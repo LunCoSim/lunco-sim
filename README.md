@@ -6,7 +6,6 @@ Core repository of the Lun-Co game
 
 LunCo is a Lunar Colony simulation game inspired by Factorio, SimCity, Kerbal Space Program and many others games.
 
-
 ## Gameplay
 
 Collect resources, build factories, manufacture robots and to build sustaiable lunar base.
@@ -43,13 +42,13 @@ You want to make the Moon forpost of human civilization in space in order to col
 3. Physics – TBD and check Godot physics and Bullet quality
 
 
-
 ## Links
 
 1. Author [DifInt](https://twitter.com/_Difint_)
 2. [Discord](https://discord.gg/Hgc6tHmhCa)
 3. [Notion](https://www.notion.so/invite/ff7a7dc226d4184c6fb77b1899d6672381be7e44)
 4. [Google Drive](https://drive.google.com/drive/folders/1mYNLdYOaw__OIb7OGDZiuHmbZZAJFA7M?usp=sharing)
+5. More information [here](https://bit.ly/3vNdfKE)
 
 ## Contribution
 
