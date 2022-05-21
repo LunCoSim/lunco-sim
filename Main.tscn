@@ -12,13 +12,13 @@ ambient_light_energy = 0.0
 [node name="Main" type="Node"]
 
 [node name="Ground" parent="." instance=ExtResource( 1 )]
-transform = Transform( 1000, 0, 0, 0, 0.5, 0, 0, 0, 1000, -8.05907, 33.1252, -140.927 )
+transform = Transform( 1000, 0, 0, 0, 0.5, 0, 0, 0, 1000, -8.05907, -24.1719, -140.927 )
 
 [node name="Spacecraft" parent="." instance=ExtResource( 2 )]
 transform = Transform( 1, 0, 0, 0, -0.256593, 0.96652, 0, -0.96652, -0.256593, -11.44, 61.1773, 25.8795 )
 
 [node name="Camera" type="Spatial" parent="."]
-transform = Transform( -0.998592, 0, 0.0530505, -0.0484982, 0.405285, -0.912903, -0.0215006, -0.91419, -0.404715, 0, 68.308, 53.8365 )
+transform = Transform( -0.998592, 0, 0.0530505, -0.0484982, 0.405285, -0.912903, -0.0215006, -0.91419, -0.404715, 9.38452, 53.6124, 123.642 )
 
 [node name="Camera" type="Camera" parent="Camera"]
 transform = Transform( -0.939253, 0.0403349, 0.340847, -0.329374, 0.173345, -0.928151, -0.0965208, -0.984035, -0.149529, 1.97963, -34.6091, -14.9053 )
@@ -53,7 +53,7 @@ omni_range = 51.848
 omni_attenuation = 17.1484
 
 [node name="Earth" parent="." instance=ExtResource( 3 )]
-transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 385.629, 368.514, -130.148 )
+transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 379.652, 198.366, -41.6088 )
 
 [node name="WorldEnvironment" type="WorldEnvironment" parent="."]
 environment = SubResource( 1 )

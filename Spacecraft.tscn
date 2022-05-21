@@ -2,9 +2,15 @@
 
 [ext_resource path="res://assets/spacex-starship/source/SpaceX_Starship.fbx" type="PackedScene" id=1]
 [ext_resource path="res://Spacecraft.gd" type="Script" id=2]
-[ext_resource path="res://assets/spacex-starship/source/Starship.material" type="Material" id=3]
 
-[sub_resource type="Skin" id=2]
+[sub_resource type="CylinderMesh" id=2]
+top_radius = 2.307
+bottom_radius = 4.268
+height = 17.032
+
+[sub_resource type="SpatialMaterial" id=3]
+albedo_color = Color( 0.92549, 0.360784, 0.360784, 1 )
+metallic_specular = 0.0
 
 [sub_resource type="CylinderShape" id=1]
 radius = 4.70786
@@ -16,12 +22,13 @@ script = ExtResource( 2 )
 
 [node name="Pivot" type="Spatial" parent="."]
 
-[node name="MeshInstance" type="MeshInstance" parent="Pivot"]
-material_override = ExtResource( 3 )
-skin = SubResource( 2 )
+[node name="SpaceX_Starship" parent="Pivot" instance=ExtResource( 1 )]
+transform = Transform( 1, 0, 0, 0, 1, 2.32831e-10, 0, -2.32831e-10, 1, 0, 0, 0 )
 
-[node name="SpaceX_Starship" parent="Pivot/MeshInstance" instance=ExtResource( 1 )]
-transform = Transform( 1, 0, 0, 0, 1, 1.16415e-10, 0, -1.16415e-10, 1, 0, 0, 0 )
+[node name="Exhause" type="MeshInstance" parent="Pivot"]
+transform = Transform( 1, 0, 0, 0, -4.35393e-08, -1, 0, 1, -4.35393e-08, 0, -9.31323e-10, -7.666 )
+mesh = SubResource( 2 )
+material/0 = SubResource( 3 )
 
 [node name="CollisionShape" type="CollisionShape" parent="."]
 transform = Transform( 1, 0, 0, 0, 0.0231235, -0.999733, 0, 0.999733, 0.0231235, 0, 0.0429078, 25.8787 )
