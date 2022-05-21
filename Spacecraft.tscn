@@ -1,0 +1,10 @@
+[gd_scene load_steps=2 format=2]
+
+[ext_resource path="res://assets/spacex-starship/source/SpaceX_Starship.fbx" type="PackedScene" id=1]
+
+[node name="KinematicBody" type="KinematicBody"]
+transform = Transform( 1, 0, 0, 0, 0.00165804, 0.999999, 0, -0.999999, 0.00165804, 0, 0, 0 )
+
+[node name="Spatial" type="Spatial" parent="."]
+
+[node name="SpaceX_Starship" parent="Spatial" instance=ExtResource( 1 )]

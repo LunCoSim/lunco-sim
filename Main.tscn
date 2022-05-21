@@ -1,0 +1,18 @@
+[gd_scene load_steps=3 format=2]
+
+[ext_resource path="res://Ground.tscn" type="PackedScene" id=1]
+[ext_resource path="res://Spacecraft.tscn" type="PackedScene" id=2]
+
+[node name="Main" type="Node"]
+
+[node name="Ground" parent="." instance=ExtResource( 1 )]
+transform = Transform( 1000, 0, 0, 0, 0.5, 0, 0, 0, 1000, 0, 0, -84.8059 )
+
+[node name="KinematicBody" parent="." instance=ExtResource( 2 )]
+
+[node name="Camera" type="Spatial" parent="."]
+transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 155.613, 257.505 )
+
+[node name="Camera" type="Camera" parent="Camera"]
+transform = Transform( 1, 0, 0, 0, 0.657743, 0.753242, 0, -0.753242, 0.657743, 6.25208, 86.3781, 27.9051 )
+far = 1500.0
