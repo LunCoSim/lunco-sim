@@ -28,6 +28,15 @@ You want to make the Moon forpost of human civilization in space in order to col
 
 1. Simulate landing of Starship on the Moon using Godot engine
 
+## How to run
+
+The game is at it's early stage and there are no binary builds yet. 
+
+However you can run the game using Godot:
+1. Clone this repo
+2. Install [Godot 3.4.4](https://downloads.tuxfamily.org/godotengine/3.4.4/) for your platform
+3. Run project by clocking on "project.godot"
+
 ## SW Stack
 
 1. Godot game enginer 3.4.4
