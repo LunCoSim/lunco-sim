@@ -17,7 +17,7 @@ radius = 4.70786
 height = 50.7794
 
 [node name="Spacecraft" type="KinematicBody"]
-transform = Transform( 1, 0, 0, 0, 0.00165804, 0.999999, 0, -0.999999, 0.00165804, 0, 0, 0 )
+transform = Transform( 0.999528, -0.030713, -1.34251e-09, 0, -4.37114e-08, 1, -0.030713, -0.999529, -4.36908e-08, 0, 0, 0 )
 script = ExtResource( 2 )
 
 [node name="Pivot" type="Spatial" parent="."]
