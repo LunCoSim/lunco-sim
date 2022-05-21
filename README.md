@@ -66,6 +66,25 @@ However you can run the game using Godot:
 1. [Starship model](assets/spacex-starship) created by [MartianDays](https://sketchfab.com/3d-models/spacex-starship-a8a0b69f776841a1a465cd9fb3762fd2)
 2. [Lunar texture](assets/FullMoon2010.jpg) created by [Gregory H. Revera](https://en.wikipedia.org/wiki/Moon#/media/File:FullMoon2010.jpg)
 
+### References
+
+*PUG* – Payload User Guide
+
+1. [Falcon 9 PUG](https://www.spacex.com/media/falcon-users-guide-2021-09.pdf)
+2. [Astrobotic's Peregrine PUG](https://www.astrobotic.com/wp-content/uploads/2022/01/PUGLanders_011222.pdf)
+3. [Astrobotic's Cube Rover PUG](https://www.astrobotic.com/wp-content/uploads/2021/07/CubeRover-Payload-Users-Guide-v1.7.pdf)
+4. [Intuitive Machines](https://www.intuitivemachines.com/)
+5. [iSpace PUG](https://www.mach5lowdown.com/wp-content/uploads/PUG/ispace_PayladUserGuide_v2_202001.pdf)
+6. [Masten PUG](https://explorers.larc.nasa.gov/2019APSMEX/MO/pdf_files/Masten%20Lunar%20Delivery%20Service%20Payload%20Users%20Guide%20Rev%201.0%202019.2.4.pdf)
+7. [Startship PUG(TBD)]()
+8. [FireFly PUG](https://westeastspace.com/wp-content/uploads/2019/08/Firefly-Aerospace-Payload-Users-Guide.pdf)
+9. [Virgin](https://virginorbit.com/wp-content/uploads/2020/09/LauncherOne-Service-Guide-August-2020.pdf)
+
+### Standards
+
+1. [NASA-STD-6016 Standard Materials and Processes Requirements for Spacecraft](https://standards.nasa.gov/standard/nasa/nasa-std-6016)
+
+
 ## Contribution
 
 You can support the project by donating
