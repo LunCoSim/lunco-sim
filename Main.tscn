@@ -1,19 +1,59 @@
-[gd_scene load_steps=3 format=2]
+[gd_scene load_steps=5 format=2]
 
 [ext_resource path="res://Ground.tscn" type="PackedScene" id=1]
 [ext_resource path="res://Spacecraft.tscn" type="PackedScene" id=2]
+[ext_resource path="res://Earth.tscn" type="PackedScene" id=3]
+
+[sub_resource type="Environment" id=1]
+background_mode = 2
+background_energy = 0.0
+ambient_light_energy = 0.0
 
 [node name="Main" type="Node"]
 
 [node name="Ground" parent="." instance=ExtResource( 1 )]
-transform = Transform( 1000, 0, 0, 0, 0.5, 0, 0, 0, 1000, 0, 0, -84.8059 )
+transform = Transform( 1000, 0, 0, 0, 0.5, 0, 0, 0, 1000, -8.05907, 33.1252, -140.927 )
 
 [node name="Spacecraft" parent="." instance=ExtResource( 2 )]
-transform = Transform( 1, 0, 0, 0, 0.00165804, 0.999999, 0, -0.999999, 0.00165804, 0, 77.2364, 0 )
+transform = Transform( 1, 0, 0, 0, -0.256593, 0.96652, 0, -0.96652, -0.256593, -11.44, 61.1773, 25.8795 )
 
 [node name="Camera" type="Spatial" parent="."]
-transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 155.613, 257.505 )
+transform = Transform( -0.998592, 0, 0.0530505, -0.0484982, 0.405285, -0.912903, -0.0215006, -0.91419, -0.404715, 0, 68.308, 53.8365 )
 
 [node name="Camera" type="Camera" parent="Camera"]
-transform = Transform( 1, 0, 0, 0, 0.657743, 0.753242, 0, -0.753242, 0.657743, 6.25208, 86.3781, 27.9051 )
+transform = Transform( -0.939253, 0.0403349, 0.340847, -0.329374, 0.173345, -0.928151, -0.0965208, -0.984035, -0.149529, 1.97963, -34.6091, -14.9053 )
 far = 1500.0
+
+[node name="Lights" type="Node" parent="."]
+
+[node name="Sun" type="Spatial" parent="Lights"]
+transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 249.654, 290.096 )
+
+[node name="DirectionalLight" type="DirectionalLight" parent="Lights/Sun"]
+transform = Transform( -0.991007, -0.0286728, -0.130705, -0.0588717, -0.783738, 0.618295, -0.120167, 0.620429, 0.775002, -48.1505, 91.4153, -9.45865 )
+light_energy = 10.19
+
+[node name="Front" type="Spatial" parent="Lights"]
+transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 180.949, 62.6722 )
+
+[node name="OmniLight" type="OmniLight" parent="Lights/Front"]
+transform = Transform( 1, 0, 0, 0, 0.936599, -0.350404, 0, 0.350404, 0.936599, 23.4156, 19.5141, -4.53191 )
+omni_range = 124.685
+omni_attenuation = 0.287175
+
+[node name="Back" type="Spatial" parent="Lights"]
+transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, -8.77536, 114.157, -29.6139 )
+
+[node name="OmniLight" type="OmniLight" parent="Lights/Back"]
+transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, -9.58287, -26.8083, 45.6126 )
+light_energy = 16.0
+light_indirect_energy = 1.514
+light_specular = 16.0
+omni_range = 51.848
+omni_attenuation = 17.1484
+
+[node name="Earth" parent="." instance=ExtResource( 3 )]
+transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 385.629, 368.514, -130.148 )
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource( 1 )
