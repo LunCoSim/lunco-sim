@@ -22,16 +22,16 @@ func _physics_process(delta):
 		if wasThrust:
 			wasThrust=false
 
-	exhause.visible = wasThrust	
+	exhause.emitting = wasThrust	
 	
 	if Input.is_action_pressed("pitch_up"): #dive up
-		add_torque(global_transform.basis.x * THRUST_TURN * Z_FRONT)
-	if Input.is_action_pressed("pitch_down"): #dive down
 		add_torque(global_transform.basis.x * -THRUST_TURN * Z_FRONT)
+	if Input.is_action_pressed("pitch_down"): #dive down
+		add_torque(global_transform.basis.x * THRUST_TURN * Z_FRONT)
 	if Input.is_action_pressed("yaw_left"):
-		add_torque(global_transform.basis.y * -THRUST_TURN * Z_FRONT)
-	if Input.is_action_pressed("yaw_right"):
 		add_torque(global_transform.basis.y * THRUST_TURN * Z_FRONT)
+	if Input.is_action_pressed("yaw_right"):
+		add_torque(global_transform.basis.y * -THRUST_TURN * Z_FRONT)
 	if Input.is_action_pressed("roll_ccw"):
 		add_torque(global_transform.basis.z * -THRUST_ROLL * Z_FRONT)
 	if Input.is_action_pressed("roll_cw"):
