@@ -35,7 +35,7 @@ The game is at it's early stage and there are no binary builds yet.
 However you can run the game using Godot:
 1. Clone this repo
 2. Install [Godot 3.4.4](https://downloads.tuxfamily.org/godotengine/3.4.4/) for your platform
-3. Run project by clocking on "project.godot"
+3. Run project by clocking on "project.godot" in "game" folder
 
 ## SW Stack
 
