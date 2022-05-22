@@ -1,4 +1,4 @@
-#This code is based on this game: 
+#This code is based on this game: https://godotforums.org/discussion/18480/godot-3d-vector-physics-cheat-sheet
 extends RigidBody
 
 const Z_FRONT = 1 #in this game the front side is towards negative Z
