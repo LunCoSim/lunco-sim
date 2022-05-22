@@ -1,10 +1,14 @@
-# lun-co-game
-
-Core repository of the Lun-Co game
+# LunCo – Lunar Colony sim
 
 ## What it is
 
-LunCo is a Lunar Colony simulation game inspired by Factorio, SimCity, Kerbal Space Program and many others games.
+LunCo – **Lunar Colony** *digital twin* inspired by Factorio, SimCity, Kerbal Space Program and others. 
+
+It's a *game* and a *scientific tool*.
+
+1. Precise enough to plan real mission
+2. Training as space engineer
+3. Economics
 
 ![First screenshot](docs/assets/second_screenshot.jpg "First screenshot")
 
@@ -64,6 +68,7 @@ However you can run the game using Godot:
 6. More information [here](https://bit.ly/3vNdfKE)
 
 ### Assets
+
 1. [Starship model](assets/spacex-starship) created by [MartianDays](https://sketchfab.com/3d-models/spacex-starship-a8a0b69f776841a1a465cd9fb3762fd2)
 2. [Lunar texture](assets/FullMoon2010.jpg) created by [Gregory H. Revera](https://en.wikipedia.org/wiki/Moon#/media/File:FullMoon2010.jpg)
 3. [NASA Moon CGI KIL](https://svs.gsfc.nasa.gov/4720)
@@ -86,6 +91,12 @@ However you can run the game using Godot:
 
 1. [NASA-STD-6016 Standard Materials and Processes Requirements for Spacecraft](https://standards.nasa.gov/standard/nasa/nasa-std-6016)
 
+### Similar projects
+
+1. [Road to Mars](https://roadtomars.page/)
+2. [!Mars](https://marsisflat.space/)
+3. [Starbase Simulator](https://ashtorak.itch.io/starbase-simulator)
+4. [Spaceport-X](https://www.indiedb.com/games/spaceport-x)
 
 ## Contribution
 
