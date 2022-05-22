@@ -1,41 +1,39 @@
-extends KinematicBody
+#This code is based on this game: 
+extends RigidBody
 
-# How fast the player moves in meters per second.
-# The downward acceleration when in the air, in meters per second squared.
-export var fall_acceleration = 1.6
-export var speed = 10
+const Z_FRONT = 1 #in this game the front side is towards negative Z
+const THRUST = 50
+const THRUST_TURN = 200
+const THRUST_ROLL = 50
 
-var velocity = Vector3.ZERO
-var direction = Vector3(0, -1, 0)
 
-var speed_up = 100
+onready var exhause = $Exhause
 
+var wasThrust = false #Visible exhause
+
+# damping: see linear and angular damping parameters
 
 func _physics_process(delta):
-	
-	var throttle = 0
-	
-	if Input.is_action_pressed("yaw_right"):
-		direction.x += 1
-	if Input.is_action_pressed("yaw_left"):
-		direction.x -= 1
-	if Input.is_action_pressed("pitch_up"):
-		direction.z += 1
-	if Input.is_action_pressed("pitch_down"):
-		direction.z -= 1
-	
 	if Input.is_action_pressed("throttle"):
-		throttle = -1
-		$Pivot/Exhause.visible = true
+		add_central_force(transform.basis.z * Z_FRONT * THRUST)
+		if !wasThrust:
+			wasThrust = true
 	else:
-		$Pivot/Exhause.visible = false
-	
-	if direction != Vector3.ZERO:
-		direction = direction.normalized()
-		$Pivot.look_at(translation + direction, Vector3.UP)
+		if wasThrust:
+			wasThrust=false
 
-	velocity.x += (throttle*direction.x * speed)*delta
-	velocity.z += (throttle*direction.z * speed)*delta
-	velocity.y += (throttle*direction.y * speed - fall_acceleration) * delta
+	exhause.visible = wasThrust	
 	
-	velocity = move_and_slide(velocity, Vector3.UP)
+	if Input.is_action_pressed("pitch_up"): #dive up
+		add_torque(global_transform.basis.x * THRUST_TURN * Z_FRONT)
+	if Input.is_action_pressed("pitch_down"): #dive down
+		add_torque(global_transform.basis.x * -THRUST_TURN * Z_FRONT)
+	if Input.is_action_pressed("yaw_left"):
+		add_torque(global_transform.basis.y * -THRUST_TURN * Z_FRONT)
+	if Input.is_action_pressed("yaw_right"):
+		add_torque(global_transform.basis.y * THRUST_TURN * Z_FRONT)
+	if Input.is_action_pressed("roll_ccw"):
+		add_torque(global_transform.basis.z * -THRUST_ROLL * Z_FRONT)
+	if Input.is_action_pressed("roll_cw"):
+		add_torque(global_transform.basis.z * THRUST_ROLL * Z_FRONT)
+

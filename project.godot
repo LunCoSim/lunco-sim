@@ -85,9 +85,11 @@ mousewright={
 [physics]
 
 common/enable_pause_aware_picking=true
+3d/default_gravity=1.625
 
 [rendering]
 
+threads/thread_model=2
 vram_compression/import_etc=true
 vram_compression/import_etc2=false
 environment/default_environment="res://default_env.tres"

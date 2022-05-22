@@ -1,8 +1,9 @@
-[gd_scene load_steps=5 format=2]
+[gd_scene load_steps=6 format=2]
 
 [ext_resource path="res://Ground.tscn" type="PackedScene" id=1]
 [ext_resource path="res://Spacecraft.tscn" type="PackedScene" id=2]
 [ext_resource path="res://Earth.tscn" type="PackedScene" id=3]
+[ext_resource path="res://Camera.gd" type="Script" id=4]
 
 [sub_resource type="Environment" id=1]
 background_mode = 2
@@ -16,13 +17,6 @@ transform = Transform( 1000, 0, 0, 0, 0.5, 0, 0, 0, 1000, -8.05907, -24.1719, -1
 
 [node name="Spacecraft" parent="." instance=ExtResource( 2 )]
 transform = Transform( 1, 0, 0, 0, -0.256593, 0.96652, 0, -0.96652, -0.256593, -11.44, 61.1773, 25.8795 )
-
-[node name="Camera" type="Spatial" parent="Spacecraft"]
-transform = Transform( -0.998592, 0, 0.0530505, 0.033225, 0.779589, 0.625409, -0.0413575, 0.626291, -0.778491, 20.8245, -81.7596, -29.5325 )
-
-[node name="Camera" type="Camera" parent="Spacecraft/Camera"]
-transform = Transform( -0.939253, 0.0403349, 0.340847, -0.329374, 0.173345, -0.928151, -0.0965208, -0.984035, -0.149529, 1.97963, -34.6091, -14.9053 )
-far = 1500.0
 
 [node name="Lights" type="Node" parent="."]
 
@@ -57,3 +51,11 @@ transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 379.652, 198.366, -41.6088 )
 
 [node name="WorldEnvironment" type="WorldEnvironment" parent="."]
 environment = SubResource( 1 )
+
+[node name="Camera" type="Spatial" parent="."]
+transform = Transform( -0.89284, -0.352849, 0.279883, -0.0467061, -0.545552, -0.836774, 0.447946, -0.760178, 0.470611, 9.38452, 52.1291, 98.9618 )
+script = ExtResource( 4 )
+
+[node name="Camera" type="Camera" parent="Camera"]
+transform = Transform( -0.939253, 0.0403349, 0.340847, -0.329374, 0.173345, -0.928151, -0.0965208, -0.984035, -0.149529, 1.97963, -34.6091, -14.9053 )
+far = 1500.0
