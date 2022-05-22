@@ -60,7 +60,8 @@ However you can run the game using Godot:
 2. [Discord](https://discord.gg/Hgc6tHmhCa)
 3. [Notion](https://www.notion.so/invite/ff7a7dc226d4184c6fb77b1899d6672381be7e44)
 4. [Google Drive](https://drive.google.com/drive/folders/1mYNLdYOaw__OIb7OGDZiuHmbZZAJFA7M?usp=sharing)
-5. More information [here](https://bit.ly/3vNdfKE)
+5. [Youtube](https://www.youtube.com/channel/UCwGFDDQcNSdXA5NxRtNbWYg/videos)
+6. More information [here](https://bit.ly/3vNdfKE)
 
 ### Assets
 1. [Starship model](assets/spacex-starship) created by [MartianDays](https://sketchfab.com/3d-models/spacex-starship-a8a0b69f776841a1a465cd9fb3762fd2)
