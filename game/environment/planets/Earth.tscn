@@ -1,6 +1,6 @@
 [gd_scene load_steps=6 format=2]
 
-[ext_resource path="res://assets/Earth.jpeg" type="Texture" id=1]
+[ext_resource path="res://assets/planets/Earth.jpeg" type="Texture" id=1]
 
 [sub_resource type="SpatialMaterial" id=2]
 albedo_texture = ExtResource( 1 )

@@ -2,8 +2,8 @@
 
 importer="texture"
 type="StreamTexture"
-path.s3tc="res://.import/Moon.png-a1e44e053cb7bf98466fc08af5013e2a.s3tc.stex"
-path.etc="res://.import/Moon.png-a1e44e053cb7bf98466fc08af5013e2a.etc.stex"
+path.s3tc="res://.import/Earth.jpeg-ce2cee802523d147b955c6640579a040.s3tc.stex"
+path.etc="res://.import/Earth.jpeg-ce2cee802523d147b955c6640579a040.etc.stex"
 metadata={
 "imported_formats": [ "s3tc", "etc" ],
 "vram_texture": true
@@ -11,8 +11,8 @@ metadata={
 
 [deps]
 
-source_file="res://assets/Moon.png"
-dest_files=[ "res://.import/Moon.png-a1e44e053cb7bf98466fc08af5013e2a.s3tc.stex", "res://.import/Moon.png-a1e44e053cb7bf98466fc08af5013e2a.etc.stex" ]
+source_file="res://assets/planets/Earth.jpeg"
+dest_files=[ "res://.import/Earth.jpeg-ce2cee802523d147b955c6640579a040.s3tc.stex", "res://.import/Earth.jpeg-ce2cee802523d147b955c6640579a040.etc.stex" ]
 
 [params]
 
