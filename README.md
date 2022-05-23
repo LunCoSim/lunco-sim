@@ -8,6 +8,11 @@ Inspired by
 
 Opensource and free for **commercial use**.
 
+
+*click on the image below to watch first gameplay video on youtube*
+
+[![First gameplay video](docs/assets/second_screenshot.jpg "First gameplay video")](https://www.youtube.com/watch?v=PmTgnI-z-rY&feature=youtu.be "First gameplay video! - Click to Watch!")
+
 ### Design you own mission ###
 
 1. Database of materials (based on db like MAPTIS)
@@ -18,7 +23,7 @@ Opensource and free for **commercial use**.
 6. Thermal, power, communications management
 7. Presize interface control description: physical, mechanical, power, data, logical, thermal
 
-![Second screenshot](docs/assets/second_screenshot.jpg "Second screenshot")
+
 
 ## Gameplay
 Collect resources, build factories, manufacture robots and to build sustaiable lunar base.
