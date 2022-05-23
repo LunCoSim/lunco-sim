@@ -1,13 +1,10 @@
-# LunCo – Lunar Colony sim
+# LunCo – Lunar Colony digital twin
+An *engineering tool/game* for **full cycle** space missions operations. 
 
-## What it is
-
-A *game* and an *engineering tool* for **full cycle** *space* mission operation. 
-
-**LunCo – Lunar Colony** *digital twin* inspired by 
+Inspired by 
 
 * Games: Factorio, SimCity, Kerbal Space Program 
-* Professional tools: AGI, Solidworks, Fusion360, Thermal Desktop, GMAT, Gazebo
+* Professional SW: AGI, Solidworks, Fusion360, Thermal Desktop, GMAT, Gazebo
 
 Opensource and free for **commercial use**.
 
