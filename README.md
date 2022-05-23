@@ -97,6 +97,8 @@ However you can run the game using Godot:
 2. [!Mars](https://marsisflat.space/)
 3. [Starbase Simulator](https://ashtorak.itch.io/starbase-simulator)
 4. [Spaceport-X](https://www.indiedb.com/games/spaceport-x)
+5. [Space Simulator](https://store.steampowered.com/app/529060/Space_Simulator/)
+6. [spaceflight-simulator](http://spaceflight-simulator.webflow.io/#videos)
 
 ## Contribution
 
