@@ -1,15 +1,24 @@
 # LunCo – Lunar Colony sim
 
 ## What it is
-LunCo – **Lunar Colony** *digital twin* inspired by Factorio, SimCity, Kerbal Space Program and others. 
+LunCo – **Lunar Colony** *digital twin* inspired by 
 
-It's a *game* and a *scientific tool*.
+* Games: Factorio, SimCity, Kerbal Space Program and others. 
+* Professional tools: [Analytic Graphics Inc](agi.com), Solidworks, Fusion 360, Thermal Desktop, GMAT, Gazebo
 
-1. Precise enough to plan real mission
-2. Training as space engineer
-3. Economics
+It's a *game* and a *scientific tool* for full cycle mission analysis, planning and running. 
 
-![First screenshot](docs/assets/second_screenshot.jpg "First screenshot")
+### Design you own mission ###
+
+1. Database of materials (based on db like MAPTIS)
+2. Database of component
+3. Follow engineering procedures: PDR, CDR, Testing, Integration, Flight, Mission Operation
+4. From first unmanned missions to sustainable human colony on the Moon
+5. Keep track of your budgets: money, mass, power, data.
+6. Thermal, power, communications management
+7. Presize interface control description: physical, mechanical, power, data, logical, thermal
+
+![Second screenshot](docs/assets/second_screenshot.jpg "Second screenshot")
 
 ## Gameplay
 Collect resources, build factories, manufacture robots and to build sustaiable lunar base.
