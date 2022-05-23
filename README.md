@@ -8,7 +8,7 @@ LunCo – **Lunar Colony** *digital twin* inspired by
 
 It's a *game* and a *scientific tool* for **full cycle** *extraterrestrial* mission analysis, planning and running. 
 
-It's free and opensource even for **commercial use**.
+It's opensource and free even for **commercial use**.
 
 ### Design you own mission ###
 
