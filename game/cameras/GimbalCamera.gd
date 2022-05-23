@@ -15,25 +15,7 @@ export (float) var max_zoom = 3.0
 export (float) var min_zoom = 0.4
 export (float, 0.05, 1.0) var zoom_speed = 0.09
 
-var zoom = 1.5
-
-func _unhandled_input(event):
-	if Input.get_mouse_mode() != Input.MOUSE_MODE_CAPTURED:
-		return
-	if event.is_action_pressed("mouse_wup"):
-		zoom -= zoom_speed
-	if event.is_action_pressed("mouse_wdown"):
-		zoom += zoom_speed
-		
-	zoom = clamp(zoom, min_zoom, max_zoom)
-	if mouse_control and event is InputEventMouseMotion:
-		if event.relative.x != 0:
-			var dir = 1 if invert_x else -1
-			rotate_object_local(Vector3.UP, dir * event.relative.x * mouse_sensitivity)
-		if event.relative.y != 0:
-			var dir = 1 if invert_y else -1
-			var y_rotation = clamp(event.relative.y, -30, 30)
-			$InnerGimbal.rotate_object_local(Vector3.RIGHT, dir * y_rotation * mouse_sensitivity)
+var zoom = 1
 
 func get_input_keyboard(delta):
 	# Rotate outer gimbal around y axis
@@ -66,6 +48,18 @@ func _input(event):
 	else:
 		Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
 		mouse_control = false
+	
+	if Input.get_mouse_mode() != Input.MOUSE_MODE_CAPTURED:
+		return
+	zoom = clamp(zoom, min_zoom, max_zoom)
+	if mouse_control and event is InputEventMouseMotion:
+		if event.relative.x != 0:
+			var dir = 1 if invert_x else -1
+			rotate_object_local(Vector3.UP, dir * event.relative.x * mouse_sensitivity)
+		if event.relative.y != 0:
+			var dir = 1 if invert_y else -1
+			var y_rotation = clamp(event.relative.y, -30, 30)
+			$InnerGimbal.rotate_object_local(Vector3.RIGHT, dir * y_rotation * mouse_sensitivity)
 		
 func _process(delta):
 	
@@ -75,3 +69,4 @@ func _process(delta):
 	scale = lerp(scale, Vector3.ONE * zoom, zoom_speed)
 	if target:
 		global_transform.origin = get_node(target).global_transform.origin
+		

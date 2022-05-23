@@ -84,13 +84,14 @@ custom_colors/font_outline_modulate = Color( 0, 0, 0, 1 )
 custom_colors/font_color_shadow = Color( 0, 0, 0, 1 )
 text = "Orientation: WASD"
 
-[node name="Direction4" type="Label" parent="Help"]
+[node name="CamDistance" type="Label" parent="Help"]
 margin_left = 16.0
 margin_top = 48.0
 margin_right = 273.0
 margin_bottom = 64.0
+rect_pivot_offset = Vector2( 176, 8 )
 custom_colors/font_outline_modulate = Color( 0, 0, 0, 1 )
 custom_colors/font_color_shadow = Color( 0, 0, 0, 1 )
-text = "Camera: RMB + Move / Arrors"
+text = "Camera distance: -/+"
 
 [connection signal="timeout" from="UpdateUI" to="." method="_on_UpdateUI_timeout"]

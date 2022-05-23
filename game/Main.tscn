@@ -21,10 +21,6 @@ transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -2935.04, 0 )
 [node name="Spacecraft" parent="." instance=ExtResource( 2 )]
 transform = Transform( -0.998931, 0.00105055, -0.0462228, -0.0195133, 0.89676, 0.442088, 0.0419152, 0.442517, -0.895781, -21.9732, 177.656, 25.8795 )
 
-[node name="CameraGimbal" parent="Spacecraft" instance=ExtResource( 4 )]
-transform = Transform( -0.99893, -0.0195133, 0.0419151, 0.00105056, 0.896759, 0.442517, -0.0462228, 0.442087, -0.895779, -19.5678, -170.744, -56.3728 )
-target = NodePath("..")
-
 [node name="Sun" type="Spatial" parent="."]
 transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 249.654, 290.096 )
 
@@ -63,3 +59,7 @@ transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 4476.79, 989.939, -41.6088 )
 environment = SubResource( 1 )
 
 [node name="Control" parent="." instance=ExtResource( 5 )]
+
+[node name="CameraGimbal" parent="." instance=ExtResource( 4 )]
+transform = Transform( 0.998286, -0.0371628, 0.0452052, 0.0249514, 0.969043, 0.245629, -0.0529339, -0.24408, 0.96831, -21.9732, 177.656, 25.8795 )
+target = NodePath("../Spacecraft")
