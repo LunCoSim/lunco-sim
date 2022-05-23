@@ -4,7 +4,7 @@
 
 A *game* and an *engineering tool* for **full cycle** *space* mission operation. 
 
-LunCo – **Lunar Colony** *digital twin* inspired by 
+**LunCo – Lunar Colony** *digital twin* inspired by 
 
 * Games: Factorio, SimCity, Kerbal Space Program 
 * Professional tools: AGI, Solidworks, Fusion360, Thermal Desktop, GMAT, Gazebo
