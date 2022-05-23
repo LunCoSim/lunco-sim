@@ -1,3 +1,4 @@
+
 extends Camera
 
 #see this link about interpolation:
@@ -41,8 +42,8 @@ func _input(event):
 		Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
 			
 func _physics_process(delta):
-	tTarget.origin = player.global_transform.origin + player.global_transform.basis*camera_position*player.Z_FRONT
+	tTarget.origin = player.global_transform.origin + camera_position
 		
-	tTarget = tTarget.looking_at(player.global_transform.origin, player.global_transform.basis.y)  #Vector3(0,1,0))
+	tTarget = tTarget.looking_at(player.global_transform.origin, tTarget.origin)  #Vector3(0,1,0))
 	
 	global_transform = global_transform.interpolate_with(tTarget, delta * follow_speed)
