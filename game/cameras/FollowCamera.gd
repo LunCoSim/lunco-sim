@@ -44,6 +44,6 @@ func _input(event):
 func _physics_process(delta):
 	tTarget.origin = player.global_transform.origin + camera_position
 		
-	tTarget = tTarget.looking_at(player.global_transform.origin, tTarget.origin)  #Vector3(0,1,0))
-	
-	global_transform = global_transform.interpolate_with(tTarget, delta * follow_speed)
+	tTarget = tTarget.looking_at(player.global_transform.origin, tTarget.origin)
+	global_transform = tTarget
+	#global_transform = global_transform.interpolate_with(tTarget, delta * follow_speed)
