@@ -1,9 +1,9 @@
-
+#TBD Delete this file as it's not used anywhere
 extends Camera
 
 #see this link about interpolation:
 # https://docs.godotengine.org/en/3.1/tutorials/math/interpolation.html
-
+# Nice tutorial https://kidscancode.org/godot_recipes/3d/camera_gimbal/
 
 export var follow_speed = 4.0
 
