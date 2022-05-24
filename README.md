@@ -8,6 +8,8 @@ Inspired by
 
 Opensource and free for **commercial use**.
 
+*[DOWNLOAD BINARY](https://github.com/lun-co/lunco-game/releases)*
+
 *click on the image below to watch first gameplay video on youtube*
 
 [![First gameplay video](docs/assets/second_screenshot.jpg "First gameplay video")](https://www.youtube.com/watch?v=PmTgnI-z-rY&feature=youtu.be "First gameplay video! - Click to Watch!")
@@ -37,9 +39,6 @@ You want to make the Moon forpost of human civilization in space in order to col
 5. Realistic technologies, physics and enviroment. E.g. you have to extract ~30-50 of different raw resources to build a satellite like Aluminum, Copper.
 
 ## How to run
-The game is at it's early stage and there are no binary builds yet. 
-
-However you can run the game using Godot:
 1. Clone this repo
 2. Install [Godot 3.4.4](https://downloads.tuxfamily.org/godotengine/3.4.4/) for your platform
 3. Run project by clocking on "project.godot" in "game" folder
