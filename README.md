@@ -139,14 +139,13 @@ However you can run the game using Godot:
 2. YAMCS
 
 ### Physics simulation ###
-
 1. [mujoco](https://github.com/deepmind/mujoco)
 2. [DART](http://dartsim.github.io)
 
+### Databases ###
+1. [MAPTIS](https://maptis.nasa.gov)
 
-
-## Contribution
-You can support the project by donating
+## Support the project
 
 ETH: 0xA64f2228cceC96076c82abb903021C33859082F8
 
