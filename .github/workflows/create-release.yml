@@ -28,24 +28,32 @@ jobs:
         id: tag_version
         run: |
           echo ::set-output name=TAG_VERSION::${GITHUB_REF#refs/tags/v}
-      - name: install wine #Install wine to be able to add icon to win executable
-        id: wine_install
+      - name: install 7z #Install wine to be able to add icon to win executable
+        id: 7z_install
         run: |
-          sudo apt install wine64
-          echo ::set-output name=WINE_PATH::$(which wine64)
+          sudo add-apt-repository universe
+          sudo apt update
+          sudo apt install -y p7zip-full
+        
+      # - name: install wine #Install wine to be able to add icon to win executable
+      #   id: wine_install
+      #   run: |
+      #     sudo apt install wine64
+      #     echo ::set-output name=WINE_PATH::$(which wine64)
       - name: create game release
         # Use latest version (see releases for all versions)
         uses: firebelley/godot-export@v3.0.0
         with:
           # Defining all the required inputs
           # I used the mono version of Godot in this example
-          godot_executable_download_url: https://downloads.tuxfamily.org/godotengine/3.4.4/Godot_v3.4.4-stable_x11.64.zip
+          godot_executable_download_url: https://downloads.tuxfamily.org/godotengine/3.4.4/Godot_v3.4.4-stable_linux_headless.64.zip
+          # godot_executable_download_url: http://192.168.1.4:8000/Godot_v3.4.4-stable_linux_headless.64.zip #used for local debig
           godot_export_templates_download_url: https://downloads.tuxfamily.org/godotengine/3.4.4/Godot_v3.4.4-stable_export_templates.tpz
           # set this either to . or your game path, e.g. ./godot in case
           # your game is within a sub-directory
           relative_project_path: ./game
           # read the wine path here that was an output of the wine_install step
-          wine_path: ${{ steps.wine_install.outputs.WINE_PATH }}
+          # wine_path: ${{ steps.wine_install.outputs.WINE_PATH }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ACTIONS_ALLOW_UNSECURE_COMMANDS: 'true'
