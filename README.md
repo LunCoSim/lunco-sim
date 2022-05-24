@@ -1,5 +1,5 @@
 # LunCo – Lunar Colony digital twin
-An *engineering tool/game* for **full cycle** space missions operations. 
+*Engineering sim* for **full cycle** space missions operations. 
 
 Inspired by 
 
@@ -97,6 +97,7 @@ You want to make the Moon forpost of human civilization in space in order to col
 11. [Children of a Dead Earth](https://store.steampowered.com/app/476530/Children_of_a_Dead_Earth/)
 12. [SpaceEngine](https://spaceengine.org/)
 13. [Universe Sandbox](https://universesandbox.com/)
+14. [Simple Rockets 2](https://www.simplerockets.com)
 
 ### Professional SW
 
