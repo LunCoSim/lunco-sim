@@ -22,8 +22,6 @@ Opensource and free for **commercial use**.
 6. Thermal, power, communications management
 7. Presize interface control description: physical, mechanical, power, data, logical, thermal
 
-
-
 ## Gameplay
 Collect resources, build factories, manufacture robots and to build sustaiable lunar base.
 
@@ -46,6 +44,15 @@ However you can run the game using Godot:
 2. Install [Godot 3.4.4](https://downloads.tuxfamily.org/godotengine/3.4.4/) for your platform
 3. Run project by clocking on "project.godot" in "game" folder
 
+## Profiles
+1. [itch.io](https://difint.itch.io/lunco)
+2. [Discord](https://discord.gg/Hgc6tHmhCa)
+3. [Notion](https://www.notion.so/invite/ff7a7dc226d4184c6fb77b1899d6672381be7e44)
+4. [Google Drive](https://drive.google.com/drive/folders/1mYNLdYOaw__OIb7OGDZiuHmbZZAJFA7M?usp=sharing)
+5. [Youtube](https://www.youtube.com/channel/UCwGFDDQcNSdXA5NxRtNbWYg/videos)
+6. [More information](https://bit.ly/3vNdfKE)
+
+
 ## Development tools
 1. Godot 3.4.4 – game engine, IDE 
 2. Blender – 3D model creation
@@ -55,14 +62,6 @@ However you can run the game using Godot:
 6. Git – version control
 
 ## Links
-
-### LunCo related
-1. Author [DifInt](https://twitter.com/_Difint_)
-2. [Discord](https://discord.gg/Hgc6tHmhCa)
-3. [Notion](https://www.notion.so/invite/ff7a7dc226d4184c6fb77b1899d6672381be7e44)
-4. [Google Drive](https://drive.google.com/drive/folders/1mYNLdYOaw__OIb7OGDZiuHmbZZAJFA7M?usp=sharing)
-5. [Youtube](https://www.youtube.com/channel/UCwGFDDQcNSdXA5NxRtNbWYg/videos)
-6. More information [here](https://bit.ly/3vNdfKE)
 
 ### Assets
 1. [Starship model](assets/spacex-starship) created by [MartianDays](https://sketchfab.com/3d-models/spacex-starship-a8a0b69f776841a1a465cd9fb3762fd2)
@@ -139,8 +138,8 @@ However you can run the game using Godot:
 
 ### Physics simulation ###
 
-1. https://github.com/deepmind/mujoco
-2. DART http://dartsim.github.io
+1. [mujoco](https://github.com/deepmind/mujoco)
+2. [DART](http://dartsim.github.io)
 
 
 
@@ -160,3 +159,5 @@ LTC: ltc1qwtzw9y9hf54mwef6k7htempzmjsqsnrwjxwj2g
 DOGE: DJc7Hgw972xXfCM443WYxBfmggRAbeBxq9
 
 TRX: TSGUmrAQpKJHwrS6XHEsYvJn8x6FaK4VzJ
+
+*Created by [DifInt](https://twitter.com/_Difint_)*
