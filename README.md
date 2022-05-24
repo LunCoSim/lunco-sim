@@ -8,7 +8,6 @@ Inspired by
 
 Opensource and free for **commercial use**.
 
-
 *click on the image below to watch first gameplay video on youtube*
 
 [![First gameplay video](docs/assets/second_screenshot.jpg "First gameplay video")](https://www.youtube.com/watch?v=PmTgnI-z-rY&feature=youtu.be "First gameplay video! - Click to Watch!")
@@ -47,12 +46,13 @@ However you can run the game using Godot:
 2. Install [Godot 3.4.4](https://downloads.tuxfamily.org/godotengine/3.4.4/) for your platform
 3. Run project by clocking on "project.godot" in "game" folder
 
-## SW Stack
-1. Godot game enginer 3.4.4
-2. Blender
-3. GIMP
-4. Inkscape
-5. Visual Code
+## Development tools
+1. Godot 3.4.4 – game engine, IDE 
+2. Blender – 3D model creation
+3. GIMP – image editor
+4. Inkscape – vector image editor 
+5. Visual Code + git branch, Godot extension – text editor + visual git manager
+6. Git – version control
 
 ## Links
 
@@ -92,6 +92,7 @@ However you can run the game using Godot:
 4. [Spaceport-X](https://www.indiedb.com/games/spaceport-x)
 5. [Space Simulator](https://store.steampowered.com/app/529060/Space_Simulator/)
 6. [spaceflight-simulator](http://spaceflight-simulator.webflow.io/#videos)
+7. [OpenRocket](https://openrocket.info/features.html)
 
 ### Professional SW
 
@@ -131,6 +132,13 @@ However you can run the game using Godot:
 #### Mission Control
 1. OpenMCT
 2. YAMCS
+
+### Physics simulation ###
+
+1. https://github.com/deepmind/mujoco
+2. DART http://dartsim.github.io
+
+
 
 ## Contribution
 You can support the project by donating
