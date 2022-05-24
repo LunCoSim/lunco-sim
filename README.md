@@ -96,6 +96,8 @@ However you can run the game using Godot:
 9. [Mars Horizon](https://store.steampowered.com/app/765810/Mars_Horizon/#:~:text=In%20Mars%20Horizon%2C%20you%20take,you%20make%20the%20right%20choices)
 10. [Surviving Mars](https://store.steampowered.com/app/464920/Surviving_Mars/)
 11. [Children of a Dead Earth](https://store.steampowered.com/app/476530/Children_of_a_Dead_Earth/)
+12. [SpaceEngine](https://spaceengine.org/)
+13. [Universe Sandbox](https://universesandbox.com/)
 
 ### Professional SW
 
