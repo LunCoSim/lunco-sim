@@ -85,14 +85,18 @@ However you can run the game using Godot:
 ### Standards
 1. [NASA-STD-6016 Standard Materials and Processes Requirements for Spacecraft](https://standards.nasa.gov/standard/nasa/nasa-std-6016)
 
-### Similar projects
-1. [Road to Mars](https://roadtomars.page/)
-2. [!Mars](https://marsisflat.space/)
-3. [Starbase Simulator](https://ashtorak.itch.io/starbase-simulator)
-4. [Spaceport-X](https://www.indiedb.com/games/spaceport-x)
-5. [Space Simulator](https://store.steampowered.com/app/529060/Space_Simulator/)
-6. [spaceflight-simulator](http://spaceflight-simulator.webflow.io/#videos)
-7. [OpenRocket](https://openrocket.info/features.html)
+### Similar games
+1. [Kerbal Space Program](https://www.kerbalspaceprogram.com/)
+2. [Road to Mars](https://roadtomars.page/)
+3. [!Mars](https://marsisflat.space/)
+4. [Starbase Simulator](https://ashtorak.itch.io/starbase-simulator)
+5. [Spaceport-X](https://www.indiedb.com/games/spaceport-x)
+6. [Space Simulator](https://store.steampowered.com/app/529060/Space_Simulator/)
+7. [spaceflight-simulator](http://spaceflight-simulator.webflow.io/#videos)
+8. [OpenRocket](https://openrocket.info/features.html)
+9. [Mars Horizon](https://store.steampowered.com/app/765810/Mars_Horizon/#:~:text=In%20Mars%20Horizon%2C%20you%20take,you%20make%20the%20right%20choices)
+10. [Surviving Mars](https://store.steampowered.com/app/464920/Surviving_Mars/)
+11. [Children of a Dead Earth](https://store.steampowered.com/app/476530/Children_of_a_Dead_Earth/)
 
 ### Professional SW
 
