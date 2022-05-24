@@ -29,7 +29,7 @@ jobs:
         run: |
           echo ::set-output name=TAG_VERSION::${GITHUB_REF#refs/tags/v}
       - name: install 7z #Install wine to be able to add icon to win executable
-        id: 7z_install
+        id: install_7z
         run: |
           sudo add-apt-repository universe
           sudo apt update
