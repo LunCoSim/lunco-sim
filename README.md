@@ -124,6 +124,7 @@ You want to make the Moon forpost of human civilization in space in order to col
 
 #### MBSE
 1. Arcadia
+2. [Innoslate](https://specinnovations.com/capabilities/digital-engineering/)
 
 #### Robotic simulations
 1. ROS / Gazebo
