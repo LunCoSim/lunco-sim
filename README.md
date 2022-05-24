@@ -49,7 +49,8 @@ You want to make the Moon forpost of human civilization in space in order to col
 3. [Notion](https://www.notion.so/invite/ff7a7dc226d4184c6fb77b1899d6672381be7e44)
 4. [Google Drive](https://drive.google.com/drive/folders/1mYNLdYOaw__OIb7OGDZiuHmbZZAJFA7M?usp=sharing)
 5. [Youtube](https://www.youtube.com/channel/UCwGFDDQcNSdXA5NxRtNbWYg/videos)
-6. [More information](https://bit.ly/3vNdfKE)
+6. [Reddit](https://www.reddit.com/r/LunCo/)
+7. [More information](https://bit.ly/3vNdfKE)
 
 
 ## Development tools
