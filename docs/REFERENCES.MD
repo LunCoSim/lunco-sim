@@ -56,3 +56,53 @@
 1. [Signum](https://github.com/MintStudios/Signum) - text editor written in GDScript
 2. [Godot Engine as an OpenAI Gym environment for Reinforcement Learning.](https://github.com/HugoTini/GymGodot) – landing on Mars!
 
+
+## Visual style & VFX 
+
+### Toon shaders
+1. [3D Edge Detection Shader (Borderlands-Style)](https://godotshaders.com/shader/3d-edge-detection-shader-borderlands-style/)
+2. [Post Effect Outline Shader for GLES2](https://godotshaders.com/shader/post-effect-outline-shader-for-gles2/)
+3. [TRUE BoTW Toon Shader!](https://godotshaders.com/shader/update-botw-toon-shader/)
+4. [Chromatic Abberation (With Offset)](https://godotshaders.com/shader/chromatic-abberation-with-offset/)
+5. [Screen-Space Edge Detection Outline Shader](https://godotshaders.com/shader/screen-space-edge-detection-outline-shader/)
+6. [Toon Shader inspired by Genshin Impact](https://godotshaders.com/shader/toon-shader-inspired-of-genshin-impact/)
+7. [Complete Toon Shader](https://godotshaders.com/shader/complete-toon-shader/)
+8. [Post Effect Outline Shader](https://godotshaders.com/shader/post-effect-outline-shader/)
+
+### Glowing
+1. [Cube Mesh Glow Outline](https://godotshaders.com/shader/cube-mesh-glow-outline/)
+2. [Vaporwave Grid](https://godotshaders.com/shader/vaporwave-grid/)
+3. [Simple Energy Shield](https://godotshaders.com/shader/simple-energy-shield/)
+4. [Lens Flare Shader](https://godotshaders.com/shader/lens-flare-shader/)
+5. [Flaring Star](https://godotshaders.com/shader/flaring-star/)
+6. [Smooth Radial Gradient](https://godotshaders.com/shader/radial-smooth-radial-gradient/)
+7. [SciFi Hologram](https://godotshaders.com/shader/scifi-hologram/)
+8. [Engine flame](https://godotshaders.com/shader/engine-flame/)
+9. [Neon](https://godotshaders.com/shader/bloom-post-processing-for-viewports/)
+10. [Fireworks](https://godotshaders.com/shader/fireworks/)
+11. [Perspective grid animated](https://godotshaders.com/shader/perspective-grid/)
+12. [Stylized fire (3D)](https://godotshaders.com/shader/stylized-fire-3d/)
+
+    
+
+### Different
+1. [Flux Core](https://godotshaders.com/shader/flux-core/)
+2. [Spine](https://godotshaders.com/shader/spine/)
+3. [Spiral Riders](https://godotshaders.com/shader/spiral-riders/)
+4. [Xod](https://godotshaders.com/shader/xod/)
+5. [Hexagon Shield](TBD)
+6. [3D – Sun](https://godotshaders.com/shader/3d-sun-shader/)
+7. [Moving planets in space for Skyboxes](https://godotshaders.com/shader/moving-planets-in-space-for-skyboxes/)
+8. [Hexagon pattern](https://godotshaders.com/shader/hexagon-pattern/)
+9.  [background shader](https://godotshaders.com/shader/background-shader/)
+10. [Wormhole](https://godotshaders.com/shader/wormhole/)
+11. [Aura (3D)](https://godotshaders.com/shader/aura-3d/)
+12. [Planet](https://godotshaders.com/shader/planet/)
+13. [Energy Beams](https://godotshaders.com/shader/energy-beams/)
+14. [Smoke Shader](https://godotshaders.com/shader/smoke-shader/)
+15. [Spatial Ice Shader](https://godotshaders.com/shader/spatial-ice-shader/)
+16. [Downhill Water Flow](https://godotshaders.com/shader/downhill-water-flow/)
+17. [Hex Line Shader](https://godotshaders.com/shader/hex-line-shader/)
+18. [Stylized Wings](https://godotshaders.com/shader/stylized-wings/)
+19. [Animated sketchy line](https://godotshaders.com/shader/animated-sketchy-line/)
+20. [Stylized/Galaxy Clouds](https://godotshaders.com/shader/stylized-galaxy-clouds/)
