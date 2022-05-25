@@ -84,6 +84,13 @@ You want to make the Moon forpost of human civilization in space in order to col
 ### Standards
 1. [NASA-STD-6016 Standard Materials and Processes Requirements for Spacecraft](https://standards.nasa.gov/standard/nasa/nasa-std-6016)
 
+### Like-minded projects
+1. [Moonwards](https://www.moonwards.com/) – opensource Lunar City in Godot, lot of assets under MIT
+2. [iVoyager](https://www.ivoyager.dev) – a development platform for creating games and educational apps in a realistic solar system, Godot, Apache 2.0
+
+### Opensource spacecrafts
+1. [deathstarinspace](deathstarinspace.com)
+
 ### Similar games
 1. [Kerbal Space Program](https://www.kerbalspaceprogram.com/)
 2. [Road to Mars](https://roadtomars.page/)
