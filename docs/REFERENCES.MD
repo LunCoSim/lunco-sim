@@ -10,6 +10,7 @@
 6. [https://github.com/roalyr/GDTLancer](https://github.com/roalyr/GDTLancer) – GPL-3.0
 7. [RPG Database](https://github.com/sdtv9507/RPG-Databases) – template for RPG games, MIT, C#
 8. [Voxel Tools for Godot](https://github.com/Zylann/godot_voxel) – MIT
+9. [Godot Shaders](https://godotshaders.com) – lot of existing shaders to make the game looks great, different
 
 ## Godot assets
 1. [Kenney's particle pack](https://github.com/Calinou/kenney-particle-pack)
