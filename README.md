@@ -64,6 +64,11 @@ You want to make the Moon forpost of human civilization in space in order to col
 
 ## Links
 
+### Like-minded projects
+1. [Moonwards](https://www.moonwards.com/) – opensource Lunar City in Godot, lot of assets under MIT
+2. [iVoyager](https://www.ivoyager.dev) – a development platform for creating games and educational apps in a realistic solar system, Godot, Apache 2.0
+3. [Extraterrestrial Logistics And Space Craft Analogs](https://elascaproject.com/elasca-missions/)
+   
 ### Assets
 1. [Starship model](assets/spacex-starship) created by [MartianDays](https://sketchfab.com/3d-models/spacex-starship-a8a0b69f776841a1a465cd9fb3762fd2)
 2. [Lunar texture](assets/FullMoon2010.jpg) created by [Gregory H. Revera](https://en.wikipedia.org/wiki/Moon#/media/File:FullMoon2010.jpg)
@@ -84,11 +89,6 @@ You want to make the Moon forpost of human civilization in space in order to col
 
 ### Standards
 1. [NASA-STD-6016 Standard Materials and Processes Requirements for Spacecraft](https://standards.nasa.gov/standard/nasa/nasa-std-6016)
-
-### Like-minded projects
-1. [Moonwards](https://www.moonwards.com/) – opensource Lunar City in Godot, lot of assets under MIT
-2. [iVoyager](https://www.ivoyager.dev) – a development platform for creating games and educational apps in a realistic solar system, Godot, Apache 2.0
-3. [Extraterrestrial Logistics And Space Craft Analogs](https://elascaproject.com/elasca-missions/)
 
 ### Opensource spacecrafts
 1. [deathstarinspace](deathstarinspace.com)
