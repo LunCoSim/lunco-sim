@@ -1,10 +1,9 @@
-# LunCo – Lunar Colony digital twin
-*Engineering sim* for **full cycle** space missions operations. 
+# LunCo: full-cycle space operations sim tool
 
-Inspired by 
+An open-source Lunar Colony sim built for industry applications and enthusiasts
 
-* Games: Factorio, SimCity, Kerbal Space Program 
-* Professional SW: AGI, Solidworks, Fusion360, Thermal Desktop, GMAT, Gazebo
+* Games: KSP, SimCity, Factorio
+* Professional: AGI, Solidworks, Ansys
 
 Opensource and free for **commercial use**.
 
