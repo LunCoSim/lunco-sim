@@ -40,7 +40,8 @@ You want to make the Moon forpost of human civilization in space in order to col
 
 ## How to run
 1. Clone this repo
-2. Install [Godot 3.4.4](https://downloads.tuxfamily.org/godotengine/3.4.4/) for your platform
+2. Install [Godot 3.5-rc2](https://downloads.tuxfamily.org/godotengine/3.5-rc2/) for your platform
+        [All Godot Versions](https://downloads.tuxfamily.org/godotengine/)
 3. Run project by clocking on "project.godot" in "game" folder
 
 ## Profiles
@@ -87,6 +88,7 @@ You want to make the Moon forpost of human civilization in space in order to col
 ### Like-minded projects
 1. [Moonwards](https://www.moonwards.com/) – opensource Lunar City in Godot, lot of assets under MIT
 2. [iVoyager](https://www.ivoyager.dev) – a development platform for creating games and educational apps in a realistic solar system, Godot, Apache 2.0
+3. [Extraterrestrial Logistics And Space Craft Analogs](https://elascaproject.com/elasca-missions/)
 
 ### Opensource spacecrafts
 1. [deathstarinspace](deathstarinspace.com)
