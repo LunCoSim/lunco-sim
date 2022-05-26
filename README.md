@@ -82,7 +82,7 @@ You want to make the Moon forpost of human civilization in space in order to col
 4. [Intuitive Machines](https://www.intuitivemachines.com/)
 5. [iSpace PUG](https://www.mach5lowdown.com/wp-content/uploads/PUG/ispace_PayladUserGuide_v2_202001.pdf)
 6. [Masten PUG](https://explorers.larc.nasa.gov/2019APSMEX/MO/pdf_files/Masten%20Lunar%20Delivery%20Service%20Payload%20Users%20Guide%20Rev%201.0%202019.2.4.pdf)
-7. [Startship PUG(TBD)]()
+7. [Startship PUG(TBD by SpaceX)]()
 8. [FireFly PUG](https://westeastspace.com/wp-content/uploads/2019/08/Firefly-Aerospace-Payload-Users-Guide.pdf)
 9. [Virgin](https://virginorbit.com/wp-content/uploads/2020/09/LauncherOne-Service-Guide-August-2020.pdf)
 
@@ -90,7 +90,7 @@ You want to make the Moon forpost of human civilization in space in order to col
 1. [NASA-STD-6016 Standard Materials and Processes Requirements for Spacecraft](https://standards.nasa.gov/standard/nasa/nasa-std-6016)
 
 ### Opensource spacecrafts
-1. [deathstarinspace](deathstarinspace.com)
+1. [deathstarinspace](http://deathstarinspace.com)
 
 ### Similar games
 1. [Kerbal Space Program](https://www.kerbalspaceprogram.com/)
