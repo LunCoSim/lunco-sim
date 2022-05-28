@@ -23,6 +23,16 @@ Opensource and free for **commercial use**.
 6. Thermal, power, communications management
 7. Presize interface control description: physical, mechanical, power, data, logical, thermal
 
+## FOLLOW US
+1. [Twitter](https://twitter.com/LunCoSim)
+2. [Discord](https://discord.gg/emfnjMj3r3)
+3. [Youtube](https://www.youtube.com/channel/UCwGFDDQcNSdXA5NxRtNbWYg/videos)
+4. [itch.io](https://difint.itch.io/lunco)
+5. [Notion](https://www.notion.so/invite/ff7a7dc226d4184c6fb77b1899d6672381be7e44)
+6. [Google Drive](https://drive.google.com/drive/folders/1mYNLdYOaw__OIb7OGDZiuHmbZZAJFA7M?usp=sharing)
+7. [Reddit](https://www.reddit.com/r/LunCo/)
+8. [More information](https://bit.ly/3vNdfKE)
+   
 ## Gameplay
 Collect resources, build factories, manufacture robots and to build sustaiable lunar base.
 
@@ -42,16 +52,6 @@ You want to make the Moon forpost of human civilization in space in order to col
 2. Install [Godot 3.5-rc2](https://downloads.tuxfamily.org/godotengine/3.5-rc2/) for your platform
         [All Godot Versions](https://downloads.tuxfamily.org/godotengine/)
 3. Run project by clocking on "project.godot" in "game" folder
-
-## Profiles
-1. [itch.io](https://difint.itch.io/lunco)
-2. [Discord](https://discord.gg/emfnjMj3r3)
-3. [Notion](https://www.notion.so/invite/ff7a7dc226d4184c6fb77b1899d6672381be7e44)
-4. [Google Drive](https://drive.google.com/drive/folders/1mYNLdYOaw__OIb7OGDZiuHmbZZAJFA7M?usp=sharing)
-5. [Youtube](https://www.youtube.com/channel/UCwGFDDQcNSdXA5NxRtNbWYg/videos)
-6. [Reddit](https://www.reddit.com/r/LunCo/)
-7. [More information](https://bit.ly/3vNdfKE)
-
 
 ## Development tools
 1. Godot 3.4.4 – game engine, IDE 
