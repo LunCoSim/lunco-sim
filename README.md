@@ -22,6 +22,8 @@ Opensource and free for **commercial use**.
 5. Keep track of your budgets: money, mass, power, data.
 6. Thermal, power, communications management
 7. Presize interface control description: physical, mechanical, power, data, logical, thermal
+8. Supply chain
+9. Logistics
 
 ## FOLLOW US
 1. [Twitter](https://twitter.com/LunCoSim)
