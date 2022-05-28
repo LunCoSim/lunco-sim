@@ -45,7 +45,7 @@ You want to make the Moon forpost of human civilization in space in order to col
 
 ## Profiles
 1. [itch.io](https://difint.itch.io/lunco)
-2. [Discord](https://discord.gg/Hgc6tHmhCa)
+2. [Discord](https://discord.gg/emfnjMj3r3)
 3. [Notion](https://www.notion.so/invite/ff7a7dc226d4184c6fb77b1899d6672381be7e44)
 4. [Google Drive](https://drive.google.com/drive/folders/1mYNLdYOaw__OIb7OGDZiuHmbZZAJFA7M?usp=sharing)
 5. [Youtube](https://www.youtube.com/channel/UCwGFDDQcNSdXA5NxRtNbWYg/videos)
