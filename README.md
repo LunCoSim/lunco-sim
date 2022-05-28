@@ -88,6 +88,7 @@ You want to make the Moon forpost of human civilization in space in order to col
 
 ### Standards
 1. [NASA-STD-6016 Standard Materials and Processes Requirements for Spacecraft](https://standards.nasa.gov/standard/nasa/nasa-std-6016)
+2. [NTRS - NASA Technical Reports Server](https://ntrs.nasa.gov/search)
 
 ### Opensource spacecrafts
 1. [deathstarinspace](http://deathstarinspace.com)
