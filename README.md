@@ -5,7 +5,7 @@ An open-source Lunar Colony sim built for industry applications and enthusiasts
 * Games: KSP, SimCity, Factorio
 * Professional: AGI, Solidworks, Ansys
 
-Opensource and free for **commercial use**.
+Free for **commercial use**.
 
 *[DOWNLOAD BINARY](https://github.com/lun-co/lunco-game/releases)*
 
