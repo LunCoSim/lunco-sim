@@ -25,6 +25,11 @@ Free for **commercial use**.
 * Integration with professional tools: CAD, FEA, Requirements management, MBSE, etc
 * Play with friends on your own servers: federated game servers connected via web3 
 
+## Related repositories
+
+* **[Space Jargon Cheatsheer](https://github.com/LunCoSim/lunco-space-jargon)**
+* **[Raw assets](https://github.com/LunCoSim/lunco-assets-raw)**
+  
 ### Design you own mission ###
 
 1. Database of materials (based on db like MAPTIS)
