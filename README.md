@@ -13,6 +13,14 @@ Opensource and free for **commercial use**.
 
 [![First gameplay video](docs/assets/second_screenshot.jpg "First gameplay video")](https://www.youtube.com/watch?v=PmTgnI-z-rY&feature=youtu.be "First gameplay video! - Click to Watch!")
 
+## Features
+* Two game play stules
+  * Digital twin mode for engineers
+  * Story mode for gamers
+* Realistic space exploration engine
+* User generated content
+* IPFS for CDN
+
 ### Design you own mission ###
 
 1. Database of materials (based on db like MAPTIS)
