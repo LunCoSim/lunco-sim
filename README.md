@@ -18,8 +18,12 @@ Free for **commercial use**.
   * Digital twin mode for engineers
   * Story mode for gamers
 * Realistic space exploration engine
-* User generated content
+* User generated content: space crafts, trajectories, factories, etc.
 * IPFS for CDN
+* Radicle to track history of user generated content
+* Precise model of a Lunar base: starting from every single bolt
+* Integration with professional tools: CAD, FEA, Requirements management, MBSE, etc
+* Play with friends on your own servers: federated game servers connected via web3 
 
 ### Design you own mission ###
 
