@@ -7,7 +7,7 @@ An open-source Lunar Colony sim built for **engineers** and **enthusiasts**
 
 Free for **commercial use**.
 
-*PS Making Kerbal a real thing*
+*PS Making Kerbal a real thing. Intended for industry applications*
 
 *[DOWNLOAD BINARY](https://github.com/lun-co/lunco-game/releases)*
 
