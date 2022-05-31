@@ -17,4 +17,4 @@
 4. Files should be clean, no meshs that are not related
 5. Use relative file references rather than embed
 6. Try to use materials from library rather than model-specific
-7. 
+7. Export from Blender should be automated including backing process. Spec for that TBD
