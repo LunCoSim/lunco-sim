@@ -2,6 +2,7 @@
 
 An open-source Lunar Colony sim built for **engineers** and **enthusiasts**
 
+*Inspired by*
 * Games: KSP, SimCity, Factorio
 * Professional: AGI, Solidworks, Ansys
 
