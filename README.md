@@ -1,11 +1,13 @@
 # LunCo: full-cycle space operations sim tool
 
-An open-source Lunar Colony sim built for industry applications and enthusiasts
+An open-source Lunar Colony sim built for **engineers** and **enthusiasts**
 
 * Games: KSP, SimCity, Factorio
 * Professional: AGI, Solidworks, Ansys
 
 Free for **commercial use**.
+
+*PS Making Kerbal a real thing*
 
 *[DOWNLOAD BINARY](https://github.com/lun-co/lunco-game/releases)*
 
