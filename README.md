@@ -27,6 +27,8 @@ Free for **commercial use**.
 
 ## Related repositories
 
+* **[Development Guide](/docs/DEVELOPMENT.MD)**
+* **[References](/docs/REFERENCES.MD)**
 * **[Space Jargon Cheatsheer](https://github.com/LunCoSim/lunco-space-jargon)**
 * **[Raw assets](https://github.com/LunCoSim/lunco-assets-raw)**
   
@@ -71,14 +73,6 @@ You want to make the Moon forpost of human civilization in space in order to col
 2. Install [Godot 3.5-rc2](https://downloads.tuxfamily.org/godotengine/3.5-rc2/) for your platform
         [All Godot Versions](https://downloads.tuxfamily.org/godotengine/)
 3. Run project by clocking on "project.godot" in "game" folder
-
-## Development tools
-1. Godot 3.4.4 – game engine, IDE 
-2. Blender – 3D model creation
-3. GIMP – image editor
-4. Inkscape – vector image editor 
-5. Visual Code + git branch, Godot extension – text editor + visual git manager
-6. Git – version control
 
 ## Links
 
