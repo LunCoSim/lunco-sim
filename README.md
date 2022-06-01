@@ -8,6 +8,8 @@ An open-source Lunar Colony sim built for **engineers** and **enthusiasts**
 
 Free for **commercial use**.
 
+***[OUR GITCOINT GRANT](https://gitcoin.co/grants/5939/lunco-full-cycle-space-operations-sim-tool)***
+
 *PS Making Kerbal a real thing. Intended for industry applications*
 
 *[DOWNLOAD BINARY](https://github.com/lun-co/lunco-game/releases)*
