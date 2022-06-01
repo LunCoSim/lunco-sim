@@ -1,6 +1,8 @@
-[gd_scene load_steps=3 format=2]
+[gd_scene load_steps=5 format=2]
 
 [ext_resource path="res://ui/ui.gd" type="Script" id=1]
+[ext_resource path="res://assets/lunco-brand/logo_1200x1200_no-BG.png" type="Texture" id=2]
+[ext_resource path="res://ui/Stopwatch.tscn" type="PackedScene" id=3]
 
 [sub_resource type="Theme" id=1]
 
@@ -8,11 +10,17 @@
 anchor_right = 1.0
 anchor_bottom = 1.0
 script = ExtResource( 1 )
+__meta__ = {
+"_edit_use_anchors_": false
+}
 
 [node name="HUD" type="Container" parent="."]
 margin_right = 40.0
 margin_bottom = 40.0
 theme = SubResource( 1 )
+__meta__ = {
+"_edit_use_anchors_": false
+}
 
 [node name="Position" type="Label" parent="HUD"]
 margin_left = 16.0
@@ -58,13 +66,45 @@ custom_colors/font_outline_modulate = Color( 0, 0, 0, 1 )
 custom_colors/font_color_shadow = Color( 0, 0, 0, 1 )
 text = "Direction: (######, ######, ######) "
 
+[node name="LunCo-Logo" type="TextureRect" parent="HUD"]
+margin_left = 20.0
+margin_top = 20.0
+margin_right = 1220.0
+margin_bottom = 1220.0
+rect_scale = Vector2( 0.05, 0.05 )
+texture = ExtResource( 2 )
+stretch_mode = 5
+
+[node name="Met" type="Container" parent="."]
+visible = false
+margin_left = 97.0
+margin_top = 18.0
+margin_right = 300.0
+margin_bottom = 88.0
+theme = SubResource( 1 )
+__meta__ = {
+"_edit_use_anchors_": false
+}
+
+[node name="Stopwatch" parent="Met" instance=ExtResource( 3 )]
+
 [node name="UpdateUI" type="Timer" parent="."]
 wait_time = 0.2
 autostart = true
 
+[node name="HideControls" type="Timer" parent="."]
+wait_time = 10.0
+one_shot = true
+autostart = true
+
 [node name="Help" type="Container" parent="."]
+margin_left = 81.0
+margin_top = 5.0
 margin_right = 336.0
 margin_bottom = 168.0
+__meta__ = {
+"_edit_use_anchors_": false
+}
 
 [node name="Thrust" type="Label" parent="Help"]
 margin_left = 16.0
@@ -105,3 +145,4 @@ custom_colors/font_color_shadow = Color( 0, 0, 0, 1 )
 text = "Rotate camera: LMB or Arrows"
 
 [connection signal="timeout" from="UpdateUI" to="." method="_on_UpdateUI_timeout"]
+[connection signal="timeout" from="HideControls" to="." method="_on_HideControls_timeout"]

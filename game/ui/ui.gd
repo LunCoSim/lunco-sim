@@ -10,10 +10,6 @@ onready var angvelocity_lbl = $"HUD/AngVelocity"
 
 onready var acceleration_lbl = $"HUD/Acceleration"
 
-# Declare member variables here. Examples:
-# var a = 2
-# var b = "text"
-
 var prev_velocity = Vector3.ZERO
 
 # Called when the node enters the scene tree for the first time.
@@ -38,3 +34,10 @@ func _on_UpdateUI_timeout():
 	acceleration_lbl.text = "Acceleration: " + str(acc) + " Abs: " + str(acc.length())
 	prev_velocity = player.linear_velocity
 	
+
+
+
+func _on_HideControls_timeout():
+	$Help.visible = false
+	$Met.visible = true
+	 
