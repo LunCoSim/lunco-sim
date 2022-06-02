@@ -24,3 +24,18 @@
 5. Use relative file references rather than embed
 6. Try to use materials from library rather than model-specific
 7. Export from Blender should be automated including backing process. Spec for that TBD
+
+## Getting high FPS
+1. Use Resources instead of Nodes where it's possible
+2. Share Resources to minimize memory consumption
+3. [Fixing jitter and stutter](https://docs.godotengine.org/en/stable/tutorials/rendering/jitter_stutter.html)
+   1. [Physics smooth addon](https://github.com/lawnjelly/smoothing-addon)
+
+### Using LOD
+LOD – level of detail. 
+
+LOD0 - the best quality. 
+
+LOD means quality models used at different distances
+
+Could be hundreds of levels
