@@ -36,4 +36,8 @@ func _physics_process(delta):
 		add_torque(global_transform.basis.z * -THRUST_ROLL * Z_FRONT)
 	if Input.is_action_pressed("roll_cw"):
 		add_torque(global_transform.basis.z * THRUST_ROLL * Z_FRONT)
+		
+	# ESCAPE TO MAIN MENU
+	if Input.is_action_pressed("ui_cancel"):
+		get_tree().change_scene("res://Main Menu/Main Menu.tscn")
 

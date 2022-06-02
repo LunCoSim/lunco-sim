@@ -1,10 +1,10 @@
 [gd_scene load_steps=7 format=2]
 
 [ext_resource path="res://environment/planets/Moon.tscn" type="PackedScene" id=1]
-[ext_resource path="res://spacecraft/Spacecraft.tscn" type="PackedScene" id=2]
-[ext_resource path="res://environment/planets/Earth.tscn" type="PackedScene" id=3]
-[ext_resource path="res://cameras/GimbalCamera.tscn" type="PackedScene" id=4]
-[ext_resource path="res://ui/ui.tscn" type="PackedScene" id=5]
+[ext_resource path="res://environment/planets/Earth.tscn" type="PackedScene" id=2]
+[ext_resource path="res://spacecraft/Spacecraft.tscn" type="PackedScene" id=3]
+[ext_resource path="res://ui/ui.tscn" type="PackedScene" id=4]
+[ext_resource path="res://cameras/GimbalCamera.tscn" type="PackedScene" id=5]
 
 [sub_resource type="Environment" id=1]
 background_mode = 2
@@ -18,7 +18,7 @@ ambient_light_sky_contribution = 0.0
 [node name="Moon" parent="." instance=ExtResource( 1 )]
 transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -2935.04, 0 )
 
-[node name="Spacecraft" parent="." instance=ExtResource( 2 )]
+[node name="Spacecraft" parent="." instance=ExtResource( 3 )]
 transform = Transform( -0.998931, 0.00105055, -0.0462228, -0.0195133, 0.89676, 0.442088, 0.0419152, 0.442517, -0.895781, -21.9732, 177.656, 25.8795 )
 
 [node name="Sun" type="Spatial" parent="."]
@@ -52,14 +52,14 @@ light_specular = 16.0
 omni_range = 51.848
 omni_attenuation = 17.1484
 
-[node name="Earth" parent="." instance=ExtResource( 3 )]
+[node name="Earth" parent="." instance=ExtResource( 2 )]
 transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 4476.79, 989.939, -41.6088 )
 
 [node name="WorldEnvironment" type="WorldEnvironment" parent="."]
 environment = SubResource( 1 )
 
-[node name="Control" parent="." instance=ExtResource( 5 )]
+[node name="Control" parent="." instance=ExtResource( 4 )]
 
-[node name="CameraGimbal" parent="." instance=ExtResource( 4 )]
+[node name="CameraGimbal" parent="." instance=ExtResource( 5 )]
 transform = Transform( 0.998286, -0.0371628, 0.0452052, 0.0249514, 0.969043, 0.245629, -0.0529339, -0.24408, 0.96831, -21.9732, 177.656, 25.8795 )
 target = NodePath("../Spacecraft")
