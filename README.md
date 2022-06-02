@@ -127,6 +127,8 @@ You want to make the Moon forpost of human civilization in space in order to col
 12. [SpaceEngine](https://spaceengine.org/)
 13. [Universe Sandbox](https://universesandbox.com/)
 14. [Simple Rockets 2](https://www.simplerockets.com)
+15. [Planet Base](https://store.steampowered.com/app/403190/Planetbase/)
+16. [playfarsite](https://playfarsite.com/l/v1a_t/?f=TW_P1_V_1)
 
 ### Professional SW
 
