@@ -75,9 +75,11 @@ You want to make the Moon forpost of human civilization in space in order to col
 
 ## How to run
 1. Clone this repo
-2. Install [Godot 3.5-rc2](https://downloads.tuxfamily.org/godotengine/3.5-rc2/) for your platform
+2. Init submodules with command:
+    git submodule update --init --recursive 
+3. Install [Godot 3.5-rc2](https://downloads.tuxfamily.org/godotengine/3.5-rc2/) for your platform
         [All Godot Versions](https://downloads.tuxfamily.org/godotengine/)
-3. Run project by clocking on "project.godot" in "game" folder
+4. Run project by clocking on "project.godot" in "game" folder
 
 ## Links
 
