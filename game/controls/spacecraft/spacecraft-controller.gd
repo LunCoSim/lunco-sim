@@ -8,9 +8,6 @@ const THRUST = 50
 const THRUST_TURN = 200
 const THRUST_ROLL = 50
 
-
-
-
 var wasThrust = false #Visible exhause
 
 # damping: see linear and angular damping parameters

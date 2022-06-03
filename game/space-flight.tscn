@@ -90,7 +90,7 @@ transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 4476.79, 989.939, -41.6088 )
 [node name="WorldEnvironment" type="WorldEnvironment" parent="."]
 environment = SubResource( 1 )
 
-[node name="Control" parent="." instance=ExtResource( 4 )]
+[node name="UI" parent="." instance=ExtResource( 4 )]
 
 [node name="CameraGimbal" parent="." instance=ExtResource( 5 )]
 transform = Transform( 0.998286, -0.0371628, 0.0452052, 0.0249514, 0.969043, 0.245629, -0.0529339, -0.24408, 0.96831, -21.9732, 177.656, 25.8795 )
