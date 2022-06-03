@@ -49,7 +49,13 @@ LOD means quality models used at different distances
 
 Could be hundreds of levels
 
-[](https://docs.godotengine.org/en/3.0/tutorials/3d/3d_performance_and_limitations.html?highlight=lod#level-of-detail-lod)
+[LOD in Godot](https://docs.godotengine.org/en/3.0/tutorials/3d/3d_performance_and_limitations.html?highlight=lod#level-of-detail-lod)
+
+LOD's should be generated in Blender during export.
+
+Just by adding modifier Decimate and Collapse ration LOD can be generated. 
+
+![Creating LOD in Blender](./assets/AthleteRover-lod.jpg "Creating LOD in Blender")
 
 ## Style guide
 
