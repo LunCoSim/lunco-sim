@@ -1,13 +1,15 @@
 #This code is based on this game: https://godotforums.org/discussion/18480/godot-3d-vector-physics-cheat-sheet
 extends RigidBody
 
+signal thrust(enabled)
+
 const Z_FRONT = 1 #in this game the front side is towards negative Z
 const THRUST = 50
 const THRUST_TURN = 200
 const THRUST_ROLL = 50
 
 
-onready var exhause = $Exhause
+
 
 var wasThrust = false #Visible exhause
 
@@ -21,8 +23,9 @@ func _physics_process(delta):
 	else:
 		if wasThrust:
 			wasThrust=false
-
-	exhause.emitting = wasThrust	
+	
+	emit_signal("thrust", wasThrust)
+	#exhause.emitting = wasThrust	
 	
 	if Input.is_action_pressed("pitch_up"): #dive up
 		add_torque(global_transform.basis.x * -THRUST_TURN * Z_FRONT)

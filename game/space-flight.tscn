@@ -1,10 +1,25 @@
-[gd_scene load_steps=7 format=2]
+[gd_scene load_steps=13 format=2]
 
-[ext_resource path="res://spacecraft/spacecraft-node.tscn" type="PackedScene" id=1]
-[ext_resource path="res://environment/planets/earth-model.tscn" type="PackedScene" id=2]
-[ext_resource path="res://environment/planets/moon-model.tscn" type="PackedScene" id=3]
+[ext_resource path="res://controls/spacecraft/spacecraft-controller.tscn" type="PackedScene" id=1]
+[ext_resource path="res://assets/planets/earth-model.tscn" type="PackedScene" id=2]
+[ext_resource path="res://assets/planets/moon-model.tscn" type="PackedScene" id=3]
 [ext_resource path="res://ui/ui.tscn" type="PackedScene" id=4]
-[ext_resource path="res://cameras/gimbal-camera.tscn" type="PackedScene" id=5]
+[ext_resource path="res://controls/camera/gimbal-camera.tscn" type="PackedScene" id=5]
+[ext_resource path="res://addons/spacex-starship/source/SpaceX_Starship.fbx" type="PackedScene" id=6]
+[ext_resource path="res://addons/spacex-starship/source/SpaceX_Starship.gd" type="Script" id=7]
+
+[sub_resource type="CylinderShape" id=7]
+height = 50.7794
+radius = 4.70786
+
+[sub_resource type="SpatialMaterial" id=6]
+albedo_color = Color( 0.619608, 0.172549, 0.172549, 1 )
+
+[sub_resource type="SphereMesh" id=8]
+material = SubResource( 6 )
+
+[sub_resource type="Gradient" id=9]
+offsets = PoolRealArray( 0.202247, 0.890851 )
 
 [sub_resource type="Environment" id=1]
 background_mode = 2
@@ -18,8 +33,25 @@ ambient_light_sky_contribution = 0.0
 [node name="Moon" parent="." instance=ExtResource( 3 )]
 transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -2935.04, 0 )
 
-[node name="Spacecraft" parent="." instance=ExtResource( 1 )]
+[node name="SpacecraftControl" parent="." instance=ExtResource( 1 )]
 transform = Transform( -0.998931, 0.00105055, -0.0462228, -0.0195133, 0.89676, 0.442088, 0.0419152, 0.442517, -0.895781, -21.9732, 177.656, 25.8795 )
+
+[node name="CollisionShape" type="CollisionShape" parent="SpacecraftControl"]
+transform = Transform( 1, -1.1102e-16, 1.1041e-16, 0, 0.00551527, -0.999986, 0, 0.999985, 0.00551527, 4.50739e-17, 1.44237e-15, -0.405991 )
+shape = SubResource( 7 )
+
+[node name="Starship" parent="SpacecraftControl" instance=ExtResource( 6 )]
+transform = Transform( -1.00898, 8.82078e-08, 0, -8.82077e-08, -1.00898, 4.23516e-22, 2.52435e-29, 0, 1.00898, 2.50777e-15, 8.02489e-14, -22.5881 )
+script = ExtResource( 7 )
+
+[node name="Exhause" type="CPUParticles" parent="SpacecraftControl/Starship"]
+transform = Transform( -0.0418833, -9.12696e-08, -0.990215, -2.98023e-08, -0.9911, 8.63802e-08, -0.990215, -2.98023e-08, 0.0418833, 0.000133514, 1.52588e-05, -0.192062 )
+emitting = false
+amount = 40
+lifetime = 1.78
+mesh = SubResource( 8 )
+initial_velocity = 8.7
+color_ramp = SubResource( 9 )
 
 [node name="Sun" type="Spatial" parent="."]
 transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 249.654, 290.096 )
@@ -62,4 +94,6 @@ environment = SubResource( 1 )
 
 [node name="CameraGimbal" parent="." instance=ExtResource( 5 )]
 transform = Transform( 0.998286, -0.0371628, 0.0452052, 0.0249514, 0.969043, 0.245629, -0.0529339, -0.24408, 0.96831, -21.9732, 177.656, 25.8795 )
-target = NodePath("../Spacecraft")
+target = NodePath("../SpacecraftControl")
+
+[connection signal="thrust" from="SpacecraftControl" to="SpacecraftControl/Starship" method="_on_SpacecraftControl_thrust"]
