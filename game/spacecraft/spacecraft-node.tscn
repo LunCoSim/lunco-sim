@@ -1,7 +1,7 @@
 [gd_scene load_steps=8 format=2]
 
 [ext_resource path="res://addons/spacex-starship/source/SpaceX_Starship.fbx" type="PackedScene" id=1]
-[ext_resource path="res://spacecraft/Spacecraft.gd" type="Script" id=2]
+[ext_resource path="res://spacecraft/spacecraft-node.gd" type="Script" id=2]
 
 [sub_resource type="PhysicsMaterial" id=4]
 

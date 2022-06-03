@@ -2,15 +2,15 @@
 
 importer="texture"
 type="StreamTexture"
-path="res://.import/logo_1200x1200.png-135ec5aa2c0d8a5d94bb57909c7f9374.stex"
+path="res://.import/logo_1200x1200.png-b827825949471a11af509d499a1995a3.stex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://assets/lunco-brand/logo_1200x1200.png"
-dest_files=[ "res://.import/logo_1200x1200.png-135ec5aa2c0d8a5d94bb57909c7f9374.stex" ]
+source_file="res://assets/logos/logo_1200x1200.png"
+dest_files=[ "res://.import/logo_1200x1200.png-b827825949471a11af509d499a1995a3.stex" ]
 
 [params]
 

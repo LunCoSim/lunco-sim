@@ -11,7 +11,7 @@ config_version=4
 [application]
 
 config/name="LunCo"
-run/main_scene="res://Main.tscn"
+run/main_scene="res://space-flight.tscn"
 config/icon="res://assets/icon.png"
 config/windows_native_icon="res://assets/icon.ico"
 

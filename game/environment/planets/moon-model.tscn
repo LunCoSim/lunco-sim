@@ -1,7 +1,7 @@
 [gd_scene load_steps=6 format=2]
 
 [ext_resource path="res://addons/planets/Moon.png" type="Texture" id=1]
-[ext_resource path="res://environment/planets/MoonCollisionShape.tscn" type="PackedScene" id=2]
+[ext_resource path="res://environment/planets/moon-collision-shape.tscn" type="PackedScene" id=2]
 
 [sub_resource type="SphereMesh" id=9]
 radius = 3000.0
