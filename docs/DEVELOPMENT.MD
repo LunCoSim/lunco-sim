@@ -71,3 +71,10 @@ For consistency across projects, we recommend following these guidelines:
 
 ## Localization
 Use [.po](https://docs.godotengine.org/en/stable/tutorials/i18n/localization_using_gettext.html#doc-localization-using-gettext) format
+
+## Measurement units and time
+International Space standards are applied.
+
+1. UTC time is used
+2. Metric system is used *[How NASA Lost a Spacecraft From a Metric Math Mistake | SimScale](https://www.simscale.com/blog/2017/12/nasa-mars-climate-orbiter-metric/)*
+3. It's ok to use context specific measurement units, e.g. engine thrust in tons for UX purposes. Internally metric should be used as well
