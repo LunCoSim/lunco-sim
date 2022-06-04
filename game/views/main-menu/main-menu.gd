@@ -7,7 +7,8 @@ func _on_Spaceflight_pressed():
 	get_tree().change_scene("res://views/space-flight.tscn")
 
 func _on_ModelBrowser_pressed():
-	get_tree().change_scene("res://views/models-preview.tscn")
+	print("Models preview")
+	get_tree().change_scene("res://views/models-preview/models-preview.tscn")
 
 func _on_Trajectory_Planning_pressed():
 	get_tree().change_scene(STUB)
