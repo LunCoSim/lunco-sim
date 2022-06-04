@@ -1,49 +1,15 @@
-[gd_scene load_steps=10 format=2]
+[gd_scene load_steps=4 format=2]
 
 [ext_resource path="res://controls/camera/gimbal-camera.tscn" type="PackedScene" id=1]
-[ext_resource path="res://views/player-view/terrain.tres" type="CubeMesh" id=2]
-[ext_resource path="res://views/player-view/terrain-collision.tres" type="Shape" id=3]
+[ext_resource path="res://maps/demo-map.tscn" type="PackedScene" id=2]
 [ext_resource path="res://controls/character/character.tscn" type="PackedScene" id=4]
-[ext_resource path="res://addons/moonwards/buildings/satellite-dish/satellite-dish.escn" type="PackedScene" id=5]
-[ext_resource path="res://addons/moonwards/items/ScooterBin/ScooterBin.escn" type="PackedScene" id=6]
-[ext_resource path="res://addons/moonwards/vehicles/rovers/Scooter/Scooter.escn" type="PackedScene" id=7]
-[ext_resource path="res://addons/moonwards/vehicles/rovers/SpiderCrane/SpiderCrane.escn" type="PackedScene" id=8]
-[ext_resource path="res://addons/moonwards/vehicles/rovers/AthleteRover/AthleteRover.escn" type="PackedScene" id=9]
 
 [node name="PlayerView" type="Node"]
 
 [node name="CameraGimbal" parent="." instance=ExtResource( 1 )]
 target = NodePath("../Character")
 
-[node name="Terrain" type="Spatial" parent="."]
-transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -1.19836, 0 )
-
-[node name="LunarSurface" type="StaticBody" parent="Terrain"]
-
-[node name="MeshInstance" type="MeshInstance" parent="Terrain/LunarSurface"]
-mesh = ExtResource( 2 )
-skeleton = NodePath("../..")
-
-[node name="CollisionShape" type="CollisionShape" parent="Terrain/LunarSurface"]
-shape = ExtResource( 3 )
-
-[node name="Objects" type="Node" parent="Terrain"]
-
-[node name="ScooterBin" parent="Terrain/Objects" instance=ExtResource( 6 )]
-transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 1.88083, -0.20671, 2.49058 )
-
-[node name="Buildings" type="Node" parent="Terrain/Objects"]
-
-[node name="satellite-dish" parent="Terrain/Objects/Buildings" instance=ExtResource( 5 )]
-transform = Transform( 5, 0, 0, 0, 5, 0, 0, 0, 5, 1.26411, 0.607037, -4.38926 )
-
-[node name="SpiderCrane" parent="Terrain/Objects" instance=ExtResource( 8 )]
-
-[node name="Scooter" parent="Terrain/Objects" instance=ExtResource( 7 )]
-transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, -1.90436, 0, 1.65441 )
-
-[node name="AthleteRover" parent="Terrain/Objects" instance=ExtResource( 9 )]
-transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.554081, 21.4751 )
+[node name="Map" parent="." instance=ExtResource( 2 )]
 
 [node name="Character" parent="." instance=ExtResource( 4 )]
 target = NodePath("../CameraGimbal")
