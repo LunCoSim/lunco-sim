@@ -75,9 +75,11 @@ You want to make the Moon forpost of human civilization in space in order to col
 
 ## How to run
 1. Clone this repo
-2. Install [Godot 3.5-rc2](https://downloads.tuxfamily.org/godotengine/3.5-rc2/) for your platform
+2. Init submodules with command:
+    git submodule update --init --recursive 
+3. Install [Godot 3.5-rc2](https://downloads.tuxfamily.org/godotengine/3.5-rc2/) for your platform
         [All Godot Versions](https://downloads.tuxfamily.org/godotengine/)
-3. Run project by clocking on "project.godot" in "game" folder
+4. Run project by clocking on "project.godot" in "game" folder
 
 ## Links
 
@@ -86,11 +88,6 @@ You want to make the Moon forpost of human civilization in space in order to col
 2. [iVoyager](https://www.ivoyager.dev) – a development platform for creating games and educational apps in a realistic solar system, Godot, Apache 2.0
 3. [Extraterrestrial Logistics And Space Craft Analogs](https://elascaproject.com/elasca-missions/)
 4. [cadCAD](https://cadcad.org) – simulation https://cadcad.org
-   
-### Assets
-1. [Starship model](assets/spacex-starship) created by [MartianDays](https://sketchfab.com/3d-models/spacex-starship-a8a0b69f776841a1a465cd9fb3762fd2)
-2. [Lunar texture](assets/FullMoon2010.jpg) created by [Gregory H. Revera](https://en.wikipedia.org/wiki/Moon#/media/File:FullMoon2010.jpg)
-3. [NASA Moon CGI KIL](https://svs.gsfc.nasa.gov/4720)
 
 ### References
 *PUG* – Payload User Guide
@@ -127,6 +124,8 @@ You want to make the Moon forpost of human civilization in space in order to col
 12. [SpaceEngine](https://spaceengine.org/)
 13. [Universe Sandbox](https://universesandbox.com/)
 14. [Simple Rockets 2](https://www.simplerockets.com)
+15. [Planet Base](https://store.steampowered.com/app/403190/Planetbase/)
+16. [playfarsite](https://playfarsite.com/l/v1a_t/?f=TW_P1_V_1)
 
 ### Professional SW
 

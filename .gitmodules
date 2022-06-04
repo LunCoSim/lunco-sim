@@ -1,0 +1,3 @@
+[submodule "game/addons"]
+	path = game/addons
+	url = git@github.com:LunCoSim/lunco-addons.git
