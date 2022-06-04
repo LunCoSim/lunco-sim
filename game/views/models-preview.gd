@@ -1,5 +1,9 @@
 extends Node
 
+
+var leaves = {}
+var ModelsList = []
+
 #SRC: https://godotengine.org/qa/5175/how-to-get-all-the-files-inside-a-folder
 #Listing all files
 func list_files_in_directory(path, files=[]):
@@ -30,21 +34,35 @@ func filter_by_extension(files: Array, extension="escn"):
 		if(file["extension"]==extension):
 			res.append(file)
 	return res
-	
+
+func get_leave(tree, path):
+	if(path in leaves):
+		return leaves[path]
+	else:
+		var dirs = path.replace("res://").split("/")
+		dirs[0] = "res://" + dirs[0]
+		for d in dirs:
+			if(path in leaves):
+				return leaves[path]
+				
 # Called when the node enters the scene tree for the first time.
 func _ready():
-	#pass # Replace with function body.
 	var path = "res://addons/"
 	var files = list_files_in_directory(path)
 	
-	var models = filter_by_extension(files)
+	ModelsList = filter_by_extension(files)
 	
 	var tree = $Control/Files
 	
-	for file in models:
-		var subchild1 = tree.create_item()
-		subchild1.set_text(0, file["filename"])
-		
+	var root = tree.create_item()
+	root.set_text(0, "Models")
+	
+	for file in ModelsList:
+		var child = tree.create_item()
+		child.set_text(0, file["filename"])
+		leaves[file["filename"]] = child
+		print(file)
+	
 	
 		
 # Called every frame. 'delta' is the elapsed time since the previous frame.
@@ -57,4 +75,20 @@ func _on_Files_button_pressed(item, column, id):
 
 
 func _on_Files_cell_selected():
-	print("asdas")
+	var childrens = $Model.get_children()
+	for ch in childrens:
+		$Model.remove_child(ch)
+	
+	var item = $Control/Files.get_selected()
+	var text = item.get_text(0)
+	
+	for m in ModelsList:
+		if(m["filename"] == text):	
+			var resource = load(m["path"] + m["filename"])
+			var model = resource.instance()
+			$Model.add_child(model)
+			
+
+func _on_Files_item_activated():
+	pass # Replace with function body.
+
