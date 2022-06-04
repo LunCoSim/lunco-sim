@@ -31,7 +31,7 @@ theme = ExtResource( 4 )
 script = ExtResource( 5 )
 
 [node name="Spaceflight" type="Button" parent="Menu"]
-margin_right = 297.0
+margin_right = 387.0
 margin_bottom = 44.0
 rect_pivot_offset = Vector2( -78, 5 )
 size_flags_horizontal = 5
@@ -40,32 +40,10 @@ theme = ExtResource( 4 )
 custom_fonts/font = ExtResource( 3 )
 text = "SpaceFlight"
 
-[node name="ModelBrowser" type="Button" parent="Menu"]
-margin_top = 48.0
-margin_right = 297.0
-margin_bottom = 92.0
-rect_pivot_offset = Vector2( -78, 5 )
-size_flags_horizontal = 5
-size_flags_vertical = 4
-theme = ExtResource( 4 )
-custom_fonts/font = ExtResource( 3 )
-text = "Model Browser"
-
-[node name="Trajectory Planning" type="Button" parent="Menu"]
-margin_top = 96.0
-margin_right = 297.0
-margin_bottom = 140.0
-rect_pivot_offset = Vector2( -78, 5 )
-size_flags_horizontal = 5
-size_flags_vertical = 4
-theme = ExtResource( 4 )
-custom_fonts/font = ExtResource( 3 )
-text = "Trajectory Planning"
-
 [node name="Surface Operations" type="Button" parent="Menu"]
-margin_top = 144.0
-margin_right = 297.0
-margin_bottom = 188.0
+margin_top = 48.0
+margin_right = 387.0
+margin_bottom = 92.0
 rect_pivot_offset = Vector2( -78, 5 )
 size_flags_horizontal = 5
 size_flags_vertical = 4
@@ -73,43 +51,80 @@ theme = ExtResource( 4 )
 custom_fonts/font = ExtResource( 3 )
 text = "Surface Operations"
 
-[node name="Lunar Base Sim" type="Button" parent="Menu"]
-margin_top = 192.0
-margin_right = 297.0
-margin_bottom = 236.0
+[node name="Panel" type="Panel" parent="Menu"]
+margin_top = 96.0
+margin_right = 387.0
+margin_bottom = 96.0
+
+[node name="ModelBrowser" type="Button" parent="Menu"]
+margin_top = 100.0
+margin_right = 387.0
+margin_bottom = 144.0
 rect_pivot_offset = Vector2( -78, 5 )
 size_flags_horizontal = 5
 size_flags_vertical = 4
 theme = ExtResource( 4 )
 custom_fonts/font = ExtResource( 3 )
-text = "Lunar Base Sim"
+text = "Model Browser"
+
+[node name="Panel2" type="Panel" parent="Menu"]
+margin_top = 148.0
+margin_right = 387.0
+margin_bottom = 148.0
+
+[node name="Trajectory Planning" type="Button" parent="Menu"]
+margin_top = 152.0
+margin_right = 387.0
+margin_bottom = 196.0
+rect_pivot_offset = Vector2( -78, 5 )
+size_flags_horizontal = 5
+size_flags_vertical = 4
+theme = ExtResource( 4 )
+custom_fonts/font = ExtResource( 3 )
+text = "Trajectory Planning (TBD)"
+
+[node name="Lunar Base Sim" type="Button" parent="Menu"]
+margin_top = 200.0
+margin_right = 387.0
+margin_bottom = 244.0
+rect_pivot_offset = Vector2( -78, 5 )
+size_flags_horizontal = 5
+size_flags_vertical = 4
+theme = ExtResource( 4 )
+custom_fonts/font = ExtResource( 3 )
+text = "Lunar Base Sim (TBD)"
+
+[node name="Panel3" type="Panel" parent="Menu"]
+margin_top = 248.0
+margin_right = 387.0
+margin_bottom = 248.0
 
 [node name="Help" type="Button" parent="Menu"]
-margin_top = 240.0
-margin_right = 297.0
-margin_bottom = 284.0
+margin_top = 252.0
+margin_right = 387.0
+margin_bottom = 296.0
 rect_pivot_offset = Vector2( -78, 5 )
 size_flags_horizontal = 5
 size_flags_vertical = 4
 theme = ExtResource( 4 )
 custom_fonts/font = ExtResource( 3 )
-text = "Help"
+text = "Help (TBD)"
 
 [node name="Settings" type="Button" parent="Menu"]
-margin_top = 288.0
-margin_right = 297.0
-margin_bottom = 332.0
+margin_top = 300.0
+margin_right = 387.0
+margin_bottom = 344.0
 rect_pivot_offset = Vector2( -78, 5 )
 size_flags_horizontal = 5
 size_flags_vertical = 4
 theme = ExtResource( 4 )
 custom_fonts/font = ExtResource( 3 )
-text = "Settings"
+text = "Settings (TBD)"
 
 [node name="Exit" type="Button" parent="Menu"]
-margin_top = 336.0
-margin_right = 297.0
-margin_bottom = 380.0
+margin_top = 348.0
+margin_right = 387.0
+margin_bottom = 392.0
 rect_pivot_offset = Vector2( -78, 5 )
 size_flags_horizontal = 5
 size_flags_vertical = 4
@@ -143,9 +158,9 @@ custom_fonts/font = ExtResource( 6 )
 text = "Version: 0.0.2"
 
 [connection signal="pressed" from="Menu/Spaceflight" to="Menu" method="_on_Spaceflight_pressed"]
+[connection signal="pressed" from="Menu/Surface Operations" to="Menu" method="_on_Surface_Operations_pressed"]
 [connection signal="pressed" from="Menu/ModelBrowser" to="Menu" method="_on_ModelBrowser_pressed"]
 [connection signal="pressed" from="Menu/Trajectory Planning" to="Menu" method="_on_Trajectory_Planning_pressed"]
-[connection signal="pressed" from="Menu/Surface Operations" to="Menu" method="_on_Surface_Operations_pressed"]
 [connection signal="pressed" from="Menu/Lunar Base Sim" to="Menu" method="_on_Lunar_Base_Sim_pressed"]
 [connection signal="pressed" from="Menu/Help" to="Menu" method="_on_Help_pressed"]
 [connection signal="pressed" from="Menu/Settings" to="Menu" method="_on_Settings_pressed"]

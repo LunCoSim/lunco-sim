@@ -13,7 +13,7 @@ func _on_Trajectory_Planning_pressed():
 	get_tree().change_scene(STUB)
 
 func _on_Surface_Operations_pressed():
-	get_tree().change_scene(STUB)
+	get_tree().change_scene("res://views/player-view/player-view.tscn")
 
 func _on_Lunar_Base_Sim_pressed():
 	get_tree().change_scene(STUB)

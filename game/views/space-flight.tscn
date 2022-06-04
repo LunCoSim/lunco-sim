@@ -12,11 +12,11 @@
 height = 50.7794
 radius = 4.70786
 
-[sub_resource type="SpatialMaterial" id=6]
+[sub_resource type="SpatialMaterial" id=10]
 albedo_color = Color( 0.619608, 0.172549, 0.172549, 1 )
 
 [sub_resource type="SphereMesh" id=8]
-material = SubResource( 6 )
+material = SubResource( 10 )
 
 [sub_resource type="Gradient" id=9]
 offsets = PoolRealArray( 0.202247, 0.890851 )
