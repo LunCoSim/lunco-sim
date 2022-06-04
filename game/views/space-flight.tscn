@@ -31,7 +31,7 @@ ambient_light_sky_contribution = 0.0
 [node name="SpaceFlight" type="Node"]
 
 [node name="Moon" parent="." instance=ExtResource( 3 )]
-transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -2935.04, 0 )
+transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 59.2984, -2934.74, -74.8813 )
 
 [node name="SpacecraftControl" parent="." instance=ExtResource( 1 )]
 transform = Transform( -0.998931, 0.00105055, -0.0462228, -0.0195133, 0.89676, 0.442088, 0.0419152, 0.442517, -0.895781, -21.9732, 177.656, 25.8795 )
