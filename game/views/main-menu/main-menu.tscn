@@ -65,7 +65,7 @@ size_flags_horizontal = 5
 size_flags_vertical = 4
 theme = ExtResource( 4 )
 custom_fonts/font = ExtResource( 3 )
-text = "Model Browser"
+text = "3D Models Browser"
 
 [node name="Panel2" type="Panel" parent="Menu"]
 margin_top = 148.0
