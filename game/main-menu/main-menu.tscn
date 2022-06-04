@@ -1,0 +1,139 @@
+[gd_scene load_steps=7 format=2]
+
+[ext_resource path="res://assets/fonts/ui_font.tres" type="DynamicFont" id=1]
+[ext_resource path="res://assets/fonts_theme.theme" type="Theme" id=2]
+[ext_resource path="res://main-menu/main-menu.gd" type="Script" id=3]
+[ext_resource path="res://assets/cover.png" type="Texture" id=4]
+[ext_resource path="res://assets/logos/logo_ICO.png" type="Texture" id=5]
+
+[sub_resource type="DynamicFont" id=1]
+
+[node name="MainMenu" type="Control"]
+anchor_right = 1.0
+anchor_bottom = 1.0
+
+[node name="Cover" type="Sprite" parent="."]
+position = Vector2( 958.5, 542 )
+scale = Vector2( 0.998438, 0.983486 )
+texture = ExtResource( 4 )
+
+[node name="Menu" type="VBoxContainer" parent="."]
+anchor_left = 0.5
+anchor_top = 0.884
+anchor_right = 0.5
+anchor_bottom = 0.903
+margin_left = 414.0
+margin_top = -584.0
+margin_right = 283.0
+margin_bottom = -262.0
+theme = ExtResource( 2 )
+script = ExtResource( 3 )
+
+[node name="Spaceflight" type="Button" parent="Menu"]
+margin_right = 297.0
+margin_bottom = 44.0
+rect_pivot_offset = Vector2( -78, 5 )
+size_flags_horizontal = 5
+size_flags_vertical = 4
+theme = ExtResource( 2 )
+custom_fonts/font = ExtResource( 1 )
+text = "SpaceFlight"
+
+[node name="ModelBrowser" type="Button" parent="Menu"]
+margin_top = 48.0
+margin_right = 297.0
+margin_bottom = 92.0
+rect_pivot_offset = Vector2( -78, 5 )
+size_flags_horizontal = 5
+size_flags_vertical = 4
+theme = ExtResource( 2 )
+custom_fonts/font = ExtResource( 1 )
+text = "Model Browser"
+
+[node name="Trajectory Planning" type="Button" parent="Menu"]
+margin_top = 96.0
+margin_right = 297.0
+margin_bottom = 140.0
+rect_pivot_offset = Vector2( -78, 5 )
+size_flags_horizontal = 5
+size_flags_vertical = 4
+theme = ExtResource( 2 )
+custom_fonts/font = ExtResource( 1 )
+text = "Trajectory Planning"
+
+[node name="Surface Operations" type="Button" parent="Menu"]
+margin_top = 144.0
+margin_right = 297.0
+margin_bottom = 188.0
+rect_pivot_offset = Vector2( -78, 5 )
+size_flags_horizontal = 5
+size_flags_vertical = 4
+theme = ExtResource( 2 )
+custom_fonts/font = ExtResource( 1 )
+text = "Surface Operations"
+
+[node name="Lunar Base Sim" type="Button" parent="Menu"]
+margin_top = 192.0
+margin_right = 297.0
+margin_bottom = 236.0
+rect_pivot_offset = Vector2( -78, 5 )
+size_flags_horizontal = 5
+size_flags_vertical = 4
+theme = ExtResource( 2 )
+custom_fonts/font = ExtResource( 1 )
+text = "Lunar Base Sim"
+
+[node name="Help" type="Button" parent="Menu"]
+margin_top = 240.0
+margin_right = 297.0
+margin_bottom = 284.0
+rect_pivot_offset = Vector2( -78, 5 )
+size_flags_horizontal = 5
+size_flags_vertical = 4
+theme = ExtResource( 2 )
+custom_fonts/font = ExtResource( 1 )
+text = "Help"
+
+[node name="Settings" type="Button" parent="Menu"]
+margin_top = 288.0
+margin_right = 297.0
+margin_bottom = 332.0
+rect_pivot_offset = Vector2( -78, 5 )
+size_flags_horizontal = 5
+size_flags_vertical = 4
+theme = ExtResource( 2 )
+custom_fonts/font = ExtResource( 1 )
+text = "Settings"
+
+[node name="Exit" type="Button" parent="Menu"]
+margin_top = 336.0
+margin_right = 297.0
+margin_bottom = 380.0
+rect_pivot_offset = Vector2( -78, 5 )
+size_flags_horizontal = 5
+size_flags_vertical = 4
+theme = ExtResource( 2 )
+custom_fonts/font = ExtResource( 1 )
+text = "Exit"
+
+[node name="Title" type="RichTextLabel" parent="."]
+visible = false
+margin_left = 602.0
+margin_top = 142.0
+margin_right = 804.0
+margin_bottom = 190.0
+custom_fonts/normal_font = SubResource( 1 )
+text = "LUNCO"
+
+[node name="LogoIco" type="Sprite" parent="."]
+position = Vector2( 96, 96 )
+texture = ExtResource( 5 )
+
+[connection signal="pressed" from="Menu/Spaceflight" to="Menu" method="_on_Spaceflight_pressed"]
+[connection signal="pressed" from="Menu/ModelBrowser" to="Menu" method="_on_ModelBrowser_pressed"]
+[connection signal="pressed" from="Menu/Trajectory Planning" to="Menu" method="_on_Trajectory_Planning_pressed"]
+[connection signal="pressed" from="Menu/Surface Operations" to="Menu" method="_on_Surface_Operations_pressed"]
+[connection signal="pressed" from="Menu/Lunar Base Sim" to="Menu" method="_on_Lunar_Base_Sim_pressed"]
+[connection signal="pressed" from="Menu/Help" to="Menu" method="_on_Help_pressed"]
+[connection signal="pressed" from="Menu/Settings" to="Menu" method="_on_Settings_pressed"]
+[connection signal="pressed" from="Menu/Exit" to="Menu" method="_on_Exit_pressed"]
