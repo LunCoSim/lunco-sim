@@ -4,6 +4,7 @@ export (NodePath) var target
 
 export (float, 0.0, 2.0) var rotation_speed = PI/2
 
+export (float, 0.01, 10000000) var distance = 3
 # mouse properties
 export (bool) var mouse_control = false
 export (float, 0.001, 0.1) var mouse_sensitivity = 0.005
@@ -17,6 +18,9 @@ export (float, 0.05, 1.0) var zoom_speed = 0.09
 
 var zoom = 1
 
+func _ready():
+	$InnerGimbal/Camera.translation.z = distance
+	
 func get_input_keyboard(delta):
 	# Rotate outer gimbal around y axis
 	var y_rotation = 0
