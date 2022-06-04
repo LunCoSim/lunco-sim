@@ -72,6 +72,14 @@ You want to make the Moon forpost of human civilization in space in order to col
 3. City management as in SimCity
 4. Economics
 5. Realistic technologies, physics and enviroment. E.g. you have to extract ~30-50 of different raw resources to build a satellite like Aluminum, Copper.
+6. Integration with real hardware. Linux Kernel drivers integrated with sim showing sim date e.g. serial devices, PID controllers, etc. 
+
+**Integration example:**
+   1. You've designed a robot using RPI
+   2. You to install LunCo linux subsystem
+   3. LunCo takes care of "faking" robot's / flatsat with sim data
+   4. You run same config + LunCo as on REAL mission
+  
 
 ## How to run
 1. Clone this repo
