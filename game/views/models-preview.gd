@@ -50,3 +50,11 @@ func _ready():
 # Called every frame. 'delta' is the elapsed time since the previous frame.
 #func _process(delta):
 #	pass
+
+
+func _on_Files_button_pressed(item, column, id):
+	print(column, id)
+
+
+func _on_Files_cell_selected():
+	print("asdas")

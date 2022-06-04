@@ -28,3 +28,6 @@ margin_right = 544.0
 margin_bottom = 1064.0
 theme = ExtResource( 4 )
 custom_fonts/font = ExtResource( 5 )
+
+[connection signal="button_pressed" from="Control/Files" to="." method="_on_Files_button_pressed"]
+[connection signal="cell_selected" from="Control/Files" to="." method="_on_Files_cell_selected"]

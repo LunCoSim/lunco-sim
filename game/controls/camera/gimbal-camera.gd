@@ -55,6 +55,7 @@ func _input(event):
 	
 	if Input.get_mouse_mode() != Input.MOUSE_MODE_CAPTURED:
 		return
+		
 	zoom = clamp(zoom, min_zoom, max_zoom)
 	if mouse_control and event is InputEventMouseMotion:
 		if event.relative.x != 0:
