@@ -39,8 +39,13 @@ func _ready():
 	
 	var models = filter_by_extension(files)
 	
+	var tree = $Control/Files
+	
 	for file in models:
-		print(file)
+		var subchild1 = tree.create_item()
+		subchild1.set_text(0, file["filename"])
+		
+	
 		
 # Called every frame. 'delta' is the elapsed time since the previous frame.
 #func _process(delta):

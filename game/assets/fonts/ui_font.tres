@@ -4,8 +4,7 @@
 font_path = "res://assets/fonts/space-mono/SpaceMono-Regular.ttf"
 
 [resource]
-size = 26
-outline_size = 1
+size = 25
 use_mipmaps = true
 use_filter = true
 font_data = SubResource( 1 )
