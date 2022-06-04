@@ -1,9 +1,11 @@
-[gd_scene load_steps=3 format=2]
+[gd_scene load_steps=4 format=2]
 
 [ext_resource path="res://addons/moonwards/buildings/satellite-dish/satellite-dish.escn" type="PackedScene" id=1]
 [ext_resource path="res://controls/camera/gimbal-camera.tscn" type="PackedScene" id=2]
+[ext_resource path="res://views/models-preview.gd" type="Script" id=3]
 
 [node name="ModelsPreview" type="Node"]
+script = ExtResource( 3 )
 
 [node name="Model" type="Spatial" parent="."]
 
@@ -11,3 +13,13 @@
 
 [node name="CameraGimbal" parent="." instance=ExtResource( 2 )]
 target = NodePath("../Model")
+
+[node name="Control" type="Control" parent="."]
+margin_right = 40.0
+margin_bottom = 40.0
+
+[node name="Files" type="Tree" parent="Control"]
+margin_left = 24.0
+margin_top = 16.0
+margin_right = 544.0
+margin_bottom = 1064.0
