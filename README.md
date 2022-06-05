@@ -39,7 +39,7 @@ Free for **commercial use**.
 * **[References](/docs/REFERENCES.MD)**
 * **[Space Jargon Cheatsheet](https://github.com/LunCoSim/lunco-space-jargon)**
 * **[Raw assets](https://github.com/LunCoSim/lunco-assets-raw)**
-* **[Addons](https://github.com/LunCoSim/lunco-addons)**
+* **[Content](https://github.com/LunCoSim/lunco-content)**
 * **[Matrix](https://github.com/LunCoSim/lunco-matrix)**
   
 ### Design you own mission ###
