@@ -34,6 +34,10 @@ jobs:
           sudo add-apt-repository universe
           sudo apt update
           sudo apt install -y p7zip-full
+      - name: git submodules init #Install wine to be able to add icon to win executable
+        id: git_submodules
+        run: |
+          sudo git submodule update --init --recursive
         
       # - name: install wine #Install wine to be able to add icon to win executable
       #   id: wine_install
