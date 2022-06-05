@@ -20,7 +20,7 @@ jobs:
       # Always include the checkout step so that
       # your project is available for Godot to export
       - name: install git lfs #Install wine to be able to add icon to win executable
-        id: install_7z
+        id: install_lfs
         run: |
           sudo apt-get install software-properties-common
           sudo curl -s https://packagecloud.io/install/repositories/github/git-lfs/script.deb.sh | sudo bash
