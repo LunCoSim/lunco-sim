@@ -1,11 +1,3 @@
-[gd_resource type="Environment" load_steps=2 format=2]
-
-[sub_resource type="ProceduralSky" id=1]
-
-[resource]
-background_mode = 2
-background_sky = SubResource( 1 )
-background_energy = 1.39
-ambient_light_color = Color( 0.945098, 0.921569, 0.921569, 1 )
-ambient_light_energy = 0.4
-ambient_light_sky_contribution = 0.0
+version https://git-lfs.github.com/spec/v1
+oid sha256:cc438394ed0ef817e4d2af9f49f1b6231cf6c4303c877b971794457ee49ddc26
+size 315
