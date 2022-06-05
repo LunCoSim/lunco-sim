@@ -19,6 +19,14 @@ jobs:
     steps:
       # Always include the checkout step so that
       # your project is available for Godot to export
+      - name: install git lfs #Install wine to be able to add icon to win executable
+        id: install_7z
+        run: |
+          sudo apt-get install software-properties-common
+          sudo curl -s https://packagecloud.io/install/repositories/github/git-lfs/script.deb.sh | sudo bash
+          sudo apt install -y git-lfs
+          git lfs install
+
       - name: checkout
         uses: actions/checkout@v3.0.2
         # Ensure that you get the entire project history
@@ -34,10 +42,6 @@ jobs:
           sudo add-apt-repository universe
           sudo apt update
           sudo apt install -y p7zip-full
-      - name: checkout all the submodules
-        uses: actions/checkout@v2
-        with:
-          submodules: recursive
         
       # - name: install wine #Install wine to be able to add icon to win executable
       #   id: wine_install
