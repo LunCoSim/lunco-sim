@@ -1,0 +1,3 @@
+[submodule "game/content"]
+	path = game/content
+	url = git@github.com:LunCoSim/lunco-content.git

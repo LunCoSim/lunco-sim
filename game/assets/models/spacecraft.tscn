@@ -1,6 +1,6 @@
 [gd_scene load_steps=6 format=2]
 
-[ext_resource path="res://addons/spacex-starship/source/SpaceX_Starship.fbx" type="PackedScene" id=1]
+[ext_resource path="res://content/spacex-starship/source/SpaceX_Starship.fbx" type="PackedScene" id=1]
 
 [sub_resource type="CylinderShape" id=1]
 height = 50.7794

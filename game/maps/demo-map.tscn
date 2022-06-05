@@ -1,11 +1,11 @@
 [gd_scene load_steps=8 format=2]
 
 [ext_resource path="res://maps/terrain.tres" type="CubeMesh" id=2]
-[ext_resource path="res://addons/moonwards/items/ScooterBin/ScooterBin.escn" type="PackedScene" id=3]
-[ext_resource path="res://addons/moonwards/buildings/satellite-dish/satellite-dish.escn" type="PackedScene" id=4]
-[ext_resource path="res://addons/moonwards/vehicles/rovers/SpiderCrane/SpiderCrane.escn" type="PackedScene" id=5]
-[ext_resource path="res://addons/moonwards/vehicles/rovers/Scooter/Scooter.escn" type="PackedScene" id=6]
-[ext_resource path="res://addons/moonwards/vehicles/rovers/AthleteRover/AthleteRover.escn" type="PackedScene" id=7]
+[ext_resource path="res://content/moonwards/items/ScooterBin/ScooterBin.escn" type="PackedScene" id=3]
+[ext_resource path="res://content/moonwards/buildings/satellite-dish/satellite-dish.escn" type="PackedScene" id=4]
+[ext_resource path="res://content/moonwards/vehicles/rovers/SpiderCrane/SpiderCrane.escn" type="PackedScene" id=5]
+[ext_resource path="res://content/moonwards/vehicles/rovers/Scooter/Scooter.escn" type="PackedScene" id=6]
+[ext_resource path="res://content/moonwards/vehicles/rovers/AthleteRover/AthleteRover.escn" type="PackedScene" id=7]
 
 [sub_resource type="ConvexPolygonShape" id=1]
 points = PoolVector3Array( -50, -0.5, -50, -50, -0.5, 50, -50, 0.5, -50, 50, -0.5, -50, -50, 0.5, 50, 50, -0.5, 50, 49.9902, 0.5, -50, 50, 0.5, 50 )

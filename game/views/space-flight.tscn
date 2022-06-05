@@ -5,8 +5,8 @@
 [ext_resource path="res://assets/planets/moon-model.tscn" type="PackedScene" id=3]
 [ext_resource path="res://ui/ui.tscn" type="PackedScene" id=4]
 [ext_resource path="res://controls/camera/gimbal-camera.tscn" type="PackedScene" id=5]
-[ext_resource path="res://addons/spacex-starship/source/SpaceX_Starship.fbx" type="PackedScene" id=6]
-[ext_resource path="res://addons/spacex-starship/source/SpaceX_Starship.gd" type="Script" id=7]
+[ext_resource path="res://content/spacex-starship/source/SpaceX_Starship.fbx" type="PackedScene" id=6]
+[ext_resource path="res://content/spacex-starship/source/SpaceX_Starship.gd" type="Script" id=7]
 
 [sub_resource type="CylinderShape" id=7]
 height = 50.7794
