@@ -2,12 +2,13 @@ extends VBoxContainer
 
 var STUB = "res://views/stub-view.tscn"
 
-
+func _enter_tree():
+	Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
+	
 func _on_Spaceflight_pressed():
 	get_tree().change_scene("res://views/space-flight.tscn")
 
 func _on_ModelBrowser_pressed():
-	print("Models preview")
 	get_tree().change_scene("res://views/models-preview.tscn")
 
 func _on_Trajectory_Planning_pressed():

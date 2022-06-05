@@ -8,4 +8,4 @@ func _input(event):
 		goto_main()
 
 func goto_main():
-	get_tree().change_scene("res://main-menu/main-menu.tscn")
+	get_tree().change_scene("res://views/main-menu.tscn")

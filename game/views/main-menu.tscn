@@ -157,6 +157,18 @@ margin_bottom = -11.0
 custom_fonts/font = ExtResource( 6 )
 text = "Version: 0.0.2"
 
+[node name="Label" type="Label" parent="Label"]
+anchor_left = 1.0
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+margin_left = -525.0
+margin_top = -786.0
+margin_right = -154.0
+margin_bottom = -746.0
+custom_fonts/font = ExtResource( 6 )
+text = "Press Esc for Menu"
+
 [connection signal="pressed" from="Menu/Spaceflight" to="Menu" method="_on_Spaceflight_pressed"]
 [connection signal="pressed" from="Menu/Surface Operations" to="Menu" method="_on_Surface_Operations_pressed"]
 [connection signal="pressed" from="Menu/ModelBrowser" to="Menu" method="_on_ModelBrowser_pressed"]
