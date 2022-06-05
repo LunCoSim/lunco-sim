@@ -8,13 +8,13 @@ func _on_Spaceflight_pressed():
 
 func _on_ModelBrowser_pressed():
 	print("Models preview")
-	get_tree().change_scene("res://views/models-preview/models-preview.tscn")
+	get_tree().change_scene("res://views/models-preview.tscn")
 
 func _on_Trajectory_Planning_pressed():
 	get_tree().change_scene(STUB)
 
 func _on_Surface_Operations_pressed():
-	get_tree().change_scene("res://views/player-view/player-view.tscn")
+	get_tree().change_scene("res://views/player-view.tscn")
 
 func _on_Lunar_Base_Sim_pressed():
 	get_tree().change_scene(STUB)
@@ -30,4 +30,4 @@ func _on_Exit_pressed():
 	
 
 func _on_Return_To_Main_Menu_pressed():
-	get_tree().change_scene("res://main-menu/main-menu.tscn")
+	get_tree().change_scene("res://views/main-menu.tscn")

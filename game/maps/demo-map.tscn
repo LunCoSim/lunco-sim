@@ -1,25 +1,17 @@
 [gd_scene load_steps=8 format=2]
 
-[ext_resource path="res://views/player-view/terrain-collision.tres" type="Shape" id=1]
-[ext_resource path="res://views/player-view/terrain.tres" type="CubeMesh" id=2]
+[ext_resource path="res://maps/terrain.tres" type="CubeMesh" id=2]
 [ext_resource path="res://addons/moonwards/items/ScooterBin/ScooterBin.escn" type="PackedScene" id=3]
 [ext_resource path="res://addons/moonwards/buildings/satellite-dish/satellite-dish.escn" type="PackedScene" id=4]
 [ext_resource path="res://addons/moonwards/vehicles/rovers/SpiderCrane/SpiderCrane.escn" type="PackedScene" id=5]
 [ext_resource path="res://addons/moonwards/vehicles/rovers/Scooter/Scooter.escn" type="PackedScene" id=6]
 [ext_resource path="res://addons/moonwards/vehicles/rovers/AthleteRover/AthleteRover.escn" type="PackedScene" id=7]
 
+[sub_resource type="ConvexPolygonShape" id=1]
+points = PoolVector3Array( -50, -0.5, -50, -50, -0.5, 50, -50, 0.5, -50, 50, -0.5, -50, -50, 0.5, 50, 50, -0.5, 50, 49.9902, 0.5, -50, 50, 0.5, 50 )
+
 [node name="Terrain" type="Spatial"]
 transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -1.19836, 0 )
-
-[node name="LunarSurface" type="StaticBody" parent="."]
-
-[node name="MeshInstance" type="MeshInstance" parent="LunarSurface"]
-transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.715679, 0 )
-mesh = ExtResource( 2 )
-skeleton = NodePath("../..")
-
-[node name="CollisionShape" type="CollisionShape" parent="LunarSurface"]
-shape = ExtResource( 1 )
 
 [node name="Objects" type="Node" parent="."]
 
@@ -29,12 +21,24 @@ transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 1.88083, -0.20671, 2.49058 )
 [node name="Buildings" type="Node" parent="Objects"]
 
 [node name="satellite-dish" parent="Objects/Buildings" instance=ExtResource( 4 )]
-transform = Transform( 5, 0, 0, 0, 5, 0, 0, 0, 5, 1.26411, 0.607037, -4.38926 )
+transform = Transform( 25, 0, 0, 0, 25, 0, 0, 0, 25, 34.2774, 0.607037, -30.7705 )
 
 [node name="SpiderCrane" parent="Objects" instance=ExtResource( 5 )]
+transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, -22.4127, 0, 10.8632 )
 
 [node name="Scooter" parent="Objects" instance=ExtResource( 6 )]
 transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, -1.90436, 0, 1.65441 )
 
 [node name="AthleteRover" parent="Objects" instance=ExtResource( 7 )]
-transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 4.53858, 21.4751 )
+transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 28.373, 4.53858, 33.9116 )
+
+[node name="LunarSurface" type="StaticBody" parent="."]
+
+[node name="MeshInstance" type="MeshInstance" parent="LunarSurface"]
+transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.715679, 0 )
+mesh = ExtResource( 2 )
+skeleton = NodePath("../..")
+
+[node name="CollisionShape" type="CollisionShape" parent="LunarSurface"]
+transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.715679, 0 )
+shape = SubResource( 1 )

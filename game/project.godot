@@ -21,7 +21,7 @@ _global_script_class_icons={
 [application]
 
 config/name="LunCo"
-run/main_scene="res://views/main-menu/main-menu.tscn"
+run/main_scene="res://views/main-menu.tscn"
 config/icon="res://assets/icon.png"
 config/windows_native_icon="res://assets/icon.ico"
 

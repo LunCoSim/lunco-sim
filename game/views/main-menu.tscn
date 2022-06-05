@@ -1,10 +1,10 @@
 [gd_scene load_steps=8 format=2]
 
-[ext_resource path="res://assets/cover.png" type="Texture" id=1]
-[ext_resource path="res://assets/logos/logo_ICO.png" type="Texture" id=2]
-[ext_resource path="res://assets/fonts/ui_font.tres" type="DynamicFont" id=3]
-[ext_resource path="res://assets/fonts_theme.theme" type="Theme" id=4]
-[ext_resource path="res://views/main-menu/main-menu.gd" type="Script" id=5]
+[ext_resource path="res://assets/logos/logo_ICO.png" type="Texture" id=1]
+[ext_resource path="res://assets/cover.png" type="Texture" id=2]
+[ext_resource path="res://views/code/main-menu.gd" type="Script" id=3]
+[ext_resource path="res://assets/fonts/ui_font.tres" type="DynamicFont" id=4]
+[ext_resource path="res://assets/fonts_theme.theme" type="Theme" id=5]
 [ext_resource path="res://assets/fonts/ui_font_outline.tres" type="DynamicFont" id=6]
 
 [sub_resource type="DynamicFont" id=1]
@@ -16,7 +16,7 @@ anchor_bottom = 1.0
 [node name="Cover" type="Sprite" parent="."]
 position = Vector2( 960, 542.5 )
 scale = Vector2( 1, 0.984404 )
-texture = ExtResource( 1 )
+texture = ExtResource( 2 )
 
 [node name="Menu" type="VBoxContainer" parent="."]
 anchor_left = 0.5
@@ -27,8 +27,8 @@ margin_left = 414.0
 margin_top = -584.0
 margin_right = 283.0
 margin_bottom = -262.0
-theme = ExtResource( 4 )
-script = ExtResource( 5 )
+theme = ExtResource( 5 )
+script = ExtResource( 3 )
 
 [node name="Spaceflight" type="Button" parent="Menu"]
 margin_right = 387.0
@@ -36,8 +36,8 @@ margin_bottom = 44.0
 rect_pivot_offset = Vector2( -78, 5 )
 size_flags_horizontal = 5
 size_flags_vertical = 4
-theme = ExtResource( 4 )
-custom_fonts/font = ExtResource( 3 )
+theme = ExtResource( 5 )
+custom_fonts/font = ExtResource( 4 )
 text = "SpaceFlight"
 
 [node name="Surface Operations" type="Button" parent="Menu"]
@@ -47,8 +47,8 @@ margin_bottom = 92.0
 rect_pivot_offset = Vector2( -78, 5 )
 size_flags_horizontal = 5
 size_flags_vertical = 4
-theme = ExtResource( 4 )
-custom_fonts/font = ExtResource( 3 )
+theme = ExtResource( 5 )
+custom_fonts/font = ExtResource( 4 )
 text = "Surface Operations"
 
 [node name="Panel" type="Panel" parent="Menu"]
@@ -63,8 +63,8 @@ margin_bottom = 144.0
 rect_pivot_offset = Vector2( -78, 5 )
 size_flags_horizontal = 5
 size_flags_vertical = 4
-theme = ExtResource( 4 )
-custom_fonts/font = ExtResource( 3 )
+theme = ExtResource( 5 )
+custom_fonts/font = ExtResource( 4 )
 text = "3D Models Browser"
 
 [node name="Panel2" type="Panel" parent="Menu"]
@@ -79,8 +79,8 @@ margin_bottom = 196.0
 rect_pivot_offset = Vector2( -78, 5 )
 size_flags_horizontal = 5
 size_flags_vertical = 4
-theme = ExtResource( 4 )
-custom_fonts/font = ExtResource( 3 )
+theme = ExtResource( 5 )
+custom_fonts/font = ExtResource( 4 )
 text = "Trajectory Planning (TBD)"
 
 [node name="Lunar Base Sim" type="Button" parent="Menu"]
@@ -90,8 +90,8 @@ margin_bottom = 244.0
 rect_pivot_offset = Vector2( -78, 5 )
 size_flags_horizontal = 5
 size_flags_vertical = 4
-theme = ExtResource( 4 )
-custom_fonts/font = ExtResource( 3 )
+theme = ExtResource( 5 )
+custom_fonts/font = ExtResource( 4 )
 text = "Lunar Base Sim (TBD)"
 
 [node name="Panel3" type="Panel" parent="Menu"]
@@ -106,8 +106,8 @@ margin_bottom = 296.0
 rect_pivot_offset = Vector2( -78, 5 )
 size_flags_horizontal = 5
 size_flags_vertical = 4
-theme = ExtResource( 4 )
-custom_fonts/font = ExtResource( 3 )
+theme = ExtResource( 5 )
+custom_fonts/font = ExtResource( 4 )
 text = "Help (TBD)"
 
 [node name="Settings" type="Button" parent="Menu"]
@@ -117,8 +117,8 @@ margin_bottom = 344.0
 rect_pivot_offset = Vector2( -78, 5 )
 size_flags_horizontal = 5
 size_flags_vertical = 4
-theme = ExtResource( 4 )
-custom_fonts/font = ExtResource( 3 )
+theme = ExtResource( 5 )
+custom_fonts/font = ExtResource( 4 )
 text = "Settings (TBD)"
 
 [node name="Exit" type="Button" parent="Menu"]
@@ -128,8 +128,8 @@ margin_bottom = 392.0
 rect_pivot_offset = Vector2( -78, 5 )
 size_flags_horizontal = 5
 size_flags_vertical = 4
-theme = ExtResource( 4 )
-custom_fonts/font = ExtResource( 3 )
+theme = ExtResource( 5 )
+custom_fonts/font = ExtResource( 4 )
 text = "Exit"
 
 [node name="Title" type="RichTextLabel" parent="."]
@@ -143,7 +143,7 @@ text = "LUNCO"
 
 [node name="LogoIco" type="Sprite" parent="."]
 position = Vector2( 96, 96 )
-texture = ExtResource( 2 )
+texture = ExtResource( 1 )
 
 [node name="Label" type="Label" parent="."]
 anchor_left = 1.0
