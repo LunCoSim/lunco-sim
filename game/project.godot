@@ -46,6 +46,7 @@ enabled=PoolStringArray( "res://addons/quentincaffeino/console/plugin.cfg" )
 [global]
 
 display=false
+export=false
 
 [input]
 
