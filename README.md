@@ -22,7 +22,7 @@ Free for **commercial use**.
 [![First gameplay video](docs/assets/second_screenshot.jpg "First gameplay video")](https://www.youtube.com/watch?v=PmTgnI-z-rY&feature=youtu.be "First gameplay video! - Click to Watch!")
 
 ## Features
-* Two game play stules
+* Two game play styles
   * Digital twin mode for engineers
   * Story mode for gamers
 * Realistic space exploration engine
@@ -45,7 +45,7 @@ Free for **commercial use**.
 ### Design you own mission ###
 
 1. Database of materials (based on db like MAPTIS)
-2. Database of component
+2. Database of components
 3. Follow engineering procedures: PDR, CDR, Testing, Integration, Flight, Mission Operation
 4. From first unmanned missions to sustainable human colony on the Moon
 5. Keep track of your budgets: money, mass, power, data.
@@ -67,13 +67,13 @@ Free for **commercial use**.
 ## Gameplay
 Collect resources, build factories, manufacture robots and to build sustaiable lunar base.
 
-You are playing as a CEO&Founder of a NewSpace Lunar exploration company in the nearest future. 
+You are playing as the CEO&Founder of a NewSpace Lunar exploration company in the nearest future. 
 
-You want to make the Moon forpost of human civilization in space in order to colonize the whole Solar system.
+You want to make the Moon forpost of human civilization in space in order to colonize the whole solar system.
 
 ## What to expect
 1. Supply chain management as in Factorio
-2. Robot&rocket control as in KSP
+2. Robot & rocket control as in KSP
 3. City management as in SimCity
 4. Economics
 5. Realistic technologies, physics and enviroment. E.g. you have to extract ~30-50 of different raw resources to build a satellite like Aluminum, Copper.
@@ -81,9 +81,9 @@ You want to make the Moon forpost of human civilization in space in order to col
 
 **Integration example:**
    1. You've designed a robot using RPI
-   2. You to install LunCo linux subsystem
+   2. You install the LunCo linux subsystem
    3. LunCo takes care of "faking" robot's / flatsat with sim data
-   4. You run same config + LunCo as on REAL mission
+   4. You run same config + LunCo as if it was on a REAL mission
   
 
 ## How to run
@@ -92,7 +92,7 @@ You want to make the Moon forpost of human civilization in space in order to col
     git submodule update --init --recursive 
 3. Install [Godot 3.5-rc2](https://downloads.tuxfamily.org/godotengine/3.5-rc2/) for your platform
         [All Godot Versions](https://downloads.tuxfamily.org/godotengine/)
-4. Run project by clocking on "project.godot" in "game" folder
+4. Run project by clicking on "project.godot" in "game" folder
 
 ## Links
 
