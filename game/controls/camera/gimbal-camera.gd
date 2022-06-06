@@ -16,10 +16,13 @@ export (float) var max_zoom = 3.0
 export (float) var min_zoom = 0.4
 export (float, 0.05, 1.0) var zoom_speed = 0.09
 
+export onready var camera = get_node("InnerGimbal/Camera")
+
 var zoom = 1
 
 func _ready():
 	$InnerGimbal/Camera.translation.z = distance
+#	camera = $InnerGimbal/Camera
 	
 func get_input_keyboard(delta):
 	# Rotate outer gimbal around y axis

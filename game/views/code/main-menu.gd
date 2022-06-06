@@ -2,6 +2,7 @@ extends VBoxContainer
 
 var STUB = "res://views/stub-view.tscn"
 
+
 func _enter_tree():
 	Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
 	
@@ -18,7 +19,7 @@ func _on_Surface_Operations_pressed():
 	get_tree().change_scene("res://views/player-view.tscn")
 
 func _on_Lunar_Base_Sim_pressed():
-	get_tree().change_scene(STUB)
+	get_tree().change_scene("res://views/spirit-view.tscn")
 
 func _on_Help_pressed():
 	OS.shell_open("https://github.com/LunCoSim/lunco-sim")

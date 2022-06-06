@@ -1,0 +1,24 @@
+[gd_scene load_steps=3 format=2]
+
+[ext_resource path="res://maps/terrain.tres" type="CubeMesh" id=2]
+
+[sub_resource type="ConvexPolygonShape" id=1]
+points = PoolVector3Array( -50, -0.5, -50, -50, -0.5, 50, -50, 0.5, -50, 50, -0.5, -50, -50, 0.5, 50, 50, -0.5, 50, 49.9902, 0.5, -50, 50, 0.5, 50 )
+
+[node name="Terrain" type="Spatial"]
+transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -1.19836, 0 )
+
+[node name="Objects" type="Node" parent="."]
+
+[node name="Buildings" type="Node" parent="Objects"]
+
+[node name="LunarSurface" type="StaticBody" parent="."]
+
+[node name="MeshInstance" type="MeshInstance" parent="LunarSurface"]
+transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.715679, 0 )
+mesh = ExtResource( 2 )
+skeleton = NodePath("../..")
+
+[node name="CollisionShape" type="CollisionShape" parent="LunarSurface"]
+transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.715679, 0 )
+shape = SubResource( 1 )
