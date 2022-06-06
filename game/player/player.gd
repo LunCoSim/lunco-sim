@@ -81,8 +81,8 @@ func _process(_delta):
 
 func _physics_process(delta):
 	var camera_move = Vector2(
-			Input.get_action_strength("view_right") - Input.get_action_strength("view_left"),
-			Input.get_action_strength("view_up") - Input.get_action_strength("view_down"))
+			Input.get_action_strength("camera_right") - Input.get_action_strength("camera_left"),
+			Input.get_action_strength("camera_up") - Input.get_action_strength("camera_down"))
 	var camera_speed_this_frame = delta * CAMERA_CONTROLLER_ROTATION_SPEED
 	if aiming:
 		camera_speed_this_frame *= 0.5
