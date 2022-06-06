@@ -56,9 +56,9 @@ Free for **commercial use**.
 
 ## FOLLOW US
 1. [Twitter](https://twitter.com/LunCoSim)
-2. [Discord](https://discord.gg/emfnjMj3r3)
-3. [Youtube](https://www.youtube.com/channel/UCwGFDDQcNSdXA5NxRtNbWYg/videos)
-4. [itch.io](https://difint.itch.io/lunco)
+2. [itch.io](https://difint.itch.io/lunco)
+3. [Discord](https://discord.gg/emfnjMj3r3)
+4. [Youtube](https://www.youtube.com/channel/UCwGFDDQcNSdXA5NxRtNbWYg/videos)
 5. [Notion](https://www.notion.so/invite/ff7a7dc226d4184c6fb77b1899d6672381be7e44)
 6. [Google Drive](https://drive.google.com/drive/folders/1mYNLdYOaw__OIb7OGDZiuHmbZZAJFA7M?usp=sharing)
 7. [Reddit](https://www.reddit.com/r/LunCo/)
@@ -121,6 +121,9 @@ You want to make the Moon forpost of human civilization in space in order to col
 
 ### Opensource spacecrafts
 1. [deathstarinspace](http://deathstarinspace.com)
+2. [JPL Open Source Rover Project](https://github.com/nasa-jpl/open-source-rover)
+3. [Sawppy the Rover](https://hackaday.io/project/158208-sawppy-the-rover)
+4. [ESA ExoMy](https://github.com/esa-prl/ExoMy)
 
 ### Similar games
 1. [Kerbal Space Program](https://www.kerbalspaceprogram.com/)
