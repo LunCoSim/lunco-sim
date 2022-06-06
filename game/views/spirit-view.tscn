@@ -1,0 +1,16 @@
+[gd_scene load_steps=4 format=2]
+
+[ext_resource path="res://controls/spirit/spirit.tscn" type="PackedScene" id=1]
+[ext_resource path="res://maps/demo-map.tscn" type="PackedScene" id=2]
+[ext_resource path="res://controls/camera/gimbal-camera.tscn" type="PackedScene" id=3]
+
+[node name="PlayerView" type="Node"]
+
+[node name="Map" parent="." instance=ExtResource( 2 )]
+transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -1, 0 )
+
+[node name="Character" parent="." instance=ExtResource( 1 )]
+target = NodePath("../CameraGimbal")
+
+[node name="CameraGimbal" parent="." instance=ExtResource( 3 )]
+target = NodePath("../Character")
