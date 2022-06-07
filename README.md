@@ -12,7 +12,7 @@ Free for **commercial use**.
 
 *PS Making Kerbal a real thing. Intended for industry applications*
 
-*[DOWNLOAD BINARY](https://github.com/lun-co/lunco-game/releases)*
+*[DOWNLOAD & PLAY](https://difint.itch.io/lunco)*
 
 *click on the image below to watch first gameplay video on youtube*
 
