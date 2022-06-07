@@ -15,8 +15,13 @@ func _input(event):
 		var camera = $Camera.camera
 		var from = camera.project_ray_origin(event.position)
 		var to = from + camera.project_ray_normal(event.position) * ray_length
-		print(from, "  ", to)
+#		print(from, "  ", to)
 	
 # Called every frame. 'delta' is the elapsed time since the previous frame.
 #func _process(delta):
 #	pass
+
+
+func _on_EmptyMap_clicked(position):
+	print("Map clicked: ", position)
+	$SpaceX_Starship.translation = position
