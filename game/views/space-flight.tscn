@@ -4,7 +4,7 @@
 [ext_resource path="res://assets/planets/earth-model.tscn" type="PackedScene" id=2]
 [ext_resource path="res://assets/planets/moon-model.tscn" type="PackedScene" id=3]
 [ext_resource path="res://ui/ui.tscn" type="PackedScene" id=4]
-[ext_resource path="res://controls/camera/gimbal-camera.tscn" type="PackedScene" id=5]
+[ext_resource path="res://addons/spring-arm-camera/spring-arm-camera.tscn" type="PackedScene" id=5]
 [ext_resource path="res://content/spacex-starship/source/SpaceX_Starship.fbx" type="PackedScene" id=6]
 [ext_resource path="res://content/spacex-starship/source/SpaceX_Starship.gd" type="Script" id=7]
 
@@ -34,7 +34,7 @@ ambient_light_sky_contribution = 0.0
 transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 59.2984, -2934.74, -74.8813 )
 
 [node name="SpacecraftControl" parent="." instance=ExtResource( 1 )]
-transform = Transform( -0.998931, 0.00105055, -0.0462228, -0.0195133, 0.89676, 0.442088, 0.0419152, 0.442517, -0.895781, -21.9732, 177.656, 25.8795 )
+transform = Transform( -0.998931, 0.00105055, -0.0462228, -0.0195133, 0.89676, 0.442088, 0.0419152, 0.442517, -0.895781, -21.9732, 203.157, 25.8795 )
 
 [node name="CollisionShape" type="CollisionShape" parent="SpacecraftControl"]
 transform = Transform( 1, -1.1102e-16, 1.1041e-16, 0, 0.00551527, -0.999986, 0, 0.999985, 0.00551527, 4.50739e-17, 1.44237e-15, -0.405991 )
@@ -52,6 +52,9 @@ lifetime = 1.78
 mesh = SubResource( 8 )
 initial_velocity = 8.7
 color_ramp = SubResource( 9 )
+
+[node name="SpringArmCamera" parent="SpacecraftControl" instance=ExtResource( 5 )]
+transform = Transform( 1, 5.58794e-09, -1.11759e-08, 0, 1, 8.9407e-08, -3.72529e-09, 0, 1, 1.60402, 18.5343, -34.2798 )
 
 [node name="Sun" type="Spatial" parent="."]
 transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 249.654, 290.096 )
@@ -91,10 +94,5 @@ transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 4476.79, 989.939, -41.6088 )
 environment = SubResource( 1 )
 
 [node name="UI" parent="." instance=ExtResource( 4 )]
-
-[node name="CameraGimbal" parent="." instance=ExtResource( 5 )]
-transform = Transform( 0.998286, -0.0371628, 0.0452052, 0.0249514, 0.969043, 0.245629, -0.0529339, -0.24408, 0.96831, -21.9732, 177.656, 25.8795 )
-target = NodePath("../SpacecraftControl")
-distance = 50.0
 
 [connection signal="thrust" from="SpacecraftControl" to="SpacecraftControl/Starship" method="_on_SpacecraftControl_thrust"]

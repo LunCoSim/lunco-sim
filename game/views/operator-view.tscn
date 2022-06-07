@@ -2,7 +2,7 @@
 
 [ext_resource path="res://maps/empty-map.tscn" type="PackedScene" id=1]
 [ext_resource path="res://content/spacex-starship/source/SpaceX_Starship.fbx" type="PackedScene" id=2]
-[ext_resource path="res://controls/camera/gimbal-camera.tscn" type="PackedScene" id=3]
+[ext_resource path="res://addons/spring-arm-camera/spring-arm-camera.tscn" type="PackedScene" id=3]
 [ext_resource path="res://controls/operator/operator.tscn" type="PackedScene" id=4]
 [ext_resource path="res://views/code/operator-view.gd" type="Script" id=5]
 
@@ -11,10 +11,10 @@ script = ExtResource( 5 )
 
 [node name="Operator" parent="." instance=ExtResource( 4 )]
 transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 0.779129, 0, 11.4547 )
-target = NodePath("../Camera")
+target = NodePath("SpringArmCamera")
 
-[node name="Camera" parent="." instance=ExtResource( 3 )]
-target = NodePath("../Operator")
+[node name="SpringArmCamera" parent="Operator" instance=ExtResource( 3 )]
+transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, -0.779129, 1.6, -11.4547 )
 
 [node name="Map" type="Spatial" parent="."]
 
