@@ -13,9 +13,15 @@ _global_script_classes=[ {
 "class": "Player",
 "language": "GDScript",
 "path": "res://player/player.gd"
+}, {
+"base": "Spatial",
+"class": "SpringArmCamera",
+"language": "GDScript",
+"path": "res://addons/spring-arm-camera/spring-arm-camera.gd"
 } ]
 _global_script_class_icons={
-"Player": ""
+"Player": "",
+"SpringArmCamera": ""
 }
 
 [application]

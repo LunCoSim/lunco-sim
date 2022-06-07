@@ -1,11 +1,7 @@
 class_name Player
 extends KinematicBody
 
-const CAMERA_MOUSE_ROTATION_SPEED = 0.001
-const CAMERA_CONTROLLER_ROTATION_SPEED = 3.0
-# A minimum angle lower than or equal to -90 breaks movement if the player is looking upward.
-const CAMERA_X_ROT_MIN = -89.9
-const CAMERA_X_ROT_MAX = 70
+export (NodePath) var camera
 
 # Release aiming if the mouse/gamepad button was held for longer than 0.4 seconds.
 # This works well for trackpads and is more accessible by not making long presses a requirement.
@@ -34,10 +30,11 @@ var toggled_aim = false
 # The duration the aiming button was held for (in seconds).
 var aiming_timer = 0.0
 
-var camera_x_rot = 0.0
 
 onready var initial_position = transform.origin
 onready var gravity = ProjectSettings.get_setting("physics/3d/default_gravity") * ProjectSettings.get_setting("physics/3d/default_gravity_vector")
+
+export onready var camera_node = get_node(camera)
 
 onready var animation_tree = $AnimationTree
 onready var player_model = $PlayerModel
@@ -45,12 +42,6 @@ onready var shoot_from = player_model.get_node(@"Robot_Skeleton/Skeleton/GunBone
 onready var color_rect = $ColorRect
 onready var crosshair = $Crosshair
 onready var fire_cooldown = $FireCooldown
-
-onready var camera_base = $SpringArmCamera
-onready var camera_animation = camera_base.get_node(@"Animation")
-onready var camera_rot = camera_base.get_node(@"CameraRot")
-onready var camera_spring_arm = camera_rot.get_node(@"SpringArm")
-onready var camera_camera = camera_spring_arm.get_node(@"Camera")
 
 onready var sound_effects = $SoundEffects
 onready var sound_effect_jump = sound_effects.get_node(@"Jump")
@@ -80,26 +71,11 @@ func _process(_delta):
 
 
 func _physics_process(delta):
-	var camera_move = Vector2(
-			Input.get_action_strength("camera_right") - Input.get_action_strength("camera_left"),
-			Input.get_action_strength("camera_up") - Input.get_action_strength("camera_down"))
-	var camera_speed_this_frame = delta * CAMERA_CONTROLLER_ROTATION_SPEED
-	if aiming:
-		camera_speed_this_frame *= 0.5
-	rotate_camera(camera_move * camera_speed_this_frame)
+	
 	var motion_target = Vector2(
 			Input.get_action_strength("move_right") - Input.get_action_strength("move_left"),
 			Input.get_action_strength("move_back") - Input.get_action_strength("move_forward"))
 	motion = motion.linear_interpolate(motion_target, MOTION_INTERPOLATE_SPEED * delta)
-
-	var camera_basis = camera_rot.global_transform.basis
-	var camera_z = camera_basis.z
-	var camera_x = camera_basis.x
-
-	camera_z.y = 0
-	camera_z = camera_z.normalized()
-	camera_x.y = 0
-	camera_x = camera_x.normalized()
 
 	var current_aim = false
 
@@ -116,13 +92,6 @@ func _physics_process(delta):
 		aiming_timer += delta
 	else:
 		aiming_timer = 0.0
-
-	if aiming != current_aim:
-		aiming = current_aim
-		if aiming:
-			camera_animation.play("shoot")
-		else:
-			camera_animation.play("far")
 
 	# Jump/in-air logic.
 	airborne_time += delta
@@ -151,14 +120,14 @@ func _physics_process(delta):
 		animation_tree["parameters/state/current"] = 0
 
 		# Change aim according to camera rotation.
-		if camera_x_rot >= 0: # Aim up.
-			animation_tree["parameters/aim/add_amount"] = -camera_x_rot / deg2rad(CAMERA_X_ROT_MAX)
+		if camera_node.camera_x_rot >= 0: # Aim up.
+			animation_tree["parameters/aim/add_amount"] = -camera_node.camera_x_rot / deg2rad(camera_node.CAMERA_X_ROT_MAX)
 		else: # Aim down.
-			animation_tree["parameters/aim/add_amount"] = camera_x_rot / deg2rad(CAMERA_X_ROT_MIN)
+			animation_tree["parameters/aim/add_amount"] = camera_node.camera_x_rot / deg2rad(camera_node.CAMERA_X_ROT_MIN)
 
 		# Convert orientation to quaternions for interpolating rotation.
 		var q_from = orientation.basis.get_rotation_quat()
-		var q_to = camera_base.global_transform.basis.get_rotation_quat()
+		var q_to = camera_node.global_transform.basis.get_rotation_quat()
 		# Interpolate current rotation with desired one.
 		orientation.basis = Basis(q_from.slerp(q_to, delta * ROTATION_INTERPOLATE_SPEED))
 
@@ -171,8 +140,8 @@ func _physics_process(delta):
 			var shoot_origin = shoot_from.global_transform.origin
 
 			var ch_pos = crosshair.rect_position + crosshair.rect_size * 0.5
-			var ray_from = camera_camera.project_ray_origin(ch_pos)
-			var ray_dir = camera_camera.project_ray_normal(ch_pos)
+			var ray_from = camera_node.project_ray_origin(ch_pos)
+			var ray_dir = camera_node.project_ray_normal(ch_pos)
 
 			var shoot_target
 			var col = get_world().direct_space_state.intersect_ray(ray_from, ray_from + ray_dir * 1000, [self], 0b11)
@@ -196,11 +165,11 @@ func _physics_process(delta):
 			muzzle_particle.emitting = true
 			fire_cooldown.start()
 			sound_effect_shoot.play()
-			camera_camera.add_trauma(0.35)
+			camera_node.add_camera_shake_trauma(0.35)
 
 	else: # Not in air or aiming, idle.
 		# Convert orientation to quaternions for interpolating rotation.
-		var target = camera_x * motion.x + camera_z * motion.y
+		var target = camera_node.camera_x * motion.x + camera_node.camera_z * motion.y
 		if target.length() > 0.001:
 			var q_from = orientation.basis.get_rotation_quat()
 			var q_to = Transform().looking_at(target, Vector3.UP).basis.get_rotation_quat()
@@ -231,22 +200,5 @@ func _physics_process(delta):
 	player_model.global_transform.basis = orientation.basis
 
 
-func _input(event):
-	if event is InputEventMouseMotion:
-		var camera_speed_this_frame = CAMERA_MOUSE_ROTATION_SPEED
-		if aiming:
-			camera_speed_this_frame *= 0.75
-		rotate_camera(event.relative * camera_speed_this_frame)
 
 
-func rotate_camera(move):
-	camera_base.rotate_y(-move.x)
-	# After relative transforms, camera needs to be renormalized.
-	camera_base.orthonormalize()
-	camera_x_rot += move.y
-	camera_x_rot = clamp(camera_x_rot, deg2rad(CAMERA_X_ROT_MIN), deg2rad(CAMERA_X_ROT_MAX))
-	camera_rot.rotation.x = camera_x_rot
-
-
-func add_camera_shake_trauma(amount):
-	camera_camera.add_trauma(amount)
