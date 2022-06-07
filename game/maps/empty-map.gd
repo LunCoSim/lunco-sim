@@ -1,6 +1,6 @@
 extends Spatial
 
-
+signal clicked(x, y, z)
 # Declare member variables here. Examples:
 # var a = 2
 # var b = "text"
@@ -14,3 +14,9 @@ func _ready():
 # Called every frame. 'delta' is the elapsed time since the previous frame.
 #func _process(delta):
 #	pass
+
+
+func _on_LunarSurface_input_event(camera, event, position, normal, shape_idx):
+	if event is InputEventMouseButton:
+		emit_signal("clicked", position.x, position.y, position.z)
+		
