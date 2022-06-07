@@ -4,7 +4,7 @@
 [ext_resource path="res://assets/planets/earth-model.tscn" type="PackedScene" id=2]
 [ext_resource path="res://assets/planets/moon-model.tscn" type="PackedScene" id=3]
 [ext_resource path="res://ui/ui.tscn" type="PackedScene" id=4]
-[ext_resource path="res://addons/lunco-cameras/spring-arm-camera/spring-arm-camera.tscn" type="PackedScene" id=5]
+[ext_resource path="res://addons/lunco-cameras/gimbal-camera/gimbal-camera.tscn" type="PackedScene" id=5]
 [ext_resource path="res://content/spacex-starship/source/SpaceX_Starship.fbx" type="PackedScene" id=6]
 [ext_resource path="res://content/spacex-starship/source/SpaceX_Starship.gd" type="Script" id=7]
 
@@ -53,9 +53,6 @@ mesh = SubResource( 8 )
 initial_velocity = 8.7
 color_ramp = SubResource( 9 )
 
-[node name="SpringArmCamera" parent="SpacecraftControl" instance=ExtResource( 5 )]
-transform = Transform( 1, 5.58794e-09, -1.11759e-08, 0, 1, 8.9407e-08, -3.72529e-09, 0, 1, 1.60402, 18.5343, -34.2798 )
-
 [node name="Sun" type="Spatial" parent="."]
 transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 249.654, 290.096 )
 
@@ -94,5 +91,10 @@ transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 4476.79, 989.939, -41.6088 )
 environment = SubResource( 1 )
 
 [node name="UI" parent="." instance=ExtResource( 4 )]
+
+[node name="CameraGimbal" parent="." instance=ExtResource( 5 )]
+transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 203.157, 0 )
+target = NodePath("../SpacecraftControl")
+distance = 50.0
 
 [connection signal="thrust" from="SpacecraftControl" to="SpacecraftControl/Starship" method="_on_SpacecraftControl_thrust"]
