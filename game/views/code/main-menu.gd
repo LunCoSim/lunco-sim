@@ -19,7 +19,7 @@ func _on_Surface_Operations_pressed():
 	get_tree().change_scene("res://views/player-view.tscn")
 
 func _on_Lunar_Base_Sim_pressed():
-	get_tree().change_scene("res://views/spirit-view.tscn")
+	get_tree().change_scene("res://views/operator-view.tscn")
 
 func _on_Help_pressed():
 	OS.shell_open("https://github.com/LunCoSim/lunco-sim")
