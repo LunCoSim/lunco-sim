@@ -118,7 +118,8 @@ func _physics_process(delta):
 	elif aiming:
 		# Change state to strafe.
 		animation_tree["parameters/state/current"] = 0
-
+		
+		camera_node.set_aiming(aiming)
 		# Change aim according to camera rotation.
 		if camera_node.camera_x_rot >= 0: # Aim up.
 			animation_tree["parameters/aim/add_amount"] = -camera_node.camera_x_rot / deg2rad(camera_node.CAMERA_X_ROT_MAX)

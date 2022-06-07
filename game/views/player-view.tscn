@@ -14,4 +14,7 @@ transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.54657, 0 )
 camera = NodePath("Camera")
 
 [node name="Camera" parent="Player" instance=ExtResource( 3 )]
-transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.0534301, 0 )
+transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.4648, 0 )
+CAMERA_MOUSE_ROTATION_SPEED = 0.049
+CAMERA_CONTROLLER_ROTATION_SPEED = 7.0
+camera_basis = Vector3( 0, 3, 0 )
