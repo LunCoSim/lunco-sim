@@ -1,7 +1,7 @@
 [gd_scene load_steps=3 format=2]
 
 [ext_resource path="res://controls/spacecraft/spacecraft-controller.tscn" type="PackedScene" id=1]
-[ext_resource path="res://addons/spring-arm-camera/spring-arm-camera.tscn" type="PackedScene" id=2]
+[ext_resource path="res://addons/spring-arm-camera/spring-arm-camera/spring-arm-camera.tscn" type="PackedScene" id=2]
 
 [node name="Node" type="Node"]
 
