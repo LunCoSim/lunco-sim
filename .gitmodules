@@ -1,3 +1,6 @@
 [submodule "game/content"]
 	path = game/content
 	url = git@github.com:LunCoSim/lunco-content.git
+[submodule "game/addons/spring-arm-camera"]
+	path = game/addons/spring-arm-camera
+	url = git@github.com:LunCoSim/spring-arm-camera.git
