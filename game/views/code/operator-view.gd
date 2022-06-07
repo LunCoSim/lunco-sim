@@ -24,4 +24,8 @@ func _input(event):
 
 func _on_EmptyMap_clicked(position):
 	print("Map clicked: ", position)
-	$SpaceX_Starship.translation = position
+	var scene = load("res://content/spacex-starship/source/SpaceX_Starship.fbx")
+	var instance = scene.instance()
+	
+	instance.translation = position
+	$Map.add_child(instance)
