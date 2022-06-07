@@ -4,7 +4,7 @@
 [ext_resource path="res://maps/empty-map.tscn" type="PackedScene" id=2]
 [ext_resource path="res://controls/camera/gimbal-camera.tscn" type="PackedScene" id=3]
 [ext_resource path="res://content/spacex-starship/source/SpaceX_Starship.fbx" type="PackedScene" id=4]
-[ext_resource path="res://views/spirit-view.gd" type="Script" id=5]
+[ext_resource path="res://views/code/spirit-view.gd" type="Script" id=5]
 
 [node name="PlayerView" type="Node"]
 script = ExtResource( 5 )

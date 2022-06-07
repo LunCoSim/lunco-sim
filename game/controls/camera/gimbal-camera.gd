@@ -44,9 +44,9 @@ func get_input_keyboard(delta):
 	
 	# Change camera distance
 	if Input.is_action_pressed("plus"):
-		$InnerGimbal/Camera.translation.z += 1
+		$InnerGimbal/Camera.translation.z += -1
 	if Input.is_action_pressed("minus"):
-		$InnerGimbal/Camera.translation.z -= 1
+		$InnerGimbal/Camera.translation.z += 1
 
 func _input(event):
 	if Input.is_action_pressed("rotate_camera"):
