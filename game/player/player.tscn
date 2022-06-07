@@ -1,4 +1,4 @@
-[gd_scene load_steps=47 format=2]
+[gd_scene load_steps=45 format=2]
 
 [ext_resource path="res://player/player.gd" type="Script" id=1]
 [ext_resource path="res://player/model/player.glb" type="PackedScene" id=2]
@@ -7,7 +7,7 @@
 [ext_resource path="res://player/audio/jump.wav" type="AudioStream" id=5]
 [ext_resource path="res://player/audio/land.wav" type="AudioStream" id=6]
 [ext_resource path="res://player/audio/shoot.wav" type="AudioStream" id=7]
-[ext_resource path="res://player/camera_noise_shake_effect.gd" type="Script" id=8]
+[ext_resource path="res://controls/camera/spring-arm-camera.tscn" type="PackedScene" id=8]
 [ext_resource path="res://player/bullet/bullet_material.tres" type="Material" id=9]
 [ext_resource path="res://player/model/muzzle_flash_particle_mesh_Cone.mesh" type="ArrayMesh" id=10]
 [ext_resource path="res://player/bullet/effect/FlarePolar.png" type="Texture" id=11]
@@ -197,65 +197,13 @@ nodes/strafe/node = SubResource( 24 )
 nodes/strafe/position = Vector2( -400, -120 )
 nodes/walk/node = SubResource( 29 )
 nodes/walk/position = Vector2( -400, 40 )
-node_connections = [ "state", 0, "strafe", "state", 1, "walk", "state", 2, "jumpup", "state", 3, "jumpdown", "output", 0, "eye_blend", "aim", 0, "aimdown", "aim", 1, "land", "aim", 2, "aimup", "eye_blend", 0, "aim", "eye_blend", 1, "eyes", "land", 0, "state", "land", 1, "hardland" ]
+node_connections = [ "eye_blend", 0, "aim", "eye_blend", 1, "eyes", "land", 0, "state", "land", 1, "hardland", "aim", 0, "aimdown", "aim", 1, "land", "aim", 2, "aimup", "output", 0, "eye_blend", "state", 0, "strafe", "state", 1, "walk", "state", 2, "jumpup", "state", 3, "jumpdown" ]
 
 [sub_resource type="CapsuleShape" id=31]
 radius = 0.5
 height = 0.6
 
 [sub_resource type="RayShape" id=32]
-
-[sub_resource type="Animation" id=33]
-tracks/0/type = "value"
-tracks/0/path = NodePath("CameraRot/SpringArm:translation")
-tracks/0/interp = 1
-tracks/0/loop_wrap = true
-tracks/0/imported = false
-tracks/0/enabled = true
-tracks/0/keys = {
-"times": PoolRealArray( 0, 1 ),
-"transitions": PoolRealArray( 0.287175, 1 ),
-"update": 3,
-"values": [ Vector3( 0, 0, 0 ), Vector3( 0, 0, 0 ) ]
-}
-tracks/1/type = "value"
-tracks/1/path = NodePath("../Crosshair:self_modulate")
-tracks/1/interp = 1
-tracks/1/loop_wrap = true
-tracks/1/imported = false
-tracks/1/enabled = true
-tracks/1/keys = {
-"times": PoolRealArray( 0.2 ),
-"transitions": PoolRealArray( 1 ),
-"update": 3,
-"values": [ Color( 1, 1, 1, 0 ) ]
-}
-
-[sub_resource type="Animation" id=34]
-tracks/0/type = "value"
-tracks/0/path = NodePath("CameraRot/SpringArm:translation")
-tracks/0/interp = 1
-tracks/0/loop_wrap = true
-tracks/0/imported = false
-tracks/0/enabled = true
-tracks/0/keys = {
-"times": PoolRealArray( 0, 1 ),
-"transitions": PoolRealArray( 0.233259, 1 ),
-"update": 3,
-"values": [ Vector3( -0.6, -0.3, 1.1 ), Vector3( -0.6, -0.3, 1.1 ) ]
-}
-tracks/1/type = "value"
-tracks/1/path = NodePath("../Crosshair:self_modulate")
-tracks/1/interp = 1
-tracks/1/loop_wrap = true
-tracks/1/imported = false
-tracks/1/enabled = true
-tracks/1/keys = {
-"times": PoolRealArray( 0.2 ),
-"transitions": PoolRealArray( 1 ),
-"update": 3,
-"values": [ Color( 1, 1, 1, 1 ) ]
-}
 
 [sub_resource type="AudioStreamRandomPitch" id=35]
 audio_stream = ExtResource( 7 )
@@ -271,7 +219,7 @@ script = ExtResource( 1 )
 transform = Transform( 0.803991, 0, 0, 0, 0.803991, 0, 0, 0, 0.803991, 0, 0, 0 )
 
 [node name="GunBone" type="BoneAttachment" parent="PlayerModel/Robot_Skeleton/Skeleton" index="5"]
-transform = Transform( 0.922283, -0.383498, -0.0503922, -0.0329634, 0.0519017, -0.998115, 0.385435, 0.922083, 0.0352233, -0.207145, 1.38919, 0.483373 )
+transform = Transform( 0.921463, -0.386968, -0.0370962, -0.0255715, 0.0348989, -0.999071, 0.387948, 0.921433, 0.0222603, -0.207148, 1.37526, 0.51599 )
 bone_name = "hand.R"
 
 [node name="ShootFrom" type="Position3D" parent="PlayerModel/Robot_Skeleton/Skeleton/GunBone"]
@@ -324,33 +272,7 @@ shape = SubResource( 31 )
 transform = Transform( 1, 0, 0, 0, -4.37114e-08, -1, 0, 1, -4.37114e-08, 0, 1.00357, 0 )
 shape = SubResource( 32 )
 
-[node name="CameraBase" type="Spatial" parent="."]
-transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.6, 0 )
-__meta__ = {
-"_editor_description_": "Handles Y rotation (yaw)."
-}
-
-[node name="CameraRot" type="Spatial" parent="CameraBase"]
-__meta__ = {
-"_editor_description_": "Handles X rotation (pitch)."
-}
-
-[node name="SpringArm" type="SpringArm" parent="CameraBase/CameraRot"]
-transform = Transform( -1, -1.11444e-07, 3.06191e-07, 0, 0.939693, 0.34202, -3.25841e-07, 0.34202, -0.939693, 0, 0, 0 )
-spring_length = 2.4
-
-[node name="Camera" type="Camera" parent="CameraBase/CameraRot/SpringArm"]
-transform = Transform( 1, 1.42109e-14, -2.84217e-14, 0, 1, 0, 0, 0, 1, 0, 0, 0 )
-current = true
-far = 300.0
-script = ExtResource( 8 )
-__meta__ = {
-"_editor_description_": "Translated when aiming."
-}
-
-[node name="Animation" type="AnimationPlayer" parent="CameraBase"]
-anims/far = SubResource( 33 )
-anims/shoot = SubResource( 34 )
+[node name="SpringArmCamera" parent="." instance=ExtResource( 8 )]
 
 [node name="ColorRect" type="ColorRect" parent="."]
 modulate = Color( 1, 1, 1, 0 )

@@ -46,7 +46,7 @@ onready var color_rect = $ColorRect
 onready var crosshair = $Crosshair
 onready var fire_cooldown = $FireCooldown
 
-onready var camera_base = $CameraBase
+onready var camera_base = $SpringArmCamera
 onready var camera_animation = camera_base.get_node(@"Animation")
 onready var camera_rot = camera_base.get_node(@"CameraRot")
 onready var camera_spring_arm = camera_rot.get_node(@"SpringArm")
