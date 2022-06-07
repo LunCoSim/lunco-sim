@@ -13,15 +13,9 @@ _global_script_classes=[ {
 "class": "Player",
 "language": "GDScript",
 "path": "res://player/player.gd"
-}, {
-"base": "Spatial",
-"class": "SpringArmCamera",
-"language": "GDScript",
-"path": "res://addons/lunco-cameras/spring-arm-camera/spring-arm-camera.gd"
 } ]
 _global_script_class_icons={
-"Player": "",
-"SpringArmCamera": ""
+"Player": ""
 }
 
 [application]
@@ -47,7 +41,7 @@ window/stretch/aspect="keep_height"
 
 [editor_plugins]
 
-enabled=PoolStringArray( "res://addons/project-map/addons/project_map/plugin.cfg", "res://addons/quentincaffeino/console/plugin.cfg" )
+enabled=PoolStringArray( "res://addons/godot-package-manager/plugin.cfg" )
 
 [global]
 
