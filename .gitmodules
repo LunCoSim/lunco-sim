@@ -4,3 +4,6 @@
 [submodule "game/addons/lunco-cameras"]
 	path = game/addons/lunco-cameras
 	url = git@github.com:LunCoSim/lunco-cameras.git
+[submodule "game/addons/project-map"]
+	path = game/addons/project-map
+	url = git@github.com:LunCoSim/Project-Map.git
