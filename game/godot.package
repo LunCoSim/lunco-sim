@@ -8,7 +8,13 @@
 				"type": "script_name",
 				"value": "test"
 			}
-		}
+		},
+		"https://github.com/LunCoSim/godot-package-manager": "",
+		"https://github.com/LunCoSim/lunco-cameras":"",
+		"https://github.com/LunCoSim/lunco-content": "",
+		"git@github.com:LunCoSim/Project-Map.git":"",
+		"https://github.com/quentincaffeino/godot-console": ""
+
 	},
 	"hooks": {
 		"pre_dry_run": "gpm.print('dry run is going to run!')",
