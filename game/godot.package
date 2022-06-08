@@ -57,6 +57,16 @@
 			"integrity": ""
 		},
 
+		"UIDesignTool": {
+			"src": "github",
+			"url": "https://github.com/godot-extended-libraries/godot-next",
+			"dist": "https://github.com/imjp94/UIDesignTool/archive/refs/tags/0.2.2.tar.gz",
+		
+			"version": "0.2.2",
+			"filename": "0.2.2.tar.gz",
+			"integrity": ""
+		},
+
 		
 
 		"lunco-content": {
@@ -90,6 +100,8 @@
 			GPMUtils.mv('addons/gdn/addons/godot-next', 'addons/godot-next')
 			GPMUtils.rm('addons/gdn')	
 
+			GPMUtils.mv('addons/UIDesignTool/addons/ui_design_tool', 'addons/ui_design_tool')
+			GPMUtils.rm('addons/UIDesignTool')	
 					
 		",
 	},
