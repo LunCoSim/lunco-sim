@@ -23,8 +23,8 @@
 			"url": "https://github.com/LunCoSim/godot-package-manager.git",
 			"dist": "https://github.com/LunCoSim/godot-package-manager/archive/refs/tags/v0.2.1.tar.gz",
 		
-			"version": "0.2.1",
-			"filename": "v0.2.1.tar.gz",
+			"version": "0.2.2",
+			"filename": "v0.2.2.tar.gz",
 			"integrity": ""
 		},
 		"lunco-cameras": {
@@ -36,6 +36,12 @@
 			"filename": "v0.2.1.tar.gz",
 			"integrity": ""
 		},
+		"lunco-content": {
+			"src": "git",
+			"url": "git@github.com:LunCoSim/lunco-content.git",
+			"version": "0.0.0",
+			"filename": "v0.0.0.tar.gz",
+		}
 		
 	},
 	"hooks": {
