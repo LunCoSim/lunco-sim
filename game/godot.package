@@ -27,6 +27,17 @@
 			"filename": "v0.2.1.tar.gz",
 			"integrity": ""
 		},
+		"project-map": {
+			"src": "github",
+			"url": "https://github.com/Yogoda/Project-Map",
+			"dist": "https://github.com/Yogoda/Project-Map/archive/refs/tags/1.3.tar.gz",
+		
+			"version": "1.3",
+			"filename": "1.3.tar.gz",
+			"integrity": ""
+		},
+
+		
 		"lunco-content": {
 			"src": "git",
 			"url": "git@github.com:LunCoSim/lunco-content.git",
@@ -48,6 +59,9 @@
 		"post_update": "
 			GPMUtils.mv('addons/godot-console/addons/quentincaffeino', 'addons/')
 			GPMUtils.rm('addons/godot-console')
+
+			GPMUtils.mv('addons/project-map/addons/project_map', 'addons/project_map')
+			GPMUtils.rm('addons/project-map')			
 		",
 	},
 	"scripts": {

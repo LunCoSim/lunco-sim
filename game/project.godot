@@ -9,6 +9,11 @@
 config_version=4
 
 _global_script_classes=[ {
+"base": "GraphNode",
+"class": "CommonNode",
+"language": "GDScript",
+"path": "res://addons/project_map/pm_common_node.gd"
+}, {
 "base": "Reference",
 "class": "GPM",
 "language": "GDScript",
@@ -55,6 +60,7 @@ _global_script_classes=[ {
 "path": "res://addons/lunco-cameras/spring-arm-camera/spring-arm-camera.gd"
 } ]
 _global_script_class_icons={
+"CommonNode": "",
 "GPM": "",
 "GPMAdvancedExpression": "",
 "GPMError": "",
@@ -89,7 +95,7 @@ window/stretch/aspect="keep_height"
 
 [editor_plugins]
 
-enabled=PoolStringArray( "res://addons/quentincaffeino/console/plugin.cfg" )
+enabled=PoolStringArray( "res://addons/project_map/plugin.cfg", "res://addons/quentincaffeino/console/plugin.cfg" )
 
 [global]
 
