@@ -18,15 +18,6 @@
 			"filename": "v3.5.1.tar.gz",
 			"integrity": ""
 		},
-		"godot-package-manager": {
-			"src": "github",
-			"url": "https://github.com/LunCoSim/godot-package-manager.git",
-			"dist": "https://github.com/LunCoSim/godot-package-manager/archive/refs/tags/v0.2.1.tar.gz",
-		
-			"version": "0.2.2",
-			"filename": "v0.2.2.tar.gz",
-			"integrity": ""
-		},
 		"lunco-cameras": {
 			"src": "github",
 			"url": "https://github.com/LunCoSim/lunco-cameras",
