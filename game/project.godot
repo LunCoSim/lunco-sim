@@ -48,6 +48,11 @@ _global_script_classes=[ {
 "class": "Player",
 "language": "GDScript",
 "path": "res://player/player.gd"
+}, {
+"base": "Spatial",
+"class": "SpringArmCamera",
+"language": "GDScript",
+"path": "res://addons/lunco-cameras/spring-arm-camera/spring-arm-camera.gd"
 } ]
 _global_script_class_icons={
 "GPM": "",
@@ -57,7 +62,8 @@ _global_script_class_icons={
 "GPMHooks": "",
 "GPMResult": "",
 "GPMUtils": "",
-"Player": ""
+"Player": "",
+"SpringArmCamera": ""
 }
 
 [application]

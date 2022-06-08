@@ -10,5 +10,9 @@
 	"godot-package-manager": {
 		"version": "0.2.1",
 		"integrity": ""
+	},
+	"lunco-cameras": {
+		"version": "0.2.1",
+		"integrity": ""
 	}
 }

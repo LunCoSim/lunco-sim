@@ -26,7 +26,17 @@
 			"version": "0.2.1",
 			"filename": "v0.2.1.tar.gz",
 			"integrity": ""
-		}
+		},
+		"lunco-cameras": {
+			"src": "github",
+			"url": "https://github.com/LunCoSim/lunco-cameras",
+			"dist": "https://github.com/LunCoSim/lunco-cameras/archive/refs/tags/v0.1.0.tar.gz",
+		
+			"version": "0.2.1",
+			"filename": "v0.2.1.tar.gz",
+			"integrity": ""
+		},
+		
 	},
 	"hooks": {
 		"pre_dry_run": "gpm.print('dry run is going to run!')",
