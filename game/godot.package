@@ -17,6 +17,15 @@
 			"version": "3.5.1",
 			"filename": "v3.5.1.tar.gz",
 			"integrity": ""
+		},
+		"godot-package-manager": {
+			"src": "github",
+			"url": "https://github.com/LunCoSim/godot-package-manager.git",
+			"dist": "https://github.com/LunCoSim/godot-package-manager/archive/refs/tags/v0.2.1.tar.gz",
+		
+			"version": "0.2.1",
+			"filename": "v0.2.1.tar.gz",
+			"integrity": ""
 		}
 	},
 	"hooks": {
@@ -32,6 +41,10 @@
 		"post_update": "
 			GPMUtils.mv('addons/godot-console/addons/quentincaffeino', 'addons/')
 			GPMUtils.rm('addons/godot-console')
+
+			GPMUtils.mv('addons/godot-package-manager/addons/godot-package-manager', 'addons/godot-package-manager1')
+			GPMUtils.rm('addons/godot-package-manager')
+			GPMUtils.mv('addons/godot-package-manager1', 'addons/godot-package-manager')
 		",
 	},
 	"scripts": {
