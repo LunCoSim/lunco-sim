@@ -9,12 +9,54 @@
 config_version=4
 
 _global_script_classes=[ {
+"base": "Reference",
+"class": "GPM",
+"language": "GDScript",
+"path": "res://addons/godot-package-manager/godot_package_manager.gd"
+}, {
+"base": "Reference",
+"class": "GPMAdvancedExpression",
+"language": "GDScript",
+"path": "res://addons/godot-package-manager/classes/advanced-expression.gd"
+}, {
+"base": "Reference",
+"class": "GPMError",
+"language": "GDScript",
+"path": "res://addons/godot-package-manager/classes/error.gd"
+}, {
+"base": "Reference",
+"class": "GPMFailedPackages",
+"language": "GDScript",
+"path": "res://addons/godot-package-manager/classes/failed-packages.gd"
+}, {
+"base": "Reference",
+"class": "GPMHooks",
+"language": "GDScript",
+"path": "res://addons/godot-package-manager/classes/hooks.gd"
+}, {
+"base": "Reference",
+"class": "GPMResult",
+"language": "GDScript",
+"path": "res://addons/godot-package-manager/classes/result.gd"
+}, {
+"base": "Reference",
+"class": "GPMUtils",
+"language": "GDScript",
+"path": "res://addons/godot-package-manager/utils.gd"
+}, {
 "base": "KinematicBody",
 "class": "Player",
 "language": "GDScript",
 "path": "res://player/player.gd"
 } ]
 _global_script_class_icons={
+"GPM": "",
+"GPMAdvancedExpression": "",
+"GPMError": "",
+"GPMFailedPackages": "",
+"GPMHooks": "",
+"GPMResult": "",
+"GPMUtils": "",
 "Player": ""
 }
 
@@ -41,7 +83,7 @@ window/stretch/aspect="keep_height"
 
 [editor_plugins]
 
-enabled=PoolStringArray( "res://addons/godot-package-manager/plugin.cfg" )
+enabled=PoolStringArray( "res://addons/quentincaffeino/console/plugin.cfg" )
 
 [global]
 

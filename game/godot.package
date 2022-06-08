@@ -9,12 +9,15 @@
 				"value": "test"
 			}
 		},
-		"https://github.com/LunCoSim/godot-package-manager": "",
-		"https://github.com/LunCoSim/lunco-cameras":"",
-		"https://github.com/LunCoSim/lunco-content": "",
-		"git@github.com:LunCoSim/Project-Map.git":"",
-		"https://github.com/quentincaffeino/godot-console": ""
-
+		"godot-console": {
+			"src": "github",
+			"url": "https://github.com/quentincaffeino/godot-console.git",
+			"dist": "https://github.com/quentincaffeino/godot-console/archive/refs/tags/v3.5.1.tar.gz",
+		
+			"version": "3.5.1",
+			"filename": "v3.5.1.tar.gz",
+			"integrity": ""
+		}
 	},
 	"hooks": {
 		"pre_dry_run": "gpm.print('dry run is going to run!')",
@@ -25,11 +28,15 @@
 		"pre_update": {
 			"type": "script",
 			"value": "gpm.print('pre update')"
-		}
+		},
+		"post_update": "
+			GPMUtils.mv('addons/godot-console/addons/quentincaffeino', 'addons/')
+			GPMUtils.rm('addons/godot-console')
+		",
 	},
 	"scripts": {
 		"test": "
-			gpm.print('hello world')
+			gpm.print('testhello world')
 			return false
 		"
 	}

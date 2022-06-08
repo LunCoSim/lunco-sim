@@ -1,0 +1,3 @@
+#! /bin/bash
+
+godot --no-window --script addons/godot-package-manager/gpm.gd
