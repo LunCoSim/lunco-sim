@@ -47,6 +47,18 @@
 			"integrity": ""
 		},
 
+		"gdn": {
+			"src": "github",
+			"url": "https://github.com/godot-extended-libraries/godot-next",
+			"dist": "https://github.com/godot-extended-libraries/godot-next/archive/refs/tags/1.1.0-godot3.2.2.tar.gz",
+		
+			"version": "1.1.0-godot3.2.2",
+			"filename": "1.1.0-godot3.2.2.tar.gz",
+			"integrity": ""
+		},
+
+		
+
 		"lunco-content": {
 			"src": "git",
 			"url": "git@github.com:LunCoSim/lunco-content.git",
@@ -73,7 +85,12 @@
 			GPMUtils.rm('addons/project-map')
 
 			GPMUtils.mv('addons/gd-YAFSM/addons/imjp94.yafsm', 'addons/imjp94.yafsm')
-			GPMUtils.rm('addons/gd-YAFSM')			
+			GPMUtils.rm('addons/gd-YAFSM')	
+
+			GPMUtils.mv('addons/gdn/addons/godot-next', 'addons/godot-next')
+			GPMUtils.rm('addons/gdn')	
+
+					
 		",
 	},
 	"scripts": {
