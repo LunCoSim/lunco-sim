@@ -1,6 +1,6 @@
 [gd_scene load_steps=6 format=2]
 
-[ext_resource path="res://content/planets/Moon.png" type="Texture" id=1]
+[ext_resource path="res://addons/lunco-content/planets/Moon.png" type="Texture" id=1]
 [ext_resource path="res://assets/planets/moon-collision-shape.tscn" type="PackedScene" id=2]
 
 [sub_resource type="SphereMesh" id=9]

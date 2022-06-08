@@ -19,7 +19,7 @@ func _ready():
 
 func _on_EmptyMap_clicked(position):
 	print("Map clicked: ", position)
-	var scene = load("res://content/spacex-starship/source/SpaceX_Starship.fbx")
+	var scene = load("res://addons/lunco-content/spacex-starship/source/SpaceX_Starship.fbx")
 	var instance = scene.instance()
 	
 	instance.translation = position
