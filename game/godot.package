@@ -48,10 +48,6 @@
 		"post_update": "
 			GPMUtils.mv('addons/godot-console/addons/quentincaffeino', 'addons/')
 			GPMUtils.rm('addons/godot-console')
-
-			GPMUtils.mv('addons/godot-package-manager/addons/godot-package-manager', 'addons/godot-package-manager1')
-			GPMUtils.rm('addons/godot-package-manager')
-			GPMUtils.mv('addons/godot-package-manager1', 'addons/godot-package-manager')
 		",
 	},
 	"scripts": {
