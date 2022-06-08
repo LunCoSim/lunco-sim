@@ -6,5 +6,9 @@
 	"godot-console": {
 		"version": "3.5.1",
 		"integrity": ""
+	},
+	"godot-package-manager": {
+		"version": "0.2.1",
+		"integrity": ""
 	}
 }
