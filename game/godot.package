@@ -37,7 +37,16 @@
 			"integrity": ""
 		},
 
+		"gd-YAFSM": {
+			"src": "github",
+			"url": "https://github.com/imjp94/gd-YAFSM",
+			"dist": "https://github.com/imjp94/gd-YAFSM/archive/refs/tags/0.5.1.tar.gz",
 		
+			"version": "0.5.1",
+			"filename": "0.5.1.tar.gz",
+			"integrity": ""
+		},
+
 		"lunco-content": {
 			"src": "git",
 			"url": "git@github.com:LunCoSim/lunco-content.git",
@@ -61,7 +70,10 @@
 			GPMUtils.rm('addons/godot-console')
 
 			GPMUtils.mv('addons/project-map/addons/project_map', 'addons/project_map')
-			GPMUtils.rm('addons/project-map')			
+			GPMUtils.rm('addons/project-map')
+
+			GPMUtils.mv('addons/gd-YAFSM/addons/imjp94.yafsm', 'addons/imjp94.yafsm')
+			GPMUtils.rm('addons/gd-YAFSM')			
 		",
 	},
 	"scripts": {

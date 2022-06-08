@@ -95,7 +95,7 @@ window/stretch/aspect="keep_height"
 
 [editor_plugins]
 
-enabled=PoolStringArray( "res://addons/project_map/plugin.cfg", "res://addons/quentincaffeino/console/plugin.cfg" )
+enabled=PoolStringArray( "res://addons/imjp94.yafsm/plugin.cfg", "res://addons/project_map/plugin.cfg", "res://addons/quentincaffeino/console/plugin.cfg" )
 
 [global]
 
