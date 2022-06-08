@@ -87,11 +87,24 @@ You want to make the Moon forpost of human civilization in space in order to col
   
 
 ## How to run
-1. Clone this repo
-2. Follow [Install Godot Package Manager](https://github.com/LunCoSim/godot-package-manager) guide
-3. Install [Godot 3.5-rc2](https://downloads.tuxfamily.org/godotengine/3.5-rc2/) for your platform
-        [All Godot Versions](https://downloads.tuxfamily.org/godotengine/)
-4. Run project by clicking on "project.godot" in "game" folder
+1. Install [Godot 3.5-rc3](https://downloads.tuxfamily.org/godotengine/3.5-rc2/)
+2. Make sure that it's in PATH, e.g. you can start it from terminal using below command:
+   
+    godot 
+
+3. Clone this repo
+4. cd to game/ subfolder
+5. Install [Install Godot Package Manager](https://github.com/LunCoSim/godot-package-manager) guide
+
+    wget https://raw.githubusercontent.com/LunCoSim/godot-package-manager/master/gpm_init.sh -O - | bash 
+
+6. Type
+
+    chmod +x ./gpm
+
+    ./gpm
+
+7. Run project by clicking on "project.godot" in "game" folder and install all the plugins
 
 ## Links
 
