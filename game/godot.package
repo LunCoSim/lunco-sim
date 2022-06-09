@@ -99,7 +99,16 @@
 			"url": "https://github.com/Rybadour/NodeConnectorGodot.git",
 			"version": "0.0.0",
 			"filename": "v0.0.0.tar.gz",
-		}
+		},
+
+		"prettyprimitive": {
+			"src": "git",
+			"url": "https://gitlab.com/tomsart/prettyprimitive.git",
+			"version": "0.0.0",
+			"filename": "v0.0.0.tar.gz",
+		},
+
+		
 		
 	},
 	"hooks": {
