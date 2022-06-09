@@ -52,7 +52,7 @@ _global_script_classes=[ {
 "base": "GraphNode",
 "class": "CommonNode",
 "language": "GDScript",
-"path": "res://addons/project_map/pm_common_node.gd"
+"path": "res://addons/project_map/project_map/pm_common_node.gd"
 }, {
 "base": "TabContainer",
 "class": "Cycle",
@@ -72,7 +72,7 @@ _global_script_classes=[ {
 "base": "Reference",
 "class": "EditorTools",
 "language": "GDScript",
-"path": "res://addons/godot-next/global/editor_tools.gd"
+"path": "res://addons/godot-next/godot-next/global/editor_tools.gd"
 }, {
 "base": "Resource",
 "class": "Event",
@@ -132,12 +132,12 @@ _global_script_classes=[ {
 "base": "Reference",
 "class": "FileSearch",
 "language": "GDScript",
-"path": "res://addons/godot-next/global/file_search.gd"
+"path": "res://addons/godot-next/godot-next/global/file_search.gd"
 }, {
 "base": "Reference",
 "class": "FileSystemLink",
 "language": "GDScript",
-"path": "res://addons/godot-next/global/file_system_link.gd"
+"path": "res://addons/godot-next/godot-next/global/file_system_link.gd"
 }, {
 "base": "Reference",
 "class": "GPM",
@@ -174,10 +174,10 @@ _global_script_classes=[ {
 "language": "GDScript",
 "path": "res://addons/godot-package-manager/utils.gd"
 }, {
-"base": "CollisionShape2D",
+"base": "Reference",
 "class": "Geometry2D",
 "language": "GDScript",
-"path": "res://addons/godot-next/2d/geometry_2d.gd"
+"path": "res://addons/godot-next/godot-next/2d/geometry_2d.gd"
 }, {
 "base": "Reference",
 "class": "Icons",
@@ -192,7 +192,7 @@ _global_script_classes=[ {
 "base": "Reference",
 "class": "InspectorControls",
 "language": "GDScript",
-"path": "res://addons/godot-next/global/inspector_controls.gd"
+"path": "res://addons/godot-next/godot-next/global/inspector_controls.gd"
 }, {
 "base": "Reference",
 "class": "MenuManager",
@@ -209,10 +209,10 @@ _global_script_classes=[ {
 "language": "GDScript",
 "path": "res://addons/godot-next/nodes/message_dispatcher_wrapper.gd"
 }, {
-"base": "Resource",
+"base": "Reference",
 "class": "PhysicsLayers",
 "language": "GDScript",
-"path": "res://addons/godot-next/global/physics_layers.gd"
+"path": "res://addons/godot-next/godot-next/global/physics_layers.gd"
 }, {
 "base": "KinematicBody",
 "class": "Player",
@@ -227,7 +227,7 @@ _global_script_classes=[ {
 "base": "Reference",
 "class": "ProjectTools",
 "language": "GDScript",
-"path": "res://addons/godot-next/global/project_tools.gd"
+"path": "res://addons/godot-next/godot-next/global/project_tools.gd"
 }, {
 "base": "Reference",
 "class": "PropertyInfo",
@@ -257,7 +257,7 @@ _global_script_classes=[ {
 "base": "Reference",
 "class": "Singletons",
 "language": "GDScript",
-"path": "res://addons/godot-next/global/singletons.gd"
+"path": "res://addons/godot-next/godot-next/global/singletons.gd"
 }, {
 "base": "Spatial",
 "class": "SpringArmCamera",
@@ -269,15 +269,15 @@ _global_script_classes=[ {
 "language": "GDScript",
 "path": "res://addons/event_system_plugin/resources/timeline_class/timeline_class.gd"
 }, {
-"base": "Line2D",
+"base": "Reference",
 "class": "Trail2D",
 "language": "GDScript",
-"path": "res://addons/godot-next/2d/trail_2d.gd"
+"path": "res://addons/godot-next/godot-next/2d/trail_2d.gd"
 }, {
-"base": "ImmediateGeometry",
+"base": "Reference",
 "class": "Trail3D",
 "language": "GDScript",
-"path": "res://addons/godot-next/3d/trail_3d.gd"
+"path": "res://addons/godot-next/godot-next/3d/trail_3d.gd"
 }, {
 "base": "Reference",
 "class": "TweenSequence",
@@ -297,27 +297,27 @@ _global_script_classes=[ {
 "base": "Reference",
 "class": "Variant",
 "language": "GDScript",
-"path": "res://addons/godot-next/global/variant.gd"
+"path": "res://addons/godot-next/godot-next/global/variant.gd"
 }, {
-"base": "Resource",
+"base": "Reference",
 "class": "Vec2",
 "language": "GDScript",
-"path": "res://addons/godot-next/2d/vec2.gd"
+"path": "res://addons/godot-next/godot-next/2d/vec2.gd"
 }, {
-"base": "Resource",
+"base": "Reference",
 "class": "Vec3",
 "language": "GDScript",
-"path": "res://addons/godot-next/3d/vec3.gd"
+"path": "res://addons/godot-next/godot-next/3d/vec3.gd"
 }, {
-"base": "Node",
+"base": "Reference",
 "class": "VectorDisplay2D",
 "language": "GDScript",
-"path": "res://addons/godot-next/2d/vector_display_2d.gd"
+"path": "res://addons/godot-next/godot-next/2d/vector_display_2d.gd"
 }, {
-"base": "Node",
+"base": "Reference",
 "class": "VectorDisplay3D",
 "language": "GDScript",
-"path": "res://addons/godot-next/3d/vector_display_3d.gd"
+"path": "res://addons/godot-next/godot-next/3d/vector_display_3d.gd"
 } ]
 _global_script_class_icons={
 "Array2D": "",
@@ -353,7 +353,7 @@ _global_script_class_icons={
 "GPMHooks": "",
 "GPMResult": "",
 "GPMUtils": "",
-"Geometry2D": "res://addons/godot-next/icons/icon_geometry_2d.svg",
+"Geometry2D": "",
 "Icons": "",
 "Inflector": "",
 "InspectorControls": "",
@@ -372,8 +372,8 @@ _global_script_class_icons={
 "Singletons": "",
 "SpringArmCamera": "",
 "Timeline": "res://addons/event_system_plugin/assets/icons/timeline_icon.png",
-"Trail2D": "res://addons/godot-next/icons/icon_trail_2d.svg",
-"Trail3D": "res://addons/godot-next/icons/icon_trail_3d.svg",
+"Trail2D": "",
+"Trail3D": "",
 "TweenSequence": "",
 "Tweener": "",
 "VBoxItemList": "res://addons/godot-next/icons/icon_v_box_item_list.svg",
@@ -407,7 +407,7 @@ window/stretch/aspect="keep_height"
 
 [editor_plugins]
 
-enabled=PoolStringArray( "res://addons/event_system_plugin/plugin.cfg", "res://addons/godot-next/plugin.cfg", "res://addons/imjp94.yafsm/plugin.cfg", "res://addons/project_map/plugin.cfg", "res://addons/quentincaffeino/console/plugin.cfg", "res://addons/ui_design_tool/plugin.cfg" )
+enabled=PoolStringArray( "res://addons/NodeConnectorGodot/plugin.cfg", "res://addons/event_system_plugin/plugin.cfg", "res://addons/godot-next/plugin.cfg", "res://addons/imjp94.yafsm/plugin.cfg", "res://addons/ply/plugin.cfg", "res://addons/project_map/plugin.cfg", "res://addons/quentincaffeino/console/plugin.cfg", "res://addons/ui_design_tool/plugin.cfg" )
 
 [global]
 
