@@ -67,7 +67,26 @@
 			"integrity": ""
 		},
 
+		"godot-ply": {
+			"src": "github",
+			"url": "https://github.com/jarneson/godot-ply",
+			"dist": "https://github.com/jarneson/godot-ply/archive/refs/tags/1.0.2.tar.gz",
 		
+			"version": "1.0.2",
+			"filename": "1.0.2.tar.gz",
+			"integrity": ""
+		},
+
+		"Godot-EventSystem": {
+			"src": "github",
+			"url": "https://github.com/AnidemDex/Godot-EventSystem",
+			"dist": "https://github.com/AnidemDex/Godot-EventSystem/archive/refs/tags/v1.4.3.tar.gz",
+		
+			"version": "v1.4.3",
+			"filename": "v1.4.3.tar.gz",
+			"integrity": ""
+		},
+
 
 		"lunco-content": {
 			"src": "git",
@@ -102,7 +121,12 @@
 
 			GPMUtils.mv('addons/UIDesignTool/addons/ui_design_tool', 'addons/ui_design_tool')
 			GPMUtils.rm('addons/UIDesignTool')	
+
+			GPMUtils.mv('addons/godot-ply/addons/ply', 'addons/ply')
+			GPMUtils.rm('addons/godot-ply')	
 					
+			GPMUtils.mv('addons/Godot-EventSystem/addons/event_system_plugin', 'addons/event_system_plugin')
+			GPMUtils.rm('addons/Godot-EventSystem')			
 		",
 	},
 	"scripts": {

@@ -74,6 +74,61 @@ _global_script_classes=[ {
 "language": "GDScript",
 "path": "res://addons/godot-next/global/editor_tools.gd"
 }, {
+"base": "Resource",
+"class": "Event",
+"language": "GDScript",
+"path": "res://addons/event_system_plugin/resources/event_class/event_class.gd"
+}, {
+"base": "Event",
+"class": "EventCall",
+"language": "GDScript",
+"path": "res://addons/event_system_plugin/events/call_from.gd"
+}, {
+"base": "Event",
+"class": "EventComment",
+"language": "GDScript",
+"path": "res://addons/event_system_plugin/events/comment.gd"
+}, {
+"base": "Event",
+"class": "EventCondition",
+"language": "GDScript",
+"path": "res://addons/event_system_plugin/events/new_condition.gd"
+}, {
+"base": "Event",
+"class": "EventEmitSignal",
+"language": "GDScript",
+"path": "res://addons/event_system_plugin/events/emit_signal.gd"
+}, {
+"base": "Event",
+"class": "EventGoTo",
+"language": "GDScript",
+"path": "res://addons/event_system_plugin/events/goto.gd"
+}, {
+"base": "Event",
+"class": "EventHide",
+"language": "GDScript",
+"path": "res://addons/event_system_plugin/events/hide.gd"
+}, {
+"base": "Node",
+"class": "EventManager",
+"language": "GDScript",
+"path": "res://addons/event_system_plugin/nodes/event_manager/event_manager.gd"
+}, {
+"base": "Event",
+"class": "EventSet",
+"language": "GDScript",
+"path": "res://addons/event_system_plugin/events/set.gd"
+}, {
+"base": "Event",
+"class": "EventShow",
+"language": "GDScript",
+"path": "res://addons/event_system_plugin/events/show.gd"
+}, {
+"base": "Event",
+"class": "EventWait",
+"language": "GDScript",
+"path": "res://addons/event_system_plugin/events/wait.gd"
+}, {
 "base": "Reference",
 "class": "FileSearch",
 "language": "GDScript",
@@ -164,6 +219,11 @@ _global_script_classes=[ {
 "language": "GDScript",
 "path": "res://player/player.gd"
 }, {
+"base": "Resource",
+"class": "PlyMesh",
+"language": "GDScript",
+"path": "res://addons/ply/resources/ply_mesh.gd"
+}, {
 "base": "Reference",
 "class": "ProjectTools",
 "language": "GDScript",
@@ -203,6 +263,11 @@ _global_script_classes=[ {
 "class": "SpringArmCamera",
 "language": "GDScript",
 "path": "res://addons/lunco-cameras/spring-arm-camera/spring-arm-camera.gd"
+}, {
+"base": "Resource",
+"class": "Timeline",
+"language": "GDScript",
+"path": "res://addons/event_system_plugin/resources/timeline_class/timeline_class.gd"
 }, {
 "base": "Line2D",
 "class": "Trail2D",
@@ -268,6 +333,17 @@ _global_script_class_icons={
 "DebugLabel": "",
 "DiscreteGradientTexture": "",
 "EditorTools": "",
+"Event": "res://addons/event_system_plugin/assets/icons/timeline_icon.png",
+"EventCall": "",
+"EventComment": "",
+"EventCondition": "",
+"EventEmitSignal": "",
+"EventGoTo": "",
+"EventHide": "",
+"EventManager": "",
+"EventSet": "",
+"EventShow": "",
+"EventWait": "",
 "FileSearch": "",
 "FileSystemLink": "",
 "GPM": "",
@@ -286,6 +362,7 @@ _global_script_class_icons={
 "MessageDispatcherWrapper": "",
 "PhysicsLayers": "",
 "Player": "",
+"PlyMesh": "",
 "ProjectTools": "",
 "PropertyInfo": "",
 "PropertyInfoFactory": "",
@@ -294,6 +371,7 @@ _global_script_class_icons={
 "ResourceSet": "",
 "Singletons": "",
 "SpringArmCamera": "",
+"Timeline": "res://addons/event_system_plugin/assets/icons/timeline_icon.png",
 "Trail2D": "res://addons/godot-next/icons/icon_trail_2d.svg",
 "Trail3D": "res://addons/godot-next/icons/icon_trail_3d.svg",
 "TweenSequence": "",
@@ -329,7 +407,7 @@ window/stretch/aspect="keep_height"
 
 [editor_plugins]
 
-enabled=PoolStringArray( "res://addons/godot-next/plugin.cfg", "res://addons/imjp94.yafsm/plugin.cfg", "res://addons/project_map/plugin.cfg", "res://addons/quentincaffeino/console/plugin.cfg", "res://addons/ui_design_tool/plugin.cfg" )
+enabled=PoolStringArray( "res://addons/event_system_plugin/plugin.cfg", "res://addons/godot-next/plugin.cfg", "res://addons/imjp94.yafsm/plugin.cfg", "res://addons/project_map/plugin.cfg", "res://addons/quentincaffeino/console/plugin.cfg", "res://addons/ui_design_tool/plugin.cfg" )
 
 [global]
 
