@@ -10,16 +10,17 @@
 			}
 		},
 		"godot-console": {
-			"src": "github",
+			"src": "tar",
 			"url": "https://github.com/quentincaffeino/godot-console.git",
 			"dist": "https://github.com/quentincaffeino/godot-console/archive/refs/tags/v3.5.1.tar.gz",
 		
 			"version": "3.5.1",
 			"filename": "v3.5.1.tar.gz",
-			"integrity": ""
+			"integrity": "",
+			"subdir": "addons/quentincaffeino"
 		},
 		"lunco-cameras": {
-			"src": "github",
+			"src": "tar",
 			"url": "https://github.com/LunCoSim/lunco-cameras",
 			"dist": "https://github.com/LunCoSim/lunco-cameras/archive/refs/tags/v0.1.0.tar.gz",
 		
@@ -28,70 +29,68 @@
 			"integrity": ""
 		},
 		"project-map": {
-			"src": "github",
+			"src": "tar",
 			"url": "https://github.com/Yogoda/Project-Map",
 			"dist": "https://github.com/Yogoda/Project-Map/archive/refs/tags/1.3.tar.gz",
 		
 			"version": "1.3",
 			"filename": "1.3.tar.gz",
-			"integrity": ""
+			"integrity": "",
+			"subdir": "addons/project_map"
 		},
-
 		"gd-YAFSM": {
-			"src": "github",
+			"src": "tar",
 			"url": "https://github.com/imjp94/gd-YAFSM",
 			"dist": "https://github.com/imjp94/gd-YAFSM/archive/refs/tags/0.5.1.tar.gz",
 		
 			"version": "0.5.1",
 			"filename": "0.5.1.tar.gz",
-			"integrity": ""
+			"integrity": "",
+			"subdir": "addons/imjp94.yafsm"
 		},
 
-		"gdn": {
-			"src": "github",
+		"godot-next": {
+			"src": "tar",
 			"url": "https://github.com/godot-extended-libraries/godot-next",
 			"dist": "https://github.com/godot-extended-libraries/godot-next/archive/refs/tags/1.1.0-godot3.2.2.tar.gz",
 		
 			"version": "1.1.0-godot3.2.2",
 			"filename": "1.1.0-godot3.2.2.tar.gz",
-			"integrity": ""
+			"integrity": "",
+			"subdir": "addons/godot-next"
 		},
 
 		"UIDesignTool": {
-			"src": "github",
+			"src": "tar",
 			"url": "https://github.com/godot-extended-libraries/godot-next",
 			"dist": "https://github.com/imjp94/UIDesignTool/archive/refs/tags/0.2.2.tar.gz",
 		
 			"version": "0.2.2",
 			"filename": "0.2.2.tar.gz",
-			"integrity": ""
+			"integrity": "",
+			"subdir": "addons/ui_design_tool"
 		},
 
 		"godot-ply": {
-			"src": "github",
+			"src": "tar",
 			"url": "https://github.com/jarneson/godot-ply",
 			"dist": "https://github.com/jarneson/godot-ply/archive/refs/tags/1.0.2.tar.gz",
 		
 			"version": "1.0.2",
 			"filename": "1.0.2.tar.gz",
-			"integrity": ""
+			"integrity": "",
+			"subdir": "addons/ply"
 		},
 
 		"Godot-EventSystem": {
-			"src": "github",
+			"src": "tar",
 			"url": "https://github.com/AnidemDex/Godot-EventSystem",
 			"dist": "https://github.com/AnidemDex/Godot-EventSystem/archive/refs/tags/v1.4.3.tar.gz",
 		
 			"version": "v1.4.3",
 			"filename": "v1.4.3.tar.gz",
-			"integrity": ""
-		},
-
-		"lunco-content": {
-			"src": "git",
-			"url": "git@github.com:LunCoSim/lunco-content.git",
-			"version": "0.0.0",
-			"filename": "v0.0.0.tar.gz",
+			"integrity": "",
+			"subdir": "addons/event_system_plugin"
 		},
 
 		"NodeConnectorGodot": {
@@ -108,8 +107,12 @@
 			"filename": "v0.0.0.tar.gz",
 		},
 
-		
-		
+		"lunco-content": {
+			"src": "git",
+			"url": "git@github.com:LunCoSim/lunco-content.git",
+			"version": "0.0.0",
+			"filename": "v0.0.0.tar.gz",
+		},
 	},
 	"hooks": {
 		"pre_dry_run": "gpm.print('dry run is going to run!')",
@@ -122,26 +125,7 @@
 			"value": "gpm.print('pre update')"
 		},
 		"post_update": "
-			GPMUtils.mv('addons/godot-console/addons/quentincaffeino', 'addons/')
-			GPMUtils.rm('addons/godot-console')
-
-			GPMUtils.mv('addons/project-map/addons/project_map', 'addons/project_map')
-			GPMUtils.rm('addons/project-map')
-
-			GPMUtils.mv('addons/gd-YAFSM/addons/imjp94.yafsm', 'addons/imjp94.yafsm')
-			GPMUtils.rm('addons/gd-YAFSM')	
-
-			GPMUtils.mv('addons/gdn/addons/godot-next', 'addons/godot-next')
-			GPMUtils.rm('addons/gdn')	
-
-			GPMUtils.mv('addons/UIDesignTool/addons/ui_design_tool', 'addons/ui_design_tool')
-			GPMUtils.rm('addons/UIDesignTool')	
-
-			GPMUtils.mv('addons/godot-ply/addons/ply', 'addons/ply')
-			GPMUtils.rm('addons/godot-ply')	
-					
-			GPMUtils.mv('addons/Godot-EventSystem/addons/event_system_plugin', 'addons/event_system_plugin')
-			GPMUtils.rm('addons/Godot-EventSystem')			
+			gpm.print('dry run is going to run!')
 		",
 	},
 	"scripts": {
