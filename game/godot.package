@@ -39,12 +39,9 @@
 			"subdir": "addons/project_map"
 		},
 		"gd-YAFSM": {
-			"src": "tar",
-			"url": "https://github.com/imjp94/gd-YAFSM",
-			"dist": "https://github.com/imjp94/gd-YAFSM/archive/refs/tags/0.5.1.tar.gz",
-		
+			"src": "git",
+			"url": "https://github.com/imjp94/gd-YAFSM.git",
 			"version": "0.5.1",
-			"filename": "0.5.1.tar.gz",
 			"integrity": "",
 			"subdir": "addons/imjp94.yafsm"
 		},

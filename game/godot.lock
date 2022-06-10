@@ -14,11 +14,6 @@
 		"integrity": "",
 		"path": "res://addons/.cache/project-map/addons/project_map"
 	},
-	"gd-YAFSM": {
-		"version": "0.5.1",
-		"integrity": "",
-		"path": "res://addons/.cache/gd-YAFSM/addons/imjp94.yafsm"
-	},
 	"godot-next": {
 		"version": "1.1.0-godot3.2.2",
 		"integrity": "",
@@ -58,5 +53,10 @@
 		"version": "0.0.0",
 		"integrity": "",
 		"path": "res://addons/.cache/VisualFSM/addons/visual_fsm"
+	},
+	"gd-YAFSM": {
+		"version": "0.5.1",
+		"integrity": "",
+		"path": "res://addons/.cache/gd-YAFSM/addons/imjp94.yafsm"
 	}
 }
