@@ -129,7 +129,8 @@ func _physics_process(delta):
 		if airborne_time > 0.5:#landed
 			sound_effect_land.play()
 		airborne_time = 0
-		
+	
+	state.set_param("on_floor", is_on_floor())
 	var on_air = airborne_time > MIN_AIRBORNE_TIME #
 		
 	match state.get_current():
@@ -156,6 +157,7 @@ func _physics_process(delta):
 		"Jump":
 			if not on_air:
 				velocity.y = JUMP_SPEED
+				state.set_trigger("on_air")
 				on_air = true
 				# Increase airborne time so next frame on_air is still true
 				airborne_time = MIN_AIRBORNE_TIME
@@ -166,6 +168,8 @@ func _physics_process(delta):
 				animation_tree["parameters/state/current"] = 2
 			else:
 				animation_tree["parameters/state/current"] = 3
+		"Landed":
+			on_air = false
 		"Aiming":
 			# Change state to strafe.
 			animation_tree["parameters/state/current"] = 0

@@ -1,4 +1,4 @@
-[gd_scene load_steps=76 format=2]
+[gd_scene load_steps=77 format=2]
 
 [ext_resource path="res://player/player.gd" type="Script" id=1]
 [ext_resource path="res://player/model/player.glb" type="PackedScene" id=2]
@@ -221,21 +221,21 @@ name = "Jump"
 [sub_resource type="Resource" id=56]
 script = ExtResource( 13 )
 __meta__ = {
-"graph_offset": Vector2( 600, 394.5 )
+"graph_offset": Vector2( 660, 334.5 )
 }
 name = "Landed"
 
 [sub_resource type="Resource" id=42]
 script = ExtResource( 13 )
 __meta__ = {
-"graph_offset": Vector2( 530, -185.5 )
+"graph_offset": Vector2( 430, -245.5 )
 }
 name = "Move"
 
 [sub_resource type="Resource" id=43]
 script = ExtResource( 13 )
 __meta__ = {
-"graph_offset": Vector2( 1267, 274.5 )
+"graph_offset": Vector2( 1267, 194.5 )
 }
 name = "On Air"
 
@@ -277,7 +277,7 @@ conditions = {
 "move": SubResource( 58 )
 }
 
-[sub_resource type="Resource" id=65]
+[sub_resource type="Resource" id=67]
 script = ExtResource( 16 )
 name = "on_floor"
 comparation = 0
@@ -288,14 +288,21 @@ script = ExtResource( 14 )
 from = "Jump"
 to = "On Air"
 conditions = {
-"on_floor": SubResource( 65 )
+"on_floor": SubResource( 67 )
 }
+
+[sub_resource type="Resource" id=68]
+script = ExtResource( 16 )
+name = "on_floor"
+comparation = 0
+value = true
 
 [sub_resource type="Resource" id=64]
 script = ExtResource( 14 )
 from = "Landed"
 to = "Idle"
 conditions = {
+"on_floor": SubResource( 68 )
 }
 
 [sub_resource type="Resource" id=61]
@@ -448,7 +455,7 @@ transform = Transform( 0.803991, 0, 0, 0, 0.803991, 0, 0, 0, 0.803991, 0, 0, 0 )
 bones/55/bound_children = [ NodePath("GunBone") ]
 
 [node name="GunBone" type="BoneAttachment" parent="PlayerModel/Robot_Skeleton/Skeleton" index="5"]
-transform = Transform( 0.927268, -0.370048, -0.0587945, -0.0171896, 0.11475, -0.993254, 0.374343, 0.921898, 0.100031, -0.206764, 1.38323, 0.488053 )
+transform = Transform( 0.920867, -0.389187, -0.027433, -0.0153664, 0.0340911, -0.999308, 0.389899, 0.920528, 0.0254097, -0.206778, 1.38065, 0.509265 )
 bone_name = "hand.R"
 
 [node name="ShootFrom" type="Position3D" parent="PlayerModel/Robot_Skeleton/Skeleton/GunBone"]
