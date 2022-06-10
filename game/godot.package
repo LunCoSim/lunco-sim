@@ -97,22 +97,27 @@
 			"src": "git",
 			"url": "https://github.com/Rybadour/NodeConnectorGodot.git",
 			"version": "0.0.0",
-			"filename": "v0.0.0.tar.gz",
 		},
 
 		"prettyprimitive": {
 			"src": "git",
 			"url": "https://gitlab.com/tomsart/prettyprimitive.git",
 			"version": "0.0.0",
-			"filename": "v0.0.0.tar.gz",
 		},
 
 		"lunco-content": {
 			"src": "git",
 			"url": "git@github.com:LunCoSim/lunco-content.git",
 			"version": "0.0.0",
-			"filename": "v0.0.0.tar.gz",
 		},
+
+		"VisualFSM": {
+			"src": "git",
+			"url": "https://github.com/BernardCloutier/VisualFSM.git",
+			"version": "0.0.0",
+			"subdir": "addons/visual_fsm"
+		},
+		
 	},
 	"hooks": {
 		"pre_dry_run": "gpm.print('dry run is going to run!')",

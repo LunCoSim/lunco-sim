@@ -53,5 +53,10 @@
 		"version": "0.0.0",
 		"integrity": "",
 		"path": "res://addons/.cache/lunco-content"
+	},
+	"VisualFSM": {
+		"version": "0.0.0",
+		"integrity": "",
+		"path": "res://addons/.cache/VisualFSM/addons/visual_fsm"
 	}
 }

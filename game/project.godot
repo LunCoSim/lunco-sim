@@ -309,6 +309,71 @@ _global_script_classes=[ {
 "language": "GDScript",
 "path": "res://addons/godot-next/gui/v_box_item_list.gd"
 }, {
+"base": "Resource",
+"class": "VFSM",
+"language": "GDScript",
+"path": "res://addons/visual_fsm/fsm/vfsm.gd"
+}, {
+"base": "KinematicBody2D",
+"class": "VFSMDemoSimpleAIJumper",
+"language": "GDScript",
+"path": "res://addons/visual_fsm/demos/simple_ai_character/vfsm_simple_ai_jumpter.gd"
+}, {
+"base": "Node2D",
+"class": "VFSMDemoTrafficLightsController",
+"language": "GDScript",
+"path": "res://addons/visual_fsm/demos/simple_traffic_lights/traffic_lights.gd"
+}, {
+"base": "Node",
+"class": "VFSMSingleton",
+"language": "GDScript",
+"path": "res://addons/visual_fsm/vfsm_singleton.gd"
+}, {
+"base": "Resource",
+"class": "VFSMState",
+"language": "GDScript",
+"path": "res://addons/visual_fsm/fsm/vfsm_state.gd"
+}, {
+"base": "Object",
+"class": "VFSMStateBase",
+"language": "GDScript",
+"path": "res://addons/visual_fsm/resources/vfsm_state_base.gd"
+}, {
+"base": "GraphNode",
+"class": "VFSMStateNode",
+"language": "GDScript",
+"path": "res://addons/visual_fsm/editor/vfsm_state_graph_node.gd"
+}, {
+"base": "Resource",
+"class": "VFSMTrigger",
+"language": "GDScript",
+"path": "res://addons/visual_fsm/fsm/vfsm_trigger.gd"
+}, {
+"base": "VFSMTrigger",
+"class": "VFSMTriggerAction",
+"language": "GDScript",
+"path": "res://addons/visual_fsm/fsm/vfsm_trigger_action.gd"
+}, {
+"base": "Object",
+"class": "VFSMTriggerBase",
+"language": "GDScript",
+"path": "res://addons/visual_fsm/resources/vfsm_trigger_base.gd"
+}, {
+"base": "PanelContainer",
+"class": "VFSMTriggerGraphSlot",
+"language": "GDScript",
+"path": "res://addons/visual_fsm/editor/vfsm_trigger_graph_slot.gd"
+}, {
+"base": "VFSMTrigger",
+"class": "VFSMTriggerScript",
+"language": "GDScript",
+"path": "res://addons/visual_fsm/fsm/vfsm_trigger_script.gd"
+}, {
+"base": "VFSMTrigger",
+"class": "VFSMTriggerTimer",
+"language": "GDScript",
+"path": "res://addons/visual_fsm/fsm/vfsm_trigger_timer.gd"
+}, {
 "base": "Reference",
 "class": "Variant",
 "language": "GDScript",
@@ -395,6 +460,19 @@ _global_script_class_icons={
 "TweenSequence": "",
 "Tweener": "",
 "VBoxItemList": "res://addons/godot-next/icons/icon_v_box_item_list.svg",
+"VFSM": "",
+"VFSMDemoSimpleAIJumper": "",
+"VFSMDemoTrafficLightsController": "",
+"VFSMSingleton": "",
+"VFSMState": "",
+"VFSMStateBase": "",
+"VFSMStateNode": "",
+"VFSMTrigger": "",
+"VFSMTriggerAction": "",
+"VFSMTriggerBase": "",
+"VFSMTriggerGraphSlot": "",
+"VFSMTriggerScript": "",
+"VFSMTriggerTimer": "",
 "Variant": "",
 "Vec2": "",
 "Vec3": "",
@@ -425,7 +503,7 @@ window/stretch/aspect="keep_height"
 
 [editor_plugins]
 
-enabled=PoolStringArray( "res://addons/NodeConnectorGodot/plugin.cfg", "res://addons/event_system_plugin/plugin.cfg", "res://addons/godot-next/plugin.cfg", "res://addons/imjp94.yafsm/plugin.cfg", "res://addons/ply/plugin.cfg", "res://addons/prettyprimitive/plugin.cfg", "res://addons/project_map/plugin.cfg", "res://addons/quentincaffeino/console/plugin.cfg", "res://addons/ui_design_tool/plugin.cfg" )
+enabled=PoolStringArray( "res://addons/NodeConnectorGodot/plugin.cfg", "res://addons/event_system_plugin/plugin.cfg", "res://addons/godot-next/plugin.cfg", "res://addons/godot-package-manager/plugin.cfg", "res://addons/imjp94.yafsm/plugin.cfg", "res://addons/ply/plugin.cfg", "res://addons/prettyprimitive/plugin.cfg", "res://addons/project_map/plugin.cfg", "res://addons/quentincaffeino/console/plugin.cfg", "res://addons/ui_design_tool/plugin.cfg", "res://addons/visual_fsm/plugin.cfg" )
 
 [global]
 
