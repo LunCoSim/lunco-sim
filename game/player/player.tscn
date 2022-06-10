@@ -1,4 +1,4 @@
-[gd_scene load_steps=63 format=2]
+[gd_scene load_steps=76 format=2]
 
 [ext_resource path="res://player/player.gd" type="Script" id=1]
 [ext_resource path="res://player/model/player.glb" type="PackedScene" id=2]
@@ -14,6 +14,8 @@
 [ext_resource path="res://addons/imjp94.yafsm/src/StateMachinePlayer.gd" type="Script" id=12]
 [ext_resource path="res://addons/imjp94.yafsm/src/states/State.gd" type="Script" id=13]
 [ext_resource path="res://addons/imjp94.yafsm/src/transitions/Transition.gd" type="Script" id=14]
+[ext_resource path="res://addons/imjp94.yafsm/src/conditions/Condition.gd" type="Script" id=15]
+[ext_resource path="res://addons/imjp94.yafsm/src/conditions/BooleanCondition.gd" type="Script" id=16]
 
 [sub_resource type="SphereMesh" id=2]
 radius = 0.003
@@ -177,7 +179,7 @@ nodes/strafe/node = SubResource( 24 )
 nodes/strafe/position = Vector2( -400, -120 )
 nodes/walk/node = SubResource( 29 )
 nodes/walk/position = Vector2( -400, 40 )
-node_connections = [ "output", 0, "eye_blend", "state", 0, "strafe", "state", 1, "walk", "state", 2, "jumpup", "state", 3, "jumpdown", "aim", 0, "aimdown", "aim", 1, "land", "aim", 2, "aimup", "eye_blend", 0, "aim", "eye_blend", 1, "eyes", "land", 0, "state", "land", 1, "hardland" ]
+node_connections = [ "state", 0, "strafe", "state", 1, "walk", "state", 2, "jumpup", "state", 3, "jumpdown", "output", 0, "eye_blend", "aim", 0, "aimdown", "aim", 1, "land", "aim", 2, "aimup", "eye_blend", 0, "aim", "eye_blend", 1, "eyes", "land", 0, "state", "land", 1, "hardland" ]
 
 [sub_resource type="CapsuleShape" id=31]
 radius = 0.5
@@ -188,54 +190,61 @@ height = 0.6
 [sub_resource type="AudioStreamRandomPitch" id=35]
 audio_stream = ExtResource( 7 )
 
+[sub_resource type="Resource" id=45]
+script = ExtResource( 13 )
+__meta__ = {
+"graph_offset": Vector2( 242, 294.5 )
+}
+name = "Aiming"
+
 [sub_resource type="Resource" id=37]
 script = ExtResource( 13 )
 __meta__ = {
-"graph_offset": Vector2( 190, 54.5 )
+"graph_offset": Vector2( 30, 74.5 )
 }
 name = "Entry"
 
 [sub_resource type="Resource" id=36]
 script = ExtResource( 13 )
 __meta__ = {
-"graph_offset": Vector2( 490, 54.5 )
+"graph_offset": Vector2( 370, 14.5 )
 }
 name = "Idle"
 
 [sub_resource type="Resource" id=41]
 script = ExtResource( 13 )
 __meta__ = {
-"graph_offset": Vector2( 750, -25.5 )
+"graph_offset": Vector2( 810, -45.5 )
 }
 name = "Jump"
+
+[sub_resource type="Resource" id=56]
+script = ExtResource( 13 )
+__meta__ = {
+"graph_offset": Vector2( 600, 394.5 )
+}
+name = "Landed"
 
 [sub_resource type="Resource" id=42]
 script = ExtResource( 13 )
 __meta__ = {
-"graph_offset": Vector2( 790, 154.5 )
+"graph_offset": Vector2( 530, -185.5 )
 }
 name = "Move"
 
 [sub_resource type="Resource" id=43]
 script = ExtResource( 13 )
 __meta__ = {
-"graph_offset": Vector2( 1027, 94.5 )
+"graph_offset": Vector2( 1267, 274.5 )
 }
 name = "On Air"
 
 [sub_resource type="Resource" id=44]
 script = ExtResource( 13 )
 __meta__ = {
-"graph_offset": Vector2( 1069.5, 214.5 )
+"graph_offset": Vector2( 229.5, 194.5 )
 }
 name = "Shooting"
-
-[sub_resource type="Resource" id=45]
-script = ExtResource( 13 )
-__meta__ = {
-"graph_offset": Vector2( 402, 214.5 )
-}
-name = "Aiming"
 
 [sub_resource type="Resource" id=39]
 script = ExtResource( 14 )
@@ -244,25 +253,87 @@ to = "Idle"
 conditions = {
 }
 
+[sub_resource type="Resource" id=57]
+script = ExtResource( 15 )
+name = "jump"
+
 [sub_resource type="Resource" id=46]
 script = ExtResource( 14 )
 from = "Idle"
 to = "Jump"
 conditions = {
+"jump": SubResource( 57 )
 }
+
+[sub_resource type="Resource" id=58]
+script = ExtResource( 15 )
+name = "move"
 
 [sub_resource type="Resource" id=47]
 script = ExtResource( 14 )
 from = "Idle"
 to = "Move"
 conditions = {
+"move": SubResource( 58 )
 }
+
+[sub_resource type="Resource" id=65]
+script = ExtResource( 16 )
+name = "on_floor"
+comparation = 0
+value = false
 
 [sub_resource type="Resource" id=48]
 script = ExtResource( 14 )
 from = "Jump"
 to = "On Air"
 conditions = {
+"on_floor": SubResource( 65 )
+}
+
+[sub_resource type="Resource" id=64]
+script = ExtResource( 14 )
+from = "Landed"
+to = "Idle"
+conditions = {
+}
+
+[sub_resource type="Resource" id=61]
+script = ExtResource( 15 )
+name = "stop"
+
+[sub_resource type="Resource" id=62]
+script = ExtResource( 14 )
+from = "Move"
+to = "Idle"
+conditions = {
+"stop": SubResource( 61 )
+}
+
+[sub_resource type="Resource" id=59]
+script = ExtResource( 15 )
+name = "jump"
+
+[sub_resource type="Resource" id=60]
+script = ExtResource( 14 )
+from = "Move"
+to = "Jump"
+conditions = {
+"jump": SubResource( 59 )
+}
+
+[sub_resource type="Resource" id=66]
+script = ExtResource( 16 )
+name = "on_floor"
+comparation = 0
+value = true
+
+[sub_resource type="Resource" id=63]
+script = ExtResource( 14 )
+from = "On Air"
+to = "Landed"
+conditions = {
+"on_floor": SubResource( 66 )
 }
 
 [sub_resource type="Resource" id=40]
@@ -273,6 +344,7 @@ states = {
 "Entry": SubResource( 37 ),
 "Idle": SubResource( 36 ),
 "Jump": SubResource( 41 ),
+"Landed": SubResource( 56 ),
 "Move": SubResource( 42 ),
 "On Air": SubResource( 43 ),
 "Shooting": SubResource( 44 )
@@ -287,8 +359,25 @@ transitions = {
 },
 "Jump": {
 "On Air": SubResource( 48 )
+},
+"Landed": {
+"Idle": SubResource( 64 )
+},
+"Move": {
+"Idle": SubResource( 62 ),
+"Jump": SubResource( 60 )
+},
+"On Air": {
+"Landed": SubResource( 63 )
 }
 }
+
+[sub_resource type="Resource" id=52]
+script = ExtResource( 13 )
+__meta__ = {
+"graph_offset": Vector2( 1142, 114.5 )
+}
+name = "Aiming"
 
 [sub_resource type="Resource" id=49]
 script = ExtResource( 13 )
@@ -304,12 +393,12 @@ __meta__ = {
 }
 name = "Normal"
 
-[sub_resource type="Resource" id=52]
-script = ExtResource( 13 )
-__meta__ = {
-"graph_offset": Vector2( 1142, 114.5 )
+[sub_resource type="Resource" id=55]
+script = ExtResource( 14 )
+from = "Aiming"
+to = "Normal"
+conditions = {
 }
-name = "Aiming"
 
 [sub_resource type="Resource" id=53]
 script = ExtResource( 14 )
@@ -322,13 +411,6 @@ conditions = {
 script = ExtResource( 14 )
 from = "Normal"
 to = "Aiming"
-conditions = {
-}
-
-[sub_resource type="Resource" id=55]
-script = ExtResource( 14 )
-from = "Aiming"
-to = "Normal"
 conditions = {
 }
 
@@ -366,7 +448,7 @@ transform = Transform( 0.803991, 0, 0, 0, 0.803991, 0, 0, 0, 0.803991, 0, 0, 0 )
 bones/55/bound_children = [ NodePath("GunBone") ]
 
 [node name="GunBone" type="BoneAttachment" parent="PlayerModel/Robot_Skeleton/Skeleton" index="5"]
-transform = Transform( 0.922436, -0.382151, -0.0573547, -0.0353031, 0.0644869, -0.997301, 0.384863, 0.921848, 0.0459885, -0.207089, 1.39797, 0.464078 )
+transform = Transform( 0.927268, -0.370048, -0.0587945, -0.0171896, 0.11475, -0.993254, 0.374343, 0.921898, 0.100031, -0.206764, 1.38323, 0.488053 )
 bone_name = "hand.R"
 
 [node name="ShootFrom" type="Position3D" parent="PlayerModel/Robot_Skeleton/Skeleton/GunBone"]
@@ -470,7 +552,7 @@ wait_time = 0.4
 one_shot = true
 autostart = true
 
-[node name="StatePlayer" type="Node" parent="."]
+[node name="State" type="Node" parent="."]
 script = ExtResource( 12 )
 state_machine = SubResource( 40 )
 
@@ -478,8 +560,8 @@ state_machine = SubResource( 40 )
 script = ExtResource( 12 )
 state_machine = SubResource( 50 )
 
-[connection signal="transited" from="StatePlayer" to="." method="_on_StatePlayer_transited"]
-[connection signal="updated" from="StatePlayer" to="." method="_on_StatePlayer_updated"]
+[connection signal="transited" from="State" to="." method="_on_StatePlayer_transited"]
+[connection signal="updated" from="State" to="." method="_on_StatePlayer_updated"]
 [connection signal="transited" from="StateAiming" to="." method="_on_StateAiming_transited"]
 [connection signal="updated" from="StateAiming" to="." method="_on_StateAiming_updated"]
 
