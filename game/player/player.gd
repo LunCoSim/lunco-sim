@@ -9,7 +9,7 @@ export (NodePath) var camera
 export var AIM_HOLD_THRESHOLD = 0.4
 
 export var DIRECTION_INTERPOLATE_SPEED = 1
-export var MOTION_INTERPOLATE_SPEED = 10
+export var MOTION_INTERPOLATE_SPEED = 100
 export var ROTATION_INTERPOLATE_SPEED = 10
 
 export var MIN_AIRBORNE_TIME = 0.1
@@ -36,7 +36,7 @@ var toggled_aim = false
 var aiming_timer = 0.0
 
 
-var motion_target
+var motion_target = Vector2.ZERO
 # Parameters
 # strafe
 # moving_direction
@@ -97,14 +97,7 @@ func _ready():
 	orientation = player_model.global_transform
 	orientation.origin = Vector3()
 
-
-func _physics_process(delta):
-	
-	motion_target = Vector2(
-			Input.get_action_strength("move_right") - Input.get_action_strength("move_left"),
-			Input.get_action_strength("move_back") - Input.get_action_strength("move_forward"))
-	motion = motion.linear_interpolate(motion_target, MOTION_INTERPOLATE_SPEED * delta)
-
+func _process(delta):
 	var current_aim = false
 
 	# Keep aiming if the mouse wasn't held for long enough.
@@ -123,18 +116,20 @@ func _physics_process(delta):
 	
 	camera_node.set_aiming(current_aim)
 
-	# Jump/in-air logic.
-	airborne_time += delta
-	if is_on_floor():
-		if airborne_time > 0.5:#landed
-			sound_effect_land.play()
-		airborne_time = 0
 	
 	state.set_param("on_floor", is_on_floor())
-	var on_air = airborne_time > MIN_AIRBORNE_TIME #
-		
+			
 	match state.get_current():
 		"Idle":
+
+			# Aim to zero (no aiming while walking).
+			animation_tree["parameters/aim/add_amount"] = 0
+			# Change state to walk.
+			animation_tree["parameters/state/current"] = 1
+			# Blend position for walk speed based on motion.
+			animation_tree["parameters/walk/blend_position"] = Vector2(motion.length(), 0)
+			
+		"Move":
 			# Not in air or aiming, idle.
 			# Convert orientation to quaternions for interpolating rotation.
 			var target = camera_node.camera_x * motion.x + camera_node.camera_z * motion.y
@@ -143,33 +138,21 @@ func _physics_process(delta):
 				var q_to = Transform().looking_at(target, Vector3.UP).basis.get_rotation_quat()
 				# Interpolate current rotation with desired one.
 				orientation.basis = Basis(q_from.slerp(q_to, delta * ROTATION_INTERPOLATE_SPEED))
-
-			# Aim to zero (no aiming while walking).
-			animation_tree["parameters/aim/add_amount"] = 0
-			# Change state to walk.
-			animation_tree["parameters/state/current"] = 1
-			# Blend position for walk speed based on motion.
-			animation_tree["parameters/walk/blend_position"] = Vector2(motion.length(), 0)
-
+				
 			root_motion = animation_tree.get_root_motion_transform()
-		"Move":
-			pass
 		"Jump":
-			if not on_air:
-				velocity.y = JUMP_SPEED
-				state.set_trigger("on_air")
-				on_air = true
-				# Increase airborne time so next frame on_air is still true
-				airborne_time = MIN_AIRBORNE_TIME
-				animation_tree["parameters/state/current"] = 2
-				sound_effect_jump.play()
+			velocity.y = JUMP_SPEED
+			state.set_trigger("on_air")
+			# Increase airborne time so next frame on_air is still true
+			animation_tree["parameters/state/current"] = 2
+			sound_effect_jump.play()
 		"On Air":
 			if (velocity.y > 0):
 				animation_tree["parameters/state/current"] = 2
 			else:
 				animation_tree["parameters/state/current"] = 3
 		"Landed":
-			on_air = false
+			sound_effect_land.play()
 		"Aiming":
 			# Change state to strafe.
 			animation_tree["parameters/state/current"] = 0
@@ -190,39 +173,40 @@ func _physics_process(delta):
 			animation_tree["parameters/strafe/blend_position"] = Vector2(motion.x, -motion.y)
 
 			root_motion = animation_tree.get_root_motion_transform()
+		"Shoot":
+			var shoot_origin = shoot_from.global_transform.origin
 
-			if Input.is_action_pressed("shoot") and fire_cooldown.time_left == 0:
-				var shoot_origin = shoot_from.global_transform.origin
+			var ch_pos = crosshair.rect_position + crosshair.rect_size * 0.5
+			var ray_from = camera_node.project_ray_origin(ch_pos)
+			var ray_dir = camera_node.project_ray_normal(ch_pos)
 
-				var ch_pos = crosshair.rect_position + crosshair.rect_size * 0.5
-				var ray_from = camera_node.project_ray_origin(ch_pos)
-				var ray_dir = camera_node.project_ray_normal(ch_pos)
+			var shoot_target
+			var col = get_world().direct_space_state.intersect_ray(ray_from, ray_from + ray_dir * 1000, [self], 0b11)
+			if col.empty():
+				shoot_target = ray_from + ray_dir * 1000
+			else:
+				shoot_target = col.position
+			var shoot_dir = (shoot_target - shoot_origin).normalized()
 
-				var shoot_target
-				var col = get_world().direct_space_state.intersect_ray(ray_from, ray_from + ray_dir * 1000, [self], 0b11)
-				if col.empty():
-					shoot_target = ray_from + ray_dir * 1000
-				else:
-					shoot_target = col.position
-				var shoot_dir = (shoot_target - shoot_origin).normalized()
-
-				var bullet = preload("res://player/bullet/bullet.tscn").instance()
-				get_parent().add_child(bullet)
-				bullet.global_transform.origin = shoot_origin
-				# If we don't rotate the bullets there is no useful way to control the particles ..
-				bullet.look_at(shoot_origin + shoot_dir, Vector3.UP)
-				bullet.add_collision_exception_with(self)
-				var shoot_particle = $PlayerModel/Robot_Skeleton/Skeleton/GunBone/ShootFrom/ShootParticle
-				shoot_particle.restart()
-				shoot_particle.emitting = true
-				var muzzle_particle = $PlayerModel/Robot_Skeleton/Skeleton/GunBone/ShootFrom/MuzzleFlash
-				muzzle_particle.restart()
-				muzzle_particle.emitting = true
-				fire_cooldown.start()
-				sound_effect_shoot.play()
-				camera_node.add_camera_shake_trauma(0.35)
-			
+			var bullet = preload("res://player/bullet/bullet.tscn").instance()
+			get_parent().add_child(bullet)
+			bullet.global_transform.origin = shoot_origin
+			# If we don't rotate the bullets there is no useful way to control the particles ..
+			bullet.look_at(shoot_origin + shoot_dir, Vector3.UP)
+			bullet.add_collision_exception_with(self)
+			var shoot_particle = $PlayerModel/Robot_Skeleton/Skeleton/GunBone/ShootFrom/ShootParticle
+			shoot_particle.restart()
+			shoot_particle.emitting = true
+			var muzzle_particle = $PlayerModel/Robot_Skeleton/Skeleton/GunBone/ShootFrom/MuzzleFlash
+			muzzle_particle.restart()
+			muzzle_particle.emitting = true
+			fire_cooldown.start()
+			sound_effect_shoot.play()
+			camera_node.add_camera_shake_trauma(0.35)
+func _physics_process(delta):
 	
+	motion = motion.linear_interpolate(motion_target, MOTION_INTERPOLATE_SPEED * delta)
+
 	# Apply root motion to orientation.
 	orientation *= root_motion
 
@@ -243,9 +227,11 @@ func start_move(direction: Vector2, orientation: Vector3):
 	pass
 	
 func stop():
+	motion_target = Vector2.ZERO
 	state.set_trigger("stop")
 	
-func move(direction: Vector2, orientation: Vector3):
+func move(direction: Vector2, orientation=null):
+	motion_target = direction
 	state.set_trigger("move")
 	
 func jump():

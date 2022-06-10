@@ -16,5 +16,14 @@ func _input(event):
 				Input.get_action_strength("move_right") - Input.get_action_strength("move_left"),
 				Input.get_action_strength("move_back") - Input.get_action_strength("move_forward"))
 		
+		if motion_direction.length() > 0.0:
+			ward.move(motion_direction)
+			
+		if motion_direction.length() < 0.001:
+			ward.stop()
+			
 		if Input.is_action_just_pressed("jump"): #idle/move
 			ward.jump()
+		
+		if Input.is_action_pressed("shoot"): #idle/move
+			ward.shoot()
