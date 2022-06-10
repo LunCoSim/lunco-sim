@@ -36,11 +36,13 @@ Free for **commercial use**.
 ## Related repositories
 
 * **[Development Guide](/docs/DEVELOPMENT.MD)**
+* **[Terminology](/docs/TERMS.MD)**
 * **[References](/docs/REFERENCES.MD)**
 * **[Space Jargon Cheatsheet](https://github.com/LunCoSim/lunco-space-jargon)**
 * **[Raw assets](https://github.com/LunCoSim/lunco-assets-raw)**
 * **[Content](https://github.com/LunCoSim/lunco-content)**
 * **[Matrix](https://github.com/LunCoSim/lunco-matrix)**
+* 
   
 ### Design you own mission ###
 
@@ -105,6 +107,7 @@ You want to make the Moon forpost of human civilization in space in order to col
     ./gpm
 
 7. Run project by clicking on "project.godot" in "game" folder and install all the plugins
+8. Read [Terms](./docs/TERMS.MD) to understand used terminology
 
 ## Links
 
