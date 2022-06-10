@@ -10,11 +10,16 @@
 8. **Telemetry** – Sampled values of System obtained from 
 9. **Digital twin** or just **twin** – detailed representation of a system, often several aspects combined e.g. cad+thermal model
 10. **Model** – a part of a digital twin, specific representation of a system, e.g. cad model, thermal model. 
+11. **State** – Commands changes system state and actions
+12. **Camera**
+13. **Viewport**
+14. **UI**
+15. **Widget**
 
 LunCo simulates the world and it's called Matrix. User connects to Matrix server using Therminal. 
 User is represented by an avatar that can interact with digital twins of system living in Matrix through Commands to ask them to perform Actions and monitor the result as telemetry.
 
-
+Terminal renders what Avatar sees in the Viewport from Cameras. On top of Viewport there is a UI layer that visualises data using Widgets.
 ## Controled by **Avatar**
 
 1. Player – a person like character in game.
