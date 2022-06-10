@@ -4,18 +4,19 @@
 2. **Terminal** – Application used by a user to connect to a Matrix
 3. **Avatar** – user's representetive in Matrix allowing interaction with the world
 4. **System** – system that is modeled, like rockets, robots, or just enviroment
-5. **Commands** – some systems can execute commmands
+5. **State** – Commands changes system state and actions
+6. **Commands** – some systems can execute commmands
    1. command arguments
-6. **Actions** – system can do actions. It's different actions than Godot
-7. **Parameters** – systems are represented using parameters
+7. **Actions** – system can do actions. It's different actions than Godot
+8. **Parameters** – systems are represented using parameters
    1.  *telemetered* – coming from remote system
    2.  *derived* – computed by algorithms
    3.  *constant* – defined in mission database
    4.  *system* – parameters of Lunco
-8. **Telemetry** – Sampled values of System obtained from 
-9.  **Digital twin** or just **twin** – detailed representation of a system, often several aspects combined e.g. cad+thermal model
-10. **Model** – a part of a digital twin, specific representation of a system, e.g. cad model, thermal model. 
-11. **State** – Commands changes system state and actions
+9. **Telemetry** – Sampled values of System obtained from 
+   1. *Stream* – flow of telemetered parameters
+10. **Digital twin** or just **twin** – detailed representation of a system, often several aspects combined e.g. cad+thermal model
+11. **Model** – a part of a digital twin, specific representation of a system, e.g. cad model, thermal model. 
 12. **Viewport**
     1.  *Camera*
     2.  *UI*
