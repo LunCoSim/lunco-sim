@@ -17,18 +17,45 @@ const JUMP_SPEED = 5
 
 var airborne_time = 100
 
-var orientation = Transform()
-var root_motion = Transform()
-var motion = Vector2()
-var velocity = Vector3()
+export var orientation = Transform()
+export var root_motion = Transform()
+export var motion = Vector2()
+export var velocity = Vector3()
 
-var aiming = false
+export var aiming = false
 
 # If `true`, the aim button was toggled on by a short press (instead of being held down).
 var toggled_aim = false
 
 # The duration the aiming button was held for (in seconds).
 var aiming_timer = 0.0
+
+
+# Parameters
+# strafe
+# moving_direction
+# moving_orientation
+# state
+# weapon_energy #droped to zero and then grows with time
+
+
+# Commands:
+# move(direction, orientation)
+# jump()
+# shoot()
+# start_moving()
+# stop()
+# start_strafe
+# set paramater
+# set state
+# set triggers
+
+# State
+# Idle
+# Moving
+# On_air
+# Aiming
+# Shooting
 
 
 onready var initial_position = transform.origin
@@ -48,9 +75,9 @@ onready var sound_effect_jump = sound_effects.get_node(@"Jump")
 onready var sound_effect_land = sound_effects.get_node(@"Land")
 onready var sound_effect_shoot = sound_effects.get_node(@"Shoot")
 
-func _init():
-	Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
+onready var smp = $StateMachinePlayer
 
+var motion_target
 
 func _ready():
 	# Pre-initialize orientation transform.
@@ -58,21 +85,9 @@ func _ready():
 	orientation.origin = Vector3()
 
 
-func _process(_delta):
-	# Fade out to black if falling out of the map. -17 is lower than
-	# the lowest valid position on the map (which is a bit under -16).
-	# At 15 units below -17 (so -32), the screen turns fully black.
-	if transform.origin.y < -17:
-		color_rect.modulate.a = min((-17 - transform.origin.y) / 15, 1)
-		# If we're below -40, respawn (teleport to the initial position).
-		if transform.origin.y < -40:
-			color_rect.modulate.a = 0
-			transform.origin = initial_position
-
-
 func _physics_process(delta):
 	
-	var motion_target = Vector2(
+	motion_target = Vector2(
 			Input.get_action_strength("move_right") - Input.get_action_strength("move_left"),
 			Input.get_action_strength("move_back") - Input.get_action_strength("move_forward"))
 	motion = motion.linear_interpolate(motion_target, MOTION_INTERPOLATE_SPEED * delta)
@@ -202,5 +217,30 @@ func _physics_process(delta):
 	player_model.global_transform.basis = orientation.basis
 
 
+# --------------------------------------------------
+
+func move(direction: Vector2, orientation: Vector3):
+	smp.set_trigger("move")
+	
+func jump():
+	smp.set_trigger("jump")
+	
+func shoot():
+	smp.set_trigger("s")
+
+# --------------------------------------------------
+# Player state
+func _on_StatePlayer_transited(from, to):
+	pass # Replace with function body.
 
 
+func _on_StatePlayer_updated(state, delta):
+	pass # Replace with function body.
+
+# Aiming
+func _on_StateAiming_transited(from, to):
+	pass # Replace with function body.
+
+
+func _on_StateAiming_updated(state, delta):
+	pass # Replace with function body.

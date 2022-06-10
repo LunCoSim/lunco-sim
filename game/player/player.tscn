@@ -1,4 +1,4 @@
-[gd_scene load_steps=44 format=2]
+[gd_scene load_steps=63 format=2]
 
 [ext_resource path="res://player/player.gd" type="Script" id=1]
 [ext_resource path="res://player/model/player.glb" type="PackedScene" id=2]
@@ -7,16 +7,13 @@
 [ext_resource path="res://player/audio/jump.wav" type="AudioStream" id=5]
 [ext_resource path="res://player/audio/land.wav" type="AudioStream" id=6]
 [ext_resource path="res://player/audio/shoot.wav" type="AudioStream" id=7]
+[ext_resource path="res://addons/imjp94.yafsm/src/states/StateMachine.gd" type="Script" id=8]
 [ext_resource path="res://player/bullet/bullet_material.tres" type="Material" id=9]
 [ext_resource path="res://player/model/muzzle_flash_particle_mesh_Cone.mesh" type="ArrayMesh" id=10]
 [ext_resource path="res://player/bullet/effect/FlarePolar.png" type="Texture" id=11]
-
-[sub_resource type="ParticlesMaterial" id=1]
-flag_align_y = true
-direction = Vector3( 0, 0, -1 )
-spread = 15.0
-gravity = Vector3( 0, -3, 0 )
-initial_velocity = 3.0
+[ext_resource path="res://addons/imjp94.yafsm/src/StateMachinePlayer.gd" type="Script" id=12]
+[ext_resource path="res://addons/imjp94.yafsm/src/states/State.gd" type="Script" id=13]
+[ext_resource path="res://addons/imjp94.yafsm/src/transitions/Transition.gd" type="Script" id=14]
 
 [sub_resource type="SphereMesh" id=2]
 radius = 0.003
@@ -29,28 +26,12 @@ vertex_color_use_as_albedo = true
 params_cull_mode = 2
 albedo_texture = ExtResource( 11 )
 
-[sub_resource type="Gradient" id=4]
-offsets = PoolRealArray( 0.325926, 1 )
-colors = PoolColorArray( 0.0507812, 0.955505, 1, 1, 0.875, 0.888672, 1, 0.305882 )
-
-[sub_resource type="GradientTexture" id=5]
-gradient = SubResource( 4 )
-width = 32
-
 [sub_resource type="Curve" id=6]
 _data = [ Vector2( 0, 0 ), 0.0, 0.0, 0, 0, Vector2( 0.791139, 0.990909 ), 0.0, 0.0, 0, 0, Vector2( 1, 0 ), 0.0, 0.0, 0, 0 ]
 
-[sub_resource type="CurveTexture" id=7]
-width = 64
-curve = SubResource( 6 )
-
-[sub_resource type="ParticlesMaterial" id=8]
-gravity = Vector3( 0, 0, 0 )
-angle = -4.0
-angle_random = 1.0
-scale = 0.3
-scale_curve = SubResource( 7 )
-color_ramp = SubResource( 5 )
+[sub_resource type="Gradient" id=4]
+offsets = PoolRealArray( 0.325926, 1 )
+colors = PoolColorArray( 0.0507812, 0.955505, 1, 1, 0.875, 0.888672, 1, 0.305882 )
 
 [sub_resource type="AnimationNodeAdd3" id=9]
 resource_local_to_scene = true
@@ -170,7 +151,7 @@ y_label = "gun"
 
 [sub_resource type="AnimationNodeBlendTree" id=30]
 resource_local_to_scene = true
-graph_offset = Vector2( -1.43226, 10.3697 )
+graph_offset = Vector2( -454.854, -75.2591 )
 nodes/aim/node = SubResource( 9 )
 nodes/aim/position = Vector2( 380, 120 )
 nodes/aimdown/node = SubResource( 10 )
@@ -196,7 +177,7 @@ nodes/strafe/node = SubResource( 24 )
 nodes/strafe/position = Vector2( -400, -120 )
 nodes/walk/node = SubResource( 29 )
 nodes/walk/position = Vector2( -400, 40 )
-node_connections = [ "aim", 0, "aimdown", "aim", 1, "land", "aim", 2, "aimup", "eye_blend", 0, "aim", "eye_blend", 1, "eyes", "land", 0, "state", "land", 1, "hardland", "output", 0, "eye_blend", "state", 0, "strafe", "state", 1, "walk", "state", 2, "jumpup", "state", 3, "jumpdown" ]
+node_connections = [ "output", 0, "eye_blend", "state", 0, "strafe", "state", 1, "walk", "state", 2, "jumpup", "state", 3, "jumpdown", "aim", 0, "aimdown", "aim", 1, "land", "aim", 2, "aimup", "eye_blend", 0, "aim", "eye_blend", 1, "eyes", "land", 0, "state", "land", 1, "hardland" ]
 
 [sub_resource type="CapsuleShape" id=31]
 radius = 0.5
@@ -206,6 +187,170 @@ height = 0.6
 
 [sub_resource type="AudioStreamRandomPitch" id=35]
 audio_stream = ExtResource( 7 )
+
+[sub_resource type="Resource" id=37]
+script = ExtResource( 13 )
+__meta__ = {
+"graph_offset": Vector2( 190, 54.5 )
+}
+name = "Entry"
+
+[sub_resource type="Resource" id=36]
+script = ExtResource( 13 )
+__meta__ = {
+"graph_offset": Vector2( 490, 54.5 )
+}
+name = "Idle"
+
+[sub_resource type="Resource" id=41]
+script = ExtResource( 13 )
+__meta__ = {
+"graph_offset": Vector2( 750, -25.5 )
+}
+name = "Jump"
+
+[sub_resource type="Resource" id=42]
+script = ExtResource( 13 )
+__meta__ = {
+"graph_offset": Vector2( 790, 154.5 )
+}
+name = "Move"
+
+[sub_resource type="Resource" id=43]
+script = ExtResource( 13 )
+__meta__ = {
+"graph_offset": Vector2( 1027, 94.5 )
+}
+name = "On Air"
+
+[sub_resource type="Resource" id=44]
+script = ExtResource( 13 )
+__meta__ = {
+"graph_offset": Vector2( 1069.5, 214.5 )
+}
+name = "Shooting"
+
+[sub_resource type="Resource" id=45]
+script = ExtResource( 13 )
+__meta__ = {
+"graph_offset": Vector2( 402, 214.5 )
+}
+name = "Aiming"
+
+[sub_resource type="Resource" id=39]
+script = ExtResource( 14 )
+from = "Entry"
+to = "Idle"
+conditions = {
+}
+
+[sub_resource type="Resource" id=46]
+script = ExtResource( 14 )
+from = "Idle"
+to = "Jump"
+conditions = {
+}
+
+[sub_resource type="Resource" id=47]
+script = ExtResource( 14 )
+from = "Idle"
+to = "Move"
+conditions = {
+}
+
+[sub_resource type="Resource" id=48]
+script = ExtResource( 14 )
+from = "Jump"
+to = "On Air"
+conditions = {
+}
+
+[sub_resource type="Resource" id=40]
+script = ExtResource( 8 )
+name = ""
+states = {
+"Aiming": SubResource( 45 ),
+"Entry": SubResource( 37 ),
+"Idle": SubResource( 36 ),
+"Jump": SubResource( 41 ),
+"Move": SubResource( 42 ),
+"On Air": SubResource( 43 ),
+"Shooting": SubResource( 44 )
+}
+transitions = {
+"Entry": {
+"Idle": SubResource( 39 )
+},
+"Idle": {
+"Jump": SubResource( 46 ),
+"Move": SubResource( 47 )
+},
+"Jump": {
+"On Air": SubResource( 48 )
+}
+}
+
+[sub_resource type="Resource" id=49]
+script = ExtResource( 13 )
+__meta__ = {
+"graph_offset": Vector2( 410, 114.5 )
+}
+name = "Entry"
+
+[sub_resource type="Resource" id=51]
+script = ExtResource( 13 )
+__meta__ = {
+"graph_offset": Vector2( 659.5, 114.5 )
+}
+name = "Normal"
+
+[sub_resource type="Resource" id=52]
+script = ExtResource( 13 )
+__meta__ = {
+"graph_offset": Vector2( 1142, 114.5 )
+}
+name = "Aiming"
+
+[sub_resource type="Resource" id=53]
+script = ExtResource( 14 )
+from = "Entry"
+to = "Normal"
+conditions = {
+}
+
+[sub_resource type="Resource" id=54]
+script = ExtResource( 14 )
+from = "Normal"
+to = "Aiming"
+conditions = {
+}
+
+[sub_resource type="Resource" id=55]
+script = ExtResource( 14 )
+from = "Aiming"
+to = "Normal"
+conditions = {
+}
+
+[sub_resource type="Resource" id=50]
+script = ExtResource( 8 )
+name = ""
+states = {
+"Aiming": SubResource( 52 ),
+"Entry": SubResource( 49 ),
+"Normal": SubResource( 51 )
+}
+transitions = {
+"Aiming": {
+"Normal": SubResource( 55 )
+},
+"Entry": {
+"Normal": SubResource( 53 )
+},
+"Normal": {
+"Aiming": SubResource( 54 )
+}
+}
 
 [node name="Player" type="KinematicBody"]
 collision_layer = 6
@@ -217,14 +362,17 @@ script = ExtResource( 1 )
 [node name="Robot_Skeleton" parent="PlayerModel" index="0"]
 transform = Transform( 0.803991, 0, 0, 0, 0.803991, 0, 0, 0, 0.803991, 0, 0, 0 )
 
+[node name="Skeleton" parent="PlayerModel/Robot_Skeleton" index="0"]
+bones/55/bound_children = [ NodePath("GunBone") ]
+
 [node name="GunBone" type="BoneAttachment" parent="PlayerModel/Robot_Skeleton/Skeleton" index="5"]
-transform = Transform( 0.920441, -0.390038, -0.0295596, -0.0169212, 0.0358096, -0.999223, 0.390839, 0.920102, 0.0263579, -0.207198, 1.36513, 0.539342 )
+transform = Transform( 0.922436, -0.382151, -0.0573547, -0.0353031, 0.0644869, -0.997301, 0.384863, 0.921848, 0.0459885, -0.207089, 1.39797, 0.464078 )
 bone_name = "hand.R"
 
 [node name="ShootFrom" type="Position3D" parent="PlayerModel/Robot_Skeleton/Skeleton/GunBone"]
 transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.4, 0 )
 
-[node name="ShootParticle" type="Particles" parent="PlayerModel/Robot_Skeleton/Skeleton/GunBone/ShootFrom"]
+[node name="ShootParticle" type="CPUParticles" parent="PlayerModel/Robot_Skeleton/Skeleton/GunBone/ShootFrom"]
 transform = Transform( 1, 2.04891e-08, 0, 3.21306e-08, 1, 5.58794e-09, 0, 0, 1, 0, 0, 0 )
 material_override = ExtResource( 9 )
 emitting = false
@@ -233,10 +381,14 @@ lifetime = 0.3
 one_shot = true
 explosiveness = 0.79
 local_coords = false
-process_material = SubResource( 1 )
-draw_pass_1 = SubResource( 2 )
+mesh = SubResource( 2 )
+flag_align_y = true
+direction = Vector3( 0, 0, -1 )
+spread = 15.0
+gravity = Vector3( 0, -3, 0 )
+initial_velocity = 3.0
 
-[node name="MuzzleFlash" type="Particles" parent="PlayerModel/Robot_Skeleton/Skeleton/GunBone/ShootFrom"]
+[node name="MuzzleFlash" type="CPUParticles" parent="PlayerModel/Robot_Skeleton/Skeleton/GunBone/ShootFrom"]
 transform = Transform( 1, 0, -2.00234e-08, 1.21072e-08, -4.37722e-08, -1, -2.98023e-08, 1, -4.74975e-08, 0, 0, 0 )
 material_override = SubResource( 3 )
 emitting = false
@@ -244,8 +396,13 @@ amount = 1
 lifetime = 0.1
 one_shot = true
 explosiveness = 1.0
-process_material = SubResource( 8 )
-draw_pass_1 = ExtResource( 10 )
+mesh = ExtResource( 10 )
+gravity = Vector3( 0, 0, 0 )
+angle = -4.0
+angle_random = 1.0
+scale_amount = 0.3
+scale_amount_curve = SubResource( 6 )
+color_ramp = SubResource( 4 )
 
 [node name="RootMotionView" type="RootMotionView" parent="."]
 animation_path = NodePath("../AnimationTree")
@@ -276,9 +433,6 @@ modulate = Color( 1, 1, 1, 0 )
 anchor_right = 1.0
 anchor_bottom = 1.0
 color = Color( 0, 0, 0, 1 )
-__meta__ = {
-"_edit_use_anchors_": false
-}
 
 [node name="Crosshair" type="TextureRect" parent="."]
 self_modulate = Color( 1, 1, 1, 0 )
@@ -315,5 +469,18 @@ stream = SubResource( 35 )
 wait_time = 0.4
 one_shot = true
 autostart = true
+
+[node name="StatePlayer" type="Node" parent="."]
+script = ExtResource( 12 )
+state_machine = SubResource( 40 )
+
+[node name="StateAiming" type="Node" parent="."]
+script = ExtResource( 12 )
+state_machine = SubResource( 50 )
+
+[connection signal="transited" from="StatePlayer" to="." method="_on_StatePlayer_transited"]
+[connection signal="updated" from="StatePlayer" to="." method="_on_StatePlayer_updated"]
+[connection signal="transited" from="StateAiming" to="." method="_on_StateAiming_transited"]
+[connection signal="updated" from="StateAiming" to="." method="_on_StateAiming_updated"]
 
 [editable path="PlayerModel"]
