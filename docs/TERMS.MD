@@ -1,6 +1,9 @@
 # LunCo: Used terms
 
 1. **Matrix** – an instance of a simulated world in Godot. Can be on a remote server or local
+   1. World
+   2. Gravity field - Gravity vector depending on x, y, z
+   3. 
 2. **Terminal** – Application used by a user to connect to a Matrix
 3. **Avatar** – user's representetive in Matrix allowing interaction with the world
 4. **System** – system that is modeled, like rockets, robots, or just enviroment
@@ -13,8 +16,8 @@
    2.  *derived* – computed by algorithms
    3.  *constant* – defined in mission database
    4.  *system* – parameters of Lunco
-9. **Telemetry** – Sampled values of System obtained from 
-   1. *Stream* – flow of telemetered parameters
+9.  **Telemetry** – Sampled values of System obtained from 
+   5. *Stream* – flow of telemetered parameters
 10. **Digital twin** or just **twin** – detailed representation of a system, often several aspects combined e.g. cad+thermal model
 11. **Model** – a part of a digital twin, specific representation of a system, e.g. cad model, thermal model. 
 12. **Viewport**
