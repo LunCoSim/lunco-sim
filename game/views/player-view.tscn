@@ -1,4 +1,4 @@
-[gd_scene load_steps=25 format=2]
+[gd_scene load_steps=35 format=2]
 
 [ext_resource path="res://player/player.tscn" type="PackedScene" id=1]
 [ext_resource path="res://maps/demo-map.tscn" type="PackedScene" id=2]
@@ -10,8 +10,9 @@
 [ext_resource path="res://addons/imjp94.yafsm/src/states/State.gd" type="Script" id=8]
 [ext_resource path="res://addons/imjp94.yafsm/src/states/StateMachine.gd" type="Script" id=9]
 [ext_resource path="res://views/world.gd" type="Script" id=10]
-[ext_resource path="res://views/Executor.gd" type="Script" id=11]
+[ext_resource path="res://addons/lunco-cameras/gimbal-camera/gimbal-camera.tscn" type="PackedScene" id=11]
 [ext_resource path="res://addons/imjp94.yafsm/src/transitions/Transition.gd" type="Script" id=12]
+[ext_resource path="res://addons/imjp94.yafsm/src/conditions/Condition.gd" type="Script" id=13]
 [ext_resource path="res://views/Avatar.gd" type="Script" id=15]
 
 [sub_resource type="CylinderShape" id=15]
@@ -85,6 +86,78 @@ transitions = {
 }
 }
 
+[sub_resource type="Resource" id=21]
+script = ExtResource( 8 )
+__meta__ = {
+"graph_offset": Vector2( 370, 154.5 )
+}
+name = "Entry"
+
+[sub_resource type="Resource" id=22]
+script = ExtResource( 8 )
+__meta__ = {
+"graph_offset": Vector2( 688, 94.5 )
+}
+name = "Player"
+
+[sub_resource type="Resource" id=23]
+script = ExtResource( 8 )
+__meta__ = {
+"graph_offset": Vector2( 902, 276.5 )
+}
+name = "Spacecraft"
+
+[sub_resource type="Resource" id=25]
+script = ExtResource( 12 )
+from = "Entry"
+to = "Player"
+conditions = {
+}
+
+[sub_resource type="Resource" id=26]
+script = ExtResource( 13 )
+name = "spacecraft"
+
+[sub_resource type="Resource" id=27]
+script = ExtResource( 12 )
+from = "Player"
+to = "Spacecraft"
+conditions = {
+"spacecraft": SubResource( 26 )
+}
+
+[sub_resource type="Resource" id=28]
+script = ExtResource( 13 )
+name = "player"
+
+[sub_resource type="Resource" id=29]
+script = ExtResource( 12 )
+from = "Spacecraft"
+to = "Player"
+conditions = {
+"player": SubResource( 28 )
+}
+
+[sub_resource type="Resource" id=30]
+script = ExtResource( 9 )
+name = ""
+states = {
+"Entry": SubResource( 21 ),
+"Player": SubResource( 22 ),
+"Spacecraft": SubResource( 23 )
+}
+transitions = {
+"Entry": {
+"Player": SubResource( 25 )
+},
+"Player": {
+"Spacecraft": SubResource( 27 )
+},
+"Spacecraft": {
+"Player": SubResource( 29 )
+}
+}
+
 [node name="PlayerView" type="Node"]
 
 [node name="World" type="Node" parent="."]
@@ -96,15 +169,6 @@ transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, -0.0778594, -1.29681, 0.40384 
 [node name="Player" parent="World" instance=ExtResource( 1 )]
 transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.783736, 0 )
 camera = NodePath("CameraPlayer")
-
-[node name="Executor" type="Node" parent="World/Player"]
-script = ExtResource( 11 )
-
-[node name="Move" type="Node" parent="World/Player/Executor"]
-
-[node name="Jump" type="Node" parent="World/Player/Executor"]
-
-[node name="Shoot" type="Node" parent="World/Player/Executor"]
 
 [node name="CameraPlayer" parent="World/Player" instance=ExtResource( 3 )]
 transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2.22763, 0 )
@@ -138,9 +202,21 @@ color_ramp = SubResource( 17 )
 script = ExtResource( 7 )
 state_machine = SubResource( 20 )
 
+[node name="SpacecraftCamera" parent="World" instance=ExtResource( 11 )]
+transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, -4.23516e-22, -3.8147e-06, 1.19209e-07 )
+target = NodePath("../SpacecraftControl/Starship")
+distance = 20.0
+
 [node name="Avatar" type="Node" parent="."]
 script = ExtResource( 15 )
-Cam = NodePath("../World/Player/CameraPlayer")
-Ward = NodePath("../World/SpacecraftControl")
+PlayerCam = NodePath("../World/Player/CameraPlayer")
+SpacecraftCam = NodePath("../World/SpacecraftCamera")
+Player = NodePath("../World/Player")
+Spacecraft = NodePath("../World/SpacecraftControl")
+
+[node name="State" type="Node" parent="Avatar"]
+script = ExtResource( 7 )
+state_machine = SubResource( 30 )
 
 [connection signal="thrust" from="World/SpacecraftControl" to="World/SpacecraftControl/Starship" method="_on_SpacecraftControl_thrust"]
+[connection signal="transited" from="Avatar/State" to="Avatar" method="_on_State_transited"]
