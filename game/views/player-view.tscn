@@ -1,11 +1,89 @@
-[gd_scene load_steps=7 format=2]
+[gd_scene load_steps=25 format=2]
 
 [ext_resource path="res://player/player.tscn" type="PackedScene" id=1]
 [ext_resource path="res://maps/demo-map.tscn" type="PackedScene" id=2]
 [ext_resource path="res://addons/lunco-cameras/spring-arm-camera/spring-arm-camera.tscn" type="PackedScene" id=3]
+[ext_resource path="res://addons/lunco-content/spacex-starship/source/SpaceX_Starship.gd" type="Script" id=4]
+[ext_resource path="res://addons/lunco-content/spacex-starship/source/SpaceX_Starship.fbx" type="PackedScene" id=5]
+[ext_resource path="res://controls/spacecraft/spacecraft-controller.tscn" type="PackedScene" id=6]
+[ext_resource path="res://addons/imjp94.yafsm/src/StateMachinePlayer.gd" type="Script" id=7]
+[ext_resource path="res://addons/imjp94.yafsm/src/states/State.gd" type="Script" id=8]
+[ext_resource path="res://addons/imjp94.yafsm/src/states/StateMachine.gd" type="Script" id=9]
 [ext_resource path="res://views/world.gd" type="Script" id=10]
 [ext_resource path="res://views/Executor.gd" type="Script" id=11]
+[ext_resource path="res://addons/imjp94.yafsm/src/transitions/Transition.gd" type="Script" id=12]
 [ext_resource path="res://views/Avatar.gd" type="Script" id=15]
+
+[sub_resource type="CylinderShape" id=15]
+height = 50.7794
+radius = 4.70786
+
+[sub_resource type="SpatialMaterial" id=10]
+albedo_color = Color( 0.619608, 0.172549, 0.172549, 1 )
+
+[sub_resource type="SphereMesh" id=16]
+material = SubResource( 10 )
+
+[sub_resource type="Gradient" id=17]
+offsets = PoolRealArray( 0.202247, 0.890851 )
+
+[sub_resource type="Resource" id=11]
+script = ExtResource( 8 )
+__meta__ = {
+"graph_offset": Vector2( 350, 294.5 )
+}
+name = "Entry"
+
+[sub_resource type="Resource" id=12]
+script = ExtResource( 8 )
+__meta__ = {
+"graph_offset": Vector2( 670, 434.5 )
+}
+name = "Idle"
+
+[sub_resource type="Resource" id=13]
+script = ExtResource( 8 )
+__meta__ = {
+"graph_offset": Vector2( 647, 74.5 )
+}
+name = "Param: thrust"
+
+[sub_resource type="Resource" id=18]
+script = ExtResource( 8 )
+__meta__ = {
+"graph_offset": Vector2( -30, -5.5 )
+}
+name = "Param thrust"
+
+[sub_resource type="Resource" id=19]
+script = ExtResource( 8 )
+__meta__ = {
+"graph_offset": Vector2( -30, -5.5 )
+}
+name = "Param thrust2"
+
+[sub_resource type="Resource" id=14]
+script = ExtResource( 12 )
+from = "Entry"
+to = "Idle"
+conditions = {
+}
+
+[sub_resource type="Resource" id=20]
+script = ExtResource( 9 )
+name = ""
+states = {
+"Entry": SubResource( 11 ),
+"Idle": SubResource( 12 ),
+"Param thrust": SubResource( 18 ),
+"Param thrust2": SubResource( 19 ),
+"Param: thrust": SubResource( 13 )
+}
+transitions = {
+"Entry": {
+"Idle": SubResource( 14 )
+}
+}
 
 [node name="PlayerView" type="Node"]
 
@@ -36,7 +114,33 @@ camera_basis = Vector3( 0, 3, 0 )
 
 [node name="Commands" type="Node" parent="World/Player/CameraPlayer"]
 
+[node name="SpacecraftControl" parent="World" instance=ExtResource( 6 )]
+transform = Transform( 1, 0, 1.11022e-16, 0, -0.0551419, 0.998479, 0, -0.998479, -0.0551419, 0, 35.4788, 0 )
+
+[node name="CollisionShape" type="CollisionShape" parent="World/SpacecraftControl"]
+transform = Transform( 1, -1.1102e-16, 1.1041e-16, 0, 0.00551527, -0.999986, 0, 0.999985, 0.00551527, 4.50739e-17, 1.44237e-15, -0.405991 )
+shape = SubResource( 15 )
+
+[node name="Starship" parent="World/SpacecraftControl" instance=ExtResource( 5 )]
+transform = Transform( -1.00898, 8.82078e-08, 0, -8.82077e-08, -1.00898, 4.23516e-22, 2.52435e-29, 0, 1.00898, 2.50777e-15, 8.02489e-14, -22.5881 )
+script = ExtResource( 4 )
+
+[node name="Exhause" type="CPUParticles" parent="World/SpacecraftControl/Starship"]
+transform = Transform( -0.0418833, -9.12696e-08, -0.990215, -2.98023e-08, -0.9911, 8.63802e-08, -0.990215, -2.98023e-08, 0.0418833, 0.000133514, 1.52588e-05, -0.192062 )
+emitting = false
+amount = 40
+lifetime = 1.78
+mesh = SubResource( 16 )
+initial_velocity = 8.7
+color_ramp = SubResource( 17 )
+
+[node name="State" type="Node" parent="World/SpacecraftControl"]
+script = ExtResource( 7 )
+state_machine = SubResource( 20 )
+
 [node name="Avatar" type="Node" parent="."]
 script = ExtResource( 15 )
 Cam = NodePath("../World/Player/CameraPlayer")
-Ward = NodePath("../World/Player")
+Ward = NodePath("../World/SpacecraftControl")
+
+[connection signal="thrust" from="World/SpacecraftControl" to="World/SpacecraftControl/Starship" method="_on_SpacecraftControl_thrust"]

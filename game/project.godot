@@ -279,6 +279,11 @@ _global_script_classes=[ {
 "language": "GDScript",
 "path": "res://addons/godot-next/global/singletons.gd"
 }, {
+"base": "RigidBody",
+"class": "Spacecraft",
+"language": "GDScript",
+"path": "res://controls/spacecraft/spacecraft-controller.gd"
+}, {
 "base": "Spatial",
 "class": "SpringArmCamera",
 "language": "GDScript",
@@ -459,6 +464,7 @@ _global_script_class_icons={
 "ResourceCollection": "",
 "ResourceSet": "",
 "Singletons": "",
+"Spacecraft": "",
 "SpringArmCamera": "",
 "Timeline": "res://addons/event_system_plugin/assets/icons/timeline_icon.png",
 "Trail2D": "res://addons/godot-next/icons/icon_trail_2d.svg",

@@ -1,43 +1,40 @@
 #This code is based on this game: https://godotforums.org/discussion/18480/godot-3d-vector-physics-cheat-sheet
+class_name Spacecraft
 extends RigidBody
 
 signal thrust(enabled)
 
 const Z_FRONT = 1 #in this game the front side is towards negative Z
-const THRUST = 50
-const THRUST_TURN = 200
-const THRUST_ROLL = 50
 
-var wasThrust = false #Visible exhause
+export var THRUST = 50
+export var THRUST_TURN = 200
+export var THRUST_ROLL = 50
+
+# Commands
+# thrust
+# change orienation(x, y, z)
+
+var thrust := 0.0
+var torque := Vector3.ZERO
 
 # damping: see linear and angular damping parameters
 
 func _physics_process(delta):
-	if Input.is_action_pressed("throttle"):
-		add_central_force(transform.basis.z * Z_FRONT * THRUST)
-		if !wasThrust:
-			wasThrust = true
-	else:
-		if wasThrust:
-			wasThrust=false
-	
-	emit_signal("thrust", wasThrust)
-	#exhause.emitting = wasThrust	
-	
-	if Input.is_action_pressed("pitch_up"): #dive up
-		add_torque(global_transform.basis.x * -THRUST_TURN * Z_FRONT)
-	if Input.is_action_pressed("pitch_down"): #dive down
-		add_torque(global_transform.basis.x * THRUST_TURN * Z_FRONT)
-	if Input.is_action_pressed("yaw_left"):
-		add_torque(global_transform.basis.y * THRUST_TURN * Z_FRONT)
-	if Input.is_action_pressed("yaw_right"):
-		add_torque(global_transform.basis.y * -THRUST_TURN * Z_FRONT)
-	if Input.is_action_pressed("roll_ccw"):
-		add_torque(global_transform.basis.z * -THRUST_ROLL * Z_FRONT)
-	if Input.is_action_pressed("roll_cw"):
-		add_torque(global_transform.basis.z * THRUST_ROLL * Z_FRONT)
+	add_central_force(transform.basis.z * Z_FRONT * thrust)
 		
-	# ESCAPE TO MAIN MENU
-	if Input.is_action_pressed("ui_cancel"):
-		get_tree().change_scene("res://Main Menu/Main Menu.tscn")
+	add_torque(global_transform.basis.x * torque.x * THRUST_TURN * Z_FRONT)
+	add_torque(global_transform.basis.y * torque.y * THRUST_TURN * Z_FRONT)
+	add_torque(global_transform.basis.z * torque.z * THRUST_ROLL * Z_FRONT)
 
+# ------------
+
+func throttle(_thrust: bool):
+	emit_signal("thrust", _thrust)
+	
+	if _thrust:
+		thrust = THRUST
+	else:
+		thrust = 0
+		
+func change_orientation(orien: Vector3):
+	torque = orien

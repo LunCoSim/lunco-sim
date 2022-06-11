@@ -1,4 +1,4 @@
-[gd_scene load_steps=13 format=2]
+[gd_scene load_steps=24 format=2]
 
 [ext_resource path="res://controls/spacecraft/spacecraft-controller.tscn" type="PackedScene" id=1]
 [ext_resource path="res://assets/planets/earth-model.tscn" type="PackedScene" id=2]
@@ -7,19 +7,81 @@
 [ext_resource path="res://addons/lunco-cameras/gimbal-camera/gimbal-camera.tscn" type="PackedScene" id=5]
 [ext_resource path="res://addons/lunco-content/spacex-starship/source/SpaceX_Starship.fbx" type="PackedScene" id=6]
 [ext_resource path="res://addons/lunco-content/spacex-starship/source/SpaceX_Starship.gd" type="Script" id=7]
+[ext_resource path="res://addons/imjp94.yafsm/src/StateMachinePlayer.gd" type="Script" id=8]
+[ext_resource path="res://addons/imjp94.yafsm/src/states/State.gd" type="Script" id=9]
+[ext_resource path="res://addons/imjp94.yafsm/src/states/StateMachine.gd" type="Script" id=10]
+[ext_resource path="res://addons/imjp94.yafsm/src/transitions/Transition.gd" type="Script" id=11]
 
 [sub_resource type="CylinderShape" id=7]
 height = 50.7794
 radius = 4.70786
 
-[sub_resource type="SpatialMaterial" id=10]
+[sub_resource type="SpatialMaterial" id=20]
 albedo_color = Color( 0.619608, 0.172549, 0.172549, 1 )
 
 [sub_resource type="SphereMesh" id=8]
-material = SubResource( 10 )
+material = SubResource( 20 )
 
 [sub_resource type="Gradient" id=9]
 offsets = PoolRealArray( 0.202247, 0.890851 )
+
+[sub_resource type="Resource" id=11]
+script = ExtResource( 9 )
+__meta__ = {
+"graph_offset": Vector2( 350, 294.5 )
+}
+name = "Entry"
+
+[sub_resource type="Resource" id=12]
+script = ExtResource( 9 )
+__meta__ = {
+"graph_offset": Vector2( 670, 434.5 )
+}
+name = "Idle"
+
+[sub_resource type="Resource" id=13]
+script = ExtResource( 9 )
+__meta__ = {
+"graph_offset": Vector2( 647, 74.5 )
+}
+name = "Param: thrust"
+
+[sub_resource type="Resource" id=18]
+script = ExtResource( 9 )
+__meta__ = {
+"graph_offset": Vector2( -30, -5.5 )
+}
+name = "Param thrust"
+
+[sub_resource type="Resource" id=19]
+script = ExtResource( 9 )
+__meta__ = {
+"graph_offset": Vector2( -30, -5.5 )
+}
+name = "Param thrust2"
+
+[sub_resource type="Resource" id=14]
+script = ExtResource( 11 )
+from = "Entry"
+to = "Idle"
+conditions = {
+}
+
+[sub_resource type="Resource" id=15]
+script = ExtResource( 10 )
+name = ""
+states = {
+"Entry": SubResource( 11 ),
+"Idle": SubResource( 12 ),
+"Param thrust": SubResource( 18 ),
+"Param thrust2": SubResource( 19 ),
+"Param: thrust": SubResource( 13 )
+}
+transitions = {
+"Entry": {
+"Idle": SubResource( 14 )
+}
+}
 
 [sub_resource type="Environment" id=1]
 background_mode = 2
@@ -52,6 +114,10 @@ lifetime = 1.78
 mesh = SubResource( 8 )
 initial_velocity = 8.7
 color_ramp = SubResource( 9 )
+
+[node name="State" type="Node" parent="SpacecraftControl"]
+script = ExtResource( 8 )
+state_machine = SubResource( 15 )
 
 [node name="Sun" type="Spatial" parent="."]
 transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 249.654, 290.096 )
