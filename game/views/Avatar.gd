@@ -25,5 +25,8 @@ func _input(event):
 		if Input.is_action_just_pressed("jump"): #idle/move
 			ward.jump()
 		
+		if Input.is_action_pressed("aim"): #idle/move
+			ward.aim()
+			
 		if Input.is_action_pressed("shoot"): #idle/move
 			ward.shoot()

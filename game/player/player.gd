@@ -27,15 +27,6 @@ export var root_motion = Transform()
 export var motion = Vector2()
 export var velocity = Vector3()
 
-export var aiming = false
-
-# If `true`, the aim button was toggled on by a short press (instead of being held down).
-var toggled_aim = false
-
-# The duration the aiming button was held for (in seconds).
-var aiming_timer = 0.0
-
-
 var motion_target = Vector2.ZERO
 # Parameters
 # strafe
@@ -98,25 +89,7 @@ func _ready():
 	orientation.origin = Vector3()
 
 func _process(delta):
-	var current_aim = false
-
-	# Keep aiming if the mouse wasn't held for long enough.
-	if Input.is_action_just_released("aim") and aiming_timer <= AIM_HOLD_THRESHOLD:
-		current_aim = true
-		toggled_aim = true
-	else:
-		current_aim = toggled_aim or Input.is_action_pressed("aim")
-		if Input.is_action_just_pressed("aim"):
-			toggled_aim = false
-
-	if current_aim:
-		aiming_timer += delta
-	else:
-		aiming_timer = 0.0
-	
-	camera_node.set_aiming(current_aim)
-
-	
+	#TBD: add tolerance timer + probably move to physics
 	state.set_param("on_floor", is_on_floor())
 			
 	match state.get_current():
@@ -130,16 +103,7 @@ func _process(delta):
 			animation_tree["parameters/walk/blend_position"] = Vector2(motion.length(), 0)
 			
 		"Move":
-			# Not in air or aiming, idle.
-			# Convert orientation to quaternions for interpolating rotation.
-			var target = camera_node.camera_x * motion.x + camera_node.camera_z * motion.y
-			if target.length() > 0.001:
-				var q_from = orientation.basis.get_rotation_quat()
-				var q_to = Transform().looking_at(target, Vector3.UP).basis.get_rotation_quat()
-				# Interpolate current rotation with desired one.
-				orientation.basis = Basis(q_from.slerp(q_to, delta * ROTATION_INTERPOLATE_SPEED))
-				
-			root_motion = animation_tree.get_root_motion_transform()
+			pass
 		"Jump":
 			velocity.y = JUMP_SPEED
 			state.set_trigger("on_air")
@@ -203,10 +167,22 @@ func _process(delta):
 			fire_cooldown.start()
 			sound_effect_shoot.play()
 			camera_node.add_camera_shake_trauma(0.35)
+			
 func _physics_process(delta):
 	
 	motion = motion.linear_interpolate(motion_target, MOTION_INTERPOLATE_SPEED * delta)
 
+	# Not in air or aiming, idle.
+	# Convert orientation to quaternions for interpolating rotation.
+	var target = camera_node.camera_x * motion.x + camera_node.camera_z * motion.y
+	if target.length() > 0.001:
+		var q_from = orientation.basis.get_rotation_quat()
+		var q_to = Transform().looking_at(target, Vector3.UP).basis.get_rotation_quat()
+		# Interpolate current rotation with desired one.
+		orientation.basis = Basis(q_from.slerp(q_to, delta * ROTATION_INTERPOLATE_SPEED))
+		
+	root_motion = animation_tree.get_root_motion_transform()
+			
 	# Apply root motion to orientation.
 	orientation *= root_motion
 
@@ -240,20 +216,24 @@ func jump():
 func shoot():
 	state.set_trigger("shoot")
 
+	
+func aim():
+	state.set_trigger("aim")
+	
 # --------------------------------------------------
 # Player state
 func _on_StatePlayer_transited(from, to):
 	var from_dir = StateDirectory.new(from)
 	var to_dir = StateDirectory.new(to)
 	print("On state transition from: %s to %s" % [from, to])
+	
+	match from:
+		"Move":
+			motion_target = Vector2.ZERO
+			print("From move")
+		"Aiming":
+			camera_node.set_aiming(false)
+	match to:
+		"Aiming":
+			camera_node.set_aiming(true)
 
-func _on_StatePlayer_updated(state, delta):
-	pass # Replace with function body.
-
-# Aiming
-func _on_StateAiming_transited(from, to):
-	pass # Replace with function body.
-
-
-func _on_StateAiming_updated(state, delta):
-	pass # Replace with function body.
