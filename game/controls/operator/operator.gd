@@ -20,22 +20,10 @@ var dir = Vector3()
 # Commands
 # reset_position
 # move(direction)
-
-func _input(_event):
-		
-	
-	dir.x = Input.get_action_strength("move_right") - Input.get_action_strength("move_left")
-	dir.z = Input.get_action_strength("move_back") - Input.get_action_strength("move_forward")	
-	dir.y = Input.get_action_strength("move_up") - Input.get_action_strength("move_down")	
 	
 		
 func _physics_process(delta):
 	
-	# Get the camera's transform basis, but remove the X rotation such
-	# that the Y axis is up and Z is horizontal.
-	var cam_basis = camera.global_transform.basis
-	var basis = cam_basis.rotated(cam_basis.x, -cam_basis.get_euler().x)
-#	dir = basis.xform(dir)
 	dir = dir.normalized()
 
 	# Apply gravity.
@@ -65,3 +53,6 @@ func _physics_process(delta):
 
 func reset_position():
 	translation = start_position
+
+func move(direction):
+	dir = direction

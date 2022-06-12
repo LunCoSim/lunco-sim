@@ -67,10 +67,16 @@ func _input(event):
 			print(torque)
 			ward.change_orientation(torque)
 		"Operator":
+			var operator: Operator = ward
 			if Input.is_action_just_pressed("reset_position"):
-				ward.reset_position();
-#		
-
+				operator.reset_position();
+#			
+			var dir = Vector3.ZERO
+			dir.x = Input.get_action_strength("move_right") - Input.get_action_strength("move_left")
+			dir.z = Input.get_action_strength("move_back") - Input.get_action_strength("move_forward")	
+			dir.y = Input.get_action_strength("move_up") - Input.get_action_strength("move_down")	
+			operator.move(dir)
+			
 func _on_State_transited(from, to):
 	match to:
 		"Player":

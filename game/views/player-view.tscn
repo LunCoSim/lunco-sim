@@ -272,10 +272,15 @@ distance = 20.0
 
 [node name="Operator" parent="World" instance=ExtResource( 14 )]
 transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 0.779129, 0, 11.4547 )
-target = NodePath("OperatorCam")
 
 [node name="OperatorCam" parent="World/Operator" instance=ExtResource( 3 )]
-transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, -0.779129, 1.6, -11.4547 )
+transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, -0.779129, 3.01137, -11.4547 )
+target = NodePath("..")
+CAMERA_MOUSE_ROTATION_SPEED = 0.049
+CAMERA_CONTROLLER_ROTATION_SPEED = 7.0
+camera_basis = Vector3( 0, 3, 0 )
+
+[node name="Commands" type="Node" parent="World/Operator/OperatorCam"]
 
 [node name="Avatar" type="Node" parent="."]
 script = ExtResource( 15 )
