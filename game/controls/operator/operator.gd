@@ -1,4 +1,5 @@
 #This code is based on Gogot kinematic_character example
+class_name Operator
 extends KinematicBody
 
 export (NodePath) var target
@@ -15,17 +16,18 @@ onready var start_position = translation
 
 var velocity: Vector3
 var dir = Vector3()
-var jumping = false
+
+# Commands
+# reset_position
+# move(direction)
 
 func _input(_event):
-	if Input.is_action_just_pressed("reset_position"):
-		translation = start_position
+		
 	
 	dir.x = Input.get_action_strength("move_right") - Input.get_action_strength("move_left")
 	dir.z = Input.get_action_strength("move_back") - Input.get_action_strength("move_forward")	
 	dir.y = Input.get_action_strength("move_up") - Input.get_action_strength("move_down")	
 	
-	jumping = Input.is_action_pressed("jump")
 		
 func _physics_process(delta):
 	
@@ -58,6 +60,8 @@ func _physics_process(delta):
 	velocity.y = hvel.y
 	velocity = move_and_slide(velocity, Vector3.UP)
 
-	# Jumping code. is_on_floor() must come after move_and_slide().
-	if is_on_floor() and jumping:
-		velocity.y = JUMP_SPEED
+	
+#-----------
+
+func reset_position():
+	translation = start_position

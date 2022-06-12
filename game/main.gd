@@ -32,3 +32,7 @@ func _on_Exit_pressed():
 
 func _on_Return_To_Main_Menu_pressed():
 	get_tree().change_scene("res://views/main-menu.tscn")
+
+
+func _on_GameState_transited(from, to):
+	pass # Replace with function body.

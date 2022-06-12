@@ -229,6 +229,11 @@ _global_script_classes=[ {
 "language": "GDScript",
 "path": "res://addons/godot-next/nodes/message_dispatcher_wrapper.gd"
 }, {
+"base": "KinematicBody",
+"class": "Operator",
+"language": "GDScript",
+"path": "res://controls/operator/operator.gd"
+}, {
 "base": "Resource",
 "class": "PhysicsLayers",
 "language": "GDScript",
@@ -454,6 +459,7 @@ _global_script_class_icons={
 "MenuManager": "",
 "MessageDispatcher": "",
 "MessageDispatcherWrapper": "",
+"Operator": "",
 "PhysicsLayers": "",
 "Player": "",
 "PlyMesh": "",
@@ -515,7 +521,7 @@ window/stretch/aspect="keep_height"
 
 [editor_plugins]
 
-enabled=PoolStringArray( "res://addons/NodeConnectorGodot/plugin.cfg", "res://addons/event_system_plugin/plugin.cfg", "res://addons/godot-next/plugin.cfg", "res://addons/godot-package-manager/plugin.cfg", "res://addons/imjp94.yafsm/plugin.cfg", "res://addons/ply/plugin.cfg", "res://addons/prettyprimitive/plugin.cfg", "res://addons/project_map/plugin.cfg", "res://addons/quentincaffeino/console/plugin.cfg", "res://addons/ui_design_tool/plugin.cfg", "res://addons/visual_fsm/plugin.cfg" )
+enabled=PoolStringArray( "res://addons/NodeConnectorGodot/plugin.cfg", "res://addons/imjp94.yafsm/plugin.cfg", "res://addons/ply/plugin.cfg", "res://addons/prettyprimitive/plugin.cfg", "res://addons/project_map/plugin.cfg", "res://addons/quentincaffeino/console/plugin.cfg", "res://addons/ui_design_tool/plugin.cfg" )
 
 [global]
 
@@ -714,6 +720,11 @@ select_player={
 select_spacecraft={
 "deadzone": 0.5,
 "events": [ Object(InputEventKey,"resource_local_to_scene":false,"resource_name":"","device":0,"alt":false,"shift":false,"control":false,"meta":false,"command":false,"pressed":false,"scancode":50,"physical_scancode":0,"unicode":0,"echo":false,"script":null)
+ ]
+}
+select_operator={
+"deadzone": 0.5,
+"events": [ Object(InputEventKey,"resource_local_to_scene":false,"resource_name":"","device":0,"alt":false,"shift":false,"control":false,"meta":false,"command":false,"pressed":false,"scancode":51,"physical_scancode":0,"unicode":0,"echo":false,"script":null)
  ]
 }
 

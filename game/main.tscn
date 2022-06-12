@@ -19,3 +19,5 @@ script = ExtResource( 2 )
 [node name="GameState" type="Node" parent="."]
 script = ExtResource( 4 )
 state_machine = ExtResource( 5 )
+
+[connection signal="transited" from="GameState" to="." method="_on_GameState_transited"]

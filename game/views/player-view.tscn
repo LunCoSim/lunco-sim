@@ -1,4 +1,4 @@
-[gd_scene load_steps=35 format=2]
+[gd_scene load_steps=45 format=2]
 
 [ext_resource path="res://player/player.tscn" type="PackedScene" id=1]
 [ext_resource path="res://maps/demo-map.tscn" type="PackedScene" id=2]
@@ -13,6 +13,7 @@
 [ext_resource path="res://addons/lunco-cameras/gimbal-camera/gimbal-camera.tscn" type="PackedScene" id=11]
 [ext_resource path="res://addons/imjp94.yafsm/src/transitions/Transition.gd" type="Script" id=12]
 [ext_resource path="res://addons/imjp94.yafsm/src/conditions/Condition.gd" type="Script" id=13]
+[ext_resource path="res://controls/operator/operator.tscn" type="PackedScene" id=14]
 [ext_resource path="res://views/Avatar.gd" type="Script" id=15]
 
 [sub_resource type="CylinderShape" id=15]
@@ -42,13 +43,6 @@ __meta__ = {
 }
 name = "Idle"
 
-[sub_resource type="Resource" id=13]
-script = ExtResource( 8 )
-__meta__ = {
-"graph_offset": Vector2( 647, 74.5 )
-}
-name = "Param: thrust"
-
 [sub_resource type="Resource" id=18]
 script = ExtResource( 8 )
 __meta__ = {
@@ -62,6 +56,13 @@ __meta__ = {
 "graph_offset": Vector2( -30, -5.5 )
 }
 name = "Param thrust2"
+
+[sub_resource type="Resource" id=13]
+script = ExtResource( 8 )
+__meta__ = {
+"graph_offset": Vector2( 647, 74.5 )
+}
+name = "Param: thrust"
 
 [sub_resource type="Resource" id=14]
 script = ExtResource( 12 )
@@ -107,6 +108,13 @@ __meta__ = {
 }
 name = "Spacecraft"
 
+[sub_resource type="Resource" id=31]
+script = ExtResource( 8 )
+__meta__ = {
+"graph_offset": Vector2( 488.5, 434.5 )
+}
+name = "Operator"
+
 [sub_resource type="Resource" id=25]
 script = ExtResource( 12 )
 from = "Entry"
@@ -126,6 +134,18 @@ conditions = {
 "spacecraft": SubResource( 26 )
 }
 
+[sub_resource type="Resource" id=32]
+script = ExtResource( 13 )
+name = "operator"
+
+[sub_resource type="Resource" id=33]
+script = ExtResource( 12 )
+from = "Player"
+to = "Operator"
+conditions = {
+"operator": SubResource( 32 )
+}
+
 [sub_resource type="Resource" id=28]
 script = ExtResource( 13 )
 name = "player"
@@ -138,11 +158,48 @@ conditions = {
 "player": SubResource( 28 )
 }
 
+[sub_resource type="Resource" id=34]
+script = ExtResource( 13 )
+name = "operator"
+
+[sub_resource type="Resource" id=35]
+script = ExtResource( 12 )
+from = "Spacecraft"
+to = "Operator"
+conditions = {
+"operator": SubResource( 34 )
+}
+
+[sub_resource type="Resource" id=36]
+script = ExtResource( 13 )
+name = "spacecraft"
+
+[sub_resource type="Resource" id=37]
+script = ExtResource( 12 )
+from = "Operator"
+to = "Spacecraft"
+conditions = {
+"spacecraft": SubResource( 36 )
+}
+
+[sub_resource type="Resource" id=38]
+script = ExtResource( 13 )
+name = "player"
+
+[sub_resource type="Resource" id=39]
+script = ExtResource( 12 )
+from = "Operator"
+to = "Player"
+conditions = {
+"player": SubResource( 38 )
+}
+
 [sub_resource type="Resource" id=30]
 script = ExtResource( 9 )
 name = ""
 states = {
 "Entry": SubResource( 21 ),
+"Operator": SubResource( 31 ),
 "Player": SubResource( 22 ),
 "Spacecraft": SubResource( 23 )
 }
@@ -150,10 +207,16 @@ transitions = {
 "Entry": {
 "Player": SubResource( 25 )
 },
+"Operator": {
+"Player": SubResource( 39 ),
+"Spacecraft": SubResource( 37 )
+},
 "Player": {
+"Operator": SubResource( 33 ),
 "Spacecraft": SubResource( 27 )
 },
 "Spacecraft": {
+"Operator": SubResource( 35 ),
 "Player": SubResource( 29 )
 }
 }
@@ -168,15 +231,15 @@ transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, -0.0778594, -1.29681, 0.40384 
 
 [node name="Player" parent="World" instance=ExtResource( 1 )]
 transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.783736, 0 )
-camera = NodePath("CameraPlayer")
+camera = NodePath("PlayerCam")
 
-[node name="CameraPlayer" parent="World/Player" instance=ExtResource( 3 )]
+[node name="PlayerCam" parent="World/Player" instance=ExtResource( 3 )]
 transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2.22763, 0 )
 CAMERA_MOUSE_ROTATION_SPEED = 0.049
 CAMERA_CONTROLLER_ROTATION_SPEED = 7.0
 camera_basis = Vector3( 0, 3, 0 )
 
-[node name="Commands" type="Node" parent="World/Player/CameraPlayer"]
+[node name="Commands" type="Node" parent="World/Player/PlayerCam"]
 
 [node name="SpacecraftControl" parent="World" instance=ExtResource( 6 )]
 transform = Transform( 1, 0, 1.11022e-16, 0, -0.0551419, 0.998479, 0, -0.998479, -0.0551419, 0, 35.4788, 0 )
@@ -202,17 +265,26 @@ color_ramp = SubResource( 17 )
 script = ExtResource( 7 )
 state_machine = SubResource( 20 )
 
-[node name="SpacecraftCamera" parent="World" instance=ExtResource( 11 )]
+[node name="SpacecraftCam" parent="World" instance=ExtResource( 11 )]
 transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, -4.23516e-22, -3.8147e-06, 1.19209e-07 )
 target = NodePath("../SpacecraftControl/Starship")
 distance = 20.0
 
+[node name="Operator" parent="World" instance=ExtResource( 14 )]
+transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 0.779129, 0, 11.4547 )
+target = NodePath("OperatorCam")
+
+[node name="OperatorCam" parent="World/Operator" instance=ExtResource( 3 )]
+transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, -0.779129, 1.6, -11.4547 )
+
 [node name="Avatar" type="Node" parent="."]
 script = ExtResource( 15 )
-PlayerCam = NodePath("../World/Player/CameraPlayer")
-SpacecraftCam = NodePath("../World/SpacecraftCamera")
+PlayerCam = NodePath("../World/Player/PlayerCam")
+SpacecraftCam = NodePath("../World/SpacecraftCam")
+OperatorCam = NodePath("../World/Operator/OperatorCam")
 Player = NodePath("../World/Player")
 Spacecraft = NodePath("../World/SpacecraftControl")
+Operator = NodePath("../World/Operator")
 
 [node name="State" type="Node" parent="Avatar"]
 script = ExtResource( 7 )

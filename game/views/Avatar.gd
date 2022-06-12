@@ -2,9 +2,12 @@ extends Node
 
 export (NodePath) var PlayerCam #camera
 export (NodePath) var SpacecraftCam
+export (NodePath) var OperatorCam
 
 export (NodePath) var Player
 export (NodePath) var Spacecraft
+export (NodePath) var Operator
+
 export (NodePath) var Inputs
 
 onready var ward: Node
@@ -19,6 +22,7 @@ func set_ward(_ward):
 
 func set_camera(_camera):
 	camera = _camera
+	
 	camera.set_current()
 	
 func _input(event):
@@ -26,6 +30,8 @@ func _input(event):
 		state.set_trigger("player")
 	elif Input.is_action_just_pressed("select_spacecraft"):
 		state.set_trigger("spacecraft")
+	elif Input.is_action_just_pressed("select_operator"):
+		state.set_trigger("operator")
 		
 	match state.get_current():
 		"Player":
@@ -60,6 +66,9 @@ func _input(event):
 			
 			print(torque)
 			ward.change_orientation(torque)
+		"Operator":
+			if Input.is_action_just_pressed("reset_position"):
+				ward.reset_position();
 #		
 
 func _on_State_transited(from, to):
@@ -70,3 +79,6 @@ func _on_State_transited(from, to):
 		"Spacecraft":
 			set_ward(get_node(Spacecraft))
 			set_camera(get_node(SpacecraftCam))
+		"Operator":
+			set_ward(get_node(Operator))
+			set_camera(get_node(OperatorCam))
