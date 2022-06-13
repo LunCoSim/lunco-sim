@@ -1,4 +1,4 @@
-[gd_scene load_steps=45 format=2]
+[gd_scene load_steps=46 format=2]
 
 [ext_resource path="res://player/player.tscn" type="PackedScene" id=1]
 [ext_resource path="res://maps/demo-map.tscn" type="PackedScene" id=2]
@@ -9,12 +9,13 @@
 [ext_resource path="res://addons/imjp94.yafsm/src/StateMachinePlayer.gd" type="Script" id=7]
 [ext_resource path="res://addons/imjp94.yafsm/src/states/State.gd" type="Script" id=8]
 [ext_resource path="res://addons/imjp94.yafsm/src/states/StateMachine.gd" type="Script" id=9]
-[ext_resource path="res://views/world.gd" type="Script" id=10]
+[ext_resource path="res://views/code/world.gd" type="Script" id=10]
 [ext_resource path="res://addons/lunco-cameras/gimbal-camera/gimbal-camera.tscn" type="PackedScene" id=11]
 [ext_resource path="res://addons/imjp94.yafsm/src/transitions/Transition.gd" type="Script" id=12]
 [ext_resource path="res://addons/imjp94.yafsm/src/conditions/Condition.gd" type="Script" id=13]
 [ext_resource path="res://controls/operator/operator.tscn" type="PackedScene" id=14]
-[ext_resource path="res://views/Avatar.gd" type="Script" id=15]
+[ext_resource path="res://views/code/Avatar.gd" type="Script" id=15]
+[ext_resource path="res://ui/spacecraft-ui.tscn" type="PackedScene" id=16]
 
 [sub_resource type="CylinderShape" id=15]
 height = 50.7794
@@ -94,6 +95,13 @@ __meta__ = {
 }
 name = "Entry"
 
+[sub_resource type="Resource" id=31]
+script = ExtResource( 8 )
+__meta__ = {
+"graph_offset": Vector2( 488.5, 434.5 )
+}
+name = "Operator"
+
 [sub_resource type="Resource" id=22]
 script = ExtResource( 8 )
 __meta__ = {
@@ -108,13 +116,6 @@ __meta__ = {
 }
 name = "Spacecraft"
 
-[sub_resource type="Resource" id=31]
-script = ExtResource( 8 )
-__meta__ = {
-"graph_offset": Vector2( 488.5, 434.5 )
-}
-name = "Operator"
-
 [sub_resource type="Resource" id=25]
 script = ExtResource( 12 )
 from = "Entry"
@@ -122,52 +123,16 @@ to = "Player"
 conditions = {
 }
 
-[sub_resource type="Resource" id=26]
-script = ExtResource( 13 )
-name = "spacecraft"
-
-[sub_resource type="Resource" id=27]
-script = ExtResource( 12 )
-from = "Player"
-to = "Spacecraft"
-conditions = {
-"spacecraft": SubResource( 26 )
-}
-
-[sub_resource type="Resource" id=32]
-script = ExtResource( 13 )
-name = "operator"
-
-[sub_resource type="Resource" id=33]
-script = ExtResource( 12 )
-from = "Player"
-to = "Operator"
-conditions = {
-"operator": SubResource( 32 )
-}
-
-[sub_resource type="Resource" id=28]
+[sub_resource type="Resource" id=38]
 script = ExtResource( 13 )
 name = "player"
 
-[sub_resource type="Resource" id=29]
+[sub_resource type="Resource" id=39]
 script = ExtResource( 12 )
-from = "Spacecraft"
+from = "Operator"
 to = "Player"
 conditions = {
-"player": SubResource( 28 )
-}
-
-[sub_resource type="Resource" id=34]
-script = ExtResource( 13 )
-name = "operator"
-
-[sub_resource type="Resource" id=35]
-script = ExtResource( 12 )
-from = "Spacecraft"
-to = "Operator"
-conditions = {
-"operator": SubResource( 34 )
+"player": SubResource( 38 )
 }
 
 [sub_resource type="Resource" id=36]
@@ -182,16 +147,52 @@ conditions = {
 "spacecraft": SubResource( 36 )
 }
 
-[sub_resource type="Resource" id=38]
+[sub_resource type="Resource" id=32]
+script = ExtResource( 13 )
+name = "operator"
+
+[sub_resource type="Resource" id=33]
+script = ExtResource( 12 )
+from = "Player"
+to = "Operator"
+conditions = {
+"operator": SubResource( 32 )
+}
+
+[sub_resource type="Resource" id=26]
+script = ExtResource( 13 )
+name = "spacecraft"
+
+[sub_resource type="Resource" id=27]
+script = ExtResource( 12 )
+from = "Player"
+to = "Spacecraft"
+conditions = {
+"spacecraft": SubResource( 26 )
+}
+
+[sub_resource type="Resource" id=34]
+script = ExtResource( 13 )
+name = "operator"
+
+[sub_resource type="Resource" id=35]
+script = ExtResource( 12 )
+from = "Spacecraft"
+to = "Operator"
+conditions = {
+"operator": SubResource( 34 )
+}
+
+[sub_resource type="Resource" id=28]
 script = ExtResource( 13 )
 name = "player"
 
-[sub_resource type="Resource" id=39]
+[sub_resource type="Resource" id=29]
 script = ExtResource( 12 )
-from = "Operator"
+from = "Spacecraft"
 to = "Player"
 conditions = {
-"player": SubResource( 38 )
+"player": SubResource( 28 )
 }
 
 [sub_resource type="Resource" id=30]
@@ -225,9 +226,6 @@ transitions = {
 
 [node name="World" type="Node" parent="."]
 script = ExtResource( 10 )
-
-[node name="Map" parent="World" instance=ExtResource( 2 )]
-transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, -0.0778594, -1.29681, 0.40384 )
 
 [node name="Player" parent="World" instance=ExtResource( 1 )]
 transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.783736, 0 )
@@ -282,6 +280,8 @@ camera_basis = Vector3( 0, 3, 0 )
 
 [node name="Commands" type="Node" parent="World/Operator/OperatorCam"]
 
+[node name="Terrain" parent="World" instance=ExtResource( 2 )]
+
 [node name="Avatar" type="Node" parent="."]
 script = ExtResource( 15 )
 PlayerCam = NodePath("../World/Player/PlayerCam")
@@ -290,10 +290,16 @@ OperatorCam = NodePath("../World/Operator/OperatorCam")
 Player = NodePath("../World/Player")
 Spacecraft = NodePath("../World/SpacecraftControl")
 Operator = NodePath("../World/Operator")
+SpacecarftUI = NodePath("UI/SpacecraftUI")
 
 [node name="State" type="Node" parent="Avatar"]
 script = ExtResource( 7 )
 state_machine = SubResource( 30 )
+
+[node name="UI" type="Node" parent="Avatar"]
+
+[node name="SpacecraftUI" parent="Avatar/UI" instance=ExtResource( 16 )]
+target = NodePath("")
 
 [connection signal="thrust" from="World/SpacecraftControl" to="World/SpacecraftControl/Starship" method="_on_SpacecraftControl_thrust"]
 [connection signal="transited" from="Avatar/State" to="Avatar" method="_on_State_transited"]

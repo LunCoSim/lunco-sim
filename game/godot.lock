@@ -58,5 +58,10 @@
 		"version": "0.5.1",
 		"integrity": "",
 		"path": "res://addons/.cache/gd-YAFSM/addons/imjp94.yafsm"
+	},
+	"StlImporter": {
+		"version": "0.0.0",
+		"integrity": "",
+		"path": "res://addons/.cache/StlImporter/addons/stl_importer"
 	}
 }

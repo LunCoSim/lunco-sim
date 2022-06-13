@@ -114,6 +114,12 @@
 			"version": "0.0.0",
 			"subdir": "addons/visual_fsm"
 		},
+		"StlImporter": {
+			"src": "git",
+			"url": "https://github.com/grabthefish/StlImporter.git",
+			"version": "0.0.0",
+			"subdir": "addons/stl_importer"
+		},
 		
 	},
 	"hooks": {
