@@ -28,7 +28,7 @@ transform = Transform( 1, 0, 1.11022e-16, 0, -0.0551419, 0.998479, 0, -0.998479,
 [node name="SpacecraftCam" parent="World" instance=ExtResource( 2 )]
 transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, -4.23516e-22, -3.8147e-06, 1.19209e-07 )
 target = NodePath("../SpacecraftControl")
-distance = 20.0
+distance = 50.0
 
 [node name="Operator" parent="World" instance=ExtResource( 8 )]
 transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 0.779129, 0, 11.4547 )
