@@ -51,9 +51,11 @@ func _input(event):
 	match state.get_current():
 		"Player":
 			var player: Player = ward
+			var cam: SpringArmCamera = camera
 			
-			var motion_direction = Vector2(
+			var motion_direction := Vector3(
 				Input.get_action_strength("move_right") - Input.get_action_strength("move_left"),
+				Input.get_action_strength("move_up") - Input.get_action_strength("move_down"),
 				Input.get_action_strength("move_back") - Input.get_action_strength("move_forward"))
 		
 			if motion_direction.length() < 0.001:
@@ -81,17 +83,10 @@ func _input(event):
 				)
 				
 			if camera_move.length_squared() > 0.0:
-				camera.rotate_relative(camera_move)
+				cam.rotate_relative(camera_move)
 			
-				player.set_camera_x_rot(camera.camera_x_rot)
-				
-				var camera_basis = Basis.IDENTITY
-				
-				camera_basis.x = camera.camera_x
-				camera_basis.y = Vector3.ZERO
-				camera_basis.z = camera.camera_z
-				
-				player.set_camera_basis(camera_basis)
+				player.set_camera_x_rot(cam.camera_x_rot)
+				player.set_camera_basis(cam.get_plain_basis())
 				
 		"Spacecraft":
 			if Input.is_action_just_pressed("throttle"):
@@ -109,12 +104,14 @@ func _input(event):
 			var operator: Operator = ward
 			if Input.is_action_just_pressed("reset_position"):
 				operator.reset_position();
-#			
-			var dir := Vector3.ZERO
-			dir.x = Input.get_action_strength("move_right") - Input.get_action_strength("move_left")
-			dir.z = Input.get_action_strength("move_back") - Input.get_action_strength("move_forward")	
-			dir.y = Input.get_action_strength("move_up") - Input.get_action_strength("move_down")	
-			operator.move(dir)
+
+			var motion_direction := Vector3(
+				Input.get_action_strength("move_right") - Input.get_action_strength("move_left"),
+				Input.get_action_strength("move_up") - Input.get_action_strength("move_down"),
+				Input.get_action_strength("move_back") - Input.get_action_strength("move_forward")
+			)
+
+			operator.move(motion_direction)
 
 func clear_ui():
 	for n in ui.get_children():

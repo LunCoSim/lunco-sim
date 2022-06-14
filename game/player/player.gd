@@ -26,10 +26,11 @@ var airborne_time = 100
 
 export var orientation = Transform()
 export var root_motion = Transform()
-export var motion = Vector2()
-export var velocity = Vector3()
 
-var motion_target := Vector2.ZERO
+export var motion := Vector3.ZERO
+export var velocity := Vector3.ZERO
+var motion_target := Vector3.ZERO
+
 var camera_x_rot = 0.0
 var camera_basis := Basis.IDENTITY
 
@@ -174,35 +175,44 @@ func _process(delta):
 #			sound_effect_shoot.play()
 			
 #			camera_node.add_camera_shake_trauma(0.35)# Todo: Emit signanl shot and connect to camera
-			
+	
+	root_motion = animation_tree.get_root_motion_transform()
+	#rotating model to match movement direction
+	player_model.global_transform.basis = orientation.basis
+	
 func _physics_process(delta):
 	
-	motion = motion.linear_interpolate(motion_target, MOTION_INTERPOLATE_SPEED * delta)
+	# 
+	if motion_target.length_squared() > 0.00001:
+		motion = motion.linear_interpolate(motion_target, MOTION_INTERPOLATE_SPEED * delta)
+	else:
+		motion = motion_target
 
 	# Not in air or aiming, idle.
 	# Convert orientation to quaternions for interpolating rotation.
-	var target = camera_basis.x * motion.x + camera_basis.z * motion.y
-	if target.length() > 0.001:
+	var target = camera_basis.x * motion.x + camera_basis.z * motion.z
+
+	if target.length_squared() > 0.001:
 		var q_from = orientation.basis.get_rotation_quat()
 		var q_to = Transform().looking_at(target, Vector3.UP).basis.get_rotation_quat()
 		# Interpolate current rotation with desired one.
 		orientation.basis = Basis(q_from.slerp(q_to, delta * ROTATION_INTERPOLATE_SPEED))
-		
-	root_motion = animation_tree.get_root_motion_transform()
-			
-	# Apply root motion to orientation.
+	
+#	orientation.basis = camera_basis	
+#	# Apply root motion to orientation.
 	orientation *= root_motion
 
 	var h_velocity = orientation.origin / delta
 	velocity.x = h_velocity.x
 	velocity.z = h_velocity.z
-	velocity += gravity * delta
-	velocity = move_and_slide(velocity, Vector3.UP)
-
+	
+	velocity += gravity * delta #TODO: Move to gravity vector
+	
 	orientation.origin = Vector3() # Clear accumulated root motion displacement (was applied to speed).
 	orientation = orientation.orthonormalized() # Orthonormalize orientation.
+	
+	velocity = move_and_slide(velocity, Vector3.UP)
 
-	player_model.global_transform.basis = orientation.basis
 
 
 # --------------------------------------------------
@@ -210,10 +220,10 @@ func start_move(direction: Vector2, orientation: Vector3):
 	pass
 	
 func stop():
-	motion_target = Vector2.ZERO
+	motion_target = Vector3.ZERO
 	state.set_trigger("stop")
 	
-func move(direction: Vector2, orientation=null):
+func move(direction: Vector3, orientation=null):
 	motion_target = direction
 	state.set_trigger("move")
 	
@@ -252,5 +262,7 @@ func _on_StatePlayer_transited(from, to):
 		"Aiming":
 #			camera_node.set_aiming(false)# TODO: should be state of camera			
 #			camera_node.set_aiming(true)
+			pass
+		"Idle":
 			pass
 
