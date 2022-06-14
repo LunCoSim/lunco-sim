@@ -62,6 +62,15 @@ func _input(event):
 				
 			if Input.is_action_pressed("shoot"): #idle/move
 				ward.shoot()
+				
+			var camera_move = Vector2(
+				Input.get_action_strength("camera_right") - Input.get_action_strength("camera_left"),
+				Input.get_action_strength("camera_up") - Input.get_action_strength("camera_down"))
+			camera.move(camera_move)
+			
+			if event is InputEventMouseMotion:
+				camera.rotate_relative(event.relative)
+			
 		"Spacecraft":
 			if Input.is_action_just_pressed("throttle"):
 				ward.throttle(true)
