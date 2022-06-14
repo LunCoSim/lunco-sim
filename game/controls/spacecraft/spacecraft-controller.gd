@@ -21,9 +21,7 @@ var torque := Vector3.ZERO
 
 func _physics_process(delta):
 	add_central_force(transform.basis.z * Z_FRONT * thrust)
-	
-	torque = Vector3(1*THRUST_TURN, 2*THRUST_TURN, 3*THRUST_ROLL)	
-#	add_torque(torque)
+
 	add_torque(global_transform.basis.x * torque.x * THRUST_TURN * Z_FRONT)
 	add_torque(global_transform.basis.y * torque.y * THRUST_TURN * Z_FRONT)
 	add_torque(global_transform.basis.z * torque.z * THRUST_ROLL * Z_FRONT)

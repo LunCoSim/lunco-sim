@@ -103,7 +103,7 @@ func _input(event):
 			var torque := Vector3(
 				Input.get_action_strength("pitch_up") - Input.get_action_strength("pitch_down"),
 				Input.get_action_strength("yaw_right") - Input.get_action_strength("yaw_left"),
-				Input.get_action_strength("roll_ccw") - Input.get_action_strength("roll_cw")
+				Input.get_action_strength("roll_cw") - Input.get_action_strength("roll_ccw")
 			)
 			
 			print(torque)
