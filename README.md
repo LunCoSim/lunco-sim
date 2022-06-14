@@ -205,6 +205,12 @@ You want to make the Moon forpost of human civilization in space in order to col
 ### Databases ###
 1. [MAPTIS](https://maptis.nasa.gov)
 
+### Systems engineering
+
+1.  [TLA+](https://lamport.azurewebsites.net/tla/tla.html) – TLA+ is a high-level language for modeling programs and systems – especially concurrent and distributed ones. 
+2.  [SysML]()
+3.  [Petri net](https://en.wikipedia.org/wiki/Petri_net)
+
 ## Support the project
 
 ETH: 0xA64f2228cceC96076c82abb903021C33859082F8
