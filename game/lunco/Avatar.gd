@@ -106,7 +106,6 @@ func _input(event):
 				Input.get_action_strength("roll_cw") - Input.get_action_strength("roll_ccw")
 			)
 			
-			print(torque)
 			spacecraft.change_orientation(torque)
 			
 		"Operator":
