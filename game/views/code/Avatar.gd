@@ -81,7 +81,11 @@ func _input(event):
 					Input.get_action_strength("camera_left") - Input.get_action_strength("camera_right"),
 					Input.get_action_strength("camera_up") - Input.get_action_strength("camera_down")
 				)
-				
+			
+			var camera_spring_length = Input.get_action_strength("plus") - Input.get_action_strength("minus")
+			
+			cam.spring_length(camera_spring_length)
+			
 			if camera_move.length_squared() > 0.0:
 				cam.rotate_relative(camera_move)
 			
