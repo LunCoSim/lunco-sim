@@ -21,3 +21,9 @@ func _on_Terrain_clicked(position):
 	instance.translation = position
 	add_child(instance)
 
+#	print("Map clicked: ", position)
+#	var scene = load("res://addons/lunco-content/spacex-starship/source/SpaceX_Starship.fbx")
+#	var instance = scene.instance()
+#
+#	instance.translation = position
+#	$Map.add_child(instance)

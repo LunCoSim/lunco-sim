@@ -59,11 +59,6 @@ _global_script_classes=[ {
 "language": "GDScript",
 "path": "res://addons/project_map/pm_common_node.gd"
 }, {
-"base": "Node",
-"class": "ControllerUI",
-"language": "GDScript",
-"path": "res://views/code/ControllerUI.gd"
-}, {
 "base": "TabContainer",
 "class": "Cycle",
 "language": "GDScript",
@@ -550,7 +545,6 @@ _global_script_class_icons={
 "ChildAdder": "res://addons/ExtraGui/add_icon.png",
 "ClassType": "",
 "CommonNode": "",
-"ControllerUI": "",
 "Cycle": "res://addons/godot-next/icons/icon_cycle.svg",
 "DebugLabel": "",
 "DiscreteGradientTexture": "",
