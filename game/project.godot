@@ -54,6 +54,11 @@ _global_script_classes=[ {
 "language": "GDScript",
 "path": "res://addons/godot-next/references/class_type.gd"
 }, {
+"base": "Node",
+"class": "Command",
+"language": "GDScript",
+"path": "res://lunco/command.gd"
+}, {
 "base": "GraphNode",
 "class": "CommonNode",
 "language": "GDScript",
@@ -274,6 +279,11 @@ _global_script_classes=[ {
 "language": "GDScript",
 "path": "res://addons/ply/resources/ply_mesh.gd"
 }, {
+"base": "Node",
+"class": "Processor",
+"language": "GDScript",
+"path": "res://lunco/processor.gd"
+}, {
 "base": "Reference",
 "class": "ProjectTools",
 "language": "GDScript",
@@ -348,6 +358,11 @@ _global_script_classes=[ {
 "class": "Singletons",
 "language": "GDScript",
 "path": "res://addons/godot-next/global/singletons.gd"
+}, {
+"base": "Node",
+"class": "SpaceSystem",
+"language": "GDScript",
+"path": "res://lunco/space-system.gd"
 }, {
 "base": "RigidBody",
 "class": "Spacecraft",
@@ -514,6 +529,7 @@ _global_script_class_icons={
 "CallbackDelegator": "",
 "ChildAdder": "res://addons/ExtraGui/add_icon.png",
 "ClassType": "",
+"Command": "",
 "CommonNode": "",
 "ControllerUI": "",
 "Cycle": "res://addons/godot-next/icons/icon_cycle.svg",
@@ -558,6 +574,7 @@ _global_script_class_icons={
 "PhysicsLayers": "",
 "Player": "",
 "PlyMesh": "",
+"Processor": "",
 "ProjectTools": "",
 "PropertyInfo": "",
 "PropertyInfoFactory": "",
@@ -573,6 +590,7 @@ _global_script_class_icons={
 "Selectable": "res://addons/ExtraGui/select_icon.png",
 "SelectionController": "res://addons/ExtraGui/select_icon.png",
 "Singletons": "",
+"SpaceSystem": "",
 "Spacecraft": "",
 "SplashAndFade": "",
 "SpringArmCamera": "",
