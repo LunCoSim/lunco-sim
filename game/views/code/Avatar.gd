@@ -14,6 +14,11 @@ export (NodePath) var PlayerUI
 
 export (NodePath) var Inputs
 
+
+#-------------------------------
+const MOUSE_SENSITIVITY = 0.1
+#-------------------------------
+
 onready var ward: Node
 onready var camera: Node
 
@@ -45,32 +50,47 @@ func _input(event):
 		
 	match state.get_current():
 		"Player":
+			var player: Player = ward
+			
 			var motion_direction = Vector2(
 				Input.get_action_strength("move_right") - Input.get_action_strength("move_left"),
 				Input.get_action_strength("move_back") - Input.get_action_strength("move_forward"))
 		
-			if motion_direction.length() > 0.0:
-				ward.move(motion_direction)
-			elif motion_direction.length() < 0.001:
-				ward.stop()
+			if motion_direction.length() < 0.001:
+				player.stop()
+			else:
+				player.move(motion_direction)
 				
 			if Input.is_action_just_pressed("jump"): #idle/move
-				ward.jump()
+				player.jump()
 			
 			if Input.is_action_pressed("aim"): #idle/move
-				ward.aim()
+				player.aim()
 				
 			if Input.is_action_pressed("shoot"): #idle/move
-				ward.shoot()
+				player.shoot()
 				
-			var camera_move = Vector2(
-				Input.get_action_strength("camera_right") - Input.get_action_strength("camera_left"),
-				Input.get_action_strength("camera_up") - Input.get_action_strength("camera_down"))
-			camera.move(camera_move)
+			var camera_move := Vector2.ZERO
 			
 			if event is InputEventMouseMotion:
-				camera.rotate_relative(event.relative)
+				camera_move = event.relative * MOUSE_SENSITIVITY
+			else:
+				camera_move = Vector2(
+					Input.get_action_strength("camera_left") - Input.get_action_strength("camera_right"),
+					Input.get_action_strength("camera_up") - Input.get_action_strength("camera_down")
+				)
+				
+			if camera_move.length_squared() > 0.0:
+				camera.rotate_relative(camera_move)
 			
+				player.set_camera_x_rot(camera.camera_x_rot)
+				
+				var c_x = camera.camera_x or 0.0
+				var c_z = camera.camera_z or 0.0
+				
+				player.set_target(Vector3(c_x, 0.0, c_z))
+				
+				
 		"Spacecraft":
 			if Input.is_action_just_pressed("throttle"):
 				ward.throttle(true)

@@ -51,19 +51,19 @@ __meta__ = {
 }
 name = "Param thrust3"
 
-[sub_resource type="Resource" id=13]
-script = ExtResource( 8 )
-__meta__ = {
-"graph_offset": Vector2( 647, 74.5 )
-}
-name = "Param: thrust"
-
 [sub_resource type="Resource" id=41]
 script = ExtResource( 8 )
 __meta__ = {
 "graph_offset": Vector2( -30, -5.5 )
 }
 name = "Param thrust4"
+
+[sub_resource type="Resource" id=13]
+script = ExtResource( 8 )
+__meta__ = {
+"graph_offset": Vector2( 647, 74.5 )
+}
+name = "Param: thrust"
 
 [sub_resource type="Resource" id=14]
 script = ExtResource( 12 )
@@ -244,7 +244,6 @@ camera = NodePath("PlayerCam")
 
 [node name="PlayerCam" parent="World/Player" instance=ExtResource( 3 )]
 transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2.22763, 0 )
-CAMERA_MOUSE_ROTATION_SPEED = 0.049
 CAMERA_CONTROLLER_ROTATION_SPEED = 7.0
 camera_basis = Vector3( 0, 3, 0 )
 
@@ -278,7 +277,6 @@ transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 0.779129, 0, 11.4547 )
 [node name="OperatorCam" parent="World/Operator" instance=ExtResource( 3 )]
 transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, -0.779129, 3.01137, -11.4547 )
 target = NodePath("..")
-CAMERA_MOUSE_ROTATION_SPEED = 0.049
 CAMERA_CONTROLLER_ROTATION_SPEED = 7.0
 camera_basis = Vector3( 0, 3, 0 )
 
