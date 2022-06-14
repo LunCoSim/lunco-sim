@@ -44,6 +44,11 @@ _global_script_classes=[ {
 "language": "GDScript",
 "path": "res://addons/godot-next/nodes/callback_delegator.gd"
 }, {
+"base": "Control",
+"class": "ChildAdder",
+"language": "GDScript",
+"path": "res://addons/ExtraGui/ChildAdder.gd"
+}, {
 "base": "Reference",
 "class": "ClassType",
 "language": "GDScript",
@@ -74,10 +79,20 @@ _global_script_classes=[ {
 "language": "GDScript",
 "path": "res://addons/godot-next/resources/discrete_gradient_texture.gd"
 }, {
+"base": "Control",
+"class": "Draggable",
+"language": "GDScript",
+"path": "res://addons/ExtraGui/Draggable.gd"
+}, {
 "base": "Reference",
 "class": "EditorTools",
 "language": "GDScript",
 "path": "res://addons/godot-next/global/editor_tools.gd"
+}, {
+"base": "OptionButton",
+"class": "EnumDropdown",
+"language": "GDScript",
+"path": "res://addons/ExtraGui/EnumDropdown.gd"
 }, {
 "base": "Resource",
 "class": "Event",
@@ -234,6 +249,11 @@ _global_script_classes=[ {
 "language": "GDScript",
 "path": "res://addons/godot-next/nodes/message_dispatcher_wrapper.gd"
 }, {
+"base": "BaseButton",
+"class": "OpacityButton",
+"language": "GDScript",
+"path": "res://addons/ExtraGui/OpacityButton.gd"
+}, {
 "base": "KinematicBody",
 "class": "Operator",
 "language": "GDScript",
@@ -269,6 +289,16 @@ _global_script_classes=[ {
 "language": "GDScript",
 "path": "res://addons/godot-next/references/property_info_factory.gd"
 }, {
+"base": "Control",
+"class": "RemoteHide",
+"language": "GDScript",
+"path": "res://addons/ExtraGui/RemoteHide.gd"
+}, {
+"base": "Node",
+"class": "Renameable",
+"language": "GDScript",
+"path": "res://addons/ExtraGui/Renameable.gd"
+}, {
 "base": "ResourceCollection",
 "class": "ResourceArray",
 "language": "GDScript",
@@ -284,6 +314,36 @@ _global_script_classes=[ {
 "language": "GDScript",
 "path": "res://addons/godot-next/resources/resource_collections/resource_set.gd"
 }, {
+"base": "Node",
+"class": "SaveController",
+"language": "GDScript",
+"path": "res://addons/ExtraGui/SaveController.gd"
+}, {
+"base": "Node",
+"class": "Saveable",
+"language": "GDScript",
+"path": "res://addons/ExtraGui/Saveable.gd"
+}, {
+"base": "Control",
+"class": "Scrollable",
+"language": "GDScript",
+"path": "res://addons/ExtraGui/Scrollable.gd"
+}, {
+"base": "Control",
+"class": "SelectBox",
+"language": "GDScript",
+"path": "res://addons/ExtraGui/SelectBox.gd"
+}, {
+"base": "Control",
+"class": "Selectable",
+"language": "GDScript",
+"path": "res://addons/ExtraGui/Selectable.gd"
+}, {
+"base": "Node",
+"class": "SelectionController",
+"language": "GDScript",
+"path": "res://addons/ExtraGui/SelectionController.gd"
+}, {
 "base": "Reference",
 "class": "Singletons",
 "language": "GDScript",
@@ -294,15 +354,35 @@ _global_script_classes=[ {
 "language": "GDScript",
 "path": "res://controls/spacecraft/spacecraft-controller.gd"
 }, {
+"base": "Control",
+"class": "SplashAndFade",
+"language": "GDScript",
+"path": "res://addons/ExtraGui/SplashAndFade.gd"
+}, {
 "base": "Spatial",
 "class": "SpringArmCamera",
 "language": "GDScript",
 "path": "res://addons/lunco-cameras/spring-arm-camera/spring-arm-camera.gd"
 }, {
+"base": "Control",
+"class": "TabController",
+"language": "GDScript",
+"path": "res://addons/ExtraGui/TabController.gd"
+}, {
+"base": "Button",
+"class": "TabgroupButton",
+"language": "GDScript",
+"path": "res://addons/ExtraGui/TabgroupButton.gd"
+}, {
 "base": "Resource",
 "class": "Timeline",
 "language": "GDScript",
 "path": "res://addons/event_system_plugin/resources/timeline_class/timeline_class.gd"
+}, {
+"base": "Button",
+"class": "ToggleVisible",
+"language": "GDScript",
+"path": "res://addons/ExtraGui/ToggleVisible.gd"
 }, {
 "base": "Line2D",
 "class": "Trail2D",
@@ -323,6 +403,11 @@ _global_script_classes=[ {
 "class": "Tweener",
 "language": "GDScript",
 "path": "res://addons/godot-next/references/tween_sequence/tweener.gd"
+}, {
+"base": "Control",
+"class": "Undoable",
+"language": "GDScript",
+"path": "res://addons/ExtraGui/Undoable.gd"
 }, {
 "base": "VBoxContainer",
 "class": "VBoxItemList",
@@ -427,13 +512,16 @@ _global_script_class_icons={
 "Bitset": "",
 "CSVFile": "",
 "CallbackDelegator": "",
+"ChildAdder": "res://addons/ExtraGui/add_icon.png",
 "ClassType": "",
 "CommonNode": "",
 "ControllerUI": "",
 "Cycle": "res://addons/godot-next/icons/icon_cycle.svg",
 "DebugLabel": "",
 "DiscreteGradientTexture": "",
+"Draggable": "res://addons/ExtraGui/move_icon.png",
 "EditorTools": "",
+"EnumDropdown": "res://addons/ExtraGui/list_icon.png",
 "Event": "res://addons/event_system_plugin/assets/icons/timeline_icon.png",
 "EventCall": "",
 "EventComment": "",
@@ -465,6 +553,7 @@ _global_script_class_icons={
 "MenuManager": "",
 "MessageDispatcher": "",
 "MessageDispatcherWrapper": "",
+"OpacityButton": "",
 "Operator": "",
 "PhysicsLayers": "",
 "Player": "",
@@ -472,17 +561,30 @@ _global_script_class_icons={
 "ProjectTools": "",
 "PropertyInfo": "",
 "PropertyInfoFactory": "",
+"RemoteHide": "res://addons/ExtraGui/eye_icon.png",
+"Renameable": "res://addons/ExtraGui/edit_icon.png",
 "ResourceArray": "",
 "ResourceCollection": "",
 "ResourceSet": "",
+"SaveController": "res://addons/ExtraGui/save_icon.png",
+"Saveable": "res://addons/ExtraGui/save_icon.png",
+"Scrollable": "res://addons/ExtraGui/move_icon.png",
+"SelectBox": "res://addons/ExtraGui/select_icon.png",
+"Selectable": "res://addons/ExtraGui/select_icon.png",
+"SelectionController": "res://addons/ExtraGui/select_icon.png",
 "Singletons": "",
 "Spacecraft": "",
+"SplashAndFade": "",
 "SpringArmCamera": "",
+"TabController": "res://addons/ExtraGui/tab_icon.png",
+"TabgroupButton": "res://addons/ExtraGui/tab_icon.png",
 "Timeline": "res://addons/event_system_plugin/assets/icons/timeline_icon.png",
+"ToggleVisible": "res://addons/ExtraGui/eye_icon.png",
 "Trail2D": "res://addons/godot-next/icons/icon_trail_2d.svg",
 "Trail3D": "res://addons/godot-next/icons/icon_trail_3d.svg",
 "TweenSequence": "",
 "Tweener": "",
+"Undoable": "res://addons/ExtraGui/undo_icon.png",
 "VBoxItemList": "res://addons/godot-next/icons/icon_v_box_item_list.svg",
 "VFSM": "",
 "VFSMDemoSimpleAIJumper": "",
@@ -515,6 +617,7 @@ config/windows_native_icon="res://assets/icon.ico"
 
 Autoload="*res://autoload/autoload.gd"
 Console="*res://addons/quentincaffeino/console/src/Console.tscn"
+egs="*res://addons/ExtraGui/extraGuiSingleton.gd"
 
 [display]
 
@@ -527,7 +630,7 @@ window/stretch/aspect="keep_height"
 
 [editor_plugins]
 
-enabled=PoolStringArray( "res://addons/NodeConnectorGodot/plugin.cfg", "res://addons/imjp94.yafsm/plugin.cfg", "res://addons/ply/plugin.cfg", "res://addons/prettyprimitive/plugin.cfg", "res://addons/project_map/plugin.cfg", "res://addons/quentincaffeino/console/plugin.cfg", "res://addons/stl_importer/plugin.cfg", "res://addons/ui_design_tool/plugin.cfg" )
+enabled=PoolStringArray( "res://addons/ExtraGui/plugin.cfg", "res://addons/NodeConnectorGodot/plugin.cfg", "res://addons/event_system_plugin/plugin.cfg", "res://addons/godot-next/plugin.cfg", "res://addons/godot-package-manager/plugin.cfg", "res://addons/imjp94.yafsm/plugin.cfg", "res://addons/ply/plugin.cfg", "res://addons/prettyprimitive/plugin.cfg", "res://addons/project_map/plugin.cfg", "res://addons/quentincaffeino/console/plugin.cfg", "res://addons/stl_importer/plugin.cfg", "res://addons/ui_design_tool/plugin.cfg", "res://addons/visual_fsm/plugin.cfg" )
 
 [global]
 

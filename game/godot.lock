@@ -63,5 +63,10 @@
 		"version": "0.0.0",
 		"integrity": "",
 		"path": "res://addons/.cache/StlImporter/addons/stl_importer"
+	},
+	"GodotExtraGUI": {
+		"version": "0.0.0",
+		"integrity": "",
+		"path": "res://addons/.cache/GodotExtraGUI/addons/ExtraGui"
 	}
 }

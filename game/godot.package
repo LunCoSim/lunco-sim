@@ -120,6 +120,14 @@
 			"version": "0.0.0",
 			"subdir": "addons/stl_importer"
 		},
+		"GodotExtraGUI": {
+			"src": "git",
+			"url": "https://github.com/rossunger/GodotExtraGUI.git",
+			"version": "0.0.0",
+			"subdir": "addons/ExtraGui"
+		},
+
+		
 		
 	},
 	"hooks": {
