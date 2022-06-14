@@ -89,17 +89,22 @@ func _input(event):
 				player.set_camera_basis(cam.get_plain_basis())
 				
 		"Spacecraft":
+			var spacecraft: Spacecraft = ward
+			
 			if Input.is_action_just_pressed("throttle"):
-				ward.throttle(true)
+				spacecraft.throttle(true)
 			elif Input.is_action_just_released("throttle"):
-				ward.throttle(false)
+				spacecraft.throttle(false)
 			
-			var torque := Vector3.ZERO
-			torque.x = Input.get_action_strength("pitch_up") - Input.get_action_strength("pitch_down")
-			torque.y = Input.get_action_strength("yaw_right") - Input.get_action_strength("yaw_left")
-			torque.z = Input.get_action_strength("roll_ccw") - Input.get_action_strength("roll_cw")
+			var torque := Vector3(
+				Input.get_action_strength("pitch_up") - Input.get_action_strength("pitch_down"),
+				Input.get_action_strength("yaw_right") - Input.get_action_strength("yaw_left"),
+				Input.get_action_strength("roll_ccw") - Input.get_action_strength("roll_cw")
+			)
 			
-			ward.change_orientation(torque)
+			print(torque)
+			spacecraft.change_orientation(torque)
+			
 		"Operator":
 			var operator: Operator = ward
 			if Input.is_action_just_pressed("reset_position"):
