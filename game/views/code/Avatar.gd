@@ -85,11 +85,13 @@ func _input(event):
 			
 				player.set_camera_x_rot(camera.camera_x_rot)
 				
-				var c_x = camera.camera_x or 0.0
-				var c_z = camera.camera_z or 0.0
+				var camera_basis = Basis.IDENTITY
 				
-				player.set_target(Vector3(c_x, 0.0, c_z))
+				camera_basis.x = camera.camera_x
+				camera_basis.y = Vector3.ZERO
+				camera_basis.z = camera.camera_z
 				
+				player.set_camera_basis(camera_basis)
 				
 		"Spacecraft":
 			if Input.is_action_just_pressed("throttle"):

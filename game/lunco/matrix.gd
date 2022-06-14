@@ -29,6 +29,7 @@ var LocalTime
 #	Space Stations
 #	!!!Terrain 
 # Avatars -> dynamic property, makes sense only in runtime 
+# Fields 
 
 # Objects
 # Buildings

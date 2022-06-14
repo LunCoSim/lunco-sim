@@ -1,8 +1,7 @@
-[gd_scene load_steps=5 format=2]
+[gd_scene load_steps=4 format=2]
 
-[ext_resource path="res://assets/planets/earth-model.tscn" type="PackedScene" id=2]
-[ext_resource path="res://assets/planets/moon-model.tscn" type="PackedScene" id=3]
-[ext_resource path="res://ui/spacecraft-ui.tscn" type="PackedScene" id=4]
+[ext_resource path="res://assets/planets/earth-model.tscn" type="PackedScene" id=1]
+[ext_resource path="res://assets/planets/moon-model.tscn" type="PackedScene" id=2]
 
 [sub_resource type="Environment" id=1]
 background_mode = 2
@@ -11,9 +10,9 @@ ambient_light_color = Color( 1, 1, 1, 1 )
 ambient_light_energy = 1.41
 ambient_light_sky_contribution = 0.0
 
-[node name="SpaceFlight" type="Node"]
+[node name="SpaceFlightMap" type="Node"]
 
-[node name="Moon" parent="." instance=ExtResource( 3 )]
+[node name="Moon" parent="." instance=ExtResource( 2 )]
 transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 59.2984, -2934.74, -74.8813 )
 
 [node name="Sun" type="Spatial" parent="."]
@@ -47,11 +46,8 @@ light_specular = 16.0
 omni_range = 51.848
 omni_attenuation = 17.1484
 
-[node name="Earth" parent="." instance=ExtResource( 2 )]
+[node name="Earth" parent="." instance=ExtResource( 1 )]
 transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 4476.79, 989.939, -41.6088 )
 
 [node name="WorldEnvironment" type="WorldEnvironment" parent="."]
 environment = SubResource( 1 )
-
-[node name="UI" parent="." instance=ExtResource( 4 )]
-target = NodePath("")

@@ -31,7 +31,7 @@ export var velocity = Vector3()
 
 var motion_target := Vector2.ZERO
 var camera_x_rot = 0.0
-var camera_target := Vector3.ZERO
+var camera_basis := Basis.IDENTITY
 
 # Parameters
 # strafe
@@ -69,7 +69,7 @@ onready var gravity = ProjectSettings.get_setting("physics/3d/default_gravity") 
 
 #----------------------------
 #Connection with UI
-export onready var camera_node = get_node(camera)
+#export onready var camera_node = get_node(camera)
 
 onready var animation_tree = $AnimationTree
 onready var player_model = $PlayerModel
@@ -181,7 +181,7 @@ func _physics_process(delta):
 
 	# Not in air or aiming, idle.
 	# Convert orientation to quaternions for interpolating rotation.
-	var target = camera_node.camera_x * motion.x + camera_node.camera_z * motion.y
+	var target = camera_basis.x * motion.x + camera_basis.z * motion.y
 	if target.length() > 0.001:
 		var q_from = orientation.basis.get_rotation_quat()
 		var q_to = Transform().looking_at(target, Vector3.UP).basis.get_rotation_quat()
@@ -230,8 +230,8 @@ func aim():
 func set_camera_x_rot(_camera_x_rot):
 	camera_x_rot = _camera_x_rot
 
-func set_target(_target):
-	camera_target = _target
+func set_camera_basis(basis: Basis):
+	camera_basis = basis
 	
 # --------------------------------------------------
 # Player state
@@ -251,6 +251,6 @@ func _on_StatePlayer_transited(from, to):
 	match to:
 		"Aiming":
 #			camera_node.set_aiming(false)# TODO: should be state of camera			
-			camera_node.set_aiming(true)
+#			camera_node.set_aiming(true)
 			pass
 

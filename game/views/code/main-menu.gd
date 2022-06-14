@@ -16,10 +16,7 @@ func _on_Trajectory_Planning_pressed():
 	get_tree().change_scene(STUB)
 
 func _on_Surface_Operations_pressed():
-	get_tree().change_scene("res://views/player-view.tscn")
-
-func _on_Lunar_Base_Sim_pressed():
-	get_tree().change_scene("res://views/operator-view.tscn")
+	get_tree().change_scene("res://views/matrix-view.tscn")
 
 func _on_Help_pressed():
 	OS.shell_open("https://github.com/LunCoSim/lunco-sim")
@@ -30,6 +27,5 @@ func _on_Settings_pressed():
 func _on_Exit_pressed():
 	get_tree().quit() # default behavior
 	
-
 func _on_Return_To_Main_Menu_pressed():
 	get_tree().change_scene("res://views/main-menu.tscn")

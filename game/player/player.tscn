@@ -180,7 +180,7 @@ nodes/strafe/node = SubResource( 24 )
 nodes/strafe/position = Vector2( -400, -120 )
 nodes/walk/node = SubResource( 29 )
 nodes/walk/position = Vector2( -400, 40 )
-node_connections = [ "output", 0, "eye_blend", "state", 0, "strafe", "state", 1, "walk", "state", 2, "jumpup", "state", 3, "jumpdown", "land", 0, "state", "land", 1, "hardland", "eye_blend", 0, "aim", "eye_blend", 1, "eyes", "aim", 0, "aimdown", "aim", 1, "land", "aim", 2, "aimup" ]
+node_connections = [ "state", 0, "strafe", "state", 1, "walk", "state", 2, "jumpup", "state", 3, "jumpdown", "output", 0, "eye_blend", "eye_blend", 0, "aim", "eye_blend", 1, "eyes", "land", 0, "state", "land", 1, "hardland", "aim", 0, "aimdown", "aim", 1, "land", "aim", 2, "aimup" ]
 
 [sub_resource type="CapsuleShape" id=31]
 radius = 0.5
@@ -461,8 +461,11 @@ script = ExtResource( 1 )
 [node name="Robot_Skeleton" parent="PlayerModel" index="0"]
 transform = Transform( 0.803991, 0, 0, 0, 0.803991, 0, 0, 0, 0.803991, 0, 0, 0 )
 
+[node name="Skeleton" parent="PlayerModel/Robot_Skeleton" index="0"]
+bones/55/bound_children = [ NodePath("GunBone") ]
+
 [node name="GunBone" type="BoneAttachment" parent="PlayerModel/Robot_Skeleton/Skeleton" index="5"]
-transform = Transform( 0.921411, -0.387105, -0.0369706, -0.0195193, 0.0489264, -0.998619, 0.388424, 0.920736, 0.0375212, -0.207205, 1.385, 0.495432 )
+transform = Transform( 0.916274, -0.400578, -0.0138807, -0.0161177, -0.00220823, -0.999875, 0.400544, 0.916261, -0.00847754, -0.207103, 1.36134, 0.549988 )
 bone_name = "hand.R"
 
 [node name="ShootFrom" type="Position3D" parent="PlayerModel/Robot_Skeleton/Skeleton/GunBone"]
