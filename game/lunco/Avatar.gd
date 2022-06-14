@@ -28,6 +28,8 @@ onready var inputs = get_node(Inputs) if Inputs else null
 
 onready var state := $State
 
+var mouse_control := false
+
 func set_ward(_ward):
 	ward = _ward
 
@@ -48,6 +50,13 @@ func _input(event):
 	elif Input.is_action_just_pressed("select_operator"):
 		state.set_trigger("operator")
 		
+	if Input.is_action_pressed("rotate_camera"):
+		Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
+		mouse_control = true
+	else:
+		Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
+		mouse_control = false
+		
 	match state.get_current():
 		"Player":
 			var player: Player = ward
@@ -66,15 +75,15 @@ func _input(event):
 			if Input.is_action_just_pressed("jump"): #idle/move
 				player.jump()
 			
-			if Input.is_action_pressed("aim"): #idle/move
-				player.aim()
+#			if Input.is_action_pressed("aim"): #idle/move
+#				player.aim()
 				
 			if Input.is_action_pressed("shoot"): #idle/move
 				player.shoot()
 				
 			var camera_move := Vector2.ZERO
 			
-			if event is InputEventMouseMotion:
+			if (event is InputEventMouseMotion) and mouse_control:
 				camera_move = event.relative * MOUSE_SENSITIVITY
 			else:
 				camera_move = Vector2(
