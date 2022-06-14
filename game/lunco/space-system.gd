@@ -1,5 +1,5 @@
 # This is the basic class according to XTCE
-class_name SpaceSystem
+class_name lnSpaceSystem
 extends Node #TODO: Check if should be node, maybe something else?
 
 #Basic parameters inspired by XTCE

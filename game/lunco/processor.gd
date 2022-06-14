@@ -1,3 +1,3 @@
 #The one which processes commands
-class_name Processor
+class_name lnProcessor
 extends Node
