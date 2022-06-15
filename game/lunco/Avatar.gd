@@ -69,7 +69,8 @@ func _input(event):
 			var from = camera.project_ray_origin(position)
 			var to = from + camera.project_ray_normal(position) * RAY_LENGTH	
 			var res = matrix.ray_cast(from, to)
-			print(res)
+			if res:
+				matrix.spawn(res["position"])
 			
 			
 	if Input.is_action_just_pressed("select_player"):

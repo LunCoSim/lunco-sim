@@ -73,20 +73,13 @@ func get_operators():
 	pass
 
 #------------------------------------------
-func _on_Terrain_clicked(position):
+func spawn(position):
 	print("Map clicked: ", position)
 	var scene = load("res://addons/lunco-content/spacex-starship/source/SpaceX_Starship.fbx")
 	var instance = scene.instance()
-#	print("Map clicked: ", position)
 	
 	instance.translation = position
 	add_child(instance)
-
-#	var scene = load("res://addons/lunco-content/spacex-starship/source/SpaceX_Starship.fbx")
-#	var instance = scene.instance()
-#
-#	instance.translation = position
-#	$Map.add_child(instance)
 
 
 func _process(_delta):
