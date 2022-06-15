@@ -103,68 +103,67 @@ func _input(event):
 		
 		if camera_move.length_squared() > 0.0:
 			cam.rotate_relative(camera_move)
-			
-	match state.get_current():
-		"Player":
-			var player: Player = ward
-			
-			if not player:
-				return
-				
-			var motion_direction := Vector3(
-				Input.get_action_strength("move_right") - Input.get_action_strength("move_left"),
-				Input.get_action_strength("move_up") - Input.get_action_strength("move_down"),
-				Input.get_action_strength("move_back") - Input.get_action_strength("move_forward"))
+	
+	if ward is lnPlayer:
+		var player: lnPlayer = ward
 		
-			if motion_direction.length() < 0.001:
-				player.stop()
-			else:
-				player.move(motion_direction)
-				
-			if Input.is_action_just_pressed("jump"): #idle/move
-				player.jump()
+		if not player:
+			return
 			
+		var motion_direction := Vector3(
+			Input.get_action_strength("move_right") - Input.get_action_strength("move_left"),
+			Input.get_action_strength("move_up") - Input.get_action_strength("move_down"),
+			Input.get_action_strength("move_back") - Input.get_action_strength("move_forward"))
+	
+		if motion_direction.length() < 0.001:
+			player.stop()
+		else:
+			player.move(motion_direction)
+			
+		if Input.is_action_just_pressed("jump"): #idle/move
+			player.jump()
+		
 #			if Input.is_action_pressed("aim"): #idle/move
 #				player.aim()
-				
-			if Input.is_action_pressed("shoot"): #idle/move
-				player.shoot()
 			
-			if camera is SpringArmCamera:
-				var cam: SpringArmCamera = camera
-				player.set_camera_x_rot(cam.camera_x_rot)
-				player.set_camera_basis(cam.get_plain_basis())
-				
-		"Spacecraft":
-			var spacecraft: Spacecraft = ward
-			
-			if Input.is_action_just_pressed("throttle"):
-				spacecraft.throttle(true)
-			elif Input.is_action_just_released("throttle"):
-				spacecraft.throttle(false)
-			
-			var torque := Vector3(
-				Input.get_action_strength("pitch_up") - Input.get_action_strength("pitch_down"),
-				Input.get_action_strength("yaw_right") - Input.get_action_strength("yaw_left"),
-				Input.get_action_strength("roll_cw") - Input.get_action_strength("roll_ccw")
-			)
-			
-			spacecraft.change_orientation(torque)
-			
-		"Operator":
+		if Input.is_action_pressed("shoot"): #idle/move
+			player.shoot()
+		
+		if camera is SpringArmCamera:
 			var cam: SpringArmCamera = camera
-			var operator: Operator = ward
+			player.set_camera_x_rot(cam.camera_x_rot)
+			player.set_camera_basis(cam.get_plain_basis())
+				
+	elif ward is lnSpaceSystem:
+		var spacecraft: lnSpacecraft = ward
+		
+		if Input.is_action_just_pressed("throttle"):
+			spacecraft.throttle(true)
+		elif Input.is_action_just_released("throttle"):
+			spacecraft.throttle(false)
+		
+		var torque := Vector3(
+			Input.get_action_strength("pitch_up") - Input.get_action_strength("pitch_down"),
+			Input.get_action_strength("yaw_right") - Input.get_action_strength("yaw_left"),
+			Input.get_action_strength("roll_cw") - Input.get_action_strength("roll_ccw")
+		)
+		
+		spacecraft.change_orientation(torque)
 			
-			if Input.is_action_just_pressed("reset_position"):
-				operator.reset_position();
+	elif ward is lnOperator:
+		var cam: SpringArmCamera = camera
+		var operator: lnOperator = ward
+		
+		if Input.is_action_just_pressed("reset_position"):
+			operator.reset_position();
 
-			var motion_direction := Vector3(
-				Input.get_action_strength("move_right") - Input.get_action_strength("move_left"),
-				Input.get_action_strength("move_up") - Input.get_action_strength("move_down"),
-				Input.get_action_strength("move_back") - Input.get_action_strength("move_forward")
-			)
+		var motion_direction := Vector3(
+			Input.get_action_strength("move_right") - Input.get_action_strength("move_left"),
+			Input.get_action_strength("move_up") - Input.get_action_strength("move_down"),
+			Input.get_action_strength("move_back") - Input.get_action_strength("move_forward")
+		)
 
-			operator.move(motion_direction)
+		operator.move(motion_direction)
 
 func _on_State_transited(from, to):
 	match to:

@@ -249,20 +249,10 @@ _global_script_classes=[ {
 "language": "GDScript",
 "path": "res://addons/ExtraGui/OpacityButton.gd"
 }, {
-"base": "KinematicBody",
-"class": "Operator",
-"language": "GDScript",
-"path": "res://controls/operator/operator.gd"
-}, {
 "base": "Resource",
 "class": "PhysicsLayers",
 "language": "GDScript",
 "path": "res://addons/godot-next/global/physics_layers.gd"
-}, {
-"base": "KinematicBody",
-"class": "Player",
-"language": "GDScript",
-"path": "res://player/player.gd"
 }, {
 "base": "Resource",
 "class": "PlyMesh",
@@ -343,11 +333,6 @@ _global_script_classes=[ {
 "class": "Singletons",
 "language": "GDScript",
 "path": "res://addons/godot-next/global/singletons.gd"
-}, {
-"base": "RigidBody",
-"class": "Spacecraft",
-"language": "GDScript",
-"path": "res://controls/spacecraft/spacecraft-controller.gd"
 }, {
 "base": "Control",
 "class": "SplashAndFade",
@@ -519,6 +504,16 @@ _global_script_classes=[ {
 "language": "GDScript",
 "path": "res://lunco/matrix.gd"
 }, {
+"base": "KinematicBody",
+"class": "lnOperator",
+"language": "GDScript",
+"path": "res://controls/operator/operator.gd"
+}, {
+"base": "KinematicBody",
+"class": "lnPlayer",
+"language": "GDScript",
+"path": "res://player/player.gd"
+}, {
 "base": "lnSpaceSystem",
 "class": "lnProcessor",
 "language": "GDScript",
@@ -528,6 +523,11 @@ _global_script_classes=[ {
 "class": "lnSpaceSystem",
 "language": "GDScript",
 "path": "res://lunco/space-system.gd"
+}, {
+"base": "RigidBody",
+"class": "lnSpacecraft",
+"language": "GDScript",
+"path": "res://controls/spacecraft/spacecraft-controller.gd"
 }, {
 "base": "Node",
 "class": "lnVector4D",
@@ -583,9 +583,7 @@ _global_script_class_icons={
 "MessageDispatcher": "",
 "MessageDispatcherWrapper": "",
 "OpacityButton": "",
-"Operator": "",
 "PhysicsLayers": "",
-"Player": "",
 "PlyMesh": "",
 "ProjectTools": "",
 "PropertyInfo": "",
@@ -602,7 +600,6 @@ _global_script_class_icons={
 "Selectable": "res://addons/ExtraGui/select_icon.png",
 "SelectionController": "res://addons/ExtraGui/select_icon.png",
 "Singletons": "",
-"Spacecraft": "",
 "SplashAndFade": "",
 "SpringArmCamera": "",
 "TabController": "res://addons/ExtraGui/tab_icon.png",
@@ -637,8 +634,11 @@ _global_script_class_icons={
 "lnField": "",
 "lnGravitationField": "",
 "lnMatrix": "",
+"lnOperator": "",
+"lnPlayer": "",
 "lnProcessor": "",
 "lnSpaceSystem": "",
+"lnSpacecraft": "",
 "lnVector4D": ""
 }
 

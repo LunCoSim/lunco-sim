@@ -1,5 +1,5 @@
 #This code is based on Gogot kinematic_character example
-class_name Operator
+class_name lnOperator
 extends KinematicBody
 
 export var MAX_SPEED = 100

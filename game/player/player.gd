@@ -1,4 +1,4 @@
-class_name Player
+class_name lnPlayer
 extends KinematicBody
 
 signal aiming

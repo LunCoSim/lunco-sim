@@ -1,5 +1,5 @@
 #This code is based on this game: https://godotforums.org/discussion/18480/godot-3d-vector-physics-cheat-sheet
-class_name Spacecraft
+class_name lnSpacecraft
 extends RigidBody
 
 signal thrust(enabled)
