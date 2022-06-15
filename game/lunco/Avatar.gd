@@ -23,7 +23,7 @@ onready var ward: Node
 onready var camera: Node
 
 onready var ui = $"UI"
-onready var spacecraft_ui = get_node(SpacecarftUI)
+#onready var spacecraft_ui = get_node(SpacecarftUI)
 onready var inputs = get_node(Inputs) if Inputs else null
 
 onready var state := $State
@@ -35,7 +35,8 @@ func set_ward(_ward):
 
 func set_camera(_camera):
 	camera = _camera
-	camera.set_current()
+	if camera:
+		camera.set_current()
 
 func set_ui(_ui):
 	clear_ui()
@@ -43,6 +44,7 @@ func set_ui(_ui):
 		ui.add_child(_ui)
 
 func _input(event):
+	
 	if Input.is_action_just_pressed("select_player"):
 		state.set_trigger("player")
 	elif Input.is_action_just_pressed("select_spacecraft"):
@@ -61,7 +63,9 @@ func _input(event):
 		"Player":
 			var player: Player = ward
 			var cam: SpringArmCamera = camera
-			
+			if not player:
+				return
+				
 			var motion_direction := Vector3(
 				Input.get_action_strength("move_right") - Input.get_action_strength("move_left"),
 				Input.get_action_strength("move_up") - Input.get_action_strength("move_down"),
@@ -144,7 +148,7 @@ func _on_State_transited(from, to):
 		"Spacecraft":
 			set_ward(get_node(Spacecraft))
 			set_camera(get_node(SpacecraftCam))
-			set_ui(spacecraft_ui)
+#			set_ui(spacecraft_ui)
 		"Operator":
 			set_ward(get_node(Operator))
 			set_camera(get_node(OperatorCam))

@@ -2,14 +2,10 @@
 class_name Operator
 extends KinematicBody
 
-export (NodePath) var target
-
 export var MAX_SPEED = 100
 export var JUMP_SPEED = 2
 export var ACCELERATION = 50
 export var DECELERATION = 50
-
-onready var camera = get_node(target)
 
 onready var gravity = 0
 onready var start_position = translation

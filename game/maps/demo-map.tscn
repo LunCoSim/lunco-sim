@@ -34,4 +34,5 @@ transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 28.373, 4.53858, 33.9116 )
 [node name="LunarSurface" parent="." instance=ExtResource( 1 )]
 transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.95033, 0 )
 
+[connection signal="clicked" from="." to="." method="_on_Terrain_clicked"]
 [connection signal="input_event" from="LunarSurface" to="." method="_on_Surface_input_event"]
