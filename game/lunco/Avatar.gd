@@ -162,21 +162,14 @@ func _input(event):
 
 			operator.move(motion_direction)
 
-func reparent_camera(parent, target):
-	camera.get_parent().remove_child(camera)
-	camera.set_target(target)
-	camera.reset_position()
-	parent.add_child(camera)
-	
 func _on_State_transited(from, to):
 	match to:
 		"Player":
 			set_ward(get_node(Player))
-			reparent_camera(ward, null)
 		"Spacecraft":
 			set_ward(get_node(Spacecraft))
-			reparent_camera(self, ward)
 		"Operator":
 			set_ward(get_node(Operator))
-			reparent_camera(ward, null)
+			
+	camera.set_target(ward)
 
