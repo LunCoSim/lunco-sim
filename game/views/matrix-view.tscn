@@ -15,11 +15,9 @@
 script = ExtResource( 5 )
 
 [node name="Player" parent="World" instance=ExtResource( 7 )]
-transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.783736, 0 )
-camera = NodePath("PlayerCam")
 
 [node name="PlayerCam" parent="World/Player" instance=ExtResource( 15 )]
-transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2.22763, 0 )
+transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 3.01137, 0 )
 CAMERA_CONTROLLER_ROTATION_SPEED = 7.0
 
 [node name="SpacecraftControl" parent="World" instance=ExtResource( 1 )]
