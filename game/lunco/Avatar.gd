@@ -61,6 +61,7 @@ func _mouse_clicked(obj, coords):
 # Matrix itself is a space system and can perform commands
 	
 func _input(event):
+	
 	if event is InputEventMouseButton and event.pressed and event.button_index == 1:
 		var e: InputEventMouseButton = event
 		var position = e.position
@@ -86,11 +87,30 @@ func _input(event):
 	else:
 		Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
 		mouse_control = false
+	
+	if camera is SpringArmCamera:
+		var cam: SpringArmCamera = camera
+		var camera_move := Vector2.ZERO
+			
+		if (event is InputEventMouseMotion) and mouse_control:
+			camera_move = event.relative * MOUSE_SENSITIVITY
+		else:
+			camera_move = Vector2(
+				Input.get_action_strength("camera_left") - Input.get_action_strength("camera_right"),
+				Input.get_action_strength("camera_up") - Input.get_action_strength("camera_down")
+			)
 		
+		var camera_spring_length = Input.get_action_strength("plus") - Input.get_action_strength("minus")
+		
+		cam.spring_length(camera_spring_length)
+		
+		if camera_move.length_squared() > 0.0:
+			cam.rotate_relative(camera_move)
+			
 	match state.get_current():
 		"Player":
 			var player: Player = ward
-			var cam: SpringArmCamera = camera
+			
 			if not player:
 				return
 				
@@ -112,24 +132,9 @@ func _input(event):
 				
 			if Input.is_action_pressed("shoot"): #idle/move
 				player.shoot()
-				
-			var camera_move := Vector2.ZERO
 			
-			if (event is InputEventMouseMotion) and mouse_control:
-				camera_move = event.relative * MOUSE_SENSITIVITY
-			else:
-				camera_move = Vector2(
-					Input.get_action_strength("camera_left") - Input.get_action_strength("camera_right"),
-					Input.get_action_strength("camera_up") - Input.get_action_strength("camera_down")
-				)
-			
-			var camera_spring_length = Input.get_action_strength("plus") - Input.get_action_strength("minus")
-			
-			cam.spring_length(camera_spring_length)
-			
-			if camera_move.length_squared() > 0.0:
-				cam.rotate_relative(camera_move)
-			
+			if camera is SpringArmCamera:
+				var cam: SpringArmCamera = camera
 				player.set_camera_x_rot(cam.camera_x_rot)
 				player.set_camera_basis(cam.get_plain_basis())
 				
@@ -163,23 +168,6 @@ func _input(event):
 			)
 
 			operator.move(motion_direction)
-			
-			var camera_move := Vector2.ZERO
-			
-			if (event is InputEventMouseMotion) and mouse_control:
-				camera_move = event.relative * MOUSE_SENSITIVITY
-			else:
-				camera_move = Vector2(
-					Input.get_action_strength("camera_left") - Input.get_action_strength("camera_right"),
-					Input.get_action_strength("camera_up") - Input.get_action_strength("camera_down")
-				)
-			
-			var camera_spring_length = Input.get_action_strength("plus") - Input.get_action_strength("minus")
-			
-			cam.spring_length(camera_spring_length)
-			
-			if camera_move.length_squared() > 0.0:
-				cam.rotate_relative(camera_move)
 			
 
 func clear_ui():
