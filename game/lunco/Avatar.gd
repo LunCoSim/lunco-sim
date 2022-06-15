@@ -31,7 +31,7 @@ func set_camera(_camera):
 	if camera:
 		camera.set_current()
 
-func set_ui(_ui):
+func set_ui(_ui=null):
 	clear_ui()
 	if(_ui):
 		ui.add_child(_ui)
@@ -166,13 +166,17 @@ func _input(event):
 		operator.move(motion_direction)
 
 func _on_State_transited(from, to):
+	var _ui = null
 	match to:
 		"Player":
 			set_ward(player)
 		"Spacecraft":
 			set_ward(spacecraft)
+			_ui = preload("res://ui/spacecraft-ui.tscn").instance()
+			_ui.set_target(ward)
 		"Operator":
 			set_ward(operator)
 			
+	set_ui(_ui)		
 	camera.set_target(ward)
 

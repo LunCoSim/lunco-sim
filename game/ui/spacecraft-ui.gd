@@ -1,8 +1,8 @@
 extends Control
 
-export (NodePath) var target = "../SpacecraftControl"
+export (NodePath) var Target
 
-onready var player = get_node(target)
+onready var target = get_node(Target)
 
 onready var position_lbl = $"HUD/Position"
 onready var direction_lbl = $"HUD/Direction"
@@ -14,6 +14,9 @@ onready var acceleration_lbl = $"HUD/Acceleration"
 
 var prev_velocity = Vector3.ZERO
 
+func set_target(_target):
+	target = _target
+	
 # Called when the node enters the scene tree for the first time.
 func _ready():
 	pass # Replace with function body.
@@ -25,22 +28,19 @@ func _ready():
 
 
 func _on_UpdateUI_timeout():
-	if player:
-		position_lbl.text = "Position: " + str(player.transform.origin) + " Abs: " + str(player.transform.origin.length())
-		direction_lbl.text = "Orientation: " + str(player.rotation)
+	if target:
+		position_lbl.text = "Position: " + str(target.transform.origin) + " Abs: " + str(target.transform.origin.length())
+		direction_lbl.text = "Orientation: " + str(target.rotation)
 		
-		velocity_lbl.text = "Velocity: " + str(player.linear_velocity) + " Abs: " + str(player.linear_velocity.length())
-		angvelocity_lbl.text = "AngVelocity: " + str(player.angular_velocity) + " Abs: " + str(player.angular_velocity.length())
+		velocity_lbl.text = "Velocity: " + str(target.linear_velocity) + " Abs: " + str(target.linear_velocity.length())
+		angvelocity_lbl.text = "AngVelocity: " + str(target.angular_velocity) + " Abs: " + str(target.angular_velocity.length())
 		
 		#change 100 to delta
-		var acc = (player.linear_velocity - prev_velocity) / 100
+		var acc = (target.linear_velocity - prev_velocity) / 100
 		acceleration_lbl.text = "Acceleration: " + str(acc) + " Abs: " + str(acc.length())
-		prev_velocity = player.linear_velocity
-	
-
-
+		prev_velocity = target.linear_velocity
 
 func _on_HideControls_timeout():
 	$Help.visible = false
-	$Met.visible = true
+	$MET.visible = true
 	 

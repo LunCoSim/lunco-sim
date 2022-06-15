@@ -149,8 +149,10 @@ script = ExtResource( 2 )
 script = ExtResource( 4 )
 state_machine = SubResource( 30 )
 
-[node name="UI" type="Node" parent="."]
-
 [node name="SpringArmCamera" parent="." instance=ExtResource( 1 )]
+
+[node name="UI" type="Control" parent="."]
+margin_right = 40.0
+margin_bottom = 40.0
 
 [connection signal="transited" from="State" to="." method="_on_State_transited"]
