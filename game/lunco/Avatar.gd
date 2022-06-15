@@ -1,19 +1,8 @@
 extends lnSpaceSystem
 
-export (NodePath) var PlayerCam #camera
-export (NodePath) var SpacecraftCam
-export (NodePath) var OperatorCam
-
 export (NodePath) var Player
 export (NodePath) var Spacecraft
 export (NodePath) var Operator
-
-export (NodePath) var OperatorUI
-export (NodePath) var SpacecarftUI
-export (NodePath) var PlayerUI
-
-export (NodePath) var Inputs
-
 
 #-------------------------------
 const MOUSE_SENSITIVITY = 0.1
@@ -22,19 +11,20 @@ const RAY_LENGTH = 10000
 #-------------------------------
 
 var ward: Node
-var camera: Node
 var mouse_control := false
 
 #-------------------------------
 
-onready var ui = $UI
+onready var ui := $UI
 onready var state := $State
 onready var matrix: lnMatrix = get_parent()
+onready var camera := $SpringArmCamera
 
 #-------------------------------
 
 func set_ward(_ward):
 	ward = _ward
+	return ward
 
 func set_camera(_camera):
 	camera = _camera
@@ -45,10 +35,13 @@ func set_ui(_ui):
 	clear_ui()
 	if(_ui):
 		ui.add_child(_ui)
+		
+func clear_ui():
+	for n in ui.get_children():
+		ui.remove_child(n)
+		n.queue_free()
 
-#object interacted
-func _mouse_clicked(obj, coords):
-	pass
+#-------------------------------
 
 # Input should scroll through all lnSystems. There should be a mapping between key and 
 # object command
@@ -168,24 +161,22 @@ func _input(event):
 			)
 
 			operator.move(motion_direction)
-			
 
-func clear_ui():
-	for n in ui.get_children():
-		ui.remove_child(n)
-		n.queue_free()
-				
+func reparent_camera(parent, target):
+	camera.get_parent().remove_child(camera)
+	camera.set_target(target)
+	camera.reset_position()
+	parent.add_child(camera)
+	
 func _on_State_transited(from, to):
 	match to:
 		"Player":
 			set_ward(get_node(Player))
-			set_camera(get_node(PlayerCam))
-			set_ui(PlayerUI)
+			reparent_camera(ward, null)
 		"Spacecraft":
 			set_ward(get_node(Spacecraft))
-			set_camera(get_node(SpacecraftCam))
-#			set_ui(spacecraft_ui)
+			reparent_camera(self, ward)
 		"Operator":
 			set_ward(get_node(Operator))
-			set_camera(get_node(OperatorCam))
-			set_ui(OperatorUI)
+			reparent_camera(ward, null)
+
