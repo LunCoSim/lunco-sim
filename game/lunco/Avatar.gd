@@ -43,8 +43,34 @@ func set_ui(_ui):
 	if(_ui):
 		ui.add_child(_ui)
 
-func _input(event):
+#object interacted
+func _mouse_clicked(obj, coords):
+	pass
+
+# Input should scroll through all lnSystems. There should be a mapping between key and 
+# object command
+# Avatar should know this mapping
+# Avatar has camera, that should be instantiated here
+# And ward - object that is being controlled. In general 
+# Avatar has it's own camera + world should have it's cameras.
+# Avatar could list all cameras
+# Avatar could list all objects. Some of them could be controlled e.g. command send
+# Matrix itself is a space system and can perform commands
 	
+func _input(event):
+	print("_Input: ", event)
+	if event is InputEventMouseButton:
+		var e: InputEventMouseButton = event
+		
+		var mousePos = e.position
+		
+		var space = get_parent().get_world().direct_space_state
+		var collision_objects = space.intersect_point(mousePos, 1)
+		if collision_objects:
+			print(collision_objects[0].collider.name)
+		else:
+			print("no hit")
+			
 	if Input.is_action_just_pressed("select_player"):
 		state.set_trigger("player")
 	elif Input.is_action_just_pressed("select_spacecraft"):
