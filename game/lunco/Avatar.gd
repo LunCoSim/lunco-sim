@@ -173,10 +173,12 @@ func _on_State_transited(from, to):
 		"Spacecraft":
 			set_ward(spacecraft)
 			_ui = preload("res://ui/spacecraft-ui.tscn").instance()
-			_ui.set_target(ward)
+			
 		"Operator":
 			set_ward(operator)
 			
-	set_ui(_ui)		
+	set_ui(_ui)
+	if _ui:
+		_ui.set_target(ward)
 	camera.set_target(ward)
 
