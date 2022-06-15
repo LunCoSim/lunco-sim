@@ -1,15 +1,17 @@
-[gd_scene load_steps=9 format=2]
+[gd_scene load_steps=10 format=2]
 
 [ext_resource path="res://controls/spacecraft/spacecraft-controller.tscn" type="PackedScene" id=1]
 [ext_resource path="res://addons/lunco-cameras/gimbal-camera/gimbal-camera.tscn" type="PackedScene" id=2]
 [ext_resource path="res://maps/demo-map.tscn" type="PackedScene" id=3]
 [ext_resource path="res://lunco/Avatar.tscn" type="PackedScene" id=4]
 [ext_resource path="res://views/code/world.gd" type="Script" id=5]
+[ext_resource path="res://lunco/matrix.gd" type="Script" id=6]
 [ext_resource path="res://player/player.tscn" type="PackedScene" id=7]
 [ext_resource path="res://controls/operator/operator.tscn" type="PackedScene" id=8]
 [ext_resource path="res://addons/lunco-cameras/spring-arm-camera/spring-arm-camera.tscn" type="PackedScene" id=15]
 
 [node name="Matrix" type="Node"]
+script = ExtResource( 6 )
 
 [node name="World" type="Node" parent="."]
 script = ExtResource( 5 )

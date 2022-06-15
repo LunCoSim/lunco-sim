@@ -12,5 +12,5 @@ export var State = {} # Hierarchical state machine
 export var Behaviour = {} # Behaviour tree
 
 #----------------
-func process_command(command: Command) -> bool:
+func process_command(command: lnCommand) -> bool:
 	return true

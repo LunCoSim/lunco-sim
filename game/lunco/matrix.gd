@@ -1,7 +1,7 @@
 # This is basically the simulation world
 # Check terms for more information
 class_name lnMatrix
-extends Node
+extends lnSpaceSystem
 
 #TODO: Introduce GravitaionField class that describes gravitation field in 4D space e.g. gravitation = F(time, x, y, z)
 var GravitationField := lnGravitationField.new()
