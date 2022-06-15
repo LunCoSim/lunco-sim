@@ -1,4 +1,4 @@
-extends Node
+extends lnSpaceSystem
 
 export (NodePath) var PlayerCam #camera
 export (NodePath) var SpacecraftCam

@@ -519,7 +519,7 @@ _global_script_classes=[ {
 "language": "GDScript",
 "path": "res://lunco/matrix.gd"
 }, {
-"base": "Node",
+"base": "lnSpaceSystem",
 "class": "lnProcessor",
 "language": "GDScript",
 "path": "res://lunco/processor.gd"
