@@ -224,10 +224,10 @@ _global_script_classes=[ {
 "language": "GDScript",
 "path": "res://addons/godot-next/global/inspector_controls.gd"
 }, {
-"base": "lnSpaceSystem",
+"base": "Reference",
 "class": "LnMap",
 "language": "GDScript",
-"path": "res://maps/ln-map.gd"
+"path": "res://lunco/map.gd"
 }, {
 "base": "Reference",
 "class": "MenuManager",
@@ -524,7 +524,7 @@ _global_script_classes=[ {
 "language": "GDScript",
 "path": "res://lunco/processor.gd"
 }, {
-"base": "Spatial",
+"base": "Node",
 "class": "lnSpaceSystem",
 "language": "GDScript",
 "path": "res://lunco/space-system.gd"
