@@ -19,16 +19,16 @@ export (NodePath) var Inputs
 const MOUSE_SENSITIVITY = 0.1
 #-------------------------------
 
-onready var ward: Node
-onready var camera: Node
+var ward: Node
+var camera: Node
+var mouse_control := false
 
-onready var ui = $"UI"
-#onready var spacecraft_ui = get_node(SpacecarftUI)
-onready var inputs = get_node(Inputs) if Inputs else null
+#-------------------------------
 
+onready var ui = $UI
 onready var state := $State
 
-var mouse_control := false
+#-------------------------------
 
 func set_ward(_ward):
 	ward = _ward
@@ -122,7 +122,9 @@ func _input(event):
 			spacecraft.change_orientation(torque)
 			
 		"Operator":
+			var cam: SpringArmCamera = camera
 			var operator: Operator = ward
+			
 			if Input.is_action_just_pressed("reset_position"):
 				operator.reset_position();
 
@@ -133,6 +135,24 @@ func _input(event):
 			)
 
 			operator.move(motion_direction)
+			
+			var camera_move := Vector2.ZERO
+			
+			if (event is InputEventMouseMotion) and mouse_control:
+				camera_move = event.relative * MOUSE_SENSITIVITY
+			else:
+				camera_move = Vector2(
+					Input.get_action_strength("camera_left") - Input.get_action_strength("camera_right"),
+					Input.get_action_strength("camera_up") - Input.get_action_strength("camera_down")
+				)
+			
+			var camera_spring_length = Input.get_action_strength("plus") - Input.get_action_strength("minus")
+			
+			cam.spring_length(camera_spring_length)
+			
+			if camera_move.length_squared() > 0.0:
+				cam.rotate_relative(camera_move)
+			
 
 func clear_ui():
 	for n in ui.get_children():
