@@ -72,6 +72,15 @@ func get_rockets():
 func get_operators():
 	pass
 
+func get_player():
+	return $Player
+	
+func get_spacecraft():
+	return $SpacecraftControl
+
+func get_operator():
+	return $Operator
+	
 #------------------------------------------
 func spawn(position):
 	print("Map clicked: ", position)

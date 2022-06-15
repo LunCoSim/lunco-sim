@@ -11,9 +11,6 @@
 script = ExtResource( 6 )
 
 [node name="Avatar" parent="." instance=ExtResource( 4 )]
-Player = NodePath("../Player")
-Spacecraft = NodePath("../SpacecraftControl")
-Operator = NodePath("../Operator")
 
 [node name="Player" parent="." instance=ExtResource( 7 )]
 

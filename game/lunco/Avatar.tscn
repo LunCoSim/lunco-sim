@@ -144,9 +144,6 @@ transitions = {
 
 [node name="Avatar" type="Node"]
 script = ExtResource( 2 )
-Player = NodePath("../World/Player")
-Spacecraft = NodePath("../World/SpacecraftControl")
-Operator = NodePath("../World/Operator")
 
 [node name="State" type="Node" parent="."]
 script = ExtResource( 4 )

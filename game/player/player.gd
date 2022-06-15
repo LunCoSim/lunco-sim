@@ -93,6 +93,8 @@ func _ready():
 	# Pre-initialize orientation transform.
 	orientation = player_model.global_transform
 	orientation.origin = Vector3()
+	
+	
 
 func _process(delta):
 	#TBD: add tolerance timer + probably move to physics
@@ -264,5 +266,5 @@ func _on_StatePlayer_transited(from, to):
 #			camera_node.set_aiming(true)
 			pass
 		"Idle":
-			pass
+			motion_target = Vector3.ZERO
 

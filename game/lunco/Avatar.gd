@@ -1,9 +1,5 @@
 extends lnSpaceSystem
 
-export (NodePath) var Player
-export (NodePath) var Spacecraft
-export (NodePath) var Operator
-
 #-------------------------------
 const MOUSE_SENSITIVITY = 0.1
 const RAY_LENGTH = 10000
@@ -12,6 +8,10 @@ const RAY_LENGTH = 10000
 
 var ward: Node
 var mouse_control := false
+
+var player
+var spacecraft
+var operator
 
 #-------------------------------
 
@@ -39,7 +39,6 @@ func set_ui(_ui):
 func clear_ui():
 	for n in ui.get_children():
 		ui.remove_child(n)
-		n.queue_free()
 
 #-------------------------------
 
@@ -52,6 +51,11 @@ func clear_ui():
 # Avatar could list all cameras
 # Avatar could list all objects. Some of them could be controlled e.g. command send
 # Matrix itself is a space system and can perform commands
+
+func _ready():
+	player = matrix.get_player()
+	spacecraft = matrix.get_spacecraft()
+	operator = matrix.get_operator()
 	
 func _input(event):
 	
@@ -165,11 +169,11 @@ func _input(event):
 func _on_State_transited(from, to):
 	match to:
 		"Player":
-			set_ward(get_node(Player))
+			set_ward(player)
 		"Spacecraft":
-			set_ward(get_node(Spacecraft))
+			set_ward(spacecraft)
 		"Operator":
-			set_ward(get_node(Operator))
+			set_ward(operator)
 			
 	camera.set_target(ward)
 
