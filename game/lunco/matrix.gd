@@ -53,3 +53,14 @@ var LocalTime
 
 # Fields can be integrated and differinciated 
 
+func create_object():
+	pass
+
+func get_players():
+	pass
+	
+func get_rockets():
+	pass
+	
+func get_operators():
+	pass
