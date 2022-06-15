@@ -6,7 +6,7 @@ const RAY_LENGTH = 10000
 
 #-------------------------------
 
-var ward: Node
+var target: Node
 var mouse_control := false
 
 var player
@@ -22,9 +22,9 @@ onready var camera := $SpringArmCamera
 
 #-------------------------------
 
-func set_ward(_ward):
-	ward = _ward
-	return ward
+func set_target(_target):
+	target = _target
+	return target
 
 func set_camera(_camera):
 	camera = _camera
@@ -104,8 +104,8 @@ func _input(event):
 		if camera_move.length_squared() > 0.0:
 			cam.rotate_relative(camera_move)
 	
-	if ward is lnPlayer:
-		var player: lnPlayer = ward
+	if target is lnPlayer:
+		var player: lnPlayer = target
 		
 		if not player:
 			return
@@ -134,8 +134,8 @@ func _input(event):
 			player.set_camera_x_rot(cam.camera_x_rot)
 			player.set_camera_basis(cam.get_plain_basis())
 				
-	elif ward is lnSpacecraft:
-		var spacecraft: lnSpacecraft = ward
+	elif target is lnSpacecraft:
+		var spacecraft: lnSpacecraft = target
 		
 		if Input.is_action_just_pressed("throttle"):
 			spacecraft.throttle(true)
@@ -150,9 +150,9 @@ func _input(event):
 		
 		spacecraft.change_orientation(torque)
 			
-	elif ward is lnOperator:
+	elif target is lnOperator:
 		var cam: SpringArmCamera = camera
-		var operator: lnOperator = ward
+		var operator: lnOperator = target
 		
 		if Input.is_action_just_pressed("reset_position"):
 			operator.reset_position();
@@ -169,16 +169,16 @@ func _on_State_transited(from, to):
 	var _ui = null
 	match to:
 		"Player":
-			set_ward(player)
+			set_target(player)
 		"Spacecraft":
-			set_ward(spacecraft)
+			set_target(spacecraft)
 			_ui = preload("res://ui/spacecraft-ui.tscn").instance()
 			
 		"Operator":
-			set_ward(operator)
+			set_target(operator)
 			
 	set_ui(_ui)
 	if _ui:
-		_ui.set_target(ward)
-	camera.set_target(ward)
+		_ui.set_target(target)
+	camera.set_target(target)
 
