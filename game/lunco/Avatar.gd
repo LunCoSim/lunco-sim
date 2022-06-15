@@ -17,6 +17,8 @@ export (NodePath) var Inputs
 
 #-------------------------------
 const MOUSE_SENSITIVITY = 0.1
+const RAY_LENGTH = 10000
+
 #-------------------------------
 
 var ward: Node
@@ -27,6 +29,7 @@ var mouse_control := false
 
 onready var ui = $UI
 onready var state := $State
+onready var matrix: lnMatrix = get_parent()
 
 #-------------------------------
 
@@ -58,18 +61,16 @@ func _mouse_clicked(obj, coords):
 # Matrix itself is a space system and can perform commands
 	
 func _input(event):
-	print("_Input: ", event)
-	if event is InputEventMouseButton:
+	if event is InputEventMouseButton and event.pressed and event.button_index == 1:
 		var e: InputEventMouseButton = event
+		var position = e.position
 		
-		var mousePos = e.position
-		
-		var space = get_parent().get_world().direct_space_state
-		var collision_objects = space.intersect_point(mousePos, 1)
-		if collision_objects:
-			print(collision_objects[0].collider.name)
-		else:
-			print("no hit")
+		if camera:  
+			var from = camera.project_ray_origin(position)
+			var to = from + camera.project_ray_normal(position) * RAY_LENGTH	
+			var res = matrix.ray_cast(from, to)
+			print(res)
+			
 			
 	if Input.is_action_just_pressed("select_player"):
 		state.set_trigger("player")

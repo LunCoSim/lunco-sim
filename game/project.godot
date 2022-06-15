@@ -224,7 +224,7 @@ _global_script_classes=[ {
 "language": "GDScript",
 "path": "res://addons/godot-next/global/inspector_controls.gd"
 }, {
-"base": "Spatial",
+"base": "lnSpaceSystem",
 "class": "LnMap",
 "language": "GDScript",
 "path": "res://maps/ln-map.gd"
@@ -524,7 +524,7 @@ _global_script_classes=[ {
 "language": "GDScript",
 "path": "res://lunco/processor.gd"
 }, {
-"base": "Node",
+"base": "Spatial",
 "class": "lnSpaceSystem",
 "language": "GDScript",
 "path": "res://lunco/space-system.gd"

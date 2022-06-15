@@ -45,4 +45,4 @@ camera_basis = Vector3( 0, 3, 0 )
 
 [node name="Terrain" parent="." instance=ExtResource( 3 )]
 
-[connection signal="clicked" from="Terrain" to="." method="_on_Terrain_clicked"]
+[node name="_World" type="Spatial" parent="."]

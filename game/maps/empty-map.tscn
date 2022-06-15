@@ -12,6 +12,3 @@ script = ExtResource( 2 )
 [node name="Objects" type="Node" parent="LunarSurface"]
 
 [node name="Buildings" type="Node" parent="LunarSurface/Objects"]
-
-[connection signal="clicked" from="." to="." method="_on_EmptyMap_clicked"]
-[connection signal="input_event" from="LunarSurface" to="." method="_on_Surface_input_event"]

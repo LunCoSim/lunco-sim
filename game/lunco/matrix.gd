@@ -55,6 +55,11 @@ onready var player = $Player
 
 # Fields can be integrated and differinciated 
 
+func ray_cast(from, to):
+	var space_state  = $_World.get_world().direct_space_state
+	
+	return space_state.intersect_ray(from, to)
+	
 func create_object():
 	pass
 
