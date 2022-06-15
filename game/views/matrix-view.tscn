@@ -2,7 +2,7 @@
 
 [ext_resource path="res://controls/spacecraft/spacecraft-controller.tscn" type="PackedScene" id=1]
 [ext_resource path="res://addons/lunco-cameras/gimbal-camera/gimbal-camera.tscn" type="PackedScene" id=2]
-[ext_resource path="res://maps/empty-map.tscn" type="PackedScene" id=3]
+[ext_resource path="res://maps/demo-map.tscn" type="PackedScene" id=3]
 [ext_resource path="res://lunco/Avatar.tscn" type="PackedScene" id=4]
 [ext_resource path="res://views/code/world.gd" type="Script" id=5]
 [ext_resource path="res://player/player.tscn" type="PackedScene" id=7]
@@ -37,6 +37,8 @@ target = NodePath("..")
 CAMERA_CONTROLLER_ROTATION_SPEED = 7.0
 camera_basis = Vector3( 0, 3, 0 )
 
-[node name="EmptyMap" parent="World" instance=ExtResource( 3 )]
+[node name="Terrain" parent="World" instance=ExtResource( 3 )]
 
 [node name="Avatar" parent="." instance=ExtResource( 4 )]
+
+[connection signal="clicked" from="World/Terrain" to="World" method="_on_Terrain_clicked"]
