@@ -20,6 +20,6 @@ transform = Transform( 1, 0, 1.11022e-16, 0, -0.0551419, 0.998479, 0, -0.998479,
 [node name="Operator" parent="." instance=ExtResource( 8 )]
 transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 0.779129, 0, 11.4547 )
 
-[node name="Terrain" parent="." instance=ExtResource( 3 )]
-
 [node name="_World" type="Spatial" parent="."]
+
+[node name="Terrain" parent="." instance=ExtResource( 3 )]

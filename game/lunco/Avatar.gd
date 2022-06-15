@@ -134,7 +134,7 @@ func _input(event):
 			player.set_camera_x_rot(cam.camera_x_rot)
 			player.set_camera_basis(cam.get_plain_basis())
 				
-	elif ward is lnSpaceSystem:
+	elif ward is lnSpacecraft:
 		var spacecraft: lnSpacecraft = ward
 		
 		if Input.is_action_just_pressed("throttle"):

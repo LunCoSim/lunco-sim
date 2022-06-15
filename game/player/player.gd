@@ -222,12 +222,12 @@ func start_move(direction: Vector2, orientation: Vector3):
 	pass
 	
 func stop():
-	motion_target = Vector3.ZERO
 	state.set_trigger("stop")
 	
 func move(direction: Vector3, orientation=null):
-	motion_target = direction
 	state.set_trigger("move")
+	if state.current == "Idle":
+		motion_target = direction
 	
 func jump():
 	state.set_trigger("jump")

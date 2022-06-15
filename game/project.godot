@@ -224,11 +224,6 @@ _global_script_classes=[ {
 "language": "GDScript",
 "path": "res://addons/godot-next/global/inspector_controls.gd"
 }, {
-"base": "lnSpaceSystem",
-"class": "LnMap",
-"language": "GDScript",
-"path": "res://lunco/map.gd"
-}, {
 "base": "Reference",
 "class": "MenuManager",
 "language": "GDScript",
@@ -500,6 +495,11 @@ _global_script_classes=[ {
 "path": "res://lunco/gravitation-field.gd"
 }, {
 "base": "lnSpaceSystem",
+"class": "lnMap",
+"language": "GDScript",
+"path": "res://lunco/map.gd"
+}, {
+"base": "lnSpaceSystem",
 "class": "lnMatrix",
 "language": "GDScript",
 "path": "res://lunco/matrix.gd"
@@ -578,7 +578,6 @@ _global_script_class_icons={
 "Icons": "",
 "Inflector": "",
 "InspectorControls": "",
-"LnMap": "",
 "MenuManager": "",
 "MessageDispatcher": "",
 "MessageDispatcherWrapper": "",
@@ -633,6 +632,7 @@ _global_script_class_icons={
 "lnCommand": "",
 "lnField": "",
 "lnGravitationField": "",
+"lnMap": "",
 "lnMatrix": "",
 "lnOperator": "",
 "lnPlayer": "",

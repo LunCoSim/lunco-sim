@@ -1,3 +1,3 @@
-class_name LnMap
+class_name lnMap
 extends lnSpaceSystem
 
