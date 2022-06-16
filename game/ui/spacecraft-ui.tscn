@@ -11,9 +11,9 @@ script = ExtResource( 1 )
 
 [node name="HUD" type="VBoxContainer" parent="."]
 margin_left = 32.0
-margin_top = 792.0
+margin_top = 790.0
 margin_right = 656.0
-margin_bottom = 1008.0
+margin_bottom = 1006.0
 
 [node name="Position" type="Label" parent="HUD"]
 margin_right = 624.0

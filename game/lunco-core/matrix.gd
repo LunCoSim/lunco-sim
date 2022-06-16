@@ -82,9 +82,8 @@ func get_operator():
 	return $Operator
 	
 #------------------------------------------
-func spawn(position):
-	print("Map clicked: ", position)
-	var scene = load("res://addons/lunco-content/spacex-starship/source/SpaceX_Starship.fbx")
+func spawn(position, path="res://addons/lunco-content/spacex-starship/source/SpaceX_Starship.fbx"):
+	var scene = load(path)
 	var instance = scene.instance()
 	
 	instance.translation = position

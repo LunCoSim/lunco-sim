@@ -58,19 +58,7 @@ func _ready():
 	operator = matrix.get_operator()
 	
 func _input(event):
-	
-	if event is InputEventMouseButton and event.pressed and event.button_index == 1:
-		var e: InputEventMouseButton = event
-		var position = e.position
-		
-		if camera:  
-			var from = camera.project_ray_origin(position)
-			var to = from + camera.project_ray_normal(position) * RAY_LENGTH	
-			var res = matrix.ray_cast(from, to)
-			if res:
-				matrix.spawn(res["position"])
-			
-			
+
 	if Input.is_action_just_pressed("select_player"):
 		state.set_trigger("player")
 	elif Input.is_action_just_pressed("select_spacecraft"):
@@ -165,6 +153,17 @@ func _input(event):
 
 		operator.move(motion_direction)
 		operator.orient(cam.get_plain_basis())
+		
+		if event is InputEventMouseButton and event.pressed and event.button_index == 1:
+			var e: InputEventMouseButton = event
+			var position = e.position
+			
+			if camera:  
+				var from = camera.project_ray_origin(position)
+				var to = from + camera.project_ray_normal(position) * RAY_LENGTH	
+				var res = matrix.ray_cast(from, to)
+				if res:
+					matrix.spawn(res["position"], "res://addons/lunco-content/moonwards/buildings/android-kiosk/android-kiosk.escn")
 
 func _on_State_transited(from, to):
 	var _ui = null
