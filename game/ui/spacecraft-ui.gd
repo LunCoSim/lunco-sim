@@ -29,15 +29,20 @@ func _ready():
 
 func _on_UpdateUI_timeout():
 	if target:
-		position_lbl.text = "Position: " + str(target.transform.origin) + " Abs: " + str(target.transform.origin.length())
-		direction_lbl.text = "Orientation: " + str(target.rotation)
+		var vec = target.transform.origin
+		position_lbl.text = "Position: (%.2f, %.2f, %.2f) Abs: %.2f" % [vec.x, vec.y, vec.z, vec.length()]
+		vec = target.rotation
+		direction_lbl.text = "Orientation: (%.2f, %.2f, %.2f)" % [vec.x, vec.y, vec.z]
 		
-		velocity_lbl.text = "Velocity: " + str(target.linear_velocity) + " Abs: " + str(target.linear_velocity.length())
-		angvelocity_lbl.text = "AngVelocity: " + str(target.angular_velocity) + " Abs: " + str(target.angular_velocity.length())
+		vec = target.linear_velocity
+		velocity_lbl.text = "Velocity: (%.2f, %.2f, %.2f) Abs: %.2f" % [vec.x, vec.y, vec.z, vec.length()]
+		
+		vec = target.angular_velocity
+		angvelocity_lbl.text = "AngVelocity: (%.2f, %.2f, %.2f) Abs: %.2f" % [vec.x, vec.y, vec.z, vec.length()]
 		
 		#change 100 to delta
 		var acc = (target.linear_velocity - prev_velocity) / 100
-		acceleration_lbl.text = "Acceleration: " + str(acc) + " Abs: " + str(acc.length())
+		acceleration_lbl.text = "Acceleration: (%.2f, %.2f, %.2f) Abs: %.2f" % [acc.x, acc.y, acc.z, acc.length()]
 		prev_velocity = target.linear_velocity
 
 func _on_HideControls_timeout():

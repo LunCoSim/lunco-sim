@@ -15,7 +15,7 @@ var operator
 
 #-------------------------------
 
-onready var ui := $UI
+onready var ui := $UI/Target
 onready var state := $State
 onready var matrix: lnMatrix = get_parent()
 onready var camera := $SpringArmCamera
