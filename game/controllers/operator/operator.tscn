@@ -1,6 +1,6 @@
 [gd_scene load_steps=5 format=2]
 
-[ext_resource path="res://controls/operator/operator.gd" type="Script" id=1]
+[ext_resource path="res://controllers/operator/operator.gd" type="Script" id=1]
 
 [sub_resource type="SphereMesh" id=1]
 radius = 0.5

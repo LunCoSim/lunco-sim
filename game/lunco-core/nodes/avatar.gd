@@ -158,12 +158,13 @@ func _input(event):
 			operator.reset_position();
 
 		var motion_direction := Vector3(
-			Input.get_action_strength("move_right") - Input.get_action_strength("move_left"),
+			Input.get_action_strength("move_left") - Input.get_action_strength("move_right"),
 			Input.get_action_strength("move_up") - Input.get_action_strength("move_down"),
-			Input.get_action_strength("move_back") - Input.get_action_strength("move_forward")
+			Input.get_action_strength("move_forward") - Input.get_action_strength("move_back")
 		)
 
 		operator.move(motion_direction)
+		operator.orient(cam.get_plain_basis())
 
 func _on_State_transited(from, to):
 	var _ui = null
@@ -182,4 +183,3 @@ func _on_State_transited(from, to):
 	if _ui:
 		_ui.set_target(target)
 	camera.set_target(target)
-

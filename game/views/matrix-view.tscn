@@ -1,11 +1,11 @@
 [gd_scene load_steps=7 format=2]
 
-[ext_resource path="res://controls/spacecraft/spacecraft-controller.tscn" type="PackedScene" id=1]
+[ext_resource path="res://controllers/spacecraft/spacecraft-controller.tscn" type="PackedScene" id=1]
 [ext_resource path="res://maps/demo-map.tscn" type="PackedScene" id=3]
-[ext_resource path="res://lunco-core/Avatar.tscn" type="PackedScene" id=4]
+[ext_resource path="res://lunco-core/nodes/avatar.tscn" type="PackedScene" id=4]
 [ext_resource path="res://lunco-core/matrix.gd" type="Script" id=6]
 [ext_resource path="res://player/player.tscn" type="PackedScene" id=7]
-[ext_resource path="res://controls/operator/operator.tscn" type="PackedScene" id=8]
+[ext_resource path="res://controllers/operator/operator.tscn" type="PackedScene" id=8]
 
 [node name="Matrix" type="Node"]
 script = ExtResource( 6 )

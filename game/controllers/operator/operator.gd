@@ -7,11 +7,11 @@ export var JUMP_SPEED = 2
 export var ACCELERATION = 50
 export var DECELERATION = 50
 
-onready var gravity = 0
 onready var start_position = translation
 
-var velocity: Vector3
-var dir = Vector3()
+var velocity := Vector3.ZERO
+var dir := Vector3.ZERO
+var orientation := Basis.IDENTITY
 
 # Commands
 # reset_position
@@ -19,17 +19,12 @@ var dir = Vector3()
 	
 		
 func _physics_process(delta):
-	
-	dir = dir.normalized()
-
-	# Apply gravity.
-	velocity.y += delta * gravity
 
 	# Using only the horizontal velocity, interpolate towards the input.
 	var hvel = velocity
 	hvel.y = 0
 
-	var target_dir = dir * MAX_SPEED
+	var target_dir = orientation * dir * MAX_SPEED
 	var acceleration
 	if dir.dot(hvel) > 0:
 		acceleration = ACCELERATION
@@ -51,4 +46,7 @@ func reset_position():
 	translation = start_position
 
 func move(direction):
-	dir = direction
+	dir = direction.normalized()
+	
+func orient(_orientation):
+	orientation = _orientation

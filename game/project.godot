@@ -507,7 +507,7 @@ _global_script_classes=[ {
 "base": "KinematicBody",
 "class": "lnOperator",
 "language": "GDScript",
-"path": "res://controls/operator/operator.gd"
+"path": "res://controllers/operator/operator.gd"
 }, {
 "base": "KinematicBody",
 "class": "lnPlayer",
@@ -527,7 +527,7 @@ _global_script_classes=[ {
 "base": "RigidBody",
 "class": "lnSpacecraft",
 "language": "GDScript",
-"path": "res://controls/spacecraft/spacecraft-controller.gd"
+"path": "res://controllers/spacecraft/spacecraft-controller.gd"
 }, {
 "base": "Node",
 "class": "lnVector4D",
