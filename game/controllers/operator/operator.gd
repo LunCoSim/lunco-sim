@@ -20,23 +20,16 @@ var orientation := Basis.IDENTITY
 		
 func _physics_process(delta):
 
-	# Using only the horizontal velocity, interpolate towards the input.
-	var hvel = velocity
-	hvel.y = 0
-
 	var target_dir = orientation * dir * MAX_SPEED
 	var acceleration
-	if dir.dot(hvel) > 0:
+	
+	if dir.dot(velocity) > 0:
 		acceleration = ACCELERATION
 	else:
 		acceleration = DECELERATION
 
-	hvel = hvel.linear_interpolate(target_dir, acceleration * delta)
+	velocity = velocity.linear_interpolate(target_dir, acceleration * delta)
 
-	# Assign hvel's values back to velocity, and then move.
-	velocity.x = hvel.x
-	velocity.z = hvel.z
-	velocity.y = hvel.y
 	velocity = move_and_slide(velocity, Vector3.UP)
 
 	
