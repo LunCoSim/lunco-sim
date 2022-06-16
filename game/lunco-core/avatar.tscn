@@ -1,0 +1,158 @@
+[gd_scene load_steps=26 format=2]
+
+[ext_resource path="res://addons/lunco-cameras/spring-arm-camera/spring-arm-camera.tscn" type="PackedScene" id=1]
+[ext_resource path="res://lunco-core/Avatar.gd" type="Script" id=2]
+[ext_resource path="res://addons/imjp94.yafsm/src/StateMachinePlayer.gd" type="Script" id=4]
+[ext_resource path="res://addons/imjp94.yafsm/src/states/State.gd" type="Script" id=5]
+[ext_resource path="res://addons/imjp94.yafsm/src/states/StateMachine.gd" type="Script" id=6]
+[ext_resource path="res://addons/imjp94.yafsm/src/transitions/Transition.gd" type="Script" id=7]
+[ext_resource path="res://addons/imjp94.yafsm/src/conditions/Condition.gd" type="Script" id=8]
+
+[sub_resource type="Resource" id=21]
+script = ExtResource( 5 )
+__meta__ = {
+"graph_offset": Vector2( 370, 154.5 )
+}
+name = "Entry"
+
+[sub_resource type="Resource" id=31]
+script = ExtResource( 5 )
+__meta__ = {
+"graph_offset": Vector2( 488.5, 434.5 )
+}
+name = "Operator"
+
+[sub_resource type="Resource" id=22]
+script = ExtResource( 5 )
+__meta__ = {
+"graph_offset": Vector2( 688, 94.5 )
+}
+name = "Player"
+
+[sub_resource type="Resource" id=23]
+script = ExtResource( 5 )
+__meta__ = {
+"graph_offset": Vector2( 902, 276.5 )
+}
+name = "Spacecraft"
+
+[sub_resource type="Resource" id=25]
+script = ExtResource( 7 )
+from = "Entry"
+to = "Player"
+conditions = {
+}
+
+[sub_resource type="Resource" id=38]
+script = ExtResource( 8 )
+name = "player"
+
+[sub_resource type="Resource" id=39]
+script = ExtResource( 7 )
+from = "Operator"
+to = "Player"
+conditions = {
+"player": SubResource( 38 )
+}
+
+[sub_resource type="Resource" id=36]
+script = ExtResource( 8 )
+name = "spacecraft"
+
+[sub_resource type="Resource" id=37]
+script = ExtResource( 7 )
+from = "Operator"
+to = "Spacecraft"
+conditions = {
+"spacecraft": SubResource( 36 )
+}
+
+[sub_resource type="Resource" id=32]
+script = ExtResource( 8 )
+name = "operator"
+
+[sub_resource type="Resource" id=33]
+script = ExtResource( 7 )
+from = "Player"
+to = "Operator"
+conditions = {
+"operator": SubResource( 32 )
+}
+
+[sub_resource type="Resource" id=26]
+script = ExtResource( 8 )
+name = "spacecraft"
+
+[sub_resource type="Resource" id=27]
+script = ExtResource( 7 )
+from = "Player"
+to = "Spacecraft"
+conditions = {
+"spacecraft": SubResource( 26 )
+}
+
+[sub_resource type="Resource" id=34]
+script = ExtResource( 8 )
+name = "operator"
+
+[sub_resource type="Resource" id=35]
+script = ExtResource( 7 )
+from = "Spacecraft"
+to = "Operator"
+conditions = {
+"operator": SubResource( 34 )
+}
+
+[sub_resource type="Resource" id=28]
+script = ExtResource( 8 )
+name = "player"
+
+[sub_resource type="Resource" id=29]
+script = ExtResource( 7 )
+from = "Spacecraft"
+to = "Player"
+conditions = {
+"player": SubResource( 28 )
+}
+
+[sub_resource type="Resource" id=30]
+script = ExtResource( 6 )
+name = ""
+states = {
+"Entry": SubResource( 21 ),
+"Operator": SubResource( 31 ),
+"Player": SubResource( 22 ),
+"Spacecraft": SubResource( 23 )
+}
+transitions = {
+"Entry": {
+"Player": SubResource( 25 )
+},
+"Operator": {
+"Player": SubResource( 39 ),
+"Spacecraft": SubResource( 37 )
+},
+"Player": {
+"Operator": SubResource( 33 ),
+"Spacecraft": SubResource( 27 )
+},
+"Spacecraft": {
+"Operator": SubResource( 35 ),
+"Player": SubResource( 29 )
+}
+}
+
+[node name="Avatar" type="Node"]
+script = ExtResource( 2 )
+
+[node name="State" type="Node" parent="."]
+script = ExtResource( 4 )
+state_machine = SubResource( 30 )
+
+[node name="SpringArmCamera" parent="." instance=ExtResource( 1 )]
+
+[node name="UI" type="Control" parent="."]
+margin_right = 40.0
+margin_bottom = 40.0
+
+[connection signal="transited" from="State" to="." method="_on_State_transited"]
