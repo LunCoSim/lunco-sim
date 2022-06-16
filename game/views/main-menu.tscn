@@ -31,34 +31,34 @@ theme = ExtResource( 5 )
 script = ExtResource( 3 )
 
 [node name="Surface Operations" type="Button" parent="Menu"]
-margin_right = 387.0
+margin_right = 267.0
 margin_bottom = 44.0
 rect_pivot_offset = Vector2( -78, 5 )
 size_flags_horizontal = 5
 size_flags_vertical = 4
 theme = ExtResource( 5 )
 custom_fonts/font = ExtResource( 4 )
-text = "Surface Operations"
+text = "New Game"
 
 [node name="Spaceflight" type="Button" parent="Menu"]
 margin_top = 48.0
-margin_right = 387.0
+margin_right = 267.0
 margin_bottom = 92.0
 rect_pivot_offset = Vector2( -78, 5 )
 size_flags_horizontal = 5
 size_flags_vertical = 4
 theme = ExtResource( 5 )
 custom_fonts/font = ExtResource( 4 )
-text = "SpaceFlight"
+text = "Select map"
 
 [node name="Panel" type="Panel" parent="Menu"]
 margin_top = 96.0
-margin_right = 387.0
+margin_right = 267.0
 margin_bottom = 96.0
 
 [node name="ModelBrowser" type="Button" parent="Menu"]
 margin_top = 100.0
-margin_right = 387.0
+margin_right = 267.0
 margin_bottom = 144.0
 rect_pivot_offset = Vector2( -78, 5 )
 size_flags_horizontal = 5
@@ -69,28 +69,28 @@ text = "3D Models Browser"
 
 [node name="Panel2" type="Panel" parent="Menu"]
 margin_top = 148.0
-margin_right = 387.0
+margin_right = 267.0
 margin_bottom = 148.0
 
 [node name="Trajectory Planning" type="Button" parent="Menu"]
 margin_top = 152.0
-margin_right = 387.0
+margin_right = 267.0
 margin_bottom = 196.0
 rect_pivot_offset = Vector2( -78, 5 )
 size_flags_horizontal = 5
 size_flags_vertical = 4
 theme = ExtResource( 5 )
 custom_fonts/font = ExtResource( 4 )
-text = "Trajectory Planning (TBD)"
+text = "Tutorial (TBD)"
 
 [node name="Panel3" type="Panel" parent="Menu"]
 margin_top = 200.0
-margin_right = 387.0
+margin_right = 267.0
 margin_bottom = 200.0
 
 [node name="Help" type="Button" parent="Menu"]
 margin_top = 204.0
-margin_right = 387.0
+margin_right = 267.0
 margin_bottom = 248.0
 rect_pivot_offset = Vector2( -78, 5 )
 size_flags_horizontal = 5
@@ -101,7 +101,7 @@ text = "Help (TBD)"
 
 [node name="Settings" type="Button" parent="Menu"]
 margin_top = 252.0
-margin_right = 387.0
+margin_right = 267.0
 margin_bottom = 296.0
 rect_pivot_offset = Vector2( -78, 5 )
 size_flags_horizontal = 5
@@ -112,7 +112,7 @@ text = "Settings (TBD)"
 
 [node name="Exit" type="Button" parent="Menu"]
 margin_top = 300.0
-margin_right = 387.0
+margin_right = 267.0
 margin_bottom = 344.0
 rect_pivot_offset = Vector2( -78, 5 )
 size_flags_horizontal = 5
