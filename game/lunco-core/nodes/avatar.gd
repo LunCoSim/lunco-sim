@@ -13,6 +13,8 @@ var player
 var spacecraft
 var operator
 
+var spawn_model_path = "res://addons/lunco-content/moonwards/buildings/android-kiosk/android-kiosk.escn"
+
 #-------------------------------
 
 onready var ui := $UI/Target
@@ -163,7 +165,7 @@ func _input(event):
 				var to = from + camera.project_ray_normal(position) * RAY_LENGTH	
 				var res = matrix.ray_cast(from, to)
 				if res:
-					matrix.spawn(res["position"], "res://addons/lunco-content/moonwards/buildings/android-kiosk/android-kiosk.escn")
+					matrix.spawn(res["position"], spawn_model_path)
 
 func _on_State_transited(from, to):
 	var _ui = null
@@ -177,8 +179,13 @@ func _on_State_transited(from, to):
 		"Operator":
 			set_target(operator)
 			_ui = preload("res://ui/operator-ui.tscn").instance()
+			_ui.connect("model_selected", self, "_on_select_model")
 			
 	set_ui(_ui)
 	if _ui:
 		_ui.set_target(target)
 	camera.set_target(target)
+
+func _on_select_model(path):
+	print("_on_select_model: ", path)
+	spawn_model_path = path

@@ -1,7 +1,9 @@
-[gd_scene load_steps=3 format=2]
+[gd_scene load_steps=5 format=2]
 
 [ext_resource path="res://ui/operator-ui.gd" type="Script" id=1]
 [ext_resource path="res://assets/fonts/ui_font_outline.tres" type="DynamicFont" id=2]
+[ext_resource path="res://assets/fonts/ui_font.tres" type="DynamicFont" id=3]
+[ext_resource path="res://assets/fonts_theme.theme" type="Theme" id=4]
 
 [node name="OperatorUI" type="Control"]
 anchor_right = 1.0
@@ -51,3 +53,13 @@ custom_colors/font_outline_modulate = Color( 0, 0, 0, 1 )
 custom_colors/font_color_shadow = Color( 0, 0, 0, 1 )
 custom_fonts/font = ExtResource( 2 )
 text = "Spawn: click on terrain"
+
+[node name="Files" type="Tree" parent="."]
+margin_left = 24.0
+margin_top = 606.0
+margin_right = 544.0
+margin_bottom = 1045.0
+theme = ExtResource( 4 )
+custom_fonts/font = ExtResource( 3 )
+
+[connection signal="cell_selected" from="Files" to="." method="_on_Files_cell_selected"]

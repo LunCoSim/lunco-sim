@@ -883,5 +883,5 @@ common/enable_pause_aware_picking=true
 threads/thread_model=2
 vram_compression/import_etc=true
 vram_compression/import_etc2=false
-quality/filters/msaa=1
+quality/filters/msaa=3
 environment/default_environment="res://assets/default_env.tres"
