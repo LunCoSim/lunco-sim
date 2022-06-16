@@ -226,8 +226,7 @@ func stop():
 	
 func move(direction: Vector3, orientation=null):
 	state.set_trigger("move")
-	if state.current == "Idle":
-		motion_target = direction
+	motion_target = direction
 	
 func jump():
 	state.set_trigger("jump")
