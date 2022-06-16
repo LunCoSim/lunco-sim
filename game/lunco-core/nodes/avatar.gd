@@ -58,9 +58,21 @@ func _ready():
 	player = matrix.get_player()
 	spacecraft = matrix.get_spacecraft()
 	operator = matrix.get_operator()
-	
-func _input(event):
 
+func _unhandled_input(event):
+	if target is lnOperator:
+		if event is InputEventMouseButton and event.pressed and event.button_index == 1:
+			var e: InputEventMouseButton = event
+			var position = e.position
+			
+			if camera:  
+				var from = camera.project_ray_origin(position)
+				var to = from + camera.project_ray_normal(position) * RAY_LENGTH	
+				var res = matrix.ray_cast(from, to)
+				if res:
+					matrix.spawn(res["position"], spawn_model_path)
+					
+func _input(event):
 	if Input.is_action_just_pressed("select_player"):
 		state.set_trigger("player")
 	elif Input.is_action_just_pressed("select_spacecraft"):
@@ -155,17 +167,6 @@ func _input(event):
 
 		operator.move(motion_direction)
 		operator.orient(cam.get_plain_basis())
-		
-		if event is InputEventMouseButton and event.pressed and event.button_index == 1:
-			var e: InputEventMouseButton = event
-			var position = e.position
-			
-			if camera:  
-				var from = camera.project_ray_origin(position)
-				var to = from + camera.project_ray_normal(position) * RAY_LENGTH	
-				var res = matrix.ray_cast(from, to)
-				if res:
-					matrix.spawn(res["position"], spawn_model_path)
 
 func _on_State_transited(from, to):
 	var _ui = null
