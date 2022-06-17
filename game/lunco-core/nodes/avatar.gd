@@ -17,7 +17,7 @@ var spawn_model_path = "res://addons/lunco-content/moonwards/buildings/android-k
 
 #-------------------------------
 
-onready var ui := $UI/Target
+onready var ui := $UI/TargetUI
 onready var state := $State
 onready var matrix: lnMatrix = get_parent()
 onready var camera := $SpringArmCamera
@@ -174,13 +174,16 @@ func _on_State_transited(from, to):
 		"Player":
 			set_target(player)
 			_ui = preload("res://ui/player-ui.tscn").instance()
+			$UI/Target.text = "Target: Player"
 		"Spacecraft":
 			set_target(spacecraft)
 			_ui = preload("res://ui/spacecraft-ui.tscn").instance()
+			$UI/Target.text = "Target: Spacecraft"
 		"Operator":
 			set_target(operator)
 			_ui = preload("res://ui/operator-ui.tscn").instance()
 			_ui.connect("model_selected", self, "_on_select_model")
+			$UI/Target.text = "Target: Operator"
 			
 	set_ui(_ui)
 	if _ui:

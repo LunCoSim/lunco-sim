@@ -156,15 +156,15 @@ state_machine = SubResource( 30 )
 margin_right = 40.0
 margin_bottom = 40.0
 
-[node name="Target" type="Control" parent="UI"]
+[node name="TargetUI" type="Control" parent="UI"]
 margin_right = 40.0
 margin_bottom = 40.0
 
 [node name="Help" type="VBoxContainer" parent="UI"]
-margin_left = 1445.0
-margin_top = 23.0
-margin_right = 1918.0
-margin_bottom = 235.0
+margin_left = 1538.0
+margin_top = 34.0
+margin_right = 2011.0
+margin_bottom = 246.0
 
 [node name="Orientation" type="Label" parent="UI/Help"]
 margin_right = 473.0
@@ -203,5 +203,15 @@ custom_colors/font_outline_modulate = Color( 0, 0, 0, 1 )
 custom_colors/font_color_shadow = Color( 0, 0, 0, 1 )
 custom_fonts/font = ExtResource( 8 )
 text = "Ctrl+` – console "
+
+[node name="Target" type="Label" parent="UI"]
+margin_left = 767.0
+margin_top = 10.0
+margin_right = 1240.0
+margin_bottom = 50.0
+custom_colors/font_outline_modulate = Color( 0, 0, 0, 1 )
+custom_colors/font_color_shadow = Color( 0, 0, 0, 1 )
+custom_fonts/font = ExtResource( 8 )
+text = "Target: "
 
 [connection signal="transited" from="State" to="." method="_on_State_transited"]
