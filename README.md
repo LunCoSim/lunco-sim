@@ -95,18 +95,12 @@ You want to make the Moon forpost of human civilization in space in order to col
     godot 
 
 3. Clone this repo
-4. cd to game/ subfolder
+4. cd to game/ 
 5. Install [Install Godot Package Manager](https://github.com/LunCoSim/godot-package-manager) guide
+    
+    `./gpm_install.sh`
 
-    wget https://raw.githubusercontent.com/LunCoSim/godot-package-manager/master/gpm_init.sh -O - | bash 
-
-6. Type
-
-    chmod +x ./gpm
-
-    ./gpm
-
-7. Run project by clicking on "project.godot" in "game" folder and install all the plugins
+6. Run project by clicking on "project.godot" in "game" folder and install all the plugins
 8. Read [Terms](./docs/TERMS.MD) to understand used terminology
 
 ## Links
