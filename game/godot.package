@@ -126,8 +126,12 @@
 			"version": "0.0.0",
 			"subdir": "addons/ExtraGui"
 		},
-
-		
+		"behavior-tree": {
+			"src": "git",
+			"url": "https://github.com/Jummit/behavior-tree.git",
+			"version": "0.0.0",
+			"subdir": "addons/behavior_tree"
+		},		
 		
 	},
 	"hooks": {

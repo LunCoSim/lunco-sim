@@ -68,5 +68,10 @@
 		"version": "0.0.0",
 		"integrity": "",
 		"path": "res://addons/.cache/GodotExtraGUI/addons/ExtraGui"
+	},
+	"behavior-tree": {
+		"version": "0.0.0",
+		"integrity": "",
+		"path": "res://addons/.cache/behavior-tree/addons/behavior_tree"
 	}
 }
