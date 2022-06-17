@@ -175,15 +175,21 @@ func _on_State_transited(from, to):
 			set_target(player)
 			_ui = preload("res://ui/player-ui.tscn").instance()
 			$UI/Target.text = "Target: Player"
+			camera.remove_excluded_object(spacecraft)
+			camera.set_spring_length(2.5)
 		"Spacecraft":
 			set_target(spacecraft)
 			_ui = preload("res://ui/spacecraft-ui.tscn").instance()
 			$UI/Target.text = "Target: Spacecraft"
+			camera.add_excluded_object(spacecraft)
+			camera.set_spring_length(50)
 		"Operator":
 			set_target(operator)
 			_ui = preload("res://ui/operator-ui.tscn").instance()
 			_ui.connect("model_selected", self, "_on_select_model")
 			$UI/Target.text = "Target: Operator"
+			camera.remove_excluded_object(spacecraft)
+			camera.set_spring_length(2.5)
 			
 	set_ui(_ui)
 	if _ui:
