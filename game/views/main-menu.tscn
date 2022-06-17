@@ -49,7 +49,7 @@ size_flags_horizontal = 5
 size_flags_vertical = 4
 theme = ExtResource( 5 )
 custom_fonts/font = ExtResource( 4 )
-text = "Select map"
+text = "Select map (TBD)"
 
 [node name="Panel" type="Panel" parent="Menu"]
 margin_top = 96.0
