@@ -111,10 +111,10 @@ custom_fonts/font = ExtResource( 2 )
 text = "Rotate camera: RMB or Arrows"
 
 [node name="MET" type="VBoxContainer" parent="."]
-margin_left = 1726.0
-margin_top = 43.0
-margin_right = 1854.0
-margin_bottom = 127.0
+margin_left = 39.0
+margin_top = 410.0
+margin_right = 167.0
+margin_bottom = 494.0
 
 [node name="Stopwatch_Label" type="Label" parent="MET"]
 margin_right = 128.0
