@@ -25,6 +25,8 @@ func _physics_process(delta):
 	add_torque(global_transform.basis.x * torque.x * THRUST_TURN * Z_FRONT)
 	add_torque(global_transform.basis.y * torque.y * THRUST_TURN * Z_FRONT)
 	add_torque(global_transform.basis.z * torque.z * THRUST_ROLL * Z_FRONT)
+	
+	
 
 # ------------
 

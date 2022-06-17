@@ -51,13 +51,6 @@ __meta__ = {
 }
 name = "Param thrust4"
 
-[sub_resource type="Resource" id=13]
-script = ExtResource( 4 )
-__meta__ = {
-"graph_offset": Vector2( 647, 74.5 )
-}
-name = "Param: thrust"
-
 [sub_resource type="Resource" id=45]
 script = ExtResource( 4 )
 __meta__ = {
@@ -71,6 +64,13 @@ __meta__ = {
 "graph_offset": Vector2( -30, -5.5 )
 }
 name = "Param thrust6"
+
+[sub_resource type="Resource" id=13]
+script = ExtResource( 4 )
+__meta__ = {
+"graph_offset": Vector2( 647, 74.5 )
+}
+name = "Param: thrust"
 
 [sub_resource type="Resource" id=14]
 script = ExtResource( 6 )
@@ -120,15 +120,15 @@ state_machine = SubResource( 47 )
 [node name="SpaceX_Starship" parent="." instance=ExtResource( 1 )]
 
 [node name="CollisionShape3" type="CollisionShape" parent="."]
-transform = Transform( -1.19209e-05, -100, 0, 100, -1.19209e-05, 0, 0, 0, 100, 2.49327e-15, 1.24023, -22.4575 )
+transform = Transform( -1.19209e-05, -100, 0, 100, -1.19209e-05, 0, 0, 0, 100, 2.51172e-15, -2.41651, -22.6237 )
 shape = SubResource( 48 )
 
 [node name="CollisionShape2" type="CollisionShape" parent="."]
-transform = Transform( -1.19209e-05, -100, 0, 100, -1.19209e-05, 0, 0, 0, 100, 2.49327e-15, 1.24023, -22.4575 )
+transform = Transform( -1.19209e-05, -100, 0, 100, -1.19209e-05, 0, 0, 0, 100, 2.51172e-15, 0.159829, -22.6237 )
 shape = SubResource( 49 )
 
 [node name="CollisionShape4" type="CollisionShape" parent="."]
-transform = Transform( -1.19209e-05, -100, 0, 100, -1.19209e-05, 0, 0, 0, 100, 2.49327e-15, 1.24023, -22.4575 )
+transform = Transform( -1.19209e-05, -100, 0, 100, -1.19209e-05, 0, 0, 0, 100, 2.51172e-15, 0.159829, -22.6237 )
 shape = SubResource( 50 )
 
 [connection signal="thrust" from="." to="SpaceX_Starship" method="_on_SpacecraftController_thrust"]

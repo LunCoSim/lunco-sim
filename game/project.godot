@@ -509,7 +509,7 @@ _global_script_classes=[ {
 "language": "GDScript",
 "path": "res://controllers/operator/operator.gd"
 }, {
-"base": "Reference",
+"base": "KinematicBody",
 "class": "lnPlayer",
 "language": "GDScript",
 "path": "res://controllers/player/player.gd"
