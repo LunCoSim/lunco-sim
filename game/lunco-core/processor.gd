@@ -1,3 +1,3 @@
 #The one which processes commands
 class_name lnProcessor
-extends lnSpaceSystem
+extends "res://lunco-core/space-system.gd"

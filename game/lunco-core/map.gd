@@ -1,3 +1,4 @@
 class_name lnMap
-extends lnSpaceSystem
+
+extends "res://lunco-core/space-system.gd"
 

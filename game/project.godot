@@ -494,12 +494,12 @@ _global_script_classes=[ {
 "language": "GDScript",
 "path": "res://lunco-core/gravitation-field.gd"
 }, {
-"base": "lnSpaceSystem",
+"base": "Node",
 "class": "lnMap",
 "language": "GDScript",
 "path": "res://lunco-core/map.gd"
 }, {
-"base": "lnSpaceSystem",
+"base": "Node",
 "class": "lnMatrix",
 "language": "GDScript",
 "path": "res://lunco-core/matrix.gd"
@@ -514,7 +514,7 @@ _global_script_classes=[ {
 "language": "GDScript",
 "path": "res://controllers/player/player.gd"
 }, {
-"base": "lnSpaceSystem",
+"base": "Node",
 "class": "lnProcessor",
 "language": "GDScript",
 "path": "res://lunco-core/processor.gd"

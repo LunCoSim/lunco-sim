@@ -1,5 +1,8 @@
 extends Node
 
+var lnSpaceSystem = load("res://lunco-core/space-system.gd")
+
+
 func _ready():
 	print("Autoload ready")	
 	

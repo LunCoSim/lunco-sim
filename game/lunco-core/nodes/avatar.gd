@@ -1,4 +1,8 @@
-extends lnSpaceSystem
+extends "res://lunco-core/space-system.gd"
+
+onready var lnMatrix = preload("res://lunco-core/matrix.gd")
+
+onready var lnOperator = preload("res://controllers/operator/operator.gd")
 
 #-------------------------------
 const MOUSE_SENSITIVITY = 0.1

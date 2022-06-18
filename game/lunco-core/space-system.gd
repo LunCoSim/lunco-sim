@@ -2,6 +2,7 @@
 class_name lnSpaceSystem
 extends Node #TODO: Check if should be node, maybe something else?
 
+
 #Basic parameters inspired by XTCE
 export var Commands = {}
 export var Telemetry = {}
@@ -12,5 +13,5 @@ export var State = {} # Hierarchical state machine
 export var Behaviour = {} # Behaviour tree
 
 #----------------
-func process_command(command: lnCommand) -> bool:
+func process_command(command) -> bool:
 	return true
