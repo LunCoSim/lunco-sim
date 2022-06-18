@@ -144,7 +144,7 @@ margin_top = -51.0
 margin_right = -15.0
 margin_bottom = -11.0
 custom_fonts/font = ExtResource( 6 )
-text = "Version: 0.0.2"
+text = "Version: 0.3.0"
 
 [node name="Label" type="Label" parent="Label"]
 anchor_left = 1.0

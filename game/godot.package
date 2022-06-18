@@ -104,7 +104,7 @@
 
 		"lunco-content": {
 			"src": "git",
-			"url": "git@github.com:LunCoSim/lunco-content.git",
+			"url": "https://github.com/LunCoSim/lunco-content.git",
 			"version": "0.0.0",
 		},
 
