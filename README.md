@@ -8,18 +8,13 @@ An open-source Lunar Colony sim built for **engineers** and **enthusiasts**
 
 Free for **commercial use**.
 
-***[OUR GITCOINT GRANT](https://gitcoin.co/grants/5939/lunco-full-cycle-space-operations-sim-tool)***
-
 *PS Making Kerbal a real thing. Intended for industry applications*
 
 *[DOWNLOAD & PLAY](https://difint.itch.io/lunco)*
 
 *click on the image below to watch first gameplay video on youtube*
 
-[![Third person view](docs/assets/third-person.jpg "Third person view")](https://www.youtube.com/watch?v=nklH7o-TIzY "Third person view! - Click to Watch!")
-
-
-[![First gameplay video](docs/assets/second_screenshot.jpg "First gameplay video")](https://www.youtube.com/watch?v=PmTgnI-z-rY&feature=youtu.be "First gameplay video! - Click to Watch!")
+[![Version 0.3.0 review](docs/assets/gameplay_0.3.jpg "Version 0.3.0 review")](https://youtu.be/qIgf4oArzg0 "Version 0.3.0 review! - Click to Watch!")
 
 ## Features
 * Two game play styles
