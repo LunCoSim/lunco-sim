@@ -33,30 +33,45 @@ Free for **commercial use**.
 ## Quick start
 1. Install [Godot 3.5](https://downloads.tuxfamily.org/godotengine/3.5/)
 2. Install [wget]() if you do not have it
-3. Make sure that it's in PATH, e.g. you can start it from terminal using below command:
+3.  Git LFS installation
+  
+    You can skip this section if **git lfs** is installed
+
+    1. Install git lfs:
+      a. MacOS: 
+
+          `brew install git-lfs`
+
+        b. Other os check [git lfs](https://git-lfs.github.com)
+
+    2. Activate it (need only once on machine):
+
+       `git lfs install`
+
+4. Make sure that it's in PATH, e.g. you can start it from terminal using below command:
    
     godot 
 
-4. Clone this repo in terminal
+5. Clone this repo in terminal
 
     `git clone --depth=1 git@github.com:LunCoSim/lunco-sim.git`
 
-5. Change directory
+6. Change directory
 
     `cd lunco-sim`
 
-6. Install [Install Godot Package Manager](https://github.com/LunCoSim/godot-package-manager) guide and all dependencies
+7. Install [Install Godot Package Manager](https://github.com/LunCoSim/godot-package-manager) guide and all dependencies
     
     `./gpm_install.sh`
 
-7. Run project by clicking on "project.godot" in "game" folder or
+8. Run project by clicking on "project.godot" in "game" folder or
 
     `godot game/project.godot`
 
-8. If you start it for the first time wait till it imports all the dependencies.
-9.  Close Godot. DO NOT SAVE THE PROJECT
-10. Open project again
-11. Run the game
+9.  If you start it for the first time wait till it imports all the dependencies.
+10. Close Godot. DO NOT SAVE THE PROJECT
+11. Open project again
+12. Run the game
 
 ## FOLLOW US
 1. [Twitter](https://twitter.com/LunCoSim)
