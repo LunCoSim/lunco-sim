@@ -12,6 +12,8 @@ Free for **commercial use**.
 
 *[DOWNLOAD & PLAY](https://difint.itch.io/lunco)*
 
+*[Gitcoin Grant](https://gitcoin.co/grants/5939/lunco-full-cycle-space-operations-sim-tool)*
+
 *click on the image below to watch first gameplay video on youtube*
 
 [![Version 0.3.0 review](docs/assets/gameplay_0.3.jpg "Version 0.3.0 review")](https://youtu.be/qIgf4oArzg0 "Version 0.3.0 review! - Click to Watch!")
