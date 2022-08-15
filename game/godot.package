@@ -20,13 +20,14 @@
 			"subdir": "addons/quentincaffeino"
 		},
 		"lunco-cameras": {
-			"src": "tar",
+			"src": "git",
 			"url": "https://github.com/LunCoSim/lunco-cameras",
 			"dist": "https://github.com/LunCoSim/lunco-cameras/archive/refs/tags/v0.1.0.tar.gz",
 		
 			"version": "0.2.1",
 			"filename": "v0.2.1.tar.gz",
-			"integrity": ""
+			"integrity": "",
+			"subdir": "addons/lunco-cameras"
 		},
 		"project-map": {
 			"src": "tar",
