@@ -23,8 +23,7 @@
 			"src": "git",
 			"url": "https://github.com/LunCoSim/lunco-cameras",
 			"version": "0.2.1",
-			"integrity": "",
-			"subdir": "addons/lunco-cameras"
+			"integrity": ""
 		},
 		"project-map": {
 			"src": "tar",

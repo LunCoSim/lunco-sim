@@ -3,6 +3,7 @@
 .import/
 export.cfg
 .godot/
+game/godot.lock
 
 # Mono-specific ignores
 .mono/
