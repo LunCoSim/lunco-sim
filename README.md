@@ -30,17 +30,44 @@ Free for **commercial use**.
 * Integration with professional tools: CAD, FEA, Requirements management, MBSE, etc
 * Play with friends on your own servers: federated game servers connected via web3 
 
-## Related repositories
+## Quick start
+1. Install [Godot 3.5](https://downloads.tuxfamily.org/godotengine/3.5/)
+2. Install [wget]() if you do not have it
+3. Make sure that it's in PATH, e.g. you can start it from terminal using below command:
+   
+    godot 
 
-* **[Development Guide](/docs/DEVELOPMENT.MD)**
-* **[Terminology](/docs/TERMS.MD)**
-* **[References](/docs/REFERENCES.MD)**
-* **[Space Jargon Cheatsheet](https://github.com/LunCoSim/lunco-space-jargon)**
-* **[Raw assets](https://github.com/LunCoSim/lunco-assets-raw)**
-* **[Content](https://github.com/LunCoSim/lunco-content)**
-* **[Matrix](https://github.com/LunCoSim/lunco-matrix)**
-* 
+4. Clone this repo (if i've installed ssh)
+
+    git clone --depth=1 git@github.com:LunCoSim/lunco-sim.git
+
+5. Install [Install Godot Package Manager](https://github.com/LunCoSim/godot-package-manager) guide and all dependencies
+    
+    `./gpm_install.sh`
+
+6. Run project by clicking on "project.godot" in "game" folder 
+7. If you start it for the first time wait till it imports all the dependencies.
+8. Close Godot. DO NOT SAVE THE PROJECT
+9. Open project again
+10. Run the game
+
+## FOLLOW US
+1. [Twitter](https://twitter.com/LunCoSim)
+2. [itch.io](https://difint.itch.io/lunco)
+3. [Discord](https://discord.gg/emfnjMj3r3)
+4. [Youtube](https://www.youtube.com/channel/UCwGFDDQcNSdXA5NxRtNbWYg/videos)
+5. [Notion](https://www.notion.so/invite/ff7a7dc226d4184c6fb77b1899d6672381be7e44)
+6. [Google Drive](https://drive.google.com/drive/folders/1mYNLdYOaw__OIb7OGDZiuHmbZZAJFA7M?usp=sharing)
+7. [Reddit](https://www.reddit.com/r/LunCo/)
+8. [More information](https://bit.ly/3vNdfKE)
   
+## Gameplay
+Collect resources, build factories, manufacture robots and to build sustaiable lunar base.
+
+You are playing as the CEO&Founder of a NewSpace Lunar exploration company in the nearest future. 
+
+You want to make the Moon forpost of human civilization in space in order to colonize the whole solar system.
+
 ### Design you own mission ###
 
 1. Database of materials (based on db like MAPTIS)
@@ -53,55 +80,26 @@ Free for **commercial use**.
 8. Supply chain
 9. Logistics
 
-## FOLLOW US
-1. [Twitter](https://twitter.com/LunCoSim)
-2. [itch.io](https://difint.itch.io/lunco)
-3. [Discord](https://discord.gg/emfnjMj3r3)
-4. [Youtube](https://www.youtube.com/channel/UCwGFDDQcNSdXA5NxRtNbWYg/videos)
-5. [Notion](https://www.notion.so/invite/ff7a7dc226d4184c6fb77b1899d6672381be7e44)
-6. [Google Drive](https://drive.google.com/drive/folders/1mYNLdYOaw__OIb7OGDZiuHmbZZAJFA7M?usp=sharing)
-7. [Reddit](https://www.reddit.com/r/LunCo/)
-8. [More information](https://bit.ly/3vNdfKE)
-   
-## Gameplay
-Collect resources, build factories, manufacture robots and to build sustaiable lunar base.
-
-You are playing as the CEO&Founder of a NewSpace Lunar exploration company in the nearest future. 
-
-You want to make the Moon forpost of human civilization in space in order to colonize the whole solar system.
-
-## What to expect
+### What to expect
 1. Supply chain management as in Factorio
 2. Robot & rocket control as in KSP
 3. City management as in SimCity
 4. Economics
 5. Realistic technologies, physics and enviroment. E.g. you have to extract ~30-50 of different raw resources to build a satellite like Aluminum, Copper.
-6. Integration with real hardware. Linux Kernel drivers integrated with sim showing sim date e.g. serial devices, PID controllers, etc. 
-
-**Integration example:**
-   1. You've designed a robot using RPI
-   2. You install the LunCo linux subsystem
-   3. LunCo takes care of "faking" robot's / flatsat with sim data
-   4. You run same config + LunCo as if it was on a REAL mission
-  
-
-## How to run
-1. Install [Godot 3.5-rc3](https://downloads.tuxfamily.org/godotengine/3.5-rc2/)
-2. Install [wget]() if you do not have it
-3. Make sure that it's in PATH, e.g. you can start it from terminal using below command:
-   
-    godot 
-
-4. Clone this repo
-5. Install [Install Godot Package Manager](https://github.com/LunCoSim/godot-package-manager) guide and all dependencies
-    
-    `./gpm_install.sh`
-
-6. Run project by clicking on "project.godot" in "game" folder and install all the plugins
-7. Read [Terms](./docs/TERMS.MD) to understand used terminology
+6. Hardware in the loop: integration with real hardware. Linux Kernel drivers integrated with sim showing sim date e.g. serial devices, PID controllers, etc. 
 
 ## Links
 
+### Related repositories
+
+* **[Development Guide](/docs/DEVELOPMENT.MD)**
+* **[Terminology](/docs/TERMS.MD)**
+* **[References](/docs/REFERENCES.MD)**
+* **[Space Jargon Cheatsheet](https://github.com/LunCoSim/lunco-space-jargon)**
+* **[Raw assets](https://github.com/LunCoSim/lunco-assets-raw)**
+* **[Content](https://github.com/LunCoSim/lunco-content)**
+* **[Matrix](https://github.com/LunCoSim/lunco-matrix)**
+  
 ### Like-minded projects
 1. [Moonwards](https://www.moonwards.com/) – opensource Lunar City in Godot, lot of assets under MIT
 2. [iVoyager](https://www.ivoyager.dev) – a development platform for creating games and educational apps in a realistic solar system, Godot, Apache 2.0
