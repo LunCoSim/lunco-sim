@@ -37,19 +37,26 @@ Free for **commercial use**.
    
     godot 
 
-4. Clone this repo (if i've installed ssh)
+4. Clone this repo in terminal
 
-    git clone --depth=1 git@github.com:LunCoSim/lunco-sim.git
+    `git clone --depth=1 git@github.com:LunCoSim/lunco-sim.git`
 
-5. Install [Install Godot Package Manager](https://github.com/LunCoSim/godot-package-manager) guide and all dependencies
+5. Change directory
+
+    `cd lunco-sim`
+
+6. Install [Install Godot Package Manager](https://github.com/LunCoSim/godot-package-manager) guide and all dependencies
     
     `./gpm_install.sh`
 
-6. Run project by clicking on "project.godot" in "game" folder 
-7. If you start it for the first time wait till it imports all the dependencies.
-8. Close Godot. DO NOT SAVE THE PROJECT
-9. Open project again
-10. Run the game
+7. Run project by clicking on "project.godot" in "game" folder or
+
+    `godot game/project.godot`
+
+8. If you start it for the first time wait till it imports all the dependencies.
+9.  Close Godot. DO NOT SAVE THE PROJECT
+10. Open project again
+11. Run the game
 
 ## FOLLOW US
 1. [Twitter](https://twitter.com/LunCoSim)
