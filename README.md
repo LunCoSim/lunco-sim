@@ -15,7 +15,7 @@ Free for **commercial use**.
 *[Gitcoin Grant](https://gitcoin.co/grants/5939/lunco-full-cycle-space-operations-sim-tool)*
 
 
-**Professional content closer to the bottom. It's just a catchy image**
+### **NOTE: Professional content closer to the bottom. It's just a catchy image**
 
 *click on the image below to watch first review  on youtube*
 
