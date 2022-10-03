@@ -1,6 +1,6 @@
 # LunCo: full-cycle space operations sim tool
 
-An open-source Lunar Colony sim built for **engineers** and **enthusiasts**
+An open-source collaborative Lunar Colony sim built for **engineers** and **enthusiasts**.
 
 *Inspired by*
 * Professional: AGI, Solidworks, Ansys
@@ -14,14 +14,15 @@ Free for **commercial use**.
 
 *[Gitcoin Grant](https://gitcoin.co/grants/5939/lunco-full-cycle-space-operations-sim-tool)*
 
-*click on the image below to watch first gameplay video on youtube*
 
-**Professional content closer to the bottom. It's just a catchy image**
+### **NOTE: Professional content closer to the bottom. It's just a catchy image**
+
+*click on the image below to watch first review  on youtube*
 
 [![Version 0.3.0 review](docs/assets/gameplay_0.3.jpg "Version 0.3.0 review")](https://youtu.be/qIgf4oArzg0 "Version 0.3.0 review! - Click to Watch!")
 
 ## Features
-* Two game play styles
+* Two modes
   * Digital twin mode for engineers
   * Story mode for gamers
 * Realistic space exploration engine
@@ -85,14 +86,8 @@ Free for **commercial use**.
 7. [Reddit](https://www.reddit.com/r/LunCo/)
 8. [More information](https://bit.ly/3vNdfKE)
   
-## Gameplay
-Collect resources, build factories, manufacture robots and to build sustaiable lunar base.
 
-You are playing as the CEO&Founder of a NewSpace Lunar exploration company in the nearest future. 
-
-You want to make the Moon forpost of human civilization in space in order to colonize the whole solar system.
-
-### Design you own mission ###
+## What to expect in professional mode
 
 1. Database of materials (based on db like MAPTIS)
 2. Database of components
@@ -104,7 +99,8 @@ You want to make the Moon forpost of human civilization in space in order to col
 8. Supply chain
 9. Logistics
 
-### What to expect
+### What to expect in game mode
+
 1. Supply chain management as in Factorio
 2. Robot & rocket control as in KSP
 3. City management as in SimCity
