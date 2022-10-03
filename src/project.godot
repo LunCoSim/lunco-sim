@@ -479,6 +479,8 @@ Console="*res://addons/quentincaffeino/console/src/Console.tscn"
 
 window/size/width=1920
 window/size/height=1080
+window/size/test_width=1280
+window/size/test_height=720
 window/dpi/allow_hidpi=true
 window/vsync/use_vsync=false
 window/stretch/mode="2d"
@@ -700,8 +702,16 @@ common/enable_pause_aware_picking=true
 
 [rendering]
 
+quality/driver/fallback_to_gles2=true
 threads/thread_model=2
 vram_compression/import_etc=true
 vram_compression/import_etc2=false
-quality/filters/msaa=3
+quality/shadows/filter_mode=0
+quality/reflections/texture_array_reflections=false
+quality/reflections/high_quality_ggx=false
+quality/filters/use_nearest_mipmap_filter=true
+gles3/shaders/shader_compilation_mode=2
+quality/lightmapping/use_bicubic_sampling=false
+quality/subsurface_scattering/quality=0
+quality/subsurface_scattering/weight_samples=false
 environment/default_environment="res://assets/default_env.tres"
