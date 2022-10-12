@@ -23,3 +23,9 @@ transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 0.779129, 0, 11.4547 )
 [node name="_World" type="Spatial" parent="."]
 
 [node name="Terrain" parent="." instance=ExtResource( 3 )]
+
+[node name="GIProbe" type="GIProbe" parent="."]
+extents = Vector3( 1000, 1000, 1000 )
+
+[node name="DirectionalLight" type="DirectionalLight" parent="."]
+transform = Transform( 0.920641, 1.37186e-08, 0.39041, -0.0995507, 0.966944, 0.234754, -0.377504, -0.25499, 0.890208, 0, 258.461, 299.578 )
