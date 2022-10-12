@@ -16,6 +16,7 @@ var mouse_control := false
 var player
 var spacecraft
 var operator
+var truck
 
 var spawn_model_path = "res://addons/lunco-content/moonwards/buildings/android-kiosk/android-kiosk.escn"
 
