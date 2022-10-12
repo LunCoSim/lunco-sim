@@ -655,6 +655,10 @@ Autoload="*res://autoload/autoload.gd"
 egs="*res://addons/ExtraGui/extraGuiSingleton.gd"
 Console="*res://addons/quentincaffeino/console/src/Console.tscn"
 
+[debug]
+
+gdscript/completion/autocomplete_setters_and_getters=true
+
 [display]
 
 window/size/width=1920
