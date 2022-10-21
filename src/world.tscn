@@ -1,6 +1,7 @@
-[gd_scene load_steps=9 format=3 uid="uid://bvvhcwcd8umwm"]
+[gd_scene load_steps=10 format=3 uid="uid://bvvhcwcd8umwm"]
 
 [ext_resource type="Texture2D" uid="uid://c3uq0d7am7kxc" path="res://icon.svg" id="1_hmckg"]
+[ext_resource type="BoxMesh" uid="uid://bherbdm8kh4vu" path="res://terrain.tres" id="2_hmwhd"]
 
 [sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_412ef"]
 sky_horizon_color = Color(0.64625, 0.65575, 0.67075, 1)
@@ -16,20 +17,16 @@ ambient_light_energy = 0.0
 tonemap_mode = 2
 glow_enabled = true
 
-[sub_resource type="BoxShape3D" id="BoxShape3D_7hjd4"]
-size = Vector3(100, 1, 100)
-
-[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_7kkco"]
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_cafid"]
 albedo_texture = ExtResource("1_hmckg")
+uv1_scale = Vector3(1000, 1000, 1000)
 
-[sub_resource type="BoxMesh" id="BoxMesh_okq2g"]
-size = Vector3(10, 1, 10)
+[sub_resource type="ConcavePolygonShape3D" id="ConcavePolygonShape3D_6hq7c"]
+data = PackedVector3Array(-50, 0.5, 50, 50, 0.5, 50, -50, -0.5, 50, 50, 0.5, 50, 50, -0.5, 50, -50, -0.5, 50, 50, 0.5, -50, -50, 0.5, -50, 50, -0.5, -50, -50, 0.5, -50, -50, -0.5, -50, 50, -0.5, -50, 50, 0.5, 50, 50, 0.5, -50, 50, -0.5, 50, 50, 0.5, -50, 50, -0.5, -50, 50, -0.5, 50, -50, 0.5, -50, -50, 0.5, 50, -50, -0.5, -50, -50, 0.5, 50, -50, -0.5, 50, -50, -0.5, -50, 50, 0.5, 50, -50, 0.5, 50, 50, 0.5, -50, -50, 0.5, 50, -50, 0.5, -50, 50, 0.5, -50, -50, -0.5, 50, 50, -0.5, 50, -50, -0.5, -50, 50, -0.5, 50, 50, -0.5, -50, -50, -0.5, -50)
 
-[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_7apnd"]
-albedo_texture = ExtResource("1_hmckg")
-uv1_scale = Vector3(10, 10, 10)
-uv1_triplanar = true
-uv1_world_triplanar = true
+[sub_resource type="CapsuleMesh" id="CapsuleMesh_6kk6j"]
+
+[sub_resource type="CapsuleShape3D" id="CapsuleShape3D_ye8wx"]
 
 [node name="World" type="Node"]
 
@@ -40,17 +37,24 @@ shadow_enabled = true
 [node name="WorldEnvironment" type="WorldEnvironment" parent="."]
 environment = SubResource("Environment_4qbus")
 
-[node name="Ground" type="StaticBody3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.500572, 0)
+[node name="Ground" type="MeshInstance3D" parent="."]
+material_override = SubResource("StandardMaterial3D_cafid")
+mesh = ExtResource("2_hmwhd")
+skeleton = NodePath("")
 
-[node name="CollisionShape3D" type="CollisionShape3D" parent="Ground"]
-shape = SubResource("BoxShape3D_7hjd4")
+[node name="StaticBody3D" type="StaticBody3D" parent="Ground"]
 
-[node name="CSGMesh3D" type="CSGMesh3D" parent="Ground"]
-material_override = SubResource("StandardMaterial3D_7kkco")
-use_collision = true
-mesh = SubResource("BoxMesh_okq2g")
-material = SubResource("StandardMaterial3D_7apnd")
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Ground/StaticBody3D"]
+shape = SubResource("ConcavePolygonShape3D_6hq7c")
 
 [node name="Camera3D" type="Camera3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.07585, 0.903132)
+transform = Transform3D(1, 0, 0, 0, 0.913197, 0.407518, 0, -0.407518, 0.913197, 0.628873, 4.20309, 4.38106)
+
+[node name="Character" type="CharacterBody3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2.22372, 0)
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="Character"]
+mesh = SubResource("CapsuleMesh_6kk6j")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Character"]
+shape = SubResource("CapsuleShape3D_ye8wx")
