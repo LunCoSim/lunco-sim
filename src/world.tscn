@@ -1,9 +1,10 @@
-[gd_scene load_steps=10 format=3 uid="uid://bvvhcwcd8umwm"]
+[gd_scene load_steps=11 format=3 uid="uid://bvvhcwcd8umwm"]
 
 [ext_resource type="Script" path="res://world.gd" id="1_1ylgw"]
 [ext_resource type="Texture2D" uid="uid://c3uq0d7am7kxc" path="res://icon.svg" id="1_hmckg"]
 [ext_resource type="BoxMesh" uid="uid://bherbdm8kh4vu" path="res://terrain.tres" id="2_hmwhd"]
 [ext_resource type="PackedScene" uid="uid://cagy0mkkkegn7" path="res://character/character.tscn" id="3_d3nn6"]
+[ext_resource type="PackedScene" uid="uid://cvb8vkie3spq3" path="res://spring-arm-camera/lc_spring_arm_camera.tscn" id="5_g08gl"]
 
 [sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_412ef"]
 sky_horizon_color = Color(0.64625, 0.65575, 0.67075, 1)
@@ -47,8 +48,7 @@ skeleton = NodePath("")
 shape = SubResource("ConcavePolygonShape3D_6hq7c")
 
 [node name="Character" parent="." instance=ExtResource("3_d3nn6")]
-SPEED = null
-JUMP_VELOCITY = null
 
-[node name="Camera3D" type="Camera3D" parent="Character"]
-transform = Transform3D(1, 0, 0, 0, 0.913197, 0.407518, 0, -0.407518, 0.913197, 0.628873, 1.45495, 4.38106)
+[node name="Camera" parent="." instance=ExtResource("5_g08gl")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2.22372, 0)
+target_path = NodePath("../Character")

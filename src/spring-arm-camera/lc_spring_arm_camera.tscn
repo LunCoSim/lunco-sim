@@ -1,0 +1,15 @@
+[gd_scene load_steps=2 format=3 uid="uid://cvb8vkie3spq3"]
+
+[ext_resource type="Script" path="res://spring-arm-camera/lc_spring_arm_camera.gd" id="1_1lobn"]
+
+[node name="lcSpringArmCamera" type="Node3D"]
+script = ExtResource("1_1lobn")
+
+[node name="RotX" type="Node3D" parent="."]
+transform = Transform3D(0.999372, 0, 0.0354402, -0.00142661, 0.999189, 0.0402286, -0.0354115, -0.0402539, 0.998562, 0, 0, 0)
+
+[node name="RotY" type="SpringArm3D" parent="RotX"]
+spring_length = 4.0
+
+[node name="Camera" type="Camera3D" parent="RotX/RotY"]
+transform = Transform3D(1, 0, 0, 0, 0.913197, 0.407518, 0, -0.407518, 0.913197, 0.628873, 3.67867, 4.38106)
