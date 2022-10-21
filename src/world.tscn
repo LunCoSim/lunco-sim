@@ -1,7 +1,9 @@
 [gd_scene load_steps=10 format=3 uid="uid://bvvhcwcd8umwm"]
 
+[ext_resource type="Script" path="res://world.gd" id="1_1ylgw"]
 [ext_resource type="Texture2D" uid="uid://c3uq0d7am7kxc" path="res://icon.svg" id="1_hmckg"]
 [ext_resource type="BoxMesh" uid="uid://bherbdm8kh4vu" path="res://terrain.tres" id="2_hmwhd"]
+[ext_resource type="PackedScene" uid="uid://cagy0mkkkegn7" path="res://character/character.tscn" id="3_d3nn6"]
 
 [sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_412ef"]
 sky_horizon_color = Color(0.64625, 0.65575, 0.67075, 1)
@@ -24,11 +26,8 @@ uv1_scale = Vector3(1000, 1000, 1000)
 [sub_resource type="ConcavePolygonShape3D" id="ConcavePolygonShape3D_6hq7c"]
 data = PackedVector3Array(-50, 0.5, 50, 50, 0.5, 50, -50, -0.5, 50, 50, 0.5, 50, 50, -0.5, 50, -50, -0.5, 50, 50, 0.5, -50, -50, 0.5, -50, 50, -0.5, -50, -50, 0.5, -50, -50, -0.5, -50, 50, -0.5, -50, 50, 0.5, 50, 50, 0.5, -50, 50, -0.5, 50, 50, 0.5, -50, 50, -0.5, -50, 50, -0.5, 50, -50, 0.5, -50, -50, 0.5, 50, -50, -0.5, -50, -50, 0.5, 50, -50, -0.5, 50, -50, -0.5, -50, 50, 0.5, 50, -50, 0.5, 50, 50, 0.5, -50, -50, 0.5, 50, -50, 0.5, -50, 50, 0.5, -50, -50, -0.5, 50, 50, -0.5, 50, -50, -0.5, -50, 50, -0.5, 50, 50, -0.5, -50, -50, -0.5, -50)
 
-[sub_resource type="CapsuleMesh" id="CapsuleMesh_6kk6j"]
-
-[sub_resource type="CapsuleShape3D" id="CapsuleShape3D_ye8wx"]
-
 [node name="World" type="Node"]
+script = ExtResource("1_1ylgw")
 
 [node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
 transform = Transform3D(-0.866025, -0.41981, 0.271587, 0, 0.543175, 0.83962, -0.5, 0.727132, -0.470403, 94.7841, 65.3005, 67.5401)
@@ -47,14 +46,9 @@ skeleton = NodePath("")
 [node name="CollisionShape3D" type="CollisionShape3D" parent="Ground/StaticBody3D"]
 shape = SubResource("ConcavePolygonShape3D_6hq7c")
 
-[node name="Camera3D" type="Camera3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 0.913197, 0.407518, 0, -0.407518, 0.913197, 0.628873, 4.20309, 4.38106)
+[node name="Character" parent="." instance=ExtResource("3_d3nn6")]
+SPEED = null
+JUMP_VELOCITY = null
 
-[node name="Character" type="CharacterBody3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2.22372, 0)
-
-[node name="MeshInstance3D" type="MeshInstance3D" parent="Character"]
-mesh = SubResource("CapsuleMesh_6kk6j")
-
-[node name="CollisionShape3D" type="CollisionShape3D" parent="Character"]
-shape = SubResource("CapsuleShape3D_ye8wx")
+[node name="Camera3D" type="Camera3D" parent="Character"]
+transform = Transform3D(1, 0, 0, 0, 0.913197, 0.407518, 0, -0.407518, 0.913197, 0.628873, 1.45495, 4.38106)
