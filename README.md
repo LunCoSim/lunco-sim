@@ -1,4 +1,6 @@
-# LunCo: Godot 4.0 Version
+# LunCo: Modeling NASA Opensource Mars Rover
+
+(NASA's opensource rover link)[https://github.com/nasa-jpl/open-source-rover]
 
 ## Architecture
 
