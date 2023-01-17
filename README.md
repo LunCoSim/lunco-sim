@@ -2,6 +2,18 @@
 
 An open-source collaborative Lunar Colony sim built for **engineers** and **enthusiasts**.
 
+### **Support the project**
+
+LunCo is a free and opensource product supported by community. 
+
+**Please consider donating us** on ***[GITCOINT GRANT](http://bit.ly/3kfZ25r)***
+
+During Gitcoin GR15  ~130 bakers supported the project, raising LunCo ~$12 000
+
+It allowed to reach a lot of professional space communities. 
+
+### About 
+
 *Inspired by*
 * Professional: AGI, Solidworks, Ansys
 * (And a bit) Games: KSP, SimCity, Factorio
