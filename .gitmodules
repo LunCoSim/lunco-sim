@@ -1,3 +1,6 @@
 [submodule "addons/lunco-content"]
 	path = addons/lunco-content
 	url = git@github.com:LunCoSim/lunco-content.git
+[submodule "addons/free-look-camera"]
+	path = addons/free-look-camera
+	url = git@github.com:LunCoSim/simple-free-look-camera.git
