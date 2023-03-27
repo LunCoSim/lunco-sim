@@ -20,6 +20,13 @@ Build using Godot 4.
 
 ## Installation
 
-tbd
+1. Install [Godot 4](https://godotengine.org/download/)
+2. Clone this repo in a terminal: 
+
+    ```git clone git@github.com:LunCoSim/lunco-sim.git```
+
+3. Init all submodules recursivle to download content
+
+    ```git submodule update --init --recursive```
 
 ## Folder Structere
