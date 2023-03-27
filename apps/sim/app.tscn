@@ -1,13 +1,35 @@
-[gd_scene format=3 uid="uid://c2mu13kbvfc04"]
+[gd_scene load_steps=5 format=3 uid="uid://c2mu13kbvfc04"]
+
+[ext_resource type="Texture2D" uid="uid://dajqms45h4arn" path="res://addons/lunco-content/planets/Moon.png" id="1_8f8qn"]
+[ext_resource type="PackedScene" uid="uid://d2p8lcl7bfh1r" path="res://addons/lunco-content/spacex-starship/source/SpaceX_Starship.tscn" id="2_ny4m8"]
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_n4n6a"]
+albedo_texture = ExtResource("1_8f8qn")
+
+[sub_resource type="BoxMesh" id="BoxMesh_4hxvd"]
+size = Vector3(100, 1, 100)
 
 [node name="sim" type="Node"]
 
-[node name="Label" type="Label" parent="."]
-offset_right = 40.0
-offset_bottom = 23.0
+[node name="UI" type="CanvasLayer" parent="."]
+
+[node name="Label" type="Label" parent="UI"]
+offset_right = 62.0
+offset_bottom = 26.0
 text = "Sim app"
 
-[node name="Label2" type="Label" parent="."]
-offset_right = 40.0
-offset_bottom = 23.0
-text = "Sim app"
+[node name="World" type="Node3D" parent="."]
+
+[node name="Ground" type="MeshInstance3D" parent="World"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.545804, 0)
+material_override = SubResource("StandardMaterial3D_n4n6a")
+mesh = SubResource("BoxMesh_4hxvd")
+
+[node name="Camera3D" type="Camera3D" parent="World"]
+transform = Transform3D(1, 0, 0, 0, 0.999939, -0.0110477, 0, 0.0110477, 0.999939, 0, 26.0892, 23.2524)
+
+[node name="SpaceX_Starship" parent="World" instance=ExtResource("2_ny4m8")]
+transform = Transform3D(1, 0, 0, 0, 0.999939, -0.0110477, 0, 0.0110477, 0.999939, 0, 3.68511, -13.3139)
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="World"]
+transform = Transform3D(1, 0, 0, 0, 0.789191, 0.614147, 0, -0.614147, 0.789191, 0, 22.2587, 3.03877)
