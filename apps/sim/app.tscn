@@ -1,13 +1,7 @@
-[gd_scene load_steps=5 format=3 uid="uid://c2mu13kbvfc04"]
+[gd_scene load_steps=3 format=3 uid="uid://c2mu13kbvfc04"]
 
-[ext_resource type="Texture2D" uid="uid://dajqms45h4arn" path="res://addons/lunco-content/planets/Moon.png" id="1_8f8qn"]
 [ext_resource type="PackedScene" uid="uid://d2p8lcl7bfh1r" path="res://addons/lunco-content/spacex-starship/source/SpaceX_Starship.tscn" id="2_ny4m8"]
-
-[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_n4n6a"]
-albedo_texture = ExtResource("1_8f8qn")
-
-[sub_resource type="BoxMesh" id="BoxMesh_4hxvd"]
-size = Vector3(100, 1, 100)
+[ext_resource type="PackedScene" uid="uid://d8gbyf2xbd4m" path="res://addons/lunco-content/maps/Langrenus/langrenus_map.tscn" id="2_w1oup"]
 
 [node name="sim" type="Node"]
 
@@ -20,11 +14,6 @@ text = "Sim app"
 
 [node name="World" type="Node3D" parent="."]
 
-[node name="Ground" type="MeshInstance3D" parent="World"]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.545804, 0)
-material_override = SubResource("StandardMaterial3D_n4n6a")
-mesh = SubResource("BoxMesh_4hxvd")
-
 [node name="Camera3D" type="Camera3D" parent="World"]
 transform = Transform3D(1, 0, 0, 0, 0.999939, -0.0110477, 0, 0.0110477, 0.999939, 0, 26.0892, 23.2524)
 
@@ -33,3 +22,6 @@ transform = Transform3D(1, 0, 0, 0, 0.999939, -0.0110477, 0, 0.0110477, 0.999939
 
 [node name="DirectionalLight3D" type="DirectionalLight3D" parent="World"]
 transform = Transform3D(1, 0, 0, 0, 0.789191, 0.614147, 0, -0.614147, 0.789191, 0, 22.2587, 3.03877)
+
+[node name="Langrenus_LP" parent="World" instance=ExtResource("2_w1oup")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.425292, 3.37504, -4.97908)
