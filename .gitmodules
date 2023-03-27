@@ -4,3 +4,6 @@
 [submodule "addons/free-look-camera"]
 	path = addons/free-look-camera
 	url = git@github.com:LunCoSim/simple-free-look-camera.git
+[submodule "addons/object-inspector"]
+	path = addons/object-inspector
+	url = git@github.com:4d49/object-inspector.git
