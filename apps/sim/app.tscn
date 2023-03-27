@@ -1,5 +1,6 @@
-[gd_scene load_steps=4 format=3 uid="uid://bq8u263y7tg23"]
+[gd_scene load_steps=5 format=3 uid="uid://bq8u263y7tg23"]
 
+[ext_resource type="Script" path="res://addons/object-inspector/scripts/inspector.gd" id="1_d3brg"]
 [ext_resource type="Script" path="res://addons/free-look-camera/camera.gd" id="1_x1wl7"]
 [ext_resource type="PackedScene" uid="uid://d8gbyf2xbd4m" path="res://addons/lunco-content/maps/Langrenus/langrenus_map.tscn" id="2_w1oup"]
 [ext_resource type="PackedScene" uid="uid://bihcxq7r6iqu" path="res://addons/lunco-content/spacex-starship/SpaceX_Starship.tscn" id="3_kmt5t"]
@@ -13,6 +14,13 @@ offset_right = 62.0
 offset_bottom = 26.0
 text = "Sim app"
 
+[node name="ObjectInspector" type="VBoxContainer" parent="UI"]
+offset_left = 9.0
+offset_top = 117.0
+offset_right = 641.0
+offset_bottom = 198.0
+script = ExtResource("1_d3brg")
+
 [node name="World" type="Node3D" parent="."]
 
 [node name="Camera3D" type="Camera3D" parent="World"]
@@ -20,7 +28,7 @@ transform = Transform3D(1, 0, 0, 0, 0.999939, -0.0110477, 0, 0.0110477, 0.999939
 script = ExtResource("1_x1wl7")
 
 [node name="DirectionalLight3D" type="DirectionalLight3D" parent="World"]
-transform = Transform3D(1, 0, 0, 0, 0.789191, 0.614147, 0, -0.614147, 0.789191, 0, 22.2587, 3.03877)
+transform = Transform3D(1, 0, 0, 0, 0.844973, 0.534809, 0, -0.534809, 0.844973, 0, 32.5156, 25.939)
 
 [node name="Langrenus_LP" parent="World" instance=ExtResource("2_w1oup")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.425292, 3.37504, -4.97908)

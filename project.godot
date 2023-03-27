@@ -15,6 +15,10 @@ run/main_scene="res://main.tscn"
 config/features=PackedStringArray("4.0", "GL Compatibility")
 config/icon="res://icon.svg"
 
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/object-inspector/plugin.cfg")
+
 [rendering]
 
 renderer/rendering_method="gl_compatibility"
