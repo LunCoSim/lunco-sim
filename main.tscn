@@ -34,8 +34,13 @@ text = "Kanban (TBD)"
 layout_mode = 2
 text = "Databases (TBD)"
 
+[node name="OrbitalMechanics" type="Button" parent="UI/Apps"]
+layout_mode = 2
+text = "OrbitalMechanics (TBD)"
+
 [connection signal="pressed" from="UI/Apps/Sim" to="." method="_on_sim_pressed"]
 [connection signal="pressed" from="UI/Apps/Yarm" to="." method="_on_yarm_pressed"]
 [connection signal="pressed" from="UI/Apps/MBSE" to="." method="_on_yarm_pressed"]
 [connection signal="pressed" from="UI/Apps/Kanban" to="." method="_on_yarm_pressed"]
 [connection signal="pressed" from="UI/Apps/Database" to="." method="_on_yarm_pressed"]
+[connection signal="pressed" from="UI/Apps/OrbitalMechanics" to="." method="_on_yarm_pressed"]

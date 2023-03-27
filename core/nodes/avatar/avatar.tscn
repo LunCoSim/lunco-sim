@@ -1,0 +1,31 @@
+[gd_scene load_steps=3 format=3 uid="uid://b44okxhtkmwxu"]
+
+[ext_resource type="Script" path="res://core/nodes/avatar/avatar.gd" id="1_1r144"]
+[ext_resource type="Script" path="res://addons/imjp94.yafsm/src/StateMachinePlayer.gd" id="2_diida"]
+
+[node name="Avatar" type="Node"]
+script = ExtResource("1_1r144")
+
+[node name="State" type="Node" parent="."]
+script = ExtResource("2_diida")
+
+[node name="UI@TargetUI" type="Control" parent="."]
+layout_mode = 3
+anchors_preset = 0
+
+[node name="UI@Help" type="VBoxContainer" parent="."]
+
+[node name="UI@Help@Orientation" type="Label" parent="."]
+text = "1 – Select player"
+
+[node name="UI@Help@CamRotate" type="Label" parent="."]
+text = "2 – Select Starship"
+
+[node name="UI@Help@CamDistance" type="Label" parent="."]
+text = "3 – Select operator"
+
+[node name="UI@Help@Spawn" type="Label" parent="."]
+text = "Ctrl+` – console "
+
+[node name="UI@Target" type="Label" parent="."]
+text = "Target: "

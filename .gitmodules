@@ -7,3 +7,6 @@
 [submodule "addons/object-inspector"]
 	path = addons/object-inspector
 	url = git@github.com:4d49/object-inspector.git
+[submodule "addons/lunco-cameras"]
+	path = addons/lunco-cameras
+	url = git@github.com:LunCoSim/lunco-cameras.git

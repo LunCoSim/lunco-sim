@@ -1,0 +1,65 @@
+[gd_scene load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://core/ui/operator-ui.gd" id="1"]
+[ext_resource type="DynamicFont" path="res://assets/fonts/ui_font_outline.tres" id="2"]
+[ext_resource type="DynamicFont" path="res://assets/fonts/ui_font.tres" id="3"]
+[ext_resource type="Theme" path="res://assets/fonts_theme.theme" id="4"]
+
+[node name="OperatorUI" type="Control"]
+anchor_right = 1.0
+anchor_bottom = 1.0
+script = ExtResource( 1 )
+
+[node name="Help" type="VBoxContainer" parent="."]
+margin_left = 23.0
+margin_top = 19.0
+margin_right = 471.0
+margin_bottom = 191.0
+
+[node name="Orientation" type="Label" parent="Help"]
+margin_right = 448.0
+margin_bottom = 40.0
+custom_colors/font_outline_modulate = Color( 0, 0, 0, 1 )
+custom_colors/font_color_shadow = Color( 0, 0, 0, 1 )
+custom_fonts/font = ExtResource( 2 )
+text = "Move: WASDEQ"
+
+[node name="CamRotate" type="Label" parent="Help"]
+margin_top = 44.0
+margin_right = 448.0
+margin_bottom = 84.0
+rect_pivot_offset = Vector2( 176, 8 )
+custom_colors/font_outline_modulate = Color( 0, 0, 0, 1 )
+custom_colors/font_color_shadow = Color( 0, 0, 0, 1 )
+custom_fonts/font = ExtResource( 2 )
+text = "Camera distance: -/+"
+
+[node name="CamDistance" type="Label" parent="Help"]
+margin_top = 88.0
+margin_right = 448.0
+margin_bottom = 128.0
+rect_pivot_offset = Vector2( 176, 8 )
+custom_colors/font_outline_modulate = Color( 0, 0, 0, 1 )
+custom_colors/font_color_shadow = Color( 0, 0, 0, 1 )
+custom_fonts/font = ExtResource( 2 )
+text = "Rotate camera: RMB or Arrows"
+
+[node name="Spawn" type="Label" parent="Help"]
+margin_top = 132.0
+margin_right = 448.0
+margin_bottom = 172.0
+rect_pivot_offset = Vector2( 176, 8 )
+custom_colors/font_outline_modulate = Color( 0, 0, 0, 1 )
+custom_colors/font_color_shadow = Color( 0, 0, 0, 1 )
+custom_fonts/font = ExtResource( 2 )
+text = "Spawn: click on terrain"
+
+[node name="Files" type="Tree" parent="."]
+margin_left = 24.0
+margin_top = 606.0
+margin_right = 544.0
+margin_bottom = 1045.0
+theme = ExtResource( 4 )
+custom_fonts/font = ExtResource( 3 )
+
+[connection signal="cell_selected" from="Files" to="." method="_on_Files_cell_selected"]
