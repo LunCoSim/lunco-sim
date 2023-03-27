@@ -1,3 +1,25 @@
-[gd_scene format=3 uid="uid://c82dl3dv3d3hb"]
+[gd_scene load_steps=2 format=3 uid="uid://c82dl3dv3d3hb"]
+
+[ext_resource type="Script" path="res://main.gd" id="1_yf43x"]
 
 [node name="Main" type="Node"]
+script = ExtResource("1_yf43x")
+
+[node name="UI" type="CanvasLayer" parent="."]
+
+[node name="Apps" type="VBoxContainer" parent="UI"]
+offset_left = 400.0
+offset_top = 275.0
+offset_right = 705.0
+offset_bottom = 341.0
+
+[node name="Sim" type="Button" parent="UI/Apps"]
+layout_mode = 2
+text = "Open Sim Application"
+
+[node name="Yarm" type="Button" parent="UI/Apps"]
+layout_mode = 2
+text = "Open Requirements Management App"
+
+[connection signal="pressed" from="UI/Apps/Sim" to="." method="_on_sim_pressed"]
+[connection signal="pressed" from="UI/Apps/Yarm" to="." method="_on_yarm_pressed"]

@@ -1,3 +1,13 @@
 [gd_scene format=3 uid="uid://c2mu13kbvfc04"]
 
 [node name="sim" type="Node"]
+
+[node name="Label" type="Label" parent="."]
+offset_right = 40.0
+offset_bottom = 23.0
+text = "Sim app"
+
+[node name="Label2" type="Label" parent="."]
+offset_right = 40.0
+offset_bottom = 23.0
+text = "Sim app"
