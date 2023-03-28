@@ -1,4 +1,4 @@
-[gd_scene load_steps=10 format=3 uid="uid://bq8u263y7tg23"]
+[gd_scene load_steps=15 format=3 uid="uid://bq8u263y7tg23"]
 
 [ext_resource type="Script" path="res://addons/object-inspector/scripts/inspector.gd" id="1_d3brg"]
 [ext_resource type="PackedScene" uid="uid://d8gbyf2xbd4m" path="res://addons/lunco-content/maps/Langrenus/langrenus_map.tscn" id="2_w1oup"]
@@ -6,7 +6,12 @@
 [ext_resource type="Script" path="res://core/controllers/spacecraft/spacecraft-controller.gd" id="5_jxy1v"]
 [ext_resource type="PackedScene" uid="uid://c5dg7yq7hd7m0" path="res://core/nodes/avatar/avatar.tscn" id="6_hs3oo"]
 [ext_resource type="PackedScene" uid="uid://dly6j7li6g7t8" path="res://core/controllers/operator/operator.tscn" id="7_b6d2d"]
+[ext_resource type="PackedScene" uid="uid://cpjdvh1eaof2y" path="res://addons/lunco-content/moonwards/buildings/nuclear-core/nuclear-core.escn" id="8_ukav2"]
 [ext_resource type="PackedScene" uid="uid://drw47qiaev3e6" path="res://core/controllers/player/player.tscn" id="8_w1x42"]
+[ext_resource type="PackedScene" uid="uid://2f4aecforicx" path="res://addons/lunco-content/moonwards/buildings/satellite-dish/satellite-dish.escn" id="9_k2t3s"]
+[ext_resource type="PackedScene" uid="uid://6xgnbadqd0df" path="res://addons/lunco-content/moonwards/items/HexpaneWindow/HexpaneWindow.escn" id="10_2q73u"]
+[ext_resource type="PackedScene" uid="uid://do1ecg5jve7wu" path="res://addons/lunco-content/moonwards/vehicles/rovers/AthleteRover/AthleteRover.escn" id="11_ctf0g"]
+[ext_resource type="PackedScene" uid="uid://dn5t73yi2rj4h" path="res://addons/lunco-content/moonwards/vehicles/rovers/SpiderCrane/SpiderCrane.escn" id="12_lyjst"]
 
 [sub_resource type="CylinderShape3D" id="CylinderShape3D_b83vq"]
 
@@ -39,6 +44,7 @@ transform = Transform3D(1, 0, 0, 0, 0.844973, 0.534809, 0, -0.534809, 0.844973, 
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.425292, 3.37504, -4.97908)
 
 [node name="SpaceX_Starship" parent="World" instance=ExtResource("3_kmt5t")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 92.9765, 26.1867, -232.091)
 script = ExtResource("5_jxy1v")
 
 [node name="Avatar" parent="World" node_paths=PackedStringArray("Player", "Spacecraft", "Operator") instance=ExtResource("6_hs3oo")]
@@ -49,9 +55,31 @@ Operator = NodePath("../Operator")
 [node name="Operator" parent="World" instance=ExtResource("7_b6d2d")]
 
 [node name="Player" parent="World" instance=ExtResource("8_w1x42")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -21, 6, 18)
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="World/Player"]
 shape = SubResource("CylinderShape3D_b83vq")
 
 [node name="MeshInstance3D" type="MeshInstance3D" parent="World/Player"]
 mesh = SubResource("CylinderMesh_mo0bq")
+
+[node name="nuclear-core" parent="." instance=ExtResource("8_ukav2")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -141.395, -12.1995, -8.34924)
+
+[node name="satellite-dish" parent="." instance=ExtResource("9_k2t3s")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -214.816, -33.905, 54.0053)
+
+[node name="HexpaneWindow" parent="." instance=ExtResource("10_2q73u")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -137.646, -33.8777, 75.2299)
+
+[node name="AthleteRover" parent="." instance=ExtResource("11_ctf0g")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -153.215, -33.4417, 44.8008)
+
+[node name="AthleteRover2" parent="." instance=ExtResource("11_ctf0g")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -113.997, -33.4217, 32.2217)
+
+[node name="SpiderCrane" parent="." instance=ExtResource("12_lyjst")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -137.367, -33.851, 87.5822)
+
+[node name="SpiderCrane2" parent="." instance=ExtResource("12_lyjst")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -136.545, -32.9742, 150.173)
