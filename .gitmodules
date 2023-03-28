@@ -10,3 +10,6 @@
 [submodule "addons/lunco-cameras"]
 	path = addons/lunco-cameras
 	url = git@github.com:LunCoSim/lunco-cameras.git
+[submodule "addons/lunco-assets"]
+	path = addons/lunco-assets
+	url = git@github.com:LunCoSim/lunco-assets.git
