@@ -7,7 +7,7 @@
 [ext_resource type="PackedScene" uid="uid://c5dg7yq7hd7m0" path="res://core/nodes/avatar/avatar.tscn" id="6_hs3oo"]
 [ext_resource type="PackedScene" uid="uid://dly6j7li6g7t8" path="res://core/controllers/operator/operator.tscn" id="7_b6d2d"]
 [ext_resource type="PackedScene" uid="uid://cpjdvh1eaof2y" path="res://addons/lunco-content/moonwards/buildings/nuclear-core/nuclear-core.escn" id="8_ukav2"]
-[ext_resource type="PackedScene" uid="uid://drw47qiaev3e6" path="res://core/controllers/player/player.tscn" id="8_w1x42"]
+[ext_resource type="PackedScene" uid="uid://c1a1fnwfincby" path="res://core/controllers/player/player.tscn" id="8_w1x42"]
 [ext_resource type="PackedScene" uid="uid://2f4aecforicx" path="res://addons/lunco-content/moonwards/buildings/satellite-dish/satellite-dish.escn" id="9_k2t3s"]
 [ext_resource type="PackedScene" uid="uid://6xgnbadqd0df" path="res://addons/lunco-content/moonwards/items/HexpaneWindow/HexpaneWindow.escn" id="10_2q73u"]
 [ext_resource type="PackedScene" uid="uid://do1ecg5jve7wu" path="res://addons/lunco-content/moonwards/vehicles/rovers/AthleteRover/AthleteRover.escn" id="11_ctf0g"]

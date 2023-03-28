@@ -158,6 +158,10 @@ anchors_preset = 0
 
 [node name="Help" type="VBoxContainer" parent="UI"]
 layout_mode = 0
+offset_left = 4.0
+offset_top = 28.0
+offset_right = 148.0
+offset_bottom = 144.0
 
 [node name="Orientation" type="Label" parent="UI/Help"]
 layout_mode = 2
