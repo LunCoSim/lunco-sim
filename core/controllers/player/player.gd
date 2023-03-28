@@ -228,21 +228,27 @@ func start_move(direction: Vector2, orientation: Vector3):
 	pass
 	
 func stop():
-	state.set_trigger("stop")
+	if state:
+		state.set_trigger("stop")
 	
 func move(direction: Vector3, orientation=null):
-	state.set_trigger("move")
-	motion_target = direction
+	if state:
+		
+		state.set_trigger("move")
+		motion_target = direction
 	
 func jump():
-	state.set_trigger("jump")
+	if state:
+		state.set_trigger("jump")
 	
 func shoot():
-	state.set_trigger("shoot")
+	if state:
+		state.set_trigger("shoot")
 
 	
 func aim():
-	state.set_trigger("aim")
+	if state:
+		state.set_trigger("aim")
 
 func set_camera_x_rot(_camera_x_rot):
 	camera_x_rot = _camera_x_rot
