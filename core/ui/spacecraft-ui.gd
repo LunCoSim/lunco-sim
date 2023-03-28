@@ -1,16 +1,16 @@
 extends Control
 
-export (NodePath) var Target
+@export var Target: Node3D
 
-onready var target = get_node(Target)
+@onready var target = Target
 
-onready var position_lbl = $"HUD/Position"
-onready var direction_lbl = $"HUD/Direction"
+@onready var position_lbl = $"HUD/Position"
+@onready var direction_lbl = $"HUD/Direction"
 
-onready var velocity_lbl = $"HUD/Velocity"
-onready var angvelocity_lbl = $"HUD/AngVelocity"
+@onready var velocity_lbl = $"HUD/Velocity"
+@onready var angvelocity_lbl = $"HUD/AngVelocity"
 
-onready var acceleration_lbl = $"HUD/Acceleration"
+@onready var acceleration_lbl = $"HUD/Acceleration"
 
 var prev_velocity = Vector3.ZERO
 
@@ -48,4 +48,3 @@ func _on_UpdateUI_timeout():
 func _on_HideControls_timeout():
 	$Help.visible = false
 	$MET.visible = true
-	 

@@ -13,9 +13,9 @@ const RAY_LENGTH = 10000
 var target: Node
 var mouse_control := false
 
-@export var Player: Node3D
-@export var Spacecraft: Node3D
-@export var Operator: Node3D
+@export var Player: lnPlayer
+@export var Spacecraft: lnSpaceSystem
+@export var Operator: lnOperator
 
 var spawn_model_path = "res://addons/lunco-content/moonwards/buildings/android-kiosk/android-kiosk.escn"
 
@@ -191,7 +191,8 @@ func _on_State_transited(from, to):
 		"Operator":
 			set_target(Operator)
 			_ui = preload("res://core/ui/operator-ui.tscn").instantiate()
-			_ui.connect("model_selected", self, "_on_select_model")
+			_ui.model_selected.connect(_on_select_model)
+#			_ui.connect("model_selected", self, "_on_select_model")
 			$UI/Target.text = "Target: Operator"
 			camera.remove_excluded_object(Spacecraft)
 			camera.set_spring_length(2.5)
