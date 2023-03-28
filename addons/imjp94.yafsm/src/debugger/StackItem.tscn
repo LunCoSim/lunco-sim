@@ -1,0 +1,11 @@
+[gd_scene format=3 uid="uid://b3b5ivtjmka6b"]
+
+[node name="StackItem" type="PanelContainer"]
+__meta__ = {
+"_edit_use_anchors_": false
+}
+
+[node name="Label" type="Label" parent="."]
+offset_right = 36.0
+offset_bottom = 26.0
+text = "Item"
