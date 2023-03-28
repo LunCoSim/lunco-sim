@@ -1,8 +1,8 @@
-extends "res://lunco-core/space-system.gd"
+extends lnSpaceSystem
 
-onready var lnMatrix = preload("res://lunco-core/matrix.gd")
-
-onready var lnOperator = preload("res://controllers/operator/operator.gd")
+#@onready var lnMatrix = preload("res://../../base/matrix.gd")
+#
+#@onready var lnOperator = preload("res://../../base/operator.gd")
 
 #-------------------------------
 const MOUSE_SENSITIVITY = 0.1
@@ -21,10 +21,10 @@ var spawn_model_path = "res://addons/lunco-content/moonwards/buildings/android-k
 
 #-------------------------------
 
-onready var ui := $UI/TargetUI
-onready var state := $State
-onready var matrix: lnMatrix = get_parent()
-onready var camera := $SpringArmCamera
+@onready var ui := $UI/TargetUI
+@onready var state := $State
+#@onready var matrix: lnMatrix = get_parent()
+@onready var camera := $SpringArmCamera
 
 #-------------------------------
 
@@ -59,9 +59,10 @@ func clear_ui():
 # Matrix itself is a space system and can perform commands
 
 func _ready():
-	player = matrix.get_player()
-	spacecraft = matrix.get_spacecraft()
-	operator = matrix.get_operator()
+#	player = matrix.get_player()
+#	spacecraft = matrix.get_spacecraft()
+#	operator = matrix.get_operator()
+	pass
 
 func _unhandled_input(event):
 	if target is lnOperator:
@@ -72,9 +73,9 @@ func _unhandled_input(event):
 			if camera:  
 				var from = camera.project_ray_origin(position)
 				var to = from + camera.project_ray_normal(position) * RAY_LENGTH	
-				var res = matrix.ray_cast(from, to)
-				if res:
-					matrix.spawn(res["position"], spawn_model_path)
+#				var res = matrix.ray_cast(from, to)
+#				if res:
+#					matrix.spawn(res["position"], spawn_model_path)
 					
 func _input(event):
 	if Input.is_action_just_pressed("select_player"):
@@ -177,19 +178,19 @@ func _on_State_transited(from, to):
 	match to:
 		"Player":
 			set_target(player)
-			_ui = preload("res://ui/player-ui.tscn").instance()
+			_ui = preload("res://core/ui/player-ui.tscn").instantiate()
 			$UI/Target.text = "Target: Player"
 			camera.remove_excluded_object(spacecraft)
 			camera.set_spring_length(2.5)
 		"Spacecraft":
 			set_target(spacecraft)
-			_ui = preload("res://ui/spacecraft-ui.tscn").instance()
+			_ui = preload("res://core/ui/spacecraft-ui.tscn").instantiate()
 			$UI/Target.text = "Target: Spacecraft"
 			camera.add_excluded_object(spacecraft)
 			camera.set_spring_length(50)
 		"Operator":
 			set_target(operator)
-			_ui = preload("res://ui/operator-ui.tscn").instance()
+			_ui = preload("res://core/ui/operator-ui.tscn").instantiate()
 			_ui.connect("model_selected", self, "_on_select_model")
 			$UI/Target.text = "Target: Operator"
 			camera.remove_excluded_object(spacecraft)

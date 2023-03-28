@@ -1,13 +1,13 @@
 # This is basically the simulation world
 # Check terms for more information
 class_name lnMatrix
-extends "res://lunco-core/space-system.gd"
+extends lnSpaceSystem
 
 #TODO: Introduce GravitaionField class that describes gravitation field in 4D space e.g. gravitation = F(time, x, y, z)
 # var GravitationField := lnGravitationField.new()
 var LocalTime
 
-onready var player = $Player
+@onready var player = $Player
 
 # Other members:
 # World

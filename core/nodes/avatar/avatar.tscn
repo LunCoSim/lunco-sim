@@ -1,6 +1,6 @@
 [gd_scene load_steps=26 format=3 uid="uid://c5dg7yq7hd7m0"]
 
-[ext_resource type="Script" path="res://lunco-core/nodes/avatar.gd" id="1_dv4ct"]
+[ext_resource type="Script" path="res://core/nodes/avatar/avatar.gd" id="1_lcnht"]
 [ext_resource type="Script" path="res://addons/imjp94.yafsm/src/StateMachinePlayer.gd" id="2_b5liy"]
 [ext_resource type="Script" path="res://addons/imjp94.yafsm/src/states/StateMachine.gd" id="3_al5a5"]
 [ext_resource type="Script" path="res://addons/imjp94.yafsm/src/states/State.gd" id="4_bur2c"]
@@ -141,7 +141,7 @@ transitions = {
 name = ""
 
 [node name="Avatar" type="Node"]
-script = ExtResource("1_dv4ct")
+script = ExtResource("1_lcnht")
 
 [node name="State" type="Node" parent="."]
 script = ExtResource("2_b5liy")
