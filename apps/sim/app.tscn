@@ -1,4 +1,4 @@
-[gd_scene load_steps=18 format=3 uid="uid://bq8u263y7tg23"]
+[gd_scene load_steps=16 format=3 uid="uid://bq8u263y7tg23"]
 
 [ext_resource type="Script" path="res://addons/object-inspector/scripts/inspector.gd" id="1_d3brg"]
 [ext_resource type="PackedScene" uid="uid://d8gbyf2xbd4m" path="res://addons/lunco-content/maps/Langrenus/langrenus_map.tscn" id="2_w1oup"]
@@ -12,10 +12,6 @@
 [ext_resource type="PackedScene" uid="uid://6xgnbadqd0df" path="res://addons/lunco-content/moonwards/items/HexpaneWindow/HexpaneWindow.escn" id="10_2q73u"]
 [ext_resource type="PackedScene" uid="uid://do1ecg5jve7wu" path="res://addons/lunco-content/moonwards/vehicles/rovers/AthleteRover/AthleteRover.escn" id="11_ctf0g"]
 [ext_resource type="PackedScene" uid="uid://dn5t73yi2rj4h" path="res://addons/lunco-content/moonwards/vehicles/rovers/SpiderCrane/SpiderCrane.escn" id="12_lyjst"]
-
-[sub_resource type="CylinderShape3D" id="CylinderShape3D_b83vq"]
-
-[sub_resource type="CylinderMesh" id="CylinderMesh_mo0bq"]
 
 [sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_a6c7k"]
 sky_top_color = Color(0.0941176, 0.121569, 0.156863, 1)
@@ -48,33 +44,26 @@ offset_right = 1143.0
 offset_bottom = 629.0
 script = ExtResource("1_d3brg")
 
+[node name="Avatar" parent="." node_paths=PackedStringArray("Player", "Spacecraft", "Operator") instance=ExtResource("6_hs3oo")]
+Player = NodePath("")
+Spacecraft = NodePath("../World/SpaceX_Starship")
+Operator = NodePath("../World/Operator")
+
 [node name="World" type="Node3D" parent="."]
 
 [node name="DirectionalLight3D" type="DirectionalLight3D" parent="World"]
 transform = Transform3D(1, 0, 0, 0, 0.844973, 0.534809, 0, -0.534809, 0.844973, 0, 32.5156, 25.939)
 
 [node name="Langrenus_LP" parent="World" instance=ExtResource("2_w1oup")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.425292, 3.37504, -4.97908)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 31.5747, 2.37504, 57.0209)
 
 [node name="SpaceX_Starship" parent="World" instance=ExtResource("3_kmt5t")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 92.9765, 26.1867, -232.091)
 script = ExtResource("5_jxy1v")
 
-[node name="Avatar" parent="World" node_paths=PackedStringArray("Player", "Spacecraft", "Operator") instance=ExtResource("6_hs3oo")]
-Player = NodePath("../Player")
-Spacecraft = NodePath("../SpaceX_Starship")
-Operator = NodePath("../Operator")
-
 [node name="Operator" parent="World" instance=ExtResource("7_b6d2d")]
 
 [node name="Player" parent="World" instance=ExtResource("8_w1x42")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -21, 6, 18)
-
-[node name="CollisionShape3D" type="CollisionShape3D" parent="World/Player"]
-shape = SubResource("CylinderShape3D_b83vq")
-
-[node name="MeshInstance3D" type="MeshInstance3D" parent="World/Player"]
-mesh = SubResource("CylinderMesh_mo0bq")
 
 [node name="WorldEnvironment" type="WorldEnvironment" parent="World"]
 environment = SubResource("Environment_7olaa")

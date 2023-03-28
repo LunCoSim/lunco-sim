@@ -97,42 +97,45 @@ func _ready():
 	pass
 	print(state)
 	
-	
-
-func _process(delta):
-	#TBD: add tolerance timer + probably move to physics
-	
-	$State.set_param("on_floor", is_on_floor())
-			
+#
+#
+#func _process(delta):
+#	#TBD: add tolerance timer + probably move to physics
+#
+#	$State.set_param("on_floor", is_on_floor())
+#
 #	match state.get_current():
 #		"Idle":
-#
-#			# Aim to zero (no aiming while walking).
-#			animation_tree["parameters/aim/add_amount"] = 0
-#			# Change state to walk.
-#			animation_tree["parameters/state/current"] = 1
-#			# Blend position for walk speed based on motion.
-#			animation_tree["parameters/walk/blend_position"] = Vector2(motion.length(), 0)
+#			pass
+##			# Aim to zero (no aiming while walking).
+##			animation_tree["parameters/aim/add_amount"] = 0
+##			# Change state to walk.
+##			animation_tree["parameters/state/current"] = 1
+##			# Blend position for walk speed based on motion.
+##			animation_tree["parameters/walk/blend_position"] = Vector2(motion.length(), 0)
 #
 #		"Move":
 #			pass
+#
 #		"Jump":
 #			velocity.y = JUMP_SPEED
 #			state.set_trigger("on_air")
 #			# Increase airborne time so next frame on_air is still true
-#			animation_tree["parameters/state/current"] = 2
+##			animation_tree["parameters/state/current"] = 2
 ##			sound_effect_jump.play()
 #		"On Air":
 #			if (velocity.y > 0):
-#				animation_tree["parameters/state/current"] = 2
+#				pass
+##				animation_tree["parameters/state/current"] = 2
 #			else:
-#				animation_tree["parameters/state/current"] = 3
+#				pass
+##				animation_tree["parameters/state/current"] = 3
 #		"Landed":
 ##			sound_effect_land.play()
 #			pass
 #		"Aiming":
 #			# Change state to strafe.
-#			animation_tree["parameters/state/current"] = 0
+##			animation_tree["parameters/state/current"] = 0
 #
 ##			# Change aim according to camera rotation.
 ##			if camera_x_rot >= 0: # Aim up.
@@ -150,6 +153,7 @@ func _process(delta):
 ##			animation_tree["parameters/strafe/blend_position"] = Vector2(motion.x, -motion.y)
 ##
 ##			root_motion = animation_tree.get_root_motion_transform()
+#			pass
 #		"Shoot":
 ##			var shoot_origin = shoot_from.global_transform.origin
 #
@@ -182,46 +186,45 @@ func _process(delta):
 ##			sound_effect_shoot.play()
 #
 ##			camera_node.add_camera_shake_trauma(0.35)# Todo: Emit signanl shot and connect to camera
-		
-	root_motion = animation_tree.get_root_motion_position()
-	#rotating model to match movement direction
-#	player_model.global_transform.basis = orientation.basis
-	
-func _physics_process(delta):
-	
-	# 
-	if motion_target.length_squared() > 0.00001:
-#		motion = motion(motion_target, MOTION_INTERPOLATE_SPEED * delta)
-		pass
-	else:
-		motion = motion_target
-
-	# Not in air or aiming, idle.
-	# Convert orientation to quaternions for interpolating rotation.
-	var target = camera_basis.x * motion.x + camera_basis.z * motion.z
-
-	if target.length_squared() > 0.001:
-		var q_from = orientation.basis.get_rotation_quat()
-		var q_to = Transform3D().looking_at(target, Vector3.UP).basis.get_rotation_quaternion()
-		# Interpolate current rotation with desired one.
-		orientation.basis = Basis(q_from.slerp(q_to, delta * ROTATION_INTERPOLATE_SPEED))
-	
-#	orientation.basis = camera_basis	
-#	# Apply root motion to orientation.
-	orientation *= root_motion
-
+#
+##	root_motion = animation_tree.get_root_motion_position()
+#	#rotating model to match movement direction
+##	player_model.global_transform.basis = orientation.basis
+#
+#func _physics_process(delta):
+#	# 
+#	if motion_target.length_squared() > 0.00001:
+#		motion = motion.lerp(motion_target, MOTION_INTERPOLATE_SPEED * delta)
+#	else:
+#		motion = motion_target
+#
+#	# Not in air or aiming, idle.
+#	# Convert orientation to quaternions for interpolating rotation.
+#	var target = camera_basis.x * motion.x + camera_basis.z * motion.z
+#
+#	if target.length_squared() > 0.001:
+#		var q_from = orientation.basis.get_rotation_quaternion()
+#		var q_to = Transform3D().looking_at(target, Vector3.UP).basis.get_rotation_quaternion()
+#		# Interpolate current rotation with desired one.
+#		orientation.basis = Basis(q_from.slerp(q_to, delta * ROTATION_INTERPOLATE_SPEED))
+#
+##	orientation.basis = camera_basis	
+##	# Apply root motion to orientation.
+#	orientation *= root_motion
+#
 #	var h_velocity = orientation.origin / delta
 #	velocity.x = h_velocity.x
 #	velocity.z = h_velocity.z
 #
-	velocity += gravity * delta #TODO: Move to gravity vector
-	
+#	velocity += gravity * delta #TODO: Move to gravity vector
+#
 #	orientation.origin = Vector3() # Clear accumulated root motion displacement (was applied to speed).
 #	orientation = orientation.orthonormalized() # Orthonormalize orientation.
-	
-	move_and_slide()
-
-
+#
+##	velocity = move_and_slide(velocity, Vector3.UP)
+#	move_and_slide()
+#
+#
 
 # --------------------------------------------------
 func start_move(direction: Vector2, orientation: Vector3):

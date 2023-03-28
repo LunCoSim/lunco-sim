@@ -28,7 +28,7 @@ func _physics_process(delta):
 	else:
 		acceleration = DECELERATION
 
-#	velocity = velocity.linear_interpolate(target_dir, acceleration * delta)
+	velocity = velocity.lerp(target_dir, acceleration * delta)
 
 	move_and_slide()
 

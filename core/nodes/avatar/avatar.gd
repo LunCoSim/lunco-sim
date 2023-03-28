@@ -169,8 +169,9 @@ func _input(event):
 			Input.get_action_strength("move_up") - Input.get_action_strength("move_down"),
 			Input.get_action_strength("move_forward") - Input.get_action_strength("move_back")
 		)
-
-		operator.move(motion_direction)
+		
+		print(motion_direction)
+		operator.move(motion_direction.normalized())
 		operator.orient(cam.get_plain_basis())
 
 func _on_State_transited(from, to):
