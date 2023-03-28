@@ -34,8 +34,9 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.425292, 3.37504, -4.97908)
 [node name="SpaceX_Starship" parent="World" instance=ExtResource("3_kmt5t")]
 script = ExtResource("5_jxy1v")
 
-[node name="Camera3D" type="Camera3D" parent="World/SpaceX_Starship"]
+[node name="Avatar" parent="World" node_paths=PackedStringArray("Spacecraft") instance=ExtResource("6_hs3oo")]
+Spacecraft = NodePath("../SpaceX_Starship")
+
+[node name="Camera3D" type="Camera3D" parent="World"]
 transform = Transform3D(1, 0, 0, 0, 0.999939, -0.0110477, 0, 0.0110477, 0.999939, 0, 26.0892, 23.2524)
 script = ExtResource("1_x1wl7")
-
-[node name="Avatar" parent="World" instance=ExtResource("6_hs3oo")]
