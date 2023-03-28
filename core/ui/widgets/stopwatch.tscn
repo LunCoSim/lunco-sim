@@ -1,7 +1,7 @@
 [gd_scene load_steps=3 format=3]
 
 [ext_resource type="Script" path="res://core/ui/widgets/stopwatch.gd" id="1"]
-[ext_resource type="DynamicFont" path="res://assets/fonts/ui_font_outline.tres" id="2"]
+[ext_resource type="DynamicFont" uid="uid://cav52klpcrnc2" path="res://addons/lunco-assets/fonts/ui_font_outline.tres" id="2"]
 
 [node name="Label" type="Label"]
 margin_left = 64.0
