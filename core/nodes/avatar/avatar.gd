@@ -1,8 +1,8 @@
-extends "res://core/lunco-core/space-system.gd"
+extends "res://lunco-core/space-system.gd"
 
-@onready var lnMatrix = preload("res://lunco-core/matrix.gd")
+onready var lnMatrix = preload("res://lunco-core/matrix.gd")
 
-@onready var lnOperator = preload("res://controllers/operator/operator.gd")
+onready var lnOperator = preload("res://controllers/operator/operator.gd")
 
 #-------------------------------
 const MOUSE_SENSITIVITY = 0.1
@@ -21,10 +21,10 @@ var spawn_model_path = "res://addons/lunco-content/moonwards/buildings/android-k
 
 #-------------------------------
 
-@onready var ui := $UI/TargetUI
-@onready var state := $State
-@onready var matrix: lnMatrix = get_parent()
-@onready var camera := $SpringArmCamera
+onready var ui := $UI/TargetUI
+onready var state := $State
+onready var matrix: lnMatrix = get_parent()
+onready var camera := $SpringArmCamera
 
 #-------------------------------
 
