@@ -1,4 +1,4 @@
-[gd_scene load_steps=15 format=3 uid="uid://bq8u263y7tg23"]
+[gd_scene load_steps=18 format=3 uid="uid://bq8u263y7tg23"]
 
 [ext_resource type="Script" path="res://addons/object-inspector/scripts/inspector.gd" id="1_d3brg"]
 [ext_resource type="PackedScene" uid="uid://d8gbyf2xbd4m" path="res://addons/lunco-content/maps/Langrenus/langrenus_map.tscn" id="2_w1oup"]
@@ -16,6 +16,19 @@
 [sub_resource type="CylinderShape3D" id="CylinderShape3D_b83vq"]
 
 [sub_resource type="CylinderMesh" id="CylinderMesh_mo0bq"]
+
+[sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_a6c7k"]
+sky_top_color = Color(0.0941176, 0.121569, 0.156863, 1)
+sky_energy_multiplier = 12.06
+
+[sub_resource type="Sky" id="Sky_a11fi"]
+sky_material = SubResource("ProceduralSkyMaterial_a6c7k")
+
+[sub_resource type="Environment" id="Environment_7olaa"]
+background_mode = 2
+background_energy_multiplier = 0.29
+sky = SubResource("Sky_a11fi")
+sdfgi_use_occlusion = true
 
 [node name="sim" type="Node"]
 
@@ -62,6 +75,9 @@ shape = SubResource("CylinderShape3D_b83vq")
 
 [node name="MeshInstance3D" type="MeshInstance3D" parent="World/Player"]
 mesh = SubResource("CylinderMesh_mo0bq")
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="World"]
+environment = SubResource("Environment_7olaa")
 
 [node name="nuclear-core" parent="." instance=ExtResource("8_ukav2")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -141.395, -12.1995, -8.34924)
