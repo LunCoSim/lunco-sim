@@ -1,6 +1,625 @@
-[gd_scene load_steps=2 format=3 uid="uid://drw47qiaev3e6"]
+[gd_scene load_steps=80 format=3 uid="uid://c1a1fnwfincby"]
 
-[ext_resource type="Script" path="res://core/controllers/player/player.gd" id="1_yyncr"]
+[ext_resource type="Script" path="res://core/controllers/player/player.gd" id="1_x30wa"]
+[ext_resource type="PackedScene" uid="uid://b6gf4ptchvoki" path="res://addons/lunco-content/player/model/player.glb" id="2_fjmnj"]
+[ext_resource type="Material" path="res://addons/lunco-content/player/bullet/bullet_material.tres" id="3_7x218"]
+[ext_resource type="Texture2D" uid="uid://b0m7ovb57tllv" path="res://addons/lunco-content/player/bullet/effect/FlarePolar.png" id="4_a24d7"]
+[ext_resource type="ArrayMesh" path="res://addons/lunco-content/player/model/muzzle_flash_particle_mesh_Cone.mesh" id="5_t37bt"]
+[ext_resource type="Texture2D" uid="uid://bolfpqle6boxx" path="res://addons/lunco-content/player/crosshair.png" id="6_p3k4u"]
+[ext_resource type="AudioStream" uid="uid://vs1cuix13cqq" path="res://addons/lunco-content/player/audio/step.wav" id="7_628jy"]
+[ext_resource type="AudioStream" uid="uid://dc7wyrbn7ecqq" path="res://addons/lunco-content/player/audio/jump.wav" id="7_hlrtt"]
+[ext_resource type="AudioStream" uid="uid://bwu51xhurf71p" path="res://addons/lunco-content/player/audio/land.wav" id="8_fj8qv"]
+[ext_resource type="AudioStream" uid="uid://bqulitoe5v7p4" path="res://addons/lunco-content/player/audio/shoot.wav" id="9_vlrbr"]
+[ext_resource type="Script" path="res://addons/imjp94.yafsm/src/StateMachinePlayer.gd" id="10_dyuf0"]
+[ext_resource type="Script" path="res://addons/imjp94.yafsm/src/states/StateMachine.gd" id="11_il1ei"]
+[ext_resource type="Script" path="res://addons/imjp94.yafsm/src/states/State.gd" id="12_ykhkp"]
+[ext_resource type="Script" path="res://addons/imjp94.yafsm/src/conditions/Condition.gd" id="13_f7xb0"]
+[ext_resource type="Script" path="res://addons/imjp94.yafsm/src/transitions/Transition.gd" id="14_hdtt7"]
+[ext_resource type="Script" path="res://addons/imjp94.yafsm/src/conditions/FloatCondition.gd" id="15_kex0t"]
+[ext_resource type="Script" path="res://addons/imjp94.yafsm/src/conditions/BooleanCondition.gd" id="16_tqoiv"]
+
+[sub_resource type="SphereMesh" id="2"]
+radius = 0.003
+height = 0.02
+
+[sub_resource type="StandardMaterial3D" id="3"]
+transparency = 1
+cull_mode = 2
+shading_mode = 0
+vertex_color_use_as_albedo = true
+albedo_texture = ExtResource("4_a24d7")
+
+[sub_resource type="Curve" id="6"]
+_data = [Vector2(0, 0), 0.0, 0.0, 0, 0, Vector2(0.791139, 0.990909), 0.0, 0.0, 0, 0, Vector2(1, 0), 0.0, 0.0, 0, 0]
+point_count = 3
+
+[sub_resource type="Gradient" id="4"]
+offsets = PackedFloat32Array(0.325926, 1)
+colors = PackedColorArray(0.0507812, 0.955505, 1, 1, 0.875, 0.888672, 1, 0.305882)
+
+[sub_resource type="AnimationNodeAdd3" id="9"]
+resource_local_to_scene = true
+filter_enabled = true
+filters = ["Robot_Skeleton/Skeleton:neck.001", "Robot_Skeleton/Skeleton:upper_arm.R"]
+
+[sub_resource type="AnimationNodeAnimation" id="10"]
+resource_local_to_scene = true
+animation = &"AIM-Down"
+
+[sub_resource type="AnimationNodeAnimation" id="11"]
+resource_local_to_scene = true
+animation = &"AIM-Up"
+
+[sub_resource type="AnimationNodeBlend2" id="12"]
+resource_local_to_scene = true
+filter_enabled = true
+filters = ["Robot_Skeleton/Skeleton:eyelid.d.L", "Robot_Skeleton/Skeleton:eyelid.d.R", "Robot_Skeleton/Skeleton:eyelid.u.L", "Robot_Skeleton/Skeleton:eyelid.u.R", "Robot_Skeleton/Skeleton:eyes"]
+
+[sub_resource type="AnimationNodeAnimation" id="13"]
+resource_local_to_scene = true
+animation = &"eyes-cycle"
+
+[sub_resource type="AnimationNodeAnimation" id="14"]
+resource_local_to_scene = true
+animation = &"jump_5_hardlanding"
+
+[sub_resource type="AnimationNodeAnimation" id="15"]
+resource_local_to_scene = true
+animation = &"jump_4_falling-cycle"
+
+[sub_resource type="AnimationNodeAnimation" id="16"]
+resource_local_to_scene = true
+animation = &"jump_2_upwards-cycle"
+
+[sub_resource type="AnimationNodeOneShot" id="17"]
+resource_local_to_scene = true
+fadein_time = 0.25
+fadeout_time = 0.25
+autorestart_random_delay = 1.0
+
+[sub_resource type="AnimationNodeTransition" id="18"]
+resource_local_to_scene = true
+xfade_time = 0.15
+input_0/name = "strafe"
+input_0/auto_advance = false
+input_0/reset = true
+input_1/name = "walk"
+input_1/auto_advance = false
+input_1/reset = true
+input_2/name = "jump_up"
+input_2/auto_advance = false
+input_2/reset = true
+input_3/name = "jump_down"
+input_3/auto_advance = false
+input_3/reset = true
+
+[sub_resource type="AnimationNodeAnimation" id="19"]
+resource_local_to_scene = true
+animation = &"strafe_left-cycle"
+
+[sub_resource type="AnimationNodeAnimation" id="20"]
+resource_local_to_scene = true
+animation = &"strafe_right-cycle"
+
+[sub_resource type="AnimationNodeAnimation" id="21"]
+resource_local_to_scene = true
+animation = &"strafe_back-cycle"
+
+[sub_resource type="AnimationNodeAnimation" id="22"]
+resource_local_to_scene = true
+animation = &"strafe_front-cycle"
+
+[sub_resource type="AnimationNodeAnimation" id="23"]
+resource_local_to_scene = true
+animation = &"Idlecombat-cycle"
+
+[sub_resource type="AnimationNodeBlendSpace2D" id="24"]
+resource_local_to_scene = true
+blend_point_0/node = SubResource("19")
+blend_point_0/pos = Vector2(1, 0)
+blend_point_1/node = SubResource("20")
+blend_point_1/pos = Vector2(-1, 0)
+blend_point_2/node = SubResource("21")
+blend_point_2/pos = Vector2(0, -1)
+blend_point_3/node = SubResource("22")
+blend_point_3/pos = Vector2(0, 1)
+blend_point_4/node = SubResource("23")
+blend_point_4/pos = Vector2(0, 0)
+
+[sub_resource type="AnimationNodeAnimation" id="25"]
+resource_local_to_scene = true
+animation = &"Idle-cycle"
+
+[sub_resource type="AnimationNodeAnimation" id="26"]
+resource_local_to_scene = true
+animation = &"running_nogun-cycle"
+
+[sub_resource type="AnimationNodeAnimation" id="27"]
+resource_local_to_scene = true
+animation = &"running_gun-cycle"
+
+[sub_resource type="AnimationNodeAnimation" id="28"]
+resource_local_to_scene = true
+animation = &"Idlecombat-cycle"
+
+[sub_resource type="AnimationNodeBlendSpace2D" id="29"]
+resource_local_to_scene = true
+blend_point_0/node = SubResource("25")
+blend_point_0/pos = Vector2(0, 0)
+blend_point_1/node = SubResource("26")
+blend_point_1/pos = Vector2(1, 0)
+blend_point_2/node = SubResource("27")
+blend_point_2/pos = Vector2(1, 1)
+blend_point_3/node = SubResource("28")
+blend_point_3/pos = Vector2(0, 1)
+min_space = Vector2(0, 0)
+x_label = "speed"
+y_label = "gun"
+
+[sub_resource type="AnimationNodeBlendTree" id="30"]
+resource_local_to_scene = true
+graph_offset = Vector2(-415.775, -83.5659)
+nodes/aim/node = SubResource("9")
+nodes/aim/position = Vector2(380, 120)
+nodes/aimdown/node = SubResource("10")
+nodes/aimdown/position = Vector2(120, 60)
+nodes/aimup/node = SubResource("11")
+nodes/aimup/position = Vector2(140, 380)
+nodes/eye_blend/node = SubResource("12")
+nodes/eye_blend/position = Vector2(640, 120)
+nodes/eyes/node = SubResource("13")
+nodes/eyes/position = Vector2(380, 360)
+nodes/hardland/node = SubResource("14")
+nodes/hardland/position = Vector2(-180, 400)
+nodes/jumpdown/node = SubResource("15")
+nodes/jumpdown/position = Vector2(-460, 320)
+nodes/jumpup/node = SubResource("16")
+nodes/jumpup/position = Vector2(-480, 200)
+nodes/land/node = SubResource("17")
+nodes/land/position = Vector2(120, 180)
+nodes/output/position = Vector2(840, 120)
+nodes/state/node = SubResource("18")
+nodes/state/position = Vector2(-120, 120)
+nodes/strafe/node = SubResource("24")
+nodes/strafe/position = Vector2(-220, -60)
+nodes/walk/node = SubResource("29")
+nodes/walk/position = Vector2(-400, 40)
+node_connections = [&"output", 0, &"eye_blend", &"aim", 0, &"aimdown", &"aim", 1, &"land", &"aim", 2, &"aimup", &"eye_blend", 0, &"aim", &"eye_blend", 1, &"eyes", &"land", 0, &"state", &"land", 1, &"hardland", &"state", 0, &"strafe", &"state", 1, &"walk", &"state", 2, &"jumpup", &"state", 3, &"jumpdown"]
+
+[sub_resource type="CapsuleShape3D" id="31"]
+radius = 0.3
+height = 0.6
+
+[sub_resource type="SeparationRayShape3D" id="32"]
+
+[sub_resource type="Resource" id="45"]
+script = ExtResource("12_ykhkp")
+name = "Aiming"
+
+[sub_resource type="Resource" id="37"]
+script = ExtResource("12_ykhkp")
+name = "Entry"
+
+[sub_resource type="Resource" id="36"]
+script = ExtResource("12_ykhkp")
+name = "Idle"
+
+[sub_resource type="Resource" id="41"]
+script = ExtResource("12_ykhkp")
+name = "Jump"
+
+[sub_resource type="Resource" id="56"]
+script = ExtResource("12_ykhkp")
+name = "Landed"
+
+[sub_resource type="Resource" id="42"]
+script = ExtResource("12_ykhkp")
+name = "Move"
+
+[sub_resource type="Resource" id="43"]
+script = ExtResource("12_ykhkp")
+name = "On Air"
+
+[sub_resource type="Resource" id="44"]
+script = ExtResource("12_ykhkp")
+name = "Shooting"
+
+[sub_resource type="Resource" id="77"]
+script = ExtResource("13_f7xb0")
+name = "jump"
+
+[sub_resource type="Resource" id="78"]
+script = ExtResource("14_hdtt7")
+from = "Aiming"
+to = "Jump"
+conditions = {
+"jump": SubResource("77")
+}
+priority = 0
+
+[sub_resource type="Resource" id="76"]
+script = ExtResource("15_kex0t")
+value = 0.0
+comparation = 5
+name = "fire_cooldown"
+
+[sub_resource type="Resource" id="69"]
+script = ExtResource("13_f7xb0")
+name = "shoot"
+
+[sub_resource type="Resource" id="70"]
+script = ExtResource("14_hdtt7")
+from = "Aiming"
+to = "Shooting"
+conditions = {
+"fire_cooldown": SubResource("76"),
+"shoot": SubResource("69")
+}
+priority = 0
+
+[sub_resource type="Resource" id="39"]
+script = ExtResource("14_hdtt7")
+from = "Entry"
+to = "Idle"
+conditions = {}
+priority = 0
+
+[sub_resource type="Resource" id="71"]
+script = ExtResource("13_f7xb0")
+name = "aim"
+
+[sub_resource type="Resource" id="72"]
+script = ExtResource("14_hdtt7")
+from = "Idle"
+to = "Aiming"
+conditions = {
+"aim": SubResource("71")
+}
+priority = 0
+
+[sub_resource type="Resource" id="57"]
+script = ExtResource("13_f7xb0")
+name = "jump"
+
+[sub_resource type="Resource" id="46"]
+script = ExtResource("14_hdtt7")
+from = "Idle"
+to = "Jump"
+conditions = {
+"jump": SubResource("57")
+}
+priority = 0
+
+[sub_resource type="Resource" id="58"]
+script = ExtResource("13_f7xb0")
+name = "move"
+
+[sub_resource type="Resource" id="47"]
+script = ExtResource("14_hdtt7")
+from = "Idle"
+to = "Move"
+conditions = {
+"move": SubResource("58")
+}
+priority = 0
+
+[sub_resource type="Resource" id="67"]
+script = ExtResource("16_tqoiv")
+value = false
+comparation = 0
+name = "on_floor"
+
+[sub_resource type="Resource" id="48"]
+script = ExtResource("14_hdtt7")
+from = "Jump"
+to = "On Air"
+conditions = {
+"on_floor": SubResource("67")
+}
+priority = 0
+
+[sub_resource type="Resource" id="68"]
+script = ExtResource("16_tqoiv")
+value = true
+comparation = 0
+name = "on_floor"
+
+[sub_resource type="Resource" id="64"]
+script = ExtResource("14_hdtt7")
+from = "Landed"
+to = "Idle"
+conditions = {
+"on_floor": SubResource("68")
+}
+priority = 0
+
+[sub_resource type="Resource" id="73"]
+script = ExtResource("13_f7xb0")
+name = "aim"
+
+[sub_resource type="Resource" id="74"]
+script = ExtResource("14_hdtt7")
+from = "Move"
+to = "Aiming"
+conditions = {
+"aim": SubResource("73")
+}
+priority = 0
+
+[sub_resource type="Resource" id="61"]
+script = ExtResource("13_f7xb0")
+name = "stop"
+
+[sub_resource type="Resource" id="62"]
+script = ExtResource("14_hdtt7")
+from = "Move"
+to = "Idle"
+conditions = {
+"stop": SubResource("61")
+}
+priority = 0
+
+[sub_resource type="Resource" id="59"]
+script = ExtResource("13_f7xb0")
+name = "jump"
+
+[sub_resource type="Resource" id="60"]
+script = ExtResource("14_hdtt7")
+from = "Move"
+to = "Jump"
+conditions = {
+"jump": SubResource("59")
+}
+priority = 0
+
+[sub_resource type="Resource" id="66"]
+script = ExtResource("16_tqoiv")
+value = true
+comparation = 0
+name = "on_floor"
+
+[sub_resource type="Resource" id="63"]
+script = ExtResource("14_hdtt7")
+from = "On Air"
+to = "Landed"
+conditions = {
+"on_floor": SubResource("66")
+}
+priority = 0
+
+[sub_resource type="Resource" id="75"]
+script = ExtResource("14_hdtt7")
+from = "Shooting"
+to = "Idle"
+conditions = {}
+priority = 0
+
+[sub_resource type="Resource" id="40"]
+script = ExtResource("11_il1ei")
+states = {
+"Aiming": SubResource("45"),
+"Entry": SubResource("37"),
+"Idle": SubResource("36"),
+"Jump": SubResource("41"),
+"Landed": SubResource("56"),
+"Move": SubResource("42"),
+"On Air": SubResource("43"),
+"Shooting": SubResource("44")
+}
+transitions = {
+"Aiming": {
+"Jump": SubResource("78"),
+"Shooting": SubResource("70")
+},
+"Entry": {
+"Idle": SubResource("39")
+},
+"Idle": {
+"Aiming": SubResource("72"),
+"Jump": SubResource("46"),
+"Move": SubResource("47")
+},
+"Jump": {
+"On Air": SubResource("48")
+},
+"Landed": {
+"Idle": SubResource("64")
+},
+"Move": {
+"Aiming": SubResource("74"),
+"Idle": SubResource("62"),
+"Jump": SubResource("60")
+},
+"On Air": {
+"Landed": SubResource("63")
+},
+"Shooting": {
+"Idle": SubResource("75")
+}
+}
+name = ""
 
 [node name="Player" type="CharacterBody3D"]
-script = ExtResource("1_yyncr")
+collision_layer = 6
+collision_mask = 7
+script = ExtResource("1_x30wa")
+
+[node name="PlayerModel" parent="." instance=ExtResource("2_fjmnj")]
+
+[node name="Robot_Skeleton" parent="PlayerModel" index="0"]
+transform = Transform3D(0.803991, 0, 0, 0, 0.803991, 0, 0, 0, 0.803991, 0, 0, 0)
+
+[node name="Skeleton3D" parent="PlayerModel/Robot_Skeleton" index="0"]
+bones/2/rotation = Quaternion(-0.0954857, 0.00280071, -0.00269498, 0.995423)
+bones/3/rotation = Quaternion(-0.104102, 0.00327611, -0.00209141, 0.994559)
+bones/4/rotation = Quaternion(-0.0410543, 0.00354144, -0.00160161, 0.999149)
+bones/6/rotation = Quaternion(-0.0126036, 0.77207, 0.635366, -0.00767444)
+bones/16/rotation = Quaternion(-0.606097, 0.0536399, 0.148984, 0.77947)
+bones/17/rotation = Quaternion(-0.0687908, 0.00661696, -0.235322, 0.969457)
+bones/18/rotation = Quaternion(-0.0862918, -0.00136207, -0.241658, 0.966516)
+bones/45/rotation = Quaternion(0.189582, -0.137612, 0.960075, 0.152896)
+bones/47/rotation = Quaternion(-0.340447, 0.0116982, 0.229027, 0.911869)
+bones/48/rotation = Quaternion(0.117886, 0.0773284, 0.594661, 0.791519)
+bones/49/rotation = Quaternion(-0.259514, -0.0357909, -0.140634, 0.954774)
+bones/51/rotation = Quaternion(-0.117661, 0.360332, 0.63279, 0.675199)
+bones/52/rotation = Quaternion(0.00436206, 0.000805848, 0.00928912, 0.999947)
+bones/53/rotation = Quaternion(-0.00526765, -0.235616, -0.00658962, 0.97181)
+bones/55/rotation = Quaternion(0.00907352, 0.999945, -0.00213467, -0.00491077)
+bones/56/scale = Vector3(0.766362, 0.766362, 0.766362)
+bones/58/rotation = Quaternion(0.262396, 0.0310503, 0.011109, 0.964397)
+bones/58/scale = Vector3(0.999991, 1, 0.999998)
+bones/59/rotation = Quaternion(-0.599879, 0.0243297, -0.0160136, 0.79956)
+bones/59/scale = Vector3(1, 0.999997, 1)
+bones/60/rotation = Quaternion(-0.851389, 0.0640215, -0.157544, 0.496204)
+bones/60/scale = Vector3(1.00003, 0.999969, 0.999979)
+bones/61/scale = Vector3(0.28462, 0.28462, 0.28462)
+bones/63/rotation = Quaternion(-0.30771, -0.307706, 0.636644, 0.636645)
+bones/64/rotation = Quaternion(-0.00783716, 0.0142509, -0.135109, 0.990697)
+bones/64/scale = Vector3(0.999993, 1, 1)
+bones/65/rotation = Quaternion(0.0230007, -0.00258889, -0.887377, 0.460464)
+bones/65/scale = Vector3(0.999975, 1.00002, 0.999995)
+bones/66/scale = Vector3(0.466168, 0.466168, 0.466168)
+bones/69/rotation = Quaternion(0.2106, 0.0346215, 0.0196047, 0.976762)
+bones/69/scale = Vector3(0.999989, 1, 1)
+bones/70/rotation = Quaternion(-0.61688, 0.0261822, -0.0113788, 0.78654)
+bones/70/scale = Vector3(0.999999, 0.999998, 1)
+bones/71/rotation = Quaternion(-0.839658, 0.0678447, -0.150817, 0.517326)
+bones/71/scale = Vector3(1.00002, 0.999968, 0.999985)
+bones/72/scale = Vector3(0.28462, 0.28462, 0.28462)
+bones/75/scale = Vector3(0.28462, 0.28462, 0.28462)
+bones/77/rotation = Quaternion(0.164967, 0.0348443, 0.0160497, 0.985553)
+bones/77/scale = Vector3(0.99999, 1, 1)
+bones/78/rotation = Quaternion(-0.631685, 0.027633, -0.00820882, 0.774689)
+bones/78/scale = Vector3(0.999999, 0.999996, 1.00001)
+bones/79/rotation = Quaternion(-0.828878, 0.071098, -0.145699, 0.535424)
+bones/79/scale = Vector3(1.00002, 0.999964, 0.999993)
+bones/81/rotation = Quaternion(-0.140048, -0.141762, 0.967998, 0.152543)
+bones/81/scale = Vector3(0.999975, 0.999991, 1.00003)
+bones/85/position = Vector3(-0.00387443, 0.0527354, 0.0957328)
+bones/86/position = Vector3(-0.0039424, 0.056544, -0.0935272)
+bones/88/position = Vector3(2.9898e-08, -4.44013e-09, 0.202989)
+bones/89/rotation = Quaternion(-0.00040512, 0.173646, 0.984808, -0.000801934)
+bones/90/position = Vector3(2.98023e-08, 0.185297, -0.0266094)
+bones/91/position = Vector3(8.94554e-08, 1.91236e-08, -0.202989)
+bones/92/position = Vector3(2.98023e-08, 0.066003, 0.026698)
+bones/95/rotation = Quaternion(0.606417, 0.0663305, 0.454407, 0.649133)
+bones/96/rotation = Quaternion(0.380126, -0.226872, 0.0721153, 0.893774)
+bones/97/rotation = Quaternion(0.220803, 0.160878, 0.574588, 0.7715)
+bones/99/rotation = Quaternion(-0.693195, -0.16982, -0.518197, 0.471289)
+bones/100/rotation = Quaternion(-0.104463, -0.144538, 0.971231, 0.15782)
+bones/101/rotation = Quaternion(0.221739, 0.187563, -0.937734, 0.190542)
+bones/102/rotation = Quaternion(0.344635, 0.675623, -0.570777, 0.314603)
+bones/104/rotation = Quaternion(-0.2611, 0.591207, 0.717551, 0.259656)
+bones/105/rotation = Quaternion(-0.102876, 0.163351, -0.961603, 0.195073)
+bones/106/rotation = Quaternion(-0.0865806, 0.303311, -0.845783, 0.4303)
+bones/107/rotation = Quaternion(-0.308394, 0.417151, -0.853904, 0.0415424)
+bones/108/rotation = Quaternion(-2.84976e-09, -2.30502e-08, 2.8e-09, 1)
+bones/136/position = Vector3(0.270767, 2.61213, 7.6863)
+bones/139/position = Vector3(-0.409036, 2.88739, 0.651231)
+bones/139/rotation = Quaternion(-0.707107, 0, 0, 0.707107)
+bones/140/position = Vector3(-1.04968, 2.25325, 0.903192)
+
+[node name="PlayerModel@Robot_Skeleton@Skeleton@GunBone" type="BoneAttachment3D" parent="."]
+transform = Transform3D(0.92917, -0.361863, -0.0769309, -0.0208846, 0.156325, -0.987492, 0.369406, 0.919031, 0.137679, -0.207141, 1.39548, 0.441971)
+bone_name = "hand.R"
+
+[node name="PlayerModel@Robot_Skeleton@Skeleton@GunBone@ShootFrom" type="Marker3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.4, 0)
+
+[node name="PlayerModel@Robot_Skeleton@Skeleton@GunBone@ShootFrom@ShootParticle" type="CPUParticles3D" parent="."]
+transform = Transform3D(1, 2.04891e-08, 0, 3.21306e-08, 1, 5.58794e-09, 0, 0, 1, 0, 0, 0)
+material_override = ExtResource("3_7x218")
+emitting = false
+amount = 10
+lifetime = 0.3
+one_shot = true
+explosiveness = 0.79
+mesh = SubResource("2")
+direction = Vector3(0, 0, -1)
+spread = 15.0
+gravity = Vector3(0, -3, 0)
+
+[node name="PlayerModel@Robot_Skeleton@Skeleton@GunBone@ShootFrom@MuzzleFlash" type="CPUParticles3D" parent="."]
+transform = Transform3D(1, 0, -2.00234e-08, 1.21072e-08, -4.37722e-08, -1, -2.98023e-08, 1, -4.74975e-08, 0, 0, 0)
+material_override = SubResource("3")
+emitting = false
+amount = 1
+lifetime = 0.1
+one_shot = true
+explosiveness = 1.0
+mesh = ExtResource("5_t37bt")
+gravity = Vector3(0, 0, 0)
+scale_amount_curve = SubResource("6")
+color_ramp = SubResource("4")
+
+[node name="RootMotionView" type="RootMotionView" parent="."]
+animation_path = NodePath("../AnimationTree")
+
+[node name="AnimationTree" type="AnimationTree" parent="."]
+tree_root = SubResource("30")
+anim_player = NodePath("../PlayerModel/AnimationPlayer")
+active = true
+root_motion_track = NodePath("Robot_Skeleton/Skeleton:root")
+parameters/aim/add_amount = 0
+parameters/eye_blend/blend_amount = 1.0
+parameters/land/active = false
+parameters/land/request = 0
+parameters/state/current_state = "strafe"
+parameters/state/transition_request = ""
+parameters/state/current_index = 0
+parameters/strafe/blend_position = Vector2(0, 0)
+parameters/walk/blend_position = Vector2(0, 0)
+
+[node name="CapsuleShape" type="CollisionShape3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, -4.37114e-08, 1, 0, -1, -4.37114e-08, 0, 1, 0)
+shape = SubResource("31")
+
+[node name="RayShape" type="CollisionShape3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, -4.37114e-08, -1, 0, 1, -4.37114e-08, 0, 1.00357, 0)
+shape = SubResource("32")
+
+[node name="ColorRect" type="ColorRect" parent="."]
+modulate = Color(1, 1, 1, 0)
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+mouse_filter = 2
+color = Color(0, 0, 0, 1)
+
+[node name="Crosshair" type="TextureRect" parent="."]
+self_modulate = Color(1, 1, 1, 0)
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+texture = ExtResource("6_p3k4u")
+expand_mode = 1
+stretch_mode = 1
+
+[node name="SoundEffects" type="Node" parent="."]
+
+[node name="Step" type="AudioStreamPlayer" parent="SoundEffects"]
+stream = ExtResource("7_628jy")
+
+[node name="Jump" type="AudioStreamPlayer" parent="SoundEffects"]
+stream = ExtResource("7_hlrtt")
+
+[node name="Land" type="AudioStreamPlayer" parent="SoundEffects"]
+stream = ExtResource("8_fj8qv")
+
+[node name="Shoot" type="AudioStreamPlayer" parent="SoundEffects"]
+stream = ExtResource("9_vlrbr")
+
+[node name="FireCooldown" type="Timer" parent="."]
+wait_time = 0.4
+one_shot = true
+autostart = true
+
+[node name="State" type="Node" parent="."]
+script = ExtResource("10_dyuf0")
+state_machine = SubResource("40")
+
+[connection signal="transited" from="State" to="." method="_on_StatePlayer_transited"]
+
+[editable path="PlayerModel"]
