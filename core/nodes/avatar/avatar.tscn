@@ -154,14 +154,23 @@ layout_mode = 3
 anchors_preset = 0
 
 [node name="TargetUI" type="Control" parent="UI"]
+layout_mode = 2
 anchors_preset = 0
-
-[node name="Help" type="VBoxContainer" parent="UI"]
-layout_mode = 0
 offset_left = 4.0
 offset_top = 28.0
 offset_right = 148.0
-offset_bottom = 144.0
+offset_bottom = 28.0
+
+[node name="Help" type="VBoxContainer" parent="UI"]
+layout_mode = 0
+offset_left = 994.0
+offset_top = 12.0
+offset_right = 1138.0
+offset_bottom = 158.0
+
+[node name="Target" type="Label" parent="UI/Help"]
+layout_mode = 2
+text = "Target: "
 
 [node name="Orientation" type="Label" parent="UI/Help"]
 layout_mode = 2
@@ -178,9 +187,5 @@ text = "3 – Select operator"
 [node name="Spawn" type="Label" parent="UI/Help"]
 layout_mode = 2
 text = "Ctrl+` – console "
-
-[node name="Target" type="Label" parent="UI"]
-layout_mode = 0
-text = "Target: "
 
 [connection signal="transited" from="State" to="." method="_on_State_transited"]

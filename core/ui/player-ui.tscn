@@ -13,10 +13,8 @@ script = ExtResource("1")
 
 [node name="Help" type="VBoxContainer" parent="."]
 layout_mode = 0
-offset_left = 382.0
-offset_top = 3.0
-offset_right = 620.0
-offset_bottom = 119.0
+offset_right = 238.0
+offset_bottom = 116.0
 
 [node name="Thrust" type="Label" parent="Help"]
 layout_mode = 2

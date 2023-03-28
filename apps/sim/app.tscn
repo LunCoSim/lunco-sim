@@ -42,10 +42,10 @@ offset_bottom = 314.0
 text = "Sim app"
 
 [node name="ObjectInspector" type="VBoxContainer" parent="UI"]
-offset_left = 9.0
-offset_top = 117.0
-offset_right = 641.0
-offset_bottom = 198.0
+offset_left = 783.0
+offset_top = 552.0
+offset_right = 1143.0
+offset_bottom = 629.0
 script = ExtResource("1_d3brg")
 
 [node name="World" type="Node3D" parent="."]

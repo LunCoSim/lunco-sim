@@ -14,10 +14,9 @@ script = ExtResource("1")
 
 [node name="HUD" type="VBoxContainer" parent="."]
 layout_mode = 0
-offset_left = 26.0
-offset_top = 467.0
-offset_right = 349.0
-offset_bottom = 613.0
+offset_top = 500.0
+offset_right = 323.0
+offset_bottom = 646.0
 
 [node name="Position" type="Label" parent="HUD"]
 layout_mode = 2
@@ -49,10 +48,9 @@ one_shot = true
 
 [node name="Help" type="VBoxContainer" parent="."]
 layout_mode = 0
-offset_left = 470.0
-offset_top = 4.0
-offset_right = 708.0
-offset_bottom = 120.0
+offset_top = 60.0
+offset_right = 238.0
+offset_bottom = 176.0
 
 [node name="Thrust" type="Label" parent="Help"]
 layout_mode = 2
