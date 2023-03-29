@@ -6,7 +6,7 @@ class_name lnSpacecraft
 @export var THRUST_TURN = 200
 @export var THRUST_ROLL = 50
 
-@export var Target: RigidBody3D
+@onready var Target: RigidBody3D = get_parent()
 
 signal thrusted(enabled)
 

@@ -4,7 +4,7 @@ class_name lnPlayer
 signal aiming
 
 #@export var camera: NodePath
-@export var Target: CharacterBody3D
+@onready var Target: CharacterBody3D = get_parent()
 # Release aiming if the mouse/gamepad button was held for longer than 0.4 seconds.
 # This works well for trackpads and is more accessible by not making long presses a requirement.
 # If the aiming button was held for less than 0.4 seconds, keep aiming until the aiming button is pressed again.

@@ -4,7 +4,7 @@ extends lnSpaceSystem
 class_name lnOperator
 
 
-@export var Target: CharacterBody3D
+@onready var Target: CharacterBody3D = get_parent()
 
 @export var MAX_SPEED = 100
 @export var JUMP_SPEED = 2

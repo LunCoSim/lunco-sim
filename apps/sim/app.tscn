@@ -55,8 +55,7 @@ Operator = NodePath("../World/Operator")
 
 [node name="Player" parent="World" instance=ExtResource("3_mf3ok")]
 
-[node name="PlayerController" parent="World/Player" node_paths=PackedStringArray("Target") instance=ExtResource("4_bffmb")]
-Target = NodePath("..")
+[node name="PlayerController" parent="World/Player" instance=ExtResource("4_bffmb")]
 
 [node name="DirectionalLight3D" type="DirectionalLight3D" parent="World"]
 transform = Transform3D(1, 0, 0, 0, 0.844973, 0.534809, 0, -0.534809, 0.844973, 0, 32.5156, 25.939)
@@ -67,14 +66,12 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 31.5747, 2.37504, 57.0209)
 [node name="SpaceX_Starship" parent="World" instance=ExtResource("3_kmt5t")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 92.9765, 26.1867, -232.091)
 
-[node name="SpacecraftController" parent="World/SpaceX_Starship" node_paths=PackedStringArray("Target") instance=ExtResource("5_w6nou")]
+[node name="SpacecraftController" parent="World/SpaceX_Starship" instance=ExtResource("5_w6nou")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -92.9765, -26.1867, 232.091)
-Target = NodePath("..")
 
 [node name="Operator" parent="World" instance=ExtResource("7_b6d2d")]
 
-[node name="OperatorController" parent="World/Operator" node_paths=PackedStringArray("Target") instance=ExtResource("7_vfs0j")]
-Target = NodePath("..")
+[node name="OperatorController" parent="World/Operator" instance=ExtResource("7_vfs0j")]
 
 [node name="WorldEnvironment" type="WorldEnvironment" parent="World"]
 environment = SubResource("Environment_7olaa")
