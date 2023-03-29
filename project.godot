@@ -18,6 +18,11 @@ config/icon="res://icon.svg"
 [autoload]
 
 BeehaveGlobalMetrics="*res://addons/beehave/metrics/beehave_global_metrics.gd"
+Console="*res://addons/panku_console/console.tscn"
+
+[debug]
+
+file_logging/enable_file_logging.pc=false
 
 [editor]
 
@@ -25,7 +30,7 @@ movie_writer/movie_file="/home/rod/Documents/lunco-movies/godot_output.avi"
 
 [editor_plugins]
 
-enabled=PackedStringArray("res://addons/object-inspector/plugin.cfg", "res://addons/imjp94.yafsm/plugin.cfg", "res://addons/panku_console/plugin.cfg", "res://addons/beehave/plugin.cfg")
+enabled=PackedStringArray("res://addons/object-inspector/plugin.cfg", "res://addons/imjp94.yafsm/plugin.cfg", "res://addons/beehave/plugin.cfg", "res://addons/panku_console/plugin.cfg")
 
 [input]
 
@@ -226,6 +231,15 @@ select_operator={
 "events": [Object(InputEventKey,"resource_local_to_scene":false,"resource_name":"","device":0,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"pressed":false,"keycode":0,"physical_keycode":51,"key_label":0,"unicode":0,"echo":false,"script":null)
 ]
 }
+toggle_console={
+"deadzone": 0.5,
+"events": [Object(InputEventKey,"resource_local_to_scene":false,"resource_name":"","device":0,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"pressed":false,"keycode":0,"physical_keycode":96,"key_label":0,"unicode":0,"echo":false,"script":null)
+]
+}
+
+[panku]
+
+toggle_console_action="toggle_console"
 
 [rendering]
 
