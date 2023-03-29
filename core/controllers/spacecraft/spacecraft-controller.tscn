@@ -1,0 +1,16 @@
+[gd_scene load_steps=2 format=3 uid="uid://btw1pbsrpnjx4"]
+
+[ext_resource type="Script" path="res://core/controllers/spacecraft/spacecraft-controller.gd" id="1_molbc"]
+
+[node name="SpacecraftController" type="Node3D"]
+script = ExtResource("1_molbc")
+
+[node name="Commands" type="Node" parent="."]
+
+[node name="Parameters" type="Node" parent="."]
+
+[node name="Thrust" type="Node" parent="Parameters"]
+
+[node name="Torque" type="Node" parent="Parameters"]
+
+[node name="EngineWorking" type="Node" parent="Parameters"]

@@ -14,7 +14,7 @@ var target: Node
 var mouse_control := false
 
 @export var Player: Node3D
-@export var Spacecraft: Node3D
+@export var Spacecraft: lnSpacecraft
 @export var Operator: Node3D
 
 var spawn_model_path = "res://addons/lunco-content/moonwards/buildings/android-kiosk/android-kiosk.escn"

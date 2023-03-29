@@ -35,6 +35,19 @@ func _physics_process(delta):
 	
 #-----------
 
+#Commands: 
+# reset_position
+# start_moving
+# stop_moving
+
+# Parameters
+# moving_direction
+# orientation
+
+# Telemetry
+# position
+# velocity
+
 func reset_position():
 	position = start_position
 

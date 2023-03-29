@@ -265,9 +265,7 @@ transitions = {
 }
 name = ""
 
-[node name="Player" type="CharacterBody3D"]
-collision_layer = 6
-collision_mask = 7
+[node name="Player" type="Node3D"]
 script = ExtResource("1_x30wa")
 
 [node name="Player" parent="." instance=ExtResource("2_u7v3q")]

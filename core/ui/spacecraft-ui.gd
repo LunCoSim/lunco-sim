@@ -29,21 +29,22 @@ func _ready():
 
 func _on_UpdateUI_timeout():
 	if target:
-		var vec = target.transform.origin
+		var Target = target.Target
+		var vec = Target.transform.origin
 		position_lbl.text = "Position: (%.2f, %.2f, %.2f) Abs: %.2f" % [vec.x, vec.y, vec.z, vec.length()]
-		vec = target.rotation
+		vec = Target.rotation
 		direction_lbl.text = "Orientation: (%.2f, %.2f, %.2f)" % [vec.x, vec.y, vec.z]
 		
-		vec = target.linear_velocity
+		vec = Target.linear_velocity
 		velocity_lbl.text = "Velocity: (%.2f, %.2f, %.2f) Abs: %.2f" % [vec.x, vec.y, vec.z, vec.length()]
 		
-		vec = target.angular_velocity
+		vec = Target.angular_velocity
 		angvelocity_lbl.text = "AngVelocity: (%.2f, %.2f, %.2f) Abs: %.2f" % [vec.x, vec.y, vec.z, vec.length()]
 		
 		#change 100 to delta
-		var acc = (target.linear_velocity - prev_velocity) / 100
+		var acc = (Target.linear_velocity - prev_velocity) / 100
 		acceleration_lbl.text = "Acceleration: (%.2f, %.2f, %.2f) Abs: %.2f" % [acc.x, acc.y, acc.z, acc.length()]
-		prev_velocity = target.linear_velocity
+		prev_velocity = Target.linear_velocity
 
 func _on_HideControls_timeout():
 	$Help.visible = false

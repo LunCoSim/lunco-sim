@@ -1,5 +1,5 @@
 class_name lnPlayer
-extends CharacterBody3D
+extends Node3D
 
 signal aiming
 
@@ -57,12 +57,13 @@ var camera_basis := Basis.IDENTITY
 # set state
 # set triggers
 
-# State
-# Idle
-# Moving
-# On_air
-# Aiming
-# Shooting
+# Telemetry
+# 	State
+# 		Idle
+# 		Moving
+# 		On_air
+# 		Aiming
+# 		Shooting
 
 
 @onready var initial_position = transform.origin
@@ -93,7 +94,7 @@ func _ready():
 	print("alksjdlksajdlkajdlk")
 	# Pre-initialize orientation transform.
 #	orientation = player_model.global_transform
-#	orientation.origin = Vector3()
+#	orientation.origin = Vector3()wwwwwwwwwwwwwwwwwww
 	pass
 	print(state)
 	
