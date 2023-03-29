@@ -1,61 +1,60 @@
-[gd_scene load_steps=44 format=3 uid="uid://c1a1fnwfincby"]
+[gd_scene load_steps=43 format=3 uid="uid://cibc2v3g1bk4g"]
 
-[ext_resource type="Script" path="res://core/controllers/player/player.gd" id="1_x30wa"]
-[ext_resource type="PackedScene" uid="uid://baunvflaucrbn" path="res://addons/lunco-content/player/player.tscn" id="2_u7v3q"]
-[ext_resource type="Script" path="res://addons/imjp94.yafsm/src/StateMachinePlayer.gd" id="10_dyuf0"]
-[ext_resource type="Script" path="res://addons/imjp94.yafsm/src/states/StateMachine.gd" id="11_il1ei"]
-[ext_resource type="Script" path="res://addons/imjp94.yafsm/src/states/State.gd" id="12_ykhkp"]
-[ext_resource type="Script" path="res://addons/imjp94.yafsm/src/conditions/Condition.gd" id="13_f7xb0"]
-[ext_resource type="Script" path="res://addons/imjp94.yafsm/src/transitions/Transition.gd" id="14_hdtt7"]
-[ext_resource type="Script" path="res://addons/imjp94.yafsm/src/conditions/FloatCondition.gd" id="15_kex0t"]
-[ext_resource type="Script" path="res://addons/imjp94.yafsm/src/conditions/BooleanCondition.gd" id="16_tqoiv"]
+[ext_resource type="Script" path="res://core/controllers/player/player-controller.gd" id="1_541sa"]
+[ext_resource type="Script" path="res://addons/imjp94.yafsm/src/StateMachinePlayer.gd" id="2_lr54q"]
+[ext_resource type="Script" path="res://addons/imjp94.yafsm/src/states/StateMachine.gd" id="3_j3fcc"]
+[ext_resource type="Script" path="res://addons/imjp94.yafsm/src/states/State.gd" id="4_kw0e3"]
+[ext_resource type="Script" path="res://addons/imjp94.yafsm/src/conditions/Condition.gd" id="5_4g1es"]
+[ext_resource type="Script" path="res://addons/imjp94.yafsm/src/transitions/Transition.gd" id="6_yom78"]
+[ext_resource type="Script" path="res://addons/imjp94.yafsm/src/conditions/FloatCondition.gd" id="7_1x8qy"]
+[ext_resource type="Script" path="res://addons/imjp94.yafsm/src/conditions/BooleanCondition.gd" id="8_nvk28"]
 
 [sub_resource type="Resource" id="45"]
-script = ExtResource("12_ykhkp")
+script = ExtResource("4_kw0e3")
 name = "Aiming"
 metadata/graph_offset = Vector2(419.5, 1.5)
 
 [sub_resource type="Resource" id="37"]
-script = ExtResource("12_ykhkp")
+script = ExtResource("4_kw0e3")
 name = "Entry"
 metadata/graph_offset = Vector2(-76, 101.5)
 
 [sub_resource type="Resource" id="36"]
-script = ExtResource("12_ykhkp")
+script = ExtResource("4_kw0e3")
 name = "Idle"
 metadata/graph_offset = Vector2(104, 221.5)
 
 [sub_resource type="Resource" id="41"]
-script = ExtResource("12_ykhkp")
+script = ExtResource("4_kw0e3")
 name = "Jump"
 metadata/graph_offset = Vector2(664, 381.5)
 
 [sub_resource type="Resource" id="56"]
-script = ExtResource("12_ykhkp")
+script = ExtResource("4_kw0e3")
 name = "Landed"
 metadata/graph_offset = Vector2(-41.5, 261.5)
 
 [sub_resource type="Resource" id="42"]
-script = ExtResource("12_ykhkp")
+script = ExtResource("4_kw0e3")
 name = "Move"
 metadata/graph_offset = Vector2(364, 121.5)
 
 [sub_resource type="Resource" id="43"]
-script = ExtResource("12_ykhkp")
+script = ExtResource("4_kw0e3")
 name = "On Air"
 metadata/graph_offset = Vector2(102, 401.5)
 
 [sub_resource type="Resource" id="44"]
-script = ExtResource("12_ykhkp")
+script = ExtResource("4_kw0e3")
 name = "Shooting"
 metadata/graph_offset = Vector2(973, 121.5)
 
 [sub_resource type="Resource" id="77"]
-script = ExtResource("13_f7xb0")
+script = ExtResource("5_4g1es")
 name = "jump"
 
 [sub_resource type="Resource" id="78"]
-script = ExtResource("14_hdtt7")
+script = ExtResource("6_yom78")
 from = "Aiming"
 to = "Jump"
 conditions = {
@@ -64,17 +63,17 @@ conditions = {
 priority = 0
 
 [sub_resource type="Resource" id="76"]
-script = ExtResource("15_kex0t")
+script = ExtResource("7_1x8qy")
 value = 0.0
 comparation = 5
 name = "fire_cooldown"
 
 [sub_resource type="Resource" id="69"]
-script = ExtResource("13_f7xb0")
+script = ExtResource("5_4g1es")
 name = "shoot"
 
 [sub_resource type="Resource" id="70"]
-script = ExtResource("14_hdtt7")
+script = ExtResource("6_yom78")
 from = "Aiming"
 to = "Shooting"
 conditions = {
@@ -84,18 +83,18 @@ conditions = {
 priority = 0
 
 [sub_resource type="Resource" id="39"]
-script = ExtResource("14_hdtt7")
+script = ExtResource("6_yom78")
 from = "Entry"
 to = "Idle"
 conditions = {}
 priority = 0
 
 [sub_resource type="Resource" id="71"]
-script = ExtResource("13_f7xb0")
+script = ExtResource("5_4g1es")
 name = "aim"
 
 [sub_resource type="Resource" id="72"]
-script = ExtResource("14_hdtt7")
+script = ExtResource("6_yom78")
 from = "Idle"
 to = "Aiming"
 conditions = {
@@ -104,11 +103,11 @@ conditions = {
 priority = 0
 
 [sub_resource type="Resource" id="57"]
-script = ExtResource("13_f7xb0")
+script = ExtResource("5_4g1es")
 name = "jump"
 
 [sub_resource type="Resource" id="46"]
-script = ExtResource("14_hdtt7")
+script = ExtResource("6_yom78")
 from = "Idle"
 to = "Jump"
 conditions = {
@@ -117,11 +116,11 @@ conditions = {
 priority = 0
 
 [sub_resource type="Resource" id="58"]
-script = ExtResource("13_f7xb0")
+script = ExtResource("5_4g1es")
 name = "move"
 
 [sub_resource type="Resource" id="47"]
-script = ExtResource("14_hdtt7")
+script = ExtResource("6_yom78")
 from = "Idle"
 to = "Move"
 conditions = {
@@ -130,13 +129,13 @@ conditions = {
 priority = 0
 
 [sub_resource type="Resource" id="67"]
-script = ExtResource("16_tqoiv")
+script = ExtResource("8_nvk28")
 value = false
 comparation = 0
 name = "on_floor"
 
 [sub_resource type="Resource" id="48"]
-script = ExtResource("14_hdtt7")
+script = ExtResource("6_yom78")
 from = "Jump"
 to = "On Air"
 conditions = {
@@ -145,13 +144,13 @@ conditions = {
 priority = 0
 
 [sub_resource type="Resource" id="68"]
-script = ExtResource("16_tqoiv")
+script = ExtResource("8_nvk28")
 value = true
 comparation = 0
 name = "on_floor"
 
 [sub_resource type="Resource" id="64"]
-script = ExtResource("14_hdtt7")
+script = ExtResource("6_yom78")
 from = "Landed"
 to = "Idle"
 conditions = {
@@ -160,11 +159,11 @@ conditions = {
 priority = 0
 
 [sub_resource type="Resource" id="73"]
-script = ExtResource("13_f7xb0")
+script = ExtResource("5_4g1es")
 name = "aim"
 
 [sub_resource type="Resource" id="74"]
-script = ExtResource("14_hdtt7")
+script = ExtResource("6_yom78")
 from = "Move"
 to = "Aiming"
 conditions = {
@@ -173,11 +172,11 @@ conditions = {
 priority = 0
 
 [sub_resource type="Resource" id="61"]
-script = ExtResource("13_f7xb0")
+script = ExtResource("5_4g1es")
 name = "stop"
 
 [sub_resource type="Resource" id="62"]
-script = ExtResource("14_hdtt7")
+script = ExtResource("6_yom78")
 from = "Move"
 to = "Idle"
 conditions = {
@@ -186,11 +185,11 @@ conditions = {
 priority = 0
 
 [sub_resource type="Resource" id="59"]
-script = ExtResource("13_f7xb0")
+script = ExtResource("5_4g1es")
 name = "jump"
 
 [sub_resource type="Resource" id="60"]
-script = ExtResource("14_hdtt7")
+script = ExtResource("6_yom78")
 from = "Move"
 to = "Jump"
 conditions = {
@@ -199,13 +198,13 @@ conditions = {
 priority = 0
 
 [sub_resource type="Resource" id="66"]
-script = ExtResource("16_tqoiv")
+script = ExtResource("8_nvk28")
 value = true
 comparation = 0
 name = "on_floor"
 
 [sub_resource type="Resource" id="63"]
-script = ExtResource("14_hdtt7")
+script = ExtResource("6_yom78")
 from = "On Air"
 to = "Landed"
 conditions = {
@@ -214,14 +213,14 @@ conditions = {
 priority = 0
 
 [sub_resource type="Resource" id="75"]
-script = ExtResource("14_hdtt7")
+script = ExtResource("6_yom78")
 from = "Shooting"
 to = "Idle"
 conditions = {}
 priority = 0
 
 [sub_resource type="Resource" id="40"]
-script = ExtResource("11_il1ei")
+script = ExtResource("3_j3fcc")
 states = {
 "Aiming": SubResource("45"),
 "Entry": SubResource("37"),
@@ -265,13 +264,11 @@ transitions = {
 }
 name = ""
 
-[node name="Player" type="Node3D"]
-script = ExtResource("1_x30wa")
-
-[node name="Player" parent="." instance=ExtResource("2_u7v3q")]
+[node name="PlayerController" type="Node3D"]
+script = ExtResource("1_541sa")
 
 [node name="State" type="Node" parent="."]
-script = ExtResource("10_dyuf0")
+script = ExtResource("2_lr54q")
 state_machine = SubResource("40")
 
 [connection signal="transited" from="State" to="." method="_on_StatePlayer_transited"]

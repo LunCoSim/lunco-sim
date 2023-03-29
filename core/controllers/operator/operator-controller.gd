@@ -1,6 +1,10 @@
 #This code is based on Gogot kinematic_character example
+
+extends Node3D
 class_name lnOperator
-extends CharacterBody3D
+
+
+@export var Target: CharacterBody3D
 
 @export var MAX_SPEED = 100
 @export var JUMP_SPEED = 2
@@ -19,18 +23,18 @@ var orientation := Basis.IDENTITY
 	
 		
 func _physics_process(delta):
+	if Target:
+		var target_dir = orientation * dir * MAX_SPEED
+		var acceleration
+		
+		if dir.dot(Target.velocity) > 0:
+			acceleration = ACCELERATION
+		else:
+			acceleration = DECELERATION
 
-	var target_dir = orientation * dir * MAX_SPEED
-	var acceleration
-	
-	if dir.dot(velocity) > 0:
-		acceleration = ACCELERATION
-	else:
-		acceleration = DECELERATION
+		Target.velocity = Target.velocity.lerp(target_dir, acceleration * delta)
 
-	velocity = velocity.lerp(target_dir, acceleration * delta)
-
-	move_and_slide()
+		Target.move_and_slide()
 
 	
 #-----------

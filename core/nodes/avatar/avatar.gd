@@ -13,9 +13,9 @@ const RAY_LENGTH = 10000
 var target: Node
 var mouse_control := false
 
-@export var Player: Node3D
+@export var Player: lnPlayer
 @export var Spacecraft: lnSpacecraft
-@export var Operator: Node3D
+@export var Operator: lnOperator
 
 var spawn_model_path = "res://addons/lunco-content/moonwards/buildings/android-kiosk/android-kiosk.escn"
 
@@ -136,10 +136,10 @@ func _input(event):
 		if Input.is_action_pressed("shoot"): #idle/move
 			player.shoot()
 		
-		if camera is SpringArmCamera:
-			var cam: SpringArmCamera = camera
-			player.set_camera_x_rot(cam.camera_x_rot)
-			player.set_camera_basis(cam.get_plain_basis())
+#		if camera is SpringArmCamera:
+#			var cam: SpringArmCamera = camera
+#			player.set_camera_x_rot(cam.camera_x_rot)
+#			player.set_camera_basis(cam.get_plain_basis())
 				
 	elif target is lnSpacecraft:
 		var spacecraft: lnSpacecraft = target
@@ -170,7 +170,6 @@ func _input(event):
 			Input.get_action_strength("move_forward") - Input.get_action_strength("move_back")
 		)
 		
-		print(motion_direction)
 		operator.move(motion_direction.normalized())
 		operator.orient(cam.get_plain_basis())
 

@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3 uid="uid://dpv63l3fgdrk5"]
+
+[ext_resource type="Script" path="res://core/controllers/operator/operator-controller.gd" id="1_sct00"]
+
+[node name="OperatorController" type="Node3D"]
+script = ExtResource("1_sct00")
