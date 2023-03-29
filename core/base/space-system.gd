@@ -1,6 +1,6 @@
 # This is the basic class according to XTCE
+extends Node3D #TODO: Check if should be node, maybe something else?
 class_name lnSpaceSystem
-extends Node #TODO: Check if should be node, maybe something else?
 
 
 #Basic parameters inspired by XTCE

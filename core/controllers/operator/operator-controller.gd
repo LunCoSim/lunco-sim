@@ -1,6 +1,6 @@
 #This code is based on Gogot kinematic_character example
 
-extends Node3D
+extends lnSpaceSystem
 class_name lnOperator
 
 

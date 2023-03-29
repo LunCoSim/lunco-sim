@@ -1,16 +1,18 @@
 #This code is based on this game: https://godotforums.org/discussion/18480/godot-3d-vector-physics-cheat-sheet
-extends Node3D
+extends lnSpaceSystem
 class_name lnSpacecraft
-
-signal thrusted(enabled)
-
-const Z_FRONT = 1 #in this game the front side is towards negative Z
 
 @export var THRUST = 50
 @export var THRUST_TURN = 200
 @export var THRUST_ROLL = 50
 
 @export var Target: RigidBody3D
+
+signal thrusted(enabled)
+
+const Z_FRONT = 1 #in this game the front side is towards negative Z
+
+
 
 # Commands
 # thrust

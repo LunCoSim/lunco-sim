@@ -1,4 +1,4 @@
-[gd_scene load_steps=18 format=3 uid="uid://bq8u263y7tg23"]
+[gd_scene load_steps=18 format=3 uid="uid://cx6jphfwylh4a"]
 
 [ext_resource type="Script" path="res://addons/object-inspector/scripts/inspector.gd" id="1_d3brg"]
 [ext_resource type="PackedScene" uid="uid://d8gbyf2xbd4m" path="res://addons/lunco-content/maps/Langrenus/langrenus_map.tscn" id="2_w1oup"]
@@ -7,7 +7,7 @@
 [ext_resource type="PackedScene" uid="uid://cibc2v3g1bk4g" path="res://core/controllers/player/player-controller.tscn" id="4_bffmb"]
 [ext_resource type="PackedScene" uid="uid://btw1pbsrpnjx4" path="res://core/controllers/spacecraft/spacecraft-controller.tscn" id="5_w6nou"]
 [ext_resource type="PackedScene" uid="uid://c5dg7yq7hd7m0" path="res://core/nodes/avatar/avatar.tscn" id="6_hs3oo"]
-[ext_resource type="PackedScene" uid="uid://dly6j7li6g7t8" path="res://core/controllers/operator/operator.tscn" id="7_b6d2d"]
+[ext_resource type="PackedScene" uid="uid://dly6j7li6g7t8" path="res://core/entities/operator.tscn" id="7_b6d2d"]
 [ext_resource type="PackedScene" uid="uid://dpv63l3fgdrk5" path="res://core/controllers/operator/operator-controller.tscn" id="7_vfs0j"]
 [ext_resource type="PackedScene" uid="uid://cpjdvh1eaof2y" path="res://addons/lunco-content/moonwards/buildings/nuclear-core/nuclear-core.escn" id="8_ukav2"]
 [ext_resource type="PackedScene" uid="uid://2f4aecforicx" path="res://addons/lunco-content/moonwards/buildings/satellite-dish/satellite-dish.escn" id="9_k2t3s"]
@@ -47,9 +47,9 @@ offset_bottom = 629.0
 script = ExtResource("1_d3brg")
 
 [node name="Avatar" parent="." node_paths=PackedStringArray("Player", "Spacecraft", "Operator") instance=ExtResource("6_hs3oo")]
-Player = NodePath("../World/Player/PlayerController")
-Spacecraft = NodePath("../World/SpaceX_Starship/SpacecraftController")
-Operator = NodePath("../World/Operator/OperatorController")
+Player = NodePath("../World/Player")
+Spacecraft = NodePath("../World/SpaceX_Starship")
+Operator = NodePath("../World/Operator")
 
 [node name="World" type="Node3D" parent="."]
 
@@ -68,6 +68,7 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 31.5747, 2.37504, 57.0209)
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 92.9765, 26.1867, -232.091)
 
 [node name="SpacecraftController" parent="World/SpaceX_Starship" node_paths=PackedStringArray("Target") instance=ExtResource("5_w6nou")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -92.9765, -26.1867, 232.091)
 Target = NodePath("..")
 
 [node name="Operator" parent="World" instance=ExtResource("7_b6d2d")]

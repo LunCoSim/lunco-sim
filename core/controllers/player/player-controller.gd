@@ -1,4 +1,4 @@
-extends Node3D
+extends lnSpaceSystem
 class_name lnPlayer
 
 signal aiming

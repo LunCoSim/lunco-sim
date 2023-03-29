@@ -140,7 +140,7 @@ transitions = {
 }
 name = ""
 
-[node name="Avatar" type="Node"]
+[node name="Avatar" type="Node3D"]
 script = ExtResource("1_lcnht")
 
 [node name="State" type="Node" parent="."]

@@ -10,12 +10,12 @@ const RAY_LENGTH = 10000
 
 #-------------------------------
 
-var target: Node
+var target: Node3D
 var mouse_control := false
 
-@export var Player: lnPlayer
-@export var Spacecraft: lnSpacecraft
-@export var Operator: lnOperator
+@export var Player: Node3D
+@export var Spacecraft: Node3D
+@export var Operator: Node3D
 
 var spawn_model_path = "res://addons/lunco-content/moonwards/buildings/android-kiosk/android-kiosk.escn"
 
@@ -30,6 +30,13 @@ var spawn_model_path = "res://addons/lunco-content/moonwards/buildings/android-k
 
 func set_target(_target):
 	target = _target
+	
+	if _target: #searching for controller
+		for N in _target.get_children():
+			if N is lnSpaceSystem:
+				target = N
+		
+	
 	return target
 
 func set_camera(_camera):
