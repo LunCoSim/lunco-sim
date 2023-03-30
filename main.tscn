@@ -15,9 +15,13 @@ offset_right = 1096.0
 offset_bottom = 463.0
 alignment = 1
 
-[node name="Sim" type="Button" parent="UI/Apps"]
+[node name="SimHost" type="Button" parent="UI/Apps"]
 layout_mode = 2
-text = "Simulation (WIP)"
+text = "Simulation Host (WIP)"
+
+[node name="SimClient" type="Button" parent="UI/Apps"]
+layout_mode = 2
+text = "Simulation Client (WIP)"
 
 [node name="Yarm" type="Button" parent="UI/Apps"]
 layout_mode = 2
@@ -44,7 +48,8 @@ position = Vector2(577.74, 324.25)
 scale = Vector2(0.603396, 0.588532)
 texture = ExtResource("2_jrfvr")
 
-[connection signal="pressed" from="UI/Apps/Sim" to="." method="_on_sim_pressed"]
+[connection signal="pressed" from="UI/Apps/SimHost" to="." method="_on_sim_host_pressed"]
+[connection signal="pressed" from="UI/Apps/SimClient" to="." method="_on_sim_client_pressed"]
 [connection signal="pressed" from="UI/Apps/Yarm" to="." method="_on_yarm_pressed"]
 [connection signal="pressed" from="UI/Apps/MBSE" to="." method="_on_yarm_pressed"]
 [connection signal="pressed" from="UI/Apps/Kanban" to="." method="_on_yarm_pressed"]

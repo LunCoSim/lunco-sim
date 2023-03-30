@@ -1,0 +1,16 @@
+[gd_scene load_steps=4 format=3 uid="uid://dxepfetvn7y3c"]
+
+[ext_resource type="PackedScene" uid="uid://dly6j7li6g7t8" path="res://core/models/operator-model.tscn" id="1_h12af"]
+[ext_resource type="PackedScene" uid="uid://dpv63l3fgdrk5" path="res://core/controllers/operator/operator-controller.tscn" id="2_gofs0"]
+
+[sub_resource type="SceneReplicationConfig" id="SceneReplicationConfig_ivohk"]
+properties/0/path = NodePath(".:position")
+properties/0/spawn = true
+properties/0/sync = true
+
+[node name="Operator" instance=ExtResource("1_h12af")]
+
+[node name="OperatorController" parent="." index="2" instance=ExtResource("2_gofs0")]
+
+[node name="MultiplayerSynchronizer" type="MultiplayerSynchronizer" parent="." index="3"]
+replication_config = SubResource("SceneReplicationConfig_ivohk")

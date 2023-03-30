@@ -20,21 +20,24 @@ var orientation := Basis.IDENTITY
 # Commands
 # reset_position
 # move(direction)
-	
+
+func _ready():
+		Target.set_multiplayer_authority(str(Target.name).to_int())
 		
 func _physics_process(delta):
-	if Target:
-		var target_dir = orientation * dir * MAX_SPEED
-		var acceleration
-		
-		if dir.dot(Target.velocity) > 0:
-			acceleration = ACCELERATION
-		else:
-			acceleration = DECELERATION
+	if Target.name == str(multiplayer.get_unique_id()):
+		if Target:
+			var target_dir = orientation * dir * MAX_SPEED
+			var acceleration
+			
+			if dir.dot(Target.velocity) > 0:
+				acceleration = ACCELERATION
+			else:
+				acceleration = DECELERATION
 
-		Target.velocity = Target.velocity.lerp(target_dir, acceleration * delta)
+			Target.velocity = Target.velocity.lerp(target_dir, acceleration * delta)
 
-		Target.move_and_slide()
+			Target.move_and_slide()
 
 	
 #-----------

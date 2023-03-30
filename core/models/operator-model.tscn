@@ -14,3 +14,4 @@ mesh = SubResource("1")
 
 [node name="CollisionShape" type="CollisionShape3D" parent="."]
 shape = SubResource("3")
+disabled = true

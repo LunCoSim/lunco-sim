@@ -30,7 +30,7 @@ movie_writer/movie_file="/home/rod/Documents/lunco-movies/godot_output.avi"
 
 [editor_plugins]
 
-enabled=PackedStringArray("res://addons/object-inspector/plugin.cfg", "res://addons/imjp94.yafsm/plugin.cfg", "res://addons/beehave/plugin.cfg", "res://addons/panku_console/plugin.cfg", "res://addons/ui_design_tool/plugin.cfg")
+enabled=PackedStringArray("res://addons/object-inspector/plugin.cfg", "res://addons/imjp94.yafsm/plugin.cfg", "res://addons/beehave/plugin.cfg", "res://addons/panku_console/plugin.cfg")
 
 [input]
 

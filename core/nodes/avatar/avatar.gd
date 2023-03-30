@@ -4,6 +4,10 @@ extends lnSpaceSystem
 #
 #@onready var lnOperator = preload("res://../../base/operator.gd")
 
+signal create_operator
+signal create_player
+signal create_spacecraft
+
 #-------------------------------
 const MOUSE_SENSITIVITY = 0.1
 const RAY_LENGTH = 10000
@@ -196,12 +200,15 @@ func _on_State_transited(from, to):
 			camera.add_excluded_object(Spacecraft)
 			camera.set_spring_length(50)
 		"Operator":
-			set_target(Operator)
-			_ui = preload("res://core/ui/operator-ui.tscn").instantiate()
-			_ui.model_selected.connect(_on_select_model)
-			$UI/Help/Target.text = "Target: Operator"
-			camera.remove_excluded_object(Spacecraft)
-			camera.set_spring_length(2.5)
+			if Operator:
+				set_target(Operator)
+				_ui = preload("res://core/ui/operator-ui.tscn").instantiate()
+				_ui.model_selected.connect(_on_select_model)
+				$UI/Help/Target.text = "Target: Operator"
+				camera.remove_excluded_object(Spacecraft)
+				camera.set_spring_length(2.5)
+			else:
+				emit_signal("create_operator")
 			
 	set_ui(_ui)
 	if _ui:

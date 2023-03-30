@@ -1,0 +1,9 @@
+[gd_scene load_steps=3 format=3 uid="uid://bmqo4d60d70oc"]
+
+[ext_resource type="PackedScene" uid="uid://bihcxq7r6iqu" path="res://addons/lunco-content/spacex-starship/SpaceX_Starship.tscn" id="1_six3u"]
+[ext_resource type="PackedScene" uid="uid://btw1pbsrpnjx4" path="res://core/controllers/spacecraft/spacecraft-controller.tscn" id="2_h3rj8"]
+
+[node name="SpaceX_Starship" instance=ExtResource("1_six3u")]
+
+[node name="SpacecraftController" parent="." index="2" instance=ExtResource("2_h3rj8")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -92.9765, -26.1867, 232.091)
