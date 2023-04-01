@@ -1,7 +1,9 @@
-[gd_scene load_steps=3 format=3 uid="uid://c82dl3dv3d3hb"]
+[gd_scene load_steps=4 format=3 uid="uid://c82dl3dv3d3hb"]
 
 [ext_resource type="Script" path="res://main.gd" id="1_yf43x"]
 [ext_resource type="Texture2D" uid="uid://brwbsp6eop682" path="res://addons/lunco-assets/cover.png" id="2_jrfvr"]
+
+[sub_resource type="SystemFont" id="SystemFont_g5bxx"]
 
 [node name="Main" type="Node"]
 script = ExtResource("1_yf43x")
@@ -42,6 +44,33 @@ text = "Databases (TBD)"
 [node name="OrbitalMechanics" type="Button" parent="UI/Apps"]
 layout_mode = 2
 text = "OrbitalMechanics (TBD)"
+
+[node name="Networking" type="Control" parent="UI"]
+layout_mode = 3
+anchors_preset = 0
+offset_left = 416.0
+offset_top = 229.0
+offset_right = 614.0
+offset_bottom = 269.0
+
+[node name="VBoxContainer" type="VBoxContainer" parent="UI/Networking"]
+layout_mode = 0
+offset_right = 93.0
+offset_bottom = 66.0
+
+[node name="IP" type="LineEdit" parent="UI/Networking/VBoxContainer"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.956863, 0.956863, 0.956863, 1)
+theme_override_fonts/font = SubResource("SystemFont_g5bxx")
+text = "127.0.0.1"
+placeholder_text = "IP"
+
+[node name="Port" type="LineEdit" parent="UI/Networking/VBoxContainer"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "9000"
+placeholder_text = "Port"
 
 [node name="Cover" type="Sprite2D" parent="."]
 position = Vector2(577.74, 324.25)

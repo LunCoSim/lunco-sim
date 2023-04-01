@@ -19,7 +19,10 @@ func _on_sim_host_pressed():
 	get_tree().change_scene_to_file("res://apps/sim/app.tscn")
 
 func _on_sim_client_pressed():
-	peer.create_client("localhost", 9000)
+	var ip = %IP.text
+	var port = %Port.text.to_int()
+	
+	peer.create_client(ip, port)
 	multiplayer.multiplayer_peer = peer
 	
 	get_tree().change_scene_to_file("res://apps/sim/app.tscn")
