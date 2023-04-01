@@ -39,8 +39,9 @@ func set_target(_target):
 		for N in _target.get_children():
 			if N is lnSpaceSystem:
 				target = N
+#				if N.name == str(multiplayer.get_unique_id()):
+#					target = N
 		
-	
 	return target
 
 func set_camera(_camera):

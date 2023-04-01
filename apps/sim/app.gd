@@ -74,6 +74,7 @@ func _on_create_operator():
 
 func _on_multiplayer_spawner_spawned(node):
 	if node.name == str(multiplayer.get_unique_id()):
+		$Avatar.Operator = node
 		$Avatar.set_target(node)
 		
 		%ObjectInspector.set_object(node)
