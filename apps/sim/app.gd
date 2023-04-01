@@ -7,10 +7,13 @@ var SpacecraftEntity := preload("res://core/entities/starship-entity.tscn")
 # Called when the node enters the scene tree for the first time.
 func _ready():
 	if multiplayer.is_server():
+		$UI/Label.text = "Server"
 		multiplayer.peer_disconnected.connect(remove_player)
 	else:
+		$UI/Label.text = "Peer"
 		multiplayer.server_disconnected.connect(server_offline)
-
+	
+	
 
 # Called every frame. 'delta' is the elapsed time since the previous frame.
 func _process(delta):
@@ -51,10 +54,10 @@ func add_operator():
 	if not found:
 		var operator = OperatorEntity.instantiate()
 		operator.name = str(id)
-
+		
 		%SpawnPosition.add_child(operator)
-		if id == multiplayer.get_unique_id():
-			$Avatar.Operator = operator
+		
+		_on_multiplayer_spawner_spawned(operator)
 			
 		send_message.rpc(str(id), " has joined the game", false)
 
@@ -72,3 +75,5 @@ func _on_create_operator():
 func _on_multiplayer_spawner_spawned(node):
 	if node.name == str(multiplayer.get_unique_id()):
 		$Avatar.Operator = node
+		
+		%ObjectInspector.set_object(node)

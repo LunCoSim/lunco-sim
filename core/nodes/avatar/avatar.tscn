@@ -186,6 +186,6 @@ text = "3 – Select operator"
 
 [node name="Spawn" type="Label" parent="UI/Help"]
 layout_mode = 2
-text = "Ctrl+` – console "
+text = "` – console "
 
 [connection signal="transited" from="State" to="." method="_on_State_transited"]
