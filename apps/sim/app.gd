@@ -10,7 +10,7 @@ func _ready():
 		$UI/Label.text = "Server"
 		multiplayer.peer_disconnected.connect(remove_player)
 	else:
-		$UI/Label.text = "Peer"
+		$UI/Label.text = "Peer id: " + str(multiplayer.get_unique_id())
 		multiplayer.server_disconnected.connect(server_offline)
 	
 	
@@ -74,6 +74,6 @@ func _on_create_operator():
 
 func _on_multiplayer_spawner_spawned(node):
 	if node.name == str(multiplayer.get_unique_id()):
-		$Avatar.Operator = node
+		$Avatar.set_target(node)
 		
 		%ObjectInspector.set_object(node)
