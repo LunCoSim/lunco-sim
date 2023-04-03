@@ -21,15 +21,11 @@ Build using Godot 4.
 ## Installation
 
 1. Install [Godot 4](https://godotengine.org/download/)
-2. Clone this repo in a terminal: 
+2. Install [FBX2glTF](https://github.com/godotengine/FBX2glTF/tags) and config Godot to use it
+3. Install [git lfs](https://github.com/git-lfs/git-lfs#getting-started)
+4. Clone this repo in a terminal: 
 
-	```git clone git@github.com:LunCoSim/lunco-sim.git```
-
-3. Init all submodules recursivle to download content
-
-	```git submodule update --init --recursive```
-	
-4. Install [FBX2glTF](https://github.com/godotengine/FBX2glTF/tags)
+	```git clone --recurse-submodules git@github.com:LunCoSim/lunco-sim.git```
 
 5. Open the project in Godot
 
