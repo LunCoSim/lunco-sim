@@ -146,3 +146,8 @@ A: Mainnet only, ETH, DAI, probably others. It's desided by Gitcoin
 **Q: How to buy crypto?**
 
 A: It depends on your residence, check big centralized exchanges like [Coinbase](https://www.coinbase.com/), [Binance](https://binance.com), [Huobi](https://www.huobi.com/),
+
+
+**Q: How funds will be used?**
+
+A: Pay for equipment (need powerfull computer for development), rent, services (VPS, ChatGPT, Twitter Blue, etc), Bounties, Sponsorships of relevent event, Attending IRL event for BD
