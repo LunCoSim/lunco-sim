@@ -1,9 +1,11 @@
 
 # LunCo
 
-***LunCo is an opensource engineering software for complex systems design inspired by Lunar Exploration***
+***LunCo is an opensource collaborative engineering software for complex systems design inspired by Lunar Exploration***
 
 ## Updates
+
+[TBD VIDEO ON YOUTUBE]()
 
 ### Community
 
@@ -21,43 +23,34 @@
 9. Sponsored:
 	- [DeSci Denver ](https://twitter.com/descieth/status/1628379084928548866)
 	- [GreenPill Gokarna Fest](https://twitter.com/IrthuSuresh/status/1643379632887193600) (along with Filecoin, Celo, NEAR, and others)
+10. Presented Gitcoin and ReFi on the [IRL event by DAO 999 NFT KINGDOM](https://twitter.com/999kingdomnft/status/1643935080417730560)
+11. Shilled the idea of a LunCo-like system to MoonDAO, so now using such a system is in[ MoonDAO Roadmap for 2024](https://docs.google.com/document/d/1E4VtthW7lEdYboaumkrlJ01hqf298wMu9qniqeNL0fA/edit#heading=h.pd8qdg2ti4sq)
 
 ### Technical
 
 1. Now it's easy to add your content thx to new [modular architecture](obsidian://open?vault=LunCo%20Docs&file=LunCo%20architecture)
-2. Start developing in minutes!  *(need git lfs to manage dependencies, no more custom [package manager](https://github.com/LunCoSim/godot-package-manager))*
+2. Start developing in minutes! Just [clone the repo](https://github.com/LunCoSim/lunco-sim#installation) *(no more custom [package manager](https://github.com/LunCoSim/godot-package-manager))*
 3. Updated to Godot 4, as it was finally released on March 1, 2023
-4. [Implemented multiplayer](https://youtu.be/hxd3Y432irQ)
+4. Implemented [multiplayer](https://youtu.be/hxd3Y432irQ)
 
 ## About
 
-LunCo is a  modular opensource framework for Lunar Settlement design build on Godot 4.
-
+LunCo serves engineers, providing all the nessesary system design tools
+* Integration with Engineering-specific AI
+* Save engineers time with great UX
+* Global database of engineering solutions
+* Full opensource, relies on open space standards
+* LunCo is a nice window, that under the hood heavily reuses existing opensource solutions
 
 ### Sample applications
 
-Solar Power Station in Space Design
-Assessing impact of solar panels installation in School
-Robotis
-Satellite constellations planning
-Robotic transportation system planning
-Robotic Crops monitoring planning
-
-### Tools
-Godot is a universal block, at some point AI writes codes and models and helps to build UI/UX
-
-Save time engineers 
-
-
-LunCo provides a set of opensource applications for Lunar Base engineering including:
-
-1.  Requirements Management
-2.  Models visualisations
-3.  Collaborative training
-4.  Digital twin of a lunar colony
-
-### [Vision](https://github.com/LunCoSim/lunco-sim#vision)
-
+- Design solar power station in space 
+- Assess impact of solar panels
+- Plan satellite constellations 
+- Visualise robotic transportation system
+- Monitor remote agricultire robots
+- Model Closed Loop Biological Life Support Systems
+- Build custom submodules for ERP, supply chain, CRM, etc
 
 # Contacts
 
@@ -74,48 +67,50 @@ LunCo provides a set of opensource applications for Lunar Base engineering inclu
 ## FAQ
 
 ### Main
-Q: Should Humanity become multiplanetary species?
+
+**Q: Should Humanity become multiplanetary species?**
 A: YES!
 
 ### Technology
 
-Q: Why Godot 4?
+**Q: Why Godot 4?**
 A: It's the only decent AAA opensource game engine
 
-Q: How LunCo helps engineers?
+**Q: How LunCo helps engineers?**
 A: With UX focused on saving time, integrated databases, wide range of modules (CAD, CAE, ML, etc), instant results sharing
 
-Q: Why it's web3?
+**Q: Why it's web3?**
 A: LunCo is designed with the web3 ideas, as one of the main goal is to connect engineers together in a decentralized maner, and server as a web3 native toolkit for complex mission management.
 
-Q: How can I use it?
+**Q: How can I use it?**
 A: All the code is under MIT licence. You can do what you want, even sell LunCo! Just leave the creds, please.
 
-Q: What standards you plan to support?
-A: OMG, NASA, ESA, MOSA, etc
+**Q: What standards you plan to support?**
+A: OMG, NASA, ESA, MOSA, CCSDS, etc
 
-Q: Explain for space engineer?
-A: All-in-one extandable modular tool with submodules for: requirements managements, MBSE, CE (concurrent engineering), project management (Kanban, Virtual whiteboard, diagrams, etc) build on decentralized technologies
+**Q: Explain as a professional space engineer?**
+A: All-in-one extandable modular tool with submodules for: requirements managements, MBSE, CE (concurrent engineering), project management (Kanban, Virtual whiteboard, diagrams, etc) build on decentralized technologies and open standards 
 
 
 ### Donations
 
-Q: Why should I donate?
-A: You can help to settle the Moon
+**Q: Why should I donate?**
+A: You will help to build a settlement on the Moon
 
-Q: How to donate?
+**Q: How to donate?**
 A: Check Gitcoin Grantee portal for latest news
 
-Q: Why I need [Gitcoin Passport](https://passport.gitcoin.co/)?
+**Q: Why I need [Gitcoin Passport](https://passport.gitcoin.co/)?**
 A: To prove that you are human to prevent bots attack on the system
 
-Q: What if my Gitcoin Passport score is insufficient?
-A: The donation won't help LunCo to raise money from matching pool, as it won't be matched
+**Q: What if my Gitcoin Passport score is insufficient?**
+A: [Reach Rod](https://twitter.com/_Difint_) and he will help you to get enough score. Otherwise the donation won't help LunCo to raise money from matching pool, as it won't be matched
 
-Q: How to donate from mobile?
+**Q: How to donate from mobile?**
 A: Use build in [Metamask Mobile Browser](https://support.metamask.io/hc/en-us/articles/6356387482523-How-to-use-the-MetaMask-Mobile-Browser)
 
-Q: What crypto I can use?
+**Q: What crypto I can use?**
 A: Mainnet only, ETH, DAI, probably others. It's desided by Gitcoin
 
-
+**Q: How to buy crypto?**
+A: It depends on your residence, check big centralized exchanges like [Coinbase](https://www.coinbase.com/), [Binance](https://binance.com), [Huobi](https://www.huobi.com/),
