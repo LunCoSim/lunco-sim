@@ -116,7 +116,6 @@ A: OMG, NASA, ESA, MOSA, CCSDS, etc
 
 A: All-in-one extandable modular tool with submodules for: requirements managements, MBSE, CE (concurrent engineering), project management (Kanban, Virtual whiteboard, diagrams, etc) build on decentralized technologies and open standards 
 
-
 ### Donations
 
 **Q: Why should I donate?**
