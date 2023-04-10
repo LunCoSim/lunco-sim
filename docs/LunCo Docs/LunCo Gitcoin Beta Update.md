@@ -133,7 +133,7 @@ A: To prove that you are human to prevent bots attack on the system
 
 **Q: What if my Gitcoin Passport score is insufficient?**
 
-A: [Reach Rod](https://twitter.com/_Difint_), he will help you to get enough. Otherwise the donation won't help LunCo to raise money from matching pool, as it won't be matched
+A: The donation won't help LunCo to raise money from matching pool, as it won't be matched. However our team could stake GTC for you, [reach Rod](https://twitter.com/_Difint_) for help
 
 **Q: How to donate from mobile?**
 
@@ -145,8 +145,7 @@ A: Mainnet only, ETH, DAI, probably others. It's desided by Gitcoin
 
 **Q: How to buy crypto?**
 
-A: It depends on your residence, check big centralized exchanges like [Coinbase](https://www.coinbase.com/), [Binance](https://binance.com), [Huobi](https://www.huobi.com/),
-
+A: It depends on your residence, we sugest to start checking big centralized exchanges like [Coinbase](https://www.coinbase.com/), [Binance](https://binance.com), [Huobi](https://www.huobi.com/), however Do You Own Research
 
 **Q: How funds will be used?**
 
