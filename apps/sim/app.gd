@@ -21,8 +21,11 @@ func _process(delta):
 
 ## Functions
 
-func remove_player():
-	pass
+func remove_player(id):
+	print("player removed: ", id)
+	for entity in %SpawnPosition.get_children():
+		if entity.name.to_int() == id:
+			entity.queue_free()
 
 func server_offline():
 	pass
