@@ -1,9 +1,8 @@
 # LunCo
 
-LunCo is an opensource engineering software for Lunar Settlement design. For older version check branch godot3.5
+LunCo is an opensource engineering software for Lunar Settlement design build with Godot 4.
 
-This is a version focused on Godot 4.
-
+*For older version check branch godot3.5*
 
 ## Vision
 
@@ -12,10 +11,6 @@ LunCo provides a set of opensource applications for Lunar Base engineering inclu
 2. Models visualisations
 3. Collaborative training
 4. Digital twin of a lunar colony
-
-## Tools
-
-Build using Godot 4.
 
 
 ## Installation
@@ -27,6 +22,9 @@ Build using Godot 4.
 
 	```git clone --recurse-submodules git@github.com:LunCoSim/lunco-sim.git```
 
-5. Open the project in Godot
+5. Open the project in Godot and run
 
-## Folder Structere
+## Documentation
+
+[Click here to learn how to develop with LunCo](./docs/LunCo%20Docs/LunCo-Documentation.md)
+
