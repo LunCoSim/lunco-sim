@@ -21,9 +21,11 @@ config/icon="res://icon.svg"
 
 BeehaveGlobalMetrics="*res://addons/beehave/metrics/beehave_global_metrics.gd"
 Log="*res://addons/godot-logger/scripts/logger.gd"
+Console="*res://addons/panku_console/console.tscn"
 
 [debug]
 
+file_logging/enable_file_logging=true
 file_logging/enable_file_logging.pc=false
 
 [display]

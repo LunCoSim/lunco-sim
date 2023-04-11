@@ -50,10 +50,7 @@ layout_mode = 2
 alignment = 1
 script = ExtResource("1_d3brg")
 
-[node name="Avatar" parent="." node_paths=PackedStringArray("Player", "Spacecraft", "Operator") instance=ExtResource("6_hs3oo")]
-Player = NodePath("")
-Spacecraft = NodePath("")
-Operator = NodePath("")
+[node name="Avatar" parent="." instance=ExtResource("6_hs3oo")]
 
 [node name="World" type="Node3D" parent="."]
 

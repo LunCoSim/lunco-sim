@@ -1,8 +1,11 @@
+class_name lnAvatar
 extends lnSpaceSystem
 
 #@onready var lnMatrix = preload("res://../../base/matrix.gd")
 #
 #@onready var lnOperator = preload("res://../../base/operator.gd")
+
+signal create (path_to_scene)
 
 signal create_operator
 signal create_player
@@ -17,9 +20,9 @@ const RAY_LENGTH = 10000
 var target: Node3D
 var mouse_control := false
 
-@export var Player: Node3D
-@export var Spacecraft: Node3D
-@export var Operator: Node3D
+#@export var Player: Node3D
+#@export var Spacecraft: Node3D
+#@export var Operator: Node3D
 
 var spawn_model_path = "res://addons/lunco-content/moonwards/buildings/android-kiosk/android-kiosk.escn"
 
@@ -42,13 +45,18 @@ func set_target(_target):
 #				if N.name == str(multiplayer.get_unique_id()):
 #					target = N
 	
+	var new_state := ""
 	if target is lnPlayer:
-		state.set_trigger("player")
+		new_state = "player"
 	elif target is lnSpacecraft:
-		state.set_trigger("spacecraft")
+		new_state = "spacecraft"
 	elif target is lnOperator:
-		state.set_trigger("operator")
-			
+		new_state = "operator"
+	
+	print("New State: ", new_state)
+	if new_state:
+		state.set_trigger(new_state)
+		
 	return target
 
 func set_camera(_camera):
@@ -98,11 +106,14 @@ func _unhandled_input(event):
 					
 func _input(event):
 	if Input.is_action_just_pressed("select_player"):
-		state.set_trigger("player")
+		emit_signal("create_spacecraft")
+#		state.set_trigger("player")
 	elif Input.is_action_just_pressed("select_spacecraft"):
-		state.set_trigger("spacecraft")
+		emit_signal("create_spacecraft")
+#		state.set_trigger("spacecraft")
 	elif Input.is_action_just_pressed("select_operator"):
-		state.set_trigger("operator")
+		emit_signal("create_operator")
+#		state.set_trigger("operator")
 		
 	if Input.is_action_pressed("rotate_camera"):
 		Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
@@ -193,30 +204,25 @@ func _input(event):
 		operator.orient(cam.get_plain_basis())
 
 func _on_State_transited(from, to):
+	print("_on_State_transited: ", from, " ", to)
 	var _ui = null
 	match to:
 		"Player":
-			set_target(Player)
 			_ui = preload("res://core/ui/player-ui.tscn").instantiate()
 			$UI/Help/Target.text = "Target: Player"
-			camera.remove_excluded_object(Spacecraft)
+#			camera.remove_excluded_object(Spacecraft)
 			camera.set_spring_length(2.5)
 		"Spacecraft":
-			set_target(Spacecraft)
 			_ui = preload("res://core/ui/spacecraft-ui.tscn").instantiate()
 			$UI/Help/Target.text = "Target: Spacecraft"
-			camera.add_excluded_object(Spacecraft)
+#			camera.add_excluded_object(Spacecraft)
 			camera.set_spring_length(50)
 		"Operator":
-			if Operator:
-				set_target(Operator)
-				_ui = preload("res://core/ui/operator-ui.tscn").instantiate()
-				_ui.model_selected.connect(_on_select_model)
-				$UI/Help/Target.text = "Target: Operator"
-				camera.remove_excluded_object(Spacecraft)
-				camera.set_spring_length(2.5)
-			else:
-				emit_signal("create_operator")
+			_ui = preload("res://core/ui/operator-ui.tscn").instantiate()
+			_ui.model_selected.connect(_on_select_model)
+			$UI/Help/Target.text = "Target: Operator"
+#				camera.remove_excluded_object(Spacecraft)
+			camera.set_spring_length(2.5)
 			
 	set_ui(_ui)
 	if _ui:
