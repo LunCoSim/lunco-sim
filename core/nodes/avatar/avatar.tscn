@@ -151,22 +151,24 @@ state_machine = SubResource("30")
 
 [node name="UI" type="Control" parent="."]
 layout_mode = 3
-anchors_preset = 0
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
 
 [node name="TargetUI" type="Control" parent="UI"]
-layout_mode = 2
 anchors_preset = 0
-offset_left = 4.0
-offset_top = 28.0
-offset_right = 148.0
-offset_bottom = 28.0
+offset_right = 144.0
 
 [node name="Help" type="VBoxContainer" parent="UI"]
-layout_mode = 0
-offset_left = 994.0
-offset_top = 12.0
-offset_right = 1138.0
-offset_bottom = 158.0
+layout_mode = 1
+anchors_preset = 1
+anchor_left = 1.0
+anchor_right = 1.0
+offset_left = -144.0
+offset_bottom = 146.0
+grow_horizontal = 0
 
 [node name="Target" type="Label" parent="UI/Help"]
 layout_mode = 2

@@ -7,10 +7,10 @@ var SpacecraftEntity := preload("res://core/entities/starship-entity.tscn")
 # Called when the node enters the scene tree for the first time.
 func _ready():
 	if multiplayer.is_server():
-		$UI/Label.text = "Server"
+		%MachineRole.text = "Server"
 		multiplayer.peer_disconnected.connect(remove_player)
 	else:
-		$UI/Label.text = "Peer id: " + str(multiplayer.get_unique_id())
+		%MachineRole.text = "Peer id: " + str(multiplayer.get_unique_id())
 		multiplayer.server_disconnected.connect(server_offline)
 	
 	

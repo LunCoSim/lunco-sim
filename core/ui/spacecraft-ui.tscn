@@ -13,10 +13,13 @@ grow_vertical = 2
 script = ExtResource("1")
 
 [node name="HUD" type="VBoxContainer" parent="."]
-layout_mode = 0
-offset_top = 500.0
+layout_mode = 1
+anchors_preset = 2
+anchor_top = 1.0
+anchor_bottom = 1.0
+offset_top = -146.0
 offset_right = 323.0
-offset_bottom = 646.0
+grow_vertical = 0
 
 [node name="Position" type="Label" parent="HUD"]
 layout_mode = 2
