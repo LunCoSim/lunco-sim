@@ -41,7 +41,14 @@ func set_target(_target):
 				target = N
 #				if N.name == str(multiplayer.get_unique_id()):
 #					target = N
-		
+	
+	if target is lnPlayer:
+		state.set_trigger("player")
+	elif target is lnSpacecraft:
+		state.set_trigger("spacecraft")
+	elif target is lnOperator:
+		state.set_trigger("operator")
+			
 	return target
 
 func set_camera(_camera):
