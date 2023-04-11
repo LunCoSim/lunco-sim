@@ -1,64 +1,25 @@
-[gd_scene load_steps=4 format=3 uid="uid://c82dl3dv3d3hb"]
+[gd_scene load_steps=5 format=3 uid="uid://c82dl3dv3d3hb"]
 
 [ext_resource type="Script" path="res://main.gd" id="1_yf43x"]
 [ext_resource type="Texture2D" uid="uid://brwbsp6eop682" path="res://addons/lunco-assets/cover.png" id="2_jrfvr"]
 
 [sub_resource type="SystemFont" id="SystemFont_g5bxx"]
 
+[sub_resource type="CanvasItemMaterial" id="CanvasItemMaterial_u6be5"]
+blend_mode = 4
+
 [node name="Main" type="Node"]
 script = ExtResource("1_yf43x")
 
 [node name="UI" type="CanvasLayer" parent="."]
 
-[node name="Apps" type="VBoxContainer" parent="UI"]
-offset_left = 791.0
-offset_top = 257.0
-offset_right = 1096.0
-offset_bottom = 463.0
-alignment = 1
+[node name="Networking" type="VBoxContainer" parent="UI"]
+offset_left = 10.0
+offset_top = 366.0
+offset_right = 315.0
+offset_bottom = 432.0
 
-[node name="SimHost" type="Button" parent="UI/Apps"]
-layout_mode = 2
-text = "Simulation Host (WIP)"
-
-[node name="SimClient" type="Button" parent="UI/Apps"]
-layout_mode = 2
-text = "Simulation Client (WIP)"
-
-[node name="Yarm" type="Button" parent="UI/Apps"]
-layout_mode = 2
-text = " Requirements Management  (TBD)"
-
-[node name="MBSE" type="Button" parent="UI/Apps"]
-layout_mode = 2
-text = "MBSE (TBD)"
-
-[node name="Kanban" type="Button" parent="UI/Apps"]
-layout_mode = 2
-text = "Kanban (TBD)"
-
-[node name="Database" type="Button" parent="UI/Apps"]
-layout_mode = 2
-text = "Databases (TBD)"
-
-[node name="OrbitalMechanics" type="Button" parent="UI/Apps"]
-layout_mode = 2
-text = "OrbitalMechanics (TBD)"
-
-[node name="Networking" type="Control" parent="UI"]
-layout_mode = 3
-anchors_preset = 0
-offset_left = 416.0
-offset_top = 229.0
-offset_right = 614.0
-offset_bottom = 269.0
-
-[node name="VBoxContainer" type="VBoxContainer" parent="UI/Networking"]
-layout_mode = 0
-offset_right = 93.0
-offset_bottom = 66.0
-
-[node name="IP" type="LineEdit" parent="UI/Networking/VBoxContainer"]
+[node name="IP" type="LineEdit" parent="UI/Networking"]
 unique_name_in_owner = true
 layout_mode = 2
 theme_override_colors/font_color = Color(0.956863, 0.956863, 0.956863, 1)
@@ -66,11 +27,61 @@ theme_override_fonts/font = SubResource("SystemFont_g5bxx")
 text = "127.0.0.1"
 placeholder_text = "IP"
 
-[node name="Port" type="LineEdit" parent="UI/Networking/VBoxContainer"]
+[node name="Port" type="LineEdit" parent="UI/Networking"]
 unique_name_in_owner = true
 layout_mode = 2
 text = "9000"
 placeholder_text = "Port"
+
+[node name="Apps" type="VBoxContainer" parent="UI"]
+offset_left = 5.0
+offset_top = 397.0
+offset_right = 310.0
+offset_bottom = 603.0
+alignment = 1
+
+[node name="SimHost" type="Button" parent="UI/Apps"]
+layout_mode = 2
+text = "Host FreeWorld Simulation"
+
+[node name="SimClient" type="Button" parent="UI/Apps"]
+layout_mode = 2
+text = "Connect to FreeWorld Simulation"
+
+[node name="ConnectToGlobal" type="Button" parent="UI/Apps"]
+layout_mode = 2
+text = "Connect to Global FreeWorld Simulation"
+
+[node name="Upcoming" type="VBoxContainer" parent="UI"]
+material = SubResource("CanvasItemMaterial_u6be5")
+offset_left = 815.0
+offset_top = 387.0
+offset_right = 1093.0
+offset_bottom = 558.0
+
+[node name="Label" type="Label" parent="UI/Upcoming"]
+layout_mode = 2
+text = "Upcoming applications"
+
+[node name="Yarm" type="Button" parent="UI/Upcoming"]
+layout_mode = 2
+text = " Requirements Management  (TBD)"
+
+[node name="MBSE" type="Button" parent="UI/Upcoming"]
+layout_mode = 2
+text = "MBSE (TBD)"
+
+[node name="Kanban" type="Button" parent="UI/Upcoming"]
+layout_mode = 2
+text = "Kanban (TBD)"
+
+[node name="Database" type="Button" parent="UI/Upcoming"]
+layout_mode = 2
+text = "Databases (TBD)"
+
+[node name="OrbitalMechanics" type="Button" parent="UI/Upcoming"]
+layout_mode = 2
+text = "OrbitalMechanics (TBD)"
 
 [node name="Cover" type="Sprite2D" parent="."]
 position = Vector2(577.74, 324.25)
@@ -79,8 +90,9 @@ texture = ExtResource("2_jrfvr")
 
 [connection signal="pressed" from="UI/Apps/SimHost" to="." method="_on_sim_host_pressed"]
 [connection signal="pressed" from="UI/Apps/SimClient" to="." method="_on_sim_client_pressed"]
-[connection signal="pressed" from="UI/Apps/Yarm" to="." method="_on_yarm_pressed"]
-[connection signal="pressed" from="UI/Apps/MBSE" to="." method="_on_yarm_pressed"]
-[connection signal="pressed" from="UI/Apps/Kanban" to="." method="_on_yarm_pressed"]
-[connection signal="pressed" from="UI/Apps/Database" to="." method="_on_yarm_pressed"]
-[connection signal="pressed" from="UI/Apps/OrbitalMechanics" to="." method="_on_yarm_pressed"]
+[connection signal="pressed" from="UI/Apps/ConnectToGlobal" to="." method="_on_connect_to_global_pressed"]
+[connection signal="pressed" from="UI/Upcoming/Yarm" to="." method="_on_yarm_pressed"]
+[connection signal="pressed" from="UI/Upcoming/MBSE" to="." method="_on_yarm_pressed"]
+[connection signal="pressed" from="UI/Upcoming/Kanban" to="." method="_on_yarm_pressed"]
+[connection signal="pressed" from="UI/Upcoming/Database" to="." method="_on_yarm_pressed"]
+[connection signal="pressed" from="UI/Upcoming/OrbitalMechanics" to="." method="_on_yarm_pressed"]
