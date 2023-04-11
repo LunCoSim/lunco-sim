@@ -68,8 +68,9 @@ func add_player(id):
 #	%SpawnPosition.add_child(player_instance)
 
 #	send_message.rpc(str(id), " has joined the game", false)
+
 @rpc("any_peer", "call_local")
-func add_operator():
+func spawn():
 	var id = multiplayer.get_remote_sender_id()
 	print("add_operator remoteid: ", id, " local id: ", multiplayer.get_unique_id())
 	
@@ -89,15 +90,14 @@ func add_operator():
 			
 		send_message.rpc(str(id), " has joined the game", false)
 
-@rpc("any_peer")
-func add_spacecraft(id):
-	pass
 	
 #----------
+# Signals from Avatar
 
 func _on_create_operator():
 	print("_on_create_operator: ", multiplayer.get_unique_id())
-	add_operator.rpc_id(1)
+	
+	spawn.rpc_id(1)
 
 #---------------------------------------
 

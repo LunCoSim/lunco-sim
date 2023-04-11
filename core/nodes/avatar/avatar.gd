@@ -44,19 +44,8 @@ func set_target(_target):
 				target = N
 #				if N.name == str(multiplayer.get_unique_id()):
 #					target = N
-	
-	var new_state := ""
-	if target is lnPlayer:
-		new_state = "player"
-	elif target is lnSpacecraft:
-		new_state = "spacecraft"
-	elif target is lnOperator:
-		new_state = "operator"
-	
-	print("New State: ", new_state)
-	if new_state:
-		state.set_trigger(new_state)
-		
+
+	_on_State_transited()
 	return target
 
 func set_camera(_camera):
@@ -203,26 +192,27 @@ func _input(event):
 		operator.move(motion_direction.normalized())
 		operator.orient(cam.get_plain_basis())
 
-func _on_State_transited(from, to):
-	print("_on_State_transited: ", from, " ", to)
+func _on_State_transited():
+	
 	var _ui = null
-	match to:
-		"Player":
-			_ui = preload("res://core/ui/player-ui.tscn").instantiate()
-			$UI/Help/Target.text = "Target: Player"
+	
+	if target is lnPlayer:
+		_ui = preload("res://core/ui/player-ui.tscn").instantiate()
+		$UI/Help/Target.text = "Target: Player"
 #			camera.remove_excluded_object(Spacecraft)
-			camera.set_spring_length(2.5)
-		"Spacecraft":
-			_ui = preload("res://core/ui/spacecraft-ui.tscn").instantiate()
-			$UI/Help/Target.text = "Target: Spacecraft"
+		camera.set_spring_length(2.5)
+	elif target is lnSpacecraft:
+		_ui = preload("res://core/ui/spacecraft-ui.tscn").instantiate()
+		$UI/Help/Target.text = "Target: Spacecraft"
 #			camera.add_excluded_object(Spacecraft)
-			camera.set_spring_length(50)
-		"Operator":
-			_ui = preload("res://core/ui/operator-ui.tscn").instantiate()
-			_ui.model_selected.connect(_on_select_model)
-			$UI/Help/Target.text = "Target: Operator"
+		camera.set_spring_length(50)
+	elif target is lnOperator:
+		_ui = preload("res://core/ui/operator-ui.tscn").instantiate()
+		_ui.model_selected.connect(_on_select_model)
+		$UI/Help/Target.text = "Target: Operator"
 #				camera.remove_excluded_object(Spacecraft)
-			camera.set_spring_length(2.5)
+		camera.set_spring_length(2.5)
+	
 			
 	set_ui(_ui)
 	if _ui:
