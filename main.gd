@@ -21,7 +21,7 @@ func _process(delta):
 
 ## UI Integrations
 func _on_sim_host_pressed():
-	print("_on_sim_host_pressed")
+	print("[INFO] _on_sim_host_pressed")
 	peer.create_server(9000)
 	multiplayer.multiplayer_peer = peer
 	

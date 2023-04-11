@@ -20,11 +20,16 @@ config/icon="res://icon.svg"
 [autoload]
 
 BeehaveGlobalMetrics="*res://addons/beehave/metrics/beehave_global_metrics.gd"
-Console="*res://addons/panku_console/console.tscn"
+Log="*res://addons/godot-logger/scripts/logger.gd"
 
 [debug]
 
 file_logging/enable_file_logging.pc=false
+
+[display]
+
+window/size/viewport_width=1280
+window/size/viewport_height=720
 
 [editor]
 
@@ -33,6 +38,13 @@ movie_writer/movie_file="/home/rod/Documents/lunco-movies/godot_output.avi"
 [editor_plugins]
 
 enabled=PackedStringArray("res://addons/object-inspector/plugin.cfg", "res://addons/imjp94.yafsm/plugin.cfg", "res://addons/beehave/plugin.cfg", "res://addons/panku_console/plugin.cfg")
+logger/log_enabled=true
+logger/log_stdout=false
+logger/level=31
+logger/file/log_file_write=true
+logger/file/file_path="res://game.log"
+logger/stdout_format="[{hour}:{minute}:{second}][{level}]{text}"
+logger/file_format="[{hour}:{minute}:{second}][{level}]{text}"
 
 [input]
 
