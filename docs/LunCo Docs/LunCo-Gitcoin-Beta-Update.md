@@ -86,7 +86,7 @@ LunCo is a single entry point with a nice UX into a rabithole of space engineeri
 
 ### Main
 
-**Q: Should Humanity become multiplanetary species?**
+**Q: Should humanity become a multiplanetary species?**
 
 A: YES!
 
@@ -94,58 +94,58 @@ A: YES!
 
 **Q: Why Godot 4?**
 
-A: It's the only decent AAA opensource game engine
+A: It's the only decent AAA opensource game engine.
 
-**Q: How LunCo helps engineers?**
+**Q: How does LunCo help engineers?**
 
-A: With UX focused on saving time, integrated databases, wide range of modules (CAD, CAE, ML, etc), instant results sharing
+A: With a UX focused on saving time, integrated databases, a wide range of modules (CAD, CAE, ML, etc), and instant result sharing.
 
-**Q: Why it's web3?**
+**Q: Why in web3?**
 
-A: LunCo is designed with the web3 ideas, as one of the main goal is to connect engineers together in a decentralized maner, and server as a web3 native toolkit for complex mission management.
+A: LunCo is designed on web3 concepts and principles, as one of the main goals is to connect engineers together in a decentralized manner and to serve as a web3 native toolkit for complex mission management.
 
 **Q: How can I use it?**
 
 A: All the code is under MIT licence. You can do what you want, even sell LunCo! Just leave the creds, please.
 
-**Q: What standards you plan to support?**
+**Q: What standards do you plan to support?**
 
-A: OMG, NASA, ESA, MOSA, CCSDS, etc
+A: OMG, NASA, ESA, MOSA, CCSDS, etc.
 
-**Q: Explain as a professional space engineer?**
+**Q: Can you explain it as a professional space engineer?**
 
-A: All-in-one extandable modular tool with submodules for: requirements managements, MBSE, CE (concurrent engineering), project management (Kanban, Virtual whiteboard, diagrams, etc) build on decentralized technologies and open standards 
+A: It is an all-in-one extendable modular tool with submodules for the following: requirements managements, MBSE, CE (concurrent engineering), project management (Kanban, Virtual whiteboard, diagrams, etc.), and build on decentralized technologies and open standards.
 
 ### Donations
 
 **Q: Why should I donate?**
 
-A: You will help to build a settlement on the Moon
+A: You will be part of helping to build a settlement on the moon.
 
-**Q: How to donate?**
+**Q: How can I donate?**
 
-A: Check Gitcoin Grantee portal for latest news
+A: Check the [Gitcoin Grantee Portal](https://gitcoin.notion.site/Gitcoin-Grantee-Portal-6adfc92627474bd48a5dfcd1e8438d20) for the latest news as well as [our project on Giveth](https://giveth.io/project/lunco-a-full-cycle-space-operations-sim-tool).
 
-**Q: Why I need [Gitcoin Passport](https://passport.gitcoin.co/)?**
+**Q: Why do I need a [Gitcoin Passport](https://passport.gitcoin.co/)?**
 
-A: To prove that you are human to prevent bots attack on the system
+A: To prove that you are human to prevent bot attack on the system.
 
 **Q: What if my Gitcoin Passport score is insufficient?**
 
-A: The donation won't help LunCo to raise money from matching pool, as it won't be matched. However our team could stake GTC for you, [reach Rod](https://twitter.com/_Difint_) for help
+A: Then your donation won't be eligible to raise funds for LunCo through the matching pool. However, our team could stake GTC for you, [reach Rod](https://twitter.com/_Difint_) for help.
 
-**Q: How to donate from mobile?**
+**Q: How can I donate from a mobile device?**
 
-A: Use build in [Metamask Mobile Browser](https://support.metamask.io/hc/en-us/articles/6356387482523-How-to-use-the-MetaMask-Mobile-Browser)
+A: Use built-in [Metamask Mobile Browser](https://support.metamask.io/hc/en-us/articles/6356387482523-How-to-use-the-MetaMask-Mobile-Browser).
 
 **Q: What crypto I can use?**
 
-A: Mainnet only, ETH, DAI, probably others. It's desided by Gitcoin
+A: Mainnet only, ETH, DAI, and others as decided by Gitcoin.
 
-**Q: How to buy crypto?**
+**Q: How can I buy crypto?**
 
-A: It depends on your residence, we sugest to start checking big centralized exchanges like [Coinbase](https://www.coinbase.com/), [Binance](https://binance.com), [Huobi](https://www.huobi.com/), however Do You Own Research
+A: It depends on your residence. We suggest to start checking big centralized exchanges like [Coinbase](https://www.coinbase.com/), [Binance](https://binance.com), [Huobi](https://www.huobi.com/). Remember, always DYOR (Do You Own Research).
 
-**Q: How funds will be used?**
+**Q: How will the funds be used?**
 
-A: Pay for equipment (need powerfull computer for development), rent, services (VPS, ChatGPT, Twitter Blue, etc), Bounties, Sponsorships of relevent event, Attending IRL event for BD
+A: To pay for equipment (powerful computing equipment is needed for development), rent, services (VPS, ChatGPT, Twitter Blue, etc.), bounties, sponsorships of relevent event, attending IRL events for BD, etc.
