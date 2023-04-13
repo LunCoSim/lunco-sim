@@ -13,6 +13,16 @@ Lack of access to such software is a source of inequality in our world.
 
 LunCo addresses these issues by providing an extensible core (3D, UI, web3-based data sharing), as well as a set of applications build on top of that for engineers.
 
+
+## Impact
+
+- significantly lower the cost of engineering, making not only Space Exploration more accesible, but in general the cost of engineered solutions, e.g. vertical farms
+- lowering the barier to engineer stuff, providing everyone interested with equail access to manufacturing software
+- global engineering community, data and technology transfer between domains
+- source of high-quality data for engineering AI
+
+
+
 ## Table of content
 
 - [[#Updates|Updates]]
