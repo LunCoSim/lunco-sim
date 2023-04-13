@@ -1,9 +1,17 @@
 
-
-
 # LunCo
 
-***LunCo is an opensource collaborative engineering software for complex systems design inspired by Lunar Exploration***
+***LunCo is an opensource collaborative engineering software for complex systems design inspired by Lunar Exploration and built by space systems engineers***
+
+From solar panels, wind turbines, and vertical farms through solar power stations in space to permanent settlements on Moon and Mars - it's all about engineering.
+
+Designing is hard and you need a lot of different software - CAD, CAE, CAM, FEA, MBSE, ERP, and so on.
+
+Software that can operate complex systems like factories or Lunar Colony at all levels, a digital twin of the system - is crucial to run existing infrastructure. 
+
+Lack of access to such software is a source of inequality in our world.
+
+LunCo addresses these issues by providing an extensible core (3D, UI, web3-based data sharing), as well as a set of applications build on top of that for engineers.
 
 ## Table of content
 
@@ -20,26 +28,25 @@
 
 ## Updates
 
-[TBD VIDEO ON YOUTUBE]()
-
 ### Community
 
-1. 7x [LunCo's Twitter](https://twitter.com/LunCoSim) growth - to 2200+ followers
-2. Minted for supporters:
-	- [hypercerts](https://hypercerts.org/app/view?claimId=0x822f17a9a5eecfd66dbaff7946a8071c265d1d07-2381976568446569244243622252022377480192) for Alpha Round
-	- [POAPs](https://www.poap.delivery/lunco-gr-15-supporters) for Gitcoin Round 15
-3. Mentioned as DeSci Method in
+1.  Mentioned as DeSci Method in
 	- [Binance Research](https://twitter.com/BinanceResearch/status/1638833482825605120)
 	- [Messary](https://twitter.com/MessariCrypto/status/1644671463914614785)
-5. GR15 and Alpha Grantee with ~250 donors, ~$15k in funds
-6. 14 donations, ~$1000, ~347k GIVPOWER  on [Giveth](https://giveth.io/project/lunco-accelerates-lunar-colonization-with-opensource)
-7. ~300 space professionals following on [Linkedin](https://www.linkedin.com/company/luncosim/) 
-8. Participated in [DeSci Rising by DeSci World](https://twitter.com/DeSciWorld/status/1623715987928518658)
-9. Sponsored:
+2. 7x [LunCo's Twitter](https://twitter.com/LunCoSim) growth - to 2200+ followers
+3. Participated in DeSpace track on ReFiDAO's Founder's Circle 2
+4. GR15 and Alpha Grantee with ~250 donors, ~$15k in funds
+5. 14 donations, ~$1000, ~347k GIVPOWER  on [Giveth](https://giveth.io/project/lunco-accelerates-lunar-colonization-with-opensource)
+6. ~300 space professionals following on [Linkedin](https://www.linkedin.com/company/luncosim/) 
+7. Participated in [DeSci Rising by DeSci World](https://twitter.com/DeSciWorld/status/1623715987928518658)
+8. Sponsored:
 	- [DeSci Denver ](https://twitter.com/descieth/status/1628379084928548866)
 	- [GreenPill Gokarna Fest](https://twitter.com/IrthuSuresh/status/1643379632887193600) (along with Filecoin, Celo, NEAR, and others)
-10. Presented Gitcoin and ReFi on the [IRL event by DAO 999 NFT KINGDOM](https://twitter.com/999kingdomnft/status/1643935080417730560)
-11. Shilled the idea of a LunCo-like system to MoonDAO, so now using such a system is in[ MoonDAO Roadmap for 2024](https://docs.google.com/document/d/1E4VtthW7lEdYboaumkrlJ01hqf298wMu9qniqeNL0fA/edit#heading=h.pd8qdg2ti4sq)
+9. Presented Gitcoin and ReFi on the [IRL event by DAO 999 NFT KINGDOM](https://twitter.com/999kingdomnft/status/1643935080417730560)
+10. Shilled the idea of a LunCo-like system to MoonDAO, so now using such a system is in[ MoonDAO Roadmap for 2024](https://docs.google.com/document/d/1E4VtthW7lEdYboaumkrlJ01hqf298wMu9qniqeNL0fA/edit#heading=h.pd8qdg2ti4sq)
+11. Minted for supporters:
+	- [hypercerts](https://hypercerts.org/app/view?claimId=0x822f17a9a5eecfd66dbaff7946a8071c265d1d07-2381976568446569244243622252022377480192) for Alpha Round
+	- [POAPs](https://www.poap.delivery/lunco-gr-15-supporters) for Gitcoin Round 15
 
 ### Technical
 
@@ -51,6 +58,8 @@
 ## About
 
 LunCo is a single entry point with a nice UX into a rabithole of space engineering, fully open.
+
+Check our [Youtube](https://www.youtube.com/@LunCoSim).  There (hopefully) should be an explanation video, launched right before the round.
 
 ### Key Ideas
 
@@ -71,6 +80,19 @@ LunCo is a single entry point with a nice UX into a rabithole of space engineeri
 - Model Closed Loop Biological Life Support Systems
 - Build custom submodules for ERP, supply chain, CRM, etc
 
+### Roadmap / next steps
+
+1. Implement crucial PM tools: Kanban board, Infinite Whiteboard
+2. User generated content distribution via IPFS
+3. ReqIf - based requirements management
+4. Basic models:
+	1. Solar power generation
+	2. Electricity consumption
+	3. Air quality
+	4. Thermal balance of a building
+	5. Basic connectivity modeling
+	6. Basic orbital mechanics (mostly to identify Sun position above the horizont at any given time)
+
 # Contacts
 
 1. [Site](https://lunco.space)
@@ -87,6 +109,10 @@ LunCo is a single entry point with a nice UX into a rabithole of space engineeri
 ### Main
 
 **Q: Should humanity become a multiplanetary species?**
+
+A: YES!
+
+**Q: Do you want to live in a sustainable, solarpunk future?**
 
 A: YES!
 
