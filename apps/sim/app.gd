@@ -70,7 +70,7 @@ func add_player(id):
 #	send_message.rpc(str(id), " has joined the game", false)
 
 @rpc("any_peer", "call_local")
-func spawn():
+func spawn(path: String):
 	var id = multiplayer.get_remote_sender_id()
 	print("add_operator remoteid: ", id, " local id: ", multiplayer.get_unique_id())
 	
@@ -81,12 +81,12 @@ func spawn():
 			found = true
 	
 	if not found:
-		var operator = OperatorEntity.instantiate()
-		operator.name = str(id)
+		var entity = SpacecraftEntity.instantiate()
+		entity.name = str(id)
 		
-		%SpawnPosition.add_child(operator)
+		%SpawnPosition.add_child(entity)
 		
-		_on_multiplayer_spawner_spawned(operator)
+		_on_multiplayer_spawner_spawned(entity)
 			
 		send_message.rpc(str(id), " has joined the game", false)
 

@@ -20,7 +20,7 @@ config/icon="res://icon.svg"
 [autoload]
 
 BeehaveGlobalMetrics="*res://addons/beehave/metrics/beehave_global_metrics.gd"
-Log="*res://addons/godot-logger/scripts/logger.gd"
+EntitiesDb="*res://core/singletones/EntitiesDB.gd"
 Console="*res://addons/panku_console/console.tscn"
 
 [debug]

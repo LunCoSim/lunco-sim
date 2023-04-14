@@ -29,7 +29,6 @@ var spawn_model_path = "res://addons/lunco-content/moonwards/buildings/android-k
 #-------------------------------
 
 @onready var ui := $UI/TargetUI
-@onready var state := $State
 #@onready var matrix: lnMatrix = get_parent()
 @onready var camera := $SpringArmCamera
 
@@ -57,6 +56,9 @@ func set_ui(_ui=null):
 	clear_ui()
 	if(_ui):
 		ui.add_child(_ui)
+	
+	_ui.set_target(target)
+		
 		
 func clear_ui():
 	for n in ui.get_children():
@@ -215,8 +217,7 @@ func _on_State_transited():
 	
 			
 	set_ui(_ui)
-	if _ui:
-		_ui.set_target(target)
+	
 	camera.set_target(target)
 
 func _on_select_model(path):
