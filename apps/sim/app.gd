@@ -109,3 +109,18 @@ func _on_multiplayer_spawner_spawned(node):
 	if node.name == str(multiplayer.get_unique_id()):
 		$Avatar.set_target(node)
 #		
+
+
+func _on_avatar_ray_cast(from: Vector3, to: Vector3):
+	
+	var space_state = $World.get_world_3d().direct_space_state
+	
+	var query = PhysicsRayQueryParameters3D.create(from, to)
+	query.exclude = [self]
+	var result = space_state.intersect_ray(query)
+	
+	
+	if result:
+		print(" Selected: ", result)
+#			emit_signal("ray_hit", res["position"])
+pass # Replace with function body.

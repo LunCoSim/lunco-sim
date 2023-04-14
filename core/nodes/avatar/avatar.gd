@@ -11,6 +11,8 @@ signal create_operator
 signal create_player
 signal create_spacecraft
 
+signal ray_cast(from: Vector3, to: Vector3)
+
 #-------------------------------
 const MOUSE_SENSITIVITY = 0.1
 const RAY_LENGTH = 10000
@@ -34,8 +36,6 @@ func set_target(_target):
 		for N in _target.get_children():
 			if N is lnSpaceSystem:
 				target = N
-#				if N.name == str(multiplayer.get_unique_id()):
-#					target = N
 
 	_on_State_transited()
 	return target
@@ -70,33 +70,35 @@ func clear_ui():
 # Matrix itself is a space system and can perform commands
 
 func _ready():
-	pass
+	$UI.set_mouse_filter(Control.MOUSE_FILTER_PASS)
 
 func _unhandled_input(event):
 	
 	#raycast
-	if target is lnOperator:
-		if event is InputEventMouseButton and event.pressed and event.button_index == 1:
+
+	#Left mouse button pressed
+	if event is InputEventMouseButton and event.pressed and event.button_index == 1:
+		print("Click mouse")
+		if target is lnOperator:
+			print("Ray casting")
+			
 			var e: InputEventMouseButton = event
 			var position = e.position
 			
 			if camera:  
 				var from = camera.project_ray_origin(position)
-				var to = from + camera.project_ray_normal(position) * RAY_LENGTH	
-#				var res = matrix.ray_cast(from, to)
-#				if res:
-#					matrix.spawn(res["position"], spawn_model_path)
-					
+				var to = from + camera.project_ray_normal(position) * RAY_LENGTH
+				
+				emit_signal("ray_cast", from, to)	
+
+
 func _input(event):
 	if Input.is_action_just_pressed("select_player"):
 		emit_signal("create_player")
-#		state.set_trigger("player")
 	elif Input.is_action_just_pressed("select_spacecraft"):
 		emit_signal("create_spacecraft")
-#		state.set_trigger("spacecraft")
 	elif Input.is_action_just_pressed("select_operator"):
 		emit_signal("create_operator")
-#		state.set_trigger("operator")
 		
 	if Input.is_action_pressed("rotate_camera"):
 		Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
