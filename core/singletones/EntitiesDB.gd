@@ -8,8 +8,8 @@ enum Entities {
 }
 
 var Paths = {
-	Entities.Spacecraft: "res://core/entities/player-entity.tscn",
-	Entities.Operator: "res://core/entities/player-entity.tscn",
+	Entities.Spacecraft: "res://core/entities/starship-entity.tscn",
+	Entities.Operator: "res://core/entities/operator-entity.tscn",
 	Entities.Character: "res://core/entities/player-entity.tscn"
 }
 
@@ -24,7 +24,7 @@ func _init():
 		Caches[entity] = load(path)
 		
 func make_entity(entity):
-	return Caches[entity]
+	return Caches[entity].instantiate()
 #
 #var Caches = {
 #	Entities.Spacecraft: preload,

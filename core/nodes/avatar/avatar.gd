@@ -97,7 +97,7 @@ func _unhandled_input(event):
 					
 func _input(event):
 	if Input.is_action_just_pressed("select_player"):
-		emit_signal("create_spacecraft")
+		emit_signal("create_player")
 #		state.set_trigger("player")
 	elif Input.is_action_just_pressed("select_spacecraft"):
 		emit_signal("create_spacecraft")

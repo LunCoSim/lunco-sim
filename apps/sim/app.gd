@@ -70,7 +70,7 @@ func add_player(id):
 #	send_message.rpc(str(id), " has joined the game", false)
 
 @rpc("any_peer", "call_local")
-func spawn(path: String):
+func spawn(_entity: EntitiesDB.Entities): #TBD think of a class entity
 	var id = multiplayer.get_remote_sender_id()
 	print("add_operator remoteid: ", id, " local id: ", multiplayer.get_unique_id())
 	
@@ -81,13 +81,13 @@ func spawn(path: String):
 			found = true
 	
 	if not found:
-		var entity = SpacecraftEntity.instantiate()
+		var entity = Entities.make_entity(_entity)
 		entity.name = str(id)
-		
+
 		%SpawnPosition.add_child(entity)
-		
+
 		_on_multiplayer_spawner_spawned(entity)
-			
+
 		send_message.rpc(str(id), " has joined the game", false)
 
 	
@@ -95,10 +95,14 @@ func spawn(path: String):
 # Signals from Avatar
 
 func _on_create_operator():
-	print("_on_create_operator: ", multiplayer.get_unique_id())
-	
-	spawn.rpc_id(1)
+	spawn.rpc_id(1, EntitiesDB.Entities.Operator)
 
+func _on_create_character():
+	spawn.rpc_id(1, EntitiesDB.Entities.Character)
+
+func _on_create_spacecraft():
+	spawn.rpc_id(1, EntitiesDB.Entities.Spacecraft)
+	
 #---------------------------------------
 
 func _on_multiplayer_spawner_spawned(node):

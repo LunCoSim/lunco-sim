@@ -92,4 +92,6 @@ spawn_path = NodePath("../SpawnPosition")
 unique_name_in_owner = true
 
 [connection signal="create_operator" from="Avatar" to="." method="_on_create_operator"]
+[connection signal="create_player" from="Avatar" to="." method="_on_create_character"]
+[connection signal="create_spacecraft" from="Avatar" to="." method="_on_create_spacecraft"]
 [connection signal="spawned" from="MultiplayerSpawner" to="." method="_on_multiplayer_spawner_spawned"]
