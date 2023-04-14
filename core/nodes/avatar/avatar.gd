@@ -20,16 +20,9 @@ const RAY_LENGTH = 10000
 var target: Node3D
 var mouse_control := false
 
-#@export var Player: Node3D
-#@export var Spacecraft: Node3D
-#@export var Operator: Node3D
-
-var spawn_model_path = "res://addons/lunco-content/moonwards/buildings/android-kiosk/android-kiosk.escn"
-
 #-------------------------------
 
 @onready var ui := $UI/TargetUI
-#@onready var matrix: lnMatrix = get_parent()
 @onready var camera := $SpringArmCamera
 
 #-------------------------------
@@ -77,12 +70,11 @@ func clear_ui():
 # Matrix itself is a space system and can perform commands
 
 func _ready():
-#	player = matrix.get_player()
-#	spacecraft = matrix.get_spacecraft()
-#	operator = matrix.get_operator()
 	pass
 
 func _unhandled_input(event):
+	
+	#raycast
 	if target is lnOperator:
 		if event is InputEventMouseButton and event.pressed and event.button_index == 1:
 			var e: InputEventMouseButton = event
@@ -222,4 +214,4 @@ func _on_State_transited():
 
 func _on_select_model(path):
 	print("_on_select_model: ", path)
-	spawn_model_path = path
+#	spawn_model_path = path
