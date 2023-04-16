@@ -10,11 +10,13 @@ properties/0/sync = true
 properties/1/path = NodePath(".:rotation")
 properties/1/spawn = true
 properties/1/sync = true
+properties/2/path = NodePath("SpaceX_Starship:position")
+properties/2/spawn = true
+properties/2/sync = true
 
 [node name="SpaceX_Starship" instance=ExtResource("1_six3u")]
 
 [node name="SpacecraftController" parent="." index="2" instance=ExtResource("2_h3rj8")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -92.9765, -26.1867, 232.091)
 
 [node name="MultiplayerSynchronizer" type="MultiplayerSynchronizer" parent="." index="3"]
 replication_config = SubResource("SceneReplicationConfig_l7sxw")
