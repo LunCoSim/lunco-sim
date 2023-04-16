@@ -49,8 +49,8 @@ func set_ui(_ui=null):
 	clear_ui()
 	if(_ui):
 		ui.add_child(_ui)
+		_ui.set_target(target)
 	
-	_ui.set_target(target)
 		
 		
 func clear_ui():
@@ -137,20 +137,20 @@ func _input(event):
 			Input.get_action_strength("move_up") - Input.get_action_strength("move_down"),
 			Input.get_action_strength("move_back") - Input.get_action_strength("move_forward"))
 	
-		if motion_direction.length() < 0.001:
-			player.stop()
-		else:
-			player.move(motion_direction)
-			
-		if Input.is_action_just_pressed("jump"): #idle/move
-			player.jump()
-		
-#			if Input.is_action_pressed("aim"): #idle/move
-#				player.aim()
-			
-		if Input.is_action_pressed("shoot"): #idle/move
-			player.shoot()
-		
+#		if motion_direction.length() < 0.001:
+#			player.stop()
+#		else:
+#			player.move(motion_direction)
+#
+#		if Input.is_action_just_pressed("jump"): #idle/move
+#			player.jump()
+#
+##			if Input.is_action_pressed("aim"): #idle/move
+##				player.aim()
+#
+#		if Input.is_action_pressed("shoot"): #idle/move
+#			player.shoot()
+		player.set_camera(camera)
 #		if camera is SpringArmCamera:
 #			var cam: SpringArmCamera = camera
 #			player.set_camera_x_rot(cam.camera_x_rot)
@@ -193,10 +193,13 @@ func _on_State_transited():
 	var _ui = null
 	
 	if target is lnPlayer:
+		
 		_ui = preload("res://core/ui/player-ui.tscn").instantiate()
 		$UI/Help/Target.text = "Target: Player"
 #			camera.remove_excluded_object(Spacecraft)
 		camera.set_spring_length(2.5)
+		target.set_camera(camera)
+		
 	elif target is lnSpacecraft:
 		_ui = preload("res://core/ui/spacecraft-ui.tscn").instantiate()
 		$UI/Help/Target.text = "Target: Spacecraft"

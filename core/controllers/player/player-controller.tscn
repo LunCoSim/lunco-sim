@@ -270,5 +270,3 @@ script = ExtResource("1_541sa")
 [node name="State" type="Node" parent="."]
 script = ExtResource("2_lr54q")
 state_machine = SubResource("40")
-
-[connection signal="transited" from="State" to="." method="_on_StatePlayer_transited"]

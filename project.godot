@@ -257,6 +257,10 @@ toggle_console={
 
 toggle_console_action="toggle_console"
 
+[physics]
+
+3d/default_gravity=1.62
+
 [rendering]
 
 renderer/rendering_method.mobile="gl_compatibility"

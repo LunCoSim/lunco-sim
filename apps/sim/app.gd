@@ -115,6 +115,8 @@ func _on_avatar_ray_cast(from: Vector3, to: Vector3):
 	
 	var space_state = $World.get_world_3d().direct_space_state
 	
+	#tbd, probably because of multithreading
+#	if space_state:
 	var query = PhysicsRayQueryParameters3D.create(from, to)
 	query.exclude = [self]
 	var result = space_state.intersect_ray(query)

@@ -53,6 +53,7 @@ script = ExtResource("1_d3brg")
 [node name="Avatar" parent="." instance=ExtResource("6_hs3oo")]
 
 [node name="World" type="Node3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1.871, 21, 0)
 
 [node name="DirectionalLight3D" type="DirectionalLight3D" parent="World"]
 transform = Transform3D(1, 0, 0, 0, 0.844973, 0.534809, 0, -0.534809, 0.844973, 0, 32.5156, 25.939)
