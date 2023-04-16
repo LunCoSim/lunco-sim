@@ -36,14 +36,19 @@ var aiming_timer := 0.0
 
 func _ready():
 	if get_multiplayer_authority() == multiplayer.get_unique_id():
+		print("plaer autority multiplayer, on: ", multiplayer.get_unique_id())
 #		camera_camera.make_current()
 		Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
 	else:
-		set_process(false)
-		set_process_input(false)
+		print("plaer autority reqular, on: ", multiplayer.get_unique_id())
+#		set_process(false)
+#		set_process_input(false)
 		color_rect.hide()
 
 func _process(delta):
+#	if get_multiplayer_authority() != multiplayer.get_unique_id():
+#		return
+		
 	motion = Vector2(
 			Input.get_action_strength("move_right") - Input.get_action_strength("move_left"),
 			Input.get_action_strength("move_back") - Input.get_action_strength("move_forward"))
@@ -126,7 +131,6 @@ func get_camera_rotation_basis() -> Basis:
 
 
 func set_camera(_camera):
-	print("set camera")
 	camera = _camera
 	
 @rpc("call_local")

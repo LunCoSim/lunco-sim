@@ -84,6 +84,8 @@ func spawn(_entity: EntitiesDB.Entities): #TBD think of a class entity
 		var entity = Entities.make_entity(_entity)
 		entity.name = str(id)
 
+		entity.set_multiplayer_authority(id)
+		
 		%SpawnPosition.add_child(entity)
 
 		_on_multiplayer_spawner_spawned(entity)
