@@ -21,14 +21,19 @@ const Z_FRONT = 1 #in this game the front side is towards negative Z
 var thrust := 0.0
 var torque := Vector3.ZERO
 
-# damping: see linear and angular damping parameters
-func _physics_process(delta):
-	if Target:
-		Target.apply_central_force(Target.transform.basis.z * Z_FRONT * thrust)
+#-----------------------
 
-		Target.apply_torque(Target.global_transform.basis.x * torque.x * THRUST_TURN * Z_FRONT)
-		Target.apply_torque(Target.global_transform.basis.y * torque.y * THRUST_TURN * Z_FRONT)
-		Target.apply_torque(Target.global_transform.basis.z * torque.z * THRUST_ROLL * Z_FRONT)
+func _ready():
+		Target.set_multiplayer_authority(str(Target.name).to_int())
+		
+func _physics_process(delta):
+	if Target.name == str(multiplayer.get_unique_id()):
+		if Target:
+			Target.apply_central_force(Target.transform.basis.z * Z_FRONT * thrust)
+
+			Target.apply_torque(Target.global_transform.basis.x * torque.x * THRUST_TURN * Z_FRONT)
+			Target.apply_torque(Target.global_transform.basis.y * torque.y * THRUST_TURN * Z_FRONT)
+			Target.apply_torque(Target.global_transform.basis.z * torque.z * THRUST_ROLL * Z_FRONT)
 	
 	
 
