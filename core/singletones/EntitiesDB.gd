@@ -37,7 +37,8 @@ func make_entity(entity):
 
 @export var text := ""
 
-@rpc("reliable")
+
+@rpc("any_peer")
 func set_text(_text):
-	print("is_server: ", multiplayer.is_server(), " set text: ", _text)
+	print("peer id: ", multiplayer.get_unique_id()," caller ", multiplayer.get_remote_sender_id() ," set text: ", _text)
 	text=_text

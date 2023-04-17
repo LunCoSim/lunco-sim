@@ -32,7 +32,6 @@ func set_text(text):
 	$TextEdit.text = text
 
 func _on_text_edit_text_changed():
-	
-	Entities.set_text.rpc_id(1, $TextEdit.text)
+	Entities.set_text.rpc($TextEdit.text)
 
 	pass # Replace with function body.
