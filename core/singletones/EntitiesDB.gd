@@ -34,3 +34,10 @@ func make_entity(entity):
 #var PlayerEntity := preload()
 #var OperatorEntity := preload("res://core/entities/operator-entity.tscn")
 #var SpacecraftEntity := preload("res://core/entities/starship-entity.tscn")
+
+@export var text := ""
+
+@rpc("reliable")
+func set_text(_text):
+	print("is_server: ", multiplayer.is_server(), " set text: ", _text)
+	text=_text

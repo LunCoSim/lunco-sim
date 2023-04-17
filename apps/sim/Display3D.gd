@@ -11,6 +11,8 @@ func _ready():
 	material_override.albedo_texture = viewport.get_texture()
 
 
+func _process(delta):
+	$SubViewport/whiteboard.set_text(Entities.text)
 
 func _on_button_pressed():
 	print("3D Display button pressed")

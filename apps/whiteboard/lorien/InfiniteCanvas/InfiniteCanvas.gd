@@ -243,10 +243,10 @@ func end_stroke() -> void:
 			_current_project.undo_redo.create_action("Stroke")
 			_current_project.undo_redo.add_undo_method(undo_last_stroke)
 			_current_project.undo_redo.add_undo_reference(_current_stroke)
-			_current_project.undo_redo.add_do_method(func(): _strokes_parent.add_child(_current_stroke))
+			_current_project.undo_redo.add_do_method(Callable(_strokes_parent, "add_child").bind(_current_stroke))
 			_current_project.undo_redo.add_do_property(info, "stroke_count", info.stroke_count + 1)
 			_current_project.undo_redo.add_do_property(info, "point_count", info.point_count + _current_stroke.points.size())
-			_current_project.undo_redo.add_do_method(func(): _current_project.add_stroke(_current_stroke))
+			_current_project.undo_redo.add_do_method(Callable(_current_project,"add_stroke").bind(_current_stroke))
 			_current_project.undo_redo.commit_action()
 		
 		_current_stroke = null

@@ -35,6 +35,7 @@ func _process(delta):
 func on_peer_connected(id):
 	print("player connected: ", id)
 	players[id] = {}
+	Entities.set_multiplayer_authority(id)
 
 func on_peer_disconnected(id):
 	print("player removed: ", id)
