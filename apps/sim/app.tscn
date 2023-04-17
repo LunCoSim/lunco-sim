@@ -1,4 +1,4 @@
-[gd_scene load_steps=17 format=3 uid="uid://dltv03b10eli"]
+[gd_scene load_steps=18 format=3 uid="uid://dltv03b10eli"]
 
 [ext_resource type="Script" path="res://addons/object-inspector/scripts/inspector.gd" id="1_d3brg"]
 [ext_resource type="Script" path="res://apps/sim/app.gd" id="1_upy72"]
@@ -11,6 +11,7 @@
 [ext_resource type="PackedScene" uid="uid://do1ecg5jve7wu" path="res://addons/lunco-content/moonwards/vehicles/rovers/AthleteRover/AthleteRover.escn" id="11_ctf0g"]
 [ext_resource type="PackedScene" uid="uid://d18c2gpps48r3" path="res://apps/editor/editor.tscn" id="11_y35nj"]
 [ext_resource type="PackedScene" uid="uid://dn5t73yi2rj4h" path="res://addons/lunco-content/moonwards/vehicles/rovers/SpiderCrane/SpiderCrane.escn" id="12_lyjst"]
+[ext_resource type="PackedScene" uid="uid://dd6tms8o0rilp" path="res://addons/lunco-content/moonwards/vehicles/rockets/NuclearPodShip/NuclearPodShip.escn" id="12_s1cr5"]
 
 [sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_a6c7k"]
 sky_top_color = Color(0.0941176, 0.121569, 0.156863, 1)
@@ -59,6 +60,7 @@ alignment = 1
 script = ExtResource("1_d3brg")
 
 [node name="Avatar" parent="." instance=ExtResource("6_hs3oo")]
+transform = Transform3D(-0.77664, 0, -0.629944, 0, 1, 0, 0.629944, 0, -0.77664, -23.4477, 27.5849, 50.7354)
 
 [node name="World" type="Node3D" parent="."]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1.871, 21, 0)
@@ -73,7 +75,7 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 31.5747, 2.37504, 57.0209)
 environment = SubResource("Environment_7olaa")
 
 [node name="nuclear-core" parent="World" instance=ExtResource("8_ukav2")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -141.395, -12.1995, -8.34924)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -141.395, -20.6602, -8.34924)
 
 [node name="satellite-dish" parent="World" instance=ExtResource("9_k2t3s")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -214.816, -33.905, 54.0053)
@@ -82,10 +84,10 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -214.816, -33.905, 54.0053)
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -137.646, -33.8777, 75.2299)
 
 [node name="AthleteRover" parent="World" instance=ExtResource("11_ctf0g")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -153.215, -33.4417, 44.8008)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -153.215, -29.8606, 44.8008)
 
 [node name="AthleteRover2" parent="World" instance=ExtResource("11_ctf0g")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -113.997, -33.4217, 32.2217)
+transform = Transform3D(0.972158, -0.234328, 0, 0.234328, 0.972158, 0, 0, 0, 1, -60.3374, -27.583, -5.96704)
 
 [node name="SpiderCrane" parent="World" instance=ExtResource("12_lyjst")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -137.367, -33.851, 87.5822)
@@ -99,7 +101,7 @@ spawn_path = NodePath("../SpawnPosition")
 
 [node name="SpawnPosition" type="Node3D" parent="."]
 unique_name_in_owner = true
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -4.33615, 0)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -78.6705, -4.33615, 0)
 
 [node name="Display3D" type="MeshInstance3D" parent="."]
 transform = Transform3D(0.937592, 0, 0.347738, 0, 1, 0, -0.347738, 0, 0.937592, -32.159, 33.6757, -39.7829)
@@ -112,6 +114,9 @@ size = Vector2i(1980, 1080)
 
 [node name="editor" parent="Display3D/SubViewport" instance=ExtResource("11_y35nj")]
 layout_direction = 1
+
+[node name="NuclearPodShip" parent="." instance=ExtResource("12_s1cr5")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -64.6564, -4.70826, 146.391)
 
 [connection signal="create_operator" from="Avatar" to="." method="_on_create_operator"]
 [connection signal="create_player" from="Avatar" to="." method="_on_create_character"]
