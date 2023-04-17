@@ -1,18 +1,25 @@
-[gd_scene format=3 uid="uid://b3gkpdkvofw8o"]
+[gd_scene load_steps=3 format=3 uid="uid://b3gkpdkvofw8o"]
+
+[ext_resource type="Script" path="res://apps/whiteboard/whiteboard.gd" id="1_p855i"]
+[ext_resource type="PackedScene" uid="uid://1jod1ib1vj41" path="res://apps/whiteboard/lorien/InfiniteCanvas/InfiniteCanvas.tscn" id="1_scpy2"]
 
 [node name="whiteboard" type="Control"]
+layout_direction = 1
 layout_mode = 3
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
+offset_right = -5.0
+offset_bottom = 3.0
 grow_horizontal = 2
 grow_vertical = 2
+script = ExtResource("1_p855i")
 
-[node name="Label" type="Label" parent="."]
-layout_mode = 0
-offset_left = 21.0
-offset_top = 291.0
-offset_right = 1161.0
-offset_bottom = 431.0
-theme_override_font_sizes/font_size = 100
-text = "Whiteboard Application"
+[node name="InfiniteCanvas" parent="." instance=ExtResource("1_scpy2")]
+layout_mode = 1
+grow_horizontal = 2
+grow_vertical = 2
+stretch = true
+
+[connection signal="mouse_entered" from="InfiniteCanvas" to="." method="_on_InfiniteCanvas_mouse_entered"]
+[connection signal="mouse_exited" from="InfiniteCanvas" to="." method="_on_InfiniteCanvas_mouse_exited"]

@@ -33,6 +33,7 @@ var _scale := Config.DEFAULT_UI_SCALE
 
 # -------------------------------------------------------------------------------------------------
 func _ready():
+	_current_project = Project.new()
 	_optimizer = BrushStrokeOptimizer.new()
 	_brush_size = Settings.get_value(Settings.GENERAL_DEFAULT_BRUSH_SIZE, Config.DEFAULT_BRUSH_SIZE)
 	_active_tool._on_brush_size_changed(_brush_size)
@@ -70,11 +71,14 @@ func _process_event(event: InputEvent) -> void:
 		if _active_tool == _selection_tool:
 			_delete_selected_strokes()
 	
-	if ! get_tree().is_input_handled():
-		_camera.tool_event(event)
-	if ! get_tree().is_input_handled():
-		if _active_tool.enabled:
-			_active_tool.tool_event(event)
+	if _active_tool.enabled:
+		_active_tool.tool_event(event)
+
+#	if ! get_tree().is_input_handled():
+#		_camera.tool_event(event)
+#	if ! get_tree().is_input_handled():
+#		if _active_tool.enabled:
+#			_active_tool.tool_event(event)
 
 # -------------------------------------------------------------------------------------------------
 func center_to_mouse() -> void:
@@ -149,7 +153,7 @@ func get_background_color() -> Color:
 	return _background_color
 
 # -------------------------------------------------------------------------------------------------
-func get_camera_3d() -> Camera2D:
+func get_camera() -> Camera2D:
 	return _camera
 
 # -------------------------------------------------------------------------------------------------

@@ -1,4 +1,4 @@
-@icon("res://Assets/Icons/cursor_icon.png")
+@icon("res://apps/whiteboard/lorien/Assets/Icons/cursor_icon.png")
 class_name BaseCursor
 extends Sprite2D
 

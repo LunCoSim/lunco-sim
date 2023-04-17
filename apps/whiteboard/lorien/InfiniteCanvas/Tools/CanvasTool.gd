@@ -1,4 +1,4 @@
-@icon("res://Assets/Icons/tools.png")
+@icon("res://apps/whiteboard/lorien/Assets/Icons/tools.png")
 class_name CanvasTool
 extends Node
 
@@ -91,7 +91,7 @@ func end_stroke() -> void:
 
 # -------------------------------------------------------------------------------------------------
 func xform_vector2(v: Vector2) -> Vector2:
-	return _canvas.get_camera_3d() * (v * _canvas.get_canvas_scale())
+	return _canvas.get_camera().xform(v * _canvas.get_canvas_scale())
 
 # -------------------------------------------------------------------------------------------------
 func reset() -> void:
