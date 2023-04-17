@@ -49,3 +49,7 @@ func _on_connect_to_global_pressed():
 func connect_to_server(ip: String, port: int):
 	peer.create_client(ip, port)
 	multiplayer.multiplayer_peer = peer
+
+
+func _on_whiteboard_pressed():
+	get_tree().change_scene_to_file("res://apps/whiteboard/whiteboard.tscn")
