@@ -71,6 +71,10 @@ text = "Connect to Global FreeWorld Simulation"
 [node name="Label2" type="Label" parent="UI/Apps"]
 layout_mode = 2
 
+[node name="Text Editor" type="Button" parent="UI/Apps"]
+layout_mode = 2
+text = "Text Editor"
+
 [node name="Whiteboard" type="Button" parent="UI/Apps"]
 layout_mode = 2
 text = "Whiteboard"
@@ -116,6 +120,7 @@ text = "OrbitalMechanics (TBD)"
 [connection signal="pressed" from="UI/Apps/SimHost" to="." method="_on_sim_host_pressed"]
 [connection signal="pressed" from="UI/Apps/SimClient" to="." method="_on_sim_client_pressed"]
 [connection signal="pressed" from="UI/Apps/ConnectToGlobal" to="." method="_on_connect_to_global_pressed"]
+[connection signal="pressed" from="UI/Apps/Text Editor" to="." method="_on_text_editor_pressed"]
 [connection signal="pressed" from="UI/Apps/Whiteboard" to="." method="_on_whiteboard_pressed"]
 [connection signal="pressed" from="UI/Upcoming/Yarm" to="." method="_on_yarm_pressed"]
 [connection signal="pressed" from="UI/Upcoming/MBSE" to="." method="_on_yarm_pressed"]

@@ -12,7 +12,7 @@ func _ready():
 
 
 func _process(delta):
-	$SubViewport/whiteboard.set_text(Entities.text)
+	$SubViewport/editor.set_text(Entities.text)
 
 func _on_button_pressed():
 	print("3D Display button pressed")

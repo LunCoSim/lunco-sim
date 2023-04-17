@@ -30,7 +30,6 @@ PaletteManager="*res://apps/whiteboard/lorien/Palette/PaletteManager.gd"
 StatePersistence="*res://apps/whiteboard/lorien/Misc/StatePersistence.gd"
 AlertDialog="*res://apps/whiteboard/lorien/UI/Dialogs/AlertDialog.tscn"
 GlobalSignals="*res://apps/whiteboard/lorien/Misc/GlobalSignals.gd"
-Console="*res://addons/panku_console/console.tscn"
 
 [debug]
 
@@ -48,7 +47,7 @@ movie_writer/movie_file="/home/rod/Documents/lunco-movies/godot_output.avi"
 
 [editor_plugins]
 
-enabled=PackedStringArray("res://addons/object-inspector/plugin.cfg", "res://addons/imjp94.yafsm/plugin.cfg", "res://addons/beehave/plugin.cfg", "res://addons/panku_console/plugin.cfg")
+enabled=PackedStringArray("res://addons/object-inspector/plugin.cfg", "res://addons/beehave/plugin.cfg", "res://addons/imjp94.yafsm/plugin.cfg")
 logger/log_enabled=true
 logger/log_stdout=true
 logger/level=31
@@ -430,15 +429,6 @@ canvas_pan_right={
 "events": [Object(InputEventKey,"resource_local_to_scene":false,"resource_name":"","device":0,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"pressed":false,"keycode":16777233,"physical_keycode":0,"key_label":0,"unicode":0,"echo":false,"script":null)
 ]
 }
-toggle_console={
-"deadzone": 0.5,
-"events": [Object(InputEventKey,"resource_local_to_scene":false,"resource_name":"","device":0,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"pressed":false,"keycode":0,"physical_keycode":96,"key_label":0,"unicode":0,"echo":false,"script":null)
-]
-}
-
-[panku]
-
-toggle_console_action="toggle_console"
 
 [physics]
 

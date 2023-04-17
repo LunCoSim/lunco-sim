@@ -1,11 +1,7 @@
 [gd_scene load_steps=3 format=3 uid="uid://b3gkpdkvofw8o"]
 
 [ext_resource type="Script" path="res://apps/whiteboard/whiteboard.gd" id="1_p855i"]
-
-[sub_resource type="SceneReplicationConfig" id="SceneReplicationConfig_4kd17"]
-properties/0/path = NodePath("TextEdit:text")
-properties/0/spawn = true
-properties/0/sync = true
+[ext_resource type="PackedScene" uid="uid://1jod1ib1vj41" path="res://apps/whiteboard/lorien/InfiniteCanvas/InfiniteCanvas.tscn" id="2_gvqmd"]
 
 [node name="whiteboard" type="Control"]
 layout_direction = 1
@@ -19,31 +15,25 @@ grow_horizontal = 2
 grow_vertical = 2
 script = ExtResource("1_p855i")
 
-[node name="Button" type="Button" parent="."]
+[node name="InfiniteCanvas" parent="." instance=ExtResource("2_gvqmd")]
+layout_direction = 1
+layout_mode = 1
+stretch = true
+
+[node name="HBoxContainer" type="HBoxContainer" parent="."]
 layout_mode = 0
-offset_right = 8.0
-offset_bottom = 8.0
+offset_right = 40.0
+offset_bottom = 40.0
+
+[node name="Button" type="Button" parent="HBoxContainer"]
+layout_mode = 2
 text = "Connect"
 
-[node name="Button2" type="Button" parent="."]
-layout_mode = 0
-offset_left = 92.0
-offset_top = 3.0
-offset_right = 136.0
-offset_bottom = 34.0
+[node name="Button2" type="Button" parent="HBoxContainer"]
+layout_mode = 2
 text = "Host"
 
-[node name="MultiplayerSynchronizer" type="MultiplayerSynchronizer" parent="."]
-replication_config = SubResource("SceneReplicationConfig_4kd17")
-
-[node name="TextEdit" type="TextEdit" parent="."]
-layout_mode = 0
-offset_left = 212.0
-offset_top = 141.0
-offset_right = 861.0
-offset_bottom = 388.0
-text = "Text Edit"
-
-[connection signal="pressed" from="Button" to="." method="_on_button_pressed"]
-[connection signal="pressed" from="Button2" to="." method="_on_button_2_pressed"]
-[connection signal="text_changed" from="TextEdit" to="." method="_on_text_edit_text_changed"]
+[connection signal="mouse_entered" from="InfiniteCanvas" to="." method="_on_InfiniteCanvas_mouse_entered"]
+[connection signal="mouse_exited" from="InfiniteCanvas" to="." method="_on_InfiniteCanvas_mouse_exited"]
+[connection signal="pressed" from="HBoxContainer/Button" to="." method="_on_button_pressed"]
+[connection signal="pressed" from="HBoxContainer/Button2" to="." method="_on_button_2_pressed"]

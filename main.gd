@@ -53,3 +53,7 @@ func connect_to_server(ip: String, port: int):
 
 func _on_whiteboard_pressed():
 	get_tree().change_scene_to_file("res://apps/whiteboard/whiteboard.tscn")
+
+
+func _on_text_editor_pressed():
+	get_tree().change_scene_to_file("res://apps/editor/editor.tscn")

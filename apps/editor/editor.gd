@@ -28,3 +28,11 @@ func _on_button_2_pressed():
 	peer.create_server(9000)
 	multiplayer.multiplayer_peer = peer
 
+func set_text(text):
+	$TextEdit.text = text
+
+func _on_text_edit_text_changed():
+	
+	Entities.set_text.rpc_id(1, $TextEdit.text)
+
+	pass # Replace with function body.
