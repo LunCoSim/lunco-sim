@@ -1,4 +1,4 @@
-[gd_scene load_steps=13 format=3 uid="uid://dltv03b10eli"]
+[gd_scene load_steps=17 format=3 uid="uid://dltv03b10eli"]
 
 [ext_resource type="Script" path="res://addons/object-inspector/scripts/inspector.gd" id="1_d3brg"]
 [ext_resource type="Script" path="res://apps/sim/app.gd" id="1_upy72"]
@@ -7,6 +7,7 @@
 [ext_resource type="PackedScene" uid="uid://cpjdvh1eaof2y" path="res://addons/lunco-content/moonwards/buildings/nuclear-core/nuclear-core.escn" id="8_ukav2"]
 [ext_resource type="PackedScene" uid="uid://2f4aecforicx" path="res://addons/lunco-content/moonwards/buildings/satellite-dish/satellite-dish.escn" id="9_k2t3s"]
 [ext_resource type="PackedScene" uid="uid://6xgnbadqd0df" path="res://addons/lunco-content/moonwards/items/HexpaneWindow/HexpaneWindow.escn" id="10_2q73u"]
+[ext_resource type="Script" path="res://apps/sim/Display3D.gd" id="10_lyms0"]
 [ext_resource type="PackedScene" uid="uid://do1ecg5jve7wu" path="res://addons/lunco-content/moonwards/vehicles/rovers/AthleteRover/AthleteRover.escn" id="11_ctf0g"]
 [ext_resource type="PackedScene" uid="uid://dn5t73yi2rj4h" path="res://addons/lunco-content/moonwards/vehicles/rovers/SpiderCrane/SpiderCrane.escn" id="12_lyjst"]
 
@@ -22,6 +23,14 @@ background_mode = 2
 background_energy_multiplier = 0.29
 sky = SubResource("Sky_a11fi")
 sdfgi_use_occlusion = true
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_cg4ar"]
+
+[sub_resource type="QuadMesh" id="QuadMesh_2gwpj"]
+size = Vector2(36, 20)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_koq7m"]
+cull_mode = 2
 
 [node name="sim" type="Node"]
 script = ExtResource("1_upy72")
@@ -91,9 +100,28 @@ spawn_path = NodePath("../SpawnPosition")
 
 [node name="SpawnPosition" type="Node3D" parent="."]
 unique_name_in_owner = true
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -4.33615, 0)
+
+[node name="Display3D" type="MeshInstance3D" parent="."]
+transform = Transform3D(0.937592, 0, 0.347738, 0, 1, 0, -0.347738, 0, 0.937592, -32.159, 20.2155, -39.8925)
+material_override = SubResource("StandardMaterial3D_cg4ar")
+mesh = SubResource("QuadMesh_2gwpj")
+surface_material_override/0 = SubResource("StandardMaterial3D_koq7m")
+script = ExtResource("10_lyms0")
+
+[node name="SubViewport" type="SubViewport" parent="Display3D"]
+size = Vector2i(1980, 1080)
+
+[node name="Button" type="Button" parent="Display3D/SubViewport"]
+offset_left = 118.0
+offset_top = 45.0
+offset_right = 1175.0
+offset_bottom = 590.0
+text = "Press me"
 
 [connection signal="create_operator" from="Avatar" to="." method="_on_create_operator"]
 [connection signal="create_player" from="Avatar" to="." method="_on_create_character"]
 [connection signal="create_spacecraft" from="Avatar" to="." method="_on_create_spacecraft"]
 [connection signal="ray_cast" from="Avatar" to="." method="_on_avatar_ray_cast"]
 [connection signal="spawned" from="MultiplayerSpawner" to="." method="_on_multiplayer_spawner_spawned"]
+[connection signal="pressed" from="Display3D/SubViewport/Button" to="Display3D" method="_on_button_pressed"]
