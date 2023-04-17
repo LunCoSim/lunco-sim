@@ -1,0 +1,8 @@
+[gd_resource type="FontFile" load_steps=2 format=3]
+
+[ext_resource type="FontFile" uid="uid://b8c5of06f61e2" path="res://apps/whiteboard/lorien/Assets/Fonts/Korean/NotoSansKR-Bold.otf" id="1"]
+
+[resource]
+size = 14
+use_filter = true
+font_data = ExtResource( 1 )

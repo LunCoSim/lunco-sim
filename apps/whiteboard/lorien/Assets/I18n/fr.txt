@@ -1,0 +1,134 @@
+LANGUAGE_NAME Français
+
+# -----------------------------------------------------------------------------
+# Menu strings
+# -----------------------------------------------------------------------------
+
+MENU_OPEN           Ouvrir...
+MENU_SAVE           Enregistrer
+MENU_SAVE_AS        Enregistrer sous...
+MENU_SETTINGS       Paramètres
+MENU_MANUAL         Documentation
+MENU_BUG_TRACKER    Suivi des bogues
+MENU_ABOUT          À propos
+MENU_EXPORT         Exporter...
+
+# -----------------------------------------------------------------------------
+# Toolbar
+# -----------------------------------------------------------------------------
+TOOLBAR_TOOLTIP_NEW_FILE        Créer un nouveau fichier {{ shortcut_list("shortcut_new_project") }}
+TOOLBAR_TOOLTIP_OPEN_FILE       Ouvrir un fichier {{ shortcut_list("shortcut_open_project") }}
+TOOLBAR_TOOLTIP_SAVE_FILE       Enregistrer un fichier {{ shortcut_list("shortcut_save_project") }}
+TOOLBAR_TOOLTIP_UNDO            Annuler l'action {{ shortcut_list("shortcut_undo") }}
+TOOLBAR_TOOLTIP_REDO            Rétablir l'action {{ shortcut_list("shortcut_redo") }}
+TOOLBAR_TOOLTIP_BRUSH_TOOL      Pinceau {{ shortcut_list("shortcut_brush_tool") }}
+TOOLBAR_TOOLTIP_RECTANGLE_TOOL  Rectangle Tool {{ shortcut_list("shortcut_rectangle_tool") }} 									# TODO
+TOOLBAR_TOOLTIP_LINE_TOOL       Ligne {{ shortcut_list("shortcut_line_tool") }}
+TOOLBAR_TOOLTIP_ERASER_TOOL     Gomme {{ shortcut_list("shortcut_eraser_tool") }}
+TOOLBAR_TOOLTIP_SELECT_TOOL     Outil de sélection {{ shortcut_list("shortcut_select_tool") }}
+TOOLBAR_TOOLTIP_BRUSH_COLOR     Couleur de la brosse
+TOOLBAR_TOOLTIP_BRUSH_SIZE      Épaisseur de la brosse
+TOOLBAR_TOOLTIP_CANVAS_COLOR    Couleur du canevas
+TOOLBAR_TOOLTIP_GRID 			Afficher la grille
+
+# -----------------------------------------------------------------------------
+# Color Palette Picker
+# -----------------------------------------------------------------------------
+COLOR_PALETTE_PICKER_HINT_NEW        Create new color palette 							# TODO
+COLOR_PALETTE_PICKER_HINT_EDIT       Edit the current color palette						# TODO
+COLOR_PALETTE_PICKER_HINT_DUPLICATE  Duplicate the current color palette 				# TODO
+COLOR_PALETTE_PICKER_HINT_DELETE     Delete the current color palette permanently 		# TODO
+
+# -----------------------------------------------------------------------------
+# Statusbar strings
+# -----------------------------------------------------------------------------
+
+STATUSBAR_POSITION              Position
+STATUSBAR_ZOOM                  Échelle
+STATUSBAR_PRESSURE              Pression
+STATUSBAR_FPS                   FPS
+STATUSBAR_STROKES               Courbes
+STATUSBAR_POINTS                Points
+
+# -----------------------------------------------------------------------------
+# Settings strings
+# -----------------------------------------------------------------------------
+
+SETTINGS_TITLE                  Paramètres
+SETTINGS_GENERAL                Général
+SETTINGS_APPEARANCE             Apparence
+SETTINGS_RENDERING              Affichage
+SETTINGS_PRESSURE_SENSITIVITY   Sensibilité de la pression
+SETTINGS_BRUSH_SIZE             Épaisseur par défaut de la brosse
+SETTINGS_CANVAS_COLOR           Couleur par défaut du canevas
+SETTINGS_PROJECT_FOLDER         Dossier par défaut du projet
+SETTINGS_LANGUAGE               Langue
+SETTINGS_THEME                  Thème
+SETTINGS_AA_METHOD              Méthode d'anticrénelage
+SETTINGS_AA_METHOD_NONE         Aucun
+SETTINGS_FPS_FOREGROUND         Fps lorsque actif
+SETTINGS_FPS_BACKGROUND         Fps lorsque inactif
+SETTINGS_BRUSH_CAPS             Extrémités des tracés
+SETTINGS_BRUSH_CAPS_FLAT        Plates
+SETTINGS_BRUSH_CAPS_ROUND       Arrondies
+SETTINGS_RESTART_NOTICE  		Un redémarrage est nécessaire pour appliquer les changements
+
+# -----------------------------------------------------------------------------
+# About dialog strings
+# -----------------------------------------------------------------------------
+
+ABOUT_DIALOG_TITLE              A propos
+ABOUT_DIALOG_COPYRIGHT          © 2021-2022 Marcus Brummer & contributeurs 
+ABOUT_DIALOG_LICSENSE           Lorien est sous licence :
+ABOUT_DIALOG_BASED_ON           Lorien est basé sur :
+ABOUT_DIALOG_EASTEREGG          Personnage Easter egg :
+
+# -----------------------------------------------------------------------------
+# Unsaved changes dialog
+# -----------------------------------------------------------------------------
+
+UNSAVED_CHANGES_DIALOG_TITLE    Enregistrer les changements ?
+UNSAVED_CHANGES_DIALOG_TEXT     Voulez-vous enregistrer les changements avant de fermer ?
+
+# -----------------------------------------------------------------------------
+# Exit dialog
+# -----------------------------------------------------------------------------
+
+EXIT_DIALOG_TITLE    Enregistrer les changements ?
+EXIT_DIALOG_TEXT     Voulez-vous enregistrer les changements avant de quitter ?
+
+# -----------------------------------------------------------------------------
+# New palette dialog
+# -----------------------------------------------------------------------------
+NEW_PALETTE_DIALOG_CREATE_TITLE 		Nouvelle palette
+NEW_PALETTE_DIALOG_DUPLICATE_TITLE 		Duplicate Palette 							# TODO
+NEW_PALETTE_DIALOG_PLACEHOLDER 			Nom de la palette
+
+# -----------------------------------------------------------------------------
+# Delete palette dialog
+# -----------------------------------------------------------------------------
+DELETE_PALETTE_DIALOG_TITLE 			Delete palette 									# TODO
+DELETE_PALETTE_DIALOG_TEXT 				Are you sure you want to permanently delete:    # TODO
+
+# -----------------------------------------------------------------------------
+# Edit palette dialog
+# -----------------------------------------------------------------------------
+EDIT_PALETTE_DIALOG_TITLE 		Modifier la palette
+
+# -----------------------------------------------------------------------------
+# Error/Alert messages
+# -----------------------------------------------------------------------------
+
+ERROR_NOT_IMPLEMENTED               Implémentation manquante.
+ERROR_AUTOSAVE_NOT_IMPLEMENTED      La sauvegarde automatique n'existe pas encore pour les fichiers "Untitled". Veuillez enregistrer manuellement. # TODO : add an option to translate "Untitled" by "Sans nom"
+ALERT_EDITING_BUILTIN_PALETTE       Editing built-in palettes is not possible. If you want to customize this palette you can make a copy and edit that instead. # TODO
+ALERT_DELETING_BUILTIN_PALETTE      Deleting built-in palettes is not possible. # TODO
+
+# -----------------------------------------------------------------------------
+# Generic strings
+# -----------------------------------------------------------------------------
+
+SAVE            Enregistrer
+DISCARD         Ignorer
+CANCEL          Annuler
+DELETE          Delete 			# TODO

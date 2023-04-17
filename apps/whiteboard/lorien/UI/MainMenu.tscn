@@ -1,0 +1,20 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="Theme" path="res://apps/whiteboard/lorien/UI/Themes/theme_dark.tres" id="1"]
+[ext_resource type="Script" path="res://apps/whiteboard/lorien/UI/MainMenu.gd" id="2"]
+
+[node name="MainMenu" type="PopupMenu"]
+offset_right = 150.0
+offset_bottom = 100.0
+custom_minimum_size = Vector2( 150, 100 )
+theme = ExtResource( 1 )
+script = ExtResource( 2 )
+__meta__ = {
+"_edit_use_anchors_": false
+}
+
+[node name="ViewsMenu" type="PopupMenu" parent="."]
+offset_right = 16.0
+offset_bottom = 16.0
+
+[connection signal="id_pressed" from="." to="." method="_on_MainMenu_id_pressed"]

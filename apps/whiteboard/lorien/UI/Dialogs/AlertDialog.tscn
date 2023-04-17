@@ -1,0 +1,15 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Theme" uid="uid://cocompl0jmhch" path="res://apps/whiteboard/UI/Themes/theme_dark.tres" id="1"]
+
+[node name="AlertDialog" type="AcceptDialog"]
+offset_right = 300.0
+offset_bottom = 80.0
+custom_minimum_size = Vector2( 500, 80 )
+theme = ExtResource( 1 )
+exclusive = true
+window_title = "Alert"
+dialog_autowrap = true
+__meta__ = {
+"_edit_use_anchors_": false
+}

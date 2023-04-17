@@ -21,6 +21,15 @@ config/icon="res://icon.svg"
 
 BeehaveGlobalMetrics="*res://addons/beehave/metrics/beehave_global_metrics.gd"
 Entities="*res://core/singletones/EntitiesDB.gd"
+BrushStrokeTexture="*res://apps/whiteboard/lorien/BrushStroke/BrushStrokeTexture.gd"
+Utils="*res://apps/whiteboard/lorien/Misc/Utils.gd"
+ProjectManager="*res://apps/whiteboard/lorien/ProjectManager/ProjectManager.gd"
+Settings="*res://apps/whiteboard/lorien/Misc/Settings.gd"
+ProjectMetadata="*res://apps/whiteboard/lorien/ProjectManager/ProjectMetadata.gd"
+PaletteManager="*res://apps/whiteboard/lorien/Palette/PaletteManager.gd"
+StatePersistence="*res://apps/whiteboard/lorien/Misc/StatePersistence.gd"
+AlertDialog="*res://apps/whiteboard/lorien/UI/Dialogs/AlertDialog.tscn"
+GlobalSignals="*res://apps/whiteboard/lorien/Misc/GlobalSignals.gd"
 Console="*res://addons/panku_console/console.tscn"
 
 [debug]
