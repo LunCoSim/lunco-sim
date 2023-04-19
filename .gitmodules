@@ -9,7 +9,8 @@
 	url = git@github.com:4d49/object-inspector.git
 [submodule "addons/lunco-cameras"]
 	path = addons/lunco-cameras
-	url = git@github.com:LunCoSim/lunco-cameras.git
+	url = https://github.com/LunCoSim/lunco-cameras.git
+    pushurl = git@github.com:LunCoSim/lunco-cameras.git
 [submodule "addons/lunco-assets"]
 	path = addons/lunco-assets
 	url = git@github.com:LunCoSim/lunco-assets.git
