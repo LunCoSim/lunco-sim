@@ -41,6 +41,18 @@ Lunco is designed with core basic ideas:
 
 		git submodule add {url_to_repo} ./addons/{your_addon_name}
 
+#### How to deal with development/download urls?
+
+Github allows to add repositories via https or ssh link. For development for security reasons, ssh is a preferable option, however it requires ssh access to be set up on the computer.
+
+So to make it easier to download https is used.
+
+However if you start developing, you'll have to do several manual steps (later a script will be added to do it automatically):
+1. Git allows to use different urls for push and pull according to [the article](https://stackoverflow.com/questions/31747072/will-remote-url-for-fetch-and-push-be-different)
+2. So you'll have to add to ".git/config" a push url with the right link
+3. Same should be done for every submodule in ".git/modules"
+4. Check ".gitmodules" file in the root folder for reference
+
 ## What addons are used?
 
 | **Name**         | **Description**                                                                                       | **Distribution** |
