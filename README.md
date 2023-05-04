@@ -16,7 +16,9 @@ LunCo provides a set of opensource applications for Lunar Base engineering inclu
 ## Installation
 
 1. Install [Godot 4](https://godotengine.org/download/)
-2. Install [FBX2glTF](https://github.com/godotengine/FBX2glTF/tags) and config Godot to use it
+2. Install [FBX2glTF](https://github.com/godotengine/FBX2glTF/tags):
+	1. Download the file
+	2. Godot will ask for this file when you will open the project
 3. Install [git lfs](https://github.com/git-lfs/git-lfs#getting-started)
 4. Clone this repo in a terminal: 
 
