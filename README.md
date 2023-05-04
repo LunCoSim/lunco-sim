@@ -20,7 +20,7 @@ LunCo provides a set of opensource applications for Lunar Base engineering inclu
 3. Install [git lfs](https://github.com/git-lfs/git-lfs#getting-started)
 4. Clone this repo in a terminal: 
 
-	```git clone --recurse-submodules https://github.com/LunCoSim/lunco-sim.git```
+	```git clone -b main --single-branch --recurse-submodules https://github.com/LunCoSim/lunco-sim.git```
 
 5. Open the project in Godot and run
 
