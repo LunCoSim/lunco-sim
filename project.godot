@@ -47,7 +47,7 @@ movie_writer/movie_file="/home/rod/Documents/lunco-movies/godot_output.avi"
 
 [editor_plugins]
 
-enabled=PackedStringArray("res://addons/object-inspector/plugin.cfg", "res://addons/beehave/plugin.cfg", "res://addons/imjp94.yafsm/plugin.cfg", "res://addons/lunco-urdf/plugin.cfg")
+enabled=PackedStringArray("res://addons/object-inspector/plugin.cfg", "res://addons/beehave/plugin.cfg", "res://addons/imjp94.yafsm/plugin.cfg", "res://addons/lunco-urdf/plugin.cfg", "res://addons/godot-idea-board/plugin.cfg")
 logger/log_enabled=true
 logger/log_stdout=true
 logger/level=31
@@ -55,6 +55,10 @@ logger/file/log_file_write=true
 logger/file/file_path="res://game.log"
 logger/stdout_format="[{hour}:{minute}:{second}][{level}]{text}"
 logger/file_format="[{hour}:{minute}:{second}][{level}]{text}"
+
+[godot_idea_board]
+
+directory_path="res://addons/godot-idea-board/savedata/"
 
 [input]
 
