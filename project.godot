@@ -440,4 +440,14 @@ canvas_pan_right={
 
 [rendering]
 
-renderer/rendering_method.mobile="gl_compatibility"
+driver/threads/thread_model=2
+lights_and_shadows/directional_shadow/size=8192
+lights_and_shadows/directional_shadow/soft_shadow_filter_quality=5
+global_illumination/gi/use_half_resolution=true
+camera/depth_of_field/depth_of_field_bokeh_quality=3
+environment/ssao/quality=3
+environment/ssil/quality=3
+environment/screen_space_reflection/roughness_quality=3
+environment/subsurface_scattering/subsurface_scattering_quality=3
+anti_aliasing/quality/msaa_2d=2
+lights_and_shadows/positional_shadow/atlas_16_bits=false
