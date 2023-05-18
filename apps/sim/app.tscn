@@ -1,29 +1,31 @@
-[gd_scene load_steps=18 format=3 uid="uid://dltv03b10eli"]
+[gd_scene load_steps=22 format=3 uid="uid://btfca8gppw043"]
 
 [ext_resource type="Script" path="res://addons/object-inspector/scripts/inspector.gd" id="1_d3brg"]
 [ext_resource type="Script" path="res://apps/sim/app.gd" id="1_upy72"]
 [ext_resource type="PackedScene" uid="uid://d8gbyf2xbd4m" path="res://addons/lunco-content/maps/Langrenus/langrenus_map.tscn" id="2_w1oup"]
+[ext_resource type="Texture2D" uid="uid://c6v84yxrojl2k" path="res://addons/lunco-assets/ESO_-_Milky_Way.jpeg" id="5_jqivx"]
 [ext_resource type="PackedScene" uid="uid://c5dg7yq7hd7m0" path="res://core/nodes/avatar/avatar.tscn" id="6_hs3oo"]
 [ext_resource type="PackedScene" uid="uid://cpjdvh1eaof2y" path="res://addons/lunco-content/moonwards/buildings/nuclear-core/nuclear-core.escn" id="8_ukav2"]
 [ext_resource type="PackedScene" uid="uid://2f4aecforicx" path="res://addons/lunco-content/moonwards/buildings/satellite-dish/satellite-dish.escn" id="9_k2t3s"]
 [ext_resource type="PackedScene" uid="uid://6xgnbadqd0df" path="res://addons/lunco-content/moonwards/items/HexpaneWindow/HexpaneWindow.escn" id="10_2q73u"]
-[ext_resource type="Script" path="res://apps/sim/Display3D.gd" id="10_lyms0"]
+[ext_resource type="Script" path="res://core/nodes/display3d/Display3D.gd" id="11_257vj"]
 [ext_resource type="PackedScene" uid="uid://do1ecg5jve7wu" path="res://addons/lunco-content/moonwards/vehicles/rovers/AthleteRover/AthleteRover.escn" id="11_ctf0g"]
 [ext_resource type="PackedScene" uid="uid://d18c2gpps48r3" path="res://apps/editor/editor.tscn" id="11_y35nj"]
 [ext_resource type="PackedScene" uid="uid://dn5t73yi2rj4h" path="res://addons/lunco-content/moonwards/vehicles/rovers/SpiderCrane/SpiderCrane.escn" id="12_lyjst"]
 [ext_resource type="PackedScene" uid="uid://dd6tms8o0rilp" path="res://addons/lunco-content/moonwards/vehicles/rockets/NuclearPodShip/NuclearPodShip.escn" id="12_s1cr5"]
+[ext_resource type="PackedScene" uid="uid://cvt6dermqeub1" path="res://addons/lunco-content/ros_robots_tutorial_urdf/urdf/03-origins.urdf" id="13_r341x"]
+[ext_resource type="PackedScene" uid="uid://6o5wivfr22gp" path="res://addons/lunco-content/ros_robots_tutorial_urdf/urdf/02-multipleshapes.urdf" id="14_j5d78"]
+[ext_resource type="PackedScene" uid="uid://ch5t8f7mxyx1v" path="res://core/entities/player-entity.tscn" id="16_qmtss"]
 
-[sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_a6c7k"]
-sky_top_color = Color(0.0941176, 0.121569, 0.156863, 1)
-sky_energy_multiplier = 12.06
+[sub_resource type="PanoramaSkyMaterial" id="PanoramaSkyMaterial_6y8xe"]
+panorama = ExtResource("5_jqivx")
 
-[sub_resource type="Sky" id="Sky_a11fi"]
-sky_material = SubResource("ProceduralSkyMaterial_a6c7k")
+[sub_resource type="Sky" id="Sky_c8mxq"]
+sky_material = SubResource("PanoramaSkyMaterial_6y8xe")
 
 [sub_resource type="Environment" id="Environment_7olaa"]
 background_mode = 2
-background_energy_multiplier = 0.29
-sky = SubResource("Sky_a11fi")
+sky = SubResource("Sky_c8mxq")
 sdfgi_use_occlusion = true
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_cg4ar"]
@@ -66,7 +68,9 @@ transform = Transform3D(-0.77664, 0, -0.629944, 0, 1, 0, 0.629944, 0, -0.77664, 
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1.871, 21, 0)
 
 [node name="DirectionalLight3D" type="DirectionalLight3D" parent="World"]
-transform = Transform3D(1, 0, 0, 0, 0.844973, 0.534809, 0, -0.534809, 0.844973, 0, 32.5156, 25.939)
+transform = Transform3D(0.998916, 0.0393323, 0.0248946, -0.0465486, 0.844057, 0.534229, 0, -0.534809, 0.844973, 16.5556, 21.7776, 74.0474)
+shadow_enabled = true
+directional_shadow_mode = 0
 
 [node name="Langrenus_LP" parent="World" instance=ExtResource("2_w1oup")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 31.5747, 2.37504, 57.0209)
@@ -89,6 +93,9 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -153.215, -29.8606, 44.8008)
 [node name="AthleteRover2" parent="World" instance=ExtResource("11_ctf0g")]
 transform = Transform3D(0.972158, -0.234328, 0, 0.234328, 0.972158, 0, 0, 0, 1, -60.3374, -27.583, -5.96704)
 
+[node name="AthleteRover3" parent="World" instance=ExtResource("11_ctf0g")]
+transform = Transform3D(0.999969, 0.00792359, 0, -0.00792359, 0.999969, 0, 0, 0, 1, -103.561, -30.5843, 0.194432)
+
 [node name="SpiderCrane" parent="World" instance=ExtResource("12_lyjst")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -137.367, -33.851, 87.5822)
 
@@ -104,10 +111,10 @@ unique_name_in_owner = true
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -78.6705, -4.33615, 0)
 
 [node name="Display3D" type="MeshInstance3D" parent="."]
-transform = Transform3D(0.937592, 0, 0.347738, 0, 1, 0, -0.347738, 0, 0.937592, -32.159, 33.6757, -39.7829)
+transform = Transform3D(0.994254, 0, -0.107045, 0, 1, 0, 0.107045, 0, 0.994254, -32.159, 33.6757, -39.7829)
 material_override = SubResource("StandardMaterial3D_cg4ar")
 mesh = SubResource("QuadMesh_2gwpj")
-script = ExtResource("10_lyms0")
+script = ExtResource("11_257vj")
 
 [node name="SubViewport" type="SubViewport" parent="Display3D"]
 size = Vector2i(1980, 1080)
@@ -117,6 +124,46 @@ layout_direction = 1
 
 [node name="NuclearPodShip" parent="." instance=ExtResource("12_s1cr5")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -64.6564, -4.70826, 146.391)
+
+[node name="origins" parent="." instance=ExtResource("13_r341x")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -80.3637, -12.4451, 4.87221)
+
+[node name="multipleshapes" parent="." instance=ExtResource("14_j5d78")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -96.3769, 0.370203, 0.0389981)
+
+[node name="origins3" parent="." instance=ExtResource("13_r341x")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -113.378, 4.71519, -3.98321)
+
+[node name="origins4" parent="." instance=ExtResource("13_r341x")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -632.56, 70.9849, 258.292)
+
+[node name="Player" parent="." instance=ExtResource("16_qmtss")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -105.515, -12.858, 13.2642)
+user_name = "User 1"
+
+[node name="Player2" parent="." instance=ExtResource("16_qmtss")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -104.023, -13.4409, 9.68341)
+user_name = "User 2"
+
+[node name="Player3" parent="." instance=ExtResource("16_qmtss")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -101.402, -13.5069, 10.0942)
+user_name = "User 3"
+
+[node name="Player4" parent="." instance=ExtResource("16_qmtss")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -102.962, -13.049, 13.459)
+user_name = "User 5"
+
+[node name="Player5" parent="." instance=ExtResource("16_qmtss")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -107.598, -12.8528, 12.7337)
+user_name = "User 6"
+
+[node name="Player6" parent="." instance=ExtResource("16_qmtss")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -99.0653, -13.4555, 12.4837)
+user_name = "User 7"
+
+[node name="Player7" parent="." instance=ExtResource("16_qmtss")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -98.5463, -13.6176, 8.49806)
+user_name = "User 8"
 
 [connection signal="create_operator" from="Avatar" to="." method="_on_create_operator"]
 [connection signal="create_player" from="Avatar" to="." method="_on_create_character"]
