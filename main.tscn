@@ -53,6 +53,12 @@ layout_mode = 2
 text = "9000"
 placeholder_text = "Port"
 
+[node name="Username" type="LineEdit" parent="UI/Apps/Networking"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Username"
+placeholder_text = "Username"
+
 [node name="Label" type="Label" parent="UI/Apps"]
 layout_mode = 2
 
