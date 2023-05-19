@@ -30,6 +30,7 @@ PaletteManager="*res://apps/whiteboard/lorien/Palette/PaletteManager.gd"
 StatePersistence="*res://apps/whiteboard/lorien/Misc/StatePersistence.gd"
 AlertDialog="*res://apps/whiteboard/lorien/UI/Dialogs/AlertDialog.tscn"
 GlobalSignals="*res://apps/whiteboard/lorien/Misc/GlobalSignals.gd"
+StateManager="*res://core/singletones/state-manager.gd"
 
 [debug]
 
@@ -441,5 +442,3 @@ canvas_pan_right={
 [rendering]
 
 driver/threads/thread_model=2
-global_illumination/gi/use_half_resolution=true
-occlusion_culling/use_occlusion_culling=true
