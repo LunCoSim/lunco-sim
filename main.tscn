@@ -13,7 +13,7 @@ script = ExtResource("1_yf43x")
 
 [node name="UI" type="CanvasLayer" parent="."]
 
-[node name="TextureRect" type="TextureRect" parent="UI"]
+[node name="BackgroundImage" type="TextureRect" parent="UI"]
 layout_direction = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -87,13 +87,13 @@ text = "Whiteboard"
 
 [node name="Upcoming" type="VBoxContainer" parent="UI"]
 material = SubResource("CanvasItemMaterial_u6be5")
-anchors_preset = 3
-anchor_left = 1.0
-anchor_top = 1.0
+anchors_preset = -1
+anchor_left = 0.245
+anchor_top = 0.378
 anchor_right = 1.0
 anchor_bottom = 1.0
-offset_left = -277.0
-offset_top = -208.0
+offset_left = 657.4
+offset_top = 239.84
 offset_right = 1.0
 offset_bottom = -7.0
 grow_horizontal = 0

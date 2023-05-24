@@ -1,4 +1,4 @@
-[gd_scene load_steps=21 format=3 uid="uid://btfca8gppw043"]
+[gd_scene load_steps=19 format=3 uid="uid://btfca8gppw043"]
 
 [ext_resource type="Script" path="res://addons/object-inspector/scripts/inspector.gd" id="1_d3brg"]
 [ext_resource type="Script" path="res://apps/sim/app.gd" id="1_upy72"]
@@ -13,8 +13,6 @@
 [ext_resource type="PackedScene" uid="uid://d18c2gpps48r3" path="res://apps/editor/editor.tscn" id="11_y35nj"]
 [ext_resource type="PackedScene" uid="uid://dn5t73yi2rj4h" path="res://addons/lunco-content/moonwards/vehicles/rovers/SpiderCrane/SpiderCrane.escn" id="12_lyjst"]
 [ext_resource type="PackedScene" uid="uid://dd6tms8o0rilp" path="res://addons/lunco-content/moonwards/vehicles/rockets/NuclearPodShip/NuclearPodShip.escn" id="12_s1cr5"]
-[ext_resource type="PackedScene" uid="uid://d3o84dtfodtyy" path="res://addons/nasa/m2020-urdf-models/rover/m2020.urdf" id="15_fecv4"]
-[ext_resource type="PackedScene" uid="uid://d4fhvxlxqjry5" path="res://addons/nasa/m2020-urdf-models/mhs/MHS.urdf" id="16_75776"]
 
 [sub_resource type="PanoramaSkyMaterial" id="PanoramaSkyMaterial_6y8xe"]
 panorama = ExtResource("5_jqivx")
@@ -96,7 +94,7 @@ transform = Transform3D(0.972158, -0.234328, 0, 0.234328, 0.972158, 0, 0, 0, 1, 
 transform = Transform3D(0.999969, 0.00792359, 0, -0.00792359, 0.999969, 0, 0, 0, 1, -103.561, -30.5843, 0.194432)
 
 [node name="SpiderCrane" parent="World" instance=ExtResource("12_lyjst")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -231.608, -62.3588, 148.77)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -231.608, -33.6229, 148.77)
 
 [node name="SpiderCrane2" parent="World" instance=ExtResource("12_lyjst")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -136.545, -32.9742, 150.173)
@@ -123,16 +121,6 @@ layout_direction = 1
 
 [node name="NuclearPodShip" parent="." instance=ExtResource("12_s1cr5")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -64.6564, -4.70826, 146.391)
-
-[node name="Perseverance" parent="." instance=ExtResource("15_fecv4")]
-transform = Transform3D(-0.695637, -0.718393, 3.1402e-08, 0, -4.37114e-08, -1, 0.718393, -0.695637, 3.04073e-08, -89.8528, -12.35, 16.2262)
-
-[node name="Perseverance2" parent="." instance=ExtResource("15_fecv4")]
-process_mode = 4
-transform = Transform3D(-0.695637, -0.718393, 3.1402e-08, 0, -4.37114e-08, -1, 0.718393, -0.695637, 3.04073e-08, -112.498, -11.1233, 16.2262)
-
-[node name="Node3D" parent="." instance=ExtResource("16_75776")]
-transform = Transform3D(1, 0, 0, 0, -4.37114e-08, -1, 0, 1, -4.37114e-08, -104.563, -10.9271, 23.0837)
 
 [connection signal="create_operator" from="Avatar" to="." method="_on_create_operator"]
 [connection signal="create_player" from="Avatar" to="." method="_on_create_character"]

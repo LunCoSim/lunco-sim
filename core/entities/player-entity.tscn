@@ -162,7 +162,6 @@ nodes/walk_speed/position = Vector2(440, 1600)
 node_connections = [&"output", 0, &"eye_blend", &"aim", 0, &"aimdown", &"aim", 1, &"land", &"aim", 2, &"aimup", &"eye_blend", 0, &"aim", &"eye_blend", 1, &"eyes", &"land", 0, &"state", &"land", 1, &"hardland", &"state", 0, &"strafe_speed", &"state", 1, &"walk_speed", &"state", 2, &"jumpup", &"state", 3, &"jumpdown", &"strafe_speed", 0, &"strafe", &"walk_speed", 0, &"walk"]
 
 [node name="Player" instance=ExtResource("1_tcir3")]
-user_name = "No user"
 
 [node name="InputSynchronizer" parent="." index="1"]
 unique_name_in_owner = true
@@ -199,7 +198,6 @@ bones/25/rotation = Quaternion(-0.408614, -0.0719893, -0.0201219, 0.909641)
 bones/25/scale = Vector3(0.92318, 0.92318, 0.92318)
 bones/27/rotation = Quaternion(-0.0490002, 0.0490007, -0.705409, 0.705404)
 bones/28/rotation = Quaternion(0.000267214, -0.00781328, 0.514822, 0.857262)
-bones/28/scale = Vector3(0.999995, 1.00001, 1)
 bones/29/rotation = Quaternion(0.00420375, 0.00610657, 0.137007, 0.990542)
 bones/30/rotation = Quaternion(-0.000354821, -0.00406403, 0.570198, 0.821497)
 bones/33/rotation = Quaternion(-0.148397, -0.0277374, -0.0078271, 0.988508)
@@ -257,12 +255,8 @@ bones/79/scale = Vector3(1.00003, 0.99996, 0.99999)
 bones/81/rotation = Quaternion(-0.139983, -0.0786114, 0.975571, 0.149952)
 bones/81/scale = Vector3(1.00003, 0.999998, 0.999959)
 bones/82/scale = Vector3(0.760341, 0.625441, 0.76034)
-bones/83/rotation = Quaternion(-0.499999, -0.499999, 0.500002, 0.499999)
-bones/84/rotation = Quaternion(0.499984, -0.499985, 0.500014, 0.500017)
 bones/85/position = Vector3(-0.00390781, 0.0527364, 0.0957321)
-bones/85/rotation = Quaternion(0.499984, -0.499985, 0.500014, 0.500017)
 bones/86/position = Vector3(-0.00390878, 0.0565452, -0.0935265)
-bones/86/rotation = Quaternion(0.499984, -0.499985, 0.500014, 0.500017)
 bones/88/position = Vector3(-0.00029844, -1.52436e-06, 0.115924)
 bones/89/rotation = Quaternion(7.45058e-09, 3.72529e-09, 1, -7.45058e-09)
 bones/90/position = Vector3(-5.42402e-06, 0.106271, -0.0266081)
@@ -295,7 +289,6 @@ bones/118/rotation = Quaternion(0.049991, -8.49574e-10, 4.83302e-09, 0.99875)
 bones/118/scale = Vector3(1, 1, 0.999999)
 bones/119/rotation = Quaternion(-0.490223, -0.121481, 0.009242, 0.863041)
 bones/120/rotation = Quaternion(1.88613e-08, 0.959381, -0.282113, -3.77321e-08)
-bones/121/rotation = Quaternion(-0.384436, 5.74738e-10, -6.29245e-09, 0.923152)
 bones/122/position = Vector3(-1.19209e-07, 0.0866593, -0.124063)
 bones/122/rotation = Quaternion(0.994071, -3.35093e-07, 1.08822e-08, 0.10873)
 bones/122/scale = Vector3(1, 1, 1.00006)
@@ -308,7 +301,6 @@ bones/126/scale = Vector3(1, 1, 1)
 bones/127/position = Vector3(0.0286197, 0.44696, -0.00286892)
 bones/127/rotation = Quaternion(-0.5815, 0.0668629, -0.0868752, 0.806127)
 bones/128/rotation = Quaternion(6.14475e-09, 0.940004, -0.341165, -4.50954e-08)
-bones/129/rotation = Quaternion(-0.384436, -5.74738e-10, 4.27475e-09, 0.923152)
 bones/130/position = Vector3(1.19209e-07, 0.0873628, -0.124124)
 bones/130/rotation = Quaternion(0.993765, -4.6549e-07, 2.19717e-08, 0.111492)
 bones/130/scale = Vector3(1, 1, 1.00006)
@@ -332,7 +324,7 @@ bones/143/rotation = Quaternion(0.997221, 0, -0.0745033, 0)
 bones/143/scale = Vector3(1, 1.01862, 1)
 
 [node name="GunBone" parent="PlayerModel/Robot_Skeleton/Skeleton3D" index="5"]
-transform = Transform3D(0.174202, 0.194962, -0.965229, 0.546709, 0.796158, 0.25946, 0.819157, -0.572821, 0.0321007, -0.297205, 1.08005, -0.0710582)
+transform = Transform3D(0.174202, 0.194963, -0.965228, 0.546709, 0.796157, 0.259461, 0.819156, -0.572821, 0.0321004, -0.297205, 1.08005, -0.071059)
 
 [node name="AnimationTree" parent="." index="4"]
 tree_root = SubResource("AnimationNodeBlendTree_8rwx7")
@@ -345,6 +337,5 @@ parameters/walk/blend_position = Vector2(0, 0)
 [node name="Username" type="Label3D" parent="." index="12"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2.09588, 0)
 billboard = 1
-text = "No user"
 
 [editable path="PlayerModel"]
