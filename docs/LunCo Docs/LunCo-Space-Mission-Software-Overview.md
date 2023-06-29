@@ -10,11 +10,11 @@
 - Opensource, but development process is closed (double check)
 - Standard and widely adopted
 
-## STK
+### STK
 
 Proprietary mission analysis software
 
-## FreeFlyer
+### FreeFlyer
 
 Proprietary mission analysis software
 
@@ -28,7 +28,7 @@ Great tools for basic Lunar mission planning, kind of a Google Maps for Lunar Da
 
 - Highly rely on Python ecosystem
 - Hard to model whole solar system
-- Simulations are  build in Python, a free, but closed source program build on Unity only for visualisations
+- Simulations are  build in Python, a free, but closed source program build on Unity only for visualizations
 
 ### SPICE
 
@@ -38,9 +38,19 @@ Low-level library for orbital mechanics by NASA, widely adopted
 
 NASA SDK for Geospatial data
 
-## IVoyager
+### IVoyager
 
-Planetarium build on Godot, great starting point for solar system visualisation
+Planetarium build on Godot, great starting point for solar system visualization
+
+## Flight Software Frameworks
+
+### Core Flight System
+
+Opensource Software by NASA on C to run robots. Impressive flight heritage
+
+### FPrime
+
+Opensource Software by NASA on C++ to run robots. Tested on Ingenuity
 
 ## Games
 
@@ -48,6 +58,6 @@ Planetarium build on Godot, great starting point for solar system visualisation
 
 Well-known space missions game
 
-## Factorio
+### Factorio
 
 Supply chain
