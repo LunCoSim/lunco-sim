@@ -34,11 +34,6 @@ StateManager="*res://core/singletones/state-manager.gd"
 BeehaveGlobalDebugger="*res://addons/beehave/debug/global_debugger.gd"
 Panku="*res://addons/panku_console/console.tscn"
 
-[debug]
-
-file_logging/enable_file_logging=true
-file_logging/enable_file_logging.pc=false
-
 [display]
 
 window/size/viewport_width=1280

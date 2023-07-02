@@ -1,5 +1,6 @@
-[gd_scene load_steps=8 format=3 uid="uid://cn3pkxciyr2xi"]
+[gd_scene load_steps=9 format=3 uid="uid://cn3pkxciyr2xi"]
 
+[ext_resource type="Script" path="res://apps/future_lunar_missions/FutureLunarMissions.gd" id="1_m5de0"]
 [ext_resource type="PackedScene" uid="uid://bpdndyk2ecpco" path="res://addons/lunco-assets/planets/moon-model.tscn" id="2_hu5vu"]
 [ext_resource type="Texture2D" uid="uid://c6v84yxrojl2k" path="res://addons/lunco-assets/ESO_-_Milky_Way.jpeg" id="2_rqccq"]
 [ext_resource type="PackedScene" uid="uid://c5dg7yq7hd7m0" path="res://core/nodes/avatar/avatar.tscn" id="3_d7w2q"]
@@ -23,6 +24,7 @@ dof_blur_far_distance = 6000.0
 dof_blur_far_transition = 5002.04
 
 [node name="FutureLunarMissions" type="Node3D"]
+script = ExtResource("1_m5de0")
 
 [node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
 transform = Transform3D(-0.00464251, 0, 0.999989, 0, 1, 0, -0.999989, 0, -0.00464251, 5885.31, 0, 0)
@@ -32,7 +34,7 @@ shadow_enabled = true
 transform = Transform3D(-0.98034, 0, 0.197315, 0, 1, 0, -0.197315, 0, -0.98034, 0, 0, 0)
 
 [node name="Model" parent="Moon" index="0"]
-transform = Transform3D(0.1, 0, 0, 0, 0.1, 0, 0, 0, 0.1, 0, 0, 0)
+transform = Transform3D(0.001, 0, 0, 0, 0.001, 0, 0, 0, 0.001, 0, 0, 0)
 
 [node name="MoonCollisionShape" parent="Moon" index="1"]
 visible = false
