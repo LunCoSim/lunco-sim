@@ -1,0 +1,7 @@
+[gd_scene load_steps=2 format=3 uid="uid://ds3hbsvvlvdyw"]
+
+[sub_resource type="StyleBoxEmpty" id="StyleBoxEmpty_07gid"]
+
+[node name="RowButton" type="Button"]
+theme_override_styles/focus = SubResource("StyleBoxEmpty_07gid")
+text = "Generate"
