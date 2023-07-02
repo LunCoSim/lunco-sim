@@ -19,13 +19,14 @@ const RAY_LENGTH = 10000
 
 #-------------------------------
 
-var target: Node3D
+@export var target: Node3D
 var mouse_control := false
 
 #-------------------------------
 
 @onready var ui := $UI/TargetUI
 @onready var camera := $SpringArmCamera
+
 
 #-------------------------------
 
@@ -71,6 +72,11 @@ func clear_ui():
 
 func _ready():
 	$UI.set_mouse_filter(Control.MOUSE_FILTER_PASS)
+	print(target)
+	set_target(target)
+	set_camera(camera)
+#	camera.set_target(target)
+	
 
 func _unhandled_input(event):
 	
@@ -193,13 +199,11 @@ func _on_State_transited():
 	var _ui = null
 	
 	if target is lnPlayer:
-		
 		_ui = preload("res://core/ui/player-ui.tscn").instantiate()
 		$UI/Help/Target.text = "Target: Player"
 #			camera.remove_excluded_object(Spacecraft)
 		camera.set_spring_length(2.5)
 		target.set_camera(camera)
-		
 	elif target is lnSpacecraft:
 		_ui = preload("res://core/ui/spacecraft-ui.tscn").instantiate()
 		$UI/Help/Target.text = "Target: Spacecraft"
@@ -211,11 +215,14 @@ func _on_State_transited():
 		$UI/Help/Target.text = "Target: Operator"
 #				camera.remove_excluded_object(Spacecraft)
 		camera.set_spring_length(2.5)
+	else:
+		$UI/Help/Target.text = "Target: Planet"
+#		camera.set_spring_length(5000)
 	
 			
 	set_ui(_ui)
 	
-	camera.set_target(target)
+	camera.target = target
 
 func _on_select_model(path):
 	print("_on_select_model: ", path)

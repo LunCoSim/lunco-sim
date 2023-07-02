@@ -1,0 +1,57 @@
+[gd_scene load_steps=8 format=3 uid="uid://cn3pkxciyr2xi"]
+
+[ext_resource type="PackedScene" uid="uid://bpdndyk2ecpco" path="res://addons/lunco-assets/planets/moon-model.tscn" id="2_hu5vu"]
+[ext_resource type="Texture2D" uid="uid://c6v84yxrojl2k" path="res://addons/lunco-assets/ESO_-_Milky_Way.jpeg" id="2_rqccq"]
+[ext_resource type="PackedScene" uid="uid://c5dg7yq7hd7m0" path="res://core/nodes/avatar/avatar.tscn" id="3_d7w2q"]
+
+[sub_resource type="PanoramaSkyMaterial" id="PanoramaSkyMaterial_6lrbw"]
+panorama = ExtResource("2_rqccq")
+
+[sub_resource type="Sky" id="Sky_fr31i"]
+sky_material = SubResource("PanoramaSkyMaterial_6lrbw")
+
+[sub_resource type="Environment" id="Environment_xlnxu"]
+background_mode = 2
+sky = SubResource("Sky_fr31i")
+adjustment_enabled = true
+adjustment_brightness = 0.9
+adjustment_contrast = 1.1
+adjustment_saturation = 1.2
+
+[sub_resource type="CameraAttributesPractical" id="CameraAttributesPractical_i6pcl"]
+dof_blur_far_distance = 6000.0
+dof_blur_far_transition = 5002.04
+
+[node name="FutureLunarMissions" type="Node3D"]
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
+transform = Transform3D(-0.00464251, 0, 0.999989, 0, 1, 0, -0.999989, 0, -0.00464251, 5885.31, 0, 0)
+shadow_enabled = true
+
+[node name="Moon" parent="." instance=ExtResource("2_hu5vu")]
+transform = Transform3D(-0.98034, 0, 0.197315, 0, 1, 0, -0.197315, 0, -0.98034, 0, 0, 0)
+
+[node name="Model" parent="Moon" index="0"]
+transform = Transform3D(0.1, 0, 0, 0, 0.1, 0, 0, 0, 0.1, 0, 0, 0)
+
+[node name="MoonCollisionShape" parent="Moon" index="1"]
+visible = false
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Environment_xlnxu")
+camera_attributes = SubResource("CameraAttributesPractical_i6pcl")
+
+[node name="Avatar" parent="." node_paths=PackedStringArray("target") instance=ExtResource("3_d7w2q")]
+target = NodePath("../Moon")
+
+[node name="SpringArmCamera" parent="Avatar" index="0"]
+SPRING_LENGTH = 3.0
+FOLLOW_HEIGHT = 0.0
+FOLLOW_ANGLE = 1.0
+
+[node name="Camera" parent="Avatar/SpringArmCamera/CameraRot/SpringArm" index="0"]
+far = 100000.0
+
+[editable path="Moon"]
+[editable path="Avatar"]
+[editable path="Avatar/SpringArmCamera"]

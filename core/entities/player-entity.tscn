@@ -329,6 +329,7 @@ transform = Transform3D(0.174202, 0.194963, -0.965228, 0.546709, 0.796157, 0.259
 [node name="AnimationTree" parent="." index="4"]
 tree_root = SubResource("AnimationNodeBlendTree_8rwx7")
 parameters/aim/add_amount = 0
+parameters/land/internal_active = false
 parameters/state/transition_request = "walk"
 parameters/walk/blend_position = Vector2(0, 0)
 
