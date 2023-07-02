@@ -29,6 +29,7 @@ Great tools for basic Lunar mission planning, kind of a Google Maps for Lunar Da
 - Highly rely on Python ecosystem
 - Hard to model whole solar system
 - Simulations are  build in Python, a free, but closed source program build on Unity only for visualizations
+- A lot of great simulations of subsystems
 
 ### SPICE
 
