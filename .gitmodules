@@ -2,14 +2,6 @@
 	path = addons/lunco-content
 	url = https://github.com/LunCoSim/lunco-content.git
 	pushurl = git@github.com:LunCoSim/lunco-content.git
-[submodule "addons/free-look-camera"]
-	path = addons/free-look-camera
-	url = https://github.com/LunCoSim/simple-free-look-camera.git
-	pushurl = git@github.com:LunCoSim/simple-free-look-camera.git
-[submodule "addons/object-inspector"]
-	path = addons/object-inspector
-	url = https://github.com/4d49/object-inspector.git
-	pushurl = git@github.com:4d49/object-inspector.git
 [submodule "addons/lunco-cameras"]
 	path = addons/lunco-cameras
 	url = https://github.com/LunCoSim/lunco-cameras.git
