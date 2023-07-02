@@ -4,3 +4,6 @@ build/
 
 .obsidian
 .plugged
+
+#Managed by gd-plug
+addons/ 
