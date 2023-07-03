@@ -2,52 +2,54 @@
 
 ## Table of content
 
-- [[#Design Principles|Design Principles]]
-- [[#Why Godot?|Why Godot?]]
-- [[#Why LunCo is easilly extandable?|Why LunCo is easilly extandable?]]
-- [[#How to structure Godot Plugins folder for convinient development?|How to structure Godot Plugins folder for convinient development?]]
-- [[#What addons are used?|What addons are used?]]
-- [[#Folder structure|Folder structure]]
+- [Design Principles](#design-principles)
+- [Why Godot?](#why-godot)
+- [Why is LunCo easily extensible?](#why-is-lunco-easily-extensible)
+- [How is the Godot Plugins folder structured for convinient development?](#how-is-the-godot-plugins-folder-structured-for-convinient-development)
+- [How to deal with development/download urls?](#how-to-deal-with-developmentdownload-urls)
+- [What addons are used?](#what-addons-are-used)
+- [Folder structure](#folder-structure)
 
 ## Design Principles
 
-Lunco is designed with core basic ideas:
-- as open as possible (e.g. MIT or similar licence)
-- reuse existing solutions and widely adopted open standards
-- easilly extensibility 
+LunCo is designed with the following core principles:
+- Be as open as possible (e.g. MIT or similar licence)
+- Reuse existing solutions and widely adopted open standards
+- Be easily extensibile
 - UX is the key
 
 ## Why Godot?
 
-- its the only open AAA decent game engine
-- almost every engineering task involves 3D, 2D, UI tasks, so it's great to use game engine as a basis
-- it's very lightweigh, with small codebase, can run on raspberri pi4
-- it's a quite old solution, has "flight heritage"
-- easy to add or change core functionality, e.g. add custom robotic-specific physics engine
+- Godot is the only open AAA decent game engine
+- Almost every engineering task involves 3D, 2D, and/or UI tasks so it's great to use game engine as a basis
+- Godot is very lightweight with small codebase, and can even run on a Raspberry Pi 4
+- Godot is quite mature. It has "flight heritage."
+- It is easy to add or change core functionality, e.g. adding a custom robotic-specific physics engine
 
 
-## Why LunCo is easilly extandable?
+## Why is LunCo easily extensible?
 
-1. Godot is crossplatform engine available on most platforms
-2. LunCo relies on git submodules to get latest plugins, or manual copy if plugin's repo folder structure is inappropriate
+1. Godot is a cross-platform engine available on most platforms
+2. LunCo relies on git submodules to get latest plugins, or manual copy if a plugin's repo folder structure is inappropriate
 
-## How to structure Godot Plugins folder for convinient development?
+## How is the Godot Plugins folder structured for convinient development?
 
-1. Identify functionality that coulde be moved to a separate plugin, in terms of Godot - moved to "res://addons/{you_addon_name}"
-2. Try to make the addon iself-dependent
+1. Identify functionality that coulde be moved to a separate plugin, in terms of Godot - moved to `res://addons/{your_addon_name}`
+2. Try to make the addon self-dependent
 3. Create a separate git repo
-4. Put your addon into root of the repo
-5. Add addon as **git submodule** using:
-
-		git submodule add {url_to_repo} ./addons/{your_addon_name}
+4. Put your addon into the root directory of the repo
+5. Add addon as a **git submodule** using:
+```bash
+git submodule add {url_to_repo} ./addons/{your_addon_name}
+```
 
 #### How to deal with development/download urls?
 
-Github allows to add repositories via https or ssh link. For development for security reasons, ssh is a preferable option, however it requires ssh access to be set up on the computer.
+GitHub allows repositories to be downloaded via HTTPS or SSH. 
+- SSH is a preferable option for development and security reasons, but it requires SSH to be set up on the host computer.
+- HTTPS can be used for easier downloads.
 
-So to make it easier to download https is used.
-
-However if you start developing, you'll have to do several manual steps (later a script will be added to do it automatically):
+To start developing, you'll have to do several manual steps (later a script will be added to do it automatically):
 1. Git allows to use different urls for push and pull according to [the article](https://stackoverflow.com/questions/31747072/will-remote-url-for-fetch-and-push-be-different)
 2. So you'll have to add to ".git/config" a push url with the right link
 3. Same should be done for every submodule in ".git/modules"
@@ -68,6 +70,6 @@ However if you start developing, you'll have to do several manual steps (later a
 
 ## Folder structure
 
-1. applications - contains applications, high-level stuff build based on the core, later could be in a seperate repo
-2. addons - folder for plugins, according to Godot suggestions
-3. core - core lunco code
+1. `applications` - contains applications, high-level stuff build based on the core, later could be in a seperate repo
+2. `addons` - folder for plugins, according to Godot suggestions
+3. `core` - core lunco code
