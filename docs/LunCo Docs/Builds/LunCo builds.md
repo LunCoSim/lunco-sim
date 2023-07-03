@@ -2,5 +2,5 @@
 
 
 Local tests
-1. Doker
+1. Docker
 2. https://github.com/nektos/act
