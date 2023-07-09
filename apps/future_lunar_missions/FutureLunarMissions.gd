@@ -9,15 +9,16 @@ var landings = []
 func _ready():
 	pass # Replace with function body.
 	
-	for i in missions.records:
-		print(i["Mission type"]=="landing")
+#	for i in missions.records:
+#		print(i["Mission type"]=="landing")
 	
 	landings = missions.records.filter(func(i): return i["Mission type"]=="landing")
 	landings = landings.filter(func(i): return i["Landing location"]!="tbd")
 	
+	var count := 0
+	
 	for i in landings:
-		var Moon = $Moon
-		
+		count += 1
 		var sphere : Node3D = preload("res://apps/future_lunar_missions/sphere.tscn").instantiate()
 		
 		var r = 3
@@ -26,7 +27,14 @@ func _ready():
 		
 		sphere.translate(spherical_to_cartesian(r, lat, lon))
 		
-		Moon.add_child(sphere)
+		var material = StandardMaterial3D.new()
+		
+		material.albedo_color = Color(abs(sin(count)), abs(cos(count)), abs(cos(0.3*count)))
+		
+		sphere.mesh.surface_set_material(0, material)
+		
+		print(material.albedo_color )
+		$Moon.add_child(sphere)
 		
 	print(landings)
 

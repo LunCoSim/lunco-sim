@@ -1,6 +1,5 @@
-[gd_scene load_steps=19 format=3 uid="uid://btfca8gppw043"]
+[gd_scene load_steps=18 format=3 uid="uid://btfca8gppw043"]
 
-[ext_resource type="Script" path="res://addons/object-inspector/scripts/inspector.gd" id="1_d3brg"]
 [ext_resource type="Script" path="res://apps/sim/app.gd" id="1_upy72"]
 [ext_resource type="PackedScene" uid="uid://d8gbyf2xbd4m" path="res://addons/lunco-content/maps/Langrenus/langrenus_map.tscn" id="2_w1oup"]
 [ext_resource type="Texture2D" uid="uid://c6v84yxrojl2k" path="res://addons/lunco-assets/ESO_-_Milky_Way.jpeg" id="5_jqivx"]
@@ -51,12 +50,6 @@ grow_vertical = 0
 unique_name_in_owner = true
 layout_mode = 2
 text = "Sim app"
-
-[node name="ObjectInspector" type="VBoxContainer" parent="UI/VBoxContainer"]
-unique_name_in_owner = true
-layout_mode = 2
-alignment = 1
-script = ExtResource("1_d3brg")
 
 [node name="Avatar" parent="." instance=ExtResource("6_hs3oo")]
 transform = Transform3D(-0.77664, 0, -0.629944, 0, 1, 0, 0.629944, 0, -0.77664, -23.4477, 27.5849, 50.7354)

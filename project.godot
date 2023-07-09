@@ -11,7 +11,7 @@ config_version=5
 [application]
 
 config/name="LunCo"
-run/main_scene="res://main.tscn"
+run/main_scene="res://apps/future_lunar_missions/FutureLunarMissions.tscn"
 config/features=PackedStringArray("4.1", "GL Compatibility")
 boot_splash/bg_color=Color(0, 0, 0, 1)
 boot_splash/image="res://addons/lunco-assets/logos/splash.png"
@@ -32,7 +32,7 @@ AlertDialog="*res://apps/whiteboard/lorien/UI/Dialogs/AlertDialog.tscn"
 GlobalSignals="*res://apps/whiteboard/lorien/Misc/GlobalSignals.gd"
 StateManager="*res://core/singletones/state-manager.gd"
 BeehaveGlobalDebugger="*res://addons/beehave/debug/global_debugger.gd"
-Panku="*res://addons/panku_console/console.tscn"
+DebugMenu="*res://addons/debug_menu/debug_menu.tscn"
 
 [display]
 
@@ -45,7 +45,7 @@ movie_writer/movie_file="/home/rod/Documents/lunco-movies/godot_output.avi"
 
 [editor_plugins]
 
-enabled=PackedStringArray("res://addons/beehave/plugin.cfg", "res://addons/csv-data-importer/plugin.cfg", "res://addons/gd-plug-ui/plugin.cfg", "res://addons/gdUnit4/plugin.cfg", "res://addons/godot-idea-board/plugin.cfg", "res://addons/imjp94.yafsm/plugin.cfg", "res://addons/lunco-urdf/plugin.cfg", "res://addons/panku_console/plugin.cfg")
+enabled=PackedStringArray("res://addons/beehave/plugin.cfg", "res://addons/csv-data-importer/plugin.cfg", "res://addons/debug_menu/plugin.cfg", "res://addons/gd-plug-ui/plugin.cfg", "res://addons/gdUnit4/plugin.cfg", "res://addons/godot-idea-board/plugin.cfg", "res://addons/imjp94.yafsm/plugin.cfg", "res://addons/lunco-urdf/plugin.cfg", "res://addons/panku_console/plugin.cfg")
 logger/log_enabled=true
 logger/log_stdout=true
 logger/level=31
@@ -433,11 +433,6 @@ canvas_pan_left={
 canvas_pan_right={
 "deadzone": 0.5,
 "events": [Object(InputEventKey,"resource_local_to_scene":false,"resource_name":"","device":0,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"pressed":false,"keycode":16777233,"physical_keycode":0,"key_label":0,"unicode":0,"echo":false,"script":null)
-]
-}
-toggle_console={
-"deadzone": 0.5,
-"events": [Object(InputEventKey,"resource_local_to_scene":false,"resource_name":"","device":0,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"pressed":false,"keycode":0,"physical_keycode":96,"key_label":0,"unicode":0,"echo":false,"script":null)
 ]
 }
 

@@ -14,7 +14,7 @@ signal create_spacecraft
 signal ray_cast(from: Vector3, to: Vector3)
 
 #-------------------------------
-const MOUSE_SENSITIVITY = 0.1
+const MOUSE_SENSITIVITY = 0.015
 const RAY_LENGTH = 10000
 
 #-------------------------------
@@ -85,20 +85,21 @@ func _unhandled_input(event):
 	#Left mouse button pressed
 	if event is InputEventMouseButton and event.pressed and event.button_index == 1:
 		print("Click mouse")
-		if target is lnOperator:
-			print("Ray casting")
+	
+		print("Ray casting")
+		
+		var e: InputEventMouseButton = event
+		var position = e.position
+		
+		if camera:  
+			var from = camera.project_ray_origin(position)
+			var to = from + camera.project_ray_normal(position) * RAY_LENGTH
 			
-			var e: InputEventMouseButton = event
-			var position = e.position
-			
-			if camera:  
-				var from = camera.project_ray_origin(position)
-				var to = from + camera.project_ray_normal(position) * RAY_LENGTH
-				
-				emit_signal("ray_cast", from, to)	
+			emit_signal("ray_cast", from, to)	
 
 
 func _input(event):
+	
 	if Input.is_action_just_pressed("select_player"):
 		emit_signal("create_player")
 	elif Input.is_action_just_pressed("select_spacecraft"):
