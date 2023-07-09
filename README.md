@@ -24,7 +24,17 @@ LunCo provides a set of opensource applications for Lunar Base engineering inclu
 ```bash
     git clone -b main --single-branch --recurse-submodules https://github.com/LunCoSim/lunco-sim.git
 ```
-5. Open the project in Godot and run
+5. After cloning, change directory to project folder
+```bash
+	cd lunco-sim
+```
+
+6. Run below command to install addons using [gd-plug](https://github.com/imjp94/gd-plug)
+```bash
+    ./install_addons.sh
+```
+
+7. Open the project in Godot and run
 
 ## Documentation
 
