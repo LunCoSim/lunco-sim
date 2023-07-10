@@ -223,7 +223,8 @@ func _on_State_transited():
 			
 	set_ui(_ui)
 	
-	camera.target = target
+	if camera != null:
+		camera.target = target
 
 func _on_select_model(path):
 	print("_on_select_model: ", path)

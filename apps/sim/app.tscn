@@ -120,3 +120,5 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -64.6564, -4.70826, 146.391)
 [connection signal="create_spacecraft" from="Avatar" to="." method="_on_create_spacecraft"]
 [connection signal="ray_cast" from="Avatar" to="." method="_on_avatar_ray_cast"]
 [connection signal="spawned" from="MultiplayerSpawner" to="." method="_on_multiplayer_spawner_spawned"]
+
+[editable path="Avatar"]

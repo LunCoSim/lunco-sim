@@ -66,7 +66,7 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, -6)
 target = NodePath("../Moon")
 
 [node name="SpringArmCamera" parent="Avatar" index="0"]
-CAMERA_X_ROT_MAX = 90
+FOLLOW_HEIGHT = 2.0
 
 [node name="SpringArm" parent="Avatar/SpringArmCamera/CameraRot" index="0"]
 transform = Transform3D(-1, 0, 8.74228e-08, 0, 1, 0, -8.74228e-08, 0, -1, 0, 0, 0)
