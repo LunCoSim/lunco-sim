@@ -1,0 +1,1 @@
+godot --headless --server ./main.tscn
