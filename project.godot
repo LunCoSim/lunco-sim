@@ -33,6 +33,7 @@ GlobalSignals="*res://apps/whiteboard/lorien/Misc/GlobalSignals.gd"
 StateManager="*res://core/singletones/state-manager.gd"
 BeehaveGlobalDebugger="*res://addons/beehave/debug/global_debugger.gd"
 DebugMenu="*res://addons/debug_menu/debug_menu.tscn"
+Panku="*res://addons/panku_console/console.tscn"
 
 [display]
 
