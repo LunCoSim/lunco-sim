@@ -28,7 +28,7 @@ func _on_sim_host_pressed():
 	peer.create_server(9000)
 	multiplayer.multiplayer_peer = peer
 	
-	get_tree().change_scene_to_file("res://apps/sim/app.tscn")
+	get_tree().change_scene_to_file("res://apps/sim/sim.tscn")
 
 func _on_sim_client_pressed():
 	print("_on_sim_client_pressed")
@@ -37,17 +37,17 @@ func _on_sim_client_pressed():
 	
 	connect_to_server(ip, port)
 	
-	get_tree().change_scene_to_file("res://apps/sim/app.tscn")
+	get_tree().change_scene_to_file("res://apps/sim/sim.tscn")
 	pass # Replace with function body.
 	
 func _on_yarm_pressed():
-	get_tree().change_scene_to_file("res://apps/yarm/app.tscn")
+	get_tree().change_scene_to_file("res://apps/yarm/yarm.tscn")
 
 
 func _on_connect_to_global_pressed():
 	#default global server
 	connect_to_server("langrenus.lunco.space", 9000)
-	get_tree().change_scene_to_file("res://apps/sim/app.tscn")
+	get_tree().change_scene_to_file("res://apps/sim/sim.tscn")
 
 func connect_to_server(ip: String, port: int):
 	peer.create_client(ip, port)
