@@ -85,7 +85,12 @@ text = "Text Editor"
 layout_mode = 2
 text = "Whiteboard"
 
+[node name="Future Missions" type="Button" parent="UI/Apps"]
+layout_mode = 2
+text = "Future Missions"
+
 [node name="Upcoming" type="VBoxContainer" parent="UI"]
+visible = false
 material = SubResource("CanvasItemMaterial_u6be5")
 anchors_preset = -1
 anchor_left = 0.245
@@ -128,6 +133,7 @@ text = "OrbitalMechanics (TBD)"
 [connection signal="pressed" from="UI/Apps/ConnectToGlobal" to="." method="_on_connect_to_global_pressed"]
 [connection signal="pressed" from="UI/Apps/Text Editor" to="." method="_on_text_editor_pressed"]
 [connection signal="pressed" from="UI/Apps/Whiteboard" to="." method="_on_whiteboard_pressed"]
+[connection signal="pressed" from="UI/Apps/Future Missions" to="." method="_on_future_missions_pressed"]
 [connection signal="pressed" from="UI/Upcoming/Yarm" to="." method="_on_yarm_pressed"]
 [connection signal="pressed" from="UI/Upcoming/MBSE" to="." method="_on_yarm_pressed"]
 [connection signal="pressed" from="UI/Upcoming/Kanban" to="." method="_on_yarm_pressed"]

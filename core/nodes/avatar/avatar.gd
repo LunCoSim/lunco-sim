@@ -99,6 +99,9 @@ func _unhandled_input(event):
 
 
 func _input(event):
+	if Input.is_action_just_pressed("ui_cancel"):
+		SceneManager.no_effect_change_scene("back")
+		
 	
 	if Input.is_action_just_pressed("select_player"):
 		emit_signal("create_player")

@@ -15,9 +15,14 @@ func _ready():
 		_on_sim_host_pressed()
 
 
-# Called every frame. 'delta' is the elapsed time since the previous frame.
-func _process(delta):
-	pass
+# ------------------------------------
+## 
+func connect_to_server(ip: String, port: int):
+	peer.create_client(ip, port)
+	multiplayer.multiplayer_peer = peer
+
+func change_scene(scene: String):
+	SceneManager.no_effect_change_scene(scene)
 
 ## UI Integrations
 func _on_sim_host_pressed():
@@ -28,7 +33,7 @@ func _on_sim_host_pressed():
 	peer.create_server(9000)
 	multiplayer.multiplayer_peer = peer
 	
-	get_tree().change_scene_to_file("res://apps/sim/sim.tscn")
+	change_scene("sim")
 
 func _on_sim_client_pressed():
 	print("_on_sim_client_pressed")
@@ -37,26 +42,23 @@ func _on_sim_client_pressed():
 	
 	connect_to_server(ip, port)
 	
-	get_tree().change_scene_to_file("res://apps/sim/sim.tscn")
-	pass # Replace with function body.
+	change_scene("sim")
 	
 func _on_yarm_pressed():
-	get_tree().change_scene_to_file("res://apps/yarm/yarm.tscn")
-
+	change_scene("yarm")
 
 func _on_connect_to_global_pressed():
 	#default global server
 	connect_to_server("langrenus.lunco.space", 9000)
-	get_tree().change_scene_to_file("res://apps/sim/sim.tscn")
-
-func connect_to_server(ip: String, port: int):
-	peer.create_client(ip, port)
-	multiplayer.multiplayer_peer = peer
+	
+	change_scene("sim")
 
 
 func _on_whiteboard_pressed():
-	get_tree().change_scene_to_file("res://apps/whiteboard/whiteboard.tscn")
-
+	change_scene("whiteboard")
 
 func _on_text_editor_pressed():
-	get_tree().change_scene_to_file("res://apps/editor/editor.tscn")
+	change_scene("editor")
+
+func _on_future_missions_pressed():
+	change_scene("FutureLunarMissions")

@@ -24,7 +24,12 @@ func _plugging():
 	## Libraries
 	# plug("maktoobgar/scene_manager")
 	plug("maktoobgar/scene_manager", {"on_updated"="on_scene_manager_updated"}) ## Scene manager
+	plug("PunchablePlushie/godot-game-settings") ## Game settings
 
+
+
+
+## Custom hook after update. TBD Either automatically, or ideally just wait till the issue will be closed
 func on_scene_manager_updated(plugin):
 	print("Scene manager on updated. Must be done manually for now.")
 	print("1. Remove file res://addons/scene_manager/scenes.gd")
