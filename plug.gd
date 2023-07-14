@@ -22,4 +22,13 @@ func _plugging():
 	plug("godot-extended-libraries/godot-debug-menu")
 
 	## Libraries
-	plug("maktoobgar/scene_manager") ## Scene manager
+	# plug("maktoobgar/scene_manager")
+	plug("maktoobgar/scene_manager", {"on_updated"="on_scene_manager_updated"}) ## Scene manager
+
+func on_scene_manager_updated(plugin):
+	print("Scene manager on updated. Must be done manually for now.")
+	print("1. Remove file res://addons/scene_manager/scenes.gd")
+	print("2. Update path to res://data/scene-manager/scenes.gd in files:")
+	print("  -res://addons/scene_manager/manager.gd")
+	print("  -res://addons/scene_manager/plugin.gd")
+	print("Corresponging issue on github: https://github.com/maktoobgar/scene_manager/issues/9")
