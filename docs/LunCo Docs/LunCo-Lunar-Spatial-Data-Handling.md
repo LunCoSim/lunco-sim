@@ -24,6 +24,8 @@ There is a an interesting [MTerrain](https://github.com/mohsenph69/Godot-MTerrai
 
 H(lat, lon) - heigh of the terration at lat, log
 
+In general the idea is to divide the whole lunar surface into chunks and have LODs. At some level chunk should have a decent quality and be to scale, allowing traversing of the area
+
 ### Questions
 1. Chunk size should be tuned to MTerrain, e.g. 100x100 meter
 2. How H relates to Height map, conversion function?
