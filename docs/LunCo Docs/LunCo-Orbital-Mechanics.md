@@ -1,3 +1,5 @@
+**[Check discussion!](https://github.com/orgs/LunCoSim/discussions/9)**
+
 With respect to the Moon mostly we are interested in relative position and orientation of Sun, Earth, Moon at any given point in time.
 
 One of the first applications is to have an accurate sun position in the sim at any point in time, as well as Earth (using kind of LOD, or hacks to adjust position/size to deal with precision error)

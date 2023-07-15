@@ -1,5 +1,6 @@
 # Lunar Spatial Data Handling
 ***Isn't it cool to walk on the Moon? Even in a simulation***
+**[Check discussion](https://github.com/orgs/LunCoSim/discussions/8)**
 
 ## Expected outcome
 
