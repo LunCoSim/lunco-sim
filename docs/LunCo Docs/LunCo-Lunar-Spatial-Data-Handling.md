@@ -1,6 +1,11 @@
 # Lunar Spatial Data Handling
 ***Isn't it cool to walk on the Moon? Even in a simulation***
 
+## Expected outcome
+
+Being able to click on any location on the moon and have a decent 3D model of the location to traverse it using existing operators
+
+
 ## Problem
 
 High-quality 3D map of the Moon is crucial for mission planning. Such a map should be able to include several layers, like Rocks distribution, Dust dencity, etc. 
