@@ -1,11 +1,16 @@
 # Lunar Spatial Data Handling
+***Isn't it cool to walk on the Moon? Even in a simulation***
 
 ## Problem
-High-quality 3D map of the Moon is crucial for mission planning. Such a map should be able to include several layers, like Rocks distribution, Dust dencity, etc.
+
+High-quality 3D map of the Moon is crucial for mission planning. Such a map should be able to include several layers, like Rocks distribution, Dust dencity, etc. 
+Visualisation of mission location, and possibility to quickly try different ways to travers it would cool. 
+Planet-scale data storage is a solved problem with tons of existing solutions, howevert it's still a very trick task.
 There are tons of open data sources, so ideally the whole pipilene of data merging to be implemented in an easy-to config way.
 [NASA Moon CGI Kit ](https://svs.gsfc.nasa.gov/cgi-bin/details.cgi?aid=4720)is a nice starting point. It has:
 - The color map: 24-bit RGB TIFF, max 27360x13680 pix (494.1 MB)
 - Height map: 23040x11520 pix (1012.6 MB)  64 ppd (pixel per degree)  floating-point TIFFs in kilometers, relative to a radius of 1737.4 km
+
 
 
 ## Solution
