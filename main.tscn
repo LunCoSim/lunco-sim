@@ -64,15 +64,15 @@ layout_mode = 2
 
 [node name="SimHost" type="Button" parent="UI/Apps"]
 layout_mode = 2
-text = "Host FreeWorld Simulation"
+text = "Host Simulation"
 
 [node name="SimClient" type="Button" parent="UI/Apps"]
 layout_mode = 2
-text = "Connect to FreeWorld Simulation"
+text = "Connect to Simulation"
 
 [node name="ConnectToGlobal" type="Button" parent="UI/Apps"]
 layout_mode = 2
-text = "Connect to Global FreeWorld Simulation"
+text = "Connect to Global Simulation"
 
 [node name="Label2" type="Label" parent="UI/Apps"]
 layout_mode = 2

@@ -37,9 +37,7 @@ LunCo provides a set of opensource applications for Lunar Base engineering inclu
 	./install_addons.sh
 ```
 
-7. Certain plugins could require manual update, plz check **res://plug.gd** file
-
-8. Open the project in Godot and run
+7. Open the project in Godot and run
 
 ## Documentation
 
