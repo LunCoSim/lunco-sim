@@ -33,8 +33,7 @@ func _ready():
 		var color = Color(abs(sin(count)), abs(cos(count)), abs(cos(0.3*count)))
 
 		add_sphere(r, lat, lon, color)
-		
-	print(landings)
+
 
 func add_sphere(r, lat, lon, color=Color(1, 1, 1)):
 	var sphere : Node3D = preload("res://apps/future_lunar_missions/sphere.tscn").instantiate()
@@ -97,6 +96,3 @@ func _on_texture_rect_gui_input(event):
 		var pos: Vector2 = 2*(event.position/size - Vector2(0.5, 0.5))*scale_adjustment
 		
 		pointer.position = spherical_to_cartesian($Moon.Radius, pos.y, pos.x)
-		
-	print(event)
-	pass # Replace with function body.
