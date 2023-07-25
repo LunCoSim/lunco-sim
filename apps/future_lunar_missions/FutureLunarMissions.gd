@@ -8,7 +8,7 @@ var pointer: Node3D
 	
 # Called when the node enters the scene tree for the first time.
 func _ready():
-	pass # Replace with function body.
+	var r = $Moon.Radius
 	
 #	for i in missions.records:
 #		print(i["Mission type"]=="landing")
@@ -16,19 +16,17 @@ func _ready():
 	landings = missions.records.filter(func(i): return i["Mission type"]=="landing")
 	landings = landings.filter(func(i): return i["Landing location"]!="tbd")
 	
-	var count := 0
-	
-	pointer = add_sphere(3, 0, 0, Color(0, 1, 0))
+	pointer = add_sphere(r, 0, 0, Color(0, 1, 0))
 #	pointer.hide()
 	
-	add_sphere(3, 90, 0, Color(1, 0, 0)) # North Pole
-	add_sphere(3, -90, 0, Color(0, 0, 1))
+	add_sphere(r, 90, 0, Color(1, 0, 0)) # North Pole
+	add_sphere(r, -90, 0, Color(0, 0, 1)) #South pole
 	
-
+	var count := 0
 	for i in landings:
 		count += 1
 
-		var r = 3
+		
 		var lat = float(i["latitude"])
 		var lon = float(i["longitude"])
 
@@ -40,7 +38,11 @@ func _ready():
 
 func add_sphere(r, lat, lon, color=Color(1, 1, 1)):
 	var sphere : Node3D = preload("res://apps/future_lunar_missions/sphere.tscn").instantiate()
-		
+	
+	var lunar_radius = $Moon.Radius
+	
+	sphere.mesh.radius = 0.5*lunar_radius/10
+	sphere.mesh.height = lunar_radius/10
 	sphere.translate(spherical_to_cartesian(r, lat, lon))
 	
 	var material = StandardMaterial3D.new()
@@ -84,7 +86,7 @@ func _on_texture_rect_gui_input(event):
 			
 			var pos: Vector2 = 2*(event.position/size - Vector2(0.5, 0.5))*scale_adjustment
 			
-			add_sphere(3, pos.y, pos.x)
+			add_sphere($Moon.Radius, pos.y, pos.x)
 			print("Clicked at: ", pos)
 			
 		else:
@@ -94,7 +96,7 @@ func _on_texture_rect_gui_input(event):
 			
 		var pos: Vector2 = 2*(event.position/size - Vector2(0.5, 0.5))*scale_adjustment
 		
-		pointer.position = spherical_to_cartesian(3, pos.y, pos.x)
+		pointer.position = spherical_to_cartesian($Moon.Radius, pos.y, pos.x)
 		
 	print(event)
 	pass # Replace with function body.
