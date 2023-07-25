@@ -101,8 +101,7 @@ func _unhandled_input(event):
 func _input(event):
 	if Input.is_action_just_pressed("ui_cancel"):
 		SceneManager.no_effect_change_scene("back")
-		
-	
+			
 	if Input.is_action_just_pressed("select_player"):
 		emit_signal("create_player")
 	elif Input.is_action_just_pressed("select_spacecraft"):
@@ -131,10 +130,19 @@ func _input(event):
 		
 		var camera_spring_length = Input.get_action_strength("plus") - Input.get_action_strength("minus")
 		
-		cam.spring_length(camera_spring_length)
+		if event is InputEventMouseButton:
+			if event.button_index == MOUSE_BUTTON_WHEEL_UP:
+				print("Mouse wheel scrolled up!")
+				camera_spring_length += -2
+				
+			elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+				print("Mouse wheel scrolled down!")
+				camera_spring_length += 2
 		
-		if camera_move.length_squared() > 0.0:
-			cam.rotate_relative(camera_move)
+		
+		cam.spring_length(camera_spring_length)
+		cam.rotate_relative(camera_move)
+			
 	
 	if target is lnPlayer:
 		var player: lnPlayer = target
