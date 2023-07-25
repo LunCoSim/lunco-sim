@@ -1,8 +1,0 @@
-[gd_resource type="FontFile" load_steps=2 format=3]
-
-[ext_resource type="FontFile" uid="uid://c177taai71iuw" path="res://apps/whiteboard/lorien/Assets/Fonts/Inter-Regular.ttf" id="1"]
-
-[resource]
-size = 14
-use_filter = true
-font_data = ExtResource( 1 )

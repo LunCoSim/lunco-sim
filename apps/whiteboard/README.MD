@@ -1,1 +1,0 @@
-This app is based on [Lorien](https://github.com/mbrlabs/Lorien)
