@@ -1,5 +1,5 @@
 [submodule "addons/lunco-content"]
-	path = addons/lunco-content
+	path = content
 	url = https://github.com/LunCoSim/lunco-content.git
 	pushurl = git@github.com:LunCoSim/lunco-content.git
 [submodule "addons/lunco-cameras"]
