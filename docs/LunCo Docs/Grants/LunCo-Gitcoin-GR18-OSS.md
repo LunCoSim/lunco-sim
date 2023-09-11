@@ -1,13 +1,14 @@
+_**Opensource software advancing industrial  and  robotics engineering for Lunar Settlement  Management**_
 
-# LunCo
-
-_**Open-source software advancing industrial & robotics engineering for future Lunar Settlement**_
 
 LunCo harnesses professional space engineers' expertise to create a project focusing on decentralized engineering. Its comprehensive toolkit caters to various hardware or robotics projects, making it an all-encompassing solution.
 
+**In other words, LunCo brings web3 into Space Engineering!**
+
 ## The first public server is launched!
 [![Multiuser](https://pbs.twimg.com/media/F00eAcsacAMlxMt?format=jpg&name=large)](https://twitter.com/LunCoSim/status/1679031437780201472)
-
+[![Multiuser](https://pbs.twimg.com/media/F1DgvAgagAAbEEa?format=jpg&name=medium )](https://twitter.com/LunCoSim/status/1679031437780201472)
+Huge shoutout to [Philip Linden](https://twitter.com/PhilipJLinden) for helping with [tests](https://twitter.com/LunCoSim/status/1679031437780201472)!
 ## Why Web3?
 
 Web3 technology allows decentralization, which is crucial as engineering work is often dispersed across various teams. 
@@ -26,11 +27,13 @@ Through LunCo, we aim to:
 ## Roadmap & Features
 
 ### Work in progress
+
 1. Real sized map of the Moon based on NASA Data. Working on Procedure Quad Sphere to make it possible
 2. Visualization of the upcoming lunar missions
 3.  Import of URDF files - widely used format for robots description
 
 ### Next steps
+
 1. Assets e.g. models sharing via IPFS and libp2p
 2. Integration with wallets
 3. User content discovery via  IP-NFT
@@ -59,7 +62,6 @@ Through LunCo, we aim to:
 10. [Discussions on Github](https://github.com/orgs/LunCoSim/discussions)
 
 ## FAQ
-
 
 **Q: The vision for LunCo is a multiplanetary, sustainable, solarpunk future. Agree?**
 
@@ -97,7 +99,7 @@ A: Be a part of our mission to establish a settlement on the moon!
 
 **Q: How can I donate?**
 
-A: Visit our [Gitcoin Grantee Portal](https://gitcoin.notion.site/Gitcoin-Grantee-Portal-6adfc92627474bd48a5dfcd1e8438d20) or [Project on Giveth](https://giveth.io/project/lunco-a-full-cycle-space-operations-sim-tool).
+A: Visit [Gitcoin Grantee Portal](https://gitcoin.notion.site/Gitcoin-Grantee-Portal-6adfc92627474bd48a5dfcd1e8438d20) or [Project on Giveth](https://giveth.io/project/lunco-a-full-cycle-space-operations-sim-tool).
 
 **Q: The need for a [Gitcoin Passport](https://passport.gitcoin.co/)?**
 
@@ -167,3 +169,6 @@ Hey, it's Rod Mamin, founder of LunCo. I'm professional space systems engineer, 
 To learn more about IPFS with [CTO Pylyp Radionov](https://www.linkedin.com/in/ACoAACRHJEoBxz7c-h46YFuDMi5uTm_0_94ydpA?lipi=urn%3Ali%3Apage%3Acompanies_company_posts_index%3B5738fc21-da5d-4484-9f2c-96f280058179) of Copernicspace [we won the ETHGlobal HackFS prize for the best application of IPFS](https://www.linkedin.com/posts/copernic-space_democratising-space-and-digitising-endangered-activity-7079043156557598720-vM5V?utm_source=share&utm_medium=member_desktop) with a service https://unid.store
 
 I've being working fulltime on Lunar Exploration since 2018, including [First Walking Robot for Moon ](https://www.youtube.com/watch?v=Fko0VZNO8DM)as COO
+
+And now with a group of amazing professionals we are launching a [DeSpace Quadratic Fund](https://giveth.io/project/despace-qf-regenerative-space-exploration) to support decentralized space exploration!
+
