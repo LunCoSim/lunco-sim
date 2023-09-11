@@ -10,7 +10,7 @@ func _plugging():
 	
 
 	#Importers
-	plug("timothyqiu/godot-csv-data-importer")
+	plug("timothyqiu/godot-csv-data-importer") # TBD Update to
 	plug("elenakrittik/GodotXML")
 
 	#Nodes & Behaviour
@@ -22,6 +22,5 @@ func _plugging():
 	plug("godot-extended-libraries/godot-debug-menu")
 
 	## Libraries
-	# plug("maktoobgar/scene_manager") #TBD to change when fixed https://github.com/maktoobgar/scene_manager/issues/9
-	plug("LunCoSim/scene_manager", {"branch"="path-to-scenes"}) ## Scene manager, 
+	plug("maktoobgar/scene_manager") ## Scene manager
 	plug("PunchablePlushie/godot-game-settings") ## Game settings
