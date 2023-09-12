@@ -58,9 +58,12 @@ transform = Transform3D(-0.77664, 0, -0.629944, 0, 1, 0, 0.629944, 0, -0.77664, 
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1.871, 21, 0)
 
 [node name="DirectionalLight3D" type="DirectionalLight3D" parent="World"]
-transform = Transform3D(0.998916, 0.0393323, 0.0248946, -0.0465486, 0.844057, 0.534229, 0, -0.534809, 0.844973, 16.5556, 21.7776, 74.0474)
+transform = Transform3D(0.998916, 0.0393323, 0.0248946, -0.0465486, 0.844057, 0.534229, 0, -0.534809, 0.844973, 23.6206, 15.0269, 75.8578)
 shadow_enabled = true
 shadow_transmittance_bias = 0.01
+directional_shadow_fade_start = 1.0
+directional_shadow_max_distance = 344.5
+directional_shadow_pancake_size = 1.8
 
 [node name="Langrenus_LP" parent="World" instance=ExtResource("3_iqdh5")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 31.5747, 2.37504, 57.0209)
