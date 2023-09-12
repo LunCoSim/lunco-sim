@@ -1,6 +1,7 @@
 ## List of used addons for gd-plug
-## After adding addon run install_addons.sh
-extends "res://addons/gd-plug/plug.gd"
+## After adding addon run ./install_addons.sh
+
+extends "res://addons/gd-plug/plug.gd" ## it's the only addon to be added to git, the rest are managed by it
 
 func _plugging():
 	#UI
@@ -10,7 +11,7 @@ func _plugging():
 	
 
 	#Importers
-	plug("timothyqiu/godot-csv-data-importer") # TBD Update to
+	plug("timothyqiu/godot-csv-data-importer") # TBD Update to IVoyager tsv importer
 	plug("elenakrittik/GodotXML")
 
 	#Nodes & Behaviour

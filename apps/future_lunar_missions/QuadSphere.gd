@@ -21,7 +21,9 @@ var radius = 1737400 #meters
 var rescale = Radius / radius
 
 #
-var sphere
+var sphere: QuadSphere
+
+var _camera
 
 var faces = {
 		"X+": {
@@ -58,8 +60,17 @@ var faces = {
 	
 #------------------------------------------
 func _ready():
+	
 	print("Rescale: ", rescale)
 	_update_mesh()
+
+
+func _process(delta):
+	sphere._update(_camera)
+	
+#		print("Distance: ", cam.global_position.length())
+
+#------------------------------------------
 
 func _update_subdivsions(value):
 	Subdivisions = value
@@ -74,7 +85,32 @@ func _update_strenth(value):
 	_update_mesh()
 
 #------------------------------------------	
+
+func _find_camera(from: Array, exclude, cameras: Array):
+	for node in from:
+		if node != exclude:
+			_find_camera(node.get_children(), exclude, cameras)
+		if node is Camera3D:
+			cameras.append(node)
+	
+func _grab_camera():
+	if Engine.is_editor_hint():
+		var a = EditorScript.new()
+		var i = a.get_editor_interface()
+		
+		var cameras = []
+		
+		_find_camera(i.get_editor_main_screen().get_children(), i.get_edited_scene_root(), cameras)
+		
+		if cameras.size():
+			_camera = cameras[0]
+	else:
+		_camera = get_viewport().get_camera_3d()
+		
 func _update_mesh():
+	_grab_camera()
+	print("Update mesh: ", _camera)
+	
 	if sphere:
 		self.remove_child(sphere.Xp.mesh)
 		self.remove_child(sphere.Xm.mesh)
@@ -85,7 +121,6 @@ func _update_mesh():
 		
 	sphere = QuadSphere.new(Radius, Subdivisions)
 	
-	
 	self.add_child(sphere.Xp.mesh)
 	self.add_child(sphere.Xm.mesh)
 	self.add_child(sphere.Yp.mesh)
@@ -93,73 +128,6 @@ func _update_mesh():
 	self.add_child(sphere.Zp.mesh)
 	self.add_child(sphere.Zm.mesh)
 	
-	pass
-#	mesh = create_quad_sphere(Subdivisions, Radius)
-#
-#	var material = StandardMaterial3D.new()
-#	material.vertex_color_use_as_albedo = true
-#	if mesh != null:
-#		for i in range(mesh.get_surface_count()):
-#			mesh.surface_set_material(i, material)
-
-#------------------------------------------
-
-func create_quad_sphere(subdivisions:int, radius:float):
-	
-	var quad_sphere = ArrayMesh.new()
-	
-	for key in faces.keys():
-		
-		var face = faces[key]
-		var baseCube = PlaneMesh.new()
-		baseCube.orientation = face["orientation"]
-		baseCube.size = Vector2(1, 1)
-		
-		baseCube.subdivide_depth = subdivisions
-	#	baseCube.subdivide_height = subdivisions #For Quad
-		baseCube.subdivide_width = subdivisions
-		
-	#	baseCube.transla
-		
-		var surfaces = baseCube.get_surface_count()
-		
-		print("Surfaces: ", surfaces)
-		
-		for i in range(surfaces):
-			var array = baseCube.surface_get_arrays(i)
-			var vertices = array[Mesh.ARRAY_VERTEX]
-			var uvs = array[Mesh.ARRAY_TEX_UV]
-			var normals = array[Mesh.ARRAY_NORMAL]
-			var colors = []
-
-			#here we apply transformation
-			for j in range(vertices.size()):
-				vertices[j] = vertices[j]+ 0.5*abs(face["modifier"])
-				
-				if face["modifier"].x <0:
-					vertices[j] = vertices[j].rotated(Vector3(0, 1, 0), PI)
-				elif face["modifier"].y <0:
-					vertices[j] = vertices[j].rotated(Vector3(0, 0, 1), PI)
-				elif face["modifier"].z <0:
-					vertices[j] = vertices[j].rotated(Vector3(1, 0, 0), PI)
-				
-				
-				vertices[j] = (vertices[j]*(1-Strength) + Strength*vertices[j].normalized()) * radius
-				
-				uvs[j] = calculate_uv(vertices[j], Radius)
-				normals[j] = calculate_normals(vertices[j])
-				
-				colors.append(face["color"])
-				
-
-			array[Mesh.ARRAY_VERTEX] = vertices
-			array[Mesh.ARRAY_TEX_UV] = uvs
-			array[Mesh.ARRAY_NORMAL] = normals
-			array[Mesh.ARRAY_COLOR] = PackedColorArray(colors)
-
-			quad_sphere.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, array)
-	
-	return quad_sphere
 
 #------------------------------------------
 
@@ -188,14 +156,26 @@ class QuadSphere:
 	var Zp: QuadPlane
 	var Zm: QuadPlane
 	
-	func _init(radius: float, subdivisions: int):
-		Xp = QuadPlane.new(Vector3(1, 0, 0), subdivisions, radius, Color(1, 0, 0))
-		Xm = QuadPlane.new(Vector3(-1, 0, 0), subdivisions, radius, Color(0.5, 0, 0))
-		Yp = QuadPlane.new(Vector3(0, 1, 0), subdivisions, radius, Color(0, 1, 0))
-		Ym = QuadPlane.new(Vector3(0, -1, 0), subdivisions, radius, Color(0, 0.5, 0))
-		Zp = QuadPlane.new(Vector3(0, 0, 1), subdivisions, radius, Color(0, 0, 1))
-		Zm = QuadPlane.new(Vector3(0, 0, -1), subdivisions, radius, Color(0, 0, 0.5))
+	var _planes:Array = []
 	
+	func _init(radius: float, subdivisions: int):
+		var size = Vector2(1, 1)
+		
+		Xp = QuadPlane.new(Vector3(1, 0, 0), Vector3(0.5, 0, 0), size, subdivisions, radius, Color(1, 0, 0))
+		Xm = QuadPlane.new(Vector3(-1, 0, 0), Vector3(0.5, 0, 0), size, subdivisions, radius, Color(0.5, 0, 0))
+		Yp = QuadPlane.new(Vector3(0, 1, 0), Vector3(0, 0.5, 0), size, subdivisions, radius, Color(0, 1, 0))
+		Ym = QuadPlane.new(Vector3(0, -1, 0), Vector3(0, 0.5, 0), size, subdivisions, radius, Color(0, 0.5, 0))
+		Zp = QuadPlane.new(Vector3(0, 0, 1), Vector3(0, 0, 0.5), size, subdivisions, radius, Color(0, 0, 1))
+		Zm = QuadPlane.new(Vector3(0, 0, -1), Vector3(0, 0, 0.5), size, subdivisions, radius, Color(0, 0, 0.5))
+		
+		_planes = [Xp, Xm, Yp, Ym, Zp, Zm]
+		
+	func _update(camera: Camera3D):
+		if Engine.get_process_frames() % 200 == 0:
+			print("Camera position: ", camera.global_position)
+			for plane in _planes:
+				plane._update(camera)
+		
 	## Destructor logic	
 	func _notification(what):
 		if what == NOTIFICATION_PREDELETE:
@@ -206,27 +186,66 @@ class QuadSphere:
 ## Class for one of the planes	
 class QuadPlane:
 	var _normal: Vector3
+	var _center: Vector3
+	var _size: Vector2
+	var _radius
+	var _strength
+	var _color
+	
+	var _level
+	
+	var _tl: QuadPlane #Top Left
+	var _tr: QuadPlane
+	var _bl: QuadPlane #Bottom Left
+	var _br: QuadPlane
+	
 	var mesh: MeshInstance3D
 	
-	func _init(normal: Vector3, subdivisions: int, radius:=1, color:=Color(1, 0, 0), Strength:=1.0):
+	func _init(normal: Vector3, center:Vector3, size: Vector2, subdivisions: int, radius:=1.0, color:=Color(1, 0, 0), level:int=0, Strength:=1.0):
+		print("Subdivisions: ", subdivisions)
 		_normal = normal
+		_center = center
+		_size = size
+		
+		_radius = radius
+		_color = color
+		
+		_level = level
+		
+		_strength = Strength
+		
+		if subdivisions > 0:
+			_tl = QuadPlane.new(normal, center, size/2, subdivisions-1, radius, color, level+1)
+			_tr = QuadPlane.new(normal, center, size/2, subdivisions-1, radius, color, level+1)
+			_bl = QuadPlane.new(normal, center, size/2, subdivisions-1, radius, color, level+1)
+			_br = QuadPlane.new(normal, center, size/2, subdivisions-1, radius, color, level+1)
+		
+		_gen_mesh()
+		
+		mesh.show()
+		if subdivisions == 0:
+			mesh.show()
+
+	## Generate visual mesh represenation		
+	func _gen_mesh():	
 		mesh = MeshInstance3D.new()
+		mesh.hide()
 		
 		var plane = ArrayMesh.new()
 	
 		var baseCube = PlaneMesh.new()
 		
-		if abs(normal.x) > 0:
+		if abs(_normal.x) > 0:
 			baseCube.orientation = PlaneMesh.FACE_X
-		elif abs(normal.y) > 0:
+		elif abs(_normal.y) > 0:
 			baseCube.orientation = PlaneMesh.FACE_Y
-		elif abs(normal.z) > 0:
+		elif abs(_normal.z) > 0:
 			baseCube.orientation = PlaneMesh.FACE_Z
 		
 		baseCube.size = Vector2(1, 1)
 		
-		baseCube.subdivide_depth = subdivisions
-		baseCube.subdivide_width = subdivisions
+		baseCube.subdivide_depth = 0
+		baseCube.subdivide_width = 0
 		
 		var surfaces = baseCube.get_surface_count()
 		
@@ -241,22 +260,22 @@ class QuadPlane:
 
 			#here we apply transformation
 			for j in range(vertices.size()):
-				vertices[j] = vertices[j]+ 0.5*abs(normal)
+				vertices[j] = vertices[j]+ 0.5*abs(_normal)
 				
-				if normal.x <0:
+				if _normal.x <0:
 					vertices[j] = vertices[j].rotated(Vector3(0, 1, 0), PI)
-				elif normal.y <0:
+				elif _normal.y <0:
 					vertices[j] = vertices[j].rotated(Vector3(0, 0, 1), PI)
-				elif normal.z <0:
+				elif _normal.z <0:
 					vertices[j] = vertices[j].rotated(Vector3(1, 0, 0), PI)
 				
 				
-				vertices[j] = (vertices[j]*(1-Strength) + Strength*vertices[j].normalized()) * radius
+				vertices[j] = (vertices[j]*(1-_strength) + _strength*vertices[j].normalized()) * _radius
 				
-				uvs[j] = QuadSphereNode.calculate_uv(vertices[j], radius)
+				uvs[j] = QuadSphereNode.calculate_uv(vertices[j], _radius)
 				normals[j] = QuadSphereNode.calculate_normals(vertices[j])
 				
-				colors.append(color)
+				colors.append(_color)
 				
 
 			array[Mesh.ARRAY_VERTEX] = vertices
@@ -278,7 +297,6 @@ class QuadPlane:
 		if what == NOTIFICATION_PREDELETE:
 			# destructor logic
 			pass
-
-## Final leaf	
-class QuadLeaf:
-	pass
+	
+	func _update(camera: Camera3D):
+		pass
