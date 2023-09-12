@@ -2,16 +2,16 @@
 
 [ext_resource type="Script" path="res://apps/sim/sim.gd" id="1_whsed"]
 [ext_resource type="PackedScene" uid="uid://c5dg7yq7hd7m0" path="res://core/nodes/avatar/avatar.tscn" id="2_misbc"]
-[ext_resource type="PackedScene" uid="uid://d8gbyf2xbd4m" path="res://addons/lunco-content/maps/Langrenus/langrenus_map.tscn" id="3_iqdh5"]
+[ext_resource type="PackedScene" uid="uid://d8gbyf2xbd4m" path="res://content/maps/Langrenus/langrenus_map.tscn" id="3_iqdh5"]
 [ext_resource type="Texture2D" uid="uid://c6v84yxrojl2k" path="res://addons/lunco-assets/ESO_-_Milky_Way.jpeg" id="4_xp8ii"]
-[ext_resource type="PackedScene" uid="uid://cpjdvh1eaof2y" path="res://addons/lunco-content/moonwards/buildings/nuclear-core/nuclear-core.escn" id="5_s4da8"]
-[ext_resource type="PackedScene" uid="uid://2f4aecforicx" path="res://addons/lunco-content/moonwards/buildings/satellite-dish/satellite-dish.escn" id="6_tkxs6"]
-[ext_resource type="PackedScene" uid="uid://6xgnbadqd0df" path="res://addons/lunco-content/moonwards/items/HexpaneWindow/HexpaneWindow.escn" id="7_l6oe6"]
-[ext_resource type="PackedScene" uid="uid://do1ecg5jve7wu" path="res://addons/lunco-content/moonwards/vehicles/rovers/AthleteRover/AthleteRover.escn" id="8_cevau"]
-[ext_resource type="PackedScene" uid="uid://dn5t73yi2rj4h" path="res://addons/lunco-content/moonwards/vehicles/rovers/SpiderCrane/SpiderCrane.escn" id="9_i4mt2"]
+[ext_resource type="PackedScene" uid="uid://cpjdvh1eaof2y" path="res://content/moonwards/buildings/nuclear-core/nuclear-core.escn" id="5_s4da8"]
+[ext_resource type="PackedScene" uid="uid://2f4aecforicx" path="res://content/moonwards/buildings/satellite-dish/satellite-dish.escn" id="6_tkxs6"]
+[ext_resource type="PackedScene" uid="uid://6xgnbadqd0df" path="res://content/moonwards/items/HexpaneWindow/HexpaneWindow.escn" id="7_l6oe6"]
+[ext_resource type="PackedScene" uid="uid://do1ecg5jve7wu" path="res://content/moonwards/vehicles/rovers/AthleteRover/AthleteRover.escn" id="8_cevau"]
+[ext_resource type="PackedScene" uid="uid://dn5t73yi2rj4h" path="res://content/moonwards/vehicles/rovers/SpiderCrane/SpiderCrane.escn" id="9_i4mt2"]
 [ext_resource type="Script" path="res://core/nodes/display3d/Display3D.gd" id="10_7183a"]
 [ext_resource type="PackedScene" uid="uid://d18c2gpps48r3" path="res://apps/editor/editor.tscn" id="11_pnwb2"]
-[ext_resource type="PackedScene" uid="uid://dd6tms8o0rilp" path="res://addons/lunco-content/moonwards/vehicles/rockets/NuclearPodShip/NuclearPodShip.escn" id="12_jy5dg"]
+[ext_resource type="PackedScene" uid="uid://dd6tms8o0rilp" path="res://content/moonwards/vehicles/rockets/NuclearPodShip/NuclearPodShip.escn" id="12_jy5dg"]
 
 [sub_resource type="PanoramaSkyMaterial" id="PanoramaSkyMaterial_6y8xe"]
 panorama = ExtResource("4_xp8ii")

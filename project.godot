@@ -25,7 +25,7 @@ DebugMenu="*res://addons/debug_menu/debug_menu.tscn"
 GGS="*res://addons/ggs/classes/ggs_globals.gd"
 Panku="*res://addons/panku_console/console.tscn"
 SceneManager="*res://addons/scene_manager/scene_manager.tscn"
-Scenes="*res://data/scene-manager/scenes.gd"
+Scenes="*res://addons/scene_manager/scenes.gd"
 
 [display]
 

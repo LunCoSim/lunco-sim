@@ -82,7 +82,7 @@ func get_operator():
 	return $Operator
 	
 #------------------------------------------
-func spawn(position, path="res://addons/lunco-content/spacex-starship/source/SpaceX_Starship.fbx"):
+func spawn(position, path="res://content/spacex-starship/source/SpaceX_Starship.fbx"):
 	var scene = load(path)
 	var instance = scene.instance()
 	

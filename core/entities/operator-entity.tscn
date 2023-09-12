@@ -11,6 +11,7 @@ albedo_color = Color(0, 0, 0, 1)
 properties/0/path = NodePath(".:position")
 properties/0/spawn = true
 properties/0/sync = true
+properties/0/watch = false
 
 [node name="Operator" instance=ExtResource("1_h12af")]
 script = ExtResource("2_36yj2")

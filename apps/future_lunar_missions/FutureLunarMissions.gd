@@ -1,6 +1,6 @@
 extends Node3D
 
-var missions = preload("res://addons/lunco-content/datasets/missions.csv")
+var missions = preload("res://content/datasets/missions.csv")
 var landings = []
 #print(missions.records)
 
