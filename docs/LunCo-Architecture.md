@@ -82,3 +82,8 @@ To start developing, you'll have to do several manual steps (later a script will
 	 -- UI: Contains all the windows
 	 -- SimManager: Current state of the simulation
 	 -- Avatar?
+
+
+## Notes
+
+Conceptually everything starts with a Blank Simulation, Main Menu is just an Overlay in the UI, and all the apps are just modules + a specific configuration of the simulation
