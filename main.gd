@@ -1,6 +1,6 @@
 extends Node
 
-var peer = ENetMultiplayerPeer.new()
+var net = LCNetworking.new()
 
 # Called when the node enters the scene tree for the first time.
 func _ready():
@@ -16,10 +16,7 @@ func _ready():
 
 
 # ------------------------------------
-## 
-func connect_to_server(ip: String, port: int):
-	peer.create_client(ip, port)
-	multiplayer.multiplayer_peer = peer
+
 
 func change_scene(scene: String):
 	SceneManager.no_effect_change_scene(scene)
@@ -30,8 +27,8 @@ func _on_sim_host_pressed():
 	StateManager.Username = %Username.text
 	
 	print("[INFO] _on_sim_host_pressed")
-	peer.create_server(9000)
-	multiplayer.multiplayer_peer = peer
+	
+#	net.host(9000)
 	
 	change_scene("sim")
 
@@ -40,7 +37,7 @@ func _on_sim_client_pressed():
 	var ip = %IP.text
 	var port = %Port.text.to_int()
 	
-	connect_to_server(ip, port)
+	net.connect_to_server(ip, port)
 	
 	change_scene("sim")
 	
@@ -49,7 +46,7 @@ func _on_yarm_pressed():
 
 func _on_connect_to_global_pressed():
 	#default global server
-	connect_to_server("langrenus.lunco.space", 9000)
+	net.connect_to_server("langrenus.lunco.space", 9000)
 	
 	change_scene("sim")
 

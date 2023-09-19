@@ -1,0 +1,19 @@
+[gd_scene load_steps=2 format=3 uid="uid://ckkho01avs00h"]
+
+[ext_resource type="Script" path="res://scenarios/future_lunar_missions/QuadSphere.gd" id="1_2p32u"]
+
+[node name="QuadSphere" type="Node3D"]
+transform = Transform3D(0.714933, 0, 0, 0, 0.714933, 0, 0, 0, 0.714933, -0.0359888, 0.181636, -0.00677919)
+script = ExtResource("1_2p32u")
+Subdivisions = 10
+Radius = 4.0
+
+[node name="SubViewport" type="SubViewport" parent="."]
+size = Vector2i(2048, 2048)
+
+[node name="Label" type="Label" parent="SubViewport"]
+offset_right = 40.0
+offset_bottom = 23.0
+theme_override_font_sizes/font_size = 256
+text = "1
+"

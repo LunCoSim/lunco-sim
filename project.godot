@@ -38,7 +38,7 @@ movie_writer/movie_file="/home/rod/Documents/lunco-movies/godot_output.avi"
 
 [editor_plugins]
 
-enabled=PackedStringArray("res://addons/csv-data-importer/plugin.cfg", "res://addons/debug_menu/plugin.cfg", "res://addons/gd-plug-ui/plugin.cfg", "res://addons/godot-idea-board/plugin.cfg", "res://addons/imjp94.yafsm/plugin.cfg", "res://addons/lunco-urdf/plugin.cfg", "res://addons/panku_console/plugin.cfg", "res://addons/scene_manager/plugin.cfg", "res://addons/terrain_3d/editor/plugin.cfg", "res://addons/ui_design_tool/plugin.cfg")
+enabled=PackedStringArray("res://addons/camera_preview/plugin.cfg", "res://addons/csv-data-importer/plugin.cfg", "res://addons/debug_menu/plugin.cfg", "res://addons/gd-plug-ui/plugin.cfg", "res://addons/godot-idea-board/plugin.cfg", "res://addons/imjp94.yafsm/plugin.cfg", "res://addons/lunco-urdf/plugin.cfg", "res://addons/panku_console/plugin.cfg", "res://addons/scene_manager/plugin.cfg", "res://addons/terrain_3d/editor/plugin.cfg", "res://addons/ui_design_tool/plugin.cfg")
 logger/log_enabled=true
 logger/log_stdout=true
 logger/level=31
@@ -441,10 +441,8 @@ toggle_console={
 
 [rendering]
 
-renderer/rendering_method="mobile"
 driver/threads/thread_model=2
-lights_and_shadows/directional_shadow/soft_shadow_filter_quality=3
-lights_and_shadows/directional_shadow/16_bits=false
+lights_and_shadows/directional_shadow/size=8192
 occlusion_culling/use_occlusion_culling=true
 
 [scene_manager]
