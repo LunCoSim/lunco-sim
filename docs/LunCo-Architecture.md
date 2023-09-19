@@ -73,3 +73,12 @@ To start developing, you'll have to do several manual steps (later a script will
 1. `applications` - contains applications, high-level stuff build based on the core, later could be in a seperate repo
 2. `addons` - folder for plugins, according to Godot suggestions
 3. `core` - core lunco code
+
+
+## Scene structure
+
+ Simulation
+	 -- Universe: Contains all bodies that has to be simulated
+	 -- UI: Contains all the windows
+	 -- SimManager: Current state of the simulation
+	 -- Avatar?
