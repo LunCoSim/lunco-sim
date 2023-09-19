@@ -1,17 +1,16 @@
 class_name lnAvatar
 extends lnSpaceSystem
 
-#@onready var lnMatrix = preload("res://../../base/matrix.gd")
-#
-#@onready var lnOperator = preload("res://../../base/operator.gd")
 
-signal create (path_to_scene)
+signal create(path_to_scene)
 
 signal create_operator
 signal create_player
 signal create_spacecraft
 
 signal ray_cast(from: Vector3, to: Vector3)
+
+signal target_changed()
 
 #-------------------------------
 const MOUSE_SENSITIVITY = 0.015
@@ -55,8 +54,9 @@ func set_ui(_ui=null):
 		
 		
 func clear_ui():
-	for n in ui.get_children():
-		ui.remove_child(n)
+	if ui:
+		for n in ui.get_children():
+			ui.remove_child(n)
 
 #-------------------------------
 
@@ -71,7 +71,7 @@ func clear_ui():
 # Matrix itself is a space system and can perform commands
 
 func _ready():
-	$UI.set_mouse_filter(Control.MOUSE_FILTER_PASS)
+	
 	print(target)
 	set_target(target)
 	set_camera(camera)
@@ -212,25 +212,21 @@ func _on_State_transited():
 	
 	if target is lnPlayer:
 		_ui = preload("res://core/ui/player-ui.tscn").instantiate()
-		$UI/Help/Target.text = "Target: Player"
 #			camera.remove_excluded_object(Spacecraft)
 		camera.set_spring_length(2.5)
 		target.set_camera(camera)
 	elif target is lnSpacecraft:
 		_ui = preload("res://core/ui/spacecraft-ui.tscn").instantiate()
-		$UI/Help/Target.text = "Target: Spacecraft"
 #			camera.add_excluded_object(Spacecraft)
 		camera.set_spring_length(50)
 	elif target is lnOperator:
 		_ui = preload("res://core/ui/operator-ui.tscn").instantiate()
 		_ui.model_selected.connect(_on_select_model)
-		$UI/Help/Target.text = "Target: Operator"
+		
 #				camera.remove_excluded_object(Spacecraft)
 		camera.set_spring_length(2.5)
-	else:
-		$UI/Help/Target.text = "Target: Planet"
-#		camera.set_spring_length(5000)
 	
+	self.emit_signal("target_changed", target)
 			
 	set_ui(_ui)
 	

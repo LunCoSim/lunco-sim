@@ -1,7 +1,9 @@
-[gd_scene load_steps=21 format=3 uid="uid://btfca8gppw043"]
+[gd_scene load_steps=23 format=3 uid="uid://btfca8gppw043"]
 
 [ext_resource type="Script" path="res://sim/sim.gd" id="1_thahp"]
 [ext_resource type="PackedScene" uid="uid://d8gbyf2xbd4m" path="res://content/maps/Langrenus/langrenus_map.tscn" id="2_7rofx"]
+[ext_resource type="Script" path="res://sim/UI.gd" id="2_c2e30"]
+[ext_resource type="PackedScene" uid="uid://c5dg7yq7hd7m0" path="res://core/nodes/avatar/avatar.tscn" id="2_o421v"]
 [ext_resource type="Texture2D" uid="uid://c6v84yxrojl2k" path="res://addons/lunco-assets/ESO_-_Milky_Way.jpeg" id="3_sc3vw"]
 [ext_resource type="PackedScene" uid="uid://cpjdvh1eaof2y" path="res://content/moonwards/buildings/nuclear-core/nuclear-core.escn" id="4_i7pui"]
 [ext_resource type="PackedScene" uid="uid://2f4aecforicx" path="res://content/moonwards/buildings/satellite-dish/satellite-dish.escn" id="5_vw5bc"]
@@ -144,6 +146,7 @@ up_vector_enabled = false
 script = ExtResource("1_thahp")
 
 [node name="UI" type="CanvasLayer" parent="."]
+script = ExtResource("2_c2e30")
 
 [node name="VBoxContainer" type="VBoxContainer" parent="UI"]
 anchors_preset = 3
@@ -238,9 +241,11 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -105.663, 0, 0)
 curve = SubResource("Curve3D_72rhe")
 
 [node name="PathFollow3D" type="PathFollow3D" parent="Universe/Path3D"]
-transform = Transform3D(-0.984744, 0, -0.17364, 0, 0.99987, 0, 0.173637, 0, -0.984766, 6.833, -12.5, -31.518)
+transform = Transform3D(-0.984744, 0, -0.17364, 0, 0.999861, 0, 0.173637, 0, -0.984766, 6.833, -12.5, -31.518)
 
 [node name="Camera3D" type="Camera3D" parent="Universe/Path3D/PathFollow3D"]
+
+[node name="Avatar" parent="." instance=ExtResource("2_o421v")]
 
 [node name="MultiplayerSpawner" type="MultiplayerSpawner" parent="."]
 _spawnable_scenes = PackedStringArray("res://core/entities/operator-entity.tscn", "res://core/entities/player-entity.tscn", "res://core/entities/starship-entity.tscn")
