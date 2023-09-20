@@ -40,12 +40,15 @@ size = Vector2(72, 40)
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_7rdsi"]
 albedo_texture = ExtResource("13_uptxe")
 normal_enabled = true
+normal_scale = 16.0
 normal_texture = ExtResource("14_e1otl")
 
 [sub_resource type="SphereMesh" id="SphereMesh_imesr"]
 material = SubResource("StandardMaterial3D_7rdsi")
 radius = 868700.0
 height = 1.7374e+06
+radial_segments = 128
+rings = 64
 
 [node name="sim" type="Node"]
 script = ExtResource("1_thahp")
@@ -81,7 +84,7 @@ environment = SubResource("Environment_7olaa")
 [node name="Moon" type="Node3D" parent="Universe/Sun/Earth"]
 
 [node name="LangrenusBase" type="Node3D" parent="Universe/Sun/Earth/Moon"]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1.34316, 21.4878, -0.168388)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1.3959, 21.6695, -0.559285)
 
 [node name="Langrenus_LP" parent="Universe/Sun/Earth/Moon/LangrenusBase" instance=ExtResource("2_7rofx")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 31.5747, 2.37504, 57.0209)
@@ -133,7 +136,7 @@ layout_direction = 1
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -63.3132, -26.196, 146.559)
 
 [node name="Globe" type="MeshInstance3D" parent="Universe/Sun/Earth/Moon"]
-transform = Transform3D(-0.657643, -0.74392, -0.118699, -0.196978, 0.321893, -0.926059, 0.727121, -0.585635, -0.358227, 0, -868072, 0)
+transform = Transform3D(-0.657643, -0.74392, -0.118699, -0.196978, 0.321893, -0.926059, 0.727121, -0.585635, -0.358227, 0, -868332, 0)
 mesh = SubResource("SphereMesh_imesr")
 
 [node name="SunLight" type="DirectionalLight3D" parent="Universe/Sun"]
