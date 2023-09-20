@@ -1,7 +1,7 @@
 [gd_scene load_steps=5 format=3 uid="uid://c82dl3dv3d3hb"]
 
-[ext_resource type="Script" path="res://main.gd" id="1_yf43x"]
-[ext_resource type="Texture2D" uid="uid://brwbsp6eop682" path="res://addons/lunco-assets/cover.png" id="2_jrfvr"]
+[ext_resource type="Script" path="res://menu/main_menu.gd" id="1_w3b0g"]
+[ext_resource type="Texture2D" uid="uid://brwbsp6eop682" path="res://addons/lunco-assets/cover.png" id="2_l3lmq"]
 
 [sub_resource type="SystemFont" id="SystemFont_g5bxx"]
 
@@ -9,7 +9,7 @@
 blend_mode = 4
 
 [node name="Main" type="Node"]
-script = ExtResource("1_yf43x")
+script = ExtResource("1_w3b0g")
 
 [node name="UI" type="CanvasLayer" parent="."]
 
@@ -20,7 +20,7 @@ anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
-texture = ExtResource("2_jrfvr")
+texture = ExtResource("2_l3lmq")
 expand_mode = 3
 
 [node name="Apps" type="VBoxContainer" parent="UI"]
