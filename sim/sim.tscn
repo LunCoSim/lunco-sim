@@ -55,58 +55,51 @@ text = "Sim app"
 
 [node name="Universe" type="Node3D" parent="."]
 
+[node name="WorldEnvironment" type="WorldEnvironment" parent="Universe"]
+environment = SubResource("Environment_7olaa")
+
 [node name="Sun" type="Node3D" parent="Universe"]
 
 [node name="Earth" type="Node3D" parent="Universe/Sun"]
 
 [node name="Moon" type="Node3D" parent="Universe/Sun/Earth"]
 
-[node name="Langrenus" type="Node3D" parent="Universe/Sun/Earth/Moon"]
+[node name="LangrenusBase" type="Node3D" parent="Universe/Sun/Earth/Moon"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1.34316, 21.4878, -0.168388)
 
-[node name="DirectionalLight3D" type="DirectionalLight3D" parent="Universe/Sun/Earth/Moon/Langrenus"]
-transform = Transform3D(0.998916, 0.0393323, 0.0248946, -0.0465486, 0.844057, 0.534229, 0, -0.534809, 0.844973, 23.6206, 15.0269, 75.8578)
-shadow_enabled = true
-shadow_blur = 0.1
-directional_shadow_blend_splits = true
-directional_shadow_max_distance = 300.0
-
-[node name="Langrenus_LP" parent="Universe/Sun/Earth/Moon/Langrenus" instance=ExtResource("2_7rofx")]
+[node name="Langrenus_LP" parent="Universe/Sun/Earth/Moon/LangrenusBase" instance=ExtResource("2_7rofx")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 31.5747, 2.37504, 57.0209)
 
-[node name="WorldEnvironment" type="WorldEnvironment" parent="Universe/Sun/Earth/Moon/Langrenus"]
-environment = SubResource("Environment_7olaa")
-
-[node name="nuclear-core" parent="Universe/Sun/Earth/Moon/Langrenus" instance=ExtResource("4_i7pui")]
+[node name="nuclear-core" parent="Universe/Sun/Earth/Moon/LangrenusBase" instance=ExtResource("4_i7pui")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -141.395, -20.6602, -8.34924)
 visible = false
 
-[node name="satellite-dish" parent="Universe/Sun/Earth/Moon/Langrenus" instance=ExtResource("5_vw5bc")]
+[node name="satellite-dish" parent="Universe/Sun/Earth/Moon/LangrenusBase" instance=ExtResource("5_vw5bc")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -99.9107, -33.905, 82.7524)
 
-[node name="HexpaneWindow" parent="Universe/Sun/Earth/Moon/Langrenus" instance=ExtResource("6_icrgr")]
+[node name="HexpaneWindow" parent="Universe/Sun/Earth/Moon/LangrenusBase" instance=ExtResource("6_icrgr")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -137.646, -33.8777, 75.2299)
 
-[node name="AthleteRover" parent="Universe/Sun/Earth/Moon/Langrenus" instance=ExtResource("7_iyh80")]
+[node name="AthleteRover" parent="Universe/Sun/Earth/Moon/LangrenusBase" instance=ExtResource("7_iyh80")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -153.215, -29.8606, 18.2701)
 
-[node name="AthleteRover2" parent="Universe/Sun/Earth/Moon/Langrenus" instance=ExtResource("7_iyh80")]
+[node name="AthleteRover2" parent="Universe/Sun/Earth/Moon/LangrenusBase" instance=ExtResource("7_iyh80")]
 transform = Transform3D(0.995631, -0.0933787, 0, 0.0933787, 0.995631, 0, 0, 0, 1, -79.4233, -30.3267, -27.6116)
 
-[node name="AthleteRover3" parent="Universe/Sun/Earth/Moon/Langrenus" instance=ExtResource("7_iyh80")]
+[node name="AthleteRover3" parent="Universe/Sun/Earth/Moon/LangrenusBase" instance=ExtResource("7_iyh80")]
 transform = Transform3D(0.999969, 0.00792359, 0, -0.00792359, 0.999969, 0, 0, 0, 1, -5.70623, -11.7022, -16.9707)
 
-[node name="SpiderCrane" parent="Universe/Sun/Earth/Moon/Langrenus" instance=ExtResource("8_pbee0")]
+[node name="SpiderCrane" parent="Universe/Sun/Earth/Moon/LangrenusBase" instance=ExtResource("8_pbee0")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -231.608, -33.6229, 148.77)
 
-[node name="SpiderCrane2" parent="Universe/Sun/Earth/Moon/Langrenus" instance=ExtResource("8_pbee0")]
+[node name="SpiderCrane2" parent="Universe/Sun/Earth/Moon/LangrenusBase" instance=ExtResource("8_pbee0")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -136.545, -32.9742, 150.173)
 
-[node name="SpawnPosition" type="Node3D" parent="Universe/Sun/Earth/Moon/Langrenus"]
+[node name="SpawnPosition" type="Node3D" parent="Universe/Sun/Earth/Moon/LangrenusBase"]
 unique_name_in_owner = true
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -103.103, -31.3941, 22.5669)
 
-[node name="Display3D" type="MeshInstance3D" parent="Universe/Sun/Earth/Moon/Langrenus"]
+[node name="Display3D" type="MeshInstance3D" parent="Universe/Sun/Earth/Moon/LangrenusBase"]
 transform = Transform3D(0.994254, 0, -0.107045, 0, 1, 0, 0.107045, 0, 0.994254, -30.8158, 12.1879, -39.6145)
 visible = false
 material_override = SubResource("StandardMaterial3D_cg4ar")
@@ -114,18 +107,25 @@ mesh = SubResource("QuadMesh_2gwpj")
 skeleton = NodePath("../../../../../..")
 script = ExtResource("9_kbh8q")
 
-[node name="SubViewport" type="SubViewport" parent="Universe/Sun/Earth/Moon/Langrenus/Display3D"]
+[node name="SubViewport" type="SubViewport" parent="Universe/Sun/Earth/Moon/LangrenusBase/Display3D"]
 size = Vector2i(1980, 1080)
 
-[node name="editor" parent="Universe/Sun/Earth/Moon/Langrenus/Display3D/SubViewport" instance=ExtResource("10_4hehs")]
+[node name="editor" parent="Universe/Sun/Earth/Moon/LangrenusBase/Display3D/SubViewport" instance=ExtResource("10_4hehs")]
 layout_direction = 1
 
-[node name="NuclearPodShip" parent="Universe/Sun/Earth/Moon/Langrenus" instance=ExtResource("11_vk7ar")]
+[node name="NuclearPodShip" parent="Universe/Sun/Earth/Moon/LangrenusBase" instance=ExtResource("11_vk7ar")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -63.3132, -26.196, 146.559)
+
+[node name="SunLight" type="DirectionalLight3D" parent="Universe/Sun"]
+transform = Transform3D(0.998916, 0.0393323, 0.0248946, -0.0465486, 0.844057, 0.534229, 0, -0.534809, 0.844973, 22.2774, 36.5147, 75.6894)
+shadow_enabled = true
+shadow_blur = 0.1
+directional_shadow_blend_splits = true
+directional_shadow_max_distance = 300.0
 
 [node name="MultiplayerSpawner" type="MultiplayerSpawner" parent="."]
 _spawnable_scenes = PackedStringArray("res://core/entities/operator-entity.tscn", "res://core/entities/player-entity.tscn", "res://core/entities/starship-entity.tscn")
-spawn_path = NodePath("../Universe/Sun/Earth/Moon/Langrenus/SpawnPosition")
+spawn_path = NodePath("../Universe/Sun/Earth/Moon/LangrenusBase/SpawnPosition")
 
 [node name="Avatar" parent="." instance=ExtResource("2_o421v")]
 transform = Transform3D(0.910522, 0.00499959, -0.41343, 0.00348538, 0.999798, 0.0197666, 0.413445, -0.0194389, 0.910321, -21.8111, 0.964943, 37.7913)

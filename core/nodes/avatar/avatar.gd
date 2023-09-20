@@ -89,11 +89,11 @@ func _unhandled_input(event):
 		print("Ray casting")
 		
 		var e: InputEventMouseButton = event
-		var position = e.position
+		var pos = e.position
 		
 		if camera:  
-			var from = camera.project_ray_origin(position)
-			var to = from + camera.project_ray_normal(position) * RAY_LENGTH
+			var from = camera.project_ray_origin(pos)
+			var to = from + camera.project_ray_normal(pos) * RAY_LENGTH
 			
 			emit_signal("ray_cast", from, to)	
 
@@ -104,6 +104,7 @@ func _input(event):
 			
 	if Input.is_action_just_pressed("select_player"):
 		emit_signal("create_player")
+		print("create_player")
 	elif Input.is_action_just_pressed("select_spacecraft"):
 		emit_signal("create_spacecraft")
 	elif Input.is_action_just_pressed("select_operator"):
