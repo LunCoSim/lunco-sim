@@ -1,6 +1,6 @@
 [gd_scene load_steps=7 format=3 uid="uid://bmqo4d60d70oc"]
 
-[ext_resource type="PackedScene" uid="uid://bihcxq7r6iqu" path="res://content/spacex-starship/SpaceX_Starship.tscn" id="1_six3u"]
+[ext_resource type="PackedScene" uid="uid://id12h35uqejc" path="res://content/spacex-starship/SpaceX_Starship.tscn" id="1_six3u"]
 [ext_resource type="Script" path="res://core/entities/starship-entity.gd" id="2_bo2xd"]
 [ext_resource type="PackedScene" uid="uid://btw1pbsrpnjx4" path="res://core/controllers/spacecraft/spacecraft-controller.tscn" id="2_h3rj8"]
 
@@ -8,20 +8,24 @@
 properties/0/path = NodePath(".:position")
 properties/0/spawn = true
 properties/0/sync = true
+properties/0/watch = false
 properties/1/path = NodePath(".:rotation")
 properties/1/spawn = true
 properties/1/sync = true
+properties/1/watch = false
 properties/2/path = NodePath("Exhaust:visible")
 properties/2/spawn = true
 properties/2/sync = true
+properties/2/watch = false
 
-[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_21vv0"]
-albedo_color = Color(1, 0.215686, 0, 1)
+[sub_resource type="FogMaterial" id="FogMaterial_t4afa"]
+density = 8.0
+albedo = Color(0, 0, 0, 1)
+emission = Color(100, 0, 0, 1)
 
-[sub_resource type="CylinderMesh" id="CylinderMesh_vj756"]
-top_radius = 4.0
-bottom_radius = 2.0
-height = 8.0
+[sub_resource type="Environment" id="Environment_i0tdu"]
+volumetric_fog_enabled = true
+volumetric_fog_density = 0.0
 
 [node name="SpaceX_Starship" instance=ExtResource("1_six3u")]
 transform = Transform3D(4.37114e-08, 3.82137e-15, 1, 8.74228e-08, -1, 0, 1, 8.74228e-08, -4.37114e-08, 0, 0, 0)
@@ -38,10 +42,14 @@ transform = Transform3D(1.91069e-15, 4.37115e-08, 1, 1, -4.37115e-08, 0, 4.37114
 [node name="MultiplayerSynchronizer" type="MultiplayerSynchronizer" parent="." index="3"]
 replication_config = SubResource("SceneReplicationConfig_l7sxw")
 
-[node name="Exhaust" type="MeshInstance3D" parent="." index="4"]
-transform = Transform3D(0.999999, 0, -3.82137e-15, 3.82137e-15, 4.37114e-08, 1, 0, -1, 4.37114e-08, -1.25323e-06, -1.09561e-13, -28.6707)
+[node name="Exhaust" type="FogVolume" parent="." index="4"]
+transform = Transform3D(1, 0, 0, 0, -4.37114e-08, -1, 0, 1, -4.37114e-08, 1.3245e-07, 1.15792e-14, -26.9699)
 visible = false
-material_override = SubResource("StandardMaterial3D_21vv0")
-mesh = SubResource("CylinderMesh_vj756")
+size = Vector3(10, 20, 50)
+shape = 1
+material = SubResource("FogMaterial_t4afa")
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="." index="5"]
+environment = SubResource("Environment_i0tdu")
 
 [connection signal="thrusted" from="SpacecraftController" to="." method="_on_spacecraft_controller_thrusted"]

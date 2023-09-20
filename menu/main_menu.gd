@@ -1,6 +1,6 @@
 extends Node
 
-var net = LCNetworking.new()
+var net = LCNetworking.new() 
 
 # Called when the node enters the scene tree for the first time.
 func _ready():
