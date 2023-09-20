@@ -1,5 +1,3 @@
-# Vote for us on [Gitcoin GG18 OSS Round](https://explorer.gitcoin.co/#/round/10/0x8de918f0163b2021839a8d84954dd7e8e151326d/0x8de918f0163b2021839a8d84954dd7e8e151326d-75)
-
 # LunCo
 
 LunCo is an open-source engineering software for Lunar Settlement design built with Godot 4.
@@ -56,4 +54,4 @@ LunCo provides a set of opensource applications for Lunar Base engineering inclu
 8. [Founder's Twitter](https://twitter.com/_Difint_)
 
 
-**PS You can support project with a donation on [Giveth](https://giveth.io/project/lunco-collaborative-engineering?referrer_id=0hWfCeRLhwayen8MGBaZGP0CLZv1)**
+# Like the project? Support it with a donation on [Giveth.io](https://giveth.io/project/lunco-collaborative-engineering?referrer_id=0hWfCeRLhwayen8MGBaZGP0CLZv1) and get ~70% back in GIV tokens
