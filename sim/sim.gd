@@ -1,5 +1,7 @@
 extends Node
 
+
+#
 var PlayerEntity := preload("res://core/entities/player-entity.tscn")
 var OperatorEntity := preload("res://core/entities/operator-entity.tscn")
 var SpacecraftEntity := preload("res://core/entities/starship-entity.tscn")
@@ -8,6 +10,10 @@ var SpacecraftEntity := preload("res://core/entities/starship-entity.tscn")
 var players = {}
 var entities = []
 
+func _init():
+	# Hack for compatibility with IVoyager
+	IVGlobal.settings.gui_size = 1
+	
 # Called when the node enters the scene tree for the first time.
 func _ready():
 	if multiplayer.is_server():
@@ -21,6 +27,7 @@ func _ready():
 		multiplayer.connection_failed.connect(on_server_connection_failed)
 		multiplayer.connected_to_server.connect(on_server_connected)
 		multiplayer.server_disconnected.connect(on_server_disconnected)
+	
 	
 	
 
@@ -116,7 +123,7 @@ func _on_multiplayer_spawner_spawned(node):
 
 func _on_avatar_ray_cast(from: Vector3, to: Vector3):
 	
-	var space_state = $World.get_world_3d().direct_space_state
+	var space_state = $Universe.get_world_3d().direct_space_state
 	
 	#tbd, probably because of multithreading
 #	if space_state:

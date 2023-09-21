@@ -1,6 +1,7 @@
-[gd_scene load_steps=3 format=3 uid="uid://c5dg7yq7hd7m0"]
+[gd_scene load_steps=4 format=3 uid="uid://c5dg7yq7hd7m0"]
 
 [ext_resource type="Script" path="res://core/nodes/avatar/avatar.gd" id="1_lcnht"]
+[ext_resource type="PackedScene" path="res://ivoyager/gui_mods/control_draggable.tscn" id="3_bx822"]
 [ext_resource type="PackedScene" uid="uid://b24kp6klp25h5" path="res://addons/lunco-cameras/spring-arm-camera/spring-arm-camera.tscn" id="7_037i5"]
 
 [node name="Avatar" type="Node3D"]
@@ -48,3 +49,5 @@ text = "3 – Select operator"
 [node name="Spawn" type="Label" parent="UI/Help"]
 layout_mode = 2
 text = "` – console "
+
+[node name="ControlDraggable" parent="UI" instance=ExtResource("3_bx822")]
