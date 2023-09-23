@@ -33,7 +33,8 @@ func _ready():
 
 # Called every frame. 'delta' is the elapsed time since the previous frame.
 func _process(delta):
-	pass
+	$Universe.position -= $Avatar.position
+	$Avatar.position = Vector3.ZERO
 
 ## Signal processing
 
@@ -80,7 +81,7 @@ func add_player(id):
 @rpc("any_peer", "call_local")
 func spawn(_entity: EntitiesDB.Entities): #TBD think of a class entity
 	var id = multiplayer.get_remote_sender_id()
-	print("add_operator remoteid: ", id, " local id: ", multiplayer.get_unique_id())
+	print("spawn remoteid: ", id, " local id: ", multiplayer.get_unique_id(), " entity:", _entity)
 	
 	var found := false
 	
@@ -94,12 +95,22 @@ func spawn(_entity: EntitiesDB.Entities): #TBD think of a class entity
 
 		entity.set_multiplayer_authority(id)
 		
-		%SpawnPosition.add_child(entity)
+		%SpawnPosition.add_child(entity, true)
 
 		_on_multiplayer_spawner_spawned(entity)
 
 		send_message.rpc(str(id), " has joined the game", false)
+	else:
+		var entity = Entities.make_entity(_entity)
+		
 
+#		entity.set_multiplayer_authority(id)
+		
+		%SpawnPosition.add_child(entity, true)
+
+		_on_multiplayer_spawner_spawned(entity)
+
+		send_message.rpc(str(id), " has joined the game", false)
 	
 #----------
 # Signals from Avatar
@@ -131,8 +142,16 @@ func _on_avatar_ray_cast(from: Vector3, to: Vector3):
 	query.exclude = [self]
 	var result = space_state.intersect_ray(query)
 	
-	
 	if result:
+		
+		if result.collider is StaticBody3D:
+			var starship= SpacecraftEntity.instantiate()
+			starship.position = result.position
+			
+			$Universe.add_child(starship)
+		else:
+			$Avatar.set_target(result.collider)
+		
+		
 		print(" Selected: ", result)
 #			emit_signal("ray_hit", res["position"])
-pass # Replace with function body.

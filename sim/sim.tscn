@@ -73,6 +73,7 @@ layout_mode = 2
 text = "Sim app"
 
 [node name="Universe" type="Node3D" parent="."]
+unique_name_in_owner = true
 
 [node name="WorldEnvironment" type="WorldEnvironment" parent="Universe"]
 environment = SubResource("Environment_7olaa")
@@ -151,7 +152,7 @@ _spawnable_scenes = PackedStringArray("res://core/entities/operator-entity.tscn"
 spawn_path = NodePath("../Universe/Sun/Earth/Moon/LangrenusBase/SpawnPosition")
 
 [node name="Avatar" parent="." instance=ExtResource("2_o421v")]
-transform = Transform3D(0.910522, 0.00499959, -0.41343, 0.00348538, 0.999798, 0.0197666, 0.413445, -0.0194389, 0.910321, -21.8111, 9.66247, 37.7913)
+transform = Transform3D(0.910522, 0.00499959, -0.41343, 0.00348538, 0.999798, 0.0197666, 0.413445, -0.0194389, 0.910321, 66.8264, 44.5945, -85.4302)
 
 [connection signal="spawned" from="MultiplayerSpawner" to="." method="_on_multiplayer_spawner_spawned"]
 [connection signal="create_operator" from="Avatar" to="." method="_on_create_operator"]
