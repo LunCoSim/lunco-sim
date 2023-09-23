@@ -1,4 +1,4 @@
-LunCo addresses **Real World issue of Space Engineers** but in a web3 way. At it's core LunCo is an opensource simulation tool to plan Space missions, ultimately - Settlement on the Moon.
+uLunCo addresses **Real World issue of Space Engineers** but in a web3 way. At it's core LunCo is an opensource simulation tool to plan Space missions, ultimately - Settlement on the Moon.
 
 Engineers would be able to design the missions in the metaverse and share it with using web3 tools, like issuing IP-NFT for the published design.
 
