@@ -2,13 +2,9 @@
 
 [ext_resource type="Script" path="res://core/ui/operator-ui.gd" id="1"]
 
-[node name="OperatorUI" type="Control"]
+[node name="OperatorUI" type="CanvasLayer"]
 layout_mode = 3
-anchors_preset = 15
-anchor_right = 1.0
-anchor_bottom = 1.0
-grow_horizontal = 2
-grow_vertical = 2
+anchors_preset = 0
 script = ExtResource("1")
 
 [node name="Help" type="VBoxContainer" parent="."]
@@ -34,5 +30,8 @@ text = "Spawn: click on terrain"
 
 [node name="Files" type="Tree" parent="."]
 layout_mode = 0
+anchor_top = 1.0
+anchor_bottom = 1.0
+grow_vertical = 0
 
 [connection signal="cell_selected" from="Files" to="." method="_on_Files_cell_selected"]
