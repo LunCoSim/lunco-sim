@@ -16,9 +16,7 @@ anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 
-[node name="TargetUI" type="Control" parent="UI"]
-anchors_preset = 0
-offset_right = 144.0
+[node name="TargetUI" type="CanvasLayer" parent="UI"]
 
 [node name="Help" type="VBoxContainer" parent="UI"]
 layout_mode = 1

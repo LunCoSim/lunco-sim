@@ -1,4 +1,4 @@
-extends CanvasLayer
+extends Control
 
 signal model_selected(path)
 

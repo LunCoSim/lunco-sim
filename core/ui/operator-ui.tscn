@@ -2,7 +2,7 @@
 
 [ext_resource type="Script" path="res://core/ui/operator-ui.gd" id="1"]
 
-[node name="OperatorUI" type="CanvasLayer"]
+[node name="OperatorUI" type="Control"]
 layout_mode = 3
 anchors_preset = 0
 script = ExtResource("1")
