@@ -5,6 +5,7 @@
 [node name="OperatorUI" type="Control"]
 layout_mode = 3
 anchors_preset = 0
+mouse_filter = 1
 script = ExtResource("1")
 
 [node name="Help" type="VBoxContainer" parent="."]
