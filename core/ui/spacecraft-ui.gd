@@ -1,4 +1,4 @@
-extends Control
+extends CanvasLayer
 
 @export var Target: Node3D
 
