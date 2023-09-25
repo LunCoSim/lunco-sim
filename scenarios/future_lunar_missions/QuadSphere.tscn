@@ -5,7 +5,7 @@
 [node name="QuadSphere" type="Node3D"]
 transform = Transform3D(0.714933, 0, 0, 0, 0.714933, 0, 0, 0, 0.714933, -0.0359888, 0.181636, -0.00677919)
 script = ExtResource("1_2p32u")
-Subdivisions = 10
+Subdivisions = 1
 Radius = 4.0
 
 [node name="SubViewport" type="SubViewport" parent="."]
