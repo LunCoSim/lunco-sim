@@ -146,8 +146,8 @@ func _on_avatar_ray_cast(from: Vector3, to: Vector3):
 		
 		if result.collider is StaticBody3D:
 			var starship= SpacecraftEntity.instantiate()
-			starship.position = result.position
-			
+			starship.position = $Universe.to_local(result.position) + Vector3(0, 1, 0)
+
 			$Universe.add_child(starship)
 		else:
 			$Avatar.set_target(result.collider)
