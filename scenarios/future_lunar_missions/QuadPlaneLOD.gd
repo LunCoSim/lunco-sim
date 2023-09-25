@@ -11,11 +11,20 @@ extends Node3D
 @export var LodLevel := 1 : set = set_lod_level
 
 var plane: QuadPlane
+var camera: Camera3D
 
 ## Godot class functions
 func _ready():
 	_rebuild()
+	camera = self._grab_camera()
 
+func _process(_delta):
+	if camera:
+		if Engine.get_process_frames() % 100 == 0:
+#			print("Camera position: ", camera.global_position)
+			plane._update(camera)
+			
+	
 ## Setters
 
 func set_subdivisions(_subdivisions):
@@ -49,7 +58,33 @@ func _rebuild():
 	plane.add_to_parent(self)
 	plane.show_lod_level(LodLevel)
 
+#------------------------------------------
 
+static func _find_camera(from: Array, exclude, cameras: Array):
+	for node in from:
+		if node != exclude:
+			_find_camera(node.get_children(), exclude, cameras)
+		if node is Camera3D:
+			cameras.append(node)
+	
+func _grab_camera() -> Camera3D:
+	var _camera: Camera3D
+	
+	if Engine.is_editor_hint():
+		var a = EditorScript.new()
+		var i = a.get_editor_interface()
+		
+		var cameras = []
+		
+		_find_camera(i.get_editor_main_screen().get_children(), i.get_edited_scene_root(), cameras)
+		
+		if cameras.size():
+			_camera = cameras[0]
+	else:
+		_camera = get_viewport().get_camera_3d()
+	
+	return _camera
+	
 #-----------------------------------
 	
 ## Class for one of the planes	
@@ -206,4 +241,30 @@ class QuadPlane:
 			pass
 	
 	func _update(camera: Camera3D):
-		print("Quad dist: ", self._center.distance_to(camera.position))
+		var global_center = self.mesh.global_transform * self._center
+		var dist = global_center.distance_to(camera.global_transform.origin)
+
+		var lod_thresholds = [20, 40, 70, 100, 120]
+		var _show_level = 0  # Default to the highest detail (lowest LOD)
+
+		# Determine the appropriate LOD level based on the distance
+		for i in range(1, lod_thresholds.size()):
+			if dist > lod_thresholds[i-1] and dist <= lod_thresholds[i]:
+				_show_level = i
+				break
+
+		# If the current LOD matches the desired one, show this quad and hide all children
+		if self._level == _show_level:
+			self.mesh.show()
+			_hide_all_children()
+		else:
+			self.mesh.hide()
+			for plane in _planes:
+				plane._update(camera)
+
+
+	# Helper method to hide all child quads
+	func _hide_all_children():
+		for plane in _planes:
+			plane.mesh.hide()
+			plane._hide_all_children() # Recursively hide all descendants

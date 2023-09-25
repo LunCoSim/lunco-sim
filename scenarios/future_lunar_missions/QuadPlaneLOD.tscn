@@ -3,7 +3,7 @@
 [ext_resource type="Script" path="res://scenarios/future_lunar_missions/QuadPlaneLOD.gd" id="1_jiv0n"]
 
 [node name="QuadPlaneLOD" type="Node3D"]
+transform = Transform3D(0.999999, 0, 0, 0, 1, 0, 0, 0, 0.999999, 0, 0, 0)
 script = ExtResource("1_jiv0n")
 Subdivisions = 4
-Size = Vector2(1000, 1000)
-LodLevel = 3
+Size = Vector2(100, 100)
