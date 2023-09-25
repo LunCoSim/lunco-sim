@@ -25,4 +25,4 @@ If you have work completed, please describe it below and include links where pos
 
 If you have work you are planning to do, please describe it below and include estimates of how much time (in hours) you expect it will take
 
-To make DeSpace round happen a lot of things has to be done: grantee onboarding, promotion, and of course fundraising. It's an ongoing job, and I'm spending on it ~25% of my time.
+To make DeSpace QF round happen a lot of things has to be done: grantee onboarding, promotion, and of course fundraising. It's an ongoing job, and I'm spending on it ~25% of my time.
