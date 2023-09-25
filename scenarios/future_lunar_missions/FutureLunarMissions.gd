@@ -36,7 +36,7 @@ func _ready():
 
 
 func add_sphere(r, lat, lon, color=Color(1, 1, 1)):
-	var sphere : Node3D = preload("res://apps/future_lunar_missions/sphere.tscn").instantiate()
+	var sphere : Node3D = preload("res://scenarios/future_lunar_missions/sphere.tscn").instantiate()
 	
 	var lunar_radius = $Moon.Radius
 	
