@@ -16,7 +16,7 @@ var camera: Camera3D
 ## Godot class functions
 func _ready():
 	_rebuild()
-	camera = self._grab_camera()
+	camera = LCUtil.grab_camera()
 
 func _process(_delta):
 	if camera:
@@ -32,7 +32,7 @@ func set_subdivisions(_subdivisions):
 	_rebuild()
 	
 func set_lod_level(_lod_level):
-	print("set_lod_level")
+#	print("set_lod_level")
 	LodLevel = _lod_level
 	if plane:
 		plane.show_lod_level(LodLevel)
@@ -60,31 +60,7 @@ func _rebuild():
 
 #------------------------------------------
 
-static func _find_camera(from: Array, exclude, cameras: Array):
-	for node in from:
-		if node != exclude:
-			_find_camera(node.get_children(), exclude, cameras)
-		if node is Camera3D:
-			cameras.append(node)
-	
-func _grab_camera() -> Camera3D:
-	var _camera: Camera3D
-	
-	if Engine.is_editor_hint():
-		var a = EditorScript.new()
-		var i = a.get_editor_interface()
-		
-		var cameras = []
-		
-		_find_camera(i.get_editor_main_screen().get_children(), i.get_edited_scene_root(), cameras)
-		
-		if cameras.size():
-			_camera = cameras[0]
-	else:
-		_camera = get_viewport().get_camera_3d()
-	
-	return _camera
-	
+
 #-----------------------------------
 	
 ## Class for one of the planes	
@@ -108,7 +84,7 @@ class QuadPlane:
 	var mesh: MeshInstance3D
 	
 	func _init(normal: Vector3, center:Vector3, size: Vector2, subdivisions: int, radius:=1.0, color:=Color(1, 0, 0), level:int=0, Strength:=0.0):
-		print("Subdivisions: ", subdivisions)
+#		print("Subdivisions: ", subdivisions)
 		_normal = normal
 		_center = center
 		_size = size
@@ -151,7 +127,7 @@ class QuadPlane:
 			
 		var surfaces = baseCube.get_surface_count()
 			
-		print("Surfaces: ", surfaces)
+#		print("Surfaces: ", surfaces)
 			
 		for i in range(surfaces):
 			var array = baseCube.surface_get_arrays(i)
@@ -208,7 +184,7 @@ class QuadPlane:
 	
 	#-----------------
 	func show_lod_level(lod_level:=1):
-		print("show lod level: ", lod_level, " ", self._level)
+#		print("show lod level: ", lod_level, " ", self._level)
 		if self._level == lod_level:
 			self.mesh.show()
 		else:
