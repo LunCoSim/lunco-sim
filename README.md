@@ -16,13 +16,13 @@ Our vision is to provide a comprehensive suite of open-source applications tailo
 ## 🚀 Features
 
 1. **Lunar 3D Mapping**: Dive into a high-resolution 3D map of the Moon, offering unparalleled detail and accuracy. Plan your missions with precision, leveraging real lunar spatial data for an immersive experience.
-    
+	
 2. **Collaborative Mission Design**: Work in real-time with fellow space engineers from around the world. Share, discuss, and refine your lunar mission designs in a collaborative metaverse, powered by web3 tools.
-    
+	
 3. **IP-NFT for Designs**: Protect and monetize your innovative space mission designs by issuing them as Intellectual Property Non-Fungible Tokens (IP-NFTs). Showcase your expertise and gain recognition in the space engineering community.
-    
+	
 4. **Decentralized Engineer Profiles**: Create your decentralized engineer profile. Manage access, showcase your projects, and connect with peers in a secure and transparent manner.
-    
+	
 5. **Interactive Training Modules**: Engage in hands-on training sessions within the LunCo platform. Simulate real-world lunar scenarios, test your designs, and receive instant feedback, all within a dynamic and interactive environment.
 
 ## 🛠 Installation
