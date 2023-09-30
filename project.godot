@@ -11,8 +11,9 @@ config_version=5
 [application]
 
 config/name="LunCo"
+config/version="0.0.1"
 run/main_scene="res://main.tscn"
-config/features=PackedStringArray("4.1", "GL Compatibility")
+config/features=PackedStringArray("4.2", "GL Compatibility")
 boot_splash/bg_color=Color(0, 0, 0, 1)
 boot_splash/image="res://addons/lunco-assets/logos/splash.png"
 config/icon="res://icon.svg"
@@ -42,7 +43,7 @@ movie_writer/movie_file="/home/rod/Documents/lunco-movies/godot_output.avi"
 
 [editor_plugins]
 
-enabled=PackedStringArray("res://addons/camera_preview/plugin.cfg", "res://addons/debug_menu/plugin.cfg", "res://addons/gd-plug-ui/plugin.cfg", "res://addons/godot-idea-board/plugin.cfg", "res://addons/imjp94.yafsm/plugin.cfg", "res://addons/ivoyager_table_importer/plugin.cfg", "res://addons/lunco-urdf/plugin.cfg", "res://addons/panku_console/plugin.cfg", "res://addons/scene_manager/plugin.cfg", "res://addons/terrain_3d/editor/plugin.cfg", "res://addons/ui_design_tool/plugin.cfg")
+enabled=PackedStringArray("res://addons/camera_preview/plugin.cfg", "res://addons/debug_menu/plugin.cfg", "res://addons/gd-plug-ui/plugin.cfg", "res://addons/godot-idea-board/plugin.cfg", "res://addons/imjp94.yafsm/plugin.cfg", "res://addons/ivoyager_table_importer/plugin.cfg", "res://addons/lunco-urdf/plugin.cfg", "res://addons/scene_manager/plugin.cfg", "res://addons/terrain_3d/plugin.cfg", "res://addons/ui_design_tool/plugin.cfg")
 logger/log_enabled=true
 logger/log_stdout=true
 logger/level=31
