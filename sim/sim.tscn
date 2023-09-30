@@ -1,4 +1,4 @@
-[gd_scene load_steps=23 format=3 uid="uid://btfca8gppw043"]
+[gd_scene load_steps=20 format=3 uid="uid://btfca8gppw043"]
 
 [ext_resource type="Script" path="res://sim/sim.gd" id="1_thahp"]
 [ext_resource type="PackedScene" uid="uid://d8gbyf2xbd4m" path="res://content/maps/Langrenus/langrenus_map.tscn" id="2_7rofx"]
@@ -13,8 +13,7 @@
 [ext_resource type="Script" path="res://core/nodes/display3d/Display3D.gd" id="9_kbh8q"]
 [ext_resource type="PackedScene" uid="uid://d18c2gpps48r3" path="res://scenarios/editor/editor.tscn" id="10_4hehs"]
 [ext_resource type="PackedScene" uid="uid://dd6tms8o0rilp" path="res://content/moonwards/vehicles/rockets/NuclearPodShip/NuclearPodShip.escn" id="11_vk7ar"]
-[ext_resource type="Texture2D" uid="uid://3ea06e1tvhmb" path="res://content/lroc_color_poles_16k.png" id="13_uptxe"]
-[ext_resource type="Texture2D" uid="uid://bplkcqq5js08v" path="res://content/planets/ldem_16_normal_map.png" id="14_e1otl"]
+[ext_resource type="PackedScene" uid="uid://l6cfv385r5qt" path="res://sim/lunar_globe.tscn" id="13_xcvhp"]
 
 [sub_resource type="PanoramaSkyMaterial" id="PanoramaSkyMaterial_6y8xe"]
 panorama = ExtResource("3_sc3vw")
@@ -36,19 +35,6 @@ cull_mode = 2
 
 [sub_resource type="QuadMesh" id="QuadMesh_2gwpj"]
 size = Vector2(72, 40)
-
-[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_7rdsi"]
-albedo_texture = ExtResource("13_uptxe")
-normal_enabled = true
-normal_scale = 16.0
-normal_texture = ExtResource("14_e1otl")
-
-[sub_resource type="SphereMesh" id="SphereMesh_imesr"]
-material = SubResource("StandardMaterial3D_7rdsi")
-radius = 868700.0
-height = 1.7374e+06
-radial_segments = 128
-rings = 64
 
 [node name="sim" type="Node"]
 script = ExtResource("1_thahp")
@@ -85,7 +71,7 @@ environment = SubResource("Environment_7olaa")
 [node name="Moon" type="Node3D" parent="Universe/Sun/Earth"]
 
 [node name="LangrenusBase" type="Node3D" parent="Universe/Sun/Earth/Moon"]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1.3959, 21.6695, -0.559285)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -127212, -7482.49, -0.559285)
 
 [node name="Langrenus_LP" parent="Universe/Sun/Earth/Moon/LangrenusBase" instance=ExtResource("2_7rofx")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 31.5747, 2.37504, 57.0209)
@@ -136,9 +122,8 @@ layout_direction = 1
 [node name="NuclearPodShip" parent="Universe/Sun/Earth/Moon/LangrenusBase" instance=ExtResource("11_vk7ar")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -63.3132, -26.196, 146.559)
 
-[node name="Globe" type="MeshInstance3D" parent="Universe/Sun/Earth/Moon"]
-transform = Transform3D(-0.657643, -0.74392, -0.118699, -0.196978, 0.321893, -0.926059, 0.727121, -0.585635, -0.358227, 0, -868332, 0)
-mesh = SubResource("SphereMesh_imesr")
+[node name="LunarGlobe" parent="Universe/Sun/Earth/Moon" instance=ExtResource("13_xcvhp")]
+transform = Transform3D(-0.314553, -0.915379, -0.251274, -0.196978, 0.321893, -0.926059, 0.928577, -0.241799, -0.281562, 0, -866686, 0)
 
 [node name="SunLight" type="DirectionalLight3D" parent="Universe/Sun"]
 transform = Transform3D(0.998916, 0.0393323, 0.0248946, -0.0465486, 0.844057, 0.534229, 0, -0.534809, 0.844973, 22.2774, 36.5147, 75.6894)
@@ -159,3 +144,5 @@ transform = Transform3D(0.910522, 0.00499959, -0.41343, 0.00348538, 0.999798, 0.
 [connection signal="create_player" from="Avatar" to="." method="_on_create_character"]
 [connection signal="create_spacecraft" from="Avatar" to="." method="_on_create_spacecraft"]
 [connection signal="ray_cast" from="Avatar" to="." method="_on_avatar_ray_cast"]
+
+[editable path="Universe/Sun/Earth/Moon/LunarGlobe"]
