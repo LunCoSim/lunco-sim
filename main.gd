@@ -1,6 +1,12 @@
 ## This is a starting script
 extends Node
 
+
+func _init():
+	# Hack for compatibility with IVoyager
+	IVGlobal.settings.gui_size = 1
+
+	
 func _ready():
 	if ("--server" in OS.get_cmdline_args()) or (OS.has_feature("server")):
 		print("Running in server mode")
