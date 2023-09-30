@@ -237,3 +237,6 @@ func _on_State_transited():
 func _on_select_model(path):
 	print("_on_select_model: ", path)
 #	spawn_model_path = path
+
+func camera_global_position():
+	return camera.global_position
