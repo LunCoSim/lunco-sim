@@ -27,14 +27,14 @@ func _ready():
 		Target.set_multiplayer_authority(str(Target.name).to_int())
 		
 func _physics_process(delta):
-	if Target.name == str(multiplayer.get_unique_id()):
-		if Target:
-			Target.apply_central_force(Target.transform.basis.z * Z_FRONT * thrust)
+	#if Target.name == str(multiplayer.get_unique_id()): TBD Find a better way to handle multiplayer authority
+	if Target:
+		Target.apply_central_force(Target.transform.basis.z * Z_FRONT * thrust)
 
-			Target.apply_torque(Target.global_transform.basis.x * torque.x * THRUST_TURN * Z_FRONT)
-			Target.apply_torque(Target.global_transform.basis.y * torque.y * THRUST_TURN * Z_FRONT)
-			Target.apply_torque(Target.global_transform.basis.z * torque.z * THRUST_ROLL * Z_FRONT)
-	
+		Target.apply_torque(Target.global_transform.basis.x * torque.x * THRUST_TURN * Z_FRONT)
+		Target.apply_torque(Target.global_transform.basis.y * torque.y * THRUST_TURN * Z_FRONT)
+		Target.apply_torque(Target.global_transform.basis.z * torque.z * THRUST_ROLL * Z_FRONT)
+
 	
 
 # ------------
