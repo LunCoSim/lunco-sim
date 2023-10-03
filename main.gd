@@ -4,7 +4,8 @@ extends Node
 
 func _init():
 	# Hack for compatibility with IVoyager
-	IVGlobal.settings.gui_size = 1
+	#IVGlobal.settings.gui_size = 1
+	pass
 
 	
 func _ready():
