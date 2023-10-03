@@ -20,11 +20,11 @@ config/icon="res://icon.svg"
 
 [autoload]
 
+Panku="*res://addons/panku_console/console.tscn"
 Entities="*res://core/singletones/EntitiesDB.gd"
 StateManager="*res://core/singletones/state-manager.gd"
 DebugMenu="*res://addons/debug_menu/debug_menu.tscn"
 GGS="*res://addons/ggs/classes/ggs_globals.gd"
-Panku="*res://addons/panku_console/console.tscn"
 SceneManager="*res://addons/scene_manager/scene_manager.tscn"
 Scenes="*res://addons/scene_manager/scenes.gd"
 IVGlobal="res://ivoyager/singletons/global.gd"
