@@ -6,7 +6,3 @@
 	path = addons/lunco-cameras
 	url = https://github.com/LunCoSim/lunco-cameras.git
     pushurl = git@github.com:LunCoSim/lunco-cameras.git
-[submodule "addons/lunco-urdf"]
-	path = addons/lunco-urdf
-	url = https://github.com/LunCoSim/lunco-urdf.git
-	pushurl = git@github.com:LunCoSim/lunco-urdf.git
