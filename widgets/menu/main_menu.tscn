@@ -1,45 +1,16 @@
-[gd_scene load_steps=5 format=3 uid="uid://c82dl3dv3d3hb"]
-
-[ext_resource type="Script" path="res://menu/main_menu.gd" id="1_w3b0g"]
-[ext_resource type="Texture2D" uid="uid://brwbsp6eop682" path="res://content/cover.png" id="2_l3lmq"]
+[gd_scene load_steps=2 format=3 uid="uid://c82dl3dv3d3hb"]
 
 [sub_resource type="SystemFont" id="SystemFont_g5bxx"]
 
-[sub_resource type="CanvasItemMaterial" id="CanvasItemMaterial_u6be5"]
-blend_mode = 4
-
-[node name="Main" type="Node"]
-script = ExtResource("1_w3b0g")
-
-[node name="UI" type="CanvasLayer" parent="."]
-
-[node name="BackgroundImage" type="TextureRect" parent="UI"]
-layout_direction = 1
-anchors_preset = 15
-anchor_right = 1.0
-anchor_bottom = 1.0
-grow_horizontal = 2
-grow_vertical = 2
-texture = ExtResource("2_l3lmq")
-expand_mode = 3
-
-[node name="Apps" type="VBoxContainer" parent="UI"]
-anchors_preset = 6
-anchor_left = 1.0
-anchor_top = 0.5
-anchor_right = 1.0
-anchor_bottom = 0.5
-offset_left = -318.0
-offset_top = -103.0
-offset_bottom = 103.0
-grow_horizontal = 0
-grow_vertical = 2
+[node name="Apps" type="VBoxContainer"]
+offset_right = 233.0
+offset_bottom = 365.0
 alignment = 1
 
-[node name="Networking" type="VBoxContainer" parent="UI/Apps"]
+[node name="Networking" type="VBoxContainer" parent="."]
 layout_mode = 2
 
-[node name="IP" type="LineEdit" parent="UI/Apps/Networking"]
+[node name="IP" type="LineEdit" parent="Networking"]
 unique_name_in_owner = true
 layout_mode = 2
 theme_override_colors/font_color = Color(0.956863, 0.956863, 0.956863, 1)
@@ -47,95 +18,46 @@ theme_override_fonts/font = SubResource("SystemFont_g5bxx")
 text = "127.0.0.1"
 placeholder_text = "IP"
 
-[node name="Port" type="LineEdit" parent="UI/Apps/Networking"]
+[node name="Port" type="LineEdit" parent="Networking"]
 unique_name_in_owner = true
 layout_mode = 2
 text = "9000"
 placeholder_text = "Port"
 
-[node name="Username" type="LineEdit" parent="UI/Apps/Networking"]
+[node name="Username" type="LineEdit" parent="Networking"]
 unique_name_in_owner = true
 layout_mode = 2
 text = "Username"
 placeholder_text = "Username"
 
-[node name="Label" type="Label" parent="UI/Apps"]
+[node name="Label" type="Label" parent="."]
 layout_mode = 2
+mouse_filter = 1
 
-[node name="SimHost" type="Button" parent="UI/Apps"]
+[node name="SimHost" type="Button" parent="."]
 layout_mode = 2
 text = "Host Simulation"
 
-[node name="SimClient" type="Button" parent="UI/Apps"]
+[node name="SimClient" type="Button" parent="."]
 layout_mode = 2
 text = "Connect to Simulation"
 
-[node name="ConnectToGlobal" type="Button" parent="UI/Apps"]
+[node name="ConnectToGlobal" type="Button" parent="."]
 layout_mode = 2
 text = "Connect to Global Simulation"
 
-[node name="Label2" type="Label" parent="UI/Apps"]
+[node name="Label2" type="Label" parent="."]
 layout_mode = 2
+mouse_filter = 1
 
-[node name="Text Editor" type="Button" parent="UI/Apps"]
+[node name="Text Editor" type="Button" parent="."]
 layout_mode = 2
 text = "Text Editor"
 
-[node name="Whiteboard" type="Button" parent="UI/Apps"]
+[node name="Whiteboard" type="Button" parent="."]
 layout_mode = 2
 text = "Whiteboard"
 
-[node name="Future Missions" type="Button" parent="UI/Apps"]
+[node name="Future Missions" type="Button" parent="."]
 layout_mode = 2
 text = "Future Missions"
-
-[node name="Upcoming" type="VBoxContainer" parent="UI"]
-visible = false
-material = SubResource("CanvasItemMaterial_u6be5")
-anchors_preset = -1
-anchor_left = 0.245
-anchor_top = 0.378
-anchor_right = 1.0
-anchor_bottom = 1.0
-offset_left = 657.4
-offset_top = 239.84
-offset_right = 1.0
-offset_bottom = -7.0
-grow_horizontal = 0
-grow_vertical = 0
-
-[node name="Label" type="Label" parent="UI/Upcoming"]
-layout_mode = 2
-text = "Upcoming applications"
-
-[node name="Yarm" type="Button" parent="UI/Upcoming"]
-layout_mode = 2
-text = " Requirements Management  (TBD)"
-
-[node name="MBSE" type="Button" parent="UI/Upcoming"]
-layout_mode = 2
-text = "MBSE (TBD)"
-
-[node name="Kanban" type="Button" parent="UI/Upcoming"]
-layout_mode = 2
-text = "Kanban (TBD)"
-
-[node name="Database" type="Button" parent="UI/Upcoming"]
-layout_mode = 2
-text = "Databases (TBD)"
-
-[node name="OrbitalMechanics" type="Button" parent="UI/Upcoming"]
-layout_mode = 2
-text = "OrbitalMechanics (TBD)"
-
-[connection signal="pressed" from="UI/Apps/SimHost" to="." method="_on_sim_host_pressed"]
-[connection signal="pressed" from="UI/Apps/SimClient" to="." method="_on_sim_client_pressed"]
-[connection signal="pressed" from="UI/Apps/ConnectToGlobal" to="." method="_on_connect_to_global_pressed"]
-[connection signal="pressed" from="UI/Apps/Text Editor" to="." method="_on_text_editor_pressed"]
-[connection signal="pressed" from="UI/Apps/Whiteboard" to="." method="_on_whiteboard_pressed"]
-[connection signal="pressed" from="UI/Apps/Future Missions" to="." method="_on_future_missions_pressed"]
-[connection signal="pressed" from="UI/Upcoming/Yarm" to="." method="_on_yarm_pressed"]
-[connection signal="pressed" from="UI/Upcoming/MBSE" to="." method="_on_yarm_pressed"]
-[connection signal="pressed" from="UI/Upcoming/Kanban" to="." method="_on_yarm_pressed"]
-[connection signal="pressed" from="UI/Upcoming/Database" to="." method="_on_yarm_pressed"]
-[connection signal="pressed" from="UI/Upcoming/OrbitalMechanics" to="." method="_on_yarm_pressed"]
