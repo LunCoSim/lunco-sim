@@ -1,6 +1,6 @@
 [gd_scene load_steps=2 format=3 uid="uid://d1ksgc5qn7ifd"]
 
-[ext_resource type="Script" path="res://sim/machine_role_container_ui.gd" id="1_6u04x"]
+[ext_resource type="Script" path="res://widgets/machine_role_container_ui.gd" id="1_6u04x"]
 
 [node name="MachineRoleContainer" type="VBoxContainer"]
 anchors_preset = 3

@@ -1,9 +1,9 @@
 [gd_scene load_steps=20 format=3 uid="uid://btfca8gppw043"]
 
 [ext_resource type="Script" path="res://sim/sim.gd" id="1_thahp"]
-[ext_resource type="PackedScene" uid="uid://dniml0evqbs6v" path="res://sim/sim-ui.tscn" id="2_5h5ks"]
+[ext_resource type="PackedScene" uid="uid://dniml0evqbs6v" path="res://ui/sim-ui.tscn" id="2_5h5ks"]
 [ext_resource type="PackedScene" uid="uid://d8gbyf2xbd4m" path="res://content/maps/Langrenus/langrenus_map.tscn" id="2_7rofx"]
-[ext_resource type="PackedScene" uid="uid://c5dg7yq7hd7m0" path="res://core/entities/avatar.tscn" id="2_o421v"]
+[ext_resource type="PackedScene" uid="uid://c5dg7yq7hd7m0" path="res://entities/avatar.tscn" id="2_o421v"]
 [ext_resource type="Texture2D" uid="uid://c6v84yxrojl2k" path="res://content/ESO_-_Milky_Way.jpeg" id="3_sc3vw"]
 [ext_resource type="PackedScene" uid="uid://cpjdvh1eaof2y" path="res://content/moonwards/buildings/nuclear-core/nuclear-core.escn" id="4_i7pui"]
 [ext_resource type="PackedScene" uid="uid://2f4aecforicx" path="res://content/moonwards/buildings/satellite-dish/satellite-dish.escn" id="5_vw5bc"]
@@ -116,7 +116,6 @@ shadow_blur = 0.1
 directional_shadow_max_distance = 400.0
 
 [node name="MultiplayerSpawner" type="MultiplayerSpawner" parent="."]
-_spawnable_scenes = PackedStringArray("res://core/entities/operator-entity.tscn", "res://core/entities/player-entity.tscn", "res://core/entities/starship-entity.tscn")
 spawn_path = NodePath("../Universe/Sun/Earth/Moon/LangrenusBase/SpawnPosition")
 
 [node name="Avatar" parent="." instance=ExtResource("2_o421v")]

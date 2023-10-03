@@ -1,7 +1,7 @@
 [gd_scene load_steps=3 format=3 uid="uid://bko8sxuql5v50"]
 
-[ext_resource type="Script" path="res://core/ui/spacecraft-ui.gd" id="1"]
-[ext_resource type="PackedScene" uid="uid://dbwb14u15aac2" path="res://core/widgets/stopwatch.tscn" id="3"]
+[ext_resource type="Script" path="res://ui/spacecraft-ui.gd" id="1"]
+[ext_resource type="PackedScene" uid="uid://dbwb14u15aac2" path="res://widgets/stopwatch.tscn" id="3"]
 
 [node name="SpacecraftUI" type="Control"]
 layout_mode = 3

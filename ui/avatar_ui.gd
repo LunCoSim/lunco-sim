@@ -29,12 +29,12 @@ func clear_ui():
 func set_target(target):
 	
 	if target is lnPlayer:
-		_ui = preload("res://core/ui/player-ui.tscn").instantiate()
+		_ui = preload("res://ui/player-ui.tscn").instantiate()
 	elif target is lnSpacecraft:
-		_ui = preload("res://core/ui/spacecraft-ui.tscn").instantiate()
+		_ui = preload("res://ui/spacecraft-ui.tscn").instantiate()
 	elif target is lnOperator:
-		_ui = preload("res://core/ui/operator-ui.tscn").instantiate()
+		_ui = preload("res://ui/operator-ui.tscn").instantiate()
 	
-	if _ui:
-		_ui.set_target(target) #controller specific function
+	#if _ui:
+		#_ui.set_target(target) #controller specific function
 	set_ui(_ui)

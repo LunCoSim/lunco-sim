@@ -1,12 +1,12 @@
 [gd_scene load_steps=2 format=3 uid="uid://b3gpndx4k2rfa"]
 
-[ext_resource type="Script" path="res://core/ui/operator-ui.gd" id="1"]
+[ext_resource type="Script" path="res://ui/operator-ui.gd" id="1_cttv1"]
 
 [node name="OperatorUI" type="Control"]
 layout_mode = 3
 anchors_preset = 0
 mouse_filter = 1
-script = ExtResource("1")
+script = ExtResource("1_cttv1")
 
 [node name="Help" type="VBoxContainer" parent="."]
 layout_mode = 0
