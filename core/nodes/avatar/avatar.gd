@@ -129,7 +129,7 @@ func _input(event):
 				camera_spring_length += 2
 
 
-		cam.spring_length(camera_spring_length)
+		cam.inc_spring_length(camera_spring_length)
 		cam.rotate_relative(camera_move)
 
 
