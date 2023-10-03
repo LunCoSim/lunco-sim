@@ -6,7 +6,11 @@ var entities = []
 
 # Called when the node enters the scene tree for the first time.
 func _ready():
-	pass
+	var menu = preload("res://widgets/menu/main_menu.tscn").instantiate()
+	var win: PankuLynxWindow = Panku.windows_manager.create_window(menu)
+	win.size = menu.get_minimum_size() + win._window_title_container.get_minimum_size()
+	win.set_window_title_text("Main menu")
+	win.show_window()
 	
 # Called every frame. 'delta' is the elapsed time since the previous frame.
 func _process(delta):
