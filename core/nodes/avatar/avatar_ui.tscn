@@ -1,0 +1,44 @@
+[gd_scene load_steps=2 format=3 uid="uid://wdnxqhctneyv"]
+
+[ext_resource type="Script" path="res://core/nodes/avatar/avatar_ui.gd" id="1_7qa7n"]
+
+[node name="UI" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+script = ExtResource("1_7qa7n")
+
+[node name="TargetUI" type="CanvasLayer" parent="."]
+
+[node name="Help" type="VBoxContainer" parent="."]
+layout_mode = 1
+anchors_preset = 1
+anchor_left = 1.0
+anchor_right = 1.0
+offset_left = -144.0
+offset_bottom = 146.0
+grow_horizontal = 0
+
+[node name="Target" type="Label" parent="Help"]
+layout_mode = 2
+text = "Target: "
+
+[node name="Orientation" type="Label" parent="Help"]
+layout_mode = 2
+text = "1 – Select player"
+
+[node name="CamRotate" type="Label" parent="Help"]
+layout_mode = 2
+text = "2 – Select Starship"
+
+[node name="CamDistance" type="Label" parent="Help"]
+layout_mode = 2
+text = "3 – Select operator"
+
+[node name="Spawn" type="Label" parent="Help"]
+layout_mode = 2
+text = "` – console "

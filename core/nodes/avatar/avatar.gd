@@ -25,7 +25,7 @@ var mouse_control := false
 
 #-------------------------------
 # Defining UI and camera variables
-@onready var ui := $UI/TargetUI
+@onready var ui := $UI
 @onready var camera := $SpringArmCamera
 
 #-------------------------------
@@ -54,18 +54,7 @@ func set_camera(_camera):
 	if camera:
 		camera.set_current()
 
-# Function set_ui clears the ui and sets target if ui exists
-func set_ui(_ui=null):
-	clear_ui()
-	if(_ui):
-		ui.add_child(_ui)
-		_ui.set_target(target)
 
-# Function clear_ui removes child items if ui exists	
-func clear_ui():
-	if ui:
-		for n in ui.get_children():
-			ui.remove_child(n)
 
 #-------------------------------
 # Defining different functions for handling player controls like select, rotate, move, etc.
@@ -195,21 +184,17 @@ func _on_State_transited():
 	var _ui = null
 
 	if target is lnPlayer:
-		_ui = preload("res://core/ui/player-ui.tscn").instantiate()
 		camera.set_spring_length(2.5)
 		target.set_camera(camera)
 	elif target is lnSpacecraft:
-		_ui = preload("res://core/ui/spacecraft-ui.tscn").instantiate()
 		camera.set_spring_length(50)
 	elif target is lnOperator:
-		_ui = preload("res://core/ui/operator-ui.tscn").instantiate()
-		_ui.model_selected.connect(_on_select_model)
-
+		#_ui.model_selected.connect(_on_select_model)
 		camera.set_spring_length(2.5)
 
 	self.emit_signal("target_changed", target)
 
-	set_ui(_ui)
+	ui.set_target(target)
 
 	if camera != null:
 		camera.target = target

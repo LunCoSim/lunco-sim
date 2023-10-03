@@ -1,6 +1,7 @@
-[gd_scene load_steps=3 format=3 uid="uid://c5dg7yq7hd7m0"]
+[gd_scene load_steps=4 format=3 uid="uid://c5dg7yq7hd7m0"]
 
 [ext_resource type="Script" path="res://core/nodes/avatar/avatar.gd" id="1_lcnht"]
+[ext_resource type="PackedScene" uid="uid://wdnxqhctneyv" path="res://core/nodes/avatar/avatar_ui.tscn" id="3_rhqrp"]
 [ext_resource type="PackedScene" uid="uid://b24kp6klp25h5" path="res://addons/lunco-cameras/spring-arm-camera/spring-arm-camera.tscn" id="7_037i5"]
 
 [node name="Avatar" type="Node3D"]
@@ -8,42 +9,4 @@ script = ExtResource("1_lcnht")
 
 [node name="SpringArmCamera" parent="." instance=ExtResource("7_037i5")]
 
-[node name="UI" type="Control" parent="."]
-layout_mode = 3
-anchors_preset = 15
-anchor_right = 1.0
-anchor_bottom = 1.0
-grow_horizontal = 2
-grow_vertical = 2
-mouse_filter = 2
-
-[node name="TargetUI" type="CanvasLayer" parent="UI"]
-
-[node name="Help" type="VBoxContainer" parent="UI"]
-layout_mode = 1
-anchors_preset = 1
-anchor_left = 1.0
-anchor_right = 1.0
-offset_left = -144.0
-offset_bottom = 146.0
-grow_horizontal = 0
-
-[node name="Target" type="Label" parent="UI/Help"]
-layout_mode = 2
-text = "Target: "
-
-[node name="Orientation" type="Label" parent="UI/Help"]
-layout_mode = 2
-text = "1 – Select player"
-
-[node name="CamRotate" type="Label" parent="UI/Help"]
-layout_mode = 2
-text = "2 – Select Starship"
-
-[node name="CamDistance" type="Label" parent="UI/Help"]
-layout_mode = 2
-text = "3 – Select operator"
-
-[node name="Spawn" type="Label" parent="UI/Help"]
-layout_mode = 2
-text = "` – console "
+[node name="UI" parent="." instance=ExtResource("3_rhqrp")]
