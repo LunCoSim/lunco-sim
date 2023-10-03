@@ -4,7 +4,7 @@
 [ext_resource type="PackedScene" uid="uid://dniml0evqbs6v" path="res://sim/sim-ui.tscn" id="2_5h5ks"]
 [ext_resource type="PackedScene" uid="uid://d8gbyf2xbd4m" path="res://content/maps/Langrenus/langrenus_map.tscn" id="2_7rofx"]
 [ext_resource type="PackedScene" uid="uid://c5dg7yq7hd7m0" path="res://core/nodes/avatar/avatar.tscn" id="2_o421v"]
-[ext_resource type="Texture2D" uid="uid://c6v84yxrojl2k" path="res://addons/lunco-assets/ESO_-_Milky_Way.jpeg" id="3_sc3vw"]
+[ext_resource type="Texture2D" uid="uid://c6v84yxrojl2k" path="res://content/ESO_-_Milky_Way.jpeg" id="3_sc3vw"]
 [ext_resource type="PackedScene" uid="uid://cpjdvh1eaof2y" path="res://content/moonwards/buildings/nuclear-core/nuclear-core.escn" id="4_i7pui"]
 [ext_resource type="PackedScene" uid="uid://2f4aecforicx" path="res://content/moonwards/buildings/satellite-dish/satellite-dish.escn" id="5_vw5bc"]
 [ext_resource type="PackedScene" uid="uid://6xgnbadqd0df" path="res://content/moonwards/items/HexpaneWindow/HexpaneWindow.escn" id="6_icrgr"]

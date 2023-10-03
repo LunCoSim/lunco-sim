@@ -1,7 +1,7 @@
 [gd_scene load_steps=5 format=3 uid="uid://c82dl3dv3d3hb"]
 
 [ext_resource type="Script" path="res://menu/main_menu.gd" id="1_w3b0g"]
-[ext_resource type="Texture2D" uid="uid://brwbsp6eop682" path="res://addons/lunco-assets/cover.png" id="2_l3lmq"]
+[ext_resource type="Texture2D" uid="uid://brwbsp6eop682" path="res://content/cover.png" id="2_l3lmq"]
 
 [sub_resource type="SystemFont" id="SystemFont_g5bxx"]
 

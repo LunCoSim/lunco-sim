@@ -24,28 +24,11 @@ func spawn(_entity: EntitiesDB.Entities): #TBD think of a class entity
 	var id = multiplayer.get_remote_sender_id()
 	print("spawn remoteid: ", id, " local id: ", multiplayer.get_unique_id(), " entity:", _entity)
 	
-	var found := false
-	
-	for i in %SpawnPosition.get_children():
-		if i.name == str(id):
-			found = true
-	
-	if not found:
-		var entity = Entities.make_entity(_entity)
-		entity.name = str(id)
+	var entity = Entities.make_entity(_entity)
 
-		entity.set_multiplayer_authority(id)
-		
-		%SpawnPosition.add_child(entity, true)
+	%SpawnPosition.add_child(entity, true)
 
-		_on_multiplayer_spawner_spawned(entity)
-
-	else:
-		var entity = Entities.make_entity(_entity)
-
-		%SpawnPosition.add_child(entity, true)
-
-		_on_multiplayer_spawner_spawned(entity)
+	#_on_multiplayer_spawner_spawned(entity)
 
 
 	
@@ -63,9 +46,10 @@ func _on_create_spacecraft():
 	
 #---------------------------------------
 
-func _on_multiplayer_spawner_spawned(node):
-	if node.name == str(multiplayer.get_unique_id()):
-		$Avatar.set_target(node)
+# set avatars target for newly spawned entity
+#func _on_multiplayer_spawner_spawned(node):
+	#if node.name == str(multiplayer.get_unique_id()):
+		#$Avatar.set_target(node)
 #		
 
 
