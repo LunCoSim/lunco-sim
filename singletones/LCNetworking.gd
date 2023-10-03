@@ -24,7 +24,7 @@ func _ready():
 	multiplayer.server_disconnected.connect(on_server_disconnected)
 
 # Function to connect to a server
-func connect_to_server(ip: String, port: int):
+func connect_to_server(ip: String="langrenus.lunco.space", port: int = 9000):
 	# Creating a client
 	peer.create_client(ip, port)
 	# Assigning the peer to this multiplayer's peer

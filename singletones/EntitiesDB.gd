@@ -8,9 +8,9 @@ enum Entities {
 }
 
 var Paths = {
-	Entities.Spacecraft: "res://core/entities/starship-entity.tscn",
-	Entities.Operator: "res://core/entities/operator-entity.tscn",
-	Entities.Character: "res://core/entities/player-entity.tscn"
+	Entities.Spacecraft: "res://entities/starship-entity.tscn",
+	Entities.Operator: "res://entities/operator-entity.tscn",
+	Entities.Character: "res://entities/player-entity.tscn"
 }
 
 var Caches = {

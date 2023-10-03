@@ -21,15 +21,15 @@ config/icon="res://assets/logos/logo.svg"
 [autoload]
 
 Panku="*res://addons/panku_console/console.tscn"
-Entities="*res://core/singletones/EntitiesDB.gd"
-StateManager="*res://core/singletones/state-manager.gd"
+Entities="*res://singletones/EntitiesDB.gd"
+StateManager="*res://singletones/state-manager.gd"
 DebugMenu="*res://addons/debug_menu/debug_menu.tscn"
 GGS="*res://addons/ggs/classes/ggs_globals.gd"
 SceneManager="*res://addons/scene_manager/scene_manager.tscn"
 Scenes="*res://addons/scene_manager/scenes.gd"
 IVGlobal="res://ivoyager/singletons/global.gd"
-LCNet="*res://core/singletones/LCNetworking.gd"
-LCUtil="*res://core/singletones/LCUtils.gd"
+LCNet="*res://singletones/LCNetworking.gd"
+LCUtil="*res://singletones/LCUtils.gd"
 
 [display]
 
@@ -42,7 +42,7 @@ movie_writer/movie_file="/home/rod/Documents/lunco-movies/godot_output.avi"
 
 [editor_plugins]
 
-enabled=PackedStringArray("res://addons/camera_preview/plugin.cfg", "res://addons/debug_menu/plugin.cfg", "res://addons/gd-plug-ui/plugin.cfg", "res://addons/godot-idea-board/plugin.cfg", "res://addons/imjp94.yafsm/plugin.cfg", "res://addons/lunco-urdf/plugin.cfg", "res://addons/scene_manager/plugin.cfg", "res://addons/terrain_3d/plugin.cfg", "res://addons/ui_design_tool/plugin.cfg")
+enabled=PackedStringArray("res://addons/camera_preview/plugin.cfg", "res://addons/debug_menu/plugin.cfg", "res://addons/gd-plug-ui/plugin.cfg", "res://addons/godot-idea-board/plugin.cfg", "res://addons/imjp94.yafsm/plugin.cfg", "res://addons/scene_manager/plugin.cfg", "res://addons/terrain_3d/plugin.cfg", "res://addons/ui_design_tool/plugin.cfg")
 logger/log_enabled=true
 logger/log_stdout=true
 logger/level=31

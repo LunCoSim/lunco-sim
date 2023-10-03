@@ -1,6 +1,5 @@
-## This is a starting script
+## This script loads simulation and passes control to it
 extends Node
-
 
 func _init():
 	# Hack for compatibility with IVoyager
@@ -38,6 +37,6 @@ func _on_local():
 
 func _on_global():
 	#default global server
-	LCNet.connect_to_server("langrenus.lunco.space", 9000) #TBD Change to constants/settings/config?
+	LCNet.connect_to_server()
 	
 	StateManager.change_scene("sim")
