@@ -1,6 +1,6 @@
-# LunCo: Open-Source Engineering Software for Lunar Settlement Design
+# LunCo: Virtual Universe for Real Space Missions
 
-LunCo is a cutting-edge open-source simulation tool designed for planning space missions, with a focus on lunar settlements. 
+LunCo is a open-source simulation tool designed for planning space missions, with a focus on lunar settlements. 
 
 Built with the powerful Godot 4 engine, LunCo aims to revolutionize the way space engineers design and collaborate on complex systems.
 
