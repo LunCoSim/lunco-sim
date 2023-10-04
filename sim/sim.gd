@@ -24,12 +24,14 @@ func _process(delta):
 
 
 @rpc("any_peer", "call_local")
-func spawn(_entity: EntitiesDB.Entities): #TBD think of a class entity
+func spawn(_entity: EntitiesDB.Entities, global_position=null): #TBD think of a class entity
 	var id = multiplayer.get_remote_sender_id()
 	print("spawn remoteid: ", id, " local id: ", multiplayer.get_unique_id(), " entity:", _entity)
 	
 	var entity = Entities.make_entity(_entity)
-
+	
+	if global_position != null:
+		entity.position = %SpawnPosition.to_local(global_position)
 	%SpawnPosition.add_child(entity, true)
 
 	#_on_multiplayer_spawner_spawned(entity)
@@ -61,8 +63,7 @@ func _on_avatar_ray_cast(from: Vector3, to: Vector3):
 	
 	var space_state = $Universe.get_world_3d().direct_space_state
 	
-	#tbd, probably because of multithreading
-#	if space_state:
+
 	var query = PhysicsRayQueryParameters3D.create(from, to)
 	query.exclude = [self]
 	var result = space_state.intersect_ray(query)
@@ -70,13 +71,8 @@ func _on_avatar_ray_cast(from: Vector3, to: Vector3):
 	if result:
 		
 		if result.collider is StaticBody3D:
-			var starship= Entities.make_entity(EntitiesDB.Entities.Spacecraft)
-			starship.position = $Universe.to_local(result.position) + Vector3(0, 1, 0)
-
-			$Universe.add_child(starship)
+			spawn.rpc_id(1, EntitiesDB.Entities.Spacecraft, result.position + Vector3(0, 1, 0))
 		else:
 			$Avatar.set_target(result.collider)
 		
-		
-		print(" Selected: ", result)
 #			emit_signal("ray_hit", res["position"])
