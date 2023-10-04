@@ -42,3 +42,16 @@ text = "3 – Select operator"
 [node name="Spawn" type="Label" parent="Help"]
 layout_mode = 2
 text = "` – console "
+
+[node name="Entities" type="Tree" parent="."]
+layout_mode = 1
+anchors_preset = 6
+anchor_left = 1.0
+anchor_top = 0.5
+anchor_right = 1.0
+anchor_bottom = 0.5
+offset_left = -200.0
+offset_bottom = 200.0
+grow_horizontal = 0
+grow_vertical = 2
+hide_root = true

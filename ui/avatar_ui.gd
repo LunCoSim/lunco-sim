@@ -6,7 +6,20 @@ var _ui
 # Called when the node enters the scene tree for the first time.
 func _ready():
 	pass # Replace with function body.
+	
+	var tree: Tree = $Entities
+	var root = tree.create_item()  # This creates the root item.
+	
+	for entity in EntitiesDB.Entities:
+		# Add child items to the root.
+		var item = tree.create_item(root)
+		var txt = "Entity: " + str(entity)
+		item.set_text(0, txt)
+	
 
+	## Add a child to item1.
+	#var subitem1 = self.create_item(item1)
+	#subitem1.set_text(0, "Subitem 1.1")
 
 # Called every frame. 'delta' is the elapsed time since the previous frame.
 func _process(delta):
