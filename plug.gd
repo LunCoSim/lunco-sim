@@ -28,7 +28,7 @@ func _plugging():
 
 
 	## IVoyager integration
-	print("ivoyager_assets should be downloaded manually https://github.com/ivoyager/ivoyager/releases")
+	# print("ivoyager_assets should be downloaded manually https://github.com/ivoyager/ivoyager/releases")
 	plug("ivoyager/ivoyager_table_importer", {"install_root": "addons/ivoyager_table_importer", "include": ["."]})
 	plug("ivoyager/ivoyager", {"install_root": "ivoyager", "include": ["."]})
 	plug("ivoyager/planetarium", {"install_root": "addons/ivoyager_planetarium", "include": ["si_base_units.gd"]})
