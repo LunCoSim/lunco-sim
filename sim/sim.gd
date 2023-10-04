@@ -3,6 +3,7 @@ extends Node
 
 var entities = []
 
+var entity_to_spawn = EntitiesDB.Entities.Astronaut
 
 # Called when the node enters the scene tree for the first time.
 func _ready():
@@ -33,9 +34,12 @@ func spawn(_entity: EntitiesDB.Entities, global_position=null): #TBD think of a 
 	if global_position != null:
 		entity.position = %SpawnPosition.to_local(global_position)
 	%SpawnPosition.add_child(entity, true)
+	
+	#return entity
+	_on_multiplayer_spawner_spawned(entity)
 
-	#_on_multiplayer_spawner_spawned(entity)
-
+func _on_multiplayer_spawner_spawned(entity):
+	$Avatar.set_target(entity)
 
 	
 #----------
@@ -49,7 +53,14 @@ func _on_create_character():
 
 func _on_create_spacecraft():
 	spawn.rpc_id(1, EntitiesDB.Entities.Spacecraft)
+
+func _on_select_entity_to_spawn(entity_id =0):
+	print("_on_select_entity_to_spawn", entity_id)
+	var entity = EntitiesDB.Entities.keys()[entity_id]
 	
+	entity_to_spawn = entity_id
+	
+	pass
 #---------------------------------------
 
 # set avatars target for newly spawned entity
@@ -71,7 +82,7 @@ func _on_avatar_ray_cast(from: Vector3, to: Vector3):
 	if result:
 		
 		if result.collider is StaticBody3D:
-			spawn.rpc_id(1, EntitiesDB.Entities.Astronaut, result.position + Vector3(0, 1, 0))
+			spawn.rpc_id(1, entity_to_spawn, result.position + Vector3(0, 1, 0))
 		else:
 			$Avatar.set_target(result.collider)
 		

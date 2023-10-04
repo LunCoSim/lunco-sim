@@ -1,5 +1,7 @@
 extends Control
 
+signal entity_selected(int)
+
 @onready var ui := $TargetUI
 
 var _ui
@@ -7,14 +9,12 @@ var _ui
 func _ready():
 	pass # Replace with function body.
 	
-	var tree: Tree = $Entities
-	var root = tree.create_item()  # This creates the root item.
+	var tree: ItemList = $Entities
 	
 	for entity in EntitiesDB.Entities:
 		# Add child items to the root.
-		var item = tree.create_item(root)
-		var txt = "Entity: " + str(entity)
-		item.set_text(0, txt)
+		tree.add_item("Entity: " + str(entity))
+		
 	
 
 	## Add a child to item1.
@@ -51,3 +51,8 @@ func set_target(target):
 	#if _ui:
 		#_ui.set_target(target) #controller specific function
 	set_ui(_ui)
+
+func _on_entities_item_selected(index):
+	print("_on_entities_item_selected: ", index)
+	emit_signal("entity_selected", index)
+	pass # Replace with function body.
