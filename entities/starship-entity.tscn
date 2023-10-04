@@ -1,8 +1,8 @@
 [gd_scene load_steps=7 format=3 uid="uid://bmqo4d60d70oc"]
 
 [ext_resource type="PackedScene" uid="uid://id12h35uqejc" path="res://content/spacex-starship/SpaceX_Starship.tscn" id="1_six3u"]
-[ext_resource type="Script" path="res://core/entities/starship-entity.gd" id="2_bo2xd"]
-[ext_resource type="PackedScene" uid="uid://btw1pbsrpnjx4" path="res://core/controllers/spacecraft/spacecraft-controller.tscn" id="2_h3rj8"]
+[ext_resource type="Script" path="res://entities/starship-entity.gd" id="2_bo2xd"]
+[ext_resource type="PackedScene" uid="uid://btw1pbsrpnjx4" path="res://controllers/spacecraft/spacecraft-controller.tscn" id="2_h3rj8"]
 
 [sub_resource type="SceneReplicationConfig" id="SceneReplicationConfig_l7sxw"]
 properties/0/path = NodePath(".:position")

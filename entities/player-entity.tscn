@@ -1,8 +1,8 @@
 [gd_scene load_steps=28 format=3 uid="uid://ch5t8f7mxyx1v"]
 
 [ext_resource type="PackedScene" uid="uid://baunvflaucrbn" path="res://content/player/player.tscn" id="1_tcir3"]
-[ext_resource type="PackedScene" uid="uid://cibc2v3g1bk4g" path="res://core/controllers/player/player-controller.tscn" id="2_uqu3g"]
-[ext_resource type="Script" path="res://core/controllers/player/player-input-adapted.gd" id="2_vwyvh"]
+[ext_resource type="PackedScene" uid="uid://cibc2v3g1bk4g" path="res://controllers/player/player-controller.tscn" id="2_uqu3g"]
+[ext_resource type="Script" path="res://controllers/player/player-input-adapted.gd" id="2_vwyvh"]
 
 [sub_resource type="AnimationNodeAdd3" id="AnimationNodeAdd3_6nea4"]
 resource_local_to_scene = true

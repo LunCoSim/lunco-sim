@@ -1,8 +1,8 @@
 [gd_scene load_steps=6 format=3 uid="uid://dxepfetvn7y3c"]
 
 [ext_resource type="PackedScene" uid="uid://dly6j7li6g7t8" path="res://core/models/operator-model.tscn" id="1_h12af"]
-[ext_resource type="Script" path="res://core/entities/operator-entity.gd" id="2_36yj2"]
-[ext_resource type="PackedScene" uid="uid://dpv63l3fgdrk5" path="res://core/controllers/operator/operator-controller.tscn" id="2_gofs0"]
+[ext_resource type="Script" path="res://entities/operator-entity.gd" id="2_36yj2"]
+[ext_resource type="PackedScene" uid="uid://dpv63l3fgdrk5" path="res://controllers/operator/operator-controller.tscn" id="2_gofs0"]
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_fffnb"]
 albedo_color = Color(0, 0, 0, 1)
