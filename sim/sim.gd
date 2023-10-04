@@ -71,7 +71,7 @@ func _on_avatar_ray_cast(from: Vector3, to: Vector3):
 	if result:
 		
 		if result.collider is StaticBody3D:
-			spawn.rpc_id(1, EntitiesDB.Entities.Spacecraft, result.position + Vector3(0, 1, 0))
+			spawn.rpc_id(1, EntitiesDB.Entities.Astronaut, result.position + Vector3(0, 1, 0))
 		else:
 			$Avatar.set_target(result.collider)
 		
