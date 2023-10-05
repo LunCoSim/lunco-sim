@@ -66,6 +66,14 @@ func _ready():
 	set_target(target)
 	set_camera(camera)
 
+func _process(delta):
+	
+	if camera:
+		#Origin shifting. TBD how to do it in multiplayer
+		if Engine.get_process_frames() % 1000:
+			print("repositioning: ", to_global(camera.position))
+			%Universe.position -= to_global(camera.position)
+		
 #-----------------------------------------------------
 func _unhandled_input(event):
 	#Left mouse button pressed
@@ -209,3 +217,4 @@ func _on_State_transited():
 # Function camera_global_position returns the global position of the camera
 func camera_global_position():
 	return camera.global_position
+
