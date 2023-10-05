@@ -3,9 +3,19 @@
 [sub_resource type="SystemFont" id="SystemFont_g5bxx"]
 
 [node name="Apps" type="VBoxContainer"]
-offset_right = 233.0
-offset_bottom = 365.0
-alignment = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -116.5
+offset_top = -182.5
+offset_right = 116.5
+offset_bottom = 182.5
+grow_horizontal = 2
+grow_vertical = 2
+size_flags_horizontal = 4
+size_flags_vertical = 4
 
 [node name="Networking" type="VBoxContainer" parent="."]
 layout_mode = 2
