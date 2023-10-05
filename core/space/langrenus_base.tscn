@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3 uid="uid://bco7fje1b5rhq"]
+
+[ext_resource type="Script" path="res://core/base/map.gd" id="1_0mb8o"]
+
+[node name="LangrenusBase" type="Node3D"]
+script = ExtResource("1_0mb8o")

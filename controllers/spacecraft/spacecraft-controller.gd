@@ -1,6 +1,6 @@
 #This code is based on this game: https://godotforums.org/discussion/18480/godot-3d-vector-physics-cheat-sheet
-extends lnSpaceSystem
-class_name lnSpacecraft
+extends LCSpaceSystem
+class_name LCSpacecraft
 
 @export var THRUST = 50
 @export var THRUST_TURN = 200

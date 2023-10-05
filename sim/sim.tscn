@@ -1,4 +1,4 @@
-[gd_scene load_steps=17 format=3 uid="uid://btfca8gppw043"]
+[gd_scene load_steps=20 format=3 uid="uid://btfca8gppw043"]
 
 [ext_resource type="Script" path="res://sim/sim.gd" id="1_thahp"]
 [ext_resource type="PackedScene" uid="uid://dniml0evqbs6v" path="res://ui/sim-ui.tscn" id="2_5h5ks"]
@@ -6,14 +6,17 @@
 [ext_resource type="PackedScene" uid="uid://c5dg7yq7hd7m0" path="res://entities/avatar.tscn" id="2_o421v"]
 [ext_resource type="PackedScene" uid="uid://b5v4w0inqo7vd" path="res://core/space/universe.tscn" id="3_q6u50"]
 [ext_resource type="PackedScene" uid="uid://cpjdvh1eaof2y" path="res://content/moonwards/buildings/nuclear-core/nuclear-core.escn" id="4_i7pui"]
+[ext_resource type="PackedScene" uid="uid://cpbv4fmfxppt1" path="res://core/space/sun.tscn" id="4_x4yhi"]
+[ext_resource type="PackedScene" uid="uid://ddaqlkbgl7bdl" path="res://core/space/earth.tscn" id="5_4mupq"]
 [ext_resource type="PackedScene" uid="uid://2f4aecforicx" path="res://content/moonwards/buildings/satellite-dish/satellite-dish.escn" id="5_vw5bc"]
+[ext_resource type="PackedScene" uid="uid://csqh45xcqbewi" path="res://core/space/moon.tscn" id="6_0xtqa"]
 [ext_resource type="PackedScene" uid="uid://6xgnbadqd0df" path="res://content/moonwards/items/HexpaneWindow/HexpaneWindow.escn" id="6_icrgr"]
+[ext_resource type="PackedScene" uid="uid://bco7fje1b5rhq" path="res://core/space/langrenus_base.tscn" id="7_5xddx"]
 [ext_resource type="PackedScene" uid="uid://do1ecg5jve7wu" path="res://content/moonwards/vehicles/rovers/AthleteRover/AthleteRover.escn" id="7_iyh80"]
 [ext_resource type="PackedScene" uid="uid://dn5t73yi2rj4h" path="res://content/moonwards/vehicles/rovers/SpiderCrane/SpiderCrane.escn" id="8_pbee0"]
 [ext_resource type="Script" path="res://core/nodes/display3d/Display3D.gd" id="9_kbh8q"]
 [ext_resource type="PackedScene" uid="uid://d18c2gpps48r3" path="res://scenarios/editor/editor.tscn" id="10_4hehs"]
 [ext_resource type="PackedScene" uid="uid://dd6tms8o0rilp" path="res://content/moonwards/vehicles/rockets/NuclearPodShip/NuclearPodShip.escn" id="11_vk7ar"]
-[ext_resource type="PackedScene" uid="uid://l6cfv385r5qt" path="res://core/models/lunar_globe.tscn" id="13_xcvhp"]
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_cg4ar"]
 cull_mode = 2
@@ -29,75 +32,65 @@ script = ExtResource("1_thahp")
 [node name="Universe" parent="." instance=ExtResource("3_q6u50")]
 unique_name_in_owner = true
 
-[node name="Sun" type="Node3D" parent="Universe"]
+[node name="Sun" parent="Universe" instance=ExtResource("4_x4yhi")]
 
-[node name="Earth" type="Node3D" parent="Universe/Sun"]
+[node name="Earth" parent="Universe/Sun" instance=ExtResource("5_4mupq")]
 
-[node name="Moon" type="Node3D" parent="Universe/Sun/Earth"]
+[node name="Moon" parent="Universe/Sun/Earth" instance=ExtResource("6_0xtqa")]
 
-[node name="LangrenusBase" type="Node3D" parent="Universe/Sun/Earth/Moon"]
+[node name="LangrenusBase" parent="Universe/Sun/Earth" instance=ExtResource("7_5xddx")]
 
-[node name="Langrenus_LP" parent="Universe/Sun/Earth/Moon/LangrenusBase" instance=ExtResource("2_7rofx")]
+[node name="Langrenus_LP" parent="Universe/Sun/Earth/LangrenusBase" instance=ExtResource("2_7rofx")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 31.5747, 2.37504, 57.0209)
 
-[node name="nuclear-core" parent="Universe/Sun/Earth/Moon/LangrenusBase" instance=ExtResource("4_i7pui")]
+[node name="nuclear-core" parent="Universe/Sun/Earth/LangrenusBase" instance=ExtResource("4_i7pui")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -141.395, -20.6602, -8.34924)
 visible = false
 
-[node name="satellite-dish" parent="Universe/Sun/Earth/Moon/LangrenusBase" instance=ExtResource("5_vw5bc")]
+[node name="satellite-dish" parent="Universe/Sun/Earth/LangrenusBase" instance=ExtResource("5_vw5bc")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -99.9107, -33.905, 82.7524)
 
-[node name="HexpaneWindow" parent="Universe/Sun/Earth/Moon/LangrenusBase" instance=ExtResource("6_icrgr")]
+[node name="HexpaneWindow" parent="Universe/Sun/Earth/LangrenusBase" instance=ExtResource("6_icrgr")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -137.646, -33.8777, 75.2299)
 
-[node name="AthleteRover" parent="Universe/Sun/Earth/Moon/LangrenusBase" instance=ExtResource("7_iyh80")]
+[node name="AthleteRover" parent="Universe/Sun/Earth/LangrenusBase" instance=ExtResource("7_iyh80")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -153.215, -29.8606, 18.2701)
 
-[node name="AthleteRover2" parent="Universe/Sun/Earth/Moon/LangrenusBase" instance=ExtResource("7_iyh80")]
+[node name="AthleteRover2" parent="Universe/Sun/Earth/LangrenusBase" instance=ExtResource("7_iyh80")]
 transform = Transform3D(0.995631, -0.0933787, 0, 0.0933787, 0.995631, 0, 0, 0, 1, -79.4233, -30.3267, -27.6116)
 
-[node name="AthleteRover3" parent="Universe/Sun/Earth/Moon/LangrenusBase" instance=ExtResource("7_iyh80")]
+[node name="AthleteRover3" parent="Universe/Sun/Earth/LangrenusBase" instance=ExtResource("7_iyh80")]
 transform = Transform3D(0.999969, 0.00792359, 0, -0.00792359, 0.999969, 0, 0, 0, 1, -5.70623, -11.7022, -16.9707)
 
-[node name="SpiderCrane" parent="Universe/Sun/Earth/Moon/LangrenusBase" instance=ExtResource("8_pbee0")]
+[node name="SpiderCrane" parent="Universe/Sun/Earth/LangrenusBase" instance=ExtResource("8_pbee0")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -231.608, -33.6229, 148.77)
 
-[node name="SpiderCrane2" parent="Universe/Sun/Earth/Moon/LangrenusBase" instance=ExtResource("8_pbee0")]
+[node name="SpiderCrane2" parent="Universe/Sun/Earth/LangrenusBase" instance=ExtResource("8_pbee0")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -136.545, -32.9742, 150.173)
 
-[node name="SpawnPosition" type="Node3D" parent="Universe/Sun/Earth/Moon/LangrenusBase"]
+[node name="SpawnPosition" type="Node3D" parent="Universe/Sun/Earth/LangrenusBase"]
 unique_name_in_owner = true
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -103.103, -31.3941, 22.5669)
 
-[node name="Display3D" type="MeshInstance3D" parent="Universe/Sun/Earth/Moon/LangrenusBase"]
+[node name="Display3D" type="MeshInstance3D" parent="Universe/Sun/Earth/LangrenusBase"]
 transform = Transform3D(0.994254, 0, -0.107045, 0, 1, 0, 0.107045, 0, 0.994254, -30.8158, 12.1879, -39.6145)
 visible = false
 material_override = SubResource("StandardMaterial3D_cg4ar")
 mesh = SubResource("QuadMesh_2gwpj")
-skeleton = NodePath("../../../../../..")
+skeleton = NodePath("../../../../..")
 script = ExtResource("9_kbh8q")
 
-[node name="SubViewport" type="SubViewport" parent="Universe/Sun/Earth/Moon/LangrenusBase/Display3D"]
+[node name="SubViewport" type="SubViewport" parent="Universe/Sun/Earth/LangrenusBase/Display3D"]
 size = Vector2i(1980, 1080)
 
-[node name="editor" parent="Universe/Sun/Earth/Moon/LangrenusBase/Display3D/SubViewport" instance=ExtResource("10_4hehs")]
+[node name="editor" parent="Universe/Sun/Earth/LangrenusBase/Display3D/SubViewport" instance=ExtResource("10_4hehs")]
 layout_direction = 1
 
-[node name="NuclearPodShip" parent="Universe/Sun/Earth/Moon/LangrenusBase" instance=ExtResource("11_vk7ar")]
+[node name="NuclearPodShip" parent="Universe/Sun/Earth/LangrenusBase" instance=ExtResource("11_vk7ar")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -63.3132, -26.196, 146.559)
 
-[node name="LunarGlobe" parent="Universe/Sun/Earth/Moon" instance=ExtResource("13_xcvhp")]
-transform = Transform3D(-0.314553, -0.915379, -0.251274, -0.196978, 0.321893, -0.926059, 0.928577, -0.241799, -0.281562, 0, -868360, 0)
-
-[node name="SunLight" type="DirectionalLight3D" parent="Universe/Sun"]
-transform = Transform3D(0.998916, 0.0393323, 0.0248946, -0.0465486, 0.844057, 0.534229, 0, -0.534809, 0.844973, 22.2774, 36.5147, 75.6894)
-shadow_enabled = true
-shadow_normal_bias = 10.0
-shadow_blur = 0.1
-directional_shadow_max_distance = 400.0
-
 [node name="MultiplayerSpawner" type="MultiplayerSpawner" parent="."]
-spawn_path = NodePath("../Universe/Sun/Earth/Moon/LangrenusBase/SpawnPosition")
+spawn_path = NodePath("../Universe/Sun/Earth/LangrenusBase/SpawnPosition")
 
 [node name="Avatar" parent="." instance=ExtResource("2_o421v")]
 transform = Transform3D(-0.82255, -0.00837469, 0.568631, 0.00348538, 0.999798, 0.0197666, -0.568682, 0.0182409, -0.822355, 0, 0, 0)
@@ -109,5 +102,4 @@ transform = Transform3D(-0.82255, -0.00837469, 0.568631, 0.00348538, 0.999798, 0
 [connection signal="ray_cast" from="Avatar" to="." method="_on_avatar_ray_cast"]
 [connection signal="entity_selected" from="Avatar/UI" to="." method="_on_select_entity_to_spawn"]
 
-[editable path="Universe/Sun/Earth/Moon/LunarGlobe"]
 [editable path="Avatar"]

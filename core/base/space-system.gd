@@ -1,7 +1,6 @@
 # This is the basic class according to XTCE
+class_name LCSpaceSystem
 extends Node3D #TODO: Check if should be node, maybe something else?
-class_name lnSpaceSystem
-
 
 #Basic parameters inspired by XTCE
 @export var Telemetry = {}

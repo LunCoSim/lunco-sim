@@ -1,7 +1,7 @@
 #This code is based on Gogot kinematic_character example
 
-extends lnSpaceSystem
-class_name lnOperator
+extends LCSpaceSystem
+class_name LCOperator
 
 
 @onready var Target: CharacterBody3D = get_parent()

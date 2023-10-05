@@ -11,11 +11,11 @@ func _process(delta):
 	pass
 
 func target_changed(target):
-	if target is lnPlayer:
+	if target is LCPlayer:
 		$Help/Target.text = "Target: Player"
-	elif target is lnSpacecraft:
+	elif target is LCSpacecraft:
 		$Help/Target.text = "Target: Spacecraft"
-	elif target is lnOperator:
+	elif target is LCOperator:
 		$Help/Target.text = "Target: Operator"
 	else:
 		$Help/Target.text = "Target: Unknown"

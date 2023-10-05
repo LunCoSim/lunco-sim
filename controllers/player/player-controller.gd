@@ -1,5 +1,5 @@
-extends lnSpaceSystem
-class_name lnPlayer
+extends LCSpaceSystem
+class_name LCPlayer
 
 func set_camera(camera):
 #	print("lnPlayer set_camera")

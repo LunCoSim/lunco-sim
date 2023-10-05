@@ -1,5 +1,6 @@
-[gd_scene load_steps=5 format=3 uid="uid://b5v4w0inqo7vd"]
+[gd_scene load_steps=6 format=3 uid="uid://b5v4w0inqo7vd"]
 
+[ext_resource type="Script" path="res://core/space/universe.gd" id="1_1k3wk"]
 [ext_resource type="Texture2D" uid="uid://c6v84yxrojl2k" path="res://content/ESO_-_Milky_Way.jpeg" id="1_dmbpg"]
 
 [sub_resource type="PanoramaSkyMaterial" id="PanoramaSkyMaterial_6y8xe"]
@@ -18,6 +19,7 @@ volumetric_fog_length = 300.0
 volumetric_fog_detail_spread = 0.588438
 
 [node name="Universe" type="Node3D"]
+script = ExtResource("1_1k3wk")
 
 [node name="WorldEnvironment" type="WorldEnvironment" parent="."]
 environment = SubResource("Environment_7olaa")

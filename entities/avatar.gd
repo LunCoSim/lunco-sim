@@ -1,6 +1,6 @@
 # Class lnAvatar which inherits from lnSpaceSystem
-class_name lnAvatar
-extends lnSpaceSystem
+class_name LCAvatar
+extends LCSpaceSystem
 
 # Declaring signals
 signal create(path_to_scene)
@@ -37,8 +37,9 @@ func set_target(_target):
 	target = _target
 	#searching for controller
 	if _target: 
+		#TBD: Better way to find controller
 		for N in _target.get_children():
-			if N is lnSpaceSystem:
+			if N is LCSpaceSystem:
 				target = N
 	
 	if camera and target:
@@ -64,26 +65,21 @@ func _ready():
 	set_target(target)
 	set_camera(camera)
 
-
-
+#-----------------------------------------------------
 func _unhandled_input(event):
 
-	#raycast
-
+	# Raycast
 	#Left mouse button pressed
 	if event is InputEventMouseButton and event.pressed and event.button_index == 1:
-		print("Click mouse")
-
-		print("Ray casting")
-
 		var e: InputEventMouseButton = event
 		var pos = e.position
-
-		if camera:  
-			var from = camera.project_ray_origin(pos)
-			var to = from + camera.project_ray_normal(pos) * RAY_LENGTH
-
-			emit_signal("ray_cast", from, to)	
+		action_raycast(e.position)
+		
+func action_raycast(position: Vector2):
+	if camera:  
+		var from = camera.project_ray_origin(position)
+		var to = from + camera.project_ray_normal(position) * RAY_LENGTH
+		emit_signal("ray_cast", from, to)	
 
 
 func _input(event):
@@ -137,8 +133,8 @@ func _input(event):
 		cam.rotate_relative(camera_move)
 
 
-	if target is lnPlayer:
-		var player: lnPlayer = target
+	if target is LCPlayer:
+		var player: LCPlayer = target
 
 		if not player:
 			return
@@ -150,8 +146,8 @@ func _input(event):
 
 		player.set_camera(camera)
 
-	elif target is lnSpacecraft:
-		var spacecraft: lnSpacecraft = target
+	elif target is LCSpacecraft:
+		var spacecraft: LCSpacecraft = target
 
 		if Input.is_action_just_pressed("throttle"):
 			spacecraft.throttle(true)
@@ -166,9 +162,9 @@ func _input(event):
 
 		spacecraft.change_orientation(torque)
 
-	elif target is lnOperator:
+	elif target is LCOperator:
 		var cam: SpringArmCamera = camera
-		var operator: lnOperator = target
+		var operator: LCOperator = target
 
 		if Input.is_action_just_pressed("reset_position"):
 			operator.reset_position();
@@ -182,19 +178,20 @@ func _input(event):
 		operator.move(motion_direction.normalized())
 		operator.orient(cam.get_plain_basis())
 
+#------------------------------------------------------
 # Function _on_State_transited instantiates different ui based on target and sets camera spring length
 func _on_State_transited():
 
 	camera.set_follow_height(0.5)
 	camera.set_spring_length(2.5)
 	
-	if target is lnPlayer:
+	if target is LCPlayer:
 		camera.set_spring_length(2.5)
 		target.set_camera(camera) #TBD: Remove camera
-	elif target is lnSpacecraft:
+	elif target is LCSpacecraft:
 		camera.set_spring_length(50)
 		camera.set_follow_height(0)
-	elif target is lnOperator:
+	elif target is LCOperator:
 		camera.set_spring_length(2.5)
 
 	self.emit_signal("target_changed", target)

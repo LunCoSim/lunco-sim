@@ -1,0 +1,13 @@
+[gd_scene load_steps=2 format=3 uid="uid://cpbv4fmfxppt1"]
+
+[ext_resource type="Script" path="res://core/space/sun.gd" id="1_aia32"]
+
+[node name="Sun" type="Node3D"]
+script = ExtResource("1_aia32")
+
+[node name="SunLight" type="DirectionalLight3D" parent="."]
+transform = Transform3D(0.998916, 0.0393323, 0.0248946, -0.0465486, 0.844057, 0.534229, 0, -0.534809, 0.844973, 22.2774, 36.5147, 75.6894)
+shadow_enabled = true
+shadow_normal_bias = 10.0
+shadow_blur = 0.1
+directional_shadow_max_distance = 400.0

@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3 uid="uid://ddaqlkbgl7bdl"]
+
+[ext_resource type="Script" path="res://core/space/earth.gd" id="1_dxuhv"]
+
+[node name="Earth" type="Node3D"]
+script = ExtResource("1_dxuhv")
