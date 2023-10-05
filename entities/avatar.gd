@@ -183,11 +183,15 @@ func _on_State_transited():
 
 	var _ui = null
 
+	camera.set_follow_height(0.5)
+	camera.set_spring_length(2.5)
+	
 	if target is lnPlayer:
 		camera.set_spring_length(2.5)
 		target.set_camera(camera)
 	elif target is lnSpacecraft:
 		camera.set_spring_length(50)
+		camera.set_follow_height(0)
 	elif target is lnOperator:
 		#_ui.model_selected.connect(_on_select_model)
 		camera.set_spring_length(2.5)

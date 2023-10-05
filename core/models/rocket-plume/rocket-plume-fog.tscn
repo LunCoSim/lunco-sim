@@ -1,0 +1,33 @@
+[gd_scene load_steps=7 format=3 uid="uid://bwgl1y87mh086"]
+
+[ext_resource type="Shader" path="res://core/models/rocket-plume/rocket-plume.gdshader" id="1_foykr"]
+[ext_resource type="Script" path="res://core/models/rocket-plume/rocket-plume.gd" id="1_jrc3n"]
+
+[sub_resource type="FastNoiseLite" id="FastNoiseLite_vh8dn"]
+
+[sub_resource type="NoiseTexture3D" id="NoiseTexture3D_kkpdp"]
+noise = SubResource("FastNoiseLite_vh8dn")
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_6nj6y"]
+shader = ExtResource("1_foykr")
+shader_parameter/base_density = 1.0
+shader_parameter/base_color = Color(0.945098, 0.839216, 0.658824, 1)
+shader_parameter/fade_color = Color(0.498039, 0.333333, 0.333333, 1)
+shader_parameter/fade_out_height = 10.0
+shader_parameter/fade_out_distance = 1000.0
+shader_parameter/noise_texture = SubResource("NoiseTexture3D_kkpdp")
+
+[sub_resource type="Environment" id="Environment_bnugs"]
+volumetric_fog_enabled = true
+volumetric_fog_density = 0.0
+
+[node name="Rocket-plume" type="Node3D"]
+script = ExtResource("1_jrc3n")
+
+[node name="FogVolume" type="FogVolume" parent="."]
+transform = Transform3D(-0.0341669, 0.999416, 0, -0.999416, -0.0341669, 0, 0, 0, 1, 0, 0, 0)
+size = Vector3(5, 19.3715, 5)
+material = SubResource("ShaderMaterial_6nj6y")
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Environment_bnugs")

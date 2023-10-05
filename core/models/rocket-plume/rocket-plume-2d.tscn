@@ -1,0 +1,32 @@
+[gd_scene load_steps=5 format=3 uid="uid://co1mar6mmv7f1"]
+
+[ext_resource type="Script" path="res://core/models/rocket-plume/rocket-plume.gd" id="1_6qo7q"]
+[ext_resource type="Material" uid="uid://bfaprn8ahj7i2" path="res://core/models/rocket-plume/engine_flame.material" id="2_sj6u5"]
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_i8vn0"]
+cull_mode = 2
+
+[sub_resource type="PlaneMesh" id="PlaneMesh_mv7go"]
+material = SubResource("StandardMaterial3D_i8vn0")
+size = Vector2(1, 4)
+
+[node name="RocketPlume" type="Node3D"]
+script = ExtResource("1_6qo7q")
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.258919, -1.95094)
+material_override = ExtResource("2_sj6u5")
+cast_shadow = 0
+mesh = SubResource("PlaneMesh_mv7go")
+
+[node name="MeshInstance3D2" type="MeshInstance3D" parent="."]
+transform = Transform3D(0.83113, 0.556078, 0, -0.556078, 0.83113, 0, 0, 0, 1, 0, -0.258919, -1.95094)
+material_override = ExtResource("2_sj6u5")
+cast_shadow = 0
+mesh = SubResource("PlaneMesh_mv7go")
+
+[node name="MeshInstance3D3" type="MeshInstance3D" parent="."]
+transform = Transform3D(-0.730592, 0.682815, 0, -0.682815, -0.730592, 0, 0, 0, 1, 0, -0.258919, -1.95094)
+material_override = ExtResource("2_sj6u5")
+cast_shadow = 0
+mesh = SubResource("PlaneMesh_mv7go")

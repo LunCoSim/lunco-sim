@@ -13,6 +13,7 @@ func _ready():
 	win.set_window_title_text("Main menu")
 	win.show_window()
 	
+	#PankuConsole.add
 # Called every frame. 'delta' is the elapsed time since the previous frame.
 func _process(delta):
 	#$Universe.position -= $Avatar.camera_global_position()

@@ -13,7 +13,7 @@
 [ext_resource type="Script" path="res://core/nodes/display3d/Display3D.gd" id="9_kbh8q"]
 [ext_resource type="PackedScene" uid="uid://d18c2gpps48r3" path="res://scenarios/editor/editor.tscn" id="10_4hehs"]
 [ext_resource type="PackedScene" uid="uid://dd6tms8o0rilp" path="res://content/moonwards/vehicles/rockets/NuclearPodShip/NuclearPodShip.escn" id="11_vk7ar"]
-[ext_resource type="PackedScene" uid="uid://l6cfv385r5qt" path="res://sim/lunar_globe.tscn" id="13_xcvhp"]
+[ext_resource type="PackedScene" uid="uid://l6cfv385r5qt" path="res://core/models/lunar_globe.tscn" id="13_xcvhp"]
 
 [sub_resource type="PanoramaSkyMaterial" id="PanoramaSkyMaterial_6y8xe"]
 panorama = ExtResource("3_sc3vw")
@@ -54,7 +54,6 @@ environment = SubResource("Environment_7olaa")
 [node name="Moon" type="Node3D" parent="Universe/Sun/Earth"]
 
 [node name="LangrenusBase" type="Node3D" parent="Universe/Sun/Earth/Moon"]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -127212, -7482.49, -0.559285)
 
 [node name="Langrenus_LP" parent="Universe/Sun/Earth/Moon/LangrenusBase" instance=ExtResource("2_7rofx")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 31.5747, 2.37504, 57.0209)
@@ -106,7 +105,7 @@ layout_direction = 1
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -63.3132, -26.196, 146.559)
 
 [node name="LunarGlobe" parent="Universe/Sun/Earth/Moon" instance=ExtResource("13_xcvhp")]
-transform = Transform3D(-0.314553, -0.915379, -0.251274, -0.196978, 0.321893, -0.926059, 0.928577, -0.241799, -0.281562, 0, -866686, 0)
+transform = Transform3D(-0.314553, -0.915379, -0.251274, -0.196978, 0.321893, -0.926059, 0.928577, -0.241799, -0.281562, 0, -868360, 0)
 
 [node name="SunLight" type="DirectionalLight3D" parent="Universe/Sun"]
 transform = Transform3D(0.998916, 0.0393323, 0.0248946, -0.0465486, 0.844057, 0.534229, 0, -0.534809, 0.844973, 22.2774, 36.5147, 75.6894)
@@ -119,7 +118,7 @@ directional_shadow_max_distance = 400.0
 spawn_path = NodePath("../Universe/Sun/Earth/Moon/LangrenusBase/SpawnPosition")
 
 [node name="Avatar" parent="." instance=ExtResource("2_o421v")]
-transform = Transform3D(-0.82255, -0.00837469, 0.568631, 0.00348538, 0.999798, 0.0197666, -0.568682, 0.0182409, -0.822355, -127384, -7442.7, 163.651)
+transform = Transform3D(-0.82255, -0.00837469, 0.568631, 0.00348538, 0.999798, 0.0197666, -0.568682, 0.0182409, -0.822355, 0, 0, 0)
 
 [connection signal="spawned" from="MultiplayerSpawner" to="." method="_on_multiplayer_spawner_spawned"]
 [connection signal="create_operator" from="Avatar" to="." method="_on_create_operator"]
