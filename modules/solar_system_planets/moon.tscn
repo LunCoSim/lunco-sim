@@ -1,7 +1,7 @@
 [gd_scene load_steps=3 format=3 uid="uid://csqh45xcqbewi"]
 
-[ext_resource type="PackedScene" uid="uid://l6cfv385r5qt" path="res://core/models/lunar_globe.tscn" id="1_4lk36"]
-[ext_resource type="Script" path="res://core/space/moon.gd" id="1_s23a1"]
+[ext_resource type="PackedScene" uid="uid://l6cfv385r5qt" path="res://modules/solar_system_planets/lunar_globe.tscn" id="1_4lk36"]
+[ext_resource type="Script" path="res://modules/solar_system_planets/moon.gd" id="1_s23a1"]
 
 [node name="Moon" type="Node3D"]
 script = ExtResource("1_s23a1")

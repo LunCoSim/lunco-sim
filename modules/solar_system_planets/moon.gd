@@ -1,3 +1,4 @@
+@icon("res://modules/solar_system_planets/moon.svg")
 extends LCBody
 
 

@@ -1,4 +1,5 @@
 # Class lnAvatar which inherits from lnSpaceSystem
+@icon("res://modules/avatar/avatar.svg")
 class_name LCAvatar
 extends LCSpaceSystem
 

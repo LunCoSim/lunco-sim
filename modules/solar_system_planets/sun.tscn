@@ -1,6 +1,6 @@
 [gd_scene load_steps=2 format=3 uid="uid://cpbv4fmfxppt1"]
 
-[ext_resource type="Script" path="res://core/space/sun.gd" id="1_aia32"]
+[ext_resource type="Script" path="res://modules/solar_system_planets/sun.gd" id="1_aia32"]
 
 [node name="Sun" type="Node3D"]
 script = ExtResource("1_aia32")
