@@ -1,4 +1,4 @@
-@icon("res://core/space/map.svg")
+@icon("res://core/base/map.svg")
 class_name LCMap
 extends LCSpaceSystem 
 

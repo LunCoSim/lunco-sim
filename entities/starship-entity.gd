@@ -1,3 +1,4 @@
+@icon("res://entities/starship_entity.svg")
 extends RigidBody3D
 
 

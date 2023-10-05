@@ -1,3 +1,4 @@
+@icon("res://entities/operator-entity.svg")
 extends CharacterBody3D
 
 func _ready():
