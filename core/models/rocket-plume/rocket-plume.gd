@@ -1,5 +1,5 @@
+@icon("res://core/models/rocket-plume/rocket_exhaust.svg")
 extends Node3D
-
 
 # Called when the node enters the scene tree for the first time.
 func _ready():
