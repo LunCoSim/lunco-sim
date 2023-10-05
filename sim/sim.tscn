@@ -1,10 +1,10 @@
-[gd_scene load_steps=20 format=3 uid="uid://btfca8gppw043"]
+[gd_scene load_steps=17 format=3 uid="uid://btfca8gppw043"]
 
 [ext_resource type="Script" path="res://sim/sim.gd" id="1_thahp"]
 [ext_resource type="PackedScene" uid="uid://dniml0evqbs6v" path="res://ui/sim-ui.tscn" id="2_5h5ks"]
 [ext_resource type="PackedScene" uid="uid://d8gbyf2xbd4m" path="res://content/maps/Langrenus/langrenus_map.tscn" id="2_7rofx"]
 [ext_resource type="PackedScene" uid="uid://c5dg7yq7hd7m0" path="res://entities/avatar.tscn" id="2_o421v"]
-[ext_resource type="Texture2D" uid="uid://c6v84yxrojl2k" path="res://content/ESO_-_Milky_Way.jpeg" id="3_sc3vw"]
+[ext_resource type="PackedScene" uid="uid://b5v4w0inqo7vd" path="res://core/space/universe.tscn" id="3_q6u50"]
 [ext_resource type="PackedScene" uid="uid://cpjdvh1eaof2y" path="res://content/moonwards/buildings/nuclear-core/nuclear-core.escn" id="4_i7pui"]
 [ext_resource type="PackedScene" uid="uid://2f4aecforicx" path="res://content/moonwards/buildings/satellite-dish/satellite-dish.escn" id="5_vw5bc"]
 [ext_resource type="PackedScene" uid="uid://6xgnbadqd0df" path="res://content/moonwards/items/HexpaneWindow/HexpaneWindow.escn" id="6_icrgr"]
@@ -14,21 +14,6 @@
 [ext_resource type="PackedScene" uid="uid://d18c2gpps48r3" path="res://scenarios/editor/editor.tscn" id="10_4hehs"]
 [ext_resource type="PackedScene" uid="uid://dd6tms8o0rilp" path="res://content/moonwards/vehicles/rockets/NuclearPodShip/NuclearPodShip.escn" id="11_vk7ar"]
 [ext_resource type="PackedScene" uid="uid://l6cfv385r5qt" path="res://core/models/lunar_globe.tscn" id="13_xcvhp"]
-
-[sub_resource type="PanoramaSkyMaterial" id="PanoramaSkyMaterial_6y8xe"]
-panorama = ExtResource("3_sc3vw")
-
-[sub_resource type="Sky" id="Sky_c8mxq"]
-sky_material = SubResource("PanoramaSkyMaterial_6y8xe")
-
-[sub_resource type="Environment" id="Environment_7olaa"]
-background_mode = 2
-sky = SubResource("Sky_c8mxq")
-sdfgi_use_occlusion = true
-volumetric_fog_enabled = true
-volumetric_fog_density = 0.0
-volumetric_fog_length = 300.0
-volumetric_fog_detail_spread = 0.588438
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_cg4ar"]
 cull_mode = 2
@@ -41,11 +26,8 @@ script = ExtResource("1_thahp")
 
 [node name="UI" parent="." instance=ExtResource("2_5h5ks")]
 
-[node name="Universe" type="Node3D" parent="."]
+[node name="Universe" parent="." instance=ExtResource("3_q6u50")]
 unique_name_in_owner = true
-
-[node name="WorldEnvironment" type="WorldEnvironment" parent="Universe"]
-environment = SubResource("Environment_7olaa")
 
 [node name="Sun" type="Node3D" parent="Universe"]
 

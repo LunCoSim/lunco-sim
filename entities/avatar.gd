@@ -88,23 +88,27 @@ func _unhandled_input(event):
 
 func _input(event):
 	if Input.is_action_just_pressed("ui_cancel"):
-		SceneManager.no_effect_change_scene("back")
-
+		#SceneManager.no_effect_change_scene("back")
+		#TBD: Show/hide menu, should be a signal? To what?
+		pass
+	
+	# Creating entities
 	if Input.is_action_just_pressed("select_player"):
 		emit_signal("create_player")
-		print("create_player")
 	elif Input.is_action_just_pressed("select_spacecraft"):
 		emit_signal("create_spacecraft")
 	elif Input.is_action_just_pressed("select_operator"):
 		emit_signal("create_operator")
-
+	
+	# Rotating camera
 	if Input.is_action_pressed("rotate_camera"):
 		Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
 		mouse_control = true
 	else:
 		Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
 		mouse_control = false
-
+		
+	# Processing input related to camera
 	if camera is SpringArmCamera:
 		var cam: SpringArmCamera = camera
 		var camera_move := Vector2.ZERO
@@ -181,19 +185,16 @@ func _input(event):
 # Function _on_State_transited instantiates different ui based on target and sets camera spring length
 func _on_State_transited():
 
-	var _ui = null
-
 	camera.set_follow_height(0.5)
 	camera.set_spring_length(2.5)
 	
 	if target is lnPlayer:
 		camera.set_spring_length(2.5)
-		target.set_camera(camera)
+		target.set_camera(camera) #TBD: Remove camera
 	elif target is lnSpacecraft:
 		camera.set_spring_length(50)
 		camera.set_follow_height(0)
 	elif target is lnOperator:
-		#_ui.model_selected.connect(_on_select_model)
 		camera.set_spring_length(2.5)
 
 	self.emit_signal("target_changed", target)
@@ -202,10 +203,6 @@ func _on_State_transited():
 
 	if camera != null:
 		camera.target = target
-
-# Function _on_select_model prints the model path selected
-func _on_select_model(path):
-	print("_on_select_model: ", path)
 
 # Function camera_global_position returns the global position of the camera
 func camera_global_position():

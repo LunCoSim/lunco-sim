@@ -14,7 +14,14 @@ func _ready():
 	for entity in EntitiesDB.Entities:
 		# Add child items to the root.
 		tree.add_item("Entity: " + str(entity))
-		
+	
+	
+	
+	#var win: PankuLynxWindow = Panku.windows_manager.create_window($Entities)
+#
+	#var size = $Entities.get_minimum_size() + Vector2(0, win._window_title_container.get_minimum_size().y)
+	#win.set_custom_minimum_size(size)
+	#win.size = win.get_minimum_size()
 	
 
 	## Add a child to item1.

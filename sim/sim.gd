@@ -8,16 +8,8 @@ var entity_to_spawn = EntitiesDB.Entities.Astronaut
 # Called when the node enters the scene tree for the first time.
 func _ready():
 	var menu = preload("res://widgets/menu/main_menu.tscn").instantiate()
-	var win: PankuLynxWindow = Panku.windows_manager.create_window(menu)
-	
-	var size = menu.get_minimum_size() + Vector2(0, win._window_title_container.get_minimum_size().y)
-	win.set_custom_minimum_size(size)
-	win.size = win.get_minimum_size()
+	LCWindowsManager.make_window(menu, "Main menu")
 
-	win.set_window_title_text("Main menu")
-	win.show_window()
-	
-	#PankuConsole.add
 # Called every frame. 'delta' is the elapsed time since the previous frame.
 func _process(delta):
 	#$Universe.position -= $Avatar.camera_global_position()

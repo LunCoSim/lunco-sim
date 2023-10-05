@@ -1,0 +1,23 @@
+[gd_scene load_steps=5 format=3 uid="uid://b5v4w0inqo7vd"]
+
+[ext_resource type="Texture2D" uid="uid://c6v84yxrojl2k" path="res://content/ESO_-_Milky_Way.jpeg" id="1_dmbpg"]
+
+[sub_resource type="PanoramaSkyMaterial" id="PanoramaSkyMaterial_6y8xe"]
+panorama = ExtResource("1_dmbpg")
+
+[sub_resource type="Sky" id="Sky_c8mxq"]
+sky_material = SubResource("PanoramaSkyMaterial_6y8xe")
+
+[sub_resource type="Environment" id="Environment_7olaa"]
+background_mode = 2
+sky = SubResource("Sky_c8mxq")
+sdfgi_use_occlusion = true
+volumetric_fog_enabled = true
+volumetric_fog_density = 0.0
+volumetric_fog_length = 300.0
+volumetric_fog_detail_spread = 0.588438
+
+[node name="Universe" type="Node3D"]
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Environment_7olaa")
