@@ -83,7 +83,7 @@ func _input(event):
 	if Input.is_action_just_pressed("ui_cancel"):
 		#SceneManager.no_effect_change_scene("back")
 		#TBD: Show/hide menu, should be a signal? To what?
-		pass
+		LCWindows.toggle_main_menu()
 	
 	# Creating entities
 	if Input.is_action_just_pressed("select_player"):

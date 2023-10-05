@@ -28,6 +28,7 @@ SceneManager="*res://addons/scene_manager/scene_manager.tscn"
 Scenes="*res://addons/scene_manager/scenes.gd"
 LCNet="*res://singletones/LCNetworking.gd"
 LCUtil="*res://singletones/LCUtils.gd"
+LCWindows="*res://singletones/LCWindowsManager.gd"
 
 [display]
 
