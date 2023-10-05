@@ -1,4 +1,4 @@
-class_name lnCommand
+class_name LCCommand
 	
 extends Node
 

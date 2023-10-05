@@ -19,7 +19,8 @@ func _plugging():
 	plug("imjp94/gd-YAFSM")
 	
 	#Developer Tools
-	plug("Ark2000/PankuConsole")
+	# plug("Ark2000/PankuConsole")
+	plug("LunCoSim/PankuConsole") #using LunCo's fork
 	# plug("godot-extended-libraries/godot-debug-menu")
 
 	## Libraries
