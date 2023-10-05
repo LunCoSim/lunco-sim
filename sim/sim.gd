@@ -8,8 +8,8 @@ var entity_to_spawn = EntitiesDB.Entities.Astronaut
 
 # Called when the node enters the scene tree for the first time.
 func _ready():
-	pass
-
+	Panku.gd_exprenv.register_env("Avatar", $Avatar)
+	
 # Called every frame. 'delta' is the elapsed time since the previous frame.
 func _process(delta):
 	#$Universe.position -= $Avatar.camera_global_position()
@@ -37,6 +37,8 @@ func spawn(_entity: EntitiesDB.Entities, global_position=null): #TBD think of a 
 
 func _on_multiplayer_spawner_spawned(entity):
 	$Avatar.set_target(entity)
+	var num = %SpawnPosition.get_child_count()
+	Panku.gd_exprenv.register_env("Entity"+str(num), entity)
 
 	
 #----------
