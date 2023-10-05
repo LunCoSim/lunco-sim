@@ -1,5 +1,6 @@
+@icon("res://sim/simulation.svg")
+class_name LCSimulation
 extends Node
-
 
 var entities = []
 

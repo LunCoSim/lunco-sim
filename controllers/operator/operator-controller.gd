@@ -1,8 +1,7 @@
 #This code is based on Gogot kinematic_character example
-
-extends LCSpaceSystem
+@icon("res://controllers/operator/operator.svg")
 class_name LCOperator
-
+extends LCSpaceSystem
 
 @onready var Target: CharacterBody3D = get_parent()
 
