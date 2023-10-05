@@ -11,7 +11,7 @@ enum Entities {
 var Paths = {
 	Entities.Spacecraft: "res://entities/starship-entity.tscn",
 	Entities.Operator: "res://entities/operator-entity.tscn",
-	Entities.Character: "res://entities/player-entity.tscn",
+	Entities.Character: "res://entities/character-entity.tscn",
 	Entities.Astronaut: "res://entities/astronaut-entity.tscn",
 }
 

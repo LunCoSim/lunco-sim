@@ -12,9 +12,11 @@ func _ready():
 	
 # Called every frame. 'delta' is the elapsed time since the previous frame.
 func _process(delta):
-	#$Universe.position -= $Avatar.camera_global_position()
-	#$Avatar.position = Vector3.ZERO
-	pass
+		#Origin shifting. TBD how to do it in multiplayer
+	if Engine.get_process_frames() % 100:
+		var pos: Vector3 = $Avatar.camera_global_position()
+		if pos.length_squared() > 1000*1000: # Doing origin shifing  if far away to prevent jutter
+			%Universe.position -= $Avatar.camera_global_position()
 
 
 	

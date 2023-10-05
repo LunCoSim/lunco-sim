@@ -61,18 +61,8 @@ func set_camera(_camera):
 #-------------------------------
 # Defining different functions for handling player controls like select, rotate, move, etc.
 func _ready():
-
-	print(target)
 	set_target(target)
 	set_camera(camera)
-
-func _process(delta):
-	
-	if camera:
-		#Origin shifting. TBD how to do it in multiplayer
-		if Engine.get_process_frames() % 1000:
-			print("repositioning: ", to_global(camera.position))
-			%Universe.position -= to_global(camera.position)
 		
 #-----------------------------------------------------
 func _unhandled_input(event):
