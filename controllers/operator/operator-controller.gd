@@ -21,11 +21,8 @@ var orientation := Basis.IDENTITY
 # reset_position
 # move(direction)
 
-func _ready():
-		Target.set_multiplayer_authority(str(Target.name).to_int())
-		
 func _physics_process(delta):
-	if Target.name == str(multiplayer.get_unique_id()):
+	if is_multiplayer_authority():
 		if Target:
 			var target_dir = orientation * dir * MAX_SPEED
 			var acceleration

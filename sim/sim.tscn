@@ -39,6 +39,7 @@ unique_name_in_owner = true
 [node name="Moon" parent="Universe/Sun/Earth" instance=ExtResource("6_0xtqa")]
 
 [node name="LangrenusBase" parent="Universe/Sun/Earth" instance=ExtResource("7_5xddx")]
+LocationCoordinates = Vector2(-8.9, 60.9)
 
 [node name="Langrenus_LP" parent="Universe/Sun/Earth/LangrenusBase" instance=ExtResource("2_7rofx")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 31.5747, 2.37504, 57.0209)

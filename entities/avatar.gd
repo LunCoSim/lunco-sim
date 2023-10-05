@@ -67,8 +67,6 @@ func _ready():
 
 #-----------------------------------------------------
 func _unhandled_input(event):
-
-	# Raycast
 	#Left mouse button pressed
 	if event is InputEventMouseButton and event.pressed and event.button_index == 1:
 		var e: InputEventMouseButton = event
@@ -80,7 +78,6 @@ func action_raycast(position: Vector2):
 		var from = camera.project_ray_origin(position)
 		var to = from + camera.project_ray_normal(position) * RAY_LENGTH
 		emit_signal("ray_cast", from, to)	
-
 
 func _input(event):
 	if Input.is_action_just_pressed("ui_cancel"):
@@ -96,6 +93,12 @@ func _input(event):
 	elif Input.is_action_just_pressed("select_operator"):
 		emit_signal("create_operator")
 	
+	input_camera(event)
+	input_character(event)
+	input_spacecraft(event)
+	input_operator(event)
+
+func input_camera(event):
 	# Rotating camera
 	if Input.is_action_pressed("rotate_camera"):
 		Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
@@ -131,8 +134,8 @@ func _input(event):
 
 		cam.inc_spring_length(camera_spring_length)
 		cam.rotate_relative(camera_move)
-
-
+		
+func input_character(event):
 	if target is LCPlayer:
 		var player: LCPlayer = target
 
@@ -145,8 +148,9 @@ func _input(event):
 			Input.get_action_strength("move_back") - Input.get_action_strength("move_forward"))
 
 		player.set_camera(camera)
-
-	elif target is LCSpacecraft:
+		
+func input_spacecraft(event):
+	if target is LCSpacecraft:
 		var spacecraft: LCSpacecraft = target
 
 		if Input.is_action_just_pressed("throttle"):
@@ -161,8 +165,9 @@ func _input(event):
 		)
 
 		spacecraft.change_orientation(torque)
-
-	elif target is LCOperator:
+		
+func input_operator(event):
+	if target is LCOperator:
 		var cam: SpringArmCamera = camera
 		var operator: LCOperator = target
 
@@ -177,7 +182,6 @@ func _input(event):
 
 		operator.move(motion_direction.normalized())
 		operator.orient(cam.get_plain_basis())
-
 #------------------------------------------------------
 # Function _on_State_transited instantiates different ui based on target and sets camera spring length
 func _on_State_transited():
