@@ -79,6 +79,6 @@ transform = Transform3D(-0.82255, -0.00837469, 0.568631, 0.00348538, 0.999798, 0
 [connection signal="create_player" from="Avatar" to="." method="_on_create_character"]
 [connection signal="create_spacecraft" from="Avatar" to="." method="_on_create_spacecraft"]
 [connection signal="spawn_entity" from="Avatar" to="." method="_on_select_entity_to_spawn"]
-[connection signal="entity_selected" from="Avatar/UI" to="." method="_on_select_entity_to_spawn"]
+[connection signal="entity_selected" from="Avatar/UI" to="Avatar" method="_on_select_entity_to_spawn"]
 
 [editable path="Avatar"]

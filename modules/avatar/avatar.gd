@@ -33,7 +33,7 @@ var mouse_control := false
 
 #------------------------------
 
-var entity_to_spawn = EntitiesDB.Entities.Astronaut
+@export var entity_to_spawn = EntitiesDB.Entities.Astronaut
 
 #-------------------------------
 # Function set_target sets the target, searches for a controller and calls state transited
@@ -85,7 +85,7 @@ func action_raycast(position: Vector2):
 		emit_signal("ray_cast", from, to)
 		
 	
-		var space_state = get_parent().get_world_3d().direct_space_state
+		var space_state = %Universe.get_world_3d().direct_space_state
 		
 
 		var query = PhysicsRayQueryParameters3D.create(from, to)
@@ -224,6 +224,9 @@ func _on_State_transited():
 
 	if camera != null:
 		camera.target = target
+
+func _on_select_entity_to_spawn(entity_id=0):
+	entity_to_spawn = entity_id
 
 # Function camera_global_position returns the global position of the camera
 func camera_global_position():

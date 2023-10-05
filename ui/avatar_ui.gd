@@ -5,6 +5,7 @@ signal entity_selected(int)
 @onready var ui := $TargetUI
 
 var _ui
+var avatar: LCAvatar
 # Called when the node enters the scene tree for the first time.
 func _ready():
 	pass # Replace with function body.
@@ -15,7 +16,9 @@ func _ready():
 		# Add child items to the root.
 		tree.add_item("Entity: " + str(entity))
 	
+	avatar = get_parent()
 	
+	tree.select(avatar.entity_to_spawn)
 	
 	#var win: PankuLynxWindow = Panku.windows_manager.create_window($Entities)
 #
