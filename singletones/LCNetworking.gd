@@ -65,3 +65,12 @@ func on_server_connected():
 func on_server_disconnected():
 	# Printing a message to signal loss of server connection
 	print("Lost connection to server")
+
+
+@export var text := ""
+
+
+@rpc("any_peer")
+func set_text(_text):
+	print("peer id: ", multiplayer.get_unique_id()," caller ", multiplayer.get_remote_sender_id() ," set text: ", _text)
+	text=_text

@@ -29,10 +29,3 @@ func make_entity(entity):
 	return Caches[entity].instantiate()
 #
 
-@export var text := ""
-
-
-@rpc("any_peer")
-func set_text(_text):
-	print("peer id: ", multiplayer.get_unique_id()," caller ", multiplayer.get_remote_sender_id() ," set text: ", _text)
-	text=_text

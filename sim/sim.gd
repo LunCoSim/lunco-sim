@@ -2,9 +2,7 @@
 class_name LCSimulation
 extends Node
 
-var entities = []
-
-var entity_to_spawn = EntitiesDB.Entities.Astronaut
+@export var entities = []
 
 # Called when the node enters the scene tree for the first time.
 func _ready():
@@ -18,10 +16,7 @@ func _process(delta):
 		if pos.length_squared() > 1000*1000: # Doing origin shifing  if far away to prevent jutter
 			%Universe.position -= $Avatar.camera_global_position()
 
-
-	
 #------------------------------------------------------
-
 
 @rpc("any_peer", "call_local")
 func spawn(_entity: EntitiesDB.Entities, global_position=null): #TBD think of a class entity
@@ -29,6 +24,7 @@ func spawn(_entity: EntitiesDB.Entities, global_position=null): #TBD think of a 
 	print("spawn remoteid: ", id, " local id: ", multiplayer.get_unique_id(), " entity:", _entity)
 	
 	var entity = Entities.make_entity(_entity)
+	entities.append(entity)
 	
 	if global_position != null:
 		entity.position = %SpawnPosition.to_local(global_position)
@@ -55,36 +51,7 @@ func _on_create_character():
 func _on_create_spacecraft():
 	spawn.rpc_id(1, EntitiesDB.Entities.Spacecraft)
 
-func _on_select_entity_to_spawn(entity_id =0):
-	print("_on_select_entity_to_spawn", entity_id)
-	var entity = EntitiesDB.Entities.keys()[entity_id]
+func _on_select_entity_to_spawn(entity_id=0, position=Vector3.ZERO):
+	spawn.rpc_id(1, entity_id, position)
 	
-	entity_to_spawn = entity_id
-	
-	pass
 #---------------------------------------
-
-# set avatars target for newly spawned entity
-#func _on_multiplayer_spawner_spawned(node):
-	#if node.name == str(multiplayer.get_unique_id()):
-		#$Avatar.set_target(node)
-#		
-
-
-func _on_avatar_ray_cast(from: Vector3, to: Vector3):
-	
-	var space_state = $Universe.get_world_3d().direct_space_state
-	
-
-	var query = PhysicsRayQueryParameters3D.create(from, to)
-	query.exclude = [self]
-	var result = space_state.intersect_ray(query)
-	
-	if result:
-		
-		if result.collider is StaticBody3D:
-			spawn.rpc_id(1, entity_to_spawn, result.position + Vector3(0, 1, 0))
-		else:
-			$Avatar.set_target(result.collider)
-		
-#			emit_signal("ray_hit", res["position"])

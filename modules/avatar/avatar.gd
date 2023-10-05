@@ -10,6 +10,8 @@ signal create_operator
 signal create_player
 signal create_spacecraft
 
+signal spawn_entity(entity, position)
+
 signal ray_cast(from: Vector3, to: Vector3)
 
 signal target_changed()
@@ -28,6 +30,10 @@ var mouse_control := false
 # Defining UI and camera variables
 @onready var ui := $UI
 @onready var camera := $SpringArmCamera
+
+#------------------------------
+
+var entity_to_spawn = EntitiesDB.Entities.Astronaut
 
 #-------------------------------
 # Function set_target sets the target, searches for a controller and calls state transited
@@ -76,7 +82,22 @@ func action_raycast(position: Vector2):
 	if camera:  
 		var from = camera.project_ray_origin(position)
 		var to = from + camera.project_ray_normal(position) * RAY_LENGTH
-		emit_signal("ray_cast", from, to)	
+		emit_signal("ray_cast", from, to)
+		
+	
+		var space_state = get_parent().get_world_3d().direct_space_state
+		
+
+		var query = PhysicsRayQueryParameters3D.create(from, to)
+		query.exclude = [self]
+		var result = space_state.intersect_ray(query)
+		
+		if result:
+			if result.collider is StaticBody3D:
+				spawn_entity.emit(entity_to_spawn, result.position + Vector3(0, 1, 0))
+			else:
+				set_target(result.collider)
+				
 
 func _input(event):
 	if Input.is_action_just_pressed("ui_cancel"):
