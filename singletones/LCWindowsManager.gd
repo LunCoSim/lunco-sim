@@ -15,7 +15,7 @@ static func make_window(control, title):
 	win.size = win.get_minimum_size()
 
 	win.set_window_title_text(title)
-
+	win.hide_window()
 	return win
 
 func toggle_main_menu():
