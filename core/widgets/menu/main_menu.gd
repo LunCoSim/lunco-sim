@@ -38,23 +38,12 @@ func _on_sim_client_pressed():
 	
 	LCNet.connect_to_server(ip, port)
 	
-	change_scene("sim")
-	
-func _on_yarm_pressed():
-	change_scene("yarm")
+	#change_scene("sim")
 
 func _on_connect_to_global_pressed():
 	#default global server
-	LCNet.connect_to_server("langrenus.lunco.space", 9000)
+	LCNet.connect_to_server()
 	
-	change_scene("sim")
+	#change_scene("sim")
 
 
-func _on_whiteboard_pressed():
-	change_scene("whiteboard")
-
-func _on_text_editor_pressed():
-	change_scene("editor")
-
-func _on_future_missions_pressed():
-	change_scene("FutureLunarMissions")
