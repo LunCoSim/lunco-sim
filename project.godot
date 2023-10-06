@@ -21,14 +21,14 @@ config/icon="res://assets/logos/logo.svg"
 [autoload]
 
 Panku="*res://addons/panku_console/console.tscn"
-Entities="*res://singletones/EntitiesDB.gd"
-StateManager="*res://singletones/state-manager.gd"
+Entities="*res://core/singletones/EntitiesDB.gd"
+StateManager="*res://core/singletones/state-manager.gd"
 GGS="*res://addons/ggs/classes/ggs_globals.gd"
 SceneManager="*res://addons/scene_manager/scene_manager.tscn"
 Scenes="*res://addons/scene_manager/scenes.gd"
-LCNet="*res://singletones/LCNetworking.gd"
-LCUtil="*res://singletones/LCUtils.gd"
-LCWindows="*res://singletones/LCWindowsManager.gd"
+LCNet="*res://core/singletones/LCNetworking.gd"
+LCUtil="*res://core/singletones/LCUtils.gd"
+LCWindows="*res://core/singletones/LCWindowsManager.gd"
 
 [display]
 

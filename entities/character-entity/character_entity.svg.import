@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://ctk3lvrfksxk1"
-path="res://.godot/imported/operator-entity.svg-e0c67ac955c6820578f58efcaf55e039.ctex"
+uid="uid://c4nyeysi22ths"
+path="res://.godot/imported/character_entity.svg-284eeb32158bd90815dc9c5a66786429.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://entities/operator-entity.svg"
-dest_files=["res://.godot/imported/operator-entity.svg-e0c67ac955c6820578f58efcaf55e039.ctex"]
+source_file="res://entities/character-entity/character_entity.svg"
+dest_files=["res://.godot/imported/character_entity.svg-284eeb32158bd90815dc9c5a66786429.ctex"]
 
 [params]
 

@@ -1,6 +1,6 @@
 [gd_scene load_steps=2 format=3 uid="uid://wdnxqhctneyv"]
 
-[ext_resource type="Script" path="res://ui/avatar_ui.gd" id="1_igs02"]
+[ext_resource type="Script" path="res://modules/avatar/avatar_ui.gd" id="1_igs02"]
 
 [node name="UI" type="Control"]
 layout_mode = 3

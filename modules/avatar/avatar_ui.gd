@@ -52,11 +52,11 @@ func clear_ui():
 func set_target(target):
 	
 	if target is LCPlayer:
-		_ui = preload("res://ui/player-ui.tscn").instantiate()
+		_ui = preload("res://entities/character-entity/player-ui.tscn").instantiate()
 	elif target is LCSpacecraft:
-		_ui = preload("res://ui/spacecraft-ui.tscn").instantiate()
+		_ui = preload("res://entities/starship-entity/spacecraft-ui.tscn").instantiate()
 	elif target is LCOperator:
-		_ui = preload("res://ui/operator-ui.tscn").instantiate()
+		_ui = preload("res://entities/operator-entity/operator-ui.tscn").instantiate()
 
 	if _ui:
 		_ui.set_target(target) #controller specific function

@@ -25,8 +25,8 @@ func _plugging():
 
 	## Libraries
 	plug("maktoobgar/scene_manager") ## Scene manager
-	plug("PunchablePlushie/godot-game-settings") ## Game settings
-
+	# plug("PunchablePlushie/godot-game-settings") ## Game settings
+	plug("LunCoSim/godot-game-settings") ## Game settings
 
 	## IVoyager integration
 	# print("ivoyager_assets should be downloaded manually https://github.com/ivoyager/ivoyager/releases")

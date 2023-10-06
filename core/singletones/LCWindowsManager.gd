@@ -4,7 +4,7 @@ extends Node
 var MainMenu: PankuLynxWindow
 
 func _ready():
-	var MainMenuScene = preload("res://widgets/menu/main_menu.tscn").instantiate()
+	var MainMenuScene = preload("res://core/widgets/menu/main_menu.tscn").instantiate()
 	MainMenu = LCWindowsManager.make_window(MainMenuScene, "Main menu")
 	
 static func make_window(control, title):

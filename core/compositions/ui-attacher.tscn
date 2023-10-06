@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3 uid="uid://bghfpgkmgh0fn"]
+
+[ext_resource type="Script" path="res://core/compositions/ui-attacher.gd" id="1_uw1sv"]
+
+[node name="UIAttacher" type="Node"]
+script = ExtResource("1_uw1sv")

@@ -1,6 +1,6 @@
 [gd_scene load_steps=3 format=3 uid="uid://dniml0evqbs6v"]
 
-[ext_resource type="Script" path="res://ui/sim-ui.gd" id="1_k86m5"]
+[ext_resource type="Script" path="res://sim/sim-ui.gd" id="1_k86m5"]
 [ext_resource type="PackedScene" uid="uid://d1ksgc5qn7ifd" path="res://widgets/machine_role_container_ui.tscn" id="2_wuuy8"]
 
 [node name="UI" type="CanvasLayer"]

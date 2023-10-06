@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://c4nyeysi22ths"
-path="res://.godot/imported/character_entity.svg-d32afb629212a831264bb1f68d1a2b2d.ctex"
+uid="uid://wbwpa410f8jv"
+path="res://.godot/imported/starship_entity.svg-04527761b7db8aca1b29a688a88e63e0.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://entities/character_entity.svg"
-dest_files=["res://.godot/imported/character_entity.svg-d32afb629212a831264bb1f68d1a2b2d.ctex"]
+source_file="res://entities/starship-entity/starship_entity.svg"
+dest_files=["res://.godot/imported/starship_entity.svg-04527761b7db8aca1b29a688a88e63e0.ctex"]
 
 [params]
 

@@ -1,7 +1,7 @@
 [gd_scene load_steps=16 format=3 uid="uid://btfca8gppw043"]
 
 [ext_resource type="Script" path="res://sim/sim.gd" id="1_thahp"]
-[ext_resource type="PackedScene" uid="uid://dniml0evqbs6v" path="res://ui/sim-ui.tscn" id="2_5h5ks"]
+[ext_resource type="PackedScene" uid="uid://dniml0evqbs6v" path="res://sim/sim-ui.tscn" id="2_5h5ks"]
 [ext_resource type="PackedScene" uid="uid://d8gbyf2xbd4m" path="res://content/maps/Langrenus/langrenus_map.tscn" id="2_7rofx"]
 [ext_resource type="PackedScene" uid="uid://c5dg7yq7hd7m0" path="res://modules/avatar/avatar.tscn" id="2_o421v"]
 [ext_resource type="PackedScene" uid="uid://b5v4w0inqo7vd" path="res://core/space/universe.tscn" id="3_q6u50"]
