@@ -3,7 +3,7 @@ class_name LCNetworking
 extends Node
 
 # Declaration of peer as MultiplayerPeer, which will be used to handle multiplayer networking
-var peer: MultiplayerPeer
+var peer: ENetMultiplayerPeer
 
 # A dictionary to store the connected players
 var players = {}
@@ -25,12 +25,14 @@ func _ready():
 	multiplayer.connection_failed.connect(on_server_connection_failed)
 	multiplayer.connected_to_server.connect(on_server_connected)
 	multiplayer.server_disconnected.connect(on_server_disconnected)
+	
+	
 
 # Function to connect to a server
 func connect_to_server(ip: String="langrenus.lunco.space", port: int = 9000):
 	# Creating a client
-	print("connecting to server")
-	peer.create_client(ip, port)
+	print("connecting to server: ", peer.create_client(ip, port))
+	
 	# Assigning the peer to this multiplayer's peer
 	
 	
@@ -38,11 +40,7 @@ func connect_to_server(ip: String="langrenus.lunco.space", port: int = 9000):
 # Function to start hosting a server
 func host(port: int = 9000):
 	# Creating a server
-	print("Hosting")
-	peer.create_server(port)
-	
-	
-
+	print("Hosting: ", peer.create_server(port))
 
 #---------------------------------------------------
 
