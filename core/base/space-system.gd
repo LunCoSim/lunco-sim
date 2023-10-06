@@ -1,4 +1,5 @@
 # This is the basic class according to XTCE
+@icon("res://core/base/space-system.svg")
 class_name LCSpaceSystem
 extends Node3D #TODO: Check if should be node, maybe something else?
 
