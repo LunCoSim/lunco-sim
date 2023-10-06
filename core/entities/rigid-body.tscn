@@ -1,3 +1,6 @@
-[gd_scene format=3 uid="uid://b8adm7oeehkx5"]
+[gd_scene load_steps=2 format=3 uid="uid://b8adm7oeehkx5"]
+
+[ext_resource type="Script" path="res://core/entities/rigid-body.gd" id="1_n860v"]
 
 [node name="RigidBody" type="Node3D"]
+script = ExtResource("1_n860v")

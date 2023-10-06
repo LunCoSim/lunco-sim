@@ -1,6 +1,5 @@
-## Basic class that can sync
-class_name LCEntity
-extends Node3D
+class_name LCRigidBody
+extends RigidBody3D
 
 
 # Called when the node enters the scene tree for the first time.

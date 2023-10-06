@@ -1,3 +1,6 @@
-[gd_scene format=3 uid="uid://djlbbac40ks8e"]
+[gd_scene load_steps=2 format=3 uid="uid://djlbbac40ks8e"]
+
+[ext_resource type="Script" path="res://core/entities/character.gd" id="1_yct5u"]
 
 [node name="Character" type="Node3D"]
+script = ExtResource("1_yct5u")
