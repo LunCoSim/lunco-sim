@@ -1,4 +1,6 @@
-[gd_scene load_steps=2 format=3 uid="uid://c82dl3dv3d3hb"]
+[gd_scene load_steps=3 format=3 uid="uid://c82dl3dv3d3hb"]
+
+[ext_resource type="Script" path="res://core/widgets/menu/main_menu.gd" id="1_ytl3l"]
 
 [sub_resource type="SystemFont" id="SystemFont_g5bxx"]
 
@@ -16,6 +18,7 @@ grow_horizontal = 2
 grow_vertical = 2
 size_flags_horizontal = 4
 size_flags_vertical = 4
+script = ExtResource("1_ytl3l")
 
 [node name="Networking" type="VBoxContainer" parent="."]
 layout_mode = 2
@@ -55,3 +58,7 @@ text = "Connect to Simulation"
 [node name="ConnectToGlobal" type="Button" parent="."]
 layout_mode = 2
 text = "Connect to Global Simulation"
+
+[connection signal="pressed" from="SimHost" to="." method="_on_sim_host_pressed"]
+[connection signal="pressed" from="SimClient" to="." method="_on_sim_client_pressed"]
+[connection signal="pressed" from="ConnectToGlobal" to="." method="_on_connect_to_global_pressed"]

@@ -1,18 +1,6 @@
 # Old code to be removed later
 extends Node
 
-# Called when the node enters the scene tree for the first time.
-func _ready():
-	print("Main ready")
-	pass # Replace with function body.
-	
-	if ("--server" in OS.get_cmdline_args()) or (OS.has_feature("server")):
-		print("Running in server mode")
-		# Run your server startup code here...
-		# Using this check, you can start a dedicated server by running
-		# a Godot binary (headless or not) with the `--server` command-line argument.
-		_on_sim_host_pressed()
-
 
 # ------------------------------------
 
@@ -27,9 +15,9 @@ func _on_sim_host_pressed():
 	
 	print("[INFO] _on_sim_host_pressed")
 	
-#	net.host(9000)
+	LCNet.host(9000)
 	
-	change_scene("sim")
+	#change_scene("sim")
 
 func _on_sim_client_pressed():
 	print("_on_sim_client_pressed")
