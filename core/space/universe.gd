@@ -1,7 +1,7 @@
 ## Base class for the simulated world
 @icon("res://core/space/universe.svg")
 class_name LCUniverse
-extends Node3D
+extends LCSpaceSystem
 
 
 # Called when the node enters the scene tree for the first time.

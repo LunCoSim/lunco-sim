@@ -1,7 +1,7 @@
 ## Basic class for Celestil bodies in the universe
 @icon("res://core/space/body.svg")
 class_name LCBody
-extends Node3D
+extends LCSpaceSystem
 
 
 # Called when the node enters the scene tree for the first time.
