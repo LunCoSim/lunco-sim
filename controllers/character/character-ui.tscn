@@ -1,12 +1,12 @@
 [gd_scene load_steps=2 format=3 uid="uid://bm2bhoih0s57n"]
 
-[ext_resource type="Script" path="res://entities/character-entity/player-ui.gd" id="1_6rgjx"]
+[ext_resource type="Script" path="res://controllers/character/character-ui.gd" id="1_o65gk"]
 
 [node name="PlayerUI" type="Control"]
 layout_mode = 3
 anchors_preset = 0
 mouse_filter = 1
-script = ExtResource("1_6rgjx")
+script = ExtResource("1_o65gk")
 
 [node name="Help" type="VBoxContainer" parent="."]
 layout_mode = 0

@@ -21,6 +21,14 @@ signal target_changed()
 const MOUSE_SENSITIVITY = 0.015
 const RAY_LENGTH = 10000
 
+@export var MAX_SPEED = 100
+@export var ACCELERATION = 50
+@export var DECELERATION = 50
+
+#var velocity := Vector3.ZERO
+var dir := Vector3.ZERO
+var orientation := Basis.IDENTITY
+
 #-------------------------------
 # Exporting target variable and setting default mouse control to false
 @export var target: Node3D
@@ -156,8 +164,8 @@ func input_camera(event):
 		cam.rotate_relative(camera_move)
 		
 func input_character(event):
-	if target is LCPlayer:
-		var player: LCPlayer = target
+	if target is LCCharacter:
+		var player: LCCharacter = target
 
 		if not player:
 			return
@@ -209,7 +217,7 @@ func _on_State_transited():
 	camera.set_follow_height(0.5)
 	camera.set_spring_length(2.5)
 	
-	if target is LCPlayer:
+	if target is LCCharacter:
 		camera.set_spring_length(2.5)
 		target.set_camera(camera) #TBD: Remove camera
 	elif target is LCSpacecraft:
@@ -233,4 +241,3 @@ func update_entities(entities):
 # Function camera_global_position returns the global position of the camera
 func camera_global_position():
 	return camera.global_position
-

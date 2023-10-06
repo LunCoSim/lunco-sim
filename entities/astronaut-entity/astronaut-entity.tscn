@@ -1,7 +1,7 @@
 [gd_scene load_steps=4 format=3 uid="uid://db37rii8injqd"]
 
 [ext_resource type="PackedScene" uid="uid://cydyol1y0iq2y" path="res://content/animated-astronaut-character-in-space-suit-loop/source/Walking astronaut.glb" id="1_twwc2"]
-[ext_resource type="PackedScene" uid="uid://cibc2v3g1bk4g" path="res://controllers/player/player-controller.tscn" id="2_kgivd"]
+[ext_resource type="PackedScene" uid="uid://cibc2v3g1bk4g" path="res://controllers/character/character-controller.tscn" id="2_kgivd"]
 
 [sub_resource type="CapsuleShape3D" id="CapsuleShape3D_8s6cg"]
 

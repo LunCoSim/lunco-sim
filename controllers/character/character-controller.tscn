@@ -1,6 +1,6 @@
 [gd_scene load_steps=43 format=3 uid="uid://cibc2v3g1bk4g"]
 
-[ext_resource type="Script" path="res://controllers/player/player-controller.gd" id="1_541sa"]
+[ext_resource type="Script" path="res://controllers/character/character-controller.gd" id="1_541sa"]
 [ext_resource type="Script" path="res://addons/imjp94.yafsm/src/StateMachinePlayer.gd" id="2_lr54q"]
 [ext_resource type="Script" path="res://addons/imjp94.yafsm/src/states/StateMachine.gd" id="3_j3fcc"]
 [ext_resource type="Script" path="res://addons/imjp94.yafsm/src/states/State.gd" id="4_kw0e3"]

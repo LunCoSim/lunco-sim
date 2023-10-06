@@ -1,7 +1,7 @@
 [gd_scene load_steps=3 format=3 uid="uid://bko8sxuql5v50"]
 
-[ext_resource type="Script" path="res://entities/starship-entity/spacecraft-ui.gd" id="1"]
-[ext_resource type="PackedScene" uid="uid://dbwb14u15aac2" path="res://widgets/stopwatch.tscn" id="3"]
+[ext_resource type="Script" path="res://controllers/spacecraft/spacecraft-ui.gd" id="1_ayjnp"]
+[ext_resource type="PackedScene" uid="uid://dbwb14u15aac2" path="res://core/widgets/stopwatch.tscn" id="2_4jvho"]
 
 [node name="SpacecraftUI" type="Control"]
 layout_mode = 3
@@ -11,7 +11,7 @@ anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 mouse_filter = 1
-script = ExtResource("1")
+script = ExtResource("1_ayjnp")
 
 [node name="HUD" type="VBoxContainer" parent="."]
 layout_mode = 1
@@ -78,7 +78,7 @@ text = "Rotate camera: RMB or Arrows"
 [node name="MET" type="VBoxContainer" parent="."]
 layout_mode = 0
 
-[node name="Stopwatch" parent="MET" instance=ExtResource("3")]
+[node name="Stopwatch" parent="MET" instance=ExtResource("2_4jvho")]
 layout_mode = 2
 text = "00:00:00"
 

@@ -1,5 +1,5 @@
 @icon("res://controllers/player/character.svg")
-class_name LCPlayer
+class_name LCCharacter
 extends LCSpaceSystem
 
 
