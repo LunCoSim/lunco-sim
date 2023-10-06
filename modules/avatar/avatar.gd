@@ -165,17 +165,15 @@ func input_camera(event):
 		
 func input_character(event):
 	if target is LCCharacter:
-		var player: LCCharacter = target
+		var character: LCCharacter = target
 
-		if not player:
-			return
-
-		var motion_direction := Vector3(
+		
+		var motion = Vector2(
 			Input.get_action_strength("move_right") - Input.get_action_strength("move_left"),
-			Input.get_action_strength("move_up") - Input.get_action_strength("move_down"),
 			Input.get_action_strength("move_back") - Input.get_action_strength("move_forward"))
-
-		player.set_camera(camera)
+			
+		#character.motion = motion	
+		#character.set_camera(camera)
 		
 func input_spacecraft(event):
 	if target is LCSpacecraft:
