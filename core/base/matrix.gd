@@ -21,12 +21,13 @@ func _ready():
 	search_for_space_systems(NodeToTrack, space_systems)
 	
 	#visualising LCSpaceSystems
-	for sp_system in space_systems:
+	for sp_system: LCSpaceSystem in space_systems:
 		if sp_system.Visual:
 			var n: Node3D = sp_system.Visual.instantiate()
-			n.set_physics_process(false)
-			n.global_position = sp_system.global_position
-			add_child(n)
+			sp_system.add_child(n)
+			#n.set_physics_process(false)
+			##n.global_position = sp_system.global_position
+			##add_child(n)
 
 #------------------
 

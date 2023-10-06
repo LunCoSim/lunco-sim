@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3 uid="uid://d0tealhfh4iqs"]
+
+[ext_resource type="Script" path="res://core/models/globe.gd" id="1_kuh4e"]
+
+[node name="Globe" type="Node3D"]
+script = ExtResource("1_kuh4e")
