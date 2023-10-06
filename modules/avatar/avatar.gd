@@ -228,6 +228,8 @@ func _on_State_transited():
 func _on_select_entity_to_spawn(entity_id=0):
 	entity_to_spawn = entity_id
 
+func update_entities(entities):
+	$UI.update_entities(entities)
 # Function camera_global_position returns the global position of the camera
 func camera_global_position():
 	return camera.global_position

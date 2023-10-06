@@ -66,3 +66,13 @@ func _on_entities_item_selected(index):
 	print("_on_entities_item_selected: ", index)
 	emit_signal("entity_selected", index)
 	pass # Replace with function body.
+
+func update_entities(entities):
+	var tree: ItemList = $LiveEntities
+	
+	tree.clear()
+	
+	for entity in entities:
+		# Add child items to the root.
+		tree.add_item("Entity: " + str(entity))
+	
