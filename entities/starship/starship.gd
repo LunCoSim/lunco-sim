@@ -1,5 +1,5 @@
 @icon("res://entities/starship_entity.svg")
-extends RigidBody3D
+extends LCRigidBody
 
 
 # Called when the node enters the scene tree for the first time.
