@@ -1,0 +1,33 @@
+[gd_scene load_steps=7 format=3 uid="uid://dic5kx001cac6"]
+
+[ext_resource type="PackedScene" uid="uid://b3g4jkx7njm1r" path="res://scenarios/quad_plane_test/QuadPlaneLOD.tscn" id="1_1ko27"]
+[ext_resource type="PackedScene" uid="uid://c5dg7yq7hd7m0" path="res://core/nodes/avatar/avatar.tscn" id="2_1bvla"]
+[ext_resource type="Texture2D" uid="uid://c6v84yxrojl2k" path="res://addons/lunco-assets/ESO_-_Milky_Way.jpeg" id="3_ga35k"]
+
+[sub_resource type="PanoramaSkyMaterial" id="PanoramaSkyMaterial_gy2me"]
+panorama = ExtResource("3_ga35k")
+
+[sub_resource type="Sky" id="Sky_c8mxq"]
+sky_material = SubResource("PanoramaSkyMaterial_gy2me")
+
+[sub_resource type="Environment" id="Environment_18cnp"]
+background_mode = 2
+sky = SubResource("Sky_c8mxq")
+sdfgi_use_occlusion = true
+volumetric_fog_enabled = true
+volumetric_fog_density = 0.0
+volumetric_fog_length = 300.0
+volumetric_fog_detail_spread = 0.588438
+
+[node name="QuadPlaneLODDemo" type="Node3D"]
+
+[node name="QuadPlaneLOD" parent="." instance=ExtResource("1_1ko27")]
+transform = Transform3D(0.999999, 0, 0, 0, 0.955747, 0.29419, 0, -0.29419, 0.955746, 0, 0, 0)
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 0.955742, 0.294207, 0, -0.294207, 0.955742, 0, 0, 0)
+
+[node name="Avatar" parent="." instance=ExtResource("2_1bvla")]
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Environment_18cnp")

@@ -1,0 +1,24 @@
+[gd_scene load_steps=6 format=3 uid="uid://dxepfetvn7y3c"]
+
+[ext_resource type="PackedScene" uid="uid://dly6j7li6g7t8" path="res://core/models/operator-model.tscn" id="1_8ym3w"]
+[ext_resource type="Script" path="res://entities/operator/operator.gd" id="2_mcyer"]
+[ext_resource type="PackedScene" uid="uid://dpv63l3fgdrk5" path="res://controllers/operator/operator-controller.tscn" id="3_kevig"]
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_fffnb"]
+albedo_color = Color(0, 0, 0, 1)
+
+[sub_resource type="SceneReplicationConfig" id="SceneReplicationConfig_ivohk"]
+properties/0/path = NodePath(".:position")
+properties/0/spawn = true
+properties/0/replication_mode = 1
+
+[node name="Operator" instance=ExtResource("1_8ym3w")]
+script = ExtResource("2_mcyer")
+
+[node name="MeshInstance" parent="." index="0"]
+surface_material_override/0 = SubResource("StandardMaterial3D_fffnb")
+
+[node name="OperatorController" parent="." index="2" instance=ExtResource("3_kevig")]
+
+[node name="MultiplayerSynchronizer" type="MultiplayerSynchronizer" parent="." index="3"]
+replication_config = SubResource("SceneReplicationConfig_ivohk")

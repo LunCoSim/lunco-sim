@@ -4,15 +4,15 @@ extends Node
 enum Entities {
 	Spacecraft,
 	Operator,
-	Character,
+	Gobot,
 	Astronaut
 }
 
 var Paths = {
-	Entities.Spacecraft: "res://entities/starship-entity/starship-entity.tscn",
-	Entities.Operator: "res://entities/operator-entity/operator-entity.tscn",
-	Entities.Character: "res://entities/character-entity/character-entity.tscn",
-	Entities.Astronaut: "res://entities/astronaut-entity/astronaut-entity.tscn",
+	Entities.Spacecraft: "res://entities/starship/starship.tscn",
+	Entities.Operator: "res://entities/operator/operator.tscn",
+	Entities.Gobot: "res://entities/gobot/gobot.tscn",
+	Entities.Astronaut: "res://entities/astronaut/astronaut.tscn",
 }
 
 var Caches = {

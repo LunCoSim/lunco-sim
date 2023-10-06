@@ -47,7 +47,7 @@ func _on_create_operator():
 	spawn.rpc_id(1, EntitiesDB.Entities.Operator)
 
 func _on_create_character():
-	spawn.rpc_id(1, EntitiesDB.Entities.Character)
+	spawn.rpc_id(1, EntitiesDB.Entities.Gobot)
 
 func _on_create_spacecraft():
 	spawn.rpc_id(1, EntitiesDB.Entities.Spacecraft)
