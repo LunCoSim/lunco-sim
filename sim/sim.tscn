@@ -1,5 +1,6 @@
-[gd_scene load_steps=16 format=3 uid="uid://btfca8gppw043"]
+[gd_scene load_steps=17 format=3 uid="uid://btfca8gppw043"]
 
+[ext_resource type="Script" path="res://core/base/matrix.gd" id="1_pdhyh"]
 [ext_resource type="Script" path="res://sim/sim.gd" id="1_thahp"]
 [ext_resource type="PackedScene" uid="uid://dniml0evqbs6v" path="res://sim/sim-ui.tscn" id="2_5h5ks"]
 [ext_resource type="PackedScene" uid="uid://d8gbyf2xbd4m" path="res://content/maps/Langrenus/langrenus_map.tscn" id="2_7rofx"]
@@ -73,6 +74,9 @@ spawn_path = NodePath("../Universe/Sun/Earth/LangrenusBase/SpawnPosition")
 
 [node name="Avatar" parent="." instance=ExtResource("2_o421v")]
 transform = Transform3D(-0.82255, -0.00837469, 0.568631, 0.00348538, 0.999798, 0.0197666, -0.568682, 0.0182409, -0.822355, 0, 0, 0)
+
+[node name="Matrix" type="Node3D" parent="."]
+script = ExtResource("1_pdhyh")
 
 [connection signal="spawned" from="MultiplayerSpawner" to="." method="_on_multiplayer_spawner_spawned"]
 [connection signal="create_operator" from="Avatar" to="." method="_on_create_operator"]
