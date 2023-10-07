@@ -15,8 +15,6 @@ extends LCController
 
 signal thrusted(enabled)
 
-const Z_FRONT = 1 #in this game the front side is towards negative Z
-
 # Commands
 # thrust
 # change orienation(x, y, z)
@@ -32,11 +30,11 @@ func _physics_process(_delta):
 	#if Target.name == str(multiplayer.get_unique_id()): TBD Find a better way to handle multiplayer authority
 	if is_multiplayer_authority():
 		if parent:
-			parent.apply_central_force(parent.transform.basis.z * Z_FRONT * thrust)
+			parent.apply_central_force(parent.transform.basis.z * thrust)
 
-			parent.apply_torque(parent.global_transform.basis.x * torque.x * THRUST_TURN * Z_FRONT)
-			parent.apply_torque(parent.global_transform.basis.y * torque.y * THRUST_TURN * Z_FRONT)
-			parent.apply_torque(parent.global_transform.basis.z * torque.z * THRUST_ROLL * Z_FRONT)
+			parent.apply_torque(parent.global_transform.basis.x * torque.x * THRUST_TURN)
+			parent.apply_torque(parent.global_transform.basis.y * torque.y * THRUST_TURN)
+			parent.apply_torque(parent.global_transform.basis.z * torque.z * THRUST_ROLL)
 
 
 	
@@ -45,7 +43,7 @@ func _physics_process(_delta):
 func throttle(_thrust: bool):
 	if _thrust:
 		thrust = THRUST
-		parent._on_spacecraft_controller_thrusted(true)
+		parent._on_spacecraft_controller_thrusted(true)     
 	else:
 		thrust = 0
 		parent._on_spacecraft_controller_thrusted(false)

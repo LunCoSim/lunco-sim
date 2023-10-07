@@ -15,9 +15,9 @@ func _input(_event):
 			_target.throttle(false)
 
 		var torque_action := Vector3(
-			Input.get_action_strength("pitch_up") - Input.get_action_strength("pitch_down"),
-			Input.get_action_strength("yaw_right") - Input.get_action_strength("yaw_left"),
-			Input.get_action_strength("roll_cw") - Input.get_action_strength("roll_ccw")
+			- Input.get_action_strength("pitch_up") + Input.get_action_strength("pitch_down"),
+			- Input.get_action_strength("yaw_right") + Input.get_action_strength("yaw_left"),
+			- Input.get_action_strength("roll_cw") + Input.get_action_strength("roll_ccw")
 		)
 
 		_target.change_orientation(torque_action)
