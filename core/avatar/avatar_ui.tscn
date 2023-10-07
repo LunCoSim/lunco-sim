@@ -12,9 +12,6 @@ grow_vertical = 2
 mouse_filter = 2
 script = ExtResource("1_igs02")
 
-[node name="TargetUI" type="Control" parent="."]
-anchors_preset = 0
-
 [node name="Help" type="VBoxContainer" parent="."]
 layout_mode = 1
 anchors_preset = 1
@@ -70,6 +67,9 @@ offset_top = 160.0
 offset_bottom = 360.0
 grow_horizontal = 0
 grow_vertical = 2
+
+[node name="TargetUI" type="Control" parent="."]
+anchors_preset = 0
 
 [connection signal="item_selected" from="Entities" to="." method="_on_entities_item_selected"]
 [connection signal="item_selected" from="LiveEntities" to="." method="_on_existing_entity_selected"]

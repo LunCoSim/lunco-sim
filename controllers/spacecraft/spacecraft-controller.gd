@@ -43,12 +43,12 @@ func _physics_process(_delta):
 # ------------
 # Commands that changes internal state
 func throttle(_thrust: bool):
-	emit_signal("thrusted", _thrust)
-	
 	if _thrust:
 		thrust = THRUST
+		parent._on_spacecraft_controller_thrusted(true)
 	else:
 		thrust = 0
+		parent._on_spacecraft_controller_thrusted(false)
 		
 func change_orientation(_torque: Vector3):
 	torque = _torque

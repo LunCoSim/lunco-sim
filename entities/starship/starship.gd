@@ -13,5 +13,5 @@ func _process(_delta):
 
 
 func _on_spacecraft_controller_thrusted(enabled):
-	$Exhaust.visible = enabled
+	$RocketEngine.visible = enabled
 			

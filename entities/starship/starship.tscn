@@ -1,9 +1,10 @@
-[gd_scene load_steps=7 format=3 uid="uid://bmqo4d60d70oc"]
+[gd_scene load_steps=8 format=3 uid="uid://bmqo4d60d70oc"]
 
 [ext_resource type="Script" path="res://entities/starship/starship.gd" id="2_1l3pd"]
 [ext_resource type="PackedScene" uid="uid://c81ry3343bcav" path="res://content/spacex-starship/source/SpaceX_Starship.fbx" id="2_rnh5o"]
 [ext_resource type="PackedScene" uid="uid://btw1pbsrpnjx4" path="res://controllers/spacecraft/spacecraft-controller.tscn" id="3_5ni86"]
 [ext_resource type="PackedScene" uid="uid://co1mar6mmv7f1" path="res://core/models/rocket-plume/rocket-plume-2d.tscn" id="4_l0nkf"]
+[ext_resource type="Script" path="res://components/rocket-engine/rocket-engine.gd" id="4_txkxb"]
 
 [sub_resource type="CapsuleShape3D" id="CapsuleShape3D_nesje"]
 radius = 5.0
@@ -27,19 +28,20 @@ shape = SubResource("CapsuleShape3D_nesje")
 
 [node name="SpacecraftController" parent="." instance=ExtResource("3_5ni86")]
 
-[node name="Exhaust" type="Node3D" parent="."]
+[node name="RocketEngine" type="Node3D" parent="."]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1.09942e-06, -9.61148e-14, -25.1519)
 visible = false
+script = ExtResource("4_txkxb")
 
-[node name="RocketPlume" parent="Exhaust" instance=ExtResource("4_l0nkf")]
+[node name="RocketPlume" parent="RocketEngine" instance=ExtResource("4_l0nkf")]
 transform = Transform3D(2, 0, 0, 0, 2, 5.0822e-21, 0, -8.47033e-21, 5, -2.40698, 1.82227, 0.268951)
 
-[node name="RocketPlume2" parent="Exhaust" instance=ExtResource("4_l0nkf")]
+[node name="RocketPlume2" parent="RocketEngine" instance=ExtResource("4_l0nkf")]
 transform = Transform3D(2, 0, 0, 0, 2, 1.35525e-20, 0, -8.47033e-21, 5, 2.68673e-07, -2.77329, 0.268951)
 
-[node name="RocketPlume3" parent="Exhaust" instance=ExtResource("4_l0nkf")]
+[node name="RocketPlume3" parent="RocketEngine" instance=ExtResource("4_l0nkf")]
 transform = Transform3D(2, 0, 0, 0, 2, -6.77626e-21, 0, -8.47033e-21, 5, 2.809, 1.80927, 0.269001)
 
-[node name="MultiplayerSynchronizer" type="MultiplayerSynchronizer" parent="Exhaust"]
+[node name="MultiplayerSynchronizer" type="MultiplayerSynchronizer" parent="RocketEngine"]
 root_path = NodePath("../..")
 replication_config = SubResource("SceneReplicationConfig_l7sxw")

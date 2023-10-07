@@ -1,10 +1,11 @@
-[gd_scene load_steps=6 format=3 uid="uid://c4vgq4emswcqj"]
+[gd_scene load_steps=7 format=3 uid="uid://c4vgq4emswcqj"]
 
 [ext_resource type="PackedScene" uid="uid://oulno1atrp8k" path="res://core/simulation/simulation.tscn" id="1_feltx"]
 [ext_resource type="PackedScene" uid="uid://cpbv4fmfxppt1" path="res://modules/solar_system_planets/sun.tscn" id="3_r6oc6"]
 [ext_resource type="PackedScene" uid="uid://ddaqlkbgl7bdl" path="res://modules/solar_system_planets/earth.tscn" id="4_lv7ap"]
 [ext_resource type="PackedScene" uid="uid://csqh45xcqbewi" path="res://modules/solar_system_planets/moon.tscn" id="5_m7lob"]
 [ext_resource type="PackedScene" uid="uid://c7q7gaaaa8g5g" path="res://content/maps/Langrenus/langrenus_crater_map.tscn" id="6_1kmik"]
+[ext_resource type="PackedScene" uid="uid://bmqo4d60d70oc" path="res://entities/starship/starship.tscn" id="6_w0e8k"]
 
 [node name="Simulation" node_paths=PackedStringArray("spawn_node") instance=ExtResource("1_feltx")]
 spawn_node = NodePath("Universe/Sun/Earth/Moon/LangrenusCraterMap/Spawner")
@@ -22,3 +23,7 @@ spawn_path = NodePath("../Universe/Sun/Earth/Moon/LangrenusCraterMap/Spawner")
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 51, 0)
 
 [node name="Spawner" type="Node3D" parent="Universe/Sun/Earth/Moon/LangrenusCraterMap" index="2"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -55.4874, 0)
+
+[node name="Starship" parent="Universe/Sun/Earth/Moon/LangrenusCraterMap/Spawner" index="0" instance=ExtResource("6_w0e8k")]
+transform = Transform3D(4.37114e-08, 3.82137e-15, 1, 8.74228e-08, -1, 0, 1, 8.74228e-08, -4.37114e-08, 0, 20.9677, 0)

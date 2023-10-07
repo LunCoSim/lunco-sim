@@ -40,7 +40,7 @@ var orientation := Basis.IDENTITY
 #-------------------------------
 # Defining UI and camera variables
 @onready var ui := $UI
-@onready var camera := $SpringArmCamera
+@onready var camera:SpringArmCamera = $SpringArmCamera
 
 #------------------------------
 # Internal state
