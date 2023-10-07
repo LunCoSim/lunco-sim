@@ -65,6 +65,7 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -93.103, -86.0103, 22.5669)
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -53.3132, -80.8122, 146.559)
 
 [node name="MultiplayerSpawner" type="MultiplayerSpawner" parent="."]
+_spawnable_scenes = PackedStringArray("res://entities/astronaut/astronaut.tscn", "res://entities/gobot/gobot.tscn", "res://entities/operator/operator.tscn", "res://entities/starship/starship.tscn")
 spawn_path = NodePath("../Universe/Sun/Earth/Moon/LangrenusCraterMap/SpawnPosition")
 
 [node name="Avatar" parent="." instance=ExtResource("2_o421v")]
