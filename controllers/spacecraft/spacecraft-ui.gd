@@ -17,8 +17,8 @@ func set_target(_target):
 
 func _on_UpdateUI_timeout():
 	print("_on_UpdateUI_timeout")
-	if target and target.Target: #target is controller and Target is the actual body
-		var Target = target.Target
+	if target and target.parent: #target is controller and Target is the actual body
+		var Target = target.parent
 		
 		var vec = Target.transform.origin
 		position_lbl.text = "Position: (%.2f, %.2f, %.2f) Abs: %.2f" % [vec.x, vec.y, vec.z, vec.length()]
