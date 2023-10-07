@@ -103,7 +103,7 @@ func action_raycast(position: Vector2):
 
 func _input(event):
 	if Input.is_action_just_pressed("click"):
-		action_raycast(event.position)
+		action_raycast(event.position) # TBD: Event could be different then expected
 		
 	if Input.is_action_just_pressed("ui_cancel"):
 		#SceneManager.no_effect_change_scene("back")
@@ -161,8 +161,8 @@ func input_camera(event):
 		cam.rotate_relative(camera_move)
 		
 func input_character(event):
-	if target is LCCharacter:
-		var character: LCCharacter = target
+	if target is LCCharacterController:
+		var character: LCCharacterController = target
 
 		
 		var motion = Vector2(
@@ -173,8 +173,8 @@ func input_character(event):
 		#character.set_camera(camera)
 		
 func input_spacecraft(event):
-	if target is LCSpacecraft:
-		var spacecraft: LCSpacecraft = target
+	if target is LCSpacecraftController:
+		var spacecraft: LCSpacecraftController = target
 
 		if Input.is_action_just_pressed("throttle"):
 			spacecraft.throttle(true)
@@ -190,9 +190,9 @@ func input_spacecraft(event):
 		spacecraft.change_orientation(torque)
 		
 func input_operator(event):
-	if target is LCOperator:
+	if target is LCOperatorController:
 		var cam: SpringArmCamera = camera
-		var operator: LCOperator = target
+		var operator: LCOperatorController = target
 
 		if Input.is_action_just_pressed("reset_position"):
 			operator.reset_position();
@@ -212,13 +212,13 @@ func _on_State_transited():
 	camera.set_follow_height(0.5)
 	camera.set_spring_length(2.5)
 	
-	if target is LCCharacter:
+	if target is LCCharacterController:
 		camera.set_spring_length(2.5)
 		target.set_camera(camera) #TBD: Remove camera
-	elif target is LCSpacecraft:
+	elif target is LCSpacecraftController:
 		camera.set_spring_length(50)
 		camera.set_follow_height(0)
-	elif target is LCOperator:
+	elif target is LCOperatorController:
 		camera.set_spring_length(2.5)
 
 	self.emit_signal("target_changed", target)

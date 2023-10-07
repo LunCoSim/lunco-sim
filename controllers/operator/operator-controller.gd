@@ -1,6 +1,6 @@
 #This code is based on Gogot kinematic_character example
 @icon("res://controllers/operator/operator.svg")
-class_name LCOperator
+class_name LCOperatorController
 extends LCSpaceSystem
 
 @onready var Target: CharacterBody3D = get_parent()

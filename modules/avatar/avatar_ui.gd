@@ -52,11 +52,11 @@ func clear_ui():
 
 func set_target(target):
 	
-	if target is LCCharacter:
+	if target is LCCharacterController:
 		_ui = preload("res://controllers/character/character-ui.tscn").instantiate()
-	elif target is LCSpacecraft:
+	elif target is LCSpacecraftController:
 		_ui = preload("res://controllers/spacecraft/spacecraft-ui.tscn").instantiate()
-	elif target is LCOperator:
+	elif target is LCOperatorController:
 		_ui = preload("res://controllers/operator/operator-ui.tscn").instantiate()
 
 	if _ui:
