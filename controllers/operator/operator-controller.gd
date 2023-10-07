@@ -35,17 +35,6 @@ func _physics_process(delta):
 
 			Target.move_and_slide()
 
-func _input(_event):
-	if Input.is_action_just_pressed("reset_position"):
-		reset_position();
-
-	var motion_direction := Vector3(
-		Input.get_action_strength("move_left") - Input.get_action_strength("move_right"),
-		Input.get_action_strength("move_up") - Input.get_action_strength("move_down"),
-		Input.get_action_strength("move_forward") - Input.get_action_strength("move_back")
-	)
-
-	move(motion_direction.normalized())	
 #-----------
 
 #Commands: 

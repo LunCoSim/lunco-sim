@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3 uid="uid://cqnkkr1pgxiyp"]
+
+[ext_resource type="Script" path="res://controllers/character/character-input-adapted.gd" id="1_53v2k"]
+
+[node name="CharactInputAdapter" type="MultiplayerSynchronizer"]
+script = ExtResource("1_53v2k")

@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3 uid="uid://cldjruv3bh7k7"]
+
+[ext_resource type="Script" path="res://controllers/spacecraft/spacecraft-input-adapter.gd" id="1_6lylm"]
+
+[node name="SpacecraftInputAdapter" type="Node"]
+script = ExtResource("1_6lylm")

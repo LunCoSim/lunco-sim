@@ -1,13 +1,18 @@
+class_name LCSpacecraftInputAdapter
 extends Node
 
-@onready var target:LCSpacecraftController=get_parent()
-	
+@export var target: Node
+
 func _input(_event):
-	if target:
+	var _target = target
+	if target is LCAvatar:
+		_target = target.target
+		
+	if _target is LCSpacecraftController:
 		if Input.is_action_just_pressed("throttle"):
-			target.throttle(true)
+			_target.throttle(true)
 		elif Input.is_action_just_released("throttle"):
-			target.throttle(false)
+			_target.throttle(false)
 
 		var torque_action := Vector3(
 			Input.get_action_strength("pitch_up") - Input.get_action_strength("pitch_down"),
@@ -15,4 +20,4 @@ func _input(_event):
 			Input.get_action_strength("roll_cw") - Input.get_action_strength("roll_ccw")
 		)
 
-		target.change_orientation(torque_action)
+		_target.change_orientation(torque_action)

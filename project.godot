@@ -29,6 +29,7 @@ LCUtil="*res://core/singletones/utils.gd"
 LCWindows="*res://core/singletones/windows-manager.gd"
 SceneManager="*res://addons/scene_manager/scene_manager.tscn"
 Scenes="*res://presets/scenes.gd"
+EntitiesDB="*res://core/singletones/entities-manager.gd"
 
 [display]
 

@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3 uid="uid://c1symo07dohlf"]
+
+[ext_resource type="Script" path="res://controllers/operator/operator-input-adapter.gd" id="1_fwdeu"]
+
+[node name="LCOperatorInputAdapter" type="Node"]
+script = ExtResource("1_fwdeu")

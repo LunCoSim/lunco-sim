@@ -1,11 +1,21 @@
+class_name LCOperatorInputAdapter
 extends Node
 
+@export var target: Node
 
-# Called when the node enters the scene tree for the first time.
-func _ready():
-	pass # Replace with function body.
+func _input(_event):
+	var _target = target
+	if target is LCAvatar:
+		_target = target.target
+	
+	if _target is LCOperatorController:
+		if Input.is_action_just_pressed("reset_position"):
+			_target.reset_position();
 
+		var motion_direction := Vector3(
+			Input.get_action_strength("move_left") - Input.get_action_strength("move_right"),
+			Input.get_action_strength("move_up") - Input.get_action_strength("move_down"),
+			Input.get_action_strength("move_forward") - Input.get_action_strength("move_back")
+		)
 
-# Called every frame. 'delta' is the elapsed time since the previous frame.
-func _process(delta):
-	pass
+		_target.move(motion_direction.normalized())	

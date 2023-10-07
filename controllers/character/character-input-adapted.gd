@@ -1,3 +1,4 @@
+class_name LCCharacterInputAdapter
 extends MultiplayerSynchronizer
 
 const CAMERA_CONTROLLER_ROTATION_SPEED := 3.0
