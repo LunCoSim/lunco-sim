@@ -16,4 +16,9 @@ _spawnable_scenes = PackedStringArray("res://entities/astronaut/astronaut.tscn",
 [node name="Universe" parent="." instance=ExtResource("3_q6u50")]
 unique_name_in_owner = true
 
+[connection signal="entities_updated" from="." to="Avatar" method="update_entities"]
+[connection signal="create_operator" from="Avatar" to="." method="_on_create_operator"]
+[connection signal="create_player" from="Avatar" to="." method="_on_create_character"]
+[connection signal="create_spacecraft" from="Avatar" to="." method="_on_create_spacecraft"]
+[connection signal="spawn_entity" from="Avatar" to="." method="_on_select_entity_to_spawn"]
 [connection signal="spawned" from="MultiplayerSpawner" to="." method="_on_multiplayer_spawner_spawned"]
