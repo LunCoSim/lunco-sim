@@ -120,7 +120,6 @@ func _input(event):
 	
 	input_camera(event)
 	input_character(event)
-	input_spacecraft(event)
 	input_operator(event)
 
 func input_camera(event):
@@ -172,38 +171,12 @@ func input_character(event):
 		#character.motion = motion	
 		#character.set_camera(camera)
 		
-func input_spacecraft(event):
-	if target is LCSpacecraftController:
-		var spacecraft: LCSpacecraftController = target
-
-		if Input.is_action_just_pressed("throttle"):
-			spacecraft.throttle(true)
-		elif Input.is_action_just_released("throttle"):
-			spacecraft.throttle(false)
-
-		var torque := Vector3(
-			Input.get_action_strength("pitch_up") - Input.get_action_strength("pitch_down"),
-			Input.get_action_strength("yaw_right") - Input.get_action_strength("yaw_left"),
-			Input.get_action_strength("roll_cw") - Input.get_action_strength("roll_ccw")
-		)
-
-		spacecraft.change_orientation(torque)
-		
 func input_operator(event):
 	if target is LCOperatorController:
 		var cam: SpringArmCamera = camera
 		var operator: LCOperatorController = target
 
-		if Input.is_action_just_pressed("reset_position"):
-			operator.reset_position();
-
-		var motion_direction := Vector3(
-			Input.get_action_strength("move_left") - Input.get_action_strength("move_right"),
-			Input.get_action_strength("move_up") - Input.get_action_strength("move_down"),
-			Input.get_action_strength("move_forward") - Input.get_action_strength("move_back")
-		)
-
-		operator.move(motion_direction.normalized())
+		
 		operator.orient(cam.get_plain_basis())
 #------------------------------------------------------
 # Function _on_State_transited instantiates different ui based on target and sets camera spring length
