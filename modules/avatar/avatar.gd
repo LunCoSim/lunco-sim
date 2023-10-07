@@ -79,13 +79,7 @@ func _ready():
 	set_camera(camera)
 		
 #-----------------------------------------------------
-func _unhandled_input(event):
-	#Left mouse button pressed
-	if event is InputEventMouseButton and event.pressed and event.button_index == 1:
-		var e: InputEventMouseButton = event
-		var pos = e.position
-		action_raycast(e.position)
-		
+
 func action_raycast(position: Vector2):
 	if camera:  
 		var from = camera.project_ray_origin(position)
@@ -108,6 +102,9 @@ func action_raycast(position: Vector2):
 				
 
 func _input(event):
+	if Input.is_action_just_pressed("click"):
+		action_raycast(event.position)
+		
 	if Input.is_action_just_pressed("ui_cancel"):
 		#SceneManager.no_effect_change_scene("back")
 		#TBD: Show/hide menu, should be a signal? To what?
