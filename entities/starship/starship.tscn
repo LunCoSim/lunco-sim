@@ -11,9 +11,6 @@ radius = 5.0
 height = 44.0
 
 [sub_resource type="SceneReplicationConfig" id="SceneReplicationConfig_l7sxw"]
-properties/0/path = NodePath("Exhaust:visible")
-properties/0/spawn = true
-properties/0/replication_mode = 2
 
 [node name="Starship" type="RigidBody3D"]
 transform = Transform3D(4.37114e-08, 3.82137e-15, 1, 8.74228e-08, -1, 0, 1, 8.74228e-08, -4.37114e-08, 0, 0, 0)

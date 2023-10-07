@@ -46,7 +46,11 @@ func spawn(_entity: EntitiesDB.Entities, global_position=null): #TBD think of a 
 	var num = spawn_node.get_child_count()
 	Panku.gd_exprenv.register_env("Entity"+str(num), entity)
 
-	
+
+func _on_multiplayer_spawner_spawned(node):
+	entities.append(node)
+	entities_updated.emit(entities)
+
 #----------
 # Signals from Avatar
 
@@ -63,3 +67,4 @@ func _on_select_entity_to_spawn(entity_id=0, position=Vector3.ZERO):
 	spawn.rpc_id(1, entity_id, position)
 	
 #---------------------------------------
+

@@ -54,6 +54,9 @@ var Controllers = [] # TBD Global
 func set_target(_target):
 	if camera and target:
 		camera.remove_excluded_object(target.get_parent())
+	
+	if target is LCController:
+		target.get_parent().set_multiplayer_authority(1)
 		
 	target = _target
 	#searching for controller
@@ -65,7 +68,9 @@ func set_target(_target):
 	
 	if camera and target:
 		camera.add_excluded_object(target.get_parent())
-		
+	
+	if target is LCController:
+		target.get_parent().set_multiplayer_authority(multiplayer.get_unique_id())
 	# Calling state transited function
 	_on_state_transited()
 	return target
