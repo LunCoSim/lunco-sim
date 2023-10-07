@@ -1,7 +1,7 @@
 #This code is based on this game: https://godotforums.org/discussion/18480/godot-3d-vector-physics-cheat-sheet
 @icon("res://controllers/spacecraft/rocket.svg")
 class_name LCSpacecraftController
-extends LCSpaceSystem
+extends LCController
 
 @export_category("Rocket Specific parameters")
 @export var THRUST = 50

@@ -1,6 +1,6 @@
 @icon("res://controllers/player/character.svg")
 class_name LCCharacterController
-extends LCSpaceSystem
+extends LCController
 
 
 func set_camera(camera):

@@ -136,28 +136,30 @@ func input_camera(event):
 		var cam: SpringArmCamera = camera
 		var camera_move := Vector2.ZERO
 
+		# Code responsible for camera movement. Better update to action
 		if (event is InputEventMouseMotion) and mouse_control:
 			camera_move = event.relative * MOUSE_SENSITIVITY
-		else:
-			camera_move = Vector2(
-				Input.get_action_strength("camera_left") - Input.get_action_strength("camera_right"),
-				Input.get_action_strength("camera_up") - Input.get_action_strength("camera_down")
-			)
-
-		var camera_spring_length = Input.get_action_strength("plus") - Input.get_action_strength("minus")
+		
+		camera_move += Vector2(
+			Input.get_action_strength("camera_left") - Input.get_action_strength("camera_right"),
+			Input.get_action_strength("camera_up") - Input.get_action_strength("camera_down")
+		)
+		cam.rotate_relative(camera_move) #-> For certain controllers new camera direction matters
+		
+		# Manupulations with camera. TBD to actions as well
+		var delta_camera_spring_length = Input.get_action_strength("plus") - Input.get_action_strength("minus")
 
 		if event is InputEventMouseButton:
 			if event.button_index == MOUSE_BUTTON_WHEEL_UP:
 				print("Mouse wheel scrolled up!")
-				camera_spring_length += -2
+				delta_camera_spring_length += -2
 
 			elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
 				print("Mouse wheel scrolled down!")
-				camera_spring_length += 2
-
-
-		cam.inc_spring_length(camera_spring_length)
-		cam.rotate_relative(camera_move)
+				delta_camera_spring_length += 2
+				
+		cam.inc_spring_length(delta_camera_spring_length)
+		
 		
 func input_character(event):
 	if target is LCCharacterController:
