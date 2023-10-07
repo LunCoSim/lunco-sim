@@ -56,7 +56,8 @@ func set_target(_target):
 		camera.remove_excluded_object(target.get_parent())
 	
 	if target is LCController:
-		target.get_parent().set_multiplayer_authority(1)
+		target.set_authority.rpc(1)
+		#target.get_parent().set_multiplayer_authority(1)
 		
 	target = _target
 	#searching for controller
@@ -70,7 +71,8 @@ func set_target(_target):
 		camera.add_excluded_object(target.get_parent())
 	
 	if target is LCController:
-		target.get_parent().set_multiplayer_authority(multiplayer.get_unique_id())
+		target.set_authority.rpc(multiplayer.get_unique_id())
+		#target.get_parent().set_multiplayer_authority()
 	# Calling state transited function
 	_on_state_transited()
 	return target
