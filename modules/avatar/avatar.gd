@@ -47,7 +47,7 @@ var mouse_control := false
 # Function set_target sets the target, searches for a controller and calls state transited
 func set_target(_target):
 	if camera and target:
-		camera.remove_excluded_object(target)
+		camera.remove_excluded_object(target.get_parent())
 		
 	target = _target
 	#searching for controller
@@ -58,7 +58,7 @@ func set_target(_target):
 				target = N
 	
 	if camera and target:
-		camera.add_excluded_object(target)
+		camera.add_excluded_object(target.get_parent())
 		
 	# Calling state transited function
 	_on_State_transited()
