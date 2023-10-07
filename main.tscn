@@ -1,6 +1,25 @@
-[gd_scene load_steps=2 format=3 uid="uid://e6s7pfl2q41t"]
+[gd_scene load_steps=6 format=3 uid="uid://c4vgq4emswcqj"]
 
-[ext_resource type="Script" path="res://main.gd" id="1_uh55s"]
+[ext_resource type="PackedScene" uid="uid://oulno1atrp8k" path="res://core/simulation/simulation.tscn" id="1_feltx"]
+[ext_resource type="PackedScene" uid="uid://cpbv4fmfxppt1" path="res://modules/solar_system_planets/sun.tscn" id="3_r6oc6"]
+[ext_resource type="PackedScene" uid="uid://ddaqlkbgl7bdl" path="res://modules/solar_system_planets/earth.tscn" id="4_lv7ap"]
+[ext_resource type="PackedScene" uid="uid://csqh45xcqbewi" path="res://modules/solar_system_planets/moon.tscn" id="5_m7lob"]
+[ext_resource type="PackedScene" uid="uid://c7q7gaaaa8g5g" path="res://content/maps/Langrenus/langrenus_crater_map.tscn" id="6_1kmik"]
 
-[node name="main" type="Node"]
-script = ExtResource("1_uh55s")
+[node name="Simulation" instance=ExtResource("1_feltx")]
+spawn_node = Object(Node3D,"_import_path":NodePath(""),"unique_name_in_owner":false,"process_mode":0,"process_priority":0,"process_physics_priority":0,"process_thread_group":0,"editor_description":"","transform":Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0),"rotation_edit_mode":0,"rotation_order":2,"top_level":false,"visible":true,"visibility_parent":NodePath(""),"script":null)
+
+
+[node name="MultiplayerSpawner" parent="." index="1"]
+spawn_path = NodePath("../Universe/Sun/Earth/Moon/LangrenusCraterMap/Spawner")
+
+[node name="Sun" parent="Universe" index="1" instance=ExtResource("3_r6oc6")]
+
+[node name="Earth" parent="Universe/Sun" index="1" instance=ExtResource("4_lv7ap")]
+
+[node name="Moon" parent="Universe/Sun/Earth" index="0" instance=ExtResource("5_m7lob")]
+
+[node name="LangrenusCraterMap" parent="Universe/Sun/Earth/Moon" index="1" instance=ExtResource("6_1kmik")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 51, 0)
+
+[node name="Spawner" type="Node3D" parent="Universe/Sun/Earth/Moon/LangrenusCraterMap" index="2"]

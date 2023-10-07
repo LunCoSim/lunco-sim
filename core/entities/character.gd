@@ -1,2 +1,3 @@
 class_name LCCharacterBody
 extends CharacterBody3D
+

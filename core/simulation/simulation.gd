@@ -1,4 +1,4 @@
-@icon("res://sim/simulation.svg")
+@icon("res://core/simulation/simulation.svg")
 class_name LCSimulation
 extends Node
 
@@ -8,10 +8,13 @@ signal entity_spawned()
 
 #--------------------------------
 @export var entities = []
+@export var spawn_node: Node3D
 
 # Called when the node enters the scene tree for the first time.
 func _ready():
 	Panku.gd_exprenv.register_env("Avatar", $Avatar)
+	#if spawn_node:
+		#$MultiplayerSpawner.spawn_path = spawn_node
 	
 # Called every frame. 'delta' is the elapsed time since the previous frame.
 func _process(_delta):
@@ -32,15 +35,15 @@ func spawn(_entity: EntitiesDB.Entities, global_position=null): #TBD think of a 
 	entities.append(entity)
 	
 	if global_position != null:
-		entity.position = %SpawnPosition.to_local(global_position)
-	%SpawnPosition.add_child(entity, true)
+		entity.position = spawn_node.to_local(global_position)
+	spawn_node.add_child(entity, true)
 	
 	entity_spawned.emit(entity)
 	entities_updated.emit(entities)
 	
 	#TBD It's done for debug, should be done somewhere else, maybe special debug
 	#node? Maybe it should be global?
-	var num = %SpawnPosition.get_child_count()
+	var num = spawn_node.get_child_count()
 	Panku.gd_exprenv.register_env("Entity"+str(num), entity)
 
 	

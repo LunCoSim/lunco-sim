@@ -1,0 +1,19 @@
+[gd_scene load_steps=4 format=3 uid="uid://oulno1atrp8k"]
+
+[ext_resource type="Script" path="res://core/simulation/simulation.gd" id="1_thahp"]
+[ext_resource type="PackedScene" uid="uid://c5dg7yq7hd7m0" path="res://core/avatar/avatar.tscn" id="2_o421v"]
+[ext_resource type="PackedScene" uid="uid://b5v4w0inqo7vd" path="res://core/space/universe.tscn" id="3_q6u50"]
+
+[node name="Simulation" type="Node"]
+script = ExtResource("1_thahp")
+
+[node name="Avatar" parent="." instance=ExtResource("2_o421v")]
+transform = Transform3D(-0.82255, -0.00837469, 0.568631, 0.00348538, 0.999798, 0.0197666, -0.568682, 0.0182409, -0.822355, 0, 0, 0)
+
+[node name="MultiplayerSpawner" type="MultiplayerSpawner" parent="."]
+_spawnable_scenes = PackedStringArray("res://entities/astronaut/astronaut.tscn", "res://entities/gobot/gobot.tscn", "res://entities/operator/operator.tscn", "res://entities/starship/starship.tscn")
+
+[node name="Universe" parent="." instance=ExtResource("3_q6u50")]
+unique_name_in_owner = true
+
+[connection signal="spawned" from="MultiplayerSpawner" to="." method="_on_multiplayer_spawner_spawned"]

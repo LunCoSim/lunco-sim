@@ -36,7 +36,8 @@ func grab_camera() -> Camera3D:
 	# Check if the game is running outside of the editor
 	else:
 		# Get the current 'Camera3D' node from the 'Viewport' node
-		_camera = get_viewport().get_camera_3d()
+		if get_viewport():
+			_camera = get_viewport().get_camera_3d()
 		
 	# Return the grabbed 'Camera3D' node
 	return _camera

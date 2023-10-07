@@ -43,5 +43,3 @@ transform = Transform3D(2, 0, 0, 0, 2, -6.77626e-21, 0, -8.47033e-21, 5, 2.809, 
 [node name="MultiplayerSynchronizer" type="MultiplayerSynchronizer" parent="Exhaust"]
 root_path = NodePath("../..")
 replication_config = SubResource("SceneReplicationConfig_l7sxw")
-
-[connection signal="thrusted" from="SpacecraftController" to="." method="_on_spacecraft_controller_thrusted"]

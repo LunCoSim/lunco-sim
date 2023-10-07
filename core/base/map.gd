@@ -11,13 +11,13 @@ var camera: Camera3D
 func _init():
 	camera = LCUtil.grab_camera()
 	
-func _process(_delta):
-	
-	#hiding/showing depending on distance. Overkill with LOD system, but let it
-	if camera:
-		#var d = camera.position.distance_squared_to(position)
-		
-		if camera.position.distance_squared_to(position) > 1000*1000:
-			self.hide()
-		else:
-			self.show()
+#func _process(_delta):
+#
+	##hiding/showing depending on distance. Overkill with LOD system, but let it
+	#if camera:
+		##var d = camera.position.distance_squared_to(position)
+#
+		#if camera.position.distance_squared_to(position) > 1000*1000:
+			#self.hide()
+		#else:
+			#self.show()

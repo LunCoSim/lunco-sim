@@ -6,8 +6,4 @@ build/
 .plugged
 
 #Managed by gd-plug
-addons/ 
-
-#IVoyager
-ivoyager/
-ivoyager_assets/
+#addons/
