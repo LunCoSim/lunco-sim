@@ -1,6 +1,7 @@
 extends Control
 
 signal entity_selected(int)
+signal existing_entity_selected(int)
 
 @onready var ui := $TargetUI
 
@@ -67,6 +68,9 @@ func _on_entities_item_selected(index):
 	emit_signal("entity_selected", index)
 	pass # Replace with function body.
 
+func _on_existing_entity_selected(index):
+	existing_entity_selected.emit(index)
+	
 func update_entities(entities):
 	var tree: ItemList = $LiveEntities
 	

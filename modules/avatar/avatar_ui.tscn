@@ -71,4 +71,4 @@ grow_horizontal = 0
 grow_vertical = 2
 
 [connection signal="item_selected" from="Entities" to="." method="_on_entities_item_selected"]
-[connection signal="item_selected" from="LiveEntities" to="." method="_on_entities_item_selected"]
+[connection signal="item_selected" from="LiveEntities" to="." method="_on_existing_entity_selected"]
