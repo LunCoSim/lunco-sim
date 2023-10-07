@@ -1,0 +1,25 @@
+[gd_scene format=3 uid="uid://c7ydipd3dui4p"]
+
+[node name="Help" type="VBoxContainer"]
+anchor_top = 0.5
+anchor_bottom = 0.5
+offset_top = -58.0
+offset_right = 238.0
+offset_bottom = 58.0
+grow_vertical = 2
+
+[node name="Thrust" type="Label" parent="."]
+layout_mode = 2
+text = "Thrust: Space"
+
+[node name="Orientation" type="Label" parent="."]
+layout_mode = 2
+text = "Torque: WASD"
+
+[node name="CamRotate" type="Label" parent="."]
+layout_mode = 2
+text = "Camera distance: -/+"
+
+[node name="CamDistance" type="Label" parent="."]
+layout_mode = 2
+text = "Rotate camera: RMB or Arrows"

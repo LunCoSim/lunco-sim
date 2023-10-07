@@ -12,7 +12,8 @@ grow_vertical = 2
 mouse_filter = 2
 script = ExtResource("1_igs02")
 
-[node name="TargetUI" type="CanvasLayer" parent="."]
+[node name="TargetUI" type="Control" parent="."]
+anchors_preset = 0
 
 [node name="Help" type="VBoxContainer" parent="."]
 layout_mode = 1
