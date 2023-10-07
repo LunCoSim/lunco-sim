@@ -16,5 +16,5 @@ extends Node3D #TODO: Check if should be node, maybe something else?
 @export var Behaviour = {} # Behaviour tree
 
 #----------------
-func process_command(command) -> bool:
+func process_command(_command) -> bool:
 	return true

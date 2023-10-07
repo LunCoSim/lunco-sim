@@ -80,10 +80,10 @@ func _ready():
 		
 #-----------------------------------------------------
 
-func action_raycast(position: Vector2):
+func action_raycast(_position: Vector2):
 	if camera:  
-		var from = camera.project_ray_origin(position)
-		var to = from + camera.project_ray_normal(position) * RAY_LENGTH
+		var from = camera.project_ray_origin(_position)
+		var to = from + camera.project_ray_normal(_position) * RAY_LENGTH
 		emit_signal("ray_cast", from, to)
 		
 	
@@ -119,7 +119,6 @@ func _input(event):
 		emit_signal("create_operator")
 	
 	input_camera(event)
-	input_character(event)
 	input_operator(event)
 
 func input_camera(event):
@@ -160,18 +159,6 @@ func input_camera(event):
 				
 		cam.inc_spring_length(delta_camera_spring_length)
 		
-		
-func input_character(event):
-	if target is LCCharacterController:
-		var character: LCCharacterController = target
-
-		
-		var motion = Vector2(
-			Input.get_action_strength("move_right") - Input.get_action_strength("move_left"),
-			Input.get_action_strength("move_back") - Input.get_action_strength("move_forward"))
-			
-		#character.motion = motion	
-		#character.set_camera(camera)
 		
 func input_operator(event):
 	if target is LCOperatorController:

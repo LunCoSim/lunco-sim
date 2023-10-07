@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3 uid="uid://b0biq8ta0a0nx"]
+
+[ext_resource type="Script" path="res://components/orientation-system/orientation-system.gd" id="1_vds6e"]
+
+[node name="OrientationSystem" type="Node3D"]
+script = ExtResource("1_vds6e")

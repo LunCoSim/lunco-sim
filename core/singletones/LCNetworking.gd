@@ -8,15 +8,7 @@ var peer: ENetMultiplayerPeer
 # A dictionary to store the connected players
 var players = {}
 
-# Initialization function
-func _init():
-	# Creating a new ENetMultiplayerPeer
-	peer = ENetMultiplayerPeer.new()
-	
-
 func _ready():
-	multiplayer.multiplayer_peer = peer
-	
 	# Setting up signals to call relevant functions when a peer is connected or disconnected.
 	multiplayer.peer_connected.connect(on_peer_connected)
 	multiplayer.peer_disconnected.connect(on_peer_disconnected)
@@ -31,8 +23,11 @@ func _ready():
 # Function to connect to a server
 func connect_to_server(ip: String="langrenus.lunco.space", port: int = 9000):
 	# Creating a client
-	print("connecting to server: ", peer.create_client(ip, port))
+	print("connecting to server: ", )
 	
+	peer = ENetMultiplayerPeer.new()
+	peer.create_client(ip, port)
+	multiplayer.multiplayer_peer = peer
 	# Assigning the peer to this multiplayer's peer
 	
 	
@@ -40,7 +35,10 @@ func connect_to_server(ip: String="langrenus.lunco.space", port: int = 9000):
 # Function to start hosting a server
 func host(port: int = 9000):
 	# Creating a server
-	print("Hosting: ", peer.create_server(port))
+	peer = ENetMultiplayerPeer.new()
+	print("Hosting: ")
+	peer.create_server(port)
+	multiplayer.multiplayer_peer = peer
 
 #---------------------------------------------------
 

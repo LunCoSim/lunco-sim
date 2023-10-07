@@ -35,7 +35,7 @@ func _physics_process(delta):
 
 			Target.move_and_slide()
 
-func _input(event):
+func _input(_event):
 	if Input.is_action_just_pressed("reset_position"):
 		reset_position();
 

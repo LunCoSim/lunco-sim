@@ -6,10 +6,6 @@ func _ready():
 #	set_mouse_filter(Control.MOUSE_FILTER_PASS)
 	pass
 
-# Called every frame. 'delta' is the elapsed time since the previous frame.
-func _process(delta):
-	pass
-
 func target_changed(target):
 	if target is LCCharacterController:
 		$Help/Target.text = "Target: Player"

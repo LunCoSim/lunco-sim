@@ -9,7 +9,7 @@ func _ready():
 	Panku.gd_exprenv.register_env("Avatar", $Avatar)
 	
 # Called every frame. 'delta' is the elapsed time since the previous frame.
-func _process(delta):
+func _process(_delta):
 		#Origin shifting. TBD how to do it in multiplayer
 	if Engine.get_process_frames() % 100:
 		var pos: Vector3 = $Avatar.camera_global_position()
