@@ -21,12 +21,12 @@ config/icon="res://assets/logos/logo.svg"
 [autoload]
 
 Panku="*res://addons/panku_console/console.tscn"
-Entities="*res://core/singletones/EntitiesDB.gd"
+Entities="*res://core/singletones/entities-manager.gd"
 StateManager="*res://core/singletones/state-manager.gd"
 GGS="*res://addons/ggs/classes/ggs_globals.gd"
-LCNet="*res://core/singletones/LCNetworking.gd"
-LCUtil="*res://core/singletones/LCUtils.gd"
-LCWindows="*res://core/singletones/LCWindowsManager.gd"
+LCNet="*res://core/singletones/networking.gd"
+LCUtil="*res://core/singletones/utils.gd"
+LCWindows="*res://core/singletones/windows-manager.gd"
 SceneManager="*res://addons/scene_manager/scene_manager.tscn"
 Scenes="*res://presets/scenes.gd"
 

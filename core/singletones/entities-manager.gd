@@ -1,4 +1,4 @@
-class_name EntitiesDB
+class_name LCEntitiesManager
 extends Node
 
 enum Entities {
