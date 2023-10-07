@@ -16,6 +16,7 @@ static func make_window(control, title):
 
 	win.set_window_title_text(title)
 	win.hide_window()
+	win.queue_free_on_close = false
 	return win
 
 func toggle_main_menu():
