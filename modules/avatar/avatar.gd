@@ -102,8 +102,8 @@ func action_raycast(_position: Vector2):
 				
 
 func _input(event):
-	if Input.is_action_just_pressed("click"):
-		action_raycast(event.position) # TBD: Event could be different then expected
+	#if Input.is_action_just_pressed("click"):
+		#action_raycast(event.position) # TBD: Event could be different then expected
 		
 	if Input.is_action_just_pressed("ui_cancel"):
 		#SceneManager.no_effect_change_scene("back")

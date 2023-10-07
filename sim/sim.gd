@@ -35,7 +35,7 @@ func spawn(_entity: EntitiesDB.Entities, global_position=null): #TBD think of a 
 
 func _on_multiplayer_spawner_spawned(entity):
 	$Avatar.update_entities(entities)
-	$Avatar.set_target(entity)
+	#$Avatar.set_target(entity)
 	var num = %SpawnPosition.get_child_count()
 	Panku.gd_exprenv.register_env("Entity"+str(num), entity)
 
