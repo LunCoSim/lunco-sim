@@ -13,7 +13,7 @@ signal create_spacecraft
 
 signal spawn_entity(entity, position)
 
-signal target_changed()
+signal target_changed(target)
 
 #-------------------------------
 # Constants for mouse sensitivity and ray length
@@ -188,22 +188,25 @@ func _on_state_transited():
 	elif target is LCOperatorController:
 		camera.set_spring_length(2.5)
 
-	self.emit_signal("target_changed", target)
-
+	target_changed.emit(target)
+	
 	ui.set_target(target)
 
 	if camera != null:
 		camera.target = target
 
-func _on_select_entity_to_spawn(entity_id=0):
-	entity_to_spawn = entity_id
-
+# Entities are tracked by simulation, and simulation sh
 func update_entities(entities):
 	$UI.update_entities(entities)
+	
 # Function camera_global_position returns the global position of the camera
 func camera_global_position():
 	return camera.global_position
 
+#---------------------------------
+
+func _on_select_entity_to_spawn(entity_id=0):
+	entity_to_spawn = entity_id
+	
 func _on_ui_existing_entity_selected(index):
-	print('_on_ui_existing_entity_selected')
 	set_target(get_parent().entities[index])

@@ -1,7 +1,6 @@
-[gd_scene load_steps=15 format=3 uid="uid://oulno1atrp8k"]
+[gd_scene load_steps=14 format=3 uid="uid://oulno1atrp8k"]
 
 [ext_resource type="Script" path="res://sim/sim.gd" id="1_thahp"]
-[ext_resource type="PackedScene" uid="uid://dniml0evqbs6v" path="res://sim/sim-ui.tscn" id="2_5h5ks"]
 [ext_resource type="PackedScene" uid="uid://c5dg7yq7hd7m0" path="res://modules/avatar/avatar.tscn" id="2_o421v"]
 [ext_resource type="PackedScene" uid="uid://b5v4w0inqo7vd" path="res://core/space/universe.tscn" id="3_q6u50"]
 [ext_resource type="PackedScene" uid="uid://cpjdvh1eaof2y" path="res://content/moonwards/buildings/nuclear-core/nuclear-core.escn" id="4_i7pui"]
@@ -17,8 +16,6 @@
 
 [node name="sim" type="Node"]
 script = ExtResource("1_thahp")
-
-[node name="UI" parent="." instance=ExtResource("2_5h5ks")]
 
 [node name="Universe" parent="." instance=ExtResource("3_q6u50")]
 unique_name_in_owner = true
@@ -71,6 +68,7 @@ spawn_path = NodePath("../Universe/Sun/Earth/Moon/LangrenusCraterMap/SpawnPositi
 [node name="Avatar" parent="." instance=ExtResource("2_o421v")]
 transform = Transform3D(-0.82255, -0.00837469, 0.568631, 0.00348538, 0.999798, 0.0197666, -0.568682, 0.0182409, -0.822355, 0, 0, 0)
 
+[connection signal="entities_updated" from="." to="Avatar" method="update_entities"]
 [connection signal="spawned" from="MultiplayerSpawner" to="." method="_on_multiplayer_spawner_spawned"]
 [connection signal="create_operator" from="Avatar" to="." method="_on_create_operator"]
 [connection signal="create_player" from="Avatar" to="." method="_on_create_character"]

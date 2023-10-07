@@ -2,6 +2,11 @@
 class_name LCSimulation
 extends Node
 
+#--------------------------------
+signal entities_updated(entities)
+signal entity_spawned()
+
+#--------------------------------
 @export var entities = []
 
 # Called when the node enters the scene tree for the first time.
@@ -30,12 +35,11 @@ func spawn(_entity: EntitiesDB.Entities, global_position=null): #TBD think of a 
 		entity.position = %SpawnPosition.to_local(global_position)
 	%SpawnPosition.add_child(entity, true)
 	
-	#return entity
-	_on_multiplayer_spawner_spawned(entity)
-
-func _on_multiplayer_spawner_spawned(entity):
-	$Avatar.update_entities(entities)
-	#$Avatar.set_target(entity)
+	entity_spawned.emit(entity)
+	entities_updated.emit(entities)
+	
+	#TBD It's done for debug, should be done somewhere else, maybe special debug
+	#node? Maybe it should be global?
 	var num = %SpawnPosition.get_child_count()
 	Panku.gd_exprenv.register_env("Entity"+str(num), entity)
 
@@ -56,6 +60,3 @@ func _on_select_entity_to_spawn(entity_id=0, position=Vector3.ZERO):
 	spawn.rpc_id(1, entity_id, position)
 	
 #---------------------------------------
-
-
-
