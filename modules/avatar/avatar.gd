@@ -3,6 +3,7 @@
 class_name LCAvatar
 extends LCSpaceSystem
 
+#-------------------------------
 # Declaring signals
 signal create(path_to_scene)
 
@@ -12,14 +13,15 @@ signal create_spacecraft
 
 signal spawn_entity(entity, position)
 
-signal ray_cast(from: Vector3, to: Vector3)
-
 signal target_changed()
 
 #-------------------------------
 # Constants for mouse sensitivity and ray length
 const MOUSE_SENSITIVITY = 0.015
 const RAY_LENGTH = 10000
+
+#------------------------------------
+# Block related to movement
 
 @export var MAX_SPEED = 100
 @export var ACCELERATION = 50
@@ -32,7 +34,8 @@ var orientation := Basis.IDENTITY
 #-------------------------------
 # Exporting target variable and setting default mouse control to false
 @export var target: Node3D
-var mouse_control := false
+@export var entity_to_spawn = EntitiesDB.Entities.Astronaut
+@export var selection: = []
 
 #-------------------------------
 # Defining UI and camera variables
@@ -40,8 +43,11 @@ var mouse_control := false
 @onready var camera := $SpringArmCamera
 
 #------------------------------
+# Internal state
+var mouse_control := false
 
-@export var entity_to_spawn = EntitiesDB.Entities.Astronaut
+var UIs: = [] # TBD Global, e.g. at entity level. Each Entity has it's path to UI, Path to controller
+var Controllers = [] # TBD Global
 
 #-------------------------------
 # Function set_target sets the target, searches for a controller and calls state transited
@@ -61,7 +67,7 @@ func set_target(_target):
 		camera.add_excluded_object(target.get_parent())
 		
 	# Calling state transited function
-	_on_State_transited()
+	_on_state_transited()
 	return target
 
 # Function set_camera sets the camera and make it current if camera exists
@@ -70,42 +76,41 @@ func set_camera(_camera):
 	if camera:
 		camera.set_current()
 
-
-
 #-------------------------------
 # Defining different functions for handling player controls like select, rotate, move, etc.
 func _ready():
 	set_target(target)
 	set_camera(camera)
-		
+	
 #-----------------------------------------------------
 
 func action_raycast(_position: Vector2):
 	if camera:  
 		var from = camera.project_ray_origin(_position)
 		var to = from + camera.project_ray_normal(_position) * RAY_LENGTH
-		emit_signal("ray_cast", from, to)
-		
-	
-		var space_state = %Universe.get_world_3d().direct_space_state
-		
+		do_raycast(from, to)
 
-		var query = PhysicsRayQueryParameters3D.create(from, to)
-		query.exclude = [self]
-		var result = space_state.intersect_ray(query)
-		
-		if result:
-			if result.collider is StaticBody3D:
-				spawn_entity.emit(entity_to_spawn, result.position + Vector3(0, 1, 0))
-			else:
-				set_target(result.collider)
+func do_raycast(from: Vector3, to: Vector3):		
+	var space_state = %Universe.get_world_3d().direct_space_state
+	
+	var query = PhysicsRayQueryParameters3D.create(from, to)
+	query.exclude = [self]
+	var result = space_state.intersect_ray(query)
+	
+	if result:
+		#TBD Should be via tools, 3 tools: TargetTool, SelectionTool, SpawnTool
+		#TBD Could be adding to selection
+		if result.collider is StaticBody3D:
+			spawn_entity.emit(entity_to_spawn, result.position + Vector3(0, 1, 0))
+		else:
+			set_target(result.collider)
 				
 
 func _input(event):
-	#if Input.is_action_just_pressed("click"):
+	#if Input.is_action_just_pressed("click"): #TBD Move to tools
 		#action_raycast(event.position) # TBD: Event could be different then expected
 		
-	if Input.is_action_just_pressed("ui_cancel"):
+	if Input.is_action_just_pressed("ui_cancel"): #TBD maybe move from avatar?
 		#SceneManager.no_effect_change_scene("back")
 		#TBD: Show/hide menu, should be a signal? To what?
 		LCWindows.toggle_main_menu()
@@ -168,8 +173,8 @@ func input_operator(event):
 		
 		operator.orient(cam.get_plain_basis())
 #------------------------------------------------------
-# Function _on_State_transited instantiates different ui based on target and sets camera spring length
-func _on_State_transited():
+# Function _on_state_transited instantiates different ui based on target and sets camera spring length
+func _on_state_transited():
 
 	camera.set_follow_height(0.5)
 	camera.set_spring_length(2.5)
@@ -198,3 +203,7 @@ func update_entities(entities):
 # Function camera_global_position returns the global position of the camera
 func camera_global_position():
 	return camera.global_position
+
+func _on_ui_existing_entity_selected(index):
+	print('_on_ui_existing_entity_selected')
+	set_target(get_parent().entities[index])

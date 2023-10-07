@@ -38,19 +38,7 @@ func _physics_process(_delta):
 			parent.apply_torque(parent.global_transform.basis.y * torque.y * THRUST_TURN * Z_FRONT)
 			parent.apply_torque(parent.global_transform.basis.z * torque.z * THRUST_ROLL * Z_FRONT)
 
-func _input(_event):
-	if Input.is_action_just_pressed("throttle"):
-		throttle(true)
-	elif Input.is_action_just_released("throttle"):
-		throttle(false)
 
-	var torque_action := Vector3(
-		Input.get_action_strength("pitch_up") - Input.get_action_strength("pitch_down"),
-		Input.get_action_strength("yaw_right") - Input.get_action_strength("yaw_left"),
-		Input.get_action_strength("roll_cw") - Input.get_action_strength("roll_ccw")
-	)
-
-	change_orientation(torque_action)
 	
 # ------------
 # Commands that changes internal state

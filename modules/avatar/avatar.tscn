@@ -10,3 +10,6 @@ script = ExtResource("1_plcpi")
 [node name="SpringArmCamera" parent="." instance=ExtResource("2_2xsb2")]
 
 [node name="UI" parent="." instance=ExtResource("3_e71qf")]
+
+[connection signal="entity_selected" from="UI" to="." method="_on_select_entity_to_spawn"]
+[connection signal="existing_entity_selected" from="UI" to="." method="_on_ui_existing_entity_selected"]

@@ -1,11 +1,18 @@
 extends Node
 
+@onready var target:LCSpacecraftController=get_parent()
+	
+func _input(_event):
+	if target:
+		if Input.is_action_just_pressed("throttle"):
+			target.throttle(true)
+		elif Input.is_action_just_released("throttle"):
+			target.throttle(false)
 
-# Called when the node enters the scene tree for the first time.
-func _ready():
-	pass # Replace with function body.
+		var torque_action := Vector3(
+			Input.get_action_strength("pitch_up") - Input.get_action_strength("pitch_down"),
+			Input.get_action_strength("yaw_right") - Input.get_action_strength("yaw_left"),
+			Input.get_action_strength("roll_cw") - Input.get_action_strength("roll_ccw")
+		)
 
-
-# Called every frame. 'delta' is the elapsed time since the previous frame.
-func _process(delta):
-	pass
+		target.change_orientation(torque_action)

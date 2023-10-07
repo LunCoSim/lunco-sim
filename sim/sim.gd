@@ -58,5 +58,4 @@ func _on_select_entity_to_spawn(entity_id=0, position=Vector3.ZERO):
 #---------------------------------------
 
 
-func _on_ui_existing_entity_selected(index):
-	$Avatar.set_target(entities[index])
+
