@@ -122,13 +122,16 @@ func _input(event):
 		#TBD: Show/hide menu, should be a signal? To what?
 		LCWindows.toggle_main_menu()
 	
-	# Creating entities
-	if Input.is_action_just_pressed("select_player"):
-		emit_signal("create_player")
-	elif Input.is_action_just_pressed("select_spacecraft"):
-		emit_signal("create_spacecraft")
-	elif Input.is_action_just_pressed("select_operator"):
-		emit_signal("create_operator")
+	if event is InputEventKey:
+		match event.keycode:
+			Key.KEY_1:
+				spawn_entity.emit(0)
+			Key.KEY_2:
+				spawn_entity.emit(1)
+			Key.KEY_3:
+				spawn_entity.emit(2)
+			Key.KEY_4:
+				spawn_entity.emit(3)
 	
 	input_camera(event)
 	input_operator(event)

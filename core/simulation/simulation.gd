@@ -54,15 +54,6 @@ func _on_multiplayer_spawner_spawned(node):
 #----------
 # Signals from Avatar
 
-func _on_create_operator():
-	spawn.rpc_id(1, EntitiesDB.Entities.Operator)
-
-func _on_create_character():
-	spawn.rpc_id(1, EntitiesDB.Entities.Gobot)
-
-func _on_create_spacecraft():
-	spawn.rpc_id(1, EntitiesDB.Entities.Spacecraft)
-
 func _on_select_entity_to_spawn(entity_id=0, position=Vector3.ZERO):
 	spawn.rpc_id(1, entity_id, position)
 	
