@@ -34,7 +34,7 @@ func _physics_process(_delta):
 
 			parent.apply_torque(parent.global_transform.basis.x * torque.x * THRUST_TURN)
 			parent.apply_torque(parent.global_transform.basis.y * torque.y * THRUST_TURN)
-			parent.apply_torque(parent.global_transform.basis.z * torque.z * THRUST_ROLL)
+			parent.apply_torque(-parent.global_transform.basis.z * torque.z * THRUST_ROLL)
 
 
 	
