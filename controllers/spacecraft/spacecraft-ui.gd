@@ -16,7 +16,6 @@ func set_target(_target):
 	target = _target
 
 func _on_UpdateUI_timeout():
-	print("_on_UpdateUI_timeout")
 	if target and target.parent: #target is controller and Target is the actual body
 		var Target = target.parent
 		
