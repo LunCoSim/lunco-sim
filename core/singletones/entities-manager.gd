@@ -5,7 +5,8 @@ enum Entities {
 	Spacecraft,
 	Operator,
 	Gobot,
-	Astronaut
+	Astronaut,
+	GobotContent
 }
 
 var Paths = {
@@ -13,6 +14,7 @@ var Paths = {
 	Entities.Operator: "res://entities/operator/operator.tscn",
 	Entities.Gobot: "res://entities/gobot/gobot.tscn",
 	Entities.Astronaut: "res://entities/astronaut/astronaut.tscn",
+	Entities.GobotContent: "res://content/gobot/player.tscn",
 }
 
 var UIs = {

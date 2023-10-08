@@ -123,15 +123,33 @@ func _input(event):
 		LCWindows.toggle_main_menu()
 	
 	if event is InputEventKey and not event.is_echo() and event.is_pressed():
+		
+		var key_number: int = -1
+		
 		match event.keycode:
 			Key.KEY_1:
-				spawn_entity.emit(0)
+				key_number = 1
 			Key.KEY_2:
-				spawn_entity.emit(1)
+				key_number = 2
 			Key.KEY_3:
-				spawn_entity.emit(2)
+				key_number = 3
 			Key.KEY_4:
-				spawn_entity.emit(3)
+				key_number = 4
+			Key.KEY_5:
+				key_number = 5
+			Key.KEY_6:
+				key_number = 6
+			Key.KEY_7:
+				key_number = 7
+			Key.KEY_8:
+				key_number = 8
+		
+		if key_number != -1:
+			if event.is_alt_pressed():
+				spawn_entity.emit(key_number-1)
+			else:
+				if get_parent().entities.size() >= key_number:
+					set_target(get_parent().entities[key_number-1])
 	
 	input_camera(event)
 	input_operator(event)
