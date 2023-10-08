@@ -122,7 +122,7 @@ func _input(event):
 		#TBD: Show/hide menu, should be a signal? To what?
 		LCWindows.toggle_main_menu()
 	
-	if event is InputEventKey:
+	if event is InputEventKey and not event.is_echo() and event.is_pressed():
 		match event.keycode:
 			Key.KEY_1:
 				spawn_entity.emit(0)
