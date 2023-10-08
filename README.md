@@ -64,3 +64,5 @@ Join our vibrant community and stay updated on the latest developments:
 ## 💖 Support LunCo
 
 If you appreciate our project and want to support our mission, consider making a donation on [Giveth.io](https://giveth.io/project/lunco-collaborative-engineering?referrer_id=0hWfCeRLhwayen8MGBaZGP0CLZv1). Donors receive ~70% back in GIV tokens.
+
+Or get our [Profile NFT](https://app.copernicspace.com/spaceibles/0xAA54295c8eb420732a3748414B782C89229C0841-1587?partner=0xA64f2228cceC96076c82abb903021C33859082F8&seller=0xA64f2228cceC96076c82abb903021C33859082F8)
