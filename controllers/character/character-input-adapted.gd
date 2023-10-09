@@ -57,6 +57,7 @@ func _process(delta):
 	# Setting Gobot parameters
 	get_parent().input_motion = motion
 	get_parent().camera_rotation_bases = get_camera_rotation_basis()
+	get_parent().camera_base_quaternion =get_camera_base_quaternion()
 	#--------------
 	
 	var current_aim = false
@@ -77,6 +78,7 @@ func _process(delta):
 
 	if aiming != current_aim:
 		aiming = current_aim
+		get_parent().aiming = aiming
 #		if aiming:
 #			camera_animation.play("shoot")
 #		else:
@@ -86,6 +88,8 @@ func _process(delta):
 		jump.rpc()
 
 	shooting = Input.is_action_pressed("shoot")
+	get_parent().shooting = shooting
+	
 	if shooting:
 		pass
 #		var ch_pos = crosshair.position + crosshair.size * 0.5
@@ -142,4 +146,4 @@ func set_camera(_camera):
 	
 @rpc("call_local")
 func jump():
-	jumping = true
+	get_parent().jumping = true
