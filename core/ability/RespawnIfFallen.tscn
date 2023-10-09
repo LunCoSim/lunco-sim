@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3 uid="uid://16o6g3sbtp2e"]
+
+[ext_resource type="Script" path="res://core/ability/RespawnIfFallen.gd" id="1_bk8gk"]
+
+[node name="RespawnIfFallen" type="Node3D"]
+script = ExtResource("1_bk8gk")
