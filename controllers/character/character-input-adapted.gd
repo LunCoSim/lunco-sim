@@ -54,7 +54,10 @@ func _process(delta):
 			Input.get_action_strength("move_right") - Input.get_action_strength("move_left"),
 			Input.get_action_strength("move_back") - Input.get_action_strength("move_forward"))
 	
+	# Setting Gobot parameters
 	get_parent().input_motion = motion
+	get_parent().camera_rotation_bases = get_camera_rotation_basis()
+	#--------------
 	
 	var current_aim = false
 
