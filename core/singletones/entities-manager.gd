@@ -12,7 +12,7 @@ var Paths = {
 	Entities.Spacecraft: "res://content/starship/starship.tscn",
 	Entities.Operator: "res://entities/operator/operator.tscn",
 	Entities.Gobot: "res://content/gobot/gobot.tscn",
-	Entities.Astronaut: "res://entities/astronaut/astronaut.tscn"
+	Entities.Astronaut: "res://content/animated-astronaut-character-in-space-suit-loop/astronaut.tscn"
 }
 
 var UIs = {
