@@ -209,6 +209,7 @@ func _on_state_transited():
 	
 	if target is LCCharacterController:
 		camera.set_spring_length(2.5)
+		camera.set_follow_height(2.0)
 		target.set_camera(camera) #TBD: Remove camera
 	elif target is LCSpacecraftController:
 		camera.set_spring_length(50)
