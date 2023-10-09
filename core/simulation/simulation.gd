@@ -32,19 +32,20 @@ func spawn(_entity: EntitiesDB.Entities, global_position=null): #TBD think of a 
 	print("spawn remoteid: ", id, " local id: ", multiplayer.get_unique_id(), " entity:", _entity)
 	
 	var entity = Entities.make_entity(_entity)
-	entities.append(entity)
-	
-	if global_position != null:
-		entity.position = spawn_node.to_local(global_position)
-	spawn_node.add_child(entity, true)
-	
-	entity_spawned.emit(entity)
-	entities_updated.emit(entities)
-	
-	#TBD It's done for debug, should be done somewhere else, maybe special debug
-	#node? Maybe it should be global?
-	var num = spawn_node.get_child_count()
-	Panku.gd_exprenv.register_env("Entity"+str(num), entity)
+	if entity != null:
+		entities.append(entity)
+		
+		if global_position != null:
+			entity.position = spawn_node.to_local(global_position)
+		spawn_node.add_child(entity, true)
+		
+		entity_spawned.emit(entity)
+		entities_updated.emit(entities)
+		
+		#TBD It's done for debug, should be done somewhere else, maybe special debug
+		#node? Maybe it should be global?
+		var num = spawn_node.get_child_count()
+		Panku.gd_exprenv.register_env("Entity"+str(num), entity)
 
 
 func _on_multiplayer_spawner_spawned(node):

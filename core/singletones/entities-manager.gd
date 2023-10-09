@@ -30,7 +30,7 @@ var InputAdapters = {
 }
 
 
-var Caches = {
+var Caches: = {
 	
 }
 
@@ -41,6 +41,10 @@ func _init():
 		Caches[entity] = load(path)
 		
 func make_entity(entity):
-	return Caches[entity].instantiate()
+
+	if Caches.get(entity) != null:
+		return Caches[entity].instantiate()
+	else:
+		return null
 #
 
