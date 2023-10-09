@@ -102,6 +102,7 @@ func _process(delta):
 #	else:
 #		# Fade out the black ColorRect progressively after being teleported back.
 #		color_rect.modulate.a *= 1.0 - delta * 4
+	get_parent().aim_rotation = get_aim_rotation()
 
 func get_aim_rotation():
 	var x := 0.0
