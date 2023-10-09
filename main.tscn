@@ -9,6 +9,9 @@
 [node name="Simulation" node_paths=PackedStringArray("spawn_node") instance=ExtResource("1_feltx")]
 spawn_node = NodePath("Universe/Sun/Earth/Moon/LangrenusCraterMap/Spawner")
 
+[node name="Avatar" parent="." index="0"]
+transform = Transform3D(-0.82255, -0.00837469, 0.568631, 0.00348538, 0.999798, 0.0197666, -0.568682, 0.0182409, -0.822355, -12.653, 7.06782, 1.34696)
+
 [node name="MultiplayerSpawner" parent="." index="1"]
 spawn_path = NodePath("../Universe/Sun/Earth/Moon/LangrenusCraterMap/Spawner")
 
