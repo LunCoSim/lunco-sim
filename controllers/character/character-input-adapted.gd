@@ -54,6 +54,8 @@ func _process(delta):
 			Input.get_action_strength("move_right") - Input.get_action_strength("move_left"),
 			Input.get_action_strength("move_back") - Input.get_action_strength("move_forward"))
 	
+	get_parent().input_motion = motion
+	
 	var current_aim = false
 
 	# Keep aiming if the mouse wasn't held for long enough.
