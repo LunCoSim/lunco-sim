@@ -37,6 +37,9 @@ func spawn(_entity: EntitiesDB.Entities, global_position=null): #TBD think of a 
 		
 		if global_position != null:
 			entity.position = spawn_node.to_local(global_position)
+		else:
+			entity.position = spawn_node.global_position
+			
 		spawn_node.add_child(entity, true)
 		
 		entity_spawned.emit(entity)
@@ -55,7 +58,7 @@ func _on_multiplayer_spawner_spawned(node):
 #----------
 # Signals from Avatar
 
-func _on_select_entity_to_spawn(entity_id=0, position=Vector3.ZERO):
+func _on_select_entity_to_spawn(entity_id=0, position=null):
 	spawn.rpc_id(1, entity_id, position)
 	
 #---------------------------------------
