@@ -62,6 +62,8 @@ func set_target(target):
 	if _ui:
 		_ui.set_target(target) #controller specific function
 	set_ui(_ui)
+	
+	update_entities(get_parent().get_parent().entities) #TBD Very dirty hack! Getting Universe entities
 
 func _on_entities_item_selected(index):
 	print("_on_entities_item_selected: ", index)
