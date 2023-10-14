@@ -26,8 +26,12 @@ func _plugging():
 
 	## Libraries
 	plug("maktoobgar/scene_manager") ## Scene manager
-	# plug("PunchablePlushie/godot-game-settings") ## Game settings
-	plug("LunCoSim/godot-game-settings") ## Game settings
+
+	#manualy delete _premade directory TBD: Propos to change structure of the file as hard to update
+	#TBD: Start using when ported to 4.2
+	#plug("PunchablePlushie/godot-game-settings", {"install_root": "addons/ggs", "include": ["."]}) ## Game settings
+
+	# plug("LunCoSim/godot-game-settings") ## Game settings
 
 	## IVoyager integration
 	# print("ivoyager_assets should be downloaded manually https://github.com/ivoyager/ivoyager/releases")
