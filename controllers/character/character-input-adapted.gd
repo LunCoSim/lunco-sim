@@ -1,6 +1,10 @@
 class_name LCCharacterInputAdapter
-extends MultiplayerSynchronizer
+extends Node
 
+#------------------------------
+@export var target: Node
+
+#------------------------------
 const CAMERA_CONTROLLER_ROTATION_SPEED := 3.0
 const CAMERA_MOUSE_ROTATION_SPEED := 0.001
 # A minimum angle lower than or equal to -90 breaks movement if the player is looking upward.
@@ -36,6 +40,9 @@ var aiming_timer := 0.0
 
 
 func _ready():
+	if target == null:
+		target = get_parent()
+		
 	if get_multiplayer_authority() == multiplayer.get_unique_id():
 		print("plaer autority multiplayer, on: ", multiplayer.get_unique_id())
 #		camera_camera.make_current()
@@ -55,9 +62,9 @@ func _process(delta):
 			Input.get_action_strength("move_back") - Input.get_action_strength("move_forward"))
 	
 	# Setting Gobot parameters
-	get_parent().input_motion = motion
-	get_parent().camera_rotation_bases = get_camera_rotation_basis()
-	get_parent().camera_base_quaternion =get_camera_base_quaternion()
+	target.input_motion = motion
+	target.camera_rotation_bases = get_camera_rotation_basis()
+	target.camera_base_quaternion =get_camera_base_quaternion()
 	#--------------
 	
 	var current_aim = false
@@ -78,7 +85,7 @@ func _process(delta):
 
 	if aiming != current_aim:
 		aiming = current_aim
-		get_parent().aiming = aiming
+		target.aiming = aiming
 #		if aiming:
 #			camera_animation.play("shoot")
 #		else:
@@ -88,7 +95,7 @@ func _process(delta):
 		jump.rpc()
 
 	shooting = Input.is_action_pressed("shoot")
-	get_parent().shooting = shooting
+	target.shooting = shooting
 	
 	if shooting:
 		pass
@@ -111,7 +118,7 @@ func _process(delta):
 #	else:
 #		# Fade out the black ColorRect progressively after being teleported back.
 #		color_rect.modulate.a *= 1.0 - delta * 4
-	get_parent().aim_rotation = get_aim_rotation()
+	target.aim_rotation = get_aim_rotation()
 
 func get_aim_rotation():
 	var x := 0.0
@@ -146,4 +153,4 @@ func set_camera(_camera):
 	
 @rpc("call_local")
 func jump():
-	get_parent().jumping = true
+	target.jumping = true

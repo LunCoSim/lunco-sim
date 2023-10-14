@@ -2,5 +2,5 @@
 
 [ext_resource type="Script" path="res://controllers/character/character-input-adapted.gd" id="1_53v2k"]
 
-[node name="CharactInputAdapter" type="MultiplayerSynchronizer"]
+[node name="CharactInputAdapter" type="Node"]
 script = ExtResource("1_53v2k")
