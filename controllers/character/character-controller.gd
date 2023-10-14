@@ -95,7 +95,6 @@ func apply_input(delta: float):
 		# Interpolate current rotation with desired one.
 		orientation.basis = Basis(q_from.slerp(q_to, delta * ROTATION_INTERPOLATE_SPEED))
 
-		root_motion = Transform3D(character_body.animation_tree.get_root_motion_rotation(), character_body.animation_tree.get_root_motion_position())
 
 		if shooting and character_body.fire_cooldown.time_left == 0:
 			var shoot_origin = character_body.shoot_from.global_transform.origin
@@ -118,8 +117,6 @@ func apply_input(delta: float):
 			var q_to = Transform3D().looking_at(target, Vector3.UP).basis.get_rotation_quaternion()
 			# Interpolate current rotation with desired one.
 			orientation.basis = Basis(q_from.slerp(q_to, delta * ROTATION_INTERPOLATE_SPEED))
-
-		root_motion = Transform3D(character_body.animation_tree.get_root_motion_rotation(), character_body.animation_tree.get_root_motion_position())
 
 	# Apply root motion to orientation.
 	orientation *= root_motion #????? What's happening here?
