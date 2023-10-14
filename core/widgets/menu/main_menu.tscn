@@ -1,8 +1,11 @@
-[gd_scene load_steps=3 format=3 uid="uid://c82dl3dv3d3hb"]
+[gd_scene load_steps=4 format=3 uid="uid://c82dl3dv3d3hb"]
 
 [ext_resource type="Script" path="res://core/widgets/menu/main_menu.gd" id="1_ytl3l"]
 
 [sub_resource type="SystemFont" id="SystemFont_g5bxx"]
+
+[sub_resource type="SystemFont" id="SystemFont_fnb7o"]
+oversampling = 5.4
 
 [node name="Apps" type="VBoxContainer"]
 anchors_preset = 8
@@ -58,6 +61,11 @@ text = "Connect to Simulation"
 [node name="ConnectToGlobal" type="Button" parent="."]
 layout_mode = 2
 text = "Connect to Global Simulation"
+
+[node name="Version" type="Label" parent="."]
+layout_mode = 2
+theme_override_fonts/font = SubResource("SystemFont_fnb7o")
+horizontal_alignment = 2
 
 [connection signal="pressed" from="SimHost" to="." method="_on_sim_host_pressed"]
 [connection signal="pressed" from="SimClient" to="." method="_on_sim_client_pressed"]

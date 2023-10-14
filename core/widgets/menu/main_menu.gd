@@ -2,8 +2,12 @@
 extends Node
 
 
-# ------------------------------------
+#------------------------------------
 
+func _ready():
+	$Version.text = "v. " + str(ProjectSettings.get_setting("application/config/version"))
+	
+#------------------------------------
 
 func change_scene(scene: String):
 	SceneManager.no_effect_change_scene(scene)
