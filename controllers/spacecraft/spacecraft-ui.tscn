@@ -52,7 +52,7 @@ wait_time = 10.0
 one_shot = true
 
 [node name="Help" parent="." instance=ExtResource("2_l0a07")]
-layout_mode = 0
+layout_mode = 1
 anchor_top = 0.0
 anchor_bottom = 0.0
 offset_top = 0.0
@@ -60,7 +60,14 @@ offset_bottom = 116.0
 grow_vertical = 1
 
 [node name="MET" parent="." instance=ExtResource("2_t5ioj")]
-layout_mode = 0
+layout_mode = 1
+anchors_preset = 5
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -55.0
+offset_right = 55.0
+offset_bottom = 23.0
+grow_horizontal = 2
 
 [connection signal="timeout" from="UpdateUI" to="." method="_on_UpdateUI_timeout"]
 [connection signal="timeout" from="HideControls" to="." method="_on_HideControls_timeout"]

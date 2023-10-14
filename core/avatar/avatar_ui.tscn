@@ -21,14 +21,6 @@ offset_left = -144.0
 offset_bottom = 146.0
 grow_horizontal = 0
 
-[node name="Orientation" type="Label" parent="Help"]
-layout_mode = 2
-text = "1-8  – Select entity"
-
-[node name="CamRotate" type="Label" parent="Help"]
-layout_mode = 2
-text = "Alt + 1-4 – Create entity"
-
 [node name="Spawn" type="Label" parent="Help"]
 layout_mode = 2
 text = "` – Console "
@@ -37,38 +29,53 @@ text = "` – Console "
 layout_mode = 2
 text = "Esc – Menu "
 
-[node name="Entities" type="ItemList" parent="."]
-unique_name_in_owner = true
+[node name="EntitiesContrainer" type="VBoxContainer" parent="."]
 layout_mode = 1
 anchors_preset = 6
 anchor_left = 1.0
 anchor_top = 0.5
 anchor_right = 1.0
 anchor_bottom = 0.5
-offset_left = -202.0
-offset_top = -190.0
-offset_right = -2.0
-offset_bottom = 10.0
+offset_left = -169.0
+offset_top = -20.0
+offset_bottom = 20.0
 grow_horizontal = 0
 grow_vertical = 2
 
-[node name="LiveEntities" type="ItemList" parent="."]
+[node name="Spawn3" type="Label" parent="EntitiesContrainer"]
+layout_mode = 2
+text = "Create entities (Alt+#)"
+
+[node name="Entities" type="ItemList" parent="EntitiesContrainer"]
 unique_name_in_owner = true
+custom_minimum_size = Vector2(170, 150)
+layout_mode = 2
+
+[node name="LivesEntitiesContrainer" type="VBoxContainer" parent="."]
 layout_mode = 1
 anchors_preset = 3
 anchor_left = 1.0
 anchor_top = 1.0
 anchor_right = 1.0
 anchor_bottom = 1.0
-offset_left = -200.0
-offset_top = -200.0
+offset_left = -134.0
+offset_top = -40.0
 grow_horizontal = 0
 grow_vertical = 0
+
+[node name="Spawn3" type="Label" parent="LivesEntitiesContrainer"]
+layout_mode = 2
+text = "Take control (1-8)"
+
+[node name="LiveEntities" type="ItemList" parent="LivesEntitiesContrainer"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(170, 200)
+layout_mode = 2
 mouse_force_pass_scroll_events = false
 
 [node name="TargetUI" type="Control" parent="."]
 unique_name_in_owner = true
 anchors_preset = 0
 
-[connection signal="item_selected" from="Entities" to="." method="_on_entities_item_selected"]
-[connection signal="item_selected" from="LiveEntities" to="." method="_on_existing_entity_selected"]
+[connection signal="item_selected" from="EntitiesContrainer/Entities" to="." method="_on_entities_item_selected"]
+[connection signal="item_selected" from="LivesEntitiesContrainer/LiveEntities" to="." method="_on_existing_entity_selected"]
