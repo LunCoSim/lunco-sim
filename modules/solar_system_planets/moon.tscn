@@ -7,6 +7,6 @@
 script = ExtResource("1_s23a1")
 
 [node name="LunarGlobe" parent="." instance=ExtResource("1_4lk36")]
-transform = Transform3D(-0.314553, -0.915379, -0.251274, -0.196978, 0.321893, -0.926059, 0.928577, -0.241799, -0.281562, 0, -868360, 0)
+transform = Transform3D(-0.314553, -0.915379, -0.251274, -0.196978, 0.321893, -0.926059, 0.928577, -0.241799, -0.281562, 0, -868365, 0)
 
 [editable path="LunarGlobe"]
