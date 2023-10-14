@@ -17,21 +17,21 @@ var airborne_time = 100
 
 var orientation = Transform3D()
 var root_motion = Transform3D()
-var motion = Vector2()
+@export var motion = Vector2()
 
 @onready var gravity = ProjectSettings.get_setting("physics/3d/default_gravity") * ProjectSettings.get_setting("physics/3d/default_gravity_vector")
 
 #----------------------------------------
 
 var aim_rotation
-var input_motion: = Vector2.ZERO
+@export var input_motion: = Vector2.ZERO
 var camera_rotation_bases: Basis = Basis.IDENTITY
 var camera_base_quaternion: Quaternion = Quaternion.IDENTITY
 
 var jumping: bool = false
-var shooting: bool = false
-var aiming: bool = false
-var shoot_target: = Vector3.ZERO
+@export var shooting: bool = false
+@export var aiming: bool = false
+@export var shoot_target: = Vector3.ZERO
 
 #-------------------------------------
 
