@@ -1,16 +1,10 @@
 @icon("res://controllers/player/character.svg")
+## This controller represents character state and attaches to CharacterBody3D
 class_name LCCharacterController
 extends LCController
 
+@export var character_body: CharacterBody3D
 
-func set_camera(camera):
-#	print("lnPlayer set_camera")
-	if %InputSynchronizer != null:
-		%InputSynchronizer.set_camera(camera)
-
-#TBD: Implement
-func remove_camera(camera):
-	pass
-	
-	#if %InputSynchronizer != null:
-		#%InputSynchronizer.remove_c
+func _ready():
+	if character_body == null:
+		character_body = get_parent()
