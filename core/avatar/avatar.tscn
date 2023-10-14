@@ -20,7 +20,8 @@ target = NodePath("..")
 [node name="OperatorInputAdapter" parent="." node_paths=PackedStringArray("target") instance=ExtResource("5_78cuv")]
 target = NodePath("..")
 
-[node name="CharactInputAdapter" parent="." instance=ExtResource("6_f6o08")]
+[node name="CharactInputAdapter" parent="." node_paths=PackedStringArray("camera") instance=ExtResource("6_f6o08")]
+camera = NodePath("../SpringArmCamera")
 
 [connection signal="entity_selected" from="UI" to="." method="_on_select_entity_to_spawn"]
 [connection signal="existing_entity_selected" from="UI" to="." method="_on_ui_existing_entity_selected"]
