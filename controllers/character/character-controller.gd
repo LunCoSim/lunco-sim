@@ -3,7 +3,15 @@
 class_name LCCharacterController
 extends LCController
 
-@export var character_body: Gobot
+#---------------------------------------
+signal land
+signal jump
+signal aiming_started
+signal aiming_finished
+signal shoot
+
+#---------------------------------------
+@export var character_body: LCCharacterBody
 
 #----------------------------------------
 const DIRECTION_INTERPOLATE_SPEED = 1
@@ -32,6 +40,7 @@ var jumping: bool = false
 @export var shooting: bool = false
 @export var aiming: bool = false
 @export var shoot_target: = Vector3.ZERO
+@export var on_air: = false
 
 #-------------------------------------
 
@@ -68,34 +77,28 @@ func apply_input(delta: float):
 	airborne_time += delta
 	if character_body.is_on_floor():
 		if airborne_time > 0.5:
-			character_body.land.rpc()
+			character_body.land.rpc() #TBD Change to signal?
 		airborne_time = 0
 
-	var on_air = airborne_time > MIN_AIRBORNE_TIME
+	on_air = airborne_time > MIN_AIRBORNE_TIME
 
 	if not on_air and jumping:
 		character_body.velocity.y = JUMP_SPEED
 		on_air = true
 		# Increase airborne time so next frame on_air is still true
 		airborne_time = MIN_AIRBORNE_TIME
-		character_body.jump.rpc()
+		character_body.jump.rpc() #TBD change to signal?
 
 	jumping = false
 
 	if on_air:
-		if (character_body.velocity.y > 0):
-			character_body.animate(character_body.ANIMATIONS.JUMP_UP, delta)
-		else:
-			character_body.animate(character_body.ANIMATIONS.JUMP_DOWN, delta)
+		pass
 	elif aiming:
 		# Convert orientation to quaternions for interpolating rotation.
 		var q_from = orientation.basis.get_rotation_quaternion()
 		var q_to = camera_base_quaternion
 		# Interpolate current rotation with desired one.
 		orientation.basis = Basis(q_from.slerp(q_to, delta * ROTATION_INTERPOLATE_SPEED))
-
-		# Change state to strafe.
-		character_body.animate(character_body.ANIMATIONS.STRAFE, delta)
 
 		root_motion = Transform3D(character_body.animation_tree.get_root_motion_rotation(), character_body.animation_tree.get_root_motion_position())
 
@@ -120,26 +123,20 @@ func apply_input(delta: float):
 			# Interpolate current rotation with desired one.
 			orientation.basis = Basis(q_from.slerp(q_to, delta * ROTATION_INTERPOLATE_SPEED))
 
-		character_body.animate(character_body.ANIMATIONS.WALK, delta)
-
 		root_motion = Transform3D(character_body.animation_tree.get_root_motion_rotation(), character_body.animation_tree.get_root_motion_position())
 
 	# Apply root motion to orientation.
 	orientation *= root_motion #????? What's happening here?
 	do_move(delta)
-	orient_player_model()
-
-func orient_player_model():
 	orientation.origin = Vector3() # Clear accumulated root motion displacement (was applied to speed).
 	orientation = orientation.orthonormalized() # Orthonormalize orientation.
-
-	character_body.player_model.global_transform.basis = orientation.basis
+	
 
 func do_move(delta):
 	var h_velocity = orientation.origin / delta
 	character_body.velocity.x = h_velocity.x
 	character_body.velocity.z = h_velocity.z
 	character_body.velocity += gravity * delta
-	character_body.set_velocity(character_body.velocity)
+	#character_body.set_velocity(character_body.velocity)
 	character_body.set_up_direction(Vector3.UP)
 	character_body.move_and_slide()
