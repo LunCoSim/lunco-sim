@@ -48,11 +48,6 @@ func _ready():
 	if character_body == null:
 		character_body = get_parent()
 
-func do_init():
-	# Pre-initialize orientation transform.
-	orientation = character_body.player_model.global_transform
-	orientation.origin = Vector3()
-
 func _physics_process(delta: float):	
 	if is_multiplayer_authority():
 		apply_input(delta)
@@ -77,7 +72,7 @@ func apply_input(delta: float):
 	airborne_time += delta
 	if character_body.is_on_floor():
 		if airborne_time > 0.5:
-			character_body.land.rpc() #TBD Change to signal?
+			land.emit()
 		airborne_time = 0
 
 	on_air = airborne_time > MIN_AIRBORNE_TIME
@@ -87,7 +82,7 @@ func apply_input(delta: float):
 		on_air = true
 		# Increase airborne time so next frame on_air is still true
 		airborne_time = MIN_AIRBORNE_TIME
-		character_body.jump.rpc() #TBD change to signal?
+		jump.emit()
 
 	jumping = false
 
@@ -112,7 +107,8 @@ func apply_input(delta: float):
 			# If we don't rotate the bullets there is no useful way to control the particles ..
 			bullet.look_at(shoot_origin + shoot_dir, Vector3.UP)
 			bullet.add_collision_exception_with(self)
-			character_body.shoot.rpc()
+			
+			shoot.emit()
 
 	else: # Not in air or aiming, idle.
 		# Convert orientation to quaternions for interpolating rotation.
