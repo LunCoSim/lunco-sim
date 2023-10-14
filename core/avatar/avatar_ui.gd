@@ -3,7 +3,7 @@ extends Control
 signal entity_selected(int)
 signal existing_entity_selected(int)
 
-@onready var ui := $TargetUI
+@onready var ui := %TargetUI
 
 var _ui
 var avatar: LCAvatar
@@ -11,11 +11,11 @@ var avatar: LCAvatar
 func _ready():
 	pass # Replace with function body.
 	
-	var tree: ItemList = $Entities
+	var tree: ItemList = %Entities
 	
 	for entity in EntitiesDB.Entities:
 		# Add child items to the root.
-		tree.add_item("Entity: " + str(entity))
+		tree.add_item(str(entity))
 	
 	avatar = get_parent()
 	
@@ -72,13 +72,13 @@ func _on_existing_entity_selected(index):
 	existing_entity_selected.emit(index)
 	
 func update_entities(entities):
-	var tree: ItemList = $LiveEntities
+	var tree: ItemList = %LiveEntities
 	
 	tree.clear()
 	
 	for entity in entities:
 		# Add child items to the root.
-		var idx = tree.add_item("Entity: " + str(entity))
+		var idx = tree.add_item(str(entity.name))
 		if avatar.target and entity == avatar.target.get_parent():
 			tree.select(idx)
 	

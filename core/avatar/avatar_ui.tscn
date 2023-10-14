@@ -21,27 +21,24 @@ offset_left = -144.0
 offset_bottom = 146.0
 grow_horizontal = 0
 
-[node name="Target" type="Label" parent="Help"]
-layout_mode = 2
-text = "Target: "
-
 [node name="Orientation" type="Label" parent="Help"]
 layout_mode = 2
-text = "1 – Select player"
+text = "1-8  – Select entity"
 
 [node name="CamRotate" type="Label" parent="Help"]
 layout_mode = 2
-text = "2 – Select Starship"
-
-[node name="CamDistance" type="Label" parent="Help"]
-layout_mode = 2
-text = "3 – Select operator"
+text = "Alt + 1-4 – Create entity"
 
 [node name="Spawn" type="Label" parent="Help"]
 layout_mode = 2
-text = "` – console "
+text = "` – Console "
+
+[node name="Spawn2" type="Label" parent="Help"]
+layout_mode = 2
+text = "Esc – Menu "
 
 [node name="Entities" type="ItemList" parent="."]
+unique_name_in_owner = true
 layout_mode = 1
 anchors_preset = 6
 anchor_left = 1.0
@@ -56,19 +53,21 @@ grow_horizontal = 0
 grow_vertical = 2
 
 [node name="LiveEntities" type="ItemList" parent="."]
+unique_name_in_owner = true
 layout_mode = 1
-anchors_preset = 6
+anchors_preset = 3
 anchor_left = 1.0
-anchor_top = 0.5
+anchor_top = 1.0
 anchor_right = 1.0
-anchor_bottom = 0.5
+anchor_bottom = 1.0
 offset_left = -200.0
-offset_top = 160.0
-offset_bottom = 360.0
+offset_top = -200.0
 grow_horizontal = 0
-grow_vertical = 2
+grow_vertical = 0
+mouse_force_pass_scroll_events = false
 
 [node name="TargetUI" type="Control" parent="."]
+unique_name_in_owner = true
 anchors_preset = 0
 
 [connection signal="item_selected" from="Entities" to="." method="_on_entities_item_selected"]

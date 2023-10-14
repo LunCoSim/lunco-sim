@@ -183,11 +183,9 @@ func input_camera(event):
 
 		if event is InputEventMouseButton:
 			if event.button_index == MOUSE_BUTTON_WHEEL_UP:
-				print("Mouse wheel scrolled up!")
 				delta_camera_spring_length += -2
 
 			elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
-				print("Mouse wheel scrolled down!")
 				delta_camera_spring_length += 2
 				
 		cam.inc_spring_length(delta_camera_spring_length)
