@@ -15,6 +15,9 @@ signal spawn_entity(entity, position)
 
 signal target_changed(target)
 
+signal requesting_control(target)
+signal release_control(target)
+
 #-------------------------------
 # Constants for mouse sensitivity and ray length
 const MOUSE_SENSITIVITY = 0.015
@@ -54,10 +57,6 @@ var Controllers = [] # TBD Global
 func set_target(_target):
 	if camera and target:
 		camera.remove_excluded_object(target.get_parent())
-	
-	if target is LCController:
-		target.set_authority.rpc(1)
-		#target.get_parent().set_multiplayer_authority(1)
 		
 	target = _target
 	#searching for controller
@@ -70,9 +69,6 @@ func set_target(_target):
 	if camera and target:
 		camera.add_excluded_object(target.get_parent())
 	
-	if target is LCController:
-		target.set_authority.rpc(multiplayer.get_unique_id())
-		#target.get_parent().set_multiplayer_authority()
 	# Calling state transited function
 	_on_state_transited()
 	return target
@@ -110,7 +106,7 @@ func do_raycast(from: Vector3, to: Vector3):
 		if result.collider is StaticBody3D:
 			spawn_entity.emit(entity_to_spawn, result.position + Vector3(0, 1, 0))
 		else:
-			set_target(result.collider)
+			requesting_control.emit(result.collider)			
 				
 
 func _input(event):
@@ -149,7 +145,8 @@ func _input(event):
 				spawn_entity.emit(key_number-1)
 			else:
 				if get_parent().entities.size() >= key_number:
-					set_target(get_parent().entities[key_number-1])
+					requesting_control.emit(get_parent().entities[key_number-1])
+					#set_target()
 	
 	input_camera(event)
 	input_operator(event)
@@ -235,4 +232,17 @@ func _on_select_entity_to_spawn(entity_id=0):
 	entity_to_spawn = entity_id
 	
 func _on_ui_existing_entity_selected(index):
-	set_target(get_parent().entities[index])
+	requesting_control.emit(get_parent().entities[index])
+
+
+func _on_simulation_control_granted(entity):
+	Panku.notify("Control %s granted" % str(entity.name))
+	if target:
+		release_control.emit(target)
+		
+	set_target(entity)
+
+
+func _on_simulation_control_declined(entity):
+	Panku.notify("Control %s declined" % str(entity.name))
+	pass # Replace with function body.
