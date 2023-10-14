@@ -56,15 +56,23 @@ func _ready():
 func _process(delta):
 #	if get_multiplayer_authority() != multiplayer.get_unique_id():
 #		return
+	var _target = target
+	if target is LCAvatar:
+		_target = target.target
+	
+	if not _target is LCCharacterController:
+		return
+	
+	_target = _target.get_parent() #TBD: find a better way, but for now its ok
 		
 	motion = Vector2(
 			Input.get_action_strength("move_right") - Input.get_action_strength("move_left"),
 			Input.get_action_strength("move_back") - Input.get_action_strength("move_forward"))
 	
 	# Setting Gobot parameters
-	target.input_motion = motion
-	target.camera_rotation_bases = get_camera_rotation_basis()
-	target.camera_base_quaternion =get_camera_base_quaternion()
+	_target.input_motion = motion
+	_target.camera_rotation_bases = get_camera_rotation_basis()
+	_target.camera_base_quaternion =get_camera_base_quaternion()
 	#--------------
 	
 	var current_aim = false
@@ -85,7 +93,7 @@ func _process(delta):
 
 	if aiming != current_aim:
 		aiming = current_aim
-		target.aiming = aiming
+		_target.aiming = aiming
 #		if aiming:
 #			camera_animation.play("shoot")
 #		else:
@@ -95,7 +103,7 @@ func _process(delta):
 		jump.rpc()
 
 	shooting = Input.is_action_pressed("shoot")
-	target.shooting = shooting
+	_target.shooting = shooting
 	
 	if shooting:
 		pass
@@ -118,7 +126,7 @@ func _process(delta):
 #	else:
 #		# Fade out the black ColorRect progressively after being teleported back.
 #		color_rect.modulate.a *= 1.0 - delta * 4
-	target.aim_rotation = get_aim_rotation()
+	_target.aim_rotation = get_aim_rotation()
 
 func get_aim_rotation():
 	var x := 0.0
@@ -153,4 +161,11 @@ func set_camera(_camera):
 	
 @rpc("call_local")
 func jump():
-	target.jumping = true
+	var _target = target
+	if target is LCAvatar:
+		_target = target.target
+	
+	if not _target is LCCharacterController:
+		return
+		
+	_target.jumping = true
