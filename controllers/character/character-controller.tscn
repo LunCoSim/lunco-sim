@@ -64,10 +64,7 @@ priority = 0
 
 [sub_resource type="Resource" id="76"]
 script = ExtResource("7_1x8qy")
-name = "fire_cooldown"
-comparation = 5
 value = 0.0
-name = "fire_cooldown"
 comparation = 5
 name = "fire_cooldown"
 
@@ -133,10 +130,7 @@ priority = 0
 
 [sub_resource type="Resource" id="67"]
 script = ExtResource("8_nvk28")
-name = "on_floor"
-comparation = 0
 value = false
-name = "on_floor"
 comparation = 0
 name = "on_floor"
 
@@ -151,10 +145,7 @@ priority = 0
 
 [sub_resource type="Resource" id="68"]
 script = ExtResource("8_nvk28")
-name = "on_floor"
-comparation = 0
 value = true
-name = "on_floor"
 comparation = 0
 name = "on_floor"
 
@@ -208,10 +199,7 @@ priority = 0
 
 [sub_resource type="Resource" id="66"]
 script = ExtResource("8_nvk28")
-name = "on_floor"
-comparation = 0
 value = true
-name = "on_floor"
 comparation = 0
 name = "on_floor"
 
@@ -233,7 +221,6 @@ priority = 0
 
 [sub_resource type="Resource" id="40"]
 script = ExtResource("3_j3fcc")
-name = ""
 states = {
 "Aiming": SubResource("45"),
 "Entry": SubResource("37"),
@@ -277,7 +264,7 @@ transitions = {
 }
 name = ""
 
-[node name="PlayerController" type="Node3D"]
+[node name="CharacterController" type="Node3D"]
 script = ExtResource("1_541sa")
 
 [node name="State" type="Node" parent="."]

@@ -63,8 +63,6 @@ func _process(delta):
 	if not _target is LCCharacterController:
 		return
 	
-	_target = _target.get_parent() #TBD: find a better way, but for now its ok
-		
 	motion = Vector2(
 			Input.get_action_strength("move_right") - Input.get_action_strength("move_left"),
 			Input.get_action_strength("move_back") - Input.get_action_strength("move_forward"))
@@ -167,7 +165,5 @@ func jump():
 	
 	if not _target is LCCharacterController:
 		return
-		
-	_target = _target.get_parent() #TBD: find a better way, but for now its ok
 		
 	_target.jumping = true
