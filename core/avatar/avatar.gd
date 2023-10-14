@@ -62,9 +62,7 @@ func set_target(_target):
 	#searching for controller
 	if _target: 
 		#TBD: Better way to find controller
-		for N in _target.get_children():
-			if N is LCSpaceSystem:
-				target = N
+		target = LCController.find_controller(_target)
 	
 	if camera and target:
 		camera.add_excluded_object(target.get_parent())

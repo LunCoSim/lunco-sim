@@ -44,6 +44,10 @@ func spawn(_entity: EntitiesDB.Entities, global_position=null): #TBD think of a 
 			entity.position = spawn_node.to_local(global_position)
 		else:
 			entity.position = spawn_node.global_position
+		
+		var controller = LCController.find_controller(entity)
+		if controller != null:
+			controller.requesting_controller_authority.connect(_on_avatar_requesting_control)
 			
 		spawn_node.add_child(entity, true)
 		
@@ -56,16 +60,14 @@ func spawn(_entity: EntitiesDB.Entities, global_position=null): #TBD think of a 
 		var num = spawn_node.get_child_count()
 		Panku.gd_exprenv.register_env("Entity"+str(num), entity)
 
-@rpc("any_peer", "call_local")
 func requesting_control(target):
 	var owner = owners.get(target) 
+		
 	if owner == null:
 		owners[owner] = multiplayer.get_remote_sender_id()
 		
 		if target is LCController:
 			target.set_authority(multiplayer.get_unique_id())
-		else:
-			target.set_multiplayer_authority(multiplayer.get_unique_id())
 		
 		control_granted.emit(target)
 	else:
@@ -91,7 +93,7 @@ func _on_select_entity_to_spawn(entity_id=0, position=null):
 
 
 func _on_avatar_requesting_control(target):
-	requesting_control.rpc_id(1, target)
+	requesting_control(target)
 	
 
 #---------------------------------------
