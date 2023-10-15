@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>MetaMask Login</title>
+  <script src="https://cdn.jsdelivr.net/npm/web3@1.5.0/dist/web3.min.js"></script>
+</head>
+<body>
+  <button id="loginBtn">Login with MetaMask</button>
+
+  <script>
+    // Initialize web3
+    let web3 = new Web3(Web3.givenProvider || "ws://localhost:8545");
+
+    // Check if MetaMask is installed
+    if (typeof window.ethereum !== 'undefined' || (typeof window.web3 !== 'undefined')) {
+      web3 = new Web3(window.ethereum || window.web3.currentProvider);
+    } else {
+      alert('MetaMask not found. Install it to proceed.');
+    }
+
+    async function apiCall(endpoint, data) {
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+      });
+      return res.json();
+    }
+
+    // Log in
+    async function login() {
+      try {
+        const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+        const account = accounts[0];
+        console.log('Logged in with account:', account);
+
+        // Call /success API
+        const successData = await apiCall('/success', { wallet: account });
+        console.log('Success API response:', successData);
+      } catch (error) {
+        console.log('Login canceled:', error);
+
+        // Call /cancel API
+        const cancelData = await apiCall('/cancel', {});
+        console.log('Cancel API response:', cancelData);
+      }
+    }
+
+    // Trigger login on button click
+    document.getElementById('loginBtn').addEventListener('click', login);
+  </script>
+</body>
+</html>
