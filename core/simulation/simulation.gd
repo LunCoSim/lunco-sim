@@ -15,9 +15,18 @@ signal control_declined(entity)
 
 var owners = {}
 
+#
+#func _init():
+	
 # Called when the node enters the scene tree for the first time.
 func _ready():
 	Panku.gd_exprenv.register_env("Avatar", $Avatar)
+	print("Main ready")
+	print(OS.get_cmdline_args())
+	if "--server" in OS.get_cmdline_args():
+		print("Headless running")
+		
+		LCNet.host()
 	#if spawn_node:
 		#$MultiplayerSpawner.spawn_path = spawn_node
 	
@@ -69,7 +78,7 @@ func init_controller_signals(controller):
 	
 	
 func _on_control_granted(controller, owner):
-	controller.set_authority(multiplayer.get_unique_id())
+	controller.set_authority.rpc(multiplayer.get_unique_id())
 	control_granted.emit(controller)
 
 func _on_control_declined(controller, owner):
@@ -83,22 +92,19 @@ func requesting_control(target, owner):
 		owners[target] = owner
 		
 		if target is LCController:
-			target.set_authority(owner)
+			target.set_authority.rpc(owner)
 			target.control_granted_notify.rpc_id(owner)
-		
-		
 		
 	else:
 		if target is LCController:
 			target.control_declined_notify.rpc_id(owner)
 			
-		
 
 func release_control(target, owner):
 	owners[target] = null 
 	
 	if target is LCController:
-		target.set_authority(1)
+		target.set_authority.rpc(1)
 	
 func _on_multiplayer_spawner_spawned(node):
 	

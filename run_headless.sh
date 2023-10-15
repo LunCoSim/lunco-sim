@@ -1,2 +1,2 @@
 # Run server
-godot --headless --server ./main.tscn
+godot42b1 --headless --server ./main.tscn
