@@ -67,7 +67,9 @@ func init_controller_signals(controller):
 	controller.control_granted_n.connect(_on_control_granted)
 	controller.control_declined_n.connect(_on_control_declined)
 	
+	
 func _on_control_granted(controller, owner):
+	controller.set_authority(multiplayer.get_unique_id())
 	control_granted.emit(controller)
 
 func _on_control_declined(controller, owner):
