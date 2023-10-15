@@ -23,7 +23,7 @@ const JUMP_SPEED = 5
 
 var airborne_time = 100
 
-var orientation = Transform3D()
+@export var orientation: = Transform3D()
 var root_motion = Transform3D()
 @export var motion = Vector2()
 

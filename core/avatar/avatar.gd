@@ -55,12 +55,13 @@ var Controllers = [] # TBD Global
 #-------------------------------
 # Function set_target sets the target, searches for a controller and calls state transited
 func set_target(_target):
+	print("Sewt target: ", _target)
 	if camera and target:
 		camera.remove_excluded_object(target.get_parent())
 		
 	target = _target
 	#searching for controller
-	if _target: 
+	if not _target is LCController: 
 		#TBD: Better way to find controller
 		target = LCController.find_controller(_target)
 	
@@ -243,4 +244,12 @@ func _on_simulation_control_granted(entity):
 
 func _on_simulation_control_declined(entity):
 	Panku.notify("Control %s declined" % str(entity.name))
+	pass # Replace with function body.
+
+
+func _on_requesting_control(target):
+	var controller: = LCController.find_controller(target)
+	
+	if controller:
+		controller.request_controller_authority.rpc_id(1)
 	pass # Replace with function body.
