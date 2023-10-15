@@ -41,3 +41,5 @@ func _plugging():
 
 	## Plugin to render Starts, TBD integration
 	#https://gitlab.com/godotuniverse/starfield
+
+	plug("deep-entertainment/godottpd")

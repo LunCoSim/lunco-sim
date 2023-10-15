@@ -27,15 +27,20 @@
       return res.json();
     }
 
-    // Log in
+    // Log in and sign message
     async function login() {
       try {
         const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
         const account = accounts[0];
+
+        const message = "You are signined to LunCo";
+        const signature = await web3.eth.personal.sign(message, account, "");
+
         console.log('Logged in with account:', account);
+        console.log('Signature:', signature);
 
         // Call /success API
-        const successData = await apiCall('/success', { wallet: account });
+        const successData = await apiCall('/success', { wallet: account, signature });
         console.log('Success API response:', successData);
       } catch (error) {
         console.log('Login canceled:', error);

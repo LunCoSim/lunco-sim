@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3 uid="uid://bco3pv7fvp080"]
+
+[ext_resource type="Script" path="res://modules/web3/web3-server.gd" id="1_a7a0q"]
+
+[node name="Web3Server" type="Node"]
+script = ExtResource("1_a7a0q")
