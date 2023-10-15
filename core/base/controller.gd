@@ -4,7 +4,7 @@ extends LCSpaceSystem
 var controller_authority_id := -1
 
 signal requesting_controller_authority(_controller, owner)
-signal releasing_controller_authority(_controller)
+signal releasing_controller_authority(_controller, owner)
 
 @rpc("any_peer", "call_local")
 func set_authority(owner):
@@ -25,9 +25,8 @@ func request_controller_authority():
 
 @rpc("any_peer", "call_local")
 func release_controller_authority():
-	print("request_controlle_authority")
-	releasing_controller_authority.emit(self)
-	#controller_authority_id = _controller_authority_id
+	print("release_controller_authority")
+	releasing_controller_authority.emit(self, multiplayer.get_remote_sender_id())
 
 
 #--------------------------------------------

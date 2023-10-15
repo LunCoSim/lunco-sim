@@ -237,7 +237,8 @@ func _on_ui_existing_entity_selected(index):
 func _on_simulation_control_granted(entity):
 	Panku.notify("Control %s granted" % str(entity.name))
 	if target:
-		release_control.emit(target)
+		target.release_controller_authority.rpc_id(1)
+		#release_control.emit(target)
 		
 	set_target(entity)
 

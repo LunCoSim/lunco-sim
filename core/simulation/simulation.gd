@@ -75,7 +75,7 @@ func requesting_control(target, owner):
 	else:
 		control_declined.emit(target)
 
-func release_control(target):
+func release_control(target, owner):
 	owners[target] = null
 	
 	if target is LCController:
