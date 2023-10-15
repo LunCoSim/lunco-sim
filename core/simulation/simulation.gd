@@ -47,11 +47,7 @@ func spawn(_entity: EntitiesDB.Entities, global_position=null): #TBD think of a 
 		
 		var controller = LCController.find_controller(entity)
 		if controller != null:
-			controller.requesting_controller_authority.connect(requesting_control)
-			controller.releasing_controller_authority.connect(release_control)
-			
-			controller.control_granted_n.connect(_on_control_granted)
-			controller.control_declined_n.connect(_on_control_declined)
+			init_controller_signals(controller)
 			
 		spawn_node.add_child(entity, true)
 		
@@ -64,6 +60,13 @@ func spawn(_entity: EntitiesDB.Entities, global_position=null): #TBD think of a 
 		var num = spawn_node.get_child_count()
 		Panku.gd_exprenv.register_env("Entity"+str(num), entity)
 
+func init_controller_signals(controller):
+	controller.requesting_controller_authority.connect(requesting_control)
+	controller.releasing_controller_authority.connect(release_control)
+	
+	controller.control_granted_n.connect(_on_control_granted)
+	controller.control_declined_n.connect(_on_control_declined)
+	
 func _on_control_granted(controller, owner):
 	control_granted.emit(controller)
 
@@ -90,12 +93,18 @@ func requesting_control(target, owner):
 		
 
 func release_control(target, owner):
-	owners[target] = null
+	owners[target] = null 
 	
 	if target is LCController:
 		target.set_authority(1)
 	
 func _on_multiplayer_spawner_spawned(node):
+	
+	var controller: = LCController.find_controller(node)
+	
+	if controller:
+		init_controller_signals(controller)
+	
 	entities.append(node)
 	entities_updated.emit(entities)
 
