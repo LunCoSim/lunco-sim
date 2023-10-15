@@ -245,12 +245,12 @@ func _on_simulation_control_granted(entity):
 
 func _on_simulation_control_declined(entity):
 	Panku.notify("Control %s declined" % str(entity.name))
-	pass # Replace with function body.
 
 
 func _on_requesting_control(target):
-	var controller: = LCController.find_controller(target)
-	
-	if controller:
-		controller.request_controller_authority.rpc_id(1)
-	pass # Replace with function body.
+	if target:
+		var controller: = LCController.find_controller(target)
+		
+		if controller:
+			controller.request_controller_authority.rpc_id(1)
+

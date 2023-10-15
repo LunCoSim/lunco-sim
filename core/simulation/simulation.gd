@@ -50,6 +50,9 @@ func spawn(_entity: EntitiesDB.Entities, global_position=null): #TBD think of a 
 			controller.requesting_controller_authority.connect(requesting_control)
 			controller.releasing_controller_authority.connect(release_control)
 			
+			controller.control_granted_n.connect(_on_control_granted)
+			controller.control_declined_n.connect(_on_control_declined)
+			
 		spawn_node.add_child(entity, true)
 		
 		Panku.notify("%s created" % entity.name)
@@ -61,6 +64,12 @@ func spawn(_entity: EntitiesDB.Entities, global_position=null): #TBD think of a 
 		var num = spawn_node.get_child_count()
 		Panku.gd_exprenv.register_env("Entity"+str(num), entity)
 
+func _on_control_granted(controller, owner):
+	control_granted.emit(controller)
+
+func _on_control_declined(controller, owner):
+	control_declined.emit(controller)
+	
 func requesting_control(target, owner):
 	print(target, owner)
 	var _owner = owners.get(target) 
@@ -70,10 +79,15 @@ func requesting_control(target, owner):
 		
 		if target is LCController:
 			target.set_authority(owner)
+			target.control_granted_notify.rpc_id(owner)
 		
-		control_granted.emit(target)
+		
+		
 	else:
-		control_declined.emit(target)
+		if target is LCController:
+			target.control_declined_notify.rpc_id(owner)
+			
+		
 
 func release_control(target, owner):
 	owners[target] = null

@@ -6,6 +6,9 @@ var controller_authority_id := -1
 signal requesting_controller_authority(_controller, owner)
 signal releasing_controller_authority(_controller, owner)
 
+signal control_granted_n(_controller, owner)
+signal control_declined_n(_controller, owner)
+
 @rpc("any_peer", "call_local")
 func set_authority(owner):
 	print("Setting authority ", multiplayer.get_remote_sender_id()  )
@@ -28,7 +31,15 @@ func release_controller_authority():
 	print("release_controller_authority")
 	releasing_controller_authority.emit(self, multiplayer.get_remote_sender_id())
 
+@rpc("any_peer", "call_local")
+func control_granted_notify():
+	print("control_granted_notify remote: ", multiplayer.get_remote_sender_id(), " local: ", multiplayer.get_unique_id())
+	control_granted_n.emit(self, multiplayer.get_remote_sender_id())
 
+@rpc("any_peer", "call_local")
+func control_declined_notify():
+	control_declined_n.emit(self, multiplayer.get_remote_sender_id())
+	
 #--------------------------------------------
 ## 
 static func find_controller(entity: Node) -> LCController:
