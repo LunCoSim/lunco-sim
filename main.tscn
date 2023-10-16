@@ -1,6 +1,7 @@
-[gd_scene load_steps=6 format=3 uid="uid://c4vgq4emswcqj"]
+[gd_scene load_steps=7 format=3 uid="uid://c4vgq4emswcqj"]
 
 [ext_resource type="PackedScene" uid="uid://oulno1atrp8k" path="res://core/simulation/simulation.tscn" id="1_feltx"]
+[ext_resource type="PackedScene" uid="uid://bco3pv7fvp080" path="res://modules/web3/web3-server.tscn" id="2_fcetm"]
 [ext_resource type="PackedScene" uid="uid://cpbv4fmfxppt1" path="res://modules/solar_system_planets/sun.tscn" id="3_r6oc6"]
 [ext_resource type="PackedScene" uid="uid://ddaqlkbgl7bdl" path="res://modules/solar_system_planets/earth.tscn" id="4_lv7ap"]
 [ext_resource type="PackedScene" uid="uid://csqh45xcqbewi" path="res://modules/solar_system_planets/moon.tscn" id="5_m7lob"]
@@ -9,10 +10,12 @@
 [node name="Simulation" node_paths=PackedStringArray("spawn_node") instance=ExtResource("1_feltx")]
 spawn_node = NodePath("Universe/Sun/Earth/Moon/LangrenusCraterMap/Spawner")
 
-[node name="Avatar" parent="." index="0"]
+[node name="Web3Server" parent="." index="0" instance=ExtResource("2_fcetm")]
+
+[node name="Avatar" parent="." index="1"]
 transform = Transform3D(-0.82255, -0.00837469, 0.568631, 0.00348538, 0.999798, 0.0197666, -0.568682, 0.0182409, -0.822355, -12.653, 7.06782, 1.34696)
 
-[node name="MultiplayerSpawner" parent="." index="1"]
+[node name="MultiplayerSpawner" parent="." index="2"]
 _spawnable_scenes = PackedStringArray("res://content/starship/starship.tscn", "res://content/animated-astronaut-character-in-space-suit-loop/astronaut.tscn", "res://content/gobot/gobot.tscn", "res://content/gobot/gobot.tscn")
 spawn_path = NodePath("../Universe/Sun/Earth/Moon/LangrenusCraterMap/Spawner")
 

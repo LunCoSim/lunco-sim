@@ -29,6 +29,8 @@ LCWindows="*res://core/singletones/windows-manager.gd"
 SceneManager="*res://addons/scene_manager/scene_manager.tscn"
 Scenes="*res://presets/scenes.gd"
 EntitiesDB="*res://core/singletones/entities-manager.gd"
+Profile="*res://core/singletones/profile.gd"
+Messenger="*res://core/singletones/messenger.gd"
 
 [display]
 

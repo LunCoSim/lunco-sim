@@ -3,18 +3,35 @@
 class_name LCProfile
 extends Node
 
+@export var username: String : set = set_username
+@export var wallet: String : set = set_wallet
+
+#----------------------------------
+const FILENAME = "profile.cfg"
+const PATH = "user://"
+const FULLPATH = PATH + FILENAME
+
+const SECTION = "Profile"
+#----------------------------------
 
 # Called when the node enters the scene tree for the first time.
-func _ready():
-	pass # Replace with function body.
+func _init():
+	load_profile()
 
+#----------------------------------
 
-# Called every frame. 'delta' is the elapsed time since the previous frame.
-func _process(delta):
-	pass
+func set_username(_username):
+	username = _username
+	save_profile()
 
-#-------------------------
-
+func set_wallet(_wallet):
+	if wallet != _wallet:
+		wallet = _wallet
+		save_profile()
+		if Messenger:
+			Messenger.profile_wallet_changed.emit()
+	
+#----------------------------------
 func login():
 	pass
 	
@@ -32,4 +49,30 @@ func is_donor()->bool:
 	
 func is_special_donor()->bool:
 	return false
+
+#-----------------------------
+func save_profile():
+	# Create new ConfigFile object.
+	var config = ConfigFile.new()
+
+	# Store some values.
+	config.set_value(SECTION, "username", username)
+	config.set_value(SECTION, "wallet", wallet)
+
+	# Save it to a file (overwrite if already exists).
+	config.save(FULLPATH)
+
+func load_profile():
+	var score_data = {}
+	var config = ConfigFile.new()
+
+	# Load data from a file.
+	var err = config.load(FULLPATH)
+
+	# If the file didn't load, ignore it.
+	if err != OK:
+		return
+	
+	username = config.get_value(SECTION, "username")
+	wallet = config.get_value(SECTION, "wallet")
 	

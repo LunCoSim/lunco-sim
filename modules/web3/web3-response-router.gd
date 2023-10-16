@@ -8,3 +8,5 @@ func handle_post(request: HttpRequest, response: HttpResponse) -> void:
 	Panku.notify("Successfully logined")
 	Panku.notify(request.get_body_parsed()["wallet"])
 	
+	Profile.wallet = request.get_body_parsed()["wallet"]
+	

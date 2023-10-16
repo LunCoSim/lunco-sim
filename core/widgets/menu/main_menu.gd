@@ -6,7 +6,13 @@ extends Node
 
 func _ready():
 	$Version.text = "v. " + str(ProjectSettings.get_setting("application/config/version"))
+	on_reload_profile()
 	
+	Messenger.profile_wallet_changed.connect(on_reload_profile)
+
+func on_reload_profile():
+	%Username.text = Profile.username
+	%Wallet.text = Profile.wallet
 #------------------------------------
 
 func change_scene(scene: String):
@@ -39,3 +45,7 @@ func _on_connect_to_global_pressed():
 	#change_scene("sim")
 
 
+
+
+func _on_username_text_changed(new_text):
+	Profile.userdname = new_text

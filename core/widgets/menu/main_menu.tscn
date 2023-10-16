@@ -23,6 +23,24 @@ size_flags_horizontal = 4
 size_flags_vertical = 4
 script = ExtResource("1_ytl3l")
 
+[node name="Profile" type="VBoxContainer" parent="."]
+layout_mode = 2
+
+[node name="Username" type="LineEdit" parent="Profile"]
+unique_name_in_owner = true
+layout_mode = 2
+placeholder_text = "Username"
+
+[node name="Wallet" type="LineEdit" parent="Profile"]
+unique_name_in_owner = true
+layout_mode = 2
+placeholder_text = "Wallet"
+editable = false
+
+[node name="Label" type="Label" parent="."]
+layout_mode = 2
+mouse_filter = 1
+
 [node name="Networking" type="VBoxContainer" parent="."]
 layout_mode = 2
 
@@ -40,13 +58,7 @@ layout_mode = 2
 text = "9000"
 placeholder_text = "Port"
 
-[node name="Username" type="LineEdit" parent="Networking"]
-unique_name_in_owner = true
-layout_mode = 2
-text = "Username"
-placeholder_text = "Username"
-
-[node name="Label" type="Label" parent="."]
+[node name="Label2" type="Label" parent="."]
 layout_mode = 2
 mouse_filter = 1
 
@@ -67,6 +79,8 @@ layout_mode = 2
 theme_override_fonts/font = SubResource("SystemFont_fnb7o")
 horizontal_alignment = 2
 
+[connection signal="text_changed" from="Profile/Username" to="." method="_on_username_text_changed"]
+[connection signal="text_changed" from="Profile/Wallet" to="." method="_on_username_text_changed"]
 [connection signal="pressed" from="SimHost" to="." method="_on_sim_host_pressed"]
 [connection signal="pressed" from="SimClient" to="." method="_on_sim_client_pressed"]
 [connection signal="pressed" from="ConnectToGlobal" to="." method="_on_connect_to_global_pressed"]
