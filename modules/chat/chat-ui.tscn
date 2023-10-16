@@ -2,44 +2,26 @@
 
 [ext_resource type="Script" path="res://modules/chat/chat-ui.gd" id="1_6i7xe"]
 
-[node name="Chat" type="Control"]
-custom_minimum_size = Vector2(300, 335)
-layout_mode = 3
-anchors_preset = 8
-anchor_left = 0.5
-anchor_top = 0.5
-anchor_right = 0.5
-anchor_bottom = 0.5
-offset_left = -150.0
-offset_top = -167.5
-offset_right = 150.0
-offset_bottom = 167.5
-grow_horizontal = 2
-grow_vertical = 2
+[node name="Chat" type="VBoxContainer"]
+custom_minimum_size = Vector2(300, 300)
+offset_right = 300.0
+offset_bottom = 300.0
 script = ExtResource("1_6i7xe")
 
-[node name="VBoxContainer" type="VBoxContainer" parent="."]
-layout_mode = 1
-offset_right = 300.0
-offset_bottom = 335.0
-
-[node name="Messages" type="ItemList" parent="VBoxContainer"]
+[node name="Messages" type="ItemList" parent="."]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(150, 300)
 layout_mode = 2
 size_flags_vertical = 3
 
-[node name="HBoxContainer" type="HBoxContainer" parent="VBoxContainer"]
+[node name="HBoxContainer" type="HBoxContainer" parent="."]
 layout_mode = 2
 
-[node name="TextEdit" type="TextEdit" parent="VBoxContainer/HBoxContainer"]
+[node name="TextEdit" type="TextEdit" parent="HBoxContainer"]
 unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
 placeholder_text = "What you want to send?"
 
-[node name="Button" type="Button" parent="VBoxContainer/HBoxContainer"]
+[node name="Button" type="Button" parent="HBoxContainer"]
 layout_mode = 2
 text = "Send"
-
-[connection signal="pressed" from="VBoxContainer/HBoxContainer/Button" to="." method="_on_send_button_pressed"]
