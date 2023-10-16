@@ -27,6 +27,9 @@ func _ready():
 		print("Headless running")
 		
 		LCNet.host()
+	
+	
+	multiplayer.peer_disconnected.connect(on_peer_disconnected)
 	#if spawn_node:
 		#$MultiplayerSpawner.spawn_path = spawn_node
 	
@@ -121,3 +124,14 @@ func _on_multiplayer_spawner_spawned(node):
 
 func _on_select_entity_to_spawn(entity_id=0, position=null):
 	spawn.rpc_id(1, entity_id, position)
+
+func on_peer_disconnected(peer_id):
+	if multiplayer.get_unique_id() == 1:
+		for key in owners:
+			var owner = owners[key]
+			
+			if owner == peer_id:
+				owners[key] = null
+				var c: LCController = key
+				
+				key.set_authority.rpc(1)
