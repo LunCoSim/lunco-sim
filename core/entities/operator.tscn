@@ -1,7 +1,7 @@
 [gd_scene load_steps=6 format=3 uid="uid://dxepfetvn7y3c"]
 
 [ext_resource type="PackedScene" uid="uid://dly6j7li6g7t8" path="res://core/models/operator-model.tscn" id="1_8ym3w"]
-[ext_resource type="Script" path="res://entities/operator/operator.gd" id="2_mcyer"]
+[ext_resource type="Script" path="res://core/entities/operator.gd" id="2_mcyer"]
 [ext_resource type="PackedScene" uid="uid://dpv63l3fgdrk5" path="res://controllers/operator/operator-controller.tscn" id="3_kevig"]
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_fffnb"]

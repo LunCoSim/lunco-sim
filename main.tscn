@@ -13,7 +13,7 @@ spawn_node = NodePath("Universe/Sun/Earth/Moon/LangrenusCraterMap/Spawner")
 transform = Transform3D(-0.82255, -0.00837469, 0.568631, 0.00348538, 0.999798, 0.0197666, -0.568682, 0.0182409, -0.822355, -12.653, 7.06782, 1.34696)
 
 [node name="MultiplayerSpawner" parent="." index="1"]
-_spawnable_scenes = PackedStringArray("res://entities/operator/operator.tscn", "res://content/starship/starship.tscn", "res://content/animated-astronaut-character-in-space-suit-loop/astronaut.tscn", "res://content/gobot/gobot.tscn", "res://content/gobot/gobot.tscn")
+_spawnable_scenes = PackedStringArray("res://content/starship/starship.tscn", "res://content/animated-astronaut-character-in-space-suit-loop/astronaut.tscn", "res://content/gobot/gobot.tscn", "res://content/gobot/gobot.tscn")
 spawn_path = NodePath("../Universe/Sun/Earth/Moon/LangrenusCraterMap/Spawner")
 
 [node name="Sun" parent="Universe" index="1" instance=ExtResource("3_r6oc6")]

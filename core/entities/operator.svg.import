@@ -3,15 +3,15 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://ctk3lvrfksxk1"
-path="res://.godot/imported/operator.svg-23f4ce3b0af8060368b8bb0e9298c4f8.ctex"
+path="res://.godot/imported/operator.svg-c388bbd2ba36e6b0b38442675388ad50.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://entities/operator/operator.svg"
-dest_files=["res://.godot/imported/operator.svg-23f4ce3b0af8060368b8bb0e9298c4f8.ctex"]
+source_file="res://core/entities/operator.svg"
+dest_files=["res://.godot/imported/operator.svg-c388bbd2ba36e6b0b38442675388ad50.ctex"]
 
 [params]
 
