@@ -55,7 +55,7 @@ var Controllers = [] # TBD Global
 #-------------------------------
 # Function set_target sets the target, searches for a controller and calls state transited
 func set_target(_target):
-	print("Sewt target: ", _target)
+	print("Set target: ", _target)
 	if camera and target:
 		camera.remove_excluded_object(target.get_parent())
 		
@@ -116,6 +116,9 @@ func _input(event):
 		#SceneManager.no_effect_change_scene("back")
 		#TBD: Show/hide menu, should be a signal? To what?
 		LCWindows.toggle_main_menu()
+	
+	if Input.is_action_just_pressed("ui_focus_next"):
+		LCWindows.toggle_chat()
 	
 	if event is InputEventKey and not event.is_echo() and event.is_pressed():
 		

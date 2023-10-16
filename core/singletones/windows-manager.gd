@@ -2,10 +2,15 @@ class_name LCWindowsManager
 extends Node
 
 var MainMenu: PankuLynxWindow
+var ChatWindow: PankuLynxWindow
+
 
 func _ready():
 	var MainMenuScene = preload("res://core/widgets/menu/main_menu.tscn").instantiate()
 	MainMenu = LCWindowsManager.make_window(MainMenuScene, "Main menu")
+	
+	var ChatWindowScene = preload("res://modules/chat/chat-ui.tscn").instantiate()
+	ChatWindow = LCWindowsManager.make_window(ChatWindowScene, "Chat")
 	
 static func make_window(control, title):
 	var win: PankuLynxWindow = Panku.windows_manager.create_window(control)
@@ -25,3 +30,10 @@ func toggle_main_menu():
 		MainMenu.hide_window()
 	else:
 		MainMenu.show_window()
+
+func toggle_chat():
+	# Workaround, buildin toggle function fails
+	if ChatWindow.visible:
+		ChatWindow.hide_window()
+	else:
+		ChatWindow.show_window()
