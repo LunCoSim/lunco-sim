@@ -9,8 +9,8 @@ func _ready():
 func _process(delta):
 	pass
 
-func _on_new_message(new_message, sender_name, sender_wallet):
-	var text = sender_name + ": " + new_message.text
+func _on_new_message(message):
+	var text = message.sender_name + ": " + message.text
 	
 	var msg: ItemList = %Messages
 	
@@ -20,3 +20,7 @@ func _on_new_message(new_message, sender_name, sender_wallet):
 func _on_send_button_pressed():
 	Chat.send_message(%TextEdit.text)
 	%TextEdit.text = ""
+
+
+func _on_text_edit_text_submitted(new_text):
+	_on_send_button_pressed()
