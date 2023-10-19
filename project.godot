@@ -33,6 +33,8 @@ Profile="*res://core/singletones/profile.gd"
 Messenger="*res://core/singletones/messenger.gd"
 Chat="*res://modules/chat/chat.gd"
 Logger="*res://addons/godot-logger/logger.gd"
+Users="*res://core/singletones/users_manager.gd"
+Signal_Debugger="*res://addons/SignalVisualizer/Debugger/SignalDebugger.gd"
 
 [display]
 
@@ -53,7 +55,7 @@ logger/file/log_file_write=true
 logger/file/file_path="res://game.log"
 logger/stdout_format="[{hour}:{minute}:{second}][{level}]{text}"
 logger/file_format="[{hour}:{minute}:{second}][{level}]{text}"
-enabled=PackedStringArray("res://addons/GPTIntegration/plugin.cfg", "res://addons/godot-logger/plugin.cfg", "res://addons/godottpd/plugin.cfg", "res://addons/imjp94.yafsm/plugin.cfg", "res://addons/panku_console/plugin.cfg", "res://addons/scene_manager/plugin.cfg", "res://addons/ui_design_tool/plugin.cfg")
+enabled=PackedStringArray("res://addons/GPTIntegration/plugin.cfg", "res://addons/SignalVisualizer/plugin.cfg", "res://addons/godot-logger/plugin.cfg", "res://addons/godottpd/plugin.cfg", "res://addons/imjp94.yafsm/plugin.cfg", "res://addons/panku_console/plugin.cfg", "res://addons/scene_manager/plugin.cfg", "res://addons/ui_design_tool/plugin.cfg")
 
 [gdunit4]
 

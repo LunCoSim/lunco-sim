@@ -23,7 +23,8 @@ func _plugging():
 	plug("LunCoSim/PankuConsole") #using LunCo's fork
 	# plug("godot-extended-libraries/godot-debug-menu")
 	plug("finepointcgi/Godot-Open-AI-GPT-Integration")
-
+	plug("Ericdowney/SignalVisualizer")
+	
 	## Libraries
 	plug("maktoobgar/scene_manager") ## Scene manager
 
@@ -44,3 +45,4 @@ func _plugging():
 
 	plug("deep-entertainment/godottpd")
 	plug("KOBUGE-Games/godot-logger", {"install_root": "addons/godot-logger", "include": ["."]})
+
