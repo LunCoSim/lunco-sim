@@ -43,3 +43,4 @@ func _plugging():
 	#https://gitlab.com/godotuniverse/starfield
 
 	plug("deep-entertainment/godottpd")
+	plug("KOBUGE-Games/godot-logger", {"install_root": "addons/godot-logger", "include": ["."]})
