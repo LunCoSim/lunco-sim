@@ -80,6 +80,7 @@ func update_entities(entities):
 	
 	for entity in entities:
 		# Add child items to the root.
+		
 		var idx = tree.add_item(str(entity.name))
 		if avatar.target and entity == avatar.target.get_parent():
 			tree.select(idx)

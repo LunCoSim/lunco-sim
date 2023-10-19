@@ -149,7 +149,24 @@ func _input(event):
 				if get_parent().entities.size() >= key_number:
 					requesting_control.emit(get_parent().entities[key_number-1])
 					#set_target()
-	
+	if target == null:
+		var motion_direction := Vector3(
+			Input.get_action_strength("move_left") - Input.get_action_strength("move_right"),
+			Input.get_action_strength("move_up") - Input.get_action_strength("move_down"),
+			Input.get_action_strength("move_forward") - Input.get_action_strength("move_back")
+		)
+		$AvatarController.direction = motion_direction
+		$AvatarController.camera_basis = camera.get_camera_rotation_basis()
+		
+		if Input.is_key_pressed(KEY_SHIFT):
+			$AvatarController.speed = 20
+		else:
+			$AvatarController.speed = 10
+	else:
+		$AvatarController.direction = Vector3.ZERO
+		
+		
+		
 	input_camera(event)
 	input_operator(event)
 
