@@ -37,14 +37,16 @@ var Caches: = {
 func _init():
 	for entity in Paths:
 		var path : String = Paths[entity]
-		
+		ResourceLoader.load_threaded_request(path)
 		Caches[entity] = load(path)
 		
 func make_entity(entity):
-
-	if Caches.get(entity) != null:
-		return Caches[entity].instantiate()
-	else:
-		return null
-#
+	var path : String = Paths[entity]
+	return ResourceLoader.load_threaded_get(path).instantiate()
+	#
+	#if Caches.get(entity) != null:
+		#return Caches[entity].instantiate()
+	#else:
+		#return null
+##
 
