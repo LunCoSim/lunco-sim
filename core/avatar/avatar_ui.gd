@@ -64,24 +64,41 @@ func set_target(target):
 	set_ui(_ui)
 	
 	update_entities(get_parent().get_parent().entities) #TBD Very dirty hack! Getting Universe entities
-
+	
 func _on_entities_item_selected(index):
 	print("_on_entities_item_selected: ", index)
 	emit_signal("entity_selected", index)
 	pass # Replace with function body.
 
-func _on_existing_entity_selected(index):
-	existing_entity_selected.emit(index)
+func _on_existing_entity_selected(idx):
+	existing_entity_selected.emit(idx)
 	
 func update_entities(entities):
-	var tree: ItemList = %LiveEntities
 	
-	tree.clear()
+	var tree: HBoxContainer = %LiveEntities
 	
+	for child in tree.get_children():
+		child.queue_free()
+	
+	var idx = 0
 	for entity in entities:
 		# Add child items to the root.
+		var button = Button.new()
+		button.text = str(entity.name)
+		tree.add_child(button)
+		#button.connect("pressed", self, "_on_item_pressed", [button])
 		
-		var idx = tree.add_item(str(entity.name))
+		button.pressed.connect(_on_existing_entity_selected, idx)
+		#var idx = tree.add_item()
+		
+		button.flat = true
 		if avatar.target and entity == avatar.target.get_parent():
-			tree.select(idx)
+			button.flat = false
+
+func select_entity(idx):
+	var tree: HBoxContainer = %LiveEntities
 	
+	for child: Button in tree.get_children():
+		child.flat = false
+		if child.get_index() == idx:
+			child.flat = true

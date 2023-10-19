@@ -53,23 +53,21 @@ layout_mode = 2
 
 [node name="LivesEntitiesContrainer" type="VBoxContainer" parent="."]
 layout_mode = 1
-anchors_preset = 3
-anchor_left = 1.0
+anchors_preset = 12
 anchor_top = 1.0
 anchor_right = 1.0
 anchor_bottom = 1.0
-offset_left = -134.0
-offset_top = -40.0
-grow_horizontal = 0
+offset_top = -77.0
+grow_horizontal = 2
 grow_vertical = 0
 
 [node name="Spawn3" type="Label" parent="LivesEntitiesContrainer"]
 layout_mode = 2
 text = "Take control (1-8)"
 
-[node name="LiveEntities" type="ItemList" parent="LivesEntitiesContrainer"]
+[node name="LiveEntities" type="HBoxContainer" parent="LivesEntitiesContrainer"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(170, 200)
+custom_minimum_size = Vector2(0, 50)
 layout_mode = 2
 mouse_force_pass_scroll_events = false
 
@@ -77,5 +75,10 @@ mouse_force_pass_scroll_events = false
 unique_name_in_owner = true
 anchors_preset = 0
 
+[node name="Button" type="Button" parent="."]
+layout_mode = 0
+offset_right = 8.0
+offset_bottom = 8.0
+text = "kjhkjhkjh"
+
 [connection signal="item_selected" from="EntitiesContrainer/Entities" to="." method="_on_entities_item_selected"]
-[connection signal="item_selected" from="LivesEntitiesContrainer/LiveEntities" to="." method="_on_existing_entity_selected"]
