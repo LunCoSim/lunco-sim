@@ -18,7 +18,6 @@ func _ready():
 	multiplayer.connected_to_server.connect(on_server_connected)
 	multiplayer.server_disconnected.connect(on_server_disconnected)
 	
-	
 
 # Function to connect to a server
 func connect_to_server(ip: String="langrenus.lunco.space", port: int = 9000):
@@ -41,12 +40,23 @@ func host(port: int = 9000):
 	multiplayer.multiplayer_peer = peer
 
 #---------------------------------------------------
+@rpc("any_peer")
+func update_player_info(_username, _userwallet):
+	var id = multiplayer.get_remote_sender_id()
+	
+	players[id] = {
+		"username": _username,
+		"wallet": _userwallet
+	}
+
+#---------------------------------------------------
 
 # Function called when a peer connects
 func on_peer_connected(id):
 	print("on_peer_connected: ", id)
 	# Adding the peer to players dictionary
 	players[id] = {}
+	update_player_info.rpc_id(id, Profile.username, Profile.wallet)
 
 # Function called when a peer disconnects
 func on_peer_disconnected(id):
@@ -71,12 +81,3 @@ func on_server_connected():
 func on_server_disconnected():
 	# Printing a message to signal loss of server connection
 	print("Lost connection to server")
-
-
-@export var text := ""
-
-
-@rpc("any_peer")
-func set_text(_text):
-	print("peer id: ", multiplayer.get_unique_id()," caller ", multiplayer.get_remote_sender_id() ," set text: ", _text)
-	text=_text
