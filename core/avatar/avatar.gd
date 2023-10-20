@@ -158,7 +158,9 @@ func _input(event):
 		$AvatarController.direction = motion_direction
 		$AvatarController.camera_basis = camera.get_camera_rotation_basis()
 		
-		if Input.is_key_pressed(KEY_SHIFT):
+		if Input.is_key_pressed(KEY_ALT):
+			$AvatarController.speed = 100
+		elif Input.is_key_pressed(KEY_SHIFT):
 			$AvatarController.speed = 20
 		else:
 			$AvatarController.speed = 10
