@@ -7,32 +7,17 @@ extends LCSpaceSystem
 # Declaring signals
 signal create(path_to_scene)
 
-signal create_operator
-signal create_player
-signal create_spacecraft
-
 signal spawn_entity(entity, position)
 
 signal target_changed(target)
 
-signal requesting_control(target)
+signal requesting_control(entity_idx)
 signal release_control(target)
 
 #-------------------------------
 # Constants for mouse sensitivity and ray length
 const MOUSE_SENSITIVITY = 0.015
 const RAY_LENGTH = 10000
-
-#------------------------------------
-# Block related to movement
-
-@export var MAX_SPEED = 100
-@export var ACCELERATION = 50
-@export var DECELERATION = 50
-
-#var velocity := Vector3.ZERO
-var dir := Vector3.ZERO
-var orientation := Basis.IDENTITY
 
 #-------------------------------
 # Exporting target variable and setting default mouse control to false
@@ -48,6 +33,7 @@ var orientation := Basis.IDENTITY
 #------------------------------
 # Internal state
 var mouse_control := false
+var controller: LCController
 
 var UIs: = [] # TBD Global, e.g. at entity level. Each Entity has it's path to UI, Path to controller
 var Controllers = [] # TBD Global
@@ -57,20 +43,24 @@ var Controllers = [] # TBD Global
 func set_target(_target):
 	print("Set target: ", _target)
 	if camera and target:
-		camera.remove_excluded_object(target.get_parent())
-		
+		camera.remove_excluded_object(controller.get_parent())
+	
+	if controller:
+		release_control.emit(controller.get_parent().get_path())
+	
 	target = _target
 	#searching for controller
 	if not _target is LCController: 
 		#TBD: Better way to find controller
 		target = LCController.find_controller(_target)
+		controller = LCController.find_controller(_target)
 	
-	if camera and target:
-		camera.add_excluded_object(target.get_parent())
+	if camera and controller:
+		camera.add_excluded_object(controller.get_parent())
 	
 	# Calling state transited function
 	_on_state_transited()
-	return target
+	return controller
 
 # Function set_camera sets the camera and make it current if camera exists
 func set_camera(_camera):
@@ -81,8 +71,8 @@ func set_camera(_camera):
 #-------------------------------
 # Defining different functions for handling player controls like select, rotate, move, etc.
 func _ready():
-	set_target(target)
 	set_camera(camera)
+	set_target(target)
 	
 #-----------------------------------------------------
 
@@ -124,9 +114,8 @@ func _input(event):
 			if event.is_alt_pressed():
 				spawn_entity.emit(key_number-1)
 			else:
-				if get_parent().entities.size() >= key_number:
-					requesting_control.emit(get_parent().entities[key_number-1])
-					#set_target()
+				requesting_control.emit(key_number-1)
+				
 	if target == null:
 		var motion_direction := Vector3(
 			Input.get_action_strength("move_left") - Input.get_action_strength("move_right"),
@@ -189,11 +178,8 @@ func input_camera(event):
 		
 func input_operator(event):
 	if target is LCOperatorController:
-		var cam: SpringArmCamera = camera
 		var operator: LCOperatorController = target
-
-		
-		operator.orient(cam.get_plain_basis())
+		operator.orient(camera.get_plain_basis())
 		
 func action_raycast(_position: Vector2):
 	if camera:  
@@ -252,27 +238,13 @@ func _on_select_entity_to_spawn(entity_id=0):
 	entity_to_spawn = entity_id
 	
 func _on_ui_existing_entity_selected(index):
-	requesting_control.emit(get_parent().entities[index])
+	requesting_control.emit(index)
 
-
-func _on_simulation_control_granted(entity):
+func _on_simulation_control_granted(path):
+	var entity = get_tree().get_root().get_node(path)
 	Panku.notify("Control %s granted" % str(entity.name))
-	if target:
-		target.release_controller_authority.rpc_id(1)
-		target.set_authority(1)
-		#release_control.emit(target)
-		
 	set_target(entity)
 
-
-func _on_simulation_control_declined(entity):
+func _on_simulation_control_declined(path):
+	var entity = get_tree().get_root().get_node(path)
 	Panku.notify("Control %s declined" % str(entity.name))
-
-
-func _on_requesting_control(target):
-	if target:
-		var controller: = LCController.find_controller(target)
-		
-		if controller:
-			controller.request_controller_authority.rpc_id(1)
-

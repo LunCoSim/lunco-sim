@@ -19,5 +19,7 @@ unique_name_in_owner = true
 [connection signal="control_declined" from="." to="Avatar" method="_on_simulation_control_declined"]
 [connection signal="control_granted" from="." to="Avatar" method="_on_simulation_control_granted"]
 [connection signal="entities_updated" from="." to="Avatar" method="update_entities"]
+[connection signal="release_control" from="Avatar" to="." method="_on_avatar_release_control"]
+[connection signal="requesting_control" from="Avatar" to="." method="_on_avatar_requesting_control"]
 [connection signal="spawn_entity" from="Avatar" to="." method="_on_select_entity_to_spawn"]
 [connection signal="spawned" from="MultiplayerSpawner" to="." method="_on_multiplayer_spawner_spawned"]

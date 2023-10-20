@@ -37,5 +37,3 @@ transform = Transform3D(107.71, 0, 22.3273, 0, 110, 0, -22.3273, 0, 107.71, 156.
 
 [node name="Root Scene2" parent="Universe/Sun/Earth/Moon/LangrenusCraterMap/Content/LaunchPad" index="0" instance=ExtResource("8_pvujg")]
 transform = Transform3D(1, 0, -2.98023e-08, 0, 1, 0, 2.98023e-08, 0, 1, 0, 0, 0)
-
-[connection signal="requesting_control" from="Avatar" to="Avatar" method="_on_requesting_control"]
