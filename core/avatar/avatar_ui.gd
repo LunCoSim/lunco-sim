@@ -53,11 +53,11 @@ func clear_ui():
 func set_target(target):
 	
 	if target is LCCharacterController:
-		_ui = preload("res://controllers/character/character-ui.tscn").instantiate()
+		_ui = load("res://controllers/character/character-ui.tscn").instantiate()
 	elif target is LCSpacecraftController:
-		_ui = preload("res://controllers/spacecraft/spacecraft-ui.tscn").instantiate()
+		_ui = load("res://controllers/spacecraft/spacecraft-ui.tscn").instantiate()
 	elif target is LCOperatorController:
-		_ui = preload("res://controllers/operator/operator-ui.tscn").instantiate()
+		_ui = load("res://controllers/operator/operator-ui.tscn").instantiate()
 
 	if _ui:
 		_ui.set_target(target) #controller specific function
@@ -86,14 +86,12 @@ func update_entities(entities):
 		var button = Button.new()
 		button.text = str(entity.name)
 		tree.add_child(button)
-		#button.connect("pressed", self, "_on_item_pressed", [button])
-		
-		button.pressed.connect(_on_existing_entity_selected, idx)
-		#var idx = tree.add_item()
-		
+
+		button.pressed.connect(_on_existing_entity_selected.bind(idx))
 		button.flat = true
 		if avatar.target and entity == avatar.target.get_parent():
 			button.flat = false
+		idx += 1
 
 func select_entity(idx):
 	var tree: HBoxContainer = %LiveEntities

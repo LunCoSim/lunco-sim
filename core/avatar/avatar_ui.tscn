@@ -1,6 +1,10 @@
-[gd_scene load_steps=2 format=3 uid="uid://wdnxqhctneyv"]
+[gd_scene load_steps=4 format=3 uid="uid://wdnxqhctneyv"]
 
 [ext_resource type="Script" path="res://core/avatar/avatar_ui.gd" id="1_igs02"]
+
+[sub_resource type="Theme" id="Theme_mfhp6"]
+
+[sub_resource type="Theme" id="Theme_kf4je"]
 
 [node name="UI" type="Control"]
 layout_mode = 3
@@ -10,6 +14,7 @@ anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 mouse_filter = 2
+theme = SubResource("Theme_mfhp6")
 script = ExtResource("1_igs02")
 
 [node name="Help" type="VBoxContainer" parent="."]
@@ -31,16 +36,15 @@ text = "Esc – Menu "
 
 [node name="EntitiesContrainer" type="VBoxContainer" parent="."]
 layout_mode = 1
-anchors_preset = 6
+anchors_preset = 3
 anchor_left = 1.0
-anchor_top = 0.5
+anchor_top = 1.0
 anchor_right = 1.0
-anchor_bottom = 0.5
-offset_left = -169.0
-offset_top = -20.0
-offset_bottom = 20.0
+anchor_bottom = 1.0
+offset_left = -170.0
+offset_top = -177.0
 grow_horizontal = 0
-grow_vertical = 2
+grow_vertical = 0
 
 [node name="Spawn3" type="Label" parent="EntitiesContrainer"]
 layout_mode = 2
@@ -50,6 +54,7 @@ text = "Create entities (Alt+#)"
 unique_name_in_owner = true
 custom_minimum_size = Vector2(170, 150)
 layout_mode = 2
+auto_height = true
 
 [node name="LivesEntitiesContrainer" type="VBoxContainer" parent="."]
 layout_mode = 1
@@ -60,6 +65,7 @@ anchor_bottom = 1.0
 offset_top = -77.0
 grow_horizontal = 2
 grow_vertical = 0
+theme = SubResource("Theme_kf4je")
 
 [node name="Spawn3" type="Label" parent="LivesEntitiesContrainer"]
 layout_mode = 2
@@ -74,11 +80,5 @@ mouse_force_pass_scroll_events = false
 [node name="TargetUI" type="Control" parent="."]
 unique_name_in_owner = true
 anchors_preset = 0
-
-[node name="Button" type="Button" parent="."]
-layout_mode = 0
-offset_right = 8.0
-offset_bottom = 8.0
-text = "kjhkjhkjh"
 
 [connection signal="item_selected" from="EntitiesContrainer/Entities" to="." method="_on_entities_item_selected"]
