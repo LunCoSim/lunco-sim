@@ -1,3 +1,6 @@
+## This class is the root node responsible for storing simulation state,
+## spawning entities and so on
+
 @icon("res://core/simulation/simulation.svg")
 class_name LCSimulation
 extends Node
@@ -23,6 +26,7 @@ func _ready():
 	Panku.gd_exprenv.register_env("Avatar", $Avatar)
 	print("Main ready")
 	print(OS.get_cmdline_args())
+	## TBD Move to separate file, as new modes like chat-server are appearing
 	if "--server" in OS.get_cmdline_args():
 		print("Headless running")
 		
@@ -43,7 +47,8 @@ func _ready():
 
 #------------------------------------------------------
 
-@rpc("any_peer", "call_local")
+## TBD: That's a factory method
+@rpc("any_peer", "call_local", "reliable")
 func spawn(_entity: EntitiesDB.Entities, global_position=null): #TBD think of a class entity
 	var id = multiplayer.get_remote_sender_id()
 	print("spawn remoteid: ", id, " local id: ", multiplayer.get_unique_id(), " entity:", _entity)
@@ -69,8 +74,8 @@ func spawn(_entity: EntitiesDB.Entities, global_position=null): #TBD think of a 
 		
 		#TBD It's done for debug, should be done somewhere else, maybe special debug
 		#node? Maybe it should be global?
-		var num = spawn_node.get_child_count()
-		Panku.gd_exprenv.register_env("Entity"+str(num), entity)
+		
+		Panku.gd_exprenv.register_env(entity.name, entity)
 
 func init_controller_signals(controller):
 	controller.requesting_controller_authority.connect(requesting_control)
@@ -95,19 +100,25 @@ func requesting_control(target, owner):
 		owners[target] = owner
 		
 		if target is LCController:
-			target.set_authority.rpc(owner)
+			set_authority.rpc(target.get_parent().get_path(), owner)
+			#target.set_authority.rpc(owner)
 			target.control_granted_notify.rpc_id(owner)
-		
 	else:
 		if target is LCController:
 			target.control_declined_notify.rpc_id(owner)
 			
-
+@rpc("any_peer", "call_local", "reliable")
+func set_authority(path, owner):
+	var node = get_tree().get_root().get_node(path)
+	print("Setting authority ", multiplayer.get_remote_sender_id()  )
+	print("Setting authority owner ", owner )
+	node.set_multiplayer_authority(owner)
+	
 func release_control(target, owner):
 	owners[target] = null 
 	
 	if target is LCController:
-		target.set_authority.rpc(1)
+		set_authority.rpc(target.get_parent().path(), 1)
 	
 func _on_multiplayer_spawner_spawned(node):
 	
@@ -126,12 +137,10 @@ func _on_select_entity_to_spawn(entity_id=0, position=null):
 	spawn.rpc_id(1, entity_id, position)
 
 func on_peer_disconnected(peer_id):
-	if multiplayer.get_unique_id() == 1:
+	if multiplayer.is_server():
 		for key in owners:
-			var owner = owners[key]
+			var owner:LCController = owners[key]
 			
 			if owner == peer_id:
 				owners[key] = null
-				var c: LCController = key
-				
 				key.set_authority.rpc(1)

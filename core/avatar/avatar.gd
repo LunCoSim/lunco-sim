@@ -86,28 +86,6 @@ func _ready():
 	
 #-----------------------------------------------------
 
-func action_raycast(_position: Vector2):
-	if camera:  
-		var from = camera.project_ray_origin(_position)
-		var to = from + camera.project_ray_normal(_position) * RAY_LENGTH
-		do_raycast(from, to)
-
-func do_raycast(from: Vector3, to: Vector3):		
-	var space_state = %Universe.get_world_3d().direct_space_state
-	
-	var query = PhysicsRayQueryParameters3D.create(from, to)
-	query.exclude = [self]
-	var result = space_state.intersect_ray(query)
-	
-	if result:
-		#TBD Should be via tools, 3 tools: TargetTool, SelectionTool, SpawnTool
-		#TBD Could be adding to selection
-		if result.collider is StaticBody3D:
-			spawn_entity.emit(entity_to_spawn, result.position + Vector3(0, 1, 0))
-		else:
-			requesting_control.emit(result.collider)			
-				
-
 func _input(event):
 	#if Input.is_action_just_pressed("click"): #TBD Move to tools
 		#action_raycast(event.position) # TBD: Event could be different then expected
@@ -216,6 +194,27 @@ func input_operator(event):
 
 		
 		operator.orient(cam.get_plain_basis())
+		
+func action_raycast(_position: Vector2):
+	if camera:  
+		var from = camera.project_ray_origin(_position)
+		var to = from + camera.project_ray_normal(_position) * RAY_LENGTH
+		do_raycast(from, to)
+
+func do_raycast(from: Vector3, to: Vector3):		
+	var space_state = %Universe.get_world_3d().direct_space_state
+	
+	var query = PhysicsRayQueryParameters3D.create(from, to)
+	query.exclude = [self]
+	var result = space_state.intersect_ray(query)
+	
+	if result:
+		#TBD Should be via tools, 3 tools: TargetTool, SelectionTool, SpawnTool
+		#TBD Could be adding to selection
+		if result.collider is StaticBody3D:
+			spawn_entity.emit(entity_to_spawn, result.position + Vector3(0, 1, 0))
+		else:
+			requesting_control.emit(result.collider)
 #------------------------------------------------------
 # Function _on_state_transited instantiates different ui based on target and sets camera spring length
 func _on_state_transited():

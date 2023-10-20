@@ -1,8 +1,6 @@
 class_name LCController
 extends LCSpaceSystem
 
-var controller_authority_id := -1
-
 signal requesting_controller_authority(_controller, owner)
 signal releasing_controller_authority(_controller, owner)
 
@@ -16,15 +14,10 @@ func set_authority(owner):
 	get_parent().set_multiplayer_authority(owner)
 
 @rpc("any_peer", "call_local")
-func set_controller_authority_id(_controller_authority_id):
-	print("set_controller_authority_id")
-	controller_authority_id = _controller_authority_id
-
-@rpc("any_peer", "call_local")
 func request_controller_authority():
 	print('request_controlle_authority')
 	requesting_controller_authority.emit(self, multiplayer.get_remote_sender_id())
-	#controller_authority_id = _controller_authority_id
+	
 
 @rpc("any_peer", "call_local")
 func release_controller_authority():
