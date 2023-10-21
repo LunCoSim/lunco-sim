@@ -248,3 +248,9 @@ func _on_simulation_control_granted(path):
 func _on_simulation_control_declined(path):
 	var entity = get_tree().get_root().get_node(path)
 	Panku.notify("Control %s declined" % str(entity.name))
+
+
+func _on_simulation_control_released(path):
+	var entity = get_tree().get_root().get_node(path)
+	set_target(null)
+	Panku.notify("Control %s released" % str(entity.name))

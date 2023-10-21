@@ -11,6 +11,7 @@ signal entity_spawned()
 
 signal control_granted(path)
 signal control_declined(path)
+signal control_released(path)
 
 #--------------------------------
 @export var entities = []
@@ -73,13 +74,17 @@ func requesting_control(path):
 			set_authority.rpc(path, owner)
 			control_granted_notify.rpc_id(owner, path)
 		else:
-			control_declined_notify.rpc_id(owner, path)
+			if _owner == multiplayer.get_remote_sender_id():
+				release_control(path)
+			else:
+				control_declined_notify.rpc_id(owner, path)
 
 @rpc("any_peer", "call_local", "reliable")
 func release_control(path):
 	if multiplayer.is_server():
 		owners[path] = null 
 		set_authority.rpc(path, 1)
+		control_released_notify.rpc(path)
 
 #---------------------------------------
 # Notifying about changed state
@@ -91,6 +96,10 @@ func control_granted_notify(path):
 func control_declined_notify(path):
 	control_declined.emit(path)
 
+@rpc("any_peer", "call_local", "reliable")
+func control_released_notify(path):
+	control_released.emit(path)
+	
 #---------------------------------------
 
 func _on_multiplayer_spawner_spawned(entity):	

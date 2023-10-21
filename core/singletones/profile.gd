@@ -73,6 +73,6 @@ func load_profile():
 	if err != OK:
 		return
 	
-	username = config.get_value(SECTION, "username")
-	wallet = config.get_value(SECTION, "wallet")
+	username = config.get_value(SECTION, "username", "")
+	wallet = config.get_value(SECTION, "wallet", "")
 	

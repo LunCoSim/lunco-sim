@@ -48,7 +48,9 @@ func update_player_info(_username, _userwallet):
 		"username": _username,
 		"wallet": _userwallet
 	}
-
+	
+	Users._on_user_connected(id, _username, _userwallet)
+	
 #---------------------------------------------------
 
 # Function called when a peer connects

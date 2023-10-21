@@ -21,16 +21,8 @@ func _ready():
 	
 	tree.select(avatar.entity_to_spawn)
 	
-	#var win: PankuLynxWindow = Panku.windows_manager.create_window($Entities)
-#
-	#var size = $Entities.get_minimum_size() + Vector2(0, win._window_title_container.get_minimum_size().y)
-	#win.set_custom_minimum_size(size)
-	#win.size = win.get_minimum_size()
+	Users.users_updated.connect(_on_update_connected_users)
 	
-
-	## Add a child to item1.
-	#var subitem1 = self.create_item(item1)
-	#subitem1.set_text(0, "Subitem 1.1")
 
 # Called every frame. 'delta' is the elapsed time since the previous frame.
 func _process(delta):
@@ -93,6 +85,13 @@ func update_entities(entities):
 			button.flat = false
 		idx += 1
 
+func _on_update_connected_users():
+	var tree: ItemList = $UsersContainer/Users
+	
+	tree.clear()
+	for user in Users.users:
+		tree.add_item(Users.users[user]["username"])
+	
 func select_entity(idx):
 	var tree: HBoxContainer = %LiveEntities
 	

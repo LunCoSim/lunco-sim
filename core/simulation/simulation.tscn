@@ -18,6 +18,7 @@ unique_name_in_owner = true
 
 [connection signal="control_declined" from="." to="Avatar" method="_on_simulation_control_declined"]
 [connection signal="control_granted" from="." to="Avatar" method="_on_simulation_control_granted"]
+[connection signal="control_released" from="." to="Avatar" method="_on_simulation_control_released"]
 [connection signal="entities_updated" from="." to="Avatar" method="update_entities"]
 [connection signal="release_control" from="Avatar" to="." method="_on_avatar_release_control"]
 [connection signal="requesting_control" from="Avatar" to="." method="_on_avatar_requesting_control"]

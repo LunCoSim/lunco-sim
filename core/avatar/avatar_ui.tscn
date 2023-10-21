@@ -56,6 +56,28 @@ custom_minimum_size = Vector2(170, 150)
 layout_mode = 2
 auto_height = true
 
+[node name="UsersContainer" type="VBoxContainer" parent="."]
+layout_mode = 1
+anchors_preset = 6
+anchor_left = 1.0
+anchor_top = 0.5
+anchor_right = 1.0
+anchor_bottom = 0.5
+offset_left = -170.0
+offset_top = -88.5
+offset_bottom = 88.5
+grow_horizontal = 0
+grow_vertical = 2
+
+[node name="Spawn3" type="Label" parent="UsersContainer"]
+layout_mode = 2
+text = "Connected Users"
+
+[node name="Users" type="ItemList" parent="UsersContainer"]
+custom_minimum_size = Vector2(170, 150)
+layout_mode = 2
+auto_height = true
+
 [node name="LivesEntitiesContrainer" type="VBoxContainer" parent="."]
 layout_mode = 1
 anchors_preset = 12
@@ -82,3 +104,4 @@ unique_name_in_owner = true
 anchors_preset = 0
 
 [connection signal="item_selected" from="EntitiesContrainer/Entities" to="." method="_on_entities_item_selected"]
+[connection signal="item_selected" from="UsersContainer/Users" to="." method="_on_entities_item_selected"]
