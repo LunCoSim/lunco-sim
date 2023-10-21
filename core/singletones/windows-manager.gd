@@ -23,7 +23,8 @@ static func make_window(control, title):
 	
 	var size = control.get_minimum_size() + Vector2(0, win._window_title_container.get_minimum_size().y)
 	win.set_custom_minimum_size(size)
-	win.size = win.get_minimum_size()
+	
+	win.size = control.get_size()+Vector2(0, win._window_title_container.get_minimum_size().y)
 
 	win.set_window_title_text(title)
 	win.hide_window()
