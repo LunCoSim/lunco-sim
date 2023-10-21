@@ -109,13 +109,16 @@ func _input(event):
 				key_number = 7
 			Key.KEY_8:
 				key_number = 8
-		
+			Key.KEY_BACKSPACE:
+				set_target(null)
+				return
+				
 		if key_number != -1:
 			if event.is_alt_pressed():
 				spawn_entity.emit(key_number-1)
 			else:
 				requesting_control.emit(key_number-1)
-				
+		
 	if target == null:
 		var motion_direction := Vector3(
 			Input.get_action_strength("move_left") - Input.get_action_strength("move_right"),
@@ -252,5 +255,5 @@ func _on_simulation_control_declined(path):
 
 func _on_simulation_control_released(path):
 	var entity = get_tree().get_root().get_node(path)
-	set_target(null)
+	#set_target(null)
 	Panku.notify("Control %s released" % str(entity.name))
