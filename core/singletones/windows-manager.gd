@@ -3,14 +3,20 @@ extends Node
 
 var MainMenu: PankuLynxWindow
 var ChatWindow: PankuLynxWindow
+var TutorialWindow: PankuLynxWindow
 
 
 func _ready():
-	var MainMenuScene = preload("res://core/widgets/menu/main_menu.tscn").instantiate()
+	var MainMenuScene = load("res://core/widgets/menu/main_menu.tscn").instantiate()
 	MainMenu = LCWindowsManager.make_window(MainMenuScene, "Main menu")
 	
-	var ChatWindowScene = preload("res://modules/chat/chat-ui.tscn").instantiate()
+	var ChatWindowScene = load("res://modules/chat/chat-ui.tscn").instantiate()
 	ChatWindow = LCWindowsManager.make_window(ChatWindowScene, "Chat")
+	
+	var TutorialWindowScene = load("res://core/widgets/tutorial.tscn").instantiate()
+	TutorialWindow = LCWindowsManager.make_window(TutorialWindowScene, "Tutorial")
+	
+	TutorialWindow.show()
 	
 static func make_window(control, title):
 	var win: PankuLynxWindow = Panku.windows_manager.create_window(control)
