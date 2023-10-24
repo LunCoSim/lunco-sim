@@ -21,6 +21,9 @@ func _ready():
 
 # Function to connect to a server
 func connect_to_server(ip: String="langrenus.lunco.space", port: int = 9000):
+	if multiplayer.multiplayer_peer != null:
+		return # Already connected
+	
 	# Creating a client
 	print("connecting to server: ", )
 	
@@ -33,6 +36,9 @@ func connect_to_server(ip: String="langrenus.lunco.space", port: int = 9000):
 
 # Function to start hosting a server
 func host(port: int = 9000):
+	if multiplayer.multiplayer_peer != null:
+		return # Already connected
+
 	# Creating a server
 	peer = ENetMultiplayerPeer.new()
 	print("Hosting: ")
