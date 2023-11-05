@@ -2,15 +2,16 @@ _**Sovereign Metaverse to design Space missions**_
 
 ## [Download Dev Build](https://github.com/LunCoSim/lunco-sim/releases/tag/v0.4.0-dev1)
 
+The goal of LunCo is to integrate Space & Robotics industry existing models into one Virtual World, allowing collaborative (concurrent) engineering.
 
+While focused on Space Engineering, it's not limited to it. With Godot as a 3D engine, it's **easy to add new functions and models, e.g. plan Solar Power Station parameters,** and concept of operations, e.g. how often to clean panels.
 
-**In other words, LunCo brings web3 into Space Engineering!**
+The below diagram highlights the overall idea.
+![Multiuser](https://bafybeic5mnsajdsyrszy7ddnoy5uvxhz76usukcnatp5g5exqapqagzcc4.ipfs.w3s.link/Combining%20simulations.png)
 
-
-[![Multiuser](https://bafybeic5mnsajdsyrszy7ddnoy5uvxhz76usukcnatp5g5exqapqagzcc4.ipfs.w3s.link/Combining%20simulations.png)
+LunCo is focused on **Data Sovereignty**, meaning that there is no need for central server. Users can run it locally, use it to edit their project, and then share it with the community using IP-NFTs for data discoverability, and decentralized data exchange networks like IPFS to share data itself.
 
 [![Multiuser](https://bafybeibdidgnutcuhqodxkvnh3qpecugyu6a7p6rvk7w36jwe5m4mtotty.ipfs.w3s.link/Federated.png)](https://twitter.com/LunCoSim/status/1679031437780201472)
-[![Multiuser](https://pbs.twimg.com/media/F1DgvAgagAAbEEa?format=jpg&name=medium )](https://twitter.com/LunCoSim/status/1679031437780201472)
 
 ## Why Web3?
 
@@ -18,32 +19,26 @@ Web3 technology allows decentralization, which is crucial as engineering work is
 
 The most common approach to knowledge sharing is email, which, while universal, is not the most efficient form of data exchange in today's digital age. On the other hand, Web3 provides advanced tools for file sharing and data exchange.
 
+![Multiuser](https://bafybeifuursjotnrriuy7sh2r7gf4k7mc4ob47nkmjnqj5h3m336a7moum.ipfs.w3s.link/Screenshot_20231105_151305.jpg)
+
+
 ## Impact
 
 Through LunCo, we aim to:
 
-- Lower engineering costs, by making knowledge sharing much more efficient
-- Democratize the engineering landscape, providing equal access to manufacturing software for all.
-- Foster a global engineering community encouraging data and technology transfer across domains.
-- Serve as a repository of high-quality data for engineering AI.
+- **Lower engineering costs,** by making knowledge sharing much more efficient
+- **Democratize the engineering landscape**, providing equal access to manufacturing software for all
+- **Foster a global engineering community** encouraging data and technology transfer across domains
+- Serve as a **repository of high-quality data for engineering AI**
 
+![](https://bafybeieyvd2guylnjom7lnyqcudcawsjnc2k5srr7a3j53jtswo6syww2m.ipfs.w3s.link/Screenshot_20231105_152202.jpg)
 ## Roadmap & Features
 
-### Work in progress
+1. End of 2023 - release of polished version 0.4.0 and 24/7 available main server
+2. Q2 2024 - decent version to start design robotic lunar exploration missions together
+3. Q4 2024 - Launch of Metaverse, extensive building of tool funded by refi activities, e.g. quadratic funding round
 
-1. Real sized map of the Moon based on NASA Data. Working on Procedure Quad Sphere to make it possible
-2. Visualization of the upcoming lunar missions
-3.  Import of URDF files - widely used format for robots description
-
-### Next steps
-
-1. Assets e.g. models sharing via IPFS and libp2p
-2. Integration with wallets
-3. User content discovery via  IP-NFT
-4. Tools for permissions management, allowing to share content only with selected profiles
-5. And much more. Follow our Discussions on Github.
-
-### Sample applications
+## Sample applications
 
 - Design solar power station in space 
 - Assess impact of solar panels in the specific project
@@ -51,6 +46,16 @@ Through LunCo, we aim to:
 - Visualize robotic transportation system
 - Monitoring and controlling of remote agriculture robots
 - Model Closed Loop Biological Life Support Systems
+
+## Inspired by
+
+1. [NASA Celestial Mapping System](https://celestialmappingsystem.arc.nasa.gov)
+2. [NASA General Missions Analysis Toolkit](https://software.nasa.gov/software/GSC-17177-1)
+3. [Basilisk: an Astrodynamics Simulation Framework](https://hanspeterschaub.info/basilisk/)
+4. [FPrime](https://github.com/nasa/fprime)
+5. [CCSDS](https://public.ccsds.org/default.aspx) 
+6. [Kerbal Space Program](https://www.kerbalspaceprogram.com)
+7. [Factorio](https://www.factorio.com)
 
 # Contacts
 
@@ -73,21 +78,12 @@ LunCo leverages Web3 technology to provide a platform that helps engineers share
 
 - Assets and Design sharing over IPFS
 - IP-NFT for design
-- Decentralized users profile for permissions management
+- Profile NFT for permissions/roles management
 
 
 **If you've participated in past grant rounds, please share any new updates or milestones from the prior months**
 
 
-1. Launched public server, so now you can start design missions and explore together. Huge thx to [Philip Linden](https://twitter.com/PhilipJLinden)
-2. Contributed to Godot ecosystem, making several pull requests
-3. Was accepted to Giveth Alpha QF Round
-4. Selected GMAT for orbital mechanics engine after comparing with Basilisk. GMAT is an opensource tool by NASA for satellite mission planning with a quality -  TRL-9, meaning it was used for real space missions. 
-5. Attended several [LSIC](https://lsic.jhuapl.edu) meetings to verify problems, that professionals has working on Lunar Missions. Those guys are connected to Artemis Accords!
-6. Reviewed [NASA Celestial mapping system](https://celestial.arc.nasa.gov) and was contacted by one of it's developers, offering help
-7. Started to use [Github Discussions](https://github.com/orgs/LunCoSim/discussions) to discuss features
-8. [NASA is Looking for Constellations Analysis Tools ](https://sam.gov/opp/afe50c193c8140a7a1a64878b3d69df4/view) providing projects with grants up to $800k. However  it's only for the US companies and US citizen
-9. [Almost won ENS Small Public Grant with 13 place](https://ensgrants.xyz/rounds/27) (first 10 got 1 ETH), a huge chance that will get it the next time
 
 **How do you measure the impact of your project? Please provide examples and/or standard metrics. This might be used in future impact reports**
 
@@ -100,11 +96,4 @@ LunCo leverages Web3 technology to provide a platform that helps engineers share
 
 **Anything else you'd like to share about your project, previous work, or other project affiliations? Anything you'd like to add that may help in determining project eligibility?**
 
-Hey, it's Rod Mamin, founder of LunCo. I'm professional space systems engineer, quite active in the Gitcoin, Regen, Giveth, MoonDAO, DeSci, Solarpunk Guild, and DeSpace communities.
-
-To learn more about IPFS with [CTO Pylyp Radionov](https://www.linkedin.com/in/ACoAACRHJEoBxz7c-h46YFuDMi5uTm_0_94ydpA?lipi=urn%3Ali%3Apage%3Acompanies_company_posts_index%3B5738fc21-da5d-4484-9f2c-96f280058179) of Copernicspace [we won the ETHGlobal HackFS prize for the best application of IPFS](https://www.linkedin.com/posts/copernic-space_democratising-space-and-digitising-endangered-activity-7079043156557598720-vM5V?utm_source=share&utm_medium=member_desktop) with a service https://unid.store
-
-I've being working fulltime on Lunar Exploration since 2018, including [First Walking Robot for Moon ](https://www.youtube.com/watch?v=Fko0VZNO8DM)as COO
-
-And now with a group of amazing professionals we are launching a [DeSpace Quadratic Fund](https://giveth.io/project/despace-qf-regenerative-space-exploration) to support decentralized space exploration!
 
