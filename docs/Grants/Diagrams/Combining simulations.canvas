@@ -1,0 +1,24 @@
+{
+	"nodes":[
+		{"id":"956c138145d59ada","type":"text","text":"             ...","x":-680,"y":-60,"width":250,"height":60},
+		{"id":"b8b9b8ffea29cca0","type":"text","text":"CAD, FEA, etc","x":-680,"y":40,"width":250,"height":60},
+		{"id":"3aaf9d4503238830","type":"text","text":"Orbital Mechanics (GMAT)","x":-680,"y":-180,"width":250,"height":60},
+		{"id":"266c512429c51524","type":"text","text":"LunCo combines existing models in one Virtual World ","x":-340,"y":-70,"width":280,"height":80},
+		{"id":"d978455c439c8846","type":"text","text":"System-Level Engineering","x":68,"y":-235,"width":250,"height":60},
+		{"id":"22e1df0eb67c8c8b","type":"text","text":"Collaborative training","x":68,"y":-120,"width":250,"height":60},
+		{"id":"44e3902b708f606c","type":"text","text":"Easily tuned for ANY robotic application","x":68,"y":-5,"width":250,"height":60},
+		{"id":"fcf1921912861d79","type":"text","text":"Play2Learn mode","x":68,"y":110,"width":250,"height":60},
+		{"id":"6cae127bf6f4ef48","x":-325,"y":-320,"width":250,"height":60,"type":"text","text":"AI-assisted development"},
+		{"id":"cc4b6b6d42a1845f","type":"text","text":"Web3 data sharing, IP-NFTs, etc","x":-325,"y":200,"width":250,"height":60}
+	],
+	"edges":[
+		{"id":"3fda2cd9dfa9c3a8","fromNode":"3aaf9d4503238830","fromSide":"right","toNode":"266c512429c51524","toSide":"left"},
+		{"id":"a822723732742072","fromNode":"b8b9b8ffea29cca0","fromSide":"right","toNode":"266c512429c51524","toSide":"left"},
+		{"id":"c18dd7f56ff1babc","fromNode":"266c512429c51524","fromSide":"right","toNode":"d978455c439c8846","toSide":"left"},
+		{"id":"0be5eb20f9beb621","fromNode":"266c512429c51524","fromSide":"right","toNode":"22e1df0eb67c8c8b","toSide":"left"},
+		{"id":"d4feeafa7b9a9b36","fromNode":"266c512429c51524","fromSide":"right","toNode":"44e3902b708f606c","toSide":"left"},
+		{"id":"694bfca251897b67","fromNode":"266c512429c51524","fromSide":"right","toNode":"fcf1921912861d79","toSide":"left"},
+		{"id":"44bc7c53cbd56d19","fromNode":"6cae127bf6f4ef48","fromSide":"bottom","toNode":"266c512429c51524","toSide":"top"},
+		{"id":"1a1c9f4b3dddf5c1","fromNode":"cc4b6b6d42a1845f","fromSide":"top","toNode":"266c512429c51524","toSide":"bottom"}
+	]
+}

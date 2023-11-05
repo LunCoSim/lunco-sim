@@ -1,0 +1,20 @@
+{
+	"nodes":[
+		{"id":"62b0070e9806f0d9","type":"text","text":"Server A","x":-420,"y":-80,"width":160,"height":60,"color":"4"},
+		{"id":"a5c4323004762123","type":"text","text":"Admin B","x":60,"y":90,"width":160,"height":60,"color":"4"},
+		{"id":"8eff1e90a8bcb483","type":"text","text":"Admin A","x":-420,"y":90,"width":160,"height":60,"color":"4"},
+		{"id":"30168913e4e63186","type":"text","text":"Server B","x":60,"y":-80,"width":160,"height":60,"color":"4"},
+		{"id":"2f60f3eb452cff57","type":"text","text":"User 2","x":60,"y":-310,"width":160,"height":60,"color":"4"},
+		{"id":"01b606f24fecf213","type":"text","text":"User 1","x":-420,"y":-310,"width":160,"height":60,"color":"4"}
+	],
+	"edges":[
+		{"id":"07e62721ec341cbc","fromNode":"62b0070e9806f0d9","fromSide":"right","toNode":"30168913e4e63186","toSide":"left"},
+		{"id":"5a9305a4af5d9545","fromNode":"30168913e4e63186","fromSide":"left","toNode":"62b0070e9806f0d9","toSide":"right","label":"Data is shared via web3"},
+		{"id":"5e8a8d42e1600f8c","fromNode":"01b606f24fecf213","fromSide":"bottom","toNode":"62b0070e9806f0d9","toSide":"top"},
+		{"id":"2d4c3071c53e04db","fromNode":"2f60f3eb452cff57","fromSide":"bottom","toNode":"62b0070e9806f0d9","toSide":"top"},
+		{"id":"d4fcf7c0132114c1","fromNode":"01b606f24fecf213","fromSide":"bottom","toNode":"30168913e4e63186","toSide":"top"},
+		{"id":"5cdfae6e3090ced3","fromNode":"2f60f3eb452cff57","fromSide":"bottom","toNode":"30168913e4e63186","toSide":"top"},
+		{"id":"b6349e5941dd7f08","fromNode":"8eff1e90a8bcb483","fromSide":"top","toNode":"62b0070e9806f0d9","toSide":"bottom"},
+		{"id":"b4376be8b96ea9a4","fromNode":"a5c4323004762123","fromSide":"top","toNode":"30168913e4e63186","toSide":"bottom"}
+	]
+}
