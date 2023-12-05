@@ -48,4 +48,4 @@ func _on_connect_to_global_pressed():
 
 
 func _on_username_text_changed(new_text):
-	Profile.userdname = new_text
+	Profile.username = new_text
