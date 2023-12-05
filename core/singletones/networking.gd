@@ -18,35 +18,36 @@ func _ready():
 	multiplayer.connected_to_server.connect(on_server_connected)
 	multiplayer.server_disconnected.connect(on_server_disconnected)
 	
-
+	Profile.profile_changed.connect(_on_profile_changed)
+	
 # Function to connect to a server
 func connect_to_server(ip: String="langrenus.lunco.space", port: int = 9000):
-	if multiplayer.multiplayer_peer != null:
-		return # Already connected
-	
+	if not multiplayer.multiplayer_peer is ENetMultiplayerPeer:
+		peer = ENetMultiplayerPeer.new() # Already connected
+	else:
+		return
 	# Creating a client
-	print("connecting to server: ", )
+	Logger.info("Connecting to server: %s:%i" % [ip, port] )
 	
-	peer = ENetMultiplayerPeer.new()
 	peer.create_client(ip, port)
 	multiplayer.multiplayer_peer = peer
 	# Assigning the peer to this multiplayer's peer
-	
-	
 
 # Function to start hosting a server
 func host(port: int = 9000):
-	if multiplayer.multiplayer_peer != null:
-		return # Already connected
+	if not multiplayer.multiplayer_peer is ENetMultiplayerPeer:
+		peer = ENetMultiplayerPeer.new() # Already connected
+	else:
+		return
 
 	# Creating a server
-	peer = ENetMultiplayerPeer.new()
-	print("Hosting: ")
+	
+	Logger.info("Hosting on %i" % port)
 	peer.create_server(port)
 	multiplayer.multiplayer_peer = peer
 
 #---------------------------------------------------
-@rpc("any_peer")
+@rpc("any_peer", "call_remote", "reliable")
 func update_player_info(_username, _userwallet):
 	var id = multiplayer.get_remote_sender_id()
 	
@@ -66,6 +67,9 @@ func on_peer_connected(id):
 	players[id] = {}
 	update_player_info.rpc_id(id, Profile.username, Profile.wallet)
 
+func _on_profile_changed():
+	update_player_info.rpc(Profile.username, Profile.wallet)
+	
 # Function called when a peer disconnects
 func on_peer_disconnected(id):
 	print("on_peer_connected: ", id)
@@ -78,7 +82,7 @@ func on_server_connection_failed():
 	print("on_server_connection_failed")
 	# This function currently does nothing.
 	pass
-
+	
 # Function called when successfully connected to server.
 func on_server_connected():
 	print("on_server_connected")

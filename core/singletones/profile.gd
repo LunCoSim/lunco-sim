@@ -3,6 +3,12 @@
 class_name LCProfile
 extends Node
 
+#----------------------------------
+
+signal profile_changed()
+
+#----------------------------------
+
 @export var username: String : set = set_username
 @export var wallet: String : set = set_wallet
 
@@ -21,8 +27,10 @@ func _init():
 #----------------------------------
 
 func set_username(_username):
-	username = _username
-	save_profile()
+	if username != _username:
+		username = _username
+		save_profile()
+		profile_changed.emit()
 
 func set_wallet(_wallet):
 	if wallet != _wallet:
@@ -30,6 +38,7 @@ func set_wallet(_wallet):
 		save_profile()
 		if Messenger:
 			Messenger.profile_wallet_changed.emit()
+		profile_changed.emit()
 	
 #----------------------------------
 func login():

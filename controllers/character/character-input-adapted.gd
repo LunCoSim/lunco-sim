@@ -43,15 +43,15 @@ func _ready():
 	if target == null:
 		target = get_parent()
 		
-	if get_multiplayer_authority() == multiplayer.get_unique_id():
-		print("plaer autority multiplayer, on: ", multiplayer.get_unique_id())
-#		camera_camera.make_current()
-		Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
-	else:
-		print("plaer autority reqular, on: ", multiplayer.get_unique_id())
-#		set_process(false)
-#		set_process_input(false)
-		color_rect.hide()
+	#if get_multiplayer_authority() == multiplayer.get_unique_id():
+		#Logger.info("plaer autority multiplayer, on: ", multiplayer.get_unique_id())
+##		camera_camera.make_current()
+		#Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
+	#else:
+		#print("plaer autority reqular, on: ", multiplayer.get_unique_id())
+##		set_process(false)
+##		set_process_input(false)
+		#color_rect.hide()
 
 func _process(delta):
 #	if get_multiplayer_authority() != multiplayer.get_unique_id():
