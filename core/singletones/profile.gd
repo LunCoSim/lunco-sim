@@ -11,6 +11,7 @@ signal profile_changed()
 
 @export var username: String : set = set_username
 @export var wallet: String : set = set_wallet
+@export var has_profile: bool : set = set_has_profile
 
 #----------------------------------
 const FILENAME = "profile.cfg"
@@ -39,7 +40,15 @@ func set_wallet(_wallet):
 		if Messenger:
 			Messenger.profile_wallet_changed.emit()
 		profile_changed.emit()
-	
+
+func set_has_profile(_has_profile):
+	if has_profile != _has_profile:
+		has_profile = _has_profile
+		#save_profile()
+		#if Messenger:
+			#Messenger.profile_wallet_changed.emit()
+		#profile_changed.emit()
+		
 #----------------------------------
 func login():
 	pass
