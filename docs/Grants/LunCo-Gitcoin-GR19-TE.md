@@ -77,32 +77,3 @@ Through LunCo, we aim to:
 8. [Founder's Twitter](https://twitter.com/_Difint_) (~3200 followers)
 9. [Founder's Linkedin](https://www.linkedin.com/in/rod-mamin-2a48a12b/) (3400+ connections)
 10. [Discussions on Github](https://github.com/orgs/LunCoSim/discussions)
-
-
-# Application specific questions:
-
-**Please explain how your project meets the round-specific eligibility criteria**
-
-LunCo leverages Web3 technology to provide a platform that helps engineers share information directly without bottlenecks, particularly:
-
-- Assets and Design sharing over IPFS
-- IP-NFT for design
-- Profile NFT for permissions/roles management
-
-
-**If you've participated in past grant rounds, please share any new updates or milestones from the prior months**
-
-
-
-**How do you measure the impact of your project? Please provide examples and/or standard metrics. This might be used in future impact reports**
-
-1. Number of people onboarded to crypto, e.g. space engineers became donors/users of LunCo
-2. Number of people onboarded to space exploration
-3. Number of users of LunCo
-4. Number of issued IP-NFTs
-5. Number of articles about Lunar Exploration that mentions LunCo
-6. Number of projects used LunCo in their design
-
-**Anything else you'd like to share about your project, previous work, or other project affiliations? Anything you'd like to add that may help in determining project eligibility?**
-
-
