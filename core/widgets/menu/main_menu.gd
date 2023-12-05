@@ -50,18 +50,28 @@ func _on_connect_to_global_pressed():
 func _on_username_text_changed(new_text):
 	Profile.username = new_text
 
-var _my_js_callback = JavaScriptBridge.create_callback(on_wallet_connected) # This reference must be kept
-
+var _on_wallet_connected_callback = JavaScriptBridge.create_callback(on_wallet_connected) # This reference must be kept
+var _on_check_profile_nft_callback = JavaScriptBridge.create_callback(on_check_profile_nft) # This reference must be kept
 	
 func _on_connect_wallet_pressed():
-	JavaScriptBridge.get_interface("Login").login(_my_js_callback)
+	JavaScriptBridge.get_interface("Login").login(_on_wallet_connected_callback)
 
 func on_wallet_connected(args):
 	print("on_wallet_connected: ")
 	print(args[0])
 	print(args[0]["wallet"])
 	Profile.wallet = args[0]["wallet"]
+
+func on_check_profile_nft(args):
+	print("on_account_profile: ")
+	print(args[0])
+	Profile.has_profile = int(args[0])
 	
+	if Profile.has_profile > 0:
+		$Profile/CheckProfileNFT.text = "You own " + str(Profile.has_profile) + " Profile NFT"
+	else:
+		$Profile/CheckProfileNFT.text = "No Profile NFT. Go get one!"
 	
 func _on_check_profile_nft_pressed():
-	pass # Replace with function body.
+	print("_on_check_profile_nft_pressed: ", Profile.wallet)
+	JavaScriptBridge.get_interface("Login").checkProfile(Profile.wallet, _on_check_profile_nft_callback)

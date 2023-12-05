@@ -11,7 +11,7 @@ signal profile_changed()
 
 @export var username: String : set = set_username
 @export var wallet: String : set = set_wallet
-@export var has_profile: bool : set = set_has_profile
+@export var has_profile: int : set = set_has_profile
 
 #----------------------------------
 const FILENAME = "profile.cfg"
