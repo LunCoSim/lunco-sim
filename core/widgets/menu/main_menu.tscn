@@ -37,11 +37,20 @@ layout_mode = 2
 placeholder_text = "Wallet"
 editable = false
 
+[node name="Connect wallet" type="Button" parent="Profile"]
+layout_mode = 2
+text = "Connect Metamask"
+
+[node name="CheckProfileNFT" type="Button" parent="Profile"]
+layout_mode = 2
+text = "Check Profile NFT"
+
 [node name="Label" type="Label" parent="."]
 layout_mode = 2
 mouse_filter = 1
 
 [node name="Networking" type="VBoxContainer" parent="."]
+visible = false
 layout_mode = 2
 
 [node name="IP" type="LineEdit" parent="Networking"]
@@ -59,18 +68,22 @@ text = "9000"
 placeholder_text = "Port"
 
 [node name="Label2" type="Label" parent="."]
+visible = false
 layout_mode = 2
 mouse_filter = 1
 
 [node name="SimHost" type="Button" parent="."]
+visible = false
 layout_mode = 2
 text = "Host Simulation"
 
 [node name="SimClient" type="Button" parent="."]
+visible = false
 layout_mode = 2
 text = "Connect to Simulation"
 
 [node name="ConnectToGlobal" type="Button" parent="."]
+visible = false
 layout_mode = 2
 text = "Connect to Global Simulation"
 
@@ -81,6 +94,8 @@ horizontal_alignment = 2
 
 [connection signal="text_changed" from="Profile/Username" to="." method="_on_username_text_changed"]
 [connection signal="text_changed" from="Profile/Wallet" to="." method="_on_username_text_changed"]
+[connection signal="pressed" from="Profile/Connect wallet" to="." method="_on_connect_wallet_pressed"]
+[connection signal="pressed" from="Profile/CheckProfileNFT" to="." method="_on_check_profile_nft_pressed"]
 [connection signal="pressed" from="SimHost" to="." method="_on_sim_host_pressed"]
 [connection signal="pressed" from="SimClient" to="." method="_on_sim_client_pressed"]
 [connection signal="pressed" from="ConnectToGlobal" to="." method="_on_connect_to_global_pressed"]

@@ -134,6 +134,61 @@ body {
 		</div>
 
 		<script src="$GODOT_URL"></script>
+
+
+        <script>
+            // Initialize web3
+            let web3 = new Web3(Web3.givenProvider || "ws://localhost:8545");
+        
+            // Check if MetaMask is installed
+            if (typeof window.ethereum !== 'undefined' || (typeof window.web3 !== 'undefined')) {
+              web3 = new Web3(window.ethereum || window.web3.currentProvider);
+            } else {
+              alert('MetaMask not found. Install it to proceed.');
+            }
+        
+            async function apiCall(endpoint, data) {
+              const res = await fetch(endpoint, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data)
+              });
+              return res.json();
+            }
+            
+            var Login = {}
+            Login.login = login
+            // Log in and sign message
+            async function login(_callback) {
+              try {
+                const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+                const account = accounts[0];
+        
+                const message = "Sign this message to log into LunCo";
+                const signature = await web3.eth.personal.sign(message, account, "");
+        
+                console.log('Logged in with account:', account);
+                console.log('Signature:', signature);
+        
+                // Call /success API
+                // const successData = await apiCall('/success', { wallet: account, signature });
+                console.log('Success API response:', { wallet: account, signature });
+                _callback({ wallet: account, signature })
+
+              } catch (error) {
+                console.log('Login canceled:', error);
+        
+                // Call /cancel API
+                // const cancelData = await apiCall('/cancel', {});
+                console.log('Cancel API response:', cancelData);
+              }
+            }
+        
+            // Trigger login on button click
+            document.getElementById('loginBtn').addEventListener('click', login);
+          </script>
+
+
 		<script>
 const GODOT_CONFIG = $GODOT_CONFIG;
 const engine = new Engine(GODOT_CONFIG);

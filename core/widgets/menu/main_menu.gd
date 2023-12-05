@@ -49,3 +49,19 @@ func _on_connect_to_global_pressed():
 
 func _on_username_text_changed(new_text):
 	Profile.username = new_text
+
+var _my_js_callback = JavaScriptBridge.create_callback(on_wallet_connected) # This reference must be kept
+
+	
+func _on_connect_wallet_pressed():
+	JavaScriptBridge.get_interface("Login").login(_my_js_callback)
+
+func on_wallet_connected(args):
+	print("on_wallet_connected: ")
+	print(args[0])
+	print(args[0]["wallet"])
+	Profile.wallet = args[0]["wallet"]
+	
+	
+func _on_check_profile_nft_pressed():
+	pass # Replace with function body.
