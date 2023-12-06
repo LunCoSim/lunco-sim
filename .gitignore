@@ -7,3 +7,6 @@ build/
 
 #Managed by gd-plug
 addons/
+
+#webrtc addon. Probably later could be managed by gd-plug
+webrtc/

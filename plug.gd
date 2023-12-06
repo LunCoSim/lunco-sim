@@ -46,3 +46,6 @@ func _plugging():
 	plug("deep-entertainment/godottpd")
 	plug("KOBUGE-Games/godot-logger", {"install_root": "addons/godot-logger", "include": ["."]})
 
+
+	#WebRTC GDExtension must be installed separatly and manually for native builds
+	#Official extension https://github.com/godotengine/webrtc-native
