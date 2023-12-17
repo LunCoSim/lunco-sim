@@ -6,6 +6,8 @@ Built with the powerful Godot 4 engine, LunCo aims to revolutionize the way spac
 
 ## [Try in Browser](https://alpha.lunco.space)
 
+## [Donate on Giveth Xmas QF](https://giveth.io/project/lunco-collaborative-engineering?referrer_id=0hWfCeRLhwayen8MGBaZGP0CLZv1)
+
 ## 🌌 Vision
 
 Our vision is to provide a comprehensive suite of open-source applications tailored for Lunar Base engineering, including:
