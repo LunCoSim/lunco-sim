@@ -1,11 +1,9 @@
-[gd_scene load_steps=7 format=3 uid="uid://dic5kx001cac6"]
+[gd_scene load_steps=6 format=3 uid="uid://dic5kx001cac6"]
 
-[ext_resource type="PackedScene" uid="uid://b3g4jkx7njm1r" path="res://scenarios/quad_plane_test/QuadPlaneLOD.tscn" id="1_1ko27"]
-[ext_resource type="PackedScene" uid="uid://c5dg7yq7hd7m0" path="res://core/nodes/avatar/avatar.tscn" id="2_1bvla"]
-[ext_resource type="Texture2D" uid="uid://c6v84yxrojl2k" path="res://addons/lunco-assets/ESO_-_Milky_Way.jpeg" id="3_ga35k"]
+[ext_resource type="PackedScene" uid="uid://b3g4jkx7njm1r" path="res://modules/quad_plane_test/QuadPlaneLOD.tscn" id="1_1ko27"]
+[ext_resource type="PackedScene" uid="uid://c5dg7yq7hd7m0" path="res://core/avatar/avatar.tscn" id="2_1bvla"]
 
 [sub_resource type="PanoramaSkyMaterial" id="PanoramaSkyMaterial_gy2me"]
-panorama = ExtResource("3_ga35k")
 
 [sub_resource type="Sky" id="Sky_c8mxq"]
 sky_material = SubResource("PanoramaSkyMaterial_gy2me")

@@ -6,10 +6,10 @@ extends LCSpaceSystem
 # Location of the map on the celestial body
 @export var LocationCoordinates: Vector2
 
-var camera: Camera3D
-
-func _init():
-	camera = LCUtil.grab_camera()
+#var camera: Camera3D
+#
+#func _init():
+	#camera = LCUtil.grab_camera()
 	
 #func _process(_delta):
 #
