@@ -1,0 +1,42 @@
+[gd_scene load_steps=2 format=3 uid="uid://dxwwew6kqvxmp"]
+
+[ext_resource type="Script" path="res://modules/mbse/mbse.gd" id="1_e3hm5"]
+
+[node name="Mbse" type="GraphEdit"]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+scroll_offset = Vector2(-281, -170)
+script = ExtResource("1_e3hm5")
+
+[node name="GraphNode" type="GraphNode" parent="."]
+layout_mode = 0
+offset_left = 766.0
+offset_top = 128.0
+offset_right = 909.0
+offset_bottom = 199.0
+mouse_filter = 1
+position_offset = Vector2(485, -42)
+title = "LunCo Metaverse"
+
+[node name="GraphNode2" type="GraphNode" parent="."]
+layout_mode = 0
+offset_left = 183.5
+offset_top = 128.0
+offset_right = 278.5
+offset_bottom = 213.0
+mouse_filter = 1
+position_offset = Vector2(-97.5, -42)
+title = "LunCore"
+
+[node name="GraphNode3" type="GraphNode" parent="."]
+layout_mode = 0
+offset_left = 477.0
+offset_top = 448.0
+offset_right = 583.0
+offset_bottom = 518.0
+mouse_filter = 1
+position_offset = Vector2(196, 278)
+title = "LunCo"
