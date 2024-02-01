@@ -6,7 +6,6 @@ Built with the powerful Godot 4 engine, LunCo aims to revolutionize the way spac
 
 ## [Try in Browser](https://alpha.lunco.space)
 
-## [Donate on Giveth Xmas QF](https://giveth.io/project/lunco-collaborative-engineering?referrer_id=0hWfCeRLhwayen8MGBaZGP0CLZv1)
 
 ## 🌌 Vision
 
@@ -27,6 +26,14 @@ Our vision is to provide a comprehensive suite of open-source applications tailo
 <p style="text-align: center;">
 <i>Early Development version</i>
 </p>
+
+## 💰 Donations
+
+1. General EVM: 0x020673a52560b50a70544d7f841fbc73626648f4
+2. Optimism: 
+3. Polygon: 
+4. Arbitrum: 
+5. zkSync: [0xDEfaf4A720Bb1894165A3804c91f75cE748F0381](https://explorer.zksync.io/address/0xDEfaf4A720Bb1894165A3804c91f75cE748F0381)
 
 ## 🚀 Features
 
