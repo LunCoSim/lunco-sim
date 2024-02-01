@@ -44,6 +44,15 @@ Our vision is to provide a comprehensive suite of open-source applications tailo
 3. [Arbitrum](https://explorer.gitcoin.co/#/round/42161/0x18a72e9940fb81860a809e266ebec42a9e2c44ce)
 4. [zkSync Era](https://explorer.gitcoin.co/#/round/324/0xabdb3a90fd5678cc180734ea945514e9b2197ae9)
 
+### Apply to Ecosystem Support rounds
+
+Eligibility criteria - be beneficial to LunCo's mission
+
+1. [Optimism](https://builder.gitcoin.co/#/chains/10/rounds/0xc97d35206250092b1ec22299fa69f88ed171f0f7)
+2. [Polygon](https://builder.gitcoin.co/#/chains/137/rounds/0xe03ebeb65bf0704f208bff15d994ea246d69b96c)
+3. [Arbitrum](https://builder.gitcoin.co/#/chains/42161/rounds/0x18a72e9940fb81860a809e266ebec42a9e2c44ce)
+4. [zkSync Era](https://builder.gitcoin.co/#/chains/324/rounds/0xabdb3a90fd5678cc180734ea945514e9b2197ae9)
+
 ## 🚀 Features
 
 1. **Lunar 3D Mapping**: Dive into a high-resolution 3D map of the Moon, offering unparalleled detail and accuracy. Plan your missions with precision, leveraging real lunar spatial data for an immersive experience.
