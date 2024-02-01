@@ -30,9 +30,9 @@ Our vision is to provide a comprehensive suite of open-source applications tailo
 ## 💰 Donations
 
 1. General EVM: 0x020673a52560b50a70544d7f841fbc73626648f4
-2. Optimism: 
-3. Polygon: 
-4. Arbitrum: 
+2. Optimism: [0x40891ce6e8574bb9118913a8a304195437f36213]()
+3. Polygon: [0xcb57A8f51C47E243ea0f6061Af5B2C9932eEe820]()
+4. Arbitrum: [0xFEc9F8dB07f96973A453Ee5D1c74606a9a19F26a]()
 5. zkSync: [0xDEfaf4A720Bb1894165A3804c91f75cE748F0381](https://explorer.zksync.io/address/0xDEfaf4A720Bb1894165A3804c91f75cE748F0381)
 
 ## 🌍 LunCo Ecosystem Support
