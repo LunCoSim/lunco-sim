@@ -5,8 +5,6 @@ Hi, my name is Rod Mamin. I'm Space Systems Engineer, founder of LunCo.
 I've being active on Gitcoin since GR15, and now it's the main source of funding for LunCo and related DeSpace/DeSci activities.
 # Impact
 
-### Round Management
-
 ### DeSpace QF Steward
 
 DeSpace stands for Decentralized Space Exploration, it was a [QF round for Space Exploration project run from November 14th till December 7th.](https://explorer.gitcoin.co/#/round/42161/0x911ae126be7d88155aa9254c91a49f4d85b83688)
@@ -46,6 +44,7 @@ After the first results that shown the system works, I've decided to scale the e
 
 **Total: $41656, 9631 donors, 45789 donations**
 
+PS On this round I've raised some funds for GreenPill DeSpace chapter. This chapter is not super active yet, but the money are flowing
 ## HyperDeSci 
 
 **[Join ROUND CHAT](https://t.me/hyperdesci_chat)** (44 members at the time of application)
@@ -97,4 +96,3 @@ The plan is to onboard as much russian speaking members to regens ASAP
 
 PS On March 28th I'll be shilling Gitcoin/Opensource/Public Goods and being Bankless to the US Immigration officer, by the time the rounds starts it's alredy would be done and I'll share the feedback with the community. 
 Someone has to start doing it!
-
