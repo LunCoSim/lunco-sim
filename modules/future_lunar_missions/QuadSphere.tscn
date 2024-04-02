@@ -1,6 +1,6 @@
 [gd_scene load_steps=2 format=3 uid="uid://ckkho01avs00h"]
 
-[ext_resource type="Script" path="res://scenarios/future_lunar_missions/QuadSphere.gd" id="1_2p32u"]
+[ext_resource type="Script" path="res://modules/future_lunar_missions/QuadSphere.gd" id="1_2p32u"]
 
 [node name="QuadSphere" type="Node3D"]
 transform = Transform3D(0.714933, 0, 0, 0, 0.714933, 0, 0, 0, 0.714933, -0.0359888, 0.181636, -0.00677919)
