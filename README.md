@@ -1,4 +1,4 @@
-# LunCo: Virtual Universe for Real Space Missions
+# LunCo: Everyone can do Space
 
 LunCo is a open-source simulation tool designed for planning space missions, with a focus on lunar settlements. 
 
@@ -34,6 +34,7 @@ Our vision is to provide a comprehensive suite of open-source applications tailo
 3. Polygon: [0xcb57A8f51C47E243ea0f6061Af5B2C9932eEe820]()
 4. Arbitrum: [0xFEc9F8dB07f96973A453Ee5D1c74606a9a19F26a]()
 5. zkSync: [0xDEfaf4A720Bb1894165A3804c91f75cE748F0381](https://explorer.zksync.io/address/0xDEfaf4A720Bb1894165A3804c91f75cE748F0381)
+6. Base: [0xC9E0Ac9205CDb16520395Fe2570d832A7eA5BfaD]()
 
 ## 🌍 LunCo Ecosystem Support
 
@@ -52,6 +53,14 @@ Eligibility criteria - be beneficial to LunCo's mission
 2. [Polygon](https://builder.gitcoin.co/#/chains/137/rounds/0xe03ebeb65bf0704f208bff15d994ea246d69b96c)
 3. [Arbitrum](https://builder.gitcoin.co/#/chains/42161/rounds/0x18a72e9940fb81860a809e266ebec42a9e2c44ce)
 4. [zkSync Era](https://builder.gitcoin.co/#/chains/324/rounds/0xabdb3a90fd5678cc180734ea945514e9b2197ae9)
+
+### Allo v2
+
+1. [Polygon]( https://builder.gitcoin.co/#/chains/137/rounds/6)
+2. [Optimism](https://builder.gitcoin.co/#/chains/10/rounds/8)
+3. [Arbitrum](https://builder.gitcoin.co/#/chains/42161/rounds/15)
+4. [Scroll](https://builder.gitcoin.co/#/chains/534352/rounds/4)
+5. [Base](https://builder.gitcoin.co/#/chains/8453/rounds/6)
 
 ## 🚀 Features
 
