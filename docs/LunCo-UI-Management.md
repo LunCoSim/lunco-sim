@@ -1,1 +1,0 @@
-Ui management is based on IVoyager gui-mods
