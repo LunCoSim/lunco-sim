@@ -26,7 +26,7 @@ Our vision is to provide a comprehensive suite of open-source applications tailo
 <p style="text-align: center;">
 <i>Early Development version</i>
 </p>
-## 🌍 LunCo Ecosystem Support
+##  🌍 LunCo Ecosystem Support
 
 Help us to prioritize the development of features by donating to the feature you like on Gitcoin
 
