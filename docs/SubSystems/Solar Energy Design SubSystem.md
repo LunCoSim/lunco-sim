@@ -5,8 +5,9 @@
 MVP
 
 1. Solar Cell as GraphNode with input and output parameters
-2. Changing input -> 
+2. Inputs -> outputs
+3. Mint NFT for Solar Panel with parameters
 
 Prompts
 
-You are expirienced Godot 4 developer. Your goal is to create a GraphNode component that represents basic solar cell models with inputs and energy output
+You are experienced Godot 4 developer. Your goal is to create a GraphNode component that represents basic solar cell models with inputs and energy output
