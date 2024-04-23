@@ -1,5 +1,9 @@
 [Allo V2](https://builder.gitcoin.co/#/chains/42161/registry/0x/projects/0xf0e5c04a2340bddca272459b990f2fc8712dc2e3c6d9e16f7f7d72572dc9a697)
 
+Prompt: What is model based systems engineering?
+
+Response:
+
 Model-Based Systems Engineering (MBSE) is a systems engineering approach that focuses on creating a virtual model of a system, which is used to design, analyze, and validate the system throughout its lifecycle. MBSE uses models to represent the system's components, behavior, and interactions, allowing for a more integrated, collaborative, and efficient approach to systems engineering.
 
 In MBSE, models are used to:
