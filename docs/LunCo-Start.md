@@ -31,3 +31,14 @@ Documentation is made with Obsidian, so some of the Markdown features could work
 4. Economics
 5. Realistic technologies, physics and enviroment. E.g. you have to extract ~30-50 of different raw resources to build a satellite like Aluminum, Copper.
 6. Hardware in the loop: integration with real hardware. Linux Kernel drivers integrated with sim showing sim date e.g. serial devices, PID controllers, etc. 
+
+
+## Summary
+
+LunCo is an open-source simulation tool designed for planning space missions, with a focus on lunar settlements. 
+
+It's built with the Godot 4 engine and aims to revolutionize the way space engineers design and collaborate on complex systems. 
+
+The platform provides a comprehensive suite of applications tailored for Lunar Base engineering, including a unified platform, requirements management, models visualizations, collaborative training, and digital twin simulations. 
+
+LunCo has a strong web3 component, incorporating decentralized technologies to enable features such as collaborative mission design in a metaverse, intellectual property non-fungible tokens (IP-NFTs) for designs, and decentralized engineer profiles. This allows for a secure, transparent, and community-driven approach to space engineering and design.
