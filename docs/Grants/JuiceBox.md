@@ -24,11 +24,11 @@ To move to the next stage we need funds, to hire full-time developers, get equip
 
 ## Details
 
-We also explore web3-native ways to sustain space activities, like doing research how Token Engineering could be applied to space exploration.
+We also explore web3-native ways to sustain space activities, like doing research how Token Engineering could be applied to space exploration, sharing designs like CAD files via IPFS, issuing IP-NFT for missions designs and so on
 
 We have launched [HyperDeSci](https://github.com/LunCoSim/hyperdesci) to fund DeSci activities
 
-LunCo was funded thx to generous donors on Gitcoin, Giveth, and raised ~$70k since it's launch
+LunCo was funded thx to generous donors on Gitcoin, Giveth, and raised ~$70k since it's launch in May 2022
 ## Subsystems / Subproject
 
 - AI-based Space Systems Engineer
@@ -37,6 +37,7 @@ LunCo was funded thx to generous donors on Gitcoin, Giveth, and raised ~$70k sin
 - Model Based Systems Engineering
 - Requirements Management
 - [Decentralize! Space](https://t.me/despaceru)
+- Token Engineering for Space Missions
 
 ## Rewards
 
