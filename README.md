@@ -30,11 +30,9 @@ Our vision is to provide a comprehensive suite of open-source applications tailo
 
 Help us to prioritize the development of features by donating to the feature you like on Gitcoin
 
-1. [Polygon](https://explorer.gitcoin.co/#/round/137/6)
-2. [Optimism](https://explorer.gitcoin.co/#/round/10/8)
-3. [Arbitrum](https://explorer.gitcoin.co/#/round/42161/15)
-4. [Scroll](https://explorer.gitcoin.co/#/round/534352/4)
-5. [Base](https://explorer.gitcoin.co/#/round/8453/6)
+1. [Optimism](https://explorer.gitcoin.co/#/round/10/32)
+2. [Scroll](https://explorer.gitcoin.co/#/round/534352/13)
+3. [zkSync](https://explorer.gitcoin.co/#/round/324/3)
 
 ### 💰 Donations
 
