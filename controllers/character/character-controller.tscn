@@ -66,7 +66,7 @@ priority = 0
 script = ExtResource("7_1x8qy")
 value = 0.0
 comparation = 5
-name = null
+name = ""
 
 [sub_resource type="Resource" id="69"]
 script = ExtResource("5_4g1es")
@@ -132,7 +132,7 @@ priority = 0
 script = ExtResource("8_nvk28")
 value = false
 comparation = 0
-name = null
+name = ""
 
 [sub_resource type="Resource" id="48"]
 script = ExtResource("6_yom78")
@@ -147,7 +147,7 @@ priority = 0
 script = ExtResource("8_nvk28")
 value = true
 comparation = 0
-name = null
+name = ""
 
 [sub_resource type="Resource" id="64"]
 script = ExtResource("6_yom78")
@@ -201,7 +201,7 @@ priority = 0
 script = ExtResource("8_nvk28")
 value = true
 comparation = 0
-name = null
+name = ""
 
 [sub_resource type="Resource" id="63"]
 script = ExtResource("6_yom78")
@@ -262,7 +262,7 @@ transitions = {
 "Idle": SubResource("75")
 }
 }
-name = null
+name = ""
 
 [node name="CharacterController" type="Node3D"]
 script = ExtResource("1_541sa")
@@ -270,6 +270,3 @@ script = ExtResource("1_541sa")
 [node name="State" type="Node" parent="."]
 script = ExtResource("2_lr54q")
 state_machine = SubResource("40")
-active = true
-autostart = true
-update_process_mode = 1

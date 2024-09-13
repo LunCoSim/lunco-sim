@@ -1,4 +1,4 @@
-@icon("res://controllers/player/character.svg")
+@icon("res://controllers/character/character.svg")
 ## This controller represents character state and attaches to CharacterBody3D
 class_name LCCharacterController
 extends LCController

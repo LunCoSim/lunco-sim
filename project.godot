@@ -11,9 +11,9 @@ config_version=5
 [application]
 
 config/name="LunCo"
-config/version="0.4.0"
+config/version="0.4.1"
 run/main_scene="res://main.tscn"
-config/features=PackedStringArray("4.3", "GL Compatibility")
+config/features=PackedStringArray("4.4", "GL Compatibility")
 boot_splash/bg_color=Color(0, 0, 0, 1)
 boot_splash/image="res://assets/logos/splash.png"
 config/icon="res://assets/logos/logo.svg"
@@ -55,7 +55,7 @@ logger/file/log_file_write=true
 logger/file/file_path="res://game.log"
 logger/stdout_format="[{hour}:{minute}:{second}][{level}]{text}"
 logger/file_format="[{hour}:{minute}:{second}][{level}]{text}"
-enabled=PackedStringArray("res://addons/GPTIntegration/plugin.cfg", "res://addons/SignalVisualizer/plugin.cfg", "res://addons/godot-logger/plugin.cfg", "res://addons/godottpd/plugin.cfg", "res://addons/imjp94.yafsm/plugin.cfg", "res://addons/panku_console/plugin.cfg", "res://addons/scene_manager/plugin.cfg", "res://addons/ui_design_tool/plugin.cfg")
+enabled=PackedStringArray("res://addons/SignalVisualizer/plugin.cfg", "res://addons/godot-logger/plugin.cfg", "res://addons/godottpd/plugin.cfg", "res://addons/imjp94.yafsm/plugin.cfg", "res://addons/panku_console/plugin.cfg", "res://addons/scene_manager/plugin.cfg", "res://addons/ui_design_tool/plugin.cfg")
 
 [gdunit4]
 
