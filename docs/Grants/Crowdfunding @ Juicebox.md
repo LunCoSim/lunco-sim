@@ -1,3 +1,24 @@
+
+1. Donors will receive $LNCP token, that reflects contribution for Space Exploration
+
+Cycles
+
+1. Alpha Cycle 10000 $LNCP/ETH - 10 days
+2. Cycle 1 - 8000 - 14 days
+3. Cycle 2 - 7500 - 14 days
+4. Cycle 3 - 7000 - 14 days
+5. Cycle 4 - 6500 - 14 days
+6. Cycle 5 - 6000 - 14 days
+7. Cycle 6 - 5500 - 14 days
+8. Cycle 7 - 5000 - until campaign stops
+
+$LNCP Utility
+
+1. LunCoSim - internal currency
+2. 
+
+NFT-perks
+
 The collection would provide visual stats for your avatar in the LunCo metaverse.
 
 Tier 0: LunCo Profile
@@ -5,7 +26,6 @@ Contribution: 0.01 ETH
 
 Perks:
 - Basic highlight in the metaverse
-
 
 Tier 1: Earth-Bound Dreamer
 Contribution: 0.1 ETH

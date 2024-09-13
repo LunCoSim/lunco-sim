@@ -18,7 +18,7 @@ Alpha version of LunCo is available at [https://alpha.lunco.space](https://alpha
 ***Space Exploration is the only thing that could unite humanity, provide enough resources for the sustainable future, and create millions of high skilled jobs***
 
 
-We have 4 people who works on the project, Rod, Miss Business Dev, Miss SMM, Mr Designer, with several contributors to the repository.
+We have 4 people who works on the project, Rod, Miss Business Dev, Miss SMM, Mr Designer, Mr Sponsorship fundraiser with several contributors to the repository.
 
 To move to the next stage we need funds, to hire full-time developers, get equipment, pay for services, and do business development.
 
