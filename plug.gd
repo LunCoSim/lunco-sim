@@ -22,7 +22,6 @@ func _plugging():
 	# plug("Ark2000/PankuConsole")
 	plug("LunCoSim/PankuConsole") #using LunCo's fork
 	# plug("godot-extended-libraries/godot-debug-menu")
-	plug("finepointcgi/Godot-Open-AI-GPT-Integration")
 	plug("Ericdowney/SignalVisualizer")
 	
 	## Libraries
