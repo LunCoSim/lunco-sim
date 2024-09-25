@@ -3,7 +3,7 @@ class_name LCNetworking
 extends Node
 
 # Declaration of peer as MultiplayerPeer, which will be used to handle multiplayer networking
-var peer: ENetMultiplayerPeer
+var peer: WebSocketMultiplayerPeer
 
 # A dictionary to store the connected players
 var players = {}
@@ -22,27 +22,30 @@ func _ready():
 	
 # Function to connect to a server
 func connect_to_server(ip: String="langrenus.lunco.space", port: int = 9000):
-	if not multiplayer.multiplayer_peer is ENetMultiplayerPeer:
-		peer = ENetMultiplayerPeer.new() # Already connected
+	if not multiplayer.multiplayer_peer is WebSocketMultiplayerPeer:
+		peer = WebSocketMultiplayerPeer.new() # Already connected
 	else:
 		return
 	# Creating a client
 	Logger.info("Connecting to server: %s:%i" % [ip, port] )
-	
-	peer.create_client(ip, port)
+	print("Connecting to server")
+	print("ws://%s:%d" % [ip, port])
+	peer.create_client("ws://%s:%d" % [ip, port])
 	multiplayer.multiplayer_peer = peer
 	# Assigning the peer to this multiplayer's peer
 
 # Function to start hosting a server
 func host(port: int = 9000):
-	if not multiplayer.multiplayer_peer is ENetMultiplayerPeer:
-		peer = ENetMultiplayerPeer.new() # Already connected
+	if not multiplayer.multiplayer_peer is WebSocketMultiplayerPeer:
+		peer = WebSocketMultiplayerPeer.new() # Already connected
 	else:
 		return
 
 	# Creating a server
 	
-	Logger.info("Hosting on %i" % port)
+	Logger.info("Hosting on %d" % port)
+	
+	print("Hosting on %d" % port)
 	peer.create_server(port)
 	multiplayer.multiplayer_peer = peer
 
@@ -80,6 +83,7 @@ func on_peer_disconnected(id):
 # Function called when connection to server failed
 func on_server_connection_failed():
 	print("on_server_connection_failed")
+	print(peer.get_packet_error())
 	# This function currently does nothing.
 	pass
 	
