@@ -39,7 +39,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("-p", "--port", help="port to listen on", default=8060, type=int)
     parser.add_argument(
-        "-r", "--root", help="path to serve as root (relative to `platform/web/`)", default="../../bin", type=Path
+        "-r", "--root", help="path to serve as root (relative to `platform/web/`)", default="../build/web", type=Path
     )
     browser_parser = parser.add_mutually_exclusive_group(required=False)
     browser_parser.add_argument(
