@@ -75,7 +75,7 @@ func _on_profile_changed():
 	
 # Function called when a peer disconnects
 func on_peer_disconnected(id):
-	print("on_peer_connected: ", id)
+	print("on_peer_disconnected: ", id)
 	# Removing the peer from players dictionary
 	players.erase(id)
 
