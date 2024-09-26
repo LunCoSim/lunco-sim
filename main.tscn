@@ -1,4 +1,4 @@
-[gd_scene load_steps=11 format=3 uid="uid://c4vgq4emswcqj"]
+[gd_scene load_steps=8 format=3 uid="uid://c4vgq4emswcqj"]
 
 [ext_resource type="PackedScene" uid="uid://oulno1atrp8k" path="res://core/simulation/simulation.tscn" id="1_feltx"]
 [ext_resource type="PackedScene" uid="uid://cpbv4fmfxppt1" path="res://modules/solar_system_planets/sun.tscn" id="3_r6oc6"]
@@ -6,10 +6,7 @@
 [ext_resource type="PackedScene" uid="uid://csqh45xcqbewi" path="res://modules/solar_system_planets/moon.tscn" id="5_m7lob"]
 [ext_resource type="PackedScene" uid="uid://c7q7gaaaa8g5g" path="res://content/maps/Langrenus/langrenus_crater_map.tscn" id="6_1kmik"]
 [ext_resource type="PackedScene" uid="uid://dmxcgvtora8v2" path="res://content/content.tscn" id="6_my0ou"]
-[ext_resource type="PackedScene" uid="uid://dlsa0lk3n8cwg" path="res://content/moonwards/buildings/android-kiosk/android-kiosk.escn" id="8_4jigx"]
 [ext_resource type="PackedScene" uid="uid://bq5a6ljxbj2ke" path="res://content/new/ML_HP_FBX/ML_HP.FBX" id="8_pvujg"]
-[ext_resource type="PackedScene" uid="uid://cpjdvh1eaof2y" path="res://content/moonwards/buildings/nuclear-core/nuclear-core.escn" id="9_luxsh"]
-[ext_resource type="PackedScene" uid="uid://2f4aecforicx" path="res://content/moonwards/buildings/satellite-dish/satellite-dish.escn" id="10_jxwu7"]
 
 [node name="Simulation" node_paths=PackedStringArray("spawn_node") instance=ExtResource("1_feltx")]
 spawn_node = NodePath("Universe/Sun/Earth/Moon/LangrenusCraterMap/Spawner")
@@ -18,7 +15,6 @@ spawn_node = NodePath("Universe/Sun/Earth/Moon/LangrenusCraterMap/Spawner")
 transform = Transform3D(-0.82255, -0.00837469, 0.568631, 0.00348538, 0.999798, 0.0197666, -0.568682, 0.0182409, -0.822355, -12.653, 7.06782, 1.34696)
 
 [node name="MultiplayerSpawner" parent="." index="1"]
-_spawnable_scenes = PackedStringArray("res://content/starship/starship.tscn", "res://content/animated-astronaut-character-in-space-suit-loop/astronaut.tscn", "res://content/gobot/gobot.tscn", "res://content/gobot/gobot.tscn")
 spawn_path = NodePath("../Universe/Sun/Earth/Moon/LangrenusCraterMap/Spawner")
 
 [node name="Sun" parent="Universe" index="1" instance=ExtResource("3_r6oc6")]
@@ -27,7 +23,7 @@ spawn_path = NodePath("../Universe/Sun/Earth/Moon/LangrenusCraterMap/Spawner")
 
 [node name="Moon" parent="Universe/Sun/Earth" index="0" instance=ExtResource("5_m7lob")]
 
-[node name="LangrenusCraterMap" parent="Universe/Sun/Earth/Moon" index="1" instance=ExtResource("6_1kmik")]
+[node name="LangrenusCraterMap" parent="Universe/Sun/Earth/Moon" index="0" instance=ExtResource("6_1kmik")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 51, 0)
 
 [node name="Spawner" type="Node3D" parent="Universe/Sun/Earth/Moon/LangrenusCraterMap" index="2"]
@@ -40,12 +36,3 @@ transform = Transform3D(107.71, 0, 22.3273, 0, 110, 0, -22.3273, 0, 107.71, 156.
 
 [node name="Root Scene2" parent="Universe/Sun/Earth/Moon/LangrenusCraterMap/Content/LaunchPad" index="0" instance=ExtResource("8_pvujg")]
 transform = Transform3D(1, 0, -2.98023e-08, 0, 1, 0, 2.98023e-08, 0, 1, 0.615741, 0, 2.69201)
-
-[node name="android-kiosk" parent="Universe/Sun/Earth/Moon/LangrenusCraterMap/Content/LaunchPad/Root Scene2" index="2" instance=ExtResource("8_4jigx")]
-transform = Transform3D(0.00890169, 0, -0.00184524, 0, 0.00909091, 0, 0.00184524, 0, 0.00890169, 0.968494, -0.00433356, -0.762015)
-
-[node name="nuclear-core" parent="Universe/Sun/Earth/Moon/LangrenusCraterMap/Content/LaunchPad/Root Scene2/android-kiosk" index="1" instance=ExtResource("9_luxsh")]
-transform = Transform3D(1, 0, -1.49012e-08, 0, 1, 0, 1.49012e-08, 0, 1, -0.0818481, 0.0234222, 3.25061)
-
-[node name="satellite-dish" parent="Universe/Sun/Earth/Moon/LangrenusCraterMap/Content/LaunchPad/Root Scene2/android-kiosk/nuclear-core" index="1" instance=ExtResource("10_jxwu7")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -2.54904, 12.0154, -63.8471)
