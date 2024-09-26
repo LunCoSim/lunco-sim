@@ -42,11 +42,11 @@ func _init():
 		
 func make_entity(entity):
 	var path : String = Paths[entity]
-	return ResourceLoader.load_threaded_get(path).instantiate()
+	#return .instantiate()
 	#
-	#if Caches.get(entity) != null:
-		#return Caches[entity].instantiate()
-	#else:
-		#return null
+	if Caches.get(entity) != null:
+		return Caches[entity].instantiate()
+	else:
+		Caches[entity] = ResourceLoader.load_threaded_get(path)
+		return Caches[entity].instantiate()
 ##
-
