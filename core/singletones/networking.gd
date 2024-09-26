@@ -27,7 +27,7 @@ func connect_to_server(ip: String="langrenus.lunco.space", port: int = 9000):
 	else:
 		return
 	# Creating a client
-	Logger.info("Connecting to server: %s:%i" % [ip, port] )
+	Logger.info("Connecting to server: %s:%d" % [ip, port] )
 	print("Connecting to server")
 	print("ws://%s:%d" % [ip, port])
 	peer.create_client("ws://%s:%d" % [ip, port])
