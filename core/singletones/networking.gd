@@ -44,6 +44,7 @@ func host(port: int = 9000):
 	# Creating a server
 	
 	Logger.info("Hosting on %d" % port)
+	DisplayServer.window_set_title("Server")
 	
 	print("Hosting on %d" % port)
 	peer.create_server(port)
@@ -90,6 +91,7 @@ func on_server_connection_failed():
 # Function called when successfully connected to server.
 func on_server_connected():
 	print("on_server_connected")
+	DisplayServer.window_set_title("Connected to server")
 	# This function currently does nothing.
 	pass
 
@@ -97,3 +99,4 @@ func on_server_connected():
 func on_server_disconnected():
 	# Printing a message to signal loss of server connection
 	print("Lost connection to server")
+	DisplayServer.window_set_title("Lost connection to server")
