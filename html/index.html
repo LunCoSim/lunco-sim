@@ -4,6 +4,9 @@
 		<meta charset="utf-8">
 		<meta name="viewport" content="width=device-width, user-scalable=no">
 		<title>$GODOT_PROJECT_NAME</title>
+
+		<script src="https://cdn.jsdelivr.net/npm/web3@4.13.0/dist/web3.min.js"></script>
+		
 		<style>
 body {
 	touch-action: none;
@@ -144,7 +147,7 @@ body {
             if (typeof window.ethereum !== 'undefined' || (typeof window.web3 !== 'undefined')) {
               web3 = new Web3(window.ethereum || window.web3.currentProvider);
             } else {
-              alert('MetaMask not found. Install it to proceed.');
+              console.log('MetaMask not found. Install it to proceed.');
             }
 			
 			const contractABI = [
@@ -486,10 +489,10 @@ body {
 
 			async function checkProfile(account, _callback) {
 
-				console.log("alsdkj checkProfile, ", account)
+				console.log("checkProfile, ", account)
 				const contract = new web3.eth.Contract(contractABI, tokenContract);
 				const balance = await contract.methods.balanceOf(account, tokenId).call()
-				console.log('lkasjdlksajdlkajslkdjlk: ', balance)
+				console.log('balance of: ', balance)
 				_callback(balance)
 			}
 
@@ -520,7 +523,11 @@ body {
             }
         
             // Trigger login on button click
-            document.getElementById('loginBtn').addEventListener('click', login);
+			var loginBtn = document.getElementById('loginBtn');
+			if(loginBtn) {
+				loginBtn.addEventListener('click', login);
+			}
+            
           </script>
 
 
