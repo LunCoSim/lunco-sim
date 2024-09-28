@@ -89,6 +89,9 @@ func load_profile():
 
 	# If the file didn't load, ignore it.
 	if err != OK:
+		print("Error loading profile")
+		username = "unknown"
+		wallet = "unknown"
 		return
 	
 	username = config.get_value(SECTION, "username", "")
