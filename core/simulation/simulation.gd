@@ -127,6 +127,7 @@ func _on_peer_disconnected(peer_id):
 
 func _on_avatar_requesting_control(entity_idx): #TBD: To path
 	if entity_idx < entities.size():
+		print("_on_avatar_requesting_control: ", entities[entity_idx].get_path())
 		requesting_control.rpc_id(1, entities[entity_idx].get_path())
 
 func _on_avatar_release_control(path):
