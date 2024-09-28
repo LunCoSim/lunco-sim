@@ -87,6 +87,7 @@ func _update_strenth(value):
 #------------------------------------------	
 
 func _find_camera(from: Array, exclude, cameras: Array):
+	return
 	for node in from:
 		if node != exclude:
 			_find_camera(node.get_children(), exclude, cameras)
@@ -94,6 +95,7 @@ func _find_camera(from: Array, exclude, cameras: Array):
 			cameras.append(node)
 	
 func _grab_camera():
+	return
 	if Engine.is_editor_hint():
 		var a = EditorScript.new()
 		var i = a.get_editor_interface()
@@ -108,6 +110,7 @@ func _grab_camera():
 		_camera = get_viewport().get_camera_3d()
 		
 func _update_mesh():
+	return
 	_grab_camera()
 	print("Update mesh: ", _camera)
 	
@@ -203,6 +206,8 @@ class QuadPlane:
 	
 	func _init(normal: Vector3, center:Vector3, size: Vector2, subdivisions: int, radius:=1.0, color:=Color(1, 0, 0), level:int=0, Strength:=1.0):
 		print("Subdivisions: ", subdivisions)
+		return
+		
 		_normal = normal
 		_center = center
 		_size = size

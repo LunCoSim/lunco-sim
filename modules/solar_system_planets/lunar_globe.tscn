@@ -1,18 +1,11 @@
-[gd_scene load_steps=6 format=3 uid="uid://l6cfv385r5qt"]
+[gd_scene load_steps=4 format=3 uid="uid://l6cfv385r5qt"]
 
 [ext_resource type="Texture2D" uid="uid://bnbhn0y51ghq7" path="res://content/nasa_cgi_kit/lroc_color_poles_8k.png" id="2_8ueqa"]
-[ext_resource type="Texture2D" uid="uid://d32imt1p2u7ng" path="res://content/nasa_cgi_kit/ldem_16_uint.exr" id="3_43miv"]
-[ext_resource type="Texture2D" uid="uid://crbekelqxni1u" path="res://content/nasa_cgi_kit/ldem_16.png" id="3_n61n6"]
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_t6tg1"]
 albedo_texture = ExtResource("2_8ueqa")
 normal_enabled = true
 normal_scale = 6.0
-normal_texture = ExtResource("3_n61n6")
-heightmap_deep_parallax = true
-heightmap_min_layers = 8
-heightmap_max_layers = 32
-heightmap_texture = ExtResource("3_43miv")
 
 [sub_resource type="SphereMesh" id="SphereMesh_imesr"]
 material = SubResource("StandardMaterial3D_t6tg1")

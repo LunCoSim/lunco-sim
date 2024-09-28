@@ -16,7 +16,7 @@ var camera: Camera3D
 ## Godot class functions
 func _ready():
 	_rebuild()
-	camera = LCUtil.grab_camera()
+	# camera = LCUtil.grab_camera()
 
 func _process(_delta):
 	if camera:
