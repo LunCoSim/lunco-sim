@@ -50,7 +50,6 @@ layout_mode = 2
 mouse_filter = 1
 
 [node name="Networking" type="VBoxContainer" parent="."]
-visible = false
 layout_mode = 2
 
 [node name="IP" type="LineEdit" parent="Networking"]
@@ -68,22 +67,18 @@ text = "9000"
 placeholder_text = "Port"
 
 [node name="Label2" type="Label" parent="."]
-visible = false
 layout_mode = 2
 mouse_filter = 1
 
 [node name="SimHost" type="Button" parent="."]
-visible = false
 layout_mode = 2
 text = "Host Simulation"
 
 [node name="SimClient" type="Button" parent="."]
-visible = false
 layout_mode = 2
 text = "Connect to Simulation"
 
 [node name="ConnectToGlobal" type="Button" parent="."]
-visible = false
 layout_mode = 2
 text = "Connect to Global Simulation"
 
