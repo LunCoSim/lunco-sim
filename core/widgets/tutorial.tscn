@@ -4,13 +4,18 @@
 offset_right = 529.0
 offset_bottom = 181.0
 bbcode_enabled = true
-text = "LunCo is Virtual Universe
+text = "LunCo is an open-source platform for collaborative designing and simulating space missions.
 
-To create new entities press on Alt+[number 1-4]
-To get control press on Number of entity or in the bottom screen
-To release control press Backspace
+Quick Start:
 
-To fly use WASD"
+• Create entities: Press Alt + [1-4]
+• Control entities: Click number or use bottom screen
+• Release control: Press Backspace
+• Navigate: Use WASD keys to fly
+• Menu: Press Esc
+• Console: Press `
+
+Explore, collaborate, and engineer the future of space exploration!"
 fit_content = true
 
 [node name="Tutorial" type="Control" parent="."]

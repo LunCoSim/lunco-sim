@@ -1,6 +1,7 @@
 [gd_scene format=3 uid="uid://c7ydipd3dui4p"]
 
 [node name="Help" type="VBoxContainer"]
+anchors_preset = 4
 anchor_top = 0.5
 anchor_bottom = 0.5
 offset_top = -58.0
