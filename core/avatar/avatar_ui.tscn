@@ -17,23 +17,6 @@ mouse_filter = 2
 theme = SubResource("Theme_mfhp6")
 script = ExtResource("1_igs02")
 
-[node name="Help" type="VBoxContainer" parent="."]
-layout_mode = 1
-anchors_preset = 1
-anchor_left = 1.0
-anchor_right = 1.0
-offset_left = -144.0
-offset_bottom = 146.0
-grow_horizontal = 0
-
-[node name="Spawn" type="Label" parent="Help"]
-layout_mode = 2
-text = "` – Console "
-
-[node name="Spawn2" type="Label" parent="Help"]
-layout_mode = 2
-text = "Esc – Menu "
-
 [node name="EntitiesContrainer" type="VBoxContainer" parent="."]
 layout_mode = 1
 anchors_preset = 3
@@ -103,5 +86,54 @@ mouse_force_pass_scroll_events = false
 unique_name_in_owner = true
 anchors_preset = 0
 
+[node name="WalletInfo" type="VBoxContainer" parent="."]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 1
+anchor_left = 1.0
+anchor_right = 1.0
+offset_left = -200.0
+offset_top = 10.0
+offset_right = -10.0
+offset_bottom = 146.0
+grow_horizontal = 0
+
+[node name="ConnectWallet" type="Button" parent="WalletInfo"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Connect Wallet"
+
+[node name="DisconnectWallet" type="Button" parent="WalletInfo"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Disconnect Wallet"
+
+[node name="WalletInfoLabel" type="Label" parent="WalletInfo"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Not connected"
+
+[node name="ProfileNFT" type="Label" parent="WalletInfo"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Profile NFT: No"
+
+[node name="GitcoinDonor" type="Label" parent="WalletInfo"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Gitcoin Donor: No"
+
+[node name="SpecialDonor" type="Label" parent="WalletInfo"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Special Donor: No"
+
+[node name="ArtizenBuyer" type="Label" parent="WalletInfo"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Artizen Buyer: No"
+
 [connection signal="item_selected" from="EntitiesContrainer/Entities" to="." method="_on_entities_item_selected"]
 [connection signal="item_selected" from="UsersContainer/Users" to="." method="_on_entities_item_selected"]
+[connection signal="pressed" from="WalletInfo/ConnectWallet" to="." method="_on_connect_wallet_pressed"]
+[connection signal="pressed" from="WalletInfo/DisconnectWallet" to="." method="_on_disconnect_wallet_pressed"]
