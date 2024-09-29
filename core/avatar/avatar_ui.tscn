@@ -1,10 +1,17 @@
-[gd_scene load_steps=4 format=3 uid="uid://wdnxqhctneyv"]
+[gd_scene load_steps=5 format=3 uid="uid://wdnxqhctneyv"]
 
 [ext_resource type="Script" path="res://core/avatar/avatar_ui.gd" id="1_igs02"]
 
 [sub_resource type="Theme" id="Theme_mfhp6"]
 
 [sub_resource type="Theme" id="Theme_kf4je"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_blue"]
+bg_color = Color(0.2, 0.4, 0.8, 1)
+corner_radius_top_left = 4
+corner_radius_top_right = 4
+corner_radius_bottom_right = 4
+corner_radius_bottom_left = 4
 
 [node name="UI" type="Control"]
 layout_mode = 3
@@ -101,6 +108,8 @@ grow_horizontal = 0
 [node name="ConnectWallet" type="Button" parent="WalletInfo"]
 unique_name_in_owner = true
 layout_mode = 2
+theme_override_colors/font_color = Color(1, 1, 1, 1)
+theme_override_styles/normal = SubResource("StyleBoxFlat_blue")
 text = "Connect Wallet"
 
 [node name="DisconnectWallet" type="Button" parent="WalletInfo"]
