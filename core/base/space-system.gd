@@ -12,7 +12,7 @@ extends Node3D #TODO: Check if should be node, maybe something else?
 
 #----------------
 @export_category("Behaviour")
-@export var State = {} # Hierarchical state machine
+@export var SystemState = {} # Hierarchical state machine
 @export var Behaviour = {} # Behaviour tree
 
 #----------------

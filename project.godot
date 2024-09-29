@@ -35,6 +35,7 @@ Chat="*res://modules/chat/chat.gd"
 Logger="*res://addons/godot-logger/logger.gd"
 Users="*res://core/singletones/users_manager.gd"
 Signal_Debugger="*res://addons/SignalVisualizer/Debugger/SignalDebugger.gd"
+ControlManager="*res://core/singletones/control-manager.gd"
 
 [display]
 

@@ -32,7 +32,10 @@ func _ready():
 		print("Headless running")
 		LCNet.host()
 	multiplayer.peer_disconnected.connect(_on_peer_disconnected)
-	
+	ControlManager.control_granted.connect(_on_control_granted)
+	ControlManager.control_released.connect(_on_control_released)
+	ControlManager.control_request_denied.connect(_on_control_request_denied)
+
 ## Called every frame. 'delta' is the elapsed time since the previous frame.
 #func _process(_delta):
 		##Origin shifting. TBD how to do it in multiplayer
@@ -59,25 +62,26 @@ func spawn(_entity: EntitiesDB.Entities, global_position=null): #TBD think of a 
 			_on_multiplayer_spawner_spawned(entity)
 
 @rpc("any_peer", "call_local", "reliable")
-func set_authority(path, owner):
+func set_authority(path, _owner):
 	var node = get_tree().get_root().get_node(path)
-	node.set_multiplayer_authority(owner)
+	node.set_multiplayer_authority(_owner)
+	entities_updated.emit(entities)
 
 @rpc("any_peer", "call_local", "reliable")
 func requesting_control(path):
-	var owner = multiplayer.get_remote_sender_id()
+	var remote_id = multiplayer.get_remote_sender_id()
 	if multiplayer.is_server():
 		var _owner = owners.get(path) 
 			
 		if _owner == null: # TBD: Access control
-			owners[path] = owner
-			set_authority.rpc(path, owner)
-			control_granted_notify.rpc_id(owner, path)
+			owners[path] = remote_id
+			set_authority.rpc(path, remote_id)
+			control_granted_notify.rpc_id(remote_id, path)
 		else:
 			if _owner == multiplayer.get_remote_sender_id():
 				release_control(path)
 			else:
-				control_declined_notify.rpc_id(owner, path)
+				control_declined_notify.rpc_id(remote_id, path)
 
 @rpc("any_peer", "call_local", "reliable")
 func release_control(path):
@@ -100,6 +104,23 @@ func control_declined_notify(path):
 func control_released_notify(path):
 	control_released.emit(path)
 	
+func _on_control_granted(peer_id: int, entity_path: NodePath):
+	control_granted.emit(entity_path)
+
+func _on_control_released(peer_id: int, entity_path: NodePath):
+	control_released.emit(entity_path)
+
+func _on_control_request_denied(peer_id: int, entity_path: NodePath):
+	control_declined.emit(entity_path)
+
+func _on_avatar_requesting_control(entity_idx):
+	if entity_idx < entities.size():
+		ControlManager.request_control(multiplayer.get_unique_id(), entities[entity_idx].get_path())
+
+func _on_avatar_release_control(path):
+	ControlManager.release_control(multiplayer.get_unique_id(), path)
+
+
 #---------------------------------------
 
 func _on_multiplayer_spawner_spawned(entity):	
@@ -124,11 +145,3 @@ func _on_peer_disconnected(peer_id):
 		for key in owners:
 			if owners[key] == peer_id:
 				release_control(key)
-
-func _on_avatar_requesting_control(entity_idx): #TBD: To path
-	if entity_idx < entities.size():
-		print("_on_avatar_requesting_control: ", entities[entity_idx].get_path())
-		requesting_control.rpc_id(1, entities[entity_idx].get_path())
-
-func _on_avatar_release_control(path):
-	release_control.rpc_id(1, path)

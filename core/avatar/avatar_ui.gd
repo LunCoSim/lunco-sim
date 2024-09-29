@@ -78,7 +78,14 @@ func update_entities(entities):
 	for entity in entities:
 		# Add child items to the root.
 		var button = Button.new()
-		button.text = str(entity.name)
+		var entity_name = str(entity.name)
+		
+		# Check if the entity has a multiplayer authority
+		# if entity.get("multiplayer_authority"):
+		var owner_id = entity.get_multiplayer_authority()
+		entity_name += " (Owner: " + str(owner_id) + ")"
+		
+		button.text = entity_name
 		tree.add_child(button)
 
 		button.pressed.connect(_on_existing_entity_selected.bind(idx))
