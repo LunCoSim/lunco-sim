@@ -22,11 +22,13 @@ const SECTION = "Profile"
 #----------------------------------
 
 var _on_wallet_connected_callback
+var _on_check_profile_nft_callback
 
 # Called when the node enters the scene tree for the first time.
 func _init():
 	load_profile()
 	_on_wallet_connected_callback = JavaScriptBridge.create_callback(on_wallet_connected)
+	_on_check_profile_nft_callback = JavaScriptBridge.create_callback(on_check_profile_nft)
 
 #----------------------------------
 
@@ -71,14 +73,29 @@ func on_wallet_connected(args):
 		var wallet_info = args[0]
 		set_wallet(wallet_info["wallet"])
 		print("Wallet connected: ", wallet)
+		check_profile_nft()
 		if wallet_info is Dictionary and wallet_info.has("wallet"):
 			set_wallet(wallet_info["wallet"])
 			print("Wallet connected: ", wallet)
-			# You might want to fetch additional info here, like has_profile or is_artizen_buyer
+			# Automatically check for Profile NFT
+			check_profile_nft()
 		else:
 			print("Invalid wallet info received")
 	else:
 		print("No wallet info received")
+
+func check_profile_nft():
+	if JavaScriptBridge.get_interface("Login"):
+		JavaScriptBridge.get_interface("Login").checkProfile(wallet, _on_check_profile_nft_callback)
+	else:
+		print("Login interface not available")
+
+func on_check_profile_nft(args):
+	if args and args.size() > 0:
+		set_has_profile(int(args[0]))
+		print("Profile NFT check result: ", has_profile)
+	else:
+		print("No Profile NFT check result received")
 
 func logout():
 	set_wallet("")
