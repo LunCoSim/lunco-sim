@@ -10,4 +10,3 @@ func _ready() -> void:
 	server.register_router("/success", Web3ResponseRouter.new())
 	add_child(server)
 	server.start()
-
