@@ -26,6 +26,3 @@ camera = NodePath("../SpringArmCamera")
 
 [node name="AvatarController" type="Node3D" parent="."]
 script = ExtResource("7_tskp4")
-
-[connection signal="entity_selected" from="UI" to="." method="_on_select_entity_to_spawn"]
-[connection signal="existing_entity_selected" from="UI" to="." method="_on_ui_existing_entity_selected"]

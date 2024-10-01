@@ -73,7 +73,10 @@ func set_camera(_camera):
 func _ready():
 	set_camera(camera)
 	set_target(target)
-	
+	get_parent().control_granted.connect(_on_simulation_control_granted)
+	get_parent().control_declined.connect(_on_simulation_control_declined)
+	get_parent().control_released.connect(_on_simulation_control_released)
+
 #-----------------------------------------------------
 
 func _input(event):
@@ -237,23 +240,38 @@ func camera_global_position():
 
 #---------------------------------
 
+var controlled_entities = []
+
 func _on_select_entity_to_spawn(entity_id=0):
 	entity_to_spawn = entity_id
 	
 func _on_ui_existing_entity_selected(index):
+	print("Requesting control for entity index: ", index)
 	requesting_control.emit(index)
 
 func _on_simulation_control_granted(path):
-	var entity = get_tree().get_root().get_node(path)
-	Panku.notify("Control %s granted" % str(entity.name))
-	set_target(entity)
+	print("Avatar: Control granted for entity: ", path)
+	var entity = get_node(path)
+	if entity:
+		print("Avatar: Setting target to ", entity.name)
+		set_target(entity)
+	else:
+		print("Avatar: Failed to get node for path: ", path)
 
 func _on_simulation_control_declined(path):
-	var entity = get_tree().get_root().get_node(path)
-	Panku.notify("Control %s declined" % str(entity.name))
-
+	print("Avatar: Control declined for entity: ", path)
 
 func _on_simulation_control_released(path):
-	var entity = get_tree().get_root().get_node(path)
-	#set_target(null)
-	Panku.notify("Control %s released" % str(entity.name))
+	print("Avatar: Control released for entity: ", path)
+
+func _on_select_entity_to_control(entity):
+	if entity is Node:  # Ensure entity is a Node
+		ControlManager.request_control(entity.get_path())
+	else:
+		print("Error: entity is not a Node")
+
+func _on_release_control(entity):
+	if entity is Node:  # Ensure entity is a Node
+		ControlManager.release_control(entity.get_path())
+	else:
+		print("Error: entity is not a Node")

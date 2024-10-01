@@ -104,21 +104,29 @@ func control_declined_notify(path):
 func control_released_notify(path):
 	control_released.emit(path)
 	
-func _on_control_granted(peer_id: int, entity_path: NodePath):
-	control_granted.emit(entity_path)
+func _on_control_granted(peer_id, path):
+	print("Simulation: Control granted for entity: ", path)
+	control_granted.emit(path)
 
-func _on_control_released(peer_id: int, entity_path: NodePath):
+func _on_control_released(peer_id, entity_path: NodePath):
+	print("Simulation: Control released for entity: ", entity_path)
 	control_released.emit(entity_path)
 
-func _on_control_request_denied(peer_id: int, entity_path: NodePath):
+func _on_control_request_denied(peer_id, entity_path: NodePath):
+	print("Simulation: Control declined for entity: ", entity_path)
 	control_declined.emit(entity_path)
 
 func _on_avatar_requesting_control(entity_idx):
+	print("Simulation received control request for entity index: ", entity_idx)
 	if entity_idx < entities.size():
-		ControlManager.request_control(multiplayer.get_unique_id(), entities[entity_idx].get_path())
+		var entity = entities[entity_idx]
+		print("Requesting control for entity: ", entity.name)
+		ControlManager.request_control(entity.get_path())
+	else:
+		print("Invalid entity index: ", entity_idx)
 
-func _on_avatar_release_control(path):
-	ControlManager.release_control(multiplayer.get_unique_id(), path)
+func _on_avatar_release_control(path: NodePath):
+	ControlManager.release_control(path)
 
 
 #---------------------------------------
