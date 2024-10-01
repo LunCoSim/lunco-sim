@@ -116,18 +116,22 @@ func _on_control_request_denied(peer_id, entity_path: NodePath):
 	print("Simulation: Control declined for entity: ", entity_path)
 	control_declined.emit(entity_path)
 
+@rpc("any_peer")
 func _on_avatar_requesting_control(entity_idx):
-	print("Simulation received control request for entity index: ", entity_idx)
+	var requester_id = multiplayer.get_remote_sender_id()
+	print("Simulation received control request for entity index: ", entity_idx, " from peer: ", requester_id)
 	if entity_idx < entities.size():
 		var entity = entities[entity_idx]
 		print("Requesting control for entity: ", entity.name)
-		ControlManager.request_control(entity.get_path())
+		ControlManager.request_control(entity.get_path(), requester_id)
 	else:
 		print("Invalid entity index: ", entity_idx)
+		if multiplayer.is_server():
+			ControlManager._client_control_request_denied(requester_id, NodePath(""))
 
 func _on_avatar_release_control(path: NodePath):
+	var releaser_id = multiplayer.get_remote_sender_id()
 	ControlManager.release_control(path)
-
 
 #---------------------------------------
 

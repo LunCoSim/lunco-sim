@@ -12,7 +12,7 @@ signal spawn_entity(entity, position)
 signal target_changed(target)
 
 signal requesting_control(entity_idx)
-signal release_control(target)
+signal release_control
 
 #-------------------------------
 # Constants for mouse sensitivity and ray length
@@ -73,6 +73,8 @@ func set_camera(_camera):
 func _ready():
 	set_camera(camera)
 	set_target(target)
+	ControlManager.control_granted.connect(_on_control_granted)
+	ControlManager.control_request_denied.connect(_on_control_request_denied)
 
 #-----------------------------------------------------
 
@@ -239,12 +241,20 @@ func camera_global_position():
 
 var controlled_entities = []
 
-func _on_select_entity_to_spawn(entity_id=0):
-	entity_to_spawn = entity_id
-	
-func _on_ui_existing_entity_selected(index):
-	print("Requesting control for entity index: ", index)
-	requesting_control.emit(index)
+func _on_select_entity_to_spawn(entity_id=0, position=null):
+	if is_multiplayer_authority():
+		get_parent().spawn.rpc_id(1, entity_id, position)
+	else:
+		get_parent().spawn.rpc_id(1, entity_id, position)
+
+func _on_existing_entity_selected(idx):
+	print("Avatar: Requesting control for entity index: ", idx)
+	get_parent()._on_avatar_requesting_control(idx)
+
+func request_release_control():
+	if target:
+		get_parent()._on_avatar_release_control(target.get_path())
+		set_target(null)
 
 func _on_simulation_control_granted(path):
 	print("Avatar: Control granted for entity: ", path)
@@ -272,3 +282,15 @@ func _on_release_control(entity):
 		ControlManager.release_control(entity.get_path())
 	else:
 		print("Error: entity is not a Node")
+
+func _on_control_granted(peer_id: int, entity_path: NodePath):
+	if peer_id == multiplayer.get_unique_id():
+		print("Avatar: Control granted for entity: ", entity_path)
+		var entity = get_node(entity_path)
+		set_target(entity)
+		# Update UI or other necessary changes
+
+func _on_control_request_denied(peer_id: int, entity_path: NodePath):
+	if peer_id == multiplayer.get_unique_id():
+		print("Avatar: Control denied for entity: ", entity_path)
+		# Update UI or show a message to the user

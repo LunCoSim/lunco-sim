@@ -126,3 +126,12 @@ func _on_connect_wallet_pressed():
 
 func _on_disconnect_wallet_pressed():
 	Profile.logout()
+
+func _on_control_granted(peer_id: int, entity_path: NodePath):
+	if peer_id == multiplayer.get_unique_id():
+		update_entities(get_parent().get_parent().entities)
+
+func _on_control_request_denied(peer_id: int, entity_path: NodePath):
+	if peer_id == multiplayer.get_unique_id():
+		# Maybe show a message to the user
+		print("Control request denied for entity: ", entity_path)

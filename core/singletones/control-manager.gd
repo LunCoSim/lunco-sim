@@ -11,20 +11,17 @@ func _ready():
 	multiplayer.peer_connected.connect(_on_peer_connected)
 	multiplayer.peer_disconnected.connect(_on_peer_disconnected)
 
-func request_control(entity_path: NodePath):
-	print("ControlManager: Requesting control for entity: ", entity_path)
-	if multiplayer.is_server() or not multiplayer.has_multiplayer_peer():
-		# Solo mode or server: process locally
-		_process_control_request(multiplayer.get_unique_id(), entity_path)
+func request_control(entity_path: NodePath, requester_id: int = multiplayer.get_unique_id()):
+	if multiplayer.is_server():
+		_process_control_request(requester_id, entity_path)
 	else:
-		# Client in multiplayer: send RPC to server
 		rpc_id(1, "_server_process_control_request", entity_path)
 
 func _process_control_request(peer_id: int, entity_path: NodePath):
 	print("ControlManager: Processing control request from peer ", peer_id, " for entity ", entity_path)
 	if entity_path in controlled_entities and controlled_entities[entity_path] != peer_id:
 		print("ControlManager: Entity already controlled by another peer")
-		_client_control_request_denied(entity_path)
+		_client_control_request_denied(peer_id, entity_path)
 	else:
 		if entity_path in controlled_entities:
 			var previous_peer = controlled_entities[entity_path]
@@ -42,16 +39,14 @@ func _process_control_request(peer_id: int, entity_path: NodePath):
 
 @rpc("any_peer", "call_local")
 func _server_process_control_request(entity_path: NodePath):
-	var peer_id = multiplayer.get_remote_sender_id()
-	_process_control_request(peer_id, entity_path)
+	var requester_id = multiplayer.get_remote_sender_id()
+	_process_control_request(requester_id, entity_path)
 
 func release_control(entity_path: NodePath):
 	print("ControlManager: Releasing control for entity: ", entity_path)
-	if multiplayer.is_server() or not multiplayer.has_multiplayer_peer():
-		# Solo mode or server: process locally
+	if multiplayer.is_server():
 		_process_control_release(multiplayer.get_unique_id(), entity_path)
 	else:
-		# Client in multiplayer: send RPC to server
 		rpc_id(1, "_server_process_control_release", entity_path)
 
 func _process_control_release(peer_id: int, entity_path: NodePath):
@@ -74,26 +69,28 @@ func _release_control_internal(peer_id: int, entity_path: NodePath):
 func _client_control_granted(peer_id: int, entity_path: NodePath):
 	print("ControlManager: Control granted to peer ", peer_id, " for entity ", entity_path)
 	control_granted.emit(peer_id, entity_path)
+	if multiplayer.is_server():
+		rpc("_sync_client_control_granted", peer_id, entity_path)
+
+@rpc
+func _sync_client_control_granted(peer_id: int, entity_path: NodePath):
+	print("ControlManager: Syncing control granted to peer ", peer_id, " for entity ", entity_path)
+	control_granted.emit(peer_id, entity_path)
 
 func _client_control_released(peer_id: int, entity_path: NodePath):
 	print("ControlManager: Control released from peer ", peer_id, " for entity ", entity_path)
 	control_released.emit(peer_id, entity_path)
 
-func _client_control_request_denied(entity_path: NodePath):
-	print("ControlManager: Control request denied for entity ", entity_path)
-	control_request_denied.emit(multiplayer.get_unique_id(), entity_path)
-
-@rpc
-func _sync_client_control_granted(peer_id: int, entity_path: NodePath):
-	_client_control_granted(peer_id, entity_path)
-
-@rpc
-func _sync_client_control_released(peer_id: int, entity_path: NodePath):
-	_client_control_released(peer_id, entity_path)
+func _client_control_request_denied(peer_id: int, entity_path: NodePath):
+	print("ControlManager: Control request denied for peer ", peer_id, " for entity ", entity_path)
+	control_request_denied.emit(peer_id, entity_path)
+	if multiplayer.is_server():
+		rpc_id(peer_id, "_sync_client_control_request_denied", entity_path)
 
 @rpc
 func _sync_client_control_request_denied(entity_path: NodePath):
-	_client_control_request_denied(entity_path)
+	print("ControlManager: Syncing control request denied for entity ", entity_path)
+	control_request_denied.emit(multiplayer.get_unique_id(), entity_path)
 
 func is_entity_controlled(entity_path: NodePath) -> bool:
 	return entity_path in controlled_entities
