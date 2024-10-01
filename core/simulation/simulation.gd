@@ -83,6 +83,37 @@ func requesting_control(path):
 			else:
 				control_declined_notify.rpc_id(remote_id, path)
 
+# Add this new method to handle entity index-based control requests
+func request_control_by_index(entity_idx):
+	var requester_id = multiplayer.get_remote_sender_id()
+	if requester_id == 0:
+		requester_id = multiplayer.get_unique_id()
+	print("Simulation received control request for entity index: ", entity_idx, " from peer: ", requester_id)
+	if entity_idx < entities.size():
+		var entity = entities[entity_idx]
+		print("Requesting control for entity: ", entity.name)
+		if multiplayer.is_server():
+			_process_control_request(requester_id, entity.get_path())
+		else:
+			requesting_control.rpc_id(1, entity.get_path())
+	else:
+		print("Invalid entity index: ", entity_idx)
+		if multiplayer.is_server():
+			control_declined_notify.rpc_id(requester_id, NodePath(""))
+
+func _process_control_request(requester_id, path):
+	var _owner = owners.get(path) 
+		
+	if _owner == null: # TBD: Access control
+		owners[path] = requester_id
+		set_authority.rpc(path, requester_id)
+		control_granted_notify.rpc_id(requester_id, path)
+	else:
+		if _owner == requester_id:
+			release_control(path)
+		else:
+			control_declined_notify.rpc_id(requester_id, path)
+
 @rpc("any_peer", "call_local", "reliable")
 func release_control(path):
 	if multiplayer.is_server():
@@ -118,16 +149,7 @@ func _on_control_request_denied(peer_id, entity_path: NodePath):
 
 @rpc("any_peer")
 func _on_avatar_requesting_control(entity_idx):
-	var requester_id = multiplayer.get_remote_sender_id()
-	print("Simulation received control request for entity index: ", entity_idx, " from peer: ", requester_id)
-	if entity_idx < entities.size():
-		var entity = entities[entity_idx]
-		print("Requesting control for entity: ", entity.name)
-		ControlManager.request_control(entity.get_path(), requester_id)
-	else:
-		print("Invalid entity index: ", entity_idx)
-		if multiplayer.is_server():
-			ControlManager._client_control_request_denied(requester_id, NodePath(""))
+	request_control_by_index(entity_idx)
 
 func _on_avatar_release_control(path: NodePath):
 	var releaser_id = multiplayer.get_remote_sender_id()
@@ -153,7 +175,9 @@ func _on_select_entity_to_spawn(entity_id=0, position=null):
 	spawn.rpc_id(1, entity_id, position) #Spawning on server
 
 func _on_peer_disconnected(peer_id):
-	if multiplayer.is_server(): # Cleaning autority
-		for key in owners:
+	print("Peer disconnected: ", peer_id)
+	if multiplayer.is_server(): # Cleaning authority
+		for key in owners.keys():
 			if owners[key] == peer_id:
+				print("Releasing control for ", key, " from disconnected peer ", peer_id)
 				release_control(key)

@@ -67,14 +67,20 @@ func _release_control_internal(peer_id: int, entity_path: NodePath):
 		_client_control_released(peer_id, entity_path)
 
 func _client_control_granted(peer_id: int, entity_path: NodePath):
-	print("ControlManager: Control granted to peer ", peer_id, " for entity ", entity_path)
-	control_granted.emit(peer_id, entity_path)
+	print("ControlManager: Granting control to peer ", peer_id, " for entity ", entity_path)
 	if multiplayer.is_server():
-		rpc("_sync_client_control_granted", peer_id, entity_path)
+		_sync_client_control_granted.rpc(peer_id, entity_path)
+	else:
+		_sync_client_control_granted(peer_id, entity_path)
 
-@rpc
+@rpc("authority", "reliable")
 func _sync_client_control_granted(peer_id: int, entity_path: NodePath):
-	print("ControlManager: Syncing control granted to peer ", peer_id, " for entity ", entity_path)
+	print("ControlManager: Syncing control granted for peer ", peer_id, " and entity ", entity_path)
+	if not multiplayer.is_server():
+		controlled_entities[entity_path] = peer_id
+		if peer_id not in peer_controlled_entities:
+			peer_controlled_entities[peer_id] = []
+		peer_controlled_entities[peer_id].append(entity_path)
 	control_granted.emit(peer_id, entity_path)
 
 func _client_control_released(peer_id: int, entity_path: NodePath):

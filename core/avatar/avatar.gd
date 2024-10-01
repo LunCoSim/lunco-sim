@@ -249,7 +249,7 @@ func _on_select_entity_to_spawn(entity_id=0, position=null):
 
 func _on_existing_entity_selected(idx):
 	print("Avatar: Requesting control for entity index: ", idx)
-	get_parent()._on_avatar_requesting_control(idx)
+	get_parent().request_control_by_index(idx)
 
 func request_release_control():
 	if target:
