@@ -73,9 +73,6 @@ func set_camera(_camera):
 func _ready():
 	set_camera(camera)
 	set_target(target)
-	get_parent().control_granted.connect(_on_simulation_control_granted)
-	get_parent().control_declined.connect(_on_simulation_control_declined)
-	get_parent().control_released.connect(_on_simulation_control_released)
 
 #-----------------------------------------------------
 
