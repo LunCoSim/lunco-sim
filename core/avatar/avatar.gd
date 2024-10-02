@@ -118,7 +118,8 @@ func handle_click(event_position: Vector2):
 		var result = do_raycast_nft(from, to)
 		
 		if result and result.collider is StaticBody3D:
-			if not active_popup:  # Only create a new popup if one doesn't exist
+			if Input.is_key_pressed(KEY_CTRL):  # Check if Ctrl is pressed
+				if not active_popup:  # Only create a new popup if one doesn't exist
 					show_nft_popup(result.position)
 
 			# if Profile.wallet != "":  # Assuming you have a Global singleton to check login status
