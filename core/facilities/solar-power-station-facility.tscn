@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3 uid="uid://86xeuneoxogv"]
+
+[ext_resource type="Script" path="res://core/facilities/solar-power-station-facility.gd" id="1_d42ye"]
+
+[node name="SolarPowerStationFacility" type="Node3D"]
+script = ExtResource("1_d42ye")
