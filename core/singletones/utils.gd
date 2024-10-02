@@ -21,23 +21,23 @@ static func find_camera(from: Array, exclude, cameras: Array):
 func grab_camera() -> Camera3D:
 	var _camera: Camera3D
 
-	# Check if the game is running in the editor
-	if Engine.is_editor_hint():
-		# List to store the found 'Camera3D' nodes
-		var cameras = []
-
-		# Find 'Camera3D' nodes in the editor's main screen
-		find_camera(EditorInterface.get_editor_main_screen().get_children(), EditorInterface.get_edited_scene_root(), cameras)
-
-		# Use the first found 'Camera3D' node
-		if cameras.size():
-			_camera = cameras[0]
-
-	# Check if the game is running outside of the editor
-	else:
-		# Get the current 'Camera3D' node from the 'Viewport' node
-		if get_viewport():
-			_camera = get_viewport().get_camera_3d()
-		
+	## Check if the game is running in the editor
+	#if Engine.is_editor_hint():
+		## List to store the found 'Camera3D' nodes
+		#var cameras = []
+#
+		## Find 'Camera3D' nodes in the editor's main screen
+		#find_camera(EditorInterface.get_editor_main_screen().get_children(), EditorInterface.get_edited_scene_root(), cameras)
+#
+		## Use the first found 'Camera3D' node
+		#if cameras.size():
+			#_camera = cameras[0]
+#
+	## Check if the game is running outside of the editor
+	#else:
+		## Get the current 'Camera3D' node from the 'Viewport' node
+		#if get_viewport():
+			#_camera = get_viewport().get_camera_3d()
+		#
 	# Return the grabbed 'Camera3D' node
 	return _camera

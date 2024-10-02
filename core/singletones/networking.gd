@@ -29,7 +29,7 @@ func connect_to_server(ip: String="langrenus.lunco.space", port: int = 9000):
 	# Creating a client
 	Logger.info("Connecting to server: %s:%d" % [ip, port] )
 	print("Connecting to server")
-	print("ws://%s:%d" % [ip, port])
+	print("wss://%s:%d" % [ip, port])
 	peer.create_client("ws://%s:%d" % [ip, port])
 	multiplayer.multiplayer_peer = peer
 	# Assigning the peer to this multiplayer's peer
