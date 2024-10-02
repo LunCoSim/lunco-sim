@@ -340,8 +340,10 @@ func show_nft_popup(position: Vector3):
 	active_popup.connect("tree_exited", Callable(self, "_on_popup_closed"))
 
 func _on_nft_issued(nft_data, position: Vector3):
+	print("NFT issued with data: ", nft_data)  # Debug print
 	spawn_nft_sphere(nft_data, position)
 	# Here you would also send the NFT data to the server for persistence
+	active_popup.queue_free()
 	active_popup = null  # Clear the active popup reference
 
 func _on_popup_closed():
@@ -352,3 +354,5 @@ func spawn_nft_sphere(nft_data, position: Vector3):
 	nft_sphere.set_nft_data(nft_data)
 	nft_sphere.global_transform.origin = position + Vector3(0, 1, 0)  # Offset slightly above the ground
 	%Universe.add_child(nft_sphere)
+	print("Spawned NFT sphere at position: ", nft_sphere.global_transform.origin)
+	print("NFT data set: ", nft_data)  # Debug print

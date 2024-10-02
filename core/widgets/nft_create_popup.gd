@@ -12,8 +12,9 @@ func _ready():
 func _on_issue_button_pressed():
 	var nft_data = {
 		"name": name_input.text,
-		"color": color_picker.color.to_html(false)
+		"color": "#" + color_picker.color.to_html(false)
 	}
+	print("Issuing NFT with data: ", nft_data)  # Debug print
 	emit_signal("nft_issued", nft_data)
 	queue_free()  # Close the popup after issuing
 
