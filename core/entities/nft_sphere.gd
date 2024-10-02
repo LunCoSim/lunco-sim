@@ -34,14 +34,16 @@ func update_appearance():
 	else:
 		print("Failed to update label. Label exists: ", label != null, ", nft_data has name: ", nft_data.has("name"))
 	
-	if nft_data.has("color") and mesh:
+	if mesh:
 		var material = StandardMaterial3D.new()
-		var color = Color.from_string(nft_data["color"], Color.WHITE)
+		var color = Color.WHITE  # Default color is white
+		if nft_data.has("color"):
+			color = Color.from_string(nft_data["color"], Color.WHITE)
 		material.albedo_color = color
 		mesh.material_override = material
 		print("Updated mesh color to: ", color)
 	else:
-		print("Failed to update mesh color. Mesh exists: ", mesh != null, ", nft_data has color: ", nft_data.has("color"))
+		print("Failed to update mesh color. Mesh exists: ", mesh != null)
 
 	# Force update of the node
 	if label:

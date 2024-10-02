@@ -8,6 +8,7 @@ signal nft_issued(nft_data)
 
 func _ready():
 	issue_button.connect("pressed", Callable(self, "_on_issue_button_pressed"))
+	color_picker.color = Color.WHITE  # Set default color to white
 
 func _on_issue_button_pressed():
 	var nft_data = {

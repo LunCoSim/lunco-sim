@@ -78,9 +78,68 @@ func _ready():
 
 #-----------------------------------------------------
 
+# Add these new constants
+const NFT_SPHERE_SCENE = preload("res://core/entities/nft-sphere.tscn")
+const POPUP_SCENE = preload("res://core/widgets/nft-create-popup.tscn")
+
+# Add this as a class variable
+var active_popup: Control = null
+
+# Add this new function
+func handle_click(event_position: Vector2):
+	# First, check if we clicked on the existing popup
+	if active_popup and active_popup.get_global_rect().has_point(event_position):
+		return  # Ignore clicks on the popup itself
+
+	if camera:
+		var from = camera.project_ray_origin(event_position)
+		var to = from + camera.project_ray_normal(event_position) * RAY_LENGTH
+		var result = do_raycast_nft(from, to)
+		
+		if result and result.collider is StaticBody3D:
+			if Profile.wallet != "":  # Assuming you have a Global singleton to check login status
+				if not active_popup:  # Only create a new popup if one doesn't exist
+					show_nft_popup(result.position)
+			else:
+				print("Please log in with Web3 wallet first")
+
+# Add this new function (renamed from do_raycast to do_raycast_nft)
+func do_raycast_nft(from: Vector3, to: Vector3):        
+	var space_state = %Universe.get_world_3d().direct_space_state
+	
+	var query = PhysicsRayQueryParameters3D.create(from, to)
+	query.exclude = [self]
+	return space_state.intersect_ray(query)
+
+# Add these new functions
+func show_nft_popup(position: Vector3):
+	active_popup = POPUP_SCENE.instantiate()
+	add_child(active_popup)
+
+	active_popup.connect("nft_issued", Callable(self, "_on_nft_issued").bind(position))
+	active_popup.connect("tree_exited", Callable(self, "_on_popup_closed"))
+
+func _on_nft_issued(nft_data, position: Vector3):
+	print("NFT issued with data: ", nft_data)  # Debug print
+	spawn_nft_sphere(nft_data, position)
+	# Here you would also send the NFT data to the server for persistence
+	active_popup.queue_free()
+	active_popup = null  # Clear the active popup reference
+
+func _on_popup_closed():
+	active_popup = null  # Clear the active popup reference when it's closed
+
+func spawn_nft_sphere(nft_data, position: Vector3):
+	var nft_sphere = NFT_SPHERE_SCENE.instantiate()
+	nft_sphere.set_nft_data(nft_data)
+	nft_sphere.global_transform.origin = position + Vector3(0, 1, 0)  # Offset slightly above the ground
+	%Universe.add_child(nft_sphere)
+	print("Spawned NFT sphere at position: ", nft_sphere.global_transform.origin)
+	print("NFT data set: ", nft_data)  # Debug print
+
 func _input(event):
-	#if Input.is_action_just_pressed("click"): #TBD Move to tools
-		#action_raycast(event.position) # TBD: Event could be different then expected
+	if active_popup:
+		return  # Ignore input when popup is active
 
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
 		handle_click(event.position)
@@ -297,62 +356,3 @@ func _on_control_request_denied(peer_id: int, entity_path: NodePath):
 	if peer_id == multiplayer.get_unique_id():
 		print("Avatar: Control denied for entity: ", entity_path)
 		# Update UI or show a message to the user
-
-# Add these new constants
-const NFT_SPHERE_SCENE = preload("res://core/entities/nft-sphere.tscn")
-const POPUP_SCENE = preload("res://core/widgets/nft-create-popup.tscn")
-
-# Add this as a class variable
-var active_popup: Control = null
-
-# Add this new function
-func handle_click(event_position: Vector2):
-	# First, check if we clicked on the existing popup
-	if active_popup and active_popup.get_global_rect().has_point(event_position):
-		return  # Ignore clicks on the popup itself
-
-	if camera:
-		var from = camera.project_ray_origin(event_position)
-		var to = from + camera.project_ray_normal(event_position) * RAY_LENGTH
-		var result = do_raycast_nft(from, to)
-		
-		if result and result.collider is StaticBody3D:
-			if Profile.wallet != "":  # Assuming you have a Global singleton to check login status
-				if not active_popup:  # Only create a new popup if one doesn't exist
-					show_nft_popup(result.position)
-			else:
-				print("Please log in with Web3 wallet first")
-
-# Add this new function (renamed from do_raycast to do_raycast_nft)
-func do_raycast_nft(from: Vector3, to: Vector3):        
-	var space_state = %Universe.get_world_3d().direct_space_state
-	
-	var query = PhysicsRayQueryParameters3D.create(from, to)
-	query.exclude = [self]
-	return space_state.intersect_ray(query)
-
-# Add these new functions
-func show_nft_popup(position: Vector3):
-	active_popup = POPUP_SCENE.instantiate()
-	add_child(active_popup)
-
-	active_popup.connect("nft_issued", Callable(self, "_on_nft_issued").bind(position))
-	active_popup.connect("tree_exited", Callable(self, "_on_popup_closed"))
-
-func _on_nft_issued(nft_data, position: Vector3):
-	print("NFT issued with data: ", nft_data)  # Debug print
-	spawn_nft_sphere(nft_data, position)
-	# Here you would also send the NFT data to the server for persistence
-	active_popup.queue_free()
-	active_popup = null  # Clear the active popup reference
-
-func _on_popup_closed():
-	active_popup = null  # Clear the active popup reference when it's closed
-
-func spawn_nft_sphere(nft_data, position: Vector3):
-	var nft_sphere = NFT_SPHERE_SCENE.instantiate()
-	nft_sphere.set_nft_data(nft_data)
-	nft_sphere.global_transform.origin = position + Vector3(0, 1, 0)  # Offset slightly above the ground
-	%Universe.add_child(nft_sphere)
-	print("Spawned NFT sphere at position: ", nft_sphere.global_transform.origin)
-	print("NFT data set: ", nft_data)  # Debug print
