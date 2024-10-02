@@ -79,7 +79,7 @@ func _ready():
 #-----------------------------------------------------
 
 # Add these new constants
-const NFT_SPHERE_SCENE = preload("res://core/entities/nft-sphere.tscn")
+const NFT_SPHERE_SCENE = preload("res://core/facilities/nft-sphere.tscn")
 const POPUP_SCENE = preload("res://core/widgets/nft-create-popup.tscn")
 
 # Add this as a class variable
