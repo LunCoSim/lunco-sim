@@ -34,6 +34,9 @@ func connect_to_server(ip: String="langrenus.lunco.space", port: int = 9000):
 	multiplayer.multiplayer_peer = peer
 	# Assigning the peer to this multiplayer's peer
 
+func connect_to_local_server():
+	connect_to_server("127.0.0.1", 9000)
+
 # Function to start hosting a server
 func host(port: int = 9000):
 	if not multiplayer.multiplayer_peer is WebSocketMultiplayerPeer:

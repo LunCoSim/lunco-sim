@@ -31,6 +31,10 @@ func _ready():
 	if "--server" in OS.get_cmdline_args():
 		print("Headless running")
 		LCNet.host()
+	elif "--connect" in OS.get_cmdline_args():
+		# Wait for 2 seconds, then connect
+		get_tree().create_timer(2.0).timeout.connect(LCNet.connect_to_local_server)
+
 	multiplayer.peer_disconnected.connect(_on_peer_disconnected)
 	ControlManager.control_granted.connect(_on_control_granted)
 	ControlManager.control_released.connect(_on_control_released)
