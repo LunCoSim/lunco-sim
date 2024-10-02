@@ -1,0 +1,19 @@
+[gd_scene load_steps=4 format=3 uid="uid://b8uc8kmxdqpe7"]
+
+[ext_resource type="Script" path="res://core/entities/nft_sphere.gd" id="1_1jxd5"]
+
+[sub_resource type="SphereMesh" id="SphereMesh_yjk2r"]
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_8n4xv"]
+
+[node name="NftSphere" type="Node3D"]
+script = ExtResource("1_1jxd5")
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="."]
+mesh = SubResource("SphereMesh_yjk2r")
+surface_material_override/0 = SubResource("StandardMaterial3D_8n4xv")
+
+[node name="Label3D" type="Label3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.5, 0)
+billboard = 1
+text = "NFT Name"
