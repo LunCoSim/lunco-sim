@@ -38,7 +38,7 @@ grow_vertical = 0
 
 [node name="Spawn3" type="Label" parent="EntitiesContrainer"]
 layout_mode = 2
-text = "Create entities (Alt+#)"
+text = "Create Entities (Alt+#)"
 
 [node name="Entities" type="ItemList" parent="EntitiesContrainer"]
 unique_name_in_owner = true
@@ -81,7 +81,7 @@ theme = SubResource("Theme_kf4je")
 
 [node name="Spawn3" type="Label" parent="LivesEntitiesContrainer"]
 layout_mode = 2
-text = "Take control (1-8)"
+text = "Take Control (1-8)"
 
 [node name="LiveEntities" type="HBoxContainer" parent="LivesEntitiesContrainer"]
 unique_name_in_owner = true
@@ -120,7 +120,7 @@ text = "Disconnect Wallet"
 [node name="WalletInfoLabel" type="Label" parent="WalletInfo"]
 unique_name_in_owner = true
 layout_mode = 2
-text = "Not connected"
+text = "Not Connected"
 
 [node name="ProfileNFT" type="Label" parent="WalletInfo"]
 unique_name_in_owner = true
