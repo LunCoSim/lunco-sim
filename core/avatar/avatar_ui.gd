@@ -115,11 +115,13 @@ func _on_profile_changed():
 func _update_connection_status():
 	%ConnectWallet.visible = Profile.wallet == ""
 	%DisconnectWallet.visible = Profile.wallet != ""
-	%WalletInfoLabel.text = Profile.wallet if Profile.wallet != "" else "Not connected"
-	%ProfileNFT.text = "Profile NFT: " + ("Yes" if Profile.has_profile > 0 else "No")
-	%GitcoinDonor.text = "Gitcoin Donor: " + ("Yes" if Profile.is_donor() else "No")
-	%SpecialDonor.text = "Special Donor: " + ("Yes" if Profile.is_special_donor() else "No")
-	%ArtizenBuyer.text = "Artizen Buyer: " + ("Yes" if Profile.is_artizen_buyer else "No")
+
+	
+
+	%WalletInfoLabel.text = ("Connected: " + Profile.wallet.substr(0, 8) + "...") if Profile.wallet != "" else "Not connected"
+	%ProfileNFT.text = "Yes" if Profile.has_profile > 0 else "No"
+	%GitcoinDonor.text = "Yes" if Profile.is_donor() else "No"
+	%ArtizenBuyer.text = "Yes" if Profile.is_artizen_buyer else "No"
 
 func _on_connect_wallet_pressed():
 	Profile.login()
