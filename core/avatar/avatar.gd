@@ -90,8 +90,8 @@ var active_popup: Control = null
 func spawn_nft_sphere(nft_data: Dictionary, position: Vector3):
 	var nft_sphere = NFT_SPHERE_SCENE.instantiate()
 	nft_sphere.set_nft_data(nft_data)
-	nft_sphere.global_transform.origin = position + Vector3(0, 1, 0)  # Offset slightly above the ground
 	%Universe.add_child(nft_sphere)
+	nft_sphere.global_transform.origin = position + Vector3(0, 1, 0)  # Offset slightly above the ground
 	print("Spawned NFT sphere at position: ", nft_sphere.global_transform.origin)
 	print("NFT data set: ", nft_data)  # Debug print
 
