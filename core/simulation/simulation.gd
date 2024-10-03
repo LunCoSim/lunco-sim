@@ -25,6 +25,8 @@ var owners = {}
 # Called when the node enters the scene tree for the first time.
 func _ready():
 	Panku.gd_exprenv.register_env("Avatar", $Avatar)
+	Panku.module_manager.get_module("native_logger").toggle_overlay()
+
 	print("Main ready")
 	print(OS.get_cmdline_args())
 	## TBD Move to separate file, as new modes like chat-server are appearing
