@@ -1,0 +1,55 @@
+[gd_scene load_steps=10 format=3 uid="uid://0k310chob81y"]
+
+[ext_resource type="PackedScene" uid="uid://oulno1atrp8k" path="res://core/simulation/simulation.tscn" id="1_kjl25"]
+[ext_resource type="PackedScene" uid="uid://cpbv4fmfxppt1" path="res://modules/solar_system_planets/sun.tscn" id="2_bjryh"]
+[ext_resource type="PackedScene" uid="uid://ddaqlkbgl7bdl" path="res://modules/solar_system_planets/earth.tscn" id="3_tu3pr"]
+[ext_resource type="PackedScene" uid="uid://csqh45xcqbewi" path="res://modules/solar_system_planets/moon.tscn" id="4_ijb73"]
+[ext_resource type="PackedScene" uid="uid://c7q7gaaaa8g5g" path="res://content/maps/Langrenus/langrenus_crater_map.tscn" id="5_b5dpc"]
+[ext_resource type="PackedScene" uid="uid://dmxcgvtora8v2" path="res://content/content.tscn" id="6_aowbr"]
+[ext_resource type="PackedScene" uid="uid://2f4aecforicx" path="res://content/moonwards/buildings/satellite-dish/satellite-dish.escn" id="7_haqp2"]
+[ext_resource type="PackedScene" uid="uid://cpjdvh1eaof2y" path="res://content/moonwards/buildings/nuclear-core/nuclear-core.escn" id="8_06btw"]
+
+[sub_resource type="Curve3D" id="Curve3D_2ufu6"]
+_data = {
+"points": PackedVector3Array(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.0260512, 0.0290671, 0.0330517, 0, 0, 0, 0, 0, 0, 0.12285, 0.0364888, 0.0169924, 0, 0, 0, 0, 0, 0, 0.216668, 0.0669681, -0.0352009, 0, 0, 0, 0, 0, 0, -6.68716, -0.609709, -3.81851),
+"tilts": PackedFloat32Array(0, 0, 0, 0, 0)
+}
+point_count = 5
+
+[node name="Simulation" instance=ExtResource("1_kjl25")]
+
+[node name="Avatar" parent="." index="0"]
+transform = Transform3D(-0.82255, -0.00837469, 0.568631, 0.00348538, 0.999798, 0.0197666, -0.568682, 0.0182409, -0.822355, -12.653, 7.06782, 1.34696)
+
+[node name="MultiplayerSpawner" parent="." index="1"]
+_spawnable_scenes = PackedStringArray("res://content/starship/starship.tscn", "res://core/entities/operator.tscn", "res://content/gobot/gobot.tscn", "res://content/animated-astronaut-character-in-space-suit-loop/astronaut.tscn")
+spawn_path = NodePath("../Universe/Sun/Earth/Moon/LangrenusCraterMap/Spawner")
+
+[node name="Sun" parent="Universe" index="1" instance=ExtResource("2_bjryh")]
+
+[node name="Earth" parent="Universe/Sun" index="1" instance=ExtResource("3_tu3pr")]
+
+[node name="Moon" parent="Universe/Sun/Earth" index="0" instance=ExtResource("4_ijb73")]
+
+[node name="LangrenusCraterMap" parent="Universe/Sun/Earth/Moon" index="0" instance=ExtResource("5_b5dpc")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 51, 0)
+
+[node name="Spawner" type="Node3D" parent="Universe/Sun/Earth/Moon/LangrenusCraterMap" index="2"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -55.4874, 0)
+
+[node name="satellite-dish" parent="Universe/Sun/Earth/Moon/LangrenusCraterMap/Spawner" index="0" instance=ExtResource("7_haqp2")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -2.15879, -34.0819, 107.581)
+
+[node name="nuclear-core" parent="Universe/Sun/Earth/Moon/LangrenusCraterMap/Spawner" index="1" instance=ExtResource("8_06btw")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 66.2471, -25.794, 111.261)
+
+[node name="Content" parent="Universe/Sun/Earth/Moon/LangrenusCraterMap" index="3" instance=ExtResource("6_aowbr")]
+
+[node name="LaunchPad" type="Node3D" parent="Universe/Sun/Earth/Moon/LangrenusCraterMap/Content" index="0"]
+transform = Transform3D(107.71, 0, 22.3273, 0, 110, 0, -22.3273, 0, 107.71, 156.754, -87.3701, -339.067)
+
+[node name="Path3D" type="Path3D" parent="." index="3"]
+curve = SubResource("Curve3D_2ufu6")
+
+[node name="PathFollow3D" type="PathFollow3D" parent="Path3D" index="0"]
+transform = Transform3D(-0.785371, -0.351798, -0.509343, 2.98023e-08, 0.822815, -0.568309, 0.619026, -0.446334, -0.646214, 0, 0, 0)
