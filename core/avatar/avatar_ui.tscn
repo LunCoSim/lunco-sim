@@ -65,7 +65,7 @@ anchors_preset = 12
 anchor_top = 1.0
 anchor_right = 1.0
 anchor_bottom = 1.0
-offset_top = -77.0
+offset_top = -57.0
 grow_horizontal = 2
 grow_vertical = 0
 theme = SubResource("Theme_kf4je")
@@ -76,7 +76,7 @@ text = "Take Control (1-8)"
 
 [node name="LiveEntities" type="HBoxContainer" parent="LivesEntitiesContrainer"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 50)
+custom_minimum_size = Vector2(0, 30)
 layout_mode = 2
 mouse_force_pass_scroll_events = false
 
