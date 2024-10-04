@@ -5,7 +5,7 @@ extends Node
 #------------------------------------
 
 func _ready():
-	$Version.text = "v. " + str(ProjectSettings.get_setting("application/config/version"))
+	$Version.text = "v" + str(ProjectSettings.get_setting("application/config/version"))
 	on_reload_profile()
 	
 	Messenger.profile_wallet_changed.connect(on_reload_profile)
