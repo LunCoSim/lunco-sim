@@ -44,6 +44,7 @@ layout_mode = 2
 text = "Connected Users"
 
 [node name="Users" type="ItemList" parent="EntityUserContainer/UsersContainer"]
+unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 150)
 layout_mode = 2
 

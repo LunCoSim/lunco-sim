@@ -95,7 +95,7 @@ func update_entities(entities):
 		idx += 1
 
 func _on_update_connected_users():
-	var tree: ItemList = $UsersContainer/Users
+	var tree: ItemList = %Users
 	
 	tree.clear()
 	for user in Users.users:
