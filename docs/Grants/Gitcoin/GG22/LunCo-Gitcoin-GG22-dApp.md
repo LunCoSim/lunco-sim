@@ -87,3 +87,27 @@ The most common approach to knowledge sharing is email, which, while universal, 
 4. [1300 followers on Linkedin](https://www.linkedin.com/company/luncosim/) 
 5. [Discord](https://discord.gg/uTEFrW32) 
 7. [Youtube](https://www.youtube.com/@LunCoSim)
+
+
+# Questions
+
+o accelerate the adoption and development of Open Source dApps and apps offering novel utilities or services within the ecosystem. This includes dApps and apps enhancing Web3 accessibility and usability and those contributing to financial inclusion, education, and social impact.
+Application Period:
+Mon, Sep 30, 2024, 7:00:00 PM +07 - Wed, Oct 30, 2024, 6:59:00 AM +07
+Round Dates:
+Wed, Oct 23, 2024, 7:00:00 PM +07 - Thu, Jan 2, 2025, 7:59:00 AM +07
+Eligibility Requirements:
+1. Demonstrate user-centric design and functionality
+2. Show contribution to Web3 ecosystem growth
+3. Present innovation in application use cases
+4. Meet the general eligibility criteria for Gitcoin Grants, including open-source principles and ethical standards
+
+
+--------
+Have you participated in a previous Gitcoin Grants Round? If so, please name the rounds or link the builder profile associated with previous rounds.
+--------
+How does your project contribute to the growth of the OSS ecosystem? Please provide specific examples of how your application enhances or expands the current ecosystem.
+--------
+What features or use cases does your dApp/App present? How is it differentiated?
+--------
+What are your plans for further development, and how will the grant funds be used to achieve these goals?
