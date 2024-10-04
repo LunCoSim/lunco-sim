@@ -25,6 +25,8 @@ const RAY_LENGTH = 10000
 @export var entity_to_spawn = EntitiesDB.Entities.Astronaut
 @export var selection: = []
 
+@export var CATCH_CAMERA := true
+
 #-------------------------------
 # Defining UI and camera variables
 @onready var ui := $UI
@@ -65,7 +67,7 @@ func set_target(_target):
 # Function set_camera sets the camera and make it current if camera exists
 func set_camera(_camera):
 	camera = _camera
-	if camera:
+	if camera and CATCH_CAMERA:
 		camera.set_current()
 
 #-------------------------------
