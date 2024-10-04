@@ -24,49 +24,40 @@ mouse_filter = 2
 theme = SubResource("Theme_mfhp6")
 script = ExtResource("1_igs02")
 
-[node name="EntitiesContrainer" type="VBoxContainer" parent="."]
+[node name="EntityUserContainer" type="VBoxContainer" parent="."]
 layout_mode = 1
 anchors_preset = 3
 anchor_left = 1.0
 anchor_top = 1.0
 anchor_right = 1.0
 anchor_bottom = 1.0
-offset_left = -170.0
-offset_top = -177.0
+offset_left = -200.0
+offset_top = -358.0
 grow_horizontal = 0
 grow_vertical = 0
 
-[node name="Spawn3" type="Label" parent="EntitiesContrainer"]
+[node name="UsersContainer" type="VBoxContainer" parent="EntityUserContainer"]
 layout_mode = 2
-text = "Create Entities (Alt+#)"
 
-[node name="Entities" type="ItemList" parent="EntitiesContrainer"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(170, 150)
-layout_mode = 2
-auto_height = true
-
-[node name="UsersContainer" type="VBoxContainer" parent="."]
-layout_mode = 1
-anchors_preset = 6
-anchor_left = 1.0
-anchor_top = 0.5
-anchor_right = 1.0
-anchor_bottom = 0.5
-offset_left = -170.0
-offset_top = -88.5
-offset_bottom = 88.5
-grow_horizontal = 0
-grow_vertical = 2
-
-[node name="Spawn3" type="Label" parent="UsersContainer"]
+[node name="ConnectedUsersLabel" type="Label" parent="EntityUserContainer/UsersContainer"]
 layout_mode = 2
 text = "Connected Users"
 
-[node name="Users" type="ItemList" parent="UsersContainer"]
-custom_minimum_size = Vector2(170, 150)
+[node name="Users" type="ItemList" parent="EntityUserContainer/UsersContainer"]
+custom_minimum_size = Vector2(0, 150)
 layout_mode = 2
-auto_height = true
+
+[node name="EntitiesContainer" type="VBoxContainer" parent="EntityUserContainer"]
+layout_mode = 2
+
+[node name="CreateEntitiesLabel" type="Label" parent="EntityUserContainer/EntitiesContainer"]
+layout_mode = 2
+text = "Create Entities (Alt+#)"
+
+[node name="Entities" type="ItemList" parent="EntityUserContainer/EntitiesContainer"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 150)
+layout_mode = 2
 
 [node name="LivesEntitiesContrainer" type="VBoxContainer" parent="."]
 layout_mode = 1
@@ -100,9 +91,7 @@ anchors_preset = 1
 anchor_left = 1.0
 anchor_right = 1.0
 offset_left = -200.0
-offset_top = 10.0
-offset_right = -10.0
-offset_bottom = 146.0
+offset_bottom = 200.0
 grow_horizontal = 0
 
 [node name="ConnectWallet" type="Button" parent="WalletInfo"]
@@ -164,7 +153,7 @@ unique_name_in_owner = true
 layout_mode = 2
 text = "No"
 
-[connection signal="item_selected" from="EntitiesContrainer/Entities" to="." method="_on_entities_item_selected"]
-[connection signal="item_selected" from="UsersContainer/Users" to="." method="_on_entities_item_selected"]
+[connection signal="item_selected" from="EntityUserContainer/UsersContainer/Users" to="." method="_on_users_item_selected"]
+[connection signal="item_selected" from="EntityUserContainer/EntitiesContainer/Entities" to="." method="_on_entities_item_selected"]
 [connection signal="pressed" from="WalletInfo/ConnectWallet" to="." method="_on_connect_wallet_pressed"]
 [connection signal="pressed" from="WalletInfo/DisconnectWallet" to="." method="_on_disconnect_wallet_pressed"]
