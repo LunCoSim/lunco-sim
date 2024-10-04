@@ -44,3 +44,6 @@ func toggle_chat():
 		ChatWindow.hide_window()
 	else:
 		ChatWindow.show_window()
+
+func hide_tutorial():
+	TutorialWindow.hide_window()
