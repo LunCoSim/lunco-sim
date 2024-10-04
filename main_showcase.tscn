@@ -1,4 +1,4 @@
-[gd_scene load_steps=11 format=3 uid="uid://0k310chob81y"]
+[gd_scene load_steps=14 format=3 uid="uid://0k310chob81y"]
 
 [ext_resource type="PackedScene" uid="uid://oulno1atrp8k" path="res://core/simulation/simulation.tscn" id="1_kjl25"]
 [ext_resource type="PackedScene" uid="uid://cpbv4fmfxppt1" path="res://modules/solar_system_planets/sun.tscn" id="2_bjryh"]
@@ -12,10 +12,111 @@
 
 [sub_resource type="Curve3D" id="Curve3D_pallq"]
 _data = {
-"points": PackedVector3Array(0, 0, 0, 0, 0, 0, 0, 0, 0),
-"tilts": PackedFloat32Array(0)
+"points": PackedVector3Array(100, 0, 0, 0, 0, 0, 7.45788, 39.6199, 49.172, 45.1258, -58.0854, 18.556, -45.1258, 58.0854, -18.556, 0, 0, 0, -56.5985, -15.8965, 7.27766, 56.5985, 15.8965, -7.27766, 25.8122, -3.09983, -67.4544, 8.70805, -1.86993, -16.0661, -8.70805, 1.86993, 16.0661, 91.8673, -19.4955, 48.5958, 11.995, -17.3153, 24.0002, -11.995, 17.3153, -24.0002, -0.717346, -13.738, 42.9793),
+"tilts": PackedFloat32Array(0, 0, 0, 0, 0)
 }
-point_count = 1
+point_count = 5
+
+[sub_resource type="Animation" id="Animation_uoaro"]
+resource_name = "new_animation"
+length = 10.0
+tracks/0/type = "bezier"
+tracks/0/imported = false
+tracks/0/enabled = true
+tracks/0/path = NodePath("Path3D/PathFollow3D:progress_ratio")
+tracks/0/interp = 1
+tracks/0/loop_wrap = true
+tracks/0/keys = {
+"handle_modes": PackedInt32Array(0, 0),
+"points": PackedFloat32Array(0, -0.25, 0, 0.25, 0, 1, 0, 0, 0, 0),
+"times": PackedFloat32Array(0, 10)
+}
+tracks/1/type = "bezier"
+tracks/1/imported = false
+tracks/1/enabled = true
+tracks/1/path = NodePath("Path3D/PathFollow3D/Camera3D:rotation:x")
+tracks/1/interp = 1
+tracks/1/loop_wrap = true
+tracks/1/keys = {
+"handle_modes": PackedInt32Array(0, 0, 0, 0, 0),
+"points": PackedFloat32Array(0, -0.25, 0, 0.25, 0, 0, -0.25, 0, 0.25, 0, 0, -0.25, 0, 0.25, 0, 0, -0.25, 0, 0.25, 0, 0, -0.25, 0, 0.25, 0),
+"times": PackedFloat32Array(3.31779, 4.30818, 7.10601, 7.13333, 10)
+}
+tracks/2/type = "bezier"
+tracks/2/imported = false
+tracks/2/enabled = true
+tracks/2/path = NodePath("Path3D/PathFollow3D/Camera3D:rotation:y")
+tracks/2/interp = 1
+tracks/2/loop_wrap = true
+tracks/2/keys = {
+"handle_modes": PackedInt32Array(0, 0, 0, 0, 0),
+"points": PackedFloat32Array(0, -0.25, 0, 0.25, 0, -1.62839, -0.25, 0, 0.25, 0, -2.19911, -0.25, 0, 0.25, 0, -0.805, -0.25, 0, 0.25, 0, -0.232129, -0.25, 0, 0.25, 0),
+"times": PackedFloat32Array(3.31779, 4.30818, 7.10601, 8.16667, 10)
+}
+tracks/3/type = "bezier"
+tracks/3/imported = false
+tracks/3/enabled = true
+tracks/3/path = NodePath("Path3D/PathFollow3D/Camera3D:rotation:z")
+tracks/3/interp = 1
+tracks/3/loop_wrap = true
+tracks/3/keys = {
+"handle_modes": PackedInt32Array(0, 0, 0, 0),
+"points": PackedFloat32Array(0, -0.25, 0, 0.25, 0, 0, -0.25, 0, 0.25, 0, 0, -0.25, 0, 0.25, 0, 0, -0.25, 0, 0.25, 0),
+"times": PackedFloat32Array(3.31779, 4.30818, 7.10601, 10)
+}
+
+[sub_resource type="Animation" id="Animation_m3ybo"]
+length = 0.001
+tracks/0/type = "bezier"
+tracks/0/imported = false
+tracks/0/enabled = true
+tracks/0/path = NodePath("Path3D/PathFollow3D:progress_ratio")
+tracks/0/interp = 1
+tracks/0/loop_wrap = true
+tracks/0/keys = {
+"handle_modes": PackedInt32Array(0),
+"points": PackedFloat32Array(0, -0.25, 0, 0.25, 0),
+"times": PackedFloat32Array(0)
+}
+tracks/1/type = "bezier"
+tracks/1/imported = false
+tracks/1/enabled = true
+tracks/1/path = NodePath("Path3D/PathFollow3D/Camera3D:rotation:x")
+tracks/1/interp = 1
+tracks/1/loop_wrap = true
+tracks/1/keys = {
+"handle_modes": PackedInt32Array(0),
+"points": PackedFloat32Array(0, -0.25, 0, 0.25, 0),
+"times": PackedFloat32Array(0)
+}
+tracks/2/type = "bezier"
+tracks/2/imported = false
+tracks/2/enabled = true
+tracks/2/path = NodePath("Path3D/PathFollow3D/Camera3D:rotation:y")
+tracks/2/interp = 1
+tracks/2/loop_wrap = true
+tracks/2/keys = {
+"handle_modes": PackedInt32Array(0),
+"points": PackedFloat32Array(0, -0.25, 0, 0.25, 0),
+"times": PackedFloat32Array(0)
+}
+tracks/3/type = "bezier"
+tracks/3/imported = false
+tracks/3/enabled = true
+tracks/3/path = NodePath("Path3D/PathFollow3D/Camera3D:rotation:z")
+tracks/3/interp = 1
+tracks/3/loop_wrap = true
+tracks/3/keys = {
+"handle_modes": PackedInt32Array(0),
+"points": PackedFloat32Array(0, -0.25, 0, 0.25, 0),
+"times": PackedFloat32Array(0)
+}
+
+[sub_resource type="AnimationLibrary" id="AnimationLibrary_rtj8d"]
+_data = {
+&"RESET": SubResource("Animation_m3ybo"),
+&"new_animation": SubResource("Animation_uoaro")
+}
 
 [node name="Simulation" instance=ExtResource("1_kjl25")]
 script = ExtResource("2_iqwup")
@@ -55,14 +156,26 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -2.15879, -89.5693, 119.006)
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 66.2471, -81.2814, 122.686)
 
 [node name="Path3D" type="Path3D" parent="." index="3"]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 5.45948, 0, 96.7412)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 24.2995, -18.8672, 126.144)
 curve = SubResource("Curve3D_pallq")
 
 [node name="PathFollow3D" type="PathFollow3D" parent="Path3D" index="0"]
-transform = Transform3D(0.330778, 0, 0.943705, 0, 0.999998, 0, -0.943708, 0, 0.330777, 10.431, 0, 3.65617)
+transform = Transform3D(0.894389, 0, 0.447005, 0, 0.999993, 0, -0.447006, 0, 0.894387, -0.717346, -13.738, 42.9793)
+rotation_edit_mode = 1
+progress = 486.935
+rotation_mode = 1
 
 [node name="Camera3D" type="Camera3D" parent="Path3D/PathFollow3D" index="0"]
-transform = Transform3D(0.330778, 0, -0.943709, 0, 1, 0, 0.943712, 0, 0.330779, 89.4896, 0, -48.2054)
+transform = Transform3D(0.973182, 0, -0.23005, 0, 1, 0, 0.23005, 0, 0.97318, 0, 0, 0)
 current = true
+
+[node name="AnimationPlayer" type="AnimationPlayer" parent="." index="4"]
+deterministic = true
+reset_on_save = false
+libraries = {
+&"": SubResource("AnimationLibrary_rtj8d")
+}
+autoplay = "new_animation"
+movie_quit_on_finish = true
 
 [editable path="Avatar"]
