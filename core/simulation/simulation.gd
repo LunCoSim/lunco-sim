@@ -54,8 +54,13 @@ func _ready():
 		print("Server running")
 		
 		if use_ssl:
-			
-			var tls_options = TLSOptions.server(key_path, certificate_path) if use_ssl else null
+			var tls_cert := X509Certificate.new()
+			var tls_key := CryptoKey.new()
+
+			tls_cert.load(certificate_path)
+			tls_key.load(key_path)
+
+			var tls_options = TLSOptions.server(tls_key, tls_cert)
 			LCNet.host(9000, tls_options)
 		else:
 			LCNet.host()
