@@ -56,10 +56,11 @@ func _ready():
 		if use_ssl:
 			var tls_cert := X509Certificate.new()
 			var tls_key := CryptoKey.new()
-
-			tls_cert.load(certificate_path)
-			tls_key.load(key_path)
-
+	
+			
+			#0 - no error
+			print("Loading Cert: ", tls_cert.load(certificate_path))
+			print("Loading key: ", tls_key.load(key_path))
 			var tls_options = TLSOptions.server(tls_key, tls_cert)
 			LCNet.host(9000, tls_options)
 		else:

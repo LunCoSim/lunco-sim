@@ -21,7 +21,7 @@ func _ready():
 	Profile.profile_changed.connect(_on_profile_changed)
 	
 # Function to connect to a server
-func connect_to_server(ip: String="langrenus.lunco.space", port: int = 9000, tls: bool = false):
+func connect_to_server(ip: String="langrenus.lunco.space", port: int = 9000, tls: bool = true):
 	if not multiplayer.multiplayer_peer is WebSocketMultiplayerPeer:
 		peer = WebSocketMultiplayerPeer.new() # Already connected
 	else:
@@ -34,14 +34,16 @@ func connect_to_server(ip: String="langrenus.lunco.space", port: int = 9000, tls
 	# Creating a client
 	Logger.info("Connecting to server: ", connection_string )
 	print("Connecting to server: ", connection_string)
+	
+	print("Result: ", peer.create_client(connection_string))
 
-
-	peer.create_client(connection_string)
+	
 	multiplayer.multiplayer_peer = peer
 	# Assigning the peer to this multiplayer's peer
 
 func connect_to_local_server():
-	connect_to_server("127.0.0.1", 9000)
+	connect_to_server("localhost", 9000, false)
+
 
 # Function to start hosting a server
 func host(port: int = 9000, tls_options: TLSOptions = null):
@@ -99,7 +101,7 @@ func on_peer_disconnected(id):
 # Function called when connection to server failed
 func on_server_connection_failed():
 	print("on_server_connection_failed")
-	print(peer.get_packet_error())
+	print(peer.handshake_headers)
 	# This function currently does nothing.
 	pass
 	
