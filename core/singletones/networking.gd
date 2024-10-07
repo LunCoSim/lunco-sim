@@ -21,16 +21,22 @@ func _ready():
 	Profile.profile_changed.connect(_on_profile_changed)
 	
 # Function to connect to a server
-func connect_to_server(ip: String="langrenus.lunco.space", port: int = 9000):
+func connect_to_server(ip: String="langrenus.lunco.space", port: int = 9000, tls: bool = false):
 	if not multiplayer.multiplayer_peer is WebSocketMultiplayerPeer:
 		peer = WebSocketMultiplayerPeer.new() # Already connected
 	else:
 		return
+
+	var protocol = "wss://" if tls else "ws://"
+	var connection_string = "%s%s:%d" % [protocol, ip, port]
+
+
 	# Creating a client
-	Logger.info("Connecting to server: %s:%d" % [ip, port] )
-	print("Connecting to server")
-	print("wss://%s:%d" % [ip, port])
-	peer.create_client("ws://%s:%d" % [ip, port])
+	Logger.info("Connecting to server: ", connection_string )
+	print("Connecting to server: ", connection_string)
+
+
+	peer.create_client(connection_string)
 	multiplayer.multiplayer_peer = peer
 	# Assigning the peer to this multiplayer's peer
 
@@ -73,6 +79,9 @@ func on_peer_connected(id):
 	# Adding the peer to players dictionary
 	players[id] = {}
 	update_player_info.rpc_id(id, Profile.username, Profile.wallet)
+	
+	# Update the Users singleton
+	Users._on_user_connected(id, "", "")  # We'll update the username and wallet later
 
 func _on_profile_changed():
 	update_player_info.rpc(Profile.username, Profile.wallet)
@@ -82,6 +91,9 @@ func on_peer_disconnected(id):
 	print("on_peer_disconnected: ", id)
 	# Removing the peer from players dictionary
 	players.erase(id)
+	
+	# Update the Users singleton
+	Users._on_user_disconnected(id)
 
 
 # Function called when connection to server failed
