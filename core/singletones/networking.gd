@@ -44,7 +44,7 @@ func connect_to_local_server():
 	connect_to_server("127.0.0.1", 9000)
 
 # Function to start hosting a server
-func host(port: int = 9000):
+func host(port: int = 9000, tls_options: TLSOptions = null):
 	if not multiplayer.multiplayer_peer is WebSocketMultiplayerPeer:
 		peer = WebSocketMultiplayerPeer.new() # Already connected
 	else:
@@ -55,8 +55,8 @@ func host(port: int = 9000):
 	Logger.info("Hosting on %d" % port)
 	DisplayServer.window_set_title("Server")
 	
-	print("Hosting on %d" % port)
-	peer.create_server(port)
+	print("Hosting on %d, tls_options: " % port, tls_options)
+	peer.create_server(port, "*",tls_options)
 	multiplayer.multiplayer_peer = peer
 
 #---------------------------------------------------

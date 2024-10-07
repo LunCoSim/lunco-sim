@@ -24,15 +24,42 @@ var owners = {}
 	
 # Called when the node enters the scene tree for the first time.
 func _ready():
+
+	# Parse command line arguments
+	var arguments = OS.get_cmdline_args()
+	var certificate_path = ""
+	var key_path = ""
+
+	#--------------------------------
 	Panku.gd_exprenv.register_env("Avatar", $Avatar)
 	Panku.module_manager.get_module("native_logger").toggle_overlay()
 
-	print("Main ready")
-	print(OS.get_cmdline_args())
-	## TBD Move to separate file, as new modes like chat-server are appearing
+	print("Simulation _ready, arguments: ", arguments)
+
+	#Certificate and key check for wss
+	for i in range(arguments.size()):
+		match arguments[i]:
+			"--certificate":
+				if i + 1 < arguments.size():
+					certificate_path = arguments[i + 1]
+			"--key":
+				if i + 1 < arguments.size():
+					key_path = arguments[i + 1]
+	
+	# Start the server
+	var use_ssl = certificate_path != "" and key_path != ""
+
+	#-----------------------------
 	if "--server" in OS.get_cmdline_args():
-		print("Headless running")
-		LCNet.host()
+		print("Server running")
+		
+		if use_ssl:
+			
+			var tls_options = TLSOptions.server(key_path, certificate_path) if use_ssl else null
+			LCNet.host(9000, tls_options)
+		else:
+			LCNet.host()
+
 	elif "--connect" in OS.get_cmdline_args():
 		# Wait for 2 seconds, then connect
 		get_tree().create_timer(2.0).timeout.connect(LCNet.connect_to_local_server)
