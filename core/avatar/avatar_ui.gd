@@ -25,6 +25,9 @@ func _ready():
 	Profile.profile_changed.connect(_on_profile_changed)
 	
 	_update_connection_status()
+	
+	# Add this line to update the user list when the scene is ready
+	_on_update_connected_users()
 
 # Called every frame. 'delta' is the elapsed time since the previous frame.
 func _process(delta):
@@ -98,9 +101,10 @@ func _on_update_connected_users():
 	var tree: ItemList = %Users
 	
 	tree.clear()
-	for user in Users.users:
-		tree.add_item(Users.users[user]["username"])
-	
+	for user_id in Users.users:
+		var username = Users.users[user_id]["username"]
+		tree.add_item(username)
+
 func select_entity(idx):
 	var tree: HBoxContainer = %LiveEntities
 	
