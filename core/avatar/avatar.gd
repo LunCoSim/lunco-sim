@@ -187,7 +187,7 @@ func _input(event):
 			Key.KEY_8:
 				key_number = 8
 			Key.KEY_BACKSPACE: #TBD: Move to actions
-				set_target(null)
+				request_release_control()
 				return
 				
 		if key_number != -1:
