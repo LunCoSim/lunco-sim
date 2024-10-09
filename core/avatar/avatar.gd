@@ -186,7 +186,7 @@ func _input(event):
 				key_number = 7
 			Key.KEY_8:
 				key_number = 8
-			Key.KEY_BACKSPACE:
+			Key.KEY_BACKSPACE: #TBD: Move to actions
 				set_target(null)
 				return
 				
