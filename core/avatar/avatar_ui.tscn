@@ -118,14 +118,15 @@ unique_name_in_owner = true
 layout_mode = 2
 columns = 2
 
-[node name="ProfileNFTLabel" type="Label" parent="WalletInfo/WalletInfoGrid"]
+[node name="ProfileNFTLabel" type="LinkButton" parent="WalletInfo/WalletInfoGrid"]
 layout_mode = 2
 text = "Profile NFT:"
+uri = "https://artizen.fund/index/p/lunco---space-is-a-right-not-a-privilege?season=4"
 
-[node name="ProfileNFT" type="Label" parent="WalletInfo/WalletInfoGrid"]
+[node name="ProfileNFT" type="LinkButton" parent="WalletInfo/WalletInfoGrid"]
 unique_name_in_owner = true
 layout_mode = 2
-text = "No"
+underline = 2
 
 [node name="GitcoinDonorLabel" type="Label" parent="WalletInfo/WalletInfoGrid"]
 layout_mode = 2
@@ -134,25 +135,17 @@ text = "Gitcoin Donor:"
 [node name="GitcoinDonor" type="Label" parent="WalletInfo/WalletInfoGrid"]
 unique_name_in_owner = true
 layout_mode = 2
-text = "No"
+text = "TBD"
 
-[node name="SpecialDonorLabel" type="Label" parent="WalletInfo/WalletInfoGrid"]
-layout_mode = 2
-text = "Special Donor:"
-
-[node name="SpecialDonor" type="Label" parent="WalletInfo/WalletInfoGrid"]
-unique_name_in_owner = true
-layout_mode = 2
-text = "No"
-
-[node name="ArtizenBuyerLabel" type="Label" parent="WalletInfo/WalletInfoGrid"]
+[node name="ArtizenBuyerLabel" type="LinkButton" parent="WalletInfo/WalletInfoGrid"]
 layout_mode = 2
 text = "Artizen Buyer:"
+uri = "https://artizen.fund/index/p/lunco---space-is-a-right-not-a-privilege?season=4"
 
-[node name="ArtizenBuyer" type="Label" parent="WalletInfo/WalletInfoGrid"]
+[node name="ArtizenBuyer" type="LinkButton" parent="WalletInfo/WalletInfoGrid"]
 unique_name_in_owner = true
 layout_mode = 2
-text = "No"
+underline = 2
 
 [connection signal="item_selected" from="EntityUserContainer/UsersContainer/Users" to="." method="_on_users_item_selected"]
 [connection signal="item_selected" from="EntityUserContainer/EntitiesContainer/Entities" to="." method="_on_entities_item_selected"]
