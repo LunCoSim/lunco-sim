@@ -103,6 +103,10 @@ func _on_update_connected_users():
 	tree.clear()
 	for user_id in Users.users:
 		var username = Users.users[user_id]["username"]
+
+		if username == "":
+			username = "Unknown"
+			
 		tree.add_item(username)
 
 func select_entity(idx):

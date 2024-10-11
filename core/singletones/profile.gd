@@ -130,12 +130,6 @@ func load_profile():
 	# Load data from a file.
 	var err = config.load(FULLPATH)
 
-	# If the file didn't load, ignore it.
-	if err != OK:
-		print("Error loading profile")
-		username = "unknown"
-		wallet = "unknown"
-		return
 	
 	username = config.get_value(SECTION, "username", "")
 	wallet = config.get_value(SECTION, "wallet", "")
