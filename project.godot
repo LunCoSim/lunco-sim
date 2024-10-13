@@ -26,8 +26,6 @@ StateManager="*res://core/singletones/state-manager.gd"
 LCNet="*res://core/singletones/networking.gd"
 LCUtil="*res://core/singletones/utils.gd"
 LCWindows="*res://core/singletones/windows-manager.gd"
-SceneManager="*res://addons/scene_manager/scene_manager.tscn"
-Scenes="*res://presets/scenes.gd"
 EntitiesDB="*res://core/singletones/entities-manager.gd"
 Profile="*res://core/singletones/profile.gd"
 Messenger="*res://core/singletones/messenger.gd"
@@ -36,6 +34,15 @@ Logger="*res://addons/godot-logger/logger.gd"
 Users="*res://core/singletones/users_manager.gd"
 Signal_Debugger="*res://addons/SignalVisualizer/Debugger/SignalDebugger.gd"
 ControlManager="*res://core/singletones/control-manager.gd"
+SceneManager="*res://addons/scene_manager/scene_manager.tscn"
+Scenes="*res://presets/scenes.gd"
+IVUnits="*res://addons/ivoyager_table_importer/editor_plugin/../singletons/units.gd"
+IVQConvert="*res://addons/ivoyager_table_importer/editor_plugin/../singletons/qconvert.gd"
+IVQFormat="*res://addons/ivoyager_table_importer/editor_plugin/../singletons/qformat.gd"
+IVTableData="*res://addons/ivoyager_table_importer/editor_plugin/../singletons/table_data.gd"
+IVGlobal="*res://addons/ivoyager_core/editor_plugin/../singletons/global.gd"
+IVCoreSettings="*res://addons/ivoyager_core/editor_plugin/../singletons/core_settings.gd"
+IVCoreInitializer="*res://addons/ivoyager_core/editor_plugin/../singletons/core_initializer.gd"
 
 [editor]
 
@@ -51,7 +58,7 @@ logger/file/log_file_write=true
 logger/file/file_path="res://game.log"
 logger/stdout_format="[{hour}:{minute}:{second}][{level}]{text}"
 logger/file_format="[{hour}:{minute}:{second}][{level}]{text}"
-enabled=PackedStringArray("res://addons/godot-logger/plugin.cfg", "res://addons/godottpd/plugin.cfg", "res://addons/panku_console/plugin.cfg")
+enabled=PackedStringArray("res://addons/SignalVisualizer/plugin.cfg", "res://addons/godot-logger/plugin.cfg", "res://addons/godottpd/plugin.cfg", "res://addons/ivoyager_core/plugin.cfg", "res://addons/ivoyager_table_importer/plugin.cfg", "res://addons/panku_console/plugin.cfg", "res://addons/scene_manager/plugin.cfg")
 
 [gdunit4]
 
@@ -462,3 +469,22 @@ occlusion_culling/use_occlusion_culling=true
 
 scenes_path="res://data/scene-manager/scenes.gd"
 scenes/scenes_path="res://presets/scenes.gd"
+
+[shader_globals]
+
+iv_time={
+"type": "float",
+"value": 0.0
+}
+iv_mouse_fragcoord={
+"type": "vec2",
+"value": Vector2(0, 0)
+}
+iv_fragment_id_cycler={
+"type": "float",
+"value": 0.0
+}
+iv_fragment_id_range={
+"type": "float",
+"value": 0.0
+}
