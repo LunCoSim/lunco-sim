@@ -36,13 +36,14 @@ Signal_Debugger="*res://addons/SignalVisualizer/Debugger/SignalDebugger.gd"
 ControlManager="*res://core/singletones/control-manager.gd"
 SceneManager="*res://addons/scene_manager/scene_manager.tscn"
 Scenes="*res://presets/scenes.gd"
-IVUnits="*res://addons/ivoyager_table_importer/editor_plugin/../singletons/units.gd"
-IVQConvert="*res://addons/ivoyager_table_importer/editor_plugin/../singletons/qconvert.gd"
-IVQFormat="*res://addons/ivoyager_table_importer/editor_plugin/../singletons/qformat.gd"
-IVTableData="*res://addons/ivoyager_table_importer/editor_plugin/../singletons/table_data.gd"
-IVGlobal="*res://addons/ivoyager_core/editor_plugin/../singletons/global.gd"
-IVCoreSettings="*res://addons/ivoyager_core/editor_plugin/../singletons/core_settings.gd"
-IVCoreInitializer="*res://addons/ivoyager_core/editor_plugin/../singletons/core_initializer.gd"
+IVGlobal="res://addons/ivoyager_core/editor_plugin/../singletons/global.gd"
+IVCoreSettings="res://addons/ivoyager_core/editor_plugin/../singletons/core_settings.gd"
+IVCoreInitializer="res://addons/ivoyager_core/editor_plugin/../singletons/core_initializer.gd"
+
+[display]
+
+window/size/viewport_width=1920
+window/size/viewport_height=1280
 
 [editor]
 
@@ -58,7 +59,7 @@ logger/file/log_file_write=true
 logger/file/file_path="res://game.log"
 logger/stdout_format="[{hour}:{minute}:{second}][{level}]{text}"
 logger/file_format="[{hour}:{minute}:{second}][{level}]{text}"
-enabled=PackedStringArray("res://addons/SignalVisualizer/plugin.cfg", "res://addons/godot-logger/plugin.cfg", "res://addons/godottpd/plugin.cfg", "res://addons/ivoyager_core/plugin.cfg", "res://addons/ivoyager_table_importer/plugin.cfg", "res://addons/panku_console/plugin.cfg", "res://addons/scene_manager/plugin.cfg")
+enabled=PackedStringArray("res://addons/SignalVisualizer/plugin.cfg", "res://addons/godot-logger/plugin.cfg", "res://addons/godottpd/plugin.cfg", "res://addons/panku_console/plugin.cfg", "res://addons/scene_manager/plugin.cfg", "res://addons/ui_design_tool/plugin.cfg")
 
 [gdunit4]
 

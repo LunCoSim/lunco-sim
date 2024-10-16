@@ -1,24 +1,39 @@
-[gd_scene load_steps=14 format=3 uid="uid://0k310chob81y"]
+[gd_scene load_steps=24 format=3 uid="uid://0k310chob81y"]
 
 [ext_resource type="PackedScene" uid="uid://oulno1atrp8k" path="res://core/simulation/simulation.tscn" id="1_kjl25"]
 [ext_resource type="PackedScene" uid="uid://cpbv4fmfxppt1" path="res://modules/solar_system_planets/sun.tscn" id="2_bjryh"]
 [ext_resource type="Script" path="res://main_showcase.gd" id="2_iqwup"]
+[ext_resource type="PackedScene" uid="uid://wdnxqhctneyv" path="res://core/avatar/avatar_ui.tscn" id="3_s30nd"]
 [ext_resource type="PackedScene" uid="uid://ddaqlkbgl7bdl" path="res://modules/solar_system_planets/earth.tscn" id="3_tu3pr"]
 [ext_resource type="PackedScene" uid="uid://csqh45xcqbewi" path="res://modules/solar_system_planets/moon.tscn" id="4_ijb73"]
 [ext_resource type="PackedScene" uid="uid://c7q7gaaaa8g5g" path="res://content/maps/Langrenus/langrenus_crater_map.tscn" id="5_b5dpc"]
 [ext_resource type="PackedScene" uid="uid://dmxcgvtora8v2" path="res://content/content.tscn" id="6_aowbr"]
 [ext_resource type="PackedScene" uid="uid://2f4aecforicx" path="res://content/moonwards/buildings/satellite-dish/satellite-dish.escn" id="7_haqp2"]
 [ext_resource type="PackedScene" uid="uid://cpjdvh1eaof2y" path="res://content/moonwards/buildings/nuclear-core/nuclear-core.escn" id="8_06btw"]
+[ext_resource type="PackedScene" uid="uid://bl8254ixsq42f" path="res://content/starship/starship.tscn" id="11_a6u3y"]
+[ext_resource type="PackedScene" uid="uid://db37rii8injqd" path="res://content/animated-astronaut-character-in-space-suit-loop/astronaut.tscn" id="11_li5p3"]
+[ext_resource type="PackedScene" uid="uid://baunvflaucrbn" path="res://content/gobot/gobot.tscn" id="12_hovtt"]
+[ext_resource type="PackedScene" uid="uid://86xeuneoxogv" path="res://core/facilities/solar-power-station-facility.tscn" id="12_m3b2r"]
+[ext_resource type="PackedScene" uid="uid://b8uc8kmxdqpe7" path="res://core/facilities/nft-sphere.tscn" id="13_b2l3r"]
+[ext_resource type="PackedScene" uid="uid://crj5xy8seigi5" path="res://content/moonwards/vehicles/rockets/PassengerPod/PassengerPod.escn" id="13_vlr17"]
+[ext_resource type="PackedScene" uid="uid://cvu6tcge8ehfr" path="res://core/facilities/living-facility.tscn" id="14_i673e"]
 
 [sub_resource type="Curve3D" id="Curve3D_pallq"]
 _data = {
-"points": PackedVector3Array(100, 0, 0, 0, 0, 0, 7.45788, 39.6199, 49.172, 45.1258, -58.0854, 18.556, -45.1258, 58.0854, -18.556, 0, 0, 0, -56.5985, -15.8965, 7.27766, 56.5985, 15.8965, -7.27766, 25.8122, -3.09983, -67.4544, 8.70805, -1.86993, -16.0661, -8.70805, 1.86993, 16.0661, 91.8673, -19.4955, 48.5958, 11.995, -17.3153, 24.0002, -11.995, 17.3153, -24.0002, -0.717346, -13.738, 42.9793),
-"tilts": PackedFloat32Array(0, 0, 0, 0, 0)
+"points": PackedVector3Array(100, 0, 0, 0, 0, 0, 7.79165, -22.2707, 139.129, -2.1821, -0.887131, 9.73264, 2.1821, 0.887131, -9.73264, 3.1842, -22.752, 17.3252, 7.23967, -13.3068, 8.32457, -7.23967, 13.3068, -8.32457, 5.59211, 18.0681, -140.122),
+"tilts": PackedFloat32Array(0, 0, 0)
 }
-point_count = 5
+point_count = 3
+
+[sub_resource type="Curve3D" id="Curve3D_1qehx"]
+_data = {
+"points": PackedVector3Array(0, 0, 0, 0, 0, 0, 0, 0, 0, -123.121, -129.735, -192.124, 123.121, 129.735, 192.124, 113.584, 320.889, 224.216, 0, 0, 0, 0, 0, 0, 115.159, 566.982, 508.23),
+"tilts": PackedFloat32Array(0, 0, 0)
+}
+point_count = 3
 
 [sub_resource type="Animation" id="Animation_m3ybo"]
-length = 0.001
+length = 20.0
 tracks/0/type = "bezier"
 tracks/0/imported = false
 tracks/0/enabled = true
@@ -62,6 +77,42 @@ tracks/3/keys = {
 "handle_modes": PackedInt32Array(0),
 "points": PackedFloat32Array(0, -0.25, 0, 0.25, 0),
 "times": PackedFloat32Array(0)
+}
+tracks/4/type = "value"
+tracks/4/imported = false
+tracks/4/enabled = true
+tracks/4/path = NodePath("flyby/PathFollow3D:progress_ratio")
+tracks/4/interp = 1
+tracks/4/loop_wrap = true
+tracks/4/keys = {
+"times": PackedFloat32Array(0),
+"transitions": PackedFloat32Array(1),
+"update": 0,
+"values": [0.0]
+}
+tracks/5/type = "value"
+tracks/5/imported = false
+tracks/5/enabled = true
+tracks/5/path = NodePath("flyby/PathFollow3D/Camera3D:rotation")
+tracks/5/interp = 1
+tracks/5/loop_wrap = true
+tracks/5/keys = {
+"times": PackedFloat32Array(0),
+"transitions": PackedFloat32Array(1),
+"update": 0,
+"values": [Vector3(0, 0, 0)]
+}
+tracks/6/type = "value"
+tracks/6/imported = false
+tracks/6/enabled = true
+tracks/6/path = NodePath("Starships/PathFollow3D:progress_ratio")
+tracks/6/interp = 1
+tracks/6/loop_wrap = true
+tracks/6/keys = {
+"times": PackedFloat32Array(0, 15),
+"transitions": PackedFloat32Array(1, 1),
+"update": 0,
+"values": [0.0, 1.0]
 }
 
 [sub_resource type="Animation" id="Animation_uoaro"]
@@ -112,9 +163,50 @@ tracks/3/keys = {
 "times": PackedFloat32Array(3.31779, 4.30818, 7.10601, 10)
 }
 
+[sub_resource type="Animation" id="Animation_qdmg5"]
+resource_name = "flyby"
+length = 40.0
+tracks/0/type = "value"
+tracks/0/imported = false
+tracks/0/enabled = true
+tracks/0/path = NodePath("flyby/PathFollow3D:progress_ratio")
+tracks/0/interp = 1
+tracks/0/loop_wrap = true
+tracks/0/keys = {
+"times": PackedFloat32Array(0, 20),
+"transitions": PackedFloat32Array(1, 1),
+"update": 0,
+"values": [0.0, 1.0]
+}
+tracks/1/type = "value"
+tracks/1/imported = false
+tracks/1/enabled = true
+tracks/1/path = NodePath("flyby/PathFollow3D/Camera3D:rotation")
+tracks/1/interp = 1
+tracks/1/loop_wrap = true
+tracks/1/keys = {
+"times": PackedFloat32Array(0, 13.2667, 17.7),
+"transitions": PackedFloat32Array(1, 1, 0.329877),
+"update": 0,
+"values": [Vector3(0, 0, 0), Vector3(0, 0, 0), Vector3(0, 2.87979, 0)]
+}
+tracks/2/type = "value"
+tracks/2/imported = false
+tracks/2/enabled = true
+tracks/2/path = NodePath("Starships/PathFollow3D:progress_ratio")
+tracks/2/interp = 1
+tracks/2/loop_wrap = true
+tracks/2/keys = {
+"times": PackedFloat32Array(12.7, 27.3, 39.5667),
+"transitions": PackedFloat32Array(1, 1, 1),
+"update": 0,
+"values": [0.0, 0.2, 0.2]
+}
+
 [sub_resource type="AnimationLibrary" id="AnimationLibrary_rtj8d"]
 _data = {
 &"RESET": SubResource("Animation_m3ybo"),
+&"flyby": SubResource("Animation_qdmg5"),
 &"new_animation": SubResource("Animation_uoaro")
 }
 
@@ -127,6 +219,30 @@ CATCH_CAMERA = false
 
 [node name="UI" parent="Avatar" index="1"]
 visible = false
+
+[node name="UI_Showcase" parent="Avatar" index="2" instance=ExtResource("3_s30nd")]
+script = null
+
+[node name="Users" parent="Avatar/UI_Showcase/EntityUserContainer/UsersContainer" index="1"]
+item_count = 3
+item_0/text = "lunco.eth"
+item_1/text = "0x1234567890123456789"
+item_2/text = "0x098765432109876543"
+
+[node name="ConnectWallet" parent="Avatar/UI_Showcase/WalletInfo" index="0"]
+visible = false
+
+[node name="WalletInfoLabel" parent="Avatar/UI_Showcase/WalletInfo" index="2"]
+text = "lunco.eth"
+
+[node name="ProfileNFT" parent="Avatar/UI_Showcase/WalletInfo/WalletInfoGrid" index="1"]
+text = "Yes"
+
+[node name="GitcoinDonor" parent="Avatar/UI_Showcase/WalletInfo/WalletInfoGrid" index="3"]
+text = "Yes"
+
+[node name="ArtizenBuyer" parent="Avatar/UI_Showcase/WalletInfo/WalletInfoGrid" index="5"]
+text = "Yes"
 
 [node name="MultiplayerSpawner" parent="." index="1"]
 _spawnable_scenes = PackedStringArray("res://content/starship/starship.tscn", "res://core/entities/operator.tscn", "res://content/gobot/gobot.tscn", "res://content/animated-astronaut-character-in-space-suit-loop/astronaut.tscn")
@@ -150,32 +266,136 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 43.622, 0, 173.527)
 transform = Transform3D(107.71, 0, 22.3273, 0, 110, 0, -22.3273, 0, 107.71, 156.754, -87.3701, -339.067)
 
 [node name="satellite-dish" parent="Universe/Sun/Earth/Moon/LangrenusCraterMap" index="4" instance=ExtResource("7_haqp2")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -2.15879, -89.5693, 119.006)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -2.15879, -90.0767, 119.006)
 
 [node name="nuclear-core" parent="Universe/Sun/Earth/Moon/LangrenusCraterMap" index="5" instance=ExtResource("8_06btw")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 66.2471, -81.2814, 122.686)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 66.2471, -78.6025, 122.686)
 
 [node name="Path3D" type="Path3D" parent="." index="3"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 24.2995, -18.8672, 126.144)
+visible = false
 curve = SubResource("Curve3D_pallq")
 
 [node name="PathFollow3D" type="PathFollow3D" parent="Path3D" index="0"]
-transform = Transform3D(0.894384, 0, 0.447015, 0, 0.999993, 0, -0.447016, 0, 0.894382, -0.717299, -13.7381, 42.9794)
+transform = Transform3D(0.999153, 0, 0.0377947, 0, 0.999993, 0, -0.0377948, 0, 0.99915, 7.79165, -22.2707, 139.129)
 rotation_edit_mode = 1
-progress = 486.935
 rotation_mode = 1
 
 [node name="Camera3D" type="Camera3D" parent="Path3D/PathFollow3D" index="0"]
-transform = Transform3D(0.973182, 0, -0.23005, 0, 1, 0, 0.23005, 0, 0.97318, 0, 0, 0)
+
+[node name="flyby" type="Path3D" parent="." index="4"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 25.4948, -19.4801, 112.809)
+curve = SubResource("Curve3D_pallq")
+
+[node name="PathFollow3D" type="PathFollow3D" parent="flyby" index="0"]
+transform = Transform3D(0.999138, 0, 0.037794, 0, 0.999993, 0, -0.0377942, 0, 0.999133, 7.79165, -22.2707, 139.129)
+rotation_edit_mode = 1
+rotation_mode = 1
+
+[node name="Camera3D" type="Camera3D" parent="flyby/PathFollow3D" index="0"]
 current = true
 
-[node name="AnimationPlayer" type="AnimationPlayer" parent="." index="4"]
+[node name="Starships" type="Path3D" parent="." index="5"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 162.882, -20.574, 112.809)
+curve = SubResource("Curve3D_1qehx")
+
+[node name="PathFollow3D" type="PathFollow3D" parent="Starships" index="0"]
+transform = Transform3D(-0.891938, 0, -0.451838, 0, 0.999993, 0, 0.45184, 0, -0.891933, 0, 0, 0)
+rotation_edit_mode = 1
+rotation_mode = 1
+
+[node name="Starship" parent="Starships/PathFollow3D" index="0" instance=ExtResource("11_a6u3y")]
+transform = Transform3D(-0.900256, -0.0552322, 0.432168, 0.0820908, 0.952664, 0.292758, -0.42788, 0.299034, -0.853107, 0, 0, 0)
+
+[node name="Starship2" parent="Starships/PathFollow3D" index="1" instance=ExtResource("11_a6u3y")]
+transform = Transform3D(-0.900257, -0.0552322, 0.432168, 0.0820908, 0.952664, 0.292758, -0.42788, 0.299034, -0.853107, -19.6343, 0.0496941, -10.0796)
+
+[node name="Starship3" parent="Starships/PathFollow3D" index="2" instance=ExtResource("11_a6u3y")]
+transform = Transform3D(-0.900256, -0.0552322, 0.432168, 0.0820908, 0.952664, 0.292758, -0.42788, 0.299034, -0.853107, 33.3496, 0, 16.8945)
+
+[node name="SolarPowerStationFacility" parent="Starships" index="1" instance=ExtResource("12_m3b2r")]
+transform = Transform3D(0.968324, -0.225328, 0.107595, 0.23934, 0.960389, -0.142722, -0.0711737, 0.163953, 0.983897, -126.411, -18.2527, -36.698)
+
+[node name="NftSphere" parent="Starships" index="2" instance=ExtResource("13_b2l3r")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -139.335, -16.0715, -43.1594)
+
+[node name="LivingFacility" parent="Starships" index="3" instance=ExtResource("14_i673e")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -114.278, -12.4932, -43.5379)
+
+[node name="NftSphere2" parent="Starships" index="4" instance=ExtResource("13_b2l3r")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -130.725, -13.7435, -49.8554)
+
+[node name="NftSphere3" parent="Starships" index="5" instance=ExtResource("13_b2l3r")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -121.875, -14.6293, -48.261)
+
+[node name="NftSphere4" parent="Starships" index="6" instance=ExtResource("13_b2l3r")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -129.833, -9.32285, -61.7784)
+
+[node name="NftSphere5" parent="Starships" index="7" instance=ExtResource("13_b2l3r")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -122.773, -12.1098, -54.6996)
+
+[node name="LivingFacility2" parent="Starships" index="8" instance=ExtResource("14_i673e")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -148.025, -13.8709, -53.5618)
+
+[node name="LivingFacility3" parent="Starships" index="9" instance=ExtResource("14_i673e")]
+transform = Transform3D(0.879906, -0.475148, 0, 0.475148, 0.879906, 0, 0, 0, 1, -142.311, -13.8709, -53.7853)
+
+[node name="AnimationPlayer" type="AnimationPlayer" parent="." index="6"]
 deterministic = true
 reset_on_save = false
 libraries = {
 &"": SubResource("AnimationLibrary_rtj8d")
 }
-autoplay = "new_animation"
+autoplay = "flyby"
 movie_quit_on_finish = true
 
+[node name="AstronautEntity" parent="." index="7" instance=ExtResource("11_li5p3")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 25.5661, -43.9322, 174.867)
+
+[node name="AstronautEntity2" parent="." index="8" instance=ExtResource("11_li5p3")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 30.6039, -44.0198, 174.867)
+
+[node name="AstronautEntity3" parent="." index="9" instance=ExtResource("11_li5p3")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 30.3914, -43.978, 173.101)
+
+[node name="AstronautEntity4" parent="." index="10" instance=ExtResource("11_li5p3")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 26.2848, -43.9065, 173.101)
+
+[node name="AstronautEntity5" parent="." index="11" instance=ExtResource("11_li5p3")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 26.2848, -43.839, 169.973)
+
+[node name="AstronautEntity6" parent="." index="12" instance=ExtResource("11_li5p3")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 30.0942, -43.9053, 169.973)
+
+[node name="AstronautEntity7" parent="." index="13" instance=ExtResource("11_li5p3")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 30.0942, -43.8544, 167.619)
+
+[node name="AstronautEntity8" parent="." index="14" instance=ExtResource("11_li5p3")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 26.7895, -43.7969, 167.619)
+
+[node name="Gobot" parent="." index="15" instance=ExtResource("12_hovtt")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 170.162)
+
+[node name="PassengerPod" parent="." index="16" instance=ExtResource("13_vlr17")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 22.3802, -39.7237, 86.5714)
+
+[node name="PassengerPod5" parent="." index="17" instance=ExtResource("13_vlr17")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 7.28769, -39.7237, 86.5714)
+
+[node name="PassengerPod6" parent="." index="18" instance=ExtResource("13_vlr17")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 22.3802, -39.2772, 108.385)
+
+[node name="PassengerPod7" parent="." index="19" instance=ExtResource("13_vlr17")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 7.28769, -39.5199, 108.385)
+
+[node name="PassengerPod2" parent="." index="20" instance=ExtResource("13_vlr17")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 125.902, -42.851, 106.472)
+
+[node name="PassengerPod3" parent="." index="21" instance=ExtResource("13_vlr17")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 125.902, -43.553, 143.969)
+
+[node name="PassengerPod4" parent="." index="22" instance=ExtResource("13_vlr17")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 88.8793, -42.9, 143.969)
+
 [editable path="Avatar"]
+[editable path="Avatar/UI_Showcase"]
