@@ -120,9 +120,11 @@ One of our goals is to also onboard space engineers into web3 by deep integratio
 --------
 What features or use cases does your dApp/App present? How is it differentiated?
 
-1. Tokengateg access via Profile NFT
-2. Missions NFT aka IP NFT for space missions
-3. Integration with decentralized data storages for space data
+1. Login via wallet 
+2. Tokengating access via Profile NFT
+3. Missions NFT aka IP NFT for space missions
+4. Integration with decentralized data storages for space data
+5. Ultimately - protocol to design space missions + implementation in smart contracts
 
 --------
 
