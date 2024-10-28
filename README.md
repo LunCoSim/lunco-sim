@@ -36,6 +36,8 @@ Help us to prioritize the development of features by donating to the feature you
 
 ### 💰 Donations
 
+#### EVM
+
 1. General EVM: 0x020673a52560b50a70544d7f841fbc73626648f4
 2. Eth Mainnet: [0x036191Bd2A777C283aE389BD2E0cF6f139f8eaDc](https://etherscan.io/address/0x036191Bd2A777C283aE389BD2E0cF6f139f8eaDc)
 3. Optimism: [0x40891ce6e8574bb9118913a8a304195437f36213]()
@@ -43,6 +45,10 @@ Help us to prioritize the development of features by donating to the feature you
 5. Arbitrum: [0xFEc9F8dB07f96973A453Ee5D1c74606a9a19F26a]()
 6. zkSync: [0xDEfaf4A720Bb1894165A3804c91f75cE748F0381](https://explorer.zksync.io/address/0xDEfaf4A720Bb1894165A3804c91f75cE748F0381)
 7. Base: [0xC9E0Ac9205CDb16520395Fe2570d832A7eA5BfaD]()
+
+#### DOGE
+
+DKrDocy32NsVAnviJ29bHr3bu2rUQk2nio
 
 
 ## 🚀 Features
