@@ -14,9 +14,9 @@ Thx  to [Gitcoin](https://explorer.gitcoin.co/#/projects/0x9a9cda60bcd1b566669a6
 
 That's helped a lot, allowing me to keep buidling fulltime
 
-You can help scale the activities by donating to this project, helping building Lunar Company :D
+By donating to the project you are providing me with resources to accelerate Space Exploration.
 
-You'll get 10% of $LUNCO, the rest would be used to support space activities.
+To honor your contribution you'll get 10% of $LUNCO while the rest would be use to support upcoming activities. The token has no value or utility, it just reflects your contribution.
 
 ## My Background
 
