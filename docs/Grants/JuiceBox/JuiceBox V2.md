@@ -1,24 +1,16 @@
+# LunCo - Democratizing Space Exploration Through Open Source
 
-# LunCo - Lunar Company
+*Building the future of space exploration, one simulation at a time*
 
-By donating to the project you are fostering Opensource Space Exploration
+## Introduction
 
-## Intro
+I'm Rod Mamin, a crypto-native space engineer and the founder of LunCo. For the past two and a half years, I've been leading the development of an open-source Lunar Colony Simulation platform that's revolutionizing how we approach space exploration.
 
-Hey all, 
-It's Rod Mamin - founder of LunCo.
+Through the generous support of [Gitcoin](https://explorer.gitcoin.co/#/projects/0x9a9cda60bcd1b566669a6e03d79dcea4be966ebdef25dc9754cbd4170e99c61f) and [Giveth](https://giveth.io/project/lunco-everyone-can-do-space), we've successfully raised $90k in grants and donations. Combined with my personal investment of $30k, this funding has enabled full-time development of our platform.
 
-I'm crypto-native space engineer, being building opensource platform for Lunar Colony Simulation for the last two and a half years, and I need your help to scale the activity.
+Your contribution will directly accelerate space exploration innovation. As a token of appreciation, contributors receive $LUNCO tokens – while these tokens carry no monetary value or utility, they represent your part in our mission to democratize space exploration.
 
-Thx  to [Gitcoin](https://explorer.gitcoin.co/#/projects/0x9a9cda60bcd1b566669a6e03d79dcea4be966ebdef25dc9754cbd4170e99c61f) and [Giveth](https://giveth.io/project/lunco-everyone-can-do-space), I've being able to bootstrap building of the sim, raising around $90k in grants and donations, and putting around $30k of my money into LunCo. 
-
-That's helped a lot, allowing me to keep buidling fulltime.
-
-By donating to the project you are providing me with resources to accelerate Space Exploration.
-
-To honor your contribution you'll get $LUNCO tokens. The token has no value or utility, it reflects the contribution to LunCo's mission of democratizing space exploration!
-
-[Discord for questions](https://discord.gg/A6U3GdvQum)
+[Join our Discord community](https://discord.gg/A6U3GdvQum) to learn more and get involved.
 
 ![](https://gateway.lighthouse.storage/ipfs/bafybeidjpafb6zg5lalug7z5sfzvszh2erskbbdqcloejr2asex2lfg4ky)
 
@@ -36,12 +28,27 @@ His deep expertise in space robotics, particularly in developing missions like s
 
 I'm also involved in [Liberland Space program as an Advisor](https://www.binance.com/en/square/post/16201208273473)
 
-# What we are raising for
+## Funding Goals
 
-1. Finish alpha version of LunCoSim to be able to model on-surface rover missions
-2. Put Space Missions Design onchain via NFT-Blueprints
-3. Design opensource tourists lunar base
-4. Onboard space and science projects into web3 via HyperDeSpace & HyperDeSci
+Your contribution will support four key initiatives:
+
+1. **Complete LunCoSim Alpha** - Develop full capability for modeling on-surface rover missions
+2. **Blockchain Integration** - Implement NFT-Blueprints to put space mission design  on-chain
+3. **Open Source Lunar Base** - Design and share plans for a tourist-ready lunar base
+4. **Web3 Integration** - Onboard space and science projects via HyperDeSpace & HyperDeSci
+
+### Fund Allocation
+- Equipment and Infrastructure
+- Essential Services
+- Contributor Compensation
+- Space Community Events (e.g., Space popup cities)
+- Promotion of Decentralized Space Exploration
+
+### Treasury Distribution
+- Until Nov 23, 23:59 UTC: 20% $LUNCO, 80% Treasury
+- Until Nov 25, 23:59 UTC: 15% $LUNCO, 85% Treasury
+- Thereafter: 10% $LUNCO, 90% Treasury
+
 ## Activities
 
 LunCo started two years ago as an opensource platform for lunar missions sim, but now it evolved into several activities, transforming from LunCo from Lunar Colony Sim to Lunar Company :D
@@ -79,28 +86,35 @@ Same as HyperDeSci but with a strict [focus on Space](https://t.me/hyperdespace)
 
 Russian-speaking news channel [about DeSpace](@despaceru)
 
-## How the funds will be used
-
-1. Equipment
-2. Services
-3. Compensation to contributors
-4. Supporting space-related activities, e.g. sponsoring Space popup cities
-5. Promoting and building Decentralized Space Exploration
-
 # Links
 ![](https://gateway.lighthouse.storage/ipfs/bafkreidkb6bfjnjgoetexsot4l67glpz2n2z7vhpueela6gmxbvg3avo3a)
-## Rod's
 
-1. [Twitter](https://twitter.com/_Difint_)
-2. [Linkedin](https://www.linkedin.com/in/rod-mamin-2a48a12b/)
-## LunCo's
+## Connect With LunCo
 
-1. [Site](https://lunco.space)
-2. [Main repo on Gitcoin](https://github.com/LunCoSim/lunco-sim) 
-3. [Twitter](https://twitter.com/LunCoSim) 
-4. [Linkedin](https://www.linkedin.com/company/luncosim/) 
-5. [Discord Server](https://discord.gg/A6U3GdvQum) 
-7. [Youtube](https://www.youtube.com/@LunCoSim) 
-8. [Giveth](https://giveth.io/project/lunco-everyone-can-do-space)
-9. [Gitcoin](https://explorer.gitcoin.co/#/projects/0x9a9cda60bcd1b566669a6e03d79dcea4be966ebdef25dc9754cbd4170e99c61f)
+### Community Hubs
+- [Discord Server](https://discord.gg/A6U3GdvQum) - Join our active community
+- [Telegram: HyperDeSci](https://t.me/hyperdesci) - DeSci coordination & discussions
+- [Telegram: HyperDeSpace](https://t.me/hyperdespace) - Space-focused initiatives
+- [Telegram: DeSpace News](https://t.me/despaceru) - Russian-language space updates
+
+### Development & Documentation
+- [GitHub Repository](https://github.com/LunCoSim/lunco-sim) - Main project codebase
+- [LunCoSim Alpha](https://alpha.lunco.space) - Try our browser-based simulation
+- [Latest Release](https://github.com/LunCoSim/lunco-sim/releases/tag/v0.4.0-dev1) - Download the desktop version
+
+### Funding & Support
+- [Gitcoin Grant](https://explorer.gitcoin.co/#/projects/0x9a9cda60bcd1b566669a6e03d79dcea4be966ebdef25dc9754cbd4170e99c61f)
+- [Giveth Project](https://giveth.io/project/lunco-everyone-can-do-space)
+
+### Social Media
+- [Twitter](https://twitter.com/LunCoSim)
+- [LinkedIn](https://www.linkedin.com/company/luncosim/)
+- [YouTube](https://www.youtube.com/@LunCoSim)
+
+### About the Founder
+- [Rod's Twitter](https://twitter.com/_Difint_)
+- [Rod's LinkedIn](https://www.linkedin.com/in/rod-mamin-2a48a12b/)
+
+### Official Website
+- [lunco.space](https://lunco.space)
 
