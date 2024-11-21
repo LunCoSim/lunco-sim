@@ -62,6 +62,8 @@ LunCo started two years ago as an opensource platform for lunar missions sim, bu
 
 We're bridging the gap between professional tools and modern gaming to make space exploration accessible to everyone.
 
+Check out [website](https://lunco.space) for more information
+
 Try our browser-based simulation: [alpha.lunco.space](https://alpha.lunco.space) or download the binary build: [LunCo Build](https://github.com/LunCoSim/lunco-sim/releases/tag/v0.4.0-dev1)   
 ## We are growing!
 ![](https://gateway.lighthouse.storage/ipfs/bafybeif2ccihyuckmy73cjcnekad6bk7ac7hvgsjtntgj5ehoe6rwy4ena)
