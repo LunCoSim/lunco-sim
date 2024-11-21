@@ -16,7 +16,7 @@ That's helped a lot, allowing me to keep buidling fulltime.
 
 By donating to the project you are providing me with resources to accelerate Space Exploration.
 
-To honor your contribution you'll get $LUNCO tokens. The token has no value or utility, it reflect contribution to LunCo mission of democratizing space exploration!
+To honor your contribution you'll get $LUNCO tokens. The token has no value or utility, it reflects the contribution to LunCo's mission of democratizing space exploration!
 
 [Discord for questions](https://discord.gg/A6U3GdvQum)
 
