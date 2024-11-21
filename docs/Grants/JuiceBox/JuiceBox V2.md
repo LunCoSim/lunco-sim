@@ -6,7 +6,7 @@
 
 I'm Rod Mamin, a crypto-native space engineer and the founder of LunCo. For the past two and a half years, I've been leading the development of an open-source Lunar Colony Simulation platform that's revolutionizing how we approach space exploration.
 
-Through the generous support of [Gitcoin](https://explorer.gitcoin.co/#/projects/0x9a9cda60bcd1b566669a6e03d79dcea4be966ebdef25dc9754cbd4170e99c61f) and [Giveth](https://giveth.io/project/lunco-everyone-can-do-space), we've successfully raised $90k in grants and donations. Combined with my personal investment of $30k, this funding has enabled full-time development of our platform.
+Through the generous support of [Gitcoin](https://explorer.gitcoin.co/#/projects/0x9a9cda60bcd1b566669a6e03d79dcea4be966ebdef25dc9754cbd4170e99c61f) and [Giveth](https://giveth.io/project/lunco-everyone-can-do-space),  and global DeSci and DeSpace community, we've successfully raised $90k in grants and donations. Combined with my personal investment of $30k, this funding has enabled full-time development of our platform.
 
 Your contribution will directly accelerate space exploration innovation. As a token of appreciation, contributors receive $LUNCO tokens – while these tokens carry no monetary value or utility, they represent your part in our mission to democratize space exploration.
 
