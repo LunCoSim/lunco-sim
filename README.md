@@ -2,6 +2,9 @@
 
 LunCo is a open-source simulation tool designed for planning space missions, with a focus on lunar settlements. 
 
+![](https://gateway.lighthouse.storage/ipfs/bafybeibtwxdybz5onr5zwqotia64lbsgju6r55nwp23bosd4mxwy25siqa)
+*Coming soon via [ivoyager](https://github.com/ivoyager)*
+
 Built with the powerful Godot 4 engine, LunCo aims to revolutionize the way space engineers design and collaborate on complex systems.
 
 ## [Try in Browser](https://alpha.lunco.space)
@@ -17,38 +20,11 @@ Our vision is to provide a comprehensive suite of open-source applications tailo
 - **Collaborative Training**: Train and collaborate with your team in real-time.
 - **Digital Twin**: Create a digital replica of your lunar colony for simulations and analysis.
 
-<p align="center">
-  <a href="https://www.youtube.com/watch?v=YKYo4oZ6MoE">
-    <img src="https://img.youtube.com/vi/YKYo4oZ6MoE/hqdefault.jpg" alt="">
-  </a>
-</p>
-
-<p style="text-align: center;">
-<i>Early Development version</i>
-</p>
-##  🌍 LunCo Subsystems
-
-Help us to prioritize the development of features by donating to the feature you like on Gitcoin
-
-1. [Optimism](https://explorer.gitcoin.co/#/round/10/32)
-2. [Scroll](https://explorer.gitcoin.co/#/round/534352/13)
-3. [zkSync](https://explorer.gitcoin.co/#/round/324/3)
+![](https://gateway.lighthouse.storage/ipfs/bafybeidjpafb6zg5lalug7z5sfzvszh2erskbbdqcloejr2asex2lfg4ky)
 
 ### 💰 Donations
 
-#### EVM
-
-1. General EVM: 0x020673a52560b50a70544d7f841fbc73626648f4
-2. Eth Mainnet: [0x036191Bd2A777C283aE389BD2E0cF6f139f8eaDc](https://etherscan.io/address/0x036191Bd2A777C283aE389BD2E0cF6f139f8eaDc)
-3. Optimism: [0x40891ce6e8574bb9118913a8a304195437f36213]()
-4. Polygon: [0xcb57A8f51C47E243ea0f6061Af5B2C9932eEe820]()
-5. Arbitrum: [0xFEc9F8dB07f96973A453Ee5D1c74606a9a19F26a]()
-6. zkSync: [0xDEfaf4A720Bb1894165A3804c91f75cE748F0381](https://explorer.zksync.io/address/0xDEfaf4A720Bb1894165A3804c91f75cE748F0381)
-7. Base: [0xC9E0Ac9205CDb16520395Fe2570d832A7eA5BfaD]()
-
-#### DOGE
-
-DKrDocy32NsVAnviJ29bHr3bu2rUQk2nio
+Support us on [JuiceBox](https://juicebox.money/v2/p/763)!
 
 
 ## 🚀 Features
@@ -101,6 +77,4 @@ Join our vibrant community and stay updated on the latest developments:
 
 ## 💖 Support LunCo
 
-If you appreciate our project and want to support our mission, consider making a donation on [Giveth.io](https://giveth.io/project/lunco-collaborative-engineering?referrer_id=0hWfCeRLhwayen8MGBaZGP0CLZv1). Donors receive ~70% back in GIV tokens.
-
-Or get our [Profile NFT](https://app.copernicspace.com/spaceibles/0xAA54295c8eb420732a3748414B782C89229C0841-1587?partner=0xA64f2228cceC96076c82abb903021C33859082F8&seller=0xA64f2228cceC96076c82abb903021C33859082F8)
+Support us on [JuiceBox](https://juicebox.money/v2/p/763)!
