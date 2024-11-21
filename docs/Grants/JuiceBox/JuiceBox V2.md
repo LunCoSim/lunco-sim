@@ -16,7 +16,9 @@ That's helped a lot, allowing me to keep buidling fulltime.
 
 By donating to the project you are providing me with resources to accelerate Space Exploration.
 
-To honor your contribution you'll get $LUNCO tokens. The token has no value or utility, it just reflects your contribution.
+To honor your contribution you'll get $LUNCO tokens. The token has no value or utility, it reflect contribution to LunCo mission of democratizing space exploration!
+
+[Discord server for questions](https://discord.gg/A6U3GdvQum)
 
 ![](https://gateway.lighthouse.storage/ipfs/bafybeidjpafb6zg5lalug7z5sfzvszh2erskbbdqcloejr2asex2lfg4ky)
 
@@ -97,7 +99,7 @@ Russian-speaking news channel [about DeSpace](@despaceru)
 2. [Main repo on Gitcoin](https://github.com/LunCoSim/lunco-sim) 
 3. [Twitter](https://twitter.com/LunCoSim) 
 4. [Linkedin](https://www.linkedin.com/company/luncosim/) 
-5. [Discord Server](https://discord.gg/uTEFrW32) 
+5. [Discord Server](https://discord.gg/A6U3GdvQum) 
 7. [Youtube](https://www.youtube.com/@LunCoSim) 
 8. [Giveth](https://giveth.io/project/lunco-everyone-can-do-space)
 9. [Gitcoin](https://explorer.gitcoin.co/#/projects/0x9a9cda60bcd1b566669a6e03d79dcea4be966ebdef25dc9754cbd4170e99c61f)
