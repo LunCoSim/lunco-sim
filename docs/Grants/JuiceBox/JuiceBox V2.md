@@ -18,7 +18,7 @@ By donating to the project you are providing me with resources to accelerate Spa
 
 To honor your contribution you'll get $LUNCO tokens. The token has no value or utility, it reflect contribution to LunCo mission of democratizing space exploration!
 
-[Discord server for questions](https://discord.gg/A6U3GdvQum)
+[Discord for questions](https://discord.gg/A6U3GdvQum)
 
 ![](https://gateway.lighthouse.storage/ipfs/bafybeidjpafb6zg5lalug7z5sfzvszh2erskbbdqcloejr2asex2lfg4ky)
 
