@@ -89,3 +89,7 @@ The system becomes even more interesting with respect to [SpaceDAO.AI](https://s
 
 1. [ReqIF](https://en.wikipedia.org/wiki/Requirements_Interchange_Format)
 2. [Intro to IP-NFT by Molecule](https://docs.molecule.to/documentation/ip-nfts/intro-to-ip-nft)
+
+### PS
+
+Thank you a rando met during Popup Archipelago in Chaing Mai 2025 for comming with the name NFT-Blueprints!
