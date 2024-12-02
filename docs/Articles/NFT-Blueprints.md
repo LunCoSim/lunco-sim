@@ -18,12 +18,22 @@ NFT-blueprints can be used to put royalties on chain, taking the best from both 
 
 NFT could represent a patent or something similar, while binding legally ownership (actually a more complecx structures could emerage), and making royalties onchain.
 
+NFT-blueprints as regular NFTs should store only metadata, like hashes and links to e.g. IPFS. 
+
+NFT-blueprints could reference each other, creating chains of NFTs for value distribution, and reminding the way how spacecrafyts design based on Systems-subsystems-components approach.
+
+NFT-blueprints could be utilized not just for Space missions, but for any robotic/hardware projects.
+
 ### Web3 native mechanics
 
 1. Retroactive funding
 2. Chains of NFTs
 3. Fragmented ownership of NFTs
 4. Onchain attestation and reputation
+
+### Onchain reputation
+
+It'll emerge naturally
 
 ## Why to put design on chain?
 
@@ -32,6 +42,24 @@ NFT could represent a patent or something similar, while binding legally ownersh
 Like traditional patents, but much more flexible.
 
 ### Global collaboration and access to best talents
+
+People all over the world could contribute and benefit from the success of Space Missions.
+
+### Interoperability
+
+With onchain design it makes it easier to automate certain operations, like dealing with complience and proving your design is compliant onchain using ZK proofs.
+
+That would reduce bureaucracy, resulting in lover mission cost, accelerating space exploration.
+
+### Medium of exchange for space companies
+
+Having d detailed ledger of designs, subsystems, makes it easier to access and after all exchange information about designs accross all the supply chain fast.
+
+### Optimisation of certain operations
+
+As of time of writing it costs less than a cent to do a transaction on Ethereum L2 chains, making financial transactions in a sence very efficient, and it's just the begginig. 
+
+Using those mechanics for space missions would decrease the cost.
 
 ## Application Examples
 
