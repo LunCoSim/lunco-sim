@@ -11,3 +11,16 @@ It starts with basic things:
 With more people, space engineers, projects on board it'll open humanity access to unlimited resources of space! One small asteroid could contain more gold (or any element that we need) that we can get on Earth.
 
 Space is much more than a trillion market, it's the only way for humanity to survive as species
+
+## Links
+
+1. MoonDAO
+2. CopernicSpace
+3. SpaceDAO.ai
+4. DeepVentureDAO
+5. AstroChain
+6. ThriveOnMars
+7. SpaceCoin
+8. Liberland Space Programme
+9. Lifeship
+10. Space Radar
