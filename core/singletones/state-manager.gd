@@ -3,6 +3,9 @@ extends Node
 
 @export var Username := ""
 
+func _ready() -> void:
+	Panku.hide()
+	
 func _save():
 	pass
 	

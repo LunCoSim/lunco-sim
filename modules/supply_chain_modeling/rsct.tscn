@@ -1,6 +1,7 @@
-[gd_scene load_steps=3 format=3 uid="uid://3lmlrsbbacm"]
+[gd_scene load_steps=4 format=3 uid="uid://3lmlrsbbacm"]
 
 [ext_resource type="Script" uid="uid://dln1wsyjwuqj7" path="res://modules/supply_chain_modeling/rsct.gd" id="1_xuhcs"]
+[ext_resource type="Theme" uid="uid://dv00ngpal62cd" path="res://modules/supply_chain_modeling/rsct.tres" id="2_xuhcs"]
 
 [sub_resource type="SystemFont" id="SystemFont_6bj1w"]
 hinting = 2
@@ -16,7 +17,7 @@ grow_horizontal = 2
 grow_vertical = 2
 script = ExtResource("1_xuhcs")
 
-[node name="HSplitContainer" type="HSplitContainer" parent="."]
+[node name="VBoxContainer" type="VBoxContainer" parent="."]
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -24,62 +25,79 @@ anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 
-[node name="VBoxContainer" type="VBoxContainer" parent="HSplitContainer"]
+[node name="HBoxContainer" type="HBoxContainer" parent="VBoxContainer"]
 layout_mode = 2
 
-[node name="Button9" type="Button" parent="HSplitContainer/VBoxContainer"]
+[node name="Button9" type="Button" parent="VBoxContainer/HBoxContainer"]
 layout_mode = 2
 text = "New Sim"
 
-[node name="Button" type="Button" parent="HSplitContainer/VBoxContainer"]
+[node name="Button" type="Button" parent="VBoxContainer/HBoxContainer"]
 layout_mode = 2
 text = "Save"
 
-[node name="Button2" type="Button" parent="HSplitContainer/VBoxContainer"]
+[node name="Button2" type="Button" parent="VBoxContainer/HBoxContainer"]
 layout_mode = 2
 text = "Load"
 
-[node name="HSeparator" type="HSeparator" parent="HSplitContainer/VBoxContainer"]
+[node name="VSeparator" type="VSeparator" parent="VBoxContainer/HBoxContainer"]
 layout_mode = 2
 
-[node name="Button7" type="Button" parent="HSplitContainer/VBoxContainer"]
+[node name="Button7" type="Button" parent="VBoxContainer/HBoxContainer"]
 layout_mode = 2
 text = "Slower"
 
-[node name="Button6" type="Button" parent="HSplitContainer/VBoxContainer"]
+[node name="Button6" type="Button" parent="VBoxContainer/HBoxContainer"]
 layout_mode = 2
 theme_override_fonts/font = SubResource("SystemFont_6bj1w")
 text = "Play/Pause"
 
-[node name="Button8" type="Button" parent="HSplitContainer/VBoxContainer"]
+[node name="Button8" type="Button" parent="VBoxContainer/HBoxContainer"]
 layout_mode = 2
 text = "Faster"
 
-[node name="HSeparator2" type="HSeparator" parent="HSplitContainer/VBoxContainer"]
+[node name="HSplitContainer" type="Control" parent="VBoxContainer"]
 layout_mode = 2
-
-[node name="Button3" type="Button" parent="HSplitContainer/VBoxContainer"]
-layout_mode = 2
-text = "Add O2"
-
-[node name="Button4" type="Button" parent="HSplitContainer/VBoxContainer"]
-layout_mode = 2
-text = "Add H2"
-
-[node name="Button5" type="Button" parent="HSplitContainer/VBoxContainer"]
-layout_mode = 2
-text = "Add Factory"
-
-[node name="GraphEdit" type="GraphEdit" parent="HSplitContainer"]
-unique_name_in_owner = true
-layout_mode = 2
-size_flags_horizontal = 3
 size_flags_vertical = 3
-scroll_offset = Vector2(-500, -377)
+
+[node name="GraphEdit" type="GraphEdit" parent="VBoxContainer/HSplitContainer"]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+size_flags_horizontal = 0
+size_flags_vertical = 3
+scroll_offset = Vector2(-596, -313)
 panning_scheme = 1
 right_disconnects = true
 connection_lines_thickness = 2.0
-show_menu = false
 
-[connection signal="pressed" from="HSplitContainer/VBoxContainer/Button" to="." method="save_graph"]
-[connection signal="pressed" from="HSplitContainer/VBoxContainer/Button2" to="." method="load_graph"]
+[node name="VBoxContainer2" type="VBoxContainer" parent="VBoxContainer/HSplitContainer"]
+layout_mode = 1
+anchors_preset = 4
+anchor_top = 0.5
+anchor_bottom = 0.5
+offset_top = -54.5
+offset_right = 100.0
+offset_bottom = 54.5
+grow_vertical = 2
+size_flags_horizontal = 0
+theme = ExtResource("2_xuhcs")
+
+[node name="Button3" type="Button" parent="VBoxContainer/HSplitContainer/VBoxContainer2"]
+layout_mode = 2
+text = "Add O2"
+
+[node name="Button4" type="Button" parent="VBoxContainer/HSplitContainer/VBoxContainer2"]
+layout_mode = 2
+text = "Add H2"
+
+[node name="Button5" type="Button" parent="VBoxContainer/HSplitContainer/VBoxContainer2"]
+layout_mode = 2
+text = "Add Factory"
+
+[connection signal="pressed" from="VBoxContainer/HBoxContainer/Button" to="." method="save_graph"]
+[connection signal="pressed" from="VBoxContainer/HBoxContainer/Button2" to="." method="load_graph"]
