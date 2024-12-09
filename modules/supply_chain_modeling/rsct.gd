@@ -1,7 +1,7 @@
 @tool
-extends Node2D
+extends Control
 
-@onready var graph_edit: GraphEdit = $GraphEdit
+@onready var graph_edit: GraphEdit = %GraphEdit
 
 # Save file path for the current graph
 var save_file_path: String = "user://current_graph.save"

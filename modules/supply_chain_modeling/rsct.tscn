@@ -2,17 +2,35 @@
 
 [ext_resource type="Script" uid="uid://dln1wsyjwuqj7" path="res://modules/supply_chain_modeling/rsct.gd" id="1_xuhcs"]
 
-[node name="RSCT" type="Node2D"]
+[node name="RSCT" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
 script = ExtResource("1_xuhcs")
 
-[node name="GraphEdit" type="GraphEdit" parent="."]
-offset_left = 3.0
-offset_top = 13.0
-offset_right = 1930.0
-offset_bottom = 1266.0
-size_flags_horizontal = 10
+[node name="HSplitContainer" type="HSplitContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="VBoxContainer" type="VBoxContainer" parent="HSplitContainer"]
+layout_mode = 2
+
+[node name="Button" type="Button" parent="HSplitContainer/VBoxContainer"]
+layout_mode = 2
+text = "Add O2"
+
+[node name="GraphEdit" type="GraphEdit" parent="HSplitContainer"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
 size_flags_vertical = 3
-scroll_offset = Vector2(-400, -500)
 right_disconnects = true
 connection_lines_thickness = 2.0
 show_menu = false
