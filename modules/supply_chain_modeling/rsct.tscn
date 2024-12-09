@@ -1,7 +1,7 @@
 [gd_scene load_steps=3 format=3 uid="uid://3lmlrsbbacm"]
 
 [ext_resource type="Script" uid="uid://4suq7qf08g4x" path="res://addons/SignalVisualizer/Visualizer/signal_graph_node.gd" id="1_aatxc"]
-[ext_resource type="Script" path="res://modules/supply_chain_modeling/rsct.gd" id="1_xuhcs"]
+[ext_resource type="Script" uid="uid://dln1wsyjwuqj7" path="res://modules/supply_chain_modeling/rsct.gd" id="1_xuhcs"]
 
 [node name="RSCT" type="Node2D"]
 script = ExtResource("1_xuhcs")
@@ -14,6 +14,8 @@ offset_bottom = 1266.0
 size_flags_horizontal = 10
 size_flags_vertical = 3
 scroll_offset = Vector2(-477, -273)
+right_disconnects = true
+connection_lines_thickness = 2.0
 
 [node name="SignalGraphNode" type="GraphNode" parent="GraphEdit"]
 layout_mode = 2
