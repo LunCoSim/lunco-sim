@@ -6,7 +6,7 @@ extends Control
 # Save file path for the current graph
 var save_file_path: String = "user://current_graph.save"
 var autosave_timer: float = 0.0
-const AUTOSAVE_INTERVAL: float = 60.0  # Autosave every 60 seconds
+const AUTOSAVE_INTERVAL: float = 60000.0  # Autosave every 60 seconds
 
 var sim_time : float = 0.0
 var time_scale: float = 1.0  # Default time scale (1 second real time = 1 minute simulation time)
@@ -41,7 +41,10 @@ func save_graph() -> void:
 	
 	var save_data := {
 		"nodes": {},
-		"connections": []
+		"connections": [],
+		"view": {
+			"scroll_offset": graph_edit.scroll_offset
+		}
 	}
 	
 	# Save all node data
@@ -83,7 +86,7 @@ func load_graph() -> void:
 	# Clear existing graph
 	for node in graph_edit.get_children():
 		if node is GraphNode:
-			node.queue_free()
+			node.free()
 	
 	# Load nodes
 	for node_name in save_data["nodes"]:
@@ -105,6 +108,13 @@ func load_graph() -> void:
 			connection["to_node"],
 			connection["to_port"]
 		)
+		
+		# Load view settings
+	if "view" in save_data:
+		graph_edit.call_deferred("set_scroll_offset", save_data["view"]["scroll_offset"]) 
+		print("Load: ", save_data["view"]["scroll_offset"])
+	
+	print("Load complete")
 
 func _on_connection_request(from_node: StringName, from_port: int, to_node: StringName, to_port: int):
 	# Create new connection between nodes
