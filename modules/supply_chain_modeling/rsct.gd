@@ -2,6 +2,7 @@
 extends Control
 
 @onready var graph_edit: GraphEdit = %GraphEdit
+@onready var sim_time_label: Label = $VBoxContainer/HBoxContainer/SimTimeLabel
 
 # Save file path for the current graph
 var save_file_path: String = "user://current_graph.save"
@@ -26,10 +27,12 @@ func _ready():
 	
 	
 	load_graph()
+	update_sim_time_label()
 
 func _process(delta: float) -> void:
 	if not paused:
 		sim_time += delta * time_scale
+		update_sim_time_label()
 		# Update objects based on sim_time here
 
 	autosave_timer += delta
@@ -169,4 +172,25 @@ func _on_button_5_pressed() -> void:
 func _on_button_10_pressed() -> void:
 	add_node_from_path("res://modules/supply_chain_modeling/facilities/solar_power_plant.tscn")
 	
+	
+
+func update_sim_time_label() -> void:
+	var sim_time_minutes = round(sim_time * time_unit)
+	sim_time_label.text = "Sim Time: " + str(sim_time_minutes) + " minutes"
+
+func _on_button_6_pressed() -> void:
+	if paused:
+		resume_simulation()
+	else:
+		pause_simulation()
+
+func _on_button_7_pressed() -> void:
+	set_time_scale(max(0.1, time_scale - 0.1))  # Decrease time scale, minimum 0.1
+	print("Time scale decreased to: ", time_scale)
+
+func _on_button_8_pressed() -> void:
+	set_time_scale(time_scale + 0.1)  # Increase time scale
+	print("Time scale increased to: ", time_scale)
+
+
 	

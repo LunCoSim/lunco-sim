@@ -56,6 +56,10 @@ text = "Play/Pause"
 layout_mode = 2
 text = "Faster"
 
+[node name="SimTimeLabel" type="Label" parent="VBoxContainer/HBoxContainer"]
+layout_mode = 2
+text = "Sim Time: 23175.0 minutes"
+
 [node name="HSplitContainer" type="Control" parent="VBoxContainer"]
 layout_mode = 2
 size_flags_vertical = 3
@@ -70,6 +74,7 @@ grow_horizontal = 2
 grow_vertical = 2
 size_flags_horizontal = 0
 size_flags_vertical = 3
+scroll_offset = Vector2(-739.869, -288)
 panning_scheme = 1
 right_disconnects = true
 connection_lines_thickness = 2.0
@@ -104,6 +109,9 @@ text = "Add Solar Power Plant"
 
 [connection signal="pressed" from="VBoxContainer/HBoxContainer/Button" to="." method="save_graph"]
 [connection signal="pressed" from="VBoxContainer/HBoxContainer/Button2" to="." method="load_graph"]
+[connection signal="pressed" from="VBoxContainer/HBoxContainer/Button7" to="." method="_on_button_7_pressed"]
+[connection signal="pressed" from="VBoxContainer/HBoxContainer/Button6" to="." method="_on_button_6_pressed"]
+[connection signal="pressed" from="VBoxContainer/HBoxContainer/Button8" to="." method="_on_button_8_pressed"]
 [connection signal="pressed" from="VBoxContainer/HSplitContainer/VBoxContainer2/Button3" to="." method="_on_button_3_pressed"]
 [connection signal="pressed" from="VBoxContainer/HSplitContainer/VBoxContainer2/Button4" to="." method="_on_button_4_pressed"]
 [connection signal="pressed" from="VBoxContainer/HSplitContainer/VBoxContainer2/Button5" to="." method="_on_button_5_pressed"]
