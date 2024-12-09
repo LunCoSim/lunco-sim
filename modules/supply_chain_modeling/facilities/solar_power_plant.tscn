@@ -1,0 +1,4 @@
+[gd_scene format=3 uid="uid://b23pxrixiv5lm"]
+
+[node name="SolarPowerPlant" type="GraphNode"]
+title = "Solar Power Plant"
