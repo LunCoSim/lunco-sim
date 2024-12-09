@@ -1,7 +1,9 @@
-[gd_scene load_steps=3 format=3 uid="uid://3lmlrsbbacm"]
+[gd_scene load_steps=5 format=3 uid="uid://3lmlrsbbacm"]
 
-[ext_resource type="Script" uid="uid://4suq7qf08g4x" path="res://addons/SignalVisualizer/Visualizer/signal_graph_node.gd" id="1_aatxc"]
 [ext_resource type="Script" uid="uid://dln1wsyjwuqj7" path="res://modules/supply_chain_modeling/rsct.gd" id="1_xuhcs"]
+[ext_resource type="PackedScene" uid="uid://brl431bi6j5c2" path="res://modules/supply_chain_modeling/resource_o_2.tscn" id="2_rnrox"]
+[ext_resource type="PackedScene" uid="uid://bc8tq8cwhy34e" path="res://modules/supply_chain_modeling/resource_h_2.tscn" id="3_br0oo"]
+[ext_resource type="PackedScene" uid="uid://cv0bmac63qtuv" path="res://modules/supply_chain_modeling/object_factory.tscn" id="4_xnrj7"]
 
 [node name="RSCT" type="Node2D"]
 script = ExtResource("1_xuhcs")
@@ -13,110 +15,28 @@ offset_right = 1930.0
 offset_bottom = 1266.0
 size_flags_horizontal = 10
 size_flags_vertical = 3
-scroll_offset = Vector2(-477, -273)
 right_disconnects = true
 connection_lines_thickness = 2.0
+show_menu = false
 
-[node name="SignalGraphNode" type="GraphNode" parent="GraphEdit"]
-layout_mode = 2
-offset_left = 376.0
-offset_top = 120.0
-offset_right = 652.0
-offset_bottom = 237.0
-mouse_filter = 1
-position_offset = Vector2(-101, -153)
-resizable = true
-title = "Resource: O2"
-slot/0/left_enabled = false
-slot/0/left_type = 1
-slot/0/left_color = Color(1, 1, 1, 1)
-slot/0/left_icon = null
-slot/0/right_enabled = true
-slot/0/right_type = 0
-slot/0/right_color = Color(1, 1, 1, 1)
-slot/0/right_icon = null
-slot/0/draw_stylebox = true
-script = ExtResource("1_aatxc")
-metadata/_custom_type_script = ExtResource("1_aatxc")
+[node name="Resource_O2" parent="GraphEdit" instance=ExtResource("2_rnrox")]
+layout_mode = 0
+offset_left = -101.0
+offset_top = -153.0
+offset_right = 175.0
+offset_bottom = -36.0
 
-[node name="Label" type="Label" parent="GraphEdit/SignalGraphNode"]
-layout_mode = 2
-text = "O2"
+[node name="Resource_H2" parent="GraphEdit" instance=ExtResource("3_br0oo")]
+layout_mode = 0
+offset_left = -286.0
+offset_top = -21.0
+offset_right = -10.0
+offset_bottom = 96.0
 
-[node name="SignalGraphNode3" type="GraphNode" parent="GraphEdit"]
-layout_mode = 2
-offset_left = 191.0
-offset_top = 252.0
-offset_right = 467.0
-offset_bottom = 369.0
-mouse_filter = 1
-position_offset = Vector2(-286, -21)
-resizable = true
-title = "Resource: H2"
-slot/0/left_enabled = false
-slot/0/left_type = 1
-slot/0/left_color = Color(1, 1, 1, 1)
-slot/0/left_icon = null
-slot/0/right_enabled = true
-slot/0/right_type = 0
-slot/0/right_color = Color(1, 1, 1, 1)
-slot/0/right_icon = null
-slot/0/draw_stylebox = true
-script = ExtResource("1_aatxc")
-metadata/_custom_type_script = ExtResource("1_aatxc")
-
-[node name="Label" type="Label" parent="GraphEdit/SignalGraphNode3"]
-layout_mode = 2
-text = "H2"
-
-[node name="SignalGraphNode2" type="GraphNode" parent="GraphEdit"]
-layout_mode = 2
-offset_left = 717.0
-offset_top = 198.0
-offset_right = 1418.0
-offset_bottom = 571.0
-mouse_filter = 1
-position_offset = Vector2(240, -75)
-resizable = true
-title = "Factory"
-slot/0/left_enabled = true
-slot/0/left_type = 0
-slot/0/left_color = Color(1, 1, 1, 1)
-slot/0/left_icon = null
-slot/0/right_enabled = false
-slot/0/right_type = 0
-slot/0/right_color = Color(1, 1, 1, 1)
-slot/0/right_icon = null
-slot/0/draw_stylebox = true
-slot/1/left_enabled = true
-slot/1/left_type = 0
-slot/1/left_color = Color(1, 1, 1, 1)
-slot/1/left_icon = null
-slot/1/right_enabled = false
-slot/1/right_type = 0
-slot/1/right_color = Color(1, 1, 1, 1)
-slot/1/right_icon = null
-slot/1/draw_stylebox = true
-slot/2/left_enabled = false
-slot/2/left_type = 0
-slot/2/left_color = Color(1, 1, 1, 1)
-slot/2/left_icon = null
-slot/2/right_enabled = true
-slot/2/right_type = 0
-slot/2/right_color = Color(1, 1, 1, 1)
-slot/2/right_icon = null
-slot/2/draw_stylebox = true
-script = ExtResource("1_aatxc")
-metadata/_custom_type_script = ExtResource("1_aatxc")
-
-[node name="Label" type="Label" parent="GraphEdit/SignalGraphNode2"]
-layout_mode = 2
-text = "O2"
-
-[node name="Label2" type="Label" parent="GraphEdit/SignalGraphNode2"]
-layout_mode = 2
-text = "H2"
-
-[node name="Label3" type="Label" parent="GraphEdit/SignalGraphNode2"]
-layout_mode = 2
-text = "H20"
+[node name="Object_Factory" parent="GraphEdit" instance=ExtResource("4_xnrj7")]
+layout_mode = 0
+offset_left = 635.0
+offset_top = 348.0
+offset_right = 1336.0
+offset_bottom = 721.0
+position_offset = Vector2(635, 348)
