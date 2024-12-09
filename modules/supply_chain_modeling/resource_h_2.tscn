@@ -3,10 +3,10 @@
 [ext_resource type="Script" uid="uid://4suq7qf08g4x" path="res://addons/SignalVisualizer/Visualizer/signal_graph_node.gd" id="1_3qw51"]
 
 [node name="Resource_H2" type="GraphNode"]
-offset_left = 191.0
-offset_top = 252.0
-offset_right = 467.0
-offset_bottom = 369.0
+offset_left = 173.0
+offset_top = 203.0
+offset_right = 322.0
+offset_bottom = 281.0
 mouse_filter = 1
 position_offset = Vector2(-286, -21)
 resizable = true

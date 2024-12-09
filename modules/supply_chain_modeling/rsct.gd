@@ -146,3 +146,17 @@ func pause_simulation() -> void:
 
 func resume_simulation() -> void:
 	paused = false
+
+
+func add_node_from_path(path: String):
+	var node_scene = load(path)
+	if node_scene:
+		var node = node_scene.instantiate()
+		graph_edit.add_child(node)
+		node.set_owner(null) # Ensure node isn't saved with scene
+		save_graph()
+
+func _on_button_3_pressed() -> void:
+	add_node_from_path("res://modules/supply_chain_modeling/resource_o_2.tscn")
+	
+	

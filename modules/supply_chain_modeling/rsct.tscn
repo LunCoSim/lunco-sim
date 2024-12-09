@@ -101,3 +101,4 @@ text = "Add Factory"
 
 [connection signal="pressed" from="VBoxContainer/HBoxContainer/Button" to="." method="save_graph"]
 [connection signal="pressed" from="VBoxContainer/HBoxContainer/Button2" to="." method="load_graph"]
+[connection signal="pressed" from="VBoxContainer/HSplitContainer/VBoxContainer2/Button3" to="." method="_on_button_3_pressed"]

@@ -5,8 +5,8 @@
 [node name="Resource_O2" type="GraphNode"]
 offset_left = 376.0
 offset_top = 120.0
-offset_right = 652.0
-offset_bottom = 237.0
+offset_right = 627.0
+offset_bottom = 198.0
 mouse_filter = 1
 position_offset = Vector2(-101, -153)
 resizable = true
