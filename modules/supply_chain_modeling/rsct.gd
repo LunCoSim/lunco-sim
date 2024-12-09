@@ -1,3 +1,4 @@
+@tool
 extends Node2D
 
 @onready var graph_edit: GraphEdit = $GraphEdit
@@ -11,34 +12,15 @@ func _ready():
 	# Connect signals for handling connections
 	graph_edit.connect("connection_request", _on_connection_request)
 	graph_edit.connect("disconnection_request", _on_disconnection_request)
+	graph_edit.connect("end_node_move", _on_node_moved)
 	
 	# Enable snapping and minimap for better UX
 	graph_edit.snapping_distance = 20
 	#graph_edit.show_minimap = true
 	#graph_edit.minimap_enabled = true
 	
-	# Load previous graph if it exists
+	
 	load_graph()
-
-func _on_connection_request(from_node: StringName, from_port: int, to_node: StringName, to_port: int):
-	# Create new connection between nodes
-	graph_edit.connect_node(from_node, from_port, to_node, to_port)
-	
-	# You can add custom logic here for handling the resource flow
-	print("Connected: ", from_node, "(", from_port, ") -> ", to_node, "(", to_port, ")")
-	
-	# Trigger save after connection
-	save_graph()
-
-func _on_disconnection_request(from_node: StringName, from_port: int, to_node: StringName, to_port: int):
-	# Remove connection between nodes
-	graph_edit.disconnect_node(from_node, from_port, to_node, to_port)
-	
-	# You can add custom cleanup logic here
-	print("Disconnected: ", from_node, "(", from_port, ") -> ", to_node, "(", to_port, ")")
-	
-	# Trigger save after disconnection
-	save_graph()
 
 func _process(delta: float) -> void:
 	autosave_timer += delta
@@ -47,6 +29,7 @@ func _process(delta: float) -> void:
 		save_graph()
 
 func save_graph() -> void:
+	
 	var save_data := {
 		"nodes": {},
 		"connections": []
@@ -103,6 +86,7 @@ func load_graph() -> void:
 			node.position_offset = node_data["position"]
 			node.size = node_data["size"]
 			graph_edit.add_child(node)
+			node.set_owner(null) # Ensure node isn't saved with scene
 	
 	# Load connections
 	for connection in save_data["connections"]:
@@ -113,6 +97,23 @@ func load_graph() -> void:
 			connection["to_port"]
 		)
 
-# Add new signal handler for node movement
+func _on_connection_request(from_node: StringName, from_port: int, to_node: StringName, to_port: int):
+	# Create new connection between nodes
+	graph_edit.connect_node(from_node, from_port, to_node, to_port)
+	
+	# You can add custom logic here for handling the resource flow
+	print("Connected: ", from_node, "(", from_port, ") -> ", to_node, "(", to_port, ")")
+	
+	save_graph()
+
+func _on_disconnection_request(from_node: StringName, from_port: int, to_node: StringName, to_port: int):
+	# Remove connection between nodes
+	graph_edit.disconnect_node(from_node, from_port, to_node, to_port)
+	
+	# You can add custom cleanup logic here
+	print("Disconnected: ", from_node, "(", from_port, ") -> ", to_node, "(", to_port, ")")
+	
+	save_graph()
+
 func _on_node_moved():
 	save_graph()
