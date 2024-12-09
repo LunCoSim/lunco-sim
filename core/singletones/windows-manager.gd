@@ -16,8 +16,6 @@ func _ready():
 	var TutorialWindowScene = load("res://core/widgets/tutorial.tscn").instantiate()
 	TutorialWindow = LCWindowsManager.make_window(TutorialWindowScene, "Tutorial")
 	
-	TutorialWindow.show()
-	
 static func make_window(control, title):
 	var win: PankuLynxWindow = Panku.windows_manager.create_window(control)
 	
@@ -45,5 +43,8 @@ func toggle_chat():
 	else:
 		ChatWindow.show_window()
 
+func show_tutoril():
+	TutorialWindow.show()
+	
 func hide_tutorial():
 	TutorialWindow.hide_window()

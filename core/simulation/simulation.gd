@@ -74,7 +74,9 @@ func _ready():
 	ControlManager.control_granted.connect(_on_control_granted)
 	ControlManager.control_released.connect(_on_control_released)
 	ControlManager.control_request_denied.connect(_on_control_request_denied)
-
+	
+	LCWindows.show_tutoril()
+	
 ## Called every frame. 'delta' is the elapsed time since the previous frame.
 #func _process(_delta):
 		##Origin shifting. TBD how to do it in multiplayer
