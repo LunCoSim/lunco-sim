@@ -1,6 +1,6 @@
 [gd_scene load_steps=2 format=3 uid="uid://brl431bi6j5c2"]
 
-[ext_resource type="Script" uid="uid://4suq7qf08g4x" path="res://addons/SignalVisualizer/Visualizer/signal_graph_node.gd" id="1_u4uxa"]
+[ext_resource type="Script" uid="uid://4suq7qf08g4x" path="res://addons/SignalVisualizer/Visualizer/signal_graph_node.gd" id="1_x4apn"]
 
 [node name="Resource_O2" type="GraphNode"]
 offset_left = 376.0
@@ -20,8 +20,8 @@ slot/0/right_type = 0
 slot/0/right_color = Color(1, 1, 1, 1)
 slot/0/right_icon = null
 slot/0/draw_stylebox = true
-script = ExtResource("1_u4uxa")
-metadata/_custom_type_script = ExtResource("1_u4uxa")
+script = ExtResource("1_x4apn")
+metadata/_custom_type_script = ExtResource("1_x4apn")
 
 [node name="Label" type="Label" parent="."]
 layout_mode = 2

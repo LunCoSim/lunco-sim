@@ -157,6 +157,16 @@ func add_node_from_path(path: String):
 		save_graph()
 
 func _on_button_3_pressed() -> void:
-	add_node_from_path("res://modules/supply_chain_modeling/resource_o_2.tscn")
+	add_node_from_path("res://modules/supply_chain_modeling/resources/resource_o_2.tscn")
+
+func _on_button_4_pressed() -> void:
+	add_node_from_path("res://modules/supply_chain_modeling/resources/resource_h_2.tscn")
+
+func _on_button_5_pressed() -> void:
+	add_node_from_path("res://modules/supply_chain_modeling/facilities/object_factory.tscn")
+
+
+func _on_button_10_pressed() -> void:
+	add_node_from_path("res://modules/supply_chain_modeling/facilities/solar_power_plant.tscn")
 	
 	

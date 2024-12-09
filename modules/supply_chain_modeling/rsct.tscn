@@ -70,7 +70,6 @@ grow_horizontal = 2
 grow_vertical = 2
 size_flags_horizontal = 0
 size_flags_vertical = 3
-scroll_offset = Vector2(-913.493, 271.814)
 panning_scheme = 1
 right_disconnects = true
 connection_lines_thickness = 2.0
@@ -99,6 +98,13 @@ text = "Add H2"
 layout_mode = 2
 text = "Add Factory"
 
+[node name="Button10" type="Button" parent="VBoxContainer/HSplitContainer/VBoxContainer2"]
+layout_mode = 2
+text = "Add Solar Power Plant"
+
 [connection signal="pressed" from="VBoxContainer/HBoxContainer/Button" to="." method="save_graph"]
 [connection signal="pressed" from="VBoxContainer/HBoxContainer/Button2" to="." method="load_graph"]
 [connection signal="pressed" from="VBoxContainer/HSplitContainer/VBoxContainer2/Button3" to="." method="_on_button_3_pressed"]
+[connection signal="pressed" from="VBoxContainer/HSplitContainer/VBoxContainer2/Button4" to="." method="_on_button_4_pressed"]
+[connection signal="pressed" from="VBoxContainer/HSplitContainer/VBoxContainer2/Button5" to="." method="_on_button_5_pressed"]
+[connection signal="pressed" from="VBoxContainer/HSplitContainer/VBoxContainer2/Button10" to="." method="_on_button_10_pressed"]
