@@ -1,6 +1,6 @@
 [gd_scene load_steps=5 format=3 uid="uid://wdnxqhctneyv"]
 
-[ext_resource type="Script" path="res://core/avatar/avatar_ui.gd" id="1_igs02"]
+[ext_resource type="Script" uid="uid://bpq5fqrtu7f5o" path="res://core/avatar/avatar_ui.gd" id="1_igs02"]
 
 [sub_resource type="Theme" id="Theme_mfhp6"]
 

@@ -2,7 +2,7 @@
 
 [ext_resource type="PackedScene" uid="uid://oulno1atrp8k" path="res://core/simulation/simulation.tscn" id="1_kjl25"]
 [ext_resource type="PackedScene" uid="uid://cpbv4fmfxppt1" path="res://modules/solar_system_planets/sun.tscn" id="2_bjryh"]
-[ext_resource type="Script" path="res://main_showcase.gd" id="2_iqwup"]
+[ext_resource type="Script" uid="uid://5evcey8c0kqj" path="res://main_showcase.gd" id="2_iqwup"]
 [ext_resource type="PackedScene" uid="uid://wdnxqhctneyv" path="res://core/avatar/avatar_ui.tscn" id="3_s30nd"]
 [ext_resource type="PackedScene" uid="uid://ddaqlkbgl7bdl" path="res://modules/solar_system_planets/earth.tscn" id="3_tu3pr"]
 [ext_resource type="PackedScene" uid="uid://csqh45xcqbewi" path="res://modules/solar_system_planets/moon.tscn" id="4_ijb73"]
@@ -115,6 +115,46 @@ tracks/6/keys = {
 "values": [0.0, 1.0]
 }
 
+[sub_resource type="Animation" id="Animation_qdmg5"]
+resource_name = "flyby"
+length = 40.0
+tracks/0/type = "value"
+tracks/0/imported = false
+tracks/0/enabled = true
+tracks/0/path = NodePath("flyby/PathFollow3D:progress_ratio")
+tracks/0/interp = 1
+tracks/0/loop_wrap = true
+tracks/0/keys = {
+"times": PackedFloat32Array(0, 20),
+"transitions": PackedFloat32Array(1, 1),
+"update": 0,
+"values": [0.0, 1.0]
+}
+tracks/1/type = "value"
+tracks/1/imported = false
+tracks/1/enabled = true
+tracks/1/path = NodePath("flyby/PathFollow3D/Camera3D:rotation")
+tracks/1/interp = 1
+tracks/1/loop_wrap = true
+tracks/1/keys = {
+"times": PackedFloat32Array(0, 13.2667, 17.7),
+"transitions": PackedFloat32Array(1, 1, 0.329877),
+"update": 0,
+"values": [Vector3(0, 0, 0), Vector3(0, 0, 0), Vector3(0, 2.87979, 0)]
+}
+tracks/2/type = "value"
+tracks/2/imported = false
+tracks/2/enabled = true
+tracks/2/path = NodePath("Starships/PathFollow3D:progress_ratio")
+tracks/2/interp = 1
+tracks/2/loop_wrap = true
+tracks/2/keys = {
+"times": PackedFloat32Array(12.7, 27.3, 39.5667),
+"transitions": PackedFloat32Array(1, 1, 1),
+"update": 0,
+"values": [0.0, 0.2, 0.2]
+}
+
 [sub_resource type="Animation" id="Animation_uoaro"]
 resource_name = "new_animation"
 length = 10.0
@@ -163,46 +203,6 @@ tracks/3/keys = {
 "times": PackedFloat32Array(3.31779, 4.30818, 7.10601, 10)
 }
 
-[sub_resource type="Animation" id="Animation_qdmg5"]
-resource_name = "flyby"
-length = 40.0
-tracks/0/type = "value"
-tracks/0/imported = false
-tracks/0/enabled = true
-tracks/0/path = NodePath("flyby/PathFollow3D:progress_ratio")
-tracks/0/interp = 1
-tracks/0/loop_wrap = true
-tracks/0/keys = {
-"times": PackedFloat32Array(0, 20),
-"transitions": PackedFloat32Array(1, 1),
-"update": 0,
-"values": [0.0, 1.0]
-}
-tracks/1/type = "value"
-tracks/1/imported = false
-tracks/1/enabled = true
-tracks/1/path = NodePath("flyby/PathFollow3D/Camera3D:rotation")
-tracks/1/interp = 1
-tracks/1/loop_wrap = true
-tracks/1/keys = {
-"times": PackedFloat32Array(0, 13.2667, 17.7),
-"transitions": PackedFloat32Array(1, 1, 0.329877),
-"update": 0,
-"values": [Vector3(0, 0, 0), Vector3(0, 0, 0), Vector3(0, 2.87979, 0)]
-}
-tracks/2/type = "value"
-tracks/2/imported = false
-tracks/2/enabled = true
-tracks/2/path = NodePath("Starships/PathFollow3D:progress_ratio")
-tracks/2/interp = 1
-tracks/2/loop_wrap = true
-tracks/2/keys = {
-"times": PackedFloat32Array(12.7, 27.3, 39.5667),
-"transitions": PackedFloat32Array(1, 1, 1),
-"update": 0,
-"values": [0.0, 0.2, 0.2]
-}
-
 [sub_resource type="AnimationLibrary" id="AnimationLibrary_rtj8d"]
 _data = {
 &"RESET": SubResource("Animation_m3ybo"),
@@ -245,7 +245,7 @@ text = "Yes"
 text = "Yes"
 
 [node name="MultiplayerSpawner" parent="." index="1"]
-_spawnable_scenes = PackedStringArray("res://content/starship/starship.tscn", "res://core/entities/operator.tscn", "res://content/gobot/gobot.tscn", "res://content/animated-astronaut-character-in-space-suit-loop/astronaut.tscn")
+_spawnable_scenes = PackedStringArray("uid://bl8254ixsq42f", "uid://dxepfetvn7y3c", "uid://baunvflaucrbn", "uid://db37rii8injqd")
 spawn_path = NodePath("../Universe/Sun/Earth/Moon/LangrenusCraterMap/Spawner")
 
 [node name="Sun" parent="Universe" index="1" instance=ExtResource("2_bjryh")]
