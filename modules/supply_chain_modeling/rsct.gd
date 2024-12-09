@@ -16,6 +16,9 @@ func _ready():
 	graph_edit.snapping_distance = 20
 	#graph_edit.show_minimap = true
 	#graph_edit.minimap_enabled = true
+	
+	# Load previous graph if it exists
+	load_graph()
 
 func _on_connection_request(from_node: StringName, from_port: int, to_node: StringName, to_port: int):
 	# Create new connection between nodes
@@ -23,6 +26,9 @@ func _on_connection_request(from_node: StringName, from_port: int, to_node: Stri
 	
 	# You can add custom logic here for handling the resource flow
 	print("Connected: ", from_node, "(", from_port, ") -> ", to_node, "(", to_port, ")")
+	
+	# Trigger save after connection
+	save_graph()
 
 func _on_disconnection_request(from_node: StringName, from_port: int, to_node: StringName, to_port: int):
 	# Remove connection between nodes
@@ -30,6 +36,9 @@ func _on_disconnection_request(from_node: StringName, from_port: int, to_node: S
 	
 	# You can add custom cleanup logic here
 	print("Disconnected: ", from_node, "(", from_port, ") -> ", to_node, "(", to_port, ")")
+	
+	# Trigger save after disconnection
+	save_graph()
 
 func _process(delta: float) -> void:
 	autosave_timer += delta
@@ -66,3 +75,44 @@ func save_graph() -> void:
 	if file:
 		file.store_var(save_data)
 		print("Graph autosaved successfully")
+
+func load_graph() -> void:
+	if not FileAccess.file_exists(save_file_path):
+		return
+		
+	var file = FileAccess.open(save_file_path, FileAccess.READ)
+	if not file:
+		return
+		
+	var save_data = file.get_var()
+	if not save_data:
+		return
+	
+	# Clear existing graph
+	for node in graph_edit.get_children():
+		if node is GraphNode:
+			node.queue_free()
+	
+	# Load nodes
+	for node_name in save_data["nodes"]:
+		var node_data = save_data["nodes"][node_name]
+		var node_scene = load(node_data["type"])
+		if node_scene:
+			var node = node_scene.instantiate()
+			node.name = node_name
+			node.position_offset = node_data["position"]
+			node.size = node_data["size"]
+			graph_edit.add_child(node)
+	
+	# Load connections
+	for connection in save_data["connections"]:
+		graph_edit.connect_node(
+			connection["from_node"],
+			connection["from_port"],
+			connection["to_node"],
+			connection["to_port"]
+		)
+
+# Add new signal handler for node movement
+func _on_node_moved():
+	save_graph()
