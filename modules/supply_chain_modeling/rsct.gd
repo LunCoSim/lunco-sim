@@ -8,6 +8,11 @@ var save_file_path: String = "user://current_graph.save"
 var autosave_timer: float = 0.0
 const AUTOSAVE_INTERVAL: float = 60.0  # Autosave every 60 seconds
 
+var sim_time : float = 0.0
+var time_scale: float = 1.0  # Default time scale (1 second real time = 1 minute simulation time)
+var time_unit: float = 60.0  # Default time unit (1 second real time = 1 minute simulation time)
+var paused: bool = false  # Simulation paused state
+
 func _ready():
 	# Connect signals for handling connections
 	graph_edit.connect("connection_request", _on_connection_request)
@@ -23,6 +28,10 @@ func _ready():
 	load_graph()
 
 func _process(delta: float) -> void:
+	if not paused:
+		sim_time += delta * time_scale
+		# Update objects based on sim_time here
+
 	autosave_timer += delta
 	if autosave_timer >= AUTOSAVE_INTERVAL:
 		autosave_timer = 0.0
@@ -117,3 +126,13 @@ func _on_disconnection_request(from_node: StringName, from_port: int, to_node: S
 
 func _on_node_moved():
 	save_graph()
+
+# Add functions to control simulation
+func set_time_scale(new_scale: float) -> void:
+	time_scale = new_scale
+
+func pause_simulation() -> void:
+	paused = true
+
+func resume_simulation() -> void:
+	paused = false
