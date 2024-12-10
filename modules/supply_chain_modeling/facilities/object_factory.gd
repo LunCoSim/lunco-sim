@@ -34,8 +34,18 @@ func connect_resource(node: Node, port: int) -> void:
 		0: o2_source = node
 		1: h2_source = node
 		2: power_source = node
-		3: h2o_storage = node
-	update_status_display()  # Update status when connection changes
+		3: 
+			if node.has_method("add_resource"):  # Check if it's a valid storage target
+				h2o_storage = node
+	update_status_display()
+
+# Add a new method to handle being the source of a connection
+func connect_to_target(node: Node, port: int) -> void:
+	if port == 0:  # H2O output port
+		if node.has_method("add_resource"):
+			h2o_storage = node
+	update_status_display()
+
 
 func disconnect_resource(port: int) -> void:
 	match port:
@@ -44,6 +54,11 @@ func disconnect_resource(port: int) -> void:
 		2: power_source = null
 		3: h2o_storage = null
 	update_status_display()  # Update status when connection changes
+
+func disconnect_from_target(port: int) -> void:
+	if port == 0:  # H2O output port
+		h2o_storage = null
+	update_status_display()
 
 func _process(delta: float) -> void:
 	# First check if we have all required connections

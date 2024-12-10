@@ -127,7 +127,9 @@ func _on_connection_request(from_node: StringName, from_port: int, to_node: Stri
 	var source_node = graph_edit.get_node(NodePath(from_node))
 	var target_node = graph_edit.get_node(NodePath(to_node))
 	
-	# Connect resources
+	# Handle the connection based on direction
+	if source_node.has_method("connect_to_target"):
+		source_node.connect_to_target(target_node, from_port)
 	if target_node.has_method("connect_resource"):
 		target_node.connect_resource(source_node, to_port)
 	
@@ -138,10 +140,13 @@ func _on_disconnection_request(from_node: StringName, from_port: int, to_node: S
 	# Remove connection between nodes
 	graph_edit.disconnect_node(from_node, from_port, to_node, to_port)
 	
-	# Get the target node
+	# Get the actual nodes
+	var source_node = graph_edit.get_node(NodePath(from_node))
 	var target_node = graph_edit.get_node(NodePath(to_node))
 	
-	# Disconnect resource
+	# Handle the disconnection based on direction
+	if source_node.has_method("disconnect_from_target"):
+		source_node.disconnect_from_target(from_port)
 	if target_node.has_method("disconnect_resource"):
 		target_node.disconnect_resource(to_port)
 	
