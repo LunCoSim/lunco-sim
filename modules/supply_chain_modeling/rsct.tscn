@@ -59,7 +59,7 @@ text = "Faster"
 [node name="SimTimeLabel" type="Label" parent="VBoxContainer/MenuContainer"]
 unique_name_in_owner = true
 layout_mode = 2
-text = "Sim Time: 316386.0 minutes"
+text = "Sim Time: 83.0 minutes"
 
 [node name="HSplitContainer" type="Control" parent="VBoxContainer"]
 layout_mode = 2
@@ -80,14 +80,14 @@ panning_scheme = 1
 right_disconnects = true
 connection_lines_thickness = 2.0
 
-[node name="VBoxContainer2" type="VFlowContainer" parent="VBoxContainer/HSplitContainer"]
+[node name="VBoxContainer2" type="VBoxContainer" parent="VBoxContainer/HSplitContainer"]
 layout_mode = 1
 anchors_preset = 4
 anchor_top = 0.5
 anchor_bottom = 0.5
 offset_top = -54.5
-offset_right = 176.0
-offset_bottom = 65.5
+offset_right = 278.0
+offset_bottom = 127.5
 grow_vertical = 2
 size_flags_horizontal = 0
 theme = ExtResource("2_xuhcs")
@@ -108,6 +108,14 @@ text = "Add Factory"
 layout_mode = 2
 text = "Add Solar Power Plant"
 
+[node name="Button11" type="Button" parent="VBoxContainer/HSplitContainer/VBoxContainer2"]
+layout_mode = 2
+text = "Add Storage"
+
+[node name="Button12" type="Button" parent="VBoxContainer/HSplitContainer/VBoxContainer2"]
+layout_mode = 2
+text = "Add H2O"
+
 [connection signal="pressed" from="VBoxContainer/MenuContainer/Button" to="." method="save_graph"]
 [connection signal="pressed" from="VBoxContainer/MenuContainer/Button2" to="." method="load_graph"]
 [connection signal="pressed" from="VBoxContainer/MenuContainer/Button7" to="." method="_on_button_7_pressed"]
@@ -117,3 +125,5 @@ text = "Add Solar Power Plant"
 [connection signal="pressed" from="VBoxContainer/HSplitContainer/VBoxContainer2/Button4" to="." method="_on_button_4_pressed"]
 [connection signal="pressed" from="VBoxContainer/HSplitContainer/VBoxContainer2/Button5" to="." method="_on_button_5_pressed"]
 [connection signal="pressed" from="VBoxContainer/HSplitContainer/VBoxContainer2/Button10" to="." method="_on_button_10_pressed"]
+[connection signal="pressed" from="VBoxContainer/HSplitContainer/VBoxContainer2/Button11" to="." method="_on_button_11_pressed"]
+[connection signal="pressed" from="VBoxContainer/HSplitContainer/VBoxContainer2/Button12" to="." method="_on_button_12_pressed"]

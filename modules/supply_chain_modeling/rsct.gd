@@ -192,5 +192,11 @@ func _on_button_8_pressed() -> void:
 	set_time_scale(time_scale + 0.1)  # Increase time scale
 	print("Time scale increased to: ", time_scale)
 
+func _on_button_11_pressed() -> void:
+	add_node_from_path("res://modules/supply_chain_modeling/facilities/storage.tscn")
+
+func _on_button_12_pressed() -> void:
+	add_node_from_path("res://modules/supply_chain_modeling/resources/resource_h2o.tscn")
+
 
 	
