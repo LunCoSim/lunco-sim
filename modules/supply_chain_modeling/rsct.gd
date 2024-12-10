@@ -46,7 +46,8 @@ func save_graph() -> void:
 		"nodes": {},
 		"connections": [],
 		"view": {
-			"scroll_offset": graph_edit.scroll_offset
+			"scroll_offset": graph_edit.scroll_offset,
+			"zoom": graph_edit.zoom
 		}
 	}
 	
@@ -114,8 +115,10 @@ func load_graph() -> void:
 		
 		# Load view settings
 	if "view" in save_data:
-		graph_edit.call_deferred("set_scroll_offset", save_data["view"]["scroll_offset"]) 
-		print("Load: ", save_data["view"]["scroll_offset"])
+		graph_edit.call_deferred("set_scroll_offset", save_data["view"]["scroll_offset"])
+		if "zoom" in save_data["view"]:
+			graph_edit.zoom = save_data["view"]["zoom"]
+		#print("Load: ", save_data["view"]["scroll_offset"], " zoom: ", save_data["view"]["zoom"])
 	
 	print("Load complete")
 
