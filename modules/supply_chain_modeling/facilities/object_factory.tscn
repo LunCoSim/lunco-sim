@@ -1,12 +1,9 @@
 [gd_scene format=3 uid="uid://cv0bmac63qtuv"]
 
 [node name="Object_Factory" type="GraphNode"]
-offset_left = 717.0
-offset_top = 198.0
-offset_right = 1418.0
-offset_bottom = 571.0
+offset_right = 158.0
+offset_bottom = 232.0
 mouse_filter = 1
-position_offset = Vector2(240, -75)
 resizable = true
 title = "Factory"
 slot/0/left_enabled = true

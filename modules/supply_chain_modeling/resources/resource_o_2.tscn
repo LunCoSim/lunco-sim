@@ -4,12 +4,9 @@
 [ext_resource type="Script" path="res://modules/supply_chain_modeling/resources/base_resource.gd" id="2_sesrm"]
 
 [node name="Resource_O2" type="GraphNode"]
-offset_left = 376.0
-offset_top = 120.0
-offset_right = 627.0
-offset_bottom = 198.0
+offset_right = 110.0
+offset_bottom = 78.0
 mouse_filter = 1
-position_offset = Vector2(-101, -153)
 resizable = true
 title = "Resource: O2"
 slot/0/left_enabled = false

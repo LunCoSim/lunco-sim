@@ -12,54 +12,54 @@ var custom_properties: Dictionary = {}
 var metadata: Dictionary = {}
 
 func _init():
-    # Set up basic GraphNode properties
-    mouse_filter = MOUSE_FILTER_PASS
-    resizable = true
+	# Set up basic GraphNode properties
+	mouse_filter = MOUSE_FILTER_PASS
+	resizable = true
 
 func _ready():
-    update_status_display()
+	update_status_display()
 
 func set_facility_properties(id: String, desc: String, type: String):
-    facility_id = id
-    description = desc
-    facility_type = type
-    title = "Facility: " + id
+	facility_id = id
+	description = desc
+	facility_type = type
+	title = "Facility: " + id
 
 func process_resources(delta: float) -> void:
-    # Virtual method to be implemented by child classes
-    pass
+	# Virtual method to be implemented by child classes
+	pass
 
 func update_status_display() -> void:
-    # Virtual method to be implemented by child classes
-    pass
+	# Virtual method to be implemented by child classes
+	pass
 
 func set_status(new_status: String) -> void:
-    status = new_status
-    update_status_display()
+	status = new_status
+	update_status_display()
 
 func get_facility_data() -> Dictionary:
-    return {
-        "id": facility_id,
-        "description": description,
-        "type": facility_type,
-        "efficiency": efficiency,
-        "status": status,
-        "custom_properties": custom_properties,
-        "metadata": metadata
-    }
+	return {
+		"id": facility_id,
+		"description": description,
+		"type": facility_type,
+		"efficiency": efficiency,
+		"status": status,
+		"custom_properties": custom_properties,
+		"metadata": metadata
+	}
 
 func load_facility_data(data: Dictionary) -> void:
-    if "id" in data:
-        facility_id = data.id
-    if "description" in data:
-        description = data.description
-    if "type" in data:
-        facility_type = data.type
-    if "efficiency" in data:
-        efficiency = data.efficiency
-    if "status" in data:
-        status = data.status
-    if "custom_properties" in data:
-        custom_properties = data.custom_properties
-    if "metadata" in data:
-        metadata = data.metadata 
+	if "id" in data:
+		facility_id = data.id
+	if "description" in data:
+		description = data.description
+	if "type" in data:
+		facility_type = data.type
+	if "efficiency" in data:
+		efficiency = data.efficiency
+	if "status" in data:
+		status = data.status
+	if "custom_properties" in data:
+		custom_properties = data.custom_properties
+	if "metadata" in data:
+		metadata = data.metadata 

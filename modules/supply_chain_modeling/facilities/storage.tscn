@@ -3,8 +3,8 @@
 [ext_resource type="Script" path="res://modules/supply_chain_modeling/facilities/storage.gd" id="1_script"]
 
 [node name="Storage" type="GraphNode"]
-offset_right = 149.0
-offset_bottom = 78.0
+offset_right = 138.0
+offset_bottom = 109.0
 title = "Storage"
 slot/0/left_enabled = true
 slot/0/left_type = 0
@@ -25,4 +25,4 @@ layout_mode = 2
 text = "Capacity: 100"
 
 [node name="ProgressBar" type="ProgressBar" parent="VBoxContainer"]
-layout_mode = 2 
+layout_mode = 2

@@ -3,12 +3,9 @@
 [ext_resource type="Script" path="res://modules/supply_chain_modeling/resources/resource_h2.gd" id="1_script"]
 
 [node name="Resource_H2" type="GraphNode"]
-offset_left = 173.0
-offset_top = 203.0
-offset_right = 322.0
-offset_bottom = 281.0
+offset_right = 198.0
+offset_bottom = 130.0
 mouse_filter = 1
-position_offset = Vector2(-286, -21)
 resizable = true
 title = "Resource: H2"
 slot/0/left_enabled = false
