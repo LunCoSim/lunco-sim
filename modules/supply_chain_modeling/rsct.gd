@@ -35,6 +35,8 @@ func _ready():
 	update_sim_time_label()
 	create_buttons()
 
+	pause_simulation()
+
 func _process(delta: float) -> void:
 	# Keep autosave in process cycle since it's not physics-dependent
 	autosave_timer += delta
@@ -153,10 +155,17 @@ func set_time_scale(new_scale: float) -> void:
 
 func pause_simulation() -> void:
 	paused = true
+	# Disable physics processing for all nodes
+	for node in graph_edit.get_children():
+		if node is GraphNode:
+			node.set_physics_process(false)
 
 func resume_simulation() -> void:
 	paused = false
-
+	# Enable physics processing for all nodes
+	for node in graph_edit.get_children():
+		if node is GraphNode:
+			node.set_physics_process(true)
 
 func add_node_from_path(path: String, position: Vector2 = Vector2.ZERO):
 	var node_scene = load(path)
@@ -164,6 +173,9 @@ func add_node_from_path(path: String, position: Vector2 = Vector2.ZERO):
 		var node = node_scene.instantiate()
 		graph_edit.add_child(node)
 		node.set_owner(null)
+		
+		# Set initial physics processing state based on simulation state
+		node.set_physics_process(!paused)
 		
 		if position == Vector2.ZERO:
 			# Use old center positioning if no position specified
