@@ -18,9 +18,37 @@ slot/0/right_type = 0
 slot/0/right_color = Color(1, 1, 1, 1)
 slot/0/right_icon = null
 slot/0/draw_stylebox = true
+slot/1/left_enabled = false
+slot/1/left_type = 0
+slot/1/left_color = Color(1, 1, 1, 1)
+slot/1/left_icon = null
+slot/1/right_enabled = false
+slot/1/right_type = 0
+slot/1/right_color = Color(1, 1, 1, 1)
+slot/1/right_icon = null
+slot/1/draw_stylebox = true
 script = ExtResource("1_y5vr7")
 metadata/_custom_type_script = ExtResource("2_wfdba")
 
 [node name="Label" type="Label" parent="."]
 layout_mode = 2
 text = "O2"
+
+[node name="Properties" type="VBoxContainer" parent="."]
+layout_mode = 2
+
+[node name="Mass" type="Label" parent="Properties"]
+layout_mode = 2
+text = "Mass: 1000000.0 kg/unit"
+
+[node name="Volume" type="Label" parent="Properties"]
+layout_mode = 2
+text = "Volume: 0.7 m³/unit"
+
+[node name="Amount" type="Label" parent="Properties"]
+layout_mode = 2
+text = "Amount: 100.0 / 100.0 units"
+
+[node name="ProgressBar" type="ProgressBar" parent="Properties"]
+layout_mode = 2
+value = 100.0
