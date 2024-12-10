@@ -13,7 +13,7 @@ const AUTOSAVE_INTERVAL: float = 60000.0  # Autosave every 60 seconds
 var sim_time : float = 0.0
 var time_scale: float = 1.0  # Default time scale (1 second real time = 1 minute simulation time)
 var time_unit: float = 60.0  # Default time unit (1 second real time = 1 minute simulation time)
-var paused: bool = false  # Simulation paused state
+var paused: bool = true  # Simulation paused state
 
 var dragging_new_node: bool = false
 var dragging_node_path: String = ""
