@@ -47,16 +47,22 @@ func disconnect_resource(port: int) -> void:
 
 func _process(delta: float) -> void:
 	# First check if we have all required connections
-	if not o2_source or not h2_source or not power_source or not h2o_storage:
-		set_status("Not Connected")
-		return
-		
-	# Check if we should change to Running status
-	if status == "Not Connected":
+	set_status("Not")
+	if not o2_source:  
+		set_status("O2 Not Connected")
+	elif not h2_source:
+		set_status("H2 Not Connected")
+	elif not power_source:		
+		set_status("Power Not Connected")
+	elif not h2o_storage:
+		set_status("H20 Not Connected")
+	else:
 		set_status("Running")
+
 	
 	# Only process if status is Running
 	if status != "Running":
+		update_status_display()
 		return
 		
 	# Calculate how much we can produce based on inputs
