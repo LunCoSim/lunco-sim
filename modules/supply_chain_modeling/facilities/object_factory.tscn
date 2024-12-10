@@ -1,4 +1,6 @@
-[gd_scene format=3 uid="uid://cv0bmac63qtuv"]
+[gd_scene load_steps=2 format=3 uid="uid://cv0bmac63qtuv"]
+
+[ext_resource type="Script" uid="uid://bm8xrkayebx5b" path="res://modules/supply_chain_modeling/facilities/object_factory.gd" id="1_a8bux"]
 
 [node name="Object_Factory" type="GraphNode"]
 offset_right = 158.0
@@ -51,6 +53,7 @@ slot/4/right_type = 0
 slot/4/right_color = Color(1, 1, 1, 1)
 slot/4/right_icon = null
 slot/4/draw_stylebox = true
+script = ExtResource("1_a8bux")
 
 [node name="O2Input" type="Label" parent="."]
 layout_mode = 2
@@ -82,3 +85,11 @@ text = "Power: 100 kW"
 [node name="Status" type="Label" parent="Parameters"]
 layout_mode = 2
 text = "Status: Running"
+
+[node name="O2Level" type="Label" parent="Parameters"]
+layout_mode = 2
+text = "O2: 0.00 units"
+
+[node name="H2Level" type="Label" parent="Parameters"]
+layout_mode = 2
+text = "H2: 0.00 units"
