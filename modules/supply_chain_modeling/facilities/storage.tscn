@@ -1,4 +1,6 @@
-[gd_scene format=3 uid="uid://b72fgyphk8f0r"]
+[gd_scene load_steps=2 format=3 uid="uid://b72fgyphk8f0r"]
+
+[ext_resource type="Script" path="res://modules/supply_chain_modeling/facilities/storage.gd" id="1_script"]
 
 [node name="Storage" type="GraphNode"]
 offset_right = 149.0
@@ -13,6 +15,7 @@ slot/0/right_type = 0
 slot/0/right_color = Color(1, 1, 1, 1)
 slot/0/right_icon = null
 slot/0/draw_stylebox = true
+script = ExtResource("1_script")
 
 [node name="VBoxContainer" type="VBoxContainer" parent="."]
 layout_mode = 2
@@ -22,4 +25,4 @@ layout_mode = 2
 text = "Capacity: 100"
 
 [node name="ProgressBar" type="ProgressBar" parent="VBoxContainer"]
-layout_mode = 2
+layout_mode = 2 
