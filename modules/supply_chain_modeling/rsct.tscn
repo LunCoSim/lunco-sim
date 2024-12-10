@@ -59,7 +59,7 @@ text = "Faster"
 [node name="SimTimeLabel" type="Label" parent="VBoxContainer/MenuContainer"]
 unique_name_in_owner = true
 layout_mode = 2
-text = "Sim Time: 111.0 minutes"
+text = "Sim Time: 33792.0 minutes"
 
 [node name="HSplitContainer" type="Control" parent="VBoxContainer"]
 layout_mode = 2
@@ -86,7 +86,7 @@ anchors_preset = 4
 anchor_top = 0.5
 anchor_bottom = 0.5
 offset_top = -54.5
-offset_right = 278.0
+offset_right = 182.0
 offset_bottom = 127.5
 grow_vertical = 2
 size_flags_horizontal = 0

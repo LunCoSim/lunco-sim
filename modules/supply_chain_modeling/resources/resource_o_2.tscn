@@ -1,6 +1,7 @@
-[gd_scene load_steps=2 format=3 uid="uid://brl431bi6j5c2"]
+[gd_scene load_steps=3 format=3 uid="uid://brl431bi6j5c2"]
 
-[ext_resource type="Script" uid="uid://4suq7qf08g4x" path="res://addons/SignalVisualizer/Visualizer/signal_graph_node.gd" id="1_x4apn"]
+[ext_resource type="Script" path="res://modules/supply_chain_modeling/resources/resource_o2.gd" id="1_k50uj"]
+[ext_resource type="Script" path="res://modules/supply_chain_modeling/resources/base_resource.gd" id="2_sesrm"]
 
 [node name="Resource_O2" type="GraphNode"]
 offset_left = 376.0
@@ -20,8 +21,8 @@ slot/0/right_type = 0
 slot/0/right_color = Color(1, 1, 1, 1)
 slot/0/right_icon = null
 slot/0/draw_stylebox = true
-script = ExtResource("1_x4apn")
-metadata/_custom_type_script = ExtResource("1_x4apn")
+script = ExtResource("1_k50uj")
+metadata/_custom_type_script = ExtResource("2_sesrm")
 
 [node name="Label" type="Label" parent="."]
 layout_mode = 2
