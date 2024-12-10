@@ -37,11 +37,6 @@ ControlManager="*res://core/singletones/control-manager.gd"
 SceneManager="*res://addons/scene_manager/scene_manager.tscn"
 Scenes="*res://presets/scenes.gd"
 
-[display]
-
-window/size/viewport_width=1920
-window/size/viewport_height=1280
-
 [editor]
 
 movie_writer/movie_file="/home/rod/Documents/lunco-movies/godot_output.avi"
