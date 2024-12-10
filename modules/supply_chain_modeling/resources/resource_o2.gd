@@ -3,5 +3,5 @@ extends BaseResource
 func _init():
 	super._init()
 	set_resource_properties("O2", "Oxygen resource", "product")
-	mass = 1000000.0  # kg/unit
-	volume = 0.7  # m³/unit at standard pressure 
+	mass = 32.0  # kg/unit (where unit = kmol)
+	volume = 22.4  # m³/unit at standard temperature and pressure (STP)
