@@ -12,68 +12,54 @@ var o2_stored: float = 0.0
 var h2_stored: float = 0.0
 var power_available: float = 0.0
 
-# Input nodes
-var o2_source = null
-var h2_source = null
-var power_source = null
-var h2o_storage = null
-
 func _init():
 	super._init()
 	set_facility_properties("Factory", "Water production facility", "producer")
 	efficiency = 0.95
-	status = "Not Connected"  # Set initial status here too
+	status = "Not Connected"
 
 func _ready() -> void:
 	super._ready()
 	update_status_display()
-	
-
-func connect_resource(node: Node, port: int) -> void:
-	match port:
-		0: o2_source = node
-		1: h2_source = node
-		2: power_source = node
-		3: 
-			if node.has_method("add_resource"):  # Check if it's a valid storage target
-				h2o_storage = node
-	update_status_display()
-
-# Add a new method to handle being the source of a connection
-func connect_to_target(node: Node, port: int) -> void:
-	if port == 0:  # H2O output port
-		if node.has_method("add_resource"):
-			h2o_storage = node
-	update_status_display()
-
-
-func disconnect_resource(port: int) -> void:
-	match port:
-		0: o2_source = null
-		1: h2_source = null
-		2: power_source = null
-		3: h2o_storage = null
-	update_status_display()  # Update status when connection changes
-
-func disconnect_from_target(port: int) -> void:
-	if port == 0:  # H2O output port
-		h2o_storage = null
-	update_status_display()
 
 func _process(delta: float) -> void:
-	# First check if we have all required connections
-	set_status("Not")
-	if not o2_source:  
+	# Get parent GraphEdit
+	var graph_edit = get_parent()
+	if not graph_edit:
+		set_status("No Graph")
+		return
+		
+	# Get connections from GraphEdit
+	var connections = graph_edit.get_connection_list()
+	var o2_source = null
+	var h2_source = null
+	var power_source = null
+	var h2o_storage = null
+	
+	# Find our connections
+	for connection in connections:
+		if connection["to_node"] == name:
+			var source_node = graph_edit.get_node(NodePath(connection["from_node"]))
+			match connection["to_port"]:
+				0: o2_source = source_node
+				1: h2_source = source_node
+				2: power_source = source_node
+		elif connection["from_node"] == name and connection["from_port"] == 0:
+			var target_node = graph_edit.get_node(NodePath(connection["to_node"]))
+			if target_node.has_method("add_resource"):
+				h2o_storage = target_node
+	
+	# Check connections and update status
+	if not o2_source:
 		set_status("O2 Not Connected")
 	elif not h2_source:
 		set_status("H2 Not Connected")
-	elif not power_source:		
+	elif not power_source:
 		set_status("Power Not Connected")
 	elif not h2o_storage:
-		set_status("H20 Not Connected")
+		set_status("H2O Not Connected")
 	else:
 		set_status("Running")
-
 	
 	# Only process if status is Running
 	if status != "Running":
