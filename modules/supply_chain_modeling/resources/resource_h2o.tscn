@@ -1,6 +1,6 @@
 [gd_scene load_steps=2 format=3 uid="uid://dao4bjvwweolu"]
 
-[ext_resource type="Script" path="res://modules/supply_chain_modeling/resources/resource_h2o.gd" id="1_script"]
+[ext_resource type="Script" uid="uid://3kjxjjklqxao" path="res://modules/supply_chain_modeling/resources/resource_h2o.gd" id="1_script"]
 
 [node name="Resource_H2O" type="GraphNode"]
 offset_right = 149.0

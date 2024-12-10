@@ -191,11 +191,11 @@ func _handle_button_release() -> void:
 
 # Button press handlers
 func _on_button_3_pressed() -> void:
-	dragging_node_path = "res://modules/supply_chain_modeling/resources/resource_o_2.tscn"
+	dragging_node_path = "res://modules/supply_chain_modeling/resources/resource_o2.tscn"
 	dragging_new_node = true
 
 func _on_button_4_pressed() -> void:
-	dragging_node_path = "res://modules/supply_chain_modeling/resources/resource_h_2.tscn"
+	dragging_node_path = "res://modules/supply_chain_modeling/resources/resource_h2.tscn"
 	dragging_new_node = true
 
 func _on_button_5_pressed() -> void:

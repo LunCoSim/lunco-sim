@@ -1,7 +1,7 @@
 [gd_scene load_steps=3 format=3 uid="uid://brl431bi6j5c2"]
 
-[ext_resource type="Script" uid="uid://bivgycr0fmlvc" path="res://modules/supply_chain_modeling/resources/resource_o2.gd" id="1_k50uj"]
-[ext_resource type="Script" uid="uid://decpb5uj1ql2n" path="res://modules/supply_chain_modeling/resources/base_resource.gd" id="2_sesrm"]
+[ext_resource type="Script" uid="uid://bivgycr0fmlvc" path="res://modules/supply_chain_modeling/resources/resource_o2.gd" id="1_y5vr7"]
+[ext_resource type="Script" uid="uid://decpb5uj1ql2n" path="res://modules/supply_chain_modeling/base/base_resource.gd" id="2_wfdba"]
 
 [node name="Resource_O2" type="GraphNode"]
 offset_right = 110.0
@@ -18,8 +18,8 @@ slot/0/right_type = 0
 slot/0/right_color = Color(1, 1, 1, 1)
 slot/0/right_icon = null
 slot/0/draw_stylebox = true
-script = ExtResource("1_k50uj")
-metadata/_custom_type_script = ExtResource("2_sesrm")
+script = ExtResource("1_y5vr7")
+metadata/_custom_type_script = ExtResource("2_wfdba")
 
 [node name="Label" type="Label" parent="."]
 layout_mode = 2
