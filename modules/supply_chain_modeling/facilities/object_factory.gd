@@ -15,14 +15,12 @@ extends BaseFacility
 func _init():
 	super._init()
 	set_facility_properties("Factory", "Water production facility", "producer")
-	efficiency = 0.95
 	status = "Not Connected"
 
 func _ready() -> void:
 	super._ready()
-	update_status_display()
 
-func _process(delta: float) -> void:
+func _physics_process(delta: float) -> void:
 	# Get parent GraphEdit
 	var graph_edit = get_parent()
 	if not graph_edit:
@@ -63,7 +61,6 @@ func _process(delta: float) -> void:
 	
 	# Only process if status is Running
 	if status != "Running":
-		update_status_display()
 		return
 		
 	# Calculate how much we can produce based on inputs
@@ -116,7 +113,8 @@ func _process(delta: float) -> void:
 		# Output H2O
 		if h2o_storage and "add_resource" in h2o_storage:
 			h2o_storage.add_resource(h2o_produced)
-	
+
+func _process(delta: float) -> void:
 	update_status_display()
 
 func update_status_display() -> void:

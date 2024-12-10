@@ -9,7 +9,7 @@ func _init():
 	set_facility_properties("SolarPowerPlant", "Solar power generation facility", "producer")
 	efficiency = 0.20  # 20% efficiency is typical for solar panels
 
-func process_resources(delta: float) -> void:
+func _physics_process(delta: float) -> void:
 	if status != "Running":
 		return
 		
@@ -17,6 +17,9 @@ func process_resources(delta: float) -> void:
 	var actual_output = power_output * efficiency * solar_irradiance * delta
 	
 	# Implementation will depend on how power distribution is handled
+
+func _process(delta: float) -> void:
+	update_status_display()
 
 func update_status_display() -> void:
 	var label = $Label
@@ -26,9 +29,7 @@ func update_status_display() -> void:
 
 func set_solar_irradiance(new_irradiance: float) -> void:
 	solar_irradiance = new_irradiance
-	update_status_display()
 
 func set_panel_area(new_area: float) -> void:
 	panel_area = new_area
-	power_output = panel_area * 1.0  # Assuming 1kW/m�� standard conditions
-	update_status_display() 
+	power_output = panel_area * 1.0  # Assuming 1kW/m standard conditions

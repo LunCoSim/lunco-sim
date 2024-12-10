@@ -36,15 +36,24 @@ func _ready():
 	create_buttons()
 
 func _process(delta: float) -> void:
-	if not paused:
-		sim_time += delta * time_scale
-		update_sim_time_label()
-		# Update objects based on sim_time here
-
+	# Keep autosave in process cycle since it's not physics-dependent
 	autosave_timer += delta
 	if autosave_timer >= AUTOSAVE_INTERVAL:
 		autosave_timer = 0.0
 		save_graph()
+		
+	# Update UI elements
+	update_sim_time_label()
+
+func _physics_process(delta: float) -> void:
+	if not paused:
+		# Update simulation time and process nodes
+		sim_time += delta * time_scale
+		
+		# Process all simulation nodes
+		for node in graph_edit.get_children():
+			if node.has_method("process_resources"):
+				node.process_resources(delta)
 
 func save_graph() -> void:
 	
