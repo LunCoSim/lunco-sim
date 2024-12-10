@@ -19,6 +19,7 @@ func _ready():
 	graph_edit.connect("connection_request", _on_connection_request)
 	graph_edit.connect("disconnection_request", _on_disconnection_request)
 	graph_edit.connect("end_node_move", _on_node_moved)
+	graph_edit.connect("delete_nodes_request", _on_delete_nodes_request)
 	
 	# Enable snapping and minimap for better UX
 	graph_edit.snapping_distance = 20
@@ -210,6 +211,37 @@ func new_graph() -> void:
 	
 	# Save the empty state
 	save_graph()
+
+func _on_delete_nodes_request() -> void:
+	# Get selected nodes
+	var selected_nodes = []
+	for node in graph_edit.get_children():
+		if node is GraphNode and node.selected:
+			selected_nodes.append(node)
+	
+	# Delete selected nodes
+	for node in selected_nodes:
+		# Remove all connections to/from this node
+		var connections = graph_edit.get_connection_list()
+		for connection in connections:
+			if connection["from_node"] == node.name or connection["to_node"] == node.name:
+				graph_edit.disconnect_node(
+					connection["from_node"],
+					connection["from_port"],
+					connection["to_node"],
+					connection["to_port"]
+				)
+		# Delete the node
+		node.queue_free()
+	
+	# Save graph after deletion
+	save_graph()
+
+func _unhandled_key_input(event: InputEvent) -> void:
+	if event is InputEventKey:
+		if event.keycode == KEY_DELETE:
+			_on_delete_nodes_request()
+			get_viewport().set_input_as_handled()
 
 
 	
