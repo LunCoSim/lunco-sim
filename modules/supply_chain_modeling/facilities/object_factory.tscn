@@ -1,6 +1,4 @@
-[gd_scene load_steps=2 format=3 uid="uid://cv0bmac63qtuv"]
-
-[ext_resource type="Script" uid="uid://4suq7qf08g4x" path="res://addons/SignalVisualizer/Visualizer/signal_graph_node.gd" id="1_c3lqc"]
+[gd_scene format=3 uid="uid://cv0bmac63qtuv"]
 
 [node name="Object_Factory" type="GraphNode"]
 offset_left = 717.0
@@ -29,11 +27,11 @@ slot/1/right_type = 0
 slot/1/right_color = Color(1, 1, 1, 1)
 slot/1/right_icon = null
 slot/1/draw_stylebox = true
-slot/2/left_enabled = false
+slot/2/left_enabled = true
 slot/2/left_type = 0
 slot/2/left_color = Color(1, 1, 1, 1)
 slot/2/left_icon = null
-slot/2/right_enabled = true
+slot/2/right_enabled = false
 slot/2/right_type = 0
 slot/2/right_color = Color(1, 1, 1, 1)
 slot/2/right_icon = null
@@ -42,26 +40,48 @@ slot/3/left_enabled = false
 slot/3/left_type = 0
 slot/3/left_color = Color(1, 1, 1, 1)
 slot/3/left_icon = null
-slot/3/right_enabled = false
+slot/3/right_enabled = true
 slot/3/right_type = 0
 slot/3/right_color = Color(1, 1, 1, 1)
 slot/3/right_icon = null
 slot/3/draw_stylebox = true
-script = ExtResource("1_c3lqc")
-metadata/_custom_type_script = ExtResource("1_c3lqc")
+slot/4/left_enabled = false
+slot/4/left_type = 0
+slot/4/left_color = Color(1, 1, 1, 1)
+slot/4/left_icon = null
+slot/4/right_enabled = false
+slot/4/right_type = 0
+slot/4/right_color = Color(1, 1, 1, 1)
+slot/4/right_icon = null
+slot/4/draw_stylebox = true
 
-[node name="Label" type="Label" parent="."]
+[node name="O2Input" type="Label" parent="."]
 layout_mode = 2
-text = "O2"
+text = "O2 Input"
 
-[node name="Label2" type="Label" parent="."]
+[node name="H2Input" type="Label" parent="."]
 layout_mode = 2
-text = "H2"
+text = "H2 Input"
 
-[node name="Label3" type="Label" parent="."]
+[node name="ElectricityInput" type="Label" parent="."]
 layout_mode = 2
-text = "H20"
+text = "Electricity Input"
 
-[node name="Label4" type="Label" parent="."]
+[node name="H2OOutput" type="Label" parent="."]
 layout_mode = 2
-text = "Electricity"
+text = "H2O Output"
+
+[node name="Parameters" type="VBoxContainer" parent="."]
+layout_mode = 2
+
+[node name="Efficiency" type="Label" parent="Parameters"]
+layout_mode = 2
+text = "Efficiency: 95%"
+
+[node name="PowerConsumption" type="Label" parent="Parameters"]
+layout_mode = 2
+text = "Power: 100 kW"
+
+[node name="Status" type="Label" parent="Parameters"]
+layout_mode = 2
+text = "Status: Running"
