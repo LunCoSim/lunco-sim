@@ -60,3 +60,11 @@ func load_resource_data(data: Dictionary) -> void:
 		custom_properties = data.custom_properties
 	if "metadata" in data:
 		metadata = data.metadata 
+
+func remove_resource(amount: float) -> float:
+	# Implement logic to remove the specified amount of resource
+	# For example, you might want to track the current amount of resource available
+	# and return the amount that can actually be removed.
+	var amount_to_remove = min(amount, mass)  # Assuming mass represents the available amount
+	mass -= amount_to_remove
+	return amount_to_remove
