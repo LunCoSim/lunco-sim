@@ -2,7 +2,7 @@
 extends Control
 
 @onready var graph_edit: GraphEdit = %GraphEdit
-@onready var sim_time_label: Label = $VBoxContainer/HBoxContainer/SimTimeLabel
+@onready var sim_time_label: Label = %SimTimeLabel
 
 # Save file path for the current graph
 var save_file_path: String = "user://current_graph.save"

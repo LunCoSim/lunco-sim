@@ -25,40 +25,41 @@ anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 
-[node name="HBoxContainer" type="HBoxContainer" parent="VBoxContainer"]
+[node name="MenuContainer" type="HBoxContainer" parent="VBoxContainer"]
 layout_mode = 2
 
-[node name="Button9" type="Button" parent="VBoxContainer/HBoxContainer"]
+[node name="Button9" type="Button" parent="VBoxContainer/MenuContainer"]
 layout_mode = 2
 text = "New Sim"
 
-[node name="Button" type="Button" parent="VBoxContainer/HBoxContainer"]
+[node name="Button" type="Button" parent="VBoxContainer/MenuContainer"]
 layout_mode = 2
 text = "Save"
 
-[node name="Button2" type="Button" parent="VBoxContainer/HBoxContainer"]
+[node name="Button2" type="Button" parent="VBoxContainer/MenuContainer"]
 layout_mode = 2
 text = "Load"
 
-[node name="VSeparator" type="VSeparator" parent="VBoxContainer/HBoxContainer"]
+[node name="VSeparator" type="VSeparator" parent="VBoxContainer/MenuContainer"]
 layout_mode = 2
 
-[node name="Button7" type="Button" parent="VBoxContainer/HBoxContainer"]
+[node name="Button7" type="Button" parent="VBoxContainer/MenuContainer"]
 layout_mode = 2
 text = "Slower"
 
-[node name="Button6" type="Button" parent="VBoxContainer/HBoxContainer"]
+[node name="Button6" type="Button" parent="VBoxContainer/MenuContainer"]
 layout_mode = 2
 theme_override_fonts/font = SubResource("SystemFont_6bj1w")
 text = "Play/Pause"
 
-[node name="Button8" type="Button" parent="VBoxContainer/HBoxContainer"]
+[node name="Button8" type="Button" parent="VBoxContainer/MenuContainer"]
 layout_mode = 2
 text = "Faster"
 
-[node name="SimTimeLabel" type="Label" parent="VBoxContainer/HBoxContainer"]
+[node name="SimTimeLabel" type="Label" parent="VBoxContainer/MenuContainer"]
+unique_name_in_owner = true
 layout_mode = 2
-text = "Sim Time: 23175.0 minutes"
+text = "Sim Time: 316386.0 minutes"
 
 [node name="HSplitContainer" type="Control" parent="VBoxContainer"]
 layout_mode = 2
@@ -79,14 +80,14 @@ panning_scheme = 1
 right_disconnects = true
 connection_lines_thickness = 2.0
 
-[node name="VBoxContainer2" type="VBoxContainer" parent="VBoxContainer/HSplitContainer"]
+[node name="VBoxContainer2" type="VFlowContainer" parent="VBoxContainer/HSplitContainer"]
 layout_mode = 1
 anchors_preset = 4
 anchor_top = 0.5
 anchor_bottom = 0.5
 offset_top = -54.5
-offset_right = 100.0
-offset_bottom = 54.5
+offset_right = 176.0
+offset_bottom = 65.5
 grow_vertical = 2
 size_flags_horizontal = 0
 theme = ExtResource("2_xuhcs")
@@ -107,11 +108,11 @@ text = "Add Factory"
 layout_mode = 2
 text = "Add Solar Power Plant"
 
-[connection signal="pressed" from="VBoxContainer/HBoxContainer/Button" to="." method="save_graph"]
-[connection signal="pressed" from="VBoxContainer/HBoxContainer/Button2" to="." method="load_graph"]
-[connection signal="pressed" from="VBoxContainer/HBoxContainer/Button7" to="." method="_on_button_7_pressed"]
-[connection signal="pressed" from="VBoxContainer/HBoxContainer/Button6" to="." method="_on_button_6_pressed"]
-[connection signal="pressed" from="VBoxContainer/HBoxContainer/Button8" to="." method="_on_button_8_pressed"]
+[connection signal="pressed" from="VBoxContainer/MenuContainer/Button" to="." method="save_graph"]
+[connection signal="pressed" from="VBoxContainer/MenuContainer/Button2" to="." method="load_graph"]
+[connection signal="pressed" from="VBoxContainer/MenuContainer/Button7" to="." method="_on_button_7_pressed"]
+[connection signal="pressed" from="VBoxContainer/MenuContainer/Button6" to="." method="_on_button_6_pressed"]
+[connection signal="pressed" from="VBoxContainer/MenuContainer/Button8" to="." method="_on_button_8_pressed"]
 [connection signal="pressed" from="VBoxContainer/HSplitContainer/VBoxContainer2/Button3" to="." method="_on_button_3_pressed"]
 [connection signal="pressed" from="VBoxContainer/HSplitContainer/VBoxContainer2/Button4" to="." method="_on_button_4_pressed"]
 [connection signal="pressed" from="VBoxContainer/HSplitContainer/VBoxContainer2/Button5" to="." method="_on_button_5_pressed"]
