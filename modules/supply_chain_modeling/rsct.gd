@@ -3,6 +3,7 @@ extends Control
 
 @onready var graph_edit: GraphEdit = %GraphEdit
 @onready var sim_time_label: Label = %SimTimeLabel
+@onready var button_container: VBoxContainer = %ButtonContainer
 
 # Save file path for the current graph
 var save_file_path: String = "user://current_graph.save"
@@ -32,6 +33,7 @@ func _ready():
 	
 	load_graph()
 	update_sim_time_label()
+	create_buttons()
 
 func _process(delta: float) -> void:
 	if not paused:
@@ -283,6 +285,42 @@ func _input(event: InputEvent) -> void:
 func update_sim_time_label() -> void:
 	var sim_time_minutes = round(sim_time * time_unit)
 	sim_time_label.text = "Sim Time: " + str(sim_time_minutes) + " minutes"
+
+func create_buttons() -> void:
+	var resource_paths = get_scene_paths("res://modules/supply_chain_modeling/resources/")
+	var facility_paths = get_scene_paths("res://modules/supply_chain_modeling/facilities/")
+	
+	for path in resource_paths + facility_paths:
+		var button = Button.new()
+		button.text = path.get_file().get_basename()
+		button.connect("button_down", func(): _on_button_down(path))
+		button.connect("button_up", _on_button_up)
+		button_container.add_child(button)
+
+func _on_button_down(path: String) -> void:
+	dragging_node_path = path
+	dragging_new_node = true
+
+func _on_button_up() -> void:
+	if dragging_new_node:
+		var mouse_pos = graph_edit.get_local_mouse_position()
+		if graph_edit.get_rect().has_point(mouse_pos):
+			var graph_pos = (mouse_pos + graph_edit.scroll_offset) / graph_edit.zoom
+			add_node_from_path(dragging_node_path, graph_pos)
+		dragging_new_node = false
+	dragging_node_path = ""
+
+func get_scene_paths(directory_path: String) -> Array:
+	var dir = DirAccess.open(directory_path)
+	var paths = []
+	if dir:
+		dir.list_dir_begin()
+		var file_name = dir.get_next()
+		while file_name != "":
+			if file_name.ends_with(".tscn"):
+				paths.append(directory_path + file_name)
+			file_name = dir.get_next()
+	return paths
 
 
 	

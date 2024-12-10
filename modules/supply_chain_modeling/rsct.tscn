@@ -59,7 +59,7 @@ text = "Faster"
 [node name="SimTimeLabel" type="Label" parent="VBoxContainer/MenuContainer"]
 unique_name_in_owner = true
 layout_mode = 2
-text = "Sim Time: 302892.0 minutes"
+text = "Sim Time: 13160.0 minutes"
 
 [node name="HSplitContainer" type="Control" parent="VBoxContainer"]
 layout_mode = 2
@@ -75,12 +75,11 @@ grow_horizontal = 2
 grow_vertical = 2
 size_flags_horizontal = 0
 size_flags_vertical = 3
-scroll_offset = Vector2(-196.875, -108.951)
 right_disconnects = true
 connection_lines_thickness = 2.0
-zoom = 0.451276
 
-[node name="VBoxContainer2" type="VBoxContainer" parent="VBoxContainer/HSplitContainer"]
+[node name="ButtonContainer" type="VBoxContainer" parent="VBoxContainer/HSplitContainer"]
+unique_name_in_owner = true
 layout_mode = 1
 anchors_preset = 4
 anchor_top = 0.5
@@ -92,45 +91,9 @@ grow_vertical = 2
 size_flags_horizontal = 0
 theme = ExtResource("2_xuhcs")
 
-[node name="Button3" type="Button" parent="VBoxContainer/HSplitContainer/VBoxContainer2"]
-layout_mode = 2
-text = "Add O2"
-
-[node name="Button4" type="Button" parent="VBoxContainer/HSplitContainer/VBoxContainer2"]
-layout_mode = 2
-text = "Add H2"
-
-[node name="Button5" type="Button" parent="VBoxContainer/HSplitContainer/VBoxContainer2"]
-layout_mode = 2
-text = "Add Factory"
-
-[node name="Button10" type="Button" parent="VBoxContainer/HSplitContainer/VBoxContainer2"]
-layout_mode = 2
-text = "Add Solar Power Plant"
-
-[node name="Button11" type="Button" parent="VBoxContainer/HSplitContainer/VBoxContainer2"]
-layout_mode = 2
-text = "Add Storage"
-
-[node name="Button12" type="Button" parent="VBoxContainer/HSplitContainer/VBoxContainer2"]
-layout_mode = 2
-text = "Add H2O"
-
 [connection signal="button_down" from="VBoxContainer/MenuContainer/Button9" to="." method="new_graph"]
 [connection signal="button_down" from="VBoxContainer/MenuContainer/Button" to="." method="save_graph"]
 [connection signal="button_down" from="VBoxContainer/MenuContainer/Button2" to="." method="load_graph"]
 [connection signal="button_down" from="VBoxContainer/MenuContainer/Button7" to="." method="_on_button_7_pressed"]
 [connection signal="button_down" from="VBoxContainer/MenuContainer/Button6" to="." method="_on_button_6_pressed"]
 [connection signal="button_down" from="VBoxContainer/MenuContainer/Button8" to="." method="_on_button_8_pressed"]
-[connection signal="button_down" from="VBoxContainer/HSplitContainer/VBoxContainer2/Button3" to="." method="_on_button_3_pressed"]
-[connection signal="button_up" from="VBoxContainer/HSplitContainer/VBoxContainer2/Button3" to="." method="_handle_button_release"]
-[connection signal="button_down" from="VBoxContainer/HSplitContainer/VBoxContainer2/Button4" to="." method="_on_button_4_pressed"]
-[connection signal="button_up" from="VBoxContainer/HSplitContainer/VBoxContainer2/Button4" to="." method="_handle_button_release"]
-[connection signal="button_down" from="VBoxContainer/HSplitContainer/VBoxContainer2/Button5" to="." method="_on_button_5_pressed"]
-[connection signal="button_up" from="VBoxContainer/HSplitContainer/VBoxContainer2/Button5" to="." method="_handle_button_release"]
-[connection signal="button_down" from="VBoxContainer/HSplitContainer/VBoxContainer2/Button10" to="." method="_on_button_10_pressed"]
-[connection signal="button_up" from="VBoxContainer/HSplitContainer/VBoxContainer2/Button10" to="." method="_handle_button_release"]
-[connection signal="button_down" from="VBoxContainer/HSplitContainer/VBoxContainer2/Button11" to="." method="_on_button_11_pressed"]
-[connection signal="button_up" from="VBoxContainer/HSplitContainer/VBoxContainer2/Button11" to="." method="_handle_button_release"]
-[connection signal="button_down" from="VBoxContainer/HSplitContainer/VBoxContainer2/Button12" to="." method="_on_button_12_pressed"]
-[connection signal="button_up" from="VBoxContainer/HSplitContainer/VBoxContainer2/Button12" to="." method="_handle_button_release"]
