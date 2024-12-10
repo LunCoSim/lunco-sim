@@ -75,9 +75,10 @@ grow_horizontal = 2
 grow_vertical = 2
 size_flags_horizontal = 0
 size_flags_vertical = 3
-scroll_offset = Vector2(535.865, 239.535)
+scroll_offset = Vector2(-196.833, -169.992)
 right_disconnects = true
 connection_lines_thickness = 2.0
+zoom = 1.331
 
 [node name="ButtonContainer" type="VBoxContainer" parent="VBoxContainer/HSplitContainer"]
 unique_name_in_owner = true

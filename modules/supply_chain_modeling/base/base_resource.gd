@@ -10,8 +10,8 @@ var resource_id: String
 @export var volume: float = 0.0
 var custom_properties: Dictionary = {}
 var metadata: Dictionary = {}
-@export var current_amount: float = 100.0  # Current amount of resource available
-@export var max_amount: float = 100.0  # Maximum storage capacity
+@export var current_amount: float = 2000.0  # Current amount of resource available
+@export var max_amount: float = 2000.0  # Maximum storage capacity
 
 func _init():
 	# Set up basic GraphNode properties

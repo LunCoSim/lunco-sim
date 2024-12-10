@@ -35,14 +35,6 @@ text = "H2O"
 [node name="Properties" type="VBoxContainer" parent="."]
 layout_mode = 2
 
-[node name="Mass" type="Label" parent="Properties"]
-layout_mode = 2
-text = "Mass: 18.015 kg/unit"
-
-[node name="Volume" type="Label" parent="Properties"]
-layout_mode = 2
-text = "Volume: 0.018 m³/unit"
-
 [node name="Amount" type="Label" parent="Properties"]
 layout_mode = 2
 text = "Amount: 100.0 / 100.0 units"

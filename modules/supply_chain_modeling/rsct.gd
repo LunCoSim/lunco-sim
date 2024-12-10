@@ -207,30 +207,6 @@ func _handle_button_release() -> void:
 		dragging_new_node = false
 		dragging_node_path = ""
 
-# Button press handlers
-func _on_button_3_pressed() -> void:
-	dragging_node_path = "res://modules/supply_chain_modeling/resources/resource_o2.tscn"
-	dragging_new_node = true
-
-func _on_button_4_pressed() -> void:
-	dragging_node_path = "res://modules/supply_chain_modeling/resources/resource_h2.tscn"
-	dragging_new_node = true
-
-func _on_button_5_pressed() -> void:
-	dragging_node_path = "res://modules/supply_chain_modeling/facilities/object_factory.tscn"
-	dragging_new_node = true
-
-func _on_button_10_pressed() -> void:
-	dragging_node_path = "res://modules/supply_chain_modeling/facilities/solar_power_plant.tscn"
-	dragging_new_node = true
-
-func _on_button_11_pressed() -> void:
-	dragging_node_path = "res://modules/supply_chain_modeling/facilities/storage.tscn"
-	dragging_new_node = true
-
-func _on_button_12_pressed() -> void:
-	dragging_node_path = "res://modules/supply_chain_modeling/resources/resource_h2o.tscn"
-	dragging_new_node = true
 
 func _on_button_6_pressed() -> void:
 	if paused:
