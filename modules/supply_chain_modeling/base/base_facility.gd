@@ -4,10 +4,10 @@ class_name BaseFacility
 
 # Basic facility properties as defined in SPECIFICATION.md
 var facility_id: String
-var description: String
-var facility_type: String  # producer, consumer, storage, or custom
-var efficiency: float = 1.0
-var status: String = "Running"
+@export var description: String
+@export var facility_type: String  # producer, consumer, storage, or custom
+@export var efficiency: float = 1.0
+@export var status: String = "Running"
 var custom_properties: Dictionary = {}
 var metadata: Dictionary = {}
 

@@ -4,10 +4,10 @@ class_name BaseResource
 
 # Basic resource properties as defined in SPECIFICATION.md
 var resource_id: String
-var description: String
-var resource_type: String  # product, service, or custom
-var mass: float = 0.0
-var volume: float = 0.0
+@export var description: String
+@export var resource_type: String  # product, service, or custom
+@export var mass: float = 0.0
+@export var volume: float = 0.0
 var custom_properties: Dictionary = {}
 var metadata: Dictionary = {}
 
