@@ -155,6 +155,19 @@ func add_node_from_path(path: String):
 		var node = node_scene.instantiate()
 		graph_edit.add_child(node)
 		node.set_owner(null) # Ensure node isn't saved with scene
+		
+		# Calculate center position
+		var viewport_size = graph_edit.size
+		var scroll_offset = graph_edit.scroll_offset
+		var zoom = graph_edit.zoom
+		
+		# Calculate center in graph coordinates
+		var center_x = (scroll_offset.x + viewport_size.x / 2) / zoom
+		var center_y = (scroll_offset.y + viewport_size.y / 2) / zoom
+		
+		# Set node position to center, accounting for node size
+		node.position_offset = Vector2(center_x - node.size.x / 2, center_y - node.size.y / 2)
+		
 		save_graph()
 
 func _on_button_3_pressed() -> void:
