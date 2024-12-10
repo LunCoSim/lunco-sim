@@ -198,5 +198,21 @@ func _on_button_11_pressed() -> void:
 func _on_button_12_pressed() -> void:
 	add_node_from_path("res://modules/supply_chain_modeling/resources/resource_h2o.tscn")
 
+func new_graph() -> void:
+	# Clear existing graph
+	for node in graph_edit.get_children():
+		if node is GraphNode:
+			node.free()
+	
+	# Reset simulation time
+	sim_time = 0.0
+	update_sim_time_label()
+	
+	# Reset view
+	graph_edit.scroll_offset = Vector2.ZERO
+	
+	# Save the empty state
+	save_graph()
+
 
 	
