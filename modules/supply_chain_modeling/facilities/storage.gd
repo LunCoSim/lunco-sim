@@ -8,12 +8,6 @@ func _init():
 	super._init()
 	set_facility_properties("Storage", "Generic storage facility", "storage")
 
-func process_resources(delta: float) -> void:
-	if status != "Running":
-		return
-	
-	# Implementation will depend on how resource flow is handled
-
 func update_status_display() -> void:
 	var capacity_label = $VBoxContainer/Label
 	if capacity_label:

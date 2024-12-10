@@ -47,13 +47,8 @@ func _process(delta: float) -> void:
 
 func _physics_process(delta: float) -> void:
 	if not paused:
-		# Update simulation time and process nodes
+		# Update simulation time
 		sim_time += delta * time_scale
-		
-		# Process all simulation nodes
-		for node in graph_edit.get_children():
-			if node.has_method("process_resources"):
-				node.process_resources(delta)
 
 func save_graph() -> void:
 	

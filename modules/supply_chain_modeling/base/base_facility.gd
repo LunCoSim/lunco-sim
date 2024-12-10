@@ -25,10 +25,6 @@ func set_facility_properties(id: String, desc: String, type: String):
 	facility_type = type
 	title = "Facility: " + id
 
-func process_resources(delta: float) -> void:
-	# Virtual method to be implemented by child classes
-	pass
-
 func update_status_display() -> void:
 	# Virtual method to be implemented by child classes
 	pass
