@@ -14,6 +14,9 @@ var time_scale: float = 1.0  # Default time scale (1 second real time = 1 minute
 var time_unit: float = 60.0  # Default time unit (1 second real time = 1 minute simulation time)
 var paused: bool = false  # Simulation paused state
 
+var dragging_new_node: bool = false
+var dragging_node_path: String = ""
+
 func _ready():
 	# Connect signals for handling connections
 	graph_edit.connect("connection_request", _on_connection_request)
@@ -149,45 +152,67 @@ func resume_simulation() -> void:
 	paused = false
 
 
-func add_node_from_path(path: String):
+func add_node_from_path(path: String, position: Vector2 = Vector2.ZERO):
 	var node_scene = load(path)
 	if node_scene:
 		var node = node_scene.instantiate()
 		graph_edit.add_child(node)
-		node.set_owner(null) # Ensure node isn't saved with scene
+		node.set_owner(null)
 		
-		# Calculate center position
-		var viewport_size = graph_edit.size
-		var scroll_offset = graph_edit.scroll_offset
-		var zoom = graph_edit.zoom
-		
-		# Calculate center in graph coordinates
-		var center_x = (scroll_offset.x + viewport_size.x / 2) / zoom
-		var center_y = (scroll_offset.y + viewport_size.y / 2) / zoom
-		
-		# Set node position to center, accounting for node size
-		node.position_offset = Vector2(center_x - node.size.x / 2, center_y - node.size.y / 2)
+		if position == Vector2.ZERO:
+			# Use old center positioning if no position specified
+			var viewport_size = graph_edit.size
+			var scroll_offset = graph_edit.scroll_offset
+			var zoom = graph_edit.zoom
+			var center_x = (scroll_offset.x + viewport_size.x / 2) / zoom
+			var center_y = (scroll_offset.y + viewport_size.y / 2) / zoom
+			node.position_offset = Vector2(center_x - node.size.x / 2, center_y - node.size.y / 2)
+		else:
+			node.position_offset = position - node.size / 2
 		
 		save_graph()
 
+# Unified function for handling button release
+func _handle_button_release() -> void:
+	if dragging_new_node:
+		# Get the button that's being released
+		var button = get_viewport().gui_get_focus_owner()
+		if button is Button and button.get_global_rect().has_point(get_viewport().get_mouse_position()):
+			# If released while still over button, create in center
+			add_node_from_path(dragging_node_path)
+		else:
+			# If released elsewhere, create at mouse position
+			var mouse_pos = graph_edit.get_local_mouse_position()
+			if graph_edit.get_rect().has_point(mouse_pos):
+				var graph_pos = (mouse_pos + graph_edit.scroll_offset) / graph_edit.zoom
+				add_node_from_path(dragging_node_path, graph_pos)
+		dragging_new_node = false
+		dragging_node_path = ""
+
+# Button press handlers
 func _on_button_3_pressed() -> void:
-	add_node_from_path("res://modules/supply_chain_modeling/resources/resource_o_2.tscn")
+	dragging_node_path = "res://modules/supply_chain_modeling/resources/resource_o_2.tscn"
+	dragging_new_node = true
 
 func _on_button_4_pressed() -> void:
-	add_node_from_path("res://modules/supply_chain_modeling/resources/resource_h_2.tscn")
+	dragging_node_path = "res://modules/supply_chain_modeling/resources/resource_h_2.tscn"
+	dragging_new_node = true
 
 func _on_button_5_pressed() -> void:
-	add_node_from_path("res://modules/supply_chain_modeling/facilities/object_factory.tscn")
-
+	dragging_node_path = "res://modules/supply_chain_modeling/facilities/object_factory.tscn"
+	dragging_new_node = true
 
 func _on_button_10_pressed() -> void:
-	add_node_from_path("res://modules/supply_chain_modeling/facilities/solar_power_plant.tscn")
-	
-	
+	dragging_node_path = "res://modules/supply_chain_modeling/facilities/solar_power_plant.tscn"
+	dragging_new_node = true
 
-func update_sim_time_label() -> void:
-	var sim_time_minutes = round(sim_time * time_unit)
-	sim_time_label.text = "Sim Time: " + str(sim_time_minutes) + " minutes"
+func _on_button_11_pressed() -> void:
+	dragging_node_path = "res://modules/supply_chain_modeling/facilities/storage.tscn"
+	dragging_new_node = true
+
+func _on_button_12_pressed() -> void:
+	dragging_node_path = "res://modules/supply_chain_modeling/resources/resource_h2o.tscn"
+	dragging_new_node = true
 
 func _on_button_6_pressed() -> void:
 	if paused:
@@ -202,12 +227,6 @@ func _on_button_7_pressed() -> void:
 func _on_button_8_pressed() -> void:
 	set_time_scale(time_scale + 0.1)  # Increase time scale
 	print("Time scale increased to: ", time_scale)
-
-func _on_button_11_pressed() -> void:
-	add_node_from_path("res://modules/supply_chain_modeling/facilities/storage.tscn")
-
-func _on_button_12_pressed() -> void:
-	add_node_from_path("res://modules/supply_chain_modeling/resources/resource_h2o.tscn")
 
 func new_graph() -> void:
 	# Clear existing graph
@@ -255,6 +274,15 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		if event.keycode == KEY_DELETE:
 			_on_delete_nodes_request()
 			get_viewport().set_input_as_handled()
+
+func _input(event: InputEvent) -> void:
+	if event is InputEventMouseButton:
+		if event.button_index == MOUSE_BUTTON_LEFT and not event.pressed:
+			_handle_button_release()
+
+func update_sim_time_label() -> void:
+	var sim_time_minutes = round(sim_time * time_unit)
+	sim_time_label.text = "Sim Time: " + str(sim_time_minutes) + " minutes"
 
 
 	
