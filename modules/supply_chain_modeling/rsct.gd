@@ -29,8 +29,9 @@ func _ready():
 	nft_manager = $NFTManager
 	
 	# Connect signals
-	nft_manager.connect("wallet_connected", _on_wallet_connected)
-	nft_manager.connect("wallet_disconnected", _on_wallet_disconnected)
+	web3_interface.connect("wallet_connected", _on_wallet_connected)
+	web3_interface.connect("wallet_disconnected", _on_wallet_disconnected)
+	
 	nft_manager.connect("nft_minted", _on_nft_minted)
 	nft_manager.connect("nft_load_complete", _on_design_loaded)
 	

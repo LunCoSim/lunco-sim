@@ -1,6 +1,6 @@
-[gd_scene load_steps=2 format=3]
+[gd_scene load_steps=2 format=3 uid="uid://baib0y8cocg71"]
 
-[ext_resource type="Script" path="res://wallet_connect_button.gd" id="1_script"]
+[ext_resource type="Script" path="res://blockchain/wallet_connect_button.gd" id="1_script"]
 
 [node name="WalletConnectButton" type="Button"]
 custom_minimum_size = Vector2(120, 0)
