@@ -1,9 +1,9 @@
 [gd_scene load_steps=6 format=3 uid="uid://3lmlrsbbacm"]
 
-[ext_resource type="Script" uid="uid://dln1wsyjwuqj7" path="res://modules/supply_chain_modeling/rsct.gd" id="1_xuhcs"]
-[ext_resource type="Theme" uid="uid://dv00ngpal62cd" path="res://modules/supply_chain_modeling/rsct.tres" id="2_xuhcs"]
-[ext_resource type="Script" uid="uid://2iqtet5emwql" path="res://modules/supply_chain_modeling/property_editor.gd" id="3_6bj1w"]
-[ext_resource type="Script" uid="uid://pdr50dg805et" path="res://modules/supply_chain_modeling/blockchain/nft_manager.gd" id="4_rnrox"]
+[ext_resource type="Script" uid="uid://dln1wsyjwuqj7" path="res://rsct.gd" id="1_xuhcs"]
+[ext_resource type="Theme" uid="uid://dv00ngpal62cd" path="res://rsct.tres" id="2_xuhcs"]
+[ext_resource type="Script" uid="uid://2iqtet5emwql" path="res://property_editor.gd" id="3_6bj1w"]
+[ext_resource type="Script" uid="uid://pdr50dg805et" path="res://blockchain/nft_manager.gd" id="4_rnrox"]
 
 [sub_resource type="SystemFont" id="SystemFont_6bj1w"]
 hinting = 2
@@ -105,7 +105,6 @@ grow_horizontal = 2
 grow_vertical = 2
 size_flags_horizontal = 0
 size_flags_vertical = 3
-scroll_offset = Vector2(-349.156, -256.611)
 right_disconnects = true
 connection_lines_thickness = 2.0
 zoom = 0.909091

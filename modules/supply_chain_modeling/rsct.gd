@@ -220,6 +220,7 @@ func _handle_button_release() -> void:
 
 
 func _on_button_6_pressed() -> void:
+	print('_on_button_6_pressed')
 	if paused:
 		resume_simulation()
 	else:
@@ -290,10 +291,13 @@ func update_sim_time_label() -> void:
 	sim_time_label.text = "Sim Time: " + str(sim_time_minutes) + " minutes"
 
 func create_buttons() -> void:
-	var resource_paths = get_scene_paths("res://modules/supply_chain_modeling/resources/")
-	var facility_paths = get_scene_paths("res://modules/supply_chain_modeling/facilities/")
 	
+	var resource_paths = get_scene_paths("res://resources/")
+	var facility_paths = get_scene_paths("res://facilities/")
+	
+	print(resource_paths, facility_paths)
 	for path in resource_paths + facility_paths:
+		print(path)
 		var button = Button.new()
 		button.text = path.get_file().get_basename()
 		button.connect("button_down", func(): _on_button_down(path))
@@ -315,13 +319,18 @@ func _on_button_up() -> void:
 
 func get_scene_paths(directory_path: String) -> Array:
 	var dir = DirAccess.open(directory_path)
+	print("get_scene: ", directory_path)
+	
 	var paths = []
 	if dir:
+		print(dir.get_files())
 		dir.list_dir_begin()
 		var file_name = dir.get_next()
 		while file_name != "":
 			if file_name.ends_with(".tscn"):
 				paths.append(directory_path + file_name)
+			elif file_name.ends_with(".tscn.remap"):
+				paths.append(directory_path + file_name.left(-6))
 			file_name = dir.get_next()
 	return paths
 
