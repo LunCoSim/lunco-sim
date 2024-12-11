@@ -61,11 +61,17 @@ unique_name_in_owner = true
 layout_mode = 2
 text = "Sim Time: 0.0 minutes"
 
-[node name="HSplitContainer" type="Control" parent="VBoxContainer"]
+[node name="HSplitContainer" type="HSplitContainer" parent="VBoxContainer"]
+layout_mode = 2
+size_flags_vertical = 3
+split_offset = 2000
+
+[node name="Workbench" type="Control" parent="VBoxContainer/HSplitContainer"]
+unique_name_in_owner = true
 layout_mode = 2
 size_flags_vertical = 3
 
-[node name="GraphEdit" type="GraphEdit" parent="VBoxContainer/HSplitContainer"]
+[node name="GraphEdit" type="GraphEdit" parent="VBoxContainer/HSplitContainer/Workbench"]
 unique_name_in_owner = true
 layout_mode = 1
 anchors_preset = 15
@@ -75,12 +81,11 @@ grow_horizontal = 2
 grow_vertical = 2
 size_flags_horizontal = 0
 size_flags_vertical = 3
-scroll_offset = Vector2(-196.833, -169.992)
 right_disconnects = true
 connection_lines_thickness = 2.0
 zoom = 1.331
 
-[node name="ButtonContainer" type="VBoxContainer" parent="VBoxContainer/HSplitContainer"]
+[node name="ButtonContainer" type="VBoxContainer" parent="VBoxContainer/HSplitContainer/Workbench"]
 unique_name_in_owner = true
 layout_mode = 1
 anchors_preset = 4
@@ -92,6 +97,19 @@ offset_bottom = 127.5
 grow_vertical = 2
 size_flags_horizontal = 0
 theme = ExtResource("2_xuhcs")
+
+[node name="Inspector" type="VBoxContainer" parent="VBoxContainer/HSplitContainer"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(200, 200)
+layout_mode = 2
+
+[node name="Tabs" type="TabContainer" parent="VBoxContainer/HSplitContainer/Inspector"]
+layout_mode = 2
+current_tab = 0
+
+[node name="Properties" type="VBoxContainer" parent="VBoxContainer/HSplitContainer/Inspector/Tabs"]
+layout_mode = 2
+metadata/_tab_index = 0
 
 [connection signal="button_down" from="VBoxContainer/MenuContainer/Button9" to="." method="new_graph"]
 [connection signal="button_down" from="VBoxContainer/MenuContainer/Button" to="." method="save_graph"]
