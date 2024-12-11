@@ -1,0 +1,8 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://wallet_connect_button.gd" id="1_script"]
+
+[node name="WalletConnectButton" type="Button"]
+custom_minimum_size = Vector2(120, 0)
+text = "Connect Wallet"
+script = ExtResource("1_script")

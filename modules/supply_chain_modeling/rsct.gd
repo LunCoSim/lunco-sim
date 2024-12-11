@@ -5,6 +5,7 @@ extends Control
 @onready var sim_time_label: Label = %SimTimeLabel
 @onready var button_container: VBoxContainer = %ButtonContainer
 @onready var properties: VBoxContainer = %Properties
+@onready var wallet_button = %MenuContainer/WalletConnectButton
 
 # Save file path for the current graph
 var save_file_path: String = "user://current_graph.save"
@@ -57,6 +58,9 @@ func _ready():
 	%MenuContainer/Button7.connect("pressed", _on_button_7_pressed)
 	%MenuContainer/Button6.connect("pressed", _on_button_6_pressed)
 	%MenuContainer/Button8.connect("pressed", _on_button_8_pressed)
+
+	wallet_button.connect("wallet_connected", _on_wallet_connected)
+	wallet_button.connect("wallet_disconnected", _on_wallet_disconnected)
 
 
 func _process(delta: float) -> void:
@@ -453,6 +457,16 @@ func show_message(text: String) -> void:
 	dialog.dialog_text = text
 	add_child(dialog)
 	dialog.popup_centered()
+
+func _on_wallet_connected(address: String):
+	print("Wallet connected: ", address)
+	# Enable NFT-related features
+	# You might want to enable certain UI elements or functionality here
+
+func _on_wallet_disconnected():
+	print("Wallet disconnected")
+	# Disable NFT-related features
+	# You might want to disable certain UI elements or functionality here
 
 
 	
