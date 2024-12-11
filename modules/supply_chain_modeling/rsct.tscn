@@ -28,6 +28,7 @@ grow_horizontal = 2
 grow_vertical = 2
 
 [node name="MenuContainer" type="HBoxContainer" parent="VBoxContainer"]
+unique_name_in_owner = true
 layout_mode = 2
 
 [node name="Button9" type="Button" parent="VBoxContainer/MenuContainer"]
@@ -140,13 +141,3 @@ metadata/_tab_index = 0
 [node name="NFTManager" type="Node" parent="."]
 unique_name_in_owner = true
 script = ExtResource("4_rnrox")
-
-[connection signal="button_down" from="VBoxContainer/MenuContainer/Button9" to="." method="new_graph"]
-[connection signal="button_down" from="VBoxContainer/MenuContainer/Button" to="." method="save_graph"]
-[connection signal="button_down" from="VBoxContainer/MenuContainer/Button2" to="." method="load_graph"]
-[connection signal="pressed" from="VBoxContainer/MenuContainer/SaveNFTButton" to="." method="_on_save_nft_pressed"]
-[connection signal="pressed" from="VBoxContainer/MenuContainer/LoadNFTButton" to="." method="_on_load_nft_pressed"]
-[connection signal="pressed" from="VBoxContainer/MenuContainer/ViewNFTsButton" to="." method="_on_view_nfts_pressed"]
-[connection signal="button_down" from="VBoxContainer/MenuContainer/Button7" to="." method="_on_button_7_pressed"]
-[connection signal="button_down" from="VBoxContainer/MenuContainer/Button6" to="." method="_on_button_6_pressed"]
-[connection signal="button_down" from="VBoxContainer/MenuContainer/Button8" to="." method="_on_button_8_pressed"]

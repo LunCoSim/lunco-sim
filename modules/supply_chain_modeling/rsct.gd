@@ -47,6 +47,18 @@ func _ready():
 
 	pause_simulation()
 
+	# Temp solution to connect buttons, tcsn is not working in web
+	%MenuContainer/Button6.connect("pressed", _on_button_6_pressed)
+	%MenuContainer/Button9.connect("pressed", new_graph)
+	%MenuContainer/Button.connect("pressed", save_graph)
+	%MenuContainer/Button2.connect("pressed", load_graph)
+	%MenuContainer/SaveNFTButton.connect("pressed", _on_save_nft_pressed)
+	%MenuContainer/LoadNFTButton.connect("pressed", _on_load_nft_pressed)
+	%MenuContainer/ViewNFTsButton.connect("pressed", _on_view_nfts_pressed)
+	%MenuContainer/Button7.connect("pressed", _on_button_7_pressed)
+	%MenuContainer/Button6.connect("pressed", _on_button_6_pressed)
+	%MenuContainer/Button8.connect("pressed", _on_button_8_pressed)
+
 
 func _process(delta: float) -> void:
 	# Keep autosave in process cycle since it's not physics-dependent
