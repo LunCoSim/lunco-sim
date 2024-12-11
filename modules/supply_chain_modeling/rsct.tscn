@@ -1,7 +1,8 @@
-[gd_scene load_steps=4 format=3 uid="uid://3lmlrsbbacm"]
+[gd_scene load_steps=5 format=3 uid="uid://3lmlrsbbacm"]
 
 [ext_resource type="Script" uid="uid://dln1wsyjwuqj7" path="res://modules/supply_chain_modeling/rsct.gd" id="1_xuhcs"]
 [ext_resource type="Theme" uid="uid://dv00ngpal62cd" path="res://modules/supply_chain_modeling/rsct.tres" id="2_xuhcs"]
+[ext_resource type="Script" path="res://modules/supply_chain_modeling/property_editor.gd" id="3_6bj1w"]
 
 [sub_resource type="SystemFont" id="SystemFont_6bj1w"]
 hinting = 2
@@ -81,6 +82,7 @@ grow_horizontal = 2
 grow_vertical = 2
 size_flags_horizontal = 0
 size_flags_vertical = 3
+scroll_offset = Vector2(-196.833, -169.992)
 right_disconnects = true
 connection_lines_thickness = 2.0
 zoom = 1.331
@@ -108,7 +110,9 @@ layout_mode = 2
 current_tab = 0
 
 [node name="Properties" type="VBoxContainer" parent="VBoxContainer/HSplitContainer/Inspector/Tabs"]
+unique_name_in_owner = true
 layout_mode = 2
+script = ExtResource("3_6bj1w")
 metadata/_tab_index = 0
 
 [connection signal="button_down" from="VBoxContainer/MenuContainer/Button9" to="." method="new_graph"]

@@ -4,6 +4,7 @@ extends Control
 @onready var graph_edit: GraphEdit = %GraphEdit
 @onready var sim_time_label: Label = %SimTimeLabel
 @onready var button_container: VBoxContainer = %ButtonContainer
+@onready var properties: VBoxContainer = %Properties
 
 # Save file path for the current graph
 var save_file_path: String = "user://current_graph.save"
@@ -24,6 +25,8 @@ func _ready():
 	graph_edit.connect("disconnection_request", _on_disconnection_request)
 	graph_edit.connect("end_node_move", _on_node_moved)
 	graph_edit.connect("delete_nodes_request", _on_delete_nodes_request)
+	graph_edit.connect("node_selected", _on_node_selected)
+	graph_edit.connect("node_deselected", _on_node_deselected)
 	
 	# Enable snapping and minimap for better UX
 	graph_edit.snapping_distance = 20
@@ -313,6 +316,13 @@ func get_scene_paths(directory_path: String) -> Array:
 				paths.append(directory_path + file_name)
 			file_name = dir.get_next()
 	return paths
+
+func _on_node_selected(node: Node):
+	properties.update_properties(node)
+
+func _on_node_deselected(node: Node):
+	if properties.current_node == node:
+		properties.clear_properties()
 
 
 	

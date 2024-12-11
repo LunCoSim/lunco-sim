@@ -3,7 +3,7 @@ extends GraphNode
 class_name BaseFacility
 
 # Basic facility properties as defined in SPECIFICATION.md
-var facility_id: String
+@export var facility_id: String
 @export var description: String
 @export var facility_type: String  # producer, consumer, storage, or custom
 @export var efficiency: float = 1.0
