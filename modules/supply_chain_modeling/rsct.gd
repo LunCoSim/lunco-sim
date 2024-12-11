@@ -47,6 +47,7 @@ func _ready():
 
 	pause_simulation()
 
+
 func _process(delta: float) -> void:
 	# Keep autosave in process cycle since it's not physics-dependent
 	autosave_timer += delta
@@ -395,6 +396,44 @@ func _on_design_loaded(design_data: Dictionary) -> void:
 			connection.to_node,
 			connection.to_port
 		)
+
+func _on_save_nft_pressed() -> void:
+	# Check if wallet is connected
+	if not nft_manager.web3_interface.is_connected():
+		show_message("Please connect your wallet first")
+		return
+	
+	save_as_nft()
+
+func _on_load_nft_pressed() -> void:
+	# Check if wallet is connected
+	if not nft_manager.web3_interface.is_connected():
+		show_message("Please connect your wallet first")
+		return
+		
+	# Show token ID input dialog
+	var dialog = load("res://modules/supply_chain_modeling/ui/token_id_dialog.tscn").instantiate()
+	add_child(dialog)
+	dialog.connect("token_id_entered", func(token_id): load_from_nft(int(token_id)))
+	dialog.popup_centered()
+
+func _on_view_nfts_pressed() -> void:
+	# Check if wallet is connected
+	if not nft_manager.web3_interface.is_connected():
+		show_message("Please connect your wallet first")
+		return
+		
+	# Show NFT gallery dialog
+	var gallery = load("res://modules/supply_chain_modeling/ui/nft_gallery.tscn").instantiate()
+	add_child(gallery)
+	gallery.connect("nft_selected", func(token_id): load_from_nft(token_id))
+	gallery.popup_centered()
+
+func show_message(text: String) -> void:
+	var dialog = AcceptDialog.new()
+	dialog.dialog_text = text
+	add_child(dialog)
+	dialog.popup_centered()
 
 
 	
