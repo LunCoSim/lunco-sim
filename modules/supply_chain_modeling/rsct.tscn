@@ -2,7 +2,7 @@
 
 [ext_resource type="Script" uid="uid://dln1wsyjwuqj7" path="res://modules/supply_chain_modeling/rsct.gd" id="1_xuhcs"]
 [ext_resource type="Theme" uid="uid://dv00ngpal62cd" path="res://modules/supply_chain_modeling/rsct.tres" id="2_xuhcs"]
-[ext_resource type="Script" path="res://modules/supply_chain_modeling/property_editor.gd" id="3_6bj1w"]
+[ext_resource type="Script" uid="uid://2iqtet5emwql" path="res://modules/supply_chain_modeling/property_editor.gd" id="3_6bj1w"]
 [ext_resource type="Script" uid="uid://pdr50dg805et" path="res://modules/supply_chain_modeling/blockchain/nft_manager.gd" id="4_rnrox"]
 
 [sub_resource type="SystemFont" id="SystemFont_6bj1w"]
