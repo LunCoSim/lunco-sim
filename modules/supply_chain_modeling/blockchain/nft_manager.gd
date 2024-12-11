@@ -28,7 +28,6 @@ func _ready():
 
 func mint_design(design_data: Dictionary) -> void:
 	# Convert design data to compressed string format
-	# For testing, we'll use a simplified version of the data
 	var simplified_data = {
 		"n": design_data.nodes,  # nodes
 		"c": design_data.connections  # connections
@@ -38,8 +37,34 @@ func mint_design(design_data: Dictionary) -> void:
 	var graph_string = JSON.stringify(simplified_data)
 	var base64_data = Marshalls.utf8_to_base64(graph_string)
 
+	# Convert string to hex format
+	var hex_string = string_to_hex(base64_data)
+	
+	# Add 0x prefix
+	var prefixed_hex = "0x" + hex_string
+	
 	# Call mint through Web3 interface
-	web3_interface.mint_blueprint(base64_data, NFT_CONTRACT)
+	web3_interface.mint_blueprint(prefixed_hex, NFT_CONTRACT)
+
+# Add this helper function to convert string to hex
+func string_to_hex(input: String) -> String:
+	var hex = ""
+	for i in range(input.length()):
+		var byte = input.unicode_at(i)
+		hex += "%02x" % byte
+	return hex
+	
+func hex_to_string(hex: String) -> String:
+	var result = ""
+	# Remove 0x prefix if present
+	if hex.begins_with("0x"):
+		hex = hex.substr(2)
+	
+	for i in range(0, hex.length(), 2):
+		var byte = hex.substr(i, 2).hex_to_int()
+		result += char(byte)
+	return result
+
 
 func load_design_from_nft(token_id: int) -> void:
 	#var base64_string = await web3_interface.call_contract(
@@ -48,10 +73,13 @@ func load_design_from_nft(token_id: int) -> void:
 		#[token_id]
 	#)
 	
+	# var hex_string = hex_to_string(hex_string)
+
 	var base64_string = "eyJjIjpbWyJSZXNvdXJjZV9PMiIsMCwiT2JqZWN0X0ZhY3RvcnkiLDBdLFsiUmVzb3VyY2VfSDIiLDAsIk9iamVjdF9GYWN0b3J5IiwxXSxbIlNvbGFyUG93ZXJQbGFudCIsMCwiT2JqZWN0X0ZhY3RvcnkiLDJdLFsiT2JqZWN0X0ZhY3RvcnkiLDAsIlN0b3JhZ2UiLDBdXSwibiI6eyJPYmplY3RfRmFjdG9yeSI6eyJwb3MiOls1ODAuMCwxNDAuMF0sInR5cGUiOiJvYmplY3RfZmFjdG9yeS50c2NuIn0sIlJlc291cmNlX0gyIjp7InBvcyI6WzYwLjAsMjIwLjBdLCJ0eXBlIjoicmVzb3VyY2VfaDIudHNjbiJ9LCJSZXNvdXJjZV9PMiI6eyJwb3MiOls2MC4wLDAuMF0sInR5cGUiOiJyZXNvdXJjZV9vMi50c2NuIn0sIlNvbGFyUG93ZXJQbGFudCI6eyJwb3MiOls2MC4wLDQ0MC4wXSwidHlwZSI6InNvbGFyX3Bvd2VyX3BsYW50LnRzY24ifSwiU3RvcmFnZSI6eyJwb3MiOlsxMDIwLjAsMjAwLjBdLCJ0eXBlIjoic3RvcmFnZS50c2NuIn19fQ=="
 
 	# Decode base64 and parse the data
 	var graph_string = Marshalls.base64_to_utf8(base64_string)
+	
 	var parsed_data = JSON.parse_string(graph_string)
 	
 	# Convert back to full format, adding full paths to node types

@@ -6,3 +6,5 @@
 custom_minimum_size = Vector2(120, 0)
 text = "Connect Wallet"
 script = ExtResource("1_script")
+
+[connection signal="button_up" from="." to="." method="_on_button_pressed"]
