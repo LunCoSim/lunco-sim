@@ -48,7 +48,6 @@ func _ready():
 	pause_simulation()
 
 	# Temp solution to connect buttons, tcsn is not working in web
-	%MenuContainer/Button6.connect("pressed", _on_button_6_pressed)
 	%MenuContainer/Button9.connect("pressed", new_graph)
 	%MenuContainer/Button.connect("pressed", save_graph)
 	%MenuContainer/Button2.connect("pressed", load_graph)
@@ -123,9 +122,7 @@ func load_graph() -> void:
 		return
 	
 	# Clear existing graph
-	for node in graph_edit.get_children():
-		if node is GraphNode:
-			node.free()
+	new_graph()
 	
 	# Load nodes
 	for node_name in save_data["nodes"]:
@@ -155,6 +152,7 @@ func load_graph() -> void:
 			graph_edit.zoom = save_data["view"]["zoom"]
 		#print("Load: ", save_data["view"]["scroll_offset"], " zoom: ", save_data["view"]["zoom"])
 	
+	pause_simulation()
 	print("Load complete")
 
 func _on_connection_request(from_node: StringName, from_port: int, to_node: StringName, to_port: int):
@@ -253,6 +251,7 @@ func new_graph() -> void:
 			node.free()
 	
 	# Reset simulation time
+	pause_simulation()
 	sim_time = 0.0
 	update_sim_time_label()
 	
@@ -413,6 +412,7 @@ func _on_design_loaded(design_data: Dictionary) -> void:
 			connection[2],
 			int(connection[3])
 		)
+	pause_simulation()
 
 func _on_save_nft_pressed() -> void:
 	# Check if wallet is connected

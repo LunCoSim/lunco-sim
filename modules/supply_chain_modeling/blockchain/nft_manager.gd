@@ -14,11 +14,12 @@ var web3_interface
 
 # Add this constant at the top of the file
 const RESOURCE_PATHS = {
-	"object_factory.tscn": "res://modules/supply_chain_modeling/facilities/object_factory.tscn",
-	"resource_o2.tscn": "res://modules/supply_chain_modeling/resources/resource_o2.tscn",
-	"resource_h2.tscn": "res://modules/supply_chain_modeling/resources/resource_h2.tscn",
-	"solar_power_plant.tscn": "res://modules/supply_chain_modeling/facilities/solar_power_plant.tscn",
-	"storage.tscn": "res://modules/supply_chain_modeling/facilities/storage.tscn"
+	"object_factory.tscn": "res://facilities/object_factory.tscn",
+	"solar_power_plant.tscn": "res://facilities/solar_power_plant.tscn",
+	"storage.tscn": "res://facilities/storage.tscn",
+	"resource_o2.tscn": "res://resources/resource_o2.tscn",
+	"resource_h2.tscn": "res://resources/resource_h2.tscn",
+	"resource_h2o.tscn": "res://resources/resource_h2o.tscn"
 }
 
 func _ready():
