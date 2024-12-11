@@ -23,8 +23,8 @@ const RESOURCE_PATHS = {
 }
 
 func _ready():
-	pass
-	# web3_interface = get_node("/root/Web3Interface")  # Assuming you have a global Web3 singleton
+	web3_interface = get_node("/root/Web3Interface")
+	web3_interface.connect("transaction_completed", _on_transaction_completed)
 
 func mint_design(design_data: Dictionary) -> void:
 	# Convert design data to compressed string format
@@ -38,19 +38,8 @@ func mint_design(design_data: Dictionary) -> void:
 	var graph_string = JSON.stringify(simplified_data)
 	var base64_data = Marshalls.utf8_to_base64(graph_string)
 
-	# Prepare transaction data
-	var tx_data = {
-		"to": NFT_CONTRACT,
-		"method": "mint",
-		"params": [base64_data]
-	}
-	
-	print(base64_data)
-	# Execute transaction
-	# var result = await web3_interface.send_transaction(tx_data)
-	var result = {"success": true, "token_id": 1}
-	if result.success:
-		emit_signal("nft_minted", result.token_id)
+	# Call mint through Web3 interface
+	web3_interface.mint_blueprint(base64_data, NFT_CONTRACT)
 
 func load_design_from_nft(token_id: int) -> void:
 	#var base64_string = await web3_interface.call_contract(
@@ -84,3 +73,7 @@ func load_design_from_nft(token_id: int) -> void:
 	}
 	
 	emit_signal("nft_load_complete", design_data)
+
+func _on_transaction_completed(success: bool, data: Dictionary):
+	if success:
+		emit_signal("nft_minted", data.hash)

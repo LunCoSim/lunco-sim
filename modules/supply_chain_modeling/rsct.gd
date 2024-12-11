@@ -5,7 +5,6 @@ extends Control
 @onready var sim_time_label: Label = %SimTimeLabel
 @onready var button_container: VBoxContainer = %ButtonContainer
 @onready var properties: VBoxContainer = %Properties
-@onready var wallet_button = %MenuContainer/WalletConnectButton
 
 # Save file path for the current graph
 var save_file_path: String = "user://current_graph.save"
@@ -22,9 +21,16 @@ var dragging_node_path: String = ""
 
 var nft_manager: NFTManager
 var current_token_id: int = -1
+var web3_interface
+var current_wallet_address: String = ""
 
 func _ready():
+	web3_interface = get_node("/root/Web3Interface")
 	nft_manager = $NFTManager
+	
+	# Connect signals
+	nft_manager.connect("wallet_connected", _on_wallet_connected)
+	nft_manager.connect("wallet_disconnected", _on_wallet_disconnected)
 	nft_manager.connect("nft_minted", _on_nft_minted)
 	nft_manager.connect("nft_load_complete", _on_design_loaded)
 	
@@ -58,9 +64,6 @@ func _ready():
 	%MenuContainer/Button7.connect("pressed", _on_button_7_pressed)
 	%MenuContainer/Button6.connect("pressed", _on_button_6_pressed)
 	%MenuContainer/Button8.connect("pressed", _on_button_8_pressed)
-
-	wallet_button.connect("wallet_connected", _on_wallet_connected)
-	wallet_button.connect("wallet_disconnected", _on_wallet_disconnected)
 
 
 func _process(delta: float) -> void:
