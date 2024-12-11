@@ -342,26 +342,24 @@ func save_as_nft() -> void:
 		}
 	}
 	
-	# Save all node data
+	# Save minimal node data for testing
 	for node in graph_edit.get_children():
 		if node is GraphNode:
 			save_data["nodes"][node.name] = {
-				"position": node.position_offset,
-				"size": node.size,
-				"type": node.scene_file_path,
-				"properties": node.get_facility_data() if node.has_method("get_facility_data") else {}
+				"pos": [node.position_offset.x, node.position_offset.y],
+				"type": node.scene_file_path.get_file()
 			}
 	
-	# Save all connections
+	# Save minimal connection data
 	for connection in graph_edit.get_connection_list():
-		save_data["connections"].append({
-			"from_node": connection["from_node"],
-			"from_port": connection["from_port"],
-			"to_node": connection["to_node"],
-			"to_port": connection["to_port"]
-		})
+		save_data["connections"].append([
+			connection["from_node"],
+			connection["from_port"],
+			connection["to_node"],
+			connection["to_port"]
+		])
 	
-	# Mint NFT with the design data
+	# Mint NFT with compressed data
 	nft_manager.mint_design(save_data)
 
 func _on_nft_minted(token_id: int) -> void:
@@ -399,23 +397,25 @@ func _on_design_loaded(design_data: Dictionary) -> void:
 
 func _on_save_nft_pressed() -> void:
 	# Check if wallet is connected
-	if not nft_manager.web3_interface.is_connected():
-		show_message("Please connect your wallet first")
-		return
+	#if not nft_manager.web3_interface.is_connected():
+		#show_message("Please connect your wallet first")
+		#return
 	
 	save_as_nft()
 
 func _on_load_nft_pressed() -> void:
 	# Check if wallet is connected
-	if not nft_manager.web3_interface.is_connected():
-		show_message("Please connect your wallet first")
-		return
+	#if not nft_manager.web3_interface.is_connected():
+		#show_message("Please connect your wallet first")
+		#return
 		
-	# Show token ID input dialog
-	var dialog = load("res://modules/supply_chain_modeling/ui/token_id_dialog.tscn").instantiate()
-	add_child(dialog)
-	dialog.connect("token_id_entered", func(token_id): load_from_nft(int(token_id)))
-	dialog.popup_centered()
+	## Show token ID input dialog
+	#var dialog = load("res://modules/supply_chain_modeling/ui/token_id_dialog.tscn").instantiate()
+	#add_child(dialog)
+	#dialog.connect("token_id_entered", func(token_id): load_from_nft(int(token_id)))
+	#dialog.popup_centered()
+	#
+	load_from_nft(int(1))
 
 func _on_view_nfts_pressed() -> void:
 	# Check if wallet is connected
