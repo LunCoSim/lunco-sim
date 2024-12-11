@@ -371,17 +371,15 @@ func load_from_nft(token_id: int) -> void:
 
 func _on_design_loaded(design_data: Dictionary) -> void:
 	# Clear current graph
-	for child in graph_edit.get_children():
-		if child is GraphNode:
-			child.queue_free()
+	new_graph()
 	
 	# Load nodes
 	for node_name in design_data.nodes:
 		var node_data = design_data.nodes[node_name]
 		var node = load(node_data.type).instantiate()
 		node.name = node_name
-		node.position_offset = node_data.position
-		node.size = node_data.size
+		node.position_offset = Vector2(node_data.pos[0],node_data.pos[1])
+
 		if node_data.has("properties"):
 			node.load_facility_data(node_data.properties)
 		graph_edit.add_child(node)
@@ -389,10 +387,10 @@ func _on_design_loaded(design_data: Dictionary) -> void:
 	# Load connections
 	for connection in design_data.connections:
 		graph_edit.connect_node(
-			connection.from_node,
-			connection.from_port,
-			connection.to_node,
-			connection.to_port
+			connection[0],
+			int(connection[1]),
+			connection[2],
+			int(connection[3])
 		)
 
 func _on_save_nft_pressed() -> void:
