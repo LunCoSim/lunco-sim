@@ -19,7 +19,14 @@ var paused: bool = true  # Simulation paused state
 var dragging_new_node: bool = false
 var dragging_node_path: String = ""
 
+var nft_manager: NFTManager
+var current_token_id: int = -1
+
 func _ready():
+	nft_manager = $NFTManager
+	nft_manager.connect("nft_minted", _on_nft_minted)
+	nft_manager.connect("nft_load_complete", _on_design_loaded)
+	
 	# Connect signals for handling connections
 	graph_edit.connect("connection_request", _on_connection_request)
 	graph_edit.connect("disconnection_request", _on_disconnection_request)
@@ -323,6 +330,71 @@ func _on_node_selected(node: Node):
 func _on_node_deselected(node: Node):
 	if properties.current_node == node:
 		properties.clear_properties()
+
+func save_as_nft() -> void:
+	var save_data = {
+		"nodes": {},
+		"connections": [],
+		"view": {
+			"scroll_offset": graph_edit.scroll_offset,
+			"zoom": graph_edit.zoom
+		}
+	}
+	
+	# Save all node data
+	for node in graph_edit.get_children():
+		if node is GraphNode:
+			save_data["nodes"][node.name] = {
+				"position": node.position_offset,
+				"size": node.size,
+				"type": node.scene_file_path,
+				"properties": node.get_facility_data() if node.has_method("get_facility_data") else {}
+			}
+	
+	# Save all connections
+	for connection in graph_edit.get_connection_list():
+		save_data["connections"].append({
+			"from_node": connection["from_node"],
+			"from_port": connection["from_port"],
+			"to_node": connection["to_node"],
+			"to_port": connection["to_port"]
+		})
+	
+	# Mint NFT with the design data
+	nft_manager.mint_design(save_data)
+
+func _on_nft_minted(token_id: int) -> void:
+	current_token_id = token_id
+	print("Design saved as NFT with token ID: ", token_id)
+
+func load_from_nft(token_id: int) -> void:
+	nft_manager.load_design_from_nft(token_id)
+
+func _on_design_loaded(design_data: Dictionary) -> void:
+	# Clear current graph
+	for child in graph_edit.get_children():
+		if child is GraphNode:
+			child.queue_free()
+	
+	# Load nodes
+	for node_name in design_data.nodes:
+		var node_data = design_data.nodes[node_name]
+		var node = load(node_data.type).instantiate()
+		node.name = node_name
+		node.position_offset = node_data.position
+		node.size = node_data.size
+		if node_data.has("properties"):
+			node.load_facility_data(node_data.properties)
+		graph_edit.add_child(node)
+	
+	# Load connections
+	for connection in design_data.connections:
+		graph_edit.connect_node(
+			connection.from_node,
+			connection.from_port,
+			connection.to_node,
+			connection.to_port
+		)
 
 
 	
