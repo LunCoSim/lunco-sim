@@ -56,15 +56,15 @@ func _ready():
 	pause_simulation()
 
 	# Temp solution to connect buttons, tcsn is not working in web
-	%MenuContainer/Button9.connect("pressed", new_graph)
-	%MenuContainer/Button.connect("pressed", save_graph)
-	%MenuContainer/Button2.connect("pressed", load_graph)
-	%MenuContainer/SaveNFTButton.connect("pressed", _on_save_nft_pressed)
-	%MenuContainer/LoadNFTButton.connect("pressed", _on_load_nft_pressed)
-	%MenuContainer/ViewNFTsButton.connect("pressed", _on_view_nfts_pressed)
-	%MenuContainer/Button7.connect("pressed", _on_button_7_pressed)
-	%MenuContainer/Button6.connect("pressed", _on_button_6_pressed)
-	%MenuContainer/Button8.connect("pressed", _on_button_8_pressed)
+	%MenuContainer/Button9.connect("button_up", new_graph)
+	%MenuContainer/Button.connect("button_up", save_graph)
+	%MenuContainer/Button2.connect("button_up", load_graph)
+	%MenuContainer/SaveNFTButton.connect("button_up", _on_save_nft_pressed)
+	%MenuContainer/LoadNFTButton.connect("button_up", _on_load_nft_pressed)
+	%MenuContainer/ViewNFTsButton.connect("button_up", _on_view_nfts_pressed)
+	%MenuContainer/Button7.connect("button_up", _on_button_7_pressed)
+	%MenuContainer/Button6.connect("button_up", _on_button_6_pressed)
+	%MenuContainer/Button8.connect("button_up", _on_button_8_pressed)
 
 
 func _process(delta: float) -> void:
@@ -361,6 +361,7 @@ func _on_node_deselected(node: Node):
 		properties.clear_properties()
 
 func save_as_nft() -> void:
+	print('save_as_nft')
 	var save_data = {
 		"nodes": {},
 		"connections": [],
@@ -423,6 +424,7 @@ func _on_design_loaded(design_data: Dictionary) -> void:
 	pause_simulation()
 
 func _on_save_nft_pressed() -> void:
+	print('save_nft_pressed')
 	# Check if wallet is connected
 	#if not nft_manager.web3_interface.is_connected():
 		#show_message("Please connect your wallet first")
