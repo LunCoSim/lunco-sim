@@ -19,21 +19,18 @@ var paused: bool = true  # Simulation paused state
 var dragging_new_node: bool = false
 var dragging_node_path: String = ""
 
-var nft_manager: NFTManager
-var current_token_id: int = -1
 var web3_interface
 var current_wallet_address: String = ""
 
 func _ready():
 	web3_interface = get_node("/root/Web3Interface")
-	nft_manager = $NFTManager
 	
 	# Connect signals
 	web3_interface.connect("wallet_connected", _on_wallet_connected)
 	web3_interface.connect("wallet_disconnected", _on_wallet_disconnected)
 	
-	nft_manager.connect("nft_minted", _on_nft_minted)
-	nft_manager.connect("nft_load_complete", _on_design_loaded)
+	web3_interface.connect("nft_minted", _on_nft_minted)
+	web3_interface.connect("nft_load_complete", _on_nft_load_complete)
 	
 	# Connect signals for handling connections
 	graph_edit.connect("connection_request", _on_connection_request)
@@ -388,17 +385,19 @@ func save_as_nft() -> void:
 			connection["to_port"]
 		])
 	
-	# Mint NFT with compressed data
-	nft_manager.mint_design(save_data)
+	var web3 = get_node("/root/Web3Interface")
+	web3.mint_design(save_data)
+
+
 
 func _on_nft_minted(token_id: int) -> void:
-	current_token_id = token_id
 	print("Design saved as NFT with token ID: ", token_id)
 
 func load_from_nft(token_id: int) -> void:
-	nft_manager.load_design_from_nft(token_id)
+	var web3 = get_node("/root/Web3Interface")
+	web3.load_design(token_id)
 
-func _on_design_loaded(design_data: Dictionary) -> void:
+func _on_nft_load_complete(design_data: Dictionary) -> void:
 	# Clear current graph
 	new_graph()
 	
@@ -448,7 +447,7 @@ func _on_load_nft_pressed() -> void:
 
 func _on_view_nfts_pressed() -> void:
 	# Check if wallet is connected
-	if not nft_manager.web3_interface.is_connected():
+	if not web3_interface.is_connected():
 		show_message("Please connect your wallet first")
 		return
 		
