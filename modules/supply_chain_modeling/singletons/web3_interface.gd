@@ -84,6 +84,7 @@ func _initialize_web3():
 		}
 
 		window.mintNFT = async function(contractAddress, data) {
+			console.log("mintNFT", contractAddress, data)
 			if (typeof window.ethereum !== 'undefined') {
 				try {
 					// Basic ERC1155 mint call
@@ -153,8 +154,8 @@ func mint_blueprint(graph_data: String, contract_address: String):
 			[graph_data]
 		)
 	}
-	print("tx_data", tx_data)
-	var result = await js_interface.mintNFT(contract_address, tx_data)
+	print("mint_blueprint tx_data: ", tx_data)
+	var result = await js_interface.mintNFT(contract_address, tx_data["data"])
 
 	var success = false if result.success == null else bool(result.success)
 
