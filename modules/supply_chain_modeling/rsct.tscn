@@ -97,12 +97,12 @@ split_offset = 2000
 [node name="Workbench" type="Control" parent="VBoxContainer/HSplitContainer"]
 unique_name_in_owner = true
 layout_mode = 2
+size_flags_horizontal = 3
 size_flags_vertical = 3
 
 [node name="GraphEdit" type="GraphEdit" parent="VBoxContainer/HSplitContainer/Workbench"]
 unique_name_in_owner = true
-layout_mode = 1
-anchors_preset = 15
+layout_mode = 2
 anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
@@ -115,8 +115,7 @@ zoom = 0.909091
 
 [node name="ButtonContainer" type="VBoxContainer" parent="VBoxContainer/HSplitContainer/Workbench"]
 unique_name_in_owner = true
-layout_mode = 1
-anchors_preset = 4
+layout_mode = 2
 anchor_top = 0.5
 anchor_bottom = 0.5
 offset_top = -54.5
@@ -140,3 +139,17 @@ unique_name_in_owner = true
 layout_mode = 2
 script = ExtResource("3_6bj1w")
 metadata/_tab_index = 0
+
+[node name="FileButtons" type="HBoxContainer" parent="VBoxContainer"]
+layout_mode = 2
+
+[node name="SaveButton" type="Button" parent="VBoxContainer/FileButtons"]
+layout_mode = 2
+text = "Save to File"
+
+[node name="LoadButton" type="Button" parent="VBoxContainer/FileButtons"]
+layout_mode = 2
+text = "Load from File"
+
+[connection signal="pressed" from="VBoxContainer/FileButtons/SaveButton" to="." method="_on_save_button_pressed"]
+[connection signal="pressed" from="VBoxContainer/FileButtons/LoadButton" to="." method="_on_load_button_pressed"]

@@ -22,6 +22,9 @@ var dragging_node_path: String = ""
 var web3_interface
 var current_wallet_address: String = ""
 
+var save_dialog: FileDialog
+var load_dialog: FileDialog
+
 func _ready():
 	web3_interface = get_node("/root/Web3Interface")
 	
@@ -63,6 +66,21 @@ func _ready():
 	%MenuContainer/Button6.connect("button_up", _on_button_6_pressed)
 	%MenuContainer/Button8.connect("button_up", _on_button_8_pressed)
 
+	# Set up save dialog
+	save_dialog = FileDialog.new()
+	save_dialog.file_mode = FileDialog.FILE_MODE_SAVE_FILE
+	save_dialog.access = FileDialog.ACCESS_FILESYSTEM
+	save_dialog.filters = ["*.json ; JSON Files"]
+	save_dialog.connect("file_selected", _on_save_file_selected)
+	add_child(save_dialog)
+	
+	# Set up load dialog
+	load_dialog = FileDialog.new()
+	load_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
+	load_dialog.access = FileDialog.ACCESS_FILESYSTEM
+	load_dialog.filters = ["*.json ; JSON Files"]
+	load_dialog.connect("file_selected", _on_load_file_selected)
+	add_child(load_dialog)
 
 func _process(delta: float) -> void:
 	# Keep autosave in process cycle since it's not physics-dependent
@@ -472,6 +490,82 @@ func _on_wallet_disconnected():
 	print("Wallet disconnected")
 	# Disable NFT-related features
 	# You might want to disable certain UI elements or functionality here
+
+func _on_save_file_selected(path: String) -> void:
+	var graph_data = {
+		"nodes": [],
+		"connections": []
+	}
+	
+	# Save all nodes
+	for node in %GraphEdit.get_children():
+		if node is GraphNode:
+			var node_data = {
+				"name": node.name,
+				"type": node.get_class(),
+				"position": [node.position_offset.x, node.position_offset.y],
+				"properties": node.get_facility_data() if "get_facility_data" in node else {}
+			}
+			graph_data["nodes"].append(node_data)
+	
+	# Save all connections
+	for connection in %GraphEdit.get_connection_list():
+		graph_data["connections"].append({
+			"from_node": connection["from_node"],
+			"from_port": connection["from_port"],
+			"to_node": connection["to_node"],
+			"to_port": connection["to_port"]
+		})
+	
+	# Save to file
+	var file = FileAccess.open(path, FileAccess.WRITE)
+	file.store_string(JSON.stringify(graph_data, "  "))
+	file.close()
+
+func _on_load_file_selected(path: String) -> void:
+	# Clear existing graph
+	new_graph()
+	
+	# Load file
+	var file = FileAccess.open(path, FileAccess.READ)
+	var json_string = file.get_as_text()
+	file.close()
+	
+	var json = JSON.new()
+	var parse_result = json.parse(json_string)
+	if parse_result != OK:
+		print("JSON Parse Error: ", json.get_error_message())
+		return
+		
+	var graph_data = json.get_data()
+	
+	# Create nodes
+	for node_data in graph_data["nodes"]:
+		var node_type = node_data["type"]
+		var node_scene = load("res://facilities/" + node_type.to_lower() + ".tscn")
+		if node_scene:
+			var node = node_scene.instantiate()
+			node.name = node_data["name"]
+			node.position_offset = Vector2(node_data["position"][0], node_data["position"][1])
+			if "properties" in node_data and "load_facility_data" in node:
+				node.load_facility_data(node_data["properties"])
+			%GraphEdit.add_child(node)
+	
+	# Restore connections
+	for connection in graph_data["connections"]:
+		%GraphEdit.connect_node(
+			connection["from_node"],
+			connection["from_port"],
+			connection["to_node"],
+			connection["to_port"]
+		)
+
+# Add these functions to handle button presses
+func _on_save_button_pressed():
+	save_dialog.popup_centered(Vector2(800, 600))
+
+func _on_load_button_pressed():
+	load_dialog.popup_centered(Vector2(800, 600))
 
 
 	
