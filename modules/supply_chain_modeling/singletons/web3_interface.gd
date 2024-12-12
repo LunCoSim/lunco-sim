@@ -79,7 +79,10 @@ func _initialize_web3():
 			return window.web3.eth.abi.encodeFunctionCall({
 				"name": function_name,
 				"type": 'function',
-				"inputs": [param_type]
+				"inputs": [{
+					"type": param_type,
+					"name": "arg1"
+				}]
 			}, [param_value])
 		}
 
