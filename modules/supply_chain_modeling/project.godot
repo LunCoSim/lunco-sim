@@ -13,6 +13,8 @@ config_version=5
 config/name="GWFlow"
 run/main_scene="res://rsct.tscn"
 config/features=PackedStringArray("4.4", "Forward Plus")
+boot_splash/bg_color=Color(0, 0, 0, 1)
+boot_splash/image="uid://bps77c4i780fm"
 config/icon="res://icon.svg"
 
 [autoload]
