@@ -71,6 +71,18 @@ func _initialize_web3():
 			return null;
 		};
 
+		window.test = function(arg1, arg2) {
+			console.log("test", arg1, arg2)
+		}
+
+		window.encodeFunctionCall = function(function_name, param_type, param_value) {
+			return window.web3.eth.abi.encodeFunctionCall({
+				"name": function_name,
+				"type": 'function',
+				"inputs": [param_type]
+			}, [param_value])
+		}
+
 		window.mintNFT = async function(contractAddress, data) {
 			if (typeof window.ethereum !== 'undefined') {
 				try {
@@ -154,32 +166,18 @@ func mint_blueprint(graph_data: String, contract_address: String):
 
 # Helper function to encode function calls
 func encode_function_call(function_name: String, param_types: Array, param_values: Array) -> String:
+
 	print("encode_function_call")
-	# Create the function signature
-	var signature = function_name + "("
-	for i in range(param_types.size()):
-		if i > 0:
-			signature += ","
-		signature += param_types[i]
-	signature += ")"
-	
-	print("signature", signature)
-
-	# Get function selector (first 4 bytes of the keccak256 hash of the signature)
-	var selector = js_interface.web3.eth.abi.encodeFunctionSignature(signature)
-
-	# """, [signature])
-	print("selector", selector)
-	# Encode parameters
+	print("function_name", function_name)
 	print("param_types", param_types)
 	print("param_values", param_values)
-	var encoded_params = js_interface.web3.eth.abi.encodeParameters(param_types, param_values)
 
-	print("encode_function_call", encoded_params)
-	
-	
+
+	var encoded_params = js_interface.encodeFunctionCall(function_name, param_types[0], param_values[0])
+
+	print("encoded_params", encoded_params)
 	# Remove '0x' from encoded_params and concatenate
-	return selector + encoded_params.substr(2)
+	return encoded_params
 
 # Function to check if a transaction was successful
 func check_transaction(tx_hash: String) -> void:
