@@ -1,7 +1,8 @@
-[gd_scene load_steps=7 format=3 uid="uid://3lmlrsbbacm"]
+[gd_scene load_steps=8 format=3 uid="uid://3lmlrsbbacm"]
 
 [ext_resource type="Script" uid="uid://dln1wsyjwuqj7" path="res://rsct.gd" id="1_xuhcs"]
 [ext_resource type="Script" uid="uid://b6qabjmm3e73a" path="res://menu_bar.gd" id="2_74p8c"]
+[ext_resource type="Script" uid="uid://d2ye6nkbx7e41" path="res://simulation/simulation.gd" id="2_n8njg"]
 [ext_resource type="Theme" uid="uid://dv00ngpal62cd" path="res://rsct.tres" id="2_xuhcs"]
 [ext_resource type="PackedScene" uid="uid://baib0y8cocg71" path="res://widgets/wallet_connect_button.tscn" id="2_y60tv"]
 [ext_resource type="Script" uid="uid://2iqtet5emwql" path="res://property_editor.gd" id="3_6bj1w"]
@@ -20,7 +21,11 @@ grow_horizontal = 2
 grow_vertical = 2
 script = ExtResource("1_xuhcs")
 
-[node name="VBoxContainer" type="VBoxContainer" parent="."]
+[node name="Simulation" type="Node" parent="."]
+script = ExtResource("2_n8njg")
+
+[node name="UI" type="VBoxContainer" parent="."]
+unique_name_in_owner = true
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -28,15 +33,15 @@ anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 
-[node name="MenuContainer" type="HBoxContainer" parent="VBoxContainer"]
+[node name="MenuContainer" type="HBoxContainer" parent="UI"]
 unique_name_in_owner = true
 layout_mode = 2
 
-[node name="MenuBar" type="MenuBar" parent="VBoxContainer/MenuContainer"]
+[node name="MenuBar" type="MenuBar" parent="UI/MenuContainer"]
 layout_mode = 2
 script = ExtResource("2_74p8c")
 
-[node name="FileMenu" type="PopupMenu" parent="VBoxContainer/MenuContainer/MenuBar"]
+[node name="FileMenu" type="PopupMenu" parent="UI/MenuContainer/MenuBar"]
 unique_name_in_owner = true
 title = "File"
 size = Vector2i(134, 170)
@@ -56,7 +61,7 @@ item_5/id = 5
 item_6/text = "Load File"
 item_6/id = 6
 
-[node name="NFTMenu" type="PopupMenu" parent="VBoxContainer/MenuContainer/MenuBar"]
+[node name="NFTMenu" type="PopupMenu" parent="UI/MenuContainer/MenuBar"]
 unique_name_in_owner = true
 size = Vector2i(104, 100)
 item_count = 3
@@ -67,46 +72,46 @@ item_1/id = 1
 item_2/text = "Show NFTs"
 item_2/id = 2
 
-[node name="VSeparator2" type="VSeparator" parent="VBoxContainer/MenuContainer"]
+[node name="VSeparator2" type="VSeparator" parent="UI/MenuContainer"]
 layout_mode = 2
 
-[node name="Extender" type="Control" parent="VBoxContainer/MenuContainer"]
+[node name="Extender" type="Control" parent="UI/MenuContainer"]
 layout_mode = 2
 size_flags_horizontal = 3
 
-[node name="Button7" type="Button" parent="VBoxContainer/MenuContainer"]
+[node name="Button7" type="Button" parent="UI/MenuContainer"]
 layout_mode = 2
 text = "Slower"
 
-[node name="Button6" type="Button" parent="VBoxContainer/MenuContainer"]
+[node name="Button6" type="Button" parent="UI/MenuContainer"]
 layout_mode = 2
 theme_override_fonts/font = SubResource("SystemFont_6bj1w")
 text = "Play/Pause"
 
-[node name="Button8" type="Button" parent="VBoxContainer/MenuContainer"]
+[node name="Button8" type="Button" parent="UI/MenuContainer"]
 layout_mode = 2
 text = "Faster"
 
-[node name="SimTimeLabel" type="Label" parent="VBoxContainer/MenuContainer"]
+[node name="SimTimeLabel" type="Label" parent="UI/MenuContainer"]
 unique_name_in_owner = true
 layout_mode = 2
 text = "Sim Time: 0.0 minutes"
 
-[node name="WalletConnectButton" parent="VBoxContainer/MenuContainer" instance=ExtResource("2_y60tv")]
+[node name="WalletConnectButton" parent="UI/MenuContainer" instance=ExtResource("2_y60tv")]
 layout_mode = 2
 
-[node name="HSplitContainer" type="HSplitContainer" parent="VBoxContainer"]
+[node name="HSplitContainer" type="HSplitContainer" parent="UI"]
 layout_mode = 2
 size_flags_vertical = 3
 split_offset = 2000
 
-[node name="Workbench" type="Control" parent="VBoxContainer/HSplitContainer"]
+[node name="Workbench" type="Control" parent="UI/HSplitContainer"]
 unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
 
-[node name="GraphEdit" type="GraphEdit" parent="VBoxContainer/HSplitContainer/Workbench"]
+[node name="GraphEdit" type="GraphEdit" parent="UI/HSplitContainer/Workbench"]
 unique_name_in_owner = true
 layout_mode = 2
 anchor_right = 1.0
@@ -120,7 +125,7 @@ right_disconnects = true
 connection_lines_thickness = 2.0
 zoom = 0.909091
 
-[node name="ButtonContainer" type="VBoxContainer" parent="VBoxContainer/HSplitContainer/Workbench"]
+[node name="ButtonContainer" type="VBoxContainer" parent="UI/HSplitContainer/Workbench"]
 unique_name_in_owner = true
 layout_mode = 2
 anchor_top = 0.5
@@ -132,23 +137,23 @@ grow_vertical = 2
 size_flags_horizontal = 0
 theme = ExtResource("2_xuhcs")
 
-[node name="Inspector" type="VBoxContainer" parent="VBoxContainer/HSplitContainer"]
+[node name="Inspector" type="VBoxContainer" parent="UI/HSplitContainer"]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(200, 200)
 layout_mode = 2
 
-[node name="Tabs" type="TabContainer" parent="VBoxContainer/HSplitContainer/Inspector"]
+[node name="Tabs" type="TabContainer" parent="UI/HSplitContainer/Inspector"]
 layout_mode = 2
 current_tab = 0
 
-[node name="Properties" type="VBoxContainer" parent="VBoxContainer/HSplitContainer/Inspector/Tabs"]
+[node name="Properties" type="VBoxContainer" parent="UI/HSplitContainer/Inspector/Tabs"]
 unique_name_in_owner = true
 layout_mode = 2
 script = ExtResource("3_6bj1w")
 metadata/_tab_index = 0
 
-[connection signal="load_from_file_requested" from="VBoxContainer/MenuContainer/MenuBar" to="." method="_on_load_file_selected"]
-[connection signal="load_requested" from="VBoxContainer/MenuContainer/MenuBar" to="." method="load_graph"]
-[connection signal="new_graph_requested" from="VBoxContainer/MenuContainer/MenuBar" to="." method="new_graph"]
-[connection signal="save_requested" from="VBoxContainer/MenuContainer/MenuBar" to="." method="save_graph"]
-[connection signal="save_to_file_requested" from="VBoxContainer/MenuContainer/MenuBar" to="." method="_on_save_file_selected"]
+[connection signal="load_from_file_requested" from="UI/MenuContainer/MenuBar" to="." method="_on_load_file_selected"]
+[connection signal="load_requested" from="UI/MenuContainer/MenuBar" to="." method="load_graph"]
+[connection signal="new_graph_requested" from="UI/MenuContainer/MenuBar" to="." method="new_graph"]
+[connection signal="save_requested" from="UI/MenuContainer/MenuBar" to="." method="save_graph"]
+[connection signal="save_to_file_requested" from="UI/MenuContainer/MenuBar" to="." method="_on_save_file_selected"]
