@@ -55,17 +55,6 @@ func _ready():
 
 	pause_simulation()
 
-	# Temp solution to connect buttons, tcsn is not working in web
-	%MenuContainer/Button9.connect("button_up", new_graph)
-	%MenuContainer/Button.connect("button_up", save_graph)
-	%MenuContainer/Button2.connect("button_up", load_graph)
-	%MenuContainer/SaveNFTButton.connect("button_up", _on_save_nft_pressed)
-	%MenuContainer/LoadNFTButton.connect("button_up", _on_load_nft_pressed)
-	%MenuContainer/ViewNFTsButton.connect("button_up", _on_view_nfts_pressed)
-	%MenuContainer/Button7.connect("button_up", _on_button_7_pressed)
-	%MenuContainer/Button6.connect("button_up", _on_button_6_pressed)
-	%MenuContainer/Button8.connect("button_up", _on_button_8_pressed)
-
 	# Set up save dialog
 	save_dialog = FileDialog.new()
 	save_dialog.file_mode = FileDialog.FILE_MODE_SAVE_FILE

@@ -1,8 +1,7 @@
-[gd_scene load_steps=8 format=3 uid="uid://3lmlrsbbacm"]
+[gd_scene load_steps=7 format=3 uid="uid://3lmlrsbbacm"]
 
 [ext_resource type="Script" uid="uid://dln1wsyjwuqj7" path="res://rsct.gd" id="1_xuhcs"]
 [ext_resource type="Script" uid="uid://b6qabjmm3e73a" path="res://menu_bar.gd" id="2_74p8c"]
-[ext_resource type="PackedScene" uid="uid://cglj3xf6kdnva" path="res://widgets/menu_button.tscn" id="2_n8njg"]
 [ext_resource type="Theme" uid="uid://dv00ngpal62cd" path="res://rsct.tres" id="2_xuhcs"]
 [ext_resource type="PackedScene" uid="uid://baib0y8cocg71" path="res://widgets/wallet_connect_button.tscn" id="2_y60tv"]
 [ext_resource type="Script" uid="uid://2iqtet5emwql" path="res://property_editor.gd" id="3_6bj1w"]
@@ -37,19 +36,23 @@ layout_mode = 2
 layout_mode = 2
 script = ExtResource("2_74p8c")
 
-[node name="FileMenu" parent="VBoxContainer/MenuContainer/MenuBar" instance=ExtResource("2_n8njg")]
+[node name="FileMenu" type="PopupMenu" parent="VBoxContainer/MenuContainer/MenuBar"]
 unique_name_in_owner = true
 title = "File"
 size = Vector2i(134, 170)
-visible = false
-unfocusable = false
 item_count = 7
 item_0/text = "New"
+item_0/id = 0
+item_1/id = 1
 item_1/separator = true
 item_2/text = "Save"
+item_2/id = 2
 item_3/text = "Load"
+item_3/id = 3
+item_4/id = 4
 item_4/separator = true
 item_5/text = "Save File"
+item_5/id = 5
 item_6/text = "Load File"
 item_6/id = 6
 
@@ -63,36 +66,6 @@ item_1/text = "Load NFT"
 item_1/id = 1
 item_2/text = "Show NFTs"
 item_2/id = 2
-
-[node name="Button9" type="Button" parent="VBoxContainer/MenuContainer"]
-layout_mode = 2
-text = "New Sim"
-
-[node name="Button" type="Button" parent="VBoxContainer/MenuContainer"]
-layout_mode = 2
-text = "Save"
-
-[node name="Button2" type="Button" parent="VBoxContainer/MenuContainer"]
-layout_mode = 2
-text = "Load"
-
-[node name="VSeparator" type="VSeparator" parent="VBoxContainer/MenuContainer"]
-layout_mode = 2
-
-[node name="SaveNFTButton" type="Button" parent="VBoxContainer/MenuContainer"]
-layout_mode = 2
-tooltip_text = "Save current design as NFT on blockchain"
-text = "Save as NFT"
-
-[node name="LoadNFTButton" type="Button" parent="VBoxContainer/MenuContainer"]
-layout_mode = 2
-tooltip_text = "Load a design from an existing NFT"
-text = "Load from NFT"
-
-[node name="ViewNFTsButton" type="Button" parent="VBoxContainer/MenuContainer"]
-layout_mode = 2
-tooltip_text = "View all your owned design NFTs"
-text = "View My NFTs"
 
 [node name="VSeparator2" type="VSeparator" parent="VBoxContainer/MenuContainer"]
 layout_mode = 2
@@ -142,6 +115,7 @@ grow_horizontal = 2
 grow_vertical = 2
 size_flags_horizontal = 0
 size_flags_vertical = 3
+scroll_offset = Vector2(-87, 0)
 right_disconnects = true
 connection_lines_thickness = 2.0
 zoom = 0.909091
@@ -173,17 +147,8 @@ layout_mode = 2
 script = ExtResource("3_6bj1w")
 metadata/_tab_index = 0
 
-[node name="FileButtons" type="HBoxContainer" parent="VBoxContainer"]
-layout_mode = 2
-
-[node name="SaveButton" type="Button" parent="VBoxContainer/FileButtons"]
-layout_mode = 2
-text = "Save to File"
-
-[node name="LoadButton" type="Button" parent="VBoxContainer/FileButtons"]
-layout_mode = 2
-text = "Load from File"
-
+[connection signal="load_from_file_requested" from="VBoxContainer/MenuContainer/MenuBar" to="." method="_on_load_file_selected"]
+[connection signal="load_requested" from="VBoxContainer/MenuContainer/MenuBar" to="." method="load_graph"]
 [connection signal="new_graph_requested" from="VBoxContainer/MenuContainer/MenuBar" to="." method="new_graph"]
-[connection signal="pressed" from="VBoxContainer/FileButtons/SaveButton" to="." method="_on_save_button_pressed"]
-[connection signal="pressed" from="VBoxContainer/FileButtons/LoadButton" to="." method="_on_load_button_pressed"]
+[connection signal="save_requested" from="VBoxContainer/MenuContainer/MenuBar" to="." method="save_graph"]
+[connection signal="save_to_file_requested" from="VBoxContainer/MenuContainer/MenuBar" to="." method="_on_save_file_selected"]
