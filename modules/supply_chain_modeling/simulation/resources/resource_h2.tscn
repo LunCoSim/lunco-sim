@@ -1,6 +1,6 @@
 [gd_scene load_steps=2 format=3 uid="uid://bc8tq8cwhy34e"]
 
-[ext_resource type="Script" uid="uid://ck0ya0dlsxygw" path="res://modules/supply_chain_modeling/resources/resource_h2.gd" id="1_script"]
+[ext_resource type="Script" uid="uid://ck0ya0dlsxygw" path="res://simulation/resources/resource_h2.gd" id="1_script"]
 
 [node name="Resource_H2" type="GraphNode"]
 offset_right = 198.0
