@@ -1,6 +1,7 @@
-[gd_scene load_steps=7 format=3 uid="uid://3lmlrsbbacm"]
+[gd_scene load_steps=8 format=3 uid="uid://3lmlrsbbacm"]
 
 [ext_resource type="Script" uid="uid://dln1wsyjwuqj7" path="res://rsct.gd" id="1_xuhcs"]
+[ext_resource type="Script" uid="uid://b6qabjmm3e73a" path="res://menu_bar.gd" id="2_74p8c"]
 [ext_resource type="PackedScene" uid="uid://cglj3xf6kdnva" path="res://widgets/menu_button.tscn" id="2_n8njg"]
 [ext_resource type="Theme" uid="uid://dv00ngpal62cd" path="res://rsct.tres" id="2_xuhcs"]
 [ext_resource type="PackedScene" uid="uid://baib0y8cocg71" path="res://widgets/wallet_connect_button.tscn" id="2_y60tv"]
@@ -34,6 +35,7 @@ layout_mode = 2
 
 [node name="MenuBar" type="MenuBar" parent="VBoxContainer/MenuContainer"]
 layout_mode = 2
+script = ExtResource("2_74p8c")
 
 [node name="FileMenu" parent="VBoxContainer/MenuContainer/MenuBar" instance=ExtResource("2_n8njg")]
 unique_name_in_owner = true
@@ -51,7 +53,8 @@ item_5/text = "Save File"
 item_6/text = "Load File"
 item_6/id = 6
 
-[node name="MenuBar" type="PopupMenu" parent="VBoxContainer/MenuContainer/MenuBar"]
+[node name="NFTMenu" type="PopupMenu" parent="VBoxContainer/MenuContainer/MenuBar"]
+unique_name_in_owner = true
 size = Vector2i(104, 100)
 item_count = 3
 item_0/text = "Mint NFT"
