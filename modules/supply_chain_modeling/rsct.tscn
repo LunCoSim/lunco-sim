@@ -3,7 +3,7 @@
 [ext_resource type="Script" uid="uid://dln1wsyjwuqj7" path="res://rsct.gd" id="1_xuhcs"]
 [ext_resource type="PackedScene" uid="uid://cglj3xf6kdnva" path="res://widgets/menu_button.tscn" id="2_n8njg"]
 [ext_resource type="Theme" uid="uid://dv00ngpal62cd" path="res://rsct.tres" id="2_xuhcs"]
-[ext_resource type="PackedScene" uid="uid://baib0y8cocg71" path="res://blockchain/wallet_connect_button.tscn" id="2_y60tv"]
+[ext_resource type="PackedScene" uid="uid://baib0y8cocg71" path="res://widgets/wallet_connect_button.tscn" id="2_y60tv"]
 [ext_resource type="Script" uid="uid://2iqtet5emwql" path="res://property_editor.gd" id="3_6bj1w"]
 
 [sub_resource type="SystemFont" id="SystemFont_6bj1w"]
@@ -37,6 +37,7 @@ layout_mode = 2
 
 [node name="FileMenu" parent="VBoxContainer/MenuContainer/MenuBar" instance=ExtResource("2_n8njg")]
 unique_name_in_owner = true
+title = "File"
 size = Vector2i(134, 170)
 visible = false
 unfocusable = false

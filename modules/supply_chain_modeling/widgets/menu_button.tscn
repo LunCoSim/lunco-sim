@@ -1,6 +1,6 @@
 [gd_scene load_steps=2 format=3 uid="uid://cglj3xf6kdnva"]
 
-[ext_resource type="Script" path="res://widgets/menu_button.gd" id="1_script"]
+[ext_resource type="Script" uid="uid://d2ccdrfnbcoje" path="res://widgets/menu_button.gd" id="1_script"]
 
 [node name="MenuButton" type="PopupMenu"]
 size = Vector2i(100, 170)
