@@ -1,6 +1,6 @@
 [gd_scene load_steps=2 format=3 uid="uid://b23pxrixiv5lm"]
 
-[ext_resource type="Script" uid="uid://bk5dho6q7o0ai" path="res://simulation/facilities/solar_power_plant.gd" id="1_script"]
+[ext_resource type="Script" uid="uid://bk5dho6q7o0ai" path="res://ui/facilities/solar_power_plant.gd" id="1_script"]
 
 [node name="SolarPowerPlant" type="GraphNode"]
 title = "Solar Power Plant"

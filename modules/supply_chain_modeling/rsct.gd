@@ -312,8 +312,8 @@ func update_sim_time_label() -> void:
 
 func create_buttons() -> void:
 	
-	var resource_paths = get_scene_paths("res://simulation/resources/")
-	var facility_paths = get_scene_paths("res://simulation/facilities/")
+	var resource_paths = get_scene_paths("res://ui/resources/")
+	var facility_paths = get_scene_paths("res://ui/facilities/")
 	
 	print(resource_paths, facility_paths)
 	for path in resource_paths + facility_paths:

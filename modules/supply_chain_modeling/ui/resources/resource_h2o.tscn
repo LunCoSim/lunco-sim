@@ -1,13 +1,13 @@
-[gd_scene load_steps=2 format=3 uid="uid://bc8tq8cwhy34e"]
+[gd_scene load_steps=2 format=3 uid="uid://dao4bjvwweolu"]
 
-[ext_resource type="Script" uid="uid://ck0ya0dlsxygw" path="res://simulation/resources/resource_h2.gd" id="1_script"]
+[ext_resource type="Script" uid="uid://3kjxjjklqxao" path="res://ui/resources/resource_h2o.gd" id="1_script"]
 
-[node name="Resource_H2" type="GraphNode"]
-offset_right = 198.0
-offset_bottom = 130.0
+[node name="Resource_H2O" type="GraphNode"]
+offset_right = 149.0
+offset_bottom = 78.0
 mouse_filter = 1
 resizable = true
-title = "Resource: H2"
+title = "Resource: H2O"
 slot/0/left_enabled = false
 slot/0/left_type = 0
 slot/0/left_color = Color(1, 1, 1, 1)
@@ -30,7 +30,7 @@ script = ExtResource("1_script")
 
 [node name="Label" type="Label" parent="."]
 layout_mode = 2
-text = "H2"
+text = "H2O"
 
 [node name="Properties" type="VBoxContainer" parent="."]
 layout_mode = 2
