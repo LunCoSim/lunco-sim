@@ -1,4 +1,4 @@
-extends GraphNode
+extends UISimulationNode
 
 class_name BaseFacility
 
@@ -17,8 +17,15 @@ func _init():
 	resizable = true
 
 func _ready():
+	super._ready()
 	update_status_display()
 
+func update_from_simulation() -> void:
+    super.update_from_simulation()
+    if simulation_node:
+        $Parameters/Status.text = simulation_node.properties.status
+        $Parameters/Efficiency.text = "Efficiency: " + str(simulation_node.properties.efficiency)
+		
 func set_facility_properties(id: String, desc: String, type: String):
 	facility_id = id
 	description = desc

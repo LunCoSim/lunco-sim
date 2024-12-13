@@ -54,3 +54,17 @@ func load_state(state: Dictionary) -> void:
 		var node_data = state.nodes[node_id]
 		#var node = create_node_from_data(node_data)
 		#add_node(node)
+
+func connect_nodes(from_id: String, to_id: String, port: int) -> bool:
+	if not (nodes.has(from_id) and nodes.has(to_id)):
+		return false
+		
+	var connection = {
+		"from": from_id,
+		"to": to_id,
+		"port": port
+	}
+	
+	nodes[from_id].connections.append(connection)
+	emit_signal("connection_added", from_id, to_id)
+	return true

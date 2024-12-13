@@ -26,8 +26,8 @@ var load_dialog: FileDialog
 var simulation: SimulationManager
 
 func _ready():
-	%Simulation.connect("node_added", _on_simulation_node_added)
-	%Simulation.connect("node_removed", _on_simulation_node_removed)
+	#%Simulation.connect("node_added", _on_simulation_node_added)
+	#%Simulation.connect("node_removed", _on_simulation_node_removed)
 
 	# Connect signals
 	Web3Interface.connect("wallet_connected", _on_wallet_connected)
@@ -168,11 +168,9 @@ func load_graph() -> void:
 	pause_simulation()
 	print("Load complete")
 
-func _on_connection_request(from_node: StringName, from_port: int, to_node: StringName, to_port: int):
-	# Create new connection between nodes
-	graph_edit.connect_node(from_node, from_port, to_node, to_port)
-	print("Connected: ", from_node, "(", from_port, ") -> ", to_node, "(", to_port, ")")
-	save_graph()
+func _on_connection_request(from_node: StringName, from_port: int, to_node: StringName, to_port: int) -> void:
+	if simulation.connect_nodes(from_node, to_node, from_port):
+		graph_edit.connect_node(from_node, from_port, to_node, to_port)
 
 func _on_disconnection_request(from_node: StringName, from_port: int, to_node: StringName, to_port: int):
 	# Remove connection between nodes
