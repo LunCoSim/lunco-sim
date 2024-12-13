@@ -1,4 +1,4 @@
-extends GraphNode
+extends UISimulationNode
 
 class_name BaseResource
 
