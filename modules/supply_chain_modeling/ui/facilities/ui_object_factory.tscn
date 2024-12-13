@@ -1,6 +1,6 @@
 [gd_scene load_steps=2 format=3 uid="uid://cv0bmac63qtuv"]
 
-[ext_resource type="Script" uid="uid://bm8xrkayebx5b" path="res://ui/facilities/object_factory.gd" id="1_a8bux"]
+[ext_resource type="Script" uid="uid://bm8xrkayebx5b" path="res://ui/facilities/ui_object_factory.gd" id="1_a8bux"]
 
 [node name="Object_Factory" type="GraphNode"]
 offset_right = 158.0
