@@ -13,44 +13,44 @@ var simulation_time: float = 0.0
 var time_scale: float = 1.0
 
 func add_node(node: SimulationNode) -> void:
-    nodes[node.node_id] = node
-    emit_signal("node_added", node)
+	nodes[node.node_id] = node
+	emit_signal("node_added", node)
 
 func remove_node(node_id: String) -> void:
-    if nodes.has(node_id):
-        nodes.erase(node_id)
-        emit_signal("node_removed", node_id)
+	if nodes.has(node_id):
+		nodes.erase(node_id)
+		emit_signal("node_removed", node_id)
 
 func _physics_process(delta: float) -> void:
-    if paused:
-        return
-        
-    simulation_time += delta * time_scale
-    process_simulation_step(delta)
-    
+	if paused:
+		return
+		
+	simulation_time += delta * time_scale
+	process_simulation_step(delta)
+	
 func process_simulation_step(delta: float) -> void:
-    for node in nodes.values():
-        if node.has_method("process_step"):
-            node.process_step(delta)
-    emit_signal("simulation_step_completed")
+	for node in nodes.values():
+		if node.has_method("process_step"):
+			node.process_step(delta)
+	emit_signal("simulation_step_completed")
 
 func save_state() -> Dictionary:
-    var state = {
-        "time": simulation_time,
-        "nodes": {},
-        "connections": []
-    }
-    
-    for node in nodes.values():
-        state.nodes[node.node_id] = node.to_dict()
-        
-    return state
+	var state = {
+		"time": simulation_time,
+		"nodes": {},
+		"connections": []
+	}
+	
+	for node in nodes.values():
+		state.nodes[node.node_id] = node.to_dict()
+		
+	return state
 
 func load_state(state: Dictionary) -> void:
-    simulation_time = state.get("time", 0.0)
-    nodes.clear()
-    
-    for node_id in state.nodes:
-        var node_data = state.nodes[node_id]
-        var node = create_node_from_data(node_data)
-        add_node(node)
+	simulation_time = state.get("time", 0.0)
+	nodes.clear()
+	
+	for node_id in state.nodes:
+		var node_data = state.nodes[node_id]
+		#var node = create_node_from_data(node_data)
+		#add_node(node)
