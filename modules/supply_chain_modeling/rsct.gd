@@ -23,7 +23,11 @@ var dragging_node_path: String = ""
 var save_dialog: FileDialog
 var load_dialog: FileDialog
 
+var simulation: SimulationManager
+
 func _ready():
+	%Simulation.connect("node_added", _on_simulation_node_added)
+	%Simulation.connect("node_removed", _on_simulation_node_removed)
 
 	# Connect signals
 	Web3Interface.connect("wallet_connected", _on_wallet_connected)
