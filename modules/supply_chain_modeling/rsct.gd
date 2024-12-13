@@ -19,21 +19,19 @@ var paused: bool = true  # Simulation paused state
 var dragging_new_node: bool = false
 var dragging_node_path: String = ""
 
-var web3_interface
 var current_wallet_address: String = ""
 
 var save_dialog: FileDialog
 var load_dialog: FileDialog
 
 func _ready():
-	web3_interface = get_node("/root/Web3Interface")
-	
+
 	# Connect signals
-	web3_interface.connect("wallet_connected", _on_wallet_connected)
-	web3_interface.connect("wallet_disconnected", _on_wallet_disconnected)
+	Web3Interface.connect("wallet_connected", _on_wallet_connected)
+	Web3Interface.connect("wallet_disconnected", _on_wallet_disconnected)
 	
-	web3_interface.connect("nft_minted", _on_nft_minted)
-	web3_interface.connect("nft_load_complete", _on_nft_load_complete)
+	Web3Interface.connect("nft_minted", _on_nft_minted)
+	Web3Interface.connect("nft_load_complete", _on_nft_load_complete)
 	
 	# Connect signals for handling connections
 	graph_edit.connect("connection_request", _on_connection_request)
@@ -454,7 +452,7 @@ func _on_load_nft_pressed() -> void:
 
 func _on_view_nfts_pressed() -> void:
 	# Check if wallet is connected
-	if not web3_interface.is_connected():
+	if not Web3Interface.is_connected:
 		show_message("Please connect your wallet first")
 		return
 		

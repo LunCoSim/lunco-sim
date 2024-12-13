@@ -120,7 +120,6 @@ grow_horizontal = 2
 grow_vertical = 2
 size_flags_horizontal = 0
 size_flags_vertical = 3
-scroll_offset = Vector2(-87, 0)
 right_disconnects = true
 connection_lines_thickness = 2.0
 zoom = 0.909091
