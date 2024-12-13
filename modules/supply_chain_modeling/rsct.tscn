@@ -184,5 +184,6 @@ text = "Save to File"
 layout_mode = 2
 text = "Load from File"
 
+[connection signal="new_graph_requested" from="VBoxContainer/MenuContainer/MenuBar" to="." method="new_graph"]
 [connection signal="pressed" from="VBoxContainer/FileButtons/SaveButton" to="." method="_on_save_button_pressed"]
 [connection signal="pressed" from="VBoxContainer/FileButtons/LoadButton" to="." method="_on_load_button_pressed"]
