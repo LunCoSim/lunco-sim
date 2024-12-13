@@ -314,8 +314,8 @@ func update_sim_time_label() -> void:
 
 func create_buttons() -> void:
 	
-	var resource_paths = get_scene_paths("res://ui/resources/")
-	var facility_paths = get_scene_paths("res://ui/facilities/")
+	var resource_paths = Utils.get_scene_paths("res://ui/resources/")
+	var facility_paths = Utils.get_scene_paths("res://ui/facilities/")
 	
 	print(resource_paths, facility_paths)
 	for path in resource_paths + facility_paths:
@@ -338,23 +338,6 @@ func _on_button_up() -> void:
 			add_node_from_path(dragging_node_path, graph_pos)
 		dragging_new_node = false
 	dragging_node_path = ""
-
-func get_scene_paths(directory_path: String) -> Array:
-	var dir = DirAccess.open(directory_path)
-	print("get_scene: ", directory_path)
-	
-	var paths = []
-	if dir:
-		print(dir.get_files())
-		dir.list_dir_begin()
-		var file_name = dir.get_next()
-		while file_name != "":
-			if file_name.ends_with(".tscn"):
-				paths.append(directory_path + file_name)
-			elif file_name.ends_with(".tscn.remap"):
-				paths.append(directory_path + file_name.left(-6))
-			file_name = dir.get_next()
-	return paths
 
 func _on_node_selected(node: Node):
 	properties.update_properties(node)
