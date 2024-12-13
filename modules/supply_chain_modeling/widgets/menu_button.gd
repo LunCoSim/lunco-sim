@@ -1,4 +1,4 @@
-extends MenuButton
+extends PopupMenu
 
 signal new_graph_requested
 signal save_requested
@@ -11,22 +11,22 @@ var save_dialog: FileDialog
 var load_dialog: FileDialog
 
 func _ready():
-	popup = get_popup()
-	
-	# Add menu items
-	popup.add_item("New", 0)
-	popup.add_separator()
-	popup.add_item("Save", 1)
-	popup.add_item("Load", 2)
-	popup.add_separator()
-	popup.add_item("Save to File", 3)
-	popup.add_item("Load from File", 4)
-	
-	# Connect the signal
-	popup.connect("id_pressed", _on_item_pressed)
-	
-	# Set initial text
-	text = "File"
+	#popup = get_popup()
+	#
+	## Add menu items
+	#popup.add_item("New", 0)
+	#popup.add_separator()
+	#popup.add_item("Save", 1)
+	#popup.add_item("Load", 2)
+	#popup.add_separator()
+	#popup.add_item("Save to File", 3)
+	#popup.add_item("Load from File", 4)
+	#
+	## Connect the signal
+	#popup.connect("id_pressed", _on_item_pressed)
+	#
+	## Set initial text
+	#text = "File"
 	
 	# Create file dialogs
 	_setup_file_dialogs()

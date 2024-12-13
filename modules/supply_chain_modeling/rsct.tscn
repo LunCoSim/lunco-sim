@@ -1,7 +1,7 @@
 [gd_scene load_steps=7 format=3 uid="uid://3lmlrsbbacm"]
 
 [ext_resource type="Script" uid="uid://dln1wsyjwuqj7" path="res://rsct.gd" id="1_xuhcs"]
-[ext_resource type="PackedScene" path="res://widgets/menu_button.tscn" id="2_n8njg"]
+[ext_resource type="PackedScene" uid="uid://cglj3xf6kdnva" path="res://widgets/menu_button.tscn" id="2_n8njg"]
 [ext_resource type="Theme" uid="uid://dv00ngpal62cd" path="res://rsct.tres" id="2_xuhcs"]
 [ext_resource type="PackedScene" uid="uid://baib0y8cocg71" path="res://blockchain/wallet_connect_button.tscn" id="2_y60tv"]
 [ext_resource type="Script" uid="uid://2iqtet5emwql" path="res://property_editor.gd" id="3_6bj1w"]
@@ -32,8 +32,33 @@ grow_vertical = 2
 unique_name_in_owner = true
 layout_mode = 2
 
-[node name="MenuButton" parent="VBoxContainer/MenuContainer" instance=ExtResource("2_n8njg")]
+[node name="MenuBar" type="MenuBar" parent="VBoxContainer/MenuContainer"]
 layout_mode = 2
+
+[node name="FileMenu" parent="VBoxContainer/MenuContainer/MenuBar" instance=ExtResource("2_n8njg")]
+unique_name_in_owner = true
+size = Vector2i(134, 170)
+visible = false
+unfocusable = false
+item_count = 7
+item_0/text = "New"
+item_1/separator = true
+item_2/text = "Save"
+item_3/text = "Load"
+item_4/separator = true
+item_5/text = "Save File"
+item_6/text = "Load File"
+item_6/id = 6
+
+[node name="MenuBar" type="PopupMenu" parent="VBoxContainer/MenuContainer/MenuBar"]
+size = Vector2i(104, 100)
+item_count = 3
+item_0/text = "Mint NFT"
+item_0/id = 0
+item_1/text = "Load NFT"
+item_1/id = 1
+item_2/text = "Show NFTs"
+item_2/id = 2
 
 [node name="Button9" type="Button" parent="VBoxContainer/MenuContainer"]
 layout_mode = 2
