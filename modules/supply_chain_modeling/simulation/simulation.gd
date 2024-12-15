@@ -4,8 +4,8 @@ extends Node
 signal simulation_step_completed
 signal node_added(node: SimulationNode)
 signal node_removed(node_id: String)
-signal connection_added(from_id: String, to_id: String)
-signal connection_removed(from_id: String, to_id: String)
+signal connection_added(from_id, from_port, to_id, port)
+signal connection_removed(from_id, from_port, to_id, port)
 
 var nodes: Dictionary = {}
 var paused: bool = true
@@ -55,16 +55,17 @@ func load_state(state: Dictionary) -> void:
 		#var node = create_node_from_data(node_data)
 		#add_node(node)
 
-func connect_nodes(from_id: String, to_id: String, port: int) -> bool:
+func connect_nodes(from_id: String, from_port: int, to_id: String, port: int) -> bool:
 	if not (nodes.has(from_id) and nodes.has(to_id)):
 		return false
 		
 	var connection = {
 		"from": from_id,
+        "from_port": from_port, 
 		"to": to_id,
 		"port": port
 	}
 	
 	nodes[from_id].connections.append(connection)
-	emit_signal("connection_added", from_id, to_id)
+	emit_signal("connection_added", from_id, from_port, to_id, port)
 	return true
