@@ -61,7 +61,7 @@ func connect_nodes(from_id: String, from_port: int, to_id: String, port: int) ->
 		
 	var connection = {
 		"from": from_id,
-        "from_port": from_port, 
+		"from_port": from_port, 
 		"to": to_id,
 		"port": port
 	}
@@ -69,3 +69,29 @@ func connect_nodes(from_id: String, from_port: int, to_id: String, port: int) ->
 	nodes[from_id].connections.append(connection)
 	emit_signal("connection_added", from_id, from_port, to_id, port)
 	return true
+
+func disconnect_nodes(from_id: String, from_port: int, to_id: String, port: int) -> bool:
+	# Step 1: Check if both nodes exist
+	if not (nodes.has(from_id) and nodes.has(to_id)):
+		return false
+	
+	# Step 2: Create the connection dictionary to match
+	var connection_to_remove = {
+		"from": from_id,
+		"from_port": from_port,
+		"to": to_id,
+		"port": port
+	}
+	
+	# Step 3: Find and remove the connection
+	var source_node = nodes[from_id]
+	for connection in source_node.connections:
+		if connection.hash() == connection_to_remove.hash():
+			# Step 4: Remove the connection
+			source_node.connections.erase(connection)
+			# Step 5: Emit the signal
+			emit_signal("connection_removed", from_id, from_port, to_id, port)
+			return true
+	
+	# Step 6: Return false if connection wasn't found
+	return false
