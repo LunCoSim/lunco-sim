@@ -22,6 +22,7 @@ grow_vertical = 2
 script = ExtResource("1_xuhcs")
 
 [node name="Simulation" type="Node" parent="."]
+unique_name_in_owner = true
 script = ExtResource("2_n8njg")
 
 [node name="UI" type="VBoxContainer" parent="."]
@@ -100,18 +101,18 @@ text = "Sim Time: 0.0 minutes"
 [node name="WalletConnectButton" parent="UI/MenuContainer" instance=ExtResource("2_y60tv")]
 layout_mode = 2
 
-[node name="HSplitContainer" type="HSplitContainer" parent="UI"]
+[node name="WorkingArea" type="HSplitContainer" parent="UI"]
 layout_mode = 2
 size_flags_vertical = 3
 split_offset = 2000
 
-[node name="Workbench" type="Control" parent="UI/HSplitContainer"]
+[node name="Workbench" type="Control" parent="UI/WorkingArea"]
 unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
 
-[node name="GraphEdit" type="GraphEdit" parent="UI/HSplitContainer/Workbench"]
+[node name="GraphEdit" type="GraphEdit" parent="UI/WorkingArea/Workbench"]
 unique_name_in_owner = true
 layout_mode = 2
 anchor_right = 1.0
@@ -124,7 +125,7 @@ right_disconnects = true
 connection_lines_thickness = 2.0
 zoom = 0.909091
 
-[node name="ButtonContainer" type="VBoxContainer" parent="UI/HSplitContainer/Workbench"]
+[node name="ButtonContainer" type="VBoxContainer" parent="UI/WorkingArea/Workbench"]
 unique_name_in_owner = true
 layout_mode = 2
 anchor_top = 0.5
@@ -136,23 +137,38 @@ grow_vertical = 2
 size_flags_horizontal = 0
 theme = ExtResource("2_xuhcs")
 
-[node name="Inspector" type="VBoxContainer" parent="UI/HSplitContainer"]
+[node name="Inspector" type="VBoxContainer" parent="UI/WorkingArea"]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(200, 200)
 layout_mode = 2
 
-[node name="Tabs" type="TabContainer" parent="UI/HSplitContainer/Inspector"]
+[node name="Tabs" type="TabContainer" parent="UI/WorkingArea/Inspector"]
 layout_mode = 2
 current_tab = 0
 
-[node name="Properties" type="VBoxContainer" parent="UI/HSplitContainer/Inspector/Tabs"]
+[node name="Properties" type="VBoxContainer" parent="UI/WorkingArea/Inspector/Tabs"]
 unique_name_in_owner = true
 layout_mode = 2
 script = ExtResource("3_6bj1w")
 metadata/_tab_index = 0
+
+[node name="SaveDialog" type="FileDialog" parent="UI"]
+unique_name_in_owner = true
+access = 2
+filters = PackedStringArray("*.json ; JSON Files")
+
+[node name="LoadDialog" type="FileDialog" parent="UI"]
+unique_name_in_owner = true
+title = "Open a File"
+ok_button_text = "Open"
+file_mode = 0
+access = 2
+filters = PackedStringArray("*.json ; JSON Files")
 
 [connection signal="load_from_file_requested" from="UI/MenuContainer/MenuBar" to="." method="_on_load_file_selected"]
 [connection signal="load_requested" from="UI/MenuContainer/MenuBar" to="." method="load_graph"]
 [connection signal="new_graph_requested" from="UI/MenuContainer/MenuBar" to="." method="new_graph"]
 [connection signal="save_requested" from="UI/MenuContainer/MenuBar" to="." method="save_graph"]
 [connection signal="save_to_file_requested" from="UI/MenuContainer/MenuBar" to="." method="_on_save_file_selected"]
+[connection signal="file_selected" from="UI/SaveDialog" to="." method="_on_save_file_selected"]
+[connection signal="file_selected" from="UI/LoadDialog" to="." method="_on_load_file_selected"]

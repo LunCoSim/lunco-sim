@@ -20,10 +20,9 @@ var dragging_new_node: bool = false
 var dragging_node_path: String = ""
 
 
-var save_dialog: FileDialog
-var load_dialog: FileDialog
-
-var simulation: SimulationManager
+@onready var save_dialog: FileDialog = %SaveDialog
+@onready var load_dialog: FileDialog = %LoadDialog
+@onready var simulation: SimulationManager = %Simulation
 
 func _ready():
 	#%Simulation.connect("node_added", _on_simulation_node_added)
@@ -37,6 +36,7 @@ func _ready():
 	Web3Interface.connect("nft_load_complete", _on_nft_load_complete)
 	
 	# Connect signals for handling connections
+	# For graph_edit it's ok to do in code to make it easier to have several views
 	graph_edit.connect("connection_request", _on_connection_request)
 	graph_edit.connect("disconnection_request", _on_disconnection_request)
 	graph_edit.connect("end_node_move", _on_node_moved)
@@ -44,33 +44,13 @@ func _ready():
 	graph_edit.connect("node_selected", _on_node_selected)
 	graph_edit.connect("node_deselected", _on_node_deselected)
 	
-	# Enable snapping and minimap for better UX
-	graph_edit.snapping_distance = 20
-	#graph_edit.show_minimap = true
-	#graph_edit.minimap_enabled = true
-	
-	
 	load_graph()
 	update_sim_time_label()
-	create_buttons()
-
 	pause_simulation()
-
-	# Set up save dialog
-	save_dialog = FileDialog.new()
-	save_dialog.file_mode = FileDialog.FILE_MODE_SAVE_FILE
-	save_dialog.access = FileDialog.ACCESS_FILESYSTEM
-	save_dialog.filters = ["*.json ; JSON Files"]
-	save_dialog.connect("file_selected", _on_save_file_selected)
-	add_child(save_dialog)
 	
-	# Set up load dialog
-	load_dialog = FileDialog.new()
-	load_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
-	load_dialog.access = FileDialog.ACCESS_FILESYSTEM
-	load_dialog.filters = ["*.json ; JSON Files"]
-	load_dialog.connect("file_selected", _on_load_file_selected)
-	add_child(load_dialog)
+	# UI initialization
+	create_buttons()
+	
 
 func _process(delta: float) -> void:
 	# Keep autosave in process cycle since it's not physics-dependent
