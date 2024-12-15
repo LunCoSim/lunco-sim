@@ -1,7 +1,7 @@
 [gd_scene load_steps=3 format=3 uid="uid://brl431bi6j5c2"]
 
 [ext_resource type="Script" uid="uid://bivgycr0fmlvc" path="res://ui/resources/ui_resource_o2.gd" id="1_y5vr7"]
-[ext_resource type="Script" uid="uid://decpb5uj1ql2n" path="res://ui/base/ui_base_resource.gd" id="2_wfdba"]
+[ext_resource type="Script" uid="uid://decpb5uj1ql2n" path="res://ui/core/ui_base_resource.gd" id="2_wfdba"]
 
 [node name="Resource_O2" type="GraphNode"]
 offset_right = 110.0
