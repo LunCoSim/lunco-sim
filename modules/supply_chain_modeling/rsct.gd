@@ -5,6 +5,9 @@ extends Control
 @onready var sim_time_label: Label = %SimTimeLabel
 @onready var button_container: VBoxContainer = %ButtonContainer
 @onready var properties: VBoxContainer = %Properties
+@onready var save_dialog: FileDialog = %SaveDialog
+@onready var load_dialog: FileDialog = %LoadDialog
+@onready var simulation: SimulationManager = %Simulation
 
 # Save file path for the current graph
 var save_file_path: String = "user://current_graph.save"
@@ -19,10 +22,6 @@ var paused: bool = true  # Simulation paused state
 var dragging_new_node: bool = false
 var dragging_node_path: String = ""
 
-
-@onready var save_dialog: FileDialog = %SaveDialog
-@onready var load_dialog: FileDialog = %LoadDialog
-@onready var simulation: SimulationManager = %Simulation
 
 func _ready():
 	#%Simulation.connect("node_added", _on_simulation_node_added)
@@ -51,6 +50,11 @@ func _ready():
 	# UI initialization
 	create_buttons()
 	
+	# Connect FileMenu signals
+	%FileMenu.id_pressed.connect(_on_file_menu_pressed)
+	
+	# Connect NFTMenu signals
+	%NFTMenu.id_pressed.connect(_on_nft_menu_pressed)
 
 func _process(delta: float) -> void:
 	# Keep autosave in process cycle since it's not physics-dependent
@@ -517,6 +521,28 @@ func _on_save_button_pressed():
 
 func _on_load_button_pressed():
 	load_dialog.popup_centered(Vector2(800, 600))
+
+func _on_file_menu_pressed(id: int) -> void:
+	match id:
+		0:  # New
+			new_graph()
+		2:  # Save
+			save_graph()
+		3:  # Load
+			load_graph()
+		5:  # Save File
+			%SaveDialog.popup_centered(Vector2(800, 600))
+		6:  # Load File
+			%LoadDialog.popup_centered(Vector2(800, 600))
+
+func _on_nft_menu_pressed(id: int) -> void:
+	match id:
+		0:  # Mint NFT
+			save_as_nft()
+		1:  # Load NFT
+			_on_load_nft_pressed()
+		2:  # Show NFTs
+			_on_view_nfts_pressed()
 
 
 	
