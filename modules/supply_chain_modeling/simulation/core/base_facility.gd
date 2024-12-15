@@ -1,4 +1,4 @@
-class_name FacilityNode
+class_name BaseFacility
 extends SimulationNode
 
 func process_step(delta: float) -> void:

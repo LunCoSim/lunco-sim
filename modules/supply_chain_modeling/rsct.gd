@@ -74,17 +74,22 @@ func _input(event: InputEvent) -> void:
 func set_time_scale(new_scale: float) -> void:
 	time_scale = new_scale
 
+func toggle_simulation() -> void:
+	paused = !paused
+	set_simulation_status(paused)
+
 func pause_simulation() -> void:
 	paused = true
-	for node in graph_edit.get_children():
-		if node is GraphNode:
-			node.set_physics_process(false)
+	set_simulation_status(paused)
 
 func resume_simulation() -> void:
 	paused = false
+	set_simulation_status(paused)
+	
+func set_simulation_status(_paused: bool):
 	for node in graph_edit.get_children():
 		if node is GraphNode:
-			node.set_physics_process(true)
+			node.set_physics_process(not _paused)
 
 # === Graph Management ===
 func new_graph() -> void:

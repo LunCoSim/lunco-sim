@@ -1,4 +1,4 @@
-class_name ResourceNode
+class_name BaseResource
 extends SimulationNode
 
 var current_amount: float

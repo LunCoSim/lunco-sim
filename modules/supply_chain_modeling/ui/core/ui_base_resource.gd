@@ -1,6 +1,6 @@
 extends UISimulationNode
 
-class_name BaseResource
+class_name UIBaseResource
 
 # Basic resource properties as defined in SPECIFICATION.md
 var resource_id: String

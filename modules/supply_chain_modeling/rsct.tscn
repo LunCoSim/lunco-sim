@@ -170,5 +170,6 @@ filters = PackedStringArray("*.json ; JSON Files")
 [connection signal="new_graph_requested" from="UI/MenuContainer/MenuBar" to="." method="new_graph"]
 [connection signal="save_requested" from="UI/MenuContainer/MenuBar" to="." method="save_graph"]
 [connection signal="save_to_file_requested" from="UI/MenuContainer/MenuBar" to="." method="_on_save_file_selected"]
+[connection signal="pressed" from="UI/MenuContainer/Button6" to="." method="toggle_simulation"]
 [connection signal="file_selected" from="UI/SaveDialog" to="." method="_on_save_file_selected"]
 [connection signal="file_selected" from="UI/LoadDialog" to="." method="_on_load_file_selected"]

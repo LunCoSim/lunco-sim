@@ -1,6 +1,6 @@
 extends UISimulationNode
 
-class_name BaseFacility
+class_name UIBaseFacility
 
 # Basic facility properties as defined in SPECIFICATION.md
 @export var facility_id: String

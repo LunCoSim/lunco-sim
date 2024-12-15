@@ -1,4 +1,4 @@
-extends BaseFacility
+extends UIBaseFacility
 
 # Input/output rates
 @export var o2_input_rate: float = 1.0  # units/minute
