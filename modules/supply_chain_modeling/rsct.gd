@@ -257,11 +257,14 @@ func load_from_nft(token_id: int) -> void:
 # -- Graph Edit Signals --
 func _on_connection_request(from_node: StringName, from_port: int, to_node: StringName, to_port: int) -> void:
 	if simulation.connect_nodes(from_node, to_node, from_port):
-		graph_edit.connect_node(from_node, from_port, to_node, to_port)
+		pass
+	graph_edit.connect_node(from_node, from_port, to_node, to_port)
+	save_graph()
 
 func _on_disconnection_request(from_node: StringName, from_port: int, to_node: StringName, to_port: int) -> void:
 	simulation.disconnect_nodes(from_node, to_node)
 	graph_edit.disconnect_node(from_node, from_port, to_node, to_port)
+	save_graph()
 
 func _on_node_moved() -> void:
 	save_graph()
