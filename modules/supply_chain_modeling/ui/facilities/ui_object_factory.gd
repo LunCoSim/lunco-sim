@@ -29,7 +29,7 @@ func _physics_process(delta: float) -> void:
 			match connection["to_port"]:
 				0: o2_source = source_node
 				1: h2_source = source_node
-				2: power_source = source_node
+				2: power_source = source_node.solar_power_plant
 		elif connection["from_node"] == name and connection["from_port"] == 0:
 			var target_node = graph_edit.get_node(NodePath(connection["to_node"]))
 			if target_node.has_method("add_resource"):
