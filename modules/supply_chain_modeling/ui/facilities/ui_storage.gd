@@ -1,4 +1,4 @@
-extends BaseFacility
+extends UIBaseFacility
 
 @export var capacity: float = 100.0  # Maximum storage capacity
 @export var current_amount: float = 0.0  # Current amount stored

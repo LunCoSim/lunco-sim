@@ -1,7 +1,9 @@
-extends BaseResource
+extends UIBaseResource
 
 func _init():
 	super._init()
-	set_resource_properties("H2O", "Water resource", "product")
-	mass = 18.015  # kg/unit (1 kmol)
-	volume = 0.018  # m³/unit at standard conditions (1 kmol) 
+	if not resource:
+		resource = BaseResource.new("H2O")
+	resource.mass = 18.015  # g/mol
+	resource.volume = 0.0  # Placeholder value
+	resource.set_properties("Water", "product", resource.mass, resource.volume)

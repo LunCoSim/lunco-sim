@@ -2,16 +2,7 @@ extends UISimulationNode
 
 class_name UIBaseResource
 
-# Basic resource properties as defined in SPECIFICATION.md
-var resource_id: String
-@export var description: String
-@export var resource_type: String  # product, service, or custom
-@export var mass: float = 0.0
-@export var volume: float = 0.0
-var custom_properties: Dictionary = {}
-var metadata: Dictionary = {}
-@export var current_amount: float = 2000.0  # Current amount of resource available
-@export var max_amount: float = 2000.0  # Maximum storage capacity
+var resource: BaseResource
 
 func _init():
 	# Set up basic GraphNode properties
@@ -32,59 +23,40 @@ func _ready():
 	update_display()
 
 func set_resource_properties(id: String, desc: String, type: String):
-	resource_id = id
-	description = desc
-	resource_type = type
+	if not resource:
+		resource = BaseResource.new(id)
+	resource.set_properties(desc, type, 0.0, 0.0)
 	title = "Resource: " + id
 
 func get_resource_data() -> Dictionary:
-	return {
-		"id": resource_id,
-		"description": description,
-		"type": resource_type,
-		"mass": mass,
-		"volume": volume,
-		"custom_properties": custom_properties,
-		"metadata": metadata
-	}
+	return resource.get_resource_data()
 
 func load_resource_data(data: Dictionary) -> void:
-	if "id" in data:
-		resource_id = data.id
-	if "description" in data:
-		description = data.description
-	if "type" in data:
-		resource_type = data.type
-	if "mass" in data:
-		mass = data.mass
-	if "volume" in data:
-		volume = data.volume
-	if "custom_properties" in data:
-		custom_properties = data.custom_properties
-	if "metadata" in data:
-		metadata = data.metadata 
+	if not resource:
+		resource = BaseResource.new(data.get("id", ""))
+	resource.load_resource_data(data)
 
 func remove_resource(amount: float) -> float:
-	var amount_to_remove = min(amount, current_amount)
-	current_amount -= amount_to_remove
+	var removed = resource.remove_resource(amount)
 	update_display()
-	return amount_to_remove
+	return removed
 
 func add_resource(amount: float) -> float:
-	var space_available = max_amount - current_amount
-	var amount_to_add = min(amount, space_available)
-	current_amount += amount_to_add
+	var added = resource.add_resource(amount)
 	update_display()
-	return amount_to_add
+	return added
 
 func update_display() -> void:
+	if not resource:
+		return
+		
 	# Update the progress bar
 	var progress = $Properties/ProgressBar
 	if progress:
-		progress.max_value = max_amount
-		progress.value = current_amount
+		progress.max_value = resource.max_amount
+		progress.value = resource.current_amount
 		
 	# Update the amount label
 	var amount_label = $Properties/Amount
 	if amount_label:
-		amount_label.text = "Amount: %.2f / %.2f units" % [current_amount, max_amount]
+		amount_label.text = "Amount: %.2f / %.2f units" % [resource.current_amount, resource.max_amount]
