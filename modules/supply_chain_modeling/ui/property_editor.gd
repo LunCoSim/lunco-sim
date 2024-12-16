@@ -4,7 +4,7 @@ var current_node: Node = null
 
 func clear_properties():
 	for child in get_children():
-		child.queue_free()
+		child.queue_free() 
 
 func update_properties(node: Node):
 	clear_properties()

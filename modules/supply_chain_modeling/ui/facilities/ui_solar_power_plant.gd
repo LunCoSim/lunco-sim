@@ -1,20 +1,19 @@
 extends UIBaseFacility
 	
-@export var power_output: float = 1000.0  # kW
-@export var solar_irradiance: float = 1.0  # kW/m² (1.0 is approx. Earth's average)
-@export var panel_area: float = 100.0  # m²
+var solar_power_plant: SolarPowerPlant	
 
 func _init():
 	super._init()
 	set_facility_properties("SolarPowerPlant", "Solar power generation facility", "producer")
-	efficiency = 0.20  # 20% efficiency is typical for solar panels
+	solar_power_plant = SolarPowerPlant.new()
+	facility.efficiency = 0.20  # 20% efficiency is typical for solar panels
 
 func _physics_process(delta: float) -> void:
-	if status != "Running":
+	if facility.status != "Running":
 		return
 		
 	# Calculate actual power output based on conditions
-	var actual_output = power_output * efficiency * solar_irradiance * delta
+	var actual_output = solar_power_plant.power_output * facility.efficiency * solar_power_plant.solar_irradiance * delta
 	
 	# Implementation will depend on how power distribution is handled
 
@@ -24,12 +23,12 @@ func _process(delta: float) -> void:
 func update_status_display() -> void:
 	var label = $Label
 	if label:
-		var current_output = power_output * efficiency * solar_irradiance
+		var current_output = solar_power_plant.power_output * facility.efficiency * solar_power_plant.solar_irradiance
 		label.text = "Output: %.1f kW" % current_output
 
 func set_solar_irradiance(new_irradiance: float) -> void:
-	solar_irradiance = new_irradiance
+	solar_power_plant.solar_irradiance = new_irradiance
 
 func set_panel_area(new_area: float) -> void:
-	panel_area = new_area
-	power_output = panel_area * 1.0  # Assuming 1kW/m standard conditions
+	solar_power_plant.panel_area = new_area
+	solar_power_plant.power_output = solar_power_plant.panel_area * 1.0  # Assuming 1kW/m standard conditions
