@@ -1,24 +1,12 @@
 extends UIBaseFacility
 
-# Input/output rates
-@export var o2_input_rate: float = 1.0  # units/minute
-@export var h2_input_rate: float = 2.0  # units/minute
-@export var power_input_rate: float = 100.0  # kW
-@export var h2o_output_rate: float = 1.0  # units/minute
-@export var power_consumption: float = 100.0  # kW
-
-# Current resource amounts
-@export var o2_stored: float = 0.0
-@export var h2_stored: float = 0.0
-@export var power_available: float = 0.0
+var object_factory: ObjectFactory
 
 func _init():
 	super._init()
 	set_facility_properties("Factory", "Water production facility", "producer")
-	status = "Not Connected"
-
-func _ready() -> void:
-	super._ready()
+	object_factory = ObjectFactory.new()
+	facility.status = "Not Connected"
 
 func _physics_process(delta: float) -> void:
 	# Get parent GraphEdit
@@ -60,7 +48,7 @@ func _physics_process(delta: float) -> void:
 		set_status("Running")
 	
 	# Only process if status is Running
-	if status != "Running":
+	if facility.status != "Running":
 		return
 		
 	# Calculate how much we can produce based on inputs
@@ -72,20 +60,20 @@ func _physics_process(delta: float) -> void:
 	var got_power = false
 	
 	if o2_source and "remove_resource" in o2_source:
-		var o2_received = o2_source.remove_resource(o2_input_rate * minutes)
+		var o2_received = o2_source.remove_resource(object_factory.o2_input_rate * minutes)
 		if o2_received > 0:
-			o2_stored += o2_received
+			object_factory.o2_stored += o2_received
 			got_o2 = true
 	
 	if h2_source and "remove_resource" in h2_source:
-		var h2_received = h2_source.remove_resource(h2_input_rate * minutes)
+		var h2_received = h2_source.remove_resource(object_factory.h2_input_rate * minutes)
 		if h2_received > 0:
-			h2_stored += h2_received
+			object_factory.h2_stored += h2_received
 			got_h2 = true
 	
 	if power_source and "power_output" in power_source:
-		power_available = power_source.power_output * power_source.efficiency
-		got_power = power_available >= power_input_rate
+		object_factory.power_available = power_source.power_output * power_source.efficiency
+		got_power = object_factory.power_available >= object_factory.power_input_rate
 	
 	# Update status based on resource availability
 	if not got_o2:
@@ -98,17 +86,17 @@ func _physics_process(delta: float) -> void:
 		set_status("Running")
 	
 	# Only produce if we have enough resources
-	if status == "Running" and \
-	   o2_stored >= o2_input_rate * minutes and \
-	   h2_stored >= h2_input_rate * minutes and \
-	   power_available >= power_input_rate:
+	if facility.status == "Running" and \
+	   object_factory.o2_stored >= object_factory.o2_input_rate * minutes and \
+	   object_factory.h2_stored >= object_factory.h2_input_rate * minutes and \
+	   object_factory.power_available >= object_factory.power_input_rate:
 		
 		# Calculate production
-		var h2o_produced = h2o_output_rate * efficiency * minutes
+		var h2o_produced = object_factory.h2o_output_rate * facility.efficiency * minutes
 		
 		# Consume resources
-		o2_stored -= o2_input_rate * minutes
-		h2_stored -= h2_input_rate * minutes
+		object_factory.o2_stored -= object_factory.o2_input_rate * minutes
+		object_factory.h2_stored -= object_factory.h2_input_rate * minutes
 		
 		# Output H2O
 		if h2o_storage and "add_resource" in h2o_storage:
@@ -121,21 +109,21 @@ func update_status_display() -> void:
 	# Update display labels
 	var status_label = $Parameters/Status
 	if status_label:
-		status_label.text = "Status: " + status
+		status_label.text = "Status: " + facility.status
 	
 	var efficiency_label = $Parameters/Efficiency
 	if efficiency_label:
-		efficiency_label.text = "Efficiency: " + str(efficiency * 100) + "%"
+		efficiency_label.text = "Efficiency: " + str(facility.efficiency * 100) + "%"
 	
 	var power_label = $Parameters/PowerConsumption
 	if power_label:
-		power_label.text = "Power: " + str(power_consumption) + " kW"
+		power_label.text = "Power: " + str(object_factory.power_consumption) + " kW"
 	
 	var o2_label = $Parameters/O2Level
 	if o2_label:
-		o2_label.text = "O2: %.2f units" % o2_stored
+		o2_label.text = "O2: %.2f units" % object_factory.o2_stored
 	
 	var h2_label = $Parameters/H2Level
 	if h2_label:
-		h2_label.text = "H2: %.2f units" % h2_stored
+		h2_label.text = "H2: %.2f units" % object_factory.h2_stored
   
