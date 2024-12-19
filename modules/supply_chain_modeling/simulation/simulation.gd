@@ -29,13 +29,7 @@ func _physics_process(delta: float) -> void:
 		return
 	
 	simulation_time += delta * time_scale
-	process_simulation_step(delta)
-	
-func process_simulation_step(delta: float) -> void:
-	for node in get_children():
-		if node is SimulationNode:
-			node.process_step(delta)
-	emit_signal("simulation_step_completed")
+
 
 func save_state() -> Dictionary:
 	var save_data := {
