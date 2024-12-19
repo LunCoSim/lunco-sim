@@ -8,6 +8,8 @@ signal connection_added(from_id, from_port, to_id, port)
 signal connection_removed(from_id, from_port, to_id, port)
 
 var nodes: Dictionary = {}
+var connections: Dictionary = {} # Dictionary of connections [from_id, from_port, to_id, port]
+
 var paused: bool = true
 var simulation_time: float = 0.0
 var time_scale: float = 1.0
@@ -18,7 +20,7 @@ func add_node(node: SimulationNode) -> void:
 
 func remove_node(node_id: String) -> void:
 	if nodes.has(node_id):
-		nodes.erase(node_id)
+		nodes.erase(node_id) #remove connections as well
 		emit_signal("node_removed", node_id)
 
 func _physics_process(delta: float) -> void:
@@ -43,6 +45,9 @@ func save_state() -> Dictionary:
 	
 	for node in nodes.values():
 		state.nodes[node.node_id] = node.to_dict()
+	
+	for connection in connections.values():
+		state.connections.append(connection)
 		
 	return state
 
@@ -54,6 +59,9 @@ func load_state(state: Dictionary) -> void:
 		var node_data = state.nodes[node_id]
 		#var node = create_node_from_data(node_data)
 		#add_node(node)
+	
+	for connection in state.connections:
+		connect_nodes(connection.from, connection.from_port, connection.to, connection.port)
 
 func connect_nodes(from_id: String, from_port: int, to_id: String, port: int) -> bool:
 	if not (nodes.has(from_id) and nodes.has(to_id)):
@@ -66,7 +74,8 @@ func connect_nodes(from_id: String, from_port: int, to_id: String, port: int) ->
 		"port": port
 	}
 	
-	nodes[from_id].connections.append(connection)
+	connections[connection.hash()] = connection	
+	
 	emit_signal("connection_added", from_id, from_port, to_id, port)
 	return true
 
