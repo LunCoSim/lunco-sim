@@ -22,14 +22,11 @@ func update_status_display() -> void:
 		progress_bar.value = storage.current_amount
 
 func add_resource(amount: float) -> float:
-	var space_available = storage.capacity - storage.current_amount
-	var amount_to_add = min(amount, space_available)
-	storage.current_amount += amount_to_add
+	var amount_to_add = storage.add_resource(amount)
 	update_status_display()
 	return amount_to_add
 
 func remove_resource(amount: float) -> float:
-	var amount_to_remove = min(amount, storage.current_amount)
-	storage.current_amount -= amount_to_remove
+	var amount_to_remove = storage.remove_resource(amount)
 	update_status_display()
 	return amount_to_remove 
