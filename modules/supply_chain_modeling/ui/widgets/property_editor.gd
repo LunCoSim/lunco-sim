@@ -1,3 +1,4 @@
+class_name PropertiesEditor
 extends VBoxContainer
 
 var current_node: Node = null

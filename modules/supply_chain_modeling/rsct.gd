@@ -4,7 +4,7 @@ extends Control
 @onready var graph_edit: GraphEdit = %GraphEdit
 @onready var sim_time_label: Label = %SimTimeLabel
 @onready var button_container: VBoxContainer = %ButtonContainer
-@onready var properties: VBoxContainer = %Properties
+@onready var properties: PropertiesEditor = %Properties
 @onready var save_dialog: FileDialog = %SaveDialog
 @onready var load_dialog: FileDialog = %LoadDialog
 @onready var simulation: SimulationManager = %Simulation
@@ -285,19 +285,19 @@ func _on_node_moved() -> void:
 	save_graph()
 
 func _on_delete_nodes_request(nodes: Array) -> void:
-	for node_name in nodes:
+	for node_name in nodes: #TBD implement nodes removal
 		var node = graph_edit.get_node(NodePath(node_name))
 		if node:
 			node.queue_free()
 	save_graph()
 
 func _on_node_selected(node: Node) -> void:
-	if node.has_method("show_properties"):
-		node.show_properties(properties)
+	var sim_node = simulation.get_node(NodePath(node.name))
+	if sim_node:
+		properties.update_properties(sim_node)
 
 func _on_node_deselected(node: Node) -> void:
-	if node.has_method("hide_properties"):
-		node.hide_properties(properties)
+	properties.clear_properties()
 
 # -- Button Signals --
 func _on_button_down(path: String) -> void:
