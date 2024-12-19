@@ -165,32 +165,24 @@ func save_graph(save_path: String = DEFAULT_SAVE_PATH) -> void:
 		return
 	
 	var save_data := {
-		"nodes": {},
-		"connections": [],
+		"simulation": simulation.save_state(),
 		"view": {
 			"scroll_offset": graph_edit.scroll_offset,
 			"zoom": graph_edit.zoom
 		}
 	}
 	
+	# Save UI node positions
 	for node in graph_edit.get_children():
 		if node is GraphNode:
-			save_data["nodes"][node.name] = {
-				"position": node.position_offset,
-				"size": node.size,
-				"type": node.scene_file_path
-			}
-	
-	for connection in graph_edit.get_connection_list():
-		save_data["connections"].append({
-			"from_node": connection["from_node"],
-			"from_port": connection["from_port"],
-			"to_node": connection["to_node"],
-			"to_port": connection["to_port"]
-		})
+			if node.name in save_data["simulation"]["nodes"]:
+				save_data["simulation"]["nodes"][node.name]["ui"] = {
+					"position": node.position_offset,
+					"size": node.size
+				}
 	
 	file.store_var(save_data)
-	print("Graph autosaved successfully")
+	print("Graph saved successfully")
 
 func load_graph(load_file_path: String = DEFAULT_SAVE_PATH) -> void:
 	if not FileAccess.file_exists(load_file_path):
@@ -206,28 +198,26 @@ func load_graph(load_file_path: String = DEFAULT_SAVE_PATH) -> void:
 	if not save_data:
 		return
 	
+	# Clear existing graph
 	new_graph()
 	
-	for node_name in save_data["nodes"]:
-		var node_data = save_data["nodes"][node_name]
-		var node_scene = load(node_data["type"])
-		if node_scene:
-			var node = node_scene.instantiate()
-			node.name = node_name
-			node.position_offset = node_data["position"]
-			node.size = node_data["size"]
-			node.set_owner(null)
-
-			graph_edit.add_child(node)
+	# Load simulation state
+	simulation.load_state(save_data["simulation"])
 	
-	for connection in save_data["connections"]:
-		graph_edit.connect_node(
-			connection["from_node"],
-			connection["from_port"],
-			connection["to_node"],
-			connection["to_port"]
-		)
+	# Create UI nodes for simulation nodes
+	for node_name in save_data["simulation"]["nodes"]:
+		var node_data = save_data["simulation"]["nodes"][node_name]
+		var ui_node = UISimulationNode.new()
+		ui_node.name = node_name
+		
+		# Set UI properties if available
+		if "ui" in node_data:
+			ui_node.position_offset = node_data["ui"]["position"]
+			ui_node.size = node_data["ui"]["size"]
+		
+		graph_edit.add_child(ui_node)
 	
+	# Restore view state
 	if "view" in save_data:
 		graph_edit.call_deferred("set_scroll_offset", save_data["view"]["scroll_offset"])
 		if "zoom" in save_data["view"]:
@@ -266,8 +256,7 @@ func save_as_nft() -> void:
 	Web3Interface.mint_design(save_data)
 
 func load_from_nft(token_id: int) -> void:
-	var web3 = get_node("/root/Web3Interface")
-	web3.load_design(token_id)
+	Web3Interface.load_design(token_id)
 
 # === Signal Handlers ===
 # -- Graph Edit Signals --
