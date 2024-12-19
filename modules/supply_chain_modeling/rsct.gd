@@ -112,12 +112,22 @@ func new_graph() -> void:
 
 # === Node Management ===
 func add_node_from_path(path: String, position: Vector2 = Vector2.ZERO):
-	var node_scene = load(path)
-	if node_scene:
-		var node = node_scene.instantiate()
-		graph_edit.add_child(node)
-		node.set_owner(null)
-		node.set_physics_process(false)
+	var node_script = load(path)
+	if node_script:
+
+		var sim_node = Node.new()
+		sim_node.set_script(node_script)
+		
+
+		var ui_node = UISimulationNode.new()
+
+		sim_node.set_owner(null)
+		ui_node.set_owner(null)
+
+		simulation.add_child(sim_node)
+		graph_edit.add_child(ui_node)
+
+		ui_node.set_physics_process(false)
 		
 		if position == Vector2.ZERO:
 			var viewport_size = graph_edit.size
@@ -125,16 +135,16 @@ func add_node_from_path(path: String, position: Vector2 = Vector2.ZERO):
 			var zoom = graph_edit.zoom
 			var center_x = (scroll_offset.x + viewport_size.x / 2) / zoom
 			var center_y = (scroll_offset.y + viewport_size.y / 2) / zoom
-			node.position_offset = Vector2(center_x - node.size.x / 2, center_y - node.size.y / 2)
+			ui_node.position_offset = Vector2(center_x - ui_node.size.x / 2, center_y - ui_node.size.y / 2)
 		else:
-			node.position_offset = position - node.size / 2
+			ui_node.position_offset = position - ui_node.size / 2
 		
 		save_graph()
 
 # === UI Management ===
 func create_buttons() -> void:
-	var resource_paths = Utils.get_scene_paths("res://ui/resources/")
-	var facility_paths = Utils.get_scene_paths("res://ui/facilities/")
+	var resource_paths = Utils.get_paths("res://simulation/resources/")
+	var facility_paths = Utils.get_paths("res://simulation/facilities/")
 	
 	for path in resource_paths + facility_paths:
 		var button = Button.new()
