@@ -1,0 +1,2 @@
+class_name ResourceO2
+extends BaseResource

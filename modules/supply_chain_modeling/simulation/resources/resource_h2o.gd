@@ -1,0 +1,2 @@
+class_name ResourceH2O
+extends BaseResource
