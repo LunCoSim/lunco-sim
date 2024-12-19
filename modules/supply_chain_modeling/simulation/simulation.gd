@@ -13,6 +13,7 @@ var connections: Dictionary = {} # Dictionary of connections [from_id, from_port
 var paused: bool = true
 var simulation_time: float = 0.0
 var time_scale: float = 1.0
+var time_unit: float = 60.0
 
 func add_node(node: SimulationNode) -> void:
 	nodes[node.node_id] = node
@@ -26,7 +27,7 @@ func remove_node(node_id: String) -> void:
 func _physics_process(delta: float) -> void:
 	if paused:
 		return
-		
+	
 	simulation_time += delta * time_scale
 	process_simulation_step(delta)
 	
@@ -104,3 +105,30 @@ func disconnect_nodes(from_id: String, from_port: int, to_id: String, port: int)
 	
 	# Step 6: Return false if connection wasn't found
 	return false
+
+# === Simulation Control ===
+func set_time_scale(new_scale: float) -> void:
+	time_scale = new_scale
+
+func toggle_simulation() -> void:
+	paused = !paused
+	set_simulation_status(paused)
+
+func pause_simulation() -> void:
+	paused = true
+	set_simulation_status(paused)
+
+func resume_simulation() -> void:
+	paused = false
+	set_simulation_status(paused)
+	
+func set_simulation_status(_paused: bool):
+	for node in get_children():
+		if node is Node:
+			node.set_physics_process(not _paused)
+
+func get_simulation_time() -> float:
+	return simulation_time
+
+func get_simulation_time_scaled() -> float	:
+	return simulation_time * time_unit

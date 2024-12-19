@@ -20,4 +20,3 @@ func update_status_display() -> void:
 	if progress_bar:
 		progress_bar.max_value = storage.capacity
 		progress_bar.value = storage.current_amount
-

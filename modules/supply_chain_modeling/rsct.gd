@@ -15,10 +15,7 @@ const AUTOSAVE_INTERVAL: float = 60000.0  # Autosave every 60 seconds
 # State variables
 var save_file_path: String = "user://current_graph.save"
 var autosave_timer: float = 0.0
-var sim_time : float = 0.0
-var time_scale: float = 1.0  # Default time scale
-var time_unit: float = 60.0  # Default time unit
-var paused: bool = true  # Simulation paused state
+
 var dragging_new_node: bool = false
 var dragging_node_path: String = ""
 
@@ -28,10 +25,16 @@ func _ready():
 	_connect_signals()
 	create_buttons()
 	
-	load_graph()
+	# load_graph()
+	# save_graph() # Hack to fix the bug that after loading form file info is deleted
+
 	update_sim_time_label()
-	save_graph() # Hack to fix the bug that after loading form file info is deleted
 	
+	for node in simulation.get_children():
+		if node is SimulationNode:
+			var ui_node = UISimulationNode.new()
+			# ui_node.set_simulation_node(node)
+			graph_edit.add_child(ui_node)
 
 func _connect_signals():
 	Web3Interface.connect("wallet_connected", _on_wallet_connected)
@@ -57,9 +60,6 @@ func _process(delta: float) -> void:
 	_handle_autosave(delta)
 	update_sim_time_label()
 
-func _physics_process(delta: float) -> void:
-	if not paused:
-		sim_time += delta * time_scale
 
 func _handle_autosave(delta: float) -> void:
 	autosave_timer += delta
@@ -74,24 +74,19 @@ func _input(event: InputEvent) -> void:
 
 # === Simulation Control ===
 func set_time_scale(new_scale: float) -> void:
-	time_scale = new_scale
+	simulation.set_time_scale(new_scale)
 
 func toggle_simulation() -> void:
-	paused = !paused
-	set_simulation_status(paused)
+	simulation.toggle_simulation()
 
 func pause_simulation() -> void:
-	paused = true
-	set_simulation_status(paused)
+	simulation.pause_simulation()
 
 func resume_simulation() -> void:
-	paused = false
-	set_simulation_status(paused)
-	
+	simulation.resume_simulation()
+
 func set_simulation_status(_paused: bool):
-	for node in graph_edit.get_children():
-		if node is GraphNode:
-			node.set_physics_process(not _paused)
+	simulation.set_simulation_status(_paused)
 
 # === Graph Management ===
 func new_graph() -> void:
@@ -100,7 +95,7 @@ func new_graph() -> void:
 			node.free()
 	
 	pause_simulation()
-	sim_time = 0.0
+	
 	update_sim_time_label()
 	graph_edit.scroll_offset = Vector2.ZERO
 	save_graph()
@@ -112,7 +107,7 @@ func add_node_from_path(path: String, position: Vector2 = Vector2.ZERO):
 		var node = node_scene.instantiate()
 		graph_edit.add_child(node)
 		node.set_owner(null)
-		node.set_physics_process(!paused)
+		node.set_physics_process(false)
 		
 		if position == Vector2.ZERO:
 			var viewport_size = graph_edit.size
@@ -139,8 +134,7 @@ func create_buttons() -> void:
 		button_container.add_child(button)
 
 func update_sim_time_label() -> void:
-	var sim_time_minutes = round(sim_time * time_unit)
-	sim_time_label.text = "Sim Time: " + str(sim_time_minutes) + " minutes"
+	sim_time_label.text = "Sim Time: " + str(simulation.get_simulation_time_scaled()) + " minutes"
 
 func show_message(text: String) -> void:
 	var dialog = AcceptDialog.new()
@@ -207,8 +201,9 @@ func load_graph() -> void:
 			node.name = node_name
 			node.position_offset = node_data["position"]
 			node.size = node_data["size"]
-			graph_edit.add_child(node)
 			node.set_owner(null)
+
+			graph_edit.add_child(node)
 	
 	for connection in save_data["connections"]:
 		graph_edit.connect_node(
