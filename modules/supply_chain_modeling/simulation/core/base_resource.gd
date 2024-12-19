@@ -10,8 +10,6 @@ extends SimulationNode
 var custom_properties: Dictionary = {}
 var metadata: Dictionary = {}
 
-func _init(id: String):
-	super._init(id, "resource")
 
 func set_properties(desc: String, type: String, init_mass: float, init_volume: float):
 	description = desc

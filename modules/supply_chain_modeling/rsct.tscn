@@ -1,4 +1,4 @@
-[gd_scene load_steps=13 format=3 uid="uid://3lmlrsbbacm"]
+[gd_scene load_steps=14 format=3 uid="uid://3lmlrsbbacm"]
 
 [ext_resource type="Script" uid="uid://dln1wsyjwuqj7" path="res://rsct.gd" id="1_xuhcs"]
 [ext_resource type="Script" uid="uid://b6qabjmm3e73a" path="res://ui/menu_bar.gd" id="2_74p8c"]
@@ -11,6 +11,7 @@
 [ext_resource type="Script" uid="uid://j7vocujk6thh" path="res://simulation/resources/resource_o2.gd" id="5_pbjji"]
 [ext_resource type="Script" uid="uid://dkkvcjevimpxi" path="res://simulation/facilities/object_factory.gd" id="6_gco8c"]
 [ext_resource type="Script" uid="uid://lufpk6rxw2fn" path="res://simulation/facilities/solar_power_plant.gd" id="7_lhm2k"]
+[ext_resource type="Script" uid="uid://ce1grq4gklbwe" path="res://simulation/resources/resource_h2o.gd" id="8_pbjji"]
 
 [sub_resource type="SystemFont" id="SystemFont_6bj1w"]
 hinting = 2
@@ -49,6 +50,10 @@ metadata/_custom_type_script = ExtResource("6_gco8c")
 [node name="SolarPowerPlant" type="Node" parent="Simulation"]
 script = ExtResource("7_lhm2k")
 metadata/_custom_type_script = ExtResource("7_lhm2k")
+
+[node name="ResourceH2O" type="Node" parent="Simulation"]
+script = ExtResource("8_pbjji")
+metadata/_custom_type_script = ExtResource("8_pbjji")
 
 [node name="UI" type="VBoxContainer" parent="."]
 unique_name_in_owner = true
