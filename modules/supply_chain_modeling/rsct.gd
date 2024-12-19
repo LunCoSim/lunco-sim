@@ -278,7 +278,7 @@ func _on_node_moved() -> void:
 
 func _on_delete_nodes_request(nodes: Array) -> void:
 	for node_name in nodes:
-		var node = graph_edit.get_node(node_name)
+		var node = graph_edit.get_node(NodePath(node_name))
 		if node:
 			node.queue_free()
 	save_graph()
