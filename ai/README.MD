@@ -1,1 +1,0 @@
-This folder will contain promts and other AI related stuff
