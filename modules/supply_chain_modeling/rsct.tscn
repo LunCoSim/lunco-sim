@@ -1,4 +1,4 @@
-[gd_scene load_steps=14 format=3 uid="uid://3lmlrsbbacm"]
+[gd_scene load_steps=8 format=3 uid="uid://3lmlrsbbacm"]
 
 [ext_resource type="Script" uid="uid://dln1wsyjwuqj7" path="res://rsct.gd" id="1_xuhcs"]
 [ext_resource type="Script" uid="uid://b6qabjmm3e73a" path="res://ui/menu_bar.gd" id="2_74p8c"]
@@ -6,12 +6,6 @@
 [ext_resource type="Theme" uid="uid://dv00ngpal62cd" path="res://rsct.tres" id="2_xuhcs"]
 [ext_resource type="PackedScene" uid="uid://baib0y8cocg71" path="res://ui/widgets/wallet_connect_button.tscn" id="2_y60tv"]
 [ext_resource type="Script" uid="uid://2iqtet5emwql" path="res://ui/property_editor.gd" id="3_6bj1w"]
-[ext_resource type="Script" uid="uid://d6pl0ma0uksl" path="res://simulation/facilities/storage.gd" id="3_74p8c"]
-[ext_resource type="Script" uid="uid://dhun28ooci1uo" path="res://simulation/resources/resource_h2.gd" id="4_hnv65"]
-[ext_resource type="Script" uid="uid://j7vocujk6thh" path="res://simulation/resources/resource_o2.gd" id="5_pbjji"]
-[ext_resource type="Script" uid="uid://dkkvcjevimpxi" path="res://simulation/facilities/object_factory.gd" id="6_gco8c"]
-[ext_resource type="Script" uid="uid://lufpk6rxw2fn" path="res://simulation/facilities/solar_power_plant.gd" id="7_lhm2k"]
-[ext_resource type="Script" uid="uid://ce1grq4gklbwe" path="res://simulation/resources/resource_h2o.gd" id="8_pbjji"]
 
 [sub_resource type="SystemFont" id="SystemFont_6bj1w"]
 hinting = 2
@@ -30,30 +24,6 @@ script = ExtResource("1_xuhcs")
 [node name="Simulation" type="Node" parent="."]
 unique_name_in_owner = true
 script = ExtResource("2_n8njg")
-
-[node name="StorageFacility" type="Node" parent="Simulation"]
-script = ExtResource("3_74p8c")
-metadata/_custom_type_script = ExtResource("3_74p8c")
-
-[node name="ResourceH2" type="Node" parent="Simulation"]
-script = ExtResource("4_hnv65")
-metadata/_custom_type_script = ExtResource("4_hnv65")
-
-[node name="ResourceO2" type="Node" parent="Simulation"]
-script = ExtResource("5_pbjji")
-metadata/_custom_type_script = ExtResource("5_pbjji")
-
-[node name="ObjectFactory" type="Node" parent="Simulation"]
-script = ExtResource("6_gco8c")
-metadata/_custom_type_script = ExtResource("6_gco8c")
-
-[node name="SolarPowerPlant" type="Node" parent="Simulation"]
-script = ExtResource("7_lhm2k")
-metadata/_custom_type_script = ExtResource("7_lhm2k")
-
-[node name="ResourceH2O" type="Node" parent="Simulation"]
-script = ExtResource("8_pbjji")
-metadata/_custom_type_script = ExtResource("8_pbjji")
 
 [node name="UI" type="VBoxContainer" parent="."]
 unique_name_in_owner = true

@@ -1,3 +1,4 @@
+class_name UIResourceH2O
 extends UIBaseResource
 
 func _init():

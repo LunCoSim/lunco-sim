@@ -1,3 +1,4 @@
+class_name UIResourceO2
 extends UIBaseResource
 
 func _init():

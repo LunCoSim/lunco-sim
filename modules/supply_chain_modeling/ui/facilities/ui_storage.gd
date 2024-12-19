@@ -1,3 +1,4 @@
+class_name UIStorage
 extends UIBaseFacility
 
 var storage: StorageFacility

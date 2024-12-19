@@ -29,22 +29,6 @@ func _ready():
 	# load_graph()
 	# save_graph() # Hack to fix the bug that after loading form file info is deleted
 
-	for node in simulation.get_children():
-		#print(node, node.get_class())
-		#if node is SimulationNode:
-		var ui_node
-		
-		if node is BaseFacility:
-			print("facility")
-		elif node is ResourceH2:
-			print("resourceh2")
-		else:
-			ui_node = UISimulationNode.new()
-		
-		if ui_node:
-			graph_edit.add_child(ui_node)
-		
-
 func _connect_signals():
 	Web3Interface.connect("wallet_connected", _on_wallet_connected)
 	Web3Interface.connect("wallet_disconnected", _on_wallet_disconnected)
@@ -58,9 +42,6 @@ func _connect_signals():
 	graph_edit.connect("node_selected", _on_node_selected)
 	graph_edit.connect("node_deselected", _on_node_deselected)
 	
-	
-	save_dialog.file_selected.connect(_on_save_dialog_file_selected)
-	load_dialog.file_selected.connect(_on_load_dialog_file_selected)
 
 # === Core Processing ===
 func _process(delta: float) -> void:
@@ -112,18 +93,45 @@ func add_node_from_path(path: String, position: Vector2 = Vector2.ZERO):
 
 		var sim_node = Node.new()
 		sim_node.set_script(node_script)
-		
-
-		var ui_node = UISimulationNode.new()
-
 		sim_node.set_owner(null)
-		ui_node.set_owner(null)
-
 		simulation.add_child(sim_node)
-		graph_edit.add_child(ui_node)
+		
+		var ui_node = create_ui_node(sim_node, position)
+		
+		if ui_node:
+			ui_node.set_owner(null)
+			graph_edit.add_child(ui_node)
 
+		save_graph()
+
+func create_ui_node(simulation_node: SimulationNode, position: Vector2 = Vector2.ZERO) -> GraphNode:
+	#return null
+	var ui_node: GraphNode
+	
+	# Create specific UI node based on simulation node type
+	if simulation_node is StorageFacility:
+		ui_node = UIStorage.new()
+	elif simulation_node is ResourceH2:
+		ui_node = UIResourceH2.new()
+	elif simulation_node is ResourceO2:
+		ui_node = UIResourceO2.new()
+	elif simulation_node is ResourceH2O:
+		ui_node = UIResourceH2O.new()
+	elif simulation_node is ObjectFactory:
+		ui_node = UIObjectFactory.new()
+	elif simulation_node is SolarPowerPlant:
+		ui_node = UISolarPowerPlant.new()
+	else:
+		# Default UI node if no specific type matches
+		ui_node = UISimulationNode.new()
+	
+	# Set common properties
+	if ui_node:
+		ui_node.name = simulation_node.name
+		ui_node.title = simulation_node.get_class()
 		ui_node.set_physics_process(false)
 		
+		# Position the node at screen center if not specified
 		if position == Vector2.ZERO:
 			var viewport_size = graph_edit.size
 			var scroll_offset = graph_edit.scroll_offset
@@ -133,8 +141,8 @@ func add_node_from_path(path: String, position: Vector2 = Vector2.ZERO):
 			ui_node.position_offset = Vector2(center_x - ui_node.size.x / 2, center_y - ui_node.size.y / 2)
 		else:
 			ui_node.position_offset = position - ui_node.size / 2
-		
-		save_graph()
+	
+	return ui_node
 
 # === UI Management ===
 func create_buttons() -> void:

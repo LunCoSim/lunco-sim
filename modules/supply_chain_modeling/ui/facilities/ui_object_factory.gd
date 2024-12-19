@@ -1,3 +1,4 @@
+class_name UIObjectFactory
 extends UIBaseFacility
 
 var object_factory: ObjectFactory

@@ -1,3 +1,4 @@
+class_name UISolarPowerPlant
 extends UIBaseFacility
 	
 var solar_power_plant: SolarPowerPlant	
