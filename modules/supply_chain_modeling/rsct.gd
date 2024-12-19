@@ -110,20 +110,20 @@ func create_ui_node(simulation_node: SimulationNode, position: Vector2 = Vector2
 	
 	# Create specific UI node based on simulation node type
 	if simulation_node is StorageFacility:
-		ui_node = UIStorage.new()
+		ui_node = load("res://ui/facilities/ui_storage.tscn").instantiate()
 	elif simulation_node is ResourceH2:
-		ui_node = UIResourceH2.new()
+		ui_node = load("res://ui/resources/ui_resource_h2.tscn").instantiate()
 	elif simulation_node is ResourceO2:
-		ui_node = UIResourceO2.new()
+		ui_node = load("res://ui/resources/ui_resource_o2.tscn").instantiate()
 	elif simulation_node is ResourceH2O:
-		ui_node = UIResourceH2O.new()
+		ui_node = load("res://ui/resources/ui_resource_h2o.tscn").instantiate()
 	elif simulation_node is ObjectFactory:
-		ui_node = UIObjectFactory.new()
+		ui_node = load("res://ui/facilities/ui_object_factory.tscn").instantiate()
 	elif simulation_node is SolarPowerPlant:
-		ui_node = UISolarPowerPlant.new()
+		ui_node = load("res://ui/facilities/ui_solar_power_plant.tscn").instantiate()
 	else:
 		# Default UI node if no specific type matches
-		ui_node = UISimulationNode.new()
+		ui_node = load("res://ui/simulation_node.tscn").instantiate()
 	
 	# Set common properties
 	if ui_node:
