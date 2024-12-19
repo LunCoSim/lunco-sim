@@ -4,7 +4,7 @@ var solar_power_plant: SolarPowerPlant
 
 func _init():
 	super._init()
-	set_facility_properties("SolarPowerPlant", "Solar power generation facility", "producer")
+	# set_facility_properties("SolarPowerPlant", "Solar power generation facility", "producer")
 	solar_power_plant = SolarPowerPlant.new()
 	facility.efficiency = 0.20  # 20% efficiency is typical for solar panels
 

@@ -20,12 +20,7 @@ func update_from_simulation() -> void:
 	if simulation_node:
 		$Parameters/Status.text = simulation_node.properties.status
 		$Parameters/Efficiency.text = "Efficiency: " + str(simulation_node.properties.efficiency)
-		
-func set_facility_properties(id: String, desc: String, type: String):
-	facility.facility_id = id
-	facility.description = desc
-	facility.facility_type = type
-	title = "Facility: " + id
+
 
 func update_status_display() -> void:
 	# Virtual method to be implemented by child classes

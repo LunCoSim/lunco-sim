@@ -3,20 +3,18 @@ extends UIBaseFacility
 var object_factory: ObjectFactory
 
 func _init():
-	super._init()
-	set_facility_properties("Factory", "Water production facility", "producer")
+	# set_facility_properties("Factory", "Water production facility", "producer")
 	object_factory = ObjectFactory.new()
-	facility.status = "Not Connected"
 
 func update_status_display() -> void:
 	# Update display labels
 	var status_label = $Parameters/Status
 	if status_label:
-		status_label.text = "Status: " + facility.status
+		status_label.text = "Status: " + object_factory.status
 	
 	var efficiency_label = $Parameters/Efficiency
 	if efficiency_label:
-		efficiency_label.text = "Efficiency: " + str(facility.efficiency * 100) + "%"
+		efficiency_label.text = "Efficiency: " + str(object_factory.efficiency * 100) + "%"
 	
 	var power_label = $Parameters/PowerConsumption
 	if power_label:

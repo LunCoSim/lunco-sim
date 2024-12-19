@@ -4,7 +4,7 @@ var storage: StorageFacility
 
 func _init():
 	super._init()
-	set_facility_properties("Storage", "Generic storage facility", "storage")
+	# set_facility_properties("Storage", "Generic storage facility", "storage")
 	storage = StorageFacility.new()
 
 func _ready():
@@ -21,12 +21,3 @@ func update_status_display() -> void:
 		progress_bar.max_value = storage.capacity
 		progress_bar.value = storage.current_amount
 
-func add_resource(amount: float) -> float:
-	var amount_to_add = storage.add_resource(amount)
-	update_status_display()
-	return amount_to_add
-
-func remove_resource(amount: float) -> float:
-	var amount_to_remove = storage.remove_resource(amount)
-	update_status_display()
-	return amount_to_remove 

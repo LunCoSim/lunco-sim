@@ -16,3 +16,4 @@ func process_step(delta: float) -> void:
 	#if can_process(inputs):
 		#consume_resources(inputs)
 		#produce_outputs(delta)
+
