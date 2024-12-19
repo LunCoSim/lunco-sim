@@ -157,7 +157,7 @@ func create_buttons() -> void:
 		button_container.add_child(button)
 
 func update_sim_time_label() -> void:
-	sim_time_label.text = "Sim Time: " + str(simulation.get_simulation_time_scaled()) + " minutes"
+	sim_time_label.text = "Sim Time: " + str(round(simulation.get_simulation_time_scaled())) + " minutes"
 
 func show_message(text: String) -> void:
 	var dialog = AcceptDialog.new()
