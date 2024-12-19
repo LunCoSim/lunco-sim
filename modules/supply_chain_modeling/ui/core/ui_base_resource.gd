@@ -22,30 +22,6 @@ func _ready():
 	size = Vector2(150, 80)  # Default size
 	update_display()
 
-func set_resource_properties(id: String, desc: String, type: String):
-	if not resource:
-		resource = BaseResource.new(id)
-	resource.set_properties(desc, type, 0.0, 0.0)
-	title = "Resource: " + id
-
-func get_resource_data() -> Dictionary:
-	return resource.get_resource_data()
-
-func load_resource_data(data: Dictionary) -> void:
-	if not resource:
-		resource = BaseResource.new(data.get("id", ""))
-	resource.load_resource_data(data)
-
-func remove_resource(amount: float) -> float:
-	var removed = resource.remove_resource(amount)
-	update_display()
-	return removed
-
-func add_resource(amount: float) -> float:
-	var added = resource.add_resource(amount)
-	update_display()
-	return added
-
 func update_display() -> void:
 	if not resource:
 		return
