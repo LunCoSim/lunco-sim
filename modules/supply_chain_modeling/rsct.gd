@@ -1,4 +1,3 @@
-@tool
 extends Control
 
 # Node references
@@ -25,11 +24,14 @@ var dragging_node_path: String = ""
 
 # === Initialization ===
 func _ready():
+	pause_simulation()
 	_connect_signals()
+	create_buttons()
+	
 	load_graph()
 	update_sim_time_label()
-	pause_simulation()
-	create_buttons()
+	save_graph() # Hack to fix the bug that after loading form file info is deleted
+	
 
 func _connect_signals():
 	Web3Interface.connect("wallet_connected", _on_wallet_connected)

@@ -123,7 +123,7 @@ size_flags_horizontal = 0
 size_flags_vertical = 3
 right_disconnects = true
 connection_lines_thickness = 2.0
-zoom = 0.909091
+zoom = 2.0736
 
 [node name="ButtonContainer" type="VBoxContainer" parent="UI/WorkingArea/Workbench"]
 unique_name_in_owner = true
