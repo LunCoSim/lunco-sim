@@ -3,5 +3,4 @@ extends UIBaseResource
 func _init():
 	super._init()
 	if not resource:
-		resource = ResourceH2O.new("H2O")
-
+		resource = ResourceH2O.new()
