@@ -35,29 +35,3 @@ func set_status(new_status: String) -> void:
 	facility.status = new_status
 	update_status_display()
 
-func get_facility_data() -> Dictionary:
-	return {
-		"id": facility.facility_id,
-		"description": facility.description,
-		"type": facility.facility_type,
-		"efficiency": facility.efficiency,
-		"status": facility.status,
-		"custom_properties": facility.custom_properties,
-		"metadata": facility.metadata
-	}
-
-func load_facility_data(data: Dictionary) -> void:
-	if "id" in data:
-		facility.facility_id = data.id
-	if "description" in data:
-		facility.description = data.description
-	if "type" in data:
-		facility.facility_type = data.type
-	if "efficiency" in data:
-		facility.efficiency = data.efficiency
-	if "status" in data:
-		facility.status = data.status
-	if "custom_properties" in data:
-		facility.custom_properties = data.custom_properties
-	if "metadata" in data:
-		facility.metadata = data.metadata 
