@@ -20,3 +20,7 @@ config/icon="res://icon.svg"
 [autoload]
 
 Web3Interface="*res://singletons/web3_interface.gd"
+
+[gui]
+
+theme/default_font_multichannel_signed_distance_field=true
