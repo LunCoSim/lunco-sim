@@ -29,8 +29,6 @@ func _ready():
 	# load_graph()
 	# save_graph() # Hack to fix the bug that after loading form file info is deleted
 
-	update_sim_time_label()
-
 	for node in simulation.get_children():
 		#print(node, node.get_class())
 		#if node is SimulationNode:
@@ -69,7 +67,6 @@ func _process(delta: float) -> void:
 	_handle_autosave(delta)
 	update_sim_time_label()
 
-
 func _handle_autosave(delta: float) -> void:
 	autosave_timer += delta
 	if autosave_timer >= AUTOSAVE_INTERVAL:
@@ -105,7 +102,6 @@ func new_graph() -> void:
 	
 	pause_simulation()
 	
-	update_sim_time_label()
 	graph_edit.scroll_offset = Vector2.ZERO
 	save_graph()
 
