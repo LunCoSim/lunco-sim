@@ -73,7 +73,6 @@ layout_mode = 2
 script = ExtResource("2_74p8c")
 
 [node name="FileMenu" type="PopupMenu" parent="UI/MenuContainer/MenuBar"]
-unique_name_in_owner = true
 title = "File"
 size = Vector2i(134, 170)
 item_count = 7
@@ -93,7 +92,6 @@ item_6/text = "Load File"
 item_6/id = 6
 
 [node name="NFTMenu" type="PopupMenu" parent="UI/MenuContainer/MenuBar"]
-unique_name_in_owner = true
 size = Vector2i(104, 100)
 item_count = 3
 item_0/text = "Mint NFT"
@@ -195,11 +193,13 @@ file_mode = 0
 access = 2
 filters = PackedStringArray("*.json ; JSON Files")
 
-[connection signal="load_from_file_requested" from="UI/MenuContainer/MenuBar" to="." method="_on_load_file_selected"]
+[connection signal="load_from_file_requested" from="UI/MenuContainer/MenuBar" to="." method="_on_load_from_file_requested"]
 [connection signal="load_requested" from="UI/MenuContainer/MenuBar" to="." method="load_graph"]
 [connection signal="new_graph_requested" from="UI/MenuContainer/MenuBar" to="." method="new_graph"]
 [connection signal="save_requested" from="UI/MenuContainer/MenuBar" to="." method="save_graph"]
-[connection signal="save_to_file_requested" from="UI/MenuContainer/MenuBar" to="." method="_on_save_file_selected"]
+[connection signal="save_to_file_requested" from="UI/MenuContainer/MenuBar" to="." method="_on_save_to_file_requested"]
+[connection signal="id_pressed" from="UI/MenuContainer/MenuBar/FileMenu" to="UI/MenuContainer/MenuBar" method="_on_file_menu_pressed"]
+[connection signal="id_pressed" from="UI/MenuContainer/MenuBar/NFTMenu" to="UI/MenuContainer/MenuBar" method="_on_nft_menu_pressed"]
 [connection signal="pressed" from="UI/MenuContainer/Button6" to="." method="toggle_simulation"]
-[connection signal="file_selected" from="UI/SaveDialog" to="." method="_on_save_file_selected"]
+[connection signal="file_selected" from="UI/SaveDialog" to="." method="_on_save_dialog_file_selected"]
 [connection signal="file_selected" from="UI/LoadDialog" to="." method="_on_load_file_selected"]

@@ -13,7 +13,8 @@ extends Control
 const AUTOSAVE_INTERVAL: float = 60000.0  # Autosave every 60 seconds
 
 # State variables
-var save_file_path: String = "user://current_graph.save"
+
+var DEFAULT_SAVE_PATH: String = "user://current_graph.save"
 var autosave_timer: float = 0.0
 
 var dragging_new_node: bool = false
@@ -59,8 +60,6 @@ func _connect_signals():
 	graph_edit.connect("node_selected", _on_node_selected)
 	graph_edit.connect("node_deselected", _on_node_deselected)
 	
-	%FileMenu.id_pressed.connect(_on_file_menu_pressed)
-	%NFTMenu.id_pressed.connect(_on_nft_menu_pressed)
 	
 	save_dialog.file_selected.connect(_on_save_dialog_file_selected)
 	load_dialog.file_selected.connect(_on_load_dialog_file_selected)
@@ -163,8 +162,8 @@ func show_message(text: String) -> void:
 	dialog.popup_centered()
 
 # === File Operations ===
-func save_graph() -> void:
-	var file = FileAccess.open(save_file_path, FileAccess.WRITE)
+func save_graph(save_path: String = DEFAULT_SAVE_PATH) -> void:
+	var file = FileAccess.open(save_path, FileAccess.WRITE)
 	if not file:
 		show_message("Error: Could not save file")
 		return
@@ -197,12 +196,12 @@ func save_graph() -> void:
 	file.store_var(save_data)
 	print("Graph autosaved successfully")
 
-func load_graph() -> void:
-	if not FileAccess.file_exists(save_file_path):
+func load_graph(load_file_path: String = DEFAULT_SAVE_PATH) -> void:
+	if not FileAccess.file_exists(load_file_path):
 		print("No save file exists")
 		return
 	
-	var file = FileAccess.open(save_file_path, FileAccess.READ)
+	var file = FileAccess.open(load_file_path, FileAccess.READ)
 	if not file:
 		show_message("Error: Could not open file")
 		return
@@ -268,8 +267,7 @@ func save_as_nft() -> void:
 			connection["to_port"]
 		])
 	
-	var web3 = get_node("/root/Web3Interface")
-	web3.mint_design(save_data)
+	Web3Interface.mint_design(save_data)
 
 func load_from_nft(token_id: int) -> void:
 	var web3 = get_node("/root/Web3Interface")
@@ -323,24 +321,6 @@ func _on_button_up() -> void:
 	dragging_new_node = false
 	dragging_node_path = ""
 
-# -- Menu Signals --
-func _on_file_menu_pressed(id: int) -> void:
-	match id:
-		0:  # New
-			new_graph()
-		1:  # Save
-			save_dialog.popup_centered()
-		2:  # Load
-			load_dialog.popup_centered()
-
-func _on_nft_menu_pressed(id: int) -> void:
-	match id:
-		0:  # Save as NFT
-			save_as_nft()
-		1:  # Load from NFT
-			# Implement NFT loading dialog
-			pass
-
 # -- Web3 Interface Signals --
 func _on_wallet_connected() -> void:
 	print("Wallet connected")
@@ -353,34 +333,20 @@ func _on_nft_minted(token_id: int) -> void:
 
 func _on_nft_load_complete(design_data: Dictionary) -> void:
 	new_graph()
-	
-	for node_name in design_data["nodes"]:
-		var node_data = design_data["nodes"][node_name]
-		var node_scene = load("res://scenes/" + node_data["type"])
-		if node_scene:
-			var node = node_scene.instantiate()
-			node.name = node_name
-			node.position_offset = Vector2(node_data["pos"][0], node_data["pos"][1])
-			graph_edit.add_child(node)
-			node.set_owner(null)
-	
-	for connection in design_data["connections"]:
-		graph_edit.connect_node(
-			connection[0],
-			connection[1],
-			connection[2],
-			connection[3]
-		)
+	# TBD Load from dics
 
 # -- Dialog Signals --
 func _on_save_dialog_file_selected(path: String) -> void:
-	save_file_path = path
-	save_graph()
+	save_graph(path)
 
 func _on_load_dialog_file_selected(path: String) -> void:
-	save_file_path = path
-	load_graph()
+	load_graph(path)
 
+func _on_save_to_file_requested() -> void:
+	save_dialog.popup_centered(Vector2(800, 600))
 
+func _on_load_from_file_requested() -> void:
+	load_dialog.popup_centered(Vector2(800, 600))
+	
 
 	
