@@ -140,12 +140,8 @@ func show_message(text: String) -> void:
 	dialog.popup_centered()
 
 # === File Operations ===
-func save_graph(save_path: String = DEFAULT_SAVE_PATH) -> void:
-	var file = FileAccess.open(save_path, FileAccess.WRITE)
-	if not file:
-		show_message("Error: Could not save file")
-		return
-	
+
+func graph_to_save_data() -> Dictionary:
 	var save_data := {
 		"simulation": simulation.save_state(),
 		"view": {
@@ -163,29 +159,9 @@ func save_graph(save_path: String = DEFAULT_SAVE_PATH) -> void:
 					"size": [node.size.x, node.size.y]
 				}
 	
+	return save_data
 
-	file.store_string(JSON.stringify(save_data))
-	print("Graph saved successfully")
-
-func load_graph(load_file_path: String = DEFAULT_SAVE_PATH) -> void:
-	if not FileAccess.file_exists(load_file_path):
-		print("No save file exists")
-		return
-	
-	var file = FileAccess.open(load_file_path, FileAccess.READ)
-	if not file:
-		show_message("Error: Could not open file")
-		return
-	
-	var json = JSON.new()
-	if json.parse(file.get_as_text()) != OK:    
-		show_message("Error: Could not parse file")
-		return
-	
-	var save_data = json.data
-	if not save_data:
-		return
-	
+func graph_from_save_data(save_data: Dictionary) -> void:
 	# Clear existing graph
 	new_graph()
 	
@@ -230,6 +206,38 @@ func load_graph(load_file_path: String = DEFAULT_SAVE_PATH) -> void:
 			graph_edit.zoom = save_data["view"]["zoom"]
 	
 	pause_simulation()
+
+func save_graph(save_path: String = DEFAULT_SAVE_PATH) -> void:
+	var file = FileAccess.open(save_path, FileAccess.WRITE)
+	if not file:
+		show_message("Error: Could not save file")
+		return
+	
+	var save_data = graph_to_save_data()
+
+	file.store_string(JSON.stringify(save_data))
+	print("Graph saved successfully")
+
+func load_graph(load_file_path: String = DEFAULT_SAVE_PATH) -> void:
+	if not FileAccess.file_exists(load_file_path):
+		print("No save file exists")
+		return
+	
+	var file = FileAccess.open(load_file_path, FileAccess.READ)
+	if not file:
+		show_message("Error: Could not open file")
+		return
+	
+	var json = JSON.new()
+	if json.parse(file.get_as_text()) != OK:    
+		show_message("Error: Could not parse file")
+		return
+	
+	var save_data = json.data
+	if not save_data:
+		return
+	
+	graph_from_save_data(save_data)
 	print("Load complete")
 
 # === NFT Operations ===
