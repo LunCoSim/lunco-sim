@@ -6,11 +6,21 @@
     "configurations": [
         
         {
-            "name": "GDScript Godot",
+            "name": "LunCo Main",
             "type": "godot",
             "request": "launch",
             "project": "${workspaceFolder}",
             "port": 6005,
+            "address": "127.0.0.1",
+            "launch_game_instance": true,
+            "launch_scene": false
+        },
+        {
+            "name": "GWFlow",
+            "type": "godot",
+            "request": "launch",
+            "project": "${workspaceFolder}/modules/supply_chain_modeling",
+            "port": 6006,
             "address": "127.0.0.1",
             "launch_game_instance": true,
             "launch_scene": false
