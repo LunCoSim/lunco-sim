@@ -77,13 +77,18 @@ func set_simulation_status(_paused: bool):
 
 # === Graph Management ===
 func new_graph() -> void:
+	# Step 1: Clear simulation first
+	simulation.clear_simulation()
+	
+	# Step 2: Clear UI nodes
 	for node in graph_edit.get_children():
 		if node is GraphNode:
 			node.free()
 	
+	# Step 3: Reset simulation state and view
 	pause_simulation()
-	
 	graph_edit.scroll_offset = Vector2.ZERO
+	graph_edit.zoom = 1.0
 	save_graph()
 
 # === Node Management ===

@@ -136,3 +136,11 @@ func get_simulation_time() -> float:
 
 func get_simulation_time_scaled() -> float	:
 	return simulation_time * time_unit
+
+func clear_simulation() -> void:
+	# Step 1: Clear all simulation nodes
+	for node in get_children():
+		node.queue_free()
+	
+	# Step 2: Clear stored connections
+	connections.clear()
