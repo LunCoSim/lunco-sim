@@ -43,7 +43,7 @@ func save_state() -> Dictionary:
 	for node in get_children():
 		if node is SimulationNode:
 			save_data["nodes"][node.name] = {
-				"type": node.scene_file_path,
+				"type": node.script.resource_path,
 				# Add any other node-specific data needed
 				"properties": node.get_save_properties() if node.has_method("get_save_properties") else {}
 			}
@@ -76,7 +76,9 @@ func load_state(state: Dictionary) -> void:
 		var node_data = state["nodes"][node_name]
 		var node_scene = load(node_data["type"])
 		if node_scene:
-			var node = node_scene.instantiate()
+			var node = Node.new()
+			node.script = node_scene
+
 			node.name = node_name
 			add_child(node)
 			# Restore node properties if available

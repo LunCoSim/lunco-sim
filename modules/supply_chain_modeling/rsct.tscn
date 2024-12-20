@@ -172,4 +172,4 @@ filters = PackedStringArray("*.json ; JSON Files")
 [connection signal="id_pressed" from="UI/MenuContainer/MenuBar/NFTMenu" to="UI/MenuContainer/MenuBar" method="_on_nft_menu_pressed"]
 [connection signal="pressed" from="UI/MenuContainer/Button6" to="." method="toggle_simulation"]
 [connection signal="file_selected" from="UI/SaveDialog" to="." method="_on_save_dialog_file_selected"]
-[connection signal="file_selected" from="UI/LoadDialog" to="." method="_on_load_file_selected"]
+[connection signal="file_selected" from="UI/LoadDialog" to="." method="_on_load_dialog_file_selected"]

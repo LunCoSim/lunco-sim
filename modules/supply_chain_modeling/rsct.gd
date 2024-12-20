@@ -178,7 +178,7 @@ func save_graph(save_path: String = DEFAULT_SAVE_PATH) -> void:
 	var save_data := {
 		"simulation": simulation.save_state(),
 		"view": {
-			"scroll_offset": graph_edit.scroll_offset,
+			"scroll_offset": [graph_edit.scroll_offset.x, graph_edit.scroll_offset.y],
 			"zoom": graph_edit.zoom
 		}
 	}
@@ -188,11 +188,12 @@ func save_graph(save_path: String = DEFAULT_SAVE_PATH) -> void:
 		if node is GraphNode:
 			if node.name in save_data["simulation"]["nodes"]:
 				save_data["simulation"]["nodes"][node.name]["ui"] = {
-					"position": node.position_offset,
-					"size": node.size
+					"position": [node.position_offset.x, node.position_offset.y],
+					"size": [node.size.x, node.size.y]
 				}
 	
-	file.store_var(save_data)
+
+	file.store_string(JSON.stringify(save_data))
 	print("Graph saved successfully")
 
 func load_graph(load_file_path: String = DEFAULT_SAVE_PATH) -> void:
@@ -205,7 +206,14 @@ func load_graph(load_file_path: String = DEFAULT_SAVE_PATH) -> void:
 		show_message("Error: Could not open file")
 		return
 	
-	var save_data = file.get_var()
+	var json = JSON.new()
+
+	if json.parse(file.get_as_text()) != OK:	
+		show_message("Error: Could not parse file")
+		return
+	
+	var save_data = json.data
+
 	if not save_data:
 		return
 	
@@ -223,14 +231,14 @@ func load_graph(load_file_path: String = DEFAULT_SAVE_PATH) -> void:
 		
 		# Set UI properties if available
 		if "ui" in node_data:
-			ui_node.position_offset = node_data["ui"]["position"]
-			ui_node.size = node_data["ui"]["size"]
+			ui_node.position_offset = Vector2(node_data["ui"]["position"][0], node_data["ui"]["position"][1])	
+			ui_node.size = Vector2(node_data["ui"]["size"][0], node_data["ui"]["size"][1])
 		
 		graph_edit.add_child(ui_node)
 	
 	# Restore view state
 	if "view" in save_data:
-		graph_edit.call_deferred("set_scroll_offset", save_data["view"]["scroll_offset"])
+		graph_edit.call_deferred("set_scroll_offset", Vector2(save_data["view"]["scroll_offset"][0], save_data["view"]["scroll_offset"][1]))
 		if "zoom" in save_data["view"]:
 			graph_edit.zoom = save_data["view"]["zoom"]
 	
