@@ -1,4 +1,4 @@
-extends GraphNode
+extends UIBaseFacility
 
 func _ready():
 	# Set up input and output ports
