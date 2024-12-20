@@ -7,7 +7,7 @@ signal node_removed(node_id: String)
 signal connection_added(from_id, from_port, to_id, port)
 signal connection_removed(from_id, from_port, to_id, port)
 
-var connections: Dictionary = {} # Dictionary of connections [from_id, from_port, to_id, port]
+var connections: Array[Dictionary] = []  # Dictionary of connections [from_id, from_port, to_id, port]
 
 var paused: bool = true
 var simulation_time: float = 0.0
@@ -32,32 +32,22 @@ func _physics_process(delta: float) -> void:
 
 
 func save_state() -> Dictionary:
-	var save_data := {
+	var state = {
 		"simulation_time": simulation_time,
+		"time_scale": time_scale,
 		"nodes": {},
-		"connections": [],
-		"time_scale": time_scale
+		"connections": connections
 	}
 	
 	# Save nodes
-	for node in get_children():
-		if node is SimulationNode:
-			save_data["nodes"][node.name] = {
-				"type": node.script.resource_path,
-				# Add any other node-specific data needed
-				"properties": node.get_save_properties() if node.has_method("get_save_properties") else {}
+	for child in get_children():
+		if child is SimulationNode:
+			state["nodes"][child.name] = {
+				"type": child.get_script().resource_path,
+				"properties": child.properties
 			}
 	
-	# Save connections
-	for connection in connections.values():
-		save_data["connections"].append({
-			"from_node": connection["from"],
-			"from_port": connection["from_port"],
-			"to_node": connection["to"],
-			"to_port": connection["port"]
-		})
-	
-	return save_data
+	return state
 
 func load_state(state: Dictionary) -> void:
 	# Clear existing state
@@ -94,46 +84,30 @@ func load_state(state: Dictionary) -> void:
 			connection["to_port"]
 		)
 
-func connect_nodes(from_id: String, from_port: int, to_id: String, port: int) -> bool:
-	if not (get_node(from_id) and get_node(to_id)):
-		return false
-		
-	var connection = {
-		"from": from_id,
-		"from_port": from_port, 
-		"to": to_id,
-		"port": port
-	}
+func connect_nodes(from_node: StringName, from_port: int, to_node: StringName, to_port: int) -> bool:
+	var source = get_node_or_null(NodePath(from_node))
+	var target = get_node_or_null(NodePath(to_node))
 	
-	connections[connection.hash()] = connection	
-	
-	emit_signal("connection_added", from_id, from_port, to_id, port)
-	return true
+	if source and target:
+		var connection = {
+			"from_node": from_node,
+			"from_port": from_port,
+			"to_node": to_node,
+			"to_port": to_port
+		}
+		connections.append(connection)
+		return true
+	return false
 
-func disconnect_nodes(from_id: String, from_port: int, to_id: String, port: int) -> bool:
-	# Step 1: Check if both nodes exist
-	if not (get_node(from_id) and get_node(to_id)):
-		return false
-	
-	# Step 2: Create the connection dictionary to match
-	var connection_to_remove = {
-		"from": from_id,
-		"from_port": from_port,
-		"to": to_id,
-		"port": port
-	}
-	
-	# Step 3: Find and remove the connection
-	var source_node = get_node(from_id)
-	for connection in source_node.connections:
-		if connection.hash() == connection_to_remove.hash():
-			# Step 4: Remove the connection
-			source_node.connections.erase(connection)
-			# Step 5: Emit the signal
-			emit_signal("connection_removed", from_id, from_port, to_id, port)
+func disconnect_nodes(from_node: StringName, from_port: int, to_node: StringName, to_port: int) -> bool:
+	for i in range(connections.size() - 1, -1, -1):
+		var connection = connections[i]
+		if connection["from_node"] == from_node and \
+		   connection["from_port"] == from_port and \
+		   connection["to_node"] == to_node and \
+		   connection["to_port"] == to_port:
+			connections.remove_at(i)
 			return true
-	
-	# Step 6: Return false if connection wasn't found
 	return false
 
 # === Simulation Control ===

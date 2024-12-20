@@ -17,31 +17,30 @@ func _init():
 	pass
 
 func _physics_process(delta: float) -> void:
-	# Get parent GraphEdit
-	var graph_edit = get_parent()
-	if not graph_edit:
-		status = ("No Graph")
+	if not is_physics_processing():
 		return
 		
-	# Get connections from GraphEdit
-	# var connections = graph_edit.get_connection_list()
+	# Get connected nodes through the simulation manager
+	var simulation = get_parent()
+	if not simulation:
+		status = "No Simulation"
+		return
+		
 	var o2_source = null
 	var h2_source = null
 	var power_source = null
 	var h2o_storage = null
 	
-	# Find our connections
-	for connection in connections:
+	# Find our connections from the simulation's connections array
+	for connection in simulation.connections:
 		if connection["to_node"] == name:
-			var source_node = graph_edit.get_node(NodePath(connection["from_node"]))
+			var source_node = simulation.get_node(NodePath(connection["from_node"]))
 			match connection["to_port"]:
 				0: o2_source = source_node
 				1: h2_source = source_node
-				2: power_source = source_node.solar_power_plant
+				2: power_source = source_node
 		elif connection["from_node"] == name and connection["from_port"] == 0:
-			var target_node = graph_edit.get_node(NodePath(connection["to_node"]))
-			if target_node.has_method("add_resource"):
-				h2o_storage = target_node
+			h2o_storage = simulation.get_node(NodePath(connection["to_node"]))
 	
 	# Check connections and update status
 	if not o2_source:

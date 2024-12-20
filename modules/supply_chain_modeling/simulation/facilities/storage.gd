@@ -23,3 +23,14 @@ func remove_resource(amount: float) -> float:
 	var amount_to_remove = min(amount, current_amount)
 	current_amount -= amount_to_remove
 	return amount_to_remove 
+
+func get_connected_outputs() -> Array:
+	var outputs = []
+	var simulation = get_parent()
+	if simulation:
+		for connection in simulation.connections:
+			if connection["from_node"] == name:
+				var target = simulation.get_node(connection["to_node"])
+				if target:
+					outputs.append(target)
+	return outputs
