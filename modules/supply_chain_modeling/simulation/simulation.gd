@@ -96,6 +96,8 @@ func connect_nodes(from_node: StringName, from_port: int, to_node: StringName, t
 			"to_port": to_port
 		}
 		connections.append(connection)
+
+		emit_signal("connection_added", from_node, from_port, to_node, to_port)
 		return true
 	return false
 
@@ -107,6 +109,7 @@ func disconnect_nodes(from_node: StringName, from_port: int, to_node: StringName
 		   connection["to_node"] == to_node and \
 		   connection["to_port"] == to_port:
 			connections.remove_at(i)
+			emit_signal("connection_removed", from_node, from_port, to_node, to_port)
 			return true
 	return false
 
@@ -134,7 +137,7 @@ func set_simulation_status(_paused: bool):
 func get_simulation_time() -> float:
 	return simulation_time
 
-func get_simulation_time_scaled() -> float	:
+func get_simulation_time_scaled() -> float:
 	return simulation_time * time_unit
 
 func clear_simulation() -> void:
