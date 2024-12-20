@@ -148,3 +148,10 @@ func clear_simulation() -> void:
 	
 	# Step 2: Clear stored connections
 	connections.clear()
+
+func reset_simulation() -> void:
+	simulation_time = 0.0
+
+func new_simulation():
+	clear_simulation()
+	reset_simulation()
