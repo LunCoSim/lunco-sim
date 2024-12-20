@@ -1,4 +1,4 @@
-[gd_scene load_steps=9 format=3 uid="uid://3lmlrsbbacm"]
+[gd_scene load_steps=10 format=3 uid="uid://3lmlrsbbacm"]
 
 [ext_resource type="Script" uid="uid://dln1wsyjwuqj7" path="res://rsct.gd" id="1_xuhcs"]
 [ext_resource type="Script" uid="uid://b6qabjmm3e73a" path="res://ui/widgets/menu_bar.gd" id="2_74p8c"]
@@ -7,6 +7,7 @@
 [ext_resource type="PackedScene" uid="uid://baib0y8cocg71" path="res://ui/widgets/wallet_connect_button.tscn" id="2_y60tv"]
 [ext_resource type="Script" uid="uid://2iqtet5emwql" path="res://ui/widgets/property_editor.gd" id="3_6bj1w"]
 [ext_resource type="Script" uid="uid://cijykw5hf0uxe" path="res://ui/widgets/sim_time_label.gd" id="4_jmsaq"]
+[ext_resource type="Script" uid="uid://bvu1h6it8sasj" path="res://ui/widgets/new_nodes_menu.gd" id="7_jmsaq"]
 
 [sub_resource type="SystemFont" id="SystemFont_6bj1w"]
 hinting = 2
@@ -125,7 +126,7 @@ right_disconnects = true
 connection_lines_thickness = 2.0
 zoom = 2.0736
 
-[node name="ButtonContainer" type="VBoxContainer" parent="UI/WorkingArea/Workbench"]
+[node name="NewNodesMenu" type="VBoxContainer" parent="UI/WorkingArea/Workbench"]
 unique_name_in_owner = true
 layout_mode = 2
 anchor_top = 0.5
@@ -136,6 +137,7 @@ offset_bottom = 127.5
 grow_vertical = 2
 size_flags_horizontal = 0
 theme = ExtResource("2_xuhcs")
+script = ExtResource("7_jmsaq")
 
 [node name="Inspector" type="VBoxContainer" parent="UI/WorkingArea"]
 unique_name_in_owner = true
@@ -177,6 +179,8 @@ autostart = true
 [connection signal="id_pressed" from="UI/MenuContainer/MenuBar/FileMenu" to="UI/MenuContainer/MenuBar" method="_on_file_menu_pressed"]
 [connection signal="id_pressed" from="UI/MenuContainer/MenuBar/NFTMenu" to="UI/MenuContainer/MenuBar" method="_on_nft_menu_pressed"]
 [connection signal="pressed" from="UI/MenuContainer/Button6" to="." method="toggle_simulation"]
+[connection signal="button_down" from="UI/WorkingArea/Workbench/NewNodesMenu" to="." method="_on_button_down"]
+[connection signal="button_up" from="UI/WorkingArea/Workbench/NewNodesMenu" to="." method="_on_button_up"]
 [connection signal="file_selected" from="UI/SaveDialog" to="." method="_on_save_dialog_file_selected"]
 [connection signal="file_selected" from="UI/LoadDialog" to="." method="_on_load_dialog_file_selected"]
 [connection signal="timeout" from="AutoSaveTimer" to="." method="_handle_autosave"]

@@ -3,7 +3,7 @@ extends Control
 # Node references
 @onready var graph_edit: GraphEdit = %GraphEdit
 
-@onready var button_container: VBoxContainer = %ButtonContainer
+@onready var button_container: VBoxContainer = %NewNodesMenu
 @onready var properties: PropertiesEditor = %Properties
 
 @onready var save_dialog: FileDialog = %SaveDialog
@@ -22,7 +22,6 @@ var dragging_node_path: String = ""
 func _ready():
 	pause_simulation()
 	_connect_signals()
-	create_buttons()
 	
 	load_graph()
 	save_graph() # Hack to fix the bug that after loading form file info is deleted
@@ -148,17 +147,6 @@ func create_ui_node(simulation_node: SimulationNode, _position: Vector2 = Vector
 	return ui_node
 
 # === UI Management ===
-func create_buttons() -> void:
-	var resource_paths = Utils.get_paths("res://simulation/resources/")
-	var facility_paths = Utils.get_paths("res://simulation/facilities/")
-	
-	for path in resource_paths + facility_paths:
-		var button = Button.new()
-		button.text = path.get_file().get_basename()
-		button.connect("button_down", func(): _on_button_down(path))
-		button.connect("button_up", _on_button_up)
-		button_container.add_child(button)
-
 
 func show_message(text: String) -> void:
 	var dialog = AcceptDialog.new()
@@ -368,6 +356,4 @@ func _on_save_to_file_requested() -> void:
 
 func _on_load_from_file_requested() -> void:
 	load_dialog.popup_centered(Vector2(800, 600))
-	
-
 	
