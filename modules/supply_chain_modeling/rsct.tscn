@@ -1,4 +1,4 @@
-[gd_scene load_steps=8 format=3 uid="uid://3lmlrsbbacm"]
+[gd_scene load_steps=9 format=3 uid="uid://3lmlrsbbacm"]
 
 [ext_resource type="Script" uid="uid://dln1wsyjwuqj7" path="res://rsct.gd" id="1_xuhcs"]
 [ext_resource type="Script" uid="uid://b6qabjmm3e73a" path="res://ui/widgets/menu_bar.gd" id="2_74p8c"]
@@ -6,6 +6,7 @@
 [ext_resource type="Theme" uid="uid://dv00ngpal62cd" path="res://rsct.tres" id="2_xuhcs"]
 [ext_resource type="PackedScene" uid="uid://baib0y8cocg71" path="res://ui/widgets/wallet_connect_button.tscn" id="2_y60tv"]
 [ext_resource type="Script" uid="uid://2iqtet5emwql" path="res://ui/widgets/property_editor.gd" id="3_6bj1w"]
+[ext_resource type="Script" uid="uid://cijykw5hf0uxe" path="res://ui/widgets/sim_time_label.gd" id="4_jmsaq"]
 
 [sub_resource type="SystemFont" id="SystemFont_6bj1w"]
 hinting = 2
@@ -95,6 +96,7 @@ text = "Faster"
 unique_name_in_owner = true
 layout_mode = 2
 text = "Sim Time: 0.0 minutes"
+script = ExtResource("4_jmsaq")
 
 [node name="WalletConnectButton" parent="UI/MenuContainer" instance=ExtResource("2_y60tv")]
 layout_mode = 2

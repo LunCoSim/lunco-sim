@@ -3,7 +3,6 @@ extends Control
 # Node references
 @onready var graph_edit: GraphEdit = %GraphEdit
 
-@onready var sim_time_label: Label = %SimTimeLabel
 @onready var button_container: VBoxContainer = %ButtonContainer
 @onready var properties: PropertiesEditor = %Properties
 
@@ -43,9 +42,6 @@ func _connect_signals():
 	
 
 # === Core Processing ===
-func _process(delta: float) -> void:
-	update_sim_time_label()
-
 func _handle_autosave() -> void:
 	save_graph()
 
@@ -163,8 +159,6 @@ func create_buttons() -> void:
 		button.connect("button_up", _on_button_up)
 		button_container.add_child(button)
 
-func update_sim_time_label() -> void:
-	sim_time_label.text = "Sim Time: " + str(round(simulation.get_simulation_time_scaled())) + " minutes"
 
 func show_message(text: String) -> void:
 	var dialog = AcceptDialog.new()
