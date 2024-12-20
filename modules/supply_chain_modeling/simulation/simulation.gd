@@ -1,7 +1,6 @@
 class_name SimulationManager
 extends Node
 
-
 signal node_added(node: SimulationNode)
 signal node_removed(node_id: String)
 signal connection_added(from_id, from_port, to_id, port)
