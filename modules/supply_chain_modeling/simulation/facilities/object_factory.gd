@@ -45,66 +45,65 @@ func _physics_process(delta: float) -> void:
 	# Check connections and update status
 	if not o2_source:
 		status = "O2 Not Connected"
+		return
 	elif not h2_source:
 		status = "H2 Not Connected"
+		return
 	elif not power_source:
 		status = "Power Not Connected"
+		return
 	elif not h2o_storage:
 		status = "H2O Not Connected"
-	else:
-		status = "Running"
-	
-	# Only process if status is Running
-	if status != "Running":
 		return
-		
-	# Calculate how much we can produce based on inputs
+	
+	# Calculate time step
 	var minutes = delta * 60  # Convert seconds to minutes
 	
-	# Get resources from inputs
-	var got_o2 = false
-	var got_h2 = false
-	var got_power = false
-	
-	if o2_source and "remove_resource" in o2_source:
-		var o2_received = o2_source.remove_resource(o2_input_rate * minutes)
-		if o2_received > 0:
-			o2_stored += o2_received
-			got_o2 = true
-	
-	if h2_source and "remove_resource" in h2_source:
-		var h2_received = h2_source.remove_resource(h2_input_rate * minutes)
-		if h2_received > 0:
-			h2_stored += h2_received
-			got_h2 = true
-	
-	if power_source and "power_output" in power_source:
-		power_available = power_source.power_output * power_source.efficiency
-		got_power = power_available >= power_input_rate
-	
-	# Update status based on resource availability
-	if not got_o2:
-		status = "No O2 Input"
-	elif not got_h2:
-		status = "No H2 Input"
-	elif not got_power:
+	# Check power availability
+	power_available = power_source.power_output * power_source.efficiency if "power_output" in power_source else 0.0
+	if power_available < power_input_rate:
 		status = "Insufficient Power"
-	else:
-		status = "Running"
+		return
+		
+	# Calculate maximum possible production based on available output space
+	var max_h2o_production = h2o_output_rate * efficiency * minutes
+	var available_output_space = h2o_storage.available_space() if "available_space" in h2o_storage else 0.0
+	max_h2o_production = min(max_h2o_production, available_output_space)
 	
-	# Only produce if we have enough resources
-	if status == "Running" and \
-	   o2_stored >= o2_input_rate * minutes and \
-	   h2_stored >= h2_input_rate * minutes and \
-	   power_available >= power_input_rate:
+	if max_h2o_production <= 0:
+		status = "Output Storage Full"
+		return
 		
-		# Calculate production
-		var h2o_produced = h2o_output_rate * efficiency * minutes
+	# Calculate required inputs for the possible production
+	var o2_required = (o2_input_rate * minutes) * (max_h2o_production / (h2o_output_rate * efficiency * minutes))
+	var h2_required = (h2_input_rate * minutes) * (max_h2o_production / (h2o_output_rate * efficiency * minutes))
+	
+	# Check resource availability without consuming
+	if not "remove_resource" in o2_source or not "remove_resource" in h2_source:
+		status = "Invalid Input Connections"
+		return
 		
-		# Consume resources
-		o2_stored -= o2_input_rate * minutes
-		h2_stored -= h2_input_rate * minutes
+	# Try to get resources atomically
+	var o2_available = o2_source.remove_resource(o2_required)
+	var h2_available = h2_source.remove_resource(h2_required)
+	
+	# If we can't get all resources, return what we took
+	if o2_available < o2_required or h2_available < h2_required:
+		if o2_available > 0:
+			o2_source.add_resource(o2_available)
+		if h2_available > 0:
+			h2_source.add_resource(h2_available)
+		status = "Insufficient Resources"
+		return
 		
-		# Output H2O
-		if h2o_storage and "add_resource" in h2o_storage:
-			h2o_storage.add_resource(h2o_produced)
+	# At this point we have all resources, produce output
+	var h2o_produced = max_h2o_production
+	var added = h2o_storage.add_resource(h2o_produced)
+	
+	# If we couldn't add all output (shouldn't happen due to earlier check), return inputs
+	if added < h2o_produced:
+		var return_ratio = (h2o_produced - added) / h2o_produced
+		o2_source.add_resource(o2_available * return_ratio)
+		h2_source.add_resource(h2_available * return_ratio)
+	
+	status = "Running"
