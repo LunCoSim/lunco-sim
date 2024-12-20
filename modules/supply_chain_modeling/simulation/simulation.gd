@@ -17,6 +17,7 @@ var resource_manager: ResourceManager = ResourceManager.get_instance()
 
 func add_node(node: SimulationNode) -> void:
 	add_child(node)
+	node.name = node.name.validate_node_name()
 	emit_signal("node_added", node)
 
 func remove_node(node_id: NodePath) -> void:
@@ -161,8 +162,6 @@ func add_node_from_path(path: String) -> SimulationNode:
 	var node_script = load(path)
 	if node_script:
 		var sim_node = node_script.new()
-		add_child(sim_node)
-		sim_node.name = sim_node.name.validate_node_name()
-		emit_signal("node_added", sim_node)
+		add_node(sim_node)
 		return sim_node
 	return null
