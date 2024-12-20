@@ -1,0 +1,37 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://ui/facilities/ui_pump.gd" id="1_pump"]
+
+[node name="Pump" type="GraphNode"]
+offset_right = 152.0
+offset_bottom = 109.0
+title = "Pump"
+show_close = true
+resizable = true
+slot/0/left_enabled = true
+slot/0/left_type = 0
+slot/0/left_color = Color(0, 0, 1, 1)
+slot/0/left_icon = null
+slot/0/right_enabled = true
+slot/0/right_type = 0
+slot/0/right_color = Color(0, 0, 1, 1)
+slot/0/right_icon = null
+slot/0/draw_stylebox = true
+slot/1/left_enabled = true
+slot/1/left_type = 0
+slot/1/left_color = Color(1, 1, 0, 1)
+slot/1/left_icon = null
+slot/1/right_enabled = false
+slot/1/right_type = 0
+slot/1/right_color = Color(1, 1, 0, 1)
+slot/1/right_icon = null
+slot/1/draw_stylebox = true
+script = ExtResource("1_pump")
+
+[node name="ResourceFlow" type="Label" parent="."]
+layout_mode = 2
+text = "Resource Flow"
+
+[node name="PowerInput" type="Label" parent="."]
+layout_mode = 2
+text = "Power Input" 
