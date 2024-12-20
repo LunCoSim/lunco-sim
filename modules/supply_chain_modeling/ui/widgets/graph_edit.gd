@@ -52,6 +52,7 @@ func create_ui_node(simulation_node: SimulationNode, _position: Vector2 = Vector
 		else:
 			ui_node.position_offset = _position - ui_node.size / 2
 	
+	add_child(ui_node)
 	return ui_node
 
 func get_view_state() -> Dictionary:

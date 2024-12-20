@@ -90,20 +90,9 @@ func show_message(text: String) -> void:
 func graph_to_save_data() -> Dictionary:
 	var save_data := {
 		"simulation": simulation.save_state(),
-		"view": {
-			"scroll_offset": [graph_edit.scroll_offset.x, graph_edit.scroll_offset.y],
-			"zoom": graph_edit.zoom
-		}
+		"ui": graph_edit.get_ui_state(),
+		"view": graph_edit.get_view_state()
 	}
-	
-	# Save UI node positions
-	for node in graph_edit.get_children():
-		if node is GraphNode:
-			if node.name in save_data["simulation"]["nodes"]:
-				save_data["simulation"]["nodes"][node.name]["ui"] = {
-					"position": [node.position_offset.x, node.position_offset.y],
-					"size": [node.size.x, node.size.y]
-				}
 	
 	return save_data
 
@@ -116,22 +105,22 @@ func graph_from_save_data(save_data: Dictionary) -> void:
 	
 	# Create UI nodes for each simulation node
 	for node_name in save_data["simulation"]["nodes"]:
-		var node_data = save_data["simulation"]["nodes"][node_name]
-		var sim_node = simulation.get_node(NodePath(node_name))
+		var sim_node = simulation.get_node_or_null(NodePath(node_name))
 		
 		if sim_node:
-			var ui_node = create_ui_node(sim_node, Vector2.ZERO)
+			graph_edit.create_ui_node(sim_node)
+			
+	if "ui" in save_data:
+		for node_name in save_data["ui"]:
+			var ui_node = graph_edit.get_node_or_null(NodePath(node_name))
 			if ui_node:
-				ui_node.name = node_name
-				graph_edit.add_child(ui_node)
-				
 				# Set UI properties
-				if "ui" in node_data:
-					ui_node.position_offset = Vector2(node_data["ui"]["position"][0], 
-												   node_data["ui"]["position"][1])
-					if "size" in node_data["ui"]:
-						ui_node.size = Vector2(node_data["ui"]["size"][0], 
-											 node_data["ui"]["size"][1])
+				ui_node.position_offset = Vector2(save_data["ui"][node_name]["position"][0], 
+												save_data["ui"][node_name]["position"][1])
+				
+				if "size" in save_data["ui"][node_name]:
+					ui_node.size = Vector2(save_data["ui"][node_name]["size"][0], 
+										save_data["ui"][node_name]["size"][1])
 	
 	# Recreate connections
 	if "connections" in save_data["simulation"]:
@@ -143,13 +132,13 @@ func graph_from_save_data(save_data: Dictionary) -> void:
 				connection["to_port"]
 			)
 	
-	# Restore view state
-	if "view" in save_data:
-		graph_edit.call_deferred("set_scroll_offset", 
-			Vector2(save_data["view"]["scroll_offset"][0], 
-				   save_data["view"]["scroll_offset"][1]))
-		if "zoom" in save_data["view"]:
-			graph_edit.zoom = save_data["view"]["zoom"]
+	## Restore view state
+	#if "view" in save_data:
+		#graph_edit.call_deferred("set_scroll_offset", 
+			#Vector2(save_data["view"]["scroll_offset"][0], 
+				   #save_data["view"]["scroll_offset"][1]))
+		#if "zoom" in save_data["view"]:
+			#graph_edit.zoom = save_data["view"]["zoom"]
 	
 	pause_simulation()
 
