@@ -1,7 +1,7 @@
 extends Control
 
 # Node references
-@onready var graph_edit: GraphEdit = %GraphEdit
+@onready var graph_edit: GraphView = %GraphEdit
 
 @onready var button_container: VBoxContainer = %NewNodesMenu
 @onready var properties: PropertiesEditor = %Properties
@@ -132,13 +132,13 @@ func graph_from_save_data(save_data: Dictionary) -> void:
 				connection["to_port"]
 			)
 	
-	## Restore view state
-	#if "view" in save_data:
-		#graph_edit.call_deferred("set_scroll_offset", 
-			#Vector2(save_data["view"]["scroll_offset"][0], 
-				   #save_data["view"]["scroll_offset"][1]))
-		#if "zoom" in save_data["view"]:
-			#graph_edit.zoom = save_data["view"]["zoom"]
+	# Restore view state
+	if "view" in save_data:
+		graph_edit.call_deferred("set_scroll_offset", 
+			Vector2(save_data["view"]["scroll_offset"][0], 
+				   save_data["view"]["scroll_offset"][1]))
+		if "zoom" in save_data["view"]:
+			graph_edit.zoom = save_data["view"]["zoom"]
 	
 	pause_simulation()
 

@@ -1,3 +1,4 @@
+class_name GraphView
 extends GraphEdit
 
 func clear_graph():
@@ -57,7 +58,7 @@ func create_ui_node(simulation_node: SimulationNode, _position: Vector2 = Vector
 
 func get_view_state() -> Dictionary:
 	return {
-		"scroll_offset": scroll_offset,
+		"scroll_offset": [scroll_offset.x, scroll_offset.y],
 		"zoom": zoom
 	}
 
