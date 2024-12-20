@@ -68,7 +68,7 @@ func new_graph() -> void:
 			node.free()
 	
 	# Step 3: Reset simulation state and view
-	pause_simulation()
+	
 	graph_edit.scroll_offset = Vector2.ZERO
 	graph_edit.zoom = 1.0
 	save_graph()

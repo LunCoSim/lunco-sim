@@ -155,3 +155,4 @@ func reset_simulation() -> void:
 func new_simulation():
 	clear_simulation()
 	reset_simulation()
+	pause_simulation()
