@@ -127,12 +127,12 @@ func create_ui_node(simulation_node: SimulationNode, _position: Vector2 = Vector
 		ui_node = load("res://ui/facilities/ui_pump.tscn").instantiate()
 	else:
 		# Default UI node if no specific type matches
-		ui_node = load("res://ui/simulation_node.tscn").instantiate()
+		ui_node = load("res://ui/core/ui_simulation_node.tscn").instantiate()
 	
 	# Set common properties
 	if ui_node:
 		ui_node.name = simulation_node.name
-		ui_node.title = simulation_node.get_class()
+		ui_node.title = simulation_node.get_script().get_path().get_file().get_basename()
 		ui_node.set_physics_process(false)
 		
 		# Position the node at screen center if not specified
