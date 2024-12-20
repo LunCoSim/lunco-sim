@@ -58,10 +58,21 @@ func _physics_process(delta: float) -> void:
 	var minutes = delta * 60  # Convert seconds to minutes
 	var amount_to_pump = pump_rate * efficiency * minutes
 	
-	# Try to remove from source
-	if "remove_resource" in source_storage:
-		var removed = source_storage.remove_resource(amount_to_pump)
-		
-		# Add to target if we got any resources
-		if removed > 0 and "add_resource" in target_storage:
-			target_storage.add_resource(removed) 
+	# First check how much the target can accept
+	if "available_space" in target_storage:
+		var target_space = target_storage.available_space()
+		# Limit pump amount to available space
+		amount_to_pump = min(amount_to_pump, target_space)
+	
+	# Only remove from source if target has space
+	if amount_to_pump > 0:
+		if "remove_resource" in source_storage:
+			var removed = source_storage.remove_resource(amount_to_pump)
+			
+			# Add to target
+			if removed > 0 and "add_resource" in target_storage:
+				var added = target_storage.add_resource(removed)
+				
+				# If target couldn't accept everything, return remainder to source
+				if added < removed:
+					source_storage.add_resource(removed - added)
