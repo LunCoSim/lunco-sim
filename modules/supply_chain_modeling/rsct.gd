@@ -125,6 +125,8 @@ func create_ui_node(simulation_node: SimulationNode, _position: Vector2 = Vector
 		ui_node = load("res://ui/facilities/ui_solar_power_plant.tscn").instantiate()
 	elif simulation_node is Pump:
 		ui_node = load("res://ui/facilities/ui_pump.tscn").instantiate()
+	elif simulation_node is ElectrolyticFactory:
+		ui_node = load("res://ui/facilities/ui_electrolytic_factory.tscn").instantiate()
 	else:
 		# Default UI node if no specific type matches
 		ui_node = load("res://ui/core/ui_simulation_node.tscn").instantiate()
