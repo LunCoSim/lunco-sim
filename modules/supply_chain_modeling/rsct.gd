@@ -207,13 +207,11 @@ func load_graph(load_file_path: String = DEFAULT_SAVE_PATH) -> void:
 		return
 	
 	var json = JSON.new()
-
-	if json.parse(file.get_as_text()) != OK:	
+	if json.parse(file.get_as_text()) != OK:    
 		show_message("Error: Could not parse file")
 		return
 	
 	var save_data = json.data
-
 	if not save_data:
 		return
 	
@@ -226,19 +224,36 @@ func load_graph(load_file_path: String = DEFAULT_SAVE_PATH) -> void:
 	# Create UI nodes for simulation nodes
 	for node_name in save_data["simulation"]["nodes"]:
 		var node_data = save_data["simulation"]["nodes"][node_name]
-		var ui_node = UISimulationNode.new()
-		ui_node.name = node_name
 		
-		# Set UI properties if available
-		if "ui" in node_data:
-			ui_node.position_offset = Vector2(node_data["ui"]["position"][0], node_data["ui"]["position"][1])	
-			ui_node.size = Vector2(node_data["ui"]["size"][0], node_data["ui"]["size"][1])
-		
-		graph_edit.add_child(ui_node)
+		# Create the node from its type path
+		if "type" in node_data:
+			# Create the simulation node first
+			add_node_from_path(node_data["type"])
+			
+			# Get the created UI node and set its properties
+			var ui_node = graph_edit.get_node(NodePath(node_name))
+			if ui_node and "ui" in node_data:
+				ui_node.position_offset = Vector2(node_data["ui"]["position"][0], 
+											   node_data["ui"]["position"][1])
+				if "size" in node_data["ui"]:
+					ui_node.size = Vector2(node_data["ui"]["size"][0], 
+										 node_data["ui"]["size"][1])
+	
+	# Recreate connections
+	if "connections" in save_data["simulation"]:
+		for connection in save_data["simulation"]["connections"]:
+			graph_edit.connect_node(
+				connection["from_node"],
+				connection["from_port"],
+				connection["to_node"],
+				connection["to_port"]
+			)
 	
 	# Restore view state
 	if "view" in save_data:
-		graph_edit.call_deferred("set_scroll_offset", Vector2(save_data["view"]["scroll_offset"][0], save_data["view"]["scroll_offset"][1]))
+		graph_edit.call_deferred("set_scroll_offset", 
+			Vector2(save_data["view"]["scroll_offset"][0], 
+				   save_data["view"]["scroll_offset"][1]))
 		if "zoom" in save_data["view"]:
 			graph_edit.zoom = save_data["view"]["zoom"]
 	
