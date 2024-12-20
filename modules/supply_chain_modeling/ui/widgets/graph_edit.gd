@@ -8,9 +8,7 @@ func clear_graph():
 
 func add_ui_for_node(node: SimulationNode, _position: Vector2 = Vector2.ZERO) -> void:
 	if node:
-		var ui_node = create_ui_node(node, _position)
-		if ui_node:
-			add_child(ui_node)
+		create_ui_node(node, _position)
 
 func create_ui_node(simulation_node: SimulationNode, _position: Vector2 = Vector2.ZERO) -> GraphNode:
 	#return null
