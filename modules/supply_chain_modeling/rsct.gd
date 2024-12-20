@@ -31,14 +31,6 @@ func _connect_signals():
 	Web3Interface.connect("wallet_disconnected", _on_wallet_disconnected)
 	Web3Interface.connect("nft_minted", _on_nft_minted)
 	Web3Interface.connect("nft_load_complete", _on_nft_load_complete)
-	
-	graph_edit.connect("connection_request", _on_connection_request)
-	graph_edit.connect("disconnection_request", _on_disconnection_request)
-	graph_edit.connect("end_node_move", _on_node_moved)
-	graph_edit.connect("delete_nodes_request", _on_delete_nodes_request)
-	graph_edit.connect("node_selected", _on_node_selected)
-	graph_edit.connect("node_deselected", _on_node_deselected)
-	
 
 # === Core Processing ===
 func _handle_autosave() -> void:
