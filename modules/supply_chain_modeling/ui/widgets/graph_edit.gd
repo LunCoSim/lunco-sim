@@ -53,3 +53,22 @@ func create_ui_node(simulation_node: SimulationNode, _position: Vector2 = Vector
 			ui_node.position_offset = _position - ui_node.size / 2
 	
 	return ui_node
+
+func get_view_state() -> Dictionary:
+	return {
+		"scroll_offset": scroll_offset,
+		"zoom": zoom
+	}
+
+func get_ui_state() -> Dictionary:
+	# Save UI node positions
+	var save_data = {}
+
+	for node in get_children():
+		if node is GraphNode:
+			save_data[node.name] = {
+				"position": [node.position_offset.x, node.position_offset.y],
+				"size": [node.size.x, node.size.y]
+			}
+			
+	return save_data
