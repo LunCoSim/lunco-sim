@@ -26,8 +26,8 @@ func _ready():
 	_connect_signals()
 	create_buttons()
 	
-	# load_graph()
-	# save_graph() # Hack to fix the bug that after loading form file info is deleted
+	load_graph()
+	save_graph() # Hack to fix the bug that after loading form file info is deleted
 
 func _connect_signals():
 	Web3Interface.connect("wallet_connected", _on_wallet_connected)
