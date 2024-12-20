@@ -87,18 +87,18 @@ func new_graph() -> void:
 	save_graph()
 
 # === Node Management ===
-func add_node_from_path(path: String, position: Vector2 = Vector2.ZERO):
+func add_node_from_path(path: String, _position: Vector2 = Vector2.ZERO):
 	var node_script = load(path)
 	if node_script:
 
-		var sim_node = Node.new()
+		var sim_node = node_script.new()
 		
-		sim_node.set_script(node_script)
+		# sim_node.set_script(node_script)
 		sim_node.set_owner(null)
 		simulation.add_child(sim_node)
 		sim_node.name = sim_node.name.validate_node_name()
 		
-		var ui_node = create_ui_node(sim_node, position)
+		var ui_node = create_ui_node(sim_node, _position)
 		
 		if ui_node:
 			ui_node.set_owner(null)
@@ -106,7 +106,7 @@ func add_node_from_path(path: String, position: Vector2 = Vector2.ZERO):
 
 		save_graph()
 
-func create_ui_node(simulation_node: SimulationNode, position: Vector2 = Vector2.ZERO) -> GraphNode:
+func create_ui_node(simulation_node: SimulationNode, _position: Vector2 = Vector2.ZERO) -> GraphNode:
 	#return null
 	var ui_node: GraphNode
 	
@@ -129,13 +129,12 @@ func create_ui_node(simulation_node: SimulationNode, position: Vector2 = Vector2
 	
 	# Set common properties
 	if ui_node:
-		print
 		ui_node.name = simulation_node.name
 		ui_node.title = simulation_node.get_class()
 		ui_node.set_physics_process(false)
 		
 		# Position the node at screen center if not specified
-		if position == Vector2.ZERO:
+		if _position == Vector2.ZERO:
 			var viewport_size = graph_edit.size
 			var scroll_offset = graph_edit.scroll_offset
 			var zoom = graph_edit.zoom
@@ -143,7 +142,7 @@ func create_ui_node(simulation_node: SimulationNode, position: Vector2 = Vector2
 			var center_y = (scroll_offset.y + viewport_size.y / 2) / zoom
 			ui_node.position_offset = Vector2(center_x - ui_node.size.x / 2, center_y - ui_node.size.y / 2)
 		else:
-			ui_node.position_offset = position - ui_node.size / 2
+			ui_node.position_offset = _position - ui_node.size / 2
 	
 	return ui_node
 
