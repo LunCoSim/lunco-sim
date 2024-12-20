@@ -2,20 +2,19 @@ extends Control
 
 # Node references
 @onready var graph_edit: GraphEdit = %GraphEdit
+
 @onready var sim_time_label: Label = %SimTimeLabel
 @onready var button_container: VBoxContainer = %ButtonContainer
 @onready var properties: PropertiesEditor = %Properties
+
 @onready var save_dialog: FileDialog = %SaveDialog
 @onready var load_dialog: FileDialog = %LoadDialog
-@onready var simulation: SimulationManager = %Simulation
 
-# Constants
-const AUTOSAVE_INTERVAL: float = 60000.0  # Autosave every 60 seconds
+@onready var simulation: SimulationManager = %Simulation
 
 # State variables
 
 var DEFAULT_SAVE_PATH: String = "user://current_graph.save"
-var autosave_timer: float = 0.0
 
 var dragging_new_node: bool = false
 var dragging_node_path: String = ""
@@ -45,14 +44,10 @@ func _connect_signals():
 
 # === Core Processing ===
 func _process(delta: float) -> void:
-	_handle_autosave(delta)
 	update_sim_time_label()
 
-func _handle_autosave(delta: float) -> void:
-	autosave_timer += delta
-	if autosave_timer >= AUTOSAVE_INTERVAL:
-		autosave_timer = 0.0
-		save_graph()
+func _handle_autosave() -> void:
+	save_graph()
 
 func _input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion and dragging_new_node:

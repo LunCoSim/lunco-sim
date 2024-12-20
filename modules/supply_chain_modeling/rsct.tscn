@@ -163,6 +163,10 @@ file_mode = 0
 access = 2
 filters = PackedStringArray("*.json ; JSON Files")
 
+[node name="AutoSaveTimer" type="Timer" parent="."]
+wait_time = 180.0
+autostart = true
+
 [connection signal="load_from_file_requested" from="UI/MenuContainer/MenuBar" to="." method="_on_load_from_file_requested"]
 [connection signal="load_requested" from="UI/MenuContainer/MenuBar" to="." method="load_graph"]
 [connection signal="new_graph_requested" from="UI/MenuContainer/MenuBar" to="." method="new_graph"]
@@ -173,3 +177,4 @@ filters = PackedStringArray("*.json ; JSON Files")
 [connection signal="pressed" from="UI/MenuContainer/Button6" to="." method="toggle_simulation"]
 [connection signal="file_selected" from="UI/SaveDialog" to="." method="_on_save_dialog_file_selected"]
 [connection signal="file_selected" from="UI/LoadDialog" to="." method="_on_load_dialog_file_selected"]
+[connection signal="timeout" from="AutoSaveTimer" to="." method="_handle_autosave"]
