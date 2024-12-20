@@ -13,6 +13,8 @@ var simulation_time: float = 0.0
 var time_scale: float = 1.0
 var time_unit: float = 60.0
 
+var resource_manager: ResourceManager = ResourceManager.get_instance()
+
 func add_node(node: SimulationNode) -> void:
 	add_child(node)
 	emit_signal("node_added", node)
