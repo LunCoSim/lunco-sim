@@ -1,7 +1,7 @@
 class_name SimulationManager
 extends Node
 
-signal simulation_step_completed
+
 signal node_added(node: SimulationNode)
 signal node_removed(node_id: String)
 signal connection_added(from_id, from_port, to_id, port)
@@ -18,7 +18,7 @@ func add_node(node: SimulationNode) -> void:
 	add_child(node)
 	emit_signal("node_added", node)
 
-func remove_node(node_id: String) -> void:
+func remove_node(node_id: NodePath) -> void:
 	var node = get_node(node_id)	
 	if node:
 		remove_child(node) #remove connections as well
