@@ -23,6 +23,9 @@ func add_node(node: SimulationNode) -> void:
 func remove_node(node_id: NodePath) -> void:
 	var node = get_node(node_id)	
 	if node:
+		for connection in connections:
+			if NodePath(connection["from_node"]) == node_id or NodePath(connection["to_node"]) == node_id:
+				disconnect_nodes(connection["from_node"], connection["from_port"], connection["to_node"], connection["to_port"])
 		remove_child(node) #remove connections as well
 		emit_signal("node_removed", node_id)
 

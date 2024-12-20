@@ -139,7 +139,7 @@ func show_message(text: String) -> void:
 	add_child(dialog)
 	dialog.popup_centered()
 
-# === File Operations ===
+# === Save/Load ===
 
 func graph_to_save_data() -> Dictionary:
 	var save_data := {
@@ -207,6 +207,8 @@ func graph_from_save_data(save_data: Dictionary) -> void:
 	
 	pause_simulation()
 
+# === File Operations ===
+
 func save_graph(save_path: String = DEFAULT_SAVE_PATH) -> void:
 	var file = FileAccess.open(save_path, FileAccess.WRITE)
 	if not file:
@@ -243,29 +245,7 @@ func load_graph(load_file_path: String = DEFAULT_SAVE_PATH) -> void:
 # === NFT Operations ===
 func save_as_nft() -> void:
 	print('save_as_nft')
-	var save_data = {
-		"nodes": {},
-		"connections": [],
-		"view": {
-			"scroll_offset": graph_edit.scroll_offset,
-			"zoom": graph_edit.zoom
-		}
-	}
-	
-	for node in graph_edit.get_children():
-		if node is GraphNode:
-			save_data["nodes"][node.name] = {
-				"pos": [node.position_offset.x, node.position_offset.y],
-				"type": node.scene_file_path.get_file()
-			}
-	
-	for connection in graph_edit.get_connection_list():
-		save_data["connections"].append([
-			connection["from_node"],
-			connection["from_port"],
-			connection["to_node"],
-			connection["to_port"]
-		])
+	var save_data = graph_to_save_data()
 	
 	Web3Interface.mint_design(save_data)
 
@@ -336,6 +316,7 @@ func _on_nft_minted(token_id: int) -> void:
 func _on_nft_load_complete(design_data: Dictionary) -> void:
 	new_graph()
 	# TBD Load from dics
+	graph_from_save_data(design_data)
 
 # -- Dialog Signals --
 func _on_save_dialog_file_selected(path: String) -> void:
