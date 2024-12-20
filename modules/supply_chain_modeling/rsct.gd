@@ -218,26 +218,27 @@ func load_graph(load_file_path: String = DEFAULT_SAVE_PATH) -> void:
 	# Clear existing graph
 	new_graph()
 	
-	# Load simulation state
+	# Load simulation state first (this creates the simulation nodes)
 	simulation.load_state(save_data["simulation"])
 	
-	# Create UI nodes for simulation nodes
+	# Create UI nodes for each simulation node
 	for node_name in save_data["simulation"]["nodes"]:
 		var node_data = save_data["simulation"]["nodes"][node_name]
+		var sim_node = simulation.get_node(NodePath(node_name))
 		
-		# Create the node from its type path
-		if "type" in node_data:
-			# Create the simulation node first
-			add_node_from_path(node_data["type"])
-			
-			# Get the created UI node and set its properties
-			var ui_node = graph_edit.get_node(NodePath(node_name))
-			if ui_node and "ui" in node_data:
-				ui_node.position_offset = Vector2(node_data["ui"]["position"][0], 
-											   node_data["ui"]["position"][1])
-				if "size" in node_data["ui"]:
-					ui_node.size = Vector2(node_data["ui"]["size"][0], 
-										 node_data["ui"]["size"][1])
+		if sim_node:
+			var ui_node = create_ui_node(sim_node, Vector2.ZERO)
+			if ui_node:
+				ui_node.name = node_name
+				graph_edit.add_child(ui_node)
+				
+				# Set UI properties
+				if "ui" in node_data:
+					ui_node.position_offset = Vector2(node_data["ui"]["position"][0], 
+												   node_data["ui"]["position"][1])
+					if "size" in node_data["ui"]:
+						ui_node.size = Vector2(node_data["ui"]["size"][0], 
+											 node_data["ui"]["size"][1])
 	
 	# Recreate connections
 	if "connections" in save_data["simulation"]:
