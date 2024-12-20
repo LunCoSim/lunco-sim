@@ -1,13 +1,17 @@
 class_name UIObjectFactory
 extends UIBaseFacility
 
-var object_factory: ObjectFactory
 
-func _init():
-	# set_facility_properties("Factory", "Water production facility", "producer")
-	object_factory = ObjectFactory.new()
+func _process(delta: float) -> void:
+	update_status_display()
 
 func update_status_display() -> void:
+
+	if not simulation_node is ObjectFactory:
+		return
+
+	var object_factory = simulation_node as ObjectFactory
+
 	# Update display labels
 	var status_label = $Parameters/Status
 	if status_label:

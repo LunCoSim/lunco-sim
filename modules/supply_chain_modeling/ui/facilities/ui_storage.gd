@@ -1,18 +1,16 @@
 class_name UIStorage
 extends UIBaseFacility
 
-var storage: StorageFacility
 
-func _init():
-	super._init()
-	# set_facility_properties("Storage", "Generic storage facility", "storage")
-	storage = StorageFacility.new()
-
-func _ready():
-	super._ready()
+func _process(delta: float) -> void:	
 	update_status_display()
 
 func update_status_display() -> void:
+	if not simulation_node is StorageFacility:
+		return
+
+	var storage = simulation_node as StorageFacility
+
 	var capacity_label = $VBoxContainer/Label
 	if capacity_label:
 		capacity_label.text = "Capacity: " + str(storage.capacity)

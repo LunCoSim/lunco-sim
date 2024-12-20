@@ -1,8 +1,5 @@
 extends UISimulationNode
-
 class_name UIBaseResource
-
-var resource: BaseResource
 
 func _init():
 	# Set up basic GraphNode properties
@@ -20,12 +17,18 @@ func _ready():
 	
 	# Set up basic appearance
 	size = Vector2(150, 80)  # Default size
+
+func _process(delta: float) -> void:
 	update_display()
 
 func update_display() -> void:
-	if not resource:
+	if not simulation_node:
 		return
-		
+
+	if not simulation_node is BaseResource:
+		return
+
+	var resource = simulation_node as BaseResource
 	# Update the progress bar
 	var progress = $Properties/ProgressBar
 	if progress:

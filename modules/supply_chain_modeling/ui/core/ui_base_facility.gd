@@ -1,19 +1,12 @@
+class_name UIBaseFacility
 extends UISimulationNode
 
-class_name UIBaseFacility
-
-var facility: BaseFacility
 
 func _init():
 	# Set up basic GraphNode properties
 	mouse_filter = MOUSE_FILTER_PASS
 	resizable = true
 
-	facility = BaseFacility.new("", "facility")
-
-func _ready():
-	super._ready()
-	update_status_display()
 
 func update_from_simulation() -> void:
 	super.update_from_simulation()
@@ -21,12 +14,9 @@ func update_from_simulation() -> void:
 		$Parameters/Status.text = simulation_node.properties.status
 		$Parameters/Efficiency.text = "Efficiency: " + str(simulation_node.properties.efficiency)
 
+func _process(delta: float) -> void:
+	update_status_display()
 
 func update_status_display() -> void:
 	# Virtual method to be implemented by child classes
 	pass
-
-func set_status(new_status: String) -> void:
-	facility.status = new_status
-	update_status_display()
-

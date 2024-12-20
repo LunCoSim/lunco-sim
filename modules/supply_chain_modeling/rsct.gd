@@ -131,6 +131,7 @@ func create_ui_node(simulation_node: SimulationNode, _position: Vector2 = Vector
 	
 	# Set common properties
 	if ui_node:
+		ui_node.simulation_node = simulation_node
 		ui_node.name = simulation_node.name
 		ui_node.title = simulation_node.get_script().get_path().get_file().get_basename()
 		ui_node.set_physics_process(false)

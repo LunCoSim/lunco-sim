@@ -1,10 +1,7 @@
 class_name UISimulationNode
 extends GraphNode
 
-var simulation_node: SimulationNode
-
-func _init():
-	pass
+@export var simulation_node: SimulationNode
 
 func _ready() -> void:
 	set_physics_process(false) # UI doesn't need physics processing
