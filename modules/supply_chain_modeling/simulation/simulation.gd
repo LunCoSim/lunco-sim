@@ -48,8 +48,7 @@ func save_state() -> Dictionary:
 	for child in get_children():
 		if child is SimulationNode:
 			state["nodes"][child.name] = {
-				"type": child.get_script().resource_path,
-				"properties": child.properties
+				"type": child.get_script().resource_path
 			}
 	
 	return state
