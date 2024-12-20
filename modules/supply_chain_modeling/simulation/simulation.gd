@@ -130,7 +130,7 @@ func resume_simulation() -> void:
 	paused = false
 	set_simulation_status(paused)
 	
-func set_simulation_status(_paused: bool):
+func set_simulation_status(_paused: bool) -> void:
 	for node in get_children():
 		if node is Node:
 			node.set_physics_process(not _paused)
@@ -152,7 +152,17 @@ func clear_simulation() -> void:
 func reset_simulation() -> void:
 	simulation_time = 0.0
 
-func new_simulation():
+func new_simulation() -> void:
 	clear_simulation()
 	reset_simulation()
 	pause_simulation()
+
+func add_node_from_path(path: String) -> SimulationNode:
+	var node_script = load(path)
+	if node_script:
+		var sim_node = node_script.new()
+		add_child(sim_node)
+		sim_node.name = sim_node.name.validate_node_name()
+		emit_signal("node_added", sim_node)
+		return sim_node
+	return null

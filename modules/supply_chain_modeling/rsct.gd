@@ -73,23 +73,18 @@ func new_graph() -> void:
 
 # === Node Management ===
 func add_node_from_path(path: String, _position: Vector2 = Vector2.ZERO):
-	var node_script = load(path)
-	if node_script:
 
-		var sim_node = node_script.new()
-		
-		# sim_node.set_script(node_script)
-		sim_node.set_owner(null)
-		simulation.add_child(sim_node)
-		sim_node.name = sim_node.name.validate_node_name()
-		
+	var sim_node = simulation.add_node_from_path(path)
+
+	if sim_node:
+
 		var ui_node = create_ui_node(sim_node, _position)
 		
 		if ui_node:
-			ui_node.set_owner(null)
+			
 			graph_edit.add_child(ui_node)
 
-		save_graph()
+	save_graph()
 
 func create_ui_node(simulation_node: SimulationNode, _position: Vector2 = Vector2.ZERO) -> GraphNode:
 	#return null
