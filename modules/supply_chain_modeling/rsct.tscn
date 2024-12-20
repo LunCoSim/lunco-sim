@@ -1,4 +1,4 @@
-[gd_scene load_steps=10 format=3 uid="uid://3lmlrsbbacm"]
+[gd_scene load_steps=11 format=3 uid="uid://3lmlrsbbacm"]
 
 [ext_resource type="Script" uid="uid://dln1wsyjwuqj7" path="res://rsct.gd" id="1_xuhcs"]
 [ext_resource type="Script" uid="uid://b6qabjmm3e73a" path="res://ui/widgets/menu_bar.gd" id="2_74p8c"]
@@ -7,6 +7,7 @@
 [ext_resource type="PackedScene" uid="uid://baib0y8cocg71" path="res://ui/widgets/wallet_connect_button.tscn" id="2_y60tv"]
 [ext_resource type="Script" uid="uid://2iqtet5emwql" path="res://ui/widgets/property_editor.gd" id="3_6bj1w"]
 [ext_resource type="Script" uid="uid://cijykw5hf0uxe" path="res://ui/widgets/sim_time_label.gd" id="4_jmsaq"]
+[ext_resource type="Script" uid="uid://f416bgd5lfxn" path="res://ui/widgets/graph_edit.gd" id="6_6a4jx"]
 [ext_resource type="Script" uid="uid://bvu1h6it8sasj" path="res://ui/widgets/new_nodes_menu.gd" id="7_jmsaq"]
 
 [sub_resource type="SystemFont" id="SystemFont_6bj1w"]
@@ -125,6 +126,7 @@ size_flags_vertical = 3
 right_disconnects = true
 connection_lines_thickness = 2.0
 zoom = 2.0736
+script = ExtResource("6_6a4jx")
 
 [node name="NewNodesMenu" type="VBoxContainer" parent="UI/WorkingArea/Workbench"]
 unique_name_in_owner = true

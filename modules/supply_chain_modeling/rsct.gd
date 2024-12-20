@@ -63,9 +63,7 @@ func new_graph() -> void:
 	simulation.new_simulation()
 	
 	# Step 2: Clear UI nodes
-	for node in graph_edit.get_children():
-		if node is GraphNode:
-			node.free()
+	graph_edit.clear_graph()
 	
 	# Step 3: Reset simulation state and view
 	
