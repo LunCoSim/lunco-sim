@@ -23,6 +23,7 @@ var dragging_node_path: String = ""
 func _init():
 	Utils.initialize_class_map("res://simulation/resources/")
 	Utils.initialize_class_map("res://simulation/facilities/")
+	Utils.initialize_class_map("res://simulation/other/")
 
 func _ready():
 	pause_simulation()
