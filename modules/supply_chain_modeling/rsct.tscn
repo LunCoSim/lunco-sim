@@ -9,7 +9,7 @@
 [ext_resource type="Script" uid="uid://cijykw5hf0uxe" path="res://ui/widgets/sim_time_label.gd" id="4_jmsaq"]
 [ext_resource type="Script" uid="uid://f416bgd5lfxn" path="res://ui/widgets/graph_edit.gd" id="6_6a4jx"]
 [ext_resource type="Script" uid="uid://bvu1h6it8sasj" path="res://ui/widgets/new_nodes_menu.gd" id="7_jmsaq"]
-[ext_resource type="Script" path="res://ui/widgets/resource_editor.gd" id="resource_editor_script"]
+[ext_resource type="PackedScene" uid="uid://d4mxgvknls7ob" path="res://ui/widgets/resource_editor.tscn" id="10_hnv65"]
 
 [sub_resource type="SystemFont" id="SystemFont_6bj1w"]
 hinting = 2
@@ -129,7 +129,6 @@ grow_horizontal = 2
 grow_vertical = 2
 size_flags_horizontal = 0
 size_flags_vertical = 3
-scroll_offset = Vector2(-940, 0)
 right_disconnects = true
 connection_lines_thickness = 2.0
 zoom = 2.0736
@@ -151,8 +150,10 @@ script = ExtResource("7_jmsaq")
 [node name="Resources" type="Control" parent="UI/WorkingArea/TabContainer"]
 visible = false
 layout_mode = 2
-script = ExtResource("resource_editor_script")
 metadata/_tab_index = 1
+
+[node name="ResourceEditor" parent="UI/WorkingArea/TabContainer/Resources" instance=ExtResource("10_hnv65")]
+layout_mode = 1
 
 [node name="Inspector" type="VBoxContainer" parent="UI/WorkingArea"]
 unique_name_in_owner = true

@@ -6,6 +6,8 @@ extends SimulationNode
 @export var resource_type: String  # product, service, or custom
 @export var mass: float = 0.0
 @export var volume: float = 0.0
+@export var unit: String = "units"
+@export var color: Color = Color.WHITE
 
 var custom_properties: Dictionary = {}
 var metadata: Dictionary = {}
@@ -16,6 +18,8 @@ var default_mass: float = 1.0
 var default_volume: float = 1.0
 var default_current_amount: float = 0.0
 var default_max_amount: float = 1000.0
+var default_unit: String = "units"
+var default_color: Color = Color.WHITE
 
 # Function to set properties
 
@@ -49,7 +53,8 @@ func save_state() -> Dictionary:
 	state["metadata"] = metadata
 	state["current_amount"] = current_amount
 	state["max_amount"] = max_amount
-
+	state["unit"] = unit
+	state["color"] = color	
 	return state
 	
 
@@ -62,4 +67,6 @@ func load_state(state: Dictionary) -> void:
 		metadata = state.get("metadata", {})
 		current_amount = state.get("current_amount", default_current_amount)
 		max_amount = state.get("max_amount", default_max_amount)
+		unit = state.get("unit", default_unit)
+		color = state.get("color", default_color)	
 	
