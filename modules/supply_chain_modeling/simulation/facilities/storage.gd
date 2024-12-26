@@ -67,3 +67,21 @@ func load_state(state: Dictionary) -> void:
 
 func can_store_resource(resource_type: String) -> bool:
 	return stored_resource_type == "" or stored_resource_type == resource_type
+
+func can_connect_with(other_node: Node, from_port: int, to_port: int) -> bool:
+	# If we're the source (from_node)
+	if other_node is StorageFacility:
+		var other_storage = other_node as StorageFacility
+		
+		# If other storage has no type set, it can accept our type
+		if other_storage.stored_resource_type == "":
+			return true
+			
+		# If we have no type set, we can't connect
+		if stored_resource_type == "":
+			return false
+			
+		# Check if resource types match
+		return stored_resource_type == other_storage.stored_resource_type
+		
+	return true  # Default to true for non-storage nodes for now

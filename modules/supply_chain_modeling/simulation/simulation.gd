@@ -91,22 +91,45 @@ func load_state(state: Dictionary) -> void:
 			connection["to_port"]
 		)
 
-func connect_nodes(from_node: StringName, from_port: int, to_node: StringName, to_port: int) -> bool:
-	var source = get_node_or_null(NodePath(from_node))
-	var target = get_node_or_null(NodePath(to_node))
+func can_connect(from_node: String, from_port: int, to_node: String, to_port: int) -> Dictionary:
+	var response = {
+		"success": false,
+		"message": ""
+	}
 	
-	if source and target:
-		var connection = {
-			"from_node": from_node,
-			"from_port": from_port,
-			"to_node": to_node,
-			"to_port": to_port
-		}
-		connections.append(connection)
+	# Get the actual nodes
+	var source = get_node_or_null(from_node)
+	var target = get_node_or_null(to_node)
+	
+	if not source or not target:
+		response.message = "Invalid nodes"
+		return response
+	
+	# Use the existing validation from StorageFacility
+	if source is StorageFacility:
+		if not source.can_connect_with(target, from_port, to_port):
+			response.message = "Resources are not compatible"
+			return response
+	
+	response.success = true
+	return response
 
-		emit_signal("connection_added", from_node, from_port, to_node, to_port)
-		return true
-	return false
+func connect_nodes(from_node: String, from_port: int, to_node: String, to_port: int) -> Dictionary:
+	var validation = can_connect(from_node, from_port, to_node, to_port)
+	if not validation.success:
+		return validation
+	
+	var connection = {
+		"from_node": from_node,
+		"from_port": from_port,
+		"to_node": to_node,
+		"to_port": to_port
+	}
+	
+	connections.append(connection)
+	emit_signal("connection_added", from_node, from_port, to_node, to_port)
+	
+	return validation
 
 func disconnect_nodes(from_node: StringName, from_port: int, to_node: StringName, to_port: int) -> bool:
 	for i in range(connections.size() - 1, -1, -1):
