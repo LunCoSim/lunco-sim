@@ -33,7 +33,6 @@ static func get_scene_paths(directory_path: String) -> Array:
 
 static func get_script_paths(directory_path: String) -> Array:
 	var dir = DirAccess.open(directory_path)
-	print("get_scene: ", directory_path)
 	
 	var paths = []
 	if dir:

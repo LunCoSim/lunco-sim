@@ -3,7 +3,27 @@ extends BaseFacility
 
 @export var capacity: float = 100.0  # Maximum storage capacity
 @export var current_amount: float = 0.0  # Current amount stored
-@export var stored_resource_type: String = ""
+@export var stored_resource_type: String = ""  # Name of the resource type
+
+var _resource: BaseResource = null
+
+func _ready() -> void:
+	_update_resource()
+
+func _update_resource() -> void:
+	if stored_resource_type != "":
+		_resource = ResourceRegistry.get_instance().get_resource(stored_resource_type)
+
+func set_resource_type(type: String) -> void:
+	if current_amount == 0 or type == stored_resource_type:
+		stored_resource_type = type
+		_update_resource()
+
+func get_resource_color() -> Color:
+	return _resource.color if _resource else Color.WHITE
+
+func get_resource_unit() -> String:
+	return _resource.unit if _resource else "units"
 
 func _init() -> void:
 	pass
@@ -47,7 +67,3 @@ func load_state(state: Dictionary) -> void:
 
 func can_store_resource(resource_type: String) -> bool:
 	return stored_resource_type == "" or stored_resource_type == resource_type
-
-func set_resource_type(type: String) -> void:
-	if current_amount == 0:
-		stored_resource_type = type
