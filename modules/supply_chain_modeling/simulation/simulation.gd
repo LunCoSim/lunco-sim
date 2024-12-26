@@ -77,8 +77,7 @@ func load_state(state: Dictionary) -> void:
 				node.name = node_name
 				add_child(node)
 				# Restore node properties if available
-				if "properties" in node_data and node.has_method("load_properties"):
-					node.load_properties(node_data["properties"])
+				node.load_state(node_data["state"])
 	
 	# Load connections
 	for connection in state["connections"]:
