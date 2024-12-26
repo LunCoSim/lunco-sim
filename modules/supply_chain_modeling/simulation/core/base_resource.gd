@@ -3,12 +3,21 @@ extends SimulationNode
 
 @export var current_amount: float = 2000.0
 @export var max_amount: float = 2000.0
-@export var description: String
 @export var resource_type: String  # product, service, or custom
 @export var mass: float = 0.0
 @export var volume: float = 0.0
+
 var custom_properties: Dictionary = {}
 var metadata: Dictionary = {}
+
+# Default properties
+var default_resource_type: String = ""
+var default_mass: float = 1.0
+var default_volume: float = 1.0
+var default_current_amount: float = 0.0
+var default_max_amount: float = 1000.0
+
+# Function to set properties
 
 
 func set_properties(desc: String, type: String, init_mass: float, init_volume: float):
@@ -28,32 +37,29 @@ func add_resource(amount: float) -> float:
 	current_amount += amount_to_add
 	return amount_to_add
 
-func save_state() -> Dictionary:
-	return {
-		"description": description,
-		"type": resource_type,
-		"mass": mass,
-		"volume": volume,
-		"custom_properties": custom_properties,
-		"metadata": metadata,
-		"current_amount": current_amount,
-		"max_amount": max_amount
-	}
+# Save/load state
 
-func load_state(data: Dictionary) -> void:
-	if "description" in data:
-		description = data.description
-	if "type" in data:
-		resource_type = data.type
-	if "mass" in data:
-		mass = data.mass
-	if "volume" in data:
-		volume = data.volume
-	if "custom_properties" in data:
-		custom_properties = data.custom_properties
-	if "metadata" in data:
-		metadata = data.metadata
-	if "current_amount" in data:
-		current_amount = data.current_amount
-	if "max_amount" in data:
-		max_amount = data.max_amount
+func save_state() -> Dictionary:
+	var state = super.save_state()
+	
+	state["type"] = resource_type
+	state["mass"] = mass
+	state["volume"] = volume
+	state["custom_properties"] = custom_properties
+	state["metadata"] = metadata
+	state["current_amount"] = current_amount
+	state["max_amount"] = max_amount
+
+	return state
+	
+
+func load_state(state: Dictionary) -> void:
+	if state:
+		resource_type = state.get("type", default_resource_type)
+		mass = state.get("mass", default_mass)
+		volume = state.get("volume", default_volume)
+		custom_properties = state.get("custom_properties", {})
+		metadata = state.get("metadata", {})
+		current_amount = state.get("current_amount", default_current_amount)
+		max_amount = state.get("max_amount", default_max_amount)
+	

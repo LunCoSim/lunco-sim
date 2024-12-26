@@ -34,3 +34,12 @@ func get_connected_outputs() -> Array:
 				if target:
 					outputs.append(target)
 	return outputs
+
+func save_state() -> Dictionary:
+	var state = super.save_state()
+	
+	
+	return state
+
+func load_state(state: Dictionary) -> void:
+	super.load_state(state)

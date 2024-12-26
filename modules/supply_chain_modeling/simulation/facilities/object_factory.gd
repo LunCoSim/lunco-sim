@@ -107,3 +107,13 @@ func _physics_process(delta: float) -> void:
 		h2_source.add_resource(h2_available * return_ratio)
 	
 	status = "Running"
+
+
+func save_state() -> Dictionary:
+	var state = super.save_state()
+	
+	
+	return state
+
+func load_state(state: Dictionary) -> void:
+	super.load_state(state)

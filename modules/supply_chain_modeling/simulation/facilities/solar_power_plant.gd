@@ -25,3 +25,12 @@ func set_solar_irradiance(new_irradiance: float) -> void:
 func set_panel_area(new_area: float) -> void:
 	panel_area = new_area
 	power_output = panel_area * solar_irradiance  # Assuming 1kW/m standard conditions
+
+func save_state() -> Dictionary:
+	var state = super.save_state()
+	
+	
+	return state
+
+func load_state(state: Dictionary) -> void:
+	super.load_state(state)

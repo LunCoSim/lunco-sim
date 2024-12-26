@@ -76,3 +76,12 @@ func _physics_process(delta: float) -> void:
 				# If target couldn't accept everything, return remainder to source
 				if added < removed:
 					source_storage.add_resource(removed - added)
+
+func save_state() -> Dictionary:
+	var state = super.save_state()
+	
+	
+	return state
+
+func load_state(state: Dictionary) -> void:
+	super.load_state(state)
