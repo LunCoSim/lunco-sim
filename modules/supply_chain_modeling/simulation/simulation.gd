@@ -72,8 +72,7 @@ func load_state(state: Dictionary) -> void:
 		if script_path:
 			var node_script = load(script_path)
 			if node_script:
-				var node = Node.new()
-				node.script = node_script
+				var node = node_script.new()
 				node.name = node_name
 				add_child(node)
 				# Restore node properties if available
@@ -161,7 +160,8 @@ func new_simulation() -> void:
 	reset_simulation()
 	pause_simulation()
 
-func add_node_from_path(path: String) -> SimulationNode:
+func add_node_from_path(custom_class_name: String) -> SimulationNode:
+	var path = Utils.get_script_path(custom_class_name)
 	var node_script = load(path)
 	if node_script:
 		var sim_node = node_script.new()

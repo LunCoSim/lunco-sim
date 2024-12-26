@@ -19,12 +19,14 @@ var dragging_new_node: bool = false
 var dragging_node_path: String = ""
 
 # === Initialization ===
+
+func _init():
+	Utils.initialize_class_map("res://simulation/resources/")
+	Utils.initialize_class_map("res://simulation/facilities/")
+
 func _ready():
 	pause_simulation()
 	_connect_signals()
-	
-	Utils.initialize_class_map("res://simulation/resources/")
-	Utils.initialize_class_map("res://simulation/facilities/")
 
 	load_graph()
 	save_graph() # Hack to fix the bug that after loading form file info is deleted
