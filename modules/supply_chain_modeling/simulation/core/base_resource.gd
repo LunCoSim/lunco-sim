@@ -28,9 +28,8 @@ func add_resource(amount: float) -> float:
 	current_amount += amount_to_add
 	return amount_to_add
 
-func get_resource_data() -> Dictionary:
+func save_state() -> Dictionary:
 	return {
-		"id": self.id,
 		"description": description,
 		"type": resource_type,
 		"mass": mass,
@@ -41,7 +40,7 @@ func get_resource_data() -> Dictionary:
 		"max_amount": max_amount
 	}
 
-func load_resource_data(data: Dictionary) -> void:
+func load_state(data: Dictionary) -> void:
 	if "description" in data:
 		description = data.description
 	if "type" in data:

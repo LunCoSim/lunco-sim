@@ -48,7 +48,8 @@ func save_state() -> Dictionary:
 	for child in get_children():
 		if child is SimulationNode:
 			state["nodes"][child.name] = {
-				"type": Utils.get_custom_class_name(child)
+				"type": Utils.get_custom_class_name(child),
+				"state": child.save_state()
 			}
 	
 	return state
