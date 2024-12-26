@@ -3,8 +3,7 @@ extends BaseFacility
 
 @export var capacity: float = 100.0  # Maximum storage capacity
 @export var current_amount: float = 0.0  # Current amount stored
-
-@export var resource_type: String = ""  # Type of resource being stored TBD: should be a BaseResource
+@export var stored_resource_type: String = ""
 
 func _init() -> void:
 	pass
@@ -37,9 +36,18 @@ func get_connected_outputs() -> Array:
 
 func save_state() -> Dictionary:
 	var state = super.save_state()
-	
+	state["capacity"] = capacity
+	state["current_amount"] = current_amount
+	state["stored_resource_type"] = stored_resource_type
 	
 	return state
 
 func load_state(state: Dictionary) -> void:
 	super.load_state(state)
+
+func can_store_resource(resource_type: String) -> bool:
+	return stored_resource_type == "" or stored_resource_type == resource_type
+
+func set_resource_type(type: String) -> void:
+	if current_amount == 0:
+		stored_resource_type = type

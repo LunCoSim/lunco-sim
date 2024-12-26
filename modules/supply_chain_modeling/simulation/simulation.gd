@@ -1,11 +1,13 @@
 class_name SimulationManager
 extends Node
 
+# === Signals ===
 signal node_added(node: SimulationNode)
 signal node_removed(node_id: String)
 signal connection_added(from_id, from_port, to_id, port)
 signal connection_removed(from_id, from_port, to_id, port)
 
+# === Variables ===
 var connections: Array[Dictionary] = []  # Dictionary of connections [from_id, from_port, to_id, port]
 
 var paused: bool = true
@@ -13,8 +15,9 @@ var simulation_time: float = 0.0
 var time_scale: float = 1.0
 var time_unit: float = 60.0
 
-var resource_manager: ResourceManager = ResourceManager.get_instance()
+var resource_manager: ResourceRegistry = ResourceRegistry.get_instance()
 
+# === Functions ===
 func add_node(node: SimulationNode) -> void:
 	add_child(node)
 	node.name = node.name.validate_node_name()

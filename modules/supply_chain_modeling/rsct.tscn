@@ -1,4 +1,4 @@
-[gd_scene load_steps=11 format=3 uid="uid://3lmlrsbbacm"]
+[gd_scene load_steps=12 format=3 uid="uid://3lmlrsbbacm"]
 
 [ext_resource type="Script" uid="uid://dln1wsyjwuqj7" path="res://rsct.gd" id="1_xuhcs"]
 [ext_resource type="Script" uid="uid://b6qabjmm3e73a" path="res://ui/widgets/menu_bar.gd" id="2_74p8c"]
@@ -9,6 +9,7 @@
 [ext_resource type="Script" uid="uid://cijykw5hf0uxe" path="res://ui/widgets/sim_time_label.gd" id="4_jmsaq"]
 [ext_resource type="Script" uid="uid://f416bgd5lfxn" path="res://ui/widgets/graph_edit.gd" id="6_6a4jx"]
 [ext_resource type="Script" uid="uid://bvu1h6it8sasj" path="res://ui/widgets/new_nodes_menu.gd" id="7_jmsaq"]
+[ext_resource type="Script" path="res://ui/widgets/resource_editor.gd" id="resource_editor_script"]
 
 [sub_resource type="SystemFont" id="SystemFont_6bj1w"]
 hinting = 2
@@ -108,13 +109,18 @@ layout_mode = 2
 size_flags_vertical = 3
 split_offset = 2000
 
-[node name="Workbench" type="Control" parent="UI/WorkingArea"]
+[node name="TabContainer" type="TabContainer" parent="UI/WorkingArea"]
+layout_mode = 2
+current_tab = 0
+
+[node name="GraphView" type="Control" parent="UI/WorkingArea/TabContainer"]
 unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
+metadata/_tab_index = 0
 
-[node name="GraphEdit" type="GraphEdit" parent="UI/WorkingArea/Workbench"]
+[node name="GraphEdit" type="GraphEdit" parent="UI/WorkingArea/TabContainer/GraphView"]
 unique_name_in_owner = true
 layout_mode = 2
 anchor_right = 1.0
@@ -123,12 +129,13 @@ grow_horizontal = 2
 grow_vertical = 2
 size_flags_horizontal = 0
 size_flags_vertical = 3
+scroll_offset = Vector2(-940, 0)
 right_disconnects = true
 connection_lines_thickness = 2.0
 zoom = 2.0736
 script = ExtResource("6_6a4jx")
 
-[node name="NewNodesMenu" type="VBoxContainer" parent="UI/WorkingArea/Workbench"]
+[node name="NewNodesMenu" type="VBoxContainer" parent="UI/WorkingArea/TabContainer/GraphView"]
 unique_name_in_owner = true
 layout_mode = 2
 anchor_top = 0.5
@@ -140,6 +147,12 @@ grow_vertical = 2
 size_flags_horizontal = 0
 theme = ExtResource("2_xuhcs")
 script = ExtResource("7_jmsaq")
+
+[node name="Resources" type="Control" parent="UI/WorkingArea/TabContainer"]
+visible = false
+layout_mode = 2
+script = ExtResource("resource_editor_script")
+metadata/_tab_index = 1
 
 [node name="Inspector" type="VBoxContainer" parent="UI/WorkingArea"]
 unique_name_in_owner = true
@@ -181,14 +194,14 @@ autostart = true
 [connection signal="id_pressed" from="UI/MenuContainer/MenuBar/FileMenu" to="UI/MenuContainer/MenuBar" method="_on_file_menu_pressed"]
 [connection signal="id_pressed" from="UI/MenuContainer/MenuBar/NFTMenu" to="UI/MenuContainer/MenuBar" method="_on_nft_menu_pressed"]
 [connection signal="pressed" from="UI/MenuContainer/Button6" to="." method="toggle_simulation"]
-[connection signal="connection_request" from="UI/WorkingArea/Workbench/GraphEdit" to="." method="_on_connection_request"]
-[connection signal="delete_nodes_request" from="UI/WorkingArea/Workbench/GraphEdit" to="." method="_on_delete_nodes_request"]
-[connection signal="disconnection_request" from="UI/WorkingArea/Workbench/GraphEdit" to="." method="_on_disconnection_request"]
-[connection signal="end_node_move" from="UI/WorkingArea/Workbench/GraphEdit" to="." method="_on_node_moved"]
-[connection signal="node_deselected" from="UI/WorkingArea/Workbench/GraphEdit" to="." method="_on_node_deselected"]
-[connection signal="node_selected" from="UI/WorkingArea/Workbench/GraphEdit" to="." method="_on_node_selected"]
-[connection signal="button_down" from="UI/WorkingArea/Workbench/NewNodesMenu" to="." method="_on_button_down"]
-[connection signal="button_up" from="UI/WorkingArea/Workbench/NewNodesMenu" to="." method="_on_button_up"]
+[connection signal="connection_request" from="UI/WorkingArea/TabContainer/GraphView/GraphEdit" to="." method="_on_connection_request"]
+[connection signal="delete_nodes_request" from="UI/WorkingArea/TabContainer/GraphView/GraphEdit" to="." method="_on_delete_nodes_request"]
+[connection signal="disconnection_request" from="UI/WorkingArea/TabContainer/GraphView/GraphEdit" to="." method="_on_disconnection_request"]
+[connection signal="end_node_move" from="UI/WorkingArea/TabContainer/GraphView/GraphEdit" to="." method="_on_node_moved"]
+[connection signal="node_deselected" from="UI/WorkingArea/TabContainer/GraphView/GraphEdit" to="." method="_on_node_deselected"]
+[connection signal="node_selected" from="UI/WorkingArea/TabContainer/GraphView/GraphEdit" to="." method="_on_node_selected"]
+[connection signal="button_down" from="UI/WorkingArea/TabContainer/GraphView/NewNodesMenu" to="." method="_on_button_down"]
+[connection signal="button_up" from="UI/WorkingArea/TabContainer/GraphView/NewNodesMenu" to="." method="_on_button_up"]
 [connection signal="file_selected" from="UI/SaveDialog" to="." method="_on_save_dialog_file_selected"]
 [connection signal="file_selected" from="UI/LoadDialog" to="." method="_on_load_dialog_file_selected"]
 [connection signal="timeout" from="AutoSaveTimer" to="." method="_handle_autosave"]
