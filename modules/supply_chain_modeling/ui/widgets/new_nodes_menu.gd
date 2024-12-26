@@ -7,8 +7,8 @@ func _ready() -> void:
 	create_buttons()
 
 func create_buttons() -> void:
-	var resource_paths = Utils.get_paths("res://simulation/resources/")
-	var facility_paths = Utils.get_paths("res://simulation/facilities/")
+	var resource_paths = Utils.get_script_paths("res://simulation/resources/")
+	var facility_paths = Utils.get_script_paths("res://simulation/facilities/")
 	
 	for path in resource_paths + facility_paths:
 		var button = Button.new()

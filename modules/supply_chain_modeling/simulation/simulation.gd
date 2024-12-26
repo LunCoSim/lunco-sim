@@ -48,7 +48,7 @@ func save_state() -> Dictionary:
 	for child in get_children():
 		if child is SimulationNode:
 			state["nodes"][child.name] = {
-				"type": child.get_script().resource_path
+				"type": Utils.get_custom_class_name(child)
 			}
 	
 	return state
@@ -68,16 +68,17 @@ func load_state(state: Dictionary) -> void:
 	# Load nodes
 	for node_name in state["nodes"]:
 		var node_data = state["nodes"][node_name]
-		var node_scene = load(node_data["type"])
-		if node_scene:
-			var node = Node.new()
-			node.script = node_scene
-
-			node.name = node_name
-			add_child(node)
-			# Restore node properties if available
-			if "properties" in node_data and node.has_method("load_properties"):
-				node.load_properties(node_data["properties"])
+		var script_path = Utils.get_script_path(node_data["type"])
+		if script_path:
+			var node_script = load(script_path)
+			if node_script:
+				var node = Node.new()
+				node.script = node_script
+				node.name = node_name
+				add_child(node)
+				# Restore node properties if available
+				if "properties" in node_data and node.has_method("load_properties"):
+					node.load_properties(node_data["properties"])
 	
 	# Load connections
 	for connection in state["connections"]:
