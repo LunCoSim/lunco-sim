@@ -7,7 +7,7 @@ The goal of the course is to prepare a group of trained lunar rovers/robotics op
 The course is divided into Several parts:
 1. [Part One: Theoretical aspects of running a rover on the Moon](./PART_ONE_BASIC_OF_LUNAR_MISSIONS.md)    
 2. [Part Two: Basics of efficient global coordination: web3 for begginers](./PART_TWO_WEB3_FOR_BEGGINERS.md)
-3. [Part Three: Lunar Rover Operator Training](./PART_THREE_LUNAR_ROVER_OPERATOR_TRAINING.md)
+3. [Part Three: Lunar Rover Operator Training](./PART_THREE.md)
 
 The first two parts are mostly theoretical, and could be self-studied, while the third part should be done in groups.
 
