@@ -7,7 +7,7 @@ func _plugging():
 	#UI
 	# plug("folt-a/godot-idea-board")
 	# plug("imjp94/gd-plug-ui")
-	plug("imjp94/UIDesignTool")
+	# plug("imjp94/UIDesignTool")
 	
 
 	#Importers
@@ -22,7 +22,7 @@ func _plugging():
 	# plug("Ark2000/PankuConsole")
 	plug("LunCoSim/PankuConsole") #using LunCo's fork
 	# plug("godot-extended-libraries/godot-debug-menu")
-	plug("Ericdowney/SignalVisualizer")
+	#plug("Ericdowney/SignalVisualizer")
 	
 	## Libraries
 	plug("maktoobgar/scene_manager") ## Scene manager
@@ -47,7 +47,7 @@ func _plugging():
 	#https://gitlab.com/godotuniverse/starfield
 
 	plug("deep-entertainment/godottpd")
-	plug("KOBUGE-Games/godot-logger", {"install_root": "addons/godot-logger", "include": ["."]})
+	# plug("KOBUGE-Games/godot-logger", {"install_root": "addons/godot-logger", "include": ["."]})
 
 
 	#WebRTC GDExtension must be installed separatly and manually for native builds

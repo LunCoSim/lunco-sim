@@ -32,7 +32,6 @@ func connect_to_server(ip: String="langrenus.lunco.space", port: int = 9000, tls
 
 
 	# Creating a client
-	Logger.info("Connecting to server: ", connection_string )
 	print("Connecting to server: ", connection_string)
 	
 	print("Result: ", peer.create_client(connection_string))
@@ -54,7 +53,7 @@ func host(port: int = 9000, tls_options: TLSOptions = null):
 
 	# Creating a server
 	
-	Logger.info("Hosting on %d" % port)
+
 	DisplayServer.window_set_title("Server")
 	
 	print("Hosting on %d, tls_options: " % port, tls_options)
