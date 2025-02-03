@@ -16,7 +16,8 @@ func on_reload_profile():
 #------------------------------------
 
 func change_scene(scene: String):
-	SceneManager.no_effect_change_scene(scene)
+	pass
+	#SceneManager.no_effect_change_scene(scene)
 
 ## UI Integrations
 func _on_sim_host_pressed():

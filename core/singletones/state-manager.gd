@@ -13,4 +13,5 @@ func _load():
 	pass
 
 func change_scene(scene: String):
-	SceneManager.no_effect_change_scene(scene)
+	pass
+	#SceneManager.no_effect_change_scene(scene)

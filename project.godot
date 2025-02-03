@@ -32,8 +32,6 @@ Messenger="*res://core/singletones/messenger.gd"
 Chat="*res://modules/chat/chat.gd"
 Users="*res://core/singletones/users_manager.gd"
 ControlManager="*res://core/singletones/control-manager.gd"
-SceneManager="*res://addons/scene_manager/scene_manager.tscn"
-Scenes="*res://presets/scenes.gd"
 
 [editor]
 
@@ -49,7 +47,7 @@ logger/file/log_file_write=true
 logger/file/file_path="res://game.log"
 logger/stdout_format="[{hour}:{minute}:{second}][{level}]{text}"
 logger/file_format="[{hour}:{minute}:{second}][{level}]{text}"
-enabled=PackedStringArray("res://addons/panku_console/plugin.cfg", "res://addons/scene_manager/plugin.cfg")
+enabled=PackedStringArray("res://addons/panku_console/plugin.cfg")
 
 [gdunit4]
 
@@ -464,11 +462,6 @@ environment/subsurface_scattering/subsurface_scattering_quality=0
 global_illumination/sdfgi/frames_to_converge=0
 environment/volumetric_fog/use_filter=0
 occlusion_culling/use_occlusion_culling=true
-
-[scene_manager]
-
-scenes_path="res://data/scene-manager/scenes.gd"
-scenes/scenes_path="res://presets/scenes.gd"
 
 [shader_globals]
 

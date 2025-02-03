@@ -25,7 +25,7 @@ func _plugging():
 	#plug("Ericdowney/SignalVisualizer")
 	
 	## Libraries
-	plug("maktoobgar/scene_manager") ## Scene manager
+	# plug("maktoobgar/scene_manager") ## Scene manager
 
 	##ivoyager
 	#plug("ivoyager/ivoyager_core", {"install_root": "addons/ivoyager_core", "include": ["."]})
