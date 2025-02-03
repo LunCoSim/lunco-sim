@@ -1,7 +1,7 @@
 [gd_scene load_steps=3 format=3 uid="uid://d4mxgvknls7ob"]
 
-[ext_resource type="Script" path="res://ui/widgets/resource_editor.gd" id="1_script"]
-[ext_resource type="Script" path="res://ui/widgets/resource_property_editor.gd" id="2_script"]
+[ext_resource type="Script" uid="uid://bfag4g5q7kkxl" path="res://ui/widgets/resource_editor.gd" id="1_script"]
+[ext_resource type="Script" uid="uid://b5sdo16w7d6n4" path="res://ui/widgets/resource_property_editor.gd" id="2_script"]
 
 [node name="ResourceEditor" type="Control"]
 layout_mode = 3
