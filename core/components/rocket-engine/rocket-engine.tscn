@@ -1,6 +1,6 @@
 [gd_scene load_steps=2 format=3 uid="uid://c11gvqn3hkov8"]
 
-[ext_resource type="Script" path="res://components/rocket-engine/rocket-engine.gd" id="1_nmjr2"]
+[ext_resource type="Script" uid="uid://c3pros47g86k" path="res://core/components/rocket-engine/rocket-engine.gd" id="1_nmjr2"]
 
 [node name="RocketEngine" type="Node3D"]
 script = ExtResource("1_nmjr2")
