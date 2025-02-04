@@ -91,7 +91,7 @@ func _ready():
 @rpc("any_peer", "call_local", "reliable")
 func spawn(_entity: EntitiesDB.Entities, global_position=null): #TBD think of a class entity
 	if multiplayer.is_server():
-		var entity = Entities.make_entity(_entity)
+		var entity = EntitiesDB.make_entity(_entity)
 		if entity != null:
 			if global_position != null:
 				entity.position = spawn_node.to_local(global_position)

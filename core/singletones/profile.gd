@@ -32,18 +32,18 @@ func _init():
 
 #----------------------------------
 
-func set_username(_username):
-	if username != _username:
-		username = _username
+func set_username(new_username):
+	if username != new_username:
+		username = new_username
 		save_profile()
 		profile_changed.emit()
 
-func set_wallet(_wallet):
-	if wallet != _wallet:
-		wallet = _wallet
+func set_wallet(new_wallet):
+	if wallet != new_wallet:
+		wallet = new_wallet
 		save_profile()
-		if Messenger:
-			Messenger.profile_wallet_changed.emit()
+		if Chat:
+			Chat.profile_wallet_changed.emit()
 		profile_changed.emit()
 
 func set_has_profile(_has_profile):
