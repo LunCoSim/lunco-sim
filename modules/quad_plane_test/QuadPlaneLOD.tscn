@@ -1,9 +1,0 @@
-[gd_scene load_steps=2 format=3 uid="uid://b3g4jkx7njm1r"]
-
-[ext_resource type="Script" path="res://modules/quad_plane_test/QuadPlaneLOD.gd" id="1_hvaae"]
-
-[node name="QuadPlaneLOD" type="Node3D"]
-transform = Transform3D(0.999999, 0, 0, 0, 1, 0, 0, 0, 0.999999, 0, 0, 0)
-script = ExtResource("1_hvaae")
-Subdivisions = 4
-Size = Vector2(100, 100)
