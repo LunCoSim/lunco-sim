@@ -21,7 +21,6 @@ config/icon="res://assets/logos/logo.svg"
 [autoload]
 
 Panku="*res://addons/panku_console/console.tscn"
-Entities="*res://core/singletones/entities-manager.gd"
 StateManager="*res://core/singletones/state-manager.gd"
 LCNet="*res://core/singletones/networking.gd"
 LCUtil="*res://core/singletones/utils.gd"
