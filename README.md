@@ -42,28 +42,49 @@ Support us on [JuiceBox](https://juicebox.money/v2/p/763)!
 ## 🛠 Installation
 
 0. The development is done on Linux Mate, so there could be issues running on Windows and MacOs. Please reach us
+
 1. Install [Godot 4](https://godotengine.org/download/)
-	1. Your Godot installation has to be available via comammand line. Check [this](https://docs.godotengine.org/en/stable/tutorials/editor/command_line_tutorial.html) tutorial to set it up
+   1. Your Godot installation has to be available via command line. Check [this](https://docs.godotengine.org/en/stable/tutorials/editor/command_line_tutorial.html) tutorial to set it up
 
 2. Install [FBX2glTF](https://github.com/godotengine/FBX2glTF/tags):
-	1. Download the file and place it somewhere. Do not put it into LunCo folder, as you could have issues with git
-	2. Godot will ask for this file when you will open the project
-3. Install [git lfs](https://github.com/git-lfs/git-lfs#getting-started)
+   1. Download the file and place it somewhere. Do not put it into LunCo folder, as you could have issues with git
+   2. Godot will ask for this file when you will open the project
+
+3. Content Management Setup (we're transitioning between two systems):
+   
+   A. Git LFS (currently used for most content):
+   1. Install [git lfs](https://github.com/git-lfs/git-lfs#getting-started)
+   2. Enable git-lfs in the repository after cloning: `git lfs install`
+   
+   B. LunCo Content Manager (new system, gradually being adopted):
+   1. Will be installed automatically with other addons
+   2. After installation, you'll see a "Content" button in the editor toolbar
+   3. Use it to download missing content files when needed
+
 4. Clone this repo in a terminal: 
 ```bash
-	git clone -b main --single-branch --recurse-submodules https://github.com/LunCoSim/lunco-sim.git
+git clone -b main --single-branch --recurse-submodules https://github.com/LunCoSim/lunco-sim.git
 ```
+
 5. After cloning, change directory to project folder
 ```bash
-	cd lunco-sim
+cd lunco-sim
 ```
 
 6. Run below command to install addons using [gd-plug](https://github.com/imjp94/gd-plug)
 ```bash
-	./install_addons.sh
+./install_addons.sh
 ```
 
 7. Open the project in Godot and run
+
+### Content Management Notes
+- Some large files are still managed by git-lfs
+- Newer content will use `.content` files for external storage
+- If you see missing files:
+  1. First try git-lfs: `git lfs pull`
+  2. Then use the Content Manager in the editor toolbar
+  3. If issues persist, please reach out on Discord
 
 ## 🌐 Community & Support
 
