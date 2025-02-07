@@ -1,6 +1,6 @@
-[gd_scene load_steps=2 format=3 uid="uid://cv0bmac63qtuv"]
+[gd_scene load_steps=2 format=3 uid="uid://c4iqxvxvxvxvx"]
 
-[ext_resource type="Script" path="res://ui/facilities/ui_electrolytic_factory.gd" id="1_script"]
+[ext_resource type="Script" uid="uid://ck0ya0dlsxygw" path="res://modules/supply_chain_modeling/ui/facilities/ui_electrolytic_factory.gd" id="1_bklm3"]
 
 [node name="Electrolytic_Factory" type="GraphNode"]
 offset_right = 158.0
@@ -36,7 +36,7 @@ slot/3/right_enabled = true
 slot/3/right_type = 0
 slot/3/right_color = Color(1, 1, 1, 1)
 slot/3/draw_stylebox = true
-script = ExtResource("1_script")
+script = ExtResource("1_bklm3")
 
 [node name="H2OInput" type="Label" parent="."]
 layout_mode = 2

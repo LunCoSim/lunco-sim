@@ -1,6 +1,8 @@
 class_name GraphView
 extends GraphEdit
 
+const MODULE_PATH = "res://modules/supply_chain_modeling"
+
 func clear_graph():
 	for node in get_children():
 		if node is GraphNode:
@@ -11,31 +13,30 @@ func add_ui_for_node(node: SimulationNode, _position: Vector2 = Vector2.ZERO) ->
 		create_ui_node(node, _position)
 
 func create_ui_node(simulation_node: SimulationNode, _position: Vector2 = Vector2.ZERO) -> GraphNode:
-	#return null
 	var ui_node: GraphNode
 	
 	# Create specific UI node based on simulation node type
 	if simulation_node is StorageFacility:
-		ui_node = load("res://ui/facilities/ui_storage.tscn").instantiate()
+		ui_node = load(MODULE_PATH + "/ui/facilities/ui_storage.tscn").instantiate()
 	elif simulation_node is ResourceH2:
-		ui_node = load("res://ui/resources/ui_resource_h2.tscn").instantiate()
+		ui_node = load(MODULE_PATH + "/ui/resources/ui_resource_h2.tscn").instantiate()
 	elif simulation_node is ResourceO2:
-		ui_node = load("res://ui/resources/ui_resource_o2.tscn").instantiate()
+		ui_node = load(MODULE_PATH + "/ui/resources/ui_resource_o2.tscn").instantiate()
 	elif simulation_node is ResourceH2O:
-		ui_node = load("res://ui/resources/ui_resource_h2o.tscn").instantiate()
+		ui_node = load(MODULE_PATH + "/ui/resources/ui_resource_h2o.tscn").instantiate()
 	elif simulation_node is ObjectFactory:
-		ui_node = load("res://ui/facilities/ui_object_factory.tscn").instantiate()
+		ui_node = load(MODULE_PATH + "/ui/facilities/ui_object_factory.tscn").instantiate()
 	elif simulation_node is SolarPowerPlant:
-		ui_node = load("res://ui/facilities/ui_solar_power_plant.tscn").instantiate()
+		ui_node = load(MODULE_PATH + "/ui/facilities/ui_solar_power_plant.tscn").instantiate()
 	elif simulation_node is Pump:
-		ui_node = load("res://ui/facilities/ui_pump.tscn").instantiate()
+		ui_node = load(MODULE_PATH + "/ui/facilities/ui_pump.tscn").instantiate()
 	elif simulation_node is ElectrolyticFactory:
-		ui_node = load("res://ui/facilities/ui_electrolytic_factory.tscn").instantiate()
+		ui_node = load(MODULE_PATH + "/ui/facilities/ui_electrolytic_factory.tscn").instantiate()
 	elif simulation_node is NoteNode:
-		ui_node = load("res://ui/other/ui_note_node.tscn").instantiate()
+		ui_node = load(MODULE_PATH + "/ui/other/ui_note_node.tscn").instantiate()
 	else:
 		# Default UI node if no specific type matches
-		ui_node = load("res://ui/core/ui_simulation_node.tscn").instantiate()
+		ui_node = load(MODULE_PATH + "/ui/core/ui_simulation_node.tscn").instantiate()
 	
 	# Set common properties
 	if ui_node:

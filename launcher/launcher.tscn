@@ -1,0 +1,52 @@
+[gd_scene load_steps=2 format=3 uid="uid://b8r6g3rgfmqxv"]
+
+[ext_resource type="Script" uid="uid://bvk5inamcxctr" path="res://launcher/launcher.gd" id="1_2u4vx"]
+
+[node name="Launcher" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_2u4vx")
+
+[node name="Background" type="Panel" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="VBoxContainer" type="VBoxContainer" parent="."]
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -150.0
+offset_top = -100.0
+offset_right = 150.0
+offset_bottom = 100.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/separation = 10
+
+[node name="Label" type="Label" parent="VBoxContainer"]
+layout_mode = 2
+text = "LunCo Launcher"
+horizontal_alignment = 1
+
+[node name="SupplyChainButton" type="Button" parent="VBoxContainer"]
+layout_mode = 2
+text = "Supply Chain Modeling"
+
+[node name="MainButton" type="Button" parent="VBoxContainer"]
+layout_mode = 2
+text = "Main Simulation"
+
+[node name="MainAnimatedButton" type="Button" parent="VBoxContainer"]
+layout_mode = 2
+text = "Main Animated"

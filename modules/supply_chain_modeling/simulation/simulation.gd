@@ -1,6 +1,8 @@
 class_name SimulationManager
 extends Node
 
+const MODULE_PATH = "res://modules/supply_chain_modeling"
+
 # === Signals ===
 signal node_added(node: SimulationNode)
 signal node_removed(node_id: String)

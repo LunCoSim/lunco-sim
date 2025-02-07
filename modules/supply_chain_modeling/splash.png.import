@@ -3,15 +3,15 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://bps77c4i780fm"
-path="res://.godot/imported/splash.png-929ed8a00b89ba36c51789452f874c77.ctex"
+path="res://.godot/imported/splash.png-1156c4e26e19152369af9dad5a18330a.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://splash.png"
-dest_files=["res://.godot/imported/splash.png-929ed8a00b89ba36c51789452f874c77.ctex"]
+source_file="res://modules/supply_chain_modeling/splash.png"
+dest_files=["res://.godot/imported/splash.png-1156c4e26e19152369af9dad5a18330a.ctex"]
 
 [params]
 

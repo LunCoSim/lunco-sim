@@ -22,8 +22,6 @@ var default_unit: String = "units"
 var default_color: Color = Color.WHITE
 
 # Function to set properties
-
-
 func set_properties(desc: String, type: String, init_mass: float, init_volume: float):
 	description = desc
 	resource_type = type
@@ -42,7 +40,6 @@ func add_resource(amount: float) -> float:
 	return amount_to_add
 
 # Save/load state
-
 func save_state() -> Dictionary:
 	var state = super.save_state()
 	
@@ -54,9 +51,14 @@ func save_state() -> Dictionary:
 	state["current_amount"] = current_amount
 	state["max_amount"] = max_amount
 	state["unit"] = unit
-	state["color"] = color	
+	# Save color as RGBA components
+	state["color"] = {
+		"r": color.r,
+		"g": color.g,
+		"b": color.b,
+		"a": color.a
+	}
 	return state
-	
 
 func load_state(state: Dictionary) -> void:
 	if state:
@@ -68,5 +70,19 @@ func load_state(state: Dictionary) -> void:
 		current_amount = state.get("current_amount", default_current_amount)
 		max_amount = state.get("max_amount", default_max_amount)
 		unit = state.get("unit", default_unit)
-		color = state.get("color", default_color)	
+		
+		# Load color from components
+		var color_data = state.get("color", null)
+		if color_data is Dictionary:
+			color = Color(
+				color_data.get("r", 1.0),
+				color_data.get("g", 1.0),
+				color_data.get("b", 1.0),
+				color_data.get("a", 1.0)
+			)
+		elif color_data is String:
+			# Handle legacy string format
+			color = Color(color_data)
+		else:
+			color = default_color
 	

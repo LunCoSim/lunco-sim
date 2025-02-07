@@ -1,6 +1,6 @@
-[gd_scene load_steps=2 format=3 uid="uid://b23pxrixiv5lm"]
+[gd_scene load_steps=2 format=3 uid="uid://c4iqxvxvxvxvx"]
 
-[ext_resource type="Script" uid="uid://bk5dho6q7o0ai" path="res://ui/facilities/ui_solar_power_plant.gd" id="1_script"]
+[ext_resource type="Script" uid="uid://ck0ya0dlsxygw" path="res://modules/supply_chain_modeling/ui/facilities/ui_solar_power_plant.gd" id="1_bklm3"]
 
 [node name="SolarPowerPlant" type="GraphNode"]
 title = "Solar Power Plant"
@@ -13,7 +13,7 @@ slot/0/right_type = 0
 slot/0/right_color = Color(1, 1, 1, 1)
 slot/0/right_icon = null
 slot/0/draw_stylebox = true
-script = ExtResource("1_script")
+script = ExtResource("1_bklm3")
 
 [node name="Label" type="Label" parent="."]
 layout_mode = 2

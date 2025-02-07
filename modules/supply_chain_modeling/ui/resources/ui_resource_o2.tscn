@@ -1,6 +1,6 @@
-[gd_scene load_steps=3 format=3 uid="uid://brl431bi6j5c2"]
+[gd_scene load_steps=2 format=3 uid="uid://c4iqxvxvxvxvx"]
 
-[ext_resource type="Script" uid="uid://bivgycr0fmlvc" path="res://ui/resources/ui_resource_o2.gd" id="1_y5vr7"]
+[ext_resource type="Script" uid="uid://ck0ya0dlsxygw" path="res://modules/supply_chain_modeling/ui/resources/ui_resource_o2.gd" id="1_bklm3"]
 [ext_resource type="Script" uid="uid://decpb5uj1ql2n" path="res://ui/core/ui_base_resource.gd" id="2_wfdba"]
 
 [node name="Resource_O2" type="GraphNode"]
@@ -27,7 +27,7 @@ slot/1/right_type = 0
 slot/1/right_color = Color(1, 1, 1, 1)
 slot/1/right_icon = null
 slot/1/draw_stylebox = true
-script = ExtResource("1_y5vr7")
+script = ExtResource("1_bklm3")
 metadata/_custom_type_script = ExtResource("2_wfdba")
 
 [node name="Label" type="Label" parent="."]

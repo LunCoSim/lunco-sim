@@ -11,9 +11,12 @@ extends Control
 
 @onready var simulation: SimulationManager = %Simulation
 
-# State variables
+# Dependencies
+var Web3Interface
+var Utils
 
-var DEFAULT_SAVE_PATH: String = "user://current_graph.save"
+# State variables
+var DEFAULT_SAVE_PATH: String = "user://supply_chain_graph.save"
 
 var dragging_new_node: bool = false
 var dragging_node_path: String = ""
@@ -21,9 +24,22 @@ var dragging_node_path: String = ""
 # === Initialization ===
 
 func _init():
-	Utils.initialize_class_map("res://simulation/resources/")
-	Utils.initialize_class_map("res://simulation/facilities/")
-	Utils.initialize_class_map("res://simulation/other/")
+	# Initialize dependencies
+	if Engine.has_singleton("Web3Interface"):
+		Web3Interface = Engine.get_singleton("Web3Interface")
+	else:
+		Web3Interface = load("res://modules/supply_chain_modeling/singletons/web3_interface.gd").new()
+		add_child(Web3Interface)
+	
+	if Engine.has_singleton("Utils"):
+		Utils = Engine.get_singleton("Utils")
+	else:
+		Utils = load("res://modules/supply_chain_modeling/singletons/utils.gd").new()
+		add_child(Utils)
+	
+	Utils.initialize_class_map("res://modules/supply_chain_modeling/simulation/resources/")
+	Utils.initialize_class_map("res://modules/supply_chain_modeling/simulation/facilities/")
+	Utils.initialize_class_map("res://modules/supply_chain_modeling/simulation/other/")
 
 func _ready():
 	pause_simulation()
@@ -72,7 +88,6 @@ func new_graph() -> void:
 	graph_edit.clear_graph()
 	
 	# Step 3: Reset simulation state and view
-	
 	graph_edit.scroll_offset = Vector2.ZERO
 	graph_edit.zoom = 1.0
 	save_graph()
@@ -84,7 +99,6 @@ func add_node_from_path(path: String, _position: Vector2 = Vector2.ZERO):
 	save_graph()
 
 # === UI Management ===
-
 func show_message(text: String) -> void:
 	var dialog = AcceptDialog.new()
 	dialog.dialog_text = text
@@ -92,7 +106,6 @@ func show_message(text: String) -> void:
 	dialog.popup_centered()
 
 # === Save/Load ===
-
 func graph_to_save_data() -> Dictionary:
 	var save_data := {
 		"simulation": simulation.save_state(),
@@ -149,7 +162,6 @@ func graph_from_save_data(save_data: Dictionary) -> void:
 	pause_simulation()
 
 # === File Operations ===
-
 func save_graph(save_path: String = DEFAULT_SAVE_PATH) -> void:
 	var file = FileAccess.open(save_path, FileAccess.WRITE)
 	if not file:
@@ -157,7 +169,6 @@ func save_graph(save_path: String = DEFAULT_SAVE_PATH) -> void:
 		return
 	
 	var save_data = graph_to_save_data()
-
 	file.store_string(JSON.stringify(save_data))
 	print("Graph saved successfully")
 
@@ -187,7 +198,6 @@ func load_graph(load_file_path: String = DEFAULT_SAVE_PATH) -> void:
 func save_as_nft() -> void:
 	print('save_as_nft')
 	var save_data = graph_to_save_data()
-	
 	Web3Interface.mint_design(save_data)
 
 func load_from_nft(token_id: int) -> void:
@@ -209,10 +219,8 @@ func _on_node_moved() -> void:
 	save_graph()
 
 func _on_delete_nodes_request(nodes: Array) -> void:
-	for node_name in nodes: #TBD implement nodes removal
-
+	for node_name in nodes:
 		simulation.remove_node(NodePath(node_name))
-
 		var node = graph_edit.get_node(NodePath(node_name))
 		if node:
 			node.queue_free()
@@ -251,13 +259,12 @@ func _on_wallet_connected() -> void:
 func _on_wallet_disconnected() -> void:
 	print("Wallet disconnected")
 
-func _on_nft_minted(token_id: int) -> void:
-	show_message("Design saved as NFT #" + str(token_id))
+func _on_nft_minted(_token_id: int) -> void:
+	print("NFT minted successfully")
 
-func _on_nft_load_complete(design_data: Dictionary) -> void:
-	new_graph()
-	# TBD Load from dics
-	graph_from_save_data(design_data)
+func _on_nft_load_complete(token_data: Dictionary) -> void:
+	if "metadata" in token_data and "graph_data" in token_data["metadata"]:
+		graph_from_save_data(token_data["metadata"]["graph_data"])
 
 # -- Dialog Signals --
 func _on_save_dialog_file_selected(path: String) -> void:

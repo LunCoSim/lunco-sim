@@ -1,14 +1,19 @@
 # wallet_connect_button.gd
 extends Button
 
+var web3_interface
+
 func _ready():
 	text = "Connect Wallet"
 	connect("pressed", _on_button_pressed)
 	
-	# Get Web3 interface and connect to its signals
-	var web3_interface = get_node("/root/Web3Interface")
-	web3_interface.connect("wallet_connected", _on_wallet_connected)
-	web3_interface.connect("wallet_disconnected", _on_wallet_disconnected)
+	# Get Web3 interface from the root scene
+	await get_tree().create_timer(0.1).timeout  # Wait for parent scene to initialize
+	var root = get_tree().root.get_node("RSCT")
+	if root:
+		web3_interface = root.Web3Interface
+		web3_interface.connect("wallet_connected", _on_wallet_connected)
+		web3_interface.connect("wallet_disconnected", _on_wallet_disconnected)
 	
 	# Style the button
 	add_theme_stylebox_override("normal", get_theme_stylebox("normal", "Button"))
@@ -18,7 +23,9 @@ func _ready():
 	custom_minimum_size.x = 120
 
 func _on_button_pressed():
-	var web3_interface = get_node("/root/Web3Interface")
+	if !web3_interface:
+		return
+		
 	if text == "Connect Wallet":
 		web3_interface.connect_wallet()
 	else:
