@@ -45,7 +45,7 @@ logger/file/log_file_write=true
 logger/file/file_path="res://game.log"
 logger/stdout_format="[{hour}:{minute}:{second}][{level}]{text}"
 logger/file_format="[{hour}:{minute}:{second}][{level}]{text}"
-enabled=PackedStringArray("res://addons/panku_console/plugin.cfg")
+enabled=PackedStringArray("res://addons/lunco-content/plugin.cfg", "res://addons/panku_console/plugin.cfg")
 
 [gdunit4]
 
