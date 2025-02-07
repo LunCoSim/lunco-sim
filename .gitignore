@@ -6,7 +6,7 @@ build/
 .plugged
 
 #Managed by gd-plug
-addons/
+addons/panku_console/
 
 #webrtc addon. Probably later could be managed by gd-plug
 webrtc/
