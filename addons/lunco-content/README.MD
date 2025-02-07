@@ -12,9 +12,35 @@ LunCo Content Manager allows you to:
 
 ## Installation
 
-1. Copy the `lunco-content` folder to your project's `addons` directory
-2. Enable the plugin in Project -> Project Settings -> Plugins
-3. You should see a "Content" button in the editor toolbar
+### Method 1: Using gd-plug (Recommended)
+
+1. Make sure you have [gd-plug](https://github.com/imjp94/gd-plug) installed
+2. Add to your `plug.gd`:
+```gdscript
+func _plugging() -> void:
+    plug("LunCoSim/lunco-content", {"include": ["."]})
+```
+3. Run installation:
+```bash
+./plug.gd install
+```
+
+### Method 2: Manual Installation
+
+1. Clone or download this repository
+2. Copy the `lunco-content` folder to your project's `addons` directory
+3. Enable the plugin in Project -> Project Settings -> Plugins
+4. Restart Godot Editor
+
+### Verifying Installation
+
+1. After restarting Godot, you should see a "Content" button in the editor toolbar
+2. Click it to see available options:
+   - Check Missing Content
+   - Download All Content
+3. If you don't see the button, check:
+   - Project Settings -> Plugins -> Make sure "LunCo Content Manager" is enabled
+   - Editor output for any error messages
 
 ## Usage
 
