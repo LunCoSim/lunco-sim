@@ -15,28 +15,28 @@ func add_ui_for_node(node: SimulationNode, _position: Vector2 = Vector2.ZERO) ->
 func create_ui_node(simulation_node: SimulationNode, _position: Vector2 = Vector2.ZERO) -> GraphNode:
 	var ui_node: GraphNode
 	
-	# Create specific UI node based on simulation node type
-	if simulation_node is StorageFacility:
+	# Create specific UI node based on simulation node type and properties
+	if simulation_node.get_class() == "StorageFacility" or ("capacity" in simulation_node and "stored_resource_type" in simulation_node):
 		ui_node = load(MODULE_PATH + "/ui/facilities/ui_storage.tscn").instantiate()
-	elif simulation_node is ResourceH2:
+	elif simulation_node.get_class() == "ResourceH2" or ("resource_type" in simulation_node and simulation_node.resource_type == "H2"):
 		ui_node = load(MODULE_PATH + "/ui/resources/ui_resource_h2.tscn").instantiate()
-	elif simulation_node is ResourceO2:
+	elif simulation_node.get_class() == "ResourceO2" or ("resource_type" in simulation_node and simulation_node.resource_type == "O2"):
 		ui_node = load(MODULE_PATH + "/ui/resources/ui_resource_o2.tscn").instantiate()
-	elif simulation_node is ResourceH2O:
+	elif simulation_node.get_class() == "ResourceH2O" or ("resource_type" in simulation_node and simulation_node.resource_type == "H2O"):
 		ui_node = load(MODULE_PATH + "/ui/resources/ui_resource_h2o.tscn").instantiate()
-	elif simulation_node is ObjectFactory:
+	elif simulation_node.get_class() == "ObjectFactory" or ("o2_input_rate" in simulation_node and "h2_input_rate" in simulation_node):
 		ui_node = load(MODULE_PATH + "/ui/facilities/ui_object_factory.tscn").instantiate()
-	elif simulation_node is SolarPowerPlant:
+	elif simulation_node.get_class() == "SolarPowerPlant" or ("power_output" in simulation_node and "solar_irradiance" in simulation_node):
 		ui_node = load(MODULE_PATH + "/ui/facilities/ui_solar_power_plant.tscn").instantiate()
-	elif simulation_node is Pump:
+	elif simulation_node.get_class() == "Pump" or ("pump_rate" in simulation_node):
 		ui_node = load(MODULE_PATH + "/ui/facilities/ui_pump.tscn").instantiate()
-	elif simulation_node is ElectrolyticFactory:
+	elif simulation_node.get_class() == "ElectrolyticFactory" or ("h2o_input_rate" in simulation_node and "h2_output_rate" in simulation_node):
 		ui_node = load(MODULE_PATH + "/ui/facilities/ui_electrolytic_factory.tscn").instantiate()
-	elif simulation_node is NoteNode:
+	elif simulation_node.get_class() == "NoteNode" or "note_text" in simulation_node:
 		ui_node = load(MODULE_PATH + "/ui/other/ui_note_node.tscn").instantiate()
 	else:
 		# Default UI node if no specific type matches
-		ui_node = load(MODULE_PATH + "/ui/core/ui_simulation_node.tscn").instantiate()
+		ui_node = load(MODULE_PATH + "/ui/other/ui_note_node.tscn").instantiate()
 	
 	# Set common properties
 	if ui_node:
