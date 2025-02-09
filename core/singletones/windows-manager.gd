@@ -54,15 +54,14 @@ func _make_window(control: Control, title: String) -> Window:
 	# Add the content
 	win.add_child(control)
 	
-	# Set size based on content and convert to Vector2i
-	var content_size: Vector2i = Vector2i(control.get_combined_minimum_size())
+	# Set size based on content
+	var content_size := Vector2i(control.get_combined_minimum_size())
 	win.min_size = content_size
 	win.size = content_size
 	
-	# Center the window - ensure both operands are Vector2i
-	var viewport_rect := get_viewport().get_visible_rect()
-	var viewport_size: Vector2i = viewport_rect.size
-	win.position = (viewport_size - content_size) / 2
+	# Center the window
+	var viewport_size := get_viewport().get_visible_rect().size
+	win.position = Vector2i((viewport_size.x - content_size.x) / 2, (viewport_size.y - content_size.y) / 2)
 	
 	# Hide by default
 	win.hide()
@@ -84,9 +83,9 @@ func toggle_main_menu():
 		MainMenu.hide()
 	else:
 		print("[LCWindows] Showing main menu")
-		var viewport_size: Vector2i = get_viewport().get_visible_rect().size
-		var win_size: Vector2i = Vector2i(MainMenu.size)
-		MainMenu.position = (viewport_size - win_size) / 2
+		var viewport_size := get_viewport().get_visible_rect().size
+		var win_size := Vector2i(MainMenu.size)
+		MainMenu.position = Vector2i((viewport_size.x - win_size.x) / 2, (viewport_size.y - win_size.y) / 2)
 		MainMenu.show()
 
 func toggle_chat():
@@ -104,9 +103,9 @@ func toggle_chat():
 		ChatWindow.hide()
 	else:
 		print("[LCWindows] Showing chat")
-		var viewport_size: Vector2i = get_viewport().get_visible_rect().size
-		var win_size: Vector2i = Vector2i(ChatWindow.size)
-		ChatWindow.position = (viewport_size - win_size) / 2
+		var viewport_size := get_viewport().get_visible_rect().size
+		var win_size := Vector2i(ChatWindow.size)
+		ChatWindow.position = Vector2i((viewport_size.x - win_size.x) / 2, (viewport_size.y - win_size.y) / 2)
 		ChatWindow.show()
 
 func show_tutoril():
@@ -116,9 +115,9 @@ func show_tutoril():
 		return
 		
 	if TutorialWindow:
-		var viewport_size: Vector2i = get_viewport().get_visible_rect().size
-		var win_size: Vector2i = Vector2i(TutorialWindow.size)
-		TutorialWindow.position = (viewport_size - win_size) / 2
+		var viewport_size := get_viewport().get_visible_rect().size
+		var win_size := Vector2i(TutorialWindow.size)
+		TutorialWindow.position = Vector2i((viewport_size.x - win_size.x) / 2, (viewport_size.y - win_size.y) / 2)
 		TutorialWindow.show()
 	else:
 		push_error("[LCWindows] Tutorial window not initialized")

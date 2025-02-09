@@ -31,8 +31,6 @@ func _ready():
 	var key_path = ""
 
 	#--------------------------------
-	Panku.gd_exprenv.register_env("Avatar", $Avatar)
-	Panku.module_manager.get_module("native_logger").toggle_overlay()
 
 	print("Simulation _ready, arguments: ", arguments)
 
@@ -200,14 +198,11 @@ func _on_avatar_release_control(path: NodePath):
 
 func _on_multiplayer_spawner_spawned(entity):	
 	entities.append(entity)
-	Panku.notify("%s created" % entity.name)
 	entity_spawned.emit(entity)
 	entities_updated.emit(entities)
 	
 	#TBD It's done for debug, should be done somewhere else, maybe special debug
 	#node? Maybe it should be global? Should be as reaction on entity_spawned
-	
-	Panku.gd_exprenv.register_env(entity.name, entity)
 
 #---------------------------------------
 # Signals from Avatar
