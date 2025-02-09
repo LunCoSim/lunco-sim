@@ -15,6 +15,10 @@ func on_reload_profile():
 	%Wallet.text = Profile.wallet
 #------------------------------------
 
+func _on_back_to_launcher_pressed():
+	get_tree().change_scene_to_file("res://launcher/launcher.tscn")
+	LCWindows.toggle_main_menu()
+
 func change_scene(scene: String):
 	pass
 	#SceneManager.no_effect_change_scene(scene)
