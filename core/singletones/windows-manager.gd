@@ -20,7 +20,7 @@ func _ready():
 	var TutorialWindowScene = load("res://core/widgets/tutorial.tscn").instantiate()
 	TutorialWindow = make_window(TutorialWindowScene, "Tutorial")
 	add_child(TutorialWindow)
-	center_window(TutorialWindow)
+	position_top_left(TutorialWindow)
 	
 static func make_window(control, title) -> Window:
 	var win = Window.new()
@@ -30,15 +30,29 @@ static func make_window(control, title) -> Window:
 	win.visible = false
 	win.unresizable = true
 	win.close_requested.connect(win.hide)
-	win.initial_position = Window.WINDOW_INITIAL_POSITION_CENTER_SCREEN_WITH_MOUSE_FOCUS
 	return win
 
 func center_window(window: Window):
-	# Get the screen size
-	var screen_size = DisplayServer.screen_get_size()
-	# Calculate the center position
-	var x = (screen_size.x - window.size.x) / 2
-	var y = (screen_size.y - window.size.y) / 2
+	# Get the main window size and position
+	var main_window_size = get_window().size
+	var main_window_position = get_window().position
+	
+	# Calculate the center position relative to the main window
+	var x = main_window_position.x + (main_window_size.x - window.size.x) / 2
+	var y = main_window_position.y + (main_window_size.y - window.size.y) / 2
+	
+	# Set the window position
+	window.position = Vector2i(x, y)
+
+func position_top_left(window: Window):
+	# Get the main window position
+	var main_window_position = get_window().position
+	
+	# Add a small margin from the edges
+	var margin = 10
+	var x = main_window_position.x + margin
+	var y = main_window_position.y + margin
+	
 	# Set the window position
 	window.position = Vector2i(x, y)
 
@@ -54,7 +68,7 @@ func toggle_chat():
 
 func show_tutorial():
 	TutorialWindow.show()
-	center_window(TutorialWindow)
+	position_top_left(TutorialWindow)
 	
 func hide_tutorial():
 	TutorialWindow.hide()
