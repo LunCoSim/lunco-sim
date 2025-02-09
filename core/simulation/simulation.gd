@@ -74,7 +74,7 @@ func _ready():
 	ControlManager.control_request_denied.connect(_on_control_request_denied)
 	
 	LCWindows.show_tutorial()
-	LCWindows.toggle_main_menu() # Show main menu by default
+	# Main menu will be shown on demand with ESC key
 	
 ## Called every frame. 'delta' is the elapsed time since the previous frame.
 #func _process(_delta):
