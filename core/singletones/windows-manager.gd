@@ -9,12 +9,15 @@ var TutorialWindow: Window
 func _ready():
 	var MainMenuScene = load("res://core/widgets/menu/main_menu.tscn").instantiate()
 	MainMenu = make_window(MainMenuScene, "Main menu")
+	add_child(MainMenu)
 	
 	var ChatWindowScene = load("res://modules/chat/chat-ui.tscn").instantiate()
 	ChatWindow = make_window(ChatWindowScene, "Chat")
+	add_child(ChatWindow)
 	
 	var TutorialWindowScene = load("res://core/widgets/tutorial.tscn").instantiate()
 	TutorialWindow = make_window(TutorialWindowScene, "Tutorial")
+	add_child(TutorialWindow)
 	
 static func make_window(control, title) -> Window:
 	var win = Window.new()
