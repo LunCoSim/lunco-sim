@@ -18,6 +18,7 @@ func _ready():
 		tree.add_item(str(entity))
 	
 	avatar = get_parent()
+	existing_entity_selected.connect(avatar._on_existing_entity_selected)
 	
 	tree.select(avatar.entity_to_spawn)
 	
@@ -68,10 +69,11 @@ func _on_entities_item_selected(index):
 	pass # Replace with function body.
 
 func _on_existing_entity_selected(idx):
+	print("DEBUG: UI button clicked for entity: ", idx)
 	existing_entity_selected.emit(idx)
 	
 func update_entities(entities):
-	
+	print("UI: Updating entities list with ", entities.size(), " entities")
 	var tree: HBoxContainer = %LiveEntities
 	
 	for child in tree.get_children():
@@ -84,17 +86,36 @@ func update_entities(entities):
 		var entity_name = str(entity.name)
 		
 		# Check if the entity has a multiplayer authority
-		# if entity.get("multiplayer_authority"):
 		var owner_id = entity.get_multiplayer_authority()
 		entity_name += " (Owner: " + str(owner_id) + ")"
 		
+		print("UI: Creating button for entity ", entity_name, " at index ", idx)
 		button.text = entity_name
+		button.custom_minimum_size = Vector2(120, 30)  # Give buttons a consistent size
+		button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND  # Show hand cursor on hover
+		
+		# Create a style for the button
+		var normal_style = StyleBoxFlat.new()
+		normal_style.bg_color = Color(0.2, 0.2, 0.2, 0.8)
+		normal_style.corner_radius_top_left = 4
+		normal_style.corner_radius_top_right = 4
+		normal_style.corner_radius_bottom_right = 4
+		normal_style.corner_radius_bottom_left = 4
+		button.add_theme_stylebox_override("normal", normal_style)
+		
+		var hover_style = normal_style.duplicate()
+		hover_style.bg_color = Color(0.3, 0.3, 0.3, 0.9)
+		button.add_theme_stylebox_override("hover", hover_style)
+		
 		tree.add_child(button)
-
 		button.pressed.connect(_on_existing_entity_selected.bind(idx))
-		button.flat = true
+		
+		# Show if this is the currently controlled entity
 		if avatar.target and entity == avatar.target.get_parent():
-			button.flat = false
+			var active_style = normal_style.duplicate()
+			active_style.bg_color = Color(0.2, 0.4, 0.8, 0.8)
+			button.add_theme_stylebox_override("normal", active_style)
+		
 		idx += 1
 
 func _on_update_connected_users():
