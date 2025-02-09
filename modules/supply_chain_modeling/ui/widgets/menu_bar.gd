@@ -10,6 +10,7 @@ signal load_from_file_requested
 signal save_as_nft_requested
 signal load_from_nft_requested
 signal load_all_nfts_requested
+signal return_to_launcher_requested
 
 func _ready() -> void:
 	# Set menu titles
@@ -29,6 +30,8 @@ func _on_file_menu_pressed(id: int) -> void:
 			emit_signal("save_to_file_requested")
 		6: # Load from File
 			emit_signal("load_from_file_requested")
+		8: # Return to Launcher
+			emit_signal("return_to_launcher_requested")
 
 func _on_nft_menu_pressed(id: int) -> void:
 	match id:

@@ -48,7 +48,24 @@ func _ready():
 	load_graph()
 	save_graph() # Hack to fix the bug that after loading form file info is deleted
 
-func _connect_signals():
+func _connect_signals() -> void:
+	# Connect menu signals
+	var menu_bar = $UI/MenuContainer/MenuBar
+	
+	# Only connect signals if they're not already connected
+	if !menu_bar.new_graph_requested.is_connected(new_graph):
+		menu_bar.new_graph_requested.connect(new_graph)
+	if !menu_bar.save_requested.is_connected(save_graph):
+		menu_bar.save_requested.connect(func(): save_graph())
+	if !menu_bar.load_requested.is_connected(load_graph):
+		menu_bar.load_requested.connect(func(): load_graph())
+	if !menu_bar.save_to_file_requested.is_connected(_on_save_to_file_requested):
+		menu_bar.save_to_file_requested.connect(_on_save_to_file_requested)
+	if !menu_bar.load_from_file_requested.is_connected(_on_load_from_file_requested):
+		menu_bar.load_from_file_requested.connect(_on_load_from_file_requested)
+	if !menu_bar.return_to_launcher_requested.is_connected(_on_return_to_launcher_requested):
+		menu_bar.return_to_launcher_requested.connect(_on_return_to_launcher_requested)
+	
 	Web3Interface.connect("wallet_connected", _on_wallet_connected)
 	Web3Interface.connect("wallet_disconnected", _on_wallet_disconnected)
 	Web3Interface.connect("nft_minted", _on_nft_minted)
@@ -278,4 +295,7 @@ func _on_save_to_file_requested() -> void:
 
 func _on_load_from_file_requested() -> void:
 	load_dialog.popup_centered(Vector2(800, 600))
+
+func _on_return_to_launcher_requested() -> void:
+	get_tree().change_scene_to_file("res://launcher/launcher.tscn")
 	

@@ -49,7 +49,7 @@ script = ExtResource("2_74p8c")
 [node name="FileMenu" type="PopupMenu" parent="UI/MenuContainer/MenuBar"]
 title = "File"
 size = Vector2i(134, 170)
-item_count = 7
+item_count = 9
 item_0/text = "New"
 item_0/id = 0
 item_1/id = 1
@@ -64,6 +64,10 @@ item_5/text = "Save File"
 item_5/id = 5
 item_6/text = "Load File"
 item_6/id = 6
+item_7/id = 7
+item_7/separator = true
+item_8/text = "Return to Launcher"
+item_8/id = 8
 
 [node name="NFTMenu" type="PopupMenu" parent="UI/MenuContainer/MenuBar"]
 size = Vector2i(104, 100)
