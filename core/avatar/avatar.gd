@@ -157,7 +157,7 @@ func _input(event):
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
 		handle_click(event.position)
 
-	if Input.is_action_just_pressed("ui_cancel"): #TBD maybe move from avatar?
+	if Input.is_action_just_pressed("main_menu"): #TBD maybe move from avatar?
 		#SceneManager.no_effect_change_scene("back")
 		#TBD: Show/hide menu, should be a signal? To what?
 		LCWindows.toggle_main_menu()
