@@ -40,7 +40,7 @@ static func get_script_paths(directory_path: String) -> Array:
 		dir.list_dir_begin()
 		var file_name = dir.get_next()
 		while file_name != "":
-			if file_name.ends_with(".gd"):
+			if file_name.ends_with(".gd") or file_name.ends_with(".gdc"):
 				paths.append(directory_path + file_name)
 			file_name = dir.get_next()
 	return paths
