@@ -4,6 +4,7 @@
 extends "res://addons/gd-plug/plug.gd" ## it's the only addon to be added to git, the rest are managed by it
 
 func _plugging():
+	pass
 	#UI
 	# plug("folt-a/godot-idea-board")
 	# plug("imjp94/gd-plug-ui")
@@ -20,7 +21,7 @@ func _plugging():
 	
 	#Developer Tools
 	# plug("Ark2000/PankuConsole")
-	plug("LunCoSim/PankuConsole") #using LunCo's fork
+	#plug("LunCoSim/PankuConsole") #using LunCo's fork
 	# plug("godot-extended-libraries/godot-debug-menu")
 	#plug("Ericdowney/SignalVisualizer")
 	
