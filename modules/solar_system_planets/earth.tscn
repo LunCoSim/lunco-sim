@@ -1,6 +1,6 @@
 [gd_scene load_steps=2 format=3 uid="uid://ddaqlkbgl7bdl"]
 
-[ext_resource type="Script" path="res://modules/solar_system_planets/earth.gd" id="1_dxuhv"]
+[ext_resource type="Script" uid="uid://cidrocc5faxh4" path="res://modules/solar_system_planets/earth.gd" id="1_dxuhv"]
 
 [node name="Earth" type="Node3D"]
 script = ExtResource("1_dxuhv")
