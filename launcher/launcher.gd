@@ -3,7 +3,6 @@ extends Control
 func _ready():
 	$VBoxContainer/SupplyChainButton.pressed.connect(_on_supply_chain_pressed)
 	$VBoxContainer/MainButton.pressed.connect(_on_main_pressed)
-	$VBoxContainer/MainAnimatedButton.pressed.connect(_on_main_animated_pressed)
 
 func _on_supply_chain_pressed():
 	# Load supply chain scene
