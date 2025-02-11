@@ -36,14 +36,16 @@ theme_override_constants/separation = 10
 
 [node name="Label" type="Label" parent="VBoxContainer"]
 layout_mode = 2
-theme_override_font_sizes/font_size = 30
+theme_override_font_sizes/font_size = 90
 text = "LunCo Launcher"
 horizontal_alignment = 1
 
 [node name="SupplyChainButton" type="Button" parent="VBoxContainer"]
 layout_mode = 2
+theme_override_font_sizes/font_size = 40
 text = "Supply Chain Modeling"
 
 [node name="MainButton" type="Button" parent="VBoxContainer"]
 layout_mode = 2
+theme_override_font_sizes/font_size = 40
 text = "3D Simulation"
