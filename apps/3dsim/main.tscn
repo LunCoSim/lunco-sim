@@ -1,11 +1,10 @@
-[gd_scene load_steps=7 format=3 uid="uid://c4vgq4emswcqj"]
+[gd_scene load_steps=6 format=3 uid="uid://c4vgq4emswcqj"]
 
 [ext_resource type="PackedScene" uid="uid://oulno1atrp8k" path="res://core/simulation/simulation.tscn" id="1_dpa21"]
 [ext_resource type="PackedScene" uid="uid://cpbv4fmfxppt1" path="res://modules/solar_system_planets/sun.tscn" id="2_lwo2e"]
 [ext_resource type="PackedScene" uid="uid://ddaqlkbgl7bdl" path="res://modules/solar_system_planets/earth.tscn" id="3_2elmi"]
 [ext_resource type="PackedScene" uid="uid://csqh45xcqbewi" path="res://modules/solar_system_planets/moon.tscn" id="4_p5lxe"]
 [ext_resource type="PackedScene" uid="uid://c7q7gaaaa8g5g" path="res://content/maps/Langrenus/langrenus_crater_map.tscn" id="5_2uqv4"]
-[ext_resource type="PackedScene" uid="uid://dmxcgvtora8v2" path="res://content/content.tscn" id="6_k2s8p"]
 
 [node name="Simulation" node_paths=PackedStringArray("spawn_node") instance=ExtResource("1_dpa21")]
 spawn_node = NodePath("Universe/Sun/Earth/Moon/LangrenusCraterMap/Spawner")
@@ -28,10 +27,20 @@ spawn_path = NodePath("../Universe/Sun/Earth/Moon/LangrenusCraterMap/Spawner")
 [node name="LangrenusCraterMap" parent="Universe/Sun/Earth/Moon" index="0" instance=ExtResource("5_2uqv4")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 51, 0)
 
-[node name="Spawner" type="Node3D" parent="Universe/Sun/Earth/Moon/LangrenusCraterMap" index="2"]
+[node name="Spawner" type="Node3D" parent="Universe/Sun/Earth/Moon/LangrenusCraterMap" index="1"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -55.4874, 0)
 
-[node name="Content" parent="Universe/Sun/Earth/Moon/LangrenusCraterMap" index="3" instance=ExtResource("6_k2s8p")]
+[node name="Content" parent="Universe/Sun/Earth/Moon/LangrenusCraterMap" index="2"]
+_import_path = NodePath("")
+unique_name_in_owner = false
+process_mode = 0
+process_priority = 0
+process_physics_priority = 0
+process_thread_group = 0
+physics_interpolation_mode = 0
+auto_translate_mode = 0
+editor_description = ""
+script = null
 
 [node name="LaunchPad" type="Node3D" parent="Universe/Sun/Earth/Moon/LangrenusCraterMap/Content" index="0"]
 transform = Transform3D(107.71, 0, 22.3273, 0, 110, 0, -22.3273, 0, 107.71, 156.754, -87.3701, -339.067)
