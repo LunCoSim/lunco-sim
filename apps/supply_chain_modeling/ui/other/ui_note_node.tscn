@@ -1,6 +1,6 @@
 [gd_scene load_steps=2 format=3 uid="uid://dlyuo32ewny4a"]
 
-[ext_resource type="Script" uid="uid://dg0v2vxnmf15c" path="res://ui/other/ui_note_node.gd" id="1_script"]
+[ext_resource type="Script" uid="uid://dg0v2vxnmf15c" path="res://apps/supply_chain_modeling/ui/other/ui_note_node.gd" id="1_script"]
 
 [node name="NoteNode" type="GraphNode"]
 offset_right = 200.0

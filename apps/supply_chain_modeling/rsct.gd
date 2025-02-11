@@ -28,18 +28,18 @@ func _init():
 	if Engine.has_singleton("Web3Interface"):
 		Web3Interface = Engine.get_singleton("Web3Interface")
 	else:
-		Web3Interface = load("res://modules/supply_chain_modeling/singletons/web3_interface.gd").new()
+		Web3Interface = load("res://apps/supply_chain_modeling/singletons/web3_interface.gd").new()
 		add_child(Web3Interface)
 	
 	if Engine.has_singleton("Utils"):
 		Utils = Engine.get_singleton("Utils")
 	else:
-		Utils = load("res://modules/supply_chain_modeling/singletons/utils.gd").new()
+		Utils = load("res://apps/supply_chain_modeling/singletons/utils.gd").new()
 		add_child(Utils)
 	
-	Utils.initialize_class_map("res://modules/supply_chain_modeling/simulation/resources/")
-	Utils.initialize_class_map("res://modules/supply_chain_modeling/simulation/facilities/")
-	Utils.initialize_class_map("res://modules/supply_chain_modeling/simulation/other/")
+	Utils.initialize_class_map("res://apps/supply_chain_modeling/simulation/resources/")
+	Utils.initialize_class_map("res://apps/supply_chain_modeling/simulation/facilities/")
+	Utils.initialize_class_map("res://apps/supply_chain_modeling/simulation/other/")
 
 func _ready():
 	pause_simulation()

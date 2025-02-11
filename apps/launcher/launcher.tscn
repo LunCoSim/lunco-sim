@@ -1,6 +1,6 @@
 [gd_scene load_steps=2 format=3 uid="uid://b8r6g3rgfmqxv"]
 
-[ext_resource type="Script" uid="uid://bvk5inamcxctr" path="res://launcher/launcher.gd" id="1_2u4vx"]
+[ext_resource type="Script" uid="uid://bvk5inamcxctr" path="res://apps/launcher/launcher.gd" id="1_2u4vx"]
 
 [node name="Launcher" type="Control"]
 layout_mode = 3

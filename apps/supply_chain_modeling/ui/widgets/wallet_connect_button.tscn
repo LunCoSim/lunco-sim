@@ -1,6 +1,6 @@
 [gd_scene load_steps=2 format=3 uid="uid://baib0y8cocg71"]
 
-[ext_resource type="Script" path="res://modules/supply_chain_modeling/ui/widgets/wallet_connect_button.gd" id="1_yvhcs"]
+[ext_resource type="Script" uid="uid://bh7kdy50klx8b" path="res://apps/supply_chain_modeling/ui/widgets/wallet_connect_button.gd" id="1_yvhcs"]
 [ext_resource type="Theme" uid="uid://hve1e7mnexbi" path="res://themes/theme.tres" id="2_theme"]
 
 [node name="WalletConnectButton" type="Button"]

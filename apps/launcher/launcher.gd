@@ -6,11 +6,11 @@ func _ready():
 
 func _on_supply_chain_pressed():
 	# Load supply chain scene
-	get_tree().change_scene_to_file("res://modules/supply_chain_modeling/rsct.tscn")
+	get_tree().change_scene_to_file("res://apps/supply_chain_modeling/rsct.tscn")
 
 func _on_main_pressed():
 	# Load main scene
-	get_tree().change_scene_to_file("res://main.tscn")
+	get_tree().change_scene_to_file("res://apps/3dsim/main.tscn")
 
 func _on_main_animated_pressed():
 	# Load main animated scene

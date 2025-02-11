@@ -1,6 +1,6 @@
 [gd_scene load_steps=2 format=3 uid="uid://c4iqxvxvxvxvx"]
 
-[ext_resource type="Script" uid="uid://ck0ya0dlsxygw" path="res://modules/supply_chain_modeling/ui/facilities/ui_storage.gd" id="1_bklm3"]
+[ext_resource type="Script" uid="uid://ck0ya0dlsxygw" path="res://apps/supply_chain_modeling/ui/resources/ui_resource_h2.gd" id="1_bklm3"]
 
 [node name="Storage" type="GraphNode"]
 offset_right = 138.0

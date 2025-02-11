@@ -1,7 +1,7 @@
 class_name GraphView
 extends GraphEdit
 
-const MODULE_PATH = "res://modules/supply_chain_modeling"
+const MODULE_PATH = "res://apps/supply_chain_modeling"
 
 func clear_graph():
 	for node in get_children():
