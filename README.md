@@ -29,7 +29,7 @@ Our vision is to provide a comprehensive suite of open-source applications tailo
 
 1. Install [Godot 4.4 Beta 3](https://godotengine.org/article/dev-snapshot-godot-4-4-beta-3/#downloads)
 
-2. Install [git lfs](https://github.com/git-lfs/git-lfs#getting-started). It handles large files in the repository.
+2. Install [git lfs](https://github.com/git-lfs/git-lfs#getting-started). It handles large files in the repository. Use git-cmd if you are on Windows.
 
 3. Clone this repo in a terminal: 
 ```bash
