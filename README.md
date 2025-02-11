@@ -22,7 +22,52 @@ Our vision is to provide a comprehensive suite of open-source applications tailo
 
 ![](https://gateway.lighthouse.storage/ipfs/bafybeidjpafb6zg5lalug7z5sfzvszh2erskbbdqcloejr2asex2lfg4ky)
 
-### 💰 Donations
+
+## 🛠 Installation
+
+0. The development is done on Linux Mate, so there could be issues running on Windows and MacOs. Please reach us
+
+1. Install [Godot 4](https://godotengine.org/download/)
+   1. Your Godot installation has to be available via command line. Check [this](https://docs.godotengine.org/en/stable/tutorials/editor/command_line_tutorial.html) tutorial to set it up
+
+2. Install [git lfs](https://github.com/git-lfs/git-lfs#getting-started). It handles large files in the repository.
+
+3. Clone this repo in a terminal: 
+```bash
+git clone -b main --single-branch --recurse-submodules https://github.com/LunCoSim/lunco-sim.git
+```
+
+4. After cloning, change directory to project folder
+```bash
+cd lunco-sim
+```
+
+5. Enable git-lfs in the repository after cloning: 
+```bash
+git lfs install
+```
+
+6. We still need to download the content files from git-lfs. Run the following command to download them:
+```bash
+git pull --recurse-submodules
+git lfs pull && git submodule foreach git lfs pull
+```
+
+7. Now open project and wait till intenal conent management downloads all the files. LunCo Content Manager (new system, gradually being adopted):
+   1. Will be installed automatically with other addons
+   2. After installation, you'll see a "Content" button in the editor toolbar
+   3. Use it to download missing content files when needed
+
+
+### Content Management Notes
+- Some large files are still managed by git-lfs
+- Newer content will use `.content` files for external storage
+- If you see missing files:
+  1. First try git-lfs: `git lfs pull`
+  2. Then use the Content Manager in the editor toolbar
+  3. If issues persist, please reach out on Discord
+
+## 💰 Donations
 
 Support us on [JuiceBox](https://juicebox.money/v2/p/763)!
 
@@ -39,47 +84,6 @@ Support us on [JuiceBox](https://juicebox.money/v2/p/763)!
 	
 5. **Interactive Training Modules**: Engage in hands-on training sessions within the LunCo platform. Simulate real-world lunar scenarios, test your designs, and receive instant feedback, all within a dynamic and interactive environment.
 
-## 🛠 Installation
-
-0. The development is done on Linux Mate, so there could be issues running on Windows and MacOs. Please reach us
-
-1. Install [Godot 4](https://godotengine.org/download/)
-   1. Your Godot installation has to be available via command line. Check [this](https://docs.godotengine.org/en/stable/tutorials/editor/command_line_tutorial.html) tutorial to set it up
-
-2. Install [FBX2glTF](https://github.com/godotengine/FBX2glTF/tags):
-   1. Download the file and place it somewhere. Do not put it into LunCo folder, as you could have issues with git
-   2. Godot will ask for this file when you will open the project
-
-3. Content Management Setup (we're transitioning between two systems):
-   
-   A. Git LFS (currently used for most content):
-   1. Install [git lfs](https://github.com/git-lfs/git-lfs#getting-started)
-   2. Enable git-lfs in the repository after cloning: `git lfs install`
-   
-   B. LunCo Content Manager (new system, gradually being adopted):
-   1. Will be installed automatically with other addons
-   2. After installation, you'll see a "Content" button in the editor toolbar
-   3. Use it to download missing content files when needed
-
-4. Clone this repo in a terminal: 
-```bash
-git clone -b main --single-branch --recurse-submodules https://github.com/LunCoSim/lunco-sim.git
-```
-
-5. After cloning, change directory to project folder
-```bash
-cd lunco-sim
-```
-
-6. Open the project in Godot and run
-
-### Content Management Notes
-- Some large files are still managed by git-lfs
-- Newer content will use `.content` files for external storage
-- If you see missing files:
-  1. First try git-lfs: `git lfs pull`
-  2. Then use the Content Manager in the editor toolbar
-  3. If issues persist, please reach out on Discord
 
 ## 🌐 Community & Support
 
