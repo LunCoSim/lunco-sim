@@ -297,5 +297,5 @@ func _on_load_from_file_requested() -> void:
 	load_dialog.popup_centered(Vector2(800, 600))
 
 func _on_return_to_launcher_requested() -> void:
-	get_tree().change_scene_to_file("res://launcher/launcher.tscn")
+	get_tree().change_scene_to_file("res://apps/launcher/launcher.tscn")
 	
