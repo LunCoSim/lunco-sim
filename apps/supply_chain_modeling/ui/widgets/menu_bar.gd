@@ -12,10 +12,13 @@ signal load_from_nft_requested
 signal load_all_nfts_requested
 signal return_to_launcher_requested
 
+signal switch_tab_requested(tab_index: int)
+
 func _ready() -> void:
 	# Set menu titles
 	self.set_menu_title(0, "File")
 	self.set_menu_title(1, "NFT")
+	self.set_menu_title(2, "View")
 	
 
 func _on_file_menu_pressed(id: int) -> void:
@@ -41,3 +44,6 @@ func _on_nft_menu_pressed(id: int) -> void:
 			emit_signal("load_from_nft_requested")
 		2: # Load all NFTs
 			emit_signal("load_all_nfts_requested")
+
+func _on_view_menu_pressed(id: int) -> void:
+	emit_signal("switch_tab_requested", id)

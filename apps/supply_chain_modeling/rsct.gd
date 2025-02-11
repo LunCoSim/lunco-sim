@@ -2,6 +2,7 @@ extends Control
 
 # Node references
 @onready var graph_edit: GraphView = %GraphEdit
+@onready var tab_container: TabContainer = %TabContainer
 
 @onready var button_container: VBoxContainer = %NewNodesMenu
 @onready var properties: PropertiesEditor = %Properties
@@ -65,6 +66,8 @@ func _connect_signals() -> void:
 		menu_bar.load_from_file_requested.connect(_on_load_from_file_requested)
 	if !menu_bar.return_to_launcher_requested.is_connected(_on_return_to_launcher_requested):
 		menu_bar.return_to_launcher_requested.connect(_on_return_to_launcher_requested)
+	if !menu_bar.switch_tab_requested.is_connected(_on_switch_tab_requested):
+		menu_bar.switch_tab_requested.connect(_on_switch_tab_requested)
 	
 	Web3Interface.connect("wallet_connected", _on_wallet_connected)
 	Web3Interface.connect("wallet_disconnected", _on_wallet_disconnected)
@@ -298,4 +301,9 @@ func _on_load_from_file_requested() -> void:
 
 func _on_return_to_launcher_requested() -> void:
 	get_tree().change_scene_to_file("res://apps/launcher/launcher.tscn")
+
+# === Tab Management ===
+func _on_switch_tab_requested(tab_index: int) -> void:
+	if tab_container and tab_index >= 0 and tab_index < tab_container.get_tab_count():
+		tab_container.current_tab = tab_index
 	
