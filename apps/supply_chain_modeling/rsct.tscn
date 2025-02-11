@@ -1,4 +1,4 @@
-[gd_scene load_steps=12 format=3 uid="uid://3lmlrsbbacm"]
+[gd_scene load_steps=17 format=3 uid="uid://3lmlrsbbacm"]
 
 [ext_resource type="Script" uid="uid://dwi42apo3altc" path="res://apps/supply_chain_modeling/rsct.gd" id="1_xuhcs"]
 [ext_resource type="Script" uid="uid://b6qabjmm3e73a" path="res://apps/supply_chain_modeling/ui/widgets/menu_bar.gd" id="2_74p8c"]
@@ -11,10 +11,135 @@
 [ext_resource type="Script" uid="uid://bvu1h6it8sasj" path="res://apps/supply_chain_modeling/ui/widgets/new_nodes_menu.gd" id="7_jmsaq"]
 [ext_resource type="PackedScene" uid="uid://d4mxgvknls7ob" path="res://apps/supply_chain_modeling/ui/widgets/resource_editor.tscn" id="10_hnv65"]
 
-[sub_resource type="SystemFont" id="SystemFont_6bj1w"]
-hinting = 2
-multichannel_signed_distance_field = true
-oversampling = 7.1
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_hover"]
+content_margin_left = 24.0
+content_margin_top = 16.0
+content_margin_right = 24.0
+content_margin_bottom = 16.0
+bg_color = Color(0.15, 0.17, 0.2, 1)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.3, 0.32, 0.35, 1)
+corner_radius_top_left = 12
+corner_radius_top_right = 12
+corner_radius_bottom_right = 12
+corner_radius_bottom_left = 12
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_normal"]
+content_margin_left = 24.0
+content_margin_top = 16.0
+content_margin_right = 24.0
+content_margin_bottom = 16.0
+bg_color = Color(0.12, 0.14, 0.17, 1)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.2, 0.22, 0.25, 1)
+corner_radius_top_left = 12
+corner_radius_top_right = 12
+corner_radius_bottom_right = 12
+corner_radius_bottom_left = 12
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_pressed"]
+content_margin_left = 24.0
+content_margin_top = 16.0
+content_margin_right = 24.0
+content_margin_bottom = 16.0
+bg_color = Color(0.08, 0.1, 0.13, 1)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.2, 0.22, 0.25, 1)
+corner_radius_top_left = 12
+corner_radius_top_right = 12
+corner_radius_bottom_right = 12
+corner_radius_bottom_left = 12
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_panel"]
+content_margin_left = 32.0
+content_margin_top = 32.0
+content_margin_right = 32.0
+content_margin_bottom = 32.0
+bg_color = Color(0.12, 0.14, 0.17, 0.95)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.2, 0.22, 0.25, 1)
+corner_radius_top_left = 16
+corner_radius_top_right = 16
+corner_radius_bottom_right = 16
+corner_radius_bottom_left = 16
+shadow_color = Color(0, 0, 0, 0.3)
+shadow_size = 12
+
+[sub_resource type="Theme" id="Theme_t31qw"]
+resource_local_to_scene = true
+Button/colors/font_color = Color(0.875, 0.875, 0.875, 1)
+Button/colors/font_focus_color = Color(0.95, 0.95, 0.95, 1)
+Button/colors/font_hover_color = Color(0.95, 0.95, 0.95, 1)
+Button/colors/font_pressed_color = Color(0.75, 0.75, 0.75, 1)
+Button/constants/h_separation = 12
+Button/font_sizes/font_size = 20
+Button/styles/hover = SubResource("StyleBoxFlat_hover")
+Button/styles/normal = SubResource("StyleBoxFlat_normal")
+Button/styles/pressed = SubResource("StyleBoxFlat_pressed")
+Label/colors/font_color = Color(0.875, 0.875, 0.875, 1)
+Label/constants/line_spacing = 6
+Label/font_sizes/font_size = 20
+LineEdit/colors/font_color = Color(0.875, 0.875, 0.875, 1)
+LineEdit/colors/font_placeholder_color = Color(0.5, 0.5, 0.5, 1)
+LineEdit/constants/minimum_character_width = 4
+LineEdit/font_sizes/font_size = 20
+LineEdit/styles/focus = SubResource("StyleBoxFlat_hover")
+LineEdit/styles/normal = SubResource("StyleBoxFlat_normal")
+Panel/styles/panel = SubResource("StyleBoxFlat_panel")
+TabContainer/colors/font_selected_color = Color(0.95, 0.95, 0.95, 1)
+TabContainer/colors/font_unselected_color = Color(0.7, 0.7, 0.7, 1)
+TabContainer/constants/side_margin = 16
+TabContainer/font_sizes/font_size = 18
+TabContainer/styles/tab_selected = SubResource("StyleBoxFlat_normal")
+TabContainer/styles/tab_unselected = SubResource("StyleBoxFlat_hover")
+Tree/colors/font_color = Color(0.875, 0.875, 0.875, 1)
+Tree/constants/h_separation = 8
+Tree/constants/v_separation = 8
+Tree/font_sizes/font_size = 18
+
+[sub_resource type="Theme" id="Theme_eyak1"]
+resource_local_to_scene = true
+Button/colors/font_color = Color(0.875, 0.875, 0.875, 1)
+Button/colors/font_focus_color = Color(0.95, 0.95, 0.95, 1)
+Button/colors/font_hover_color = Color(0.95, 0.95, 0.95, 1)
+Button/colors/font_pressed_color = Color(0.75, 0.75, 0.75, 1)
+Button/constants/h_separation = 12
+Button/font_sizes/font_size = 20
+Button/styles/hover = SubResource("StyleBoxFlat_hover")
+Button/styles/normal = SubResource("StyleBoxFlat_normal")
+Button/styles/pressed = SubResource("StyleBoxFlat_pressed")
+Label/colors/font_color = Color(0.875, 0.875, 0.875, 1)
+Label/constants/line_spacing = 6
+Label/font_sizes/font_size = 20
+LineEdit/colors/font_color = Color(0.875, 0.875, 0.875, 1)
+LineEdit/colors/font_placeholder_color = Color(0.5, 0.5, 0.5, 1)
+LineEdit/constants/minimum_character_width = 4
+LineEdit/font_sizes/font_size = 20
+LineEdit/styles/focus = SubResource("StyleBoxFlat_hover")
+LineEdit/styles/normal = SubResource("StyleBoxFlat_normal")
+Panel/styles/panel = SubResource("StyleBoxFlat_panel")
+TabContainer/colors/font_selected_color = Color(0.95, 0.95, 0.95, 1)
+TabContainer/colors/font_unselected_color = Color(0.7, 0.7, 0.7, 1)
+TabContainer/constants/side_margin = 16
+TabContainer/font_sizes/font_size = 18
+TabContainer/styles/tab_selected = SubResource("StyleBoxFlat_normal")
+TabContainer/styles/tab_unselected = SubResource("StyleBoxFlat_hover")
+Tree/colors/font_color = Color(0.875, 0.875, 0.875, 1)
+Tree/constants/h_separation = 8
+Tree/constants/v_separation = 8
+Tree/font_sizes/font_size = 18
 
 [node name="RSCT" type="Control"]
 layout_mode = 3
@@ -113,6 +238,7 @@ script = ExtResource("4_jmsaq")
 
 [node name="WalletConnectButton" parent="UI/MenuContainer" instance=ExtResource("2_y60tv")]
 layout_mode = 2
+theme = SubResource("Theme_t31qw")
 
 [node name="WorkingArea" type="HSplitContainer" parent="UI"]
 layout_mode = 2
@@ -143,7 +269,7 @@ grow_vertical = 2
 size_flags_horizontal = 0
 size_flags_vertical = 3
 theme = ExtResource("2_xuhcs")
-scroll_offset = Vector2(0, -31)
+scroll_offset = Vector2(0, -58)
 right_disconnects = true
 connection_lines_thickness = 2.0
 zoom = 2.0736
@@ -169,6 +295,7 @@ metadata/_tab_index = 1
 
 [node name="ResourceEditor" parent="UI/WorkingArea/TabContainer/Resources" instance=ExtResource("10_hnv65")]
 layout_mode = 1
+theme = SubResource("Theme_eyak1")
 
 [node name="Inspector" type="VBoxContainer" parent="UI/WorkingArea"]
 unique_name_in_owner = true
@@ -196,8 +323,8 @@ filters = PackedStringArray("*.json ; JSON Files")
 
 [node name="LoadDialog" type="FileDialog" parent="UI"]
 unique_name_in_owner = true
-theme = ExtResource("2_xuhcs")
 title = "Open a File"
+theme = ExtResource("2_xuhcs")
 ok_button_text = "Open"
 file_mode = 0
 access = 2

@@ -91,7 +91,6 @@ TabContainer/colors/font_selected_color = Color(0.95, 0.95, 0.95, 1)
 TabContainer/colors/font_unselected_color = Color(0.7, 0.7, 0.7, 1)
 TabContainer/constants/side_margin = 16
 TabContainer/font_sizes/font_size = 18
-TabContainer/styles/panel = SubResource("StyleBoxFlat_panel")
 TabContainer/styles/tab_selected = SubResource("StyleBoxFlat_normal")
 TabContainer/styles/tab_unselected = SubResource("StyleBoxFlat_hover")
 Tree/colors/font_color = Color(0.875, 0.875, 0.875, 1)
