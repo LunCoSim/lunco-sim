@@ -27,7 +27,7 @@ Our vision is to provide a comprehensive suite of open-source applications tailo
 
 0. The development is done on Linux Mate, so there could be issues running on Windows and MacOs. Please reach us
 
-1. Install [Godot 4](https://godotengine.org/download/)
+1. Install [Godot 4.4 Beta 2](https://godotengine.org/article/dev-snapshot-godot-4-4-beta-2/#downloads)
 
 2. Install [git lfs](https://github.com/git-lfs/git-lfs#getting-started). It handles large files in the repository.
 
