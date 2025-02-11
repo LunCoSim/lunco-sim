@@ -250,6 +250,7 @@ split_offset = 2000
 layout_mode = 2
 theme = ExtResource("2_xuhcs")
 current_tab = 0
+tabs_visible = false
 
 [node name="GraphView" type="Control" parent="UI/WorkingArea/TabContainer"]
 unique_name_in_owner = true
@@ -269,7 +270,7 @@ grow_vertical = 2
 size_flags_horizontal = 0
 size_flags_vertical = 3
 theme = ExtResource("2_xuhcs")
-scroll_offset = Vector2(0, -58)
+scroll_offset = Vector2(-1768, -1016)
 right_disconnects = true
 connection_lines_thickness = 2.0
 zoom = 2.0736
