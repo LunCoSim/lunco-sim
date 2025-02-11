@@ -52,6 +52,10 @@ logger/stdout_format="[{hour}:{minute}:{second}][{level}]{text}"
 logger/file_format="[{hour}:{minute}:{second}][{level}]{text}"
 enabled=PackedStringArray("res://addons/lunco-content/plugin.cfg")
 
+[filesystem]
+
+import/fbx2gltf/enabled=false
+
 [gdunit4]
 
 settings/common/update_notification_enabled=false
