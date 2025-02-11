@@ -57,6 +57,10 @@ git lfs pull && git submodule foreach git lfs pull
    2. After installation, you'll see a "Content" button in the editor toolbar
    3. Use it to download missing content files when needed
 
+8. Wait till all the files are downloaded. You'll see the message in the Output tab.
+
+9. Restart editor and enjoy!
+
 
 ### Content Management Notes
 - Some large files are still managed by git-lfs
