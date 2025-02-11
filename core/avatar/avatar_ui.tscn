@@ -1,8 +1,7 @@
 [gd_scene load_steps=5 format=3 uid="uid://wdnxqhctneyv"]
 
 [ext_resource type="Script" uid="uid://bpq5fqrtu7f5o" path="res://core/avatar/avatar_ui.gd" id="1_igs02"]
-
-[sub_resource type="Theme" id="Theme_mfhp6"]
+[ext_resource type="Theme" uid="uid://hve1e7mnexbi" path="res://themes/theme.tres" id="1_ois6a"]
 
 [sub_resource type="Theme" id="Theme_kf4je"]
 
@@ -21,7 +20,7 @@ anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 mouse_filter = 2
-theme = SubResource("Theme_mfhp6")
+theme = ExtResource("1_ois6a")
 script = ExtResource("1_igs02")
 
 [node name="EntityUserContainer" type="VBoxContainer" parent="."]

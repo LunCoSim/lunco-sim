@@ -3,7 +3,7 @@
 [ext_resource type="Script" uid="uid://dwi42apo3altc" path="res://modules/supply_chain_modeling/rsct.gd" id="1_xuhcs"]
 [ext_resource type="Script" uid="uid://b6qabjmm3e73a" path="res://modules/supply_chain_modeling/ui/widgets/menu_bar.gd" id="2_74p8c"]
 [ext_resource type="Script" uid="uid://d2ye6nkbx7e41" path="res://modules/supply_chain_modeling/simulation/simulation.gd" id="2_n8njg"]
-[ext_resource type="Theme" uid="uid://dv00ngpal62cd" path="res://modules/supply_chain_modeling/rsct.tres" id="2_xuhcs"]
+[ext_resource type="Theme" uid="uid://hve1e7mnexbi" path="res://themes/theme.tres" id="2_xuhcs"]
 [ext_resource type="PackedScene" uid="uid://baib0y8cocg71" path="res://modules/supply_chain_modeling/ui/widgets/wallet_connect_button.tscn" id="2_y60tv"]
 [ext_resource type="Script" uid="uid://2iqtet5emwql" path="res://modules/supply_chain_modeling/ui/widgets/property_editor.gd" id="3_6bj1w"]
 [ext_resource type="Script" uid="uid://cijykw5hf0uxe" path="res://modules/supply_chain_modeling/ui/widgets/sim_time_label.gd" id="4_jmsaq"]
@@ -23,6 +23,7 @@ anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
+theme = ExtResource("2_xuhcs")
 script = ExtResource("1_xuhcs")
 
 [node name="Simulation" type="Node" parent="."]
@@ -37,10 +38,12 @@ anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
+theme = ExtResource("2_xuhcs")
 
 [node name="MenuContainer" type="HBoxContainer" parent="UI"]
 unique_name_in_owner = true
 layout_mode = 2
+theme = ExtResource("2_xuhcs")
 
 [node name="MenuBar" type="MenuBar" parent="UI/MenuContainer"]
 layout_mode = 2
@@ -88,20 +91,23 @@ size_flags_horizontal = 3
 
 [node name="Button7" type="Button" parent="UI/MenuContainer"]
 layout_mode = 2
+theme = ExtResource("2_xuhcs")
 text = "Slower"
 
 [node name="Button6" type="Button" parent="UI/MenuContainer"]
 layout_mode = 2
-theme_override_fonts/font = SubResource("SystemFont_6bj1w")
+theme = ExtResource("2_xuhcs")
 text = "Play/Pause"
 
 [node name="Button8" type="Button" parent="UI/MenuContainer"]
 layout_mode = 2
+theme = ExtResource("2_xuhcs")
 text = "Faster"
 
 [node name="SimTimeLabel" type="Label" parent="UI/MenuContainer"]
 unique_name_in_owner = true
 layout_mode = 2
+theme = ExtResource("2_xuhcs")
 text = "Sim Time: 0.0 minutes"
 script = ExtResource("4_jmsaq")
 
@@ -111,10 +117,12 @@ layout_mode = 2
 [node name="WorkingArea" type="HSplitContainer" parent="UI"]
 layout_mode = 2
 size_flags_vertical = 3
+theme = ExtResource("2_xuhcs")
 split_offset = 2000
 
 [node name="TabContainer" type="TabContainer" parent="UI/WorkingArea"]
 layout_mode = 2
+theme = ExtResource("2_xuhcs")
 current_tab = 0
 
 [node name="GraphView" type="Control" parent="UI/WorkingArea/TabContainer"]
@@ -122,6 +130,7 @@ unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
+theme = ExtResource("2_xuhcs")
 metadata/_tab_index = 0
 
 [node name="GraphEdit" type="GraphEdit" parent="UI/WorkingArea/TabContainer/GraphView"]
@@ -133,6 +142,7 @@ grow_horizontal = 2
 grow_vertical = 2
 size_flags_horizontal = 0
 size_flags_vertical = 3
+theme = ExtResource("2_xuhcs")
 scroll_offset = Vector2(0, -31)
 right_disconnects = true
 connection_lines_thickness = 2.0
@@ -164,24 +174,29 @@ layout_mode = 1
 unique_name_in_owner = true
 custom_minimum_size = Vector2(200, 200)
 layout_mode = 2
+theme = ExtResource("2_xuhcs")
 
 [node name="Tabs" type="TabContainer" parent="UI/WorkingArea/Inspector"]
 layout_mode = 2
+theme = ExtResource("2_xuhcs")
 current_tab = 0
 
 [node name="Properties" type="VBoxContainer" parent="UI/WorkingArea/Inspector/Tabs"]
 unique_name_in_owner = true
 layout_mode = 2
+theme = ExtResource("2_xuhcs")
 script = ExtResource("3_6bj1w")
 metadata/_tab_index = 0
 
 [node name="SaveDialog" type="FileDialog" parent="UI"]
 unique_name_in_owner = true
+theme = ExtResource("2_xuhcs")
 access = 2
 filters = PackedStringArray("*.json ; JSON Files")
 
 [node name="LoadDialog" type="FileDialog" parent="UI"]
 unique_name_in_owner = true
+theme = ExtResource("2_xuhcs")
 title = "Open a File"
 ok_button_text = "Open"
 file_mode = 0

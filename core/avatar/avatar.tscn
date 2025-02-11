@@ -1,12 +1,12 @@
 [gd_scene load_steps=8 format=3 uid="uid://c5dg7yq7hd7m0"]
 
-[ext_resource type="Script" path="res://core/avatar/avatar.gd" id="1_plcpi"]
+[ext_resource type="Script" uid="uid://bomqiutxnbrh" path="res://core/avatar/avatar.gd" id="1_plcpi"]
 [ext_resource type="PackedScene" uid="uid://b24kp6klp25h5" path="res://addons/lunco-cameras/spring-arm-camera/spring-arm-camera.tscn" id="2_2xsb2"]
 [ext_resource type="PackedScene" uid="uid://wdnxqhctneyv" path="res://core/avatar/avatar_ui.tscn" id="3_e71qf"]
 [ext_resource type="PackedScene" uid="uid://cldjruv3bh7k7" path="res://controllers/spacecraft/spacecraft-input-adapter.tscn" id="4_cd740"]
 [ext_resource type="PackedScene" uid="uid://c1symo07dohlf" path="res://controllers/operator/operator-input-adapter.tscn" id="5_78cuv"]
 [ext_resource type="PackedScene" uid="uid://cqnkkr1pgxiyp" path="res://controllers/character/character-input-adapter.tscn" id="6_f6o08"]
-[ext_resource type="Script" path="res://core/avatar/avatar-controller.gd" id="7_tskp4"]
+[ext_resource type="Script" uid="uid://dcnypxmborlkv" path="res://core/avatar/avatar-controller.gd" id="7_tskp4"]
 
 [node name="Avatar" type="Node3D"]
 script = ExtResource("1_plcpi")
