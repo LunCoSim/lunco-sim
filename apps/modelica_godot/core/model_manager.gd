@@ -1,4 +1,3 @@
-@tool
 extends Node
 class_name ModelManager
 
@@ -19,12 +18,18 @@ func _init() -> void:
 	print("DEBUG: ModelManager initializing")
 	_models = {}
 	_model_tree = {}
-	
-func _ready() -> void:
-	print("DEBUG: ModelManager _ready")
 	_parser = MOParser.new()
 	equation_system = EquationSystem.new()
-	add_child(equation_system)
+
+func _enter_tree() -> void:
+	print("DEBUG: ModelManager entering tree")
+	if not equation_system:
+		equation_system = EquationSystem.new()
+	if not equation_system.get_parent():
+		add_child(equation_system)
+
+func _ready() -> void:
+	print("DEBUG: ModelManager _ready")
 	
 	# Clear cache on startup for now
 	_clear_cache()
@@ -49,90 +54,38 @@ func _ready() -> void:
 		else:
 			push_error("MSL directory not found at relative path either: " + msl_path)
 
+func load_msl_directory(path: String) -> void:
+	print("DEBUG: Loading MSL directory: ", path)
+	var dir = DirAccess.open(path)
+	if not dir:
+		push_error("Failed to open directory: " + path)
+		return
+		
+	dir.list_dir_begin()
+	var file_name = dir.get_next()
+	
+	while file_name != "":
+		var full_path = path.path_join(file_name)
+		
+		if dir.current_is_dir() and not file_name.begins_with("."):
+			load_msl_directory(full_path)
+		elif file_name.ends_with(".mo"):
+			print("DEBUG: Loading Modelica file: ", full_path)
+			var model_data = _parser.parse_file(full_path)
+			if not model_data.is_empty():
+				_models[full_path] = model_data
+				emit_signal("model_loaded", model_data)
+				print("DEBUG: Loaded model: ", model_data.name)
+				
+		file_name = dir.get_next()
+	
+	dir.list_dir_end()
+	emit_signal("models_loaded")
+
 func _clear_cache() -> void:
 	if FileAccess.file_exists(_cache_file):
 		DirAccess.remove_absolute(_cache_file)
 		print("DEBUG: Cache cleared")
-
-func load_msl_directory(base_path: String):
-	print("DEBUG: Starting MSL load from: ", base_path)
-	emit_signal("loading_progress", 0.0, "Starting MSL load...")
-	
-	# Try to load from cache first
-	if _load_from_cache():
-		print("DEBUG: Loaded from cache")
-		_validate_loaded_models()  # New validation step
-		emit_signal("loading_progress", 1.0, "Loaded from cache")
-		emit_signal("models_loaded")
-		return
-	
-	# Recursively find all .mo files
-	var mo_files = []
-	_find_mo_files(base_path, mo_files)
-	print("DEBUG: Found ", mo_files.size(), " .mo files")
-	
-	var total_files = mo_files.size()
-	if total_files == 0:
-		print("DEBUG: No models found in path: ", base_path)
-		emit_signal("loading_progress", 1.0, "No models found")
-		emit_signal("models_loaded")
-		return
-		
-	var processed = 0
-	var successful = 0
-	var failed = 0
-	var batch_size = 10  # Process files in batches
-	
-	# First, try to load the main Modelica package
-	var modelica_package = base_path.path_join("Modelica/package.mo")
-	print("DEBUG: Looking for main package at: ", modelica_package)
-	if FileAccess.file_exists(modelica_package):
-		print("DEBUG: Found main package")
-		var model_data = _parser.parse_file(modelica_package)
-		if model_data.size() > 0:
-			print("DEBUG: Successfully parsed main package: ", model_data)
-			_models[modelica_package] = model_data
-			_add_to_model_tree(modelica_package, model_data)
-			successful += 1
-		else:
-			print("DEBUG: Failed to parse main package")
-			failed += 1
-	
-	# Then load all other .mo files in batches
-	while processed < total_files:
-		var batch_end = mini(processed + batch_size, total_files)
-		for i in range(processed, batch_end):
-			var file_path = mo_files[i]
-			if file_path == modelica_package:
-				continue
-				
-			print("DEBUG: Processing file: ", file_path)
-			var model_data = _parser.parse_file(file_path)
-			if model_data.size() > 0:
-				var model_type = model_data.get("type", "unknown")
-				var model_name = model_data.get("name", "unnamed")
-				print("DEBUG: Successfully parsed ", model_type, " ", model_name, " from ", file_path)
-				_models[file_path] = model_data
-				_add_to_model_tree(file_path, model_data)
-				successful += 1
-			else:
-				print("DEBUG: Failed to parse file: ", file_path)
-				failed += 1
-		
-		processed = batch_end
-		var progress = float(processed) / total_files
-		var status = "Loading models... (%d/%d, %d failed)" % [successful, total_files, failed]
-		emit_signal("loading_progress", progress, status)
-		# Allow the UI to update
-		await get_tree().process_frame
-	
-	print("DEBUG: Loading complete. Successfully loaded: ", successful, " Failed: ", failed)
-	print("DEBUG: Final model tree: ", _model_tree)
-	
-	# Save to cache
-	_save_to_cache()
-	
-	emit_signal("models_loaded")
 
 func _find_mo_files(path: String, results: Array) -> void:
 	print("DEBUG: Searching for .mo files in: ", path)
@@ -163,60 +116,34 @@ func _find_mo_files(path: String, results: Array) -> void:
 	else:
 		push_error("Failed to open directory: " + path)
 
-func _add_to_model_tree(file_path: String, model_data: Dictionary) -> void:
-	print("DEBUG: Adding to model tree: ", file_path)
-	print("DEBUG: Model data: ", model_data)
+func _add_to_model_tree(path: String, model_data: Dictionary) -> void:
+	var parts = path.split("/MSL/")[1].split("/")
+	var current = _model_tree
 	
-	# Get the path relative to the MSL directory
-	var path_parts = file_path.split("/")
-	var msl_index = path_parts.find("MSL")
-	if msl_index == -1:
-		print("DEBUG: Not an MSL path: ", file_path)
-		return
-		
-	# Get the path after MSL
-	path_parts = path_parts.slice(msl_index + 1)
-	print("DEBUG: Path parts after MSL: ", path_parts)
+	for i in range(parts.size() - 1):  # Skip the last part (filename)
+		var part = parts[i]
+		if not current.has(part):
+			current[part] = {}
+		current = current[part]
 	
-	var current_dict = _model_tree
-	if not current_dict.has("Modelica"):
-		current_dict["Modelica"] = {}
-	current_dict = current_dict["Modelica"]
-	
-	# Handle package.mo files specially
-	var is_package = path_parts[-1] == "package.mo"
-	if is_package:
-		path_parts = path_parts.slice(0, -1)  # Remove package.mo
-		
-	# Process all directories in the path
-	for i in range(path_parts.size() - 1):
-		var part = path_parts[i]
-		if not current_dict.has(part):
-			current_dict[part] = {}
-		current_dict = current_dict[part]
-	
-	# Add the model
-	if path_parts.size() > 0:
-		var model_name = path_parts[-1]
-		if is_package:
-			# For package.mo, update the current directory's metadata
-			current_dict["type"] = model_data.get("type", "package")
-			current_dict["name"] = model_data.get("name", model_name)
-			current_dict["path"] = file_path
-			current_dict["description"] = model_data.get("description", "")
-		else:
-			# For regular models, add them as entries
-			model_name = model_name.get_basename()  # Remove .mo extension
-			if not model_name.is_empty():
-				current_dict[model_name] = {
-					"path": file_path,
-					"type": model_data.get("type", "unknown"),
-					"name": model_data.get("name", model_name),
-					"description": model_data.get("description", ""),
-					"connectors": model_data.get("connectors", []),
-					"parameters": model_data.get("parameters", [])
-				}
-		print("DEBUG: Added model/package: ", model_name)
+	# Add model data to the tree
+	var filename = parts[-1].get_basename()
+	if filename == "package":
+		# For package.mo, add its contents at the current level
+		current.merge({
+			"description": model_data.get("description", ""),
+			"name": model_data.get("name", ""),
+			"path": path,
+			"type": model_data.get("type", "")
+		})
+	else:
+		# For other files, add them as leaf nodes
+		current[filename] = {
+			"description": model_data.get("description", ""),
+			"name": model_data.get("name", ""),
+			"path": path,
+			"type": model_data.get("type", "")
+		}
 
 func _save_to_cache() -> void:
 	# Don't save empty data
@@ -371,15 +298,13 @@ func _validate_loaded_models() -> void:
 	print("Model count: ", _models.size())
 	print("Model tree size: ", _model_tree.size())
 	
-	# Print first level of model tree
+	# Print Modelica package contents
 	if _model_tree.has("Modelica"):
 		print("Modelica package contents:")
 		for key in _model_tree["Modelica"].keys():
-			print("- ", key)
-	else:
-		print("No Modelica package found in tree")
-
+			print("- " + key)
+	
 	print("DEBUG: Model validation:")
 	print("Total models loaded: ", _models.size())
-	print("Models by type: ", _model_tree.get("Modelica", {}))
+	print("Models by type: ", JSON.stringify(_model_tree, "  "))
 	print("Model tree structure: ", JSON.stringify(_model_tree, "  ")) 

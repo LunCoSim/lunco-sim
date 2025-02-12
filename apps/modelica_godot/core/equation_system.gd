@@ -3,6 +3,15 @@ extends Node
 
 var equations: Array[Dictionary] = []
 var variables: Dictionary = {}
+var components: Array[ModelicaComponent] = []
+
+func _init() -> void:
+	equations = []
+	variables = {}
+	components = []
+
+func _ready() -> void:
+	print("EquationSystem: Ready")
 
 func add_equation(equation: String, component: ModelicaComponent) -> void:
 	# Simple parser for equations like "a = b + c"
@@ -17,9 +26,13 @@ func add_equation(equation: String, component: ModelicaComponent) -> void:
 		"component": component
 	})
 
+func add_component(component: ModelicaComponent) -> void:
+	if not components.has(component):
+		components.append(component)
+
 func solve() -> void:
 	# Simple fixed-point iteration solver
-	# This is a very basic implementation - would need a proper solver for real use
+	# This is a basic implementation - would need a proper solver for real use
 	for i in range(10): # Max iterations
 		var max_diff = 0.0
 		for eq in equations:
@@ -33,8 +46,15 @@ func solve() -> void:
 			break
 
 func _evaluate_expression(expr: String, component: ModelicaComponent) -> float:
-	# Very simple expression evaluator - would need a proper parser for real use
+	# Simple expression evaluator - would need a proper parser for real use
 	# Currently only handles simple arithmetic
 	var value = 0.0
-	# Implementation would go here
-	return value 
+	# Basic implementation
+	if expr.is_valid_float():
+		value = float(expr)
+	return value
+
+func clear() -> void:
+	equations.clear()
+	variables.clear()
+	components.clear() 

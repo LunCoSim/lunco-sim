@@ -1,19 +1,18 @@
-@tool
 extends RefCounted
 class_name MOParser
 
-enum TokenType {
-	KEYWORD,
-	IDENTIFIER,
-	NUMBER,
-	OPERATOR,
-	STRING,
-	COMMENT,
-	NEWLINE,
-	EOF
-}
+# Token types
+const TOKEN_KEYWORD = 0
+const TOKEN_IDENTIFIER = 1
+const TOKEN_NUMBER = 2
+const TOKEN_OPERATOR = 3
+const TOKEN_STRING = 4
+const TOKEN_COMMENT = 5
+const TOKEN_NEWLINE = 6
+const TOKEN_EOF = 7
 
-const KEYWORDS: Array[String] = [
+# Keywords list
+const KEYWORDS = [
 	"model", "end", "parameter", "equation", "der", "input", "output",
 	"flow", "stream", "connector", "package", "class", "type", "constant",
 	"discrete", "Real", "Integer", "Boolean", "String", "extends",
@@ -50,69 +49,98 @@ func parse_file(path: String) -> Dictionary:
 		
 	_text = file.get_as_text()
 	_reset()
-	
-	var model_data := {}
-	
-	# Skip whitespace and comments at start
-	_skip_whitespace()
-	
-	# Parse 'within' statement if present
-	if _match_keyword("within"):
-		_skip_until(";")
-		_skip_whitespace()
-	
-	# Parse type declaration
-	var type := _parse_type_declaration()
-	if not type.is_empty():
-		model_data["type"] = type.type
-		model_data["name"] = type.name
-		if type.has("description"):
-			model_data["description"] = type.description
-	else:
-		# If no explicit type found, try to infer from filename
-		var filename = path.get_file()
-		if filename == "package.mo":
-			model_data["type"] = "package"
-			model_data["name"] = path.get_base_dir().get_file()
-		else:
-			model_data["type"] = "model"  # Default to model
-			model_data["name"] = filename.get_basename()
-	
-	# If still no name, use directory name
-	if model_data.get("name", "").is_empty():
-		model_data["name"] = path.get_base_dir().get_file()
-	
-	# Store path
-	model_data["path"] = path
-	
+	var model_data = _parse_model()
 	_model_cache[path] = model_data
 	return model_data
 
-func _parse_type_declaration() -> Dictionary:
-	var result := {}
-	
-	# Skip any leading whitespace or comments
+func _is_whitespace(c: String) -> bool:
+	return c == " " or c == "\t" or c == "\n" or c == "\r"
+
+func _skip_whitespace() -> void:
+	while _pos < _text.length():
+		var c := _text[_pos]
+		if _is_whitespace(c):
+			_pos += 1
+			if c == "\n":
+				_line += 1
+				_column = 1
+			else:
+				_column += 1
+		elif c == "/" and _pos + 1 < _text.length():
+			if _text[_pos + 1] == "/":
+				_skip_line_comment()
+			elif _text[_pos + 1] == "*":
+				_skip_block_comment()
+			else:
+				break
+		else:
+			break
+
+func _skip_line_comment() -> void:
+	while _pos < _text.length() and _text[_pos] != "\n":
+		_pos += 1
+
+func _skip_block_comment() -> void:
+	_pos += 2  # Skip /*
+	while _pos < _text.length():
+		if _text[_pos] == "*" and _pos + 1 < _text.length() and _text[_pos + 1] == "/":
+			_pos += 2
+			break
+		if _text[_pos] == "\n":
+			_line += 1
+			_column = 1
+		else:
+			_column += 1
+		_pos += 1
+
+func _skip_until(delimiter: String) -> void:
+	while _pos < _text.length() and _text[_pos] != delimiter:
+		if _text[_pos] == "\n":
+			_line += 1
+			_column = 1
+		else:
+			_column += 1
+		_pos += 1
+	if _pos < _text.length():
+		_pos += 1  # Skip the delimiter
+
+func _peek() -> String:
+	return _text[_pos] if _pos < _text.length() else ""
+
+func _peek_at(pos: int) -> String:
+	return _text[pos] if pos < _text.length() else ""
+
+func _parse_identifier() -> String:
 	_skip_whitespace()
+	var start := _pos
 	
-	# Look for type keywords
-	for type in ["package", "model", "connector", "block", "record", "class", "function"]:
-		if _match_keyword(type):
-			result["type"] = type
-			_skip_whitespace()
-			
-			# Get the name
-			var name := _parse_identifier()
-			if not name.is_empty():
-				result["name"] = name
-				
-				# Look for description string
-				_skip_whitespace()
-				if _peek() == "\"":
-					result["description"] = _parse_string()
-			
-			return result
+	while _pos < _text.length():
+		var c := _text[_pos]
+		if not (c.is_valid_identifier() or c == "."):
+			break
+		_pos += 1
 	
-	return {}
+	if _pos > start:
+		return _text.substr(start, _pos - start)
+	return ""
+
+func _parse_string() -> String:
+	var start := _pos
+	
+	while _pos < _text.length() and _text[_pos] != "\"":
+		if _text[_pos] == "\\":
+			_pos += 2  # Skip escape sequence
+		else:
+			_pos += 1
+			
+	var result := ""
+	if _pos > start:
+		result = _text.substr(start, _pos - start)
+	
+	if _pos < _text.length():
+		_pos += 1  # Skip closing quote
+		
+	return result.strip_edges()
 
 func _match_keyword(keyword: String) -> bool:
 	_skip_whitespace()
@@ -129,513 +157,186 @@ func _match_keyword(keyword: String) -> bool:
 	_pos = start_pos
 	return false
 
-func _parse_identifier() -> String:
-	_skip_whitespace()
-	var start := _pos
-	
-	while _pos < _text.length():
-		var c := _text[_pos]
-		if not (c.is_valid_identifier() or c == '.'):
-			break
-		_pos += 1
-	
-	if _pos > start:
-		return _text.substr(start, _pos - start)
-	return ""
-
-func _parse_string() -> String:
-	if _peek() != "\"":
-		return ""
-		
-	_pos += 1  # Skip opening quote
-	var start := _pos
-	
-	while _pos < _text.length():
-		if _text[_pos] == "\"" and _text[_pos - 1] != "\\":
-			var content := _text.substr(start, _pos - start)
-			_pos += 1  # Skip closing quote
-			return content
-		_pos += 1
-	
-	return ""
-
-func _skip_whitespace() -> void:
-	while _pos < _text.length():
-		var c := _text[_pos]
-		if c.strip_edges().is_empty():
-			_pos += 1
-			if c == "\n":
-				_line += 1
-				_column = 1
-			else:
-				_column += 1
-		elif _text.substr(_pos, 2) == "//":
-			_skip_line_comment()
-		elif _text.substr(_pos, 2) == "/*":
-			_skip_block_comment()
-		else:
-			break
-
-func _skip_line_comment() -> void:
-	while _pos < _text.length():
-		if _text[_pos] == "\n":
-			_pos += 1
-			_line += 1
-			_column = 1
-			break
-		_pos += 1
-		_column += 1
-
-func _skip_block_comment() -> void:
-	_pos += 2  # Skip /*
-	while _pos < _text.length():
-		if _text.substr(_pos, 2) == "*/":
-			_pos += 2
-			break
-		if _text[_pos] == "\n":
-			_line += 1
-			_column = 1
-		_pos += 1
-		_column += 1
-
-func _skip_until(char: String) -> void:
-	while _pos < _text.length():
-		if _text[_pos] == char:
-			_pos += 1
-			break
-		if _text[_pos] == "\n":
-			_line += 1
-			_column = 1
-		_pos += 1
-		_column += 1
-
-func _peek(offset: int = 0) -> String:
-	var pos := _pos + offset
-	if pos < _text.length():
-		return _text[pos]
-	return ""
-
-func _peek_at(pos: int) -> String:
-	if pos < _text.length():
-		return _text[pos]
-	return ""
-
-func _parse_import() -> String:
-	var import_path = ""
-	while true:
-		var token = _next_token()
-		match token.type:
-			TokenType.IDENTIFIER:
-				import_path += token.value
-			TokenType.OPERATOR:
-				if token.value == ".":
-					import_path += "."
-				else:
-					break
-			_:
-				break
-	return import_path
-
-func _parse_component_declaration(type_name: String) -> Dictionary:
-	var component = {
-		"type": type_name,
-		"name": "",
-		"is_connector": false,
-		"modifiers": {},
-		"description": ""
-	}
-	
-	var token = _next_token()
-	if token.type == TokenType.IDENTIFIER:
-		component.name = token.value
-		
-		# Check if this is a connector type
-		component.is_connector = type_name.begins_with("Flange") or \
-							   type_name.begins_with("Pin") or \
-							   type_name.begins_with("Port")
-		
-		# Look for modifiers
-		token = _next_token()
-		if token.type == TokenType.OPERATOR and token.value == "(":
-			component.modifiers = _parse_modifiers(token.value)
-		
-		# Look for description
-		token = _next_token()
-		if token.type == TokenType.STRING:
-			component.description = token.value
-		
-		return component
-	
-	return {}
-
-func _parse_modifiers(line: String) -> Dictionary:
-	var modifiers = {}
-	
-	var start = line.find("(")
-	var end = line.find(")")
-	if start == -1 or end == -1:
-		return modifiers
-		
-	var modifier_str = line.substr(start + 1, end - start - 1)
-	var parts = modifier_str.split(",")
-	
-	for part in parts:
-		var key_value = part.split("=")
-		if key_value.size() == 2:
-			modifiers[key_value[0].strip_edges()] = key_value[1].strip_edges()
-	
-	return modifiers
-
-func _parse_annotation() -> Dictionary:
-	var annotation = {}
-	
-	# Skip until we find "annotation("
-	while _pos < _text.length():
-		if _text.substr(_pos).begins_with("annotation("):
-			_pos += 11  # Skip "annotation("
-			break
-		_pos += 1
-	
-	# Parse the annotation content
-	var parentheses_count = 1
-	var content = ""
-	
-	while _pos < _text.length() and parentheses_count > 0:
-		var char = _text[_pos]
-		if char == "(":
-			parentheses_count += 1
-		elif char == ")":
-			parentheses_count -= 1
-		
-		if parentheses_count > 0:
-			content += char
-		_pos += 1
-	
-	# Parse Icon section if present
-	if content.find("Icon(") != -1:
-		var icon_start = content.find("Icon(") + 5
-		var icon_end = content.find(")", icon_start)
-		var icon_content = content.substr(icon_start, icon_end - icon_start)
-		
-		annotation["Icon"] = {
-			"graphics": _parse_graphics(icon_content)
-		}
-	
-	return annotation
-
-func _parse_graphics(content: String) -> Array:
-	var graphics = []
-	var lines = content.split("\n")
-	
-	for line in lines:
-		line = line.strip_edges()
-		if line.begins_with("Line("):
-			graphics.append(_parse_line(line))
-		elif line.begins_with("Rectangle("):
-			graphics.append(_parse_rectangle(line))
-		elif line.begins_with("Text("):
-			graphics.append(_parse_text(line))
-	
-	return graphics
-
-func _parse_line(line: String) -> Dictionary:
-	var graphic = {"type": "Line"}
-	
-	# Extract points
-	var points_start = line.find("points={{") + 8
-	var points_end = line.find("}}", points_start)
-	var points_str = line.substr(points_start, points_end - points_start)
-	
-	var points = []
-	for point in points_str.split("},{"):
-		var coords = point.replace("{", "").replace("}", "").split(",")
-		points.append(float(coords[0]))
-		points.append(float(coords[1]))
-	
-	graphic["points"] = points
-	return graphic
-
-func _parse_rectangle(line: String) -> Dictionary:
-	var graphic = {"type": "Rectangle"}
-	
-	# Extract extent
-	var extent_start = line.find("extent={{") + 8
-	var extent_end = line.find("}}", extent_start)
-	var extent_str = line.substr(extent_start, extent_end - extent_start)
-	
-	var extent = []
-	for coord in extent_str.split("},{"):
-		var coords = coord.replace("{", "").replace("}", "").split(",")
-		extent.append(float(coords[0]))
-		extent.append(float(coords[1]))
-	
-	graphic["extent"] = extent
-	
-	# Extract fillColor if present
-	var fill_color_start = line.find("fillColor={")
-	if fill_color_start != -1:
-		fill_color_start += 10
-		var fill_color_end = line.find("}", fill_color_start)
-		var color_str = line.substr(fill_color_start, fill_color_end - fill_color_start)
-		var colors = color_str.split(",")
-		graphic["fillColor"] = [int(colors[0]), int(colors[1]), int(colors[2])]
-	
-	return graphic
-
-func _parse_text(line: String) -> Dictionary:
-	var graphic = {"type": "Text"}
-	
-	# Extract extent
-	var extent_start = line.find("extent={{") + 8
-	var extent_end = line.find("}}", extent_start)
-	var extent_str = line.substr(extent_start, extent_end - extent_start)
-	
-	var extent = []
-	for coord in extent_str.split("},{"):
-		var coords = coord.replace("{", "").replace("}", "").split(",")
-		extent.append(float(coords[0]))
-		extent.append(float(coords[1]))
-	
-	graphic["extent"] = extent
-	
-	# Extract text string
-	var text_start = line.find("textString=\"") + 12
-	var text_end = line.find("\"", text_start)
-	graphic["textString"] = line.substr(text_start, text_end - text_start)
-	
-	return graphic
-
-func _parse_parameter() -> Dictionary:
-	var param = {
+func _parse_model() -> Dictionary:
+	var model := {
 		"type": "",
 		"name": "",
-		"value": 0.0,
-		"unit": "",
-		"description": ""
+		"description": "",
+		"parameters": [],
+		"equations": [],
+		"components": []
 	}
 	
-	while true:
-		var token = _next_token()
-		match token.type:
-			TokenType.KEYWORD:
-				param.type = token.value
-			
-			TokenType.IDENTIFIER:
-				param.name = token.value
-			
-			TokenType.OPERATOR:
-				if token.value == "=":
-					var value_token = _next_token()
-					if value_token.type == TokenType.NUMBER:
-						param.value = float(value_token.value)
-			
-			TokenType.STRING:
-				param.description = token.value
-			
-			TokenType.NEWLINE:
-				break
-	
-	return param
-
-func _parse_equation() -> String:
-	var equation = ""
-	
-	while true:
-		var token = _next_token()
-		match token.type:
-			TokenType.NEWLINE:
-				break
-			TokenType.COMMENT:
-				continue
-			_:
-				equation += token.value + " "
-	
-	return equation.strip_edges()
-
-func _next_token() -> Dictionary:
+	# Skip whitespace and comments at start
 	_skip_whitespace()
 	
-	if _pos >= _text.length():
-		return {"type": TokenType.EOF, "value": ""}
+	# Parse 'within' statement if present
+	if _match_keyword("within"):
+		model["within"] = _parse_identifier()
+		_skip_until(";")
+		_skip_whitespace()
 	
-	var char := _text[_pos] as String
+	# Parse type declaration
+	var type := _parse_type_declaration()
+	if not type.is_empty():
+		model["type"] = type.get("type", "")
+		model["name"] = type.get("name", "")
+		if type.has("description"):
+			model["description"] = type.get("description", "")
+		if type.has("extends"):
+			model["extends"] = type.get("extends", "")
 	
-	# Handle comments
-	if char == "/" and _pos + 1 < _text.length() and _text[_pos + 1] == "/":
-		return _read_line_comment()
-	
-	# Handle string literals
-	if char == "\"":
-		return _read_string()
-	
-	# Handle numbers
-	if _is_digit(char) or char == "-":
-		return _read_number()
-	
-	# Handle identifiers and keywords
-	if _is_letter(char):
-		return _read_identifier()
-	
-	# Handle operators
-	if "=+-*/()<>".contains(char):
-		_pos += 1
-		return {"type": TokenType.OPERATOR, "value": char}
-	
-	# Handle newlines
-	if char == "\n":
-		_line += 1
-		_column = 1
-		_pos += 1
-		return {"type": TokenType.NEWLINE, "value": "\n"}
-	
-	# Skip unrecognized characters
-	_pos += 1
-	return _next_token()
-
-func _is_letter(c: String) -> bool:
-	return (c >= "a" and c <= "z") or (c >= "A" and c <= "Z")
-
-func _is_digit(c: String) -> bool:
-	return c >= "0" and c <= "9"
-
-# Parse Modelica code from a string
-func parse_string(content: String) -> Dictionary:
-	_text = content
-	_pos = 0
-	_line = 1
-	_column = 1
-	return _parse_model()
-
-func _merge_model_properties(model: Dictionary, parent: Dictionary) -> void:
-	# Merge parameters
-	for param in parent.get("parameters", []):
-		if not param in model["parameters"]:
-			model["parameters"].append(param)
-	
-	# Merge variables
-	for var_def in parent.get("variables", []):
-		if not var_def in model["variables"]:
-			model["variables"].append(var_def)
-	
-	# Merge equations
-	for eq in parent.get("equations", []):
-		if not eq in model["equations"]:
-			model["equations"].append(eq)
-	
-	# Merge annotations
-	if parent.has("annotations"):
-		if not model.has("annotations"):
-			model["annotations"] = {}
-		for key in parent["annotations"]:
-			if not model["annotations"].has(key):
-				model["annotations"][key] = parent["annotations"][key]
-
-# Extract parameters from the model
-func _extract_parameters(content: String) -> Array:
-	var parameters = []
-	var param_regex = RegEx.new()
-	param_regex.compile("parameter\\s+(\\w+)\\s+(\\w+)\\s*=\\s*([\\d\\.]+)")
-	
-	var pos = 0
-	while true:
-		var result = param_regex.search(content, pos)
-		if not result:
+	# Parse body until 'end'
+	while _pos < _text.length():
+		_skip_whitespace()
+		
+		# Check for end of declaration
+		if _match_keyword("end"):
+			var end_name = _parse_identifier()
+			if end_name != model["name"]:
+				push_warning("End name '%s' does not match model name '%s'" % [end_name, model["name"]])
 			break
 			
-		parameters.append({
-			"type": result.get_string(1),
-			"name": result.get_string(2),
-			"value": float(result.get_string(3))
-		})
-		pos = result.get_end()
+		# Parse parameters
+		if _match_keyword("parameter"):
+			var param = _parse_parameter()
+			if not param.is_empty():
+				model["parameters"].append(param)
+				
+		# Parse equations
+		elif _match_keyword("equation"):
+			var eq = _parse_equation()
+			if not eq.is_empty():
+				model["equations"].append(eq)
+				
+		# Parse components
+		elif _is_component_declaration():
+			var comp = _parse_component()
+			if not comp.is_empty():
+				model["components"].append(comp)
+		
+		# Skip other content for now
+		else:
+			_skip_until(";")
 	
-	return parameters
+	return model
 
-# Extract variables from the model
-func _extract_variables(content: String) -> Array:
-	var variables = []
-	var var_regex = RegEx.new()
-	var_regex.compile("(input|output|flow)?\\s*(\\w+)\\s+(\\w+)\\s*;")
+func _parse_type_declaration() -> Dictionary:
+	var result := {}
 	
-	var pos = 0
-	while true:
-		var result = var_regex.search(content, pos)
-		if not result:
-			break
+	# Skip any leading whitespace and comments
+	_skip_whitespace()
+	
+	# Look for type keywords
+	for type in ["package", "model", "connector", "block", "record", "class", "function"]:
+		if _match_keyword(type):
+			result["type"] = type
+			_skip_whitespace()
 			
-		variables.append({
-			"prefix": result.get_string(1),
-			"type": result.get_string(2),
-			"name": result.get_string(3)
-		})
-		pos = result.get_end()
-	
-	return variables
-
-# Extract equations from the model
-func _extract_equations(content: String) -> Array:
-	var equations = []
-	var eq_section = _extract_section(content, "equation", "end")
-	if eq_section:
-		var eq_lines = eq_section.split(";")
-		for eq in eq_lines:
-			eq = eq.strip_edges()
-			if eq:
-				equations.append(eq)
-	
-	return equations
-
-# Extract annotations from the model
-func _extract_annotations(content: String) -> Dictionary:
-	var annotations = {}
-	var annotation_regex = RegEx.new()
-	annotation_regex.compile("annotation\\s*\\((.*?)\\);")
-	
-	var pos = 0
-	while true:
-		var result = annotation_regex.search(content, pos)
-		if not result:
-			break
+			# Get the name
+			var name := _parse_identifier()
+			if not name.is_empty():
+				result["name"] = name.strip_edges()
+				
+				# Look for description string
+				_skip_whitespace()
+				if _peek() == "\"":
+					_pos += 1  # Skip opening quote
+					result["description"] = _parse_string()
 			
-		var annotation_content = result.get_string(1)
-		# Parse annotation content into a dictionary
-		# This is a simplified version - you'll need more complex parsing
-		annotations = _parse_annotation_content(annotation_content)
-		pos = result.get_end()
+			# Handle extends clause
+			_skip_whitespace()
+			if _match_keyword("extends"):
+				_skip_whitespace()
+				var extends_name := _parse_identifier()
+				if not extends_name.is_empty():
+					result["extends"] = extends_name.strip_edges()
+			
+			# Skip to end of declaration
+			_skip_until(";")
+			return result
 	
-	return annotations
+	return result
 
-# Helper function to extract text between patterns
-func _extract_section(content: String, start_pattern: String, end_pattern: String) -> String:
-	var start_idx = content.find(start_pattern)
-	if start_idx == -1:
-		return ""
+func _parse_parameter() -> Dictionary:
+	var param := {}
+	_skip_whitespace()
 	
-	start_idx += start_pattern.length()
-	var end_idx = content.find(end_pattern, start_idx)
-	if end_idx == -1:
-		return ""
+	# Get type
+	var type = _parse_identifier()
+	if not type.is_empty():
+		param["type"] = type
+		
+		# Get name
+		_skip_whitespace()
+		var name = _parse_identifier()
+		if not name.is_empty():
+			param["name"] = name
+			
+			# Get default value if present
+			_skip_whitespace()
+			if _peek() == "=":
+				_pos += 1
+				_skip_whitespace()
+				param["default"] = _parse_value()
 	
-	return content.substr(start_idx, end_idx - start_idx)
+	_skip_until(";")
+	return param
 
-# Helper function to extract pattern with regex
-func _extract_pattern(content: String, pattern: String) -> Array:
-	var regex = RegEx.new()
-	regex.compile(pattern)
-	var result = regex.search(content)
-	if result:
-		return result.get_strings()
-	return []
+func _parse_equation() -> Dictionary:
+	var eq := {}
+	_skip_whitespace()
+	
+	var start_pos = _pos
+	_skip_until(";")
+	
+	if _pos > start_pos:
+		eq["expression"] = _text.substr(start_pos, _pos - start_pos).strip_edges()
+	
+	return eq
 
-# Helper function to parse annotation content
-func _parse_annotation_content(content: String) -> Dictionary:
-	var result = {}
-	# This is a simplified parser - you'll need more complex parsing
-	# for real Modelica annotations
+func _is_component_declaration() -> bool:
+	var start_pos = _pos
+	var is_comp = false
 	
-	# Extract Icon annotation
-	var icon_match = _extract_section(content, "Icon(", ")")
-	if icon_match:
-		result["Icon"] = _parse_graphics(icon_match)
+	# Skip type name
+	if not _parse_identifier().is_empty():
+		_skip_whitespace()
+		# Check for component name
+		if not _parse_identifier().is_empty():
+			is_comp = true
 	
-	return result 
+	_pos = start_pos
+	return is_comp
+
+func _parse_component() -> Dictionary:
+	var comp := {}
+	
+	# Get type
+	var type = _parse_identifier()
+	if not type.is_empty():
+		comp["type"] = type
+		
+		# Get name
+		_skip_whitespace()
+		var name = _parse_identifier()
+		if not name.is_empty():
+			comp["name"] = name
+	
+	_skip_until(";")
+	return comp
+
+func _parse_value() -> String:
+	_skip_whitespace()
+	var value = ""
+	
+	if _peek() == "\"":
+		value = _parse_string()
+	else:
+		var start_pos = _pos
+		while _pos < _text.length() and _text[_pos] != ";" and _text[_pos] != ",":
+			_pos += 1
+		if _pos > start_pos:
+			value = _text.substr(start_pos, _pos - start_pos).strip_edges()
+	
+	return value 
