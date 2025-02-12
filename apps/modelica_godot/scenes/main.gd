@@ -2,8 +2,8 @@
 extends Control
 
 @onready var model_manager: ModelManager = $ModelManager
-@onready var model_browser: ModelBrowser = $UI/HSplitContainer/ModelBrowser
-@onready var graph_edit: GraphEdit = $UI/HSplitContainer/GraphEdit
+@onready var model_browser_window: ModelBrowserWindow = $ModelBrowserWindow
+@onready var graph_edit: GraphEdit = $UI/GraphEdit
 @onready var status_label: Label = $UI/Toolbar/HBoxContainer/StatusLabel
 
 var component_count: int = 0
@@ -15,8 +15,8 @@ func _ready() -> void:
 		push_error("ModelManager node not found")
 		return
 		
-	if not model_browser:
-		push_error("ModelBrowser node not found")
+	if not model_browser_window:
+		push_error("ModelBrowserWindow node not found")
 		return
 		
 	if not graph_edit:
@@ -24,16 +24,13 @@ func _ready() -> void:
 		return
 	
 	print("Main scene: Initializing model browser with model manager")
-	# Initialize model browser
-	model_browser.initialize(model_manager)
-	if model_browser.has_signal("model_selected"):
-		model_browser.model_selected.connect(_on_model_selected)
+	# Initialize model browser window
+	model_browser_window.initialize(model_manager)
+	model_browser_window.model_selected.connect(_on_model_selected)
 	
 	# Connect GraphEdit signals
-	if graph_edit.has_signal("connection_request"):
-		graph_edit.connection_request.connect(_on_connection_request)
-	if graph_edit.has_signal("disconnection_request"):
-		graph_edit.disconnection_request.connect(_on_disconnection_request)
+	graph_edit.connection_request.connect(_on_connection_request)
+	graph_edit.disconnection_request.connect(_on_disconnection_request)
 	
 	# Set GraphEdit properties
 	graph_edit.snapping_enabled = true
@@ -41,10 +38,8 @@ func _ready() -> void:
 	graph_edit.show_grid = true
 	
 	# Connect to model manager signals
-	if model_manager.has_signal("models_loaded_changed"):
-		model_manager.models_loaded_changed.connect(_on_models_loaded)
-	if model_manager.has_signal("loading_progress"):
-		model_manager.loading_progress.connect(_on_loading_progress)
+	model_manager.models_loaded_changed.connect(_on_models_loaded)
+	model_manager.loading_progress.connect(_on_loading_progress)
 
 	print("Main scene initialized successfully")
 
@@ -58,68 +53,11 @@ func _on_loading_progress(progress: float, message: String) -> void:
 	status_label.text = message
 
 func _on_model_selected(model_path: String, model_data: Dictionary) -> void:
-	# Create a new GraphNode for the selected model
-	var node = _create_component_node(model_data)
-	if node:
-		graph_edit.add_child(node)
-		status_label.text = "Added " + model_data.get("name", "unnamed")
+	print("Selected model: ", model_path)
+	# TODO: Handle model selection
 
-func _create_component_node(model_data: Dictionary) -> GraphNode:
-	var node := GraphNode.new()
-	var unique_name = model_data.get("name", "UnknownModel") + str(component_count)
-	component_count += 1
-	
-	# Set up the node
-	node.name = unique_name
-	node.title = model_data.get("name", "UnknownModel")
-	node.position_offset = Vector2(200, 200)  # Default position
-	node.draggable = true
-	node.resizable = false
-	node.size = Vector2(120, 80)  # Set a fixed size
-	
-	# Create the main container
-	var container := VBoxContainer.new()
-	container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	container.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	node.add_child(container)
-	
-	# Add the main body
-	var body := ColorRect.new()
-	body.custom_minimum_size = Vector2(100, 50)
-	body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	body.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	
-	# Set color based on component type
-	match model_data.get("type", ""):
-		"model":
-			body.color = Color(0.2, 0.6, 1.0)  # Light blue
-		"connector":
-			body.color = Color(0.8, 0.2, 0.2)  # Red
-		"block":
-			body.color = Color(0.2, 0.8, 0.2)  # Green
-		_:
-			body.color = Color(0.7, 0.7, 0.7)  # Gray
-	
-	container.add_child(body)
-	
-	# Add connectors based on model data
-	var connectors = model_data.get("connectors", [])
-	for i in range(connectors.size()):
-		var connector = connectors[i]
-		node.set_slot(i,  # Slot index
-			true,         # Enable left slot
-			0,           # Left slot type
-			Color.GOLD,  # Left slot color
-			true,        # Enable right slot
-			0,           # Right slot type
-			Color.GOLD)  # Right slot color
-		
-		# Add connector label
-		var label := Label.new()
-		label.text = connector.get("name", "unnamed")
-		container.add_child(label)
-	
-	return node
+func _on_library_pressed():
+	model_browser_window.show()
 
 func _on_connection_request(from_node: StringName, from_port: int, 
 						  to_node: StringName, to_port: int) -> void:

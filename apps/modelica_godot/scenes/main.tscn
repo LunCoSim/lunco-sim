@@ -2,7 +2,7 @@
 
 [ext_resource type="Script" uid="uid://y7swjbgdv85r" path="res://apps/modelica_godot/scenes/main.gd" id="1_main"]
 [ext_resource type="Script" uid="uid://vsm7wnflauvi" path="res://apps/modelica_godot/core/model_manager.gd" id="2_manager"]
-[ext_resource type="Script" uid="uid://bf7f0tl7logoi" path="res://apps/modelica_godot/ui/model_browser.gd" id="3_browser"]
+[ext_resource type="PackedScene" path="res://apps/modelica_godot/ui/model_browser_window.tscn" id="3_browser_window"]
 
 [node name="Main" type="Control"]
 layout_mode = 3
@@ -16,6 +16,9 @@ script = ExtResource("1_main")
 [node name="ModelManager" type="Node" parent="."]
 script = ExtResource("2_manager")
 
+[node name="ModelBrowserWindow" parent="." instance=ExtResource("3_browser_window")]
+visible = false
+
 [node name="UI" type="VBoxContainer" parent="."]
 layout_mode = 1
 anchors_preset = 15
@@ -28,6 +31,13 @@ grow_vertical = 2
 layout_mode = 2
 
 [node name="HBoxContainer" type="HBoxContainer" parent="UI/Toolbar"]
+layout_mode = 2
+
+[node name="LibraryBtn" type="Button" parent="UI/Toolbar/HBoxContainer"]
+layout_mode = 2
+text = "Library"
+
+[node name="VSeparator" type="VSeparator" parent="UI/Toolbar/HBoxContainer"]
 layout_mode = 2
 
 [node name="SimulateBtn" type="Button" parent="UI/Toolbar/HBoxContainer"]
@@ -44,59 +54,11 @@ size_flags_horizontal = 3
 text = "Ready"
 horizontal_alignment = 1
 
-[node name="HSplitContainer" type="HSplitContainer" parent="UI"]
+[node name="GraphEdit" type="GraphEdit" parent="UI"]
 layout_mode = 2
 size_flags_vertical = 3
-
-[node name="ModelBrowser" type="Control" parent="UI/HSplitContainer"]
-layout_mode = 2
-size_flags_horizontal = 3
-size_flags_stretch_ratio = 0.3
-script = ExtResource("3_browser")
-
-[node name="VBoxContainer" type="VBoxContainer" parent="UI/HSplitContainer/ModelBrowser"]
-layout_mode = 1
-anchors_preset = 15
-anchor_right = 1.0
-anchor_bottom = 1.0
-grow_horizontal = 2
-grow_vertical = 2
-
-[node name="SearchBar" type="LineEdit" parent="UI/HSplitContainer/ModelBrowser/VBoxContainer"]
-layout_mode = 2
-placeholder_text = "Search models..."
-clear_button_enabled = true
-
-[node name="HSplitContainer" type="HSplitContainer" parent="UI/HSplitContainer/ModelBrowser/VBoxContainer"]
-layout_mode = 2
-size_flags_vertical = 3
-
-[node name="Tree" type="Tree" parent="UI/HSplitContainer/ModelBrowser/VBoxContainer/HSplitContainer"]
-layout_mode = 2
-size_flags_horizontal = 3
-
-[node name="Details" type="TextEdit" parent="UI/HSplitContainer/ModelBrowser/VBoxContainer/HSplitContainer"]
-layout_mode = 2
-size_flags_horizontal = 3
-size_flags_stretch_ratio = 0.7
-editable = false
-wrap_mode = 1
-
-[node name="ProgressBar" type="ProgressBar" parent="UI/HSplitContainer/ModelBrowser/VBoxContainer"]
-visible = false
-layout_mode = 2
-max_value = 1.0
-
-[node name="StatusLabel" type="Label" parent="UI/HSplitContainer/ModelBrowser/VBoxContainer"]
-layout_mode = 2
-text = "Ready"
-horizontal_alignment = 1
-
-[node name="GraphEdit" type="GraphEdit" parent="UI/HSplitContainer"]
-layout_mode = 2
-size_flags_horizontal = 3
-size_flags_stretch_ratio = 0.7
 right_disconnects = true
 
+[connection signal="pressed" from="UI/Toolbar/HBoxContainer/LibraryBtn" to="." method="_on_library_pressed"]
 [connection signal="pressed" from="UI/Toolbar/HBoxContainer/SimulateBtn" to="." method="_on_simulate_pressed"]
 [connection signal="pressed" from="UI/Toolbar/HBoxContainer/StopBtn" to="." method="_on_stop_pressed"]
