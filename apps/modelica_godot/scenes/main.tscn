@@ -1,124 +1,16 @@
-[gd_scene load_steps=2 format=3 uid="uid://chv8byvbidkjb"]
+[gd_scene load_steps=2 format=3 uid="uid://b6g8pu8hpyy5v"]
 
-[ext_resource type="Script" uid="uid://y7swjbgdv85r" path="res://apps/modelica_godot/scenes/main.gd" id="1_main"]
+[ext_resource type="Script" uid="uid://y7swjbgdv85r" path="res://apps/modelica_godot/scenes/main.gd" id="1_xjmvd"]
 
-[node name="ModelicaMain" type="Control"]
-layout_mode = 3
-anchors_preset = 15
-anchor_right = 1.0
-anchor_bottom = 1.0
-grow_horizontal = 2
-grow_vertical = 2
-script = ExtResource("1_main")
+[node name="Main" type="Node2D"]
+script = ExtResource("1_xjmvd")
 
-[node name="MainLayout" type="HSplitContainer" parent="."]
-layout_mode = 1
-anchors_preset = 15
-anchor_right = 1.0
-anchor_bottom = 1.0
-grow_horizontal = 2
-grow_vertical = 2
-split_offset = 200
+[node name="Camera2D" type="Camera2D" parent="."]
+position = Vector2(576, 324)
 
-[node name="LeftPanel" type="Panel" parent="MainLayout"]
-custom_minimum_size = Vector2(200, 0)
-layout_mode = 2
+[node name="Background" type="ColorRect" parent="."]
+offset_right = 1152.0
+offset_bottom = 648.0
+color = Color(0.12549, 0.12549, 0.12549, 1)
 
-[node name="ComponentLayout" type="VBoxContainer" parent="MainLayout/LeftPanel"]
-custom_minimum_size = Vector2(200, 0)
-layout_mode = 1
-anchors_preset = 15
-anchor_right = 1.0
-anchor_bottom = 1.0
-grow_horizontal = 2
-grow_vertical = 2
-theme_override_constants/separation = 10
-
-[node name="Title" type="Label" parent="MainLayout/LeftPanel/ComponentLayout"]
-layout_mode = 2
-theme_override_font_sizes/font_size = 18
-text = "Components"
-horizontal_alignment = 1
-
-[node name="HSeparator" type="HSeparator" parent="MainLayout/LeftPanel/ComponentLayout"]
-layout_mode = 2
-
-[node name="ScrollContainer" type="ScrollContainer" parent="MainLayout/LeftPanel/ComponentLayout"]
-layout_mode = 2
-size_flags_vertical = 3
-
-[node name="ComponentList" type="VBoxContainer" parent="MainLayout/LeftPanel/ComponentLayout/ScrollContainer"]
-unique_name_in_owner = true
-layout_mode = 2
-size_flags_horizontal = 3
-theme_override_constants/separation = 10
-
-[node name="MechanicalSection" type="VBoxContainer" parent="MainLayout/LeftPanel/ComponentLayout/ScrollContainer/ComponentList"]
-layout_mode = 2
-
-[node name="Label" type="Label" parent="MainLayout/LeftPanel/ComponentLayout/ScrollContainer/ComponentList/MechanicalSection"]
-layout_mode = 2
-theme_override_colors/font_color = Color(0.8, 0.8, 0.8, 1)
-text = "Mechanical"
-
-[node name="MechanicalList" type="VBoxContainer" parent="MainLayout/LeftPanel/ComponentLayout/ScrollContainer/ComponentList/MechanicalSection"]
-layout_mode = 2
-theme_override_constants/separation = 5
-
-[node name="ElectricalSection" type="VBoxContainer" parent="MainLayout/LeftPanel/ComponentLayout/ScrollContainer/ComponentList"]
-layout_mode = 2
-
-[node name="Label" type="Label" parent="MainLayout/LeftPanel/ComponentLayout/ScrollContainer/ComponentList/ElectricalSection"]
-layout_mode = 2
-theme_override_colors/font_color = Color(0.8, 0.8, 0.8, 1)
-text = "Electrical"
-
-[node name="ElectricalList" type="VBoxContainer" parent="MainLayout/LeftPanel/ComponentLayout/ScrollContainer/ComponentList/ElectricalSection"]
-layout_mode = 2
-theme_override_constants/separation = 5
-
-[node name="CenterPanel" type="VBoxContainer" parent="MainLayout"]
-layout_mode = 2
-size_flags_horizontal = 3
-
-[node name="Controls" type="PanelContainer" parent="MainLayout/CenterPanel"]
-layout_mode = 2
-
-[node name="MarginContainer" type="MarginContainer" parent="MainLayout/CenterPanel/Controls"]
-layout_mode = 2
-theme_override_constants/margin_left = 10
-theme_override_constants/margin_top = 5
-theme_override_constants/margin_right = 10
-theme_override_constants/margin_bottom = 5
-
-[node name="SimulationControls" type="HBoxContainer" parent="MainLayout/CenterPanel/Controls/MarginContainer"]
-unique_name_in_owner = true
-layout_mode = 2
-theme_override_constants/separation = 10
-
-[node name="PlayButton" type="Button" parent="MainLayout/CenterPanel/Controls/MarginContainer/SimulationControls"]
-unique_name_in_owner = true
-layout_mode = 2
-text = "Play"
-
-[node name="PauseButton" type="Button" parent="MainLayout/CenterPanel/Controls/MarginContainer/SimulationControls"]
-unique_name_in_owner = true
-layout_mode = 2
-text = "Pause"
-
-[node name="StepButton" type="Button" parent="MainLayout/CenterPanel/Controls/MarginContainer/SimulationControls"]
-unique_name_in_owner = true
-layout_mode = 2
-text = "Step"
-
-[node name="ResetButton" type="Button" parent="MainLayout/CenterPanel/Controls/MarginContainer/SimulationControls"]
-unique_name_in_owner = true
-layout_mode = 2
-text = "Reset"
-
-[node name="GraphEdit" type="GraphEdit" parent="MainLayout/CenterPanel"]
-unique_name_in_owner = true
-layout_mode = 2
-size_flags_vertical = 3
-right_disconnects = true
-show_zoom_label = true
+[node name="ComponentArea" type="Node2D" parent="."]

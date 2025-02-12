@@ -24,17 +24,21 @@ var _line: int = 1
 var _column: int = 1
 
 func parse_file(path: String) -> Dictionary:
+	print("Opening file: ", path)
 	var file = FileAccess.open(path, FileAccess.READ)
 	if file == null:
 		push_error("Could not open file: " + path)
 		return {}
 		
 	_text = file.get_as_text()
+	print("File contents: ", _text.substr(0, 100) + "...")
 	_pos = 0
 	_line = 1
 	_column = 1
 	
-	return _parse_model()
+	var model = _parse_model()
+	print("Parsed model structure: ", model.keys())
+	return model
 
 func _parse_model() -> Dictionary:
 	var model = {
@@ -47,8 +51,10 @@ func _parse_model() -> Dictionary:
 		"annotations": {}
 	}
 	
+	print("Starting model parsing")
 	while _pos < _text.length():
 		var token = _next_token()
+		print("Token: ", token)
 		
 		match token.type:
 			TokenType.KEYWORD:
@@ -58,25 +64,33 @@ func _parse_model() -> Dictionary:
 						var name_token = _next_token()
 						if name_token.type == TokenType.IDENTIFIER:
 							model.name = name_token.value
+						print("Found model type: ", model.type, " name: ", model.name)
 					
 					"parameter":
-						model.parameters.append(_parse_parameter())
+						var param = _parse_parameter()
+						model.parameters.append(param)
+						print("Found parameter: ", param)
 					
 					"equation":
-						model.equations.append(_parse_equation())
+						var eq = _parse_equation()
+						model.equations.append(eq)
+						print("Found equation: ", eq)
 					
 					"end":
+						print("Found end of model")
 						break
 			
 			TokenType.COMMENT:
 				if token.value.begins_with("\""):
 					# Description string
 					model.description = token.value.trim_prefix("\"").trim_suffix("\"")
+					print("Found description: ", model.description)
 			
 			TokenType.NEWLINE:
 				continue
 				
 			TokenType.EOF:
+				print("Reached end of file")
 				break
 	
 	return model
@@ -145,11 +159,11 @@ func _next_token() -> Dictionary:
 		return _read_string()
 	
 	# Handle numbers
-	if char.is_valid_int() or char == "-":
+	if _is_digit(char) or char == "-":
 		return _read_number()
 	
 	# Handle identifiers and keywords
-	if char.is_valid_identifier():
+	if _is_letter(char):
 		return _read_identifier()
 	
 	# Handle operators
@@ -169,7 +183,7 @@ func _next_token() -> Dictionary:
 	return _next_token()
 
 func _skip_whitespace() -> void:
-	while _pos < _text.length() and _text[_pos].is_whitespace() and _text[_pos] != "\n":
+	while _pos < _text.length() and _text[_pos] in [" ", "\t", "\r"]:
 		_pos += 1
 		_column += 1
 
@@ -204,7 +218,7 @@ func _read_number() -> Dictionary:
 	
 	while _pos < _text.length():
 		var char = _text[_pos]
-		if char.is_valid_int():
+		if _is_digit(char):
 			number += char
 		elif char == "." and not has_decimal:
 			number += char
@@ -218,11 +232,17 @@ func _read_number() -> Dictionary:
 func _read_identifier() -> Dictionary:
 	var identifier = ""
 	
-	while _pos < _text.length() and (_text[_pos].is_valid_identifier() or _text[_pos] == "_"):
+	while _pos < _text.length() and (_is_letter(_text[_pos]) or _is_digit(_text[_pos]) or _text[_pos] == "_"):
 		identifier += _text[_pos]
 		_pos += 1
 	
 	if identifier in KEYWORDS:
 		return {"type": TokenType.KEYWORD, "value": identifier}
 	else:
-		return {"type": TokenType.IDENTIFIER, "value": identifier} 
+		return {"type": TokenType.IDENTIFIER, "value": identifier}
+
+func _is_letter(c: String) -> bool:
+	return (c >= "a" and c <= "z") or (c >= "A" and c <= "Z")
+
+func _is_digit(c: String) -> bool:
+	return c >= "0" and c <= "9" 

@@ -2,13 +2,13 @@ model Spring
     "1D translational spring"
     
     // Connectors
-    Modelica.Mechanics.Translational.Interfaces.Flange_a flange_a 
+    Interfaces.Flange_a flange_a 
         "Left flange of the spring";
-    Modelica.Mechanics.Translational.Interfaces.Flange_b flange_b 
+    Interfaces.Flange_b flange_b 
         "Right flange of the spring";
     
     // Parameters
-    parameter Real k(unit="N/m") = 1.0 
+    parameter Real k(unit="N/m", min=0) = 1.0 
         "Spring constant";
     parameter Real s_rel0 = 0 
         "Unstretched spring length";
@@ -32,6 +32,11 @@ annotation(
     Documentation(info="<html>
         <p>This component represents a linear 1D translational spring</p>
         <p>The spring connects two flanges and has a linear characteristic.</p>
+        <p>Parameters:</p>
+        <ul>
+            <li>k: Spring constant [N/m]</li>
+            <li>s_rel0: Unstretched length [m]</li>
+        </ul>
     </html>"),
     Icon(
         coordinateSystem(preserveAspectRatio=true),
