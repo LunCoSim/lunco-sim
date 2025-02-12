@@ -1,6 +1,6 @@
 extends Node2D
 
-var loader: MOLoader
+@onready var loader: MOLoader
 var components: Dictionary = {}
 var connections: Array[Connection] = []
 var dragging_component: Node2D = null
@@ -36,6 +36,9 @@ func _ready():
 	print("Starting main scene")
 	loader = MOLoader.new()
 	add_child(loader)
+	
+	# Wait one frame for loader to initialize
+	await get_tree().process_frame
 	
 	# Connect UI signals
 	_connect_ui_signals()
@@ -226,16 +229,32 @@ func _try_complete_connection(end_component: Node2D, end_point: String):
 		# Create new connection
 		var connection = Connection.new(start_component, end_component, start_point, end_point)
 		connection.connection_clicked.connect(_on_connection_clicked.bind(connection))
+		connection.connection_deleted.connect(_on_connection_deleted.bind(connection))
+		connection.connection_selected.connect(_on_connection_selected.bind(connection))
 		component_area.add_child(connection)
 		connections.append(connection)
+		status_label.text = "Connected components"
+	else:
+		status_label.text = "Invalid connection"
 	
 	# Clear connecting state
 	connecting_from.clear()
 
 func _on_connection_clicked(connection: Connection):
-	# Remove connection
+	# Handle middle-click
+	print("Connection clicked: ", connection.get_connection_data())
+
+func _on_connection_deleted(connection: Connection):
+	# Remove connection from our list
 	connections.erase(connection)
-	connection.queue_free()
+	status_label.text = "Connection deleted"
+
+func _on_connection_selected(connection: Connection):
+	# Deselect other connections
+	for other in connections:
+		if other != connection:
+			other.is_selected = false
+	status_label.text = "Connection selected"
 
 func _process(delta):
 	if dragging_component:
@@ -347,11 +366,101 @@ func _create_example_circuit():
 		component_area.add_child(connection)
 		connections.append(connection)
 
+func _load_package(package_path: String) -> void:
+	print("Loading package from: ", package_path)
+	var model = loader.parser.parse_file(package_path)
+	
+	if model.empty():
+		push_error("Failed to parse package file")
+		return
+	
+	# Load all components defined in the package
+	for component in model.components:
+		var component_name = component.name
+		var component_type = component.type
+		print("Found component: ", component_name, " of type: ", component_type)
+		
+		# Create the component
+		var node = _create_component_from_package(package_path, component_type)
+		if node:
+			node.name = component_name
+			# Store any additional component data from the model
+			if node.has_method("set_component_data"):
+				node.set_component_data(component)
+	
+	# Load sub-packages
+	for import_path in model.imports:
+		var full_path = package_path.get_base_dir().path_join(import_path.replace(".", "/") + ".mo")
+		_load_package(full_path)
+
 func _create_component_from_package(package_path: String, component_name: String) -> Node:
 	print("Creating component from package: ", package_path, " component: ", component_name)
+	
+	# Try to load the component definition from the package
+	var model = loader.parser.parse_file(package_path)
+	var component_def = null
+	
+	# Look for the component definition in the package
+	for comp in model.components:
+		if comp.type == component_name:
+			component_def = comp
+			break
+	
 	var node = Node2D.new()
 	node.name = component_name
 	
+	# If we found a definition, use it to create the component
+	if component_def:
+		_create_component_from_definition(node, component_def)
+	else:
+		# Fall back to our default component creation
+		_create_default_component(node, component_name)
+	
+	return node
+
+func _create_component_from_definition(node: Node2D, component_def: Dictionary) -> void:
+	# Create visuals based on component definition
+	var main_rect = ColorRect.new()
+	main_rect.size = Vector2(40, 20)
+	main_rect.position = Vector2(-20, -10)
+	
+	# Set color based on component type
+	match component_def.type:
+		"VoltageSource", "Source":
+			main_rect.color = Color(0.2, 0.6, 1.0)  # Light blue
+		"Resistor", "Damper":
+			main_rect.color = Color(0.8, 0.2, 0.2)  # Red
+		"Capacitor", "Spring":
+			main_rect.color = Color(0.2, 0.8, 0.2)  # Green
+		"Inductor", "Mass":
+			main_rect.color = Color(0.8, 0.2, 0.8)  # Purple
+		_:
+			main_rect.color = Color(0.7, 0.7, 0.7)  # Gray
+	
+	node.add_child(main_rect)
+	
+	# Add label
+	var label = Label.new()
+	label.text = component_def.name
+	label.position = Vector2(-5, -10)
+	node.add_child(label)
+	
+	# Add connection points for each connector
+	for connector in component_def.get("connectors", []):
+		var point = ColorRect.new()
+		point.size = Vector2(10, 10)
+		point.color = Color(1, 0.8, 0)  # Gold
+		
+		# Position based on connector name/type
+		if connector.name.ends_with("_a") or connector.name.begins_with("left"):
+			point.position = Vector2(-25, -5)
+		else:
+			point.position = Vector2(15, -5)
+		
+		node.add_child(point)
+
+func _create_default_component(node: Node2D, component_name: String) -> void:
+	# This is our existing component creation code
 	match component_name:
 		"VoltageSource":
 			# Create circle for voltage source
@@ -469,8 +578,6 @@ func _create_component_from_package(package_path: String, component_name: String
 			label.text = component_name
 			label.position = Vector2(-25, 30)
 			node.add_child(label)
-	
-	return node
 
 func _unhandled_input(event):
 	# Camera pan with middle mouse or Alt + Left mouse

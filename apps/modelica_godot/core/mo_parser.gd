@@ -15,15 +15,25 @@ enum TokenType {
 const KEYWORDS = [
 	"model", "end", "parameter", "equation", "der", "input", "output",
 	"flow", "stream", "connector", "package", "class", "type", "constant",
-	"discrete", "Real", "Integer", "Boolean", "String"
+	"discrete", "Real", "Integer", "Boolean", "String", "extends"
 ]
 
 var _text: String
 var _pos: int = 0
 var _line: int = 1
 var _column: int = 1
+var _package_path: String = ""
+
+# Cache for parsed models to avoid re-parsing
+var _model_cache: Dictionary = {}
 
 func parse_file(path: String) -> Dictionary:
+	_package_path = path.get_base_dir()
+	
+	# Check cache first
+	if _model_cache.has(path):
+		return _model_cache[path]
+		
 	print("Opening file: ", path)
 	var file = FileAccess.open(path, FileAccess.READ)
 	if file == null:
@@ -31,13 +41,12 @@ func parse_file(path: String) -> Dictionary:
 		return {}
 		
 	_text = file.get_as_text()
-	print("File contents: ", _text.substr(0, 100) + "...")
 	_pos = 0
 	_line = 1
 	_column = 1
 	
 	var model = _parse_model()
-	print("Parsed model structure: ", model.keys())
+	_model_cache[path] = model
 	return model
 
 func _parse_model() -> Dictionary:
@@ -45,16 +54,19 @@ func _parse_model() -> Dictionary:
 		"type": "",  # model, connector, package, etc.
 		"name": "",
 		"description": "",
+		"extends": [],
+		"imports": [],
 		"parameters": [],
 		"variables": [],
 		"equations": [],
-		"annotations": {}
+		"annotations": {},
+		"components": [],
+		"connectors": []
 	}
 	
 	print("Starting model parsing")
 	while _pos < _text.length():
 		var token = _next_token()
-		print("Token: ", token)
 		
 		match token.type:
 			TokenType.KEYWORD:
@@ -66,15 +78,23 @@ func _parse_model() -> Dictionary:
 							model.name = name_token.value
 						print("Found model type: ", model.type, " name: ", model.name)
 					
+					"extends":
+						var base_token = _next_token()
+						if base_token.type == TokenType.IDENTIFIER:
+							model.extends.append(base_token.value)
+					
+					"import":
+						var import_path = _parse_import()
+						if import_path:
+							model.imports.append(import_path)
+					
 					"parameter":
 						var param = _parse_parameter()
 						model.parameters.append(param)
-						print("Found parameter: ", param)
 					
 					"equation":
 						var eq = _parse_equation()
 						model.equations.append(eq)
-						print("Found equation: ", eq)
 					
 					"end":
 						print("Found end of model")
@@ -84,16 +104,211 @@ func _parse_model() -> Dictionary:
 				if token.value.begins_with("\""):
 					# Description string
 					model.description = token.value.trim_prefix("\"").trim_suffix("\"")
-					print("Found description: ", model.description)
+				elif token.value.begins_with("annotation"):
+					var annotation = _parse_annotation()
+					model.annotations.merge(annotation)
+			
+			TokenType.IDENTIFIER:
+				# This might be a component declaration
+				var component = _parse_component_declaration(token.value)
+				if component:
+					if component.is_connector:
+						model.connectors.append(component)
+					else:
+						model.components.append(component)
 			
 			TokenType.NEWLINE:
 				continue
-				
+			
 			TokenType.EOF:
-				print("Reached end of file")
 				break
 	
 	return model
+
+func _parse_import() -> String:
+	var import_path = ""
+	while true:
+		var token = _next_token()
+		match token.type:
+			TokenType.IDENTIFIER:
+				import_path += token.value
+			TokenType.OPERATOR:
+				if token.value == ".":
+					import_path += "."
+				else:
+					break
+			_:
+				break
+	return import_path
+
+func _parse_component_declaration(type_name: String) -> Dictionary:
+	var component = {
+		"type": type_name,
+		"name": "",
+		"is_connector": false,
+		"modifiers": {},
+		"description": ""
+	}
+	
+	var token = _next_token()
+	if token.type == TokenType.IDENTIFIER:
+		component.name = token.value
+		
+		# Check if this is a connector type
+		component.is_connector = type_name.begins_with("Flange") or \
+							   type_name.begins_with("Pin") or \
+							   type_name.begins_with("Port")
+		
+		# Look for modifiers
+		token = _next_token()
+		if token.type == TokenType.OPERATOR and token.value == "(":
+			component.modifiers = _parse_modifiers(token.value)
+		
+		# Look for description
+		token = _next_token()
+		if token.type == TokenType.STRING:
+			component.description = token.value
+		
+		return component
+	
+	return {}
+
+func _parse_modifiers(line: String) -> Dictionary:
+	var modifiers = {}
+	
+	var start = line.find("(")
+	var end = line.find(")")
+	if start == -1 or end == -1:
+		return modifiers
+		
+	var modifier_str = line.substr(start + 1, end - start - 1)
+	var parts = modifier_str.split(",")
+	
+	for part in parts:
+		var key_value = part.split("=")
+		if key_value.size() == 2:
+			modifiers[key_value[0].strip_edges()] = key_value[1].strip_edges()
+	
+	return modifiers
+
+func _parse_annotation() -> Dictionary:
+	var annotation = {}
+	
+	# Skip until we find "annotation("
+	while _pos < _text.length():
+		if _text.substr(_pos).begins_with("annotation("):
+			_pos += 11  # Skip "annotation("
+			break
+		_pos += 1
+	
+	# Parse the annotation content
+	var parentheses_count = 1
+	var content = ""
+	
+	while _pos < _text.length() and parentheses_count > 0:
+		var char = _text[_pos]
+		if char == "(":
+			parentheses_count += 1
+		elif char == ")":
+			parentheses_count -= 1
+		
+		if parentheses_count > 0:
+			content += char
+		_pos += 1
+	
+	# Parse Icon section if present
+	if content.find("Icon(") != -1:
+		var icon_start = content.find("Icon(") + 5
+		var icon_end = content.find(")", icon_start)
+		var icon_content = content.substr(icon_start, icon_end - icon_start)
+		
+		annotation["Icon"] = {
+			"graphics": _parse_graphics(icon_content)
+		}
+	
+	return annotation
+
+func _parse_graphics(content: String) -> Array:
+	var graphics = []
+	var lines = content.split("\n")
+	
+	for line in lines:
+		line = line.strip_edges()
+		if line.begins_with("Line("):
+			graphics.append(_parse_line(line))
+		elif line.begins_with("Rectangle("):
+			graphics.append(_parse_rectangle(line))
+		elif line.begins_with("Text("):
+			graphics.append(_parse_text(line))
+	
+	return graphics
+
+func _parse_line(line: String) -> Dictionary:
+	var graphic = {"type": "Line"}
+	
+	# Extract points
+	var points_start = line.find("points={{") + 8
+	var points_end = line.find("}}", points_start)
+	var points_str = line.substr(points_start, points_end - points_start)
+	
+	var points = []
+	for point in points_str.split("},{"):
+		var coords = point.replace("{", "").replace("}", "").split(",")
+		points.append(float(coords[0]))
+		points.append(float(coords[1]))
+	
+	graphic["points"] = points
+	return graphic
+
+func _parse_rectangle(line: String) -> Dictionary:
+	var graphic = {"type": "Rectangle"}
+	
+	# Extract extent
+	var extent_start = line.find("extent={{") + 8
+	var extent_end = line.find("}}", extent_start)
+	var extent_str = line.substr(extent_start, extent_end - extent_start)
+	
+	var extent = []
+	for coord in extent_str.split("},{"):
+		var coords = coord.replace("{", "").replace("}", "").split(",")
+		extent.append(float(coords[0]))
+		extent.append(float(coords[1]))
+	
+	graphic["extent"] = extent
+	
+	# Extract fillColor if present
+	var fill_color_start = line.find("fillColor={")
+	if fill_color_start != -1:
+		fill_color_start += 10
+		var fill_color_end = line.find("}", fill_color_start)
+		var color_str = line.substr(fill_color_start, fill_color_end - fill_color_start)
+		var colors = color_str.split(",")
+		graphic["fillColor"] = [int(colors[0]), int(colors[1]), int(colors[2])]
+	
+	return graphic
+
+func _parse_text(line: String) -> Dictionary:
+	var graphic = {"type": "Text"}
+	
+	# Extract extent
+	var extent_start = line.find("extent={{") + 8
+	var extent_end = line.find("}}", extent_start)
+	var extent_str = line.substr(extent_start, extent_end - extent_start)
+	
+	var extent = []
+	for coord in extent_str.split("},{"):
+		var coords = coord.replace("{", "").replace("}", "").split(",")
+		extent.append(float(coords[0]))
+		extent.append(float(coords[1]))
+	
+	graphic["extent"] = extent
+	
+	# Extract text string
+	var text_start = line.find("textString=\"") + 12
+	var text_end = line.find("\"", text_start)
+	graphic["textString"] = line.substr(text_start, text_end - text_start)
+	
+	return graphic
 
 func _parse_parameter() -> Dictionary:
 	var param = {

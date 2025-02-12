@@ -3,12 +3,15 @@ extends Node
 
 var parser: MOParser
 
-func _init():
+func _ready():
 	parser = MOParser.new()
 
 # Load a Modelica component from a .mo file and create a node for it
 func load_component(mo_path: String) -> Node:
 	print("Attempting to load Modelica file: ", mo_path)
+	if not parser:
+		parser = MOParser.new()
+		
 	var model = parser.parse_file(mo_path)
 	if model.is_empty():
 		push_error("Failed to parse Modelica file: " + mo_path)
