@@ -4,8 +4,16 @@ var loader: MOLoader
 var components: Dictionary = {}
 var connections: Array[Connection] = []
 var dragging_component: Node2D = null
+var dragging_offset: Vector2 = Vector2.ZERO  # Store offset from mouse to component center
+var moving_components: Dictionary = {}  # Store components that are moving to target positions
 var connecting_from: Dictionary = {}  # Stores component and point when starting connection
 var hovered_point: Dictionary = {}  # Stores currently hovered connection point
+var scaling_component: Node2D = null
+var scaling_start_size: Vector2 = Vector2.ZERO
+var scaling_start_mouse: Vector2 = Vector2.ZERO
+var scaling_center: String = ""  # "left" or "right"
+var min_component_size = 30
+var max_component_size = 100
 @onready var component_area = $ComponentArea
 @onready var camera = $Camera2D
 @onready var status_label = $CanvasLayer/UI/Toolbar/HBoxContainer/StatusLabel
@@ -80,10 +88,14 @@ func _on_component_button_pressed(component_type: String):
 	if component:
 		# Position at center of camera view
 		var camera_center = camera.get_screen_center_position()
-		component.position = camera_center
+		component.position = camera_center + Vector2(0, -100)  # Start above target position
 		_make_component_interactive(component)
 		component_area.add_child(component)
 		components[component.name + str(components.size())] = component
+		
+		# Set up smooth movement to target position
+		moving_components[component] = camera_center
+		
 		status_label.text = "Added " + component_type
 
 func _load_mechanical_components():
@@ -158,19 +170,43 @@ func _on_component_gui_input(event: InputEvent, component: Node2D, area: ColorRe
 		if event.button_index == MOUSE_BUTTON_LEFT:
 			if event.pressed:
 				if area.position.x < -15:  # Left connection point
-					_start_connection(component, "left")
+					if event.shift_pressed:  # Shift + Click for scaling
+						_start_scaling(component, "left")
+					else:
+						_start_connection(component, "left")
 				elif area.position.x > 15:  # Right connection point
-					_start_connection(component, "right")
-				else:  # Main body
+					if event.shift_pressed:  # Shift + Click for scaling
+						_start_scaling(component, "right")
+					else:
+						_start_connection(component, "right")
+				else:  # Main body - dragging
 					dragging_component = component
-			else:
+					# Calculate offset in local coordinates
+					var mouse_pos = component.get_local_mouse_position()
+					dragging_offset = Vector2.ZERO - mouse_pos
+					# Visual feedback
+					for child in component.get_children():
+						if child is ColorRect:
+							child.modulate.a = 0.7
+			else:  # Mouse released
 				if dragging_component == component:
 					dragging_component = null
+					for child in component.get_children():
+						if child is ColorRect:
+							child.modulate.a = 1.0
+				elif scaling_component == component:
+					scaling_component = null
+					for child in component.get_children():
+						if child is ColorRect:
+							child.modulate.a = 1.0
 				elif not connecting_from.is_empty():
-					if area.position.x < -15:  # Left connection point
+					if area.position.x < -15:
 						_try_complete_connection(component, "left")
-					elif area.position.x > 15:  # Right connection point
+					elif area.position.x > 15:
 						_try_complete_connection(component, "right")
+		elif event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
+			if area == get_main_rect(component):  # Only scale from center when clicking main body
+				_start_scaling(component, "center")
 
 func _start_connection(component: Node2D, point: String):
 	connecting_from = {
@@ -201,13 +237,53 @@ func _on_connection_clicked(connection: Connection):
 	connections.erase(connection)
 	connection.queue_free()
 
-func _process(_delta):
+func _process(delta):
 	if dragging_component:
-		var mouse_pos = get_viewport().get_mouse_position()
-		var snapped_pos = _snap_to_grid(mouse_pos)
-		dragging_component.position = snapped_pos
+		# Get the mouse position in the component_area's coordinate system
+		var mouse_pos = component_area.get_local_mouse_position()
+		# Apply the offset and snap to grid
+		var target_pos = _snap_to_grid(mouse_pos + dragging_offset)
+		dragging_component.position = target_pos
 	
-	# Queue redraw for grid and connection lines
+	elif scaling_component:
+		var mouse_pos = get_global_mouse_position()
+		var delta_x = mouse_pos.x - scaling_start_mouse.x
+		
+		# Adjust scaling based on center type
+		match scaling_center:
+			"left":
+				delta_x *= 1
+			"right":
+				delta_x *= -1
+			"center":
+				delta_x *= 0.5  # Scale from center
+		
+		# Calculate new size
+		var scale_factor = 1.0 + (delta_x / 100.0)
+		var new_size = scaling_start_size * scale_factor
+		new_size.x = clamp(new_size.x, min_component_size, max_component_size)
+		new_size.y = clamp(new_size.y, min_component_size/2, max_component_size/2)
+		
+		# Update component visuals
+		_update_component_size(scaling_component, new_size)
+	
+	# Handle smooth movement of components
+	var components_to_remove = []
+	for component in moving_components:
+		var target = moving_components[component]
+		var direction = target - component.position
+		var distance = direction.length()
+		
+		if distance < 1:
+			component.position = target
+			components_to_remove.append(component)
+		else:
+			var speed = min(distance * 10, 400)
+			component.position += direction.normalized() * speed * delta
+	
+	for component in components_to_remove:
+		moving_components.erase(component)
+	
 	queue_redraw()
 
 func _draw():
@@ -397,9 +473,10 @@ func _create_component_from_package(package_path: String, component_name: String
 	return node
 
 func _unhandled_input(event):
-	# Camera pan
+	# Camera pan with middle mouse or Alt + Left mouse
 	if event is InputEventMouseButton:
-		if event.button_index == MOUSE_BUTTON_MIDDLE:
+		if (event.button_index == MOUSE_BUTTON_MIDDLE) or \
+		   (event.button_index == MOUSE_BUTTON_LEFT and event.alt_pressed):
 			if event.pressed:
 				camera_drag = true
 				camera_drag_start = event.position
@@ -434,3 +511,74 @@ func _snap_to_grid(pos: Vector2) -> Vector2:
 	snapped.x = round(pos.x / GRID_SIZE) * GRID_SIZE
 	snapped.y = round(pos.y / GRID_SIZE) * GRID_SIZE
 	return snapped
+
+func _start_scaling(component: Node2D, center: String):
+	scaling_component = component
+	scaling_center = center
+	scaling_start_mouse = get_global_mouse_position()
+	
+	# Store initial sizes of all ColorRect children
+	var main_rect: ColorRect = null
+	for child in component.get_children():
+		if child is ColorRect:
+			if child.position.x > -15 and child.position.x < 15:  # Main body
+				main_rect = child
+				break
+	
+	if main_rect:
+		scaling_start_size = main_rect.size
+		
+		# Change appearance while scaling
+		for child in component.get_children():
+			if child is ColorRect:
+				child.modulate.a = 0.7
+
+func get_main_rect(component: Node2D) -> ColorRect:
+	for child in component.get_children():
+		if child is ColorRect:
+			if child.position.x > -15 and child.position.x < 15:  # Main body
+				return child
+	return null
+
+func _update_component_size(component: Node2D, new_size: Vector2):
+	var main_rect = get_main_rect(component)
+	var left_point: ColorRect = null
+	var right_point: ColorRect = null
+	var label: Label = null
+	
+	# Find connection points and label
+	for child in component.get_children():
+		if child is ColorRect:
+			if child.position.x < -15:
+				left_point = child
+			elif child.position.x > 15:
+				right_point = child
+		elif child is Label:
+			label = child
+	
+	if main_rect:
+		# Calculate position offset based on scaling center
+		var old_center = main_rect.position + main_rect.size / 2
+		var position_offset = Vector2.ZERO
+		
+		match scaling_center:
+			"left":
+				position_offset.x = 0
+			"right":
+				position_offset.x = (main_rect.size.x - new_size.x)
+			"center":
+				position_offset = (main_rect.size - new_size) / 2
+		
+		# Update main body
+		main_rect.size = new_size
+		main_rect.position = Vector2(-new_size.x/2, -new_size.y/2) + position_offset
+		
+		# Update connection points
+		if left_point:
+			left_point.position = Vector2(-new_size.x/2 - 5, -5) + position_offset
+		if right_point:
+			right_point.position = Vector2(new_size.x/2 - 5, -5) + position_offset
+		
+		# Update label position
+		if label:
+			label.position = Vector2(-5, -new_size.y/2 + 5) + position_offset
