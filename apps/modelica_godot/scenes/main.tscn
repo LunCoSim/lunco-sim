@@ -1,9 +1,10 @@
-[gd_scene load_steps=5 format=3 uid="uid://b6x8j2y4n8m5q"]
+[gd_scene load_steps=6 format=3 uid="uid://b6x8j2y4n8m5q"]
 
 [ext_resource type="Script" uid="uid://y7swjbgdv85r" path="res://apps/modelica_godot/scenes/main.gd" id="1_main"]
 [ext_resource type="Script" uid="uid://vsm7wnflauvi" path="res://apps/modelica_godot/core/model_manager.gd" id="2_manager"]
 [ext_resource type="PackedScene" path="res://apps/modelica_godot/ui/model_browser_window.tscn" id="3_browser_window"]
 [ext_resource type="PackedScene" path="res://apps/modelica_godot/ui/component_palette.tscn" id="4_palette"]
+[ext_resource type="PackedScene" path="res://apps/modelica_godot/ui/simulation_view.tscn" id="5_simview"]
 
 [node name="Main" type="Control"]
 layout_mode = 3
@@ -81,16 +82,23 @@ horizontal_alignment = 1
 layout_mode = 2
 size_flags_vertical = 3
 
-[node name="ComponentPalette" parent="UI/HSplitContainer" instance=ExtResource("4_palette")]
-layout_mode = 2
-
-[node name="GraphEdit" type="GraphEdit" parent="UI/HSplitContainer"]
+[node name="VSplitContainer" type="VSplitContainer" parent="UI/HSplitContainer"]
 layout_mode = 2
 size_flags_horizontal = 3
+
+[node name="ComponentPalette" parent="UI/HSplitContainer/VSplitContainer" instance=ExtResource("4_palette")]
+layout_mode = 2
+
+[node name="GraphEdit" type="GraphEdit" parent="UI/HSplitContainer/VSplitContainer"]
+layout_mode = 2
+size_flags_vertical = 3
 right_disconnects = true
+
+[node name="SimulationView" parent="UI/HSplitContainer" instance=ExtResource("5_simview")]
+layout_mode = 2
 
 [connection signal="pressed" from="UI/Toolbar/HBoxContainer/LoadMSLBtn" to="." method="_on_load_msl_pressed"]
 [connection signal="pressed" from="UI/Toolbar/HBoxContainer/LibraryBtn" to="." method="_on_library_pressed"]
 [connection signal="pressed" from="UI/Toolbar/HBoxContainer/SimulateBtn" to="." method="_on_simulate_pressed"]
 [connection signal="pressed" from="UI/Toolbar/HBoxContainer/StopBtn" to="." method="_on_stop_pressed"]
-[connection signal="component_selected" from="UI/HSplitContainer/ComponentPalette" to="." method="_on_component_selected"]
+[connection signal="component_selected" from="UI/HSplitContainer/VSplitContainer/ComponentPalette" to="." method="_on_component_selected"]

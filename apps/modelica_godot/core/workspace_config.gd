@@ -29,11 +29,15 @@ func initialize(root_path: String) -> bool:
 	workspace_root = root_path
 	return _validate_and_create_structure()
 
-func get_path(path_type: String) -> String:
+func get_workspace_path(path_type: String) -> String:
 	if not MODELICA_PATHS.has(path_type):
 		push_error("Invalid path type: " + path_type)
 		return ""
 	return workspace_root.path_join(MODELICA_PATHS[path_type])
+
+func has_msl() -> bool:
+	var msl_path = get_workspace_path("MSL")
+	return DirAccess.dir_exists_absolute(msl_path)
 
 func _validate_and_create_structure() -> bool:
 	# Check if workspace root exists

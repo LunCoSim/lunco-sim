@@ -3,13 +3,15 @@ extends Control
 
 @onready var model_manager: ModelManager = $ModelManager
 @onready var model_browser_window: ModelBrowserWindow = $ModelBrowserWindow
-@onready var graph_edit: GraphEdit = $UI/HSplitContainer/GraphEdit
+@onready var graph_edit: GraphEdit = $UI/HSplitContainer/VSplitContainer/GraphEdit
 @onready var status_label: Label = $UI/Toolbar/HBoxContainer/StatusLabel
 @onready var file_menu: MenuButton = $UI/Toolbar/HBoxContainer/FileMenuBtn
+@onready var simulation_view = $UI/HSplitContainer/SimulationView
 
 var component_count: int = 0
 var current_file: String = ""
 var has_unsaved_changes: bool = false
+var is_simulating: bool = false
 
 func _ready() -> void:
 	print("Starting main scene")
@@ -435,13 +437,30 @@ func _can_connect(from_node: StringName, to_node: StringName) -> bool:
 	return true
 
 func _on_simulate_pressed() -> void:
+	if is_simulating:
+		return
+		
+	is_simulating = true
 	status_label.text = "Simulating..."
-	# TODO: Implement simulation
+	
+	# Initialize equation system
+	model_manager.equation_system.initialize()
+	
+	# Connect simulation view to equation system
+	simulation_view.set_equation_system(model_manager.equation_system)
 
 func _on_stop_pressed() -> void:
-	status_label.text = "Stopped"
-	# TODO: Implement simulation stop
+	is_simulating = false
+	status_label.text = "Simulation stopped"
 
 func _on_load_msl_pressed() -> void:
 	model_browser_window.show()
 	model_browser_window.get_node("ModelBrowser").load_msl()
+
+func _process(delta: float) -> void:
+	if is_simulating:
+		# Update simulation using equation system
+		model_manager.equation_system.solve_step()
+		
+		# Update status
+		status_label.text = "Time: %.2f s" % model_manager.equation_system.time

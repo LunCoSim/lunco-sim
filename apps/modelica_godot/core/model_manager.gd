@@ -4,26 +4,31 @@ class_name ModelManager
 
 const MOParser = preload("res://apps/modelica_godot/core/mo_parser.gd")
 const PackageManager = preload("res://apps/modelica_godot/core/package_manager.gd")
+const WorkspaceConfig = preload("res://apps/modelica_godot/core/workspace_config.gd")
+const MOLoader = preload("res://apps/modelica_godot/core/mo_loader.gd")
 
-signal models_loaded_changed()  # Fixed signal declaration
+signal models_loaded_changed
 signal loading_progress(progress: float, message: String)
 signal model_loaded(model_data: Dictionary)
 
 var _parser: MOParser
 var _models: Dictionary = {}  # Path -> Model data
 var _model_tree: Dictionary = {}  # Package hierarchy
+var _package_tree: Dictionary = {}
 var _cache_file: String = "user://modelica_cache.json"
 var components: Array[ModelicaComponent] = []
 var equation_system: EquationSystem
 var time: float = 0.0
 var dt: float = 0.01  # Time step
 var _package_manager: PackageManager
+var _workspace_config: WorkspaceConfig
 
 func _init() -> void:
 	_models = {}
 	_model_tree = {}
 	_parser = MOParser.new()
 	equation_system = EquationSystem.new()
+	_workspace_config = WorkspaceConfig.new()
 
 func _enter_tree() -> void:
 	if not equation_system:
@@ -32,73 +37,42 @@ func _enter_tree() -> void:
 		add_child(equation_system)
 
 func _ready() -> void:
-	_clear_cache()
-	_package_manager = PackageManager.new()
-	add_child(_package_manager)
-	
-	# Connect to package manager signals
-	_package_manager.package_loaded.connect(_on_package_loaded)
-	_package_manager.loading_error.connect(_on_package_loading_error)
-
-# Function to explicitly load MSL when needed
-func load_msl_directory(path: String) -> void:
-	print("Loading MSL directory: ", path)
-	var dir = DirAccess.open(path)
-	if not dir:
-		push_error("Failed to open directory: " + path)
+	if not _workspace_config:
+		push_error("WorkspaceConfig not initialized")
 		return
-		
-	dir.list_dir_begin()
-	var files_to_process = []
-	var subdirs_to_process = []
+
+func initialize() -> void:
+	if not _workspace_config:
+		_workspace_config = WorkspaceConfig.new()
 	
-	# First collect all files and subdirectories
-	var file_name = dir.get_next()
-	while file_name != "":
-		var full_path = path.path_join(file_name)
-		
-		if dir.current_is_dir() and not file_name.begins_with("."):
-			subdirs_to_process.append(full_path)
-		elif file_name.ends_with(".mo"):
-			files_to_process.append(full_path)
-			
-		file_name = dir.get_next()
+	# Load initial models
+	load_models()
+
+func load_models() -> void:
+	# Clear existing models
+	_model_tree.clear()
+	_package_tree.clear()
 	
-	dir.list_dir_end()
+	# Load models from workspace
+	var loader = MOLoader.new()
+	var parser = MOParser.new()
 	
-	# Process files in chunks
-	const CHUNK_SIZE = 10
-	var total_files = files_to_process.size()
-	var processed = 0
+	# Load MSL if available
+	if _workspace_config.has_msl():
+		emit_signal("loading_progress", 0.0, "Loading MSL...")
+		var msl_models = loader.load_msl(_workspace_config)
+		for model in msl_models:
+			_add_model_to_tree(model)
+		emit_signal("loading_progress", 0.5, "MSL loaded")
 	
-	while processed < total_files:
-		var chunk_end = mini(processed + CHUNK_SIZE, total_files)
-		var chunk = files_to_process.slice(processed, chunk_end)
-		
-		for file_path in chunk:
-			var model_data = _parser.parse_file(file_path)
-			if not model_data.is_empty():
-				_models[file_path] = model_data
-				_add_to_model_tree(file_path, model_data)
-				emit_signal("model_loaded", model_data)
-			
-			var progress = float(processed) / total_files
-			emit_signal("loading_progress", progress, "Loading models...")
-		
-		processed = chunk_end
-		# Allow a frame to process between chunks
-		await get_tree().process_frame
+	# Load workspace models
+	emit_signal("loading_progress", 0.5, "Loading workspace models...")
+	var workspace_models = loader.load_workspace(_workspace_config)
+	for model in workspace_models:
+		_add_model_to_tree(model)
 	
-	# Process subdirectories
-	for subdir in subdirs_to_process:
-		await load_msl_directory(subdir)
-	
-	# Only emit models_loaded when we're at the root call
-	if path.ends_with("MSL"):
-		print("Model loading complete. Total models: ", _models.size())
-		print("Model tree size: ", _model_tree.size())
-		_validate_loaded_models()
-		emit_signal("models_loaded_changed")
+	emit_signal("loading_progress", 1.0, "All models loaded")
+	emit_signal("models_loaded_changed")
 
 func _clear_cache() -> void:
 	if FileAccess.file_exists(_cache_file):
@@ -425,3 +399,11 @@ func _parse_model_file(content: String, path: String) -> void:
 	# Add to model tree
 	var tree_path = path.trim_prefix(ProjectSettings.get_setting("modelica/root_path", ""))
 	_add_to_model_tree(tree_path, model_data)
+
+func _add_model_to_tree(model_data: Dictionary) -> void:
+	var path = model_data.get("path", "")
+	if path.is_empty():
+		push_error("Invalid model path")
+		return
+	
+	_add_to_model_tree(path, model_data)

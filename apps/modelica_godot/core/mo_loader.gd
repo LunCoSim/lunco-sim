@@ -1,11 +1,67 @@
 @tool
 extends Node
-class_name ModelicaLoader
+class_name MOLoader
 
 var _parser: MOParser
 
 func _init():
 	_parser = MOParser.new()
+
+func load_msl(workspace_config: WorkspaceConfig) -> Array:
+	var models = []
+	var msl_path = workspace_config.get_workspace_path("MSL")
+	
+	if not DirAccess.dir_exists_absolute(msl_path):
+		push_error("MSL directory not found at: " + msl_path)
+		return models
+	
+	_find_mo_files(msl_path, models)
+	return models
+
+func load_workspace(workspace_config: WorkspaceConfig) -> Array:
+	var models = []
+	var models_path = workspace_config.get_workspace_path("MODELS")
+	
+	if not DirAccess.dir_exists_absolute(models_path):
+		push_error("Models directory not found at: " + models_path)
+		return models
+	
+	_find_mo_files(models_path, models)
+	return models
+
+func _find_mo_files(path: String, results: Array) -> void:
+	var dir = DirAccess.open(path)
+	if not dir:
+		push_error("Failed to open directory: " + path)
+		return
+	
+	dir.list_dir_begin()
+	var file_name = dir.get_next()
+	
+	while file_name != "":
+		if not file_name.begins_with("."):
+			var full_path = path.path_join(file_name)
+			
+			if dir.current_is_dir():
+				_find_mo_files(full_path, results)
+			elif file_name.ends_with(".mo"):
+				var model_data = _load_model_file(full_path)
+				if not model_data.is_empty():
+					model_data["path"] = full_path
+					results.append(model_data)
+		
+		file_name = dir.get_next()
+	
+	dir.list_dir_end()
+
+func _load_model_file(path: String) -> Dictionary:
+	var file = FileAccess.open(path, FileAccess.READ)
+	if not file:
+		push_error("Failed to open file: " + path)
+		return {}
+	
+	var content = file.get_as_text()
+	return _parser.parse_file(content)
 
 func load_model(path: String) -> ModelicaComponent:
 	print("Loading model from: ", path)

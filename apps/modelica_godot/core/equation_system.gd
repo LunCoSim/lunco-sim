@@ -13,18 +13,16 @@ var initial_conditions: Array[Dictionary] = []
 # Solver settings
 const MAX_ITERATIONS = 50
 const TOLERANCE = 1e-6
-class Token:
+class EquationToken:
 	var type: String
 	var value: String
-	var position: int
 	
-	func _init(p_type: String, p_value: String, p_position: int):
+	func _init(p_type: String, p_value: String):
 		type = p_type
 		value = p_value
-		position = p_position
 	
 	func _to_string() -> String:
-		return "Token(%s, '%s', %d)" % [type, value, position]
+		return "Token(%s, '%s')" % [type, value]
 
 class ASTNode:
 	var type: String
@@ -60,7 +58,7 @@ class ASTNode:
 
 const TOKEN_TYPES = {
 	"NUMBER": "\\d+(\\.\\d+)?",
-	"OPERATOR": "[+\\-*/^]",
+	"OPERATOR": "[+\\-*/]",
 	"LPAREN": "\\(",
 	"RPAREN": "\\)",
 	"IDENTIFIER": "[a-zA-Z_][a-zA-Z0-9_]*",
@@ -120,88 +118,93 @@ func add_component(component: ModelicaComponent) -> void:
 		components.append(component)
 
 func solve_step() -> void:
+	# Solve one time step using explicit Euler method
 	# 1. Store current state
 	var current_state = variables.duplicate()
+	var current_derivatives = derivatives.duplicate()
 	
-	# 2. Calculate all derivatives at the current state
-	var current_derivatives = {}
-	
-	# First evaluate non-differential equations to get current forces, accelerations, etc.
-	for eq in equations:
-		if not eq.is_differential:
+	# 2. Solve the nonlinear system at the current time
+	var converged = false
+	for iter in range(MAX_ITERATIONS):
+		var max_residual = 0.0
+		var new_derivatives = {}
+		var new_values = {}
+		
+		# First pass: evaluate all equations
+		for eq in equations:
 			var rhs_value = _evaluate_expression(eq.right, eq.component, current_state)
-			var lhs_var = eq.left
-			current_state[lhs_var] = rhs_value
+			
+			if eq.is_differential:
+				# Handle differential equations
+				var der_var = _extract_der_variable(eq.left if eq.left.begins_with("der(") else eq.right)
+				new_derivatives[der_var] = rhs_value
+				max_residual = max(max_residual, abs(rhs_value - current_derivatives.get(der_var, 0.0)))
+			else:
+				# Handle algebraic equations
+				var lhs_var = eq.left
+				new_values[lhs_var] = rhs_value
+				max_residual = max(max_residual, abs(rhs_value - current_state.get(lhs_var, 0.0)))
+		
+		# Second pass: update all variables
+		for var_name in new_values:
+			current_state[var_name] = new_values[var_name]
 			
 			# Update component state
-			var parts = lhs_var.split(".")
+			var parts = var_name.split(".")
 			if parts.size() == 2:
 				var comp_name = parts[0]
 				var var_name_only = parts[1]
 				for comp in components:
 					if comp.component_name == comp_name:
-						comp.set_variable(var_name_only, rhs_value)
+						comp.set_variable(var_name_only, new_values[var_name])
 						break
+		
+		# Update derivatives
+		current_derivatives = new_derivatives
+		
+		if max_residual < TOLERANCE:
+			converged = true
+			break
 	
-	# Then evaluate all differential equations to get derivatives
-	for eq in equations:
-		if eq.is_differential:
-			var rhs_value = _evaluate_expression(eq.right, eq.component, current_state)
-			var der_var = _extract_der_variable(eq.left if eq.left.begins_with("der(") else eq.right)
-			current_derivatives[der_var] = rhs_value
-			
-			# Update component derivatives
-			var parts = der_var.split(".")
-			if parts.size() == 2:
-				var comp_name = parts[0]
-				var var_name_only = parts[1]
-				for comp in components:
-					if comp.component_name == comp_name:
-						var der_var_name = "der(" + var_name_only + ")"
-						if der_var_name in comp.der_variables:
-							comp.set_variable(der_var_name, rhs_value)
-						break
+	if not converged:
+		push_warning("Solver did not converge in " + str(MAX_ITERATIONS) + " iterations")
 	
-	# 3. Integrate using explicit Euler method
+	# 3. Update state using explicit Euler integration
 	var next_state = current_state.duplicate()
 	
-	# Integrate all state variables using their derivatives
+	# First update velocities using accelerations
 	for var_name in current_derivatives:
-		var derivative_value = current_derivatives[var_name]
-		var current_value = current_state.get(var_name, 0.0)
-		var next_value = current_value + dt * derivative_value
-		next_state[var_name] = next_value
-		
-		# Update component state
-		var parts = var_name.split(".")
-		if parts.size() == 2:
-			var comp_name = parts[0]
-			var var_name_only = parts[1]
-			for comp in components:
-				if comp.component_name == comp_name:
-					comp.set_variable(var_name_only, next_value)
-					break
+		if var_name.ends_with("velocity"):
+			next_state[var_name] = current_state[var_name] + dt * current_derivatives[var_name]
+			
+			# Update component state immediately
+			var parts = var_name.split(".")
+			if parts.size() == 2:
+				var comp_name = parts[0]
+				var var_name_only = parts[1]
+				for comp in components:
+					if comp.component_name == comp_name:
+						comp.set_variable(var_name_only, next_state[var_name])
+						break
+	
+	# Then update positions using velocities
+	for var_name in current_derivatives:
+		if var_name.ends_with("position"):
+			next_state[var_name] = current_state[var_name] + dt * current_derivatives[var_name]
+			
+			# Update component state immediately
+			var parts = var_name.split(".")
+			if parts.size() == 2:
+				var comp_name = parts[0]
+				var var_name_only = parts[1]
+				for comp in components:
+					if comp.component_name == comp_name:
+						comp.set_variable(var_name_only, next_state[var_name])
+						break
 	
 	# 4. Update system state
 	variables = next_state
 	derivatives = current_derivatives
-	
-	# 5. Update dependent variables for the next step
-	for eq in equations:
-		if not eq.is_differential:
-			var rhs_value = _evaluate_expression(eq.right, eq.component, variables)
-			var lhs_var = eq.left
-			variables[lhs_var] = rhs_value
-			
-			# Update component state
-			var parts = lhs_var.split(".")
-			if parts.size() == 2:
-				var comp_name = parts[0]
-				var var_name_only = parts[1]
-				for comp in components:
-					if comp.component_name == comp_name:
-						comp.set_variable(var_name_only, rhs_value)
-						break
 	
 	time += dt
 
@@ -250,8 +253,8 @@ func initialize() -> void:
 			var rhs_value = _evaluate_expression(eq.right, eq.component, variables)
 			derivatives[der_var] = rhs_value
 
-func tokenize(expr: String) -> Array[Token]:
-	var tokens: Array[Token] = []
+func tokenize(expr: String) -> Array[EquationToken]:
+	var tokens: Array[EquationToken] = []
 	var pos = 0
 	
 	while pos < expr.length():
@@ -269,7 +272,7 @@ func tokenize(expr: String) -> Array[Token]:
 			if result:
 				var value = result.get_string()
 				if type != "WHITESPACE":  # Skip whitespace tokens
-					tokens.append(Token.new(type, value, pos))
+					tokens.append(EquationToken.new(type, value))
 				pos += value.length()
 				matched = true
 				break
@@ -280,7 +283,7 @@ func tokenize(expr: String) -> Array[Token]:
 	
 	return tokens
 
-func parse_expression(tokens: Array[Token], start: int = 0, min_precedence: int = 0) -> Dictionary:
+func parse_expression(tokens: Array[EquationToken], start: int = 0, min_precedence: int = 0) -> Dictionary:
 	var result = parse_primary(tokens, start)
 	if not result:
 		return {}
@@ -311,7 +314,7 @@ func parse_expression(tokens: Array[Token], start: int = 0, min_precedence: int 
 	
 	return {"node": left, "next_pos": pos}
 
-func parse_primary(tokens: Array[Token], pos: int) -> Dictionary:
+func parse_primary(tokens: Array[EquationToken], pos: int) -> Dictionary:
 	if pos >= tokens.size():
 		return {}
 	
@@ -354,7 +357,7 @@ func parse_primary(tokens: Array[Token], pos: int) -> Dictionary:
 			return {"node": result.node, "next_pos": result.next_pos + 1}
 	return {}
 
-func parse_function_call(tokens: Array[Token], pos: int) -> Dictionary:
+func parse_function_call(tokens: Array[EquationToken], pos: int) -> Dictionary:
 	var func_name = tokens[pos].value
 	pos += 2  # Skip function name and left paren
 	
@@ -380,7 +383,6 @@ func get_operator_precedence(op: String) -> int:
 	match op:
 		"+", "-": return 1
 		"*", "/": return 2
-		"^": return 3
 	return 0
 
 func evaluate_ast(node: ASTNode, component: ModelicaComponent, state: Dictionary) -> float:
@@ -400,7 +402,6 @@ func evaluate_ast(node: ASTNode, component: ModelicaComponent, state: Dictionary
 					else:
 						push_error("Division by zero")
 						return 0.0
-				"^": return pow(left_val, right_val)
 		"UNARY_OP":
 			var val = evaluate_ast(node.operand, component, state)
 			match node.value:
@@ -453,20 +454,6 @@ func evaluate_ast(node: ASTNode, component: ModelicaComponent, state: Dictionary
 						push_error("Invalid argument type for der() function")
 						return 0.0
 					return derivatives.get(var_name, 0.0)
-			elif node.value == "sin":
-				if node.arguments.size() == 1:
-					return sin(evaluate_ast(node.arguments[0], component, state))
-			elif node.value == "cos":
-				if node.arguments.size() == 1:
-					return cos(evaluate_ast(node.arguments[0], component, state))
-			elif node.value == "sqrt":
-				if node.arguments.size() == 1:
-					var val = evaluate_ast(node.arguments[0], component, state)
-					if val >= 0:
-						return sqrt(val)
-					else:
-						push_error("Square root of negative number")
-						return 0.0
 	push_error("Invalid AST node type: " + node.type)
 	return 0.0
 
