@@ -68,6 +68,22 @@ func parse_file(path: String) -> Dictionary:
 		model_data["name"] = type.name
 		if type.has("description"):
 			model_data["description"] = type.description
+	else:
+		# If no explicit type found, try to infer from filename
+		var filename = path.get_file()
+		if filename == "package.mo":
+			model_data["type"] = "package"
+			model_data["name"] = path.get_base_dir().get_file()
+		else:
+			model_data["type"] = "model"  # Default to model
+			model_data["name"] = filename.get_basename()
+	
+	# If still no name, use directory name
+	if model_data.get("name", "").is_empty():
+		model_data["name"] = path.get_base_dir().get_file()
+	
+	# Store path
+	model_data["path"] = path
 	
 	_model_cache[path] = model_data
 	return model_data

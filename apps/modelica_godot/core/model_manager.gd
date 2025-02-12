@@ -167,16 +167,16 @@ func _add_to_model_tree(file_path: String, model_data: Dictionary) -> void:
 	print("DEBUG: Adding to model tree: ", file_path)
 	print("DEBUG: Model data: ", model_data)
 	
-	# Get the path relative to the MSL/Modelica directory
+	# Get the path relative to the MSL directory
 	var path_parts = file_path.split("/")
-	var modelica_index = path_parts.find("Modelica")
-	if modelica_index == -1:
-		print("DEBUG: Not a Modelica path: ", file_path)
+	var msl_index = path_parts.find("MSL")
+	if msl_index == -1:
+		print("DEBUG: Not an MSL path: ", file_path)
 		return
 		
-	# Get the path after "Modelica"
-	path_parts = path_parts.slice(modelica_index)
-	print("DEBUG: Path parts: ", path_parts)
+	# Get the path after MSL
+	path_parts = path_parts.slice(msl_index + 1)
+	print("DEBUG: Path parts after MSL: ", path_parts)
 	
 	var current_dict = _model_tree
 	if not current_dict.has("Modelica"):
@@ -184,33 +184,39 @@ func _add_to_model_tree(file_path: String, model_data: Dictionary) -> void:
 	current_dict = current_dict["Modelica"]
 	
 	# Handle package.mo files specially
-	if path_parts[-1] == "package.mo":
-		path_parts = path_parts.slice(0, -1)  # Remove the last element
-		if path_parts.size() == 1:  # This is the root package.mo
-			current_dict["type"] = model_data.get("type", "unknown")
-			current_dict["name"] = model_data.get("name", "Modelica")
-			current_dict["path"] = file_path
-			print("DEBUG: Added root package")
-			return
-	
-	# Process intermediate directories
-	for i in range(1, path_parts.size() - 1):  # Start from 1 to skip "Modelica"
+	var is_package = path_parts[-1] == "package.mo"
+	if is_package:
+		path_parts = path_parts.slice(0, -1)  # Remove package.mo
+		
+	# Process all directories in the path
+	for i in range(path_parts.size() - 1):
 		var part = path_parts[i]
 		if not current_dict.has(part):
 			current_dict[part] = {}
 		current_dict = current_dict[part]
 	
-	# Add the actual model
-	if path_parts.size() > 1:
-		var model_name = path_parts[-1].get_basename()
-		if not model_name.is_empty():
-			current_dict[model_name] = {
-				"path": file_path,
-				"type": model_data.get("type", "unknown"),
-				"name": model_data.get("name", model_name),
-				"description": model_data.get("description", "")
-			}
-			print("DEBUG: Added model: ", model_name)
+	# Add the model
+	if path_parts.size() > 0:
+		var model_name = path_parts[-1]
+		if is_package:
+			# For package.mo, update the current directory's metadata
+			current_dict["type"] = model_data.get("type", "package")
+			current_dict["name"] = model_data.get("name", model_name)
+			current_dict["path"] = file_path
+			current_dict["description"] = model_data.get("description", "")
+		else:
+			# For regular models, add them as entries
+			model_name = model_name.get_basename()  # Remove .mo extension
+			if not model_name.is_empty():
+				current_dict[model_name] = {
+					"path": file_path,
+					"type": model_data.get("type", "unknown"),
+					"name": model_data.get("name", model_name),
+					"description": model_data.get("description", ""),
+					"connectors": model_data.get("connectors", []),
+					"parameters": model_data.get("parameters", [])
+				}
+		print("DEBUG: Added model/package: ", model_name)
 
 func _save_to_cache() -> void:
 	# Don't save empty data

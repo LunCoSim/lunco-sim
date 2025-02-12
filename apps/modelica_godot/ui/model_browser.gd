@@ -165,6 +165,9 @@ func _populate_tree(parent: TreeItem, data: Dictionary, filter: String) -> void:
 	keys.sort()
 	
 	for key in keys:
+		if key in ["type", "name", "path", "description", "connectors", "parameters"]:
+			continue  # Skip metadata keys
+			
 		var value = data[key]
 		if not value is Dictionary:
 			print("ModelBrowser: Skipping non-dictionary value for key: ", key)
@@ -172,30 +175,49 @@ func _populate_tree(parent: TreeItem, data: Dictionary, filter: String) -> void:
 			
 		var should_show = filter.is_empty() or key.to_lower().contains(filter)
 		
-		if value.has("type"):
-			# This is a model/component
-			if should_show:
-				var item := tree.create_item(parent)
-				item.set_text(0, key)
-				item.set_metadata(0, value.get("path", ""))
-				print("ModelBrowser: Added model: ", key, " of type: ", value.get("type", "unknown"))
-				
-				match value.get("type", ""):
-					"model":
-						item.set_icon(0, model_icon)
-					"connector":
-						item.set_icon(0, connector_icon)
-					"package":
-						item.set_icon(0, package_icon)
-					_:
-						item.set_icon(0, unknown_icon)
-		else:
-			# This is a package/folder
-			var folder := tree.create_item(parent)
-			folder.set_text(0, key)
-			folder.set_icon(0, folder_icon)
-			print("ModelBrowser: Added folder: ", key)
-			_populate_tree(folder, value, filter)
+		# Create tree item
+		var item := tree.create_item(parent)
+		item.set_text(0, key)
+		item.set_metadata(0, value.get("path", ""))
+		
+		var type = value.get("type", "")
+		if type.is_empty() and value.has("path"):
+			# Try to infer type from path
+			var path = value.get("path", "")
+			if path.ends_with("package.mo"):
+				type = "package"
+			else:
+				type = "model"
+		
+		print("ModelBrowser: Added item: ", key, " of type: ", type)
+		
+		match type:
+			"model", "block", "function", "record":
+				item.set_icon(0, model_icon)
+			"connector":
+				item.set_icon(0, connector_icon)
+			"package":
+				item.set_icon(0, package_icon)
+				# Recursively populate package contents
+				_populate_tree(item, value, filter)
+			_:
+				if value.keys().size() > 0:
+					# This is probably a folder
+					item.set_icon(0, folder_icon)
+					_populate_tree(item, value, filter)
+				else:
+					item.set_icon(0, unknown_icon)
+		
+		# Hide if filtered out
+		item.visible = should_show or _has_visible_children(item)
+
+func _has_visible_children(item: TreeItem) -> bool:
+	var child = item.get_first_child()
+	while child:
+		if child.visible or _has_visible_children(child):
+			return true
+		child = child.get_next()
+	return false
 
 func _format_model_details(model: Dictionary) -> String:
 	var details := ""
