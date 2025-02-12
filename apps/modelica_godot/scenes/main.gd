@@ -1,36 +1,9 @@
-extends Node2D
+extends GraphEdit
 
 @onready var loader: MOLoader
-var components: Dictionary = {}
-var connections: Array[Connection] = []
-var dragging_component: Node2D = null
-var dragging_offset: Vector2 = Vector2.ZERO  # Store offset from mouse to component center
-var moving_components: Dictionary = {}  # Store components that are moving to target positions
-var connecting_from: Dictionary = {}  # Stores component and point when starting connection
-var hovered_point: Dictionary = {}  # Stores currently hovered connection point
-var scaling_component: Node2D = null
-var scaling_start_size: Vector2 = Vector2.ZERO
-var scaling_start_mouse: Vector2 = Vector2.ZERO
-var scaling_center: String = ""  # "left" or "right"
-var min_component_size = 30
-var max_component_size = 100
-@onready var component_area = $ComponentArea
-@onready var camera = $Camera2D
 @onready var status_label = $CanvasLayer/UI/Toolbar/HBoxContainer/StatusLabel
-@onready var grid = $Grid
 
-# Camera control variables
-var camera_drag = false
-var camera_drag_start = Vector2()
-var camera_start_position = Vector2()
-var zoom_speed = 0.1
-var min_zoom = 0.1
-var max_zoom = 5.0
-
-# Grid settings
-const GRID_SIZE = 20
-const GRID_COLOR = Color(0.2, 0.2, 0.2)
-const GRID_ALPHA = 0.5
+var component_count = 0
 
 func _ready():
 	print("Starting main scene")
@@ -43,20 +16,14 @@ func _ready():
 	# Connect UI signals
 	_connect_ui_signals()
 	
-	# Set initial camera zoom
-	camera.zoom = Vector2(1, 1)
+	# Connect GraphEdit signals
+	connection_request.connect(_on_connection_request)
+	disconnection_request.connect(_on_disconnection_request)
 	
-	# Draw initial grid
-	queue_redraw()
-	
-	# Load mechanical components
-	_load_mechanical_components()
-	
-	# Load electrical components
-	_load_electrical_components()
-	
-	# Create example connections
-	_create_example_circuit()
+	# Set GraphEdit properties
+	snapping_enabled = true  # Enable grid snapping
+	snapping_distance = 20   # Set snap size to 20
+	show_grid = true        # Show the grid
 
 func _connect_ui_signals():
 	# Connect component buttons
@@ -73,7 +40,7 @@ func _connect_ui_signals():
 	}
 	
 	for btn_name in component_buttons:
-		var button = get_node("CanvasLayer/UI/ComponentPanel/VBoxContainer/" + btn_name)
+		var button = get_node_or_null(NodePath("CanvasLayer/UI/ComponentPanel/VBoxContainer/" + btn_name))
 		if button:
 			button.pressed.connect(_on_component_button_pressed.bind(component_buttons[btn_name]))
 	
@@ -84,526 +51,91 @@ func _connect_ui_signals():
 	stop_btn.pressed.connect(_on_stop_pressed)
 
 func _on_component_button_pressed(component_type: String):
-	var component = _create_component_from_package(
-		"res://apps/modelica_godot/components/Electrical/Components.mo",
-		component_type
-	)
-	if component:
-		# Position at center of camera view
-		var camera_center = camera.get_screen_center_position()
-		component.position = camera_center + Vector2(0, -100)  # Start above target position
-		_make_component_interactive(component)
-		component_area.add_child(component)
-		components[component.name + str(components.size())] = component
-		
-		# Set up smooth movement to target position
-		moving_components[component] = camera_center
-		
+	# Create a new GraphNode for the component
+	var node = _create_component_node(component_type)
+	if node:
+		add_child(node)
 		status_label.text = "Added " + component_type
 
-func _load_mechanical_components():
-	print("Loading mechanical components")
-	# Load spring
-	var spring = loader.load_component("res://apps/modelica_godot/components/mechanical/Spring.mo")
-	if spring:
-		print("Spring loaded successfully")
-		spring.position = Vector2(200, 200)
-		_make_component_interactive(spring)
-		component_area.add_child(spring)
-		components["spring"] = spring
-	else:
-		push_error("Failed to load spring component")
+func _create_component_node(component_type: String) -> GraphNode:
+	var node = GraphNode.new()
+	var unique_name = component_type + str(component_count)
+	component_count += 1
 	
-	# Load mass (once we restore it)
-	# var mass = loader.load_component("res://apps/modelica_godot/components/mechanical/Mass.mo")
-	# if mass:
-	#     mass.position = Vector2(300, 200)
-	#     component_area.add_child(mass)
-	#     components["mass"] = mass
-
-func _load_electrical_components():
-	print("Loading electrical components")
-	# Load components from Electrical/Components.mo
-	var resistor = _create_component_from_package(
-		"res://apps/modelica_godot/components/Electrical/Components.mo",
-		"Resistor"
-	)
-	if resistor:
-		resistor.position = Vector2(200, 300)
-		_make_component_interactive(resistor)
-		component_area.add_child(resistor)
-		components["resistor"] = resistor
+	# Set up the node
+	node.name = unique_name
+	node.title = component_type
+	node.position_offset = Vector2(200, 200)  # Default position
+	node.draggable = true  # Make sure the node can be dragged
+	node.resizable = false  # Disable resizing
+	node.size = Vector2(120, 80)  # Set a fixed size
 	
-	var voltage_source = _create_component_from_package(
-		"res://apps/modelica_godot/components/Electrical/Components.mo",
-		"VoltageSource"
-	)
-	if voltage_source:
-		voltage_source.position = Vector2(100, 300)
-		_make_component_interactive(voltage_source)
-		component_area.add_child(voltage_source)
-		components["voltage_source"] = voltage_source
-
-func _make_component_interactive(component: Node2D):
-	# Make the component clickable
-	for child in component.get_children():
-		if child is ColorRect:
-			child.mouse_filter = Control.MOUSE_FILTER_STOP
-			
-			# Connect signals
-			child.gui_input.connect(_on_component_gui_input.bind(component, child))
-			child.mouse_entered.connect(_on_area_mouse_entered.bind(component, child))
-			child.mouse_exited.connect(_on_area_mouse_exited.bind(component, child))
-
-func _on_area_mouse_entered(_component: Node2D, area: ColorRect):
-	if area.position.x < -15:  # Left connection point
-		hovered_point = {"area": area, "side": "left"}
-		area.color = Color.YELLOW
-	elif area.position.x > 15:  # Right connection point
-		hovered_point = {"area": area, "side": "right"}
-		area.color = Color.YELLOW
-
-func _on_area_mouse_exited(_component: Node2D, area: ColorRect):
-	if hovered_point.get("area") == area:
-		hovered_point.clear()
-	area.color = Color.WHITE
-
-func _on_component_gui_input(event: InputEvent, component: Node2D, area: ColorRect):
-	if event is InputEventMouseButton:
-		if event.button_index == MOUSE_BUTTON_LEFT:
-			if event.pressed:
-				if area.position.x < -15:  # Left connection point
-					if event.shift_pressed:  # Shift + Click for scaling
-						_start_scaling(component, "left")
-					else:
-						_start_connection(component, "left")
-				elif area.position.x > 15:  # Right connection point
-					if event.shift_pressed:  # Shift + Click for scaling
-						_start_scaling(component, "right")
-					else:
-						_start_connection(component, "right")
-				else:  # Main body - dragging
-					dragging_component = component
-					# Calculate offset in local coordinates
-					var mouse_pos = component.get_local_mouse_position()
-					dragging_offset = Vector2.ZERO - mouse_pos
-					# Visual feedback
-					for child in component.get_children():
-						if child is ColorRect:
-							child.modulate.a = 0.7
-			else:  # Mouse released
-				if dragging_component == component:
-					dragging_component = null
-					for child in component.get_children():
-						if child is ColorRect:
-							child.modulate.a = 1.0
-				elif scaling_component == component:
-					scaling_component = null
-					for child in component.get_children():
-						if child is ColorRect:
-							child.modulate.a = 1.0
-				elif not connecting_from.is_empty():
-					if area.position.x < -15:
-						_try_complete_connection(component, "left")
-					elif area.position.x > 15:
-						_try_complete_connection(component, "right")
-		elif event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
-			if area == get_main_rect(component):  # Only scale from center when clicking main body
-				_start_scaling(component, "center")
-
-func _start_connection(component: Node2D, point: String):
-	connecting_from = {
-		"component": component,
-		"point": point
-	}
-
-func _try_complete_connection(end_component: Node2D, end_point: String):
-	if connecting_from.is_empty():
-		return
-		
-	var start_component = connecting_from.component
-	var start_point = connecting_from.point
+	# Create the main container
+	var container = VBoxContainer.new()
+	container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	container.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	node.add_child(container)
 	
-	# Validate connection
-	if Connection.can_connect(start_component, end_component, start_point, end_point):
-		# Create new connection
-		var connection = Connection.new(start_component, end_component, start_point, end_point)
-		connection.connection_clicked.connect(_on_connection_clicked.bind(connection))
-		connection.connection_deleted.connect(_on_connection_deleted.bind(connection))
-		connection.connection_selected.connect(_on_connection_selected.bind(connection))
-		component_area.add_child(connection)
-		connections.append(connection)
-		status_label.text = "Connected components"
-	else:
-		status_label.text = "Invalid connection"
+	# Add the main body
+	var body = ColorRect.new()
+	body.custom_minimum_size = Vector2(100, 50)
+	body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	body.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	match component_type:
+		"VoltageSource":
+			body.color = Color(0.2, 0.6, 1.0)  # Light blue
+		"Resistor":
+			body.color = Color(0.8, 0.2, 0.2)  # Red
+		"Capacitor":
+			body.color = Color(0.2, 0.8, 0.2)  # Green
+		"Inductor":
+			body.color = Color(0.8, 0.2, 0.8)  # Purple
+		_:
+			body.color = Color(0.7, 0.7, 0.7)  # Gray
 	
-	# Clear connecting state
-	connecting_from.clear()
-
-func _on_connection_clicked(connection: Connection):
-	# Handle middle-click
-	print("Connection clicked: ", connection.get_connection_data())
-
-func _on_connection_deleted(connection: Connection):
-	# Remove connection from our list
-	connections.erase(connection)
-	status_label.text = "Connection deleted"
-
-func _on_connection_selected(connection: Connection):
-	# Deselect other connections
-	for other in connections:
-		if other != connection:
-			other.is_selected = false
-	status_label.text = "Connection selected"
-
-func _process(delta):
-	if dragging_component:
-		# Get the mouse position in the component_area's coordinate system
-		var mouse_pos = component_area.get_local_mouse_position()
-		# Apply the offset and snap to grid
-		var target_pos = _snap_to_grid(mouse_pos + dragging_offset)
-		dragging_component.position = target_pos
+	container.add_child(body)
 	
-	elif scaling_component:
-		var mouse_pos = get_global_mouse_position()
-		var delta_x = mouse_pos.x - scaling_start_mouse.x
-		
-		# Adjust scaling based on center type
-		match scaling_center:
-			"left":
-				delta_x *= 1
-			"right":
-				delta_x *= -1
-			"center":
-				delta_x *= 0.5  # Scale from center
-		
-		# Calculate new size
-		var scale_factor = 1.0 + (delta_x / 100.0)
-		var new_size = scaling_start_size * scale_factor
-		new_size.x = clamp(new_size.x, min_component_size, max_component_size)
-		new_size.y = clamp(new_size.y, min_component_size/2, max_component_size/2)
-		
-		# Update component visuals
-		_update_component_size(scaling_component, new_size)
-	
-	# Handle smooth movement of components
-	var components_to_remove = []
-	for component in moving_components:
-		var target = moving_components[component]
-		var direction = target - component.position
-		var distance = direction.length()
-		
-		if distance < 1:
-			component.position = target
-			components_to_remove.append(component)
-		else:
-			var speed = min(distance * 10, 400)
-			component.position += direction.normalized() * speed * delta
-	
-	for component in components_to_remove:
-		moving_components.erase(component)
-	
-	queue_redraw()
-
-func _draw():
-	# Draw grid
-	var view_size = get_viewport_rect().size
-	var left = -5000
-	var right = 5000
-	var top = -5000
-	var bottom = 5000
-	
-	# Draw vertical lines
-	for x in range(left, right, GRID_SIZE):
-		draw_line(Vector2(x, top), Vector2(x, bottom), GRID_COLOR, 1.0, true)
-	
-	# Draw horizontal lines
-	for y in range(top, bottom, GRID_SIZE):
-		draw_line(Vector2(left, y), Vector2(right, y), GRID_COLOR, 1.0, true)
-	
-	# Draw temporary connection line if connecting
-	if not connecting_from.is_empty():
-		var start_pos = _get_connection_point_position(
-			connecting_from.component,
-			connecting_from.point
-		)
-		var end_pos = get_viewport().get_mouse_position()
-		
-		# Change color based on whether the current hover would make a valid connection
-		var color = Color.WHITE
-		if not hovered_point.is_empty():
-			var can_connect = Connection.can_connect(
-				connecting_from.component,
-				get_component_from_area(hovered_point.area),
-				connecting_from.point,
-				hovered_point.side
-			)
-			color = Color.GREEN if can_connect else Color.RED
-		
-		draw_line(start_pos, end_pos, color, 2.0)
-
-func get_component_from_area(area: ColorRect) -> Node2D:
-	return area.get_parent() as Node2D
-
-func _get_connection_point_position(component: Node2D, point: String) -> Vector2:
-	var offset = Vector2.ZERO
-	match point:
-		"left":
-			offset = Vector2(-20, 0)
-		"right":
-			offset = Vector2(20, 0)
-	return component.global_position + offset
-
-func _create_example_circuit():
-	# Create a simple voltage source -> resistor connection
-	if components.has("voltage_source") and components.has("resistor"):
-		var connection = Connection.new(
-			components.voltage_source,
-			components.resistor,
-			"right",
-			"left"
-		)
-		component_area.add_child(connection)
-		connections.append(connection)
-
-func _load_package(package_path: String) -> void:
-	print("Loading package from: ", package_path)
-	var model = loader.parser.parse_file(package_path)
-	
-	if model.empty():
-		push_error("Failed to parse package file")
-		return
-	
-	# Load all components defined in the package
-	for component in model.components:
-		var component_name = component.name
-		var component_type = component.type
-		print("Found component: ", component_name, " of type: ", component_type)
-		
-		# Create the component
-		var node = _create_component_from_package(package_path, component_type)
-		if node:
-			node.name = component_name
-			# Store any additional component data from the model
-			if node.has_method("set_component_data"):
-				node.set_component_data(component)
-	
-	# Load sub-packages
-	for import_path in model.imports:
-		var full_path = package_path.get_base_dir().path_join(import_path.replace(".", "/") + ".mo")
-		_load_package(full_path)
-
-func _create_component_from_package(package_path: String, component_name: String) -> Node:
-	print("Creating component from package: ", package_path, " component: ", component_name)
-	
-	# Try to load the component definition from the package
-	var model = loader.parser.parse_file(package_path)
-	var component_def = null
-	
-	# Look for the component definition in the package
-	for comp in model.components:
-		if comp.type == component_name:
-			component_def = comp
-			break
-	
-	var node = Node2D.new()
-	node.name = component_name
-	
-	# If we found a definition, use it to create the component
-	if component_def:
-		_create_component_from_definition(node, component_def)
-	else:
-		# Fall back to our default component creation
-		_create_default_component(node, component_name)
+	# Set up connection slots
+	node.set_slot(0,  # Slot index
+		true,         # Enable left slot
+		0,           # Left slot type
+		Color.GOLD,  # Left slot color
+		true,        # Enable right slot
+		0,           # Right slot type
+		Color.GOLD)  # Right slot color
 	
 	return node
 
-func _create_component_from_definition(node: Node2D, component_def: Dictionary) -> void:
-	# Create visuals based on component definition
-	var main_rect = ColorRect.new()
-	main_rect.size = Vector2(40, 20)
-	main_rect.position = Vector2(-20, -10)
-	
-	# Set color based on component type
-	match component_def.type:
-		"VoltageSource", "Source":
-			main_rect.color = Color(0.2, 0.6, 1.0)  # Light blue
-		"Resistor", "Damper":
-			main_rect.color = Color(0.8, 0.2, 0.2)  # Red
-		"Capacitor", "Spring":
-			main_rect.color = Color(0.2, 0.8, 0.2)  # Green
-		"Inductor", "Mass":
-			main_rect.color = Color(0.8, 0.2, 0.8)  # Purple
-		_:
-			main_rect.color = Color(0.7, 0.7, 0.7)  # Gray
-	
-	node.add_child(main_rect)
-	
-	# Add label
-	var label = Label.new()
-	label.text = component_def.name
-	label.position = Vector2(-5, -10)
-	node.add_child(label)
-	
-	# Add connection points for each connector
-	for connector in component_def.get("connectors", []):
-		var point = ColorRect.new()
-		point.size = Vector2(10, 10)
-		point.color = Color(1, 0.8, 0)  # Gold
-		
-		# Position based on connector name/type
-		if connector.name.ends_with("_a") or connector.name.begins_with("left"):
-			point.position = Vector2(-25, -5)
-		else:
-			point.position = Vector2(15, -5)
-		
-		node.add_child(point)
+func _on_connection_request(from_node: StringName, from_port: int, 
+						  to_node: StringName, to_port: int):
+	# Check if connection is valid
+	if _can_connect(from_node, to_node):
+		connect_node(from_node, from_port, to_node, to_port)
+		status_label.text = "Connected components"
+	else:
+		status_label.text = "Invalid connection"
 
-func _create_default_component(node: Node2D, component_name: String) -> void:
-	# This is our existing component creation code
-	match component_name:
-		"VoltageSource":
-			# Create circle for voltage source
-			var circle = ColorRect.new()
-			circle.size = Vector2(40, 40)
-			circle.position = Vector2(-20, -20)
-			circle.color = Color(0.2, 0.6, 1.0)  # Light blue
-			node.add_child(circle)
-			
-			# Add V symbol
-			var label = Label.new()
-			label.text = "V"
-			label.position = Vector2(-5, -10)
-			node.add_child(label)
-			
-			# Add connection points
-			var left_point = ColorRect.new()
-			left_point.size = Vector2(10, 10)
-			left_point.position = Vector2(-25, -5)
-			left_point.color = Color(1, 0.8, 0)  # Gold
-			node.add_child(left_point)
-			
-			var right_point = ColorRect.new()
-			right_point.size = Vector2(10, 10)
-			right_point.position = Vector2(15, -5)
-			right_point.color = Color(1, 0.8, 0)  # Gold
-			node.add_child(right_point)
-			
-		"Resistor":
-			# Create rectangle for resistor
-			var rect = ColorRect.new()
-			rect.size = Vector2(40, 20)
-			rect.position = Vector2(-20, -10)
-			rect.color = Color(0.8, 0.2, 0.2)  # Red
-			node.add_child(rect)
-			
-			# Add R symbol
-			var label = Label.new()
-			label.text = "R"
-			label.position = Vector2(-5, -10)
-			node.add_child(label)
-			
-			# Add connection points
-			var left_point = ColorRect.new()
-			left_point.size = Vector2(10, 10)
-			left_point.position = Vector2(-25, -5)
-			left_point.color = Color(1, 0.8, 0)  # Gold
-			node.add_child(left_point)
-			
-			var right_point = ColorRect.new()
-			right_point.size = Vector2(10, 10)
-			right_point.position = Vector2(15, -5)
-			right_point.color = Color(1, 0.8, 0)  # Gold
-			node.add_child(right_point)
-			
-		"Capacitor":
-			# Create capacitor symbol
-			var rect = ColorRect.new()
-			rect.size = Vector2(40, 20)
-			rect.position = Vector2(-20, -10)
-			rect.color = Color(0.2, 0.8, 0.2)  # Green
-			node.add_child(rect)
-			
-			var label = Label.new()
-			label.text = "C"
-			label.position = Vector2(-5, -10)
-			node.add_child(label)
-			
-			var left_point = ColorRect.new()
-			left_point.size = Vector2(10, 10)
-			left_point.position = Vector2(-25, -5)
-			left_point.color = Color(1, 0.8, 0)
-			node.add_child(left_point)
-			
-			var right_point = ColorRect.new()
-			right_point.size = Vector2(10, 10)
-			right_point.position = Vector2(15, -5)
-			right_point.color = Color(1, 0.8, 0)
-			node.add_child(right_point)
-			
-		"Inductor":
-			# Create inductor symbol
-			var rect = ColorRect.new()
-			rect.size = Vector2(40, 20)
-			rect.position = Vector2(-20, -10)
-			rect.color = Color(0.8, 0.2, 0.8)  # Purple
-			node.add_child(rect)
-			
-			var label = Label.new()
-			label.text = "L"
-			label.position = Vector2(-5, -10)
-			node.add_child(label)
-			
-			var left_point = ColorRect.new()
-			left_point.size = Vector2(10, 10)
-			left_point.position = Vector2(-25, -5)
-			left_point.color = Color(1, 0.8, 0)
-			node.add_child(left_point)
-			
-			var right_point = ColorRect.new()
-			right_point.size = Vector2(10, 10)
-			right_point.position = Vector2(15, -5)
-			right_point.color = Color(1, 0.8, 0)
-			node.add_child(right_point)
-			
-		_:
-			# Default representation for unknown components
-			var rect = ColorRect.new()
-			rect.size = Vector2(50, 50)
-			rect.position = Vector2(-25, -25)
-			rect.color = Color(0.7, 0.7, 0.7)  # Gray
-			node.add_child(rect)
-			
-			var label = Label.new()
-			label.text = component_name
-			label.position = Vector2(-25, 30)
-			node.add_child(label)
+func _on_disconnection_request(from_node: StringName, from_port: int,
+							 to_node: StringName, to_port: int):
+	disconnect_node(from_node, from_port, to_node, to_port)
+	status_label.text = "Disconnected components"
 
-func _unhandled_input(event):
-	# Camera pan with middle mouse or Alt + Left mouse
-	if event is InputEventMouseButton:
-		if (event.button_index == MOUSE_BUTTON_MIDDLE) or \
-		   (event.button_index == MOUSE_BUTTON_LEFT and event.alt_pressed):
-			if event.pressed:
-				camera_drag = true
-				camera_drag_start = event.position
-				camera_start_position = camera.position
-			else:
-				camera_drag = false
-		# Zoom
-		elif event.button_index == MOUSE_BUTTON_WHEEL_UP:
-			_zoom_camera(1 + zoom_speed)
-		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
-			_zoom_camera(1 - zoom_speed)
+func _can_connect(from_node: StringName, to_node: StringName) -> bool:
+	# Get the actual nodes
+	var from = get_node_or_null(NodePath(from_node))
+	var to = get_node_or_null(NodePath(to_node))
 	
-	# Camera drag
-	elif event is InputEventMouseMotion and camera_drag:
-		camera.position = camera_start_position + (camera_drag_start - event.position) / camera.zoom.x
-
-func _zoom_camera(factor):
-	var new_zoom = camera.zoom * factor
-	new_zoom = new_zoom.clamp(Vector2(min_zoom, min_zoom), Vector2(max_zoom, max_zoom))
-	camera.zoom = new_zoom
+	if not from or not to:
+		return false
+	
+	# Don't connect a node to itself
+	if from == to:
+		return false
+	
+	# Add more connection validation logic here
+	# For example, check component compatibility
+	
+	return true
 
 func _on_simulate_pressed():
 	status_label.text = "Simulating..."
@@ -612,80 +144,3 @@ func _on_simulate_pressed():
 func _on_stop_pressed():
 	status_label.text = "Stopped"
 	# TODO: Implement simulation stop
-
-func _snap_to_grid(pos: Vector2) -> Vector2:
-	var snapped = Vector2()
-	snapped.x = round(pos.x / GRID_SIZE) * GRID_SIZE
-	snapped.y = round(pos.y / GRID_SIZE) * GRID_SIZE
-	return snapped
-
-func _start_scaling(component: Node2D, center: String):
-	scaling_component = component
-	scaling_center = center
-	scaling_start_mouse = get_global_mouse_position()
-	
-	# Store initial sizes of all ColorRect children
-	var main_rect: ColorRect = null
-	for child in component.get_children():
-		if child is ColorRect:
-			if child.position.x > -15 and child.position.x < 15:  # Main body
-				main_rect = child
-				break
-	
-	if main_rect:
-		scaling_start_size = main_rect.size
-		
-		# Change appearance while scaling
-		for child in component.get_children():
-			if child is ColorRect:
-				child.modulate.a = 0.7
-
-func get_main_rect(component: Node2D) -> ColorRect:
-	for child in component.get_children():
-		if child is ColorRect:
-			if child.position.x > -15 and child.position.x < 15:  # Main body
-				return child
-	return null
-
-func _update_component_size(component: Node2D, new_size: Vector2):
-	var main_rect = get_main_rect(component)
-	var left_point: ColorRect = null
-	var right_point: ColorRect = null
-	var label: Label = null
-	
-	# Find connection points and label
-	for child in component.get_children():
-		if child is ColorRect:
-			if child.position.x < -15:
-				left_point = child
-			elif child.position.x > 15:
-				right_point = child
-		elif child is Label:
-			label = child
-	
-	if main_rect:
-		# Calculate position offset based on scaling center
-		var old_center = main_rect.position + main_rect.size / 2
-		var position_offset = Vector2.ZERO
-		
-		match scaling_center:
-			"left":
-				position_offset.x = 0
-			"right":
-				position_offset.x = (main_rect.size.x - new_size.x)
-			"center":
-				position_offset = (main_rect.size - new_size) / 2
-		
-		# Update main body
-		main_rect.size = new_size
-		main_rect.position = Vector2(-new_size.x/2, -new_size.y/2) + position_offset
-		
-		# Update connection points
-		if left_point:
-			left_point.position = Vector2(-new_size.x/2 - 5, -5) + position_offset
-		if right_point:
-			right_point.position = Vector2(new_size.x/2 - 5, -5) + position_offset
-		
-		# Update label position
-		if label:
-			label.position = Vector2(-5, -new_size.y/2 + 5) + position_offset

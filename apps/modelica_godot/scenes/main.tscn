@@ -1,24 +1,14 @@
 [gd_scene load_steps=2 format=3 uid="uid://b6g8pu8hpyy5v"]
 
-[ext_resource type="Script" uid="uid://y7swjbgdv85r" path="res://apps/modelica_godot/scenes/main.gd" id="1_xjmvd"]
+[ext_resource type="Script" path="res://apps/modelica_godot/scenes/main.gd" id="1_y7swj"]
 
-[node name="Main" type="Node2D"]
-script = ExtResource("1_xjmvd")
-
-[node name="Background" type="ColorRect" parent="."]
-offset_left = -5000.0
-offset_top = -5000.0
-offset_right = 5000.0
-offset_bottom = 5000.0
-mouse_filter = 2
-color = Color(0.12549, 0.12549, 0.12549, 1)
-
-[node name="Grid" type="Node2D" parent="."]
-
-[node name="ComponentArea" type="Node2D" parent="."]
-
-[node name="Camera2D" type="Camera2D" parent="."]
-position = Vector2(576, 324)
+[node name="Main" type="GraphEdit"]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_y7swj")
 
 [node name="CanvasLayer" type="CanvasLayer" parent="."]
 
@@ -29,16 +19,12 @@ anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
-mouse_filter = 2
 
 [node name="ComponentPanel" type="Panel" parent="CanvasLayer/UI"]
 layout_mode = 1
-anchors_preset = 11
-anchor_left = 1.0
-anchor_right = 1.0
+anchors_preset = 9
 anchor_bottom = 1.0
-offset_left = -200.0
-grow_horizontal = 0
+offset_right = 150.0
 grow_vertical = 2
 
 [node name="VBoxContainer" type="VBoxContainer" parent="CanvasLayer/UI/ComponentPanel"]
@@ -46,6 +32,10 @@ layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
+offset_left = 10.0
+offset_top = 10.0
+offset_right = -10.0
+offset_bottom = -10.0
 grow_horizontal = 2
 grow_vertical = 2
 
@@ -102,12 +92,13 @@ text = "Damper"
 
 [node name="GroundMechBtn" type="Button" parent="CanvasLayer/UI/ComponentPanel/VBoxContainer"]
 layout_mode = 2
-text = "Ground"
+text = "Ground (Mech)"
 
 [node name="Toolbar" type="Panel" parent="CanvasLayer/UI"]
 layout_mode = 1
 anchors_preset = 10
 anchor_right = 1.0
+offset_left = 150.0
 offset_bottom = 40.0
 grow_horizontal = 2
 
@@ -116,6 +107,10 @@ layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
+offset_left = 10.0
+offset_top = 5.0
+offset_right = -10.0
+offset_bottom = -5.0
 grow_horizontal = 2
 grow_vertical = 2
 
@@ -137,6 +132,5 @@ text = "Stop"
 
 [node name="StatusLabel" type="Label" parent="CanvasLayer/UI/Toolbar/HBoxContainer"]
 layout_mode = 2
-size_flags_horizontal = 3
 text = "Ready"
 vertical_alignment = 1
