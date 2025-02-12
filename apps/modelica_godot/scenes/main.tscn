@@ -5,12 +5,138 @@
 [node name="Main" type="Node2D"]
 script = ExtResource("1_xjmvd")
 
+[node name="Background" type="ColorRect" parent="."]
+offset_left = -5000.0
+offset_top = -5000.0
+offset_right = 5000.0
+offset_bottom = 5000.0
+mouse_filter = 2
+color = Color(0.12549, 0.12549, 0.12549, 1)
+
+[node name="Grid" type="Node2D" parent="."]
+
+[node name="ComponentArea" type="Node2D" parent="."]
+
 [node name="Camera2D" type="Camera2D" parent="."]
 position = Vector2(576, 324)
 
-[node name="Background" type="ColorRect" parent="."]
-offset_right = 1152.0
-offset_bottom = 648.0
-color = Color(0.12549, 0.12549, 0.12549, 1)
+[node name="CanvasLayer" type="CanvasLayer" parent="."]
 
-[node name="ComponentArea" type="Node2D" parent="."]
+[node name="UI" type="Control" parent="CanvasLayer"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+
+[node name="ComponentPanel" type="Panel" parent="CanvasLayer/UI"]
+layout_mode = 1
+anchors_preset = 11
+anchor_left = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = -200.0
+grow_horizontal = 0
+grow_vertical = 2
+
+[node name="VBoxContainer" type="VBoxContainer" parent="CanvasLayer/UI/ComponentPanel"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Label" type="Label" parent="CanvasLayer/UI/ComponentPanel/VBoxContainer"]
+layout_mode = 2
+text = "Components"
+horizontal_alignment = 1
+
+[node name="HSeparator" type="HSeparator" parent="CanvasLayer/UI/ComponentPanel/VBoxContainer"]
+layout_mode = 2
+
+[node name="ElectricalLabel" type="Label" parent="CanvasLayer/UI/ComponentPanel/VBoxContainer"]
+layout_mode = 2
+text = "Electrical"
+
+[node name="VoltageSourceBtn" type="Button" parent="CanvasLayer/UI/ComponentPanel/VBoxContainer"]
+layout_mode = 2
+text = "Voltage Source"
+
+[node name="ResistorBtn" type="Button" parent="CanvasLayer/UI/ComponentPanel/VBoxContainer"]
+layout_mode = 2
+text = "Resistor"
+
+[node name="CapacitorBtn" type="Button" parent="CanvasLayer/UI/ComponentPanel/VBoxContainer"]
+layout_mode = 2
+text = "Capacitor"
+
+[node name="InductorBtn" type="Button" parent="CanvasLayer/UI/ComponentPanel/VBoxContainer"]
+layout_mode = 2
+text = "Inductor"
+
+[node name="GroundBtn" type="Button" parent="CanvasLayer/UI/ComponentPanel/VBoxContainer"]
+layout_mode = 2
+text = "Ground"
+
+[node name="HSeparator2" type="HSeparator" parent="CanvasLayer/UI/ComponentPanel/VBoxContainer"]
+layout_mode = 2
+
+[node name="MechanicalLabel" type="Label" parent="CanvasLayer/UI/ComponentPanel/VBoxContainer"]
+layout_mode = 2
+text = "Mechanical"
+
+[node name="SpringBtn" type="Button" parent="CanvasLayer/UI/ComponentPanel/VBoxContainer"]
+layout_mode = 2
+text = "Spring"
+
+[node name="MassBtn" type="Button" parent="CanvasLayer/UI/ComponentPanel/VBoxContainer"]
+layout_mode = 2
+text = "Mass"
+
+[node name="DamperBtn" type="Button" parent="CanvasLayer/UI/ComponentPanel/VBoxContainer"]
+layout_mode = 2
+text = "Damper"
+
+[node name="GroundMechBtn" type="Button" parent="CanvasLayer/UI/ComponentPanel/VBoxContainer"]
+layout_mode = 2
+text = "Ground"
+
+[node name="Toolbar" type="Panel" parent="CanvasLayer/UI"]
+layout_mode = 1
+anchors_preset = 10
+anchor_right = 1.0
+offset_bottom = 40.0
+grow_horizontal = 2
+
+[node name="HBoxContainer" type="HBoxContainer" parent="CanvasLayer/UI/Toolbar"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Label" type="Label" parent="CanvasLayer/UI/Toolbar/HBoxContainer"]
+layout_mode = 2
+text = "  LunCo Modelica Editor"
+vertical_alignment = 1
+
+[node name="VSeparator" type="VSeparator" parent="CanvasLayer/UI/Toolbar/HBoxContainer"]
+layout_mode = 2
+
+[node name="SimulateBtn" type="Button" parent="CanvasLayer/UI/Toolbar/HBoxContainer"]
+layout_mode = 2
+text = "Simulate"
+
+[node name="StopBtn" type="Button" parent="CanvasLayer/UI/Toolbar/HBoxContainer"]
+layout_mode = 2
+text = "Stop"
+
+[node name="StatusLabel" type="Label" parent="CanvasLayer/UI/Toolbar/HBoxContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Ready"
+vertical_alignment = 1
