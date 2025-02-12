@@ -1,6 +1,6 @@
-[gd_scene load_steps=2 format=3]
+[gd_scene load_steps=2 format=3 uid="uid://chv8byvbidkjb"]
 
-[ext_resource type="Script" path="res://apps/modelica_godot/scenes/main.gd" id="1_main"]
+[ext_resource type="Script" uid="uid://y7swjbgdv85r" path="res://apps/modelica_godot/scenes/main.gd" id="1_main"]
 
 [node name="ModelicaMain" type="Control"]
 layout_mode = 3
@@ -21,10 +21,11 @@ grow_vertical = 2
 split_offset = 200
 
 [node name="LeftPanel" type="Panel" parent="MainLayout"]
-layout_mode = 2
 custom_minimum_size = Vector2(200, 0)
+layout_mode = 2
 
 [node name="ComponentLayout" type="VBoxContainer" parent="MainLayout/LeftPanel"]
+custom_minimum_size = Vector2(200, 0)
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -32,7 +33,6 @@ anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 theme_override_constants/separation = 10
-custom_minimum_size = Vector2(200, 0)
 
 [node name="Title" type="Label" parent="MainLayout/LeftPanel/ComponentLayout"]
 layout_mode = 2
@@ -43,8 +43,37 @@ horizontal_alignment = 1
 [node name="HSeparator" type="HSeparator" parent="MainLayout/LeftPanel/ComponentLayout"]
 layout_mode = 2
 
-[node name="ComponentList" type="VBoxContainer" parent="MainLayout/LeftPanel/ComponentLayout"]
+[node name="ScrollContainer" type="ScrollContainer" parent="MainLayout/LeftPanel/ComponentLayout"]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="ComponentList" type="VBoxContainer" parent="MainLayout/LeftPanel/ComponentLayout/ScrollContainer"]
 unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 10
+
+[node name="MechanicalSection" type="VBoxContainer" parent="MainLayout/LeftPanel/ComponentLayout/ScrollContainer/ComponentList"]
+layout_mode = 2
+
+[node name="Label" type="Label" parent="MainLayout/LeftPanel/ComponentLayout/ScrollContainer/ComponentList/MechanicalSection"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.8, 0.8, 0.8, 1)
+text = "Mechanical"
+
+[node name="MechanicalList" type="VBoxContainer" parent="MainLayout/LeftPanel/ComponentLayout/ScrollContainer/ComponentList/MechanicalSection"]
+layout_mode = 2
+theme_override_constants/separation = 5
+
+[node name="ElectricalSection" type="VBoxContainer" parent="MainLayout/LeftPanel/ComponentLayout/ScrollContainer/ComponentList"]
+layout_mode = 2
+
+[node name="Label" type="Label" parent="MainLayout/LeftPanel/ComponentLayout/ScrollContainer/ComponentList/ElectricalSection"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.8, 0.8, 0.8, 1)
+text = "Electrical"
+
+[node name="ElectricalList" type="VBoxContainer" parent="MainLayout/LeftPanel/ComponentLayout/ScrollContainer/ComponentList/ElectricalSection"]
 layout_mode = 2
 theme_override_constants/separation = 5
 
@@ -92,5 +121,4 @@ unique_name_in_owner = true
 layout_mode = 2
 size_flags_vertical = 3
 right_disconnects = true
-minimap_enabled = true
-show_zoom_label = true 
+show_zoom_label = true

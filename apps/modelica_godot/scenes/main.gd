@@ -25,19 +25,32 @@ func _ready() -> void:
 	_connect_signals()
 
 func _setup_component_list() -> void:
-	var components = {
+	var mechanical_components = {
 		"Mass": MassComponent,
 		"Spring": SpringComponent,
-		"Ground": GroundComponent,
+		"Ground": GroundComponent
+	}
+	
+	var electrical_components = {
 		"VoltageSource": VoltageSourceComponent,
 		"Resistor": ResistorComponent
 	}
 	
-	for component_name in components:
+	var mechanical_list = %ComponentList.get_node("MechanicalSection/MechanicalList")
+	var electrical_list = %ComponentList.get_node("ElectricalSection/ElectricalList")
+	
+	for component_name in mechanical_components:
 		var button = Button.new()
 		button.text = component_name
-		button.custom_minimum_size.y = 40
-		component_list.add_child(button)
+		button.custom_minimum_size.y = 30
+		mechanical_list.add_child(button)
+		button.pressed.connect(_on_component_button_pressed.bind(component_name))
+	
+	for component_name in electrical_components:
+		var button = Button.new()
+		button.text = component_name
+		button.custom_minimum_size.y = 30
+		electrical_list.add_child(button)
 		button.pressed.connect(_on_component_button_pressed.bind(component_name))
 
 func _connect_signals() -> void:
@@ -95,9 +108,9 @@ func _on_connection_request(from_node: StringName, from_port: int,
 	var to_component = model_manager.get_component(to_node)
 	
 	if from_component and to_component:
-		model_manager.connect(from_component, str(from_port), 
-							to_component, str(to_port))
-		graph_edit.connect_node(from_node, from_port, to_node, to_port)
+		if model_manager.connect_components(from_component, str(from_port), 
+										 to_component, str(to_port)):
+			graph_edit.connect_node(from_node, from_port, to_node, to_port)
 
 func _on_disconnection_request(from_node: StringName, from_port: int,
 							 to_node: StringName, to_port: int) -> void:
@@ -122,6 +135,8 @@ func _on_reset_pressed() -> void:
 
 func _update_visualization() -> void:
 	for component in model_manager.components:
-		var graph_node = graph_edit.get_node_or_null(component.name)
+		# Convert component name to NodePath
+		var node_path = NodePath(component.name)
+		var graph_node = graph_edit.get_node_or_null(node_path)
 		if graph_node and graph_node.has_method("update_visualization"):
 			graph_node.update_visualization() 
