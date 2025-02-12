@@ -61,14 +61,21 @@ func load_msl_directory(path: String) -> void:
 		print("No files to process in: ", modelica_path)
 		return
 		
-	print("Total files to process: ", files_to_process.size())
+	# Limit to first 10 files
+	files_to_process = files_to_process.slice(0, 10)
+	print("Processing first 10 files out of total available: ", files_to_process.size())
 	
 	# Process files in smaller chunks
-	const CHUNK_SIZE = 3
+	const CHUNK_SIZE = 2
 	var total_files = files_to_process.size()
 	var processed = 0
 	var skipped = 0
 	var errors = []
+	
+	print("\nFiles to process:")
+	for i in range(files_to_process.size()):
+		print("%d. %s" % [i + 1, files_to_process[i].get_file()])
+	print("")
 	
 	while processed + skipped < total_files:
 		var chunk_end = mini(processed + skipped + CHUNK_SIZE, total_files)
@@ -99,8 +106,8 @@ func load_msl_directory(path: String) -> void:
 	
 	# Print summary
 	print("\nModel loading complete:")
-	print("- Total files: ", total_files)
-	print("- Processed: ", processed)
+	print("- Total files processed: ", total_files)
+	print("- Successfully processed: ", processed)
 	print("- Skipped: ", skipped)
 	print("- Models in tree: ", _models.size())
 	
