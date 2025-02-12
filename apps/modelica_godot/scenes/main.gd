@@ -1,21 +1,18 @@
 extends Control
 
-@onready var loader: MOLoader
+@onready var model_manager = $ModelManager
+@onready var model_browser = $UI/HSplitContainer/ModelBrowser
+@onready var graph_edit = $UI/HSplitContainer/GraphEdit
 @onready var status_label = $UI/Toolbar/HBoxContainer/StatusLabel
-@onready var graph_edit = $UI/GraphEdit
 
 var component_count = 0
 
 func _ready():
 	print("Starting main scene")
-	loader = MOLoader.new()
-	add_child(loader)
 	
-	# Wait one frame for loader to initialize
-	await get_tree().process_frame
-	
-	# Connect UI signals
-	_connect_ui_signals()
+	# Initialize model browser
+	model_browser.initialize(model_manager)
+	model_browser.model_selected.connect(_on_model_selected)
 	
 	# Connect GraphEdit signals
 	graph_edit.connection_request.connect(_on_connection_request)
@@ -26,51 +23,24 @@ func _ready():
 	graph_edit.snapping_distance = 20
 	graph_edit.show_grid = true
 
-func _connect_ui_signals():
-	# Connect component buttons - using Modelica Standard Library components
-	var component_buttons = {
-		"VoltageSourceBtn": "Modelica.Electrical.Analog.Sources.ConstantVoltage",
-		"ResistorBtn": "Modelica.Electrical.Analog.Basic.Resistor",
-		"CapacitorBtn": "Modelica.Electrical.Analog.Basic.Capacitor",
-		"InductorBtn": "Modelica.Electrical.Analog.Basic.Inductor",
-		"GroundBtn": "Modelica.Electrical.Analog.Basic.Ground",
-		"SpringBtn": "Modelica.Mechanics.Translational.Components.Spring",
-		"MassBtn": "Modelica.Mechanics.Translational.Components.Mass",
-		"DamperBtn": "Modelica.Mechanics.Translational.Components.Damper",
-		"GroundMechBtn": "Modelica.Mechanics.Translational.Components.Fixed"
-	}
-	
-	for btn_name in component_buttons:
-		var button = get_node_or_null(NodePath("UI/ComponentPanel/VBoxContainer/" + btn_name))
-		if button:
-			button.pressed.connect(_on_component_button_pressed.bind(component_buttons[btn_name]))
-	
-	# Connect toolbar buttons
-	var simulate_btn = $UI/Toolbar/HBoxContainer/SimulateBtn
-	var stop_btn = $UI/Toolbar/HBoxContainer/StopBtn
-	simulate_btn.pressed.connect(_on_simulate_pressed)
-	stop_btn.pressed.connect(_on_stop_pressed)
-
-func _on_component_button_pressed(component_type: String):
-	# Create a new GraphNode for the component
-	var node = _create_component_node(component_type)
+func _on_model_selected(model_path: String, model_data: Dictionary):
+	# Create a new GraphNode for the selected model
+	var node = _create_component_node(model_data)
 	if node:
 		graph_edit.add_child(node)
-		status_label.text = "Added " + component_type
+		status_label.text = "Added " + model_data.name
 
-func _create_component_node(component_type: String) -> GraphNode:
+func _create_component_node(model_data: Dictionary) -> GraphNode:
 	var node = GraphNode.new()
-	var unique_name = component_type + str(component_count)
+	var unique_name = model_data.name + str(component_count)
 	component_count += 1
 	
 	# Set up the node
 	node.name = unique_name
-	node.title = component_type
+	node.title = model_data.name
 	node.position_offset = Vector2(200, 200)  # Default position
 	node.draggable = true
 	node.resizable = false
-
-
 	node.size = Vector2(120, 80)  # Set a fixed size
 	
 	# Create the main container
@@ -84,28 +54,36 @@ func _create_component_node(component_type: String) -> GraphNode:
 	body.custom_minimum_size = Vector2(100, 50)
 	body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	body.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	match component_type:
-		"VoltageSource":
+	
+	# Set color based on component type
+	match model_data.type:
+		"model":
 			body.color = Color(0.2, 0.6, 1.0)  # Light blue
-		"Resistor":
+		"connector":
 			body.color = Color(0.8, 0.2, 0.2)  # Red
-		"Capacitor":
+		"block":
 			body.color = Color(0.2, 0.8, 0.2)  # Green
-		"Inductor":
-			body.color = Color(0.8, 0.2, 0.8)  # Purple
 		_:
 			body.color = Color(0.7, 0.7, 0.7)  # Gray
 	
 	container.add_child(body)
 	
-	# Set up connection slots
-	node.set_slot(0,  # Slot index
-		true,         # Enable left slot
-		0,           # Left slot type
-		Color.GOLD,  # Left slot color
-		true,        # Enable right slot
-		0,           # Right slot type
-		Color.GOLD)  # Right slot color
+	# Add connectors based on model data
+	var connectors = model_data.get("connectors", [])
+	for i in range(connectors.size()):
+		var connector = connectors[i]
+		node.set_slot(i,  # Slot index
+			true,         # Enable left slot
+			0,           # Left slot type
+			Color.GOLD,  # Left slot color
+			true,        # Enable right slot
+			0,           # Right slot type
+			Color.GOLD)  # Right slot color
+		
+		# Add connector label
+		var label = Label.new()
+		label.text = connector.name
+		container.add_child(label)
 	
 	return node
 

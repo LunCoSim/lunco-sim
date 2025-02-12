@@ -1,0 +1,49 @@
+[gd_scene load_steps=2 format=3 uid="uid://b6x8j2y4n8m5q"]
+
+[ext_resource type="Script" uid="uid://bf7f0tl7logoi" path="res://apps/modelica_godot/ui/model_browser.gd" id="1_browser"]
+
+[node name="ModelBrowser" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_browser")
+
+[node name="VBoxContainer" type="VBoxContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="SearchBar" type="LineEdit" parent="VBoxContainer"]
+layout_mode = 2
+placeholder_text = "Search models..."
+clear_button_enabled = true
+
+[node name="HSplitContainer" type="HSplitContainer" parent="VBoxContainer"]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="Tree" type="Tree" parent="VBoxContainer/HSplitContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_stretch_ratio = 0.3
+
+[node name="Details" type="TextEdit" parent="VBoxContainer/HSplitContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_stretch_ratio = 0.7
+editable = false
+wrap_mode = 1
+
+[node name="ProgressBar" type="ProgressBar" parent="VBoxContainer"]
+layout_mode = 2
+
+[node name="StatusLabel" type="Label" parent="VBoxContainer"]
+layout_mode = 2
+text = "Ready"
+horizontal_alignment = 1
