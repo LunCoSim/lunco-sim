@@ -32,8 +32,10 @@ var units: Dictionary = {}
 var is_connected: bool = false
 var connected_to: Array[ModelicaConnector] = []
 
-func _init(connector_type: Type = Type.NONE):
+func _init(connector_type: Type = Type.NONE) -> void:
 	type = connector_type
+	variables = {}
+	units = {}
 	_setup_variables()
 
 func _setup_variables():
@@ -75,8 +77,8 @@ func _setup_variables():
 				"mass_flow": Unit.KG_PER_SEC
 			}
 
-func add_variable(name: String, unit: Unit = Unit.NONE) -> void:
-	variables[name] = 0.0  # Initialize with default value
+func add_variable(name: String, value: float = 0.0, unit: Unit = Unit.NONE) -> void:
+	variables[name] = value
 	units[name] = unit
 
 func get_variable(name: String) -> float:

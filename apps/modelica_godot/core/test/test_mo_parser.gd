@@ -1,11 +1,11 @@
 extends SceneTree
 
-const MOParser = preload("res://core/mo_parser.gd")
+const MOParser = preload("res://apps/modelica_godot/core/mo_parser.gd")
 
 var tests_run := 0
 var tests_passed := 0
 var current_test := ""
-var test_dir := "res://components/Mechanical/"
+var test_dir := "res://apps/modelica_godot/components/Mechanical/"
 
 func _init():
 	print("\nRunning Modelica Parser Tests...")

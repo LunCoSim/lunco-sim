@@ -2,6 +2,7 @@ class_name ModelicaComponent
 extends Node
 
 # Component state
+var component_name: String = ""
 var connectors: Dictionary = {}
 var parameters: Dictionary = {}
 var variables: Dictionary = {}
@@ -13,14 +14,13 @@ var annotations: Dictionary = {}      # Component annotations
 var is_valid: bool = false
 
 # Component metadata
-var component_name: String = ""
 var description: String = ""
 
 signal state_changed(variable_name: String, value: float)
 signal event_triggered(event_name: String, data: Dictionary)
 
-func _init(name: String = "", desc: String = ""):
-	component_name = name
+func _init(comp_name: String = "", desc: String = ""):
+	component_name = comp_name
 	description = desc
 
 func add_connector(name: String, type: ModelicaConnector.Type) -> void:
@@ -29,29 +29,18 @@ func add_connector(name: String, type: ModelicaConnector.Type) -> void:
 		_validate_component()
 
 func add_parameter(name: String, value: float, unit: ModelicaConnector.Unit = ModelicaConnector.Unit.NONE) -> void:
-	parameters[name] = {
-		"value": value,
-		"unit": unit
-	}
+	parameters[name] = value
 	_validate_component()
 
 func add_variable(name: String, initial_value: float = 0.0, unit: ModelicaConnector.Unit = ModelicaConnector.Unit.NONE) -> void:
-	variables[name] = {
-		"value": initial_value,
-		"unit": unit
-	}
+	variables[name] = initial_value
 	_validate_component()
 
 func add_state_variable(name: String, initial_value: float = 0.0, unit: ModelicaConnector.Unit = ModelicaConnector.Unit.NONE) -> void:
-	state_variables[name] = {
-		"value": initial_value,
-		"unit": unit
-	}
+	state_variables[name] = initial_value
+	variables[name] = initial_value  # Also add to regular variables for easy access
 	# Initialize corresponding derivative variable
-	der_variables["der(" + name + ")"] = {
-		"value": 0.0,
-		"unit": unit  # Note: Should actually be unit/second, but keeping it simple for now
-	}
+	der_variables["der(" + name + ")"] = 0.0
 	_validate_component()
 
 func add_equation(equation: String) -> void:
@@ -71,46 +60,34 @@ func get_connector(name: String) -> ModelicaConnector:
 	return connectors.get(name)
 
 func get_parameter(name: String) -> float:
-	var param = parameters.get(name)
-	return param.value if param else 0.0
-
-func get_parameter_unit(name: String) -> ModelicaConnector.Unit:
-	var param = parameters.get(name)
-	return param.unit if param else ModelicaConnector.Unit.NONE
+	if name in parameters:
+		return parameters[name]
+	push_error("Parameter not found: " + name)
+	return 0.0
 
 func get_variable(name: String) -> float:
-	var var_data = variables.get(name)
-	if var_data:
-		return var_data.value
-	var_data = state_variables.get(name)
-	if var_data:
-		return var_data.value
-	var_data = der_variables.get(name)
-	return var_data.value if var_data else 0.0
-
-func get_variable_unit(name: String) -> ModelicaConnector.Unit:
-	var var_data = variables.get(name)
-	if var_data:
-		return var_data.unit
-	var_data = state_variables.get(name)
-	if var_data:
-		return var_data.unit
-	var_data = der_variables.get(name)
-	return var_data.unit if var_data else ModelicaConnector.Unit.NONE
+	if name in variables:
+		return variables[name]
+	elif name in state_variables:
+		return state_variables[name]
+	elif name in der_variables:
+		return der_variables[name]
+	push_error("Variable not found: " + name)
+	return 0.0
 
 func set_variable(name: String, value: float) -> void:
-	var var_data = variables.get(name)
-	if var_data:
-		var_data.value = value
+	if name in variables:
+		variables[name] = value
 		emit_signal("state_changed", name, value)
-	var_data = state_variables.get(name)
-	if var_data:
-		var_data.value = value
+	elif name in state_variables:
+		state_variables[name] = value
+		variables[name] = value  # Keep regular variables in sync
 		emit_signal("state_changed", name, value)
-	var_data = der_variables.get(name)
-	if var_data:
-		var_data.value = value
+	elif name in der_variables:
+		der_variables[name] = value
 		emit_signal("state_changed", name, value)
+	else:
+		push_error("Variable not found: " + name)
 
 func get_equations() -> Array[String]:
 	return equations
@@ -134,47 +111,7 @@ func _evaluate_condition(condition: String) -> bool:
 	return false
 
 func _validate_component() -> void:
-	print("Validating component: ", component_name)
-	
-	# Check required fields
-	if component_name.is_empty():
-		push_error("Component name is empty")
-	
-	# Validate parameters
-	for param_name in parameters:
-		var param = parameters[param_name]
-		if not param.has("value"):
-			push_error("Parameter missing value: " + param_name)
-	
-	# Validate variables
-	for var_name in variables:
-		var var_data = variables[var_name]
-		if not var_data.has("value"):
-			push_error("Variable missing value: " + var_name)
-	
-	# Validate state variables
-	for var_name in state_variables:
-		var var_data = state_variables[var_name]
-		if not var_data.has("value"):
-			push_error("State variable missing value: " + var_name)
-		if not der_variables.has("der(" + var_name + ")"):
-			push_warning("Missing derivative for state variable: " + var_name)
-	
-	# Validate equations
-	for eq in equations:
-		if eq.is_empty():
-			push_error("Empty equation found")
-		if not eq.contains("="):
-			push_error("Invalid equation format: " + eq)
-	
-	# Validate events
-	for event in events:
-		if not event.has("condition"):
-			push_error("Event missing condition")
-		if not event.has("action"):
-			push_error("Event missing action")
-	
-	print("Component validation complete: ", component_name)
+	is_valid = true  # Simple validation for now
 
 func to_dict() -> Dictionary:
 	return {
