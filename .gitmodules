@@ -6,3 +6,6 @@
 	path = addons/lunco-cameras
 	url = https://github.com/LunCoSim/lunco-cameras.git
     pushurl = git@github.com:LunCoSim/lunco-cameras.git
+[submodule "apps/modelica_godot/MSL"]
+	path = apps/modelica_godot/MSL
+	url = https://github.com/modelica/ModelicaStandardLibrary.git

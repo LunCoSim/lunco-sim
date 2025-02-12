@@ -45,7 +45,7 @@ func parse_file(path: String) -> Dictionary:
 	_line = 1
 	_column = 1
 	
-	var model = _parse_model()
+	var model = parse_string(_text)
 	_model_cache[path] = model
 	return model
 
@@ -460,4 +460,146 @@ func _is_letter(c: String) -> bool:
 	return (c >= "a" and c <= "z") or (c >= "A" and c <= "Z")
 
 func _is_digit(c: String) -> bool:
-	return c >= "0" and c <= "9" 
+	return c >= "0" and c <= "9"
+
+# Parse Modelica code from a string
+func parse_string(content: String) -> Dictionary:
+	_text = content
+	_pos = 0
+	_line = 1
+	_column = 1
+	return _parse_model()
+
+func _merge_model_properties(model: Dictionary, parent: Dictionary) -> void:
+	# Merge parameters
+	for param in parent.get("parameters", []):
+		if not param in model["parameters"]:
+			model["parameters"].append(param)
+	
+	# Merge variables
+	for var_def in parent.get("variables", []):
+		if not var_def in model["variables"]:
+			model["variables"].append(var_def)
+	
+	# Merge equations
+	for eq in parent.get("equations", []):
+		if not eq in model["equations"]:
+			model["equations"].append(eq)
+	
+	# Merge annotations
+	if parent.has("annotations"):
+		if not model.has("annotations"):
+			model["annotations"] = {}
+		for key in parent["annotations"]:
+			if not model["annotations"].has(key):
+				model["annotations"][key] = parent["annotations"][key]
+
+# Extract parameters from the model
+func _extract_parameters(content: String) -> Array:
+	var parameters = []
+	var param_regex = RegEx.new()
+	param_regex.compile("parameter\\s+(\\w+)\\s+(\\w+)\\s*=\\s*([\\d\\.]+)")
+	
+	var pos = 0
+	while true:
+		var result = param_regex.search(content, pos)
+		if not result:
+			break
+			
+		parameters.append({
+			"type": result.get_string(1),
+			"name": result.get_string(2),
+			"value": float(result.get_string(3))
+		})
+		pos = result.get_end()
+	
+	return parameters
+
+# Extract variables from the model
+func _extract_variables(content: String) -> Array:
+	var variables = []
+	var var_regex = RegEx.new()
+	var_regex.compile("(input|output|flow)?\\s*(\\w+)\\s+(\\w+)\\s*;")
+	
+	var pos = 0
+	while true:
+		var result = var_regex.search(content, pos)
+		if not result:
+			break
+			
+		variables.append({
+			"prefix": result.get_string(1),
+			"type": result.get_string(2),
+			"name": result.get_string(3)
+		})
+		pos = result.get_end()
+	
+	return variables
+
+# Extract equations from the model
+func _extract_equations(content: String) -> Array:
+	var equations = []
+	var eq_section = _extract_section(content, "equation", "end")
+	if eq_section:
+		var eq_lines = eq_section.split(";")
+		for eq in eq_lines:
+			eq = eq.strip_edges()
+			if eq:
+				equations.append(eq)
+	
+	return equations
+
+# Extract annotations from the model
+func _extract_annotations(content: String) -> Dictionary:
+	var annotations = {}
+	var annotation_regex = RegEx.new()
+	annotation_regex.compile("annotation\\s*\\((.*?)\\);")
+	
+	var pos = 0
+	while true:
+		var result = annotation_regex.search(content, pos)
+		if not result:
+			break
+			
+		var annotation_content = result.get_string(1)
+		# Parse annotation content into a dictionary
+		# This is a simplified version - you'll need more complex parsing
+		annotations = _parse_annotation_content(annotation_content)
+		pos = result.get_end()
+	
+	return annotations
+
+# Helper function to extract text between patterns
+func _extract_section(content: String, start_pattern: String, end_pattern: String) -> String:
+	var start_idx = content.find(start_pattern)
+	if start_idx == -1:
+		return ""
+	
+	start_idx += start_pattern.length()
+	var end_idx = content.find(end_pattern, start_idx)
+	if end_idx == -1:
+		return ""
+	
+	return content.substr(start_idx, end_idx - start_idx)
+
+# Helper function to extract pattern with regex
+func _extract_pattern(content: String, pattern: String) -> Array:
+	var regex = RegEx.new()
+	regex.compile(pattern)
+	var result = regex.search(content)
+	if result:
+		return result.get_strings()
+	return []
+
+# Helper function to parse annotation content
+func _parse_annotation_content(content: String) -> Dictionary:
+	var result = {}
+	# This is a simplified parser - you'll need more complex parsing
+	# for real Modelica annotations
+	
+	# Extract Icon annotation
+	var icon_match = _extract_section(content, "Icon(", ")")
+	if icon_match:
+		result["Icon"] = _parse_graphics(icon_match)
+	
+	return result 

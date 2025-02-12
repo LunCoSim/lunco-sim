@@ -6,22 +6,34 @@ var parser: MOParser
 func _ready():
 	parser = MOParser.new()
 
-# Load a Modelica component from a .mo file and create a node for it
-func load_component(mo_path: String) -> Node:
-	print("Attempting to load Modelica file: ", mo_path)
+# Load a Modelica component from MSL or a .mo file and create a node for it
+func load_component(component_path: String) -> Node:
+	print("Attempting to load Modelica component: ", component_path)
 	if not parser:
 		parser = MOParser.new()
+	
+	var mo_path: String
+	if component_path.begins_with("Modelica."):
+		# This is an MSL component
+		mo_path = "res://MSL/" + component_path.replace(".", "/") + ".mo"
+		# Skip if the file doesn't exist or is not a Modelica file
+		if not FileAccess.file_exists(mo_path) or mo_path.get_extension() != "mo":
+			push_error("Component file not found or invalid: " + mo_path)
+			return null
+	else:
+		# This is a local component
+		mo_path = component_path
 		
 	var model = parser.parse_file(mo_path)
 	if model.is_empty():
-		push_error("Failed to parse Modelica file: " + mo_path)
+		push_error("Failed to parse Modelica component: " + mo_path)
 		return null
 		
 	print("Parsed model: ", model)
 		
 	# Create a node for this component
 	var node = Node2D.new()
-	node.name = model.name if model.has("name") else "Component"
+	node.name = model.name if model.has("name") else component_path.get_file().get_basename()
 	print("Created node with name: ", node.name)
 	
 	# Add component data

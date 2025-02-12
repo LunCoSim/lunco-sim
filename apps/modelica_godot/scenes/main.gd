@@ -27,17 +27,17 @@ func _ready():
 	graph_edit.show_grid = true
 
 func _connect_ui_signals():
-	# Connect component buttons
+	# Connect component buttons - using Modelica Standard Library components
 	var component_buttons = {
-		"VoltageSourceBtn": "VoltageSource",
-		"ResistorBtn": "Resistor",
-		"CapacitorBtn": "Capacitor",
-		"InductorBtn": "Inductor",
-		"GroundBtn": "Ground",
-		"SpringBtn": "Spring",
-		"MassBtn": "Mass",
-		"DamperBtn": "Damper",
-		"GroundMechBtn": "GroundMech"
+		"VoltageSourceBtn": "Modelica.Electrical.Analog.Sources.ConstantVoltage",
+		"ResistorBtn": "Modelica.Electrical.Analog.Basic.Resistor",
+		"CapacitorBtn": "Modelica.Electrical.Analog.Basic.Capacitor",
+		"InductorBtn": "Modelica.Electrical.Analog.Basic.Inductor",
+		"GroundBtn": "Modelica.Electrical.Analog.Basic.Ground",
+		"SpringBtn": "Modelica.Mechanics.Translational.Components.Spring",
+		"MassBtn": "Modelica.Mechanics.Translational.Components.Mass",
+		"DamperBtn": "Modelica.Mechanics.Translational.Components.Damper",
+		"GroundMechBtn": "Modelica.Mechanics.Translational.Components.Fixed"
 	}
 	
 	for btn_name in component_buttons:
@@ -52,6 +52,7 @@ func _connect_ui_signals():
 	stop_btn.pressed.connect(_on_stop_pressed)
 
 func _on_component_button_pressed(component_type: String):
+	# Create a new GraphNode for the component
 	var node = _create_component_node(component_type)
 	if node:
 		graph_edit.add_child(node)
@@ -69,12 +70,13 @@ func _create_component_node(component_type: String) -> GraphNode:
 	node.draggable = true
 	node.resizable = false
 
+
+	node.size = Vector2(120, 80)  # Set a fixed size
 	
 	# Create the main container
 	var container = VBoxContainer.new()
 	container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	container.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	container.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	node.add_child(container)
 	
 	# Add the main body
@@ -82,7 +84,6 @@ func _create_component_node(component_type: String) -> GraphNode:
 	body.custom_minimum_size = Vector2(100, 50)
 	body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	body.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	body.mouse_filter = Control.MOUSE_FILTER_IGNORE  # Allow clicks to pass through
 	match component_type:
 		"VoltageSource":
 			body.color = Color(0.2, 0.6, 1.0)  # Light blue
