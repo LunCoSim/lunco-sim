@@ -48,16 +48,20 @@ func initialize(manager: ModelManager) -> void:
 		model_manager.loading_progress.connect(_on_loading_progress)
 	
 	# Update UI
-	status_label.text = "Initializing..."
+	status_label.text = "Ready"
+	progress_bar.hide()
+	progress_bar.value = 0
+
+func load_msl() -> void:
+	print("ModelBrowser: Starting MSL load")
+	status_label.text = "Loading MSL..."
 	progress_bar.show()
 	progress_bar.value = 0
 	
 	# Get the absolute path to MSL directory
 	var project_root = ProjectSettings.globalize_path("res://")
 	var msl_path = project_root.path_join("apps/modelica_godot/MSL")
-	print("ModelBrowser: MSL path: ", msl_path)
 	
-	# Start loading MSL
 	if DirAccess.dir_exists_absolute(msl_path):
 		print("ModelBrowser: MSL directory exists, starting load")
 		model_manager.load_msl_directory(msl_path)
@@ -70,6 +74,8 @@ func initialize(manager: ModelManager) -> void:
 			model_manager.load_msl_directory(msl_path)
 		else:
 			push_error("MSL directory not found at relative path either: " + msl_path)
+			status_label.text = "Error: MSL not found"
+			progress_bar.hide()
 
 func _create_icons() -> void:
 	# Create colored icons

@@ -32,6 +32,11 @@ layout_mode = 2
 text = "Spring"
 icon_alignment = 1
 
+[node name="DamperBtn" type="Button" parent="VBoxContainer/ScrollContainer/ComponentList"]
+layout_mode = 2
+text = "Damper"
+icon_alignment = 1
+
 [node name="FixedBtn" type="Button" parent="VBoxContainer/ScrollContainer/ComponentList"]
 layout_mode = 2
 text = "Fixed Point"

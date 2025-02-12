@@ -34,11 +34,33 @@ layout_mode = 2
 [node name="HBoxContainer" type="HBoxContainer" parent="UI/Toolbar"]
 layout_mode = 2
 
+[node name="FileMenuBtn" type="MenuButton" parent="UI/Toolbar/HBoxContainer"]
+layout_mode = 2
+text = "File"
+item_count = 5
+popup/item_0/text = "New System"
+popup/item_0/id = 0
+popup/item_1/text = "Import Modelica..."
+popup/item_1/id = 1
+popup/item_2/text = "Export Modelica..."
+popup/item_2/id = 2
+popup/item_3/text = "Save Workspace..."
+popup/item_3/id = 3
+popup/item_4/text = "Load Workspace..."
+popup/item_4/id = 4
+
+[node name="VSeparator" type="VSeparator" parent="UI/Toolbar/HBoxContainer"]
+layout_mode = 2
+
+[node name="LoadMSLBtn" type="Button" parent="UI/Toolbar/HBoxContainer"]
+layout_mode = 2
+text = "Load MSL"
+
 [node name="LibraryBtn" type="Button" parent="UI/Toolbar/HBoxContainer"]
 layout_mode = 2
 text = "Library"
 
-[node name="VSeparator" type="VSeparator" parent="UI/Toolbar/HBoxContainer"]
+[node name="VSeparator2" type="VSeparator" parent="UI/Toolbar/HBoxContainer"]
 layout_mode = 2
 
 [node name="SimulateBtn" type="Button" parent="UI/Toolbar/HBoxContainer"]
@@ -67,6 +89,7 @@ layout_mode = 2
 size_flags_horizontal = 3
 right_disconnects = true
 
+[connection signal="pressed" from="UI/Toolbar/HBoxContainer/LoadMSLBtn" to="." method="_on_load_msl_pressed"]
 [connection signal="pressed" from="UI/Toolbar/HBoxContainer/LibraryBtn" to="." method="_on_library_pressed"]
 [connection signal="pressed" from="UI/Toolbar/HBoxContainer/SimulateBtn" to="." method="_on_simulate_pressed"]
 [connection signal="pressed" from="UI/Toolbar/HBoxContainer/StopBtn" to="." method="_on_stop_pressed"]
