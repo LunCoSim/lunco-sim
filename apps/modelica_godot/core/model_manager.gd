@@ -21,9 +21,11 @@ func _init() -> void:
 	_model_tree = {}
 	
 func _ready() -> void:
+	print("DEBUG: ModelManager _ready")
 	_parser = MOParser.new()
 	equation_system = EquationSystem.new()
 	add_child(equation_system)
+	
 	# Clear cache on startup for now
 	_clear_cache()
 	
@@ -39,6 +41,13 @@ func _ready() -> void:
 		load_msl_directory(msl_path)
 	else:
 		push_error("MSL directory not found at: " + msl_path)
+		# Try relative path as fallback
+		msl_path = "res://apps/modelica_godot/MSL"
+		if DirAccess.dir_exists_absolute(msl_path):
+			print("DEBUG: Found MSL at relative path, starting load")
+			load_msl_directory(msl_path)
+		else:
+			push_error("MSL directory not found at relative path either: " + msl_path)
 
 func _clear_cache() -> void:
 	if FileAccess.file_exists(_cache_file):
@@ -125,8 +134,8 @@ func load_msl_directory(base_path: String):
 	
 	emit_signal("models_loaded")
 
-func _find_mo_files(path: String, results: Array):
-	print("DEBUG: Searching in directory: ", path)
+func _find_mo_files(path: String, results: Array) -> void:
+	print("DEBUG: Searching for .mo files in: ", path)
 	var dir = DirAccess.open(path)
 	if dir:
 		dir.include_hidden = false
@@ -152,83 +161,47 @@ func _find_mo_files(path: String, results: Array):
 		
 		dir.list_dir_end()
 	else:
-		print("DEBUG: Failed to open directory: ", path)
+		push_error("Failed to open directory: " + path)
 
-func _add_to_model_tree(file_path: String, model_data: Dictionary):
+func _add_to_model_tree(file_path: String, model_data: Dictionary) -> void:
 	print("DEBUG: Adding to model tree: ", file_path)
 	print("DEBUG: Model data: ", model_data)
 	
 	# Get the path relative to the MSL/Modelica directory
-	var msl_base = "res://apps/modelica_godot/MSL/"
-	var relative_path = file_path
-	
-	# Handle both absolute and relative paths
-	if file_path.begins_with("/"):
-		# Convert absolute path to project relative path
-		var project_root = ProjectSettings.globalize_path("res://")
-		if file_path.begins_with(project_root):
-			relative_path = file_path.substr(project_root.length())
-			print("DEBUG: Converted to relative path: ", relative_path)
-	
-	# Check if path is under MSL directory
-	if relative_path.begins_with(msl_base) or relative_path.find("/MSL/") != -1:
-		# Extract the part after MSL/
-		var msl_index = relative_path.find("/MSL/")
-		if msl_index != -1:
-			relative_path = relative_path.substr(msl_index + 5)  # Skip "/MSL/"
-		else:
-			relative_path = relative_path.substr(msl_base.length())
-		
-		print("DEBUG: Path after MSL: ", relative_path)
-		
-		# Only process files under the Modelica directory
-		if not relative_path.begins_with("Modelica/"):
-			print("DEBUG: Skipping non-Modelica path: ", relative_path)
-			return
-			
-		# Remove the "Modelica/" prefix
-		relative_path = relative_path.substr("Modelica/".length())
-		print("DEBUG: Final relative path: ", relative_path)
-	else:
-		print("DEBUG: Skipping file outside MSL: ", relative_path)
-		return  # Skip files outside the MSL directory
-	
-	var path_parts = relative_path.split("/")
-	if path_parts.size() == 0:
-		print("DEBUG: Empty path parts")
+	var path_parts = file_path.split("/")
+	var modelica_index = path_parts.find("Modelica")
+	if modelica_index == -1:
+		print("DEBUG: Not a Modelica path: ", file_path)
 		return
 		
+	# Get the path after "Modelica"
+	path_parts = path_parts.slice(modelica_index)
+	print("DEBUG: Path parts: ", path_parts)
+	
 	var current_dict = _model_tree
-	
-	# Handle package.mo files specially
-	if path_parts[-1] == "package.mo":
-		path_parts = path_parts.slice(0, -1)  # Remove the last element
-		if path_parts.size() == 0:
-			# This is the root package.mo, add it directly to root
-			if not current_dict.has("Modelica"):
-				current_dict["Modelica"] = {
-					"path": file_path,
-					"type": model_data.get("type", "unknown"),
-					"name": model_data.get("name", "Modelica"),
-					"description": model_data.get("description", "")
-				}
-				print("DEBUG: Added root Modelica package")
-			return
-	
-	# Start from Modelica package
 	if not current_dict.has("Modelica"):
 		current_dict["Modelica"] = {}
 	current_dict = current_dict["Modelica"]
 	
+	# Handle package.mo files specially
+	if path_parts[-1] == "package.mo":
+		path_parts = path_parts.slice(0, -1)  # Remove the last element
+		if path_parts.size() == 1:  # This is the root package.mo
+			current_dict["type"] = model_data.get("type", "unknown")
+			current_dict["name"] = model_data.get("name", "Modelica")
+			current_dict["path"] = file_path
+			print("DEBUG: Added root package")
+			return
+	
 	# Process intermediate directories
-	for i in range(path_parts.size() - 1):
+	for i in range(1, path_parts.size() - 1):  # Start from 1 to skip "Modelica"
 		var part = path_parts[i]
 		if not current_dict.has(part):
 			current_dict[part] = {}
 		current_dict = current_dict[part]
 	
 	# Add the actual model
-	if path_parts.size() > 0:
+	if path_parts.size() > 1:
 		var model_name = path_parts[-1].get_basename()
 		if not model_name.is_empty():
 			current_dict[model_name] = {
@@ -387,7 +360,7 @@ func simulate(duration: float) -> void:
 		time += dt
 		equation_system.solve() 
 
-func _validate_loaded_models():
+func _validate_loaded_models() -> void:
 	var total = _models.size()
 	var types = {}
 	for path in _models:
@@ -399,4 +372,5 @@ func _validate_loaded_models():
 	
 	print("DEBUG: Model validation:")
 	print("Total models loaded: ", total)
-	print("Models by type: ", types) 
+	print("Models by type: ", types)
+	print("Model tree structure: ", JSON.stringify(_model_tree, "  ")) 

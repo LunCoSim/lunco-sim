@@ -47,6 +47,25 @@ func initialize(manager: ModelManager) -> void:
 	# Update UI
 	status_label.text = "Ready"
 	progress_bar.hide()
+	
+	# Get the absolute path to MSL directory
+	var project_root = ProjectSettings.globalize_path("res://")
+	var msl_path = project_root.path_join("apps/modelica_godot/MSL")
+	print("ModelBrowser: MSL path: ", msl_path)
+	
+	# Start loading MSL
+	if DirAccess.dir_exists_absolute(msl_path):
+		print("ModelBrowser: MSL directory exists, starting load")
+		model_manager.load_msl_directory(msl_path)
+	else:
+		push_error("MSL directory not found at: " + msl_path)
+		# Try relative path as fallback
+		msl_path = "res://apps/modelica_godot/MSL"
+		if DirAccess.dir_exists_absolute(msl_path):
+			print("ModelBrowser: Found MSL at relative path, starting load")
+			model_manager.load_msl_directory(msl_path)
+		else:
+			push_error("MSL directory not found at relative path either: " + msl_path)
 
 func _create_icons() -> void:
 	# Create colored icons
@@ -70,7 +89,7 @@ func _create_colored_icon(color: Color) -> ImageTexture:
 	return ImageTexture.create_from_image(image)
 
 func _on_models_loaded() -> void:
-	print("ModelBrowser: Models loaded")
+	print("ModelBrowser: Models loaded, updating tree")
 	_update_tree()
 	status_label.text = "Models loaded"
 	progress_bar.hide()
@@ -79,6 +98,7 @@ func _on_model_loaded(model_data: Dictionary) -> void:
 	print("ModelBrowser: Model loaded: ", model_data.get("name", "unnamed"))
 
 func _on_loading_progress(progress: float, message: String) -> void:
+	print("ModelBrowser: Loading progress: ", progress, " - ", message)
 	progress_bar.show()
 	progress_bar.value = progress
 	status_label.text = message
@@ -106,15 +126,18 @@ func _on_tree_item_selected() -> void:
 	emit_signal("model_selected", model_path, model_data)
 
 func _update_tree(filter: String = "") -> void:
+	print("ModelBrowser: Updating tree with filter: ", filter)
 	tree.clear()
 	var root := tree.create_item()
 	root.set_text(0, "Modelica")
 	root.set_icon(0, package_icon)
 	
 	var model_tree = model_manager.get_model_tree()
+	print("ModelBrowser: Model tree: ", model_tree)
 	_populate_tree(root, model_tree, filter.to_lower())
 
 func _populate_tree(parent: TreeItem, data: Dictionary, filter: String) -> void:
+	print("ModelBrowser: Populating tree node: ", parent.get_text(0), " with data: ", data)
 	for key in data.keys():
 		var value = data[key]
 		if value is Dictionary:
@@ -125,6 +148,7 @@ func _populate_tree(parent: TreeItem, data: Dictionary, filter: String) -> void:
 					var item := tree.create_item(parent)
 					item.set_text(0, key)
 					item.set_metadata(0, value.get("path", ""))
+					print("ModelBrowser: Added model: ", key, " of type: ", value.get("type", "unknown"))
 					
 					match value.get("type", ""):
 						"model":
@@ -140,6 +164,7 @@ func _populate_tree(parent: TreeItem, data: Dictionary, filter: String) -> void:
 				var folder := tree.create_item(parent)
 				folder.set_text(0, key)
 				folder.set_icon(0, folder_icon)
+				print("ModelBrowser: Added folder: ", key)
 				_populate_tree(folder, value, filter)
 
 func _format_model_details(model: Dictionary) -> String:

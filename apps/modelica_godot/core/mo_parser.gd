@@ -48,45 +48,161 @@ func parse_file(path: String) -> Dictionary:
 		push_error("Could not open file: " + path)
 		return {}
 		
-	_package_path = path.get_base_dir()
 	_text = file.get_as_text()
 	_reset()
 	
-	var model := _parse_model()
-	if not model.is_empty():
-		_model_cache[path] = model
-		
-	return model
+	var model_data := {}
+	
+	# Skip whitespace and comments at start
+	_skip_whitespace()
+	
+	# Parse 'within' statement if present
+	if _match_keyword("within"):
+		_skip_until(";")
+		_skip_whitespace()
+	
+	# Parse type declaration
+	var type := _parse_type_declaration()
+	if not type.is_empty():
+		model_data["type"] = type.type
+		model_data["name"] = type.name
+		if type.has("description"):
+			model_data["description"] = type.description
+	
+	_model_cache[path] = model_data
+	return model_data
 
-func _parse_model() -> Dictionary:
-	var model := {
-		"type": "",
-		"name": "",
-		"description": "",
-		"extends": [] as Array[String],
-		"imports": [] as Array[String],
-		"parameters": [] as Array[Dictionary],
-		"variables": [] as Array[Dictionary],
-		"equations": [] as Array[String],
-		"annotations": {},
-		"components": [] as Array[Dictionary],
-		"connectors": [] as Array[Dictionary]
-	}
+func _parse_type_declaration() -> Dictionary:
+	var result := {}
 	
-	# Basic parsing for now - just extract type and name
-	var lines := _text.split("\n")
-	for line in lines:
-		line = line.strip_edges()
-		if line.is_empty() or line.begins_with("//"):
-			continue
+	# Skip any leading whitespace or comments
+	_skip_whitespace()
+	
+	# Look for type keywords
+	for type in ["package", "model", "connector", "block", "record", "class", "function"]:
+		if _match_keyword(type):
+			result["type"] = type
+			_skip_whitespace()
 			
-		var words := line.split(" ", false)
-		if words.size() >= 2 and words[0] in KEYWORDS:
-			model.type = words[0]
-			model.name = words[1].strip_edges().split("(")[0]  # Remove any parameters
-			break
+			# Get the name
+			var name := _parse_identifier()
+			if not name.is_empty():
+				result["name"] = name
+				
+				# Look for description string
+				_skip_whitespace()
+				if _peek() == "\"":
+					result["description"] = _parse_string()
+			
+			return result
 	
-	return model
+	return {}
+
+func _match_keyword(keyword: String) -> bool:
+	_skip_whitespace()
+	var start_pos := _pos
+	var chars := keyword.length()
+	
+	if _pos + chars <= _text.length():
+		if _text.substr(_pos, chars) == keyword:
+			var next_char := _peek_at(_pos + chars)
+			if next_char.is_empty() or not next_char.is_valid_identifier():
+				_pos += chars
+				return true
+	
+	_pos = start_pos
+	return false
+
+func _parse_identifier() -> String:
+	_skip_whitespace()
+	var start := _pos
+	
+	while _pos < _text.length():
+		var c := _text[_pos]
+		if not (c.is_valid_identifier() or c == '.'):
+			break
+		_pos += 1
+	
+	if _pos > start:
+		return _text.substr(start, _pos - start)
+	return ""
+
+func _parse_string() -> String:
+	if _peek() != "\"":
+		return ""
+		
+	_pos += 1  # Skip opening quote
+	var start := _pos
+	
+	while _pos < _text.length():
+		if _text[_pos] == "\"" and _text[_pos - 1] != "\\":
+			var content := _text.substr(start, _pos - start)
+			_pos += 1  # Skip closing quote
+			return content
+		_pos += 1
+	
+	return ""
+
+func _skip_whitespace() -> void:
+	while _pos < _text.length():
+		var c := _text[_pos]
+		if c.strip_edges().is_empty():
+			_pos += 1
+			if c == "\n":
+				_line += 1
+				_column = 1
+			else:
+				_column += 1
+		elif _text.substr(_pos, 2) == "//":
+			_skip_line_comment()
+		elif _text.substr(_pos, 2) == "/*":
+			_skip_block_comment()
+		else:
+			break
+
+func _skip_line_comment() -> void:
+	while _pos < _text.length():
+		if _text[_pos] == "\n":
+			_pos += 1
+			_line += 1
+			_column = 1
+			break
+		_pos += 1
+		_column += 1
+
+func _skip_block_comment() -> void:
+	_pos += 2  # Skip /*
+	while _pos < _text.length():
+		if _text.substr(_pos, 2) == "*/":
+			_pos += 2
+			break
+		if _text[_pos] == "\n":
+			_line += 1
+			_column = 1
+		_pos += 1
+		_column += 1
+
+func _skip_until(char: String) -> void:
+	while _pos < _text.length():
+		if _text[_pos] == char:
+			_pos += 1
+			break
+		if _text[_pos] == "\n":
+			_line += 1
+			_column = 1
+		_pos += 1
+		_column += 1
+
+func _peek(offset: int = 0) -> String:
+	var pos := _pos + offset
+	if pos < _text.length():
+		return _text[pos]
+	return ""
+
+func _peek_at(pos: int) -> String:
+	if pos < _text.length():
+		return _text[pos]
+	return ""
 
 func _parse_import() -> String:
 	var import_path = ""
@@ -359,67 +475,6 @@ func _next_token() -> Dictionary:
 	# Skip unrecognized characters
 	_pos += 1
 	return _next_token()
-
-func _skip_whitespace() -> void:
-	while _pos < _text.length() and _text[_pos] in [" ", "\t", "\r"]:
-		_pos += 1
-		_column += 1
-
-func _read_line_comment() -> Dictionary:
-	var comment := ""
-	_pos += 2  # Skip //
-	
-	while _pos < _text.length() and _text[_pos] != "\n":
-		comment += _text[_pos]
-		_pos += 1
-	
-	return {"type": TokenType.COMMENT, "value": comment.strip_edges()}
-
-func _read_string() -> Dictionary:
-	var string := ""
-	_pos += 1  # Skip opening quote
-	
-	while _pos < _text.length() and _text[_pos] != "\"":
-		string += _text[_pos]
-		_pos += 1
-	
-	if _pos < _text.length():
-		_pos += 1  # Skip closing quote
-	
-	return {"type": TokenType.STRING, "value": string}
-
-func _read_number() -> Dictionary:
-	var number := ""
-	var has_decimal := false
-	
-	if _text[_pos] == "-":
-		number += "-"
-		_pos += 1
-	
-	while _pos < _text.length():
-		var char := _text[_pos] as String
-		if _is_digit(char):
-			number += char
-		elif char == "." and not has_decimal:
-			number += char
-			has_decimal = true
-		else:
-			break
-		_pos += 1
-	
-	return {"type": TokenType.NUMBER, "value": number}
-
-func _read_identifier() -> Dictionary:
-	var identifier := ""
-	
-	while _pos < _text.length() and (_is_letter(_text[_pos]) or _is_digit(_text[_pos]) or _text[_pos] == "_"):
-		identifier += _text[_pos]
-		_pos += 1
-	
-	if identifier in KEYWORDS:
-		return {"type": TokenType.KEYWORD, "value": identifier}
-	else:
-		return {"type": TokenType.IDENTIFIER, "value": identifier}
 
 func _is_letter(c: String) -> bool:
 	return (c >= "a" and c <= "z") or (c >= "A" and c <= "Z")
