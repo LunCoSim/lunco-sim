@@ -3,7 +3,7 @@ extends Control
 
 @onready var model_manager: ModelManager = $ModelManager
 @onready var model_browser_window: ModelBrowserWindow = $ModelBrowserWindow
-@onready var graph_edit: GraphEdit = $UI/GraphEdit
+@onready var graph_edit: GraphEdit = $UI/HSplitContainer/GraphEdit
 @onready var status_label: Label = $UI/Toolbar/HBoxContainer/StatusLabel
 
 var component_count: int = 0
@@ -58,6 +58,25 @@ func _on_model_selected(model_path: String, model_data: Dictionary) -> void:
 
 func _on_library_pressed():
 	model_browser_window.show()
+
+func _on_component_selected(type: String) -> void:
+	# Create a new component node
+	var node = GraphNode.new()
+	node.title = type
+	node.position_offset = Vector2(100, 100) * (component_count + 1)
+	node.size = Vector2(200, 100)
+	node.set_script(load("res://apps/modelica_godot/ui/component_node.gd"))
+	
+	# Add to graph
+	graph_edit.add_child(node)
+	
+	# Initialize the node
+	node.setup(type)
+	
+	# Increment counter for offset positioning
+	component_count += 1
+	
+	status_label.text = "Added " + type + " component"
 
 func _on_connection_request(from_node: StringName, from_port: int, 
 						  to_node: StringName, to_port: int) -> void:

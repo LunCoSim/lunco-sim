@@ -1,0 +1,38 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://apps/modelica_godot/ui/component_palette.gd" id="1_palette"]
+
+[node name="ComponentPalette" type="PanelContainer"]
+custom_minimum_size = Vector2(200, 0)
+script = ExtResource("1_palette")
+
+[node name="VBoxContainer" type="VBoxContainer" parent="."]
+layout_mode = 2
+
+[node name="Label" type="Label" parent="VBoxContainer"]
+layout_mode = 2
+text = "Components"
+horizontal_alignment = 1
+
+[node name="ScrollContainer" type="ScrollContainer" parent="VBoxContainer"]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="ComponentList" type="VBoxContainer" parent="VBoxContainer/ScrollContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="MassBtn" type="Button" parent="VBoxContainer/ScrollContainer/ComponentList"]
+layout_mode = 2
+text = "Mass"
+icon_alignment = 1
+
+[node name="SpringBtn" type="Button" parent="VBoxContainer/ScrollContainer/ComponentList"]
+layout_mode = 2
+text = "Spring"
+icon_alignment = 1
+
+[node name="FixedBtn" type="Button" parent="VBoxContainer/ScrollContainer/ComponentList"]
+layout_mode = 2
+text = "Fixed Point"
+icon_alignment = 1 

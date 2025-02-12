@@ -1,8 +1,9 @@
-[gd_scene load_steps=4 format=3 uid="uid://b6x8j2y4n8m5q"]
+[gd_scene load_steps=5 format=3 uid="uid://b6x8j2y4n8m5q"]
 
 [ext_resource type="Script" uid="uid://y7swjbgdv85r" path="res://apps/modelica_godot/scenes/main.gd" id="1_main"]
 [ext_resource type="Script" uid="uid://vsm7wnflauvi" path="res://apps/modelica_godot/core/model_manager.gd" id="2_manager"]
 [ext_resource type="PackedScene" path="res://apps/modelica_godot/ui/model_browser_window.tscn" id="3_browser_window"]
+[ext_resource type="PackedScene" path="res://apps/modelica_godot/ui/component_palette.tscn" id="4_palette"]
 
 [node name="Main" type="Control"]
 layout_mode = 3
@@ -54,11 +55,19 @@ size_flags_horizontal = 3
 text = "Ready"
 horizontal_alignment = 1
 
-[node name="GraphEdit" type="GraphEdit" parent="UI"]
+[node name="HSplitContainer" type="HSplitContainer" parent="UI"]
 layout_mode = 2
 size_flags_vertical = 3
+
+[node name="ComponentPalette" parent="UI/HSplitContainer" instance=ExtResource("4_palette")]
+layout_mode = 2
+
+[node name="GraphEdit" type="GraphEdit" parent="UI/HSplitContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
 right_disconnects = true
 
 [connection signal="pressed" from="UI/Toolbar/HBoxContainer/LibraryBtn" to="." method="_on_library_pressed"]
 [connection signal="pressed" from="UI/Toolbar/HBoxContainer/SimulateBtn" to="." method="_on_simulate_pressed"]
 [connection signal="pressed" from="UI/Toolbar/HBoxContainer/StopBtn" to="." method="_on_stop_pressed"]
+[connection signal="component_selected" from="UI/HSplitContainer/ComponentPalette" to="." method="_on_component_selected"]
