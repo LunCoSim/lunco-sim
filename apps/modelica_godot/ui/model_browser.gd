@@ -167,6 +167,7 @@ func _populate_tree(parent: TreeItem, data: Dictionary, filter: String) -> void:
 	var keys = data.keys()
 	keys.sort()
 	
+	# First add all packages and their contents
 	for key in keys:
 		if key in ["type", "name", "path", "description"]:
 			continue  # Skip metadata keys
@@ -214,6 +215,58 @@ func _populate_tree(parent: TreeItem, data: Dictionary, filter: String) -> void:
 		
 		# Hide if filtered out
 		item.visible = should_show or _has_visible_children(item)
+	
+	# Then add components and variables if present
+	var model_data = data
+	if "components" in model_data and model_data["components"].size() > 0:
+		var components_root = tree.create_item(parent)
+		components_root.set_text(0, "Components")
+		components_root.set_icon(0, model_icon)
+		
+		for component in model_data["components"]:
+			var should_show = filter.is_empty() or \
+							 component["name"].to_lower().contains(filter) or \
+							 component["description"].to_lower().contains(filter)
+			
+			if should_show:
+				var item = tree.create_item(components_root)
+				item.set_text(0, component["name"])
+				if component["description"]:
+					item.set_tooltip_text(0, component["description"])
+				item.set_icon(0, model_icon)
+				
+				# Store component data in metadata
+				item.set_metadata(0, {
+					"type": "component",
+					"data": component
+				})
+	
+	if "variables" in model_data and model_data["variables"].size() > 0:
+		var variables_root = tree.create_item(parent)
+		variables_root.set_text(0, "Variables")
+		variables_root.set_icon(0, unknown_icon)
+		
+		for variable in model_data["variables"]:
+			var should_show = filter.is_empty() or \
+							 variable["name"].to_lower().contains(filter) or \
+							 variable["description"].to_lower().contains(filter)
+			
+			if should_show:
+				var item = tree.create_item(variables_root)
+				var display_text = variable["name"]
+				if variable["unit"]:
+					display_text += " [" + variable["unit"] + "]"
+				if variable["value"]:
+					display_text += " = " + variable["value"]
+				item.set_text(0, display_text)
+				if variable["description"]:
+					item.set_tooltip_text(0, variable["description"])
+				
+				# Store variable data in metadata
+				item.set_metadata(0, {
+					"type": "variable",
+					"data": variable
+				})
 
 func _has_visible_children(item: TreeItem) -> bool:
 	var child = item.get_first_child()
@@ -231,10 +284,26 @@ func _format_model_details(model: Dictionary) -> String:
 	details += "Name: " + model.get("name", "unnamed") + "\n"
 	details += "Path: " + model.get("path", "") + "\n\n"
 	
-	# Components and variables count
+	# Components
 	var components = model.get("components", [])
-	var variables = model.get("variables", [])
 	details += "Components: " + str(components.size()) + "\n"
-	details += "Variables: " + str(variables.size()) + "\n"
+	for component in components:
+		details += "- " + component["name"]
+		if component["description"]:
+			details += ": " + component["description"]
+		details += "\n"
+	
+	# Variables
+	var variables = model.get("variables", [])
+	details += "\nVariables: " + str(variables.size()) + "\n"
+	for variable in variables:
+		details += "- " + variable["name"]
+		if variable["unit"]:
+			details += " [" + variable["unit"] + "]"
+		if variable["value"]:
+			details += " = " + variable["value"]
+		if variable["description"]:
+			details += ": " + variable["description"]
+		details += "\n"
 	
 	return details 
