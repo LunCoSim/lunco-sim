@@ -1,8 +1,9 @@
 [gd_scene load_steps=2 format=3 uid="uid://b6g8pu8hpyy5v"]
 
-[ext_resource type="Script" path="res://apps/modelica_godot/scenes/main.gd" id="1_y7swj"]
+[ext_resource type="Script" uid="uid://y7swjbgdv85r" path="res://apps/modelica_godot/scenes/main.gd" id="1_y7swj"]
 
-[node name="Main" type="GraphEdit"]
+[node name="Main" type="Control"]
+layout_mode = 3
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
@@ -10,24 +11,22 @@ grow_horizontal = 2
 grow_vertical = 2
 script = ExtResource("1_y7swj")
 
-[node name="CanvasLayer" type="CanvasLayer" parent="."]
-
-[node name="UI" type="Control" parent="CanvasLayer"]
-layout_mode = 3
+[node name="UI" type="Control" parent="."]
+layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 
-[node name="ComponentPanel" type="Panel" parent="CanvasLayer/UI"]
+[node name="ComponentPanel" type="Panel" parent="UI"]
 layout_mode = 1
 anchors_preset = 9
 anchor_bottom = 1.0
 offset_right = 150.0
 grow_vertical = 2
 
-[node name="VBoxContainer" type="VBoxContainer" parent="CanvasLayer/UI/ComponentPanel"]
+[node name="VBoxContainer" type="VBoxContainer" parent="UI/ComponentPanel"]
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -39,62 +38,62 @@ offset_bottom = -10.0
 grow_horizontal = 2
 grow_vertical = 2
 
-[node name="Label" type="Label" parent="CanvasLayer/UI/ComponentPanel/VBoxContainer"]
+[node name="Label" type="Label" parent="UI/ComponentPanel/VBoxContainer"]
 layout_mode = 2
 text = "Components"
 horizontal_alignment = 1
 
-[node name="HSeparator" type="HSeparator" parent="CanvasLayer/UI/ComponentPanel/VBoxContainer"]
+[node name="HSeparator" type="HSeparator" parent="UI/ComponentPanel/VBoxContainer"]
 layout_mode = 2
 
-[node name="ElectricalLabel" type="Label" parent="CanvasLayer/UI/ComponentPanel/VBoxContainer"]
+[node name="ElectricalLabel" type="Label" parent="UI/ComponentPanel/VBoxContainer"]
 layout_mode = 2
 text = "Electrical"
 
-[node name="VoltageSourceBtn" type="Button" parent="CanvasLayer/UI/ComponentPanel/VBoxContainer"]
+[node name="VoltageSourceBtn" type="Button" parent="UI/ComponentPanel/VBoxContainer"]
 layout_mode = 2
 text = "Voltage Source"
 
-[node name="ResistorBtn" type="Button" parent="CanvasLayer/UI/ComponentPanel/VBoxContainer"]
+[node name="ResistorBtn" type="Button" parent="UI/ComponentPanel/VBoxContainer"]
 layout_mode = 2
 text = "Resistor"
 
-[node name="CapacitorBtn" type="Button" parent="CanvasLayer/UI/ComponentPanel/VBoxContainer"]
+[node name="CapacitorBtn" type="Button" parent="UI/ComponentPanel/VBoxContainer"]
 layout_mode = 2
 text = "Capacitor"
 
-[node name="InductorBtn" type="Button" parent="CanvasLayer/UI/ComponentPanel/VBoxContainer"]
+[node name="InductorBtn" type="Button" parent="UI/ComponentPanel/VBoxContainer"]
 layout_mode = 2
 text = "Inductor"
 
-[node name="GroundBtn" type="Button" parent="CanvasLayer/UI/ComponentPanel/VBoxContainer"]
+[node name="GroundBtn" type="Button" parent="UI/ComponentPanel/VBoxContainer"]
 layout_mode = 2
 text = "Ground"
 
-[node name="HSeparator2" type="HSeparator" parent="CanvasLayer/UI/ComponentPanel/VBoxContainer"]
+[node name="HSeparator2" type="HSeparator" parent="UI/ComponentPanel/VBoxContainer"]
 layout_mode = 2
 
-[node name="MechanicalLabel" type="Label" parent="CanvasLayer/UI/ComponentPanel/VBoxContainer"]
+[node name="MechanicalLabel" type="Label" parent="UI/ComponentPanel/VBoxContainer"]
 layout_mode = 2
 text = "Mechanical"
 
-[node name="SpringBtn" type="Button" parent="CanvasLayer/UI/ComponentPanel/VBoxContainer"]
+[node name="SpringBtn" type="Button" parent="UI/ComponentPanel/VBoxContainer"]
 layout_mode = 2
 text = "Spring"
 
-[node name="MassBtn" type="Button" parent="CanvasLayer/UI/ComponentPanel/VBoxContainer"]
+[node name="MassBtn" type="Button" parent="UI/ComponentPanel/VBoxContainer"]
 layout_mode = 2
 text = "Mass"
 
-[node name="DamperBtn" type="Button" parent="CanvasLayer/UI/ComponentPanel/VBoxContainer"]
+[node name="DamperBtn" type="Button" parent="UI/ComponentPanel/VBoxContainer"]
 layout_mode = 2
 text = "Damper"
 
-[node name="GroundMechBtn" type="Button" parent="CanvasLayer/UI/ComponentPanel/VBoxContainer"]
+[node name="GroundMechBtn" type="Button" parent="UI/ComponentPanel/VBoxContainer"]
 layout_mode = 2
 text = "Ground (Mech)"
 
-[node name="Toolbar" type="Panel" parent="CanvasLayer/UI"]
+[node name="Toolbar" type="Panel" parent="UI"]
 layout_mode = 1
 anchors_preset = 10
 anchor_right = 1.0
@@ -102,7 +101,7 @@ offset_left = 150.0
 offset_bottom = 40.0
 grow_horizontal = 2
 
-[node name="HBoxContainer" type="HBoxContainer" parent="CanvasLayer/UI/Toolbar"]
+[node name="HBoxContainer" type="HBoxContainer" parent="UI/Toolbar"]
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -114,23 +113,37 @@ offset_bottom = -5.0
 grow_horizontal = 2
 grow_vertical = 2
 
-[node name="Label" type="Label" parent="CanvasLayer/UI/Toolbar/HBoxContainer"]
+[node name="Label" type="Label" parent="UI/Toolbar/HBoxContainer"]
 layout_mode = 2
 text = "  LunCo Modelica Editor"
 vertical_alignment = 1
 
-[node name="VSeparator" type="VSeparator" parent="CanvasLayer/UI/Toolbar/HBoxContainer"]
+[node name="VSeparator" type="VSeparator" parent="UI/Toolbar/HBoxContainer"]
 layout_mode = 2
 
-[node name="SimulateBtn" type="Button" parent="CanvasLayer/UI/Toolbar/HBoxContainer"]
+[node name="SimulateBtn" type="Button" parent="UI/Toolbar/HBoxContainer"]
+unique_name_in_owner = true
 layout_mode = 2
 text = "Simulate"
 
-[node name="StopBtn" type="Button" parent="CanvasLayer/UI/Toolbar/HBoxContainer"]
+[node name="StopBtn" type="Button" parent="UI/Toolbar/HBoxContainer"]
+unique_name_in_owner = true
 layout_mode = 2
 text = "Stop"
 
-[node name="StatusLabel" type="Label" parent="CanvasLayer/UI/Toolbar/HBoxContainer"]
+[node name="StatusLabel" type="Label" parent="UI/Toolbar/HBoxContainer"]
+unique_name_in_owner = true
 layout_mode = 2
 text = "Ready"
 vertical_alignment = 1
+
+[node name="GraphEdit" type="GraphEdit" parent="UI"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 150.0
+offset_top = 40.0
+grow_horizontal = 2
+grow_vertical = 2
+right_disconnects = true

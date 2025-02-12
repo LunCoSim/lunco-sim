@@ -1,7 +1,8 @@
-extends GraphEdit
+extends Control
 
 @onready var loader: MOLoader
-@onready var status_label = $CanvasLayer/UI/Toolbar/HBoxContainer/StatusLabel
+@onready var status_label = $UI/Toolbar/HBoxContainer/StatusLabel
+@onready var graph_edit = $UI/GraphEdit
 
 var component_count = 0
 
@@ -17,13 +18,13 @@ func _ready():
 	_connect_ui_signals()
 	
 	# Connect GraphEdit signals
-	connection_request.connect(_on_connection_request)
-	disconnection_request.connect(_on_disconnection_request)
+	graph_edit.connection_request.connect(_on_connection_request)
+	graph_edit.disconnection_request.connect(_on_disconnection_request)
 	
 	# Set GraphEdit properties
-	snapping_enabled = true  # Enable grid snapping
-	snapping_distance = 20   # Set snap size to 20
-	show_grid = true        # Show the grid
+	graph_edit.snapping_enabled = true
+	graph_edit.snapping_distance = 20
+	graph_edit.show_grid = true
 
 func _connect_ui_signals():
 	# Connect component buttons
@@ -40,21 +41,20 @@ func _connect_ui_signals():
 	}
 	
 	for btn_name in component_buttons:
-		var button = get_node_or_null(NodePath("CanvasLayer/UI/ComponentPanel/VBoxContainer/" + btn_name))
+		var button = get_node_or_null(NodePath("UI/ComponentPanel/VBoxContainer/" + btn_name))
 		if button:
 			button.pressed.connect(_on_component_button_pressed.bind(component_buttons[btn_name]))
 	
 	# Connect toolbar buttons
-	var simulate_btn = $CanvasLayer/UI/Toolbar/HBoxContainer/SimulateBtn
-	var stop_btn = $CanvasLayer/UI/Toolbar/HBoxContainer/StopBtn
+	var simulate_btn = $UI/Toolbar/HBoxContainer/SimulateBtn
+	var stop_btn = $UI/Toolbar/HBoxContainer/StopBtn
 	simulate_btn.pressed.connect(_on_simulate_pressed)
 	stop_btn.pressed.connect(_on_stop_pressed)
 
 func _on_component_button_pressed(component_type: String):
-	# Create a new GraphNode for the component
 	var node = _create_component_node(component_type)
 	if node:
-		add_child(node)
+		graph_edit.add_child(node)
 		status_label.text = "Added " + component_type
 
 func _create_component_node(component_type: String) -> GraphNode:
@@ -66,14 +66,15 @@ func _create_component_node(component_type: String) -> GraphNode:
 	node.name = unique_name
 	node.title = component_type
 	node.position_offset = Vector2(200, 200)  # Default position
-	node.draggable = true  # Make sure the node can be dragged
-	node.resizable = false  # Disable resizing
-	node.size = Vector2(120, 80)  # Set a fixed size
+	node.draggable = true
+	node.resizable = false
+
 	
 	# Create the main container
 	var container = VBoxContainer.new()
 	container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	container.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	container.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	node.add_child(container)
 	
 	# Add the main body
@@ -81,6 +82,7 @@ func _create_component_node(component_type: String) -> GraphNode:
 	body.custom_minimum_size = Vector2(100, 50)
 	body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	body.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	body.mouse_filter = Control.MOUSE_FILTER_IGNORE  # Allow clicks to pass through
 	match component_type:
 		"VoltageSource":
 			body.color = Color(0.2, 0.6, 1.0)  # Light blue
@@ -110,20 +112,20 @@ func _on_connection_request(from_node: StringName, from_port: int,
 						  to_node: StringName, to_port: int):
 	# Check if connection is valid
 	if _can_connect(from_node, to_node):
-		connect_node(from_node, from_port, to_node, to_port)
+		graph_edit.connect_node(from_node, from_port, to_node, to_port)
 		status_label.text = "Connected components"
 	else:
 		status_label.text = "Invalid connection"
 
 func _on_disconnection_request(from_node: StringName, from_port: int,
 							 to_node: StringName, to_port: int):
-	disconnect_node(from_node, from_port, to_node, to_port)
+	graph_edit.disconnect_node(from_node, from_port, to_node, to_port)
 	status_label.text = "Disconnected components"
 
 func _can_connect(from_node: StringName, to_node: StringName) -> bool:
 	# Get the actual nodes
-	var from = get_node_or_null(NodePath(from_node))
-	var to = get_node_or_null(NodePath(to_node))
+	var from = graph_edit.get_node_or_null(NodePath(from_node))
+	var to = graph_edit.get_node_or_null(NodePath(to_node))
 	
 	if not from or not to:
 		return false
