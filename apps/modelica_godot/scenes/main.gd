@@ -23,6 +23,7 @@ func _ready() -> void:
 		push_error("GraphEdit node not found")
 		return
 	
+	print("Main scene: Initializing model browser with model manager")
 	# Initialize model browser
 	model_browser.initialize(model_manager)
 	model_browser.model_selected.connect(_on_model_selected)
@@ -43,7 +44,9 @@ func _ready() -> void:
 	print("Main scene initialized successfully")
 
 func _on_models_loaded() -> void:
-	print("Models loaded")
+	print("Main scene: Models loaded")
+	print("Model tree size: ", model_manager._model_tree.size())
+	print("Model tree contents: ", model_manager._model_tree.keys())
 	status_label.text = "Models loaded"
 
 func _on_loading_progress(progress: float, message: String) -> void:

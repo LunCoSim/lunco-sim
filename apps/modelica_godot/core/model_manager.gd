@@ -361,16 +361,19 @@ func simulate(duration: float) -> void:
 		equation_system.solve() 
 
 func _validate_loaded_models() -> void:
-	var total = _models.size()
-	var types = {}
-	for path in _models:
-		var model = _models[path]
-		var type = model.get("type", "unknown")
-		if not types.has(type):
-			types[type] = 0
-		types[type] += 1
+	print("Validating loaded models...")
+	print("Model count: ", _models.size())
+	print("Model tree size: ", _model_tree.size())
 	
+	# Print first level of model tree
+	if _model_tree.has("Modelica"):
+		print("Modelica package contents:")
+		for key in _model_tree["Modelica"].keys():
+			print("- ", key)
+	else:
+		print("No Modelica package found in tree")
+
 	print("DEBUG: Model validation:")
-	print("Total models loaded: ", total)
-	print("Models by type: ", types)
+	print("Total models loaded: ", _models.size())
+	print("Models by type: ", _model_tree.get("Modelica", {}))
 	print("Model tree structure: ", JSON.stringify(_model_tree, "  ")) 

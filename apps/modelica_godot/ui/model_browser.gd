@@ -93,6 +93,11 @@ func _on_models_loaded() -> void:
 	_update_tree()
 	status_label.text = "Models loaded"
 	progress_bar.hide()
+	
+	# Debug: Print model tree structure
+	var model_tree = model_manager._model_tree
+	print("ModelBrowser: Model tree structure:")
+	print(JSON.stringify(model_tree, "  "))
 
 func _on_model_loaded(model_data: Dictionary) -> void:
 	print("ModelBrowser: Model loaded: ", model_data.get("name", "unnamed"))
@@ -132,40 +137,65 @@ func _update_tree(filter: String = "") -> void:
 	root.set_text(0, "Modelica")
 	root.set_icon(0, package_icon)
 	
-	var model_tree = model_manager.get_model_tree()
-	print("ModelBrowser: Model tree: ", model_tree)
-	_populate_tree(root, model_tree, filter.to_lower())
+	if not model_manager:
+		print("ModelBrowser: No model manager available")
+		return
+		
+	var model_tree = model_manager._model_tree
+	print("ModelBrowser: Got model tree: ", model_tree.size(), " items")
+	
+	if model_tree.is_empty():
+		print("ModelBrowser: Model tree is empty")
+		return
+		
+	if model_tree.has("Modelica"):
+		print("ModelBrowser: Found Modelica package, populating tree")
+		_populate_tree(root, model_tree["Modelica"], filter.to_lower())
+	else:
+		print("ModelBrowser: No Modelica package found in tree")
+		# Try to populate with the entire tree as fallback
+		_populate_tree(root, model_tree, filter.to_lower())
 
 func _populate_tree(parent: TreeItem, data: Dictionary, filter: String) -> void:
-	print("ModelBrowser: Populating tree node: ", parent.get_text(0), " with data: ", data)
-	for key in data.keys():
+	print("ModelBrowser: Populating tree node: ", parent.get_text(0))
+	print("ModelBrowser: Data to populate: ", data.keys())
+	
+	# Sort keys to ensure consistent ordering
+	var keys = data.keys()
+	keys.sort()
+	
+	for key in keys:
 		var value = data[key]
-		if value is Dictionary:
-			if value.has("type"):
-				# This is a model
-				var should_show = filter.is_empty() or key.to_lower().contains(filter)
-				if should_show:
-					var item := tree.create_item(parent)
-					item.set_text(0, key)
-					item.set_metadata(0, value.get("path", ""))
-					print("ModelBrowser: Added model: ", key, " of type: ", value.get("type", "unknown"))
-					
-					match value.get("type", ""):
-						"model":
-							item.set_icon(0, model_icon)
-						"connector":
-							item.set_icon(0, connector_icon)
-						"package":
-							item.set_icon(0, package_icon)
-						_:
-							item.set_icon(0, unknown_icon)
-			else:
-				# This is a package/folder
-				var folder := tree.create_item(parent)
-				folder.set_text(0, key)
-				folder.set_icon(0, folder_icon)
-				print("ModelBrowser: Added folder: ", key)
-				_populate_tree(folder, value, filter)
+		if not value is Dictionary:
+			print("ModelBrowser: Skipping non-dictionary value for key: ", key)
+			continue
+			
+		var should_show = filter.is_empty() or key.to_lower().contains(filter)
+		
+		if value.has("type"):
+			# This is a model/component
+			if should_show:
+				var item := tree.create_item(parent)
+				item.set_text(0, key)
+				item.set_metadata(0, value.get("path", ""))
+				print("ModelBrowser: Added model: ", key, " of type: ", value.get("type", "unknown"))
+				
+				match value.get("type", ""):
+					"model":
+						item.set_icon(0, model_icon)
+					"connector":
+						item.set_icon(0, connector_icon)
+					"package":
+						item.set_icon(0, package_icon)
+					_:
+						item.set_icon(0, unknown_icon)
+		else:
+			# This is a package/folder
+			var folder := tree.create_item(parent)
+			folder.set_text(0, key)
+			folder.set_icon(0, folder_icon)
+			print("ModelBrowser: Added folder: ", key)
+			_populate_tree(folder, value, filter)
 
 func _format_model_details(model: Dictionary) -> String:
 	var details := ""
