@@ -1,6 +1,6 @@
-[gd_scene load_steps=2 format=3 uid="uid://b6x8j2y4n8m5q"]
+[gd_scene load_steps=2 format=3]
 
-[ext_resource type="Script" uid="uid://bf7f0tl7logoi" path="res://apps/modelica_godot/ui/model_browser.gd" id="1_browser"]
+[ext_resource type="Script" path="res://apps/modelica_godot/ui/model_browser.gd" id="1_browser"]
 
 [node name="ModelBrowser" type="Control"]
 layout_mode = 3
@@ -31,7 +31,6 @@ size_flags_vertical = 3
 [node name="Tree" type="Tree" parent="VBoxContainer/HSplitContainer"]
 layout_mode = 2
 size_flags_horizontal = 3
-size_flags_stretch_ratio = 0.3
 
 [node name="Details" type="TextEdit" parent="VBoxContainer/HSplitContainer"]
 layout_mode = 2

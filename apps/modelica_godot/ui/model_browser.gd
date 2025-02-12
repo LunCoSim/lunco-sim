@@ -1,3 +1,4 @@
+@tool
 class_name ModelBrowser
 extends Control
 
@@ -18,14 +19,9 @@ var package_icon: ImageTexture
 var unknown_icon: ImageTexture
 var folder_icon: ImageTexture
 
-func _ready():
+func _ready() -> void:
 	print("ModelBrowser: Ready")
-	# Create colored icons
-	model_icon = _create_colored_icon(Color(0.2, 0.6, 1.0))  # Light blue
-	connector_icon = _create_colored_icon(Color(0.8, 0.2, 0.2))  # Red
-	package_icon = _create_colored_icon(Color(0.2, 0.8, 0.2))  # Green
-	unknown_icon = _create_colored_icon(Color(0.7, 0.7, 0.7))  # Gray
-	folder_icon = _create_colored_icon(Color(0.8, 0.8, 0.2))  # Yellow
+	_create_icons()
 	
 	# Connect signals
 	search_box.text_changed.connect(_on_search_text_changed)
@@ -39,8 +35,29 @@ func _ready():
 	# Setup details text
 	details_text.editable = false
 
+func initialize(manager: ModelManager) -> void:
+	print("ModelBrowser: Initializing with manager")
+	model_manager = manager
+	
+	# Connect to model manager signals
+	model_manager.models_loaded.connect(_on_models_loaded)
+	model_manager.model_loaded.connect(_on_model_loaded)
+	model_manager.loading_progress.connect(_on_loading_progress)
+	
+	# Update UI
+	status_label.text = "Ready"
+	progress_bar.hide()
+
+func _create_icons() -> void:
+	# Create colored icons
+	model_icon = _create_colored_icon(Color(0.2, 0.6, 1.0))  # Light blue
+	connector_icon = _create_colored_icon(Color(0.8, 0.2, 0.2))  # Red
+	package_icon = _create_colored_icon(Color(0.2, 0.8, 0.2))  # Green
+	unknown_icon = _create_colored_icon(Color(0.7, 0.7, 0.7))  # Gray
+	folder_icon = _create_colored_icon(Color(0.8, 0.8, 0.2))  # Yellow
+
 func _create_colored_icon(color: Color) -> ImageTexture:
-	var image = Image.create(16, 16, false, Image.FORMAT_RGBA8)
+	var image := Image.create(16, 16, false, Image.FORMAT_RGBA8)
 	image.fill(color)
 	
 	# Add a border
@@ -52,124 +69,101 @@ func _create_colored_icon(color: Color) -> ImageTexture:
 	
 	return ImageTexture.create_from_image(image)
 
-func initialize(manager: ModelManager):
-	print("ModelBrowser: Initializing with manager")
-	model_manager = manager
-	model_manager.models_loaded.connect(_on_models_loaded)
-	model_manager.loading_progress.connect(_on_loading_progress)
-	
-	# Get the absolute path to MSL directory
-	var msl_path = ProjectSettings.globalize_path("res://apps/modelica_godot/MSL")
-	print("ModelBrowser: Loading MSL from path: ", msl_path)
-	
-	# Start loading MSL
-	progress_bar.show()
-	model_manager.load_msl_directory(msl_path)
+func _on_models_loaded() -> void:
+	print("ModelBrowser: Models loaded")
+	_update_tree()
+	status_label.text = "Models loaded"
+	progress_bar.hide()
 
-func _on_loading_progress(progress: float, message: String):
-	print("ModelBrowser: Loading progress: ", progress, " - ", message)
+func _on_model_loaded(model_data: Dictionary) -> void:
+	print("ModelBrowser: Model loaded: ", model_data.get("name", "unnamed"))
+
+func _on_loading_progress(progress: float, message: String) -> void:
+	progress_bar.show()
 	progress_bar.value = progress
 	status_label.text = message
 
-func _on_models_loaded():
-	print("ModelBrowser: Models loaded")
-	progress_bar.hide()
-	status_label.text = "Models loaded"
-	_populate_tree()
+func _on_search_text_changed(new_text: String) -> void:
+	_update_tree(new_text)
 
-func _populate_tree():
-	print("ModelBrowser: Populating tree")
+func _on_tree_item_selected() -> void:
+	var selected := tree.get_selected()
+	if not selected:
+		return
+		
+	var model_path = selected.get_metadata(0)
+	if not model_path:
+		return
+		
+	var model_data = model_manager.get_model_data(model_path)
+	if model_data.is_empty():
+		return
+		
+	# Update details
+	details_text.text = _format_model_details(model_data)
+	
+	# Emit signal
+	emit_signal("model_selected", model_path, model_data)
+
+func _update_tree(filter: String = "") -> void:
 	tree.clear()
-	var root = tree.create_item()
-	root.set_text(0, "Modelica Standard Library")
-	root.set_icon(0, folder_icon)
+	var root := tree.create_item()
+	root.set_text(0, "Modelica")
+	root.set_icon(0, package_icon)
 	
 	var model_tree = model_manager.get_model_tree()
-	print("ModelBrowser: Model tree data: ", model_tree)
-	
-	# Start with Modelica package if it exists
-	if model_tree.has("Modelica"):
-		var modelica_data = model_tree["Modelica"]
-		if modelica_data is Dictionary:
-			if modelica_data.has("path"):
-				# This is the root package itself
-				root.set_metadata(0, modelica_data)
-				root.set_icon(0, package_icon)
-				# Add its children
-				for key in modelica_data:
-					if key not in ["path", "type", "name", "description"]:
-						_add_tree_items(root, {key: modelica_data[key]})
+	_populate_tree(root, model_tree, filter.to_lower())
+
+func _populate_tree(parent: TreeItem, data: Dictionary, filter: String) -> void:
+	for key in data.keys():
+		var value = data[key]
+		if value is Dictionary:
+			if value.has("type"):
+				# This is a model
+				var should_show = filter.is_empty() or key.to_lower().contains(filter)
+				if should_show:
+					var item := tree.create_item(parent)
+					item.set_text(0, key)
+					item.set_metadata(0, value.get("path", ""))
+					
+					match value.get("type", ""):
+						"model":
+							item.set_icon(0, model_icon)
+						"connector":
+							item.set_icon(0, connector_icon)
+						"package":
+							item.set_icon(0, package_icon)
+						_:
+							item.set_icon(0, unknown_icon)
 			else:
-				# This is just a container
-				_add_tree_items(root, modelica_data)
+				# This is a package/folder
+				var folder := tree.create_item(parent)
+				folder.set_text(0, key)
+				folder.set_icon(0, folder_icon)
+				_populate_tree(folder, value, filter)
 
-func _add_tree_items(parent: TreeItem, data: Dictionary):
-	for key in data:
-		var item = tree.create_item(parent)
-		var node_data = data[key]
-		
-		if node_data is Dictionary:
-			if node_data.has("path"):
-				# This is a model leaf
-				item.set_text(0, node_data.get("name", key))
-				item.set_metadata(0, node_data)
-				print("ModelBrowser: Adding model leaf: ", key, " type: ", node_data.get("type", "unknown"))
-				
-				# Set icon based on type
-				match node_data.get("type", ""):
-					"model":
-						item.set_icon(0, model_icon)
-					"connector":
-						item.set_icon(0, connector_icon)
-					"package":
-						item.set_icon(0, package_icon)
-						# For packages, also add their children
-						for child_key in node_data:
-							if child_key not in ["path", "type", "name", "description"]:
-								_add_tree_items(item, {child_key: node_data[child_key]})
-					_:
-						item.set_icon(0, unknown_icon)
-			else:
-				# This is a package/directory
-				print("ModelBrowser: Adding package: ", key)
-				item.set_text(0, key)
-				item.set_icon(0, folder_icon)
-				_add_tree_items(item, node_data)
-
-func _on_tree_item_selected():
-	var selected = tree.get_selected()
-	if selected and selected.get_metadata(0):
-		var metadata = selected.get_metadata(0)
-		_show_model_details(metadata)
-		emit_signal("model_selected", metadata.path, model_manager.get_model_data(metadata.path))
-
-func _show_model_details(metadata: Dictionary):
-	var details = """Type: {type}
-Name: {name}
-Path: {path}
-
-Description:
-{description}""".format(metadata)
+func _format_model_details(model: Dictionary) -> String:
+	var details := ""
 	
-	details_text.text = details
-
-func _on_search_text_changed(new_text: String):
-	if new_text.length() < 3:  # Only search with 3+ characters
-		_populate_tree()
-		return
+	# Basic info
+	details += "Type: " + model.get("type", "unknown") + "\n"
+	details += "Name: " + model.get("name", "unnamed") + "\n"
 	
-	var results = model_manager.search_models(new_text)
-	tree.clear()
-	var root = tree.create_item()
-	root.set_text(0, "Search Results")
-	root.set_icon(0, folder_icon)
+	if not model.get("description", "").is_empty():
+		details += "\nDescription:\n" + model.description + "\n"
 	
-	for result in results:
-		var item = tree.create_item(root)
-		item.set_text(0, result.model.get("name", "Unknown"))
-		item.set_metadata(0, {
-			"path": result.path,
-			"type": result.model.get("type", "unknown"),
-			"name": result.model.get("name", "Unknown"),
-			"description": result.model.get("description", "")
-		}) 
+	# Parameters
+	var params = model.get("parameters", [])
+	if not params.is_empty():
+		details += "\nParameters:\n"
+		for param in params:
+			details += "- " + param.get("name", "unnamed") + ": " + str(param.get("value", 0.0)) + "\n"
+	
+	# Variables
+	var vars = model.get("variables", [])
+	if not vars.is_empty():
+		details += "\nVariables:\n"
+		for var_def in vars:
+			details += "- " + var_def.get("name", "unnamed") + ": " + var_def.get("type", "unknown") + "\n"
+	
+	return details 

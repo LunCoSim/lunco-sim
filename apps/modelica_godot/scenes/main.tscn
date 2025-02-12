@@ -2,7 +2,7 @@
 
 [ext_resource type="Script" uid="uid://y7swjbgdv85r" path="res://apps/modelica_godot/scenes/main.gd" id="1_main"]
 [ext_resource type="Script" uid="uid://vsm7wnflauvi" path="res://apps/modelica_godot/core/model_manager.gd" id="2_manager"]
-[ext_resource type="PackedScene" uid="uid://b6x8j2y4n8m5q" path="res://apps/modelica_godot/ui/model_browser.tscn" id="3_browser"]
+[ext_resource type="Script" uid="uid://bf7f0tl7logoi" path="res://apps/modelica_godot/ui/model_browser.gd" id="3_browser"]
 
 [node name="Main" type="Control"]
 layout_mode = 3
@@ -48,13 +48,55 @@ horizontal_alignment = 1
 layout_mode = 2
 size_flags_vertical = 3
 
-[node name="ModelBrowser" parent="UI/HSplitContainer" instance=ExtResource("3_browser")]
+[node name="ModelBrowser" type="Control" parent="UI/HSplitContainer"]
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_stretch_ratio = 0.3
+script = ExtResource("3_browser")
+
+[node name="VBoxContainer" type="VBoxContainer" parent="UI/HSplitContainer/ModelBrowser"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="SearchBar" type="LineEdit" parent="UI/HSplitContainer/ModelBrowser/VBoxContainer"]
+layout_mode = 2
+placeholder_text = "Search models..."
+clear_button_enabled = true
+
+[node name="HSplitContainer" type="HSplitContainer" parent="UI/HSplitContainer/ModelBrowser/VBoxContainer"]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="Tree" type="Tree" parent="UI/HSplitContainer/ModelBrowser/VBoxContainer/HSplitContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="Details" type="TextEdit" parent="UI/HSplitContainer/ModelBrowser/VBoxContainer/HSplitContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_stretch_ratio = 0.7
+editable = false
+wrap_mode = 1
+
+[node name="ProgressBar" type="ProgressBar" parent="UI/HSplitContainer/ModelBrowser/VBoxContainer"]
+visible = false
+layout_mode = 2
+max_value = 1.0
+
+[node name="StatusLabel" type="Label" parent="UI/HSplitContainer/ModelBrowser/VBoxContainer"]
+layout_mode = 2
+text = "Ready"
+horizontal_alignment = 1
 
 [node name="GraphEdit" type="GraphEdit" parent="UI/HSplitContainer"]
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_stretch_ratio = 0.7
 right_disconnects = true
+
+[connection signal="pressed" from="UI/Toolbar/HBoxContainer/SimulateBtn" to="." method="_on_simulate_pressed"]
+[connection signal="pressed" from="UI/Toolbar/HBoxContainer/StopBtn" to="." method="_on_stop_pressed"]

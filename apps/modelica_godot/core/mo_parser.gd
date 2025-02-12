@@ -1,5 +1,6 @@
-class_name MOParser
+@tool
 extends RefCounted
+class_name MOParser
 
 enum TokenType {
 	KEYWORD,
@@ -12,116 +13,78 @@ enum TokenType {
 	EOF
 }
 
-const KEYWORDS = [
+const KEYWORDS: Array[String] = [
 	"model", "end", "parameter", "equation", "der", "input", "output",
 	"flow", "stream", "connector", "package", "class", "type", "constant",
-	"discrete", "Real", "Integer", "Boolean", "String", "extends"
+	"discrete", "Real", "Integer", "Boolean", "String", "extends",
+	"block", "function", "record", "partial", "encapsulated", "within",
+	"import", "public", "protected", "external", "annotation"
 ]
 
-var _text: String
+var _text: String = ""
 var _pos: int = 0
 var _line: int = 1
 var _column: int = 1
 var _package_path: String = ""
-
-# Cache for parsed models to avoid re-parsing
 var _model_cache: Dictionary = {}
 
+func _init() -> void:
+	_reset()
+
+func _reset() -> void:
+	_text = ""
+	_pos = 0
+	_line = 1
+	_column = 1
+	_package_path = ""
+
 func parse_file(path: String) -> Dictionary:
-	_package_path = path.get_base_dir()
-	
-	# Check cache first
 	if _model_cache.has(path):
 		return _model_cache[path]
 		
 	print("Opening file: ", path)
-	var file = FileAccess.open(path, FileAccess.READ)
-	if file == null:
+	var file := FileAccess.open(path, FileAccess.READ)
+	if not file:
 		push_error("Could not open file: " + path)
 		return {}
 		
+	_package_path = path.get_base_dir()
 	_text = file.get_as_text()
-	_pos = 0
-	_line = 1
-	_column = 1
+	_reset()
 	
-	var model = parse_string(_text)
-	_model_cache[path] = model
+	var model := _parse_model()
+	if not model.is_empty():
+		_model_cache[path] = model
+		
 	return model
 
 func _parse_model() -> Dictionary:
-	var model = {
-		"type": "",  # model, connector, package, etc.
+	var model := {
+		"type": "",
 		"name": "",
 		"description": "",
-		"extends": [],
-		"imports": [],
-		"parameters": [],
-		"variables": [],
-		"equations": [],
+		"extends": [] as Array[String],
+		"imports": [] as Array[String],
+		"parameters": [] as Array[Dictionary],
+		"variables": [] as Array[Dictionary],
+		"equations": [] as Array[String],
 		"annotations": {},
-		"components": [],
-		"connectors": []
+		"components": [] as Array[Dictionary],
+		"connectors": [] as Array[Dictionary]
 	}
 	
-	print("Starting model parsing")
-	while _pos < _text.length():
-		var token = _next_token()
-		
-		match token.type:
-			TokenType.KEYWORD:
-				match token.value:
-					"model", "connector", "package", "class":
-						model.type = token.value
-						var name_token = _next_token()
-						if name_token.type == TokenType.IDENTIFIER:
-							model.name = name_token.value
-						print("Found model type: ", model.type, " name: ", model.name)
-					
-					"extends":
-						var base_token = _next_token()
-						if base_token.type == TokenType.IDENTIFIER:
-							model.extends.append(base_token.value)
-					
-					"import":
-						var import_path = _parse_import()
-						if import_path:
-							model.imports.append(import_path)
-					
-					"parameter":
-						var param = _parse_parameter()
-						model.parameters.append(param)
-					
-					"equation":
-						var eq = _parse_equation()
-						model.equations.append(eq)
-					
-					"end":
-						print("Found end of model")
-						break
+	# Basic parsing for now - just extract type and name
+	var lines := _text.split("\n")
+	for line in lines:
+		line = line.strip_edges()
+		if line.is_empty() or line.begins_with("//"):
+			continue
 			
-			TokenType.COMMENT:
-				if token.value.begins_with("\""):
-					# Description string
-					model.description = token.value.trim_prefix("\"").trim_suffix("\"")
-				elif token.value.begins_with("annotation"):
-					var annotation = _parse_annotation()
-					model.annotations.merge(annotation)
-			
-			TokenType.IDENTIFIER:
-				# This might be a component declaration
-				var component = _parse_component_declaration(token.value)
-				if component:
-					if component.is_connector:
-						model.connectors.append(component)
-					else:
-						model.components.append(component)
-			
-			TokenType.NEWLINE:
-				continue
-			
-			TokenType.EOF:
-				break
+		var words := line.split(" ", false)
+		if words.size() >= 2 and words[0] in KEYWORDS:
+			model.type = words[0]
+			model.name = words[1].strip_edges().split("(")[0]  # Remove any parameters
+			break
 	
 	return model
 
@@ -363,7 +326,7 @@ func _next_token() -> Dictionary:
 	if _pos >= _text.length():
 		return {"type": TokenType.EOF, "value": ""}
 	
-	var char = _text[_pos]
+	var char := _text[_pos] as String
 	
 	# Handle comments
 	if char == "/" and _pos + 1 < _text.length() and _text[_pos + 1] == "/":
@@ -403,7 +366,7 @@ func _skip_whitespace() -> void:
 		_column += 1
 
 func _read_line_comment() -> Dictionary:
-	var comment = ""
+	var comment := ""
 	_pos += 2  # Skip //
 	
 	while _pos < _text.length() and _text[_pos] != "\n":
@@ -413,26 +376,28 @@ func _read_line_comment() -> Dictionary:
 	return {"type": TokenType.COMMENT, "value": comment.strip_edges()}
 
 func _read_string() -> Dictionary:
-	var string = ""
+	var string := ""
 	_pos += 1  # Skip opening quote
 	
 	while _pos < _text.length() and _text[_pos] != "\"":
 		string += _text[_pos]
 		_pos += 1
 	
-	_pos += 1  # Skip closing quote
+	if _pos < _text.length():
+		_pos += 1  # Skip closing quote
+	
 	return {"type": TokenType.STRING, "value": string}
 
 func _read_number() -> Dictionary:
-	var number = ""
-	var has_decimal = false
+	var number := ""
+	var has_decimal := false
 	
 	if _text[_pos] == "-":
 		number += "-"
 		_pos += 1
 	
 	while _pos < _text.length():
-		var char = _text[_pos]
+		var char := _text[_pos] as String
 		if _is_digit(char):
 			number += char
 		elif char == "." and not has_decimal:
@@ -445,7 +410,7 @@ func _read_number() -> Dictionary:
 	return {"type": TokenType.NUMBER, "value": number}
 
 func _read_identifier() -> Dictionary:
-	var identifier = ""
+	var identifier := ""
 	
 	while _pos < _text.length() and (_is_letter(_text[_pos]) or _is_digit(_text[_pos]) or _text[_pos] == "_"):
 		identifier += _text[_pos]
