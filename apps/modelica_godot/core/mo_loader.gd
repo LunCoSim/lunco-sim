@@ -1,17 +1,78 @@
 @tool
 extends Node
-class_name MOLoader
+class_name ModelicaLoader
 
-var parser: MOParser
+var _parser: MOParser
 
-func _ready() -> void:
-	parser = MOParser.new()
+func _init():
+	_parser = MOParser.new()
+
+func load_model(path: String) -> ModelicaComponent:
+	print("Loading model from: ", path)
+	
+	# Parse the model file
+	var model_data = _parser.parse_file(path)
+	if model_data.is_empty():
+		push_error("Failed to parse model file: " + path)
+		return null
+	
+	# Create component from parsed data
+	var component = ModelicaComponent.new()
+	
+	# Set basic properties
+	component.component_name = model_data.get("name", "")
+	component.description = model_data.get("description", "")
+	
+	# Load parameters
+	for param in model_data.get("parameters", []):
+		var value = _parse_value(param.get("value", "0"))
+		component.add_parameter(param.get("name", ""), value)
+	
+	# Load variables
+	for var_data in model_data.get("variables", []):
+		if var_data.get("flow", false):
+			# Flow variables become connectors
+			var connector_name = var_data.get("name", "")
+			var connector_type = _get_connector_type(var_data.get("type", ""))
+			component.add_connector(connector_name, connector_type)
+		else:
+			# Regular variables
+			component.add_variable(var_data.get("name", ""))
+	
+	# Load equations
+	for eq in model_data.get("equations", []):
+		component.add_equation(eq)
+	
+	# Load annotations
+	component.annotations = model_data.get("annotations", {}).duplicate()
+	
+	return component
+
+func _parse_value(value_str: String) -> float:
+	if value_str.is_empty():
+		return 0.0
+	return float(value_str)
+
+func _get_connector_type(type_str: String) -> ModelicaConnector.Type:
+	match type_str.to_lower():
+		"mechanical":
+			return ModelicaConnector.Type.MECHANICAL
+		"electrical":
+			return ModelicaConnector.Type.ELECTRICAL
+		"thermal":
+			return ModelicaConnector.Type.THERMAL
+		"fluid":
+			return ModelicaConnector.Type.FLUID
+		"signal":
+			return ModelicaConnector.Type.SIGNAL
+		_:
+			return ModelicaConnector.Type.NONE
 
 # Load a Modelica component from MSL or a .mo file and create a node for it
 func load_component(component_path: String) -> Node:
 	print("Attempting to load Modelica component: ", component_path)
-	if not parser:
-		parser = MOParser.new()
+	if not _parser:
+		_parser = MOParser.new()
 	
 	var mo_path: String
 	if component_path.begins_with("Modelica."):
@@ -25,7 +86,7 @@ func load_component(component_path: String) -> Node:
 		push_error("Invalid Modelica file path: " + mo_path)
 		return null
 		
-	var model_data: Dictionary = parser.parse_file(mo_path)
+	var model_data: Dictionary = _parser.parse_file(mo_path)
 	if model_data.is_empty():
 		push_error("Failed to parse Modelica file: " + mo_path)
 		return null

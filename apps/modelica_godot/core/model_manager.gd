@@ -1,7 +1,7 @@
-extends Node
 class_name ModelManager
+extends Node
 
-signal models_loaded
+signal models_loaded_changed
 signal model_loaded(model_data: Dictionary)
 signal loading_progress(progress: float, message: String)
 
@@ -15,72 +15,102 @@ var time: float = 0.0
 var dt: float = 0.01  # Time step
 
 func _init() -> void:
-	print("DEBUG: ModelManager initializing")
 	_models = {}
 	_model_tree = {}
 	_parser = MOParser.new()
 	equation_system = EquationSystem.new()
 
 func _enter_tree() -> void:
-	print("DEBUG: ModelManager entering tree")
 	if not equation_system:
 		equation_system = EquationSystem.new()
 	if not equation_system.get_parent():
 		add_child(equation_system)
 
 func _ready() -> void:
-	print("DEBUG: ModelManager _ready")
-	
-	# Clear cache on startup for now
 	_clear_cache()
 	
 	# Get the absolute path to MSL directory
 	var project_root = ProjectSettings.globalize_path("res://")
 	var msl_path = project_root.path_join("apps/modelica_godot/MSL")
-	print("DEBUG: Project root: ", project_root)
-	print("DEBUG: MSL path: ", msl_path)
 	
-	# Start loading MSL
+	# Start loading MSL asynchronously
 	if DirAccess.dir_exists_absolute(msl_path):
-		print("DEBUG: MSL directory exists, starting load")
-		load_msl_directory(msl_path)
+		load_msl_directory.call_deferred(msl_path)
 	else:
 		push_error("MSL directory not found at: " + msl_path)
 		# Try relative path as fallback
 		msl_path = "res://apps/modelica_godot/MSL"
 		if DirAccess.dir_exists_absolute(msl_path):
-			print("DEBUG: Found MSL at relative path, starting load")
-			load_msl_directory(msl_path)
+			load_msl_directory.call_deferred(msl_path)
 		else:
 			push_error("MSL directory not found at relative path either: " + msl_path)
 
 func load_msl_directory(path: String) -> void:
-	print("DEBUG: Loading MSL directory: ", path)
-	var dir = DirAccess.open(path)
-	if not dir:
-		push_error("Failed to open directory: " + path)
+	print("Loading MSL directory: ", path)
+	
+	# Focus only on Modelica subdirectory
+	var modelica_path = path.path_join("Modelica")
+	if not DirAccess.dir_exists_absolute(modelica_path):
+		push_error("Modelica directory not found at: " + modelica_path)
+		return
+	
+	# Collect files first
+	emit_signal("loading_progress", 0.0, "Collecting files from Modelica directory...")
+	var files_to_process = await _collect_files(modelica_path)
+	if files_to_process.is_empty():
+		print("No files to process in: ", modelica_path)
 		return
 		
-	dir.list_dir_begin()
-	var file_name = dir.get_next()
+	print("Total files to process: ", files_to_process.size())
 	
-	while file_name != "":
-		var full_path = path.path_join(file_name)
+	# Process files in smaller chunks
+	const CHUNK_SIZE = 3
+	var total_files = files_to_process.size()
+	var processed = 0
+	var skipped = 0
+	var errors = []
+	
+	while processed + skipped < total_files:
+		var chunk_end = mini(processed + skipped + CHUNK_SIZE, total_files)
+		var chunk = files_to_process.slice(processed + skipped, chunk_end)
 		
-		if dir.current_is_dir() and not file_name.begins_with("."):
-			load_msl_directory(full_path)
-		elif file_name.ends_with(".mo"):
-			print("DEBUG: Loading Modelica file: ", full_path)
-			var model_data = _parser.parse_file(full_path)
-			if not model_data.is_empty():
-				_models[full_path] = model_data
-				emit_signal("model_loaded", model_data)
-				print("DEBUG: Loaded model: ", model_data.name)
-				
-		file_name = dir.get_next()
+		for file_path in chunk:
+			print("\nProcessing file ", processed + skipped + 1, " of ", total_files, ": ", file_path)
+			
+			var success = await _process_single_file(file_path, processed, total_files)
+			if success:
+				processed += 1
+				print("Successfully processed file ", processed, " of ", total_files)
+			else:
+				skipped += 1
+				errors.append(file_path)
+				print("Skipped file ", file_path, " (Total skipped: ", skipped, ")")
+			
+			# Update progress after each file
+			var progress = float(processed) / float(total_files - skipped)
+			var message = "Loading Modelica models... (%d processed, %d skipped, %d total)" % [processed, skipped, total_files]
+			emit_signal("loading_progress", progress, message)
+			
+			# Allow a frame to process
+			await get_tree().process_frame
+		
+		# Allow a longer pause between chunks
+		await get_tree().create_timer(0.1).timeout
 	
-	dir.list_dir_end()
-	emit_signal("models_loaded")
+	# Print summary
+	print("\nModel loading complete:")
+	print("- Total files: ", total_files)
+	print("- Processed: ", processed)
+	print("- Skipped: ", skipped)
+	print("- Models in tree: ", _models.size())
+	
+	if not errors.is_empty():
+		print("\nFiles with errors:")
+		for error_file in errors:
+			print("- ", error_file)
+	
+	_validate_loaded_models()
+	emit_signal("models_loaded_changed")
 
 func _clear_cache() -> void:
 	if FileAccess.file_exists(_cache_file):
@@ -117,19 +147,31 @@ func _find_mo_files(path: String, results: Array) -> void:
 		push_error("Failed to open directory: " + path)
 
 func _add_to_model_tree(path: String, model_data: Dictionary) -> void:
-	var parts = path.split("/MSL/")[1].split("/")
+	# Extract the relative path from MSL directory
+	var msl_index = path.find("/MSL/")
+	if msl_index == -1:
+		push_error("Invalid model path: " + path)
+		return
+		
+	var relative_path = path.substr(msl_index + 5)  # Skip "/MSL/"
+	var parts = relative_path.split("/")
 	var current = _model_tree
 	
+	# Build the tree structure
 	for i in range(parts.size() - 1):  # Skip the last part (filename)
 		var part = parts[i]
 		if not current.has(part):
-			current[part] = {}
-		current = current[part]
+			current[part] = {
+				"name": part,
+				"type": "package",
+				"children": {}
+			}
+		current = current.get(part).get("children")
 	
 	# Add model data to the tree
 	var filename = parts[-1].get_basename()
 	if filename == "package":
-		# For package.mo, add its contents at the current level
+		# For package.mo, merge with parent node
 		current.merge({
 			"description": model_data.get("description", ""),
 			"name": model_data.get("name", ""),
@@ -137,12 +179,13 @@ func _add_to_model_tree(path: String, model_data: Dictionary) -> void:
 			"type": model_data.get("type", "")
 		})
 	else:
-		# For other files, add them as leaf nodes
+		# For other files, add as a child
 		current[filename] = {
 			"description": model_data.get("description", ""),
-			"name": model_data.get("name", ""),
+			"name": model_data.get("name", filename),
 			"path": path,
-			"type": model_data.get("type", "")
+			"type": model_data.get("type", "unknown"),
+			"children": {}
 		}
 
 func _save_to_cache() -> void:
@@ -298,13 +341,101 @@ func _validate_loaded_models() -> void:
 	print("Model count: ", _models.size())
 	print("Model tree size: ", _model_tree.size())
 	
-	# Print Modelica package contents
-	if _model_tree.has("Modelica"):
-		print("Modelica package contents:")
-		for key in _model_tree["Modelica"].keys():
-			print("- " + key)
+	# Validate model tree structure
+	var has_modelica = _model_tree.has("Modelica")
+	print("Has Modelica package: ", has_modelica)
 	
-	print("DEBUG: Model validation:")
-	print("Total models loaded: ", _models.size())
-	print("Models by type: ", JSON.stringify(_model_tree, "  "))
-	print("Model tree structure: ", JSON.stringify(_model_tree, "  ")) 
+	if has_modelica:
+		var modelica = _model_tree["Modelica"]
+		print("Modelica package type: ", modelica.get("type", "unknown"))
+		print("Modelica subpackages: ", modelica.get("children", {}).keys())
+	
+	# Check for common packages
+	var packages = ["Blocks", "Electrical", "Mechanics", "Thermal"]
+	for pkg in packages:
+		var has_pkg = _model_tree.has("Modelica") and _model_tree["Modelica"].get("children", {}).has(pkg)
+		print("Has ", pkg, " package: ", has_pkg) 
+
+func _collect_files(path: String) -> Array:
+	var files_to_process = []
+	var subdirs_to_process = []
+	
+	var dir = DirAccess.open(path)
+	if not dir:
+		push_error("Failed to open directory: " + path)
+		return files_to_process
+	
+	dir.list_dir_begin()
+	var file_name = dir.get_next()
+	
+	while file_name != "":
+		var full_path = path.path_join(file_name)
+		
+		if dir.current_is_dir() and not file_name.begins_with("."):
+			if not file_name in ["Resources", ".CI", ".git", "Images"]:  # Skip non-model directories
+				subdirs_to_process.append(full_path)
+		elif file_name.ends_with(".mo"):
+			if not file_name in ["package.order"]:  # Skip non-model files
+				files_to_process.append(full_path)
+		
+		file_name = dir.get_next()
+	
+	dir.list_dir_end()
+	
+	# Process subdirectories recursively
+	for subdir in subdirs_to_process:
+		var subdir_files = await _collect_files(subdir)
+		files_to_process.append_array(subdir_files)
+	
+	return files_to_process
+
+func _process_single_file(file_path: String, processed: int, total_files: int) -> bool:
+	print("Starting to process file: ", file_path)
+	
+	# Skip if file doesn't exist
+	if not FileAccess.file_exists(file_path):
+		push_error("File not found: " + file_path)
+		return false
+	
+	# Add file size check
+	var file = FileAccess.open(file_path, FileAccess.READ)
+	if not file:
+		push_error("Failed to open file: " + file_path)
+		return false
+		
+	var file_size = file.get_length()
+	print("File size: ", file_size, " bytes")
+	
+	# Skip extremely large files
+	if file_size > 1 * 1024 * 1024:  # 1MB limit
+		push_error("File too large to process: " + file_path + " (" + str(file_size) + " bytes)")
+		return false
+	
+	# Allow a frame to process
+	await get_tree().process_frame
+	
+	print("Starting parse of file: ", file_path)
+	var parse_start_time = Time.get_unix_time_from_system()
+	
+	var model_data = _parser.parse_file(file_path)
+	
+	var parse_duration = Time.get_unix_time_from_system() - parse_start_time
+	print("Parse duration: ", parse_duration, " seconds")
+	
+	if parse_duration > 5.0:  # Log warning for slow parsing
+		push_warning("Slow file parsing: " + file_path + " took " + str(parse_duration) + " seconds")
+		return false  # Skip files that take too long to parse
+	
+	if model_data.is_empty():
+		push_error("Failed to parse file: " + file_path)
+		return false
+		
+	print("Adding to model tree: ", file_path)
+	_models[file_path] = model_data
+	_add_to_model_tree(file_path, model_data)
+	
+	# Emit signal with the model data
+	emit_signal("model_loaded", model_data)
+	
+	print("Successfully processed file: ", file_path)
+	return true 

@@ -9,6 +9,7 @@ var state_variables: Dictionary = {}  # Variables that have time derivatives
 var der_variables: Dictionary = {}    # Derivatives of state variables
 var equations: Array[String] = []
 var events: Array[Dictionary] = []    # Discrete events
+var annotations: Dictionary = {}      # Component annotations
 var is_valid: bool = false
 
 # Component metadata
@@ -133,55 +134,61 @@ func _evaluate_condition(condition: String) -> bool:
 	return false
 
 func _validate_component() -> void:
-	is_valid = true
+	print("Validating component: ", component_name)
 	
-	# Check that all referenced variables in equations exist
-	for equation in equations:
-		var vars = _extract_variables_from_equation(equation)
-		for var_name in vars:
-			if not _variable_exists(var_name):
-				is_valid = false
-				push_error("Variable %s referenced in equation but not defined" % var_name)
+	# Check required fields
+	if component_name.is_empty():
+		push_error("Component name is empty")
 	
-	# Check that all state variables have corresponding derivative equations
-	for state_var in state_variables:
-		var der_name = "der(" + state_var + ")"
-		if der_name not in der_variables:
-			is_valid = false
-			push_error("State variable %s has no derivative variable" % state_var)
+	# Validate parameters
+	for param_name in parameters:
+		var param = parameters[param_name]
+		if not param.has("value"):
+			push_error("Parameter missing value: " + param_name)
+	
+	# Validate variables
+	for var_name in variables:
+		var var_data = variables[var_name]
+		if not var_data.has("value"):
+			push_error("Variable missing value: " + var_name)
+	
+	# Validate state variables
+	for var_name in state_variables:
+		var var_data = state_variables[var_name]
+		if not var_data.has("value"):
+			push_error("State variable missing value: " + var_name)
+		if not der_variables.has("der(" + var_name + ")"):
+			push_warning("Missing derivative for state variable: " + var_name)
+	
+	# Validate equations
+	for eq in equations:
+		if eq.is_empty():
+			push_error("Empty equation found")
+		if not eq.contains("="):
+			push_error("Invalid equation format: " + eq)
 	
 	# Validate events
 	for event in events:
-		if not _validate_event(event):
-			is_valid = false
-
-func _extract_variables_from_equation(equation: String) -> Array[String]:
-	# Placeholder - would need proper equation parser
-	# Returns array of variable names referenced in equation
-	return []
-
-func _variable_exists(name: String) -> bool:
-	return (name in variables 
-			or name in state_variables 
-			or name in der_variables 
-			or name in parameters)
-
-func _validate_event(event: Dictionary) -> bool:
-	# Placeholder for event validation
-	# Would check that condition and action are valid expressions
-	return true
+		if not event.has("condition"):
+			push_error("Event missing condition")
+		if not event.has("action"):
+			push_error("Event missing action")
+	
+	print("Component validation complete: ", component_name)
 
 func to_dict() -> Dictionary:
 	return {
 		"name": component_name,
 		"description": description,
+		"type": "component",
 		"connectors": _serialize_connectors(),
 		"parameters": parameters,
 		"variables": variables,
 		"state_variables": state_variables,
 		"der_variables": der_variables,
 		"equations": equations,
-		"events": events
+		"events": events,
+		"annotations": annotations
 	}
 
 func from_dict(data: Dictionary) -> void:
@@ -192,26 +199,52 @@ func from_dict(data: Dictionary) -> void:
 	var connector_data = data.get("connectors", {})
 	for connector_name in connector_data:
 		var c_data = connector_data[connector_name]
-		add_connector(connector_name, c_data.type)
+		add_connector(connector_name, c_data.get("type", ModelicaConnector.Type.NONE))
 		var connector = connectors[connector_name]
-		for var_name in c_data.variables:
-			connector.variables[var_name] = c_data.variables[var_name]
+		connector.variables = c_data.get("variables", {}).duplicate()
+		connector.units = c_data.get("units", {}).duplicate()
 	
-	# Load parameters
-	parameters = data.get("parameters", {})
+	# Load parameters with validation
+	parameters = {}
+	for param_name in data.get("parameters", {}):
+		var param = data.get("parameters", {})[param_name]
+		if param is Dictionary and param.has("value"):
+			parameters[param_name] = param.duplicate()
 	
-	# Load variables
-	variables = data.get("variables", {})
+	# Load variables with validation
+	variables = {}
+	for var_name in data.get("variables", {}):
+		var var_data = data.get("variables", {})[var_name]
+		if var_data is Dictionary and var_data.has("value"):
+			variables[var_name] = var_data.duplicate()
 	
 	# Load state variables and their derivatives
-	state_variables = data.get("state_variables", {})
-	der_variables = data.get("der_variables", {})
+	state_variables = {}
+	for var_name in data.get("state_variables", {}):
+		var var_data = data.get("state_variables", {})[var_name]
+		if var_data is Dictionary and var_data.has("value"):
+			state_variables[var_name] = var_data.duplicate()
 	
-	# Load equations
-	equations = data.get("equations", [])
+	der_variables = {}
+	for var_name in data.get("der_variables", {}):
+		var var_data = data.get("der_variables", {})[var_name]
+		if var_data is Dictionary and var_data.has("value"):
+			der_variables[var_name] = var_data.duplicate()
 	
-	# Load events
-	events = data.get("events", [])
+	# Load equations with validation
+	equations = []
+	for eq in data.get("equations", []):
+		if eq is String and not eq.is_empty():
+			equations.append(eq)
+	
+	# Load events with validation
+	events = []
+	for event in data.get("events", []):
+		if event is Dictionary and event.has("condition"):
+			events.append(event.duplicate())
+	
+	# Load annotations
+	annotations = data.get("annotations", {}).duplicate()
 	
 	# Validate the loaded component
 	_validate_component()
@@ -222,8 +255,8 @@ func _serialize_connectors() -> Dictionary:
 		var connector = connectors[connector_name]
 		result[connector_name] = {
 			"type": connector.type,
-			"variables": connector.variables,
-			"units": connector.units
+			"variables": connector.variables.duplicate(),
+			"units": connector.units.duplicate()
 		}
 	return result
 

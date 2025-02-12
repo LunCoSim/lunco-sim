@@ -40,13 +40,17 @@ func initialize(manager: ModelManager) -> void:
 	model_manager = manager
 	
 	# Connect to model manager signals
-	model_manager.models_loaded.connect(_on_models_loaded)
-	model_manager.model_loaded.connect(_on_model_loaded)
-	model_manager.loading_progress.connect(_on_loading_progress)
+	if model_manager.has_signal("models_loaded_changed"):
+		model_manager.models_loaded_changed.connect(_on_models_loaded)
+	if model_manager.has_signal("model_loaded"):
+		model_manager.model_loaded.connect(_on_model_loaded)
+	if model_manager.has_signal("loading_progress"):
+		model_manager.loading_progress.connect(_on_loading_progress)
 	
 	# Update UI
-	status_label.text = "Ready"
-	progress_bar.hide()
+	status_label.text = "Initializing..."
+	progress_bar.show()
+	progress_bar.value = 0
 	
 	# Get the absolute path to MSL directory
 	var project_root = ProjectSettings.globalize_path("res://")
@@ -158,19 +162,17 @@ func _update_tree(filter: String = "") -> void:
 
 func _populate_tree(parent: TreeItem, data: Dictionary, filter: String) -> void:
 	print("ModelBrowser: Populating tree node: ", parent.get_text(0))
-	print("ModelBrowser: Data to populate: ", data.keys())
 	
 	# Sort keys to ensure consistent ordering
 	var keys = data.keys()
 	keys.sort()
 	
 	for key in keys:
-		if key in ["type", "name", "path", "description", "connectors", "parameters"]:
+		if key in ["type", "name", "path", "description"]:
 			continue  # Skip metadata keys
 			
 		var value = data[key]
 		if not value is Dictionary:
-			print("ModelBrowser: Skipping non-dictionary value for key: ", key)
 			continue
 			
 		var should_show = filter.is_empty() or key.to_lower().contains(filter)
@@ -180,19 +182,21 @@ func _populate_tree(parent: TreeItem, data: Dictionary, filter: String) -> void:
 		item.set_text(0, key)
 		item.set_metadata(0, value.get("path", ""))
 		
-		var type = value.get("type", "")
-		if type.is_empty() and value.has("path"):
-			# Try to infer type from path
+		# Get or infer type
+		var type = value.get("type", "unknown")
+		if type == "unknown":
+			# Try to infer type from path or structure
 			var path = value.get("path", "")
 			if path.ends_with("package.mo"):
 				type = "package"
-			else:
+			elif path.ends_with(".mo"):
 				type = "model"
 		
 		print("ModelBrowser: Added item: ", key, " of type: ", type)
 		
+		# Set icon based on type
 		match type:
-			"model", "block", "function", "record":
+			"model", "block":
 				item.set_icon(0, model_icon)
 			"connector":
 				item.set_icon(0, connector_icon)
@@ -225,22 +229,12 @@ func _format_model_details(model: Dictionary) -> String:
 	# Basic info
 	details += "Type: " + model.get("type", "unknown") + "\n"
 	details += "Name: " + model.get("name", "unnamed") + "\n"
+	details += "Path: " + model.get("path", "") + "\n\n"
 	
-	if not model.get("description", "").is_empty():
-		details += "\nDescription:\n" + model.description + "\n"
-	
-	# Parameters
-	var params = model.get("parameters", [])
-	if not params.is_empty():
-		details += "\nParameters:\n"
-		for param in params:
-			details += "- " + param.get("name", "unnamed") + ": " + str(param.get("value", 0.0)) + "\n"
-	
-	# Variables
-	var vars = model.get("variables", [])
-	if not vars.is_empty():
-		details += "\nVariables:\n"
-		for var_def in vars:
-			details += "- " + var_def.get("name", "unnamed") + ": " + var_def.get("type", "unknown") + "\n"
+	# Components and variables count
+	var components = model.get("components", [])
+	var variables = model.get("variables", [])
+	details += "Components: " + str(components.size()) + "\n"
+	details += "Variables: " + str(variables.size()) + "\n"
 	
 	return details 

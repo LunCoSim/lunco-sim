@@ -26,11 +26,14 @@ func _ready() -> void:
 	print("Main scene: Initializing model browser with model manager")
 	# Initialize model browser
 	model_browser.initialize(model_manager)
-	model_browser.model_selected.connect(_on_model_selected)
+	if model_browser.has_signal("model_selected"):
+		model_browser.model_selected.connect(_on_model_selected)
 	
 	# Connect GraphEdit signals
-	graph_edit.connection_request.connect(_on_connection_request)
-	graph_edit.disconnection_request.connect(_on_disconnection_request)
+	if graph_edit.has_signal("connection_request"):
+		graph_edit.connection_request.connect(_on_connection_request)
+	if graph_edit.has_signal("disconnection_request"):
+		graph_edit.disconnection_request.connect(_on_disconnection_request)
 	
 	# Set GraphEdit properties
 	graph_edit.snapping_enabled = true
@@ -38,8 +41,10 @@ func _ready() -> void:
 	graph_edit.show_grid = true
 	
 	# Connect to model manager signals
-	model_manager.models_loaded.connect(_on_models_loaded)
-	model_manager.loading_progress.connect(_on_loading_progress)
+	if model_manager.has_signal("models_loaded_changed"):
+		model_manager.models_loaded_changed.connect(_on_models_loaded)
+	if model_manager.has_signal("loading_progress"):
+		model_manager.loading_progress.connect(_on_loading_progress)
 
 	print("Main scene initialized successfully")
 
