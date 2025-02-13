@@ -29,6 +29,8 @@ func _init() -> void:
 	_parser = MOParser.new()
 	equation_system = EquationSystem.new()
 	_workspace_config = WorkspaceConfig.new()
+	_package_manager = PackageManager.new()
+	add_child(_package_manager)
 
 func _enter_tree() -> void:
 	if not equation_system:
@@ -40,10 +42,17 @@ func _ready() -> void:
 	if not _workspace_config:
 		push_error("WorkspaceConfig not initialized")
 		return
+	if not _package_manager:
+		push_error("PackageManager not initialized")
+		return
 
 func initialize() -> void:
 	if not _workspace_config:
 		_workspace_config = WorkspaceConfig.new()
+	
+	if not _package_manager:
+		_package_manager = PackageManager.new()
+		add_child(_package_manager)
 	
 	# Load initial models
 	load_models()

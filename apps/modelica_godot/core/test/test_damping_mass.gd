@@ -26,7 +26,15 @@ func _setup():
 	print("Setting up test environment...")
 	model_manager = ModelManager.new()
 	test_root.add_child(model_manager)
+	print("Initializing model manager...")
 	model_manager.initialize()
+	print("Model manager initialized")
+	
+	print("Checking package manager...")
+	if model_manager.has_package("Mechanical"):
+		print("Found Mechanical package")
+	else:
+		print("Warning: Mechanical package not found")
 	
 	parser = MOParser.new()
 	test_root.add_child(parser)
