@@ -402,8 +402,110 @@ func _parse_model_file(content: String, path: String) -> void:
 
 func _add_model_to_tree(model_data: Dictionary) -> void:
 	var path = model_data.get("path", "")
-	if path.is_empty():
-		push_error("Invalid model path")
-		return
+	var parts = path.split("/")
+	var current = _model_tree
 	
-	_add_to_model_tree(path, model_data)
+	# Process imports first
+	_process_imports(model_data)
+	
+	# Process inheritance
+	if not model_data.get("extends", []).is_empty():
+		_resolve_inheritance(model_data)
+	
+	# Build package hierarchy
+	for i in range(parts.size() - 1):
+		var part = parts[i]
+		if not current.has(part):
+			current[part] = {
+				"name": part,
+				"type": "package",
+				"children": {}
+			}
+		current = current.get(part).get("children")
+	
+	# Add model to tree
+	var name = parts[-1].get_basename()
+	if name == "package":
+		current.merge({
+			"description": model_data.get("description", ""),
+			"name": model_data.get("name", ""),
+			"path": path,
+			"type": model_data.get("type", "")
+		})
+	else:
+		current[name] = {
+			"description": model_data.get("description", ""),
+			"name": model_data.get("name", name),
+			"path": path,
+			"type": model_data.get("type", "unknown"),
+			"children": {},
+			"components": model_data.get("components", []),
+			"equations": model_data.get("equations", [])
+		}
+
+func _process_imports(model_data: Dictionary) -> void:
+	var current_package = _get_package_name(model_data)
+	
+	for import_info in model_data.get("imports", []):
+		_package_manager.add_import(
+			current_package,
+			import_info.get("name", ""),
+			import_info.get("alias", ""),
+			import_info.get("is_wildcard", false)
+		)
+
+func _get_package_name(model_data: Dictionary) -> String:
+	var within = model_data.get("within", "")
+	var name = model_data.get("name", "")
+	
+	if within.is_empty():
+		return name
+	return within + "." + name
+
+func _resolve_inheritance(model_data: Dictionary) -> void:
+	var resolved_components = []
+	var resolved_equations = []
+	var current_package = _get_package_name(model_data)
+	
+	# Process each extends clause
+	for extends_info in model_data.get("extends", []):
+		var base_class = extends_info.get("base_class", "")
+		var modifications = extends_info.get("modifications", {})
+		
+		# Resolve base class
+		var base_data = _package_manager.resolve_type(base_class, current_package)
+		if base_data.is_empty():
+			push_warning("Could not resolve base class: " + base_class)
+			continue
+		
+		# Apply modifications to inherited components
+		var modified_components = _apply_modifications(
+			base_data.get("components", []),
+			modifications
+		)
+		resolved_components.append_array(modified_components)
+		
+		# Add inherited equations
+		resolved_equations.append_array(base_data.get("equations", []))
+	
+	# Add inherited members before local ones
+	model_data.components = resolved_components + model_data.get("components", [])
+	model_data.equations = resolved_equations + model_data.get("equations", [])
+
+func _apply_modifications(components: Array, modifications: Dictionary) -> Array:
+	var result = []
+	
+	for comp in components:
+		var modified = comp.duplicate(true)
+		
+		# Apply modifications if they exist for this component
+		if modifications.has(modified.name):
+			var mod = modifications.get(modified.name)
+			modified.modifications.merge(mod)
+		
+		result.append(modified)
+	
+	return result
+
+func get_component_type(type_name: String, current_package: String) -> Dictionary:
+	return _package_manager.resolve_type(type_name, current_package)
