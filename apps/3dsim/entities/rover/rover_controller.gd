@@ -1,6 +1,6 @@
 @icon("res://controllers/rover/rover.svg")
 class_name LC3DSimRoverController
-extends Node3D
+extends LCController
 
 # Export categories for easy configuration in the editor
 @export_category("Rover Movement Parameters")
@@ -24,6 +24,7 @@ var motor_input := 0.0  # Range: -1.0 to 1.0
 var steering_input := 0.0  # Range: -1.0 to 1.0
 var brake_input := 0.0  # Range: 0.0 to 1.0
 var current_speed := 0.0
+var is_controlled := false
 
 # Signals for UI and effects
 signal motor_state_changed(power: float)
@@ -48,6 +49,9 @@ func _ready():
 		back_right_wheel = get_node_or_null("../Wheels/BackRightWheel")
 
 func _physics_process(delta: float):
+	if not is_multiplayer_authority():
+		return
+		
 	if not parent:
 		return
 		
@@ -110,4 +114,19 @@ func set_steering(value: float):
 	steering_input = clamp(value, -1.0, 1.0)
 
 func set_brake(value: float):
-	brake_input = clamp(value, 0.0, 1.0) 
+	brake_input = clamp(value, 0.0, 1.0)
+
+# Avatar control methods
+func take_control():
+	is_controlled = true
+	# Reset all inputs when taking control
+	motor_input = 0.0
+	steering_input = 0.0
+	brake_input = 0.0
+
+func release_control():
+	is_controlled = false
+	# Reset all inputs when releasing control
+	motor_input = 0.0
+	steering_input = 0.0
+	brake_input = 0.0 
