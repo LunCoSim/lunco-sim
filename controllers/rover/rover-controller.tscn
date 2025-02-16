@@ -1,6 +1,6 @@
-[gd_scene load_steps=2 format=3 uid="uid://b8r6g0vxuqn8k"]
+[gd_scene load_steps=2 format=3 uid="uid://cv88je1vydp2k"]
 
-[ext_resource type="Script" path="res://controllers/rover/rover-controller.gd" id="1_yvk4r"]
+[ext_resource type="Script" uid="uid://f0iojori2ghp" path="res://controllers/rover/rover-controller.gd" id="1_yvk4r"]
 
 [node name="RoverController" type="Node"]
-script = ExtResource("1_yvk4r") 
+script = ExtResource("1_yvk4r")

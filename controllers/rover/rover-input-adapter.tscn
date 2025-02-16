@@ -1,6 +1,6 @@
-[gd_scene load_steps=2 format=3 uid="uid://c6r2g0vxuqn8l"]
+[gd_scene load_steps=2 format=3 uid="uid://cst8vao42ka1m"]
 
-[ext_resource type="Script" path="res://controllers/rover/rover-input-adapter.gd" id="1_xvk4r"]
+[ext_resource type="Script" uid="uid://dviposkab7kji" path="res://controllers/rover/rover-input-adapter.gd" id="1_xvk4r"]
 
 [node name="RoverInputAdapter" type="Node"]
-script = ExtResource("1_xvk4r") 
+script = ExtResource("1_xvk4r")

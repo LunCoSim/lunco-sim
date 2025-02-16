@@ -1,0 +1,36 @@
+[gd_scene load_steps=4 format=3 uid="uid://b8r6g0vxuqn8l"]
+
+[ext_resource type="Script" path="res://core/entities/rigid-body.gd" id="1_yvk4r"]
+[ext_resource type="Script" path="res://controllers/rover/rover-controller.gd" id="2_xvk4r"]
+[ext_resource type="Script" path="res://controllers/rover/rover-input-adapter.gd" id="3_wvk4r"]
+
+[node name="Rover" type="RigidBody3D"]
+collision_layer = 1
+collision_mask = 1
+mass = 400.0
+script = ExtResource("1_yvk4r")
+
+[node name="RoverController" type="Node" parent="."]
+script = ExtResource("2_xvk4r")
+
+[node name="RoverInputAdapter" type="Node" parent="."]
+script = ExtResource("3_wvk4r")
+controller = NodePath("../RoverController")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="."]
+
+[node name="Wheels" type="Node3D" parent="."]
+
+[node name="FrontLeftWheel" type="Node3D" parent="Wheels"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1, 0, 1)
+
+[node name="FrontRightWheel" type="Node3D" parent="Wheels"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1, 0, 1)
+
+[node name="BackLeftWheel" type="Node3D" parent="Wheels"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1, 0, -1)
+
+[node name="BackRightWheel" type="Node3D" parent="Wheels"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1, 0, -1)
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="."] 
