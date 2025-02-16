@@ -6,13 +6,15 @@ enum Entities {
 	Operator,
 	Gobot,
 	Astronaut,
+	Rover,
 }
 
 var Paths = {
 	Entities.Spacecraft: "res://content/starship/starship.tscn",
 	Entities.Operator: "res://core/entities/operator.tscn",
 	Entities.Gobot: "res://content/gobot/gobot.tscn",
-	Entities.Astronaut: "res://content/animated-astronaut-character-in-space-suit-loop/astronaut.tscn"
+	Entities.Astronaut: "res://content/animated-astronaut-character-in-space-suit-loop/astronaut.tscn",
+	Entities.Rover: "res://apps/3dsim/entities/rover/rover.tscn",
 }
 
 var UIs = {
@@ -20,6 +22,7 @@ var UIs = {
 	Entities.Operator: "res://entities/operator/operator.tscn",
 	Entities.Gobot: "res://entities/gobot/gobot.tscn",
 	Entities.Astronaut: "res://entities/astronaut/astronaut.tscn",
+	Entities.Rover: "res://apps/3dsim/entities/rover/rover.tscn",
 }
 
 var InputAdapters = {
@@ -27,8 +30,8 @@ var InputAdapters = {
 	Entities.Operator: "res://entities/operator/operator.tscn",
 	Entities.Gobot: "res://entities/gobot/gobot.tscn",
 	Entities.Astronaut: "res://entities/astronaut/astronaut.tscn",
+	Entities.Rover: "res://apps/3dsim/entities/rover/rover.tscn",
 }
-
 
 var Caches: = {
 	
