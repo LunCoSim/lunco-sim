@@ -1,4 +1,4 @@
-extends GDScript
+extends SceneTree
 
 class_name TestComponent
 

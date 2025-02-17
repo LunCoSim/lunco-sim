@@ -12,7 +12,7 @@ var initial_conditions: Array[Dictionary] = []
 
 # Solver settings
 const MAX_ITERATIONS = 50
-const TOLERANCE = 1e-6
+const TOLERANCE = 1e-8  # Increased precision
 class EquationToken:
 	var type: String
 	var value: String
@@ -58,7 +58,7 @@ class ASTNode:
 
 const TOKEN_TYPES = {
 	"NUMBER": "\\d+(\\.\\d+)?",
-	"OPERATOR": "[+\\-*/]",
+	"OPERATOR": "[+\\-*/^]",
 	"LPAREN": "\\(",
 	"RPAREN": "\\)",
 	"IDENTIFIER": "[a-zA-Z_][a-zA-Z0-9_]*",
@@ -117,8 +117,50 @@ func add_component(component: ModelicaComponent) -> void:
 	if not components.has(component):
 		components.append(component)
 
+# RK4 integration helper function
+func _rk4_step(current_state: Dictionary, current_derivatives: Dictionary) -> Dictionary:
+	var k1 = current_derivatives.duplicate()
+	var k2_state = current_state.duplicate()
+	var k3_state = current_state.duplicate()
+	var k4_state = current_state.duplicate()
+	
+	# Calculate k1 (already done)
+	
+	# Calculate k2 (midpoint)
+	for var_name in k1:
+		k2_state[var_name] = current_state[var_name] + 0.5 * dt * k1[var_name]
+	var k2 = _evaluate_derivatives(k2_state)
+	
+	# Calculate k3 (midpoint)
+	for var_name in k2:
+		k3_state[var_name] = current_state[var_name] + 0.5 * dt * k2[var_name]
+	var k3 = _evaluate_derivatives(k3_state)
+	
+	# Calculate k4 (endpoint)
+	for var_name in k3:
+		k4_state[var_name] = current_state[var_name] + dt * k3[var_name]
+	var k4 = _evaluate_derivatives(k4_state)
+	
+	# Combine all steps
+	var next_state = current_state.duplicate()
+	for var_name in current_derivatives:
+		next_state[var_name] = current_state[var_name] + (dt / 6.0) * (
+			k1[var_name] + 2 * k2[var_name] + 2 * k3[var_name] + k4[var_name]
+		)
+	
+	return next_state
+
+func _evaluate_derivatives(state: Dictionary) -> Dictionary:
+	var new_derivatives = {}
+	for eq in equations:
+		if eq.is_differential:
+			var rhs_value = _evaluate_expression(eq.right, eq.component, state)
+			var der_var = _extract_der_variable(eq.left if eq.left.begins_with("der(") else eq.right)
+			new_derivatives[der_var] = rhs_value
+	return new_derivatives
+
 func solve_step() -> void:
-	# Solve one time step using explicit Euler method
+	# Solve one time step using RK4 method
 	# 1. Store current state
 	var current_state = variables.duplicate()
 	var current_derivatives = derivatives.duplicate()
@@ -169,42 +211,42 @@ func solve_step() -> void:
 	if not converged:
 		push_warning("Solver did not converge in " + str(MAX_ITERATIONS) + " iterations")
 	
-	# 3. Update state using explicit Euler integration
-	var next_state = current_state.duplicate()
+	# 3. Update state using RK4 integration
+	var next_state = _rk4_step(current_state, current_derivatives)
 	
-	# First update velocities using accelerations
-	for var_name in current_derivatives:
-		if var_name.ends_with("velocity"):
-			next_state[var_name] = current_state[var_name] + dt * current_derivatives[var_name]
-			
-			# Update component state immediately
-			var parts = var_name.split(".")
-			if parts.size() == 2:
-				var comp_name = parts[0]
-				var var_name_only = parts[1]
-				for comp in components:
-					if comp.component_name == comp_name:
-						comp.set_variable(var_name_only, next_state[var_name])
-						break
-	
-	# Then update positions using velocities
-	for var_name in current_derivatives:
-		if var_name.ends_with("position"):
-			next_state[var_name] = current_state[var_name] + dt * current_derivatives[var_name]
-			
-			# Update component state immediately
-			var parts = var_name.split(".")
-			if parts.size() == 2:
-				var comp_name = parts[0]
-				var var_name_only = parts[1]
-				for comp in components:
-					if comp.component_name == comp_name:
-						comp.set_variable(var_name_only, next_state[var_name])
-						break
+	# Update component states
+	for var_name in next_state:
+		var parts = var_name.split(".")
+		if parts.size() == 2:
+			var comp_name = parts[0]
+			var var_name_only = parts[1]
+			for comp in components:
+				if comp.component_name == comp_name:
+					comp.set_variable(var_name_only, next_state[var_name])
+					break
 	
 	# 4. Update system state
 	variables = next_state
 	derivatives = current_derivatives
+	
+	# 5. Solve algebraic equations one more time to ensure consistency
+	var final_values = {}
+	for eq in equations:
+		if not eq.is_differential:
+			var rhs_value = _evaluate_expression(eq.right, eq.component, variables)
+			var lhs_var = eq.left
+			final_values[lhs_var] = rhs_value
+			
+			# Update both system and component state
+			variables[lhs_var] = rhs_value
+			var parts = lhs_var.split(".")
+			if parts.size() == 2:
+				var comp_name = parts[0]
+				var var_name_only = parts[1]
+				for comp in components:
+					if comp.component_name == comp_name:
+						comp.set_variable(var_name_only, rhs_value)
+						break
 	
 	time += dt
 
@@ -383,12 +425,35 @@ func get_operator_precedence(op: String) -> int:
 	match op:
 		"+", "-": return 1
 		"*", "/": return 2
+		"^": return 3
 	return 0
+
+func _evaluate_expression(expression: String, component: ModelicaComponent, state: Dictionary) -> float:
+	print("Evaluating expression: " + expression)
+	var tokens = tokenize(expression)
+	print("Tokens: " + str(tokens))
+	var ast_dict = parse_expression(tokens)
+	print("AST: " + str(ast_dict))
+	
+	# The AST node is already an ASTNode object, no need to convert
+	return evaluate_ast(ast_dict.node, component, state)
 
 func evaluate_ast(node: ASTNode, component: ModelicaComponent, state: Dictionary) -> float:
 	match node.type:
 		"NUMBER":
 			return float(node.value)
+		"VARIABLE":
+			var parts = node.value.split(".")
+			if parts.size() == 2:
+				var comp_name = parts[0]
+				var var_name = parts[1]
+				if comp_name == component.component_name:
+					return component.get_variable(var_name)
+				else:
+					for comp in components:
+						if comp.component_name == comp_name:
+							return comp.get_variable(var_name)
+			return state[node.value]
 		"BINARY_OP":
 			var left_val = evaluate_ast(node.left, component, state)
 			var right_val = evaluate_ast(node.right, component, state)
@@ -396,85 +461,39 @@ func evaluate_ast(node: ASTNode, component: ModelicaComponent, state: Dictionary
 				"+": return left_val + right_val
 				"-": return left_val - right_val
 				"*": return left_val * right_val
-				"/":
-					if abs(right_val) > 1e-10:
-						return left_val / right_val
-					else:
-						push_error("Division by zero")
-						return 0.0
+				"/": return left_val / right_val
+				"^": return pow(left_val, right_val)
+			push_error("Unknown operator: " + node.value)
+			return 0.0
 		"UNARY_OP":
-			var val = evaluate_ast(node.operand, component, state)
+			var operand_val = evaluate_ast(node.operand, component, state)
 			match node.value:
-				"-": return -val
-				"+": return val
-		"VARIABLE":
-			if node.value.contains("."):
-				# Handle dotted identifiers (e.g., spring.length)
-				var parts = node.value.split(".")
-				var comp_name = parts[0]
-				var var_name = parts[1]
-				
-				# First try state dictionary
-				var full_name = node.value
-				if full_name in state:
-					return state[full_name]
-				
-				# Then try component
-				for comp in components:
-					if comp.component_name == comp_name:
-						if var_name in comp.parameters:
-							return comp.get_parameter(var_name)
-						else:
-							return comp.get_variable(var_name)
-				
-				return 0.0
-			else:
-				# Handle simple variables
-				if component != null:
-					var full_name = component.component_name + "." + node.value
-					if full_name in state:
-						return state[full_name]
-					elif node.value in component.parameters:
-						return component.get_parameter(node.value)
-					elif node.value in component.variables:
-						return component.get_variable(node.value)
-				return state.get(node.value, 0.0)
+				"-": return -operand_val
+				"+": return operand_val
+			push_error("Unknown unary operator: " + node.value)
+			return 0.0
 		"FUNCTION_CALL":
-			if node.value == "der":
-				if node.arguments.size() == 1:
-					# Get the full variable name (e.g., "mass.position")
-					var arg = node.arguments[0]
-					var var_name = ""
-					if arg.type == "VARIABLE":
-						var_name = arg.value
-						# If the variable doesn't have a component prefix, add it
-						if not var_name.contains(".") and component != null:
-							var_name = component.component_name + "." + var_name
-					else:
-						push_error("Invalid argument type for der() function")
+			var args = []
+			for arg in node.arguments:
+				args.append(evaluate_ast(arg, component, state))
+			match node.value:
+				"sin": return sin(args[0])
+				"cos": return cos(args[0])
+				"sqrt": return sqrt(args[0])
+				"abs": return abs(args[0])
+				"exp": return exp(args[0])
+				"log": 
+					if args[0] <= 0:
+						push_error("Invalid argument for log: " + str(args[0]))
 						return 0.0
-					return derivatives.get(var_name, 0.0)
+					return log(args[0])
+				"der":
+					var var_name = args[0]
+					return derivatives[var_name]
+			push_error("Unknown function: " + node.value)
+			return 0.0
 	push_error("Invalid AST node type: " + node.type)
 	return 0.0
-
-func _evaluate_expression(expr: String, component: ModelicaComponent, state: Dictionary) -> float:
-	print("Evaluating expression: ", expr)
-	var tokens = tokenize(expr)
-	print("Tokens: ", tokens)
-	
-	if tokens.is_empty():
-		push_error("Failed to tokenize expression: " + expr)
-		return 0.0
-	
-	var parse_result = parse_expression(tokens)
-	if not parse_result or parse_result.next_pos != tokens.size():
-		push_error("Failed to parse expression: " + expr)
-		return 0.0
-	
-	var ast = parse_result.node
-	print("AST: ", ast)
-	
-	return evaluate_ast(ast, component, state)
 
 func _extract_der_variable(expr: String) -> String:
 	# Extract variable name from der() expression
