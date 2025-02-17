@@ -146,13 +146,17 @@ func parse_definition() -> Dictionary:
 			if not equation.is_empty():
 				result.equations.append(equation)
 				print("Found equation: ", equation)
-			_skip_until_semicolon()
+			_skip_whitespace_and_comments()
+			if _peek() == ";":
+				_next()  # Skip semicolon
 		elif in_initial_equation_section:
 			var equation = _parse_equation()
 			if not equation.is_empty():
 				result.initial_equations.append(equation)
 				print("Found initial equation: ", equation)
-			_skip_until_semicolon()
+			_skip_whitespace_and_comments()
+			if _peek() == ";":
+				_next()  # Skip semicolon
 		else:
 			var component = _parse_component()
 			if not component.is_empty():
