@@ -95,8 +95,11 @@ func parse_definition() -> Dictionary:
 		if _pos >= _len:
 			break
 			
+		print("Current position: ", _pos, ", Current char: '", _peek(), "'")
+		
 		# Check for end of definition
 		if _match_keyword("end"):
+			print("Found 'end' keyword")
 			# Parse the end name if present
 			_skip_whitespace_and_comments()
 			var end_name = _parse_identifier()
@@ -126,8 +129,11 @@ func parse_definition() -> Dictionary:
 				if _pos >= _len:
 					break
 					
+				print("Initial equation - Current position: ", _pos, ", Current char: '", _peek(), "'")
+				
 				# Check for end of equation section
 				if _match_keyword("equation") or _match_keyword("end") or _match_keyword("annotation"):
+					print("Found end of initial equation section")
 					break
 					
 				var equation = _parse_equation()
@@ -144,8 +150,11 @@ func parse_definition() -> Dictionary:
 				if _pos >= _len:
 					break
 					
+				print("Equation - Current position: ", _pos, ", Current char: '", _peek(), "'")
+				
 				# Check for end of equation section
 				if _match_keyword("end") or _match_keyword("annotation"):
+					print("Found end of equation section")
 					break
 				
 				var equation = _parse_equation()
@@ -253,37 +262,54 @@ func _parse_equation() -> String:
 	var equation = ""
 	var parentheses_count = 0
 	
+	print("Parsing equation at position: ", _pos, ", Current char: '", _peek(), "'")
+	
 	# Check for annotation
 	if _match_keyword("annotation"):
 		print("Found equation annotation")
 		var annotation = _parse_model_annotation()
 		return "annotation" + annotation.get("content", "")
 	
+	# Handle empty lines or end of section
+	if _peek() == ";" or _match_keyword("end") or _match_keyword("annotation"):
+		print("Found end of equation or empty line")
+		return ""
+	
 	while _pos < _len:
 		var c = _peek()
+		print("Equation char: '", c, "', Parentheses count: ", parentheses_count)
 		
 		# Handle parentheses counting
 		if c == "(":
 			parentheses_count += 1
+			equation += _next()
+			continue
 		elif c == ")":
 			parentheses_count -= 1
+			equation += _next()
+			continue
 		
 		# Break on semicolon if not inside parentheses
 		if c == ";" and parentheses_count == 0:
 			_next()  # Skip semicolon
+			print("Found end of equation with semicolon")
 			break
 		
-		# Check for annotation after equation
+		# Break on end or annotation if not inside parentheses
 		if parentheses_count == 0 and c.strip_edges().is_empty():
 			var save_pos = _pos
 			_skip_whitespace_and_comments()
-			if _match_keyword("annotation"):
+			if _match_keyword("end") or _match_keyword("annotation"):
+				_pos = save_pos
+				print("Found end or annotation after equation")
 				break
 			_pos = save_pos
 		
 		equation += _next()
 	
-	return equation.strip_edges()
+	var result = equation.strip_edges()
+	print("Parsed equation: ", result)
+	return result
 
 func _parse_definition_type() -> String:
 	_skip_whitespace_and_comments()
@@ -406,10 +432,24 @@ func _skip_whitespace_and_comments() -> void:
 		break
 
 func _skip_until_semicolon() -> void:
-	while _pos < _len and _peek() != ";":
-		_next()
-	if _pos < _len:
-		_next()  # Skip semicolon
+	print("Skipping until semicolon from position: ", _pos)
+	
+	# If we're already at a semicolon, just skip it and return
+	if _peek() == ";":
+		_next()  # Skip the semicolon
+		print("Already at semicolon, skipped it")
+		return
+	
+	# Otherwise, search for the next semicolon
+	while _pos < _len:
+		var c = _peek()
+		if c == ";":
+			_next()  # Skip the semicolon
+			print("Found semicolon at position: ", _pos)
+			return
+		_next()  # Skip current character
+	
+	print("Reached end of text without finding semicolon")
 
 func _match_keyword(keyword: String) -> bool:
 	_skip_whitespace_and_comments()
@@ -438,6 +478,7 @@ func _next() -> String:
 		return ""
 	var c = _text[_pos]
 	_pos += 1
+	print("Moving from position ", _pos - 1, " to ", _pos, ", char: '", c, "'")
 	return c
 
 func _parse_model_annotation() -> Dictionary:
