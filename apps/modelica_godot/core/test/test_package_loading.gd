@@ -1,5 +1,6 @@
 extends SceneTree
 
+const PackageManager = preload("res://apps/modelica_godot/core/package_manager.gd")
 var package_manager: PackageManager
 
 func _init():

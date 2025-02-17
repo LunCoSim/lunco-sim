@@ -11,6 +11,59 @@ const KEYWORDS = ["model", "connector", "package", "class", "record", "block",
 				 "type", "function", "extends", "parameter", "constant", "input", 
 				 "output", "flow", "stream", "equation"]
 
+# Add new constants for syntax rules
+const MODELICA_KEYWORDS = {
+	"algorithm": true, "and": true, "annotation": true, "block": true,
+	"break": true, "class": true, "connect": true, "connector": true,
+	"constant": true, "constrainedby": true, "der": true, "discrete": true,
+	"each": true, "else": true, "elseif": true, "elsewhen": true,
+	"encapsulated": true, "end": true, "enumeration": true, "equation": true,
+	"expandable": true, "extends": true, "external": true, "false": true,
+	"final": true, "flow": true, "for": true, "function": true,
+	"if": true, "import": true, "in": true, "initial": true,
+	"inner": true, "input": true, "loop": true, "model": true,
+	"not": true, "operator": true, "or": true, "outer": true,
+	"output": true, "package": true, "parameter": true, "partial": true,
+	"protected": true, "public": true, "record": true, "redeclare": true,
+	"replaceable": true, "return": true, "stream": true, "then": true,
+	"true": true, "type": true, "when": true, "while": true,
+	"within": true
+}
+
+const MODELICA_FUNCTIONS = {
+	"der": true,
+	"sin": true,
+	"cos": true,
+	"tan": true,
+	"asin": true,
+	"acos": true,
+	"atan": true,
+	"atan2": true,
+	"sinh": true,
+	"cosh": true,
+	"tanh": true,
+	"exp": true,
+	"log": true,
+	"log10": true,
+	"sqrt": true,
+	"abs": true,
+	"sign": true,
+	"max": true,
+	"min": true,
+	"integer": true,
+	"floor": true,
+	"ceil": true,
+	"pre": true,
+	"edge": true,
+	"change": true,
+	"sample": true,
+	"initial": true,
+	"terminal": true,
+	"noEvent": true,
+	"smooth": true,
+	"delay": true
+}
+
 func parse_file(file_path: String) -> Dictionary:
 	print("\n=== Parsing Modelica File ===")
 	print("File: ", file_path)
@@ -291,27 +344,20 @@ func _parse_component() -> Dictionary:
 
 func _parse_equation() -> String:
 	_skip_whitespace_and_comments()
-	var equation = ""
-	var parentheses_count = 0
 	
+	if _pos >= _len:
+		return ""
+		
 	print("Parsing equation at position: ", _pos, ", Current char: '", _peek(), "'")
 	
-	# Check for annotation
-	if _match_keyword("annotation"):
-		print("Found equation annotation")
-		var annotation = _parse_model_annotation()
-		return "annotation" + annotation.get("content", "")
-	
-	# Handle empty lines or end of section
-	if _peek() == ";" or _match_keyword("end") or _match_keyword("annotation"):
-		print("Found end of equation or empty line")
-		return ""
+	var equation = ""
+	var parentheses_count = 0
+	var bracket_count = 0
 	
 	while _pos < _len:
 		var c = _peek()
-		print("Equation char: '", c, "', Parentheses count: ", parentheses_count)
 		
-		# Handle parentheses counting
+		# Handle parentheses and brackets
 		if c == "(":
 			parentheses_count += 1
 			equation += _next()
@@ -320,59 +366,96 @@ func _parse_equation() -> String:
 			parentheses_count -= 1
 			equation += _next()
 			continue
-		
-		# Break on semicolon if not inside parentheses
-		if c == ";" and parentheses_count == 0:
+		elif c == "[":
+			bracket_count += 1
+			equation += _next()
+			continue
+		elif c == "]":
+			bracket_count -= 1
+			equation += _next()
+			continue
+			
+		# Break on semicolon if not inside any grouping
+		if c == ";" and parentheses_count == 0 and bracket_count == 0:
 			_next()  # Skip semicolon
 			print("Found end of equation with semicolon")
 			break
-		
-		# Break on end or annotation if not inside parentheses
-		if parentheses_count == 0 and c.strip_edges().is_empty():
+			
+		# Handle string literals
+		if c == "\"":
+			equation += _parse_string()
+			continue
+			
+		# Handle operators
+		if c in ["+", "-", "*", "/", "^", "=", "<", ">", ".", ","]:
+			equation += _next()
+			continue
+			
+		# Handle identifiers and numbers
+		if _is_letter(c) or _is_digit(c) or c == "_":
 			var save_pos = _pos
-			_skip_whitespace_and_comments()
-			if _match_keyword("end") or _match_keyword("annotation"):
-				_pos = save_pos
-				print("Found end or annotation after equation")
-				break
+			var word = _peek_word()
+			
+			# Check if it's a built-in function
+			if MODELICA_FUNCTIONS.has(word):
+				equation += word
+				_advance(word.length())
+				continue
+				
+			# Otherwise try to parse as a value
 			_pos = save_pos
-		
-		equation += _next()
+			var value = _parse_value()
+			if not value.is_empty():
+				equation += value
+				continue
+			
+		# Skip whitespace
+		if _is_whitespace(c):
+			_next()
+			continue
+			
+		# If we get here, we have an invalid character
+		push_error("Invalid character in equation: " + c)
+		break
 	
 	var result = equation.strip_edges()
-	print("Parsed equation: ", result)
+	if not result.is_empty():
+		print("Parsed equation: ", result)
 	return result
 
 func _parse_definition_type() -> String:
 	_skip_whitespace_and_comments()
-	for keyword in KEYWORDS:
-		if _match_keyword(keyword):
-			return keyword
+	var word = _peek_word()
+	
+	if word in ["model", "connector", "package", "class", "record", "block", "type", "function"]:
+		_advance(word.length())
+		return word
 	return ""
 
 func _parse_identifier() -> String:
 	_skip_whitespace_and_comments()
-	var identifier = ""
+	var id = ""
 	
-	if _pos >= _len:
-		return ""
-	
-	# First character must be a letter
+	# First character must be a letter or underscore
 	var first = _peek()
-	if not first.is_valid_identifier():
+	if not (_is_letter(first) or first == "_"):
 		return ""
-	
-	identifier += _next()
+		
+	id += _next()
 	
 	# Rest can be letters, digits or underscore
 	while _pos < _len:
 		var c = _peek()
-		if c.is_valid_identifier() or c == "_" or c.is_valid_int():
-			identifier += _next()
+		if _is_letter(c) or _is_digit(c) or c == "_":
+			id += _next()
 		else:
 			break
-	
-	return identifier
+			
+	# Check if it's not a keyword
+	if _is_keyword(id):
+		return ""
+		
+	return id
 
 func _parse_string() -> String:
 	_skip_whitespace_and_comments()
@@ -421,46 +504,112 @@ func _parse_modifications() -> Dictionary:
 
 func _parse_value() -> String:
 	_skip_whitespace_and_comments()
+	
+	# Handle string literal
+	if _peek() == "\"":
+		return _parse_string()
+		
+	# Handle array constructor
+	if _peek() == "{":
+		return _parse_array()
+		
+	# Handle numeric literal or identifier
 	var value = ""
+	var has_digit = false
+	var has_decimal = false
+	var has_exponent = false
+	
+	# Handle sign
+	if _peek() in ["+", "-"]:
+		value += _next()
 	
 	while _pos < _len:
 		var c = _peek()
-		if c in [",", ")", ";"]:
+		
+		# Break on delimiters
+		if c in [",", ")", ";", " ", "\t", "\n"]:
 			break
-		value += _next()
+			
+		# Handle digits
+		if c.is_valid_int():
+			has_digit = true
+			value += _next()
+			continue
+			
+		# Handle decimal point
+		if c == "." and not has_decimal and not has_exponent:
+			has_decimal = true
+			value += _next()
+			continue
+			
+		# Handle exponent
+		if (c == "e" or c == "E") and has_digit and not has_exponent:
+			has_exponent = true
+			value += _next()
+			# Handle exponent sign
+			if _peek() in ["+", "-"]:
+				value += _next()
+			continue
+			
+		# If not a valid numeric character, try parsing as identifier
+		if not has_digit:
+			return _parse_identifier()
+			
+		# Invalid character in number
+		break
 	
 	return value.strip_edges()
+
+func _parse_array() -> String:
+	var array = "{"
+	_next()  # Skip opening brace
+	
+	while _pos < _len:
+		_skip_whitespace_and_comments()
+		
+		if _peek() == "}":
+			array += "}"
+			_next()
+			break
+			
+		var value = _parse_value()
+		if not value.is_empty():
+			array += value
+			
+		_skip_whitespace_and_comments()
+		if _peek() == ",":
+			array += ","
+			_next()
+			
+	return array
 
 func _skip_whitespace_and_comments() -> void:
 	while _pos < _len:
 		var c = _peek()
 		
 		# Skip whitespace
-		if c.strip_edges().is_empty():
+		if _is_whitespace(c):
 			_next()
 			continue
-		
-		# Skip single-line comments
+			
+		# Skip single-line comment
 		if c == "/" and _peek(1) == "/":
 			while _pos < _len and _peek() != "\n":
 				_next()
-			if _pos < _len:
-				_next()  # Skip the newline
 			continue
-		
-		# Skip multi-line comments
-		if c == "/" and _peek(1) == "*":
-			_next()  # Skip /
-			_next()  # Skip *
 			
+		# Skip multi-line comment
+		if c == "/" and _peek(1) == "*":
+			_next() # Skip /
+			_next() # Skip *
 			while _pos < _len:
 				if _peek() == "*" and _peek(1) == "/":
-					_next()  # Skip *
-					_next()  # Skip /
+					_next() # Skip *
+					_next() # Skip /
 					break
 				_next()
 			continue
-		
+			
 		break
 
 func _skip_until_semicolon() -> void:
@@ -510,7 +659,6 @@ func _next() -> String:
 		return ""
 	var c = _text[_pos]
 	_pos += 1
-	print("Moving from position ", _pos - 1, " to ", _pos, ", char: '", c, "'")
 	return c
 
 func _parse_model_annotation() -> Dictionary:
@@ -546,11 +694,16 @@ func _parse_model_annotation() -> Dictionary:
 	return annotation
 
 func _peek_word() -> String:
-	var start = _pos
+	var save_pos = _pos
 	var word = ""
-	while start < _len and _text[start].is_valid_identifier():
-		word += _text[start]
-		start += 1
+	
+	while _pos < _len:
+		var c = _peek()
+		if not (_is_letter(c) or _is_digit(c) or c == "_"):
+			break
+		word += _next()
+	
+	_pos = save_pos
 	return word
 
 func _advance(length: int) -> void:
@@ -587,3 +740,35 @@ func _parse_annotation() -> Dictionary:
 		annotation["content"] = content
 	
 	return annotation
+
+func _is_keyword(word: String) -> bool:
+	return MODELICA_KEYWORDS.has(word.to_lower())
+
+func _is_valid_modelica_identifier(id: String) -> bool:
+	if id.is_empty():
+		return false
+		
+	# First character must be a letter or underscore
+	var first = id[0]
+	if not (first.is_valid_identifier() and (first.is_letter() or first == "_")):
+		return false
+		
+	# Remaining characters must be letters, digits, or underscore
+	for i in range(1, id.length()):
+		var c = id[i]
+		if not (c.is_valid_identifier() and (c.is_letter() or c.is_digit() or c == "_")):
+			return false
+			
+	# Check if it's not a keyword
+	return not _is_keyword(id)
+
+func _is_whitespace(c: String) -> bool:
+	return c == " " or c == "\t" or c == "\n" or c == "\r"
+
+func _is_letter(c: String) -> bool:
+	var code = c.unicode_at(0)
+	return (code >= 65 and code <= 90) or (code >= 97 and code <= 122)  # A-Z or a-z
+
+func _is_digit(c: String) -> bool:
+	var code = c.unicode_at(0)
+	return code >= 48 and code <= 57  # 0-9
