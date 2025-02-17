@@ -12,6 +12,9 @@ const KEYWORDS = ["model", "connector", "package", "class", "record", "block",
 				 "output", "flow", "stream", "equation"]
 
 func parse_file(file_path: String) -> Dictionary:
+	print("\n=== Parsing Modelica File ===")
+	print("File: ", file_path)
+	
 	var file = FileAccess.open(file_path, FileAccess.READ)
 	if not file:
 		push_error("Failed to open file: " + file_path)
@@ -24,12 +27,14 @@ func parse_file(file_path: String) -> Dictionary:
 	return parse_definition()
 
 func parse_text(text: String) -> Dictionary:
+	print("\n=== Parsing Modelica Text ===")
 	_text = text
 	_pos = 0
 	_len = text.length()
 	return parse_definition()
 
 func parse_definition() -> Dictionary:
+	print("\nParsing definition...")
 	var result = {
 		"type": "",           # model, connector, package, etc.
 		"name": "",           # component name
@@ -45,427 +50,304 @@ func parse_definition() -> Dictionary:
 	
 	# Parse within clause if present
 	if _match_keyword("within"):
+		print("Found 'within' clause")
 		result.within = _parse_qualified_name()
+		print("Within: ", result.within)
 		_skip_until_semicolon()
 	
 	# Parse import statements
 	while _match_keyword("import"):
+		print("Found 'import' statement")
 		var import_info = _parse_import()
 		if not import_info.is_empty():
 			result.imports.append(import_info)
+			print("Import: ", import_info)
 	
 	# Parse definition type and name
 	result.type = _parse_definition_type()
 	if result.type.is_empty():
+		print("No definition type found")
 		return result
 	
+	print("Definition type: ", result.type)
 	result.name = _parse_identifier()
+	print("Definition name: ", result.name)
 	
 	# Parse description string if present
 	_skip_whitespace_and_comments()
 	if _peek() == "\"":
 		result.description = _parse_string()
+		print("Description: ", result.description)
 	
 	# Parse extends clauses
 	while _match_keyword("extends"):
+		print("Found 'extends' clause")
 		var extends_info = _parse_extends()
 		if not extends_info.is_empty():
 			result.extends.append(extends_info)
+			print("Extends: ", extends_info)
 	
-	# Parse body until "end"
-	while not _match_keyword("end"):
+	# Parse component declarations
+	print("\nParsing component declarations...")
+	while not _match_keyword("equation") and not _match_keyword("end") and _pos < _len:
 		_skip_whitespace_and_comments()
-		
 		if _pos >= _len:
 			break
 			
-		# Parse equations section
-		if _match_keyword("equation"):
-			result.equations = _parse_equations()
-			continue
-			
-		# Parse component declaration
-		var comp = _parse_component()
-		if not comp.is_empty():
-			result.components.append(comp)
-			continue
-			
-		# Skip unknown content until semicolon
-		_skip_until_semicolon()
+		var component = _parse_component_declaration()
+		if not component.is_empty():
+			result.components.append(component)
+			print("Found component: ", component.get("type", ""), " ", component.get("name", ""))
 	
-	# Skip to end of definition
-	_skip_whitespace_and_comments()
-	if _peek() == ";":
-		_pos += 1
+	# Parse equations if present
+	if _match_keyword("equation"):
+		print("\nParsing equations...")
+		while not _match_keyword("end") and _pos < _len:
+			_skip_whitespace_and_comments()
+			if _pos >= _len:
+				break
+				
+			var equation = _parse_equation()
+			if not equation.is_empty():
+				result.equations.append(equation)
+				print("Found equation: ", equation)
 	
+	print("\nParsing complete")
+	print("Components found: ", result.components.size())
+	print("Equations found: ", result.equations.size())
 	return result
 
+func _parse_qualified_name() -> String:
+	_skip_whitespace_and_comments()
+	var name = ""
+	while _pos < _len:
+		var c = _peek()
+		if c.is_valid_identifier() or c == ".":
+			name += _next()
+		else:
+			break
+	return name.strip_edges()
+
+func _parse_import() -> Dictionary:
+	_skip_whitespace_and_comments()
+	var import_info = {}
+	
+	# Parse import name
+	var name = _parse_qualified_name()
+	if name.is_empty():
+		return {}
+	
+	import_info["name"] = name
+	
+	# Check for alias
+	_skip_whitespace_and_comments()
+	if _peek() == "=":
+		_next()  # Skip =
+		_skip_whitespace_and_comments()
+		import_info["alias"] = _parse_identifier()
+	
+	_skip_until_semicolon()
+	return import_info
+
+func _parse_extends() -> Dictionary:
+	_skip_whitespace_and_comments()
+	var extends_info = {}
+	
+	# Parse base class name
+	extends_info["base_class"] = _parse_qualified_name()
+	
+	# Parse modifications if any
+	_skip_whitespace_and_comments()
+	if _peek() == "(":
+		extends_info["modifications"] = _parse_modifications()
+	
+	_skip_until_semicolon()
+	return extends_info
+
+func _parse_component_declaration() -> Dictionary:
+	_skip_whitespace_and_comments()
+	var component = {}
+	
+	# Parse type
+	component["type"] = _parse_qualified_name()
+	if component["type"].is_empty():
+		return {}
+	
+	_skip_whitespace_and_comments()
+	
+	# Parse name
+	component["name"] = _parse_identifier()
+	if component["name"].is_empty():
+		return {}
+	
+	# Parse modifications if any
+	_skip_whitespace_and_comments()
+	if _peek() == "(":
+		component["modifications"] = _parse_modifications()
+	
+	_skip_until_semicolon()
+	return component
+
+func _parse_equation() -> String:
+	_skip_whitespace_and_comments()
+	var equation = ""
+	
+	while _pos < _len:
+		if _peek() == ";":
+			_next()
+			break
+		equation += _next()
+	
+	return equation.strip_edges()
+
 func _parse_definition_type() -> String:
+	_skip_whitespace_and_comments()
 	for keyword in KEYWORDS:
 		if _match_keyword(keyword):
 			return keyword
 	return ""
 
-func _parse_extends() -> Dictionary:
-	var extends_info = {
-		"base_class": "",
-		"modifications": {}
-	}
-	
-	# Parse base class name (can be qualified)
-	extends_info.base_class = _parse_qualified_name()
-	
-	# Parse modifications if present
-	_skip_whitespace_and_comments()
-	if _peek() == "(":
-		extends_info.modifications = _parse_modifications()
-	
-	_skip_until_semicolon()
-	return extends_info
-
-func _parse_component() -> Dictionary:
-	var comp = {
-		"type": "",
-		"name": "",
-		"modifications": {},
-		"attributes": []  # input, output, parameter, etc.
-	}
-	
-	# Parse attributes
-	while true:
-		var attr = _parse_identifier()
-		if attr in ["input", "output", "flow", "stream", "parameter", "constant"]:
-			comp.attributes.append(attr)
-		else:
-			# Not an attribute, must be the type
-			comp.type = attr
-			break
-	
-	comp.name = _parse_identifier()
-	
-	# Parse modifications
-	if _peek() == "(":
-		comp.modifications = _parse_modifications()
-	
-	_skip_until_semicolon()
-	return comp
-
-func _parse_equations() -> Array:
-	var equations = []
-	
-	while not _match_keyword("end") and _pos < _len:
-		_skip_whitespace_and_comments()
-		
-		var eq = ""
-		var in_string = false
-		var paren_count = 0
-		
-		# Parse until semicolon
-		while _pos < _len:
-			var c = _peek()
-			
-			if not in_string:
-				if c == "\"":
-					in_string = true
-				elif c == "(":
-					paren_count += 1
-				elif c == ")":
-					paren_count -= 1
-				elif c == ";" and paren_count == 0:
-					_pos += 1  # Skip semicolon
-					break
-			else:
-				if c == "\"":
-					in_string = false
-			
-			eq += c
-			_pos += 1
-		
-		eq = eq.strip_edges()
-		if not eq.is_empty():
-			equations.append(eq)
-	
-	return equations
-
-func _parse_modifications() -> Dictionary:
-	var mods = {}
-	
-	_expect("(")
-	_skip_whitespace_and_comments()
-	
-	while _pos < _len and _peek() != ")":
-		# Parse modification path (can be qualified)
-		var path = _parse_qualified_name()
-		if path.is_empty():
-			break
-		
-		_skip_whitespace_and_comments()
-		if _peek() == "=":
-			_pos += 1  # Skip =
-			_skip_whitespace_and_comments()
-			var value = _parse_value()
-			mods[path] = {"value": value}
-		elif _peek() == "(":
-			mods[path] = _parse_modifications()
-		
-		_skip_whitespace_and_comments()
-		if _peek() == ",":
-			_pos += 1  # Skip comma
-			_skip_whitespace_and_comments()
-	
-	_expect(")")
-	return mods
-
-func _parse_qualified_name() -> String:
-	var name = ""
-	var parts = []
-	
-	# Parse first identifier
-	var first = _parse_identifier()
-	if first.is_empty():
-		return ""
-	parts.append(first)
-	
-	# Parse remaining parts
-	while _peek() == ".":
-		_pos += 1  # Skip dot
-		var part = _parse_identifier()
-		if part.is_empty():
-			break
-		parts.append(part)
-	
-	return ".".join(parts)
-
 func _parse_identifier() -> String:
 	_skip_whitespace_and_comments()
-	
 	var identifier = ""
-	var c = _peek()
 	
-	# First character must be letter or underscore
-	if not (c.is_valid_identifier() or c == "_"):
+	if _pos >= _len:
 		return ""
 	
+	# First character must be a letter
+	var first = _peek()
+	if not first.is_valid_identifier():
+		return ""
+	
+	identifier += _next()
+	
+	# Rest can be letters, digits or underscore
 	while _pos < _len:
-		c = _peek()
-		# Use is_valid_identifier() for letters and check digits separately
-		if not (c.is_valid_identifier() or c == "_" or c in "0123456789" or c == "."):
+		var c = _peek()
+		if c.is_valid_identifier() or c.is_valid_integer():
+			identifier += _next()
+		else:
 			break
-		identifier += c
-		_pos += 1
 	
 	return identifier
 
 func _parse_string() -> String:
+	_skip_whitespace_and_comments()
 	var string = ""
-	_pos += 1  # Skip opening quote
 	
-	while _pos < _len and _peek() != "\"":
-		string += _text[_pos]
-		_pos += 1
+	if _peek() != "\"":
+		return ""
 	
-	if _pos < _len:
-		_pos += 1  # Skip closing quote
-	
-	return string
-
-func _parse_value() -> Variant:
-	_skip_whitespace_and_comments()
-	
-	var c = _peek()
-	
-	# Parse string
-	if c == "\"":
-		return _parse_string()
-	
-	# Parse number
-	if c.is_valid_float() or c == "-" or c == "+":
-		return _parse_number()
-	
-	# Parse boolean
-	if _match_keyword("true"):
-		return true
-	if _match_keyword("false"):
-		return false
-	
-	# Parse array
-	if c == "{":
-		return _parse_array()
-	
-	# Parse qualified name (reference to another component/parameter)
-	return _parse_qualified_name()
-
-func _parse_array() -> Array:
-	var array = []
-	
-	_expect("{")
-	_skip_whitespace_and_comments()
-	
-	while _pos < _len and _peek() != "}":
-		var value = _parse_value()
-		array.append(value)
-		
-		_skip_whitespace_and_comments()
-		if _peek() == ",":
-			_pos += 1  # Skip comma
-			_skip_whitespace_and_comments()
-	
-	_expect("}")
-	return array
-
-func _parse_number() -> float:
-	_skip_whitespace_and_comments()
-	
-	var number = ""
-	var in_string = false
-	var paren_count = 0
+	_next()  # Skip opening quote
 	
 	while _pos < _len:
 		var c = _peek()
-		
-		if not in_string:
-			if c == "\"":
-				in_string = true
-			elif c == "(":
-				paren_count += 1
-			elif c == ")":
-				paren_count -= 1
-				if paren_count < 0:
-					break
-			elif paren_count == 0 and (c == "," or c == ")" or c == ";"):
-				break
-		else:
-			if c == "\"":
-				in_string = false
-		
-		number += c
-		_pos += 1
+		if c == "\"":
+			_next()  # Skip closing quote
+			break
+		string += _next()
 	
-	return number.to_float()
+	return string
+
+func _parse_modifications() -> Dictionary:
+	var modifications = {}
+	
+	_next()  # Skip opening parenthesis
+	
+	while _pos < _len:
+		_skip_whitespace_and_comments()
+		if _peek() == ")":
+			_next()  # Skip closing parenthesis
+			break
+			
+		var name = _parse_identifier()
+		if name.is_empty():
+			break
+			
+		_skip_whitespace_and_comments()
+		if _peek() == "=":
+			_next()  # Skip =
+			_skip_whitespace_and_comments()
+			modifications[name] = _parse_value()
+		
+		_skip_whitespace_and_comments()
+		if _peek() == ",":
+			_next()  # Skip comma
+	
+	return modifications
+
+func _parse_value() -> String:
+	_skip_whitespace_and_comments()
+	var value = ""
+	
+	while _pos < _len:
+		var c = _peek()
+		if c in [",", ")", ";"]:
+			break
+		value += _next()
+	
+	return value.strip_edges()
+
+func _skip_whitespace_and_comments() -> void:
+	while _pos < _len:
+		var c = _peek()
+		
+		# Skip whitespace
+		if c.strip_edges().is_empty():
+			_next()
+			continue
+		
+		# Skip single-line comments
+		if c == "/" and _peek(1) == "/":
+			while _pos < _len and _peek() != "\n":
+				_next()
+			continue
+		
+		# Skip multi-line comments
+		if c == "/" and _peek(1) == "*":
+			_next()  # Skip /
+			_next()  # Skip *
+			while _pos < _len:
+				if _peek() == "*" and _peek(1) == "/":
+					_next()  # Skip *
+					_next()  # Skip /
+					break
+				_next()
+			continue
+		
+		break
+
+func _skip_until_semicolon() -> void:
+	while _pos < _len and _peek() != ";":
+		_next()
+	if _pos < _len:
+		_next()  # Skip semicolon
 
 func _match_keyword(keyword: String) -> bool:
 	_skip_whitespace_and_comments()
+	var start_pos = _pos
 	
-	if _pos + keyword.length() > _len:
+	for c in keyword:
+		if _pos >= _len or _peek() != c:
+			_pos = start_pos
+			return false
+		_next()
+	
+	# Check that the next character is not a valid identifier character
+	if _pos < _len and _peek().is_valid_identifier():
+		_pos = start_pos
 		return false
 	
-	var text = _text.substr(_pos, keyword.length())
-	if text == keyword:
-		var next_char = _peek(keyword.length())
-		if next_char.is_empty() or not next_char.is_valid_identifier():
-			_pos += keyword.length()
-			return true
-	
-	return false
-
-func _expect(char: String) -> void:
-	_skip_whitespace_and_comments()
-	
-	if _pos < _len and _peek() == char:
-		_pos += 1
-	else:
-		push_warning("Expected '" + char + "' at position " + str(_pos))
+	return true
 
 func _peek(offset: int = 0) -> String:
 	if _pos + offset >= _len:
 		return ""
 	return _text[_pos + offset]
 
-func _skip_whitespace_and_comments() -> void:
-	while _pos < _len:
-		# Skip whitespace
-		while _pos < _len and _text[_pos].strip_edges().is_empty():
-			_pos += 1
-		
-		if _pos + 1 >= _len:
-			break
-		
-		# Skip single-line comments
-		if _text[_pos] == "/" and _text[_pos + 1] == "/":
-			while _pos < _len and _text[_pos] != "\n":
-				_pos += 1
-			continue
-		
-		# Skip multi-line comments
-		if _text[_pos] == "/" and _text[_pos + 1] == "*":
-			_pos += 2
-			while _pos + 1 < _len:
-				if _text[_pos] == "*" and _text[_pos + 1] == "/":
-					_pos += 2
-					break
-				_pos += 1
-			continue
-		
-		break
-
-func _skip_until_semicolon() -> void:
-	var in_string = false
-	var paren_count = 0
-	
-	while _pos < _len:
-		var c = _peek()
-		
-		if not in_string:
-			if c == "\"":
-				in_string = true
-			elif c == "(":
-				paren_count += 1
-			elif c == ")":
-				paren_count -= 1
-			elif c == ";" and paren_count == 0:
-				_pos += 1  # Skip semicolon
-				break
-		else:
-			if c == "\"":
-				in_string = false
-		
-		_pos += 1
-
-func _skip_until(char: String) -> void:
-	while _pos < _len and _peek() != char:
-		_pos += 1
-	if _peek() == char:
-		_pos += 1
-
-func _parse_import() -> Dictionary:
-	var import_info = {
-		"name": "",          # Full qualified name being imported
-		"alias": "",         # Optional alias
-		"is_wildcard": false # Whether it's a wildcard import
-	}
-	
-	# Parse the imported name
-	var name = _parse_qualified_name()
-	if name.is_empty():
-		return {}
-	
-	_skip_whitespace_and_comments()
-	
-	# Check for wildcard import
-	if _peek() == ".":
-		_pos += 1  # Skip dot
-		if _peek() == "*":
-			_pos += 1  # Skip asterisk
-			import_info.name = name
-			import_info.is_wildcard = true
-			_skip_until_semicolon()
-			return import_info
-		else:
-			# Invalid syntax
-			_skip_until_semicolon()
-			return {}
-	
-	# Check for alias
-	if _match_keyword("as"):
-		var alias = _parse_identifier()
-		if not alias.is_empty():
-			import_info.name = name
-			import_info.alias = alias
-			_skip_until_semicolon()
-			return import_info
-	else:
-		import_info.name = name
-		_skip_until_semicolon()
-		return import_info
-	
-	return {}
+func _next() -> String:
+	if _pos >= _len:
+		return ""
+	var c = _text[_pos]
+	_pos += 1
+	return c
