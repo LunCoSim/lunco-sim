@@ -5,8 +5,26 @@ class_name PackageManager
 signal package_loaded(package_name: String)
 signal loading_error(package_name: String, error: String)
 
-var _packages: Dictionary = {}  # package_name -> package_data
+var _packages: Dictionary = {}  # full_qualified_name -> package_data
 var _components: Dictionary = {}  # full_path -> component_data
+var _package_hierarchy: Dictionary = {}  # package_path -> parent_package
+var _initialized: bool = false
+
+func _ready() -> void:
+	initialize()
+
+func initialize() -> void:
+	if _initialized:
+		return
+		
+	print("\n=== Initializing Package Manager ===")
+	# Load the root package
+	var root_path = "res://apps/modelica_godot/components"
+	if load_package(root_path):
+		print("Root package loaded successfully")
+		_initialized = true
+	else:
+		push_error("Failed to load root package")
 
 func load_package(path: String) -> bool:
 	print("\n=== Loading Package ===")
@@ -36,17 +54,26 @@ func load_package(path: String) -> bool:
 		emit_signal("loading_error", path.get_file(), "Failed to parse package.mo")
 		return false
 	
+	# Build full qualified name
+	var full_name = package_data["name"]
+	if package_data.has("within"):
+		full_name = package_data["within"] + "." + full_name
+	
 	print("Package Info:")
-	print("- Name: ", package_data.name)
+	print("- Name: ", package_data["name"])
+	print("- Full Name: ", full_name)
 	print("- Within: ", package_data.get("within", ""))
 	
 	# Store package data
-	_packages[package_data.name] = package_data
-	print("Stored package: ", package_data.name)
+	_packages[full_name] = package_data
+	print("Stored package: ", full_name)
+	
+	# Store in hierarchy
+	_package_hierarchy[path] = package_data.get("within", "")
 	
 	# Load all .mo files in the package directory
 	print("\n=== Loading Components ===")
-	_load_package_components(path)
+	_load_package_components(path, full_name)
 	
 	print("\n=== Package Loading Summary ===")
 	print("Total components loaded: ", _components.size())
@@ -54,8 +81,17 @@ func load_package(path: String) -> bool:
 	for comp_path in _components:
 		var comp = _components[comp_path]
 		print("- ", comp.get("name", "Unknown"), " (", comp.get("type", "unknown"), ")")
+		print("  Within: ", comp.get("within", ""))
 	
-	emit_signal("package_loaded", package_data.name)
+	print("\nPackage hierarchy:")
+	for pkg_path in _package_hierarchy:
+		print("- ", pkg_path, " -> ", _package_hierarchy[pkg_path])
+	
+	print("\nLoaded packages:")
+	for pkg_name in _packages:
+		print("- ", pkg_name)
+	
+	emit_signal("package_loaded", full_name)
 	return true
 
 func _find_package_mo(start_path: String) -> String:
@@ -107,8 +143,10 @@ func _parse_package_mo(content: String, path: String) -> Dictionary:
 	
 	return package_data
 
-func _load_package_components(path: String) -> void:
+func _load_package_components(path: String, parent_package: String) -> void:
 	print("\nLoading components from directory: ", path)
+	print("Parent package: ", parent_package)
+	
 	var dir = DirAccess.open(path)
 	if not dir:
 		push_error("Failed to open directory: " + path)
@@ -118,16 +156,28 @@ func _load_package_components(path: String) -> void:
 	var file_name = dir.get_next()
 	
 	while file_name != "":
-		if not file_name.begins_with(".") and file_name.ends_with(".mo") and file_name != "package.mo":
+		if not file_name.begins_with("."):
 			var full_path = path.path_join(file_name)
-			print("\nLoading component: ", file_name)
-			_load_component(full_path)
+			
+			if dir.current_is_dir():
+				print("\nEntering subdirectory: ", file_name)
+				# First check if it's a package
+				var package_mo = full_path.path_join("package.mo")
+				if FileAccess.file_exists(package_mo):
+					print("Found package.mo in subdirectory")
+					load_package(full_path)
+				else:
+					# If not a package, just load components
+					_load_package_components(full_path, parent_package)
+			elif file_name.ends_with(".mo") and file_name != "package.mo":
+				print("\nLoading component: ", file_name)
+				_load_component(full_path, parent_package)
 		
 		file_name = dir.get_next()
 	
 	dir.list_dir_end()
 
-func _load_component(path: String) -> void:
+func _load_component(path: String, parent_package: String) -> void:
 	var file = FileAccess.open(path, FileAccess.READ)
 	if not file:
 		push_error("Failed to open component file: " + path)
@@ -142,7 +192,14 @@ func _load_component(path: String) -> void:
 		print("Component Info:")
 		print("- Type: ", component_data.get("type", "unknown"))
 		print("- Name: ", component_data.get("name", "unknown"))
+		
+		# If no within clause, use parent package
+		if not component_data.has("within") or component_data["within"].is_empty():
+			component_data["within"] = parent_package
+			print("Setting within to parent package: ", parent_package)
+		
 		print("- Within: ", component_data.get("within", ""))
+		
 		if component_data.has("components"):
 			print("- Used Components:")
 			for comp in component_data.get("components", []):
@@ -155,21 +212,53 @@ func _load_component(path: String) -> void:
 		push_error("Failed to parse component: " + path)
 
 func has_package(package_name: String) -> bool:
-	var has = _packages.has(package_name)
-	print("\nChecking for package: ", package_name, " -> ", has)
-	return has
+	if not _initialized:
+		initialize()
+		
+	print("\nChecking for package: ", package_name)
+	# Try exact match first
+	if _packages.has(package_name):
+		print("Found exact package match")
+		return true
+		
+	# Try with parent packages
+	for full_name in _packages:
+		if full_name.ends_with("." + package_name):
+			print("Found package as: ", full_name)
+			return true
+	
+	print("Package not found")
+	print("Currently loaded packages: ", _packages.keys())
+	return false
 
 func get_package_metadata(package_name: String) -> Dictionary:
+	if not _initialized:
+		initialize()
+		
 	print("\nGetting metadata for package: ", package_name)
+	# Try exact match first
 	var metadata = _packages.get(package_name, {})
 	if not metadata.is_empty():
-		print("Found metadata:")
+		print("Found metadata with exact match")
 		print(metadata)
-	else:
-		print("No metadata found")
-	return metadata
+		return metadata
+		
+	# Try with parent packages
+	for full_name in _packages:
+		if full_name.ends_with("." + package_name):
+			metadata = _packages[full_name]
+			print("Found metadata as: ", full_name)
+			print(metadata)
+			return metadata
+	
+	print("No metadata found")
+	print("Currently loaded packages: ", _packages.keys())
+	return {}
 
 func get_component(path: String) -> Dictionary:
+	if not _initialized:
+		initialize()
+		
 	print("\nGetting component: ", path)
 	var component = _components.get(path, {})
 	if not component.is_empty():
@@ -180,6 +269,9 @@ func get_component(path: String) -> Dictionary:
 	return component
 
 func get_loaded_packages() -> Array:
+	if not _initialized:
+		initialize()
+		
 	var packages = _packages.keys()
 	print("\nLoaded packages: ", packages)
 	return packages
@@ -188,4 +280,6 @@ func clear() -> void:
 	print("\nClearing all packages and components")
 	_packages.clear()
 	_components.clear()
+	_package_hierarchy.clear()
+	_initialized = false
 	print("Package manager cleared")
