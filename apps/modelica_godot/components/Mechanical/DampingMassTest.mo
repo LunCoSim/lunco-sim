@@ -1,10 +1,11 @@
+within ModelicaGodot.Mechanical;
 model DampingMassTest
   "Test model for a mass with damping"
   
   // Components
-  Mechanical.Mass mass(m=1.0);  // 1 kg mass
-  Mechanical.Damper damper(d=0.5);  // Damping coefficient 0.5 N.s/m
-  Mechanical.Fixed fixed;  // Fixed point
+  Mass mass(m=1.0);  // 1 kg mass
+  Damper damper(d=0.5);  // Damping coefficient 0.5 N.s/m
+  Fixed fixed;  // Fixed point
   
   // Initial conditions
   parameter Real x0 = 1.0 "Initial position in meters";

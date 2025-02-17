@@ -1,3 +1,4 @@
+within ModelicaGodot;
 package Mechanical "Basic mechanical components library"
   annotation(
     Documentation(info="Basic mechanical components for 1D translational mechanics.
