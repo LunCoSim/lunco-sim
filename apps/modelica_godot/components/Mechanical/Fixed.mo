@@ -1,4 +1,4 @@
-within Mechanical;
+within ModelicaGodot.Mechanical;
 model Fixed "Fixed point in space (ground)"
   parameter Real position = 0.0 "Fixed position (m)";
   

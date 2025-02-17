@@ -1,4 +1,4 @@
-within Mechanical;
+within ModelicaGodot.Mechanical;
 model Mass "Point mass with one mechanical connector"
   parameter Real m = 1.0 "Mass of the component (kg)";
   parameter Real x0 = 0.0 "Initial position (m)";

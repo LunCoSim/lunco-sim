@@ -1,4 +1,4 @@
-within Mechanical;
+within ModelicaGodot.Mechanical;
 model Damper "Linear viscous damper"
   parameter Real d = 1.0 "Damping coefficient (N.s/m)";
   

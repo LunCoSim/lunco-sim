@@ -1,4 +1,4 @@
-within Mechanical;
+within ModelicaGodot.Mechanical;
 connector MechanicalConnector "Connector for mechanical components with force and position"
   Real force "Force transmitted through the connector (N)";
   Real position "Position of the connector (m)";
