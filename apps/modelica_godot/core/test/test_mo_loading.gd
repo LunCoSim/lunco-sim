@@ -1,7 +1,7 @@
 @tool
 extends SceneTree
 
-const MOParser = preload("res://core/mo_parser.gd")
+const MOParser = preload("res://apps/modelica_godot/core/mo_parser.gd")
 var parser: MOParser
 
 func _init() -> void:
@@ -13,7 +13,7 @@ func _init() -> void:
 
 func test_damping_mass() -> void:
 	print("\nTesting DampingMassTest.mo loading")
-	var result = parser.parse_file("res://components/Mechanical/DampingMassTest.mo")
+	var result = parser.parse_file("res://apps/modelica_godot/components/Mechanical/DampingMassTest.mo")
 	
 	# Test basic model structure
 	assert_eq(result.type, "model", "Model type")

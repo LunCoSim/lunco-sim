@@ -40,6 +40,7 @@ func parse_definition() -> Dictionary:
 		"name": "",           # component name
 		"extends": [],        # list of base classes with modifications
 		"components": [],     # list of component declarations
+		"parameters": [],     # list of parameters
 		"equations": [],      # list of equations
 		"initial_equations": [], # list of initial equations
 		"annotations": {},    # annotations
@@ -160,13 +161,18 @@ func parse_definition() -> Dictionary:
 		else:
 			var component = _parse_component()
 			if not component.is_empty():
-				result.components.append(component)
-				print("Found component: ", component)
+				if component.is_parameter:
+					result.parameters.append(component)
+					print("Found parameter: ", component)
+				else:
+					result.components.append(component)
+					print("Found component: ", component)
 			if _peek() == ";":
 				_next()  # Skip semicolon
 	
 	print("\nParsing complete")
 	print("Components found: ", result.components.size())
+	print("Parameters found: ", result.parameters.size())
 	print("Initial equations found: ", result.initial_equations.size())
 	print("Equations found: ", result.equations.size())
 	return result
@@ -280,14 +286,14 @@ func _parse_component() -> Dictionary:
 		print("Found default value")
 		_next()  # Skip =
 		_skip_whitespace_and_comments()
-		component.default = _parse_value()
-		component.value = component.default
-	
-	# Parse description if any
-	_skip_whitespace_and_comments()
-	if _peek() == "\"":
-		print("Found description")
-		component.description = _parse_string()
+		component.value = _parse_value()
+		component.default = component.value
+		
+		# Parse description if any
+		_skip_whitespace_and_comments()
+		if _peek() == "\"":
+			print("Found description")
+			component.description = _parse_string()
 	
 	# Parse annotation if any
 	_skip_whitespace_and_comments()
@@ -532,6 +538,7 @@ func _parse_value() -> String:
 	var value = ""
 	var parentheses_count = 0
 	var in_string = false
+	var in_description = false
 	
 	# Handle string literals
 	if _peek() == "\"":
@@ -549,6 +556,8 @@ func _parse_value() -> String:
 		if c == "\"":
 			if not in_string:
 				in_string = true
+				in_description = true
+				break  # Stop here, we've found the description
 			else:
 				if _peek(-1) != "\\":  # Not an escaped quote
 					in_string = false
