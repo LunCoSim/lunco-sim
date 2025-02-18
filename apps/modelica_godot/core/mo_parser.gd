@@ -96,97 +96,76 @@ func parse_definition() -> Dictionary:
 	
 	while _pos < _len:
 		_skip_whitespace_and_comments()
+		
 		if _pos >= _len:
 			break
 			
-		print("Current position: ", _pos, ", Current char: '", _peek(), "'")
+		var current_char = _peek()
 		
-		# Check for end of definition
-		if _match_keyword("end"):
-			print("Found 'end' keyword")
-			# Parse the end name if present
-			_skip_whitespace_and_comments()
-			var end_name = _parse_identifier()
-			if not end_name.is_empty():
+		if current_char == "e":
+			if _match_keyword("end"):
+				print("Found 'end' keyword")
+				# Parse end name and verify it matches
+				_skip_whitespace()
+				var end_name = _parse_identifier()
 				print("Found end name: ", end_name)
-				if end_name == result.name:
-					print("End name matches definition name")
-				else:
-					push_error("End name '" + end_name + "' does not match definition name '" + result.name + "'")
-			# Skip any remaining content until semicolon
-			_skip_until_semicolon()
-			print("Found end of definition")
-			return result
-		
-		# Check for equation sections
-		if _match_keyword("equation"):
-			print("Found equation section")
-			in_equation_section = true
-			in_initial_equation_section = false
-			continue
-		
-		if _match_keyword("initial equation"):
-			print("Found initial equation section")
-			in_initial_equation_section = true
-			in_equation_section = false
-			continue
-		
-		# Check for model-level annotation
-		if _match_keyword("annotation"):
+				if end_name != result.name:
+					push_warning("End name does not match definition name")
+				_skip_until_semicolon()
+				print("Found end of definition")
+				break
+			elif _match_keyword("equation"):
+				print("Found equation section")
+				in_equation_section = true
+				in_initial_equation_section = false
+				continue
+		elif current_char == "i" and _match_keyword("initial"):
+			if _match_keyword("equation"):
+				print("Found initial equation section")
+				in_initial_equation_section = true
+				in_equation_section = false
+				continue
+		elif current_char == "a" and _match_keyword("annotation"):
 			print("\nParsing model annotation...")
-			var annotation = _parse_model_annotation()
+			var annotation = _parse_annotation()
 			if not annotation.is_empty():
 				result.annotations = annotation
 				print("Found model annotation: ", annotation)
-			_skip_until_semicolon()
 			continue
-		
-		# Parse equations or components based on current section
+			
 		if in_equation_section:
 			var equation = _parse_equation()
 			if not equation.is_empty():
-				result.equations.append(equation)
 				print("Found equation: ", equation)
-			_skip_whitespace_and_comments()
-			if _peek() == ";":
-				_next()  # Skip semicolon
+				result.equations.append(equation)
 		elif in_initial_equation_section:
 			var equation = _parse_equation()
 			if not equation.is_empty():
-				result.initial_equations.append(equation)
 				print("Found initial equation: ", equation)
-			_skip_whitespace_and_comments()
-			if _peek() == ";":
-				_next()  # Skip semicolon
+				result.initial_equations.append(equation)
 		else:
 			var component = _parse_component()
 			if not component.is_empty():
-				if component.is_parameter:
+				print("Found component: ", component)
+				if component.get("type", "") == "parameter":
 					result.parameters.append(component)
-					print("Found parameter: ", component)
 				else:
 					result.components.append(component)
-					print("Found component: ", component)
-			if _peek() == ";":
-				_next()  # Skip semicolon
 	
-	print("\nParsing complete")
-	print("Components found: ", result.components.size())
-	print("Parameters found: ", result.parameters.size())
-	print("Initial equations found: ", result.initial_equations.size())
-	print("Equations found: ", result.equations.size())
 	return result
 
 func _parse_qualified_name() -> String:
-	_skip_whitespace_and_comments()
-	var name = ""
+	var name = _parse_identifier()
+	
 	while _pos < _len:
-		var c = _peek()
-		if c.is_valid_identifier() or c == ".":
-			name += _next()
-		else:
+		_skip_whitespace_and_comments()
+		if _peek() != ".":
 			break
-	return name.strip_edges()
+		_next()  # Skip dot
+		name += "."
+		name += _parse_identifier()
+	
+	return name
 
 func _parse_import() -> Dictionary:
 	_skip_whitespace_and_comments()
@@ -225,182 +204,177 @@ func _parse_extends() -> Dictionary:
 	return extends_info
 
 func _parse_component() -> Dictionary:
-	print("\nParsing component at position: ", _pos)
+	print("\nParsing component at position: ", _pos, ", Current char: ", _peek())
 	var component = {
 		"type": "",
 		"name": "",
 		"modifications": {},
-		"description": "",
-		"annotation": {},
+		"annotations": {},
 		"is_parameter": false,
-		"attributes": [],  # For flow, input, output etc.
+		"attributes": [],
+		"description": "",
 		"value": "",
 		"default": ""
 	}
 	
-	# Parse attributes (flow, input, output, etc.)
-	while true:
-		_skip_whitespace_and_comments()
-		var next_word = _peek_word()
-		print("Checking word: ", next_word)
-		if next_word in ["flow", "input", "output", "stream"]:
-			component.attributes.append(next_word)
-			_advance(next_word.length())
-			_skip_whitespace_and_comments()
-		elif next_word == "parameter":
-			component.is_parameter = true
-			_advance(next_word.length())
-			_skip_whitespace_and_comments()
-		else:
-			break
+	# Check for parameter keyword
+	if _match_keyword("parameter"):
+		component.is_parameter = true
+		component.type = "parameter"
+		_skip_whitespace()
 	
-	# Parse type
-	component.type = _parse_identifier()
-	if component.type.is_empty():
+	# Parse type name
+	var type_name = _parse_type_name()
+	if type_name.is_empty():
 		print("No type found, returning empty component")
 		return {}
-	print("Found type: ", component.type)
 	
-	# Parse name
-	_skip_whitespace_and_comments()
-	component.name = _parse_identifier()
-	if component.name.is_empty():
+	if not component.is_parameter:
+		component.type = type_name
+	
+	print("Checking word: ", type_name)
+	
+	# Parse component name
+	_skip_whitespace()
+	var name = _parse_identifier()
+	if name.is_empty():
 		print("No name found, returning empty component")
 		return {}
-	print("Found name: ", component.name)
 	
-	# Parse array dimensions if any
-	_skip_whitespace_and_comments()
-	if _peek() == "[":
-		component.dimensions = _parse_array_dimensions()
+	component.name = name
+	print("Found name: ", name)
 	
-	# Parse modifications if any
-	_skip_whitespace_and_comments()
+	# Parse modifications
+	_skip_whitespace()
 	if _peek() == "(":
 		print("Found modifications")
 		component.modifications = _parse_modifications()
+		print("Finished parsing modifications: ", component.modifications)
 	
-	# Parse default value if any
-	_skip_whitespace_and_comments()
-	if _peek() == "=":
-		print("Found default value")
-		_next()  # Skip =
-		_skip_whitespace_and_comments()
-		component.value = _parse_value()
-		component.default = component.value
-		
-		# Parse description if any
-		_skip_whitespace_and_comments()
-		if _peek() == "\"":
-			print("Found description")
-			component.description = _parse_string()
+	# Parse description string
+	_skip_whitespace()
+	if _peek() == "\"":
+		component.description = _parse_string()
 	
-	# Parse annotation if any
-	_skip_whitespace_and_comments()
-	if _match_keyword("annotation"):
-		print("Found annotation")
-		component.annotation = _parse_model_annotation()
-		_skip_whitespace_and_comments()
-	
-	# Must end with a semicolon
+	# Look for semicolon
+	_skip_whitespace()
 	if _peek() == ";":
-		_next()  # Skip semicolon
+		_advance()  # Skip semicolon
 		print("Found end of component declaration")
 	else:
-		print("Warning: Component declaration did not end with semicolon")
-		
+		push_warning("Component declaration did not end with semicolon")
+	
 	print("Finished parsing component: ", component)
 	return component
 
-func _parse_array_dimensions() -> Array:
-	var dimensions = []
-	_next()  # Skip [
+func _parse_annotation() -> Dictionary:
+	print("Parsing model annotation")
+	var result = {}
 	
-	while _pos < _len:
-		_skip_whitespace_and_comments()
-		var dimension = ""
-		
-		# Parse the dimension value
-		while _pos < _len:
-			var c = _peek()
-			if c.is_valid_int() or c == ":":
-				dimension += _next()
-			else:
-				break
-		
-		if not dimension.is_empty():
-			dimensions.append(dimension)
-		
-		_skip_whitespace_and_comments()
-		if _peek() == "]":
-			_next()  # Skip ]
-			break
-		elif _peek() == ",":
-			_next()  # Skip ,
-			continue
+	_skip_whitespace()
+	if _peek() != "(":
+		return result
 	
-	return dimensions
+	_advance()  # Skip opening parenthesis
+	
+	# Parse annotation content
+	var content = ""
+	var parentheses_count = 1
+	
+	while _pos < _len and parentheses_count > 0:
+		var char = _peek()
+		
+		if char == "(":
+			parentheses_count += 1
+		elif char == ")":
+			parentheses_count -= 1
+			
+		if parentheses_count > 0:
+			content += char
+			
+		_advance()
+	
+	print("Parsed annotation content: ", content)
+	
+	# Parse experiment settings
+	if content.begins_with("experiment"):
+		var experiment = {}
+		
+		# Extract values using regular expressions
+		var regex = RegEx.new()
+		
+		# StartTime
+		regex.compile("StartTime\\s*=\\s*(\\d+(\\.\\d+)?)")
+		var match_result = regex.search(content)
+		if match_result:
+			experiment["StartTime"] = match_result.get_string(1)
+		
+		# StopTime
+		regex.compile("StopTime\\s*=\\s*(\\d+(\\.\\d+)?)")
+		match_result = regex.search(content)
+		if match_result:
+			experiment["StopTime"] = match_result.get_string(1)
+		
+		# Interval
+		regex.compile("Interval\\s*=\\s*(\\d+(\\.\\d+)?)")
+		match_result = regex.search(content)
+		if match_result:
+			experiment["Interval"] = match_result.get_string(1)
+		
+		result["experiment"] = experiment
+	
+	_skip_until_semicolon()
+	return result
 
 func _parse_equation() -> String:
-	_skip_whitespace_and_comments()
+	print("\nParsing equation at position: ", _pos, ", Current char: ", _peek())
 	var equation = ""
 	var parentheses_count = 0
-	
-	print("Parsing equation at position: ", _pos, ", Current char: '", _peek(), "'")
-	
-	# Check for annotation
-	if _match_keyword("annotation"):
-		print("Found equation annotation")
-		var annotation = _parse_model_annotation()
-		return "annotation" + annotation.get("content", "")
-	
-	# Handle empty lines or end of section
-	if _peek() == ";" or _match_keyword("end") or _match_keyword("annotation"):
-		print("Found end of equation or empty line")
-		return ""
 	
 	while _pos < _len:
 		var c = _peek()
 		print("Equation char: '", c, "', Parentheses count: ", parentheses_count)
 		
-		# Handle parentheses counting
-		if c == "(":
-			parentheses_count += 1
-			equation += _next()
-			continue
-		elif c == ")":
-			parentheses_count -= 1
-			equation += _next()
-			continue
-		
-		# Break on semicolon if not inside parentheses
 		if c == ";" and parentheses_count == 0:
 			_next()  # Skip semicolon
 			print("Found end of equation with semicolon")
 			break
 		
-		# Break on end or annotation if not inside parentheses
-		if parentheses_count == 0 and c.strip_edges().is_empty():
-			var save_pos = _pos
-			_skip_whitespace_and_comments()
-			if _match_keyword("end") or _match_keyword("annotation"):
-				_pos = save_pos
-				print("Found end or annotation after equation")
-				break
-			_pos = save_pos
+		if c == "(":
+			parentheses_count += 1
+		elif c == ")":
+			parentheses_count -= 1
 		
 		equation += _next()
 	
-	var result = equation.strip_edges()
-	print("Parsed equation: ", result)
-	return result
+	equation = equation.strip_edges()
+	if not equation.is_empty():
+		print("Parsed equation: ", equation)
+	return equation
 
-func _parse_definition_type() -> String:
+func _parse_type_name() -> String:
 	_skip_whitespace_and_comments()
-	for keyword in KEYWORDS:
-		if _match_keyword(keyword):
-			return keyword
-	return ""
+	var type_name = ""
+	
+	if _pos >= _len:
+		return ""
+	
+	# First character must be a letter
+	var first = _peek()
+	if not first.is_valid_identifier():
+		return ""
+	
+	type_name += _next()
+	
+	# Rest can be letters, digits or underscore
+	while _pos < _len:
+		var c = _peek()
+		if c.is_valid_identifier() or c == "_" or c.is_valid_int() or c == ".":
+			type_name += _next()
+		else:
+			break
+	
+	return type_name.strip_edges()
 
 func _parse_identifier() -> String:
 	_skip_whitespace_and_comments()
@@ -419,7 +393,7 @@ func _parse_identifier() -> String:
 	# Rest can be letters, digits or underscore
 	while _pos < _len:
 		var c = _peek()
-		if c.is_valid_identifier() or c == "_" or c.is_valid_int() or c == ".":
+		if c.is_valid_identifier() or c == "_" or c.is_valid_int():
 			identifier += _next()
 		else:
 			break
@@ -427,36 +401,27 @@ func _parse_identifier() -> String:
 	return identifier.strip_edges()
 
 func _parse_string() -> String:
-	var string = ""
-	
+	_skip_whitespace_and_comments()
 	if _peek() != "\"":
 		return ""
 	
 	_next()  # Skip opening quote
+	var string = ""
 	
 	while _pos < _len:
-		var c = _peek()
-		
-		# Handle escaped quotes
-		if c == "\\" and _peek(1) == "\"":
-			string += "\""
-			_next()  # Skip backslash
-			_next()  # Skip quote
-			continue
-		
-		# Handle normal quote
+		var c = _next()
 		if c == "\"":
-			_next()  # Skip closing quote
 			break
-			
-		string += _next()
+		string += c
 	
 	return string
 
 func _parse_modifications() -> Dictionary:
-	print("\nParsing modifications at position: ", _pos)
 	var modifications = {}
-	var parentheses_count = 1  # We've already consumed the opening parenthesis
+	
+	_skip_whitespace_and_comments()
+	if _peek() != "(":
+		return modifications
 	
 	_next()  # Skip opening parenthesis
 	
@@ -465,319 +430,108 @@ func _parse_modifications() -> Dictionary:
 		
 		# Check for end of modifications
 		if _peek() == ")":
-			if parentheses_count == 1:
-				_next()  # Skip closing parenthesis
-				print("Found end of modifications")
-				break
-			parentheses_count -= 1
-			_next()
-			continue
-			
-		# Handle nested parentheses
-		if _peek() == "(":
-			parentheses_count += 1
-			_next()
-			continue
+			_next()  # Skip closing parenthesis
+			break
 		
 		# Parse modification name
 		var name = _parse_identifier()
 		if name.is_empty():
-			print("No valid identifier found, breaking")
 			break
 		
-		print("Parsing modification: ", name)
-		
 		_skip_whitespace_and_comments()
-		if _peek() == "=":
-			_next()  # Skip =
-			_skip_whitespace_and_comments()
-			
-			# Parse the value, which could be complex
-			var value = ""
-			var in_string = false
-			
-			while _pos < _len:
-				var c = _peek()
-				
-				# Handle string literals
-				if c == "\"":
-					if not in_string:
-						in_string = true
-					else:
-						if _peek(-1) != "\\":  # Not an escaped quote
-							in_string = false
-					value += _next()
-					continue
-				
-				# Only check for delimiters if not in a string
-				if not in_string:
-					if c == "," and parentheses_count == 1:
-						_next()  # Skip comma
-						break
-					elif c == ")":
-						if parentheses_count == 1:
-							break
-						parentheses_count -= 1
-					elif c == "(":
-						parentheses_count += 1
-				
-				value += _next()
-			
-			modifications[name] = value.strip_edges()
-			print("Added modification ", name, " = ", value.strip_edges())
+		if _peek() != "=":
+			break
+		
+		_next()  # Skip =
+		_skip_whitespace_and_comments()
+		
+		# Parse modification value
+		var value = ""
+		while _pos < _len:
+			var c = _peek()
+			if c == ")" or c == ",":
+				break
+			value += _next()
+		
+		modifications[name] = value.strip_edges()
 		
 		_skip_whitespace_and_comments()
 		if _peek() == ",":
 			_next()  # Skip comma
+			continue
+		elif _peek() == ")":
+			_next()  # Skip closing parenthesis
+			break
 	
-	print("Finished parsing modifications: ", modifications)
 	return modifications
 
-func _parse_value() -> String:
-	_skip_whitespace_and_comments()
-	var value = ""
-	var parentheses_count = 0
-	var in_string = false
-	var in_description = false
-	
-	# Handle string literals
-	if _peek() == "\"":
-		return _parse_string()
-	
-	while _pos < _len:
-		var c = _peek()
-		
-		# Break on delimiters if not in a string or parentheses
-		if not in_string and parentheses_count == 0:
-			if c in [",", ")", ";"]:
-				break
-		
-		# Handle string literals
-		if c == "\"":
-			if not in_string:
-				in_string = true
-				in_description = true
-				break  # Stop here, we've found the description
-			else:
-				if _peek(-1) != "\\":  # Not an escaped quote
-					in_string = false
-			value += _next()
-			continue
-		
-		# Handle parentheses
-		if not in_string:
-			if c == "(":
-				parentheses_count += 1
-			elif c == ")":
-				parentheses_count -= 1
-				if parentheses_count < 0:  # Found closing parenthesis of outer context
-					break
-		
-		value += _next()
-	
-	return value.strip_edges()
-
-func _skip_whitespace_and_comments() -> void:
-	while _pos < _len:
-		var c = _peek()
-		
-		# Skip whitespace
-		if c.strip_edges().is_empty():
-			_next()
-			continue
-		
-		# Skip single-line comments
-		if c == "/" and _peek(1) == "/":
-			print("Skipping single-line comment")
-			while _pos < _len and _peek() != "\n":
-				_next()
-			if _pos < _len:
-				_next()  # Skip the newline
-			continue
-		
-		# Skip multi-line comments
-		if c == "/" and _peek(1) == "*":
-			print("Skipping multi-line comment")
-			_next()  # Skip /
-			_next()  # Skip *
-			
-			while _pos < _len:
-				if _peek() == "*" and _peek(1) == "/":
-					_next()  # Skip *
-					_next()  # Skip /
-					break
-				_next()
-			continue
-		
-		break
-
-func _skip_until_semicolon() -> void:
-	print("Skipping until semicolon from position: ", _pos)
-	var parentheses_count = 0
-	var in_string = false
-	
-	# If we're already at a semicolon, just skip it and return
-	if _peek() == ";":
-		_next()  # Skip the semicolon
-		print("Already at semicolon, skipped it")
-		return
-	
-	# Otherwise, search for the next semicolon
-	while _pos < _len:
-		var c = _peek()
-		
-		# Handle string literals
-		if c == "\"":
-			if not in_string:
-				in_string = true
-			else:
-				if _peek(-1) != "\\":  # Not an escaped quote
-					in_string = false
-			_next()
-			continue
-		
-		# Only count parentheses if not in a string
-		if not in_string:
-			if c == "(":
-				parentheses_count += 1
-			elif c == ")":
-				parentheses_count -= 1
-		
-		# Break on semicolon if not in string and not in parentheses
-		if c == ";" and not in_string and parentheses_count <= 0:
-			_next()  # Skip the semicolon
-			print("Found semicolon at position: ", _pos)
-			return
-		
-		_next()  # Skip current character
-	
-	print("Reached end of text without finding semicolon")
-
-func _match_keyword(keyword: String) -> bool:
-	_skip_whitespace_and_comments()
-	var start_pos = _pos
-	
-	# Try to match each character of the keyword
-	for c in keyword:
-		if _pos >= _len or _peek() != c:
-			_pos = start_pos
-			return false
-		_next()
-	
-	# Check that the next character is not a valid identifier character
-	# This prevents matching "model" in "modeling" for example
-	if _pos < _len:
-		var next_char = _peek()
-		if next_char.is_valid_identifier() or next_char == "_" or next_char.is_valid_int():
-			_pos = start_pos
-			return false
-	
-	print("Matched keyword: ", keyword)
-	return true
-
-func _peek(offset: int = 0) -> String:
-	if _pos + offset >= _len or _pos + offset < 0:
+func _peek() -> String:
+	if _pos >= _len:
 		return ""
-	return _text[_pos + offset]
+	return _text[_pos]
 
 func _next() -> String:
 	if _pos >= _len:
 		return ""
 	var c = _text[_pos]
 	_pos += 1
-	print("Moving from position ", _pos - 1, " to ", _pos, ", char: '", c, "'")
 	return c
 
-func _parse_model_annotation() -> Dictionary:
-	print("Parsing model annotation")
-	var annotation = {}
-	
-	_skip_whitespace_and_comments()
-	if _peek() != "(":
-		push_error("Expected '(' after annotation keyword")
-		return annotation
-	
-	_next()  # Skip opening parenthesis
-	var content = ""
-	var parentheses_count = 1
-	var in_string = false
-	
+func _advance(count: int = 1) -> void:
+	_pos = min(_pos + count, _len)
+
+func _skip_whitespace_and_comments() -> void:
 	while _pos < _len:
-		var c = _peek()
+		# Skip whitespace
+		while _pos < _len and _text[_pos].strip_edges().is_empty():
+			_pos += 1
 		
-		# Handle string literals
-		if c == "\"":
-			if not in_string:
-				in_string = true
-			else:
-				if _peek(-1) != "\\":  # Not an escaped quote
-					in_string = false
-			content += _next()
-			continue
-		
-		# Only count parentheses if not in a string
-		if not in_string:
-			if c == "(":
-				parentheses_count += 1
-			elif c == ")":
-				parentheses_count -= 1
-				if parentheses_count == 0:
-					_next()  # Skip closing parenthesis
-					break
-		
-		content += _next()
-	
-	annotation["content"] = content.strip_edges()
-	print("Parsed annotation content: ", content)
-	return annotation
+		# Check for comments
+		if _pos + 1 < _len:
+			if _text[_pos] == "/" and _text[_pos + 1] == "/":
+				# Single-line comment
+				print("Skipping single-line comment")
+				_pos += 2  # Skip //
+				while _pos < _len and _text[_pos] != "\n":
+					_pos += 1
+				continue
+			elif _text[_pos] == "/" and _text[_pos + 1] == "*":
+				# Multi-line comment
+				_pos += 2  # Skip /*
+				while _pos + 1 < _len:
+					if _text[_pos] == "*" and _text[_pos + 1] == "/":
+						_pos += 2  # Skip */
+						break
+					_pos += 1
+				continue
+		break
 
-func _peek_word() -> String:
-	var word = ""
-	var save_pos = _pos
-	
-	while _pos < _len:
-		var c = _peek()
-		if c.is_valid_identifier():
-			word += _next()
-		else:
-			break
-	
-	_pos = save_pos
-	return word
+func _skip_whitespace() -> void:
+	while _pos < _len and _text[_pos].strip_edges().is_empty():
+		_pos += 1
 
-func _advance(count: int) -> void:
-	for i in range(count):
-		if _pos < _len:
-			_next()
+func _skip_until_semicolon() -> void:
+	while _pos < _len and _text[_pos] != ";":
+		_pos += 1
+	if _pos < _len:
+		_pos += 1  # Skip the semicolon
 
-func _parse_annotation() -> Dictionary:
+func _match_keyword(keyword: String) -> bool:
 	_skip_whitespace_and_comments()
-	var annotation = {}
-	var parentheses_count = 0
-	var content = ""
+	if _pos + keyword.length() > _len:
+		return false
 	
+	var word = _text.substr(_pos, keyword.length())
+	if word == keyword:
+		var next_char = _pos + keyword.length() < _len ? _text[_pos + keyword.length()] : " "
+		if not next_char.is_valid_identifier():
+			_pos += keyword.length()
+			return true
+	return false
+
+func _parse_definition_type() -> String:
 	_skip_whitespace_and_comments()
-	if _peek() != "(":
-		return {}
-		
-	_next()  # Skip opening parenthesis
-	parentheses_count += 1
-	
-	while _pos < _len and parentheses_count > 0:
-		var c = _peek()
-		
-		if c == "(":
-			parentheses_count += 1
-		elif c == ")":
-			parentheses_count -= 1
-		
-		content += _next()
-	
-	_skip_whitespace_and_comments()
-	if _peek() == ";":
-		_next()  # Skip semicolon
-	
-	if not content.is_empty():
-		annotation["content"] = content
-	
-	return annotation
+	for keyword in KEYWORDS:
+		if _match_keyword(keyword):
+			return keyword
+	return ""

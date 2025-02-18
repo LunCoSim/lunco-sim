@@ -9,6 +9,7 @@ func _init() -> void:
 	parser = MOParser.new()
 	get_root().add_child(parser)
 	test_damping_mass()
+	test_damping_mass_dependencies()
 	quit()
 
 func test_damping_mass() -> void:
@@ -68,6 +69,36 @@ func test_damping_mass() -> void:
 	
 	print("DampingMassTest.mo tests completed successfully")
 
+func test_damping_mass_dependencies() -> void:
+	print("\nTesting DampingMassTest dependencies and settings")
+	
+	# Test model dependencies
+	var mechanical_path = "res://apps/modelica_godot/components/Mechanical/package.mo"
+	var mechanical_result = parser.parse_file(mechanical_path)
+	assert_not_null(mechanical_result, "Mechanical package exists")
+	
+	# Test required component models
+	var mass_model = find_model_in_package(mechanical_result, "Mass")
+	assert_not_null(mass_model, "Mass model exists in package")
+	
+	var damper_model = find_model_in_package(mechanical_result, "Damper")
+	assert_not_null(damper_model, "Damper model exists in package")
+	
+	var fixed_model = find_model_in_package(mechanical_result, "Fixed")
+	assert_not_null(fixed_model, "Fixed model exists in package")
+	
+	# Load main model again
+	var result = parser.parse_file("res://apps/modelica_godot/components/Mechanical/DampingMassTest.mo")
+	
+	# Test experiment annotation parameters
+	var experiment = get_experiment_annotation(result)
+	assert_not_null(experiment, "Has experiment annotation")
+	assert_eq(experiment.get("StartTime", ""), "0", "Correct start time")
+	assert_eq(experiment.get("StopTime", ""), "10", "Correct stop time")
+	assert_eq(experiment.get("Interval", ""), "0.1", "Correct interval")
+	
+	print("DampingMassTest dependencies and settings test completed successfully")
+
 func find_component(components: Array, name: String) -> Dictionary:
 	for component in components:
 		if component.name == name:
@@ -79,6 +110,33 @@ func find_parameter(parameters: Array, name: String) -> Dictionary:
 		if parameter.name == name:
 			return parameter
 	return {}
+
+func find_model_in_package(package_data: Dictionary, model_name: String) -> Dictionary:
+	if package_data.has("models"):
+		for model in package_data.models:
+			if model.name == model_name:
+				return model
+	return {}
+
+func get_experiment_annotation(model_data: Dictionary) -> Dictionary:
+	if not model_data.has("annotations") or not model_data.annotations.has("content"):
+		return {}
+	
+	var content = model_data.annotations.content
+	if not content.contains("experiment"):
+		return {}
+	
+	var experiment = {}
+	var start_idx = content.find("experiment(")
+	var end_idx = content.find(")", start_idx)
+	if start_idx != -1 and end_idx != -1:
+		var params = content.substr(start_idx + 11, end_idx - start_idx - 11).split(",")
+		for param in params:
+			var parts = param.strip_edges().split("=")
+			if parts.size() == 2:
+				experiment[parts[0].strip_edges()] = parts[1].strip_edges()
+	
+	return experiment
 
 func assert_eq(actual, expected, message: String) -> void:
 	if actual != expected:

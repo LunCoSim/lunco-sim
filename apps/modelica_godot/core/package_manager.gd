@@ -1,4 +1,6 @@
+@tool
 extends Node
+class_name PackageManager
 
 const MOParser = preload("res://apps/modelica_godot/core/mo_parser.gd")
 
@@ -8,6 +10,9 @@ signal loading_error(package_name: String, error: String)
 var _packages: Dictionary = {}  # full_qualified_name -> package_data
 var _components: Dictionary = {}  # full_path -> component_data
 var _package_hierarchy: Dictionary = {}  # package_path -> parent_package
+
+func _init():
+	pass  # Basic initialization
 
 func load_package(path: String) -> bool:
 	print("\n=== Loading Package ===")

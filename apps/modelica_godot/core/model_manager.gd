@@ -410,111 +410,66 @@ func _parse_model_file(content: String, path: String) -> void:
 	_add_to_model_tree(tree_path, model_data)
 
 func _add_model_to_tree(model_data: Dictionary) -> void:
-	var path = model_data.get("path", "")
-	var parts = path.split("/")
-	var current = _model_tree
+	if model_data.is_empty():
+		return
+		
+	var model_name = model_data.get("name", "")
+	if model_name.is_empty():
+		push_error("Model data missing name")
+		return
+		
+	# Create a new component for the model
+	var component = ModelicaComponent.new(model_name, model_data.get("description", ""))
 	
-	# Process imports first
-	_process_imports(model_data)
+	# Add parameters
+	for param in model_data.get("parameters", []):
+		component.add_parameter(param.get("name", ""), param.get("value", 0.0))
 	
-	# Process inheritance
-	if not model_data.get("extends", []).is_empty():
-		_resolve_inheritance(model_data)
+	# Add variables
+	for var_data in model_data.get("variables", []):
+		component.add_variable(var_data.get("name", ""), var_data.get("value", 0.0))
 	
-	# Build package hierarchy
-	for i in range(parts.size() - 1):
-		var part = parts[i]
-		if not current.has(part):
-			current[part] = {
-				"name": part,
-				"type": "package",
-				"children": {}
-			}
-		current = current.get(part).get("children")
+	# Add equations
+	for equation in model_data.get("equations", []):
+		component.add_equation(equation)
 	
-	# Add model to tree
-	var name = parts[-1].get_basename()
-	if name == "package":
-		current.merge({
-			"description": model_data.get("description", ""),
-			"name": model_data.get("name", ""),
-			"path": path,
-			"type": model_data.get("type", "")
-		})
-	else:
-		current[name] = {
-			"description": model_data.get("description", ""),
-			"name": model_data.get("name", name),
-			"path": path,
-			"type": model_data.get("type", "unknown"),
-			"children": {},
-			"components": model_data.get("components", []),
-			"equations": model_data.get("equations", [])
-		}
+	# Add annotations
+	component.annotations = model_data.get("annotations", {})
+	
+	# Add to model tree
+	_model_tree[model_name] = component
+	add_child(component)
+	components.append(component)
+	
+	emit_signal("model_loaded", model_data)
 
-func _process_imports(model_data: Dictionary) -> void:
-	var current_package = _get_package_name(model_data)
-	
-	for import_info in model_data.get("imports", []):
-		_package_manager.add_import(
-			current_package,
-			import_info.get("name", ""),
-			import_info.get("alias", ""),
-			import_info.get("is_wildcard", false)
-		)
+func has_model(model_name: String) -> bool:
+	return _model_tree.has(model_name)
 
-func _get_package_name(model_data: Dictionary) -> String:
-	var within = model_data.get("within", "")
-	var name = model_data.get("name", "")
-	
-	if within.is_empty():
-		return name
-	return within + "." + name
+func has_component(component_name: String) -> bool:
+	for component in components:
+		if component.component_name == component_name:
+			return true
+	return false
 
-func _resolve_inheritance(model_data: Dictionary) -> void:
-	var resolved_components = []
-	var resolved_equations = []
-	var current_package = _get_package_name(model_data)
-	
-	# Process each extends clause
-	for extends_info in model_data.get("extends", []):
-		var base_class = extends_info.get("base_class", "")
-		var modifications = extends_info.get("modifications", {})
-		
-		# Resolve base class
-		var base_data = _package_manager.resolve_type(base_class, current_package)
-		if base_data.is_empty():
-			push_warning("Could not resolve base class: " + base_class)
-			continue
-		
-		# Apply modifications to inherited components
-		var modified_components = _apply_modifications(
-			base_data.get("components", []),
-			modifications
-		)
-		resolved_components.append_array(modified_components)
-		
-		# Add inherited equations
-		resolved_equations.append_array(base_data.get("equations", []))
-	
-	# Add inherited members before local ones
-	model_data.components = resolved_components + model_data.get("components", [])
-	model_data.equations = resolved_equations + model_data.get("equations", [])
+func get_model_parameters(model_data: Dictionary) -> Dictionary:
+	var params = {}
+	for param in model_data.get("parameters", []):
+		params[param.get("name", "")] = param.get("value", 0.0)
+	return params
 
-func _apply_modifications(components: Array, modifications: Dictionary) -> Array:
-	var result = []
+func get_experiment_settings(model_data: Dictionary) -> Dictionary:
+	var settings = {}
+	var annotations = model_data.get("annotations", {})
 	
-	for comp in components:
-		var modified = comp.duplicate(true)
-		
-		# Apply modifications if they exist for this component
-		if modifications.has(modified.name):
-			var mod = modifications.get(modified.name)
-			modified.modifications.merge(mod)
-		
-		result.append(modified)
+	if annotations.has("experiment"):
+		var experiment = annotations["experiment"]
+		if experiment is Dictionary:
+			settings["StartTime"] = float(experiment.get("StartTime", "0"))
+			settings["StopTime"] = float(experiment.get("StopTime", "1"))
+			settings["Interval"] = float(experiment.get("Interval", "0.1"))
 	
-	return result
+	return settings
 
 func get_component_type(type_name: String, current_package: String) -> Dictionary:
 	return _package_manager.resolve_type(type_name, current_package)
