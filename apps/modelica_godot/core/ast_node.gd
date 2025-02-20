@@ -1,65 +1,74 @@
 class_name ImprovedASTNode
-extends RefCounted
+extends Node
 
 var type: String
 var value: String
-var dependencies: Array[String]
-var is_differential: bool
-var state_variable: String
 var left: ImprovedASTNode
 var right: ImprovedASTNode
 var operand: ImprovedASTNode
 var arguments: Array[ImprovedASTNode]
+var is_differential: bool = false
+var state_variable: String = ""
+var dependencies: Array[String] = []
 
-func _init(p_type: String, p_value: String = ""):
-	type = p_type
-	value = p_value
-	dependencies = []
-	is_differential = false
-	state_variable = ""
+func _init(type_: String = "", value_: String = ""):
+	type = type_
+	value = value_
+	left = null
+	right = null
+	operand = null
 	arguments = []
+	dependencies = []
 
 func add_dependency(var_name: String) -> void:
 	if not dependencies.has(var_name):
 		dependencies.append(var_name)
 
-func get_dependencies() -> Array[String]:
-	var all_deps: Array[String] = []
-	all_deps.append_array(dependencies)
+func collect_dependencies() -> void:
+	# First collect direct dependencies from children
+	if left != null:
+		left.collect_dependencies()
+		for dep in left.dependencies:
+			if not dependencies.has(dep):
+				dependencies.append(dep)
 	
-	if left:
-		all_deps.append_array(left.get_dependencies())
-	if right:
-		all_deps.append_array(right.get_dependencies())
-	if operand:
-		all_deps.append_array(operand.get_dependencies())
+	if right != null:
+		right.collect_dependencies()
+		for dep in right.dependencies:
+			if not dependencies.has(dep):
+				dependencies.append(dep)
+	
+	if operand != null:
+		operand.collect_dependencies()
+		for dep in operand.dependencies:
+			if not dependencies.has(dep):
+				dependencies.append(dep)
+	
 	for arg in arguments:
-		all_deps.append_array(arg.get_dependencies())
-	
-	var unique_deps: Array[String] = []
-	for dep in all_deps:
-		if not unique_deps.has(dep):
-			unique_deps.append(dep)
-	
-	return unique_deps
+		arg.collect_dependencies()
+		for dep in arg.dependencies:
+			if not dependencies.has(dep):
+				dependencies.append(dep)
+
+func get_dependencies() -> Array[String]:
+	return dependencies
 
 func _to_string() -> String:
 	match type:
 		"NUMBER":
 			return value
-		"BINARY_OP":
-			return "(%s %s %s)" % [left, value, right]
-		"UNARY_OP":
-			return "(%s%s)" % [value, operand]
 		"VARIABLE":
 			return value
-		"DERIVATIVE":
-			return "der(%s)" % state_variable
+		"BINARY_OP":
+			return "(" + str(left) + " " + value + " " + str(right) + ")"
+		"UNARY_OP":
+			return value + "(" + str(operand) + ")"
 		"FUNCTION_CALL":
 			var args_str = ""
-			for arg in arguments:
-				if args_str:
+			for i in range(arguments.size()):
+				if i > 0:
 					args_str += ", "
-				args_str += str(arg)
-			return "%s(%s)" % [value, args_str]
-	return "Node(%s, %s)" % [type, value] 
+				args_str += str(arguments[i])
+			return value + "(" + args_str + ")"
+		_:
+			return "[Unknown AST Node]" 

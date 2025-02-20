@@ -24,6 +24,9 @@ func _run_all_tests() -> void:
 	_test_damped_spring_mass_system()
 	_test_coupled_pendulums()
 	_test_bouncing_ball()
+	_test_ast_dependencies()
+	_test_ast_differential()
+	_test_ast_state_variables()
 
 func _start_test(test_name: String) -> void:
 	current_test = test_name
@@ -464,4 +467,133 @@ func _test_bouncing_ball() -> void:
 	# v = v0 + a*t = 0 + (-9.81)*0.1 = -0.981 m/s
 	# h = h0 + v0*t + 0.5*a*t^2 = 1.0 + 0 + 0.5*(-9.81)*0.1^2 = 0.95095 m
 	_assert_approx(ball.get_variable("velocity"), -0.981, "Velocity after 10 steps", 1e-3)
-	_assert_approx(ball.get_variable("height"), 0.95095, "Height after 10 steps", 1e-5) 
+	_assert_approx(ball.get_variable("height"), 0.95095, "Height after 10 steps", 1e-5)
+
+func _test_ast_dependencies() -> void:
+	_start_test("AST Dependencies")
+	
+	var eq_system = EquationSystem.new()
+	var comp = ModelicaComponent.new("test")
+	
+	# Add variables to component
+	comp.add_variable("x")
+	comp.add_variable("y")
+	comp.add_variable("z")
+	
+	# Test simple dependency
+	eq_system.add_component(comp)
+	eq_system.add_equation("test.x = test.y + test.z", comp)
+	eq_system.initialize()
+	
+	# Get the AST node from the last equation
+	var tokens = eq_system.tokenize("test.y + test.z")
+	var ast_dict = eq_system.parse_expression(tokens)
+	var node = ast_dict.node
+	
+	# Test dependencies
+	var deps = node.get_dependencies()
+	_assert(deps.has("test.y"), "AST tracks dependency on y")
+	_assert(deps.has("test.z"), "AST tracks dependency on z")
+	_assert(deps.size() == 2, "AST has correct number of dependencies")
+	
+	# Test nested dependencies
+	tokens = eq_system.tokenize("test.x * (test.y + test.z)")
+	ast_dict = eq_system.parse_expression(tokens)
+	node = ast_dict.node
+	
+	deps = node.get_dependencies()
+	_assert(deps.has("test.x"), "AST tracks dependency in multiplication")
+	_assert(deps.has("test.y"), "AST tracks dependency in nested addition")
+	_assert(deps.has("test.z"), "AST tracks dependency in nested addition")
+	_assert(deps.size() == 3, "AST has correct number of nested dependencies")
+	
+	# Test function call dependencies
+	tokens = eq_system.tokenize("sin(test.x) + cos(test.y)")
+	ast_dict = eq_system.parse_expression(tokens)
+	node = ast_dict.node
+	
+	deps = node.get_dependencies()
+	_assert(deps.has("test.x"), "AST tracks dependency in sin function")
+	_assert(deps.has("test.y"), "AST tracks dependency in cos function")
+	_assert(deps.size() == 2, "AST has correct number of function dependencies")
+
+func _test_ast_differential() -> void:
+	_start_test("AST Differential Equations")
+	
+	var eq_system = EquationSystem.new()
+	var comp = ModelicaComponent.new("test")
+	
+	# Add state variables
+	comp.add_state_variable("x")
+	comp.add_state_variable("v")
+	
+	# Test simple derivative
+	eq_system.add_component(comp)
+	eq_system.add_equation("der(test.x) = test.v", comp)
+	
+	# Get the AST node from the derivative expression
+	var tokens = eq_system.tokenize("der(test.x)")
+	var ast_dict = eq_system.parse_expression(tokens)
+	var node = ast_dict.node
+	
+	# Test differential properties
+	_assert(node.is_differential, "AST identifies derivative function")
+	_assert(node.state_variable == "test.x", "AST tracks state variable in derivative")
+	
+	# Test nested derivative
+	tokens = eq_system.tokenize("2.0 * der(test.x) + test.v")
+	ast_dict = eq_system.parse_expression(tokens)
+	node = ast_dict.node
+	
+	# The derivative node should be in the left part of the addition
+	var der_node = node.left.right  # Navigate to der() node in "2.0 * der(test.x)"
+	_assert(der_node.is_differential, "AST identifies derivative in complex expression")
+	_assert(der_node.state_variable == "test.x", "AST tracks state variable in complex expression")
+
+func _test_ast_state_variables() -> void:
+	_start_test("AST State Variables")
+	
+	var eq_system = EquationSystem.new()
+	var comp = ModelicaComponent.new("test")
+	
+	# Add state variables and regular variables
+	comp.add_state_variable("pos")
+	comp.add_state_variable("vel")
+	comp.add_variable("force")
+	
+	# Test state variable tracking in a complex equation
+	eq_system.add_component(comp)
+	eq_system.add_equation("der(test.pos) = test.vel", comp)
+	eq_system.add_equation("der(test.vel) = test.force / 1.0", comp)
+	
+	# Test first equation
+	var tokens = eq_system.tokenize("der(test.pos) = test.vel")
+	var ast_dict = eq_system.parse_expression(tokens)
+	var node = ast_dict.node
+	
+	_assert(node.type == "BINARY_OP", "AST creates binary operation for equation")
+	_assert(node.left.is_differential, "Left side is marked as differential")
+	_assert(node.left.state_variable == "test.pos", "Tracks correct state variable")
+	
+	# Test second equation with more complex right side
+	tokens = eq_system.tokenize("der(test.vel) = test.force / 1.0")
+	ast_dict = eq_system.parse_expression(tokens)
+	node = ast_dict.node
+	
+	_assert(node.left.is_differential, "Left side is marked as differential")
+	_assert(node.left.state_variable == "test.vel", "Tracks correct state variable")
+	
+	# Test dependencies in differential equation
+	var deps = node.get_dependencies()
+	_assert(deps.has("test.force"), "Tracks dependencies in differential equation")
+	
+	# Test nested derivatives
+	tokens = eq_system.tokenize("der(test.vel) + 2.0 * der(test.pos)")
+	ast_dict = eq_system.parse_expression(tokens)
+	node = ast_dict.node
+	
+	deps = node.get_dependencies()
+	_assert(node.left.is_differential, "First derivative is marked")
+	_assert(node.right.right.is_differential, "Second derivative is marked")
+	_assert(node.left.state_variable == "test.vel", "First state variable is correct")
+	_assert(node.right.right.state_variable == "test.pos", "Second state variable is correct") 

@@ -523,7 +523,7 @@ func _match_keyword(keyword: String) -> bool:
 	
 	var word = _text.substr(_pos, keyword.length())
 	if word == keyword:
-		var next_char = _pos + keyword.length() < _len ? _text[_pos + keyword.length()] : " "
+		var next_char = " " if _pos + keyword.length() >= _len else _text[_pos + keyword.length()]
 		if not next_char.is_valid_identifier():
 			_pos += keyword.length()
 			return true
