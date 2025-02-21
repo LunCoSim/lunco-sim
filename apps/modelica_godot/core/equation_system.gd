@@ -95,21 +95,28 @@ func _rk4_step(current_state: Dictionary, current_derivatives: Dictionary) -> Di
 	var k4_state = current_state.duplicate()
 	
 	# Calculate k1 (evaluate derivatives at current state)
+	_solve_algebraic_equations(k1_state)  # Solve algebraic equations first
 	var k1 = _evaluate_derivatives(k1_state)
 	
 	# Calculate k2 (midpoint)
+	k2_state = current_state.duplicate()  # Start fresh
 	for var_name in k1:
 		k2_state[var_name] = current_state[var_name] + 0.5 * dt * k1[var_name]
+	_solve_algebraic_equations(k2_state)  # Update dependent variables
 	var k2 = _evaluate_derivatives(k2_state)
 	
 	# Calculate k3 (midpoint)
+	k3_state = current_state.duplicate()  # Start fresh
 	for var_name in k2:
 		k3_state[var_name] = current_state[var_name] + 0.5 * dt * k2[var_name]
+	_solve_algebraic_equations(k3_state)  # Update dependent variables
 	var k3 = _evaluate_derivatives(k3_state)
 	
 	# Calculate k4 (endpoint)
+	k4_state = current_state.duplicate()  # Start fresh
 	for var_name in k3:
 		k4_state[var_name] = current_state[var_name] + dt * k3[var_name]
+	_solve_algebraic_equations(k4_state)  # Update dependent variables
 	var k4 = _evaluate_derivatives(k4_state)
 	
 	# Combine all steps
@@ -119,7 +126,31 @@ func _rk4_step(current_state: Dictionary, current_derivatives: Dictionary) -> Di
 			k1[var_name] + 2 * k2[var_name] + 2 * k3[var_name] + k4[var_name]
 		)
 	
+	# Final algebraic solve to ensure consistency
+	_solve_algebraic_equations(next_state)
+	
 	return next_state
+
+# Helper function to solve algebraic equations
+func _solve_algebraic_equations(state: Dictionary) -> void:
+	for iter in range(MAX_ITERATIONS):
+		var max_residual = 0.0
+		var new_values = {}
+		
+		# Evaluate all algebraic equations
+		for eq in equations:
+			if not eq.is_differential:
+				var rhs_value = _evaluate_expression(eq.right, eq.component, state)
+				var lhs_var = eq.left
+				new_values[lhs_var] = rhs_value
+				max_residual = max(max_residual, abs(rhs_value - state.get(lhs_var, 0.0)))
+		
+		# Update state with new values
+		for var_name in new_values:
+			state[var_name] = new_values[var_name]
+		
+		if max_residual < TOLERANCE:
+			break
 
 func _evaluate_derivatives(state: Dictionary) -> Dictionary:
 	var new_derivatives = {}
