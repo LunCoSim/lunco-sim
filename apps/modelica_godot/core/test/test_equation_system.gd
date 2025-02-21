@@ -589,10 +589,19 @@ func _test_ast_state_variables() -> void:
 	
 	# Test nested derivatives
 	tokens = eq_system.tokenize("der(test.vel) + 2.0 * der(test.pos)")
+	print("Tokens for nested derivatives:", tokens)
 	ast_dict = eq_system.parse_expression(tokens)
+	print("AST dict for nested derivatives:", ast_dict)
 	node = ast_dict.node
+	print("Node for nested derivatives:", node)
 	
 	deps = node.get_dependencies()
+	print("Dependencies for nested derivatives:", deps)
+	print("Node left:", node.left)
+	print("Node right:", node.right)
+	if node.right:
+		print("Node right.right:", node.right.right)
+	
 	_assert(node.left.is_differential, "First derivative is marked")
 	_assert(node.right.right.is_differential, "Second derivative is marked")
 	_assert(node.left.state_variable == "test.vel", "First state variable is correct")

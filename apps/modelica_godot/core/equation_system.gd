@@ -28,6 +28,7 @@ class EquationToken:
 const TOKEN_TYPES = {
 	"NUMBER": "\\d+(\\.\\d+)?",
 	"OPERATOR": "[+\\-*/^]",
+	"EQUALS": "=",
 	"LPAREN": "\\(",
 	"RPAREN": "\\)",
 	"IDENTIFIER": "[a-zA-Z_][a-zA-Z0-9_]*",
@@ -88,12 +89,13 @@ func add_component(component: ModelicaComponent) -> void:
 
 # RK4 integration helper function
 func _rk4_step(current_state: Dictionary, current_derivatives: Dictionary) -> Dictionary:
-	var k1 = current_derivatives.duplicate()
+	var k1_state = current_state.duplicate()
 	var k2_state = current_state.duplicate()
 	var k3_state = current_state.duplicate()
 	var k4_state = current_state.duplicate()
 	
-	# Calculate k1 (already done)
+	# Calculate k1 (evaluate derivatives at current state)
+	var k1 = _evaluate_derivatives(k1_state)
 	
 	# Calculate k2 (midpoint)
 	for var_name in k1:
@@ -112,7 +114,7 @@ func _rk4_step(current_state: Dictionary, current_derivatives: Dictionary) -> Di
 	
 	# Combine all steps
 	var next_state = current_state.duplicate()
-	for var_name in current_derivatives:
+	for var_name in k1:  # Using k1 keys since it has all derivative variables
 		next_state[var_name] = current_state[var_name] + (dt / 6.0) * (
 			k1[var_name] + 2 * k2[var_name] + 2 * k3[var_name] + k4[var_name]
 		)
@@ -129,34 +131,24 @@ func _evaluate_derivatives(state: Dictionary) -> Dictionary:
 	return new_derivatives
 
 func solve_step() -> void:
-	# Solve one time step using RK4 method
 	# 1. Store current state
 	var current_state = variables.duplicate()
-	var current_derivatives = derivatives.duplicate()
 	
-	# 2. Solve the nonlinear system at the current time
+	# 2. Solve algebraic equations first to ensure consistent state
 	var converged = false
 	for iter in range(MAX_ITERATIONS):
 		var max_residual = 0.0
-		var new_derivatives = {}
 		var new_values = {}
 		
-		# First pass: evaluate all equations
+		# First pass: evaluate all algebraic equations
 		for eq in equations:
-			var rhs_value = _evaluate_expression(eq.right, eq.component, current_state)
-			
-			if eq.is_differential:
-				# Handle differential equations
-				var der_var = _extract_der_variable(eq.left if eq.left.begins_with("der(") else eq.right)
-				new_derivatives[der_var] = rhs_value
-				max_residual = max(max_residual, abs(rhs_value - current_derivatives.get(der_var, 0.0)))
-			else:
-				# Handle algebraic equations
+			if not eq.is_differential:
+				var rhs_value = _evaluate_expression(eq.right, eq.component, current_state)
 				var lhs_var = eq.left
 				new_values[lhs_var] = rhs_value
 				max_residual = max(max_residual, abs(rhs_value - current_state.get(lhs_var, 0.0)))
 		
-		# Second pass: update all variables
+		# Update state with new values
 		for var_name in new_values:
 			current_state[var_name] = new_values[var_name]
 			
@@ -170,52 +162,35 @@ func solve_step() -> void:
 						comp.set_variable(var_name_only, new_values[var_name])
 						break
 		
-		# Update derivatives
-		current_derivatives = new_derivatives
-		
 		if max_residual < TOLERANCE:
 			converged = true
 			break
 	
 	if not converged:
-		push_warning("Solver did not converge in " + str(MAX_ITERATIONS) + " iterations")
+		push_warning("Algebraic solver did not converge in " + str(MAX_ITERATIONS) + " iterations")
 	
-	# 3. Update state using RK4 integration
+	# 3. Evaluate derivatives at the current state
+	var current_derivatives = _evaluate_derivatives(current_state)
+	
+	# 4. Perform RK4 integration step
 	var next_state = _rk4_step(current_state, current_derivatives)
 	
-	# Update component states
-	for var_name in next_state:
+	# 5. Update system state
+	variables = next_state
+	
+	# 6. Re-evaluate derivatives at the new state
+	derivatives = _evaluate_derivatives(variables)
+	
+	# 7. Update component states with the new values
+	for var_name in variables:
 		var parts = var_name.split(".")
 		if parts.size() == 2:
 			var comp_name = parts[0]
 			var var_name_only = parts[1]
 			for comp in components:
 				if comp.component_name == comp_name:
-					comp.set_variable(var_name_only, next_state[var_name])
+					comp.set_variable(var_name_only, variables[var_name])
 					break
-	
-	# 4. Update system state
-	variables = next_state
-	derivatives = current_derivatives
-	
-	# 5. Solve algebraic equations one more time to ensure consistency
-	var final_values = {}
-	for eq in equations:
-		if not eq.is_differential:
-			var rhs_value = _evaluate_expression(eq.right, eq.component, variables)
-			var lhs_var = eq.left
-			final_values[lhs_var] = rhs_value
-			
-			# Update both system and component state
-			variables[lhs_var] = rhs_value
-			var parts = lhs_var.split(".")
-			if parts.size() == 2:
-				var comp_name = parts[0]
-				var var_name_only = parts[1]
-				for comp in components:
-					if comp.component_name == comp_name:
-						comp.set_variable(var_name_only, rhs_value)
-						break
 	
 	time += dt
 
@@ -295,6 +270,36 @@ func tokenize(expr: String) -> Array[EquationToken]:
 	return tokens
 
 func parse_expression(tokens: Array[EquationToken], start: int = 0, min_precedence: int = 0) -> Dictionary:
+	# First check if this is an equation (contains equals sign)
+	var equals_pos = -1
+	for i in range(start, tokens.size()):
+		if tokens[i].type == "EQUALS":
+			equals_pos = i
+			break
+	
+	if equals_pos != -1:
+		# Parse left and right sides separately
+		var left_tokens = tokens.slice(start, equals_pos)
+		var right_tokens = tokens.slice(equals_pos + 1)
+		
+		var left_result = parse_expression(left_tokens)
+		var right_result = parse_expression(right_tokens)
+		
+		if left_result.node == null or right_result.node == null:
+			return {"node": null, "next_pos": tokens.size()}
+		
+		var equation_node = ImprovedASTNode.new("BINARY_OP", "=")
+		equation_node.left = left_result.node
+		equation_node.right = right_result.node
+		
+		# Propagate dependencies from both sides
+		for dep in left_result.node.get_dependencies():
+			equation_node.add_dependency(dep)
+		for dep in right_result.node.get_dependencies():
+			equation_node.add_dependency(dep)
+		
+		return {"node": equation_node, "next_pos": tokens.size()}
+	
 	var result = parse_primary(tokens, start)
 	if result.node == null:
 		return result
