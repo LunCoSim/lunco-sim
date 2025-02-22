@@ -20,7 +20,8 @@ enum Unit {
     KELVIN,
     PASCAL,
     WATT,
-    VOLT
+    VOLT,
+    JOULE
 }
 
 var type: Type = Type.NONE
