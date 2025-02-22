@@ -1,73 +1,48 @@
 @tool
 extends SceneTree
 
-const ModelManager = preload("../model_manager.gd")
-const MOParser = preload("../mo_parser.gd")
-const PackageManager = preload("../package_manager.gd")
-const WorkspaceConfig = preload("../workspace_config.gd")
+const MOParser = preload("res://apps/modelica_godot/core/mo_parser.gd")
+const PackageManager = preload("res://apps/modelica_godot/core/package_manager.gd")
+const ModelManager = preload("res://apps/modelica_godot/core/model_manager.gd")
 
-var test_root: Node
-var model_manager: ModelManager
-var package_manager: PackageManager
 var parser: MOParser
-var workspace_config: WorkspaceConfig
+var package_manager: PackageManager
+var model_manager: ModelManager
+var test_msl_path: String
 
 func _init() -> void:
 	print("\nStarting Model Import Tests...")
-	test_root = Node.new()
-	get_root().add_child(test_root)
-	_run_tests()
-	quit()
-
-func _run_tests() -> void:
 	_setup()
 	test_model_import()
-	_teardown()
-	print("Tests completed.")
+	_cleanup()
+	quit()
 
 func _setup() -> void:
 	print("Setting up test environment...")
 	
-	# Initialize workspace config
-	workspace_config = WorkspaceConfig.new()
-	workspace_config.initialize(ProjectSettings.globalize_path("res://apps/modelica_godot"))
-	
-	# Initialize managers
-	model_manager = ModelManager.new()
-	package_manager = PackageManager.new()
+	# Initialize components
 	parser = MOParser.new()
+	package_manager = PackageManager.new()
+	model_manager = ModelManager.new()
 	
-	test_root.add_child(model_manager)
-	test_root.add_child(package_manager)
-	test_root.add_child(parser)
+	# Add to scene tree
+	root.add_child(package_manager)
+	root.add_child(model_manager)
 	
-	model_manager.initialize()
-	print("Setup complete.")
-
-func _teardown() -> void:
-	print("Cleaning up...")
-	if model_manager:
-		model_manager.queue_free()
-	if package_manager:
-		package_manager.queue_free()
-	if parser:
-		parser.queue_free()
-	if test_root:
-		test_root.queue_free()
-	print("Cleanup complete.")
+	# Set up test paths
+	test_msl_path = ProjectSettings.globalize_path("res://apps/modelica_godot/components")
 
 func test_model_import() -> void:
 	print("\nTesting model import functionality...")
 	
 	# Test package loading
-	var package_path = ProjectSettings.globalize_path("res://apps/modelica_godot/components")
-	assert_true(package_manager.load_package(package_path), "Package loaded successfully")
+	assert_true(package_manager.load_package(test_msl_path), "Package loaded successfully")
 	
 	# Test mechanical package
 	assert_true(package_manager.has_package("Mechanical"), "Mechanical package exists")
 	
 	# Test model import
-	var model_path = ProjectSettings.globalize_path("res://apps/modelica_godot/components/Mechanical/DampingMassTest.mo")
+	var model_path = test_msl_path.path_join("Mechanical/DampingMassTest.mo")
 	var file = FileAccess.open(model_path, FileAccess.READ)
 	assert_not_null(file, "Model file exists")
 	
@@ -105,26 +80,30 @@ func test_model_import() -> void:
 	
 	print("Model import tests completed successfully")
 
-func assert_true(condition: bool, message: String) -> void:
+func _cleanup() -> void:
+	print("\nCleaning up...")
+	if is_instance_valid(package_manager):
+		package_manager.queue_free()
+	if is_instance_valid(model_manager):
+		model_manager.queue_free()
+	if is_instance_valid(parser):
+		parser.free()
+	print("Cleanup complete.")
+	print("Tests completed.")
+
+# Test helper functions
+func assert_true(condition: bool, message: String = "") -> void:
 	if not condition:
 		push_error("Assertion failed: " + message)
-		return
-	print("  ✓ " + message)
 
-func assert_false(condition: bool, message: String) -> void:
+func assert_false(condition: bool, message: String = "") -> void:
 	if condition:
 		push_error("Assertion failed: " + message)
-		return
-	print("  ✓ " + message)
 
-func assert_not_null(value, message: String) -> void:
+func assert_eq(a: Variant, b: Variant, message: String = "") -> void:
+	if a != b:
+		push_error("Assertion failed: " + message + " (Expected " + str(b) + ", got " + str(a) + ")")
+
+func assert_not_null(value: Variant, message: String = "") -> void:
 	if value == null:
-		push_error("Assertion failed: " + message + " (value is null)")
-		return
-	print("  ✓ " + message)
-
-func assert_eq(actual, expected, message: String) -> void:
-	if actual != expected:
-		push_error("Assertion failed: " + message + "\nExpected: " + str(expected) + "\nActual: " + str(actual))
-		return
-	print("  ✓ " + message)	
+		push_error("Assertion failed: " + message + " (Got null)")	
