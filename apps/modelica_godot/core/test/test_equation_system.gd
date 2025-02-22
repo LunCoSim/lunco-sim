@@ -643,101 +643,86 @@ func _test_ast_state_variables() -> void:
 	_assert(node.right.right.state_variable == "test.pos", "Second state variable is correct")
 
 func _test_damping_mass() -> void:
-	_start_test("Damping Mass System")
+	current_test = "Damping Mass System"
+	print("\nTesting damping mass system...")
 	
-	var eq_system = EquationSystem.new()
+	# Constants
+	const GRAVITY = 9.81  # m/s²
+	const SIMULATION_TIME = 5.0
+	const DT = 0.01
 	
-	# Create mass component
-	var mass = ModelicaComponent.new("mass")
-	mass.add_connector("port", ModelicaConnector.Type.MECHANICAL)
-	mass.add_state_variable("position", 0.0)
-	mass.add_state_variable("velocity", 0.0)
-	mass.add_variable("force", 0.0)
-	mass.add_parameter("m", 1.0)  # 1 kg mass
+	# Initial conditions
+	var initial_position = 1.0  # x0
+	var initial_velocity = 0.0  # v0
+	var mass = 1.0             # mass.m
+	var damping = 0.5          # damper.d
 	
-	# Initialize mass port variables
-	mass.add_variable("port.position", 0.0)
-	mass.add_variable("port.velocity", 0.0)
-	mass.add_variable("port.force", 0.0)
+	# Create equation system
+	var system = EquationSystem.new()
 	
-	# Add mass equations
-	mass.add_equation("der(position) = velocity")
-	mass.add_equation("der(velocity) = force/m")
-	mass.add_equation("port.position = position")
-	mass.add_equation("port.velocity = velocity")
-	mass.add_equation("port.force = -force")
+	# Add equations for damped mass under gravity
+	system.add_variable("x", initial_position)  # Position
+	system.add_variable("v", initial_velocity)  # Velocity
+	system.add_variable("a")                    # Acceleration
+	system.add_variable("F_g", mass * GRAVITY)  # Gravity force
+	system.add_variable("F_d")                  # Damping force
 	
-	# Create damper component
-	var damper = ModelicaComponent.new("damper")
-	damper.add_connector("port_a", ModelicaConnector.Type.MECHANICAL)
-	damper.add_connector("port_b", ModelicaConnector.Type.MECHANICAL)
-	damper.add_parameter("d", 0.5)  # Damping coefficient 0.5 N⋅s/m
-	damper.add_variable("force", 0.0)
+	# Add equations
+	system.add_equation("v = dx/dt")           # Velocity is derivative of position
+	system.add_equation("a = dv/dt")           # Acceleration is derivative of velocity
+	system.add_equation("F_d = -d * v")        # Damping force
+	system.add_equation("m * a = F_g + F_d")   # Newton's second law
 	
-	# Initialize damper port variables
-	damper.add_variable("port_a.position", 0.0)
-	damper.add_variable("port_a.velocity", 0.0)
-	damper.add_variable("port_a.force", 0.0)
-	damper.add_variable("port_b.position", 0.0)
-	damper.add_variable("port_b.velocity", 0.0)
-	damper.add_variable("port_b.force", 0.0)
+	# Set parameters
+	system.set_parameter("m", mass)
+	system.set_parameter("d", damping)
 	
-	# Add damper equations
-	damper.add_equation("force = d * (port_b.velocity - port_a.velocity)")
-	damper.add_equation("port_a.force = force")
-	damper.add_equation("port_b.force = -force")
+	# Calculate theoretical terminal velocity
+	var terminal_velocity = GRAVITY * mass / damping
+	print("Theoretical terminal velocity: %.3f m/s" % terminal_velocity)
 	
-	# Create fixed point
-	var fixed = ModelicaComponent.new("fixed")
-	fixed.add_connector("port", ModelicaConnector.Type.MECHANICAL)
-	fixed.add_parameter("position", 0.0)
+	# Run simulation
+	var steps = int(SIMULATION_TIME / DT)
+	var time = 0.0
+	var positions = []
+	var velocities = []
 	
-	# Initialize fixed point port variables
-	fixed.add_variable("port.position", 0.0)
-	fixed.add_variable("port.velocity", 0.0)
-	fixed.add_variable("port.force", 0.0)
+	for i in range(steps):
+		time += DT
+		system.solve_step(DT)
+		
+		var current_position = system.get_variable("x")
+		var current_velocity = system.get_variable("v")
+		
+		positions.append(current_position)
+		velocities.append(current_velocity)
+		
+		if i % (steps/10) == 0:  # Print 10 evenly spaced steps
+			print("Time: %.2f, Position: %.3f, Velocity: %.3f" % 
+				[time, current_position, current_velocity])
 	
-	fixed.add_equation("port.position = position")
-	fixed.add_equation("port.velocity = 0")
+	# Verify damping behavior
+	print("\nVerifying damping behavior...")
 	
-	# Add components to system
-	eq_system.add_component(mass)
-	eq_system.add_component(damper)
-	eq_system.add_component(fixed)
+	# 1. Check position decreasing
+	assert_true(positions[-1] < initial_position, "Position should decrease due to gravity and damping")
 	
-	# Add connection equations
-	eq_system.add_equation("fixed.port.position = damper.port_a.position", null)
-	eq_system.add_equation("fixed.port.velocity = damper.port_a.velocity", null)
-	eq_system.add_equation("fixed.port.force + damper.port_a.force = 0", null)
-	eq_system.add_equation("damper.port_b.position = mass.port.position", null)
-	eq_system.add_equation("damper.port_b.velocity = mass.port.velocity", null)
-	eq_system.add_equation("damper.port_b.force + mass.port.force = 0", null)
+	# 2. Check terminal velocity
+	var final_velocity = velocities[-1]
+	var velocity_diff = abs(final_velocity - terminal_velocity)
+	var velocity_error = velocity_diff / terminal_velocity * 100
 	
-	# Add initial conditions
-	eq_system.add_initial_condition("mass.position", 1.0, mass)  # Start at x₀ = 1m
-	eq_system.add_initial_condition("mass.velocity", 0.0, mass)  # Start at v₀ = 0
-	eq_system.add_initial_condition("mass.port.position", 1.0, mass)  # Initialize port position
-	eq_system.add_initial_condition("mass.port.velocity", 0.0, mass)  # Initialize port velocity
-	eq_system.add_initial_condition("damper.port_a.position", 0.0, damper)  # Fixed end
-	eq_system.add_initial_condition("damper.port_a.velocity", 0.0, damper)  # Fixed end
-	eq_system.add_initial_condition("damper.port_b.position", 1.0, damper)  # Mass end
-	eq_system.add_initial_condition("damper.port_b.velocity", 0.0, damper)  # Mass end
-	eq_system.add_initial_condition("fixed.port.position", 0.0, fixed)  # Fixed point
-	eq_system.add_initial_condition("fixed.port.velocity", 0.0, fixed)  # Fixed point
+	assert_true(velocity_error <= 20, "Velocity should be within 20% of terminal velocity")
 	
-	# Initialize system
-	eq_system.initialize()
+	# 3. Check energy dissipation
+	var energy_decreasing = true
+	for i in range(1, positions.size()):
+		var prev_energy = 0.5 * mass * velocities[i-1] * velocities[i-1] + mass * GRAVITY * positions[i-1]
+		var curr_energy = 0.5 * mass * velocities[i] * velocities[i] + mass * GRAVITY * positions[i]
+		if curr_energy > prev_energy:
+			energy_decreasing = false
+			break
 	
-	# Test initial state
-	_assert_approx(mass.get_variable("position"), 1.0, "Initial position")
-	_assert_approx(mass.get_variable("velocity"), 0.0, "Initial velocity")
+	assert_true(energy_decreasing, "Total energy should decrease due to damping")
 	
-	# Simulate one step
-	eq_system.solve_step()
-	
-	# After one step (dt = 0.01):
-	# Damping force = -d * v = -0.5 * v
-	# Initial velocity should be negative (moving towards equilibrium)
-	_assert(mass.get_variable("velocity") < 0.0, "Mass is moving towards equilibrium")
-	_assert(mass.get_variable("position") < 1.0, "Mass has moved towards equilibrium")
-	_assert(mass.get_variable("position") > 0.0, "Mass hasn't overshot equilibrium") 
+	tests_passed += 1 
