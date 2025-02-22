@@ -12,13 +12,13 @@ model DampingMassTest
   parameter Real v0 = 0.0 "Initial velocity in m/s";
   
 initial equation
-  mass.s = x0;
-  mass.v = v0;
+  mass.port.position = x0;
+  mass.port.velocity = v0;
   
 equation
   // Connect components
-  connect(fixed.flange, damper.flange_a);
-  connect(damper.flange_b, mass.flange_a);
+  connect(fixed.port, damper.port_a);
+  connect(damper.port_b, mass.port);
 
 annotation(
   experiment(

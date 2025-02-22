@@ -64,7 +64,7 @@ func simulate_model(path: String) -> int:
     # Convert relative path to absolute if needed
     var absolute_path = path
     if not path.begins_with("/"):
-        absolute_path = OS.get_executable_path().get_base_dir().path_join(path)
+        absolute_path = ProjectSettings.globalize_path("res://").path_join(path)
     
     # Verify file exists
     if not FileAccess.file_exists(absolute_path):
@@ -140,19 +140,26 @@ func _run_simulation(model_data: Dictionary, start_time: float, stop_time: float
     # Override defaults with model parameters if available
     if model_data.has("components"):
         for component in model_data["components"]:
-            if component["name"] == "mass" and component.has("modifications"):
-                mass = float(component["modifications"].get("m", mass))
-            elif component["name"] == "spring" and component.has("modifications"):
-                spring_k = float(component["modifications"].get("k", spring_k))
-            elif component["name"] == "damper" and component.has("modifications"):
-                damper_d = float(component["modifications"].get("d", damper_d))
+            if component.has("name") and component.has("modifications"):
+                match component["name"]:
+                    "mass":
+                        if component["modifications"].has("m"):
+                            mass = float(component["modifications"]["m"])
+                    "spring":
+                        if component["modifications"].has("k"):
+                            spring_k = float(component["modifications"]["k"])
+                    "damper":
+                        if component["modifications"].has("d"):
+                            damper_d = float(component["modifications"]["d"])
     
     if model_data.has("parameters"):
         for param in model_data["parameters"]:
-            if param["name"] == "x0":
-                x0 = float(param["default"].split(" ")[0])
-            elif param["name"] == "v0":
-                v0 = float(param["default"].split(" ")[0])
+            if param.has("name") and param.has("default"):
+                match param["name"]:
+                    "x0":
+                        x0 = float(param["default"].split(" ")[0])
+                    "v0":
+                        v0 = float(param["default"].split(" ")[0])
     
     # Initialize state variables
     var x = x0  # Position
