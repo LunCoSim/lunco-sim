@@ -1,24 +1,40 @@
 class_name ImprovedASTNode
-extends Node
+extends RefCounted
 
 var type: String
 var value: String
 var left: ImprovedASTNode
 var right: ImprovedASTNode
 var operand: ImprovedASTNode
-var arguments: Array[ImprovedASTNode]
-var is_differential: bool = false
-var state_variable: String = ""
-var dependencies: Array[String] = []
+var arguments: Array
+var dependencies: Array
+var is_differential: bool
+var state_variable: String
 
-func _init(type_: String = "", value_: String = ""):
-	type = type_
-	value = value_
+func _init(p_type: String = "", p_value: String = ""):
+	type = p_type
+	value = p_value
 	left = null
 	right = null
 	operand = null
 	arguments = []
 	dependencies = []
+	is_differential = false
+	state_variable = ""
+
+func get_dependencies() -> Array:
+	var deps = []
+	if type == "VARIABLE":
+		deps.append(value)
+	if left:
+		deps.append_array(left.get_dependencies())
+	if right:
+		deps.append_array(right.get_dependencies())
+	if operand:
+		deps.append_array(operand.get_dependencies())
+	for arg in arguments:
+		deps.append_array(arg.get_dependencies())
+	return deps
 
 func add_dependency(var_name: String) -> void:
 	if not dependencies.has(var_name):
@@ -49,9 +65,6 @@ func collect_dependencies() -> void:
 		for dep in arg.dependencies:
 			if not dependencies.has(dep):
 				dependencies.append(dep)
-
-func get_dependencies() -> Array[String]:
-	return dependencies
 
 func _to_string() -> String:
 	match type:

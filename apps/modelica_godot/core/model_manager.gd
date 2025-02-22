@@ -419,13 +419,16 @@ func _add_model_to_tree(model_data: Dictionary) -> void:
 	# Create a new component for the model
 	var component = ModelicaComponent.new(model_name, model_data.get("description", ""))
 	
-	# Add parameters
-	for param in model_data.get("parameters", []):
-		component.add_parameter(param.get("name", ""), param.get("value", 0.0))
+	# Add parameters with proper handling
+	var params = get_model_parameters(model_data)
+	for param_name in params:
+		add_parameter_to_component(component, param_name, params[param_name])
 	
 	# Add variables
 	for var_data in model_data.get("variables", []):
-		component.add_variable(var_data.get("name", ""), var_data.get("value", 0.0))
+		var var_name = var_data.get("name", "")
+		var var_value = float(var_data.get("value", "0"))
+		component.add_variable(var_name, var_value)
 	
 	# Add equations
 	for equation in model_data.get("equations", []):
@@ -450,8 +453,130 @@ func has_component(name: String) -> bool:
 func get_model_parameters(model_data: Dictionary) -> Dictionary:
 	var params = {}
 	for param in model_data.get("parameters", []):
-		params[param.get("name", "")] = param.get("value", 0.0)
+		var param_name = param.get("name", "")
+		if param_name.is_empty():
+			continue
+			
+		var param_info = {
+			"value": _convert_parameter_value(param),
+			"type": param.get("type", "Real"),
+			"description": param.get("description", ""),
+			"unit": param.get("unit", ""),
+			"fixed": param.get("fixed", true),
+			"evaluate": param.get("evaluate", true),
+			"min": param.get("min"),
+			"max": param.get("max")
+		}
+		
+		# Validate parameter value
+		if not _validate_parameter(param_info):
+			push_warning("Invalid parameter value for " + param_name)
+			continue
+			
+		params[param_name] = param_info
 	return params
+
+func _convert_parameter_value(param: Dictionary) -> Variant:
+	var value = param.get("value", "")
+	var default = param.get("default", "")
+	
+	# Use default if value is empty
+	if value.is_empty() and not default.is_empty():
+		value = default
+	
+	# Convert based on type
+	match param.get("type", "Real"):
+		"Real":
+			if value.is_empty():
+				return 0.0
+			return float(value)
+		"Integer":
+			if value.is_empty():
+				return 0
+			return int(value)
+		"Boolean":
+			if value.is_empty():
+				return false
+			return value.to_lower() == "true"
+		"String":
+			if value.is_empty():
+				return ""
+			return value.strip_edges().trim_prefix("\"").trim_suffix("\"")
+		_:
+			return value
+
+func _validate_parameter(param_info: Dictionary) -> bool:
+	var value = param_info["value"]
+	var type = param_info["type"]
+	
+	# Type validation
+	match type:
+		"Real":
+			if not (value is float or value is int):
+				return false
+		"Integer":
+			if not value is int:
+				return false
+		"Boolean":
+			if not value is bool:
+				return false
+		"String":
+			if not value is String:
+				return false
+	
+	# Range validation for numeric types
+	if type in ["Real", "Integer"]:
+		var min_val = param_info["min"]
+		var max_val = param_info["max"]
+		
+		if min_val != null and value < min_val:
+			return false
+		if max_val != null and value > max_val:
+			return false
+	
+	return true
+
+func add_parameter_to_component(component: ModelicaComponent, param_name: String, param_info: Dictionary) -> void:
+	if not param_info.has("value"):
+		push_error("Parameter " + param_name + " has no value")
+		return
+		
+	var value = param_info["value"]
+	var unit = ModelicaConnector.Unit.NONE
+	
+	# Convert unit string to enum if present
+	if param_info.has("unit") and not param_info["unit"].is_empty():
+		unit = _convert_unit_string(param_info["unit"])
+	
+	# Add parameter to component with proper type and unit
+	component.add_parameter(param_name, value, unit)
+	
+	# Store additional metadata if needed
+	if param_info.has("min"):
+		component.set_parameter_min(param_name, param_info["min"])
+	if param_info.has("max"):
+		component.set_parameter_max(param_name, param_info["max"])
+
+func _convert_unit_string(unit_str: String) -> ModelicaConnector.Unit:
+	match unit_str.to_lower():
+		"m", "meter", "meters":
+			return ModelicaConnector.Unit.METER
+		"kg", "kilogram", "kilograms":
+			return ModelicaConnector.Unit.KILOGRAM
+		"s", "second", "seconds":
+			return ModelicaConnector.Unit.SECOND
+		"n", "newton", "newtons":
+			return ModelicaConnector.Unit.NEWTON
+		"j", "joule", "joules":
+			return ModelicaConnector.Unit.JOULE
+		"w", "watt", "watts":
+			return ModelicaConnector.Unit.WATT
+		"v", "volt", "volts":
+			return ModelicaConnector.Unit.VOLT
+		"a", "ampere", "amperes":
+			return ModelicaConnector.Unit.AMPERE
+		_:
+			return ModelicaConnector.Unit.NONE
 
 func get_experiment_settings(model_data: Dictionary) -> Dictionary:
 	var settings = {}

@@ -1,6 +1,8 @@
 class_name EquationSystem
 extends Node
 
+const ImprovedASTNode = preload("res://apps/modelica_godot/core/ast_node.gd")
+
 # System state
 var time: float = 0.0
 var dt: float = 0.01  # Time step size
@@ -87,103 +89,42 @@ func add_component(component: ModelicaComponent) -> void:
 	if not components.has(component):
 		components.append(component)
 
-# RK4 integration helper function
-func _rk4_step(current_state: Dictionary, current_derivatives: Dictionary) -> Dictionary:
-	var k1_state = current_state.duplicate()
-	var k2_state = current_state.duplicate()
-	var k3_state = current_state.duplicate()
-	var k4_state = current_state.duplicate()
+func initialize() -> void:
+	# First apply initial conditions
+	for ic in initial_conditions:
+		var var_name = ic.variable
+		var value = ic.value
+		var component = ic.component
+		
+		# Update both system and component state
+		variables[var_name] = value
+		
+		# Update component if this is a component variable
+		var parts = var_name.split(".")
+		if parts.size() == 2:
+			var comp_name = parts[0]
+			var var_name_only = parts[1]
+			if component.component_name == comp_name:
+				component.set_variable(var_name_only, value)
 	
-	# Calculate k1 (evaluate derivatives at current state)
-	_solve_algebraic_equations(k1_state)  # Solve algebraic equations first
-	var k1 = _evaluate_derivatives(k1_state)
-	
-	# Calculate k2 (midpoint)
-	k2_state = current_state.duplicate()  # Start fresh
-	for var_name in k1:
-		k2_state[var_name] = current_state[var_name] + 0.5 * dt * k1[var_name]
-	_solve_algebraic_equations(k2_state)  # Update dependent variables
-	var k2 = _evaluate_derivatives(k2_state)
-	
-	# Calculate k3 (midpoint)
-	k3_state = current_state.duplicate()  # Start fresh
-	for var_name in k2:
-		k3_state[var_name] = current_state[var_name] + 0.5 * dt * k2[var_name]
-	_solve_algebraic_equations(k3_state)  # Update dependent variables
-	var k3 = _evaluate_derivatives(k3_state)
-	
-	# Calculate k4 (endpoint)
-	k4_state = current_state.duplicate()  # Start fresh
-	for var_name in k3:
-		k4_state[var_name] = current_state[var_name] + dt * k3[var_name]
-	_solve_algebraic_equations(k4_state)  # Update dependent variables
-	var k4 = _evaluate_derivatives(k4_state)
-	
-	# Combine all steps
-	var next_state = current_state.duplicate()
-	for var_name in k1:  # Using k1 keys since it has all derivative variables
-		next_state[var_name] = current_state[var_name] + (dt / 6.0) * (
-			k1[var_name] + 2 * k2[var_name] + 2 * k3[var_name] + k4[var_name]
-		)
-	
-	# Final algebraic solve to ensure consistency
-	_solve_algebraic_equations(next_state)
-	
-	return next_state
-
-# Helper function to solve algebraic equations
-func _solve_algebraic_equations(state: Dictionary) -> void:
+	# Solve initial system of equations
 	for iter in range(MAX_ITERATIONS):
 		var max_residual = 0.0
 		var new_values = {}
 		
-		# Evaluate all algebraic equations
+		# First pass: evaluate all equations
 		for eq in equations:
 			if not eq.is_differential:
-				var rhs_value = _evaluate_expression(eq.right, eq.component, state)
-				var lhs_var = eq.left
+				var rhs_value = _evaluate_expression(eq.right, eq.component, variables)
+				var lhs_var = eq.left.strip_edges()
 				new_values[lhs_var] = rhs_value
-				max_residual = max(max_residual, abs(rhs_value - state.get(lhs_var, 0.0)))
+				max_residual = max(max_residual, abs(rhs_value - variables.get(lhs_var, 0.0)))
 		
 		# Update state with new values
 		for var_name in new_values:
-			state[var_name] = new_values[var_name]
-		
-		if max_residual < TOLERANCE:
-			break
-
-func _evaluate_derivatives(state: Dictionary) -> Dictionary:
-	var new_derivatives = {}
-	for eq in equations:
-		if eq.is_differential:
-			var rhs_value = _evaluate_expression(eq.right, eq.component, state)
-			var der_var = _extract_der_variable(eq.left if eq.left.begins_with("der(") else eq.right)
-			new_derivatives[der_var] = rhs_value
-	return new_derivatives
-
-func solve_step() -> void:
-	# 1. Store current state
-	var current_state = variables.duplicate()
-	
-	# 2. Solve algebraic equations first to ensure consistent state
-	var converged = false
-	for iter in range(MAX_ITERATIONS):
-		var max_residual = 0.0
-		var new_values = {}
-		
-		# First pass: evaluate all algebraic equations
-		for eq in equations:
-			if not eq.is_differential:
-				var rhs_value = _evaluate_expression(eq.right, eq.component, current_state)
-				var lhs_var = eq.left
-				new_values[lhs_var] = rhs_value
-				max_residual = max(max_residual, abs(rhs_value - current_state.get(lhs_var, 0.0)))
-		
-		# Update state with new values
-		for var_name in new_values:
-			current_state[var_name] = new_values[var_name]
+			variables[var_name] = new_values[var_name]
 			
-			# Update component state
+			# Update component state if needed
 			var parts = var_name.split(".")
 			if parts.size() == 2:
 				var comp_name = parts[0]
@@ -194,28 +135,99 @@ func solve_step() -> void:
 						break
 		
 		if max_residual < TOLERANCE:
-			converged = true
 			break
 	
-	if not converged:
-		push_warning("Algebraic solver did not converge in " + str(MAX_ITERATIONS) + " iterations")
+	# Initialize derivatives
+	derivatives.clear()
+	for eq in equations:
+		if eq.is_differential:
+			var der_var = _extract_der_variable(eq.left if eq.left.begins_with("der(") else eq.right)
+			var rhs_value = _evaluate_expression(eq.right, eq.component, variables)
+			derivatives[der_var] = rhs_value
+			print("Initial derivative for %s = %f" % [der_var, rhs_value])
+
+func solve_step() -> void:
+	# Store current state
+	var current_state = variables.duplicate()
 	
-	# 3. Evaluate derivatives at the current state
-	var current_derivatives = _evaluate_derivatives(current_state)
+	# First solve algebraic equations to get consistent state
+	_solve_algebraic_equations(current_state)
 	
-	# 4. Perform RK4 integration step
-	var next_state = _rk4_step(current_state, current_derivatives)
+	# Evaluate derivatives at current state
+	var current_derivatives = {}
+	for eq in equations:
+		if eq.is_differential:
+			var der_var = _extract_der_variable(eq.left if eq.left.begins_with("der(") else eq.right)
+			var rhs_value = _evaluate_expression(eq.right, eq.component, current_state)
+			current_derivatives[der_var] = rhs_value
 	
-	# 5. Update system state
-	variables = next_state
+	# Perform RK4 integration for state variables
+	var k1_state = current_state.duplicate()
+	var k2_state = current_state.duplicate()
+	var k3_state = current_state.duplicate()
+	var k4_state = current_state.duplicate()
 	
-	# 6. Re-evaluate derivatives at the new state
-	derivatives = _evaluate_derivatives(variables)
+	# k1 = f(t, y)
+	var k1 = current_derivatives
 	
-	# 7. Update component states with the new values
+	# k2 = f(t + dt/2, y + dt*k1/2)
+	for var_name in k1:
+		k2_state[var_name] = current_state[var_name] + 0.5 * dt * k1[var_name]
+	_solve_algebraic_equations(k2_state)
+	var k2 = {}
+	for eq in equations:
+		if eq.is_differential:
+			var der_var = _extract_der_variable(eq.left if eq.left.begins_with("der(") else eq.right)
+			var rhs_value = _evaluate_expression(eq.right, eq.component, k2_state)
+			k2[der_var] = rhs_value
+	
+	# k3 = f(t + dt/2, y + dt*k2/2)
+	for var_name in k2:
+		k3_state[var_name] = current_state[var_name] + 0.5 * dt * k2[var_name]
+	_solve_algebraic_equations(k3_state)
+	var k3 = {}
+	for eq in equations:
+		if eq.is_differential:
+			var der_var = _extract_der_variable(eq.left if eq.left.begins_with("der(") else eq.right)
+			var rhs_value = _evaluate_expression(eq.right, eq.component, k3_state)
+			k3[der_var] = rhs_value
+	
+	# k4 = f(t + dt, y + dt*k3)
+	for var_name in k3:
+		k4_state[var_name] = current_state[var_name] + dt * k3[var_name]
+	_solve_algebraic_equations(k4_state)
+	var k4 = {}
+	for eq in equations:
+		if eq.is_differential:
+			var der_var = _extract_der_variable(eq.left if eq.left.begins_with("der(") else eq.right)
+			var rhs_value = _evaluate_expression(eq.right, eq.component, k4_state)
+			k4[der_var] = rhs_value
+	
+	# Update state variables using RK4 formula
+	# y(t + dt) = y(t) + (dt/6)*(k1 + 2*k2 + 2*k3 + k4)
+	for var_name in k1:
+		var new_value = current_state[var_name] + (dt / 6.0) * (
+			k1[var_name] + 2.0 * k2[var_name] + 2.0 * k3[var_name] + k4[var_name]
+		)
+		variables[var_name] = new_value
+		
+		# Update component state
+		var parts = var_name.split(".")
+		if parts.size() >= 2:
+			var comp_name = parts[0]
+			var var_name_only = parts[1]
+			for comp in components:
+				if comp.component_name == comp_name:
+					comp.set_variable(var_name_only, new_value)
+					break
+	
+	# Final algebraic solve to ensure consistency
+	_solve_algebraic_equations(variables)
+	
+	# Update component states for algebraic variables
 	for var_name in variables:
 		var parts = var_name.split(".")
-		if parts.size() == 2:
+		if parts.size() >= 2:
 			var comp_name = parts[0]
 			var var_name_only = parts[1]
 			for comp in components:
@@ -223,281 +235,47 @@ func solve_step() -> void:
 					comp.set_variable(var_name_only, variables[var_name])
 					break
 	
-	time += dt
-
-func initialize() -> void:
-	# Apply initial conditions
-	for ic in initial_conditions:
-		var parts = ic.variable.split(".")
-		if parts.size() == 2:
-			var comp_name = parts[0]
-			var var_name = parts[1]
-			for comp in components:
-				if comp.component_name == comp_name:
-					comp.set_variable(var_name, ic.value)
-					variables[ic.variable] = ic.value
-					break
-	
-	# Solve initial system
-	for iter in range(MAX_ITERATIONS):
-		var max_residual = 0.0
-		
-		for eq in equations:
-			if not eq.is_differential:
-				var rhs_value = _evaluate_expression(eq.right, eq.component, variables)
-				var lhs_var = eq.left
-				
-				# Update both system and component state
-				variables[lhs_var] = rhs_value
-				var parts = lhs_var.split(".")
-				if parts.size() == 2:
-					var comp_name = parts[0]
-					var var_name = parts[1]
-					for comp in components:
-						if comp.component_name == comp_name:
-							comp.set_variable(var_name, rhs_value)
-							break
-				
-				max_residual = max(max_residual, abs(rhs_value - variables.get(lhs_var, 0.0)))
-		
-		if max_residual < TOLERANCE:
-			break
-	
-	# Initialize derivatives
+	# Store derivatives for next step
+	derivatives.clear()
 	for eq in equations:
 		if eq.is_differential:
 			var der_var = _extract_der_variable(eq.left if eq.left.begins_with("der(") else eq.right)
 			var rhs_value = _evaluate_expression(eq.right, eq.component, variables)
 			derivatives[der_var] = rhs_value
-
-func tokenize(expr: String) -> Array[EquationToken]:
-	var tokens: Array[EquationToken] = []
-	var pos = 0
 	
-	while pos < expr.length():
-		var matched = false
-		# Skip whitespace
-		if expr[pos] == " ":
-			pos += 1
-			continue
-			
-		for type in TOKEN_TYPES:
-			var regex = RegEx.new()
-			regex.compile("^" + TOKEN_TYPES[type])
-			var result = regex.search(expr.substr(pos))
-			
-			if result:
-				var value = result.get_string()
-				if type != "WHITESPACE":  # Skip whitespace tokens
-					tokens.append(EquationToken.new(type, value))
-				pos += value.length()
-				matched = true
-				break
+	time += dt
+
+func _solve_algebraic_equations(state: Dictionary) -> void:
+	for iter in range(MAX_ITERATIONS):
+		var max_residual = 0.0
+		var new_values = {}
 		
-		if not matched:
-			push_error("Invalid character in expression at position %d: %s" % [pos, expr[pos]])
-			return []
-	
-	return tokens
-
-func parse_expression(tokens: Array[EquationToken], start: int = 0, min_precedence: int = 0) -> Dictionary:
-	# First check if this is an equation (contains equals sign)
-	var equals_pos = -1
-	for i in range(start, tokens.size()):
-		if tokens[i].type == "EQUALS":
-			equals_pos = i
+		# Evaluate all algebraic equations
+		for eq in equations:
+			if not eq.is_differential:
+				var rhs_value = _evaluate_expression(eq.right, eq.component, state)
+				var lhs_var = eq.left.strip_edges()
+				new_values[lhs_var] = rhs_value
+				max_residual = max(max_residual, abs(rhs_value - state.get(lhs_var, 0.0)))
+		
+		# Update state with new values
+		for var_name in new_values:
+			state[var_name] = new_values[var_name]
+		
+		if max_residual < TOLERANCE:
 			break
-	
-	if equals_pos != -1:
-		# Parse left and right sides separately
-		var left_tokens = tokens.slice(start, equals_pos)
-		var right_tokens = tokens.slice(equals_pos + 1)
-		
-		var left_result = parse_expression(left_tokens)
-		var right_result = parse_expression(right_tokens)
-		
-		if left_result.node == null or right_result.node == null:
-			return {"node": null, "next_pos": tokens.size()}
-		
-		var equation_node = ImprovedASTNode.new("BINARY_OP", "=")
-		equation_node.left = left_result.node
-		equation_node.right = right_result.node
-		
-		# Propagate dependencies from both sides
-		for dep in left_result.node.get_dependencies():
-			equation_node.add_dependency(dep)
-		for dep in right_result.node.get_dependencies():
-			equation_node.add_dependency(dep)
-		
-		return {"node": equation_node, "next_pos": tokens.size()}
-	
-	var result = parse_primary(tokens, start)
-	if result.node == null:
-		return result
-	var pos = result.next_pos
-	var left = result.node
-	
-	while pos < tokens.size():
-		var token = tokens[pos]
-		if token.type != "OPERATOR" or get_precedence(token) < min_precedence:
-			break
-			
-		var op = token
-		var precedence = get_precedence(op)
-		pos += 1
-		
-		if pos >= tokens.size():
-			push_error("Unexpected end of expression")
-			return {"node": null, "next_pos": pos}
-		
-		var right_result = parse_expression(tokens, pos, precedence + 1)
-		if right_result.node == null:
-			return right_result
-		pos = right_result.next_pos
-		
-		left = create_binary_node(op.value, left, right_result.node)
-	
-	return {"node": left, "next_pos": pos}
-
-func parse_primary(tokens: Array[EquationToken], start: int) -> Dictionary:
-	if start >= tokens.size():
-		push_error("Unexpected end of expression")
-		return {"node": null, "next_pos": start}
-	
-	var pos = start + 1
-	var token = tokens[start]
-	
-	match token.type:
-		"NUMBER":
-			var node = ImprovedASTNode.new("NUMBER", token.value)
-			return {"node": node, "next_pos": pos}
-		
-		"IDENTIFIER":
-			if pos < tokens.size() and tokens[pos].type == "LPAREN":
-				# Function call
-				pos += 1  # Skip LPAREN
-				var args: Array[ImprovedASTNode] = []
-				
-				while pos < tokens.size() and tokens[pos].type != "RPAREN":
-					var arg_result = parse_expression(tokens, pos)
-					if arg_result.node == null:
-						return {"node": null, "next_pos": pos}
-					args.append(arg_result.node)
-					pos = arg_result.next_pos
-					
-					if pos < tokens.size() and tokens[pos].type == "COMMA":
-						pos += 1
-				
-				if pos >= tokens.size() or tokens[pos].type != "RPAREN":
-					push_error("Expected closing parenthesis")
-					return {"node": null, "next_pos": pos}
-				pos += 1  # Skip RPAREN
-				
-				var node = ImprovedASTNode.new("FUNCTION_CALL", token.value)
-				node.arguments = args
-				
-				# Propagate dependencies from arguments
-				for arg in args:
-					if arg != null:
-						for dep in arg.get_dependencies():
-							node.add_dependency(dep)
-				
-				if token.value == "der":
-					node.is_differential = true
-					if args.size() > 0 and args[0] != null:
-						# For derivatives, we need to track both the full variable name and its dependencies
-						var state_var = args[0].dependencies[0] if args[0].dependencies.size() > 0 else args[0].value
-						node.state_variable = state_var
-						node.add_dependency(state_var)
-				
-				return {"node": node, "next_pos": pos}
-			else:
-				# Variable or component reference
-				var node = ImprovedASTNode.new("VARIABLE", token.value)
-				node.add_dependency(token.value)
-				
-				# Check for dot notation
-				if pos < tokens.size() and tokens[pos].type == "DOT":
-					pos += 1  # Skip DOT
-					if pos >= tokens.size() or tokens[pos].type != "IDENTIFIER":
-						push_error("Expected identifier after dot")
-						return {"node": null, "next_pos": pos}
-					
-					# Create a component reference node
-					var comp_node = node  # The component name
-					node = ImprovedASTNode.new("VARIABLE", tokens[pos].value)
-					node.add_dependency(comp_node.value + "." + tokens[pos].value)
-					pos += 1  # Skip the member name
-				
-				return {"node": node, "next_pos": pos}
-		
-		"OPERATOR":
-			if token.value in ["+", "-"] and (start == 0 or tokens[start-1].type in ["OPERATOR", "LPAREN"]):
-				# Unary operator
-				var operand_result = parse_primary(tokens, pos)
-				pos = operand_result.next_pos
-				
-				var node = ImprovedASTNode.new("UNARY_OP", token.value)
-				node.operand = operand_result.node
-				
-				# Propagate dependencies from operand
-				if operand_result.node != null:
-					for dep in operand_result.node.get_dependencies():
-						node.add_dependency(dep)
-				
-				return {"node": node, "next_pos": pos}
-		
-		"LPAREN":
-			var inner_result = parse_expression(tokens, pos)
-			pos = inner_result.next_pos
-			
-			if pos >= tokens.size() or tokens[pos].type != "RPAREN":
-				push_error("Expected closing parenthesis")
-				return {"node": null, "next_pos": pos}
-			pos += 1  # Skip RPAREN
-			
-			return {"node": inner_result.node, "next_pos": pos}
-	
-	push_error("Unexpected token: " + str(token))
-	return {"node": null, "next_pos": pos}
-
-func create_binary_node(op: String, left: ImprovedASTNode, right: ImprovedASTNode) -> ImprovedASTNode:
-	if left == null or right == null:
-		return null
-		
-	var node = ImprovedASTNode.new("BINARY_OP", op)
-	node.left = left
-	node.right = right
-	
-	# Propagate dependencies from children
-	for dep in left.get_dependencies():
-		node.add_dependency(dep)
-	for dep in right.get_dependencies():
-		node.add_dependency(dep)
-	
-	return node
-
-func get_precedence(token: EquationToken) -> int:
-	match token.value:
-		"+", "-": return 1
-		"*", "/": return 2
-		"^": return 3
-		_: return 0
-
-func is_unary_operator(op: String) -> bool:
-	return op in ["+", "-"]
 
 func _evaluate_expression(expression: String, component: ModelicaComponent, state: Dictionary) -> float:
-	print("Evaluating expression: " + expression)
 	var tokens = tokenize(expression)
-	print("Tokens: " + str(tokens))
 	var ast_dict = parse_expression(tokens)
-	print("AST: " + str(ast_dict))
 	
-	# The AST node is already an ASTNode object, no need to convert
+	if ast_dict.node == null:
+		push_error("Failed to parse expression: " + expression)
+		return 0.0
+	
 	return evaluate_ast(ast_dict.node, component, state)
 
-func evaluate_ast(node: ImprovedASTNode, component: ModelicaComponent, variables: Dictionary) -> float:
+func evaluate_ast(node: ImprovedASTNode, component: ModelicaComponent, state: Dictionary) -> float:
 	if node == null:
 		return 0.0
 		
@@ -510,40 +288,58 @@ func evaluate_ast(node: ImprovedASTNode, component: ModelicaComponent, variables
 			var var_name = node.dependencies[0] if node.dependencies.size() > 0 else node.value
 			
 			if "." in var_name:
-				# Handle component references (e.g., mass1.position)
+				# Handle component references (e.g., mass1.position or mass1.port.position)
 				var parts = var_name.split(".")
 				var comp_name = parts[0]
-				var var_name_only = parts[1]
 				
-				# First try to get from variables dictionary
-				if variables.has(var_name):
-					return variables[var_name]
+				# First try to get from state dictionary
+				if state.has(var_name):
+					return state[var_name]
 				
 				# Then try to find the referenced component
 				for comp in components:
 					if comp.component_name == comp_name:
-						# Try parameter first, then variable
-						var param_value = comp.get_parameter(var_name_only)
-						if param_value != null:
-							return param_value
-						return comp.get_variable(var_name_only)
+						if parts.size() == 2:
+							# Simple component variable (e.g., mass1.position)
+							var var_name_only = parts[1]
+							# Try parameter first, then variable
+							var param_value = comp.get_parameter(var_name_only)
+							if param_value != null:
+								return param_value
+							var var_value = comp.get_variable(var_name_only)
+							if var_value != null:
+								return var_value
+						elif parts.size() == 3:
+							# Port variable (e.g., mass1.port.position)
+							var port_name = parts[1]
+							var var_name_only = parts[2]
+							var full_var_name = port_name + "." + var_name_only
+							var var_value = comp.get_variable(full_var_name)
+							if var_value != null:
+								return var_value
+						push_error("Variable not found in component: " + var_name)
+						return 0.0
 				
 				push_error("Component not found: " + comp_name)
 				return 0.0
 			else:
-				# First try to get from variables dictionary
-				if variables.has(var_name):
-					return variables[var_name]
+				# First try to get from state dictionary
+				if state.has(var_name):
+					return state[var_name]
 				
 				# Then try parameter first, then variable from the component
 				var param_value = component.get_parameter(var_name)
 				if param_value != null:
 					return param_value
-				return component.get_variable(var_name)
+				var var_value = component.get_variable(var_name)
+				if var_value != null:
+					return var_value
+				push_error("Variable not found: " + var_name)
+				return 0.0
 				
 		"BINARY_OP":
-			var left_val = evaluate_ast(node.left, component, variables)
-			var right_val = evaluate_ast(node.right, component, variables)
+			var left_val = evaluate_ast(node.left, component, state)
+			var right_val = evaluate_ast(node.right, component, state)
 			
 			match node.value:
 				"+": return left_val + right_val
@@ -556,7 +352,7 @@ func evaluate_ast(node: ImprovedASTNode, component: ModelicaComponent, variables
 					return 0.0
 					
 		"UNARY_OP":
-			var operand_val = evaluate_ast(node.operand, component, variables)
+			var operand_val = evaluate_ast(node.operand, component, state)
 			match node.value:
 				"+": return operand_val
 				"-": return -operand_val
@@ -567,7 +363,7 @@ func evaluate_ast(node: ImprovedASTNode, component: ModelicaComponent, variables
 		"FUNCTION_CALL":
 			var args = []
 			for arg in node.arguments:
-				args.append(evaluate_ast(arg, component, variables))
+				args.append(evaluate_ast(arg, component, state))
 				
 			match node.value:
 				"sin": return sin(args[0])
@@ -579,6 +375,7 @@ func evaluate_ast(node: ImprovedASTNode, component: ModelicaComponent, variables
 						var var_name = node.state_variable
 						if derivatives.has(var_name):
 							return derivatives[var_name]
+						push_error("Derivative not found for: " + var_name)
 					return 0.0
 				_:
 					push_error("Unknown function: " + node.value)
@@ -593,6 +390,184 @@ func _extract_der_variable(expr: String) -> String:
 	var start_idx = expr.find("der(") + 4
 	var end_idx = expr.find(")", start_idx)
 	if start_idx >= 4 and end_idx > start_idx:
-		return expr.substr(start_idx, end_idx - start_idx)
-	return "" 
+		return expr.substr(start_idx, end_idx - start_idx).strip_edges()
+	return ""
+
+func tokenize(expression: String) -> Array:
+	var tokens = []
+	var pos = 0
+	
+	while pos < expression.length():
+		var matched = false
+		
+		# Skip whitespace
+		if expression[pos] == " ":
+			pos += 1
+			continue
+		
+		# Try to match each token type
+		for type in TOKEN_TYPES:
+			var regex = RegEx.new()
+			regex.compile(TOKEN_TYPES[type])
+			var result = regex.search(expression, pos)
+			
+			if result and result.get_start() == pos:
+				tokens.append(EquationToken.new(type, result.get_string()))
+				pos = result.get_end()
+				matched = true
+				break
+		
+		if not matched:
+			push_error("Invalid token at position " + str(pos))
+			return []
+	
+	return tokens
+
+func parse_expression(tokens: Array) -> Dictionary:
+	var pos = 0
+	var result = _parse_term(tokens, pos)
+	return {
+		"node": result.node,
+		"pos": result.pos
+	}
+
+func _parse_term(tokens: Array, pos: int) -> Dictionary:
+	var result = _parse_factor(tokens, pos)
+	var left = result.node
+	pos = result.pos
+	
+	while pos < tokens.size() and tokens[pos].type == "OPERATOR" and (tokens[pos].value == "+" or tokens[pos].value == "-"):
+		var op = tokens[pos].value
+		pos += 1
+		result = _parse_factor(tokens, pos)
+		var right = result.node
+		pos = result.pos
+		
+		var node = ImprovedASTNode.new("BINARY_OP", op)
+		node.left = left
+		node.right = right
+		left = node
+	
+	return {"node": left, "pos": pos}
+
+func _parse_factor(tokens: Array, pos: int) -> Dictionary:
+	var result = _parse_power(tokens, pos)
+	var left = result.node
+	pos = result.pos
+	
+	while pos < tokens.size() and tokens[pos].type == "OPERATOR" and (tokens[pos].value == "*" or tokens[pos].value == "/"):
+		var op = tokens[pos].value
+		pos += 1
+		result = _parse_power(tokens, pos)
+		var right = result.node
+		pos = result.pos
+		
+		var node = ImprovedASTNode.new("BINARY_OP", op)
+		node.left = left
+		node.right = right
+		left = node
+	
+	return {"node": left, "pos": pos}
+
+func _parse_power(tokens: Array, pos: int) -> Dictionary:
+	var result = _parse_primary(tokens, pos)
+	var left = result.node
+	pos = result.pos
+	
+	while pos < tokens.size() and tokens[pos].type == "OPERATOR" and tokens[pos].value == "^":
+		var op = tokens[pos].value
+		pos += 1
+		result = _parse_power(tokens, pos)  # Right associative
+		var right = result.node
+		pos = result.pos
+		
+		var node = ImprovedASTNode.new("BINARY_OP", op)
+		node.left = left
+		node.right = right
+		left = node
+	
+	return {"node": left, "pos": pos}
+
+func _parse_primary(tokens: Array, pos: int) -> Dictionary:
+	if pos >= tokens.size():
+		return {"node": null, "pos": pos}
+	
+	var token = tokens[pos]
+	
+	match token.type:
+		"NUMBER":
+			var node = ImprovedASTNode.new("NUMBER", token.value)
+			return {"node": node, "pos": pos + 1}
+			
+		"IDENTIFIER":
+			if pos + 1 < tokens.size() and tokens[pos + 1].type == "LPAREN":
+				# Function call
+				var node = ImprovedASTNode.new("FUNCTION_CALL", token.value)
+				pos += 2  # Skip identifier and left paren
+				
+				while pos < tokens.size() and tokens[pos].type != "RPAREN":
+					var arg_result = _parse_term(tokens, pos)
+					if arg_result.node != null:
+						node.arguments.append(arg_result.node)
+					pos = arg_result.pos
+					
+					if pos < tokens.size() and tokens[pos].type == "COMMA":
+						pos += 1
+				
+				if pos < tokens.size() and tokens[pos].type == "RPAREN":
+					pos += 1
+				
+				if token.value == "der":
+					node.is_differential = true
+					if node.arguments.size() > 0:
+						var arg = node.arguments[0]
+						if arg.type == "VARIABLE":
+							node.state_variable = arg.value
+						elif arg.type == "BINARY_OP" and arg.left and arg.left.type == "VARIABLE":
+							node.state_variable = arg.left.value
+				
+				return {"node": node, "pos": pos}
+			else:
+				# Variable
+				var node = ImprovedASTNode.new("VARIABLE", token.value)
+				pos += 1
+				
+				# Handle dot notation (e.g., mass.position)
+				while pos < tokens.size() and tokens[pos].type == "DOT":
+					pos += 1
+					if pos < tokens.size() and tokens[pos].type == "IDENTIFIER":
+						node.value += "." + tokens[pos].value
+						pos += 1
+					else:
+						push_error("Expected identifier after dot")
+						return {"node": null, "pos": pos}
+				
+				return {"node": node, "pos": pos}
+				
+		"LPAREN":
+			pos += 1
+			var result = _parse_term(tokens, pos)
+			pos = result.pos
+			
+			if pos < tokens.size() and tokens[pos].type == "RPAREN":
+				pos += 1
+				return {"node": result.node, "pos": pos}
+			else:
+				push_error("Expected closing parenthesis")
+				return {"node": null, "pos": pos}
+				
+		"OPERATOR":
+			if token.value == "+" or token.value == "-":
+				# Unary operator
+				pos += 1
+				var result = _parse_primary(tokens, pos)
+				var node = ImprovedASTNode.new("UNARY_OP", token.value)
+				node.operand = result.node
+				return {"node": node, "pos": result.pos}
+		
+		_:
+			push_error("Unexpected token type: " + token.type)
+			return {"node": null, "pos": pos}
+	
+	return {"node": null, "pos": pos}
 

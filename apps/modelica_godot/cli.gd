@@ -1,12 +1,10 @@
 extends SceneTree
 
 const MOParser = preload("res://apps/modelica_godot/core/mo_parser.gd")
-const PackageManager = preload("res://apps/modelica_godot/core/package_manager.gd")
-const WorkspaceConfig = preload("res://apps/modelica_godot/core/workspace_config.gd")
-const MOLoader = preload("res://apps/modelica_godot/core/mo_loader.gd")
-const ModelManager = preload("res://apps/modelica_godot/core/model_manager.gd")
+const EquationSystem = preload("res://apps/modelica_godot/core/equation_system.gd")
+const ModelicaComponent = preload("res://apps/modelica_godot/core/component.gd")
+const ModelicaConnector = preload("res://apps/modelica_godot/core/connector.gd")
 
-var model_manager: ModelManager
 var output_format: String = "csv"  # Default output format
 
 func _init():
@@ -39,18 +37,6 @@ func _init():
         quit(1)
         return
     
-    # Initialize model manager
-    print("Setting up model manager...")
-    model_manager = ModelManager.new()
-    var root = get_root()
-    if root:
-        root.add_child(model_manager)
-        model_manager.initialize()
-    else:
-        print("Error: Could not get root node")
-        quit(1)
-        return
-    
     # Load and simulate model
     var result = simulate_model(model_path)
     if result != OK:
@@ -61,15 +47,18 @@ func _init():
 func simulate_model(path: String) -> int:
     print("Loading model from: ", path)
     
-    # Convert relative path to absolute if needed
-    var absolute_path = path
-    if not path.begins_with("/"):
-        absolute_path = ProjectSettings.globalize_path("res://").path_join(path)
+    # Load and parse model file
+    var file = FileAccess.open(path, FileAccess.READ)
+    if not file:
+        print("Error: Failed to open file")
+        return ERR_FILE_NOT_FOUND
+        
+    var content = file.get_as_text()
+    var parser = MOParser.new()
+    var model_data = parser.parse_text(content)
     
-    # Load model using model manager
-    var model_data = model_manager.load_component(absolute_path)
     if model_data.is_empty():
-        print("Error: Failed to load model")
+        print("Error: Failed to parse model")
         return ERR_PARSE_ERROR
     
     print("Model loaded successfully")
@@ -98,13 +87,61 @@ func simulate_model(path: String) -> int:
     _output_results(results)
     return OK
 
+func _create_component(type: String, name: String) -> ModelicaComponent:
+    var component = ModelicaComponent.new(name)
+    
+    # Initialize component based on type
+    match type:
+        "Mass":
+            # Add mechanical connector
+            component.add_connector("port", ModelicaConnector.Type.MECHANICAL)
+            
+            # Add state variables and parameters
+            component.add_state_variable("position", 0.0)
+            component.add_state_variable("velocity", 0.0)
+            component.add_variable("force", 0.0)
+            component.add_parameter("m", 1.0)
+            
+            # Add equations
+            component.add_equation("der(position) = velocity")
+            component.add_equation("der(velocity) = force/m")
+            component.add_equation("port.position = position")
+            component.add_equation("port.velocity = velocity")
+            component.add_equation("port.force = -force")  # Action-reaction principle
+            
+        "Damper":
+            # Add mechanical connectors
+            component.add_connector("port_a", ModelicaConnector.Type.MECHANICAL)
+            component.add_connector("port_b", ModelicaConnector.Type.MECHANICAL)
+            
+            # Add parameter and variables
+            component.add_parameter("d", 0.5)  # Damping coefficient
+            component.add_variable("force", 0.0)
+            
+            # Add equations - damping force proportional to relative velocity
+            component.add_equation("force = d * (port_b.velocity - port_a.velocity)")
+            component.add_equation("port_a.force = force")
+            component.add_equation("port_b.force = -force")  # Action-reaction principle
+            
+        "Fixed":
+            # Add mechanical connector
+            component.add_connector("port", ModelicaConnector.Type.MECHANICAL)
+            
+            # Add parameter for fixed position
+            component.add_parameter("position", 0.0)
+            
+            # Add equations - fixed point doesn't move
+            component.add_equation("port.position = position")
+            component.add_equation("port.velocity = 0")
+    
+    return component
+
 func _run_simulation(model_data: Dictionary, start_time: float, stop_time: float, step_size: float) -> Dictionary:
     var results = {
         "time": [],
         "variables": {
             "position": [],
             "velocity": [],
-            "spring_force": [],
             "damper_force": []
         },
         "metadata": {
@@ -115,65 +152,100 @@ func _run_simulation(model_data: Dictionary, start_time: float, stop_time: float
         }
     }
     
-    # Get parameters from model
-    var mass = 1.0  # Default mass in kg
-    var spring_k = 10.0  # Default spring constant in N/m
-    var damper_d = 0.5  # Default damping coefficient in N.s/m
-    var x0 = 0.5  # Default initial position in m
-    var v0 = 0.0  # Default initial velocity in m/s
+    # Create equation system
+    var eq_system = EquationSystem.new()
+    eq_system.dt = step_size  # Set time step
     
-    # Override defaults with model parameters
-    for param in model_data.get("parameters", []):
-        match param.get("name", ""):
-            "mass":
-                if param.has("value"):
-                    mass = float(param["value"])
-            "spring_k":
-                if param.has("value"):
-                    spring_k = float(param["value"])
-            "damper_d":
-                if param.has("value"):
-                    damper_d = float(param["value"])
-            "x0":
-                if param.has("value"):
-                    x0 = float(param["value"])
-            "v0":
-                if param.has("value"):
-                    v0 = float(param["value"])
-    
-    # Initialize state variables
-    var x = x0  # Position
-    var v = v0  # Velocity
-    var t = start_time
-    
-    # Simulation loop using simple Euler integration
-    while t <= stop_time:
-        # Calculate forces
-        var spring_force = -spring_k * x
-        var damper_force = -damper_d * v
-        var total_force = spring_force + damper_force
+    # Create and add components
+    var components = {}  # Store components by name for easy lookup
+    for component_data in model_data.get("components", []):
+        var comp_type = component_data.get("type", "")
+        var comp_name = component_data.get("name", "")
         
+        # Create component instance
+        var component = _create_component(comp_type, comp_name)
+        if component == null:
+            print("Error: Failed to create component of type ", comp_type)
+            continue
+        
+        # Apply modifications (parameters)
+        var modifications = component_data.get("modifications", {})
+        for param_name in modifications:
+            component.add_parameter(param_name, float(modifications[param_name]))
+        
+        # Add to equation system and store in lookup
+        eq_system.add_component(component)
+        components[comp_name] = component
+    
+    # Add connections from the model
+    for equation in model_data.get("equations", []):
+        if equation is Dictionary and equation.has("equation"):
+            var eq = equation["equation"]
+            if eq.begins_with("connect("):
+                # Parse connect equation: connect(comp1.port, comp2.port)
+                eq = eq.trim_prefix("connect(").trim_suffix(")")
+                var parts = eq.split(",")
+                if parts.size() == 2:
+                    var from_parts = parts[0].strip_edges().split(".")
+                    var to_parts = parts[1].strip_edges().split(".")
+                    
+                    if from_parts.size() == 2 and to_parts.size() == 2:
+                        var from_comp = components.get(from_parts[0])
+                        var to_comp = components.get(to_parts[0])
+                        
+                        if from_comp and to_comp:
+                            # Add connection equations
+                            eq_system.add_equation(from_parts[0] + "." + from_parts[1] + ".position = " + 
+                                                to_parts[0] + "." + to_parts[1] + ".position", null)
+                            eq_system.add_equation(from_parts[0] + "." + from_parts[1] + ".velocity = " + 
+                                                to_parts[0] + "." + to_parts[1] + ".velocity", null)
+                            eq_system.add_equation(from_parts[0] + "." + from_parts[1] + ".force + " + 
+                                                to_parts[0] + "." + to_parts[1] + ".force = 0", null)
+    
+    # Add initial equations
+    for init_eq in model_data.get("initial_equations", []):
+        if init_eq is Dictionary and init_eq.has("equation"):
+            var eq_parts = init_eq["equation"].split("=")
+            if eq_parts.size() == 2:
+                var var_name = eq_parts[0].strip_edges()
+                var value = float(eq_parts[1].strip_edges())
+                eq_system.add_initial_condition(var_name, value, null)
+    
+    # Initialize the system
+    eq_system.initialize()
+    
+    # Run simulation
+    var t = start_time
+    while t <= stop_time:
         # Store current state
         results["time"].append(t)
-        results["variables"]["position"].append(x)
-        results["variables"]["velocity"].append(v)
-        results["variables"]["spring_force"].append(spring_force)
+        
+        # Get state variables from components
+        var mass_pos = 0.0
+        var mass_vel = 0.0
+        var damper_force = 0.0
+        
+        # Get values using exact component names from the model
+        if components.has("mass"):
+            mass_pos = components["mass"].get_variable("position")
+            mass_vel = components["mass"].get_variable("velocity")
+        if components.has("damper"):
+            damper_force = components["damper"].get_variable("force")
+        
+        results["variables"]["position"].append(mass_pos)
+        results["variables"]["velocity"].append(mass_vel)
         results["variables"]["damper_force"].append(damper_force)
         
-        # Update state using Euler integration
-        var a = total_force / mass  # Acceleration
-        v += a * step_size  # Update velocity
-        x += v * step_size  # Update position
-        t += step_size
+        # Advance simulation
+        eq_system.solve_step()
+        t = eq_system.time
     
     # Add parameters to metadata
-    results["metadata"]["parameters"] = {
-        "mass": mass,
-        "spring_constant": spring_k,
-        "damping_coefficient": damper_d,
-        "initial_position": x0,
-        "initial_velocity": v0
-    }
+    results["metadata"]["parameters"] = {}
+    if components.has("mass"):
+        results["metadata"]["parameters"]["mass"] = components["mass"].get_parameter("m")
+    if components.has("damper"):
+        results["metadata"]["parameters"]["damping_coefficient"] = components["damper"].get_parameter("d")
     
     return results
 

@@ -5,6 +5,7 @@ extends Node
 var component_name: String = ""
 var connectors: Dictionary = {}
 var parameters: Dictionary = {}
+var parameter_metadata: Dictionary = {}  # Store additional parameter info
 var variables: Dictionary = {}
 var state_variables: Dictionary = {}  # Variables that have time derivatives
 var der_variables: Dictionary = {}    # Derivatives of state variables
@@ -18,6 +19,7 @@ var description: String = ""
 
 signal state_changed(variable_name: String, value: float)
 signal event_triggered(event_name: String, data: Dictionary)
+signal parameter_changed(param_name: String, value: Variant)
 
 func _init(comp_name: String = "", desc: String = ""):
 	component_name = comp_name
@@ -28,19 +30,131 @@ func add_connector(name: String, type: ModelicaConnector.Type) -> void:
 		connectors[name] = ModelicaConnector.new(type)
 		_validate_component()
 
-func add_parameter(name: String, value: float, unit: ModelicaConnector.Unit = ModelicaConnector.Unit.NONE) -> void:
-	parameters[name] = value
+func add_parameter(name: String, value: Variant, unit: ModelicaConnector.Unit = ModelicaConnector.Unit.NONE) -> void:
+	parameters[name] = {
+		"value": value,
+		"unit": unit
+	}
+	
+	# Initialize metadata if not exists
+	if not parameter_metadata.has(name):
+		parameter_metadata[name] = {
+			"min": null,
+			"max": null,
+			"fixed": true,
+			"evaluate": true,
+			"description": ""
+		}
+	
 	_validate_component()
+	emit_signal("parameter_changed", name, value)
+
+func set_parameter_min(name: String, min_value: float) -> void:
+	if parameters.has(name):
+		if not parameter_metadata.has(name):
+			parameter_metadata[name] = {}
+		parameter_metadata[name]["min"] = min_value
+		_validate_component()
+
+func set_parameter_max(name: String, max_value: float) -> void:
+	if parameters.has(name):
+		if not parameter_metadata.has(name):
+			parameter_metadata[name] = {}
+		parameter_metadata[name]["max"] = max_value
+		_validate_component()
+
+func set_parameter_fixed(name: String, fixed: bool) -> void:
+	if parameters.has(name):
+		if not parameter_metadata.has(name):
+			parameter_metadata[name] = {}
+		parameter_metadata[name]["fixed"] = fixed
+		_validate_component()
+
+func set_parameter_evaluate(name: String, evaluate: bool) -> void:
+	if parameters.has(name):
+		if not parameter_metadata.has(name):
+			parameter_metadata[name] = {}
+		parameter_metadata[name]["evaluate"] = evaluate
+		_validate_component()
+
+func set_parameter_description(name: String, description: String) -> void:
+	if parameters.has(name):
+		if not parameter_metadata.has(name):
+			parameter_metadata[name] = {}
+		parameter_metadata[name]["description"] = description
+
+func get_parameter(name: String) -> Variant:
+	if name in parameters:
+		return parameters[name].value
+	push_error("Parameter not found: " + name)
+	return null
+
+func get_parameter_unit(name: String) -> ModelicaConnector.Unit:
+	if name in parameters:
+		return parameters[name].unit
+	return ModelicaConnector.Unit.NONE
+
+func get_parameter_metadata(name: String) -> Dictionary:
+	if name in parameter_metadata:
+		return parameter_metadata[name]
+	return {}
+
+func is_parameter_fixed(name: String) -> bool:
+	if name in parameter_metadata:
+		return parameter_metadata[name].get("fixed", true)
+	return true
+
+func is_parameter_evaluable(name: String) -> bool:
+	if name in parameter_metadata:
+		return parameter_metadata[name].get("evaluate", true)
+	return true
+
+func validate_parameter(name: String, value: Variant) -> bool:
+	if not parameters.has(name):
+		return false
+		
+	# Get metadata
+	var metadata = get_parameter_metadata(name)
+	
+	# Check type
+	if not (value is float or value is int or value is bool or value is String):
+		return false
+		
+	# Check range for numeric types
+	if value is float or value is int:
+		var min_val = metadata.get("min")
+		var max_val = metadata.get("max")
+		
+		if min_val != null and value < min_val:
+			return false
+		if max_val != null and value > max_val:
+			return false
+	
+	return true
 
 func add_variable(name: String, initial_value: float = 0.0, unit: ModelicaConnector.Unit = ModelicaConnector.Unit.NONE) -> void:
-	variables[name] = initial_value
+	variables[name] = {
+		"value": initial_value,
+		"unit": unit
+	}
 	_validate_component()
 
 func add_state_variable(name: String, initial_value: float = 0.0, unit: ModelicaConnector.Unit = ModelicaConnector.Unit.NONE) -> void:
-	state_variables[name] = initial_value
-	variables[name] = initial_value  # Also add to regular variables for easy access
+	state_variables[name] = {
+		"value": initial_value,
+		"unit": unit
+	}
+	variables[name] = {  # Also add to regular variables for easy access
+		"value": initial_value,
+		"unit": unit
+	}
 	# Initialize corresponding derivative variable
-	der_variables["der(" + name + ")"] = 0.0
+	var der_name = "der(" + name + ")"
+	der_variables[der_name] = {
+		"value": 0.0,
+		"unit": unit,  # The derivative will have the same unit per time
+		"state_var": name  # Keep track of which state variable this is the derivative of
+	}
 	_validate_component()
 
 func add_equation(equation: String) -> void:
@@ -59,32 +173,55 @@ func add_event(name: String, condition: String, action: String) -> void:
 func get_connector(name: String) -> ModelicaConnector:
 	return connectors.get(name)
 
-func get_parameter(name: String) -> float:
-	if name in parameters:
-		return parameters[name]
-	push_error("Parameter not found: " + name)
-	return 0.0
-
-func get_variable(name: String) -> float:
+func get_variable(name: String) -> Variant:
+	if "." in name:
+		# Handle port variables (e.g., port.position)
+		var parts = name.split(".")
+		if parts.size() == 2:
+			var port_name = parts[0]
+			var var_name = parts[1]
+			if port_name in variables:
+				var full_name = name  # Use the full name as is
+				if full_name in variables:
+					return variables[full_name].value
+	
+	# Handle regular variables
 	if name in variables:
-		return variables[name]
+		return variables[name].value
 	elif name in state_variables:
-		return state_variables[name]
+		return state_variables[name].value
 	elif name in der_variables:
-		return der_variables[name]
+		return der_variables[name].value
 	push_error("Variable not found: " + name)
-	return 0.0
+	return null
 
 func set_variable(name: String, value: float) -> void:
+	if "." in name:
+		# Handle port variables (e.g., port.position)
+		var parts = name.split(".")
+		if parts.size() == 2:
+			var port_name = parts[0]
+			var var_name = parts[1]
+			if port_name in variables:
+				var full_name = name  # Use the full name as is
+				if full_name in variables:
+					variables[full_name].value = value
+					emit_signal("state_changed", name, value)
+					return
+	
+	# Handle regular variables
 	if name in variables:
-		variables[name] = value
+		variables[name].value = value
+		# If this is also a state variable, update that too
+		if name in state_variables:
+			state_variables[name].value = value
 		emit_signal("state_changed", name, value)
 	elif name in state_variables:
-		state_variables[name] = value
-		variables[name] = value  # Keep regular variables in sync
+		state_variables[name].value = value
+		variables[name].value = value  # Keep regular variables in sync
 		emit_signal("state_changed", name, value)
 	elif name in der_variables:
-		der_variables[name] = value
+		der_variables[name].value = value
 		emit_signal("state_changed", name, value)
 	else:
 		push_error("Variable not found: " + name)
@@ -111,7 +248,28 @@ func _evaluate_condition(condition: String) -> bool:
 	return false
 
 func _validate_component() -> void:
-	is_valid = true  # Simple validation for now
+	is_valid = true
+	
+	# Validate parameters
+	for param_name in parameters:
+		var value = parameters[param_name].value
+		if not validate_parameter(param_name, value):
+			push_error("Invalid parameter value for " + param_name)
+			is_valid = false
+	
+	# Validate that all state variables have corresponding derivatives
+	for state_var in state_variables:
+		var der_name = "der(" + state_var + ")"
+		if not der_variables.has(der_name):
+			push_error("State variable " + state_var + " has no derivative")
+			is_valid = false
+	
+	# Validate that all derivatives have corresponding state variables
+	for der_var in der_variables:
+		var state_var = der_variables[der_var].state_var
+		if not state_variables.has(state_var):
+			push_error("Derivative " + der_var + " has no state variable")
+			is_valid = false
 
 func to_dict() -> Dictionary:
 	return {
@@ -120,6 +278,7 @@ func to_dict() -> Dictionary:
 		"type": "component",
 		"connectors": _serialize_connectors(),
 		"parameters": parameters,
+		"parameter_metadata": parameter_metadata,
 		"variables": variables,
 		"state_variables": state_variables,
 		"der_variables": der_variables,
@@ -143,10 +302,15 @@ func from_dict(data: Dictionary) -> void:
 	
 	# Load parameters with validation
 	parameters = {}
+	parameter_metadata = {}
 	for param_name in data.get("parameters", {}):
 		var param = data.get("parameters", {})[param_name]
 		if param is Dictionary and param.has("value"):
 			parameters[param_name] = param.duplicate()
+			
+		# Load parameter metadata if available
+		if data.has("parameter_metadata") and data["parameter_metadata"].has(param_name):
+			parameter_metadata[param_name] = data["parameter_metadata"][param_name].duplicate()
 	
 	# Load variables with validation
 	variables = {}
@@ -161,6 +325,8 @@ func from_dict(data: Dictionary) -> void:
 		var var_data = data.get("state_variables", {})[var_name]
 		if var_data is Dictionary and var_data.has("value"):
 			state_variables[var_name] = var_data.duplicate()
+			# Also add to regular variables
+			variables[var_name] = var_data.duplicate()
 	
 	der_variables = {}
 	for var_name in data.get("der_variables", {}):

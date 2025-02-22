@@ -214,7 +214,12 @@ func _parse_component() -> Dictionary:
 		"attributes": [],
 		"description": "",
 		"value": "",
-		"default": ""
+		"default": "",
+		"fixed": true,  # Default to true for parameters
+		"evaluate": true,  # Default to true for parameters
+		"unit": "",
+		"min": null,
+		"max": null
 	}
 	
 	# Skip any leading whitespace and comments
@@ -238,8 +243,23 @@ func _parse_component() -> Dictionary:
 		print("No type found, skipping character at position ", _pos)
 		return {}
 	
-	if not component.is_parameter:
-		component.type = type_name
+	# Handle type and set default value based on type
+	match type_name:
+		"Real":
+			component.value = "0.0"
+			component.type = "Real"
+		"Integer":
+			component.value = "0"
+			component.type = "Integer"
+		"Boolean":
+			component.value = "false"
+			component.type = "Boolean"
+		"String":
+			component.value = "\"\""
+			component.type = "String"
+		_:
+			if not component.is_parameter:
+				component.type = type_name
 	
 	print("Found type: ", type_name)
 	
@@ -258,7 +278,18 @@ func _parse_component() -> Dictionary:
 	# Parse modifications if present
 	_skip_whitespace_and_comments()
 	if _peek() == "(":
-		component.modifications = _parse_modifications()
+		var mods = _parse_modifications()
+		component.modifications = mods
+		
+		# Handle special parameter attributes
+		if mods.has("fixed"):
+			component.fixed = _to_bool(mods["fixed"])
+		if mods.has("unit"):
+			component.unit = mods["unit"].strip_edges().trim_prefix("\"").trim_suffix("\"")
+		if mods.has("min"):
+			component.min = _to_number(mods["min"])
+		if mods.has("max"):
+			component.max = _to_number(mods["max"])
 	
 	# Parse description string if present
 	_skip_whitespace_and_comments()
@@ -271,11 +302,18 @@ func _parse_component() -> Dictionary:
 		_next() # Skip =
 		_skip_whitespace_and_comments()
 		component.default = _parse_value()
+		if not component.default.is_empty():
+			component.value = component.default
 	
 	# Parse annotation if present
 	_skip_whitespace_and_comments()
 	if _match_keyword("annotation"):
-		component.annotations = _parse_annotation()
+		var annotations = _parse_annotation()
+		component.annotations = annotations
+		
+		# Check for Evaluate annotation
+		if annotations.has("Evaluate"):
+			component.evaluate = _to_bool(annotations["Evaluate"])
 	
 	_skip_until_semicolon()
 	return component
@@ -573,3 +611,19 @@ func _parse_definition_type() -> String:
 		if _match_keyword(keyword):
 			return keyword
 	return ""
+
+func _to_bool(value: String) -> bool:
+	value = value.to_lower()
+	return value == "true" or value == "1"
+
+func _to_number(value: String) -> float:
+	if value.is_empty():
+		return 0.0
+	# Handle scientific notation
+	if "e" in value.to_lower():
+		var parts = value.split("e")
+		if parts.size() == 2:
+			var base = float(parts[0])
+			var exp = float(parts[1])
+			return base * pow(10, exp)
+	return float(value)

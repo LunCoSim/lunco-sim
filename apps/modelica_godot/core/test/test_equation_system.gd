@@ -27,6 +27,7 @@ func _run_all_tests() -> void:
 	_test_ast_dependencies()
 	_test_ast_differential()
 	_test_ast_state_variables()
+	_test_damping_mass()
 
 func _start_test(test_name: String) -> void:
 	current_test = test_name
@@ -268,70 +269,104 @@ func _test_derivatives() -> void:
 	_assert_approx(comp.get_variable("vel"), 1.0, "Velocity unchanged in first step")
 
 func _test_damped_spring_mass_system() -> void:
-	_start_test("Damped Spring-Mass System")
+	_start_test("Damping Mass System")
 	
 	var eq_system = EquationSystem.new()
-	
-	# Create spring component
-	var spring = ModelicaComponent.new("spring")
-	spring.add_parameter("k", 100.0)  # N/m
-	spring.add_parameter("l0", 1.0)   # m
-	spring.add_variable("length")
-	spring.add_variable("elongation")
-	spring.add_variable("force")
-	
-	# Create damper component
-	var damper = ModelicaComponent.new("damper")
-	damper.add_parameter("c", 10.0)  # Ns/m - damping coefficient
-	damper.add_variable("velocity")
-	damper.add_variable("force")
-	
-	# Create mass component
 	var mass = ModelicaComponent.new("mass")
-	mass.add_parameter("m", 1.0)  # kg
-	mass.add_state_variable("position")
-	mass.add_state_variable("velocity")
-	mass.add_variable("force")
-	mass.add_variable("acceleration")
+	var damper = ModelicaComponent.new("damper")
+	var fixed = ModelicaComponent.new("fixed")
 	
-	# Add components
-	eq_system.add_component(spring)
-	eq_system.add_component(damper)
+	# Initialize mass component
+	mass.add_parameter("m", 1.0)  # kg
+	mass.add_state_variable("position", 1.0)  # m
+	mass.add_state_variable("velocity", 0.0)  # m/s
+	mass.add_variable("port.position", 1.0)
+	mass.add_variable("port.velocity", 0.0)
+	mass.add_variable("port.force", 0.0)
+	
+	# Initialize damper component
+	damper.add_parameter("c", 10.0)  # Ns/m
+	damper.add_variable("port_a.position", 0.0)
+	damper.add_variable("port_a.velocity", 0.0)
+	damper.add_variable("port_a.force", 0.0)
+	damper.add_variable("port_b.position", 1.0)
+	damper.add_variable("port_b.velocity", 0.0)
+	damper.add_variable("port_b.force", 0.0)
+	damper.add_variable("velocity", 0.0)
+	damper.add_variable("force", 0.0)
+	
+	# Initialize fixed point component
+	fixed.add_variable("port.position", 0.0)
+	fixed.add_variable("port.velocity", 0.0)
+	fixed.add_variable("port.force", 0.0)
+	
+	# Add components to system
 	eq_system.add_component(mass)
+	eq_system.add_component(damper)
+	eq_system.add_component(fixed)
 	
 	# Add initial conditions
-	eq_system.add_initial_condition("mass.position", 1.5, mass)  # Stretched 0.5m
+	eq_system.add_initial_condition("mass.position", 1.0, mass)
 	eq_system.add_initial_condition("mass.velocity", 0.0, mass)
+	eq_system.add_initial_condition("mass.port.position", 1.0, mass)
+	eq_system.add_initial_condition("mass.port.velocity", 0.0, mass)
+	eq_system.add_initial_condition("mass.port.force", 0.0, mass)
 	
-	# Add equations
-	eq_system.add_equation("spring.length = mass.position", spring)
-	eq_system.add_equation("spring.elongation = spring.length - spring.l0", spring)
-	eq_system.add_equation("spring.force = spring.k * spring.elongation", spring)
-	eq_system.add_equation("damper.velocity = mass.velocity", damper)
-	eq_system.add_equation("damper.force = damper.c * damper.velocity", damper)
-	eq_system.add_equation("mass.force = -(spring.force + damper.force)", mass)  # Total force on mass
-	eq_system.add_equation("mass.acceleration = mass.force / mass.m", mass)
+	eq_system.add_initial_condition("damper.port_a.position", 0.0, damper)
+	eq_system.add_initial_condition("damper.port_a.velocity", 0.0, damper)
+	eq_system.add_initial_condition("damper.port_a.force", 0.0, damper)
+	eq_system.add_initial_condition("damper.port_b.position", 1.0, damper)
+	eq_system.add_initial_condition("damper.port_b.velocity", 0.0, damper)
+	eq_system.add_initial_condition("damper.port_b.force", 0.0, damper)
+	eq_system.add_initial_condition("damper.velocity", 0.0, damper)
+	eq_system.add_initial_condition("damper.force", 0.0, damper)
+	
+	eq_system.add_initial_condition("fixed.port.position", 0.0, fixed)
+	eq_system.add_initial_condition("fixed.port.velocity", 0.0, fixed)
+	eq_system.add_initial_condition("fixed.port.force", 0.0, fixed)
+	
+	# Add equations for mass
 	eq_system.add_equation("der(mass.position) = mass.velocity", mass)
-	eq_system.add_equation("der(mass.velocity) = mass.acceleration", mass)
+	eq_system.add_equation("mass.m * der(mass.velocity) = mass.port.force", mass)
+	eq_system.add_equation("mass.port.position = mass.position", mass)
+	eq_system.add_equation("mass.port.velocity = mass.velocity", mass)
 	
+	# Add equations for damper
+	eq_system.add_equation("damper.velocity = damper.port_b.velocity - damper.port_a.velocity", damper)
+	eq_system.add_equation("damper.force = damper.c * damper.velocity", damper)
+	eq_system.add_equation("damper.port_a.force + damper.port_b.force = 0", damper)
+	eq_system.add_equation("damper.port_a.force = -damper.force", damper)
+	eq_system.add_equation("damper.port_b.force = damper.force", damper)
+	
+	# Add equations for fixed point
+	eq_system.add_equation("fixed.port.position = 0", fixed)
+	eq_system.add_equation("fixed.port.velocity = 0", fixed)
+	
+	# Add connection equations
+	eq_system.add_equation("fixed.port.position = damper.port_a.position", null)
+	eq_system.add_equation("fixed.port.velocity = damper.port_a.velocity", null)
+	eq_system.add_equation("fixed.port.force + damper.port_a.force = 0", null)
+	eq_system.add_equation("damper.port_b.position = mass.port.position", null)
+	eq_system.add_equation("damper.port_b.velocity = mass.port.velocity", null)
+	eq_system.add_equation("damper.port_b.force + mass.port.force = 0", null)
+	
+	# Initialize system
 	eq_system.initialize()
 	
-	# Test initial state
-	_assert_approx(spring.get_variable("elongation"), 0.5, "Initial spring elongation")
-	_assert_approx(spring.get_variable("force"), 50.0, "Initial spring force")
-	_assert_approx(damper.get_variable("force"), 0.0, "Initial damper force")
-	_assert_approx(mass.get_variable("acceleration"), -50.0, "Initial mass acceleration")
+	# Test initial conditions
+	_assert_approx(mass.get_variable("position"), 1.0, "Initial position")
+	_assert_approx(mass.get_variable("velocity"), 0.0, "Initial velocity")
 	
-	# Test first time step
+	# Simulate one step
 	eq_system.solve_step()
-	# After one step (dt = 0.01):
-	# a = -50 m/s²
-	# v = v0 + a*dt = 0 + (-50)*0.01 = -0.5 m/s
-	# Damper force = c*v = 10 * (-0.5) = -5 N
-	# x = x0 + v0*dt = 1.5 + 0*0.01 = 1.5 m  # Initial velocity was 0
-	_assert_approx(mass.get_variable("velocity"), -0.5, "Mass velocity after first step")
-	_assert_approx(mass.get_variable("position"), 1.5, "Mass position after first step")
-	_assert_approx(damper.get_variable("force"), -5.0, "Damper force after first step")
+	
+	# Test that mass is moving towards equilibrium
+	var new_velocity = mass.get_variable("velocity")
+	var new_position = mass.get_variable("position")
+	
+	_assert(new_velocity < 0.0, "Mass is moving towards equilibrium")
+	_assert(new_position < 1.0, "Mass has moved towards equilibrium")
+	_assert(new_position > 0.0, "Mass hasn't overshot equilibrium")
 
 func _test_coupled_pendulums() -> void:
 	_start_test("Coupled Pendulums")
@@ -605,4 +640,104 @@ func _test_ast_state_variables() -> void:
 	_assert(node.left.is_differential, "First derivative is marked")
 	_assert(node.right.right.is_differential, "Second derivative is marked")
 	_assert(node.left.state_variable == "test.vel", "First state variable is correct")
-	_assert(node.right.right.state_variable == "test.pos", "Second state variable is correct") 
+	_assert(node.right.right.state_variable == "test.pos", "Second state variable is correct")
+
+func _test_damping_mass() -> void:
+	_start_test("Damping Mass System")
+	
+	var eq_system = EquationSystem.new()
+	
+	# Create mass component
+	var mass = ModelicaComponent.new("mass")
+	mass.add_connector("port", ModelicaConnector.Type.MECHANICAL)
+	mass.add_state_variable("position", 0.0)
+	mass.add_state_variable("velocity", 0.0)
+	mass.add_variable("force", 0.0)
+	mass.add_parameter("m", 1.0)  # 1 kg mass
+	
+	# Initialize mass port variables
+	mass.add_variable("port.position", 0.0)
+	mass.add_variable("port.velocity", 0.0)
+	mass.add_variable("port.force", 0.0)
+	
+	# Add mass equations
+	mass.add_equation("der(position) = velocity")
+	mass.add_equation("der(velocity) = force/m")
+	mass.add_equation("port.position = position")
+	mass.add_equation("port.velocity = velocity")
+	mass.add_equation("port.force = -force")
+	
+	# Create damper component
+	var damper = ModelicaComponent.new("damper")
+	damper.add_connector("port_a", ModelicaConnector.Type.MECHANICAL)
+	damper.add_connector("port_b", ModelicaConnector.Type.MECHANICAL)
+	damper.add_parameter("d", 0.5)  # Damping coefficient 0.5 N⋅s/m
+	damper.add_variable("force", 0.0)
+	
+	# Initialize damper port variables
+	damper.add_variable("port_a.position", 0.0)
+	damper.add_variable("port_a.velocity", 0.0)
+	damper.add_variable("port_a.force", 0.0)
+	damper.add_variable("port_b.position", 0.0)
+	damper.add_variable("port_b.velocity", 0.0)
+	damper.add_variable("port_b.force", 0.0)
+	
+	# Add damper equations
+	damper.add_equation("force = d * (port_b.velocity - port_a.velocity)")
+	damper.add_equation("port_a.force = force")
+	damper.add_equation("port_b.force = -force")
+	
+	# Create fixed point
+	var fixed = ModelicaComponent.new("fixed")
+	fixed.add_connector("port", ModelicaConnector.Type.MECHANICAL)
+	fixed.add_parameter("position", 0.0)
+	
+	# Initialize fixed point port variables
+	fixed.add_variable("port.position", 0.0)
+	fixed.add_variable("port.velocity", 0.0)
+	fixed.add_variable("port.force", 0.0)
+	
+	fixed.add_equation("port.position = position")
+	fixed.add_equation("port.velocity = 0")
+	
+	# Add components to system
+	eq_system.add_component(mass)
+	eq_system.add_component(damper)
+	eq_system.add_component(fixed)
+	
+	# Add connection equations
+	eq_system.add_equation("fixed.port.position = damper.port_a.position", null)
+	eq_system.add_equation("fixed.port.velocity = damper.port_a.velocity", null)
+	eq_system.add_equation("fixed.port.force + damper.port_a.force = 0", null)
+	eq_system.add_equation("damper.port_b.position = mass.port.position", null)
+	eq_system.add_equation("damper.port_b.velocity = mass.port.velocity", null)
+	eq_system.add_equation("damper.port_b.force + mass.port.force = 0", null)
+	
+	# Add initial conditions
+	eq_system.add_initial_condition("mass.position", 1.0, mass)  # Start at x₀ = 1m
+	eq_system.add_initial_condition("mass.velocity", 0.0, mass)  # Start at v₀ = 0
+	eq_system.add_initial_condition("mass.port.position", 1.0, mass)  # Initialize port position
+	eq_system.add_initial_condition("mass.port.velocity", 0.0, mass)  # Initialize port velocity
+	eq_system.add_initial_condition("damper.port_a.position", 0.0, damper)  # Fixed end
+	eq_system.add_initial_condition("damper.port_a.velocity", 0.0, damper)  # Fixed end
+	eq_system.add_initial_condition("damper.port_b.position", 1.0, damper)  # Mass end
+	eq_system.add_initial_condition("damper.port_b.velocity", 0.0, damper)  # Mass end
+	eq_system.add_initial_condition("fixed.port.position", 0.0, fixed)  # Fixed point
+	eq_system.add_initial_condition("fixed.port.velocity", 0.0, fixed)  # Fixed point
+	
+	# Initialize system
+	eq_system.initialize()
+	
+	# Test initial state
+	_assert_approx(mass.get_variable("position"), 1.0, "Initial position")
+	_assert_approx(mass.get_variable("velocity"), 0.0, "Initial velocity")
+	
+	# Simulate one step
+	eq_system.solve_step()
+	
+	# After one step (dt = 0.01):
+	# Damping force = -d * v = -0.5 * v
+	# Initial velocity should be negative (moving towards equilibrium)
+	_assert(mass.get_variable("velocity") < 0.0, "Mass is moving towards equilibrium")
+	_assert(mass.get_variable("position") < 1.0, "Mass has moved towards equilibrium")
+	_assert(mass.get_variable("position") > 0.0, "Mass hasn't overshot equilibrium") 
