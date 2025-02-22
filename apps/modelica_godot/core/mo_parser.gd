@@ -46,6 +46,7 @@ func parse_definition() -> Dictionary:
 		"annotations": {},    # annotations
 		"within": "",         # within clause
 		"imports": [],        # list of import statements
+		"description": ""     # description string
 	}
 	
 	_skip_whitespace_and_comments()
@@ -147,10 +148,14 @@ func parse_definition() -> Dictionary:
 			var component = _parse_component()
 			if not component.is_empty():
 				print("Found component: ", component)
-				if component.get("type", "") == "parameter":
+				# Add all components to components list
+				result.components.append(component)
+				# Also add parameters to parameters list
+				if component.is_parameter:
+					# Store the value from default if present
+					if not component.default.is_empty():
+						component.value = component.default
 					result.parameters.append(component)
-				else:
-					result.components.append(component)
 	
 	return result
 
@@ -215,7 +220,12 @@ func _parse_component() -> Dictionary:
 		"attributes": [],
 		"description": "",
 		"value": "",
-		"default": ""
+		"default": "",
+		"fixed": true,  # Default to true as per Modelica spec
+		"unit": "",     # Store unit separately
+		"min": "",      # Store min separately
+		"max": "",      # Store max separately
+		"evaluate": true  # Default to true as per Modelica spec
 	}
 	
 	# Skip any leading whitespace and comments
@@ -228,12 +238,12 @@ func _parse_component() -> Dictionary:
 	# Check for flow keyword
 	if _match_keyword("flow"):
 		component.is_flow = true
+		component.attributes.append("flow")
 		_skip_whitespace_and_comments()
 	
 	# Check for parameter keyword
 	if _match_keyword("parameter"):
 		component.is_parameter = true
-		component.type = "parameter"
 		_skip_whitespace_and_comments()
 	
 	# Parse type name
@@ -244,106 +254,104 @@ func _parse_component() -> Dictionary:
 		print("No type found, skipping character at position ", _pos)
 		return {}
 	
-	if not component.is_parameter:
-		component.type = type_name
-	
+	component.type = type_name
 	print("Found type: ", type_name)
 	
 	# Parse component name
 	_skip_whitespace_and_comments()
-	var name = _parse_identifier()
-	if name.is_empty():
-		# Advance position to avoid infinite loop
-		_pos += 1
-		print("No name found, skipping character at position ", _pos)
-		return {}
+	component.name = _parse_identifier()
+	print("Found name: ", component.name, ", is_flow: ", component.is_flow)
 	
-	component.name = name
-	print("Found name: ", name, ", is_flow: ", component.is_flow)
-	
-	# Parse modifications if present
+	# Parse modifications if any
 	_skip_whitespace_and_comments()
 	if _peek() == "(":
-		component.modifications = _parse_modifications()
+		var mods = _parse_modifications()
+		component.modifications = mods
+		# Extract special modifications
+		if "fixed" in mods:
+			component.fixed = mods["fixed"]
+		if "unit" in mods:
+			component.unit = mods["unit"]
+		if "min" in mods:
+			component.min = mods["min"]
+		if "max" in mods:
+			component.max = mods["max"]
 	
-	# Parse description string if present
+	# Parse default value if any
+	_skip_whitespace_and_comments()
+	if _peek() == "=":
+		_next()  # Skip =
+		_skip_whitespace_and_comments()
+		component.default = _parse_value()
+		component.value = component.default
+	
+	# Parse description string if any
 	_skip_whitespace_and_comments()
 	if _peek() == "\"":
 		component.description = _parse_string()
 	
-	# Parse default value if present
-	_skip_whitespace_and_comments()
-	if _peek() == "=":
-		_next() # Skip =
-		_skip_whitespace_and_comments()
-		component.default = _parse_value()
-	
-	# Parse annotation if present
+	# Parse annotation if any
 	_skip_whitespace_and_comments()
 	if _match_keyword("annotation"):
-		component.annotations = _parse_annotation()
+		var anns = _parse_annotation()
+		component.annotations = anns
+		# Extract special annotations
+		if "Evaluate" in anns:
+			component.evaluate = anns["Evaluate"]
 	
 	_skip_until_semicolon()
 	return component
 
 func _parse_annotation() -> Dictionary:
-	print("Parsing model annotation")
-	var result = {}
+	var annotations = {}
 	
-	_skip_whitespace()
+	# Skip opening parenthesis
+	_skip_whitespace_and_comments()
 	if _peek() != "(":
-		return result
+		return annotations
+	_next()
 	
-	_advance()  # Skip opening parenthesis
+	while _pos < _len:
+		_skip_whitespace_and_comments()
+		
+		# Check for closing parenthesis
+		if _peek() == ")":
+			_next()
+			break
+		
+		# Parse annotation name
+		var name = _parse_identifier()
+		if name.is_empty():
+			break
+		
+		_skip_whitespace_and_comments()
+		
+		# Parse equals sign
+		if _peek() != "=":
+			break
+		_next()
+		
+		# Parse annotation value
+		_skip_whitespace_and_comments()
+		var value = _parse_value()
+		if value.is_empty():
+			break
+		
+		# Convert boolean string values
+		if value == "true" or value == "false":
+			annotations[name] = value == "true"
+		else:
+			# Remove quotes for string values
+			if value.begins_with("\"") and value.ends_with("\""):
+				value = value.substr(1, value.length() - 2)
+			annotations[name] = value
+		
+		# Skip comma if present
+		_skip_whitespace_and_comments()
+		if _peek() == ",":
+			_next()
 	
-	# Parse annotation content
-	var content = ""
-	var parentheses_count = 1
-	
-	while _pos < _len and parentheses_count > 0:
-		var char = _peek()
-		
-		if char == "(":
-			parentheses_count += 1
-		elif char == ")":
-			parentheses_count -= 1
-			
-		if parentheses_count > 0:
-			content += char
-			
-		_advance()
-	
-	print("Parsed annotation content: ", content)
-	
-	# Parse experiment settings
-	if content.begins_with("experiment"):
-		var experiment = {}
-		
-		# Extract values using regular expressions
-		var regex = RegEx.new()
-		
-		# StartTime
-		regex.compile("StartTime\\s*=\\s*(\\d+(\\.\\d+)?)")
-		var match_result = regex.search(content)
-		if match_result:
-			experiment["StartTime"] = match_result.get_string(1)
-		
-		# StopTime
-		regex.compile("StopTime\\s*=\\s*(\\d+(\\.\\d+)?)")
-		match_result = regex.search(content)
-		if match_result:
-			experiment["StopTime"] = match_result.get_string(1)
-		
-		# Interval
-		regex.compile("Interval\\s*=\\s*(\\d+(\\.\\d+)?)")
-		match_result = regex.search(content)
-		if match_result:
-			experiment["Interval"] = match_result.get_string(1)
-		
-		result["experiment"] = experiment
-	
-	_skip_until_semicolon()
-	return result
+	return annotations
 
 func _parse_equation() -> String:
 	print("\nParsing equation at position: ", _pos, ", Current char: ", _peek())
@@ -420,36 +428,35 @@ func _parse_identifier() -> String:
 	return identifier.strip_edges()
 
 func _parse_string() -> String:
-	_skip_whitespace_and_comments()
-	if _peek() != "\"":
-		return ""
-	
+	var value = ""
 	_next()  # Skip opening quote
-	var string = ""
 	
 	while _pos < _len:
-		var c = _next()
+		var c = _peek()
 		if c == "\"":
+			_next()  # Skip closing quote
 			break
-		string += c
+		elif c == "\\":
+			_next()  # Skip backslash
+			if _pos < _len:
+				value += _next()  # Add escaped character
+		else:
+			value += _next()
 	
-	return string
+	return "\"" + value + "\""
 
 func _parse_modifications() -> Dictionary:
 	var modifications = {}
 	
-	_skip_whitespace_and_comments()
-	if _peek() != "(":
-		return modifications
-	
-	_next()  # Skip opening parenthesis
+	# Skip opening parenthesis
+	_next()
 	
 	while _pos < _len:
 		_skip_whitespace_and_comments()
 		
-		# Check for end of modifications
+		# Check for closing parenthesis
 		if _peek() == ")":
-			_next()  # Skip closing parenthesis
+			_next()
 			break
 		
 		# Parse modification name
@@ -458,56 +465,101 @@ func _parse_modifications() -> Dictionary:
 			break
 		
 		_skip_whitespace_and_comments()
+		
+		# Parse equals sign
 		if _peek() != "=":
 			break
-		
-		_next()  # Skip =
-		_skip_whitespace_and_comments()
+		_next()
 		
 		# Parse modification value
-		var value = ""
-		while _pos < _len:
-			var c = _peek()
-			if c == ")" or c == ",":
-				break
-			value += _next()
+		_skip_whitespace_and_comments()
+		var value = _parse_value()
 		
-		modifications[name] = value.strip_edges()
+		# Convert boolean string values
+		if value == "true" or value == "false":
+			modifications[name] = value == "true"
+		else:
+			# Remove quotes for string values
+			if value.begins_with("\"") and value.ends_with("\""):
+				value = value.substr(1, value.length() - 2)
+			modifications[name] = value
 		
+		# Skip comma if present
 		_skip_whitespace_and_comments()
 		if _peek() == ",":
-			_next()  # Skip comma
-			continue
-		elif _peek() == ")":
-			_next()  # Skip closing parenthesis
-			break
+			_next()
 	
 	return modifications
 
 func _parse_value() -> String:
+	_skip_whitespace_and_comments()
 	var value = ""
-	var parentheses_count = 0
+	
+	# Handle string literals
+	if _peek() == "\"":
+		value = _parse_string()
+		return value
+	
+	# Handle boolean literals
+	if _match_keyword("true"):
+		return "true"
+	elif _match_keyword("false"):
+		return "false"
+	
+	# Handle scientific notation and numbers
+	var has_digit = false
+	var has_decimal = false
+	var has_exponent = false
+	var has_sign = false
 	
 	while _pos < _len:
 		var c = _peek()
 		
-		if c == "(":
-			parentheses_count += 1
-		elif c == ")":
-			if parentheses_count == 0:
-				break
-			parentheses_count -= 1
-		elif c == "," and parentheses_count == 0:
-			break
-		elif c == ";" and parentheses_count == 0:
-			break
-		elif c == " " and value.is_empty():
+		# Handle sign at start or after exponent
+		if (value.is_empty() or value.ends_with("e") or value.ends_with("E")) and (c == "+" or c == "-"):
+			if value.is_empty():
+				has_sign = true
+			value += c
 			_next()
 			continue
 		
-		value += _next()
+		# Handle decimal point
+		if c == "." and not has_decimal and not has_exponent:
+			has_decimal = true
+			value += c
+			_next()
+			continue
+		
+		# Handle exponent
+		if (c == "e" or c == "E") and has_digit and not has_exponent:
+			has_exponent = true
+			value += c
+			_next()
+			continue
+		
+		# Handle digits
+		if c.is_valid_int():
+			has_digit = true
+			value += c
+			_next()
+			continue
+		
+		# Stop at any other character
+		if c == "," or c == ")" or c == ";" or c == " ":
+			break
+		
+		# If we get here, it's not a number
+		if not has_digit and not has_sign:
+			# Try to parse as identifier
+			return _parse_identifier()
+		
+		break
 	
-	return value.strip_edges()
+	# If we only have a sign, treat it as an identifier
+	if has_sign and not has_digit:
+		return _parse_identifier()
+	
+	return value
 
 func _peek() -> String:
 	if _pos >= _len:
