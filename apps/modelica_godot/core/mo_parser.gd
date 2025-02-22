@@ -217,54 +217,67 @@ func _parse_component() -> Dictionary:
 		"default": ""
 	}
 	
+	# Skip any leading whitespace and comments
+	_skip_whitespace_and_comments()
+	
+	# If we've reached the end of the file, return empty
+	if _pos >= _len:
+		return {}
+	
 	# Check for parameter keyword
 	if _match_keyword("parameter"):
 		component.is_parameter = true
 		component.type = "parameter"
-		_skip_whitespace()
+		_skip_whitespace_and_comments()
 	
 	# Parse type name
-	var type_name = _parse_type_name()
+	var type_name = _parse_qualified_name()
 	if type_name.is_empty():
-		print("No type found, returning empty component")
+		# Advance position to avoid infinite loop
+		_pos += 1
+		print("No type found, skipping character at position ", _pos)
 		return {}
 	
 	if not component.is_parameter:
 		component.type = type_name
 	
-	print("Checking word: ", type_name)
+	print("Found type: ", type_name)
 	
 	# Parse component name
-	_skip_whitespace()
+	_skip_whitespace_and_comments()
 	var name = _parse_identifier()
 	if name.is_empty():
-		print("No name found, returning empty component")
+		# Advance position to avoid infinite loop
+		_pos += 1
+		print("No name found, skipping character at position ", _pos)
 		return {}
 	
 	component.name = name
 	print("Found name: ", name)
 	
-	# Parse modifications
-	_skip_whitespace()
+	# Parse modifications if present
+	_skip_whitespace_and_comments()
 	if _peek() == "(":
-		print("Found modifications")
 		component.modifications = _parse_modifications()
-		print("Finished parsing modifications: ", component.modifications)
 	
-	# Parse description string
-	_skip_whitespace()
+	# Parse description string if present
+	_skip_whitespace_and_comments()
 	if _peek() == "\"":
 		component.description = _parse_string()
 	
-	# Look for semicolon
-	_skip_whitespace()
-	if _peek() == ";":
-		_advance()  # Skip semicolon
-		print("Found end of component declaration")
-	else:
-		push_warning("Component declaration did not end with semicolon")
+	# Parse default value if present
+	_skip_whitespace_and_comments()
+	if _peek() == "=":
+		_next() # Skip =
+		_skip_whitespace_and_comments()
+		component.default = _parse_value()
 	
-	print("Finished parsing component: ", component)
+	# Parse annotation if present
+	_skip_whitespace_and_comments()
+	if _match_keyword("annotation"):
+		component.annotations = _parse_annotation()
+	
+	_skip_until_semicolon()
 	return component
 
 func _parse_annotation() -> Dictionary:
@@ -464,6 +477,31 @@ func _parse_modifications() -> Dictionary:
 			break
 	
 	return modifications
+
+func _parse_value() -> String:
+	var value = ""
+	var parentheses_count = 0
+	
+	while _pos < _len:
+		var c = _peek()
+		
+		if c == "(":
+			parentheses_count += 1
+		elif c == ")":
+			if parentheses_count == 0:
+				break
+			parentheses_count -= 1
+		elif c == "," and parentheses_count == 0:
+			break
+		elif c == ";" and parentheses_count == 0:
+			break
+		elif c == " " and value.is_empty():
+			_next()
+			continue
+		
+		value += _next()
+	
+	return value.strip_edges()
 
 func _peek() -> String:
 	if _pos >= _len:
