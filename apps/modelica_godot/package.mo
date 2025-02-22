@@ -1,11 +1,10 @@
-package modelica_godot "Root package for modelica_godot workspace"
+package ModelicaGodot "Root package for ModelicaGodot workspace"
   annotation(
-    Documentation(info="Modelica workspace for modelica_godot project.
+    Documentation(info="Modelica workspace for ModelicaGodot project.
     Contains:
     - Models: User-created models
     - Libraries: User-created libraries
-    - MSL: Modelica Standard Library
     - Resources: Additional resources
     ")
   );
-end modelica_godot;
+end ModelicaGodot;
