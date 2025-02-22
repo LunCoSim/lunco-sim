@@ -66,24 +66,9 @@ func simulate_model(path: String) -> int:
     if not path.begins_with("/"):
         absolute_path = ProjectSettings.globalize_path("res://").path_join(path)
     
-    # Verify file exists
-    if not FileAccess.file_exists(absolute_path):
-        print("Error: Model file not found: ", absolute_path)
-        return ERR_FILE_NOT_FOUND
-    
-    # Load model
-    var file = FileAccess.open(absolute_path, FileAccess.READ)
-    if not file:
-        print("Error: Could not open file: ", absolute_path)
-        return ERR_FILE_CANT_OPEN
-        
-    var content = file.get_as_text()
-    file.close()
-    
-    var parser = MOParser.new()
-    var model_data = parser.parse_text(content)
-    
-    if not model_data or model_data.is_empty():
+    # Load model using model manager
+    var model_data = model_manager.load_component(absolute_path)
+    if model_data.is_empty():
         print("Error: Failed to load model")
         return ERR_PARSE_ERROR
     
@@ -137,29 +122,24 @@ func _run_simulation(model_data: Dictionary, start_time: float, stop_time: float
     var x0 = 0.5  # Default initial position in m
     var v0 = 0.0  # Default initial velocity in m/s
     
-    # Override defaults with model parameters if available
-    if model_data.has("components"):
-        for component in model_data["components"]:
-            if component.has("name") and component.has("modifications"):
-                match component["name"]:
-                    "mass":
-                        if component["modifications"].has("m"):
-                            mass = float(component["modifications"]["m"])
-                    "spring":
-                        if component["modifications"].has("k"):
-                            spring_k = float(component["modifications"]["k"])
-                    "damper":
-                        if component["modifications"].has("d"):
-                            damper_d = float(component["modifications"]["d"])
-    
-    if model_data.has("parameters"):
-        for param in model_data["parameters"]:
-            if param.has("name") and param.has("default"):
-                match param["name"]:
-                    "x0":
-                        x0 = float(param["default"].split(" ")[0])
-                    "v0":
-                        v0 = float(param["default"].split(" ")[0])
+    # Override defaults with model parameters
+    for param in model_data.get("parameters", []):
+        match param.get("name", ""):
+            "mass":
+                if param.has("value"):
+                    mass = float(param["value"])
+            "spring_k":
+                if param.has("value"):
+                    spring_k = float(param["value"])
+            "damper_d":
+                if param.has("value"):
+                    damper_d = float(param["value"])
+            "x0":
+                if param.has("value"):
+                    x0 = float(param["value"])
+            "v0":
+                if param.has("value"):
+                    v0 = float(param["value"])
     
     # Initialize state variables
     var x = x0  # Position

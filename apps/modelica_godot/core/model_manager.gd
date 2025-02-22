@@ -6,6 +6,7 @@ const MOParser = preload("res://apps/modelica_godot/core/mo_parser.gd")
 const PackageManager = preload("res://apps/modelica_godot/core/package_manager.gd")
 const WorkspaceConfig = preload("res://apps/modelica_godot/core/workspace_config.gd")
 const MOLoader = preload("res://apps/modelica_godot/core/mo_loader.gd")
+const ComponentLoader = preload("res://apps/modelica_godot/core/component_loader.gd")
 
 signal models_loaded_changed
 signal loading_progress(progress: float, message: String)
@@ -22,6 +23,7 @@ var time: float = 0.0
 var dt: float = 0.01  # Time step
 var _package_manager: PackageManager
 var _workspace_config: WorkspaceConfig
+var _component_loader: ComponentLoader
 
 func _init() -> void:
 	_models = {}
@@ -30,7 +32,9 @@ func _init() -> void:
 	equation_system = EquationSystem.new()
 	_workspace_config = WorkspaceConfig.new()
 	_package_manager = PackageManager.new()
+	_component_loader = ComponentLoader.new()
 	add_child(_package_manager)
+	add_child(_component_loader)
 
 func _enter_tree() -> void:
 	if not equation_system:
@@ -255,14 +259,8 @@ func add_component(component: ModelicaComponent) -> void:
 	for eq in component.get_equations():
 		equation_system.add_equation(eq, component)
 
-func get_component(node_name: StringName) -> ModelicaComponent:
-	# Convert StringName to NodePath
-	var node_path = NodePath(node_name)
-	# Find component by name
-	for component in components:
-		if component.name == node_name:
-			return component
-	return null
+func get_component(name: String) -> Dictionary:
+	return _component_loader.get_component_by_name(name)
 
 func connect_components(from_component: ModelicaComponent, from_port: String, 
 						to_component: ModelicaComponent, to_port: String) -> bool:
@@ -446,11 +444,8 @@ func _add_model_to_tree(model_data: Dictionary) -> void:
 func has_model(model_name: String) -> bool:
 	return _model_tree.has(model_name)
 
-func has_component(component_name: String) -> bool:
-	for component in components:
-		if component.component_name == component_name:
-			return true
-	return false
+func has_component(name: String) -> bool:
+	return _component_loader.has_component(name)
 
 func get_model_parameters(model_data: Dictionary) -> Dictionary:
 	var params = {}
@@ -473,3 +468,6 @@ func get_experiment_settings(model_data: Dictionary) -> Dictionary:
 
 func get_component_type(type_name: String, current_package: String) -> Dictionary:
 	return _package_manager.resolve_type(type_name, current_package)
+
+func load_component(path: String) -> Dictionary:
+	return _component_loader.load_component_file(path)
