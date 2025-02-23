@@ -1,244 +1,271 @@
-class_name ModelicaEquationSystem
-extends ModelicaBase
+class_name EquationSystem
+extends RefCounted
 
-const ImprovedASTNode = preload("./ast_node.gd")
+var variables: Dictionary = {}  # name -> ModelicaVariable
+var equations: Array = []      # List of equation strings
+var ast_nodes: Array = []      # List of AST nodes for equations
+var time: float = 0.0         # Current simulation time
 
-var components: Array[ModelicaComponent] = []
-var connection_sets: Array = []          # From connect equations
-var initial_system: Dictionary = {}      # For initialization
-var runtime_system: Dictionary = {}      # For simulation
-var time: float = 0.0
-var dt: float = 0.01
+func add_variable(name: String, kind: ModelicaVariable.VariableKind = ModelicaVariable.VariableKind.REGULAR) -> ModelicaVariable:
+    var var_obj = ModelicaVariable.new(name, kind)
+    variables[name] = var_obj
+    return var_obj
 
-# Solver settings
-const MAX_ITERATIONS = 50
-const TOLERANCE = 1e-8
+func add_equation(equation: String, ast: ASTNode = null) -> void:
+    equations.append(equation)
+    ast_nodes.append(ast)
 
-func _init() -> void:
-	initial_system = {
-		"equations": [],
-		"variables": {},
-		"parameters": {}
-	}
-	runtime_system = {
-		"equations": [],
-		"variables": {},
-		"parameters": {},
-		"state_variables": {},
-		"derivatives": {}
-	}
+func get_variable(name: String) -> ModelicaVariable:
+    return variables.get(name)
 
-func add_component(component: ModelicaComponent) -> void:
-	components.append(component)
-	
-	# Register all variables and parameters
-	for var_name in component.variables:
-		var var_obj = component.get_variable(var_name)
-		if var_obj.is_state_variable():
-			runtime_system.state_variables[var_name] = var_obj
-		else:
-			runtime_system.variables[var_name] = var_obj
-	
-	for param_name in component.parameters:
-		var param_obj = component.get_parameter(param_name)
-		runtime_system.parameters[param_name] = param_obj
-	
-	# Add equations
-	runtime_system.equations.extend(component.get_equations())
-	initial_system.equations.extend(component.get_initial_equations())
+func tokenize(expression: String) -> Array:
+    var tokens = []
+    var i = 0
+    var expr = expression.strip_edges()
+    
+    while i < expr.length():
+        var c = expr[i]
+        
+        # Skip whitespace
+        if c == " " or c == "\t":
+            i += 1
+            continue
+            
+        # Numbers
+        if c.is_valid_integer() or c == "." or c == "-":
+            var num = ""
+            var has_decimal = false
+            
+            if c == "-":
+                num += c
+                i += 1
+                if i >= expr.length():
+                    tokens.append(num)
+                    break
+                c = expr[i]
+            
+            while i < expr.length() and (c.is_valid_integer() or c == "."):
+                if c == ".":
+                    if has_decimal:
+                        break
+                    has_decimal = true
+                num += c
+                i += 1
+                if i >= expr.length():
+                    break
+                c = expr[i]
+            tokens.append(num)
+            continue
+            
+        # Operators
+        if c in ["+", "-", "*", "/", "^", "(", ")", "=", "<", ">", "!"]:
+            if i + 1 < expr.length():
+                var next_c = expr[i + 1]
+                if (c + next_c) in ["<=", ">=", "==", "!="]:
+                    tokens.append(c + next_c)
+                    i += 2
+                    continue
+            tokens.append(c)
+            i += 1
+            continue
+            
+        # Variables and functions
+        if c.is_valid_identifier():
+            var name = ""
+            while i < expr.length() and (c.is_valid_identifier() or c == "." or c == "_"):
+                name += c
+                i += 1
+                if i >= expr.length():
+                    break
+                c = expr[i]
+            tokens.append(name)
+            continue
+            
+        # Unknown character
+        push_error("Unknown character in expression: " + c)
+        i += 1
+    
+    return tokens
 
-func connect(conn1: ModelicaConnector, conn2: ModelicaConnector) -> void:
-	conn1.connect_to(conn2)
-	connection_sets.append([conn1, conn2])
-	
-	# Generate connection equations
-	for var_name in conn1.variables:
-		if conn2.has_variable(var_name):
-			var var1 = conn1.get_variable(var_name)
-			var var2 = conn2.get_variable(var_name)
-			
-			if var1.is_flow_variable():
-				# Sum of flow variables = 0
-				runtime_system.equations.append("%s + %s = 0" % [var1.get_declaration(var1.declarations.keys()[0]).name, 
-															   var2.get_declaration(var2.declarations.keys()[0]).name])
-			else:
-				# Equality of potential variables
-				runtime_system.equations.append("%s = %s" % [var1.get_declaration(var1.declarations.keys()[0]).name,
-														   var2.get_declaration(var2.declarations.keys()[0]).name])
+func parse_expression(tokens: Array) -> ASTNode:
+    var i = 0
+    
+    func parse_primary() -> ASTNode:
+        var token = tokens[i]
+        
+        if token.is_valid_float():
+            i += 1
+            return ASTNode.new(ASTNode.NodeType.NUMBER, token)
+            
+        elif token == "(":
+            i += 1
+            var expr = parse_expression()
+            if i >= tokens.size() or tokens[i] != ")":
+                push_error("Expected closing parenthesis")
+                return null
+            i += 1
+            return expr
+            
+        elif token == "-":
+            i += 1
+            var operand = parse_primary()
+            var node = ASTNode.new(ASTNode.NodeType.UNARY_OP, "-")
+            node.operand = operand
+            return node
+            
+        elif token.is_valid_identifier():
+            i += 1
+            # Check if it's a function call
+            if i < tokens.size() and tokens[i] == "(":
+                var func_node = ASTNode.new(ASTNode.NodeType.FUNCTION_CALL, token)
+                i += 1
+                while i < tokens.size() and tokens[i] != ")":
+                    var arg = parse_expression()
+                    func_node.arguments.append(arg)
+                    if i < tokens.size() and tokens[i] == ",":
+                        i += 1
+                if i >= tokens.size() or tokens[i] != ")":
+                    push_error("Expected closing parenthesis in function call")
+                    return null
+                i += 1
+                return func_node
+            else:
+                return ASTNode.new(ASTNode.NodeType.VARIABLE, token)
+        
+        push_error("Unexpected token: " + token)
+        return null
+    
+    func parse_term() -> ASTNode:
+        var left = parse_primary()
+        while i < tokens.size() and tokens[i] in ["*", "/"]:
+            var op = tokens[i]
+            i += 1
+            var right = parse_primary()
+            var node = ASTNode.new(ASTNode.NodeType.BINARY_OP, op)
+            node.left = left
+            node.right = right
+            left = node
+        return left
+    
+    func parse_expression() -> ASTNode:
+        var left = parse_term()
+        while i < tokens.size() and tokens[i] in ["+", "-"]:
+            var op = tokens[i]
+            i += 1
+            var right = parse_term()
+            var node = ASTNode.new(ASTNode.NodeType.BINARY_OP, op)
+            node.left = left
+            node.right = right
+            left = node
+        return left
+    
+    return parse_expression()
+
+func evaluate_ast(node: ASTNode) -> float:
+    match node.type:
+        ASTNode.NodeType.NUMBER:
+            return float(node.value)
+            
+        ASTNode.NodeType.VARIABLE:
+            var var_obj = get_variable(node.value)
+            if var_obj != null:
+                return float(var_obj.value)
+            push_error("Unknown variable: " + node.value)
+            return 0.0
+            
+        ASTNode.NodeType.BINARY_OP:
+            var left = evaluate_ast(node.left)
+            var right = evaluate_ast(node.right)
+            match node.value:
+                "+": return left + right
+                "-": return left - right
+                "*": return left * right
+                "/": return left / right if right != 0 else INF
+                "^": return pow(left, right)
+                _: 
+                    push_error("Unknown operator: " + node.value)
+                    return 0.0
+                    
+        ASTNode.NodeType.UNARY_OP:
+            var val = evaluate_ast(node.operand)
+            match node.value:
+                "-": return -val
+                _:
+                    push_error("Unknown unary operator: " + node.value)
+                    return 0.0
+                    
+        ASTNode.NodeType.FUNCTION_CALL:
+            match node.value:
+                "sin": return sin(evaluate_ast(node.arguments[0]))
+                "cos": return cos(evaluate_ast(node.arguments[0]))
+                "tan": return tan(evaluate_ast(node.arguments[0]))
+                "exp": return exp(evaluate_ast(node.arguments[0]))
+                "log": return log(evaluate_ast(node.arguments[0]))
+                "sqrt": return sqrt(evaluate_ast(node.arguments[0]))
+                "abs": return abs(evaluate_ast(node.arguments[0]))
+                "der":
+                    # Derivative evaluation requires numerical methods
+                    push_error("Derivative evaluation not implemented")
+                    return 0.0
+                _:
+                    push_error("Unknown function: " + node.value)
+                    return 0.0
+    
+    push_error("Unknown node type")
+    return 0.0
+
+func solve() -> bool:
+    # Simple equation solver - needs to be expanded for more complex systems
+    for i in range(equations.size()):
+        var eq = equations[i]
+        var ast = ast_nodes[i]
+        
+        if ast == null:
+            # Parse equation if no AST provided
+            var parts = eq.split("=")
+            if parts.size() != 2:
+                push_error("Invalid equation format: " + eq)
+                return false
+            
+            var left_tokens = tokenize(parts[0])
+            var right_tokens = tokenize(parts[1])
+            
+            var left_ast = parse_expression(left_tokens)
+            var right_ast = parse_expression(right_tokens)
+            
+            if left_ast == null or right_ast == null:
+                return false
+            
+            # Create equation node
+            ast = ASTNode.new(ASTNode.NodeType.BINARY_OP, "=")
+            ast.left = left_ast
+            ast.right = right_ast
+            ast_nodes[i] = ast
+        
+        # Evaluate equation
+        var left_val = evaluate_ast(ast.left)
+        var right_val = evaluate_ast(ast.right)
+        
+        # Update variables based on equation
+        # This is a very simple solver that only works for basic equations
+        # A more sophisticated solver would be needed for complex systems
+        if ast.left.type == ASTNode.NodeType.VARIABLE:
+            var var_obj = get_variable(ast.left.value)
+            if var_obj != null:
+                var_obj.set_value(right_val)
+        elif ast.right.type == ASTNode.NodeType.VARIABLE:
+            var var_obj = get_variable(ast.right.value)
+            if var_obj != null:
+                var_obj.set_value(left_val)
+    
+    return true
 
 func solve_initialization() -> bool:
-	# First solve initial equations
-	for iter in range(MAX_ITERATIONS):
-		var max_residual = 0.0
-		var new_values = {}
-		
-		# Evaluate all initial equations
-		for eq in initial_system.equations:
-			var ast_dict = parse_expression(tokenize(eq))
-			if ast_dict.node == null:
-				push_error("Failed to parse equation: " + eq)
-				return false
-			
-			var rhs_value = evaluate_ast(ast_dict.node)
-			var lhs_var = ast_dict.node.left.value if ast_dict.node.left else ""
-			if lhs_var != "":
-				new_values[lhs_var] = rhs_value
-				max_residual = max(max_residual, abs(rhs_value - get_variable_value(lhs_var)))
-		
-		# Update state
-		for var_name in new_values:
-			set_variable_value(var_name, new_values[var_name])
-		
-		if max_residual < TOLERANCE:
-			return true
-	
-	return false
-
-func solve_step() -> bool:
-	# Store current state
-	var current_state = {}
-	for var_name in runtime_system.variables:
-		current_state[var_name] = runtime_system.variables[var_name].value
-	for var_name in runtime_system.state_variables:
-		current_state[var_name] = runtime_system.state_variables[var_name].value
-	
-	# First solve algebraic equations
-	if not _solve_algebraic_equations(current_state):
-		return false
-	
-	# Evaluate derivatives at current state
-	var current_derivatives = {}
-	for var_name in runtime_system.state_variables:
-		var der_name = "der(" + var_name + ")"
-		var der_eq = _find_derivative_equation(der_name)
-		if der_eq != "":
-			var ast_dict = parse_expression(tokenize(der_eq))
-			if ast_dict.node != null:
-				current_derivatives[var_name] = evaluate_ast(ast_dict.node)
-	
-	# Perform RK4 integration for state variables
-	var k1_state = current_state.duplicate()
-	var k2_state = current_state.duplicate()
-	var k3_state = current_state.duplicate()
-	var k4_state = current_state.duplicate()
-	
-	# k1 = f(t, y)
-	var k1 = current_derivatives
-	
-	# k2 = f(t + dt/2, y + dt*k1/2)
-	for var_name in k1:
-		k2_state[var_name] = current_state[var_name] + 0.5 * dt * k1[var_name]
-	_solve_algebraic_equations(k2_state)
-	var k2 = {}
-	for var_name in runtime_system.state_variables:
-		var der_name = "der(" + var_name + ")"
-		var der_eq = _find_derivative_equation(der_name)
-		if der_eq != "":
-			var ast_dict = parse_expression(tokenize(der_eq))
-			if ast_dict.node != null:
-				k2[var_name] = evaluate_ast(ast_dict.node)
-	
-	# k3 = f(t + dt/2, y + dt*k2/2)
-	for var_name in k2:
-		k3_state[var_name] = current_state[var_name] + 0.5 * dt * k2[var_name]
-	_solve_algebraic_equations(k3_state)
-	var k3 = {}
-	for var_name in runtime_system.state_variables:
-		var der_name = "der(" + var_name + ")"
-		var der_eq = _find_derivative_equation(der_name)
-		if der_eq != "":
-			var ast_dict = parse_expression(tokenize(der_eq))
-			if ast_dict.node != null:
-				k3[var_name] = evaluate_ast(ast_dict.node)
-	
-	# k4 = f(t + dt, y + dt*k3)
-	for var_name in k3:
-		k4_state[var_name] = current_state[var_name] + dt * k3[var_name]
-	_solve_algebraic_equations(k4_state)
-	var k4 = {}
-	for var_name in runtime_system.state_variables:
-		var der_name = "der(" + var_name + ")"
-		var der_eq = _find_derivative_equation(der_name)
-		if der_eq != "":
-			var ast_dict = parse_expression(tokenize(der_eq))
-			if ast_dict.node != null:
-				k4[var_name] = evaluate_ast(ast_dict.node)
-	
-	# Update state variables using RK4 formula
-	# y(t + dt) = y(t) + (dt/6)*(k1 + 2*k2 + 2*k3 + k4)
-	for var_name in k1:
-		var new_value = current_state[var_name] + (dt / 6.0) * (
-			k1[var_name] + 2.0 * k2[var_name] + 2.0 * k3[var_name] + k4[var_name]
-		)
-		set_variable_value(var_name, new_value)
-	
-	# Final algebraic solve to ensure consistency
-	if not _solve_algebraic_equations(runtime_system.variables):
-		return false
-	
-	time += dt
-	return true
-
-func _solve_algebraic_equations(state: Dictionary) -> bool:
-	for iter in range(MAX_ITERATIONS):
-		var max_residual = 0.0
-		var new_values = {}
-		
-		# Evaluate all algebraic equations
-		for eq in runtime_system.equations:
-			if not _is_derivative_equation(eq):
-				var ast_dict = parse_expression(tokenize(eq))
-				if ast_dict.node == null:
-					push_error("Failed to parse equation: " + eq)
-					return false
-				
-				var rhs_value = evaluate_ast(ast_dict.node)
-				var lhs_var = ast_dict.node.left.value if ast_dict.node.left else ""
-				if lhs_var != "":
-					new_values[lhs_var] = rhs_value
-					max_residual = max(max_residual, abs(rhs_value - get_variable_value(lhs_var)))
-		
-		# Update state
-		for var_name in new_values:
-			set_variable_value(var_name, new_values[var_name])
-		
-		if max_residual < TOLERANCE:
-			return true
-	
-	return false
-
-func _is_derivative_equation(eq: String) -> bool:
-	return eq.begins_with("der(")
-
-func _find_derivative_equation(der_name: String) -> String:
-	for eq in runtime_system.equations:
-		if eq.begins_with(der_name):
-			return eq
-	return ""
-
-func get_variable_value(name: String) -> float:
-	if runtime_system.variables.has(name):
-		return runtime_system.variables[name].value
-	elif runtime_system.state_variables.has(name):
-		return runtime_system.state_variables[name].value
-	elif runtime_system.parameters.has(name):
-		return runtime_system.parameters[name].value
-	return 0.0
-
-func set_variable_value(name: String, value: float) -> void:
-	if runtime_system.variables.has(name):
-		runtime_system.variables[name].set_value(value)
-	elif runtime_system.state_variables.has(name):
-		runtime_system.state_variables[name].set_value(value)
-
-func _to_string() -> String:
-	var result = "ModelicaEquationSystem:\n"
-	result += "  Time: %f\n" % time
-	result += "  Components: %d\n" % components.size()
-	result += "  Connection Sets: %d\n" % connection_sets.size()
-	result += "  Variables: %d\n" % runtime_system.variables.size()
-	result += "  State Variables: %d\n" % runtime_system.state_variables.size()
-	result += "  Parameters: %d\n" % runtime_system.parameters.size()
-	result += "  Equations: %d\n" % runtime_system.equations.size()
-	return result
-
+    # Initialize all variables that need initialization
+    for var_name in variables:
+        var var_obj = variables[var_name]
+        if var_obj.is_state_variable():
+            # Use start value for state variables
+            var_obj.set_value(var_obj.start)
+    
+    return solve()  # Solve initial system 

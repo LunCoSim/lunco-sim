@@ -10,9 +10,27 @@ enum VariableKind {
     STREAM
 }
 
+enum Unit {
+    NONE,
+    METER,
+    KILOGRAM,
+    SECOND,
+    AMPERE,
+    KELVIN,
+    MOLE,
+    CANDELA,
+    NEWTON,
+    JOULE,
+    WATT,
+    PASCAL,
+    VOLT,
+    OHM,
+    HERTZ
+}
+
 var kind: VariableKind
 var value: Variant
-var unit: String
+var unit: Unit = Unit.NONE
 var fixed: bool = false  # For initialization
 var start: float = 0.0   # Initial value
 var nominal: float = 1.0 # Nominal value
@@ -25,7 +43,6 @@ func _init(p_name: String, p_kind: VariableKind = VariableKind.REGULAR, p_value:
     add_declaration(decl)
     kind = p_kind
     value = p_value
-    unit = ""
     min_value = -INF
     max_value = INF
 
@@ -52,7 +69,7 @@ func set_bounds(min_val: float, max_val: float) -> void:
     min_value = min_val
     max_value = max_val
 
-func set_unit(p_unit: String) -> void:
+func set_unit(p_unit: Unit) -> void:
     unit = p_unit
 
 func set_derivative_of(var_name: String) -> void:
@@ -74,8 +91,8 @@ func _to_string() -> String:
     var result = "Variable %s:\n" % decl.name
     result += "  Kind: %s\n" % VariableKind.keys()[kind]
     result += "  Value: %s\n" % str(value)
-    if unit != "":
-        result += "  Unit: %s\n" % unit
+    if unit != Unit.NONE:
+        result += "  Unit: %s\n" % Unit.keys()[unit]
     if is_state_variable() and derivative_of != "":
         result += "  Derivative of: %s\n" % derivative_of
     return result 

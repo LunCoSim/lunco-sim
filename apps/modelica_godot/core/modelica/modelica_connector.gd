@@ -3,7 +3,13 @@ extends ModelicaBase
 
 enum ConnectorType {
     INSIDE,
-    OUTSIDE
+    OUTSIDE,
+    MECHANICAL,
+    ELECTRICAL,
+    THERMAL,
+    FLUID,
+    SIGNAL,
+    NONE
 }
 
 var type: ConnectorType

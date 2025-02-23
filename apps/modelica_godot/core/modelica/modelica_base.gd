@@ -33,4 +33,4 @@ func _to_string() -> String:
     var result = "ModelicaBase:\n"
     for decl in declarations.values():
         result += "  %s (%s)\n" % [decl.name, "public" if decl.access == AccessLevel.PUBLIC else "protected"]
-    return result 
+    return result
