@@ -1,10 +1,18 @@
+@tool
+extends Node
 class_name EquationSystem
-extends RefCounted
+
+const ASTNodeClass = preload("res://apps/modelica_godot/core/system/ast_node.gd")
+const ModelicaVariableClass = preload("res://apps/modelica_godot/core/modelica/modelica_variable.gd")
 
 var variables: Dictionary = {}  # name -> ModelicaVariable
 var equations: Array = []      # List of equation strings
-var ast_nodes: Array = []      # List of AST nodes for equations
+var ast_nodes: Array[ASTNode] = []  # List of AST nodes for equations
 var time: float = 0.0         # Current simulation time
+var _parse_pos: int = 0       # Current position during parsing
+
+func _init() -> void:
+    process_mode = Node.PROCESS_MODE_ALWAYS
 
 func add_variable(name: String, kind: ModelicaVariable.VariableKind = ModelicaVariable.VariableKind.REGULAR) -> ModelicaVariable:
     var var_obj = ModelicaVariable.new(name, kind)
@@ -88,78 +96,80 @@ func tokenize(expression: String) -> Array:
     return tokens
 
 func parse_expression(tokens: Array) -> ASTNode:
-    var i = 0
-    
-    func parse_primary() -> ASTNode:
-        var token = tokens[i]
-        
-        if token.is_valid_float():
-            i += 1
-            return ASTNode.new(ASTNode.NodeType.NUMBER, token)
-            
-        elif token == "(":
-            i += 1
-            var expr = parse_expression()
-            if i >= tokens.size() or tokens[i] != ")":
-                push_error("Expected closing parenthesis")
-                return null
-            i += 1
-            return expr
-            
-        elif token == "-":
-            i += 1
-            var operand = parse_primary()
-            var node = ASTNode.new(ASTNode.NodeType.UNARY_OP, "-")
-            node.operand = operand
-            return node
-            
-        elif token.is_valid_identifier():
-            i += 1
-            # Check if it's a function call
-            if i < tokens.size() and tokens[i] == "(":
-                var func_node = ASTNode.new(ASTNode.NodeType.FUNCTION_CALL, token)
-                i += 1
-                while i < tokens.size() and tokens[i] != ")":
-                    var arg = parse_expression()
-                    func_node.arguments.append(arg)
-                    if i < tokens.size() and tokens[i] == ",":
-                        i += 1
-                if i >= tokens.size() or tokens[i] != ")":
-                    push_error("Expected closing parenthesis in function call")
-                    return null
-                i += 1
-                return func_node
-            else:
-                return ASTNode.new(ASTNode.NodeType.VARIABLE, token)
-        
-        push_error("Unexpected token: " + token)
+    _parse_pos = 0
+    return _parse_expression(tokens)
+
+func _parse_primary(tokens: Array) -> ASTNode:
+    if _parse_pos >= tokens.size():
         return null
+        
+    var token = tokens[_parse_pos]
     
-    func parse_term() -> ASTNode:
-        var left = parse_primary()
-        while i < tokens.size() and tokens[i] in ["*", "/"]:
-            var op = tokens[i]
-            i += 1
-            var right = parse_primary()
-            var node = ASTNode.new(ASTNode.NodeType.BINARY_OP, op)
-            node.left = left
-            node.right = right
-            left = node
-        return left
+    if token.is_valid_float():
+        _parse_pos += 1
+        return ASTNodeClass.new(ASTNodeClass.NodeType.NUMBER, float(token))
+        
+    elif token == "(":
+        _parse_pos += 1
+        var expr = _parse_expression(tokens)
+        if _parse_pos >= tokens.size() or tokens[_parse_pos] != ")":
+            push_error("Expected closing parenthesis")
+            return null
+        _parse_pos += 1
+        return expr
+        
+    elif token == "-":
+        _parse_pos += 1
+        var operand = _parse_primary(tokens)
+        var node = ASTNodeClass.new(ASTNodeClass.NodeType.UNARY_OP, "-")
+        node.operand = operand
+        return node
+        
+    elif token.is_valid_identifier():
+        _parse_pos += 1
+        # Check if it's a function call
+        if _parse_pos < tokens.size() and tokens[_parse_pos] == "(":
+            var func_node = ASTNode.new(ASTNode.NodeType.FUNCTION_CALL, token)
+            _parse_pos += 1
+            while _parse_pos < tokens.size() and tokens[_parse_pos] != ")":
+                var arg = _parse_expression(tokens)
+                func_node.arguments.append(arg)
+                if _parse_pos < tokens.size() and tokens[_parse_pos] == ",":
+                    _parse_pos += 1
+            if _parse_pos >= tokens.size() or tokens[_parse_pos] != ")":
+                push_error("Expected closing parenthesis in function call")
+                return null
+            _parse_pos += 1
+            return func_node
+        else:
+            return ASTNode.new(ASTNode.NodeType.VARIABLE, token)
     
-    func parse_expression() -> ASTNode:
-        var left = parse_term()
-        while i < tokens.size() and tokens[i] in ["+", "-"]:
-            var op = tokens[i]
-            i += 1
-            var right = parse_term()
-            var node = ASTNode.new(ASTNode.NodeType.BINARY_OP, op)
-            node.left = left
-            node.right = right
-            left = node
-        return left
-    
-    return parse_expression()
+    push_error("Unexpected token: " + token)
+    return null
+
+func _parse_term(tokens: Array) -> ASTNode:
+    var left = _parse_primary(tokens)
+    while _parse_pos < tokens.size() and tokens[_parse_pos] in ["*", "/"]:
+        var op = tokens[_parse_pos]
+        _parse_pos += 1
+        var right = _parse_primary(tokens)
+        var node = ASTNode.new(ASTNode.NodeType.BINARY_OP, op)
+        node.left = left
+        node.right = right
+        left = node
+    return left
+
+func _parse_expression(tokens: Array) -> ASTNode:
+    var left = _parse_term(tokens)
+    while _parse_pos < tokens.size() and tokens[_parse_pos] in ["+", "-"]:
+        var op = tokens[_parse_pos]
+        _parse_pos += 1
+        var right = _parse_term(tokens)
+        var node = ASTNode.new(ASTNode.NodeType.BINARY_OP, op)
+        node.left = left
+        node.right = right
+        left = node
+    return left
 
 func evaluate_ast(node: ASTNode) -> float:
     match node.type:
@@ -170,7 +180,7 @@ func evaluate_ast(node: ASTNode) -> float:
             var var_obj = get_variable(node.value)
             if var_obj != null:
                 return float(var_obj.value)
-            push_error("Unknown variable: " + node.value)
+            push_error("Unknown variable: " + str(node.value))
             return 0.0
             
         ASTNode.NodeType.BINARY_OP:
@@ -183,7 +193,7 @@ func evaluate_ast(node: ASTNode) -> float:
                 "/": return left / right if right != 0 else INF
                 "^": return pow(left, right)
                 _: 
-                    push_error("Unknown operator: " + node.value)
+                    push_error("Unknown operator: " + str(node.value))
                     return 0.0
                     
         ASTNode.NodeType.UNARY_OP:
@@ -191,7 +201,7 @@ func evaluate_ast(node: ASTNode) -> float:
             match node.value:
                 "-": return -val
                 _:
-                    push_error("Unknown unary operator: " + node.value)
+                    push_error("Unknown unary operator: " + str(node.value))
                     return 0.0
                     
         ASTNode.NodeType.FUNCTION_CALL:
@@ -208,7 +218,7 @@ func evaluate_ast(node: ASTNode) -> float:
                     push_error("Derivative evaluation not implemented")
                     return 0.0
                 _:
-                    push_error("Unknown function: " + node.value)
+                    push_error("Unknown function: " + str(node.value))
                     return 0.0
     
     push_error("Unknown node type")
@@ -237,7 +247,7 @@ func solve() -> bool:
                 return false
             
             # Create equation node
-            ast = ASTNode.new(ASTNode.NodeType.BINARY_OP, "=")
+            ast = ASTNode.new(ASTNode.NodeType.EQUATION, "=")
             ast.left = left_ast
             ast.right = right_ast
             ast_nodes[i] = ast
@@ -268,4 +278,15 @@ func solve_initialization() -> bool:
             # Use start value for state variables
             var_obj.set_value(var_obj.start)
     
-    return solve()  # Solve initial system 
+    return solve()  # Solve initial system
+
+func _to_string() -> String:
+    var result = "EquationSystem:\n"
+    result += "  Time: %f\n" % time
+    result += "  Variables:\n"
+    for var_name in variables:
+        result += "    %s = %s\n" % [var_name, str(variables[var_name].value)]
+    result += "  Equations:\n"
+    for i in range(equations.size()):
+        result += "    %s\n" % equations[i]
+    return result 

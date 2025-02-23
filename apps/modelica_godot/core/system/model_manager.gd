@@ -12,19 +12,25 @@ signal model_loaded(model_data: Dictionary)
 var _models: Dictionary = {}  # Path -> Model data
 var _model_tree: Dictionary = {}  # Package hierarchy
 var _cache_file: String = "user://modelica_cache.json"
-var components: Array[ModelicaComponent] = []
-var equation_system: EquationSystem
-var time: float = 0.0
-var dt: float = 0.01  # Time step
+var components: Dictionary = {}  # name -> ModelicaComponent
 var _package_loader: PackageLoader
 var _component_loader: ComponentLoader
+var _equation_system: EquationSystem
+var time: float = 0.0
+var dt: float = 0.01  # Time step
 
 func _init() -> void:
 	_models = {}
 	_model_tree = {}
-	equation_system = EquationSystem.new()
 	_package_loader = PackageLoader.new()
 	_component_loader = ComponentLoader.new()
+	_equation_system = EquationSystem.new()
+
+func _ready() -> void:
+	if not _package_loader:
+		push_error("PackageLoader not initialized")
+		return
+	
 	add_child(_package_loader)
 	add_child(_component_loader)
 	
@@ -33,17 +39,6 @@ func _init() -> void:
 	_package_loader.package_loading_error.connect(_on_package_loading_error)
 	_component_loader.component_loaded.connect(_on_component_loaded)
 	_component_loader.component_loading_error.connect(_on_component_loading_error)
-
-func _enter_tree() -> void:
-	if not equation_system:
-		equation_system = EquationSystem.new()
-	if not equation_system.get_parent():
-		add_child(equation_system)
-
-func _ready() -> void:
-	if not _package_loader:
-		push_error("PackageLoader not initialized")
-		return
 
 func initialize() -> void:
 	if not _package_loader:
@@ -175,21 +170,27 @@ func _model_matches_search(model: Dictionary, query: String) -> bool:
 	return false
 
 func add_component(component: ModelicaComponent) -> void:
-	components.append(component)
-	add_child(component)
+	var name = component.get_declaration(component.declarations.keys()[0]).name
+	components[name] = component
+
+func get_component(name: String) -> ModelicaComponent:
+	return components.get(name)
+
+func connect_components(from_component: String, from_port: String, 
+						to_component: String, to_port: String) -> bool:
+	var from_comp = get_component(from_component)
+	var to_comp = get_component(to_component)
 	
-	# Add component equations to system
-	for eq in component.get_equations():
-		equation_system.add_equation(eq, component)
-
-func get_component(name: String) -> Dictionary:
-	return _component_loader.get_component_by_name(name)
-
-func connect_components(from_component: ModelicaComponent, from_port: String, 
-						to_component: ModelicaComponent, to_port: String) -> bool:
-	# Verify connection compatibility
-	var from_connector = from_component.get_connector(from_port)
-	var to_connector = to_component.get_connector(to_port)
+	if not from_comp or not to_comp:
+		push_error("Component not found")
+		return false
+	
+	var from_connector = from_comp.get_connector(from_port)
+	var to_connector = to_comp.get_connector(to_port)
+	
+	if not from_connector or not to_connector:
+		push_error("Connector not found")
+		return false
 	
 	if from_connector.type != to_connector.type:
 		push_error("Cannot connect different connector types")
@@ -197,24 +198,25 @@ func connect_components(from_component: ModelicaComponent, from_port: String,
 	
 	# Add connection equations
 	for var_name in from_connector.variables.keys():
-		if _is_flow_variable(from_connector.name, var_name):
+		if from_connector.get_variable(var_name).is_flow_variable():
 			# Through variables sum to zero
-			equation_system.add_equation(
+			_equation_system.add_equation(
 				"%s.%s.%s + %s.%s.%s = 0" % [
-					from_component.name, from_port, var_name,
-					to_component.name, to_port, var_name
-				],
-				null
+					from_component, from_port, var_name,
+					to_component, to_port, var_name
+				]
 			)
 		else:
 			# Across variables are equal
-			equation_system.add_equation(
+			_equation_system.add_equation(
 				"%s.%s.%s = %s.%s.%s" % [
-					from_component.name, from_port, var_name,
-					to_component.name, to_port, var_name
-				],
-				null
+					from_component, from_port, var_name,
+					to_component, to_port, var_name
+				]
 			)
+	
+	# Connect the connectors
+	from_connector.connect_to(to_connector)
 	return true
 
 func disconnect_components(from_component: ModelicaComponent, from_port: String,
@@ -229,7 +231,7 @@ func simulate(duration: float) -> void:
 	var steps = int(duration / dt)
 	for i in range(steps):
 		time += dt
-		equation_system.solve() 
+		_equation_system.solve() 
 
 func _validate_loaded_models() -> void:
 	print("Validating loaded models...")
@@ -252,18 +254,23 @@ func _validate_loaded_models() -> void:
 		print("Has ", pkg, " package: ", has_pkg)
 
 # Signal Handlers
-func _on_package_loaded(package_name: String) -> void:
-	emit_signal("loading_progress", 0.75, "Loaded package: " + package_name)
+func _on_package_loaded(package_data: Dictionary) -> void:
+	_models[package_data.path] = package_data
+	_update_model_tree()
+	emit_signal("models_loaded_changed")
+	emit_signal("model_loaded", package_data)
 
-func _on_package_loading_error(package_name: String, error: String) -> void:
-	push_error("Package loading error - " + package_name + ": " + error)
-	emit_signal("loading_progress", 1.0, "Error loading package: " + package_name)
+func _on_package_loading_error(error: String) -> void:
+	push_error("Package loading error: " + error)
 
-func _on_component_loaded(component_name: String) -> void:
-	emit_signal("loading_progress", 0.85, "Loaded component: " + component_name)
+func _on_component_loaded(component_data: Dictionary) -> void:
+	_models[component_data.path] = component_data
+	_update_model_tree()
+	emit_signal("models_loaded_changed")
+	emit_signal("model_loaded", component_data)
 
-func _on_component_loading_error(component_name: String, error: String) -> void:
-	push_error("Component loading error - " + component_name + ": " + error)
+func _on_component_loading_error(error: String) -> void:
+	push_error("Component loading error: " + error)
 
 # Public API methods for package management
 func has_package(package_name: String) -> bool:
@@ -292,3 +299,34 @@ func get_component_type(type_name: String, current_package: String) -> Dictionar
 
 func load_component(path: String) -> Dictionary:
 	return _component_loader.load_component_file(path)
+
+func _update_model_tree() -> void:
+	_model_tree.clear()
+	for path in _models:
+		var model = _models[path]
+		var parts = path.split("/")
+		var current = _model_tree
+		
+		for i in range(parts.size()):
+			var part = parts[i]
+			if not current.has(part):
+				current[part] = {}
+			current = current[part]
+			
+			if i == parts.size() - 1:
+				current["__data"] = model
+
+func get_model(path: String) -> Dictionary:
+	return _models.get(path, {})
+
+func get_equation_system() -> EquationSystem:
+	return _equation_system
+
+func _to_string() -> String:
+	var result = "ModelManager:\n"
+	result += "  Models:\n"
+	for path in _models:
+		result += "    %s\n" % path
+	result += "  Equation System:\n"
+	result += _equation_system._to_string()
+	return result

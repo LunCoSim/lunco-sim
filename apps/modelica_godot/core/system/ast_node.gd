@@ -74,7 +74,8 @@ func mark_as_differential() -> void:
         elif arg.type == NodeType.BINARY_OP and arg.left and arg.left.type == NodeType.VARIABLE:
             set_state_variable(arg.left.value)
 
-func to_string() -> String:
+# Format node as a mathematical expression
+func format_expression() -> String:
     match type:
         NodeType.NUMBER:
             return str(value)
@@ -83,27 +84,36 @@ func to_string() -> String:
             return str(value)
             
         NodeType.BINARY_OP:
-            var left_str = left.to_string() if left else ""
-            var right_str = right.to_string() if right else ""
+            var left_str = left.format_expression() if left else ""
+            var right_str = right.format_expression() if right else ""
             return "(" + left_str + " " + str(value) + " " + right_str + ")"
             
         NodeType.UNARY_OP:
-            var operand_str = operand.to_string() if operand else ""
+            var operand_str = operand.format_expression() if operand else ""
             return str(value) + "(" + operand_str + ")"
             
         NodeType.FUNCTION_CALL:
             var args_str = []
             for arg in arguments:
-                args_str.append(arg.to_string())
+                args_str.append(arg.format_expression())
             return str(value) + "(" + ", ".join(args_str) + ")"
             
         NodeType.EQUATION:
-            var left_str = left.to_string() if left else ""
-            var right_str = right.to_string() if right else ""
+            var left_str = left.format_expression() if left else ""
+            var right_str = right.format_expression() if right else ""
             return left_str + " = " + right_str
             
         _:
             return "[Unknown Node Type]"
 
+# Detailed string representation for debugging
 func _to_string() -> String:
-    return to_string() 
+    var result = "ASTNode(%s, '%s'" % [NodeType.keys()[type], str(value)]
+    if is_differential:
+        result += ", differential"
+    if state_variable != "":
+        result += ", state_var='%s'" % state_variable
+    if dependencies.size() > 0:
+        result += ", deps=%s" % str(dependencies)
+    result += ")"
+    return result 

@@ -1,7 +1,7 @@
 @tool
 extends Control
 
-@onready var model_manager: ModelManager = $ModelManager
+var model_manager: ModelManager
 @onready var model_browser_window: ModelBrowserWindow = $ModelBrowserWindow
 @onready var graph_edit: GraphEdit = $UI/HSplitContainer/VSplitContainer/GraphEdit
 @onready var status_label: Label = $UI/Toolbar/HBoxContainer/StatusLabel
@@ -16,10 +16,10 @@ var is_simulating: bool = false
 func _ready() -> void:
 	print("Starting main scene")
 	
-	if not model_manager:
-		push_error("ModelManager node not found")
-		return
-		
+	# Create and add ModelManager
+	model_manager = ModelManager.new()
+	add_child(model_manager)
+	
 	if not model_browser_window:
 		push_error("ModelBrowserWindow node not found")
 		return
@@ -43,8 +43,9 @@ func _ready() -> void:
 	graph_edit.show_grid = true
 	
 	# Connect to model manager signals
-	model_manager.models_loaded_changed.connect(_on_models_loaded)
+	model_manager.models_loaded_changed.connect(_on_models_loaded_changed)
 	model_manager.loading_progress.connect(_on_loading_progress)
+	model_manager.model_loaded.connect(_on_model_loaded)
 	
 	# Setup file menu
 	_setup_file_menu()
@@ -369,11 +370,14 @@ func _load_workspace_from_file(path: String) -> void:
 	has_unsaved_changes = false
 	status_label.text = "Workspace loaded from " + path.get_file()
 
-func _on_models_loaded() -> void:
-	print("Main scene: Models loaded")
-	print("Model tree size: ", model_manager._model_tree.size())
-	print("Model tree contents: ", model_manager._model_tree.keys())
-	status_label.text = "Models loaded"
+func _on_models_loaded_changed() -> void:
+	# Update UI when models are loaded
+	if simulation_view:
+		simulation_view.set_equation_system(model_manager._equation_system)
+
+func _on_model_loaded(model_data: Dictionary) -> void:
+	# Handle individual model loading
+	print("Model loaded: ", model_data.path)
 
 func _on_loading_progress(progress: float, message: String) -> void:
 	status_label.text = message
@@ -464,3 +468,24 @@ func _process(delta: float) -> void:
 		
 		# Update status
 		status_label.text = "Time: %.2f s" % model_manager.equation_system.time
+
+func _on_load_button_pressed() -> void:
+	# Show file dialog to load Modelica files
+	var dialog = FileDialog.new()
+	dialog.file_mode = FileDialog.FILE_MODE_OPEN_DIR
+	dialog.access = FileDialog.ACCESS_FILESYSTEM
+	dialog.title = "Load Modelica Package"
+	dialog.dir_selected.connect(_on_directory_selected)
+	add_child(dialog)
+	dialog.popup_centered(Vector2(800, 600))
+
+func _on_directory_selected(dir: String) -> void:
+	model_manager.load_models_from_directory(dir)
+
+func _to_string() -> String:
+	var result = "Main:\n"
+	result += model_manager._to_string()
+	if simulation_view:
+		result += "\nSimulation View:\n"
+		result += simulation_view._to_string()
+	return result
