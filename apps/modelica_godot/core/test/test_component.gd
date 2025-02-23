@@ -1,10 +1,10 @@
-class_name TestComponent
+class_name ModelicaTestComponent
 
 extends SceneTree
 
-const ModelicaComponent = preload("res://apps/modelica_godot/core/modelica/modelica_component.gd")
-const ModelicaConnector = preload("res://apps/modelica_godot/core/modelica/modelica_connector.gd")
-const ModelicaVariable = preload("res://apps/modelica_godot/core/modelica/modelica_variable.gd")
+# const ModelicaComponent = preload("res://apps/modelica_godot/core/modelica/modelica_component.gd")
+# const ModelicaConnector = preload("res://apps/modelica_godot/core/modelica/modelica_connector.gd")
+# const ModelicaVariable = preload("res://apps/modelica_godot/core/modelica/modelica_variable.gd")
 
 # Test framework setup
 var tests_run := 0

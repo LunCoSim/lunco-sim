@@ -251,3 +251,102 @@ func _to_string() -> String:
 		result += "    %s: %s -> %s\n" % [event.name, event.condition, event.action]
 	
 	return result 
+
+func to_dict() -> Dictionary:
+	var data = {
+		"declarations": {},
+		"variables": {},
+		"parameters": {},
+		"parameter_metadata": parameter_metadata.duplicate(),
+		"connectors": {},
+		"equations": equations.duplicate(),
+		"binding_equations": binding_equations.duplicate(),
+		"initial_equations": initial_equations.duplicate(),
+		"events": events.duplicate(),
+		"is_valid": is_valid
+	}
+	
+	# Save declarations
+	for key in declarations:
+		var decl = declarations[key]
+		data.declarations[key] = {
+			"name": decl.name,
+			"description": decl.description
+		}
+	
+	# Save variables
+	for key in variables:
+		var var_obj = variables[key]
+		var decl = var_obj.get_declaration(var_obj.declarations.keys()[0])
+		data.variables[key] = {
+			"name": decl.name,
+			"kind": var_obj.kind,
+			"value": var_obj.value,
+			"unit": var_obj.unit
+		}
+	
+	# Save parameters
+	for key in parameters:
+		var param = parameters[key]
+		var decl = param.get_declaration(param.declarations.keys()[0])
+		data.parameters[key] = {
+			"name": decl.name,
+			"kind": param.kind,
+			"value": param.value,
+			"unit": param.unit
+		}
+	
+	# Save connectors
+	for key in connectors:
+		var conn = connectors[key]
+		var decl = conn.get_declaration(conn.declarations.keys()[0])
+		data.connectors[key] = {
+			"name": decl.name,
+			"type": conn.type
+		}
+	
+	return data
+
+func from_dict(data: Dictionary) -> void:
+	# Clear current state
+	variables.clear()
+	parameters.clear()
+	parameter_metadata = data.get("parameter_metadata", {}).duplicate()
+	connectors.clear()
+	equations = data.get("equations", []).duplicate()
+	binding_equations = data.get("binding_equations", []).duplicate()
+	initial_equations = data.get("initial_equations", []).duplicate()
+	events = data.get("events", []).duplicate()
+	is_valid = data.get("is_valid", false)
+	
+	# Load declarations
+	declarations.clear()
+	for key in data.get("declarations", {}):
+		var decl_data = data.declarations[key]
+		var decl = Declaration.new(decl_data.name)
+		decl.description = decl_data.description
+		add_declaration(decl)
+	
+	# Load variables
+	for key in data.get("variables", {}):
+		var var_data = data.variables[key]
+		var var_obj = add_variable(var_data.name, var_data.kind)
+		if var_obj != null:
+			var_obj.set_value(var_data.value)
+			var_obj.set_unit(var_data.unit)
+	
+	# Load parameters
+	for key in data.get("parameters", {}):
+		var param_data = data.parameters[key]
+		var param = add_variable(param_data.name, param_data.kind)
+		if param != null:
+			param.set_value(param_data.value)
+			param.set_unit(param_data.unit)
+			parameters[key] = param
+	
+	# Load connectors
+	for key in data.get("connectors", {}):
+		var conn_data = data.connectors[key]
+		add_connector(conn_data.name, conn_data.type)
+	
+	_validate_component() 
