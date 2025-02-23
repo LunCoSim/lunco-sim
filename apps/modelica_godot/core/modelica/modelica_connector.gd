@@ -33,7 +33,7 @@ func get_variable(name: String) -> ModelicaVariable:
 func has_variable(name: String) -> bool:
     return variables.has(name)
 
-func connect_to(other: ModelicaConnector) -> void:
+func connect_to(other: ModelicaConnector) -> bool:
     # Create a new connection set or add to existing one
     var new_set = true
     for set in connection_sets:
@@ -58,7 +58,9 @@ func connect_to(other: ModelicaConnector) -> void:
                 pass
             else:
                 # Equality of potential variables
-                var1.set_value(var2.value)
+                if var1.value != var2.value:  # Compare values instead of objects
+                    var1.set_value(var2.value)
+    return true  # Return success
 
 func is_inside() -> bool:
     return type == ConnectorType.INSIDE
