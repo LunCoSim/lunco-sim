@@ -1,9 +1,9 @@
 @tool
 extends SceneTree
 
-const MOParser = preload("res://apps/modelica_godot/core/mo_parser.gd")
-const PackageManager = preload("res://apps/modelica_godot/core/package_manager.gd")
-const ModelManager = preload("res://apps/modelica_godot/core/model_manager.gd")
+const MOParser = preload("../mo_parser.gd")
+const PackageManager = preload("../package_manager.gd")
+const ModelManager = preload("../model_manager.gd")
 
 var parser: MOParser
 var package_manager: PackageManager

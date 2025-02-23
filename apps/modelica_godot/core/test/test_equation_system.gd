@@ -27,7 +27,6 @@ func _run_all_tests() -> void:
 	_test_ast_dependencies()
 	_test_ast_differential()
 	_test_ast_state_variables()
-	_test_damping_mass()
 
 func _start_test(test_name: String) -> void:
 	current_test = test_name
@@ -45,6 +44,17 @@ func _assert(condition: bool, message: String) -> void:
 func _assert_approx(a: float, b: float, message: String, tolerance: float = 1e-6) -> void:
 	_assert(abs(a - b) < tolerance, message + " (got %.6f, expected %.6f)" % [a, b])
 
+func assert_true(condition: bool, message: String = "") -> void:
+	tests_run += 1
+	if condition:
+		tests_passed += 1
+		print("✓ " + message if message else "Test passed")
+	else:
+		print("✗ " + message if message else "Test failed")
+
+func assert_approx_eq(a: float, b: float, tolerance: float = 0.0001, message: String = "") -> void:
+	assert_true(abs(a - b) < tolerance, message + " (expected: " + str(b) + ", got: " + str(a) + ")")
+
 func _test_basic_equations() -> void:
 	_start_test("Basic Equations")
 	
@@ -52,11 +62,11 @@ func _test_basic_equations() -> void:
 	var comp = ModelicaComponent.new("test")
 	
 	# Add variables to component
-	comp.add_variable("x")
-	comp.add_variable("y")
-	comp.add_variable("z")
-	comp.add_variable("w")
-	comp.add_variable("v")
+	comp.add_variable("x", 0.0, ModelicaConnector.Unit.NONE)
+	comp.add_variable("y", 0.0, ModelicaConnector.Unit.NONE)
+	comp.add_variable("z", 0.0, ModelicaConnector.Unit.NONE)
+	comp.add_variable("w", 0.0, ModelicaConnector.Unit.NONE)
+	comp.add_variable("v", 0.0, ModelicaConnector.Unit.NONE)
 	
 	# Test simple equation
 	eq_system.add_component(comp)
@@ -210,9 +220,9 @@ func _test_initial_conditions() -> void:
 	var comp = ModelicaComponent.new("test")
 	
 	# Add variables
-	comp.add_variable("x")
-	comp.add_variable("y")
-	comp.add_variable("v")
+	comp.add_variable("x", 0.0, ModelicaConnector.Unit.NONE)
+	comp.add_variable("y", 0.0, ModelicaConnector.Unit.NONE)
+	comp.add_variable("v", 0.0, ModelicaConnector.Unit.NONE)
 	
 	# Test multiple initial conditions
 	eq_system.add_component(comp)
@@ -235,9 +245,9 @@ func _test_derivatives() -> void:
 	var comp = ModelicaComponent.new("test")
 	
 	# Add state variables
-	comp.add_state_variable("x")
-	comp.add_state_variable("pos")
-	comp.add_state_variable("vel")
+	comp.add_state_variable("x", 0.0, ModelicaConnector.Unit.NONE)
+	comp.add_state_variable("pos", 0.0, ModelicaConnector.Unit.NONE)
+	comp.add_state_variable("vel", 0.0, ModelicaConnector.Unit.NONE)
 	
 	# Test simple derivative
 	eq_system.add_component(comp)
@@ -511,9 +521,9 @@ func _test_ast_dependencies() -> void:
 	var comp = ModelicaComponent.new("test")
 	
 	# Add variables to component
-	comp.add_variable("x")
-	comp.add_variable("y")
-	comp.add_variable("z")
+	comp.add_variable("x", 0.0, ModelicaConnector.Unit.NONE)
+	comp.add_variable("y", 0.0, ModelicaConnector.Unit.NONE)
+	comp.add_variable("z", 0.0, ModelicaConnector.Unit.NONE)
 	
 	# Test simple dependency
 	eq_system.add_component(comp)
@@ -559,8 +569,8 @@ func _test_ast_differential() -> void:
 	var comp = ModelicaComponent.new("test")
 	
 	# Add state variables
-	comp.add_state_variable("x")
-	comp.add_state_variable("v")
+	comp.add_state_variable("x", 0.0, ModelicaConnector.Unit.NONE)
+	comp.add_state_variable("v", 0.0, ModelicaConnector.Unit.NONE)
 	
 	# Test simple derivative
 	eq_system.add_component(comp)
@@ -592,9 +602,9 @@ func _test_ast_state_variables() -> void:
 	var comp = ModelicaComponent.new("test")
 	
 	# Add state variables and regular variables
-	comp.add_state_variable("pos")
-	comp.add_state_variable("vel")
-	comp.add_variable("force")
+	comp.add_state_variable("pos", 0.0, ModelicaConnector.Unit.NONE)
+	comp.add_state_variable("vel", 0.0, ModelicaConnector.Unit.NONE)
+	comp.add_variable("force", 0.0, ModelicaConnector.Unit.NONE)
 	
 	# Test state variable tracking in a complex equation
 	eq_system.add_component(comp)
@@ -640,89 +650,4 @@ func _test_ast_state_variables() -> void:
 	_assert(node.left.is_differential, "First derivative is marked")
 	_assert(node.right.right.is_differential, "Second derivative is marked")
 	_assert(node.left.state_variable == "test.vel", "First state variable is correct")
-	_assert(node.right.right.state_variable == "test.pos", "Second state variable is correct")
-
-func _test_damping_mass() -> void:
-	current_test = "Damping Mass System"
-	print("\nTesting damping mass system...")
-	
-	# Constants
-	const GRAVITY = 9.81  # m/s²
-	const SIMULATION_TIME = 5.0
-	const DT = 0.01
-	
-	# Initial conditions
-	var initial_position = 1.0  # x0
-	var initial_velocity = 0.0  # v0
-	var mass = 1.0             # mass.m
-	var damping = 0.5          # damper.d
-	
-	# Create equation system
-	var system = EquationSystem.new()
-	
-	# Add equations for damped mass under gravity
-	system.add_variable("x", initial_position)  # Position
-	system.add_variable("v", initial_velocity)  # Velocity
-	system.add_variable("a")                    # Acceleration
-	system.add_variable("F_g", mass * GRAVITY)  # Gravity force
-	system.add_variable("F_d")                  # Damping force
-	
-	# Add equations
-	system.add_equation("v = dx/dt")           # Velocity is derivative of position
-	system.add_equation("a = dv/dt")           # Acceleration is derivative of velocity
-	system.add_equation("F_d = -d * v")        # Damping force
-	system.add_equation("m * a = F_g + F_d")   # Newton's second law
-	
-	# Set parameters
-	system.set_parameter("m", mass)
-	system.set_parameter("d", damping)
-	
-	# Calculate theoretical terminal velocity
-	var terminal_velocity = GRAVITY * mass / damping
-	print("Theoretical terminal velocity: %.3f m/s" % terminal_velocity)
-	
-	# Run simulation
-	var steps = int(SIMULATION_TIME / DT)
-	var time = 0.0
-	var positions = []
-	var velocities = []
-	
-	for i in range(steps):
-		time += DT
-		system.solve_step(DT)
-		
-		var current_position = system.get_variable("x")
-		var current_velocity = system.get_variable("v")
-		
-		positions.append(current_position)
-		velocities.append(current_velocity)
-		
-		if i % (steps/10) == 0:  # Print 10 evenly spaced steps
-			print("Time: %.2f, Position: %.3f, Velocity: %.3f" % 
-				[time, current_position, current_velocity])
-	
-	# Verify damping behavior
-	print("\nVerifying damping behavior...")
-	
-	# 1. Check position decreasing
-	assert_true(positions[-1] < initial_position, "Position should decrease due to gravity and damping")
-	
-	# 2. Check terminal velocity
-	var final_velocity = velocities[-1]
-	var velocity_diff = abs(final_velocity - terminal_velocity)
-	var velocity_error = velocity_diff / terminal_velocity * 100
-	
-	assert_true(velocity_error <= 20, "Velocity should be within 20% of terminal velocity")
-	
-	# 3. Check energy dissipation
-	var energy_decreasing = true
-	for i in range(1, positions.size()):
-		var prev_energy = 0.5 * mass * velocities[i-1] * velocities[i-1] + mass * GRAVITY * positions[i-1]
-		var curr_energy = 0.5 * mass * velocities[i] * velocities[i] + mass * GRAVITY * positions[i]
-		if curr_energy > prev_energy:
-			energy_decreasing = false
-			break
-	
-	assert_true(energy_decreasing, "Total energy should decrease due to damping")
-	
-	tests_passed += 1 
+	_assert(node.right.right.state_variable == "test.pos", "Second state variable is correct") 

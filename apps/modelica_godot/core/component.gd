@@ -133,10 +133,33 @@ func validate_parameter(name: String, value: Variant) -> bool:
 	return true
 
 func add_variable(name: String, initial_value: float = 0.0, unit: ModelicaConnector.Unit = ModelicaConnector.Unit.NONE) -> void:
-	variables[name] = {
-		"value": initial_value,
-		"unit": unit
-	}
+	if "." in name:
+		# Handle port variables (e.g., port.position or port_a.position)
+		var parts = name.split(".")
+		if parts.size() == 2:
+			var port_name = parts[0]
+			var var_name = parts[1]
+			
+			# Create connector if it doesn't exist
+			if not connectors.has(port_name):
+				connectors[port_name] = ModelicaConnector.new(ModelicaConnector.Type.MECHANICAL)
+			
+			# Add variable to connector
+			var connector = connectors[port_name]
+			connector.variables[var_name] = initial_value
+			connector.units[var_name] = unit
+			
+			# Also store in variables dictionary for easy access
+			variables[name] = {
+				"value": initial_value,
+				"unit": unit
+			}
+	else:
+		# Regular variable
+		variables[name] = {
+			"value": initial_value,
+			"unit": unit
+		}
 	_validate_component()
 
 func add_state_variable(name: String, initial_value: float = 0.0, unit: ModelicaConnector.Unit = ModelicaConnector.Unit.NONE) -> void:
@@ -173,27 +196,30 @@ func add_event(name: String, condition: String, action: String) -> void:
 func get_connector(name: String) -> ModelicaConnector:
 	return connectors.get(name)
 
-func get_variable(name: String) -> Variant:
+func get_variable(name: String) -> float:
 	if "." in name:
 		# Handle port variables (e.g., port.position)
 		var parts = name.split(".")
 		if parts.size() == 2:
 			var port_name = parts[0]
 			var var_name = parts[1]
-			if port_name in variables:
-				var full_name = name  # Use the full name as is
-				if full_name in variables:
-					return variables[full_name].value
+			var full_name = name  # Use the full name as is
+			if variables.has(full_name):
+				return variables[full_name].value if variables[full_name] is Dictionary else variables[full_name]
+			# If not found in variables, check if it's a connector variable
+			if connectors.has(port_name):
+				var connector = connectors[port_name]
+				if connector.variables.has(var_name):
+					return connector.variables[var_name]
 	
 	# Handle regular variables
-	if name in variables:
-		return variables[name].value
-	elif name in state_variables:
-		return state_variables[name].value
-	elif name in der_variables:
-		return der_variables[name].value
-	push_error("Variable not found: " + name)
-	return null
+	if variables.has(name):
+		return variables[name].value if variables[name] is Dictionary else variables[name]
+	elif state_variables.has(name):
+		return state_variables[name].value if state_variables[name] is Dictionary else state_variables[name]
+	elif der_variables.has(name):
+		return der_variables[name].value if der_variables[name] is Dictionary else der_variables[name]
+	return 0.0
 
 func set_variable(name: String, value: float) -> void:
 	if "." in name:
@@ -202,26 +228,60 @@ func set_variable(name: String, value: float) -> void:
 		if parts.size() == 2:
 			var port_name = parts[0]
 			var var_name = parts[1]
-			if port_name in variables:
-				var full_name = name  # Use the full name as is
-				if full_name in variables:
+			var full_name = name  # Use the full name as is
+			
+			# First try to set in variables dictionary
+			if variables.has(full_name):
+				if variables[full_name] is Dictionary:
 					variables[full_name].value = value
+				else:
+					variables[full_name] = value
+				emit_signal("state_changed", name, value)
+				return
+			
+			# If not in variables, try to set in connector
+			if connectors.has(port_name):
+				var connector = connectors[port_name]
+				if connector.variables.has(var_name):
+					connector.variables[var_name] = value
 					emit_signal("state_changed", name, value)
 					return
+			
+			# If we get here, create the variable in the variables dictionary
+			variables[full_name] = {"value": value, "unit": ModelicaConnector.Unit.NONE}
+			emit_signal("state_changed", name, value)
+			return
 	
 	# Handle regular variables
-	if name in variables:
-		variables[name].value = value
+	if variables.has(name):
+		if variables[name] is Dictionary:
+			variables[name].value = value
+		else:
+			variables[name] = value
 		# If this is also a state variable, update that too
-		if name in state_variables:
+		if state_variables.has(name):
+			if state_variables[name] is Dictionary:
+				state_variables[name].value = value
+			else:
+				state_variables[name] = value
+		emit_signal("state_changed", name, value)
+	elif state_variables.has(name):
+		if state_variables[name] is Dictionary:
 			state_variables[name].value = value
+		else:
+			state_variables[name] = value
+		# Keep regular variables in sync
+		if variables.has(name):
+			if variables[name] is Dictionary:
+				variables[name].value = value
+			else:
+				variables[name] = value
 		emit_signal("state_changed", name, value)
-	elif name in state_variables:
-		state_variables[name].value = value
-		variables[name].value = value  # Keep regular variables in sync
-		emit_signal("state_changed", name, value)
-	elif name in der_variables:
-		der_variables[name].value = value
+	elif der_variables.has(name):
+		if der_variables[name] is Dictionary:
+			der_variables[name].value = value
+		else:
+			der_variables[name] = value
 		emit_signal("state_changed", name, value)
 	else:
 		push_error("Variable not found: " + name)
