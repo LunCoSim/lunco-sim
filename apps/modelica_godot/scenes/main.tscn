@@ -1,7 +1,7 @@
 [gd_scene load_steps=6 format=3 uid="uid://b6x8j2y4n8m5q"]
 
 [ext_resource type="Script" uid="uid://y7swjbgdv85r" path="res://apps/modelica_godot/scenes/main.gd" id="1_main"]
-[ext_resource type="Script" uid="uid://vsm7wnflauvi" path="res://apps/modelica_godot/core/model_manager.gd" id="2_manager"]
+[ext_resource type="Script" uid="uid://vsm7wnflauvi" path="res://apps/modelica_godot/core/system/model_manager.gd" id="2_manager"]
 [ext_resource type="PackedScene" path="res://apps/modelica_godot/ui/model_browser_window.tscn" id="3_browser_window"]
 [ext_resource type="PackedScene" path="res://apps/modelica_godot/ui/component_palette.tscn" id="4_palette"]
 [ext_resource type="PackedScene" path="res://apps/modelica_godot/ui/simulation_view.tscn" id="5_simview"]
