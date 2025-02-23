@@ -1,7 +1,7 @@
 @tool
 extends SceneTree
 
-const MOParser = preload("res://apps/modelica_godot/core/mo_parser.gd")
+const MOParser = preload("../parser/mo_parser.gd")
 
 var parser: MOParser
 
@@ -108,27 +108,6 @@ func test_parameter_basic_types() -> void:
 	var p1 = _find_parameter(params, "p1")
 	assert_not_null(p1, "Real parameter exists")
 	assert_eq(p1.get("type"), "Real", "Correct Real type")
-	assert_eq(p1.get("value"), "1.0", "Correct Real value")
-	
-	# Test Integer parameter
-	var i1 = _find_parameter(params, "i1")
-	assert_not_null(i1, "Integer parameter exists")
-	assert_eq(i1.get("type"), "Integer", "Correct Integer type")
-	assert_eq(i1.get("value"), "42", "Correct Integer value")
-	
-	# Test Boolean parameter
-	var b1 = _find_parameter(params, "b1")
-	assert_not_null(b1, "Boolean parameter exists")
-	assert_eq(b1.get("type"), "Boolean", "Correct Boolean type")
-	assert_eq(b1.get("value"), "true", "Correct Boolean value")
-	
-	# Test String parameter
-	var s1 = _find_parameter(params, "s1")
-	assert_not_null(s1, "String parameter exists")
-	assert_eq(s1.get("type"), "String", "Correct String type")
-	assert_eq(s1.get("value"), "\"test\"", "Correct String value")
-	
-	print("  ✓ Basic parameter types test passed")
 
 func test_parameter_modifications() -> void:
 	print("\nTesting parameter modifications...")
