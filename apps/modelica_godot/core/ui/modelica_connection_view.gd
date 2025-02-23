@@ -1,4 +1,4 @@
-class_name Connection
+class_name ModelicaConnectionView
 extends Node2D
 
 var start_component: Node2D
@@ -103,8 +103,8 @@ static func can_connect(start_comp: Node2D, end_comp: Node2D, start_p: String, e
 		
 	# Don't connect if components are already connected
 	for child in start_comp.get_parent().get_children():
-		if child is Connection:
-			var conn = child as Connection
+		if child is ModelicaConnectionView:
+			var conn = child as ModelicaConnectionView
 			if (conn.start_component == start_comp and conn.end_component == end_comp) or \
 			   (conn.start_component == end_comp and conn.end_component == start_comp):
 				return false

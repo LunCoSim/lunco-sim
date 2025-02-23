@@ -1,15 +1,12 @@
 @tool
-extends Node
+extends BaseLoader
 class_name ComponentLoader
 
-const MOParser = preload("res://apps/modelica_godot/core/mo_parser.gd")
+signal component_loaded(component_name: String)
+signal component_loading_error(component_name: String, error: String)
 
-var _parser: MOParser
-var _components: Dictionary = {}  # path -> model_data
-var _connectors: Dictionary = {}  # name -> connector_data
-
-func _init() -> void:
-    _parser = MOParser.new()
+var _components: Dictionary = {}  # name -> component data
+var _connectors: Dictionary = {}  # name -> connector data
 
 func load_component_file(path: String) -> Dictionary:
     print("Loading component from: ", path)
@@ -19,13 +16,9 @@ func load_component_file(path: String) -> Dictionary:
         return _components[path]
     
     # Load and parse file
-    var file = FileAccess.open(path, FileAccess.READ)
-    if not file:
-        push_error("Failed to open file: " + path)
+    var model_data = load_file(path)
+    if not validate_model_data(model_data):
         return {}
-    
-    var content = file.get_as_text()
-    var model_data = _parser.parse_text(content)
     
     if not model_data.is_empty():
         # Check if this is a connector definition
@@ -34,6 +27,7 @@ func load_component_file(path: String) -> Dictionary:
         
         _components[path] = model_data
         print("Loaded component: ", model_data.get("name", ""), " of type: ", model_data.get("type", ""))
+        emit_signal("component_loaded", model_data.get("name", ""))
         
     return model_data
 
@@ -67,6 +61,49 @@ func _process_connector(connector_data: Dictionary) -> void:
     
     _connectors[name] = processed_data
     print("Processed connector: ", name, " with flow variables: ", processed_data.flow_variables)
+
+func create_component(model_data: Dictionary) -> ModelicaComponent:
+    var component = ModelicaComponent.new(model_data.get("name", ""), model_data.get("description", ""))
+    
+    # Load parameters
+    for param in model_data.get("parameters", []):
+        var value = _convert_parameter_value(param)
+        component.add_parameter(param.get("name", ""), value)
+    
+    # Load variables
+    for var_data in model_data.get("variables", []):
+        if var_data.get("flow", false):
+            # Flow variables become connectors
+            var connector_name = var_data.get("name", "")
+            var connector_type = _get_connector_type(var_data.get("type", ""))
+            component.add_connector(connector_name, connector_type)
+        else:
+            # Regular variables
+            component.add_variable(var_data.get("name", ""))
+    
+    # Load equations
+    for eq in model_data.get("equations", []):
+        component.add_equation(eq)
+    
+    # Load annotations
+    component.annotations = model_data.get("annotations", {}).duplicate()
+    
+    return component
+
+func _get_connector_type(type_str: String) -> ModelicaConnector.ConnectorType:
+    match type_str.to_lower():
+        "mechanical":
+            return ModelicaConnector.ConnectorType.MECHANICAL
+        "electrical":
+            return ModelicaConnector.ConnectorType.ELECTRICAL
+        "thermal":
+            return ModelicaConnector.ConnectorType.THERMAL
+        "fluid":
+            return ModelicaConnector.ConnectorType.FLUID
+        "signal":
+            return ModelicaConnector.ConnectorType.SIGNAL
+        _:
+            return ModelicaConnector.ConnectorType.NONE
 
 func get_component(path: String) -> Dictionary:
     return _components.get(path, {})

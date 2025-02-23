@@ -1,8 +1,8 @@
 extends SceneTree
 
 const EquationSystem = preload("../equation_system.gd")
-const ModelicaComponent = preload("../component.gd")
-const ModelicaConnector = preload("../connector.gd")
+const ModelicaComponent = preload("../modelica/modelica_component.gd")
+const ModelicaConnector = preload("../modelica/modelica_connector.gd")
 
 var tests_run := 0
 var tests_passed := 0

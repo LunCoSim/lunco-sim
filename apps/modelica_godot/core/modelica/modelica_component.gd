@@ -3,13 +3,17 @@ extends ModelicaBase
 
 var variables: Dictionary = {}      # name -> ModelicaVariable
 var parameters: Dictionary = {}     # name -> ModelicaVariable
+var parameter_metadata: Dictionary = {}  # Store additional parameter info
 var connectors: Dictionary = {}     # name -> ModelicaConnector
 var equations: Array = []          # List of equations
 var binding_equations: Array = []   # Equations from declarations
 var initial_equations: Array = []   # For initialization
+var events: Array[Dictionary] = []  # Discrete events
+var is_valid: bool = false
 
 signal state_changed(variable_name: String, value: float)
 signal parameter_changed(param_name: String, value: Variant)
+signal event_triggered(event_name: String, data: Dictionary)
 
 func _init(p_name: String, description: String = "") -> void:
     var decl = Declaration.new(p_name)
@@ -43,7 +47,17 @@ func add_variable(name: String, kind: ModelicaVariable.VariableKind = ModelicaVa
     
     if kind == ModelicaVariable.VariableKind.PARAMETER:
         parameters[name] = var_obj
+        # Initialize metadata if not exists
+        if not parameter_metadata.has(name):
+            parameter_metadata[name] = {
+                "min": null,
+                "max": null,
+                "fixed": true,
+                "evaluate": true,
+                "description": ""
+            }
     
+    _validate_component()
     return var_obj
 
 func add_state_variable(name: String, initial_value: float = 0.0) -> ModelicaVariable:
@@ -57,6 +71,7 @@ func add_state_variable(name: String, initial_value: float = 0.0) -> ModelicaVar
 func add_connector(name: String, type: ModelicaConnector.ConnectorType = ModelicaConnector.ConnectorType.INSIDE) -> ModelicaConnector:
     var conn = ModelicaConnector.new(name, type)
     connectors[name] = conn
+    _validate_component()
     return conn
 
 func add_equation(equation: String, is_initial: bool = false) -> void:
@@ -64,12 +79,96 @@ func add_equation(equation: String, is_initial: bool = false) -> void:
         initial_equations.append(equation)
     else:
         equations.append(equation)
+    _validate_component()
 
 func add_binding_equation(variable: String, expression: String) -> void:
     binding_equations.append({
         "variable": variable,
         "expression": expression
     })
+    _validate_component()
+
+func add_event(name: String, condition: String, action: String) -> void:
+    events.append({
+        "name": name,
+        "condition": condition,
+        "action": action,
+        "is_active": false
+    })
+    _validate_component()
+
+# Parameter metadata management
+func set_parameter_min(name: String, min_value: float) -> void:
+    if parameters.has(name):
+        if not parameter_metadata.has(name):
+            parameter_metadata[name] = {}
+        parameter_metadata[name]["min"] = min_value
+        _validate_component()
+
+func set_parameter_max(name: String, max_value: float) -> void:
+    if parameters.has(name):
+        if not parameter_metadata.has(name):
+            parameter_metadata[name] = {}
+        parameter_metadata[name]["max"] = max_value
+        _validate_component()
+
+func set_parameter_fixed(name: String, fixed: bool) -> void:
+    if parameters.has(name):
+        if not parameter_metadata.has(name):
+            parameter_metadata[name] = {}
+        parameter_metadata[name]["fixed"] = fixed
+        _validate_component()
+
+func set_parameter_evaluate(name: String, evaluate: bool) -> void:
+    if parameters.has(name):
+        if not parameter_metadata.has(name):
+            parameter_metadata[name] = {}
+        parameter_metadata[name]["evaluate"] = evaluate
+        _validate_component()
+
+func set_parameter_description(name: String, description: String) -> void:
+    if parameters.has(name):
+        if not parameter_metadata.has(name):
+            parameter_metadata[name] = {}
+        parameter_metadata[name]["description"] = description
+
+func get_parameter_metadata(name: String) -> Dictionary:
+    if name in parameter_metadata:
+        return parameter_metadata[name]
+    return {}
+
+func is_parameter_fixed(name: String) -> bool:
+    if name in parameter_metadata:
+        return parameter_metadata[name].get("fixed", true)
+    return true
+
+func is_parameter_evaluable(name: String) -> bool:
+    if name in parameter_metadata:
+        return parameter_metadata[name].get("evaluate", true)
+    return true
+
+func validate_parameter(name: String, value: Variant) -> bool:
+    if not parameters.has(name):
+        return false
+        
+    # Get metadata
+    var metadata = get_parameter_metadata(name)
+    
+    # Check type
+    if not (value is float or value is int or value is bool or value is String):
+        return false
+        
+    # Check range for numeric types
+    if value is float or value is int:
+        var min_val = metadata.get("min")
+        var max_val = metadata.get("max")
+        
+        if min_val != null and value < min_val:
+            return false
+        if max_val != null and value > max_val:
+            return false
+    
+    return true
 
 func get_variable(name: String) -> ModelicaVariable:
     if "." in name:
@@ -95,10 +194,11 @@ func set_variable_value(name: String, value: float) -> void:
             emit_signal("state_changed", name, value)
 
 func set_parameter_value(name: String, value: Variant) -> void:
-    var param = get_parameter(name)
-    if param != null:
-        if param.set_value(value):
-            emit_signal("parameter_changed", name, value)
+    if validate_parameter(name, value):
+        var param = get_parameter(name)
+        if param != null:
+            if param.set_value(value):
+                emit_signal("parameter_changed", name, value)
 
 func get_equations() -> Array:
     return equations
@@ -108,6 +208,11 @@ func get_initial_equations() -> Array:
 
 func get_binding_equations() -> Array:
     return binding_equations
+
+func _validate_component() -> void:
+    # Basic validation - can be extended based on requirements
+    is_valid = true
+    # Add validation logic here as needed
 
 func _to_string() -> String:
     var decl = get_declaration(declarations.keys()[0])
@@ -121,10 +226,18 @@ func _to_string() -> String:
     
     result += "  Parameters:\n"
     for param_name in parameters:
-        result += "    %s\n" % param_name
+        var metadata = get_parameter_metadata(param_name)
+        result += "    %s" % param_name
+        if metadata.get("description", "") != "":
+            result += " (%s)" % metadata["description"]
+        result += "\n"
     
     result += "  Connectors:\n"
     for conn_name in connectors:
         result += "    %s\n" % conn_name
+    
+    result += "  Events:\n"
+    for event in events:
+        result += "    %s: %s -> %s\n" % [event.name, event.condition, event.action]
     
     return result 

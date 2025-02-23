@@ -2,8 +2,8 @@ extends SceneTree
 
 const MOParser = preload("res://apps/modelica_godot/core/mo_parser.gd")
 const EquationSystem = preload("res://apps/modelica_godot/core/equation_system.gd")
-const ModelicaComponent = preload("res://apps/modelica_godot/core/component.gd")
-const ModelicaConnector = preload("res://apps/modelica_godot/core/connector.gd")
+const ModelicaComponent = preload("res://apps/modelica_godot/core/modelica/modelica_component.gd")
+const ModelicaConnector = preload("res://apps/modelica_godot/core/modelica/modelica_connector.gd")
 
 var output_format: String = "csv"  # Default output format
 

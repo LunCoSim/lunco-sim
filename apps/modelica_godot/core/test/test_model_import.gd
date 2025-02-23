@@ -1,32 +1,101 @@
 @tool
 extends SceneTree
 
-const MOParser = preload("../mo_parser.gd")
-const PackageManager = preload("../package_manager.gd")
+const MOParser = preload("../parser/mo_parser.gd")
+const PackageLoader = preload("../loader/package_loader.gd")
 const ModelManager = preload("../model_manager.gd")
 
+var tests_run := 0
+var tests_passed := 0
 var parser: MOParser
-var package_manager: PackageManager
+var package_loader: PackageLoader
 var model_manager: ModelManager
 var test_msl_path: String
 
-func _init() -> void:
-	print("\nStarting Model Import Tests...")
-	_setup()
-	test_model_import()
-	_cleanup()
+func _init():
+	print("\nRunning Model Import Tests...")
+	_run_all_tests()
+	print("\nTests completed: %d/%d passed" % [tests_passed, tests_run])
 	quit()
+
+func _run_all_tests() -> void:
+	_test_package_loading()
+	_test_msl_loading()
+	_test_component_loading()
+
+func _start_test(test_name: String) -> void:
+	print("\nRunning test: " + test_name)
+	tests_run += 1
+	
+	# Reset package loader for each test
+	package_loader = PackageLoader.new()
+	add_child(package_loader)
+
+func _assert(condition: bool, message: String) -> void:
+	if condition:
+		tests_passed += 1
+		print("  ✓ " + message)
+	else:
+		print("  ✗ " + message)
+		push_error("Test failed: " + message)
+
+func _test_package_loading() -> void:
+	_start_test("Package Loading")
+	
+	# Test loading a package
+	var result = package_loader.load_package("res://test_models/TestPackage")
+	_assert(result, "Package loaded successfully")
+	
+	# Test package metadata
+	var metadata = package_loader.get_package_metadata("TestPackage")
+	_assert(not metadata.is_empty(), "Package metadata retrieved")
+	_assert(metadata.get("name", "") == "TestPackage", "Package name matches")
+	
+	# Test component loading
+	var components = package_loader.get_package_components("TestPackage")
+	_assert(not components.is_empty(), "Package components loaded")
+	_assert(components.has("TestModel"), "Test model found in package")
+
+func _test_msl_loading() -> void:
+	_start_test("MSL Loading")
+	
+	# Test MSL path setting
+	package_loader.set_msl_path("res://test_models/MSL")
+	_assert(package_loader.has_msl(), "MSL path set")
+	
+	# Test MSL loading
+	var result = package_loader.load_msl()
+	_assert(result, "MSL loaded successfully")
+	
+	# Test MSL components
+	var components = package_loader.get_package_components("Modelica")
+	_assert(not components.is_empty(), "MSL components loaded")
+
+func _test_component_loading() -> void:
+	_start_test("Component Loading")
+	
+	# Load a test package
+	package_loader.load_package("res://test_models/TestPackage")
+	
+	# Test component resolution
+	var component = package_loader.resolve_type("TestModel", "TestPackage")
+	_assert(not component.is_empty(), "Component resolved in package")
+	_assert(component.get("name", "") == "TestModel", "Component name matches")
+	
+	# Test component from MSL
+	package_loader.set_msl_path("res://test_models/MSL")
+	package_loader.load_msl()
+	var msl_component = package_loader.resolve_type("Resistor", "Modelica.Electrical.Analog.Basic")
+	_assert(not msl_component.is_empty(), "MSL component resolved")
 
 func _setup() -> void:
 	print("Setting up test environment...")
 	
 	# Initialize components
 	parser = MOParser.new()
-	package_manager = PackageManager.new()
 	model_manager = ModelManager.new()
 	
 	# Add to scene tree
-	root.add_child(package_manager)
 	root.add_child(model_manager)
 	
 	# Set up test paths
@@ -36,10 +105,10 @@ func test_model_import() -> void:
 	print("\nTesting model import functionality...")
 	
 	# Test package loading
-	assert_true(package_manager.load_package(test_msl_path), "Package loaded successfully")
+	assert_true(package_loader.load_package(test_msl_path), "Package loaded successfully")
 	
 	# Test mechanical package
-	assert_true(package_manager.has_package("Mechanical"), "Mechanical package exists")
+	assert_true(package_loader.has_package("Mechanical"), "Mechanical package exists")
 	
 	# Test model import
 	var model_path = test_msl_path.path_join("Mechanical/DampingMassTest.mo")
@@ -82,8 +151,6 @@ func test_model_import() -> void:
 
 func _cleanup() -> void:
 	print("\nCleaning up...")
-	if is_instance_valid(package_manager):
-		package_manager.queue_free()
 	if is_instance_valid(model_manager):
 		model_manager.queue_free()
 	if is_instance_valid(parser):
