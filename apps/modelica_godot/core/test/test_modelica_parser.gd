@@ -1,18 +1,21 @@
+class_name ModelicaTestParser
+
 extends SceneTree
 
-const ModelicaParser = preload("res://apps/modelica_godot/core/parser/modelica_parser.gd")
+const ModelicaParser = preload("res://apps/modelica_godot/core/parser/modelica/modelica_parser.gd")
 
 var parser: ModelicaParser
+var tests_run := 0
+var tests_passed := 0
+var current_test := ""
 
-func _ready():
-    run_all_tests()
+func _init():
+    print("\nRunning Modelica Parser Tests...")
+    _run_all_tests()
+    print("\nTests completed: %d/%d passed" % [tests_passed, tests_run])
 
-func run_all_tests():
+func _run_all_tests() -> void:
     parser = ModelicaParser.new()
-    
-    print("\nRunning Modelica Parser Tests:")
-    print("------------------------------")
-    
     test_parse_simple_model()
     test_parse_component_with_parameters()
     test_parse_connector()
@@ -23,9 +26,19 @@ func run_all_tests():
     test_parse_model_with_when()
     test_parse_invalid_model()
     test_parse_empty_model()
-    
-    print("\nAll tests completed!")
-    get_tree().quit()
+
+func _start_test(test_name: String) -> void:
+    current_test = test_name
+    tests_run += 1
+    print("\nRunning test: " + test_name)
+
+func _assert(condition: bool, message: String) -> void:
+    if condition:
+        tests_passed += 1
+        print("  ✓ " + message)
+    else:
+        print("  ✗ " + message)
+        push_error("Test failed: " + current_test + " - " + message)
 
 func assert_eq(a, b, message: String = ""):
     if a != b:
@@ -42,12 +55,6 @@ func assert_ne(a, b, message: String = ""):
 func assert_true(condition, message: String = ""):
     if !condition:
         push_error("Assertion failed: Expected true but got false. %s" % message)
-    else:
-        print("✓ " + message)
-
-func assert_almost_eq(a, b, tolerance: float, message: String = ""):
-    if abs(a - b) > tolerance:
-        push_error("Assertion failed: |%s - %s| > %s. %s" % [str(a), str(b), str(tolerance), message])
     else:
         print("✓ " + message)
 
