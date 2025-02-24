@@ -64,6 +64,10 @@ func _run_all_tests() -> void:
     test_parse_pure_impure_functions()
     test_parse_operator_overloading()
     test_parse_record()
+    test_parse_package()
+    test_parse_block()
+    test_parse_enumeration()
+    test_parse_annotations()
 
 func assert_eq(a, b, message: String = ""):
     if a != b:
@@ -676,4 +680,215 @@ func test_parse_record():
     assert_eq(complex.type, "record")
     assert_eq(complex.components.size(), 2)
     assert_eq(complex.operator_functions.size(), 2)
+    after_each_test()
+
+func test_parse_package():
+    before_each_test("test_parse_package")
+    var model = """
+    package MyLibrary
+        constant Real g = 9.81;
+        
+        model Mass
+            parameter Real m = 1;
+            Real x, v;
+        equation
+            m*der(v) = -m*g;
+            der(x) = v;
+        end Mass;
+        
+        package SubPackage
+            constant String version = "1.0";
+        end SubPackage;
+    end MyLibrary;
+    """
+    
+    var result = parser.parse(model)
+    assert_eq(result.error, "", "No error expected")
+    
+    var library = result.ast.classes["MyLibrary"]
+    assert_eq(library.type, "package")
+    assert_eq(library.constants.size(), 1)
+    assert_true(library.classes.has("Mass"))
+    assert_true(library.classes.has("SubPackage"))
+    
+    var mass = library.classes["Mass"]
+    assert_eq(mass.type, "model")
+    assert_eq(mass.equations.size(), 2)
+    
+    var subpackage = library.classes["SubPackage"]
+    assert_eq(subpackage.type, "package")
+    assert_eq(subpackage.constants.size(), 1)
+    after_each_test()
+
+func test_parse_block():
+    before_each_test("test_parse_block")
+    var model = """
+    block PID "PID controller"
+        parameter Real k = 1 "Gain";
+        parameter Real Ti = 0.5 "Time constant of Integrator";
+        parameter Real Td = 0.1 "Time constant of Derivative block";
+        input Real u "Control error";
+        output Real y "Control signal";
+    protected
+        Real x "State of integrator";
+        Real D "State of derivative block";
+    equation
+        der(x) = u/Ti;
+        der(D) = (u - D)/Td;
+        y = k*(u + x + Td*D);
+    end PID;
+    """
+    
+    var result = parser.parse(model)
+    assert_eq(result.error, "", "No error expected")
+    
+    var pid = result.ast.classes["PID"]
+    assert_eq(pid.type, "block")
+    assert_eq(pid.parameters.size(), 3)
+    
+    var inputs = 0
+    var outputs = 0
+    var protected_vars = 0
+    for comp in pid.components:
+        if comp.is_input:
+            inputs += 1
+        if comp.is_output:
+            outputs += 1
+        if comp.is_protected:
+            protected_vars += 1
+    
+    assert_eq(inputs, 1, "Should have 1 input")
+    assert_eq(outputs, 1, "Should have 1 output")
+    assert_eq(protected_vars, 2, "Should have 2 protected variables")
+    assert_eq(pid.equations.size(), 3, "Should have 3 equations")
+    after_each_test()
+
+func test_parse_enumeration():
+    before_each_test("test_parse_enumeration")
+    var model = """
+    type StateType = enumeration(
+        Start "System starting",
+        Run "System running",
+        Stop "System stopping",
+        Fault "System in fault"
+    );
+    
+    model StateMachine
+        StateType state;
+        Boolean running;
+    equation
+        running = state == StateType.Run;
+        when state == StateType.Start then
+            state = StateType.Run;
+        elsewhen state == StateType.Run and pre(running) == false then
+            state = StateType.Stop;
+        elsewhen state == StateType.Stop then
+            state = StateType.Fault;
+        end when;
+    end StateMachine;
+    """
+    
+    var result = parser.parse(model)
+    assert_eq(result.error, "", "No error expected")
+    
+    var state_type = result.ast.classes["StateType"]
+    assert_eq(state_type.type, "enumeration")
+    assert_eq(state_type.values.size(), 4)
+    assert_eq(state_type.values[0].name, "Start")
+    assert_eq(state_type.values[1].name, "Run")
+    
+    var state_machine = result.ast.classes["StateMachine"]
+    assert_eq(state_machine.components.size(), 2)
+    assert_eq(state_machine.equations.size(), 2)
+    
+    # Check that the when equation has multiple branches
+    var when_eq = state_machine.equations[1]
+    assert_eq(when_eq.type, "when")
+    assert_eq(when_eq.branches.size(), 3)
+    after_each_test()
+
+func test_parse_annotations():
+    before_each_test("test_parse_annotations")
+    var model = """
+    model AnnotatedModel
+        Real x annotation(
+            Dialog(group="Parameters", tab="General"),
+            Documentation(info="Variable x represents the state")
+        );
+        
+        Real y annotation(
+            Dialog(group="Variables", enable=false),
+            defaultComponentName="y1",
+            defaultComponentPrefixes="parameter"
+        );
+        
+        annotation(
+            Documentation(info="
+                This is a test model showing various annotations.
+                It demonstrates both graphical and non-graphical annotations.
+            "),
+            Icon(coordinateSystem(extent={{-100,-100},{100,100}}),
+                graphics={
+                    Rectangle(
+                        extent={{-100,-100},{100,100}},
+                        lineColor={0,0,0},
+                        fillColor={255,255,255},
+                        fillPattern=FillPattern.Solid
+                    ),
+                    Text(
+                        extent={{-80,-40},{80,40}},
+                        textString="%name",
+                        fontSize=12
+                    )
+                }
+            ),
+            experiment(
+                StartTime=0,
+                StopTime=10,
+                Tolerance=1e-6,
+                Interval=0.02,
+                __Dymola_Algorithm="Dassl"
+            ),
+            preferredView="diagram",
+            version="1.0",
+            uses(Modelica(version="4.0.0"))
+        );
+    equation
+        der(x) = -x + y;
+        y = sin(time);
+    end AnnotatedModel;
+    """
+    
+    var result = parser.parse(model)
+    assert_eq(result.error, "", "No error expected")
+    
+    var annotated = result.ast.classes["AnnotatedModel"]
+    assert_true(annotated.has_annotation("Documentation"))
+    assert_true(annotated.has_annotation("Icon"))
+    assert_true(annotated.has_annotation("experiment"))
+    assert_true(annotated.has_annotation("preferredView"))
+    assert_true(annotated.has_annotation("version"))
+    assert_true(annotated.has_annotation("uses"))
+    
+    # Check component annotations
+    var x_comp = annotated.components[0]
+    assert_true(x_comp.has_annotation("Dialog"))
+    assert_true(x_comp.has_annotation("Documentation"))
+    
+    var y_comp = annotated.components[1]
+    assert_true(y_comp.has_annotation("Dialog"))
+    assert_true(y_comp.has_annotation("defaultComponentName"))
+    assert_true(y_comp.has_annotation("defaultComponentPrefixes"))
+    
+    # Check specific annotation values
+    var exp_annot = annotated.get_annotation("experiment")
+    assert_eq(exp_annot.StartTime, 0)
+    assert_eq(exp_annot.StopTime, 10)
+    assert_eq(exp_annot.Tolerance, 1e-6)
+    
+    # Check icon graphics
+    var icon_annot = annotated.get_annotation("Icon")
+    assert_true(icon_annot.graphics.size() > 0)
+    assert_eq(icon_annot.graphics[0].type, "Rectangle")
+    assert_eq(icon_annot.graphics[1].type, "Text")
     after_each_test() 
