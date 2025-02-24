@@ -1,4 +1,4 @@
-extends GutTest
+extends SceneTree
 
 const DAESystem = preload("res://apps/modelica_godot/core/system/dae/dae_system.gd")
 const ModelicaParser = preload("res://apps/modelica_godot/core/parser/modelica_parser.gd")
@@ -6,11 +6,53 @@ const ModelicaParser = preload("res://apps/modelica_godot/core/parser/modelica_p
 var system: DAESystem
 var parser: ModelicaParser
 
-func before_each():
-    system = DAESystem.new()
-    parser = ModelicaParser.new()
+func _ready():
+    run_all_tests()
+
+func run_all_tests():
+    print("\nRunning DAE System Tests:")
+    print("------------------------")
+    
+    test_add_variable()
+    test_add_equation()
+    test_add_initial_equation()
+    test_get_state_variables()
+    test_get_algebraic_variables()
+    test_initialize()
+    test_solve_continuous()
+    test_to_string()
+    
+    print("\nAll tests completed!")
+    get_tree().quit()
+
+func assert_eq(a, b, message: String = ""):
+    if a != b:
+        push_error("Assertion failed: %s != %s. %s" % [str(a), str(b), message])
+    else:
+        print("✓ " + message)
+
+func assert_ne(a, b, message: String = ""):
+    if a == b:
+        push_error("Assertion failed: %s == %s. %s" % [str(a), str(b), message])
+    else:
+        print("✓ " + message)
+
+func assert_true(condition, message: String = ""):
+    if !condition:
+        push_error("Assertion failed: Expected true but got false. %s" % message)
+    else:
+        print("✓ " + message)
+
+func assert_almost_eq(a, b, tolerance: float, message: String = ""):
+    if abs(a - b) > tolerance:
+        push_error("Assertion failed: |%s - %s| > %s. %s" % [str(a), str(b), str(tolerance), message])
+    else:
+        print("✓ " + message)
 
 func test_add_variable():
+    system = DAESystem.new()
+    parser = ModelicaParser.new()
+    
     var var_name = "x"
     var var_type = DAESystem.VariableType.STATE
     var value = 1.0

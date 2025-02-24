@@ -1,11 +1,55 @@
-extends GutTest
+extends SceneTree
 
 const ModelicaParser = preload("res://apps/modelica_godot/core/parser/modelica_parser.gd")
 
 var parser: ModelicaParser
 
-func before_each():
+func _ready():
+    run_all_tests()
+
+func run_all_tests():
     parser = ModelicaParser.new()
+    
+    print("\nRunning Modelica Parser Tests:")
+    print("------------------------------")
+    
+    test_parse_simple_model()
+    test_parse_component_with_parameters()
+    test_parse_connector()
+    test_parse_model_with_extends()
+    test_parse_model_with_connect()
+    test_parse_model_with_if()
+    test_parse_model_with_for()
+    test_parse_model_with_when()
+    test_parse_invalid_model()
+    test_parse_empty_model()
+    
+    print("\nAll tests completed!")
+    get_tree().quit()
+
+func assert_eq(a, b, message: String = ""):
+    if a != b:
+        push_error("Assertion failed: %s != %s. %s" % [str(a), str(b), message])
+    else:
+        print("✓ " + message)
+
+func assert_ne(a, b, message: String = ""):
+    if a == b:
+        push_error("Assertion failed: %s == %s. %s" % [str(a), str(b), message])
+    else:
+        print("✓ " + message)
+
+func assert_true(condition, message: String = ""):
+    if !condition:
+        push_error("Assertion failed: Expected true but got false. %s" % message)
+    else:
+        print("✓ " + message)
+
+func assert_almost_eq(a, b, tolerance: float, message: String = ""):
+    if abs(a - b) > tolerance:
+        push_error("Assertion failed: |%s - %s| > %s. %s" % [str(a), str(b), str(tolerance), message])
+    else:
+        print("✓ " + message)
 
 func test_parse_simple_model():
     var model = """
