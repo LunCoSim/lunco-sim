@@ -2,10 +2,18 @@
 extends RefCounted
 class_name ModelicaASTNode
 
+const ModelicaTypeClass = preload("res://apps/modelica_godot/core/parser/types/modelica_type.gd")
+
 enum NodeType {
 	# Common nodes
 	UNKNOWN,
 	ERROR,
+	ROOT,  # Root node representing the entire compilation unit
+	
+	# Type system nodes
+	TYPE_DEFINITION,
+	TYPE_REFERENCE,
+	BUILTIN_TYPE,
 	
 	# Expression nodes
 	NUMBER,
@@ -36,10 +44,25 @@ enum NodeType {
 	ANNOTATION
 }
 
+# Basic node properties
 var type: NodeType = NodeType.UNKNOWN
 var value: Variant  # The actual value/operator/function name
 var children: Array[ModelicaASTNode] = []
-var metadata: Dictionary = {}  # Additional information like line numbers, comments, etc.
+var parent: ModelicaASTNode = null  # Parent node reference
+var source_location := {"line": 0, "column": 0}  # Source code location
+
+# Error handling
+var errors: Array[Dictionary] = []
+var has_errors: bool:
+	get: return not errors.is_empty()
+
+# Type system
+var modelica_type = null  # Reference to type information (ModelicaTypeClass instance)
+var is_type_checked: bool = false
+
+# Scope and symbol management
+var scope: Dictionary = {}  # Local symbol table
+var qualified_name: String = ""  # Full path to this node (e.g. Modelica.Mechanics.Mass)
 
 # Expression-specific fields
 var left: ModelicaASTNode   # Left operand for binary ops
@@ -47,75 +70,61 @@ var right: ModelicaASTNode  # Right operand for binary ops
 var operand: ModelicaASTNode # Single operand for unary ops
 var arguments: Array[ModelicaASTNode] = [] # Arguments for function calls
 
-# Equation-specific fields
-var is_initial: bool = false
-var is_differential: bool = false
-var state_variable: String = ""
-var dependencies: Array[String] = []
-
 # Modelica-specific fields
 var visibility: String = "public"  # public, protected
 var variability: String = ""  # parameter, constant, discrete
 var causality: String = ""   # input, output
 var modifications: Dictionary = {}
 
-func _init() -> void:
-	type = NodeType.UNKNOWN
-	value = null
-	children = []
-	metadata = {}
-	left = null
-	right = null
-	operand = null
-	arguments = []
+func _init(node_type: NodeType = NodeType.UNKNOWN, node_value: Variant = null, location: Dictionary = {}) -> void:
+	type = node_type
+	value = node_value
+	if not location.is_empty():
+		source_location = location
 
 func add_child(node: ModelicaASTNode) -> void:
 	if node:
+		node.parent = self
 		children.append(node)
+		if node.has_errors:
+			_propagate_errors(node)
 
-func add_metadata(key: String, value: Variant) -> void:
-	metadata[key] = value
+func add_error(message: String, error_type: String = "error", location: Dictionary = {}) -> void:
+	var error = {
+		"message": message,
+		"type": error_type,
+		"location": location if not location.is_empty() else source_location
+	}
+	errors.append(error)
+	if parent:
+		parent._propagate_errors(self)
 
-func get_metadata(key: String, default: Variant = null) -> Variant:
-	return metadata.get(key, default)
+func _propagate_errors(from_node: ModelicaASTNode) -> void:
+	for error in from_node.errors:
+		if not errors.has(error):  # Avoid duplicates
+			errors.append(error)
+	if parent:
+		parent._propagate_errors(self)
 
-func add_dependency(var_name: String) -> void:
-	if not dependencies.has(var_name):
-		dependencies.append(var_name)
+func get_root() -> ModelicaASTNode:
+	if parent:
+		return parent.get_root()
+	return self
 
-func set_state_variable(var_name: String) -> void:
-	state_variable = var_name
-	is_differential = true
-	add_dependency(var_name)
-
-func is_state_variable() -> bool:
-	return not state_variable.is_empty()
-
-func get_dependencies() -> Array[String]:
-	var all_deps: Array[String] = []
-	all_deps.append_array(dependencies)
-	
-	# Collect dependencies from children
+func find_child_by_name(name: String) -> ModelicaASTNode:
 	for child in children:
-		all_deps.append_array(child.get_dependencies())
-	
-	# Collect from expression-specific fields
-	if left:
-		all_deps.append_array(left.get_dependencies())
-	if right:
-		all_deps.append_array(right.get_dependencies())
-	if operand:
-		all_deps.append_array(operand.get_dependencies())
-	for arg in arguments:
-		all_deps.append_array(arg.get_dependencies())
-	
-	# Remove duplicates while preserving order
-	var unique_deps: Array[String] = []
-	for dep in all_deps:
-		if not unique_deps.has(dep):
-			unique_deps.append(dep)
-	
-	return unique_deps
+		if child.value == name:
+			return child
+	return null
+
+func get_full_name() -> String:
+	if parent and parent.type != NodeType.ROOT:
+		var parent_name = parent.get_full_name()
+		return parent_name + "." + str(value) if parent_name else str(value)
+	return str(value)
+
+func is_definition() -> bool:
+	return type in [NodeType.MODEL, NodeType.CONNECTOR, NodeType.CLASS, NodeType.PACKAGE]
 
 func is_equation() -> bool:
 	return type in [
@@ -137,100 +146,15 @@ func is_expression() -> bool:
 		NodeType.ARRAY_ACCESS
 	]
 
-func is_declaration() -> bool:
+func is_type() -> bool:
 	return type in [
-		NodeType.MODEL,
-		NodeType.CONNECTOR,
-		NodeType.COMPONENT,
-		NodeType.PARAMETER,
-		NodeType.VARIABLE,
-		NodeType.CLASS
+		NodeType.TYPE_DEFINITION,
+		NodeType.TYPE_REFERENCE,
+		NodeType.BUILTIN_TYPE
 	]
 
-# Format node as a mathematical expression
-func format_expression() -> String:
-	match type:
-		NodeType.NUMBER:
-			return str(value)
-			
-		NodeType.IDENTIFIER:
-			return str(value)
-			
-		NodeType.STRING:
-			return "\"%s\"" % value
-			
-		NodeType.OPERATOR:
-			var left_str = left.format_expression() if left else ""
-			var right_str = right.format_expression() if right else ""
-			return "(" + left_str + " " + str(value) + " " + right_str + ")"
-			
-		NodeType.FUNCTION_CALL:
-			var args_str = []
-			for arg in arguments:
-				args_str.append(arg.format_expression())
-			return str(value) + "(" + ", ".join(args_str) + ")"
-			
-		NodeType.EQUATION:
-			var left_str = left.format_expression() if left else ""
-			var right_str = right.format_expression() if right else ""
-			return left_str + " = " + right_str
-			
-		_:
-			return "[Unknown Node Type]"
-
-# Format node as Modelica code
-func format_modelica() -> String:
-	match type:
-		NodeType.MODEL:
-			var result = "model " + str(value) + "\n"
-			for child in children:
-				result += "  " + child.format_modelica().replace("\n", "\n  ")
-			result += "end " + str(value) + ";"
-			return result
-			
-		NodeType.CONNECTOR:
-			var result = "connector " + str(value) + "\n"
-			for child in children:
-				result += "  " + child.format_modelica().replace("\n", "\n  ")
-			result += "end " + str(value) + ";"
-			return result
-			
-		NodeType.COMPONENT, NodeType.PARAMETER, NodeType.VARIABLE:
-			var result = ""
-			if variability:
-				result += variability + " "
-			if causality:
-				result += causality + " "
-			result += str(value)
-			if not modifications.is_empty():
-				result += "(" + _format_modifications() + ")"
-			result += ";"
-			return result
-			
-		_:
-			return format_expression()
-
-func _format_modifications() -> String:
-	var mods = []
-	for key in modifications:
-		var value = modifications[key]
-		if value is String:
-			mods.append("%s=\"%s\"" % [key, value])
-		else:
-			mods.append("%s=%s" % [key, str(value)])
-	return ", ".join(mods)
-
 func _to_string() -> String:
-	var result = "ModelicaASTNode(type=%d, value=%s)" % [type, str(value)]
-	
-	if is_differential:
-		result += ", differential"
-	if not state_variable.is_empty():
-		result += ", state_var='%s'" % state_variable
-	if not dependencies.is_empty():
-		result += ", deps=%s" % str(dependencies)
-	if not modifications.is_empty():
-		result += ", mods=%s" % str(modifications)
-	
-	result += ")"
+	var result = "ModelicaASTNode(%s, type=%s)" % [str(value), NodeType.keys()[type]]
+	if has_errors:
+		result += " [HAS ERRORS]"
 	return result 

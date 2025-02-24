@@ -12,9 +12,30 @@ func _init(p_lexer: LexicalAnalyzer = null) -> void:
 	lexer = p_lexer if p_lexer else LexicalAnalyzer.new()
 
 func parse(text: String) -> ModelicaASTNode:
-	# To be implemented by derived classes
-	push_error("parse() must be implemented by derived classes")
-	return null
+	# Virtual method to be implemented by derived classes
+	errors.clear()
+	tokens = lexer.tokenize(text)
+	position = 0
+	current_token = _advance()
+	
+	var ast = _parse()
+	
+	if _has_errors():
+		var error_str = ""
+		for error in errors:
+			if error_str.length() > 0:
+				error_str += "\n"
+			error_str += error
+		
+		var location = {
+			"line": current_token.line if current_token else 0,
+			"column": current_token.column if current_token else 0
+		}
+		var error_node = ModelicaASTNode.new(ModelicaASTNode.NodeType.ERROR, error_str, location)
+		error_node.add_error(error_str, "syntax_error", location)
+		return error_node
+	
+	return ast
 
 func _parse() -> ModelicaASTNode:
 	# To be implemented by derived classes
@@ -68,13 +89,14 @@ func _expect(type: int, value: String = "") -> bool:
 	errors.append(error)
 	return false
 
-func _error(message: String) -> void:
-	var error = "Parse error"
-	if current_token:
-		error += " at line %d, column %d" % [current_token.line, current_token.column]
-	error += ": " + message
-	errors.append(error)
-	push_error(error)
+func _error(message: String) -> ModelicaASTNode:
+	var location = {
+		"line": current_token.line if current_token else 0,
+		"column": current_token.column if current_token else 0
+	}
+	var error_node = ModelicaASTNode.new(ModelicaASTNode.NodeType.ERROR, message, location)
+	error_node.add_error(message, "syntax_error", location)
+	return error_node
 
 func _token_type_to_string(type: int) -> String:
 	return LexicalAnalyzer.TokenType.keys()[type]
@@ -84,6 +106,3 @@ func _has_errors() -> bool:
 
 func get_errors() -> Array[String]:
 	return errors 
-
-func _match_keyword(keyword: String) -> bool:
-	return _match(LexicalAnalyzer.TokenType.KEYWORD, keyword) 
