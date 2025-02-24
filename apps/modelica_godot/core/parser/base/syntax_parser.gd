@@ -11,10 +11,10 @@ var errors: Array[String] = []
 func _init(p_lexer: LexicalAnalyzer = null) -> void:
 	lexer = p_lexer if p_lexer else LexicalAnalyzer.new()
 
-func parse(text: String) -> Dictionary:
+func parse(text: String) -> ModelicaASTNode:
 	# To be implemented by derived classes
 	push_error("parse() must be implemented by derived classes")
-	return {"error": "Not implemented", "ast": {}}
+	return null
 
 func _parse() -> ModelicaASTNode:
 	# To be implemented by derived classes
@@ -84,3 +84,6 @@ func _has_errors() -> bool:
 
 func get_errors() -> Array[String]:
 	return errors 
+
+func _match_keyword(keyword: String) -> bool:
+	return _match(LexicalAnalyzer.TokenType.KEYWORD, keyword) 

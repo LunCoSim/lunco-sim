@@ -2,7 +2,7 @@
 extends LexicalAnalyzer
 class_name ModelicaLexer
 
-const MODELICA_KEYWORDS = [
+const MODELICA_KEYWORDS: Array[String] = [
 	"model", "connector", "package", "class", "record", "block",
 	"type", "function", "extends", "parameter", "constant", "input",
 	"output", "flow", "stream", "equation", "algorithm", "end",
@@ -13,7 +13,7 @@ const MODELICA_KEYWORDS = [
 	"external", "and", "or", "not", "true", "false"
 ]
 
-const MODELICA_OPERATORS = [
+const MODELICA_OPERATORS: Array[String] = [
 	"+", "-", "*", "/", "^", "=", "<", ">", "<=", ">=", "==", "<>",
 	":=", ".", ",", ";", "(", ")", "[", "]", "{", "}", ":", ".."
 ]

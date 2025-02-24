@@ -2,7 +2,7 @@
 extends SyntaxParser
 class_name ModelicaParser
 
-const NodeTypes = preload("res://apps/modelica_godot/core/parser/ast/ast_node.gd").NodeType
+const NodeTypes = ModelicaASTNode.NodeType
 
 var _current_visibility: String = "public"
 var _current_package: String = ""
@@ -10,177 +10,175 @@ var _current_package: String = ""
 func _init() -> void:
 	super._init(ModelicaLexer.new())
 
-func parse(text: String) -> Dictionary:
+func parse(text: String) -> ModelicaASTNode:
+	print("\nStarting to parse text:")
+	print("-------------------")
+	print(text)
+	print("-------------------")
+	
 	errors.clear()
 	tokens = lexer.tokenize(text)
 	position = 0
 	current_token = _advance()
 	
+	print("\nStarting AST construction")
 	var ast = _parse()
-	return {
-		"error": "\n".join(PackedStringArray(errors)) if not errors.is_empty() else "",
-		"ast": _convert_ast_to_dict(ast) if ast else {}
-	}
-
-func _convert_ast_to_dict(ast: ModelicaASTNode) -> Dictionary:
-	var result = {}
 	
-	if ast.type == NodeTypes.MODEL:
-		result["classes"] = {}
-		result["classes"][ast.value] = {
-			"components": _extract_components(ast),
-			"equations": _extract_equations(ast)
-		}
+	print("\nParsing complete")
+	if not errors.is_empty():
+		print("Errors encountered:")
+		for error in errors:
+			print("- " + error)
 	
-	return result
-
-func _extract_components(ast: ModelicaASTNode) -> Array:
-	var components = []
-	for child in ast.children:
-		if child.type == NodeTypes.COMPONENT:
-			components.append({
-				"name": child.value,
-				"type": child.metadata.get("type", ""),
-				"variability": child.metadata.get("variability", ""),
-				"value": child.metadata.get("value", null)
-			})
-	return components
-
-func _extract_equations(ast: ModelicaASTNode) -> Array:
-	var equations = []
-	for child in ast.children:
-		if child.type == NodeTypes.EQUATION:
-			equations.append({
-				"left": _equation_to_string(child.left),
-				"right": _equation_to_string(child.right)
-			})
-	return equations
-
-func _equation_to_string(node: ModelicaASTNode) -> String:
-	if not node:
-		return ""
-	
-	match node.type:
-		NodeTypes.FUNCTION_CALL:
-			if node.value == "der":
-				return "der(" + _equation_to_string(node.arguments[0]) + ")"
-			return str(node.value)
-		NodeTypes.IDENTIFIER:
-			return str(node.value)
-		NodeTypes.NUMBER:
-			return str(node.value)
-		NodeTypes.OPERATOR:
-			return _equation_to_string(node.left) + " " + str(node.value) + " " + _equation_to_string(node.right)
-		_:
-			return str(node.value)
-
-func _create_node(type: int, value: Variant = null) -> ModelicaASTNode:
-	var node = ModelicaASTNode.new()
-	node.type = type
-	node.value = value
-	node.children = []
-	node.metadata = {}
-	return node
+	return ast
 
 func _parse() -> ModelicaASTNode:
+	print("\nParsing model structure")
 	# Parse optional within clause
 	var within = _parse_within()
+	if within:
+		print("Found within clause: " + within)
 	
-	# Parse imports
-	var imports = []
-	while _match_keyword("import"):
-		imports.append(_parse_import())
+	# Parse optional import statements
+	var imports = _parse_imports()
+	if not imports.is_empty():
+		print("Found imports: ", imports)
 	
-	# Parse main definition
+	# Parse the main definition
+	print("Parsing main definition")
 	var definition = _parse_definition()
 	if definition:
-		# Add within and imports as metadata
-		if within:
-			definition.add_metadata("within", within)
-		if not imports.is_empty():
-			definition.add_metadata("imports", imports)
+		definition.metadata["within"] = within
+		definition.metadata["imports"] = imports
+		print("Successfully parsed definition of type: ", definition.type)
+	else:
+		print("Failed to parse definition")
 	
 	return definition
 
 func _parse_within() -> String:
 	if _match_keyword("within"):
-		var name = _parse_qualified_name()
+		_current_package = _parse_identifier()
 		_expect(LexicalAnalyzer.TokenType.PUNCTUATION, ";")
-		return name
+		return _current_package
 	return ""
 
-func _parse_import() -> Dictionary:
-	var import_info = {}
-	
-	# Parse import name
-	var name = _parse_qualified_name()
-	if name.is_empty():
-		return {}
-	
-	import_info["name"] = name
-	
-	# Check for alias
-	if _match(LexicalAnalyzer.TokenType.OPERATOR, "="):
-		import_info["alias"] = _parse_identifier()
-	
-	_expect(LexicalAnalyzer.TokenType.PUNCTUATION, ";")
-	return import_info
+func _parse_imports() -> Array:
+	var imports = []
+	while _match_keyword("import"):
+		var import_info = _parse_import()
+		if not import_info.is_empty():
+			imports.append(import_info)
+	return imports
 
 func _parse_definition() -> ModelicaASTNode:
+	print("\nParsing definition")
+	
+	# Parse optional encapsulated keyword
+	var is_encapsulated = _match_keyword("encapsulated")
+	if is_encapsulated:
+		print("Found encapsulated keyword")
+	
+	# Parse optional partial keyword
+	var is_partial = _match_keyword("partial")
+	if is_partial:
+		print("Found partial keyword")
+	
+	# Get the definition type (model, class, etc.)
 	var def_type = _parse_definition_type()
 	if def_type.is_empty():
+		print("No definition type found")
 		return null
 	
+	# Get the definition name
+	if not current_token:
+		print("No token found for definition name")
+		return null
+		
+	if current_token.type != LexicalAnalyzer.TokenType.IDENTIFIER:
+		print("Expected identifier for definition name, got: " + current_token._to_string())
+		return null
+		
+	var name = current_token.value
+	print("Found definition name: " + name)
+	_advance()
+	
 	var node_type = _get_node_type_for_definition(def_type)
-	var name = _parse_identifier()
 	var node = _create_node(node_type, name)
+	
+	# Store encapsulated and partial flags in metadata
+	if is_encapsulated:
+		node.metadata["encapsulated"] = true
+	if is_partial:
+		node.metadata["partial"] = true
 	
 	# Parse description string if present
 	if current_token and current_token.type == LexicalAnalyzer.TokenType.STRING:
-		node.add_metadata("description", current_token.value)
+		node.metadata["description"] = current_token.value
+		print("Found description: " + current_token.value)
 		_advance()
 	
-	# Parse extends clauses
-	while _match_keyword("extends"):
+	# Parse extends clause if present
+	if _match_keyword("extends"):
+		print("Parsing extends clause")
 		var extends_info = _parse_extends()
 		if not extends_info.is_empty():
 			var extends_node = _create_node(NodeTypes.EXTENDS, extends_info.base_class)
 			if extends_info.has("modifications"):
-				extends_node.modifications = extends_info.modifications
-			node.add_child(extends_node)
+				extends_node.metadata["modifications"] = extends_info.modifications
+			node.children.append(extends_node)
+			print("Added extends node: " + extends_info.base_class)
 	
-	# Parse body until 'end'
+	print("Parsing components and equations")
+	# Parse components and equations
 	while current_token and not _match_keyword("end"):
-		# Handle visibility
-		if _match_keyword("public"):
-			_current_visibility = "public"
-			continue
-		elif _match_keyword("protected"):
-			_current_visibility = "protected"
-			continue
+		if current_token == null:
+			print("ERROR: Unexpected end of tokens while parsing components")
+			break
+			
+		print("Current token: ", current_token._to_string())
 		
-		# Parse component declarations and equations
 		if _match_keyword("equation"):
+			print("Parsing equation section")
 			var equations = _parse_equation_section()
-			for eq in equations:
-				node.add_child(eq)
+			node.children.append_array(equations)
+			print("Added %d equations" % equations.size())
 		else:
+			print("Parsing component")
 			var component = _parse_component()
 			if component:
-				node.add_child(component)
+				node.children.append(component)
 	
-	# Parse end name and verify it matches
-	var end_name = _parse_identifier()
-	if end_name != name:
-		_error("End name '%s' does not match definition name '%s'" % [end_name, name])
+	# Parse end name
+	if current_token and current_token.type == LexicalAnalyzer.TokenType.IDENTIFIER:
+		var end_name = current_token.value
+		print("Found end name: " + end_name)
+		if end_name != name:
+			var error = "End name '%s' does not match definition name '%s'" % [end_name, name]
+			print("ERROR: " + error)
+			errors.append(error)
+		_advance()
 	
-	_expect(LexicalAnalyzer.TokenType.PUNCTUATION, ";")
+	if not _expect(LexicalAnalyzer.TokenType.PUNCTUATION, ";"):
+		print("ERROR: Missing semicolon after end")
+		return null
+	
+	print("Completed parsing definition")
 	return node
 
 func _parse_definition_type() -> String:
-	for keyword in ModelicaLexer.MODELICA_KEYWORDS:
-		if _match_keyword(keyword):
-			return keyword
+	print("Looking for definition type")
+	if not current_token:
+		print("No current token")
+		return ""
+	
+	var definition_types = ["model", "connector", "class", "record", "block", "type", "package", "function"]
+	for def_type in definition_types:
+		if _match(LexicalAnalyzer.TokenType.KEYWORD, def_type):
+			print("Found definition type: " + def_type)
+			return def_type
+	
+	print("Current token is not a valid definition type: " + current_token._to_string())
 	return ""
 
 func _get_node_type_for_definition(def_type: String) -> int:
@@ -190,26 +188,34 @@ func _get_node_type_for_definition(def_type: String) -> int:
 		"class": return NodeTypes.CLASS
 		"record": return NodeTypes.CLASS
 		"block": return NodeTypes.CLASS
+		"type": return NodeTypes.CLASS
+		"package": return NodeTypes.PACKAGE
+		"function": return NodeTypes.CLASS
 		_: return NodeTypes.UNKNOWN
 
 func _parse_extends() -> Dictionary:
 	var extends_info = {}
+	extends_info.base_class = _parse_identifier()
 	
-	# Parse base class name
-	extends_info["base_class"] = _parse_qualified_name()
-	
-	# Parse modifications if any
 	if _match(LexicalAnalyzer.TokenType.PUNCTUATION, "("):
-		extends_info["modifications"] = _parse_modifications()
+		extends_info.modifications = _parse_modifications()
 		_expect(LexicalAnalyzer.TokenType.PUNCTUATION, ")")
 	
 	_expect(LexicalAnalyzer.TokenType.PUNCTUATION, ";")
 	return extends_info
 
 func _parse_component() -> ModelicaASTNode:
+	print("Starting to parse component")
 	var node: ModelicaASTNode = null
 	var variability = ""
 	var causality = ""
+	
+	# Check if we're at a definition keyword
+	if current_token and current_token.type == LexicalAnalyzer.TokenType.KEYWORD:
+		var keyword = current_token.value
+		if keyword in ["model", "connector", "class", "record", "block", "equation", "end"]:
+			print("Found definition keyword '%s', not a component" % keyword)
+			return null
 	
 	# Parse prefixes
 	while true:
@@ -229,12 +235,18 @@ func _parse_component() -> ModelicaASTNode:
 	# Parse type name
 	var type_name = _parse_qualified_name()
 	if type_name.is_empty():
+		print("No type name found")
 		return null
+	
+	print("Found type name: " + type_name)
 	
 	# Parse component name
 	var name = _parse_identifier()
 	if name.is_empty():
+		print("No component name found")
 		return null
+	
+	print("Found component name: " + name)
 	
 	# Create appropriate node
 	if variability == "parameter":
@@ -242,23 +254,26 @@ func _parse_component() -> ModelicaASTNode:
 	else:
 		node = _create_node(NodeTypes.COMPONENT, name)
 	
-	node.visibility = _current_visibility
-	node.variability = variability
-	node.causality = causality
-	node.add_metadata("type", type_name)
+	node.metadata["type"] = type_name
+	node.metadata["variability"] = variability
+	node.metadata["causality"] = causality
 	
 	# Parse array dimensions if any
 	if _match(LexicalAnalyzer.TokenType.PUNCTUATION, "["):
 		var dimensions = _parse_array_dimensions()
-		node.add_metadata("dimensions", dimensions)
+		node.metadata["dimensions"] = dimensions
 		_expect(LexicalAnalyzer.TokenType.PUNCTUATION, "]")
 	
 	# Parse modifications
 	if _match(LexicalAnalyzer.TokenType.PUNCTUATION, "("):
-		node.modifications = _parse_modifications()
+		node.metadata["modifications"] = _parse_modifications()
 		_expect(LexicalAnalyzer.TokenType.PUNCTUATION, ")")
 	
-	_expect(LexicalAnalyzer.TokenType.PUNCTUATION, ";")
+	if not _expect(LexicalAnalyzer.TokenType.PUNCTUATION, ";"):
+		print("Missing semicolon after component declaration")
+		return null
+	
+	print("Successfully parsed component: " + name)
 	return node
 
 func _parse_equation_section() -> Array[ModelicaASTNode]:
@@ -436,7 +451,7 @@ func _parse_function_arguments() -> Array[ModelicaASTNode]:
 	return arguments
 
 func _match_keyword(keyword: String) -> bool:
-	return current_token and current_token.type == LexicalAnalyzer.TokenType.KEYWORD and current_token.value == keyword
+	return _match(LexicalAnalyzer.TokenType.KEYWORD, keyword)
 
 func _is_section_keyword() -> bool:
 	return current_token and current_token.type == LexicalAnalyzer.TokenType.KEYWORD and current_token.value in [
@@ -468,7 +483,7 @@ func _parse_when_equation() -> ModelicaASTNode:
 	while current_token and not _is_when_terminator():
 		var equation = _parse_equation()
 		if equation:
-			node.add_child(equation)
+			node.children.append(equation)
 	
 	# Handle elsewhen clauses
 	while _match_keyword("elsewhen"):
@@ -485,9 +500,9 @@ func _parse_when_equation() -> ModelicaASTNode:
 		while current_token and not _is_when_terminator():
 			var equation = _parse_equation()
 			if equation:
-				elsewhen.add_child(equation)
+				elsewhen.children.append(equation)
 		
-		node.add_child(elsewhen)
+		node.children.append(elsewhen)
 	
 	_expect(LexicalAnalyzer.TokenType.KEYWORD, "end")
 	_expect(LexicalAnalyzer.TokenType.KEYWORD, "when")
@@ -510,8 +525,8 @@ func _parse_if_equation() -> ModelicaASTNode:
 	while current_token and not _is_if_terminator():
 		var equation = _parse_equation()
 		if equation:
-			then_branch.add_child(equation)
-	node.add_child(then_branch)
+			then_branch.children.append(equation)
+	node.children.append(then_branch)
 	
 	# Handle elseif branches
 	while _match_keyword("elseif"):
@@ -528,9 +543,9 @@ func _parse_if_equation() -> ModelicaASTNode:
 		while current_token and not _is_if_terminator():
 			var equation = _parse_equation()
 			if equation:
-				elseif.add_child(equation)
+				elseif.children.append(equation)
 		
-		node.add_child(elseif)
+		node.children.append(elseif)
 	
 	# Handle else branch
 	if _match_keyword("else"):
@@ -538,8 +553,8 @@ func _parse_if_equation() -> ModelicaASTNode:
 		while current_token and not _is_if_terminator():
 			var equation = _parse_equation()
 			if equation:
-				else_branch.add_child(equation)
-		node.add_child(else_branch)
+				else_branch.children.append(equation)
+		node.children.append(else_branch)
 	
 	_expect(LexicalAnalyzer.TokenType.KEYWORD, "end")
 	_expect(LexicalAnalyzer.TokenType.KEYWORD, "if")
@@ -552,7 +567,7 @@ func _parse_for_equation() -> ModelicaASTNode:
 	
 	# Parse indices
 	var indices = _parse_for_indices()
-	node.add_metadata("indices", indices)
+	node.metadata["indices"] = indices
 	
 	_expect(LexicalAnalyzer.TokenType.KEYWORD, "loop")
 	
@@ -560,7 +575,7 @@ func _parse_for_equation() -> ModelicaASTNode:
 	while current_token and not _match_keyword("end"):
 		var equation = _parse_equation()
 		if equation:
-			node.add_child(equation)
+			node.children.append(equation)
 	
 	_expect(LexicalAnalyzer.TokenType.KEYWORD, "for")
 	_expect(LexicalAnalyzer.TokenType.PUNCTUATION, ";")
@@ -576,7 +591,7 @@ func _parse_connect_equation() -> ModelicaASTNode:
 	var from_ref = _parse_component_reference()
 	if not from_ref:
 		return null
-	node.add_metadata("from", from_ref)
+	node.metadata["from"] = from_ref
 	
 	_expect(LexicalAnalyzer.TokenType.PUNCTUATION, ",")
 	
@@ -584,7 +599,7 @@ func _parse_connect_equation() -> ModelicaASTNode:
 	var to_ref = _parse_component_reference()
 	if not to_ref:
 		return null
-	node.add_metadata("to", to_ref)
+	node.metadata["to"] = to_ref
 	
 	_expect(LexicalAnalyzer.TokenType.PUNCTUATION, ")")
 	_expect(LexicalAnalyzer.TokenType.PUNCTUATION, ";")
@@ -625,4 +640,96 @@ func _is_when_terminator() -> bool:
 func _is_if_terminator() -> bool:
 	return current_token and current_token.type == LexicalAnalyzer.TokenType.KEYWORD and current_token.value in [
 		"elseif", "else", "end"
-	] 
+	]
+
+func _convert_ast_to_dict(ast: ModelicaASTNode) -> Dictionary:
+	if ast == null:
+		print("AST is null, returning empty result")
+		return {"classes": {}}
+		
+	print("Converting AST node of type: ", ast.type)
+	var result = {"classes": {}}
+	
+	match ast.type:
+		NodeTypes.MODEL, NodeTypes.CLASS, NodeTypes.CONNECTOR:
+			result["classes"][ast.value] = {
+				"type": ast.type,
+				"components": _extract_components(ast),
+				"equations": _extract_equations(ast)
+			}
+		NodeTypes.PACKAGE:
+			result["classes"][ast.value] = {
+				"type": ast.type,
+				"components": [],
+				"equations": []
+			}
+			# Add nested classes if any
+			for child in ast.children:
+				if child.type in [NodeTypes.MODEL, NodeTypes.CLASS, NodeTypes.CONNECTOR, NodeTypes.PACKAGE]:
+					var nested = _convert_ast_to_dict(child)
+					result["classes"].merge(nested["classes"])
+	
+	return result
+
+func _extract_components(ast: ModelicaASTNode) -> Array:
+	var components = []
+	for child in ast.children:
+		if child.type == NodeTypes.COMPONENT:
+			components.append({
+				"name": child.value,
+				"type": child.metadata.get("type", ""),
+				"variability": child.metadata.get("variability", ""),
+				"value": child.metadata.get("value", null)
+			})
+	return components
+
+func _extract_equations(ast: ModelicaASTNode) -> Array:
+	var equations = []
+	for child in ast.children:
+		if child.type == NodeTypes.EQUATION:
+			equations.append({
+				"left": _equation_to_string(child.left),
+				"right": _equation_to_string(child.right)
+			})
+	return equations
+
+func _equation_to_string(node: ModelicaASTNode) -> String:
+	if not node:
+		return ""
+	
+	match node.type:
+		NodeTypes.FUNCTION_CALL:
+			if node.value == "der":
+				return "der(" + _equation_to_string(node.arguments[0]) + ")"
+			return str(node.value)
+		NodeTypes.IDENTIFIER:
+			return str(node.value)
+		NodeTypes.NUMBER:
+			return str(node.value)
+		NodeTypes.OPERATOR:
+			return _equation_to_string(node.left) + " " + str(node.value) + " " + _equation_to_string(node.right)
+		_:
+			return str(node.value)
+
+func _create_node(type: int, value: Variant = null) -> ModelicaASTNode:
+	var node = ModelicaASTNode.new()
+	node.type = type
+	node.value = value
+	return node
+
+func _parse_import() -> Dictionary:
+	var import_info = {}
+	
+	# Parse import name
+	var name = _parse_identifier()
+	if name.is_empty():
+		return {}
+	
+	import_info["name"] = name
+	
+	# Check for alias
+	if _match(LexicalAnalyzer.TokenType.OPERATOR, "="):
+		import_info["alias"] = _parse_identifier()
+	
+	_expect(LexicalAnalyzer.TokenType.PUNCTUATION, ";")
+	return import_info 

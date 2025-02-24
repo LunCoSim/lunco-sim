@@ -47,6 +47,7 @@ func set_keywords(keywords: Array[String]) -> void:
 	_keywords = keywords
 
 func tokenize(text: String) -> Array[Token]:
+	print("\nStarting tokenization of text (length: %d)" % text.length())
 	_text = text
 	_length = text.length()
 	_position = 0
@@ -54,14 +55,32 @@ func tokenize(text: String) -> Array[Token]:
 	_column = 1
 	
 	var tokens: Array[Token] = []
+	var last_position = -1
+	var stuck_count = 0
 	
 	while _position < _length:
+		print("Position: %d, Line: %d, Column: %d, Current char: '%s'" % [_position, _line, _column, _current_char()])
 		var token = _next_token()
-		if token != null:
+		if token != null and token.type != TokenType.WHITESPACE:  # Skip whitespace tokens
+			print("Generated token: %s" % token._to_string())
 			tokens.append(token)
+		
+		# Check if we're stuck
+		if last_position == _position:
+			stuck_count += 1
+			if stuck_count > 5:
+				print("WARNING: Possibly stuck at position %d" % _position)
+				print("Context: '%s'" % _text.substr(max(0, _position - 10), min(20, _length - _position)))
+				break
+		else:
+			stuck_count = 0
+		last_position = _position
 	
 	# Add EOF token
-	tokens.append(Token.new(TokenType.EOF, "", _line, _column, _position))
+	var eof_token = Token.new(TokenType.EOF, "", _line, _column, _position)
+	print("Generated EOF token: %s" % eof_token._to_string())
+	tokens.append(eof_token)
+	print("Tokenization complete. Generated %d tokens" % tokens.size())
 	return tokens
 
 func _next_token() -> Token:
@@ -69,35 +88,44 @@ func _next_token() -> Token:
 		return null
 	
 	var c = _current_char()
+	print("Processing character: '%s' at position %d" % [c, _position])
 	
 	# Skip whitespace
 	if c.strip_edges().is_empty():
+		print("Handling whitespace")
 		return _handle_whitespace()
 	
 	# Handle comments
 	if c == "/" and _peek_next() == "/":
+		print("Handling line comment")
 		return _handle_line_comment()
 	if c == "/" and _peek_next() == "*":
+		print("Handling block comment")
 		return _handle_block_comment()
 	
 	# Handle identifiers and keywords
 	if c.is_valid_identifier():
+		print("Handling identifier")
 		return _handle_identifier()
 	
 	# Handle numbers
 	if c.is_valid_int() or (c == "-" and _peek_next().is_valid_int()):
+		print("Handling number")
 		return _handle_number()
 	
 	# Handle strings
 	if c == "\"":
+		print("Handling string")
 		return _handle_string()
 	
 	# Handle operators and punctuation
+	print("Handling operator/punctuation")
 	return _handle_operator()
 
 func _handle_whitespace() -> Token:
 	var start_pos = _position
 	var start_col = _column
+	var value = ""
 	
 	while _position < _length and _current_char().strip_edges().is_empty():
 		if _current_char() == "\n":
@@ -105,40 +133,31 @@ func _handle_whitespace() -> Token:
 			_column = 1
 		else:
 			_column += 1
+		value += _current_char()
 		_position += 1
 	
-	return Token.new(
-		TokenType.WHITESPACE,
-		_text.substr(start_pos, _position - start_pos),
-		_line,
-		start_col,
-		start_pos
-	)
+	return Token.new(TokenType.WHITESPACE, value, _line, start_col, start_pos)
 
 func _handle_line_comment() -> Token:
 	var start_pos = _position
 	var start_col = _column
+	var value = ""
 	
 	# Skip //
 	_position += 2
 	_column += 2
 	
 	while _position < _length and _current_char() != "\n":
+		value += _current_char()
 		_position += 1
 		_column += 1
 	
-	return Token.new(
-		TokenType.COMMENT,
-		_text.substr(start_pos, _position - start_pos),
-		_line,
-		start_col,
-		start_pos
-	)
+	return Token.new(TokenType.COMMENT, value, _line, start_col, start_pos)
 
 func _handle_block_comment() -> Token:
 	var start_pos = _position
 	var start_col = _column
-	var start_line = _line
+	var value = ""
 	
 	# Skip /*
 	_position += 2
@@ -156,41 +175,32 @@ func _handle_block_comment() -> Token:
 		else:
 			_column += 1
 		
+		value += _current_char()
 		_position += 1
 	
-	return Token.new(
-		TokenType.COMMENT,
-		_text.substr(start_pos, _position - start_pos),
-		start_line,
-		start_col,
-		start_pos
-	)
+	return Token.new(TokenType.COMMENT, value, _line, start_col, start_pos)
 
 func _handle_identifier() -> Token:
 	var start_pos = _position
 	var start_col = _column
 	var value = ""
 	
-	while _position < _length:
-		var c = _current_char()
-		if not (c.is_valid_identifier() or c == "_" or c.is_valid_int()):
-			break
-		value += c
+	while _position < _length and (_current_char().is_valid_identifier() or _current_char().is_valid_int()):
+		value += _current_char()
 		_position += 1
 		_column += 1
 	
-	var type = TokenType.IDENTIFIER
-	if _keywords.has(value):
-		type = TokenType.KEYWORD
+	# Check if it's a keyword
+	if value in _keywords:
+		return Token.new(TokenType.KEYWORD, value, _line, start_col, start_pos)
 	
-	return Token.new(type, value, _line, start_col, start_pos)
+	return Token.new(TokenType.IDENTIFIER, value, _line, start_col, start_pos)
 
 func _handle_number() -> Token:
 	var start_pos = _position
 	var start_col = _column
 	var value = ""
 	var has_decimal = false
-	var has_exponent = false
 	
 	# Handle negative numbers
 	if _current_char() == "-":
@@ -200,35 +210,25 @@ func _handle_number() -> Token:
 	
 	while _position < _length:
 		var c = _current_char()
-		
-		# Handle decimal point
-		if c == "." and not has_decimal and not has_exponent:
+		if c.is_valid_int():
+			value += c
+			_position += 1
+			_column += 1
+		elif c == "." and not has_decimal:
+			value += c
 			has_decimal = true
+			_position += 1
+			_column += 1
+		elif c == "e" or c == "E":  # Handle scientific notation
 			value += c
 			_position += 1
 			_column += 1
-			continue
-		
-		# Handle exponent
-		if (c == "e" or c == "E") and not has_exponent:
-			has_exponent = true
-			value += c
-			_position += 1
-			_column += 1
-			
-			# Handle exponent sign
-			if _position < _length and (_peek_next() == "+" or _peek_next() == "-"):
-				value += _peek_next()
+			if _position < _length and (_current_char() == "+" or _current_char() == "-"):
+				value += _current_char()
 				_position += 1
 				_column += 1
-			continue
-		
-		if not c.is_valid_int():
+		else:
 			break
-			
-		value += c
-		_position += 1
-		_column += 1
 	
 	return Token.new(TokenType.NUMBER, value, _line, start_col, start_pos)
 
@@ -241,26 +241,17 @@ func _handle_string() -> Token:
 	_position += 1
 	_column += 1
 	
-	while _position < _length:
-		var c = _current_char()
-		
-		if c == "\"":
-			# Skip closing quote
-			_position += 1
+	while _position < _length and _current_char() != "\"":
+		if _current_char() == "\n":
+			_line += 1
+			_column = 1
+		else:
 			_column += 1
-			break
-			
-		if c == "\\":
-			# Handle escape sequences
-			_position += 1
-			_column += 1
-			if _position < _length:
-				value += "\\" + _current_char()
-				_position += 1
-				_column += 1
-			continue
-		
-		value += c
+		value += _current_char()
+		_position += 1
+	
+	# Skip closing quote
+	if _position < _length:
 		_position += 1
 		_column += 1
 	
