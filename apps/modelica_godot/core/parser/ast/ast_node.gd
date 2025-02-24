@@ -1,6 +1,6 @@
 @tool
 extends RefCounted
-class_name ASTNode
+class_name ModelicaASTNode
 
 enum NodeType {
 	# Common nodes
@@ -23,28 +23,29 @@ enum NodeType {
 	FOR_EQUATION,
 	CONNECT_EQUATION,
 	
-	# Modelica nodes
+	# Definition nodes
 	MODEL,
 	CONNECTOR,
+	CLASS,
+	PACKAGE,
 	COMPONENT,
 	PARAMETER,
 	VARIABLE,
-	CLASS,
 	EXTENDS,
 	IMPORT,
 	ANNOTATION
 }
 
-var type: NodeType
+var type: NodeType = NodeType.UNKNOWN
 var value: Variant  # The actual value/operator/function name
-var children: Array[ASTNode]
-var metadata: Dictionary  # Additional information like line numbers, comments, etc.
+var children: Array[ModelicaASTNode] = []
+var metadata: Dictionary = {}  # Additional information like line numbers, comments, etc.
 
 # Expression-specific fields
-var left: ASTNode   # Left operand for binary ops
-var right: ASTNode  # Right operand for binary ops
-var operand: ASTNode # Single operand for unary ops
-var arguments: Array[ASTNode] # Arguments for function calls
+var left: ModelicaASTNode   # Left operand for binary ops
+var right: ModelicaASTNode  # Right operand for binary ops
+var operand: ModelicaASTNode # Single operand for unary ops
+var arguments: Array[ModelicaASTNode] = [] # Arguments for function calls
 
 # Equation-specific fields
 var is_initial: bool = false
@@ -58,13 +59,17 @@ var variability: String = ""  # parameter, constant, discrete
 var causality: String = ""   # input, output
 var modifications: Dictionary = {}
 
-func _init(p_type: NodeType, p_value: Variant = null) -> void:
-	type = p_type
-	value = p_value
+func _init() -> void:
+	type = NodeType.UNKNOWN
+	value = null
 	children = []
 	metadata = {}
+	left = null
+	right = null
+	operand = null
+	arguments = []
 
-func add_child(node: ASTNode) -> void:
+func add_child(node: ModelicaASTNode) -> void:
 	if node:
 		children.append(node)
 
@@ -216,7 +221,7 @@ func _format_modifications() -> String:
 	return ", ".join(mods)
 
 func _to_string() -> String:
-	var result = "ASTNode(%s, '%s'" % [NodeType.keys()[type], str(value)]
+	var result = "ModelicaASTNode(type=%d, value=%s)" % [type, str(value)]
 	
 	if is_differential:
 		result += ", differential"

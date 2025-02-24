@@ -11,32 +11,23 @@ var errors: Array[String] = []
 func _init(p_lexer: LexicalAnalyzer = null) -> void:
 	lexer = p_lexer if p_lexer else LexicalAnalyzer.new()
 
-func parse(text: String) -> ASTNode:
-	errors.clear()
-	tokens = lexer.tokenize(text)
-	position = 0
-	current_token = _advance()
-	return _parse()
+func parse(text: String) -> Dictionary:
+	# To be implemented by derived classes
+	push_error("parse() must be implemented by derived classes")
+	return {"error": "Not implemented", "ast": {}}
 
-func _parse() -> ASTNode:
+func _parse() -> ModelicaASTNode:
 	# To be implemented by derived classes
 	push_error("_parse() must be implemented by derived classes")
 	return null
 
 func _advance() -> LexicalAnalyzer.Token:
-	while position < tokens.size():
-		var token = tokens[position]
-		position += 1
-		
-		# Skip whitespace and comments by default
-		if token.type in [LexicalAnalyzer.TokenType.WHITESPACE, 
-						 LexicalAnalyzer.TokenType.COMMENT]:
-			continue
-			
-		current_token = token
-		return token
-	
-	return null
+	position += 1
+	if position < tokens.size():
+		current_token = tokens[position]
+	else:
+		current_token = null
+	return current_token
 
 func _peek() -> LexicalAnalyzer.Token:
 	var saved_pos = position
@@ -49,38 +40,33 @@ func _peek() -> LexicalAnalyzer.Token:
 	
 	return next_token
 
-func _expect(type: int, value: String = "") -> LexicalAnalyzer.Token:
-	if current_token == null:
-		_error("Expected %s but got end of input" % _token_type_to_string(type))
-		return null
-	
-	if current_token.type != type:
-		_error("Expected %s but got %s" % [
-			_token_type_to_string(type),
-			_token_type_to_string(current_token.type)
-		])
-		return null
-	
-	if not value.is_empty() and current_token.value != value:
-		_error("Expected '%s' but got '%s'" % [value, current_token.value])
-		return null
-	
-	var token = current_token
-	_advance()
-	return token
-
 func _match(type: int, value: String = "") -> bool:
-	if current_token == null:
+	if not current_token:
 		return false
 	
-	if current_token.type != type:
-		return false
+	if current_token.type == type:
+		if value.is_empty() or current_token.value == value:
+			_advance()
+			return true
+	return false
+
+func _expect(type: int, value: String = "") -> bool:
+	if _match(type, value):
+		return true
 	
-	if not value.is_empty() and current_token.value != value:
-		return false
+	var error = "Expected "
+	if not value.is_empty():
+		error += "'" + value + "'"
+	else:
+		error += str(type)
+	error += " but got "
+	if current_token:
+		error += "'" + current_token.value + "'"
+	else:
+		error += "end of input"
 	
-	_advance()
-	return true
+	errors.append(error)
+	return false
 
 func _error(message: String) -> void:
 	var error = "Parse error"

@@ -2,13 +2,87 @@
 extends SyntaxParser
 class_name ModelicaParser
 
+const NodeTypes = preload("res://apps/modelica_godot/core/parser/ast/ast_node.gd").NodeType
+
 var _current_visibility: String = "public"
 var _current_package: String = ""
 
 func _init() -> void:
 	super._init(ModelicaLexer.new())
 
-func _parse() -> ASTNode:
+func parse(text: String) -> Dictionary:
+	errors.clear()
+	tokens = lexer.tokenize(text)
+	position = 0
+	current_token = _advance()
+	
+	var ast = _parse()
+	return {
+		"error": "\n".join(PackedStringArray(errors)) if not errors.is_empty() else "",
+		"ast": _convert_ast_to_dict(ast) if ast else {}
+	}
+
+func _convert_ast_to_dict(ast: ModelicaASTNode) -> Dictionary:
+	var result = {}
+	
+	if ast.type == NodeTypes.MODEL:
+		result["classes"] = {}
+		result["classes"][ast.value] = {
+			"components": _extract_components(ast),
+			"equations": _extract_equations(ast)
+		}
+	
+	return result
+
+func _extract_components(ast: ModelicaASTNode) -> Array:
+	var components = []
+	for child in ast.children:
+		if child.type == NodeTypes.COMPONENT:
+			components.append({
+				"name": child.value,
+				"type": child.metadata.get("type", ""),
+				"variability": child.metadata.get("variability", ""),
+				"value": child.metadata.get("value", null)
+			})
+	return components
+
+func _extract_equations(ast: ModelicaASTNode) -> Array:
+	var equations = []
+	for child in ast.children:
+		if child.type == NodeTypes.EQUATION:
+			equations.append({
+				"left": _equation_to_string(child.left),
+				"right": _equation_to_string(child.right)
+			})
+	return equations
+
+func _equation_to_string(node: ModelicaASTNode) -> String:
+	if not node:
+		return ""
+	
+	match node.type:
+		NodeTypes.FUNCTION_CALL:
+			if node.value == "der":
+				return "der(" + _equation_to_string(node.arguments[0]) + ")"
+			return str(node.value)
+		NodeTypes.IDENTIFIER:
+			return str(node.value)
+		NodeTypes.NUMBER:
+			return str(node.value)
+		NodeTypes.OPERATOR:
+			return _equation_to_string(node.left) + " " + str(node.value) + " " + _equation_to_string(node.right)
+		_:
+			return str(node.value)
+
+func _create_node(type: int, value: Variant = null) -> ModelicaASTNode:
+	var node = ModelicaASTNode.new()
+	node.type = type
+	node.value = value
+	node.children = []
+	node.metadata = {}
+	return node
+
+func _parse() -> ModelicaASTNode:
 	# Parse optional within clause
 	var within = _parse_within()
 	
@@ -52,14 +126,14 @@ func _parse_import() -> Dictionary:
 	_expect(LexicalAnalyzer.TokenType.PUNCTUATION, ";")
 	return import_info
 
-func _parse_definition() -> ASTNode:
+func _parse_definition() -> ModelicaASTNode:
 	var def_type = _parse_definition_type()
 	if def_type.is_empty():
 		return null
 	
 	var node_type = _get_node_type_for_definition(def_type)
 	var name = _parse_identifier()
-	var node = ASTNode.new(node_type, name)
+	var node = _create_node(node_type, name)
 	
 	# Parse description string if present
 	if current_token and current_token.type == LexicalAnalyzer.TokenType.STRING:
@@ -70,7 +144,7 @@ func _parse_definition() -> ASTNode:
 	while _match_keyword("extends"):
 		var extends_info = _parse_extends()
 		if not extends_info.is_empty():
-			var extends_node = ASTNode.new(ASTNode.NodeType.EXTENDS, extends_info.base_class)
+			var extends_node = _create_node(NodeTypes.EXTENDS, extends_info.base_class)
 			if extends_info.has("modifications"):
 				extends_node.modifications = extends_info.modifications
 			node.add_child(extends_node)
@@ -111,12 +185,12 @@ func _parse_definition_type() -> String:
 
 func _get_node_type_for_definition(def_type: String) -> int:
 	match def_type:
-		"model": return ASTNode.NodeType.MODEL
-		"connector": return ASTNode.NodeType.CONNECTOR
-		"class": return ASTNode.NodeType.CLASS
-		"record": return ASTNode.NodeType.CLASS
-		"block": return ASTNode.NodeType.CLASS
-		_: return ASTNode.NodeType.UNKNOWN
+		"model": return NodeTypes.MODEL
+		"connector": return NodeTypes.CONNECTOR
+		"class": return NodeTypes.CLASS
+		"record": return NodeTypes.CLASS
+		"block": return NodeTypes.CLASS
+		_: return NodeTypes.UNKNOWN
 
 func _parse_extends() -> Dictionary:
 	var extends_info = {}
@@ -132,8 +206,8 @@ func _parse_extends() -> Dictionary:
 	_expect(LexicalAnalyzer.TokenType.PUNCTUATION, ";")
 	return extends_info
 
-func _parse_component() -> ASTNode:
-	var node: ASTNode = null
+func _parse_component() -> ModelicaASTNode:
+	var node: ModelicaASTNode = null
 	var variability = ""
 	var causality = ""
 	
@@ -164,9 +238,9 @@ func _parse_component() -> ASTNode:
 	
 	# Create appropriate node
 	if variability == "parameter":
-		node = ASTNode.new(ASTNode.NodeType.PARAMETER, name)
+		node = _create_node(NodeTypes.PARAMETER, name)
 	else:
-		node = ASTNode.new(ASTNode.NodeType.COMPONENT, name)
+		node = _create_node(NodeTypes.COMPONENT, name)
 	
 	node.visibility = _current_visibility
 	node.variability = variability
@@ -187,8 +261,8 @@ func _parse_component() -> ASTNode:
 	_expect(LexicalAnalyzer.TokenType.PUNCTUATION, ";")
 	return node
 
-func _parse_equation_section() -> Array[ASTNode]:
-	var equations: Array[ASTNode] = []
+func _parse_equation_section() -> Array[ModelicaASTNode]:
+	var equations: Array[ModelicaASTNode] = []
 	
 	while current_token and not _is_section_keyword():
 		var equation = _parse_equation()
@@ -197,7 +271,7 @@ func _parse_equation_section() -> Array[ASTNode]:
 	
 	return equations
 
-func _parse_equation() -> ASTNode:
+func _parse_equation() -> ModelicaASTNode:
 	# Handle special equation types
 	if _match_keyword("when"):
 		return _parse_when_equation()
@@ -221,15 +295,15 @@ func _parse_equation() -> ASTNode:
 	
 	_expect(LexicalAnalyzer.TokenType.PUNCTUATION, ";")
 	
-	var node = ASTNode.new(ASTNode.NodeType.EQUATION)
+	var node = _create_node(NodeTypes.EQUATION)
 	node.left = left
 	node.right = right
 	return node
 
-func _parse_expression() -> ASTNode:
+func _parse_expression() -> ModelicaASTNode:
 	return _parse_binary_expression()
 
-func _parse_binary_expression(precedence: int = 0) -> ASTNode:
+func _parse_binary_expression(precedence: int = 0) -> ModelicaASTNode:
 	var left = _parse_unary_expression()
 	
 	while current_token and current_token.type == LexicalAnalyzer.TokenType.OPERATOR:
@@ -242,28 +316,28 @@ func _parse_binary_expression(precedence: int = 0) -> ASTNode:
 		
 		var right = _parse_binary_expression(op_precedence)
 		
-		var node = ASTNode.new(ASTNode.NodeType.OPERATOR, operator)
+		var node = _create_node(NodeTypes.OPERATOR, operator)
 		node.left = left
 		node.right = right
 		left = node
 	
 	return left
 
-func _parse_unary_expression() -> ASTNode:
+func _parse_unary_expression() -> ModelicaASTNode:
 	if _match(LexicalAnalyzer.TokenType.OPERATOR, "-"):
-		var node = ASTNode.new(ASTNode.NodeType.OPERATOR, "-")
+		var node = _create_node(NodeTypes.OPERATOR, "-")
 		node.operand = _parse_primary()
 		return node
 	
 	return _parse_primary()
 
-func _parse_primary() -> ASTNode:
+func _parse_primary() -> ModelicaASTNode:
 	if current_token == null:
 		return null
 	
 	match current_token.type:
 		LexicalAnalyzer.TokenType.NUMBER:
-			var node = ASTNode.new(ASTNode.NodeType.NUMBER, float(current_token.value))
+			var node = _create_node(NodeTypes.NUMBER, float(current_token.value))
 			_advance()
 			return node
 			
@@ -273,15 +347,15 @@ func _parse_primary() -> ASTNode:
 			
 			# Check for function call
 			if _match(LexicalAnalyzer.TokenType.PUNCTUATION, "("):
-				var node = ASTNode.new(ASTNode.NodeType.FUNCTION_CALL, name)
+				var node = _create_node(NodeTypes.FUNCTION_CALL, name)
 				node.arguments = _parse_function_arguments()
 				_expect(LexicalAnalyzer.TokenType.PUNCTUATION, ")")
 				return node
 			
-			return ASTNode.new(ASTNode.NodeType.IDENTIFIER, name)
+			return _create_node(NodeTypes.IDENTIFIER, name)
 			
 		LexicalAnalyzer.TokenType.STRING:
-			var node = ASTNode.new(ASTNode.NodeType.STRING, current_token.value)
+			var node = _create_node(NodeTypes.STRING, current_token.value)
 			_advance()
 			return node
 			
@@ -348,8 +422,8 @@ func _parse_array_dimensions() -> Array:
 	
 	return dimensions
 
-func _parse_function_arguments() -> Array[ASTNode]:
-	var arguments: Array[ASTNode] = []
+func _parse_function_arguments() -> Array[ModelicaASTNode]:
+	var arguments: Array[ModelicaASTNode] = []
 	
 	while current_token and current_token.type != LexicalAnalyzer.TokenType.PUNCTUATION:
 		var arg = _parse_expression()
@@ -380,8 +454,8 @@ func _get_operator_precedence(op: String) -> int:
 		"^": return 7
 		_: return 0
 
-func _parse_when_equation() -> ASTNode:
-	var node = ASTNode.new(ASTNode.NodeType.WHEN_EQUATION)
+func _parse_when_equation() -> ModelicaASTNode:
+	var node = _create_node(NodeTypes.WHEN_EQUATION)
 	
 	# Parse condition
 	var condition = _parse_expression()
@@ -398,7 +472,7 @@ func _parse_when_equation() -> ASTNode:
 	
 	# Handle elsewhen clauses
 	while _match_keyword("elsewhen"):
-		var elsewhen = ASTNode.new(ASTNode.NodeType.WHEN_EQUATION)
+		var elsewhen = _create_node(NodeTypes.WHEN_EQUATION)
 		
 		# Parse condition
 		condition = _parse_expression()
@@ -421,8 +495,8 @@ func _parse_when_equation() -> ASTNode:
 	
 	return node
 
-func _parse_if_equation() -> ASTNode:
-	var node = ASTNode.new(ASTNode.NodeType.IF_EQUATION)
+func _parse_if_equation() -> ModelicaASTNode:
+	var node = _create_node(NodeTypes.IF_EQUATION)
 	
 	# Parse condition
 	var condition = _parse_expression()
@@ -432,7 +506,7 @@ func _parse_if_equation() -> ASTNode:
 	_expect(LexicalAnalyzer.TokenType.KEYWORD, "then")
 	
 	# Parse then branch
-	var then_branch = ASTNode.new(ASTNode.NodeType.EQUATION)
+	var then_branch = _create_node(NodeTypes.EQUATION)
 	while current_token and not _is_if_terminator():
 		var equation = _parse_equation()
 		if equation:
@@ -441,7 +515,7 @@ func _parse_if_equation() -> ASTNode:
 	
 	# Handle elseif branches
 	while _match_keyword("elseif"):
-		var elseif = ASTNode.new(ASTNode.NodeType.IF_EQUATION)
+		var elseif = _create_node(NodeTypes.IF_EQUATION)
 		
 		# Parse condition
 		condition = _parse_expression()
@@ -460,7 +534,7 @@ func _parse_if_equation() -> ASTNode:
 	
 	# Handle else branch
 	if _match_keyword("else"):
-		var else_branch = ASTNode.new(ASTNode.NodeType.EQUATION)
+		var else_branch = _create_node(NodeTypes.EQUATION)
 		while current_token and not _is_if_terminator():
 			var equation = _parse_equation()
 			if equation:
@@ -473,8 +547,8 @@ func _parse_if_equation() -> ASTNode:
 	
 	return node
 
-func _parse_for_equation() -> ASTNode:
-	var node = ASTNode.new(ASTNode.NodeType.FOR_EQUATION)
+func _parse_for_equation() -> ModelicaASTNode:
+	var node = _create_node(NodeTypes.FOR_EQUATION)
 	
 	# Parse indices
 	var indices = _parse_for_indices()
@@ -493,8 +567,8 @@ func _parse_for_equation() -> ASTNode:
 	
 	return node
 
-func _parse_connect_equation() -> ASTNode:
-	var node = ASTNode.new(ASTNode.NodeType.CONNECT_EQUATION)
+func _parse_connect_equation() -> ModelicaASTNode:
+	var node = _create_node(NodeTypes.CONNECT_EQUATION)
 	
 	_expect(LexicalAnalyzer.TokenType.PUNCTUATION, "(")
 	

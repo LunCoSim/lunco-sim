@@ -3,6 +3,11 @@ class_name ModelicaTestParser
 extends SceneTree
 
 const ModelicaParser = preload("res://apps/modelica_godot/core/parser/modelica/modelica_parser.gd")
+const ModelicaLexer = preload("res://apps/modelica_godot/core/parser/modelica/modelica_lexer.gd")
+const BaseParser = preload("res://apps/modelica_godot/core/parser/base/syntax_parser.gd")
+const BaseLexer = preload("res://apps/modelica_godot/core/parser/base/lexical_analyzer.gd")
+const NodeTypes = preload("res://apps/modelica_godot/core/parser/ast/ast_node.gd").NodeType
+const ModelicaASTNodeClass = preload("res://apps/modelica_godot/core/parser/ast/ast_node.gd")
 
 var parser: ModelicaParser
 var tests_run := 0
@@ -26,19 +31,6 @@ func _run_all_tests() -> void:
     test_parse_model_with_when()
     test_parse_invalid_model()
     test_parse_empty_model()
-
-func _start_test(test_name: String) -> void:
-    current_test = test_name
-    tests_run += 1
-    print("\nRunning test: " + test_name)
-
-func _assert(condition: bool, message: String) -> void:
-    if condition:
-        tests_passed += 1
-        print("  ✓ " + message)
-    else:
-        print("  ✗ " + message)
-        push_error("Test failed: " + current_test + " - " + message)
 
 func assert_eq(a, b, message: String = ""):
     if a != b:
