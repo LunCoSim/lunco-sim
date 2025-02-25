@@ -2,27 +2,29 @@
 
 ## Overview
 
-LunSim is built using Godot 4 with GDScript, leveraging Godot's GraphEdit component for the node-based building system and incorporating a simplified Modelica-inspired simulation engine.
+LunSim is built using Godot 4.4 with GDScript, leveraging Godot's GraphElement component for the node-based building system and implementing a simplified simulation engine with a path toward potential Modelica integration in the future.
 
 ## Core Systems
 
 ### 1. Node-Based Building System
 
 **Core Classes:**
-- `BuildingNode`: Extends GraphNode, represents a building component
+- `BuildingNode`: Extends GraphElement, represents a building component
 - `ResourcePort`: Connection points for resource flows
 - `ConnectionManager`: Handles connection validation and creation
+- `VisualFeedback`: Provides visual feedback for connections and operations
 
 **Implementation:**
 ```gdscript
 # Example BuildingNode class
 class_name BuildingNode
-extends GraphNode
+extends GraphElement
 
 var inputs = {}
 var outputs = {}
 var properties = {}
 var simulation_data = {}
+var visual_effects = {}
 
 func _init():
     resizable = false
@@ -33,6 +35,9 @@ func setup_ports():
     
 func process_simulation(delta):
     # Process inputs, modify state, generate outputs
+    
+func update_visual_feedback():
+    # Update visual effects based on current state
 ```
 
 ### 2. Resource System
@@ -41,6 +46,7 @@ func process_simulation(delta):
 - `Resource`: Base class for all resources
 - `ResourceFlow`: Handles transfer between components
 - `ResourceContainer`: Manages resource storage
+- `ResourceEffects`: Manages visual representation of resources
 
 **Resource Types:**
 - Material resources (physical items)
@@ -51,34 +57,39 @@ func process_simulation(delta):
 
 **Components:**
 - `SimulationManager`: Controls time and simulation steps
-- `EquationSolver`: Simplified solver for component interactions
+- `SimpleSolver`: Handles basic resource transfers and transformations
 - `StateTracker`: Maintains and updates system state
+- `FeedbackSystem`: Provides gameplay feedback on simulation
 
 **Simulation Loop:**
 1. Update inputs for all components
-2. Solve equations for current state
+2. Process component logic with simple equations
 3. Update outputs and flows
-4. Advance simulation time
+4. Generate visual and audio feedback
+5. Advance simulation time
 
 ### 4. User Interface
 
 **Main Elements:**
-- `BuildingEditor`: Main GraphEdit-based building interface
+- `BuildingEditor`: Main GraphElement-based building interface
 - `ComponentPalette`: Available components for placement
 - `ResourceMonitor`: Displays resource levels and flows
 - `TimeControls`: Controls for simulation speed
+- `FeedbackPanel`: Provides gameplay guidance and feedback
 
-### 5. Modelica Integration (Future)
+### 5. Future Extensibility for Modelica
 
-**Simplified Phase:**
-- Basic equation-based components
-- Simplified solvers for component interactions
-- Limited variable types and connections
+**Initial Architecture Considerations:**
+- Use abstract interfaces for simulation components
+- Implement a plugin system for simulation solvers
+- Design resource system to be compatible with equation-based modeling
+- Document connection points and interfaces for future integration
 
-**Advanced Phase:**
-- Full Modelica parser integration
-- Differential equation solver
-- Modelica Standard Library compatibility
+**Integration Path:**
+1. Start with simple GDScript simulations
+2. Add more complex equation-based models still in GDScript
+3. Implement native module interfaces (optional future step)
+4. Add Modelica parser and integration (optional future step)
 
 ## Data Flow
 
@@ -89,6 +100,12 @@ func process_simulation(delta):
 │  - Input        │    │  - Simulation   │    │  - Rendering    │
 │  - Controls     │───►│  - State        │───►│  - Feedback     │
 └─────────────────┘    └─────────────────┘    └─────────────────┘
+                                 ▲
+                        ┌────────┴────────┐
+                        │ Gameplay Systems│
+                        │ - Progression   │
+                        │ - Challenges    │
+                        └─────────────────┘
 ```
 
 ## File Structure
@@ -98,12 +115,18 @@ func process_simulation(delta):
   /main.tscn            # Main game scene
   /building_editor.tscn # Node editing interface
   /simulation_view.tscn # Simulation visualization
+  /ui/                  # UI scenes
+    /component_palette.tscn
+    /resource_monitor.tscn
+    /feedback_panel.tscn
 
 /scripts
   /core                 # Core simulation systems
     /simulation.gd      # Simulation manager
     /resource.gd        # Resource base class
-    /equation_solver.gd # Simplified equation solver
+    /simple_solver.gd   # Simple equation solver
+    /gameplay.gd        # Gameplay systems manager
+    /recording.gd       # Gameplay recording system
   
   /components           # Building components
     /base_component.gd  # Base component class
@@ -116,35 +139,41 @@ func process_simulation(delta):
     /component_palette.gd
     /resource_monitor.gd
     /time_controls.gd
+    /visual_effects.gd  # Visual effects manager
 
 /resources              # Game resources
   /components/          # Component definitions
   /icons/               # UI icons
   /themes/              # UI themes
+  /effects/             # Visual and audio effects
+  /tutorials/           # Tutorial resources
 ```
 
 ## Initial Implementation Steps
 
-1. Create base component system with GraphEdit
-2. Implement resource flow visualization
-3. Add simple simulation loop with basic equation solving
+1. Create base component system with GraphElement
+2. Implement resource flow with visual feedback
+3. Add simple simulation loop with basic resource transformations
 4. Create initial set of power and life support components
-5. Implement time controls and basic UI
-6. Add resource tracking and monitoring
-7. Create sandbox mode for free building
+5. Implement time controls and engaging UI with feedback
+6. Add resource tracking and monitoring with visual feedback
+7. Create sandbox mode for free building and experimentation
+8. Implement gameplay recording for validation and sharing
 
 ## Performance Considerations
 
 - Use Godot's signal system for loose coupling
 - Optimize simulation updates for larger colonies
 - Implement component update priority for critical systems
-- Consider threading for complex equation solving (future)
+- Use visual instancing for resource flows
+- Consider simpler models for mobile platforms
 
 ## Future Technical Expansions
 
-- Full Modelica language support
-- Differential equation solvers
+- More complex equation systems (still in GDScript)
+- Optional native modules for performance-critical code
+- Optional Modelica integration (long-term)
 - Multiplayer colony sharing
 - Advanced visualization modes (thermal, power, etc.)
 - Serialization for colony sharing
-- Mobile platform considerations 
+- Mobile-friendly UI mode 
