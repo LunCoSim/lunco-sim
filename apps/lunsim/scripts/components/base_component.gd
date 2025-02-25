@@ -118,6 +118,65 @@ func _get_slot_color(resource_type: int) -> Color:
 		_:
 			return Color(0.7, 0.7, 0.7)  # Gray for unknown
 
+# Add helpful tooltip text to explain component functionality
+func set_component_tooltip(text: String):
+	tooltip_text = text
+	
+# Add resource type labels to slots to make connections clearer
+func add_slot_labels(container: Control, input_types: Array = [], output_types: Array = []):
+	# Create a horizontal container for input and output labels
+	var hbox = HBoxContainer.new()
+	hbox.size_flags_horizontal = Control.SIZE_FILL
+	container.add_child(hbox)
+	
+	# Left side for inputs
+	var left_vbox = VBoxContainer.new()
+	left_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	hbox.add_child(left_vbox)
+	
+	# Add input labels
+	for type in input_types:
+		var label = Label.new()
+		label.text = _get_resource_name(type) + " ◄"
+		label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+		left_vbox.add_child(label)
+	
+	# Spacer in the middle
+	var spacer = Control.new()
+	spacer.custom_minimum_size = Vector2(20, 0)
+	hbox.add_child(spacer)
+	
+	# Right side for outputs
+	var right_vbox = VBoxContainer.new()
+	right_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	hbox.add_child(right_vbox)
+	
+	# Add output labels
+	for type in output_types:
+		var label = Label.new()
+		label.text = "► " + _get_resource_name(type)
+		label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		right_vbox.add_child(label)
+
+# Get human-readable resource name
+func _get_resource_name(resource_type: int) -> String:
+	match resource_type:
+		ResourceType.ELECTRICITY:
+			return "Power"
+		ResourceType.OXYGEN:
+			return "Oxygen"
+		ResourceType.WATER:
+			return "Water"
+		_:
+			return "Unknown"
+
+# Visual indication of component status
+func update_component_status_color(is_active: bool):
+	if is_active:
+		self.modulate = Color(1, 1, 1)  # Normal color when active
+	else:
+		self.modulate = Color(0.7, 0.7, 0.7)  # Grayed out when inactive
+
 func _handle_resource_transfers(delta: float):
 	# Transfer resources through connections
 	# This is a simplified version - in a real simulation this would be more complex

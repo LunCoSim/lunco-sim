@@ -1,5 +1,5 @@
 @tool
-extends BaseComponent
+extends "res://apps/lunsim/scripts/components/base_component.gd"
 
 class_name SolarPanel
 
@@ -43,6 +43,12 @@ func setup_component():
 	label.text = "Status: Idle"
 	vbox.add_child(label)
 	
+	# Add day/night indicator
+	var daynight_label = Label.new()
+	daynight_label.name = "DayNightLabel"
+	daynight_label.text = "Day/Night: Day"
+	vbox.add_child(daynight_label)
+	
 	var progress = ProgressBar.new()
 	progress.name = "ElectricityBar"
 	progress.max_value = max_electricity
@@ -59,6 +65,9 @@ func setup_component():
 	info_label.name = "InfoLabel"
 	info_label.text = "Output: 0.0 kW"
 	vbox.add_child(info_label)
+	
+	# Add tooltip explaining the component
+	set_component_tooltip("Solar Panel: Generates electricity during daylight hours.\nConnect to a Battery to store energy for night time.")
 
 func _setup_slots():
 	# Solar panels have no inputs, only outputs
@@ -99,9 +108,19 @@ func _update_display():
 		else:
 			status_label.text = "Status: Night (Idle)"
 	
+	var daynight_label = get_node_or_null("DayNightLabel")
+	if daynight_label:
+		if current_irradiance > 0:
+			daynight_label.text = "Day/Night: Day ☀️"
+		else:
+			daynight_label.text = "Day/Night: Night 🌙"
+	
 	var info_label = get_node_or_null("InfoLabel")
 	if info_label:
 		info_label.text = "Output: %.1f kW" % electricity_production_rate
+	
+	# Update visual appearance based on active state
+	update_component_status_color(current_irradiance > 0)
 
 func _get_resource_type_from_port(port_index: int) -> int:
 	return ResourceType.ELECTRICITY 
