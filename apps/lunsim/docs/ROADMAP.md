@@ -1,33 +1,61 @@
 # LunSim Development Roadmap
 
-This document outlines the phased development approach for the LunSim project, starting with a minimal viable product and progressively adding features.
+This document outlines the phased development approach for the LunSim project, starting with a focused Proof of Concept and progressively adding features.
 
-## Phase 1: Foundation (MVP)
+## Phase 0: Proof of Concept (POC)
 
-**Goal**: Create a functioning node-based building system with basic Godot-native simulation
+**Goal**: Create a minimal but functional implementation demonstrating the core concepts
 
 ### Core Features
-- [x] Project structure and documentation
-- [ ] GraphElement-based building interface (Godot 4.4)
-- [ ] Basic component system (nodes, connections)
-- [ ] Simple resource system using Godot native implementation
-- [ ] Basic simulation loop with engaging feedback
-- [ ] Essential UI elements with focus on user experience
-- [ ] Gameplay recording capability for validation and sharing
+- [ ] Project structure and documentation
+- [ ] GraphElement-based building interface with Godot 4.4
+- [ ] Simple resource system with 3-4 resource types
+- [ ] Basic component system with inputs/outputs
+- [ ] Connection system for resource flows
+- [ ] Minimal simulation loop using `_physics_process`
+- [ ] Basic visualization of resource flows
 
-### Components
-- [ ] Solar panel
-- [ ] Battery
-- [ ] Habitat module
-- [ ] Oxygen generator
-- [ ] Simple resource visualization
-- [ ] Visual effects for resource flows
+### Components for POC
+- [ ] Solar panel (produces electricity)
+- [ ] Battery (stores electricity)
+- [ ] Habitat (consumes electricity, oxygen, water)
+- [ ] Simple resource visualizations
 
 ### Release Target
-- Functional prototype demonstrating basic resource flows
-- Simple scenarios to test component connections
-- Basic UI for building and monitoring
-- Playable demo that's fun even with simple mechanics
+- Working demonstration of:
+  - Component placement
+  - Creating connections
+  - Resource production and consumption
+  - Visual feedback of flows
+
+### Timeline: 2-4 weeks
+
+## Phase 1: MVP Enhancement
+
+**Goal**: Expand the POC into a more complete gameplay experience
+
+### Core Features
+- [ ] Enhanced resource system with resource manager
+- [ ] Extended component base with state management
+- [ ] More component types and interactions
+- [ ] Basic UI for building and monitoring
+- [ ] Simple lunar day/night cycle
+- [ ] Component property editing
+- [ ] Basic save/load functionality
+
+### Components
+- [ ] Complete power system (RTG, distribution)
+- [ ] Basic life support system
+- [ ] Resource extraction (regolith, water)
+- [ ] Storage components
+- [ ] Visual and audio feedback for gameplay satisfaction
+
+### Release Target
+- Playable sandbox mode
+- Simple balancing of resources
+- Early playtesting framework
+
+### Timeline: 1-2 months after POC
 
 ## Phase 2: Gameplay Foundation
 
@@ -55,6 +83,8 @@ This document outlines the phased development approach for the LunSim project, s
 - Basic challenge scenarios
 - Gameplay video demonstration
 
+### Timeline: 2-3 months after Phase 1
+
 ## Phase 3: Enhanced Simulation
 
 **Goal**: Enhance simulation depth while maintaining engaging gameplay
@@ -78,6 +108,8 @@ This document outlines the phased development approach for the LunSim project, s
 - Component creation documentation
 - Extended scenario set
 - Gameplay tutorials
+
+### Timeline: 3-4 months after Phase 2
 
 ## Phase 4: Full Game Experience
 
@@ -103,6 +135,8 @@ This document outlines the phased development approach for the LunSim project, s
 - Challenge mode
 - Community content hub
 
+### Timeline: 4-5 months after Phase 3
+
 ## Phase 5: Modelica Integration (Optional Long-term)
 
 **Goal**: Add Modelica integration without disrupting existing gameplay
@@ -125,52 +159,63 @@ This document outlines the phased development approach for the LunSim project, s
 - Documentation for Modelica integration
 - Educational materials
 
+### Timeline: TBD (long-term goal)
+
 ## Implementation Priorities
 
 For each phase, development will follow this sequence:
 
-1. **Core Framework & Gameplay Loop**
+1. **Core Framework**
    - Essential systems implementation
-   - Focus on fun first, complexity later
-   - Early playability testing
+   - Focus on functionality first
 
 2. **Component Development**
-   - Building blocks implementation
+   - Basic building blocks
    - Resource flow testing
-   - Visual feedback
 
 3. **User Interface**
-   - Controls and visualization
-   - User feedback systems
-   - Accessibility considerations
+   - Controls for interaction
+   - Visualization of states
 
-4. **Content Creation**
-   - Scenarios and challenges
-   - Balancing and tuning
-   - Story elements
-
-5. **Polish & Optimization**
-   - Performance tuning
+4. **Testing & Refinement**
+   - Gameplay testing
+   - Performance optimization
    - Bug fixing
-   - User experience improvements
-   - Gameplay video creation
+
+## POC Milestone Checklist
+
+The POC will be considered complete when:
+
+1. [ ] Basic component system works with GraphElement
+2. [ ] Resources can flow between components
+3. [ ] Simple simulation updates resource values
+4. [ ] Components can be placed and connected visually
+5. [ ] Resource flows have basic visualization
+6. [ ] A small working lunar base can be created
+
+## Development Approach
+
+- Start with minimal implementation that demonstrates core concepts
+- Make one system work completely before adding complexity
+- Implement features in small, testable increments
+- Focus on creating a solid foundation before adding advanced features
+- Use object-oriented design for clear extension points
 
 ## Timeline Estimates
 
-- **Phase 1**: 2-3 months
-- **Phase 2**: 3-4 months
-- **Phase 3**: 4-5 months
-- **Phase 4**: 5-6 months
-- **Phase 5**: Optional long-term goal (timeline TBD)
+- **Phase 0**: 2-4 weeks
+- **Phase 1**: 1-2 months
+- **Phase 2**: 2-3 months
+- **Phase 3**: 3-4 months
+- **Phase 4**: 4-5 months
+- **Phase 5**: TBD (long-term)
 
 ## Milestone Evaluation Criteria
 
 Each phase will be considered complete when:
 
 1. All listed features are implemented
-2. Gameplay is engaging and fun
-3. Testing shows stability and performance targets are met
-4. User feedback has been incorporated
-5. Documentation is complete
-6. Gameplay videos demonstrate core mechanics
-7. The release target is ready for distribution 
+2. Testing shows stability and performance targets are met
+3. User feedback has been incorporated
+4. Documentation is complete
+5. The release target is ready for distribution 

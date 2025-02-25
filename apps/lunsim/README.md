@@ -6,30 +6,38 @@ A game-first approach to lunar colony simulation built with Godot 4.4 and GDScri
 
 LunSim combines engaging gameplay mechanics inspired by factory-building games like Factorio with an intuitive node-based building system. Build, manage, and optimize a sustainable lunar colony while learning about the challenges of extraterrestrial habitation.
 
+## Development Strategy
+
+We're using a phased approach, starting with a focused Proof of Concept:
+
+1. **POC Phase (Current)**: Create a minimal functioning prototype demonstrating core mechanics
+2. **MVP Phase**: Expand to a fuller gameplay experience with more components
+3. **Feature Expansion**: Progressively add depth and complexity
+4. **Full Experience**: Complete game with campaign, challenges, and comprehensive systems
+
 ## Core Philosophy
 
 - **Game-First Experience**: We focus on creating fun, engaging gameplay before adding simulation complexity
 - **Visual Feedback**: All actions provide immediate, satisfying visual and audio feedback
 - **Progressive Complexity**: Start simple and gradually unlock more challenging systems
 - **Intuitive Building**: Using Godot 4.4's GraphElement for a smooth building experience
-- **Early Validation**: Gameplay recording and validation ensure mechanics are enjoyable
+- **Early Validation**: Gameplay testing ensures mechanics are enjoyable
 
-## Core Features
+## Current Focus (POC)
 
-- **Resource Chains**: Manage interconnected systems for oxygen, water, power, food, and materials
-- **Visual Building Interface**: Build your colony using an intuitive node-based system
-- **Lunar Environment**: Deal with the unique challenges of the lunar surface
-- **Engaging Feedback**: Satisfying visual and audio feedback for all player actions
-- **Gameplay Recording**: Built-in system to record and share colony development
+- **Basic Building System**: Place and connect simple components
+- **Resource Flows**: Visualize electricity, oxygen, and water moving between components
+- **Core Components**: Solar panels, batteries, and habitat modules
+- **Simple Simulation**: Resource production, storage, and consumption
 
-## Development Approach
+## Implementation Plan
 
-1. Start with fun, engaging gameplay
-2. Add visual and audio feedback for all actions
-3. Validate core mechanics through gameplay recordings
-4. Build from simple working systems to more complex ones
-5. Add simulation depth while maintaining engagement
-6. Consider optional Modelica integration as a long-term goal
+1. Create core component framework with GraphElement
+2. Implement basic resource system
+3. Add connection functionality
+4. Create visual feedback for resource flows
+5. Implement simple time controls
+6. Balance initial components for demonstration
 
 ## Documentation
 
@@ -43,7 +51,11 @@ LunSim combines engaging gameplay mechanics inspired by factory-building games l
 
 ## Getting Started
 
-*Instructions for setup and running will be added as development progresses*
+*Detailed instructions for setup and running will be provided once POC is completed*
+
+## Contributing
+
+We welcome contributions! Please refer to our development strategy and focus on the current POC priorities.
 
 ## License
 
