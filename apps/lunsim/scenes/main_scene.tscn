@@ -1,0 +1,130 @@
+[gd_scene load_steps=2 format=3 uid="uid://chj4g5yo8uqc6"]
+
+[ext_resource type="Script" uid="uid://xnr6aba2kkkb" path="res://apps/lunsim/scripts/core/simulator.gd" id="1_4qogp"]
+
+[node name="LunarColonySimulator" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_4qogp")
+
+[node name="SimulationArea" type="GraphEdit" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+right_disconnects = true
+zoom_min = 0.5
+zoom_max = 2.0
+
+[node name="UI" type="Control" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+
+[node name="ComponentPanel" type="Panel" parent="UI"]
+layout_mode = 1
+anchors_preset = 11
+anchor_left = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = -200.0
+grow_horizontal = 0
+grow_vertical = 2
+
+[node name="VBoxContainer" type="VBoxContainer" parent="UI/ComponentPanel"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Label" type="Label" parent="UI/ComponentPanel/VBoxContainer"]
+layout_mode = 2
+text = "Components"
+horizontal_alignment = 1
+
+[node name="ScrollContainer" type="ScrollContainer" parent="UI/ComponentPanel/VBoxContainer"]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="ComponentList" type="VBoxContainer" parent="UI/ComponentPanel/VBoxContainer/ScrollContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+
+[node name="TimeControls" type="Panel" parent="UI"]
+layout_mode = 1
+anchors_preset = 12
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_top = -60.0
+offset_right = -200.0
+grow_horizontal = 2
+grow_vertical = 0
+
+[node name="HBoxContainer" type="HBoxContainer" parent="UI/TimeControls"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+alignment = 1
+
+[node name="PauseButton" type="Button" parent="UI/TimeControls/HBoxContainer"]
+layout_mode = 2
+text = "Pause"
+
+[node name="NormalSpeedButton" type="Button" parent="UI/TimeControls/HBoxContainer"]
+layout_mode = 2
+text = "1x"
+
+[node name="FastSpeedButton" type="Button" parent="UI/TimeControls/HBoxContainer"]
+layout_mode = 2
+text = "2x"
+
+[node name="VeryFastSpeedButton" type="Button" parent="UI/TimeControls/HBoxContainer"]
+layout_mode = 2
+text = "5x"
+
+[node name="ResourceDisplay" type="Panel" parent="UI"]
+layout_mode = 0
+offset_right = 200.0
+offset_bottom = 100.0
+
+[node name="VBoxContainer" type="VBoxContainer" parent="UI/ResourceDisplay"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Label" type="Label" parent="UI/ResourceDisplay/VBoxContainer"]
+layout_mode = 2
+text = "Resources"
+horizontal_alignment = 1
+
+[node name="ElectricityLabel" type="Label" parent="UI/ResourceDisplay/VBoxContainer"]
+layout_mode = 2
+text = "Electricity: 0 kW"
+
+[node name="OxygenLabel" type="Label" parent="UI/ResourceDisplay/VBoxContainer"]
+layout_mode = 2
+text = "Oxygen: 0 m³"
+
+[node name="WaterLabel" type="Label" parent="UI/ResourceDisplay/VBoxContainer"]
+layout_mode = 2
+text = "Water: 0 L"

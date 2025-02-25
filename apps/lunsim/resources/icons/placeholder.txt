@@ -1,0 +1,10 @@
+This directory contains placeholder icons for the lunar colony simulator components.
+
+In a full implementation, this folder would contain the following image files:
+- solar_panel_icon.png
+- battery_icon.png
+- habitat_icon.png
+- oxygen_generator_icon.png
+- water_recycler_icon.png
+
+For the current POC, the components will fall back to using emoji as placeholders when the image files are not found. 

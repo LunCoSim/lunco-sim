@@ -12,7 +12,7 @@ config_version=5
 
 config/name="LunCo"
 config/version="0.4.3"
-run/main_scene="uid://b8r6g3rgfmqxv"
+run/main_scene="res://apps/lunsim/scenes/main_scene.tscn"
 config/features=PackedStringArray("4.4", "GL Compatibility")
 boot_splash/bg_color=Color(0, 0, 0, 1)
 boot_splash/image="res://assets/logos/splash.png"
