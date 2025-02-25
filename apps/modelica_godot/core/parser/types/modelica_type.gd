@@ -42,52 +42,15 @@ var is_discrete: bool = false
 var has_default: bool = false
 var default_value = null
 
-static var _builtin_types: Dictionary = {}
-
+# Static method to get built-in type - forwards to ModelicaBuiltinTypes
 static func get_builtin_type(name: String) -> ModelicaTypeClass:
-	if _builtin_types.is_empty():
-		_init_builtin_types()
-	return _builtin_types.get(name)
+	const BuiltinTypes = preload("res://apps/modelica_godot/core/parser/types/modelica_builtin_types.gd")
+	return BuiltinTypes.get_type(name)
 
-static func _init_builtin_types() -> void:
-	# Create basic types
-	var real = ModelicaTypeClass.new()
-	real.kind = TypeKind.BUILTIN
-	real.name = "Real"
-	real.has_default = true
-	real.default_value = 0.0
-	_builtin_types["Real"] = real
-	
-	var integer = ModelicaTypeClass.new()
-	integer.kind = TypeKind.BUILTIN
-	integer.name = "Integer"
-	integer.is_discrete = true
-	integer.has_default = true
-	integer.default_value = 0
-	_builtin_types["Integer"] = integer
-	
-	var boolean = ModelicaTypeClass.new()
-	boolean.kind = TypeKind.BUILTIN
-	boolean.name = "Boolean"
-	boolean.is_discrete = true
-	boolean.has_default = true
-	boolean.default_value = false
-	_builtin_types["Boolean"] = boolean
-	
-	var string = ModelicaTypeClass.new()
-	string.kind = TypeKind.BUILTIN
-	string.name = "String"
-	string.has_default = true
-	string.default_value = ""
-	_builtin_types["String"] = string
-
+# Static method to create array type - forwards to ModelicaBuiltinTypes
 static func create_array_type(element_type: ModelicaTypeClass, dimensions: Array) -> ModelicaTypeClass:
-	var array_type = ModelicaTypeClass.new()
-	array_type.kind = TypeKind.ARRAY
-	array_type.name = element_type.name + "[]"
-	array_type.element_type = element_type
-	array_type.dimensions = dimensions
-	return array_type
+	const BuiltinTypes = preload("res://apps/modelica_godot/core/parser/types/modelica_builtin_types.gd")
+	return BuiltinTypes.create_array_type(element_type, dimensions)
 
 func is_numeric() -> bool:
 	return name in ["Real", "Integer"]

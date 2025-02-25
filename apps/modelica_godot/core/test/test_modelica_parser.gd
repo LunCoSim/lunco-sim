@@ -5,8 +5,8 @@ const ModelicaParser = preload("res://apps/modelica_godot/core/parser/modelica/m
 const ModelicaLexer = preload("res://apps/modelica_godot/core/parser/modelica/modelica_lexer.gd")
 const BaseParser = preload("res://apps/modelica_godot/core/parser/base/syntax_parser.gd")
 const BaseLexer = preload("res://apps/modelica_godot/core/parser/base/lexical_analyzer.gd")
-const NodeTypes = preload("res://apps/modelica_godot/core/parser/ast/ast_node.gd").NodeType
-const ModelicaASTNodeClass = preload("res://apps/modelica_godot/core/parser/ast/ast_node.gd")
+const ModelicaASTNode = preload("res://apps/modelica_godot/core/parser/ast/ast_node.gd")
+const NodeTypes = ModelicaASTNode.NodeType
 const ModelicaTypeClass = preload("res://apps/modelica_godot/core/parser/types/modelica_type.gd")
 
 var parser: ModelicaParser
@@ -81,8 +81,8 @@ func assert_no_errors(node: ModelicaASTNode, message: String = "") -> bool:
 		return false
 	return assert_true(true, message + " (no errors check)")
 
-func find_child_by_type(node: ModelicaASTNode, type: int) -> Array[ModelicaASTNode]:
-	var result: Array[ModelicaASTNode] = []
+func find_child_by_type(node: ModelicaASTNode, type: int) -> Array:
+	var result: Array = []
 	for child in node.children:
 		if child.type == type:
 			result.append(child)
