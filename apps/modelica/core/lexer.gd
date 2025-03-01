@@ -60,6 +60,13 @@ const EQUATION_KEYWORDS: Array[String] = [
 	"reinit", "delay", "cardinality", "and", "or", "not"
 ]
 
+# Unified operator list containing all operators from both modes
+const ALL_OPERATORS: Array[String] = [
+	"+", "-", "*", "/", "^", "=", "<", ">", "<=", ">=", "==", "<>",
+	":=", ".", ",", ";", "(", ")", "[", "]", "{", "}", ":", "..",
+	"and", "or", "not"
+]
+
 const MODELICA_OPERATORS: Array[String] = [
 	"+", "-", "*", "/", "^", "=", "<", ">", "<=", ">=", "==", "<>",
 	":=", ".", ",", ";", "(", ")", "[", "]", "{", "}", ":", ".."
@@ -83,13 +90,14 @@ var _mode: int = LexerMode.BASIC
 # Initialize the lexer with optional mode
 func _init(mode: int = LexerMode.BASIC) -> void:
 	_mode = mode
+	# Always use the unified operator list
+	_operators = ALL_OPERATORS
+	
 	match mode:
 		LexerMode.MODELICA:
 			set_keywords(MODELICA_KEYWORDS)
-			_operators = MODELICA_OPERATORS
 		LexerMode.EQUATION:
 			set_keywords(EQUATION_KEYWORDS)
-			_operators = EQUATION_OPERATORS
 
 # Create specific lexer instances
 static func create_modelica_lexer() -> LexicalAnalyzer:
@@ -260,6 +268,10 @@ func _handle_identifier() -> Token:
 		_position += 1
 		_column += 1
 	
+	# Special handling for logical operators in equation mode
+	if _mode == LexerMode.EQUATION and value in ["and", "or", "not"]:
+		return Token.new(TokenType.OPERATOR, value, _line, start_col, start_pos)
+	
 	# Check if it's a keyword
 	if value in _keywords:
 		return Token.new(TokenType.KEYWORD, value, _line, start_col, start_pos)
@@ -350,19 +362,16 @@ func _handle_operator() -> Token:
 	if two_char in ["<=", ">=", "==", "<>", ":=", ".."]:
 		_position += 2
 		_column += 2
-		var type = TokenType.OPERATOR if _mode == LexerMode.EQUATION else TokenType.PUNCTUATION
-		return Token.new(type, two_char, _line, start_col, start_pos)
+		# Always use OPERATOR type for operators
+		return Token.new(TokenType.OPERATOR, two_char, _line, start_col, start_pos)
 	
 	# Handle single-character operators
 	_position += 1
 	_column += 1
 	
-	var type
-	if _mode == LexerMode.EQUATION and c in EQUATION_OPERATORS:
+	var type = TokenType.PUNCTUATION
+	# Check if it's in our unified operator list
+	if c in _operators:
 		type = TokenType.OPERATOR
-	elif _mode == LexerMode.MODELICA and c in MODELICA_OPERATORS:
-		type = TokenType.PUNCTUATION  # Modelica treats these as punctuation
-	else:
-		type = TokenType.PUNCTUATION
 	
 	return Token.new(type, c, _line, start_col, start_pos) 
