@@ -1,6 +1,6 @@
-extends BaseTest
+extends "../../core/testing/base_test.gd"
 
-const ModelicaLexer = preload("res://apps/modelica/core/lexer.gd")
+const ModelicaLexer = preload("../../core/lexer.gd")
 
 var lexer: ModelicaLexer
 

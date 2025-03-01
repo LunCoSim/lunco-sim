@@ -1,7 +1,7 @@
-extends BaseTest
+extends "../../core/testing/base_test.gd"
 
-const Parser = preload("res://apps/modelica/core/parser.gd")
-const ASTNode = preload("res://apps/modelica/core/ast_node.gd")
+const Parser = preload("../../core/parser.gd")
+const ASTNode = preload("../../core/ast_node.gd")
 
 var parser: Parser
 

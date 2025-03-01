@@ -1,8 +1,8 @@
-extends BaseTest
+extends "../../core/testing/base_test.gd"
 
-const Parser = preload("res://apps/modelica/core/parser.gd")
-const ASTNode = preload("res://apps/modelica/core/ast_node.gd")
-const DAESolver = preload("res://apps/modelica/core/solver.gd")
+const Parser = preload("../../core/parser.gd")
+const ASTNode = preload("../../core/ast_node.gd")
+const DAESolver = preload("../../core/solver.gd")
 
 var parser: Parser
 var solver: DAESolver
@@ -70,7 +70,6 @@ func test_simple_mass_spring_model():
 			"x": solver.get_variable_value("x"),
 			"v": solver.get_variable_value("v")
 		})
-	}
 	
 	# Check results against analytical solution for spring-mass system
 	# x(t) = x0 * cos(ω * t), where ω = sqrt(k/m)
@@ -83,7 +82,6 @@ func test_simple_mass_spring_model():
 		
 		# Allow some error due to numerical integration
 		assert_almost_equal(x_val, expected_x, 0.1, "Position should match analytical solution at t=" + str(t_val))
-	}
 
 # Helper to create a solver from a model AST
 func setup_equation_system(ast: ASTNode) -> DAESolver:

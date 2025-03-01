@@ -1,7 +1,7 @@
 class_name TestRunner
 extends Node
 
-const BaseTest = preload("res://apps/modelica/core/testing/base_test.gd")
+const BaseTest = preload("res://core/testing/base_test.gd")
 
 # Statistics across all test suites
 var total_test_suites: int = 0
@@ -18,7 +18,7 @@ func _init():
 	pass
 
 # Run all tests in the given directories
-func run_tests(test_dirs: Array = ["res://apps/modelica/tests"]) -> int:
+func run_tests(test_dirs: Array = ["res://tests"]) -> int:
 	print("\n===== MODELICA TEST RUNNER =====\n")
 	print("Discovering tests...")
 	
@@ -60,8 +60,10 @@ func discover_tests(dir_path: String):
 				var script = load(script_path)
 				
 				# Check if it's a valid test script (extends BaseTest)
-				if script and script.new() is BaseTest:
-					test_suites.append(script)
+				if script:
+					var instance = script.new()
+					if is_instance_of(instance, BaseTest):
+						test_suites.append(script)
 		
 		file_name = dir.get_next()
 	
@@ -86,6 +88,10 @@ func run_test_suite(test_script):
 	
 	print("\n")
 
+# Check if an object is an instance of a specific class
+func is_instance_of(obj, cls) -> bool:
+	return obj is Object and obj.get_script() == cls or obj.get_script().get_base_script() == cls
+
 # Print summary of all test results
 func print_summary():
 	print("===== TEST SUMMARY =====")
@@ -104,4 +110,4 @@ func print_summary():
 # Entry point when run directly
 func _run():
 	var exit_code = run_tests()
-	OS.exit(exit_code) 
+	get_tree().quit(exit_code) 

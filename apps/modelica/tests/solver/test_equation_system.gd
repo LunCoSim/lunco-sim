@@ -1,6 +1,6 @@
-extends BaseTest
+extends "../../core/testing/base_test.gd"
 
-const DAESolver = preload("res://apps/modelica/core/solver.gd")
+const DAESolver = preload("../../core/solver.gd")
 
 var solver: DAESolver
 
