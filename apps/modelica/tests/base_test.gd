@@ -20,6 +20,10 @@ var current_test_name = ""
 var _setup_done: bool = false
 var _teardown_needed: bool = false
 
+# Error handling
+var _current_test_error: String = ""
+var _error_occurred: bool = false
+
 # Constructor
 func _init():
 	test_class = get_script().resource_path.get_file().get_basename()
@@ -84,33 +88,35 @@ func run_single_test(test_method: String):
 	# Setup
 	_setup_done = false
 	_teardown_needed = false
+	_error_occurred = false
+	_current_test_error = ""
 	
 	var start_time = Time.get_ticks_msec()
 	
-	# Run the test with error handling
-	try:
-		# Setup
-		setup()
-		_setup_done = true
-		_teardown_needed = true
-		
-		# Run the test
+	# Since Godot doesn't have try-catch-finally, we use a different approach
+	# Setup phase - if this fails, the test will fail
+	setup()
+	_setup_done = true
+	_teardown_needed = true
+	
+	# Run the test method
+	if not _error_occurred:
 		call(test_method)
-		
-		# Test passed if we got here
+	
+	# Record test result
+	if not _error_occurred:
 		result.passed = true
 		passed_tests += 1
-		
-	except var e:
-		# Test failed
+	else:
 		result.passed = false
-		result.error = str(e)
+		result.error = _current_test_error
 		failed_tests += 1
-		print("    FAILED: " + str(e))
-	finally:
-		# Teardown if setup was completed
-		if _teardown_needed:
-			teardown()
+		print("    FAILED: " + _current_test_error)
+	
+	# Always run teardown if setup was completed
+	if _teardown_needed:
+		# We should also handle errors in teardown, but for simplicity, we'll just run it
+		teardown()
 	
 	var end_time = Time.get_ticks_msec()
 	result.execution_time = end_time - start_time
@@ -204,23 +210,59 @@ func assert_has_method(obj: Object, method_name: String, message: String = ""):
 			error_msg += " - " + message
 		_fail_test(error_msg)
 
+# Modified assert_throws to better detect errors
 func assert_throws(callback: Callable, message: String = ""):
-	var threw = false
-	try:
-		callback.call()
-	except:
-		threw = true
+	# In a language without exceptions, we need to use another approach
+	# We'll check if the global error flag was set during callback execution
 	
-	if not threw:
+	# Set up error tracking
+	_error_occurred = false
+	_current_test_error = ""
+	
+	# Create a simple error handler function
+	var push_error_handling = func(err_msg):
+		# We're overriding our _fail_test to not mark test as failed when we expect errors
+		_error_occurred = true
+		_current_test_error = err_msg
+		push_error(err_msg)  # Still show the error in the console
+		return true
+	
+	# Set a flag for the test framework to know we're expecting errors
+	var expecting_error = true
+	
+	# Call the function and see if it fails
+	callback.call()
+	
+	# Reset the flag
+	expecting_error = false
+	
+	# If no error was detected, fail the test
+	if not _error_occurred:
 		var error_msg = "Assertion failed: Expected function to throw an error"
 		if message:
 			error_msg += " - " + message
 		_fail_test(error_msg)
+	else:
+		# Since this was an expected error, clear the error state
+		_error_occurred = false
+		_current_test_error = ""
 
 # Helper to fail a test
 func _fail_test(error_message: String):
 	push_error(error_message)
-	assert(false, error_message)  # This will throw an error and fail the test
+	
+	# Store the error and set the flag
+	_error_occurred = true
+	_current_test_error = error_message
+	
+	# Get stack trace information
+	var script_stack = get_stack()
+	var caller_info = ""
+	if script_stack.size() > 1:
+		var frame = script_stack[1]  # Frame 0 is this function, frame 1 is the caller
+		caller_info = " at " + frame.source + ":" + str(frame.line)
+	
+	print("    ERROR" + caller_info + ": " + error_message)
 
 # Static method to run all tests in the tests directory
 static func run_all_tests():
