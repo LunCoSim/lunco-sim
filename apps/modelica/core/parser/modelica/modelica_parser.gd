@@ -2,8 +2,8 @@
 extends SyntaxParser
 class_name ModelicaParser
 
-const NodeTypes = preload("res://apps/modelica_godot/core/parser/ast/ast_node.gd").NodeType
-const ModelicaTypeClass = preload("res://apps/modelica_godot/core/parser/types/modelica_type.gd")
+const NodeTypes = preload("res://apps/modelica/core/parser/ast/ast_node.gd").NodeType
+const ModelicaTypeClass = preload("res://apps/modelica/core/parser/types/modelica_type.gd")
 
 func _init() -> void:
 	super._init(ModelicaLexer.new())

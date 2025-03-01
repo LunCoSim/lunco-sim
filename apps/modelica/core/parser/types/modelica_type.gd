@@ -44,12 +44,12 @@ var default_value = null
 
 # Static method to get built-in type - forwards to ModelicaBuiltinTypes
 static func get_builtin_type(name: String) -> ModelicaTypeClass:
-	const BuiltinTypes = preload("res://apps/modelica_godot/core/parser/types/modelica_builtin_types.gd")
+	const BuiltinTypes = preload("res://apps/modelica/core/parser/types/modelica_builtin_types.gd")
 	return BuiltinTypes.get_type(name)
 
 # Static method to create array type - forwards to ModelicaBuiltinTypes
 static func create_array_type(element_type: ModelicaTypeClass, dimensions: Array) -> ModelicaTypeClass:
-	const BuiltinTypes = preload("res://apps/modelica_godot/core/parser/types/modelica_builtin_types.gd")
+	const BuiltinTypes = preload("res://apps/modelica/core/parser/types/modelica_builtin_types.gd")
 	return BuiltinTypes.create_array_type(element_type, dimensions)
 
 func is_numeric() -> bool:
