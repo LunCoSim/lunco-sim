@@ -6,8 +6,8 @@ const LexerImpl = preload("res://apps/modelica/core/lexer.gd")
 const ModelicaNode = preload("res://apps/modelica/core/ast_node.gd")
 
 # Forward declare the node types for reference
-const NodeTypes = preload("../../parser/ast/ast_node.gd").NodeType
-const ModelicaTypeClass = preload("../../parser/types/modelica_type.gd")
+const NodeTypes = preload("res://apps/modelica/core/ast_node.gd").NodeType
+const ModelicaTypeClass = preload("res://apps/modelica/core/modelica_type.gd")
 
 #-----------------------------------------------------------------------
 # BASE SYNTAX PARSER

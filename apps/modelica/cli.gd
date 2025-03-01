@@ -1,8 +1,8 @@
 extends SceneTree
 
-const Parser = preload("res://apps/modelica/core/parser.gd")
-const ModelicaLexer = preload("res://apps/modelica/core/modelica_lexer.gd")
-const ASTNode = preload("res://apps/modelica/core/parser/ast/ast_node.gd")
+const Parser = preload("./core/parser.gd")
+const ModelicaLexer = preload("./core/lexer.gd")
+const ASTNode = preload("./core/ast_node.gd")
 
 # Configuration
 var models_path: String = "res://apps/modelica/models"
