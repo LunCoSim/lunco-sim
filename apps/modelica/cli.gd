@@ -1,7 +1,7 @@
 extends SceneTree
 
-const ModelicaParser = preload("res://apps/modelica/core/parser/modelica/modelica_parser.gd")
-const ModelicaLexer = preload("res://apps/modelica/core/parser/modelica/modelica_lexer.gd")
+const Parser = preload("res://apps/modelica/core/parser.gd")
+const ModelicaLexer = preload("res://apps/modelica/core/modelica_lexer.gd")
 const ASTNode = preload("res://apps/modelica/core/parser/ast/ast_node.gd")
 
 # Configuration
@@ -98,15 +98,14 @@ func load_and_simulate_model(model_name: String) -> int:
 	
 	# Parse model
 	print("Parsing model...")
-	var parser = ModelicaParser.new()
-	var lexer = ModelicaLexer.new()
-	lexer.init(content)
-	var ast = parser.parse(lexer)
+	var parser = Parser.create_modelica_parser()
+	var ast = parser.parse(content)
 	
-	if parser.has_errors():
+	if parser._has_errors():
+		print("Error parsing model:")
 		for error in parser.get_errors():
-			push_error("Parser error: " + error)
-		return ERR_PARSE_ERROR
+			print("  " + error)
+		return
 	
 	# Set up equations system
 	print("Setting up equation system...")

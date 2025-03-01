@@ -2,6 +2,7 @@
 extends RefCounted
 class_name LexicalAnalyzer
 
+# Token class definition
 class Token:
 	var type: int
 	var value: String
@@ -19,6 +20,7 @@ class Token:
 	func _to_string() -> String:
 		return "Token(%d, '%s', line=%d, col=%d)" % [type, value, line, column]
 
+# Common token types for all lexers
 enum TokenType {
 	UNKNOWN,
 	EOF,
@@ -33,19 +35,75 @@ enum TokenType {
 	PUNCTUATION
 }
 
+# Lexer mode to determine specific behavior
+enum LexerMode {
+	BASIC,
+	MODELICA,
+	EQUATION
+}
+
+# Common keywords and operators
+const MODELICA_KEYWORDS: Array[String] = [
+	"model", "connector", "package", "class", "record", "block",
+	"type", "function", "extends", "parameter", "constant", "input",
+	"output", "flow", "stream", "equation", "algorithm", "end",
+	"if", "then", "else", "elseif", "for", "loop", "in", "while",
+	"when", "elsewhen", "connect", "der", "initial", "inner", "outer",
+	"public", "protected", "final", "each", "partial", "redeclare",
+	"replaceable", "import", "within", "encapsulated", "annotation",
+	"external", "and", "or", "not", "true", "false"
+]
+
+const EQUATION_KEYWORDS: Array[String] = [
+	"der", "sin", "cos", "tan", "asin", "acos", "atan", "atan2",
+	"sinh", "cosh", "tanh", "exp", "log", "log10", "sqrt",
+	"pre", "initial", "terminal", "sample", "edge", "change",
+	"reinit", "delay", "cardinality", "and", "or", "not"
+]
+
+const MODELICA_OPERATORS: Array[String] = [
+	"+", "-", "*", "/", "^", "=", "<", ">", "<=", ">=", "==", "<>",
+	":=", ".", ",", ";", "(", ")", "[", "]", "{", "}", ":", ".."
+]
+
+const EQUATION_OPERATORS: Array[String] = [
+	"+", "-", "*", "/", "^", "=", "<", ">", "<=", ">=", "==", "<>",
+	"and", "or", "not", "(", ")", "[", "]", ",", "."
+]
+
+# State variables
 var _text: String = ""
 var _length: int = 0
 var _position: int = 0
 var _line: int = 1
 var _column: int = 1
 var _keywords: Array[String] = []
+var _operators: Array[String] = []
+var _mode: int = LexerMode.BASIC
 
-func _init() -> void:
-	pass
+# Initialize the lexer with optional mode
+func _init(mode: int = LexerMode.BASIC) -> void:
+	_mode = mode
+	match mode:
+		LexerMode.MODELICA:
+			set_keywords(MODELICA_KEYWORDS)
+			_operators = MODELICA_OPERATORS
+		LexerMode.EQUATION:
+			set_keywords(EQUATION_KEYWORDS)
+			_operators = EQUATION_OPERATORS
 
+# Create specific lexer instances
+static func create_modelica_lexer() -> LexicalAnalyzer:
+	return LexicalAnalyzer.new(LexerMode.MODELICA)
+
+static func create_equation_lexer() -> LexicalAnalyzer:
+	return LexicalAnalyzer.new(LexerMode.EQUATION)
+
+# Set keywords for the lexer
 func set_keywords(keywords: Array[String]) -> void:
 	_keywords = keywords
 
+# Main tokenize function
 func tokenize(text: String) -> Array[Token]:
 	print("\nStarting tokenization of text (length: %d)" % text.length())
 	_text = text
@@ -83,6 +141,7 @@ func tokenize(text: String) -> Array[Token]:
 	print("Tokenization complete. Generated %d tokens" % tokens.size())
 	return tokens
 
+# Get the next token based on current state
 func _next_token() -> Token:
 	if _position >= _length:
 		return null
@@ -109,7 +168,7 @@ func _next_token() -> Token:
 		return _handle_identifier()
 	
 	# Handle numbers
-	if c.is_valid_int() or (c == "-" and _peek_next().is_valid_int()):
+	if c.is_valid_int() or (c == "-" and _peek_next().is_valid_int()) or (c == "+" and _peek_next().is_valid_int()):
 		print("Handling number")
 		return _handle_number()
 	
@@ -122,6 +181,18 @@ func _next_token() -> Token:
 	print("Handling operator/punctuation")
 	return _handle_operator()
 
+# Helper methods
+func _current_char() -> String:
+	if _position < _length:
+		return _text[_position]
+	return ""
+
+func _peek_next() -> String:
+	if _position + 1 < _length:
+		return _text[_position + 1]
+	return ""
+
+# Token handling methods
 func _handle_whitespace() -> Token:
 	var start_pos = _position
 	var start_col = _column
@@ -185,7 +256,7 @@ func _handle_identifier() -> Token:
 	var start_col = _column
 	var value = ""
 	
-	while _position < _length and (_current_char().is_valid_identifier() or _current_char().is_valid_int()):
+	while _position < _length and (_current_char().is_valid_identifier() or _current_char() == "_" or (value.length() > 0 and _current_char().is_valid_int())):
 		value += _current_char()
 		_position += 1
 		_column += 1
@@ -194,6 +265,11 @@ func _handle_identifier() -> Token:
 	if value in _keywords:
 		return Token.new(TokenType.KEYWORD, value, _line, start_col, start_pos)
 	
+	# Special handling for derivative operator in equation mode
+	if _mode == LexerMode.EQUATION and value == "der" and _current_char() == "(":
+		# Handle derivative notation in equation mode
+		# This is a placeholder for more complex handling if needed
+	
 	return Token.new(TokenType.IDENTIFIER, value, _line, start_col, start_pos)
 
 func _handle_number() -> Token:
@@ -201,34 +277,41 @@ func _handle_number() -> Token:
 	var start_col = _column
 	var value = ""
 	var has_decimal = false
+	var has_exponent = false
 	
-	# Handle negative numbers
-	if _current_char() == "-":
+	# Handle sign
+	if _current_char() == "-" or _current_char() == "+":
 		value += _current_char()
 		_position += 1
 		_column += 1
 	
 	while _position < _length:
 		var c = _current_char()
+		
 		if c.is_valid_int():
 			value += c
-			_position += 1
-			_column += 1
-		elif c == "." and not has_decimal:
-			value += c
+		elif c == "." and not has_decimal and not has_exponent:
 			has_decimal = true
-			_position += 1
-			_column += 1
-		elif c == "e" or c == "E":  # Handle scientific notation
+			value += c
+		elif (c == "e" or c == "E") and not has_exponent:
+			# Handle scientific notation
+			has_exponent = true
 			value += c
 			_position += 1
 			_column += 1
-			if _position < _length and (_current_char() == "+" or _current_char() == "-"):
-				value += _current_char()
+			
+			# Handle optional sign in exponent
+			c = _current_char()
+			if c == "+" or c == "-":
+				value += c
 				_position += 1
 				_column += 1
+			continue
 		else:
 			break
+		
+		_position += 1
+		_column += 1
 	
 	return Token.new(TokenType.NUMBER, value, _line, start_col, start_pos)
 
@@ -250,8 +333,8 @@ func _handle_string() -> Token:
 		value += _current_char()
 		_position += 1
 	
-	# Skip closing quote
-	if _position < _length:
+	# Skip closing quote if found
+	if _position < _length and _current_char() == "\"":
 		_position += 1
 		_column += 1
 	
@@ -264,24 +347,22 @@ func _handle_operator() -> Token:
 	
 	# Handle multi-character operators
 	var two_char = c + _peek_next()
-	if two_char in ["<=", ">=", "==", "!=", "=>", "->", ":="]:
+	if two_char in ["<=", ">=", "==", "<>", ":=", ".."]:
 		_position += 2
 		_column += 2
-		return Token.new(TokenType.OPERATOR, two_char, _line, start_col, start_pos)
+		var type = TokenType.OPERATOR if _mode == LexerMode.EQUATION else TokenType.PUNCTUATION
+		return Token.new(type, two_char, _line, start_col, start_pos)
 	
-	# Handle single-character operators and punctuation
+	# Handle single-character operators
 	_position += 1
 	_column += 1
 	
-	var type = TokenType.OPERATOR if c in ["+", "-", "*", "/", "^", "=", "<", ">", "!"] else TokenType.PUNCTUATION
-	return Token.new(type, c, _line, start_col, start_pos)
-
-func _current_char() -> String:
-	if _position >= _length:
-		return ""
-	return _text[_position]
-
-func _peek_next() -> String:
-	if _position + 1 >= _length:
-		return ""
-	return _text[_position + 1] 
+	var type
+	if _mode == LexerMode.EQUATION and c in EQUATION_OPERATORS:
+		type = TokenType.OPERATOR
+	elif _mode == LexerMode.MODELICA and c in MODELICA_OPERATORS:
+		type = TokenType.PUNCTUATION  # Modelica treats these as punctuation
+	else:
+		type = TokenType.PUNCTUATION
+	
+	return Token.new(type, c, _line, start_col, start_pos) 
