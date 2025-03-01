@@ -1,8 +1,8 @@
 #!/usr/bin/env -S godot --headless --script
 extends SceneTree
 
-class TestBasicTokens extends "../base_test.gd":
-	const LexicalAnalyzer = preload("../../core/lexer.gd")
+class TestBasicTokens extends "res://apps/modelica/tests/base_test.gd":
+	const LexicalAnalyzer = preload("res://apps/modelica/core/lexer.gd")
 	
 	var lexer: LexicalAnalyzer
 	

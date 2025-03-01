@@ -1,4 +1,3 @@
-@tool
 extends RefCounted
 class_name LexicalAnalyzer
 
@@ -267,6 +266,7 @@ func _handle_identifier() -> Token:
 	
 	# Special handling for derivative operator in equation mode
 	if _mode == LexerMode.EQUATION and value == "der" and _current_char() == "(":
+		pass
 		# Handle derivative notation in equation mode
 		# This is a placeholder for more complex handling if needed
 	
