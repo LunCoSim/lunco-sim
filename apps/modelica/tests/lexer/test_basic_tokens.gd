@@ -1,4 +1,4 @@
-extends "../../core/testing/base_test.gd"
+extends "../base_test.gd"
 
 const ModelicaLexer = preload("../../core/lexer.gd")
 

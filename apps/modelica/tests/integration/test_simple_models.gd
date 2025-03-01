@@ -1,4 +1,4 @@
-extends "../../core/testing/base_test.gd"
+extends "../base_test.gd"
 
 const Parser = preload("../../core/parser.gd")
 const ASTNode = preload("../../core/ast_node.gd")

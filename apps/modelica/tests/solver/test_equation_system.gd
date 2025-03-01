@@ -1,4 +1,4 @@
-extends "../../core/testing/base_test.gd"
+extends "../base_test.gd"
 
 const DAESolver = preload("../../core/solver.gd")
 

@@ -101,7 +101,7 @@ func run_single_test(test_method: String):
 		result.passed = true
 		passed_tests += 1
 		
-	except e:
+	except var e:
 		# Test failed
 		result.passed = false
 		result.error = str(e)
@@ -208,7 +208,7 @@ func assert_throws(callback: Callable, message: String = ""):
 	var threw = false
 	try:
 		callback.call()
-	except e:
+	except:
 		threw = true
 	
 	if not threw:
@@ -220,4 +220,53 @@ func assert_throws(callback: Callable, message: String = ""):
 # Helper to fail a test
 func _fail_test(error_message: String):
 	push_error(error_message)
-	assert(false, error_message)  # This will throw an error and fail the test 
+	assert(false, error_message)  # This will throw an error and fail the test
+
+# Static method to run all tests in the tests directory
+static func run_all_tests():
+	print("Starting test runner...")
+	var test_dir = "res://apps/modelica/tests"
+	var failed_tests = 0
+	
+	# Find and run all test files
+	failed_tests += _run_tests_in_directory(test_dir + "/lexer")
+	failed_tests += _run_tests_in_directory(test_dir + "/parser")
+	failed_tests += _run_tests_in_directory(test_dir + "/solver")
+	failed_tests += _run_tests_in_directory(test_dir + "/integration")
+	failed_tests += _run_tests_in_directory(test_dir + "/cli")
+	
+	# Print final summary
+	print("\n=======================================")
+	print("All tests completed.")
+	if failed_tests == 0:
+		print("✅ All tests passed!")
+	else:
+		print("❌ " + str(failed_tests) + " test(s) failed!")
+	print("=======================================\n")
+	
+	return failed_tests == 0
+
+# Helper method to run all tests in a directory
+static func _run_tests_in_directory(dir_path: String) -> int:
+	print("\nRunning tests in: " + dir_path)
+	var dir = DirAccess.open(dir_path)
+	var failed_tests = 0
+	
+	if dir:
+		dir.list_dir_begin()
+		var file_name = dir.get_next()
+		
+		while file_name != "":
+			if file_name.ends_with("_test.gd") or file_name.begins_with("test_"):
+				var test_script = load(dir_path + "/" + file_name)
+				if test_script:
+					var test_instance = test_script.new()
+					if test_instance is BaseTest:
+						if not test_instance.run_tests():
+							failed_tests += 1
+					test_instance.queue_free()
+			file_name = dir.get_next()
+	else:
+		print("Error: Could not open directory: " + dir_path)
+	
+	return failed_tests 
