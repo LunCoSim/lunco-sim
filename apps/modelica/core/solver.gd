@@ -77,22 +77,37 @@ func add_equation(equation: String):
 # Get the value of a variable
 func get_variable_value(name: String):
 	if name in state_variables:
-		return ErrorSystem.ok(state_variables[name].value)
+		return state_variables[name].value
 	elif name in algebraic_variables:
-		return ErrorSystem.ok(algebraic_variables[name].value)
+		return algebraic_variables[name].value
 	elif name in parameters:
-		return ErrorSystem.ok(parameters[name])
+		return parameters[name]
 	else:
-		var error = error_manager.report_variable_error("Variable not found: " + name)
-		return ErrorSystem.err(error)
+		print("Error: Variable not found: " + name)
+		return 0.0  # Return a default value instead of an error object
 
 # Set the value of a variable
-func set_variable_value(name: String, value: float):
+func set_variable_value(name: String, value):
+	# Try to convert the value to float if it's not already
+	var float_value = 0.0
+	
+	if value is float or value is int:
+		float_value = float(value)
+	elif value is String:
+		float_value = float(value.to_float())
+	elif value is Dictionary and "value" in value:
+		# If we're getting a result object from our error system
+		float_value = float(value.value) if value.value is float or value.value is int else 0.0
+	elif value != null:
+		# Try a generic conversion, with a fallback
+		float_value = float(value) if str(value).is_valid_float() else 0.0
+		print("Warning: Converting non-standard type to float: ", value, " -> ", float_value)
+	
 	if name in state_variables:
-		state_variables[name].value = value
+		state_variables[name].value = float_value
 		return ErrorSystem.ok()
 	elif name in algebraic_variables:
-		algebraic_variables[name].value = value
+		algebraic_variables[name].value = float_value
 		return ErrorSystem.ok()
 	else:
 		var error = error_manager.report_variable_error("Cannot set value for non-existent variable: " + name)

@@ -381,6 +381,20 @@ class ModelicaParser extends SyntaxParser:
 			print("Error: " + error_msg)
 			param_node.add_error(error_msg, "syntax_error")
 			
+			# Skip until we find a semicolon or a new token that might start a new declaration
+			while current_token and not (
+				current_token.type == LexerImpl.TokenType.PUNCTUATION and current_token.value == ";" or
+				current_token.type == LexerImpl.TokenType.KEYWORD or
+				current_token.type == LexerImpl.TokenType.IDENTIFIER and _is_type_name(current_token.value) or
+				current_token.value == "equation" or current_token.value == "end"
+			):
+				print("Skipping token in model body: " + str(current_token.type) + " - " + str(current_token.value))
+				_advance()
+			
+			# If we found a semicolon, consume it
+			if current_token and current_token.type == LexerImpl.TokenType.PUNCTUATION and current_token.value == ";":
+				_advance()
+			
 		return param_node
 		
 	# Parse a variable declaration
@@ -500,7 +514,12 @@ class ModelicaParser extends SyntaxParser:
 		var lhs = _parse_expression()
 		if not lhs:
 			print("Failed to parse left-hand side of equation")
-			return ModelicaNode.new(NodeTypes.ERROR, "Failed to parse equation", start_loc)
+			var error_node = ModelicaNode.new(NodeTypes.ERROR, "Failed to parse equation", start_loc)
+			
+			# Skip to semicolon to recover
+			_recover_to_semicolon()
+			
+			return error_node
 		
 		# Skip comments before the equals sign
 		while current_token and current_token.type == LexerImpl.TokenType.COMMENT:
@@ -519,6 +538,10 @@ class ModelicaParser extends SyntaxParser:
 			print("Error: " + error_msg)
 			var error_node = ModelicaNode.new(NodeTypes.ERROR, error_msg, start_loc)
 			error_node.add_child(lhs)  # Attach the left-hand side for context
+			
+			# Skip to semicolon to recover
+			_recover_to_semicolon()
+			
 			return error_node
 		
 		_advance()  # Consume equals sign
@@ -535,6 +558,10 @@ class ModelicaParser extends SyntaxParser:
 			var error_msg = "Failed to parse right side of equation"
 			var error_node = ModelicaNode.new(NodeTypes.ERROR, error_msg, start_loc)
 			error_node.add_child(lhs)  # Attach the left-hand side for context
+			
+			# Skip to semicolon to recover
+			_recover_to_semicolon()
+			
 			return error_node
 		
 		# Create equation node
@@ -559,8 +586,32 @@ class ModelicaParser extends SyntaxParser:
 				error_msg += ", got " + str(current_token.type) + " (" + current_token.value + ")"
 			print("Error: " + error_msg)
 			eq_node.add_error(error_msg, "syntax_error")
+			
+			# Attempt recovery - advance until we find a semicolon or something that looks like the end of this equation
+			_recover_to_semicolon()
 		
 		return eq_node
+
+	# Helper method to recover from syntax errors by advancing to the next semicolon or equation boundary
+	func _recover_to_semicolon():
+		var recovery_limit = 10 # Limit the number of tokens we'll look ahead to prevent infinite loops
+		var count = 0
+		
+		while current_token and count < recovery_limit:
+			count += 1
+			
+			# Check for semicolon
+			if current_token.type in [LexerImpl.TokenType.PUNCTUATION, LexerImpl.TokenType.OPERATOR] and current_token.value == ";":
+				_advance() # Consume the semicolon
+				return
+				
+			# Check for other equation boundary markers
+			if current_token.type == LexerImpl.TokenType.KEYWORD and current_token.value in ["equation", "end", "algorithm", "initial"]:
+				return # Don't consume these tokens, but stop recovery
+			
+			_advance() # Move to next token
+		
+		print("Warning: Recovery reached limit without finding semicolon or equation boundary")
 
 	# Parse an expression
 	func _parse_expression() -> ModelicaNode:
@@ -580,6 +631,18 @@ class ModelicaParser extends SyntaxParser:
 		while current_token and current_token.type == LexerImpl.TokenType.COMMENT:
 			print("Skipping comment in addition expression: " + current_token.value)
 			_advance()
+		
+		# Special handling for adjacent terms which are missing an operator - this is handled in _parse_term now
+		# but we keep a check here in case something slips through
+		if (left.type == NodeTypes.IDENTIFIER or left.type == NodeTypes.NUMBER) and current_token:
+			# Check if the next token is an identifier or number without an operator in between
+			if current_token.type == LexerImpl.TokenType.IDENTIFIER or current_token.type == LexerImpl.TokenType.NUMBER:
+				var error_msg = "Missing operator between '" + str(left.value) + "' and '" + str(current_token.value) + "'"
+				print("Error: " + error_msg)
+				
+				var error_node = ModelicaNode.new(NodeTypes.ERROR, error_msg, start_loc)
+				error_node.add_child(left)
+				return error_node
 			
 		# Continue parsing binary operations as long as we have +/- operators
 		while current_token and current_token.type == LexerImpl.TokenType.OPERATOR and current_token.value in ["+", "-"]:
@@ -630,6 +693,17 @@ class ModelicaParser extends SyntaxParser:
 			print("Skipping comment in term expression: " + current_token.value)
 			_advance()
 			
+		# Special handling for adjacent identifiers or numbers which are missing an operator
+		if (left.type == NodeTypes.IDENTIFIER or left.type == NodeTypes.NUMBER) and current_token:
+			# Check if the next token is an identifier or number without an operator in between
+			if current_token.type == LexerImpl.TokenType.IDENTIFIER or current_token.type == LexerImpl.TokenType.NUMBER:
+				var error_msg = "Missing operator between '" + str(left.value) + "' and '" + str(current_token.value) + "'"
+				print("Error: " + error_msg)
+				
+				var error_node = ModelicaNode.new(NodeTypes.ERROR, error_msg, start_loc)
+				error_node.add_child(left)
+				return error_node
+			
 		# Continue parsing binary operations as long as we have */ operators
 		while current_token and current_token.type == LexerImpl.TokenType.OPERATOR and current_token.value in ["*", "/"]:
 			var op = current_token.value
@@ -673,6 +747,16 @@ class ModelicaParser extends SyntaxParser:
 		if not current_token:
 			var error_msg = "Unexpected end of input in expression"
 			print("Error: " + error_msg)
+			return ModelicaNode.new(NodeTypes.ERROR, error_msg, start_loc)
+		
+		# Early check for semicolons, which should not appear inside expressions
+		if current_token and (
+			(current_token.type == LexerImpl.TokenType.PUNCTUATION and current_token.value == ";") or 
+			(current_token.type == LexerImpl.TokenType.OPERATOR and current_token.value == ";")
+		):
+			var error_msg = "Unexpected semicolon in expression"
+			print("Error: " + error_msg)
+			_advance()  # Consume the semicolon to prevent infinite loops
 			return ModelicaNode.new(NodeTypes.ERROR, error_msg, start_loc)
 		
 		# Skip any whitespace or comments in expression
@@ -909,6 +993,12 @@ class ModelicaParser extends SyntaxParser:
 		cond_node.add_child(else_expr)
 		
 		return cond_node
+
+	# Helper to check if a token represents a valid type name
+	func _is_type_name(name: String) -> bool:
+		# Add common Modelica types
+		var built_in_types = ["Real", "Integer", "Boolean", "String"]
+		return name in built_in_types
 
 # Factory functions to create parsers
 static func create_modelica_parser() -> ModelicaParser:

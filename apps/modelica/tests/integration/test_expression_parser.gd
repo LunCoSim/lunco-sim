@@ -293,7 +293,7 @@ class TestExpressionParser extends "res://apps/modelica/tests/base_test.gd":
 		assert_not_null(ast, "AST should not be null")
 		
 		# The AST should have error flags
-		assert_true(ast.has_errors(), "AST should have errors")
+		assert_true(ast.has_errors, "AST should have errors")
 		
 		print("Error recovery test passed!")
 

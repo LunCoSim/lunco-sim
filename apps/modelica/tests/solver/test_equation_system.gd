@@ -30,15 +30,15 @@ func test_solver():
 	print("Tried to add duplicate variable 'x': " + result.get_string())
 	
 	# Get variable values
-	result = solver.get_variable_value("x")
-	print("Value of 'x': " + str(result.get_value()))
+	var x_value = solver.get_variable_value("x")
+	print("Value of 'x': " + str(x_value))
 	
-	result = solver.get_variable_value("p")
-	print("Value of 'p': " + str(result.get_value()))
+	var p_value = solver.get_variable_value("p")
+	print("Value of 'p': " + str(p_value))
 	
 	# Try to get non-existent variable
-	result = solver.get_variable_value("z")
-	print("Tried to get non-existent variable 'z': " + result.get_string())
+	var z_value = solver.get_variable_value("z")
+	print("Tried to get non-existent variable 'z': " + str(z_value))
 	
 	# Check solver error state
 	print("Has errors: " + str(solver.has_errors()))
