@@ -34,6 +34,76 @@ func load_model_file(path: String) -> String:
 	file.close()
 	return content
 
+# Extract package name from package.mo content
+func extract_package_name(content: String) -> String:
+	var regex = RegEx.new()
+	regex.compile("package\\s+([A-Za-z0-9_]+)\\s")
+	
+	var match = regex.search(content)
+	if match and match.get_group_count() >= 1:
+		return match.get_string(1)
+	
+	return ""
+
+# Discover package structure from a file path
+func discover_package_from_path(file_path: String) -> Dictionary:
+	var package_info = {
+		"root_path": "",
+		"root_package_name": "",
+		"parent_path": "",
+		"hierarchy": []
+	}
+	
+	# Start from the directory containing the file
+	var dir_path = file_path.get_base_dir()
+	var package_hierarchy = []
+	
+	# Traverse up the directory structure looking for package.mo files
+	while not dir_path.is_empty():
+		var package_mo_path = dir_path.path_join("package.mo")
+		
+		if FileAccess.file_exists(package_mo_path):
+			# Found a package.mo, extract its name
+			var package_content = load_model_file(package_mo_path)
+			var package_name = extract_package_name(package_content)
+			
+			if not package_name.is_empty():
+				# Add to our hierarchy (at the beginning)
+				package_hierarchy.insert(0, package_name)
+				
+				# If this is the first one we found (deepest in tree),
+				# remember its path for validation
+				if package_info["root_path"].is_empty():
+					package_info["root_path"] = dir_path
+					package_info["root_package_name"] = package_name
+					package_info["parent_path"] = dir_path.get_base_dir()
+		
+		# Try to find parent package
+		var parent_dir = dir_path.get_base_dir()
+		if parent_dir == dir_path:
+			# We've reached the root
+			break
+		
+		dir_path = parent_dir
+	
+	# Set the full hierarchy
+	package_info["hierarchy"] = package_hierarchy
+	
+	return package_info
+
+# Auto-add the parent directory of a model's package to MODELICAPATH
+func auto_add_package_path(model_path: String) -> Dictionary:
+	var package_info = discover_package_from_path(model_path)
+	var result = {"path_added": "", "success": false}
+	
+	if not package_info["parent_path"].is_empty():
+		add_modelica_path(package_info["parent_path"])
+		result["path_added"] = package_info["parent_path"]
+		result["success"] = true
+		print("Auto-detected and added to MODELICAPATH: " + package_info["parent_path"])
+	
+	return result
+
 # Find a model by name using MODELICAPATH
 func find_model_by_name(name: String) -> String:
 	# If it's a direct path, check if it exists
@@ -218,17 +288,26 @@ func validate_and_load_model(model_name: String) -> Dictionary:
 	
 	# Try to load the model
 	var content = ""
+	var model_path = ""
 	
 	# Check if it's a direct file path
 	if FileAccess.file_exists(model_name):
+		model_path = model_name
 		content = load_model_file(model_name)
+		
+		# Auto-add the package path to MODELICAPATH
+		auto_add_package_path(model_path)
 	else:
 		# Try as a simple name
-		content = load_model_by_name(model_name)
+		model_path = find_model_by_name(model_name)
+		if not model_path.is_empty():
+			content = load_model_file(model_path)
 		
 		# If not found, try as a qualified name
 		if content.is_empty() and "." in model_name:
-			content = load_model_by_qualified_name(model_name)
+			model_path = find_model_by_qualified_name(model_name)
+			if not model_path.is_empty():
+				content = load_model_file(model_path)
 	
 	if content.is_empty():
 		result["errors"].append(PackageError.new(
@@ -243,10 +322,10 @@ func validate_and_load_model(model_name: String) -> Dictionary:
 	result["package_info"] = extract_package_info(content)
 	
 	# Validate package structure
-	if not validate_package_structure(model_name, result["package_info"]):
+	if not validate_package_structure(model_path, result["package_info"]):
 		result["errors"].append(PackageError.new(
 			ErrorType.INVALID_PACKAGE_STRUCTURE,
-			"Invalid package structure for model: " + model_name,
+			"Invalid package structure for model: " + model_path,
 			{"within": result["package_info"]["within"]}
 		))
 	
@@ -271,19 +350,26 @@ func validate_and_load_model(model_name: String) -> Dictionary:
 	return result
 
 # Validate package structure based on "within" clause and file location
-func validate_package_structure(model_name: String, package_info: Dictionary) -> bool:
+func validate_package_structure(model_path: String, package_info: Dictionary) -> bool:
 	# If there's no "within" clause, it's valid (top-level model)
 	if package_info["within"].is_empty():
 		return true
 	
-	# TODO: Implement more comprehensive validation
-	# For now, simply check if the "within" package exists
-	if not package_info["within"].is_empty():
-		var within_path = find_model_by_qualified_name(package_info["within"])
-		if within_path.is_empty():
-			return false
+	# Check the discovered package hierarchy against the within clause
+	var discovered_info = discover_package_from_path(model_path)
 	
-	return true
+	# If we couldn't discover any package, but there's a within clause,
+	# it could still be valid if the within package exists 
+	if discovered_info["hierarchy"].size() == 0:
+		# Just check if the within package exists
+		var within_path = find_model_by_qualified_name(package_info["within"])
+		return not within_path.is_empty()
+	
+	# Compare the within clause with the discovered hierarchy
+	var expected_within = ".".join(discovered_info["hierarchy"])
+	
+	# Allow partial match - model might be in a subpackage that's not fully represented in the hierarchy
+	return package_info["within"] == expected_within or expected_within.begins_with(package_info["within"])
 
 # Create a static function to get a new package manager
 static func create() -> RefCounted:

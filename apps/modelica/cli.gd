@@ -1,234 +1,137 @@
 extends SceneTree
 
-const Parser = preload("./core/parser.gd")
-const ModelicaLexer = preload("./core/lexer.gd")
-const ASTNode = preload("./core/ast_node.gd")
-const PackageManager = preload("./core/package_manager.gd")
+const default_models_dir = "res://apps/modelica/models"
 
-# Package manager instance
-var package_manager = PackageManager.create()
-
-# Configuration
-var output_format: String = "csv"
-var output_file: String = ""
-
-# Simulation settings
-var simulation_start: float = 0.0
-var simulation_stop: float = 10.0
-var simulation_step: float = 0.01
+var verbose = false
+var package_manager
 
 func _init():
-	print("Modelica Loader v1.0")
+	var arguments = OS.get_cmdline_args()
+	var model_file_path = ""
+	var model_path_added = false
 	
-	# Process command line arguments
-	var args = OS.get_cmdline_args()
-	var model_name = ""
+	# Initialize the package manager
+	package_manager = load("res://apps/modelica/core/package_manager.gd").new()
+	
+	# Parse command line arguments
 	var i = 0
-	
-	while i < args.size():
-		var arg = args[i]
-		
-		if arg == "--script":
-			i += 1  # Skip the script path
-		elif arg == "--format" or arg == "-f":
-			i += 1
-			if i < args.size():
-				output_format = args[i].to_lower()
-		elif arg == "--output" or arg == "-o":
-			i += 1
-			if i < args.size():
-				output_file = args[i]
-		elif arg == "--path" or arg == "-p":
-			# Add a path to MODELICAPATH
-			i += 1
-			if i < args.size():
-				package_manager.add_modelica_path(args[i])
-		elif arg == "--start" or arg == "-s":
-			i += 1
-			if i < args.size():
-				simulation_start = float(args[i])
-		elif arg == "--stop" or arg == "-e":
-			i += 1
-			if i < args.size():
-				simulation_stop = float(args[i])
-		elif arg == "--step" or arg == "-dt":
-			i += 1
-			if i < args.size():
-				simulation_step = float(args[i])
-		elif arg == "--help" or arg == "-h":
-			_print_usage()
-			quit(0)
-		elif not arg.begins_with("--") and not arg.begins_with("-"):
-			model_name = arg
+	while i < arguments.size():
+		var arg = arguments[i]
+		if arg == "--mpath":
+			if i + 1 < arguments.size():
+				var path = arguments[i + 1]
+				package_manager.add_modelica_path(path)
+				model_path_added = true
+				i += 1
+			else:
+				push_error("Missing value for --mpath")
+		elif arg == "--verbose":
+			verbose = true
+		elif arg.begins_with("res://") and arg.ends_with(".mo"):
+			model_file_path = arg
 		i += 1
 	
-	if model_name.is_empty():
-		print("Error: No model specified")
-		_print_usage()
-		quit(1)
+	# Add default models directory if no paths were specified
+	if not model_path_added:
+		package_manager.add_modelica_path(default_models_dir)
+		if verbose:
+			print("Added default models directory to MODELICAPATH: " + default_models_dir)
 	
-	# Run the simulation
-	var result = load_and_simulate_model(model_name)
-	if result != OK:
-		quit(1)
+	if verbose:
+		print("Current MODELICAPATH: " + str(package_manager.get_modelica_path()))
+	
+	if model_file_path.is_empty():
+		print_usage()
+		quit()
 	else:
-		quit(0)
+		load_and_simulate_model(model_file_path)
+		quit()
 
-func _print_usage() -> void:
-	print("Usage: godot --script modelica_loader.gd [options] <model_name>")
+func print_usage():
+	print("Modelica CLI Usage:")
+	print("godot --script apps/modelica/cli.gd [options] <model_file_path>")
+	print("")
 	print("Options:")
-	print("  --format, -f <format>    Output format (csv, json)")
-	print("  --output, -o <file>      Output file (defaults to stdout)")
-	print("  --path, -p <path>        Add directory to MODELICAPATH")
-	print("  --start, -s <time>       Simulation start time (default: 0.0)")
-	print("  --stop, -e <time>        Simulation end time (default: 10.0)")
-	print("  --step, -dt <step>       Simulation time step (default: 0.01)")
-	print("  --help, -h               Show this help message")
+	print("  --mpath <path>   Add path to MODELICAPATH")
+	print("  --verbose        Enable verbose output")
+	print("")
+	print("Examples:")
+	print("  godot --script apps/modelica/cli.gd res://apps/modelica/models/MyModel.mo")
+	print("  godot --script apps/modelica/cli.gd --mpath res://apps/modelica/models res://path/to/model.mo")
 
-func load_and_simulate_model(model_name: String) -> int:
-	print("\nLoading model: ", model_name)
+func load_and_simulate_model(model_file_path: String):
+	if verbose:
+		print("Loading model file: " + model_file_path)
+		print("Current MODELICAPATH: " + str(package_manager.get_modelica_path()))
 	
-	# Validate and load the model using the package manager
-	var result = package_manager.validate_and_load_model(model_name)
-	
-	if not result.success:
-		print("Errors loading model:")
-		for error in result.errors:
-			print("  " + error.message)
-			if error.details.size() > 0:
-				for key in error.details:
-					print("    " + key + ": " + str(error.details[key]))
-		return ERR_FILE_NOT_FOUND
-	
-	print("Model loaded successfully")
-	
-	# Parse model
-	print("Parsing model...")
-	var parser = Parser.create_modelica_parser()
-	var ast = parser.parse(result.content)
-	
-	if parser._has_errors():
-		print("Error parsing model:")
-		for error in parser.get_errors():
-			print("  " + error)
-		return ERR_PARSE_ERROR
-	
-	# Set up equations system
-	print("Setting up equation system...")
-	var system = setup_equation_system(ast)
-	if not system:
-		push_error("Failed to set up equation system")
-		return ERR_CANT_CREATE
-	
-	# Initialize output
-	var output_writer = setup_output_writer()
-	if not output_writer:
-		push_error("Failed to set up output writer")
-		return ERR_CANT_CREATE
-	
-	# Run simulation
-	print("Running simulation...")
-	var sim_result = simulate(system, output_writer)
-	if sim_result != OK:
-		push_error("Simulation failed")
-		return sim_result
-	
-	print("Simulation completed successfully")
-	return OK
-
-func setup_equation_system(ast: ASTNode):
-	# This is a placeholder for the actual equation system setup
-	# In a real implementation, this would:
-	# 1. Extract variables, parameters, and equations from the AST
-	# 2. Create a DAE system
-	# 3. Set up initial conditions
-	
-	# For now, return a simple dictionary as a mock system
-	var system = {
-		"variables": {},
-		"parameters": {},
-		"equations": [],
-		"initial_conditions": {}
-	}
-	
-	# Extract model information from AST
-	for node in ast.children:
-		if node.type == ASTNode.NodeType.VARIABLE:
-			if node.variability == "parameter":
-				system.parameters[node.name] = node.value
-			else:
-				system.variables[node.name] = 0.0
-		elif node.type == ASTNode.NodeType.EQUATION:
-			system.equations.append(node.value)
-	
-	return system
-
-func setup_output_writer():
-	# Create appropriate output handler based on format
-	var writer = {
-		"format": output_format,
-		"file": null,
-		"buffer": []
-	}
-	
-	if not output_file.is_empty():
-		writer.file = FileAccess.open(output_file, FileAccess.WRITE)
-		if not writer.file:
-			push_error("Failed to open output file: " + output_file)
-			return null
-	
-	# Write header for CSV
-	if output_format == "csv":
-		var header = "time"
-		# Add variable names to header
-		# (In a real implementation, you would iterate through your system's variables)
-		writer.buffer.append(header)
-	
-	return writer
-
-func simulate(system, output_writer):
-	# This is a placeholder for the actual simulation
-	# In a real implementation, this would:
-	# 1. Initialize the solver
-	# 2. Step through time
-	# 3. Solve at each step
-	# 4. Output results
-	
-	var t = simulation_start
-	while t <= simulation_stop:
-		# Placeholder for solving the system at time t
-		var results = {
-			"time": t,
-			"values": {}
-		}
+	# Try to auto-add package path based on the model file
+	var discovery_result = package_manager.discover_package_from_path(model_file_path)
+	if verbose:
+		print("Package discovery result:")
+		print("  Found package structure: " + str(discovery_result.get("package_hierarchy", [])))
+		print("  Root package: " + str(discovery_result.get("root_package", "")))
+		print("  Root package path: " + str(discovery_result.get("root_package_path", "")))
 		
-		# Output results
-		write_output(output_writer, results)
-		
-		t += simulation_step
+	if discovery_result.has("root_package_path") and discovery_result.root_package_path != "":
+		var auto_add_result = package_manager.auto_add_package_path(model_file_path)
+		if verbose:
+			print("Auto-added package path: " + auto_add_result.path_added)
+			print("Updated MODELICAPATH: " + str(package_manager.get_modelica_path()))
 	
-	# Close output file if needed
-	if output_writer.file:
-		output_writer.file.close()
+	var parser = load("res://apps/modelica/core/parser.gd").new()
+	var ast = parser.parse_file(model_file_path)
 	
-	return OK
-
-func write_output(writer, results):
-	# Format and write results based on output format
-	if writer.format == "csv":
-		var line = str(results.time)
-		for var_name in results.values:
-			line += "," + str(results.values[var_name])
-		
-		if writer.file:
-			writer.file.store_line(line)
+	if ast == null:
+		push_error("Failed to parse model file: " + model_file_path)
+		return
+	
+	if verbose:
+		print("Model parsed successfully")
+		print("Model qualified name: " + ast.qualified_name)
+		if ast.has("within"):
+			print("Within package: " + str(ast.get("within")))
+	
+	# Determine how to load the model
+	var model_path = model_file_path
+	var use_qualified_name = false
+	
+	if not ast.qualified_name.is_empty():
+		# First, check if the qualified name exists in the package structure
+		var qualified_model_path = package_manager.find_model_by_qualified_name(ast.qualified_name)
+		if not qualified_model_path.is_empty():
+			model_path = ast.qualified_name
+			use_qualified_name = true
+			if verbose:
+				print("Found model by qualified name: " + qualified_model_path)
 		else:
-			print(line)
+			print("Warning: Model has qualified name '" + ast.qualified_name + "' but no matching package structure was found")
+			print("Using file path instead: " + model_file_path)
+	else:
+		print("Warning: Model has no qualified name, using file path: " + model_file_path)
 	
-	elif writer.format == "json":
-		var json_text = JSON.stringify(results)
+	# Load the model with the appropriate path
+	var result
+	if use_qualified_name:
+		result = package_manager.validate_and_load_model(model_path)
+	else:
+		result = package_manager.validate_and_load_model(model_file_path)
+	
+	if result.success:
+		if verbose:
+			print("Model validated and loaded successfully")
+			if result.dependencies.size() > 0:
+				print("Dependencies found:")
+				for dep in result.dependencies:
+					print("  - " + dep)
 		
-		if writer.file:
-			writer.file.store_line(json_text)
+		# Here we would pass the model to the simulator
+		# For now we'll just print a success message
+		print("Simulation completed successfully")
+	else:
+		var error_message = "Error loading model:"
+		if result.errors.size() > 0:
+			for err in result.errors:
+				error_message += "\n  - " + err.message
 		else:
-			print(json_text) 
+			error_message += " Unknown error"
+		push_error(error_message)

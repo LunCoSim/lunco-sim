@@ -9,6 +9,24 @@ const ModelicaNode = preload("res://apps/modelica/core/ast_node.gd")
 const NodeTypes = preload("res://apps/modelica/core/ast_node.gd").NodeType
 const ModelicaTypeClass = preload("res://apps/modelica/core/modelica_type.gd")
 
+# Helper function to parse a file directly
+func parse_file(file_path: String) -> ModelicaNode:
+	if not FileAccess.file_exists(file_path):
+		push_error("File does not exist: " + file_path)
+		return null
+		
+	var file = FileAccess.open(file_path, FileAccess.READ)
+	if not file:
+		push_error("Failed to open file: " + file_path)
+		return null
+		
+	var content = file.get_as_text()
+	file.close()
+	
+	# Create a parser and parse the content
+	var parser = ModelicaParser.new()
+	return parser.parse(content)
+
 #-----------------------------------------------------------------------
 # BASE SYNTAX PARSER
 #-----------------------------------------------------------------------
@@ -161,6 +179,37 @@ class ModelicaParser extends SyntaxParser:
 		position = 0
 		current_token = tokens[position]
 		
+		# Look for 'within' statement first
+		var within_package = ""
+		
+		# First token could be the 'within' keyword
+		if current_token and current_token.type == LexerImpl.TokenType.KEYWORD and current_token.value == "within":
+			_advance() # Consume 'within' keyword
+			
+			# If there's an identifier after 'within', it's a package path
+			if current_token and current_token.type == LexerImpl.TokenType.IDENTIFIER:
+				var path_parts = []
+				
+				# Collect all parts of the package path (identifiers separated by dots)
+				while current_token and current_token.type == LexerImpl.TokenType.IDENTIFIER:
+					path_parts.append(current_token.value)
+					_advance() # Consume identifier
+					
+					# Check for dot separator
+					if current_token and current_token.type == LexerImpl.TokenType.OPERATOR and current_token.value == ".":
+						_advance() # Consume dot
+					else:
+						break
+				
+				within_package = ".".join(path_parts)
+				print("Found within package: " + within_package)
+			
+			# Expect semicolon after within
+			if current_token and current_token.type == LexerImpl.TokenType.OPERATOR and current_token.value == ";":
+				_advance() # Consume semicolon
+			else:
+				print("Warning: Expected ';' after within statement")
+		
 		# Skip whitespace and comments at the beginning of the file
 		while current_token and (
 			current_token.type == LexerImpl.TokenType.WHITESPACE or
@@ -176,7 +225,13 @@ class ModelicaParser extends SyntaxParser:
 			print("Found model keyword!")
 			var model_node = _parse_model()
 			if model_node:
-				print("Model node created with type: " + str(model_node.type))
+				# Set qualified name based on the within package
+				if not within_package.is_empty():
+					model_node.qualified_name = within_package + "." + model_node.value
+				else:
+					model_node.qualified_name = model_node.value
+				
+				print("Model node created with type: " + str(model_node.type) + ", qualified name: " + model_node.qualified_name)
 				return model_node
 		elif current_token:
 			# Look ahead to find model keyword
