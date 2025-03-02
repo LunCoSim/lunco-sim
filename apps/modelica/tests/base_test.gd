@@ -299,14 +299,16 @@ static func _run_tests_in_directory(dir_path: String) -> int:
 		var file_name = dir.get_next()
 		
 		while file_name != "":
-			if file_name.ends_with("_test.gd") or file_name.begins_with("test_"):
-				var test_script = load(dir_path + "/" + file_name)
-				if test_script:
-					var test_instance = test_script.new()
-					if test_instance is BaseTest:
-						if not test_instance.run_tests():
-							failed_tests += 1
-					test_instance.queue_free()
+			# Only process .gd files
+			if file_name.ends_with(".gd"):
+				if file_name.ends_with("_test.gd") or file_name.begins_with("test_"):
+					var test_script = load(dir_path + "/" + file_name)
+					if test_script:
+						var test_instance = test_script.new()
+						if test_instance is BaseTest:
+							if not test_instance.run_tests():
+								failed_tests += 1
+						test_instance.queue_free()
 			file_name = dir.get_next()
 	else:
 		print("Error: Could not open directory: " + dir_path)
