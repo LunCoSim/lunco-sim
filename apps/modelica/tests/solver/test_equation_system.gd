@@ -80,10 +80,25 @@ class TestEquationSystem extends "../base_test.gd":
 		assert_equal(solver.get_variable_value("p"), 3.0, "Should get correct value for p")
 		
 		# Test getting non-existent variable
-		# Instead of using assert_throws, we'll check if the function returns the expected error value
+		# Make note that we expect an error but the function will return 0.0
+		var error_detected = false
+		
+		# First capture the current error state
+		var prev_error_state = _error_occurred
+		
+		# Call the function that should produce an error
 		var result = solver.get_variable_value("z")
+		
+		# If the error state has changed, an error occurred
+		if _error_occurred and not prev_error_state:
+			error_detected = true
+			# Reset the error state since we're expecting this
+			_error_occurred = false
+			_current_test_error = ""
+		
+		# Verify both the error was detected and the fallback value is returned
+		assert_true(error_detected, "Should detect an error for non-existent variable")
 		assert_equal(result, 0.0, "Should return 0.0 for non-existent variable")
-		# We can't directly check if push_error was called, but the function is designed to return 0.0 on error
 
 	func test_set_variable_value():
 		# Add variables
@@ -99,9 +114,24 @@ class TestEquationSystem extends "../base_test.gd":
 		assert_equal(solver.get_variable_value("y"), 6.0, "y should be updated to 6.0")
 		
 		# Test setting non-existent variable
-		# Instead of using assert_throws, we'll just call the function and check
-		# that it doesn't affect existing variables
+		var error_detected = false
+		
+		# First capture the current error state
+		var prev_error_state = _error_occurred
+		
+		# Call the function that should produce an error
 		solver.set_variable_value("z", 7.0)
+		
+		# If the error state has changed, an error occurred
+		if _error_occurred and not prev_error_state:
+			error_detected = true
+			# Reset the error state since we're expecting this
+			_error_occurred = false
+			_current_test_error = ""
+		
+		# Verify error was detected
+		assert_true(error_detected, "Should detect an error for setting non-existent variable")
+		
 		# Verify existing variables weren't affected
 		assert_equal(solver.get_variable_value("x"), 5.0, "x should still be 5.0")
 		assert_equal(solver.get_variable_value("y"), 6.0, "y should still be 6.0")

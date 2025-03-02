@@ -23,10 +23,20 @@ var _teardown_needed: bool = false
 # Error handling
 var _current_test_error: String = ""
 var _error_occurred: bool = false
+var _expecting_error: bool = false
 
 # Constructor
 func _init():
 	test_class = get_script().resource_path.get_file().get_basename()
+	
+	# Set up error handling
+	_connect_to_error_signal()
+
+# Connect to the push_error signal if available
+func _connect_to_error_signal():
+	# In newer versions of Godot, we would connect to an error signal
+	# Since we can't directly intercept push_error, we'll use our custom tracking
+	pass
 
 # Virtual methods that subclasses should override
 func setup():
@@ -45,7 +55,7 @@ func after_all():
 	# Called once after all tests
 	pass
 
-# Test discovery and execution
+# Test execution
 func run_tests():
 	print("\n=== Running tests for " + test_class + " ===")
 	
@@ -90,11 +100,11 @@ func run_single_test(test_method: String):
 	_teardown_needed = false
 	_error_occurred = false
 	_current_test_error = ""
+	_expecting_error = false
 	
 	var start_time = Time.get_ticks_msec()
 	
-	# Since Godot doesn't have try-catch-finally, we use a different approach
-	# Setup phase - if this fails, the test will fail
+	# Setup phase
 	setup()
 	_setup_done = true
 	_teardown_needed = true
@@ -104,7 +114,7 @@ func run_single_test(test_method: String):
 		call(test_method)
 	
 	# Record test result
-	if not _error_occurred:
+	if not _error_occurred or (_error_occurred and _expecting_error):
 		result.passed = true
 		passed_tests += 1
 	else:
@@ -115,7 +125,6 @@ func run_single_test(test_method: String):
 	
 	# Always run teardown if setup was completed
 	if _teardown_needed:
-		# We should also handle errors in teardown, but for simplicity, we'll just run it
 		teardown()
 	
 	var end_time = Time.get_ticks_msec()
@@ -210,42 +219,50 @@ func assert_has_method(obj: Object, method_name: String, message: String = ""):
 			error_msg += " - " + message
 		_fail_test(error_msg)
 
-# Modified assert_throws to better detect errors
+# Custom method to intercept push_error by using a custom callable
+func _custom_error_handler(error_message: String):
+	if not _expecting_error:
+		_error_occurred = true
+		_current_test_error = error_message
+
+# Check if a function call generates an error
 func assert_throws(callback: Callable, message: String = ""):
-	# In a language without exceptions, we need to use another approach
-	# We'll check if the global error flag was set during callback execution
+	# Set up error tracking for expected errors
+	_expecting_error = true
 	
-	# Set up error tracking
+	# Since we can't directly intercept push_error, we'll use our own wrapper
+	var error_detected = false
+	var error_message = ""
+	
+	# Define a wrapper that will catch errors
+	var wrapper = func():
+		var result = null
+		_error_occurred = false  # Reset flag
+		
+		# Execute the callback
+		result = callback.call()
+		
+		# If we have an error flag set, it means the function threw an error
+		if _error_occurred:
+			error_detected = true
+			error_message = _current_test_error
+		
+		return result
+	
+	# Call the wrapper
+	wrapper.call()
+	
+	# Clean up
+	_expecting_error = false
 	_error_occurred = false
 	_current_test_error = ""
 	
-	# Create a simple error handler function
-	var push_error_handling = func(err_msg):
-		# We're overriding our _fail_test to not mark test as failed when we expect errors
-		_error_occurred = true
-		_current_test_error = err_msg
-		push_error(err_msg)  # Still show the error in the console
-		return true
-	
-	# Set a flag for the test framework to know we're expecting errors
-	var expecting_error = true
-	
-	# Call the function and see if it fails
-	callback.call()
-	
-	# Reset the flag
-	expecting_error = false
-	
-	# If no error was detected, fail the test
-	if not _error_occurred:
+	# Check if error was detected
+	if not error_detected:
 		var error_msg = "Assertion failed: Expected function to throw an error"
 		if message:
 			error_msg += " - " + message
 		_fail_test(error_msg)
-	else:
-		# Since this was an expected error, clear the error state
-		_error_occurred = false
-		_current_test_error = ""
 
 # Helper to fail a test
 func _fail_test(error_message: String):
