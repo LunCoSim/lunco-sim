@@ -61,44 +61,43 @@ class SyntaxParser:
 			current_token = null
 		return current_token
 
-	func _peek() -> LexerImpl.Token:
-		var saved_pos = position
-		var saved_token = current_token
-		
-		var next_token = _advance()
-		
-		position = saved_pos
-		current_token = saved_token
-		
-		return next_token
+	func _peek(offset: int = 1) -> LexerImpl.Token:
+		var peek_pos = position + offset
+		if peek_pos >= 0 and peek_pos < tokens.size():
+			return tokens[peek_pos]
+		return null
 
-	func _match(type: int, value: String = "") -> bool:
+	func _match(token_type, token_value = null) -> bool:
 		if not current_token:
 			return false
 		
-		if current_token.type == type:
-			if value.is_empty() or current_token.value == value:
-				_advance()
-				return true
-		return false
+		if current_token.type != token_type:
+			return false
+			
+		if token_value != null and current_token.value != token_value:
+			return false
+			
+		return true
 
-	func _expect(type: int, value: String = "") -> bool:
-		if _match(type, value):
+	func _expect(token_type, token_value = null, error_message: String = "") -> bool:
+		if _match(token_type, token_value):
+			_advance()
 			return true
 		
-		var error = "Expected "
-		if not value.is_empty():
-			error += "'" + value + "'"
-		else:
-			error += str(type)
-		error += " but got "
-		if current_token:
-			error += "'" + current_token.value + "'"
-		else:
-			error += "end of input"
+		if error_message.is_empty():
+			if token_value != null:
+				error_message = "Expected %s with value '%s'" % [str(token_type), str(token_value)]
+			else:
+				error_message = "Expected %s" % str(token_type)
 		
-		errors.append(error)
+		_add_error(error_message)
 		return false
+
+	func _add_error(error_message: String) -> void:
+		var pos_str = ""
+		if current_token:
+			pos_str = " at line %d, column %d" % [current_token.line, current_token.column]
+		errors.append(error_message + pos_str)
 
 	func _error(message: String) -> ModelicaNode:
 		var location = {
@@ -113,10 +112,28 @@ class SyntaxParser:
 		return LexerImpl.TokenType.keys()[type]
 
 	func _has_errors() -> bool:
-		return not errors.is_empty()
+		return errors.size() > 0
 
 	func get_errors() -> Array[String]:
 		return errors
+
+	# Helper to get the location dictionary from a token
+	func get_token_location(token: LexerImpl.Token) -> Dictionary:
+		if not token:
+			return {"line": 0, "column": 0}
+		return {"line": token.line, "column": token.column}
+
+#-----------------------------------------------------------------------
+# EQUATION PARSER
+#-----------------------------------------------------------------------
+class EquationParser extends SyntaxParser:
+	func _init() -> void:
+		super._init(LexerImpl.create_modelica_lexer())
+		
+	# TO BE IMPLEMENTED
+	func _parse() -> ModelicaNode:
+		# Create an empty node for now
+		return ModelicaNode.new(NodeTypes.EQUATION, "", {"line": 0, "column": 0})
 
 #-----------------------------------------------------------------------
 # MODELICA PARSER
@@ -126,497 +143,626 @@ class ModelicaParser extends SyntaxParser:
 		super._init(LexerImpl.create_modelica_lexer())
 		print("NodeTypes.ROOT = ", NodeTypes.ROOT)  # Debug print
 
-	# Add a public method to parse expressions
-	func parse_expression(text: String) -> ModelicaNode:
-		errors.clear()
-		tokens = lexer.tokenize(text)
-		position = 0
-		current_token = _advance()
-		
-		# Simple expression parser for tests
-		var result = null
-		if tokens.size() > 1:  # At least one token plus EOF
-			var token = tokens[0]
-			var location = {"line": token.line, "column": token.column}
-			
-			match token.type:
-				LexerImpl.TokenType.IDENTIFIER:
-					result = ModelicaNode.new(NodeTypes.IDENTIFIER, token.value, location)
-					
-				LexerImpl.TokenType.NUMBER:
-					result = ModelicaNode.new(NodeTypes.NUMBER, token.value, location)
-					
-				LexerImpl.TokenType.OPERATOR:
-					# Handle unary operator
-					if token.value == "-" and tokens.size() > 2:
-						var op_node = ModelicaNode.new(NodeTypes.OPERATOR, token.value, location)
-						var operand_token = tokens[1]
-						var operand_location = {"line": operand_token.line, "column": operand_token.column}
-						var operand = ModelicaNode.new(NodeTypes.IDENTIFIER, operand_token.value, operand_location)
-						op_node.operand = operand
-						result = op_node
-			
-			# Handle function calls - simplified for tests
-			if token.type == LexerImpl.TokenType.IDENTIFIER and tokens.size() > 3:
-				if tokens[1].value == "(" and tokens[3].value == ")":
-					var arg_token = tokens[2]
-					var func_node = ModelicaNode.new(NodeTypes.FUNCTION_CALL, token.value, location)
-					var arg_location = {"line": arg_token.line, "column": arg_token.column}
-					var arg_node = ModelicaNode.new(NodeTypes.IDENTIFIER, arg_token.value, arg_location)
-					func_node.arguments.append(arg_node)
-					result = func_node
-					
-			# Handle array access - simplified for tests
-			if token.type == LexerImpl.TokenType.IDENTIFIER and tokens.size() > 3:
-				if tokens[1].value == "[" and tokens[3].value == "]":
-					var index_token = tokens[2]
-					var array_node = ModelicaNode.new(NodeTypes.ARRAY_ACCESS, token.value, location)
-					var index_location = {"line": index_token.line, "column": index_token.column}
-					var index_node = ModelicaNode.new(NodeTypes.NUMBER, index_token.value, index_location)
-					array_node.arguments.append(index_node)
-					result = array_node
-		
-		if result:
-			print("Custom expression parsing result: type=", result.type, ", value=", result.value)
-			if result.type == ModelicaNode.NodeType.FUNCTION_CALL:
-				print("Function call arguments: ", result.arguments.size())
-			elif result.type == ModelicaNode.NodeType.OPERATOR:
-				print("Operator operand: ", "exists" if result.operand else "null")
-		else:
-			print("Expression parsing failed, returned null")
-		return result
+	# Helper to create error nodes
+	func _create_error_node(error_msg: String, location: Dictionary) -> ModelicaNode:
+		print("Error: " + error_msg)
+		var error_node = ModelicaNode.new(NodeTypes.ERROR, error_msg, location)
+		error_node.add_error(error_msg, "syntax_error")
+		return error_node
 
+	# Main parsing entry point for Modelica code
 	func _parse() -> ModelicaNode:
-		var root = ModelicaNode.new(NodeTypes.ROOT, "", {"line": 1, "column": 1})
-		var definitions = []
+		var start_token = current_token
+		var start_loc = get_token_location(start_token)
 		
-		while current_token and current_token.type != LexerImpl.TokenType.EOF:
-			var definition = _parse_definition()
-			if definition:
-				definitions.append(definition)
-			else:
-				# Create error node with specific message
-				var error_msg = "Failed to parse definition at line %d, column %d" % [current_token.line if current_token else 0, current_token.column if current_token else 0]
-				var error_node = _error(error_msg)
-				definitions.append(error_node)
-				_synchronize()  # Try to recover
+		print("Starting parse with token: type=" + str(current_token.type) + ", value='" + current_token.value + "'")
 		
-		# Add all definitions to root
-		for def in definitions:
-			root.add_child(def)
+		# Reset position to beginning to ensure we don't miss anything
+		position = 0
+		current_token = tokens[position]
 		
-		if definitions.is_empty():
-			root.add_error("No definitions found in the input", "syntax_error")
-		
-		return root
-
-	func _synchronize() -> void:
-		# Skip tokens until we find a synchronization point (like end of statement or new definition)
-		while current_token and current_token.type != LexerImpl.TokenType.EOF:
-			if current_token.type == LexerImpl.TokenType.PUNCTUATION and current_token.value == ";":
-				_advance()
-				return
-			if current_token.type == LexerImpl.TokenType.KEYWORD and current_token.value in ["model", "class", "connector", "package"]:
-				return
+		# Skip whitespace and comments at the beginning of the file
+		while current_token and (
+			current_token.type == LexerImpl.TokenType.WHITESPACE or
+			current_token.type == LexerImpl.TokenType.COMMENT or
+			current_token.type == LexerImpl.TokenType.NEWLINE
+		):
 			_advance()
+		
+		print("After skipping initial whitespace: token type=" + str(current_token.type) + ", value='" + current_token.value + "'")
+		
+		# Check if we have a model keyword
+		if current_token and current_token.type == LexerImpl.TokenType.KEYWORD and current_token.value.to_lower() == "model":
+			print("Found model keyword!")
+			var model_node = _parse_model()
+			if model_node:
+				print("Model node created with type: " + str(model_node.type))
+				return model_node
+		elif current_token:
+			# Look ahead to find model keyword
+			var saved_position = position
+			var saved_token = current_token
+			var max_lookahead = 10
+			var i = 0
+			
+			print("Model keyword not found at start, searching ahead...")
+			while i < max_lookahead and position < tokens.size():
+				if current_token.type == LexerImpl.TokenType.KEYWORD and current_token.value.to_lower() == "model":
+					print("Found model keyword at position " + str(position))
+					var model_node = _parse_model()
+					if model_node:
+						return model_node
+					break
+				_advance()
+				i += 1
+			
+			# Reset position if model not found
+			position = saved_position
+			current_token = saved_token
+			
+			# Try to recover by parsing it as a model anyway if we have an identifier
+			if current_token.type == LexerImpl.TokenType.IDENTIFIER:
+				print("Attempting to parse as model starting with identifier: " + current_token.value)
+				var error_node = ModelicaNode.new(NodeTypes.MODEL, current_token.value, start_loc)
+				error_node.add_error("Expected model keyword before model name", "syntax_error", start_loc)
+				
+				_advance() # Consume the identifier
+				
+				# Continue parsing the rest of the model
+				_parse_model_body(error_node)
+				
+				return error_node
+			
+			var error_msg = "Expected 'model' keyword, found: " + str(current_token.type) + " - " + current_token.value
+			print("Error: " + error_msg)
+			return ModelicaNode.new(NodeTypes.ERROR, error_msg, start_loc)
+		else:
+			var error_msg = "Unexpected end of file"
+			print("Error: " + error_msg)
+			return ModelicaNode.new(NodeTypes.ERROR, error_msg, start_loc)
+		
+		return ModelicaNode.new(NodeTypes.ERROR, "Failed to parse model", start_loc)
 
-	func _parse_definition() -> ModelicaNode:
-		if not current_token:
-			return _error("Unexpected end of input")
+	# Parse a Modelica model definition - improved version
+	func _parse_model() -> ModelicaNode:
+		print("Parsing model definition")
+		var start_loc = get_token_location(current_token)
 		
-		var def_type = ""
-		var name = ""
-		var start_location = {"line": current_token.line, "column": current_token.column}
+		# Consume the 'model' keyword
+		_advance()
 		
-		# Parse definition type
-		if current_token.type == LexerImpl.TokenType.KEYWORD:
-			def_type = current_token.value
-			if not def_type in ["model", "connector", "package", "class"]:
-				return _error("Invalid definition type: " + def_type)
-			_advance() # consume type
+		# Skip any whitespace after the model keyword
+		while current_token and (
+			current_token.type == LexerImpl.TokenType.WHITESPACE or
+			current_token.type == LexerImpl.TokenType.COMMENT or
+			current_token.type == LexerImpl.TokenType.NEWLINE
+		):
+			_advance()
+		
+		# Get the model name
+		if not current_token or current_token.type != LexerImpl.TokenType.IDENTIFIER:
+			var error_msg = "Expected model name after 'model' keyword"
+			if current_token:
+				error_msg += ", got " + str(current_token.type) + " (" + current_token.value + ")"
+			print("Error: " + error_msg)
+			return ModelicaNode.new(NodeTypes.ERROR, error_msg, start_loc)
+		
+		var name = current_token.value
+		print("Model name: " + name)
+		
+		# Create the model node with the correct type and name
+		var model_node = ModelicaNode.new(NodeTypes.MODEL, name, start_loc)
+		print("Created model node with type:", model_node.type, " and name:", model_node.value)
+		
+		# Consume model name
+		_advance()
+		
+		# Parse the model body
+		return _parse_model_body(model_node)
+	
+	# Parse the body of a model - extracted to a separate method for reuse
+	func _parse_model_body(model_node: ModelicaNode) -> ModelicaNode:
+		# Parse model body (parameters, variables, equations, etc.)
+		while current_token and current_token.type != LexerImpl.TokenType.EOF:
+			var token_type = current_token.type
+			var token_value = current_token.value
+			
+			# End of model
+			if token_type == LexerImpl.TokenType.KEYWORD and token_value == "end":
+				_advance()  # Consume 'end'
+				
+				# Check if model name is repeated after 'end'
+				if current_token and current_token.type == LexerImpl.TokenType.IDENTIFIER and current_token.value == model_node.value:
+					_advance()  # Consume model name
+				
+				# Expect semicolon after end statement
+				if current_token and current_token.type == LexerImpl.TokenType.OPERATOR and current_token.value == ";":
+					_advance()  # Consume semicolon
+				
+				break  # End of model definition
+			
+			# Parameter declaration
+			elif token_type == LexerImpl.TokenType.KEYWORD and token_value == "parameter":
+				var param_node = _parse_parameter()
+				if param_node:
+					model_node.add_child(param_node)
+			
+			# Variable declaration
+			elif token_type == LexerImpl.TokenType.IDENTIFIER:
+				if token_value in ["Real", "Integer", "Boolean", "String"]:
+					var var_node = _parse_variable()
+					if var_node:
+						model_node.add_child(var_node)
+				else:
+					print("Unexpected identifier in model body: " + token_value)
+					_advance()  # Skip unknown token
+			
+			# Initial equation section
+			elif token_type == LexerImpl.TokenType.KEYWORD and token_value == "initial":
+				_advance()  # Consume 'initial'
+				
+				if current_token and current_token.type == LexerImpl.TokenType.KEYWORD and current_token.value == "equation":
+					var eq_section = _parse_equation(true)  # true for initial
+					if eq_section:
+						model_node.add_child(eq_section)
+			
+			# Regular equation section
+			elif token_type == LexerImpl.TokenType.KEYWORD and token_value == "equation":
+				var eq_section = _parse_equation(false)  # false for regular
+				if eq_section:
+					model_node.add_child(eq_section)
+			
+			# Skip unknown or whitespace tokens
+			else:
+				print("Skipping token in model body: " + str(token_type) + " - " + str(token_value))
+				_advance()
+		
+		return model_node
+
+	# Parse a parameter declaration
+	func _parse_parameter() -> ModelicaNode:
+		print("Parsing parameter")
+		var start_loc = get_token_location(current_token)
+		
+		# Consume "parameter" keyword
+		_advance()
+		
+		# Get parameter type (Real, Integer, etc.)
+		if current_token.type != LexerImpl.TokenType.IDENTIFIER:
+			var error_msg = "Expected type after 'parameter' keyword"
+			print("Error: " + error_msg)
+			return ModelicaNode.new(NodeTypes.ERROR, error_msg, start_loc)
+		
+		var param_type = current_token.value
+		_advance()  # Consume type
+		
+		# Get parameter name
+		if current_token.type != LexerImpl.TokenType.IDENTIFIER:
+			var error_msg = "Expected parameter name"
+			print("Error: " + error_msg)
+			return ModelicaNode.new(NodeTypes.ERROR, error_msg, start_loc)
+		
+		var param_name = current_token.value
+		var param_node = ModelicaNode.new(NodeTypes.PARAMETER, param_name, start_loc)
+		
+		# Add type information
+		var type_node = ModelicaNode.new(NodeTypes.TYPE_REFERENCE, param_type, start_loc)
+		param_node.add_child(type_node)
+		
+		_advance()  # Consume parameter name
+		
+		# Check for initialization
+		if current_token.type == LexerImpl.TokenType.PUNCTUATION and current_token.value == "=":
+			_advance()  # Consume equals sign
+			
+			# Get parameter value
+			if current_token.type == LexerImpl.TokenType.NUMBER:
+				var value_node = ModelicaNode.new(NodeTypes.NUMBER, current_token.value, 
+					get_token_location(current_token))
+				param_node.add_child(value_node)
+				_advance()  # Consume value
+			else:
+				var error_msg = "Expected number for parameter value"
+				print("Error: " + error_msg)
+				param_node.add_error(error_msg, "syntax_error")
+		
+		# Check for description string
+		if current_token.type == LexerImpl.TokenType.STRING:
+			var comment_node = ModelicaNode.new(NodeTypes.STRING, current_token.value, 
+				get_token_location(current_token))
+			param_node.add_child(comment_node)
+			_advance()  # Consume string
+		
+		# Check for semicolon
+		if current_token.type == LexerImpl.TokenType.PUNCTUATION and current_token.value == ";":
+			_advance()  # Consume semicolon
 		else:
-			return _error("Expected model, connector, package, or class, got " + str(current_token.value))
+			var error_msg = "Expected ';' after parameter declaration"
+			print("Error: " + error_msg)
+			param_node.add_error(error_msg, "syntax_error")
+			
+		return param_node
 		
-		# Parse name
-		if current_token and current_token.type == LexerImpl.TokenType.IDENTIFIER:
-			name = current_token.value
-			start_location = {"line": current_token.line, "column": current_token.column}
-			_advance() # consume name
+	# Parse a variable declaration
+	func _parse_variable() -> ModelicaNode:
+		print("Parsing variable")
+		var start_loc = get_token_location(current_token)
+		
+		# Get variable type (Real, Integer, etc.)
+		var var_type = current_token.value
+		_advance()  # Consume type
+		
+		# Get variable name
+		if not current_token or current_token.type != LexerImpl.TokenType.IDENTIFIER:
+			var error_msg = "Expected variable name"
+			if current_token:
+				error_msg += ", got " + str(current_token.type) + " (" + current_token.value + ")"
+			print("Error: " + error_msg)
+			return ModelicaNode.new(NodeTypes.ERROR, error_msg, start_loc)
+		
+		var var_name = current_token.value
+		var var_node = ModelicaNode.new(NodeTypes.VARIABLE, var_name, start_loc)
+		
+		# Add type information
+		var type_node = ModelicaNode.new(NodeTypes.TYPE_REFERENCE, var_type, start_loc)
+		var_node.add_child(type_node)
+		
+		_advance()  # Consume variable name
+		
+		# Check for description string
+		if current_token and current_token.type == LexerImpl.TokenType.STRING:
+			var comment_node = ModelicaNode.new(NodeTypes.STRING, current_token.value, 
+				get_token_location(current_token))
+			var_node.add_child(comment_node)
+			_advance()  # Consume string
+		
+		# Check for semicolon
+		if current_token and (
+			(current_token.type == LexerImpl.TokenType.PUNCTUATION and current_token.value == ";") or
+			(current_token.type == LexerImpl.TokenType.OPERATOR and current_token.value == ";")
+		):
+			_advance()  # Consume semicolon
 		else:
-			return _error("Expected identifier after " + def_type)
+			var error_msg = "Expected ';' after variable declaration"
+			print("Error: " + error_msg)
+			var_node.add_error(error_msg, "syntax_error")
+			
+		return var_node
 		
-		var node_type = NodeTypes.UNKNOWN
-		var modelica_type_kind = ModelicaTypeClass.TypeKind.UNKNOWN
+	# Parse an equation section (initial or regular)
+	func _parse_equation(is_initial: bool) -> ModelicaNode:
+		print("Parsing equation section (initial=" + str(is_initial) + ")")
+		var start_loc = get_token_location(current_token)
 		
-		match def_type:
-			"model":
-				node_type = NodeTypes.MODEL
-				modelica_type_kind = ModelicaTypeClass.TypeKind.MODEL
-			"connector":
-				node_type = NodeTypes.CONNECTOR
-				modelica_type_kind = ModelicaTypeClass.TypeKind.CONNECTOR
-			"package":
-				node_type = NodeTypes.PACKAGE
-				modelica_type_kind = ModelicaTypeClass.TypeKind.TYPE
-			"class":
-				node_type = NodeTypes.CLASS
-				modelica_type_kind = ModelicaTypeClass.TypeKind.CLASS
+		# Create equation section node
+		var eq_section
+		if is_initial:
+			eq_section = ModelicaNode.new(NodeTypes.EQUATION, "initial", start_loc)
+		else:
+			eq_section = ModelicaNode.new(NodeTypes.EQUATION, "section", start_loc)
 		
-		print("Creating node with type: ", node_type, " (", NodeTypes.keys()[node_type], ")")  # Debug print
-		var node = ModelicaNode.new(node_type, name, start_location)
-		node.modelica_type = ModelicaTypeClass.new()
-		node.modelica_type.kind = modelica_type_kind
-		node.modelica_type.name = name
+		# Consume "equation" keyword
+		_advance()
 		
-		# Parse components and equations
+		# Skip any whitespace after the equation keyword
+		while current_token and (
+			current_token.type == LexerImpl.TokenType.WHITESPACE or
+			current_token.type == LexerImpl.TokenType.COMMENT or
+			current_token.type == LexerImpl.TokenType.NEWLINE
+		):
+			_advance()
+		
+		# Parse equations until we reach end, equation, or another keyword
 		while current_token and current_token.type != LexerImpl.TokenType.EOF:
 			if current_token.type == LexerImpl.TokenType.KEYWORD:
-				match current_token.value:
-					"parameter", "constant", "input", "output", "Real", "Integer", "Boolean", "String":
-						var component = _parse_component()
-						if component:
-							node.add_child(component)
-						else:
-							node.add_error("Failed to parse component", "syntax_error")
-					"equation":
-						_advance() # consume 'equation'
-						while current_token and current_token.type != LexerImpl.TokenType.KEYWORD:
-							var equation = _parse_equation()
-							if equation:
-								node.add_child(equation)
-							else:
-								node.add_error("Failed to parse equation", "syntax_error")
-								break
-					"end":
-						_advance() # consume 'end'
-						if current_token and current_token.type == LexerImpl.TokenType.IDENTIFIER:
-							if current_token.value != name:
-								node.add_error("Expected end " + name + " but got end " + current_token.value)
-							_advance() # consume name
-						else:
-							node.add_error("Expected identifier after end")
-						
-						if current_token and current_token.type == LexerImpl.TokenType.PUNCTUATION and current_token.value == ";":
-							_advance() # consume semicolon
-							return node
-						else:
-							node.add_error("Expected semicolon after end " + name)
-							return node
-					_:
-						node.add_error("Unexpected keyword: " + current_token.value)
-						return node
-			elif current_token.type == LexerImpl.TokenType.IDENTIFIER:
-				var component = _parse_component()
-				if component:
-					node.add_child(component)
-				else:
-					node.add_error("Failed to parse component", "syntax_error")
-			else:
-				node.add_error("Unexpected token: " + str(current_token.value))
+				if current_token.value in ["end", "equation", "algorithm", "initial"]:
+					break  # End of equation section
+			
+			# Skip any whitespace before equations
+			while current_token and (
+				current_token.type == LexerImpl.TokenType.WHITESPACE or
+				current_token.type == LexerImpl.TokenType.COMMENT or
+				current_token.type == LexerImpl.TokenType.NEWLINE
+			):
 				_advance()
-		
-		return node
-
-	func _parse_component() -> ModelicaNode:
-		var start_location = {"line": current_token.line, "column": current_token.column}
-		var node = ModelicaNode.new(NodeTypes.COMPONENT, null, start_location)
-		
-		# Handle variability and causality
-		match current_token.value:
-			"parameter":
-				node.variability = "parameter"
-				_advance()
-			"constant":
-				node.variability = "constant"
-				_advance()
-			"input":
-				node.causality = "input"
-				_advance()
-			"output":
-				node.causality = "output"
-				_advance()
-		
-		# Type name
-		if not _expect(LexerImpl.TokenType.IDENTIFIER):
-			return null
-		
-		var type_name = current_token.value
-		var builtin_type = ModelicaTypeClass.get_builtin_type(type_name)
-		if builtin_type:
-			node.modelica_type = builtin_type
-		else:
-			node.add_error("Unknown type: " + type_name)
-		
-		_advance()
-		
-		# Component name
-		if not _expect(LexerImpl.TokenType.IDENTIFIER):
-			return null
-		
-		node.value = current_token.value
-		_advance()
-		
-		# Optional array dimensions
-		if current_token and current_token.type == LexerImpl.TokenType.PUNCTUATION and current_token.value == "[":
-			_advance() # consume '['
-			var dimensions = _parse_expression()
-			if dimensions:
-				if node.modelica_type:
-					node.modelica_type = ModelicaTypeClass.create_array_type(node.modelica_type, [dimensions])
-			if not _expect(LexerImpl.TokenType.PUNCTUATION, "]"):
-				return null
-		
-		# Optional modification
-		if current_token and current_token.type == LexerImpl.TokenType.PUNCTUATION and current_token.value == "=":
-			_advance() # consume '='
-			var modification = _parse_expression()
-			if modification:
-				node.modifications["value"] = modification
-		
-		if not _expect(LexerImpl.TokenType.PUNCTUATION, ";"):
-			return null
-		
-		return node
-
-	func _parse_equation() -> ModelicaNode:
-		var start_location = {"line": current_token.line, "column": current_token.column}
-		var node = ModelicaNode.new(NodeTypes.EQUATION, null, start_location)
-		
-		var left = _parse_expression()
-		if not left:
-			return null
-		
-		if not _match(LexerImpl.TokenType.OPERATOR, "="):
-			return left  # Just an expression, not an equation
-		
-		var right = _parse_expression()
-		if not right:
-			return null
-		
-		if not _expect(LexerImpl.TokenType.PUNCTUATION, ";"):
-			return null
-		
-		node.left = left
-		node.right = right
-		return node
-
-	func _parse_expression() -> ModelicaNode:
-		if not current_token:
-			return null
-		
-		var start_location = {"line": current_token.line, "column": current_token.column}
-		var node = ModelicaNode.new(NodeTypes.UNKNOWN, null, start_location)
-		
-		match current_token.type:
-			LexerImpl.TokenType.NUMBER:
-				node.type = NodeTypes.NUMBER
-				node.value = current_token.value
-				# Infer type based on value
-				if "." in str(current_token.value):
-					node.modelica_type = ModelicaTypeClass.get_builtin_type("Real")
-				else:
-					node.modelica_type = ModelicaTypeClass.get_builtin_type("Integer")
-				_advance()
-			LexerImpl.TokenType.IDENTIFIER:
-				node.type = NodeTypes.IDENTIFIER
-				node.value = current_token.value
-				_advance()
-				# Handle function calls and array access
-				if current_token and current_token.type == LexerImpl.TokenType.PUNCTUATION:
-					match current_token.value:
-						"(":
-							node.type = NodeTypes.FUNCTION_CALL
-							_advance() # consume '('
-							while current_token and current_token.type != LexerImpl.TokenType.PUNCTUATION and current_token.value != ")":
-								var arg = _parse_expression()
-								if arg:
-									node.arguments.append(arg)
-								if current_token and current_token.value == ",":
-									_advance()
-							if not _expect(LexerImpl.TokenType.PUNCTUATION, ")"):
-								return null
-						"[":
-							node.type = NodeTypes.ARRAY_ACCESS
-							_advance() # consume '['
-							var index = _parse_expression()
-							if index:
-								node.arguments.append(index)
-							if not _expect(LexerImpl.TokenType.PUNCTUATION, "]"):
-								return null
-			LexerImpl.TokenType.OPERATOR:
-				node.type = NodeTypes.OPERATOR
-				node.value = current_token.value
-				_advance()
-				node.operand = _parse_expression()
-			_:
-				node.type = NodeTypes.ERROR
-				node.add_error("Unexpected token in expression: " + current_token.value)
-				return node
-		
-		return node
-
-#-----------------------------------------------------------------------
-# EQUATION PARSER
-#-----------------------------------------------------------------------
-class EquationParser extends SyntaxParser:
-	func _init() -> void:
-		super._init(LexerImpl.create_equation_lexer())
-
-	func _parse() -> ModelicaNode:
-		var left = _parse_expression()
-		if not left:
-			return null
-		
-		if not _match(LexerImpl.TokenType.OPERATOR, "="):
-			return left  # Just an expression, not an equation
-		
-		var right = _parse_expression()
-		if not right:
-			return null
-		
-		var node = ModelicaNode.new(ModelicaNode.NodeType.EQUATION)
-		node.left = left
-		node.right = right
-		
-		# Check for differential equation
-		if _is_derivative(left):
-			node.type = ModelicaNode.NodeType.DIFFERENTIAL_EQUATION
-			node.is_differential = true
-			node.state_variable = _extract_state_variable(left)
-		
-		return node
-
-	func _parse_expression() -> ModelicaNode:
-		return _parse_binary_expression()
-
-	func _parse_binary_expression(precedence: int = 0) -> ModelicaNode:
-		var left = _parse_unary_expression()
-		
-		while current_token and current_token.type == LexerImpl.TokenType.OPERATOR:
-			var op_precedence = _get_operator_precedence(current_token.value)
-			if op_precedence <= precedence:
+				
+			# Check if we've reached a section end
+			if not current_token or current_token.type == LexerImpl.TokenType.EOF:
+				break
+			if current_token.type == LexerImpl.TokenType.KEYWORD and current_token.value in ["end", "equation", "algorithm", "initial"]:
 				break
 			
-			var operator = current_token.value
+			# Parse a single equation
+			var eq_node = _parse_single_equation()
+			if eq_node:
+				eq_section.add_child(eq_node)
+			else:
+				print("Failed to parse equation, skipping to next semicolon")
+				# Skip to next equation (after semicolon)
+				while current_token and current_token.value != ";":
+					_advance()
+				if current_token and current_token.value == ";":
+					_advance()  # Consume semicolon
+		
+		return eq_section
+
+	# Parse a single equation
+	func _parse_single_equation() -> ModelicaNode:
+		print("Parsing single equation")
+		var start_loc = get_token_location(current_token)
+		
+		# Parse left-hand side expression
+		var lhs = _parse_expression()
+		if not lhs:
+			print("Failed to parse left-hand side of equation")
+			return null
+		
+		# Expect equals sign
+		if not current_token or (
+			current_token.value != "=" or 
+			(current_token.type != LexerImpl.TokenType.PUNCTUATION and 
+			 current_token.type != LexerImpl.TokenType.OPERATOR)
+		):
+			var error_msg = "Expected '=' in equation"
+			if current_token:
+				error_msg += ", got " + str(current_token.type) + " (" + current_token.value + ")"
+			print("Error: " + error_msg)
+			var error_node = ModelicaNode.new(NodeTypes.ERROR, error_msg, start_loc)
+			error_node.add_child(lhs)  # Attach the left-hand side for context
+			return error_node
+		
+		_advance()  # Consume equals sign
+		
+		# Parse right-hand side expression
+		var rhs = _parse_expression()
+		if not rhs:
+			print("Failed to parse right-hand side of equation")
+			var error_msg = "Failed to parse right side of equation"
+			var error_node = ModelicaNode.new(NodeTypes.ERROR, error_msg, start_loc)
+			error_node.add_child(lhs)  # Attach the left-hand side for context
+			return error_node
+		
+		# Create equation node
+		var eq_node = ModelicaNode.new(NodeTypes.EQUATION, "=", start_loc)
+		eq_node.add_child(lhs)
+		eq_node.add_child(rhs)
+		
+		# Expect semicolon
+		if current_token and (
+			(current_token.type == LexerImpl.TokenType.PUNCTUATION and current_token.value == ";") or
+			(current_token.type == LexerImpl.TokenType.OPERATOR and current_token.value == ";")
+		):
+			_advance()  # Consume semicolon
+		else:
+			var error_msg = "Expected ';' after equation"
+			if current_token:
+				error_msg += ", got " + str(current_token.type) + " (" + current_token.value + ")"
+			print("Error: " + error_msg)
+			eq_node.add_error(error_msg, "syntax_error")
+		
+		return eq_node
+
+	# Parse an expression
+	func _parse_expression() -> ModelicaNode:
+		print("Parsing expression: " + str(current_token.value if current_token else "null"))
+		return _parse_addition()
+		
+	# Parse addition and subtraction (lowest precedence)
+	func _parse_addition() -> ModelicaNode:
+		var start_loc = get_token_location(current_token)
+		
+		# First parse the left operand (higher precedence)
+		var left = _parse_term()
+		if not left:
+			return null
+			
+		# Continue parsing binary operations as long as we have +/- operators
+		while current_token and current_token.type == LexerImpl.TokenType.OPERATOR and current_token.value in ["+", "-"]:
+			var op = current_token.value
+			var op_loc = get_token_location(current_token)
+			_advance()  # Consume operator
+			
+			# Parse the right operand (higher precedence)
+			var right = _parse_term()
+			if not right:
+				var error_msg = "Expected expression after '" + op + "' operator"
+				print("Error: " + error_msg)
+				var error_node = ModelicaNode.new(NodeTypes.ERROR, error_msg, op_loc)
+				error_node.add_child(left)  # Preserve the left side
+				return error_node
+				
+			# Create binary operation node
+			var op_node = ModelicaNode.new(NodeTypes.OPERATOR, op, op_loc)
+			op_node.add_child(left)
+			op_node.add_child(right)
+			
+			# Update left for the next iteration (for chained operations)
+			left = op_node
+			
+		return left
+		
+	# Parse multiplication and division (higher precedence)
+	func _parse_term() -> ModelicaNode:
+		var start_loc = get_token_location(current_token)
+		
+		# First parse the left operand (higher precedence)
+		var left = _parse_factor()
+		if not left:
+			return null
+			
+		# Continue parsing binary operations as long as we have */ operators
+		while current_token and current_token.type == LexerImpl.TokenType.OPERATOR and current_token.value in ["*", "/"]:
+			var op = current_token.value
+			var op_loc = get_token_location(current_token)
+			_advance()  # Consume operator
+			
+			# Parse the right operand (higher precedence)
+			var right = _parse_factor()
+			if not right:
+				var error_msg = "Expected expression after '" + op + "' operator"
+				print("Error: " + error_msg)
+				var error_node = ModelicaNode.new(NodeTypes.ERROR, error_msg, op_loc)
+				error_node.add_child(left)  # Preserve the left side
+				return error_node
+				
+			# Create binary operation node
+			var op_node = ModelicaNode.new(NodeTypes.OPERATOR, op, op_loc)
+			op_node.add_child(left)
+			op_node.add_child(right)
+			
+			# Update left for the next iteration (for chained operations)
+			left = op_node
+			
+		return left
+		
+	# Parse atomic expressions and highest precedence operations
+	func _parse_factor() -> ModelicaNode:
+		print("Parsing factor: " + str(current_token.value if current_token else "null"))
+		var start_loc = get_token_location(current_token)
+		
+		if not current_token:
+			var error_msg = "Unexpected end of input in expression"
+			print("Error: " + error_msg)
+			return ModelicaNode.new(NodeTypes.ERROR, error_msg, start_loc)
+		
+		# Skip any whitespace in expression
+		while current_token and current_token.type == LexerImpl.TokenType.WHITESPACE:
 			_advance()
 			
-			var right = _parse_binary_expression(op_precedence)
-			
-			var node = ModelicaNode.new(ModelicaNode.NodeType.OPERATOR, operator)
-			node.left = left
-			node.right = right
-			
-			# Collect dependencies
-			if left.is_expression():
-				for dep in left.get_dependencies():
-					node.add_dependency(dep)
-			if right.is_expression():
-				for dep in right.get_dependencies():
-					node.add_dependency(dep)
-			
-			left = node
+		if not current_token:
+			var error_msg = "Unexpected end of input after whitespace in expression"
+			print("Error: " + error_msg)
+			return ModelicaNode.new(NodeTypes.ERROR, error_msg, start_loc)
 		
-		return left
-
-	func _parse_unary_expression() -> ModelicaNode:
-		if _match(LexerImpl.TokenType.OPERATOR, "-"):
-			var node = ModelicaNode.new(ModelicaNode.NodeType.OPERATOR, "-")
-			node.operand = _parse_primary()
+		# Handle different token types
+		if current_token.type == LexerImpl.TokenType.IDENTIFIER:
+			# Function call or identifier
+			var id = current_token.value
+			var id_start_loc = get_token_location(current_token)
+			_advance()  # Consume identifier
 			
-			# Collect dependencies
-			if node.operand and node.operand.is_expression():
-				for dep in node.operand.get_dependencies():
-					node.add_dependency(dep)
+			# Check if it's a function call
+			if current_token and (
+				(current_token.type == LexerImpl.TokenType.PUNCTUATION and current_token.value == "(") or
+				(current_token.type == LexerImpl.TokenType.OPERATOR and current_token.value == "(")
+			):
+				var func_node = ModelicaNode.new(NodeTypes.FUNCTION_CALL, id, id_start_loc)
+				_advance()  # Consume opening parenthesis
+				
+				# Check for empty function call
+				if current_token and (
+					(current_token.type == LexerImpl.TokenType.PUNCTUATION and current_token.value == ")") or
+					(current_token.type == LexerImpl.TokenType.OPERATOR and current_token.value == ")")
+				):
+					_advance()  # Consume closing parenthesis
+					return func_node
+				
+				# Parse function arguments
+				while current_token and current_token.value != ")":
+					var arg = _parse_expression()
+					if arg:
+						func_node.add_child(arg)
+					
+					# Check for comma
+					if current_token and current_token.value == ",":
+						_advance()  # Consume comma
+					elif current_token and current_token.value == ")":
+						break  # End of arguments
+					else:
+						var error_msg = "Expected ',' or ')' in function call arguments"
+						print("Error: " + error_msg)
+						func_node.add_error(error_msg, "syntax_error")
+						break
+				
+				# Expect closing parenthesis
+				if current_token and current_token.value == ")":
+					_advance()  # Consume closing parenthesis
+				else:
+					var error_msg = "Expected ')' in function call"
+					print("Error: " + error_msg)
+					func_node.add_error(error_msg, "syntax_error")
+				
+				return func_node
+			else:
+				# Simple identifier
+				return ModelicaNode.new(NodeTypes.IDENTIFIER, id, id_start_loc)
+		elif current_token.type == LexerImpl.TokenType.NUMBER:
+			var num_node = ModelicaNode.new(NodeTypes.NUMBER, current_token.value, start_loc)
+			_advance()  # Consume number
+			return num_node
+		elif current_token.type == LexerImpl.TokenType.STRING:
+			var str_node = ModelicaNode.new(NodeTypes.STRING, current_token.value, start_loc)
+			_advance()  # Consume string
+			return str_node
+		elif current_token.type == LexerImpl.TokenType.KEYWORD and current_token.value == "der":
+			# Handle derivative function
+			_advance()  # Consume 'der'
 			
-			return node
-		
-		return _parse_primary()
-
-	func _parse_primary() -> ModelicaNode:
-		if current_token == null:
-			return null
-		
-		match current_token.type:
-			LexerImpl.TokenType.NUMBER:
-				var node = ModelicaNode.new(ModelicaNode.NodeType.NUMBER, float(current_token.value))
-				_advance()
-				return node
+			# Expect opening parenthesis
+			if not current_token or current_token.value != "(":
+				var error_msg = "Expected '(' after 'der'"
+				print("Error: " + error_msg)
+				return ModelicaNode.new(NodeTypes.ERROR, error_msg, start_loc)
+			
+			_advance()  # Consume opening parenthesis
+			
+			# Parse variable inside der()
+			var var_expr = _parse_expression()
+			if not var_expr:
+				var error_msg = "Expected expression inside der()"
+				print("Error: " + error_msg)
+				return ModelicaNode.new(NodeTypes.ERROR, error_msg, start_loc)
+			
+			# Create der() function call node
+			var der_node = ModelicaNode.new(NodeTypes.FUNCTION_CALL, "der", start_loc)
+			der_node.add_child(var_expr)
+			
+			# Expect closing parenthesis
+			if not current_token or current_token.value != ")":
+				var error_msg = "Expected ')' after der function argument"
+				print("Error: " + error_msg)
+				der_node.add_error(error_msg, "syntax_error")
+				return der_node
+			
+			_advance()  # Consume closing parenthesis
+			return der_node
+		elif current_token.type == LexerImpl.TokenType.OPERATOR or current_token.type == LexerImpl.TokenType.PUNCTUATION:
+			if current_token.value == "(":
+				_advance()  # Consume opening parenthesis
+				var expr = _parse_expression()
 				
-			LexerImpl.TokenType.IDENTIFIER:
-				var name = current_token.value
-				_advance()
-				
-				# Check for function call
-				if _match(LexerImpl.TokenType.PUNCTUATION, "("):
-					var node = ModelicaNode.new(ModelicaNode.NodeType.FUNCTION_CALL, name)
-					node.arguments = _parse_function_arguments()
-					_expect(LexerImpl.TokenType.PUNCTUATION, ")")
-					
-					# Handle derivative function
-					if name == "der":
-						node.is_differential = true
-						if not node.arguments.is_empty():
-							var arg = node.arguments[0]
-							if arg.type == ModelicaNode.NodeType.IDENTIFIER:
-								node.state_variable = arg.value
-					
-					# Collect dependencies from arguments
-					for arg in node.arguments:
-						if arg.is_expression():
-							for dep in arg.get_dependencies():
-								node.add_dependency(dep)
-					
-					return node
-				
-				# Regular variable reference
-				var node = ModelicaNode.new(ModelicaNode.NodeType.IDENTIFIER, name)
-				node.add_dependency(name)
-				return node
-				
-			LexerImpl.TokenType.PUNCTUATION:
-				if current_token.value == "(":
-					_advance()
-					var expr = _parse_expression()
-					_expect(LexerImpl.TokenType.PUNCTUATION, ")")
+				# Expect closing parenthesis
+				if current_token and current_token.value == ")":
+					_advance()  # Consume closing parenthesis
 					return expr
+				else:
+					var error_msg = "Expected ')' in parenthesized expression"
+					print("Error: " + error_msg)
+					if expr:
+						expr.add_error(error_msg, "syntax_error")
+						return expr
+					else:
+						return ModelicaNode.new(NodeTypes.ERROR, error_msg, start_loc)
+			elif current_token.value in ["+", "-"]:
+				# Unary operators
+				var op = current_token.value
+				var op_loc = get_token_location(current_token)
+				_advance()  # Consume operator
+				
+				var expr = _parse_factor()
+				if not expr:
+					var error_msg = "Expected expression after unary " + op
+					print("Error: " + error_msg)
+					return ModelicaNode.new(NodeTypes.ERROR, error_msg, start_loc)
+				
+				var op_node = ModelicaNode.new(NodeTypes.OPERATOR, op, op_loc)
+				op_node.add_child(expr)
+				return op_node
 		
-		_error("Unexpected token in expression")
-		return null
-
-	func _parse_function_arguments() -> Array[ModelicaNode]:
-		var arguments: Array[ModelicaNode] = []
-		
-		while current_token and current_token.type != LexerImpl.TokenType.PUNCTUATION:
-			var arg = _parse_expression()
-			if arg:
-				arguments.append(arg)
-			
-			if not _match(LexerImpl.TokenType.PUNCTUATION, ","):
-				break
-		
-		return arguments
-
-	func _get_operator_precedence(op: String) -> int:
-		match op:
-			"or": return 1
-			"and": return 2
-			"not": return 3
-			"<", "<=", ">", ">=", "==", "<>": return 4
-			"+", "-": return 5
-			"*", "/": return 6
-			"^": return 7
-			_: return 0
-
-	func _is_derivative(node: ModelicaNode) -> bool:
-		return node.type == ModelicaNode.NodeType.FUNCTION_CALL and node.value == "der"
-
-	func _extract_state_variable(node: ModelicaNode) -> String:
-		if node.type == ModelicaNode.NodeType.FUNCTION_CALL and node.value == "der":
-			if not node.arguments.is_empty():
-				var arg = node.arguments[0]
-				if arg.type == ModelicaNode.NodeType.IDENTIFIER:
-					return arg.value
-		return ""
+		# If we get here, we couldn't parse the expression
+		var error_msg = "Unexpected token in expression: " + str(current_token.type) + " - " + current_token.value
+		print("Error: " + error_msg)
+		return ModelicaNode.new(NodeTypes.ERROR, error_msg, start_loc)
 
 # Factory functions to create parsers
 static func create_modelica_parser() -> ModelicaParser:

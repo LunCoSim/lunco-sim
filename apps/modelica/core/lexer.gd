@@ -95,6 +95,7 @@ func _init(mode: int = LexerMode.BASIC) -> void:
 	
 	match mode:
 		LexerMode.MODELICA:
+			print("Initializing Modelica lexer with keywords:", MODELICA_KEYWORDS)
 			set_keywords(MODELICA_KEYWORDS)
 		LexerMode.EQUATION:
 			set_keywords(EQUATION_KEYWORDS)
@@ -272,8 +273,22 @@ func _handle_identifier() -> Token:
 	if _mode == LexerMode.EQUATION and value in ["and", "or", "not"]:
 		return Token.new(TokenType.OPERATOR, value, _line, start_col, start_pos)
 	
-	# Check if it's a keyword
-	if value in _keywords:
+	# Enhanced keyword checking for Modelica mode
+	if _mode == LexerMode.MODELICA:
+		# Debug output
+		if value == "model":
+			print("Found 'model' keyword, checking against MODELICA_KEYWORDS")
+		
+		# Case-insensitive check for "model" to ensure it's always caught
+		if value.to_lower() == "model":
+			print("Converting 'model' identifier to keyword token")
+			return Token.new(TokenType.KEYWORD, value, _line, start_col, start_pos)
+		
+		# Normal keyword check
+		if value in MODELICA_KEYWORDS:
+			print("Recognized keyword: " + value)
+			return Token.new(TokenType.KEYWORD, value, _line, start_col, start_pos)
+	elif value in _keywords:
 		return Token.new(TokenType.KEYWORD, value, _line, start_col, start_pos)
 	
 	# Special handling for derivative operator in equation mode
@@ -282,6 +297,7 @@ func _handle_identifier() -> Token:
 		# Handle derivative notation in equation mode
 		# This is a placeholder for more complex handling if needed
 	
+	print("Identifier token: " + value)
 	return Token.new(TokenType.IDENTIFIER, value, _line, start_col, start_pos)
 
 func _handle_number() -> Token:
