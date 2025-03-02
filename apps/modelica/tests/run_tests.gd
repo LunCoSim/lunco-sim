@@ -107,6 +107,7 @@ func run_test_file(test_path: String) -> bool:
 				# Add to test counts cautiously since we can't get exact numbers
 				total_tests += 1
 				failed_tests += 1
+				print("❌ FAILED: " + test_path)
 				return false
 			return true
 			
@@ -121,8 +122,13 @@ func run_test_file(test_path: String) -> bool:
 			skipped_tests += test_instance.skipped_tests
 			
 			if not success:
-				print("❌ Test failed: " + test_path)
+				print("❌ FAILED: " + test_path + " (Failed tests: " + str(test_instance.failed_tests) + ")")
+				# Print failed test names if available
+				if test_instance.has_method("get_failed_test_names") and test_instance.get_failed_test_names():
+					print("   Failed tests: " + str(test_instance.get_failed_test_names()))
 				return false
+			else:
+				print("✅ PASSED: " + test_path + " (Tests: " + str(test_instance.total_tests) + ")")
 		else:
 			print("ERROR: Test file does not extend BaseTest: " + test_path)
 			return false

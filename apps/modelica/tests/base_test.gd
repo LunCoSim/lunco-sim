@@ -148,6 +148,14 @@ func print_summary():
 	
 	print("\n")
 
+# Get a list of names of failed tests
+func get_failed_test_names() -> Array:
+	var failed_test_names = []
+	for result in results:
+		if not result.passed:
+			failed_test_names.append(result.name + " (" + result.error + ")")
+	return failed_test_names
+
 # Assertion methods
 func assert_true(condition: bool, message: String = ""):
 	if not condition:
