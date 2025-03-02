@@ -307,17 +307,32 @@ class TestSimpleModels extends "res://apps/modelica/tests/base_test.gd":
 func _init():
 	print("Starting test_simple_models.gd...")
 	var direct_execution = true
+	var test_suite_mode = false
 	
-	# Check if we're being run directly or via the test runner
+	# Check execution mode
 	for arg in OS.get_cmdline_args():
 		if arg.ends_with("run_tests.gd"):
 			direct_execution = false
+			break
+		if arg == "--test-suite-mode":
+			test_suite_mode = true
+			direct_execution = true
 			break
 	
 	if direct_execution:
 		print("\nRunning TestSimpleModels...")
 		var test = TestSimpleModels.new()
 		print("Running tests...")
-		test.run_tests()
+		
+		# Run the test
+		var success = test.run_tests()
+		
+		# In test suite mode, make the success/failure explicit
+		if test_suite_mode:
+			if success:
+				print("\n✅ TestSimpleModels PASSED")
+			else:
+				print("\n❌ TestSimpleModels FAILED")
+		
 		print("Test execution complete, quitting...")
 		quit() 

@@ -269,13 +269,30 @@ func _init():
 	var direct_execution = true
 	
 	# Check if we're being run directly or via the test runner
+	var test_suite_mode = false
+	
 	for arg in OS.get_cmdline_args():
 		if arg.ends_with("run_tests.gd"):
 			direct_execution = false
+			break
+		if arg == "--test-suite-mode":
+			test_suite_mode = true
+			direct_execution = true
 			break
 	
 	if direct_execution:
 		print("\nRunning TestNewArchitecture...")
 		var test = TestNewArchitecture.new()
-		test.run_tests()
+		
+		# Run the tests
+		var success = test.run_tests()
+		
+		# In test suite mode, make the success/failure explicit
+		if test_suite_mode:
+			if success:
+				print("\n✅ TestNewArchitecture PASSED")
+			else:
+				print("\n❌ TestNewArchitecture FAILED")
+				
+		print("Test execution complete, quitting...")
 		quit()

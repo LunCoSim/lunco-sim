@@ -34,7 +34,7 @@ func _init():
 
 # Run all tests in all test directories
 func run_all_tests():
-	# First pass: discover all test files
+	# First, discover all test files
 	var all_test_files = []
 	for directory in TEST_DIRECTORIES:
 		var dir_path = TEST_ROOT_DIR + "/" + directory
@@ -45,13 +45,25 @@ func run_all_tests():
 		else:
 			all_test_files.append_array(test_files)
 	
-	# Second pass: run all discovered tests
+	# Group tests by type to better manage resources
+	var scene_tree_tests = []
+	var base_tests = []
+	
+	# Identify test types
 	for test_file in all_test_files:
-		var file_result = run_test_file(test_file)
-		
-		# If the test file specifically indicates that tests failed, count that
-		if file_result == false:
-			failed_tests += 1
+		var file_path = ProjectSettings.globalize_path(test_file)
+		if file_is_scene_tree_test(test_file):
+			scene_tree_tests.append(test_file)
+		else:
+			base_tests.append(test_file)
+	
+	# Run regular BaseTest tests first (these are more reliable)
+	for test_file in base_tests:
+		run_base_test(test_file)
+	
+	# Run SceneTree tests afterward
+	for test_file in scene_tree_tests:
+		run_scene_tree_test(test_file)
 	
 	# Print final summary
 	print_final_summary()
@@ -81,9 +93,21 @@ func find_test_files(dir_path: String) -> Array:
 	
 	return test_files
 
-# Run a specific test file, return true if test succeeded, false if failed
-func run_test_file(test_path: String) -> bool:
-	print("\nRunning tests in: " + test_path)
+# Determine if a test file is a SceneTree test by examining its content
+func file_is_scene_tree_test(file_path: String) -> bool:
+	var file = FileAccess.open(file_path, FileAccess.READ)
+	if file:
+		var content = file.get_as_text()
+		file.close()
+		
+		# Check if the file directly extends SceneTree
+		return content.contains("extends SceneTree") and not content.contains("extends \"res://apps/modelica/tests/base_test.gd\"")
+	
+	return false
+
+# Run a regular BaseTest test
+func run_base_test(test_path: String) -> bool:
+	print("\nRunning BaseTest in: " + test_path)
 	
 	var test_script = load(test_path)
 	if test_script == null:
@@ -94,43 +118,36 @@ func run_test_file(test_path: String) -> bool:
 	test_classes_run += 1
 	
 	if test_instance:
-		# Handle SceneTree extended test files differently
-		if test_instance is SceneTree:
-			# These files handle themselves, just print their path
-			print("Starting " + test_path.get_file() + "...")
-			
-			# Attempt to inspect output from SceneTree tests
-			# We can't directly capture their results, but we'll mark as failed
-			# any file that contains "FAILED:" in the output
-			var file_content = FileAccess.get_file_as_string(test_path)
-			if file_content.contains("FAILED") or file_content.contains("push_error"):
-				# Add to test counts cautiously since we can't get exact numbers
-				total_tests += 1
-				failed_tests += 1
-				print("❌ FAILED: " + test_path)
-				return false
-			return true
-			
-		# For BaseTest extensions
-		if test_instance is BaseTest:
-			var success = test_instance.run_tests()
-			
-			# Add to global counters
-			total_tests += test_instance.total_tests
-			passed_tests += test_instance.passed_tests
-			failed_tests += test_instance.failed_tests
-			skipped_tests += test_instance.skipped_tests
-			
-			if not success:
-				print("❌ FAILED: " + test_path + " (Failed tests: " + str(test_instance.failed_tests) + ")")
-				# Print failed test names if available
-				if test_instance.has_method("get_failed_test_names") and test_instance.get_failed_test_names():
-					print("   Failed tests: " + str(test_instance.get_failed_test_names()))
-				return false
+		# Check if it extends BaseTest using a different approach
+		var BaseTest = load("res://apps/modelica/tests/base_test.gd")
+		if BaseTest != null:
+			# Try to run the test - will catch errors if not compatible
+			if test_instance.has_method("run_tests"):
+				var success = test_instance.run_tests()
+				
+				# Check if the instance has the expected properties from BaseTest
+				if "total_tests" in test_instance and "passed_tests" in test_instance:
+					# Add to global counters
+					total_tests += test_instance.total_tests
+					passed_tests += test_instance.passed_tests
+					failed_tests += test_instance.failed_tests
+					skipped_tests += test_instance.skipped_tests
+					
+					if not success:
+						print("❌ FAILED: " + test_path + " (Failed tests: " + str(test_instance.failed_tests) + ")")
+						if test_instance.has_method("get_failed_test_names") and test_instance.get_failed_test_names():
+							print("   Failed tests: " + str(test_instance.get_failed_test_names()))
+						return false
+					else:
+						print("✅ PASSED: " + test_path + " (Tests: " + str(test_instance.total_tests) + ")")
+				else:
+					print("ERROR: Test does not have required BaseTest properties: " + test_path)
+					return false
 			else:
-				print("✅ PASSED: " + test_path + " (Tests: " + str(test_instance.total_tests) + ")")
+				print("ERROR: Test file does not have run_tests method: " + test_path)
+				return false
 		else:
-			print("ERROR: Test file does not extend BaseTest: " + test_path)
+			print("ERROR: Could not load BaseTest class")
 			return false
 			
 		# Clean up
@@ -141,6 +158,67 @@ func run_test_file(test_path: String) -> bool:
 	else:
 		print("ERROR: Could not instantiate test: " + test_path)
 		return false
+
+# Run a SceneTree test in a smarter way
+func run_scene_tree_test(test_path: String) -> bool:
+	print("\nRunning SceneTree test in: " + test_path)
+	
+	# Get the absolute path for this test
+	var abs_test_path = ProjectSettings.globalize_path(test_path)
+	
+	# Create a unique temporary directory for this test run to ensure isolation
+	var timestamp = Time.get_unix_time_from_system()
+	var tmp_dir = "/tmp/godot_test_" + str(timestamp).md5_text()
+	
+	# Create a shell command to ensure the directory exists
+	OS.execute("mkdir", ["-p", tmp_dir], [], true)
+	
+	# Arguments for Godot with optimizations for test execution
+	var args = [
+		"--headless",                    # No UI needed
+		"--script", abs_test_path,       # The test to run
+		"--test-suite-mode",             # Special flag for our tests
+		"--no-window",                   # Ensure no window is created 
+		"--path", ProjectSettings.globalize_path("res://"),  # Ensure proper path
+		"--quiet"                        # Reduce noise
+	]
+	
+	# Improve isolation by using a dedicated user directory
+	args.append("--userdir")
+	args.append(tmp_dir)
+	
+	# Run the test and capture output
+	var output = []
+	var exit_code = OS.execute("godot", args, output, true)
+	
+	# Analyze the output
+	var output_str = output[0] if output.size() > 0 else ""
+	
+	# Count this as a test
+	total_tests += 1
+	test_classes_run += 1
+	
+	# Clean up resources
+	OS.execute("rm", ["-rf", tmp_dir], [], true)
+	
+	# Determine test success/failure
+	if exit_code != 0 or output_str.contains("❌ FAILED") or output_str.contains("push_error") or output_str.contains("ERROR:") or output_str.contains("FAILED:"):
+		failed_tests += 1
+		print("❌ FAILED: " + test_path)
+		print("Output: " + output_str.substr(0, min(output_str.length(), 500)) + "...")
+		return false
+	else:
+		# Look for explicit PASSED indicator in the test output
+		if output_str.contains("✅") or output_str.contains("PASSED") or output_str.contains("All tests passed"):
+			passed_tests += 1
+			print("✅ PASSED: " + test_path)
+			return true
+		else:
+			# Some tests might not explicitly output success indicators
+			# If there were no errors, we'll assume success
+			passed_tests += 1
+			print("✅ PASSED (implicit): " + test_path)  
+			return true
 
 # Print the final summary of all tests
 func print_final_summary():
