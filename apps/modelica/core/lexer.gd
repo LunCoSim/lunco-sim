@@ -169,6 +169,9 @@ func _next_token() -> Token:
 	if c == "/" and _peek_next() == "*":
 		print("Handling block comment")
 		return _handle_block_comment()
+	if c == "#":
+		print("Handling # line comment")
+		return _handle_hash_comment()
 	
 	# Handle identifiers and keywords
 	if c.is_valid_identifier():
@@ -256,6 +259,22 @@ func _handle_block_comment() -> Token:
 		
 		value += _current_char()
 		_position += 1
+	
+	return Token.new(TokenType.COMMENT, value, _line, start_col, start_pos)
+
+func _handle_hash_comment() -> Token:
+	var start_pos = _position
+	var start_col = _column
+	var value = ""
+	
+	# Skip #
+	_position += 1
+	_column += 1
+	
+	while _position < _length and _current_char() != "\n":
+		value += _current_char()
+		_position += 1
+		_column += 1
 	
 	return Token.new(TokenType.COMMENT, value, _line, start_col, start_pos)
 

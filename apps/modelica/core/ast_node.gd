@@ -22,6 +22,7 @@ enum NodeType {
 	OPERATOR,
 	FUNCTION_CALL,
 	ARRAY_ACCESS,
+	CONDITIONAL_EXPRESSION,  # For if-then-else expressions
 	
 	# Equation nodes
 	EQUATION,

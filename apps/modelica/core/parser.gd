@@ -685,6 +685,11 @@ class ModelicaParser extends SyntaxParser:
 			print("Error: " + error_msg)
 			return ModelicaNode.new(NodeTypes.ERROR, error_msg, start_loc)
 		
+		# Handle conditional expressions
+		if current_token.type == LexerImpl.TokenType.KEYWORD and current_token.value == "if":
+			# Handle conditional expressions (if-then-else)
+			return _parse_conditional_expression()
+			
 		# Handle different token types
 		if current_token.type == LexerImpl.TokenType.IDENTIFIER:
 			# Function call or identifier
@@ -814,6 +819,96 @@ class ModelicaParser extends SyntaxParser:
 		var error_msg = "Unexpected token in expression: " + str(current_token.type) + " - " + current_token.value
 		print("Error: " + error_msg)
 		return ModelicaNode.new(NodeTypes.ERROR, error_msg, start_loc)
+
+	# Parse conditional expression (if-then-else)
+	func _parse_conditional_expression() -> ModelicaNode:
+		var start_loc = get_token_location(current_token)
+		_advance() # Consume 'if'
+		
+		var cond_node = ModelicaNode.new(NodeTypes.CONDITIONAL_EXPRESSION, "if", start_loc)
+		
+		# Parse condition
+		var condition = _parse_expression()
+		if not condition:
+			var error_msg = "Expected condition after 'if'"
+			print("Error: " + error_msg)
+			cond_node.add_error(error_msg, "syntax_error")
+			return cond_node
+		
+		cond_node.add_child(condition)
+		
+		# Expect 'then' keyword
+		if not current_token or current_token.type != LexerImpl.TokenType.KEYWORD or current_token.value != "then":
+			var error_msg = "Expected 'then' after condition in if expression"
+			print("Error: " + error_msg)
+			cond_node.add_error(error_msg, "syntax_error")
+			return cond_node
+		
+		_advance() # Consume 'then'
+		
+		# Parse then-expression
+		var then_expr = _parse_expression()
+		if not then_expr:
+			var error_msg = "Expected expression after 'then'"
+			print("Error: " + error_msg)
+			cond_node.add_error(error_msg, "syntax_error")
+			return cond_node
+		
+		cond_node.add_child(then_expr)
+		
+		# Handle elseif branches
+		while current_token and current_token.type == LexerImpl.TokenType.KEYWORD and current_token.value == "elseif":
+			_advance() # Consume 'elseif'
+			
+			var elseif_condition = _parse_expression()
+			if not elseif_condition:
+				var error_msg = "Expected condition after 'elseif'"
+				print("Error: " + error_msg)
+				cond_node.add_error(error_msg, "syntax_error")
+				return cond_node
+			
+			# Expect 'then' keyword
+			if not current_token or current_token.type != LexerImpl.TokenType.KEYWORD or current_token.value != "then":
+				var error_msg = "Expected 'then' after condition in elseif"
+				print("Error: " + error_msg)
+				cond_node.add_error(error_msg, "syntax_error")
+				return cond_node
+			
+			_advance() # Consume 'then'
+			
+			var elseif_expr = _parse_expression()
+			if not elseif_expr:
+				var error_msg = "Expected expression after 'then' in elseif"
+				print("Error: " + error_msg)
+				cond_node.add_error(error_msg, "syntax_error")
+				return cond_node
+			
+			# Add elseif branch as a pair of condition and expression
+			var elseif_branch = ModelicaNode.new(NodeTypes.CONDITIONAL_EXPRESSION, "elseif", get_token_location(current_token))
+			elseif_branch.add_child(elseif_condition)
+			elseif_branch.add_child(elseif_expr)
+			cond_node.add_child(elseif_branch)
+		
+		# Expect 'else' keyword
+		if not current_token or current_token.type != LexerImpl.TokenType.KEYWORD or current_token.value != "else":
+			var error_msg = "Expected 'else' in conditional expression"
+			print("Error: " + error_msg)
+			cond_node.add_error(error_msg, "syntax_error")
+			return cond_node
+		
+		_advance() # Consume 'else'
+		
+		# Parse else-expression
+		var else_expr = _parse_expression()
+		if not else_expr:
+			var error_msg = "Expected expression after 'else'"
+			print("Error: " + error_msg)
+			cond_node.add_error(error_msg, "syntax_error")
+			return cond_node
+		
+		cond_node.add_child(else_expr)
+		
+		return cond_node
 
 # Factory functions to create parsers
 static func create_modelica_parser() -> ModelicaParser:
