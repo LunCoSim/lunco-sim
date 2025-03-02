@@ -3,9 +3,12 @@ extends SceneTree
 const Parser = preload("./core/parser.gd")
 const ModelicaLexer = preload("./core/lexer.gd")
 const ASTNode = preload("./core/ast_node.gd")
+const PackageManager = preload("./core/package_manager.gd")
+
+# Package manager instance
+var package_manager = PackageManager.create()
 
 # Configuration
-var models_path: String = "res://apps/modelica/models"
 var output_format: String = "csv"
 var output_file: String = ""
 
@@ -35,6 +38,11 @@ func _init():
 			i += 1
 			if i < args.size():
 				output_file = args[i]
+		elif arg == "--path" or arg == "-p":
+			# Add a path to MODELICAPATH
+			i += 1
+			if i < args.size():
+				package_manager.add_modelica_path(args[i])
 		elif arg == "--start" or arg == "-s":
 			i += 1
 			if i < args.size():
@@ -71,6 +79,7 @@ func _print_usage() -> void:
 	print("Options:")
 	print("  --format, -f <format>    Output format (csv, json)")
 	print("  --output, -o <file>      Output file (defaults to stdout)")
+	print("  --path, -p <path>        Add directory to MODELICAPATH")
 	print("  --start, -s <time>       Simulation start time (default: 0.0)")
 	print("  --stop, -e <time>        Simulation end time (default: 10.0)")
 	print("  --step, -dt <step>       Simulation time step (default: 0.01)")
@@ -79,33 +88,30 @@ func _print_usage() -> void:
 func load_and_simulate_model(model_name: String) -> int:
 	print("\nLoading model: ", model_name)
 	
-	# Find the model file
-	var model_file_path = find_model_file(model_name)
-	if model_file_path.is_empty():
-		push_error("Model not found: " + model_name)
+	# Validate and load the model using the package manager
+	var result = package_manager.validate_and_load_model(model_name)
+	
+	if not result.success:
+		print("Errors loading model:")
+		for error in result.errors:
+			print("  " + error.message)
+			if error.details.size() > 0:
+				for key in error.details:
+					print("    " + key + ": " + str(error.details[key]))
 		return ERR_FILE_NOT_FOUND
 	
-	print("Found model at: " + model_file_path)
-	
-	# Load model file
-	var file = FileAccess.open(model_file_path, FileAccess.READ)
-	if not file:
-		push_error("Failed to open model file: " + model_file_path)
-		return ERR_FILE_NOT_FOUND
-	
-	var content = file.get_as_text()
-	file.close()
+	print("Model loaded successfully")
 	
 	# Parse model
 	print("Parsing model...")
 	var parser = Parser.create_modelica_parser()
-	var ast = parser.parse(content)
+	var ast = parser.parse(result.content)
 	
 	if parser._has_errors():
 		print("Error parsing model:")
 		for error in parser.get_errors():
 			print("  " + error)
-		return
+		return ERR_PARSE_ERROR
 	
 	# Set up equations system
 	print("Setting up equation system...")
@@ -122,34 +128,13 @@ func load_and_simulate_model(model_name: String) -> int:
 	
 	# Run simulation
 	print("Running simulation...")
-	var result = simulate(system, output_writer)
-	if result != OK:
+	var sim_result = simulate(system, output_writer)
+	if sim_result != OK:
 		push_error("Simulation failed")
-		return result
+		return sim_result
 	
 	print("Simulation completed successfully")
 	return OK
-
-func find_model_file(model_name: String) -> String:
-	# Try direct path first
-	if FileAccess.file_exists(model_name):
-		return model_name
-	
-	# Try with .mo extension
-	if not model_name.ends_with(".mo"):
-		model_name += ".mo"
-	
-	# Try in models directory
-	var model_path = models_path.path_join(model_name)
-	if FileAccess.file_exists(model_path):
-		return model_path
-	
-	# Try in Mechanical subdirectory
-	model_path = models_path.path_join("Mechanical").path_join(model_name)
-	if FileAccess.file_exists(model_path):
-		return model_path
-	
-	return ""
 
 func setup_equation_system(ast: ASTNode):
 	# This is a placeholder for the actual equation system setup
