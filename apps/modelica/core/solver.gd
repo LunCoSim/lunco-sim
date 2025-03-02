@@ -87,7 +87,19 @@ func get_variable_value(name: String):
 		return 0.0  # Return a default value instead of an error object
 
 # Set the value of a variable
-func set_variable_value(name: String, value):
+func set_variable_value(name: String, value: float):
+	if name in state_variables:
+		state_variables[name].value = value
+		return ErrorSystem.ok()
+	elif name in algebraic_variables:
+		algebraic_variables[name].value = value
+		return ErrorSystem.ok()
+	else:
+		var error = error_manager.report_variable_error("Cannot set value for non-existent variable: " + name)
+		return ErrorSystem.err(error)
+
+# Set the value of a parameter
+func set_parameter_value(name: String, value):
 	# Try to convert the value to float if it's not already
 	var float_value = 0.0
 	
@@ -103,14 +115,11 @@ func set_variable_value(name: String, value):
 		float_value = float(value) if str(value).is_valid_float() else 0.0
 		print("Warning: Converting non-standard type to float: ", value, " -> ", float_value)
 	
-	if name in state_variables:
-		state_variables[name].value = float_value
-		return ErrorSystem.ok()
-	elif name in algebraic_variables:
-		algebraic_variables[name].value = float_value
+	if name in parameters:
+		parameters[name] = float_value
 		return ErrorSystem.ok()
 	else:
-		var error = error_manager.report_variable_error("Cannot set value for non-existent variable: " + name)
+		var error = error_manager.report_variable_error("Cannot set value for non-existent parameter: " + name)
 		return ErrorSystem.err(error)
 
 # Initialize the system
