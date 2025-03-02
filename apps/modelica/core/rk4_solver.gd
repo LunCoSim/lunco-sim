@@ -32,11 +32,12 @@ func _initialize_impl() -> bool:
 	if not success:
 		return false
 	
-	# Set up algebraic solver for non-state variables
-	success = setup_algebraic_solver()
+	# Try to set up algebraic solver for non-state variables
+	# This is optional and can fail without failing the overall initialization
+	setup_algebraic_solver()
 	
-	initialized = success
-	return success
+	initialized = true
+	return true
 
 # Identify state variables and their derivative equations
 func identify_state_variables() -> bool:
@@ -66,15 +67,15 @@ func identify_state_variables() -> bool:
 	return true
 
 # Set up algebraic solver for non-state variables
+# This is now optional and can fail without failing the overall initialization
 func setup_algebraic_solver() -> bool:
 	# Create a new equation system for algebraic variables only
 	var algebraic_system = EquationSystem.new()
 	
 	# Copy all variables except state variables
 	for var_name in equation_system.variables:
-		if not var_name in state_variables:
-			var var_data = equation_system.variables[var_name]
-			algebraic_system.add_variable(var_name, var_data)
+		var var_data = equation_system.variables[var_name]
+		algebraic_system.add_variable(var_name, var_data)
 	
 	# Copy all equations except derivative equations
 	for eq in equation_system.equations:
@@ -83,7 +84,13 @@ func setup_algebraic_solver() -> bool:
 	
 	# Create and initialize the causal solver
 	algebraic_solver = CausalSolver.new()
-	return algebraic_solver.initialize(algebraic_system)
+	var success = algebraic_solver.initialize(algebraic_system)
+	
+	if not success:
+		push_warning("Algebraic solver initialization failed - will use manual equation evaluation")
+		algebraic_solver = null
+	
+	return success
 
 # Implement a step of the solver
 func step(dt: float) -> bool:
@@ -132,6 +139,15 @@ func _step_impl(dt: float) -> bool:
 		equation_system.set_variable_value(state_var, new_value)
 	
 	# Update algebraic variables with the new state
+	update_algebraic_variables()
+	
+	# Update time
+	equation_system.time += dt
+	
+	return true
+
+# Update algebraic variables based on the current state
+func update_algebraic_variables() -> void:
 	if algebraic_solver != null:
 		# Copy updated state variables to the algebraic system
 		for state_var in state_variables:
@@ -145,26 +161,54 @@ func _step_impl(dt: float) -> bool:
 		
 		# Copy back the updated algebraic variables
 		for var_name in algebraic_solver.equation_system.variables:
-			equation_system.set_variable_value(
-				var_name, 
-				algebraic_solver.equation_system.get_variable_value(var_name)
-			)
-	
-	# Update time
-	equation_system.time += dt
-	
-	return true
+			if not var_name in state_variables:
+				equation_system.set_variable_value(
+					var_name, 
+					algebraic_solver.equation_system.get_variable_value(var_name)
+				)
+	else:
+		# Manual fallback for algebraic equations
+		# This is a simpler approach for our demo case
+		for eq in equation_system.equations:
+			if eq.type == ModelicaEquation.EquationType.EXPLICIT:
+				if eq.left_expression.type == ModelicaExpression.ExpressionType.VARIABLE:
+					var var_name = eq.left_expression.value
+					if not var_name in state_variables:
+						# This is an explicit assignment to an algebraic variable
+						var current_values = {}
+						for vname in equation_system.variables:
+							current_values[vname] = equation_system.get_variable_value(vname)
+						
+						var new_value = eq.right_expression.evaluate(current_values)
+						equation_system.set_variable_value(var_name, new_value)
 
 # Calculate derivatives for all state variables given a state
 func calculate_derivatives(state_values: Dictionary) -> Dictionary:
 	var derivatives = {}
+	
+	# First, update algebraic variables based on the given state
+	var temp_state = {}
+	for var_name in equation_system.variables:
+		if var_name in state_values:
+			temp_state[var_name] = state_values[var_name]
+		else:
+			temp_state[var_name] = equation_system.get_variable_value(var_name)
+	
+	# Handle algebraic variables manually if no solver
+	if algebraic_solver == null:
+		for eq in equation_system.equations:
+			if eq.type == ModelicaEquation.EquationType.EXPLICIT:
+				if eq.left_expression.type == ModelicaExpression.ExpressionType.VARIABLE:
+					var var_name = eq.left_expression.value
+					if not var_name in state_variables:
+						temp_state[var_name] = eq.right_expression.evaluate(temp_state)
 	
 	# For each state variable, evaluate its derivative equation
 	for state_var in derivative_equations:
 		var eq = derivative_equations[state_var]
 		
 		# The equation is der(x) = f(...), so evaluate the right-hand side
-		var der_value = eq.right_expression.evaluate(state_values)
+		var der_value = eq.right_expression.evaluate(temp_state)
 		derivatives[state_var] = der_value
 	
 	return derivatives
