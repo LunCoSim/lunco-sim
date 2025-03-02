@@ -300,17 +300,56 @@ static func _run_tests_in_directory(dir_path: String) -> int:
 		
 		while file_name != "":
 			# Only process .gd files
-			if file_name.ends_with(".gd"):
+			if file_name.ends_with(".gd") and not file_name.ends_with(".uid"):
 				if file_name.ends_with("_test.gd") or file_name.begins_with("test_"):
-					var test_script = load(dir_path + "/" + file_name)
-					if test_script:
-						var test_instance = test_script.new()
+					var test_script = null
+					var test_instance = null
+					var test_path = dir_path + "/" + file_name
+					
+					# Try to load the script and report error if it fails
+					test_script = load(test_path)
+					if test_script == null:
+						print("ERROR: Failed to load test script: " + test_path)
+						failed_tests += 1
+						file_name = dir.get_next()
+						continue
+					
+					# Special handling for integration tests since they have parse errors
+					if dir_path.ends_with("/integration") and file_name == "test_simple_models.gd":
+						print("ERROR: Integration test has parse errors: " + test_path)
+						failed_tests += 1
+						file_name = dir.get_next()
+						continue
+					
+					# For files that contain their own test class and _init method
+					# Try running the script directly - it will handle its own test execution
+					test_instance = test_script.new()
+					
+					if test_instance != null:
+						# For SceneTree extended test files, let them handle their own execution
+						if test_instance is SceneTree:
+							# The SceneTree test will handle running its own tests and cleanup
+							file_name = dir.get_next()
+							continue
+						
+						# For direct BaseTest extensions
 						if test_instance is BaseTest:
 							if not test_instance.run_tests():
 								failed_tests += 1
-						test_instance.queue_free()
+						else:
+							print("ERROR: Test file does not extend BaseTest: " + test_path)
+							failed_tests += 1
+						
+						# Clean up
+						if test_instance.has_method("queue_free"):
+							test_instance.queue_free()
+					else:
+						print("ERROR: Could not instantiate test: " + test_path)
+						failed_tests += 1
+			
 			file_name = dir.get_next()
 	else:
 		print("Error: Could not open directory: " + dir_path)
+		failed_tests += 1  # Count directory access failure as a test failure
 	
 	return failed_tests 
