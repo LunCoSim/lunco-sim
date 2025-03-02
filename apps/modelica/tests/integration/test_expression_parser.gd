@@ -297,6 +297,12 @@ class TestExpressionParser extends "res://apps/modelica/tests/base_test.gd":
 		
 		print("Error recovery test passed!")
 
+# Bridge method for the test runner
+func run_tests():
+	print("Starting test_expression_parser.gd...")
+	var test_instance = TestExpressionParser.new()
+	return test_instance.run_tests()
+
 func _init():
 	print("Starting test_expression_parser.gd...")
 	var direct_execution = true

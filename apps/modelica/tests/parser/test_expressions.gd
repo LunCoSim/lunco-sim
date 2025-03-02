@@ -65,6 +65,11 @@ class TestExpressions extends "res://apps/modelica/tests/base_test.gd":
 		assert_equal(ast.operand.type, ASTNode.NodeType.IDENTIFIER, "Operand should be an identifier")
 		assert_equal(ast.operand.value, "x", "Operand should be 'x'")
 
+# Bridge method for the test runner
+func run_tests():
+	var test_instance = TestExpressions.new()
+	return test_instance.run_tests()
+
 func _init():
 	var direct_execution = true
 	

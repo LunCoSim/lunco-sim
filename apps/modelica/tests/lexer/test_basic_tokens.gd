@@ -149,6 +149,11 @@ class TestBasicTokens extends "res://apps/modelica/tests/base_test.gd":
 		
 		assert_equal(tokens[3].type, LexicalAnalyzer.TokenType.EOF)
 
+# Bridge method for the test runner
+func run_tests():
+	var test_instance = TestBasicTokens.new()
+	return test_instance.run_tests()
+
 func _init():
 	var direct_execution = true
 	

@@ -90,6 +90,11 @@ class TestLogicalOperators extends "res://apps/modelica/tests/base_test.gd":
 		assert_equal(tokens[6].type, LexicalAnalyzer.TokenType.NUMBER, "Token '10' should be NUMBER")
 		assert_equal(tokens[11].type, LexicalAnalyzer.TokenType.NUMBER, "Token '5' should be NUMBER")
 
+# Bridge method for the test runner
+func run_tests():
+	var test_instance = TestLogicalOperators.new()
+	return test_instance.run_tests()
+
 func _init():
 	var test = TestLogicalOperators.new()
 	test.run_tests()

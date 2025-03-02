@@ -265,6 +265,20 @@ class TestNewArchitecture extends "res://apps/modelica/tests/base_test.gd":
 		
 		print("Test passed!")
 
+# Bridge method for the test runner
+func run_tests():
+	var test_instance = TestNewArchitecture.new()
+	
+	# Make sure the test is properly initialized
+	test_instance.test_class = "TestNewArchitecture"
+	test_instance.total_tests = 0
+	test_instance.passed_tests = 0
+	test_instance.failed_tests = 0
+	test_instance.skipped_tests = 0
+	
+	# Run the tests with proper initialization
+	return test_instance.run_tests()
+
 func _init():
 	var direct_execution = true
 	

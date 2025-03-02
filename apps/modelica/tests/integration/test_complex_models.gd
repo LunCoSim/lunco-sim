@@ -231,6 +231,12 @@ class TestComplexModels extends "res://apps/modelica/tests/base_test.gd":
 			
 		print("PDE boundary conditions test passed!")
 
+# Bridge method for the test runner
+func run_tests():
+	print("Starting test_complex_models.gd...")
+	var test_instance = TestComplexModels.new()
+	return test_instance.run_tests()
+
 func _init():
 	print("Starting test_complex_models.gd...")
 	var direct_execution = true

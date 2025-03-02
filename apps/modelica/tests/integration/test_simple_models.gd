@@ -304,6 +304,12 @@ class TestSimpleModels extends "res://apps/modelica/tests/base_test.gd":
 		else:
 			print("Warning: state_variables dictionary missing or incomplete")
 
+# Bridge method for the test runner
+func run_tests():
+	print("Starting test_simple_models.gd...")
+	var test_instance = TestSimpleModels.new()
+	return test_instance.run_tests()
+
 func _init():
 	print("Starting test_simple_models.gd...")
 	var direct_execution = true
