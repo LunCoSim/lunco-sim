@@ -473,7 +473,7 @@ class ModelicaParser extends SyntaxParser:
 				break
 			
 			# Parse a single equation
-			var eq_node = _parse_single_equation()
+			var eq_node = _parse_single_equation(is_initial)
 			if eq_node:
 				eq_section.add_child(eq_node)
 			else:
@@ -487,15 +487,25 @@ class ModelicaParser extends SyntaxParser:
 		return eq_section
 
 	# Parse a single equation
-	func _parse_single_equation() -> ModelicaNode:
+	func _parse_single_equation(initial: bool = false) -> ModelicaNode:
 		print("Parsing single equation")
 		var start_loc = get_token_location(current_token)
+		
+		# Skip comments before equation
+		while current_token and current_token.type == LexerImpl.TokenType.COMMENT:
+			print("Skipping comment before equation: " + current_token.value)
+			_advance()
 		
 		# Parse left-hand side expression
 		var lhs = _parse_expression()
 		if not lhs:
 			print("Failed to parse left-hand side of equation")
-			return null
+			return ModelicaNode.new(NodeTypes.ERROR, "Failed to parse equation", start_loc)
+		
+		# Skip comments before the equals sign
+		while current_token and current_token.type == LexerImpl.TokenType.COMMENT:
+			print("Skipping comment before equals sign: " + current_token.value)
+			_advance()
 		
 		# Expect equals sign
 		if not current_token or (
@@ -513,6 +523,11 @@ class ModelicaParser extends SyntaxParser:
 		
 		_advance()  # Consume equals sign
 		
+		# Skip comments after the equals sign
+		while current_token and current_token.type == LexerImpl.TokenType.COMMENT:
+			print("Skipping comment after equals sign: " + current_token.value)
+			_advance()
+		
 		# Parse right-hand side expression
 		var rhs = _parse_expression()
 		if not rhs:
@@ -526,6 +541,11 @@ class ModelicaParser extends SyntaxParser:
 		var eq_node = ModelicaNode.new(NodeTypes.EQUATION, "=", start_loc)
 		eq_node.add_child(lhs)
 		eq_node.add_child(rhs)
+		
+		# Skip comments before the semicolon
+		while current_token and current_token.type == LexerImpl.TokenType.COMMENT:
+			print("Skipping comment before semicolon: " + current_token.value)
+			_advance()
 		
 		# Expect semicolon
 		if current_token and (
@@ -556,11 +576,21 @@ class ModelicaParser extends SyntaxParser:
 		if not left:
 			return null
 			
+		# Skip any comments before checking for operators
+		while current_token and current_token.type == LexerImpl.TokenType.COMMENT:
+			print("Skipping comment in addition expression: " + current_token.value)
+			_advance()
+			
 		# Continue parsing binary operations as long as we have +/- operators
 		while current_token and current_token.type == LexerImpl.TokenType.OPERATOR and current_token.value in ["+", "-"]:
 			var op = current_token.value
 			var op_loc = get_token_location(current_token)
 			_advance()  # Consume operator
+			
+			# Skip any comments after operator before parsing right term
+			while current_token and current_token.type == LexerImpl.TokenType.COMMENT:
+				print("Skipping comment after operator in addition: " + current_token.value)
+				_advance()
 			
 			# Parse the right operand (higher precedence)
 			var right = _parse_term()
@@ -579,6 +609,11 @@ class ModelicaParser extends SyntaxParser:
 			# Update left for the next iteration (for chained operations)
 			left = op_node
 			
+			# Skip any comments before checking for more operators
+			while current_token and current_token.type == LexerImpl.TokenType.COMMENT:
+				print("Skipping comment after term in addition: " + current_token.value)
+				_advance()
+			
 		return left
 		
 	# Parse multiplication and division (higher precedence)
@@ -590,11 +625,21 @@ class ModelicaParser extends SyntaxParser:
 		if not left:
 			return null
 			
+		# Skip any comments before checking for operators
+		while current_token and current_token.type == LexerImpl.TokenType.COMMENT:
+			print("Skipping comment in term expression: " + current_token.value)
+			_advance()
+			
 		# Continue parsing binary operations as long as we have */ operators
 		while current_token and current_token.type == LexerImpl.TokenType.OPERATOR and current_token.value in ["*", "/"]:
 			var op = current_token.value
 			var op_loc = get_token_location(current_token)
 			_advance()  # Consume operator
+			
+			# Skip any comments after operator before parsing right factor
+			while current_token and current_token.type == LexerImpl.TokenType.COMMENT:
+				print("Skipping comment after operator in term: " + current_token.value)
+				_advance()
 			
 			# Parse the right operand (higher precedence)
 			var right = _parse_factor()
@@ -613,6 +658,11 @@ class ModelicaParser extends SyntaxParser:
 			# Update left for the next iteration (for chained operations)
 			left = op_node
 			
+			# Skip any comments before checking for more operators
+			while current_token and current_token.type == LexerImpl.TokenType.COMMENT:
+				print("Skipping comment after factor in term: " + current_token.value)
+				_advance()
+			
 		return left
 		
 	# Parse atomic expressions and highest precedence operations
@@ -625,12 +675,13 @@ class ModelicaParser extends SyntaxParser:
 			print("Error: " + error_msg)
 			return ModelicaNode.new(NodeTypes.ERROR, error_msg, start_loc)
 		
-		# Skip any whitespace in expression
-		while current_token and current_token.type == LexerImpl.TokenType.WHITESPACE:
+		# Skip any whitespace or comments in expression
+		while current_token and (current_token.type == LexerImpl.TokenType.WHITESPACE or current_token.type == LexerImpl.TokenType.COMMENT):
+			print("Skipping token in expression: " + str(current_token.type) + " - " + current_token.value)
 			_advance()
 			
 		if not current_token:
-			var error_msg = "Unexpected end of input after whitespace in expression"
+			var error_msg = "Unexpected end of input after whitespace/comment in expression"
 			print("Error: " + error_msg)
 			return ModelicaNode.new(NodeTypes.ERROR, error_msg, start_loc)
 		
