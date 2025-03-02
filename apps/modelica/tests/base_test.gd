@@ -300,7 +300,7 @@ static func _run_tests_in_directory(dir_path: String) -> int:
 		
 		while file_name != "":
 			# Only process .gd files
-			if file_name.ends_with(".gd") and not file_name.ends_with(".uid"):
+			if file_name.ends_with(".gd"):
 				if file_name.ends_with("_test.gd") or file_name.begins_with("test_"):
 					var test_script = null
 					var test_instance = null
@@ -310,13 +310,6 @@ static func _run_tests_in_directory(dir_path: String) -> int:
 					test_script = load(test_path)
 					if test_script == null:
 						print("ERROR: Failed to load test script: " + test_path)
-						failed_tests += 1
-						file_name = dir.get_next()
-						continue
-					
-					# Special handling for integration tests since they have parse errors
-					if dir_path.ends_with("/integration") and file_name == "test_simple_models.gd":
-						print("ERROR: Integration test has parse errors: " + test_path)
 						failed_tests += 1
 						file_name = dir.get_next()
 						continue
