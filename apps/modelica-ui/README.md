@@ -59,4 +59,90 @@ We welcome contributions! Please refer to our development strategy and focus on 
 
 ## License
 
-*To be determined* 
+*To be determined*
+
+# Modelica UI
+
+A user interface for working with Modelica models, built using Godot Engine.
+
+## Features
+
+- Load Modelica files (.mo) and their dependencies
+- Show all loaded Modelica files in a file tree
+- Edit, save, and create new Modelica files with syntax highlighting
+- Run simulations with configurable parameters
+- View simulation results in a table
+- Export simulation results to CSV
+
+## Getting Started
+
+### Prerequisites
+
+- Godot Engine 4.x
+
+### Running the UI
+
+1. Open the project in Godot Engine
+2. Run the project (F5)
+3. Use the UI to load, edit, and simulate Modelica models
+
+## Usage
+
+### Loading a Model
+
+1. Click the "Load" button in the top-left corner
+2. Select a Modelica (.mo) file to load
+3. The file and its dependencies will be loaded and shown in the file tree
+
+### Creating a New Model
+
+1. Click the "New" button in the top-left corner
+2. Choose a location and name for your new file
+3. A template model will be created and opened in the editor
+
+### Editing a Model
+
+1. Select a file from the file tree to open it in the editor
+2. Make your changes in the code editor
+3. Click "Save" to save your changes
+
+### Running a Simulation
+
+1. Open the model you want to simulate
+2. Configure the simulation parameters (start time, end time, step size)
+3. Click "Run Simulation" to start the simulation
+4. Results will appear in the table below
+
+### Exporting Results
+
+1. After running a simulation, click "Export CSV"
+2. Choose a location and name for your CSV file
+3. The simulation results will be exported to the CSV file
+
+## Project Structure
+
+- `scenes/` - Contains the UI scene definitions
+- `scripts/` - Contains the scripts for the UI functionality
+  - `ui/` - UI-specific scripts
+  - `core/` - Core functionality scripts
+- `resources/` - Resources used by the UI
+
+## Development
+
+The Modelica UI uses the Modelica core functionality from the `apps/modelica` directory.
+
+### Key Components
+
+- `modelica_ui_controller.gd` - Main UI controller script
+- `modelica_syntax_highlighter.gd` - Syntax highlighting for Modelica files
+- `modelica_simulator.gd` - Handles simulation and results
+
+## Roadmap
+
+Planned features for future versions:
+
+- Graphical representation of simulation results
+- Better error reporting and visualization
+- Auto-completion in the code editor
+- Model debugging capabilities
+- Support for more complex Modelica features 

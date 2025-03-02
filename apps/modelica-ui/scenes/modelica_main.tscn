@@ -1,0 +1,165 @@
+[gd_scene load_steps=2 format=3 uid="uid://4xkf8ysq7lti"]
+
+[ext_resource type="Script" uid="uid://cic55cm0d4a8o" path="res://apps/modelica-ui/scripts/ui/modelica_ui_controller.gd" id="1_f6mrj"]
+
+[node name="ModelicaUI" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_f6mrj")
+
+[node name="MainLayout" type="HSplitContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="FilePanel" type="VBoxContainer" parent="MainLayout"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_stretch_ratio = 0.25
+
+[node name="FilesPanelHeader" type="HBoxContainer" parent="MainLayout/FilePanel"]
+layout_mode = 2
+
+[node name="Label" type="Label" parent="MainLayout/FilePanel/FilesPanelHeader"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Modelica Files"
+
+[node name="LoadFileButton" type="Button" parent="MainLayout/FilePanel/FilesPanelHeader"]
+layout_mode = 2
+text = "Load"
+
+[node name="NewFileButton" type="Button" parent="MainLayout/FilePanel/FilesPanelHeader"]
+layout_mode = 2
+text = "New"
+
+[node name="FileTree" type="Tree" parent="MainLayout/FilePanel"]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="WorkArea" type="VSplitContainer" parent="MainLayout"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_stretch_ratio = 0.75
+
+[node name="EditorPanel" type="VBoxContainer" parent="MainLayout/WorkArea"]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="EditorToolbar" type="HBoxContainer" parent="MainLayout/WorkArea/EditorPanel"]
+layout_mode = 2
+
+[node name="SaveButton" type="Button" parent="MainLayout/WorkArea/EditorPanel/EditorToolbar"]
+layout_mode = 2
+text = "Save"
+
+[node name="RunButton" type="Button" parent="MainLayout/WorkArea/EditorPanel/EditorToolbar"]
+layout_mode = 2
+text = "Run Simulation"
+
+[node name="FileNameLabel" type="Label" parent="MainLayout/WorkArea/EditorPanel/EditorToolbar"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "No file open"
+horizontal_alignment = 2
+
+[node name="CodeEditor" type="CodeEdit" parent="MainLayout/WorkArea/EditorPanel"]
+layout_mode = 2
+size_flags_vertical = 3
+minimap_draw = true
+highlight_current_line = true
+draw_tabs = true
+
+[node name="SimulationPanel" type="VBoxContainer" parent="MainLayout/WorkArea"]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="SimulationToolbar" type="HBoxContainer" parent="MainLayout/WorkArea/SimulationPanel"]
+layout_mode = 2
+
+[node name="Label" type="Label" parent="MainLayout/WorkArea/SimulationPanel/SimulationToolbar"]
+layout_mode = 2
+text = "Simulation Controls:"
+
+[node name="StartTimeLabel" type="Label" parent="MainLayout/WorkArea/SimulationPanel/SimulationToolbar"]
+layout_mode = 2
+text = "Start:"
+
+[node name="StartTimeInput" type="SpinBox" parent="MainLayout/WorkArea/SimulationPanel/SimulationToolbar"]
+layout_mode = 2
+step = 0.01
+
+[node name="EndTimeLabel" type="Label" parent="MainLayout/WorkArea/SimulationPanel/SimulationToolbar"]
+layout_mode = 2
+text = "End:"
+
+[node name="EndTimeInput" type="SpinBox" parent="MainLayout/WorkArea/SimulationPanel/SimulationToolbar"]
+layout_mode = 2
+step = 0.1
+value = 10.0
+
+[node name="StepSizeLabel" type="Label" parent="MainLayout/WorkArea/SimulationPanel/SimulationToolbar"]
+layout_mode = 2
+text = "Step:"
+
+[node name="StepSizeInput" type="SpinBox" parent="MainLayout/WorkArea/SimulationPanel/SimulationToolbar"]
+layout_mode = 2
+max_value = 1.0
+step = 0.001
+
+[node name="ExportCSVButton" type="Button" parent="MainLayout/WorkArea/SimulationPanel/SimulationToolbar"]
+layout_mode = 2
+text = "Export CSV"
+
+[node name="ResultsTabContainer" type="TabContainer" parent="MainLayout/WorkArea/SimulationPanel"]
+layout_mode = 2
+size_flags_vertical = 3
+current_tab = 0
+
+[node name="Table" type="MarginContainer" parent="MainLayout/WorkArea/SimulationPanel/ResultsTabContainer"]
+layout_mode = 2
+metadata/_tab_index = 0
+
+[node name="ResultsTable" type="Tree" parent="MainLayout/WorkArea/SimulationPanel/ResultsTabContainer/Table"]
+layout_mode = 2
+columns = 3
+
+[node name="Graph" type="MarginContainer" parent="MainLayout/WorkArea/SimulationPanel/ResultsTabContainer"]
+visible = false
+layout_mode = 2
+metadata/_tab_index = 1
+
+[node name="GraphPlaceholder" type="Label" parent="MainLayout/WorkArea/SimulationPanel/ResultsTabContainer/Graph"]
+layout_mode = 2
+text = "Graph view will be implemented here"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="LoadFileDialog" type="FileDialog" parent="."]
+title = "Open a File"
+size = Vector2i(600, 400)
+ok_button_text = "Open"
+file_mode = 0
+filters = PackedStringArray("*.mo ; Modelica Files")
+
+[node name="SaveFileDialog" type="FileDialog" parent="."]
+size = Vector2i(600, 400)
+filters = PackedStringArray("*.mo ; Modelica Files")
+
+[node name="NewFileDialog" type="FileDialog" parent="."]
+title = "Open a File"
+size = Vector2i(600, 400)
+ok_button_text = "Open"
+file_mode = 0
+filters = PackedStringArray("*.mo ; Modelica Files")
+
+[node name="ExportCSVDialog" type="FileDialog" parent="."]
+size = Vector2i(600, 400)
+filters = PackedStringArray("*.csv ; CSV Files")
