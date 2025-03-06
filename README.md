@@ -1,11 +1,11 @@
-# LunCo: Everyone can do Space
+# LunCoSim: Everyone can do Space
 
-LunCo is a open-source simulation tool designed for planning space missions, with a focus on lunar settlements. 
+LunCoSim is a open-source simulation tool designed for planning space missions, with a focus on lunar settlements. 
 
 ![](https://gateway.lighthouse.storage/ipfs/bafybeibtwxdybz5onr5zwqotia64lbsgju6r55nwp23bosd4mxwy25siqa)
 *Coming soon via [ivoyager](https://github.com/ivoyager)*
 
-Built with the powerful Godot 4 engine, LunCo aims to revolutionize the way space engineers design and collaborate on complex systems.
+Built with the powerful Godot 4 engine, LunCoSim aims to revolutionize the way space engineers design and collaborate on complex systems.
 
 ## [Try in Browser](https://alpha.lunco.space)
 
@@ -14,7 +14,7 @@ Built with the powerful Godot 4 engine, LunCo aims to revolutionize the way spac
 
 Our vision is to provide a comprehensive suite of open-source applications tailored for Lunar Base engineering, including:
 
-- **Unified Platform**: LunCo serves as a central hub, bringing together the best of open-source space engineering tools, offering a unified experience for users.
+- **Unified Platform**: LunCoSim serves as a central hub, bringing together the best of open-source space engineering tools, offering a unified experience for users.
 - **Requirements Management**: Streamline and manage your project requirements with ease.
 - **Models Visualizations**: Visualize and interact with your designs in a 3D environment.
 - **Collaborative Training**: Train and collaborate with your team in real-time.
@@ -27,7 +27,7 @@ Our vision is to provide a comprehensive suite of open-source applications tailo
 
 0. The development is done on Linux Mate, so there could be issues running on Windows and MacOs. Please reach us
 
-1. Install [Godot 4.4 Beta 3](https://godotengine.org/article/dev-snapshot-godot-4-4-beta-3/#downloads)
+1. Install [Godot 4.4](https://godotengine.org/download/)
 
 2. Install [git lfs](https://github.com/git-lfs/git-lfs#getting-started). It handles large files in the repository. Use git-cmd if you are on Windows.
 
@@ -52,7 +52,7 @@ git pull --recurse-submodules
 git lfs pull && git submodule foreach git lfs pull
 ```
 
-7. Now open project and wait till intenal conent management downloads all the files. LunCo Content Manager (new system, gradually being adopted):
+7. Now open project and wait till intenal conent management downloads all the files. LunCoSim Content Manager (new system, gradually being adopted):
    1. Will be installed automatically with other addons
    2. After installation, you'll see a "Content" button in the editor toolbar
    3. Use it to download missing content files when needed
@@ -85,7 +85,7 @@ Support us on [JuiceBox](https://juicebox.money/v2/p/763)!
 	
 4. **Decentralized Engineer Profiles**: Create your decentralized engineer profile. Manage access, showcase your projects, and connect with peers in a secure and transparent manner.
 	
-5. **Interactive Training Modules**: Engage in hands-on training sessions within the LunCo platform. Simulate real-world lunar scenarios, test your designs, and receive instant feedback, all within a dynamic and interactive environment.
+5. **Interactive Training Modules**: Engage in hands-on training sessions within the LunCoSim platform. Simulate real-world lunar scenarios, test your designs, and receive instant feedback, all within a dynamic and interactive environment.
 
 
 ## 🌐 Community & Support
