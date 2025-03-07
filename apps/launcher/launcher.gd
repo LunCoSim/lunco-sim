@@ -3,6 +3,7 @@ extends Control
 func _ready():
 	$VBoxContainer/SupplyChainButton.pressed.connect(_on_supply_chain_pressed)
 	$VBoxContainer/MainButton.pressed.connect(_on_main_pressed)
+	$VBoxContainer/ModelicaUIButton.pressed.connect(_on_modelica_ui_pressed)
 
 func _on_supply_chain_pressed():
 	# Load supply chain scene
@@ -20,3 +21,7 @@ func _on_main_pressed():
 func _on_main_animated_pressed():
 	# Load main animated scene
 	get_tree().change_scene_to_file("res://main_animated.tscn") 
+
+func _on_modelica_ui_pressed():
+	# Load Modelica UI scene
+	get_tree().change_scene_to_file("res://apps/modelica-ui/scenes/modelica_main.tscn") 

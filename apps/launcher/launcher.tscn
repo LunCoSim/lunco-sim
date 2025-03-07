@@ -49,3 +49,8 @@ text = "Supply Chain Modeling"
 layout_mode = 2
 theme_override_font_sizes/font_size = 40
 text = "3D Simulation"
+
+[node name="ModelicaUIButton" type="Button" parent="VBoxContainer"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 40
+text = "Modelica UI"
