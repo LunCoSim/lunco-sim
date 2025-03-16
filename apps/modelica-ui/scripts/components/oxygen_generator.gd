@@ -1,5 +1,5 @@
 @tool
-extends "res://apps/lunsim/scripts/components/base_component.gd"
+extends "res://apps/modelica-ui/scripts/components/base_component.gd"
 
 class_name OxygenGenerator
 

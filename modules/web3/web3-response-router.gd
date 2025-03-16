@@ -5,8 +5,8 @@ extends HttpRouter
 func handle_post(request: HttpRequest, response: HttpResponse) -> void:
 	print('handle_post')
 	
-	Panku.notify("Successfully logined")
-	Panku.notify(request.get_body_parsed()["wallet"])
+	#Panku.notify("Successfully logined")
+	#Panku.notify(request.get_body_parsed()["wallet"])
 	
 	Profile.wallet = request.get_body_parsed()["wallet"]
 	

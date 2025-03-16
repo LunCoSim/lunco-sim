@@ -75,15 +75,15 @@ func _on_component_button_pressed(type):
 	var component
 	match type:
 		"solar_panel":
-			component = preload("res://apps/lunsim/scripts/components/solar_panel.gd").new()
+			component = preload("res://apps/modelica-ui/scripts/components/solar_panel.gd").new()
 		"battery":
-			component = preload("res://apps/lunsim/scripts/components/battery.gd").new()
+			component = preload("res://apps/modelica-ui/scripts/components/battery.gd").new()
 		"habitat":
-			component = preload("res://apps/lunsim/scripts/components/habitat.gd").new()
+			component = preload("res://apps/modelica-ui/scripts/components/habitat.gd").new()
 		"oxygen_generator":
-			component = preload("res://apps/lunsim/scripts/components/oxygen_generator.gd").new()
+			component = preload("res://apps/modelica-ui/scripts/components/oxygen_generator.gd").new()
 		"water_recycler":
-			component = preload("res://apps/lunsim/scripts/components/water_recycler.gd").new()
+			component = preload("res://apps/modelica-ui/scripts/components/water_recycler.gd").new()
 	
 	# Add component to simulation area
 	simulation_area.add_child(component)

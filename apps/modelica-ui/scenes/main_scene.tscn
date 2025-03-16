@@ -1,6 +1,6 @@
 [gd_scene load_steps=2 format=3 uid="uid://chj4g5yo8uqc6"]
 
-[ext_resource type="Script" uid="uid://xnr6aba2kkkb" path="res://apps/lunsim/scripts/core/simulator.gd" id="1_4qogp"]
+[ext_resource type="Script" uid="uid://xnr6aba2kkkb" path="res://apps/modelica-ui/scripts/core/simulator.gd" id="1_4qogp"]
 
 [node name="LunarColonySimulator" type="Control"]
 layout_mode = 3

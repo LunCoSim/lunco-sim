@@ -32,6 +32,6 @@ func set_text(text):
 	$TextEdit.text = text
 
 func _on_text_edit_text_changed():
-	Entities.set_text.rpc($TextEdit.text)
-
+	# TODO: Uncomment when Entities class is implemented
+	# Entities.set_text.rpc($TextEdit.text)
 	pass # Replace with function body.

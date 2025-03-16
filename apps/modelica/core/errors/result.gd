@@ -21,7 +21,7 @@ static func err(error_obj: ModelicaError) -> Result:
     return instance
 
 # Helper to create error with message
-static func error(msg: String, category: ModelicaError.Category, 
+static func create_error(msg: String, category: ModelicaError.Category, 
                 severity: ModelicaError.Severity = ModelicaError.Severity.ERROR,
                 location = null, context = null) -> Result:
     var error_obj = ModelicaError.new(msg, category, severity, location, context)
@@ -48,8 +48,8 @@ func get_error() -> ModelicaError:
     return error
 
 # Get string representation
-func to_string() -> String:
+func get_result_string() -> String:
     if success:
         return "Result.ok(%s)" % [str(value)]
     else:
-        return "Result.err(%s)" % [error.to_string()] 
+        return "Result.err(%s)" % [error.get_error_string()] 

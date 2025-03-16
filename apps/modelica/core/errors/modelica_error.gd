@@ -28,7 +28,7 @@ func _init(msg: String, cat: Category, sev: Severity = Severity.ERROR, loc = nul
     if ctx:
         context = ctx
         
-func to_string() -> String:
+func get_error_string() -> String:
     var result = "%s: %s" % [Severity.keys()[severity], message]
     if not location.is_empty():
         result += " at %s:%s:%s" % [location.file, location.line, location.column]
