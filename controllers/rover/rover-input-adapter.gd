@@ -1,6 +1,6 @@
 extends Node
 
-@export var controller: LCRoverController
+@export var controller: LC3DSimRoverController
 
 # Input sensitivity and deadzone settings
 @export var MOTOR_SENSITIVITY := 1.0
@@ -17,6 +17,10 @@ var brake_input := 0.0
 func _ready():
 	if not controller:
 		push_warning("RoverInputAdapter: No controller reference set!")
+		# Try to autodetect controller if not set
+		controller = get_node_or_null("../RoverController")
+		if controller:
+			print("RoverInputAdapter: Auto-detected controller")
 
 func _physics_process(delta: float):
 	if not controller:
@@ -37,8 +41,16 @@ func process_keyboard_input():
 	left_input = Input.get_action_strength("move_left")
 	right_input = Input.get_action_strength("move_right")
 	
-	# Brake
-	brake_input = Input.get_action_strength("brake")
+	# Brake - check multiple possible brake actions
+	brake_input = max(
+		Input.get_action_strength("brake"),  # Space
+		Input.get_action_strength("jump"),   # Alternative mapping
+		Input.get_action_strength("throttle") # Another possible mapping
+	)
+	
+	# Print debug info when brake is pressed
+	if brake_input > 0:
+		print("Brake applied: ", brake_input)
 
 func process_gamepad_input():
 	# Get gamepad analog stick values if available
@@ -54,6 +66,11 @@ func process_gamepad_input():
 func apply_inputs():
 	# Calculate motor input (-1 to 1)
 	var motor = (forward_input - reverse_input) * MOTOR_SENSITIVITY
+	
+	# If braking, gradually reduce motor input
+	if brake_input > 0:
+		motor *= (1.0 - brake_input)
+	
 	controller.set_motor(motor)
 	
 	# Calculate steering input (-1 to 1)
