@@ -14,6 +14,9 @@ var left_input := 0.0
 var right_input := 0.0
 var brake_input := 0.0
 
+# Track brake state for debug output
+var was_braking := false
+
 func _ready():
 	if not controller:
 		push_warning("RoverInputAdapter: No controller reference set!")
@@ -41,16 +44,20 @@ func process_keyboard_input():
 	left_input = Input.get_action_strength("move_left")
 	right_input = Input.get_action_strength("move_right")
 	
-	# Brake - check multiple possible brake actions
-	brake_input = max(
-		Input.get_action_strength("brake"),  # Space
-		Input.get_action_strength("jump"),   # Alternative mapping
-		Input.get_action_strength("throttle") # Another possible mapping
-	)
+	# Check multiple possible brake actions
+	var space_brake = Input.get_action_strength("brake")
+	var jump_brake = Input.get_action_strength("jump")
+	var throttle_brake = Input.get_action_strength("throttle")
 	
-	# Print debug info when brake is pressed
-	if brake_input > 0:
+	# Use the strongest brake input
+	brake_input = max(space_brake, max(jump_brake, throttle_brake))
+	
+	# Debug info for braking
+	if brake_input > 0 and not was_braking:
 		print("Brake applied: ", brake_input)
+		was_braking = true
+	elif brake_input == 0 and was_braking:
+		was_braking = false
 
 func process_gamepad_input():
 	# Get gamepad analog stick values if available
@@ -64,10 +71,14 @@ func process_gamepad_input():
 		right_input = max(right_input, gamepad_movement.x if gamepad_movement.x > 0 else 0)
 
 func apply_inputs():
+	# Only proceed if we have a controller
+	if not controller:
+		return
+		
 	# Calculate motor input (-1 to 1)
 	var motor = (forward_input - reverse_input) * MOTOR_SENSITIVITY
 	
-	# If braking, gradually reduce motor input
+	# Strong braking: reduce motor force when brake is applied
 	if brake_input > 0:
 		motor *= (1.0 - brake_input)
 	
@@ -77,5 +88,5 @@ func apply_inputs():
 	var steering = (right_input - left_input) * STEERING_SENSITIVITY
 	controller.set_steering(steering)
 	
-	# Apply brake
+	# Apply brake - full brake value for stronger braking response
 	controller.set_brake(brake_input) 

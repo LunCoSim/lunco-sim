@@ -4,10 +4,10 @@ extends LCController
 
 # Export categories for easy configuration in the editor
 @export_category("Rover Movement Parameters")
-@export var MOTOR_FORCE := 2000.0  # Forward/backward force (adjusted for lunar gravity)
-@export var STEERING_FORCE := 1000.0  # Turning force
-@export var MAX_SPEED := 10.0  # Maximum speed (m/s)
-@export var BRAKE_FORCE := 1500.0  # Braking force
+@export var MOTOR_FORCE := 4000.0  # Forward/backward force (adjusted for lunar gravity)
+@export var STEERING_FORCE := 2000.0  # Turning force
+@export var MAX_SPEED := 12.0  # Maximum speed (m/s)
+@export var BRAKE_FORCE := 2500.0  # Braking force
 @export var TRACTION_SLIP := 0.2  # Wheel slip factor (adjusted for lunar surface)
 
 @export_category("Wheel Configuration")
@@ -26,9 +26,9 @@ var brake_input := 0.0  # Range: 0.0 to 1.0
 var current_speed := 0.0
 var is_controlled := false
 
-# Wheel physics state
-var front_wheels_contact := false
-var rear_wheels_contact := false
+# State tracking
+var wheels_on_ground := 0
+var ground_contact := false
 
 # Signals for UI and effects
 signal motor_state_changed(power: float)
@@ -59,8 +59,8 @@ func _physics_process(delta: float):
 	if not parent:
 		return
 	
-	# Update wheel contact states
-	update_wheel_contact_states()
+	# Update ground contact state
+	check_ground_contact()
 	
 	# Apply forces
 	apply_motor_forces(delta)
@@ -72,105 +72,102 @@ func _physics_process(delta: float):
 	current_speed = parent.linear_velocity.length()
 	speed_changed.emit(current_speed)
 
-func update_wheel_contact_states():
-	# Check if front and rear wheels are in contact with the ground
-	var fl_contact = front_left_wheel.has_method("is_in_contact") and front_left_wheel.is_in_contact()
-	var fr_contact = front_right_wheel.has_method("is_in_contact") and front_right_wheel.is_in_contact()
-	var bl_contact = back_left_wheel.has_method("is_in_contact") and back_left_wheel.is_in_contact()
-	var br_contact = back_right_wheel.has_method("is_in_contact") and back_right_wheel.is_in_contact()
+func check_ground_contact():
+	# Count how many wheels are on the ground
+	wheels_on_ground = 0
 	
-	front_wheels_contact = fl_contact or fr_contact
-	rear_wheels_contact = bl_contact or br_contact
+	if has_ground_contact(front_left_wheel):
+		wheels_on_ground += 1
+	if has_ground_contact(front_right_wheel):
+		wheels_on_ground += 1
+	if has_ground_contact(back_left_wheel):
+		wheels_on_ground += 1
+	if has_ground_contact(back_right_wheel):
+		wheels_on_ground += 1
+	
+	# Vehicle has traction if at least one wheel is on the ground
+	ground_contact = wheels_on_ground > 0
+
+func has_ground_contact(wheel: Node3D) -> bool:
+	if not wheel:
+		return false
+	
+	if wheel.has_method("is_in_contact"):
+		return wheel.is_in_contact()
+	
+	return false
 
 func apply_motor_forces(delta: float):
-	# Only apply motor forces if wheels are in contact with the ground
-	if not (front_wheels_contact or rear_wheels_contact):
+	# Skip if we don't have any ground contact
+	if not ground_contact:
 		return
-		
-	# Calculate the forward force based on motor input
-	var forward_dir = -parent.global_transform.basis.z
+	
+	# Get forward direction from vehicle's orientation
+	var forward_dir = -parent.global_transform.basis.z.normalized()
+	
+	# Calculate motor force
 	var target_force = forward_dir * (motor_input * MOTOR_FORCE)
 	
-	# Apply forces at wheel positions for more realistic behavior
-	if front_wheels_contact:
-		var front_force = target_force * 0.5  # Distribute force between front wheels
-		parent.apply_force(front_force, front_left_wheel.global_position - parent.global_position)
-		parent.apply_force(front_force, front_right_wheel.global_position - parent.global_position)
-	
-	if rear_wheels_contact:
-		var rear_force = target_force * 0.5  # Distribute force between rear wheels
-		parent.apply_force(rear_force, back_left_wheel.global_position - parent.global_position)
-		parent.apply_force(rear_force, back_right_wheel.global_position - parent.global_position)
+	# Apply at the wheel contact points
+	for wheel in [front_left_wheel, front_right_wheel, back_left_wheel, back_right_wheel]:
+		if has_ground_contact(wheel):
+			# Apply a portion of the force at each wheel
+			var wheel_force = target_force * (1.0 / max(1, wheels_on_ground))
+			parent.apply_force(wheel_force, wheel.global_position - parent.global_position)
 	
 	motor_state_changed.emit(motor_input)
 
 func apply_steering(delta: float):
-	# Only apply steering if front wheels are in contact
-	if not front_wheels_contact:
-		# Still allow some air steering but reduced
-		var air_steering_torque = Vector3.UP * (steering_input * STEERING_FORCE * 0.2)
-		parent.apply_torque(air_steering_torque)
+	# Only apply steering when on the ground
+	if not ground_contact:
 		return
-		
-	# Apply torque for steering, taking into account current speed for better control
-	var speed_factor = clamp(current_speed / MAX_SPEED, 0.1, 1.0)
+	
+	# Scale steering based on speed (easier turning at lower speeds)
+	var speed_factor = clamp(remap(current_speed, 0, MAX_SPEED, 1.0, 0.5), 0.5, 1.0)
 	var steering_torque = Vector3.UP * (steering_input * STEERING_FORCE * speed_factor)
+	
+	# Apply torque for steering
 	parent.apply_torque(steering_torque)
 	
 	steering_changed.emit(steering_input)
 
 func apply_brakes(delta: float):
 	if brake_input > 0:
-		# Apply brake force opposite to current velocity at wheel positions
-		var brake_dir = -parent.linear_velocity.normalized()
-		var brake_force = brake_dir * (brake_input * BRAKE_FORCE)
-		
-		# Apply stronger central braking force for quicker stopping
-		parent.apply_central_force(brake_force * 1.5)
-		
-		if front_wheels_contact:
-			parent.apply_force(brake_force * 0.5, front_left_wheel.global_position - parent.global_position)
-			parent.apply_force(brake_force * 0.5, front_right_wheel.global_position - parent.global_position)
+		# Create brake force opposite to current velocity
+		if parent.linear_velocity.length_squared() > 0.1:
+			var brake_dir = -parent.linear_velocity.normalized()
+			var brake_force = brake_dir * (brake_input * BRAKE_FORCE)
 			
-		if rear_wheels_contact:
-			parent.apply_force(brake_force * 0.5, back_left_wheel.global_position - parent.global_position)
-			parent.apply_force(brake_force * 0.5, back_right_wheel.global_position - parent.global_position)
-		
-		# Add angular damping when braking to prevent spinning
-		if current_speed < 1.0:
-			parent.apply_torque(-parent.angular_velocity * BRAKE_FORCE * 0.5)
+			# Apply central brake force for stability
+			parent.apply_central_force(brake_force * 1.5)
+			
+			# Apply at wheels for more authentic braking
+			for wheel in [front_left_wheel, front_right_wheel, back_left_wheel, back_right_wheel]:
+				if has_ground_contact(wheel):
+					parent.apply_force(brake_force * 0.25, wheel.global_position - parent.global_position)
+			
+			# Apply damping to reduce spinning
+			parent.apply_torque(-parent.angular_velocity * BRAKE_FORCE * 0.2)
 		
 		brake_applied.emit(brake_input)
 
 func update_wheel_visual_rotation(delta: float):
-	# Calculate wheel rotation speed based on rover's velocity
-	# Project velocity onto wheel's forward direction
-	var wheel_rotation_speed = current_speed * delta * 2.0
+	# Calculate rotation speed - based on the parent's forward velocity
+	var forward_dir = -parent.global_transform.basis.z
+	var forward_velocity = parent.linear_velocity.dot(forward_dir)
+	var wheel_rotation_speed = forward_velocity * delta * 2.0
 	
-	# Update wheel rotations along their local X axis (for wheels oriented sideways)
-	if front_left_wheel:
-		var wheel_mesh = front_left_wheel.get_node_or_null("MeshInstance3D")
+	# Update the visual rotation of all wheels
+	rotate_wheel(front_left_wheel, wheel_rotation_speed)
+	rotate_wheel(front_right_wheel, wheel_rotation_speed)
+	rotate_wheel(back_left_wheel, wheel_rotation_speed)
+	rotate_wheel(back_right_wheel, wheel_rotation_speed)
+
+func rotate_wheel(wheel: Node3D, amount: float):
+	if wheel:
+		var wheel_mesh = wheel.get_node_or_null("MeshInstance3D")
 		if wheel_mesh:
-			# Changed from rotate_z to rotate_x for correct axis
-			wheel_mesh.rotate_x(wheel_rotation_speed * sign(motor_input))
-	
-	if front_right_wheel:
-		var wheel_mesh = front_right_wheel.get_node_or_null("MeshInstance3D")
-		if wheel_mesh:
-			# Changed from rotate_z to rotate_x for correct axis
-			wheel_mesh.rotate_x(wheel_rotation_speed * sign(motor_input))
-	
-	if back_left_wheel:
-		var wheel_mesh = back_left_wheel.get_node_or_null("MeshInstance3D")
-		if wheel_mesh:
-			# Changed from rotate_z to rotate_x for correct axis
-			wheel_mesh.rotate_x(wheel_rotation_speed * sign(motor_input))
-	
-	if back_right_wheel:
-		var wheel_mesh = back_right_wheel.get_node_or_null("MeshInstance3D")
-		if wheel_mesh:
-			# Changed from rotate_z to rotate_x for correct axis
-			wheel_mesh.rotate_x(wheel_rotation_speed * sign(motor_input))
+			wheel_mesh.rotate_x(amount)
 
 # Command methods to control the rover
 func set_motor(value: float):
