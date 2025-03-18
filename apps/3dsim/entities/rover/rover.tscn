@@ -23,7 +23,7 @@ roughness = 0.8
 
 [node name="Rover" type="RigidBody3D"]
 mass = 500.0
-gravity_scale = 0.165
+gravity_scale = 1.0
 center_of_mass_mode = 1
 center_of_mass = Vector3(0, -0.5, 0)
 linear_damp = 0.1
