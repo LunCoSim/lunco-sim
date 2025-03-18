@@ -59,7 +59,7 @@ func apply_inputs():
     controller.set_motor(motor)
     
     # Calculate steering input (-1 to 1)
-    var steering = (right_input - left_input) * STEERING_SENSITIVITY
+    var steering = (left_input - right_input) * STEERING_SENSITIVITY
     controller.set_steering(steering)
     
     # Apply brake

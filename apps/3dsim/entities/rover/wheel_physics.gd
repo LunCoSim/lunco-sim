@@ -3,10 +3,12 @@ extends Node3D
 class_name LCRoverWheel
 
 # Wheel physics parameters
-@export var suspension_rest_length := 0.5
-@export var suspension_stiffness := 50.0
-@export var suspension_damping := 5.0
-@export var wheel_radius := 0.4
+@export var suspension_rest_length: float = 0.8
+@export var suspension_stiffness: float = 800.0
+@export var suspension_damping: float = 150.0
+@export var wheel_radius: float = 0.4
+@export var wheel_friction: float = 0.8
+@export var wheel_angular_damp: float = 0.5
 
 # Internal state
 var parent_body: RigidBody3D
@@ -89,8 +91,16 @@ func apply_suspension_force(delta: float):
 	# Calculate spring force
 	var spring_force = compression * suspension_stiffness
 	
-	# Create force vector in world space
-	var suspension_force = ground_normal * spring_force
+	# Calculate damping force based on vertical velocity
+	var relative_velocity = parent_body.linear_velocity.dot(ground_normal)
+	var damping_force = -relative_velocity * suspension_damping
+	
+	# Create force vector in world space combining spring and damping
+	var suspension_force = ground_normal * (spring_force + damping_force)
+	
+	# Apply additional downward force to improve ground contact
+	var down_force = ground_normal * (-wheel_friction * 150.0)
+	suspension_force += down_force
 	
 	# Apply force to parent body
 	parent_body.apply_force(suspension_force, global_position - parent_body.global_position)

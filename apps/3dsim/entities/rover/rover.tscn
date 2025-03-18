@@ -12,6 +12,14 @@ size = Vector3(2, 1, 3)
 [sub_resource type="BoxMesh" id="BoxMesh_1"]
 size = Vector3(2, 1, 3)
 
+[sub_resource type="BoxMesh" id="BoxMesh_bumper"]
+size = Vector3(2.2, 0.2, 0.3)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_bumper"]
+albedo_color = Color(1, 0.2, 0.2, 1.0)
+metallic = 0.7
+roughness = 0.3
+
 [sub_resource type="CylinderMesh" id="CylinderMesh_wheel"]
 top_radius = 0.4
 bottom_radius = 0.4
@@ -23,18 +31,17 @@ roughness = 0.8
 
 [node name="Rover" type="RigidBody3D"]
 mass = 500.0
-gravity_scale = 1.0
 center_of_mass_mode = 1
-center_of_mass = Vector3(0, -0.5, 0)
-linear_damp = 0.1
-angular_damp = 2.0
+center_of_mass = Vector3(0, -0.7, 0)
+linear_damp = 0.2
+angular_damp = 3.0
 script = ExtResource("1_yvk4r")
 
 [node name="RoverController" type="Node3D" parent="."]
 script = ExtResource("2_xvk4r")
-MOTOR_FORCE = 5000.0
-STEERING_FORCE = 3000.0
-BRAKE_FORCE = 4000.0
+MOTOR_FORCE = 2500.0
+STEERING_FORCE = 1500.0
+BRAKE_FORCE = 2000.0
 MAX_SPEED = 15.0
 front_left_wheel = NodePath("../Wheels/FrontLeftWheel")
 front_right_wheel = NodePath("../Wheels/FrontRightWheel")
@@ -56,11 +63,13 @@ shape = SubResource("BoxShape3D_1")
 [node name="Wheels" type="Node3D" parent="."]
 
 [node name="FrontLeftWheel" type="Node3D" parent="Wheels"]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1, -0.4, 1)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1, -0.4, -1)
 script = ExtResource("4_wheel")
 suspension_rest_length = 0.8
-suspension_stiffness = 1200.0
-suspension_damping = 100.0
+suspension_stiffness = 600.0
+suspension_damping = 250.0
+wheel_friction = 1.2
+wheel_angular_damp = 0.8
 
 [node name="MeshInstance3D" type="MeshInstance3D" parent="Wheels/FrontLeftWheel"]
 transform = Transform3D(-4.37114e-08, -1, 0, 1, -4.37114e-08, 0, 0, 0, 1, 0, 0, 0)
@@ -68,11 +77,13 @@ mesh = SubResource("CylinderMesh_wheel")
 surface_material_override/0 = SubResource("StandardMaterial3D_wheel")
 
 [node name="FrontRightWheel" type="Node3D" parent="Wheels"]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1, -0.4, 1)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1, -0.4, -1)
 script = ExtResource("4_wheel")
 suspension_rest_length = 0.8
-suspension_stiffness = 1200.0
-suspension_damping = 100.0
+suspension_stiffness = 600.0
+suspension_damping = 250.0
+wheel_friction = 1.2
+wheel_angular_damp = 0.8
 
 [node name="MeshInstance3D" type="MeshInstance3D" parent="Wheels/FrontRightWheel"]
 transform = Transform3D(-4.37114e-08, -1, 0, 1, -4.37114e-08, 0, 0, 0, 1, 0, 0, 0)
@@ -80,11 +91,13 @@ mesh = SubResource("CylinderMesh_wheel")
 surface_material_override/0 = SubResource("StandardMaterial3D_wheel")
 
 [node name="BackLeftWheel" type="Node3D" parent="Wheels"]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1, -0.4, -1)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1, -0.4, 1)
 script = ExtResource("4_wheel")
 suspension_rest_length = 0.8
-suspension_stiffness = 1200.0
-suspension_damping = 100.0
+suspension_stiffness = 600.0
+suspension_damping = 250.0
+wheel_friction = 1.2
+wheel_angular_damp = 0.8
 
 [node name="MeshInstance3D" type="MeshInstance3D" parent="Wheels/BackLeftWheel"]
 transform = Transform3D(-4.37114e-08, -1, 0, 1, -4.37114e-08, 0, 0, 0, 1, 0, 0, 0)
@@ -92,11 +105,13 @@ mesh = SubResource("CylinderMesh_wheel")
 surface_material_override/0 = SubResource("StandardMaterial3D_wheel")
 
 [node name="BackRightWheel" type="Node3D" parent="Wheels"]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1, -0.4, -1)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1, -0.4, 1)
 script = ExtResource("4_wheel")
 suspension_rest_length = 0.8
-suspension_stiffness = 1200.0
-suspension_damping = 100.0
+suspension_stiffness = 600.0
+suspension_damping = 250.0
+wheel_friction = 1.2
+wheel_angular_damp = 0.8
 
 [node name="MeshInstance3D" type="MeshInstance3D" parent="Wheels/BackRightWheel"]
 transform = Transform3D(-4.37114e-08, -1, 0, 1, -4.37114e-08, 0, 0, 0, 1, 0, 0, 0)
@@ -105,6 +120,11 @@ surface_material_override/0 = SubResource("StandardMaterial3D_wheel")
 
 [node name="MeshInstance3D" type="MeshInstance3D" parent="."]
 mesh = SubResource("BoxMesh_1")
+
+[node name="BumperMesh" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, -1.5)
+mesh = SubResource("BoxMesh_bumper")
+surface_material_override/0 = SubResource("StandardMaterial3D_bumper")
 
 [connection signal="control_granted" from="." to="RoverController" method="take_control"]
 [connection signal="control_released" from="." to="RoverController" method="release_control"]
