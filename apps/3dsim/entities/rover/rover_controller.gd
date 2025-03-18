@@ -124,7 +124,7 @@ func apply_steering(delta: float):
 	
 	# Scale steering based on speed (easier turning at lower speeds)
 	var speed_factor = clamp(remap(current_speed, 0, MAX_SPEED, 1.0, 0.5), 0.5, 1.0)
-	var steering_torque = Vector3.UP * (steering_input * STEERING_FORCE * speed_factor)
+	var steering_torque = Vector3.UP * (-steering_input * STEERING_FORCE * speed_factor)
 	
 	# Apply torque for steering
 	parent.apply_torque(steering_torque)
