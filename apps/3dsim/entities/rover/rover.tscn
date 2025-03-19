@@ -43,10 +43,6 @@ MOTOR_FORCE = 2500.0
 STEERING_FORCE = 1500.0
 MAX_SPEED = 15.0
 BRAKE_FORCE = 2000.0
-front_left_wheel = NodePath("../Wheels/FrontLeftWheel")
-front_right_wheel = NodePath("../Wheels/FrontRightWheel")
-back_left_wheel = NodePath("../Wheels/BackLeftWheel")
-back_right_wheel = NodePath("../Wheels/BackRightWheel")
 
 [node name="RoverInputAdapter" type="Node" parent="."]
 script = ExtResource("3_wvk4r")

@@ -8,6 +8,7 @@ extends LCController
 @export var STEERING_FORCE := 30.0  # Turning force
 @export var MAX_SPEED := 20.0  # Maximum speed
 @export var BRAKE_FORCE := 40.0  # Braking force
+@export var DEBUG_MODE := true  # Enable extra debug output
 
 @export_category("Wheel Configuration")
 @export var front_left_wheel: Node3D
@@ -15,15 +16,20 @@ extends LCController
 @export var back_left_wheel: Node3D
 @export var back_right_wheel: Node3D
 
-# Get the parent RigidBody3D node
-var parent: RigidBody3D
+# Get the parent RigidBody3D node - use the same style as spacecraft controller
+@onready var parent: RigidBody3D:
+	get:
+		return self.get_parent()
 
 # Internal state - simplified like spacecraft controller
 var motor_input := 0.0
 var steering_input := 0.0
 var brake_input := 0.0
 var current_speed := 0.0
+
+# Keep the is_controlled flag but don't use it for physics processing
 var is_controlled := false
+var debug_counter := 0
 
 # Signals
 signal motor_state_changed(power: float)
@@ -39,13 +45,6 @@ func _ready():
 	if not is_in_group("RoverControllers"):
 		add_to_group("RoverControllers")
 	
-	# Get the parent rigidbody
-	if get_parent() is RigidBody3D:
-		parent = get_parent() as RigidBody3D
-	else:
-		push_error("LCRoverController: Parent must be a RigidBody3D!")
-		return
-		
 	# Ensure we have connections to control signals
 	if parent.has_signal("control_granted"):
 		if not parent.control_granted.is_connected(take_control):
@@ -75,22 +74,34 @@ func _ready():
 	add_child(timer)
 	
 	print("LCRoverController: Initialized with parent: ", parent.name)
+	print("LCRoverController: MOTOR_FORCE = ", MOTOR_FORCE)
 
 func _on_timer_timeout():
 	print("LCRoverController status: authority=", is_multiplayer_authority(), " is_controlled=", is_controlled)
+	print("LCRoverController inputs: motor=", motor_input, " steering=", steering_input, " brake=", brake_input)
 
 # Processing physics for Rover controller
+# MAJOR CHANGE: Use same approach as spacecraft - just check multiplayer authority
 func _physics_process(delta: float):
-	# Only process when we have authority and we're controlled
-	if is_multiplayer_authority() and is_controlled:
+	# Only check for authority like spacecraft controller
+	if is_multiplayer_authority():
 		if parent:
+			# Debug output (only occasionally to avoid spam)
+			debug_counter += 1
+			if DEBUG_MODE and debug_counter % 30 == 0:
+				print("Rover physics: motor_input=", motor_input, " force=", motor_input * MOTOR_FORCE)
+				
 			# Apply motor force
 			var forward_dir = -parent.global_transform.basis.z
 			if current_speed < MAX_SPEED:
-				parent.apply_central_force(forward_dir * motor_input * MOTOR_FORCE)
-			
+				var force = forward_dir * motor_input * MOTOR_FORCE
+				parent.apply_central_force(force)
+				if DEBUG_MODE and debug_counter % 30 == 0:
+					print("Applied force: ", force, " mass: ", parent.mass)
+
 			# Apply steering
-			parent.apply_torque(Vector3.UP * (steering_input * STEERING_FORCE))
+			var steering_torque = Vector3.UP * (steering_input * STEERING_FORCE)
+			parent.apply_torque(steering_torque)
 			
 			# Apply brakes if needed
 			if brake_input > 0:
@@ -125,12 +136,18 @@ func update_wheels(delta: float):
 # Simple command methods like spacecraft
 func set_motor(value: float):
 	motor_input = clamp(value, -1.0, 1.0)
+	if DEBUG_MODE and abs(value) > 0.1:
+		print("RoverController: set_motor called with value=", value, " set to ", motor_input)
 
 func set_steering(value: float):
 	steering_input = clamp(value, -1.0, 1.0)
+	if DEBUG_MODE and abs(value) > 0.1:
+		print("RoverController: set_steering called with value=", value, " set to ", steering_input)
 
 func set_brake(value: float):
 	brake_input = clamp(value, 0.0, 1.0)
+	if DEBUG_MODE and value > 0.1:
+		print("RoverController: set_brake called with value=", value, " set to ", brake_input)
 
 # Handle control signals, but keep them simple
 func take_control():

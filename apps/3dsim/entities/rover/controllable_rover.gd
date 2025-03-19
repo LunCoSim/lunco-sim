@@ -55,7 +55,17 @@ func take_control(id: int) -> bool:
 	_owner_id = id
 	set_multiplayer_authority(id)
 	print("Rover: Control granted to player ", id)
+	
+	# Fix: Make sure signal emission works properly
 	control_granted.emit()
+	
+	# Double check that signals are properly connected
+	if not control_granted.is_connected(controller.take_control):
+		print("Rover: WARNING - control_granted signal not connected, connecting now")
+		control_granted.connect(controller.take_control)
+		# Call the method directly to ensure it takes effect
+		controller.take_control()
+	
 	return true
 
 func release_control(id: int) -> bool:
