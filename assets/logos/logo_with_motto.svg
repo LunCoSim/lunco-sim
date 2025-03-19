@@ -9,6 +9,9 @@
    sodipodi:docname="logo_with_motto.svg"
    inkscape:version="1.4 (1:1.4+202410161351+e7c3feb100)"
    xml:space="preserve"
+   inkscape:export-filename="logo_with_motto.png"
+   inkscape:export-xdpi="960"
+   inkscape:export-ydpi="960"
    xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
    xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
    xmlns="http://www.w3.org/2000/svg"
@@ -29,9 +32,9 @@
      inkscape:pagecheckerboard="0"
      inkscape:deskcolor="#d1d1d1"
      showgrid="false"
-     inkscape:zoom="3.663294"
-     inkscape:cx="48.863127"
-     inkscape:cy="105.36965"
+     inkscape:zoom="9.276899"
+     inkscape:cx="58.748079"
+     inkscape:cy="45.05816"
      inkscape:window-width="1920"
      inkscape:window-height="1042"
      inkscape:window-x="0"
@@ -120,9 +123,6 @@
        fill="#fcfcfc"
        id="path82" /></g><g
      id="g989"><path
-       d="M78.3483 37.0089C78.3483 55.324 63.501 70.1713 45.1859 70.1713C26.8708 70.1713 12.0234 55.324 12.0234 37.0089C12.0234 18.6937 26.8708 3.84641 45.1859 3.84641C63.501 3.84641 78.3483 18.6937 78.3483 37.0089Z"
-       fill="black"
-       id="path84" /><path
        fill-rule="evenodd"
        clip-rule="evenodd"
        d="M42.2376 32.0512C48.0798 30.5566 51.6692 24.6815 50.3328 18.8011L51.3116 18.5787C52.7686 24.9893 48.8554 31.3943 42.4863 33.0236L38.1234 34.1397C34.234 35.1347 30.871 37.5767 28.7211 40.9673L27.8265 42.3782L26.9788 41.8407L27.8734 40.4298C30.1602 36.8232 33.7374 34.2256 37.8746 33.1673L42.2376 32.0512Z"
