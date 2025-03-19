@@ -1,13 +1,16 @@
+class_name LCRoverInputMappings
 extends Node
 
 # This script sets up input mappings for the rover at runtime
-# It's a workaround for when we can't modify the project.godot file directly
+# It ensures all necessary input actions are available
 
 func _ready():
 	setup_input_mappings()
 	
 func setup_input_mappings():
 	# Make sure we have all the necessary input actions for rover control
+	
+	print("LCRoverInputMappings: Setting up input mappings")
 	
 	# Movement controls
 	if not InputMap.has_action("move_forward"):
@@ -70,4 +73,4 @@ func setup_input_mappings():
 		event.axis_value = 1.0
 		InputMap.action_add_event("gamepad_backward", event)
 	
-	print("Rover input mappings set up successfully") 
+	print("LCRoverInputMappings: Input mappings set up successfully") 

@@ -25,6 +25,7 @@ var motor_input := 0.0
 var steering_input := 0.0
 var brake_input := 0.0
 var current_speed := 0.0
+var is_controlled := false
 
 # Signals
 signal motor_state_changed(power: float)
@@ -111,6 +112,7 @@ func set_brake(value: float):
 
 # Handle control signals, but keep them simple
 func take_control():
+	is_controlled = true
 	print("RoverController: Control taken")
 	# Reset all inputs when taking control
 	motor_input = 0.0
@@ -118,8 +120,13 @@ func take_control():
 	brake_input = 0.0
 
 func release_control():
+	is_controlled = false
 	print("RoverController: Control released")
 	# Reset all inputs when releasing control
 	motor_input = 0.0
 	steering_input = 0.0
-	brake_input = 0.0 
+	brake_input = 0.0
+
+# Check if this rover is currently being controlled
+func is_being_controlled() -> bool:
+	return is_controlled 

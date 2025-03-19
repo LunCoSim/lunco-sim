@@ -3,7 +3,9 @@ extends Node
 
 @export var target: Node
 
-# Input deadzone
+# Input sensitivity and deadzone settings
+@export var MOTOR_SENSITIVITY := 1.0
+@export var STEERING_SENSITIVITY := 1.0
 @export var INPUT_DEADZONE := 0.1
 
 func _ready():
@@ -28,40 +30,42 @@ func _ready():
 	print("RoverInputAdapter: Ready, target is ", target)
 
 func _input(_event):
+	# Only process inputs if we have a target
+	if not target:
+		return
+		
 	var _target = target
-	# Handle avatar target case
+	
+	# If target is an Avatar, get its current target
 	if target is LCAvatar:
 		_target = target.target
-	
+		
 	# Check if we have a compatible rover controller
-	var is_rover_controller = _target is LCRoverController
-	var is_3dsim_rover_controller = _target.get_script() and _target.get_script().get_path().find("rover_controller.gd") != -1
+	var is_compatible_controller = _target is LCRoverController
 	
-	# Debug key press
-	if _event is InputEventKey and _event.pressed and not _event.echo:
-		if is_rover_controller or is_3dsim_rover_controller:
-			print("RoverInputAdapter: Processing key input for rover controller", _target)
-		else:
-			print("RoverInputAdapter: Target is not a rover controller: ", _target, " type: ", _target.get_class())
-	
-	# Process input for any rover controller
-	if is_rover_controller or is_3dsim_rover_controller:
-		# Handle forward/reverse movement
+	# Only process input if the target is a rover controller
+	if is_compatible_controller:
+		# Process movement input
 		var motor_input = Input.get_action_strength("move_forward") - Input.get_action_strength("move_backward")
-		
-		# Handle steering
 		var steering_input = Input.get_action_strength("move_right") - Input.get_action_strength("move_left")
-		
-		# Handle braking
 		var brake_input = Input.get_action_strength("brake")
 		
 		# Process gamepad input if available
 		var gamepad_movement = Input.get_vector("gamepad_left", "gamepad_right", "gamepad_forward", "gamepad_backward")
-		if gamepad_movement.length() > 0.1:
-			motor_input = gamepad_movement.y
-			steering_input = gamepad_movement.x
+		if gamepad_movement.length() > INPUT_DEADZONE:
+			motor_input = gamepad_movement.y if abs(gamepad_movement.y) > abs(motor_input) else motor_input
+			steering_input = gamepad_movement.x if abs(gamepad_movement.x) > abs(steering_input) else steering_input
 		
-		# Apply the inputs to the controller (both controller types have the same methods)
-		_target.set_motor(motor_input)
-		_target.set_steering(steering_input)
-		_target.set_brake(brake_input) 
+		# Apply inputs to controller
+		if _target.has_method("set_motor"):
+			_target.set_motor(motor_input * MOTOR_SENSITIVITY)
+		
+		if _target.has_method("set_steering"):
+			_target.set_steering(steering_input * STEERING_SENSITIVITY)
+		
+		if _target.has_method("set_brake"):
+			_target.set_brake(brake_input)
+		
+		# Print debug info - only for key presses to reduce spam
+		if _event is InputEventKey and _event.pressed and not _event.echo:
+			print("RoverInputAdapter: Input sent to ", _target.name) 
