@@ -4,24 +4,18 @@ extends LCController
 
 # Export categories for easy configuration in the editor
 @export_category("Rover Movement Parameters")
-@export var MOTOR_FORCE := 50.0  # Forward/backward force
-@export var STEERING_FORCE := 30.0  # Turning force
-@export var MAX_SPEED := 20.0  # Maximum speed
-@export var BRAKE_FORCE := 40.0  # Braking force
+@export var ENGINE_FORCE := 5000.0  # Higher engine force for better response
+@export var STEERING_FORCE := 0.5  # Steering force (max angle in radians)
+@export var MAX_SPEED := 8.0  # Maximum speed
+@export var BRAKE_FORCE := 800.0  # Braking force
 @export var DEBUG_MODE := true  # Enable extra debug output
 
-@export_category("Wheel Configuration")
-@export var front_left_wheel: Node3D
-@export var front_right_wheel: Node3D
-@export var back_left_wheel: Node3D
-@export var back_right_wheel: Node3D
-
-# Get the parent RigidBody3D node - use the same style as spacecraft controller
-@onready var parent: RigidBody3D:
+# Get the parent VehicleBody3D node
+@onready var parent: VehicleBody3D:
 	get:
 		return self.get_parent()
 
-# Internal state - simplified like spacecraft controller
+# Internal state
 var motor_input := 0.0
 var steering_input := 0.0
 var brake_input := 0.0
@@ -57,43 +51,49 @@ func _ready():
 	add_child(timer)
 	
 	print("LCRoverController: Initialized with parent: ", parent.name)
-	print("LCRoverController: MOTOR_FORCE = ", MOTOR_FORCE)
+	print("LCRoverController: ENGINE_FORCE = ", ENGINE_FORCE)
+	print("LCRoverController: Initial multiplayer authority = ", is_multiplayer_authority())
+	
+	# Ensure parent is a VehicleBody3D
+	if not parent is VehicleBody3D:
+		push_error("RoverController's parent must be a VehicleBody3D")
+	else:
+		# Directly set initial values
+		parent.engine_force = 0.0
+		parent.steering = 0.0
+		parent.brake = 0.0
+		print("RoverController: Vehicle properties initialized")
 
 func _on_timer_timeout():
 	print("LCRoverController status: authority=", is_multiplayer_authority())
 	print("LCRoverController inputs: motor=", motor_input, " steering=", steering_input, " brake=", brake_input)
+	if is_multiplayer_authority() and parent:
+		print("Rover parent values: engine_force=", parent.engine_force, " steering=", parent.steering, " brake=", parent.brake)
+		print("Rover speed: ", current_speed)
 
 # Processing physics for Rover controller
-func _physics_process(delta: float):
-	# Only process if we have authority (same as spacecraft)
-	if is_multiplayer_authority():
-		if parent:
+func _physics_process(_delta: float):
+	# TEMPORARY: Process regardless of authority for testing
+	# if is_multiplayer_authority():
+	if true:  # Process regardless of authority for testing
+		if parent and parent is VehicleBody3D:
 			# Debug output (only occasionally to avoid spam)
 			debug_counter += 1
 			if DEBUG_MODE and debug_counter % 30 == 0:
-				print("Rover physics: motor_input=", motor_input, " force=", motor_input * MOTOR_FORCE)
+				print("Rover physics: motor_input=", motor_input, " engine_force=", motor_input * ENGINE_FORCE)
+				print("Rover parent direct values: engine_force=", parent.engine_force, " steering=", parent.steering)
+				print("Rover authority status: ", is_multiplayer_authority())
 				
-			# Apply motor force
-			var forward_dir = -parent.global_transform.basis.z
-			if current_speed < MAX_SPEED:
-				var force = forward_dir * motor_input * MOTOR_FORCE
-				parent.apply_central_force(force)
-				if DEBUG_MODE and debug_counter % 30 == 0:
-					print("Applied force: ", force, " mass: ", parent.mass)
-
-			# Apply steering
-			var steering_torque = Vector3.UP * (steering_input * STEERING_FORCE)
-			parent.apply_torque(steering_torque)
+			# Apply engine force to VehicleBody3D
+			parent.engine_force = motor_input * ENGINE_FORCE
+			
+			# Apply steering to VehicleBody3D
+			parent.steering = steering_input * STEERING_FORCE  
 			
 			# Apply brakes if needed
+			parent.brake = brake_input * BRAKE_FORCE
 			if brake_input > 0:
-				var brake_dir = -parent.linear_velocity.normalized()
-				var brake_force = brake_dir * (brake_input * BRAKE_FORCE)
-				parent.apply_central_force(brake_force)
 				brake_applied.emit(brake_input)
-			
-			# Update wheel rotations
-			update_wheels(delta)
 			
 			# Update speed
 			current_speed = parent.linear_velocity.length()
@@ -103,33 +103,39 @@ func _physics_process(delta: float):
 			motor_state_changed.emit(motor_input)
 			steering_changed.emit(steering_input)
 
-# Update the wheel visuals
-func update_wheels(delta: float):
-	# Update wheel rotations and positions
-	if front_left_wheel:
-		front_left_wheel.rotate_x(current_speed * delta)
-	if front_right_wheel:
-		front_right_wheel.rotate_x(current_speed * delta)
-	if back_left_wheel:
-		back_left_wheel.rotate_x(current_speed * delta)
-	if back_right_wheel:
-		back_right_wheel.rotate_x(current_speed * delta)
-
-# Simple command methods like spacecraft
+# Simple command methods
 func set_motor(value: float):
 	motor_input = clamp(value, -1.0, 1.0)
+	# Immediately apply engine force if we have a parent
+	if parent and parent is VehicleBody3D:
+		parent.engine_force = motor_input * ENGINE_FORCE
+	
 	if DEBUG_MODE and abs(value) > 0.1:
 		print("RoverController: set_motor called with value=", value, " set to ", motor_input)
+		if parent and parent is VehicleBody3D:
+			print("  - Direct engine_force set to: ", parent.engine_force)
 
 func set_steering(value: float):
 	steering_input = clamp(value, -1.0, 1.0)
+	# Immediately apply steering if we have a parent
+	if parent and parent is VehicleBody3D:
+		parent.steering = steering_input * STEERING_FORCE
+	
 	if DEBUG_MODE and abs(value) > 0.1:
 		print("RoverController: set_steering called with value=", value, " set to ", steering_input)
+		if parent and parent is VehicleBody3D:
+			print("  - Direct steering set to: ", parent.steering)
 
 func set_brake(value: float):
 	brake_input = clamp(value, 0.0, 1.0)
+	# Immediately apply brake if we have a parent
+	if parent and parent is VehicleBody3D:
+		parent.brake = brake_input * BRAKE_FORCE
+	
 	if DEBUG_MODE and value > 0.1:
 		print("RoverController: set_brake called with value=", value, " set to ", brake_input)
+		if parent and parent is VehicleBody3D:
+			print("  - Direct brake set to: ", parent.brake)
 
 # Simplified control methods (required for compatibility with signals)
 func take_control():
@@ -137,6 +143,13 @@ func take_control():
 	motor_input = 0.0
 	steering_input = 0.0
 	brake_input = 0.0
+	
+	# Make sure parent values are reset too
+	if parent and parent is VehicleBody3D:
+		parent.engine_force = 0.0
+		parent.steering = 0.0
+		parent.brake = 0.0
+	
 	print("RoverController: Control taken")
 
 func release_control():
@@ -144,4 +157,11 @@ func release_control():
 	motor_input = 0.0
 	steering_input = 0.0
 	brake_input = 0.0
+	
+	# Make sure parent values are reset too
+	if parent and parent is VehicleBody3D:
+		parent.engine_force = 0.0
+		parent.steering = 0.0
+		parent.brake = 0.0
+	
 	print("RoverController: Control released") 

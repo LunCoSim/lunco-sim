@@ -1,9 +1,8 @@
-[gd_scene load_steps=12 format=3 uid="uid://baaxdcimi1r6x"]
+[gd_scene load_steps=11 format=3 uid="uid://dyfxw33dhjjrw"]
 
 [ext_resource type="Script" uid="uid://bqc056rgml8ww" path="res://apps/3dsim/entities/rover/rover.gd" id="1_yvk4r"]
 [ext_resource type="Script" uid="uid://f0iojori2ghp" path="res://controllers/rover/rover-controller.gd" id="2_xvk4r"]
 [ext_resource type="Script" uid="uid://dviposkab7kji" path="res://controllers/rover/rover-input-adapter.gd" id="3_wvk4r"]
-[ext_resource type="Script" uid="uid://daxhg7wqqh3ta" path="res://apps/3dsim/entities/rover/wheel_physics.gd" id="4_wheel"]
 [ext_resource type="Script" uid="uid://cqful0lwrl288" path="res://controllers/rover/rover-input-mappings.gd" id="5_input"]
 
 [sub_resource type="BoxShape3D" id="BoxShape3D_1"]
@@ -29,20 +28,19 @@ albedo_color = Color(1, 0.2, 0.2, 1)
 metallic = 0.7
 roughness = 0.3
 
-[node name="Rover" type="RigidBody3D"]
-mass = 500.0
-center_of_mass_mode = 1
-center_of_mass = Vector3(0, -0.7, 0)
-linear_damp = 0.2
-angular_damp = 3.0
+[node name="Rover" type="VehicleBody3D"]
+mass = 250.0
+continuous_cd = true
+max_contacts_reported = 8
+can_sleep = false
 script = ExtResource("1_yvk4r")
 
 [node name="RoverController" type="Node3D" parent="." groups=["RoverControllers"]]
 script = ExtResource("2_xvk4r")
-MOTOR_FORCE = 2500.0
-STEERING_FORCE = 1500.0
-MAX_SPEED = 15.0
-BRAKE_FORCE = 2000.0
+ENGINE_FORCE = 2500.0
+STEERING_FORCE = 0.5
+MAX_SPEED = 8.0
+BRAKE_FORCE = 800.0
 
 [node name="RoverInputAdapter" type="Node" parent="."]
 script = ExtResource("3_wvk4r")
@@ -51,56 +49,79 @@ script = ExtResource("3_wvk4r")
 script = ExtResource("5_input")
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.1, 0)
 shape = SubResource("BoxShape3D_1")
 
 [node name="Wheels" type="Node3D" parent="."]
 
-[node name="FrontLeftWheel" type="Node3D" parent="Wheels"]
+[node name="FrontLeftWheel" type="VehicleWheel3D" parent="Wheels"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1, -0.4, -1)
-script = ExtResource("4_wheel")
-suspension_stiffness = 600.0
-suspension_damping = 250.0
-wheel_friction = 1.2
-wheel_angular_damp = 0.8
+use_as_traction = true
+use_as_steering = true
+wheel_roll_influence = 0.01
+wheel_radius = 0.4
+wheel_rest_length = 0.2
+wheel_friction_slip = 2.0
+suspension_travel = 0.2
+suspension_stiffness = 25.0
+suspension_max_force = 8000.0
+damping_compression = 0.88
+damping_relaxation = 0.88
 
 [node name="MeshInstance3D" type="MeshInstance3D" parent="Wheels/FrontLeftWheel"]
 transform = Transform3D(-4.37114e-08, -1, 0, 1, -4.37114e-08, 0, 0, 0, 1, 0, 0, 0)
 mesh = SubResource("CylinderMesh_wheel")
 surface_material_override/0 = SubResource("StandardMaterial3D_wheel")
 
-[node name="FrontRightWheel" type="Node3D" parent="Wheels"]
+[node name="FrontRightWheel" type="VehicleWheel3D" parent="Wheels"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1, -0.4, -1)
-script = ExtResource("4_wheel")
-suspension_stiffness = 600.0
-suspension_damping = 250.0
-wheel_friction = 1.2
-wheel_angular_damp = 0.8
+use_as_traction = true
+use_as_steering = true
+wheel_roll_influence = 0.01
+wheel_radius = 0.4
+wheel_rest_length = 0.2
+wheel_friction_slip = 2.0
+suspension_travel = 0.2
+suspension_stiffness = 25.0
+suspension_max_force = 8000.0
+damping_compression = 0.88
+damping_relaxation = 0.88
 
 [node name="MeshInstance3D" type="MeshInstance3D" parent="Wheels/FrontRightWheel"]
 transform = Transform3D(-4.37114e-08, -1, 0, 1, -4.37114e-08, 0, 0, 0, 1, 0, 0, 0)
 mesh = SubResource("CylinderMesh_wheel")
 surface_material_override/0 = SubResource("StandardMaterial3D_wheel")
 
-[node name="BackLeftWheel" type="Node3D" parent="Wheels"]
+[node name="BackLeftWheel" type="VehicleWheel3D" parent="Wheels"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1, -0.4, 1)
-script = ExtResource("4_wheel")
-suspension_stiffness = 600.0
-suspension_damping = 250.0
-wheel_friction = 1.2
-wheel_angular_damp = 0.8
+use_as_traction = true
+wheel_roll_influence = 0.01
+wheel_radius = 0.4
+wheel_rest_length = 0.2
+wheel_friction_slip = 2.0
+suspension_travel = 0.2
+suspension_stiffness = 25.0
+suspension_max_force = 8000.0
+damping_compression = 0.88
+damping_relaxation = 0.88
 
 [node name="MeshInstance3D" type="MeshInstance3D" parent="Wheels/BackLeftWheel"]
 transform = Transform3D(-4.37114e-08, -1, 0, 1, -4.37114e-08, 0, 0, 0, 1, 0, 0, 0)
 mesh = SubResource("CylinderMesh_wheel")
 surface_material_override/0 = SubResource("StandardMaterial3D_wheel")
 
-[node name="BackRightWheel" type="Node3D" parent="Wheels"]
+[node name="BackRightWheel" type="VehicleWheel3D" parent="Wheels"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1, -0.4, 1)
-script = ExtResource("4_wheel")
-suspension_stiffness = 600.0
-suspension_damping = 250.0
-wheel_friction = 1.2
-wheel_angular_damp = 0.8
+use_as_traction = true
+wheel_roll_influence = 0.01
+wheel_radius = 0.4
+wheel_rest_length = 0.2
+wheel_friction_slip = 2.0
+suspension_travel = 0.2
+suspension_stiffness = 25.0
+suspension_max_force = 8000.0
+damping_compression = 0.88
+damping_relaxation = 0.88
 
 [node name="MeshInstance3D" type="MeshInstance3D" parent="Wheels/BackRightWheel"]
 transform = Transform3D(-4.37114e-08, -1, 0, 1, -4.37114e-08, 0, 0, 0, 1, 0, 0, 0)
