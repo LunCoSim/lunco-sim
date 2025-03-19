@@ -4,10 +4,10 @@ extends LCController
 
 # Export categories for easy configuration in the editor
 @export_category("Rover Movement Parameters")
-@export var ENGINE_FORCE := 5000.0  # Reduced engine force for smoother acceleration
-@export var STEERING_FORCE := 0.3  # Reduced steering force for more stability
-@export var MAX_SPEED := 6.0  # Slightly reduced max speed
-@export var BRAKE_FORCE := 800.0  # Braking force
+@export var ENGINE_FORCE := 3000.0  # Balanced engine force for good acceleration
+@export var STEERING_FORCE := 0.5  # Balanced steering for good handling
+@export var MAX_SPEED := 5.0  # Realistic max speed for lunar rover
+@export var BRAKE_FORCE := 1000.0  # Increased braking force for better control
 @export var DEBUG_MODE := true  # Enable extra debug output
 
 # Get the parent VehicleBody3D node
@@ -109,8 +109,8 @@ func _physics_process(_delta: float):
 		# Apply engine force to VehicleBody3D
 		parent.engine_force = motor_input * ENGINE_FORCE
 		
-		# Apply steering to VehicleBody3D
-		parent.steering = steering_input * STEERING_FORCE  
+		# Apply steering to VehicleBody3D - note the negative sign to fix wheel direction
+		parent.steering = -steering_input * STEERING_FORCE  
 		
 		# Apply brakes if needed
 		parent.brake = brake_input * BRAKE_FORCE
@@ -139,9 +139,9 @@ func set_motor(value: float):
 
 func set_steering(value: float):
 	steering_input = clamp(value, -1.0, 1.0)
-	# Immediately apply steering if we have a parent
+	# Immediately apply steering if we have a parent - fix wheel direction with negative sign
 	if parent and parent is VehicleBody3D:
-		parent.steering = steering_input * STEERING_FORCE
+		parent.steering = -steering_input * STEERING_FORCE
 	
 	if DEBUG_MODE and abs(value) > 0.1:
 		print("RoverController: set_steering called with value=", value, " set to ", steering_input)
