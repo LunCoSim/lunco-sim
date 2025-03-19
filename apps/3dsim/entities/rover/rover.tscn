@@ -1,13 +1,22 @@
-[gd_scene load_steps=10 format=3 uid="uid://baaxdcimi1r6x"]
+[gd_scene load_steps=12 format=3 uid="uid://baaxdcimi1r6x"]
 
 [ext_resource type="Script" uid="uid://bqc056rgml8ww" path="res://apps/3dsim/entities/rover/controllable_rover.gd" id="1_yvk4r"]
 [ext_resource type="Script" uid="uid://cx4pmkso8313l" path="res://apps/3dsim/entities/rover/rover_controller.gd" id="2_xvk4r"]
 [ext_resource type="Script" uid="uid://dviposkab7kji" path="res://controllers/rover/rover-input-adapter.gd" id="3_wvk4r"]
-[ext_resource type="Script" path="res://apps/3dsim/entities/rover/wheel_physics.gd" id="4_wheel"]
-[ext_resource type="Script" path="res://apps/3dsim/entities/rover/rover_input_mappings.gd" id="5_input"]
+[ext_resource type="Script" uid="uid://daxhg7wqqh3ta" path="res://apps/3dsim/entities/rover/wheel_physics.gd" id="4_wheel"]
+[ext_resource type="Script" uid="uid://c4p0yuxlgq8ji" path="res://apps/3dsim/entities/rover/rover_input_mappings.gd" id="5_input"]
 
 [sub_resource type="BoxShape3D" id="BoxShape3D_1"]
 size = Vector3(2, 1, 3)
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_wheel"]
+top_radius = 0.4
+bottom_radius = 0.4
+height = 0.3
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_wheel"]
+albedo_color = Color(0.2, 0.2, 0.2, 1)
+roughness = 0.8
 
 [sub_resource type="BoxMesh" id="BoxMesh_1"]
 size = Vector3(2, 1, 3)
@@ -16,18 +25,9 @@ size = Vector3(2, 1, 3)
 size = Vector3(2.2, 0.2, 0.3)
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_bumper"]
-albedo_color = Color(1, 0.2, 0.2, 1.0)
+albedo_color = Color(1, 0.2, 0.2, 1)
 metallic = 0.7
 roughness = 0.3
-
-[sub_resource type="CylinderMesh" id="CylinderMesh_wheel"]
-top_radius = 0.4
-bottom_radius = 0.4
-height = 0.3
-
-[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_wheel"]
-albedo_color = Color(0.2, 0.2, 0.2, 1.0)
-roughness = 0.8
 
 [node name="Rover" type="RigidBody3D"]
 mass = 500.0
@@ -37,12 +37,12 @@ linear_damp = 0.2
 angular_damp = 3.0
 script = ExtResource("1_yvk4r")
 
-[node name="RoverController" type="Node3D" parent="."]
+[node name="RoverController" type="Node3D" parent="." groups=["RoverControllers"]]
 script = ExtResource("2_xvk4r")
 MOTOR_FORCE = 2500.0
 STEERING_FORCE = 1500.0
-BRAKE_FORCE = 2000.0
 MAX_SPEED = 15.0
+BRAKE_FORCE = 2000.0
 front_left_wheel = NodePath("../Wheels/FrontLeftWheel")
 front_right_wheel = NodePath("../Wheels/FrontRightWheel")
 back_left_wheel = NodePath("../Wheels/BackLeftWheel")
@@ -50,9 +50,7 @@ back_right_wheel = NodePath("../Wheels/BackRightWheel")
 
 [node name="RoverInputAdapter" type="Node" parent="."]
 script = ExtResource("3_wvk4r")
-controller = NodePath("../RoverController")
-MOTOR_SENSITIVITY = 1.5
-STEERING_SENSITIVITY = 1.0
+target = NodePath("../RoverController")
 
 [node name="InputMappings" type="Node" parent="."]
 script = ExtResource("5_input")
@@ -65,7 +63,6 @@ shape = SubResource("BoxShape3D_1")
 [node name="FrontLeftWheel" type="Node3D" parent="Wheels"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1, -0.4, -1)
 script = ExtResource("4_wheel")
-suspension_rest_length = 0.8
 suspension_stiffness = 600.0
 suspension_damping = 250.0
 wheel_friction = 1.2
@@ -79,7 +76,6 @@ surface_material_override/0 = SubResource("StandardMaterial3D_wheel")
 [node name="FrontRightWheel" type="Node3D" parent="Wheels"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1, -0.4, -1)
 script = ExtResource("4_wheel")
-suspension_rest_length = 0.8
 suspension_stiffness = 600.0
 suspension_damping = 250.0
 wheel_friction = 1.2
@@ -93,7 +89,6 @@ surface_material_override/0 = SubResource("StandardMaterial3D_wheel")
 [node name="BackLeftWheel" type="Node3D" parent="Wheels"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1, -0.4, 1)
 script = ExtResource("4_wheel")
-suspension_rest_length = 0.8
 suspension_stiffness = 600.0
 suspension_damping = 250.0
 wheel_friction = 1.2
@@ -107,7 +102,6 @@ surface_material_override/0 = SubResource("StandardMaterial3D_wheel")
 [node name="BackRightWheel" type="Node3D" parent="Wheels"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1, -0.4, 1)
 script = ExtResource("4_wheel")
-suspension_rest_length = 0.8
 suspension_stiffness = 600.0
 suspension_damping = 250.0
 wheel_friction = 1.2
@@ -125,6 +119,3 @@ mesh = SubResource("BoxMesh_1")
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, -1.5)
 mesh = SubResource("BoxMesh_bumper")
 surface_material_override/0 = SubResource("StandardMaterial3D_bumper")
-
-[connection signal="control_granted" from="." to="RoverController" method="take_control"]
-[connection signal="control_released" from="." to="RoverController" method="release_control"]

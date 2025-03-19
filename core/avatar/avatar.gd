@@ -294,6 +294,9 @@ func _on_state_transited():
 	elif target is LCSpacecraftController:
 		camera.set_spring_length(50)
 		camera.set_follow_height(0)
+	elif target is LCRoverController:
+		camera.set_spring_length(5) 
+		camera.set_follow_height(1.5)
 	elif target is LCOperatorController:
 		camera.set_spring_length(2.5)
 

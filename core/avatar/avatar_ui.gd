@@ -49,11 +49,14 @@ func clear_ui():
 			ui.remove_child(n)
 
 func set_target(target):
+	clear_ui()
 	
 	if target is LCCharacterController:
 		_ui = load("res://controllers/character/character-ui.tscn").instantiate()
 	elif target is LCSpacecraftController:
 		_ui = load("res://controllers/spacecraft/spacecraft-ui.tscn").instantiate()
+	elif target is LCRoverController:
+		_ui = load("res://controllers/rover/rover-ui.tscn").instantiate()
 	elif target is LCOperatorController:
 		_ui = load("res://controllers/operator/operator-ui.tscn").instantiate()
 
@@ -62,7 +65,7 @@ func set_target(target):
 	set_ui(_ui)
 	
 	update_entities(get_parent().get_parent().entities) #TBD Very dirty hack! Getting Universe entities
-	
+
 func _on_entities_item_selected(index):
 	print("_on_entities_item_selected: ", index)
 	emit_signal("entity_selected", index)
