@@ -27,8 +27,6 @@ var steering_input := 0.0
 var brake_input := 0.0
 var current_speed := 0.0
 
-# Keep the is_controlled flag but don't use it for physics processing
-var is_controlled := false
 var debug_counter := 0
 
 # Signals
@@ -41,24 +39,9 @@ signal brake_applied(force: float)
 func _ready():
 	print("LCRoverController: Initializing node ", name)
 	
-	# Ensure we're in the right group
+	# Ensure we're in the right group for discovery
 	if not is_in_group("RoverControllers"):
 		add_to_group("RoverControllers")
-	
-	# Ensure we have connections to control signals
-	if parent.has_signal("control_granted"):
-		if not parent.control_granted.is_connected(take_control):
-			parent.control_granted.connect(take_control)
-			print("LCRoverController: Connected control_granted signal")
-	else:
-		print("LCRoverController: Parent does not have control_granted signal")
-	
-	if parent.has_signal("control_released"):
-		if not parent.control_released.is_connected(release_control):
-			parent.control_released.connect(release_control)
-			print("LCRoverController: Connected control_released signal")
-	else:
-		print("LCRoverController: Parent does not have control_released signal")
 	
 	# Reset inputs on start
 	motor_input = 0.0
@@ -77,13 +60,12 @@ func _ready():
 	print("LCRoverController: MOTOR_FORCE = ", MOTOR_FORCE)
 
 func _on_timer_timeout():
-	print("LCRoverController status: authority=", is_multiplayer_authority(), " is_controlled=", is_controlled)
+	print("LCRoverController status: authority=", is_multiplayer_authority())
 	print("LCRoverController inputs: motor=", motor_input, " steering=", steering_input, " brake=", brake_input)
 
 # Processing physics for Rover controller
-# MAJOR CHANGE: Use same approach as spacecraft - just check multiplayer authority
 func _physics_process(delta: float):
-	# Only check for authority like spacecraft controller
+	# Only process if we have authority (same as spacecraft)
 	if is_multiplayer_authority():
 		if parent:
 			# Debug output (only occasionally to avoid spam)
@@ -149,23 +131,17 @@ func set_brake(value: float):
 	if DEBUG_MODE and value > 0.1:
 		print("RoverController: set_brake called with value=", value, " set to ", brake_input)
 
-# Handle control signals, but keep them simple
+# Simplified control methods (required for compatibility with signals)
 func take_control():
-	is_controlled = true
-	print("RoverController: Control taken, is_controlled=", is_controlled)
 	# Reset all inputs when taking control
 	motor_input = 0.0
 	steering_input = 0.0
 	brake_input = 0.0
+	print("RoverController: Control taken")
 
 func release_control():
-	is_controlled = false
-	print("RoverController: Control released, is_controlled=", is_controlled)
 	# Reset all inputs when releasing control
 	motor_input = 0.0
 	steering_input = 0.0
 	brake_input = 0.0
-
-# Check if this rover is currently being controlled
-func is_being_controlled() -> bool:
-	return is_controlled 
+	print("RoverController: Control released") 

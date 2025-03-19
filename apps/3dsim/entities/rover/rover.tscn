@@ -46,7 +46,6 @@ BRAKE_FORCE = 2000.0
 
 [node name="RoverInputAdapter" type="Node" parent="."]
 script = ExtResource("3_wvk4r")
-target = NodePath("../RoverController")
 
 [node name="InputMappings" type="Node" parent="."]
 script = ExtResource("5_input")
