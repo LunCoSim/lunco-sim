@@ -9,32 +9,6 @@ extends Node
 @export var INPUT_DEADZONE := 0.1
 
 func _ready():
-	# Try to find our controller if target is not set
-	if not target:
-		print("RoverInputAdapter: Target not set, looking for parent controller")
-		# Try to find in parent first
-		var parent = get_parent()
-		if parent and parent.get_node_or_null("LCRoverController") != null:
-			target = parent.get_node("LCRoverController")
-			print("RoverInputAdapter: Found LCRoverController in parent: ", target)
-		elif parent and parent.get_node_or_null("RoverController") != null:
-			target = parent.get_node("RoverController")
-			print("RoverInputAdapter: Found RoverController in parent: ", target)
-		else:
-			# Try to find any controller in the scene
-			var potentialControllers = get_tree().get_nodes_in_group("RoverControllers")
-			if potentialControllers.size() > 0:
-				target = potentialControllers[0]
-				print("RoverInputAdapter: Found controller in group: ", target)
-				
-			# Try to find the avatar to make it the target instead
-			var avatar = get_node_or_null("/root/Avatar")
-			if avatar:
-				print("RoverInputAdapter: Found Avatar node, setting as target")
-				target = avatar
-	else:
-		print("RoverInputAdapter: Target was already set to: ", target)
-	
 	# Create a timer to periodically check and report the state
 	var timer = Timer.new()
 	timer.wait_time = 2.0
@@ -58,13 +32,10 @@ func _on_timer_timeout():
 		print("RoverInputAdapter: Avatar's target is: ", _target)
 	
 	if _target is LCRoverController:
-		print("RoverInputAdapter: Target is RoverController, is_controlled=", _target.is_controlled)
+		print("RoverInputAdapter: Target is RoverController")
 	else:
-		# Try to look up the full avatar path
-		var avatar_path = "???"
-		if target:
-			avatar_path = target.get_path()
-		print("RoverInputAdapter: Target is not a RoverController: ", _target, " (avatar path: ", avatar_path, ")")
+		# Print what the target actually is for debugging
+		print("RoverInputAdapter: Target is not a RoverController: ", _target)
 
 func _input(_event):
 	# Only process inputs if we have a target

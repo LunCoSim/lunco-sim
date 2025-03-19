@@ -7,6 +7,7 @@
 [ext_resource type="PackedScene" uid="uid://c1symo07dohlf" path="res://controllers/operator/operator-input-adapter.tscn" id="5_78cuv"]
 [ext_resource type="PackedScene" uid="uid://cqnkkr1pgxiyp" path="res://controllers/character/character-input-adapter.tscn" id="6_f6o08"]
 [ext_resource type="Script" uid="uid://dcnypxmborlkv" path="res://core/avatar/avatar-controller.gd" id="7_tskp4"]
+[ext_resource type="PackedScene" uid="uid://cst8vao42ka1m" path="res://controllers/rover/rover-input-adapter.tscn" id="8_rlsuw"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_hover"]
 content_margin_left = 24.0
@@ -123,6 +124,9 @@ target = NodePath("..")
 
 [node name="CharactInputAdapter" parent="." node_paths=PackedStringArray("camera") instance=ExtResource("6_f6o08")]
 camera = NodePath("../SpringArmCamera")
+
+[node name="RoverInputAdapter" parent="." node_paths=PackedStringArray("target") instance=ExtResource("8_rlsuw")]
+target = NodePath("..")
 
 [node name="AvatarController" type="Node3D" parent="."]
 script = ExtResource("7_tskp4")
