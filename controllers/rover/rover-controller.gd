@@ -106,24 +106,6 @@ func _physics_process(_delta: float):
 			print("Rover physics: motor_input=", motor_input, " engine_force=", motor_input * ENGINE_FORCE)
 			print("Rover parent direct values: engine_force=", parent.engine_force, " steering=", parent.steering)
 			
-			# Check if we're actually moving or falling
-			var speed = parent.linear_velocity.length()
-			var vertical_speed = abs(parent.linear_velocity.y)
-			
-			# If we're falling but not moving horizontally, we might be off the ground
-			if vertical_speed > 0.5 and abs(motor_input) > 0.1:
-				print("WARNING: Rover appears to be falling!")
-				if parent.has_method("teleport_to_safe_position"):
-					parent.teleport_to_safe_position()
-			# If we have input but not moving, try to unstick
-			elif abs(motor_input) > 0.1 and speed < 0.01:
-				print("WARNING: Rover has input but isn't moving! Attempting recovery...")
-				# Try to unstuck the rover by applying a vertical impulse
-				parent.apply_central_impulse(Vector3(0, 1.0, 0))
-				# Add a small forward/backward push based on input direction
-				var forward_impulse = 5.0 * sign(motor_input)
-				parent.apply_central_impulse(Vector3(0, 0, forward_impulse))
-			
 		# Apply engine force to VehicleBody3D
 		parent.engine_force = motor_input * ENGINE_FORCE
 		
