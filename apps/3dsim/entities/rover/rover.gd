@@ -6,8 +6,9 @@ var controller: Node
 var input_adapter: Node
 
 func _ready():
-	# Set up networking and control
-	set_multiplayer_authority(1)
+	# Set up networking and control without forcing authority
+	# Removed automatic authority setting to allow proper control
+	# set_multiplayer_authority(1)
 	
 	# Find and cache the controller
 	controller = get_node_or_null("RoverController")
@@ -28,6 +29,17 @@ func _ready():
 		elif controller:
 			input_adapter.target = controller
 			print("Rover: Set input adapter target to controller")
+			
+	# Create a timer to check position
+	var timer = Timer.new()
+	timer.wait_time = 1.0
+	timer.one_shot = false
+	timer.autostart = true
+	timer.connect("timeout", Callable(self, "_on_timer_timeout"))
+	add_child(timer)
+	
+	# Set initial position
+	teleport_to_safe_position()
 
 func take_control(id: int) -> bool:
 	print("Rover: take_control called with id=", id)
@@ -38,6 +50,19 @@ func take_control(id: int) -> bool:
 	_owner_id = id
 	set_multiplayer_authority(id)
 	print("Rover: Control granted to player ", id)
+	
+	# Ensure the input adapter is connected and reset controls
+	if controller:
+		if controller.has_method("take_control"):
+			controller.take_control()
+		
+		# Make sure controller starts with zero inputs
+		if controller.has_method("set_motor"):
+			controller.set_motor(0.0)
+		if controller.has_method("set_steering"):
+			controller.set_steering(0.0)
+		if controller.has_method("set_brake"):
+			controller.set_brake(0.0)
 	
 	# Ensure the input adapter is connected
 	if input_adapter and controller:
@@ -67,8 +92,9 @@ func get_owner_id() -> int:
 
 # Called every physics frame
 func _physics_process(_delta):
-	# Verify that the input adapter is properly connected to the controller
-	if input_adapter and controller and is_multiplayer_authority():
+	# Ensure the input adapter is always connected to the controller
+	# regardless of multiplayer authority
+	if input_adapter and controller:
 		if input_adapter.target != controller:
 			input_adapter.target = controller
 			print("Rover: Reconnected input adapter to controller in physics_process")
@@ -91,3 +117,22 @@ func _get_configuration_warnings() -> PackedStringArray:
 		warnings.append("Missing RoverInputAdapter node")
 	
 	return warnings 
+
+# Add a function to teleport the rover to a safe position
+func teleport_to_safe_position():
+	# Teleport to a position with ground underneath
+	global_position = Vector3(0, 1.0, 0)  # Slightly above ground level
+	global_rotation = Vector3.ZERO       # Reset rotation
+	linear_velocity = Vector3.ZERO       # Reset velocity
+	angular_velocity = Vector3.ZERO      # Reset angular velocity
+	print("Rover: Teleported to safe position")
+	
+	# Apply a small downward force to ensure contact with ground
+	apply_central_impulse(Vector3(0, -10, 0))
+
+func _on_timer_timeout():
+	if _owner_id != 0 and global_position.y < -5.0:
+		print("Rover: Detected falling, resetting position")
+		teleport_to_safe_position()
+		
+ 

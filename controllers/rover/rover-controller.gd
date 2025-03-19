@@ -4,7 +4,7 @@ extends LCController
 
 # Export categories for easy configuration in the editor
 @export_category("Rover Movement Parameters")
-@export var ENGINE_FORCE := 5000.0  # Higher engine force for better response
+@export var ENGINE_FORCE := 10000.0  # Increased engine force for better response
 @export var STEERING_FORCE := 0.5  # Steering force (max angle in radians)
 @export var MAX_SPEED := 8.0  # Maximum speed
 @export var BRAKE_FORCE := 800.0  # Braking force
@@ -13,7 +13,12 @@ extends LCController
 # Get the parent VehicleBody3D node
 @onready var parent: VehicleBody3D:
 	get:
-		return self.get_parent()
+		var p = self.get_parent()
+		if p and p is VehicleBody3D:
+			return p
+		else:
+			push_error("RoverController: Parent is not a VehicleBody3D! Got: " + str(p))
+			return null
 
 # Internal state
 var motor_input := 0.0
@@ -64,44 +69,79 @@ func _ready():
 		parent.brake = 0.0
 		print("RoverController: Vehicle properties initialized")
 
+# Add a function to debug physics state
+func debug_physics_state():
+	if parent and parent is VehicleBody3D:
+		print("--- ROVER PHYSICS DEBUG ---")
+		print("Position: ", parent.global_position)
+		print("Linear velocity: ", parent.linear_velocity)
+		print("Engine force: ", parent.engine_force)
+		print("Gravity scale: ", parent.gravity_scale)
+		print("Is on floor: ", parent.is_on_floor() if parent.has_method("is_on_floor") else "N/A")
+		
+		# Debug wheel contact
+		for wheel in parent.get_children():
+			if wheel is VehicleWheel3D:
+				print("Wheel ", wheel.name, " contact: ", wheel.is_in_contact())
+				
+		print("-------------------------")
+		
 func _on_timer_timeout():
 	print("LCRoverController status: authority=", is_multiplayer_authority())
 	print("LCRoverController inputs: motor=", motor_input, " steering=", steering_input, " brake=", brake_input)
-	if is_multiplayer_authority() and parent:
+	if parent:
 		print("Rover parent values: engine_force=", parent.engine_force, " steering=", parent.steering, " brake=", parent.brake)
 		print("Rover speed: ", current_speed)
+		
+		# Add physics debugging
+		debug_physics_state()
 
 # Processing physics for Rover controller
 func _physics_process(_delta: float):
-	# TEMPORARY: Process regardless of authority for testing
-	# if is_multiplayer_authority():
-	if true:  # Process regardless of authority for testing
-		if parent and parent is VehicleBody3D:
-			# Debug output (only occasionally to avoid spam)
-			debug_counter += 1
-			if DEBUG_MODE and debug_counter % 30 == 0:
-				print("Rover physics: motor_input=", motor_input, " engine_force=", motor_input * ENGINE_FORCE)
-				print("Rover parent direct values: engine_force=", parent.engine_force, " steering=", parent.steering)
-				print("Rover authority status: ", is_multiplayer_authority())
-				
-			# Apply engine force to VehicleBody3D
-			parent.engine_force = motor_input * ENGINE_FORCE
+	# Process regardless of authority to ensure controls always work
+	if parent and parent is VehicleBody3D:
+		# Debug output (only occasionally to avoid spam)
+		debug_counter += 1
+		if DEBUG_MODE and debug_counter % 30 == 0:
+			print("Rover physics: motor_input=", motor_input, " engine_force=", motor_input * ENGINE_FORCE)
+			print("Rover parent direct values: engine_force=", parent.engine_force, " steering=", parent.steering)
 			
-			# Apply steering to VehicleBody3D
-			parent.steering = steering_input * STEERING_FORCE  
+			# Check if we're actually moving or falling
+			var speed = parent.linear_velocity.length()
+			var vertical_speed = abs(parent.linear_velocity.y)
 			
-			# Apply brakes if needed
-			parent.brake = brake_input * BRAKE_FORCE
-			if brake_input > 0:
-				brake_applied.emit(brake_input)
+			# If we're falling but not moving horizontally, we might be off the ground
+			if vertical_speed > 0.5 and abs(motor_input) > 0.1:
+				print("WARNING: Rover appears to be falling!")
+				if parent.has_method("teleport_to_safe_position"):
+					parent.teleport_to_safe_position()
+			# If we have input but not moving, try to unstick
+			elif abs(motor_input) > 0.1 and speed < 0.01:
+				print("WARNING: Rover has input but isn't moving! Attempting recovery...")
+				# Try to unstuck the rover by applying a vertical impulse
+				parent.apply_central_impulse(Vector3(0, 1.0, 0))
+				# Add a small forward/backward push based on input direction
+				var forward_impulse = 5.0 * sign(motor_input)
+				parent.apply_central_impulse(Vector3(0, 0, forward_impulse))
 			
-			# Update speed
-			current_speed = parent.linear_velocity.length()
-			speed_changed.emit(current_speed)
-			
-			# Emit other signals
-			motor_state_changed.emit(motor_input)
-			steering_changed.emit(steering_input)
+		# Apply engine force to VehicleBody3D
+		parent.engine_force = motor_input * ENGINE_FORCE
+		
+		# Apply steering to VehicleBody3D
+		parent.steering = steering_input * STEERING_FORCE  
+		
+		# Apply brakes if needed
+		parent.brake = brake_input * BRAKE_FORCE
+		if brake_input > 0:
+			brake_applied.emit(brake_input)
+		
+		# Update speed
+		current_speed = parent.linear_velocity.length()
+		speed_changed.emit(current_speed)
+		
+		# Emit other signals
+		motor_state_changed.emit(motor_input)
+		steering_changed.emit(steering_input)
 
 # Simple command methods
 func set_motor(value: float):
@@ -164,4 +204,22 @@ func release_control():
 		parent.steering = 0.0
 		parent.brake = 0.0
 	
-	print("RoverController: Control released") 
+	print("RoverController: Control released")
+
+# Add a regular process function to regularly check input values
+func _process(_delta: float):
+	if parent and parent is VehicleBody3D:
+		# Check if motor values are being applied consistently
+		if DEBUG_MODE and debug_counter % 60 == 0:
+			print("RoverController _process: Input values - motor:", motor_input, 
+				" steering:", steering_input, 
+				" brake:", brake_input)
+			print("RoverController vehicle values - engine:", parent.engine_force, 
+				" steering:", parent.steering,
+				" brake:", parent.brake)
+			print("RoverController speed:", current_speed)
+			
+	# Always test direct input from keyboard for debugging
+	var debug_motor = Input.get_action_strength("move_forward") - Input.get_action_strength("move_backward")
+	if abs(debug_motor) > 0.1 and DEBUG_MODE and debug_counter % 60 == 0:
+		print("RoverController direct keyboard input:", debug_motor) 
