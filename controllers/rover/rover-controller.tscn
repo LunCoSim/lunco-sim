@@ -2,5 +2,5 @@
 
 [ext_resource type="Script" uid="uid://f0iojori2ghp" path="res://controllers/rover/rover-controller.gd" id="1_yvk4r"]
 
-[node name="RoverController" type="Node"]
+[node name="RoverController" type="Node3D"]
 script = ExtResource("1_yvk4r")

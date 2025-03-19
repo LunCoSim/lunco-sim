@@ -16,9 +16,7 @@ extends LCController
 @export var back_right_wheel: Node3D
 
 # Get the parent RigidBody3D node
-@onready var parent: RigidBody3D:
-	get:
-		return self.get_parent()
+var parent: RigidBody3D
 
 # Internal state - simplified like spacecraft controller
 var motor_input := 0.0
@@ -40,27 +38,51 @@ func _ready():
 	# Ensure we're in the right group
 	if not is_in_group("RoverControllers"):
 		add_to_group("RoverControllers")
+	
+	# Get the parent rigidbody
+	if get_parent() is RigidBody3D:
+		parent = get_parent() as RigidBody3D
+	else:
+		push_error("LCRoverController: Parent must be a RigidBody3D!")
+		return
 		
 	# Ensure we have connections to control signals
 	if parent.has_signal("control_granted"):
 		if not parent.control_granted.is_connected(take_control):
 			parent.control_granted.connect(take_control)
+			print("LCRoverController: Connected control_granted signal")
+	else:
+		print("LCRoverController: Parent does not have control_granted signal")
 	
 	if parent.has_signal("control_released"):
 		if not parent.control_released.is_connected(release_control):
 			parent.control_released.connect(release_control)
+			print("LCRoverController: Connected control_released signal")
+	else:
+		print("LCRoverController: Parent does not have control_released signal")
 	
 	# Reset inputs on start
 	motor_input = 0.0
 	steering_input = 0.0
 	brake_input = 0.0
 	
-	print("LCRoverController: Initialized")
+	# Create a timer to periodically report status
+	var timer = Timer.new()
+	timer.wait_time = 3.0
+	timer.one_shot = false
+	timer.autostart = true
+	timer.connect("timeout", Callable(self, "_on_timer_timeout"))
+	add_child(timer)
+	
+	print("LCRoverController: Initialized with parent: ", parent.name)
+
+func _on_timer_timeout():
+	print("LCRoverController status: authority=", is_multiplayer_authority(), " is_controlled=", is_controlled)
 
 # Processing physics for Rover controller
 func _physics_process(delta: float):
-	# Only process when we have authority (exactly like spacecraft)
-	if is_multiplayer_authority():
+	# Only process when we have authority and we're controlled
+	if is_multiplayer_authority() and is_controlled:
 		if parent:
 			# Apply motor force
 			var forward_dir = -parent.global_transform.basis.z
@@ -113,7 +135,7 @@ func set_brake(value: float):
 # Handle control signals, but keep them simple
 func take_control():
 	is_controlled = true
-	print("RoverController: Control taken")
+	print("RoverController: Control taken, is_controlled=", is_controlled)
 	# Reset all inputs when taking control
 	motor_input = 0.0
 	steering_input = 0.0
@@ -121,7 +143,7 @@ func take_control():
 
 func release_control():
 	is_controlled = false
-	print("RoverController: Control released")
+	print("RoverController: Control released, is_controlled=", is_controlled)
 	# Reset all inputs when releasing control
 	motor_input = 0.0
 	steering_input = 0.0

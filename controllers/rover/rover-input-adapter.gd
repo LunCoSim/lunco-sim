@@ -26,8 +26,45 @@ func _ready():
 			if potentialControllers.size() > 0:
 				target = potentialControllers[0]
 				print("RoverInputAdapter: Found controller in group: ", target)
+				
+			# Try to find the avatar to make it the target instead
+			var avatar = get_node_or_null("/root/Avatar")
+			if avatar:
+				print("RoverInputAdapter: Found Avatar node, setting as target")
+				target = avatar
+	else:
+		print("RoverInputAdapter: Target was already set to: ", target)
+	
+	# Create a timer to periodically check and report the state
+	var timer = Timer.new()
+	timer.wait_time = 2.0
+	timer.one_shot = false
+	timer.autostart = true
+	timer.connect("timeout", Callable(self, "_on_timer_timeout"))
+	add_child(timer)
 	
 	print("RoverInputAdapter: Ready, target is ", target)
+
+func _on_timer_timeout():
+	var _target = target
+	
+	# Report status for debugging
+	if not target:
+		print("RoverInputAdapter: No target set!")
+		return
+		
+	if target is LCAvatar:
+		_target = target.target
+		print("RoverInputAdapter: Avatar's target is: ", _target)
+	
+	if _target is LCRoverController:
+		print("RoverInputAdapter: Target is RoverController, is_controlled=", _target.is_controlled)
+	else:
+		# Try to look up the full avatar path
+		var avatar_path = "???"
+		if target:
+			avatar_path = target.get_path()
+		print("RoverInputAdapter: Target is not a RoverController: ", _target, " (avatar path: ", avatar_path, ")")
 
 func _input(_event):
 	# Only process inputs if we have a target

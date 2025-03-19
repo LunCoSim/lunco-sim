@@ -4,3 +4,4 @@
 
 [node name="RoverInputAdapter" type="Node"]
 script = ExtResource("1_xvk4r")
+# This will be set at runtime to target the avatar

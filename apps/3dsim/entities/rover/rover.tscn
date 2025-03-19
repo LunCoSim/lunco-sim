@@ -1,10 +1,10 @@
 [gd_scene load_steps=12 format=3 uid="uid://baaxdcimi1r6x"]
 
 [ext_resource type="Script" uid="uid://bqc056rgml8ww" path="res://apps/3dsim/entities/rover/controllable_rover.gd" id="1_yvk4r"]
-[ext_resource type="Script" uid="uid://cx4pmkso8313l" path="res://controllers/rover/rover-controller.gd" id="2_xvk4r"]
+[ext_resource type="Script" uid="uid://f0iojori2ghp" path="res://controllers/rover/rover-controller.gd" id="2_xvk4r"]
 [ext_resource type="Script" uid="uid://dviposkab7kji" path="res://controllers/rover/rover-input-adapter.gd" id="3_wvk4r"]
 [ext_resource type="Script" uid="uid://daxhg7wqqh3ta" path="res://apps/3dsim/entities/rover/wheel_physics.gd" id="4_wheel"]
-[ext_resource type="Script" uid="uid://c4p0yuxlgq8ji" path="res://controllers/rover/rover-input-mappings.gd" id="5_input"]
+[ext_resource type="Script" uid="uid://cqful0lwrl288" path="res://controllers/rover/rover-input-mappings.gd" id="5_input"]
 
 [sub_resource type="BoxShape3D" id="BoxShape3D_1"]
 size = Vector3(2, 1, 3)

@@ -16,21 +16,40 @@ func _ready():
 	controller = get_node_or_null("RoverController")
 	if not controller:
 		push_warning("Rover: No controller found!")
+	else:
+		print("Rover: Found controller: ", controller.name)
 	
 	# Find and cache the input adapter
 	input_adapter = get_node_or_null("RoverInputAdapter")
 	if not input_adapter:
 		push_warning("Rover: No input adapter found!")
+	else:
+		print("Rover: Found input adapter: ", input_adapter.name)
 	
 	# Connect control signals to controller
 	if controller.has_method("take_control") and not control_granted.is_connected(controller.take_control):
 		control_granted.connect(controller.take_control)
+		print("Rover: Connected control_granted signal to controller")
 	
 	if controller.has_method("release_control") and not control_released.is_connected(controller.release_control):
 		control_released.connect(controller.release_control)
+		print("Rover: Connected control_released signal to controller")
+	
+	# Create a periodic status reporter
+	var timer = Timer.new()
+	timer.wait_time = 4.0
+	timer.one_shot = false
+	timer.autostart = true
+	timer.connect("timeout", Callable(self, "_on_timer_timeout"))
+	add_child(timer)
+
+func _on_timer_timeout():
+	print("Rover status: owner_id=", _owner_id, " authority=", get_multiplayer_authority())
 
 func take_control(id: int) -> bool:
+	print("Rover: take_control called with id=", id)
 	if _owner_id != 0:
+		print("Rover: Already controlled by ", _owner_id)
 		return false
 	
 	_owner_id = id
@@ -40,7 +59,9 @@ func take_control(id: int) -> bool:
 	return true
 
 func release_control(id: int) -> bool:
+	print("Rover: release_control called with id=", id)
 	if _owner_id != id and id != 0:
+		print("Rover: Cannot release - controlled by ", _owner_id, " not ", id)
 		return false
 	
 	_owner_id = 0
