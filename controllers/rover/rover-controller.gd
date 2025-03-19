@@ -4,9 +4,9 @@ extends LCController
 
 # Export categories for easy configuration in the editor
 @export_category("Rover Movement Parameters")
-@export var ENGINE_FORCE := 10000.0  # Increased engine force for better response
-@export var STEERING_FORCE := 0.5  # Steering force (max angle in radians)
-@export var MAX_SPEED := 8.0  # Maximum speed
+@export var ENGINE_FORCE := 5000.0  # Reduced engine force for smoother acceleration
+@export var STEERING_FORCE := 0.3  # Reduced steering force for more stability
+@export var MAX_SPEED := 6.0  # Slightly reduced max speed
 @export var BRAKE_FORCE := 800.0  # Braking force
 @export var DEBUG_MODE := true  # Enable extra debug output
 
