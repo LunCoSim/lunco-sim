@@ -62,8 +62,8 @@ anchor_left = 1.0
 anchor_top = 1.0
 anchor_right = 1.0
 anchor_bottom = 1.0
-offset_left = -200.0
-offset_top = -358.0
+offset_left = -210.0
+offset_top = -310.0
 grow_horizontal = 0
 grow_vertical = 0
 
@@ -76,7 +76,7 @@ text = "Connected Users"
 
 [node name="Users" type="ItemList" parent="EntityUserContainer/UsersContainer"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 150)
+custom_minimum_size = Vector2(0, 80)
 layout_mode = 2
 theme_override_styles/panel = SubResource("StyleBoxFlat_item_normal")
 theme_override_styles/selected = SubResource("StyleBoxFlat_item_selected")
@@ -84,6 +84,7 @@ theme_override_styles/selected_focus = SubResource("StyleBoxFlat_item_selected")
 
 [node name="EntitiesContainer" type="VBoxContainer" parent="EntityUserContainer"]
 layout_mode = 2
+size_flags_vertical = 3
 
 [node name="CreateEntitiesLabel" type="Label" parent="EntityUserContainer/EntitiesContainer"]
 layout_mode = 2
@@ -91,8 +92,9 @@ text = "Create Entities (Alt+#)"
 
 [node name="Entities" type="ItemList" parent="EntityUserContainer/EntitiesContainer"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 150)
+custom_minimum_size = Vector2(0, 80)
 layout_mode = 2
+size_flags_vertical = 3
 theme_override_styles/panel = SubResource("StyleBoxFlat_item_normal")
 theme_override_styles/selected = SubResource("StyleBoxFlat_item_selected")
 theme_override_styles/selected_focus = SubResource("StyleBoxFlat_item_selected")
@@ -103,7 +105,9 @@ anchors_preset = 12
 anchor_top = 1.0
 anchor_right = 1.0
 anchor_bottom = 1.0
-offset_top = -57.0
+offset_top = -60.0
+offset_right = -210.0
+offset_bottom = -5.0
 grow_horizontal = 2
 grow_vertical = 0
 theme = SubResource("Theme_kf4je")
