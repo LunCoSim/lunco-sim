@@ -1,0 +1,36 @@
+[gd_scene load_steps=5 format=3 uid="uid://doyj5ibnqvv3m"]
+
+[ext_resource type="Script" uid="uid://6r2kxosnfnd0" path="res://apps/3dsim/entities/ui_display/supply_chain_display.gd" id="1_p0mmu"]
+
+[sub_resource type="QuadMesh" id="QuadMesh_f2m0u"]
+size = Vector2(4, 3)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_gljst"]
+resource_local_to_scene = true
+transparency = 1
+shading_mode = 0
+albedo_color = Color(1, 1, 1, 0.9)
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_g3y36"]
+size = Vector3(4, 3, 0.1)
+
+[node name="SupplyChainDisplay" type="Node3D"]
+script = ExtResource("1_p0mmu")
+
+[node name="DisplayMesh" type="MeshInstance3D" parent="."]
+mesh = SubResource("QuadMesh_f2m0u")
+surface_material_override/0 = SubResource("StandardMaterial3D_gljst")
+
+[node name="SubViewport" type="SubViewport" parent="."]
+transparent_bg = true
+size = Vector2i(1920, 1080)
+render_target_update_mode = 4
+
+[node name="Area3D" type="Area3D" parent="."]
+collision_layer = 2
+collision_mask = 0
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Area3D"]
+shape = SubResource("BoxShape3D_g3y36")
+
+[connection signal="input_event" from="Area3D" to="." method="_on_area_3d_input_event"]

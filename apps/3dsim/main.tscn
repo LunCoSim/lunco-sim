@@ -1,10 +1,12 @@
-[gd_scene load_steps=6 format=3 uid="uid://c4vgq4emswcqj"]
+[gd_scene load_steps=8 format=3 uid="uid://c4vgq4emswcqj"]
 
 [ext_resource type="PackedScene" uid="uid://oulno1atrp8k" path="res://core/simulation/simulation.tscn" id="1_dpa21"]
 [ext_resource type="PackedScene" uid="uid://cpbv4fmfxppt1" path="res://modules/solar_system_planets/sun.tscn" id="2_lwo2e"]
 [ext_resource type="PackedScene" uid="uid://ddaqlkbgl7bdl" path="res://modules/solar_system_planets/earth.tscn" id="3_2elmi"]
 [ext_resource type="PackedScene" uid="uid://csqh45xcqbewi" path="res://modules/solar_system_planets/moon.tscn" id="4_p5lxe"]
 [ext_resource type="PackedScene" uid="uid://c7q7gaaaa8g5g" path="res://content/maps/Langrenus/langrenus_crater_map.tscn" id="5_2uqv4"]
+[ext_resource type="PackedScene" uid="uid://doyj5ibnqvv3m" path="res://apps/3dsim/entities/ui_display/supply_chain_display.tscn" id="6_rsdku"]
+[ext_resource type="Script" uid="uid://b2u28srar01oq" path="res://apps/3dsim/entities/ui_display/display_controller.gd" id="7_ukwid"]
 
 [node name="Simulation" node_paths=PackedStringArray("spawn_node") instance=ExtResource("1_dpa21")]
 spawn_node = NodePath("Universe/Sun/Earth/Moon/LangrenusCraterMap/Spawner")
@@ -21,6 +23,9 @@ spawn_path = NodePath("../Universe/Sun/Earth/Moon/LangrenusCraterMap/Spawner")
 
 [node name="iVoyager" type="Node" parent="." index="3"]
 
+[node name="DisplayController" type="Node" parent="." index="4"]
+script = ExtResource("7_ukwid")
+
 [node name="Sun" parent="Universe" index="1" instance=ExtResource("2_lwo2e")]
 
 [node name="Earth" parent="Universe/Sun" index="1" instance=ExtResource("3_2elmi")]
@@ -32,3 +37,6 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 51, 0)
 
 [node name="Spawner" type="Node3D" parent="Universe/Sun/Earth/Moon/LangrenusCraterMap" index="1"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -55.4874, 0)
+
+[node name="SupplyChainDisplay" parent="Universe/Sun/Earth/Moon/LangrenusCraterMap" index="2" instance=ExtResource("6_rsdku")]
+transform = Transform3D(1, 0, 0, 0, 0.866025, 0.5, 0, -0.5, 0.866025, 0, -45, 20)
