@@ -9,6 +9,7 @@ var input_enabled = true
 var last_click_position = Vector2()
 var is_dragging = false
 var mouse_button_pressed = false
+var mouse_over_display = false
 
 func _ready():
 	# Add to group for easy identification
@@ -44,6 +45,10 @@ func _ready():
 	
 	# Connect to global mouse events for better drag handling
 	get_viewport().connect("gui_focus_changed", _on_focus_changed)
+	
+	# Connect to mouse enter/exit events
+	$Area3D.mouse_entered.connect(_on_mouse_entered)
+	$Area3D.mouse_exited.connect(_on_mouse_exited)
 
 func _process(_delta):
 	# Continuously send mouse motion events when dragging is active
@@ -65,6 +70,15 @@ func _process(_delta):
 		if result and result.collider == $Area3D:
 			# Convert 3D position to 2D viewport coordinates
 			_handle_mouse_motion(result.position)
+		else:
+			# If ray doesn't hit our display but we're still dragging,
+			# use the last position with updated relative movement
+			var viewport_event = InputEventMouseMotion.new()
+			viewport_event.position = last_click_position
+			viewport_event.global_position = last_click_position
+			viewport_event.relative = mouse_pos - get_viewport().get_mouse_position()
+			viewport_event.button_mask = MOUSE_BUTTON_MASK_LEFT
+			$SubViewport.push_input(viewport_event)
 
 # Helper method to add the root reference in a deferred way
 func _add_root_reference(ref_node):
@@ -76,12 +90,22 @@ func _add_supply_chain_scene(scene):
 	$SubViewport.add_child(scene)
 	print("Added supply chain scene to SubViewport")
 
+# Mouse enter/exit event handlers
+func _on_mouse_entered():
+	mouse_over_display = true
+
+func _on_mouse_exited():
+	mouse_over_display = false
+
 # Handle 3D area input and translate to 2D viewport input
 func _on_area_3d_input_event(camera, event, position, normal, shape_idx):
 	if not input_enabled:
 		return
-		
+	
+	# Mark this event as handled to prevent it from affecting avatar height
 	if event is InputEventMouseButton:
+		get_viewport().set_input_as_handled()
+		
 		# Update dragging state
 		if event.button_index == MOUSE_BUTTON_LEFT:
 			mouse_button_pressed = event.pressed
@@ -114,12 +138,16 @@ func _on_area_3d_input_event(camera, event, position, normal, shape_idx):
 		
 		# Send event to the viewport
 		$SubViewport.push_input(viewport_event)
-		last_click_position = viewport_position
+		
+		# Only update last click position when pressing down
+		if event.pressed:
+			last_click_position = viewport_position
 		
 		# Debug
 		print("Mouse button event forwarded to viewport at position: ", viewport_position)
 	
 	elif event is InputEventMouseMotion:
+		get_viewport().set_input_as_handled()
 		_handle_mouse_motion(position)
 
 # Handle mouse motion events
@@ -140,17 +168,81 @@ func _handle_mouse_motion(position):
 	viewport_event.position = viewport_position
 	viewport_event.global_position = viewport_position
 	
+	# Calculate relative motion since last position
+	if last_click_position != Vector2.ZERO:
+		viewport_event.relative = viewport_position - last_click_position
+	
 	if mouse_button_pressed:
 		viewport_event.button_mask = MOUSE_BUTTON_MASK_LEFT
 	
 	$SubViewport.push_input(viewport_event)
 	last_click_position = viewport_position
 
-# Global input handler to catch mouse release outside the area
+# Global input handler to catch mouse release outside the area and handle scroll wheel
 func _input(event):
 	if not input_enabled:
 		return
+	
+	# Handle mouse wheel events when mouse is over display
+	if mouse_over_display and event is InputEventMouseButton and (event.button_index == MOUSE_BUTTON_WHEEL_UP or event.button_index == MOUSE_BUTTON_WHEEL_DOWN):
+		# Get mouse position and convert to viewport coordinates
+		var mouse_pos = get_viewport().get_mouse_position()
+		var camera = get_viewport().get_camera_3d()
 		
+		# Cast a ray to find the intersection with display
+		var from = camera.project_ray_origin(mouse_pos)
+		var to = from + camera.project_ray_normal(mouse_pos) * 1000
+		
+		var space_state = get_world_3d().direct_space_state
+		var query = PhysicsRayQueryParameters3D.create(from, to)
+		query.collide_with_areas = true
+		query.collision_mask = 2  # Match the Area3D collision layer
+		
+		var result = space_state.intersect_ray(query)
+		if result and result.collider == $Area3D:
+			# Convert position to viewport coordinates
+			var viewport_size = $SubViewport.size
+			var mesh_size = Vector2(40, 30)
+			var local_position = result.position - global_position
+			var local_2d_position = Vector2(
+				(local_position.x / mesh_size.x + 0.5), 
+				(0.5 - local_position.y / mesh_size.y)
+			)
+			var viewport_position = Vector2(
+				local_2d_position.x * viewport_size.x,
+				local_2d_position.y * viewport_size.y
+			)
+			
+			# Create scroll event for viewport
+			var viewport_event = InputEventMouseButton.new()
+			viewport_event.button_index = event.button_index
+			viewport_event.pressed = event.pressed
+			viewport_event.position = viewport_position
+			viewport_event.global_position = viewport_position
+			
+			# Forward to viewport
+			$SubViewport.push_input(viewport_event)
+			
+			# Stop event propagation to prevent avatar height change
+			get_viewport().set_input_as_handled()
+	
+	# Handle mouse motion during drag even when outside the area
+	if is_dragging and mouse_button_pressed and event is InputEventMouseMotion:
+		# We don't need to check if we're over the display - if we're dragging
+		# we want to continue processing mouse motion events
+		var viewport_event = InputEventMouseMotion.new()
+		viewport_event.position = last_click_position
+		viewport_event.global_position = last_click_position
+		viewport_event.relative = event.relative * 2  # Amplify movement for better response
+		viewport_event.button_mask = MOUSE_BUTTON_MASK_LEFT
+		
+		# Forward to viewport
+		$SubViewport.push_input(viewport_event)
+		
+		# Stop event propagation
+		get_viewport().set_input_as_handled()
+	
+	# Handle mouse button release
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and not event.pressed:
 		if is_dragging:
 			is_dragging = false
