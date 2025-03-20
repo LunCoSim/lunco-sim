@@ -170,7 +170,8 @@ func _handle_mouse_motion(position):
 	
 	# Calculate relative motion since last position
 	if last_click_position != Vector2.ZERO:
-		viewport_event.relative = viewport_position - last_click_position
+		# Apply a smaller relative movement to match cursor movement more precisely
+		viewport_event.relative = (viewport_position - last_click_position) * 0.75
 	
 	if mouse_button_pressed:
 		viewport_event.button_mask = MOUSE_BUTTON_MASK_LEFT
@@ -233,7 +234,7 @@ func _input(event):
 		var viewport_event = InputEventMouseMotion.new()
 		viewport_event.position = last_click_position
 		viewport_event.global_position = last_click_position
-		viewport_event.relative = event.relative * 2  # Amplify movement for better response
+		viewport_event.relative = event.relative * 0.75  # Reduce movement speed to match cursor better
 		viewport_event.button_mask = MOUSE_BUTTON_MASK_LEFT
 		
 		# Forward to viewport
