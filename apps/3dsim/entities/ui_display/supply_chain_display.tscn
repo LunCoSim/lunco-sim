@@ -3,16 +3,17 @@
 [ext_resource type="Script" uid="uid://6r2kxosnfnd0" path="res://apps/3dsim/entities/ui_display/supply_chain_display.gd" id="1_p0mmu"]
 
 [sub_resource type="QuadMesh" id="QuadMesh_f2m0u"]
-size = Vector2(4, 3)
+size = Vector2(40, 30)
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_gljst"]
 resource_local_to_scene = true
 transparency = 1
+cull_mode = 2
 shading_mode = 0
 albedo_color = Color(1, 1, 1, 0.9)
 
 [sub_resource type="BoxShape3D" id="BoxShape3D_g3y36"]
-size = Vector3(4, 3, 0.1)
+size = Vector3(40, 30, 0.1)
 
 [node name="SupplyChainDisplay" type="Node3D"]
 script = ExtResource("1_p0mmu")
@@ -23,7 +24,8 @@ surface_material_override/0 = SubResource("StandardMaterial3D_gljst")
 
 [node name="SubViewport" type="SubViewport" parent="."]
 transparent_bg = true
-size = Vector2i(1920, 1080)
+gui_snap_controls_to_pixels = false
+size = Vector2i(2560, 1920)
 render_target_update_mode = 4
 
 [node name="Area3D" type="Area3D" parent="."]
