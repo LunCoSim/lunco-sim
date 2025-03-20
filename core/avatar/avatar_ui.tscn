@@ -3,15 +3,6 @@
 [ext_resource type="Script" uid="uid://bpq5fqrtu7f5o" path="res://core/avatar/avatar_ui.gd" id="1_igs02"]
 [ext_resource type="Theme" uid="uid://hve1e7mnexbi" path="res://themes/theme.tres" id="1_ois6a"]
 
-[sub_resource type="Theme" id="Theme_kf4je"]
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_blue"]
-bg_color = Color(0.2, 0.4, 0.8, 1)
-corner_radius_top_left = 4
-corner_radius_top_right = 4
-corner_radius_bottom_right = 4
-corner_radius_bottom_left = 4
-
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_item_normal"]
 content_margin_left = 8.0
 content_margin_top = 4.0
@@ -43,6 +34,15 @@ corner_radius_top_left = 6
 corner_radius_top_right = 6
 corner_radius_bottom_right = 6
 corner_radius_bottom_left = 6
+
+[sub_resource type="Theme" id="Theme_kf4je"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_blue"]
+bg_color = Color(0.2, 0.4, 0.8, 1)
+corner_radius_top_left = 4
+corner_radius_top_right = 4
+corner_radius_bottom_right = 4
+corner_radius_bottom_left = 4
 
 [node name="UI" type="Control"]
 layout_mode = 3
@@ -165,11 +165,11 @@ unique_name_in_owner = true
 layout_mode = 2
 underline = 2
 
-[node name="GitcoinDonorLabel" type="Label" parent="WalletInfo/WalletInfoGrid"]
+[node name="GitcoinDonorLabel" type="LinkButton" parent="WalletInfo/WalletInfoGrid"]
 layout_mode = 2
 text = "Gitcoin Donor:"
 
-[node name="GitcoinDonor" type="Label" parent="WalletInfo/WalletInfoGrid"]
+[node name="GitcoinDonor" type="LinkButton" parent="WalletInfo/WalletInfoGrid"]
 unique_name_in_owner = true
 layout_mode = 2
 text = "TBD"
