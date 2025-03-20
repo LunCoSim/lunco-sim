@@ -1,4 +1,4 @@
-[gd_scene load_steps=13 format=3 uid="uid://c5dg7yq7hd7m0"]
+[gd_scene load_steps=14 format=3 uid="uid://c5dg7yq7hd7m0"]
 
 [ext_resource type="Script" uid="uid://bomqiutxnbrh" path="res://core/avatar/avatar.gd" id="1_plcpi"]
 [ext_resource type="PackedScene" uid="uid://b24kp6klp25h5" path="res://addons/lunco-cameras/spring-arm-camera/spring-arm-camera.tscn" id="2_2xsb2"]

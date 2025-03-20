@@ -1,4 +1,4 @@
-[gd_scene load_steps=5 format=3 uid="uid://wdnxqhctneyv"]
+[gd_scene load_steps=7 format=3 uid="uid://wdnxqhctneyv"]
 
 [ext_resource type="Script" uid="uid://bpq5fqrtu7f5o" path="res://core/avatar/avatar_ui.gd" id="1_igs02"]
 [ext_resource type="Theme" uid="uid://hve1e7mnexbi" path="res://themes/theme.tres" id="1_ois6a"]
@@ -11,6 +11,38 @@ corner_radius_top_left = 4
 corner_radius_top_right = 4
 corner_radius_bottom_right = 4
 corner_radius_bottom_left = 4
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_item_normal"]
+content_margin_left = 8.0
+content_margin_top = 4.0
+content_margin_right = 8.0
+content_margin_bottom = 4.0
+bg_color = Color(0.12, 0.14, 0.17, 1)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.2, 0.22, 0.25, 1)
+corner_radius_top_left = 6
+corner_radius_top_right = 6
+corner_radius_bottom_right = 6
+corner_radius_bottom_left = 6
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_item_selected"]
+content_margin_left = 8.0
+content_margin_top = 4.0
+content_margin_right = 8.0
+content_margin_bottom = 4.0
+bg_color = Color(0.15, 0.17, 0.2, 1)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.3, 0.32, 0.35, 1)
+corner_radius_top_left = 6
+corner_radius_top_right = 6
+corner_radius_bottom_right = 6
+corner_radius_bottom_left = 6
 
 [node name="UI" type="Control"]
 layout_mode = 3
@@ -46,6 +78,9 @@ text = "Connected Users"
 unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 150)
 layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_item_normal")
+theme_override_styles/selected = SubResource("StyleBoxFlat_item_selected")
+theme_override_styles/selected_focus = SubResource("StyleBoxFlat_item_selected")
 
 [node name="EntitiesContainer" type="VBoxContainer" parent="EntityUserContainer"]
 layout_mode = 2
@@ -58,6 +93,9 @@ text = "Create Entities (Alt+#)"
 unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 150)
 layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_item_normal")
+theme_override_styles/selected = SubResource("StyleBoxFlat_item_selected")
+theme_override_styles/selected_focus = SubResource("StyleBoxFlat_item_selected")
 
 [node name="LivesEntitiesContrainer" type="VBoxContainer" parent="."]
 layout_mode = 1
