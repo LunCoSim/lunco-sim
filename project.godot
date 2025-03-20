@@ -67,6 +67,7 @@ directory_path="res://data/godot-idea-board/"
 
 [gui]
 
+theme/custom="uid://hve1e7mnexbi"
 theme/default_font_antialiasing=2
 theme/default_font_hinting=2
 theme/default_font_subpixel_positioning=3
