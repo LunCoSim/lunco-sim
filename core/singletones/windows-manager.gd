@@ -26,7 +26,11 @@ static func make_window(control, title) -> Window:
 	var win = Window.new()
 	win.add_child(control)
 	win.title = title
-	win.size = control.get_size()
+	
+	# Set size with some padding
+	var control_size = control.get_combined_minimum_size()
+	win.size = control_size + Vector2(40, 40)  # Add padding
+	
 	win.visible = false
 	win.unresizable = true
 	win.close_requested.connect(win.hide)
@@ -57,9 +61,28 @@ func position_top_left(window: Window):
 	window.position = Vector2i(x, y)
 
 func toggle_main_menu():
-	MainMenu.visible = !MainMenu.visible
-	if MainMenu.visible:
+	if !MainMenu.visible:
+		# Before showing, update the size based on content
+		var main_menu_content = MainMenu.get_child(0)
+		var content_size = main_menu_content.get_combined_minimum_size()
+		MainMenu.size = content_size + Vector2(40, 40)  # Add padding
+		
+		MainMenu.visible = true
+		
+		# Center the window
 		center_window(MainMenu)
+		
+		# Make sure the menu is visible within the window boundaries
+		var window_size = get_window().size
+		var menu_pos = MainMenu.position
+		
+		# Check if menu extends beyond window bottom
+		if menu_pos.y + MainMenu.size.y > window_size.y:
+			# Adjust position to fit vertically
+			menu_pos.y = max(0, window_size.y - MainMenu.size.y - 20)
+			MainMenu.position = menu_pos
+	else:
+		MainMenu.visible = false
 
 func toggle_chat():
 	ChatWindow.visible = !ChatWindow.visible

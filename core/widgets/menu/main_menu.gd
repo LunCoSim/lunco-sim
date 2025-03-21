@@ -80,3 +80,7 @@ func on_check_profile_nft(args):
 func _on_check_profile_nft_pressed():
 	print("_on_check_profile_nft_pressed: ", Profile.wallet)
 	JavaScriptBridge.get_interface("Login").checkProfile(Profile.wallet, _on_check_profile_nft_callback)
+
+func _on_replay_mode_pressed():
+	LCWindows.toggle_main_menu() # Close the menu
+	StateManager.goto_replay_scene()

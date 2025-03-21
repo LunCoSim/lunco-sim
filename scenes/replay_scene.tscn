@@ -1,0 +1,121 @@
+[gd_scene load_steps=2 format=3 uid="uid://chbhpj8mfr1qk"]
+
+[ext_resource type="Script" path="res://scenes/replay_scene.gd" id="1_s1y2n"]
+
+[node name="ReplayScene" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_s1y2n")
+
+[node name="VBoxContainer" type="VBoxContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Label" type="Label" parent="VBoxContainer"]
+layout_mode = 2
+text = "Replay Controls"
+horizontal_alignment = 1
+
+[node name="HBoxContainer" type="HBoxContainer" parent="VBoxContainer"]
+layout_mode = 2
+
+[node name="RecordButton" type="Button" parent="VBoxContainer/HBoxContainer"]
+layout_mode = 2
+text = "Start Recording"
+
+[node name="StopButton" type="Button" parent="VBoxContainer/HBoxContainer"]
+layout_mode = 2
+text = "Stop"
+
+[node name="ReplayButton" type="Button" parent="VBoxContainer/HBoxContainer"]
+layout_mode = 2
+text = "Start Replay"
+
+[node name="RestartButton" type="Button" parent="VBoxContainer/HBoxContainer"]
+layout_mode = 2
+text = "Restart Replay"
+
+[node name="MovieModeButton" type="Button" parent="VBoxContainer/HBoxContainer"]
+layout_mode = 2
+text = "Movie Maker Mode"
+
+[node name="SaveButton" type="Button" parent="VBoxContainer/HBoxContainer"]
+layout_mode = 2
+text = "Save Recording"
+
+[node name="LoadButton" type="Button" parent="VBoxContainer/HBoxContainer"]
+layout_mode = 2
+text = "Load Recording"
+
+[node name="RefreshButton" type="Button" parent="VBoxContainer/HBoxContainer"]
+layout_mode = 2
+text = "Refresh List"
+
+[node name="SpeedSlider" type="HSlider" parent="VBoxContainer/HBoxContainer"]
+custom_minimum_size = Vector2(200, 0)
+layout_mode = 2
+min_value = 0.1
+max_value = 3.0
+step = 0.1
+value = 1.0
+
+[node name="SpeedLabel" type="Label" parent="VBoxContainer/HBoxContainer"]
+layout_mode = 2
+text = "Speed: 1.0x"
+
+[node name="BackButton" type="Button" parent="VBoxContainer/HBoxContainer"]
+layout_mode = 2
+text = "Back to Game"
+
+[node name="HSeparator" type="HSeparator" parent="VBoxContainer"]
+layout_mode = 2
+
+[node name="StatusLabel" type="Label" parent="VBoxContainer"]
+layout_mode = 2
+text = "Status: Ready"
+
+[node name="HSeparator2" type="HSeparator" parent="VBoxContainer"]
+layout_mode = 2
+
+[node name="RecordingsHeader" type="Label" parent="VBoxContainer"]
+layout_mode = 2
+text = "Available Recordings:"
+horizontal_alignment = 0
+
+[node name="HBoxContainer2" type="HBoxContainer" parent="VBoxContainer"]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="RecordingsList" type="ItemList" parent="VBoxContainer/HBoxContainer2"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+auto_height = false
+item_count = 0
+
+[node name="SaveDialog" type="FileDialog" parent="."]
+title = "Save Recording"
+position = Vector2i(100, 100)
+size = Vector2i(600, 400)
+ok_button_text = "Save"
+dialog_close_on_escape = false
+access = 2
+filters = PackedStringArray("*.replay ; Replay Files")
+
+[node name="LoadDialog" type="FileDialog" parent="."]
+title = "Load Recording"
+position = Vector2i(100, 100)
+size = Vector2i(600, 400)
+ok_button_text = "Open"
+dialog_close_on_escape = false
+file_mode = 0
+access = 2
+filters = PackedStringArray("*.replay ; Replay Files") 
