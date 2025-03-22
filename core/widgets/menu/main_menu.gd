@@ -5,7 +5,8 @@ extends Node
 #------------------------------------
 
 func _ready():
-	$Version.text = "v" + str(ProjectSettings.get_setting("application/config/version"))
+	# Set the version from project settings
+	$MarginContainer/ScrollContainer/MainContent/Version.text = "v" + str(ProjectSettings.get_setting("application/config/version"))
 	on_reload_profile()
 	
 	Chat.profile_wallet_changed.connect(on_reload_profile)
@@ -73,9 +74,9 @@ func on_check_profile_nft(args):
 	Profile.has_profile = int(args[0])
 	
 	if Profile.has_profile > 0:
-		$Profile/CheckProfileNFT.text = "You own " + str(Profile.has_profile) + " Profile NFT"
+		$MarginContainer/ScrollContainer/MainContent/ProfilePanel/Profile/ProfileButtonsContainer/CheckProfileNFT.text = "You own " + str(Profile.has_profile) + " Profile NFT"
 	else:
-		$Profile/CheckProfileNFT.text = "No Profile NFT. Go get one!"
+		$MarginContainer/ScrollContainer/MainContent/ProfilePanel/Profile/ProfileButtonsContainer/CheckProfileNFT.text = "No Profile NFT. Go get one!"
 	
 func _on_check_profile_nft_pressed():
 	print("_on_check_profile_nft_pressed: ", Profile.wallet)

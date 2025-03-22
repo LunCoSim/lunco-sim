@@ -9,6 +9,9 @@ var TutorialWindow: Window
 func _ready():
 	var MainMenuScene = load("res://core/widgets/menu/main_menu.tscn").instantiate()
 	MainMenu = make_window(MainMenuScene, "Main menu")
+	# Set a larger size for the main menu
+	MainMenu.min_size = Vector2(480, 640)
+	MainMenu.size = Vector2(480, 720)
 	add_child(MainMenu)
 	center_window(MainMenu)
 	
@@ -18,35 +21,81 @@ func _ready():
 	center_window(ChatWindow)
 	
 	var TutorialWindowScene = load("res://core/widgets/tutorial.tscn").instantiate()
-	TutorialWindow = make_window(TutorialWindowScene, "Tutorial", Vector2(60, 60))
+	TutorialWindow = make_window(TutorialWindowScene, "Tutorial", false)
 	add_child(TutorialWindow)
+	TutorialWindow.initial_position = Window.WINDOW_INITIAL_POSITION_CENTER_PRIMARY_SCREEN
+	TutorialWindow.min_size = Vector2(300, 400)
 	position_top_left(TutorialWindow)
-	
-static func make_window(control, title, padding = Vector2(40, 40)) -> Window:
+
+static func make_window(control, title, transparent_bg = true) -> Window:
 	var win = Window.new()
 	win.add_child(control)
 	win.title = title
 	
-	# Set size with padding
-	var control_size = control.get_combined_minimum_size()
-	win.size = control_size + padding
-	
 	# Configure window properties
-	win.transparent_bg = true
+	win.transparent_bg = transparent_bg
 	win.unresizable = false
 	win.borderless = false
 	win.min_size = Vector2(300, 200)
+	win.auto_translate = true
+	# Ensure window size starts at a reasonable size
+	win.size = Vector2(400, 500)
 	
 	# Add a styled panel for the window background
 	var panel = Panel.new()
 	panel.show_behind_parent = true
 	panel.set_anchors_preset(Control.PRESET_FULL_RECT)
 	
+	# Create a StyleBoxFlat for the panel that looks good in and out of focus
+	var style = StyleBoxFlat.new()
+	style.bg_color = Color(0.12, 0.14, 0.17, 1.0)
+	style.border_width_left = 1
+	style.border_width_top = 1
+	style.border_width_right = 1
+	style.border_width_bottom = 1
+	style.border_color = Color(0.2, 0.22, 0.25, 1)
+	style.corner_radius_top_left = 8
+	style.corner_radius_top_right = 8
+	style.corner_radius_bottom_right = 8
+	style.corner_radius_bottom_left = 8
+	style.shadow_color = Color(0, 0, 0, 0.3)
+	style.shadow_size = 8
+	
+	# Create a StyleBoxFlat for the unfocused state to prevent gray background
+	var unfocused_style = StyleBoxFlat.new()
+	unfocused_style.bg_color = Color(0.12, 0.14, 0.17, 1.0)
+	unfocused_style.border_width_left = 1
+	unfocused_style.border_width_top = 1
+	unfocused_style.border_width_right = 1
+	unfocused_style.border_width_bottom = 1
+	unfocused_style.border_color = Color(0.18, 0.2, 0.22, 1)
+	unfocused_style.corner_radius_top_left = 8
+	unfocused_style.corner_radius_top_right = 8
+	unfocused_style.corner_radius_bottom_right = 8
+	unfocused_style.corner_radius_bottom_left = 8
+	unfocused_style.shadow_color = Color(0, 0, 0, 0.2)
+	unfocused_style.shadow_size = 8
+	
+	panel.add_theme_stylebox_override("panel", style)
+	panel.add_theme_stylebox_override("panel_unfocused", unfocused_style)
+	
 	win.add_child(panel)
 	win.move_child(panel, 0)
 	
+	# Setup content anchors
+	if control and control is Control:
+		control.set_anchors_preset(Control.PRESET_FULL_RECT)
+		control.size_flags_horizontal = Control.SIZE_FILL
+		control.size_flags_vertical = Control.SIZE_FILL
+		control.mouse_filter = Control.MOUSE_FILTER_STOP  # Ensure components receive input
+	
 	win.visible = false
 	win.close_requested.connect(win.hide)
+	
+	# Connect focus signals to update the window appearance
+	win.focus_entered.connect(func(): panel.add_theme_stylebox_override("panel", style))
+	win.focus_exited.connect(func(): panel.add_theme_stylebox_override("panel", unfocused_style))
+	
 	return win
 
 func center_window(window: Window):
@@ -74,37 +123,21 @@ func position_top_left(window: Window):
 	window.position = Vector2i(x, y)
 
 func toggle_main_menu():
-	if !MainMenu.visible:
-		# Before showing, update the size based on content
-		var main_menu_content = MainMenu.get_child(0)
-		var content_size = main_menu_content.get_combined_minimum_size()
-		MainMenu.size = content_size + Vector2(50, 50)  # Add padding
-		
-		MainMenu.visible = true
-		
-		# Center the window
+	MainMenu.visible = !MainMenu.visible
+	if MainMenu.visible:
 		center_window(MainMenu)
-		
-		# Make sure the menu is visible within the window boundaries
-		var window_size = get_window().size
-		var menu_pos = MainMenu.position
-		
-		# Check if menu extends beyond window bottom
-		if menu_pos.y + MainMenu.size.y > window_size.y:
-			# Adjust position to fit vertically
-			menu_pos.y = max(0, window_size.y - MainMenu.size.y - 20)
-			MainMenu.position = menu_pos
-	else:
-		MainMenu.visible = false
+		MainMenu.grab_focus()
 
 func toggle_chat():
 	ChatWindow.visible = !ChatWindow.visible
 	if ChatWindow.visible:
 		center_window(ChatWindow)
+		ChatWindow.grab_focus()
 
 func show_tutorial():
 	TutorialWindow.show()
 	position_top_left(TutorialWindow)
+	TutorialWindow.grab_focus()
 	
 func hide_tutorial():
 	TutorialWindow.hide()
