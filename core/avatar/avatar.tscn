@@ -1,4 +1,4 @@
-[gd_scene load_steps=14 format=3 uid="uid://c5dg7yq7hd7m0"]
+[gd_scene load_steps=15 format=3 uid="uid://c5dg7yq7hd7m0"]
 
 [ext_resource type="Script" uid="uid://bomqiutxnbrh" path="res://core/avatar/avatar.gd" id="1_plcpi"]
 [ext_resource type="PackedScene" uid="uid://b24kp6klp25h5" path="res://addons/lunco-cameras/spring-arm-camera/spring-arm-camera.tscn" id="2_2xsb2"]
@@ -8,6 +8,7 @@
 [ext_resource type="PackedScene" uid="uid://cqnkkr1pgxiyp" path="res://controllers/character/character-input-adapter.tscn" id="6_f6o08"]
 [ext_resource type="Script" uid="uid://dcnypxmborlkv" path="res://core/avatar/avatar-controller.gd" id="7_tskp4"]
 [ext_resource type="PackedScene" uid="uid://cst8vao42ka1m" path="res://controllers/rover/rover-input-adapter.tscn" id="8_rlsuw"]
+[ext_resource type="Script" path="res://core/avatar/ui_display_manager.gd" id="9_wdj5f"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_hover"]
 content_margin_left = 24.0
@@ -130,3 +131,6 @@ target = NodePath("..")
 
 [node name="AvatarController" type="Node3D" parent="."]
 script = ExtResource("7_tskp4")
+
+[node name="UiDisplayManager" type="Node" parent="."]
+script = ExtResource("9_wdj5f")

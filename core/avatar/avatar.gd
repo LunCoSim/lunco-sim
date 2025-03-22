@@ -18,6 +18,9 @@ signal release_control
 # Constants for mouse sensitivity and ray length
 const MOUSE_SENSITIVITY = 0.015
 const RAY_LENGTH = 10000
+const SPEED = 5.0
+const JUMP_VELOCITY = 4.5
+const ZOOM_SPEED = 0.1
 
 #-------------------------------
 # Exporting target variable and setting default mouse control to false
@@ -31,6 +34,7 @@ const RAY_LENGTH = 10000
 # Defining UI and camera variables
 @onready var ui := $UI
 @onready var camera:SpringArmCamera = $SpringArmCamera
+@onready var ui_display_manager := $UiDisplayManager
 
 #------------------------------
 # Internal state
@@ -77,6 +81,10 @@ func _ready():
 	set_target(target)
 	ControlManager.control_granted.connect(_on_control_granted)
 	ControlManager.control_request_denied.connect(_on_control_request_denied)
+	
+	# Initialize the UiDisplayManager if it exists
+	if not ui_display_manager and has_node("UiDisplayManager"):
+		ui_display_manager = get_node("UiDisplayManager")
 
 #-----------------------------------------------------
 
@@ -151,6 +159,21 @@ func _on_popup_closed():
 
 # Modify the _input function to use the new handle_click function
 func _input(event):
+	# First, check if the UiDisplayManager wants to handle this event
+	if ui_display_manager and ui_display_manager.is_display_active():
+		# Try to route keyboard input
+		if event is InputEventKey:
+			if ui_display_manager.process_key_event(event):
+				get_viewport().set_input_as_handled()
+				return
+		
+		# Try to route mouse input
+		if event is InputEventMouseButton or event is InputEventMouseMotion:
+			if ui_display_manager.process_mouse_event(event):
+				get_viewport().set_input_as_handled()
+				return
+	
+	# Continue with regular avatar input if UiDisplayManager didn't handle it
 	if active_popup:
 		return  # Ignore input when popup is active
 
@@ -166,6 +189,14 @@ func _input(event):
 		LCWindows.toggle_chat()
 	
 	if event is InputEventKey and not event.is_echo() and event.is_pressed():
+		# Process display toggle keys if UiDisplayManager exists but didn't handle it
+		if ui_display_manager:
+			if event.keycode == KEY_TAB:
+				ui_display_manager.toggle_supply_chain_display()
+				return
+			elif event.keycode == KEY_M:
+				ui_display_manager.toggle_modelica_display()
+				return
 		
 		var key_number: int = -1
 		
@@ -248,14 +279,14 @@ func input_camera(event):
 
 		if event is InputEventMouseButton:
 			if event.button_index == MOUSE_BUTTON_WHEEL_UP:
-				delta_camera_spring_length += -2
-
+				delta_camera_spring_length -= cam.WHEEL_ZOOM_INCREMENT
 			elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
-				delta_camera_spring_length += 2
+				delta_camera_spring_length += cam.WHEEL_ZOOM_INCREMENT
 				
-		cam.inc_spring_length(delta_camera_spring_length)
-		
-		
+		# Use inc_spring_length or modify SPRING_LENGTH instead of accessing spring_length directly
+		if delta_camera_spring_length != 0:
+			cam.inc_spring_length(delta_camera_spring_length * ZOOM_SPEED)
+
 func input_operator(event):
 	if target is LCOperatorController:
 		var operator: LCOperatorController = target

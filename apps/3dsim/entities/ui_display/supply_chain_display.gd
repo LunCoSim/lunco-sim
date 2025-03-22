@@ -10,6 +10,8 @@ var last_click_position = Vector2()
 var is_dragging = false
 var mouse_button_pressed = false
 var mouse_over_display = false
+var has_keyboard_focus = false
+var is_visible = true
 
 func _ready():
 	# Add to group for easy identification
@@ -80,6 +82,17 @@ func _process(_delta):
 			viewport_event.button_mask = MOUSE_BUTTON_MASK_LEFT
 			$SubViewport.push_input(viewport_event)
 
+# Called when focus changes in the GUI
+func _on_focus_changed(control):
+	# If a control in our SubViewport gained focus, we should capture keyboard events
+	if control and is_instance_valid(control) and control.is_inside_tree():
+		var parent_viewport = control.get_viewport()
+		if parent_viewport == $SubViewport:
+			has_keyboard_focus = true
+			print("Supply Chain UI gained keyboard focus")
+		else:
+			has_keyboard_focus = false
+
 # Helper method to add the root reference in a deferred way
 func _add_root_reference(ref_node):
 	get_tree().root.add_child(ref_node)
@@ -110,6 +123,10 @@ func _on_area_3d_input_event(camera, event, position, normal, shape_idx):
 		if event.button_index == MOUSE_BUTTON_LEFT:
 			mouse_button_pressed = event.pressed
 			is_dragging = event.pressed
+			
+			# Set keyboard focus when clicking on the display
+			if event.pressed:
+				has_keyboard_focus = true
 		
 		# Convert 3D position to 2D viewport coordinates
 		var viewport_size = $SubViewport.size
@@ -179,15 +196,38 @@ func _handle_mouse_motion(position):
 	$SubViewport.push_input(viewport_event)
 	last_click_position = viewport_position
 
-# Global input handler to catch mouse release outside the area and handle scroll wheel
-func _input(event):
-	if not input_enabled:
-		return
+# New function to handle keyboard input from avatar
+func receive_keyboard_input(event: InputEvent) -> bool:
+	if not input_enabled or not is_visible:
+		return false
+		
+	if event is InputEventKey:
+		# Create a copy of the keyboard event to forward to the viewport
+		var viewport_event = InputEventKey.new()
+		viewport_event.keycode = event.keycode
+		viewport_event.physical_keycode = event.physical_keycode
+		viewport_event.unicode = event.unicode
+		viewport_event.echo = event.echo
+		viewport_event.pressed = event.pressed
+		viewport_event.alt_pressed = event.alt_pressed
+		viewport_event.shift_pressed = event.shift_pressed
+		viewport_event.ctrl_pressed = event.ctrl_pressed
+		viewport_event.meta_pressed = event.meta_pressed
+		
+		# Send to viewport
+		$SubViewport.push_input(viewport_event)
+		return true
 	
-	# Handle mouse wheel events when mouse is over display
-	if mouse_over_display and event is InputEventMouseButton and (event.button_index == MOUSE_BUTTON_WHEEL_UP or event.button_index == MOUSE_BUTTON_WHEEL_DOWN):
+	return false
+
+# New function to handle mouse input from avatar
+func receive_mouse_input(event: InputEvent) -> bool:
+	if not input_enabled or not is_visible:
+		return false
+		
+	if event is InputEventMouseButton:
 		# Get mouse position and convert to viewport coordinates
-		var mouse_pos = get_viewport().get_mouse_position()
+		var mouse_pos = event.position
 		var camera = get_viewport().get_camera_3d()
 		
 		# Cast a ray to find the intersection with display
@@ -201,7 +241,16 @@ func _input(event):
 		
 		var result = space_state.intersect_ray(query)
 		if result and result.collider == $Area3D:
-			# Convert position to viewport coordinates
+			# Update dragging state
+			if event.button_index == MOUSE_BUTTON_LEFT:
+				mouse_button_pressed = event.pressed
+				is_dragging = event.pressed
+				
+				# Set keyboard focus when clicking on the display
+				if event.pressed:
+					has_keyboard_focus = true
+			
+			# Calculate viewport coordinates
 			var viewport_size = $SubViewport.size
 			var mesh_size = Vector2(40, 30)
 			var local_position = result.position - global_position
@@ -214,7 +263,7 @@ func _input(event):
 				local_2d_position.y * viewport_size.y
 			)
 			
-			# Create scroll event for viewport
+			# Create event for viewport
 			var viewport_event = InputEventMouseButton.new()
 			viewport_event.button_index = event.button_index
 			viewport_event.pressed = event.pressed
@@ -224,13 +273,14 @@ func _input(event):
 			# Forward to viewport
 			$SubViewport.push_input(viewport_event)
 			
-			# Stop event propagation to prevent avatar height change
-			get_viewport().set_input_as_handled()
+			# Update last click position
+			if event.pressed:
+				last_click_position = viewport_position
+				
+			return true
 	
 	# Handle mouse motion during drag even when outside the area
 	if is_dragging and mouse_button_pressed and event is InputEventMouseMotion:
-		# We don't need to check if we're over the display - if we're dragging
-		# we want to continue processing mouse motion events
 		var viewport_event = InputEventMouseMotion.new()
 		viewport_event.position = last_click_position
 		viewport_event.global_position = last_click_position
@@ -239,46 +289,23 @@ func _input(event):
 		
 		# Forward to viewport
 		$SubViewport.push_input(viewport_event)
-		
-		# Stop event propagation
-		get_viewport().set_input_as_handled()
+		return true
 	
 	# Handle mouse button release
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and not event.pressed:
 		if is_dragging:
 			is_dragging = false
 			mouse_button_pressed = false
+			return true
 			
-			# Notify the viewport that the drag has ended
-			var viewport_event = InputEventMouseButton.new()
-			viewport_event.button_index = MOUSE_BUTTON_LEFT
-			viewport_event.pressed = false
-			viewport_event.position = last_click_position
-			viewport_event.global_position = last_click_position
-			
-			$SubViewport.push_input(viewport_event)
+	return false
 
-# Handle focus changes
-func _on_focus_changed(control):
-	# Reset dragging state when focus changes
-	is_dragging = false
-
-# Toggle the display on/off
+# Toggle visibility of the display
 func toggle_display():
-	visible = !visible
-	input_enabled = visible
+	is_visible = !is_visible
+	visible = is_visible
+	input_enabled = is_visible
 	
-	# Release any active dragging when hiding
-	if not visible and is_dragging:
-		is_dragging = false
-		mouse_button_pressed = false
-
-# Set the display state
-func set_display_state(state):
-	visible = state
-	input_enabled = state
-	
-	# Release any active dragging when hiding
-	if not state and is_dragging:
-		is_dragging = false
-		mouse_button_pressed = false 
+	# Reset keyboard focus when hiding
+	if !is_visible:
+		has_keyboard_focus = false 
