@@ -1,23 +1,74 @@
-[gd_scene format=3 uid="uid://ds18c8bbcrnql"]
+[gd_scene load_steps=3 format=3 uid="uid://ds18c8bbcrnql"]
 
-[node name="RichTextLabel" type="RichTextLabel"]
-offset_right = 529.0
-offset_bottom = 181.0
+[ext_resource type="Theme" uid="uid://hve1e7mnexbi" path="res://themes/theme.tres" id="1_vwu5s"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_8nw8q"]
+content_margin_left = 16.0
+content_margin_top = 16.0
+content_margin_right = 16.0
+content_margin_bottom = 16.0
+bg_color = Color(0.12, 0.14, 0.17, 0.95)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.2, 0.22, 0.25, 1)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_right = 8
+corner_radius_bottom_left = 8
+shadow_color = Color(0, 0, 0, 0.2)
+shadow_size = 6
+
+[node name="TutorialContent" type="PanelContainer"]
+custom_minimum_size = Vector2(520, 400)
+offset_right = 520.0
+offset_bottom = 400.0
+theme = ExtResource("1_vwu5s")
+theme_override_styles/panel = SubResource("StyleBoxFlat_8nw8q")
+
+[node name="VBoxContainer" type="VBoxContainer" parent="."]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="TitleLabel" type="Label" parent="VBoxContainer"]
+layout_mode = 2
+theme_type_variation = "_section_header"
+text = "LunCo Tutorial"
+horizontal_alignment = 1
+
+[node name="ScrollContainer" type="ScrollContainer" parent="VBoxContainer"]
+layout_mode = 2
+size_flags_vertical = 3
+horizontal_scroll_mode = 0
+
+[node name="RichTextLabel" type="RichTextLabel" parent="VBoxContainer/ScrollContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
 bbcode_enabled = true
 text = "LunCo is an open-source platform for collaborative designing and simulating space missions.
 
-Quick Start:
+[b]Quick Start Guide:[/b]
 
-• Create entities: Press Alt + [1-4]
-• Control entities: Click number or use bottom screen
-• Release control: Press Backspace
-• Navigate: Use WASD keys to fly
-• Menu: Press Esc
-• Console: Press `
-• Create NFT sphere: Hold Ctrl and click on terrain
+[u]Creating and Controlling:[/u]
+• [b]Create entities:[/b] Press Alt + [1-4]
+• [b]Control entities:[/b] Click on entity buttons at the bottom of screen
+• [b]Release control:[/b] Press Backspace key
+• [b]Navigate:[/b] Use WASD keys for movement
 
-Explore, collaborate, and engineer the future of space exploration!"
-fit_content = true
+[u]Camera Controls:[/u]
+• [b]Rotate camera:[/b] Right mouse button (RMB) or Arrow keys
+• [b]Zoom:[/b] Mouse wheel or +/- keys
+• [b]Reset view:[/b] Press Home key
+
+[u]Interface:[/u]
+• [b]Menu:[/b] Press Esc key
+• [b]Console:[/b] Press ` (backtick) key
+• [b]Create NFT sphere:[/b] Hold Ctrl and click on terrain
+
+Explore the lunar surface, collaborate with other users, and help engineer the future of space exploration!"
+autowrap_mode = 2
 
 [node name="Tutorial" type="Control" parent="."]
 layout_mode = 3

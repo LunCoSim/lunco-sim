@@ -1,6 +1,39 @@
-[gd_scene load_steps=4 format=3 uid="uid://c82dl3dv3d3hb"]
+[gd_scene load_steps=7 format=3 uid="uid://c82dl3dv3d3hb"]
 
 [ext_resource type="Script" uid="uid://db7gwwneprdfi" path="res://core/widgets/menu/main_menu.gd" id="1_ytl3l"]
+[ext_resource type="Theme" uid="uid://hve1e7mnexbi" path="res://themes/theme.tres" id="2_u4dxb"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_panel"]
+content_margin_left = 20.0
+content_margin_top = 16.0
+content_margin_right = 20.0
+content_margin_bottom = 16.0
+bg_color = Color(0.12, 0.15, 0.2, 0.95)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.25, 0.28, 0.32, 1)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_right = 8
+corner_radius_bottom_left = 8
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_section_header"]
+content_margin_left = 12.0
+content_margin_top = 6.0
+content_margin_right = 12.0
+content_margin_bottom = 6.0
+bg_color = Color(0.2, 0.25, 0.35, 0.9)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.3, 0.35, 0.45, 1)
+corner_radius_top_left = 6
+corner_radius_top_right = 6
+corner_radius_bottom_right = 6
+corner_radius_bottom_left = 6
 
 [sub_resource type="SystemFont" id="SystemFont_g5bxx"]
 
@@ -15,95 +48,151 @@ grow_horizontal = 2
 grow_vertical = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
-theme_override_constants/separation = 10
+theme = ExtResource("2_u4dxb")
+theme_override_constants/separation = 16
 script = ExtResource("1_ytl3l")
 
-[node name="Profile" type="VBoxContainer" parent="."]
+[node name="ProfilePanel" type="PanelContainer" parent="."]
 layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_panel")
 
-[node name="Username" type="LineEdit" parent="Profile"]
+[node name="Profile" type="VBoxContainer" parent="ProfilePanel"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="SectionHeader" type="Label" parent="ProfilePanel/Profile"]
+layout_mode = 2
+theme_override_styles/normal = SubResource("StyleBoxFlat_section_header")
+text = "Profile"
+horizontal_alignment = 1
+
+[node name="Username" type="LineEdit" parent="ProfilePanel/Profile"]
 unique_name_in_owner = true
 layout_mode = 2
 placeholder_text = "Username"
 
-[node name="Wallet" type="LineEdit" parent="Profile"]
+[node name="Wallet" type="LineEdit" parent="ProfilePanel/Profile"]
 unique_name_in_owner = true
 layout_mode = 2
 placeholder_text = "Wallet"
 editable = false
 
-[node name="Connect wallet" type="Button" parent="Profile"]
+[node name="ProfileButtonsContainer" type="HBoxContainer" parent="ProfilePanel/Profile"]
 layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="Connect wallet" type="Button" parent="ProfilePanel/Profile/ProfileButtonsContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
 text = "Connect Metamask"
 
-[node name="CheckProfileNFT" type="Button" parent="Profile"]
+[node name="CheckProfileNFT" type="Button" parent="ProfilePanel/Profile/ProfileButtonsContainer"]
 layout_mode = 2
+size_flags_horizontal = 3
 text = "Check Profile NFT"
 
-[node name="Label" type="Label" parent="."]
+[node name="NetworkingPanel" type="PanelContainer" parent="."]
 layout_mode = 2
-mouse_filter = 1
+theme_override_styles/panel = SubResource("StyleBoxFlat_panel")
 
-[node name="Networking" type="VBoxContainer" parent="."]
+[node name="Networking" type="VBoxContainer" parent="NetworkingPanel"]
 layout_mode = 2
+theme_override_constants/separation = 12
 
-[node name="IP" type="LineEdit" parent="Networking"]
+[node name="SectionHeader" type="Label" parent="NetworkingPanel/Networking"]
+layout_mode = 2
+theme_override_styles/normal = SubResource("StyleBoxFlat_section_header")
+text = "Connection Settings"
+horizontal_alignment = 1
+
+[node name="SettingsGrid" type="GridContainer" parent="NetworkingPanel/Networking"]
+layout_mode = 2
+columns = 2
+
+[node name="IPLabel" type="Label" parent="NetworkingPanel/Networking/SettingsGrid"]
+layout_mode = 2
+text = "IP Address:"
+
+[node name="IP" type="LineEdit" parent="NetworkingPanel/Networking/SettingsGrid"]
 unique_name_in_owner = true
 layout_mode = 2
+size_flags_horizontal = 3
 theme_override_colors/font_color = Color(0.956863, 0.956863, 0.956863, 1)
 theme_override_fonts/font = SubResource("SystemFont_g5bxx")
 text = "127.0.0.1"
 placeholder_text = "IP"
 
-[node name="Port" type="LineEdit" parent="Networking"]
+[node name="PortLabel" type="Label" parent="NetworkingPanel/Networking/SettingsGrid"]
+layout_mode = 2
+text = "Port:"
+
+[node name="Port" type="LineEdit" parent="NetworkingPanel/Networking/SettingsGrid"]
 unique_name_in_owner = true
 layout_mode = 2
+size_flags_horizontal = 3
 text = "9000"
 placeholder_text = "Port"
 
-[node name="Label2" type="Label" parent="."]
+[node name="SimulationPanel" type="PanelContainer" parent="."]
 layout_mode = 2
-mouse_filter = 1
+theme_override_styles/panel = SubResource("StyleBoxFlat_panel")
 
-[node name="SimHost" type="Button" parent="."]
+[node name="Simulation" type="VBoxContainer" parent="SimulationPanel"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="SectionHeader" type="Label" parent="SimulationPanel/Simulation"]
+layout_mode = 2
+theme_override_styles/normal = SubResource("StyleBoxFlat_section_header")
+text = "Simulation Options"
+horizontal_alignment = 1
+
+[node name="SimHost" type="Button" parent="SimulationPanel/Simulation"]
 layout_mode = 2
 text = "Host Simulation"
 
-[node name="SimClient" type="Button" parent="."]
+[node name="SimClient" type="Button" parent="SimulationPanel/Simulation"]
 layout_mode = 2
 text = "Connect to Simulation"
 
-[node name="ConnectToGlobal" type="Button" parent="."]
+[node name="ConnectToGlobal" type="Button" parent="SimulationPanel/Simulation"]
 layout_mode = 2
 text = "Connect to Global Simulation"
 
-[node name="LabelReplay" type="Label" parent="."]
+[node name="OptionsPanel" type="PanelContainer" parent="."]
 layout_mode = 2
-mouse_filter = 1
+theme_override_styles/panel = SubResource("StyleBoxFlat_panel")
 
-[node name="ReplayMode" type="Button" parent="."]
+[node name="Options" type="VBoxContainer" parent="OptionsPanel"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="SectionHeader" type="Label" parent="OptionsPanel/Options"]
+layout_mode = 2
+theme_override_styles/normal = SubResource("StyleBoxFlat_section_header")
+text = "Additional Options"
+horizontal_alignment = 1
+
+[node name="ReplayMode" type="Button" parent="OptionsPanel/Options"]
 layout_mode = 2
 text = "Replay Mode"
 
-[node name="Version" type="Label" parent="."]
-layout_mode = 2
-theme_override_fonts/font = SubResource("SystemFont_fnb7o")
-horizontal_alignment = 2
-
-[node name="Separator" type="Label" parent="."]
-layout_mode = 2
-mouse_filter = 1
-
-[node name="BackToLauncher" type="Button" parent="."]
+[node name="BackToLauncher" type="Button" parent="OptionsPanel/Options"]
 layout_mode = 2
 text = "Back to Launcher"
 
-[connection signal="text_changed" from="Profile/Username" to="." method="_on_username_text_changed"]
-[connection signal="text_changed" from="Profile/Wallet" to="." method="_on_username_text_changed"]
-[connection signal="pressed" from="Profile/Connect wallet" to="." method="_on_connect_wallet_pressed"]
-[connection signal="pressed" from="Profile/CheckProfileNFT" to="." method="_on_check_profile_nft_pressed"]
-[connection signal="pressed" from="SimHost" to="." method="_on_sim_host_pressed"]
-[connection signal="pressed" from="SimClient" to="." method="_on_sim_client_pressed"]
-[connection signal="pressed" from="ConnectToGlobal" to="." method="_on_connect_to_global_pressed"]
-[connection signal="pressed" from="ReplayMode" to="." method="_on_replay_mode_pressed"]
-[connection signal="pressed" from="BackToLauncher" to="." method="_on_back_to_launcher_pressed"]
+[node name="Version" type="Label" parent="."]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.7, 0.7, 0.75, 1)
+theme_override_fonts/font = SubResource("SystemFont_fnb7o")
+horizontal_alignment = 2
+
+[connection signal="text_changed" from="ProfilePanel/Profile/Username" to="." method="_on_username_text_changed"]
+[connection signal="text_changed" from="ProfilePanel/Profile/Wallet" to="." method="_on_username_text_changed"]
+[connection signal="pressed" from="ProfilePanel/Profile/ProfileButtonsContainer/Connect wallet" to="." method="_on_connect_wallet_pressed"]
+[connection signal="pressed" from="ProfilePanel/Profile/ProfileButtonsContainer/CheckProfileNFT" to="." method="_on_check_profile_nft_pressed"]
+[connection signal="pressed" from="SimulationPanel/Simulation/SimHost" to="." method="_on_sim_host_pressed"]
+[connection signal="pressed" from="SimulationPanel/Simulation/SimClient" to="." method="_on_sim_client_pressed"]
+[connection signal="pressed" from="SimulationPanel/Simulation/ConnectToGlobal" to="." method="_on_connect_to_global_pressed"]
+[connection signal="pressed" from="OptionsPanel/Options/ReplayMode" to="." method="_on_replay_mode_pressed"]
+[connection signal="pressed" from="OptionsPanel/Options/BackToLauncher" to="." method="_on_back_to_launcher_pressed"]

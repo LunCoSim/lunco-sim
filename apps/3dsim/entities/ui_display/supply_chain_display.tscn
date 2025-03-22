@@ -3,17 +3,17 @@
 [ext_resource type="Script" uid="uid://6r2kxosnfnd0" path="res://apps/3dsim/entities/ui_display/supply_chain_display.gd" id="1_p0mmu"]
 
 [sub_resource type="QuadMesh" id="QuadMesh_f2m0u"]
-size = Vector2(40, 30)
+size = Vector2(50, 38)
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_gljst"]
 resource_local_to_scene = true
 transparency = 1
 cull_mode = 2
 shading_mode = 0
-albedo_color = Color(1, 1, 1, 0.9)
+albedo_color = Color(1, 1, 1, 0.95)
 
 [sub_resource type="BoxShape3D" id="BoxShape3D_g3y36"]
-size = Vector3(40, 30, 0.1)
+size = Vector3(50, 38, 0.1)
 
 [node name="SupplyChainDisplay" type="Node3D"]
 script = ExtResource("1_p0mmu")

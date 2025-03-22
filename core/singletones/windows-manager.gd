@@ -18,21 +18,34 @@ func _ready():
 	center_window(ChatWindow)
 	
 	var TutorialWindowScene = load("res://core/widgets/tutorial.tscn").instantiate()
-	TutorialWindow = make_window(TutorialWindowScene, "Tutorial")
+	TutorialWindow = make_window(TutorialWindowScene, "Tutorial", Vector2(60, 60))
 	add_child(TutorialWindow)
 	position_top_left(TutorialWindow)
 	
-static func make_window(control, title) -> Window:
+static func make_window(control, title, padding = Vector2(40, 40)) -> Window:
 	var win = Window.new()
 	win.add_child(control)
 	win.title = title
 	
-	# Set size with some padding
+	# Set size with padding
 	var control_size = control.get_combined_minimum_size()
-	win.size = control_size + Vector2(40, 40)  # Add padding
+	win.size = control_size + padding
+	
+	# Configure window properties
+	win.transparent_bg = true
+	win.unresizable = false
+	win.borderless = false
+	win.min_size = Vector2(300, 200)
+	
+	# Add a styled panel for the window background
+	var panel = Panel.new()
+	panel.show_behind_parent = true
+	panel.set_anchors_preset(Control.PRESET_FULL_RECT)
+	
+	win.add_child(panel)
+	win.move_child(panel, 0)
 	
 	win.visible = false
-	win.unresizable = true
 	win.close_requested.connect(win.hide)
 	return win
 
@@ -53,7 +66,7 @@ func position_top_left(window: Window):
 	var main_window_position = get_window().position
 	
 	# Add a small margin from the edges
-	var margin = 10
+	var margin = 20
 	var x = main_window_position.x + margin
 	var y = main_window_position.y + margin
 	
@@ -65,7 +78,7 @@ func toggle_main_menu():
 		# Before showing, update the size based on content
 		var main_menu_content = MainMenu.get_child(0)
 		var content_size = main_menu_content.get_combined_minimum_size()
-		MainMenu.size = content_size + Vector2(40, 40)  # Add padding
+		MainMenu.size = content_size + Vector2(50, 50)  # Add padding
 		
 		MainMenu.visible = true
 		

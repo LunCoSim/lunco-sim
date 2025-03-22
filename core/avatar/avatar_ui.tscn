@@ -1,7 +1,41 @@
-[gd_scene load_steps=7 format=3 uid="uid://wdnxqhctneyv"]
+[gd_scene load_steps=8 format=3 uid="uid://wdnxqhctneyv"]
 
 [ext_resource type="Script" uid="uid://bpq5fqrtu7f5o" path="res://core/avatar/avatar_ui.gd" id="1_igs02"]
 [ext_resource type="Theme" uid="uid://hve1e7mnexbi" path="res://themes/theme.tres" id="1_ois6a"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_entities_panel"]
+content_margin_left = 16.0
+content_margin_top = 16.0
+content_margin_right = 16.0
+content_margin_bottom = 16.0
+bg_color = Color(0.12, 0.15, 0.2, 0.8)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.25, 0.28, 0.32, 0.9)
+corner_radius_top_left = 10
+corner_radius_top_right = 10
+corner_radius_bottom_right = 10
+corner_radius_bottom_left = 10
+shadow_color = Color(0, 0, 0, 0.2)
+shadow_size = 5
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_label_bg"]
+content_margin_left = 8.0
+content_margin_top = 4.0
+content_margin_right = 8.0
+content_margin_bottom = 4.0
+bg_color = Color(0.2, 0.25, 0.35, 0.9)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.3, 0.35, 0.45, 1)
+corner_radius_top_left = 4
+corner_radius_top_right = 4
+corner_radius_bottom_right = 4
+corner_radius_bottom_left = 4
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_item_normal"]
 content_margin_left = 8.0
@@ -35,8 +69,6 @@ corner_radius_top_right = 6
 corner_radius_bottom_right = 6
 corner_radius_bottom_left = 6
 
-[sub_resource type="Theme" id="Theme_kf4je"]
-
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_blue"]
 bg_color = Color(0.2, 0.4, 0.8, 1)
 corner_radius_top_left = 4
@@ -62,19 +94,31 @@ anchor_left = 1.0
 anchor_top = 1.0
 anchor_right = 1.0
 anchor_bottom = 1.0
-offset_left = -210.0
-offset_top = -310.0
+offset_left = -300.0
+offset_top = -380.0
 grow_horizontal = 0
 grow_vertical = 0
+theme_override_constants/separation = 16
 
-[node name="UsersContainer" type="VBoxContainer" parent="EntityUserContainer"]
+[node name="UsersContainer" type="PanelContainer" parent="EntityUserContainer"]
 layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_entities_panel")
 
-[node name="ConnectedUsersLabel" type="Label" parent="EntityUserContainer/UsersContainer"]
+[node name="VBoxContainer" type="VBoxContainer" parent="EntityUserContainer/UsersContainer"]
 layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="ConnectedUsersLabel" type="Label" parent="EntityUserContainer/UsersContainer/VBoxContainer"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
+theme_override_colors/font_shadow_color = Color(0, 0, 0, 0.3)
+theme_override_constants/shadow_offset_x = 1
+theme_override_constants/shadow_offset_y = 1
+theme_override_styles/normal = SubResource("StyleBoxFlat_label_bg")
 text = "Connected Users"
+horizontal_alignment = 1
 
-[node name="Users" type="ItemList" parent="EntityUserContainer/UsersContainer"]
+[node name="Users" type="ItemList" parent="EntityUserContainer/UsersContainer/VBoxContainer"]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 80)
 layout_mode = 2
@@ -82,45 +126,76 @@ theme_override_styles/panel = SubResource("StyleBoxFlat_item_normal")
 theme_override_styles/selected = SubResource("StyleBoxFlat_item_selected")
 theme_override_styles/selected_focus = SubResource("StyleBoxFlat_item_selected")
 
-[node name="EntitiesContainer" type="VBoxContainer" parent="EntityUserContainer"]
+[node name="EntitiesContainer" type="PanelContainer" parent="EntityUserContainer"]
 layout_mode = 2
 size_flags_vertical = 3
+theme_override_styles/panel = SubResource("StyleBoxFlat_entities_panel")
 
-[node name="CreateEntitiesLabel" type="Label" parent="EntityUserContainer/EntitiesContainer"]
+[node name="VBoxContainer" type="VBoxContainer" parent="EntityUserContainer/EntitiesContainer"]
 layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="CreateEntitiesLabel" type="Label" parent="EntityUserContainer/EntitiesContainer/VBoxContainer"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
+theme_override_colors/font_shadow_color = Color(0, 0, 0, 0.3)
+theme_override_constants/shadow_offset_x = 1
+theme_override_constants/shadow_offset_y = 1
+theme_override_styles/normal = SubResource("StyleBoxFlat_label_bg")
 text = "Create Entities (Alt+#)"
+horizontal_alignment = 1
 
-[node name="Entities" type="ItemList" parent="EntityUserContainer/EntitiesContainer"]
+[node name="Entities" type="ItemList" parent="EntityUserContainer/EntitiesContainer/VBoxContainer"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 80)
+custom_minimum_size = Vector2(0, 140)
 layout_mode = 2
 size_flags_vertical = 3
 theme_override_styles/panel = SubResource("StyleBoxFlat_item_normal")
 theme_override_styles/selected = SubResource("StyleBoxFlat_item_selected")
 theme_override_styles/selected_focus = SubResource("StyleBoxFlat_item_selected")
 
-[node name="LivesEntitiesContrainer" type="VBoxContainer" parent="."]
+[node name="LivesEntitiesContrainer" type="PanelContainer" parent="."]
 layout_mode = 1
 anchors_preset = 12
 anchor_top = 1.0
 anchor_right = 1.0
 anchor_bottom = 1.0
-offset_top = -60.0
-offset_right = -210.0
+offset_top = -150.0
+offset_right = -320.0
 offset_bottom = -5.0
 grow_horizontal = 2
 grow_vertical = 0
-theme = SubResource("Theme_kf4je")
+size_flags_horizontal = 3
+theme_override_styles/panel = SubResource("StyleBoxFlat_entities_panel")
 
-[node name="Spawn3" type="Label" parent="LivesEntitiesContrainer"]
+[node name="VBoxContainer" type="VBoxContainer" parent="LivesEntitiesContrainer"]
 layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="TakeControlLabel" type="Label" parent="LivesEntitiesContrainer/VBoxContainer"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
+theme_override_colors/font_shadow_color = Color(0, 0, 0, 0.3)
+theme_override_constants/shadow_offset_x = 1
+theme_override_constants/shadow_offset_y = 1
+theme_override_styles/normal = SubResource("StyleBoxFlat_label_bg")
 text = "Take Control (1-8)"
+horizontal_alignment = 1
 
-[node name="LiveEntities" type="HBoxContainer" parent="LivesEntitiesContrainer"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 30)
+[node name="ScrollContainer" type="ScrollContainer" parent="LivesEntitiesContrainer/VBoxContainer"]
 layout_mode = 2
-mouse_force_pass_scroll_events = false
+size_flags_vertical = 3
+horizontal_scroll_mode = 0
+vertical_scroll_mode = 0
+
+[node name="LiveEntities" type="GridContainer" parent="LivesEntitiesContrainer/VBoxContainer/ScrollContainer"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+theme_override_constants/h_separation = 8
+theme_override_constants/v_separation = 8
+columns = 8
 
 [node name="TargetUI" type="Control" parent="."]
 unique_name_in_owner = true
@@ -188,7 +263,7 @@ unique_name_in_owner = true
 layout_mode = 2
 underline = 2
 
-[connection signal="item_selected" from="EntityUserContainer/UsersContainer/Users" to="." method="_on_users_item_selected"]
-[connection signal="item_selected" from="EntityUserContainer/EntitiesContainer/Entities" to="." method="_on_entities_item_selected"]
+[connection signal="item_selected" from="EntityUserContainer/UsersContainer/VBoxContainer/Users" to="." method="_on_users_item_selected"]
+[connection signal="item_selected" from="EntityUserContainer/EntitiesContainer/VBoxContainer/Entities" to="." method="_on_entities_item_selected"]
 [connection signal="pressed" from="WalletInfo/ConnectWallet" to="." method="_on_connect_wallet_pressed"]
 [connection signal="pressed" from="WalletInfo/DisconnectWallet" to="." method="_on_disconnect_wallet_pressed"]
