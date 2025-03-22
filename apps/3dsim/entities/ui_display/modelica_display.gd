@@ -41,6 +41,10 @@ func _ready():
 	box_shape.size = Vector3(40, 30, 0.1)
 	collision_shape.shape = box_shape
 	
+	# Make sure the Area3D is on the correct collision layer (2)
+	$Area3D.collision_layer = 2
+	$Area3D.collision_mask = 0  # We don't need the area to detect collisions
+	
 	# Make sure the SubViewport receives input events
 	$SubViewport.handle_input_locally = true
 	$SubViewport.gui_disable_input = false
@@ -82,6 +86,9 @@ func _process(_delta):
 			viewport_event.button_mask = MOUSE_BUTTON_MASK_LEFT
 			$SubViewport.push_input(viewport_event)
 
+	# Debug direct key detection is no longer needed since we're handling keys properly through receive_keyboard_input
+	# This dramatically reduces console spam
+
 func _on_focus_changed(control):
 	# This is called when focus changes in the GUI
 	# If a control in our SubViewport gained focus, we should capture keyboard events
@@ -119,14 +126,41 @@ func _on_area_3d_input_event(camera, event, position, normal, shape_idx):
 	if event is InputEventMouseButton:
 		get_viewport().set_input_as_handled()
 		
-		# Update dragging state
-		if event.button_index == MOUSE_BUTTON_LEFT:
-			mouse_button_pressed = event.pressed
-			is_dragging = event.pressed
+		# Handle mouse button click to activate display
+		if event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
+			# When clicking on the modelica display, ensure it's active and has keyboard focus
+			has_keyboard_focus = true
+			mouse_button_pressed = true
+			is_dragging = true
 			
-			# Set keyboard focus when clicking on the display
-			if event.pressed:
-				has_keyboard_focus = true
+			# Make sure the display is visible
+			if !is_visible:
+				is_visible = true
+				visible = true
+			
+			# Activate the controls directly and set focus immediately
+			print("ModelicaUI: Area3D received direct click - activating input focus")
+			_activate_direct_input_focus()
+			_direct_set_focus()  # Call directly without deferring
+			
+			# Notify UI display manager that we've been clicked on and need to be active
+			var controller = _find_display_controller()
+			if controller and controller.ui_display_manager:
+				print("ModelicaUI: Found display controller, activating UI")
+				controller.ui_display_manager.on_modelica_display_clicked()
+			else:
+				print("ModelicaUI: Could not find display controller or UI manager")
+				# Try to directly find the avatar and its UI display manager
+				var avatar = get_tree().get_first_node_in_group("avatar")
+				if avatar and avatar.has_node("UiDisplayManager"):
+					print("ModelicaUI: Found avatar directly, activating UI")
+					var ui_manager = avatar.get_node("UiDisplayManager")
+					ui_manager.on_modelica_display_clicked()
+				else:
+					print("ModelicaUI: Could not find avatar or its UI manager")
+			
+			# Print focus state for debugging
+			print("ModelicaUI gained keyboard focus from click")
 		
 		# Convert 3D position to 2D viewport coordinates
 		var viewport_size = $SubViewport.size
@@ -196,12 +230,118 @@ func _handle_mouse_motion(position):
 	$SubViewport.push_input(viewport_event)
 	last_click_position = viewport_position
 
+# Find the display controller that contains the UiDisplayManager
+func _find_display_controller():
+	var controllers = get_tree().get_nodes_in_group("display_controller")
+	if controllers.size() > 0:
+		print("ModelicaUI: Found display controller: ", controllers[0])
+		return controllers[0]
+	
+	print("ModelicaUI: No display controllers found in 'display_controller' group")
+	return null
+
+# Direct focus setting (without deferring)
+func _direct_set_focus():
+	if not is_instance_valid(modelica_scene):
+		return
+	
+	# Priority-based focus selection (similar to _find_and_set_focus)
+	
+	# 1. First try to find the code editor (highest priority)
+	var code_editors = []
+	_find_specific_controls(modelica_scene, code_editors, ["CodeEdit", "TextEdit"], false)
+	if code_editors.size() > 0:
+		var editor = code_editors[0]
+		print("ModelicaUI: Direct focus to code editor: ", editor.name)
+		editor.grab_focus()
+		# Force update the editor's focus state
+		if editor.has_method("set_caret_line"):
+			editor.set_caret_line(editor.get_caret_line())
+		return
+	
+	# 2. Then try text fields (second priority)
+	var text_fields = []
+	_find_specific_controls(modelica_scene, text_fields, ["LineEdit", "SpinBox"], false)
+	if text_fields.size() > 0:
+		var text_field = text_fields[0]
+		print("ModelicaUI: Direct focus to text field: ", text_field.name)
+		text_field.grab_focus()
+		return
+		
+	# 3. Then try buttons (third priority)
+	var buttons = []
+	_find_specific_controls(modelica_scene, buttons, ["Button"], false)
+	if buttons.size() > 0:
+		var button = buttons[0]
+		print("ModelicaUI: Direct focus to button: ", button.name)
+		button.grab_focus()
+		return
+		
+	# 4. Finally try any focusable control
+	var focusable_controls = []
+	_find_focusable_controls(modelica_scene, focusable_controls, false)
+	if focusable_controls.size() > 0:
+		print("ModelicaUI: Direct focus to ", focusable_controls[0].name)
+		focusable_controls[0].grab_focus()
+		return
+	
+	print("ModelicaUI: No suitable controls found for direct focus")
+
+# Special method to directly activate input focus bypassing the normal flow
+func _activate_direct_input_focus():
+	# This will send some fake input events to the SubViewport to ensure it's properly activated
+	
+	# First, try a text input event to activate any text fields
+	var text_event = InputEventKey.new()
+	text_event.pressed = true
+	text_event.keycode = KEY_A  # Letter A as test
+	text_event.unicode = 65     # ASCII for A
+	$SubViewport.push_input(text_event)
+	
+	# Also create a mouse click in the center of the viewport
+	var viewport_size = $SubViewport.size
+	var click_event = InputEventMouseButton.new()
+	click_event.button_index = MOUSE_BUTTON_LEFT
+	click_event.pressed = true
+	click_event.position = Vector2(viewport_size.x / 2, viewport_size.y / 2)
+	$SubViewport.push_input(click_event)
+	
+	print("ModelicaUI: Sent direct activation events to SubViewport")
+
 # New function to handle keyboard input from avatar
 func receive_keyboard_input(event: InputEvent) -> bool:
 	if not input_enabled or not is_visible:
 		return false
 		
+	# Always process keyboard input regardless of has_keyboard_focus
 	if event is InputEventKey:
+		# Debug only major events with specific keys for performance
+		if event.pressed and not event.is_echo() and event.keycode in [KEY_ENTER, KEY_ESCAPE, KEY_TAB]:
+			print("ModelicaUI receiving key: ", event.keycode)
+		
+		# Make sure the SubViewport is set up to handle input
+		$SubViewport.handle_input_locally = true
+		$SubViewport.gui_disable_input = false
+		
+		# First, check if any control is actually focused in the UI
+		var has_focused_control = false
+		if is_instance_valid(modelica_scene):
+			var focused_control = _get_focused_control(modelica_scene)
+			has_focused_control = focused_control != null
+		
+		# If no control has focus and this is a typing key (not a navigation/system key),
+		# try to set focus before accepting the event
+		if event.pressed and not has_focused_control:
+			var is_text_key = event.keycode > KEY_SPACE and event.keycode < KEY_ESCAPE
+			if is_text_key:
+				# If this is a typing key but no control has focus, set focus before accepting
+				_find_and_set_focus()
+				# Re-check if focus succeeded
+				var focused_control = _get_focused_control(modelica_scene)
+				if focused_control == null:
+					# If we still don't have focus, don't handle the event
+					return false
+		
 		# Create a copy of the keyboard event to forward to the viewport
 		var viewport_event = InputEventKey.new()
 		viewport_event.keycode = event.keycode
@@ -216,9 +356,23 @@ func receive_keyboard_input(event: InputEvent) -> bool:
 		
 		# Send to viewport
 		$SubViewport.push_input(viewport_event)
+		
+		# Return true to indicate we handled this event
 		return true
 	
 	return false
+
+# Helper method to find the currently focused control
+func _get_focused_control(node: Node) -> Control:
+	if node is Control and node.has_focus():
+		return node
+	
+	for child in node.get_children():
+		var focused = _get_focused_control(child)
+		if focused != null:
+			return focused
+	
+	return null
 
 # New function to handle mouse input from avatar
 func receive_mouse_input(event: InputEvent) -> bool:
@@ -300,12 +454,119 @@ func receive_mouse_input(event: InputEvent) -> bool:
 			
 	return false
 
-# Toggle visibility of the display
+# New function to toggle display visibility
 func toggle_display():
 	is_visible = !is_visible
 	visible = is_visible
 	input_enabled = is_visible
 	
-	# Reset keyboard focus when hiding
-	if !is_visible:
-		has_keyboard_focus = false 
+	# If becoming visible, try to set focus
+	if is_visible:
+		has_keyboard_focus = true
+		# Try to find any Controls in the SubViewport and set focus to the first one
+		call_deferred("_find_and_set_focus")
+	else:
+		# Reset focus when hiding the display
+		has_keyboard_focus = false
+	
+	return is_visible
+
+# New function to just release focus without affecting visibility
+func release_focus():
+	has_keyboard_focus = false
+	
+	# Find and release focus from any currently focused control
+	if is_instance_valid(modelica_scene):
+		var focused_control = _get_focused_control(modelica_scene)
+		if focused_control and focused_control.has_focus():
+			focused_control.release_focus()
+			return true
+	
+	return false
+
+# Helper method to find focusable controls in the SubViewport and set focus
+func _find_and_set_focus():
+	if not is_instance_valid(modelica_scene):
+		return
+		
+	if not input_enabled or not has_keyboard_focus:
+		return
+	
+	# Skip printing the entire scene tree for performance reasons
+	# print_scene_tree(modelica_scene)
+	
+	# Priority-based focus selection
+	
+	# 1. First try to find the code editor (highest priority)
+	var code_editors = []
+	_find_specific_controls(modelica_scene, code_editors, ["CodeEdit", "TextEdit"], false)
+	if code_editors.size() > 0:
+		var editor = code_editors[0]
+		print("ModelicaUI: Setting focus to code editor: ", editor.name)
+		editor.grab_focus()
+		# Force update the editor's focus state
+		if editor.has_method("set_caret_line"):
+			editor.set_caret_line(editor.get_caret_line())
+		return
+	
+	# 2. Then try text fields (second priority)
+	var text_fields = []
+	_find_specific_controls(modelica_scene, text_fields, ["LineEdit", "SpinBox"], false)
+	if text_fields.size() > 0:
+		var text_field = text_fields[0]
+		print("ModelicaUI: Setting focus to text field: ", text_field.name)
+		text_field.grab_focus()
+		return
+		
+	# 3. Then try buttons (third priority)
+	var buttons = []
+	_find_specific_controls(modelica_scene, buttons, ["Button"], false)
+	if buttons.size() > 0:
+		var button = buttons[0]
+		print("ModelicaUI: Setting focus to button: ", button.name)
+		button.grab_focus()
+		return
+	
+	# 4. Finally, try any other focusable control
+	var focusable_controls = []
+	_find_focusable_controls(modelica_scene, focusable_controls, false)
+	
+	if focusable_controls.size() > 0:
+		print("ModelicaUI: Setting focus to ", focusable_controls[0].name)
+		focusable_controls[0].grab_focus()
+	else:
+		print("ModelicaUI: No focusable controls found")
+
+# Find specific types of controls
+func _find_specific_controls(node: Node, result: Array, types: Array, debug: bool = true):
+	var node_class = node.get_class()
+	if types.has(node_class):
+		result.append(node)
+		if debug:
+			print("ModelicaUI: Found control of type ", node_class, ": ", node.name)
+	
+	for child in node.get_children():
+		_find_specific_controls(child, result, types, debug)
+
+# Modified for better debugging
+func _find_focusable_controls(node: Node, result: Array, debug: bool = true):
+	if node is Control:
+		if node.focus_mode != Control.FOCUS_NONE:
+			result.append(node)
+			if debug:
+				print("ModelicaUI: Found focusable control: ", node.name, " of type ", node.get_class())
+		elif debug:
+			print("ModelicaUI: Found non-focusable control: ", node.name, " of type ", node.get_class())
+	
+	for child in node.get_children():
+		_find_focusable_controls(child, result, debug)
+
+# Debug function to print the scene tree
+func print_scene_tree(node, indent=""):
+	print(indent + node.name + " (" + node.get_class() + ")")
+	
+	if node is Control:
+		print(indent + "  Focus mode: " + str(node.focus_mode))
+		
+	for child in node.get_children():
+		print_scene_tree(child, indent + "  ") 

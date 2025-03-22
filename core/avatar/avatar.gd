@@ -78,6 +78,9 @@ func set_camera(_camera):
 #-------------------------------
 # Defining different functions for handling player controls like select, rotate, move, etc.
 func _ready():
+	# Add to group for easier identification
+	add_to_group("avatar")
+	
 	set_camera(camera)
 	set_target(target)
 	ControlManager.control_granted.connect(_on_control_granted)
@@ -86,6 +89,7 @@ func _ready():
 	# Initialize the UiDisplayManager if it exists
 	if not ui_display_manager and has_node("UiDisplayManager"):
 		ui_display_manager = get_node("UiDisplayManager")
+		print("Avatar: Found UiDisplayManager: ", ui_display_manager)
 
 #-----------------------------------------------------
 
@@ -158,23 +162,43 @@ func show_nft_popup(position: Vector3):
 func _on_popup_closed():
 	active_popup = null  # Clear the active popup reference when it's closed
 
-# Modify the _input function to use the new handle_click function
+# Modify the _input function to better handle UI display input
 func _input(event):
-	# First, check if the UiDisplayManager wants to handle this event
+	# Only handle UI-related input if a display is active
 	if ui_display_manager and ui_display_manager.is_display_active():
-		# Try to route keyboard input
+		# Handle mouse click outside of displays to close them
+		if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
+			# Check if this is a click outside the active display
+			if ui_display_manager.get_active_display() == "modelica":
+				if !_is_click_on_modelica_display(event.position):
+					# Close the display and continue with regular input
+					ui_display_manager.close_modelica_display()
+					# Don't mark as handled so the click can still be processed
+					return
+		
+		# Handle keyboard events for displays
 		if event is InputEventKey:
-			if ui_display_manager.process_key_event(event):
+			var handled = ui_display_manager.process_key_event(event)
+			if handled:
 				get_viewport().set_input_as_handled()
 				return
+			
+			# Special case for Escape key to close ModelicaUI
+			if event.pressed and event.keycode == KEY_ESCAPE:
+				if ui_display_manager.get_active_display() == "modelica":
+					print("Avatar: Handling Escape key to close ModelicaUI")
+					ui_display_manager.close_modelica_display()
+					get_viewport().set_input_as_handled()
+					return
 		
-		# Try to route mouse input
-		if event is InputEventMouseButton or event is InputEventMouseMotion:
-			if ui_display_manager.process_mouse_event(event):
+		# Handle mouse events for displays
+		if (event is InputEventMouseButton or event is InputEventMouseMotion) and !event.is_echo():
+			var handled = ui_display_manager.process_mouse_event(event)
+			if handled:
 				get_viewport().set_input_as_handled()
 				return
 	
-	# Continue with regular avatar input if UiDisplayManager didn't handle it
+	# Continue with regular avatar input if UI hasn't handled it
 	if active_popup:
 		return  # Ignore input when popup is active
 
@@ -190,17 +214,15 @@ func _input(event):
 		LCWindows.toggle_chat()
 	
 	if event is InputEventKey and not event.is_echo() and event.is_pressed():
-		# Process display toggle keys if UiDisplayManager exists but didn't handle it
+		# Process display toggle keys if UiDisplayManager exists
 		if ui_display_manager:
 			if event.keycode == KEY_TAB:
 				ui_display_manager.toggle_supply_chain_display()
 				return
-			elif event.keycode == KEY_M:
-				ui_display_manager.toggle_modelica_display()
-				return
 		
 		var key_number: int = -1
 		
+		# Process number keys for entity control
 		match event.keycode:
 			Key.KEY_1:
 				key_number = 1
@@ -228,25 +250,26 @@ func _input(event):
 			else:
 				requesting_control.emit(key_number-1)
 		
-	if target == null:
-		var motion_direction := Vector3(
-			Input.get_action_strength("move_left") - Input.get_action_strength("move_right"),
-			Input.get_action_strength("move_up") - Input.get_action_strength("move_down"),
-			Input.get_action_strength("move_forward") - Input.get_action_strength("move_back")
-		)
-		$AvatarController.direction = motion_direction
-		$AvatarController.camera_basis = camera.get_camera_rotation_basis()
-		
-		if Input.is_key_pressed(KEY_ALT):
-			$AvatarController.speed = 100
-		elif Input.is_key_pressed(KEY_SHIFT):
-			$AvatarController.speed = 20
+	# Handle camera/movement controls when no UI display is active 
+	# or when UI is visible but not active
+	if ui_display_manager == null or not ui_display_manager.is_display_active():
+		if target == null:
+			var motion_direction := Vector3(
+				Input.get_action_strength("move_left") - Input.get_action_strength("move_right"),
+				Input.get_action_strength("move_up") - Input.get_action_strength("move_down"),
+				Input.get_action_strength("move_forward") - Input.get_action_strength("move_back")
+			)
+			$AvatarController.direction = motion_direction
+			$AvatarController.camera_basis = camera.get_camera_rotation_basis()
+			
+			if Input.is_key_pressed(KEY_ALT):
+				$AvatarController.speed = 100
+			elif Input.is_key_pressed(KEY_SHIFT):
+				$AvatarController.speed = 20
+			else:
+				$AvatarController.speed = 10
 		else:
-			$AvatarController.speed = 10
-	else:
-		$AvatarController.direction = Vector3.ZERO
-		
-		
+			$AvatarController.direction = Vector3.ZERO
 		
 	input_camera(event)
 	input_operator(event)
@@ -404,3 +427,25 @@ func _on_control_request_denied(peer_id: int, entity_path: NodePath):
 	if peer_id == multiplayer.get_unique_id():
 		print("Avatar: Control denied for entity: ", entity_path)
 		# Update UI or show a message to the user
+
+# Helper method to check if a click position intersects with the ModelicaUI display
+func _is_click_on_modelica_display(click_position: Vector2) -> bool:
+	if !camera:
+		return false
+		
+	var from = camera.project_ray_origin(click_position)
+	var to = from + camera.project_ray_normal(click_position) * RAY_LENGTH
+	
+	var space_state = get_world_3d().direct_space_state
+	var query = PhysicsRayQueryParameters3D.create(from, to)
+	query.collide_with_areas = true
+	query.collision_mask = 2  # Make sure this matches the collision layer of the ModelicaUI Area3D
+	
+	var result = space_state.intersect_ray(query)
+	if result and result.collider:
+		# Check if the collider is part of the ModelicaUI
+		var node = result.collider
+		if node.is_in_group("modelica_display") or node.get_parent().is_in_group("modelica_display"):
+			return true
+	
+	return false
