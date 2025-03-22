@@ -21,6 +21,7 @@ const RAY_LENGTH = 10000
 const SPEED = 5.0
 const JUMP_VELOCITY = 4.5
 const ZOOM_SPEED = 0.1
+const WHEEL_ZOOM_INCREMENT = 0.1  # Add default value for wheel zoom
 
 #-------------------------------
 # Exporting target variable and setting default mouse control to false
@@ -279,9 +280,9 @@ func input_camera(event):
 
 		if event is InputEventMouseButton:
 			if event.button_index == MOUSE_BUTTON_WHEEL_UP:
-				delta_camera_spring_length -= cam.WHEEL_ZOOM_INCREMENT
+				delta_camera_spring_length -= WHEEL_ZOOM_INCREMENT
 			elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
-				delta_camera_spring_length += cam.WHEEL_ZOOM_INCREMENT
+				delta_camera_spring_length += WHEEL_ZOOM_INCREMENT
 				
 		# Use inc_spring_length or modify SPRING_LENGTH instead of accessing spring_length directly
 		if delta_camera_spring_length != 0:

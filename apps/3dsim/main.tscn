@@ -40,7 +40,7 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 51, 0)
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -55.4874, 0)
 
 [node name="SupplyChainDisplay" parent="Universe/Sun/Earth/Moon/LangrenusCraterMap" index="2" instance=ExtResource("6_rsdku")]
-transform = Transform3D(1, 0, 0, 0, 0.96025, -0.279142, 0, 0.279142, 0.96025, -49.846, 48.2416, -228.335)
+transform = Transform3D(1, 0, 0, 0, 0.96025, -0.279142, 0, 0.279142, 0.96025, -49.846, 48.2416, -86.9162)
 
 [node name="ModelicaDisplay" parent="Universe/Sun/Earth/Moon/LangrenusCraterMap" index="3" instance=ExtResource("8_mwx56")]
-transform = Transform3D(1, 0, 0, 0, 0.96025, -0.279142, 0, 0.279142, 0.96025, 49.154, 48.2416, -228.335)
+transform = Transform3D(1, 0, 0, 0, 0.96025, -0.279142, 0, 0.279142, 0.96025, 9.29662, 48.2416, -86.9162)
