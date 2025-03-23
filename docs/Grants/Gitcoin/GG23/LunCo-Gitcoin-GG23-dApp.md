@@ -18,6 +18,12 @@ Try our browser-based simulation: [alpha.lunco.space](https://alpha.lunco.space)
 ![](https://gateway.lighthouse.storage/ipfs/bafkreidkb6bfjnjgoetexsot4l67glpz2n2z7vhpueela6gmxbvg3avo3a)
 
 
+We have implemented Supply Chain modeling via Graph View ![](https://gateway.irys.xyz/W6tGPpjYb4r7DXQCuG9VdHm4ffJzTsjqqkUBNbnDTjQ) and implemented build-in [Modelica](https://modelica.org/) (an object oriented language to model cyber-physical systems) support ![](https://gateway.irys.xyz/AsQBWXvdt1xhYnW8NFdeL2LWzBRLmXcQJpPVjMYppwKr)
+
+All those subsystems are available in 3D View, making interactive immersive simulation expirience possible: ![](https://gateway.irys.xyz/CTXEPAcexMh31dJGGgMBmPZYePRfumBAoUAa5ppUXchc)
+
+
+
 # 🌟 Why LunCo?
 
 - **Democratize Space Engineering**: Equal access to cutting-edge tools for all
@@ -32,6 +38,7 @@ Try our browser-based simulation: [alpha.lunco.space](https://alpha.lunco.space)
 - **NFT Integration**: Unlock missions and assets with unique digital tokens
 - **Entities**: Control Starships, Robots, and more
 - **Cross-Platform**: Available on browser and desktop
+- **Modelica Integration**: Modelica is an industrial grade language for Modeling complex systems and now we support it
 
 ## How it Works
 
@@ -46,9 +53,9 @@ LunCo combines the power of space engineering with the accessibility of gaming a
 4. **Web3 Integration**: 
    - Login seamlessly with MetaMask
    - Use NFTs to share missions, assets, or features
+   - Store & Share Modelica & Supply Chain models as NFTs
 
 5. **Learn and Iterate**: Analyze mission results, refine your designs, and contribute to a growing knowledge base of lunar engineering solutions
-
 
 
 ## Why Web3?
