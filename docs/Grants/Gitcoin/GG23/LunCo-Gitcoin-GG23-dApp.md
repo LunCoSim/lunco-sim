@@ -1,10 +1,8 @@
-# LunCoSim: Web3-Integrated Space Engineering
-
 ***Accelerating Space Exploration through Open-Source Collaboration***
 
 ## 🚀 Our Mission
 
-We are on a mission to build Opensource Lunar Settlement. 
+We are on a mission to build Opensource Lunar Settlement and Web3 will make it possible!
 
 That's a long way, that's starts with an Opensource Collaborative Lunar Colony Simulator - LunCoSim.
 
