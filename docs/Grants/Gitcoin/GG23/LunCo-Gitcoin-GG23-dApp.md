@@ -98,7 +98,7 @@ The most common approach to knowledge sharing is email, which, while universal, 
 4. [1500 followers on Linkedin](https://www.linkedin.com/company/luncosim/) 
 5. [Discord](https://discord.gg/uTEFrW32) 
 7. [Youtube](https://www.youtube.com/@LunCoSim)
-8. [Telegram] (https://t.me/luncosim)
+8. [Telegram](https://t.me/luncosim)
 
 
 # Questions
