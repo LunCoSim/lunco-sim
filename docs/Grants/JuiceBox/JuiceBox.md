@@ -1,11 +1,53 @@
 # LunCo - Lunar Company
 
-*On a missin to build Opensource Lunar Settlement. One subsystem at a time.
+*Building Opensource Lunar Settlement. One subsystem at a time.
 
 ## Introduction
 
-I'm Rod Mamin, a crypto-native space engineer and the founder of LunCo. For the past two and a half years, I've been leading the development of an open-source Lunar Colony Simulation platform that's revolutionizing how we approach space exploration.
+I'm Rod Mamin, a web3 native space engineer, founder of LunCo. 
 
+## Plan
+
+### Step 1. LunCoSim - Lunar Colony Simulator
+
+Opensours Platform/Metaverse for interactive collaborative mission simulations/trainings.
+
+Fully Free to use and modify MIT Licenced,  build on MIT Licenced 3D Engine Godot. 
+
+LunCoSim allows us to effificently plan missions, exchange information, and work together comfortable.
+
+### Step 2. Lunar Opensource Lander
+
+We will have to design all the HW & SW in LunCoSim
+
+### Step 3. IRL Colony
+
+Commercial lunar exploratin is reality with success of Blue Ghost, Intutivie machines and all the companies delivering stuff under CLIPS.
+
+We entered new era, now we just need to build it.
+
+## Funding Goals
+
+Our goal for this iteration of the campaign is to raise 30 $ETH in exchange to $LUNCO
+
+### Treasury Distribution
+
+Our goal for this iteration of the campaign is to raise 30 $ETH. 
+The campaign is set into cycles, with manual updates due.
+
+We are at very early stage, the $LUNCO token reflects your contribution to the future of Lunar Exploration, with perks coming later on the way
+
+1. Up to 1 $ETH - 150k $LUNCO, 850k $LUNCO to treasury (15% reward)
+2. 1 to 10 $ETH - 140k $LUNCO, 860k $LUNCO to treasury (14% reward)
+3. 10 to 15 $ETH - 130k $LUNCO, 870k $LUNCO to treasury (13% reward)
+4. 15 to 20 $ETH - 120k $LUNCO, 880k $LUNCO to treasury (12% reward)
+5. 20 to 25 $ETH - 110k $LUNCO, 890k $LUNCO to treasury (11% reward)
+6. 25 to 30 $ETH - 100k $LUNCO, 900k $LUNCO to treasury (10% reward)
+
+
+# Tons of details if you interested in past activitis for LLPs :D
+
+## Past about LunCoSim
 Through the generous support of [Gitcoin](https://explorer.gitcoin.co/#/projects/0x9a9cda60bcd1b566669a6e03d79dcea4be966ebdef25dc9754cbd4170e99c61f) and [Giveth](https://giveth.io/project/lunco-everyone-can-do-space),  and global DeSci and DeSpace community, we've successfully raised $90k in grants and donations. Combined with my personal investment of $30k, this funding has enabled full-time development of our platform.
 
 Your contribution will directly accelerate space exploration innovation. 
@@ -43,9 +85,6 @@ Short answer:
 His deep expertise in space robotics, particularly in developing missions like sending robots to the Moon, combined with his commitment to decentralized technologies through initiatives like LunCo, positions him perfectly to lead decentralized space exploration efforts.*
 
 i'm building LunCo because I'm pretty deep in Space and Web3 :D. Our goal is to accelerate Space Exploration, and your support on the way is much needed!c
-## Funding Goals
-
-Our goal for this iteration of the campaign is to raise 30 $ETH.
 
 Your contribution will support four key initiatives:
 
@@ -65,18 +104,6 @@ Your contribution will support four key initiatives:
 	- LunCo Gitcoin & Giveth donors up to GG22
 	- Contributors to DeSci projects
 	- Projects that supported LunCo on the way
-
-### Treasury Distribution
-
-Our goal for this iteration of the campaign is to raise 30 $ETH. 
-The campaign is set into cycles, once goal for each cycle is reached there would be a 3-days transition window to new cycle. 
-
-1. Up to 1 $ETH - 150k $LUNCO, 850k $LUNCO to treasury (15% reward)
-2. 1 to 10 $ETH - 140k $LUNCO, 860k $LUNCO to treasury (14% reward)
-3. 10 to 15 $ETH - 130k $LUNCO, 870k $LUNCO to treasury (13% reward)
-4. 15 to 20 $ETH - 120k $LUNCO, 880k $LUNCO to treasury (12% reward)
-5. 20 to 25 $ETH - 110k $LUNCO, 890k $LUNCO to treasury (11% reward)
-6. 25 to 30 $ETH - 100k $LUNCO, 900k $LUNCO to treasury (10% reward)
 
 ## LunCo Activities
 
