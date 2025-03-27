@@ -132,13 +132,13 @@ What features or use cases does your dApp/App present? How is it differentiated?
 
 What are your plans for further development, and how will the grant funds be used to achieve these goals?
 
-1. Implement rover/vehicle controller to be able to create robots
+1. Improve Modelica Support
 2. Support of URDF to be able to import robots
 3. Refactor Networking module to make it more robust
 4. Finalize tokengating via Profile NFT
-5. Implement Mission NFT - possibility to modify mission and publish it onchain
+5. Integration with onchain Modelica modelels
 6. Solar system View - integration with ivoyager
 
 Grant funds would help us sustain operations:
 1. Compensation to contributors
-2. Paying for services e.g. VPS, LLMs
+2. Paying for services e.g. VPS, LLMs, Cursor, X
