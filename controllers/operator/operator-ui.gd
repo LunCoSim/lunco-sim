@@ -58,7 +58,7 @@ func _ready():
 	
 	ModelsList = filter_by_extension(files)
 	
-	var tree = $Files
+	var tree = $PanelContainer2/Files
 	
 	var root = tree.create_item()
 	root.set_text(0, "Models")
