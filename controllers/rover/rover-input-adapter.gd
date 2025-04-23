@@ -16,26 +16,19 @@ func _ready():
 	timer.autostart = true
 	timer.connect("timeout", Callable(self, "_on_timer_timeout"))
 	add_child(timer)
-	
-	print("RoverInputAdapter: Ready, target is ", target)
 
 func _on_timer_timeout():
 	var _target = target
 	
-	# Report status for debugging
+	# Check target validity
 	if not target:
-		print("RoverInputAdapter: No target set!")
 		return
 		
 	if target is LCAvatar:
 		_target = target.target
-		print("RoverInputAdapter: Avatar's target is: ", _target)
 	
-	if _target is LCRoverController:
-		print("RoverInputAdapter: Target is RoverController")
-	else:
-		# Print what the target actually is for debugging
-		print("RoverInputAdapter: Target is not a RoverController: ", _target)
+	if not (_target is LCRoverController):
+		return
 
 func _input(_event):
 	# Only process inputs if we have a target
