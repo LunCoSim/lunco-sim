@@ -111,3 +111,7 @@
 1.  [TLA+](https://lamport.azurewebsites.net/tla/tla.html) – TLA+ is a high-level language for modeling programs and systems – especially concurrent and distributed ones. 
 2.  [SysML]()
 3.  [Petri net](https://en.wikipedia.org/wiki/Petri_net)
+
+### Papers
+
+1. [Collaborative virtual reality platform for visualizing space data and mission planning](https://link.springer.com/article/10.1007/s11042-019-7736-8)
