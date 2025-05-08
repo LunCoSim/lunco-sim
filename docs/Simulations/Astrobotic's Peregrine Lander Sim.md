@@ -1,1 +1,0 @@
-1. [Allo V2](https://builder.gitcoin.co/#/chains/42161/registry/0x/projects/0x1e656e0a6fc6fca4b2e21c754182516a9680ce911b40722fd250a2e8ec1e87e7)
