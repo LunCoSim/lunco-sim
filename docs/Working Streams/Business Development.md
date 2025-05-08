@@ -1,1 +1,0 @@
-Get in touch with other projects, looking for partners
