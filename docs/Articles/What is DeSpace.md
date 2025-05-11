@@ -24,3 +24,5 @@ Space is much more than a trillion market, it's the only way for humanity to sur
 8. Liberland Space Programme
 9. Lifeship
 10. Space Radar
+11. Space Computer
+12. DecenSpace
