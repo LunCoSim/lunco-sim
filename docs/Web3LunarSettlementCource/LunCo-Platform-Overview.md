@@ -10,13 +10,13 @@
 
 ## Project Overview
 
-LunCo is a revolutionary platform that aims to create a scalable, open-source ecosystem for the space industry, initially focused on lunar activities with plans to expand to Mars, near-Earth space, and deep space operations. The platform combines professional-grade simulation tools with gaming mechanics and Web3 integration to revolutionize how space missions are planned, designed, and executed.
+LunCo is a revolutionary platform that aims to create a scalable, open-source ecosystem for the space industry, initially focused on lunar activities with plans to expand to Mars, NEO, and deep space operations. The platform combines professional-grade simulation tools with gaming mechanics and Web3 integration to revolutionize how space missions are planned, designed, and executed.
 
 ### Core Vision
 - Bridge the gap between traditional space industry tools and modern collaborative technologies
 - Create a universal space for professionals, enthusiasts, and researchers
 - Combine professional simulation capabilities, engaging gamification, and Web3 integration
-- Establish a decentralized autonomous organization (DAO) for lunar base development by 2042
+- Establish DAO for lunar base development by 2042
 
 ## Technical Architecture
 
@@ -149,11 +149,3 @@ LunCo is a revolutionary platform that aims to create a scalable, open-source ec
 ## Contributing
 
 We welcome contributions to the LunCo platform. Please refer to our development strategy and focus on the current priorities. For more information on how to contribute, please see our [Contributing Guidelines](CONTRIBUTING.md).
-
-## License
-
-[License details to be determined]
-
----
-
-This documentation is a living document and will be updated as the project evolves. For the most current information, please refer to our [GitHub repository](https://github.com/your-repo/lunco-sim). 
