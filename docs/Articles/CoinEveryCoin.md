@@ -7,6 +7,7 @@ PumpDotFun Pionered idea of issuing coins for fun.
 
 Tons of projects emerged from that and we are reviewing the mechanics.
 
+We believe that coins is the evolution of donations when people resieve coins as token of appreciation for the projects support.
 
 First, let's introduce the idea of coins. Coins are special tokens:
 1. Instantly tradable via LPs
@@ -22,3 +23,10 @@ We will review the mechanics of the following platforms:
 4. Origo.fun
 5. https://streme.fun/
 6. https://garden.taikai.network
+
+## Types of coins
+
+1. Memecoins
+2. Art coins
+3. Project coins
+4. Donation coins
