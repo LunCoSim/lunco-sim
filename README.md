@@ -92,9 +92,9 @@ Support us on [JuiceBox](https://juicebox.money/v2/p/763)!
 
 Join our vibrant community and stay updated on the latest developments:
 
-- [Discord Server](https://discord.gg/uTEFrW32)
+- [Discord Server](https://discord.gg/A6U3GdvQum)
 - [Twitter](https://twitter.com/LunCoSim)
-- [Official Website](https://lunco.space/)
+- [Website](https://lunco.space/)
 - [LinkedIn](https://www.linkedin.com/company/luncosim/)
 - [YouTube Channel](https://www.youtube.com/@LunCoSim)
 
