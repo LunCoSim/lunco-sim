@@ -71,13 +71,13 @@ directory_path="res://data/godot-idea-board/"
 
 [gui]
 
-theme/custom="uid://hve1e7mnexbi"
 theme/default_font_antialiasing=2
 theme/default_font_hinting=2
 theme/default_font_subpixel_positioning=3
 theme/default_font_multichannel_signed_distance_field=true
 theme/default_font_generate_mipmaps=true
 theme/lcd_subpixel_layout=0
+theme/custom="uid://hve1e7mnexbi"
 
 [input]
 
