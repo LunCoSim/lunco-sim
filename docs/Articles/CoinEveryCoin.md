@@ -23,6 +23,8 @@ We will review the mechanics of the following platforms:
 4. Origo.fun
 5. https://streme.fun/
 6. https://garden.taikai.network
+7. http://poster.fun/
+8. https://app.onyx.bond/
 
 ## Types of coins
 
