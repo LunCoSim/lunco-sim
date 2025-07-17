@@ -43,9 +43,9 @@ We will review the mechanics of the following platforms:
 ## Awarness
 1. Campaign on Galxe - but they'll dump your coin soon after
 2. Buy coin (later get XX% of coins)
-3Activity on X - reward contributors
-Tips on Farcaster via NOICE
-Airdrop to early buyers
+3. Activity on X - reward contributors
+4. Tips on Farcaster via NOICE
+5. Airdrop to early buyers
 
 ## Listings & Credibility
 
@@ -59,6 +59,13 @@ Airdrop to early buyers
 ## Incentives
 
 1. Giveaway via Noice (example 1)https://farcaster.xyz/brnd
+
+## Payed promotion
+
+1. https://qrcoin.fun/
+2. Points on DexScreener
+3. https://revealcam.fun/
+4. Gigs on gigbot e.g. buy your coin
 
 ## Artifacts
 1. Website - astropad.xyz
