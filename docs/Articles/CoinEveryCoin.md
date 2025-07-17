@@ -1,5 +1,4 @@
-# Coin Every Coin
-
+# Coin Everything: Some considerations for founders 
 
 Inspired by memecoins Zora pionered the idea of Coin everything and HyperStrucutres.
 
@@ -18,7 +17,7 @@ First, let's introduce the idea of coins. Coins are special tokens:
 
 We will review the mechanics of the following platforms:
 1. Zora.co
-2. Clanker: clank.fun, https://www.clanker.world
+2. Clanker: https://www.clanker.world
 3. muse.markets
 4. Origo.fun
 5. https://streme.fun/
@@ -32,8 +31,6 @@ We will review the mechanics of the following platforms:
 1. Memecoins
 2. Art coins
 3. Project coins
-4. Donation coins
-
 
 ## How to Coin
 
