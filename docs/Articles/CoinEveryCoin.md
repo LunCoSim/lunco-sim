@@ -64,31 +64,32 @@ First, let's introduce the idea of coins. Coins are special tokens that:
 
 Some marketing hints
 
-### Awarness
-1. Campaign on Galxe - but they'll dump your coin soon after
-2. Buy coin (later get XX% of coins)
-3. Activity on X - reward contributors
-4. Tips on Farcaster via NOICE
-5. Airdrop to early buyers
+### Awareness
+
+1. Campaign on Galxe (but note that many may sell quickly)
+2. Activity on X & Farcaster (reward contributors, run contests, host AMAs)
+3. Tips on Farcaster via NOICE
+4. Partner with micro-influencers and community leaders to expand reach
+5. Collaborate with other projects for cross-promotion and joint campaigns
+6. Host community events and contests (e.g., meme competitions, trivia)
 
 ### Listings & Credibility
 
-1. CMC (https://coinmarketcap.com)
-2. CoinGecko (https://www.coingecko.com)
-3. DexScreener (https://dexscreener.comj)
-4. DexTools (https://www.dextools.io)
-5. GeckoTerminal (https://www.geckoterminal.com)
-6. BaseScan
+1. [CoinMarketCap (CMC)](https://coinmarketcap.com)
+2. [CoinGecko](https://www.coingecko.com)
+3. [DexScreener](https://dexscreener.com)
+4. [DexTools](https://www.dextools.io)
+5. [GeckoTerminal](https://www.geckoterminal.com)
+6. [BaseScan](https://basescan.org)
+7. [Brnd](https://farcaster.xyz/brnd)
 
-### Incentives
 
-1. Giveaway via Noice (example 1)
-2. https://farcaster.xyz/brnd
+### Paid Promotion
 
-### Payed promotion
-
-1. https://qrcoin.fun/
-2. Points on DexScreener
-3. https://revealcam.fun/
-4. Gigs on gigbot e.g. buy your coin
+1. Pay for a featured or trending listing on DEX tools like [DexScreener](https://dexscreener.com) or [DexTools](https://www.dextools.io) to boost visibility among active traders.
+2. Use sponsored posts or paid boosts on [Farcaster](https://farcaster.xyz) or [X (Twitter)](https://twitter.com) to reach targeted crypto audiences.
+3. Purchase shoutouts or mentions from micro-influencers with proven crypto engagement (avoid generic shill accounts).
+4. Pay for your airdrop to be featured on aggregator sites like [airdrops.io](https://airdrops.io) or [CoinMarketCap Airdrops](https://coinmarketcap.com/airdrop/) for greater exposure.
+5. Place banner ads on niche crypto sites such as [DegenScore](https://degenscore.com).
+6. Run creative, interactive paid campaigns using platforms like [Revealcam](https://revealcam.fun), [QRcoin](https://qrcoin.fun), or [Gigbot](https://gigbot.xyz) (e.g., QR code hunts, reveal-to-earn, or gig-based coin buys).
 
