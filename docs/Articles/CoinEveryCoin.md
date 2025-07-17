@@ -45,33 +45,33 @@ First, let's introduce the idea of coins. Coins are special tokens that:
    - Pick a unique and memorable symbol for your coin.
 3. **Choose starting market cap (or the price of your coin)**
    - The smaller the cap, the bigger portion of coins could be bought by you and early supporters. Balance your goals for distribution and initial value.
-4. **Tokenomics design**
-   - Decide on total supply, distribution, vesting schedules, and incentives. Consider if you want taxes/fees on trades and how rewards will be distributed.
-5. **Legal & compliance considerations**
+4. **Legal & compliance considerations**
    - Understand the legal implications of launching a token, even for memecoins. Ensure you comply with relevant regulations in your jurisdiction.
-6. **Smart contract deployment**
+5. **Smart contract deployment**
    - Most platforms handle this, but review or verify the contract if possible. Ensure transparency and security.
-7. **Liquidity provision**
+6. **Liquidity provision**
    - Provide initial liquidity for your coin, either manually or automatically (depending on the platform). This enables trading and price discovery. Most coin platform do that for you
-8. **Airdrops & claims**
+7. **Airdrops & claims**
    - Consider distributing coins via claims rather than direct airdrops to inactive accounts. Claims increase engagement and awareness.
-9. **Token vault/reserves**
+8. **Token vault/reserves**
    - Decide how much to reserve for future use, team, or community incentives, and communicate this clearly.
-10. **Community building**
+9. **Community building**
     - Set up social channels (X, Farcaster, Discord, Telegram, etc.), engage early supporters, and communicate your vision.
-11. **Security best practices**
+10. **Security best practices**
     - Protect admin keys, use multisig wallets where possible, and avoid common pitfalls. Prioritize transparency and user trust.
-12. **Post-launch steps**
-    - Monitor your coin, iterate on incentives, respond to community feedback, and adapt as needed to ensure long-term sustainability and growth.
 
-## Awarness
+## Marketing
+
+Some marketing hints
+
+### Awarness
 1. Campaign on Galxe - but they'll dump your coin soon after
 2. Buy coin (later get XX% of coins)
 3. Activity on X - reward contributors
 4. Tips on Farcaster via NOICE
 5. Airdrop to early buyers
 
-## Listings & Credibility
+### Listings & Credibility
 
 1. CMC (https://coinmarketcap.com)
 2. CoinGecko (https://www.coingecko.com)
@@ -80,21 +80,15 @@ First, let's introduce the idea of coins. Coins are special tokens that:
 5. GeckoTerminal (https://www.geckoterminal.com)
 6. BaseScan
 
-## Incentives
+### Incentives
 
 1. Giveaway via Noice (example 1)
 2. https://farcaster.xyz/brnd
 
-## Payed promotion
+### Payed promotion
 
 1. https://qrcoin.fun/
 2. Points on DexScreener
 3. https://revealcam.fun/
 4. Gigs on gigbot e.g. buy your coin
-
-## Artifacts
-1. Website - astropad.xyz
-2. X 
-3. Channel on farcaster
-4. Whitepaper
 
