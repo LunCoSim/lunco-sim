@@ -26,9 +26,46 @@ We will review the mechanics of the following platforms:
 7. http://poster.fun/
 8. https://app.onyx.bond/
 
+
 ## Types of coins
 
 1. Memecoins
 2. Art coins
 3. Project coins
 4. Donation coins
+
+
+## How to Coin
+
+1. Choose ticker
+2. Choose starting market cap (or the price of your coin). The considerations - the smaller the cap the bigger portion of coins could be bought by you and people on free markets. It's a balance and consideration - how much X you want to make for you first supporters
+3. Choose initial DevBuy
+4. Airdrops? Better to make via claims so you won't drop to inactive accounts + more engagements with your posts
+5. Token Vault - how much you reserve and for what?
+
+## Awarness
+1. Campaign on Galxe - but they'll dump your coin soon after
+2. Buy coin (later get XX% of coins)
+3Activity on X - reward contributors
+Tips on Farcaster via NOICE
+Airdrop to early buyers
+
+## Listings & Credibility
+
+1. CMC (https://coinmarketcap.com)
+2. CoinGecko (https://www.coingecko.com)
+3. DexScreener (https://dexscreener.comj)
+4. DexTools (https://www.dextools.io)
+5. GeckoTerminal (https://www.geckoterminal.com)
+6. BaseScan
+
+## Incentives
+
+1. Giveaway via Noice (example 1)https://farcaster.xyz/brnd
+
+## Artifacts
+1. Website - astropad.xyz
+2. X 
+3. Channel on farcaster
+4. Whitepaper
+
