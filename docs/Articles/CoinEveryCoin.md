@@ -19,7 +19,7 @@ First, let's introduce the idea of coins. Coins are special tokens that:
 
 - [Zora.co](https://zora.co): A decentralized protocol and Layer 2 network on Ethereum, Zora enables creators to mint, distribute, and trade digital content and NFTs entirely on-chain. It features content coins, creator rewards, and a marketplace for trading and monetizing posts and media.
 - [Clanker](https://www.clanker.world): Clanker is a set of audited smart contracts and tools for launching ERC-20 tokens on Base and Arbitrum. It allows users to deploy tokens instantly, configure liquidity and fees, and earn creator rewards based on trading volume. Integrates with Farcaster and offers advanced features for token creators. Clanker also provides a Farcaster bot—users can coin directly from a Farcaster post by tagging @clanker and specifying token details; the bot will automatically deploy the token and set up liquidity, making token creation accessible to anyone with a social post.
-- [muse.markets](https://muse.markets): Muse Markets is a platform for trading and investing in digital assets, with a focus on luxury collectibles and investment-grade assets. It provides real-time valuations, expert curation, and a marketplace for high-value items such as art, watches, and more.
+- [muse.markets](https://muse.markets): Muse Markets is a platform that funds and launches new crypto product ideas by turning them into tradable tokens. Ideas start as tweets and are launched as "Only Up" tokens, gathering trading fees into a pot. Community trading signals interest, and developers are incentivized to build the product, receiving the pot as compensation if the community approves the final result. Once built, the token transitions to traditional trading, aligning incentives for idea creators, traders, and builders, and fostering innovation in the crypto space.
 - [Origo.fun](https://origo.fun): Origo is a permissionless platform focused on Decentralized Science (DeSci), enabling anyone to create their own token in just a few clicks, with no fees. Built on Base, Origo aims to unlock and capture scientific value by making token launches accessible to all, supporting early-stage research and innovation in science.
 - [streme.fun](https://streme.fun): Streme is an AI agent-powered token launcher that deploys streamable tokens with built-in staking rewards and automatic Uniswap v3 liquidity provision. Tokens can be streamed in real-time (via Superfluid), and stakers earn rewards distributed continuously. Users can create Streme coins directly from Farcaster by mentioning @streme and providing token details. Each coin includes a staking contract with a reward pool, and creators earn a share of trading fees from the Uniswap pool.
 - [garden.taikai.network](https://garden.taikai.network): Part of the TAIKAI hackathon ecosystem, the Garden is a collaborative space for nurturing and growing hackathon projects. It rewards innovation and collaboration, helping projects transition from ideas to thriving businesses within a vibrant community.
@@ -39,11 +39,30 @@ First, let's introduce the idea of coins. Coins are special tokens that:
 
 ## How to Coin
 
-1. Choose ticker
-2. Choose starting market cap (or the price of your coin). The considerations - the smaller the cap the bigger portion of coins could be bought by you and people on free markets. It's a balance and consideration - how much X you want to make for you first supporters
-3. Choose initial DevBuy
-4. Airdrops? Better to make via claims so you won't drop to inactive accounts + more engagements with your posts
-5. Token Vault - how much you reserve and for what?
+1. **Choose a platform**
+   - Select the platform that best fits your goals and audience (e.g., Zora, Clanker, Origo, Streme). Consider features, fees, and community reach.
+2. **Choose ticker**
+   - Pick a unique and memorable symbol for your coin.
+3. **Choose starting market cap (or the price of your coin)**
+   - The smaller the cap, the bigger portion of coins could be bought by you and early supporters. Balance your goals for distribution and initial value.
+4. **Tokenomics design**
+   - Decide on total supply, distribution, vesting schedules, and incentives. Consider if you want taxes/fees on trades and how rewards will be distributed.
+5. **Legal & compliance considerations**
+   - Understand the legal implications of launching a token, even for memecoins. Ensure you comply with relevant regulations in your jurisdiction.
+6. **Smart contract deployment**
+   - Most platforms handle this, but review or verify the contract if possible. Ensure transparency and security.
+7. **Liquidity provision**
+   - Provide initial liquidity for your coin, either manually or automatically (depending on the platform). This enables trading and price discovery. Most coin platform do that for you
+8. **Airdrops & claims**
+   - Consider distributing coins via claims rather than direct airdrops to inactive accounts. Claims increase engagement and awareness.
+9. **Token vault/reserves**
+   - Decide how much to reserve for future use, team, or community incentives, and communicate this clearly.
+10. **Community building**
+    - Set up social channels (X, Farcaster, Discord, Telegram, etc.), engage early supporters, and communicate your vision.
+11. **Security best practices**
+    - Protect admin keys, use multisig wallets where possible, and avoid common pitfalls. Prioritize transparency and user trust.
+12. **Post-launch steps**
+    - Monitor your coin, iterate on incentives, respond to community feedback, and adapt as needed to ensure long-term sustainability and growth.
 
 ## Awarness
 1. Campaign on Galxe - but they'll dump your coin soon after
