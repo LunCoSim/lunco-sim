@@ -1,4 +1,136 @@
-Lunar Opensource Rover (LOR) Specification
-1.2 Scope
+# Environmental Requirements
 
-Environmental requirements
+## 6.1 Overview
+
+This section defines the environmental conditions that Lunar Opensource Rover (LOR) platforms and components must withstand during lunar surface operations. All LOR-compliant systems shall be designed and tested to operate reliably under these conditions.
+
+## 6.2 Thermal Environment
+
+### 6.2.1 Operating Temperature Range
+- **Nominal Operating Range**: -173°C to +127°C (-279°F to +261°F)
+- **Survival Range**: -190°C to +150°C (-310°F to +302°F)
+- **Temperature Cycling**: Systems must withstand thermal cycling between operational extremes
+
+### 6.2.2 Thermal Design Requirements
+- **Thermal Control System**: Active or passive thermal management required
+- **Material Selection**: Materials must maintain structural integrity across temperature range
+- **Component Derating**: Electronic components shall be derated for extreme temperature operation
+- **Thermal Interface**: Standardized thermal interface points for heat dissipation
+
+## 6.3 Radiation Environment
+
+### 6.3.1 Radiation Exposure
+- **Galactic Cosmic Rays (GCR)**: Continuous exposure to high-energy particles
+- **Solar Particle Events (SPE)**: Periodic high-flux proton events
+- **Total Ionizing Dose (TID)**: Minimum 100 krad tolerance for 1-year mission
+- **Single Event Effects (SEE)**: Electronics must be hardened against latch-up and upset
+
+### 6.3.2 Shielding Requirements
+- **Critical Electronics**: Minimum 2mm aluminum equivalent shielding
+- **Data Storage**: Radiation-tolerant memory with error correction
+- **Processor Architecture**: Fault-tolerant computing with redundancy options
+
+## 6.4 Vacuum Environment
+
+### 6.4.1 Pressure Conditions
+- **Operational Pressure**: <10⁻⁹ torr lunar surface vacuum
+- **Material Outgassing**: Low outgassing materials per ASTM E595
+- **Seal Requirements**: Hermetic sealing for pressurized components
+- **Thermal-Vacuum Testing**: All components tested in simulated lunar vacuum
+
+## 6.5 Mechanical Environment
+
+### 6.5.1 Launch Environment
+- **Vibration**: Random vibration per NASA-STD-7001
+- **Shock**: Pyroshock and mechanical shock survival
+- **Acoustic**: 140 dB overall sound pressure level
+- **Acceleration**: 12g quasi-static loads in all axes
+
+### 6.5.2 Landing Environment
+- **Impact Loads**: Survive 20g deceleration during lunar landing
+- **Deployment Shock**: Component release mechanism shock loads
+- **Surface Operations**: Continuous low-level vibration from mobility
+
+## 6.6 Dust Environment
+
+### 6.6.1 Lunar Regolith Characteristics
+- **Particle Size**: 0.1 to 1000 microns diameter
+- **Composition**: Sharp, abrasive silicate particles
+- **Electrostatic Properties**: High charging potential in vacuum
+- **Adhesion**: Strong electrostatic and van der Waals forces
+
+### 6.6.2 Dust Mitigation Requirements
+- **Sealing**: IP67-equivalent sealing for mechanical interfaces
+- **Materials**: Dust-resistant surface treatments and materials
+- **Mechanisms**: Self-cleaning or dust-tolerant moving parts
+- **Optics**: Protective covers or cleaning systems for optical surfaces
+
+## 6.7 Electromagnetic Environment
+
+### 6.7.1 Electromagnetic Compatibility (EMC)
+- **Conducted Emissions**: Per MIL-STD-461 requirements
+- **Radiated Emissions**: Minimal interference with communication systems
+- **Susceptibility**: Immunity to solar radio bursts and plasma effects
+- **Grounding**: Common grounding architecture for EMC compliance
+
+### 6.7.2 Charging Environment
+- **Surface Charging**: Components must survive electrostatic discharge
+- **Plasma Interaction**: Operations during lunar plasma wake conditions
+- **Mitigation**: Conductive paths and charge dissipation systems
+
+## 6.8 Lighting Environment
+
+### 6.8.1 Illumination Conditions
+- **Lunar Day**: 14 Earth days of continuous sunlight
+- **Lunar Night**: 14 Earth days of darkness
+- **Solar Elevation**: 0° to 90° elevation angles
+- **Albedo Variations**: 7-12% surface reflectance
+
+### 6.8.2 Optical System Requirements
+- **Dynamic Range**: Operate across full lunar lighting spectrum
+- **Shadow Operations**: Navigation and science in permanent shadow
+- **Solar Protection**: Avoid damage from direct solar observation
+
+## 6.9 Gravity Environment
+
+### 6.9.1 Lunar Gravity Effects
+- **Surface Gravity**: 1.62 m/s² (1/6 Earth gravity)
+- **Mobility Design**: Optimize traction and stability for low gravity
+- **Dust Dynamics**: Modified dust settling and suspension behavior
+- **Mechanical Systems**: Adjust spring rates and damping for low-g operation
+
+## 6.10 Mission Duration Requirements
+
+### 6.10.1 Design Life
+- **Primary Mission**: Minimum 90 Earth days operational
+- **Extended Mission**: Design goal of 1 Earth year
+- **Survival Periods**: Withstand lunar night dormancy cycles
+- **Degradation Allowance**: Performance within specifications at end of life
+
+## 6.11 Testing and Validation
+
+### 6.11.1 Environmental Testing Requirements
+- **Thermal Vacuum**: Component and system-level thermal vacuum testing
+- **Vibration Testing**: Random vibration and sine sweep testing
+- **Radiation Testing**: Proton and heavy ion exposure testing
+- **Dust Testing**: JSC-1A lunar simulant exposure testing
+
+### 6.11.2 Test Standards
+- **Space Environment**: NASA-HDBK-4002 space environment testing
+- **Component Testing**: Per MIL-STD-810 environmental test methods
+- **Materials Testing**: ASTM space materials testing standards
+- **Qualification Testing**: Full qualification test program for flight hardware
+
+## 6.12 Environmental Design Guidelines
+
+### 6.12.1 Design Margins
+- **Temperature**: ±10°C margin beyond operational requirements
+- **Radiation**: 2x margin on total dose requirements
+- **Mechanical**: 1.4 safety factor on ultimate loads
+- **Lifetime**: 2x margin on cyclic loading requirements
+
+### 6.12.2 Heritage and Standards
+- **Space Heritage**: Utilize proven space-qualified components where possible
+- **Commercial Components**: Screening and testing for commercial parts
+- **Standard Compliance**: Adherence to NASA and international space standards
+- **Lessons Learned**: Incorporate lunar mission heritage and lessons learned
