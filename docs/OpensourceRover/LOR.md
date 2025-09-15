@@ -24,3 +24,8 @@ This specification covers:
 - Standard subsystem definitions
 - Environmental requirements
 - Testing and validation procedures
+
+
+## References
+
+1. CubeSat specs: https://www.cubesat.org/cubesatinfo
