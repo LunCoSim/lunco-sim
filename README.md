@@ -2,8 +2,7 @@
 
 LunCoSim is a open-source simulation tool designed for planning space missions, with a focus on lunar settlements. 
 
-![](https://gateway.lighthouse.storage/ipfs/bafybeibtwxdybz5onr5zwqotia64lbsgju6r55nwp23bosd4mxwy25siqa)
-*Coming soon via [ivoyager](https://github.com/ivoyager)*
+Want to contribute? Apply [here](https://tally.so/r/3jX6aE)
 
 Built with the powerful Godot 4 engine, LunCoSim aims to revolutionize the way space engineers design and collaborate on complex systems.
 
