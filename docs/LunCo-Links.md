@@ -80,6 +80,8 @@
 #### Requirements management and systems engineering
 1. IBM Doors
 2. JAMA
+3. Valispace
+4. Epsilon3
 
 #### MBSE
 1. Arcadia
@@ -112,6 +114,10 @@
 2. [SysML]()
 3. [Petri net](https://en.wikipedia.org/wiki/Petri_net)
 4. Modelica
+
+### Simulations
+
+1. [NASA NOS3](https://github.com/nasa/nos3?tab=readme-ov-file)
 
 ### Papers
 
