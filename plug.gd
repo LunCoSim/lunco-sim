@@ -4,7 +4,7 @@
 extends "res://addons/gd-plug/plug.gd" ## it's the only addon to be added to git, the rest are managed by it
 
 func _plugging():
-	pass
+	plug("fenix-hub/godot-engine.easy-charts")
 	#UI
 	# plug("folt-a/godot-idea-board")
 	# plug("imjp94/gd-plug-ui")
