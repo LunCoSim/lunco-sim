@@ -1,0 +1,71 @@
+services:
+  # Web Service
+  - type: web
+    name: lunar-base-monitoring
+    env: node
+    plan: starter
+    buildCommand: "npm run build"
+    startCommand: "npm start"
+    healthCheckPath: "/api/health"
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: lunar-base-db
+          property: connectionString
+      - key: NEXTAUTH_URL
+        value: https://lunar-base-monitoring.onrender.com
+      - key: NEXTAUTH_SECRET
+        generateValue: true
+      - key: APP_NAME
+        value: Lunar Base Monitoring System
+      - key: LOG_LEVEL
+        value: info
+      - key: ENABLE_DEV_TOOLS
+        value: false
+      - key: MOCK_DATA
+        value: false
+      - key: RATE_LIMIT_MAX
+        value: 100
+      - key: RATE_LIMIT_WINDOW
+        value: 900000
+      - key: ENABLE_METRICS
+        value: true
+
+  # PostgreSQL Database
+  - type: pserv
+    name: lunar-base-db
+    env: docker
+    plan: starter
+    dockerfilePath: ./docker/Dockerfile.postgres
+    envVars:
+      - key: POSTGRES_DB
+        value: lunar_base_monitoring
+      - key: POSTGRES_USER
+        value: postgres
+      - key: POSTGRES_PASSWORD
+        generateValue: true
+    disk:
+      name: postgres-data
+      mountPath: /var/lib/postgresql/data
+      sizeGB: 10
+
+# Build configuration
+build:
+  envVars:
+    - key: NODE_VERSION
+      value: 18
+    - key: NPM_VERSION
+      value: 9
+
+# Auto-deploy configuration
+autoDeploy: true
+
+# Health checks
+healthChecks:
+  web:
+    path: /api/health
+    interval: 30s
+    timeout: 10s
+    retries: 3

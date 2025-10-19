@@ -1,4 +1,4 @@
-# LunCoSim × Aurum Grid Interface
+# LunCoSim × Bio-Cochlea Interface
 
 A groundbreaking fusion of lunar surface mission simulation and bio-resonance technology, creating an unprecedented interface between space exploration and human cognitive enhancement.
 
@@ -12,7 +12,7 @@ This project combines two cutting-edge domains:
 - Multiple mission scenarios (Apollo 17, Artemis 3, Swarm operations, Night survival)
 - Hardware-in-the-loop simulation capabilities
 
-### **Aurum Grid Technology**
+### **Bio-Cochlea Technology**
 - Personal bio-integrated cognitive interface
 - Multi-layered transduction system
 - Energy harvesting from body motion and vibration
@@ -23,7 +23,7 @@ This project combines two cutting-edge domains:
 ### **Dashboard Capabilities**
 - **Overview Dashboard**: Real-time metrics from both systems
 - **LunCoSim Control**: Mission scenarios, rover telemetry, environmental data
-- **Aurum Grid Visualization**: Interactive layer exploration, power flow monitoring
+- **Bio-Cochlea Visualization**: Interactive layer exploration, power flow monitoring
 - **Network Resonance**: Human-AUI connection topology and coherence metrics
 
 ### **Real-Time Simulations**
@@ -262,4 +262,4 @@ For questions, suggestions, or collaborations:
 
 > *"A golden ear to the world—listening, harmonizing, and thinking in tune."*
 
-**LunCoSim × Aurum Grid Interface** - Where lunar exploration meets cognitive enhancement.
+**LunCoSim × Bio-Cochlea Interface** - Where lunar exploration meets cognitive enhancement.
