@@ -5,6 +5,7 @@ signal existing_entity_selected(int)
 
 @onready var ui := %TargetUI
 @onready var ui_helper = get_node("/root/UIHelper")
+@onready var physio_network_bridge = $PhysioNetworkBridge
 
 var _ui
 var avatar: LCAvatar
@@ -239,3 +240,6 @@ func _on_visibility_changed():
 		var parent = get_parent()
 		if parent and parent.get_parent() and parent.get_parent().has_method("get_entities"):
 			call_deferred("update_entities", parent.get_parent().get_entities())
+
+func _on_PhysioNetworkBridgeButton_pressed():
+	physio_network_bridge.visible = !physio_network_bridge.visible

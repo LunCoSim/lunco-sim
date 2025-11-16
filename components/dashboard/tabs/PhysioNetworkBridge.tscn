@@ -1,0 +1,130 @@
+[gd_scene load_steps=2 format=3 uid="uid://dqe8v3j4n7w2k"]
+
+[ext_resource type="Script" path="res://components/dashboard/tabs/PhysioNetworkBridge.gd" id="1_t8j7k"]
+
+[node name="PhysioNetworkBridge" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_t8j7k")
+
+[node name="Timer" type="Timer" parent="."]
+autostart = true
+
+[node name="LoadingLabel" type="Label" parent="."]
+layout_mode = 0
+anchor_right = 1.0
+anchor_bottom = 1.0
+text = "Loading bridge..."
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="MainGrid" type="GridContainer" parent="."]
+layout_mode = 0
+anchor_right = 1.0
+anchor_bottom = 1.0
+columns = 3
+
+[node name="ChartCard" type="PanelContainer" parent="MainGrid"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_stretch_ratio = 2.0
+
+[node name="ChartVBox" type="VBoxContainer" parent="MainGrid/ChartCard"]
+layout_mode = 2
+
+[node name="ChartTitle" type="Label" parent="MainGrid/ChartCard/ChartVBox"]
+layout_mode = 2
+text = "HRV ↔ Network Coherence"
+
+[node name="Chart" type="Control" parent="MainGrid/ChartCard/ChartVBox"]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="Legend" type="VBoxContainer" parent="MainGrid/ChartCard/ChartVBox"]
+layout_mode = 2
+
+[node name="HRVLegend" type="HBoxContainer" parent="MainGrid/ChartCard/ChartVBox/Legend"]
+layout_mode = 2
+
+[node name="HRVColor" type="ColorRect" parent="MainGrid/ChartCard/ChartVBox/Legend/HRVLegend"]
+layout_mode = 2
+custom_minimum_size = Vector2(20, 20)
+color = Color(0.5, 0.5, 1, 1)
+
+[node name="HRVLabel" type="Label" parent="MainGrid/ChartCard/ChartVBox/Legend/HRVLegend"]
+layout_mode = 2
+text = "HRV (ms)"
+
+[node name="CoherenceLegend" type="HBoxContainer" parent="MainGrid/ChartCard/ChartVBox/Legend"]
+layout_mode = 2
+
+[node name="CoherenceColor" type="ColorRect" parent="MainGrid/ChartCard/ChartVBox/Legend/CoherenceLegend"]
+layout_mode = 2
+custom_minimum_size = Vector2(20, 20)
+color = Color(0.5, 1, 0.5, 1)
+
+[node name="CoherenceLabel" type="Label" parent="MainGrid/ChartCard/ChartVBox/Legend/CoherenceLegend"]
+layout_mode = 2
+text = "Coherence (%)"
+
+[node name="MetricsGrid" type="GridContainer" parent="MainGrid/ChartCard/ChartVBox"]
+layout_mode = 2
+columns = 2
+
+[node name="CorrelationLabel" type="Label" parent="MainGrid/ChartCard/ChartVBox/MetricsGrid"]
+layout_mode = 2
+text = "Correlation:"
+
+[node name="CorrelationValue" type="Label" parent="MainGrid/ChartCard/ChartVBox/MetricsGrid"]
+layout_mode = 2
+
+[node name="ImpactFactorLabel" type="Label" parent="MainGrid/ChartCard/ChartVBox/MetricsGrid"]
+layout_mode = 2
+text = "Impact Factor:"
+
+[node name="ImpactFactorValue" type="Label" parent="MainGrid/ChartCard/ChartVBox/MetricsGrid"]
+layout_mode = 2
+
+[node name="GaugeCard" type="PanelContainer" parent="MainGrid"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="GaugeVBox" type="VBoxContainer" parent="MainGrid/GaugeCard"]
+layout_mode = 2
+alignment = 1
+
+[node name="GaugeTitle" type="Label" parent="MainGrid/GaugeCard/GaugeVBox"]
+layout_mode = 2
+text = "Physio Impact"
+horizontal_alignment = 1
+
+[node name="Gauge" type="TextureProgressBar" parent="MainGrid/GaugeCard/GaugeVBox"]
+layout_mode = 2
+size_flags_horizontal = 4
+size_flags_vertical = 4
+max_value = 100.0
+step = 1.0
+value = 50.0
+fill_mode = 4
+
+[node name="HRVLabel" type="Label" parent="MainGrid/GaugeCard/GaugeVBox"]
+layout_mode = 2
+text = "HRV:"
+horizontal_alignment = 1
+
+[node name="HRVValue" type="Label" parent="MainGrid/GaugeCard/GaugeVBox"]
+layout_mode = 2
+horizontal_alignment = 1
+
+[node name="AvgCoherenceLabel" type="Label" parent="MainGrid/GaugeCard/GaugeVBox"]
+layout_mode = 2
+text = "Avg Coherence:"
+horizontal_alignment = 1
+
+[node name="AvgCoherenceValue" type="Label" parent="MainGrid/GaugeCard/GaugeVBox"]
+layout_mode = 2
+horizontal_alignment = 1
