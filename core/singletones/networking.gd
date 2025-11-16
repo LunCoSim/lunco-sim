@@ -21,7 +21,7 @@ func _ready():
 	Profile.profile_changed.connect(_on_profile_changed)
 	
 # Function to connect to a server
-func connect_to_server(ip: String="langrenus.lunco.space", port: int = 9000, tls: bool = true):
+func connect_to_server(ip: String="langrenus.lunco.space", port: int = 9000, tls: bool = false):
 	if not multiplayer.multiplayer_peer is WebSocketMultiplayerPeer:
 		peer = WebSocketMultiplayerPeer.new() # Already connected
 	else:
