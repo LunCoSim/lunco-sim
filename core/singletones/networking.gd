@@ -38,20 +38,39 @@ func setup_tls(cert_path: String, key_path: String) -> TLSOptions:
 		key_fs_path = ProjectSettings.globalize_path(key_path)
 		print("Converted key path: %s -> %s" % [key_path, key_fs_path])
 	
+	# Verify files exist before attempting to load
+	if not FileAccess.file_exists(cert_fs_path):
+		push_error("Certificate file does not exist: %s" % cert_fs_path)
+		return null
+	
+	if not FileAccess.file_exists(key_fs_path):
+		push_error("Private key file does not exist: %s" % key_fs_path)
+		return null
+	
+	print("Certificate file exists: %s" % cert_fs_path)
+	print("Private key file exists: %s" % key_fs_path)
+	
 	# Load certificate
+	print("Attempting to load certificate...")
 	var cert_error = cert.load(cert_fs_path)
 	if cert_error != OK:
-		push_error("Failed to load certificate from %s: %s" % [cert_fs_path, error_string(cert_error)])
+		push_error("Failed to load certificate from %s: Error code %d (%s)" % [cert_fs_path, cert_error, error_string(cert_error)])
 		return null
+	print("Certificate loaded successfully")
 	
 	# Load private key
+	print("Attempting to load private key...")
 	var key_error = key.load(key_fs_path)
 	if key_error != OK:
-		push_error("Failed to load key from %s: %s" % [key_fs_path, error_string(key_error)])
+		push_error("Failed to load key from %s: Error code %d (%s)" % [key_fs_path, key_error, error_string(key_error)])
 		return null
+	print("Private key loaded successfully")
 	
 	# Create TLS options for server
-	return TLSOptions.server(cert, key)
+	print("Creating TLS options...")
+	var tls_options = TLSOptions.server(cert, key)
+	print("TLS options created successfully")
+	return tls_options
 
 # Function to connect to a server with optional TLS
 func connect_to_server(ip: String = "langrenus.lunco.space", port: int = 9000, tls: bool = true):
