@@ -4,28 +4,68 @@
 
 set -e
 
-# Configuration
+# Configuration - modify these paths if your certificates are in different locations
 DOMAIN="langrenus.lunco.space"
 CERT_DIR=".cert"
 LETSENCRYPT_DIR="/etc/letsencrypt/live/${DOMAIN}"
 
+# Alternative: Direct paths (uncomment and modify if you have certificates in different locations)
+# NOTE: If you uncomment these, comment out the auto-detection section below
+# FULLCHAIN_SRC="/etc/letsencrypt/live/langrenus.lunco.space/fullchain.pem"
+# PRIVKEY_SRC="/etc/letsencrypt/live/langrenus.lunco.space/privkey.pem"
+
 echo "🔒 Setting up SSL certificates for LunCo server"
 echo "=============================================="
 echo "Domain: $DOMAIN"
-echo "Source: $LETSENCRYPT_DIR"
+echo "Source: Auto-detect Let's Encrypt or manual paths"
 echo "Destination: $CERT_DIR"
 echo ""
 
-# Check if Let's Encrypt certificates exist
-if [[ ! -f "$LETSENCRYPT_DIR/fullchain.pem" || ! -f "$LETSENCRYPT_DIR/privkey.pem" ]]; then
-    echo "❌ Let's Encrypt certificates not found!"
-    echo "Expected at: $LETSENCRYPT_DIR"
-    echo ""
-    echo "Make sure certificates exist. You can check with:"
-    echo "  sudo certbot certificates"
-    echo ""
-    echo "Or obtain new certificates:"
-    echo "  sudo certbot certonly --standalone -d $DOMAIN"
+# Check for certificates in different locations
+CERT_FOUND=false
+
+# First try: Standard Let's Encrypt location
+if [[ -f "$LETSENCRYPT_DIR/fullchain.pem" && -f "$LETSENCRYPT_DIR/privkey.pem" ]]; then
+    echo "✅ Found certificates in standard Let's Encrypt location"
+    FULLCHAIN_SRC="$LETSENCRYPT_DIR/fullchain.pem"
+    PRIVKEY_SRC="$LETSENCRYPT_DIR/privkey.pem"
+    CERT_FOUND=true
+fi
+
+# Alternative locations (uncomment the variables at the top if needed)
+if [[ -n "${FULLCHAIN_SRC:-}" && -n "${PRIVKEY_SRC:-}" ]]; then
+    if [[ -f "$FULLCHAIN_SRC" && -f "$PRIVKEY_SRC" ]]; then
+        echo "✅ Using manually specified certificate paths"
+        CERT_FOUND=true
+    fi
+fi
+
+# Manual placement: Check if user already placed files in .cert directory
+if [[ ! $CERT_FOUND && -f ".cert/fullchain.pem" && -f ".cert/privkey.pem" ]]; then
+    echo "✅ Found certificates already in .cert directory"
+    echo "Using existing certificates..."
+    CERT_FOUND=true
+fi
+
+if [[ ! $CERT_FOUND ]]; then
+    cat << 'EOF'
+❌ No certificates found!
+
+You can place certificates manually:
+  mkdir -p .cert
+  cp /path/to/your/fullchain.pem .cert/
+  cp /path/to/your/privkey.pem .cert/
+  sudo chown $USER:$USER .cert/*.pem
+  chmod 644 .cert/fullchain.pem
+  chmod 600 .cert/privkey.pem
+
+Or obtain new certificates:
+  sudo certbot certonly --standalone -d langrenus.lunco.space
+
+Or check existing certificates:
+  sudo certbot certificates
+
+EOF
     exit 1
 fi
 
@@ -36,20 +76,28 @@ mkdir -p "$CERT_DIR"
 # Copy certificates with proper permissions
 echo "📋 Copying certificates..."
 
-# Full certificate chain
-if sudo cp "$LETSENCRYPT_DIR/fullchain.pem" "$CERT_DIR/"; then
-    echo "✅ Copied fullchain.pem"
+# Only copy if source files exist and are different from destination
+if [[ "$FULLCHAIN_SRC" != "$CERT_DIR/fullchain.pem" ]]; then
+    echo "Copying from: $FULLCHAIN_SRC"
+    if sudo cp "$FULLCHAIN_SRC" "$CERT_DIR/"; then
+        echo "✅ Copied fullchain.pem"
+    else
+        echo "❌ Failed to copy fullchain.pem"
+        exit 1
+    fi
 else
-    echo "❌ Failed to copy fullchain.pem"
-    exit 1
+    echo "✅ fullchain.pem already in place"
 fi
 
-# Private key
-if sudo cp "$LETSENCRYPT_DIR/privkey.pem" "$CERT_DIR/"; then
-    echo "✅ Copied privkey.pem"
+if [[ "$PRIVKEY_SRC" != "$CERT_DIR/privkey.pem" ]]; then
+    if sudo cp "$PRIVKEY_SRC" "$CERT_DIR/"; then
+        echo "✅ Copied privkey.pem"
+    else
+        echo "❌ Failed to copy privkey.pem"
+        exit 1
+    fi
 else
-    echo "❌ Failed to copy privkey.pem"
-    exit 1
+    echo "✅ privkey.pem already in place"
 fi
 
 # Set proper ownership and permissions
