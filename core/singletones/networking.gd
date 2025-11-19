@@ -67,8 +67,10 @@ func setup_tls(cert_path: String, key_path: String) -> TLSOptions:
 	print("Private key loaded successfully")
 	
 	# Create TLS options for server
+	# NOTE: TLSOptions.server() signature is: server(key: CryptoKey, cert: X509Certificate)
+	# The key comes FIRST, then the certificate
 	print("Creating TLS options...")
-	var tls_options = TLSOptions.server(cert, key)
+	var tls_options = TLSOptions.server(key, cert)
 	print("TLS options created successfully")
 	return tls_options
 
@@ -116,17 +118,22 @@ func host(port: int = 9000, tls_cert_path: String = "", tls_key_path: String = "
 	
 	# Setup TLS if paths are provided
 	if tls_cert_path and tls_key_path:
+		print("Setting up TLS with cert: %s, key: %s" % [tls_cert_path, tls_key_path])
 		server_tls_options = setup_tls(tls_cert_path, tls_key_path)
 		if server_tls_options == null:
 			push_error("Failed to setup TLS, hosting without TLS")
+		else:
+			print("TLS options object created: %s" % server_tls_options)
 	
 	print("Hosting on port %d, TLS enabled: %s" % [port, server_tls_options != null])
+	print("About to call create_server with TLS options: %s" % server_tls_options)
 	
 	var error = peer.create_server(port, "*", server_tls_options)
 	if error != OK:
 		push_error("Failed to create server: %s" % error_string(error))
 		return
 	
+	print("Server created successfully, error code: %d" % error)
 	multiplayer.multiplayer_peer = peer
 
 #---------------------------------------------------
