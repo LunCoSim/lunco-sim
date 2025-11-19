@@ -25,16 +25,29 @@ func setup_tls(cert_path: String, key_path: String) -> TLSOptions:
 	var cert = X509Certificate.new()
 	var key = CryptoKey.new()
 	
+	# Convert res:// paths to filesystem paths
+	# X509Certificate.load() and CryptoKey.load() expect filesystem paths, not resource paths
+	var cert_fs_path = cert_path
+	var key_fs_path = key_path
+	
+	if cert_path.begins_with("res://"):
+		cert_fs_path = ProjectSettings.globalize_path(cert_path)
+		print("Converted certificate path: %s -> %s" % [cert_path, cert_fs_path])
+	
+	if key_path.begins_with("res://"):
+		key_fs_path = ProjectSettings.globalize_path(key_path)
+		print("Converted key path: %s -> %s" % [key_path, key_fs_path])
+	
 	# Load certificate
-	var cert_error = cert.load(cert_path)
+	var cert_error = cert.load(cert_fs_path)
 	if cert_error != OK:
-		push_error("Failed to load certificate from %s: %s" % [cert_path, error_string(cert_error)])
+		push_error("Failed to load certificate from %s: %s" % [cert_fs_path, error_string(cert_error)])
 		return null
 	
 	# Load private key
-	var key_error = key.load(key_path)
+	var key_error = key.load(key_fs_path)
 	if key_error != OK:
-		push_error("Failed to load key from %s: %s" % [key_path, error_string(key_error)])
+		push_error("Failed to load key from %s: %s" % [key_fs_path, error_string(key_error)])
 		return null
 	
 	# Create TLS options for server
