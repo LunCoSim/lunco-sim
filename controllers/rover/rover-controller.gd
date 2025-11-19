@@ -98,7 +98,11 @@ func _on_timer_timeout():
 
 # Processing physics for Rover controller
 func _physics_process(_delta: float):
-	# Process regardless of authority to ensure controls always work
+	# Only apply physics forces if we have authority
+	# Remote clients will receive synchronized position/velocity from MultiplayerSynchronizer
+	if not is_multiplayer_authority():
+		return
+		
 	if parent and parent is VehicleBody3D:
 		# Debug output (only occasionally to avoid spam)
 		debug_counter += 1
@@ -133,6 +137,7 @@ func _physics_process(_delta: float):
 		
 		# Apply slope compensation
 		apply_slope_compensation()
+
 
 # Add slope compensation to prevent flipping downhill
 func apply_slope_compensation():
