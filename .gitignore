@@ -10,3 +10,6 @@ addons/panku_console/
 
 #webrtc addon. Probably later could be managed by gd-plug
 webrtc/
+
+# SSL certificates (security)
+.cert/
