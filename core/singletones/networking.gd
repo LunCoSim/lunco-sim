@@ -41,12 +41,19 @@ func setup_tls(cert_path: String, key_path: String) -> TLSOptions:
 	return TLSOptions.server(cert, key)
 
 # Function to connect to a server with optional TLS
-func connect_to_server(ip: String = "langrenus.lunco.space", port: int = 9000, tls: bool = false):
+func connect_to_server(ip: String = "langrenus.lunco.space", port: int = 9000, tls: bool = true):
 	if multiplayer.multiplayer_peer is WebSocketMultiplayerPeer:
 		print("Already connected to a server")
 		return
 
 	peer = WebSocketMultiplayerPeer.new()
+
+	# Automatically disable TLS for localhost connections
+	# SSL certificates don't work with IP addresses, only domain names
+	var is_localhost = ip in ["localhost", "127.0.0.1", "::1"]
+	if is_localhost and tls:
+		print("Localhost detected (%s), disabling TLS (using ws:// instead of wss://)" % ip)
+		tls = false
 
 	var protocol = "wss://" if tls else "ws://"
 	var connection_string = "%s%s:%d" % [protocol, ip, port]
@@ -130,8 +137,27 @@ func on_peer_disconnected(id):
 # Function called when connection to server failed
 func on_server_connection_failed():
 	print("on_server_connection_failed")
+
 	if peer:
 		print("Handshake headers: ", peer.handshake_headers)
+
+		# Get underlying connection status for more details
+		var status = peer.get_connection_status()
+		print("Peer connection status: ", status)
+
+		# Check if there were any specific WebSocket errors
+		if peer.has_method("get_requested_url"):
+			print("Requested URL: ", peer.get_requested_url())
+
+		# Show supported sub-protocols if any
+		if peer.has_method("get_supported_protocols"):
+			print("Supported protocols: ", peer.get_supported_protocols())
+
+	print("Possible causes:")
+	print("- Server not running on port 9000")
+	print("- SSL/TLS certificate issues (check server logs)")
+	print("- Network firewall blocking connection")
+	print("- Incorrect URL or port")
 	
 # Function called when successfully connected to server.
 func on_server_connected():
