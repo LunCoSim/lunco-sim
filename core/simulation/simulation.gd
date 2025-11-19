@@ -50,18 +50,14 @@ func _ready():
 	#-----------------------------
 	if "--server" in OS.get_cmdline_args():
 		print("Server running")
-		
+
 		if use_ssl:
-			var tls_cert := X509Certificate.new()
-			var tls_key := CryptoKey.new()
-	
-			
-			#0 - no error
-			print("Loading Cert: ", tls_cert.load(certificate_path))
-			print("Loading key: ", tls_key.load(key_path))
-			var tls_options = TLSOptions.server(tls_key, tls_cert)
-			LCNet.host(9000, tls_options)
+			print("Starting secure server with SSL certificates:")
+			print("Certificate: ", certificate_path)
+			print("Private Key: ", key_path)
+			LCNet.host(9000, certificate_path, key_path)
 		else:
+			print("Starting server without SSL")
 			LCNet.host()
 
 	elif "--connect" in OS.get_cmdline_args():
