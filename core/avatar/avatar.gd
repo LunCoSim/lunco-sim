@@ -5,8 +5,6 @@ extends LCSpaceSystem
 
 #-------------------------------
 # Declaring signals
-signal create(path_to_scene)
-
 signal spawn_entity(entity, position)
 
 signal target_changed(target)
