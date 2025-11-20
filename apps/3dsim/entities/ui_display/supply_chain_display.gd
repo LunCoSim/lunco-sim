@@ -11,7 +11,7 @@ var is_dragging = false
 var mouse_button_pressed = false
 var mouse_over_display = false
 var has_keyboard_focus = false
-var is_visible = true
+var is_display_visible = true
 
 func _ready():
 	# Add to group for easy identification
@@ -198,7 +198,7 @@ func _handle_mouse_motion(mouse_position):
 
 # New function to handle keyboard input from avatar
 func receive_keyboard_input(event: InputEvent) -> bool:
-	if not input_enabled or not is_visible:
+	if not input_enabled or not is_display_visible:
 		return false
 		
 	if event is InputEventKey:
@@ -222,7 +222,7 @@ func receive_keyboard_input(event: InputEvent) -> bool:
 
 # New function to handle mouse input from avatar
 func receive_mouse_input(event: InputEvent) -> bool:
-	if not input_enabled or not is_visible:
+	if not input_enabled or not is_display_visible:
 		return false
 		
 	if event is InputEventMouseButton:
@@ -302,10 +302,10 @@ func receive_mouse_input(event: InputEvent) -> bool:
 
 # Toggle visibility of the display
 func toggle_display():
-	is_visible = !is_visible
-	visible = is_visible
-	input_enabled = is_visible
-	
+	is_display_visible = !is_display_visible
+	visible = is_display_visible
+	input_enabled = is_display_visible
+
 	# Reset keyboard focus when hiding
-	if !is_visible:
-		has_keyboard_focus = false 
+	if !is_display_visible:
+		has_keyboard_focus = false
