@@ -18,15 +18,37 @@ if [ $# -ne 1 ]; then
 fi
 
 GODOT_VERSION="$1"
-TAG="${GODOT_VERSION}-stable"
+
+# Parse version and flavor from the input
+# Examples: 4.3, 4.6.dev4, 4.5.beta2, 4.4.rc1
+if [[ "$GODOT_VERSION" =~ ^([0-9]+\.[0-9]+)\.?(dev|beta|rc)?([0-9]+)?$ ]]; then
+    BASE_VERSION="${BASH_REMATCH[1]}"
+    FLAVOR="${BASH_REMATCH[2]}"
+    FLAVOR_NUM="${BASH_REMATCH[3]}"
+    
+    if [ -n "$FLAVOR" ]; then
+        # Dev/beta/rc version
+        FLAVOR_PARAM="${FLAVOR}${FLAVOR_NUM}"
+        VERSION_SUFFIX="${BASE_VERSION}.${FLAVOR_PARAM}"
+    else
+        # Stable version
+        FLAVOR_PARAM="stable"
+        VERSION_SUFFIX="${BASE_VERSION}.stable"
+    fi
+else
+    echo "✗ Error: Invalid version format: ${GODOT_VERSION}"
+    echo "  Expected format: X.Y or X.Y.devN or X.Y.betaN or X.Y.rcN"
+    echo "  Examples: 4.3, 4.6.dev4, 4.5.beta2, 4.4.rc1"
+    exit 1
+fi
 
 # Official Godot export templates download URL
 # This TPZ file contains both release and debug templates for all platforms
-TEMPLATES_URL="https://github.com/godotengine/godot-builds/releases/download/${TAG}/Godot_v${TAG}_export_templates.tpz"
-OUTPUT_FILE="Godot_v${TAG}_export_templates.tpz"
+TEMPLATES_URL="https://downloads.godotengine.org/?version=${BASE_VERSION}&flavor=${FLAVOR_PARAM}&slug=export_templates.tpz&platform=templates"
+OUTPUT_FILE="godot_${VERSION_SUFFIX}_export_templates.tpz"
 
 # Godot expects templates in this directory structure
-TEMPLATES_DIR="${HOME}/.local/share/godot/export_templates/${GODOT_VERSION}.stable"
+TEMPLATES_DIR="${HOME}/.local/share/godot/export_templates/${VERSION_SUFFIX}"
 
 echo "=========================================="
 echo "Godot Export Templates Installer"
