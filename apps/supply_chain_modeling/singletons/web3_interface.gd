@@ -7,7 +7,7 @@ signal nft_minted(token_id: int)
 signal nft_load_complete(data: Dictionary)
 
 var connected_address: String = ""
-var is_connected: bool = false
+var is_wallet_connected_state: bool = false
 
 var js_interface
 
@@ -110,7 +110,7 @@ func _initialize_web3():
 	""")
 
 func connect_wallet() -> void:
-	if is_connected:
+	if is_wallet_connected_state:
 		push_warning("Wallet already connected")
 		return
 
@@ -119,26 +119,26 @@ func connect_wallet() -> void:
 	var result = await js_interface.connectWallet()
 	if result.success:
 		connected_address = result.address
-		is_connected = true
+		is_wallet_connected_state = true
 		emit_signal("wallet_connected", connected_address)
 	else:
 		push_error("Failed to connect wallet: " + str(result.error))
 
 func disconnect_wallet() -> void:
-	if !is_connected:
+	if !is_wallet_connected_state:
 		push_warning("No wallet connected")
 		return
 		
 	# Implement your wallet disconnection logic here
 	connected_address = ""
-	is_connected = false
+	is_wallet_connected_state = false
 	emit_signal("wallet_disconnected")
 
 func get_connected_address() -> String:
 	return connected_address
 
 func is_wallet_connected() -> bool:
-	return is_connected
+	return is_wallet_connected_state
 
 # Function to mint a new blueprint NFT
 func mint_blueprint(graph_data: String, contract_address: String):
