@@ -794,13 +794,13 @@ class ModelicaParser extends SyntaxParser:
 			
 		return left
 		
-	# Parse atomic expressions and highest precedence operations
 	func _parse_factor() -> ModelicaNode:
 		print("Parsing factor: " + str(current_token.value if current_token else "null"))
 		var start_loc = get_token_location(current_token)
+		var error_msg: String
 		
 		if not current_token:
-			var error_msg = "Unexpected end of input in expression"
+			error_msg = "Unexpected end of input in expression"
 			print("Error: " + error_msg)
 			return ModelicaNode.new(NodeTypes.ERROR, error_msg, start_loc)
 		
@@ -809,7 +809,7 @@ class ModelicaParser extends SyntaxParser:
 			(current_token.type == LexerImpl.TokenType.PUNCTUATION and current_token.value == ";") or 
 			(current_token.type == LexerImpl.TokenType.OPERATOR and current_token.value == ";")
 		):
-			var error_msg = "Unexpected semicolon in expression"
+			error_msg = "Unexpected semicolon in expression"
 			print("Error: " + error_msg)
 			_advance()  # Consume the semicolon to prevent infinite loops
 			return ModelicaNode.new(NodeTypes.ERROR, error_msg, start_loc)
@@ -820,7 +820,7 @@ class ModelicaParser extends SyntaxParser:
 			_advance()
 			
 		if not current_token:
-			var error_msg = "Unexpected end of input after whitespace/comment in expression"
+			error_msg = "Unexpected end of input after whitespace/comment in expression"
 			print("Error: " + error_msg)
 			return ModelicaNode.new(NodeTypes.ERROR, error_msg, start_loc)
 		
@@ -864,7 +864,7 @@ class ModelicaParser extends SyntaxParser:
 					elif current_token and current_token.value == ")":
 						break  # End of arguments
 					else:
-						var error_msg = "Expected ',' or ')' in function call arguments"
+						error_msg = "Expected ',' or ')' in function call arguments"
 						print("Error: " + error_msg)
 						func_node.add_error(error_msg, "syntax_error")
 						break
@@ -873,7 +873,7 @@ class ModelicaParser extends SyntaxParser:
 				if current_token and current_token.value == ")":
 					_advance()  # Consume closing parenthesis
 				else:
-					var error_msg = "Expected ')' in function call"
+					error_msg = "Expected ')' in function call"
 					print("Error: " + error_msg)
 					func_node.add_error(error_msg, "syntax_error")
 				
@@ -895,7 +895,7 @@ class ModelicaParser extends SyntaxParser:
 			
 			# Expect opening parenthesis
 			if not current_token or current_token.value != "(":
-				var error_msg = "Expected '(' after 'der'"
+				error_msg = "Expected '(' after 'der'"
 				print("Error: " + error_msg)
 				return ModelicaNode.new(NodeTypes.ERROR, error_msg, start_loc)
 			
@@ -904,7 +904,7 @@ class ModelicaParser extends SyntaxParser:
 			# Parse variable inside der()
 			var var_expr = _parse_expression()
 			if not var_expr:
-				var error_msg = "Expected expression inside der()"
+				error_msg = "Expected expression inside der()"
 				print("Error: " + error_msg)
 				return ModelicaNode.new(NodeTypes.ERROR, error_msg, start_loc)
 			
@@ -914,7 +914,7 @@ class ModelicaParser extends SyntaxParser:
 			
 			# Expect closing parenthesis
 			if not current_token or current_token.value != ")":
-				var error_msg = "Expected ')' after der function argument"
+				error_msg = "Expected ')' after der function argument"
 				print("Error: " + error_msg)
 				der_node.add_error(error_msg, "syntax_error")
 				return der_node
@@ -931,7 +931,7 @@ class ModelicaParser extends SyntaxParser:
 					_advance()  # Consume closing parenthesis
 					return expr
 				else:
-					var error_msg = "Expected ')' in parenthesized expression"
+					error_msg = "Expected ')' in parenthesized expression"
 					print("Error: " + error_msg)
 					if expr:
 						expr.add_error(error_msg, "syntax_error")
@@ -946,7 +946,7 @@ class ModelicaParser extends SyntaxParser:
 				
 				var expr = _parse_factor()
 				if not expr:
-					var error_msg = "Expected expression after unary " + op
+					error_msg = "Expected expression after unary " + op
 					print("Error: " + error_msg)
 					return ModelicaNode.new(NodeTypes.ERROR, error_msg, start_loc)
 				
@@ -955,7 +955,7 @@ class ModelicaParser extends SyntaxParser:
 				return op_node
 		
 		# If we get here, we couldn't parse the expression
-		var error_msg = "Unexpected token in expression: " + str(current_token.type) + " - " + current_token.value
+		error_msg = "Unexpected token in expression: " + str(current_token.type) + " - " + current_token.value
 		print("Error: " + error_msg)
 		return ModelicaNode.new(NodeTypes.ERROR, error_msg, start_loc)
 
