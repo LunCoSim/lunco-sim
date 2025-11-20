@@ -9,10 +9,10 @@
 [ext_resource type="Script" uid="uid://b2u28srar01oq" path="res://apps/3dsim/entities/ui_display/display_controller.gd" id="7_ukwid"]
 [ext_resource type="PackedScene" uid="uid://dpebcdtj4q5wq" path="res://apps/3dsim/entities/ui_display/modelica_display.tscn" id="8_mwx56"]
 
-[node name="Simulation" node_paths=PackedStringArray("spawn_node") instance=ExtResource("1_dpa21")]
+[node name="Simulation2" unique_id=701308856 node_paths=PackedStringArray("spawn_node") instance=ExtResource("1_dpa21")]
 spawn_node = NodePath("Universe/Sun/Earth/Moon/LangrenusCraterMap/Spawner")
 
-[node name="Universe_Sun_Earth_Moon_LangrenusCraterMap_Content#LaunchPad" type="Node3D" parent="." index="0"]
+[node name="Universe_Sun_Earth_Moon_LangrenusCraterMap_Content#LaunchPad" type="Node3D" parent="." index="0" unique_id=2077097449]
 transform = Transform3D(107.71, 0, 22.3273, 0, 110, 0, -22.3273, 0, 107.71, 156.754, -87.3701, -339.067)
 
 [node name="Avatar" parent="." index="1"]
@@ -22,25 +22,25 @@ transform = Transform3D(-0.82255, -0.00837469, 0.568631, 0.00348538, 0.999798, 0
 _spawnable_scenes = PackedStringArray("uid://dyfxw33dhjjrw", "uid://db37rii8injqd", "uid://baunvflaucrbn", "uid://exet76y0islr", "uid://dxepfetvn7y3c")
 spawn_path = NodePath("../Universe/Sun/Earth/Moon/LangrenusCraterMap/Spawner")
 
-[node name="iVoyager" type="Node" parent="." index="3"]
+[node name="iVoyager" type="Node" parent="." index="3" unique_id=1047562450]
 
-[node name="DisplayController" type="Node" parent="." index="4"]
+[node name="DisplayController" type="Node" parent="." index="4" unique_id=1036454674]
 script = ExtResource("7_ukwid")
 
-[node name="Sun" parent="Universe" index="1" instance=ExtResource("2_lwo2e")]
+[node name="Sun" parent="Universe" index="1" unique_id=1574882939 instance=ExtResource("2_lwo2e")]
 
-[node name="Earth" parent="Universe/Sun" index="1" instance=ExtResource("3_2elmi")]
+[node name="Earth" parent="Universe/Sun" index="1" unique_id=1530454073 instance=ExtResource("3_2elmi")]
 
-[node name="Moon" parent="Universe/Sun/Earth" index="0" instance=ExtResource("4_p5lxe")]
+[node name="Moon" parent="Universe/Sun/Earth" index="0" unique_id=311595451 instance=ExtResource("4_p5lxe")]
 
-[node name="LangrenusCraterMap" parent="Universe/Sun/Earth/Moon" index="0" instance=ExtResource("5_2uqv4")]
+[node name="LangrenusCraterMap" parent="Universe/Sun/Earth/Moon" index="0" unique_id=1649360909 instance=ExtResource("5_2uqv4")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 51, 0)
 
-[node name="Spawner" type="Node3D" parent="Universe/Sun/Earth/Moon/LangrenusCraterMap" index="1"]
+[node name="Spawner" type="Node3D" parent="Universe/Sun/Earth/Moon/LangrenusCraterMap" index="1" unique_id=1601683693]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -55.4874, 0)
 
-[node name="SupplyChainDisplay" parent="Universe/Sun/Earth/Moon/LangrenusCraterMap" index="2" instance=ExtResource("6_rsdku")]
+[node name="SupplyChainDisplay" parent="Universe/Sun/Earth/Moon/LangrenusCraterMap" index="2" unique_id=326787907 instance=ExtResource("6_rsdku")]
 transform = Transform3D(1, 0, 0, 0, 0.96025, -0.279142, 0, 0.279142, 0.96025, -49.846, 48.2416, -86.9162)
 
-[node name="ModelicaDisplay" parent="Universe/Sun/Earth/Moon/LangrenusCraterMap" index="3" instance=ExtResource("8_mwx56")]
+[node name="ModelicaDisplay" parent="Universe/Sun/Earth/Moon/LangrenusCraterMap" index="3" unique_id=1486978284 instance=ExtResource("8_mwx56")]
 transform = Transform3D(1, 0, 0, 0, 0.96025, -0.279142, 0, 0.279142, 0.96025, 9.29662, 48.2416, -86.9162)
