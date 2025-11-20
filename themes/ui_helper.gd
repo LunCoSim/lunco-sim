@@ -33,7 +33,7 @@ const ENTITY_BUTTON_TEXT_MAX_LENGTH = 10
 
 # Apply consistent window settings
 func setup_window(window: Window) -> void:
-	window.initial_position = 2  # Center of screen
+	window.initial_position = Window.WINDOW_INITIAL_POSITION_CENTER_PRIMARY_SCREEN
 	window.min_size = Vector2i(WINDOW_MIN_WIDTH, 0)
 	window.size = Vector2i(WINDOW_DEFAULT_WIDTH, WINDOW_DEFAULT_HEIGHT)
 	window.borderless = true
