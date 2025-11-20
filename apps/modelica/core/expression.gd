@@ -191,17 +191,17 @@ func _to_string() -> String:
 	return "UnknownExpression"
 
 # Static helpers to create different types of expressions
-static func create_constant(value: float) -> ModelicaExpression:
-	return ModelicaExpression.new(ExpressionType.CONSTANT, value)
+static func create_constant(constant_value: float) -> ModelicaExpression:
+	return ModelicaExpression.new(ExpressionType.CONSTANT, constant_value)
 
-static func create_variable(name: String) -> ModelicaExpression:
-	return ModelicaExpression.new(ExpressionType.VARIABLE, name)
+static func create_variable(var_name: String) -> ModelicaExpression:
+	return ModelicaExpression.new(ExpressionType.VARIABLE, var_name)
 
 static func create_operator(op: String, args: Array) -> ModelicaExpression:
 	return ModelicaExpression.new(ExpressionType.OPERATOR, op, args)
 
-static func create_function(name: String, args: Array) -> ModelicaExpression:
-	return ModelicaExpression.new(ExpressionType.FUNCTION, name, args)
+static func create_function(func_name: String, args: Array) -> ModelicaExpression:
+	return ModelicaExpression.new(ExpressionType.FUNCTION, func_name, args)
 
 static func create_derivative(var_name: String) -> ModelicaExpression:
 	var var_expr = create_variable(var_name)
