@@ -43,10 +43,12 @@ func _physics_process(_delta):
 func throttle(_thrust: bool):
 	if _thrust:
 		thrust = THRUST
-		parent._on_spacecraft_controller_thrusted(true)     
+		parent._on_spacecraft_controller_thrusted(true)   
+		thrusted.emit(true)
 	else:
 		thrust = 0
 		parent._on_spacecraft_controller_thrusted(false)
+		thrusted.emit(false)
 		
 func change_orientation(_torque: Vector3):
 	torque = _torque
