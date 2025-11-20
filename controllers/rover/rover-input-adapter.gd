@@ -9,26 +9,9 @@ extends Node
 @export var INPUT_DEADZONE := 0.1
 
 func _ready():
-	# Create a timer to periodically check and report the state
-	var timer = Timer.new()
-	timer.wait_time = 2.0
-	timer.one_shot = false
-	timer.autostart = true
-	timer.connect("timeout", Callable(self, "_on_timer_timeout"))
-	add_child(timer)
+	pass
 
-func _on_timer_timeout():
-	var _target = target
-	
-	# Check target validity
-	if not target:
-		return
-		
-	if target is LCAvatar:
-		_target = target.target
-	
-	if not (_target is LCRoverController):
-		return
+
 
 func _input(_event):
 	# Only process inputs if we have a target
@@ -65,8 +48,4 @@ func _input(_event):
 			_target.set_steering(steering_input * STEERING_SENSITIVITY)
 		
 		if _target.has_method("set_brake"):
-			_target.set_brake(brake_input)
-		
-		# Print debug info - only for key presses to reduce spam
-		if _event is InputEventKey and _event.pressed and not _event.echo:
-			print("RoverInputAdapter: Input sent to ", _target.name) 
+			_target.set_brake(brake_input) 

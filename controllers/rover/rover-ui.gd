@@ -15,7 +15,6 @@ func set_target(_target):
 		target.speed_changed.connect(_on_speed_changed)
 		target.steering_changed.connect(_on_steering_changed)
 		target.motor_state_changed.connect(_on_motor_changed)
-		print("RoverUI: Connected to rover controller")
 	else:
 		push_warning("RoverUI: Target is not a rover controller")
 
