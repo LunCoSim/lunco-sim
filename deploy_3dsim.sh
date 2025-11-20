@@ -31,18 +31,22 @@ echo "=== Starting 3D Sim deployment ==="
 echo "Using Godot executable: $GODOT_PATH"
 echo "Build type: $BUILD_TYPE"
 
-# Step 1: Build the 3D sim
+# Step 1: Create build directory
+echo "Creating build directory..."
+mkdir -p build/3dsim
+
+# Step 2: Build the 3D sim
 echo "Building 3D sim..."
 "$GODOT_PATH" $EXPORT_FLAG --headless "Web_3DSim" build/3dsim/index.html
 
-# Step 2: Compress index.pck and index.wasm with maximum gzip compression
+# Step 3: Compress index.pck and index.wasm with maximum gzip compression
 echo "Compressing index.pck..."
 gzip -9f build/3dsim/index.pck
 
 echo "Compressing index.wasm..."
 gzip -9f build/3dsim/index.wasm
 
-# Step 3: Copy everything to /var/www/html
+# Step 4: Copy everything to /var/www/html
 echo "Copying files to /var/www/html..."
 sudo cp -r build/3dsim/* /var/www/html/
 
