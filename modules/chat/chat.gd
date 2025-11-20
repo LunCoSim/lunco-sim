@@ -7,7 +7,6 @@ extends Node
 signal new_message(message: Message)
 signal private_message(message: Message)
 signal system_message(message: Message)
-signal profile_wallet_changed  # Moved from messenger
 #------------------------------------------
 
 enum MessageType {

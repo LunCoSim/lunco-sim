@@ -9,7 +9,7 @@ func _ready():
 	$MarginContainer/ScrollContainer/MainContent/Version.text = "v" + str(ProjectSettings.get_setting("application/config/version"))
 	on_reload_profile()
 	
-	Chat.profile_wallet_changed.connect(on_reload_profile)
+	Profile.profile_changed.connect(on_reload_profile)
 
 func on_reload_profile():
 	%Username.text = Profile.username

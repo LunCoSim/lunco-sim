@@ -42,8 +42,6 @@ func set_wallet(new_wallet):
 	if wallet != new_wallet:
 		wallet = new_wallet
 		save_profile()
-		if Chat:
-			Chat.profile_wallet_changed.emit()
 		profile_changed.emit()
 
 func set_has_profile(_has_profile):
