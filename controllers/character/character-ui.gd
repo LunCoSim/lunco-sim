@@ -34,12 +34,12 @@ func update_stats():
 	if target and is_instance_valid(target):
 		# Get character velocity and position
 		var velocity = target.get_linear_velocity() if target.has_method("get_linear_velocity") else Vector3.ZERO
-		var position = target.get_position() if target.has_method("get_position") else Vector3.ZERO
+		var target_position = target.get_position() if target.has_method("get_position") else Vector3.ZERO
 		var speed = velocity.length()
 		
 		# Update UI elements
 		%SpeedValue.text = "%.2f m/s" % speed
-		%PosValue.text = "%.1f, %.1f, %.1f" % [position.x, position.y, position.z]
+		%PosValue.text = "%.1f, %.1f, %.1f" % [target_position.x, target_position.y, target_position.z]
 		%GravValue.text = "1.625 m/s²"  # Moon gravity constant
 
 func _on_close_requested():
