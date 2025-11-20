@@ -202,10 +202,10 @@ func _on_area_3d_input_event(camera, event, position, normal, shape_idx):
 		_handle_mouse_motion(position)
 
 # Handle mouse motion events
-func _handle_mouse_motion(position):
+func _handle_mouse_motion(mouse_position):
 	var viewport_size = $SubViewport.size
 	var mesh_size = Vector2(40, 30)
-	var local_position = position - global_position
+	var local_position = mouse_position - global_position
 	var local_2d_position = Vector2(
 		(local_position.x / mesh_size.x + 0.5), 
 		(0.5 - local_position.y / mesh_size.y)

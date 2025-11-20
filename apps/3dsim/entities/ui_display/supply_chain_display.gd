@@ -111,7 +111,7 @@ func _on_mouse_exited():
 	mouse_over_display = false
 
 # Handle 3D area input and translate to 2D viewport input
-func _on_area_3d_input_event(camera, event, position, normal, shape_idx):
+func _on_area_3d_input_event(camera, event, mouse_position, normal, shape_idx):
 	if not input_enabled:
 		return
 	
@@ -133,7 +133,7 @@ func _on_area_3d_input_event(camera, event, position, normal, shape_idx):
 		var mesh_size = Vector2(40, 30)  # Size of our quad mesh - 10x LARGER
 		
 		# Calculate normalized position on the mesh (0-1)
-		var local_position = position - global_position
+		var local_position = mouse_position - global_position
 		var local_2d_position = Vector2(
 			(local_position.x / mesh_size.x + 0.5), 
 			(0.5 - local_position.y / mesh_size.y)
@@ -168,10 +168,10 @@ func _on_area_3d_input_event(camera, event, position, normal, shape_idx):
 		_handle_mouse_motion(position)
 
 # Handle mouse motion events
-func _handle_mouse_motion(position):
+func _handle_mouse_motion(mouse_position):
 	var viewport_size = $SubViewport.size
 	var mesh_size = Vector2(40, 30) # 10x LARGER size
-	var local_position = position - global_position
+	var local_position = mouse_position - global_position
 	var local_2d_position = Vector2(
 		(local_position.x / mesh_size.x + 0.5), 
 		(0.5 - local_position.y / mesh_size.y)
