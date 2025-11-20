@@ -6,7 +6,7 @@ signal existing_entity_selected(int)
 @onready var ui := %TargetUI
 @onready var ui_helper = get_node("/root/UIHelper")
 
-var _ui
+var controller_ui: Node
 var avatar: LCAvatar
 # Called when the node enters the scene tree for the first time.
 func _ready():
@@ -59,17 +59,18 @@ func _ready():
 	# Add this line to update the user list when the scene is ready
 	_on_update_connected_users()
 
+# Function display_controller_ui clears the ui and displays the controller UI
+func display_controller_ui(new_controller_ui: Node = null):
+	clear_ui()
+	if new_controller_ui and ui:
+		ui.add_child(new_controller_ui)
+
 # Called every frame. 'delta' is the elapsed time since the previous frame.
 func _process(delta):
 	pass
 
 
-# Function set_ui clears the ui and sets target if ui exists
-func set_ui(_ui=null):
-	clear_ui()
-	if(_ui and ui):
-		ui.add_child(_ui)
-		
+
 
 # Function clear_ui removes child items if ui exists	
 func clear_ui():
@@ -81,17 +82,17 @@ func set_target(target):
 	clear_ui()
 	
 	if target is LCCharacterController:
-		_ui = load("res://controllers/character/character-ui.tscn").instantiate()
+		controller_ui = load("res://controllers/character/character-ui.tscn").instantiate()
 	elif target is LCSpacecraftController:
-		_ui = load("res://controllers/spacecraft/spacecraft-ui.tscn").instantiate()
+		controller_ui = load("res://controllers/spacecraft/spacecraft-ui.tscn").instantiate()
 	elif target is LCRoverController:
-		_ui = load("res://controllers/rover/rover-ui.tscn").instantiate()
+		controller_ui = load("res://controllers/rover/rover-ui.tscn").instantiate()
 	elif target is LCOperatorController:
-		_ui = load("res://controllers/operator/operator-ui.tscn").instantiate()
+		controller_ui = load("res://controllers/operator/operator-ui.tscn").instantiate()
 
-	if _ui:
-		_ui.set_target(target) #controller specific function
-	set_ui(_ui)
+	if controller_ui:
+		controller_ui.set_target(target) #controller specific function
+	display_controller_ui(controller_ui)
 	
 	# Only update entities if we're attached to the parent properly
 	var parent = get_parent()
