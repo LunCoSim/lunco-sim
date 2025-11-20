@@ -102,22 +102,22 @@ var active_popup: Control = null
 
 # Modify the spawn_nft_sphere function to use RPC
 @rpc("any_peer", "call_local")
-func spawn_nft_sphere(nft_data: Dictionary, position: Vector3):
+func spawn_nft_sphere(nft_data: Dictionary, spawn_position: Vector3):
 	var nft_sphere = NFT_SPHERE_SCENE.instantiate()
 	nft_sphere.set_nft_data(nft_data)
 	%Universe.add_child(nft_sphere)
-	nft_sphere.global_transform.origin = position + Vector3(0, 1, 0)  # Offset slightly above the ground
+	nft_sphere.global_transform.origin = spawn_position + Vector3(0, 1, 0)  # Offset slightly above the ground
 	print("Spawned NFT sphere at position: ", nft_sphere.global_transform.origin)
 	print("NFT data set: ", nft_data)  # Debug print
 
 # Modify the _on_nft_issued function to use RPC
-func _on_nft_issued(nft_data, position: Vector3):
+func _on_nft_issued(nft_data, spawn_position: Vector3):
 	print("NFT issued with data: ", nft_data)  # Debug print
 	if multiplayer.is_server():
-		spawn_nft_sphere.rpc(nft_data, position)
+		spawn_nft_sphere.rpc(nft_data, spawn_position)
 	else:
 		# Send to server for validation and distribution
-		spawn_nft_sphere.rpc_id(1, nft_data, position)
+		spawn_nft_sphere.rpc_id(1, nft_data, spawn_position)
 	active_popup.queue_free()
 	active_popup = null  # Clear the active popup reference
 
@@ -152,11 +152,11 @@ func do_raycast_nft(from: Vector3, to: Vector3):
 	return space_state.intersect_ray(query)
 
 # Add these new functions
-func show_nft_popup(position: Vector3):
+func show_nft_popup(spawn_position: Vector3):
 	active_popup = POPUP_SCENE.instantiate()
 	add_child(active_popup)
 
-	active_popup.connect("nft_issued", Callable(self, "_on_nft_issued").bind(position))
+	active_popup.connect("nft_issued", Callable(self, "_on_nft_issued").bind(spawn_position))
 	active_popup.connect("tree_exited", Callable(self, "_on_popup_closed"))
 
 func _on_popup_closed():
@@ -374,11 +374,11 @@ func camera_global_position():
 
 var controlled_entities = []
 
-func _on_select_entity_to_spawn(entity_id=0, position=null):
+func _on_select_entity_to_spawn(entity_id=0, spawn_position=null):
 	if is_multiplayer_authority():
-		get_parent().spawn.rpc_id(1, entity_id, position)
+		get_parent().spawn.rpc_id(1, entity_id, spawn_position)
 	else:
-		get_parent().spawn.rpc_id(1, entity_id, position)
+		get_parent().spawn.rpc_id(1, entity_id, spawn_position)
 
 func _on_existing_entity_selected(idx):
 	print("Avatar: Requesting control for entity index: ", idx)
