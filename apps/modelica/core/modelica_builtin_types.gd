@@ -2,7 +2,7 @@
 extends RefCounted
 class_name ModelicaBuiltinTypes
 
-const ModelicaTypeClass = preload("res://apps/modelica/core/modelica_type.gd")
+
 
 # Dictionary to store all built-in types
 static var _types: Dictionary = {}

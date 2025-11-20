@@ -7,7 +7,7 @@ const ModelicaNode = preload("res://apps/modelica/core/ast_node.gd")
 
 # Forward declare the node types for reference
 const NodeTypes = preload("res://apps/modelica/core/ast_node.gd").NodeType
-const ModelicaTypeClass = preload("res://apps/modelica/core/modelica_type.gd")
+
 
 # Helper function to parse a file directly
 func parse_file(file_path: String) -> ModelicaNode:

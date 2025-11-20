@@ -3,11 +3,7 @@ extends RefCounted
 # Import Modelica core components
 const PackageManager = preload("res://apps/modelica/core/package_manager.gd")
 const Parser = preload("res://apps/modelica/core/parser.gd")
-const SolverFactory = preload("res://apps/modelica/core/solver_factory.gd")
-const EquationSystem = preload("res://apps/modelica/core/equation_system.gd")
-const ModelicaEquation = preload("res://apps/modelica/core/equation.gd")
-const ModelicaExpression = preload("res://apps/modelica/core/expression.gd")
-const ModelicaASTNode = preload("res://apps/modelica/core/ast_node.gd")
+
 
 # Signals for UI integration
 signal simulation_progress(percent)
