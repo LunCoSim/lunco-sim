@@ -5,10 +5,6 @@ func _ready():
 	Chat.new_message.connect(_on_new_message)
 
 
-# Called every frame. 'delta' is the elapsed time since the previous frame.
-func _process(delta):
-	pass
-
 func _on_new_message(message):
 	var text = message.sender_name + ": " + message.text
 	
