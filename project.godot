@@ -23,7 +23,6 @@ config/icon="res://assets/logos/logo.svg"
 
 StateManager="*res://core/singletones/state-manager.gd"
 LCNet="*res://core/singletones/networking.gd"
-LCUtil="*res://core/singletones/utils.gd"
 LCWindows="*res://core/singletones/windows-manager.gd"
 EntitiesDB="*res://core/singletones/entities-manager.gd"
 Profile="*res://core/singletones/profile.gd"
