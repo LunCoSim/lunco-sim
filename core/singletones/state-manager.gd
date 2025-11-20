@@ -11,9 +11,6 @@ func _save():
 func _load():
 	pass
 
-func change_scene(scene: String):
-	pass
-	#SceneManager.no_effect_change_scene(scene)
 
 # Add a method to transition to the replay scene
 func goto_replay_scene():

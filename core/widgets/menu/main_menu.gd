@@ -17,12 +17,9 @@ func on_reload_profile():
 #------------------------------------
 
 func _on_back_to_launcher_pressed():
+
 	get_tree().change_scene_to_file("res://launcher/launcher.tscn")
 	LCWindows.toggle_main_menu()
-
-func change_scene(scene: String):
-	pass
-	#SceneManager.no_effect_change_scene(scene)
 
 ## UI Integrations
 func _on_sim_host_pressed():
@@ -33,7 +30,6 @@ func _on_sim_host_pressed():
 	
 	LCNet.host(9000)
 	
-	#change_scene("sim")
 
 func _on_sim_client_pressed():
 	print("_on_sim_client_pressed")
@@ -42,13 +38,10 @@ func _on_sim_client_pressed():
 	
 	LCNet.connect_to_server(ip, port)
 	
-	#change_scene("sim")
 
 func _on_connect_to_global_pressed():
 	#default global server
 	LCNet.connect_to_server()
-	
-	#change_scene("sim")
 
 
 
