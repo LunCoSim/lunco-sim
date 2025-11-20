@@ -2,8 +2,7 @@
 class_name LCNetworking
 extends Node
 
-# Declaration of peer as MultiplayerPeer, which will be used to handle multiplayer networking
-var peer: WebSocketMultiplayerPeer
+
 
 # A dictionary to store the connected players
 var players = {}
@@ -80,7 +79,7 @@ func connect_to_server(ip: String = "langrenus.lunco.space", port: int = 9000, t
 		print("Already connected to a server")
 		return
 
-	peer = WebSocketMultiplayerPeer.new()
+	var ws_peer = WebSocketMultiplayerPeer.new()
 
 	# Automatically disable TLS for localhost connections
 	# SSL certificates don't work with IP addresses, only domain names
@@ -94,12 +93,12 @@ func connect_to_server(ip: String = "langrenus.lunco.space", port: int = 9000, t
 
 	print("Connecting to server: ", connection_string)
 	
-	var error = peer.create_client(connection_string)
+	var error = ws_peer.create_client(connection_string)
 	if error != OK:
 		push_error("Failed to create client: %s" % error_string(error))
 		return
 	
-	multiplayer.multiplayer_peer = peer
+	multiplayer.multiplayer_peer = ws_peer
 
 func connect_to_local_server(tls: bool = false):
 	connect_to_server("localhost", 9000, tls)
@@ -111,7 +110,7 @@ func host(port: int = 9000, tls_cert_path: String = "", tls_key_path: String = "
 		print("Already hosting a server")
 		return
 
-	peer = WebSocketMultiplayerPeer.new()
+	var ws_peer = WebSocketMultiplayerPeer.new()
 	DisplayServer.window_set_title("Server")
 	
 	var server_tls_options: TLSOptions = null
@@ -128,13 +127,13 @@ func host(port: int = 9000, tls_cert_path: String = "", tls_key_path: String = "
 	print("Hosting on port %d, TLS enabled: %s" % [port, server_tls_options != null])
 	print("About to call create_server with TLS options: %s" % server_tls_options)
 	
-	var error = peer.create_server(port, "*", server_tls_options)
+	var error = ws_peer.create_server(port, "*", server_tls_options)
 	if error != OK:
 		push_error("Failed to create server: %s" % error_string(error))
 		return
 	
 	print("Server created successfully, error code: %d" % error)
-	multiplayer.multiplayer_peer = peer
+	multiplayer.multiplayer_peer = ws_peer
 
 #---------------------------------------------------
 @rpc("any_peer", "call_remote", "reliable")
@@ -177,26 +176,30 @@ func on_peer_disconnected(id):
 func on_server_connection_failed():
 	print("on_server_connection_failed")
 
-	if peer:
-		print("Handshake headers: ", peer.handshake_headers)
+	var ws_peer = multiplayer.multiplayer_peer as WebSocketMultiplayerPeer
+	if ws_peer:
+		print("Handshake headers: ", ws_peer.handshake_headers)
 
 		# Get underlying connection status for more details
-		var status = peer.get_connection_status()
+		var status = ws_peer.get_connection_status()
 		print("Peer connection status: ", status)
 
 		# Check if there were any specific WebSocket errors
-		if peer.has_method("get_requested_url"):
-			print("Requested URL: ", peer.get_requested_url())
+		if ws_peer.has_method("get_requested_url"):
+			print("Requested URL: ", ws_peer.get_requested_url())
 
 		# Show supported sub-protocols if any
-		if peer.has_method("get_supported_protocols"):
-			print("Supported protocols: ", peer.get_supported_protocols())
+		if ws_peer.has_method("get_supported_protocols"):
+			print("Supported protocols: ", ws_peer.get_supported_protocols())
 
 	print("Possible causes:")
 	print("- Server not running on port 9000")
 	print("- SSL/TLS certificate issues (check server logs)")
 	print("- Network firewall blocking connection")
 	print("- Incorrect URL or port")
+	
+	# Reset the peer so we can try connecting again
+	multiplayer.multiplayer_peer = null
 	
 # Function called when successfully connected to server.
 func on_server_connected():
@@ -210,3 +213,6 @@ func on_server_disconnected():
 	# Printing a message to signal loss of server connection
 	print("Lost connection to server")
 	DisplayServer.window_set_title("Lost connection to server")
+	
+	# Reset the peer so we can try connecting again
+	multiplayer.multiplayer_peer = null
