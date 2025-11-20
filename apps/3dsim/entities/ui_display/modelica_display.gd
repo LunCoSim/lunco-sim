@@ -10,7 +10,7 @@ var last_click_position = Vector2()
 var is_dragging = false
 var mouse_button_pressed = false
 var mouse_over_display = false
-var is_visible = true
+var is_display_visible = true
 var has_keyboard_focus = false
 
 func _ready():
@@ -118,7 +118,7 @@ func _on_mouse_exited():
 	mouse_over_display = false
 
 # Handle 3D area input and translate to 2D viewport input
-func _on_area_3d_input_event(camera, event, position, normal, shape_idx):
+func _on_area_3d_input_event(_camera, event, mouse_position, _normal, shape_idx):
 	if not input_enabled:
 		return
 	
@@ -134,8 +134,8 @@ func _on_area_3d_input_event(camera, event, position, normal, shape_idx):
 			is_dragging = true
 			
 			# Make sure the display is visible
-			if !is_visible:
-				is_visible = true
+			if !is_display_visible:
+				is_display_visible = true
 				visible = true
 			
 			# Activate the controls directly and set focus immediately
@@ -167,7 +167,7 @@ func _on_area_3d_input_event(camera, event, position, normal, shape_idx):
 		var mesh_size = Vector2(40, 30)  # Size of our quad mesh
 		
 		# Calculate normalized position on the mesh (0-1)
-		var local_position = position - global_position
+		var local_position = mouse_position - global_position
 		var local_2d_position = Vector2(
 			(local_position.x / mesh_size.x + 0.5), 
 			(0.5 - local_position.y / mesh_size.y)
@@ -199,7 +199,7 @@ func _on_area_3d_input_event(camera, event, position, normal, shape_idx):
 	
 	elif event is InputEventMouseMotion:
 		get_viewport().set_input_as_handled()
-		_handle_mouse_motion(position)
+		_handle_mouse_motion(mouse_position)
 
 # Handle mouse motion events
 func _handle_mouse_motion(mouse_position):
@@ -310,7 +310,7 @@ func _activate_direct_input_focus():
 
 # New function to handle keyboard input from avatar
 func receive_keyboard_input(event: InputEvent) -> bool:
-	if not input_enabled or not is_visible:
+	if not input_enabled or not is_display_visible:
 		return false
 		
 	# Always process keyboard input regardless of has_keyboard_focus
@@ -376,7 +376,7 @@ func _get_focused_control(node: Node) -> Control:
 
 # New function to handle mouse input from avatar
 func receive_mouse_input(event: InputEvent) -> bool:
-	if not input_enabled or not is_visible:
+	if not input_enabled or not is_display_visible:
 		return false
 		
 	if event is InputEventMouseButton:
@@ -456,12 +456,12 @@ func receive_mouse_input(event: InputEvent) -> bool:
 
 # New function to toggle display visibility
 func toggle_display():
-	is_visible = !is_visible
-	visible = is_visible
-	input_enabled = is_visible
+	is_display_visible = !is_display_visible
+	visible = is_display_visible
+	input_enabled = is_display_visible
 	
 	# If becoming visible, try to set focus
-	if is_visible:
+	if is_display_visible:
 		has_keyboard_focus = true
 		# Try to find any Controls in the SubViewport and set focus to the first one
 		call_deferred("_find_and_set_focus")
@@ -469,7 +469,7 @@ func toggle_display():
 		# Reset focus when hiding the display
 		has_keyboard_focus = false
 	
-	return is_visible
+	return is_display_visible
 
 # New function to just release focus without affecting visibility
 func release_focus():

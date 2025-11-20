@@ -51,7 +51,7 @@ func set_displays(supply_chain: Node, modelica: Node):
 		print("UiDisplayManager: Ensuring ModelicaUI is properly set up")
 		# Make sure it's visible
 		modelica_display.visible = true
-		modelica_display.is_visible = true
+		modelica_display.is_display_visible = true
 		modelica_display.input_enabled = true
 
 # Process key events for toggling displays and forwarding input
@@ -183,7 +183,7 @@ func pass_keyboard_input_to_active_display(event: InputEvent) -> bool:
 		# Always force ensure the display is visible and active
 		if modelica_display.visible == false:
 			modelica_display.visible = true
-			modelica_display.is_visible = true
+			modelica_display.is_display_visible = true
 			modelica_display.input_enabled = true
 			print("UiDisplayManager: Forced ModelicaUI to be visible")
 		
@@ -241,7 +241,7 @@ func on_modelica_display_clicked():
 	if modelica_display:
 		if not modelica_display.visible:
 			modelica_display.visible = true
-			modelica_display.is_visible = true
+			modelica_display.is_display_visible = true
 			modelica_display.input_enabled = true
 			print("UiDisplayManager: Made ModelicaUI visible")
 		
