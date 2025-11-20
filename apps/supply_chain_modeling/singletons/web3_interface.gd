@@ -163,7 +163,7 @@ func mint_blueprint(graph_data: String, contract_address: String):
 	var success = false if result.success == null else bool(result.success)
 
 	# emit_signal("transaction_completed", success, JSON.parse_string(JSON.stringify(result)))
-	emit_signal("transaction_completed", false, {})
+	emit_signal("transaction_completed", success, {})
 	return result
 	
 	# return {"success": false, "error": "Not running in web context"}
