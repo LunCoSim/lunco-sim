@@ -45,12 +45,6 @@ func _ready():
 		multiplayer.peer_connected.connect(_on_peer_connected)
 		multiplayer.peer_disconnected.connect(_on_peer_disconnected)
 
-# Called every frame. 'delta' is the elapsed time since the previous frame.
-func _process(delta):
-	pass
-
-#------------------------------------------
-
 
 #------------------------------------------
 
