@@ -122,7 +122,6 @@ func save_profile():
 	config.save(FULLPATH)
 
 func load_profile():
-	var score_data = {}
 	var config = ConfigFile.new()
 
 	# Load data from a file.
