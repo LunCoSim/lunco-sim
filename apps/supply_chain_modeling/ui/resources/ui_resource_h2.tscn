@@ -2,7 +2,7 @@
 
 [ext_resource type="Script" uid="uid://ck0ya0dlsxygw" path="res://apps/supply_chain_modeling/ui/resources/ui_resource_h2.gd" id="1_bklm3"]
 
-[node name="Resource_H2" type="GraphNode"]
+[node name="Resource_H2" type="GraphNode" unique_id=2096303818]
 offset_right = 198.0
 offset_bottom = 130.0
 mouse_filter = 1
@@ -28,17 +28,17 @@ slot/1/right_icon = null
 slot/1/draw_stylebox = true
 script = ExtResource("1_bklm3")
 
-[node name="Label" type="Label" parent="."]
+[node name="Label" type="Label" parent="." unique_id=4770673]
 layout_mode = 2
 text = "H2"
 
-[node name="Properties" type="VBoxContainer" parent="."]
+[node name="Properties" type="VBoxContainer" parent="." unique_id=2029364271]
 layout_mode = 2
 
-[node name="Amount" type="Label" parent="Properties"]
+[node name="Amount" type="Label" parent="Properties" unique_id=1843098626]
 layout_mode = 2
 text = "Amount: 100.0 / 100.0 units"
 
-[node name="ProgressBar" type="ProgressBar" parent="Properties"]
+[node name="ProgressBar" type="ProgressBar" parent="Properties" unique_id=1232367116]
 layout_mode = 2
 value = 100.0

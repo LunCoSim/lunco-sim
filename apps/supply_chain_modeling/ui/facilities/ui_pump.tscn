@@ -1,13 +1,12 @@
-[gd_scene load_steps=2 format=3 uid="uid://c4iqxvxvxvxvx"]
+[gd_scene load_steps=2 format=3]
 
 [ext_resource type="Script" uid="uid://ck0ya0dlsxygw" path="res://apps/supply_chain_modeling/ui/resources/ui_resource_h2.gd" id="1_bklm3"]
 
-[node name="Pump" type="GraphNode"]
+[node name="Pump" type="GraphNode" unique_id=418741251]
 offset_right = 152.0
 offset_bottom = 109.0
-title = "Pump"
-show_close = true
 resizable = true
+title = "Pump"
 slot/0/left_enabled = true
 slot/0/left_type = 0
 slot/0/left_color = Color(0, 0, 1, 1)
@@ -28,10 +27,10 @@ slot/1/right_icon = null
 slot/1/draw_stylebox = true
 script = ExtResource("1_bklm3")
 
-[node name="ResourceFlow" type="Label" parent="."]
+[node name="ResourceFlow" type="Label" parent="." unique_id=456731412]
 layout_mode = 2
 text = "Resource Flow"
 
-[node name="PowerInput" type="Label" parent="."]
+[node name="PowerInput" type="Label" parent="." unique_id=3633202]
 layout_mode = 2
-text = "Power Input" 
+text = "Power Input"

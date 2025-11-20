@@ -1,8 +1,8 @@
-[gd_scene load_steps=2 format=3 uid="uid://c4iqxvxvxvxvx"]
+[gd_scene load_steps=2 format=3]
 
 [ext_resource type="Script" uid="uid://ck0ya0dlsxygw" path="res://apps/supply_chain_modeling/ui/resources/ui_resource_h2.gd" id="1_bklm3"]
 
-[node name="SolarPowerPlant" type="GraphNode"]
+[node name="SolarPowerPlant" type="GraphNode" unique_id=279931452]
 title = "Solar Power Plant"
 slot/0/left_enabled = false
 slot/0/left_type = 0
@@ -15,6 +15,6 @@ slot/0/right_icon = null
 slot/0/draw_stylebox = true
 script = ExtResource("1_bklm3")
 
-[node name="Label" type="Label" parent="."]
+[node name="Label" type="Label" parent="." unique_id=1942428815]
 layout_mode = 2
 text = "Output: 20.0 kW"
