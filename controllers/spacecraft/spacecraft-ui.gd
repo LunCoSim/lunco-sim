@@ -8,4 +8,4 @@ func set_target(_target):
 
 
 func _on_HideControls_timeout():
-	$Help.visible = false
+	$PanelContainer.visible = false

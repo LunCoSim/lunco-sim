@@ -1,104 +1,109 @@
-[gd_scene load_steps=4 format=3 uid="uid://c12u4vsw7gq25"]
+[gd_scene load_steps=3 format=3 uid="uid://c12u4vsw7gq25"]
 
 [ext_resource type="Script" path="res://controllers/character/character-ui.gd" id="1_iqqcr"]
 [ext_resource type="Theme" uid="uid://hve1e7mnexbi" path="res://themes/theme.tres" id="1_v4hy0"]
 
-[node name="CharacterUI" type="Window"]
-title = "Character Controller"
-initial_position = 2
-size = Vector2i(400, 0)
-min_size = Vector2i(350, 0)
-exclusive = true
-borderless = true
-theme = ExtResource("1_v4hy0")
-script = ExtResource("1_iqqcr")
-
-[node name="PanelContainer" type="PanelContainer" parent="."]
+[node name="CharacterUI" type="Control"]
+layout_mode = 3
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
-theme_type_variation = &"PanelContainerOverlay"
+mouse_filter = 1
+theme = ExtResource("1_v4hy0")
+script = ExtResource("1_iqqcr")
 
-[node name="MarginContainer" type="MarginContainer" parent="PanelContainer"]
+[node name="PanelContainer" type="PanelContainer" parent="."]
+layout_mode = 0
+offset_right = 238.0
+offset_bottom = 116.0
+
+[node name="Help" type="VBoxContainer" parent="PanelContainer"]
 layout_mode = 2
 
-[node name="VBoxContainer" type="VBoxContainer" parent="PanelContainer/MarginContainer"]
-layout_mode = 2
-size_flags_vertical = 3
-
-[node name="HeaderLabel" type="Label" parent="PanelContainer/MarginContainer/VBoxContainer"]
+[node name="HeaderLabel" type="Label" parent="PanelContainer/Help"]
 layout_mode = 2
 theme_type_variation = &"_section_header"
-text = "Character Controller"
-horizontal_alignment = 1
+text = "Character Controls"
 
-[node name="ControlInstructions" type="RichTextLabel" parent="PanelContainer/MarginContainer/VBoxContainer"]
+[node name="Move" type="Label" parent="PanelContainer/Help"]
 layout_mode = 2
-bbcode_enabled = true
-text = "[b]Controls:[/b]
-• Movement: WASD keys
-• Jump: Spacebar
-• Run: Shift
-• Release control: Backspace"
-fit_content = true
-autowrap_mode = 2
+text = "Move: WASD"
 
-[node name="HSeparator" type="HSeparator" parent="PanelContainer/MarginContainer/VBoxContainer"]
+[node name="Jump" type="Label" parent="PanelContainer/Help"]
+layout_mode = 2
+text = "Jump: Spacebar"
+
+[node name="Run" type="Label" parent="PanelContainer/Help"]
+layout_mode = 2
+text = "Run: Shift"
+
+[node name="Release" type="Label" parent="PanelContainer/Help"]
+layout_mode = 2
+text = "Release control: Backspace"
+
+[node name="CamRotate" type="Label" parent="PanelContainer/Help"]
+layout_mode = 2
+text = "Camera distance: -/+"
+
+[node name="CamDistance" type="Label" parent="PanelContainer/Help"]
+layout_mode = 2
+text = "Rotate camera: RMB or Arrows"
+
+[node name="HSeparator" type="HSeparator" parent="PanelContainer/Help"]
 layout_mode = 2
 
-[node name="StatsContainer" type="GridContainer" parent="PanelContainer/MarginContainer/VBoxContainer"]
+[node name="StatsContainer" type="GridContainer" parent="PanelContainer/Help"]
 layout_mode = 2
 columns = 2
 
-[node name="SpeedLabel" type="Label" parent="PanelContainer/MarginContainer/VBoxContainer/StatsContainer"]
+[node name="SpeedLabel" type="Label" parent="PanelContainer/Help/StatsContainer"]
 layout_mode = 2
 size_flags_horizontal = 3
 text = "Speed:"
 
-[node name="SpeedValue" type="Label" parent="PanelContainer/MarginContainer/VBoxContainer/StatsContainer"]
+[node name="SpeedValue" type="Label" parent="PanelContainer/Help/StatsContainer"]
 unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
 text = "0 m/s"
 
-[node name="PosLabel" type="Label" parent="PanelContainer/MarginContainer/VBoxContainer/StatsContainer"]
+[node name="PosLabel" type="Label" parent="PanelContainer/Help/StatsContainer"]
 layout_mode = 2
 text = "Position:"
 
-[node name="PosValue" type="Label" parent="PanelContainer/MarginContainer/VBoxContainer/StatsContainer"]
+[node name="PosValue" type="Label" parent="PanelContainer/Help/StatsContainer"]
 unique_name_in_owner = true
 layout_mode = 2
 text = "0, 0, 0"
 text_overrun_behavior = 3
 
-[node name="GravLabel" type="Label" parent="PanelContainer/MarginContainer/VBoxContainer/StatsContainer"]
+[node name="GravLabel" type="Label" parent="PanelContainer/Help/StatsContainer"]
 layout_mode = 2
 text = "Gravity:"
 
-[node name="GravValue" type="Label" parent="PanelContainer/MarginContainer/VBoxContainer/StatsContainer"]
+[node name="GravValue" type="Label" parent="PanelContainer/Help/StatsContainer"]
 unique_name_in_owner = true
 layout_mode = 2
 text = "1.625 m/s²"
 
-[node name="HSeparator2" type="HSeparator" parent="PanelContainer/MarginContainer/VBoxContainer"]
+[node name="HSeparator2" type="HSeparator" parent="PanelContainer/Help"]
 layout_mode = 2
 
-[node name="ButtonsContainer" type="VBoxContainer" parent="PanelContainer/MarginContainer/VBoxContainer"]
+[node name="ButtonsContainer" type="VBoxContainer" parent="PanelContainer/Help"]
 layout_mode = 2
 theme_override_constants/separation = 8
 
-[node name="ResetButton" type="Button" parent="PanelContainer/MarginContainer/VBoxContainer/ButtonsContainer"]
+[node name="ResetButton" type="Button" parent="PanelContainer/Help/ButtonsContainer"]
 layout_mode = 2
 size_flags_horizontal = 4
 text = "Reset Camera"
 
-[node name="ReleaseControlButton" type="Button" parent="PanelContainer/MarginContainer/VBoxContainer/ButtonsContainer"]
+[node name="ReleaseControlButton" type="Button" parent="PanelContainer/Help/ButtonsContainer"]
 layout_mode = 2
 size_flags_horizontal = 4
 text = "Release Control"
 
-[connection signal="close_requested" from="." to="." method="_on_close_requested"]
-[connection signal="pressed" from="PanelContainer/MarginContainer/VBoxContainer/ButtonsContainer/ResetButton" to="." method="_on_reset_button_pressed"]
-[connection signal="pressed" from="PanelContainer/MarginContainer/VBoxContainer/ButtonsContainer/ReleaseControlButton" to="." method="_on_release_control_button_pressed"]
+[connection signal="pressed" from="PanelContainer/Help/ButtonsContainer/ResetButton" to="." method="_on_reset_button_pressed"]
+[connection signal="pressed" from="PanelContainer/Help/ButtonsContainer/ReleaseControlButton" to="." method="_on_release_control_button_pressed"]

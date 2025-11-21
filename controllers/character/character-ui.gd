@@ -1,4 +1,4 @@
-extends Window
+extends Control
 
 # Reference UIHelper singleton
 @onready var ui_helper = get_node("/root/UIHelper")
@@ -7,17 +7,6 @@ var target
 var update_timer = 0
 
 func _ready():
-	# Apply consistent UI styling using our helper
-	ui_helper.setup_window(self)
-	
-	var panel = $PanelContainer
-	var margin = $PanelContainer/MarginContainer
-	var vbox = $PanelContainer/MarginContainer/VBoxContainer
-	
-	# Apply consistent styling to containers
-	ui_helper.setup_panel(panel)
-	ui_helper.setup_containers(vbox, margin)
-	
 	set_process(true)
 
 func _process(delta):
@@ -42,8 +31,6 @@ func update_stats():
 		%PosValue.text = "%.1f, %.1f, %.1f" % [target_position.x, target_position.y, target_position.z]
 		%GravValue.text = "1.625 m/s²"  # Moon gravity constant
 
-func _on_close_requested():
-	hide()
 
 func _on_reset_button_pressed():
 	if target and target.has_method("reset_camera"):
