@@ -33,6 +33,7 @@ func _ready():
 	avatar = get_parent()
 	if avatar:
 		existing_entity_selected.connect(avatar._on_existing_entity_selected)
+		entity_selected.connect(avatar._on_select_entity_to_spawn)
 		
 		var tree: ItemList = get_node_or_null("%Entities")
 		if tree and avatar.entity_to_spawn != null:
@@ -58,6 +59,11 @@ func _ready():
 	
 	# Add this line to update the user list when the scene is ready
 	_on_update_connected_users()
+	
+	var create_button = get_node_or_null("%CreateEntityButton")
+	if create_button:
+		ui_helper.setup_entity_button(create_button, false)
+		create_button.modulate = Color(0.2, 0.8, 0.2)
 
 # Function display_controller_ui clears the ui and displays the controller UI
 func display_controller_ui(new_controller_ui: Node = null):
@@ -102,8 +108,9 @@ func set_target(target):
 
 func _on_entities_item_selected(index):
 	print("_on_entities_item_selected: ", index)
+	if avatar:
+		avatar.entity_to_spawn = index
 	emit_signal("entity_selected", index)
-	pass # Replace with function body.
 
 func _on_existing_entity_selected(idx):
 	print("DEBUG: UI button clicked for entity: ", idx)
@@ -123,13 +130,13 @@ func update_entities(entities):
 	var idx = 0
 	
 	# Adjust columns based on entity count for better layout
-	if tree is GridContainer:
-		if entities.size() <= 8:
-			tree.columns = 8
-		elif entities.size() <= 16:
-			tree.columns = 8
-		else:
-			tree.columns = 10
+	# if tree is GridContainer:
+	# 	if entities.size() <= 8:
+	# 		tree.columns = 8
+	# 	elif entities.size() <= 16:
+	# 		tree.columns = 8
+	# 	else:
+	# 		tree.columns = 10
 	
 	for entity in entities:
 		# Add child items to the root.
@@ -153,9 +160,37 @@ func update_entities(entities):
 		button.tooltip_text = str(entity.name) + " (Owner: " + str(owner_id) + ")"
 		
 		tree.add_child(button)
+		# Connect with BINDING to ensure the correct index is passed
 		button.pressed.connect(_on_existing_entity_selected.bind(idx))
+		print("UI: Connected button for entity ", entity_name, " to index ", idx)
 		
 		idx += 1
+
+func _on_create_entity_button_pressed():
+	var button_node = get_node_or_null("%CreateEntityButton")
+	if not button_node:
+		return
+		
+	var popup = PopupMenu.new()
+	popup.name = "CreateEntityPopup"
+	add_child(popup)
+	
+	if EntitiesDB:
+		var keys = EntitiesDB.Entities.keys()
+		for key in keys:
+			var value = EntitiesDB.Entities[key]
+			popup.add_item(key, value)
+	
+	popup.id_pressed.connect(func(id): 
+		_on_entities_item_selected(id)
+		popup.queue_free()
+	)
+	popup.popup_hide.connect(func(): popup.queue_free())
+	
+	# Show popup near the button
+	var rect = button_node.get_global_rect()
+	popup.position = Vector2(rect.position.x, rect.position.y - popup.size.y) # Show above if possible, or let it handle itself
+	popup.popup(Rect2(rect.position.x, rect.position.y, rect.size.x, rect.size.y))
 
 func _on_update_connected_users():
 	var tree: ItemList = get_node_or_null("%Users")
