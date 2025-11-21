@@ -126,6 +126,7 @@ anchors_preset = 0
 
 [node name="WalletInfo" type="VBoxContainer" parent="."]
 unique_name_in_owner = true
+visible = false
 layout_mode = 1
 anchors_preset = 1
 anchor_left = 1.0
