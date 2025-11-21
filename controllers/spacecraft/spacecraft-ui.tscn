@@ -2,7 +2,7 @@
 
 [ext_resource type="Script" path="res://controllers/spacecraft/spacecraft-ui.gd" id="1_ayjnp"]
 [ext_resource type="PackedScene" uid="uid://c7ydipd3dui4p" path="res://core/widgets/help-spacecraft.tscn" id="2_l0a07"]
-[ext_resource type="PackedScene" uid="uid://k71ui4sp0lti" path="res://core/widgets/met.tscn" id="2_t5ioj"]
+
 
 [node name="SpacecraftUI" type="Control"]
 layout_mode = 3
@@ -14,38 +14,7 @@ grow_vertical = 2
 mouse_filter = 1
 script = ExtResource("1_ayjnp")
 
-[node name="HUD" type="VBoxContainer" parent="."]
-layout_mode = 1
-anchors_preset = 2
-anchor_top = 1.0
-anchor_bottom = 1.0
-offset_top = -146.0
-offset_right = 323.0
-grow_vertical = 0
 
-[node name="Position" type="Label" parent="HUD"]
-layout_mode = 2
-text = "Position: (100, 1100, 1000) "
-
-[node name="Direction" type="Label" parent="HUD"]
-layout_mode = 2
-text = "Direction: (######, ######, ######) "
-
-[node name="AngVelocity" type="Label" parent="HUD"]
-layout_mode = 2
-text = "AngVelocity: (100, 1100, 1000) "
-
-[node name="Velocity" type="Label" parent="HUD"]
-layout_mode = 2
-text = "Velocity: (100, 1100, 1000) "
-
-[node name="Acceleration" type="Label" parent="HUD"]
-layout_mode = 2
-text = "Acceleration: (######, ######, ######) "
-
-[node name="UpdateUI" type="Timer" parent="."]
-wait_time = 0.2
-autostart = true
 
 [node name="HideControls" type="Timer" parent="."]
 wait_time = 10.0
@@ -59,15 +28,7 @@ offset_top = 0.0
 offset_bottom = 116.0
 grow_vertical = 1
 
-[node name="MET" parent="." instance=ExtResource("2_t5ioj")]
-layout_mode = 1
-anchors_preset = 5
-anchor_left = 0.5
-anchor_right = 0.5
-offset_left = -55.0
-offset_right = 55.0
-offset_bottom = 23.0
-grow_horizontal = 2
 
-[connection signal="timeout" from="UpdateUI" to="." method="_on_UpdateUI_timeout"]
+
+
 [connection signal="timeout" from="HideControls" to="." method="_on_HideControls_timeout"]
