@@ -164,6 +164,13 @@ func mint_blueprint(graph_data: String, contract_address: String):
 
 	# emit_signal("transaction_completed", success, JSON.parse_string(JSON.stringify(result)))
 	emit_signal("transaction_completed", success, {})
+	
+	# Emit nft_minted signal if successful
+	if success:
+		# TODO: Extract actual token_id from transaction receipt
+		var token_id = 0  # Placeholder until we can parse the transaction receipt
+		emit_signal("nft_minted", token_id)
+	
 	return result
 	
 	# return {"success": false, "error": "Not running in web context"}
