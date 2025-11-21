@@ -1,0 +1,20 @@
+[gd_resource type="FontFile" format=3 uid="uid://cqm8y7xr5n8ov"]
+
+[resource]
+cache/0/16/0/ascent = 0.0
+cache/0/16/0/descent = 0.0
+cache/0/16/0/underline_position = 0.0
+cache/0/16/0/underline_thickness = 0.0
+cache/0/16/0/scale = 1.0
+face_index = 0
+msdf_pixel_range = 8
+msdf_size = 48
+allow_system_fallback = true
+force_autohinter = false
+hinting = 1
+subpixel_positioning = 1
+oversampling = 0.0
+fixed_size = 0
+opentype_feature_overrides = {}
+fallbacks = []
+data = "res://assets/fonts/space-mono/SpaceMono-Regular.ttf"

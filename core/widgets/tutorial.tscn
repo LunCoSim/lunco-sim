@@ -1,8 +1,8 @@
-[gd_scene load_steps=3 format=3 uid="uid://ds18c8bbcrnql"]
+[gd_scene load_steps=2 format=3 uid="uid://ds18c8bbcrnql"]
 
 [ext_resource type="Theme" uid="uid://hve1e7mnexbi" path="res://themes/theme.tres" id="1_vwu5s"]
 
-[node name="TutorialContent" type="PanelContainer"]
+[node name="TutorialContent" type="PanelContainer" unique_id=225535878]
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
@@ -13,34 +13,34 @@ size_flags_vertical = 3
 theme = ExtResource("1_vwu5s")
 theme_type_variation = &"PanelContainerOverlay"
 
-[node name="VBoxContainer" type="VBoxContainer" parent="."]
+[node name="VBoxContainer" type="VBoxContainer" parent="." unique_id=1292763523]
 layout_mode = 2
 theme_override_constants/separation = 8
 
-[node name="TitleLabel" type="Label" parent="VBoxContainer"]
+[node name="TitleLabel" type="Label" parent="VBoxContainer" unique_id=471496908]
 layout_mode = 2
 theme_type_variation = &"_section_header"
 text = "LunCo Tutorial"
 horizontal_alignment = 1
 
-[node name="HSeparator" type="HSeparator" parent="VBoxContainer"]
+[node name="HSeparator" type="HSeparator" parent="VBoxContainer" unique_id=121512096]
 layout_mode = 2
 
-[node name="ScrollContainer" type="ScrollContainer" parent="VBoxContainer"]
+[node name="ScrollContainer" type="ScrollContainer" parent="VBoxContainer" unique_id=2125980268]
 layout_mode = 2
 size_flags_vertical = 3
 follow_focus = true
 horizontal_scroll_mode = 0
 vertical_scroll_mode = 2
 
-[node name="MarginContainer" type="MarginContainer" parent="VBoxContainer/ScrollContainer"]
+[node name="MarginContainer" type="MarginContainer" parent="VBoxContainer/ScrollContainer" unique_id=1308592442]
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
 theme_override_constants/margin_left = 4
 theme_override_constants/margin_right = 4
 
-[node name="RichTextLabel" type="RichTextLabel" parent="VBoxContainer/ScrollContainer/MarginContainer"]
+[node name="RichTextLabel" type="RichTextLabel" parent="VBoxContainer/ScrollContainer/MarginContainer" unique_id=1017576466]
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
@@ -51,7 +51,7 @@ text = "LunCo is an open-source platform for collaborative designing and simulat
 [b]Quick Start Guide:[/b]
 
 [u]Creating and Controlling:[/u]
-• [b]Create entities:[/b] Press Alt + [1-4]
+• [b]Create entities:[/b] Press Alt + [1-5]
 • [b]Control entities:[/b] Click on entity buttons at the bottom of screen
 • [b]Release control:[/b] Press Backspace key
 • [b]Navigate:[/b] Use WASD keys for movement

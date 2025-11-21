@@ -1,4 +1,7 @@
-[gd_resource type="Theme" load_steps=12 format=3 uid="uid://hve1e7mnexbi"]
+[gd_resource type="Theme" load_steps=14 format=3 uid="uid://hve1e7mnexbi"]
+
+[ext_resource type="FontFile" uid="uid://cqm8y7xr5n8ov" path="res://themes/fonts/space_mono_regular.tres" id="1_font_regular"]
+[ext_resource type="FontFile" uid="uid://dxkp2y8r6oapw" path="res://themes/fonts/space_mono_bold.tres" id="2_font_bold"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_hover"]
 content_margin_left = 12.0
@@ -242,8 +245,10 @@ ProgressBar/font_sizes/font_size = 16
 ProgressBar/styles/background = SubResource("StyleBoxFlat_normal")
 ProgressBar/styles/fill = SubResource("StyleBoxFlat_hover")
 RichTextLabel/colors/default_color = Color(0.875, 0.875, 0.875, 1)
-RichTextLabel/font_sizes/bold_font_size = 18
-RichTextLabel/font_sizes/normal_font_size = 16
+RichTextLabel/font_sizes/bold_font_size = 30
+RichTextLabel/font_sizes/normal_font_size = 27
+RichTextLabel/fonts/bold_font = ExtResource("2_font_bold")
+RichTextLabel/fonts/normal_font = ExtResource("1_font_regular")
 SpinBox/colors/font_color = Color(0.875, 0.875, 0.875, 1)
 SpinBox/font_sizes/font_size = 16
 SpinBox/styles/focus = SubResource("StyleBoxFlat_hover")
