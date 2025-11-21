@@ -1,10 +1,9 @@
-[gd_scene load_steps=4 format=3 uid="uid://bko8sxuql5v50"]
+[gd_scene load_steps=3 format=3 uid="uid://bko8sxuql5v50"]
 
-[ext_resource type="Script" path="res://controllers/spacecraft/spacecraft-ui.gd" id="1_ayjnp"]
+[ext_resource type="Script" uid="uid://ckhpijad7chx3" path="res://controllers/spacecraft/spacecraft-ui.gd" id="1_ayjnp"]
 [ext_resource type="PackedScene" uid="uid://c7ydipd3dui4p" path="res://core/widgets/help-spacecraft.tscn" id="2_l0a07"]
 
-
-[node name="SpacecraftUI" type="Control"]
+[node name="SpacecraftUI5" type="Control" unique_id=288646867]
 layout_mode = 3
 anchors_preset = 15
 anchor_right = 1.0
@@ -14,21 +13,17 @@ grow_vertical = 2
 mouse_filter = 1
 script = ExtResource("1_ayjnp")
 
-
-
-[node name="HideControls" type="Timer" parent="."]
+[node name="HideControls" type="Timer" parent="." unique_id=1929934624]
 wait_time = 10.0
 one_shot = true
 
-[node name="Help" parent="." instance=ExtResource("2_l0a07")]
+[node name="Help" parent="." unique_id=1653004638 instance=ExtResource("2_l0a07")]
 layout_mode = 1
+anchors_preset = 0
 anchor_top = 0.0
 anchor_bottom = 0.0
 offset_top = 0.0
 offset_bottom = 116.0
 grow_vertical = 1
-
-
-
 
 [connection signal="timeout" from="HideControls" to="." method="_on_HideControls_timeout"]
