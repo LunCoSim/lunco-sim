@@ -58,6 +58,7 @@ text = "LunCo is an open-source platform for collaborative designing and simulat
 • [b]Create NFT sphere:[/b] Hold Ctrl and click on terrain
 
 Explore the lunar surface, collaborate with other users, and help engineer the future of space exploration!"
-scroll_active = true
+fit_content = true
+scroll_active = false
 autowrap_mode = 2
 text_direction = 1
