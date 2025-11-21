@@ -160,7 +160,7 @@ func get_camera_rotation_basis() -> Basis:
 func set_camera(_camera):
 	camera = _camera
 	
-@rpc("call_local")
+@rpc("any_peer", "call_local")
 func jump():
 	var _target = target
 	if target is LCAvatar:
