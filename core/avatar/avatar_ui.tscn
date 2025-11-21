@@ -104,6 +104,7 @@ tooltip_text = "Create a new entity"
 [node name="TargetUI" type="Control" parent="."]
 unique_name_in_owner = true
 anchors_preset = 0
+mouse_filter = 2
 
 [node name="WalletInfo" type="VBoxContainer" parent="."]
 unique_name_in_owner = true

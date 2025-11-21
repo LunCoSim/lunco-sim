@@ -43,8 +43,8 @@ func _ready():
 					tree.select(avatar.entity_to_spawn)
 		
 		# Try to update entities list if we can access them
-		if avatar.get_parent() and avatar.get_parent().has_method("get_entities"):
-			update_entities(avatar.get_parent().get_entities())
+		if avatar.get_parent() and "entities" in avatar.get_parent():
+			update_entities(avatar.get_parent().entities)
 	else:
 		push_error("Avatar UI: Parent avatar not found")
 	
@@ -102,9 +102,9 @@ func set_target(target):
 	
 	# Only update entities if we're attached to the parent properly
 	var parent = get_parent()
-	if parent and parent.get_parent() and parent.get_parent().has_method("get_entities"):
+	if parent and parent.get_parent() and "entities" in parent.get_parent():
 		# Use call_deferred to ensure the scene tree is ready
-		call_deferred("update_entities", parent.get_parent().get_entities())
+		call_deferred("update_entities", parent.get_parent().entities)
 
 func _on_entities_item_selected(index):
 	print("_on_entities_item_selected: ", index)
@@ -155,7 +155,18 @@ func update_entities(entities):
 		button.text = entity_name
 		
 		# Use theme type variation and set up button
-		var is_active = avatar.target and entity == avatar.target.get_parent()
+		var is_active = false
+		if avatar.target:
+			# Check if the entity itself is the target
+			if entity == avatar.target:
+				is_active = true
+			# Check if the entity is the parent of the target (if target is a controller)
+			elif entity == avatar.target.get_parent():
+				is_active = true
+			# Check if the target is a controller of the entity (using find_controller logic)
+			elif LCController.find_controller(entity) == avatar.target:
+				is_active = true
+				
 		ui_helper.setup_entity_button(button, is_active)
 		button.tooltip_text = str(entity.name) + " (Owner: " + str(owner_id) + ")"
 		
@@ -261,7 +272,8 @@ func _on_disconnect_wallet_pressed():
 	Profile.logout()
 
 func _on_control_granted(peer_id: int, entity_path: NodePath):
-	if peer_id == multiplayer.get_unique_id():
+	# Always update entities to reflect the new owner in the UI
+	if get_parent() and get_parent().get_parent() and "entities" in get_parent().get_parent():
 		update_entities(get_parent().get_parent().entities)
 
 func _on_control_request_denied(peer_id: int, entity_path: NodePath):
@@ -269,9 +281,14 @@ func _on_control_request_denied(peer_id: int, entity_path: NodePath):
 		# Maybe show a message to the user
 		print("Control request denied for entity: ", entity_path)
 
+func _on_control_released(peer_id: int, entity_path: NodePath):
+	# Always update entities to reflect the released control
+	if get_parent() and get_parent().get_parent() and "entities" in get_parent().get_parent():
+		update_entities(get_parent().get_parent().entities)
+
 func _on_visibility_changed():
 	# Update entity list when the UI becomes visible
 	if visible:
 		var parent = get_parent()
-		if parent and parent.get_parent() and parent.get_parent().has_method("get_entities"):
-			call_deferred("update_entities", parent.get_parent().get_entities())
+		if parent and parent.get_parent() and "entities" in parent.get_parent():
+			call_deferred("update_entities", parent.get_parent().entities)

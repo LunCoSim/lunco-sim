@@ -52,7 +52,9 @@ func _ready():
 		character_body = get_parent()
 
 func _physics_process(delta: float):	
-	if is_multiplayer_authority():
+	# Check if we have authority over the parent entity (the character body that contains this controller)
+	var parent = get_parent()
+	if parent and parent.is_multiplayer_authority():
 		apply_input(delta)
 		
 func apply_input(delta: float):

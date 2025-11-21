@@ -51,7 +51,16 @@ func set_target(_target):
 		camera.remove_excluded_object(controller.get_parent())
 	
 	if controller:
-		release_control.emit(controller.get_parent().get_path())
+		var current_entity = controller.get_parent()
+		var new_entity = _target
+		
+		# Resolve new_entity if _target is a controller
+		if _target is LCController:
+			new_entity = _target.get_parent()
+			
+		# Only release if we are switching to a DIFFERENT entity
+		if current_entity != new_entity:
+			release_control.emit(controller.get_parent().get_path())
 	
 	target = _target
 	#searching for controller
@@ -83,6 +92,9 @@ func _ready():
 	set_target(target)
 	ControlManager.control_granted.connect(_on_control_granted)
 	ControlManager.control_request_denied.connect(_on_control_request_denied)
+	ControlManager.control_released.connect(ui._on_control_released)
+	ControlManager.control_granted.connect(ui._on_control_granted)
+	ControlManager.control_request_denied.connect(ui._on_control_request_denied)
 	
 	# Initialize the UiDisplayManager if it exists
 	if not ui_display_manager and has_node("UiDisplayManager"):

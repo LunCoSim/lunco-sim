@@ -124,38 +124,24 @@ func request_control_by_index(entity_idx):
 	var requester_id = multiplayer.get_remote_sender_id()
 	if requester_id == 0:
 		requester_id = multiplayer.get_unique_id()
-	print("Simulation received control request for entity index: ", entity_idx, " from peer: ", requester_id)
-	if entity_idx < entities.size():
-		var entity = entities[entity_idx]
-		print("Requesting control for entity: ", entity.name)
-		if multiplayer.is_server():
-			_process_control_request(requester_id, entity.get_path())
+	print("Simulation received control request for entity index/node: ", entity_idx, " from peer: ", requester_id)
+	
+	if typeof(entity_idx) == TYPE_INT:
+		if entity_idx < entities.size():
+			var entity = entities[entity_idx]
+			print("Requesting control for entity: ", entity.name)
+			ControlManager.request_control(entity.get_path(), requester_id)
 		else:
-			requesting_control.rpc_id(1, entity.get_path())
+			print("Invalid entity index: ", entity_idx)
+	elif entity_idx is Node:
+		print("Requesting control for entity node: ", entity_idx.name)
+		ControlManager.request_control(entity_idx.get_path(), requester_id)
 	else:
-		print("Invalid entity index: ", entity_idx)
-		if multiplayer.is_server():
-			control_declined_notify.rpc_id(requester_id, NodePath(""))
-
-func _process_control_request(requester_id, path):
-	var _owner = owners.get(path) 
-		
-	if _owner == null: # TBD: Access control
-		owners[path] = requester_id
-		set_authority.rpc(path, requester_id)
-		control_granted_notify.rpc_id(requester_id, path)
-	else:
-		if _owner == requester_id:
-			release_control(path)
-		else:
-			control_declined_notify.rpc_id(requester_id, path)
+		print("Invalid entity identifier type: ", typeof(entity_idx))
 
 @rpc("any_peer", "call_local", "reliable")
 func release_control(path):
-	if multiplayer.is_server():
-		owners[path] = null 
-		set_authority.rpc(path, 1)
-		control_released_notify.rpc(path)
+	ControlManager.release_control(path)
 
 #---------------------------------------
 # Notifying about changed state
@@ -173,15 +159,12 @@ func control_released_notify(path):
 	
 func _on_control_granted(peer_id, path):
 	print("Simulation: Control granted for entity: ", path)
-	control_granted.emit(path)
 
 func _on_control_released(peer_id, entity_path: NodePath):
 	print("Simulation: Control released for entity: ", entity_path)
-	control_released.emit(entity_path)
 
 func _on_control_request_denied(peer_id, entity_path: NodePath):
 	print("Simulation: Control declined for entity: ", entity_path)
-	control_declined.emit(entity_path)
 
 @rpc("any_peer")
 func _on_avatar_requesting_control(entity_idx):

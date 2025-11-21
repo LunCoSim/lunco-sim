@@ -54,13 +54,16 @@ func _ready():
 		#color_rect.hide()
 
 func _process(delta):
-#	if get_multiplayer_authority() != multiplayer.get_unique_id():
-#		return
 	var _target = target
 	if target is LCAvatar:
 		_target = target.target
 	
 	if not _target is LCCharacterController:
+		return
+	
+	# Only process input if we have authority over the character body
+	var character_body = _target.character_body if _target.character_body else _target.get_parent()
+	if not character_body or not character_body.is_multiplayer_authority():
 		return
 	
 	motion = Vector2(
