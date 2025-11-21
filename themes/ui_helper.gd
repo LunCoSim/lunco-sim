@@ -54,20 +54,16 @@ func setup_containers(vbox: VBoxContainer, margin: MarginContainer) -> void:
 # Apply standard configuration for entity buttons
 func setup_entity_button(button: Button, is_active: bool = false) -> void:
 	button.theme_type_variation = "_entity_button"
-	button.custom_minimum_size = ENTITY_BUTTON_MIN_SIZE
-	button.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	button.custom_minimum_size = Vector2(0, 40) # Allow width to be dynamic
+	button.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN # Minimal width to fit text
 	button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	
 	if is_active:
-		# Get from theme or create style for active state
-		var theme = button.get_theme()
-		if theme:
-			var active_style = theme.get_stylebox("active", "_entity_button")
-			if active_style:
-				button.add_theme_stylebox_override("normal", active_style)
+		# Highlight active button
+		button.modulate = COLOR_ACCENT
+	else:
+		button.modulate = Color(1, 1, 1, 1)
 	
 # Truncate entity name for display
 func format_entity_name(entity_name: String) -> String:
-	if entity_name.length() > ENTITY_BUTTON_TEXT_MAX_LENGTH:
-		return entity_name.substr(0, ENTITY_BUTTON_TEXT_MAX_LENGTH - 2) + ".."
 	return entity_name 

@@ -25,9 +25,10 @@ anchor_right = 1.0
 anchor_bottom = 1.0
 offset_left = -300.0
 offset_top = -300.0
-offset_bottom = -90.0
+offset_bottom = -5.0
 grow_horizontal = 0
 grow_vertical = 0
+alignment = 2
 theme_override_constants/separation = 16
 
 [node name="UsersContainer" type="PanelContainer" parent="EntityUserContainer"]
@@ -94,6 +95,7 @@ layout_mode = 2
 
 [node name="CreateEntityButton" type="Button" parent="LivesEntitiesContainer/HBoxContainer"]
 unique_name_in_owner = true
+custom_minimum_size = Vector2(120, 0)
 layout_mode = 2
 size_flags_vertical = 4
 text = "Create (+)"
