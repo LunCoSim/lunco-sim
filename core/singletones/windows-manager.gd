@@ -23,13 +23,13 @@ func _ready():
 	center_window(ChatWindow)
 	
 	var TutorialWindowScene = load("res://core/widgets/tutorial.tscn").instantiate()
-	TutorialWindow = make_window(TutorialWindowScene, "Tutorial", false)
+	TutorialWindow = make_window(TutorialWindowScene, "Tutorial", true, false)
 	add_child(TutorialWindow)
 	TutorialWindow.initial_position = Window.WINDOW_INITIAL_POSITION_CENTER_PRIMARY_SCREEN
 	TutorialWindow.min_size = Vector2(300, 400)
 	position_top_left(TutorialWindow)
 
-static func make_window(control, title, transparent_bg = true) -> Window:
+static func make_window(control, title, transparent_bg = true, borderless = false) -> Window:
 	var win = Window.new()
 	win.add_child(control)
 	win.title = title
@@ -37,7 +37,7 @@ static func make_window(control, title, transparent_bg = true) -> Window:
 	# Configure window properties
 	win.transparent_bg = transparent_bg
 	win.unresizable = false
-	win.borderless = false
+	win.borderless = borderless
 	win.min_size = Vector2(300, 200)
 	win.auto_translate = true
 	# Ensure window size starts at a reasonable size

@@ -1,4 +1,4 @@
-[gd_resource type="Theme" load_steps=14 format=3 uid="uid://hve1e7mnexbi"]
+[gd_resource type="Theme" load_steps=15 format=3 uid="uid://hve1e7mnexbi"]
 
 [ext_resource type="FontFile" uid="uid://cqm8y7xr5n8ov" path="res://themes/fonts/space_mono_regular.tres" id="1_font_regular"]
 [ext_resource type="FontFile" uid="uid://dxkp2y8r6oapw" path="res://themes/fonts/space_mono_bold.tres" id="2_font_bold"]
@@ -134,6 +134,24 @@ corner_radius_bottom_left = 8
 shadow_color = Color(0, 0, 0, 0.3)
 shadow_size = 8
 
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_window_embedded"]
+content_margin_left = 12.0
+content_margin_top = 12.0
+content_margin_right = 12.0
+content_margin_bottom = 12.0
+bg_color = Color(0.13, 0.13, 0.13, 1)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.25, 0.25, 0.25, 1)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_right = 8
+corner_radius_bottom_left = 8
+shadow_color = Color(0, 0, 0, 0.3)
+shadow_size = 8
+
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_entity_button_hover"]
 content_margin_left = 10.0
 content_margin_top = 8.0
@@ -245,8 +263,8 @@ ProgressBar/font_sizes/font_size = 16
 ProgressBar/styles/background = SubResource("StyleBoxFlat_normal")
 ProgressBar/styles/fill = SubResource("StyleBoxFlat_hover")
 RichTextLabel/colors/default_color = Color(0.875, 0.875, 0.875, 1)
-RichTextLabel/font_sizes/bold_font_size = 30
-RichTextLabel/font_sizes/normal_font_size = 27
+RichTextLabel/font_sizes/bold_font_size = 23
+RichTextLabel/font_sizes/normal_font_size = 21
 RichTextLabel/fonts/bold_font = ExtResource("2_font_bold")
 RichTextLabel/fonts/normal_font = ExtResource("1_font_regular")
 SpinBox/colors/font_color = Color(0.875, 0.875, 0.875, 1)
@@ -280,7 +298,7 @@ Window/constants/close_v_offset = 20
 Window/constants/resize_margin = 6
 Window/constants/title_height = 32
 Window/font_sizes/title_font_size = 20
-Window/styles/embedded_border = SubResource("StyleBoxFlat_panel")
+Window/styles/embedded_border = SubResource("StyleBoxFlat_window_embedded")
 Window/styles/panel = SubResource("StyleBoxFlat_panel")
 _entity_button/base_type = &"Button"
 _entity_button/colors/font_color = Color(0.875, 0.875, 0.875, 1)
