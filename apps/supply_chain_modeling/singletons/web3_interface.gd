@@ -255,7 +255,7 @@ func mint_design(design_data: Dictionary) -> void:
 	var encoded_data = encode_graph_data(design_data)
 	mint_blueprint(encoded_data, NFT_CONTRACT)
 
-func load_design(token_id: int) -> void:
+func load_design(_token_id: int) -> void:
 	#var base64_string = await call_contract(
 		#NFT_CONTRACT, 
 		#"getGraphData",

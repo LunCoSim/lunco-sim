@@ -118,7 +118,7 @@ func _on_mouse_exited():
 	mouse_over_display = false
 
 # Handle 3D area input and translate to 2D viewport input
-func _on_area_3d_input_event(_camera, event, mouse_position, _normal, shape_idx):
+func _on_area_3d_input_event(_camera, event, mouse_position, _normal, _shape_idx):
 	if not input_enabled:
 		return
 	
