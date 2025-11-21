@@ -48,6 +48,22 @@ corner_radius_top_right = 6
 corner_radius_bottom_right = 6
 corner_radius_bottom_left = 6
 
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_entity_button_active"]
+content_margin_left = 10.0
+content_margin_top = 8.0
+content_margin_right = 10.0
+content_margin_bottom = 8.0
+bg_color = Color(0.2, 0.4, 0.8, 1)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.4, 0.6, 1, 1)
+corner_radius_top_left = 6
+corner_radius_top_right = 6
+corner_radius_bottom_right = 6
+corner_radius_bottom_left = 6
+
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_panel_compact"]
 content_margin_left = 8.0
 content_margin_top = 8.0
@@ -86,6 +102,17 @@ corner_radius_top_right = 4
 corner_radius_bottom_right = 4
 corner_radius_bottom_left = 4
 
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_section_header"]
+content_margin_left = 12.0
+content_margin_top = 8.0
+content_margin_right = 12.0
+content_margin_bottom = 8.0
+bg_color = Color(0.2, 0.2, 0.2, 1)
+border_width_bottom = 2
+border_color = Color(0.3, 0.3, 0.3, 1)
+corner_radius_top_left = 6
+corner_radius_top_right = 6
+
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_panel"]
 content_margin_left = 24.0
 content_margin_top = 24.0
@@ -103,22 +130,6 @@ corner_radius_bottom_right = 8
 corner_radius_bottom_left = 8
 shadow_color = Color(0, 0, 0, 0.3)
 shadow_size = 8
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_entity_button_active"]
-content_margin_left = 10.0
-content_margin_top = 8.0
-content_margin_right = 10.0
-content_margin_bottom = 8.0
-bg_color = Color(0.2, 0.4, 0.8, 1)
-border_width_left = 1
-border_width_top = 1
-border_width_right = 1
-border_width_bottom = 1
-border_color = Color(0.4, 0.6, 1.0, 1)
-corner_radius_top_left = 6
-corner_radius_top_right = 6
-corner_radius_bottom_right = 6
-corner_radius_bottom_left = 6
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_entity_button_hover"]
 content_margin_left = 10.0
@@ -152,17 +163,6 @@ corner_radius_top_right = 6
 corner_radius_bottom_right = 6
 corner_radius_bottom_left = 6
 
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_section_header"]
-content_margin_left = 12.0
-content_margin_top = 8.0
-content_margin_right = 12.0
-content_margin_bottom = 8.0
-bg_color = Color(0.2, 0.2, 0.2, 1)
-border_width_bottom = 2
-border_color = Color(0.3, 0.3, 0.3, 1)
-corner_radius_top_left = 6
-corner_radius_top_right = 6
-
 [resource]
 resource_local_to_scene = true
 Button/colors/font_color = Color(0.875, 0.875, 0.875, 1)
@@ -174,6 +174,10 @@ Button/font_sizes/font_size = 16
 Button/styles/hover = SubResource("StyleBoxFlat_hover")
 Button/styles/normal = SubResource("StyleBoxFlat_normal")
 Button/styles/pressed = SubResource("StyleBoxFlat_pressed")
+ButtonAccent/base_type = &"Button"
+ButtonAccent/styles/hover = SubResource("StyleBoxFlat_entity_button_active")
+ButtonAccent/styles/normal = SubResource("StyleBoxFlat_entity_button_active")
+ButtonAccent/styles/pressed = SubResource("StyleBoxFlat_entity_button_active")
 CheckBox/colors/font_color = Color(0.875, 0.875, 0.875, 1)
 CheckBox/colors/font_focus_color = Color(0.95, 0.95, 0.95, 1)
 CheckBox/colors/font_hover_color = Color(0.95, 0.95, 0.95, 1)
@@ -200,6 +204,8 @@ Label/colors/font_color = Color(0.875, 0.875, 0.875, 1)
 Label/constants/line_spacing = 4
 Label/font_sizes/font_size = 16
 Label/styles/normal = null
+LabelTag/base_type = &"Label"
+LabelTag/styles/normal = SubResource("StyleBoxFlat_section_header")
 LineEdit/colors/font_color = Color(0.875, 0.875, 0.875, 1)
 LineEdit/colors/font_placeholder_color = Color(0.5, 0.5, 0.5, 1)
 LineEdit/constants/minimum_character_width = 4
@@ -224,6 +230,8 @@ OptionButton/styles/normal = SubResource("StyleBoxFlat_normal")
 OptionButton/styles/pressed = SubResource("StyleBoxFlat_pressed")
 Panel/styles/panel = SubResource("StyleBoxFlat_panel")
 PanelContainer/styles/panel = SubResource("StyleBoxFlat_panel_compact")
+PanelContainerOverlay/base_type = &"PanelContainer"
+PanelContainerOverlay/styles/panel = SubResource("StyleBoxFlat_panel")
 PopupMenu/colors/font_color = Color(0.875, 0.875, 0.875, 1)
 PopupMenu/colors/font_hover_color = Color(0.95, 0.95, 0.95, 1)
 PopupMenu/font_sizes/font_size = 16

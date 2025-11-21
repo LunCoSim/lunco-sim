@@ -3,24 +3,6 @@
 [ext_resource type="Script" path="res://controllers/character/character-ui.gd" id="1_iqqcr"]
 [ext_resource type="Theme" uid="uid://hve1e7mnexbi" path="res://themes/theme.tres" id="1_v4hy0"]
 
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_jwqaa"]
-content_margin_left = 16.0
-content_margin_top = 16.0
-content_margin_right = 16.0
-content_margin_bottom = 16.0
-bg_color = Color(0.13, 0.13, 0.13, 0.9)
-border_width_left = 1
-border_width_top = 1
-border_width_right = 1
-border_width_bottom = 1
-border_color = Color(0.25, 0.25, 0.25, 1)
-corner_radius_top_left = 8
-corner_radius_top_right = 8
-corner_radius_bottom_right = 8
-corner_radius_bottom_left = 8
-shadow_color = Color(0, 0, 0, 0.2)
-shadow_size = 6
-
 [node name="CharacterUI" type="Window"]
 title = "Character Controller"
 initial_position = 2
@@ -37,7 +19,7 @@ anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
-theme_override_styles/panel = SubResource("StyleBoxFlat_jwqaa")
+theme_type_variation = &"PanelContainerOverlay"
 
 [node name="MarginContainer" type="MarginContainer" parent="PanelContainer"]
 layout_mode = 2
@@ -48,7 +30,7 @@ size_flags_vertical = 3
 
 [node name="HeaderLabel" type="Label" parent="PanelContainer/MarginContainer/VBoxContainer"]
 layout_mode = 2
-theme_type_variation = "_section_header"
+theme_type_variation = &"_section_header"
 text = "Character Controller"
 horizontal_alignment = 1
 

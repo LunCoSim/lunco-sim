@@ -3,78 +3,7 @@
 [ext_resource type="Script" uid="uid://bpq5fqrtu7f5o" path="res://core/avatar/avatar_ui.gd" id="1_igs02"]
 [ext_resource type="Theme" uid="uid://hve1e7mnexbi" path="res://themes/theme.tres" id="1_ois6a"]
 
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_entities_panel"]
-content_margin_left = 16.0
-content_margin_top = 16.0
-content_margin_right = 16.0
-content_margin_bottom = 16.0
-bg_color = Color(0.13, 0.13, 0.13, 0.9)
-border_width_left = 1
-border_width_top = 1
-border_width_right = 1
-border_width_bottom = 1
-border_color = Color(0.25, 0.25, 0.25, 0.9)
-corner_radius_top_left = 8
-corner_radius_top_right = 8
-corner_radius_bottom_right = 8
-corner_radius_bottom_left = 8
-shadow_color = Color(0, 0, 0, 0.2)
-shadow_size = 5
 
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_label_bg"]
-content_margin_left = 8.0
-content_margin_top = 4.0
-content_margin_right = 8.0
-content_margin_bottom = 4.0
-bg_color = Color(0.2, 0.2, 0.2, 0.9)
-border_width_left = 1
-border_width_top = 1
-border_width_right = 1
-border_width_bottom = 1
-border_color = Color(0.3, 0.3, 0.3, 1)
-corner_radius_top_left = 4
-corner_radius_top_right = 4
-corner_radius_bottom_right = 4
-corner_radius_bottom_left = 4
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_item_normal"]
-content_margin_left = 8.0
-content_margin_top = 4.0
-content_margin_right = 8.0
-content_margin_bottom = 4.0
-bg_color = Color(0.18, 0.18, 0.18, 1)
-border_width_left = 1
-border_width_top = 1
-border_width_right = 1
-border_width_bottom = 1
-border_color = Color(0.25, 0.25, 0.25, 1)
-corner_radius_top_left = 6
-corner_radius_top_right = 6
-corner_radius_bottom_right = 6
-corner_radius_bottom_left = 6
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_item_selected"]
-content_margin_left = 8.0
-content_margin_top = 4.0
-content_margin_right = 8.0
-content_margin_bottom = 4.0
-bg_color = Color(0.25, 0.25, 0.25, 1)
-border_width_left = 1
-border_width_top = 1
-border_width_right = 1
-border_width_bottom = 1
-border_color = Color(0.4, 0.4, 0.4, 1)
-corner_radius_top_left = 6
-corner_radius_top_right = 6
-corner_radius_bottom_right = 6
-corner_radius_bottom_left = 6
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_blue"]
-bg_color = Color(0.2, 0.4, 0.8, 1)
-corner_radius_top_left = 4
-corner_radius_top_right = 4
-corner_radius_bottom_right = 4
-corner_radius_bottom_left = 4
 
 [node name="UI" type="Control"]
 layout_mode = 3
@@ -102,7 +31,7 @@ theme_override_constants/separation = 16
 
 [node name="UsersContainer" type="PanelContainer" parent="EntityUserContainer"]
 layout_mode = 2
-theme_override_styles/panel = SubResource("StyleBoxFlat_entities_panel")
+theme_type_variation = &"PanelContainerOverlay"
 
 [node name="VBoxContainer" type="VBoxContainer" parent="EntityUserContainer/UsersContainer"]
 layout_mode = 2
@@ -110,11 +39,11 @@ theme_override_constants/separation = 10
 
 [node name="ConnectedUsersLabel" type="Label" parent="EntityUserContainer/UsersContainer/VBoxContainer"]
 layout_mode = 2
+theme_type_variation = &"LabelTag"
 theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
 theme_override_colors/font_shadow_color = Color(0, 0, 0, 0.3)
 theme_override_constants/shadow_offset_x = 1
 theme_override_constants/shadow_offset_y = 1
-theme_override_styles/normal = SubResource("StyleBoxFlat_label_bg")
 text = "Connected Users"
 horizontal_alignment = 1
 
@@ -122,14 +51,11 @@ horizontal_alignment = 1
 unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 80)
 layout_mode = 2
-theme_override_styles/panel = SubResource("StyleBoxFlat_item_normal")
-theme_override_styles/selected = SubResource("StyleBoxFlat_item_selected")
-theme_override_styles/selected_focus = SubResource("StyleBoxFlat_item_selected")
 
 [node name="EntitiesContainer" type="PanelContainer" parent="EntityUserContainer"]
 layout_mode = 2
 size_flags_vertical = 3
-theme_override_styles/panel = SubResource("StyleBoxFlat_entities_panel")
+theme_type_variation = &"PanelContainerOverlay"
 
 [node name="VBoxContainer" type="VBoxContainer" parent="EntityUserContainer/EntitiesContainer"]
 layout_mode = 2
@@ -137,11 +63,11 @@ theme_override_constants/separation = 10
 
 [node name="CreateEntitiesLabel" type="Label" parent="EntityUserContainer/EntitiesContainer/VBoxContainer"]
 layout_mode = 2
+theme_type_variation = &"LabelTag"
 theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
 theme_override_colors/font_shadow_color = Color(0, 0, 0, 0.3)
 theme_override_constants/shadow_offset_x = 1
 theme_override_constants/shadow_offset_y = 1
-theme_override_styles/normal = SubResource("StyleBoxFlat_label_bg")
 text = "Create Entities (Alt+#)"
 horizontal_alignment = 1
 
@@ -150,9 +76,6 @@ unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 140)
 layout_mode = 2
 size_flags_vertical = 3
-theme_override_styles/panel = SubResource("StyleBoxFlat_item_normal")
-theme_override_styles/selected = SubResource("StyleBoxFlat_item_selected")
-theme_override_styles/selected_focus = SubResource("StyleBoxFlat_item_selected")
 
 [node name="LivesEntitiesContrainer" type="PanelContainer" parent="."]
 layout_mode = 1
@@ -166,7 +89,7 @@ offset_bottom = -5.0
 grow_horizontal = 2
 grow_vertical = 0
 size_flags_horizontal = 3
-theme_override_styles/panel = SubResource("StyleBoxFlat_entities_panel")
+theme_type_variation = &"PanelContainerOverlay"
 
 [node name="VBoxContainer" type="VBoxContainer" parent="LivesEntitiesContrainer"]
 layout_mode = 2
@@ -174,11 +97,11 @@ theme_override_constants/separation = 8
 
 [node name="TakeControlLabel" type="Label" parent="LivesEntitiesContrainer/VBoxContainer"]
 layout_mode = 2
+theme_type_variation = &"LabelTag"
 theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
 theme_override_colors/font_shadow_color = Color(0, 0, 0, 0.3)
 theme_override_constants/shadow_offset_x = 1
 theme_override_constants/shadow_offset_y = 1
-theme_override_styles/normal = SubResource("StyleBoxFlat_label_bg")
 text = "Take Control (1-8)"
 horizontal_alignment = 1
 
@@ -215,7 +138,7 @@ grow_horizontal = 0
 unique_name_in_owner = true
 layout_mode = 2
 theme_override_colors/font_color = Color(1, 1, 1, 1)
-theme_override_styles/normal = SubResource("StyleBoxFlat_blue")
+theme_type_variation = &"ButtonAccent"
 text = "Connect Wallet"
 
 [node name="DisconnectWallet" type="Button" parent="WalletInfo"]

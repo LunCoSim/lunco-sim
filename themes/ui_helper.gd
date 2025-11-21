@@ -41,24 +41,7 @@ func setup_window(window: Window) -> void:
 	
 # Apply panel styling consistently
 func setup_panel(panel: PanelContainer) -> void:
-	var style = StyleBoxFlat.new()
-	style.content_margin_left = MARGIN_MEDIUM
-	style.content_margin_top = MARGIN_MEDIUM
-	style.content_margin_right = MARGIN_MEDIUM
-	style.content_margin_bottom = MARGIN_MEDIUM
-	style.bg_color = COLOR_BG
-	style.border_width_left = 1
-	style.border_width_top = 1
-	style.border_width_right = 1
-	style.border_width_bottom = 1
-	style.border_color = COLOR_BORDER
-	style.corner_radius_top_left = CORNER_RADIUS_MEDIUM
-	style.corner_radius_top_right = CORNER_RADIUS_MEDIUM
-	style.corner_radius_bottom_right = CORNER_RADIUS_MEDIUM
-	style.corner_radius_bottom_left = CORNER_RADIUS_MEDIUM
-	style.shadow_color = Color(0, 0, 0, 0.2)
-	style.shadow_size = 6
-	panel.add_theme_stylebox_override("panel", style)
+	panel.theme_type_variation = "PanelContainerOverlay"
 
 # Apply consistent container spacing
 func setup_containers(vbox: VBoxContainer, margin: MarginContainer) -> void:

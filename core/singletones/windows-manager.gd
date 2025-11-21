@@ -5,6 +5,8 @@ var MainMenu: Window
 var ChatWindow: Window
 var TutorialWindow: Window
 
+const THEME = preload("res://themes/theme.tres")
+
 
 func _ready():
 	var MainMenuScene = load("res://core/widgets/menu/main_menu.tscn").instantiate()
@@ -40,44 +42,12 @@ static func make_window(control, title, transparent_bg = true) -> Window:
 	win.auto_translate = true
 	# Ensure window size starts at a reasonable size
 	win.size = Vector2(400, 500)
+	win.theme = THEME
 	
 	# Add a styled panel for the window background
 	var panel = Panel.new()
 	panel.show_behind_parent = true
 	panel.set_anchors_preset(Control.PRESET_FULL_RECT)
-	
-	# Create a StyleBoxFlat for the panel that looks good in and out of focus
-	var style = StyleBoxFlat.new()
-	style.bg_color = Color(0.12, 0.14, 0.17, 1.0)
-	style.border_width_left = 1
-	style.border_width_top = 1
-	style.border_width_right = 1
-	style.border_width_bottom = 1
-	style.border_color = Color(0.2, 0.22, 0.25, 1)
-	style.corner_radius_top_left = 8
-	style.corner_radius_top_right = 8
-	style.corner_radius_bottom_right = 8
-	style.corner_radius_bottom_left = 8
-	style.shadow_color = Color(0, 0, 0, 0.3)
-	style.shadow_size = 8
-	
-	# Create a StyleBoxFlat for the unfocused state to prevent gray background
-	var unfocused_style = StyleBoxFlat.new()
-	unfocused_style.bg_color = Color(0.12, 0.14, 0.17, 1.0)
-	unfocused_style.border_width_left = 1
-	unfocused_style.border_width_top = 1
-	unfocused_style.border_width_right = 1
-	unfocused_style.border_width_bottom = 1
-	unfocused_style.border_color = Color(0.18, 0.2, 0.22, 1)
-	unfocused_style.corner_radius_top_left = 8
-	unfocused_style.corner_radius_top_right = 8
-	unfocused_style.corner_radius_bottom_right = 8
-	unfocused_style.corner_radius_bottom_left = 8
-	unfocused_style.shadow_color = Color(0, 0, 0, 0.2)
-	unfocused_style.shadow_size = 8
-	
-	panel.add_theme_stylebox_override("panel", style)
-	panel.add_theme_stylebox_override("panel_unfocused", unfocused_style)
 	
 	win.add_child(panel)
 	win.move_child(panel, 0)
@@ -93,8 +63,7 @@ static func make_window(control, title, transparent_bg = true) -> Window:
 	win.close_requested.connect(win.hide)
 	
 	# Connect focus signals to update the window appearance
-	win.focus_entered.connect(func(): panel.add_theme_stylebox_override("panel", style))
-	win.focus_exited.connect(func(): panel.add_theme_stylebox_override("panel", unfocused_style))
+
 	
 	return win
 
