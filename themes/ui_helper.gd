@@ -16,16 +16,16 @@ const SPACING_SMALL = 8
 const SPACING_MEDIUM = 16
 
 # Corner radii
-const CORNER_RADIUS_SMALL = 6
-const CORNER_RADIUS_MEDIUM = 10
-const CORNER_RADIUS_LARGE = 16
+const CORNER_RADIUS_SMALL = 4
+const CORNER_RADIUS_MEDIUM = 8
+const CORNER_RADIUS_LARGE = 12
 
 # Color variants - centralize color management
-const COLOR_BG = Color(0.12, 0.15, 0.2, 0.9)
-const COLOR_BG_LIGHT = Color(0.15, 0.18, 0.23, 0.9)
-const COLOR_BORDER = Color(0.25, 0.28, 0.32, 1.0)
-const COLOR_ACCENT = Color(0.2, 0.4, 0.8, 0.9)
-const COLOR_TEXT = Color(0.9, 0.9, 0.95, 1.0)
+const COLOR_BG = Color(0.13, 0.13, 0.13, 0.95)
+const COLOR_BG_LIGHT = Color(0.18, 0.18, 0.18, 1.0)
+const COLOR_BORDER = Color(0.25, 0.25, 0.25, 1.0)
+const COLOR_ACCENT = Color(0.2, 0.4, 0.8, 1.0)
+const COLOR_TEXT = Color(0.875, 0.875, 0.875, 1.0)
 
 # Entity button settings
 const ENTITY_BUTTON_MIN_SIZE = Vector2(90, 40)
