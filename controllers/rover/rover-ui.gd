@@ -2,9 +2,9 @@ extends Control
 
 var target: LCRoverController
 
-@onready var speed_label = $Panel/VBoxContainer/SpeedLabel
-@onready var steering_label = $Panel/VBoxContainer/SteeringLabel
-@onready var motor_label = $Panel/VBoxContainer/MotorLabel
+@onready var speed_label = $PanelContainer/Help/SpeedLabel
+@onready var steering_label = $PanelContainer/Help/SteeringLabel
+@onready var motor_label = $PanelContainer/Help/MotorLabel
 
 func _ready():
 	pass

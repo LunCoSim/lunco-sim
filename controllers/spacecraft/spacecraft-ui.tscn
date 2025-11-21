@@ -17,13 +17,33 @@ script = ExtResource("1_ayjnp")
 wait_time = 10.0
 one_shot = true
 
-[node name="Help" parent="." unique_id=1653004638 instance=ExtResource("2_l0a07")]
-layout_mode = 1
-anchors_preset = 0
-anchor_top = 0.0
-anchor_bottom = 0.0
-offset_top = 0.0
+[node name="PanelContainer" type="PanelContainer" parent="."]
+layout_mode = 0
+offset_right = 238.0
 offset_bottom = 116.0
-grow_vertical = 1
+
+[node name="Help" type="VBoxContainer" parent="PanelContainer"]
+layout_mode = 2
+
+[node name="HeaderLabel" type="Label" parent="PanelContainer/Help"]
+layout_mode = 2
+theme_type_variation = &"_section_header"
+text = "Spacecraft Controls"
+
+[node name="Thrust" type="Label" parent="PanelContainer/Help"]
+layout_mode = 2
+text = "Thrust: Space"
+
+[node name="Orientation" type="Label" parent="PanelContainer/Help"]
+layout_mode = 2
+text = "Torque: WASD"
+
+[node name="CamRotate" type="Label" parent="PanelContainer/Help"]
+layout_mode = 2
+text = "Camera distance: -/+"
+
+[node name="CamDistance" type="Label" parent="PanelContainer/Help"]
+layout_mode = 2
+text = "Rotate camera: RMB or Arrows"
 
 [connection signal="timeout" from="HideControls" to="." method="_on_HideControls_timeout"]
