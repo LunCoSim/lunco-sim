@@ -25,7 +25,6 @@ const WHEEL_ZOOM_INCREMENT = 0.1  # Add default value for wheel zoom
 # Exporting target variable and setting default mouse control to false
 @export var target: Node3D
 @export var entity_to_spawn = EntitiesDB.Entities.Astronaut
-@export var selection: = []
 
 @export var CATCH_CAMERA := true
 
@@ -39,9 +38,6 @@ const WHEEL_ZOOM_INCREMENT = 0.1  # Add default value for wheel zoom
 # Internal state
 var mouse_control := false
 var controller: LCController
-
-var UIs: = [] # TBD Global, e.g. at entity level. Each Entity has it's path to UI, Path to controller
-var Controllers = [] # TBD Global
 
 #-------------------------------
 # Function set_target sets the target, searches for a controller and calls state transited
@@ -274,7 +270,6 @@ func _input(event):
 			$AvatarController.camera_basis = camera.get_camera_rotation_basis()
 		
 	input_camera(event)
-	input_operator(event)
 
 func input_camera(event):
 	# Rotating camera
@@ -369,10 +364,6 @@ func _on_state_transited():
 # Note: update_entities is called directly on ui by simulation
 func camera_global_position():
 	return camera.global_position
-
-#---------------------------------
-
-var controlled_entities = []
 
 func _on_select_entity_to_spawn(entity_id=0, spawn_position=null):
 	if is_multiplayer_authority():

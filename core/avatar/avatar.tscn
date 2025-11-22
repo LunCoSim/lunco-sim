@@ -26,8 +26,9 @@ theme = ExtResource("10_theme")
 [node name="SpacecraftInputAdapter" parent="." node_paths=PackedStringArray("target") instance=ExtResource("4_cd740")]
 target = NodePath("..")
 
-[node name="OperatorInputAdapter" parent="." node_paths=PackedStringArray("target") instance=ExtResource("5_78cuv")]
+[node name="OperatorInputAdapter" parent="." node_paths=PackedStringArray("target", "camera") instance=ExtResource("5_78cuv")]
 target = NodePath("..")
+camera = NodePath("../SpringArmCamera")
 
 [node name="CharactInputAdapter" parent="." node_paths=PackedStringArray("camera") instance=ExtResource("6_f6o08")]
 camera = NodePath("../SpringArmCamera")
