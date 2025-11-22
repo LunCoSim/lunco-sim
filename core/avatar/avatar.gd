@@ -445,7 +445,11 @@ func _on_state_transited():
 
 # Entities are tracked by simulation
 # Avatar delegates entity list updates to UI
-# Note: update_entities is called directly on ui by simulation
+# This method is called by simulation when entities are updated
+func update_entities(entities):
+	if ui:
+		ui.update_entities(entities)
+
 func camera_global_position():
 	return camera.global_position
 
