@@ -33,6 +33,7 @@ ReplayManager="*res://core/singletones/replay-manager.gd"
 ReplayShortcut="*res://core/singletones/replay-shortcut.gd"
 NotificationManager="*res://core/singletones/notification-manager.gd"
 UIHelper="*res://themes/ui_helper.gd"
+BuilderManager="*res://core/singletones/builder_manager.gd"
 
 [display]
 

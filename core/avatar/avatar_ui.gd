@@ -32,6 +32,33 @@ func _ready():
 	
 	if get_node_or_null("%TargetUI") == null:
 		push_error("Avatar UI: TargetUI node not found")
+
+	# Setup buttons FIRST to ensure they work even if other things fail
+	print("Avatar UI: Setting up buttons...")
+	var create_button = get_node_or_null("%CreateEntityButton")
+	if create_button:
+		print("Avatar UI: CreateEntityButton found")
+		if not create_button.pressed.is_connected(_on_create_entity_button_pressed):
+			create_button.pressed.connect(_on_create_entity_button_pressed)
+			
+		if ui_helper:
+			ui_helper.setup_entity_button(create_button, false)
+		# Apply color AFTER setup to ensure it overrides defaults
+		create_button.modulate = Color(0.2, 0.8, 0.2)
+	else:
+		push_error("Avatar UI: CreateEntityButton not found")
+
+	var builder_button = get_node_or_null("%BuilderButton")
+	if builder_button:
+		print("Avatar UI: BuilderButton found")
+		if not builder_button.pressed.is_connected(_on_builder_button_pressed):
+			builder_button.pressed.connect(_on_builder_button_pressed)
+			
+		if ui_helper:
+			ui_helper.setup_entity_button(builder_button, false)
+		builder_button.modulate = Color(0.2, 0.6, 1.0) # Blue-ish
+	else:
+		push_warning("Avatar UI: BuilderButton not found")
 	
 	# Connect visibility change signal to update entities when UI becomes visible
 	visibility_changed.connect(_on_visibility_changed)
@@ -71,13 +98,11 @@ func _ready():
 	
 	_update_connection_status()
 	
-	# Add this line to update the user list when the scene is ready
-	_on_update_connected_users()
+	# Update user list
+	if Users:
+		_on_update_connected_users()
 	
-	var create_button = get_node_or_null("%CreateEntityButton")
-	if create_button:
-		ui_helper.setup_entity_button(create_button, false)
-		create_button.modulate = Color(0.2, 0.8, 0.2)
+	print("Avatar UI: Ready complete")
 
 # Function display_controller_ui clears the ui and displays the controller UI
 func display_controller_ui(new_controller_ui: Node = null):
@@ -191,8 +216,10 @@ func update_entities(entities):
 		idx += 1
 
 func _on_create_entity_button_pressed():
+	print("DEBUG: Create Entity button pressed!")
 	var button_node = get_node_or_null("%CreateEntityButton")
 	if not button_node:
+		push_error("CreateEntityButton node not found in callback")
 		return
 		
 	var popup = PopupMenu.new()
@@ -200,10 +227,13 @@ func _on_create_entity_button_pressed():
 	add_child(popup)
 	
 	if EntitiesDB:
+		print("Populating entities from DB")
 		var keys = EntitiesDB.Entities.keys()
 		for key in keys:
 			var value = EntitiesDB.Entities[key]
 			popup.add_item(key, value)
+	else:
+		push_error("EntitiesDB singleton not found")
 	
 	popup.id_pressed.connect(func(id): 
 		_on_entities_item_selected(id)
@@ -215,6 +245,23 @@ func _on_create_entity_button_pressed():
 	var rect = button_node.get_global_rect()
 	popup.position = Vector2(rect.position.x, rect.position.y - popup.size.y) # Show above if possible, or let it handle itself
 	popup.popup(Rect2(rect.position.x, rect.position.y, rect.size.x, rect.size.y))
+
+func _on_builder_button_pressed():
+	print("DEBUG: Builder button pressed!")
+	var builder_ui_scene = load("res://core/ui/builder_ui.tscn")
+	if builder_ui_scene:
+		print("Builder UI scene loaded")
+		var builder_ui = builder_ui_scene.instantiate()
+		add_child(builder_ui)
+		
+		# Check if BuilderManager exists (it should be an autoload)
+		if has_node("/root/BuilderManager"):
+			print("Starting building mode")
+			get_node("/root/BuilderManager").start_building()
+		else:
+			push_error("BuilderManager singleton not found! Please restart the project.")
+	else:
+		push_error("Failed to load Builder UI scene")
 
 func _on_update_connected_users():
 	var tree: ItemList = get_node_or_null("%Users")
