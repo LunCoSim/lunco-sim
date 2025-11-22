@@ -14,10 +14,13 @@ script = ExtResource("1_script")
 
 [node name="PanelContainer" type="PanelContainer" parent="."]
 layout_mode = 1
-anchors_preset = 9
+anchors_preset = 11
+anchor_left = 1.0
+anchor_right = 1.0
 anchor_bottom = 1.0
-offset_right = 250.0
-offset_bottom = -85.0
+offset_left = -250.0
+offset_bottom = -310.0
+grow_horizontal = 0
 grow_vertical = 2
 
 [node name="VBoxContainer" type="VBoxContainer" parent="PanelContainer"]
@@ -46,48 +49,5 @@ layout_mode = 2
 layout_mode = 2
 text = "LAUNCH MISSION"
 
-[node name="StructurePanel" type="PanelContainer" parent="."]
-layout_mode = 1
-anchors_preset = 11
-anchor_left = 1.0
-anchor_right = 1.0
-anchor_bottom = 1.0
-offset_left = -300.0
-offset_bottom = -85.0
-grow_horizontal = 0
-grow_vertical = 2
-
-[node name="VBoxContainer" type="VBoxContainer" parent="StructurePanel"]
-layout_mode = 2
-
-[node name="Label" type="Label" parent="StructurePanel/VBoxContainer"]
-layout_mode = 2
-text = "Rover Structure"
-horizontal_alignment = 1
-
-[node name="HSeparator" type="HSeparator" parent="StructurePanel/VBoxContainer"]
-layout_mode = 2
-
-[node name="ScrollContainer" type="ScrollContainer" parent="StructurePanel/VBoxContainer"]
-layout_mode = 2
-size_flags_vertical = 3
-
-[node name="ComponentTree" type="Tree" parent="StructurePanel/VBoxContainer/ScrollContainer"]
-layout_mode = 2
-size_flags_horizontal = 3
-size_flags_vertical = 3
-hide_root = true
-
-[node name="HSeparator2" type="HSeparator" parent="StructurePanel/VBoxContainer"]
-layout_mode = 2
-
-[node name="PropertiesLabel" type="Label" parent="StructurePanel/VBoxContainer"]
-layout_mode = 2
-text = "Properties"
-horizontal_alignment = 1
-
-[node name="PropertiesGrid" type="GridContainer" parent="StructurePanel/VBoxContainer"]
-layout_mode = 2
-columns = 2
 
 [connection signal="pressed" from="PanelContainer/VBoxContainer/LaunchButton" to="." method="_on_launch_button_pressed"]

@@ -18,27 +18,39 @@ func _process(delta):
 		update_structure_view()
 
 func update_structure_view():
-	# Find all constructibles in the scene
-	var constructibles = get_tree().get_nodes_in_group("Constructibles")
-	
 	component_tree.clear()
 	var root = component_tree.create_item()
 	
-	for constructible in constructibles:
-		if constructible is LCConstructible:
-			var rover_item = component_tree.create_item(root)
-			rover_item.set_text(0, constructible.name)
-			rover_item.set_metadata(0, constructible)
-			
-			# Add components as children
-			for comp in constructible.components:
-				var comp_item = component_tree.create_item(rover_item)
-				comp_item.set_text(0, "  └ " + comp.name + " (%.1f kg)" % comp.mass)
-				comp_item.set_metadata(0, comp)
-			
-			# Show total mass
-			var total_mass = constructible.mass
-			rover_item.set_text(0, constructible.name + " (Total: %.1f kg, %d parts)" % [total_mass, constructible.components.size()])
+	if selected_rover and is_instance_valid(selected_rover):
+		var rover_item = component_tree.create_item(root)
+		rover_item.set_text(0, selected_rover.name)
+		rover_item.set_metadata(0, selected_rover)
+		
+		# Add components as children
+		for comp in selected_rover.components:
+			var comp_item = component_tree.create_item(rover_item)
+			comp_item.set_text(0, "  └ " + comp.name + " (%.1f kg)" % comp.mass)
+			comp_item.set_metadata(0, comp)
+		
+		# Show total mass
+		var total_mass = selected_rover.mass
+		rover_item.set_text(0, selected_rover.name + " (Total: %.1f kg, %d parts)" % [total_mass, selected_rover.components.size()])
+		
+		# Expand to show components
+		rover_item.collapsed = false
+	else:
+		var item = component_tree.create_item(root)
+		item.set_text(0, "No rover selected")
+
+func set_selected_rover(rover: LCConstructible):
+	selected_rover = rover
+	update_structure_view()
+	if rover:
+		show_properties(rover)
+	else:
+		# Clear properties
+		for child in properties_grid.get_children():
+			child.queue_free()
 
 func _on_component_selected():
 	var selected = component_tree.get_selected()

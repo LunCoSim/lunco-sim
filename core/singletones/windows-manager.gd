@@ -27,7 +27,7 @@ func _ready():
 	add_child(TutorialWindow)
 	TutorialWindow.initial_position = Window.WINDOW_INITIAL_POSITION_CENTER_PRIMARY_SCREEN
 	TutorialWindow.min_size = Vector2(300, 400)
-	position_top_left(TutorialWindow)
+	center_window(TutorialWindow)
 
 static func make_window(control, title, transparent_bg = true, borderless = false) -> Window:
 	var win = Window.new()
@@ -105,7 +105,7 @@ func toggle_chat():
 
 func show_tutorial():
 	TutorialWindow.show()
-	position_top_left(TutorialWindow)
+	center_window(TutorialWindow)
 	TutorialWindow.grab_focus()
 	
 func hide_tutorial():

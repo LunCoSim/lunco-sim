@@ -269,11 +269,30 @@ func _on_create_entity_button_pressed():
 
 func _on_builder_button_pressed():
 	print("DEBUG: Builder button pressed!")
+	
+	# Check if builder UI already exists
+	var existing_builder = get_node_or_null("BuilderUI")
+	if existing_builder:
+		existing_builder.visible = not existing_builder.visible
+		print("Builder UI toggled: ", existing_builder.visible)
+		
+		# Also toggle inspector to match
+		var inspector = get_node_or_null("ComponentInspector")
+		if inspector:
+			inspector.visible = existing_builder.visible
+		return
+
 	var builder_ui_scene = load("res://core/ui/builder_ui.tscn")
 	if builder_ui_scene:
 		print("Builder UI scene loaded")
 		var builder_ui = builder_ui_scene.instantiate()
+		builder_ui.name = "BuilderUI" # Ensure consistent name
 		add_child(builder_ui)
+		
+		# Open the component inspector automatically
+		var inspector = get_node_or_null("ComponentInspector")
+		if inspector:
+			inspector.visible = true
 		
 		# Check if BuilderManager exists (it should be an autoload)
 		if has_node("/root/BuilderManager"):

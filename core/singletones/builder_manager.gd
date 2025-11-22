@@ -37,10 +37,59 @@ func stop_building():
 		ghost_instance = null
 
 func select_part(part_id: String):
+	if selected_part_id == part_id and current_state == BuilderState.PLACING_PART:
+		deselect_part()
+		return
+
 	if part_registry.has(part_id):
 		selected_part_id = part_id
 		current_state = BuilderState.PLACING_PART
 		create_ghost(part_id)
+
+func deselect_part():
+	selected_part_id = ""
+	current_state = BuilderState.SELECTING_PART
+	if ghost_instance:
+		ghost_instance.queue_free()
+		ghost_instance = null
+
+func try_select_entity():
+	var camera = get_viewport().get_camera_3d()
+	if not camera: return
+	
+	var mouse_pos = get_viewport().get_mouse_position()
+	var from = camera.project_ray_origin(mouse_pos)
+	var to = from + camera.project_ray_normal(mouse_pos) * 1000.0
+	
+	var space_state = camera.get_world_3d().direct_space_state
+	var query = PhysicsRayQueryParameters3D.create(from, to)
+	query.collision_mask = 1 # Adjust mask if needed
+	
+	var result = space_state.intersect_ray(query)
+	
+	if result and result.collider:
+		var target = result.collider
+		while target and not target is LCConstructible:
+			target = target.get_parent()
+		
+		if target and target is LCConstructible:
+			print("BuilderManager: Selected entity: ", target.name)
+			# Notify Inspector
+			var inspector = get_tree().root.find_child("ComponentInspector", true, false)
+			if inspector and inspector.has_method("set_selected_rover"):
+				inspector.set_selected_rover(target)
+				# Ensure inspector is visible?
+				# inspector.visible = true 
+				# Maybe not force visible, but if it IS visible, it will update.
+				# If user wants to see it, they can press I.
+				
+				# Also highlight? (TODO)
+		else:
+			# Deselect if clicked on nothing?
+			# var inspector = get_tree().root.find_child("ComponentInspector", true, false)
+			# if inspector and inspector.has_method("set_selected_rover"):
+			# 	inspector.set_selected_rover(null)
+			pass
 
 func create_ghost(part_id: String):
 	if ghost_instance:
@@ -57,27 +106,14 @@ func create_ghost(part_id: String):
 func _process(delta):
 	if current_state == BuilderState.PLACING_PART and ghost_instance:
 		update_ghost_position()
-		
-		# Only place on click DOWN, not while holding
-		if Input.is_action_just_pressed("ui_accept") or Input.is_action_just_pressed("click"):
-			# Check if mouse is over UI by checking if any Control is handling the mouse
-			var viewport = get_viewport()
-			if viewport:
-				# Get the control that's under the mouse
-				var mouse_pos = viewport.get_mouse_position()
-				
-				# Simple check: if Builder UI is visible and mouse is on left side, it's probably UI
-				var builder_ui = get_tree().root.find_child("BuilderUI", true, false)
-				var is_over_ui = false
-				
-				if builder_ui and builder_ui.visible:
-					# Check if mouse is over the left panel (width 250)
-					if mouse_pos.x < 250:
-						is_over_ui = true
-						print("BuilderManager: Click on UI detected, ignoring")
-				
-				if not is_over_ui:
-					try_place_part()
+
+func _unhandled_input(event):
+	if current_state == BuilderState.PLACING_PART and ghost_instance:
+		if event.is_action_pressed("click") or event.is_action_pressed("ui_accept"):
+			try_place_part()
+			get_viewport().set_input_as_handled()
+	elif event.is_action_pressed("click"):
+		try_select_entity()
 
 func update_ghost_position():
 	# Raycast from camera
