@@ -1,10 +1,55 @@
-# Class lnAvatar which inherits from lnSpaceSystem
+## Avatar - The Player's Agent in the World
+##
+## Avatar serves as the intermediary between the USER and the SYSTEM, acting as the player's
+## viewport and control interface into the simulation world.
+##
+## ARCHITECTURAL ROLE:
+## - User Interface Layer: Handles how the player sees and interacts with the world
+## - Input Coordinator: Manages when and how different input systems are active
+## - Visualization Manager: Controls camera settings and view preferences
+## - Entity Controller: Coordinates control requests and entity targeting
+##
+## RESPONSIBILITIES:
+## 1. Camera Management
+##    - Handles camera input (rotation, zoom)
+##    - Manages camera settings per controller type
+##    - Controls mouse capture mode for camera rotation
+##
+## 2. Input Coordination
+##    - Enables/disables input adapters based on context
+##    - Routes keyboard shortcuts (entity selection, spawning)
+##    - Manages input priority (UI vs gameplay)
+##
+## 3. Entity Control
+##    - Targets entities for control
+##    - Sends control requests to ControlManager
+##    - Manages control release
+##
+## 4. UI Management
+##    - Owns and coordinates UI components
+##    - Updates entity lists
+##    - Manages UI display states
+##
+## 5. Raycasting & Interaction
+##    - Handles click-to-select entities
+##    - Manages NFT spawning interactions
+##    - Coordinates with display managers
+##
+## DESIGN PHILOSOPHY:
+## Avatar is CLIENT-SIDE ONLY and never synchronized over network.
+## Each player has their own Avatar instance with their own camera and UI.
+## Avatar coordinates but delegates implementation to specialized classes:
+## - Input adapters handle controller-specific input
+## - Controllers handle entity behavior
+## - UI classes handle interface rendering
+##
 @icon("res://core/avatar/avatar.svg")
 class_name LCAvatar
 extends LCSpaceSystem
 
-#-------------------------------
-# Declaring signals
+#===============================================================================
+# SIGNALS - Communication with other systems
+#===============================================================================
 signal spawn_entity(entity, position)
 
 signal target_changed(target)
@@ -12,8 +57,9 @@ signal target_changed(target)
 signal requesting_control(entity_idx)
 signal release_control
 
-#-------------------------------
-# Constants for mouse sensitivity and ray length
+#===============================================================================
+# CONSTANTS - Configuration values
+#===============================================================================
 const MOUSE_SENSITIVITY = 0.015
 const RAY_LENGTH = 10000
 const SPEED = 5.0
@@ -21,26 +67,33 @@ const JUMP_VELOCITY = 4.5
 const ZOOM_SPEED = 0.1
 const WHEEL_ZOOM_INCREMENT = 0.1  # Add default value for wheel zoom
 
-#-------------------------------
-# Exporting target variable and setting default mouse control to false
+#===============================================================================
+# EXPORTS - Editor-configurable properties
+#===============================================================================
 @export var target: Node3D
 @export var entity_to_spawn = EntitiesDB.Entities.Astronaut
 
 @export var CATCH_CAMERA := true
 
-#-------------------------------
-# Defining UI and camera variables
+#===============================================================================
+# COMPONENTS - Child nodes and references
+#===============================================================================
 @onready var ui := $UI
 @onready var camera:SpringArmCamera = $SpringArmCamera
 @onready var ui_display_manager := $UiDisplayManager
 
-#------------------------------
-# Internal state
+#===============================================================================
+# STATE - Internal runtime state
+#===============================================================================
 var mouse_control := false
 var controller: LCController
 
-#-------------------------------
-# Function set_target sets the target, searches for a controller and calls state transited
+#===============================================================================
+# ENTITY TARGETING & CONTROL - Managing what the player controls
+#===============================================================================
+
+## Sets the target entity/controller for the player to control
+## Handles controller resolution and camera exclusion
 func set_target(_target):
 	print("Set target: ", _target)
 	if camera and target:
@@ -72,14 +125,18 @@ func set_target(_target):
 	_on_state_transited()
 	return controller
 
-# Function set_camera sets the camera and make it current if camera exists
+## Sets the camera and makes it current if CATCH_CAMERA is enabled
 func set_camera(_camera):
 	camera = _camera
 	if camera and CATCH_CAMERA:
 		camera.set_current()
 
-#-------------------------------
-# Defining different functions for handling player controls like select, rotate, move, etc.
+#===============================================================================
+# INITIALIZATION - Setup and signal connections
+#===============================================================================
+
+## Called when Avatar enters the scene tree
+## Sets up camera, target, and connects to ControlManager signals
 func _ready():
 	# Add to group for easier identification
 	add_to_group("avatar")
@@ -100,13 +157,18 @@ func _ready():
 #-----------------------------------------------------
 
 # Add these new constants
+#===============================================================================
+# NFT SYSTEM - NFT sphere spawning and popup management
+#===============================================================================
+
+# Preload NFT-related scenes
 const NFT_SPHERE_SCENE = preload("res://core/facilities/nft-sphere.tscn")
 const POPUP_SCENE = preload("res://core/widgets/nft-create-popup.tscn")
 
-# Add this as a class variable
+# Active popup tracking
 var active_popup: Control = null
 
-# Modify the spawn_nft_sphere function to use RPC
+## Spawns an NFT sphere in the world (synchronized via RPC)
 @rpc("any_peer", "call_local")
 func spawn_nft_sphere(nft_data: Dictionary, spawn_position: Vector3):
 	var nft_sphere = NFT_SPHERE_SCENE.instantiate()
@@ -168,7 +230,12 @@ func show_nft_popup(spawn_position: Vector3):
 func _on_popup_closed():
 	active_popup = null  # Clear the active popup reference when it's closed
 
-# Modify the _input function to better handle UI display input
+#===============================================================================
+# INPUT HANDLING - Keyboard shortcuts and input coordination
+#===============================================================================
+
+## Main input handler - coordinates all input systems
+## Routes keyboard shortcuts and manages input adapter states
 func _input(event):
 	# Only handle UI-related input if a display is active
 	if ui_display_manager and ui_display_manager.is_display_active():
@@ -271,6 +338,12 @@ func _input(event):
 		
 	input_camera(event)
 
+#===============================================================================
+# CAMERA INPUT - Camera rotation and zoom controls
+#===============================================================================
+
+## Handles camera rotation (mouse/keyboard) and zoom (wheel/keyboard)
+## Manages mouse capture mode for camera control
 func input_camera(event):
 	# Rotating camera
 	if Input.is_action_pressed("rotate_camera"):
@@ -313,6 +386,11 @@ func input_operator(event):
 		var operator: LCOperatorController = target
 		operator.orient(camera.get_plain_basis())
 		
+#===============================================================================
+# RAYCASTING & INTERACTION - Click-to-select and world interaction
+#===============================================================================
+
+## Performs raycast from screen position for entity selection or spawning
 func action_raycast(_position: Vector2):
 	if camera:  
 		var from = camera.project_ray_origin(_position)
@@ -335,6 +413,12 @@ func do_raycast(from: Vector3, to: Vector3):
 			requesting_control.emit(result.collider)
 #------------------------------------------------------
 # Function _on_state_transited instantiates different ui based on target and sets camera spring length
+#===============================================================================
+# STATE TRANSITIONS - Camera settings per controller type
+#===============================================================================
+
+## Called when target changes - applies appropriate camera settings
+## Avatar owns visualization preferences for each controller type
 func _on_state_transited():
 
 	camera.set_follow_height(0.5)
@@ -365,6 +449,11 @@ func _on_state_transited():
 func camera_global_position():
 	return camera.global_position
 
+#===============================================================================
+# SIGNAL HANDLERS - Responding to control events and user actions
+#===============================================================================
+
+## Handles entity spawning requests from UI
 func _on_select_entity_to_spawn(entity_id=0, spawn_position=null):
 	if is_multiplayer_authority():
 		get_parent().spawn.rpc_id(1, entity_id, spawn_position)
