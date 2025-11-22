@@ -11,7 +11,6 @@ extends LCSpaceSystem
 @export var attachment_nodes: Array[Node3D] = []
 
 func _ready():
-	super._ready()
 	# Auto-find attachment nodes if not manually assigned
 	if attachment_nodes.is_empty():
 		for child in get_children():

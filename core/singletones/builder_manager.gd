@@ -94,7 +94,26 @@ func try_place_part():
 	
 	if selected_part_id == "chassis_box":
 		print("BuilderManager: Requesting spawn of chassis_box")
-		request_spawn_constructible.rpc_id(1, selected_part_id, ghost_instance.global_position, ghost_instance.global_rotation)
+		
+		# Check if we're in actual multiplayer mode (not just hosting locally)
+		var peer = multiplayer.multiplayer_peer
+		var is_server = multiplayer.is_server()
+		var peer_count = multiplayer.get_peers().size()
+		
+		print("BuilderManager: Peer: ", peer)
+		print("BuilderManager: Is server: ", is_server)
+		print("BuilderManager: Connected peers: ", peer_count)
+		
+		# Only use RPC if we're a client OR if we're a server with connected clients
+		# If we're the server with no clients, just call directly
+		if peer != null and not (is_server and peer_count == 0):
+			# In multiplayer, send RPC to server (or call locally if we are the server)
+			print("BuilderManager: Using RPC")
+			request_spawn_constructible.rpc_id(1, selected_part_id, ghost_instance.global_position, ghost_instance.global_rotation)
+		else:
+			# In single-player or local server with no clients, call directly
+			print("BuilderManager: Calling directly (local)")
+			request_spawn_constructible(selected_part_id, ghost_instance.global_position, ghost_instance.global_rotation)
 	else:
 		# Find parent under cursor
 		# request_attach_component.rpc_id(1, parent_path, selected_part_id, attachment_node)
@@ -104,7 +123,10 @@ func try_place_part():
 @rpc("any_peer", "call_remote", "reliable")
 func request_spawn_constructible(type: String, pos: Vector3, rot: Vector3):
 	print("BuilderManager: request_spawn_constructible called for ", type)
-	if not multiplayer.is_server(): 
+	
+	# In single-player, we are the "server"
+	# In multiplayer, only the server should execute this
+	if multiplayer.has_multiplayer_peer() and not multiplayer.is_server():
 		print("BuilderManager: Not server, ignoring spawn request")
 		return
 	
@@ -117,6 +139,7 @@ func request_spawn_constructible(type: String, pos: Vector3, rot: Vector3):
 	var spawner = get_tree().current_scene.find_child("Spawner", true, false)
 	if spawner:
 		spawner.add_child(constructible)
+		print("BuilderManager: Added constructible to Spawner")
 	else:
 		push_warning("BuilderManager: Spawner node not found, adding to root")
 		get_tree().root.add_child(constructible)
@@ -129,6 +152,14 @@ func request_spawn_constructible(type: String, pos: Vector3, rot: Vector3):
 	var comp = comp_scene.instantiate()
 	constructible.add_child(comp)
 	constructible.register_component(comp)
+	
+	# Notify the simulation about the new entity
+	var simulation = get_tree().current_scene
+	if simulation and simulation.has_method("_on_multiplayer_spawner_spawned"):
+		simulation._on_multiplayer_spawner_spawned(constructible)
+		print("BuilderManager: Notified simulation of new entity")
+	else:
+		push_warning("BuilderManager: Could not find simulation to notify")
 	
 	# Ensure networking spawns it on clients (needs MultiplayerSpawner setup in scene)
 
@@ -143,3 +174,4 @@ func request_attach_component(parent_path: String, type: String, attachment_node
 		parent.add_child(comp)
 		# Position at attachment node...
 		parent.register_component(comp)
+
