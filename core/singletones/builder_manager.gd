@@ -46,12 +46,18 @@ func select_part(part_id: String):
 		current_state = BuilderState.PLACING_PART
 		create_ghost(part_id)
 
+signal part_selected(part_id)
+signal part_deselected
+signal entity_selected(entity)
+
 func deselect_part():
+	print("BuilderManager: Deselecting part")
 	selected_part_id = ""
 	current_state = BuilderState.SELECTING_PART
 	if ghost_instance:
 		ghost_instance.queue_free()
 		ghost_instance = null
+	part_deselected.emit()
 
 func try_select_entity():
 	var camera = get_viewport().get_camera_3d()
@@ -69,27 +75,40 @@ func try_select_entity():
 	
 	if result and result.collider:
 		var target = result.collider
-		while target and not target is LCConstructible:
+		# Walk up to find LCConstructible
+		while target:
+			if target is LCConstructible:
+				break
+			# Fallback: Check by duck typing (safer if class_name fails)
+			if target.has_method("register_component") and target.has_method("recalculate_physics"):
+				print("BuilderManager: Found LCConstructible via duck typing")
+				break
+				
 			target = target.get_parent()
 		
-		if target and target is LCConstructible:
+		if target and (target is LCConstructible or target.has_method("register_component")):
 			print("BuilderManager: Selected entity: ", target.name)
-			# Notify Inspector
-			var inspector = get_tree().root.find_child("ComponentInspector", true, false)
-			if inspector and inspector.has_method("set_selected_rover"):
-				inspector.set_selected_rover(target)
-				# Ensure inspector is visible?
-				# inspector.visible = true 
-				# Maybe not force visible, but if it IS visible, it will update.
-				# If user wants to see it, they can press I.
-				
-				# Also highlight? (TODO)
+			entity_selected.emit(target)
 		else:
-			# Deselect if clicked on nothing?
-			# var inspector = get_tree().root.find_child("ComponentInspector", true, false)
-			# if inspector and inspector.has_method("set_selected_rover"):
-			# 	inspector.set_selected_rover(null)
-			pass
+			print("BuilderManager: Hit something, but not a constructible")
+			print("Hit Object: ", result.collider.name)
+			print("Hit Class: ", result.collider.get_class())
+			if result.collider.get_script():
+				print("Hit Script: ", result.collider.get_script().resource_path)
+			
+			entity_selected.emit(null) # Deselect
+	else:
+		print("BuilderManager: Selection raycast missed")
+		# Optional: Deselect if clicked on empty space
+		# entity_selected.emit(null)
+
+func select_entity(entity):
+	if entity and (entity is LCConstructible or entity.has_method("register_component")):
+		print("BuilderManager: Programmatically selected entity: ", entity.name)
+		entity_selected.emit(entity)
+	else:
+		print("BuilderManager: Programmatically deselected entity")
+		entity_selected.emit(null)
 
 func create_ghost(part_id: String):
 	if ghost_instance:
@@ -113,6 +132,7 @@ func _unhandled_input(event):
 			try_place_part()
 			get_viewport().set_input_as_handled()
 	elif event.is_action_pressed("click"):
+		print("BuilderManager: Click detected in _unhandled_input")
 		try_select_entity()
 
 func update_ghost_position():

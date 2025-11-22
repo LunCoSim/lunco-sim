@@ -7,7 +7,14 @@ var selected_rover: LCConstructible = null
 var update_timer = 0.0
 
 func _ready():
-	# Setup component tree
+	print("ComponentInspector: _ready")
+	var bm = get_node_or_null("/root/BuilderManager")
+	if bm:
+		print("ComponentInspector: Connected to BuilderManager")
+		bm.entity_selected.connect(set_selected_rover)
+	else:
+		print("ComponentInspector: BuilderManager not found")
+	
 	component_tree.item_selected.connect(_on_component_selected)
 
 func _process(delta):
@@ -43,6 +50,7 @@ func update_structure_view():
 		item.set_text(0, "No rover selected")
 
 func set_selected_rover(rover: LCConstructible):
+	print("ComponentInspector: set_selected_rover called with ", rover)
 	selected_rover = rover
 	update_structure_view()
 	if rover:

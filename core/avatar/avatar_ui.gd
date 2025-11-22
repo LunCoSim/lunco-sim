@@ -147,17 +147,38 @@ func clear_ui():
 func set_target(target):
 	clear_ui()
 	
-	# Use preloaded scenes with dictionary lookup instead of runtime loading
+	# Use type checking instead of string lookup
 	if target:
-		var controller_class = target.get_class()
-		var ui_scene = UI_SCENES.get(controller_class)
+		var ui_scene = null
+		
+		if target is LCRoverController:
+			ui_scene = ROVER_UI
+		elif target is LCCharacterController:
+			ui_scene = CHARACTER_UI
+		elif target is LCSpacecraftController:
+			ui_scene = SPACECRAFT_UI
+		elif target is LCOperatorController:
+			ui_scene = OPERATOR_UI
 		
 		if ui_scene:
 			controller_ui = ui_scene.instantiate()
 			controller_ui.set_target(target)  # controller specific function
 			display_controller_ui(controller_ui)
 		else:
-			push_warning("Avatar UI: No UI scene found for controller type: " + controller_class)
+			var class_name_str = "Unknown"
+			if target.get_script():
+				class_name_str = target.get_script().resource_path.get_file()
+			push_warning("Avatar UI: No UI scene found for controller: " + str(target) + " (" + class_name_str + ")")
+	
+	# Notify BuilderManager to select this entity for inspection
+	# This ensures the Inspector updates when we take control
+	if target:
+		var entity = target
+		if target is LCController:
+			entity = target.get_parent()
+		
+		if BuilderManager:
+			BuilderManager.select_entity(entity)
 	
 	# Only update entities if we're attached to the parent properly
 	var parent = get_parent()

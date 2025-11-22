@@ -20,6 +20,16 @@ func _ready():
 		btn.text = part_id.capitalize().replace("_", " ")
 		btn.pressed.connect(_on_part_selected.bind(part_id, btn))
 		part_list.add_child(btn)
+	
+	# Connect signals
+	if not bm.part_deselected.is_connected(_on_part_deselected):
+		bm.part_deselected.connect(_on_part_deselected)
+
+func _on_part_deselected():
+	if selected_button:
+		selected_button.modulate = Color(1, 1, 1)
+		selected_button = null
+	label.text = "Mission Builder\n[Select part, then click to place]"
 
 func _on_part_selected(part_id: String, btn: Button):
 	var bm = get_node_or_null("/root/BuilderManager")
