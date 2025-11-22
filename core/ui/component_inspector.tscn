@@ -9,8 +9,9 @@ anchor_top = 1.0
 anchor_right = 1.0
 anchor_bottom = 1.0
 offset_left = -300.0
-offset_top = -300.0
+offset_top = -400.0
 offset_bottom = -85.0
+offset_right = -5.0
 grow_horizontal = 0
 grow_vertical = 0
 script = ExtResource("1_script")
@@ -44,6 +45,11 @@ layout_mode = 2
 text = "Properties"
 horizontal_alignment = 1
 
-[node name="PropertiesGrid" type="GridContainer" parent="VBoxContainer"]
+[node name="PropertiesScroll" type="ScrollContainer" parent="VBoxContainer"]
 layout_mode = 2
+size_flags_vertical = 3
+
+[node name="PropertiesGrid" type="GridContainer" parent="VBoxContainer/PropertiesScroll"]
+layout_mode = 2
+size_flags_horizontal = 3
 columns = 2

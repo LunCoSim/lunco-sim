@@ -1,7 +1,7 @@
 extends PanelContainer
 
 @onready var component_tree = $VBoxContainer/ScrollContainer/ComponentTree
-@onready var properties_grid = $VBoxContainer/PropertiesGrid
+@onready var properties_grid = $VBoxContainer/PropertiesScroll/PropertiesGrid
 
 var selected_rover: LCConstructible = null
 var update_timer = 0.0

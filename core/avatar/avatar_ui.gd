@@ -59,6 +59,18 @@ func _ready():
 		builder_button.modulate = Color(0.2, 0.6, 1.0) # Blue-ish
 	else:
 		push_warning("Avatar UI: BuilderButton not found")
+
+	var inspector_button = get_node_or_null("%InspectorButton")
+	if inspector_button:
+		print("Avatar UI: InspectorButton found")
+		if not inspector_button.pressed.is_connected(_on_inspector_button_pressed):
+			inspector_button.pressed.connect(_on_inspector_button_pressed)
+			
+		if ui_helper:
+			ui_helper.setup_entity_button(inspector_button, false)
+		inspector_button.modulate = Color(0.8, 0.4, 0.8) # Purple-ish
+	else:
+		push_warning("Avatar UI: InspectorButton not found")
 	
 	# Connect visibility change signal to update entities when UI becomes visible
 	visibility_changed.connect(_on_visibility_changed)
@@ -271,6 +283,15 @@ func _on_builder_button_pressed():
 			push_error("BuilderManager singleton not found! Please restart the project.")
 	else:
 		push_error("Failed to load Builder UI scene")
+
+func _on_inspector_button_pressed():
+	print("DEBUG: Inspector button pressed!")
+	var inspector = get_node_or_null("ComponentInspector")
+	if inspector:
+		inspector.visible = not inspector.visible
+		print("Component Inspector toggled: ", inspector.visible)
+	else:
+		push_error("ComponentInspector node not found")
 
 func _on_update_connected_users():
 	var tree: ItemList = get_node_or_null("%Users")

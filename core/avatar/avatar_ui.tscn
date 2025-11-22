@@ -109,6 +109,14 @@ size_flags_vertical = 4
 text = "Builder"
 tooltip_text = "Open Mission Builder"
 
+[node name="InspectorButton" type="Button" parent="LivesEntitiesContainer/HBoxContainer"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(120, 0)
+layout_mode = 2
+size_flags_vertical = 4
+text = "Inspector"
+tooltip_text = "Toggle Component Inspector (I)"
+
 [node name="TargetUI" type="Control" parent="."]
 unique_name_in_owner = true
 anchors_preset = 0
@@ -183,6 +191,7 @@ underline = 2
 [connection signal="item_selected" from="EntityUserContainer/UsersContainer/VBoxContainer/Users" to="." method="_on_users_item_selected"]
 [connection signal="pressed" from="LivesEntitiesContainer/HBoxContainer/CreateEntityButton" to="." method="_on_create_entity_button_pressed"]
 [connection signal="pressed" from="LivesEntitiesContainer/HBoxContainer/BuilderButton" to="." method="_on_builder_button_pressed"]
+[connection signal="pressed" from="LivesEntitiesContainer/HBoxContainer/InspectorButton" to="." method="_on_inspector_button_pressed"]
 
 [connection signal="pressed" from="WalletInfo/ConnectWallet" to="." method="_on_connect_wallet_pressed"]
 [connection signal="pressed" from="WalletInfo/DisconnectWallet" to="." method="_on_disconnect_wallet_pressed"]
