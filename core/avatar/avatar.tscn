@@ -1,4 +1,4 @@
-[gd_scene load_steps=15 format=3 uid="uid://c5dg7yq7hd7m0"]
+[gd_scene load_steps=16 format=3 uid="uid://c5dg7yq7hd7m0"]
 
 [ext_resource type="Script" uid="uid://bomqiutxnbrh" path="res://core/avatar/avatar.gd" id="1_plcpi"]
 [ext_resource type="PackedScene" uid="uid://b24kp6klp25h5" path="res://addons/lunco-cameras/spring-arm-camera/spring-arm-camera.tscn" id="2_2xsb2"]
@@ -10,6 +10,7 @@
 [ext_resource type="PackedScene" uid="uid://cst8vao42ka1m" path="res://controllers/rover/rover-input-adapter.tscn" id="8_rlsuw"]
 [ext_resource type="Script" uid="uid://b3rjvml2e7lqq" path="res://core/avatar/ui_display_manager.gd" id="9_wdj5f"]
 [ext_resource type="Theme" uid="uid://hve1e7mnexbi" path="res://themes/theme.tres" id="10_theme"]
+[ext_resource type="PackedScene" uid="uid://bvh8xj3m4qn7k" path="res://core/avatar/avatar-input-adapter.tscn" id="11_avatar_input"]
 
 
 
@@ -33,6 +34,9 @@ camera = NodePath("../SpringArmCamera")
 
 [node name="RoverInputAdapter" parent="." node_paths=PackedStringArray("target") instance=ExtResource("8_rlsuw")]
 target = NodePath("..")
+
+[node name="AvatarInputAdapter" parent="." node_paths=PackedStringArray("target") instance=ExtResource("11_avatar_input")]
+target = NodePath("../AvatarController")
 
 [node name="AvatarController" type="Node3D" parent="."]
 script = ExtResource("7_tskp4")

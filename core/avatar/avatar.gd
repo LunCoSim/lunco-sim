@@ -263,23 +263,15 @@ func _input(event):
 	# Handle camera/movement controls when no UI display is active 
 	# or when UI is visible but not active
 	if ui_display_manager == null or not ui_display_manager.is_display_active():
-		if target == null:
-			var motion_direction := Vector3(
-				Input.get_action_strength("move_left") - Input.get_action_strength("move_right"),
-				Input.get_action_strength("move_up") - Input.get_action_strength("move_down"),
-				Input.get_action_strength("move_forward") - Input.get_action_strength("move_back")
-			)
-			$AvatarController.direction = motion_direction
+		# Enable/disable avatar input adapter based on whether we have a target
+		# When target is null, avatar can move freely
+		# When target is set, avatar is controlling an entity
+		if has_node("AvatarInputAdapter"):
+			$AvatarInputAdapter.set_process(target == null)
+		
+		# Always update camera basis for avatar controller
+		if camera and has_node("AvatarController"):
 			$AvatarController.camera_basis = camera.get_camera_rotation_basis()
-			
-			if Input.is_key_pressed(KEY_ALT):
-				$AvatarController.speed = 100
-			elif Input.is_key_pressed(KEY_SHIFT):
-				$AvatarController.speed = 20
-			else:
-				$AvatarController.speed = 10
-		else:
-			$AvatarController.direction = Vector3.ZERO
 		
 	input_camera(event)
 	input_operator(event)
@@ -372,11 +364,9 @@ func _on_state_transited():
 	if camera != null:
 		camera.target = target
 
-# Entities are tracked by simulation, and simulation sh
-func update_entities(entities):
-	$UI.update_entities(entities)
-	
-# Function camera_global_position returns the global position of the camera
+# Entities are tracked by simulation
+# Avatar delegates entity list updates to UI
+# Note: update_entities is called directly on ui by simulation
 func camera_global_position():
 	return camera.global_position
 
