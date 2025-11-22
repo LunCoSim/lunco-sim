@@ -28,6 +28,7 @@ func _ready():
 	TutorialWindow.initial_position = Window.WINDOW_INITIAL_POSITION_CENTER_PRIMARY_SCREEN
 	TutorialWindow.min_size = Vector2(300, 400)
 	center_window(TutorialWindow)
+	# Tutorial visibility is controlled by simulation.gd based on Profile.hide_tutorial
 
 static func make_window(control, title, transparent_bg = true, borderless = false) -> Window:
 	var win = Window.new()

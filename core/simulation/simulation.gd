@@ -69,7 +69,9 @@ func _ready():
 	ControlManager.control_released.connect(_on_control_released)
 	ControlManager.control_request_denied.connect(_on_control_request_denied)
 	
-	LCWindows.show_tutorial()
+	# Show tutorial only if user hasn't disabled it
+	if not Profile.hide_tutorial:
+		LCWindows.show_tutorial()
 	# Main menu will be shown on demand with ESC key
 	
 ## Called every frame. 'delta' is the elapsed time since the previous frame.

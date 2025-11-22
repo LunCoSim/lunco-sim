@@ -2,6 +2,8 @@
 
 [ext_resource type="Theme" uid="uid://hve1e7mnexbi" path="res://themes/theme.tres" id="1_vwu5s"]
 
+[ext_resource type="Script" uid="uid://b8q4q4q4q4q4q" path="res://core/widgets/tutorial.gd" id="2_script"]
+
 [node name="TutorialContent" type="PanelContainer" unique_id=225535878]
 anchors_preset = 15
 anchor_right = 1.0
@@ -12,6 +14,7 @@ size_flags_horizontal = 3
 size_flags_vertical = 3
 theme = ExtResource("1_vwu5s")
 theme_type_variation = &"PanelContainerOverlay"
+script = ExtResource("2_script")
 
 [node name="VBoxContainer" type="VBoxContainer" parent="." unique_id=1292763523]
 layout_mode = 2
@@ -62,3 +65,10 @@ fit_content = true
 scroll_active = false
 autowrap_mode = 2
 text_direction = 1
+
+[node name="HideTutorial" type="CheckBox" parent="VBoxContainer"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Hide Tutorial"
+
+[connection signal="toggled" from="VBoxContainer/HideTutorial" to="." method="_on_hide_tutorial_toggled"]

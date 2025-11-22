@@ -10,6 +10,9 @@ func _ready():
 	on_reload_profile()
 	
 	Profile.profile_changed.connect(on_reload_profile)
+	
+	# Load hide tutorial setting from Profile
+	%HideTutorial.button_pressed = Profile.hide_tutorial
 
 func on_reload_profile():
 	%Username.text = Profile.username
@@ -74,6 +77,10 @@ func on_check_profile_nft(args):
 func _on_check_profile_nft_pressed():
 	print("_on_check_profile_nft_pressed: ", Profile.wallet)
 	JavaScriptBridge.get_interface("Login").checkProfile(Profile.wallet, _on_check_profile_nft_callback)
+
+func _on_hide_tutorial_toggled(toggled_on):
+	# Save the setting to Profile
+	Profile.hide_tutorial = toggled_on
 
 func _on_replay_mode_pressed():
 	LCWindows.toggle_main_menu() # Close the menu
