@@ -13,3 +13,8 @@ webrtc/
 
 # SSL certificates (security)
 .cert/
+
+
+# Raw data, e.g. PUGs
+
+.raw_data/
