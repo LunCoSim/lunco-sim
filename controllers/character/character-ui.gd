@@ -1,9 +1,9 @@
-extends Control
+extends LCControllerUI
 
 # Reference UIHelper singleton
 @onready var ui_helper = get_node("/root/UIHelper")
 
-var target
+# target is inherited from LCControllerUI
 var update_timer = 0
 
 func _ready():
@@ -16,9 +16,6 @@ func _process(delta):
 		update_timer = 0
 		update_stats()
 
-func set_target(_target):
-	target = _target
-	
 func update_stats():
 	if target and is_instance_valid(target):
 		# Get character velocity and position

@@ -1,6 +1,3 @@
-extends Control
+extends LCControllerUI
 
-var target
-
-func set_target(_target):
-	target = _target
+# target is inherited from LCControllerUI

@@ -28,7 +28,7 @@ var torque := Vector3.ZERO
 # Processing physics for Spacecraft controller
 func _physics_process(_delta):
 	#if Target.name == str(multiplayer.get_unique_id()): TBD Find a better way to handle multiplayer authority
-	if is_multiplayer_authority():
+	if has_authority():
 		if parent:
 			parent.apply_central_force(parent.transform.basis.z * thrust)
 

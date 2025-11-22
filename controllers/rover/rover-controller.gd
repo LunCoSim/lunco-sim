@@ -59,7 +59,7 @@ func _ready():
 func _physics_process(_delta: float):
 	# Only apply physics forces if we have authority
 	# Remote clients will receive synchronized position/velocity from MultiplayerSynchronizer
-	if not is_multiplayer_authority():
+	if not has_authority():
 		return
 		
 	if parent and parent is VehicleBody3D:
@@ -137,19 +137,14 @@ func set_brake(value: float):
 
 # Simplified control methods (required for compatibility with signals)
 func take_control():
-	# Reset all inputs when taking control
-	motor_input = 0.0
-	steering_input = 0.0
-	brake_input = 0.0
-	
-	# Make sure parent values are reset too
-	if parent and parent is VehicleBody3D:
-		parent.engine_force = 0.0
-		parent.steering = 0.0
-		parent.brake = 0.0
+	_reset_inputs()
 
 func release_control():
-	# Reset all inputs when releasing control
+	_reset_inputs()
+
+# Private helper to reset all inputs and parent vehicle state
+func _reset_inputs():
+	# Reset all inputs when taking/releasing control
 	motor_input = 0.0
 	steering_input = 0.0
 	brake_input = 0.0

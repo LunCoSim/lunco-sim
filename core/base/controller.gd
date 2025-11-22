@@ -9,6 +9,14 @@ func set_authority(_owner):
 	print("Setting authority owner ", _owner )
 	get_parent().set_multiplayer_authority(_owner)
 
+## Returns true if this controller or its parent has multiplayer authority.
+## Provides a consistent way to check authority across all controller types.
+func has_authority() -> bool:
+	var parent = get_parent()
+	if parent:
+		return parent.is_multiplayer_authority()
+	return is_multiplayer_authority()
+
 
 	
 #--------------------------------------------

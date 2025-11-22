@@ -60,9 +60,8 @@ func _process(delta):
 	if not _target is LCCharacterController:
 		return
 	
-	# Only process input if we have authority over the character body
-	var character_body = _target.character_body if _target.character_body else _target.get_parent()
-	if not character_body or not character_body.is_multiplayer_authority():
+	# Only process input if we have authority over the character controller
+	if not _target.has_authority():
 		return
 	
 	motion = Vector2(

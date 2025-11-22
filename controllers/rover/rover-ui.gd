@@ -1,6 +1,6 @@
-extends Control
+extends LCControllerUI
 
-var target: LCRoverController
+# target is inherited from LCControllerUI (typed as LCRoverController)
 
 @onready var speed_label = $PanelContainer/Help/SpeedLabel
 @onready var steering_label = $PanelContainer/Help/SteeringLabel
@@ -9,9 +9,9 @@ var target: LCRoverController
 func _ready():
 	pass
 
-func set_target(_target):
-	if _target is LCRoverController:
-		target = _target
+# Override base class hook to connect signals when target is set
+func _on_target_set():
+	if target is LCRoverController:
 		target.speed_changed.connect(_on_speed_changed)
 		target.steering_changed.connect(_on_steering_changed)
 		target.motor_state_changed.connect(_on_motor_changed)

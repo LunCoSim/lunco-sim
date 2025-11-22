@@ -1,10 +1,7 @@
-extends Control
+extends LCControllerUI
 
-@onready var target: Node3D
-
-func set_target(_target):
-	target = _target
-
+# target is inherited from LCControllerUI
+@onready var target_typed: Node3D = target
 
 
 func _on_HideControls_timeout():
