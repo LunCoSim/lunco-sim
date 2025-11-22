@@ -1,7 +1,7 @@
 class_name LCRoverInputAdapter
-extends Node
+extends LCInputAdapter
 
-@export var target: Node
+# target is inherited from LCInputAdapter
 
 # Input sensitivity and deadzone settings
 @export var MOTOR_SENSITIVITY := 1.0
@@ -18,11 +18,7 @@ func _input(_event):
 	if not target:
 		return
 		
-	var _target = target
-	
-	# If target is an Avatar, get its current target
-	if target is LCAvatar:
-		_target = target.target
+	var _target = get_resolved_target()
 		
 	# Check if we have a compatible rover controller
 	var is_compatible_controller = _target is LCRoverController

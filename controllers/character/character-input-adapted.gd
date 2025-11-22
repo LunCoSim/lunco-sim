@@ -1,8 +1,8 @@
 class_name LCCharacterInputAdapter
-extends Node
+extends LCInputAdapter
 
 #------------------------------
-@export var target: Node
+# target is inherited from LCInputAdapter
 
 #------------------------------
 const CAMERA_CONTROLLER_ROTATION_SPEED := 3.0
@@ -54,9 +54,8 @@ func _ready():
 		#color_rect.hide()
 
 func _process(delta):
-	var _target = target
-	if target is LCAvatar:
-		_target = target.target
+	var _target = get_resolved_target()
+
 	
 	if not _target is LCCharacterController:
 		return
@@ -162,9 +161,7 @@ func set_camera(_camera):
 	
 @rpc("any_peer", "call_local")
 func jump():
-	var _target = target
-	if target is LCAvatar:
-		_target = target.target
+	var _target = get_resolved_target()
 	
 	if not _target is LCCharacterController:
 		return

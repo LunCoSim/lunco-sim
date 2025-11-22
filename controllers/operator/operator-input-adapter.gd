@@ -1,12 +1,10 @@
 class_name LCOperatorInputAdapter
-extends Node
+extends LCInputAdapter
 
-@export var target: Node
+# target is inherited from LCInputAdapter
 
 func _input(_event):
-	var _target = target
-	if target is LCAvatar:
-		_target = target.target
+	var _target = get_resolved_target()
 	
 	if _target is LCOperatorController:
 		if Input.is_action_just_pressed("reset_position"):
