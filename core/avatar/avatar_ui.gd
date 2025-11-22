@@ -1,5 +1,19 @@
 extends Control
 
+# Preload all controller UI scenes at compile time for better performance
+const CHARACTER_UI = preload("res://controllers/character/character-ui.tscn")
+const SPACECRAFT_UI = preload("res://controllers/spacecraft/spacecraft-ui.tscn")
+const ROVER_UI = preload("res://controllers/rover/rover-ui.tscn")
+const OPERATOR_UI = preload("res://controllers/operator/operator-ui.tscn")
+
+# Dictionary for cleaner lookup by controller class name
+const UI_SCENES = {
+	"LCCharacterController": CHARACTER_UI,
+	"LCSpacecraftController": SPACECRAFT_UI,
+	"LCRoverController": ROVER_UI,
+	"LCOperatorController": OPERATOR_UI
+}
+
 signal entity_selected(int)
 signal existing_entity_selected(int)
 
@@ -87,18 +101,17 @@ func clear_ui():
 func set_target(target):
 	clear_ui()
 	
-	if target is LCCharacterController:
-		controller_ui = load("res://controllers/character/character-ui.tscn").instantiate()
-	elif target is LCSpacecraftController:
-		controller_ui = load("res://controllers/spacecraft/spacecraft-ui.tscn").instantiate()
-	elif target is LCRoverController:
-		controller_ui = load("res://controllers/rover/rover-ui.tscn").instantiate()
-	elif target is LCOperatorController:
-		controller_ui = load("res://controllers/operator/operator-ui.tscn").instantiate()
-
-	if controller_ui:
-		controller_ui.set_target(target) #controller specific function
-	display_controller_ui(controller_ui)
+	# Use preloaded scenes with dictionary lookup instead of runtime loading
+	if target:
+		var controller_class = target.get_class()
+		var ui_scene = UI_SCENES.get(controller_class)
+		
+		if ui_scene:
+			controller_ui = ui_scene.instantiate()
+			controller_ui.set_target(target)  # controller specific function
+			display_controller_ui(controller_ui)
+		else:
+			push_warning("Avatar UI: No UI scene found for controller type: " + controller_class)
 	
 	# Only update entities if we're attached to the parent properly
 	var parent = get_parent()
