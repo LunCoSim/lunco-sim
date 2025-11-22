@@ -1,30 +1,12 @@
-extends Control
+extends PanelContainer
 
-@onready var part_list = $PanelContainer/VBoxContainer/ScrollContainer/PartList
-@onready var label = $PanelContainer/VBoxContainer/Label
-@onready var component_tree = $StructurePanel/VBoxContainer/ScrollContainer/ComponentTree
-@onready var properties_grid = $StructurePanel/VBoxContainer/PropertiesGrid
+@onready var component_tree = $VBoxContainer/ScrollContainer/ComponentTree
+@onready var properties_grid = $VBoxContainer/PropertiesGrid
 
-var selected_button: Button = null
 var selected_rover: LCConstructible = null
 var update_timer = 0.0
 
 func _ready():
-	var bm = get_node_or_null("/root/BuilderManager")
-	if not bm:
-		push_error("BuilderManager not found")
-		return
-		
-	# Update label with instructions
-	label.text = "Mission Builder\n[Select part, then click to place]"
-	
-	# Populate part list
-	for part_id in bm.part_registry:
-		var btn = Button.new()
-		btn.text = part_id.capitalize().replace("_", " ")
-		btn.pressed.connect(_on_part_selected.bind(part_id, btn))
-		part_list.add_child(btn)
-	
 	# Setup component tree
 	component_tree.item_selected.connect(_on_component_selected)
 
@@ -34,23 +16,6 @@ func _process(delta):
 	if update_timer > 0.5:  # Update twice per second
 		update_timer = 0.0
 		update_structure_view()
-
-func _on_part_selected(part_id: String, btn: Button):
-	var bm = get_node_or_null("/root/BuilderManager")
-	if bm:
-		bm.select_part(part_id)
-		
-		# Visual feedback - highlight selected button
-		if selected_button:
-			selected_button.modulate = Color(1, 1, 1)
-		selected_button = btn
-		btn.modulate = Color(0.5, 1.0, 0.5)
-		
-		# Update label
-		if part_id == "chassis_box":
-			label.text = "Chassis Box Selected\n[Click anywhere to place new rover]"
-		else:
-			label.text = part_id.capitalize().replace("_", " ") + " Selected\n[Click on existing rover to attach]"
 
 func update_structure_view():
 	# Find all constructibles in the scene
@@ -93,6 +58,16 @@ func show_properties(obj):
 		add_property("Mass", "%.1f kg" % obj.mass)
 		add_property("Components", str(obj.components.size()))
 		add_property("Wheels", str(count_wheels(obj)))
+		
+		# Add XTCE telemetry if available
+		var telemetry = obj.get_telemetry_data()
+		if telemetry.size() > 0:
+			add_property_label("=== Telemetry ===")
+			for comp_name in telemetry:
+				var comp_data = telemetry[comp_name]
+				for key in comp_data:
+					add_property(comp_name + "." + key, str(comp_data[key]))
+					
 	elif obj is LCComponent:
 		add_property_label("=== Component ===")
 		add_property("Name", obj.name)
@@ -101,6 +76,18 @@ func show_properties(obj):
 			add_property("Power Use", "%.1f W" % obj.power_consumption)
 		if obj.power_production > 0:
 			add_property("Power Gen", "%.1f W" % obj.power_production)
+		
+		# Show XTCE telemetry
+		if obj.Telemetry.size() > 0:
+			add_property_label("=== Telemetry ===")
+			for key in obj.Telemetry:
+				add_property(key, str(obj.Telemetry[key]))
+		
+		# Show XTCE commands
+		if obj.Commands.size() > 0:
+			add_property_label("=== Commands ===")
+			for key in obj.Commands:
+				add_property(key, str(obj.Commands[key]))
 
 func add_property_label(text: String):
 	var label = Label.new()
@@ -124,11 +111,3 @@ func count_wheels(constructible: LCConstructible) -> int:
 		if child is VehicleWheel3D:
 			count += 1
 	return count
-
-func _on_launch_button_pressed():
-	var bm = get_node_or_null("/root/BuilderManager")
-	if bm:
-		bm.stop_building()
-	# Logic to enable physics for all constructibles?
-	# For now, just hide UI or switch mode
-	visible = false

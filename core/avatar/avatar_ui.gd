@@ -104,6 +104,15 @@ func _ready():
 	
 	print("Avatar UI: Ready complete")
 
+func _input(event):
+	# Toggle component inspector with 'I' key
+	if event is InputEventKey and event.pressed and not event.echo:
+		if event.keycode == KEY_I:
+			var inspector = get_node_or_null("ComponentInspector")
+			if inspector:
+				inspector.visible = not inspector.visible
+				print("Component Inspector toggled: ", inspector.visible)
+
 # Function display_controller_ui clears the ui and displays the controller UI
 func display_controller_ui(new_controller_ui: Node = null):
 	clear_ui()

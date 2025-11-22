@@ -1,8 +1,8 @@
-[gd_scene load_steps=8 format=3 uid="uid://wdnxqhctneyv"]
+[gd_scene load_steps=9 format=3 uid="uid://wdnxqhctneyv"]
 
 [ext_resource type="Script" uid="uid://bpq5fqrtu7f5o" path="res://core/avatar/avatar_ui.gd" id="1_igs02"]
 [ext_resource type="Theme" uid="uid://hve1e7mnexbi" path="res://themes/theme.tres" id="1_ois6a"]
-
+[ext_resource type="PackedScene" uid="uid://component_inspector" path="res://core/ui/component_inspector.tscn" id="2_inspector"]
 
 
 [node name="UI" type="Control"]
@@ -113,6 +113,9 @@ tooltip_text = "Open Mission Builder"
 unique_name_in_owner = true
 anchors_preset = 0
 mouse_filter = 2
+
+[node name="ComponentInspector" parent="." instance=ExtResource("2_inspector")]
+visible = false
 
 [node name="WalletInfo" type="VBoxContainer" parent="."]
 unique_name_in_owner = true

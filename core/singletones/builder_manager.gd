@@ -58,8 +58,26 @@ func _process(delta):
 	if current_state == BuilderState.PLACING_PART and ghost_instance:
 		update_ghost_position()
 		
-		if Input.is_action_just_pressed("ui_accept") or Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
-			try_place_part()
+		# Only place on click DOWN, not while holding
+		if Input.is_action_just_pressed("ui_accept") or Input.is_action_just_pressed("click"):
+			# Check if mouse is over UI by checking if any Control is handling the mouse
+			var viewport = get_viewport()
+			if viewport:
+				# Get the control that's under the mouse
+				var mouse_pos = viewport.get_mouse_position()
+				
+				# Simple check: if Builder UI is visible and mouse is on left side, it's probably UI
+				var builder_ui = get_tree().root.find_child("BuilderUI", true, false)
+				var is_over_ui = false
+				
+				if builder_ui and builder_ui.visible:
+					# Check if mouse is over the left panel (width 250)
+					if mouse_pos.x < 250:
+						is_over_ui = true
+						print("BuilderManager: Click on UI detected, ignoring")
+				
+				if not is_over_ui:
+					try_place_part()
 
 func update_ghost_position():
 	# Raycast from camera
@@ -115,9 +133,40 @@ func try_place_part():
 			print("BuilderManager: Calling directly (local)")
 			request_spawn_constructible(selected_part_id, ghost_instance.global_position, ghost_instance.global_rotation)
 	else:
-		# Find parent under cursor
-		# request_attach_component.rpc_id(1, parent_path, selected_part_id, attachment_node)
-		pass
+		# Attach component to existing constructible
+		print("BuilderManager: Attempting to attach component: ", selected_part_id)
+		
+		# Raycast to find what we're clicking on
+		var camera = get_viewport().get_camera_3d()
+		if not camera: return
+		
+		var mouse_pos = get_viewport().get_mouse_position()
+		var from = camera.project_ray_origin(mouse_pos)
+		var to = from + camera.project_ray_normal(mouse_pos) * 100.0
+		
+		var space_state = camera.get_world_3d().direct_space_state
+		var query = PhysicsRayQueryParameters3D.create(from, to)
+		query.collision_mask = 1
+		
+		var result = space_state.intersect_ray(query)
+		
+		if result and result.collider:
+			# Find the constructible parent
+			var target = result.collider
+			while target and not target is LCConstructible:
+				target = target.get_parent()
+			
+			if target and target is LCConstructible:
+				print("BuilderManager: Found constructible: ", target.name)
+				# Attach component directly
+				if multiplayer.has_multiplayer_peer() and multiplayer.get_peers().size() > 0:
+					request_attach_component.rpc_id(1, target.get_path(), selected_part_id, "")
+				else:
+					request_attach_component(str(target.get_path()), selected_part_id, "")
+			else:
+				print("BuilderManager: No constructible found under cursor")
+		else:
+			print("BuilderManager: No collision detected")
 
 # Server-side RPCs
 @rpc("any_peer", "call_remote", "reliable")
@@ -163,15 +212,28 @@ func request_spawn_constructible(type: String, pos: Vector3, rot: Vector3):
 	
 	# Ensure networking spawns it on clients (needs MultiplayerSpawner setup in scene)
 
+
 @rpc("any_peer", "call_remote", "reliable")
 func request_attach_component(parent_path: String, type: String, attachment_node_name: String):
-	if not multiplayer.is_server(): return
+	print("BuilderManager: request_attach_component called for ", type, " on ", parent_path)
+	
+	# In single-player, we are the "server"
+	if multiplayer.has_multiplayer_peer() and not multiplayer.is_server():
+		print("BuilderManager: Not server, ignoring attach request")
+		return
 	
 	var parent = get_node(parent_path)
 	if parent and parent is LCConstructible:
+		print("BuilderManager: Found constructible parent, attaching component")
 		var comp_scene = load(part_registry[type])
-		var comp = comp_scene.instantiate()
-		parent.add_child(comp)
-		# Position at attachment node...
-		parent.register_component(comp)
+		if comp_scene:
+			var comp = comp_scene.instantiate()
+			parent.add_child(comp)
+			# Position at attachment node... (TODO: implement proper snapping)
+			parent.register_component(comp)
+			print("BuilderManager: Component attached successfully")
+		else:
+			push_error("BuilderManager: Failed to load component scene: " + type)
+	else:
+		push_error("BuilderManager: Parent not found or not a constructible: " + parent_path)
 

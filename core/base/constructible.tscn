@@ -2,7 +2,7 @@
 
 [ext_resource type="Script" path="res://core/base/constructible.gd" id="1_script"]
 
-[node name="Constructible" type="RigidBody3D"]
+[node name="Constructible" type="VehicleBody3D"]
 collision_layer = 1
 collision_mask = 1
 script = ExtResource("1_script")
