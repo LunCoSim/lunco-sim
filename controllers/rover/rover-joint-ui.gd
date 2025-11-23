@@ -104,7 +104,7 @@ func _update_wheel_controls_visibility():
 	if not scroll_container or not panel_container:
 		return
 	
-	var show_individual = target and target.enable_individual_control and target.drive_mode == 2
+	var show_individual = target and target.enable_individual_control and target.drive_mode == 3
 	
 	# Change visibility of the ScrollContainer itself
 	scroll_container.visible = show_individual
@@ -153,8 +153,8 @@ func _on_mode_selector_item_selected(index: int):
 	"""Called when drive mode is changed"""
 	if target:
 		target.drive_mode = index
-		# Enable individual control when Independent mode (index 2) is selected
-		target.enable_individual_control = (index == 2)
+		# Enable individual control when Independent mode (index 3) is selected
+		target.enable_individual_control = (index == 3)
 		_update_mode_display()
 		_update_wheel_controls_visibility()
 
