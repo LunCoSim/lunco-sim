@@ -1,11 +1,18 @@
-[gd_scene load_steps=4 format=3 uid="uid://wheel_basic_component"]
+[gd_scene load_steps=5 format=3 uid="uid://wheel_basic_component"]
 
 [ext_resource type="Script" path="res://core/components/propulsion/wheel-effector.gd" id="1_script"]
+[ext_resource type="Shader" path="res://core/components/propulsion/wheel.gdshader" id="2_shader"]
 
 [sub_resource type="CylinderMesh" id="CylinderMesh_1"]
 top_radius = 0.3
 bottom_radius = 0.3
 height = 0.2
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_wheel"]
+shader = ExtResource("2_shader")
+shader_parameter/angle = 0.0
+shader_parameter/color = Color(0.1, 0.1, 0.1, 1)
+shader_parameter/stripe_color = Color(0.8, 0.8, 0.8, 1)
 
 [node name="WheelBasic" type="VehicleWheel3D"]
 use_as_traction = true
@@ -30,5 +37,6 @@ Commands = {
 [node name="MeshInstance3D" type="MeshInstance3D" parent="."]
 transform = Transform3D(-4.37114e-08, -1, 0, 1, -4.37114e-08, 0, 0, 0, 1, 0, 0, 0)
 mesh = SubResource("CylinderMesh_1")
+surface_material_override/0 = SubResource("ShaderMaterial_wheel")
 
 [node name="AttachPoint" type="Marker3D" parent="."]

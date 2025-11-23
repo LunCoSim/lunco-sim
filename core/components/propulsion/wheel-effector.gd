@@ -56,6 +56,50 @@ func _ready():
 func _physics_process(delta):
 	_update_telemetry()
 
+var _accumulated_angle: float = 0.0
+
+func _process(delta):
+	# Update visual rotation
+	var angular_velocity = 0.0
+	
+	if is_in_contact():
+		# On ground: use real physics RPM
+		# RPM * 2PI / 60 = rad/s
+		angular_velocity = get_rpm() * TAU / 60.0
+	else:
+		# In air: simulate spin based on motor torque
+		# Simple approximation: torque accelerates the wheel
+		
+		# If get_rpm() is very low but we have high torque, fake it.
+		var rpm = get_rpm()
+		
+		# If we have significant torque request, spin up
+		if abs(motor_torque_request) > 1.0:
+			var target_vel = sign(motor_torque_request) * 20.0 # Arbitrary max speed
+			angular_velocity = move_toward(_last_angular_velocity, target_vel, delta * 5.0)
+		else:
+			# Spin down friction
+			angular_velocity = move_toward(_last_angular_velocity, 0.0, delta * 2.0)
+			
+			# If physics is still reporting something (e.g. just left ground), blend with it
+			if abs(rpm) > 1.0:
+				angular_velocity = rpm * TAU / 60.0
+
+	_last_angular_velocity = angular_velocity
+	_accumulated_angle += angular_velocity * delta
+	
+	# Keep angle within reasonable bounds to prevent float precision issues
+	_accumulated_angle = fmod(_accumulated_angle, TAU)
+	
+	# Update shader parameter
+	var mesh_instance = $MeshInstance3D
+	if mesh_instance:
+		var material = mesh_instance.get_surface_override_material(0)
+		if material is ShaderMaterial:
+			material.set_shader_parameter("angle", _accumulated_angle)
+
+var _last_angular_velocity: float = 0.0
+
 ## Implements dynamic effector interface (duck typed)
 func compute_force_torque(delta: float) -> Dictionary:
 	# VehicleWheel3D handles physics internally via engine_force/brake
