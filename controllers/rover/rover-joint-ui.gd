@@ -5,10 +5,12 @@ extends LCControllerUI
 
 @onready var speed_label = $PanelContainer/VBox/StatusPanel/GridContainer/SpeedValue
 @onready var mode_label = $PanelContainer/VBox/StatusPanel/GridContainer/ModeValue
+@onready var motor_value = $PanelContainer/VBox/StatusPanel/GridContainer/MotorValue
+@onready var steering_value = $PanelContainer/VBox/StatusPanel/GridContainer/SteeringValue
 
 # Drive mode controls
-@onready var mode_selector = $PanelContainer/VBox/ModePanel/HBox/ModeSelector
-@onready var individual_control_toggle = $PanelContainer/VBox/ModePanel/HBox/IndividualToggle
+@onready var mode_selector = $PanelContainer/VBox/ModePanel/VBox/HBox/ModeSelector
+@onready var individual_control_toggle = $PanelContainer/VBox/ModePanel/VBox/HBox/IndividualToggle
 
 # Wheel control panels
 @onready var wheel_controls_container = $PanelContainer/VBox/WheelControlsPanel
@@ -41,13 +43,15 @@ func _ready():
 	if mode_selector:
 		for mode in drive_modes:
 			mode_selector.add_item(mode)
-		mode_selector.selected = 0
+		# Don't set selected here - wait for target to be set
 
 func _on_target_set():
 	"""Called when target controller is set"""
 	if target is LCRoverJointController:
 		# Connect signals
 		target.speed_changed.connect(_on_speed_changed)
+		target.motor_state_changed.connect(_on_motor_changed)
+		target.steering_changed.connect(_on_steering_changed)
 		target.wheel_control_changed.connect(_on_wheel_control_changed)
 		
 		# Update UI to match current mode
@@ -69,6 +73,14 @@ func _process(_delta):
 func _on_speed_changed(speed: float):
 	if speed_label:
 		speed_label.text = "%.1f m/s" % speed
+
+func _on_motor_changed(power: float):
+	if motor_value:
+		motor_value.text = "%.0f%%" % (power * 100)
+
+func _on_steering_changed(angle: float):
+	if steering_value:
+		steering_value.text = "%.2f" % angle
 
 func _on_wheel_control_changed(wheel_name: String, motor: float, brake: float, steering: float):
 	"""Update UI when wheel control changes"""
@@ -125,6 +137,13 @@ func _on_individual_toggle_toggled(toggled_on: bool):
 	"""Called when individual control toggle is changed"""
 	if target:
 		target.enable_individual_control = toggled_on
+		
+		# Auto-switch to Independent mode if enabling individual control
+		if toggled_on and target.drive_mode != 2:
+			target.drive_mode = 2
+			if mode_selector:
+				mode_selector.selected = 2
+				
 		_update_mode_display()
 		_update_wheel_controls_visibility()
 

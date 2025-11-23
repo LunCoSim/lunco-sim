@@ -1,9 +1,9 @@
 extends PanelContainer
 
 @onready var component_tree = $VBoxContainer/ScrollContainer/ComponentTree
-@onready var properties_grid = $VBoxContainer/PropertiesScroll/PropertiesGrid
+@onready var properties_grid = $VBoxContainer/PropertiesScroll/VBox/PropertiesGrid
 
-var selected_rover: LCConstructible = null
+var selected_rover: Node = null
 var update_timer = 0.0
 
 func _ready():
@@ -34,14 +34,27 @@ func update_structure_view():
 		rover_item.set_metadata(0, selected_rover)
 		
 		# Add components as children
-		for comp in selected_rover.components:
+		# Add components as children
+		var components = []
+		if selected_rover is LCConstructible:
+			components = selected_rover.components
+		elif selected_rover is LCVehicle:
+			components = selected_rover.state_effectors
+			
+		for comp in components:
 			var comp_item = component_tree.create_item(rover_item)
-			comp_item.set_text(0, "  └ " + comp.name + " (%.1f kg)" % comp.mass)
+			var mass_val = 0.0
+			if comp.has_method("get_mass_contribution"):
+				mass_val = comp.get_mass_contribution()
+			elif "mass" in comp:
+				mass_val = comp.mass
+				
+			comp_item.set_text(0, "  └ " + comp.name + " (%.1f kg)" % mass_val)
 			comp_item.set_metadata(0, comp)
 		
 		# Show total mass
 		var total_mass = selected_rover.mass
-		rover_item.set_text(0, selected_rover.name + " (Total: %.1f kg, %d parts)" % [total_mass, selected_rover.components.size()])
+		rover_item.set_text(0, selected_rover.name + " (Total: %.1f kg, %d parts)" % [total_mass, components.size()])
 		
 		# Expand to show components
 		rover_item.collapsed = false
@@ -49,7 +62,7 @@ func update_structure_view():
 		var item = component_tree.create_item(root)
 		item.set_text(0, "No rover selected")
 
-func set_selected_rover(rover: LCConstructible):
+func set_selected_rover(rover: Node):
 	print("ComponentInspector: set_selected_rover called with ", rover)
 	selected_rover = rover
 	update_structure_view()
@@ -71,22 +84,30 @@ func show_properties(obj):
 	for child in properties_grid.get_children():
 		child.queue_free()
 	
-	if obj is LCConstructible:
+	if obj is LCConstructible or obj is LCVehicle:
 		selected_rover = obj
 		add_property_label("=== Rover ===")
 		add_property("Name", obj.name)
 		add_property("Mass", "%.1f kg" % obj.mass)
-		add_property("Components", str(obj.components.size()))
+		
+		var comp_count = 0
+		if obj is LCConstructible:
+			comp_count = obj.components.size()
+		elif obj is LCVehicle:
+			comp_count = obj.state_effectors.size()
+			
+		add_property("Components", str(comp_count))
 		add_property("Wheels", str(count_wheels(obj)))
 		
-		# Add XTCE telemetry if available
-		var telemetry = obj.get_telemetry_data()
-		if telemetry.size() > 0:
-			add_property_label("=== Telemetry ===")
-			for comp_name in telemetry:
-				var comp_data = telemetry[comp_name]
-				for key in comp_data:
-					add_property(comp_name + "." + key, str(comp_data[key]))
+		# Add XTCE telemetry if available (only for LCConstructible)
+		if obj.has_method("get_telemetry_data"):
+			var telemetry = obj.get_telemetry_data()
+			if telemetry.size() > 0:
+				add_property_label("=== Telemetry ===")
+				for comp_name in telemetry:
+					var comp_data = telemetry[comp_name]
+					for key in comp_data:
+						add_property(comp_name + "." + key, str(comp_data[key]))
 					
 	elif obj is LCComponent:
 		add_property_label("=== Component ===")
@@ -125,7 +146,7 @@ func add_property(name: String, value: String):
 	value_label.text = value
 	properties_grid.add_child(value_label)
 
-func count_wheels(constructible: LCConstructible) -> int:
+func count_wheels(constructible: Node) -> int:
 	var count = 0
 	for child in constructible.get_children():
 		if child is VehicleWheel3D:

@@ -7,7 +7,7 @@ extends LCController
 
 # Export categories for easy configuration in the editor
 @export_category("Drive Configuration")
-@export_enum("Ackermann:0", "Differential:1", "Independent:2") var drive_mode: int = 0
+@export_enum("Ackermann:0", "Differential:1", "Independent:2") var drive_mode: int = 1
 @export var enable_individual_control: bool = false
 
 @export_category("Rover Movement Parameters")
@@ -135,7 +135,17 @@ func _apply_ackermann_control():
 	"""Traditional car-like steering: front wheels steer, all wheels drive"""
 	var speed_factor = _get_speed_factor()
 	
-	# All wheels get same motor force
+	# Reset individual wheel forces (let parent control them)
+	if fl_wheel:
+		fl_wheel.engine_force = 0.0
+	if fr_wheel:
+		fr_wheel.engine_force = 0.0
+	if bl_wheel:
+		bl_wheel.engine_force = 0.0
+	if br_wheel:
+		br_wheel.engine_force = 0.0
+	
+	# All wheels get same motor force via parent
 	parent.engine_force = -motor_input * ENGINE_FORCE * speed_factor
 	parent.steering = -steering_input * STEERING_FORCE
 	parent.brake = brake_input * BRAKE_FORCE
@@ -149,6 +159,11 @@ func _apply_differential_control():
 	"""Tank-like steering: left/right wheels can rotate at different speeds"""
 	var speed_factor = _get_speed_factor()
 	
+	# Don't use parent controls in differential mode
+	parent.engine_force = 0.0
+	parent.steering = 0.0
+	parent.brake = 0.0
+	
 	# Calculate left and right motor forces
 	# steering_input affects the differential between left and right
 	var base_motor = -motor_input * ENGINE_FORCE * speed_factor
@@ -160,12 +175,24 @@ func _apply_differential_control():
 	# Apply to individual wheels
 	if fl_wheel:
 		fl_wheel.engine_force = left_motor
+	else:
+		push_warning("RoverJointController: FL wheel not found!")
 	if bl_wheel:
 		bl_wheel.engine_force = left_motor
+	else:
+		push_warning("RoverJointController: BL wheel not found!")
 	if fr_wheel:
 		fr_wheel.engine_force = right_motor
+	else:
+		push_warning("RoverJointController: FR wheel not found!")
 	if br_wheel:
 		br_wheel.engine_force = right_motor
+	else:
+		push_warning("RoverJointController: BR wheel not found!")
+	
+	# Debug: Print once to verify
+	if Engine.get_physics_frames() % 60 == 0 and motor_input != 0:
+		print("Differential mode - Left: %.1f, Right: %.1f" % [left_motor, right_motor])
 	
 	# Apply brakes to all wheels
 	var brake_force = brake_input * BRAKE_FORCE
@@ -190,6 +217,11 @@ func _apply_independent_control():
 		_apply_differential_control()
 		return
 	
+	# Don't use parent controls in independent mode
+	parent.engine_force = 0.0
+	parent.steering = 0.0
+	parent.brake = 0.0
+	
 	# Apply individual wheel controls
 	_apply_wheel_control(fl_wheel, wheel_controls["front_left"])
 	_apply_wheel_control(fr_wheel, wheel_controls["front_right"])
@@ -204,7 +236,8 @@ func _apply_wheel_control(wheel: LCWheelEffector, control: Dictionary):
 	var speed_factor = _get_speed_factor()
 	wheel.engine_force = -control["motor"] * ENGINE_FORCE * speed_factor
 	wheel.brake = control["brake"] * BRAKE_FORCE
-	wheel.steering = -control["steering"] * STEERING_FORCE
+	# Note: Individual wheel steering not supported by VehicleWheel3D
+	# Steering is controlled at VehicleBody3D level
 
 func _get_speed_factor() -> float:
 	"""Calculate speed-based scaling to prevent flipping"""

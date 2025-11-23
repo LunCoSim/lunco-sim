@@ -24,6 +24,7 @@ layout_mode = 2
 [node name="ScrollContainer" type="ScrollContainer" parent="VBoxContainer"]
 layout_mode = 2
 size_flags_vertical = 3
+size_flags_stretch_ratio = 1.0
 
 [node name="ComponentTree" type="Tree" parent="VBoxContainer/ScrollContainer"]
 layout_mode = 2
@@ -42,8 +43,13 @@ horizontal_alignment = 1
 [node name="PropertiesScroll" type="ScrollContainer" parent="VBoxContainer"]
 layout_mode = 2
 size_flags_vertical = 3
+size_flags_stretch_ratio = 2.0
+custom_minimum_size = Vector2(0, 300)
+horizontal_scroll_mode = 0
 
-[node name="PropertiesGrid" type="GridContainer" parent="VBoxContainer/PropertiesScroll"]
+[node name="VBox" type="VBoxContainer" parent="VBoxContainer/PropertiesScroll"]
 layout_mode = 2
-size_flags_horizontal = 3
+
+[node name="PropertiesGrid" type="GridContainer" parent="VBoxContainer/PropertiesScroll/VBox"]
+layout_mode = 2
 columns = 2

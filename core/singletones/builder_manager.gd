@@ -77,7 +77,7 @@ func try_select_entity():
 		var target = result.collider
 		# Walk up to find LCConstructible
 		while target:
-			if target is LCConstructible:
+			if target is LCConstructible or target is LCVehicle:
 				break
 			# Fallback: Check by duck typing (safer if class_name fails)
 			if target.has_method("register_component") and target.has_method("recalculate_physics"):
@@ -86,7 +86,7 @@ func try_select_entity():
 				
 			target = target.get_parent()
 		
-		if target and (target is LCConstructible or target.has_method("register_component")):
+		if target and (target is LCConstructible or target is LCVehicle or target.has_method("register_component")):
 			print("BuilderManager: Selected entity: ", target.name)
 			entity_selected.emit(target)
 		else:
@@ -103,7 +103,7 @@ func try_select_entity():
 		# entity_selected.emit(null)
 
 func select_entity(entity):
-	if entity and (entity is LCConstructible or entity.has_method("register_component")):
+	if entity and (entity is LCConstructible or entity is LCVehicle or entity.has_method("register_component")):
 		print("BuilderManager: Programmatically selected entity: ", entity.name)
 		entity_selected.emit(entity)
 	else:
