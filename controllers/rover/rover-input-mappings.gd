@@ -37,6 +37,19 @@ func setup_input_mappings():
 		event.keycode = KEY_D
 		InputMap.action_add_event("move_right", event)
 	
+	# Crab Steering
+	if not InputMap.has_action("crab_left"):
+		InputMap.add_action("crab_left")
+		var event = InputEventKey.new()
+		event.keycode = KEY_E
+		InputMap.action_add_event("crab_left", event)
+	
+	if not InputMap.has_action("crab_right"):
+		InputMap.add_action("crab_right")
+		var event = InputEventKey.new()
+		event.keycode = KEY_Q
+		InputMap.action_add_event("crab_right", event)
+	
 	# Brake
 	if not InputMap.has_action("brake"):
 		InputMap.add_action("brake")

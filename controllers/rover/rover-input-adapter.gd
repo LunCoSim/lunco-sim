@@ -9,7 +9,21 @@ extends LCInputAdapter
 @export var INPUT_DEADZONE := 0.1
 
 func _ready():
-	pass
+	_setup_input_mappings()
+
+func _setup_input_mappings():
+	# Crab Steering
+	if not InputMap.has_action("crab_left"):
+		InputMap.add_action("crab_left")
+		var event = InputEventKey.new()
+		event.keycode = KEY_E
+		InputMap.action_add_event("crab_left", event)
+	
+	if not InputMap.has_action("crab_right"):
+		InputMap.add_action("crab_right")
+		var event = InputEventKey.new()
+		event.keycode = KEY_Q
+		InputMap.action_add_event("crab_right", event)
 
 
 
@@ -28,6 +42,7 @@ func _input(_event):
 		# Process movement input
 		var motor_input = Input.get_action_strength("move_forward") - Input.get_action_strength("move_backward")
 		var steering_input = Input.get_action_strength("move_right") - Input.get_action_strength("move_left")
+		var crab_input = Input.get_action_strength("crab_right") - Input.get_action_strength("crab_left")
 		var brake_input = Input.get_action_strength("brake")
 		
 		# Process gamepad input if available
@@ -42,6 +57,9 @@ func _input(_event):
 		
 		if _target.has_method("set_steering"):
 			_target.set_steering(steering_input * STEERING_SENSITIVITY)
+			
+		if _target.has_method("set_crab_steering"):
+			_target.set_crab_steering(crab_input * STEERING_SENSITIVITY)
 		
 		if _target.has_method("set_brake"):
 			_target.set_brake(brake_input) 

@@ -43,7 +43,7 @@ var resize_tween: Tween
 @onready var bl_rpm_label = $PanelContainer/VBox/ScrollContainer/WheelControlsPanel/BackLeft/RPMLabel
 @onready var br_rpm_label = $PanelContainer/VBox/ScrollContainer/WheelControlsPanel/BackRight/RPMLabel
 
-var drive_modes = ["Ackermann", "Differential", "Independent"]
+var drive_modes = ["Standard", "Ackermann", "Differential", "Independent"]
 
 func _ready():
 	# Setup mode selector

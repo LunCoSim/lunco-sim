@@ -7,7 +7,7 @@ extends LCController
 
 # Export categories for easy configuration in the editor
 @export_category("Drive Configuration")
-@export_enum("Ackermann:0", "Differential:1", "Independent:2") var drive_mode: int = 1
+@export_enum("Standard:0", "Ackermann:1", "Differential:2", "Independent:3") var drive_mode: int = 0
 @export var enable_individual_control: bool = false
 
 @export_category("Rover Movement Parameters")
@@ -41,6 +41,7 @@ var br_wheel: LCWheelEffector
 # Control inputs
 var motor_input := 0.0
 var steering_input := 0.0
+var crab_input := 0.0
 var brake_input := 0.0
 var current_speed := 0.0
 
@@ -121,35 +122,45 @@ func _physics_process(_delta: float):
 		
 		# Apply control based on drive mode
 		match drive_mode:
-			0: # Ackermann
+			0: # Standard
+				_apply_standard_control()
+			1: # Ackermann
 				_apply_ackermann_control()
-			1: # Differential
+			2: # Differential
 				_apply_differential_control()
-			2: # Independent
+			3: # Independent
 				_apply_independent_control()
 		
 		# Apply slope compensation
 		_apply_slope_compensation()
 
 func _apply_ackermann_control():
-	"""Traditional car-like steering: front wheels steer, all wheels drive"""
+	"""
+	Modified Ackermann control:
+	- AD keys (steering_input): 4-Wheel Steering (Rotation)
+	- QE keys (crab_input): Crab Steering (Translation)
+	"""
 	var speed_factor = _get_speed_factor()
 	
-	# Reset individual wheel forces (let parent control them)
-	if fl_wheel:
-		fl_wheel.engine_force = 0.0
-	if fr_wheel:
-		fr_wheel.engine_force = 0.0
-	if bl_wheel:
-		bl_wheel.engine_force = 0.0
-	if br_wheel:
-		br_wheel.engine_force = 0.0
+	# Calculate steering angles
+	# AD rotates: Front turns opposite to Back
+	# QE crabs: Front and Back turn same direction
+	var front_angle = (-steering_input + crab_input) * STEERING_FORCE
+	var back_angle = (steering_input + crab_input) * STEERING_FORCE
 	
-	# All wheels get same motor force via parent
+	# Apply to parent (Front wheels via VehicleBody3D steering)
 	parent.engine_force = -motor_input * ENGINE_FORCE * speed_factor
-	parent.steering = -steering_input * STEERING_FORCE
+	parent.steering = front_angle
 	parent.brake = brake_input * BRAKE_FORCE
 	
+	# Apply to back wheels manually
+	if bl_wheel:
+		bl_wheel.steering = back_angle
+		bl_wheel.engine_force = 0.0 # Let parent handle drive force
+	if br_wheel:
+		br_wheel.steering = back_angle
+		br_wheel.engine_force = 0.0
+		
 	motor_state_changed.emit(motor_input)
 	steering_changed.emit(steering_input)
 	if brake_input > 0:
@@ -228,6 +239,28 @@ func _apply_independent_control():
 	_apply_wheel_control(bl_wheel, wheel_controls["back_left"])
 	_apply_wheel_control(br_wheel, wheel_controls["back_right"])
 
+func _apply_standard_control():
+	"""Standard car steering: Only front wheels steer"""
+	var speed_factor = _get_speed_factor()
+	
+	# Apply to parent (Front wheels via VehicleBody3D steering)
+	parent.engine_force = -motor_input * ENGINE_FORCE * speed_factor
+	parent.steering = -steering_input * STEERING_FORCE
+	parent.brake = brake_input * BRAKE_FORCE
+	
+	# Ensure back wheels are straight
+	if bl_wheel:
+		bl_wheel.steering = 0.0
+		bl_wheel.engine_force = 0.0
+	if br_wheel:
+		br_wheel.steering = 0.0
+		br_wheel.engine_force = 0.0
+		
+	motor_state_changed.emit(motor_input)
+	steering_changed.emit(steering_input)
+	if brake_input > 0:
+		brake_applied.emit(brake_input)
+
 func _apply_wheel_control(wheel: LCWheelEffector, control: Dictionary):
 	"""Apply control values to a specific wheel"""
 	if not wheel:
@@ -269,6 +302,10 @@ func set_motor(value: float):
 func set_steering(value: float):
 	"""Set steering input"""
 	steering_input = clamp(value, -1.0, 1.0)
+
+func set_crab_steering(value: float):
+	"""Set crab steering input"""
+	crab_input = clamp(value, -1.0, 1.0)
 
 func set_brake(value: float):
 	"""Set brake input for all wheels"""
@@ -340,6 +377,7 @@ func release_control():
 func _reset_inputs():
 	motor_input = 0.0
 	steering_input = 0.0
+	crab_input = 0.0
 	brake_input = 0.0
 	
 	# Reset individual wheel controls
