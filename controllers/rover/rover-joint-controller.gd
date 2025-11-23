@@ -272,7 +272,7 @@ func get_wheel_control(wheel_name: String) -> Dictionary:
 func get_wheel_telemetry(wheel_name: String) -> Dictionary:
 	"""Get telemetry data from a specific wheel"""
 	var wheel = _get_wheel_by_name(wheel_name)
-	if wheel and wheel.has("Telemetry"):
+	if wheel and "Telemetry" in wheel:
 		return wheel.Telemetry.duplicate()
 	return {}
 

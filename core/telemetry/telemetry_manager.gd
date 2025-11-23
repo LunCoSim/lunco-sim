@@ -93,8 +93,7 @@ func _discover_entities():
 							"entity_type": tracker.entity_type
 						})
 						print("TelemetryManager: Discovered entity from Simulation: ", entity.name)
-		else:
-			print("TelemetryManager: Simulation node found but no 'entities' property")
+		
 			
 		# Method 2: Fallback - scan scene tree for spawn_node children
 		if "spawn_node" in simulation:

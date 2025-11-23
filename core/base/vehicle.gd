@@ -92,8 +92,7 @@ func _update_mass_properties():
 		if debug_effectors:
 			push_warning("[LCVehicle] Total mass is too low (%.2f kg). Defaulting to 50.0 kg." % total_mass)
 			
-	if debug_effectors:
-		print("[LCVehicle] Updated mass: %.2f kg, CoM: %s" % [mass, center_of_mass])
+
 
 ## Updates power budget by aggregating from all effectors.
 func _update_power_budget():
