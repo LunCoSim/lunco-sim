@@ -21,7 +21,7 @@ func _input(_event):
 	var _target = get_resolved_target()
 		
 	# Check if we have a compatible rover controller
-	var is_compatible_controller = _target is LCRoverController
+	var is_compatible_controller = _target is LCRoverController or _target is LCRoverJointController
 	
 	# Only process input if the target is a rover controller
 	if is_compatible_controller:

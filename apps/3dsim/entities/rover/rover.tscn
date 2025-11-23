@@ -1,7 +1,7 @@
 [gd_scene load_steps=11 format=3 uid="uid://dyfxw33dhjjrw"]
 
 [ext_resource type="Script" uid="uid://bqc056rgml8ww" path="res://apps/3dsim/entities/rover/rover.gd" id="1_yvk4r"]
-[ext_resource type="Script" uid="uid://f0iojori2ghp" path="res://controllers/rover/rover-controller.gd" id="2_xvk4r"]
+[ext_resource type="Script" path="res://controllers/rover/rover-joint-controller.gd" id="2_xvk4r"]
 [ext_resource type="PackedScene" uid="uid://chassis_box_component" path="res://core/components/structure/chassis_box.tscn" id="3_chassis"]
 [ext_resource type="PackedScene" uid="uid://wheel_basic_component" path="res://core/components/propulsion/wheel_basic.tscn" id="4_wheel"]
 [ext_resource type="PackedScene" uid="uid://battery_basic_component" path="res://core/components/power/battery_basic.tscn" id="5_battery"]
