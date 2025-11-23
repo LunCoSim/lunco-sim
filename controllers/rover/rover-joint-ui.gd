@@ -12,28 +12,28 @@ extends LCControllerUI
 @onready var mode_selector = $PanelContainer/VBox/ModePanel/VBox/HBox/ModeSelector
 
 # Wheel control panels
-@onready var wheel_controls_container = $PanelContainer/VBox/WheelControlsPanel
-@onready var fl_motor_slider = $PanelContainer/VBox/WheelControlsPanel/FrontLeft/MotorSlider
-@onready var fl_brake_slider = $PanelContainer/VBox/WheelControlsPanel/FrontLeft/BrakeSlider
-@onready var fl_steering_slider = $PanelContainer/VBox/WheelControlsPanel/FrontLeft/SteeringSlider
+@onready var wheel_controls_container = $PanelContainer/VBox/ScrollContainer/WheelControlsPanel
+@onready var fl_motor_slider = $PanelContainer/VBox/ScrollContainer/WheelControlsPanel/FrontLeft/MotorSlider
+@onready var fl_brake_slider = $PanelContainer/VBox/ScrollContainer/WheelControlsPanel/FrontLeft/BrakeSlider
+@onready var fl_steering_slider = $PanelContainer/VBox/ScrollContainer/WheelControlsPanel/FrontLeft/SteeringSlider
 
-@onready var fr_motor_slider = $PanelContainer/VBox/WheelControlsPanel/FrontRight/MotorSlider
-@onready var fr_brake_slider = $PanelContainer/VBox/WheelControlsPanel/FrontRight/BrakeSlider
-@onready var fr_steering_slider = $PanelContainer/VBox/WheelControlsPanel/FrontRight/SteeringSlider
+@onready var fr_motor_slider = $PanelContainer/VBox/ScrollContainer/WheelControlsPanel/FrontRight/MotorSlider
+@onready var fr_brake_slider = $PanelContainer/VBox/ScrollContainer/WheelControlsPanel/FrontRight/BrakeSlider
+@onready var fr_steering_slider = $PanelContainer/VBox/ScrollContainer/WheelControlsPanel/FrontRight/SteeringSlider
 
-@onready var bl_motor_slider = $PanelContainer/VBox/WheelControlsPanel/BackLeft/MotorSlider
-@onready var bl_brake_slider = $PanelContainer/VBox/WheelControlsPanel/BackLeft/BrakeSlider
-@onready var bl_steering_slider = $PanelContainer/VBox/WheelControlsPanel/BackLeft/SteeringSlider
+@onready var bl_motor_slider = $PanelContainer/VBox/ScrollContainer/WheelControlsPanel/BackLeft/MotorSlider
+@onready var bl_brake_slider = $PanelContainer/VBox/ScrollContainer/WheelControlsPanel/BackLeft/BrakeSlider
+@onready var bl_steering_slider = $PanelContainer/VBox/ScrollContainer/WheelControlsPanel/BackLeft/SteeringSlider
 
-@onready var br_motor_slider = $PanelContainer/VBox/WheelControlsPanel/BackRight/MotorSlider
-@onready var br_brake_slider = $PanelContainer/VBox/WheelControlsPanel/BackRight/BrakeSlider
-@onready var br_steering_slider = $PanelContainer/VBox/WheelControlsPanel/BackRight/SteeringSlider
+@onready var br_motor_slider = $PanelContainer/VBox/ScrollContainer/WheelControlsPanel/BackRight/MotorSlider
+@onready var br_brake_slider = $PanelContainer/VBox/ScrollContainer/WheelControlsPanel/BackRight/BrakeSlider
+@onready var br_steering_slider = $PanelContainer/VBox/ScrollContainer/WheelControlsPanel/BackRight/SteeringSlider
 
 # Telemetry labels
-@onready var fl_rpm_label = $PanelContainer/VBox/WheelControlsPanel/FrontLeft/RPMLabel
-@onready var fr_rpm_label = $PanelContainer/VBox/WheelControlsPanel/FrontRight/RPMLabel
-@onready var bl_rpm_label = $PanelContainer/VBox/WheelControlsPanel/BackLeft/RPMLabel
-@onready var br_rpm_label = $PanelContainer/VBox/WheelControlsPanel/BackRight/RPMLabel
+@onready var fl_rpm_label = $PanelContainer/VBox/ScrollContainer/WheelControlsPanel/FrontLeft/RPMLabel
+@onready var fr_rpm_label = $PanelContainer/VBox/ScrollContainer/WheelControlsPanel/FrontRight/RPMLabel
+@onready var bl_rpm_label = $PanelContainer/VBox/ScrollContainer/WheelControlsPanel/BackLeft/RPMLabel
+@onready var br_rpm_label = $PanelContainer/VBox/ScrollContainer/WheelControlsPanel/BackRight/RPMLabel
 
 var drive_modes = ["Ackermann", "Differential", "Independent"]
 
