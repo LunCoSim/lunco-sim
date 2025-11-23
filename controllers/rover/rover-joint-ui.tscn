@@ -91,10 +91,6 @@ layout_mode = 2
 layout_mode = 2
 size_flags_horizontal = 3
 
-[node name="IndividualToggle" type="CheckButton" parent="PanelContainer/VBox/ModePanel/VBox/HBox"]
-layout_mode = 2
-text = "Individual"
-
 [node name="HSeparator3" type="HSeparator" parent="PanelContainer/VBox"]
 layout_mode = 2
 
@@ -268,7 +264,6 @@ layout_mode = 2
 text = "RPM: 0"
 
 [connection signal="item_selected" from="PanelContainer/VBox/ModePanel/VBox/HBox/ModeSelector" to="." method="_on_mode_selector_item_selected"]
-[connection signal="toggled" from="PanelContainer/VBox/ModePanel/VBox/HBox/IndividualToggle" to="." method="_on_individual_toggle_toggled"]
 [connection signal="value_changed" from="PanelContainer/VBox/WheelControlsPanel/FrontLeft/MotorSlider" to="." method="_on_fl_motor_slider_value_changed"]
 [connection signal="value_changed" from="PanelContainer/VBox/WheelControlsPanel/FrontLeft/BrakeSlider" to="." method="_on_fl_brake_slider_value_changed"]
 [connection signal="value_changed" from="PanelContainer/VBox/WheelControlsPanel/FrontLeft/SteeringSlider" to="." method="_on_fl_steering_slider_value_changed"]

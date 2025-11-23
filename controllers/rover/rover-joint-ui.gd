@@ -10,7 +10,6 @@ extends LCControllerUI
 
 # Drive mode controls
 @onready var mode_selector = $PanelContainer/VBox/ModePanel/VBox/HBox/ModeSelector
-@onready var individual_control_toggle = $PanelContainer/VBox/ModePanel/VBox/HBox/IndividualToggle
 
 # Wheel control panels
 @onready var wheel_controls_container = $PanelContainer/VBox/WheelControlsPanel
@@ -57,8 +56,6 @@ func _on_target_set():
 		# Update UI to match current mode
 		if mode_selector:
 			mode_selector.selected = target.drive_mode
-		if individual_control_toggle:
-			individual_control_toggle.button_pressed = target.enable_individual_control
 		
 		_update_mode_display()
 		_update_wheel_controls_visibility()
@@ -92,8 +89,7 @@ func _update_mode_display():
 	"""Update the mode label"""
 	if mode_label and target:
 		var mode_name = drive_modes[target.drive_mode]
-		var individual = " (Individual)" if target.enable_individual_control else ""
-		mode_label.text = mode_name + individual
+		mode_label.text = mode_name
 
 func _update_wheel_controls_visibility():
 	"""Show/hide individual wheel controls based on mode"""
@@ -130,20 +126,8 @@ func _on_mode_selector_item_selected(index: int):
 	"""Called when drive mode is changed"""
 	if target:
 		target.drive_mode = index
-		_update_mode_display()
-		_update_wheel_controls_visibility()
-
-func _on_individual_toggle_toggled(toggled_on: bool):
-	"""Called when individual control toggle is changed"""
-	if target:
-		target.enable_individual_control = toggled_on
-		
-		# Auto-switch to Independent mode if enabling individual control
-		if toggled_on and target.drive_mode != 2:
-			target.drive_mode = 2
-			if mode_selector:
-				mode_selector.selected = 2
-				
+		# Enable individual control when Independent mode (index 2) is selected
+		target.enable_individual_control = (index == 2)
 		_update_mode_display()
 		_update_wheel_controls_visibility()
 
