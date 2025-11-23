@@ -13,11 +13,12 @@ mouse_filter = 2
 script = ExtResource("1")
 
 [node name="PanelContainer" type="PanelContainer" parent="." unique_id=917030152]
+custom_minimum_size = Vector2(400, 0)
 layout_mode = 0
 offset_left = 10.0
 offset_top = 10.0
 offset_right = 410.0
-offset_bottom = 400.0
+size_flags_vertical = 0
 
 [node name="VBox" type="VBoxContainer" parent="PanelContainer" unique_id=1144542463]
 layout_mode = 2
@@ -95,7 +96,6 @@ size_flags_horizontal = 3
 layout_mode = 2
 
 [node name="ScrollContainer" type="ScrollContainer" parent="PanelContainer/VBox" unique_id=854433091]
-visible = false
 layout_mode = 2
 size_flags_vertical = 3
 

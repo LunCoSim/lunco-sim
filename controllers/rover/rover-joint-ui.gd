@@ -8,8 +8,16 @@ extends LCControllerUI
 @onready var motor_value = $PanelContainer/VBox/StatusPanel/GridContainer/MotorValue
 @onready var steering_value = $PanelContainer/VBox/StatusPanel/GridContainer/SteeringValue
 
+# UI Container references
+@onready var panel_container = $PanelContainer
+@onready var vbox_container = $PanelContainer/VBox
+@onready var scroll_container = $PanelContainer/VBox/ScrollContainer
+
 # Drive mode controls
 @onready var mode_selector = $PanelContainer/VBox/ModePanel/VBox/HBox/ModeSelector
+
+# Animation
+var resize_tween: Tween
 
 # Wheel control panels
 @onready var wheel_controls_container = $PanelContainer/VBox/ScrollContainer/WheelControlsPanel
@@ -93,11 +101,30 @@ func _update_mode_display():
 
 func _update_wheel_controls_visibility():
 	"""Show/hide individual wheel controls based on mode"""
-	if not wheel_controls_container:
+	if not scroll_container or not panel_container:
 		return
 	
 	var show_individual = target and target.enable_individual_control and target.drive_mode == 2
-	wheel_controls_container.visible = show_individual
+	
+	# Change visibility of the ScrollContainer itself
+	scroll_container.visible = show_individual
+	
+	if show_individual:
+		# MAXIMIZE: Explicitly set minimum height to fill screen
+		var viewport_height = get_viewport_rect().size.y
+		var target_height = viewport_height - 100.0 # 20px margin
+		panel_container.custom_minimum_size.y = target_height
+	else:
+		# MINIMIZE: Reset minimum height to allow auto-shrink
+		panel_container.custom_minimum_size.y = 0.0
+	
+	# Force layout update
+	if vbox_container:
+		vbox_container.queue_sort()
+	
+	# Reset size to ensure it recalculates correctly
+	panel_container.size = Vector2.ZERO
+	panel_container.reset_size()
 
 func _update_wheel_telemetry():
 	"""Update wheel telemetry displays"""
