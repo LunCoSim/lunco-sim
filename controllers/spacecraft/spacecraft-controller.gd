@@ -52,5 +52,3 @@ func throttle(_thrust: bool):
 		
 func change_orientation(_torque: Vector3):
 	torque = _torque
-
-

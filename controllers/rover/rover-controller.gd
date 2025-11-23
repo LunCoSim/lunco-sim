@@ -5,7 +5,7 @@ extends LCController
 # Export categories for easy configuration in the editor
 @export_category("Rover Movement Parameters")
 @export var ENGINE_FORCE := 1200.0  # Reduced force to prevent flipping
-@export var STEERING_FORCE := 0.35  # Balanced steering for good handling
+@export var STEERING_FORCE := 0.6  # Increased for better steering response
 @export var MAX_SPEED := 3.5  # Realistic max speed for lunar rover
 @export var BRAKE_FORCE := 800.0  # Increased braking for better control
 

@@ -1,4 +1,3 @@
-@tool
 class_name LCWheelEffector
 extends VehicleWheel3D
 

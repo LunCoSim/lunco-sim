@@ -57,7 +57,7 @@ shape = SubResource("BoxShape3D_chassis")
 [node name="ChassisBox" parent="." instance=ExtResource("3_chassis")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.05, 0)
 size = Vector3(2.2, 0.4, 3)
-density = 208.0
+density = 50.0
 
 [node name="CollisionShape3D" parent="ChassisBox" index="0"]
 disabled = true
@@ -70,7 +70,7 @@ surface_material_override/0 = SubResource("StandardMaterial3D_bumper")
 [node name="BackLeftWheel" parent="." instance=ExtResource("4_wheel")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1.35, -0.35, 1)
 wheel_radius = 0.4
-wheel_roll_influence = 0.0005
+wheel_roll_influence = 0.15
 wheel_friction_slip = 1.8
 suspension_stiffness = 22.0
 suspension_max_force = 8000.0
@@ -80,7 +80,7 @@ damping_relaxation = 0.8
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1.35, -0.35, -1)
 use_as_steering = true
 wheel_radius = 0.4
-wheel_roll_influence = 0.0005
+wheel_roll_influence = 0.15
 wheel_friction_slip = 1.8
 suspension_stiffness = 22.0
 suspension_max_force = 8000.0
@@ -90,7 +90,7 @@ damping_relaxation = 0.8
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1.35, -0.35, -1)
 use_as_steering = true
 wheel_radius = 0.4
-wheel_roll_influence = 0.0005
+wheel_roll_influence = 0.15
 wheel_friction_slip = 1.8
 suspension_stiffness = 22.0
 suspension_max_force = 8000.0
@@ -99,7 +99,7 @@ damping_relaxation = 0.8
 [node name="BackRightWheel" parent="." instance=ExtResource("4_wheel")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1.35, -0.35, 1)
 wheel_radius = 0.4
-wheel_roll_influence = 0.0005
+wheel_roll_influence = 0.15
 wheel_friction_slip = 1.8
 suspension_stiffness = 22.0
 suspension_max_force = 8000.0
