@@ -1,16 +1,19 @@
 [gd_scene load_steps=4 format=3 uid="uid://chassis_box_component"]
 
-[ext_resource type="Script" path="res://core/base/component.gd" id="1_script"]
+[ext_resource type="Script" path="res://core/components/structure/chassis-effector.gd" id="1_script"]
 
 [sub_resource type="BoxShape3D" id="BoxShape3D_1"]
+resource_local_to_scene = true
 size = Vector3(1, 0.5, 2)
 
 [sub_resource type="BoxMesh" id="BoxMesh_1"]
+resource_local_to_scene = true
 size = Vector3(1, 0.5, 2)
 
 [node name="ChassisBox" type="Node3D"]
 script = ExtResource("1_script")
-mass = 50.0
+size = Vector3(1, 0.5, 2)
+density = 25.0
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="."]
 shape = SubResource("BoxShape3D_1")

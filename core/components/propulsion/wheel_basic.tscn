@@ -1,36 +1,33 @@
 [gd_scene load_steps=4 format=3 uid="uid://wheel_basic_component"]
 
-[ext_resource type="Script" path="res://core/base/component.gd" id="1_script"]
-
-[sub_resource type="CylinderShape3D" id="CylinderShape3D_1"]
-height = 0.2
-radius = 0.3
+[ext_resource type="Script" path="res://core/components/propulsion/wheel-effector.gd" id="1_script"]
 
 [sub_resource type="CylinderMesh" id="CylinderMesh_1"]
 top_radius = 0.3
 bottom_radius = 0.3
 height = 0.2
 
-[node name="WheelBasic" type="Node3D"]
-script = ExtResource("1_script")
-mass = 10.0
-Telemetry = {
-"current_speed": 0.0
-}
-Commands = {
-"motor_torque": 0.0,
-"brake": 0.0
-}
-
-[node name="VehicleWheel3D" type="VehicleWheel3D" parent="."]
+[node name="WheelBasic" type="VehicleWheel3D"]
 use_as_traction = true
 use_as_steering = true
 wheel_radius = 0.3
 suspension_stiffness = 40.0
 damping_compression = 0.5
 damping_relaxation = 0.5
+script = ExtResource("1_script")
+mass = 10.0
+Telemetry = {
+"brake_force": 0.0,
+"current_speed": 0.0,
+"motor_torque": 0.0,
+"rpm": 0.0
+}
+Commands = {
+"brake": 0.0,
+"motor_torque": 0.0
+}
 
-[node name="MeshInstance3D" type="MeshInstance3D" parent="VehicleWheel3D"]
+[node name="MeshInstance3D" type="MeshInstance3D" parent="."]
 transform = Transform3D(-4.37114e-08, -1, 0, 1, -4.37114e-08, 0, 0, 0, 1, 0, 0, 0)
 mesh = SubResource("CylinderMesh_1")
 
