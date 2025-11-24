@@ -1,6 +1,20 @@
 // OpenMCT Configuration for LunCoSim Telemetry
 
-const TELEMETRY_API_URL = 'http://localhost:8082/api';
+// Detect if running locally or remotely
+const isLocal = window.location.hostname === 'localhost' ||
+    window.location.hostname === '127.0.0.1' ||
+    window.location.hostname === '';
+
+// Set API URL based on environment
+// Local: HTTP to localhost
+// Remote: HTTPS to langrenus.lunco.space (uses same TLS certs as WebSocket connections)
+const TELEMETRY_API_URL = isLocal
+    ? 'http://localhost:8082/api'
+    : 'https://langrenus.lunco.space:8082/api';
+
+console.log(`Environment: ${isLocal ? 'LOCAL' : 'REMOTE'}`);
+console.log(`Telemetry API URL: ${TELEMETRY_API_URL}`);
+
 
 // Wait for DOM to be ready
 document.addEventListener('DOMContentLoaded', function () {
