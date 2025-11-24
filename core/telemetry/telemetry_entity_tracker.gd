@@ -19,7 +19,7 @@ func _init(tracked_entity: Node):
 	entity_id = str(entity.get_instance_id())
 	entity_name = entity.name
 	entity_type = _determine_entity_type(entity)
-	created_at = Time.get_ticks_msec()
+	created_at = int(Time.get_unix_time_from_system() * 1000)
 	
 	# Connect to common signals
 	_connect_signals()
@@ -73,29 +73,39 @@ func update_properties() -> Dictionary:
 		"entity_id": entity_id,
 		"entity_name": entity_name,
 		"entity_type": entity_type,
-		"timestamp": Time.get_ticks_msec()
+		"timestamp": int(Time.get_unix_time_from_system() * 1000)  # Integer milliseconds
 	}
 	
-	# Get position
+	# Get position - use flat keys for OpenMCT compatibility
 	var pos = _get_position()
 	if pos != Vector3.ZERO:
-		props["position"] = {"x": pos.x, "y": pos.y, "z": pos.z}
+		props["position.x"] = pos.x
+		props["position.y"] = pos.y
+		props["position.z"] = pos.z
 	
 	# Get rotation
 	if entity.has_method("get_global_rotation"):
 		var rot = entity.global_rotation
-		props["rotation"] = {"x": rot.x, "y": rot.y, "z": rot.z}
+		props["rotation.x"] = rot.x
+		props["rotation.y"] = rot.y
+		props["rotation.z"] = rot.z
 	
 	# Get velocity based on entity type
-	if entity is RigidBody3D:
+	if entity is RigidBody3D or entity is VehicleBody3D:
 		var vel = entity.linear_velocity
-		props["velocity"] = {"x": vel.x, "y": vel.y, "z": vel.z}
+		props["velocity.x"] = vel.x
+		props["velocity.y"] = vel.y
+		props["velocity.z"] = vel.z
 		var ang_vel = entity.angular_velocity
-		props["angular_velocity"] = {"x": ang_vel.x, "y": ang_vel.y, "z": ang_vel.z}
+		props["angular_velocity.x"] = ang_vel.x
+		props["angular_velocity.y"] = ang_vel.y
+		props["angular_velocity.z"] = ang_vel.z
 		props["mass"] = entity.mass
 	elif entity is CharacterBody3D:
 		var vel = entity.velocity
-		props["velocity"] = {"x": vel.x, "y": vel.y, "z": vel.z}
+		props["velocity.x"] = vel.x
+		props["velocity.y"] = vel.y
+		props["velocity.z"] = vel.z
 		props["is_on_floor"] = entity.is_on_floor()
 	
 	# Get controller info if available
@@ -108,15 +118,12 @@ func update_properties() -> Dictionary:
 		controller = entity.get_node_or_null("SpacecraftController")
 	
 	if controller:
-		var inputs = {}
 		if controller.has_method("get_motor"):
-			inputs["motor"] = controller.get_motor()
+			props["inputs.motor"] = controller.get_motor()
 		if controller.has_method("get_steering"):
-			inputs["steering"] = controller.get_steering()
+			props["inputs.steering"] = controller.get_steering()
 		if controller.has_method("get_brake"):
-			inputs["brake"] = controller.get_brake()
-		if inputs.size() > 0:
-			props["inputs"] = inputs
+			props["inputs.brake"] = controller.get_brake()
 	
 	last_properties = props
 	return props
@@ -128,7 +135,7 @@ func _get_position() -> Vector3:
 
 func track_event(event_type: String, data: Dictionary = {}):
 	var event = {
-		"timestamp": Time.get_ticks_msec(),
+		"timestamp": int(Time.get_unix_time_from_system() * 1000),
 		"event_type": event_type,
 		"entity_id": entity_id,
 		"data": data
@@ -163,5 +170,5 @@ func cleanup():
 	
 	# Track destruction event
 	track_event("entity.destroyed", {
-		"lifetime_ms": Time.get_ticks_msec() - created_at
+		"lifetime_ms": int(Time.get_unix_time_from_system() * 1000) - created_at
 	})

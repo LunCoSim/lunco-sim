@@ -77,10 +77,15 @@ func _on_entities_updated(entities: Array):
 
 func _discover_entities():
 	# Method 1: Check Simulation.entities array if available
-	var simulation = get_tree().root.find_child("Simulation", true, false)
+	# Find by class name instead of node name to support "Simulation", "Simulation2", etc.
+	var simulation = null
+	for child in get_tree().root.get_children():
+		if child is LCSimulation:
+			simulation = child
+			break
+	
 	if simulation:
 		if "entities" in simulation:
-			print("TelemetryManager: Checking Simulation.entities, count: ", simulation.entities.size())
 			for entity in simulation.entities:
 				if is_instance_valid(entity) and _should_track_entity(entity):
 					var entity_id = str(entity.get_instance_id())
@@ -99,7 +104,6 @@ func _discover_entities():
 		if "spawn_node" in simulation:
 			var spawn_node = simulation.get("spawn_node")
 			if spawn_node:
-				print("TelemetryManager: Checking spawn_node children, count: ", spawn_node.get_child_count())
 				for child in spawn_node.get_children():
 					if _should_track_entity(child):
 						var entity_id = str(child.get_instance_id())
@@ -112,8 +116,7 @@ func _discover_entities():
 								"entity_type": tracker.entity_type
 							})
 							print("TelemetryManager: Discovered entity from spawn_node: ", child.name)
-	else:
-		print("TelemetryManager: Simulation node NOT found")
+
 	
 	# Clean up trackers for destroyed entities
 	var to_remove = []
@@ -128,8 +131,8 @@ func _discover_entities():
 		entity_trackers.erase(entity_id)
 
 func _should_track_entity(node: Node) -> bool:
-	# Track RigidBody3D and CharacterBody3D nodes
-	if node is RigidBody3D or node is CharacterBody3D:
+	# Track RigidBody3D, CharacterBody3D, and VehicleBody3D nodes
+	if node is RigidBody3D or node is CharacterBody3D or node is VehicleBody3D:
 		# Exclude certain nodes (e.g., projectiles, small objects)
 		if node.name.begins_with("@"):  # Skip internal nodes
 			return false
@@ -165,7 +168,7 @@ func _on_user_disconnected(user_id: int):
 
 func _track_global_event(event_type: String, data: Dictionary):
 	var event = {
-		"timestamp": Time.get_ticks_msec(),
+		"timestamp": int(Time.get_unix_time_from_system() * 1000),
 		"event_type": event_type,
 		"data": data
 	}
