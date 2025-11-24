@@ -97,13 +97,20 @@ document.addEventListener('DOMContentLoaded', function () {
                                 type: "luncosim.telemetry",
                                 telemetry: {
                                     values: [
-                                        { key: "timestamp", name: "Timestamp", format: "utc", hints: { domain: 1 } },
+                                        { key: "utc", source: "timestamp", name: "Timestamp", format: "utc", hints: { domain: 1 } },
                                         { key: "position.x", name: "Position X", unit: "m", format: "float", hints: { range: 1 } },
                                         { key: "position.y", name: "Position Y", unit: "m", format: "float", hints: { range: 1 } },
                                         { key: "position.z", name: "Position Z", unit: "m", format: "float", hints: { range: 1 } },
                                         { key: "velocity.x", name: "Velocity X", unit: "m/s", format: "float", hints: { range: 1 } },
                                         { key: "velocity.y", name: "Velocity Y", unit: "m/s", format: "float", hints: { range: 1 } },
                                         { key: "velocity.z", name: "Velocity Z", unit: "m/s", format: "float", hints: { range: 1 } },
+                                        { key: "angular_velocity.x", name: "Angular Velocity X", unit: "rad/s", format: "float", hints: { range: 1 } },
+                                        { key: "angular_velocity.y", name: "Angular Velocity Y", unit: "rad/s", format: "float", hints: { range: 1 } },
+                                        { key: "angular_velocity.z", name: "Angular Velocity Z", unit: "rad/s", format: "float", hints: { range: 1 } },
+                                        { key: "rotation.x", name: "Rotation X", unit: "rad", format: "float", hints: { range: 1 } },
+                                        { key: "rotation.y", name: "Rotation Y", unit: "rad", format: "float", hints: { range: 1 } },
+                                        { key: "rotation.z", name: "Rotation Z", unit: "rad", format: "float", hints: { range: 1 } },
+                                        { key: "mass", name: "Mass", unit: "kg", format: "float", hints: { range: 1 } },
                                         { key: "controller_id", name: "Controller ID", format: "integer", hints: { range: 1 } }
                                     ]
                                 },
@@ -126,24 +133,31 @@ document.addEventListener('DOMContentLoaded', function () {
                                     type: "luncosim.telemetry",
                                     telemetry: {
                                         values: [
-                                            { key: "timestamp", name: "Timestamp", format: "utc", hints: { domain: 1 } },
+                                            { key: "utc", source: "timestamp", name: "Timestamp", format: "utc", hints: { domain: 1 } },
                                             { key: "position.x", name: "Position X", unit: "m", format: "float", hints: { range: 1 } },
                                             { key: "position.y", name: "Position Y", unit: "m", format: "float", hints: { range: 1 } },
                                             { key: "position.z", name: "Position Z", unit: "m", format: "float", hints: { range: 1 } },
                                             { key: "velocity.x", name: "Velocity X", unit: "m/s", format: "float", hints: { range: 1 } },
                                             { key: "velocity.y", name: "Velocity Y", unit: "m/s", format: "float", hints: { range: 1 } },
                                             { key: "velocity.z", name: "Velocity Z", unit: "m/s", format: "float", hints: { range: 1 } },
+                                            { key: "angular_velocity.x", name: "Angular Velocity X", unit: "rad/s", format: "float", hints: { range: 1 } },
+                                            { key: "angular_velocity.y", name: "Angular Velocity Y", unit: "rad/s", format: "float", hints: { range: 1 } },
+                                            { key: "angular_velocity.z", name: "Angular Velocity Z", unit: "rad/s", format: "float", hints: { range: 1 } },
+                                            { key: "rotation.x", name: "Rotation X", unit: "rad", format: "float", hints: { range: 1 } },
+                                            { key: "rotation.y", name: "Rotation Y", unit: "rad", format: "float", hints: { range: 1 } },
+                                            { key: "rotation.z", name: "Rotation Z", unit: "rad", format: "float", hints: { range: 1 } },
+                                            { key: "mass", name: "Mass", unit: "kg", format: "float", hints: { range: 1 } },
                                             { key: "controller_id", name: "Controller ID", format: "integer", hints: { range: 1 } }
                                         ]
                                     },
                                     location: "luncosim:luncosim"
                                 };
                             }
-                            return null;
+                            throw new Error(`Entity not found: ${identifier.key}`);
                         })
                         .catch(err => {
-                            console.warn('Error fetching entity:', err);
-                            return null;
+                            console.warn('Error fetching entity:', identifier.key, err);
+                            return Promise.reject(err);
                         });
                 }
             };
@@ -151,7 +165,7 @@ document.addEventListener('DOMContentLoaded', function () {
             // Composition provider
             var compositionProvider = {
                 appliesTo: function (domainObject) {
-                    return domainObject.identifier.namespace === 'luncosim' && domainObject.identifier.key === 'luncosim';
+                    return domainObject && domainObject.identifier && domainObject.identifier.namespace === 'luncosim' && domainObject.identifier.key === 'luncosim';
                 },
                 load: function () {
                     return fetch(`${TELEMETRY_API_URL}/entities`)
@@ -237,7 +251,10 @@ document.addEventListener('DOMContentLoaded', function () {
                             .then(response => response.json())
                             .then(data => {
                                 if (data && data.timestamp) {
+                                    console.log('Telemetry data received:', entityId, 'timestamp:', data.timestamp);
                                     callback(data);
+                                } else {
+                                    console.warn('Invalid telemetry data (no timestamp):', data);
                                 }
                             })
                             .catch(err => console.error('Telemetry fetch error:', err));
@@ -247,6 +264,19 @@ document.addEventListener('DOMContentLoaded', function () {
                         console.log('Unsubscribing from:', entityId);
                         clearInterval(interval);
                     };
+                },
+                supportsMetadata: function (domainObject) {
+                    return domainObject.type === 'luncosim.telemetry';
+                },
+                getMetadata: function (domainObject) {
+                    // Return properly structured metadata for OpenMCT
+                    if (domainObject.telemetry && domainObject.telemetry.values) {
+                        return {
+                            values: domainObject.telemetry.values,
+                            valueMetadatas: domainObject.telemetry.values
+                        };
+                    }
+                    return domainObject.telemetry;
                 }
             };
 
