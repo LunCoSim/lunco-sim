@@ -49,11 +49,24 @@ theme_override_constants/shadow_offset_y = 1
 text = "Connected Users"
 horizontal_alignment = 1
 
+[node name="ConnectionStatus" type="Label" parent="EntityUserContainer/UsersContainer/VBoxContainer"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.7, 0.7, 0.75, 1)
+theme_override_font_sizes/font_size = 12
+text = "Server: Disconnected"
+horizontal_alignment = 1
+
 [node name="Users" type="ItemList" parent="EntityUserContainer/UsersContainer/VBoxContainer"]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 80)
 layout_mode = 2
 
+[node name="MenuButton" type="Button" parent="EntityUserContainer/UsersContainer/VBoxContainer"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Menu"
+tooltip_text = "Open Main Menu"
 
 
 [node name="LivesEntitiesContainer" type="PanelContainer" parent="."]
@@ -189,6 +202,7 @@ layout_mode = 2
 underline = 2
 
 [connection signal="item_selected" from="EntityUserContainer/UsersContainer/VBoxContainer/Users" to="." method="_on_users_item_selected"]
+[connection signal="pressed" from="EntityUserContainer/UsersContainer/VBoxContainer/MenuButton" to="." method="_on_menu_button_pressed"]
 [connection signal="pressed" from="LivesEntitiesContainer/HBoxContainer/CreateEntityButton" to="." method="_on_create_entity_button_pressed"]
 [connection signal="pressed" from="LivesEntitiesContainer/HBoxContainer/BuilderButton" to="." method="_on_builder_button_pressed"]
 [connection signal="pressed" from="LivesEntitiesContainer/HBoxContainer/InspectorButton" to="." method="_on_inspector_button_pressed"]

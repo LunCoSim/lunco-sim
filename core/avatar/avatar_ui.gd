@@ -109,13 +109,21 @@ func _ready():
 	if Profile:
 		Profile.profile_changed.connect(_on_profile_changed)
 	
+	# Connect to networking signals for connection status
+	if LCNet:
+		LCNet.connection_state_changed.connect(_on_connection_state_changed)
+	
 	_update_connection_status()
 	
 	# Update user list
 	if Users:
 		_on_update_connected_users()
 	
+	# Update server connection status
+	_on_connection_state_changed(LCNet.connection_state if LCNet else "disconnected")
+	
 	print("Avatar UI: Ready complete")
+
 
 func _input(event):
 	# Toggle component inspector with 'I' key
@@ -425,3 +433,34 @@ func _on_visibility_changed():
 		var parent = get_parent()
 		if parent and parent.get_parent() and "entities" in parent.get_parent():
 			call_deferred("update_entities", parent.get_parent().entities)
+
+func _on_menu_button_pressed():
+	print("Menu button pressed")
+	# Toggle the main menu
+	if LCWindows:
+		LCWindows.toggle_main_menu()
+	else:
+		push_error("LCWindows singleton not found")
+
+func _on_connection_state_changed(state: String):
+	var status_label = get_node_or_null("%ConnectionStatus")
+	if status_label == null:
+		return
+	
+	# Update the connection status label based on state
+	match state:
+		"disconnected":
+			status_label.text = "Server: Disconnected"
+			status_label.modulate = Color(0.7, 0.7, 0.75, 1)
+		"connecting":
+			status_label.text = "Server: Connecting..."
+			status_label.modulate = Color(0.9, 0.9, 0.5, 1)
+		"connected":
+			status_label.text = "Server: Connected"
+			status_label.modulate = Color(0.5, 0.9, 0.5, 1)
+		"failed":
+			status_label.text = "Server: Failed"
+			status_label.modulate = Color(0.9, 0.5, 0.5, 1)
+		_:
+			status_label.text = "Server: " + state
+			status_label.modulate = Color(0.7, 0.7, 0.75, 1)

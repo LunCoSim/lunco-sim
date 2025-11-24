@@ -2,10 +2,22 @@
 class_name LCNetworking
 extends Node
 
-
+# Signal emitted when connection state changes
+signal connection_state_changed(state: String)
 
 # A dictionary to store the connected players
 var players = {}
+
+# Connection state tracking
+var connection_state: String = "disconnected"
+
+# Reconnection settings
+var auto_reconnect: bool = true
+var reconnect_delay: float = 5.0
+var reconnect_timer: Timer = null
+var last_connection_ip: String = ""
+var last_connection_port: int = 9000
+var last_connection_tls: bool = true
 
 func _ready():
 	# Setting up signals to call relevant functions when a peer is connected or disconnected.
@@ -18,6 +30,17 @@ func _ready():
 	multiplayer.server_disconnected.connect(on_server_disconnected)
 	
 	Profile.profile_changed.connect(_on_profile_changed)
+	
+	# Load auto_reconnect setting from Profile
+	if Profile:
+		auto_reconnect = Profile.auto_reconnect
+		print("[Networking] Auto-reconnect loaded from Profile: ", auto_reconnect)
+	
+	# Setup reconnection timer
+	_setup_reconnect_timer()
+	
+	# Auto-connect if running on alpha.lunco.space
+	_check_auto_connect()
 
 # Load and setup TLS certificate for secure WSS connections
 func setup_tls(cert_path: String, key_path: String) -> TLSOptions:
@@ -79,6 +102,11 @@ func connect_to_server(ip: String = "langrenus.lunco.space", port: int = 9000, t
 		print("Already connected to a server")
 		return
 
+	# Save connection parameters for reconnection
+	last_connection_ip = ip
+	last_connection_port = port
+	last_connection_tls = tls
+
 	var ws_peer = WebSocketMultiplayerPeer.new()
 
 	# Automatically disable TLS for localhost connections
@@ -87,15 +115,18 @@ func connect_to_server(ip: String = "langrenus.lunco.space", port: int = 9000, t
 	if is_localhost and tls:
 		print("Localhost detected (%s), disabling TLS (using ws:// instead of wss://)" % ip)
 		tls = false
+		last_connection_tls = false
 
 	var protocol = "wss://" if tls else "ws://"
 	var connection_string = "%s%s:%d" % [protocol, ip, port]
 
 	print("Connecting to server: ", connection_string)
+	_set_connection_state("connecting")
 	
 	var error = ws_peer.create_client(connection_string)
 	if error != OK:
 		push_error("Failed to create client: %s" % error_string(error))
+		_set_connection_state("failed")
 		return
 	
 	multiplayer.multiplayer_peer = ws_peer
@@ -200,13 +231,21 @@ func on_server_connection_failed():
 	
 	# Reset the peer so we can try connecting again
 	multiplayer.multiplayer_peer = null
+	_set_connection_state("failed")
+	
+	# Attempt reconnection if enabled
+	if auto_reconnect:
+		_start_reconnect_timer()
 	
 # Function called when successfully connected to server.
 func on_server_connected():
 	print("on_server_connected")
 	DisplayServer.window_set_title("Connected to server")
-	# This function currently does nothing.
-	pass
+	_set_connection_state("connected")
+	
+	# Stop reconnection timer if it's running
+	if reconnect_timer and reconnect_timer.is_stopped() == false:
+		reconnect_timer.stop()
 
 # Function called when server gets disconnected
 func on_server_disconnected():
@@ -216,3 +255,49 @@ func on_server_disconnected():
 	
 	# Reset the peer so we can try connecting again
 	multiplayer.multiplayer_peer = null
+	_set_connection_state("disconnected")
+	
+	# Attempt reconnection if enabled
+	if auto_reconnect:
+		_start_reconnect_timer()
+
+# Helper function to check if we should auto-connect
+func _check_auto_connect():
+	# Check if running in a web browser
+	if OS.has_feature("web"):
+		var hostname = JavaScriptBridge.eval("window.location.hostname")
+		print("Running on hostname: ", hostname)
+		
+		# Auto-connect if running on alpha.lunco.space
+		if hostname == "alpha.lunco.space":
+			print("Auto-connecting to server (running on alpha.lunco.space)")
+			connect_to_server("langrenus.lunco.space", 9000, true)
+
+# Helper function to setup reconnection timer
+func _setup_reconnect_timer():
+	reconnect_timer = Timer.new()
+	reconnect_timer.name = "ReconnectTimer"
+	reconnect_timer.one_shot = true
+	reconnect_timer.timeout.connect(_attempt_reconnect)
+	add_child(reconnect_timer)
+
+# Helper function to start reconnection timer
+func _start_reconnect_timer():
+	if reconnect_timer:
+		print("Will attempt reconnection in %.1f seconds..." % reconnect_delay)
+		reconnect_timer.start(reconnect_delay)
+
+# Helper function to attempt reconnection
+func _attempt_reconnect():
+	if last_connection_ip != "":
+		print("Attempting to reconnect to %s:%d..." % [last_connection_ip, last_connection_port])
+		connect_to_server(last_connection_ip, last_connection_port, last_connection_tls)
+	else:
+		print("No previous connection to reconnect to")
+
+# Helper function to set connection state and emit signal
+func _set_connection_state(new_state: String):
+	if connection_state != new_state:
+		connection_state = new_state
+		print("Connection state changed: ", new_state)
+		connection_state_changed.emit(new_state)

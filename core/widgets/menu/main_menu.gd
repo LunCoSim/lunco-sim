@@ -13,6 +13,10 @@ func _ready():
 	
 	# Load hide tutorial setting from Profile
 	%HideTutorial.button_pressed = Profile.hide_tutorial
+	
+	# Load auto-reconnect setting from Profile
+	if Profile:
+		%AutoReconnect.button_pressed = Profile.auto_reconnect
 
 func on_reload_profile():
 	%Username.text = Profile.username
@@ -81,6 +85,12 @@ func _on_check_profile_nft_pressed():
 func _on_hide_tutorial_toggled(toggled_on):
 	# Save the setting to Profile
 	Profile.hide_tutorial = toggled_on
+
+func _on_auto_reconnect_toggled(toggled_on):
+	# Save the setting to Profile (which will update LCNet automatically)
+	if Profile:
+		Profile.auto_reconnect = toggled_on
+		print("Auto-reconnect ", "enabled" if toggled_on else "disabled")
 
 func _on_replay_mode_pressed():
 	LCWindows.toggle_main_menu() # Close the menu

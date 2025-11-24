@@ -156,6 +156,13 @@ size_flags_horizontal = 3
 text = "9000"
 placeholder_text = "Port"
 
+[node name="AutoReconnect" type="CheckBox" parent="MarginContainer/ScrollContainer/MainContent/NetworkingPanel/Networking"]
+unique_name_in_owner = true
+layout_mode = 2
+button_pressed = true
+text = "Auto-Reconnect"
+tooltip_text = "Automatically reconnect if connection is lost"
+
 [node name="SimulationPanel" type="PanelContainer" parent="MarginContainer/ScrollContainer/MainContent"]
 layout_mode = 2
 size_flags_horizontal = 3
@@ -229,6 +236,7 @@ horizontal_alignment = 2
 [connection signal="text_changed" from="MarginContainer/ScrollContainer/MainContent/ProfilePanel/Profile/WalletContainer/Wallet" to="." method="_on_username_text_changed"]
 [connection signal="pressed" from="MarginContainer/ScrollContainer/MainContent/ProfilePanel/Profile/ProfileButtonsContainer/Connect wallet" to="." method="_on_connect_wallet_pressed"]
 [connection signal="pressed" from="MarginContainer/ScrollContainer/MainContent/ProfilePanel/Profile/ProfileButtonsContainer/CheckProfileNFT" to="." method="_on_check_profile_nft_pressed"]
+[connection signal="toggled" from="MarginContainer/ScrollContainer/MainContent/NetworkingPanel/Networking/AutoReconnect" to="." method="_on_auto_reconnect_toggled"]
 [connection signal="pressed" from="MarginContainer/ScrollContainer/MainContent/SimulationPanel/Simulation/SimHost" to="." method="_on_sim_host_pressed"]
 [connection signal="pressed" from="MarginContainer/ScrollContainer/MainContent/SimulationPanel/Simulation/SimClient" to="." method="_on_sim_client_pressed"]
 [connection signal="pressed" from="MarginContainer/ScrollContainer/MainContent/SimulationPanel/Simulation/ConnectToGlobal" to="." method="_on_connect_to_global_pressed"]

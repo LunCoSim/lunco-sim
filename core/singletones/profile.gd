@@ -14,6 +14,7 @@ signal profile_changed()
 @export var has_profile: int : set = set_has_profile
 @export var is_artizen_buyer: bool : set = set_is_artizen_buyer
 @export var hide_tutorial: bool : set = set_hide_tutorial
+@export var auto_reconnect: bool = true : set = set_auto_reconnect
 
 const FILENAME = "profile.cfg"
 const PATH = "user://"
@@ -71,6 +72,16 @@ func set_hide_tutorial(_hide_tutorial):
 		if not _is_loading:
 			save_profile()
 			profile_changed.emit()
+
+func set_auto_reconnect(_auto_reconnect):
+	if auto_reconnect != _auto_reconnect:
+		auto_reconnect = _auto_reconnect
+		if not _is_loading:
+			save_profile()
+			profile_changed.emit()
+			# Update LCNet setting
+			if LCNet:
+				LCNet.auto_reconnect = _auto_reconnect
 
 #----------------------------------
 func login():
@@ -132,6 +143,7 @@ func save_profile():
 	config.set_value(SECTION, "has_profile", has_profile)
 	config.set_value(SECTION, "is_artizen_buyer", is_artizen_buyer)
 	config.set_value(SECTION, "hide_tutorial", hide_tutorial)
+	config.set_value(SECTION, "auto_reconnect", auto_reconnect)
 
 	# Save it to a file (overwrite if already exists).
 	config.save(FULLPATH)
@@ -153,5 +165,6 @@ func load_profile():
 	has_profile = config.get_value(SECTION, "has_profile", 0)
 	is_artizen_buyer = config.get_value(SECTION, "is_artizen_buyer", false)
 	hide_tutorial = config.get_value(SECTION, "hide_tutorial", false)
+	auto_reconnect = config.get_value(SECTION, "auto_reconnect", true)  # Default to true
 	
-	print("[Profile] Loaded successfully: hide_tutorial = ", hide_tutorial)
+	print("[Profile] Loaded successfully: hide_tutorial = ", hide_tutorial, ", auto_reconnect = ", auto_reconnect)
