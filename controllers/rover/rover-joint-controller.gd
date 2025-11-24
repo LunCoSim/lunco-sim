@@ -238,6 +238,11 @@ func _apply_independent_control():
 	_apply_wheel_control(fr_wheel, wheel_controls["front_right"])
 	_apply_wheel_control(bl_wheel, wheel_controls["back_left"])
 	_apply_wheel_control(br_wheel, wheel_controls["back_right"])
+	
+	motor_state_changed.emit(motor_input)
+	steering_changed.emit(steering_input)
+	if brake_input > 0:
+		brake_applied.emit(brake_input)
 
 func _apply_standard_control():
 	"""Standard car steering: Only front wheels steer"""
@@ -269,8 +274,7 @@ func _apply_wheel_control(wheel: LCWheelEffector, control: Dictionary):
 	var speed_factor = _get_speed_factor()
 	wheel.engine_force = -control["motor"] * ENGINE_FORCE * speed_factor
 	wheel.brake = control["brake"] * BRAKE_FORCE
-	# Note: Individual wheel steering not supported by VehicleWheel3D
-	# Steering is controlled at VehicleBody3D level
+	wheel.steering = control["steering"] * STEERING_FORCE
 
 func _get_speed_factor() -> float:
 	"""Calculate speed-based scaling to prevent flipping"""
