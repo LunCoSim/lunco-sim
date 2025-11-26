@@ -52,6 +52,12 @@ func _ready():
 	Telemetry["motor_torque"] = 0.0
 	Telemetry["brake_force"] = 0.0
 	Telemetry["rpm"] = 0.0
+	
+	# Register Parameters for Universal Editor
+	Parameters["Mass"] = { "path": "mass", "type": "float", "min": 1.0, "max": 100.0, "step": 1.0 }
+	Parameters["Radius"] = { "path": "wheel_radius_config", "type": "float", "min": 0.1, "max": 2.0, "step": 0.05 }
+	Parameters["Max Torque"] = { "path": "max_motor_torque", "type": "float", "min": 100.0, "max": 5000.0, "step": 100.0 }
+	Parameters["Max Brake"] = { "path": "max_brake_force", "type": "float", "min": 100.0, "max": 5000.0, "step": 100.0 }
 
 func _physics_process(delta):
 	_update_telemetry()

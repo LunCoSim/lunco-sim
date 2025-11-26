@@ -64,6 +64,12 @@ func _ready():
 	if not is_in_group("RoverControllers"):
 		add_to_group("RoverControllers")
 	
+	# Register Parameters
+	Parameters["Engine Force"] = { "path": "ENGINE_FORCE", "type": "float", "min": 100.0, "max": 5000.0, "step": 100.0 }
+	Parameters["Steering Force"] = { "path": "STEERING_FORCE", "type": "float", "min": 0.1, "max": 1.0, "step": 0.05 }
+	Parameters["Brake Force"] = { "path": "BRAKE_FORCE", "type": "float", "min": 100.0, "max": 5000.0, "step": 100.0 }
+	Parameters["Max Speed"] = { "path": "MAX_SPEED", "type": "float", "min": 1.0, "max": 20.0, "step": 0.5 }
+	
 	# Find wheel references
 	_discover_wheels()
 	
