@@ -4,6 +4,7 @@
 [ext_resource type="Theme" uid="uid://hve1e7mnexbi" path="res://themes/theme.tres" id="1_ois6a"]
 [ext_resource type="PackedScene" uid="uid://component_inspector" path="res://core/ui/component_inspector.tscn" id="2_inspector"]
 [ext_resource type="PackedScene" uid="uid://effector_inspector" path="res://core/ui/effector_inspector.tscn" id="3_effector_inspector"]
+[ext_resource type="PackedScene" uid="uid://resource_monitor" path="res://core/ui/resource_monitor.tscn" id="4_resource_monitor"]
 
 
 [node name="UI" type="Control"]
@@ -150,6 +151,18 @@ visible = false
 [node name="EffectorInspector" parent="." instance=ExtResource("3_effector_inspector")]
 unique_name_in_owner = true
 visible = false
+
+[node name="ResourceMonitor" parent="." instance=ExtResource("4_resource_monitor")]
+layout_mode = 1
+anchors_preset = 0
+anchor_right = 0.0
+anchor_bottom = 0.0
+offset_left = 20.0
+offset_top = 20.0
+offset_right = 250.0
+offset_bottom = 150.0
+grow_horizontal = 1
+grow_vertical = 1
 
 [node name="WalletInfo" type="VBoxContainer" parent="."]
 unique_name_in_owner = true
