@@ -16,40 +16,10 @@ extends Resource
 @export var heat_generated: float = 0.0  ## Watts of waste heat
 
 @export_group("Inputs")
-@export var input_resources: Array[ProcessIngredient] = []
+@export var input_resources: Array[LCProcessIngredient] = []
 
 @export_group("Outputs")
-@export var output_resources: Array[ProcessProduct] = []
-
-## Ingredient definition
-class ProcessIngredient:
-	var resource_id: String
-	var amount_per_cycle: float
-	
-	func _init(res_id: String = "", amt: float = 0.0):
-		resource_id = res_id
-		amount_per_cycle = amt
-	
-	func to_dict() -> Dictionary:
-		return {"resource_id": resource_id, "amount": amount_per_cycle}
-	
-	static func from_dict(data: Dictionary) -> ProcessIngredient:
-		return ProcessIngredient.new(data.get("resource_id", ""), data.get("amount", 0.0))
-
-## Product definition
-class ProcessProduct:
-	var resource_id: String
-	var amount_per_cycle: float
-	
-	func _init(res_id: String = "", amt: float = 0.0):
-		resource_id = res_id
-		amount_per_cycle = amt
-	
-	func to_dict() -> Dictionary:
-		return {"resource_id": resource_id, "amount": amount_per_cycle}
-	
-	static func from_dict(data: Dictionary) -> ProcessProduct:
-		return ProcessProduct.new(data.get("resource_id", ""), data.get("amount", 0.0))
+@export var output_resources: Array[LCProcessProduct] = []
 
 ## Get efficiency (output value / input value)
 func get_efficiency() -> float:
@@ -101,11 +71,11 @@ static func from_dict(data: Dictionary) -> LCProcessRecipe:
 	# Parse inputs
 	var inputs = data.get("inputs", [])
 	for input_data in inputs:
-		recipe.input_resources.append(ProcessIngredient.from_dict(input_data))
+		recipe.input_resources.append(LCProcessIngredient.from_dict(input_data))
 	
 	# Parse outputs
 	var outputs = data.get("outputs", [])
 	for output_data in outputs:
-		recipe.output_resources.append(ProcessProduct.from_dict(output_data))
+		recipe.output_resources.append(LCProcessProduct.from_dict(output_data))
 	
 	return recipe

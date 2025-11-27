@@ -21,6 +21,10 @@ func _ready():
 	close_requested.connect(func(): hide())
 	
 	# Main layout
+	var main_vbox = VBoxContainer.new()
+	main_vbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	add_child(main_vbox)
+	
 	# Add margin
 	var margin = MarginContainer.new()
 	margin.size_flags_vertical = Control.SIZE_EXPAND_FILL

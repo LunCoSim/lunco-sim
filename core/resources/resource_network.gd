@@ -64,7 +64,7 @@ func add_process(process: LCProcessEffector):
 	
 	# Create producer nodes for outputs
 	for product in process.recipe.output_resources:
-		var node = LCResourceNode.new(LCResourceNode.NodeType.PRODUCER, product.resource_id, product.resource_id)
+		var node = LCResourceNode.new(LCResourceNode.NodeType.PRODUCER, process, product.resource_id)
 		nodes.append(node)
 		
 		if not resource_types.has(product.resource_id):
