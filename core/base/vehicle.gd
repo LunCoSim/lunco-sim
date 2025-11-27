@@ -9,6 +9,9 @@ extends VehicleBody3D
 var state_effectors: Array = [] # Can hold LCStateEffector or LCWheelEffector
 var dynamic_effectors: Array = [] # Can hold LCDynamicEffector or LCWheelEffector
 
+# Resource network (auto-populated)
+var resource_network: LCResourceNetwork = null
+
 # Aggregated properties (computed automatically)
 var total_mass: float = 0.0
 var power_consumption: float = 0.0
@@ -24,6 +27,7 @@ var Telemetry: Dictionary = {}
 
 func _ready():
 	_discover_effectors()
+	_initialize_resource_network()
 	_update_mass_properties()
 	_manage_power_system(0.0)
 	_initialize_telemetry()
@@ -157,21 +161,36 @@ func _apply_reaction_wheel_torques():
 ## Initializes telemetry dictionary.
 func _initialize_telemetry():
 	Telemetry = {
-		"total_mass": total_mass,
-		"power_consumption": power_consumption,
-		"power_production": power_production,
-		"power_available": power_available,
 		"position": global_position,
 		"velocity": linear_velocity,
 		"angular_velocity": angular_velocity,
+		"rotation": global_rotation,
+		"mass": total_mass,
+		"power_consumption": power_consumption,
+		"power_production": power_production,
+		"power_available": power_available,
 	}
 
 ## Updates telemetry with current values.
 func _update_telemetry():
-	Telemetry["total_mass"] = total_mass
-	Telemetry["power_consumption"] = power_consumption
-	Telemetry["power_production"] = power_production
-	Telemetry["power_available"] = power_available
 	Telemetry["position"] = global_position
 	Telemetry["velocity"] = linear_velocity
 	Telemetry["angular_velocity"] = angular_velocity
+	Telemetry["rotation"] = global_rotation
+	Telemetry["mass"] = total_mass
+	Telemetry["power_consumption"] = power_consumption
+	Telemetry["power_production"] = power_production
+	Telemetry["power_available"] = power_available
+
+## Initialize resource network for automatic flow
+func _initialize_resource_network():
+	# Create network if it doesn't exist
+	if not resource_network:
+		resource_network = LCResourceNetwork.new()
+		add_child(resource_network)
+	
+	# Rebuild network from current effectors
+	resource_network.rebuild_from_vehicle(self)
+	
+	if debug_effectors:
+		print("[LCVehicle] Resource network initialized with ", resource_network.nodes.size(), " nodes")
