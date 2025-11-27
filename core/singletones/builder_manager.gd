@@ -256,7 +256,11 @@ func request_spawn_constructible(type: String, pos: Vector3, rot: Vector3):
 	var comp_scene = load(part_registry[type])
 	var comp = comp_scene.instantiate()
 	constructible.add_child(comp)
-	constructible.register_component(comp)
+	
+	if comp is LCComponent:
+		constructible.register_component(comp)
+	else:
+		print("BuilderManager: Spawned part is not an LCComponent: ", comp.name)
 	
 	# Notify the simulation about the new entity
 	var simulation = get_tree().current_scene
@@ -286,7 +290,12 @@ func request_attach_component(parent_path: String, type: String, attachment_node
 			var comp = comp_scene.instantiate()
 			parent.add_child(comp)
 			# Position at attachment node... (TODO: implement proper snapping)
-			parent.register_component(comp)
+			
+			if comp is LCComponent:
+				parent.register_component(comp)
+			else:
+				print("BuilderManager: Attached part is not an LCComponent: ", comp.name)
+				
 			print("BuilderManager: Component attached successfully")
 		else:
 			push_error("BuilderManager: Failed to load component scene: " + type)

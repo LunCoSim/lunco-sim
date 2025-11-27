@@ -25,7 +25,7 @@ var Telemetry: Dictionary = {}
 func _ready():
 	_discover_effectors()
 	_update_mass_properties()
-	_update_power_budget()
+	_manage_power_system(0.0)
 	_initialize_telemetry()
 
 func _process(delta):
@@ -38,8 +38,9 @@ func _physics_process(delta):
 	# Only update if we have authority (for multiplayer)
 	if is_multiplayer_authority():
 		_update_mass_properties()
-		_update_power_budget()
+		_manage_power_system(delta)
 		_apply_effector_forces(delta)
+		_apply_reaction_wheel_torques()
 		_update_telemetry()
 
 ## Discovers all effector children recursively.
@@ -93,13 +94,12 @@ func _update_mass_properties():
 			push_warning("[LCVehicle] Total mass is too low (%.2f kg). Defaulting to 50.0 kg." % total_mass)
 			
 
-
-## Updates power budget by aggregating from all effectors.
-func _update_power_budget():
+## Manages power system with batteries and solar panels.
+func _manage_power_system(delta: float):
 	power_consumption = 0.0
 	power_production = 0.0
 	
-	# Aggregate from all effectors
+	# Aggregate power from all effectors
 	for effector in state_effectors:
 		if effector.has_method("get_power_consumption"):
 			power_consumption += effector.get_power_consumption()
@@ -113,7 +113,22 @@ func _update_power_budget():
 			if effector.has_method("get_power_production"):
 				power_production += effector.get_power_production()
 	
-	power_available = power_production - power_consumption
+	# Calculate net power
+	var net_power = power_production - power_consumption
+	
+	# Manage battery charging/discharging
+	for effector in state_effectors:
+		if effector is LCBatteryEffector:
+			if net_power > 0:
+				# Charge battery with excess power
+				effector.charge(net_power, delta)
+			elif net_power < 0:
+				# Discharge battery to meet demand
+				var power_needed = abs(net_power)
+				var power_delivered = effector.discharge(power_needed, delta)
+				net_power += power_delivered
+	
+	power_available = net_power
 
 ## Applies forces and torques from dynamic effectors.
 func _apply_effector_forces(delta: float):
@@ -129,6 +144,15 @@ func _apply_effector_forces(delta: float):
 			# Apply torque if present
 			if ft.has("torque") and ft.torque.length_squared() > 0:
 				apply_torque(ft.torque)
+
+## Applies reaction torques from reaction wheels.
+func _apply_reaction_wheel_torques():
+	for effector in state_effectors:
+		if effector is LCReactionWheelEffector:
+			var rw_torque = effector.get_reaction_torque()
+			if rw_torque.length_squared() > 0:
+				apply_torque(rw_torque)
+
 
 ## Initializes telemetry dictionary.
 func _initialize_telemetry():
