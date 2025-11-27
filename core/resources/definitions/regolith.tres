@@ -1,0 +1,19 @@
+[gd_resource type="Resource" script_class="LCResourceDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://core/resources/resource_definition.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+resource_id = "regolith"
+display_name = "Lunar Regolith"
+description = "Lunar soil, contains oxygen and metals"
+category = "solid"
+density = 1500.0
+specific_heat = 840.0
+phase_at_stp = "solid"
+can_flow = false
+requires_pressure = false
+requires_temperature_control = false
+flow_rate_multiplier = 0.5
+color = Color(0.6, 0.6, 0.6, 1)
+tags = PackedStringArray("raw_material", "mineable")

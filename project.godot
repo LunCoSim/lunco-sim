@@ -36,6 +36,7 @@ UIHelper="*res://themes/ui_helper.gd"
 BuilderManager="*res://core/singletones/builder_manager.gd"
 TelemetryManager="*res://core/telemetry/telemetry_manager.gd"
 TelemetryServer="*res://core/telemetry/telemetry_server.gd"
+LCResourceRegistry="*res://core/resources/resource_registry.gd"
 
 [display]
 
