@@ -1,0 +1,24 @@
+[gd_scene load_steps=4 format=3 uid="uid://battery_effector"]
+
+[ext_resource type="Script" path="res://core/effectors/state/battery-effector.gd" id="1_script"]
+
+[sub_resource type="BoxMesh" id="BoxMesh_battery"]
+size = Vector3(0.5, 0.3, 0.8)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_battery"]
+albedo_color = Color(0.2, 0.2, 0.2, 1)
+metallic = 0.5
+roughness = 0.5
+emission_enabled = true
+emission = Color(0.2, 1, 0.2, 1)
+emission_energy_multiplier = 0.5
+emission_operator = 1
+
+[node name="Battery" type="Node3D"]
+script = ExtResource("1_script")
+capacity = 1000.0
+current_charge = 1000.0
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="."]
+mesh = SubResource("BoxMesh_battery")
+surface_material_override/0 = SubResource("StandardMaterial3D_battery")

@@ -13,14 +13,19 @@ var selected_part_id: String = ""
 var ghost_instance: Node3D = null
 
 # Configuration
+# Configuration
 # Map part IDs to resource paths
 var part_registry = {
 	"chassis_box": "res://core/components/structure/chassis_box.tscn",
 	"wheel_basic": "res://core/components/propulsion/wheel_basic.tscn",
-	"battery_basic": "res://core/components/power/battery_basic.tscn",
-	"solar_panel_basic": "res://core/components/power/solar_panel_basic.tscn",
-	"command_unit_basic": "res://core/components/avionics/command_unit_basic.tscn",
-	"camera_basic": "res://core/components/payload/camera_basic.tscn"
+	"battery_effector": "res://core/components/power/battery_effector.tscn",
+	"solar_panel_effector": "res://core/components/power/solar_panel_effector.tscn",
+	"resource_tank_effector": "res://core/components/power/resource_tank_effector.tscn",
+	"thruster_effector": "res://core/components/propulsion/thruster_effector.tscn",
+	"lidar_effector": "res://core/components/sensors/lidar_effector.tscn",
+	"camera_effector": "res://core/components/sensors/camera_effector.tscn",
+	"imu_effector": "res://core/components/sensors/imu_effector.tscn",
+	"gps_effector": "res://core/components/sensors/gps_effector.tscn"
 }
 
 func _ready():
@@ -207,13 +212,13 @@ func try_place_part():
 		var result = space_state.intersect_ray(query)
 		
 		if result and result.collider:
-			# Find the constructible parent
+			# Find the constructible/vehicle parent
 			var target = result.collider
-			while target and not target is LCConstructible:
+			while target and not (target is LCConstructible or target is LCVehicle):
 				target = target.get_parent()
 			
-			if target and target is LCConstructible:
-				print("BuilderManager: Found constructible: ", target.name)
+			if target and (target is LCConstructible or target is LCVehicle):
+				print("BuilderManager: Found target: ", target.name)
 				# Attach component directly
 				if multiplayer.has_multiplayer_peer() and multiplayer.get_peers().size() > 0:
 					request_attach_component.rpc_id(1, target.get_path(), selected_part_id, "")
@@ -283,36 +288,29 @@ func request_attach_component(parent_path: String, type: String, attachment_node
 		return
 	
 	var parent = get_node(parent_path)
-	if parent and parent is LCConstructible:
-		print("BuilderManager: Found constructible parent, attaching component")
+	if parent and (parent is LCConstructible or parent is LCVehicle):
+		print("BuilderManager: Found parent, attaching component")
 		var comp_scene = load(part_registry[type])
 		if comp_scene:
 			var comp = comp_scene.instantiate()
 			parent.add_child(comp)
 			# Position at attachment node... (TODO: implement proper snapping)
 			
-			if comp is LCComponent:
+			if parent is LCConstructible and comp is LCComponent:
 				parent.register_component(comp)
+			elif parent is LCVehicle:
+				# For LCVehicle, we just need to refresh effectors
+				if parent.has_method("refresh_effectors"):
+					parent.refresh_effectors()
+				else:
+					print("BuilderManager: LCVehicle missing refresh_effectors method")
 			else:
-				print("BuilderManager: Attached part is not an LCComponent: ", comp.name)
+				print("BuilderManager: Attached part is not compatible with parent type")
 				
 			print("BuilderManager: Component attached successfully")
 		else:
 			push_error("BuilderManager: Failed to load component scene: " + type)
 	else:
-		push_error("BuilderManager: Parent not found or not a constructible: " + parent_path)
+		push_error("BuilderManager: Parent not found or not a constructible/vehicle: " + parent_path)
 
-## Spawns a fully equipped rover for testing.
-func spawn_full_rover(pos: Vector3 = Vector3(0, 5, 0)):
-	var spawner = get_tree().current_scene.find_child("Spawner", true, false)
-	var parent = spawner if spawner else get_tree().current_scene
-	
-	var rover = RoverAssembler.spawn_full_rover(parent, pos)
-	
-	# Notify simulation
-	var simulation = get_tree().current_scene
-	if simulation and simulation.has_method("_on_multiplayer_spawner_spawned"):
-		simulation._on_multiplayer_spawner_spawned(rover)
-	
-	return rover
 

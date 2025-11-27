@@ -69,6 +69,13 @@ func _discover_effectors():
 		for effector in state_effectors:
 			print("  [State] %s (mass: %.2f kg)" % [effector.name, effector.get_mass_contribution()])
 
+## Refresh effectors (call this after adding/removing children)
+func refresh_effectors():
+	_discover_effectors()
+	if resource_network:
+		resource_network.rebuild_from_vehicle(self)
+	_update_mass_properties()
+
 ## Updates vehicle mass properties by aggregating from state effectors.
 func _update_mass_properties():
 	total_mass = 0.0

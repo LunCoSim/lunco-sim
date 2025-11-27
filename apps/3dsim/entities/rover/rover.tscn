@@ -1,13 +1,17 @@
-[gd_scene load_steps=11 format=3 uid="uid://dyfxw33dhjjrw"]
+[gd_scene load_steps=15 format=3 uid="uid://dyfxw33dhjjrw"]
 
 [ext_resource type="Script" uid="uid://bqc056rgml8ww" path="res://apps/3dsim/entities/rover/rover.gd" id="1_yvk4r"]
 [ext_resource type="Script" path="res://controllers/rover/rover-joint-controller.gd" id="2_xvk4r"]
 [ext_resource type="PackedScene" uid="uid://chassis_box_component" path="res://core/components/structure/chassis_box.tscn" id="3_chassis"]
 [ext_resource type="PackedScene" uid="uid://wheel_basic_component" path="res://core/components/propulsion/wheel_basic.tscn" id="4_wheel"]
-[ext_resource type="PackedScene" uid="uid://battery_basic_component" path="res://core/components/power/battery_basic.tscn" id="5_battery"]
-[ext_resource type="PackedScene" uid="uid://solar_panel_basic_component" path="res://core/components/power/solar_panel_basic.tscn" id="6_solar"]
-[ext_resource type="PackedScene" uid="uid://camera_basic_component" path="res://core/components/payload/camera_basic.tscn" id="7_camera"]
+[ext_resource type="PackedScene" uid="uid://battery_effector" path="res://core/components/power/battery_effector.tscn" id="5_battery"]
+[ext_resource type="PackedScene" uid="uid://solar_panel_effector" path="res://core/components/power/solar_panel_effector.tscn" id="6_solar"]
+[ext_resource type="PackedScene" uid="uid://camera_effector" path="res://core/components/sensors/camera_effector.tscn" id="7_camera"]
 [ext_resource type="PackedScene" uid="uid://flight_computer_component" path="res://core/components/avionics/flight_computer.tscn" id="8_computer"]
+[ext_resource type="PackedScene" uid="uid://lidar_effector" path="res://core/components/sensors/lidar_effector.tscn" id="9_lidar"]
+[ext_resource type="PackedScene" uid="uid://imu_effector" path="res://core/components/sensors/imu_effector.tscn" id="10_imu"]
+[ext_resource type="PackedScene" uid="uid://gps_effector" path="res://core/components/sensors/gps_effector.tscn" id="11_gps"]
+[ext_resource type="PackedScene" uid="uid://resource_tank_effector" path="res://core/components/power/resource_tank_effector.tscn" id="12_tank"]
 
 [sub_resource type="SceneReplicationConfig" id="SceneReplicationConfig_rover"]
 properties/0/path = NodePath(".:position")
@@ -146,3 +150,19 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.2, -1.4)
 
 [node name="FlightComputer" parent="." instance=ExtResource("8_computer")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.0, 0.0)
+
+[node name="Lidar" parent="." instance=ExtResource("9_lidar")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.3, -1.0)
+
+[node name="IMU" parent="." instance=ExtResource("10_imu")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.0, 0.0)
+
+[node name="GPS" parent="." instance=ExtResource("11_gps")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.3, 1.0)
+
+[node name="OxygenTank" parent="." instance=ExtResource("12_tank")]
+transform = Transform3D(1, 0, 0, 0, -4.37114e-08, -1, 0, 1, -4.37114e-08, 0, 0.2, 0.8)
+resource_id = "oxygen"
+capacity = 50.0
+
+[editable path="ChassisBox"]

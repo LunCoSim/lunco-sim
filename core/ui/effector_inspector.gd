@@ -20,11 +20,7 @@ func _ready():
 	visible = false
 	close_requested.connect(func(): hide())
 	
-	# Main layout container
-	var main_vbox = VBoxContainer.new()
-	main_vbox.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	add_child(main_vbox)
-	
+	# Main layout
 	# Add margin
 	var margin = MarginContainer.new()
 	margin.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -37,12 +33,6 @@ func _ready():
 	var content_vbox = VBoxContainer.new()
 	content_vbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	margin.add_child(content_vbox)
-	
-	# Spawn Button
-	var spawn_btn = Button.new()
-	spawn_btn.text = "Spawn Test Rover"
-	spawn_btn.pressed.connect(_on_spawn_test_rover)
-	content_vbox.add_child(spawn_btn)
 	
 	# Vehicle Selector (if no vehicle assigned)
 	if vehicle_path:
@@ -105,13 +95,6 @@ func _process(delta):
 		if node and node is LCVehicle:
 			set_vehicle(node)
 
-func _on_spawn_test_rover():
-	if BuilderManager.has_method("spawn_full_rover"):
-		var rover = BuilderManager.spawn_full_rover(Vector3(0, 5, 0))
-		set_vehicle(rover)
-		print("Spawned and selected new test rover")
-	else:
-		push_error("BuilderManager does not support spawn_full_rover")
 
 func _on_entity_selected(entity):
 	if entity is LCVehicle:
