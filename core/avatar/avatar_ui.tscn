@@ -3,6 +3,7 @@
 [ext_resource type="Script" uid="uid://bpq5fqrtu7f5o" path="res://core/avatar/avatar_ui.gd" id="1_igs02"]
 [ext_resource type="Theme" uid="uid://hve1e7mnexbi" path="res://themes/theme.tres" id="1_ois6a"]
 [ext_resource type="PackedScene" uid="uid://component_inspector" path="res://core/ui/component_inspector.tscn" id="2_inspector"]
+[ext_resource type="PackedScene" uid="uid://effector_inspector" path="res://core/ui/effector_inspector.tscn" id="3_effector_inspector"]
 
 
 [node name="UI" type="Control"]
@@ -130,12 +131,24 @@ size_flags_vertical = 4
 text = "Inspector"
 tooltip_text = "Toggle Component Inspector (I)"
 
+[node name="EffectorButton" type="Button" parent="LivesEntitiesContainer/HBoxContainer"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(120, 0)
+layout_mode = 2
+size_flags_vertical = 4
+text = "Effectors"
+tooltip_text = "Toggle Effector Inspector (E)"
+
 [node name="TargetUI" type="Control" parent="."]
 unique_name_in_owner = true
 anchors_preset = 0
 mouse_filter = 2
 
 [node name="ComponentInspector" parent="." instance=ExtResource("2_inspector")]
+visible = false
+
+[node name="EffectorInspector" parent="." instance=ExtResource("3_effector_inspector")]
+unique_name_in_owner = true
 visible = false
 
 [node name="WalletInfo" type="VBoxContainer" parent="."]
@@ -206,6 +219,7 @@ underline = 2
 [connection signal="pressed" from="LivesEntitiesContainer/HBoxContainer/CreateEntityButton" to="." method="_on_create_entity_button_pressed"]
 [connection signal="pressed" from="LivesEntitiesContainer/HBoxContainer/BuilderButton" to="." method="_on_builder_button_pressed"]
 [connection signal="pressed" from="LivesEntitiesContainer/HBoxContainer/InspectorButton" to="." method="_on_inspector_button_pressed"]
+[connection signal="pressed" from="LivesEntitiesContainer/HBoxContainer/EffectorButton" to="." method="_on_effector_button_pressed"]
 
 [connection signal="pressed" from="WalletInfo/ConnectWallet" to="." method="_on_connect_wallet_pressed"]
 [connection signal="pressed" from="WalletInfo/DisconnectWallet" to="." method="_on_disconnect_wallet_pressed"]

@@ -302,3 +302,17 @@ func request_attach_component(parent_path: String, type: String, attachment_node
 	else:
 		push_error("BuilderManager: Parent not found or not a constructible: " + parent_path)
 
+## Spawns a fully equipped rover for testing.
+func spawn_full_rover(pos: Vector3 = Vector3(0, 5, 0)):
+	var spawner = get_tree().current_scene.find_child("Spawner", true, false)
+	var parent = spawner if spawner else get_tree().current_scene
+	
+	var rover = RoverAssembler.spawn_full_rover(parent, pos)
+	
+	# Notify simulation
+	var simulation = get_tree().current_scene
+	if simulation and simulation.has_method("_on_multiplayer_spawner_spawned"):
+		simulation._on_multiplayer_spawner_spawned(rover)
+	
+	return rover
+
