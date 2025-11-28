@@ -63,6 +63,13 @@ func _process(delta):
 	# Only process input if we have authority over the character controller
 	if not _target.has_authority():
 		return
+		
+	# Check if input is captured by UI
+	if not should_process_input():
+		_target.input_motion = Vector2.ZERO
+		_target.aiming = false
+		_target.shooting = false
+		return
 	
 	motion = Vector2(
 			Input.get_action_strength("move_right") - Input.get_action_strength("move_left"),

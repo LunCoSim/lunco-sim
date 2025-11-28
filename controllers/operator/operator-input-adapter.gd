@@ -20,6 +20,11 @@ func _input(_event):
 	
 	# Only process input if the target is an operator controller
 	if is_compatible_controller:
+		# Check if input is captured by UI
+		if not should_process_input():
+			_target.move(Vector3.ZERO)
+			return
+
 		# Update orientation based on camera
 		if camera:
 			_target.orient(camera.get_plain_basis())

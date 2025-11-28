@@ -39,6 +39,14 @@ func _input(_event):
 	
 	# Only process input if the target is a rover controller
 	if is_compatible_controller:
+		# Check if input is captured by UI
+		if not should_process_input():
+			if _target.has_method("set_motor"): _target.set_motor(0)
+			if _target.has_method("set_steering"): _target.set_steering(0)
+			if _target.has_method("set_crab_steering"): _target.set_crab_steering(0)
+			if _target.has_method("set_brake"): _target.set_brake(0)
+			return
+
 		# Process movement input
 		var motor_input = Input.get_action_strength("move_forward") - Input.get_action_strength("move_backward")
 		var steering_input = Input.get_action_strength("move_right") - Input.get_action_strength("move_left")

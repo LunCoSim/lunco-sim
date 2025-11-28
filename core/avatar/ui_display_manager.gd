@@ -14,7 +14,12 @@ signal display_deactivated(display_name)
 
 # Initialize the manager
 func _ready():
+	add_to_group("ui_display_manager")
 	print("UiDisplayManager: Initialized")
+
+# Check if any display is currently capturing input
+func is_input_captured() -> bool:
+	return active_display != "none"
 
 # Method to set the display references
 func set_displays(supply_chain: Node, modelica: Node):
@@ -98,7 +103,16 @@ func process_mouse_event(event: InputEvent) -> bool:
 	if active_display == "supply_chain" and supply_chain_display:
 		return pass_mouse_input_to_supply_chain(event)
 	elif active_display == "modelica" and modelica_display:
-		return pass_mouse_input_to_modelica(event)
+		var handled = pass_mouse_input_to_modelica(event)
+		
+		# If the event wasn't handled by the Modelica display (i.e. clicked outside),
+		# and it's a left mouse click, close the display
+		if not handled and event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+			print("UiDisplayManager: Clicked outside Modelica display, closing")
+			close_modelica_display()
+			return true
+			
+		return handled
 		
 	return false
 

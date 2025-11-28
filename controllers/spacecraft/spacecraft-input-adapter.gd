@@ -7,6 +7,12 @@ func _input(_event):
 	var _target = get_resolved_target()
 		
 	if _target is LCSpacecraftController:
+		# Check if input is captured by UI
+		if not should_process_input():
+			_target.throttle(false)
+			_target.change_orientation(Vector3.ZERO)
+			return
+
 		if Input.is_action_just_pressed("throttle"):
 			_target.throttle(true)
 		elif Input.is_action_just_released("throttle"):
