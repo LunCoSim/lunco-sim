@@ -1,6 +1,6 @@
 [gd_scene load_steps=4 format=3 uid="uid://flight_computer_component"]
 
-[ext_resource type="Script" path="res://core/base/state-effector.gd" id="1_script"]
+[ext_resource type="Script" path="res://core/effectors/state-effector.gd" id="1_script"]
 
 [sub_resource type="BoxShape3D" id="BoxShape3D_pcb"]
 size = Vector3(0.2, 0.05, 0.3)
