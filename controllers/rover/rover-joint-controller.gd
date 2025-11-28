@@ -45,6 +45,15 @@ var crab_input := 0.0
 var brake_input := 0.0
 var current_speed := 0.0
 
+# Previous values for change detection
+var prev_motor_input := 0.0
+var prev_steering_input := 0.0
+var prev_speed := 0.0
+
+# Slope compensation optimization
+var slope_check_timer := 0.0
+const SLOPE_CHECK_INTERVAL := 0.2  # Check slope every 200ms instead of every physics frame
+
 # Individual wheel control (for Independent mode)
 var wheel_controls := {
 	"front_left": {"motor": 0.0, "brake": 0.0, "steering": 0.0},
@@ -124,7 +133,9 @@ func _physics_process(_delta: float):
 	
 	if parent and parent is VehicleBody3D:
 		current_speed = parent.linear_velocity.length()
-		speed_changed.emit(current_speed)
+		if abs(current_speed - prev_speed) > 0.01:
+			prev_speed = current_speed
+			speed_changed.emit(current_speed)
 		
 		# Apply control based on drive mode
 		match drive_mode:
@@ -137,8 +148,11 @@ func _physics_process(_delta: float):
 			3: # Independent
 				_apply_independent_control()
 		
-		# Apply slope compensation
-		_apply_slope_compensation()
+		# Apply slope compensation with reduced frequency
+		slope_check_timer += _delta
+		if slope_check_timer >= SLOPE_CHECK_INTERVAL:
+			slope_check_timer = 0.0
+			_check_slope_compensation()
 
 func _apply_ackermann_control():
 	"""
@@ -166,9 +180,14 @@ func _apply_ackermann_control():
 	if br_wheel:
 		br_wheel.steering = back_angle
 		br_wheel.engine_force = 0.0
-		
-	motor_state_changed.emit(motor_input)
-	steering_changed.emit(steering_input)
+
+	# Emit signals only on significant changes
+	if abs(motor_input - prev_motor_input) > 0.01:
+		prev_motor_input = motor_input
+		motor_state_changed.emit(motor_input)
+	if abs(steering_input - prev_steering_input) > 0.01:
+		prev_steering_input = steering_input
+		steering_changed.emit(steering_input)
 	if brake_input > 0:
 		brake_applied.emit(brake_input)
 
@@ -221,9 +240,14 @@ func _apply_differential_control():
 		bl_wheel.brake = brake_force
 	if br_wheel:
 		br_wheel.brake = brake_force
-	
-	motor_state_changed.emit(motor_input)
-	steering_changed.emit(steering_input)
+
+	# Emit signals only on significant changes
+	if abs(motor_input - prev_motor_input) > 0.01:
+		prev_motor_input = motor_input
+		motor_state_changed.emit(motor_input)
+	if abs(steering_input - prev_steering_input) > 0.01:
+		prev_steering_input = steering_input
+		steering_changed.emit(steering_input)
 	if brake_input > 0:
 		brake_applied.emit(brake_input)
 
@@ -244,9 +268,14 @@ func _apply_independent_control():
 	_apply_wheel_control(fr_wheel, wheel_controls["front_right"])
 	_apply_wheel_control(bl_wheel, wheel_controls["back_left"])
 	_apply_wheel_control(br_wheel, wheel_controls["back_right"])
-	
-	motor_state_changed.emit(motor_input)
-	steering_changed.emit(steering_input)
+
+	# Emit signals only on significant changes
+	if abs(motor_input - prev_motor_input) > 0.01:
+		prev_motor_input = motor_input
+		motor_state_changed.emit(motor_input)
+	if abs(steering_input - prev_steering_input) > 0.01:
+		prev_steering_input = steering_input
+		steering_changed.emit(steering_input)
 	if brake_input > 0:
 		brake_applied.emit(brake_input)
 
@@ -266,9 +295,14 @@ func _apply_standard_control():
 	if br_wheel:
 		br_wheel.steering = 0.0
 		br_wheel.engine_force = 0.0
-		
-	motor_state_changed.emit(motor_input)
-	steering_changed.emit(steering_input)
+
+	# Emit signals only on significant changes
+	if abs(motor_input - prev_motor_input) > 0.01:
+		prev_motor_input = motor_input
+		motor_state_changed.emit(motor_input)
+	if abs(steering_input - prev_steering_input) > 0.01:
+		prev_steering_input = steering_input
+		steering_changed.emit(steering_input)
 	if brake_input > 0:
 		brake_applied.emit(brake_input)
 
@@ -288,7 +322,7 @@ func _get_speed_factor() -> float:
 		return 1.0 - min((current_speed - 2.0) / 3.0, 0.6)
 	return 1.0
 
-func _apply_slope_compensation():
+func _check_slope_compensation():
 	"""Prevent flipping on slopes"""
 	if parent and parent.linear_velocity.length() > 1.0:
 		var up = parent.global_transform.basis.y.normalized()

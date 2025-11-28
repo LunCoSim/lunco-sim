@@ -25,6 +25,15 @@ var steering_input := 0.0
 var brake_input := 0.0
 var current_speed := 0.0
 
+# Previous values for change detection
+var prev_motor_input := 0.0
+var prev_steering_input := 0.0
+var prev_speed := 0.0
+
+# Slope compensation optimization
+var slope_check_timer := 0.0
+const SLOPE_CHECK_INTERVAL := 0.2  # Check slope every 200ms instead of every physics frame
+
 var debug_counter := 0
 
 # Signals
@@ -79,21 +88,31 @@ func _physics_process(_delta: float):
 		parent.brake = brake_input * BRAKE_FORCE
 		if brake_input > 0:
 			brake_applied.emit(brake_input)
-		
-		# Update speed
+
+		# Update speed and emit signal only on significant change
 		current_speed = parent.linear_velocity.length()
-		speed_changed.emit(current_speed)
+		if abs(current_speed - prev_speed) > 0.01:
+			prev_speed = current_speed
+			speed_changed.emit(current_speed)
+
+		# Emit signals only on significant changes
+		if abs(motor_input - prev_motor_input) > 0.01:
+			prev_motor_input = motor_input
+			motor_state_changed.emit(motor_input)
+
+		if abs(steering_input - prev_steering_input) > 0.01:
+			prev_steering_input = steering_input
+			steering_changed.emit(steering_input)
 		
-		# Emit other signals
-		motor_state_changed.emit(motor_input)
-		steering_changed.emit(steering_input)
-		
-		# Apply slope compensation
-		apply_slope_compensation()
+		# Apply slope compensation with reduced frequency
+		slope_check_timer += _delta
+		if slope_check_timer >= SLOPE_CHECK_INTERVAL:
+			slope_check_timer = 0.0
+			_check_slope_compensation()
 
 
-# Add slope compensation to prevent flipping downhill
-func apply_slope_compensation():
+# Check and apply slope compensation to prevent flipping downhill
+func _check_slope_compensation():
 	if parent and parent.linear_velocity.length() > 1.0:
 		var up = parent.global_transform.basis.y.normalized()
 		var slope_dot = up.dot(Vector3.UP)
@@ -154,5 +173,3 @@ func _reset_inputs():
 		parent.engine_force = 0.0
 		parent.steering = 0.0
 		parent.brake = 0.0
-
- 

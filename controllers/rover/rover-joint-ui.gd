@@ -70,10 +70,29 @@ func _on_target_set():
 	else:
 		push_warning("RoverJointUI: Target is not a LCRoverJointController")
 
-func _process(_delta):
-	"""Update telemetry displays"""
-	if target and target is LCRoverJointController:
-		_update_wheel_telemetry()
+# UI and telemetry update throttling
+var ui_update_timer := 0.0
+var telemetry_update_timer := 0.0
+const UI_UPDATE_INTERVAL := 0.1  # 10 fps
+const TELEMETRY_UPDATE_INTERVAL := 0.05  # 20 fps
+
+# Cached telemetry to reduce dictionary duplication
+var cached_telemetry := {}
+
+func _process(delta):
+	"""Update UI and telemetry with throttling"""
+	ui_update_timer += delta
+	telemetry_update_timer += delta
+
+	# Update telemetry more frequently than UI
+	if telemetry_update_timer >= TELEMETRY_UPDATE_INTERVAL:
+		telemetry_update_timer = 0.0
+		_update_cached_telemetry()
+
+	# Update UI less frequently
+	if ui_update_timer >= UI_UPDATE_INTERVAL:
+		ui_update_timer = 0.0
+		_update_ui_from_cache()
 
 func _on_speed_changed(speed: float):
 	if speed_label:
@@ -136,11 +155,53 @@ func _update_wheel_telemetry():
 	_update_wheel_rpm("back_left", bl_rpm_label)
 	_update_wheel_rpm("back_right", br_rpm_label)
 
+func _update_cached_telemetry():
+	"""Update cached telemetry from all wheels"""
+	if not target:
+		return
+
+	cached_telemetry["front_left"] = target.get_wheel_telemetry("front_left")
+	cached_telemetry["front_right"] = target.get_wheel_telemetry("front_right")
+	cached_telemetry["back_left"] = target.get_wheel_telemetry("back_left")
+	cached_telemetry["back_right"] = target.get_wheel_telemetry("back_right")
+
+func _update_ui_from_cache():
+	"""Update UI elements from cached telemetry and current values"""
+	if not target:
+		return
+
+	# Update status panel values
+	var speed = target.current_speed if "current_speed" in target else 0.0
+	var motor = target.motor_input if "motor_input" in target else 0.0
+	var steering = target.steering_input if "steering_input" in target else 0.0
+
+	if speed_label:
+		speed_label.text = "%.1f m/s" % speed
+	if motor_value:
+		motor_value.text = "%.0f%%" % (motor * 100)
+	if steering_value:
+		steering_value.text = "%.2f" % steering
+
+	# Update wheel RPM labels from cache
+	_update_wheel_rpm_from_cache("front_left", fl_rpm_label)
+	_update_wheel_rpm_from_cache("front_right", fr_rpm_label)
+	_update_wheel_rpm_from_cache("back_left", bl_rpm_label)
+	_update_wheel_rpm_from_cache("back_right", br_rpm_label)
+
+func _update_wheel_rpm_from_cache(wheel_name: String, label: Label):
+	"""Update RPM label for a specific wheel from cached telemetry"""
+	if not label or not cached_telemetry.has(wheel_name):
+		return
+
+	var telemetry = cached_telemetry[wheel_name]
+	if telemetry.has("rpm"):
+		label.text = "RPM: %.0f" % telemetry["rpm"]
+
 func _update_wheel_rpm(wheel_name: String, label: Label):
 	"""Update RPM label for a specific wheel"""
 	if not label:
 		return
-	
+
 	var telemetry = target.get_wheel_telemetry(wheel_name)
 	if telemetry.has("rpm"):
 		label.text = "RPM: %.0f" % telemetry["rpm"]
