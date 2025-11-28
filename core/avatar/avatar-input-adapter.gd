@@ -10,6 +10,11 @@ func _process(_delta):
 	if not _target is LCAvatarController:
 		return
 	
+	# Check if input is captured by UI
+	if not should_process_input():
+		_target.set_direction(Vector3.ZERO)
+		return
+	
 	# Read movement input
 	var motion_direction := Vector3(
 		Input.get_action_strength("move_left") - Input.get_action_strength("move_right"),
