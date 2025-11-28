@@ -31,28 +31,37 @@ func _ready():
 	mass = tank_dry_mass + fuel_mass
 	fuel_level = fuel_mass / fuel_capacity
 	_initialize_telemetry()
-
-func _physics_process(delta):
-	# Update mass property
-	mass = tank_dry_mass + fuel_mass
-	fuel_level = fuel_mass / fuel_capacity if fuel_capacity > 0 else 0.0
-	_update_telemetry()
+	
+	# Register Parameters
+	Parameters["Capacity"] = { "path": "fuel_capacity", "type": "float", "min": 10.0, "max": 2000.0, "step": 10.0 }
+	Parameters["Fuel Mass"] = { "path": "fuel_mass", "type": "float", "min": 0.0, "max": 2000.0, "step": 1.0 }
+	Parameters["Dry Mass"] = { "path": "tank_dry_mass", "type": "float", "min": 1.0, "max": 500.0, "step": 1.0 }
 
 ## Depletes fuel by the given mass in kg.
 ## Returns actual mass depleted (may be less if tank runs dry).
 func deplete_fuel(mass_kg: float) -> float:
 	var actual_depletion = min(mass_kg, fuel_mass)
-	fuel_mass -= actual_depletion
-	fuel_mass = max(0.0, fuel_mass)
+	if actual_depletion > 0:
+		fuel_mass -= actual_depletion
+		fuel_mass = max(0.0, fuel_mass)
+		_update_mass()
 	return actual_depletion
 
 ## Refills fuel by the given mass in kg.
 ## Returns actual mass added (may be less if tank is full).
 func refill_fuel(mass_kg: float) -> float:
 	var actual_refill = min(mass_kg, fuel_capacity - fuel_mass)
-	fuel_mass += actual_refill
-	fuel_mass = min(fuel_capacity, fuel_mass)
+	if actual_refill > 0:
+		fuel_mass += actual_refill
+		fuel_mass = min(fuel_capacity, fuel_mass)
+		_update_mass()
 	return actual_refill
+
+func _update_mass():
+	mass = tank_dry_mass + fuel_mass
+	fuel_level = fuel_mass / fuel_capacity if fuel_capacity > 0 else 0.0
+	mass_changed.emit()
+	_update_telemetry()
 
 ## Returns the total mass contribution (tank + fuel).
 func get_mass_contribution() -> float:

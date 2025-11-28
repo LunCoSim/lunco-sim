@@ -11,6 +11,7 @@ var created_at: int
 var signal_connections: Array = []
 var events: Array = []
 var last_properties: Dictionary = {}
+var _cached_controller: Node = null
 
 const MAX_EVENTS = 5000  # Keep last 5000 events per entity
 
@@ -113,17 +114,18 @@ func update_properties() -> Dictionary:
 		props["controller_id"] = entity.get_owner_id()
 	
 	# Get custom properties from controller child
-	var controller = entity.get_node_or_null("RoverController")
-	if not controller:
-		controller = entity.get_node_or_null("SpacecraftController")
+	if not _cached_controller:
+		_cached_controller = entity.get_node_or_null("RoverController")
+		if not _cached_controller:
+			_cached_controller = entity.get_node_or_null("SpacecraftController")
 	
-	if controller:
-		if controller.has_method("get_motor"):
-			props["inputs.motor"] = controller.get_motor()
-		if controller.has_method("get_steering"):
-			props["inputs.steering"] = controller.get_steering()
-		if controller.has_method("get_brake"):
-			props["inputs.brake"] = controller.get_brake()
+	if _cached_controller and is_instance_valid(_cached_controller):
+		if _cached_controller.has_method("get_motor"):
+			props["inputs.motor"] = _cached_controller.get_motor()
+		if _cached_controller.has_method("get_steering"):
+			props["inputs.steering"] = _cached_controller.get_steering()
+		if _cached_controller.has_method("get_brake"):
+			props["inputs.brake"] = _cached_controller.get_brake()
 	
 	last_properties = props
 	return props

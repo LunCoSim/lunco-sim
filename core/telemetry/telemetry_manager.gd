@@ -4,8 +4,8 @@ extends Node
 # Entities have no knowledge of telemetry
 
 # Historical data storage (circular buffer per entity)
-const MAX_HISTORY_SAMPLES = 10000  # Store last 10,000 property snapshots per entity (~16 minutes at 10Hz)
-const COLLECTION_RATE_HZ = 10.0
+const MAX_HISTORY_SAMPLES = 1000  # Store last 1,000 property snapshots per entity (~1.6 minutes at 10Hz)
+const COLLECTION_RATE_HZ = 2.0
 
 var entity_trackers: Dictionary = {}  # entity_id -> TelemetryEntityTracker
 var entity_history: Dictionary = {}  # entity_id -> Array of property snapshots
@@ -13,7 +13,7 @@ var all_events: Array = []  # Global event log
 var collection_timer: Timer
 var discovery_timer: Timer
 
-const MAX_GLOBAL_EVENTS = 50000  # Store last 50,000 global events
+const MAX_GLOBAL_EVENTS = 1000  # Store last 1,000 global events
 
 func _ready():
 	# Create collection timer
@@ -25,7 +25,7 @@ func _ready():
 	
 	# Create entity discovery timer (slower rate)
 	discovery_timer = Timer.new()
-	discovery_timer.wait_time = 1.0  # Check for new entities every second
+	discovery_timer.wait_time = 5.0  # Check for new entities every 5 seconds
 	discovery_timer.timeout.connect(_discover_entities)
 	add_child(discovery_timer)
 	discovery_timer.start()
@@ -136,6 +136,12 @@ func _should_track_entity(node: Node) -> bool:
 		# Exclude certain nodes (e.g., projectiles, small objects)
 		if node.name.begins_with("@"):  # Skip internal nodes
 			return false
+			
+		# Exclude debris and projectiles
+		var name_lower = node.name.to_lower()
+		if "debris" in name_lower or "projectile" in name_lower or "bullet" in name_lower:
+			return false
+			
 		return true
 	return false
 
@@ -149,7 +155,7 @@ func _collect_telemetry():
 		if not entity_history.has(entity_id):
 			entity_history[entity_id] = []
 		
-		entity_history[entity_id].append(props.duplicate())
+		entity_history[entity_id].append(props)
 		
 		# Trim history if too large
 		if entity_history[entity_id].size() > MAX_HISTORY_SAMPLES:

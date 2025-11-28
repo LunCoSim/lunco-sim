@@ -37,6 +37,18 @@ func _initialize_tank():
 	
 	_update_mass()
 	_initialize_telemetry()
+	_initialize_parameters()
+
+var current_amount: float:
+	get:
+		return get_amount()
+	set(value):
+		set_amount(value)
+
+func _initialize_parameters():
+	Parameters["Capacity"] = { "path": "capacity", "type": "float", "min": 1.0, "max": 1000.0, "step": 10.0 }
+	Parameters["Dry Mass"] = { "path": "tank_dry_mass", "type": "float", "min": 1.0, "max": 500.0, "step": 1.0 }
+	Parameters["Amount"] = { "path": "current_amount", "type": "float", "min": 0.0, "max": 1000.0, "step": 1.0 }
 
 ## Add resource to tank
 func add_resource(amount: float) -> float:

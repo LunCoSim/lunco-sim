@@ -3,8 +3,10 @@ extends LCComponent
 
 ## Base class for components that contribute state (mass, inertia, power) to a vehicle.
 ##
-## Implements the "State Effector" concept from Basilisk.
 ## These components are passive and provide property contributions when queried.
+
+signal mass_changed
+
 
 func _ready():
 	super._ready()

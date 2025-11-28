@@ -25,6 +25,11 @@ var Telemetry: Dictionary = {}
 @export var debug_effectors: bool = false
 @export var center_of_mass_offset: Vector3 = Vector3.ZERO # Manual offset for stability tuning
 
+# Optimization
+var mass_properties_dirty: bool = true
+var telemetry_timer: float = 0.0
+const TELEMETRY_RATE: float = 0.1 # 10Hz
+
 func _ready():
 	_discover_effectors()
 	_initialize_resource_network()
@@ -41,11 +46,18 @@ func _physics_process(delta):
 	# ... (existing logic)
 	# Only update if we have authority (for multiplayer)
 	if is_multiplayer_authority():
-		_update_mass_properties()
+		if mass_properties_dirty:
+			_update_mass_properties()
+			
 		_manage_power_system(delta)
 		_apply_effector_forces(delta)
 		_apply_reaction_wheel_torques()
-		_update_telemetry()
+		
+		# Throttled telemetry update
+		telemetry_timer += delta
+		if telemetry_timer >= TELEMETRY_RATE:
+			telemetry_timer = 0.0
+			_update_telemetry()
 
 ## Discovers all effector children recursively.
 func _discover_effectors():
@@ -56,6 +68,8 @@ func _discover_effectors():
 	for child in find_children("*"):
 		if child is LCStateEffector:
 			state_effectors.append(child)
+			if not child.mass_changed.is_connected(_on_effector_mass_changed):
+				child.mass_changed.connect(_on_effector_mass_changed)
 		elif child is LCWheelEffector:
 			# LCWheelEffector implements the interface but extends VehicleWheel3D
 			state_effectors.append(child)
@@ -68,6 +82,11 @@ func _discover_effectors():
 		print("[LCVehicle] Discovered effectors:")
 		for effector in state_effectors:
 			print("  [State] %s (mass: %.2f kg)" % [effector.name, effector.get_mass_contribution()])
+	
+	mass_properties_dirty = true
+
+func _on_effector_mass_changed():
+	mass_properties_dirty = true
 
 ## Refresh effectors (call this after adding/removing children)
 func refresh_effectors():
@@ -103,6 +122,8 @@ func _update_mass_properties():
 		center_of_mass = Vector3.ZERO
 		if debug_effectors:
 			push_warning("[LCVehicle] Total mass is too low (%.2f kg). Defaulting to 50.0 kg." % total_mass)
+			
+	mass_properties_dirty = false
 			
 
 ## Manages power system with batteries and solar panels.

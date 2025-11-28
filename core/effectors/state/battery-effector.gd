@@ -49,10 +49,16 @@ func _ready():
 	mass = 10.0 + capacity * 0.01  # Rough mass estimate (10kg + 10g per Wh)
 	_initialize_telemetry()
 
+var telemetry_timer: float = 0.0
+
 func _physics_process(delta):
 	_update_battery_state(delta)
 	_update_degradation()
-	_update_telemetry()
+	
+	telemetry_timer += delta
+	if telemetry_timer >= 0.1:
+		telemetry_timer = 0.0
+		_update_telemetry()
 
 ## Charges the battery with the given power in Watts.
 ## Returns actual power consumed (may be less if battery is full or rate-limited).

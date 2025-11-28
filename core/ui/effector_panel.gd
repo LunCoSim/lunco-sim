@@ -57,34 +57,67 @@ func setup(target_effector: Node):
 	
 	_create_controls()
 
+var telemetry_labels: Dictionary = {}
+var update_timer: float = 0.0
+
 func _process(delta):
 	if not is_instance_valid(effector):
 		return
-		
-	_update_telemetry()
+	
+	# Throttle updates to 10Hz
+	update_timer += delta
+	if update_timer > 0.1:
+		update_timer = 0.0
+		_update_telemetry()
 
 func _update_telemetry():
-	# Clear existing telemetry
-	for child in telemetry_grid.get_children():
-		child.queue_free()
-	
 	if effector.has_method("get_telemetry"):
 		var data = effector.get_telemetry()
+		
+		# Remove keys that are no longer present
+		var current_keys = data.keys()
+		var keys_to_remove = []
+		for key in telemetry_labels:
+			if not key in data:
+				keys_to_remove.append(key)
+		
+		for key in keys_to_remove:
+			if telemetry_labels[key].name_label:
+				telemetry_labels[key].name_label.queue_free()
+			if telemetry_labels[key].value_label:
+				telemetry_labels[key].value_label.queue_free()
+			telemetry_labels.erase(key)
+		
+		# Update or create labels
 		for key in data:
-			var label = Label.new()
-			label.text = str(key) + ":"
-			label.add_theme_color_override("font_color", Color(0.8, 0.8, 0.8))
-			telemetry_grid.add_child(label)
-			
-			var value = Label.new()
 			var val = data[key]
+			var val_text = ""
+			
 			if val is float:
-				value.text = "%.3f" % val
+				val_text = "%.3f" % val
 			elif val is Vector3:
-				value.text = "(%.2f, %.2f, %.2f)" % [val.x, val.y, val.z]
+				val_text = "(%.2f, %.2f, %.2f)" % [val.x, val.y, val.z]
 			else:
-				value.text = str(val)
-			telemetry_grid.add_child(value)
+				val_text = str(val)
+			
+			if telemetry_labels.has(key):
+				# Update existing label
+				telemetry_labels[key].value_label.text = val_text
+			else:
+				# Create new labels
+				var name_label = Label.new()
+				name_label.text = str(key) + ":"
+				name_label.add_theme_color_override("font_color", Color(0.8, 0.8, 0.8))
+				telemetry_grid.add_child(name_label)
+				
+				var value_label = Label.new()
+				value_label.text = val_text
+				telemetry_grid.add_child(value_label)
+				
+				telemetry_labels[key] = {
+					"name_label": name_label,
+					"value_label": value_label
+				}
 
 func _create_controls():
 	# Create controls based on effector type
