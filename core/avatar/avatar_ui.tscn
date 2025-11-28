@@ -129,7 +129,7 @@ custom_minimum_size = Vector2(120, 0)
 layout_mode = 2
 size_flags_vertical = 4
 text = "Inspector"
-tooltip_text = "Toggle Component Inspector (I)"
+tooltip_text = "Toggle Inspector & Settings (I)"
 
 [node name="EffectorButton" type="Button" parent="LivesEntitiesContainer/HBoxContainer"]
 unique_name_in_owner = true

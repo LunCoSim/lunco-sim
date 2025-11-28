@@ -1,7 +1,6 @@
-[gd_scene load_steps=3 format=3 uid="uid://cq47y6l8o57qw"]
+[gd_scene load_steps=2 format=3 uid="uid://cq47y6l8o57qw"]
 
 [ext_resource type="Script" uid="uid://wl7ymfvfa5fq" path="res://controllers/rover/rover-joint-ui.gd" id="1"]
-[ext_resource type="PackedScene" uid="uid://parameter_editor_ui" path="res://core/ui/parameter_editor.tscn" id="2_param_editor"]
 
 [node name="RoverJointUI" type="Control" unique_id=1559803848]
 layout_mode = 3
@@ -93,19 +92,8 @@ layout_mode = 2
 layout_mode = 2
 size_flags_horizontal = 3
 
-[node name="SettingsButton" type="Button" parent="PanelContainer/VBox/ModePanel/VBox/HBox" unique_id=987654321]
-layout_mode = 2
-text = "Settings"
-toggle_mode = true
-
 [node name="HSeparator3" type="HSeparator" parent="PanelContainer/VBox" unique_id=1528598707]
 layout_mode = 2
-
-[node name="ParameterEditor" parent="PanelContainer/VBox" instance=ExtResource("2_param_editor")]
-unique_id = 123456789
-layout_mode = 2
-size_flags_vertical = 3
-visible = false
 
 [node name="ScrollContainer" type="ScrollContainer" parent="PanelContainer/VBox" unique_id=854433091]
 layout_mode = 2
@@ -280,7 +268,6 @@ layout_mode = 2
 text = "RPM: 0"
 
 [connection signal="item_selected" from="PanelContainer/VBox/ModePanel/VBox/HBox/ModeSelector" to="." method="_on_mode_selector_item_selected"]
-[connection signal="toggled" from="PanelContainer/VBox/ModePanel/VBox/HBox/SettingsButton" to="." method="_on_settings_button_toggled"]
 [connection signal="value_changed" from="PanelContainer/VBox/ScrollContainer/WheelControlsPanel/FrontLeft/MotorSlider" to="." method="_on_fl_motor_slider_value_changed"]
 [connection signal="value_changed" from="PanelContainer/VBox/ScrollContainer/WheelControlsPanel/FrontLeft/BrakeSlider" to="." method="_on_fl_brake_slider_value_changed"]
 [connection signal="value_changed" from="PanelContainer/VBox/ScrollContainer/WheelControlsPanel/FrontLeft/SteeringSlider" to="." method="_on_fl_steering_slider_value_changed"]

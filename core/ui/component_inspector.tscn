@@ -1,55 +1,125 @@
-[gd_scene load_steps=2 format=3 uid="uid://component_inspector"]
+[gd_scene load_steps=3 format=3 uid="uid://component_inspector"]
 
 [ext_resource type="Script" path="res://core/ui/component_inspector.gd" id="1_script"]
+[ext_resource type="PackedScene" uid="uid://resource_monitor_ui" path="res://core/ui/resource_monitor.tscn" id="2_resource_monitor"]
 
 [node name="ComponentInspector" type="PanelContainer"]
 anchors_preset = 9
 anchor_bottom = 1.0
-offset_right = 300.0
+offset_right = 350.0
 offset_bottom = -85.0
 grow_vertical = 2
 script = ExtResource("1_script")
 
-[node name="VBoxContainer" type="VBoxContainer" parent="."]
+[node name="MainVBox" type="VBoxContainer" parent="."]
 layout_mode = 2
 
-[node name="Label" type="Label" parent="VBoxContainer"]
+[node name="TitleLabel" type="Label" parent="MainVBox"]
 layout_mode = 2
-text = "Component Inspector"
+text = "Inspector & Settings"
 horizontal_alignment = 1
 
-[node name="HSeparator" type="HSeparator" parent="VBoxContainer"]
+[node name="HSeparator" type="HSeparator" parent="MainVBox"]
 layout_mode = 2
 
-[node name="ScrollContainer" type="ScrollContainer" parent="VBoxContainer"]
+[node name="MainScroll" type="ScrollContainer" parent="MainVBox"]
 layout_mode = 2
 size_flags_vertical = 3
-size_flags_stretch_ratio = 1.0
 
-[node name="ComponentTree" type="Tree" parent="VBoxContainer/ScrollContainer"]
+[node name="ContentVBox" type="VBoxContainer" parent="MainVBox/MainScroll"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="ResourceSection" type="VBoxContainer" parent="MainVBox/MainScroll/ContentVBox"]
+layout_mode = 2
+
+[node name="ResourceHeader" type="Button" parent="MainVBox/MainScroll/ContentVBox/ResourceSection"]
+layout_mode = 2
+toggle_mode = true
+button_pressed = true
+text = "📊 Resources"
+flat = true
+alignment = 0
+
+[node name="ResourceMonitor" parent="MainVBox/MainScroll/ContentVBox/ResourceSection" instance=ExtResource("2_resource_monitor")]
+layout_mode = 2
+
+[node name="HSeparator" type="HSeparator" parent="MainVBox/MainScroll/ContentVBox"]
+layout_mode = 2
+
+[node name="ComponentTreeSection" type="VBoxContainer" parent="MainVBox/MainScroll/ContentVBox"]
+layout_mode = 2
+
+[node name="TreeHeader" type="Button" parent="MainVBox/MainScroll/ContentVBox/ComponentTreeSection"]
+layout_mode = 2
+toggle_mode = true
+button_pressed = true
+text = "🔧 Component Tree"
+flat = true
+alignment = 0
+
+[node name="TreeScroll" type="ScrollContainer" parent="MainVBox/MainScroll/ContentVBox/ComponentTreeSection"]
+custom_minimum_size = Vector2(0, 150)
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="ComponentTree" type="Tree" parent="MainVBox/MainScroll/ContentVBox/ComponentTreeSection/TreeScroll"]
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
 hide_root = true
 
-[node name="HSeparator2" type="HSeparator" parent="VBoxContainer"]
+[node name="HSeparator2" type="HSeparator" parent="MainVBox/MainScroll/ContentVBox"]
 layout_mode = 2
 
-[node name="PropertiesLabel" type="Label" parent="VBoxContainer"]
-layout_mode = 2
-text = "Properties"
-horizontal_alignment = 1
-
-[node name="PropertiesScroll" type="ScrollContainer" parent="VBoxContainer"]
-layout_mode = 2
-size_flags_vertical = 3
-size_flags_stretch_ratio = 2.0
-custom_minimum_size = Vector2(0, 300)
-horizontal_scroll_mode = 0
-
-[node name="VBox" type="VBoxContainer" parent="VBoxContainer/PropertiesScroll"]
+[node name="SettingsSection" type="VBoxContainer" parent="MainVBox/MainScroll/ContentVBox"]
 layout_mode = 2
 
-[node name="PropertiesGrid" type="GridContainer" parent="VBoxContainer/PropertiesScroll/VBox"]
+[node name="SettingsHeader" type="Button" parent="MainVBox/MainScroll/ContentVBox/SettingsSection"]
+layout_mode = 2
+toggle_mode = true
+button_pressed = true
+text = "⚙️ Component Settings"
+flat = true
+alignment = 0
+
+[node name="SettingsContent" type="VBoxContainer" parent="MainVBox/MainScroll/ContentVBox/SettingsSection"]
+layout_mode = 2
+
+[node name="HSeparator3" type="HSeparator" parent="MainVBox/MainScroll/ContentVBox"]
+layout_mode = 2
+
+[node name="EffectorsSection" type="VBoxContainer" parent="MainVBox/MainScroll/ContentVBox"]
+layout_mode = 2
+
+[node name="EffectorsHeader" type="Button" parent="MainVBox/MainScroll/ContentVBox/EffectorsSection"]
+layout_mode = 2
+toggle_mode = true
+button_pressed = false
+text = "📡 Effectors"
+flat = true
+alignment = 0
+
+[node name="EffectorsGrid" type="GridContainer" parent="MainVBox/MainScroll/ContentVBox/EffectorsSection"]
+visible = false
+layout_mode = 2
+columns = 1
+
+[node name="HSeparator4" type="HSeparator" parent="MainVBox/MainScroll/ContentVBox"]
+layout_mode = 2
+
+[node name="TelemetrySection" type="VBoxContainer" parent="MainVBox/MainScroll/ContentVBox"]
+layout_mode = 2
+
+[node name="TelemetryHeader" type="Button" parent="MainVBox/MainScroll/ContentVBox/TelemetrySection"]
+layout_mode = 2
+toggle_mode = true
+button_pressed = false
+text = "📊 Telemetry"
+flat = true
+alignment = 0
+
+[node name="TelemetryGrid" type="GridContainer" parent="MainVBox/MainScroll/ContentVBox/TelemetrySection"]
+visible = false
 layout_mode = 2
 columns = 2

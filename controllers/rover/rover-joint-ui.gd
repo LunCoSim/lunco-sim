@@ -15,8 +15,6 @@ extends LCControllerUI
 
 # Drive mode controls
 @onready var mode_selector = $PanelContainer/VBox/ModePanel/VBox/HBox/ModeSelector
-@onready var settings_button = $PanelContainer/VBox/ModePanel/VBox/HBox/SettingsButton
-@onready var parameter_editor = $PanelContainer/VBox/ParameterEditor
 
 # Animation
 var resize_tween: Tween
@@ -160,32 +158,7 @@ func _on_mode_selector_item_selected(index: int):
 		_update_mode_display()
 		_update_wheel_controls_visibility()
 
-func _on_settings_button_toggled(toggled_on: bool):
-	print("DEBUG: Settings toggled: ", toggled_on)
-	if parameter_editor:
-		parameter_editor.visible = toggled_on
-		if toggled_on:
-			# Hide wheel controls when settings are open to save space
-			if scroll_container:
-				scroll_container.visible = false
-			
-			# MAXIMIZE: Explicitly set minimum height to fill screen (Same as wheel controls)
-			var viewport_height = get_viewport_rect().size.y
-			var target_height = viewport_height - 100.0 # 20px margin
-			if panel_container:
-				panel_container.custom_minimum_size.y = target_height
-			
-			# Initialize editor if needed
-			if target:
-				# Find the root vehicle to scan everything
-				var root = target.parent if target.parent else target
-				print("DEBUG: Setting parameter editor target: ", root)
-				parameter_editor.set_target(root)
-			else:
-				print("DEBUG: No target for parameter editor")
-		else:
-			# Restore wheel controls visibility
-			_update_wheel_controls_visibility()
+
 
 # Front Left Wheel
 func _on_fl_motor_slider_value_changed(value: float):

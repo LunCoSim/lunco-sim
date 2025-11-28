@@ -138,7 +138,7 @@ func _ready():
 
 
 func _input(event):
-	# Toggle component inspector with 'I' key
+	# Toggle component inspector & settings with 'I' key
 	if event is InputEventKey and event.pressed and not event.echo:
 		if event.keycode == KEY_I:
 			var inspector = get_node_or_null("ComponentInspector")
@@ -352,7 +352,7 @@ func _on_builder_button_pressed():
 		push_error("Failed to load Builder UI scene")
 
 func _on_inspector_button_pressed():
-	print("DEBUG: Inspector button pressed!")
+	print("DEBUG: Inspector & Settings button pressed!")
 	var inspector = get_node_or_null("ComponentInspector")
 	if inspector:
 		inspector.visible = not inspector.visible
