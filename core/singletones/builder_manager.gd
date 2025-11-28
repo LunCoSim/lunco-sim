@@ -137,8 +137,39 @@ func _unhandled_input(event):
 			try_place_part()
 			get_viewport().set_input_as_handled()
 	elif event.is_action_pressed("click"):
+		# Check if the click hit a UI display before processing
+		if _is_click_on_ui_display():
+			# Don't process clicks on UI displays
+			return
+		
 		print("BuilderManager: Click detected in _unhandled_input")
 		try_select_entity()
+
+# Helper function to check if mouse is over a UI display
+func _is_click_on_ui_display() -> bool:
+	var camera = get_viewport().get_camera_3d()
+	if not camera:
+		return false
+	
+	var mouse_pos = get_viewport().get_mouse_position()
+	var from = camera.project_ray_origin(mouse_pos)
+	var to = from + camera.project_ray_normal(mouse_pos) * 1000.0
+	
+	var space_state = camera.get_world_3d().direct_space_state
+	var query = PhysicsRayQueryParameters3D.create(from, to)
+	query.collide_with_areas = true
+	query.collision_mask = 2  # UI displays are on collision layer 2
+	
+	var result = space_state.intersect_ray(query)
+	
+	if result and result.collider:
+		# Check if it's a UI display area
+		var collider = result.collider
+		if collider is Area3D and (collider.collision_layer & 2) != 0:
+			print("BuilderManager: Click is on UI display, ignoring")
+			return true
+	
+	return false
 
 func update_ghost_position():
 	# Raycast from camera

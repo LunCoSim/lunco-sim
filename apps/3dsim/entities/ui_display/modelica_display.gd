@@ -12,10 +12,26 @@ var mouse_button_pressed = false
 var mouse_over_display = false
 var is_display_visible = true
 var has_keyboard_focus = false
+var mesh_size = Vector2(50, 38)  # Will be updated from actual mesh in _ready()
+
+# Helper function to get the actual mesh size
+func _get_mesh_size() -> Vector2:
+	if $DisplayMesh and $DisplayMesh.mesh:
+		var mesh = $DisplayMesh.mesh
+		if mesh is QuadMesh:
+			return mesh.size
+		elif mesh is PlaneMesh:
+			return mesh.size
+	# Fallback to default size if mesh not found
+	return Vector2(50, 38)
 
 func _ready():
 	# Add to group for easy identification
 	add_to_group("modelica_display")
+	
+	# Get the actual mesh size from the DisplayMesh
+	mesh_size = _get_mesh_size()
+	print("ModelicaUI: Mesh size detected as: ", mesh_size)
 	
 	# First, add a reference to the scene at root level for scripts that use absolute paths
 	# This needs to happen BEFORE loading the modelica scene so other nodes can find it
@@ -38,8 +54,9 @@ func _ready():
 	# Set up collision shape to match mesh for interaction
 	var collision_shape = $Area3D/CollisionShape3D
 	var box_shape = BoxShape3D.new()
-	box_shape.size = Vector3(40, 30, 0.1)
+	box_shape.size = Vector3(mesh_size.x, mesh_size.y, 0.1)
 	collision_shape.shape = box_shape
+	print("ModelicaUI: Collision shape updated to size: ", box_shape.size)
 	
 	# Make sure the Area3D is on the correct collision layer (2)
 	$Area3D.collision_layer = 2
@@ -164,13 +181,19 @@ func _on_area_3d_input_event(_camera, event, mouse_position, _normal, _shape_idx
 		
 		# Convert 3D position to 2D viewport coordinates
 		var viewport_size = $SubViewport.size
-		var mesh_size = Vector2(40, 30)  # Size of our quad mesh
 		
-		# Calculate normalized position on the mesh (0-1)
-		var local_position = mouse_position - global_position
+		# Convert mouse position from global space to local space (accounts for rotation)
+		var local_position = to_local(mouse_position)
+		
+		# The mesh is centered at origin, so local_position ranges from:
+		# X: -mesh_size.x/2 to +mesh_size.x/2
+		# Y: -mesh_size.y/2 to +mesh_size.y/2
+		# Z: should be near 0 (on the surface)
+		
+		# Normalize to 0-1 range
 		var local_2d_position = Vector2(
-			(local_position.x / mesh_size.x + 0.5), 
-			(0.5 - local_position.y / mesh_size.y)
+			(local_position.x / mesh_size.x) + 0.5,
+			0.5 - (local_position.y / mesh_size.y)
 		)
 		
 		# Convert to viewport coordinates
@@ -204,12 +227,16 @@ func _on_area_3d_input_event(_camera, event, mouse_position, _normal, _shape_idx
 # Handle mouse motion events
 func _handle_mouse_motion(mouse_position):
 	var viewport_size = $SubViewport.size
-	var mesh_size = Vector2(40, 30)
-	var local_position = mouse_position - global_position
+	
+	# Convert mouse position from global space to local space (accounts for rotation)
+	var local_position = to_local(mouse_position)
+	
+	# Normalize to 0-1 range
 	var local_2d_position = Vector2(
-		(local_position.x / mesh_size.x + 0.5), 
-		(0.5 - local_position.y / mesh_size.y)
+		(local_position.x / mesh_size.x) + 0.5,
+		0.5 - (local_position.y / mesh_size.y)
 	)
+	
 	var viewport_position = Vector2(
 		local_2d_position.x * viewport_size.x,
 		local_2d_position.y * viewport_size.y
@@ -406,12 +433,16 @@ func receive_mouse_input(event: InputEvent) -> bool:
 			
 			# Calculate viewport coordinates
 			var viewport_size = $SubViewport.size
-			var mesh_size = Vector2(40, 30)
-			var local_position = result.position - global_position
+			
+			# Convert from global space to local space (accounts for rotation)
+			var local_position = to_local(result.position)
+			
+			# Normalize to 0-1 range
 			var local_2d_position = Vector2(
-				(local_position.x / mesh_size.x + 0.5), 
-				(0.5 - local_position.y / mesh_size.y)
+				(local_position.x / mesh_size.x) + 0.5,
+				0.5 - (local_position.y / mesh_size.y)
 			)
+			
 			var viewport_position = Vector2(
 				local_2d_position.x * viewport_size.x,
 				local_2d_position.y * viewport_size.y
