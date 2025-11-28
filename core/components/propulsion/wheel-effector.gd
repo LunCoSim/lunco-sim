@@ -39,6 +39,7 @@ func get_power_production() -> float:
 	set(value):
 		wheel_radius_config = value
 		wheel_radius = value # Update built-in property
+		_update_visual_scale()
 
 @export var max_motor_torque: float = 1000.0
 @export var max_brake_force: float = 800.0
@@ -46,6 +47,7 @@ func get_power_production() -> float:
 func _ready():
 	# Apply properties
 	wheel_radius = wheel_radius_config
+	_update_visual_scale()
 	
 	# Initialize telemetry
 	Telemetry["current_speed"] = 0.0
@@ -142,3 +144,12 @@ func _update_telemetry():
 	Telemetry["motor_torque"] = motor_torque_request
 	Telemetry["brake_force"] = brake_force_request
 	Telemetry["rpm"] = get_wheel_rpm()
+
+## Updates the visual mesh scale to match the wheel radius
+func _update_visual_scale():
+	var mesh_instance = $MeshInstance3D
+	if mesh_instance:
+		# The default cylinder mesh has radius 0.3
+		# Scale it proportionally to match wheel_radius_config
+		var scale_factor = wheel_radius_config / 0.3
+		mesh_instance.scale = Vector3(scale_factor, scale_factor, scale_factor)
