@@ -21,7 +21,10 @@ func should_process_input() -> bool:
 	var managers = get_tree().get_nodes_in_group("ui_display_manager")
 	if managers.size() > 0:
 		if managers[0].has_method("is_input_captured"):
-			if managers[0].is_input_captured():
+			var is_captured = managers[0].is_input_captured()
+			if is_captured:
+				# Debug: uncomment to see when input is blocked
+				print("Input blocked by UI: ", managers[0].get_active_display())
 				return false
 	
 	return true

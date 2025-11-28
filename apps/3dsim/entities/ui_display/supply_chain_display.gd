@@ -223,6 +223,15 @@ func receive_keyboard_input(event: InputEvent) -> bool:
 		return false
 		
 	if event is InputEventKey:
+		# Check if any control is actually focused in the UI
+		var has_focused_control = false
+		if is_instance_valid(supply_chain_scene):
+			var focused_control = _get_focused_control(supply_chain_scene)
+			has_focused_control = focused_control != null
+			
+			# Update has_keyboard_focus based on actual focus state
+			has_keyboard_focus = has_focused_control
+		
 		# Create a copy of the keyboard event to forward to the viewport
 		var viewport_event = InputEventKey.new()
 		viewport_event.keycode = event.keycode
@@ -240,6 +249,18 @@ func receive_keyboard_input(event: InputEvent) -> bool:
 		return true
 	
 	return false
+
+# Helper method to find the currently focused control
+func _get_focused_control(node: Node) -> Control:
+	if node is Control and node.has_focus():
+		return node
+	
+	for child in node.get_children():
+		var focused = _get_focused_control(child)
+		if focused != null:
+			return focused
+	
+	return null
 
 # New function to handle mouse input from avatar
 func receive_mouse_input(event: InputEvent) -> bool:

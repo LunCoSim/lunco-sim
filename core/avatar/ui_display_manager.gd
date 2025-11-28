@@ -19,7 +19,25 @@ func _ready():
 
 # Check if any display is currently capturing input
 func is_input_captured() -> bool:
-	return active_display != "none"
+	# Check if modelica display has keyboard focus
+	if active_display == "modelica" and modelica_display:
+		if "has_keyboard_focus" in modelica_display:
+			var is_captured = modelica_display.has_keyboard_focus
+			print("UiDisplayManager: Modelica has_keyboard_focus = ", is_captured)
+			return is_captured
+	
+	# Check if supply chain display has keyboard focus
+	if active_display == "supply_chain" and supply_chain_display:
+		if "has_keyboard_focus" in supply_chain_display:
+			var is_captured = supply_chain_display.has_keyboard_focus
+			print("UiDisplayManager: Supply chain has_keyboard_focus = ", is_captured)
+			return is_captured
+	
+	# Fallback: if a display is active, assume it's capturing input
+	var fallback = active_display != "none"
+	if fallback:
+		print("UiDisplayManager: Fallback - active_display = ", active_display)
+	return fallback
 
 # Method to set the display references
 func set_displays(supply_chain: Node, modelica: Node):

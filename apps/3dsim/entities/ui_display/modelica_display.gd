@@ -355,6 +355,9 @@ func receive_keyboard_input(event: InputEvent) -> bool:
 		if is_instance_valid(modelica_scene):
 			var focused_control = _get_focused_control(modelica_scene)
 			has_focused_control = focused_control != null
+			
+			# Update has_keyboard_focus based on actual focus state
+			has_keyboard_focus = has_focused_control
 		
 		# If no control has focus and this is a typing key (not a navigation/system key),
 		# try to set focus before accepting the event
@@ -367,7 +370,10 @@ func receive_keyboard_input(event: InputEvent) -> bool:
 				var focused_control = _get_focused_control(modelica_scene)
 				if focused_control == null:
 					# If we still don't have focus, don't handle the event
+					has_keyboard_focus = false
 					return false
+				else:
+					has_keyboard_focus = true
 		
 		# Create a copy of the keyboard event to forward to the viewport
 		var viewport_event = InputEventKey.new()

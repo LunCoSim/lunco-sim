@@ -65,7 +65,9 @@ func _process(delta):
 		return
 		
 	# Check if input is captured by UI
-	if not should_process_input():
+	var can_process = should_process_input()
+	print("Character input adapter: should_process_input = ", can_process)
+	if not can_process:
 		_target.input_motion = Vector2.ZERO
 		_target.aiming = false
 		_target.shooting = false
