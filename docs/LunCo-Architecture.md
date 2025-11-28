@@ -75,6 +75,24 @@ To start developing, you'll have to do several manual steps (later a script will
 3. `core` - core lunco code
 
 
+## Basilisk-Inspired Effector Architecture
+
+LunCoSim's component system is inspired by NASA's [Basilisk](https://github.com/AVSLab/basilisk) astrodynamics framework, using an effector-based architecture for spacecraft and vehicle simulation.
+
+![Basilisk Architecture](images/basilisk-architecture-diagram.svg)
+
+### Key Concepts
+
+- **State Effectors**: Passive components that contribute mass, power, and inertia (e.g., fuel tanks, batteries, solar panels)
+- **Dynamic Effectors**: Active components that apply forces and torques (e.g., thrusters, reaction wheels)
+- **Vehicle Hub**: Central aggregator that manages all effectors and integrates physics
+- **Sensors**: Specialized effectors that provide measurements for control and telemetry
+
+For detailed information, see:
+- [Basilisk Architecture Integration Guide](Basilisk-Architecture-Integration.md) - Complete integration documentation
+- [Basilisk Quick Reference](Basilisk-Quick-Reference.md) - Developer quick reference with code examples
+
+
 ## Scene structure
 
  Simulation
