@@ -12,15 +12,16 @@ var container: VBoxContainer
 var resource_bars: Dictionary = {}  # resource_id -> ProgressBar
 
 func _ready():
-	visible = false
 	# Setup layout
 	container = VBoxContainer.new()
 	add_child(container)
 	
-	var label = Label.new()
-	label.text = "Resources"
-	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	container.add_child(label)
+	# Title for the section
+	var title_label = Label.new()
+	title_label.text = "Resources"
+	title_label.add_theme_font_size_override("font_size", 16)
+	title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	container.add_child(title_label)
 	
 	container.add_child(HSeparator.new())
 	
@@ -36,7 +37,7 @@ func _ready():
 
 func set_vehicle(target: LCVehicle):
 	vehicle = target
-	visible = (vehicle != null)
+	# Always visible when embedded, just show empty state if no vehicle
 	_rebuild_ui()
 
 func _on_entity_selected(entity):
@@ -48,11 +49,26 @@ func _on_entity_selected(entity):
 func _rebuild_ui():
 	# Clear existing bars
 	for child in container.get_children():
-		if child is HBoxContainer: # Resource rows
+		if child is HBoxContainer or child is Label and child.name == "NoVehicleLabel": # Resource rows or placeholder
 			child.queue_free()
 	resource_bars.clear()
 	
-	if not vehicle or not vehicle.resource_network:
+	if not vehicle:
+		# Show "no vehicle selected" message
+		var no_vehicle_label = Label.new()
+		no_vehicle_label.name = "NoVehicleLabel"
+		no_vehicle_label.text = "No vehicle selected"
+		no_vehicle_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
+		container.add_child(no_vehicle_label)
+		return
+	
+	if not vehicle.resource_network:
+		# Show "no resource network" message
+		var no_network_label = Label.new()
+		no_network_label.name = "NoVehicleLabel"
+		no_network_label.text = "Vehicle has no resource network"
+		no_network_label.add_theme_color_override("font_color", Color(0.9, 0.7, 0.3))
+		container.add_child(no_network_label)
 		return
 	
 	# Find all resources in the network
