@@ -15,17 +15,20 @@ const MARGIN_LARGE = 24
 const SPACING_SMALL = 8
 const SPACING_MEDIUM = 16
 
-# Corner radii
-const CORNER_RADIUS_SMALL = 4
-const CORNER_RADIUS_MEDIUM = 8
-const CORNER_RADIUS_LARGE = 12
+# Corner radii - glassmorphic style (larger, smoother)
+const CORNER_RADIUS_SMALL = 8
+const CORNER_RADIUS_MEDIUM = 12
+const CORNER_RADIUS_LARGE = 16
 
-# Color variants - centralize color management
-const COLOR_BG = Color(0.13, 0.13, 0.13, 0.95)
-const COLOR_BG_LIGHT = Color(0.18, 0.18, 0.18, 1.0)
-const COLOR_BORDER = Color(0.25, 0.25, 0.25, 1.0)
-const COLOR_ACCENT = Color(0.2, 0.4, 0.8, 1.0)
-const COLOR_TEXT = Color(0.875, 0.875, 0.875, 1.0)
+# Color variants - centralize color management (Glassmorphic Theme)
+const COLOR_BG = Color(0.06, 0.08, 0.12, 0.96)  # More opaque dark blue
+const COLOR_BG_LIGHT = Color(0.12, 0.15, 0.22, 0.95)  # More opaque lighter blue
+const COLOR_BORDER = Color(0.25, 0.6, 0.95, 0.6)  # Neon cyan border
+const COLOR_BORDER_GLOW = Color(0.3, 0.7, 1.0, 0.8)  # Bright cyan glow
+const COLOR_ACCENT = Color(0.25, 0.45, 0.75, 0.95)  # Brighter blue accent (matches active buttons)
+const COLOR_ACCENT_BRIGHT = Color(0.4, 0.8, 1.0, 1.0)  # Bright neon accent
+const COLOR_TEXT = Color(0.95, 0.95, 0.98, 1.0)  # Brighter text for contrast
+const COLOR_SHADOW = Color(0.15, 0.5, 0.9, 0.4)  # Blue glow shadow
 
 # Entity button settings
 const ENTITY_BUTTON_MIN_SIZE = Vector2(90, 40)
