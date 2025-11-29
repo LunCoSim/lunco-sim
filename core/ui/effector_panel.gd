@@ -71,53 +71,68 @@ func _process(delta):
 		_update_telemetry()
 
 func _update_telemetry():
-	if effector.has_method("get_telemetry"):
-		var data = effector.get_telemetry()
-		
-		# Remove keys that are no longer present
-		var current_keys = data.keys()
-		var keys_to_remove = []
-		for key in telemetry_labels:
-			if not key in data:
-				keys_to_remove.append(key)
-		
-		for key in keys_to_remove:
-			if telemetry_labels[key].name_label:
-				telemetry_labels[key].name_label.queue_free()
-			if telemetry_labels[key].value_label:
-				telemetry_labels[key].value_label.queue_free()
-			telemetry_labels.erase(key)
-		
-		# Update or create labels
-		for key in data:
-			var val = data[key]
-			var val_text = ""
-			
-			if val is float:
-				val_text = "%.3f" % val
-			elif val is Vector3:
-				val_text = "(%.2f, %.2f, %.2f)" % [val.x, val.y, val.z]
-			else:
-				val_text = str(val)
-			
-			if telemetry_labels.has(key):
-				# Update existing label
-				telemetry_labels[key].value_label.text = val_text
-			else:
-				# Create new labels
-				var name_label = Label.new()
-				name_label.text = str(key) + ":"
-				name_label.add_theme_color_override("font_color", Color(0.8, 0.8, 0.8))
-				telemetry_grid.add_child(name_label)
+	var data = {}
+	
+	# Method 1: Use Telemetry schema if present (preferred)
+	var telemetry_schema = effector.get("Telemetry")
+	if telemetry_schema is Dictionary:
+		for key in telemetry_schema:
+			var prop_name = telemetry_schema[key]
+			var val = effector.get(prop_name)
+			if val != null:
+				data[key] = val
 				
-				var value_label = Label.new()
-				value_label.text = val_text
-				telemetry_grid.add_child(value_label)
-				
-				telemetry_labels[key] = {
-					"name_label": name_label,
-					"value_label": value_label
-				}
+	# Method 2: Fallback to get_telemetry()
+	elif effector.has_method("get_telemetry"):
+		data = effector.get_telemetry()
+	
+	if data.is_empty():
+		return
+		
+	# Remove keys that are no longer present
+	var current_keys = data.keys()
+	var keys_to_remove = []
+	for key in telemetry_labels:
+		if not key in data:
+			keys_to_remove.append(key)
+	
+	for key in keys_to_remove:
+		if telemetry_labels[key].name_label:
+			telemetry_labels[key].name_label.queue_free()
+		if telemetry_labels[key].value_label:
+			telemetry_labels[key].value_label.queue_free()
+		telemetry_labels.erase(key)
+	
+	# Update or create labels
+	for key in data:
+		var val = data[key]
+		var val_text = ""
+		
+		if val is float:
+			val_text = "%.3f" % val
+		elif val is Vector3:
+			val_text = "(%.2f, %.2f, %.2f)" % [val.x, val.y, val.z]
+		else:
+			val_text = str(val)
+		
+		if telemetry_labels.has(key):
+			# Update existing label
+			telemetry_labels[key].value_label.text = val_text
+		else:
+			# Create new labels
+			var name_label = Label.new()
+			name_label.text = str(key) + ":"
+			name_label.add_theme_color_override("font_color", Color(0.8, 0.8, 0.8))
+			telemetry_grid.add_child(name_label)
+			
+			var value_label = Label.new()
+			value_label.text = val_text
+			telemetry_grid.add_child(value_label)
+			
+			telemetry_labels[key] = {
+				"name_label": name_label,
+				"value_label": value_label
+			}
 
 func _create_controls():
 	# Create controls based on effector type

@@ -36,7 +36,18 @@ func _ready():
 		BuilderManager.entity_selected.connect(_on_entity_selected)
 
 func set_vehicle(target: LCVehicle):
+	# Disconnect from old vehicle
+	if vehicle and is_instance_valid(vehicle) and vehicle.resource_network:
+		if vehicle.resource_network.network_updated.is_connected(_on_network_updated):
+			vehicle.resource_network.network_updated.disconnect(_on_network_updated)
+			
 	vehicle = target
+	
+	# Connect to new vehicle
+	if vehicle and vehicle.resource_network:
+		if not vehicle.resource_network.network_updated.is_connected(_on_network_updated):
+			vehicle.resource_network.network_updated.connect(_on_network_updated)
+	
 	# Always visible when embedded, just show empty state if no vehicle
 	_rebuild_ui()
 
@@ -99,10 +110,10 @@ func _rebuild_ui():
 		
 		resource_bars[res_id] = bar
 
-func _process(delta):
+func _on_network_updated():
 	if not vehicle or not vehicle.resource_network:
 		return
-	
+		
 	for res_id in resource_bars:
 		var bar = resource_bars[res_id]
 		var total = vehicle.resource_network.get_total_resource(res_id)

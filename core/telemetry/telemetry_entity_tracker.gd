@@ -13,6 +13,15 @@ var events: Array = []
 var last_properties: Dictionary = {}
 var _cached_controller: Node = null
 
+var _property_map: Dictionary = {}
+var _has_standard_methods: Dictionary = {
+	"get_global_position": false,
+	"get_global_rotation": false,
+	"linear_velocity": false,
+	"velocity": false,
+	"get_owner_id": false
+}
+
 const MAX_EVENTS = 5000  # Keep last 5000 events per entity
 
 func _init(tracked_entity: Node):
@@ -21,6 +30,22 @@ func _init(tracked_entity: Node):
 	entity_name = entity.name
 	entity_type = _determine_entity_type(entity)
 	created_at = int(Time.get_unix_time_from_system() * 1000)
+	
+	# Cache standard method existence
+	_has_standard_methods.get_global_position = entity.has_method("get_global_position") or "global_position" in entity
+	_has_standard_methods.get_global_rotation = entity.has_method("get_global_rotation") or "global_rotation" in entity
+	_has_standard_methods.linear_velocity = "linear_velocity" in entity
+	_has_standard_methods.velocity = "velocity" in entity
+	_has_standard_methods.get_owner_id = entity.has_method("get_owner_id")
+	
+	# Parse Telemetry schema if present
+	var telemetry_schema = entity.get("Telemetry")
+	if telemetry_schema is Dictionary:
+		for key in telemetry_schema:
+			var prop_name = telemetry_schema[key]
+			# Verify property exists (simple check)
+			if prop_name in entity:
+				_property_map[key] = prop_name
 	
 	# Connect to common signals
 	_connect_signals()
@@ -78,21 +103,22 @@ func update_properties() -> Dictionary:
 	}
 	
 	# Get position - use flat keys for OpenMCT compatibility
-	var pos = _get_position()
-	if pos != Vector3.ZERO:
-		props["position.x"] = pos.x
-		props["position.y"] = pos.y
-		props["position.z"] = pos.z
+	if _has_standard_methods.get_global_position:
+		var pos = entity.global_position
+		if pos != Vector3.ZERO:
+			props["position.x"] = pos.x
+			props["position.y"] = pos.y
+			props["position.z"] = pos.z
 	
 	# Get rotation
-	if entity.has_method("get_global_rotation"):
+	if _has_standard_methods.get_global_rotation:
 		var rot = entity.global_rotation
 		props["rotation.x"] = rot.x
 		props["rotation.y"] = rot.y
 		props["rotation.z"] = rot.z
 	
 	# Get velocity based on entity type
-	if entity is RigidBody3D or entity is VehicleBody3D:
+	if _has_standard_methods.linear_velocity:
 		var vel = entity.linear_velocity
 		props["velocity.x"] = vel.x
 		props["velocity.y"] = vel.y
@@ -102,7 +128,7 @@ func update_properties() -> Dictionary:
 		props["angular_velocity.y"] = ang_vel.y
 		props["angular_velocity.z"] = ang_vel.z
 		props["mass"] = entity.mass
-	elif entity is CharacterBody3D:
+	elif _has_standard_methods.velocity:
 		var vel = entity.velocity
 		props["velocity.x"] = vel.x
 		props["velocity.y"] = vel.y
@@ -110,7 +136,7 @@ func update_properties() -> Dictionary:
 		props["is_on_floor"] = entity.is_on_floor()
 	
 	# Get controller info if available
-	if entity.has_method("get_owner_id"):
+	if _has_standard_methods.get_owner_id:
 		props["controller_id"] = entity.get_owner_id()
 	
 	# Get custom properties from controller child
@@ -126,6 +152,17 @@ func update_properties() -> Dictionary:
 			props["inputs.steering"] = _cached_controller.get_steering()
 		if _cached_controller.has_method("get_brake"):
 			props["inputs.brake"] = _cached_controller.get_brake()
+			
+	# Get mapped properties from Telemetry schema
+	for key in _property_map:
+		var prop_name = _property_map[key]
+		var val = entity.get(prop_name)
+		if val != null:
+			# Handle vector decomposition if needed, or just pass raw
+			# For now, we pass raw and let the UI/API handle formatting
+			# If the key implies a sub-property (e.g. "position.x"), we might need more logic
+			# But for now, we assume 1:1 mapping for simple types
+			props[key] = val
 	
 	last_properties = props
 	return props
