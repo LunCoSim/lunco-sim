@@ -74,13 +74,22 @@ func _update_telemetry():
 	var data = {}
 	
 	# Method 1: Use Telemetry schema if present (preferred)
-	var telemetry_schema = effector.get("Telemetry")
-	if telemetry_schema is Dictionary:
-		for key in telemetry_schema:
-			var prop_name = telemetry_schema[key]
-			var val = effector.get(prop_name)
-			if val != null:
-				data[key] = val
+	# Method 1: Use Telemetry dictionary
+	var telemetry_data = effector.get("Telemetry")
+	if telemetry_data is Dictionary:
+		for key in telemetry_data:
+			var val_or_prop = telemetry_data[key]
+			
+			# If it's a string, check if it's a property name
+			if val_or_prop is String:
+				var prop_val = effector.get(val_or_prop)
+				if prop_val != null:
+					data[key] = prop_val
+				else:
+					data[key] = val_or_prop
+			else:
+				# It's a direct value (float, vector, etc.)
+				data[key] = val_or_prop
 				
 	# Method 2: Fallback to get_telemetry()
 	elif effector.has_method("get_telemetry"):
