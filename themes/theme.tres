@@ -15,8 +15,8 @@ corner_radius_top_left = 12
 corner_radius_top_right = 12
 corner_radius_bottom_right = 12
 corner_radius_bottom_left = 12
-shadow_color = Color(0.2, 0.6, 1.0, 0.3)
-shadow_size = 6
+shadow_color = Color(0, 0, 0, 0)
+shadow_size = 0
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_normal"]
 content_margin_left = 14.0
@@ -33,8 +33,8 @@ corner_radius_top_left = 12
 corner_radius_top_right = 12
 corner_radius_bottom_right = 12
 corner_radius_bottom_left = 12
-shadow_color = Color(0, 0, 0, 0.2)
-shadow_size = 4
+shadow_color = Color(0, 0, 0, 0)
+shadow_size = 0
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_pressed"]
 content_margin_left = 14.0
@@ -51,8 +51,8 @@ corner_radius_top_left = 12
 corner_radius_top_right = 12
 corner_radius_bottom_right = 12
 corner_radius_bottom_left = 12
-shadow_color = Color(0.3, 0.7, 1.0, 0.4)
-shadow_size = 8
+shadow_color = Color(0, 0, 0, 0)
+shadow_size = 0
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_entity_button_active"]
 content_margin_left = 12.0
@@ -69,8 +69,8 @@ corner_radius_top_left = 12
 corner_radius_top_right = 12
 corner_radius_bottom_right = 12
 corner_radius_bottom_left = 12
-shadow_color = Color(0.3, 0.7, 1.0, 0.4)
-shadow_size = 3
+shadow_color = Color(0, 0, 0, 0)
+shadow_size = 0
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_panel_compact"]
 content_margin_left = 10.0
@@ -87,10 +87,8 @@ corner_radius_top_left = 10
 corner_radius_top_right = 10
 corner_radius_bottom_right = 10
 corner_radius_bottom_left = 10
-shadow_color = Color(0, 0, 0, 0.2)
-shadow_size = 2
-shadow_color = Color(0, 0, 0, 0.4)
-shadow_size = 6
+shadow_color = Color(0, 0, 0, 0)
+shadow_size = 0
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_hover_compact"]
 content_margin_left = 10.0
@@ -107,10 +105,8 @@ corner_radius_top_left = 8
 corner_radius_top_right = 8
 corner_radius_bottom_right = 8
 corner_radius_bottom_left = 8
-shadow_color = Color(0.2, 0.5, 0.9, 0.2)
-shadow_size = 2
-shadow_color = Color(0.2, 0.5, 0.9, 0.3)
-shadow_size = 4
+shadow_color = Color(0, 0, 0, 0)
+shadow_size = 0
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_pressed_compact"]
 content_margin_left = 10.0
@@ -127,8 +123,8 @@ corner_radius_top_left = 8
 corner_radius_top_right = 8
 corner_radius_bottom_right = 8
 corner_radius_bottom_left = 8
-shadow_color = Color(0.3, 0.6, 1.0, 0.3)
-shadow_size = 6
+shadow_color = Color(0, 0, 0, 0)
+shadow_size = 0
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_section_header"]
 content_margin_left = 14.0
@@ -140,8 +136,8 @@ border_width_bottom = 2
 border_color = Color(0.3, 0.7, 1.0, 0.8)
 corner_radius_top_left = 12
 corner_radius_top_right = 12
-shadow_color = Color(0.2, 0.6, 1.0, 0.2)
-shadow_size = 4
+shadow_color = Color(0, 0, 0, 0)
+shadow_size = 0
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_panel"]
 content_margin_left = 16.0
@@ -158,10 +154,8 @@ corner_radius_top_left = 16
 corner_radius_top_right = 16
 corner_radius_bottom_right = 16
 corner_radius_bottom_left = 16
-shadow_color = Color(0.15, 0.5, 0.9, 0.25)
-shadow_size = 3
-shadow_color = Color(0.15, 0.5, 0.9, 0.4)
-shadow_size = 12
+shadow_color = Color(0, 0, 0, 0)
+shadow_size = 0
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_window_embedded"]
 content_margin_left = 16.0
@@ -179,10 +173,8 @@ corner_radius_top_right = 16
 corner_radius_bottom_right = 16
 corner_radius_bottom_left = 16
 expand_margin_top = 32.0
-shadow_color = Color(0.2, 0.55, 1.0, 0.3)
-shadow_size = 4
-shadow_color = Color(0.2, 0.55, 1.0, 0.5)
-shadow_size = 14
+shadow_color = Color(0, 0, 0, 0)
+shadow_size = 0
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_entity_button_hover"]
 content_margin_left = 12.0
@@ -199,10 +191,8 @@ corner_radius_top_left = 12
 corner_radius_top_right = 12
 corner_radius_bottom_right = 12
 corner_radius_bottom_left = 12
-shadow_color = Color(0.25, 0.6, 1.0, 0.25)
-shadow_size = 2
-shadow_color = Color(0.25, 0.6, 1.0, 0.35)
-shadow_size = 6
+shadow_color = Color(0, 0, 0, 0)
+shadow_size = 0
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_entity_button_normal"]
 content_margin_left = 12.0
@@ -219,8 +209,8 @@ corner_radius_top_left = 12
 corner_radius_top_right = 12
 corner_radius_bottom_right = 12
 corner_radius_bottom_left = 12
-shadow_color = Color(0, 0, 0, 0.2)
-shadow_size = 4
+shadow_color = Color(0, 0, 0, 0)
+shadow_size = 0
 
 [resource]
 resource_local_to_scene = true
