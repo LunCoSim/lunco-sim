@@ -151,6 +151,9 @@ func display_controller_ui(new_controller_ui: Node = null):
 	clear_ui()
 	if new_controller_ui and ui:
 		ui.add_child(new_controller_ui)
+		ui.visible = true
+	else:
+		ui.visible = false
 
 # Called every frame. 'delta' is the elapsed time since the previous frame.
 func _process(delta):
@@ -164,6 +167,7 @@ func clear_ui():
 	if ui:
 		for n in ui.get_children():
 			ui.remove_child(n)
+		ui.visible = false
 
 func set_target(target):
 	clear_ui()
@@ -318,16 +322,17 @@ func _on_create_entity_button_pressed():
 func _on_builder_button_pressed():
 	print("DEBUG: Builder button pressed!")
 	
+	# Get the LeftSideContainer
+	var left_container = get_node_or_null("LeftSideContainer")
+	if not left_container:
+		push_error("LeftSideContainer not found")
+		return
+	
 	# Check if builder UI already exists
-	var existing_builder = get_node_or_null("BuilderUI")
+	var existing_builder = left_container.get_node_or_null("BuilderUI")
 	if existing_builder:
 		existing_builder.visible = not existing_builder.visible
 		print("Builder UI toggled: ", existing_builder.visible)
-		
-		# Also toggle inspector to match
-		var inspector = get_node_or_null("ComponentInspector")
-		if inspector:
-			inspector.visible = existing_builder.visible
 		return
 
 	var builder_ui_scene = load("res://core/ui/builder_ui.tscn")
@@ -335,12 +340,8 @@ func _on_builder_button_pressed():
 		print("Builder UI scene loaded")
 		var builder_ui = builder_ui_scene.instantiate()
 		builder_ui.name = "BuilderUI" # Ensure consistent name
-		add_child(builder_ui)
-		
-		# Open the component inspector automatically
-		var inspector = get_node_or_null("ComponentInspector")
-		if inspector:
-			inspector.visible = true
+		builder_ui.size_flags_vertical = Control.SIZE_EXPAND_FILL # Fill available space
+		left_container.add_child(builder_ui)
 		
 		# Check if BuilderManager exists (it should be an autoload)
 		if has_node("/root/BuilderManager"):

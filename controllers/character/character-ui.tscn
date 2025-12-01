@@ -14,12 +14,7 @@ mouse_filter = 1
 theme = ExtResource("1_v4hy0")
 script = ExtResource("1_iqqcr")
 
-[node name="PanelContainer" type="PanelContainer" parent="."]
-layout_mode = 0
-offset_right = 238.0
-offset_bottom = 116.0
-
-[node name="Help" type="VBoxContainer" parent="PanelContainer"]
+[node name="Help" type="VBoxContainer" parent="."]
 layout_mode = 2
 
 [node name="HeaderLabel" type="Label" parent="PanelContainer/Help"]
@@ -27,80 +22,80 @@ layout_mode = 2
 theme_type_variation = &"_section_header"
 text = "Character Controls"
 
-[node name="Move" type="Label" parent="PanelContainer/Help"]
+[node name="Move" type="Label" parent="Help"]
 layout_mode = 2
 text = "Move: WASD"
 
-[node name="Jump" type="Label" parent="PanelContainer/Help"]
+[node name="Jump" type="Label" parent="Help"]
 layout_mode = 2
 text = "Jump: Spacebar"
 
-[node name="Run" type="Label" parent="PanelContainer/Help"]
+[node name="Run" type="Label" parent="Help"]
 layout_mode = 2
 text = "Run: Shift"
 
-[node name="Release" type="Label" parent="PanelContainer/Help"]
+[node name="Release" type="Label" parent="Help"]
 layout_mode = 2
 text = "Release control: Backspace"
 
-[node name="CamRotate" type="Label" parent="PanelContainer/Help"]
+[node name="CamRotate" type="Label" parent="Help"]
 layout_mode = 2
 text = "Camera distance: -/+"
 
-[node name="CamDistance" type="Label" parent="PanelContainer/Help"]
+[node name="CamDistance" type="Label" parent="Help"]
 layout_mode = 2
 text = "Rotate camera: RMB or Arrows"
 
-[node name="HSeparator" type="HSeparator" parent="PanelContainer/Help"]
+[node name="HSeparator" type="HSeparator" parent="Help"]
 layout_mode = 2
 
-[node name="StatsContainer" type="GridContainer" parent="PanelContainer/Help"]
+[node name="StatsContainer" type="GridContainer" parent="Help"]
 layout_mode = 2
 columns = 2
 
-[node name="SpeedLabel" type="Label" parent="PanelContainer/Help/StatsContainer"]
+[node name="SpeedLabel" type="Label" parent="Help/StatsContainer"]
 layout_mode = 2
 size_flags_horizontal = 3
 text = "Speed:"
 
-[node name="SpeedValue" type="Label" parent="PanelContainer/Help/StatsContainer"]
+[node name="SpeedValue" type="Label" parent="Help/StatsContainer"]
 unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
 text = "0 m/s"
 
-[node name="PosLabel" type="Label" parent="PanelContainer/Help/StatsContainer"]
+[node name="PosLabel" type="Label" parent="Help/StatsContainer"]
 layout_mode = 2
 text = "Position:"
 
-[node name="PosValue" type="Label" parent="PanelContainer/Help/StatsContainer"]
+[node name="PosValue" type="Label" parent="Help/StatsContainer"]
 unique_name_in_owner = true
 layout_mode = 2
 text = "0, 0, 0"
 text_overrun_behavior = 3
 
-[node name="GravLabel" type="Label" parent="PanelContainer/Help/StatsContainer"]
+[node name="GravLabel" type="Label" parent="Help/StatsContainer"]
 layout_mode = 2
 text = "Gravity:"
 
-[node name="GravValue" type="Label" parent="PanelContainer/Help/StatsContainer"]
+[node name="GravValue" type="Label" parent="Help/StatsContainer"]
 unique_name_in_owner = true
 layout_mode = 2
 text = "1.625 m/s²"
 
-[node name="HSeparator2" type="HSeparator" parent="PanelContainer/Help"]
+[node name="HSeparator2" type="HSeparator" parent="Help"]
 layout_mode = 2
 
-[node name="ButtonsContainer" type="VBoxContainer" parent="PanelContainer/Help"]
+[node name="ButtonsContainer" type="VBoxContainer" parent="Help"]
 layout_mode = 2
 theme_override_constants/separation = 8
 
-[node name="ResetButton" type="Button" parent="PanelContainer/Help/ButtonsContainer"]
+[node name="ResetButton" type="Button" parent="Help/ButtonsContainer"]
 layout_mode = 2
 size_flags_horizontal = 4
 text = "Reset Camera"
 
-[node name="ReleaseControlButton" type="Button" parent="PanelContainer/Help/ButtonsContainer"]
+[node name="ReleaseControlButton" type="Button" parent="Help/ButtonsContainer"]
 layout_mode = 2
 size_flags_horizontal = 4
 text = "Release Control"

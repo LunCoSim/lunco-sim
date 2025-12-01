@@ -17,12 +17,7 @@ script = ExtResource("1_ayjnp")
 wait_time = 10.0
 one_shot = true
 
-[node name="PanelContainer" type="PanelContainer" parent="."]
-layout_mode = 0
-offset_right = 238.0
-offset_bottom = 116.0
-
-[node name="Help" type="VBoxContainer" parent="PanelContainer"]
+[node name="Help" type="VBoxContainer" parent="."]
 layout_mode = 2
 
 [node name="HeaderLabel" type="Label" parent="PanelContainer/Help"]
@@ -30,19 +25,19 @@ layout_mode = 2
 theme_type_variation = &"_section_header"
 text = "Spacecraft Controls"
 
-[node name="Thrust" type="Label" parent="PanelContainer/Help"]
+[node name="Thrust" type="Label" parent="Help"]
 layout_mode = 2
 text = "Thrust: Space"
 
-[node name="Orientation" type="Label" parent="PanelContainer/Help"]
+[node name="Orientation" type="Label" parent="Help"]
 layout_mode = 2
 text = "Torque: WASD"
 
-[node name="CamRotate" type="Label" parent="PanelContainer/Help"]
+[node name="CamRotate" type="Label" parent="Help"]
 layout_mode = 2
 text = "Camera distance: -/+"
 
-[node name="CamDistance" type="Label" parent="PanelContainer/Help"]
+[node name="CamDistance" type="Label" parent="Help"]
 layout_mode = 2
 text = "Rotate camera: RMB or Arrows"
 

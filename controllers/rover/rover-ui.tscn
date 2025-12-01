@@ -12,12 +12,7 @@ grow_vertical = 2
 mouse_filter = 1
 script = ExtResource("1_nqqus")
 
-[node name="PanelContainer" type="PanelContainer" parent="."]
-layout_mode = 0
-offset_right = 238.0
-offset_bottom = 116.0
-
-[node name="Help" type="VBoxContainer" parent="PanelContainer"]
+[node name="Help" type="VBoxContainer" parent="."]
 layout_mode = 2
 
 [node name="HeaderLabel" type="Label" parent="PanelContainer/Help"]
@@ -25,29 +20,29 @@ layout_mode = 2
 theme_type_variation = &"_section_header"
 text = "Rover Controls"
 
-[node name="Move" type="Label" parent="PanelContainer/Help"]
+[node name="Move" type="Label" parent="Help"]
 layout_mode = 2
 text = "Move: WASD"
 
-[node name="CamRotate" type="Label" parent="PanelContainer/Help"]
+[node name="CamRotate" type="Label" parent="Help"]
 layout_mode = 2
 text = "Camera distance: -/+"
 
-[node name="CamDistance" type="Label" parent="PanelContainer/Help"]
+[node name="CamDistance" type="Label" parent="Help"]
 layout_mode = 2
 text = "Rotate camera: RMB or Arrows"
 
-[node name="HSeparator" type="HSeparator" parent="PanelContainer/Help"]
+[node name="HSeparator" type="HSeparator" parent="Help"]
 layout_mode = 2
 
-[node name="SpeedLabel" type="Label" parent="PanelContainer/Help"]
+[node name="SpeedLabel" type="Label" parent="Help"]
 layout_mode = 2
 text = "Speed: 0 m/s"
 
-[node name="MotorLabel" type="Label" parent="PanelContainer/Help"]
+[node name="MotorLabel" type="Label" parent="Help"]
 layout_mode = 2
 text = "Motor: 0%"
 
-[node name="SteeringLabel" type="Label" parent="PanelContainer/Help"]
+[node name="SteeringLabel" type="Label" parent="Help"]
 layout_mode = 2
 text = "Steering: 0°"

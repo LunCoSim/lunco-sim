@@ -2,9 +2,9 @@ extends LCControllerUI
 
 # target is inherited from LCControllerUI (typed as LCRoverController)
 
-@onready var speed_label = $PanelContainer/Help/SpeedLabel
-@onready var steering_label = $PanelContainer/Help/SteeringLabel
-@onready var motor_label = $PanelContainer/Help/MotorLabel
+@onready var speed_label = $Help/SpeedLabel
+@onready var steering_label = $Help/SteeringLabel
+@onready var motor_label = $Help/MotorLabel
 
 # UI update throttling
 var update_timer := 0.0

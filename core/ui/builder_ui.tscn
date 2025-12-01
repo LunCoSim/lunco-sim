@@ -14,14 +14,12 @@ script = ExtResource("1_script")
 
 [node name="PanelContainer" type="PanelContainer" parent="."]
 layout_mode = 1
-anchors_preset = 11
-anchor_left = 1.0
+anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
-offset_left = -250.0
-offset_bottom = -310.0
-grow_horizontal = 0
+grow_horizontal = 2
 grow_vertical = 2
+theme_type_variation = &"PanelContainerOverlay"
 
 [node name="VBoxContainer" type="VBoxContainer" parent="PanelContainer"]
 layout_mode = 2

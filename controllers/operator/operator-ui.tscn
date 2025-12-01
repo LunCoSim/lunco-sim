@@ -10,12 +10,7 @@ mouse_filter = 1
 theme = ExtResource("2_ymcg3")
 script = ExtResource("1_unaak")
 
-[node name="PanelContainer" type="PanelContainer" parent="."]
-layout_mode = 0
-offset_right = 238.0
-offset_bottom = 116.0
-
-[node name="Help" type="VBoxContainer" parent="PanelContainer"]
+[node name="Help" type="VBoxContainer" parent="."]
 layout_mode = 2
 
 [node name="HeaderLabel" type="Label" parent="PanelContainer/Help"]
@@ -23,19 +18,19 @@ layout_mode = 2
 theme_type_variation = "_section_header"
 text = "Operator Controls"
 
-[node name="Orientation" type="Label" parent="PanelContainer/Help"]
+[node name="Orientation" type="Label" parent="Help"]
 layout_mode = 2
 text = "Move: WASDEQ"
 
-[node name="CamRotate" type="Label" parent="PanelContainer/Help"]
+[node name="CamRotate" type="Label" parent="Help"]
 layout_mode = 2
 text = "Camera distance: -/+"
 
-[node name="CamDistance" type="Label" parent="PanelContainer/Help"]
+[node name="CamDistance" type="Label" parent="Help"]
 layout_mode = 2
 text = "Rotate camera: RMB or Arrows"
 
-[node name="Spawn" type="Label" parent="PanelContainer/Help"]
+[node name="Spawn" type="Label" parent="Help"]
 layout_mode = 2
 text = "Spawn: click on terrain"
 
