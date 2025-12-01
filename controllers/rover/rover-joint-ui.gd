@@ -3,45 +3,43 @@ extends LCControllerUI
 ## UI for advanced rover joint control
 ## Shows individual wheel controls and drive mode selection
 
-@onready var speed_label = $PanelContainer/VBox/StatusPanel/GridContainer/SpeedValue
-@onready var mode_label = $PanelContainer/VBox/StatusPanel/GridContainer/ModeValue
-@onready var motor_value = $PanelContainer/VBox/StatusPanel/GridContainer/MotorValue
-@onready var steering_value = $PanelContainer/VBox/StatusPanel/GridContainer/SteeringValue
+@onready var speed_label = $StatusPanel/GridContainer/SpeedValue
+@onready var mode_label = $StatusPanel/GridContainer/ModeValue
+@onready var motor_value = $StatusPanel/GridContainer/MotorValue
+@onready var steering_value = $StatusPanel/GridContainer/SteeringValue
 
 # UI Container references
-@onready var panel_container = $PanelContainer
-@onready var vbox_container = $PanelContainer/VBox
-@onready var scroll_container = $PanelContainer/VBox/ScrollContainer
+@onready var scroll_container = $ScrollContainer
 
 # Drive mode controls
-@onready var mode_selector = $PanelContainer/VBox/ModePanel/VBox/HBox/ModeSelector
+@onready var mode_selector = $ModePanel/VBox/HBox/ModeSelector
 
 # Animation
 var resize_tween: Tween
 
 # Wheel control panels
-@onready var wheel_controls_container = $PanelContainer/VBox/ScrollContainer/WheelControlsPanel
-@onready var fl_motor_slider = $PanelContainer/VBox/ScrollContainer/WheelControlsPanel/FrontLeft/MotorSlider
-@onready var fl_brake_slider = $PanelContainer/VBox/ScrollContainer/WheelControlsPanel/FrontLeft/BrakeSlider
-@onready var fl_steering_slider = $PanelContainer/VBox/ScrollContainer/WheelControlsPanel/FrontLeft/SteeringSlider
+@onready var wheel_controls_container = $ScrollContainer/WheelControlsPanel
+@onready var fl_motor_slider = $ScrollContainer/WheelControlsPanel/FrontLeft/MotorSlider
+@onready var fl_brake_slider = $ScrollContainer/WheelControlsPanel/FrontLeft/BrakeSlider
+@onready var fl_steering_slider = $ScrollContainer/WheelControlsPanel/FrontLeft/SteeringSlider
 
-@onready var fr_motor_slider = $PanelContainer/VBox/ScrollContainer/WheelControlsPanel/FrontRight/MotorSlider
-@onready var fr_brake_slider = $PanelContainer/VBox/ScrollContainer/WheelControlsPanel/FrontRight/BrakeSlider
-@onready var fr_steering_slider = $PanelContainer/VBox/ScrollContainer/WheelControlsPanel/FrontRight/SteeringSlider
+@onready var fr_motor_slider = $ScrollContainer/WheelControlsPanel/FrontRight/MotorSlider
+@onready var fr_brake_slider = $ScrollContainer/WheelControlsPanel/FrontRight/BrakeSlider
+@onready var fr_steering_slider = $ScrollContainer/WheelControlsPanel/FrontRight/SteeringSlider
 
-@onready var bl_motor_slider = $PanelContainer/VBox/ScrollContainer/WheelControlsPanel/BackLeft/MotorSlider
-@onready var bl_brake_slider = $PanelContainer/VBox/ScrollContainer/WheelControlsPanel/BackLeft/BrakeSlider
-@onready var bl_steering_slider = $PanelContainer/VBox/ScrollContainer/WheelControlsPanel/BackLeft/SteeringSlider
+@onready var bl_motor_slider = $ScrollContainer/WheelControlsPanel/BackLeft/MotorSlider
+@onready var bl_brake_slider = $ScrollContainer/WheelControlsPanel/BackLeft/BrakeSlider
+@onready var bl_steering_slider = $ScrollContainer/WheelControlsPanel/BackLeft/SteeringSlider
 
-@onready var br_motor_slider = $PanelContainer/VBox/ScrollContainer/WheelControlsPanel/BackRight/MotorSlider
-@onready var br_brake_slider = $PanelContainer/VBox/ScrollContainer/WheelControlsPanel/BackRight/BrakeSlider
-@onready var br_steering_slider = $PanelContainer/VBox/ScrollContainer/WheelControlsPanel/BackRight/SteeringSlider
+@onready var br_motor_slider = $ScrollContainer/WheelControlsPanel/BackRight/MotorSlider
+@onready var br_brake_slider = $ScrollContainer/WheelControlsPanel/BackRight/BrakeSlider
+@onready var br_steering_slider = $ScrollContainer/WheelControlsPanel/BackRight/SteeringSlider
 
 # Telemetry labels
-@onready var fl_rpm_label = $PanelContainer/VBox/ScrollContainer/WheelControlsPanel/FrontLeft/RPMLabel
-@onready var fr_rpm_label = $PanelContainer/VBox/ScrollContainer/WheelControlsPanel/FrontRight/RPMLabel
-@onready var bl_rpm_label = $PanelContainer/VBox/ScrollContainer/WheelControlsPanel/BackLeft/RPMLabel
-@onready var br_rpm_label = $PanelContainer/VBox/ScrollContainer/WheelControlsPanel/BackRight/RPMLabel
+@onready var fl_rpm_label = $ScrollContainer/WheelControlsPanel/FrontLeft/RPMLabel
+@onready var fr_rpm_label = $ScrollContainer/WheelControlsPanel/FrontRight/RPMLabel
+@onready var bl_rpm_label = $ScrollContainer/WheelControlsPanel/BackLeft/RPMLabel
+@onready var br_rpm_label = $ScrollContainer/WheelControlsPanel/BackRight/RPMLabel
 
 var drive_modes = ["Standard", "Ackermann", "Differential", "Independent"]
 
@@ -120,30 +118,13 @@ func _update_mode_display():
 
 func _update_wheel_controls_visibility():
 	"""Show/hide individual wheel controls based on mode"""
-	if not scroll_container or not panel_container:
+	if not scroll_container:
 		return
 	
 	var show_individual = target and target.enable_individual_control and target.drive_mode == 3
 	
 	# Change visibility of the ScrollContainer itself
 	scroll_container.visible = show_individual
-	
-	if show_individual:
-		# MAXIMIZE: Explicitly set minimum height to fill screen
-		var viewport_height = get_viewport_rect().size.y
-		var target_height = viewport_height - 100.0 # 20px margin
-		panel_container.custom_minimum_size.y = target_height
-	else:
-		# MINIMIZE: Reset minimum height to allow auto-shrink
-		panel_container.custom_minimum_size.y = 0.0
-	
-	# Force layout update
-	if vbox_container:
-		vbox_container.queue_sort()
-	
-	# Reset size to ensure it recalculates correctly
-	panel_container.size = Vector2.ZERO
-	panel_container.reset_size()
 
 func _update_wheel_telemetry():
 	"""Update wheel telemetry displays"""

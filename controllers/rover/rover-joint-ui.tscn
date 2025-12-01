@@ -2,281 +2,267 @@
 
 [ext_resource type="Script" uid="uid://wl7ymfvfa5fq" path="res://controllers/rover/rover-joint-ui.gd" id="1"]
 
-[node name="RoverJointUI" type="Control" unique_id=1559803848]
-layout_mode = 3
-anchors_preset = 15
-anchor_right = 1.0
-anchor_bottom = 1.0
-grow_horizontal = 2
-grow_vertical = 2
-mouse_filter = 2
+[node name="RoverJointUI" type="VBoxContainer" unique_id=1559803848]
+layout_mode = 2
 script = ExtResource("1")
 
-[node name="PanelContainer" type="PanelContainer" parent="." unique_id=917030152]
-custom_minimum_size = Vector2(400, 0)
-layout_mode = 0
-offset_left = 10.0
-offset_top = 10.0
-offset_right = 410.0
-size_flags_vertical = 0
-
-[node name="VBox" type="VBoxContainer" parent="PanelContainer" unique_id=1144542463]
-layout_mode = 2
-
-[node name="Title" type="Label" parent="PanelContainer/VBox" unique_id=1516478101]
+[node name="Title" type="Label" parent="." unique_id=1516478101]
 layout_mode = 2
 text = "Rover Joint Control"
 horizontal_alignment = 1
 
-[node name="HSeparator" type="HSeparator" parent="PanelContainer/VBox" unique_id=1062435499]
+[node name="HSeparator" type="HSeparator" parent="." unique_id=1062435499]
 layout_mode = 2
 
-[node name="StatusPanel" type="PanelContainer" parent="PanelContainer/VBox" unique_id=481321501]
+[node name="StatusPanel" type="PanelContainer" parent="." unique_id=481321501]
 layout_mode = 2
 
-[node name="GridContainer" type="GridContainer" parent="PanelContainer/VBox/StatusPanel" unique_id=582626594]
+[node name="GridContainer" type="GridContainer" parent="StatusPanel" unique_id=582626594]
 layout_mode = 2
 columns = 2
 
-[node name="SpeedLabel" type="Label" parent="PanelContainer/VBox/StatusPanel/GridContainer" unique_id=1902412547]
+[node name="SpeedLabel" type="Label" parent="StatusPanel/GridContainer" unique_id=1902412547]
 layout_mode = 2
 text = "Speed:"
 
-[node name="SpeedValue" type="Label" parent="PanelContainer/VBox/StatusPanel/GridContainer" unique_id=2000664850]
+[node name="SpeedValue" type="Label" parent="StatusPanel/GridContainer" unique_id=2000664850]
 layout_mode = 2
 text = "0.0 m/s"
 
-[node name="ModeLabel" type="Label" parent="PanelContainer/VBox/StatusPanel/GridContainer" unique_id=557975186]
+[node name="ModeLabel" type="Label" parent="StatusPanel/GridContainer" unique_id=557975186]
 layout_mode = 2
 text = "Drive Mode:"
 
-[node name="ModeValue" type="Label" parent="PanelContainer/VBox/StatusPanel/GridContainer" unique_id=1732911012]
+[node name="ModeValue" type="Label" parent="StatusPanel/GridContainer" unique_id=1732911012]
 layout_mode = 2
 text = "Differential"
 
-[node name="MotorLabel" type="Label" parent="PanelContainer/VBox/StatusPanel/GridContainer" unique_id=889540212]
+[node name="MotorLabel" type="Label" parent="StatusPanel/GridContainer" unique_id=889540212]
 layout_mode = 2
 text = "Motor:"
 
-[node name="MotorValue" type="Label" parent="PanelContainer/VBox/StatusPanel/GridContainer" unique_id=665114472]
+[node name="MotorValue" type="Label" parent="StatusPanel/GridContainer" unique_id=665114472]
 layout_mode = 2
 text = "0%"
 
-[node name="SteeringLabel" type="Label" parent="PanelContainer/VBox/StatusPanel/GridContainer" unique_id=1762848089]
+[node name="SteeringLabel" type="Label" parent="StatusPanel/GridContainer" unique_id=1762848089]
 layout_mode = 2
 text = "Steering:"
 
-[node name="SteeringValue" type="Label" parent="PanelContainer/VBox/StatusPanel/GridContainer" unique_id=159213287]
+[node name="SteeringValue" type="Label" parent="StatusPanel/GridContainer" unique_id=159213287]
 layout_mode = 2
 text = "0.00"
 
-[node name="HSeparator2" type="HSeparator" parent="PanelContainer/VBox" unique_id=1204049018]
+[node name="HSeparator2" type="HSeparator" parent="." unique_id=1204049018]
 layout_mode = 2
 
-[node name="ModePanel" type="PanelContainer" parent="PanelContainer/VBox" unique_id=663837835]
+[node name="ModePanel" type="PanelContainer" parent="." unique_id=663837835]
 layout_mode = 2
 
-[node name="VBox" type="VBoxContainer" parent="PanelContainer/VBox/ModePanel" unique_id=1775023887]
+[node name="VBox" type="VBoxContainer" parent="ModePanel" unique_id=1775023887]
 layout_mode = 2
 
-[node name="Label" type="Label" parent="PanelContainer/VBox/ModePanel/VBox" unique_id=1025611554]
+[node name="Label" type="Label" parent="ModePanel/VBox" unique_id=1025611554]
 layout_mode = 2
 theme_type_variation = &"HeaderSmall"
 text = "DRIVE MODE"
 horizontal_alignment = 1
 
-[node name="HBox" type="HBoxContainer" parent="PanelContainer/VBox/ModePanel/VBox" unique_id=1304768439]
+[node name="HBox" type="HBoxContainer" parent="ModePanel/VBox" unique_id=1304768439]
 layout_mode = 2
 
-[node name="ModeSelector" type="OptionButton" parent="PanelContainer/VBox/ModePanel/VBox/HBox" unique_id=212080724]
+[node name="ModeSelector" type="OptionButton" parent="ModePanel/VBox/HBox" unique_id=212080724]
 layout_mode = 2
 size_flags_horizontal = 3
 
-[node name="HSeparator3" type="HSeparator" parent="PanelContainer/VBox" unique_id=1528598707]
+[node name="HSeparator3" type="HSeparator" parent="." unique_id=1528598707]
 layout_mode = 2
 
-[node name="ScrollContainer" type="ScrollContainer" parent="PanelContainer/VBox" unique_id=854433091]
+[node name="ScrollContainer" type="ScrollContainer" parent="." unique_id=854433091]
+visible = false
+custom_minimum_size = Vector2(0, 200)
 layout_mode = 2
 size_flags_vertical = 3
 
-[node name="WheelControlsPanel" type="VBoxContainer" parent="PanelContainer/VBox/ScrollContainer" unique_id=1103847777]
+[node name="WheelControlsPanel" type="VBoxContainer" parent="ScrollContainer" unique_id=1103847777]
 layout_mode = 2
+size_flags_horizontal = 3
 
-[node name="WheelControlsLabel" type="Label" parent="PanelContainer/VBox/ScrollContainer/WheelControlsPanel" unique_id=358406405]
+[node name="WheelControlsLabel" type="Label" parent="ScrollContainer/WheelControlsPanel" unique_id=358406405]
 layout_mode = 2
 text = "Individual Wheel Controls"
 horizontal_alignment = 1
 
-[node name="FrontLeft" type="VBoxContainer" parent="PanelContainer/VBox/ScrollContainer/WheelControlsPanel" unique_id=1343868675]
+[node name="FrontLeft" type="VBoxContainer" parent="ScrollContainer/WheelControlsPanel" unique_id=1343868675]
 layout_mode = 2
 
-[node name="Label" type="Label" parent="PanelContainer/VBox/ScrollContainer/WheelControlsPanel/FrontLeft" unique_id=1429774095]
+[node name="Label" type="Label" parent="ScrollContainer/WheelControlsPanel/FrontLeft" unique_id=1429774095]
 layout_mode = 2
 text = "Front Left Wheel"
 
-[node name="MotorLabel" type="Label" parent="PanelContainer/VBox/ScrollContainer/WheelControlsPanel/FrontLeft" unique_id=1289099870]
+[node name="MotorLabel" type="Label" parent="ScrollContainer/WheelControlsPanel/FrontLeft" unique_id=1289099870]
 layout_mode = 2
 text = "Motor:"
 
-[node name="MotorSlider" type="HSlider" parent="PanelContainer/VBox/ScrollContainer/WheelControlsPanel/FrontLeft" unique_id=1977012666]
+[node name="MotorSlider" type="HSlider" parent="ScrollContainer/WheelControlsPanel/FrontLeft" unique_id=1977012666]
 layout_mode = 2
 min_value = -1.0
 max_value = 1.0
 step = 0.01
 
-[node name="BrakeLabel" type="Label" parent="PanelContainer/VBox/ScrollContainer/WheelControlsPanel/FrontLeft" unique_id=1471304534]
+[node name="BrakeLabel" type="Label" parent="ScrollContainer/WheelControlsPanel/FrontLeft" unique_id=1471304534]
 layout_mode = 2
 text = "Brake:"
 
-[node name="BrakeSlider" type="HSlider" parent="PanelContainer/VBox/ScrollContainer/WheelControlsPanel/FrontLeft" unique_id=1845242714]
+[node name="BrakeSlider" type="HSlider" parent="ScrollContainer/WheelControlsPanel/FrontLeft" unique_id=1845242714]
 layout_mode = 2
 max_value = 1.0
 step = 0.01
 
-[node name="SteeringLabel" type="Label" parent="PanelContainer/VBox/ScrollContainer/WheelControlsPanel/FrontLeft" unique_id=1432241012]
+[node name="SteeringLabel" type="Label" parent="ScrollContainer/WheelControlsPanel/FrontLeft" unique_id=1432241012]
 layout_mode = 2
 text = "Steering:"
 
-[node name="SteeringSlider" type="HSlider" parent="PanelContainer/VBox/ScrollContainer/WheelControlsPanel/FrontLeft" unique_id=1358752105]
+[node name="SteeringSlider" type="HSlider" parent="ScrollContainer/WheelControlsPanel/FrontLeft" unique_id=1358752105]
 layout_mode = 2
 min_value = -1.0
 max_value = 1.0
 step = 0.01
 
-[node name="RPMLabel" type="Label" parent="PanelContainer/VBox/ScrollContainer/WheelControlsPanel/FrontLeft" unique_id=923920231]
+[node name="RPMLabel" type="Label" parent="ScrollContainer/WheelControlsPanel/FrontLeft" unique_id=923920231]
 layout_mode = 2
 text = "RPM: 0"
 
-[node name="FrontRight" type="VBoxContainer" parent="PanelContainer/VBox/ScrollContainer/WheelControlsPanel" unique_id=919975169]
+[node name="FrontRight" type="VBoxContainer" parent="ScrollContainer/WheelControlsPanel" unique_id=919975169]
 layout_mode = 2
 
-[node name="Label" type="Label" parent="PanelContainer/VBox/ScrollContainer/WheelControlsPanel/FrontRight" unique_id=1500122137]
+[node name="Label" type="Label" parent="ScrollContainer/WheelControlsPanel/FrontRight" unique_id=1500122137]
 layout_mode = 2
 text = "Front Right Wheel"
 
-[node name="MotorLabel" type="Label" parent="PanelContainer/VBox/ScrollContainer/WheelControlsPanel/FrontRight" unique_id=401402626]
+[node name="MotorLabel" type="Label" parent="ScrollContainer/WheelControlsPanel/FrontRight" unique_id=401402626]
 layout_mode = 2
 text = "Motor:"
 
-[node name="MotorSlider" type="HSlider" parent="PanelContainer/VBox/ScrollContainer/WheelControlsPanel/FrontRight" unique_id=156530793]
+[node name="MotorSlider" type="HSlider" parent="ScrollContainer/WheelControlsPanel/FrontRight" unique_id=156530793]
 layout_mode = 2
 min_value = -1.0
 max_value = 1.0
 step = 0.01
 
-[node name="BrakeLabel" type="Label" parent="PanelContainer/VBox/ScrollContainer/WheelControlsPanel/FrontRight" unique_id=1860606879]
+[node name="BrakeLabel" type="Label" parent="ScrollContainer/WheelControlsPanel/FrontRight" unique_id=1860606879]
 layout_mode = 2
 text = "Brake:"
 
-[node name="BrakeSlider" type="HSlider" parent="PanelContainer/VBox/ScrollContainer/WheelControlsPanel/FrontRight" unique_id=500214439]
+[node name="BrakeSlider" type="HSlider" parent="ScrollContainer/WheelControlsPanel/FrontRight" unique_id=500214439]
 layout_mode = 2
 max_value = 1.0
 step = 0.01
 
-[node name="SteeringLabel" type="Label" parent="PanelContainer/VBox/ScrollContainer/WheelControlsPanel/FrontRight" unique_id=413299210]
+[node name="SteeringLabel" type="Label" parent="ScrollContainer/WheelControlsPanel/FrontRight" unique_id=413299210]
 layout_mode = 2
 text = "Steering:"
 
-[node name="SteeringSlider" type="HSlider" parent="PanelContainer/VBox/ScrollContainer/WheelControlsPanel/FrontRight" unique_id=1023401115]
+[node name="SteeringSlider" type="HSlider" parent="ScrollContainer/WheelControlsPanel/FrontRight" unique_id=1023401115]
 layout_mode = 2
 min_value = -1.0
 max_value = 1.0
 step = 0.01
 
-[node name="RPMLabel" type="Label" parent="PanelContainer/VBox/ScrollContainer/WheelControlsPanel/FrontRight" unique_id=2116907318]
+[node name="RPMLabel" type="Label" parent="ScrollContainer/WheelControlsPanel/FrontRight" unique_id=2116907318]
 layout_mode = 2
 text = "RPM: 0"
 
-[node name="BackLeft" type="VBoxContainer" parent="PanelContainer/VBox/ScrollContainer/WheelControlsPanel" unique_id=1266250505]
+[node name="BackLeft" type="VBoxContainer" parent="ScrollContainer/WheelControlsPanel" unique_id=1266250505]
 layout_mode = 2
 
-[node name="Label" type="Label" parent="PanelContainer/VBox/ScrollContainer/WheelControlsPanel/BackLeft" unique_id=1047637945]
+[node name="Label" type="Label" parent="ScrollContainer/WheelControlsPanel/BackLeft" unique_id=1047637945]
 layout_mode = 2
 text = "Back Left Wheel"
 
-[node name="MotorLabel" type="Label" parent="PanelContainer/VBox/ScrollContainer/WheelControlsPanel/BackLeft" unique_id=366765796]
+[node name="MotorLabel" type="Label" parent="ScrollContainer/WheelControlsPanel/BackLeft" unique_id=366765796]
 layout_mode = 2
 text = "Motor:"
 
-[node name="MotorSlider" type="HSlider" parent="PanelContainer/VBox/ScrollContainer/WheelControlsPanel/BackLeft" unique_id=336509692]
+[node name="MotorSlider" type="HSlider" parent="ScrollContainer/WheelControlsPanel/BackLeft" unique_id=336509692]
 layout_mode = 2
 min_value = -1.0
 max_value = 1.0
 step = 0.01
 
-[node name="BrakeLabel" type="Label" parent="PanelContainer/VBox/ScrollContainer/WheelControlsPanel/BackLeft" unique_id=2146514712]
+[node name="BrakeLabel" type="Label" parent="ScrollContainer/WheelControlsPanel/BackLeft" unique_id=2146514712]
 layout_mode = 2
 text = "Brake:"
 
-[node name="BrakeSlider" type="HSlider" parent="PanelContainer/VBox/ScrollContainer/WheelControlsPanel/BackLeft" unique_id=1445544619]
+[node name="BrakeSlider" type="HSlider" parent="ScrollContainer/WheelControlsPanel/BackLeft" unique_id=1445544619]
 layout_mode = 2
 max_value = 1.0
 step = 0.01
 
-[node name="SteeringLabel" type="Label" parent="PanelContainer/VBox/ScrollContainer/WheelControlsPanel/BackLeft" unique_id=179638020]
+[node name="SteeringLabel" type="Label" parent="ScrollContainer/WheelControlsPanel/BackLeft" unique_id=179638020]
 layout_mode = 2
 text = "Steering:"
 
-[node name="SteeringSlider" type="HSlider" parent="PanelContainer/VBox/ScrollContainer/WheelControlsPanel/BackLeft" unique_id=903373809]
+[node name="SteeringSlider" type="HSlider" parent="ScrollContainer/WheelControlsPanel/BackLeft" unique_id=903373809]
 layout_mode = 2
 min_value = -1.0
 max_value = 1.0
 step = 0.01
 
-[node name="RPMLabel" type="Label" parent="PanelContainer/VBox/ScrollContainer/WheelControlsPanel/BackLeft" unique_id=1017187680]
+[node name="RPMLabel" type="Label" parent="ScrollContainer/WheelControlsPanel/BackLeft" unique_id=1017187680]
 layout_mode = 2
 text = "RPM: 0"
 
-[node name="BackRight" type="VBoxContainer" parent="PanelContainer/VBox/ScrollContainer/WheelControlsPanel" unique_id=732749245]
+[node name="BackRight" type="VBoxContainer" parent="ScrollContainer/WheelControlsPanel" unique_id=732749245]
 layout_mode = 2
 
-[node name="Label" type="Label" parent="PanelContainer/VBox/ScrollContainer/WheelControlsPanel/BackRight" unique_id=394488985]
+[node name="Label" type="Label" parent="ScrollContainer/WheelControlsPanel/BackRight" unique_id=394488985]
 layout_mode = 2
 text = "Back Right Wheel"
 
-[node name="MotorLabel" type="Label" parent="PanelContainer/VBox/ScrollContainer/WheelControlsPanel/BackRight" unique_id=806450367]
+[node name="MotorLabel" type="Label" parent="ScrollContainer/WheelControlsPanel/BackRight" unique_id=806450367]
 layout_mode = 2
 text = "Motor:"
 
-[node name="MotorSlider" type="HSlider" parent="PanelContainer/VBox/ScrollContainer/WheelControlsPanel/BackRight" unique_id=1198926014]
+[node name="MotorSlider" type="HSlider" parent="ScrollContainer/WheelControlsPanel/BackRight" unique_id=1198926014]
 layout_mode = 2
 min_value = -1.0
 max_value = 1.0
 step = 0.01
 
-[node name="BrakeLabel" type="Label" parent="PanelContainer/VBox/ScrollContainer/WheelControlsPanel/BackRight" unique_id=497499939]
+[node name="BrakeLabel" type="Label" parent="ScrollContainer/WheelControlsPanel/BackRight" unique_id=497499939]
 layout_mode = 2
 text = "Brake:"
 
-[node name="BrakeSlider" type="HSlider" parent="PanelContainer/VBox/ScrollContainer/WheelControlsPanel/BackRight" unique_id=924125677]
+[node name="BrakeSlider" type="HSlider" parent="ScrollContainer/WheelControlsPanel/BackRight" unique_id=924125677]
 layout_mode = 2
 max_value = 1.0
 step = 0.01
 
-[node name="SteeringLabel" type="Label" parent="PanelContainer/VBox/ScrollContainer/WheelControlsPanel/BackRight" unique_id=64267867]
+[node name="SteeringLabel" type="Label" parent="ScrollContainer/WheelControlsPanel/BackRight" unique_id=64267867]
 layout_mode = 2
 text = "Steering:"
 
-[node name="SteeringSlider" type="HSlider" parent="PanelContainer/VBox/ScrollContainer/WheelControlsPanel/BackRight" unique_id=30629531]
+[node name="SteeringSlider" type="HSlider" parent="ScrollContainer/WheelControlsPanel/BackRight" unique_id=30629531]
 layout_mode = 2
 min_value = -1.0
 max_value = 1.0
 step = 0.01
 
-[node name="RPMLabel" type="Label" parent="PanelContainer/VBox/ScrollContainer/WheelControlsPanel/BackRight" unique_id=72373166]
+[node name="RPMLabel" type="Label" parent="ScrollContainer/WheelControlsPanel/BackRight" unique_id=72373166]
 layout_mode = 2
 text = "RPM: 0"
 
-[connection signal="item_selected" from="PanelContainer/VBox/ModePanel/VBox/HBox/ModeSelector" to="." method="_on_mode_selector_item_selected"]
-[connection signal="value_changed" from="PanelContainer/VBox/ScrollContainer/WheelControlsPanel/FrontLeft/MotorSlider" to="." method="_on_fl_motor_slider_value_changed"]
-[connection signal="value_changed" from="PanelContainer/VBox/ScrollContainer/WheelControlsPanel/FrontLeft/BrakeSlider" to="." method="_on_fl_brake_slider_value_changed"]
-[connection signal="value_changed" from="PanelContainer/VBox/ScrollContainer/WheelControlsPanel/FrontLeft/SteeringSlider" to="." method="_on_fl_steering_slider_value_changed"]
-[connection signal="value_changed" from="PanelContainer/VBox/ScrollContainer/WheelControlsPanel/FrontRight/MotorSlider" to="." method="_on_fr_motor_slider_value_changed"]
-[connection signal="value_changed" from="PanelContainer/VBox/ScrollContainer/WheelControlsPanel/FrontRight/BrakeSlider" to="." method="_on_fr_brake_slider_value_changed"]
-[connection signal="value_changed" from="PanelContainer/VBox/ScrollContainer/WheelControlsPanel/FrontRight/SteeringSlider" to="." method="_on_fr_steering_slider_value_changed"]
-[connection signal="value_changed" from="PanelContainer/VBox/ScrollContainer/WheelControlsPanel/BackLeft/MotorSlider" to="." method="_on_bl_motor_slider_value_changed"]
-[connection signal="value_changed" from="PanelContainer/VBox/ScrollContainer/WheelControlsPanel/BackLeft/BrakeSlider" to="." method="_on_bl_brake_slider_value_changed"]
-[connection signal="value_changed" from="PanelContainer/VBox/ScrollContainer/WheelControlsPanel/BackLeft/SteeringSlider" to="." method="_on_bl_steering_slider_value_changed"]
-[connection signal="value_changed" from="PanelContainer/VBox/ScrollContainer/WheelControlsPanel/BackRight/MotorSlider" to="." method="_on_br_motor_slider_value_changed"]
-[connection signal="value_changed" from="PanelContainer/VBox/ScrollContainer/WheelControlsPanel/BackRight/BrakeSlider" to="." method="_on_br_brake_slider_value_changed"]
-[connection signal="value_changed" from="PanelContainer/VBox/ScrollContainer/WheelControlsPanel/BackRight/SteeringSlider" to="." method="_on_br_steering_slider_value_changed"]
+[connection signal="item_selected" from="ModePanel/VBox/HBox/ModeSelector" to="." method="_on_mode_selector_item_selected"]
+[connection signal="value_changed" from="ScrollContainer/WheelControlsPanel/FrontLeft/MotorSlider" to="." method="_on_fl_motor_slider_value_changed"]
+[connection signal="value_changed" from="ScrollContainer/WheelControlsPanel/FrontLeft/BrakeSlider" to="." method="_on_fl_brake_slider_value_changed"]
+[connection signal="value_changed" from="ScrollContainer/WheelControlsPanel/FrontLeft/SteeringSlider" to="." method="_on_fl_steering_slider_value_changed"]
+[connection signal="value_changed" from="ScrollContainer/WheelControlsPanel/FrontRight/MotorSlider" to="." method="_on_fr_motor_slider_value_changed"]
+[connection signal="value_changed" from="ScrollContainer/WheelControlsPanel/FrontRight/BrakeSlider" to="." method="_on_fr_brake_slider_value_changed"]
+[connection signal="value_changed" from="ScrollContainer/WheelControlsPanel/FrontRight/SteeringSlider" to="." method="_on_fr_steering_slider_value_changed"]
+[connection signal="value_changed" from="ScrollContainer/WheelControlsPanel/BackLeft/MotorSlider" to="." method="_on_bl_motor_slider_value_changed"]
+[connection signal="value_changed" from="ScrollContainer/WheelControlsPanel/BackLeft/BrakeSlider" to="." method="_on_bl_brake_slider_value_changed"]
+[connection signal="value_changed" from="ScrollContainer/WheelControlsPanel/BackLeft/SteeringSlider" to="." method="_on_bl_steering_slider_value_changed"]
+[connection signal="value_changed" from="ScrollContainer/WheelControlsPanel/BackRight/MotorSlider" to="." method="_on_br_motor_slider_value_changed"]
+[connection signal="value_changed" from="ScrollContainer/WheelControlsPanel/BackRight/BrakeSlider" to="." method="_on_br_brake_slider_value_changed"]
+[connection signal="value_changed" from="ScrollContainer/WheelControlsPanel/BackRight/SteeringSlider" to="." method="_on_br_steering_slider_value_changed"]

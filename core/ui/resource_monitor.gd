@@ -18,12 +18,15 @@ func _ready():
 	
 	# Title for the section
 	var title_label = Label.new()
+	title_label.name = "HeaderTitle"
 	title_label.text = "Resources"
 	title_label.add_theme_font_size_override("font_size", 16)
 	title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	container.add_child(title_label)
 	
-	container.add_child(HSeparator.new())
+	var sep = HSeparator.new()
+	sep.name = "HeaderSeparator"
+	container.add_child(sep)
 	
 	# Auto-find vehicle if path set
 	if vehicle_path:
@@ -60,7 +63,7 @@ func _on_entity_selected(entity):
 func _rebuild_ui():
 	# Clear existing bars
 	for child in container.get_children():
-		if child is HBoxContainer or child is Label and child.name == "NoVehicleLabel": # Resource rows or placeholder
+		if child.name != "HeaderTitle" and child.name != "HeaderSeparator":
 			child.queue_free()
 	resource_bars.clear()
 	
