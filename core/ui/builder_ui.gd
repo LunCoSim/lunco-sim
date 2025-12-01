@@ -1,7 +1,7 @@
-extends Control
+extends PanelContainer
 
-@onready var part_list = $PanelContainer/VBoxContainer/ScrollContainer/PartList
-@onready var label = $PanelContainer/VBoxContainer/Label
+@onready var part_list = $VBoxContainer/ScrollContainer/PartList
+@onready var label = $VBoxContainer/Label
 
 var selected_button: Button = null
 

@@ -3,34 +3,29 @@
 [ext_resource type="Script" path="res://controllers/operator/operator-ui.gd" id="1_unaak"]
 [ext_resource type="Theme" uid="uid://hve1e7mnexbi" path="res://themes/theme.tres" id="2_ymcg3"]
 
-[node name="OperatorUI" type="Control"]
-layout_mode = 3
-anchors_preset = 0
-mouse_filter = 1
+[node name="OperatorUI" type="VBoxContainer"]
+layout_mode = 2
 theme = ExtResource("2_ymcg3")
 script = ExtResource("1_unaak")
 
-[node name="Help" type="VBoxContainer" parent="."]
-layout_mode = 2
-
-[node name="HeaderLabel" type="Label" parent="PanelContainer/Help"]
+[node name="HeaderLabel" type="Label" parent="."]
 layout_mode = 2
 theme_type_variation = "_section_header"
 text = "Operator Controls"
 
-[node name="Orientation" type="Label" parent="Help"]
+[node name="Orientation" type="Label" parent="."]
 layout_mode = 2
 text = "Move: WASDEQ"
 
-[node name="CamRotate" type="Label" parent="Help"]
+[node name="CamRotate" type="Label" parent="."]
 layout_mode = 2
 text = "Camera distance: -/+"
 
-[node name="CamDistance" type="Label" parent="Help"]
+[node name="CamDistance" type="Label" parent="."]
 layout_mode = 2
 text = "Rotate camera: RMB or Arrows"
 
-[node name="Spawn" type="Label" parent="Help"]
+[node name="Spawn" type="Label" parent="."]
 layout_mode = 2
 text = "Spawn: click on terrain"
 

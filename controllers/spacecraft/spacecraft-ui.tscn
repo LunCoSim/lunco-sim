@@ -3,41 +3,32 @@
 [ext_resource type="Script" uid="uid://ckhpijad7chx3" path="res://controllers/spacecraft/spacecraft-ui.gd" id="1_ayjnp"]
 [ext_resource type="PackedScene" uid="uid://c7ydipd3dui4p" path="res://core/widgets/help-spacecraft.tscn" id="2_l0a07"]
 
-[node name="SpacecraftUI5" type="Control" unique_id=288646867]
-layout_mode = 3
-anchors_preset = 15
-anchor_right = 1.0
-anchor_bottom = 1.0
-grow_horizontal = 2
-grow_vertical = 2
-mouse_filter = 1
+[node name="SpacecraftUI5" type="VBoxContainer" unique_id=288646867]
+layout_mode = 2
 script = ExtResource("1_ayjnp")
 
 [node name="HideControls" type="Timer" parent="." unique_id=1929934624]
 wait_time = 10.0
 one_shot = true
 
-[node name="Help" type="VBoxContainer" parent="."]
-layout_mode = 2
-
-[node name="HeaderLabel" type="Label" parent="PanelContainer/Help"]
+[node name="HeaderLabel" type="Label" parent="."]
 layout_mode = 2
 theme_type_variation = &"_section_header"
 text = "Spacecraft Controls"
 
-[node name="Thrust" type="Label" parent="Help"]
+[node name="Thrust" type="Label" parent="."]
 layout_mode = 2
 text = "Thrust: Space"
 
-[node name="Orientation" type="Label" parent="Help"]
+[node name="Orientation" type="Label" parent="."]
 layout_mode = 2
 text = "Torque: WASD"
 
-[node name="CamRotate" type="Label" parent="Help"]
+[node name="CamRotate" type="Label" parent="."]
 layout_mode = 2
 text = "Camera distance: -/+"
 
-[node name="CamDistance" type="Label" parent="Help"]
+[node name="CamDistance" type="Label" parent="."]
 layout_mode = 2
 text = "Rotate camera: RMB or Arrows"
 

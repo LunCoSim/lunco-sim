@@ -2,50 +2,38 @@
 
 [ext_resource type="Script" path="res://core/ui/builder_ui.gd" id="1_script"]
 
-[node name="BuilderUI" type="Control"]
-layout_mode = 3
-anchors_preset = 15
-anchor_right = 1.0
-anchor_bottom = 1.0
-grow_horizontal = 2
-grow_vertical = 2
-mouse_filter = 2
+[node name="BuilderUI" type="PanelContainer"]
+custom_minimum_size = Vector2(280, 400)
+layout_mode = 2
+size_flags_vertical = 3
+theme_type_variation = &"PanelContainerOverlay"
 script = ExtResource("1_script")
 
-[node name="PanelContainer" type="PanelContainer" parent="."]
-layout_mode = 1
-anchors_preset = 15
-anchor_right = 1.0
-anchor_bottom = 1.0
-grow_horizontal = 2
-grow_vertical = 2
-theme_type_variation = &"PanelContainerOverlay"
-
-[node name="VBoxContainer" type="VBoxContainer" parent="PanelContainer"]
+[node name="VBoxContainer" type="VBoxContainer" parent="."]
 layout_mode = 2
 
-[node name="Label" type="Label" parent="PanelContainer/VBoxContainer"]
+[node name="Label" type="Label" parent="VBoxContainer"]
 layout_mode = 2
 text = "Mission Builder"
 horizontal_alignment = 1
 
-[node name="HSeparator" type="HSeparator" parent="PanelContainer/VBoxContainer"]
+[node name="HSeparator" type="HSeparator" parent="VBoxContainer"]
 layout_mode = 2
 
-[node name="ScrollContainer" type="ScrollContainer" parent="PanelContainer/VBoxContainer"]
+[node name="ScrollContainer" type="ScrollContainer" parent="VBoxContainer"]
 layout_mode = 2
 size_flags_vertical = 3
 
-[node name="PartList" type="VBoxContainer" parent="PanelContainer/VBoxContainer/ScrollContainer"]
+[node name="PartList" type="VBoxContainer" parent="VBoxContainer/ScrollContainer"]
 layout_mode = 2
 size_flags_horizontal = 3
 
-[node name="HSeparator2" type="HSeparator" parent="PanelContainer/VBoxContainer"]
+[node name="HSeparator2" type="HSeparator" parent="VBoxContainer"]
 layout_mode = 2
 
-[node name="LaunchButton" type="Button" parent="PanelContainer/VBoxContainer"]
+[node name="LaunchButton" type="Button" parent="VBoxContainer"]
 layout_mode = 2
 text = "LAUNCH MISSION"
 
 
-[connection signal="pressed" from="PanelContainer/VBoxContainer/LaunchButton" to="." method="_on_launch_button_pressed"]
+[connection signal="pressed" from="VBoxContainer/LaunchButton" to="." method="_on_launch_button_pressed"]
