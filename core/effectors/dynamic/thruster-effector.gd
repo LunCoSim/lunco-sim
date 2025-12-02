@@ -30,8 +30,9 @@ var oxidizer_tank = null  ## LCResourceTankEffector for oxygen
 @export var efficiency: float = 1.0  ## Thrust efficiency (0.0 to 1.0)
 
 # Control inputs
+var throttle_limit: float = 1.0 ## User-set max throttle (0.0 to 1.0)
 var thrust_command: float = 0.0  ## Commanded thrust level (0.0 to 1.0)
-var gimbal_command: Vector2 = Vector2.ZERO  ## Gimbal command in degrees (pitch, yaw)
+var gimbal_command: Vector2 = Vector2.ZERO  ## Gimbal command in radians
 
 # Internal state
 var current_thrust: float = 0.0  ## Current actual thrust
@@ -42,6 +43,24 @@ var total_impulse: float = 0.0  ## Total impulse delivered in N·s
 
 # Physics constants
 const G0: float = 9.80665  ## Standard gravity in m/s²
+
+func _init():
+	_initialize_parameters()
+
+func _initialize_parameters():
+	# User-controllable settings
+	Parameters["Throttle Limit %"] = { "path": "throttle_limit", "type": "float", "min": 0.0, "max": 1.0, "step": 0.01 }
+	
+	# Read-only status displays
+	Parameters["Firing"] = { "path": "is_firing", "type": "bool", "readonly": true }
+	Parameters["Current Thrust (N)"] = { "path": "current_thrust", "type": "float", "readonly": true }
+	Parameters["Fuel Flow (kg/s)"] = { "path": "current_fuel_flow", "type": "float", "readonly": true }
+
+# Computed property for current fuel flow
+var current_fuel_flow: float:
+	get:
+		var thrust_fraction = current_thrust / max_thrust if max_thrust > 0 else 0.0
+		return fuel_flow_rate * thrust_fraction
 
 func _ready():
 	super._ready()
@@ -96,7 +115,8 @@ func _physics_process(delta):
 
 ## Sets the thrust command (0.0 to 1.0).
 func set_thrust(level: float):
-	thrust_command = clamp(level, 0.0, 1.0)
+	# Apply throttle limit to the input command
+	thrust_command = clamp(level, 0.0, 1.0) * throttle_limit
 
 ## Sets the gimbal command in degrees.
 func set_gimbal(pitch_deg: float, yaw_deg: float):

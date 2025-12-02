@@ -160,18 +160,38 @@ func _create_parameter_control(parent: Control, component: Object, param_key: St
 			row.add_child(value_label)
 		
 	elif type == "bool":
-		var checkbox = CheckBox.new()
-		checkbox.button_pressed = current_value
-		checkbox.toggled.connect(func(val):
-			component.set(property_path, val)
-		)
-		row.add_child(checkbox)
+		if is_readonly:
+			# Read-only boolean: show as label
+			var value_label = Label.new()
+			value_label.text = "Yes" if current_value else "No"
+			value_label.custom_minimum_size.x = 60
+			value_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+			row.add_child(value_label)
+			
+			# Store reference for real-time updates
+			value_label.set_meta("component", component)
+			value_label.set_meta("property_path", property_path)
+			value_label.set_meta("type", type)
+		else:
+			# Editable boolean: checkbox
+			var checkbox = CheckBox.new()
+			checkbox.button_pressed = current_value
+			checkbox.toggled.connect(func(val):
+				component.set(property_path, val)
+			)
+			row.add_child(checkbox)
 
 func _format_value(value, type: String) -> String:
 	if type == "int":
 		return str(int(value))
 	elif type == "float":
-		return "%.2f" % value
+		# Show as percentage if value is between 0-1 and looks like a ratio
+		if value >= 0.0 and value <= 1.0:
+			return "%.1f%%" % (value * 100.0)
+		else:
+			return "%.2f" % value
+	elif type == "bool":
+		return "Yes" if value else "No"
 	return str(value)
 
 func _process(_delta):
@@ -183,7 +203,7 @@ func _process(_delta):
 		_update_controls_recursive(child)
 
 func _update_controls_recursive(node: Node):
-	# Update readonly labels
+	# Update readonly labels (including booleans)
 	if node is Label and node.has_meta("component"):
 		var component = node.get_meta("component")
 		var property_path = node.get_meta("property_path")
