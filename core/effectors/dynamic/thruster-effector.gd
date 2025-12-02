@@ -140,6 +140,9 @@ func _update_gimbal(delta: float):
 
 ## Computes force and torque from thruster.
 func compute_force_torque(delta: float) -> Dictionary:
+	# Update visibility based on firing state
+	visible = is_firing
+	
 	if not is_firing:
 		return {}
 	
@@ -184,9 +187,6 @@ func compute_force_torque(delta: float) -> Dictionary:
 	if not can_fire:
 		current_thrust = 0.0
 		is_firing = false
-	
-	# Update visibility to match actual firing state
-	visible = is_firing
 	
 	# Calculate thrust direction with gimbal
 	var thrust_dir = thrust_direction
