@@ -1,0 +1,19 @@
+[gd_resource type="Resource" script_class="LCResourceDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://core/resources/resource_definition.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+resource_id = "methane"
+display_name = "Methane (CH₄)"
+description = "Liquid methane fuel for rocket engines, cryogenic propellant"
+category = "liquid"
+density = 422.0
+specific_heat = 3480.0
+phase_at_stp = "gas"
+can_flow = true
+requires_pressure = true
+requires_temperature_control = true
+flow_rate_multiplier = 1.0
+color = Color(0.9, 0.95, 1.0, 1)
+tags = PackedStringArray("fuel", "cryogenic", "propellant")

@@ -173,7 +173,7 @@ func _update_mass_properties():
 	else:
 		mass = 1000.0 # Default for spacecraft
 		center_of_mass = Vector3.ZERO
-			
+	
 	mass_properties_dirty = false
 
 ## Manages power system with batteries and solar panels.

@@ -12,9 +12,12 @@ extends LCDynamicEffector
 @export var min_on_time: float = 0.02  ## Minimum firing pulse in seconds
 @export var thrust_direction: Vector3 = Vector3(0, 0, 1)  ## Local thrust direction (normalized)
 
-@export_group("Fuel Connection")
+@export_group("Propellant Connection")
 @export var fuel_tank_path: NodePath
-var fuel_tank: LCFuelTankEffector = null
+var fuel_tank = null  ## Can be LCFuelTankEffector or LCResourceTankEffector
+@export var oxidizer_tank_path: NodePath
+var oxidizer_tank = null  ## LCResourceTankEffector for oxygen
+@export var mixture_ratio: float = 3.6  ## Oxidizer:Fuel mass ratio (3.6:1 for Starship Raptor)
 @export var fuel_flow_rate: float = 0.0  ## kg/s at max thrust (auto-calculated if 0)
 
 @export_group("Thrust Vectoring")
@@ -44,17 +47,40 @@ func _ready():
 	super._ready()
 	thrust_direction = thrust_direction.normalized()
 	
+	# Connect to fuel tank (can be LCFuelTankEffector or LCResourceTankEffector)
 	if not fuel_tank_path.is_empty():
 		var node = get_node_or_null(fuel_tank_path)
-		if node is LCFuelTankEffector:
+		if node is LCFuelTankEffector or node is LCResourceTankEffector:
 			fuel_tank = node
-			print("LCThrusterEffector: Connected to fuel tank ", node.name)
+			var amount = 0.0
+			if node is LCFuelTankEffector:
+				amount = node.fuel_mass
+			else:
+				amount = node.get_amount()
+			print("✓ LCThrusterEffector: Connected to fuel tank ", node.name, " with ", amount, " kg")
 		else:
-			print("LCThrusterEffector: Invalid fuel tank path or type")
+			print("✗ LCThrusterEffector: Invalid fuel tank path or type: ", fuel_tank_path)
+	else:
+		print("✗ LCThrusterEffector: No fuel tank path set")
+	
+	# Connect to oxidizer tank
+	if not oxidizer_tank_path.is_empty():
+		var node = get_node_or_null(oxidizer_tank_path)
+		if node is LCResourceTankEffector:
+			oxidizer_tank = node
+			print("✓ LCThrusterEffector: Connected to oxidizer tank ", node.name, " with ", node.get_amount(), " kg")
+		else:
+			print("✗ LCThrusterEffector: Invalid oxidizer tank path or type: ", oxidizer_tank_path)
+	else:
+		print("✗ LCThrusterEffector: No oxidizer tank path set")
 	
 	# Auto-calculate fuel flow rate if not set
+	# Total propellant flow = fuel + oxidizer
+	# For mixture ratio R:1, fuel fraction = 1/(R+1), oxidizer fraction = R/(R+1)
 	if fuel_flow_rate <= 0.0 and specific_impulse > 0.0:
-		fuel_flow_rate = max_thrust / (specific_impulse * G0)
+		var total_flow = max_thrust / (specific_impulse * G0)
+		fuel_flow_rate = total_flow / (mixture_ratio + 1.0)  # Fuel portion only
+		print("✓ LCThrusterEffector: Calculated fuel flow rate: ", fuel_flow_rate, " kg/s")
 	
 	# Set power consumption (rough estimate: 10W per 100N)
 	power_consumption = max_thrust * 0.1
@@ -116,17 +142,47 @@ func compute_force_torque(delta: float) -> Dictionary:
 	if not is_firing:
 		return {}
 	
-	# Deplete fuel if connected to tank
-	if fuel_tank and fuel_flow_rate > 0:
-		var fuel_needed = fuel_flow_rate * (current_thrust / max_thrust) * delta
-		var fuel_depleted = fuel_tank.deplete_fuel(fuel_needed)
+	# Deplete propellants if connected to tanks
+	var thrust_fraction = current_thrust / max_thrust if max_thrust > 0 else 0.0
+	var can_fire = true
+	
+	# Calculate propellant needs based on mixture ratio
+	var fuel_needed = fuel_flow_rate * thrust_fraction * delta
+	var oxidizer_needed = fuel_needed * mixture_ratio
+	
+	# Deplete fuel tank
+	if fuel_tank:
+		var fuel_available = 0.0
+		if fuel_tank is LCFuelTankEffector:
+			fuel_available = fuel_tank.deplete_fuel(fuel_needed)
+		elif fuel_tank is LCResourceTankEffector:
+			fuel_available = fuel_tank.remove_resource(fuel_needed)
 		
-		# Reduce thrust if insufficient fuel
-		if fuel_depleted < fuel_needed:
-			current_thrust *= (fuel_depleted / fuel_needed) if fuel_needed > 0 else 0.0
+		if fuel_available < fuel_needed * 0.99:  # Allow 1% tolerance
+			can_fire = false
 			if fuel_tank.is_empty():
-				current_thrust = 0.0
-				is_firing = false
+				print("LCThrusterEffector: Fuel tank empty!")
+	else:
+		can_fire = false
+	
+	# Deplete oxidizer tank
+	if oxidizer_tank:
+		var oxidizer_available = oxidizer_tank.remove_resource(oxidizer_needed)
+		if oxidizer_available < oxidizer_needed * 0.99:
+			can_fire = false
+			if oxidizer_tank.is_empty():
+				print("LCThrusterEffector: Oxidizer tank empty!")
+			# Refund fuel if oxidizer unavailable
+			if fuel_tank and fuel_tank is LCResourceTankEffector:
+				fuel_tank.add_resource(fuel_needed)
+	elif mixture_ratio > 0:
+		# No oxidizer tank but mixture ratio set - can't fire
+		can_fire = false
+	
+	# Stop firing if insufficient propellant
+	if not can_fire:
+		current_thrust = 0.0
+		is_firing = false
 	
 	# Calculate thrust direction with gimbal
 	var thrust_dir = thrust_direction

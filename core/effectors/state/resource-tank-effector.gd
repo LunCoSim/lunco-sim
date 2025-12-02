@@ -24,9 +24,13 @@ func _initialize_tank():
 	# Get resource definition from registry
 	var res_def = LCResourceRegistry.get_resource(resource_id)
 	if res_def:
-		resource_container = LCResourceContainer.new(res_def, 0.0)
+		# Initialize with current_amount (set from scene properties)
+		var initial_amount = 0.0
+		if has_meta("initial_amount"):
+			initial_amount = get_meta("initial_amount")
+		resource_container = LCResourceContainer.new(res_def, initial_amount)
 		is_initialized = true
-		print("ResourceTank: Initialized for ", res_def.display_name)
+		print("ResourceTank: Initialized for ", res_def.display_name, " with ", initial_amount, " kg")
 	else:
 		push_error("ResourceTank: Resource not found in registry: " + resource_id)
 		# Create a placeholder to prevent crashes
@@ -107,6 +111,8 @@ func get_amount() -> float:
 ## Set amount (for initialization)
 func set_amount(new_amount: float):
 	if not resource_container:
+		# Store for later initialization
+		set_meta("initial_amount", new_amount)
 		return
 	resource_container.amount = clamp(new_amount, 0.0, capacity)
 	_update_mass()

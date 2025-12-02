@@ -17,9 +17,9 @@ func _init(res_def: LCResourceDefinition, initial_amount: float = 0.0):
 
 ## Get total mass of this resource
 func get_mass() -> float:
-	if not definition:
-		return 0.0
-	return amount * definition.density
+	# Amount is stored in kg, not volume
+	# (capacity is specified in kg in the tank effector)
+	return amount
 
 ## Get thermal energy stored in this resource
 func get_thermal_energy() -> float:
