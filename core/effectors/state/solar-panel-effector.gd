@@ -51,6 +51,8 @@ func _physics_process(delta):
 	_update_deployment(delta)
 	_update_articulation(delta)
 	_update_power_generation(delta)
+
+func _process(delta):
 	_update_telemetry()
 
 ## Deploys the solar panel.

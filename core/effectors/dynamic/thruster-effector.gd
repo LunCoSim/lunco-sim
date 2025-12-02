@@ -109,9 +109,11 @@ func _ready():
 func _physics_process(delta):
 	_update_thrust(delta)
 	_update_gimbal(delta)
-	_update_telemetry()
 	# Only show plume when actually firing (after fuel check)
 	# visible is set in compute_force_torque based on can_fire
+
+func _process(delta):
+	_update_telemetry()
 
 ## Sets the thrust command (0.0 to 1.0).
 func set_thrust(level: float):

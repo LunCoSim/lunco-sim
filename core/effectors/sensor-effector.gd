@@ -44,7 +44,8 @@ func _physics_process(delta):
 		last_update_time = 0.0
 		measurement_count += 1
 		is_valid = true
-	
+
+func _process(delta):
 	_update_telemetry()
 
 ## Override this to implement sensor-specific measurement logic.

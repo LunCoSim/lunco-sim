@@ -163,7 +163,7 @@ func _initialize_telemetry():
 		"temperature": resource_container.temperature if resource_container else 293.15,
 	}
 
-func _physics_process(delta):
+func _process(delta):
 	_update_telemetry()
 
 func _update_telemetry():

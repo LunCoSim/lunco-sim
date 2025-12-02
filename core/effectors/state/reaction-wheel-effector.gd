@@ -40,6 +40,8 @@ func _ready():
 func _physics_process(delta):
 	_update_wheel_dynamics(delta)
 	_update_power_consumption()
+
+func _process(delta):
 	_update_telemetry()
 
 ## Sets the commanded torque (-1.0 to 1.0, normalized).

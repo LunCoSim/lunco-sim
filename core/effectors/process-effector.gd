@@ -54,7 +54,8 @@ func _physics_process(delta: float):
 		_execute_cycle()
 		cycle_progress = 0.0
 		total_cycles_completed += 1
-	
+
+func _process(delta):
 	_update_telemetry()
 
 ## Execute one process cycle

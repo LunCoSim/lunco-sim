@@ -54,7 +54,8 @@ var telemetry_timer: float = 0.0
 func _physics_process(delta):
 	_update_battery_state(delta)
 	_update_degradation()
-	
+
+func _process(delta):
 	telemetry_timer += delta
 	if telemetry_timer >= 0.1:
 		telemetry_timer = 0.0
