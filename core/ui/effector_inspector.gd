@@ -7,7 +7,7 @@ extends Window
 ## panels for them.
 
 @export var vehicle_path: NodePath
-var vehicle: LCVehicle
+var vehicle: Node  # Can be LCVehicle or LCSpacecraft
 
 var scroll_container: ScrollContainer
 var grid_container: GridContainer
@@ -76,7 +76,7 @@ func _ready():
 	grid_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll_container.add_child(grid_container)
 
-func set_vehicle(target_vehicle: LCVehicle):
+func set_vehicle(target_vehicle: Node):
 	vehicle = target_vehicle
 	
 	# Update resource monitor
@@ -90,7 +90,7 @@ func set_vehicle(target_vehicle: LCVehicle):
 		for child in grid_container.get_children():
 			child.queue_free()
 
-func _setup_for_vehicle(target: LCVehicle):
+func _setup_for_vehicle(target: Node):
 	# Clear existing panels
 	for child in grid_container.get_children():
 		child.queue_free()
@@ -101,6 +101,14 @@ func _setup_for_vehicle(target: LCVehicle):
 		no_vehicle_label.text = "No vehicle selected"
 		no_vehicle_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
 		grid_container.add_child(no_vehicle_label)
+		return
+	
+	# Check if target has effector arrays (LCVehicle or LCSpacecraft)
+	if not ("state_effectors" in target and "dynamic_effectors" in target):
+		var incompatible_label = Label.new()
+		incompatible_label.text = "Selected entity is not a vehicle or spacecraft"
+		incompatible_label.add_theme_color_override("font_color", Color(0.9, 0.5, 0.3))
+		grid_container.add_child(incompatible_label)
 		return
 	
 	# Find all effectors
@@ -132,7 +140,7 @@ func _process(delta):
 	# Auto-find vehicle if not set (e.g. for testing)
 	if not vehicle and vehicle_path:
 		var node = get_node_or_null(vehicle_path)
-		if node and node is LCVehicle:
+		if node and (node is LCVehicle or node.has_method("_on_spacecraft_controller_thrusted")):
 			set_vehicle(node)
 
 func _on_visibility_changed():
@@ -149,8 +157,8 @@ func _try_find_current_vehicle():
 		if entity is LCController:
 			entity = entity.get_parent()
 		
-		# Check if it's a vehicle
-		if entity is LCVehicle:
+		# Check if it's a vehicle or spacecraft
+		if entity is LCVehicle or entity.has_method("_on_spacecraft_controller_thrusted"):
 			set_vehicle(entity)
 			return
 	
@@ -169,7 +177,7 @@ func _find_avatar() -> Node:
 
 func _find_vehicles_recursive(node: Node) -> Array:
 	var vehicles = []
-	if node is LCVehicle:
+	if node is LCVehicle or node.has_method("_on_spacecraft_controller_thrusted"):
 		vehicles.append(node)
 	for child in node.get_children():
 		vehicles.append_array(_find_vehicles_recursive(child))
@@ -177,10 +185,13 @@ func _find_vehicles_recursive(node: Node) -> Array:
 
 
 func _on_entity_selected(entity):
-	if entity is LCVehicle:
+	if not entity:
+		return
+		
+	if entity is LCVehicle or entity.has_method("_on_spacecraft_controller_thrusted"):
 		set_vehicle(entity)
 	elif entity is LCConstructible:
 		# LCConstructible might not be compatible with LCVehicle-based inspector
 		# unless we make them compatible or check for components
-		# For now, we only support LCVehicle (the new system)
+		# For now, we only support LCVehicle and LCSpacecraft (the new system)
 		pass

@@ -82,10 +82,18 @@ func update_structure_view():
 
 	# Get components list first
 	var components = []
+	if not selected_rover:
+		return
+
 	if selected_rover is LCConstructible:
 		components = selected_rover.components
-	elif selected_rover is LCVehicle:
-		components = selected_rover.state_effectors
+	elif selected_rover is LCVehicle or selected_rover is LCSpacecraft or selected_rover.has_method("_on_spacecraft_controller_thrusted") or selected_rover.has_method("set_control_inputs") or (selected_rover.get_script() and selected_rover.get_script().resource_path.ends_with("spacecraft.gd")):
+		components = []
+		components.append_array(selected_rover.state_effectors)
+		if "dynamic_effectors" in selected_rover:
+			for eff in selected_rover.dynamic_effectors:
+				if not components.has(eff):
+					components.append(eff)
 
 	# Check if we need to rebuild
 	var rebuild = false
@@ -150,7 +158,11 @@ func set_selected_rover(rover: Node):
 	
 	# Update resource monitor
 	if resource_monitor:
-		if rover is LCVehicle:
+		var is_spacecraft = false
+		if rover:
+			is_spacecraft = rover is LCVehicle or rover is LCSpacecraft or rover.has_method("_on_spacecraft_controller_thrusted") or rover.has_method("set_control_inputs") or (rover.get_script() and rover.get_script().resource_path.ends_with("spacecraft.gd"))
+		
+		if is_spacecraft:
 			resource_monitor.set_vehicle(rover)
 		else:
 			resource_monitor.set_vehicle(null)
@@ -179,7 +191,8 @@ func show_component_info(obj):
 	
 	if obj:
 		# If it's the root vehicle/rover, scan entire hierarchy
-		if obj is LCConstructible or obj is LCVehicle:
+		var is_spacecraft = obj is LCConstructible or obj is LCVehicle or obj is LCSpacecraft or obj.has_method("_on_spacecraft_controller_thrusted") or obj.has_method("set_control_inputs") or (obj.get_script() and obj.get_script().resource_path.ends_with("spacecraft.gd"))
+		if is_spacecraft:
 			print("ComponentInspector: Scanning entire vehicle hierarchy for Parameters...")
 			_scan_and_create_settings(obj)
 		# If it's a specific component, show only its settings
@@ -271,7 +284,11 @@ func _update_effectors():
 	for child in effectors_grid.get_children():
 		child.queue_free()
 	
-	if not selected_rover or not selected_rover is LCVehicle:
+	if not selected_rover:
+		return
+
+	var is_spacecraft = selected_rover is LCVehicle or selected_rover is LCSpacecraft or selected_rover.has_method("_on_spacecraft_controller_thrusted") or selected_rover.has_method("set_control_inputs") or (selected_rover.get_script() and selected_rover.get_script().resource_path.ends_with("spacecraft.gd"))
+	if not is_spacecraft:
 		return
 	
 	# Find all effectors
@@ -308,9 +325,12 @@ func _update_telemetry_display():
 		child.queue_free()
 	
 	var obj = selected_component
-	
+	if not obj:
+		return
+
 	# Show telemetry based on object type
-	if obj is LCConstructible or obj is LCVehicle:
+	var is_spacecraft = obj is LCConstructible or obj is LCVehicle or obj is LCSpacecraft or obj.has_method("_on_spacecraft_controller_thrusted") or obj.has_method("set_control_inputs") or (obj.get_script() and obj.get_script().resource_path.ends_with("spacecraft.gd"))
+	if is_spacecraft:
 		if obj.has_method("get_telemetry_data"):
 			var telemetry = obj.get_telemetry_data()
 			if telemetry.size() > 0:

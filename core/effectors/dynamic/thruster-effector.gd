@@ -10,10 +10,11 @@ extends LCDynamicEffector
 @export var max_thrust: float = 100.0  ## Maximum thrust in Newtons
 @export var specific_impulse: float = 300.0  ## Isp in seconds
 @export var min_on_time: float = 0.02  ## Minimum firing pulse in seconds
-@export var thrust_direction: Vector3 = Vector3(0, 1, 0)  ## Local thrust direction (normalized)
+@export var thrust_direction: Vector3 = Vector3(0, 0, 1)  ## Local thrust direction (normalized)
 
 @export_group("Fuel Connection")
-@export var fuel_tank: LCFuelTankEffector = null  ## Connected fuel tank (optional)
+@export var fuel_tank_path: NodePath
+var fuel_tank: LCFuelTankEffector = null
 @export var fuel_flow_rate: float = 0.0  ## kg/s at max thrust (auto-calculated if 0)
 
 @export_group("Thrust Vectoring")
@@ -43,6 +44,14 @@ func _ready():
 	super._ready()
 	thrust_direction = thrust_direction.normalized()
 	
+	if not fuel_tank_path.is_empty():
+		var node = get_node_or_null(fuel_tank_path)
+		if node is LCFuelTankEffector:
+			fuel_tank = node
+			print("LCThrusterEffector: Connected to fuel tank ", node.name)
+		else:
+			print("LCThrusterEffector: Invalid fuel tank path or type")
+	
 	# Auto-calculate fuel flow rate if not set
 	if fuel_flow_rate <= 0.0 and specific_impulse > 0.0:
 		fuel_flow_rate = max_thrust / (specific_impulse * G0)
@@ -56,6 +65,7 @@ func _physics_process(delta):
 	_update_thrust(delta)
 	_update_gimbal(delta)
 	_update_telemetry()
+	visible = is_firing
 
 ## Sets the thrust command (0.0 to 1.0).
 func set_thrust(level: float):
@@ -133,6 +143,9 @@ func compute_force_torque(delta: float) -> Dictionary:
 	# Convert to global frame
 	var global_force = local_to_global_force(thrust_dir * current_thrust)
 	var application_point = global_position
+	
+	# if is_firing:
+	# 	print("LCThrusterEffector: Force=", global_force.length(), " Dir=", thrust_dir)
 	
 	return {
 		"force": global_force,

@@ -80,9 +80,14 @@ func try_select_entity():
 	
 	if result and result.collider:
 		var target = result.collider
-		# Walk up to find LCConstructible
+		# Walk up to find LCConstructible or LCSpacecraft
 		while target:
-			if target is LCConstructible or target is LCVehicle:
+			if target is LCConstructible or target is LCVehicle or target is LCSpacecraft or target.has_method("set_control_inputs"):
+				break
+			
+			# Check by script path (robust against class_name issues)
+			var script = target.get_script()
+			if script and (script.resource_path.ends_with("spacecraft.gd") or script.resource_path.ends_with("starship.gd")):
 				break
 			# Fallback: Check by duck typing (safer if class_name fails)
 			if target.has_method("register_component") and target.has_method("recalculate_physics"):
@@ -91,7 +96,7 @@ func try_select_entity():
 				
 			target = target.get_parent()
 		
-		if target and (target is LCConstructible or target is LCVehicle or target.has_method("register_component")):
+		if target and (target is LCConstructible or target is LCVehicle or target is LCSpacecraft or target.has_method("register_component")):
 			print("BuilderManager: Selected entity: ", target.name)
 			entity_selected.emit(target)
 		else:
@@ -108,7 +113,7 @@ func try_select_entity():
 		# entity_selected.emit(null)
 
 func select_entity(entity):
-	if entity and (entity is LCConstructible or entity is LCVehicle or entity.has_method("register_component")):
+	if entity and (entity is LCConstructible or entity is LCVehicle or entity is LCSpacecraft or entity.has_method("register_component") or entity.has_method("set_control_inputs")):
 		print("BuilderManager: Programmatically selected entity: ", entity.name)
 		entity_selected.emit(entity)
 	else:

@@ -46,6 +46,7 @@ func _ready():
 			ui_helper.setup_entity_button(create_button, false)
 		# Apply color AFTER setup to ensure it overrides defaults
 		create_button.modulate = Color(0.2, 0.8, 0.2)
+		create_button.focus_mode = Control.FOCUS_NONE
 	else:
 		push_error("Avatar UI: CreateEntityButton not found")
 
@@ -58,6 +59,7 @@ func _ready():
 		if ui_helper:
 			ui_helper.setup_entity_button(builder_button, false)
 		builder_button.modulate = Color(0.2, 0.6, 1.0) # Blue-ish
+		builder_button.focus_mode = Control.FOCUS_NONE
 	else:
 		push_warning("Avatar UI: BuilderButton not found")
 
@@ -70,6 +72,7 @@ func _ready():
 		if ui_helper:
 			ui_helper.setup_entity_button(inspector_button, false)
 		inspector_button.modulate = Color(0.8, 0.4, 0.8) # Purple-ish
+		inspector_button.focus_mode = Control.FOCUS_NONE
 	else:
 		push_warning("Avatar UI: InspectorButton not found")
 		
@@ -82,6 +85,7 @@ func _ready():
 		if ui_helper:
 			ui_helper.setup_entity_button(effector_button, false)
 		effector_button.modulate = Color(1.0, 0.6, 0.2) # Orange-ish
+		effector_button.focus_mode = Control.FOCUS_NONE
 	else:
 		push_warning("Avatar UI: EffectorButton not found")
 	
