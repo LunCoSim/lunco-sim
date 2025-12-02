@@ -53,8 +53,9 @@ var thrust_input: float = 0.0
 var torque_input: Vector3 = Vector3.ZERO
 
 ## Sets control inputs from controller
+## Sets control inputs from controller
 func set_control_inputs(thrust: float, torque: Vector3):
-	print("LCSpacecraft: set_control_inputs thrust=", thrust, " torque=", torque)
+	# print("LCSpacecraft: set_control_inputs thrust=", thrust, " torque=", torque)
 	thrust_input = thrust
 	torque_input = torque
 	
@@ -77,11 +78,12 @@ func _physics_process(delta):
 		_apply_reaction_wheel_torques()
 		_apply_control_torque(delta)
 	else:
-		print("LCSpacecraft: No authority (", name, ")")
+		# print("LCSpacecraft: No authority (", name, ")")
+		pass
 
 func _apply_control_torque(delta):
 	if torque_input.length_squared() > 0.001:
-		print("LCSpacecraft: Applying torque ", torque_input)
+		# print("LCSpacecraft: Applying torque ", torque_input)
 		# If we have reaction wheels, they are handled in _apply_reaction_wheel_torques
 		# But if we don't, or if we want "magic" torque from the controller:
 		

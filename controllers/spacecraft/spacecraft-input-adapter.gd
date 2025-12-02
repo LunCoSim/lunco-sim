@@ -4,7 +4,7 @@ extends LCInputAdapter
 # target is inherited from LCInputAdapter
 
 func _ready():
-	print("SpacecraftInputAdapter ready. Target: ", target)
+	pass # print("SpacecraftInputAdapter ready. Target: ", target)
 
 func _input(_event):
 	var _target = get_resolved_target()
@@ -12,8 +12,8 @@ func _input(_event):
 	# Debug: Print when we have a spacecraft controller
 	if _target and (_target.has_method("throttle") or _target.get_class() == "LCSpacecraftController" or _target is LCSpacecraftController):
 		# Only print on key presses to avoid spam
-		if _event is InputEventKey and _event.pressed and not _event.is_echo():
-			print("SpacecraftInputAdapter: Processing input for ", _target.get_parent().name)
+		# if _event is InputEventKey and _event.pressed and not _event.is_echo():
+		# 	print("SpacecraftInputAdapter: Processing input for ", _target.get_parent().name)
 		
 		# Check if input is captured by UI
 		if not should_process_input():
@@ -22,10 +22,10 @@ func _input(_event):
 			return
 
 		if Input.is_action_just_pressed("throttle"):
-			print("SpacecraftInputAdapter: Throttle ON")
+			# print("SpacecraftInputAdapter: Throttle ON")
 			_target.throttle(true)
 		elif Input.is_action_just_released("throttle"):
-			print("SpacecraftInputAdapter: Throttle OFF")
+			# print("SpacecraftInputAdapter: Throttle OFF")
 			_target.throttle(false)
 
 		var torque_action := Vector3(
@@ -34,9 +34,9 @@ func _input(_event):
 			- Input.get_action_strength("roll_cw") + Input.get_action_strength("roll_ccw")
 		)
 
-		if torque_action != Vector3.ZERO:
-			print("SpacecraftInputAdapter: Torque ", torque_action)
+		# if torque_action != Vector3.ZERO:
+		# 	print("SpacecraftInputAdapter: Torque ", torque_action)
 		_target.change_orientation(torque_action)
-	elif _target != null and (_event is InputEventKey and _event.pressed and not _event.is_echo()):
-		# Debug: Print what type of target we have instead
-		print("SpacecraftInputAdapter: Target is ", _target.get_class(), " not LCSpacecraftController")
+	# elif _target != null and (_event is InputEventKey and _event.pressed and not _event.is_echo()):
+	# 	# Debug: Print what type of target we have instead
+	# 	print("SpacecraftInputAdapter: Target is ", _target.get_class(), " not LCSpacecraftController")

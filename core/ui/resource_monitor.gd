@@ -6,7 +6,7 @@ extends PanelContainer
 ## Displays current amounts and capacities of resources in the vehicle's tanks.
 
 @export var vehicle_path: NodePath
-var vehicle: LCVehicle
+var vehicle: Node # Can be LCVehicle or LCSpacecraft
 
 var container: VBoxContainer
 var resource_bars: Dictionary = {}  # resource_id -> ProgressBar
@@ -31,23 +31,23 @@ func _ready():
 	# Auto-find vehicle if path set
 	if vehicle_path:
 		var node = get_node_or_null(vehicle_path)
-		if node and node is LCVehicle:
+		if node and (node is LCVehicle or node is LCSpacecraft):
 			set_vehicle(node)
 	
 	# Connect to builder manager for selection updates
 	if BuilderManager:
 		BuilderManager.entity_selected.connect(_on_entity_selected)
 
-func set_vehicle(target: LCVehicle):
+func set_vehicle(target: Node):
 	# Disconnect from old vehicle
-	if vehicle and is_instance_valid(vehicle) and vehicle.resource_network:
+	if vehicle and is_instance_valid(vehicle) and "resource_network" in vehicle and vehicle.resource_network:
 		if vehicle.resource_network.network_updated.is_connected(_on_network_updated):
 			vehicle.resource_network.network_updated.disconnect(_on_network_updated)
 			
 	vehicle = target
 	
 	# Connect to new vehicle
-	if vehicle and vehicle.resource_network:
+	if vehicle and "resource_network" in vehicle and vehicle.resource_network:
 		if not vehicle.resource_network.network_updated.is_connected(_on_network_updated):
 			vehicle.resource_network.network_updated.connect(_on_network_updated)
 	
@@ -55,7 +55,7 @@ func set_vehicle(target: LCVehicle):
 	_rebuild_ui()
 
 func _on_entity_selected(entity):
-	if entity is LCVehicle:
+	if entity is LCVehicle or entity is LCSpacecraft:
 		set_vehicle(entity)
 	else:
 		set_vehicle(null)
@@ -76,7 +76,7 @@ func _rebuild_ui():
 		container.add_child(no_vehicle_label)
 		return
 	
-	if not vehicle.resource_network:
+	if not "resource_network" in vehicle or not vehicle.resource_network:
 		# Show "no resource network" message
 		var no_network_label = Label.new()
 		no_network_label.name = "NoVehicleLabel"
@@ -114,7 +114,7 @@ func _rebuild_ui():
 		resource_bars[res_id] = bar
 
 func _on_network_updated():
-	if not vehicle or not vehicle.resource_network:
+	if not vehicle or not "resource_network" in vehicle or not vehicle.resource_network:
 		return
 		
 	for res_id in resource_bars:
