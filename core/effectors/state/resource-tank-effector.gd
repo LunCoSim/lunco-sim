@@ -49,10 +49,20 @@ var current_amount: float:
 	set(value):
 		set_amount(value)
 
+var fill_percentage_param: float:
+	get:
+		return get_fill_percentage()
+	set(value):
+		set_amount(capacity * value / 100.0)
+
 func _initialize_parameters():
-	Parameters["Capacity"] = { "path": "capacity", "type": "float", "min": 1.0, "max": 1000.0, "step": 10.0 }
-	Parameters["Dry Mass"] = { "path": "tank_dry_mass", "type": "float", "min": 1.0, "max": 500.0, "step": 1.0 }
-	Parameters["Amount"] = { "path": "current_amount", "type": "float", "min": 0.0, "max": 1000.0, "step": 1.0 }
+	# Capacity and dry mass use reasonable kg ranges
+	Parameters["Capacity"] = { "path": "capacity", "type": "float", "min": 1000.0, "max": 2000000.0, "step": 1000.0 }
+	Parameters["Dry Mass"] = { "path": "tank_dry_mass", "type": "float", "min": 1000.0, "max": 100000.0, "step": 1000.0 }
+	# Amount uses percentage (0-100%) for better slider UX
+	Parameters["Fill %"] = { "path": "fill_percentage_param", "type": "float", "min": 0.0, "max": 100.0, "step": 0.1 }
+	# Direct text input for exact mass
+	Parameters["Amount (kg)"] = { "path": "current_amount", "type": "float", "text_field": true }
 
 ## Add resource to tank
 func add_resource(amount: float) -> float:

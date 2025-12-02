@@ -217,7 +217,7 @@ func _scan_and_create_settings(node: Node):
 		_scan_and_create_settings(child)
 
 func _create_parameter_controls(component: Object):
-	# Create interactive controls for component parameters
+	# Create header
 	var header = Label.new()
 	header.text = "Settings for: " + component.name
 	header.add_theme_font_size_override("font_size", 14)
@@ -226,58 +226,11 @@ func _create_parameter_controls(component: Object):
 	
 	settings_content.add_child(HSeparator.new())
 	
-	# Create controls for each parameter
-	for param_key in component.Parameters:
-		var metadata = component.Parameters[param_key]
-		_create_parameter_control(component, param_key, metadata)
-
-func _create_parameter_control(component: Object, param_key: String, metadata: Dictionary):
-	var row = HBoxContainer.new()
-	settings_content.add_child(row)
-	
-	var label = Label.new()
-	label.text = param_key.capitalize()
-	label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	label.custom_minimum_size.x = 120
-	row.add_child(label)
-	
-	var property_path = metadata.get("path", "")
-	if property_path.is_empty():
-		return # Invalid metadata
-		
-	var current_value = component.get(property_path)
-	var type = metadata.get("type", "float")
-	
-	if type == "float" or type == "int":
-		var slider = HSlider.new()
-		slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		slider.min_value = metadata.get("min", 0.0)
-		slider.max_value = metadata.get("max", 100.0)
-		slider.step = metadata.get("step", 0.1 if type == "float" else 1.0)
-		slider.value = current_value
-		
-		var value_label = Label.new()
-		value_label.text = str(current_value)
-		value_label.custom_minimum_size.x = 60
-		
-		slider.value_changed.connect(func(val):
-			component.set(property_path, val)
-			value_label.text = ("%.2f" % val) if type == "float" else str(int(val))
-			# Optional: Trigger update if component needs it
-			if component.has_method("_update_parameters"):
-				component._update_parameters()
-		)
-		
-		row.add_child(slider)
-		row.add_child(value_label)
-		
-	elif type == "bool":
-		var checkbox = CheckBox.new()
-		checkbox.button_pressed = current_value
-		checkbox.toggled.connect(func(val):
-			component.set(property_path, val)
-		)
-		row.add_child(checkbox)
+	# Use LCParameterEditor to create controls
+	var param_editor = LCParameterEditor.new()
+	param_editor.target_node = component
+	settings_content.add_child(param_editor)
+	param_editor.refresh()
 
 func _update_effectors():
 	# Clear existing effector panels
