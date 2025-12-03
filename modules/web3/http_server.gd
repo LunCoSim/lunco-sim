@@ -25,34 +25,59 @@ func _process(_delta):
 			var tls_client = StreamPeerTLS.new()
 			var err = tls_client.accept_stream(client, tls_options)
 			if err == OK:
-				clients.append(tls_client)
+				clients.append({"peer": tls_client, "is_tls": true, "handshake_complete": false})
 			else:
-				push_error("Failed to establish TLS connection: " + error_string(err))
+				push_warning("Failed to initiate TLS handshake: " + error_string(err))
 		else:
-			clients.append(client)
+			clients.append({"peer": client, "is_tls": false, "handshake_complete": true})
 	
 	# Process existing clients
 	for i in range(clients.size() - 1, -1, -1):
-		var client = clients[i]
-		var status = StreamPeerTCP.STATUS_NONE
+		var client_data = clients[i]
+		var client = client_data["peer"]
+		var is_tls = client_data["is_tls"]
+		var handshake_complete = client_data["handshake_complete"]
 		
-		# Get status based on client type
-		if client is StreamPeerTLS:
-			status = client.get_status()
-			# For TLS, also check if handshake is complete
+		# Handle TLS clients
+		if is_tls:
+			var status = client.get_status()
+			
+			# Check handshake status
+			if not handshake_complete:
+				if status == StreamPeerTLS.STATUS_CONNECTED:
+					# Handshake completed successfully
+					client_data["handshake_complete"] = true
+				elif status == StreamPeerTLS.STATUS_HANDSHAKING:
+					# Still handshaking, poll to continue
+					client.poll()
+					continue
+				elif status == StreamPeerTLS.STATUS_ERROR or status == StreamPeerTLS.STATUS_ERROR_HOSTNAME_MISMATCH:
+					# Handshake failed
+					push_warning("TLS handshake failed with status: " + str(status))
+					clients.remove_at(i)
+					continue
+				else:
+					# Other status, keep waiting
+					continue
+			
+			# Handshake complete, check for data
 			if status == StreamPeerTLS.STATUS_CONNECTED:
+				client.poll()  # Poll to update internal state
 				if client.get_available_bytes() > 0:
 					_handle_client_request(client)
 					clients.remove_at(i)
 			elif status == StreamPeerTLS.STATUS_ERROR or status == StreamPeerTLS.STATUS_ERROR_HOSTNAME_MISMATCH:
 				clients.remove_at(i)
-		elif client is StreamPeerTCP:
-			status = client.get_status()
+		
+		# Handle regular TCP clients
+		else:
+			var status = client.get_status()
 			if status == StreamPeerTCP.STATUS_CONNECTED:
 				if client.get_available_bytes() > 0:
 					_handle_client_request(client)
 					clients.remove_at(i)
-			else:
+			elif status != StreamPeerTCP.STATUS_CONNECTING:
+				# Remove if not connected or connecting
 				clients.remove_at(i)
 
 
@@ -81,12 +106,14 @@ func configure_tls(cert_path: String, key_path: String) -> Error:
 
 func start(p: int = 8080) -> Error:
 	port = p
-	var err = server.listen(port)
+	# Listen on all interfaces ("*") instead of just localhost
+	# This allows remote connections to reach the server
+	var err = server.listen(port, "*")
 	if err != OK:
 		push_error("Failed to start HTTP server on port " + str(port) + ": " + str(err))
 	else:
 		var protocol = "HTTPS" if tls_enabled else "HTTP"
-		print(protocol + " server started on port " + str(port))
+		print(protocol + " server started on port " + str(port) + " (listening on all interfaces)")
 	return err
 
 func stop() -> void:
