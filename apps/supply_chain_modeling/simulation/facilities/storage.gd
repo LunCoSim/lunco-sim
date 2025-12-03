@@ -12,7 +12,9 @@ func _ready() -> void:
 
 func _update_resource() -> void:
 	if stored_resource_type != "":
-		_resource = ResourceRegistry.get_resource(stored_resource_type)
+		var registry = get_node_or_null("/root/ResourceRegistry")
+		if registry:
+			_resource = registry.get_resource(stored_resource_type)
 
 func set_resource_type(type: String) -> void:
 	if current_amount == 0 or type == stored_resource_type:
@@ -34,8 +36,11 @@ func _create_ports():
 	# Create storage node with capacitance
 	var port = solver_graph.add_node(0.0, false, "Fluid")
 	port.resource_type = stored_resource_type
-	port.set_capacitance(1.0)  # Will be updated in update_solver_state
+	port.set_capacitance(max(capacity, 0.1))  # Set proper capacitance from the start
 	port.flow_accumulation = current_amount
+	# Calculate initial potential from mass and capacitance
+	if port.capacitance > 0:
+		port.potential = port.flow_accumulation / port.capacitance
 	ports["fluid_port"] = port
 
 ## Update solver parameters from component state

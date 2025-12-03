@@ -142,11 +142,36 @@ func connect_nodes(from_node: String, from_port: int, to_node: String, to_port: 
 	if not validation.success:
 		return validation
 	
+	# Get the actual component nodes
+	var source = get_node_or_null(from_node)
+	var target = get_node_or_null(to_node)
+	
+	if not source or not target:
+		validation.success = false
+		validation.message = "Invalid nodes"
+		return validation
+	
+	# Create solver edge if both are SolverSimulationNodes
+	var solver_edge = null
+	if source is SolverSimulationNode and target is SolverSimulationNode:
+		# Map port indices to port names (simplified - assumes single port or indexed ports)
+		var source_port_name = _get_port_name(source, from_port, true)
+		var target_port_name = _get_port_name(target, to_port, false)
+		
+		if source_port_name and target_port_name:
+			var source_port = source.get_port(source_port_name)
+			var target_port = target.get_port(target_port_name)
+			
+			if source_port and target_port:
+				# Create edge with default conductance
+				solver_edge = solver_graph.connect_nodes(source_port, target_port, 1.0, source_port.domain)
+	
 	var connection = {
 		"from_node": from_node,
 		"from_port": from_port,
 		"to_node": to_node,
-		"to_port": to_port
+		"to_port": to_port,
+		"solver_edge": solver_edge
 	}
 	
 	connections.append(connection)
@@ -161,6 +186,10 @@ func disconnect_nodes(from_node: StringName, from_port: int, to_node: StringName
 		   connection["from_port"] == from_port and \
 		   connection["to_node"] == to_node and \
 		   connection["to_port"] == to_port:
+			# Remove solver edge if it exists
+			if connection.has("solver_edge") and connection["solver_edge"]:
+				solver_graph.remove_edge(connection["solver_edge"])
+			
 			connections.remove_at(i)
 			emit_signal("connection_removed", from_node, from_port, to_node, to_port)
 			return true
@@ -217,3 +246,35 @@ func add_node_from_path(custom_class_name: String) -> SimulationNode:
 		add_node(sim_node)
 		return sim_node
 	return null
+
+## Helper function to map port index to port name
+## This is a simplified mapping - components define their own port names
+func _get_port_name(component: SolverSimulationNode, port_index: int, is_output: bool) -> String:
+	# For StorageFacility: single port "fluid_port"
+	if component is StorageFacility:
+		return "fluid_port"
+	
+	# For Pump: inlet (port 0 input) and outlet (port 0 output)
+	if component is Pump:
+		if is_output:
+			return "outlet"
+		else:
+			return "inlet"
+	
+	# For ElectrolyticFactory:
+	# Inputs: 0=water_in, 1=power_in
+	# Outputs: 0=h2_out, 1=o2_out
+	if component is ElectrolyticFactory:
+		if is_output:
+			if port_index == 0:
+				return "h2_out"
+			elif port_index == 1:
+				return "o2_out"
+		else:
+			if port_index == 0:
+				return "water_in"
+			elif port_index == 1:
+				return "power_in"
+	
+	# Default fallback
+	return ""

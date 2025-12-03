@@ -9,6 +9,11 @@ extends SimulationNode
 ##   - fluid_out (Port -> LCSolverNode, Domain: Fluid)
 ##   - power_in (Port -> LCSolverNode, Domain: Electrical)
 
+# Properties inherited from BaseFacility
+@export var facility_type: String = "generic"
+@export var status: String = "Idle"
+@export var efficiency: float = 1.0
+
 # Reference to the solver graph (set by SimulationManager)
 var solver_graph: LCSolverGraph = null
 

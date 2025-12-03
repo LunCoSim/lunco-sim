@@ -39,14 +39,15 @@ func update_solver_state():
 		power_ratio = clamp(power_available / power_consumption, 0.0, 1.0)
 	
 	# Convert pump_rate (units/min) to pressure source
-	# This is a simplified model - in reality would depend on pump curve
-	var target_pressure_source = (pump_rate / 60.0) * efficiency * power_ratio * 0.1
+	# Pump pressure should be strong enough to overcome typical back-pressure
+	# Using pump_rate directly as a pressure multiplier (simplified model)
+	var target_pressure_source = pump_rate * efficiency * power_ratio
 	
 	pump_edge.potential_source = target_pressure_source
 	
 	# Update conductance (resistance to flow)
 	# Higher pump rate = higher conductance when powered
-	pump_edge.conductance = max(0.1, pump_rate / 10.0 * power_ratio)
+	pump_edge.conductance = max(0.1, pump_rate * power_ratio)
 
 ## Update component state from solver results
 func update_from_solver():
