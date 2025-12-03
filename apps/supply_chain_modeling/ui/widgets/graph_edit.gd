@@ -78,3 +78,42 @@ func get_ui_state() -> Dictionary:
 			}
 			
 	return save_data
+
+## Load and visualize a raw LCSolverGraph
+func load_from_solver_graph(graph: LCSolverGraph):
+	clear_graph()
+	clear_connections()
+	
+	if not graph:
+		return
+		
+	var node_map = {} # solver_id -> ui_node_name
+	var layout_x = 100
+	var layout_y = 100
+	var spacing = 250
+	var cols = 4
+	var i = 0
+	
+	# Create Nodes
+	for node_id in graph.nodes:
+		var solver_node: LCSolverNode = graph.nodes[node_id]
+		var ui_node = load(MODULE_PATH + "/ui/widgets/ui_solver_node.tscn").instantiate()
+		
+		ui_node.solver_node = solver_node
+		ui_node.name = "SolverNode_" + str(node_id)
+		node_map[node_id] = ui_node.name
+		
+		# Simple grid layout
+		ui_node.position_offset = Vector2(layout_x + (i % cols) * spacing, layout_y + (i / cols) * spacing)
+		i += 1
+		
+		add_child(ui_node)
+	
+	# Create Connections
+	for edge_id in graph.edges:
+		var edge: LCSolverEdge = graph.edges[edge_id]
+		var from_name = node_map.get(edge.node_a.id)
+		var to_name = node_map.get(edge.node_b.id)
+		
+		if from_name and to_name:
+			connect_node(from_name, 0, to_name, 0)
