@@ -1,5 +1,5 @@
 class_name Pump
-extends BaseFacility
+extends SolverSimulationNode
 
 # Pump properties
 @export var pump_rate: float = 10.0  # units/minute
@@ -10,78 +10,67 @@ func _init():
 	facility_type = "pump"
 	description = "Pumps resources between storages"
 
-func _physics_process(delta: float) -> void:
-	if not is_physics_processing():
+## Create inlet and outlet ports
+func _create_ports():
+	# Inlet port (junction node - no storage)
+	ports["inlet"] = solver_graph.add_node(0.0, false, "Fluid")
+	
+	# Outlet port (junction node - no storage)
+	ports["outlet"] = solver_graph.add_node(0.0, false, "Fluid")
+
+## Create internal edge (the pump itself)
+func _create_internal_edges():
+	var pump_edge = solver_graph.connect_nodes(ports["inlet"], ports["outlet"], 1.0, "Fluid")
+	pump_edge.is_unidirectional = true  # Pumps only push one direction
+	internal_edges.append(pump_edge)
+
+## Update solver parameters from component state
+func update_solver_state():
+	if internal_edges.size() == 0:
 		return
 		
-	# Get connected nodes through the simulation manager
-	var simulation = get_parent()
-	if not simulation:
-		status = "No Simulation"
+	var pump_edge: LCSolverEdge = internal_edges[0]
+	
+	# Calculate effective pump pressure based on power availability
+	# If we have enough power, apply full pump pressure
+	# Otherwise, scale down proportionally
+	var power_ratio = 1.0
+	if power_consumption > 0:
+		power_ratio = clamp(power_available / power_consumption, 0.0, 1.0)
+	
+	# Convert pump_rate (units/min) to pressure source
+	# This is a simplified model - in reality would depend on pump curve
+	var target_pressure_source = (pump_rate / 60.0) * efficiency * power_ratio * 0.1
+	
+	pump_edge.potential_source = target_pressure_source
+	
+	# Update conductance (resistance to flow)
+	# Higher pump rate = higher conductance when powered
+	pump_edge.conductance = max(0.1, pump_rate / 10.0 * power_ratio)
+
+## Update component state from solver results
+func update_from_solver():
+	# Update status based on flow
+	if internal_edges.size() == 0:
+		status = "Not Connected"
 		return
 		
-	var source_storage = null
-	var target_storage = null
-	var power_source = null
+	var pump_edge: LCSolverEdge = internal_edges[0]
 	
-	# Find our connections
-	for connection in simulation.connections:
-		if connection["to_node"] == name:
-			var source_node = simulation.get_node(NodePath(connection["from_node"]))
-			match connection["to_port"]:
-				0: source_storage = source_node
-				1: power_source = source_node
-		elif connection["from_node"] == name and connection["from_port"] == 0:
-			target_storage = simulation.get_node(NodePath(connection["to_node"]))
-	
-	# Check connections and update status
-	if not source_storage:
-		status = "Source Not Connected"
-		return
-	elif not target_storage:
-		status = "Target Not Connected"
-		return
-	elif not power_source:
-		status = "Power Not Connected"
-		return
-		
-	# Check power availability
-	if power_source and "power_output" in power_source:
-		power_available = power_source.power_output * power_source.efficiency
-		if power_available < power_consumption:
-			status = "Insufficient Power"
-			return
-	
-	status = "Running"
-	
-	# Calculate pumping for this time step
-	var minutes = delta * 60  # Convert seconds to minutes
-	var amount_to_pump = pump_rate * efficiency * minutes
-	
-	# First check how much the target can accept
-	if "available_space" in target_storage:
-		var target_space = target_storage.available_space()
-		# Limit pump amount to available space
-		amount_to_pump = min(amount_to_pump, target_space)
-	
-	# Only remove from source if target has space
-	if amount_to_pump > 0:
-		if "remove_resource" in source_storage:
-			var removed = source_storage.remove_resource(amount_to_pump)
-			
-			# Add to target
-			if removed > 0 and "add_resource" in target_storage:
-				var added = target_storage.add_resource(removed)
-				
-				# If target couldn't accept everything, return remainder to source
-				if added < removed:
-					source_storage.add_resource(removed - added)
+	if power_available < power_consumption * 0.1:
+		status = "Insufficient Power"
+	elif pump_edge.flow_rate > 0.01:
+		status = "Running"
+	else:
+		status = "Idle"
 
 func save_state() -> Dictionary:
 	var state = super.save_state()
-	
-	
+	state["pump_rate"] = pump_rate
+	state["power_consumption"] = power_consumption
 	return state
 
 func load_state(state: Dictionary) -> void:
 	super.load_state(state)
+	pump_rate = state.get("pump_rate", pump_rate)
+	power_consumption = state.get("power_consumption", power_consumption)

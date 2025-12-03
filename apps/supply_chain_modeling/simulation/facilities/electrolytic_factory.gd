@@ -1,5 +1,5 @@
 class_name ElectrolyticFactory
-extends BaseFacility
+extends SolverSimulationNode
 
 # Input/output rates
 @export var h2o_input_rate: float = 2.0  # units/minute
@@ -16,112 +16,110 @@ func _init():
 	facility_type = "producer"
 	description = "Breaks down H2O into H2 and O2 through electrolysis"
 
-func _physics_process(delta: float) -> void:
-	if not is_physics_processing():
-		return
-		
-	# Get connected nodes through the simulation manager
-	var simulation = get_parent()
-	if not simulation:
-		status = "No Simulation"
-		return
-		
-	var h2o_source = null
-	var power_source = null
-	var h2_storage = null
-	var o2_storage = null
+## Create ports for water input and gas outputs
+func _create_ports():
+	# Water inlet (junction node)
+	var water_in = solver_graph.add_node(0.0, false, "Fluid")
+	water_in.resource_type = "water"
+	ports["water_in"] = water_in
 	
-	# Find our connections
-	for connection in simulation.connections:
-		if connection["to_node"] == name:
-			var source_node = simulation.get_node(NodePath(connection["from_node"]))
-			match connection["to_port"]:
-				0: h2o_source = source_node
-				1: power_source = source_node
-		elif connection["from_node"] == name:
-			var target_node = simulation.get_node(NodePath(connection["to_node"]))
-			match connection["from_port"]:
-				0: h2_storage = target_node
-				1: o2_storage = target_node
+	# H2 outlet (junction node)
+	var h2_out = solver_graph.add_node(0.0, false, "Fluid")
+	h2_out.resource_type = "hydrogen"
+	ports["h2_out"] = h2_out
 	
-	# Check connections and update status
-	if not h2o_source:
-		status = "H2O Not Connected"
-		return
-	elif not power_source:
-		status = "Power Not Connected"
-		return
-	elif not h2_storage:
-		status = "H2 Not Connected"
-		return
-	elif not o2_storage:
-		status = "O2 Not Connected"
+	# O2 outlet (junction node)
+	var o2_out = solver_graph.add_node(0.0, false, "Fluid")
+	o2_out.resource_type = "oxygen"
+	ports["o2_out"] = o2_out
+	
+	# Internal storage for buffering (small capacitance)
+	var internal_buffer = solver_graph.add_node(0.0, false, "Fluid")
+	internal_buffer.set_capacitance(1.0)  # Small buffer
+	internal_buffer.resource_type = "water"
+	ports["_internal_buffer"] = internal_buffer
+
+## Create internal edges
+func _create_internal_edges():
+	# Water intake edge (from external water_in to internal buffer)
+	var intake_edge = solver_graph.connect_nodes(ports["water_in"], ports["_internal_buffer"], 1.0, "Fluid")
+	internal_edges.append(intake_edge)
+	
+	# H2 production edge (from buffer to h2_out)
+	var h2_edge = solver_graph.connect_nodes(ports["_internal_buffer"], ports["h2_out"], 0.1, "Fluid")
+	h2_edge.is_unidirectional = true
+	internal_edges.append(h2_edge)
+	
+	# O2 production edge (from buffer to o2_out)
+	var o2_edge = solver_graph.connect_nodes(ports["_internal_buffer"], ports["o2_out"], 0.1, "Fluid")
+	o2_edge.is_unidirectional = true
+	internal_edges.append(o2_edge)
+
+## Update solver parameters from component state
+func update_solver_state():
+	if internal_edges.size() < 3:
 		return
 	
-	# Calculate time step
-	var minutes = delta * 60  # Convert seconds to minutes
+	# Calculate production rate based on power availability
+	var power_ratio = 1.0
+	if power_consumption > 0:
+		power_ratio = clamp(power_available / power_consumption, 0.0, 1.0)
 	
-	# Check power availability
-	power_available = power_source.power_output * power_source.efficiency if "power_output" in power_source else 0.0
-	if power_available < power_input_rate:
+	var effective_efficiency = efficiency * power_ratio
+	
+	# Intake edge (water consumption)
+	var intake_edge: LCSolverEdge = internal_edges[0]
+	intake_edge.conductance = (h2o_input_rate / 60.0) * effective_efficiency
+	
+	# H2 production edge
+	var h2_edge: LCSolverEdge = internal_edges[1]
+	h2_edge.potential_source = (h2_output_rate / 60.0) * effective_efficiency * 0.1
+	h2_edge.conductance = (h2_output_rate / 60.0) * effective_efficiency
+	
+	# O2 production edge
+	var o2_edge: LCSolverEdge = internal_edges[2]
+	o2_edge.potential_source = (o2_output_rate / 60.0) * effective_efficiency * 0.1
+	o2_edge.conductance = (o2_output_rate / 60.0) * effective_efficiency
+
+## Update component state from solver results
+func update_from_solver():
+	if internal_edges.size() < 3:
+		status = "Not Connected"
+		return
+	
+	# Check power
+	if power_available < power_consumption * 0.1:
 		status = "Insufficient Power"
 		return
-		
-	# Calculate maximum possible production based on available output space
-	var max_h2_production = h2_output_rate * efficiency * minutes
-	var max_o2_production = o2_output_rate * efficiency * minutes
 	
-	var h2_space = h2_storage.available_space() if "available_space" in h2_storage else 0.0
-	var o2_space = o2_storage.available_space() if "available_space" in o2_storage else 0.0
+	# Check if we're producing
+	var h2_edge: LCSolverEdge = internal_edges[1]
+	var o2_edge: LCSolverEdge = internal_edges[2]
 	
-	max_h2_production = min(max_h2_production, h2_space)
-	max_o2_production = min(max_o2_production, o2_space)
-	
-	if max_h2_production <= 0 or max_o2_production <= 0:
-		status = "Output Storage Full"
-		return
-		
-	# Calculate required H2O input for the possible production
-	var h2o_required = (h2o_input_rate * minutes) * (max_h2_production / (h2_output_rate * efficiency * minutes))
-	
-	# Check resource availability
-	if not "remove_resource" in h2o_source:
-		status = "Invalid Input Connection"
-		return
-		
-	# Try to get H2O
-	var h2o_available = h2o_source.remove_resource(h2o_required)
-	
-	# If we can't get enough H2O, return what we took
-	if h2o_available < h2o_required:
-		if h2o_available > 0:
-			h2o_source.add_resource(h2o_available)
-		status = "Insufficient H2O"
-		return
-		
-	# Produce outputs
-	var h2_produced = max_h2_production
-	var o2_produced = max_o2_production
-	
-	var h2_added = h2_storage.add_resource(h2_produced)
-	var o2_added = o2_storage.add_resource(o2_produced)
-	
-	# If we couldn't add all output, return proportional input
-	if h2_added < h2_produced or o2_added < o2_produced:
-		var return_ratio = min(
-			(h2_produced - h2_added) / h2_produced,
-			(o2_produced - o2_added) / o2_produced
-		)
-		h2o_source.add_resource(h2o_available * return_ratio)
-	
-	status = "Running" 
-
+	if h2_edge.flow_rate > 0.01 and o2_edge.flow_rate > 0.01:
+		status = "Running"
+	elif ports.has("_internal_buffer"):
+		var buffer: LCSolverNode = ports["_internal_buffer"]
+		if buffer.flow_accumulation < 0.1:
+			status = "Insufficient H2O"
+		else:
+			status = "Output Storage Full"
+	else:
+		status = "Idle"
 
 func save_state() -> Dictionary:
 	var state = super.save_state()
-	
-	
+	state["h2o_input_rate"] = h2o_input_rate
+	state["power_input_rate"] = power_input_rate
+	state["h2_output_rate"] = h2_output_rate
+	state["o2_output_rate"] = o2_output_rate
+	state["power_consumption"] = power_consumption
 	return state
 
 func load_state(state: Dictionary) -> void:
 	super.load_state(state)
+	h2o_input_rate = state.get("h2o_input_rate", h2o_input_rate)
+	power_input_rate = state.get("power_input_rate", power_input_rate)
+	h2_output_rate = state.get("h2_output_rate", h2_output_rate)
+	o2_output_rate = state.get("o2_output_rate", o2_output_rate)
+	power_consumption = state.get("power_consumption", power_consumption)

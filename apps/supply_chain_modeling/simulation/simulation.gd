@@ -12,6 +12,9 @@ signal connection_removed(from_id, from_port, to_id, port)
 # === Variables ===
 var connections: Array[Dictionary] = []  # Dictionary of connections [from_id, from_port, to_id, port]
 
+# Solver Graph
+var solver_graph: LCSolverGraph = LCSolverGraph.new()
+
 var paused: bool = true
 var simulation_time: float = 0.0
 var time_scale: float = 1.0
@@ -23,6 +26,11 @@ var resource_manager: ResourceRegistry = ResourceRegistry.get_instance()
 func add_node(node: SimulationNode) -> void:
 	add_child(node)
 	node.name = node.name.validate_node_name()
+	
+	# Register with solver if it's a SolverSimulationNode
+	if node is SolverSimulationNode:
+		node.register_with_solver(solver_graph)
+	
 	emit_signal("node_added", node)
 
 func remove_node(node_id: NodePath) -> void:
@@ -39,6 +47,19 @@ func _physics_process(delta: float) -> void:
 		return
 	
 	simulation_time += delta * time_scale
+	
+	# Update solver parameters from component states
+	for child in get_children():
+		if child is SolverSimulationNode:
+			child.update_solver_state()
+	
+	# Solve the graph
+	solver_graph.solve(delta * time_scale)
+	
+	# Update component states from solver results
+	for child in get_children():
+		if child is SolverSimulationNode:
+			child.update_from_solver()
 
 
 func save_state() -> Dictionary:
