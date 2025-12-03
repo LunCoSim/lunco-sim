@@ -14,7 +14,7 @@ extends LCDynamicEffector
 
 @export_group("Propellant Connection")
 @export var fuel_tank_path: NodePath
-var fuel_tank = null  ## Can be LCFuelTankEffector or LCResourceTankEffector
+var fuel_tank = null  ## LCResourceTankEffector
 @export var oxidizer_tank_path: NodePath
 var oxidizer_tank = null  ## LCResourceTankEffector for oxygen
 @export var mixture_ratio: float = 3.6  ## Oxidizer:Fuel mass ratio (3.6:1 for Starship Raptor)
@@ -66,17 +66,12 @@ func _ready():
 	super._ready()
 	thrust_direction = thrust_direction.normalized()
 	
-	# Connect to fuel tank (can be LCFuelTankEffector or LCResourceTankEffector)
+	# Connect to fuel tank
 	if not fuel_tank_path.is_empty():
 		var node = get_node_or_null(fuel_tank_path)
-		if node is LCFuelTankEffector or node is LCResourceTankEffector:
+		if node is LCResourceTankEffector:
 			fuel_tank = node
-			var amount = 0.0
-			if node is LCFuelTankEffector:
-				amount = node.fuel_mass
-			else:
-				amount = node.get_amount()
-			print("✓ LCThrusterEffector: Connected to fuel tank ", node.name, " with ", amount, " kg")
+			print("✓ LCThrusterEffector: Connected to fuel tank ", node.name, " with ", node.get_amount(), " kg")
 		else:
 			print("✗ LCThrusterEffector: Invalid fuel tank path or type: ", fuel_tank_path)
 	else:
@@ -178,11 +173,7 @@ func compute_force_torque(delta: float) -> Dictionary:
 	
 	# Deplete fuel tank
 	if fuel_tank:
-		var fuel_available = 0.0
-		if fuel_tank is LCFuelTankEffector:
-			fuel_available = fuel_tank.deplete_fuel(fuel_needed)
-		elif fuel_tank is LCResourceTankEffector:
-			fuel_available = fuel_tank.remove_resource(fuel_needed)
+		var fuel_available = fuel_tank.remove_resource(fuel_needed)
 		
 		if fuel_available < fuel_needed * 0.99:  # Allow 1% tolerance
 			can_fire = false

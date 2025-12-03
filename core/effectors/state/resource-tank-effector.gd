@@ -1,16 +1,21 @@
 class_name LCResourceTankEffector
 extends LCStateEffector
 
-## Universal resource storage tank
+## Universal resource storage tank (New Physics)
 ##
-## Can store any resource type defined in the resource registry.
-## Replaces specific tank types (fuel tank, oxygen tank, etc.)
+## Uses LCTankComponent for pressure-based bidirectional flow.
+## Replaces the old LCResourceContainer system.
 
 @export var resource_id: String = "oxygen"  ## Resource type to store
-@export var capacity: float = 100.0  ## Maximum capacity in resource units (kg, L, kWh, etc.)
-@export var tank_dry_mass: float = 10.0  ## Mass of empty tank
+@export var capacity: float = 100.0  ## Maximum capacity in kg
+@export var tank_dry_mass: float = 10.0  ## Mass of empty tank in kg
+@export var tank_height: float = 2.0  ## Physical height for pressure calculation in m
+@export var initial_fill_percentage: float = 100.0  ## Initial fill level (0-100%)
 
-var resource_container: LCResourceContainer
+# Physics component
+var component: LCTankComponent
+var solver_graph: LCSolverGraph
+
 var is_initialized: bool = false
 
 func _ready():
@@ -23,25 +28,96 @@ func _initialize_tank():
 	
 	# Get resource definition from registry
 	var res_def = LCResourceRegistry.get_resource(resource_id)
-	if res_def:
-		# Initialize with current_amount (set from scene properties)
-		var initial_amount = 0.0
-		if has_meta("initial_amount"):
-			initial_amount = get_meta("initial_amount")
-		resource_container = LCResourceContainer.new(res_def, initial_amount)
-		is_initialized = true
-		print("ResourceTank: Initialized for ", res_def.display_name, " with ", initial_amount, " kg")
-	else:
+	if not res_def:
 		push_error("ResourceTank: Resource not found in registry: " + resource_id)
-		# Create a placeholder to prevent crashes
-		var placeholder = LCResourceDefinition.new()
-		placeholder.resource_id = resource_id
-		placeholder.display_name = "Unknown (" + resource_id + ")"
-		resource_container = LCResourceContainer.new(placeholder, 0.0)
+		return
 	
-	_update_mass()
+	is_initialized = true
+	print("ResourceTank: Initialized for ", res_def.display_name)
+	
 	_initialize_telemetry()
 	_initialize_parameters()
+
+## Set the solver graph (called by spacecraft during _ready)
+func set_solver_graph(graph: LCSolverGraph):
+	solver_graph = graph
+	if solver_graph and not component:
+		# Get resource density
+		var res_def = LCResourceRegistry.get_resource(resource_id)
+		var density = res_def.density if res_def else 1000.0
+		
+		# Create component
+		var volume = capacity / density
+		component = LCTankComponent.new(solver_graph, volume, tank_height, density)
+		
+		# Set initial mass
+		var initial_mass = (initial_fill_percentage / 100.0) * capacity
+		component.set_initial_mass(initial_mass)
+		
+		_update_mass()
+
+# --- Public API ---
+
+## Get current amount in kg
+func get_amount() -> float:
+	if component:
+		return component.mass
+	return 0.0
+
+## Get current fill percentage (0-100)
+func get_fill_percentage() -> float:
+	if component:
+		var max_mass = component.volume * component.density
+		return (component.mass / max_mass) * 100.0 if max_mass > 0 else 0.0
+	return 0.0
+
+## Set amount in kg (for initialization/commands)
+func set_amount(new_amount: float):
+	if component:
+		component.set_initial_mass(new_amount)
+		_update_mass()
+
+## Add resource to tank (helper)
+func add_resource(amount: float):
+	if component:
+		component.mass += amount
+		_update_mass()
+
+## Remove resource from tank (helper)
+## Returns actual amount removed
+func remove_resource(amount: float) -> float:
+	if component:
+		var actual_remove = min(amount, component.mass)
+		component.mass -= actual_remove
+		_update_mass()
+		return actual_remove
+	return 0.0
+
+## Get the solver port (for manual connections)
+func get_port() -> LCSolverNode:
+	if component:
+		return component.get_port("port")
+	return null
+
+## Check if tank is empty
+func is_empty() -> bool:
+	if component:
+		return component.mass < 0.1
+	return true
+
+## Check if tank is full
+func is_full() -> bool:
+	if component:
+		var max_mass = component.volume * component.density
+		return component.mass >= max_mass * 0.99
+	return false
+
+## Get resource name
+func get_resource_name() -> String:
+	var res_def = LCResourceRegistry.get_resource(resource_id)
+	return res_def.display_name if res_def else "Unknown"
+
+# --- Internal ---
 
 var current_amount: float:
 	get:
@@ -56,99 +132,14 @@ var fill_percentage_param: float:
 		set_amount(capacity * value / 100.0)
 
 func _initialize_parameters():
-	# Capacity and dry mass use reasonable kg ranges
 	Parameters["Capacity"] = { "path": "capacity", "type": "float", "min": 1000.0, "max": 2000000.0, "step": 1000.0 }
 	Parameters["Dry Mass"] = { "path": "tank_dry_mass", "type": "float", "min": 1000.0, "max": 100000.0, "step": 1000.0 }
-	# Amount uses percentage (0-100%) for better slider UX
 	Parameters["Fill %"] = { "path": "fill_percentage_param", "type": "float", "min": 0.0, "max": 100.0, "step": 0.1 }
-	# Direct text input for exact mass
 	Parameters["Amount (kg)"] = { "path": "current_amount", "type": "float", "text_field": true }
 
-## Add resource to tank
-func add_resource(amount: float) -> float:
-	if not resource_container:
-		return 0.0
-	
-	var space_available = capacity - resource_container.amount
-	var added = resource_container.add(min(amount, space_available))
-	_update_mass()
-	return added
-
-## Remove resource from tank
-func remove_resource(amount: float) -> float:
-	if not resource_container:
-		return 0.0
-	
-	var removed = resource_container.remove(amount)
-	_update_mass()
-	return removed
-
-## Transfer resource to another tank
-func transfer_to(other_tank: LCResourceTankEffector, amount: float) -> float:
-	if not other_tank or not resource_container or not other_tank.resource_container:
-		return 0.0
-	
-	# Check if same resource type
-	if other_tank.resource_id != resource_id:
-		push_error("Cannot transfer between different resource types")
-		return 0.0
-	
-	# Calculate how much can be transferred
-	var available = resource_container.amount
-	var space_in_other = other_tank.capacity - other_tank.resource_container.amount
-	var transfer_amount = min(amount, min(available, space_in_other))
-	
-	if transfer_amount > 0:
-		var transferred = resource_container.transfer_to(other_tank.resource_container, transfer_amount)
-		_update_mass()
-		other_tank._update_mass()
-		return transferred
-	
-	return 0.0
-
-## Get current fill percentage
-func get_fill_percentage() -> float:
-	if not resource_container:
-		return 0.0
-	return resource_container.get_fill_percentage(capacity)
-
-## Get current amount
-func get_amount() -> float:
-	if not resource_container:
-		return 0.0
-	return resource_container.amount
-
-## Set amount (for initialization)
-func set_amount(new_amount: float):
-	if not resource_container:
-		# Store for later initialization
-		set_meta("initial_amount", new_amount)
-		return
-	resource_container.amount = clamp(new_amount, 0.0, capacity)
-	_update_mass()
-
-## Check if tank is empty
-func is_empty() -> bool:
-	if not resource_container:
-		return true
-	return resource_container.is_empty()
-
-## Check if tank is full
-func is_full() -> bool:
-	if not resource_container:
-		return false
-	return resource_container.amount >= capacity * 0.99  # 99% is "full"
-
-## Get resource name
-func get_resource_name() -> String:
-	if resource_container:
-		return resource_container.get_resource_name()
-	return "Unknown"
-
-## Update vehicle mass based on tank contents
 func _update_mass():
-	if resource_container:
-		mass = tank_dry_mass + resource_container.get_mass()
+	if component:
+		mass = tank_dry_mass + component.mass
 	else:
 		mass = tank_dry_mass
 
@@ -160,23 +151,29 @@ func _initialize_telemetry():
 		"capacity": capacity,
 		"fill_percentage": get_fill_percentage(),
 		"mass": mass,
-		"temperature": resource_container.temperature if resource_container else 293.15,
+		"pressure": 0.0,
 	}
 
 func _process(delta):
 	_update_telemetry()
 
+func _physics_process(delta):
+	# Update component physics
+	if component:
+		component.update(delta)
+		_update_mass()
+
 func _update_telemetry():
-	if not Telemetry:
+	if not Telemetry or not component:
 		return
 	
 	Telemetry["amount"] = get_amount()
 	Telemetry["fill_percentage"] = get_fill_percentage()
 	Telemetry["mass"] = mass
-	if resource_container:
-		Telemetry["temperature"] = resource_container.temperature
+	Telemetry["pressure"] = component.get_port("port").pressure
 
-# Command interface for remote control
+# --- Command Interface ---
+
 func cmd_fill(args: Array):
 	if args.size() > 0:
 		set_amount(args[0])
@@ -185,9 +182,11 @@ func cmd_empty(args: Array):
 	set_amount(0.0)
 
 func cmd_add(args: Array):
-	if args.size() > 0:
-		add_resource(args[0])
+	if args.size() > 0 and component:
+		component.mass += args[0]
+		_update_mass()
 
 func cmd_remove(args: Array):
-	if args.size() > 0:
-		remove_resource(args[0])
+	if args.size() > 0 and component:
+		component.mass = max(0.0, component.mass - args[0])
+		_update_mass()

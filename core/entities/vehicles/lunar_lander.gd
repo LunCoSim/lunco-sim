@@ -54,11 +54,11 @@ func _build_lander():
 	descent_structure.add_child(ds_mesh)
 	
 	# Descent fuel tank (hypergolic propellant)
-	var descent_fuel = LCFuelTankEffector.new()
-	descent_fuel.fuel_capacity = 8200.0  # kg
-	descent_fuel.fuel_mass = 8200.0  # Start full
+	var descent_fuel = LCResourceTankEffector.new()
+	descent_fuel.resource_id = "fuel" # Generic fuel for now
+	descent_fuel.capacity = 8200.0  # kg
+	descent_fuel.initial_fill_percentage = 100.0  # Start full
 	descent_fuel.tank_dry_mass = 200.0  # Tank structure mass
-	descent_fuel.tank_type = LCFuelTankEffector.TankType.CYLINDRICAL
 	descent_fuel.tank_height = 2.0
 	descent_fuel.name = "DescentFuelTank"
 	descent_fuel.position = Vector3(0, -0.5, 0)
@@ -149,11 +149,11 @@ func _build_lander():
 	ascent_structure.add_child(as_mesh)
 	
 	# Ascent fuel tank
-	var ascent_fuel = LCFuelTankEffector.new()
-	ascent_fuel.fuel_capacity = 2400.0  # kg
-	ascent_fuel.fuel_mass = 2400.0  # Start full
+	var ascent_fuel = LCResourceTankEffector.new()
+	ascent_fuel.resource_id = "fuel"
+	ascent_fuel.capacity = 2400.0  # kg
+	ascent_fuel.initial_fill_percentage = 100.0  # Start full
 	ascent_fuel.tank_dry_mass = 100.0
-	ascent_fuel.tank_type = LCFuelTankEffector.TankType.SPHERICAL
 	ascent_fuel.name = "AscentFuelTank"
 	ascent_fuel.position = Vector3(0, 1.0, 0)
 	add_child(ascent_fuel)

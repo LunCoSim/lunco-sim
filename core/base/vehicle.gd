@@ -9,8 +9,8 @@ extends VehicleBody3D
 var state_effectors: Array = [] # Can hold LCStateEffector or LCWheelEffector
 var dynamic_effectors: Array = [] # Can hold LCDynamicEffector or LCWheelEffector
 
-# Resource network (auto-populated)
-var resource_network: LCResourceNetwork = null
+# Resource solver (new physics)
+var solver_graph: LCSolverGraph = null
 
 # Aggregated properties (computed automatically)
 var total_mass: float = 0.0
@@ -40,7 +40,7 @@ var mass_properties_dirty: bool = true
 
 func _ready():
 	_discover_effectors()
-	_initialize_resource_network()
+	_initialize_solver_graph()
 	_update_mass_properties()
 	_manage_power_system(0.0)
 
@@ -56,23 +56,27 @@ func _physics_process(delta):
 		if mass_properties_dirty:
 			_update_mass_properties()
 			
+		# Update solver graph
+		if solver_graph:
+			solver_graph.solve(delta)
+			
 		_manage_power_system(delta)
 		_apply_effector_forces(delta)
 		_apply_reaction_wheel_torques()
 
 
-## Initialize resource network for automatic flow
-func _initialize_resource_network():
-	# Create network if it doesn't exist
-	if not resource_network:
-		resource_network = LCResourceNetwork.new()
-		add_child(resource_network)
+## Initialize solver graph for physics
+func _initialize_solver_graph():
+	if not solver_graph:
+		solver_graph = LCSolverGraph.new()
 	
-	# Rebuild network from current effectors
-	resource_network.rebuild_from_vehicle(self)
+	# Pass solver graph to all tank effectors
+	for effector in state_effectors:
+		if effector.has_method("set_solver_graph"):
+			effector.set_solver_graph(solver_graph)
 	
 	if debug_effectors:
-		print("[LCVehicle] Resource network initialized with ", resource_network.nodes.size(), " nodes")
+		print("[LCVehicle] Solver graph initialized")
 
 ## Discovers all effector children recursively.
 func _discover_effectors():
@@ -106,8 +110,7 @@ func _on_effector_mass_changed():
 ## Refresh effectors (call this after adding/removing children)
 func refresh_effectors():
 	_discover_effectors()
-	if resource_network:
-		resource_network.rebuild_from_vehicle(self)
+	_initialize_solver_graph()
 	_update_mass_properties()
 
 ## Updates vehicle mass properties by aggregating from state effectors.
