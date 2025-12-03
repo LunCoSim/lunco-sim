@@ -2,7 +2,7 @@
 
 [ext_resource type="Theme" uid="uid://hve1e7mnexbi" path="res://themes/theme.tres" id="1_vwu5s"]
 
-[ext_resource type="Script" uid="uid://b8q4q4q4q4q4q" path="res://core/widgets/tutorial.gd" id="2_script"]
+[ext_resource type="Script" uid="uid://dwtoylxvxdvt2" path="res://core/widgets/tutorial.gd" id="2_script"]
 
 [node name="TutorialContent" type="PanelContainer" unique_id=225535878]
 anchors_preset = 15
