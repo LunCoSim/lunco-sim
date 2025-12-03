@@ -7,6 +7,8 @@ enum Entities {
 	Gobot,
 	Astronaut,
 	Rover,
+	LunarLander,
+	MarsRover,
 }
 
 var Paths = {
@@ -15,6 +17,8 @@ var Paths = {
 	Entities.Gobot: "res://content/gobot/gobot.tscn",
 	Entities.Astronaut: "res://content/animated-astronaut-character-in-space-suit-loop/astronaut.tscn",
 	Entities.Rover: "res://apps/3dsim/entities/rover/rover.tscn",
+	Entities.LunarLander: "res://core/entities/vehicles/lunar_lander.tscn",
+	Entities.MarsRover: "res://core/entities/vehicles/mars_rover.tscn",
 }
 
 var UIs = {
@@ -23,6 +27,8 @@ var UIs = {
 	Entities.Gobot: "res://entities/gobot/gobot.tscn",
 	Entities.Astronaut: "res://entities/astronaut/astronaut.tscn",
 	Entities.Rover: "res://apps/3dsim/entities/rover/rover.tscn",
+	Entities.LunarLander: "res://content/starship/starship-ui.tscn", # Reuse starship UI for now
+	Entities.MarsRover: "res://apps/3dsim/entities/rover/rover.tscn", # Reuse rover UI
 }
 
 var InputAdapters = {
@@ -31,6 +37,8 @@ var InputAdapters = {
 	Entities.Gobot: "res://entities/gobot/gobot.tscn",
 	Entities.Astronaut: "res://entities/astronaut/astronaut.tscn",
 	Entities.Rover: "res://apps/3dsim/entities/rover/rover.tscn",
+	Entities.LunarLander: "res://content/starship/starship.tscn", # Reuse starship adapter
+	Entities.MarsRover: "res://apps/3dsim/entities/rover/rover.tscn", # Reuse rover adapter
 }
 
 var Caches: = {

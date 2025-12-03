@@ -2,9 +2,9 @@ extends LCControllerUI
 
 # target is inherited from LCControllerUI (typed as LCRoverController)
 
-@onready var speed_label = $Help/SpeedLabel
-@onready var steering_label = $Help/SteeringLabel
-@onready var motor_label = $Help/MotorLabel
+@onready var speed_label = get_node_or_null("Help/SpeedLabel")
+@onready var steering_label = get_node_or_null("Help/SteeringLabel")
+@onready var motor_label = get_node_or_null("Help/MotorLabel")
 
 # UI update throttling
 var update_timer := 0.0
@@ -51,7 +51,10 @@ func _update_ui_labels():
 	var steering = target.steering_input if "steering_input" in target else 0.0
 	var motor = target.motor_input if "motor_input" in target else 0.0
 
-	# Update labels
-	speed_label.text = "Speed: %.1f m/s" % speed
-	steering_label.text = "Steering: %.2f" % steering
-	motor_label.text = "Motor: %.0f%%" % (motor * 100)
+	# Update labels (only if they exist)
+	if speed_label:
+		speed_label.text = "Speed: %.1f m/s" % speed
+	if steering_label:
+		steering_label.text = "Steering: %.2f" % steering
+	if motor_label:
+		motor_label.text = "Motor: %.0f%%" % (motor * 100)

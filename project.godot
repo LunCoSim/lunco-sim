@@ -506,7 +506,6 @@ toggle_recording={
 lights_and_shadows/directional_shadow/size=8192
 lights_and_shadows/directional_shadow/soft_shadow_filter_quality=3
 lights_and_shadows/positional_shadow/soft_shadow_filter_quality=3
-driver/depth_prepass/enable=true
 environment/ssao/quality=0
 environment/ssil/quality=0
 anti_aliasing/screen_space_roughness_limiter/enabled=false

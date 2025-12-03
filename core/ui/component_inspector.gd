@@ -129,13 +129,16 @@ func update_structure_view():
 		# Just update text of existing items
 		_update_component_item_text(rover_item, selected_rover, components.size())
 		
-		var i = 0
-		var child = rover_item.get_child(0)
-		while child:
-			if i < components.size():
-				_update_component_item_text(child, components[i])
-			child = child.get_next()
-			i += 1
+		# Only update children if they exist
+		if rover_item.get_child_count() > 0:
+			var i = 0
+			var child = rover_item.get_child(0)
+			while child:
+				if i < components.size():
+					_update_component_item_text(child, components[i])
+				child = child.get_next()
+				i += 1
+
 
 func _update_component_item_text(item: TreeItem, obj: Object, count: int = -1):
 	if obj == selected_rover:
