@@ -126,13 +126,21 @@ func register_router(path: String, router) -> void:
 func set_default_router(router) -> void:
 	default_router = router
 
-func _handle_client_request(client: StreamPeerTCP) -> void:
+func _handle_client_request(client) -> void:
 	# Read request data
-	var request_data = client.get_utf8_string(client.get_available_bytes())
+	var available = client.get_available_bytes()
+	if available == 0:
+		push_warning("Client has no data available")
+		return
+	
+	var request_data = client.get_utf8_string(available)
+	print("Received request (%d bytes): %s" % [available, request_data.substr(0, 100)])
 	
 	# Parse request
 	var request = HttpRequest.new()
 	request.parse(request_data)
+	
+	print("Parsed request: %s %s" % [request.method, request.path])
 	
 	# Create response object
 	var response = HttpResponse.new(client)
@@ -152,6 +160,8 @@ func _handle_client_request(client: StreamPeerTCP) -> void:
 	
 	# Handle request
 	if router != null:
+		print("Routing to: %s" % router)
 		router.handle_request(request, response)
 	else:
+		print("No router found for path: %s" % request.path)
 		response.send_error(404, "Not Found") 
