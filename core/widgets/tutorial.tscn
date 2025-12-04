@@ -55,6 +55,12 @@ text = "LunCo is an open-source platform for collaborative designing and simulat
 • [b]Zoom:[/b] Mouse wheel or +/- keys
 • [b]Reset view:[/b] Press Home key
 
+[u]Resource Network Inspection:[/u]
+• [b]View resources:[/b] Select a spacecraft to see floating resource graph
+• [b]Toggle floating display:[/b] Press G key
+• [b]Detailed inspection:[/b] Press Shift+G for fullscreen view
+• [b]Close fullscreen:[/b] Press Esc key
+
 [u]Interface:[/u]
 • [b]Menu:[/b] Press Esc key
 • [b]Console:[/b] Press ` (backtick) key

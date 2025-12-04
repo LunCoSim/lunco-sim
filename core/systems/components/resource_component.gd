@@ -21,8 +21,8 @@ func update(delta: float):
 	pass
 
 ## Helper to create a port
-func _create_port(name: String, initial_pressure: float = 0.0) -> LCSolverNode:
-	var node = graph.add_node(initial_pressure)
+func _create_port(name: String, initial_potential: float = 0.0) -> LCSolverNode:
+	var node = graph.add_node(initial_potential)
 	ports[name] = node
 	return node
 

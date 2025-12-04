@@ -170,7 +170,7 @@ func _update_telemetry():
 	Telemetry["amount"] = get_amount()
 	Telemetry["fill_percentage"] = get_fill_percentage()
 	Telemetry["mass"] = mass
-	Telemetry["pressure"] = component.get_port("port").pressure
+	Telemetry["pressure"] = component.get_port("port").potential
 
 # --- Command Interface ---
 

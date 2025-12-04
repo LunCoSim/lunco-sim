@@ -64,6 +64,6 @@ func _update_level_and_pressure():
 	var hydrostatic_p = density * gravity * level
 	var total_p = p_gas + hydrostatic_p
 	
-	# Update the solver node's pressure
+	# Update the solver node's potential
 	# Since this is a "ground" node, the solver won't override this value
-	ports["port"].pressure = total_p
+	ports["port"].potential = total_p

@@ -355,3 +355,12 @@ func toggle_display():
 	# Reset keyboard focus when hiding
 	if !is_display_visible:
 		has_keyboard_focus = false
+
+## Set the graph to inspect
+func set_graph(graph: LCSolverGraph):
+	if supply_chain_scene and supply_chain_scene.has_method("inspect_graph"):
+		supply_chain_scene.inspect_graph(graph)
+	else:
+		# If scene not loaded yet, wait and try again
+		await get_tree().create_timer(0.1).timeout
+		set_graph(graph)

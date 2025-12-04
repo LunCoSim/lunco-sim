@@ -154,6 +154,11 @@ func _ready():
 		ui_display_manager = get_node("UiDisplayManager")
 		print("Avatar: Found UiDisplayManager: ", ui_display_manager)
 
+	# Add FloatingScreenManager
+	var floating_manager = load("res://apps/3dsim/managers/floating_screen_manager.gd").new()
+	floating_manager.name = "FloatingScreenManager"
+	add_child(floating_manager)
+
 #-----------------------------------------------------
 
 # Add these new constants
