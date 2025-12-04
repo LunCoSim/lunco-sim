@@ -79,10 +79,45 @@ func get_ui_state() -> Dictionary:
 			
 	return save_data
 
+var current_solver_graph: LCSolverGraph
+var edge_connection_map = {} # edge_id -> {from, from_port, to, to_port}
+
+func _process(_delta):
+	if not visible or not current_solver_graph:
+		return
+		
+	# Update connection flow animations
+	for edge_id in current_solver_graph.edges:
+		var edge = current_solver_graph.edges[edge_id]
+		var conn_info = edge_connection_map.get(edge_id)
+		
+		if conn_info:
+			# Calculate activity based on flow rate
+			# Activity controls the speed of the scrolling texture on the connection line
+			var flow_mag = abs(edge.flow_rate)
+			
+			if flow_mag > 0.001:
+				# Logarithmic scaling for visualization range so both small and large flows are visible
+				# + 0.1 ensures even small flows move a bit
+				var activity = (log(flow_mag + 1.0) * 0.5) + 0.1
+				
+				# Reverse animation if flow is negative (if that's possible in the solver logic)
+				# Though typically flow_rate is magnitude or direction relative to defined A->B
+				# If flow is from B to A, flow_rate might be negative.
+				if edge.flow_rate < 0:
+					activity = -activity
+					
+				set_connection_activity(conn_info.from, conn_info.from_port, conn_info.to, conn_info.to_port, activity)
+			else:
+				set_connection_activity(conn_info.from, conn_info.from_port, conn_info.to, conn_info.to_port, 0.0)
+
 ## Load and visualize a raw LCSolverGraph
 func load_from_solver_graph(graph: LCSolverGraph):
 	clear_graph()
 	clear_connections()
+	
+	current_solver_graph = graph
+	edge_connection_map.clear()
 	
 	if not graph:
 		return
@@ -117,3 +152,11 @@ func load_from_solver_graph(graph: LCSolverGraph):
 		
 		if from_name and to_name:
 			connect_node(from_name, 0, to_name, 0)
+			
+			# Store connection info for animation
+			edge_connection_map[edge_id] = {
+				"from": from_name,
+				"from_port": 0,
+				"to": to_name,
+				"to_port": 0
+			}
