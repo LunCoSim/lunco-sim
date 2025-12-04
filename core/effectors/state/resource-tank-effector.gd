@@ -27,7 +27,13 @@ func _initialize_tank():
 		return
 	
 	# Get resource definition from registry
-	var res_def = LCResourceRegistry.get_resource(resource_id)
+	# Use dynamic lookup to avoid compile-time dependency issues with AutoLoad
+	var registry = get_node_or_null("/root/LCResourceRegistry")
+	if not registry:
+		push_error("ResourceTank: LCResourceRegistry not found at /root/LCResourceRegistry")
+		return
+
+	var res_def = registry.get_resource(resource_id)
 	if not res_def:
 		push_error("ResourceTank: Resource not found in registry: " + resource_id)
 		return
@@ -43,7 +49,8 @@ func set_solver_graph(graph: LCSolverGraph):
 	solver_graph = graph
 	if solver_graph and not component:
 		# Get resource density
-		var res_def = LCResourceRegistry.get_resource(resource_id)
+		var registry = get_node_or_null("/root/LCResourceRegistry")
+		var res_def = registry.get_resource(resource_id) if registry else null
 		var density = res_def.density if res_def else 1000.0
 		
 		# Create component
@@ -114,7 +121,8 @@ func is_full() -> bool:
 
 ## Get resource name
 func get_resource_name() -> String:
-	var res_def = LCResourceRegistry.get_resource(resource_id)
+	var registry = get_node_or_null("/root/LCResourceRegistry")
+	var res_def = registry.get_resource(resource_id) if registry else null
 	return res_def.display_name if res_def else "Unknown"
 
 # --- Internal ---
