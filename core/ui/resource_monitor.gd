@@ -69,25 +69,41 @@ func _rebuild_ui():
 		container.add_child(no_vehicle_label)
 		return
 	
-	if not "resource_network" in vehicle or not vehicle.resource_network:
-		# Show "no resource network" message
-		var no_network_label = Label.new()
-		no_network_label.name = "NoVehicleLabel"
-		no_network_label.text = "Vehicle has no resource network"
-		no_network_label.add_theme_color_override("font_color", Color(0.9, 0.7, 0.3))
-		container.add_child(no_network_label)
+	if not "solver_graph" in vehicle or not vehicle.solver_graph:
+		# Show "no solver graph" message
+		var no_graph_label = Label.new()
+		no_graph_label.name = "NoGraphLabel"
+		no_graph_label.text = "Vehicle has no solver graph"
+		no_graph_label.add_theme_color_override("font_color", Color(0.9, 0.7, 0.3))
+		container.add_child(no_graph_label)
 		return
 	
-	# Find all resources in the network
-	var resources = vehicle.resource_network.resource_types.keys()
+	# Find all fluid storage nodes in the solver graph
+	var fluid_nodes = {}  # resource_type -> {total, capacity}
 	
-	for res_id in resources:
-		# Only show if there are tanks (capacity > 0)
-		var capacity = vehicle.resource_network.get_total_capacity(res_id)
-		if capacity <= 0:
-			continue
+	for node_id in vehicle.solver_graph.nodes:
+		var node = vehicle.solver_graph.nodes[node_id]
+		if node.domain == "Fluid" and node.is_storage and node.capacitance > 0:
+			var res_type = node.resource_type if node.resource_type else "unknown"
+			if not res_type in fluid_nodes:
+				fluid_nodes[res_type] = {"total": 0.0, "capacity": 0.0}
 			
-		var res_def = LCResourceRegistry.get_resource(res_id)
+			# flow_accumulation is mass in kg
+			fluid_nodes[res_type]["total"] += node.flow_accumulation
+			# capacitance is the storage capacity
+			fluid_nodes[res_type]["capacity"] += node.capacitance
+	
+	if fluid_nodes.is_empty():
+		var no_resources_label = Label.new()
+		no_resources_label.text = "No fluid resources"
+		no_resources_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
+		container.add_child(no_resources_label)
+		return
+	
+	for res_id in fluid_nodes:
+		var data = fluid_nodes[res_id]
+		var registry = get_node_or_null("/root/LCResourceRegistry")
+		var res_def = registry.get_resource(res_id) if registry else null
 		var res_name = res_def.display_name if res_def else res_id
 		
 		var row = HBoxContainer.new()
@@ -116,14 +132,27 @@ func _process(delta):
 		_update_bars()
 
 func _update_bars():
-	if not vehicle or not "resource_network" in vehicle or not vehicle.resource_network:
+	if not vehicle or not "solver_graph" in vehicle or not vehicle.solver_graph:
 		return
-		
+	
+	# Update bars from solver graph
+	var fluid_nodes = {}  # resource_type -> {total, capacity}
+	
+	for node_id in vehicle.solver_graph.nodes:
+		var node = vehicle.solver_graph.nodes[node_id]
+		if node.domain == "Fluid" and node.is_storage and node.capacitance > 0:
+			var res_type = node.resource_type if node.resource_type else "unknown"
+			if not res_type in fluid_nodes:
+				fluid_nodes[res_type] = {"total": 0.0, "capacity": 0.0}
+			
+			fluid_nodes[res_type]["total"] += node.flow_accumulation
+			fluid_nodes[res_type]["capacity"] += node.capacitance
+	
 	for res_id in resource_bars:
-		var bar = resource_bars[res_id]
-		var total = vehicle.resource_network.get_total_resource(res_id)
-		var capacity = vehicle.resource_network.get_total_capacity(res_id)
-		
-		if capacity > 0:
-			bar.value = (total / capacity) * 100.0
-			bar.tooltip_text = "%.1f / %.1f" % [total, capacity]
+		if res_id in fluid_nodes:
+			var bar = resource_bars[res_id]
+			var data = fluid_nodes[res_id]
+			
+			if data["capacity"] > 0:
+				bar.value = (data["total"] / data["capacity"]) * 100.0
+				bar.tooltip_text = "%.1f / %.1f kg" % [data["total"], data["capacity"]]
