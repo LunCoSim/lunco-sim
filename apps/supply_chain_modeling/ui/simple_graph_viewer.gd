@@ -4,6 +4,7 @@ extends Control
 ## Used by floating screen to show spacecraft resource networks
 
 @onready var graph_view: GraphEdit = $GraphView
+var details_panel # NodeDetailsPanel
 
 func _ready():
 	if not graph_view:
@@ -17,6 +18,50 @@ func _ready():
 		graph_view.offset_top = 0
 		graph_view.offset_right = 0
 		graph_view.offset_bottom = 0
+	
+	# Connect selection signals
+	if not graph_view.node_selected.is_connected(_on_node_selected):
+		graph_view.node_selected.connect(_on_node_selected)
+	
+	# Create details panel
+	var panel_scene = load("res://apps/supply_chain_modeling/ui/node_details_panel.tscn")
+	if panel_scene:
+		details_panel = panel_scene.instantiate()
+		add_child(details_panel)
+		
+		# Position top-right
+		details_panel.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+		details_panel.position = Vector2(-270, 20) # Relative to anchor
+		details_panel.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+
+	# Create search bar
+	var search_bar = LineEdit.new()
+	search_bar.placeholder_text = "Search nodes (ID, Domain)..."
+	add_child(search_bar)
+	search_bar.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	search_bar.position = Vector2(20, 20)
+	search_bar.custom_minimum_size.x = 200
+	search_bar.text_submitted.connect(_on_search_submitted)
+
+func _on_node_selected(node):
+	if details_panel and node.get("solver_node"):
+		details_panel.display_node(node.solver_node)
+
+func _on_search_submitted(text):
+	if text.is_empty(): return
+	
+	# Find node with matching name or ID
+	for child in graph_view.get_children():
+		if child is GraphNode and child.get("solver_node"):
+			var node = child.solver_node
+			# Search by ID, Domain, or Resource Type
+			if text in str(node.id) or text.to_lower() in str(node.domain).to_lower() or (node.resource_type and text.to_lower() in node.resource_type.to_lower()):
+				# Found match
+				child.selected = true
+				graph_view.scroll_offset = child.position_offset - graph_view.size / 2
+				_on_node_selected(child)
+				break
+
 
 ## Load and display a solver graph
 func set_graph(graph: LCSolverGraph):

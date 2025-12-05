@@ -41,6 +41,12 @@ var is_ground: bool = false
 # Defines what material is present/flowing (e.g., "oxygen", "water")
 var resource_type: StringName = ""
 
+# Flow Source (External flow injection)
+# Positive = Flow entering the node
+# Fluid: Mass Flow In (kg/s)
+# Electrical: Current Source (Amps)
+var flow_source: float = 0.0
+
 # Connected edges (for graph traversal if needed)
 var edges: Array[LCSolverEdge] = []
 

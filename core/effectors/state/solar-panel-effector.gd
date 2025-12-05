@@ -33,6 +33,10 @@ var panel_angle: float = 0.0  ## Current articulation angle in degrees
 var target_angle: float = 0.0  ## Target articulation angle
 var total_energy_generated: float = 0.0  ## Total energy in Watt-hours
 
+# Solver Integration
+var solver_graph: LCSolverGraph
+var solver_node: LCSolverNode  ## Electrical node representing panel output
+
 # Constants
 const AU: float = 1.496e11  ## Astronomical unit in meters
 
@@ -46,6 +50,19 @@ func _ready():
 		deployment_fraction = 0.0
 	
 	_initialize_telemetry()
+
+## Set the solver graph (called by spacecraft during _ready)
+func set_solver_graph(graph: LCSolverGraph):
+	solver_graph = graph
+	if solver_graph and not solver_node:
+		# Create electrical source node
+		solver_node = solver_graph.add_node(0.0, false, "Electrical")
+		solver_node.resource_type = "electrical_power"
+		
+		# Solar panel acts as a current source
+		# We'll update flow_source based on power output
+		
+		print("SolarPanel: Created solver node as current source")
 
 func _physics_process(delta):
 	_update_deployment(delta)
@@ -108,6 +125,8 @@ func _update_power_generation(delta: float):
 	if deployment_fraction <= 0.0:
 		current_power_output = 0.0
 		power_production = 0.0
+		if solver_node:
+			solver_node.flow_source = 0.0
 		return
 	
 	# Calculate effective panel normal with articulation
@@ -134,6 +153,17 @@ func _update_power_generation(delta: float):
 	
 	# Track total energy
 	total_energy_generated += current_power_output * delta / 3600.0  # Convert to Wh
+	
+	# Update solver node (inject current)
+	if solver_node:
+		# Assume nominal bus voltage for current calculation
+		# I = P / V
+		var bus_voltage = 28.0  # Typical spacecraft bus voltage
+		if solver_node.potential > 1.0:
+			bus_voltage = solver_node.potential
+		
+		var current_amps = current_power_output / bus_voltage
+		solver_node.flow_source = current_amps
 
 ## Returns the current sun angle in degrees.
 func get_sun_angle() -> float:

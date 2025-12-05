@@ -42,6 +42,10 @@ var total_energy_charged: float = 0.0  ## Total energy charged in Wh
 var total_energy_discharged: float = 0.0  ## Total energy discharged in Wh
 var cycle_depth: float = 0.0  ## Current cycle depth for tracking
 
+# Solver Integration
+var solver_graph: LCSolverGraph
+var solver_node: LCSolverNode  ## Electrical node representing battery terminal
+
 func _ready():
 	super._ready()
 	current_charge = initial_charge
@@ -49,9 +53,38 @@ func _ready():
 	mass = 10.0 + capacity * 0.01  # Rough mass estimate (10kg + 10g per Wh)
 	_initialize_telemetry()
 
+## Set the solver graph (called by spacecraft during _ready)
+func set_solver_graph(graph: LCSolverGraph):
+	solver_graph = graph
+	if solver_graph and not solver_node:
+		# Create electrical storage node
+		solver_node = solver_graph.add_node(nominal_voltage, false, "Electrical")
+		solver_node.resource_type = "electrical_power"
+		
+		# Set capacitance (simplified: treat battery as large capacitor)
+		# Energy = 0.5 * C * V^2, but for batteries we use Charge = Capacity_Ah * 3600
+		# Capacitance (Farads) = Charge / Voltage
+		var capacity_coulombs = (capacity / nominal_voltage) * 3600.0  # Wh / V = Ah, * 3600 = Coulombs
+		solver_node.set_capacitance(capacity_coulombs / nominal_voltage)  # C = Q/V
+		
+		# Initialize flow accumulation (charge)
+		solver_node.flow_accumulation = (current_charge / nominal_voltage) * 3600.0
+		
+		print("Battery: Created solver node with capacitance %.2f F" % solver_node.capacitance)
+
 var telemetry_timer: float = 0.0
 
 func _physics_process(delta):
+	# Sync with solver if available
+	if solver_node:
+		# Read charge from solver (Coulombs -> Wh)
+		var charge_coulombs = solver_node.flow_accumulation
+		current_charge = (charge_coulombs * nominal_voltage) / 3600.0
+		
+		# Update voltage from solver
+		# For now, use solver potential directly as voltage
+		# In a more complex model, we'd have internal resistance
+		
 	_update_battery_state(delta)
 	_update_degradation()
 

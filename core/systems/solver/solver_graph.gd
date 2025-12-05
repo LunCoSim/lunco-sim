@@ -90,7 +90,9 @@ func _solve_potentials():
 				continue
 				
 			# Calculate target potential based on neighbors
-			# P_node = sum(G_i * P_i) / sum(G_i)
+			# KCL: sum(Flow_in) + Flow_source = 0
+			# Flow_in = G * (P_neighbor - P_node + P_source_towards_node)
+			# P_node = (sum(G * (P_neighbor + P_source_effect)) + Flow_source) / sum(G)
 			var sum_g_p = 0.0
 			var sum_g = 0.0
 			
@@ -111,6 +113,10 @@ func _solve_potentials():
 				# Contribution to sum_g_p: G * (P_neighbor + P_source_effect)
 				sum_g_p += g * (neighbor.potential + p_source_effect)
 				sum_g += g
+			
+			# Add flow source contribution
+			# Flow_source is already in flow units (kg/s or Amps)
+			sum_g_p += node.flow_source
 			
 			if sum_g > 0.000001:
 				var target_potential = sum_g_p / sum_g
