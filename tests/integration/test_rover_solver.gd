@@ -105,6 +105,59 @@ func _init():
 		print("  ✗ No solver graph")
 		failed += 1
 	
+	# Test 6: Wheel Power Consumption
+	total += 1
+	print("\n[Test 6] Wheel Power Consumption")
+	var wheel = rover.get_node_or_null("FrontLeftWheel")
+	if wheel and wheel.solver_node:
+		# Simulate driving
+		wheel.engine_force = 100.0 # 100 Nm
+		# We need some RPM for power = Torque * Omega
+		# Mocking RPM is hard since it's a physics property.
+		# But we can check if the code runs without error.
+		# Actually, if RPM is 0, Power is 0.
+		# We can't easily mock RPM on a VehicleWheel3D in a unit test without physics stepping.
+		# But we can check if the node exists and is connected.
+		
+		# Let's just verify the node is connected to the bus
+		var bus_connected = false
+		for edge_id in rover.solver_graph.edges:
+			var edge = rover.solver_graph.edges[edge_id]
+			if edge.node_a == wheel.solver_node or edge.node_b == wheel.solver_node:
+				bus_connected = true
+				break
+		
+		if bus_connected:
+			print("  ✓ Wheel connected to electrical bus")
+			passed += 1
+		else:
+			print("  ✗ Wheel not connected to bus")
+			failed += 1
+	else:
+		print("  ✗ Wheel or solver node missing")
+		failed += 1
+	
+	# Test 7: Generic Components (Flight Computer, Camera)
+	total += 1
+	print("\n[Test 7] Generic Component Discovery")
+	var computer = rover.get_node_or_null("FlightComputer")
+	var camera = rover.get_node_or_null("Camera")
+	
+	if computer and camera:
+		if computer.solver_node and camera.solver_node:
+			print("  ✓ Flight Computer and Camera have solver nodes")
+			print("    - Computer Load: %.1f W" % computer.power_consumption)
+			print("    - Camera Load: %.1f W" % camera.power_consumption)
+			passed += 1
+		else:
+			print("  ✗ Missing solver nodes:")
+			print("    - Computer: %s" % ("Yes" if computer.solver_node else "No"))
+			print("    - Camera: %s" % ("Yes" if camera.solver_node else "No"))
+			failed += 1
+	else:
+		print("  ✗ Components not found")
+		failed += 1
+
 	# Summary
 	print("\n" + "=".repeat(50))
 	print("Tests Passed: %d/%d" % [passed, total])

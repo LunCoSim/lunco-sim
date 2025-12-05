@@ -175,11 +175,12 @@ func _update_mass_properties():
 	mass_properties_dirty = false
 
 ## Manages power system with batteries and solar panels.
+## Manages power system with batteries and solar panels.
 func _manage_power_system(delta: float):
 	power_consumption = 0.0
 	power_production = 0.0
 	
-	# Aggregate power from all effectors
+	# Aggregate power from all effectors for telemetry
 	for effector in state_effectors:
 		if effector.has_method("get_power_consumption"):
 			power_consumption += effector.get_power_consumption()
@@ -193,21 +194,7 @@ func _manage_power_system(delta: float):
 			if effector.has_method("get_power_production"):
 				power_production += effector.get_power_production()
 	
-	# Calculate net power
 	var net_power = power_production - power_consumption
-	
-	# Manage battery charging/discharging
-	for effector in state_effectors:
-		if effector is LCBatteryEffector:
-			if net_power > 0:
-				# Charge battery with excess power
-				effector.charge(net_power, delta)
-			elif net_power < 0:
-				# Discharge battery to meet demand
-				var power_needed = abs(net_power)
-				var power_delivered = effector.discharge(power_needed, delta)
-				net_power += power_delivered
-	
 	power_available = net_power
 
 ## Applies forces and torques from dynamic effectors.

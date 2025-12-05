@@ -43,8 +43,9 @@ var total_energy_discharged: float = 0.0  ## Total energy discharged in Wh
 var cycle_depth: float = 0.0  ## Current cycle depth for tracking
 
 # Solver Integration
-var solver_graph: LCSolverGraph
-var solver_node: LCSolverNode  ## Electrical node representing battery terminal
+# Inherited from LCStateEffector:
+# var solver_graph: LCSolverGraph
+# var solver_node: LCSolverNode  ## Electrical node representing battery terminal
 
 func _ready():
 	super._ready()

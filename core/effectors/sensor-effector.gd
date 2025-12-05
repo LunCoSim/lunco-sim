@@ -31,6 +31,7 @@ func _ready():
 	_initialize_telemetry()
 
 func _physics_process(delta):
+	_update_solver_power()
 	if not is_enabled:
 		is_valid = false
 		return

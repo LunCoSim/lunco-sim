@@ -62,6 +62,7 @@ func _ready():
 	Parameters["Max Brake"] = { "path": "max_brake_force", "type": "float", "min": 100.0, "max": 5000.0, "step": 100.0 }
 
 func _physics_process(delta):
+	_update_solver_power()
 	_update_telemetry()
 
 var _accumulated_angle: float = 0.0
@@ -153,3 +154,61 @@ func _update_visual_scale():
 		# Scale it proportionally to match wheel_radius_config
 		var scale_factor = wheel_radius_config / 0.3
 		mesh_instance.scale = Vector3(scale_factor, scale_factor, scale_factor)
+
+# --- Solver Integration ---
+var solver_graph: LCSolverGraph
+var solver_node: LCSolverNode
+
+## Set the solver graph (called by vehicle during _ready)
+func set_solver_graph(graph: LCSolverGraph):
+	solver_graph = graph
+	if solver_graph and not solver_node:
+		# Create electrical load node
+		# 0.0 potential means it's a passive node, but we'll drive it as a current sink
+		solver_node = solver_graph.add_node(0.0, false, "Electrical")
+		solver_node.resource_type = "electrical_power"
+		solver_node.display_name = name
+		
+		# We act as a current sink (negative source)
+		# The vehicle will connect us to the bus
+		
+		print("Wheel: Created solver node as power sink")
+
+func _update_solver_power():
+	if solver_node:
+		# Calculate power consumption
+		# Base consumption + motor load
+		var current_power = power_consumption
+		
+		# Determine effective torque (either from custom request or Godot's engine_force)
+		var effective_torque = motor_torque_request
+		if abs(engine_force) > abs(effective_torque):
+			effective_torque = engine_force
+		
+		# Add motor power: Torque * Angular Velocity
+		# P = τ * ω
+		if abs(effective_torque) > 0.1:
+			var omega = get_wheel_rpm() * TAU / 60.0
+			# Efficiency loss (heat) + Mechanical work
+			# Simplified: Power = |Torque * Omega| / Efficiency
+			# Let's assume 85% efficiency
+			var motor_power = abs(effective_torque * omega) / 0.85
+			current_power += motor_power
+			
+		# Update flow source (Amps)
+		# I = P / V
+		var bus_voltage = 28.0 # Default fallback
+		if solver_node.potential > 1.0:
+			bus_voltage = solver_node.potential
+			
+		var current_draw = current_power / bus_voltage
+		
+		# Negative flow source = consumption
+		solver_node.flow_source = -current_draw
+		
+		# Update telemetry
+		if Telemetry:
+			Telemetry["bus_voltage"] = bus_voltage
+			Telemetry["current_draw"] = current_draw
+			Telemetry["actual_power"] = current_power
+

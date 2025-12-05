@@ -209,16 +209,6 @@ func _manage_power_system(delta: float):
 				power_production += effector.get_power_production()
 	
 	var net_power = power_production - power_consumption
-	
-	for effector in state_effectors:
-		if effector is LCBatteryEffector:
-			if net_power > 0:
-				effector.charge(net_power, delta)
-			elif net_power < 0:
-				var power_needed = abs(net_power)
-				var power_delivered = effector.discharge(power_needed, delta)
-				net_power += power_delivered
-	
 	power_available = net_power
 
 ## Applies forces and torques from dynamic effectors.

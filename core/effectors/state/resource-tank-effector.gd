@@ -14,7 +14,8 @@ extends LCStateEffector
 
 # Physics component
 var component: LCTankComponent
-var solver_graph: LCSolverGraph
+# Inherited from LCStateEffector:
+# var solver_graph: LCSolverGraph
 
 var is_initialized: bool = false
 

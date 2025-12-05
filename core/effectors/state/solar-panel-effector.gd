@@ -34,8 +34,9 @@ var target_angle: float = 0.0  ## Target articulation angle
 var total_energy_generated: float = 0.0  ## Total energy in Watt-hours
 
 # Solver Integration
-var solver_graph: LCSolverGraph
-var solver_node: LCSolverNode  ## Electrical node representing panel output
+# Inherited from LCStateEffector:
+# var solver_graph: LCSolverGraph
+# var solver_node: LCSolverNode  ## Electrical node representing panel output
 
 # Constants
 const AU: float = 1.496e11  ## Astronomical unit in meters
