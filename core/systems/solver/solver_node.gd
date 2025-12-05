@@ -41,6 +41,9 @@ var is_ground: bool = false
 # Defines what material is present/flowing (e.g., "oxygen", "water")
 var resource_type: StringName = ""
 
+# Display Name (for visualization)
+var display_name: String = ""
+
 # Flow Source (External flow injection)
 # Positive = Flow entering the node
 # Fluid: Mass Flow In (kg/s)

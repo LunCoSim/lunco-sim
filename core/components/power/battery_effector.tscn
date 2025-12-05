@@ -17,7 +17,7 @@ emission_operator = 1
 [node name="Battery" type="Node3D"]
 script = ExtResource("1_script")
 capacity = 1000.0
-current_charge = 1000.0
+initial_charge = 1000.0
 
 [node name="MeshInstance3D" type="MeshInstance3D" parent="."]
 mesh = SubResource("BoxMesh_battery")

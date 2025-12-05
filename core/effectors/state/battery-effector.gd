@@ -60,6 +60,7 @@ func set_solver_graph(graph: LCSolverGraph):
 		# Create electrical storage node
 		solver_node = solver_graph.add_node(nominal_voltage, false, "Electrical")
 		solver_node.resource_type = "electrical_power"
+		solver_node.display_name = name  # Use effector's name
 		
 		# Set capacitance (simplified: treat battery as large capacitor)
 		# Energy = 0.5 * C * V^2, but for batteries we use Charge = Capacity_Ah * 3600

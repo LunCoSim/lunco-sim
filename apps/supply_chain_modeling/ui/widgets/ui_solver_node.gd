@@ -14,7 +14,12 @@ const MAX_SIZE_X = 240.0
 
 func _ready():
 	if solver_node:
-		title = "Node " + str(solver_node.id)
+		# Use display_name if available, otherwise fall back to "Node ID"
+		if solver_node.display_name and solver_node.display_name != "":
+			title = solver_node.display_name
+		else:
+			title = "Node " + str(solver_node.id)
+		
 		label_id.text = "ID: " + str(solver_node.id)
 		label_domain.text = str(solver_node.domain)
 		

@@ -70,13 +70,42 @@ func _initialize_solver_graph():
 	if not solver_graph:
 		solver_graph = LCSolverGraph.new()
 	
-	# Pass solver graph to all tank effectors
+	# Create electrical bus (common node for all electrical components)
+	var electrical_bus = solver_graph.add_node(28.0, false, "Electrical")
+	electrical_bus.resource_type = "electrical_power"
+	electrical_bus.display_name = "Electrical Bus"
+	
+	# Pass solver graph to all effectors
 	for effector in state_effectors:
 		if effector.has_method("set_solver_graph"):
 			effector.set_solver_graph(solver_graph)
 	
+	for effector in dynamic_effectors:
+		if effector not in state_effectors:  # Avoid double-calling
+			if effector.has_method("set_solver_graph"):
+				effector.set_solver_graph(solver_graph)
+	
+	# Connect all electrical components to the bus
+	# Use high conductance (low resistance) for wiring
+	var wire_conductance = 1000.0  # Very low resistance
+	
+	for effector in state_effectors:
+		if effector.has_method("set_solver_graph") and effector.get("solver_node"):
+			var node = effector.solver_node
+			if node and node.domain == "Electrical" and node != electrical_bus:
+				solver_graph.connect_nodes(electrical_bus, node, wire_conductance, "Electrical")
+	
+	for effector in dynamic_effectors:
+		if effector not in state_effectors:
+			if effector.has_method("set_solver_graph") and effector.get("solver_node"):
+				var node = effector.solver_node
+				if node and node.domain == "Electrical" and node != electrical_bus:
+					solver_graph.connect_nodes(electrical_bus, node, wire_conductance, "Electrical")
+	
 	if debug_effectors:
 		print("[LCVehicle] Solver graph initialized")
+		print("  Nodes: %d" % solver_graph.nodes.size())
+		print("  Edges: %d" % solver_graph.edges.size())
 
 ## Discovers all effector children recursively.
 func _discover_effectors():

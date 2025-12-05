@@ -12,6 +12,7 @@
 [ext_resource type="PackedScene" uid="uid://imu_effector" path="res://core/components/sensors/imu_effector.tscn" id="10_imu"]
 [ext_resource type="PackedScene" uid="uid://gps_effector" path="res://core/components/sensors/gps_effector.tscn" id="11_gps"]
 [ext_resource type="PackedScene" uid="uid://resource_tank_effector" path="res://core/components/power/resource_tank_effector.tscn" id="12_tank"]
+[ext_resource type="PackedScene" uid="uid://motor_effector" path="res://core/components/propulsion/motor_effector.tscn" id="13_motor"]
 
 [sub_resource type="SceneReplicationConfig" id="SceneReplicationConfig_rover"]
 properties/0/path = NodePath(".:position")
@@ -164,5 +165,57 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.3, 1.0)
 transform = Transform3D(1, 0, 0, 0, -4.37114e-08, -1, 0, 1, -4.37114e-08, 0, 0.2, 0.8)
 resource_id = "oxygen"
 capacity = 50.0
+
+[node name="FrontLeftDriveMotor" parent="." instance=ExtResource("13_motor")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1.35, -0.35, -1)
+max_torque = 50.0
+max_power_draw = 300.0
+
+[node name="FrontLeftSteerMotor" parent="." instance=ExtResource("13_motor")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1.35, -0.25, -1)
+max_torque = 20.0
+max_power_draw = 100.0
+
+[node name="FrontRightDriveMotor" parent="." instance=ExtResource("13_motor")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1.35, -0.35, -1)
+max_torque = 50.0
+max_power_draw = 300.0
+
+[node name="FrontRightSteerMotor" parent="." instance=ExtResource("13_motor")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1.35, -0.25, -1)
+max_torque = 20.0
+max_power_draw = 100.0
+
+[node name="BackLeftDriveMotor" parent="." instance=ExtResource("13_motor")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1.35, -0.35, 1)
+max_torque = 50.0
+max_power_draw = 300.0
+
+[node name="BackLeftSteerMotor" parent="." instance=ExtResource("13_motor")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1.35, -0.25, 1)
+max_torque = 20.0
+max_power_draw = 100.0
+
+[node name="BackRightDriveMotor" parent="." instance=ExtResource("13_motor")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1.35, -0.35, 1)
+max_torque = 50.0
+max_power_draw = 300.0
+
+[node name="BackRightSteerMotor" parent="." instance=ExtResource("13_motor")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1.35, -0.25, 1)
+max_torque = 20.0
+max_power_draw = 100.0
+
+[node name="SolarPanelLeft" parent="." instance=ExtResource("6_solar")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.6, 0.25, 0)
+panel_area = 1.5
+panel_efficiency = 0.25
+max_power_output = 375.0
+
+[node name="SolarPanelRight" parent="." instance=ExtResource("6_solar")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.6, 0.25, 0)
+panel_area = 1.5
+panel_efficiency = 0.25
+max_power_output = 375.0
 
 [editable path="ChassisBox"]
