@@ -40,8 +40,10 @@ var mass_properties_dirty: bool = true
 func _ready():
 	sleeping = false
 	_discover_effectors()
-	_initialize_solver_graph()
-	_update_mass_properties()
+	# Defer solver graph initialization to next frame so all effectors are ready
+	call_deferred("_initialize_solver_graph")
+	# Update mass after solver graph is initialized (when tanks have components)
+	call_deferred("_update_mass_properties")
 	_manage_power_system(0.0)
 
 func _process(delta):
@@ -118,13 +120,20 @@ func _initialize_solver_graph():
 	if not solver_graph:
 		solver_graph = LCSolverGraph.new()
 	
-	# Pass solver graph to all tank effectors
+	# Pass solver graph to all effectors
 	for effector in state_effectors:
 		if effector.has_method("set_solver_graph"):
 			effector.set_solver_graph(solver_graph)
 	
+	for effector in dynamic_effectors:
+		if effector not in state_effectors:  # Avoid double-calling
+			if effector.has_method("set_solver_graph"):
+				effector.set_solver_graph(solver_graph)
+	
 	if debug_effectors:
 		print("[LCSpacecraft] Solver graph initialized")
+		print("  Nodes: %d" % solver_graph.nodes.size())
+		print("  Edges: %d" % solver_graph.edges.size())
 
 ## Discovers all effector children recursively.
 func _discover_effectors():

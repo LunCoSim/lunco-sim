@@ -20,6 +20,10 @@ var oxidizer_tank = null  ## LCResourceTankEffector for oxygen
 @export var mixture_ratio: float = 3.6  ## Oxidizer:Fuel mass ratio (3.6:1 for Starship Raptor)
 @export var fuel_flow_rate: float = 0.0  ## kg/s at max thrust (auto-calculated if 0)
 
+# Solver Integration
+var solver_graph: LCSolverGraph
+var solver_node: LCSolverNode  ## Single engine node (consumes both propellants)
+
 @export_group("Thrust Vectoring")
 @export var can_vector: bool = false  ## Can this thruster gimbal?
 @export var max_gimbal_angle: float = 5.0  ## Maximum gimbal angle in degrees
@@ -100,6 +104,30 @@ func _ready():
 	power_consumption = max_thrust * 0.1
 	
 	_initialize_telemetry()
+
+## Set the solver graph (called by vehicle during _ready)
+func set_solver_graph(graph: LCSolverGraph):
+	solver_graph = graph
+	if solver_graph and (fuel_tank or oxidizer_tank):
+		# Create single engine node (Fluid domain, represents the combustion chamber)
+		solver_node = solver_graph.add_node(0.0, false, "Fluid")
+		solver_node.display_name = name
+		solver_node.resource_type = "combustion"  # Mixed propellants
+		solver_node.flow_source = 0.0  # Will be negative when consuming
+		
+		# Connect to fuel tank
+		if fuel_tank:
+			var fuel_port = fuel_tank.get_port()
+			if fuel_port:
+				# High conductance for direct connection
+				solver_graph.connect_nodes(fuel_port, solver_node, 1000.0, "Fluid")
+		
+		# Connect to oxidizer tank
+		if oxidizer_tank:
+			var oxidizer_port = oxidizer_tank.get_port()
+			if oxidizer_port:
+				# High conductance for direct connection
+				solver_graph.connect_nodes(oxidizer_port, solver_node, 1000.0, "Fluid")
 
 func _physics_process(delta):
 	_update_thrust(delta)
@@ -185,6 +213,7 @@ func compute_force_torque(delta: float) -> Dictionary:
 	# Deplete oxidizer tank
 	if oxidizer_tank:
 		var oxidizer_available = oxidizer_tank.remove_resource(oxidizer_needed)
+		
 		if oxidizer_available < oxidizer_needed * 0.99:
 			can_fire = false
 			if oxidizer_tank.is_empty():
@@ -195,6 +224,11 @@ func compute_force_torque(delta: float) -> Dictionary:
 	elif mixture_ratio > 0:
 		# No oxidizer tank but mixture ratio set - can't fire
 		can_fire = false
+	
+	# Update solver node with total propellant consumption
+	if solver_node and delta > 0:
+		var total_propellant_flow = (fuel_needed + oxidizer_needed) / delta
+		solver_node.flow_source = -total_propellant_flow  # Negative = consumption
 	
 	# Stop firing if insufficient propellant
 	if not can_fire:

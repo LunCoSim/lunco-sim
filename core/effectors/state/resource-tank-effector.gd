@@ -61,6 +61,12 @@ func set_solver_graph(graph: LCSolverGraph):
 		var initial_mass = (initial_fill_percentage / 100.0) * capacity
 		component.set_initial_mass(initial_mass)
 		
+		# Set display name and resource type on the solver node
+		var port = component.get_port("port")
+		if port:
+			port.display_name = name  # Use effector's name
+			port.resource_type = resource_id
+		
 		_update_mass()
 
 # --- Public API ---

@@ -40,8 +40,10 @@ var mass_properties_dirty: bool = true
 
 func _ready():
 	_discover_effectors()
-	_initialize_solver_graph()
-	_update_mass_properties()
+	# Defer solver graph initialization to next frame so all effectors are ready
+	call_deferred("_initialize_solver_graph")
+	# Update mass after solver graph is initialized (when tanks have components)
+	call_deferred("_update_mass_properties")
 	_manage_power_system(0.0)
 
 func _process(delta):
