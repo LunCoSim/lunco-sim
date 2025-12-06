@@ -31,9 +31,8 @@ func _ready():
 		if child is LCComponent:
 			register_component(child)
 	
-	# VehicleBody3D requires at least some wheels to work
-	# Add default wheels if none exist
-	call_deferred("_ensure_wheels")
+	# VehicleBody3D works fine as a RigidBody without wheels. 
+	# User will add wheels manually via Builder.
 
 func register_component(component: LCComponent):
 	if not component in components:
@@ -91,37 +90,6 @@ func recalculate_physics():
 	mass = total_mass
 	# TODO: Calculate Center of Mass properly based on component positions
 
-func _ensure_wheels():
-	# Check if we have any VehicleWheel3D nodes
-	var has_wheels = false
-	for child in get_children():
-		if child is VehicleWheel3D:
-			has_wheels = true
-			break
-	
-	if not has_wheels:
-		print("Constructible: No wheels found, adding default wheels")
-		# Add 4 basic wheels in a rectangular pattern
-		var wheel_positions = [
-			Vector3(-0.5, -0.25, -1.0),  # Front left
-			Vector3(0.5, -0.25, -1.0),   # Front right
-			Vector3(-0.5, -0.25, 1.0),   # Back left
-			Vector3(0.5, -0.25, 1.0)     # Back right
-		]
-		
-		for i in range(4):
-			var wheel = VehicleWheel3D.new()
-			wheel.name = "DefaultWheel" + str(i)
-			wheel.position = wheel_positions[i]
-			wheel.use_as_traction = true
-			wheel.use_as_steering = (i < 2)  # Front wheels steer
-			wheel.wheel_radius = 0.3
-			wheel.suspension_travel = 0.2
-			wheel.suspension_stiffness = 40.0
-			wheel.damping_compression = 0.5
-			wheel.damping_relaxation = 0.5
-			add_child(wheel)
-	
 # XTCE Aggregation
 func get_telemetry_data() -> Dictionary:
 	var data = {}

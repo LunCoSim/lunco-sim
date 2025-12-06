@@ -59,10 +59,25 @@ func _update_dimensions():
 	
 	_update_mass()
 
+	_update_mass()
+	
+	# Register parameters for inspector
+	Parameters = {
+		"Size X": { "path": "size:x", "type": "float", "min": 0.5, "max": 10.0, "step": 0.1 },
+		"Size Y": { "path": "size:y", "type": "float", "min": 0.1, "max": 2.0, "step": 0.1 },
+		"Size Z": { "path": "size:z", "type": "float", "min": 0.5, "max": 10.0, "step": 0.1 },
+		"Density": { "path": "density", "type": "float", "min": 1.0, "max": 500.0, "step": 1.0 }
+	}
+
 func _update_mass():
 	# Volume * Density
 	var volume = size.x * size.y * size.z
 	mass = volume * density
 	# Notify parent if possible (in editor)
 	update_configuration_warnings()
+	
+	# Notify change for dynamic mass updates
+	if has_signal("mass_changed"):
+		emit_signal("mass_changed")
+
 

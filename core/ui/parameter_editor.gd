@@ -85,7 +85,7 @@ func _create_parameter_control(parent: Control, component: Object, param_key: St
 	if property_path.is_empty():
 		return # Invalid metadata
 		
-	var current_value = component.get(property_path)
+	var current_value = component.get_indexed(property_path)
 	var type = metadata.get("type", "float")
 	var is_readonly = metadata.get("readonly", false)
 	var use_text_field = metadata.get("text_field", false)
@@ -117,13 +117,13 @@ func _create_parameter_control(parent: Control, component: Object, param_key: St
 			
 			line_edit.text_submitted.connect(func(text):
 				var val = float(text.replace(",", ""))
-				component.set(property_path, val)
+				component.set_indexed(property_path, val)
 				line_edit.text = _format_value(val, type)
 			)
 			
 			line_edit.focus_exited.connect(func():
 				var val = float(line_edit.text.replace(",", ""))
-				component.set(property_path, val)
+				component.set_indexed(property_path, val)
 				line_edit.text = _format_value(val, type)
 			)
 			
@@ -131,16 +131,21 @@ func _create_parameter_control(parent: Control, component: Object, param_key: St
 		else:
 			# Editable: slider + value label
 			var slider = HSlider.new()
+			slider.custom_minimum_size.x = 120 # Ensure visibility
 			slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			slider.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 			slider.min_value = metadata.get("min", 0.0)
 			slider.max_value = metadata.get("max", 100.0)
 			slider.step = metadata.get("step", 0.1 if type == "float" else 1.0)
+			if current_value == null:
+				current_value = 0.0
 			slider.value = current_value
 			
 			var value_label = Label.new()
 			value_label.text = _format_value(current_value, type)
 			value_label.custom_minimum_size.x = 70
 			value_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+
 			
 			# Store references for real-time updates
 			slider.set_meta("component", component)
@@ -149,7 +154,7 @@ func _create_parameter_control(parent: Control, component: Object, param_key: St
 			slider.set_meta("type", type)
 			
 			slider.value_changed.connect(func(val):
-				component.set(property_path, val)
+				component.set_indexed(property_path, val)
 				value_label.text = _format_value(val, type)
 				# Optional: Trigger update if component needs it
 				if component.has_method("_update_parameters"):
@@ -177,7 +182,7 @@ func _create_parameter_control(parent: Control, component: Object, param_key: St
 			var checkbox = CheckBox.new()
 			checkbox.button_pressed = current_value
 			checkbox.toggled.connect(func(val):
-				component.set(property_path, val)
+				component.set_indexed(property_path, val)
 			)
 			row.add_child(checkbox)
 
@@ -209,7 +214,7 @@ func _update_controls_recursive(node: Node):
 		var property_path = node.get_meta("property_path")
 		var type = node.get_meta("type")
 		if component and is_instance_valid(component):
-			var current_value = component.get(property_path)
+			var current_value = component.get_indexed(property_path)
 			node.text = _format_value(current_value, type)
 	
 	# Update text fields (only if not focused)
@@ -219,7 +224,7 @@ func _update_controls_recursive(node: Node):
 			var property_path = node.get_meta("property_path")
 			var type = node.get_meta("type")
 			if component and is_instance_valid(component):
-				var current_value = component.get(property_path)
+				var current_value = component.get_indexed(property_path)
 				node.text = _format_value(current_value, type)
 	
 	# Update sliders (only if not being dragged)
@@ -231,7 +236,7 @@ func _update_controls_recursive(node: Node):
 			var value_label = node.get_meta("value_label")
 			var type = node.get_meta("type")
 			if component and is_instance_valid(component):
-				var current_value = component.get(property_path)
+				var current_value = component.get_indexed(property_path)
 				node.value = current_value
 				if value_label:
 					value_label.text = _format_value(current_value, type)
