@@ -10,6 +10,7 @@ extends Resource
 @export var display_name: String = ""  ## Human-readable name
 @export_multiline var description: String = ""
 @export var category: String = "generic"  ## "gas", "liquid", "solid", "energy"
+@export var unit: String = "kg"  ## Display unit (e.g., "kg", "L", "kWh")
 
 @export_group("Physical Properties")
 @export var density: float = 1.0  ## kg/m³ or kg/L

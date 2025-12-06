@@ -14,9 +14,11 @@ func _ready() -> void:
 
 func _update_resource() -> void:
 	if stored_resource_type != "":
-		var registry = get_node_or_null("/root/ResourceRegistry")
-		if registry:
-			_resource = registry.get_resource(stored_resource_type)
+		# Use global LCResourceRegistry autoload
+		if LCResourceRegistry.has_resource(stored_resource_type):
+			_resource = LCResourceRegistry.get_resource(stored_resource_type)
+		else:
+			push_warning("StorageFacility: Resource not found: " + stored_resource_type)
 
 func set_resource_type(type: String) -> void:
 	if current_amount == 0 or type == stored_resource_type:
