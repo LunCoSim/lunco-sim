@@ -34,6 +34,10 @@ func create_ui_node(simulation_node: SimulationNode, _position: Vector2 = Vector
 			ui_node = load(MODULE_PATH + "/ui/facilities/ui_pump.tscn").instantiate()
 		"electrolytic_factory", "ElectrolyticFactory":
 			ui_node = load(MODULE_PATH + "/ui/facilities/ui_electrolytic_factory.tscn").instantiate()
+		"regolith_reduction_reactor", "RegolithReductionReactor":
+			ui_node = load(MODULE_PATH + "/ui/facilities/ui_regolith_reduction_reactor.tscn").instantiate()
+		"water_collection_system", "WaterCollectionSystem":
+			ui_node = load(MODULE_PATH + "/ui/facilities/ui_water_collection_system.tscn").instantiate()
 		"note_node", "NoteNode":
 			ui_node = load(MODULE_PATH + "/ui/other/ui_note_node.tscn").instantiate()
 		_:

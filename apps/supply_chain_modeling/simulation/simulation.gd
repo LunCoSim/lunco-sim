@@ -107,7 +107,8 @@ func load_state(state: Dictionary) -> void:
 			if node_script:
 				var node = node_script.new()
 				node.name = node_name
-				add_child(node)
+				# Use add_node to ensure registration with solver
+				add_node(node)
 				# Restore node properties if available
 				node.load_state(node_data["state"])
 	
@@ -260,12 +261,15 @@ func _get_port_name(component: SolverSimulationNode, port_index: int, is_output:
 	if component is StorageFacility:
 		return "fluid_port"
 	
-	# For Pump: inlet (port 0 input) and outlet (port 0 output)
+	# For Pump: inlet (port 0 input), outlet (port 0 output), power_in (port 1 input)
 	if component is Pump:
 		if is_output:
 			return "outlet"
 		else:
-			return "inlet"
+			if port_index == 0:
+				return "inlet"
+			elif port_index == 1:
+				return "power_in"
 	
 	# For ElectrolyticFactory:
 	# Inputs: 0=water_in, 1=power_in

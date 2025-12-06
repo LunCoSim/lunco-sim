@@ -7,6 +7,7 @@ const SolverDomain = preload("res://core/systems/solver/solver_domain.gd")
 @export var pump_rate: float = 10.0  # units/minute
 @export var power_consumption: float = 50.0  # kW
 @export var power_available: float = 0.0
+@export var domain: StringName = SolverDomain.LIQUID # Default to Liquid, can be changed to Gas
 
 func _init():
 	facility_type = "pump"
@@ -15,19 +16,32 @@ func _init():
 ## Create inlet and outlet ports
 func _create_ports():
 	# Inlet port (junction node - no storage)
-	ports["inlet"] = solver_graph.add_node(0.0, false, SolverDomain.LIQUID)
+	ports["inlet"] = solver_graph.add_node(0.0, false, domain)
 	
 	# Outlet port (junction node - no storage)
-	ports["outlet"] = solver_graph.add_node(0.0, false, SolverDomain.LIQUID)
+	ports["outlet"] = solver_graph.add_node(0.0, false, domain)
+	
+	# Power inlet (Electrical)
+	ports["power_in"] = solver_graph.add_node(0.0, false, SolverDomain.ELECTRICAL)
 
 ## Create internal edge (the pump itself)
 func _create_internal_edges():
-	var pump_edge = solver_graph.connect_nodes(ports["inlet"], ports["outlet"], 1.0, SolverDomain.LIQUID)
+	var pump_edge = solver_graph.connect_nodes(ports["inlet"], ports["outlet"], 1.0, domain)
 	pump_edge.is_unidirectional = true  # Pumps only push one direction
 	internal_edges.append(pump_edge)
 
 ## Update solver parameters from component state
 func update_solver_state():
+	# Check power
+	ports["power_in"].flow_source = 0.0
+	power_available = 0.0
+	
+	var voltage = ports["power_in"].potential
+	if voltage > 0.1:
+		var current_demand = (power_consumption * 1000.0) / voltage
+		ports["power_in"].flow_source = -current_demand
+		power_available = power_consumption # Simplified
+	
 	if internal_edges.size() == 0:
 		return
 		

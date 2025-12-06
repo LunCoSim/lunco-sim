@@ -35,8 +35,15 @@ func get_resource_unit() -> String:
 
 ## Create a single storage port
 func _create_ports():
+	# Determine domain based on resource type
+	var domain = SolverDomain.LIQUID
+	if stored_resource_type in ["oxygen", "hydrogen", "methane"]:
+		domain = SolverDomain.GAS
+	elif stored_resource_type == "regolith":
+		domain = SolverDomain.SOLID
+		
 	# Create storage node with capacitance
-	var port = solver_graph.add_node(0.0, false, SolverDomain.LIQUID)
+	var port = solver_graph.add_node(0.0, false, domain)
 	port.resource_type = stored_resource_type
 	port.set_capacitance(max(capacity, 0.1))  # Set proper capacitance from the start
 	port.flow_accumulation = current_amount
