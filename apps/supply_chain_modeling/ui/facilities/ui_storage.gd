@@ -55,6 +55,18 @@ func update_display() -> void:
 		progress_bar.value = storage.current_amount
 		progress_bar.modulate = storage.get_resource_color()
 	
+	# Sync dropdown if type changed externally (e.g. auto-detection)
+	if resource_type_selector and resource_type_selector.item_count > 0:
+		var current_idx = resource_type_selector.selected
+		var current_id = resource_type_selector.get_item_metadata(current_idx) if current_idx >= 0 else ""
+		
+		# If user interface doesn't match backend, update UI
+		if current_id != storage.stored_resource_type:
+			for i in range(resource_type_selector.item_count):
+				if resource_type_selector.get_item_metadata(i) == storage.stored_resource_type:
+					resource_type_selector.select(i)
+					break
+	
 	# Update capacity label
 	var label = $VBoxContainer/Label
 	if label:

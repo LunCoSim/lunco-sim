@@ -40,35 +40,19 @@ func _create_ports():
 	
 	# Internal storage for buffering (small capacitance)
 	var internal_buffer = solver_graph.add_node(0.0, false, SolverDomain.LIQUID)
-	internal_buffer.set_capacitance(1.0)  # Small buffer
+	internal_buffer.set_capacitance(50.0)  # Larger buffer for stability
 	internal_buffer.resource_type = "water"
 	ports["_internal_buffer"] = internal_buffer
 
 ## Create internal edges
 func _create_internal_edges():
-	# Water intake edge (from external water_in to internal buffer)
+	# Intake edge (water consumption)
+	# Use connect_nodes helper which handles domain matching or warnings
 	var intake_edge = solver_graph.connect_nodes(ports["water_in"], ports["_internal_buffer"], 1.0, SolverDomain.LIQUID)
+	# intake_edge.is_unidirectional = true # Removed to prevent flow blocking issues
 	internal_edges.append(intake_edge)
 	
 	# H2 production edge (from buffer to h2_out)
-	# Note: Connecting Liquid buffer to Gas output is physically weird without a phase change model.
-	# But for now, we just allow mass transfer.
-	# Ideally, we should have a Gas buffer for H2 and O2.
-	# But let's keep it simple: Liquid Water -> Gas H2/O2.
-	# We need to handle domain mismatch in connect_nodes or allow it here.
-	# LCSolverGraph.connect_nodes checks domains. If they differ, it warns.
-	# We should probably use a custom edge or just ignore the warning for this internal process.
-	# Or better: Create Gas buffers for H2/O2 and drive flow from Water Buffer to Gas Buffers via "Reaction".
-	
-	# Let's try to be cleaner:
-	# Water Buffer (Liquid) -> [Reaction Logic] -> H2 Buffer (Gas) -> H2 Out
-	# Water Buffer (Liquid) -> [Reaction Logic] -> O2 Buffer (Gas) -> O2 Out
-	
-	# For now, to minimize changes, I will just use the existing logic but update domains.
-	# I will suppress the warning by using the domain of the source node for the edge?
-	# No, the edge domain defines the physics.
-	# Let's use "Liquid" for the reaction input side.
-	
 	var h2_edge = solver_graph.connect_nodes(ports["_internal_buffer"], ports["h2_out"], 0.1, SolverDomain.LIQUID)
 	h2_edge.is_unidirectional = true
 	internal_edges.append(h2_edge)
@@ -101,7 +85,8 @@ func update_solver_state():
 	
 	# Intake edge (water consumption)
 	var intake_edge: LCSolverEdge = internal_edges[0]
-	intake_edge.conductance = (h2o_input_rate / 60.0) * effective_efficiency
+	# Allow free flow into the buffer (high conductance) when valves are open
+	intake_edge.conductance = 5.0 * effective_efficiency
 	
 	# H2 production edge
 	var h2_edge: LCSolverEdge = internal_edges[1]
@@ -133,8 +118,11 @@ func update_from_solver():
 		status = "Running"
 	elif ports.has("_internal_buffer"):
 		var buffer: LCSolverNode = ports["_internal_buffer"]
-		if buffer.flow_accumulation < 0.1:
+		# Debug buffer status
+		if buffer.flow_accumulation < 0.001: # Lowered threshold
 			status = "Insufficient H2O"
+			if Engine.get_process_frames() % 60 == 0:
+				print("Factory [%s]: H2O Low! Buffer=%.6f, IntakeFlow=%.6f" % [name, buffer.flow_accumulation, internal_edges[0].flow_rate])
 		else:
 			status = "Output Storage Full"
 	else:

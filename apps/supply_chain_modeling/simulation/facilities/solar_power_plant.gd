@@ -29,27 +29,19 @@ func update_solver_state():
 	var max_power_kw = panel_area * solar_irradiance * efficiency
 	current_output = max_power_kw
 	
-	# Convert to Current Source (Amps)
-	# We need to know the grid voltage to set the current source correctly?
-	# Or we can model it as a Voltage Source?
-	# Solar panels are typically Current Sources.
-	# Let's assume a nominal voltage for calculation if the grid is down, 
-	# but really the solver should handle the voltage.
-	# For a current source, I_source = P / V_grid.
-	# If V_grid is 0 (short circuit), I is max short circuit current.
-	
 	var port = ports["power_out"]
-	var grid_voltage = port.potential
 	
-	if grid_voltage < 1.0:
-		grid_voltage = 120.0 # Nominal voltage to start up
-		
-	var current_amps = (max_power_kw * 1000.0) / grid_voltage
-	
-	# Set flow source (Positive = entering the node = supplying power)
-	port.flow_source = current_amps
-	
-	status = "Generating: %.1f kW" % current_output
+	# Act as a Voltage Source (Fixed Potential) to provide reference voltage for the network
+	if max_power_kw > 0.001:
+		port.is_ground = true
+		port.potential = 120.0 # Nominal 120V DC
+		port.flow_source = 0.0
+		status = "Online: %.1f kW Cap" % current_output
+	else:
+		# Offline / Deep Shadow
+		port.is_ground = false
+		port.flow_source = 0.0
+		status = "Offline (Low Light)"
 
 func update_from_solver():
 	pass

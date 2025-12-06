@@ -16,7 +16,7 @@ var _next_edge_id: int = 0
 
 # Solver Settings
 var max_iterations: int = 10
-var relaxation: float = 1.5 # Over-relaxation factor (1.0 = Gauss-Seidel)
+var relaxation: float = 1.0 # Reduced from 1.5 to prevent instability with high conductance
 var tolerance: float = 0.001
 
 # --- Topology Management ---
@@ -113,8 +113,39 @@ func _solve_potentials():
 					p_source_effect = -edge.potential_source
 				
 				# Contribution to sum_g_p: G * (P_neighbor + P_source_effect)
-				sum_g_p += g * (neighbor.potential + p_source_effect)
-				sum_g += g
+				
+				# Check Unidirectionality (Diode)
+				# Flow into THIS node (from neighbor).
+				# If edge is unidirectional, we must check if flow is allowed.
+				# Flow direction depends on (P_neighbor + P_source_effect) vs P_node.
+				# But P_node is what we are solving for! Using current estimate.
+				
+				var effective_g = g
+				if edge.is_unidirectional:
+					# Check direction A -> B
+					# If node is A, neighbor is B. Flow out.
+					# If node is B, neighbor is A. Flow in.
+					
+					var p_neighbor_effective = neighbor.potential + p_source_effect
+					var delta_p = p_neighbor_effective - node.potential
+					
+					# Edge is A->B.
+					if node == edge.node_b:
+						# We are B. Flow must be A->B (Positive into us).
+						# So P_A > P_B. (neighbor > node).
+						# delta_p > 0.
+						if delta_p < 0:
+							effective_g = 0.0
+					else:
+						# We are A. Flow must be A->B (Negative out of us).
+						# So P_A > P_B. (node > neighbor).
+						# delta_p < 0.
+						if delta_p > 0:
+							effective_g = 0.0
+				
+				if effective_g > 0.0:
+					sum_g_p += effective_g * (neighbor.potential + p_source_effect)
+					sum_g += effective_g
 			
 			# Add flow source contribution
 			# Flow_source is already in flow units (kg/s or Amps)

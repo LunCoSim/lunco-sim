@@ -57,8 +57,11 @@ func update_solver_state():
 	# Convert pump_rate (units/min) to pressure source
 	# Pump pressure should be strong enough to overcome typical back-pressure
 	# Using pump_rate directly as a pressure multiplier (simplified model)
-	var target_pressure_source = pump_rate * efficiency * power_ratio
+	var target_pressure_source = pump_rate * efficiency * power_ratio * 10.0 # Multiplier for stronger pump effect
 	
+	# Pump pushes from Inlet to Outlet
+	# potential_source adds to flow from A->B: Flow = G * (Pa - Pb + Psource)
+	# So if A=Inlet, B=Outlet, Psource > 0 helps flow.
 	pump_edge.potential_source = target_pressure_source
 	
 	# Update conductance (resistance to flow)
@@ -76,10 +79,19 @@ func update_from_solver():
 	
 	if power_available < power_consumption * 0.1:
 		status = "Insufficient Power"
+		if Engine.get_process_frames() % 60 == 0:
+			print("Pump [%s]: Low Power! V=%.2f, Req=%.2f" % [name, ports["power_in"].potential, power_consumption])
 	elif pump_edge.flow_rate > 0.01:
 		status = "Running"
 	else:
 		status = "Idle"
+		if Engine.get_process_frames() % 60 == 0:
+			var inlet_edges = ports["inlet"].edges.size()
+			var outlet_edges = ports["outlet"].edges.size()
+			print("Pump [%s]: Idle. P_In=%.2f, P_Out=%.2f, Flow=%.4f. Edges: In=%d, Out=%d" % [name, ports["inlet"].potential, ports["outlet"].potential, pump_edge.flow_rate, inlet_edges, outlet_edges])
+			
+			if inlet_edges < 2: # 1 internal edge (pump) + 0 external
+				print("Pump [%s]: WARNING - Inlet NOT connected to Source!" % name)
 
 func save_state() -> Dictionary:
 	var state = super.save_state()

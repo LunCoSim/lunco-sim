@@ -14,14 +14,37 @@ func _ready() -> void:
 
 func _update_resource() -> void:
 	if stored_resource_type != "":
-		# Use global LCResourceRegistry autoload
-		if LCResourceRegistry.has_resource(stored_resource_type):
-			_resource = LCResourceRegistry.get_resource(stored_resource_type)
+		# Use connect to global LCResourceRegistry autoload safely
+		var registry = get_node_or_null("/root/LCResourceRegistry")
+		if registry:
+			if registry.has_resource(stored_resource_type):
+				_resource = registry.get_resource(stored_resource_type)
+			else:
+				push_warning("StorageFacility: Resource not found: " + stored_resource_type)
 		else:
-			push_warning("StorageFacility: Resource not found: " + stored_resource_type)
+			push_warning("StorageFacility: ResourceRegistry not found")
+
+func set_capacity(value: float) -> void:
+	capacity = value
+	if ports.has("fluid_port"):
+		ports["fluid_port"].set_capacitance(max(capacity, 0.1))
+
+func set_current_amount(value: float) -> void:
+	current_amount = value
+	if ports.has("fluid_port"):
+		ports["fluid_port"].flow_accumulation = current_amount
+		# Also update potential if capacity is known
+		if ports["fluid_port"].capacitance > 0:
+			ports["fluid_port"].potential = value / ports["fluid_port"].capacitance
 
 func set_resource_type(type: String) -> void:
-	if current_amount == 0 or type == stored_resource_type:
+	# ... existing logic ...
+	# Allow changing type freely for now to avoid editor frustration
+	# OR: only if amount is default 100?
+	# Let's just allow it and print a warning if we are mixing (which we overwrite anyway)
+	
+	if stored_resource_type != type:
+		print("StorageFacility: Changing type from '%s' to '%s' (Amount: %.2f)" % [stored_resource_type, type, current_amount])
 		stored_resource_type = type
 		_update_resource()
 		
@@ -53,6 +76,7 @@ func _create_ports():
 	if port.capacitance > 0:
 		port.potential = port.flow_accumulation / port.capacitance
 	ports["fluid_port"] = port
+	print("StorageFacility [%s]: Port created. Type='%s', Amount=%.2f, Cap=%.2f" % [name, stored_resource_type, current_amount, capacity])
 
 ## Update solver parameters from component state
 func update_solver_state():
@@ -61,6 +85,10 @@ func update_solver_state():
 		
 	var port: LCSolverNode = ports["fluid_port"]
 	
+	# Debug check for zero type
+	if stored_resource_type == "" and current_amount > 0:
+		print("StorageFacility [%s]: WARNING - Amount > 0 but Type is EMPTY!" % name)
+	
 	# Update capacitance based on capacity
 	# Using simple linear model: Pressure = Mass / Capacitance
 	# For a tank, we want Pressure to represent "fill level" in some way
@@ -68,7 +96,17 @@ func update_solver_state():
 	port.set_capacitance(max(capacity, 0.1))  # Avoid division by zero
 	
 	# Ensure resource type is synced
-	port.resource_type = stored_resource_type
+	if port.resource_type != stored_resource_type:
+		print("StorageFacility [%s]: Syncing solver type '%s' -> '%s'" % [name, port.resource_type, stored_resource_type])
+		port.resource_type = stored_resource_type
+	
+	# Sync user changes to solver (if mass was updated externally)
+	# This assumes current_amount is the source of truth if it deviates significantly
+	# from what the solver last reported (e.g. user edit in inspector).
+	# However, since update_from_solver overwrites current_amount every frame,
+	# we can just push current_amount to flow_accumulation here to support
+	# external edits and initialization.
+	port.flow_accumulation = current_amount
 
 ## Update component state from solver results
 func update_from_solver():
@@ -77,6 +115,17 @@ func update_from_solver():
 		
 	var port: LCSolverNode = ports["fluid_port"]
 	current_amount = port.flow_accumulation
+	
+	# Auto-classify resource type if generic and receiving flow
+	if stored_resource_type == "" and current_amount > 0.0001:
+		for edge in port.edges:
+			var neighbor = edge.node_a if edge.node_b == port else edge.node_b
+			if neighbor.resource_type != "" and neighbor.resource_type != "fluid":
+				print("StorageFacility [%s]: Auto-detected resource type '%s' from neighbor" % [name, neighbor.resource_type])
+				set_resource_type(neighbor.resource_type)
+				break
+	
+
 
 func available_space() -> float:
 	return capacity - current_amount

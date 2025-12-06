@@ -48,7 +48,7 @@ func _ready():
 
 	load_graph()
 	save_graph() # Hack to fix the bug that after loading form file info is deleted
-
+	
 func _connect_signals() -> void:
 	# Connect menu signals
 	var menu_bar = $UI/MenuContainer/MenuBar
@@ -226,8 +226,11 @@ func load_from_nft(token_id: int) -> void:
 # === Signal Handlers ===
 # -- Graph Edit Signals --
 func _on_connection_request(from_node: StringName, from_port: int, to_node: StringName, to_port: int) -> void:
-	if simulation.connect_nodes(from_node, from_port, to_node, to_port):
+	var result = simulation.connect_nodes(from_node, from_port, to_node, to_port)
+	if result.success:
 		graph_edit.connect_node(from_node, from_port, to_node, to_port)
+	else:
+		print("RSCT: Connection rejected: %s" % result.message)
 	save_graph()
 
 func _on_disconnection_request(from_node: StringName, from_port: int, to_node: StringName, to_port: int) -> void:

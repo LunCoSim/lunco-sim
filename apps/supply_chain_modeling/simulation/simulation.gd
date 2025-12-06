@@ -1,6 +1,7 @@
 class_name SimulationManager
 extends Node
 
+const SolverDomain = preload("res://core/systems/solver/solver_domain.gd")
 const RegolithReductionReactor = preload("res://apps/supply_chain_modeling/simulation/facilities/regolith_reduction_reactor.gd")
 const WaterCollectionSystem = preload("res://apps/supply_chain_modeling/simulation/facilities/water_collection_system.gd")
 const SolarPowerPlant = preload("res://apps/supply_chain_modeling/simulation/facilities/solar_power_plant.gd")
@@ -138,10 +139,12 @@ func can_connect(from_node: String, from_port: int, to_node: String, to_port: in
 	# Use the existing validation from StorageFacility
 	if source is StorageFacility:
 		if not source.can_connect_with(target, from_port, to_port):
+			print("SimulationManager: Connection rejected by StorageFacility validation: %s -> %s" % [source.name, target.name])
 			response.message = "Resources are not compatible"
 			return response
 	
 	response.success = true
+	# print("SimulationManager: Connection validation passed: %s -> %s" % [source.name, target.name])
 	return response
 
 func connect_nodes(from_node: String, from_port: int, to_node: String, to_port: int) -> Dictionary:
@@ -158,20 +161,49 @@ func connect_nodes(from_node: String, from_port: int, to_node: String, to_port: 
 		validation.message = "Invalid nodes"
 		return validation
 	
+	# Debug print
+	print("Simulation: Connect Request %s:%d -> %s:%d. SourceType=%s, TargetType=%s" % 
+		[source.name, from_port, target.name, to_port, Utils.get_custom_class_name(source), Utils.get_custom_class_name(target)])
+
 	# Create solver edge if both are SolverSimulationNodes
 	var solver_edge = null
-	if source is SolverSimulationNode and target is SolverSimulationNode:
+	# check if source and target actually have the class name
+	if source.has_method("register_with_solver") and target.has_method("register_with_solver"):
 		# Map port indices to port names (simplified - assumes single port or indexed ports)
 		var source_port_name = _get_port_name(source, from_port, true)
 		var target_port_name = _get_port_name(target, to_port, false)
 		
-		if source_port_name and target_port_name:
+		# print("Resolving connection %s:%d -> %s:%d ==> %s -> %s" % [source.name, from_port, target.name, to_port, source_port_name, target_port_name])
+		
+		# Only create edge if ports are found
+		if source_port_name != "" and target_port_name != "":
 			var source_port = source.get_port(source_port_name)
 			var target_port = target.get_port(target_port_name)
 			
 			if source_port and target_port:
 				# Create edge with default conductance
-				solver_edge = solver_graph.connect_nodes(source_port, target_port, 1.0, source_port.domain)
+				var conductance = 1.0
+				if source_port.domain == SolverDomain.ELECTRICAL:
+					conductance = 10000.0 # High conductance for wires (low resistance)
+				
+				solver_edge = solver_graph.connect_nodes(source_port, target_port, conductance, source_port.domain)
+				print("Simulation: Connected [%s:%s] -> [%s:%s] (Cond=%.1f, Domain=%s)" % 
+					[source.name, source_port_name, target.name, target_port_name, conductance, source_port.domain])
+			else:
+				print("Simulation: FAILED to find solver nodes for valid port names!")
+				validation.success = false
+				validation.message = "Internal Solver Error (Ports missing)"
+				return validation
+		else:
+			print("Simulation: FAILED to resolve port names for connection %s:%d -> %s:%d" % [source.name, from_port, target.name, to_port])
+			validation.success = false
+			validation.message = "Failed to resolve ports"
+			return validation
+	else:
+		print("Simulation: Warning - Nodes do not support solver registration.")
+		validation.success = false
+		validation.message = "Nodes incompatible with solver"
+		return validation
 	
 	var connection = {
 		"from_node": from_node,
@@ -257,12 +289,19 @@ func add_node_from_path(custom_class_name: String) -> SimulationNode:
 ## Helper function to map port index to port name
 ## This is a simplified mapping - components define their own port names
 func _get_port_name(component: SolverSimulationNode, port_index: int, is_output: bool) -> String:
+	# Debug mapping
+	# print("Mapping port for %s (Class: %s): Index=%d, Output=%s" % [component.name, component.get_class(), port_index, is_output])
+
+	# For BaseResource (Legacy items like Water, Oxygen, etc used as tanks)
+	if component is BaseResource:
+		return "out"
+
 	# For StorageFacility: single port "fluid_port"
-	if component is StorageFacility:
+	if component is StorageFacility or component.get_class() == "StorageFacility" or "StorageFacility" in Utils.get_custom_class_name(component):
 		return "fluid_port"
 	
 	# For Pump: inlet (port 0 input), outlet (port 0 output), power_in (port 1 input)
-	if component is Pump:
+	if component is Pump or "Pump" in Utils.get_custom_class_name(component):
 		if is_output:
 			return "outlet"
 		else:
@@ -322,4 +361,37 @@ func _get_port_name(component: SolverSimulationNode, port_index: int, is_output:
 			return "power_out"
 	
 	# Default fallback
+	# Fallback/Debug
+	print("SimulationManager: Unknown port mapping for node '%s' (Type: %s, Port: %d, Output: %s)" % 
+		[component.name, Utils.get_custom_class_name(component), port_index, is_output])
 	return ""
+
+func print_graph_state() -> void:
+	print("=== SIMULATION GRAPH STATE ===")
+	print("Nodes: ", get_child_count())
+	for child in get_children():
+		var info = "[%s] %s" % [child.name, Utils.get_custom_class_name(child)]
+		if child.has_method("register_with_solver"):
+			info += " (SolverNode)"
+			if child.get("ports") and child.ports.size() > 0:
+				info += " Ports: " + str(child.ports.keys())
+		else:
+			info += " (BasicNode)"
+		print(info)
+	
+	if solver_graph:
+		print("--- Solver Graph ---")
+		print("Solver Nodes: ", solver_graph.nodes.size())
+		for id in solver_graph.nodes:
+			var n = solver_graph.nodes[id]
+			print("  Node %s: Domain=%s, P=%.2f, Cap=%.2f" % [id, n.domain, n.potential, n.capacitance])
+		
+		print("Solver Edges: ", solver_graph.edges.size())
+		for id in solver_graph.edges:
+			var e = solver_graph.edges[id]
+			print("  Edge %s: %s -> %s (G=%.2f)" % [id, e.node_a.id, e.node_b.id, e.conductance])
+	
+	print("--- Connections ---")
+	for c in connections:
+		print("  %s:%d -> %s:%d" % [c.from_node, c.from_port, c.to_node, c.to_port])
+	print("===============================")

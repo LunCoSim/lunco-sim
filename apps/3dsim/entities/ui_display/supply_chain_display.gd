@@ -177,8 +177,7 @@ func _on_area_3d_input_event(_camera, event, mouse_position, _normal, _shape_idx
 		if event.pressed:
 			last_click_position = viewport_position
 		
-		# Debug
-		print("Mouse button event forwarded to viewport at position: ", viewport_position)
+
 	
 	elif event is InputEventMouseMotion:
 		get_viewport().set_input_as_handled()
