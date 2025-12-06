@@ -197,7 +197,8 @@ func show_component_info(obj):
 		var is_spacecraft = obj is LCConstructible or obj is LCVehicle or obj is LCSpacecraft or obj.has_method("_on_spacecraft_controller_thrusted") or obj.has_method("set_control_inputs") or (obj.get_script() and obj.get_script().resource_path.ends_with("spacecraft.gd"))
 		if is_spacecraft:
 			print("ComponentInspector: Scanning entire vehicle hierarchy for Parameters...")
-			_scan_and_create_settings(obj)
+			# Use LCParameterEditor to handle the entire hierarchy
+			_create_parameter_controls(obj)
 		# If it's a specific component, show only its settings
 		elif "Parameters" in obj and obj.Parameters is Dictionary and not obj.Parameters.is_empty():
 			print("ComponentInspector: Showing settings for selected component: ", obj.name)
@@ -208,28 +209,9 @@ func show_component_info(obj):
 	# Initial telemetry display (create labels)
 	_update_telemetry_display()
 
-func _scan_and_create_settings(node: Node):
-	"""Recursively scan node and its children for Parameters"""
-	# Check if this node has Parameters
-	if "Parameters" in node and node.Parameters is Dictionary and not node.Parameters.is_empty():
-		print("ComponentInspector: Found component with Parameters: ", node.name)
-		_create_parameter_controls(node)
-	
-	# Recursively scan children
-	for child in node.get_children():
-		_scan_and_create_settings(child)
-
 func _create_parameter_controls(component: Object):
-	# Create header
-	var header = Label.new()
-	header.text = "Settings for: " + component.name
-	header.add_theme_font_size_override("font_size", 14)
-	header.add_theme_color_override("font_color", Color(0.6, 0.8, 1.0))
-	settings_content.add_child(header)
-	
-	settings_content.add_child(HSeparator.new())
-	
 	# Use LCParameterEditor to create controls
+	# LCParameterEditor handles headers and hierarchy scanning
 	var param_editor = LCParameterEditor.new()
 	param_editor.target_node = component
 	settings_content.add_child(param_editor)
