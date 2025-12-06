@@ -14,7 +14,7 @@ var viewer_instance_3d: Control = null  # Graph viewer for 3D
 var viewer_instance_fullscreen: Control = null  # Graph viewer for fullscreen
 var current_target: Node3D = null
 var current_mode: DisplayMode = DisplayMode.HIDDEN
-var floating_enabled: bool = true  # Can be toggled with 'G'
+var floating_enabled: bool = false  # Can be toggled with 'G'
 
 func _ready():
 	# Connect to BuilderManager
