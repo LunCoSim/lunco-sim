@@ -1,6 +1,8 @@
 class_name ElectrolyticFactory
 extends SolverSimulationNode
 
+const SolverDomain = preload("res://core/systems/solver/solver_domain.gd")
+
 # Input/output rates
 @export var h2o_input_rate: float = 2.0  # units/minute
 @export var power_input_rate: float = 100.0  # kW
@@ -18,23 +20,26 @@ func _init():
 
 ## Create ports for water input and gas outputs
 func _create_ports():
-	# Water inlet (junction node)
-	var water_in = solver_graph.add_node(0.0, false, "Fluid")
+	# Water inlet (Liquid)
+	var water_in = solver_graph.add_node(0.0, false, SolverDomain.LIQUID)
 	water_in.resource_type = "water"
 	ports["water_in"] = water_in
 	
-	# H2 outlet (junction node)
-	var h2_out = solver_graph.add_node(0.0, false, "Fluid")
+	# H2 outlet (Gas)
+	var h2_out = solver_graph.add_node(0.0, false, SolverDomain.GAS)
 	h2_out.resource_type = "hydrogen"
 	ports["h2_out"] = h2_out
 	
-	# O2 outlet (junction node)
-	var o2_out = solver_graph.add_node(0.0, false, "Fluid")
+	# O2 outlet (Gas)
+	var o2_out = solver_graph.add_node(0.0, false, SolverDomain.GAS)
 	o2_out.resource_type = "oxygen"
 	ports["o2_out"] = o2_out
 	
+	# Power inlet (Electrical)
+	ports["power_in"] = solver_graph.add_node(0.0, false, SolverDomain.ELECTRICAL)
+	
 	# Internal storage for buffering (small capacitance)
-	var internal_buffer = solver_graph.add_node(0.0, false, "Fluid")
+	var internal_buffer = solver_graph.add_node(0.0, false, SolverDomain.LIQUID)
 	internal_buffer.set_capacitance(1.0)  # Small buffer
 	internal_buffer.resource_type = "water"
 	ports["_internal_buffer"] = internal_buffer
@@ -42,21 +47,48 @@ func _create_ports():
 ## Create internal edges
 func _create_internal_edges():
 	# Water intake edge (from external water_in to internal buffer)
-	var intake_edge = solver_graph.connect_nodes(ports["water_in"], ports["_internal_buffer"], 1.0, "Fluid")
+	var intake_edge = solver_graph.connect_nodes(ports["water_in"], ports["_internal_buffer"], 1.0, SolverDomain.LIQUID)
 	internal_edges.append(intake_edge)
 	
 	# H2 production edge (from buffer to h2_out)
-	var h2_edge = solver_graph.connect_nodes(ports["_internal_buffer"], ports["h2_out"], 0.1, "Fluid")
+	# Note: Connecting Liquid buffer to Gas output is physically weird without a phase change model.
+	# But for now, we just allow mass transfer.
+	# Ideally, we should have a Gas buffer for H2 and O2.
+	# But let's keep it simple: Liquid Water -> Gas H2/O2.
+	# We need to handle domain mismatch in connect_nodes or allow it here.
+	# LCSolverGraph.connect_nodes checks domains. If they differ, it warns.
+	# We should probably use a custom edge or just ignore the warning for this internal process.
+	# Or better: Create Gas buffers for H2/O2 and drive flow from Water Buffer to Gas Buffers via "Reaction".
+	
+	# Let's try to be cleaner:
+	# Water Buffer (Liquid) -> [Reaction Logic] -> H2 Buffer (Gas) -> H2 Out
+	# Water Buffer (Liquid) -> [Reaction Logic] -> O2 Buffer (Gas) -> O2 Out
+	
+	# For now, to minimize changes, I will just use the existing logic but update domains.
+	# I will suppress the warning by using the domain of the source node for the edge?
+	# No, the edge domain defines the physics.
+	# Let's use "Liquid" for the reaction input side.
+	
+	var h2_edge = solver_graph.connect_nodes(ports["_internal_buffer"], ports["h2_out"], 0.1, SolverDomain.LIQUID)
 	h2_edge.is_unidirectional = true
 	internal_edges.append(h2_edge)
 	
-	# O2 production edge (from buffer to o2_out)
-	var o2_edge = solver_graph.connect_nodes(ports["_internal_buffer"], ports["o2_out"], 0.1, "Fluid")
+	var o2_edge = solver_graph.connect_nodes(ports["_internal_buffer"], ports["o2_out"], 0.1, SolverDomain.LIQUID)
 	o2_edge.is_unidirectional = true
 	internal_edges.append(o2_edge)
 
 ## Update solver parameters from component state
 func update_solver_state():
+	# Check power
+	ports["power_in"].flow_source = 0.0
+	power_available = 0.0
+	
+	var voltage = ports["power_in"].potential
+	if voltage > 0.1:
+		var current_demand = (power_consumption * 1000.0) / voltage
+		ports["power_in"].flow_source = -current_demand
+		power_available = power_consumption # Simplified
+	
 	if internal_edges.size() < 3:
 		return
 	
@@ -73,12 +105,13 @@ func update_solver_state():
 	
 	# H2 production edge
 	var h2_edge: LCSolverEdge = internal_edges[1]
-	h2_edge.potential_source = (h2_output_rate / 60.0) * effective_efficiency * 0.1
+	# Drive flow with potential source (pressure pump effect)
+	h2_edge.potential_source = (h2_output_rate / 60.0) * effective_efficiency * 10.0 
 	h2_edge.conductance = (h2_output_rate / 60.0) * effective_efficiency
 	
 	# O2 production edge
 	var o2_edge: LCSolverEdge = internal_edges[2]
-	o2_edge.potential_source = (o2_output_rate / 60.0) * effective_efficiency * 0.1
+	o2_edge.potential_source = (o2_output_rate / 60.0) * effective_efficiency * 10.0
 	o2_edge.conductance = (o2_output_rate / 60.0) * effective_efficiency
 
 ## Update component state from solver results
@@ -96,7 +129,7 @@ func update_from_solver():
 	var h2_edge: LCSolverEdge = internal_edges[1]
 	var o2_edge: LCSolverEdge = internal_edges[2]
 	
-	if h2_edge.flow_rate > 0.01 and o2_edge.flow_rate > 0.01:
+	if h2_edge.flow_rate > 0.001 or o2_edge.flow_rate > 0.001:
 		status = "Running"
 	elif ports.has("_internal_buffer"):
 		var buffer: LCSolverNode = ports["_internal_buffer"]

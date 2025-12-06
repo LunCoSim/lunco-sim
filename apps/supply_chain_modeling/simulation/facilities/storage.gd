@@ -1,6 +1,8 @@
 class_name StorageFacility
 extends SolverSimulationNode
 
+const SolverDomain = preload("res://core/systems/solver/solver_domain.gd")
+
 @export var capacity: float = 100.0  # Maximum storage capacity (kg)
 @export var current_amount: float = 0.0  # Current amount stored (kg)
 @export var stored_resource_type: String = ""  # Name of the resource type
@@ -34,7 +36,7 @@ func get_resource_unit() -> String:
 ## Create a single storage port
 func _create_ports():
 	# Create storage node with capacitance
-	var port = solver_graph.add_node(0.0, false, "Fluid")
+	var port = solver_graph.add_node(0.0, false, SolverDomain.LIQUID)
 	port.resource_type = stored_resource_type
 	port.set_capacitance(max(capacity, 0.1))  # Set proper capacitance from the start
 	port.flow_accumulation = current_amount

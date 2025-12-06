@@ -1,6 +1,12 @@
 class_name SimulationManager
 extends Node
 
+const RegolithReductionReactor = preload("res://apps/supply_chain_modeling/simulation/facilities/regolith_reduction_reactor.gd")
+const WaterCollectionSystem = preload("res://apps/supply_chain_modeling/simulation/facilities/water_collection_system.gd")
+const SolarPowerPlant = preload("res://apps/supply_chain_modeling/simulation/facilities/solar_power_plant.gd")
+const ElectrolyticFactory = preload("res://apps/supply_chain_modeling/simulation/facilities/electrolytic_factory.gd")
+
+# Graph management
 const MODULE_PATH = "res://modules/supply_chain_modeling"
 
 # === Signals ===
@@ -275,6 +281,41 @@ func _get_port_name(component: SolverSimulationNode, port_index: int, is_output:
 				return "water_in"
 			elif port_index == 1:
 				return "power_in"
+	
+	# For RegolithReductionReactor:
+	# Inputs: 0=regolith_in, 1=h2_in, 2=power_in
+	# Outputs: 0=water_out, 1=waste_out
+	if component is RegolithReductionReactor:
+		if is_output:
+			if port_index == 0:
+				return "water_out"
+			elif port_index == 1:
+				return "waste_out"
+		else:
+			if port_index == 0:
+				return "regolith_in"
+			elif port_index == 1:
+				return "h2_in"
+			elif port_index == 2:
+				return "power_in"
+				
+	# For WaterCollectionSystem:
+	# Inputs: 0=vapor_in, 1=power_in
+	# Outputs: 0=water_out
+	if component is WaterCollectionSystem:
+		if is_output:
+			return "water_out"
+		else:
+			if port_index == 0:
+				return "vapor_in"
+			elif port_index == 1:
+				return "power_in"
+				
+	# For SolarPowerPlant:
+	# Outputs: 0=power_out
+	if component is SolarPowerPlant:
+		if is_output:
+			return "power_out"
 	
 	# Default fallback
 	return ""

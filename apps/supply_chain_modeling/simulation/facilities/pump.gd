@@ -1,6 +1,8 @@
 class_name Pump
 extends SolverSimulationNode
 
+const SolverDomain = preload("res://core/systems/solver/solver_domain.gd")
+
 # Pump properties
 @export var pump_rate: float = 10.0  # units/minute
 @export var power_consumption: float = 50.0  # kW
@@ -13,14 +15,14 @@ func _init():
 ## Create inlet and outlet ports
 func _create_ports():
 	# Inlet port (junction node - no storage)
-	ports["inlet"] = solver_graph.add_node(0.0, false, "Fluid")
+	ports["inlet"] = solver_graph.add_node(0.0, false, SolverDomain.LIQUID)
 	
 	# Outlet port (junction node - no storage)
-	ports["outlet"] = solver_graph.add_node(0.0, false, "Fluid")
+	ports["outlet"] = solver_graph.add_node(0.0, false, SolverDomain.LIQUID)
 
 ## Create internal edge (the pump itself)
 func _create_internal_edges():
-	var pump_edge = solver_graph.connect_nodes(ports["inlet"], ports["outlet"], 1.0, "Fluid")
+	var pump_edge = solver_graph.connect_nodes(ports["inlet"], ports["outlet"], 1.0, SolverDomain.LIQUID)
 	pump_edge.is_unidirectional = true  # Pumps only push one direction
 	internal_edges.append(pump_edge)
 

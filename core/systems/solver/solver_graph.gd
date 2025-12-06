@@ -1,6 +1,8 @@
 class_name LCSolverGraph
 extends RefCounted
 
+const SolverDomain = preload("res://core/systems/solver/solver_domain.gd")
+
 ## Linear Graph Solver Engine
 ## Solves for Potential and Flow in a network of nodes and edges.
 ## Uses an iterative approach (Successive Over-Relaxation) suitable for real-time.
@@ -19,13 +21,13 @@ var tolerance: float = 0.001
 
 # --- Topology Management ---
 
-func add_node(initial_potential: float = 0.0, is_ground: bool = false, domain: StringName = "Fluid") -> LCSolverNode:
+func add_node(initial_potential: float = 0.0, is_ground: bool = false, domain: StringName = SolverDomain.LIQUID) -> LCSolverNode:
 	var node = LCSolverNode.new(_next_node_id, initial_potential, is_ground, domain)
 	nodes[_next_node_id] = node
 	_next_node_id += 1
 	return node
 
-func connect_nodes(node_a: LCSolverNode, node_b: LCSolverNode, conductance: float, domain: StringName = "Fluid") -> LCSolverEdge:
+func connect_nodes(node_a: LCSolverNode, node_b: LCSolverNode, conductance: float, domain: StringName = SolverDomain.LIQUID) -> LCSolverEdge:
 	if not node_a or not node_b:
 		push_error("Cannot connect null nodes")
 		return null
