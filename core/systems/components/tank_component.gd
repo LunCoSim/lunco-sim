@@ -11,7 +11,7 @@ var volume: float = 1.0 # m^3
 var height: float = 1.0 # m
 var base_area: float = 1.0 # m^2 (derived or set)
 var density: float = 1000.0 # kg/m^3 (Water/Fuel)
-var p_gas: float = 101325.0 # Pa (1 atm)
+var p_gas: float = 600000.0 # Pa (6 bar - typical rocket ullage pressure)
 var gravity: float = 9.81 # m/s^2
 
 # State
@@ -58,6 +58,14 @@ func update(delta: float):
 
 func _update_level_and_pressure():
 	level = mass / (density * base_area)
+	
+	# Phase-aware pressure model:
+	# Only provide pressure at the liquid port if liquid is actually present.
+	# When empty, the ullage gas pressure exists but cannot flow through
+	# liquid-only plumbing (engine feed lines, valves, etc.)
+	if mass <= 0.01:  # Small epsilon for numerical stability
+		ports["port"].potential = 0.0
+		return
 	
 	# Hydrostatic pressure at the bottom
 	# P = P_gas + rho * g * h

@@ -5,6 +5,11 @@ extends LCDynamicEffector
 ##
 ## Can be linked to a fuel tank for mass depletion.
 ## Supports thrust vectoring and on/off pulsing.
+##
+## PHYSICS UPDATE: 
+## Acts as a vacuum sink (Ground Node, Potential=0) in the linear solver.
+## Thrust command modulates the CONDUCTANCE of the connection to the tanks (Valve).
+## Thrust is calculated from the ACTUAL mass flow rate resulting from reservoir pressure.
 
 @export_group("Thruster Properties")
 @export var max_thrust: float = 100.0  ## Maximum thrust in Newtons
@@ -22,7 +27,10 @@ var oxidizer_tank = null  ## LCResourceTankEffector for oxygen
 
 # Solver Integration
 var solver_graph: LCSolverGraph
-var solver_node: LCSolverNode  ## Single engine node (consumes both propellants)
+var solver_node: LCSolverNode  ## Single engine node (acts as exhaust/vacuum)
+var fuel_edge: LCSolverEdge    ## Connection to fuel tank (valve)
+var oxidizer_edge: LCSolverEdge ## Connection to oxidizer tank (valve)
+var valve_max_conductance: float = 1.0  ## Calculated conductance when fully open
 
 @export_group("Thrust Vectoring")
 @export var can_vector: bool = false  ## Can this thruster gimbal?
@@ -37,6 +45,7 @@ var solver_node: LCSolverNode  ## Single engine node (consumes both propellants)
 var throttle_limit: float = 1.0 ## User-set max throttle (0.0 to 1.0)
 var thrust_command: float = 0.0  ## Commanded thrust level (0.0 to 1.0)
 var gimbal_command: Vector2 = Vector2.ZERO  ## Gimbal command in radians
+var current_throttle: float = 0.0 ## Actual valve position (0.0 to 1.0) due to ramping
 
 # Internal state
 var current_thrust: float = 0.0  ## Current actual thrust
@@ -44,9 +53,13 @@ var current_gimbal: Vector2 = Vector2.ZERO  ## Current gimbal angles
 var is_firing: bool = false
 var firing_time: float = 0.0
 var total_impulse: float = 0.0  ## Total impulse delivered in N·s
+var actual_mass_flow: float = 0.0 ## Current total mass flow (kg/s)
 
 # Physics constants
 const G0: float = 9.80665  ## Standard gravity in m/s²
+# Estimation pressure for calculating conductance (e.g., 3 bar typical tank pressure)
+# This is used to size the "valve" so that at nominal pressure, we get max thrust.
+const NOMINAL_TANK_PRESSURE: float = 300000.0 # 3 Bar
 
 func _init():
 	_initialize_parameters()
@@ -58,13 +71,7 @@ func _initialize_parameters():
 	# Read-only status displays
 	Parameters["Firing"] = { "path": "is_firing", "type": "bool", "readonly": true }
 	Parameters["Current Thrust (N)"] = { "path": "current_thrust", "type": "float", "readonly": true }
-	Parameters["Fuel Flow (kg/s)"] = { "path": "current_fuel_flow", "type": "float", "readonly": true }
-
-# Computed property for current fuel flow
-var current_fuel_flow: float:
-	get:
-		var thrust_fraction = current_thrust / max_thrust if max_thrust > 0 else 0.0
-		return fuel_flow_rate * thrust_fraction
+	Parameters["Mass Flow (kg/s)"] = { "path": "actual_mass_flow", "type": "float", "readonly": true }
 
 func _ready():
 	super._ready()
@@ -93,12 +100,17 @@ func _ready():
 		print("✗ LCThrusterEffector: No oxidizer tank path set")
 	
 	# Auto-calculate fuel flow rate if not set
-	# Total propellant flow = fuel + oxidizer
-	# For mixture ratio R:1, fuel fraction = 1/(R+1), oxidizer fraction = R/(R+1)
 	if fuel_flow_rate <= 0.0 and specific_impulse > 0.0:
 		var total_flow = max_thrust / (specific_impulse * G0)
 		fuel_flow_rate = total_flow / (mixture_ratio + 1.0)  # Fuel portion only
 		print("✓ LCThrusterEffector: Calculated fuel flow rate: ", fuel_flow_rate, " kg/s")
+		
+		# Calculate Max Conductance (Valve Size)
+		# Flow = Conductance * Pressure
+		# Conductance = Flow / Pressure
+		# We assume flow drives towards vacuum (0 pressure), so DeltaP = TankPressure
+		valve_max_conductance = total_flow / NOMINAL_TANK_PRESSURE
+		print("✓ LCThrusterEffector: Calculated valve Kv: ", valve_max_conductance)
 	
 	# Set power consumption (rough estimate: 10W per 100N)
 	power_consumption = max_thrust * 0.1
@@ -109,31 +121,34 @@ func _ready():
 func set_solver_graph(graph: LCSolverGraph):
 	solver_graph = graph
 	if solver_graph and (fuel_tank or oxidizer_tank):
-		# Create single engine node (Fluid domain, represents the combustion chamber)
-		solver_node = solver_graph.add_node(0.0, false, "Fluid")
-		solver_node.display_name = name
-		solver_node.resource_type = "combustion"  # Mixed propellants
-		solver_node.flow_source = 0.0  # Will be negative when consuming
+		# Create single engine node (Fluid domain)
+		# Represents the EXHAUST / VACUUM.
+		# is_ground = true forces potential to 0.0 (Vacuum)
+		solver_node = solver_graph.add_node(0.0, true, "Fluid")
+		solver_node.display_name = name + " (Nozzle)"
+		solver_node.resource_type = "combustion"
 		
 		# Connect to fuel tank
 		if fuel_tank:
 			var fuel_port = fuel_tank.get_port()
 			if fuel_port:
-				# High conductance for direct connection
-				solver_graph.connect_nodes(fuel_port, solver_node, 1000.0, "Fluid")
+				# Connect with 0 conductance initially (Closed Valve)
+				fuel_edge = solver_graph.connect_nodes(fuel_port, solver_node, 0.0, "Fluid")
+				fuel_edge.is_unidirectional = true # Check valve, only flow out
 		
 		# Connect to oxidizer tank
 		if oxidizer_tank:
 			var oxidizer_port = oxidizer_tank.get_port()
 			if oxidizer_port:
-				# High conductance for direct connection
-				solver_graph.connect_nodes(oxidizer_port, solver_node, 1000.0, "Fluid")
+				# Connect with 0 conductance initially (Closed Valve)
+				oxidizer_edge = solver_graph.connect_nodes(oxidizer_port, solver_node, 0.0, "Fluid")
+				oxidizer_edge.is_unidirectional = true # Check valve, only flow out
 
 func _physics_process(delta):
-	_update_thrust(delta)
+	_update_throttle_ramp(delta)
+	_update_solver_valves()
 	_update_gimbal(delta)
-	# Only show plume when actually firing (after fuel check)
-	# visible is set in compute_force_torque based on can_fire
+	# Force calculation happens in compute_force_torque
 
 func _process(delta):
 	_update_telemetry()
@@ -155,25 +170,40 @@ func fire_pulse(duration: float, level: float = 1.0):
 		set_thrust(level)
 		# Note: Caller should handle timing or use a timer
 
-## Updates thrust level with ramping.
-func _update_thrust(delta: float):
-	var target_thrust = thrust_command * max_thrust * efficiency
+## Updates throttle level with ramping.
+func _update_throttle_ramp(delta: float):
+	var target = thrust_command * efficiency
 	
-	# Ramp thrust
+	# Ramp throttle
 	if thrust_ramp_time > 0:
-		var ramp_rate = max_thrust / thrust_ramp_time
-		if current_thrust < target_thrust:
-			current_thrust = min(current_thrust + ramp_rate * delta, target_thrust)
+		var ramp_rate = 1.0 / thrust_ramp_time
+		if current_throttle < target:
+			current_throttle = min(current_throttle + ramp_rate * delta, target)
 		else:
-			current_thrust = max(current_thrust - ramp_rate * delta, target_thrust)
+			current_throttle = max(current_throttle - ramp_rate * delta, target)
 	else:
-		current_thrust = target_thrust
+		current_throttle = target
+
+## Updates solver edge conductance based on throttle
+func _update_solver_valves():
+	if not solver_graph: return
 	
-	is_firing = current_thrust > 0.01
+	var current_conductance = valve_max_conductance * current_throttle
 	
-	if is_firing:
-		firing_time += delta
-		total_impulse += current_thrust * delta
+	# If mixture ratio is used, we split conductance accordingly?
+	# Or simplified: Both valves open proportionally. 
+	# Refined: To maintain mixture ratio, conductance should be proportional to mass fractions.
+	# But if tank pressures are equal, conductance ratio = mass flow ratio.
+	
+	# Fraction of total flow for each prop
+	var fuel_fraction = 1.0 / (mixture_ratio + 1.0)
+	var ox_fraction = mixture_ratio / (mixture_ratio + 1.0)
+	
+	if fuel_edge:
+		fuel_edge.conductance = current_conductance * fuel_fraction
+	
+	if oxidizer_edge:
+		oxidizer_edge.conductance = current_conductance * ox_fraction
 
 ## Updates gimbal angles.
 func _update_gimbal(delta: float):
@@ -185,55 +215,32 @@ func _update_gimbal(delta: float):
 
 ## Computes force and torque from thruster.
 func compute_force_torque(delta: float) -> Dictionary:
-	# Update visibility based on firing state
-	visible = is_firing
+	# 1. READ ACTUAL FLOW from Solver
+	var total_flow = 0.0
 	
+	if fuel_edge:
+		total_flow += fuel_edge.flow_rate
+		
+	if oxidizer_edge:
+		total_flow += oxidizer_edge.flow_rate
+	
+	actual_mass_flow = total_flow
+	
+	# 2. CALCULATE THRUST from Physics
+	# F = m_dot * Isp * g0
+	current_thrust = actual_mass_flow * specific_impulse * G0
+	
+	# Update State
+	is_firing = current_thrust > 0.01
+	visible = is_firing # Show plume if thrusting
+	
+	if is_firing:
+		firing_time += delta
+		total_impulse += current_thrust * delta
+	
+	# 3. APPLY FORCE
 	if not is_firing:
 		return {}
-	
-	# Deplete propellants if connected to tanks
-	var thrust_fraction = current_thrust / max_thrust if max_thrust > 0 else 0.0
-	var can_fire = true
-	
-	# Calculate propellant needs based on mixture ratio
-	var fuel_needed = fuel_flow_rate * thrust_fraction * delta
-	var oxidizer_needed = fuel_needed * mixture_ratio
-	
-	# Deplete fuel tank
-	if fuel_tank:
-		var fuel_available = fuel_tank.remove_resource(fuel_needed)
-		
-		if fuel_available < fuel_needed * 0.99:  # Allow 1% tolerance
-			can_fire = false
-			if fuel_tank.is_empty():
-				print("LCThrusterEffector: Fuel tank empty!")
-	else:
-		can_fire = false
-	
-	# Deplete oxidizer tank
-	if oxidizer_tank:
-		var oxidizer_available = oxidizer_tank.remove_resource(oxidizer_needed)
-		
-		if oxidizer_available < oxidizer_needed * 0.99:
-			can_fire = false
-			if oxidizer_tank.is_empty():
-				print("LCThrusterEffector: Oxidizer tank empty!")
-			# Refund fuel if oxidizer unavailable
-			if fuel_tank and fuel_tank is LCResourceTankEffector:
-				fuel_tank.add_resource(fuel_needed)
-	elif mixture_ratio > 0:
-		# No oxidizer tank but mixture ratio set - can't fire
-		can_fire = false
-	
-	# Update solver node with total propellant consumption
-	if solver_node and delta > 0:
-		var total_propellant_flow = (fuel_needed + oxidizer_needed) / delta
-		solver_node.flow_source = -total_propellant_flow  # Negative = consumption
-	
-	# Stop firing if insufficient propellant
-	if not can_fire:
-		current_thrust = 0.0
-		is_firing = false
 	
 	# Calculate thrust direction with gimbal
 	var thrust_dir = thrust_direction
@@ -251,9 +258,6 @@ func compute_force_torque(delta: float) -> Dictionary:
 	var global_force = local_to_global_force(thrust_dir * current_thrust)
 	var application_point = global_position
 	
-	# if is_firing:
-	# 	print("LCThrusterEffector: Force=", global_force.length(), " Dir=", thrust_dir)
-	
 	return {
 		"force": global_force,
 		"position": application_point,
@@ -262,9 +266,7 @@ func compute_force_torque(delta: float) -> Dictionary:
 
 ## Returns current mass flow rate in kg/s.
 func get_mass_flow_rate() -> float:
-	if is_firing:
-		return fuel_flow_rate * (current_thrust / max_thrust)
-	return 0.0
+	return actual_mass_flow
 
 ## Returns total fuel consumed in kg.
 func get_total_fuel_consumed() -> float:
@@ -281,7 +283,7 @@ func _initialize_telemetry():
 		"total_impulse": total_impulse,
 		"gimbal_pitch": current_gimbal.x,
 		"gimbal_yaw": current_gimbal.y,
-		"fuel_flow_rate": get_mass_flow_rate(),
+		"mass_flow_rate": actual_mass_flow,
 	}
 
 func _update_telemetry():
@@ -292,7 +294,7 @@ func _update_telemetry():
 	Telemetry["total_impulse"] = total_impulse
 	Telemetry["gimbal_pitch"] = current_gimbal.x
 	Telemetry["gimbal_yaw"] = current_gimbal.y
-	Telemetry["fuel_flow_rate"] = get_mass_flow_rate()
+	Telemetry["mass_flow_rate"] = actual_mass_flow
 
 # Command interface
 func cmd_fire(args: Array):
