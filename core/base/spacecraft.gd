@@ -55,13 +55,17 @@ var thrust_input: float = 0.0
 var torque_input: Vector3 = Vector3.ZERO
 
 ## Sets control inputs from controller
-## Sets control inputs from controller
 func set_control_inputs(thrust: float, torque: Vector3):
 	# print("LCSpacecraft: set_control_inputs thrust=", thrust, " torque=", torque)
 	thrust_input = thrust
 	torque_input = torque
 	
-	# Update thrusters immediately for responsiveness
+	# Update pumps to control propellant flow
+	for effector in dynamic_effectors:
+		if effector.has_method("set_pump_power"):
+			effector.set_pump_power(thrust_input)
+	
+	# Legacy: Update thrusters (now a no-op but kept for compatibility)
 	for effector in dynamic_effectors:
 		if effector is LCThrusterEffector:
 			effector.set_thrust(thrust_input)

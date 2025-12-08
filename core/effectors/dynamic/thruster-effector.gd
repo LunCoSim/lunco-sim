@@ -8,8 +8,8 @@ extends LCDynamicEffector
 ##
 ## PHYSICS UPDATE: 
 ## Acts as a vacuum sink (Ground Node, Potential=0) in the linear solver.
-## Thrust command modulates the CONDUCTANCE of the connection to the tanks (Valve).
-## Thrust is calculated from the ACTUAL mass flow rate resulting from reservoir pressure.
+## Flow is controlled by upstream PUMPS, not by the thruster directly.
+## Thrust is calculated from the ACTUAL mass flow rate provided by the pumps.
 
 @export_group("Thruster Properties")
 @export var max_thrust: float = 100.0  ## Maximum thrust in Newtons
@@ -28,9 +28,8 @@ var oxidizer_tank = null  ## LCResourceTankEffector for oxygen
 # Solver Integration
 var solver_graph: LCSolverGraph
 var solver_node: LCSolverNode  ## Single engine node (acts as exhaust/vacuum)
-var fuel_edge: LCSolverEdge    ## Connection to fuel tank (valve)
-var oxidizer_edge: LCSolverEdge ## Connection to oxidizer tank (valve)
-var valve_max_conductance: float = 1.0  ## Calculated conductance when fully open
+var fuel_edge: LCSolverEdge    ## Connection from fuel pump (read-only)
+var oxidizer_edge: LCSolverEdge ## Connection from oxidizer pump (read-only)
 
 @export_group("Thrust Vectoring")
 @export var can_vector: bool = false  ## Can this thruster gimbal?
@@ -42,10 +41,8 @@ var valve_max_conductance: float = 1.0  ## Calculated conductance when fully ope
 @export var efficiency: float = 1.0  ## Thrust efficiency (0.0 to 1.0)
 
 # Control inputs
-var throttle_limit: float = 1.0 ## User-set max throttle (0.0 to 1.0)
-var thrust_command: float = 0.0  ## Commanded thrust level (0.0 to 1.0)
+var throttle_limit: float = 1.0 ## User-set max throttle (0.0 to 1.0) - safety limiter
 var gimbal_command: Vector2 = Vector2.ZERO  ## Gimbal command in radians
-var current_throttle: float = 0.0 ## Actual valve position (0.0 to 1.0) due to ramping
 
 # Internal state
 var current_thrust: float = 0.0  ## Current actual thrust
@@ -66,12 +63,12 @@ func _init():
 
 func _initialize_parameters():
 	# User-controllable settings
-	Parameters["Throttle Limit %"] = { "path": "throttle_limit", "type": "float", "min": 0.0, "max": 1.0, "step": 0.01 }
+	Parameters["Throttle Limit %"] = { "path": "throttle_limit", "type": "float", "min": 0.0, "max": 1.0, "step": 0.01, "category": "control" }
 	
 	# Read-only status displays
-	Parameters["Firing"] = { "path": "is_firing", "type": "bool", "readonly": true }
-	Parameters["Current Thrust (N)"] = { "path": "current_thrust", "type": "float", "readonly": true }
-	Parameters["Mass Flow (kg/s)"] = { "path": "actual_mass_flow", "type": "float", "readonly": true }
+	Parameters["Firing"] = { "path": "is_firing", "type": "bool", "readonly": true, "category": "status" }
+	Parameters["Current Thrust (N)"] = { "path": "current_thrust", "type": "float", "readonly": true, "category": "status" }
+	Parameters["Mass Flow (kg/s)"] = { "path": "actual_mass_flow", "type": "float", "readonly": true, "category": "status" }
 
 func _ready():
 	super._ready()
@@ -99,18 +96,11 @@ func _ready():
 	else:
 		print("✗ LCThrusterEffector: No oxidizer tank path set")
 	
-	# Auto-calculate fuel flow rate if not set
+	# Auto-calculate fuel flow rate if not set (for reference only)
 	if fuel_flow_rate <= 0.0 and specific_impulse > 0.0:
 		var total_flow = max_thrust / (specific_impulse * G0)
 		fuel_flow_rate = total_flow / (mixture_ratio + 1.0)  # Fuel portion only
 		print("✓ LCThrusterEffector: Calculated fuel flow rate: ", fuel_flow_rate, " kg/s")
-		
-		# Calculate Max Conductance (Valve Size)
-		# Flow = Conductance * Pressure
-		# Conductance = Flow / Pressure
-		# We assume flow drives towards vacuum (0 pressure), so DeltaP = TankPressure
-		valve_max_conductance = total_flow / NOMINAL_TANK_PRESSURE
-		print("✓ LCThrusterEffector: Calculated valve Kv: ", valve_max_conductance)
 	
 	# Set power consumption (rough estimate: 10W per 100N)
 	power_consumption = max_thrust * 0.1
@@ -121,42 +111,50 @@ func _ready():
 func set_solver_graph(graph: LCSolverGraph):
 	solver_graph = graph
 	if solver_graph and (fuel_tank or oxidizer_tank):
-		# Create single engine node (Fluid domain)
+		# Create single engine node (Liquid domain to match tanks)
 		# Represents the EXHAUST / VACUUM.
 		# is_ground = true forces potential to 0.0 (Vacuum)
-		solver_node = solver_graph.add_node(0.0, true, "Fluid")
+		solver_node = solver_graph.add_node(0.0, true, "Liquid")
 		solver_node.display_name = name + " (Nozzle)"
 		solver_node.resource_type = "combustion"
 		
-		# Connect to fuel tank
-		if fuel_tank:
-			var fuel_port = fuel_tank.get_port()
-			if fuel_port:
-				# Connect with 0 conductance initially (Closed Valve)
-				fuel_edge = solver_graph.connect_nodes(fuel_port, solver_node, 0.0, "Fluid")
-				fuel_edge.is_unidirectional = true # Check valve, only flow out
-		
-		# Connect to oxidizer tank
-		if oxidizer_tank:
-			var oxidizer_port = oxidizer_tank.get_port()
-			if oxidizer_port:
-				# Connect with 0 conductance initially (Closed Valve)
-				oxidizer_edge = solver_graph.connect_nodes(oxidizer_port, solver_node, 0.0, "Fluid")
-				oxidizer_edge.is_unidirectional = true # Check valve, only flow out
+		# Note: Pumps will connect tanks to this engine node
+		# We just need to identify our edges for flow reading
+		# Edges will be created by pump effectors during their initialization
+
+## Get the solver port (for pump connections)
+func get_port() -> LCSolverNode:
+	return solver_node
 
 func _physics_process(delta):
-	_update_throttle_ramp(delta)
-	_update_solver_valves()
 	_update_gimbal(delta)
+	_find_pump_edges()  # Identify edges from pumps
 	# Force calculation happens in compute_force_torque
 
 func _process(delta):
 	_update_telemetry()
 
-## Sets the thrust command (0.0 to 1.0).
+## Find edges connected to this engine (from pumps)
+func _find_pump_edges():
+	if not solver_node or fuel_edge or oxidizer_edge:
+		return  # Already found or no solver node
+	
+	# Find edges connected to our engine node
+	for edge in solver_node.edges:
+		if edge.node_b == solver_node:  # Flow into engine
+			# Determine if this is fuel or oxidizer based on source
+			if not fuel_edge:
+				fuel_edge = edge
+			elif not oxidizer_edge:
+				oxidizer_edge = edge
+
+## Sets the thrust command (0.0 to 1.0) - for backward compatibility
+## NOTE: With pump-based control, this doesn't directly control thrust
+## Instead, use pumps to control flow. This is kept for legacy controller support.
 func set_thrust(level: float):
-	# Apply throttle limit to the input command
-	thrust_command = clamp(level, 0.0, 1.0) * throttle_limit
+	# For now, this is a no-op since pumps control flow
+	# Could be used to adjust throttle_limit if desired
+	pass
 
 ## Sets the gimbal command in degrees.
 func set_gimbal(pitch_deg: float, yaw_deg: float):
@@ -170,40 +168,7 @@ func fire_pulse(duration: float, level: float = 1.0):
 		set_thrust(level)
 		# Note: Caller should handle timing or use a timer
 
-## Updates throttle level with ramping.
-func _update_throttle_ramp(delta: float):
-	var target = thrust_command * efficiency
-	
-	# Ramp throttle
-	if thrust_ramp_time > 0:
-		var ramp_rate = 1.0 / thrust_ramp_time
-		if current_throttle < target:
-			current_throttle = min(current_throttle + ramp_rate * delta, target)
-		else:
-			current_throttle = max(current_throttle - ramp_rate * delta, target)
-	else:
-		current_throttle = target
 
-## Updates solver edge conductance based on throttle
-func _update_solver_valves():
-	if not solver_graph: return
-	
-	var current_conductance = valve_max_conductance * current_throttle
-	
-	# If mixture ratio is used, we split conductance accordingly?
-	# Or simplified: Both valves open proportionally. 
-	# Refined: To maintain mixture ratio, conductance should be proportional to mass fractions.
-	# But if tank pressures are equal, conductance ratio = mass flow ratio.
-	
-	# Fraction of total flow for each prop
-	var fuel_fraction = 1.0 / (mixture_ratio + 1.0)
-	var ox_fraction = mixture_ratio / (mixture_ratio + 1.0)
-	
-	if fuel_edge:
-		fuel_edge.conductance = current_conductance * fuel_fraction
-	
-	if oxidizer_edge:
-		oxidizer_edge.conductance = current_conductance * ox_fraction
 
 ## Updates gimbal angles.
 func _update_gimbal(delta: float):
@@ -220,15 +185,28 @@ func compute_force_torque(delta: float) -> Dictionary:
 	
 	if fuel_edge:
 		total_flow += fuel_edge.flow_rate
+		if fuel_edge.flow_rate > 0.01:
+			print("DEBUG Thruster: Fuel flow detected: ", fuel_edge.flow_rate, " kg/s")
 		
 	if oxidizer_edge:
 		total_flow += oxidizer_edge.flow_rate
+		if oxidizer_edge.flow_rate > 0.01:
+			print("DEBUG Thruster: Oxidizer flow detected: ", oxidizer_edge.flow_rate, " kg/s")
+	
+	if not fuel_edge and not oxidizer_edge:
+		print("DEBUG Thruster: No edges found yet")
 	
 	actual_mass_flow = total_flow
 	
-	# 2. CALCULATE THRUST from Physics
+	# 2. APPLY THROTTLE LIMIT (safety cap)
+	var limited_flow = actual_mass_flow * throttle_limit
+	
+	# 3. CALCULATE THRUST from Physics
 	# F = m_dot * Isp * g0
-	current_thrust = actual_mass_flow * specific_impulse * G0
+	current_thrust = limited_flow * specific_impulse * G0
+	
+	if current_thrust > 1.0:
+		print("DEBUG Thruster: Producing thrust: ", current_thrust, " N from flow: ", limited_flow, " kg/s")
 	
 	# Update State
 	is_firing = current_thrust > 0.01
@@ -238,7 +216,7 @@ func compute_force_torque(delta: float) -> Dictionary:
 		firing_time += delta
 		total_impulse += current_thrust * delta
 	
-	# 3. APPLY FORCE
+	# 4. APPLY FORCE
 	if not is_firing:
 		return {}
 	
@@ -276,7 +254,6 @@ func get_total_fuel_consumed() -> float:
 
 func _initialize_telemetry():
 	Telemetry = {
-		"thrust_command": thrust_command,
 		"current_thrust": current_thrust,
 		"is_firing": is_firing,
 		"firing_time": firing_time,
@@ -287,7 +264,6 @@ func _initialize_telemetry():
 	}
 
 func _update_telemetry():
-	Telemetry["thrust_command"] = thrust_command
 	Telemetry["current_thrust"] = current_thrust
 	Telemetry["is_firing"] = is_firing
 	Telemetry["firing_time"] = firing_time
@@ -297,13 +273,10 @@ func _update_telemetry():
 	Telemetry["mass_flow_rate"] = actual_mass_flow
 
 # Command interface
-func cmd_fire(args: Array):
-	if args.size() >= 1:
-		set_thrust(args[0])
-
-func cmd_stop(args: Array):
-	set_thrust(0.0)
-
 func cmd_gimbal(args: Array):
 	if args.size() >= 2:
 		set_gimbal(args[0], args[1])
+
+func cmd_set_throttle_limit(args: Array):
+	if args.size() >= 1:
+		throttle_limit = clamp(args[0], 0.0, 1.0)

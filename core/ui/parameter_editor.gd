@@ -62,10 +62,57 @@ func _create_component_section(component: Object):
 	var sep = HSeparator.new()
 	section.add_child(sep)
 	
-	# Create controls for each parameter
+	# Separate parameters by category
+	var controls = []
+	var status = []
+	var uncategorized = []
+	
 	for param_key in component.Parameters:
 		var metadata = component.Parameters[param_key]
-		_create_parameter_control(section, component, param_key, metadata)
+		var category = metadata.get("category", "")
+		
+		if category == "control":
+			controls.append([param_key, metadata])
+		elif category == "status":
+			status.append([param_key, metadata])
+		else:
+			uncategorized.append([param_key, metadata])
+	
+	# Create Controls section if we have controls
+	if not controls.is_empty():
+		var controls_header = Label.new()
+		controls_header.text = "Controls"
+		controls_header.add_theme_font_size_override("font_size", 14)
+		controls_header.add_theme_color_override("font_color", Color(0.4, 0.7, 1.0))
+		section.add_child(controls_header)
+		
+		for param_data in controls:
+			_create_parameter_control(section, component, param_data[0], param_data[1])
+		
+		# Spacer between sections
+		var spacer1 = Control.new()
+		spacer1.custom_minimum_size.y = 8
+		section.add_child(spacer1)
+	
+	# Create Status section if we have status
+	if not status.is_empty():
+		var status_header = Label.new()
+		status_header.text = "Status"
+		status_header.add_theme_font_size_override("font_size", 14)
+		status_header.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
+		section.add_child(status_header)
+		
+		for param_data in status:
+			_create_parameter_control(section, component, param_data[0], param_data[1])
+		
+		# Spacer between sections
+		var spacer2 = Control.new()
+		spacer2.custom_minimum_size.y = 8
+		section.add_child(spacer2)
+	
+	# Create uncategorized parameters (legacy support)
+	for param_data in uncategorized:
+		_create_parameter_control(section, component, param_data[0], param_data[1])
 	
 	# Spacer
 	var spacer = Control.new()

@@ -82,11 +82,24 @@ func _rebuild_ui():
 			fluid_nodes[res_type]["capacity"] += node.capacitance
 	
 	if fluid_nodes.is_empty():
+		print("DEBUG ResourceMonitor: No fluid nodes found in solver graph")
+		print("  Total nodes in graph: ", vehicle.solver_graph.nodes.size())
+		print("  Checking node details:")
+		for node_id in vehicle.solver_graph.nodes:
+			var node = vehicle.solver_graph.nodes[node_id]
+			print("    Node ", node_id, ": domain=", node.domain, " is_storage=", node.is_storage, " capacitance=", node.capacitance, " resource_type=", node.resource_type)
+		
 		var no_resources_label = Label.new()
-		no_resources_label.text = "No fluid resources"
-		no_resources_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
+		no_resources_label.text = "No fluid storage found"
+		no_resources_label.add_theme_color_override("font_color", Color(0.9, 0.7, 0.3))
 		container.add_child(no_resources_label)
 		return
+	
+	
+	print("DEBUG ResourceMonitor: Found ", fluid_nodes.size(), " fluid resource types")
+	for res_id in fluid_nodes:
+		var data = fluid_nodes[res_id]
+		print("  Resource: ", res_id, " total=", data["total"], " capacity=", data["capacity"])
 	
 	for res_id in fluid_nodes:
 		var data = fluid_nodes[res_id]
