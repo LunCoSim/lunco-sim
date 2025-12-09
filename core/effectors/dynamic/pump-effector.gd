@@ -70,8 +70,10 @@ func _ready():
 func set_solver_graph(graph: LCSolverGraph):
 	solver_graph = graph
 	if solver_graph and source_node and sink_node:
-		# Create pump component
+		# Create pump component with configured max_flow
 		component = LCPumpComponent.new(solver_graph, max_pressure)
+		component.max_flow = max_flow  # CRITICAL: Set max_flow from exported property
+		component._update_conductance()  # Recalculate conductance based on max_flow
 		
 		# Defer connection to next frame to ensure all solver nodes exist
 		# (Engine solver nodes are created in deferred _initialize_solver_graph)

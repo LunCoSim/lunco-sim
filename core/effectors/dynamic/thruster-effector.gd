@@ -181,32 +181,65 @@ func _update_gimbal(delta: float):
 ## Computes force and torque from thruster.
 func compute_force_torque(delta: float) -> Dictionary:
 	# 1. READ ACTUAL FLOW from Solver
-	var total_flow = 0.0
+	var fuel_flow = 0.0
+	var oxidizer_flow = 0.0
 	
 	if fuel_edge:
-		total_flow += fuel_edge.flow_rate
-		if fuel_edge.flow_rate > 0.01:
-			print("DEBUG Thruster: Fuel flow detected: ", fuel_edge.flow_rate, " kg/s")
+		fuel_flow = abs(fuel_edge.flow_rate)
 		
 	if oxidizer_edge:
-		total_flow += oxidizer_edge.flow_rate
-		if oxidizer_edge.flow_rate > 0.01:
-			print("DEBUG Thruster: Oxidizer flow detected: ", oxidizer_edge.flow_rate, " kg/s")
+		oxidizer_flow = abs(oxidizer_edge.flow_rate)
 	
-	if not fuel_edge and not oxidizer_edge:
-		print("DEBUG Thruster: No edges found yet")
+	# 2. CALCULATE COMBUSTIBLE FLOW based on mixture ratio
+	# mixture_ratio = oxidizer/fuel (e.g., 3.6:1)
+	# For complete combustion, need: oxidizer_flow = mixture_ratio × fuel_flow
 	
-	actual_mass_flow = total_flow
+	var combustible_fuel = 0.0
+	var combustible_oxidizer = 0.0
+	var excess_fuel = 0.0
+	var excess_oxidizer = 0.0
 	
-	# 2. APPLY THROTTLE LIMIT (safety cap)
-	var limited_flow = actual_mass_flow * throttle_limit
+	if fuel_flow > 0.001 and oxidizer_flow > 0.001:
+		# Both propellants available - check ratio
+		var actual_ratio = oxidizer_flow / fuel_flow
+		
+		if actual_ratio >= mixture_ratio:
+			# Excess oxidizer - fuel limited
+			combustible_fuel = fuel_flow
+			combustible_oxidizer = fuel_flow * mixture_ratio
+			excess_oxidizer = oxidizer_flow - combustible_oxidizer
+		else:
+			# Excess fuel - oxidizer limited
+			combustible_oxidizer = oxidizer_flow
+			combustible_fuel = oxidizer_flow / mixture_ratio
+			excess_fuel = fuel_flow - combustible_fuel
+	elif fuel_flow > 0.001:
+		# Only fuel - all excess
+		excess_fuel = fuel_flow
+	elif oxidizer_flow > 0.001:
+		# Only oxidizer - all excess
+		excess_oxidizer = oxidizer_flow
 	
-	# 3. CALCULATE THRUST from Physics
-	# F = m_dot * Isp * g0
-	current_thrust = limited_flow * specific_impulse * G0
+	# 3. CALCULATE THRUST
+	var combustion_flow = combustible_fuel + combustible_oxidizer
+	var cold_gas_flow = excess_fuel + excess_oxidizer
 	
-	if current_thrust > 1.0:
-		print("DEBUG Thruster: Producing thrust: ", current_thrust, " N from flow: ", limited_flow, " kg/s")
+	# Physics-based Isp calculation from chamber conditions
+	var effective_isp = _calculate_isp(combustion_flow, cold_gas_flow, fuel_flow, oxidizer_flow)
+	
+	# Combustion thrust: uses calculated Isp
+	var combustion_thrust = combustion_flow * effective_isp * G0
+	
+	# Cold gas thrust: excess propellant, much lower Isp (~50s for cold gas)
+	var cold_gas_isp = 50.0  # Typical for cold gas thrusters
+	var cold_gas_thrust = cold_gas_flow * cold_gas_isp * G0
+	
+	# Total thrust
+	current_thrust = combustion_thrust + cold_gas_thrust
+	actual_mass_flow = combustion_flow + cold_gas_flow
+	
+	# 4. APPLY THROTTLE LIMIT (safety cap)
+	current_thrust *= throttle_limit
 	
 	# Update State
 	is_firing = current_thrust > 0.01
@@ -218,16 +251,17 @@ func compute_force_torque(delta: float) -> Dictionary:
 	
 	# 4. APPLY FORCE
 	if not is_firing:
-		return {}
+		return {
+			"force": Vector3.ZERO,
+			"position": global_position,
+			"torque": Vector3.ZERO
+		}
 	
-	# Calculate thrust direction with gimbal
+	# Apply gimbal
 	var thrust_dir = thrust_direction
-	if can_vector and current_gimbal.length_squared() > 0:
-		# Apply gimbal rotation
+	if can_vector:
 		var pitch_rad = deg_to_rad(current_gimbal.x)
 		var yaw_rad = deg_to_rad(current_gimbal.y)
-		
-		# Rotate around local axes
 		var pitch_basis = Basis(Vector3.RIGHT, pitch_rad)
 		var yaw_basis = Basis(Vector3.UP, yaw_rad)
 		thrust_dir = yaw_basis * pitch_basis * thrust_direction
@@ -241,6 +275,42 @@ func compute_force_torque(delta: float) -> Dictionary:
 		"position": application_point,
 		"torque": Vector3.ZERO  # Torque comes from offset application point
 	}
+
+## Calculate Isp based on chamber pressure and propellant properties
+func _calculate_isp(combustion_flow: float, cold_gas_flow: float, fuel_flow: float, oxidizer_flow: float) -> float:
+	if combustion_flow < 0.001:
+		return 50.0  # Cold gas only
+	
+	# Estimate chamber pressure from pump pressure and flow
+	# Higher flow → higher chamber pressure
+	var chamber_pressure = 0.0
+	if fuel_edge and oxidizer_edge:
+		# Average of fuel and oxidizer pressures
+		chamber_pressure = (abs(fuel_edge.node_a.potential) + abs(oxidizer_edge.node_a.potential)) / 2.0
+	
+	# Clamp to reasonable range (1-300 bar)
+	chamber_pressure = clamp(chamber_pressure, 100000.0, 30000000.0)  # 1-300 bar in Pa
+	
+	# Simplified rocket equation: Isp ∝ sqrt(T_chamber / M_molecular)
+	# For methane/oxygen combustion:
+	# - Combustion temperature: ~3500 K
+	# - Molecular weight: ~23 g/mol (CO2 + H2O mix)
+	# - Expansion ratio depends on chamber pressure
+	
+	var combustion_temp = 3500.0  # K (typical for CH4/O2)
+	var molecular_weight = 23.0  # g/mol
+	
+	# Expansion efficiency increases with chamber pressure
+	# At 1 bar: ~0.5, at 100 bar: ~0.9, at 300 bar: ~0.95
+	var pressure_bar = chamber_pressure / 100000.0
+	var expansion_efficiency = 0.5 + 0.45 * (1.0 - exp(-pressure_bar / 50.0))
+	
+	# Theoretical Isp = expansion_efficiency × sqrt(T/M) × constant
+	# Constant ≈ 10 for this simplified model
+	var theoretical_isp = expansion_efficiency * sqrt(combustion_temp / molecular_weight) * 10.0
+	
+	# Clamp to reasonable range (200-400s for CH4/O2)
+	return clamp(theoretical_isp, 200.0, 400.0)
 
 ## Returns current mass flow rate in kg/s.
 func get_mass_flow_rate() -> float:

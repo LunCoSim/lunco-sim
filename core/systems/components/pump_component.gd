@@ -18,8 +18,19 @@ func _init(p_graph: LCSolverGraph, p_max_pressure: float = 100000.0):
 	super._init(p_graph)
 	max_pressure = p_max_pressure
 	
-	# Assume some internal resistance
-	conductance = 0.1 # Arbitrary for now
+	# Calculate conductance from max_flow and max_pressure
+	# This ensures pumps with different max_flow have different flow resistance
+	# conductance = max_flow / max_pressure (kg/s per Pa)
+	# Will be recalculated when max_flow is set
+	_update_conductance()
+
+func _update_conductance():
+	# Conductance determines flow resistance
+	# Higher max_flow → higher conductance → more flow
+	if max_pressure > 0:
+		conductance = max_flow / max_pressure
+	else:
+		conductance = 0.001  # Fallback
 
 ## Connect two existing nodes with this pump
 func connect_nodes(node_in: LCSolverNode, node_out: LCSolverNode):
@@ -34,12 +45,23 @@ func set_power(p_power: float):
 
 func update(delta: float):
 	if edge:
-		# Apply pressure source based on power
-		edge.potential_source = max_pressure * power
+		# CRITICAL: Only pump if source has fluid (potential > 0)
+		# Prevents pumping from empty tanks
+		var source_has_fluid = edge.node_a.potential > 1.0  # 1 Pa threshold
 		
-		# CRITICAL: Conductance must be 0 when pump is off
-		# Otherwise flow happens even without pressure source
-		if power > 0.01:
+		if source_has_fluid and power > 0.01:
+			# Apply pressure source based on power
+			edge.potential_source = max_pressure * power
 			edge.conductance = conductance
+			
+			# Flow limiting: Reduce conductance if flow exceeds max_flow
+			# This simulates pump performance curve
+			if abs(edge.flow_rate) > max_flow:
+				var pressure_diff = abs(edge.node_a.potential - edge.node_b.potential + edge.potential_source)
+				if pressure_diff > 0.1:
+					# Adjust conductance to limit flow
+					edge.conductance = max_flow / pressure_diff
 		else:
+			# No fluid or pump off - close valve
+			edge.potential_source = 0.0
 			edge.conductance = 0.0
