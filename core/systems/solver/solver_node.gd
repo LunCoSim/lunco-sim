@@ -50,6 +50,10 @@ var resource_type: StringName = ""
 # Display Name (for visualization)
 var display_name: String = ""
 
+# Effector Reference (for UI parameter control)
+# Weak reference to the associated effector/component
+var effector_ref: WeakRef = null
+
 # Flow Source (External flow injection)
 # Positive = Flow entering the node
 # Liquid/Gas/Solid: Mass Flow In (kg/s)

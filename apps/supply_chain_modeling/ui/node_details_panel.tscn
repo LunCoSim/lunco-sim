@@ -87,4 +87,11 @@ text = "Capacitance:"
 layout_mode = 2
 text = "0.00"
 
+[node name="HSeparator2" type="HSeparator" parent="MarginContainer/VBoxContainer"]
+layout_mode = 2
+
+[node name="ParametersContainer" type="VBoxContainer" parent="MarginContainer/VBoxContainer"]
+layout_mode = 2
+theme_override_constants/separation = 5
+
 [connection signal="pressed" from="MarginContainer/VBoxContainer/Header/CloseButton" to="." method="_on_close_button_pressed"]

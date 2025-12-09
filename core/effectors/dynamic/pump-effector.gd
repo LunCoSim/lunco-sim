@@ -75,6 +75,10 @@ func set_solver_graph(graph: LCSolverGraph):
 		component.max_flow = max_flow  # CRITICAL: Set max_flow from exported property
 		component._update_conductance()  # Recalculate conductance based on max_flow
 		
+		# Set display name and link effector to pump node
+		component.pump_node.display_name = name
+		component.pump_node.effector_ref = weakref(self)
+		
 		# Defer connection to next frame to ensure all solver nodes exist
 		# (Engine solver nodes are created in deferred _initialize_solver_graph)
 		call_deferred("_connect_to_solver_nodes")
@@ -129,9 +133,9 @@ func _update_pump_power():
 
 ## Reads current flow state from solver
 func _read_flow_state():
-	if component and component.edge:
-		actual_flow_rate = abs(component.edge.flow_rate)
-		pressure_head = component.edge.potential_source
+	if component and component.outlet_edge:
+		actual_flow_rate = abs(component.outlet_edge.flow_rate)
+		pressure_head = component.outlet_edge.potential_source
 	else:
 		actual_flow_rate = 0.0
 		pressure_head = 0.0

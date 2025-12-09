@@ -3,6 +3,25 @@ extends GraphEdit
 
 const MODULE_PATH = "res://apps/supply_chain_modeling"
 
+# Custom signal for node selection (GraphEdit doesn't have this built-in in Godot 4)
+signal node_selected(node: GraphNode)
+
+func _ready():
+	# Connect to child_entered_tree to set up click handlers for new nodes
+	child_entered_tree.connect(_on_child_added)
+
+func _on_child_added(child: Node):
+	if child is GraphNode:
+		# Connect to the node's gui_input to detect clicks
+		if not child.gui_input.is_connected(_on_node_gui_input.bind(child)):
+			child.gui_input.connect(_on_node_gui_input.bind(child))
+
+func _on_node_gui_input(event: InputEvent, node: GraphNode):
+	if event is InputEventMouseButton:
+		if event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+			# Emit our custom node_selected signal
+			node_selected.emit(node)
+
 func clear_graph():
 	for node in get_children():
 		if node is GraphNode:

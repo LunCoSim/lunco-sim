@@ -9,8 +9,10 @@ extends PanelContainer
 @onready var label_resource = $MarginContainer/VBoxContainer/GridContainer/LabelResourceValue
 @onready var label_capacitance = $MarginContainer/VBoxContainer/GridContainer/LabelCapacitanceValue
 @onready var label_capacitance_label = $MarginContainer/VBoxContainer/GridContainer/LabelCapacitance
+@onready var parameters_container = $MarginContainer/VBoxContainer/ParametersContainer
 
 var current_node: LCSolverNode
+var parameter_controls: Dictionary = {}  # param_name -> control widget
 
 func _ready():
 	hide()
@@ -24,6 +26,7 @@ func display_node(node: LCSolverNode):
 	show()
 	_update_static_info()
 	_update_values()
+	_build_parameter_controls()
 
 func _update_static_info():
 	if not current_node: return
@@ -43,6 +46,85 @@ func _update_values():
 	label_potential.text = "%.4f" % current_node.potential
 	label_flow.text = "%.4f" % current_node.flow_accumulation
 	label_resource.text = current_node.resource_type if current_node.resource_type else "None"
+
+func _build_parameter_controls():
+	# Clear existing controls
+	for child in parameters_container.get_children():
+		child.queue_free()
+	parameter_controls.clear()
+	
+	if not current_node or not current_node.effector_ref:
+		parameters_container.hide()
+		return
+	
+	var effector = current_node.effector_ref.get_ref()
+	if not effector or not "Parameters" in effector:
+		parameters_container.hide()
+		return
+	
+	# Show parameters section
+	parameters_container.show()
+	
+	# Add title
+	var title = Label.new()
+	title.text = "Parameters"
+	title.add_theme_font_size_override("font_size", 14)
+	parameters_container.add_child(title)
+	
+	var separator = HSeparator.new()
+	parameters_container.add_child(separator)
+	
+	# Create controls for each parameter
+	for param_name in effector.Parameters:
+		var param_def = effector.Parameters[param_name]
+		
+		# Skip read-only parameters
+		if param_def.get("readonly", false):
+			continue
+		
+		var row = HBoxContainer.new()
+		parameters_container.add_child(row)
+		
+		var label = Label.new()
+		label.text = param_name + ":"
+		label.custom_minimum_size.x = 100
+		row.add_child(label)
+		
+		# Create appropriate control based on type
+		var control = null
+		match param_def.get("type", "float"):
+			"float":
+				var slider = HSlider.new()
+				slider.min_value = param_def.get("min", 0.0)
+				slider.max_value = param_def.get("max", 1.0)
+				slider.step = param_def.get("step", 0.01)
+				slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+				slider.value = effector.get(param_def.path)
+				slider.value_changed.connect(_on_parameter_changed.bind(effector, param_def.path))
+				control = slider
+				
+				# Add value label
+				var value_label = Label.new()
+				value_label.text = "%.2f" % slider.value
+				value_label.custom_minimum_size.x = 50
+				slider.value_changed.connect(func(val): value_label.text = "%.2f" % val)
+				row.add_child(slider)
+				row.add_child(value_label)
+				
+			"bool":
+				var checkbox = CheckBox.new()
+				checkbox.button_pressed = effector.get(param_def.path)
+				checkbox.toggled.connect(_on_parameter_changed.bind(effector, param_def.path))
+				control = checkbox
+				row.add_child(checkbox)
+		
+		if control:
+			parameter_controls[param_name] = control
+
+func _on_parameter_changed(value, effector, param_path):
+	if effector and effector.has_method("set"):
+		effector.set(param_path, value)
+		print("NodeDetailsPanel: Set %s.%s = %s" % [effector.name, param_path, value])
 
 func _on_close_button_pressed():
 	hide()
