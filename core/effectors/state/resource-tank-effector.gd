@@ -67,6 +67,7 @@ func set_solver_graph(graph: LCSolverGraph):
 		if port:
 			port.display_name = name  # Use effector's name
 			port.resource_type = resource_id
+			port.effector_ref = weakref(self)
 		
 		_update_mass()
 

@@ -22,8 +22,10 @@ func _process(_delta):
 		_update_values()
 
 func display_node(node: LCSolverNode):
+	print("NodeDetailsPanel: display_node called for: ", node.display_name if node else "null")
 	current_node = node
 	show()
+	print("NodeDetailsPanel: Panel shown. Visible=%s, Position=%s, Size=%s" % [visible, position, size])
 	_update_static_info()
 	_update_values()
 	_build_parameter_controls()
@@ -53,14 +55,28 @@ func _build_parameter_controls():
 		child.queue_free()
 	parameter_controls.clear()
 	
-	if not current_node or not current_node.effector_ref:
+	if not current_node:
+		print("NodeDetailsPanel: No current_node")
+		parameters_container.hide()
+		return
+		
+	if not current_node.effector_ref:
+		print("NodeDetailsPanel: Node '%s' has no effector_ref" % current_node.display_name)
 		parameters_container.hide()
 		return
 	
 	var effector = current_node.effector_ref.get_ref()
-	if not effector or not "Parameters" in effector:
+	if not effector:
+		print("NodeDetailsPanel: effector_ref is dead/null for node '%s'" % current_node.display_name)
 		parameters_container.hide()
 		return
+		
+	if not "Parameters" in effector:
+		print("NodeDetailsPanel: Effector '%s' has no Parameters dictionary" % effector.name)
+		parameters_container.hide()
+		return
+	
+	print("NodeDetailsPanel: Building controls for '%s' with %d parameters" % [effector.name, effector.Parameters.size()])
 	
 	# Show parameters section
 	parameters_container.show()
@@ -120,6 +136,8 @@ func _build_parameter_controls():
 		
 		if control:
 			parameter_controls[param_name] = control
+	
+	print("NodeDetailsPanel: Created %d parameter controls (skipped read-only)" % parameter_controls.size())
 
 func _on_parameter_changed(value, effector, param_path):
 	if effector and effector.has_method("set"):

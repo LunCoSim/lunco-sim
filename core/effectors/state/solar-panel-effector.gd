@@ -60,6 +60,7 @@ func set_solver_graph(graph: LCSolverGraph):
 		solver_node = solver_graph.add_node(0.0, false, "Electrical")
 		solver_node.resource_type = "electrical_power"
 		solver_node.display_name = name  # Use effector's name
+		solver_node.effector_ref = weakref(self)
 		
 		# Solar panel acts as a current source
 		# We'll update flow_source based on power output

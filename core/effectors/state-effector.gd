@@ -50,6 +50,7 @@ func set_solver_graph(graph: LCSolverGraph):
 			solver_node = solver_graph.add_node(0.0, false, "Electrical")
 			solver_node.resource_type = "electrical_power"
 			solver_node.display_name = name
+			solver_node.effector_ref = weakref(self)
 			
 			print("Effector '%s': Created solver node (Load: %.1f W)" % [name, power_consumption])
 

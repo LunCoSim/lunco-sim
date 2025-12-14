@@ -117,6 +117,7 @@ func set_solver_graph(graph: LCSolverGraph):
 		solver_node = solver_graph.add_node(0.0, true, "Liquid")
 		solver_node.display_name = name + " (Nozzle)"
 		solver_node.resource_type = "combustion"
+		solver_node.effector_ref = weakref(self)
 		
 		# Note: Pumps will connect tanks to this engine node
 		# We just need to identify our edges for flow reading

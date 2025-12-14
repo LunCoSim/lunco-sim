@@ -29,10 +29,21 @@ func _ready():
 		details_panel = panel_scene.instantiate()
 		add_child(details_panel)
 		
-		# Position top-right
-		details_panel.set_anchors_preset(Control.PRESET_TOP_RIGHT)
-		details_panel.position = Vector2(-270, 20) # Relative to anchor
+		# Position top-right with proper anchors
+		details_panel.anchor_left = 1.0  # Right edge
+		details_panel.anchor_top = 0.0   # Top edge
+		details_panel.anchor_right = 1.0
+		details_panel.anchor_bottom = 0.0
+		details_panel.offset_left = -270  # 270px from right edge
+		details_panel.offset_top = 20     # 20px from top
+		details_panel.offset_right = -20  # 20px margin from right
+		details_panel.offset_bottom = 320 # Fixed height
 		details_panel.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+		details_panel.grow_vertical = Control.GROW_DIRECTION_END
+		details_panel.custom_minimum_size = Vector2(250, 200)
+		details_panel.z_index = 100  # Ensure it's on top
+		
+		print("SimpleGraphViewer: Created details panel at position: ", details_panel.position)
 
 	# Create search bar
 	var search_bar = LineEdit.new()
@@ -44,8 +55,15 @@ func _ready():
 	search_bar.text_submitted.connect(_on_search_submitted)
 
 func _on_node_selected(node):
-	if details_panel and node.get("solver_node"):
-		details_panel.display_node(node.solver_node)
+	print("SimpleGraphViewer: Node selected: ", node.name if node else "null")
+	if node and node.get("solver_node"):
+		print("SimpleGraphViewer: Has solver_node, display_name: ", node.solver_node.display_name)
+		if details_panel:
+			details_panel.display_node(node.solver_node)
+		else:
+			print("SimpleGraphViewer: No details_panel!")
+	else:
+		print("SimpleGraphViewer: Node has no solver_node property")
 
 func _on_search_submitted(text):
 	if text.is_empty(): return
