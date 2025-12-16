@@ -12,7 +12,7 @@ var players = {}
 var connection_state: String = "disconnected"
 
 # Reconnection settings
-var auto_reconnect: bool = true
+var auto_reconnect: bool = false
 var reconnect_delay: float = 5.0
 var reconnect_timer: Timer = null
 var last_connection_ip: String = ""

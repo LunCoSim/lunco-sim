@@ -14,7 +14,7 @@ signal profile_changed()
 @export var has_profile: int : set = set_has_profile
 @export var is_artizen_buyer: bool : set = set_is_artizen_buyer
 @export var hide_tutorial: bool : set = set_hide_tutorial
-@export var auto_reconnect: bool = true : set = set_auto_reconnect
+@export var auto_reconnect: bool = false : set = set_auto_reconnect
 
 const FILENAME = "profile.cfg"
 const PATH = "user://"
@@ -165,6 +165,6 @@ func load_profile():
 	has_profile = config.get_value(SECTION, "has_profile", 0)
 	is_artizen_buyer = config.get_value(SECTION, "is_artizen_buyer", false)
 	hide_tutorial = config.get_value(SECTION, "hide_tutorial", false)
-	auto_reconnect = config.get_value(SECTION, "auto_reconnect", true)  # Default to true
+	auto_reconnect = config.get_value(SECTION, "auto_reconnect", false)  # Default to false
 	
 	print("[Profile] Loaded successfully: hide_tutorial = ", hide_tutorial, ", auto_reconnect = ", auto_reconnect)
