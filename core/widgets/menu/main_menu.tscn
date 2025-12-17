@@ -215,10 +215,7 @@ unique_name_in_owner = true
 layout_mode = 2
 text = "Hide Tutorial"
 
-[node name="ReplayMode" type="Button" parent="MarginContainer/ScrollContainer/MainContent/OptionsPanel/Options"]
-layout_mode = 2
-size_flags_horizontal = 3
-text = "Replay Mode"
+
 
 [node name="BackToLauncher" type="Button" parent="MarginContainer/ScrollContainer/MainContent/OptionsPanel/Options"]
 layout_mode = 2
@@ -241,5 +238,5 @@ horizontal_alignment = 2
 [connection signal="pressed" from="MarginContainer/ScrollContainer/MainContent/SimulationPanel/Simulation/SimClient" to="." method="_on_sim_client_pressed"]
 [connection signal="pressed" from="MarginContainer/ScrollContainer/MainContent/SimulationPanel/Simulation/ConnectToGlobal" to="." method="_on_connect_to_global_pressed"]
 [connection signal="toggled" from="MarginContainer/ScrollContainer/MainContent/OptionsPanel/Options/HideTutorial" to="." method="_on_hide_tutorial_toggled"]
-[connection signal="pressed" from="MarginContainer/ScrollContainer/MainContent/OptionsPanel/Options/ReplayMode" to="." method="_on_replay_mode_pressed"]
+
 [connection signal="pressed" from="MarginContainer/ScrollContainer/MainContent/OptionsPanel/Options/BackToLauncher" to="." method="_on_back_to_launcher_pressed"]

@@ -31,8 +31,6 @@ func _on_back_to_launcher_pressed():
 ## UI Integrations
 func _on_sim_host_pressed():
 	
-	StateManager.Username = %Username.text
-	
 	print("[INFO] _on_sim_host_pressed")
 	
 	LCNet.host(9000)
@@ -92,6 +90,4 @@ func _on_auto_reconnect_toggled(toggled_on):
 		Profile.auto_reconnect = toggled_on
 		print("Auto-reconnect ", "enabled" if toggled_on else "disabled")
 
-func _on_replay_mode_pressed():
-	LCWindows.toggle_main_menu() # Close the menu
-	StateManager.goto_replay_scene()
+
