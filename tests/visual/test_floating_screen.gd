@@ -37,7 +37,7 @@ func _initialize():
 	builder_manager.emit_signal("entity_selected", vehicle)
 	
 	# Check if display was created
-	await get_tree().create_timer(0.1).timeout
+	await create_timer(0.1).timeout
 	
 	if manager.display_instance:
 		print("✅ Display instance created")

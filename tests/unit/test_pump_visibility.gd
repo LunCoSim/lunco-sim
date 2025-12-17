@@ -24,8 +24,8 @@ func _init():
 	var sink_tank = LCTankComponent.new(graph, 1.0, 2.0)
 	sink_tank.set_initial_mass(0.0)
 	
-	print("  Source tank node ID: %d" % source_tank.get_port().id)
-	print("  Sink tank node ID: %d" % sink_tank.get_port().id)
+	print("  Source tank node ID: %d" % source_tank.get_port("port").id)
+	print("  Sink tank node ID: %d" % sink_tank.get_port("port").id)
 	print("  ✓ Tanks created")
 	passed += 1
 	
@@ -49,7 +49,7 @@ func _init():
 	# Test 3: Connect pump
 	total += 1
 	print("\n[Test 3] Connect Pump to Tanks")
-	pump.connect_nodes(source_tank.get_port(), sink_tank.get_port())
+	pump.connect_nodes(source_tank.get_port("port"), sink_tank.get_port("port"))
 	
 	if pump.inlet_edge and pump.outlet_edge:
 		print("  ✓ Pump edges created")

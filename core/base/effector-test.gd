@@ -214,18 +214,18 @@ func _print_battery_status():
 		])
 
 func _print_fuel_status():
-	var tanks = _get_effectors_of_type(LCFuelTankEffector)
+	var tanks = _get_effectors_of_type(LCResourceTankEffector)
 	print("Fuel Tanks:")
-	for tank: LCFuelTankEffector in tanks:
+	for tank: LCResourceTankEffector in tanks:
 		print("  %s: %.2f kg (%.1f%% full)" % [
 			tank.name,
-			tank.fuel_mass,
-			tank.fuel_level * 100
+			tank.get_amount(),
+			tank.get_fill_percentage()
 		])
 
 func _print_effector_summary():
 	print("Effectors:")
-	print("  Fuel Tanks: %d" % _get_effectors_of_type(LCFuelTankEffector).size())
+	print("  Fuel Tanks (Resource): %d" % _get_effectors_of_type(LCResourceTankEffector).size())
 	print("  Thrusters: %d" % _get_effectors_of_type(LCThrusterEffector).size())
 	print("  Reaction Wheels: %d" % _get_effectors_of_type(LCReactionWheelEffector).size())
 	print("  Solar Panels: %d" % _get_effectors_of_type(LCSolarPanelEffector).size())
