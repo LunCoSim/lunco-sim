@@ -66,10 +66,10 @@ Built on the powerful **Godot 4** engine, it bridges the gap between gaming and 
 3. Clone this repo in a terminal: 
     ```bash
     git clone -b main --single-branch --recurse-submodules https://github.com/LunCoSim/lunco-sim.git
-```
+    ```
 
 4. After cloning, change directory to project folder
-```bash
+    ```bash
     cd lunco-sim
     ```
 
