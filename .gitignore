@@ -18,3 +18,4 @@ webrtc/
 # Raw data, e.g. PUGs
 
 .raw_data/
+scripts/remote_console_commands_history.txt
