@@ -1,26 +1,59 @@
+
 # LunCoSim: Everyone can do Space
 
-LunCoSim is a open-source simulation tool designed for planning space missions, with a focus on lunar settlements. 
-
-## Want to contribute? Apply [here](https://tally.so/r/3jX6aE)
-
-Built with the powerful Godot 4 engine, LunCoSim aims to revolutionize the way space engineers design and collaborate on complex systems.
+LunCoSim is an open-source, collaborative space simulation platform designed for planning lunar & and space missions, engineering complex systems, and training future space explorers. 
 
 ## [Try in Browser](https://alpha.lunco.space)
 
-
-## 🌌 Vision
-
-Our vision is to provide a comprehensive suite of open-source applications tailored for Lunar Base engineering, including:
-
-- **Unified Platform**: LunCoSim serves as a central hub, bringing together the best of open-source space engineering tools, offering a unified experience for users.
-- **Requirements Management**: Streamline and manage your project requirements with ease.
-- **Models Visualizations**: Visualize and interact with your designs in a 3D environment.
-- **Collaborative Training**: Train and collaborate with your team in real-time.
-- **Digital Twin**: Create a digital replica of your lunar colony for simulations and analysis.
-
 ![](https://gateway.lighthouse.storage/ipfs/bafybeidjpafb6zg5lalug7z5sfzvszh2erskbbdqcloejr2asex2lfg4ky)
 
+Built on the powerful **Godot 4** engine, it bridges the gap between gaming and professional space engineering.
+
+
+## 🚀 Why LunCoSim?
+
+-   **Real Engineering, Gamified**: We use real physical models (Modelica integration) and engineering constraints, but accessible enough for enthusiasts.
+-   **Multiplayer Mission Control**: Run missions with friends! One person drives the rover, another monitors telemetry, and a third manages the power grid.
+-   **Digital Twin Capability**: Design your lunar base, simulate its operations, and validate requirements before bending a single piece of metal.
+-   **Open & Extensible**: Built on open standards. Control your entities via Python scripts, HTTP API, or custom plugins.
+
+## 🌟 Features
+
+### 🎮 Simulation & Control
+-   **Multi-Entity Control**: Take direct control of 4 types of units:
+    -   **Astronauts**: EVA activities and manual tasks.
+    -   **Operators**: Remote presence and drone control.
+    -   **Rovers**: Driving and surface operations.
+    -   **Spacecraft**: Orbital maneuvers and landing.
+-   **Solver-Based Physics**: Complex interactions (power, thermal, data) are simulated using a graph-based solver, not just simple game logic.
+
+### 🤝 Collaboration
+-   **Network Mode**: Host or join sessions. Work together in the same shared environment.
+-   **"With Friends"**: Collaborative training scenarios where coordination is key to mission success.
+
+### 🛠️ Engineering Tools
+-   **Telemetry & OpenMCT**: Stream real-time data to NASA's OpenMCT dashboard for professional-grade mission monitoring.
+-   **Supply Chain Modeling**: Visualize and optimize resource flows (Oxygen, Hydrogen, Power) using a node-based graph editor.
+-   **Modelica Support**: Integrate high-fidelity physics models for specialized components.
+
+### 🔌 Extensibility
+-   **HTTP API**: Send commands to the simulation from external tools.
+-   **Python Bridge**: Write your own control scripts in Python.
+-   **Custom Models**: Import your own vehicles and assets.
+
+## 📚 Documentation
+
+### For Users
+-   **[Control Guide](docs/UserGuide/ControlEntities.md)**: How to control Rovers, Astronauts, and more.
+-   **[Collaborative Missions](docs/UserGuide/CollaborativeMission.md)**: Setting up multiplayer sessions.
+-   **[Supply Chain](docs/UserGuide/SupplyChain.md)**: Using the resource graph view.
+
+### For Engineers & Developers
+-   **[Architecture Overview](docs/Technical/Architecture.md)**: System design and "Effector" pattern.
+-   **[Telemetry Setup](docs/Technical/Telemetry.md)**: Connecting to OpenMCT.
+-   **[HTTP API Reference](docs/Technical/HTTP_API.md)**: Integrating external tools.
+-   **[Modelica Integration](docs/Technical/Modelica_Integration.md)**: Advanced physics modeling.
+-   **[Custom Models](docs/Technical/Custom_Models.md)**: Creating new entities.
 
 ## 🛠 Installation
 
@@ -31,25 +64,20 @@ Our vision is to provide a comprehensive suite of open-source applications tailo
 2. Install [git lfs](https://github.com/git-lfs/git-lfs#getting-started). It handles large files in the repository. Use git-cmd if you are on Windows.
 
 3. Clone this repo in a terminal: 
-```bash
-git clone -b main --single-branch --recurse-submodules https://github.com/LunCoSim/lunco-sim.git
+    ```bash
+    git clone -b main --single-branch --recurse-submodules https://github.com/LunCoSim/lunco-sim.git
 ```
 
 4. After cloning, change directory to project folder
 ```bash
-cd lunco-sim
-```
+    cd lunco-sim
+    ```
 
 5. Enable git-lfs in the repository after cloning: 
-```bash
-git lfs install
-```
-
-6. We still need to download the content files from git-lfs. Run the following command to download them:
-```bash
-git pull --recurse-submodules
-git lfs pull && git submodule foreach git lfs pull
-```
+    ```bash
+    git lfs install
+    git lfs pull && git submodule foreach git lfs pull
+    ```
 
 7. Now open project and wait till intenal conent management downloads all the files. LunCoSim Content Manager (new system, gradually being adopted):
    1. Will be installed automatically with other addons
@@ -69,23 +97,6 @@ git lfs pull && git submodule foreach git lfs pull
   2. Then use the Content Manager in the editor toolbar
   3. If issues persist, please reach out on Discord
 
-## 💰 Donations
-
-Support us on [JuiceBox](https://juicebox.money/v2/p/763)!
-
-
-## 🚀 Features
-
-1. **Lunar 3D Mapping**: Dive into a high-resolution 3D map of the Moon, offering unparalleled detail and accuracy. Plan your missions with precision, leveraging real lunar spatial data for an immersive experience.
-	
-2. **Collaborative Mission Design**: Work in real-time with fellow space engineers from around the world. Share, discuss, and refine your lunar mission designs in a collaborative metaverse, powered by web3 tools.
-	
-3. **IP-NFT for Designs**: Protect and monetize your innovative space mission designs by issuing them as Intellectual Property Non-Fungible Tokens (IP-NFTs). Showcase your expertise and gain recognition in the space engineering community.
-	
-4. **Decentralized Engineer Profiles**: Create your decentralized engineer profile. Manage access, showcase your projects, and connect with peers in a secure and transparent manner.
-	
-5. **Interactive Training Modules**: Engage in hands-on training sessions within the LunCoSim platform. Simulate real-world lunar scenarios, test your designs, and receive instant feedback, all within a dynamic and interactive environment.
-
 
 ## 🌐 Community & Support
 
@@ -97,6 +108,8 @@ Join our vibrant community and stay updated on the latest developments:
 - [LinkedIn](https://www.linkedin.com/company/luncosim/)
 - [YouTube Channel](https://www.youtube.com/@LunCoSim)
 
-## 💖 Support LunCo
+## 💖 Support Us
 
-Support us on [JuiceBox](https://juicebox.money/v2/p/763)!
+Support development on [JuiceBox](https://juicebox.money/v2/p/763)!
+
+## Want to contribute? Apply [here](https://tally.so/r/3jX6aE)

@@ -57,22 +57,24 @@ To start developing, you'll have to do several manual steps (later a script will
 
 ## What addons are used?
 
-| **Name**         | **Description**                                                                                       | **Distribution** |
-| ---------------- | ----------------------------------------------------------------------------------------------------- | ---------------- |
-| beehave          | Behaviour Tree for AI                                                                                 | Manuel           |
-| free-look-camera | Simple free look camera                                                                               | Git              |
-| imjp94.yafsm     | State machine                                                                                         | Manuel           |
-| lunco-assets     | Binare assets like icons, spash for LunCo                                                             | Git              |
-| lunco-cameras    | Plugin with several different cameras made for LunCo                                                  | Git              |
-| lunco-content    | Repo with heavy-weight binary models, e.g. terrain. Later to be switched to IPFS content distribution | Git              |
-| object-inspector | Node that helps inspects objects properties at runtime                                                | Git              |
-| panku_console    | Swiss kniff for runtime debuggin. Console that allows control all the aspecs of the world in runtime  | Manuel           |                 |                                                                                                       |                  |
+LunCoSim uses a mix of internal and external addons. Some are managed via `gd-plug` (see `plug.gd`), while others are submodules.
+
+| **Name** | **Description** |
+| :--- | :--- |
+| **gd-plug** | Minimal plugin manager for Godot. |
+| **lunco-cameras** | Custom camera systems for simulation views. |
+| **lunco-content** | Content management system for large assets (models, terrain). |
+| *Others* | Various other plugins may be installed via `plug.gd`. |
 
 ## Folder structure
 
-1. `applications` - contains applications, high-level stuff build based on the core, later could be in a seperate repo
-2. `addons` - folder for plugins, according to Godot suggestions
-3. `core` - core lunco code
+1.  **apps/**: High-level applications and simulation modules.
+2.  **addons/**: Godot plugins (both internal and external).
+3.  **core/**: Core LunCoSim systems (networking, physics, base classes).
+4.  **controllers/**: Logic for specific entities (rover, characters).
+5.  **docs/**: Project documentation.
+6.  **assets/**: Shared assets (fonts, themes).
+
 
 
 ## Basilisk-Inspired Effector Architecture
