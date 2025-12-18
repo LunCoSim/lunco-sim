@@ -258,7 +258,11 @@ func _input(event):
 		if event is InputEventKey:
 			var handled = ui_display_manager.process_key_event(event)
 			if handled:
-				get_viewport().set_input_as_handled()
+				# For the console, we want to block avatar's internal shortcuts
+				# BUT we must let the event reach the LineEdit focus phase.
+				# In Godot, marking handled here BLOCKS the LineEdit from receiving it.
+				if ui_display_manager.get_active_display() != "console" or event.keycode == KEY_ESCAPE:
+					get_viewport().set_input_as_handled()
 				return
 			
 			# Special case for Escape key to close ModelicaUI

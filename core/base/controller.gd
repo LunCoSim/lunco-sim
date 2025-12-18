@@ -1,6 +1,9 @@
 class_name LCController
 extends LCSpaceSystem
 
+func _enter_tree():
+	add_to_group("controllers")
+
 
 
 @rpc("any_peer", "call_local")

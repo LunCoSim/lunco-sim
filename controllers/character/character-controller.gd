@@ -50,12 +50,17 @@ var jumping: bool = false
 func _ready():
 	if character_body == null:
 		character_body = get_parent()
+		
+	# Add command executor
+	var executor = LCCommandExecutor.new()
+	executor.name = "CommandExecutor"
+	add_child(executor)
 
 func _physics_process(delta: float):	
 	# Check if we have authority over the parent entity (the character body that contains this controller)
 	if has_authority():
 		apply_input(delta)
-		
+
 func apply_input(delta: float):
 	if character_body == null:
 		return
@@ -142,3 +147,12 @@ func do_move(delta):
 	#character_body.set_velocity(character_body.velocity)
 	character_body.set_up_direction(Vector3.UP)
 	character_body.move_and_slide()
+
+# Command Methods
+func cmd_jump(args: Dictionary):
+	jumping = true
+	return "Jumping"
+
+func cmd_set_speed(args: Dictionary):
+	move_speed = args.get("value", 5.0)
+	return "Speed set to %.1f" % move_speed

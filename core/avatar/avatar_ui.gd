@@ -142,6 +142,10 @@ func _ready():
 
 
 func _input(event):
+	# Check if input is captured by other displays (like console)
+	if avatar and avatar.ui_display_manager and avatar.ui_display_manager.is_input_captured():
+		return
+		
 	# Toggle component inspector & settings with 'I' key
 	if event is InputEventKey and event.pressed and not event.echo:
 		if event.keycode == KEY_I:

@@ -11,6 +11,18 @@ signal command_failed(command: LCCommand, error: String)
 
 func _ready():
 	add_to_group("CommandExecutors")
+	
+	# Auto-generate alias if none provided
+	if alias == "":
+		var parent = get_parent()
+		if parent:
+			var grandparent = parent.get_parent()
+			# If we are in a controller, use the vehicle/character name
+			if parent is LCController and grandparent:
+				alias = grandparent.name
+			else:
+				alias = parent.name
+				
 	if LCCommandRouter:
 		LCCommandRouter.register_executor(self)
 

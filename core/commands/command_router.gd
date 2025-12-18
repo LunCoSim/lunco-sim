@@ -54,6 +54,29 @@ func execute_raw(dict: Dictionary) -> Variant:
 
 ## Returns a consolidated dictionary of all available commands across all entities.
 func get_all_command_definitions() -> Dictionary:
+	# First, ensure all current executors in group are registered
+	var group_nodes = get_tree().get_nodes_in_group("CommandExecutors")
+	
+	# Fallback 1: search controllers group
+	if group_nodes.is_empty():
+		for controller in get_tree().get_nodes_in_group("controllers"):
+			for child in controller.get_children():
+				if child is LCCommandExecutor:
+					group_nodes.append(child)
+	
+	# Fallback 2: absolute search (slow but guaranteed)
+	if group_nodes.is_empty():
+		group_nodes = _find_executors_recursive(get_tree().root)
+					
+	if group_nodes.is_empty():
+		print("LCCommandRouter: No executors found in group or tree search.")
+	else:
+		print("LCCommandRouter: Found %d executors." % group_nodes.size())
+					
+	for e in group_nodes:
+		if not str(e.get_path()) in _executors:
+			register_executor(e)
+			
 	var dict = {}
 	for key in _executors:
 		var executor = _executors[key]
@@ -62,3 +85,11 @@ func get_all_command_definitions() -> Dictionary:
 			continue
 		dict[key] = executor.get_command_dictionary()
 	return dict
+
+func _find_executors_recursive(node: Node) -> Array:
+	var results = []
+	if node is LCCommandExecutor:
+		results.append(node)
+	for child in node.get_children():
+		results.append_array(_find_executors_recursive(child))
+	return results

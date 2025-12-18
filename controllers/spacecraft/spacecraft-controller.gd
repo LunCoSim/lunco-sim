@@ -13,31 +13,23 @@ extends LCController
 	get:
 		return self.get_parent()
 
-
 signal thrusted(enabled)
 
 func _ready():
 	print("LCSpacecraftController: Ready. Parent: ", parent.name if parent else "NULL")
+	
+	# Add command executor
+	var executor = LCCommandExecutor.new()
+	executor.name = "CommandExecutor"
+	add_child(executor)
+	
 	if parent:
 		print("LCSpacecraftController: Parent methods: ", parent.get_method_list().map(func(m): return m.name).filter(func(n): return "control" in n))
-
-# Commands
-# thrust
-# change orienation(x, y, z)
 
 # Internal state
 var thrust := 0.0
 var torque := Vector3.ZERO
 
-#-----------------------
-
-# Processing physics for Spacecraft controller
-# func _physics_process(_delta):
-# 	# Delegated to LCSpacecraft
-# 	pass
-	
-# ------------
-# Commands that changes internal state
 func throttle(_thrust: bool):
 	if _thrust:
 		thrust = 1.0
@@ -58,3 +50,17 @@ func _update_parent_control():
 	elif parent and parent.has_method("_on_spacecraft_controller_thrusted"):
 		# Fallback for older spacecraft
 		parent._on_spacecraft_controller_thrusted(thrust > 0.5)
+
+# Command Methods
+func cmd_throttle(args: Dictionary):
+	var enabled = args.get("enabled", true)
+	if typeof(enabled) == TYPE_STRING: enabled = enabled.to_lower() == "true"
+	throttle(bool(enabled))
+	return "Throttle %s" % ("ON" if enabled else "OFF")
+
+func cmd_orientation(args: Dictionary):
+	var x = float(args.get("x", 0.0))
+	var y = float(args.get("y", 0.0))
+	var z = float(args.get("z", 0.0))
+	change_orientation(Vector3(x, y, z))
+	return "Orientation updated"

@@ -28,6 +28,12 @@ func _input(event):
 	if not current_target:
 		return
 	
+	# Check if input is captured by other UI (like console)
+	var avatar = get_parent()
+	if avatar and "ui_display_manager" in avatar and avatar.ui_display_manager:
+		if avatar.ui_display_manager.is_input_captured():
+			return
+	
 	# Toggle floating display with 'G'
 	if event is InputEventKey and event.pressed and not event.echo:
 		if event.keycode == KEY_G and not event.shift_pressed:

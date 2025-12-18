@@ -6,7 +6,7 @@ var supply_chain_display = null
 var modelica_display = null
 
 # Track which display is currently active
-var active_display = "none"  # "none", "supply_chain", or "modelica"
+var active_display = "none"  # "none", "supply_chain", "modelica", or "console"
 
 # Signals
 signal display_activated(display_name)
@@ -36,6 +36,9 @@ func is_input_captured() -> bool:
 	# Fallback: if a display is active, assume it's capturing input
 	var fallback = active_display != "none"
 	if fallback:
+		# If console is active, it definitely captured input
+		if active_display == "console":
+			return true
 		print("UiDisplayManager: Fallback - active_display = ", active_display)
 	return fallback
 
@@ -103,6 +106,11 @@ func process_key_event(event: InputEvent) -> bool:
 		
 	# Pass keyboard events to active display when active
 	if active_display != "none" and event is InputEventKey:
+		# If console is active, capture EVERYTHING to prevent leaks to avatar/sim
+		if active_display == "console":
+			# Still let the console process it if it needs to, but we definitely return true
+			return true
+			
 		var result = pass_keyboard_input_to_active_display(event)
 		return result
 		
