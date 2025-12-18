@@ -8,6 +8,7 @@
 [ext_resource type="PackedScene" uid="uid://doyj5ibnqvv3m" path="res://apps/3dsim/entities/ui_display/supply_chain_display.tscn" id="6_rsdku"]
 [ext_resource type="Script" uid="uid://b2u28srar01oq" path="res://apps/3dsim/entities/ui_display/display_controller.gd" id="7_ukwid"]
 [ext_resource type="PackedScene" uid="uid://dpebcdtj4q5wq" path="res://apps/3dsim/entities/ui_display/modelica_display.tscn" id="8_mwx56"]
+[ext_resource type="PackedScene" uid="uid://cmdconsole" path="res://core/ui/command_console.tscn" id="9_console"]
 
 [node name="Simulation2" unique_id=701308856 node_paths=PackedStringArray("spawn_node") instance=ExtResource("1_dpa21")]
 spawn_node = NodePath("Universe/Sun/Earth/Moon/LangrenusCraterMap/Spawner")
@@ -44,3 +45,8 @@ transform = Transform3D(1, 0, 0, 0, 0.96025, -0.279142, 0, 0.279142, 0.96025, -4
 
 [node name="ModelicaDisplay" parent="Universe/Sun/Earth/Moon/LangrenusCraterMap" index="3" unique_id=1486978284 instance=ExtResource("8_mwx56")]
 transform = Transform3D(1, 0, 0, 0, 0.96025, -0.279142, 0, 0.279142, 0.96025, 9.29662, 48.2416, -86.9162)
+
+[node name="UILayer" type="CanvasLayer" parent="." index="5"]
+
+[node name="CommandConsole" parent="UILayer" index="0" instance=ExtResource("9_console")]
+visible = false

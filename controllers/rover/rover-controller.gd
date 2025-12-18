@@ -61,6 +61,11 @@ func _ready():
 		parent.engine_force = 0.0
 		parent.steering = 0.0
 		parent.brake = 0.0
+	
+	# Add command executor
+	var executor = LCCommandExecutor.new()
+	executor.name = "CommandExecutor"
+	add_child(executor)
 
 
 
@@ -173,3 +178,16 @@ func _reset_inputs():
 		parent.engine_force = 0.0
 		parent.steering = 0.0
 		parent.brake = 0.0
+# Command Methods (Reflection)
+func cmd_set_motor(args: Dictionary):
+	set_motor(args.get("value", 0.0))
+
+func cmd_set_steering(args: Dictionary):
+	set_steering(args.get("value", 0.0))
+
+func cmd_set_crab_steering(args: Dictionary):
+	if has_method("set_crab_steering"):
+		call("set_crab_steering", args.get("value", 0.0))
+
+func cmd_set_brake(args: Dictionary):
+	set_brake(args.get("value", 0.0))

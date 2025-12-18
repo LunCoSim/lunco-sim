@@ -60,8 +60,8 @@ var effector_ref: WeakRef = null
 # Electrical: Current Source (Amps)
 var flow_source: float = 0.0
 
-# Connected edges (for graph traversal if needed)
-var edges: Array[LCSolverEdge] = []
+# Connected edges
+var edges: Array = []
 
 func _init(p_id: int, p_initial_potential: float = 0.0, p_is_ground: bool = false, p_domain: StringName = SolverDomain.LIQUID):
 	id = p_id

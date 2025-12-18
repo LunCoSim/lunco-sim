@@ -1,0 +1,64 @@
+class_name LCCommandExecutor
+extends Node
+
+## Node that handles command execution for its parent.
+## Commands are mapped to parent methods with the 'cmd_' prefix.
+
+signal command_executed(command: LCCommand, result: Variant)
+signal command_failed(command: LCCommand, error: String)
+
+@export var alias: String = "" ## Optional alias to address this executor (e.g., "rover1")
+
+func _ready():
+	add_to_group("CommandExecutors")
+	if LCCommandRouter:
+		LCCommandRouter.register_executor(self)
+
+func _exit_tree():
+	if LCCommandRouter:
+		LCCommandRouter.unregister_executor(self)
+
+## Executes a command.
+func execute(command: LCCommand) -> Variant:
+	var method_name = "cmd_" + command.name.to_lower()
+	var parent = get_parent()
+	
+	if not parent:
+		var err = "Executor has no parent"
+		command_failed.emit(command, err)
+		return err
+		
+	if not parent.has_method(method_name):
+		var err = "Parent %s does not implement command method: %s" % [parent.name, method_name]
+		command_failed.emit(command, err)
+		return err
+		
+	# Execute using reflection
+	var result = parent.call(method_name, command.arguments)
+	command_executed.emit(command, result)
+	return result
+
+## Returns a list of available commands based on methods prefixed with 'cmd_'.
+func get_command_dictionary() -> Array:
+	var commands = []
+	var parent = get_parent()
+	if not parent:
+		return []
+		
+	for method in parent.get_method_list():
+		if method.name.begins_with("cmd_"):
+			var cmd_name = method.name.substr(4).to_upper()
+			commands.append({
+				"name": cmd_name,
+				"arguments": _get_method_params(method)
+			})
+	return commands
+
+func _get_method_params(method: Dictionary) -> Array:
+	var params = []
+	for arg in method.args:
+		params.append({
+			"name": arg.name,
+			"type": type_string(arg.type)
+		})
+	return params

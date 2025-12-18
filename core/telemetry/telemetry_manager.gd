@@ -268,4 +268,10 @@ func get_openmct_dictionary() -> Dictionary:
 		
 		measurements.append(measurement)
 	
-	return {"measurements": measurements}
+	var dictionary = {"measurements": measurements}
+	
+	# Add available commands to the dictionary if available
+	if LCCommandRouter:
+		dictionary["commands"] = LCCommandRouter.get_all_command_definitions()
+		
+	return dictionary

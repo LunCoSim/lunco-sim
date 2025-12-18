@@ -59,15 +59,16 @@ func _input(_event):
 			motor_input = gamepad_movement.y if abs(gamepad_movement.y) > abs(motor_input) else motor_input
 			steering_input = gamepad_movement.x if abs(gamepad_movement.x) > abs(steering_input) else steering_input
 		
-		# Apply inputs to controller
-		if _target.has_method("set_motor"):
-			_target.set_motor(motor_input * MOTOR_SENSITIVITY)
-		
-		if _target.has_method("set_steering"):
-			_target.set_steering(steering_input * STEERING_SENSITIVITY)
-			
-		if _target.has_method("set_crab_steering"):
-			_target.set_crab_steering(crab_input * STEERING_SENSITIVITY)
-		
-		if _target.has_method("set_brake"):
-			_target.set_brake(brake_input) 
+		# Apply inputs via Command System
+		_send_command("SET_MOTOR", {"value": motor_input * MOTOR_SENSITIVITY})
+		_send_command("SET_STEERING", {"value": steering_input * STEERING_SENSITIVITY})
+		# Crab steering not yet refactored to command in controller, but following same pattern
+		_send_command("SET_CRAB_STEERING", {"value": crab_input * STEERING_SENSITIVITY})
+		_send_command("SET_BRAKE", {"value": brake_input})
+
+func _send_command(cmd_name: String, args: Dictionary):
+	var _target = get_resolved_target()
+	if not _target: return
+	
+	var cmd = LCCommand.new(cmd_name, _target.get_path(), args, "local")
+	LCCommandRouter.dispatch(cmd)

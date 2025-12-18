@@ -26,13 +26,30 @@ func handle_get(request: HttpRequest, response: HttpResponse) -> void:
 		_handle_global_events(request, response)
 	elif path.begins_with("/events/"):
 		_handle_entity_events(request, response)
+	elif path == "/command":
+		_handle_command(request, response)
+	else:
+		response.send_error(404, "Not Found")
+
+func handle_post(request: HttpRequest, response: HttpResponse) -> void:
+	# Add CORS headers
+	response.set_header("Access-Control-Allow-Origin", "*")
+	response.set_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+	response.set_header("Access-Control-Allow-Headers", "Content-Type")
+	
+	var path = request.path
+	if path.begins_with("/api"):
+		path = path.substr(4)
+		
+	if path == "/command":
+		_handle_command(request, response)
 	else:
 		response.send_error(404, "Not Found")
 
 func handle_options(request: HttpRequest, response: HttpResponse) -> void:
 	# Handle CORS preflight
 	response.set_header("Access-Control-Allow-Origin", "*")
-	response.set_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+	response.set_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 	response.set_header("Access-Control-Allow-Headers", "Content-Type")
 	response.send("", "text/plain")
 
@@ -105,3 +122,29 @@ func _handle_entity_events(request: HttpRequest, response: HttpResponse) -> void
 	
 	var events = TelemetryManager.get_entity_events(entity_id, start_time, end_time)
 	response.send_json({"events": events})
+
+func _handle_command(request: HttpRequest, response: HttpResponse) -> void:
+	var body_str = request.body
+	var json = JSON.new()
+	var err = json.parse(body_str)
+	
+	if err != OK:
+		response.send_error(400, "Invalid JSON: " + json.get_error_message())
+		return
+		
+	var data = json.get_data()
+	if not data is Dictionary:
+		response.send_error(400, "Expected JSON object")
+		return
+		
+	# Dispatch command via LCCommandRouter
+	# Remote commands should be marked as source="http"
+	data["source"] = "http"
+	var result = LCCommandRouter.execute_raw(data)
+	
+	if result is String and result.begins_with("Command target not found"):
+		response.send_error(404, result)
+	elif result is String and result.begins_with("Parent"):
+		response.send_error(400, result)
+	else:
+		response.send_json({"status": "executed", "result": result})

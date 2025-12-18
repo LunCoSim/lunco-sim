@@ -35,6 +35,7 @@ TelemetryManager="*res://core/telemetry/telemetry_manager.gd"
 TelemetryServer="*res://core/telemetry/telemetry_server.gd"
 LCResourceRegistry="*res://core/resources/resource_registry.gd"
 LCRecipeRegistry="*res://core/resources/recipe_registry.gd"
+LCCommandRouter="*res://core/commands/command_router.gd"
 
 [display]
 

@@ -12,8 +12,8 @@ var id: int = -1
 var domain: StringName = "Fluid"
 
 # The two nodes this edge connects
-var node_a: LCSolverNode
-var node_b: LCSolverNode
+var node_a # LCSolverNode
+var node_b # LCSolverNode
 
 # Conductance (G = 1/R)
 # Flow = G * (Potential_A - Potential_B + Potential_Source)
@@ -39,7 +39,7 @@ var is_unidirectional: bool = false
 # If set, only allows flow if nodes have compatible resources.
 var allowed_resource_types: Array[StringName] = []
 
-func _init(p_id: int, p_node_a: LCSolverNode, p_node_b: LCSolverNode, p_conductance: float = 1.0, p_domain: StringName = "Fluid"):
+func _init(p_id: int, p_node_a, p_node_b, p_conductance: float = 1.0, p_domain: StringName = "Fluid"):
 	id = p_id
 	node_a = p_node_a
 	node_b = p_node_b
@@ -62,7 +62,7 @@ func update_flow():
 	flow_rate = delta_p * conductance
 
 ## Get the other node connected to this edge
-func get_other_node(node: LCSolverNode) -> LCSolverNode:
+func get_other_node(node) :
 	if node == node_a:
 		return node_b
 	elif node == node_b:
