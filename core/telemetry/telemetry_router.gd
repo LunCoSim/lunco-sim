@@ -27,7 +27,7 @@ func handle_get(request: HttpRequest, response: HttpResponse) -> void:
 	elif path.begins_with("/events/"):
 		_handle_entity_events(request, response)
 	elif path == "/command":
-		_handle_command(request, response)
+		_handle_command_definitions(request, response)
 	else:
 		response.send_error(404, "Not Found")
 
@@ -148,3 +148,7 @@ func _handle_command(request: HttpRequest, response: HttpResponse) -> void:
 		response.send_error(400, result)
 	else:
 		response.send_json({"status": "executed", "result": result})
+
+func _handle_command_definitions(_request: HttpRequest, response: HttpResponse) -> void:
+	var defs = LCCommandRouter.get_all_command_definitions()
+	response.send_json({"targets": defs})
