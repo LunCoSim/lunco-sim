@@ -206,6 +206,9 @@ func cmd_spawn(args: Dictionary) -> String:
 	spawn.rpc_id(1, entity_type, global_pos)
 	return "Spawned %s" % EntitiesDB.Entities.keys()[entity_type]
 
+func cmd_list_entities(_args: Dictionary) -> Array:
+	return EntitiesDB.Entities.keys()
+
 #---------------------------------------
 
 func _on_multiplayer_spawner_spawned(entity):	

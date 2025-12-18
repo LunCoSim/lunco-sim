@@ -16,16 +16,15 @@ func _input(_event):
 		# 	print("SpacecraftInputAdapter: Processing input for ", _target.get_parent().name)
 		
 		# Check if input is captured by UI
-		if not should_process_input():
+		if not should_process_input(_event):
 			_target.throttle(false)
 			_target.change_orientation(Vector3.ZERO)
 			return
 
-		if Input.is_action_just_pressed("throttle"):
-			# print("SpacecraftInputAdapter: Throttle ON")
+		# Use event-based checks for throttle, allowing echos for remote continuity
+		if _event.is_action_pressed("throttle", true):
 			_target.throttle(true)
-		elif Input.is_action_just_released("throttle"):
-			# print("SpacecraftInputAdapter: Throttle OFF")
+		elif _event.is_action_released("throttle"):
 			_target.throttle(false)
 
 		var torque_action := Vector3(

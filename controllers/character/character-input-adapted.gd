@@ -66,7 +66,6 @@ func _process(delta):
 		
 	# Check if input is captured by UI
 	var can_process = should_process_input()
-	print("Character input adapter: should_process_input = ", can_process)
 	if not can_process:
 		_target.input_motion = Vector2.ZERO
 		_target.aiming = false

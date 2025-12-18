@@ -40,7 +40,7 @@ func _input(_event):
 	# Only process input if the target is a rover controller
 	if is_compatible_controller:
 		# Check if input is captured by UI
-		if not should_process_input():
+		if not should_process_input(_event):
 			if _target.has_method("set_motor"): _target.set_motor(0)
 			if _target.has_method("set_steering"): _target.set_steering(0)
 			if _target.has_method("set_crab_steering"): _target.set_crab_steering(0)

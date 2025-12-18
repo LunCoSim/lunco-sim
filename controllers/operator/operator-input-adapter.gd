@@ -21,7 +21,7 @@ func _input(_event):
 	# Only process input if the target is an operator controller
 	if is_compatible_controller:
 		# Check if input is captured by UI
-		if not should_process_input():
+		if not should_process_input(_event):
 			_target.move(Vector3.ZERO)
 			return
 

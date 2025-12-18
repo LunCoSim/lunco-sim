@@ -18,7 +18,11 @@ func _ready():
 	print("UiDisplayManager: Initialized")
 
 # Check if any display is currently capturing input
-func is_input_captured() -> bool:
+func is_input_captured(event: InputEvent = null) -> bool:
+	# Artificial events from remote console should bypass UI capture
+	if event and LCAvatar.is_remote_event(event):
+		return false
+		
 	# Check if modelica display has keyboard focus
 	if active_display == "modelica" and modelica_display:
 		if "has_keyboard_focus" in modelica_display:
@@ -35,11 +39,19 @@ func is_input_captured() -> bool:
 	
 	# Fallback: if a display is active, assume it's capturing input
 	var fallback = active_display != "none"
+	
 	if fallback:
+		# If we have remote keys held (artificial input), we should allow 
+		# polling-based adapters to continue processing.
+		if event == null and get_parent().has_method("get_held_remote_keys"):
+			var held_keys = get_parent().get_held_remote_keys()
+			if not held_keys.is_empty():
+				return false
+				
 		# If console is active, it definitely captured input
 		if active_display == "console":
 			return true
-		print("UiDisplayManager: Fallback - active_display = ", active_display)
+		# print("UiDisplayManager: Fallback - active_display = ", active_display)
 	return fallback
 
 # Method to set the display references
@@ -86,6 +98,10 @@ func process_key_event(event: InputEvent) -> bool:
 	if not event is InputEventKey:
 		return false
 	
+	# Remote artificial events bypass UI capture
+	if LCAvatar.is_remote_event(event):
+		return false
+		
 	# Only log important keys for performance reasons
 	if event.pressed and not event.is_echo() and event.keycode in [KEY_ESCAPE, KEY_TAB, KEY_ENTER]:
 		print("UiDisplayManager: Processing key event - Key: ", event.keycode)

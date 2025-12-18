@@ -66,6 +66,7 @@ const SPEED = 5.0
 const JUMP_VELOCITY = 4.5
 const ZOOM_SPEED = 0.1
 const WHEEL_ZOOM_INCREMENT = 0.1  # Add default value for wheel zoom
+const DEVICE_ID_REMOTE = 7 # Dedicated device ID for remote artificial events
 
 #===============================================================================
 # EXPORTS - Editor-configurable properties
@@ -570,18 +571,63 @@ func cmd_stop_control(_args: Dictionary) -> String:
 	request_release_control()
 	return "Control released"
 
+# Track keys held down by remote console to re-apply them every frame
+var held_remote_keys = {}
+
+func _physics_process(_delta):
+	# Re-apply held keys state aggressively every physics frame.
+	# We use parse_input_event to trigger _input/unhandled_input logic 
+	# and action_press to update polling-based systems.
+	# This helps overcome Focus Loss resets in Godot.
+	for key_str in held_remote_keys:
+		var keycode = held_remote_keys[key_str]
+		var event = InputEventKey.new()
+		event.device = DEVICE_ID_REMOTE
+		event.pressed = true
+		event.keycode = keycode
+		event.physical_keycode = keycode
+		event.echo = true # Mark as echo to show it's continuous
+		
+		# Update global action state
+		for action in InputMap.get_actions():
+			if InputMap.event_is_action(event, action):
+				Input.action_press(action, 1.0)
+		
+		# Trigger event-based input processing
+		Input.parse_input_event(event)
+
 func cmd_key_down(args: Dictionary) -> String:
 	var key_str = args.get("key", "")
-	return _mimic_key(key_str, true)
+	
+	# Mark as remote to bypass UI capture
+	var result = _mimic_key(key_str, true)
+	
+	# Store in held keys if successful
+	if not result.begins_with("Unknown"):
+		# Extract keycode from result or find again
+		var keycode = OS.find_keycode_from_string(key_str)
+		if keycode == KEY_NONE: keycode = OS.find_keycode_from_string(key_str.to_upper())
+		if keycode != KEY_NONE:
+			held_remote_keys[key_str.to_lower()] = keycode
+			
+	return result
 
 func cmd_key_up(args: Dictionary) -> String:
 	var key_str = args.get("key", "")
+	held_remote_keys.erase(key_str.to_lower())
 	return _mimic_key(key_str, false)
+
+func get_held_remote_keys() -> Dictionary:
+	return held_remote_keys
 
 func cmd_key_press(args: Dictionary) -> String:
 	var key_str = args.get("key", "")
 	_mimic_key(key_str, true)
-	_mimic_key(key_str, false)
+	# Add a small delay for the release event so the game logic has time to detect the press
+	get_tree().create_timer(0.1).timeout.connect(func(): 
+		held_remote_keys.erase(key_str.to_lower()) # Also ensure it's removed from held
+		_mimic_key(key_str, false)
+	)
 	return "Key pressed: %s" % key_str
 
 func _mimic_key(key_str: String, pressed: bool) -> String:
@@ -600,10 +646,29 @@ func _mimic_key(key_str: String, pressed: bool) -> String:
 		return "Unknown key: %s" % key_str
 		
 	var event = InputEventKey.new()
+	event.device = DEVICE_ID_REMOTE
 	event.pressed = pressed
 	event.keycode = keycode
-	# For physical key support
 	event.physical_keycode = keycode
+	event.echo = false
 	
+	# Detect actions for this key for debug and aggressive state management
+	var matched_actions = []
+	for action in InputMap.get_actions():
+		if InputMap.event_is_action(event, action):
+			matched_actions.append(action)
+			if pressed:
+				Input.action_press(action, 1.0) # Explicitly set strength to 1.0
+			else:
+				Input.action_release(action)
+	
+	if pressed:
+		print("DEBUG: _mimic_key key=%s pressed=%s keycode=%d actions=%s" % [key_str, pressed, keycode, matched_actions])
+	
+	# Pass to global input system to trigger _input/unhandled_input callbacks
 	Input.parse_input_event(event)
-	return "Key %s: %s (code: %d)" % ["down" if pressed else "up", key_str, keycode]
+				
+	return "Key %s: %s (code: %d, actions: %s)" % ["down" if pressed else "up", key_str, keycode, matched_actions]
+
+static func is_remote_event(event: InputEvent) -> bool:
+	return event != null and event.device == DEVICE_ID_REMOTE
