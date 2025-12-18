@@ -177,6 +177,36 @@ func _on_avatar_release_control(path: NodePath):
 	ControlManager.release_control(path)
 
 #---------------------------------------
+# Commands for LCCommandExecutor
+
+func cmd_spawn(args: Dictionary) -> String:
+	var type_name = args.get("type", "")
+	var entity_type = -1
+	
+	if type_name is String:
+		# Try to match enum name
+		for key in EntitiesDB.Entities.keys():
+			if key.to_lower() == type_name.to_lower():
+				entity_type = EntitiesDB.Entities[key]
+				break
+	elif type_name is float or type_name is int:
+		entity_type = int(type_name)
+		
+	if entity_type == -1:
+		return "Unknown entity type: %s" % str(type_name)
+		
+	var global_pos = null
+	if args.has("position"):
+		var p = args["position"]
+		if p is Array and p.size() >= 3:
+			global_pos = Vector3(p[0], p[1], p[2])
+		elif p is Vector3:
+			global_pos = p
+			
+	spawn.rpc_id(1, entity_type, global_pos)
+	return "Spawned %s" % EntitiesDB.Entities.keys()[entity_type]
+
+#---------------------------------------
 
 func _on_multiplayer_spawner_spawned(entity):	
 	entities.append(entity)

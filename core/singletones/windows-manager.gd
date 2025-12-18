@@ -42,7 +42,7 @@ func _ready():
 	# Connect to main window signals for changes - Do this LAST to avoid catching setup changes
 	var win = get_window()
 	win.size_changed.connect(_on_window_changed)
-	win.position_changed.connect(_on_window_changed)
+	# win.position_changed.connect(_on_window_changed) # Not available in standard Godot 4.x Window
 
 func _notification(what):
 	if what == NOTIFICATION_WM_CLOSE_REQUEST or what == NOTIFICATION_APPLICATION_FOCUS_OUT:

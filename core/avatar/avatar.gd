@@ -542,3 +542,68 @@ func _is_click_on_modelica_display(click_position: Vector2) -> bool:
 			return true
 	
 	return false
+
+#===============================================================================
+# REMOTE CONTROL COMMANDS - Commands for remote execution
+#===============================================================================
+
+func cmd_take_control(args: Dictionary) -> String:
+	var target_id = args.get("target")
+	if target_id == null:
+		return "Missing target argument"
+		
+	if target_id is float or target_id is int:
+		_on_existing_entity_selected(int(target_id))
+		return "Requested control for entity index: %d" % int(target_id)
+	elif target_id is String:
+		# Try to find node by name or path
+		var target_node = get_tree().root.find_child(target_id, true, false)
+		if target_node:
+			ControlManager.request_control(target_node.get_path(), multiplayer.get_unique_id())
+			return "Requested control for node: %s" % target_node.name
+		else:
+			return "Entity not found: %s" % target_id
+			
+	return "Invalid target type"
+
+func cmd_stop_control(_args: Dictionary) -> String:
+	request_release_control()
+	return "Control released"
+
+func cmd_key_down(args: Dictionary) -> String:
+	var key_str = args.get("key", "")
+	return _mimic_key(key_str, true)
+
+func cmd_key_up(args: Dictionary) -> String:
+	var key_str = args.get("key", "")
+	return _mimic_key(key_str, false)
+
+func cmd_key_press(args: Dictionary) -> String:
+	var key_str = args.get("key", "")
+	_mimic_key(key_str, true)
+	_mimic_key(key_str, false)
+	return "Key pressed: %s" % key_str
+
+func _mimic_key(key_str: String, pressed: bool) -> String:
+	if key_str == "":
+		return "Missing key argument"
+		
+	# OS.find_keycode_from_string is available in most Godot 4 versions 
+	# as an alternative to the newer DisplayServer method.
+	var keycode = KEY_NONE
+	if OS.has_method("find_keycode_from_string"):
+		keycode = OS.find_keycode_from_string(key_str)
+		if keycode == KEY_NONE:
+			keycode = OS.find_keycode_from_string(key_str.to_upper())
+			
+	if keycode == KEY_NONE:
+		return "Unknown key: %s" % key_str
+		
+	var event = InputEventKey.new()
+	event.pressed = pressed
+	event.keycode = keycode
+	# For physical key support
+	event.physical_keycode = keycode
+	
+	Input.parse_input_event(event)
+	return "Key %s: %s (code: %d)" % ["down" if pressed else "up", key_str, keycode]
