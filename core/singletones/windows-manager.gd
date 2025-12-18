@@ -9,6 +9,15 @@ const THEME = preload("res://themes/theme.tres")
 
 
 func _ready():
+	# Setup debounce timer first so it's ready for any signals
+	debounce_timer.one_shot = true
+	debounce_timer.wait_time = 0.5
+	debounce_timer.timeout.connect(save_window_state)
+	add_child(debounce_timer)
+
+	# Load window state immediately on startup
+	load_window_state()
+	
 	var MainMenuScene = load("res://core/widgets/menu/main_menu.tscn").instantiate()
 	MainMenu = make_window(MainMenuScene, "Main menu")
 	# Set a larger size for the main menu
@@ -29,6 +38,68 @@ func _ready():
 	TutorialWindow.min_size = Vector2(300, 400)
 	center_window(TutorialWindow)
 	# Tutorial visibility is controlled by simulation.gd based on Profile.hide_tutorial
+	
+	# Connect to main window signals for changes - Do this LAST to avoid catching setup changes
+	var win = get_window()
+	win.size_changed.connect(_on_window_changed)
+	win.position_changed.connect(_on_window_changed)
+
+func _notification(what):
+	if what == NOTIFICATION_WM_CLOSE_REQUEST or what == NOTIFICATION_APPLICATION_FOCUS_OUT:
+		save_window_state()
+
+#-----------------------------------------------------------------------------
+# Window Persistence
+#-----------------------------------------------------------------------------
+
+const CONFIG_PATH = "user://window_state.cfg"
+const CONFIG_SECTION = "Window"
+var debounce_timer = Timer.new()
+
+func _on_window_changed():
+	# Only start if timer is inside tree (safer check, though reordering _ready fixes the main issue)
+	if debounce_timer.is_inside_tree():
+		debounce_timer.start()
+
+func save_window_state():
+	var win = get_window()
+	var config = ConfigFile.new()
+	
+	config.set_value(CONFIG_SECTION, "mode", win.mode)
+	config.set_value(CONFIG_SECTION, "position", win.position)
+	config.set_value(CONFIG_SECTION, "size", win.size)
+	config.set_value(CONFIG_SECTION, "current_screen", win.current_screen)
+	
+	config.save(CONFIG_PATH)
+	# print("Window state saved: ", win.position, win.size)
+
+func load_window_state():
+	var config = ConfigFile.new()
+	var err = config.load(CONFIG_PATH)
+	
+	if err != OK:
+		return # No saved state or error loading
+		
+	var win = get_window()
+	
+	# Load Mode
+	var mode = config.get_value(CONFIG_SECTION, "mode", Window.MODE_WINDOWED)
+	# Only restore if mode is valid
+	if mode >= 0 and mode <= Window.MODE_EXCLUSIVE_FULLSCREEN:
+		win.mode = mode
+		
+	# If in windowed mode, restore size and position
+	if mode == Window.MODE_WINDOWED:
+		var screen = config.get_value(CONFIG_SECTION, "current_screen", win.current_screen)
+		win.current_screen = screen
+		
+		# Validation to ensure window assumes a safe position (e.g. not off-screen) could be added here
+		var pos = config.get_value(CONFIG_SECTION, "position", win.position)
+		var size = config.get_value(CONFIG_SECTION, "size", win.size)
+		
+		win.position = pos
+		win.size = size
+
 
 static func make_window(control, title, transparent_bg = true, borderless = false) -> Window:
 	var win = Window.new()
@@ -64,7 +135,6 @@ static func make_window(control, title, transparent_bg = true, borderless = fals
 	win.close_requested.connect(win.hide)
 	
 	# Connect focus signals to update the window appearance
-
 	
 	return win
 
