@@ -10,7 +10,9 @@ signal command_failed(command: LCCommand, error: String)
 @export var alias: String = "" ## Optional alias to address this executor (e.g., "rover1")
 
 func _ready():
+	print("DEBUG: LCCommandExecutor _ready called. Name: ", name, " Parent: ", get_parent())
 	add_to_group("CommandExecutors")
+	print("DEBUG: Added to CommandExecutors group. In group? ", is_in_group("CommandExecutors"))
 	
 	# Auto-generate alias if none provided
 	if alias == "":
@@ -18,13 +20,20 @@ func _ready():
 		if parent:
 			var grandparent = parent.get_parent()
 			# If we are in a controller, use the vehicle/character name
-			if parent is LCController and grandparent:
+			# If we are in a controller, use the vehicle/character name
+			var is_controller = parent is LCController
+			if not is_controller and parent.get_script():
+				# Fallback check using resource path in case of cyclic dependency issues
+				is_controller = "Controller" in parent.get_script().resource_path.get_file()
+				
+			if is_controller and grandparent:
 				alias = grandparent.name
 			else:
 				alias = parent.name
 				
 	if LCCommandRouter:
 		LCCommandRouter.register_executor(self)
+		print("LCCommandExecutor: Registered self for parent: ", get_parent().get_path())
 
 func _exit_tree():
 	if LCCommandRouter:

@@ -66,6 +66,7 @@ func _ready():
 	var executor = LCCommandExecutor.new()
 	executor.name = "CommandExecutor"
 	add_child(executor)
+	print("DEBUG: RoverController _ready complete. Created executor: ", executor, " path: ", executor.get_path())
 
 
 

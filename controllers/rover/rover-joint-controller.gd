@@ -91,6 +91,12 @@ func _ready():
 	if not parent is VehicleBody3D:
 		push_error("RoverJointController's parent must be a VehicleBody3D")
 
+	# Add command executor
+	var executor = LCCommandExecutor.new()
+	executor.name = "CommandExecutor"
+	add_child(executor)
+	print("RoverJointController: Created CommandExecutor. My path: ", get_path())
+
 func _discover_wheels():
 	"""Automatically discover wheels if paths not set, or use explicit paths"""
 	if front_left_wheel.is_empty():
@@ -447,3 +453,19 @@ func _reset_inputs():
 		if br_wheel:
 			br_wheel.engine_force = 0.0
 			br_wheel.brake = 0.0
+
+# ============================================================================
+# Command Methods (Reflection)
+# ============================================================================
+
+func cmd_set_motor(args: Dictionary):
+	set_motor(args.get("value", 0.0))
+
+func cmd_set_steering(args: Dictionary):
+	set_steering(args.get("value", 0.0))
+
+func cmd_set_crab_steering(args: Dictionary):
+	set_crab_steering(args.get("value", 0.0))
+
+func cmd_set_brake(args: Dictionary):
+	set_brake(args.get("value", 0.0))

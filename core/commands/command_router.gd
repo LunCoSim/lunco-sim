@@ -15,7 +15,7 @@ func register_executor(executor: Node):
 	_executors[str(executor.get_parent().get_path())] = executor
 
 ## Unregisters an executor.
-func unregister_executor(executor: LCCommandExecutor):
+func unregister_executor(executor: Node):
 	if executor.alias != "" and _executors.get(executor.alias) == executor:
 		_executors.erase(executor.alias)
 	
@@ -34,10 +34,17 @@ func dispatch(command: LCCommand) -> Variant:
 	
 	if not executor:
 		# Fallback: try to find it in group if not registered (e.g., if it was just spawned)
-		for e in get_tree().get_nodes_in_group("CommandExecutors"):
-			if e.alias == target_str or str(e.get_path()) == target_str or str(e.get_parent().get_path()) == target_str:
+		var group_nodes = get_tree().get_nodes_in_group("CommandExecutors")
+		# print("Debug: Dispatching to '%s'. Executors registered: %d. Group size: %d" % [target_str, _executors.size(), group_nodes.size()])
+		
+		for e in group_nodes:
+			var parent_path = str(e.get_parent().get_path())
+			# print("Debug: Check fallback: %s vs %s (Parent)" % [target_str, parent_path])
+			
+			if e.alias == target_str or str(e.get_path()) == target_str or parent_path == target_str:
 				executor = e
 				register_executor(e)
+				print("Debug: Found executor via fallback for %s" % target_str)
 				break
 				
 	if executor:
@@ -45,6 +52,15 @@ func dispatch(command: LCCommand) -> Variant:
 	else:
 		var err = "Command target not found: %s" % target_str
 		push_warning(err)
+		
+		# DIAGNOSTIC DUMP
+		var group = get_tree().get_nodes_in_group("CommandExecutors")
+		push_warning("--- DIAGNOSTICS ---")
+		push_warning("Group 'CommandExecutors' count: %d" % group.size())
+		for e in group:
+			push_warning("  Executor: %s | Parent: %s | Alias: %s" % [e.get_path(), e.get_parent().get_path(), e.alias])
+		push_warning("-------------------")
+		
 		return err
 
 ## Executes a command from a raw dictionary (e.g., from JSON/HTTP).
