@@ -37,12 +37,6 @@ LCResourceRegistry="*res://core/resources/resource_registry.gd"
 LCRecipeRegistry="*res://core/resources/recipe_registry.gd"
 LCCommandRouter="*res://core/commands/command_router.gd"
 
-[display]
-
-window/size/viewport_width=1980
-window/size/viewport_height=1080
-window/size/mode=2
-
 [editor]
 
 movie_writer/movie_file="/home/rod/Documents/lunco-movies/godot_output.avi"
