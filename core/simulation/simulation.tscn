@@ -3,6 +3,7 @@
 [ext_resource type="Script" path="res://core/simulation/simulation.gd" id="1_thahp"]
 [ext_resource type="PackedScene" uid="uid://c5dg7yq7hd7m0" path="res://core/avatar/avatar.tscn" id="2_o421v"]
 [ext_resource type="PackedScene" uid="uid://b5v4w0inqo7vd" path="res://core/space/universe.tscn" id="3_q6u50"]
+[ext_resource type="Script" path="res://core/commands/command_executor.gd" id="4_executor"]
 
 [node name="Simulation" type="Node"]
 script = ExtResource("1_thahp")
@@ -15,6 +16,9 @@ _spawnable_scenes = PackedStringArray("res://content/starship/starship.tscn", "r
 
 [node name="Universe" parent="." instance=ExtResource("3_q6u50")]
 unique_name_in_owner = true
+
+[node name="LCCommandExecutor" type="Node" parent="."]
+script = ExtResource("4_executor")
 
 [connection signal="control_declined" from="." to="Avatar" method="_on_simulation_control_declined"]
 [connection signal="control_granted" from="." to="Avatar" method="_on_simulation_control_granted"]

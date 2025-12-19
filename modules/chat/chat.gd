@@ -7,7 +7,6 @@ extends Node
 signal new_message(message: Message)
 signal private_message(message: Message)
 signal system_message(message: Message)
-signal profile_wallet_changed  # Moved from messenger
 #------------------------------------------
 
 enum MessageType {
@@ -45,12 +44,6 @@ func _ready():
 	if multiplayer.is_server():
 		multiplayer.peer_connected.connect(_on_peer_connected)
 		multiplayer.peer_disconnected.connect(_on_peer_disconnected)
-
-# Called every frame. 'delta' is the elapsed time since the previous frame.
-func _process(delta):
-	pass
-
-#------------------------------------------
 
 
 #------------------------------------------

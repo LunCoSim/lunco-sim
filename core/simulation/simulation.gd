@@ -50,18 +50,14 @@ func _ready():
 	#-----------------------------
 	if "--server" in OS.get_cmdline_args():
 		print("Server running")
-		
+
 		if use_ssl:
-			var tls_cert := X509Certificate.new()
-			var tls_key := CryptoKey.new()
-	
-			
-			#0 - no error
-			print("Loading Cert: ", tls_cert.load(certificate_path))
-			print("Loading key: ", tls_key.load(key_path))
-			var tls_options = TLSOptions.server(tls_key, tls_cert)
-			LCNet.host(9000, tls_options)
+			print("Starting secure server with SSL certificates:")
+			print("Certificate: ", certificate_path)
+			print("Private Key: ", key_path)
+			LCNet.host(9000, certificate_path, key_path)
 		else:
+			print("Starting server without SSL")
 			LCNet.host()
 
 	elif "--connect" in OS.get_cmdline_args():
@@ -73,7 +69,9 @@ func _ready():
 	ControlManager.control_released.connect(_on_control_released)
 	ControlManager.control_request_denied.connect(_on_control_request_denied)
 	
-	LCWindows.show_tutorial()
+	# Show tutorial only if user hasn't disabled it
+	if not Profile.hide_tutorial:
+		LCWindows.show_tutorial()
 	# Main menu will be shown on demand with ESC key
 	
 ## Called every frame. 'delta' is the elapsed time since the previous frame.
@@ -128,38 +126,24 @@ func request_control_by_index(entity_idx):
 	var requester_id = multiplayer.get_remote_sender_id()
 	if requester_id == 0:
 		requester_id = multiplayer.get_unique_id()
-	print("Simulation received control request for entity index: ", entity_idx, " from peer: ", requester_id)
-	if entity_idx < entities.size():
-		var entity = entities[entity_idx]
-		print("Requesting control for entity: ", entity.name)
-		if multiplayer.is_server():
-			_process_control_request(requester_id, entity.get_path())
+	print("Simulation received control request for entity index/node: ", entity_idx, " from peer: ", requester_id)
+	
+	if typeof(entity_idx) == TYPE_INT:
+		if entity_idx < entities.size():
+			var entity = entities[entity_idx]
+			print("Requesting control for entity: ", entity.name)
+			ControlManager.request_control(entity.get_path(), requester_id)
 		else:
-			requesting_control.rpc_id(1, entity.get_path())
+			print("Invalid entity index: ", entity_idx)
+	elif entity_idx is Node:
+		print("Requesting control for entity node: ", entity_idx.name)
+		ControlManager.request_control(entity_idx.get_path(), requester_id)
 	else:
-		print("Invalid entity index: ", entity_idx)
-		if multiplayer.is_server():
-			control_declined_notify.rpc_id(requester_id, NodePath(""))
-
-func _process_control_request(requester_id, path):
-	var _owner = owners.get(path) 
-		
-	if _owner == null: # TBD: Access control
-		owners[path] = requester_id
-		set_authority.rpc(path, requester_id)
-		control_granted_notify.rpc_id(requester_id, path)
-	else:
-		if _owner == requester_id:
-			release_control(path)
-		else:
-			control_declined_notify.rpc_id(requester_id, path)
+		print("Invalid entity identifier type: ", typeof(entity_idx))
 
 @rpc("any_peer", "call_local", "reliable")
 func release_control(path):
-	if multiplayer.is_server():
-		owners[path] = null 
-		set_authority.rpc(path, 1)
-		control_released_notify.rpc(path)
+	ControlManager.release_control(path)
 
 #---------------------------------------
 # Notifying about changed state
@@ -177,15 +161,12 @@ func control_released_notify(path):
 	
 func _on_control_granted(peer_id, path):
 	print("Simulation: Control granted for entity: ", path)
-	control_granted.emit(path)
 
 func _on_control_released(peer_id, entity_path: NodePath):
 	print("Simulation: Control released for entity: ", entity_path)
-	control_released.emit(entity_path)
 
 func _on_control_request_denied(peer_id, entity_path: NodePath):
 	print("Simulation: Control declined for entity: ", entity_path)
-	control_declined.emit(entity_path)
 
 @rpc("any_peer")
 func _on_avatar_requesting_control(entity_idx):
@@ -194,6 +175,39 @@ func _on_avatar_requesting_control(entity_idx):
 func _on_avatar_release_control(path: NodePath):
 	var releaser_id = multiplayer.get_remote_sender_id()
 	ControlManager.release_control(path)
+
+#---------------------------------------
+# Commands for LCCommandExecutor
+
+func cmd_spawn(args: Dictionary) -> String:
+	var type_name = args.get("type", "")
+	var entity_type = -1
+	
+	if type_name is String:
+		# Try to match enum name
+		for key in EntitiesDB.Entities.keys():
+			if key.to_lower() == type_name.to_lower():
+				entity_type = EntitiesDB.Entities[key]
+				break
+	elif type_name is float or type_name is int:
+		entity_type = int(type_name)
+		
+	if entity_type == -1:
+		return "Unknown entity type: %s" % str(type_name)
+		
+	var global_pos = null
+	if args.has("position"):
+		var p = args["position"]
+		if p is Array and p.size() >= 3:
+			global_pos = Vector3(p[0], p[1], p[2])
+		elif p is Vector3:
+			global_pos = p
+			
+	spawn.rpc_id(1, entity_type, global_pos)
+	return "Spawned %s" % EntitiesDB.Entities.keys()[entity_type]
+
+func cmd_list_entities(_args: Dictionary) -> Array:
+	return EntitiesDB.Entities.keys()
 
 #---------------------------------------
 

@@ -48,7 +48,7 @@ func _ready():
 
 	load_graph()
 	save_graph() # Hack to fix the bug that after loading form file info is deleted
-
+	
 func _connect_signals() -> void:
 	# Connect menu signals
 	var menu_bar = $UI/MenuContainer/MenuBar
@@ -226,8 +226,11 @@ func load_from_nft(token_id: int) -> void:
 # === Signal Handlers ===
 # -- Graph Edit Signals --
 func _on_connection_request(from_node: StringName, from_port: int, to_node: StringName, to_port: int) -> void:
-	if simulation.connect_nodes(from_node, from_port, to_node, to_port):
+	var result = simulation.connect_nodes(from_node, from_port, to_node, to_port)
+	if result.success:
 		graph_edit.connect_node(from_node, from_port, to_node, to_port)
+	else:
+		print("RSCT: Connection rejected: %s" % result.message)
 	save_graph()
 
 func _on_disconnection_request(from_node: StringName, from_port: int, to_node: StringName, to_port: int) -> void:
@@ -306,4 +309,33 @@ func _on_return_to_launcher_requested() -> void:
 func _on_switch_tab_requested(tab_index: int) -> void:
 	if tab_container and tab_index >= 0 and tab_index < tab_container.get_tab_count():
 		tab_container.current_tab = tab_index
+
+# === External Graph Inspection ===
+
+## Inspect an external solver graph (e.g., from a spacecraft)
+func inspect_graph(graph: LCSolverGraph):
+	if not graph:
+		return
 	
+	# Check if nodes are ready
+	if not graph_edit or not simulation:
+		push_warning("RSCT: graph_edit or simulation not ready, cannot inspect graph")
+		return
+	
+	# Clear current simulation/graph (only if simulation exists)
+	if simulation and simulation.has_method("new_simulation"):
+		simulation.new_simulation()
+	
+	# Clear UI nodes
+	if graph_edit and graph_edit.has_method("clear_graph"):
+		graph_edit.clear_graph()
+	
+	# Load the external graph into the view
+	if graph_edit and graph_edit.has_method("load_from_solver_graph"):
+		graph_edit.load_from_solver_graph(graph)
+	
+	# Disable simulation controls since we're viewing an external simulation
+	if simulation:
+		simulation.paused = true
+	
+	print("RSCT: Inspecting external solver graph with ", graph.nodes.size(), " nodes")

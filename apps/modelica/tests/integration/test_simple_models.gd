@@ -3,8 +3,6 @@ extends SceneTree
 
 class TestSimpleModels extends "res://apps/modelica/tests/base_test.gd":
 	const Parser = preload("res://apps/modelica/core/parser.gd")
-	const ModelicaASTNode = preload("res://apps/modelica/core/ast_node.gd")
-	const DAESolver = preload("res://apps/modelica/core/solver.gd")
 
 	var parser
 	var solver: DAESolver

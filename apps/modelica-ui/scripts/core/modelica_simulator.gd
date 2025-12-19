@@ -3,11 +3,7 @@ extends RefCounted
 # Import Modelica core components
 const PackageManager = preload("res://apps/modelica/core/package_manager.gd")
 const Parser = preload("res://apps/modelica/core/parser.gd")
-const SolverFactory = preload("res://apps/modelica/core/solver_factory.gd")
-const EquationSystem = preload("res://apps/modelica/core/equation_system.gd")
-const ModelicaEquation = preload("res://apps/modelica/core/equation.gd")
-const ModelicaExpression = preload("res://apps/modelica/core/expression.gd")
-const ModelicaASTNode = preload("res://apps/modelica/core/ast_node.gd")
+
 
 # Signals for UI integration
 signal simulation_progress(percent)
@@ -98,7 +94,7 @@ func load_model(file_path: String) -> Dictionary:
 # Extract a model from an AST and create an equation system
 func _extract_model_from_ast(ast: ModelicaASTNode) -> EquationSystem:
 	print("Extracting model from AST...")
-	var equation_system = EquationSystem.new()
+	var eq_system = EquationSystem.new()
 	
 	# Check if we have a valid model node
 	if ast.type != ModelicaASTNode.NodeType.MODEL:
@@ -116,7 +112,7 @@ func _extract_model_from_ast(ast: ModelicaASTNode) -> EquationSystem:
 				
 		if not found_model:
 			print("Error: No model node found in AST")
-			return equation_system  # Return empty equation system
+			return eq_system  # Return empty equation system
 	
 	print("Processing model: ", ast.value, " (Type: ", ModelicaASTNode.NodeType.keys()[ast.type], ")")
 	
@@ -135,7 +131,7 @@ func _extract_model_from_ast(ast: ModelicaASTNode) -> EquationSystem:
 						break
 			
 			print("Adding parameter: ", param_name, " = ", param_value)
-			equation_system.add_variable(param_name, {
+			eq_system.add_variable(param_name, {
 				"is_parameter": true,
 				"value": param_value
 			})
@@ -155,7 +151,7 @@ func _extract_model_from_ast(ast: ModelicaASTNode) -> EquationSystem:
 						initial_value = float(attribute.children[0].value)
 			
 			print("Adding variable: ", var_name, " (is_state=", is_state, ", value=", initial_value, ")")
-			equation_system.add_variable(var_name, {
+			eq_system.add_variable(var_name, {
 				"is_state": is_state,
 				"value": initial_value
 			})
@@ -174,10 +170,10 @@ func _extract_model_from_ast(ast: ModelicaASTNode) -> EquationSystem:
 				
 				print("Adding equation: ", str(left_expr), " = ", str(right_expr))
 				var equation = ModelicaEquation.new(eq_type, left_expr, right_expr)
-				equation_system.add_equation(equation)
+				eq_system.add_equation(equation)
 	
-	print("Model extraction complete. Variables: ", equation_system.variables.size(), ", Equations: ", equation_system.equations.size())
-	return equation_system
+	print("Model eeq_systemxtraction complete. Variables: ", eq_system.variables.size(), ", Equations: ", equation_system.equations.size())
+	return eq_system
 
 # Create a ModelicaExpression from an AST node
 func _create_expression(expr_node) -> ModelicaExpression:
@@ -229,71 +225,7 @@ func _create_expression(expr_node) -> ModelicaExpression:
 			print("Warning: Unsupported expression node type: ", ModelicaASTNode.NodeType.keys()[node_type])
 			return ModelicaExpression.create_constant(0.0)
 
-# Create a simple spring-mass-damper model for testing
-func _create_test_model() -> EquationSystem:
-	print("Creating test spring-mass-damper model...")
-	var equation_system = EquationSystem.new()
-	
-	# Add parameters
-	equation_system.add_variable("m", {
-		"is_parameter": true,
-		"value": 1.0
-	})
-	
-	equation_system.add_variable("k", {
-		"is_parameter": true,
-		"value": 10.0
-	})
-	
-	# Add state variables
-	equation_system.add_variable("x", {
-		"is_state": true,
-		"value": 1.0  # Initial position
-	})
-	
-	equation_system.add_variable("v", {
-		"is_state": true,
-		"value": 0.0  # Initial velocity
-	})
-	
-	# Add equations
-	# Equation 1: der(x) = v
-	var der_x = ModelicaExpression.create_derivative("x")
-	var var_v = ModelicaExpression.create_variable("v")
-	var eq1 = ModelicaEquation.new(
-		ModelicaEquation.EquationType.DIFFERENTIAL,
-		der_x,
-		var_v
-	)
-	equation_system.add_equation(eq1)
-	
-	# Equation 2: Simple spring force: der(v) = -k/m * x
-	var der_v = ModelicaExpression.create_derivative("v")
-	
-	# Create -k/m * x
-	var var_k = ModelicaExpression.create_variable("k")
-	var var_m = ModelicaExpression.create_variable("m")
-	var var_x = ModelicaExpression.create_variable("x")
-	
-	# First calculate k/m
-	var k_div_m = ModelicaExpression.create_operator("/", [var_k, var_m])
-	
-	# Then multiply by x
-	var k_div_m_times_x = ModelicaExpression.create_operator("*", [k_div_m, var_x])
-	
-	# Then negate it (creating a constant -1 and multiplying)
-	var neg_one = ModelicaExpression.create_constant(-1.0)
-	var right_side = ModelicaExpression.create_operator("*", [neg_one, k_div_m_times_x])
-	
-	var eq2 = ModelicaEquation.new(
-		ModelicaEquation.EquationType.DIFFERENTIAL,
-		der_v,
-		right_side
-	)
-	equation_system.add_equation(eq2)
-	
-	print("Test model created. Variables: ", equation_system.variables.size(), ", Equations: ", equation_system.equations.size())
-	return equation_system
+
 
 # Setup the model and solver for simulation
 func setup_model(ast, start_time: float, end_time: float, step_size: float) -> Dictionary:
@@ -312,7 +244,7 @@ func setup_model(ast, start_time: float, end_time: float, step_size: float) -> D
 	# If the model extraction didn't work well, use a test model
 	if equation_system.equations.size() == 0 or equation_system.variables.size() == 0:
 		print("Warning: Could not extract model properly. Using test model instead.")
-		equation_system = _create_test_model()
+		
 	
 	# Create a solver for the equation system
 	# First try RK4 solver
@@ -449,4 +381,4 @@ func export_to_csv(results: Array, file_path: String) -> bool:
 	
 	file.close()
 	print("Exported results to: ", file_path)
-	return true 
+	return true

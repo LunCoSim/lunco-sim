@@ -1,14 +1,14 @@
 class_name HttpResponse
 extends RefCounted
 
-var client: StreamPeerTCP
+var client  # Can be StreamPeerTCP or StreamPeerTLS
 var headers: Dictionary = {}
 var status_code: int = 200
 var status_message: String = "OK"
 var content_type: String = "text/html"
 var body: String = ""
 
-func _init(client_connection: StreamPeerTCP):
+func _init(client_connection):  # Can be StreamPeerTCP or StreamPeerTLS
 	client = client_connection
 	
 	# Set default headers

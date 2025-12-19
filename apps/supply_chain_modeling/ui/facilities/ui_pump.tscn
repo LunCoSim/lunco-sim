@@ -1,18 +1,17 @@
-[gd_scene load_steps=2 format=3 uid="uid://c4iqxvxvxvxvx"]
+[gd_scene load_steps=2 format=3]
 
-[ext_resource type="Script" uid="uid://ck0ya0dlsxygw" path="res://apps/supply_chain_modeling/ui/resources/ui_resource_h2.gd" id="1_bklm3"]
+[ext_resource type="Script" path="res://apps/supply_chain_modeling/ui/facilities/ui_simple_facility.gd" id="1_newscript"]
 
-[node name="Pump" type="GraphNode"]
+[node name="Pump" type="GraphNode" unique_id=418741251]
 offset_right = 152.0
 offset_bottom = 109.0
-title = "Pump"
-show_close = true
 resizable = true
+title = "Pump"
 slot/0/left_enabled = true
 slot/0/left_type = 0
 slot/0/left_color = Color(0, 0, 1, 1)
 slot/0/left_icon = null
-slot/0/right_enabled = true
+slot/0/right_enabled = false
 slot/0/right_type = 0
 slot/0/right_color = Color(0, 0, 1, 1)
 slot/0/right_icon = null
@@ -26,12 +25,35 @@ slot/1/right_type = 0
 slot/1/right_color = Color(1, 1, 0, 1)
 slot/1/right_icon = null
 slot/1/draw_stylebox = true
-script = ExtResource("1_bklm3")
+slot/2/left_enabled = false
+slot/2/left_type = 0
+slot/2/left_color = Color(0, 0, 1, 1)
+slot/2/left_icon = null
+slot/2/right_enabled = true
+slot/2/right_type = 0
+slot/2/right_color = Color(0, 0, 1, 1)
+slot/2/right_icon = null
+slot/2/draw_stylebox = true
+script = ExtResource("1_newscript")
 
-[node name="ResourceFlow" type="Label" parent="."]
+[node name="Row1" type="HBoxContainer" parent="."]
 layout_mode = 2
-text = "Resource Flow"
 
-[node name="PowerInput" type="Label" parent="."]
+[node name="Inlet" type="Label" parent="Row1"]
 layout_mode = 2
-text = "Power Input" 
+text = "Inlet"
+
+[node name="Row2" type="HBoxContainer" parent="."]
+layout_mode = 2
+
+[node name="PowerInput" type="Label" parent="Row2"]
+layout_mode = 2
+text = "Power Input"
+
+[node name="Row3" type="HBoxContainer" parent="."]
+layout_mode = 2
+alignment = 2
+
+[node name="Outlet" type="Label" parent="Row3"]
+layout_mode = 2
+text = "Outlet"

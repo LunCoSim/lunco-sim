@@ -13,6 +13,8 @@ signal profile_changed()
 @export var wallet: String : set = set_wallet
 @export var has_profile: int : set = set_has_profile
 @export var is_artizen_buyer: bool : set = set_is_artizen_buyer
+@export var hide_tutorial: bool : set = set_hide_tutorial
+@export var auto_reconnect: bool = false : set = set_auto_reconnect
 
 const FILENAME = "profile.cfg"
 const PATH = "user://"
@@ -21,12 +23,15 @@ const FULLPATH = PATH + FILENAME
 const SECTION = "Profile"
 #----------------------------------
 
+var _is_loading = false  # Flag to prevent saving during load
 var _on_wallet_connected_callback
 var _on_check_profile_nft_callback
 
 # Called when the node enters the scene tree for the first time.
 func _init():
+	_is_loading = true
 	load_profile()
+	_is_loading = false
 	_on_wallet_connected_callback = JavaScriptBridge.create_callback(on_wallet_connected)
 	_on_check_profile_nft_callback = JavaScriptBridge.create_callback(on_check_profile_nft)
 
@@ -35,16 +40,16 @@ func _init():
 func set_username(new_username):
 	if username != new_username:
 		username = new_username
-		save_profile()
-		profile_changed.emit()
+		if not _is_loading:
+			save_profile()
+			profile_changed.emit()
 
 func set_wallet(new_wallet):
 	if wallet != new_wallet:
 		wallet = new_wallet
-		save_profile()
-		if Chat:
-			Chat.profile_wallet_changed.emit()
-		profile_changed.emit()
+		if not _is_loading:
+			save_profile()
+			profile_changed.emit()
 
 func set_has_profile(_has_profile):
 	if has_profile != _has_profile:
@@ -57,8 +62,26 @@ func set_has_profile(_has_profile):
 func set_is_artizen_buyer(_is_artizen_buyer):
 	if is_artizen_buyer != _is_artizen_buyer:
 		is_artizen_buyer = _is_artizen_buyer
-		save_profile()
-		profile_changed.emit()
+		if not _is_loading:
+			save_profile()
+			profile_changed.emit()
+
+func set_hide_tutorial(_hide_tutorial):
+	if hide_tutorial != _hide_tutorial:
+		hide_tutorial = _hide_tutorial
+		if not _is_loading:
+			save_profile()
+			profile_changed.emit()
+
+func set_auto_reconnect(_auto_reconnect):
+	if auto_reconnect != _auto_reconnect:
+		auto_reconnect = _auto_reconnect
+		if not _is_loading:
+			save_profile()
+			profile_changed.emit()
+			# Update LCNet setting
+			if LCNet:
+				LCNet.auto_reconnect = _auto_reconnect
 
 #----------------------------------
 func login():
@@ -119,19 +142,29 @@ func save_profile():
 	config.set_value(SECTION, "wallet", wallet)
 	config.set_value(SECTION, "has_profile", has_profile)
 	config.set_value(SECTION, "is_artizen_buyer", is_artizen_buyer)
+	config.set_value(SECTION, "hide_tutorial", hide_tutorial)
+	config.set_value(SECTION, "auto_reconnect", auto_reconnect)
 
 	# Save it to a file (overwrite if already exists).
 	config.save(FULLPATH)
 
 func load_profile():
-	var score_data = {}
 	var config = ConfigFile.new()
 
 	# Load data from a file.
 	var err = config.load(FULLPATH)
-
 	
+	if err != OK:
+		print("[Profile] Failed to load profile from ", FULLPATH, ". Error code: ", err)
+		# Profile file doesn't exist or failed to load, will use default values
+		return
+	
+	# Load values - setters won't trigger save because _is_loading is true
 	username = config.get_value(SECTION, "username", "")
 	wallet = config.get_value(SECTION, "wallet", "")
 	has_profile = config.get_value(SECTION, "has_profile", 0)
 	is_artizen_buyer = config.get_value(SECTION, "is_artizen_buyer", false)
+	hide_tutorial = config.get_value(SECTION, "hide_tutorial", false)
+	auto_reconnect = config.get_value(SECTION, "auto_reconnect", false)  # Default to false
+	
+	print("[Profile] Loaded successfully: hide_tutorial = ", hide_tutorial, ", auto_reconnect = ", auto_reconnect)

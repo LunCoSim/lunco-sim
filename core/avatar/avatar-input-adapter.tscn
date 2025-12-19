@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3 uid="uid://bvh8xj3m4qn7k"]
+
+[ext_resource type="Script" path="res://core/avatar/avatar-input-adapter.gd" id="1_avatar_input"]
+
+[node name="AvatarInputAdapter" type="Node"]
+script = ExtResource("1_avatar_input")

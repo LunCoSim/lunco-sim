@@ -12,8 +12,11 @@ func _init():
 	set_slot_color_right(0, Color.WHITE)
 
 func _ready():
-	# Disable left slot (resources are sources)
-	set_slot_enabled_left(0, false)
+	# Enable left slot to allow refilling or chaining
+	set_slot_enabled_left(0, true)
+	set_slot_type_left(0, 0)
+	set_slot_color_left(0, Color.WHITE)
+
 	
 	# Set up basic appearance
 	size = Vector2(150, 80)  # Default size

@@ -1,12 +1,55 @@
-# Class lnAvatar which inherits from lnSpaceSystem
+## Avatar - The Player's Agent in the World
+##
+## Avatar serves as the intermediary between the USER and the SYSTEM, acting as the player's
+## viewport and control interface into the simulation world.
+##
+## ARCHITECTURAL ROLE:
+## - User Interface Layer: Handles how the player sees and interacts with the world
+## - Input Coordinator: Manages when and how different input systems are active
+## - Visualization Manager: Controls camera settings and view preferences
+## - Entity Controller: Coordinates control requests and entity targeting
+##
+## RESPONSIBILITIES:
+## 1. Camera Management
+##    - Handles camera input (rotation, zoom)
+##    - Manages camera settings per controller type
+##    - Controls mouse capture mode for camera rotation
+##
+## 2. Input Coordination
+##    - Enables/disables input adapters based on context
+##    - Routes keyboard shortcuts (entity selection, spawning)
+##    - Manages input priority (UI vs gameplay)
+##
+## 3. Entity Control
+##    - Targets entities for control
+##    - Sends control requests to ControlManager
+##    - Manages control release
+##
+## 4. UI Management
+##    - Owns and coordinates UI components
+##    - Updates entity lists
+##    - Manages UI display states
+##
+## 5. Raycasting & Interaction
+##    - Handles click-to-select entities
+##    - Manages NFT spawning interactions
+##    - Coordinates with display managers
+##
+## DESIGN PHILOSOPHY:
+## Avatar is CLIENT-SIDE ONLY and never synchronized over network.
+## Each player has their own Avatar instance with their own camera and UI.
+## Avatar coordinates but delegates implementation to specialized classes:
+## - Input adapters handle controller-specific input
+## - Controllers handle entity behavior
+## - UI classes handle interface rendering
+##
 @icon("res://core/avatar/avatar.svg")
 class_name LCAvatar
 extends LCSpaceSystem
 
-#-------------------------------
-# Declaring signals
-signal create(path_to_scene)
-
+#===============================================================================
+# SIGNALS - Communication with other systems
+#===============================================================================
 signal spawn_entity(entity, position)
 
 signal target_changed(target)
@@ -14,46 +57,60 @@ signal target_changed(target)
 signal requesting_control(entity_idx)
 signal release_control
 
-#-------------------------------
-# Constants for mouse sensitivity and ray length
+#===============================================================================
+# CONSTANTS - Configuration values
+#===============================================================================
 const MOUSE_SENSITIVITY = 0.015
 const RAY_LENGTH = 10000
 const SPEED = 5.0
 const JUMP_VELOCITY = 4.5
 const ZOOM_SPEED = 0.1
 const WHEEL_ZOOM_INCREMENT = 0.1  # Add default value for wheel zoom
+const DEVICE_ID_REMOTE = 7 # Dedicated device ID for remote artificial events
 
-#-------------------------------
-# Exporting target variable and setting default mouse control to false
+#===============================================================================
+# EXPORTS - Editor-configurable properties
+#===============================================================================
 @export var target: Node3D
 @export var entity_to_spawn = EntitiesDB.Entities.Astronaut
-@export var selection: = []
 
 @export var CATCH_CAMERA := true
 
-#-------------------------------
-# Defining UI and camera variables
+#===============================================================================
+# COMPONENTS - Child nodes and references
+#===============================================================================
 @onready var ui := $UI
 @onready var camera:SpringArmCamera = $SpringArmCamera
 @onready var ui_display_manager := $UiDisplayManager
 
-#------------------------------
-# Internal state
+#===============================================================================
+# STATE - Internal runtime state
+#===============================================================================
 var mouse_control := false
 var controller: LCController
 
-var UIs: = [] # TBD Global, e.g. at entity level. Each Entity has it's path to UI, Path to controller
-var Controllers = [] # TBD Global
+#===============================================================================
+# ENTITY TARGETING & CONTROL - Managing what the player controls
+#===============================================================================
 
-#-------------------------------
-# Function set_target sets the target, searches for a controller and calls state transited
+## Sets the target entity/controller for the player to control
+## Handles controller resolution and camera exclusion
 func set_target(_target):
 	print("Set target: ", _target)
 	if camera and target:
 		camera.remove_excluded_object(controller.get_parent())
 	
 	if controller:
-		release_control.emit(controller.get_parent().get_path())
+		var current_entity = controller.get_parent()
+		var new_entity = _target
+		
+		# Resolve new_entity if _target is a controller
+		if _target is LCController:
+			new_entity = _target.get_parent()
+			
+		# Only release if we are switching to a DIFFERENT entity
+		if current_entity != new_entity:
+			release_control.emit(controller.get_parent().get_path())
 	
 	target = _target
 	#searching for controller
@@ -69,14 +126,18 @@ func set_target(_target):
 	_on_state_transited()
 	return controller
 
-# Function set_camera sets the camera and make it current if camera exists
+## Sets the camera and makes it current if CATCH_CAMERA is enabled
 func set_camera(_camera):
 	camera = _camera
 	if camera and CATCH_CAMERA:
 		camera.set_current()
 
-#-------------------------------
-# Defining different functions for handling player controls like select, rotate, move, etc.
+#===============================================================================
+# INITIALIZATION - Setup and signal connections
+#===============================================================================
+
+## Called when Avatar enters the scene tree
+## Sets up camera, target, and connects to ControlManager signals
 func _ready():
 	# Add to group for easier identification
 	add_to_group("avatar")
@@ -85,39 +146,52 @@ func _ready():
 	set_target(target)
 	ControlManager.control_granted.connect(_on_control_granted)
 	ControlManager.control_request_denied.connect(_on_control_request_denied)
+	ControlManager.control_released.connect(ui._on_control_released)
+	ControlManager.control_granted.connect(ui._on_control_granted)
+	ControlManager.control_request_denied.connect(ui._on_control_request_denied)
 	
 	# Initialize the UiDisplayManager if it exists
 	if not ui_display_manager and has_node("UiDisplayManager"):
 		ui_display_manager = get_node("UiDisplayManager")
 		print("Avatar: Found UiDisplayManager: ", ui_display_manager)
 
+	# Add FloatingScreenManager
+	var floating_manager = load("res://apps/3dsim/managers/floating_screen_manager.gd").new()
+	floating_manager.name = "FloatingScreenManager"
+	add_child(floating_manager)
+
 #-----------------------------------------------------
 
 # Add these new constants
+#===============================================================================
+# NFT SYSTEM - NFT sphere spawning and popup management
+#===============================================================================
+
+# Preload NFT-related scenes
 const NFT_SPHERE_SCENE = preload("res://core/facilities/nft-sphere.tscn")
 const POPUP_SCENE = preload("res://core/widgets/nft-create-popup.tscn")
 
-# Add this as a class variable
+# Active popup tracking
 var active_popup: Control = null
 
-# Modify the spawn_nft_sphere function to use RPC
+## Spawns an NFT sphere in the world (synchronized via RPC)
 @rpc("any_peer", "call_local")
-func spawn_nft_sphere(nft_data: Dictionary, position: Vector3):
+func spawn_nft_sphere(nft_data: Dictionary, spawn_position: Vector3):
 	var nft_sphere = NFT_SPHERE_SCENE.instantiate()
 	nft_sphere.set_nft_data(nft_data)
 	%Universe.add_child(nft_sphere)
-	nft_sphere.global_transform.origin = position + Vector3(0, 1, 0)  # Offset slightly above the ground
+	nft_sphere.global_transform.origin = spawn_position + Vector3(0, 1, 0)  # Offset slightly above the ground
 	print("Spawned NFT sphere at position: ", nft_sphere.global_transform.origin)
 	print("NFT data set: ", nft_data)  # Debug print
 
 # Modify the _on_nft_issued function to use RPC
-func _on_nft_issued(nft_data, position: Vector3):
+func _on_nft_issued(nft_data, spawn_position: Vector3):
 	print("NFT issued with data: ", nft_data)  # Debug print
 	if multiplayer.is_server():
-		spawn_nft_sphere.rpc(nft_data, position)
+		spawn_nft_sphere.rpc(nft_data, spawn_position)
 	else:
 		# Send to server for validation and distribution
-		spawn_nft_sphere.rpc_id(1, nft_data, position)
+		spawn_nft_sphere.rpc_id(1, nft_data, spawn_position)
 	active_popup.queue_free()
 	active_popup = null  # Clear the active popup reference
 
@@ -152,17 +226,22 @@ func do_raycast_nft(from: Vector3, to: Vector3):
 	return space_state.intersect_ray(query)
 
 # Add these new functions
-func show_nft_popup(position: Vector3):
+func show_nft_popup(spawn_position: Vector3):
 	active_popup = POPUP_SCENE.instantiate()
 	add_child(active_popup)
 
-	active_popup.connect("nft_issued", Callable(self, "_on_nft_issued").bind(position))
+	active_popup.connect("nft_issued", Callable(self, "_on_nft_issued").bind(spawn_position))
 	active_popup.connect("tree_exited", Callable(self, "_on_popup_closed"))
 
 func _on_popup_closed():
 	active_popup = null  # Clear the active popup reference when it's closed
 
-# Modify the _input function to better handle UI display input
+#===============================================================================
+# INPUT HANDLING - Keyboard shortcuts and input coordination
+#===============================================================================
+
+## Main input handler - coordinates all input systems
+## Routes keyboard shortcuts and manages input adapter states
 func _input(event):
 	# Only handle UI-related input if a display is active
 	if ui_display_manager and ui_display_manager.is_display_active():
@@ -180,7 +259,11 @@ func _input(event):
 		if event is InputEventKey:
 			var handled = ui_display_manager.process_key_event(event)
 			if handled:
-				get_viewport().set_input_as_handled()
+				# For the console, we want to block avatar's internal shortcuts
+				# BUT we must let the event reach the LineEdit focus phase.
+				# In Godot, marking handled here BLOCKS the LineEdit from receiving it.
+				if ui_display_manager.get_active_display() != "console" or event.keycode == KEY_ESCAPE:
+					get_viewport().set_input_as_handled()
 				return
 			
 			# Special case for Escape key to close ModelicaUI
@@ -253,27 +336,24 @@ func _input(event):
 	# Handle camera/movement controls when no UI display is active 
 	# or when UI is visible but not active
 	if ui_display_manager == null or not ui_display_manager.is_display_active():
-		if target == null:
-			var motion_direction := Vector3(
-				Input.get_action_strength("move_left") - Input.get_action_strength("move_right"),
-				Input.get_action_strength("move_up") - Input.get_action_strength("move_down"),
-				Input.get_action_strength("move_forward") - Input.get_action_strength("move_back")
-			)
-			$AvatarController.direction = motion_direction
+		# Enable/disable avatar input adapter based on whether we have a target
+		# When target is null, avatar can move freely
+		# When target is set, avatar is controlling an entity
+		if has_node("AvatarInputAdapter"):
+			$AvatarInputAdapter.set_process(target == null)
+		
+		# Always update camera basis for avatar controller
+		if camera and has_node("AvatarController"):
 			$AvatarController.camera_basis = camera.get_camera_rotation_basis()
-			
-			if Input.is_key_pressed(KEY_ALT):
-				$AvatarController.speed = 100
-			elif Input.is_key_pressed(KEY_SHIFT):
-				$AvatarController.speed = 20
-			else:
-				$AvatarController.speed = 10
-		else:
-			$AvatarController.direction = Vector3.ZERO
 		
 	input_camera(event)
-	input_operator(event)
 
+#===============================================================================
+# CAMERA INPUT - Camera rotation and zoom controls
+#===============================================================================
+
+## Handles camera rotation (mouse/keyboard) and zoom (wheel/keyboard)
+## Manages mouse capture mode for camera control
 func input_camera(event):
 	# Rotating camera
 	if Input.is_action_pressed("rotate_camera"):
@@ -316,6 +396,11 @@ func input_operator(event):
 		var operator: LCOperatorController = target
 		operator.orient(camera.get_plain_basis())
 		
+#===============================================================================
+# RAYCASTING & INTERACTION - Click-to-select and world interaction
+#===============================================================================
+
+## Performs raycast from screen position for entity selection or spawning
 func action_raycast(_position: Vector2):
 	if camera:  
 		var from = camera.project_ray_origin(_position)
@@ -338,6 +423,12 @@ func do_raycast(from: Vector3, to: Vector3):
 			requesting_control.emit(result.collider)
 #------------------------------------------------------
 # Function _on_state_transited instantiates different ui based on target and sets camera spring length
+#===============================================================================
+# STATE TRANSITIONS - Camera settings per controller type
+#===============================================================================
+
+## Called when target changes - applies appropriate camera settings
+## Avatar owns visualization preferences for each controller type
 func _on_state_transited():
 
 	camera.set_follow_height(0.5)
@@ -362,23 +453,26 @@ func _on_state_transited():
 	if camera != null:
 		camera.target = target
 
-# Entities are tracked by simulation, and simulation sh
+# Entities are tracked by simulation
+# Avatar delegates entity list updates to UI
+# This method is called by simulation when entities are updated
 func update_entities(entities):
-	$UI.update_entities(entities)
-	
-# Function camera_global_position returns the global position of the camera
+	if ui:
+		ui.update_entities(entities)
+
 func camera_global_position():
 	return camera.global_position
 
-#---------------------------------
+#===============================================================================
+# SIGNAL HANDLERS - Responding to control events and user actions
+#===============================================================================
 
-var controlled_entities = []
-
-func _on_select_entity_to_spawn(entity_id=0, position=null):
+## Handles entity spawning requests from UI
+func _on_select_entity_to_spawn(entity_id=0, spawn_position=null):
 	if is_multiplayer_authority():
-		get_parent().spawn.rpc_id(1, entity_id, position)
+		get_parent().spawn.rpc_id(1, entity_id, spawn_position)
 	else:
-		get_parent().spawn.rpc_id(1, entity_id, position)
+		get_parent().spawn.rpc_id(1, entity_id, spawn_position)
 
 func _on_existing_entity_selected(idx):
 	print("Avatar: Requesting control for entity index: ", idx)
@@ -449,3 +543,132 @@ func _is_click_on_modelica_display(click_position: Vector2) -> bool:
 			return true
 	
 	return false
+
+#===============================================================================
+# REMOTE CONTROL COMMANDS - Commands for remote execution
+#===============================================================================
+
+func cmd_take_control(args: Dictionary) -> String:
+	var target_id = args.get("target")
+	if target_id == null:
+		return "Missing target argument"
+		
+	if target_id is float or target_id is int:
+		_on_existing_entity_selected(int(target_id))
+		return "Requested control for entity index: %d" % int(target_id)
+	elif target_id is String:
+		# Try to find node by name or path
+		var target_node = get_tree().root.find_child(target_id, true, false)
+		if target_node:
+			ControlManager.request_control(target_node.get_path(), multiplayer.get_unique_id())
+			return "Requested control for node: %s" % target_node.name
+		else:
+			return "Entity not found: %s" % target_id
+			
+	return "Invalid target type"
+
+func cmd_stop_control(_args: Dictionary) -> String:
+	request_release_control()
+	return "Control released"
+
+# Track keys held down by remote console to re-apply them every frame
+var held_remote_keys = {}
+
+func _physics_process(_delta):
+	# Re-apply held keys state aggressively every physics frame.
+	# We use parse_input_event to trigger _input/unhandled_input logic 
+	# and action_press to update polling-based systems.
+	# This helps overcome Focus Loss resets in Godot.
+	for key_str in held_remote_keys:
+		var keycode = held_remote_keys[key_str]
+		var event = InputEventKey.new()
+		event.device = DEVICE_ID_REMOTE
+		event.pressed = true
+		event.keycode = keycode
+		event.physical_keycode = keycode
+		event.echo = true # Mark as echo to show it's continuous
+		
+		# Update global action state
+		for action in InputMap.get_actions():
+			if InputMap.event_is_action(event, action):
+				Input.action_press(action, 1.0)
+		
+		# Trigger event-based input processing
+		Input.parse_input_event(event)
+
+func cmd_key_down(args: Dictionary) -> String:
+	var key_str = args.get("key", "")
+	
+	# Mark as remote to bypass UI capture
+	var result = _mimic_key(key_str, true)
+	
+	# Store in held keys if successful
+	if not result.begins_with("Unknown"):
+		# Extract keycode from result or find again
+		var keycode = OS.find_keycode_from_string(key_str)
+		if keycode == KEY_NONE: keycode = OS.find_keycode_from_string(key_str.to_upper())
+		if keycode != KEY_NONE:
+			held_remote_keys[key_str.to_lower()] = keycode
+			
+	return result
+
+func cmd_key_up(args: Dictionary) -> String:
+	var key_str = args.get("key", "")
+	held_remote_keys.erase(key_str.to_lower())
+	return _mimic_key(key_str, false)
+
+func get_held_remote_keys() -> Dictionary:
+	return held_remote_keys
+
+func cmd_key_press(args: Dictionary) -> String:
+	var key_str = args.get("key", "")
+	_mimic_key(key_str, true)
+	# Add a small delay for the release event so the game logic has time to detect the press
+	get_tree().create_timer(0.1).timeout.connect(func(): 
+		held_remote_keys.erase(key_str.to_lower()) # Also ensure it's removed from held
+		_mimic_key(key_str, false)
+	)
+	return "Key pressed: %s" % key_str
+
+func _mimic_key(key_str: String, pressed: bool) -> String:
+	if key_str == "":
+		return "Missing key argument"
+		
+	# OS.find_keycode_from_string is available in most Godot 4 versions 
+	# as an alternative to the newer DisplayServer method.
+	var keycode = KEY_NONE
+	if OS.has_method("find_keycode_from_string"):
+		keycode = OS.find_keycode_from_string(key_str)
+		if keycode == KEY_NONE:
+			keycode = OS.find_keycode_from_string(key_str.to_upper())
+			
+	if keycode == KEY_NONE:
+		return "Unknown key: %s" % key_str
+		
+	var event = InputEventKey.new()
+	event.device = DEVICE_ID_REMOTE
+	event.pressed = pressed
+	event.keycode = keycode
+	event.physical_keycode = keycode
+	event.echo = false
+	
+	# Detect actions for this key for debug and aggressive state management
+	var matched_actions = []
+	for action in InputMap.get_actions():
+		if InputMap.event_is_action(event, action):
+			matched_actions.append(action)
+			if pressed:
+				Input.action_press(action, 1.0) # Explicitly set strength to 1.0
+			else:
+				Input.action_release(action)
+	
+	if pressed:
+		print("DEBUG: _mimic_key key=%s pressed=%s keycode=%d actions=%s" % [key_str, pressed, keycode, matched_actions])
+	
+	# Pass to global input system to trigger _input/unhandled_input callbacks
+	Input.parse_input_event(event)
+				
+	return "Key %s: %s (code: %d, actions: %s)" % ["down" if pressed else "up", key_str, keycode, matched_actions]
+
+static func is_remote_event(event: InputEvent) -> bool:
+	return event != null and event.device == DEVICE_ID_REMOTE

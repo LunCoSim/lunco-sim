@@ -12,6 +12,16 @@ This project combines two cutting-edge domains:
 - Multiple mission scenarios (Apollo 17, Artemis 3, Swarm operations, Night survival)
 - Hardware-in-the-loop simulation capabilities
 
+# LunCoSim: Everyone can do Space
+
+LunCoSim is an open-source, collaborative space simulation platform designed for planning lunar & and space missions, engineering complex systems, and training future space explorers. 
+
+## [Try in Browser](https://alpha.lunco.space)
+
+![](https://gateway.lighthouse.storage/ipfs/bafybeidjpafb6zg5lalug7z5sfzvszh2erskbbdqcloejr2asex2lfg4ky)
+
+Built on the powerful **Godot 4** engine, it bridges the gap between gaming and professional space engineering.
+
 ### **Bio-Cochlea Technology**
 - Personal bio-integrated cognitive interface
 - Multi-layered transduction system
@@ -39,6 +49,50 @@ This project combines two cutting-edge domains:
 - Real-time data animations
 
 ## 🛠️ Technology Stack
+## 🚀 Why LunCoSim?
+
+-   **Real Engineering, Gamified**: We use real physical models (Modelica integration) and engineering constraints, but accessible enough for enthusiasts.
+-   **Multiplayer Mission Control**: Run missions with friends! One person drives the rover, another monitors telemetry, and a third manages the power grid.
+-   **Digital Twin Capability**: Design your lunar base, simulate its operations, and validate requirements before bending a single piece of metal.
+-   **Open & Extensible**: Built on open standards. Control your entities via Python scripts, HTTP API, or custom plugins.
+
+## 🌟 Features
+
+### 🎮 Simulation & Control
+-   **Multi-Entity Control**: Take direct control of 4 types of units:
+    -   **Astronauts**: EVA activities and manual tasks.
+    -   **Operators**: Remote presence and drone control.
+    -   **Rovers**: Driving and surface operations.
+    -   **Spacecraft**: Orbital maneuvers and landing.
+-   **Solver-Based Physics**: Complex interactions (power, thermal, data) are simulated using a graph-based solver, not just simple game logic.
+
+### 🤝 Collaboration
+-   **Network Mode**: Host or join sessions. Work together in the same shared environment.
+-   **"With Friends"**: Collaborative training scenarios where coordination is key to mission success.
+
+### 🛠️ Engineering Tools
+-   **Telemetry & OpenMCT**: Stream real-time data to NASA's OpenMCT dashboard for professional-grade mission monitoring.
+-   **Supply Chain Modeling**: Visualize and optimize resource flows (Oxygen, Hydrogen, Power) using a node-based graph editor.
+-   **Modelica Support**: Integrate high-fidelity physics models for specialized components.
+
+### 🔌 Extensibility
+-   **HTTP API**: Send commands to the simulation from external tools.
+-   **Python Bridge**: Write your own control scripts in Python.
+-   **Custom Models**: Import your own vehicles and assets.
+
+## 📚 Documentation
+
+### For Users
+-   **[Control Guide](docs/UserGuide/ControlEntities.md)**: How to control Rovers, Astronauts, and more.
+-   **[Collaborative Missions](docs/UserGuide/CollaborativeMission.md)**: Setting up multiplayer sessions.
+-   **[Supply Chain](docs/UserGuide/SupplyChain.md)**: Using the resource graph view.
+
+### For Engineers & Developers
+-   **[Architecture Overview](docs/Technical/Architecture.md)**: System design and "Effector" pattern.
+-   **[Telemetry Setup](docs/Technical/Telemetry.md)**: Connecting to OpenMCT.
+-   **[HTTP API Reference](docs/Technical/HTTP_API.md)**: Integrating external tools.
+-   **[Modelica Integration](docs/Technical/Modelica_Integration.md)**: Advanced physics modeling.
+-   **[Custom Models](docs/Technical/Custom_Models.md)**: Creating new entities.
 
 - **Frontend**: Next.js 15 with TypeScript
 - **UI Components**: shadcn/ui with Tailwind CSS
@@ -186,6 +240,21 @@ The application will be available at `http://localhost:3000`
 npm run build
 npm start
 ```
+3. Clone this repo in a terminal: 
+    ```bash
+    git clone -b main --single-branch --recurse-submodules https://github.com/LunCoSim/lunco-sim.git
+    ```
+
+4. After cloning, change directory to project folder
+    ```bash
+    cd lunco-sim
+    ```
+
+5. Enable git-lfs in the repository after cloning: 
+    ```bash
+    git lfs install
+    git lfs pull && git submodule foreach git lfs pull
+    ```
 
 ## 📊 API Endpoints
 
@@ -263,3 +332,8 @@ For questions, suggestions, or collaborations:
 > *"A golden ear to the world—listening, harmonizing, and thinking in tune."*
 
 **LunCoSim × Bio-Cochlea Interface** - Where lunar exploration meets cognitive enhancement.
+## 💖 Support Us
+
+Support development on [JuiceBox](https://juicebox.money/v2/p/763)!
+
+## Want to contribute? Apply [here](https://tally.so/r/3jX6aE)

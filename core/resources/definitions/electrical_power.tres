@@ -1,0 +1,19 @@
+[gd_resource type="Resource" script_class="LCResourceDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://core/resources/resource_definition.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+resource_id = "electrical_power"
+display_name = "Electrical Power"
+description = "Electrical energy in Watt-hours"
+category = "energy"
+density = 0.0
+specific_heat = 0.0
+phase_at_stp = "energy"
+can_flow = true
+requires_pressure = false
+requires_temperature_control = false
+flow_rate_multiplier = 10.0
+color = Color(1.0, 1.0, 0.0, 1)
+tags = PackedStringArray("energy", "instant")

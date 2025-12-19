@@ -2,7 +2,7 @@
 extends RefCounted
 class_name ModelicaASTNode
 
-const ModelicaTypeClass = preload("res://apps/modelica/core/modelica_type.gd")
+
 
 enum NodeType {
 	# Common nodes

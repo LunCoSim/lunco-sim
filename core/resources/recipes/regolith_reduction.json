@@ -1,0 +1,28 @@
+{
+  "id": "regolith_reduction",
+  "name": "Regolith Oxygen Extraction",
+  "description": "Extract oxygen from lunar regolith using hydrogen reduction at high temperature",
+  "duration": 10.0,
+  "power_required": 5000.0,
+  "heat_generated": 2000.0,
+  "inputs": [
+    {
+      "resource_id": "regolith",
+      "amount": 10.0
+    },
+    {
+      "resource_id": "hydrogen",
+      "amount": 1.0
+    }
+  ],
+  "outputs": [
+    {
+      "resource_id": "oxygen",
+      "amount": 4.0
+    },
+    {
+      "resource_id": "hydrogen",
+      "amount": 0.9
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+[gd_scene load_steps=2 format=3 uid="uid://resource_monitor"]
+
+[ext_resource type="Script" path="res://core/ui/resource_monitor.gd" id="1_script"]
+
+[node name="ResourceMonitor" type="PanelContainer"]
+offset_right = 200.0
+offset_bottom = 100.0
+script = ExtResource("1_script")

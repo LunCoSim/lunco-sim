@@ -1,6 +1,9 @@
 class_name LCController
 extends LCSpaceSystem
 
+func _enter_tree():
+	add_to_group("controllers")
+
 
 
 @rpc("any_peer", "call_local")
@@ -8,6 +11,14 @@ func set_authority(_owner):
 	print("Setting authority ", multiplayer.get_remote_sender_id()  )
 	print("Setting authority owner ", _owner )
 	get_parent().set_multiplayer_authority(_owner)
+
+## Returns true if this controller or its parent has multiplayer authority.
+## Provides a consistent way to check authority across all controller types.
+func has_authority() -> bool:
+	var parent = get_parent()
+	if parent:
+		return parent.is_multiplayer_authority()
+	return is_multiplayer_authority()
 
 
 	

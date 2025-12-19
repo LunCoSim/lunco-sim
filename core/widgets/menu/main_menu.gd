@@ -9,7 +9,14 @@ func _ready():
 	$MarginContainer/ScrollContainer/MainContent/Version.text = "v" + str(ProjectSettings.get_setting("application/config/version"))
 	on_reload_profile()
 	
-	Chat.profile_wallet_changed.connect(on_reload_profile)
+	Profile.profile_changed.connect(on_reload_profile)
+	
+	# Load hide tutorial setting from Profile
+	%HideTutorial.button_pressed = Profile.hide_tutorial
+	
+	# Load auto-reconnect setting from Profile
+	if Profile:
+		%AutoReconnect.button_pressed = Profile.auto_reconnect
 
 func on_reload_profile():
 	%Username.text = Profile.username
@@ -17,23 +24,17 @@ func on_reload_profile():
 #------------------------------------
 
 func _on_back_to_launcher_pressed():
+
 	get_tree().change_scene_to_file("res://launcher/launcher.tscn")
 	LCWindows.toggle_main_menu()
 
-func change_scene(scene: String):
-	pass
-	#SceneManager.no_effect_change_scene(scene)
-
 ## UI Integrations
 func _on_sim_host_pressed():
-	
-	StateManager.Username = %Username.text
 	
 	print("[INFO] _on_sim_host_pressed")
 	
 	LCNet.host(9000)
 	
-	#change_scene("sim")
 
 func _on_sim_client_pressed():
 	print("_on_sim_client_pressed")
@@ -42,13 +43,10 @@ func _on_sim_client_pressed():
 	
 	LCNet.connect_to_server(ip, port)
 	
-	#change_scene("sim")
 
 func _on_connect_to_global_pressed():
 	#default global server
 	LCNet.connect_to_server()
-	
-	#change_scene("sim")
 
 
 
@@ -82,6 +80,14 @@ func _on_check_profile_nft_pressed():
 	print("_on_check_profile_nft_pressed: ", Profile.wallet)
 	JavaScriptBridge.get_interface("Login").checkProfile(Profile.wallet, _on_check_profile_nft_callback)
 
-func _on_replay_mode_pressed():
-	LCWindows.toggle_main_menu() # Close the menu
-	StateManager.goto_replay_scene()
+func _on_hide_tutorial_toggled(toggled_on):
+	# Save the setting to Profile
+	Profile.hide_tutorial = toggled_on
+
+func _on_auto_reconnect_toggled(toggled_on):
+	# Save the setting to Profile (which will update LCNet automatically)
+	if Profile:
+		Profile.auto_reconnect = toggled_on
+		print("Auto-reconnect ", "enabled" if toggled_on else "disabled")
+
+

@@ -2,51 +2,38 @@
 
 [ext_resource type="Script" path="res://controllers/rover/rover-ui.gd" id="1_nqqus"]
 
-[node name="RoverUI" type="Control"]
-layout_mode = 3
-anchors_preset = 15
-anchor_right = 1.0
-anchor_bottom = 1.0
-grow_horizontal = 2
-grow_vertical = 2
+[node name="RoverUI" type="VBoxContainer"]
+layout_mode = 2
 script = ExtResource("1_nqqus")
 
-[node name="Panel" type="Panel" parent="."]
-layout_mode = 1
-anchors_preset = 3
-anchor_left = 1.0
-anchor_top = 1.0
-anchor_right = 1.0
-anchor_bottom = 1.0
-offset_left = -200.0
-offset_top = -150.0
-grow_horizontal = 0
-grow_vertical = 0
-
-[node name="VBoxContainer" type="VBoxContainer" parent="Panel"]
-layout_mode = 1
-anchors_preset = 15
-anchor_right = 1.0
-anchor_bottom = 1.0
-grow_horizontal = 2
-grow_vertical = 2
-
-[node name="Label" type="Label" parent="Panel/VBoxContainer"]
+[node name="HeaderLabel" type="Label" parent="."]
 layout_mode = 2
+theme_type_variation = &"_section_header"
 text = "Rover Controls"
-horizontal_alignment = 1
 
-[node name="HSeparator" type="HSeparator" parent="Panel/VBoxContainer"]
+[node name="Move" type="Label" parent="."]
+layout_mode = 2
+text = "Move: WASD"
+
+[node name="CamRotate" type="Label" parent="."]
+layout_mode = 2
+text = "Camera distance: -/+"
+
+[node name="CamDistance" type="Label" parent="."]
+layout_mode = 2
+text = "Rotate camera: RMB or Arrows"
+
+[node name="HSeparator" type="HSeparator" parent="."]
 layout_mode = 2
 
-[node name="SpeedLabel" type="Label" parent="Panel/VBoxContainer"]
+[node name="SpeedLabel" type="Label" parent="."]
 layout_mode = 2
 text = "Speed: 0 m/s"
 
-[node name="MotorLabel" type="Label" parent="Panel/VBoxContainer"]
+[node name="MotorLabel" type="Label" parent="."]
 layout_mode = 2
 text = "Motor: 0%"
 
-[node name="SteeringLabel" type="Label" parent="Panel/VBoxContainer"]
+[node name="SteeringLabel" type="Label" parent="."]
 layout_mode = 2
-text = "Steering: 0°" 
+text = "Steering: 0°"
