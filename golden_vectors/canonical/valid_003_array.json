@@ -1,0 +1,1 @@
+{"canonical":"{\"items\":[3,1,2]}","expected_verdict":"VALID","input":{"items":[3,1,2]},"name":"valid_003_array"}
