@@ -1,0 +1,1 @@
+{"canonical":"{\"a\":1}","expected_verdict":"INVALID","input_non_canonical":"{ \"a\": 1 }","name":"invalid_001_whitespace","reason":"Contains whitespace"}
