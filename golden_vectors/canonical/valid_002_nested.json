@@ -1,0 +1,1 @@
+{"canonical":"{\"outer\":{\"a\":1,\"z\":2}}","expected_verdict":"VALID","input":{"outer":{"a":1,"z":2}},"name":"valid_002_nested"}
