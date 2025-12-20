@@ -2,7 +2,7 @@
 extends RefCounted
 class_name ModelicaASTNode
 
-
+const ModelicaTypeClass = preload("res://apps/modelica/core/modelica_type.gd")
 
 enum NodeType {
 	# Common nodes
@@ -158,4 +158,4 @@ func _to_string() -> String:
 	var result = "ModelicaASTNode(%s, type=%s)" % [str(value), NodeType.keys()[type]]
 	if has_errors:
 		result += " [HAS ERRORS]"
-	return result 
+	return result

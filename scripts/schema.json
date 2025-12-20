@@ -1,0 +1,61 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "required": [
+        "version",
+        "secret_scope_hash",
+        "secret_hash",
+        "root_before",
+        "root_after",
+        "merkle_proof",
+        "removal_timestamp",
+        "pog",
+        "metadata"
+    ],
+    "properties": {
+        "version": {
+            "type": "string"
+        },
+        "secret_scope_hash": {
+            "type": "string"
+        },
+        "secret_hash": {
+            "type": "string"
+        },
+        "root_before": {
+            "type": "string"
+        },
+        "root_after": {
+            "type": "string"
+        },
+        "removal_timestamp": {
+            "type": "integer",
+            "minimum": 0
+        },
+        "pog": {
+            "type": "object",
+            "required": [
+                "signatures",
+                "policy_id"
+            ],
+            "properties": {
+                "signatures": {
+                    "type": "array"
+                },
+                "policy_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "metadata": {
+            "type": "object",
+            "required": [
+                "repo_id",
+                "branch",
+                "commit_before",
+                "commit_after"
+            ]
+        }
+    },
+    "additionalProperties": false
+}

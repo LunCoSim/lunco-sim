@@ -1,21 +1,61 @@
-# Godot 4+ specific ignores
-.godot/
-build/
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
 
-.obsidian
-.plugged
+# dependencies
+/node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
 
-#Managed by gd-plug
-addons/panku_console/
+# testing
+/coverage
 
-#webrtc addon. Probably later could be managed by gd-plug
-webrtc/
+# next.js
+/.next/
+/out/
 
-# SSL certificates (security)
-.cert/
+# production
+/build
 
+# misc
+.DS_Store
+*.pem
 
-# Raw data, e.g. PUGs
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
 
-.raw_data/
-scripts/remote_console_commands_history.txt
+# env files (can opt-in for committing if needed)
+.env*
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+local-*
+.claude
+.z-ai-config
+dev.log
+test
+prompt
+
+server.log
+
+# Rust build artifacts
+/nocturne_fileverse/target/
+
+# Python artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/

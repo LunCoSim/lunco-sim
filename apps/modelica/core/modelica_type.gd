@@ -82,4 +82,4 @@ func _to_string() -> String:
 				dim_str += "[" + str(d) + "]"
 			return str(element_type) + dim_str
 		_:
-			return name if not qualified_name else qualified_name 
+			return name if not qualified_name else qualified_name

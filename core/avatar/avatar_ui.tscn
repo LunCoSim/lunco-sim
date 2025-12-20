@@ -1,10 +1,81 @@
-[gd_scene load_steps=8 format=3 uid="uid://wdnxqhctneyv"]
+[gd_scene load_steps=9 format=3 uid="uid://wdnxqhctneyv"]
 
 [ext_resource type="Script" uid="uid://bpq5fqrtu7f5o" path="res://core/avatar/avatar_ui.gd" id="1_igs02"]
 [ext_resource type="Theme" uid="uid://hve1e7mnexbi" path="res://themes/theme.tres" id="1_ois6a"]
-[ext_resource type="PackedScene" uid="uid://component_inspector" path="res://core/ui/component_inspector.tscn" id="2_inspector"]
-[ext_resource type="PackedScene" uid="uid://effector_inspector" path="res://core/ui/effector_inspector.tscn" id="3_effector_inspector"]
+[ext_resource type="PackedScene" uid="uid://dqe8v3j4n7w2k" path="res://components/dashboard/tabs/PhysioNetworkBridge.tscn" id="2_abcde"]
 
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_entities_panel"]
+content_margin_left = 16.0
+content_margin_top = 16.0
+content_margin_right = 16.0
+content_margin_bottom = 16.0
+bg_color = Color(0.12, 0.15, 0.2, 0.8)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.25, 0.28, 0.32, 0.9)
+corner_radius_top_left = 10
+corner_radius_top_right = 10
+corner_radius_bottom_right = 10
+corner_radius_bottom_left = 10
+shadow_color = Color(0, 0, 0, 0.2)
+shadow_size = 5
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_label_bg"]
+content_margin_left = 8.0
+content_margin_top = 4.0
+content_margin_right = 8.0
+content_margin_bottom = 4.0
+bg_color = Color(0.2, 0.25, 0.35, 0.9)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.3, 0.35, 0.45, 1)
+corner_radius_top_left = 4
+corner_radius_top_right = 4
+corner_radius_bottom_right = 4
+corner_radius_bottom_left = 4
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_item_normal"]
+content_margin_left = 8.0
+content_margin_top = 4.0
+content_margin_right = 8.0
+content_margin_bottom = 4.0
+bg_color = Color(0.12, 0.14, 0.17, 1)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.2, 0.22, 0.25, 1)
+corner_radius_top_left = 6
+corner_radius_top_right = 6
+corner_radius_bottom_right = 6
+corner_radius_bottom_left = 6
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_item_selected"]
+content_margin_left = 8.0
+content_margin_top = 4.0
+content_margin_right = 8.0
+content_margin_bottom = 4.0
+bg_color = Color(0.15, 0.17, 0.2, 1)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.3, 0.32, 0.35, 1)
+corner_radius_top_left = 6
+corner_radius_top_right = 6
+corner_radius_bottom_right = 6
+corner_radius_bottom_left = 6
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_blue"]
+bg_color = Color(0.2, 0.4, 0.8, 1)
+corner_radius_top_left = 4
+corner_radius_top_right = 4
+corner_radius_bottom_right = 4
+corner_radius_bottom_left = 4
 
 [node name="UI" type="Control"]
 layout_mode = 3
@@ -17,6 +88,21 @@ mouse_filter = 2
 theme = ExtResource("1_ois6a")
 script = ExtResource("1_igs02")
 
+[node name="PhysioNetworkBridgeButton" type="Button" parent="."]
+layout_mode = 0
+offset_right = 200.0
+offset_bottom = 31.0
+text = "Physio-Network Bridge"
+
+[node name="PhysioNetworkBridge" parent="." instance=ExtResource("2_abcde")]
+visible = false
+layout_mode = 0
+anchor_right = 0.0
+anchor_bottom = 0.0
+offset_left = 210.0
+offset_right = 1110.0
+offset_bottom = 600.0
+
 [node name="EntityUserContainer" type="VBoxContainer" parent="."]
 layout_mode = 1
 anchors_preset = 3
@@ -25,16 +111,14 @@ anchor_top = 1.0
 anchor_right = 1.0
 anchor_bottom = 1.0
 offset_left = -300.0
-offset_top = -300.0
-offset_bottom = -5.0
+offset_top = -380.0
 grow_horizontal = 0
 grow_vertical = 0
-alignment = 2
 theme_override_constants/separation = 16
 
 [node name="UsersContainer" type="PanelContainer" parent="EntityUserContainer"]
 layout_mode = 2
-theme_type_variation = &"PanelContainerOverlay"
+theme_override_styles/panel = SubResource("StyleBoxFlat_entities_panel")
 
 [node name="VBoxContainer" type="VBoxContainer" parent="EntityUserContainer/UsersContainer"]
 layout_mode = 2
@@ -42,131 +126,99 @@ theme_override_constants/separation = 10
 
 [node name="ConnectedUsersLabel" type="Label" parent="EntityUserContainer/UsersContainer/VBoxContainer"]
 layout_mode = 2
-theme_type_variation = &"LabelTag"
 theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
 theme_override_colors/font_shadow_color = Color(0, 0, 0, 0.3)
 theme_override_constants/shadow_offset_x = 1
 theme_override_constants/shadow_offset_y = 1
+theme_override_styles/normal = SubResource("StyleBoxFlat_label_bg")
 text = "Connected Users"
-horizontal_alignment = 1
-
-[node name="ConnectionStatus" type="Label" parent="EntityUserContainer/UsersContainer/VBoxContainer"]
-unique_name_in_owner = true
-layout_mode = 2
-theme_override_colors/font_color = Color(0.7, 0.7, 0.75, 1)
-theme_override_font_sizes/font_size = 12
-text = "Server: Disconnected"
 horizontal_alignment = 1
 
 [node name="Users" type="ItemList" parent="EntityUserContainer/UsersContainer/VBoxContainer"]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 80)
 layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_item_normal")
+theme_override_styles/selected = SubResource("StyleBoxFlat_item_selected")
+theme_override_styles/selected_focus = SubResource("StyleBoxFlat_item_selected")
 
-[node name="MenuButton" type="Button" parent="EntityUserContainer/UsersContainer/VBoxContainer"]
-unique_name_in_owner = true
+[node name="EntitiesContainer" type="PanelContainer" parent="EntityUserContainer"]
 layout_mode = 2
-text = "Menu"
-tooltip_text = "Open Main Menu"
+size_flags_vertical = 3
+theme_override_styles/panel = SubResource("StyleBoxFlat_entities_panel")
 
+[node name="VBoxContainer" type="VBoxContainer" parent="EntityUserContainer/EntitiesContainer"]
+layout_mode = 2
+theme_override_constants/separation = 10
 
-[node name="LivesEntitiesContainer" type="PanelContainer" parent="."]
+[node name="CreateEntitiesLabel" type="Label" parent="EntityUserContainer/EntitiesContainer/VBoxContainer"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
+theme_override_colors/font_shadow_color = Color(0, 0, 0, 0.3)
+theme_override_constants/shadow_offset_x = 1
+theme_override_constants/shadow_offset_y = 1
+theme_override_styles/normal = SubResource("StyleBoxFlat_label_bg")
+text = "Create Entities (Alt+#)"
+horizontal_alignment = 1
+
+[node name="Entities" type="ItemList" parent="EntityUserContainer/EntitiesContainer/VBoxContainer"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 140)
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_styles/panel = SubResource("StyleBoxFlat_item_normal")
+theme_override_styles/selected = SubResource("StyleBoxFlat_item_selected")
+theme_override_styles/selected_focus = SubResource("StyleBoxFlat_item_selected")
+
+[node name="LivesEntitiesContrainer" type="PanelContainer" parent="."]
 layout_mode = 1
 anchors_preset = 12
 anchor_top = 1.0
 anchor_right = 1.0
 anchor_bottom = 1.0
-offset_top = -80.0
+offset_top = -150.0
 offset_right = -320.0
 offset_bottom = -5.0
 grow_horizontal = 2
 grow_vertical = 0
 size_flags_horizontal = 3
-theme_type_variation = &"PanelContainerOverlay"
-tooltip_text = "Click an entity to take control. Shortcuts: 1-8"
+theme_override_styles/panel = SubResource("StyleBoxFlat_entities_panel")
 
-[node name="HBoxContainer" type="HBoxContainer" parent="LivesEntitiesContainer"]
+[node name="VBoxContainer" type="VBoxContainer" parent="LivesEntitiesContrainer"]
 layout_mode = 2
 theme_override_constants/separation = 8
 
-[node name="ScrollContainer" type="ScrollContainer" parent="LivesEntitiesContainer/HBoxContainer"]
+[node name="TakeControlLabel" type="Label" parent="LivesEntitiesContrainer/VBoxContainer"]
 layout_mode = 2
-size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
+theme_override_colors/font_shadow_color = Color(0, 0, 0, 0.3)
+theme_override_constants/shadow_offset_x = 1
+theme_override_constants/shadow_offset_y = 1
+theme_override_styles/normal = SubResource("StyleBoxFlat_label_bg")
+text = "Take Control (1-8)"
+horizontal_alignment = 1
+
+[node name="ScrollContainer" type="ScrollContainer" parent="LivesEntitiesContrainer/VBoxContainer"]
+layout_mode = 2
 size_flags_vertical = 3
 horizontal_scroll_mode = 0
 vertical_scroll_mode = 0
 
-[node name="LiveEntities" type="HFlowContainer" parent="LivesEntitiesContainer/HBoxContainer/ScrollContainer"]
+[node name="LiveEntities" type="GridContainer" parent="LivesEntitiesContrainer/VBoxContainer/ScrollContainer"]
 unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
 theme_override_constants/h_separation = 8
 theme_override_constants/v_separation = 8
+columns = 8
 
-[node name="VSeparator" type="VSeparator" parent="LivesEntitiesContainer/HBoxContainer"]
-layout_mode = 2
-
-[node name="CreateEntityButton" type="Button" parent="LivesEntitiesContainer/HBoxContainer"]
+[node name="TargetUI" type="Control" parent="."]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(120, 0)
-layout_mode = 2
-size_flags_vertical = 4
-text = "Create (+)"
-tooltip_text = "Create a new entity"
-
-[node name="BuilderButton" type="Button" parent="LivesEntitiesContainer/HBoxContainer"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(120, 0)
-layout_mode = 2
-size_flags_vertical = 4
-text = "Builder"
-tooltip_text = "Open Mission Builder"
-
-[node name="InspectorButton" type="Button" parent="LivesEntitiesContainer/HBoxContainer"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(120, 0)
-layout_mode = 2
-size_flags_vertical = 4
-text = "Inspector"
-tooltip_text = "Toggle Inspector & Settings (I)"
-
-[node name="EffectorButton" type="Button" parent="LivesEntitiesContainer/HBoxContainer"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(120, 0)
-layout_mode = 2
-size_flags_vertical = 4
-text = "Effectors"
-tooltip_text = "Toggle Effector Inspector (E)"
-
-[node name="LeftSideContainer" type="VBoxContainer" parent="."]
-layout_mode = 1
-anchors_preset = 9
-anchor_bottom = 1.0
-offset_left = 16.0
-offset_right = 296.0
-offset_bottom = -85.0
-grow_vertical = 2
-mouse_filter = 2
-theme_override_constants/separation = 8
-
-[node name="TargetUI" type="PanelContainer" parent="LeftSideContainer"]
-unique_name_in_owner = true
-layout_mode = 2
-mouse_filter = 2
-theme_type_variation = &"PanelContainerOverlay"
-
-[node name="ComponentInspector" parent="." instance=ExtResource("2_inspector")]
-visible = false
-
-[node name="EffectorInspector" parent="." instance=ExtResource("3_effector_inspector")]
-unique_name_in_owner = true
-visible = false
-
+anchors_preset = 0
 
 [node name="WalletInfo" type="VBoxContainer" parent="."]
 unique_name_in_owner = true
-visible = false
 layout_mode = 1
 anchors_preset = 1
 anchor_left = 1.0
@@ -179,7 +231,7 @@ grow_horizontal = 0
 unique_name_in_owner = true
 layout_mode = 2
 theme_override_colors/font_color = Color(1, 1, 1, 1)
-theme_type_variation = &"ButtonAccent"
+theme_override_styles/normal = SubResource("StyleBoxFlat_blue")
 text = "Connect Wallet"
 
 [node name="DisconnectWallet" type="Button" parent="WalletInfo"]
@@ -227,12 +279,8 @@ unique_name_in_owner = true
 layout_mode = 2
 underline = 2
 
+[connection signal="pressed" from="PhysioNetworkBridgeButton" to="." method="_on_PhysioNetworkBridgeButton_pressed"]
 [connection signal="item_selected" from="EntityUserContainer/UsersContainer/VBoxContainer/Users" to="." method="_on_users_item_selected"]
-[connection signal="pressed" from="EntityUserContainer/UsersContainer/VBoxContainer/MenuButton" to="." method="_on_menu_button_pressed"]
-[connection signal="pressed" from="LivesEntitiesContainer/HBoxContainer/CreateEntityButton" to="." method="_on_create_entity_button_pressed"]
-[connection signal="pressed" from="LivesEntitiesContainer/HBoxContainer/BuilderButton" to="." method="_on_builder_button_pressed"]
-[connection signal="pressed" from="LivesEntitiesContainer/HBoxContainer/InspectorButton" to="." method="_on_inspector_button_pressed"]
-[connection signal="pressed" from="LivesEntitiesContainer/HBoxContainer/EffectorButton" to="." method="_on_effector_button_pressed"]
-
+[connection signal="item_selected" from="EntityUserContainer/EntitiesContainer/VBoxContainer/Entities" to="." method="_on_entities_item_selected"]
 [connection signal="pressed" from="WalletInfo/ConnectWallet" to="." method="_on_connect_wallet_pressed"]
 [connection signal="pressed" from="WalletInfo/DisconnectWallet" to="." method="_on_disconnect_wallet_pressed"]

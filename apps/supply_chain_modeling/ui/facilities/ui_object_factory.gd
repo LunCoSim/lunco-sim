@@ -7,10 +7,10 @@ func _process(delta: float) -> void:
 
 func update_status_display() -> void:
 
-	if not simulation_node is ElectrolyticFactory:
+	if not simulation_node is ObjectFactory:
 		return
 
-	var object_factory = simulation_node as ElectrolyticFactory
+	var object_factory = simulation_node as ObjectFactory
 
 	# Update display labels
 	var status_label = $Parameters/Status

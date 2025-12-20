@@ -5,9 +5,10 @@ extends LCController
 # Export categories for easy configuration in the editor
 @export_category("Rover Movement Parameters")
 @export var ENGINE_FORCE := 1200.0  # Reduced force to prevent flipping
-@export var STEERING_FORCE := 0.6  # Increased for better steering response
+@export var STEERING_FORCE := 0.35  # Balanced steering for good handling
 @export var MAX_SPEED := 3.5  # Realistic max speed for lunar rover
 @export var BRAKE_FORCE := 800.0  # Increased braking for better control
+@export var DEBUG_MODE := true  # Enable extra debug output
 
 # Get the parent VehicleBody3D node
 @onready var parent: VehicleBody3D:
@@ -25,15 +26,6 @@ var steering_input := 0.0
 var brake_input := 0.0
 var current_speed := 0.0
 
-# Previous values for change detection
-var prev_motor_input := 0.0
-var prev_steering_input := 0.0
-var prev_speed := 0.0
-
-# Slope compensation optimization
-var slope_check_timer := 0.0
-const SLOPE_CHECK_INTERVAL := 0.2  # Check slope every 200ms instead of every physics frame
-
 var debug_counter := 0
 
 # Signals
@@ -44,6 +36,8 @@ signal brake_applied(force: float)
 
 # Initialize the controller
 func _ready():
+	print("LCRoverController: Initializing node ", name)
+
 	# Ensure we're in the right group for discovery
 	if not is_in_group("RoverControllers"):
 		add_to_group("RoverControllers")
@@ -53,6 +47,18 @@ func _ready():
 	steering_input = 0.0
 	brake_input = 0.0
 	
+	# Create a timer to periodically report status
+	var timer = Timer.new()
+	timer.wait_time = 3.0
+	timer.one_shot = false
+	timer.autostart = true
+	timer.connect("timeout", Callable(self, "_on_timer_timeout"))
+	add_child(timer)
+
+	print("LCRoverController: Initialized with parent: ", parent.name)
+	print("LCRoverController: ENGINE_FORCE = ", ENGINE_FORCE)
+	print("LCRoverController: Initial multiplayer authority = ", is_multiplayer_authority())
+
 	# Ensure parent is a VehicleBody3D
 	if not parent is VehicleBody3D:
 		push_error("RoverController's parent must be a VehicleBody3D")
@@ -61,23 +67,45 @@ func _ready():
 		parent.engine_force = 0.0
 		parent.steering = 0.0
 		parent.brake = 0.0
-	
-	# Add command executor
-	var executor = LCCommandExecutor.new()
-	executor.name = "CommandExecutor"
-	add_child(executor)
-	print("DEBUG: RoverController _ready complete. Created executor: ", executor, " path: ", executor.get_path())
+		print("RoverController: Vehicle properties initialized")
 
+# Add a function to debug physics state
+func debug_physics_state():
+	if parent and parent is VehicleBody3D:
+		print("--- ROVER PHYSICS DEBUG ---")
+		print("Position: ", parent.global_position)
+		print("Linear velocity: ", parent.linear_velocity)
+		print("Engine force: ", parent.engine_force)
+		print("Gravity scale: ", parent.gravity_scale)
+		print("Is on floor: ", parent.is_on_floor() if parent.has_method("is_on_floor") else "N/A")
 
+		# Debug wheel contact
+		for wheel in parent.get_children():
+			if wheel is VehicleWheel3D:
+				print("Wheel ", wheel.name, " contact: ", wheel.is_in_contact())
+
+		print("-------------------------")
+
+func _on_timer_timeout():
+	print("LCRoverController status: authority=", is_multiplayer_authority())
+	print("LCRoverController inputs: motor=", motor_input, " steering=", steering_input, " brake=", brake_input)
+	if parent:
+		print("Rover parent values: engine_force=", parent.engine_force, " steering=", parent.steering, " brake=", parent.brake)
+		print("Rover speed: ", current_speed)
+
+		# Add physics debugging
+		debug_physics_state()
 
 # Processing physics for Rover controller
 func _physics_process(_delta: float):
-	# Only apply physics forces if we have authority
-	# Remote clients will receive synchronized position/velocity from MultiplayerSynchronizer
-	if not has_authority():
-		return
-		
+	# Process regardless of authority to ensure controls always work
 	if parent and parent is VehicleBody3D:
+		# Debug output (only occasionally to avoid spam)
+		debug_counter += 1
+		if DEBUG_MODE and debug_counter % 30 == 0:
+			print("Rover physics: motor_input=", motor_input, " engine_force=", motor_input * ENGINE_FORCE)
+			print("Rover parent direct values: engine_force=", parent.engine_force, " steering=", parent.steering)
+
 		# Calculate speed-based engine scaling to prevent flip at high speeds
 		var speed_factor = 1.0
 		if current_speed > 2.0:
@@ -95,30 +123,19 @@ func _physics_process(_delta: float):
 		if brake_input > 0:
 			brake_applied.emit(brake_input)
 
-		# Update speed and emit signal only on significant change
+		# Update speed
 		current_speed = parent.linear_velocity.length()
-		if abs(current_speed - prev_speed) > 0.01:
-			prev_speed = current_speed
-			speed_changed.emit(current_speed)
-
-		# Emit signals only on significant changes
-		if abs(motor_input - prev_motor_input) > 0.01:
-			prev_motor_input = motor_input
-			motor_state_changed.emit(motor_input)
-
-		if abs(steering_input - prev_steering_input) > 0.01:
-			prev_steering_input = steering_input
-			steering_changed.emit(steering_input)
+		speed_changed.emit(current_speed)
 		
-		# Apply slope compensation with reduced frequency
-		slope_check_timer += _delta
-		if slope_check_timer >= SLOPE_CHECK_INTERVAL:
-			slope_check_timer = 0.0
-			_check_slope_compensation()
+		# Emit other signals
+		motor_state_changed.emit(motor_input)
+		steering_changed.emit(steering_input)
 
+		# Apply slope compensation
+		apply_slope_compensation()
 
-# Check and apply slope compensation to prevent flipping downhill
-func _check_slope_compensation():
+# Add slope compensation to prevent flipping downhill
+func apply_slope_compensation():
 	if parent and parent.linear_velocity.length() > 1.0:
 		var up = parent.global_transform.basis.y.normalized()
 		var slope_dot = up.dot(Vector3.UP)
@@ -147,6 +164,11 @@ func set_motor(value: float):
 		# IMPORTANT: Invert motor direction
 		parent.engine_force = -motor_input * ENGINE_FORCE * speed_factor
 
+	if DEBUG_MODE and abs(value) > 0.1:
+		print("RoverController: set_motor called with value=", value, " set to ", motor_input)
+		if parent and parent is VehicleBody3D:
+			print("  - Direct engine_force set to: ", parent.engine_force)
+
 func set_steering(value: float):
 	steering_input = clamp(value, -1.0, 1.0)
 	# Immediately apply steering if we have a parent
@@ -154,22 +176,39 @@ func set_steering(value: float):
 		# IMPORTANT: Invert steering direction
 		parent.steering = -steering_input * STEERING_FORCE
 
+	if DEBUG_MODE and abs(value) > 0.1:
+		print("RoverController: set_steering called with value=", value, " set to ", steering_input)
+		if parent and parent is VehicleBody3D:
+			print("  - Direct steering set to: ", parent.steering)
+
 func set_brake(value: float):
 	brake_input = clamp(value, 0.0, 1.0)
 	# Immediately apply brake if we have a parent
 	if parent and parent is VehicleBody3D:
 		parent.brake = brake_input * BRAKE_FORCE
 
+	if DEBUG_MODE and value > 0.1:
+		print("RoverController: set_brake called with value=", value, " set to ", brake_input)
+		if parent and parent is VehicleBody3D:
+			print("  - Direct brake set to: ", parent.brake)
+
 # Simplified control methods (required for compatibility with signals)
 func take_control():
-	_reset_inputs()
+	# Reset all inputs when taking control
+	motor_input = 0.0
+	steering_input = 0.0
+	brake_input = 0.0
+
+	# Make sure parent values are reset too
+	if parent and parent is VehicleBody3D:
+		parent.engine_force = 0.0
+		parent.steering = 0.0
+		parent.brake = 0.0
+
+	print("RoverController: Control taken")
 
 func release_control():
-	_reset_inputs()
-
-# Private helper to reset all inputs and parent vehicle state
-func _reset_inputs():
-	# Reset all inputs when taking/releasing control
+	# Reset all inputs when releasing control
 	motor_input = 0.0
 	steering_input = 0.0
 	brake_input = 0.0
@@ -179,16 +218,23 @@ func _reset_inputs():
 		parent.engine_force = 0.0
 		parent.steering = 0.0
 		parent.brake = 0.0
-# Command Methods (Reflection)
-func cmd_set_motor(args: Dictionary):
-	set_motor(args.get("value", 0.0))
 
-func cmd_set_steering(args: Dictionary):
-	set_steering(args.get("value", 0.0))
+	print("RoverController: Control released")
 
-func cmd_set_crab_steering(args: Dictionary):
-	if has_method("set_crab_steering"):
-		call("set_crab_steering", args.get("value", 0.0))
+# Add a regular process function to regularly check input values
+func _process(_delta: float):
+	if parent and parent is VehicleBody3D:
+		# Check if motor values are being applied consistently
+		if DEBUG_MODE and debug_counter % 60 == 0:
+			print("RoverController _process: Input values - motor:", motor_input,
+				" steering:", steering_input,
+				" brake:", brake_input)
+			print("RoverController vehicle values - engine:", parent.engine_force,
+				" steering:", parent.steering,
+				" brake:", parent.brake)
+			print("RoverController speed:", current_speed)
 
-func cmd_set_brake(args: Dictionary):
-	set_brake(args.get("value", 0.0))
+	# Always test direct input from keyboard for debugging
+	var debug_motor = Input.get_action_strength("move_forward") - Input.get_action_strength("move_backward")
+	if abs(debug_motor) > 0.1 and DEBUG_MODE and debug_counter % 60 == 0:
+		print("RoverController direct keyboard input:", debug_motor)

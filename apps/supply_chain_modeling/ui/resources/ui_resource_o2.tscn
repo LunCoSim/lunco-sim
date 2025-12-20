@@ -1,8 +1,9 @@
-[gd_scene load_steps=2 format=3]
+[gd_scene load_steps=2 format=3 uid="uid://c4iqxvxvxvxvx"]
 
 [ext_resource type="Script" uid="uid://ck0ya0dlsxygw" path="res://apps/supply_chain_modeling/ui/resources/ui_resource_h2.gd" id="1_bklm3"]
+[ext_resource type="Script" uid="uid://decpb5uj1ql2n" path="res://apps/supply_chain_modeling/ui/core/ui_base_resource.gd" id="2_wfdba"]
 
-[node name="Resource_O2" type="GraphNode" unique_id=663008282]
+[node name="Resource_O2" type="GraphNode"]
 offset_right = 110.0
 offset_bottom = 78.0
 mouse_filter = 1
@@ -27,19 +28,19 @@ slot/1/right_color = Color(1, 1, 1, 1)
 slot/1/right_icon = null
 slot/1/draw_stylebox = true
 script = ExtResource("1_bklm3")
-metadata/_custom_type_script = "uid://decpb5uj1ql2n"
+metadata/_custom_type_script = ExtResource("2_wfdba")
 
-[node name="Label" type="Label" parent="." unique_id=973662934]
+[node name="Label" type="Label" parent="."]
 layout_mode = 2
 text = "O2"
 
-[node name="Properties" type="VBoxContainer" parent="." unique_id=1764888151]
+[node name="Properties" type="VBoxContainer" parent="."]
 layout_mode = 2
 
-[node name="Amount" type="Label" parent="Properties" unique_id=1408289314]
+[node name="Amount" type="Label" parent="Properties"]
 layout_mode = 2
 text = "Amount: 100.0 / 100.0 units"
 
-[node name="ProgressBar" type="ProgressBar" parent="Properties" unique_id=858056459]
+[node name="ProgressBar" type="ProgressBar" parent="Properties"]
 layout_mode = 2
 value = 100.0

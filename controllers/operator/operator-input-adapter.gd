@@ -1,37 +1,16 @@
 class_name LCOperatorInputAdapter
-extends LCInputAdapter
+extends Node
 
-## Input adapter for Operator controller
-## Handles movement input and camera-based orientation
-
-@export var camera: SpringArmCamera
-
-# target is inherited from LCInputAdapter
+@export var target: Node
 
 func _input(_event):
-	# Only process inputs if we have a target
-	if not target:
-		return
-		
-	var _target = get_resolved_target()
+	var _target = target
+	if target is LCAvatar:
+		_target = target.target
 	
-	# Check if we have a compatible operator controller
-	var is_compatible_controller = _target is LCOperatorController
-	
-	# Only process input if the target is an operator controller
-	if is_compatible_controller:
-		# Check if input is captured by UI
-		if not should_process_input(_event):
-			_target.move(Vector3.ZERO)
-			return
-
-		# Update orientation based on camera
-		if camera:
-			_target.orient(camera.get_plain_basis())
-		
-		# Reset position on R key
+	if _target is LCOperatorController:
 		if Input.is_action_just_pressed("reset_position"):
-			_target.reset_position()
+			_target.reset_position();
 
 		var motion_direction := Vector3(
 			Input.get_action_strength("move_left") - Input.get_action_strength("move_right"),

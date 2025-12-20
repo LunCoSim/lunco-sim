@@ -2,7 +2,7 @@
 
 [ext_resource type="Script" uid="uid://dg0v2vxnmf15c" path="res://apps/supply_chain_modeling/ui/other/ui_note_node.gd" id="1_script"]
 
-[node name="NoteNode" type="GraphNode" unique_id=1975356892]
+[node name="NoteNode" type="GraphNode"]
 offset_right = 200.0
 offset_bottom = 100.0
 resizable = true
@@ -18,7 +18,7 @@ slot/0/right_icon = null
 slot/0/draw_stylebox = true
 script = ExtResource("1_script")
 
-[node name="TextEdit" type="TextEdit" parent="." unique_id=64403258]
+[node name="TextEdit" type="TextEdit" parent="."]
 layout_mode = 2
 size_flags_vertical = 3
 wrap_mode = 1

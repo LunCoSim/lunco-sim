@@ -1,8 +1,8 @@
 class_name LCCharacterInputAdapter
-extends LCInputAdapter
+extends Node
 
 #------------------------------
-# target is inherited from LCInputAdapter
+@export var target: Node
 
 #------------------------------
 const CAMERA_CONTROLLER_ROTATION_SPEED := 3.0
@@ -54,22 +54,13 @@ func _ready():
 		#color_rect.hide()
 
 func _process(delta):
-	var _target = get_resolved_target()
-
+#	if get_multiplayer_authority() != multiplayer.get_unique_id():
+#		return
+	var _target = target
+	if target is LCAvatar:
+		_target = target.target
 	
 	if not _target is LCCharacterController:
-		return
-	
-	# Only process input if we have authority over the character controller
-	if not _target.has_authority():
-		return
-		
-	# Check if input is captured by UI
-	var can_process = should_process_input()
-	if not can_process:
-		_target.input_motion = Vector2.ZERO
-		_target.aiming = false
-		_target.shooting = false
 		return
 	
 	motion = Vector2(
@@ -166,9 +157,11 @@ func get_camera_rotation_basis() -> Basis:
 func set_camera(_camera):
 	camera = _camera
 	
-@rpc("any_peer", "call_local")
+@rpc("call_local")
 func jump():
-	var _target = get_resolved_target()
+	var _target = target
+	if target is LCAvatar:
+		_target = target.target
 	
 	if not _target is LCCharacterController:
 		return

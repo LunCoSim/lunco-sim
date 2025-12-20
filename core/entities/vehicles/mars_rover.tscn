@@ -1,6 +1,0 @@
-[gd_scene load_steps=2 format=3 uid="uid://mars_rover_entity"]
-
-[ext_resource type="Script" path="res://core/entities/vehicles/mars_rover.gd" id="1_script"]
-
-[node name="MarsRover" type="VehicleBody3D"]
-script = ExtResource("1_script")

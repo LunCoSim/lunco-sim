@@ -6,7 +6,7 @@ var supply_chain_display = null
 var modelica_display = null
 
 # Track which display is currently active
-var active_display = "none"  # "none", "supply_chain", "modelica", or "console"
+var active_display = "none"  # "none", "supply_chain", or "modelica"
 
 # Signals
 signal display_activated(display_name)
@@ -14,45 +14,7 @@ signal display_deactivated(display_name)
 
 # Initialize the manager
 func _ready():
-	add_to_group("ui_display_manager")
 	print("UiDisplayManager: Initialized")
-
-# Check if any display is currently capturing input
-func is_input_captured(event: InputEvent = null) -> bool:
-	# Artificial events from remote console should bypass UI capture
-	if event and LCAvatar.is_remote_event(event):
-		return false
-		
-	# Check if modelica display has keyboard focus
-	if active_display == "modelica" and modelica_display:
-		if "has_keyboard_focus" in modelica_display:
-			var is_captured = modelica_display.has_keyboard_focus
-			print("UiDisplayManager: Modelica has_keyboard_focus = ", is_captured)
-			return is_captured
-	
-	# Check if supply chain display has keyboard focus
-	if active_display == "supply_chain" and supply_chain_display:
-		if "has_keyboard_focus" in supply_chain_display:
-			var is_captured = supply_chain_display.has_keyboard_focus
-			print("UiDisplayManager: Supply chain has_keyboard_focus = ", is_captured)
-			return is_captured
-	
-	# Fallback: if a display is active, assume it's capturing input
-	var fallback = active_display != "none"
-	
-	if fallback:
-		# If we have remote keys held (artificial input), we should allow 
-		# polling-based adapters to continue processing.
-		if event == null and get_parent().has_method("get_held_remote_keys"):
-			var held_keys = get_parent().get_held_remote_keys()
-			if not held_keys.is_empty():
-				return false
-				
-		# If console is active, it definitely captured input
-		if active_display == "console":
-			return true
-		# print("UiDisplayManager: Fallback - active_display = ", active_display)
-	return fallback
 
 # Method to set the display references
 func set_displays(supply_chain: Node, modelica: Node):
@@ -89,7 +51,7 @@ func set_displays(supply_chain: Node, modelica: Node):
 		print("UiDisplayManager: Ensuring ModelicaUI is properly set up")
 		# Make sure it's visible
 		modelica_display.visible = true
-		modelica_display.is_display_visible = true
+		modelica_display.is_visible = true
 		modelica_display.input_enabled = true
 
 # Process key events for toggling displays and forwarding input
@@ -98,10 +60,6 @@ func process_key_event(event: InputEvent) -> bool:
 	if not event is InputEventKey:
 		return false
 	
-	# Remote artificial events bypass UI capture
-	if LCAvatar.is_remote_event(event):
-		return false
-		
 	# Only log important keys for performance reasons
 	if event.pressed and not event.is_echo() and event.keycode in [KEY_ESCAPE, KEY_TAB, KEY_ENTER]:
 		print("UiDisplayManager: Processing key event - Key: ", event.keycode)
@@ -122,11 +80,6 @@ func process_key_event(event: InputEvent) -> bool:
 		
 	# Pass keyboard events to active display when active
 	if active_display != "none" and event is InputEventKey:
-		# If console is active, capture EVERYTHING to prevent leaks to avatar/sim
-		if active_display == "console":
-			# Still let the console process it if it needs to, but we definitely return true
-			return true
-			
 		var result = pass_keyboard_input_to_active_display(event)
 		return result
 		
@@ -145,16 +98,7 @@ func process_mouse_event(event: InputEvent) -> bool:
 	if active_display == "supply_chain" and supply_chain_display:
 		return pass_mouse_input_to_supply_chain(event)
 	elif active_display == "modelica" and modelica_display:
-		var handled = pass_mouse_input_to_modelica(event)
-		
-		# If the event wasn't handled by the Modelica display (i.e. clicked outside),
-		# and it's a left mouse click, close the display
-		if not handled and event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
-			print("UiDisplayManager: Clicked outside Modelica display, closing")
-			close_modelica_display()
-			return true
-			
-		return handled
+		return pass_mouse_input_to_modelica(event)
 		
 	return false
 
@@ -239,7 +183,7 @@ func pass_keyboard_input_to_active_display(event: InputEvent) -> bool:
 		# Always force ensure the display is visible and active
 		if modelica_display.visible == false:
 			modelica_display.visible = true
-			modelica_display.is_display_visible = true
+			modelica_display.is_visible = true
 			modelica_display.input_enabled = true
 			print("UiDisplayManager: Forced ModelicaUI to be visible")
 		
@@ -297,7 +241,7 @@ func on_modelica_display_clicked():
 	if modelica_display:
 		if not modelica_display.visible:
 			modelica_display.visible = true
-			modelica_display.is_display_visible = true
+			modelica_display.is_visible = true
 			modelica_display.input_enabled = true
 			print("UiDisplayManager: Made ModelicaUI visible")
 		
@@ -328,4 +272,4 @@ func on_modelica_display_clicked():
 		click_event.pressed = false
 		modelica_display.receive_mouse_input(click_event)
 		
-		print("UiDisplayManager: Sent mouse events to ModelicaUI") 
+		print("UiDisplayManager: Sent mouse events to ModelicaUI")

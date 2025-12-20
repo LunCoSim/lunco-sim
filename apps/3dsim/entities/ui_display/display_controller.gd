@@ -113,4 +113,4 @@ func toggle_supply_chain_display():
 # Toggle the modelica display directly (for backwards compatibility or custom control)
 func toggle_modelica_display():
 	if modelica_display:
-		modelica_display.toggle_display() 
+		modelica_display.toggle_display()

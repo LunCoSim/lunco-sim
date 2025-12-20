@@ -29,9 +29,6 @@ var root_motion = Transform3D()
 
 @onready var gravity = ProjectSettings.get_setting("physics/3d/default_gravity") * ProjectSettings.get_setting("physics/3d/default_gravity_vector")
 
-@export var use_root_motion: bool = true
-@export var move_speed: float = 5.0
-
 #----------------------------------------
 
 var aim_rotation
@@ -50,15 +47,9 @@ var jumping: bool = false
 func _ready():
 	if character_body == null:
 		character_body = get_parent()
-		
-	# Add command executor
-	var executor = LCCommandExecutor.new()
-	executor.name = "CommandExecutor"
-	add_child(executor)
 
 func _physics_process(delta: float):	
-	# Check if we have authority over the parent entity (the character body that contains this controller)
-	if has_authority():
+	if is_multiplayer_authority():
 		apply_input(delta)
 
 func apply_input(delta: float):
@@ -128,12 +119,7 @@ func apply_input(delta: float):
 			orientation.basis = Basis(q_from.slerp(q_to, delta * ROTATION_INTERPOLATE_SPEED))
 
 	# Apply root motion to orientation.
-	if use_root_motion:
-		orientation *= root_motion #????? What's happening here?
-	else:
-		var target_dir = (camera_x * motion.x + camera_z * motion.y)
-		orientation.origin += target_dir * move_speed * delta
-
+	orientation *= root_motion #????? What's happening here?
 	do_move(delta)
 	orientation.origin = Vector3() # Clear accumulated root motion displacement (was applied to speed).
 	orientation = orientation.orthonormalized() # Orthonormalize orientation.
@@ -147,12 +133,3 @@ func do_move(delta):
 	#character_body.set_velocity(character_body.velocity)
 	character_body.set_up_direction(Vector3.UP)
 	character_body.move_and_slide()
-
-# Command Methods
-func cmd_jump(args: Dictionary):
-	jumping = true
-	return "Jumping"
-
-func cmd_set_speed(args: Dictionary):
-	move_speed = args.get("value", 5.0)
-	return "Speed set to %.1f" % move_speed

@@ -1,17 +1,11 @@
 class_name LCControllableRover
-extends LCVehicle
+extends VehicleBody3D
 
 var _owner_id: int = 0
 var controller: Node
 var input_adapter: Node
 
 func _ready():
-	super._ready()
-	
-	# Skip game logic in editor
-	if Engine.is_editor_hint():
-		return
-		
 	# Find and cache the controller and input adapter
 	controller = get_node_or_null("RoverController")
 	input_adapter = get_node_or_null("RoverInputAdapter")

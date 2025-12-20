@@ -1,9 +1,13 @@
 [gd_scene load_steps=3 format=3 uid="uid://desvbmv0lbqad"]
 
 [ext_resource type="Script" path="res://core/widgets/notification.gd" id="1_qpnwb"]
-[ext_resource type="Theme" uid="uid://hve1e7mnexbi" path="res://themes/theme.tres" id="2_theme"]
 
-
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_4xwvr"]
+bg_color = Color(0.2, 0.2, 0.2, 0.8)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_right = 8
+corner_radius_bottom_left = 8
 
 [node name="Notification" type="Control"]
 layout_mode = 3
@@ -12,7 +16,6 @@ anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
-theme = ExtResource("2_theme")
 script = ExtResource("1_qpnwb")
 
 [node name="Panel" type="Panel" parent="."]
@@ -25,8 +28,7 @@ offset_top = 20.0
 offset_right = -20.0
 offset_bottom = 80.0
 grow_horizontal = 0
-grow_horizontal = 0
-theme_type_variation = &"PanelContainerOverlay"
+theme_override_styles/panel = SubResource("StyleBoxFlat_4xwvr")
 
 [node name="Message" type="Label" parent="Panel"]
 layout_mode = 1

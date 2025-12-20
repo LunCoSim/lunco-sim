@@ -1,6 +1,0 @@
-[gd_scene load_steps=2 format=3 uid="uid://lunar_lander_entity"]
-
-[ext_resource type="Script" path="res://core/entities/vehicles/lunar_lander.gd" id="1_script"]
-
-[node name="LunarLander" type="RigidBody3D"]
-script = ExtResource("1_script")

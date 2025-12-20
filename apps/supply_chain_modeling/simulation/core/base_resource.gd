@@ -1,7 +1,5 @@
 class_name BaseResource
-extends SolverSimulationNode
-
-const SolverDomain = preload("res://core/systems/solver/solver_domain.gd")
+extends SimulationNode
 
 @export var current_amount: float = 2000.0
 @export var max_amount: float = 2000.0
@@ -22,47 +20,6 @@ var default_current_amount: float = 0.0
 var default_max_amount: float = 1000.0
 var default_unit: String = "units"
 var default_color: Color = Color.WHITE
-
-# === Solver Integration ===
-func _create_ports() -> void:
-	# Create a single port acting as storage
-	# Determine domain based on resource name/type (heuristic)
-	var domain = SolverDomain.LIQUID
-	var name_lower = name.to_lower()
-	if "oxygen" in name_lower or "hydrogen" in name_lower or "methane" in name_lower or "gas" in name_lower:
-		domain = SolverDomain.GAS
-	elif "power" in name_lower or "electric" in name_lower:
-		domain = SolverDomain.ELECTRICAL
-	elif "regolith" in name_lower or "ore" in name_lower:
-		domain = SolverDomain.SOLID
-		
-	var port = solver_graph.add_node(0.0, false, domain)
-	port.resource_type = resource_type if resource_type else name_lower
-	# Treat as a massive tank or infinite source if configured
-	port.set_capacitance(max(max_amount, 100.0)) 
-	port.flow_accumulation = current_amount
-	
-	# Calculate initial potential
-	if port.capacitance > 0:
-		port.potential = port.flow_accumulation / port.capacitance
-		
-	ports["out"] = port
-	
-func update_solver_state() -> void:
-	if not ports.has("out"):
-		return
-	var port = ports["out"]
-	# Sync amount to solver
-	port.flow_accumulation = current_amount
-	port.set_capacitance(max(max_amount, 100.0))
-	
-func update_from_solver() -> void:
-	if not ports.has("out"):
-		return
-	var port = ports["out"]
-	current_amount = port.flow_accumulation
-
-# ==========================
 
 # Function to set properties
 func set_properties(desc: String, type: String, init_mass: float, init_volume: float):

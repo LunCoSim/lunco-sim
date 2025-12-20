@@ -17,20 +17,21 @@ func _setup_resource_selector() -> void:
 	# Add empty option
 	resource_type_selector.add_item("Select Resource Type", 0)
 	
-	# Get all available resources from LCResourceRegistry
-	var resources = LCResourceRegistry.get_all_resources()
+	# Get all available resources
+	var registry = ResourceRegistry.get_instance()
+	var resources = registry.get_all_resources()
 	
 	# Add each resource as an option
 	var index = 1
 	for resource in resources:
-		resource_type_selector.add_item(resource.display_name, index)
-		# Store the resource ID in the metadata
-		resource_type_selector.set_item_metadata(index, resource.resource_id)
+		resource_type_selector.add_item(resource.name, index)
+		# Store the resource name in the metadata
+		resource_type_selector.set_item_metadata(index, resource.name)
 		
 		# Select current resource if it matches
 		if simulation_node and simulation_node is StorageFacility:
 			var storage = simulation_node as StorageFacility
-			if storage.stored_resource_type == resource.resource_id:
+			if storage.stored_resource_type == resource.name:
 				resource_type_selector.select(index)
 		
 		index += 1
@@ -54,18 +55,6 @@ func update_display() -> void:
 		progress_bar.max_value = storage.capacity
 		progress_bar.value = storage.current_amount
 		progress_bar.modulate = storage.get_resource_color()
-	
-	# Sync dropdown if type changed externally (e.g. auto-detection)
-	if resource_type_selector and resource_type_selector.item_count > 0:
-		var current_idx = resource_type_selector.selected
-		var current_id = resource_type_selector.get_item_metadata(current_idx) if current_idx >= 0 else ""
-		
-		# If user interface doesn't match backend, update UI
-		if current_id != storage.stored_resource_type:
-			for i in range(resource_type_selector.item_count):
-				if resource_type_selector.get_item_metadata(i) == storage.stored_resource_type:
-					resource_type_selector.select(i)
-					break
 	
 	# Update capacity label
 	var label = $VBoxContainer/Label

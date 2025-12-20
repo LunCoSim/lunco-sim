@@ -2,7 +2,7 @@
 extends RefCounted
 class_name ModelicaBuiltinTypes
 
-
+const ModelicaTypeClass = preload("res://apps/modelica/core/modelica_type.gd")
 
 # Dictionary to store all built-in types
 static var _types: Dictionary = {}
@@ -65,4 +65,4 @@ static func create_array_type(element_type: ModelicaTypeClass, dimensions: Array
 	array_type.name = element_type.name + "[]"
 	array_type.element_type = element_type
 	array_type.dimensions = dimensions
-	return array_type 
+	return array_type
