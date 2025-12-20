@@ -8,3 +8,6 @@ __pycache__/
 build/
 dist/
 *.egg-info/
+
+# Rust build artifacts
+/nocturne_server/target/
