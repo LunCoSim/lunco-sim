@@ -1,1 +1,0 @@
-{"canonical":"{\"emoji\":\"🔐\",\"text\":\"NoctHub\"}","expected_verdict":"VALID","input":{"emoji":"🔐","text":"NoctHub"},"name":"valid_005_unicode"}

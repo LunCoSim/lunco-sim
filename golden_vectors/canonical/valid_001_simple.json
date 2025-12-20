@@ -1,1 +1,0 @@
-{"canonical":"{\"a\":1,\"z\":2}","expected_verdict":"VALID","input":{"a":1,"z":2},"name":"valid_001_simple"}

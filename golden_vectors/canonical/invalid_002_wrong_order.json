@@ -1,1 +1,0 @@
-{"canonical":"{\"a\":2,\"z\":1}","expected_verdict":"INVALID","input_non_canonical":"{\"z\":1,\"a\":2}","name":"invalid_002_wrong_order","reason":"Wrong key order"}

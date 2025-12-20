@@ -1,1 +1,0 @@
-{"canonical":"{\"key\":\"valueA\"}","expected_verdict":"INVALID","input_non_canonical":"{\"key\":\"value\\u0041\"}","name":"invalid_003_escaped","reason":"Unnecessary escape"}
