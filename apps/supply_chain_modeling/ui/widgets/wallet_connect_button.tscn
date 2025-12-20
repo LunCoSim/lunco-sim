@@ -3,7 +3,7 @@
 [ext_resource type="Script" uid="uid://bh7kdy50klx8b" path="res://apps/supply_chain_modeling/ui/widgets/wallet_connect_button.gd" id="1_yvhcs"]
 [ext_resource type="Theme" uid="uid://hve1e7mnexbi" path="res://themes/theme.tres" id="2_theme"]
 
-[node name="WalletConnectButton" type="Button" unique_id=1898901794]
+[node name="WalletConnectButton" type="Button"]
 theme = ExtResource("2_theme")
 text = "Connect Wallet"
 script = ExtResource("1_yvhcs")

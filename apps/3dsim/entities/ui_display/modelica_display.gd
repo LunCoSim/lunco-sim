@@ -10,28 +10,12 @@ var last_click_position = Vector2()
 var is_dragging = false
 var mouse_button_pressed = false
 var mouse_over_display = false
-var is_display_visible = true
+var is_visible = true
 var has_keyboard_focus = false
-var mesh_size = Vector2(50, 38)  # Will be updated from actual mesh in _ready()
-
-# Helper function to get the actual mesh size
-func _get_mesh_size() -> Vector2:
-	if $DisplayMesh and $DisplayMesh.mesh:
-		var mesh = $DisplayMesh.mesh
-		if mesh is QuadMesh:
-			return mesh.size
-		elif mesh is PlaneMesh:
-			return mesh.size
-	# Fallback to default size if mesh not found
-	return Vector2(50, 38)
 
 func _ready():
 	# Add to group for easy identification
 	add_to_group("modelica_display")
-	
-	# Get the actual mesh size from the DisplayMesh
-	mesh_size = _get_mesh_size()
-	print("ModelicaUI: Mesh size detected as: ", mesh_size)
 	
 	# First, add a reference to the scene at root level for scripts that use absolute paths
 	# This needs to happen BEFORE loading the modelica scene so other nodes can find it
@@ -54,9 +38,8 @@ func _ready():
 	# Set up collision shape to match mesh for interaction
 	var collision_shape = $Area3D/CollisionShape3D
 	var box_shape = BoxShape3D.new()
-	box_shape.size = Vector3(mesh_size.x, mesh_size.y, 0.1)
+	box_shape.size = Vector3(40, 30, 0.1)
 	collision_shape.shape = box_shape
-	print("ModelicaUI: Collision shape updated to size: ", box_shape.size)
 	
 	# Make sure the Area3D is on the correct collision layer (2)
 	$Area3D.collision_layer = 2
@@ -135,7 +118,7 @@ func _on_mouse_exited():
 	mouse_over_display = false
 
 # Handle 3D area input and translate to 2D viewport input
-func _on_area_3d_input_event(_camera, event, mouse_position, _normal, _shape_idx):
+func _on_area_3d_input_event(camera, event, position, normal, shape_idx):
 	if not input_enabled:
 		return
 	
@@ -151,8 +134,8 @@ func _on_area_3d_input_event(_camera, event, mouse_position, _normal, _shape_idx
 			is_dragging = true
 			
 			# Make sure the display is visible
-			if !is_display_visible:
-				is_display_visible = true
+			if !is_visible:
+				is_visible = true
 				visible = true
 			
 			# Activate the controls directly and set focus immediately
@@ -181,19 +164,13 @@ func _on_area_3d_input_event(_camera, event, mouse_position, _normal, _shape_idx
 		
 		# Convert 3D position to 2D viewport coordinates
 		var viewport_size = $SubViewport.size
+		var mesh_size = Vector2(40, 30)  # Size of our quad mesh
 		
-		# Convert mouse position from global space to local space (accounts for rotation)
-		var local_position = to_local(mouse_position)
-		
-		# The mesh is centered at origin, so local_position ranges from:
-		# X: -mesh_size.x/2 to +mesh_size.x/2
-		# Y: -mesh_size.y/2 to +mesh_size.y/2
-		# Z: should be near 0 (on the surface)
-		
-		# Normalize to 0-1 range
+		# Calculate normalized position on the mesh (0-1)
+		var local_position = position - global_position
 		var local_2d_position = Vector2(
-			(local_position.x / mesh_size.x) + 0.5,
-			0.5 - (local_position.y / mesh_size.y)
+			(local_position.x / mesh_size.x + 0.5),
+			(0.5 - local_position.y / mesh_size.y)
 		)
 		
 		# Convert to viewport coordinates
@@ -217,25 +194,22 @@ func _on_area_3d_input_event(_camera, event, mouse_position, _normal, _shape_idx
 		if event.pressed:
 			last_click_position = viewport_position
 		
-
+		# Debug
+		print("Mouse button event forwarded to viewport at position: ", viewport_position)
 	
 	elif event is InputEventMouseMotion:
 		get_viewport().set_input_as_handled()
-		_handle_mouse_motion(mouse_position)
+		_handle_mouse_motion(position)
 
 # Handle mouse motion events
-func _handle_mouse_motion(mouse_position):
+func _handle_mouse_motion(position):
 	var viewport_size = $SubViewport.size
-	
-	# Convert mouse position from global space to local space (accounts for rotation)
-	var local_position = to_local(mouse_position)
-	
-	# Normalize to 0-1 range
+	var mesh_size = Vector2(40, 30)
+	var local_position = position - global_position
 	var local_2d_position = Vector2(
-		(local_position.x / mesh_size.x) + 0.5,
-		0.5 - (local_position.y / mesh_size.y)
+		(local_position.x / mesh_size.x + 0.5),
+		(0.5 - local_position.y / mesh_size.y)
 	)
-	
 	var viewport_position = Vector2(
 		local_2d_position.x * viewport_size.x,
 		local_2d_position.y * viewport_size.y
@@ -336,7 +310,7 @@ func _activate_direct_input_focus():
 
 # New function to handle keyboard input from avatar
 func receive_keyboard_input(event: InputEvent) -> bool:
-	if not input_enabled or not is_display_visible:
+	if not input_enabled or not is_visible:
 		return false
 		
 	# Always process keyboard input regardless of has_keyboard_focus
@@ -354,9 +328,6 @@ func receive_keyboard_input(event: InputEvent) -> bool:
 		if is_instance_valid(modelica_scene):
 			var focused_control = _get_focused_control(modelica_scene)
 			has_focused_control = focused_control != null
-			
-			# Update has_keyboard_focus based on actual focus state
-			has_keyboard_focus = has_focused_control
 		
 		# If no control has focus and this is a typing key (not a navigation/system key),
 		# try to set focus before accepting the event
@@ -369,10 +340,7 @@ func receive_keyboard_input(event: InputEvent) -> bool:
 				var focused_control = _get_focused_control(modelica_scene)
 				if focused_control == null:
 					# If we still don't have focus, don't handle the event
-					has_keyboard_focus = false
 					return false
-				else:
-					has_keyboard_focus = true
 		
 		# Create a copy of the keyboard event to forward to the viewport
 		var viewport_event = InputEventKey.new()
@@ -408,7 +376,7 @@ func _get_focused_control(node: Node) -> Control:
 
 # New function to handle mouse input from avatar
 func receive_mouse_input(event: InputEvent) -> bool:
-	if not input_enabled or not is_display_visible:
+	if not input_enabled or not is_visible:
 		return false
 		
 	if event is InputEventMouseButton:
@@ -438,16 +406,12 @@ func receive_mouse_input(event: InputEvent) -> bool:
 			
 			# Calculate viewport coordinates
 			var viewport_size = $SubViewport.size
-			
-			# Convert from global space to local space (accounts for rotation)
-			var local_position = to_local(result.position)
-			
-			# Normalize to 0-1 range
+			var mesh_size = Vector2(40, 30)
+			var local_position = result.position - global_position
 			var local_2d_position = Vector2(
-				(local_position.x / mesh_size.x) + 0.5,
-				0.5 - (local_position.y / mesh_size.y)
+				(local_position.x / mesh_size.x + 0.5),
+				(0.5 - local_position.y / mesh_size.y)
 			)
-			
 			var viewport_position = Vector2(
 				local_2d_position.x * viewport_size.x,
 				local_2d_position.y * viewport_size.y
@@ -492,12 +456,12 @@ func receive_mouse_input(event: InputEvent) -> bool:
 
 # New function to toggle display visibility
 func toggle_display():
-	is_display_visible = !is_display_visible
-	visible = is_display_visible
-	input_enabled = is_display_visible
+	is_visible = !is_visible
+	visible = is_visible
+	input_enabled = is_visible
 	
 	# If becoming visible, try to set focus
-	if is_display_visible:
+	if is_visible:
 		has_keyboard_focus = true
 		# Try to find any Controls in the SubViewport and set focus to the first one
 		call_deferred("_find_and_set_focus")
@@ -505,7 +469,7 @@ func toggle_display():
 		# Reset focus when hiding the display
 		has_keyboard_focus = false
 	
-	return is_display_visible
+	return is_visible
 
 # New function to just release focus without affecting visibility
 func release_focus():

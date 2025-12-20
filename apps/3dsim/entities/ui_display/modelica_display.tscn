@@ -1,6 +1,6 @@
 [gd_scene load_steps=5 format=3 uid="uid://dpebcdtj4q5wq"]
 
-[ext_resource type="Script" uid="uid://cxi5col7eum2o" path="res://apps/3dsim/entities/ui_display/modelica_display.gd" id="1_h6t8q"]
+[ext_resource type="Script" uid="uid://bsadc51bqlrlt" path="res://apps/3dsim/entities/ui_display/modelica_display.gd" id="1_h6t8q"]
 
 [sub_resource type="QuadMesh" id="QuadMesh_f2m0u"]
 size = Vector2(50, 38)
@@ -11,28 +11,31 @@ transparency = 1
 cull_mode = 2
 shading_mode = 0
 albedo_color = Color(1, 1, 1, 0.95)
+outline_enabled = true
+outline_width = 2.0
+outline_color = Color(0.3, 0.4, 0.6, 0.8)
 
 [sub_resource type="BoxShape3D" id="BoxShape3D_g3y36"]
 size = Vector3(50, 38, 0.1)
 
-[node name="ModelicaDisplay2" type="Node3D" unique_id=451277820]
+[node name="ModelicaDisplay" type="Node3D"]
 script = ExtResource("1_h6t8q")
 
-[node name="DisplayMesh" type="MeshInstance3D" parent="." unique_id=413449100]
+[node name="DisplayMesh" type="MeshInstance3D" parent="."]
 mesh = SubResource("QuadMesh_f2m0u")
 surface_material_override/0 = SubResource("StandardMaterial3D_gljst")
 
-[node name="SubViewport" type="SubViewport" parent="." unique_id=879310770]
+[node name="SubViewport" type="SubViewport" parent="."]
 transparent_bg = true
 gui_snap_controls_to_pixels = false
 size = Vector2i(2560, 1920)
 render_target_update_mode = 4
 
-[node name="Area3D" type="Area3D" parent="." unique_id=1731967640]
+[node name="Area3D" type="Area3D" parent="."]
 collision_layer = 2
 collision_mask = 0
 
-[node name="CollisionShape3D" type="CollisionShape3D" parent="Area3D" unique_id=569423363]
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Area3D"]
 shape = SubResource("BoxShape3D_g3y36")
 
 [connection signal="input_event" from="Area3D" to="." method="_on_area_3d_input_event"]

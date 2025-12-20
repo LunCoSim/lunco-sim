@@ -8,17 +8,3 @@ __pycache__/
 build/
 dist/
 *.egg-info/
-#Managed by gd-plug
-addons/panku_console/
-
-#webrtc addon. Probably later could be managed by gd-plug
-webrtc/
-
-# SSL certificates (security)
-.cert/
-
-
-# Raw data, e.g. PUGs
-
-.raw_data/
-scripts/remote_console_commands_history.txt

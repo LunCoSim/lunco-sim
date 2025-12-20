@@ -1,8 +1,8 @@
-[gd_scene load_steps=2 format=3]
+[gd_scene load_steps=2 format=3 uid="uid://c4iqxvxvxvxvx"]
 
 [ext_resource type="Script" uid="uid://ck0ya0dlsxygw" path="res://apps/supply_chain_modeling/ui/resources/ui_resource_h2.gd" id="1_bklm3"]
 
-[node name="Object_Factory" type="GraphNode" unique_id=1059782117]
+[node name="Object_Factory" type="GraphNode"]
 offset_right = 158.0
 offset_bottom = 232.0
 mouse_filter = 1
@@ -55,41 +55,41 @@ slot/4/right_icon = null
 slot/4/draw_stylebox = true
 script = ExtResource("1_bklm3")
 
-[node name="O2Input" type="Label" parent="." unique_id=1858665671]
+[node name="O2Input" type="Label" parent="."]
 layout_mode = 2
 text = "O2 Input"
 
-[node name="H2Input" type="Label" parent="." unique_id=1201995271]
+[node name="H2Input" type="Label" parent="."]
 layout_mode = 2
 text = "H2 Input"
 
-[node name="ElectricityInput" type="Label" parent="." unique_id=792967520]
+[node name="ElectricityInput" type="Label" parent="."]
 layout_mode = 2
 text = "Electricity Input"
 
-[node name="H2OOutput" type="Label" parent="." unique_id=1191593414]
+[node name="H2OOutput" type="Label" parent="."]
 layout_mode = 2
 text = "H2O Output"
 
-[node name="Parameters" type="VBoxContainer" parent="." unique_id=322984889]
+[node name="Parameters" type="VBoxContainer" parent="."]
 layout_mode = 2
 
-[node name="Efficiency" type="Label" parent="Parameters" unique_id=408720745]
+[node name="Efficiency" type="Label" parent="Parameters"]
 layout_mode = 2
 text = "Efficiency: 95%"
 
-[node name="PowerConsumption" type="Label" parent="Parameters" unique_id=613562612]
+[node name="PowerConsumption" type="Label" parent="Parameters"]
 layout_mode = 2
 text = "Power: 100 kW"
 
-[node name="Status" type="Label" parent="Parameters" unique_id=2017021828]
+[node name="Status" type="Label" parent="Parameters"]
 layout_mode = 2
 text = "Status: Running"
 
-[node name="O2Level" type="Label" parent="Parameters" unique_id=1787501977]
+[node name="O2Level" type="Label" parent="Parameters"]
 layout_mode = 2
 text = "O2: 0.00 units"
 
-[node name="H2Level" type="Label" parent="Parameters" unique_id=510390675]
+[node name="H2Level" type="Label" parent="Parameters"]
 layout_mode = 2
 text = "H2: 0.00 units"

@@ -11,27 +11,11 @@ var is_dragging = false
 var mouse_button_pressed = false
 var mouse_over_display = false
 var has_keyboard_focus = false
-var is_display_visible = true
-var mesh_size = Vector2(50, 38)  # Will be updated from actual mesh in _ready()
-
-# Helper function to get the actual mesh size
-func _get_mesh_size() -> Vector2:
-	if $DisplayMesh and $DisplayMesh.mesh:
-		var mesh = $DisplayMesh.mesh
-		if mesh is QuadMesh:
-			return mesh.size
-		elif mesh is PlaneMesh:
-			return mesh.size
-	# Fallback to default size if mesh not found
-	return Vector2(50, 38)
+var is_visible = true
 
 func _ready():
 	# Add to group for easy identification
 	add_to_group("supply_chain_display")
-	
-	# Get the actual mesh size from the DisplayMesh
-	mesh_size = _get_mesh_size()
-	print("RSCT: Mesh size detected as: ", mesh_size)
 	
 	# First, add a reference to the scene at root level for scripts that use absolute paths
 	# This needs to happen BEFORE loading the supply chain scene so other nodes can find it
@@ -54,7 +38,7 @@ func _ready():
 	# Set up collision shape to match mesh for interaction
 	var collision_shape = $Area3D/CollisionShape3D
 	var box_shape = BoxShape3D.new()
-	box_shape.size = Vector3(mesh_size.x, mesh_size.y, 0.1)
+	box_shape.size = Vector3(40, 30, 0.1) # 10x larger size
 	collision_shape.shape = box_shape
 	
 	# Make sure the SubViewport receives input events
@@ -127,7 +111,7 @@ func _on_mouse_exited():
 	mouse_over_display = false
 
 # Handle 3D area input and translate to 2D viewport input
-func _on_area_3d_input_event(_camera, event, mouse_position, _normal, _shape_idx):
+func _on_area_3d_input_event(camera, event, position, normal, shape_idx):
 	if not input_enabled:
 		return
 	
@@ -146,14 +130,13 @@ func _on_area_3d_input_event(_camera, event, mouse_position, _normal, _shape_idx
 		
 		# Convert 3D position to 2D viewport coordinates
 		var viewport_size = $SubViewport.size
+		var mesh_size = Vector2(40, 30)  # Size of our quad mesh - 10x LARGER
 		
-		# Convert mouse position from global space to local space (accounts for rotation)
-		var local_position = to_local(mouse_position)
-		
-		# Normalize to 0-1 range
+		# Calculate normalized position on the mesh (0-1)
+		var local_position = position - global_position
 		var local_2d_position = Vector2(
-			(local_position.x / mesh_size.x) + 0.5,
-			0.5 - (local_position.y / mesh_size.y)
+			(local_position.x / mesh_size.x + 0.5),
+			(0.5 - local_position.y / mesh_size.y)
 		)
 		
 		# Convert to viewport coordinates
@@ -177,25 +160,22 @@ func _on_area_3d_input_event(_camera, event, mouse_position, _normal, _shape_idx
 		if event.pressed:
 			last_click_position = viewport_position
 		
-
+		# Debug
+		print("Mouse button event forwarded to viewport at position: ", viewport_position)
 	
 	elif event is InputEventMouseMotion:
 		get_viewport().set_input_as_handled()
 		_handle_mouse_motion(position)
 
 # Handle mouse motion events
-func _handle_mouse_motion(mouse_position):
+func _handle_mouse_motion(position):
 	var viewport_size = $SubViewport.size
-	
-	# Convert mouse position from global space to local space (accounts for rotation)
-	var local_position = to_local(mouse_position)
-	
-	# Normalize to 0-1 range
+	var mesh_size = Vector2(40, 30) # 10x LARGER size
+	var local_position = position - global_position
 	var local_2d_position = Vector2(
-		(local_position.x / mesh_size.x) + 0.5,
-		0.5 - (local_position.y / mesh_size.y)
+		(local_position.x / mesh_size.x + 0.5),
+		(0.5 - local_position.y / mesh_size.y)
 	)
-	
 	var viewport_position = Vector2(
 		local_2d_position.x * viewport_size.x,
 		local_2d_position.y * viewport_size.y
@@ -218,19 +198,10 @@ func _handle_mouse_motion(mouse_position):
 
 # New function to handle keyboard input from avatar
 func receive_keyboard_input(event: InputEvent) -> bool:
-	if not input_enabled or not is_display_visible:
+	if not input_enabled or not is_visible:
 		return false
 		
 	if event is InputEventKey:
-		# Check if any control is actually focused in the UI
-		var has_focused_control = false
-		if is_instance_valid(supply_chain_scene):
-			var focused_control = _get_focused_control(supply_chain_scene)
-			has_focused_control = focused_control != null
-			
-			# Update has_keyboard_focus based on actual focus state
-			has_keyboard_focus = has_focused_control
-		
 		# Create a copy of the keyboard event to forward to the viewport
 		var viewport_event = InputEventKey.new()
 		viewport_event.keycode = event.keycode
@@ -249,21 +220,9 @@ func receive_keyboard_input(event: InputEvent) -> bool:
 	
 	return false
 
-# Helper method to find the currently focused control
-func _get_focused_control(node: Node) -> Control:
-	if node is Control and node.has_focus():
-		return node
-	
-	for child in node.get_children():
-		var focused = _get_focused_control(child)
-		if focused != null:
-			return focused
-	
-	return null
-
 # New function to handle mouse input from avatar
 func receive_mouse_input(event: InputEvent) -> bool:
-	if not input_enabled or not is_display_visible:
+	if not input_enabled or not is_visible:
 		return false
 		
 	if event is InputEventMouseButton:
@@ -293,16 +252,12 @@ func receive_mouse_input(event: InputEvent) -> bool:
 			
 			# Calculate viewport coordinates
 			var viewport_size = $SubViewport.size
-			
-			# Convert from global space to local space (accounts for rotation)
-			var local_position = to_local(result.position)
-			
-			# Normalize to 0-1 range
+			var mesh_size = Vector2(40, 30)
+			var local_position = result.position - global_position
 			var local_2d_position = Vector2(
-				(local_position.x / mesh_size.x) + 0.5,
-				0.5 - (local_position.y / mesh_size.y)
+				(local_position.x / mesh_size.x + 0.5),
+				(0.5 - local_position.y / mesh_size.y)
 			)
-			
 			var viewport_position = Vector2(
 				local_2d_position.x * viewport_size.x,
 				local_2d_position.y * viewport_size.y
@@ -347,19 +302,10 @@ func receive_mouse_input(event: InputEvent) -> bool:
 
 # Toggle visibility of the display
 func toggle_display():
-	is_display_visible = !is_display_visible
-	visible = is_display_visible
-	input_enabled = is_display_visible
+	is_visible = !is_visible
+	visible = is_visible
+	input_enabled = is_visible
 
 	# Reset keyboard focus when hiding
-	if !is_display_visible:
+	if !is_visible:
 		has_keyboard_focus = false
-
-## Set the graph to inspect
-func set_graph(graph: LCSolverGraph):
-	if supply_chain_scene and supply_chain_scene.has_method("inspect_graph"):
-		supply_chain_scene.inspect_graph(graph)
-	else:
-		# If scene not loaded yet, wait and try again
-		await get_tree().create_timer(0.1).timeout
-		set_graph(graph)

@@ -8,12 +8,6 @@ script = ExtResource("1_aia32")
 [node name="SunLight" type="DirectionalLight3D" parent="."]
 transform = Transform3D(0.998916, 0.0393323, 0.0248946, -0.0465486, 0.844057, 0.534229, 0, -0.534809, 0.844973, 22.2774, 36.5147, 75.6894)
 shadow_enabled = true
-shadow_bias = 0.01
-shadow_normal_bias = 2.0
+shadow_normal_bias = 10.0
 shadow_blur = 0.1
-directional_shadow_mode = 2
-directional_shadow_split_1 = 0.08
-directional_shadow_split_2 = 0.25
-directional_shadow_fade_start = 0.8
-directional_shadow_blend_splits = true
 directional_shadow_max_distance = 400.0

@@ -3,7 +3,7 @@
 [ext_resource type="Script" uid="uid://bfag4g5q7kkxl" path="res://apps/supply_chain_modeling/ui/widgets/resource_editor.gd" id="1_script"]
 [ext_resource type="Theme" uid="uid://hve1e7mnexbi" path="res://themes/theme.tres" id="2_theme"]
 
-[node name="ResourceEditor" type="Control" unique_id=1283087615]
+[node name="ResourceEditor" type="Control"]
 layout_mode = 3
 anchors_preset = 15
 anchor_right = 1.0
@@ -13,7 +13,7 @@ grow_vertical = 2
 theme = ExtResource("2_theme")
 script = ExtResource("1_script")
 
-[node name="VBoxContainer" type="VBoxContainer" parent="." unique_id=898668667]
+[node name="VBoxContainer" type="VBoxContainer" parent="."]
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -22,33 +22,33 @@ grow_horizontal = 2
 grow_vertical = 2
 theme = ExtResource("2_theme")
 
-[node name="Label" type="Label" parent="VBoxContainer" unique_id=1312071694]
+[node name="Label" type="Label" parent="VBoxContainer"]
 layout_mode = 2
 theme = ExtResource("2_theme")
 text = "Resources"
 horizontal_alignment = 1
 
-[node name="HSeparator" type="HSeparator" parent="VBoxContainer" unique_id=1626291051]
+[node name="HSeparator" type="HSeparator" parent="VBoxContainer"]
 layout_mode = 2
 theme = ExtResource("2_theme")
 
-[node name="ScrollContainer" type="ScrollContainer" parent="VBoxContainer" unique_id=715745263]
+[node name="ScrollContainer" type="ScrollContainer" parent="VBoxContainer"]
 layout_mode = 2
 size_flags_vertical = 3
 theme = ExtResource("2_theme")
 
-[node name="ResourceList" type="VBoxContainer" parent="VBoxContainer/ScrollContainer" unique_id=91115806]
+[node name="ResourceList" type="VBoxContainer" parent="VBoxContainer/ScrollContainer"]
 unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
 theme = ExtResource("2_theme")
 
-[node name="HSeparator2" type="HSeparator" parent="VBoxContainer" unique_id=1601593282]
+[node name="HSeparator2" type="HSeparator" parent="VBoxContainer"]
 layout_mode = 2
 theme = ExtResource("2_theme")
 
-[node name="AddResourceButton" type="Button" parent="VBoxContainer" unique_id=191173139]
+[node name="AddResourceButton" type="Button" parent="VBoxContainer"]
 layout_mode = 2
 theme = ExtResource("2_theme")
 text = "Add Resource"

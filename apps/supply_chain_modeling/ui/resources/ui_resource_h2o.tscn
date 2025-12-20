@@ -1,8 +1,8 @@
-[gd_scene load_steps=2 format=3]
+[gd_scene load_steps=2 format=3 uid="uid://c4iqxvxvxvxvx"]
 
 [ext_resource type="Script" uid="uid://ck0ya0dlsxygw" path="res://apps/supply_chain_modeling/ui/resources/ui_resource_h2.gd" id="1_bklm3"]
 
-[node name="Resource_H2O" type="GraphNode" unique_id=1106981186]
+[node name="Resource_H2O" type="GraphNode"]
 offset_right = 149.0
 offset_bottom = 78.0
 mouse_filter = 1
@@ -28,17 +28,17 @@ slot/1/right_icon = null
 slot/1/draw_stylebox = true
 script = ExtResource("1_bklm3")
 
-[node name="Label" type="Label" parent="." unique_id=502981050]
+[node name="Label" type="Label" parent="."]
 layout_mode = 2
 text = "H2O"
 
-[node name="Properties" type="VBoxContainer" parent="." unique_id=1492290235]
+[node name="Properties" type="VBoxContainer" parent="."]
 layout_mode = 2
 
-[node name="Amount" type="Label" parent="Properties" unique_id=268899680]
+[node name="Amount" type="Label" parent="Properties"]
 layout_mode = 2
 text = "Amount: 100.0 / 100.0 units"
 
-[node name="ProgressBar" type="ProgressBar" parent="Properties" unique_id=1108327252]
+[node name="ProgressBar" type="ProgressBar" parent="Properties"]
 layout_mode = 2
 value = 100.0

@@ -7,7 +7,7 @@ signal nft_minted(token_id: int)
 signal nft_load_complete(data: Dictionary)
 
 var connected_address: String = ""
-var is_wallet_connected_state: bool = false
+var is_connected: bool = false
 
 var js_interface
 
@@ -110,7 +110,7 @@ func _initialize_web3():
 	""")
 
 func connect_wallet() -> void:
-	if is_wallet_connected_state:
+	if is_connected:
 		push_warning("Wallet already connected")
 		return
 
@@ -119,26 +119,26 @@ func connect_wallet() -> void:
 	var result = await js_interface.connectWallet()
 	if result.success:
 		connected_address = result.address
-		is_wallet_connected_state = true
+		is_connected = true
 		emit_signal("wallet_connected", connected_address)
 	else:
 		push_error("Failed to connect wallet: " + str(result.error))
 
 func disconnect_wallet() -> void:
-	if !is_wallet_connected_state:
+	if !is_connected:
 		push_warning("No wallet connected")
 		return
 		
 	# Implement your wallet disconnection logic here
 	connected_address = ""
-	is_wallet_connected_state = false
+	is_connected = false
 	emit_signal("wallet_disconnected")
 
 func get_connected_address() -> String:
 	return connected_address
 
 func is_wallet_connected() -> bool:
-	return is_wallet_connected_state
+	return is_connected
 
 # Function to mint a new blueprint NFT
 func mint_blueprint(graph_data: String, contract_address: String):
@@ -163,14 +163,7 @@ func mint_blueprint(graph_data: String, contract_address: String):
 	var success = false if result.success == null else bool(result.success)
 
 	# emit_signal("transaction_completed", success, JSON.parse_string(JSON.stringify(result)))
-	emit_signal("transaction_completed", success, {})
-	
-	# Emit nft_minted signal if successful
-	if success:
-		# TODO: Extract actual token_id from transaction receipt
-		var token_id = 0  # Placeholder until we can parse the transaction receipt
-		emit_signal("nft_minted", token_id)
-	
+	emit_signal("transaction_completed", false, {})
 	return result
 	
 	# return {"success": false, "error": "Not running in web context"}
@@ -255,7 +248,7 @@ func mint_design(design_data: Dictionary) -> void:
 	var encoded_data = encode_graph_data(design_data)
 	mint_blueprint(encoded_data, NFT_CONTRACT)
 
-func load_design(_token_id: int) -> void:
+func load_design(token_id: int) -> void:
 	#var base64_string = await call_contract(
 		#NFT_CONTRACT, 
 		#"getGraphData",

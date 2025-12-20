@@ -70,8 +70,10 @@ func _client_control_granted(peer_id: int, entity_path: NodePath):
 	print("ControlManager: Granting control to peer ", peer_id, " for entity ", entity_path)
 	if multiplayer.is_server():
 		_sync_client_control_granted.rpc(peer_id, entity_path)
+	else:
+		_sync_client_control_granted(peer_id, entity_path)
 
-@rpc("authority", "reliable", "call_local")
+@rpc("authority", "reliable")
 func _sync_client_control_granted(peer_id: int, entity_path: NodePath):
 	print("ControlManager: Syncing control granted for peer ", peer_id, " and entity ", entity_path)
 	if not multiplayer.is_server():
@@ -79,43 +81,10 @@ func _sync_client_control_granted(peer_id: int, entity_path: NodePath):
 		if peer_id not in peer_controlled_entities:
 			peer_controlled_entities[peer_id] = []
 		peer_controlled_entities[peer_id].append(entity_path)
-	
-	# Set authority on the actual node
-	var node = get_node_or_null(entity_path)
-	if node:
-		node.set_multiplayer_authority(peer_id)
-	else:
-		print("ControlManager: Warning - Node not found for path ", entity_path)
-		
 	control_granted.emit(peer_id, entity_path)
 
 func _client_control_released(peer_id: int, entity_path: NodePath):
 	print("ControlManager: Control released from peer ", peer_id, " for entity ", entity_path)
-	if multiplayer.is_server():
-		_sync_client_control_released.rpc(peer_id, entity_path)
-	else:
-		# Fallback for local? Should not happen if logic is correct
-		control_released.emit(peer_id, entity_path)
-
-@rpc("authority", "reliable", "call_local")
-func _sync_client_control_released(peer_id: int, entity_path: NodePath):
-	print("ControlManager: Syncing control released for peer ", peer_id, " and entity ", entity_path)
-	if not multiplayer.is_server():
-		# Update local state on clients
-		if controlled_entities.get(entity_path) == peer_id:
-			controlled_entities.erase(entity_path)
-			if peer_id in peer_controlled_entities:
-				peer_controlled_entities[peer_id].erase(entity_path)
-				if peer_controlled_entities[peer_id].is_empty():
-					peer_controlled_entities.erase(peer_id)
-	
-	# Reset authority to server
-	var node = get_node_or_null(entity_path)
-	if node:
-		node.set_multiplayer_authority(1) # Reset to server
-	else:
-		print("ControlManager: Warning - Node not found for path ", entity_path)
-		
 	control_released.emit(peer_id, entity_path)
 
 func _client_control_request_denied(peer_id: int, entity_path: NodePath):

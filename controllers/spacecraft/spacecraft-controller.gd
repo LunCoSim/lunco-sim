@@ -4,63 +4,49 @@ class_name LCSpacecraftController
 extends LCController
 
 @export_category("Rocket Specific parameters")
-# Constants handled by LCSpacecraft now
-# @export var THRUST = 50
-# @export var THRUST_TURN = 200
-# @export var THRUST_ROLL = 50
+@export var THRUST = 50
+@export var THRUST_TURN = 200
+@export var THRUST_ROLL = 50
 
-@onready var parent: 
+@onready var parent: RigidBody3D:
 	get:
 		return self.get_parent()
 
+
 signal thrusted(enabled)
 
-func _ready():
-	print("LCSpacecraftController: Ready. Parent: ", parent.name if parent else "NULL")
-	
-	# Add command executor
-	var executor = LCCommandExecutor.new()
-	executor.name = "CommandExecutor"
-	add_child(executor)
-	
-	if parent:
-		print("LCSpacecraftController: Parent methods: ", parent.get_method_list().map(func(m): return m.name).filter(func(n): return "control" in n))
+# Commands
+# thrust
+# change orienation(x, y, z)
 
 # Internal state
 var thrust := 0.0
 var torque := Vector3.ZERO
 
+#-----------------------
+
+# Processing physics for Spacecraft controller
+func _physics_process(_delta):
+	#if Target.name == str(multiplayer.get_unique_id()): TBD Find a better way to handle multiplayer authority
+	if is_multiplayer_authority():
+		if parent:
+			parent.apply_central_force(parent.transform.basis.z * thrust)
+
+			parent.apply_torque(parent.global_transform.basis.x * torque.x * THRUST_TURN)
+			parent.apply_torque(parent.global_transform.basis.y * torque.y * THRUST_TURN)
+			parent.apply_torque(-parent.global_transform.basis.z * torque.z * THRUST_ROLL)
+
+
+
+# ------------
+# Commands that changes internal state
 func throttle(_thrust: bool):
 	if _thrust:
-		thrust = 1.0
-		print("SpacecraftController: Throttle activated")
+		thrust = THRUST
+		parent._on_spacecraft_controller_thrusted(true)
 	else:
-		thrust = 0.0
-		
-	thrusted.emit(_thrust)
-	_update_parent_control()
+		thrust = 0
+		parent._on_spacecraft_controller_thrusted(false)
 		
 func change_orientation(_torque: Vector3):
 	torque = _torque
-	_update_parent_control()
-
-func _update_parent_control():
-	if parent and parent.has_method("set_control_inputs"):
-		parent.set_control_inputs(thrust, torque)
-	elif parent and parent.has_method("_on_spacecraft_controller_thrusted"):
-		# Fallback for older spacecraft
-		parent._on_spacecraft_controller_thrusted(thrust > 0.5)
-
-# Command Methods
-func cmd_throttle(args: Dictionary):
-	var enabled = args.get("enabled", true)
-	if typeof(enabled) == TYPE_STRING: enabled = enabled.to_lower() == "true"
-	throttle(bool(enabled))
-	return "Throttle %s" % ("ON" if enabled else "OFF")
-
-func cmd_orientation(args: Dictionary):
-	var x = float(args.get("x", 0.0))
-	var y = float(args.get("y", 0.0))
-	var z = float(args.get("z", 0.0))
-	change_orientation(Vector3(x, y, z))
-	return "Orientation updated"

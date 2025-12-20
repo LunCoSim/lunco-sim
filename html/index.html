@@ -1,0 +1,642 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no">
+		<title>$GODOT_PROJECT_NAME</title>
+
+		<script src="https://cdn.jsdelivr.net/npm/web3@4.13.0/dist/web3.min.js"></script>
+
+		<style>
+body {
+	touch-action: none;
+	margin: 0;
+	border: 0 none;
+	padding: 0;
+	text-align: center;
+	background-color: black;
+}
+
+#canvas {
+	display: block;
+	margin: 0;
+	color: white;
+}
+
+#canvas:focus {
+	outline: none;
+}
+
+.godot {
+	font-family: 'Noto Sans', 'Droid Sans', Arial, sans-serif;
+	color: #e0e0e0;
+	background-color: #3b3943;
+	background-image: linear-gradient(to bottom, #403e48, #35333c);
+	border: 1px solid #45434e;
+	box-shadow: 0 0 1px 1px #2f2d35;
+}
+
+/* Status display */
+
+#status {
+	position: absolute;
+	left: 0;
+	top: 0;
+	right: 0;
+	bottom: 0;
+	display: flex;
+	justify-content: center;
+	align-items: center;
+	/* don't consume click events - make children visible explicitly */
+	visibility: hidden;
+}
+
+#status-progress {
+	width: 366px;
+	height: 7px;
+	background-color: #38363A;
+	border: 1px solid #444246;
+	padding: 1px;
+	box-shadow: 0 0 2px 1px #1B1C22;
+	border-radius: 2px;
+	visibility: visible;
+}
+
+@media only screen and (orientation:portrait) {
+	#status-progress {
+		width: 61.8%;
+	}
+}
+
+#status-progress-inner {
+	height: 100%;
+	width: 0;
+	box-sizing: border-box;
+	transition: width 0.5s linear;
+	background-color: #202020;
+	border: 1px solid #222223;
+	box-shadow: 0 0 1px 1px #27282E;
+	border-radius: 3px;
+}
+
+#status-indeterminate {
+	height: 42px;
+	visibility: visible;
+	position: relative;
+}
+
+#status-indeterminate > div {
+	width: 4.5px;
+	height: 0;
+	border-style: solid;
+	border-width: 9px 3px 0 3px;
+	border-color: #2b2b2b transparent transparent transparent;
+	transform-origin: center 21px;
+	position: absolute;
+}
+
+#status-indeterminate > div:nth-child(1) { transform: rotate( 22.5deg); }
+#status-indeterminate > div:nth-child(2) { transform: rotate( 67.5deg); }
+#status-indeterminate > div:nth-child(3) { transform: rotate(112.5deg); }
+#status-indeterminate > div:nth-child(4) { transform: rotate(157.5deg); }
+#status-indeterminate > div:nth-child(5) { transform: rotate(202.5deg); }
+#status-indeterminate > div:nth-child(6) { transform: rotate(247.5deg); }
+#status-indeterminate > div:nth-child(7) { transform: rotate(292.5deg); }
+#status-indeterminate > div:nth-child(8) { transform: rotate(337.5deg); }
+
+#status-notice {
+	margin: 0 100px;
+	line-height: 1.3;
+	visibility: visible;
+	padding: 4px 6px;
+	visibility: visible;
+}
+		</style>
+		$GODOT_HEAD_INCLUDE
+	</head>
+	<body>
+		<canvas id="canvas">
+			HTML5 canvas appears to be unsupported in the current browser.<br >
+			Please try updating or use a different browser.
+		</canvas>
+		<div id="status">
+			<div id="status-progress" style="display: none;" oncontextmenu="event.preventDefault();">
+				<div id ="status-progress-inner"></div>
+			</div>
+			<div id="status-indeterminate" style="display: none;" oncontextmenu="event.preventDefault();">
+				<div></div>
+				<div></div>
+				<div></div>
+				<div></div>
+				<div></div>
+				<div></div>
+				<div></div>
+				<div></div>
+			</div>
+			<div id="status-notice" class="godot" style="display: none;"></div>
+		</div>
+
+		<script src="$GODOT_URL"></script>
+
+
+        <script>
+            // Initialize web3
+            let web3 = new Web3(Web3.givenProvider || "ws://localhost:8545");
+
+            // Check if MetaMask is installed
+            if (typeof window.ethereum !== 'undefined' || (typeof window.web3 !== 'undefined')) {
+              web3 = new Web3(window.ethereum || window.web3.currentProvider);
+            } else {
+              console.log('MetaMask not found. Install it to proceed.');
+            }
+
+			const contractABI = [
+	{
+		"anonymous": false,
+		"inputs": [
+			{
+				"indexed": true,
+				"internalType": "address",
+				"name": "account",
+				"type": "address"
+			},
+			{
+				"indexed": true,
+				"internalType": "address",
+				"name": "operator",
+				"type": "address"
+			},
+			{
+				"indexed": false,
+				"internalType": "bool",
+				"name": "approved",
+				"type": "bool"
+			}
+		],
+		"name": "ApprovalForAll",
+		"type": "event"
+	},
+	{
+		"anonymous": false,
+		"inputs": [
+			{
+				"indexed": true,
+				"internalType": "address",
+				"name": "operator",
+				"type": "address"
+			},
+			{
+				"indexed": true,
+				"internalType": "address",
+				"name": "from",
+				"type": "address"
+			},
+			{
+				"indexed": true,
+				"internalType": "address",
+				"name": "to",
+				"type": "address"
+			},
+			{
+				"indexed": false,
+				"internalType": "uint256[]",
+				"name": "ids",
+				"type": "uint256[]"
+			},
+			{
+				"indexed": false,
+				"internalType": "uint256[]",
+				"name": "values",
+				"type": "uint256[]"
+			}
+		],
+		"name": "TransferBatch",
+		"type": "event"
+	},
+	{
+		"anonymous": false,
+		"inputs": [
+			{
+				"indexed": true,
+				"internalType": "address",
+				"name": "operator",
+				"type": "address"
+			},
+			{
+				"indexed": true,
+				"internalType": "address",
+				"name": "from",
+				"type": "address"
+			},
+			{
+				"indexed": true,
+				"internalType": "address",
+				"name": "to",
+				"type": "address"
+			},
+			{
+				"indexed": false,
+				"internalType": "uint256",
+				"name": "id",
+				"type": "uint256"
+			},
+			{
+				"indexed": false,
+				"internalType": "uint256",
+				"name": "value",
+				"type": "uint256"
+			}
+		],
+		"name": "TransferSingle",
+		"type": "event"
+	},
+	{
+		"anonymous": false,
+		"inputs": [
+			{
+				"indexed": false,
+				"internalType": "string",
+				"name": "value",
+				"type": "string"
+			},
+			{
+				"indexed": true,
+				"internalType": "uint256",
+				"name": "id",
+				"type": "uint256"
+			}
+		],
+		"name": "URI",
+		"type": "event"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "address",
+				"name": "account",
+				"type": "address"
+			},
+			{
+				"internalType": "uint256",
+				"name": "id",
+				"type": "uint256"
+			}
+		],
+		"name": "balanceOf",
+		"outputs": [
+			{
+				"internalType": "uint256",
+				"name": "",
+				"type": "uint256"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "address[]",
+				"name": "accounts",
+				"type": "address[]"
+			},
+			{
+				"internalType": "uint256[]",
+				"name": "ids",
+				"type": "uint256[]"
+			}
+		],
+		"name": "balanceOfBatch",
+		"outputs": [
+			{
+				"internalType": "uint256[]",
+				"name": "",
+				"type": "uint256[]"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "address",
+				"name": "account",
+				"type": "address"
+			},
+			{
+				"internalType": "address",
+				"name": "operator",
+				"type": "address"
+			}
+		],
+		"name": "isApprovedForAll",
+		"outputs": [
+			{
+				"internalType": "bool",
+				"name": "",
+				"type": "bool"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "address",
+				"name": "from",
+				"type": "address"
+			},
+			{
+				"internalType": "address",
+				"name": "to",
+				"type": "address"
+			},
+			{
+				"internalType": "uint256[]",
+				"name": "ids",
+				"type": "uint256[]"
+			},
+			{
+				"internalType": "uint256[]",
+				"name": "amounts",
+				"type": "uint256[]"
+			},
+			{
+				"internalType": "bytes",
+				"name": "data",
+				"type": "bytes"
+			}
+		],
+		"name": "safeBatchTransferFrom",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "address",
+				"name": "from",
+				"type": "address"
+			},
+			{
+				"internalType": "address",
+				"name": "to",
+				"type": "address"
+			},
+			{
+				"internalType": "uint256",
+				"name": "id",
+				"type": "uint256"
+			},
+			{
+				"internalType": "uint256",
+				"name": "amount",
+				"type": "uint256"
+			},
+			{
+				"internalType": "bytes",
+				"name": "data",
+				"type": "bytes"
+			}
+		],
+		"name": "safeTransferFrom",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "address",
+				"name": "operator",
+				"type": "address"
+			},
+			{
+				"internalType": "bool",
+				"name": "approved",
+				"type": "bool"
+			}
+		],
+		"name": "setApprovalForAll",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "bytes4",
+				"name": "interfaceId",
+				"type": "bytes4"
+			}
+		],
+		"name": "supportsInterface",
+		"outputs": [
+			{
+				"internalType": "bool",
+				"name": "",
+				"type": "bool"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "uint256",
+				"name": "id",
+				"type": "uint256"
+			}
+		],
+		"name": "uri",
+		"outputs": [
+			{
+				"internalType": "string",
+				"name": "",
+				"type": "string"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	}
+]
+
+
+			const tokenContract = "0xaa54295c8eb420732a3748414b782c89229c0841" // Parallel contract address
+			const tokenId = 1587 // A token we'd like to retrieve its metadata of
+
+
+
+            async function apiCall(endpoint, data) {
+              const res = await fetch(endpoint, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data)
+              });
+              return res.json();
+            }
+
+
+
+            var Login = {}
+            Login.login = login
+			Login.checkProfile = checkProfile
+
+
+			async function checkProfile(account, _callback) {
+
+				console.log("checkProfile, ", account)
+				const contract = new web3.eth.Contract(contractABI, tokenContract);
+				const balance = await contract.methods.balanceOf(account, tokenId).call()
+				console.log('balance of: ', balance)
+				_callback(balance)
+			}
+
+            // Log in and sign message
+            async function login(_callback) {
+              try {
+                const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+                const account = accounts[0];
+
+                const message = "Sign this message to log into LunCo";
+                const signature = await web3.eth.personal.sign(message, account, "");
+
+                console.log('Logged in with account:', account);
+                console.log('Signature:', signature);
+
+                // Call /success API
+                // const successData = await apiCall('/success', { wallet: account, signature });
+                console.log('Success API response:', { wallet: account, signature });
+                _callback({ wallet: account, signature })
+
+              } catch (error) {
+                console.log('Login canceled:', error);
+
+                // Call /cancel API
+                // const cancelData = await apiCall('/cancel', {});
+                console.log('Cancel API response:', cancelData);
+              }
+            }
+
+            // Trigger login on button click
+			var loginBtn = document.getElementById('loginBtn');
+			if(loginBtn) {
+				loginBtn.addEventListener('click', login);
+			}
+
+          </script>
+
+
+		<script>
+const GODOT_CONFIG = $GODOT_CONFIG;
+const engine = new Engine(GODOT_CONFIG);
+
+(function () {
+	const INDETERMINATE_STATUS_STEP_MS = 100;
+	const statusProgress = document.getElementById('status-progress');
+	const statusProgressInner = document.getElementById('status-progress-inner');
+	const statusIndeterminate = document.getElementById('status-indeterminate');
+	const statusNotice = document.getElementById('status-notice');
+
+	let initializing = true;
+	let statusMode = 'hidden';
+
+	let animationCallbacks = [];
+	function animate(time) {
+		animationCallbacks.forEach((callback) => callback(time));
+		requestAnimationFrame(animate);
+	}
+	requestAnimationFrame(animate);
+
+	function animateStatusIndeterminate(ms) {
+		const i = Math.floor((ms / INDETERMINATE_STATUS_STEP_MS) % 8);
+		if (statusIndeterminate.children[i].style.borderTopColor === '') {
+			Array.prototype.slice.call(statusIndeterminate.children).forEach((child) => {
+				child.style.borderTopColor = '';
+			});
+			statusIndeterminate.children[i].style.borderTopColor = '#dfdfdf';
+		}
+	}
+
+	function setStatusMode(mode) {
+		if (statusMode === mode || !initializing) {
+			return;
+		}
+		[statusProgress, statusIndeterminate, statusNotice].forEach((elem) => {
+			elem.style.display = 'none';
+		});
+		animationCallbacks = animationCallbacks.filter(function (value) {
+			return (value !== animateStatusIndeterminate);
+		});
+		switch (mode) {
+		case 'progress':
+			statusProgress.style.display = 'block';
+			break;
+		case 'indeterminate':
+			statusIndeterminate.style.display = 'block';
+			animationCallbacks.push(animateStatusIndeterminate);
+			break;
+		case 'notice':
+			statusNotice.style.display = 'block';
+			break;
+		case 'hidden':
+			break;
+		default:
+			throw new Error('Invalid status mode');
+		}
+		statusMode = mode;
+	}
+
+	function setStatusNotice(text) {
+		while (statusNotice.lastChild) {
+			statusNotice.removeChild(statusNotice.lastChild);
+		}
+		const lines = text.split('\n');
+		lines.forEach((line) => {
+			statusNotice.appendChild(document.createTextNode(line));
+			statusNotice.appendChild(document.createElement('br'));
+		});
+	}
+
+	function displayFailureNotice(err) {
+		const msg = err.message || err;
+		console.error(msg);
+		setStatusNotice(msg);
+		setStatusMode('notice');
+		initializing = false;
+	}
+
+	const missing = Engine.getMissingFeatures();
+	if (missing.length !== 0) {
+		const missingMsg = 'Error\nThe following features required to run Godot projects on the Web are missing:\n';
+		displayFailureNotice(missingMsg + missing.join('\n'));
+	} else {
+		setStatusMode('indeterminate');
+		engine.startGame({
+			'onProgress': function (current, total) {
+				if (total > 0) {
+					statusProgressInner.style.width = `${(current / total) * 100}%`;
+					setStatusMode('progress');
+					if (current === total) {
+						// wait for progress bar animation
+						setTimeout(() => {
+							setStatusMode('indeterminate');
+						}, 500);
+					}
+				} else {
+					setStatusMode('indeterminate');
+				}
+			},
+		}).then(() => {
+			setStatusMode('hidden');
+			initializing = false;
+		}, displayFailureNotice);
+	}
+}());
+		</script>
+	</body>
+</html>
