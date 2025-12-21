@@ -171,10 +171,9 @@ func _print_thruster_status():
 	var thrusters = _get_effectors_of_type(LCThrusterEffector)
 	print("Thrusters:")
 	for thruster: LCThrusterEffector in thrusters:
-		print("  %s: %.2f N (%.1f%% cmd), firing=%s" % [
+		print("  %s: %.2f N, firing=%s" % [
 			thruster.name,
 			thruster.current_thrust,
-			thruster.thrust_command * 100,
 			thruster.is_firing
 		])
 
@@ -214,9 +213,9 @@ func _print_battery_status():
 		])
 
 func _print_fuel_status():
-	var tanks = _get_effectors_of_type(LCResourceTankEffector)
+	var tanks = _get_effectors_of_type(LCResourceEffector)
 	print("Fuel Tanks:")
-	for tank: LCResourceTankEffector in tanks:
+	for tank: LCResourceEffector in tanks:
 		print("  %s: %.2f kg (%.1f%% full)" % [
 			tank.name,
 			tank.get_amount(),
@@ -225,7 +224,7 @@ func _print_fuel_status():
 
 func _print_effector_summary():
 	print("Effectors:")
-	print("  Fuel Tanks (Resource): %d" % _get_effectors_of_type(LCResourceTankEffector).size())
+	print("  Fuel Tanks (Resource): %d" % _get_effectors_of_type(LCResourceEffector).size())
 	print("  Thrusters: %d" % _get_effectors_of_type(LCThrusterEffector).size())
 	print("  Reaction Wheels: %d" % _get_effectors_of_type(LCReactionWheelEffector).size())
 	print("  Solar Panels: %d" % _get_effectors_of_type(LCSolarPanelEffector).size())

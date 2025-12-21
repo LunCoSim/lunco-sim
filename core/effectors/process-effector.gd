@@ -12,7 +12,7 @@ extends LCStateEffector
 
 var recipe: LCProcessRecipe
 var cycle_progress: float = 0.0
-var connected_tanks: Dictionary = {}  # resource_id -> LCResourceTankEffector
+var connected_tanks: Dictionary = {}  # resource_id -> LCResourceEffector
 var current_efficiency: float = 1.0
 
 # Statistics
@@ -109,7 +109,7 @@ func _check_outputs() -> bool:
 	return true
 
 ## Connect a resource tank to this process
-func connect_tank(tank: LCResourceTankEffector):
+func connect_tank(tank: LCResourceEffector):
 	if not tank:
 		return
 	

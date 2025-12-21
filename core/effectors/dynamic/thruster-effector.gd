@@ -19,9 +19,9 @@ extends LCDynamicEffector
 
 @export_group("Propellant Connection")
 @export var fuel_tank_path: NodePath
-var fuel_tank = null  ## LCResourceTankEffector
+var fuel_tank: LCResourceEffector = null
 @export var oxidizer_tank_path: NodePath
-var oxidizer_tank = null  ## LCResourceTankEffector for oxygen
+var oxidizer_tank: LCResourceEffector = null
 @export var mixture_ratio: float = 3.6  ## Oxidizer:Fuel mass ratio (3.6:1 for Starship Raptor)
 @export var fuel_flow_rate: float = 0.0  ## kg/s at max thrust (auto-calculated if 0)
 
@@ -77,7 +77,7 @@ func _ready():
 	# Connect to fuel tank
 	if not fuel_tank_path.is_empty():
 		var node = get_node_or_null(fuel_tank_path)
-		if node is LCResourceTankEffector:
+		if node is LCResourceEffector:
 			fuel_tank = node
 			print("✓ LCThrusterEffector: Connected to fuel tank ", node.name, " with ", node.get_amount(), " kg")
 		else:
@@ -88,7 +88,7 @@ func _ready():
 	# Connect to oxidizer tank
 	if not oxidizer_tank_path.is_empty():
 		var node = get_node_or_null(oxidizer_tank_path)
-		if node is LCResourceTankEffector:
+		if node is LCResourceEffector:
 			oxidizer_tank = node
 			print("✓ LCThrusterEffector: Connected to oxidizer tank ", node.name, " with ", node.get_amount(), " kg")
 		else:

@@ -89,5 +89,3 @@ func _on_auto_reconnect_toggled(toggled_on):
 	if Profile:
 		Profile.auto_reconnect = toggled_on
 		print("Auto-reconnect ", "enabled" if toggled_on else "disabled")
-
-

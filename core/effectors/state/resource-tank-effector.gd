@@ -1,5 +1,5 @@
 class_name LCResourceTankEffector
-extends LCStateEffector
+extends LCResourceEffector
 
 ## Universal resource storage tank (New Physics)
 ##
@@ -132,6 +132,9 @@ func get_resource_name() -> String:
 	var registry = get_node_or_null("/root/LCResourceRegistry")
 	var res_def = registry.get_resource(resource_id) if registry else null
 	return res_def.display_name if res_def else "Unknown"
+
+func get_resource_id() -> String:
+	return resource_id
 
 # --- Internal ---
 
