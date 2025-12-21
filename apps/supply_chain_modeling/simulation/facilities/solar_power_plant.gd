@@ -1,7 +1,6 @@
 class_name SolarPowerPlant
 extends SolverSimulationNode
 
-const SolverDomain = preload("res://core/systems/solver/solver_domain.gd")
 
 @export var power_output: float = 1000.0  # kW (Peak)
 @export var solar_irradiance: float = 1.0  # kW/m²

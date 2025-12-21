@@ -1,7 +1,6 @@
 class_name StorageFacility
 extends SolverSimulationNode
 
-const SolverDomain = preload("res://core/systems/solver/solver_domain.gd")
 
 @export var capacity: float = 100.0  # Maximum storage capacity (kg)
 @export var current_amount: float = 0.0  # Current amount stored (kg)

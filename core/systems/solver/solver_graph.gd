@@ -1,7 +1,6 @@
 class_name LCSolverGraph
 extends RefCounted
 
-const SolverDomain = preload("res://core/systems/solver/solver_domain.gd")
 
 ## Linear Graph Solver Engine
 ## Solves for Potential and Flow in a network of nodes and edges.

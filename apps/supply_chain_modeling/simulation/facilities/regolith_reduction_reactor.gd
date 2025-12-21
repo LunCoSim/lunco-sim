@@ -1,7 +1,6 @@
 class_name RegolithReductionReactor
 extends SolverSimulationNode
 
-const SolverDomain = preload("res://core/systems/solver/solver_domain.gd")
 
 # Input/output rates
 @export var regolith_input_rate: float = 10.0  # kg/minute

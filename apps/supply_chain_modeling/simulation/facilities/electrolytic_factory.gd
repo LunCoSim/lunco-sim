@@ -1,7 +1,6 @@
 class_name ElectrolyticFactory
 extends SolverSimulationNode
 
-const SolverDomain = preload("res://core/systems/solver/solver_domain.gd")
 
 # Input/output rates
 @export var h2o_input_rate: float = 2.0  # units/minute

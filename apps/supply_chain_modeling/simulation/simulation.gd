@@ -1,7 +1,6 @@
 class_name SimulationManager
 extends Node
 
-const SolverDomain = preload("res://core/systems/solver/solver_domain.gd")
 const RegolithReductionReactor = preload("res://apps/supply_chain_modeling/simulation/facilities/regolith_reduction_reactor.gd")
 const WaterCollectionSystem = preload("res://apps/supply_chain_modeling/simulation/facilities/water_collection_system.gd")
 const SolarPowerPlant = preload("res://apps/supply_chain_modeling/simulation/facilities/solar_power_plant.gd")

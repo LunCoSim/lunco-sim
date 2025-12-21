@@ -1,7 +1,6 @@
 class_name Pump
 extends SolverSimulationNode
 
-const SolverDomain = preload("res://core/systems/solver/solver_domain.gd")
 
 # Pump properties
 @export var pump_rate: float = 10.0  # units/minute

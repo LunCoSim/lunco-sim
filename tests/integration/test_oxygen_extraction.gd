@@ -7,7 +7,6 @@ const StorageFacility = preload("res://apps/supply_chain_modeling/simulation/fac
 const RegolithReductionReactor = preload("res://apps/supply_chain_modeling/simulation/facilities/regolith_reduction_reactor.gd")
 const WaterCollectionSystem = preload("res://apps/supply_chain_modeling/simulation/facilities/water_collection_system.gd")
 const ElectrolyticFactory = preload("res://apps/supply_chain_modeling/simulation/facilities/electrolytic_factory.gd")
-const SolverDomain = preload("res://core/systems/solver/solver_domain.gd")
 
 var simulation: SimulationManager
 var solar_panel: SolarPowerPlant

@@ -1,7 +1,6 @@
 class_name LCSolverNode
 extends RefCounted
 
-const SolverDomain = preload("res://core/systems/solver/solver_domain.gd")
 
 ## Node in the Linear Graph Solver
 ## Represents a point of potential (Pressure/Voltage) in a specific domain.

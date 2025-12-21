@@ -5,7 +5,6 @@ const StorageFacility = preload("res://apps/supply_chain_modeling/simulation/fac
 const Pump = preload("res://apps/supply_chain_modeling/simulation/facilities/pump.gd")
 const SolarPowerPlant = preload("res://apps/supply_chain_modeling/simulation/facilities/solar_power_plant.gd")
 const ElectrolyticFactory = preload("res://apps/supply_chain_modeling/simulation/facilities/electrolytic_factory.gd")
-const SolverDomain = preload("res://core/systems/solver/solver_domain.gd")
 
 var simulation: SimulationManager
 var water_tank: StorageFacility

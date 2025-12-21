@@ -1,7 +1,6 @@
 class_name BaseResource
 extends SolverSimulationNode
 
-const SolverDomain = preload("res://core/systems/solver/solver_domain.gd")
 
 @export var current_amount: float = 2000.0
 @export var max_amount: float = 2000.0

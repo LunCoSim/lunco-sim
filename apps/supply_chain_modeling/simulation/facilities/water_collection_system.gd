@@ -1,7 +1,6 @@
 class_name WaterCollectionSystem
 extends SolverSimulationNode
 
-const SolverDomain = preload("res://core/systems/solver/solver_domain.gd")
 
 # Rates
 @export var condensation_rate: float = 5.0 # kg/minute
