@@ -11,6 +11,7 @@ extends LCStateEffector
 @export var max_momentum: float = 10.0  ## Maximum momentum storage in N·m·s
 @export var wheel_inertia: float = 0.01  ## Wheel moment of inertia in kg·m²
 @export var spin_axis: Vector3 = Vector3(1, 0, 0)  ## Local spin axis (normalized)
+@export var action_channel: String = "torque_pitch" ## Action this wheel responds to
 
 @export_group("Performance")
 @export var friction_coefficient: float = 0.001  ## Friction torque coefficient
@@ -52,6 +53,15 @@ func set_torque_normalized(level: float):
 func set_torque(torque_nm: float):
 	torque_command = clamp(torque_nm, -max_torque, max_torque)
 
+# --- Control Interface ---
+
+func get_control_actions() -> Array[String]:
+	return [action_channel]
+
+func apply_control(action: String, value: float):
+	if action == action_channel:
+		set_torque_normalized(value)
+
 ## Updates wheel dynamics and momentum.
 func _update_wheel_dynamics(delta: float):
 	# Apply commanded torque
@@ -83,12 +93,15 @@ func _update_wheel_dynamics(delta: float):
 			stored_momentum = clamp(stored_momentum, -max_momentum, max_momentum)
 			wheel_speed = stored_momentum / wheel_inertia
 
-## Returns the torque applied to the spacecraft (reaction torque).
-## This should be called by the vehicle to apply the RW torque.
-func get_reaction_torque() -> Vector3:
+## Computes the torque applied by this effector.
+func compute_force_torque(_delta: float) -> Dictionary:
 	# Reaction torque is opposite to wheel acceleration
 	var wheel_torque = -torque_command
-	return local_to_global_torque(spin_axis * wheel_torque)
+	return {
+		"force": Vector3.ZERO,
+		"torque": local_to_global_torque(spin_axis * wheel_torque),
+		"position": global_position
+	}
 
 ## Dumps momentum by applying external torque (e.g., thrusters, magnetic torquers).
 ## Returns actual momentum dumped.

@@ -129,6 +129,17 @@ func set_brake_force(force: float):
 	brake_force_request = clamp(force, 0.0, max_brake_force)
 	Commands["brake"] = brake_force_request
 
+# --- Control Interface ---
+
+func get_control_actions() -> Array[String]:
+	return ["drive", "brake"]
+
+func apply_control(action: String, value: float):
+	if action == "drive":
+		set_motor_torque(value * max_motor_torque)
+	elif action == "brake":
+		set_brake_force(value * max_brake_force)
+
 ## Gets current wheel speed in m/s.
 func get_wheel_speed() -> float:
 	# RPM to m/s: (RPM * 2π * radius) / 60

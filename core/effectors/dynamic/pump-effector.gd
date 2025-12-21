@@ -10,6 +10,7 @@ extends LCDynamicEffector
 @export var max_pressure: float = 500000.0  ## Maximum pressure head in Pa (5 bar typical turbopump)
 @export var max_flow: float = 50.0  ## Maximum flow rate in kg/s
 @export var pump_efficiency: float = 0.85  ## Pump efficiency (0.0 to 1.0)
+@export var action_channel: String = "thrust" ## Action this pump responds to
 
 @export_group("Connections")
 @export var source_path: NodePath  ## Source node (typically a tank)
@@ -124,6 +125,15 @@ func _process(delta):
 ## Sets the pump power (0.0 to 1.0)
 func set_pump_power(power: float):
 	pump_power = clamp(power, 0.0, 1.0)
+
+# --- Control Interface ---
+
+func get_control_actions() -> Array[String]:
+	return [action_channel]
+
+func apply_control(action: String, value: float):
+	if action == action_channel:
+		set_pump_power(value)
 
 ## Updates pump component power based on user input
 func _update_pump_power():

@@ -17,6 +17,22 @@ func _ready():
 			if child is Marker3D and child.name.begins_with("Attach"):
 				attachment_nodes.append(child)
 
+# Physics / Solver processes are handled in subclasses
+func _physics_process(_delta: float):
+	pass
+
+# --- Control Interface ---
+
+## Returns a list of control actions this component responds to.
+## Example: ["thrust", "torque_pitch", "drive", "brake"]
+func get_control_actions() -> Array[String]:
+	return []
+
+## Applies a control signal value to the component.
+## value is typically normalized -1.0 to 1.0 or 0.0 to 1.0.
+func apply_control(_action: String, _value: float):
+	pass
+
 # XTCE Interface (Wrappers around LCSpaceSystem's dictionaries)
 func get_telemetry() -> Dictionary:
 	# In a real implementation, this would sample values from the component's logic

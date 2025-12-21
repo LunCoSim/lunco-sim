@@ -9,6 +9,9 @@ extends VehicleBody3D
 var state_effectors: Array = [] # Can hold LCStateEffector or LCWheelEffector
 var dynamic_effectors: Array = [] # Can hold LCDynamicEffector or LCWheelEffector
 
+# Control routing map: action_name -> Array of effectors
+var control_map: Dictionary = {}
+
 # Resource solver (new physics)
 var solver_graph: LCSolverGraph = null
 
@@ -64,7 +67,6 @@ func _physics_process(delta):
 			
 		_manage_power_system(delta)
 		_apply_effector_forces(delta)
-		_apply_reaction_wheel_torques()
 
 
 ## Initialize solver graph for physics
@@ -113,25 +115,34 @@ func _initialize_solver_graph():
 func _discover_effectors():
 	state_effectors.clear()
 	dynamic_effectors.clear()
+	control_map.clear()
 	
-	# Recursively find all effectors
+	# Recursively find all effectors using duck typing
 	for child in find_children("*"):
-		if child is LCStateEffector:
+		# Does it behave like a state effector (has mass)?
+		if child.has_method("get_mass_contribution"):
 			state_effectors.append(child)
-			if not child.mass_changed.is_connected(_on_effector_mass_changed):
-				child.mass_changed.connect(_on_effector_mass_changed)
-		elif child is LCWheelEffector:
-			# LCWheelEffector implements the interface but extends VehicleWheel3D
-			state_effectors.append(child)
+			if child.has_signal("mass_changed"):
+				if not child.mass_changed.is_connected(_on_effector_mass_changed):
+					child.mass_changed.connect(_on_effector_mass_changed)
+			
+		# Does it behave like a dynamic effector (has force)?
+		if child.has_method("compute_force_torque"):
 			dynamic_effectors.append(child)
 			
-		if child is LCDynamicEffector:
-			dynamic_effectors.append(child)
+		# Register control actions
+		if child.has_method("get_control_actions"):
+			var actions = child.get_control_actions()
+			for action in actions:
+				if not control_map.has(action):
+					control_map[action] = []
+				control_map[action].append(child)
 	
 	if debug_effectors:
 		print("[LCVehicle] Discovered effectors:")
 		for effector in state_effectors:
 			print("  [State] %s (mass: %.2f kg)" % [effector.name, effector.get_mass_contribution()])
+		print("  [Control] Registered actions: ", control_map.keys())
 	
 	mass_properties_dirty = true
 
@@ -200,22 +211,14 @@ func _manage_power_system(delta: float):
 ## Applies forces and torques from dynamic effectors.
 func _apply_effector_forces(delta: float):
 	for effector in dynamic_effectors:
-		if effector.has_method("compute_force_torque"):
-			var ft = effector.compute_force_torque(delta)
-			
-			# Apply force if present
-			if ft.has("force") and ft.force.length_squared() > 0:
-				var position = ft.get("position", global_position)
-				apply_force(ft.force, position - global_position)
-			
-			# Apply torque if present
-			if ft.has("torque") and ft.torque.length_squared() > 0:
-				apply_torque(ft.torque)
-
-## Applies reaction torques from reaction wheels.
-func _apply_reaction_wheel_torques():
-	for effector in state_effectors:
-		if effector is LCReactionWheelEffector:
-			var rw_torque = effector.get_reaction_torque()
-			if rw_torque.length_squared() > 0:
-				apply_torque(rw_torque)
+		# compute_force_torque is guaranteed by _discover_effectors check
+		var ft = effector.compute_force_torque(delta)
+		
+		# Apply force if present
+		if ft.has("force") and ft.force.length_squared() > 0:
+			var position = ft.get("position", global_position)
+			apply_force(ft.force, position - global_position)
+		
+		# Apply torque if present
+		if ft.has("torque") and ft.torque.length_squared() > 0:
+			apply_torque(ft.torque)

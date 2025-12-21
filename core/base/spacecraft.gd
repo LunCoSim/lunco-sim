@@ -9,6 +9,9 @@ extends RigidBody3D
 var state_effectors: Array = [] # Can hold LCStateEffector
 var dynamic_effectors: Array = [] # Can hold LCDynamicEffector
 
+# Control routing map: action_name -> Array of effectors
+var control_map: Dictionary = {}
+
 # Resource solver (new physics)
 var solver_graph: LCSolverGraph = null
 
@@ -56,19 +59,22 @@ var torque_input: Vector3 = Vector3.ZERO
 
 ## Sets control inputs from controller
 func set_control_inputs(thrust: float, torque: Vector3):
-	# print("LCSpacecraft: set_control_inputs thrust=", thrust, " torque=", torque)
 	thrust_input = thrust
 	torque_input = torque
 	
-	# Update pumps to control propellant flow
-	for effector in dynamic_effectors:
-		if effector.has_method("set_pump_power"):
-			effector.set_pump_power(thrust_input)
+	# Route thrust
+	_dispatch_control("thrust", thrust_input)
 	
-	# Legacy: Update thrusters (now a no-op but kept for compatibility)
-	for effector in dynamic_effectors:
-		if effector is LCThrusterEffector:
-			effector.set_thrust(thrust_input)
+	# Route torque (pitch, yaw, roll)
+	_dispatch_control("torque_pitch", torque_input.x)
+	_dispatch_control("torque_yaw", torque_input.y)
+	_dispatch_control("torque_roll", torque_input.z)
+
+## Dispatches a control signal to all registered effectors
+func _dispatch_control(action: String, value: float):
+	if control_map.has(action):
+		for effector in control_map[action]:
+			effector.apply_control(action, value)
 
 func get_telemetry_data() -> Dictionary:
 	return { "Spacecraft": Telemetry }
@@ -85,7 +91,6 @@ func _physics_process(delta):
 			
 		_manage_power_system(delta)
 		_apply_effector_forces(delta)
-		_apply_reaction_wheel_torques()
 		_apply_control_torque(delta)
 	else:
 		# print("LCSpacecraft: No authority (", name, ")")
@@ -97,14 +102,10 @@ func _apply_control_torque(delta):
 		# If we have reaction wheels, they are handled in _apply_reaction_wheel_torques
 		# But if we don't, or if we want "magic" torque from the controller:
 		
-		# Check if we have active reaction wheels
-		var has_rw = false
-		for effector in state_effectors:
-			if effector is LCReactionWheelEffector:
-				has_rw = true
-				break
+		# Check if we have active reaction wheels or other attitude control
+		var has_attitude_control = control_map.has("torque_pitch") or control_map.has("torque_yaw") or control_map.has("torque_roll")
 		
-		if not has_rw:
+		if not has_attitude_control:
 			# Apply magic torque if no reaction wheels present
 			# Scale torque by mass to make it usable across different ship sizes
 			# A base turn rate of ~1 rad/s^2 requires Torque = Inertia * 1
@@ -143,20 +144,33 @@ func _initialize_solver_graph():
 func _discover_effectors():
 	state_effectors.clear()
 	dynamic_effectors.clear()
+	control_map.clear()
 	
-	for child in find_children("*"):
-		if child is LCStateEffector:
+	for child in find_children("*", "", true, false):
+		# Duck typing: if it behaves like a state effector (has mass)
+		if child.has_method("get_mass_contribution"):
 			state_effectors.append(child)
-			if not child.mass_changed.is_connected(_on_effector_mass_changed):
-				child.mass_changed.connect(_on_effector_mass_changed)
-			
-		if child is LCDynamicEffector:
+			if child.has_signal("mass_changed"):
+				if not child.mass_changed.is_connected(_on_effector_mass_changed):
+					child.mass_changed.connect(_on_effector_mass_changed)
+		
+		# Duck typing: if it behaves like a dynamic effector (has force)
+		if child.has_method("compute_force_torque"):
 			dynamic_effectors.append(child)
+			
+		# Register control actions
+		if child.has_method("get_control_actions"):
+			var actions = child.get_control_actions()
+			for action in actions:
+				if not control_map.has(action):
+					control_map[action] = []
+				control_map[action].append(child)
 	
 	if debug_effectors:
 		print("[LCSpacecraft] Discovered effectors:")
 		for effector in state_effectors:
 			print("  [State] %s (mass: %.2f kg)" % [effector.name, effector.get_mass_contribution()])
+		print("  [Control] Registered actions: ", control_map.keys())
 	
 	mass_properties_dirty = true
 
@@ -218,20 +232,12 @@ func _manage_power_system(delta: float):
 ## Applies forces and torques from dynamic effectors.
 func _apply_effector_forces(delta: float):
 	for effector in dynamic_effectors:
-		if effector.has_method("compute_force_torque"):
-			var ft = effector.compute_force_torque(delta)
-			
-			if ft.has("force") and ft.force.length_squared() > 0:
-				var position = ft.get("position", global_position)
-				apply_force(ft.force, position - global_position)
-			
-			if ft.has("torque") and ft.torque.length_squared() > 0:
-				apply_torque(ft.torque)
-
-## Applies reaction torques from reaction wheels.
-func _apply_reaction_wheel_torques():
-	for effector in state_effectors:
-		if effector is LCReactionWheelEffector:
-			var rw_torque = effector.get_reaction_torque()
-			if rw_torque.length_squared() > 0:
-				apply_torque(rw_torque)
+		# compute_force_torque is guaranteed by _discover_effectors check
+		var ft = effector.compute_force_torque(delta)
+		
+		if ft.has("force") and ft.force.length_squared() > 0:
+			var position = ft.get("position", global_position)
+			apply_force(ft.force, position - global_position)
+		
+		if ft.has("torque") and ft.torque.length_squared() > 0:
+			apply_torque(ft.torque)

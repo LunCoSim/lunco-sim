@@ -16,6 +16,7 @@ extends LCDynamicEffector
 @export var specific_impulse: float = 300.0  ## Isp in seconds
 @export var min_on_time: float = 0.02  ## Minimum firing pulse in seconds
 @export var thrust_direction: Vector3 = Vector3(0, 0, 1)  ## Local thrust direction (normalized)
+@export var action_channel: String = "thrust" ## Action this thruster responds to
 
 @export_group("Propellant Connection")
 @export var fuel_tank_path: NodePath
@@ -156,6 +157,15 @@ func set_thrust(level: float):
 	# For now, this is a no-op since pumps control flow
 	# Could be used to adjust throttle_limit if desired
 	pass
+
+# --- Control Interface ---
+
+func get_control_actions() -> Array[String]:
+	return [action_channel]
+
+func apply_control(action: String, value: float):
+	if action == action_channel:
+		set_thrust(value)
 
 ## Sets the gimbal command in degrees.
 func set_gimbal(pitch_deg: float, yaw_deg: float):
