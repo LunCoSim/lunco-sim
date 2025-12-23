@@ -597,6 +597,10 @@ document.addEventListener('DOMContentLoaded', function () {
                                                 let val = argInputs[name].input.value;
                                                 const type = argInputs[name].type;
 
+                                                if (val === "" || val === undefined || val === null) {
+                                                    continue;
+                                                }
+
                                                 if (type === 'float') val = parseFloat(val);
                                                 else if (type === 'int') val = parseInt(val);
                                                 else if (type === 'vector3') {
