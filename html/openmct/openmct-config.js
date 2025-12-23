@@ -135,6 +135,15 @@ document.addEventListener('DOMContentLoaded', function () {
             // Object provider
             var objectProvider = {
                 get: function (identifier) {
+                    if (identifier.key === 'luncosim') {
+                        return Promise.resolve({
+                            identifier: identifier,
+                            name: "LunCoSim",
+                            type: "folder",
+                            location: "ROOT"
+                        });
+                    }
+
                     if (identifier.key === 'entities') {
                         return Promise.resolve({
                             identifier: identifier,
@@ -269,7 +278,10 @@ document.addEventListener('DOMContentLoaded', function () {
             var compositionProvider = {
                 appliesTo: function (domainObject) {
                     return domainObject && domainObject.identifier && domainObject.identifier.namespace === 'luncosim' &&
-                        (domainObject.identifier.key === 'luncosim' || domainObject.identifier.key === 'controllers' || domainObject.type === 'luncosim.telemetry');
+                        (domainObject.identifier.key === 'luncosim' ||
+                            domainObject.identifier.key === 'entities' ||
+                            domainObject.identifier.key === 'controllers' ||
+                            domainObject.type === 'luncosim.telemetry');
                 },
                 load: function (domainObject) {
                     if (domainObject.type === 'luncosim.telemetry') {
