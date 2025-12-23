@@ -62,7 +62,7 @@ func dispatch(command: LCCommand) -> Variant:
 		push_warning("-------------------")
 		
 		return err
-
+		
 ## Executes a command from a raw dictionary (e.g., from JSON/HTTP).
 func execute_raw(dict: Dictionary) -> Variant:
 	var command = LCCommand.from_dict(dict)

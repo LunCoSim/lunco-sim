@@ -87,6 +87,51 @@ document.addEventListener('DOMContentLoaded', function () {
                 };
             }
 
+            function getMockCommands() {
+                return [
+                    {
+                        name: "SET_MOTOR",
+                        arguments: [
+                            { name: "value", type: "float" }
+                        ]
+                    },
+                    {
+                        name: "STOP",
+                        arguments: []
+                    }
+                ];
+            }
+
+            // Command discovery and execution
+            var commandDefinitions = null;
+            function loadCommandDefinitions() {
+                return fetch(`${TELEMETRY_API_URL}/command`)
+                    .then(response => response.json())
+                    .then(data => {
+                        commandDefinitions = data.targets;
+                        return commandDefinitions;
+                    })
+                    .catch(err => {
+                        console.warn('Could not load command definitions:', err);
+                        return {};
+                    });
+            }
+
+            function executeCommand(targetId, commandName, args) {
+                console.log(`Executing command ${commandName} on ${targetId}`, args);
+                return fetch(`${TELEMETRY_API_URL}/command`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        target_path: targetId,
+                        name: commandName,
+                        arguments: args
+                    })
+                }).then(response => response.json());
+            }
+
             // Object provider
             var objectProvider = {
                 get: function (identifier) {
@@ -103,8 +148,19 @@ document.addEventListener('DOMContentLoaded', function () {
                     // Check for mock entities first
                     if (identifier.key.startsWith('mock-')) {
                         const mockEntities = getMockEntities();
-                        const entity = mockEntities.find(e => e.entity_id === identifier.key);
+                        const isCommands = identifier.key.endsWith('-commands');
+                        const baseId = isCommands ? identifier.key.replace('-commands', '') : identifier.key;
+                        const entity = mockEntities.find(e => e.entity_id === baseId);
+
                         if (entity) {
+                            if (isCommands) {
+                                return Promise.resolve({
+                                    identifier: identifier,
+                                    name: "Commands",
+                                    type: "luncosim.commands",
+                                    location: "luncosim:" + baseId
+                                });
+                            }
                             return Promise.resolve({
                                 identifier: identifier,
                                 name: entity.entity_name + " (MOCK)",
@@ -133,18 +189,31 @@ document.addEventListener('DOMContentLoaded', function () {
                         }
                     }
 
+                    const isCommands = identifier.key.endsWith('-commands');
+                    const baseId = isCommands ? identifier.key.replace('-commands', '') : identifier.key;
+
                     return fetch(`${TELEMETRY_API_URL}/entities`)
                         .then(response => {
                             if (!response.ok) throw new Error('Network response was not ok');
                             return response.json();
                         })
                         .then(data => {
-                            const entity = data.entities.find(e => e.entity_id === identifier.key);
+                            const entity = data.entities.find(e => e.entity_id === baseId);
                             if (entity) {
+                                if (isCommands) {
+                                    return {
+                                        identifier: identifier,
+                                        name: "Commands",
+                                        type: "luncosim.commands",
+                                        entity_name: entity.entity_name,
+                                        location: "luncosim:" + baseId
+                                    };
+                                }
                                 return {
                                     identifier: identifier,
                                     name: entity.entity_name + " (" + entity.entity_type + ")",
                                     type: "luncosim.telemetry",
+                                    entity_name: entity.entity_name,
                                     telemetry: {
                                         values: [
                                             { key: "utc", source: "timestamp", name: "Timestamp", format: "utc", hints: { domain: 1 } },
@@ -179,9 +248,19 @@ document.addEventListener('DOMContentLoaded', function () {
             // Composition provider
             var compositionProvider = {
                 appliesTo: function (domainObject) {
-                    return domainObject && domainObject.identifier && domainObject.identifier.namespace === 'luncosim' && domainObject.identifier.key === 'luncosim';
+                    return domainObject && domainObject.identifier && domainObject.identifier.namespace === 'luncosim' &&
+                        (domainObject.identifier.key === 'luncosim' || domainObject.type === 'luncosim.telemetry');
                 },
-                load: function () {
+                load: function (domainObject) {
+                    if (domainObject.type === 'luncosim.telemetry') {
+                        // Commands child for entities
+                        return Promise.resolve([{
+                            namespace: 'luncosim',
+                            key: domainObject.identifier.key + '-commands'
+                        }]);
+                    }
+
+                    // Root listing
                     return fetch(`${TELEMETRY_API_URL}/entities`)
                         .then(response => {
                             if (!response.ok) {
@@ -304,11 +383,182 @@ document.addEventListener('DOMContentLoaded', function () {
             openmct.composition.addProvider(compositionProvider);
             openmct.telemetry.addProvider(telemetryProvider);
 
-            // Register telemetry type
+            // Command View Provider
+            openmct.objectViews.addProvider({
+                key: 'luncosim.command-view',
+                name: 'Commands',
+                cssClass: 'icon-command',
+                canView: function (domainObject) {
+                    return domainObject.type === 'luncosim.commands';
+                },
+                view: function (domainObject) {
+                    let container;
+                    return {
+                        show: function (element) {
+                            container = element;
+                            container.style.padding = '20px';
+                            container.style.color = 'white';
+                            container.style.overflowY = 'auto';
+                            container.style.height = '100%';
+
+                            const title = document.createElement('h2');
+                            title.innerText = `Command Control`;
+                            container.appendChild(title);
+
+                            const commandList = document.createElement('div');
+                            commandList.innerHTML = '<i>Loading commands...</i>';
+                            container.appendChild(commandList);
+
+                            const refreshBtn = document.createElement('button');
+                            refreshBtn.innerText = 'Refresh Commands';
+                            refreshBtn.style.marginBottom = '10px';
+                            refreshBtn.style.padding = '5px 10px';
+                            refreshBtn.style.cursor = 'pointer';
+                            refreshBtn.onclick = renderCommands;
+                            container.insertBefore(refreshBtn, commandList);
+
+                            function renderCommands() {
+                                commandList.innerHTML = '<i>Loading...</i>';
+
+                                const entityId = domainObject.identifier.key.replace('-commands', '');
+                                const entityName = domainObject.entity_name || entityId;
+
+                                const fetchPromise = entityId.startsWith('mock-')
+                                    ? Promise.resolve({ [entityId]: getMockCommands() })
+                                    : loadCommandDefinitions();
+
+                                fetchPromise.then(targets => {
+                                    commandList.innerHTML = '';
+                                    // Try lookup by entity name (real) or entityId (mock)
+                                    const commands = targets[entityName] || targets[entityId] || [];
+
+                                    if (commands.length === 0) {
+                                        commandList.innerHTML = `<p>No commands available for target: ${entityName}.</p>`;
+                                        return;
+                                    }
+
+                                    commands.forEach(cmd => {
+                                        const cmdEl = document.createElement('div');
+                                        cmdEl.style.border = '1px solid #555';
+                                        cmdEl.style.padding = '10px';
+                                        cmdEl.style.marginBottom = '10px';
+                                        cmdEl.style.borderRadius = '4px';
+                                        cmdEl.style.background = 'rgba(255,255,255,0.05)';
+
+                                        const cmdTitle = document.createElement('h3');
+                                        cmdTitle.innerText = cmd.name;
+                                        cmdTitle.style.marginTop = '0';
+                                        cmdEl.appendChild(cmdTitle);
+
+                                        const argsContainer = document.createElement('div');
+                                        argsContainer.style.marginBottom = '10px';
+
+                                        const argInputs = {};
+                                        if (cmd.arguments && cmd.arguments.length > 0) {
+                                            cmd.arguments.forEach(arg => {
+                                                const argRow = document.createElement('div');
+                                                argRow.style.marginBottom = '5px';
+
+                                                const label = document.createElement('label');
+                                                label.innerText = `${arg.name} (${arg.type}): `;
+                                                label.style.width = '150px';
+                                                label.style.display = 'inline-block';
+                                                argRow.appendChild(label);
+
+                                                const input = document.createElement('input');
+                                                input.type = arg.type === 'float' || arg.type === 'int' ? 'number' : 'text';
+                                                if (arg.type === 'float') input.step = '0.1';
+                                                input.style.background = '#333';
+                                                input.style.color = 'white';
+                                                input.style.border = '1px solid #666';
+                                                input.style.padding = '2px 5px';
+                                                argRow.appendChild(input);
+
+                                                argInputs[arg.name] = { input, type: arg.type };
+                                                argsContainer.appendChild(argRow);
+                                            });
+                                        } else {
+                                            argsContainer.innerHTML = '<i>No arguments</i>';
+                                        }
+                                        cmdEl.appendChild(argsContainer);
+
+                                        const execBtn = document.createElement('button');
+                                        execBtn.innerText = 'Execute';
+                                        execBtn.style.padding = '5px 20px';
+                                        execBtn.style.background = '#2196F3';
+                                        execBtn.style.color = 'white';
+                                        execBtn.style.border = 'none';
+                                        execBtn.style.borderRadius = '2px';
+                                        execBtn.style.cursor = 'pointer';
+
+                                        const statusMsg = document.createElement('span');
+                                        statusMsg.style.marginLeft = '10px';
+                                        statusMsg.style.fontSize = '0.9em';
+
+                                        execBtn.onclick = () => {
+                                            const args = {};
+                                            for (const name in argInputs) {
+                                                let val = argInputs[name].input.value;
+                                                if (argInputs[name].type === 'float') val = parseFloat(val);
+                                                else if (argInputs[name].type === 'int') val = parseInt(val);
+                                                args[name] = val;
+                                            }
+
+                                            statusMsg.innerText = 'Executing...';
+                                            statusMsg.style.color = '#aaa';
+
+                                            if (entityId.startsWith('mock-')) {
+                                                setTimeout(() => {
+                                                    console.log('Mock command execution:', cmd.name, args);
+                                                    statusMsg.innerText = 'Executed (MOCK)';
+                                                    statusMsg.style.color = '#4CAF50';
+                                                }, 500);
+                                                return;
+                                            }
+
+                                            executeCommand(entityName, cmd.name, args)
+                                                .then(result => {
+                                                    if (result.status === 'executed') {
+                                                        statusMsg.innerText = 'Success';
+                                                        statusMsg.style.color = '#4CAF50';
+                                                    } else {
+                                                        statusMsg.innerText = 'Error: ' + (result.error || 'Unknown');
+                                                        statusMsg.style.color = '#F44336';
+                                                    }
+                                                })
+                                                .catch(err => {
+                                                    statusMsg.innerText = 'Failed: ' + err.message;
+                                                    statusMsg.style.color = '#F44336';
+                                                });
+                                        };
+
+                                        cmdEl.appendChild(execBtn);
+                                        cmdEl.appendChild(statusMsg);
+                                        commandList.appendChild(cmdEl);
+                                    });
+                                });
+                            }
+
+                            renderCommands();
+                        },
+                        destroy: function () {
+                            container = undefined;
+                        }
+                    };
+                }
+            });
+
+            // Register types
             openmct.types.addType('luncosim.telemetry', {
                 name: 'LunCoSim Telemetry',
                 description: 'Telemetry from LunCoSim entities',
                 cssClass: 'icon-telemetry'
+            });
+
+            openmct.types.addType('luncosim.commands', {
+                name: 'Commands',
+                description: 'Control interface for the entity',
+                cssClass: 'icon-command'
             });
 
             console.log('LunCoSim Telemetry Plugin installed successfully');
