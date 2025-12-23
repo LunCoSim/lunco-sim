@@ -66,13 +66,37 @@ func get_command_dictionary() -> Array:
 	if not parent:
 		return []
 		
+	var metadata = {}
+	if parent.has_method("get_command_metadata"):
+		metadata = parent.get_command_metadata()
+		
 	for method in parent.get_method_list():
 		if method.name.begins_with("cmd_"):
 			var cmd_name = method.name.substr(4).to_upper()
-			commands.append({
+			var cmd_info = {
 				"name": cmd_name,
 				"arguments": _get_method_params(method)
-			})
+			}
+			
+			# Merge metadata if available
+			if metadata.has(cmd_name):
+				var cmd_meta = metadata[cmd_name]
+				
+				# If metadata has detailed arguments, use them instead of the reflected 'args' dict
+				if cmd_meta.has("arguments"):
+					var detailed_args = []
+					for arg_name in cmd_meta.arguments:
+						var arg_info = cmd_meta.arguments[arg_name].duplicate()
+						arg_info["name"] = arg_name
+						detailed_args.append(arg_info)
+					cmd_info.arguments = detailed_args
+				
+				# Allow metadata to override/add other fields (description, etc.)
+				for key in cmd_meta:
+					if key != "arguments":
+						cmd_info[key] = cmd_meta[key]
+						
+			commands.append(cmd_info)
 	return commands
 
 func _get_method_params(method: Dictionary) -> Array:

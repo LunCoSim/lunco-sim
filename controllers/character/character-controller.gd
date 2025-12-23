@@ -148,6 +148,22 @@ func do_move(delta):
 	character_body.set_up_direction(Vector3.UP)
 	character_body.move_and_slide()
 
+func get_command_metadata() -> Dictionary:
+	return {
+		"JUMP": {
+			"description": "Make the character jump."
+		},
+		"SET_SPEED": {
+			"description": "Set the character's movement speed.",
+			"arguments": {
+				"value": {
+					"type": "float",
+					"description": "Speed in m/s (default: 5.0)"
+				}
+			}
+		}
+	}
+
 # Command Methods
 func cmd_jump(args: Dictionary):
 	jumping = true

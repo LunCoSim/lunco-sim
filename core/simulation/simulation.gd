@@ -176,9 +176,28 @@ func _on_avatar_release_control(path: NodePath):
 	var releaser_id = multiplayer.get_remote_sender_id()
 	ControlManager.release_control(path)
 
-#---------------------------------------
-# Commands for LCCommandExecutor
+func get_command_metadata() -> Dictionary:
+	return {
+		"SPAWN": {
+			"description": "Spawn a new entity into the simulation.",
+			"arguments": {
+				"type": {
+					"type": "enum",
+					"values": EntitiesDB.Entities.keys(),
+					"description": "The type of entity to spawn."
+				},
+				"position": {
+					"type": "vector3",
+					"description": "Optional global position [x, y, z]."
+				}
+			}
+		},
+		"LIST_ENTITIES": {
+			"description": "List all available entity types that can be spawned."
+		}
+	}
 
+# Commands for LCCommandExecutor
 func cmd_spawn(args: Dictionary) -> String:
 	var type_name = args.get("type", "")
 	var entity_type = -1

@@ -135,13 +135,21 @@ document.addEventListener('DOMContentLoaded', function () {
             // Object provider
             var objectProvider = {
                 get: function (identifier) {
-                    if (identifier.key === 'luncosim') {
+                    if (identifier.key === 'entities') {
                         return Promise.resolve({
                             identifier: identifier,
                             name: "LunCoSim Entities",
                             type: "folder",
-                            location: "ROOT",
-                            composition: []
+                            location: "luncosim:luncosim"
+                        });
+                    }
+
+                    if (identifier.key === 'controllers') {
+                        return Promise.resolve({
+                            identifier: identifier,
+                            name: "Global Controllers",
+                            type: "folder",
+                            location: "luncosim:luncosim"
                         });
                     }
 
@@ -187,6 +195,18 @@ document.addEventListener('DOMContentLoaded', function () {
                                 location: "luncosim:luncosim"
                             });
                         }
+                    }
+
+                    // Check for global controllers
+                    if (identifier.key.startsWith('global-controller-')) {
+                        const targetName = identifier.key.replace('global-controller-', '');
+                        return Promise.resolve({
+                            identifier: identifier,
+                            name: targetName,
+                            type: "luncosim.commands",
+                            entity_name: targetName,
+                            location: "luncosim:controllers"
+                        });
                     }
 
                     const isCommands = identifier.key.endsWith('-commands');
@@ -249,7 +269,7 @@ document.addEventListener('DOMContentLoaded', function () {
             var compositionProvider = {
                 appliesTo: function (domainObject) {
                     return domainObject && domainObject.identifier && domainObject.identifier.namespace === 'luncosim' &&
-                        (domainObject.identifier.key === 'luncosim' || domainObject.type === 'luncosim.telemetry');
+                        (domainObject.identifier.key === 'luncosim' || domainObject.identifier.key === 'controllers' || domainObject.type === 'luncosim.telemetry');
                 },
                 load: function (domainObject) {
                     if (domainObject.type === 'luncosim.telemetry') {
@@ -260,39 +280,72 @@ document.addEventListener('DOMContentLoaded', function () {
                         }]);
                     }
 
-                    // Root listing
-                    return fetch(`${TELEMETRY_API_URL}/entities`)
-                        .then(response => {
-                            if (!response.ok) {
-                                throw new Error('Network response was not ok');
-                            }
-                            return response.json();
-                        })
-                        .then(data => {
-                            console.log('Loaded entities:', data.entities);
-                            let entities = data.entities.map(entity => ({
-                                namespace: 'luncosim',
-                                key: entity.entity_id
-                            }));
+                    if (domainObject.identifier.key === 'luncosim') {
+                        // Root listing: Entities and Controllers folders
+                        return Promise.resolve([
+                            { namespace: 'luncosim', key: 'entities' },
+                            { namespace: 'luncosim', key: 'controllers' }
+                        ]);
+                    }
 
-                            // Add mock entities if list is empty (for testing)
-                            if (entities.length === 0) {
-                                console.log('No real entities found, adding mocks...');
-                                entities = getMockEntities().map(e => ({
+                    if (domainObject.identifier.key === 'controllers') {
+                        // Load all command targets and filter out entities
+                        return Promise.all([
+                            loadCommandDefinitions(),
+                            fetch(`${TELEMETRY_API_URL}/entities`).then(r => r.json()).catch(() => ({ entities: [] }))
+                        ]).then(([commandTargets, entityData]) => {
+                            const entityNames = new Set(entityData.entities.map(e => e.entity_name));
+                            const controllers = [];
+
+                            for (const targetName in commandTargets) {
+                                if (!entityNames.has(targetName)) {
+                                    controllers.push({
+                                        namespace: 'luncosim',
+                                        key: 'global-controller-' + targetName
+                                    });
+                                }
+                            }
+                            return controllers;
+                        });
+                    }
+
+                    if (domainObject.identifier.key === 'entities') {
+                        // Entities folder listing
+                        return fetch(`${TELEMETRY_API_URL}/entities`)
+                            .then(response => {
+                                if (!response.ok) {
+                                    throw new Error('Network response was not ok');
+                                }
+                                return response.json();
+                            })
+                            .then(data => {
+                                console.log('Loaded entities:', data.entities);
+                                let entities = data.entities.map(entity => ({
+                                    namespace: 'luncosim',
+                                    key: entity.entity_id
+                                }));
+
+                                // Add mock entities if list is empty (for testing)
+                                if (entities.length === 0) {
+                                    console.log('No real entities found, adding mocks...');
+                                    entities = getMockEntities().map(e => ({
+                                        namespace: 'luncosim',
+                                        key: e.entity_id
+                                    }));
+                                }
+                                return entities;
+                            })
+                            .catch(err => {
+                                console.warn('Could not load entities (server might be offline), using mocks:', err);
+                                // Return mock entities on error
+                                return getMockEntities().map(e => ({
                                     namespace: 'luncosim',
                                     key: e.entity_id
                                 }));
-                            }
-                            return entities;
-                        })
-                        .catch(err => {
-                            console.warn('Could not load entities (server might be offline), using mocks:', err);
-                            // Return mock entities on error
-                            return getMockEntities().map(e => ({
-                                namespace: 'luncosim',
-                                key: e.entity_id
-                            }));
-                        });
+                            });
+                    }
+
+                    return Promise.resolve([]);
                 }
             };
 
@@ -440,67 +493,123 @@ document.addEventListener('DOMContentLoaded', function () {
                                     commands.forEach(cmd => {
                                         const cmdEl = document.createElement('div');
                                         cmdEl.style.border = '1px solid #555';
-                                        cmdEl.style.padding = '10px';
-                                        cmdEl.style.marginBottom = '10px';
-                                        cmdEl.style.borderRadius = '4px';
+                                        cmdEl.style.padding = '15px';
+                                        cmdEl.style.marginBottom = '15px';
+                                        cmdEl.style.borderRadius = '6px';
                                         cmdEl.style.background = 'rgba(255,255,255,0.05)';
+
+                                        const cmdHeader = document.createElement('div');
+                                        cmdHeader.style.display = 'flex';
+                                        cmdHeader.style.justifyContent = 'space-between';
+                                        cmdHeader.style.alignItems = 'baseline';
+                                        cmdHeader.style.marginBottom = '10px';
 
                                         const cmdTitle = document.createElement('h3');
                                         cmdTitle.innerText = cmd.name;
-                                        cmdTitle.style.marginTop = '0';
-                                        cmdEl.appendChild(cmdTitle);
+                                        cmdTitle.style.margin = '0';
+                                        cmdHeader.appendChild(cmdTitle);
+
+                                        if (cmd.description) {
+                                            const cmdDesc = document.createElement('div');
+                                            cmdDesc.innerText = cmd.description;
+                                            cmdDesc.style.fontSize = '0.85em';
+                                            cmdDesc.style.color = '#aaa';
+                                            cmdDesc.style.fontStyle = 'italic';
+                                            cmdEl.appendChild(cmdDesc);
+                                            cmdDesc.style.marginBottom = '10px';
+                                        }
+
+                                        cmdEl.appendChild(cmdHeader);
 
                                         const argsContainer = document.createElement('div');
-                                        argsContainer.style.marginBottom = '10px';
+                                        argsContainer.style.marginBottom = '15px';
 
                                         const argInputs = {};
                                         if (cmd.arguments && cmd.arguments.length > 0) {
                                             cmd.arguments.forEach(arg => {
                                                 const argRow = document.createElement('div');
-                                                argRow.style.marginBottom = '5px';
+                                                argRow.style.marginBottom = '8px';
 
                                                 const label = document.createElement('label');
-                                                label.innerText = `${arg.name} (${arg.type}): `;
-                                                label.style.width = '150px';
+                                                label.innerText = `${arg.name}: `;
+                                                label.style.width = '120px';
                                                 label.style.display = 'inline-block';
                                                 argRow.appendChild(label);
 
-                                                const input = document.createElement('input');
-                                                input.type = arg.type === 'float' || arg.type === 'int' ? 'number' : 'text';
-                                                if (arg.type === 'float') input.step = '0.1';
+                                                let input;
+                                                if (arg.type === 'enum' && arg.values) {
+                                                    input = document.createElement('select');
+                                                    arg.values.forEach(val => {
+                                                        const opt = document.createElement('option');
+                                                        opt.value = val;
+                                                        opt.text = val;
+                                                        input.appendChild(opt);
+                                                    });
+                                                } else {
+                                                    input = document.createElement('input');
+                                                    input.type = arg.type === 'float' || arg.type === 'int' || arg.type === 'number' ? 'number' : 'text';
+                                                    if (arg.type === 'float') input.step = '0.1';
+                                                    if (arg.type === 'vector3') input.placeholder = '[x, y, z]';
+                                                }
+
                                                 input.style.background = '#333';
                                                 input.style.color = 'white';
                                                 input.style.border = '1px solid #666';
-                                                input.style.padding = '2px 5px';
+                                                input.style.padding = '4px 8px';
+                                                input.style.borderRadius = '3px';
+                                                input.style.width = '200px';
                                                 argRow.appendChild(input);
+
+                                                if (arg.description) {
+                                                    const argDesc = document.createElement('span');
+                                                    argDesc.innerText = ` ${arg.description}`;
+                                                    argDesc.style.fontSize = '0.8em';
+                                                    argDesc.style.color = '#888';
+                                                    argDesc.style.marginLeft = '10px';
+                                                    argRow.appendChild(argDesc);
+                                                }
 
                                                 argInputs[arg.name] = { input, type: arg.type };
                                                 argsContainer.appendChild(argRow);
                                             });
                                         } else {
-                                            argsContainer.innerHTML = '<i>No arguments</i>';
+                                            argsContainer.innerHTML = '<i>No arguments required.</i>';
                                         }
                                         cmdEl.appendChild(argsContainer);
 
                                         const execBtn = document.createElement('button');
-                                        execBtn.innerText = 'Execute';
-                                        execBtn.style.padding = '5px 20px';
-                                        execBtn.style.background = '#2196F3';
+                                        execBtn.innerText = 'Run Command';
+                                        execBtn.style.padding = '8px 24px';
+                                        execBtn.style.background = '#1e88e5';
                                         execBtn.style.color = 'white';
                                         execBtn.style.border = 'none';
-                                        execBtn.style.borderRadius = '2px';
+                                        execBtn.style.borderRadius = '4px';
                                         execBtn.style.cursor = 'pointer';
+                                        execBtn.style.fontWeight = 'bold';
 
                                         const statusMsg = document.createElement('span');
-                                        statusMsg.style.marginLeft = '10px';
+                                        statusMsg.style.marginLeft = '15px';
                                         statusMsg.style.fontSize = '0.9em';
 
                                         execBtn.onclick = () => {
                                             const args = {};
                                             for (const name in argInputs) {
                                                 let val = argInputs[name].input.value;
-                                                if (argInputs[name].type === 'float') val = parseFloat(val);
-                                                else if (argInputs[name].type === 'int') val = parseInt(val);
+                                                const type = argInputs[name].type;
+
+                                                if (type === 'float') val = parseFloat(val);
+                                                else if (type === 'int') val = parseInt(val);
+                                                else if (type === 'vector3') {
+                                                    try {
+                                                        const parsed = JSON.parse(val);
+                                                        if (Array.isArray(parsed)) val = parsed;
+                                                        else throw new Error("Must be an array [x,y,z]");
+                                                    } catch (e) {
+                                                        statusMsg.innerText = 'Invalid Vector3 format. Use [0,0,0]';
+                                                        statusMsg.style.color = '#F44336';
+                                                        return;
+                                                    }
+                                                }
                                                 args[name] = val;
                                             }
 
@@ -509,8 +618,8 @@ document.addEventListener('DOMContentLoaded', function () {
 
                                             if (entityId.startsWith('mock-')) {
                                                 setTimeout(() => {
-                                                    console.log('Mock command execution:', cmd.name, args);
-                                                    statusMsg.innerText = 'Executed (MOCK)';
+                                                    console.log('Mock execution:', cmd.name, args);
+                                                    statusMsg.innerText = 'Success (MOCK)';
                                                     statusMsg.style.color = '#4CAF50';
                                                 }, 500);
                                                 return;
@@ -519,15 +628,15 @@ document.addEventListener('DOMContentLoaded', function () {
                                             executeCommand(entityName, cmd.name, args)
                                                 .then(result => {
                                                     if (result.status === 'executed') {
-                                                        statusMsg.innerText = 'Success';
+                                                        statusMsg.innerText = '✓ ' + (result.result || 'Success');
                                                         statusMsg.style.color = '#4CAF50';
                                                     } else {
-                                                        statusMsg.innerText = 'Error: ' + (result.error || 'Unknown');
+                                                        statusMsg.innerText = '✗ ' + (result.error || 'Unknown Error');
                                                         statusMsg.style.color = '#F44336';
                                                     }
                                                 })
                                                 .catch(err => {
-                                                    statusMsg.innerText = 'Failed: ' + err.message;
+                                                    statusMsg.innerText = '✗ Failed: ' + err.message;
                                                     statusMsg.style.color = '#F44336';
                                                 });
                                         };

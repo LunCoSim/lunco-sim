@@ -544,6 +544,52 @@ func _is_click_on_modelica_display(click_position: Vector2) -> bool:
 	
 	return false
 
+func get_command_metadata() -> Dictionary:
+	return {
+		"TAKE_CONTROL": {
+			"description": "Take control of an entity by name or index.",
+			"arguments": {
+				"target": {
+					"type": "string",
+					"description": "Entity name or index."
+				}
+			}
+		},
+		"STOP_CONTROL": {
+			"description": "Release control of the current entity."
+		},
+		"KEY_DOWN": {
+			"description": "Send a key down event.",
+			"arguments": {
+				"key": {
+					"type": "enum",
+					"values": ["w", "s", "a", "d", "q", "e", "space", "shift", "v", "f"],
+					"description": "The key to press down."
+				}
+			}
+		},
+		"KEY_UP": {
+			"description": "Send a key up event.",
+			"arguments": {
+				"key": {
+					"type": "enum",
+					"values": ["w", "s", "a", "d", "q", "e", "space", "shift", "v", "f"],
+					"description": "The key to release."
+				}
+			}
+		},
+		"KEY_PRESS": {
+			"description": "Send a short key press (down then up).",
+			"arguments": {
+				"key": {
+					"type": "enum",
+					"values": ["w", "s", "a", "d", "q", "e", "space", "shift", "v", "f"],
+					"description": "The key to press."
+				}
+			}
+		}
+	}
+
 #===============================================================================
 # REMOTE CONTROL COMMANDS - Commands for remote execution
 #===============================================================================
