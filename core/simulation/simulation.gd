@@ -198,34 +198,32 @@ func get_command_metadata() -> Dictionary:
 	}
 
 # Commands for LCCommandExecutor
-func cmd_spawn(args: Dictionary) -> String:
-	var type_name = args.get("type", "")
+func cmd_spawn(type: Variant, position: Variant = null) -> String:
 	var entity_type = -1
 	
-	if type_name is String:
+	if type is String:
 		# Try to match enum name
 		for key in EntitiesDB.Entities.keys():
-			if key.to_lower() == type_name.to_lower():
+			if key.to_lower() == type.to_lower():
 				entity_type = EntitiesDB.Entities[key]
 				break
-	elif type_name is float or type_name is int:
-		entity_type = int(type_name)
+	elif type is float or type is int:
+		entity_type = int(type)
 		
 	if entity_type == -1:
-		return "Unknown entity type: %s" % str(type_name)
+		return "Unknown entity type: %s" % str(type)
 		
 	var global_pos = null
-	if args.has("position"):
-		var p = args["position"]
-		if p is Array and p.size() >= 3:
-			global_pos = Vector3(p[0], p[1], p[2])
-		elif p is Vector3:
-			global_pos = p
+	if position != null:
+		if position is Array and position.size() >= 3:
+			global_pos = Vector3(position[0], position[1], position[2])
+		elif position is Vector3:
+			global_pos = position
 			
 	spawn.rpc_id(1, entity_type, global_pos)
 	return "Spawned %s" % EntitiesDB.Entities.keys()[entity_type]
 
-func cmd_list_entities(_args: Dictionary) -> Array:
+func cmd_list_entities() -> Array:
 	return EntitiesDB.Entities.keys()
 
 #---------------------------------------

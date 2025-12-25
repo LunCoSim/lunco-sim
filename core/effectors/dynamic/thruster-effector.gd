@@ -354,10 +354,8 @@ func _update_telemetry():
 	Telemetry["mass_flow_rate"] = actual_mass_flow
 
 # Command interface
-func cmd_gimbal(args: Array):
-	if args.size() >= 2:
-		set_gimbal(args[0], args[1])
+func cmd_gimbal(pitch_deg: float, yaw_deg: float):
+	set_gimbal(pitch_deg, yaw_deg)
 
-func cmd_set_throttle_limit(args: Array):
-	if args.size() >= 1:
-		throttle_limit = clamp(args[0], 0.0, 1.0)
+func cmd_set_throttle_limit(limit: float):
+	throttle_limit = clamp(limit, 0.0, 1.0)

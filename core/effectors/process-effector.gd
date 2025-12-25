@@ -182,13 +182,13 @@ func _update_telemetry():
 	Telemetry["total_runtime"] = total_runtime
 
 # Command interface
-func cmd_start(args: Array):
+func cmd_start():
 	start_process()
 
-func cmd_stop(args: Array):
+func cmd_stop():
 	stop_process()
 
-func cmd_toggle(args: Array):
+func cmd_toggle():
 	if is_active:
 		stop_process()
 	else:

@@ -193,19 +193,18 @@ func _update_telemetry():
 
 # --- Command Interface ---
 
-func cmd_fill(args: Array):
-	if args.size() > 0:
-		set_amount(args[0])
+func cmd_fill(amount: float):
+	set_amount(amount)
 
-func cmd_empty(args: Array):
+func cmd_empty():
 	set_amount(0.0)
 
-func cmd_add(args: Array):
-	if args.size() > 0 and component:
-		component.mass += args[0]
+func cmd_add(amount: float):
+	if component:
+		component.mass += amount
 		_update_mass()
 
-func cmd_remove(args: Array):
-	if args.size() > 0 and component:
-		component.mass = max(0.0, component.mass - args[0])
+func cmd_remove(amount: float):
+	if component:
+		component.mass = max(0.0, component.mass - amount)
 		_update_mass()

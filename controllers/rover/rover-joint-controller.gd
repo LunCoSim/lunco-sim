@@ -458,14 +458,14 @@ func _reset_inputs():
 # Command Methods (Reflection)
 # ============================================================================
 
-func cmd_set_motor(args: Dictionary):
-	set_motor(args.get("value", 0.0))
+func cmd_set_motor(value: float = 0.0):
+	set_motor(value)
 
-func cmd_set_steering(args: Dictionary):
-	set_steering(args.get("value", 0.0))
+func cmd_set_steering(value: float = 0.0):
+	set_steering(value)
 
-func cmd_set_crab_steering(args: Dictionary):
-	set_crab_steering(args.get("value", 0.0))
+func cmd_set_crab_steering(value: float = 0.0):
+	set_crab_steering(value)
 
-func cmd_set_brake(args: Dictionary):
-	set_brake(args.get("value", 0.0))
+func cmd_set_brake(value: float = 0.0):
+	set_brake(value)

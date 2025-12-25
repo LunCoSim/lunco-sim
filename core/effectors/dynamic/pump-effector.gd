@@ -173,12 +173,11 @@ func _update_telemetry():
 	Telemetry["is_active"] = is_active
 
 # Command interface
-func cmd_set_power(args: Array):
-	if args.size() >= 1:
-		set_pump_power(args[0])
+func cmd_set_power(power: float):
+	set_pump_power(power)
 
-func cmd_on(args: Array):
+func cmd_on():
 	set_pump_power(1.0)
 
-func cmd_off(args: Array):
+func cmd_off():
 	set_pump_power(0.0)

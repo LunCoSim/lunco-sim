@@ -154,10 +154,8 @@ func _update_telemetry():
 	Telemetry["power_consumption"] = power_consumption
 
 # Command interface
-func cmd_set_torque(args: Array):
-	if args.size() >= 1:
-		set_torque(args[0])
+func cmd_set_torque(torque: float):
+	set_torque(torque)
 
-func cmd_dump_momentum(args: Array):
-	if args.size() >= 2:
-		dump_momentum(args[0], args[1])
+func cmd_dump_momentum(external_torque: float, delta: float):
+	dump_momentum(external_torque, delta)

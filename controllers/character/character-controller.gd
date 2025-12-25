@@ -165,10 +165,10 @@ func get_command_metadata() -> Dictionary:
 	}
 
 # Command Methods
-func cmd_jump(args: Dictionary):
+func cmd_jump():
 	jumping = true
 	return "Jumping"
 
-func cmd_set_speed(args: Dictionary):
-	move_speed = args.get("value", 5.0)
+func cmd_set_speed(value: float = 5.0):
+	move_speed = value
 	return "Speed set to %.1f" % move_speed

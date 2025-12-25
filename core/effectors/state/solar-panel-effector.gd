@@ -211,15 +211,14 @@ func _update_telemetry():
 	Telemetry["total_energy"] = total_energy_generated
 
 # Command interface
-func cmd_deploy(args: Array):
+func cmd_deploy():
 	deploy()
 
-func cmd_stow(args: Array):
+func cmd_stow():
 	stow()
 
-func cmd_set_angle(args: Array):
-	if args.size() >= 1:
-		set_articulation_angle(args[0])
+func cmd_set_angle(angle_deg: float):
+	set_articulation_angle(angle_deg)
 
-func cmd_track_sun(args: Array):
+func cmd_track_sun():
 	enable_sun_tracking()

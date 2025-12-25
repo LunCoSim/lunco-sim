@@ -52,15 +52,10 @@ func _update_parent_control():
 		parent._on_spacecraft_controller_thrusted(thrust > 0.5)
 
 # Command Methods
-func cmd_throttle(args: Dictionary):
-	var enabled = args.get("enabled", true)
-	if typeof(enabled) == TYPE_STRING: enabled = enabled.to_lower() == "true"
-	throttle(bool(enabled))
+func cmd_throttle(enabled: bool = true):
+	throttle(enabled)
 	return "Throttle %s" % ("ON" if enabled else "OFF")
 
-func cmd_orientation(args: Dictionary):
-	var x = float(args.get("x", 0.0))
-	var y = float(args.get("y", 0.0))
-	var z = float(args.get("z", 0.0))
+func cmd_orientation(x: float = 0.0, y: float = 0.0, z: float = 0.0):
 	change_orientation(Vector3(x, y, z))
 	return "Orientation updated"

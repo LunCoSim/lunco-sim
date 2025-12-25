@@ -594,26 +594,25 @@ func get_command_metadata() -> Dictionary:
 # REMOTE CONTROL COMMANDS - Commands for remote execution
 #===============================================================================
 
-func cmd_take_control(args: Dictionary) -> String:
-	var target_id = args.get("target")
-	if target_id == null:
+func cmd_take_control(target: Variant) -> String:
+	if target == null:
 		return "Missing target argument"
 		
-	if target_id is float or target_id is int:
-		_on_existing_entity_selected(int(target_id))
-		return "Requested control for entity index: %d" % int(target_id)
-	elif target_id is String:
+	if target is float or target is int:
+		_on_existing_entity_selected(int(target))
+		return "Requested control for entity index: %d" % int(target)
+	elif target is String:
 		# Try to find node by name or path
-		var target_node = get_tree().root.find_child(target_id, true, false)
+		var target_node = get_tree().root.find_child(target, true, false)
 		if target_node:
 			ControlManager.request_control(target_node.get_path(), multiplayer.get_unique_id())
 			return "Requested control for node: %s" % target_node.name
 		else:
-			return "Entity not found: %s" % target_id
+			return "Entity not found: %s" % target
 			
 	return "Invalid target type"
 
-func cmd_stop_control(_args: Dictionary) -> String:
+func cmd_stop_control() -> String:
 	request_release_control()
 	return "Control released"
 
@@ -642,39 +641,35 @@ func _physics_process(_delta):
 		# Trigger event-based input processing
 		Input.parse_input_event(event)
 
-func cmd_key_down(args: Dictionary) -> String:
-	var key_str = args.get("key", "")
-	
+func cmd_key_down(key: String) -> String:
 	# Mark as remote to bypass UI capture
-	var result = _mimic_key(key_str, true)
+	var result = _mimic_key(key, true)
 	
 	# Store in held keys if successful
 	if not result.begins_with("Unknown"):
 		# Extract keycode from result or find again
-		var keycode = OS.find_keycode_from_string(key_str)
-		if keycode == KEY_NONE: keycode = OS.find_keycode_from_string(key_str.to_upper())
+		var keycode = OS.find_keycode_from_string(key)
+		if keycode == KEY_NONE: keycode = OS.find_keycode_from_string(key.to_upper())
 		if keycode != KEY_NONE:
-			held_remote_keys[key_str.to_lower()] = keycode
+			held_remote_keys[key.to_lower()] = keycode
 			
 	return result
 
-func cmd_key_up(args: Dictionary) -> String:
-	var key_str = args.get("key", "")
-	held_remote_keys.erase(key_str.to_lower())
-	return _mimic_key(key_str, false)
+func cmd_key_up(key: String) -> String:
+	held_remote_keys.erase(key.to_lower())
+	return _mimic_key(key, false)
 
 func get_held_remote_keys() -> Dictionary:
 	return held_remote_keys
 
-func cmd_key_press(args: Dictionary) -> String:
-	var key_str = args.get("key", "")
-	_mimic_key(key_str, true)
+func cmd_key_press(key: String) -> String:
+	_mimic_key(key, true)
 	# Add a small delay for the release event so the game logic has time to detect the press
 	get_tree().create_timer(0.1).timeout.connect(func(): 
-		held_remote_keys.erase(key_str.to_lower()) # Also ensure it's removed from held
-		_mimic_key(key_str, false)
+		held_remote_keys.erase(key.to_lower()) # Also ensure it's removed from held
+		_mimic_key(key, false)
 	)
-	return "Key pressed: %s" % key_str
+	return "Key pressed: %s" % key
 
 func _mimic_key(key_str: String, pressed: bool) -> String:
 	if key_str == "":
