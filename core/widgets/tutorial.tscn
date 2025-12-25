@@ -61,6 +61,11 @@ text = "LunCo is an open-source platform for collaborative designing and simulat
 • [b]Detailed inspection:[/b] Press Shift+G for fullscreen view
 • [b]Close fullscreen:[/b] Press Esc key
 
+[u]Telemetry & OpenMCT:[/u]
+• [b]OpenMCT Dashboard:[/b] Access NASA's OpenMCT for real-time telemetry monitoring
+• [b]Access:[/b] Use the menu button or visit https://alpha.lunco.space/mcc/index.html
+• [b]Features:[/b] View position, velocity, and system state in real-time plots
+
 [u]Interface:[/u]
 • [b]Menu:[/b] Press Esc key
 • [b]Console:[/b] Press ` (backtick) key

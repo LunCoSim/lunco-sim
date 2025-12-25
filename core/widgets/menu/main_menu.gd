@@ -89,3 +89,7 @@ func _on_auto_reconnect_toggled(toggled_on):
 	if Profile:
 		Profile.auto_reconnect = toggled_on
 		print("Auto-reconnect ", "enabled" if toggled_on else "disabled")
+
+func _on_open_mct_pressed():
+	print("[INFO] Opening OpenMCT dashboard...")
+	OS.shell_open("https://alpha.lunco.space/mcc/index.html")
