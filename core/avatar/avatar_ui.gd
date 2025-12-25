@@ -76,18 +76,7 @@ func _ready():
 	else:
 		push_warning("Avatar UI: InspectorButton not found")
 		
-	var effector_button = get_node_or_null("%EffectorButton")
-	if effector_button:
-		print("Avatar UI: EffectorButton found")
-		if not effector_button.pressed.is_connected(_on_effector_button_pressed):
-			effector_button.pressed.connect(_on_effector_button_pressed)
-			
-		if ui_helper:
-			ui_helper.setup_entity_button(effector_button, false)
-		effector_button.modulate = Color(1.0, 0.6, 0.2) # Orange-ish
-		effector_button.focus_mode = Control.FOCUS_NONE
-	else:
-		push_warning("Avatar UI: EffectorButton not found")
+
 	
 	# Connect visibility change signal to update entities when UI becomes visible
 	visibility_changed.connect(_on_visibility_changed)
@@ -369,18 +358,7 @@ func _on_inspector_button_pressed():
 	else:
 		push_error("ComponentInspector node not found")
 
-func _on_effector_button_pressed():
-	print("DEBUG: Effector button pressed!")
-	var inspector = get_node_or_null("EffectorInspector")
-	if inspector:
-		if inspector.visible:
-			inspector.hide()
-			print("Effector Inspector hidden")
-		else:
-			inspector.popup_centered()
-			print("Effector Inspector shown")
-	else:
-		push_error("EffectorInspector node not found")
+
 
 func _on_update_connected_users():
 	var tree: ItemList = get_node_or_null("%Users")

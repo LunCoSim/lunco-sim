@@ -1,6 +1,0 @@
-[gd_scene load_steps=2 format=3 uid="uid://effector_inspector"]
-
-[ext_resource type="Script" path="res://core/ui/effector_inspector.gd" id="1_script"]
-
-[node name="EffectorInspector" type="Window"]
-script = ExtResource("1_script")
