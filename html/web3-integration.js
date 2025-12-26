@@ -4,13 +4,14 @@
  */
 
 // Initialize web3
-let web3 = new Web3(Web3.givenProvider || "ws://localhost:8545");
+let web3;
 
 // Check if MetaMask is installed
 if (typeof window.ethereum !== 'undefined' || (typeof window.web3 !== 'undefined')) {
     web3 = new Web3(window.ethereum || window.web3.currentProvider);
+    console.log('MetaMask detected and Web3 initialized.');
 } else {
-    console.log('MetaMask not found. Install it to proceed.');
+    console.warn('MetaMask not found. Wallet features will be limited to sign-in only (if supported by other providers) or disabled.');
 }
 
 /**
@@ -35,10 +36,20 @@ async function apiCall(endpoint, data) {
  */
 async function checkProfile(account, _callback) {
     console.log("checkProfile, ", account);
-    const contract = new web3.eth.Contract(contractABI, tokenContract);
-    const balance = await contract.methods.balanceOf(account, tokenId).call();
-    console.log('balance of: ', balance);
-    _callback(balance);
+    if (!web3) {
+        console.error("Web3 not initialized. Cannot check profile.");
+        _callback(0);
+        return;
+    }
+    try {
+        const contract = new web3.eth.Contract(contractABI, tokenContract);
+        const balance = await contract.methods.balanceOf(account, tokenId).call();
+        console.log('balance of: ', balance);
+        _callback(balance);
+    } catch (error) {
+        console.error("Error checking profile:", error);
+        _callback(0);
+    }
 }
 
 /**
@@ -46,6 +57,14 @@ async function checkProfile(account, _callback) {
  * @param {function} _callback - Callback function to receive login result
  */
 async function login(_callback) {
+    if (!window.ethereum) {
+        console.error("MetaMask/Ethereum provider not found.");
+        alert("MetaMask not found. Please install it to use wallet features.");
+        return;
+    }
+    if (!web3) {
+        web3 = new Web3(window.ethereum);
+    }
     try {
         const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
         const account = accounts[0];
@@ -62,7 +81,7 @@ async function login(_callback) {
         _callback({ wallet: account, signature });
 
     } catch (error) {
-        console.log('Login canceled:', error);
+        console.log('Login canceled or failed:', error);
 
         // Call /cancel API (currently commented out)
         // const cancelData = await apiCall('/cancel', {});
