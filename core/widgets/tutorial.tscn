@@ -63,7 +63,7 @@ text = "LunCo is an open-source platform for collaborative designing and simulat
 
 [u]Telemetry & OpenMCT:[/u]
 • [b]OpenMCT Dashboard:[/b] Access NASA's OpenMCT for real-time telemetry monitoring
-• [b]Access:[/b] Use the menu button or visit https://alpha.lunco.space/mcc/index.html
+• [b]Access:[/b] Use the menu button or visit [url]https://alpha.lunco.space/mcc/index.html[/url]
 • [b]Features:[/b] View position, velocity, and system state in real-time plots
 
 [u]Command Dashboard:[/u]
@@ -88,3 +88,4 @@ layout_mode = 2
 text = "Hide Tutorial"
 
 [connection signal="toggled" from="VBoxContainer/HideTutorial" to="." method="_on_hide_tutorial_toggled"]
+[connection signal="meta_clicked" from="VBoxContainer/ScrollContainer/MarginContainer/RichTextLabel" to="." method="_on_rich_text_label_meta_clicked"]
