@@ -549,7 +549,10 @@ document.addEventListener('DOMContentLoaded', function () {
                                                 argRow.appendChild(label);
 
                                                 let input;
-                                                if (arg.type === 'enum' && arg.values) {
+                                                const argType = arg.type || 'string';
+                                                const isEnum = argType === 'enum' || argType === 'options';
+
+                                                if (isEnum && arg.values) {
                                                     input = document.createElement('select');
                                                     arg.values.forEach(val => {
                                                         const opt = document.createElement('option');
@@ -557,11 +560,18 @@ document.addEventListener('DOMContentLoaded', function () {
                                                         opt.text = val;
                                                         input.appendChild(opt);
                                                     });
+                                                    if (arg.default) input.value = arg.default;
+                                                } else if (argType === 'bool' || argType === 'boolean') {
+                                                    input = document.createElement('input');
+                                                    input.type = 'checkbox';
+                                                    input.checked = arg.default === true || arg.default === 'true';
+                                                    input.style.width = 'auto';
                                                 } else {
                                                     input = document.createElement('input');
-                                                    input.type = arg.type === 'float' || arg.type === 'int' || arg.type === 'number' ? 'number' : 'text';
-                                                    if (arg.type === 'float') input.step = '0.1';
-                                                    if (arg.type === 'vector3') input.placeholder = '[x, y, z]';
+                                                    input.type = argType === 'float' || argType === 'int' || argType === 'number' ? 'number' : 'text';
+                                                    if (argType === 'float') input.step = '0.1';
+                                                    if (argType === 'vector3') input.placeholder = '[x, y, z]';
+                                                    if (arg.default !== undefined) input.value = arg.default;
                                                 }
 
                                                 input.style.background = '#333';
@@ -569,7 +579,7 @@ document.addEventListener('DOMContentLoaded', function () {
                                                 input.style.border = '1px solid #666';
                                                 input.style.padding = '4px 8px';
                                                 input.style.borderRadius = '3px';
-                                                input.style.width = '200px';
+                                                if (input.type !== 'checkbox') input.style.width = '200px';
                                                 argRow.appendChild(input);
 
                                                 if (arg.description) {
@@ -581,7 +591,7 @@ document.addEventListener('DOMContentLoaded', function () {
                                                     argRow.appendChild(argDesc);
                                                 }
 
-                                                argInputs[arg.name] = { input, type: arg.type };
+                                                argInputs[arg.name] = { input, type: argType };
                                                 argsContainer.appendChild(argRow);
                                             });
                                         } else {
@@ -606,16 +616,17 @@ document.addEventListener('DOMContentLoaded', function () {
                                         execBtn.onclick = () => {
                                             const args = {};
                                             for (const name in argInputs) {
-                                                let val = argInputs[name].input.value;
-                                                const type = argInputs[name].type;
+                                                const argCtrl = argInputs[name];
+                                                const type = argCtrl.type;
+                                                let val = argCtrl.input.type === 'checkbox' ? argCtrl.input.checked : argCtrl.input.value;
 
                                                 if (val === "" || val === undefined || val === null) {
-                                                    continue;
+                                                    if (argCtrl.input.type !== 'checkbox') continue;
                                                 }
 
                                                 if (type === 'float') val = parseFloat(val);
                                                 else if (type === 'int') val = parseInt(val);
-                                                else if (type === 'vector3') {
+                                                else if (type === 'vector3' && typeof val === 'string') {
                                                     try {
                                                         const parsed = JSON.parse(val);
                                                         if (Array.isArray(parsed)) val = parsed;
