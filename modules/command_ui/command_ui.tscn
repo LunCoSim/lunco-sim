@@ -1,0 +1,90 @@
+[gd_scene load_steps=3 format=3 uid="uid://commandui"]
+
+[ext_resource type="Script" path="res://modules/command_ui/command_ui.gd" id="1_script"]
+
+[sub_resource type="StyleBoxEmpty" id="StyleBoxEmpty_1"]
+content_margin_top = 10.0
+
+[node name="CommandUI" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_script")
+
+[node name="MainPanel" type="MarginContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/margin_left = 20
+theme_override_constants/margin_top = 20
+theme_override_constants/margin_right = 20
+theme_override_constants/margin_bottom = 20
+
+[node name="VBox" type="VBoxContainer" parent="MainPanel"]
+layout_mode = 2
+theme_override_constants/separation = 15
+
+[node name="Header" type="HBoxContainer" parent="MainPanel/VBox"]
+layout_mode = 2
+
+[node name="Title" type="Label" parent="MainPanel/VBox/Header"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = " COMMAND DASHBOARD"
+theme_override_font_sizes/font_size = 24
+
+[node name="DetachButton" type="Button" parent="MainPanel/VBox/Header"]
+unique_name_in_owner = true
+layout_mode = 2
+toggle_mode = true
+text = " Detach "
+
+[node name="SearchInput" type="LineEdit" parent="MainPanel/VBox"]
+unique_name_in_owner = true
+layout_mode = 2
+placeholder_text = "Search target entity..."
+
+[node name="Content" type="HBoxContainer" parent="MainPanel/VBox"]
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_constants/separation = 20
+
+[node name="LeftNav" type="VBoxContainer" parent="MainPanel/VBox/Content"]
+custom_minimum_size = Vector2(250, 0)
+layout_mode = 2
+
+[node name="Label" type="Label" parent="MainPanel/VBox/Content/LeftNav"]
+layout_mode = 2
+text = "TARGET ENTITIES"
+theme_override_colors/font_color = Color(0.6, 0.6, 0.6, 1)
+
+[node name="TargetList" type="ItemList" parent="MainPanel/VBox/Content/LeftNav"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_styles/panel = SubResource("StyleBoxEmpty_1")
+
+[node name="RightContent" type="VBoxContainer" parent="MainPanel/VBox/Content"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="Label" type="Label" parent="MainPanel/VBox/Content/RightContent"]
+layout_mode = 2
+text = "AVAILABLE COMMANDS"
+theme_override_colors/font_color = Color(0.6, 0.6, 0.6, 1)
+
+[node name="Scroll" type="ScrollContainer" parent="MainPanel/VBox/Content/RightContent"]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="CommandList" type="VBoxContainer" parent="MainPanel/VBox/Content/RightContent/Scroll"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 10

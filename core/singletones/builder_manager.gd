@@ -456,5 +456,3 @@ func request_attach_component(parent_path: String, type: String, pos: Vector3, r
 			push_error("BuilderManager: Failed to load: " + type)
 	else:
 		push_error("BuilderManager: Parent not found: " + parent_path)
-
-

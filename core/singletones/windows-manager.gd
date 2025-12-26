@@ -4,11 +4,13 @@ extends Node
 var MainMenu: Window
 var ChatWindow: Window
 var TutorialWindow: Window
+var CommandWindow: Window
 
 const THEME = preload("res://themes/theme.tres")
 
 
 func _ready():
+	print("[LCWindows] Initializing...")
 	# Setup debounce timer first so it's ready for any signals
 	debounce_timer.one_shot = true
 	debounce_timer.wait_time = 0.5
@@ -18,30 +20,47 @@ func _ready():
 	# Load window state immediately on startup
 	load_window_state()
 	
-	var MainMenuScene = load("res://core/widgets/menu/main_menu.tscn").instantiate()
-	MainMenu = make_window(MainMenuScene, "Main menu")
-	# Set a larger size for the main menu
-	MainMenu.min_size = Vector2(480, 640)
-	MainMenu.size = Vector2(480, 720)
-	add_child(MainMenu)
-	center_window(MainMenu)
-	
-	var ChatWindowScene = load("res://modules/chat/chat-ui.tscn").instantiate()
-	ChatWindow = make_window(ChatWindowScene, "Chat")
-	add_child(ChatWindow)
-	center_window(ChatWindow)
-	
-	var TutorialWindowScene = load("res://core/widgets/tutorial.tscn").instantiate()
-	TutorialWindow = make_window(TutorialWindowScene, "Tutorial", true, false)
-	add_child(TutorialWindow)
-	TutorialWindow.initial_position = Window.WINDOW_INITIAL_POSITION_CENTER_PRIMARY_SCREEN
-	TutorialWindow.min_size = Vector2(300, 400)
-	center_window(TutorialWindow)
-	# Tutorial visibility is controlled by simulation.gd based on Profile.hide_tutorial
+	_setup_system_windows()
+	_setup_tutorial_window()
+	_setup_command_window()
 	
 	# Connect to main window signals for changes - Do this LAST to avoid catching setup changes
 	var win = get_window()
 	win.size_changed.connect(_on_window_changed)
+
+func _setup_system_windows():
+	var MainMenuScene = load("res://core/widgets/menu/main_menu.tscn")
+	if MainMenuScene:
+		MainMenu = make_window(MainMenuScene.instantiate(), "Main menu")
+		MainMenu.min_size = Vector2(480, 640)
+		MainMenu.size = Vector2(480, 720)
+		add_child(MainMenu)
+		center_window(MainMenu)
+	
+	var ChatWindowScene = load("res://modules/chat/chat-ui.tscn")
+	if ChatWindowScene:
+		ChatWindow = make_window(ChatWindowScene.instantiate(), "Chat")
+		add_child(ChatWindow)
+		center_window(ChatWindow)
+
+func _setup_tutorial_window():
+	var TutorialRes = load("res://core/widgets/tutorial.tscn")
+	if TutorialRes:
+		TutorialWindow = make_window(TutorialRes.instantiate(), "Tutorial", true, false)
+		add_child(TutorialWindow)
+		TutorialWindow.initial_position = Window.WINDOW_INITIAL_POSITION_CENTER_PRIMARY_SCREEN
+		TutorialWindow.min_size = Vector2(300, 400)
+		center_window(TutorialWindow)
+
+func _setup_command_window():
+	var CommandRes = load("res://modules/command_ui/command_ui.tscn")
+	if CommandRes:
+		CommandWindow = make_window(CommandRes.instantiate(), "Command Dashboard")
+		add_child(CommandWindow)
+		CommandWindow.min_size = Vector2(900, 600)
+		center_window(CommandWindow)
+	else:
+		push_error("[LCWindows] Failed to load command_ui.tscn!")
 	# win.position_changed.connect(_on_window_changed) # Not available in standard Godot 4.x Window
 
 func _notification(what):
@@ -181,3 +200,9 @@ func show_tutorial():
 	
 func hide_tutorial():
 	TutorialWindow.hide()
+
+func toggle_command_ui():
+	CommandWindow.visible = !CommandWindow.visible
+	if CommandWindow.visible:
+		center_window(CommandWindow)
+		CommandWindow.grab_focus()
