@@ -66,6 +66,11 @@ text = "LunCo is an open-source platform for collaborative designing and simulat
 • [b]Access:[/b] Use the menu button or visit https://alpha.lunco.space/mcc/index.html
 • [b]Features:[/b] View position, velocity, and system state in real-time plots
 
+[u]Command Dashboard:[/u]
+• [b]Visual Dashboard:[/b] Press [b]F10[/b] to browse and execute commands with interactive parameters (sliders, dropdowns)
+• [b]Windowed Mode:[/b] Detach the dashboard into a separate OS window for multi-monitor setups
+• [b]Sync:[/b] Commands executed here are also available via OpenMCT
+
 [u]Interface:[/u]
 • [b]Menu:[/b] Press Esc key
 • [b]Console:[/b] Press ` (backtick) key

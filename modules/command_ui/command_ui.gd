@@ -28,14 +28,11 @@ func _on_window_visibility_changed():
 		refresh_data()
 
 func _on_detach_toggled(button_pressed: bool):
-	var parent_win = get_parent()
-	if parent_win is Window:
-		# In Godot 4, you can't easily detach a single window if embedding is global,
-		# but we can toggle the global setting for a "pop out" effect for all windows
-		# or try to use DisplayServer if available.
-		# For now, let's toggle the viewport embedding setting which is the standard way.
-		get_viewport().gui_embed_subwindows = !button_pressed
-		print("[LCCommandUI] Subwindows embedded: ", get_viewport().gui_embed_subwindows)
+	# In Godot 4, you can't easily detach a single window if embedding is global,
+	# but we can toggle the global setting for a "pop out" effect for all windows.
+	# We must set this on the root viewport, not the window's viewport.
+	get_tree().root.gui_embed_subwindows = !button_pressed
+	print("[LCCommandUI] Detach toggled. Subwindows embedded: ", get_tree().root.gui_embed_subwindows)
 
 func refresh_data():
 	all_definitions = LCCommandRouter.get_all_command_definitions()
