@@ -79,9 +79,6 @@ func set_auto_reconnect(_auto_reconnect):
 		if not _is_loading:
 			save_profile()
 			profile_changed.emit()
-			# Update LCNet setting
-			if LCNet:
-				LCNet.auto_reconnect = _auto_reconnect
 
 #----------------------------------
 func login():

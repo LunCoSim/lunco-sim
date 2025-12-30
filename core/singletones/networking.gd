@@ -12,7 +12,7 @@ var players = {}
 var connection_state: String = "disconnected"
 
 # Reconnection settings
-var auto_reconnect: bool = false
+var reconnect_delay: float = 5.0
 var reconnect_delay: float = 5.0
 var reconnect_timer: Timer = null
 var last_connection_ip: String = ""
@@ -30,11 +30,6 @@ func _ready():
 	multiplayer.server_disconnected.connect(on_server_disconnected)
 	
 	Profile.profile_changed.connect(_on_profile_changed)
-	
-	# Load auto_reconnect setting from Profile
-	if Profile:
-		auto_reconnect = Profile.auto_reconnect
-		print("[Networking] Auto-reconnect loaded from Profile: ", auto_reconnect)
 	
 	# Setup reconnection timer
 	_setup_reconnect_timer()
@@ -234,7 +229,7 @@ func on_server_connection_failed():
 	_set_connection_state("failed")
 	
 	# Attempt reconnection if enabled
-	if auto_reconnect:
+	if Profile.auto_reconnect:
 		_start_reconnect_timer()
 	
 # Function called when successfully connected to server.
@@ -258,11 +253,15 @@ func on_server_disconnected():
 	_set_connection_state("disconnected")
 	
 	# Attempt reconnection if enabled
-	if auto_reconnect:
+	if Profile.auto_reconnect:
 		_start_reconnect_timer()
 
 # Helper function to check if we should auto-connect
 func _check_auto_connect():
+	if not Profile.auto_reconnect:
+		print("[Networking] Auto-connect disabled in Profile")
+		return
+
 	# Check if running in a web browser
 	if OS.has_feature("web"):
 		var hostname = JavaScriptBridge.eval("window.location.hostname")
