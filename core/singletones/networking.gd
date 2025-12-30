@@ -13,7 +13,7 @@ var connection_state: String = "disconnected"
 
 # Reconnection settings
 var reconnect_delay: float = 5.0
-var reconnect_delay: float = 5.0
+
 var reconnect_timer: Timer = null
 var last_connection_ip: String = ""
 var last_connection_port: int = 9000
