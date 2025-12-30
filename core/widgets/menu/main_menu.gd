@@ -5,8 +5,12 @@ extends Node
 #------------------------------------
 
 func _ready():
-	# Set the version from project settings
-	$MarginContainer/ScrollContainer/MainContent/Version.text = "v" + str(ProjectSettings.get_setting("application/config/version"))
+	# Set the version from project settings + git hash
+	_update_version_label()
+	
+	LCNet.server_version_received.connect(_on_server_version_received)
+	LCNet.connection_state_changed.connect(_on_connection_state_changed) # To Reset if needed
+	
 	on_reload_profile()
 	
 	Profile.profile_changed.connect(on_reload_profile)
@@ -89,6 +93,24 @@ func _on_auto_reconnect_toggled(toggled_on):
 	if Profile:
 		Profile.auto_reconnect = toggled_on
 		print("Auto-reconnect ", "enabled" if toggled_on else "disabled")
+
+func _update_version_label():
+	var ver_text = "Local: " + LCVersionHelper.get_version_string()
+	
+	if LCNet.server_version != "":
+		var server_ver = LCNet.server_version
+		if LCNet.server_git_hash != "":
+			server_ver += " (%s)" % LCNet.server_git_hash
+		ver_text += " | Server: " + server_ver
+	
+	$MarginContainer/ScrollContainer/MainContent/Version.text = ver_text
+
+func _on_server_version_received(_ver, _hash):
+	_update_version_label()
+
+func _on_connection_state_changed(state):
+	if state == "disconnected":
+		_update_version_label()
 
 func _on_open_mct_pressed():
 	print("[INFO] Opening OpenMCT dashboard...")

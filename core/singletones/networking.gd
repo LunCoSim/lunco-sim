@@ -24,6 +24,23 @@ func _ready():
 	multiplayer.peer_connected.connect(on_peer_connected)
 	multiplayer.peer_disconnected.connect(on_peer_disconnected)
 
+var server_version: String = ""
+var server_git_hash: String = ""
+signal server_version_received(version: String, git_hash: String)
+
+@rpc("authority", "call_remote", "reliable")
+func receive_server_version(ver: String, git_hash: String):
+	print("Received server version: ", ver, " hash: ", git_hash)
+	server_version = ver
+	server_git_hash = git_hash
+	server_version_received.emit(ver, git_hash)
+
+func _send_version_to_peer(peer_id: int):
+	var local_ver = str(ProjectSettings.get_setting("application/config/version"))
+	var local_hash = LCVersionHelper.get_git_hash() # Now using the singleton
+	receive_server_version.rpc_id(peer_id, local_ver, local_hash)
+
+
 	# Setting up signals to call relevant functions upon server connection status changes.
 	multiplayer.connection_failed.connect(on_server_connection_failed)
 	multiplayer.connected_to_server.connect(on_server_connected)
@@ -178,6 +195,10 @@ func update_player_info(_username, _userwallet):
 # Function called when a peer connects
 func on_peer_connected(id):
 	print("on_peer_connected: ", id)
+	
+	if multiplayer.is_server():
+		_send_version_to_peer(id)
+
 	# Adding the peer to players dictionary
 	players[id] = {}
 	update_player_info.rpc_id(id, Profile.username, Profile.wallet)
@@ -251,6 +272,10 @@ func on_server_disconnected():
 	# Reset the peer so we can try connecting again
 	multiplayer.multiplayer_peer = null
 	_set_connection_state("disconnected")
+	
+	server_version = ""
+	server_git_hash = ""
+
 	
 	# Attempt reconnection if enabled
 	if Profile.auto_reconnect:

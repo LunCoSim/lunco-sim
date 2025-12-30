@@ -37,7 +37,14 @@ mkdir -p build/3dsim
 
 # Step 2: Build the 3D sim
 echo "Building 3D sim..."
+
+# Generate git_hash.txt for the build
+./generate_version.sh
+
 "$GODOT_PATH" $EXPORT_FLAG --headless "Web_3DSim" build/3dsim/index.html
+
+# Cleanup git_hash.txt
+rm git_hash.txt
 
 # Step 2.5: Prepare web assets
 echo "Preparing web assets..."
