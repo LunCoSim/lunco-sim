@@ -516,6 +516,7 @@ func _on_control_granted(peer_id: int, entity_path: NodePath):
 		var entity = get_node(entity_path)
 		set_target(entity)
 		# Update UI or other necessary changes
+		get_viewport().gui_release_focus()
 
 func _on_control_request_denied(peer_id: int, entity_path: NodePath):
 	if peer_id == multiplayer.get_unique_id():
