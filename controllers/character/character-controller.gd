@@ -34,18 +34,18 @@ var root_motion = Transform3D()
 
 #----------------------------------------
 
-var aim_rotation
-@export var input_motion: = Vector2.ZERO
-var camera_rotation_bases: Basis = Basis.IDENTITY
-var camera_base_quaternion: Quaternion = Quaternion.IDENTITY
+# State variables (set via commands)
+var move_vector := Vector3.ZERO
+var view_quaternion := Quaternion.IDENTITY
+# input_motion is no longer used for direction calculation, but kept if needed for animation speed blend? 
+# actually we can just use move_vector length.
 
+# Restored State Variables
 var jumping: bool = false
 @export var shooting: bool = false
 @export var aiming: bool = false
 @export var shoot_target: = Vector3.ZERO
 @export var on_air: = false
-
-#-------------------------------------
 
 func _ready():
 	if character_body == null:
@@ -55,28 +55,27 @@ func _ready():
 	var executor = LCCommandExecutor.new()
 	executor.name = "CommandExecutor"
 	add_child(executor)
+	
+	# Default view
+	view_quaternion = Quaternion.IDENTITY
 
 func _physics_process(delta: float):	
-	# Check if we have authority over the parent entity (the character body that contains this controller)
+	# Check if we have authority over the parent entity
 	if has_authority():
 		apply_input(delta)
 
 func apply_input(delta: float):
 	if character_body == null:
 		return
-		
-	motion = motion.lerp(input_motion, MOTION_INTERPOLATE_SPEED * delta)
-
-	var camera_basis : Basis = camera_rotation_bases
 	
-	var camera_z := camera_basis.z
-	var camera_x := camera_basis.x
-
-	camera_z.y = 0
-	camera_z = camera_z.normalized()
-	camera_x.y = 0
-	camera_x = camera_x.normalized()
-
+	# Interpolate motion for smoothness
+	# motion was Vector2 previously, but now we work with Vector3 world direction
+	# Let's keep 'motion' as the smoothed version of 'move_vector'
+	# Wait, original code had motion as Vector2. Let's adapt.
+	
+	# Move Vector is the target world velocity (normalized * intensity)
+	# We interpret move_vector.length() as speed intensity
+	
 	# Jump/in-air logic.
 	airborne_time += delta
 	if character_body.is_on_floor():
@@ -89,7 +88,6 @@ func apply_input(delta: float):
 	if not on_air and jumping:
 		character_body.velocity.y = JUMP_SPEED
 		on_air = true
-		# Increase airborne time so next frame on_air is still true
 		airborne_time = MIN_AIRBORNE_TIME
 		jump.emit()
 
@@ -98,45 +96,52 @@ func apply_input(delta: float):
 	if on_air:
 		pass
 	elif aiming:
-		# Convert orientation to quaternions for interpolating rotation.
+		# Interpolate current rotation to view rotation
 		var q_from = orientation.basis.get_rotation_quaternion()
-		var q_to = camera_base_quaternion
-		# Interpolate current rotation with desired one.
+		var q_to = view_quaternion
 		orientation.basis = Basis(q_from.slerp(q_to, delta * ROTATION_INTERPOLATE_SPEED))
-
 
 		if shooting and character_body.fire_cooldown.time_left == 0:
 			var shoot_origin = character_body.shoot_from.global_transform.origin
+			# Shoot direction is forward from orientation (since we aligned with view)
+			# or we can use the explicit shoot_target if provided. 
+			# Original code used shoot_target.
 			var shoot_dir = (shoot_target - shoot_origin).normalized()
+			
+			# If no target, use forward
+			if shoot_dir.length() < 0.001:
+				shoot_dir = orientation.basis.z
 
 			var bullet = preload("res://content/gobot/bullet/bullet.tscn").instantiate()
 			get_parent().add_child(bullet, true)
 			bullet.global_transform.origin = shoot_origin
-			# If we don't rotate the bullets there is no useful way to control the particles ..
 			bullet.look_at(shoot_origin + shoot_dir, Vector3.UP)
 			bullet.add_collision_exception_with(self)
 			
 			shoot.emit()
 
-	else: # Not in air or aiming, idle.
-		# Convert orientation to quaternions for interpolating rotation.
-		var target = camera_x * motion.x + camera_z * motion.y
-		if target.length() > 0.001:
+	else: # Not in air or aiming, idle/moving.
+		# Rotate to face movement direction
+		var target_dir = move_vector
+		target_dir.y = 0 # Keep flat
+		
+		# Only rotate if we are moving
+		if target_dir.length() > 0.001:
 			var q_from = orientation.basis.get_rotation_quaternion()
-			var q_to = Transform3D().looking_at(target, Vector3.UP).basis.get_rotation_quaternion()
-			# Interpolate current rotation with desired one.
+			var q_to = Transform3D().looking_at(target_dir, Vector3.UP).basis.get_rotation_quaternion()
 			orientation.basis = Basis(q_from.slerp(q_to, delta * ROTATION_INTERPOLATE_SPEED))
 
 	# Apply root motion to orientation.
 	if use_root_motion:
-		orientation *= root_motion #????? What's happening here?
+		orientation *= root_motion
 	else:
-		var target_dir = (camera_x * motion.x + camera_z * motion.y)
-		orientation.origin += target_dir * move_speed * delta
+		var target_velocity = move_vector
+		target_velocity.y = 0
+		orientation.origin += target_velocity * move_speed * delta
 
 	do_move(delta)
-	orientation.origin = Vector3() # Clear accumulated root motion displacement (was applied to speed).
-	orientation = orientation.orthonormalized() # Orthonormalize orientation.
+	orientation.origin = Vector3()
+	orientation = orientation.orthonormalized()
 	
 
 func do_move(delta):
@@ -168,6 +173,30 @@ func get_command_metadata() -> Dictionary:
 func cmd_jump():
 	jumping = true
 	return "Jumping"
+
+func cmd_set_move_vector(x: float, y: float, z: float):
+	move_vector = Vector3(x, y, z)
+	# Also update 'motion' vec2 for animation blend if needed?
+	# Original code used 'motion' (Vector2) for some logic, but we replaced it with move_vector (Vector3) in apply_input.
+	# We might need to map it back if other systems read 'motion'.
+	motion = Vector2(x, z) # Approximation for 2D blend space
+	return "Move vector set"
+
+func cmd_set_view_quaternion(x: float, y: float, z: float, w: float):
+	view_quaternion = Quaternion(x, y, z, w)
+	return "View quaternion set"
+
+func cmd_set_aiming(is_aiming: bool):
+	aiming = is_aiming
+	return "Aiming: %s" % is_aiming
+
+func cmd_set_shooting(is_shooting: bool):
+	shooting = is_shooting
+	return "Shooting: %s" % is_shooting
+
+func cmd_set_shoot_target(x: float, y: float, z: float):
+	shoot_target = Vector3(x, y, z)
+	return "Shoot target set"
 
 func cmd_set_speed(value: float = 5.0):
 	move_speed = value

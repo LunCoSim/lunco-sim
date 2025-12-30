@@ -8,6 +8,12 @@ extends LCInputAdapter
 @export var STEERING_SENSITIVITY := 1.0
 @export var INPUT_DEADZONE := 0.1
 
+# Previous state for change detection
+var _prev_motor_input := 0.0
+var _prev_steering_input := 0.0
+var _prev_crab_input := 0.0
+var _prev_brake_input := 0.0
+
 func _ready():
 	_setup_input_mappings()
 
@@ -59,12 +65,27 @@ func _input(_event):
 			motor_input = gamepad_movement.y if abs(gamepad_movement.y) > abs(motor_input) else motor_input
 			steering_input = gamepad_movement.x if abs(gamepad_movement.x) > abs(steering_input) else steering_input
 		
-		# Apply inputs via Command System
-		_send_command("SET_MOTOR", {"value": motor_input * MOTOR_SENSITIVITY})
-		_send_command("SET_STEERING", {"value": steering_input * STEERING_SENSITIVITY})
-		# Crab steering not yet refactored to command in controller, but following same pattern
-		_send_command("SET_CRAB_STEERING", {"value": crab_input * STEERING_SENSITIVITY})
-		_send_command("SET_BRAKE", {"value": brake_input})
+		# Scale inputs
+		motor_input *= MOTOR_SENSITIVITY
+		steering_input *= STEERING_SENSITIVITY
+		crab_input *= STEERING_SENSITIVITY
+		
+		# Change detection
+		if not is_equal_approx(motor_input, _prev_motor_input):
+			_prev_motor_input = motor_input
+			_send_command("SET_MOTOR", {"value": motor_input})
+			
+		if not is_equal_approx(steering_input, _prev_steering_input):
+			_prev_steering_input = steering_input
+			_send_command("SET_STEERING", {"value": steering_input})
+			
+		if not is_equal_approx(crab_input, _prev_crab_input):
+			_prev_crab_input = crab_input
+			_send_command("SET_CRAB_STEERING", {"value": crab_input})
+			
+		if not is_equal_approx(brake_input, _prev_brake_input):
+			_prev_brake_input = brake_input
+			_send_command("SET_BRAKE", {"value": brake_input})
 
 func _send_command(cmd_name: String, args: Dictionary):
 	var _target = get_resolved_target()

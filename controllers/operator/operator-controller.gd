@@ -12,49 +12,54 @@ extends LCController
 
 @onready var start_position = position
 
-#var velocity := Vector3.ZERO
-var dir := Vector3.ZERO
-var orientation := Basis.IDENTITY
+# Internal state
+var move_direction := Vector3.ZERO
 
-# Commands
-# reset_position
-# move(direction)
+func _ready():
+	# Add command executor
+	var executor = LCCommandExecutor.new()
+	executor.name = "CommandExecutor"
+	add_child(executor)
 
 func _physics_process(delta):
 	if has_authority():
 		if Target:
-			var target_dir = orientation * dir * MAX_SPEED
+			# move_direction is already in world space (normalized)
+			var target_velocity = move_direction * MAX_SPEED
 			var acceleration
 			
-			if dir.dot(Target.velocity) > 0:
+			if move_direction.dot(Target.velocity) > 0:
 				acceleration = ACCELERATION
 			else:
 				acceleration = DECELERATION
 
-			Target.velocity = Target.velocity.lerp(target_dir, acceleration * delta)
-
+			Target.velocity = Target.velocity.lerp(target_velocity, acceleration * delta)
 			Target.move_and_slide()
 
-#-----------
+# Command Methods
+func cmd_move(x: float, y: float, z: float):
+	move_direction = Vector3(x, y, z)
+	# Check for invalid length if needed, but input adapter should handle normalization
+	if move_direction.length() > 1.0:
+		move_direction = move_direction.normalized()
+	return "Move direction set"
 
-#Commands: 
-# reset_position
-# start_moving
-# stop_moving
-
-# Parameters
-# moving_direction
-# orientation
-
-# Telemetry
-# position
-# velocity
-
-func reset_position():
+func cmd_reset_position():
 	position = start_position
+	# Also reset velocity
+	if Target:
+		Target.velocity = Vector3.ZERO
+	return "Position reset"
+
+# Legacy compatibility (can be removed if all adapters updated)
+func reset_position():
+	cmd_reset_position()
 
 func move(direction):
-	dir = direction.normalized()
+	# Implicitly assumes local direction if called directly, but we are moving to commands
+	# Let's map it to command for now
+	cmd_move(direction.x, direction.y, direction.z)
 	
 func orient(_orientation):
-	orientation = _orientation
+	# Deprecated: Orientation should be handled by caller converting input to world space
+	pass

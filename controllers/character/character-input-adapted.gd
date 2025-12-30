@@ -22,12 +22,11 @@ var toggled_aim := false
 # The duration the aiming button was held for (in seconds).
 var aiming_timer := 0.0
 
-# Synchronized controls
+# Synchronized controls - kept for compatibility if needed, but driven by commands now
 @export var aiming := false
 @export var shoot_target := Vector3()
 @export var motion := Vector2()
 @export var shooting := false
-# This is handled via RPC for now
 @export var jumping := false
 
 # Camera and effects
@@ -38,25 +37,19 @@ var aiming_timer := 0.0
 
 @export var color_rect : ColorRect
 
+# Previous state for change detection
+var _prev_move_vector := Vector3.ZERO
+var _prev_view_quat := Quaternion.IDENTITY
+var _prev_aiming := false
+var _prev_shooting := false
 
 func _ready():
 	if target == null:
 		target = get_parent()
-		
-	#if get_multiplayer_authority() == multiplayer.get_unique_id():
-		#Logger.info("plaer autority multiplayer, on: ", multiplayer.get_unique_id())
-##		camera_camera.make_current()
-		#Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
-	#else:
-		#print("plaer autority reqular, on: ", multiplayer.get_unique_id())
-##		set_process(false)
-##		set_process_input(false)
-		#color_rect.hide()
 
 func _process(delta):
 	var _target = get_resolved_target()
 
-	
 	if not _target is LCCharacterController:
 		return
 	
@@ -64,24 +57,52 @@ func _process(delta):
 	if not _target.has_authority():
 		return
 		
-	# Check if input is captured by UI
+	# Check if input captured by UI
 	var can_process = should_process_input()
 	if not can_process:
-		_target.input_motion = Vector2.ZERO
-		_target.aiming = false
-		_target.shooting = false
+		if _prev_move_vector != Vector3.ZERO:
+			_prev_move_vector = Vector3.ZERO
+			_send_command("SET_MOVE_VECTOR", {"x": 0, "y": 0, "z": 0})
+		if _prev_aiming:
+			_prev_aiming = false
+			_send_command("SET_AIMING", {"is_aiming": false})
+		if _prev_shooting:
+			_prev_shooting = false
+			_send_command("SET_SHOOTING", {"is_shooting": false})
 		return
 	
-	motion = Vector2(
+	# --- Motion ---
+	var input_vec = Vector2(
 			Input.get_action_strength("move_right") - Input.get_action_strength("move_left"),
 			Input.get_action_strength("move_back") - Input.get_action_strength("move_forward"))
 	
-	# Setting Gobot parameters
-	_target.input_motion = motion
-	_target.camera_rotation_bases = get_camera_rotation_basis()
-	_target.camera_base_quaternion =get_camera_base_quaternion()
-	#--------------
+	# Calculate world move vector based on camera
+	var camera_basis = get_camera_rotation_basis()
+	var camera_z = camera_basis.z
+	var camera_x = camera_basis.x
 	
+	camera_z.y = 0
+	camera_z = camera_z.normalized()
+	camera_x.y = 0
+	camera_x = camera_x.normalized()
+	
+	var move_vec_world = (camera_x * input_vec.x + camera_z * input_vec.y)
+	
+	# Clamp length
+	if input_vec.length() > 1.0:
+		move_vec_world = move_vec_world.normalized()
+	
+	if not move_vec_world.is_equal_approx(_prev_move_vector):
+		_prev_move_vector = move_vec_world
+		_send_command("SET_MOVE_VECTOR", {"x": move_vec_world.x, "y": move_vec_world.y, "z": move_vec_world.z})
+	
+	# --- View / Aiming Rotation ---
+	var view_quat = get_camera_base_quaternion()
+	if abs(view_quat.dot(_prev_view_quat)) < 0.9999:
+		_prev_view_quat = view_quat
+		_send_command("SET_VIEW_QUATERNION", {"x": view_quat.x, "y": view_quat.y, "z": view_quat.z, "w": view_quat.w})
+
+	# --- Aiming Logic ---
 	var current_aim = false
 
 	# Keep aiming if the mouse wasn't held for long enough.
@@ -100,40 +121,28 @@ func _process(delta):
 
 	if aiming != current_aim:
 		aiming = current_aim
-		_target.aiming = aiming
-#		if aiming:
-#			camera_animation.play("shoot")
-#		else:
-#			camera_animation.play("far")
-
-	if Input.is_action_just_pressed("jump"):
-		jump.rpc()
-
-	shooting = Input.is_action_pressed("shoot")
-	_target.shooting = shooting
 	
-	if shooting:
-		pass
-#		var ch_pos = crosshair.position + crosshair.size * 0.5
-#		var ray_from = camera_camera.project_ray_origin(ch_pos)
-#		var ray_dir = camera_camera.project_ray_normal(ch_pos)
-#
-#		var col = get_parent().get_world_3d().direct_space_state.intersect_ray(PhysicsRayQueryParameters3D.create(ray_from, ray_from + ray_dir * 1000, 0b11, [self]))
-#		if col.is_empty():
-#			shoot_target = ray_from + ray_dir * 1000
-#		else:
-#			shoot_target = col.position
+	if aiming != _prev_aiming:
+		_prev_aiming = aiming
+		_send_command("SET_AIMING", {"is_aiming": aiming})
 
-	# Fade out to black if falling out of the map. -17 is lower than
-	# the lowest valid position checked the map (which is a bit under -16).
-	# At 15 units below -17 (so -32), the screen turns fully black.
-#	var tr : Transform3D = get_parent().global_transform
-#	if tr.origin.y < -17:
-#		color_rect.modulate.a = min((-17 - tr.origin.y) / 15, 1)
-#	else:
-#		# Fade out the black ColorRect progressively after being teleported back.
-#		color_rect.modulate.a *= 1.0 - delta * 4
-	_target.aim_rotation = get_aim_rotation()
+	# --- Jumping ---
+	if Input.is_action_just_pressed("jump"):
+		_send_command("JUMP", {})
+
+	# --- Shooting ---
+	shooting = Input.is_action_pressed("shoot")
+	if shooting != _prev_shooting:
+		_prev_shooting = shooting
+		_send_command("SET_SHOOTING", {"is_shooting": shooting})
+
+# Helper to send commands
+func _send_command(cmd_name: String, args: Dictionary):
+	var _target = get_resolved_target()
+	if not _target: return
+	
+	var cmd = LCCommand.new(cmd_name, _target.get_path(), args, "local")
+	LCCommandRouter.dispatch(cmd)
 
 func get_aim_rotation():
 	var x := 0.0
@@ -148,13 +157,11 @@ func get_aim_rotation():
 	else: # Aim down.
 		return camera_x_rot / CAMERA_X_ROT_MIN
 
-
 func get_camera_base_quaternion() -> Quaternion:
 	if camera:
 		return camera.get_camera_base_quaternion()
 	else: 
 		return Quaternion.IDENTITY
-
 
 func get_camera_rotation_basis() -> Basis:
 	if camera:
@@ -162,15 +169,5 @@ func get_camera_rotation_basis() -> Basis:
 	else:
 		return Basis.IDENTITY
 
-
 func set_camera(_camera):
 	camera = _camera
-	
-@rpc("any_peer", "call_local")
-func jump():
-	var _target = get_resolved_target()
-	
-	if not _target is LCCharacterController:
-		return
-		
-	_target.jumping = true

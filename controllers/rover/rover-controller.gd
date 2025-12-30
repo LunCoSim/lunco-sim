@@ -136,29 +136,15 @@ func _check_slope_compensation():
 # Simple command methods
 func set_motor(value: float):
 	motor_input = clamp(value, -1.0, 1.0)
-	
-	# Speed-based engine force scaling to prevent flipping at higher speeds
-	var speed_factor = 1.0
-	if current_speed > 2.0:
-		speed_factor = 1.0 - min((current_speed - 2.0) / 3.0, 0.6)
-	
-	# Immediately apply engine force if we have a parent
-	if parent and parent is VehicleBody3D:
-		# IMPORTANT: Invert motor direction
-		parent.engine_force = -motor_input * ENGINE_FORCE * speed_factor
+	# Speed factor calculation and force application is now handled in _physics_process
 
 func set_steering(value: float):
 	steering_input = clamp(value, -1.0, 1.0)
-	# Immediately apply steering if we have a parent
-	if parent and parent is VehicleBody3D:
-		# IMPORTANT: Invert steering direction
-		parent.steering = -steering_input * STEERING_FORCE
+	# Steering application is now handled in _physics_process
 
 func set_brake(value: float):
 	brake_input = clamp(value, 0.0, 1.0)
-	# Immediately apply brake if we have a parent
-	if parent and parent is VehicleBody3D:
-		parent.brake = brake_input * BRAKE_FORCE
+	# Brake application is now handled in _physics_process
 
 # Simplified control methods (required for compatibility with signals)
 func take_control():
