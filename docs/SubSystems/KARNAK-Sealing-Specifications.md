@@ -1,37 +1,33 @@
-# KARNAK Sealing: Pharmaceutical Integrity Specifications
+# KARNAK v2.0: Radiation-Hardened Data Integrity Protocol
 
-## 1. Introduction
-The KARNAK Sealing protocol provides immutable, radiation-resistant cryptographic assurance for long-duration deep-space missions. This specification focuses on the integrity of pharmaceutical synthesis and medical data records.
+## 1. Overview
+KARNAK v2.0 is a deep-space medical ledger designed to remain readable and verifiable for 20+ years in high-radiation environments. It addresses bit rot, quantum-age decryption, and context loss.
 
-## 2. Cryptographic Architecture
+## 2. Layer 1: The Quantum-Resistant Seal (The "Lock")
+To ensure long-term archival integrity, KARNAK uses **CRYSTALS-Dilithium** (NIST PQC Winner).
+- **Dual Signing:** Every SASC decision is signed twice:
+    - **Sig_Fast (Ed25519):** For immediate onboard verification.
+    - **Sig_Deep (Dilithium-Mode3):** For long-term archival integrity.
+- **Epoxy Hash Chain:** Uses **BLAKE3-Δ2** hashing woven with temporal anchors (pulsar navigation fixes) and geometric anchors (Mesh-Neuron topology).
 
-### 2.1 Multi-Layered Sealing
-Each medical data object (e.g., a batch record for 3D-printed pharmaceuticals) is sealed using a three-layer cascade:
-1. **Local Attestation:** Signed by the generating granule using Ed25519.
-2. **Consensus Seal:** Signed by the Mesh-Neuron majority using BLS aggregate signatures.
-3. **Temporal Anchor:** Timestamped using I38 logical clocks and causal-linked to the mission-epoch Merkle tree.
+## 3. Layer 2: Fountain Code Storage (The "Shield")
+Standard RAID is replaced by **Luby Transform (LT) Fountain Codes** for information-theoretic persistence.
+- **Holographic Archive:** Data is broken into chunks and generated into infinite "droplets".
+- **100x Redundancy:** Droplets are distributed across all non-volatile memory (SSD, microcontroller flash, steganographic metadata).
+- **Recovery:** Only a subset of droplets is needed to reconstruct the entire database with bit-perfect accuracy, making it immune to 90% storage loss.
 
-### 2.2 Quantum-Resistant Handshake
-For Earth-to-Ship communication, KARNAK implements a hybrid cryptographic handshake:
-- **Classical:** X25519 for key exchange.
-- **Post-Quantum:** Dilithium or Kyber for quantum-resistant signature verification and encryption, ensuring data longevity over decades.
+## 4. Layer 3: Biological DNA Storage (The "Cold Storage")
+Critical data (genomic baselines, SASC constitution) is stored in synthetic DNA.
+- **Medium:** Synthetic DNA oligonucleotides encapsulated in silica glass beads or embedded in *Bacillus subtilis* spores.
+- **Encoding:** Binary to Base-4 (A, C, G, T).
+- **Purpose:** Extreme backup against total electronic failure (e.g., solar super-flare).
 
-## 3. Pharmaceutical Integrity Workflow
+## 5. Layer 4: The Rosetta Header (The "Key")
+To prevent context loss, every storage volume begins with an ASCII-readable Rosetta Block.
+- **Content:** Mathematical specification of Fountain Codes, source code for BLAKE3/Dilithium (C/Python), and the medical ontology (SASC definitions).
+- **Goal:** Enable a human or future AI to reconstruct the decoder from scratch using only a basic text editor.
 
-### 3.1 Synthesis Validation
-When a medicine is 3D-printed on-board:
-1. **Recipe Verification:** The AGI verifies the synthesis recipe against the **Golden Vector Vault**.
-2. **Real-time Monitoring:** Omics sensors monitor the synthesis process for molecular divergence.
-3. **Sealing:** Upon completion, a **Synthesis Record Token (SRT)** is generated, containing:
-    - BLAKE3 hash of the molecular telemetry.
-    - SASC ethical attestation (confirming the triage priority).
-    - Vajra stability markers of the overseeing AI.
-
-### 3.2 Radiation Damage Mitigation
-KARNAK logs use **Δ2-Checksums** specifically designed to detect and correct multi-bit flips caused by cosmic radiation:
-- **Redundant Parity Nodes:** KARNAK logs are replicated across spatially separated granules to prevent single-point-of-failure due to radiation hits.
-- **Periodic Scrubbing:** The system executes background Merkle audits to identify and repair silent data corruption.
-
-## 4. Hardware Requirements
-- **Rad-Hard Secure Elements:** Cryptographic keys must be stored in specialized radiation-hardened hardware modules.
-- **Optical Interconnects:** Inter-granule communication should prioritize optical links to minimize EM interference during solar events.
+## 6. Antarctic Validation Protocol
+- **Microwave Stress Test:** Verify Fountain Code reconstruction after 50% bit-flip irradiation.
+- **Amnesia Test:** Verify that a developer can reconstruct the archive using only the Rosetta Header.
+- **Quantum Future-Proofing:** Validate Dilithium signatures against NIST FIPS 204 standards.

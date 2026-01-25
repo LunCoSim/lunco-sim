@@ -51,13 +51,16 @@ The Lunar Base Monitoring System is a comprehensive Next.js application for moni
 ## 🏗️ Technical Architecture
 
 ### AI-Powered Space Systems Engineer (New)
-- **Consensus Layer**: Mesh-Neuron distributed architecture with BLAKE3-Δ2 routing
-- **Ethical Governance**: SASC Triage Consensus Protocol (Φ-threshold based)
-- **Psychological Monitoring**: VajraPsych Coherence Tracking (ICE/GBH metrics)
-- **Data Integrity**: KARNAK Sealing with radiation-resistant Δ2-checksums
+- **Consensus Layer**: Mesh-Neuron distributed architecture with **BAP-DD** (Byzantine Agreement Protocol with Drift Detection).
+- **Ethical Governance**: SASC Triage Consensus Protocol (Φ-threshold based) with **Partition Priest** resolution.
+- **Psychological Monitoring**: VajraPsych Coherence Tracking and **FIM v1.0** (Fault Injection Model).
+- **Data Integrity**: **KARNAK v2.0** with Fountain Codes, Quantum-Resistant signatures, and DNA storage.
 - **Detailed Specifications**:
     - [Mesh-Neuron Failure Analysis](./docs/SubSystems/Mesh-Neuron-Consensus-Failure-Analysis.md)
-    - [KARNAK Sealing Specifications](./docs/SubSystems/KARNAK-Sealing-Specifications.md)
+    - [BAP-DD Protocol](./docs/SubSystems/Byzantine-Agreement-Protocol-BAP-DD.md)
+    - [Fault Injection Model (FIM)](./docs/SubSystems/Fault-Injection-Model-FIM.md)
+    - [KARNAK v2.0 Specifications](./docs/SubSystems/KARNAK-Sealing-Specifications.md)
+    - [Operation SPACENAUT Project Charter](./docs/Operation-SPACENAUT-Project-Charter.md)
 
 ### Frontend
 - **Framework**: Next.js 15 with App Router

@@ -9,4 +9,5 @@
 The networking subsystem is evolving to support the **Mesh-Neuron** distributed architecture, which provides partition-tolerant consensus for deep-space missions.
 
 - **Failure Mode Analysis**: [Mesh-Neuron Failure Analysis](./Mesh-Neuron-Consensus-Failure-Analysis.md)
-- **Data Integrity**: [KARNAK Sealing Specifications](./KARNAK-Sealing-Specifications.md)
+- **Byzantine Agreement**: [BAP-DD Protocol](./Byzantine-Agreement-Protocol-BAP-DD.md)
+- **Data Integrity**: [KARNAK v2.0 Specifications](./KARNAK-Sealing-Specifications.md)
