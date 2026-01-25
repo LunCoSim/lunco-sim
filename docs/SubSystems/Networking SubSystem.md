@@ -3,3 +3,10 @@
 
 1. Godot has build in capabilities for Networking
 2. Need to implement for browser
+
+## Advanced Architectures
+### Mesh-Neuron Consensus
+The networking subsystem is evolving to support the **Mesh-Neuron** distributed architecture, which provides partition-tolerant consensus for deep-space missions.
+
+- **Failure Mode Analysis**: [Mesh-Neuron Failure Analysis](./Mesh-Neuron-Consensus-Failure-Analysis.md)
+- **Data Integrity**: [KARNAK Sealing Specifications](./KARNAK-Sealing-Specifications.md)

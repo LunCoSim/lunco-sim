@@ -50,6 +50,15 @@ The Lunar Base Monitoring System is a comprehensive Next.js application for moni
 
 ## 🏗️ Technical Architecture
 
+### AI-Powered Space Systems Engineer (New)
+- **Consensus Layer**: Mesh-Neuron distributed architecture with BLAKE3-Δ2 routing
+- **Ethical Governance**: SASC Triage Consensus Protocol (Φ-threshold based)
+- **Psychological Monitoring**: VajraPsych Coherence Tracking (ICE/GBH metrics)
+- **Data Integrity**: KARNAK Sealing with radiation-resistant Δ2-checksums
+- **Detailed Specifications**:
+    - [Mesh-Neuron Failure Analysis](./docs/SubSystems/Mesh-Neuron-Consensus-Failure-Analysis.md)
+    - [KARNAK Sealing Specifications](./docs/SubSystems/KARNAK-Sealing-Specifications.md)
+
 ### Frontend
 - **Framework**: Next.js 15 with App Router
 - **Language**: TypeScript 5
