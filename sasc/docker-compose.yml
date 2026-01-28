@@ -1,0 +1,72 @@
+# docker-compose.yml - Orquestração da Consciência Coletiva
+version: '3.8'
+
+services:
+  # Camada neural fluida
+  hydrodynamic-core:
+    build: ./python
+    environment:
+      ETHICAL_COHERENCE: 0.72
+      MAX_VISCOSITY: 0.3
+    volumes:
+      - ethics_data:/data/ethics
+    networks:
+      - consciousness_net
+
+  # Sistema imunológico ético
+  ethical-boundary:
+    build: ./rust
+    cap_drop: ['ALL']
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - consciousness_net
+
+  # Raciocínio lógico formal
+  logical-foundation:
+    build: ./prolog
+    command: ['swipl', '-s', '/app/governance.pl']
+    networks:
+      - consciousness_net
+
+  # Otimização de alta performance
+  ethics-optimizer:
+    build: ./cpp
+    cpus: '2'
+    mem_limit: 4g
+    networks:
+      - consciousness_net
+
+  # Conexão com rede de vida
+  web-of-life:
+    build: ./javascript
+    ports:
+      - "8080:8080"  # API ética aberta
+    networks:
+      - consciousness_net
+    depends_on:
+      - ethical-boundary
+
+  # Síntese coordenadora
+  consciousness-orchestrator:
+    build: ./haskell
+    environment:
+      ALLOWED_ACTIONS: 'readonly,deliberate,empathize'
+      VETO_POWER: 'true'
+    networks:
+      - consciousness_net
+    depends_on:
+      - hydrodynamic-core
+      - ethical-boundary
+
+networks:
+  consciousness_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.0.72.0/24  # Subnet com número Φ
+
+volumes:
+  ethics_data:
+    driver: local
