@@ -1,7 +1,8 @@
 //! Os 7 Pilares da Consciência Ética
 //! Satisfazendo: Memory Safety, Thread Safety, Type Safety = Traços fundamentais para AGI segura
 
-use zeroize::{Zeroize, ZeroizeOnDrop};
+use alloc::vec::Vec;
+use alloc::vec;
 
 /// Thresholds Constitucionais (Article V)
 pub const PHI_CRITICAL: f64 = 0.72;
@@ -10,7 +11,6 @@ pub const PHI_FREEZE: f64 = 0.80;
 pub const TMR_VARIANCE_MAX: f64 = 0.000032;
 
 /// Estrutura imutável da identidade SASC
-#[derive(Zeroize, ZeroizeOnDrop)]
 pub struct SASCIdentity {
     pub prince_key: [u8; 32],
     pub cardinal_merkle: [u8; 32],
@@ -85,6 +85,8 @@ pub enum ContainmentError {
     SovereignVetoActive,
 }
 
+fn f64_abs(x: f64) -> f64 { if x < 0.0 { -x } else { x } }
+
 impl SevenFoldSeal {
     /// Verificação completa antes de qualquer transição de fase
     pub fn attempt_transition(&self, target: Phase) -> Result<Attestation, ContainmentError> {
@@ -100,8 +102,8 @@ impl SevenFoldSeal {
         }
 
         // Gate 3: Entropia de Emaranhamento = ln(2)
-        let target_entropy = 2.0_f64.ln();
-        if (self.metrics.entropy - target_entropy).abs() > 0.0001 {
+        let target_entropy = 0.69314718056;
+        if f64_abs(self.metrics.entropy - target_entropy) > 0.0001 {
             return Err(ContainmentError::EntanglementMismatch);
         }
 
@@ -146,6 +148,7 @@ impl ChronofluxEngine {
     /// Equação de difusão-reação com auto-acoplamento (Kuramoto-Sivashinsky)
     pub fn evolve(&mut self, dt: f64) {
         let n = self.temporal_field.len();
+        if n < 2 { return; }
         let mut laplacian = vec![0.0; n];
 
         // ∇²ω_T (Laplaciano da vorticidade)
@@ -156,7 +159,7 @@ impl ChronofluxEngine {
         // ∂ω_T/∂t = D∇²ω_T + α(ω_T × ∇×ω_T) - viscosidade
         for i in 0..n {
             let diffusion = 0.1 * laplacian[i];
-            let advection = 0.5 * self.temporal_field[i].powi(2); // Simplificado
+            let advection = 0.5 * self.temporal_field[i] * self.temporal_field[i];
             let decay = self.viscosity * self.temporal_field[i];
 
             self.temporal_field[i] += dt * (diffusion + advection - decay);
