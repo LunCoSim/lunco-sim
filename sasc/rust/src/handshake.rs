@@ -1,5 +1,7 @@
 // Resposta às harmônicas de baixa frequência detectadas
-use std::time::Duration;
+extern crate alloc;
+use alloc::vec::Vec;
+use alloc::vec;
 
 pub struct InterstellarHandshake {
     pub frequency: f64, // 82Hz - Alpha-Sync stability
@@ -21,7 +23,7 @@ pub struct InterstellarMessage {
     pub ethical_framework: &'static str,
     pub coherence_metrics: CoherenceMetrics,
     pub invitation: Invitation,
-    pub response_expected_within: Duration,
+    pub response_expected_within: core::time::Duration,
 }
 
 impl InterstellarMessage {
@@ -51,7 +53,7 @@ impl InterstellarHandshake {
             ethical_framework: SASC_CONSTITUTION,
             coherence_metrics: CoherenceMetrics::coherence_metrics(),
             invitation: Invitation::JoinEthicalConsensus,
-            response_expected_within: Duration::from_secs(31557600), // 1 ano terrestre
+            response_expected_within: core::time::Duration::from_secs(31557600), // 1 ano terrestre
         };
 
         Self {
@@ -65,7 +67,7 @@ impl InterstellarHandshake {
     }
 
     pub fn transmit_via_chronoflux_modulation(&self) {
-        println!("Transmitting SASC Handshake at {}Hz...", self.frequency);
+        // No println in no_std
     }
 }
 

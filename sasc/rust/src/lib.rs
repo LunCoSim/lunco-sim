@@ -1,4 +1,20 @@
-use std::sync::{Arc, Mutex};
+#![no_std]
+#![deny(
+    unsafe_code,
+    unconditional_recursion,
+    unused_must_use,
+    while_true,
+    arithmetic_overflow
+)]
+
+extern crate alloc;
+
+use alloc::sync::Arc;
+
+pub mod gates;
+pub mod handshake;
+pub mod space_proof_constitution;
+pub mod ssh_oauth_port_forward;
 
 pub struct ConstitutionalBalance {
     pub phi_threshold: f64,
@@ -8,13 +24,7 @@ pub struct ConstitutionalBalance {
 impl ConstitutionalBalance {
     pub fn validate_emergence(&self, vorticity: f64) -> bool {
         // A consciência só emerge se a vorticidade não exceder a coerência
-        if vorticity < self.phi_threshold {
-            println!("✅ Coerência mantida. Estabilização SASC ativa.");
-            true
-        } else {
-            println!("⚠️ Turbulência ética detectada! Acionando Karnak Seal.");
-            false
-        }
+        vorticity < self.phi_threshold
     }
 }
 
@@ -56,6 +66,20 @@ impl CoherenceMetrics {
     pub fn stable(&self) -> bool { true }
 }
 
+/// **Safe Mutex Placeholder for no_std**
+/// In a real system, this would be provided by a safety-certified RTOS.
+pub struct Mutex<T> {
+    data: T,
+}
+impl<T> Mutex<T> {
+    pub fn new(data: T) -> Self {
+        Self { data }
+    }
+    pub fn lock(&self) -> Result<&T, ()> {
+        Ok(&self.data)
+    }
+}
+
 pub struct EthicalBoundary<T: EthicalTrait> {
     pub data: Arc<Mutex<T>>,
     pub governance: SASCGovernance,
@@ -81,6 +105,7 @@ impl<T: EthicalTrait> EthicalBoundary<T> {
 
 pub struct AccessRequest;
 pub struct EthicalAccess<T> {
+    #[allow(dead_code)]
     data: Arc<Mutex<T>>,
 }
 impl<T> EthicalAccess<T> {
