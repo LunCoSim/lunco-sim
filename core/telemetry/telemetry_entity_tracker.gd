@@ -153,19 +153,33 @@ func update_properties() -> Dictionary:
 		if _cached_controller.has_method("get_brake"):
 			props["inputs.brake"] = _cached_controller.get_brake()
 			
+	# Aggregate telemetry from all child components (effectors, etc.)
+	_collect_component_telemetry(entity, props)
+			
 	# Get mapped properties from Telemetry schema
 	for key in _property_map:
 		var prop_name = _property_map[key]
 		var val = entity.get(prop_name)
 		if val != null:
-			# Handle vector decomposition if needed, or just pass raw
-			# For now, we pass raw and let the UI/API handle formatting
-			# If the key implies a sub-property (e.g. "position.x"), we might need more logic
-			# But for now, we assume 1:1 mapping for simple types
 			props[key] = val
 	
 	last_properties = props
 	return props
+
+func _collect_component_telemetry(node: Node, props: Dictionary):
+	for child in node.get_children():
+		if child is LCComponent:
+			var component_telemetry = child.get_telemetry()
+			if component_telemetry is Dictionary:
+				# print("DEBUG: Merging telemetry from ", child.name, ": ", component_telemetry.keys())
+				for key in component_telemetry:
+					# We allow components to set properties. If multiple components 
+					# use the same key, the last one wins (shoud be avoided in design)
+					props[key] = component_telemetry[key]
+		
+		# Recurse to find nested components if necessary
+		if child.get_child_count() > 0:
+			_collect_component_telemetry(child, props)
 
 func _get_position() -> Vector3:
 	if entity.has_method("get_global_position"):

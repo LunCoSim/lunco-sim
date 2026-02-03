@@ -48,7 +48,7 @@ func dispatch(command: LCCommand) -> Variant:
 				break
 				
 	if executor:
-		return executor.execute(command)
+		return await executor.execute(command)
 	else:
 		var err = "Command target not found: %s" % target_str
 		push_warning(err)
@@ -66,7 +66,7 @@ func dispatch(command: LCCommand) -> Variant:
 ## Executes a command from a raw dictionary (e.g., from JSON/HTTP).
 func execute_raw(dict: Dictionary) -> Variant:
 	var command = LCCommand.from_dict(dict)
-	return dispatch(command)
+	return await dispatch(command)
 
 ## Returns a consolidated dictionary of all available commands across all entities.
 func get_all_command_definitions() -> Dictionary:

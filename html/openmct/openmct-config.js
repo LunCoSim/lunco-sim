@@ -25,6 +25,8 @@ document.addEventListener('DOMContentLoaded', function () {
     openmct.install(openmct.plugins.LocalStorage());
     openmct.install(openmct.plugins.MyItems());
     openmct.install(openmct.plugins.Espresso());
+    openmct.install(openmct.plugins.ImageryPlugin.default());
+    openmct.install(openmct.plugins.Clock());
 
     // Disable in-memory search to avoid SharedWorker CORS issues
     // Mock SharedWorker to silently fail instead of throwing
@@ -76,14 +78,16 @@ document.addEventListener('DOMContentLoaded', function () {
             function getMockTelemetry(id) {
                 const now = Date.now();
                 return {
-                    timestamp: now,
-                    "position.x": Math.sin(now / 10000) * 100,
-                    "position.y": 10,
-                    "position.z": Math.cos(now / 10000) * 100,
+                    "utc": now,
+                    "timestamp": now,
+                    "position.x": Math.sin(now / 5000) * 50,
+                    "position.y": Math.cos(now / 5000) * 50,
+                    "position.z": Math.sin(now / 10000) * 20,
                     "velocity.x": Math.cos(now / 10000) * 5,
                     "velocity.y": 0,
                     "velocity.z": -Math.sin(now / 10000) * 5,
-                    "controller_id": 1
+                    "controller_id": 1,
+                    "image_url": "https://raw.githubusercontent.com/nasa/openmct/master/example/imagery/imagery/images/img2.jpg"
                 };
             }
 
@@ -162,6 +166,15 @@ document.addEventListener('DOMContentLoaded', function () {
                         });
                     }
 
+                    if (identifier.key === 'gallery') {
+                        return Promise.resolve({
+                            identifier: identifier,
+                            name: "Image Gallery",
+                            type: "luncosim.gallery",
+                            location: "luncosim:luncosim"
+                        });
+                    }
+
                     // Check for mock entities first
                     if (identifier.key.startsWith('mock-')) {
                         const mockEntities = getMockEntities();
@@ -198,7 +211,8 @@ document.addEventListener('DOMContentLoaded', function () {
                                         { key: "rotation.y", name: "Rotation Y", unit: "rad", format: "float", hints: { range: 1 } },
                                         { key: "rotation.z", name: "Rotation Z", unit: "rad", format: "float", hints: { range: 1 } },
                                         { key: "mass", name: "Mass", unit: "kg", format: "float", hints: { range: 1 } },
-                                        { key: "controller_id", name: "Controller ID", format: "integer", hints: { range: 1 } }
+                                        { key: "controller_id", name: "Controller ID", format: "integer", hints: { range: 1 } },
+                                        { key: "image", source: "image_url", name: "Camera Image", format: "image", hints: { image: 1 } }
                                     ]
                                 },
                                 location: "luncosim:luncosim"
@@ -259,7 +273,8 @@ document.addEventListener('DOMContentLoaded', function () {
                                             { key: "rotation.y", name: "Rotation Y", unit: "rad", format: "float", hints: { range: 1 } },
                                             { key: "rotation.z", name: "Rotation Z", unit: "rad", format: "float", hints: { range: 1 } },
                                             { key: "mass", name: "Mass", unit: "kg", format: "float", hints: { range: 1 } },
-                                            { key: "controller_id", name: "Controller ID", format: "integer", hints: { range: 1 } }
+                                            { key: "controller_id", name: "Controller ID", format: "integer", hints: { range: 1 } },
+                                            { key: "image", source: "image_url", name: "Camera Image", format: "image", hints: { image: 1 } }
                                         ]
                                     },
                                     location: "luncosim:luncosim"
@@ -281,6 +296,7 @@ document.addEventListener('DOMContentLoaded', function () {
                         (domainObject.identifier.key === 'luncosim' ||
                             domainObject.identifier.key === 'entities' ||
                             domainObject.identifier.key === 'controllers' ||
+                            domainObject.identifier.key === 'gallery' ||
                             domainObject.type === 'luncosim.telemetry');
                 },
                 load: function (domainObject) {
@@ -296,7 +312,8 @@ document.addEventListener('DOMContentLoaded', function () {
                         // Root listing: Entities and Controllers folders
                         return Promise.resolve([
                             { namespace: 'luncosim', key: 'entities' },
-                            { namespace: 'luncosim', key: 'controllers' }
+                            { namespace: 'luncosim', key: 'controllers' },
+                            { namespace: 'luncosim', key: 'gallery' }
                         ]);
                     }
 
@@ -409,10 +426,7 @@ document.addEventListener('DOMContentLoaded', function () {
                             .then(response => response.json())
                             .then(data => {
                                 if (data && data.timestamp) {
-                                    console.log('Telemetry data received:', entityId, 'timestamp:', data.timestamp);
                                     callback(data);
-                                } else {
-                                    console.warn('Invalid telemetry data (no timestamp):', data);
                                 }
                             })
                             .catch(err => console.error('Telemetry fetch error:', err));
@@ -684,7 +698,101 @@ document.addEventListener('DOMContentLoaded', function () {
                 }
             });
 
+            // Register Gallery View
+            openmct.objectViews.addProvider({
+                key: 'luncosim.gallery.view',
+                name: 'Gallery',
+                canView: function (domainObject) {
+                    return domainObject.type === 'luncosim.gallery';
+                },
+                view: function (domainObject) {
+                    let container;
+                    let interval;
+                    return {
+                        show: function (element) {
+                            container = document.createElement('div');
+                            container.style.display = 'grid';
+                            container.style.gridTemplateColumns = 'repeat(auto-fill, minmax(200px, 1fr))';
+                            container.style.gap = '15px';
+                            container.style.padding = '15px';
+                            container.style.overflowY = 'auto';
+                            container.style.height = '100%';
+                            container.style.background = '#111';
+                            element.appendChild(container);
+
+                            function refresh() {
+                                fetch(`${TELEMETRY_API_URL}/images`)
+                                    .then(r => r.json())
+                                    .then(data => {
+                                        container.innerHTML = '';
+                                        if (!data.images || data.images.length === 0) {
+                                            container.innerHTML = '<p style="color: #888; text-align: center; grid-column: 1/-1; margin-top: 50px;">No images captured yet. Run the TAKE_IMAGE command on a rover!</p>';
+                                            return;
+                                        }
+                                        data.images.forEach(img => {
+                                            const card = document.createElement('div');
+                                            card.style.background = '#222';
+                                            card.style.borderRadius = '8px';
+                                            card.style.padding = '10px';
+                                            card.style.cursor = 'pointer';
+                                            card.style.transition = 'transform 0.2s';
+                                            card.onmouseenter = () => card.style.transform = 'scale(1.02)';
+                                            card.onmouseleave = () => card.style.transform = 'scale(1)';
+
+                                            const image = document.createElement('img');
+                                            image.src = img.url;
+                                            image.style.width = '100%';
+                                            image.style.aspectRatio = '16/9';
+                                            image.style.objectFit = 'cover';
+                                            image.style.borderRadius = '4px';
+                                            image.style.display = 'block';
+
+                                            const info = document.createElement('div');
+                                            info.style.marginTop = '10px';
+
+                                            const date = document.createElement('div');
+                                            date.innerText = new Date(img.timestamp).toLocaleString();
+                                            date.style.fontSize = '0.8em';
+                                            date.style.color = '#eee';
+
+                                            const name = document.createElement('div');
+                                            name.innerText = img.name;
+                                            name.style.fontSize = '0.7em';
+                                            name.style.color = '#666';
+                                            name.style.whiteSpace = 'nowrap';
+                                            name.style.overflow = 'hidden';
+                                            name.style.textOverflow = 'ellipsis';
+
+                                            info.appendChild(date);
+                                            info.appendChild(name);
+                                            card.appendChild(image);
+                                            card.appendChild(info);
+                                            container.appendChild(card);
+
+                                            card.onclick = () => window.open(img.url, '_blank');
+                                        });
+                                    })
+                                    .catch(err => {
+                                        container.innerHTML = `<p style="color: #f44336; padding: 20px;">Error loading gallery: ${err.message}</p>`;
+                                    });
+                            }
+                            refresh();
+                            interval = setInterval(refresh, 5000);
+                        },
+                        destroy: function () {
+                            if (interval) clearInterval(interval);
+                        }
+                    };
+                }
+            });
+
             // Register types
+            openmct.types.addType('luncosim.gallery', {
+                name: 'Image Gallery',
+                description: 'A view of all images captured by rovers',
+                cssClass: 'icon-image'
+            });
+
             openmct.types.addType('luncosim.telemetry', {
                 name: 'LunCoSim Telemetry',
                 description: 'Telemetry from LunCoSim entities',
@@ -704,16 +812,19 @@ document.addEventListener('DOMContentLoaded', function () {
     // Install the plugin
     openmct.install(LunCoSimTelemetryPlugin());
 
-    // Start OpenMCT first
+    // Set up time system BEFORE start to avoid synchronization errors
+    try {
+        openmct.time.clock('local', { start: -15 * 60 * 1000, end: 0 });
+        openmct.time.timeSystem('utc');
+    } catch (e) {
+        console.warn('Initial clock setup failed, will retry after start:', e.message);
+    }
+
+    // Start OpenMCT
     console.log('Starting OpenMCT...');
     try {
         openmct.start(document.body);
         console.log('OpenMCT started successfully');
-
-        // Set up time system after start
-        openmct.time.setClock('local');
-        openmct.time.setClockOffsets({ start: -15 * 60 * 1000, end: 0 });
-        openmct.time.setTimeSystem('utc');
     } catch (error) {
         console.error('Error starting OpenMCT:', error);
         document.body.innerHTML = '<div style="color: white; padding: 20px;">Error starting OpenMCT: ' + error.message + '</div>';

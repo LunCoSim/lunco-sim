@@ -28,8 +28,16 @@ func handle_get(request: HttpRequest, response: HttpResponse) -> void:
 		_handle_entity_events(request, response)
 	elif path == "/command":
 		_handle_command_definitions(request, response)
+	elif path == "/images":
+		_handle_image_list(request, response)
+	elif path.begins_with("/images/"):
+		_handle_image_request(request, response)
 	else:
 		response.send_error(404, "Not Found")
+
+func _handle_image_list(_request: HttpRequest, response: HttpResponse) -> void:
+	var images = TelemetryManager.get_image_list()
+	response.send_json({"images": images})
 
 func handle_post(request: HttpRequest, response: HttpResponse) -> void:
 	# Add CORS headers
@@ -81,6 +89,7 @@ func _handle_latest(entity_id: String, response: HttpResponse) -> void:
 	if data.is_empty():
 		response.send_error(404, "Entity not found")
 	else:
+		# print("DEBUG: Sending latest telemetry for ", entity_id, ": ", data.keys())
 		response.send_json(data)
 
 func _handle_history(entity_id: String, request: HttpRequest, response: HttpResponse) -> void:
@@ -140,7 +149,7 @@ func _handle_command(request: HttpRequest, response: HttpResponse) -> void:
 	# Dispatch command via LCCommandRouter
 	# Remote commands should be marked as source="http"
 	data["source"] = "http"
-	var result = LCCommandRouter.execute_raw(data)
+	var result = await LCCommandRouter.execute_raw(data)
 	
 	if result is String and result.begins_with("Command target not found"):
 		response.send_error(404, result)
@@ -152,3 +161,22 @@ func _handle_command(request: HttpRequest, response: HttpResponse) -> void:
 func _handle_command_definitions(_request: HttpRequest, response: HttpResponse) -> void:
 	var defs = LCCommandRouter.get_all_command_definitions()
 	response.send_json({"targets": defs})
+
+func _handle_image_request(request: HttpRequest, response: HttpResponse) -> void:
+	var path = request.path
+	if path.begins_with("/api"):
+		path = path.substr(4)
+	
+	var parts = path.split("/")
+	if parts.size() < 3:
+		response.send_error(400, "Invalid image path")
+		return
+	
+	var filename = parts[2]
+	var file_path = "user://images/" + filename
+	
+	if not FileAccess.file_exists(file_path):
+		response.send_error(404, "Image not found")
+		return
+	
+	response.send_file(file_path)

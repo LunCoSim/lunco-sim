@@ -178,3 +178,19 @@ func cmd_set_crab_steering(value: float = 0.0):
 
 func cmd_set_brake(value: float = 0.0):
 	set_brake(value)
+
+func cmd_take_image():
+	# Find camera effector in children or descendants
+	var camera = _find_camera(parent if parent else self)
+	if camera:
+		return await camera.cmd_take_image()
+	return "No camera found on rover"
+
+func _find_camera(node: Node) -> Node:
+	if node is LCCameraEffector:
+		return node
+	for child in node.get_children():
+		var found = _find_camera(child)
+		if found:
+			return found
+	return null

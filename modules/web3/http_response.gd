@@ -7,6 +7,7 @@ var status_code: int = 200
 var status_message: String = "OK"
 var content_type: String = "text/html"
 var body: String = ""
+var body_raw: PackedByteArray = PackedByteArray()
 
 func _init(client_connection):  # Can be StreamPeerTCP or StreamPeerTLS
 	client = client_connection
@@ -58,8 +59,11 @@ func send_file(file_path: String) -> void:
 		send_error(500, "Could not open file")
 		return
 	
-	var content = file.get_as_text()
+	var content_raw = file.get_buffer(file.get_length())
 	file.close()
+	
+	body_raw = content_raw
+	body = "" # Clear string body
 	
 	# Determine content type based on file extension
 	var extension = file_path.get_extension().to_lower()
@@ -76,7 +80,9 @@ func send_file(file_path: String) -> void:
 		"svg": type = "image/svg+xml"
 		"txt": type = "text/plain"
 	
-	send(content, type)
+	set_content_type(type)
+	headers["Content-Length"] = str(body_raw.size())
+	_send_response()
 
 func send_error(code: int, message: String = "") -> void:
 	set_status(code, message)
@@ -90,14 +96,20 @@ func redirect(url: String, permanent: bool = false) -> void:
 	send("", "text/plain")
 
 func _send_response() -> void:
-	var response = "HTTP/1.1 " + str(status_code) + " " + status_message + "\r\n"
+	var response_head = "HTTP/1.1 " + str(status_code) + " " + status_message + "\r\n"
 	
 	# Add headers
 	for key in headers:
-		response += key + ": " + headers[key] + "\r\n"
+		response_head += key + ": " + headers[key] + "\r\n"
 	
-	# Add body
-	response += "\r\n" + body
+	response_head += "\r\n"
+	
+	var response_data = response_head.to_utf8_buffer()
+	
+	if body_raw.size() > 0:
+		response_data.append_array(body_raw)
+	elif not body.is_empty():
+		response_data.append_array(body.to_utf8_buffer())
 	
 	# Send response
-	client.put_data(response.to_utf8_buffer()) 
+	client.put_data(response_data)

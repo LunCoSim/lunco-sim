@@ -240,6 +240,37 @@ func get_global_events(start_time: int = 0, end_time: int = 0) -> Array:
 	
 	return filtered
 
+func get_image_list() -> Array:
+	var images = []
+	var path = "user://images/"
+	if not DirAccess.dir_exists_absolute(path):
+		return []
+		
+	var dir = DirAccess.open(path)
+	if dir:
+		dir.list_dir_begin()
+		var file_name = dir.get_next()
+		while file_name != "":
+			if not dir.current_is_dir() and file_name.ends_with(".png"):
+				images.append({
+					"name": file_name,
+					"url": "http://localhost:8082/api/images/" + file_name,
+					"timestamp": _extract_timestamp(file_name)
+				})
+			file_name = dir.get_next()
+	
+	# Sort by timestamp descending
+	images.sort_custom(func(a, b): return a.timestamp > b.timestamp)
+	return images
+
+func _extract_timestamp(filename: String) -> int:
+	# filename format: entity_id_timestamp.png
+	var parts = filename.split("_")
+	if parts.size() >= 2:
+		var ts_str = parts[parts.size()-1].get_basename()
+		return int(ts_str) * 1000 # Convert to ms
+	return 0
+
 func get_openmct_dictionary() -> Dictionary:
 	var measurements = []
 	
@@ -262,7 +293,8 @@ func get_openmct_dictionary() -> Dictionary:
 				{"key": "velocity.x", "name": "Velocity X", "unit": "m/s", "format": "float", "hints": {"range": 1}},
 				{"key": "velocity.y", "name": "Velocity Y", "unit": "m/s", "format": "float", "hints": {"range": 1}},
 				{"key": "velocity.z", "name": "Velocity Z", "unit": "m/s", "format": "float", "hints": {"range": 1}},
-				{"key": "controller_id", "name": "Controller ID", "format": "integer", "hints": {"range": 1}}
+				{"key": "controller_id", "name": "Controller ID", "format": "integer", "hints": {"range": 1}},
+				{"key": "image_url", "name": "Camera Image", "format": "image", "hints": {"image": true}}
 			]
 		}
 		

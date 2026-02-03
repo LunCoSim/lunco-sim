@@ -68,8 +68,8 @@ func execute(command: LCCommand) -> Variant:
 		command_failed.emit(command, err)
 		return err
 	
-	# Call with proper arguments
-	var result = parent.callv(method_name, converted_args)
+	# Call with proper arguments - support async commands
+	var result = await parent.callv(method_name, converted_args)
 	command_executed.emit(command, result)
 	return result
 

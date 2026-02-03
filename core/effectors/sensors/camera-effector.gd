@@ -30,6 +30,9 @@ var image_center_depth: float = 0.0  ## Depth at image center
 # Internal
 var camera_3d: Camera3D
 var space_state: PhysicsDirectSpaceState3D
+var _viewport: SubViewport
+var _render_camera: Camera3D
+var last_image_url: String = ""
 
 func _ready():
 	super._ready()
@@ -44,6 +47,11 @@ func _ready():
 	camera_3d.far = far_plane
 	
 	space_state = get_world_3d().direct_space_state
+	
+	# Add command executor for standalone use
+	var executor = LCCommandExecutor.new()
+	executor.name = "CommandExecutor"
+	add_child(executor)
 
 func _update_measurement():
 	if not space_state:
@@ -207,3 +215,61 @@ func _update_telemetry():
 	Telemetry["center_depth"] = image_center_depth
 	Telemetry["fov"] = field_of_view
 	Telemetry["resolution"] = resolution
+	Telemetry["image_url"] = last_image_url
+
+func get_command_metadata() -> Dictionary:
+	return {
+		"TAKE_IMAGE": {
+			"description": "Capture an image from the camera and save it as PNG."
+		}
+	}
+
+func cmd_take_image():
+	if not _viewport:
+		_setup_rendering()
+	
+	# Wait for a frame to render
+	await get_tree().process_frame
+	await get_tree().process_frame
+	
+	var img = _viewport.get_texture().get_image()
+	var timestamp = int(Time.get_unix_time_from_system())
+	var entity_id = "camera"
+	if get_parent():
+		entity_id = get_parent().name.to_snake_case()
+	
+	var filename = "%s_%d.png" % [entity_id, timestamp]
+	var dir = "user://images/"
+	if not DirAccess.dir_exists_absolute(dir):
+		DirAccess.make_dir_recursive_absolute(dir)
+	
+	var path = dir + filename
+	var err = img.save_png(path)
+	
+	if err == OK:
+		last_image_url = "http://localhost:8082/api/images/" + filename
+		print("Camera: Image saved to ", path)
+		return "Image captured: " + filename
+	else:
+		return "Failed to save image: " + error_string(err)
+
+func _setup_rendering():
+	_viewport = SubViewport.new()
+	_viewport.size = resolution
+	_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	add_child(_viewport)
+	
+	_render_camera = Camera3D.new()
+	_viewport.add_child(_render_camera)
+	_render_camera.fov = field_of_view
+	_render_camera.near = near_plane
+	_render_camera.far = far_plane
+	
+	# Match position/rotation of this effector
+	# We rely on _process to sync transform
+	set_process(true)
+
+func _process(delta):
+	super._process(delta)
+	if _render_camera:
+		_render_camera.global_transform = global_transform
