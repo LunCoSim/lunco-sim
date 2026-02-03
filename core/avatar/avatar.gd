@@ -89,6 +89,11 @@ const DEVICE_ID_REMOTE = 7 # Dedicated device ID for remote artificial events
 var mouse_control := false
 var controller: LCController
 
+# Multi-camera system
+var available_cameras: Array[Dictionary] = []  # List of all available cameras
+var current_camera_index: int = 0  # Index of currently active camera
+var default_camera_index: int = 0  # Index of the SpringArmCamera
+
 #===============================================================================
 # ENTITY TARGETING & CONTROL - Managing what the player controls
 #===============================================================================
@@ -131,6 +136,17 @@ func set_camera(_camera):
 	camera = _camera
 	if camera and CATCH_CAMERA:
 		camera.set_current()
+	
+	# Initialize camera list with SpringArmCamera
+	available_cameras.clear()
+	if camera:
+		_register_camera(camera.camera, {
+			"name": "Third Person",
+			"type": "spring_arm",
+			"description": "Follow camera behind entity"
+		})
+		default_camera_index = 0
+		current_camera_index = 0
 
 #===============================================================================
 # INITIALIZATION - Setup and signal connections
@@ -296,6 +312,10 @@ func _input(event):
 	if Input.is_action_just_pressed("ui_focus_next"):
 		LCWindows.toggle_chat()
 	
+	# Handle camera switching
+	if Input.is_action_just_pressed("camera_switch"):
+		cycle_camera()
+	
 	if event is InputEventKey and not event.is_echo() and event.is_pressed():
 		# Process display toggle keys if UiDisplayManager exists
 		if ui_display_manager:
@@ -427,9 +447,121 @@ func do_raycast(from: Vector3, to: Vector3):
 # STATE TRANSITIONS - Camera settings per controller type
 #===============================================================================
 
+#===============================================================================
+# MULTI-CAMERA SYSTEM - Camera registration and switching
+#===============================================================================
+
+## Registers a camera with metadata
+func _register_camera(cam: Camera3D, metadata: Dictionary):
+	if not cam:
+		return
+	
+	var camera_info = {
+		"camera": cam,
+		"name": metadata.get("name", "Unknown Camera"),
+		"type": metadata.get("type", "generic"),
+		"description": metadata.get("description", "")
+	}
+	available_cameras.append(camera_info)
+	print("Avatar: Registered camera '%s' (%s)" % [camera_info.name, camera_info.type])
+
+## Discovers and registers cameras from the current controller
+func _discover_entity_cameras():
+	if not controller:
+		return
+	
+	# Try to find camera effectors in the entity
+	var entity = controller.get_parent()
+	if not entity:
+		return
+	
+	var cameras_found = _find_all_cameras(entity)
+	for cam_node in cameras_found:
+		# Get Camera3D from camera effector
+		var cam_3d = null
+		if cam_node is LCCameraEffector:
+			cam_3d = cam_node.get_node_or_null("Camera3D")
+			if cam_3d:
+				_register_camera(cam_3d, {
+					"name": cam_node.name,
+					"type": "first_person",
+					"description": "Camera effector on " + entity.name
+				})
+		elif cam_node is Camera3D:
+			_register_camera(cam_node, {
+				"name": cam_node.name,
+				"type": "fixed",
+				"description": "Fixed camera on " + entity.name
+			})
+
+## Recursively finds all cameras in a node tree
+func _find_all_cameras(node: Node) -> Array:
+	var cameras = []
+	
+	if node is LCCameraEffector or node is Camera3D:
+		cameras.append(node)
+	
+	for child in node.get_children():
+		cameras.append_array(_find_all_cameras(child))
+	
+	return cameras
+
+## Cycles to the next available camera
+func cycle_camera():
+	if available_cameras.is_empty():
+		print("Avatar: No cameras available")
+		return
+	
+	# Move to next camera
+	current_camera_index = (current_camera_index + 1) % available_cameras.size()
+	_activate_camera(current_camera_index)
+
+## Activates a camera by index
+func _activate_camera(index: int):
+	if index < 0 or index >= available_cameras.size():
+		print("Avatar: Invalid camera index %d" % index)
+		return
+	
+	var camera_info = available_cameras[index]
+	var cam = camera_info.camera as Camera3D
+	
+	if cam:
+		cam.current = true
+		current_camera_index = index
+		print("Avatar: Switched to camera '%s' (%d/%d)" % [
+			camera_info.name,
+			index + 1,
+			available_cameras.size()
+		])
+	else:
+		print("Avatar: Camera at index %d is invalid" % index)
+
+#===============================================================================
+# STATE TRANSITIONS - Camera settings per controller type
+#===============================================================================
+
 ## Called when target changes - applies appropriate camera settings
 ## Avatar owns visualization preferences for each controller type
 func _on_state_transited():
+	# Reset camera list and rediscover cameras
+	available_cameras.clear()
+	
+	# Re-register SpringArmCamera
+	if camera:
+		_register_camera(camera.camera, {
+			"name": "Third Person",
+			"type": "spring_arm",
+			"description": "Follow camera behind entity"
+		})
+		default_camera_index = 0
+		current_camera_index = 0
+	
+	# Discover entity-specific cameras
+	_discover_entity_cameras()
+	
+	# Activate default camera
+	if not available_cameras.is_empty():
+		_activate_camera(default_camera_index)
 
 	camera.set_follow_height(0.5)
 	camera.set_spring_length(2.5)

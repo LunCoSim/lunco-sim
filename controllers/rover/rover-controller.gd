@@ -412,3 +412,8 @@ func _find_camera(node: Node) -> Node:
 		if found:
 			return found
 	return null
+
+func get_rover_camera() -> LCCameraEffector:
+	"""Returns the rover's camera effector if available"""
+	var camera = _find_camera(parent if parent else self)
+	return camera as LCCameraEffector
