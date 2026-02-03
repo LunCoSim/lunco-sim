@@ -10,7 +10,7 @@ extends LCSensorEffector
 @export var resolution: Vector2i = Vector2i(640, 480)  ## Image resolution
 @export var field_of_view: float = 60.0  ## Horizontal FOV in degrees
 @export var near_plane: float = 0.1  ## Near clipping plane in meters
-@export var far_plane: float = 100.0  ## Far clipping plane in meters
+@export var far_plane: float = 100000.0  ## Far clipping plane in meters (100km)
 
 @export_group("Camera Features")
 @export var enable_depth: bool = false  ## Enable depth sensing
