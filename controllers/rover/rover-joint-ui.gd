@@ -52,7 +52,7 @@ func _ready():
 
 func _on_target_set():
 	"""Called when target controller is set"""
-	if target is LCRoverJointController:
+	if target is LCRoverController:
 		# Connect signals
 		target.speed_changed.connect(_on_speed_changed)
 		target.motor_state_changed.connect(_on_motor_changed)
@@ -66,7 +66,7 @@ func _on_target_set():
 		_update_mode_display()
 		_update_wheel_controls_visibility()
 	else:
-		push_warning("RoverJointUI: Target is not a LCRoverJointController")
+		push_warning("RoverJointUI: Target is not a LCRoverController")
 
 # UI and telemetry update throttling
 var ui_update_timer := 0.0

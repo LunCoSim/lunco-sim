@@ -4,7 +4,6 @@ extends Control
 const CHARACTER_UI = preload("res://controllers/character/character-ui.tscn")
 const SPACECRAFT_UI = preload("res://controllers/spacecraft/spacecraft-ui.tscn")
 const ROVER_UI = preload("res://controllers/rover/rover-ui.tscn")
-const ROVER_JOINT_UI = preload("res://controllers/rover/rover-joint-ui.tscn")
 const OPERATOR_UI = preload("res://controllers/operator/operator-ui.tscn")
 
 # Dictionary for cleaner lookup by controller class name
@@ -175,8 +174,6 @@ func set_target(target):
 		
 		if target is LCRoverController:
 			ui_scene = ROVER_UI
-		elif target is LCRoverJointController:
-			ui_scene = ROVER_JOINT_UI
 		elif target is LCCharacterController:
 			ui_scene = CHARACTER_UI
 		elif target is LCSpacecraftController:
