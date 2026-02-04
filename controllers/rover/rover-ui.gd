@@ -6,6 +6,7 @@ extends LCControllerUI
 @onready var steering_label = get_node_or_null("SteeringLabel")
 @onready var motor_label = get_node_or_null("MotorLabel")
 @onready var camera_label = get_node_or_null("CurrentCamera")
+@onready var drive_mode_select = get_node_or_null("DriveModeSelect")
 
 # UI update throttling
 var update_timer := 0.0
@@ -32,6 +33,10 @@ func _on_target_set():
 		target.speed_changed.connect(_on_speed_changed)
 		target.steering_changed.connect(_on_steering_changed)
 		target.motor_state_changed.connect(_on_motor_changed)
+		
+		# Initialize drive mode selector
+		if drive_mode_select and "drive_mode" in target:
+			drive_mode_select.selected = target.drive_mode
 	else:
 		push_warning("RoverUI: Target is not a rover controller")
 
@@ -54,6 +59,12 @@ func _on_steering_changed(angle: float):
 func _on_motor_changed(power: float):
 	# Signal received - mark for update
 	pass
+
+func _on_drive_mode_selected(index: int):
+	"""Handle drive mode selection change"""
+	if target and "drive_mode" in target:
+		target.drive_mode = index
+		print("RoverUI: Drive mode changed to: ", ["Standard", "Ackermann", "Differential", "Independent"][index])
 
 func _update_ui_labels():
 	"""Update UI labels with current values"""
