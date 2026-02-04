@@ -404,6 +404,63 @@ func cmd_take_image():
 		return await camera.cmd_take_image()
 	return "No camera found on rover"
 
+# New Basic Minimum Commands
+func cmd_stop():
+	"""
+	Emergency stop: Cuts power and applies full brake.
+	"""
+	set_motor(0.0)
+	set_brake(1.0)
+	return "Stopped"
+
+func cmd_set_drive_mode(mode: int):
+	"""
+	Set drive mode: 0=Standard, 1=Ackermann, 2=Differential, 3=Independent
+	"""
+	if mode < 0 or mode > 3:
+		return "Invalid mode. Use 0-3."
+	
+	drive_mode = mode
+	# Update individual control flag if switching to Independent
+	enable_individual_control = (mode == 3)
+	
+	# Reset any persistent state when switching modes
+	_reset_inputs()
+	
+	return "Drive mode set to: " + str(mode)
+
+func cmd_set_max_speed(limit: float):
+	"""
+	Set maximum speed in m/s.
+	"""
+	if limit <= 0:
+		return "Invalid speed limit"
+	
+	MAX_SPEED = limit
+	# Update parameter registry if needed
+	if Parameters.has("Max Speed"):
+		Parameters["Max Speed"]["value"] = limit 
+		
+	return "Max speed set to: " + str(MAX_SPEED)
+
+func cmd_ping():
+	"""
+	Simple connectivity test.
+	"""
+	return "pong " + str(Time.get_unix_time_from_system())
+
+func cmd_get_telemetry():
+	"""
+	Get basic telemetry snapshot.
+	"""
+	return {
+		"speed": current_speed,
+		"heading": rotation.y,
+		"drive_mode": drive_mode,
+		"battery": 100.0, # Placeholder
+		"coordinates": [global_position.x, global_position.y, global_position.z]
+	}
+
 func _find_camera(node: Node) -> Node:
 	if node is LCCameraEffector:
 		return node
