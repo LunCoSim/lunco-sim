@@ -2,16 +2,29 @@ extends LCControllerUI
 
 # target is inherited from LCControllerUI (typed as LCRoverController)
 
-@onready var speed_label = get_node_or_null("Help/SpeedLabel")
-@onready var steering_label = get_node_or_null("Help/SteeringLabel")
-@onready var motor_label = get_node_or_null("Help/MotorLabel")
+@onready var speed_label = get_node_or_null("SpeedLabel")
+@onready var steering_label = get_node_or_null("SteeringLabel")
+@onready var motor_label = get_node_or_null("MotorLabel")
+@onready var camera_label = get_node_or_null("CurrentCamera")
 
 # UI update throttling
 var update_timer := 0.0
 const UPDATE_INTERVAL := 0.1  # 10 fps instead of 60
 
 func _ready():
-	pass
+	# Connect to avatar's camera system if available
+	var avatar = _find_avatar()
+	if avatar:
+		# Update camera label when cameras change
+		call_deferred("_update_camera_label")
+
+func _find_avatar() -> Node:
+	"""Find the avatar in the scene tree"""
+	var root = get_tree().root
+	var avatars = root.get_tree().get_nodes_in_group("avatar")
+	if avatars.size() > 0:
+		return avatars[0]
+	return null
 
 # Override base class hook to connect signals when target is set
 func _on_target_set():
@@ -28,6 +41,7 @@ func _process(delta):
 	if update_timer >= UPDATE_INTERVAL:
 		update_timer = 0.0
 		_update_ui_labels()
+		_update_camera_label()
 
 func _on_speed_changed(speed: float):
 	# Signal received - mark for update
@@ -58,3 +72,28 @@ func _update_ui_labels():
 		steering_label.text = "Steering: %.2f" % steering
 	if motor_label:
 		motor_label.text = "Motor: %.0f%%" % (motor * 100)
+
+func _update_camera_label():
+	"""Update camera label with current camera info"""
+	if not camera_label:
+		return
+	
+	var avatar = _find_avatar()
+	if not avatar:
+		return
+	
+	if "available_cameras" in avatar and "current_camera_index" in avatar:
+		var cameras = avatar.available_cameras
+		var current_idx = avatar.current_camera_index
+		
+		if cameras.size() > 0 and current_idx < cameras.size():
+			var camera_info = cameras[current_idx]
+			camera_label.text = "Camera: %s (%d/%d)" % [
+				camera_info.name,
+				current_idx + 1,
+				cameras.size()
+			]
+		else:
+			camera_label.text = "Camera: Unknown"
+	else:
+		camera_label.text = "Camera: Third Person"

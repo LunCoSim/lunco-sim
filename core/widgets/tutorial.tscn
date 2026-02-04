@@ -53,6 +53,7 @@ text = "LunCo is an open-source platform for collaborative designing and simulat
 [u]Camera Controls:[/u]
 • [b]Rotate camera:[/b] Right mouse button (RMB) or Arrow keys
 • [b]Zoom:[/b] Mouse wheel or +/- keys
+• [b]Switch camera:[/b] Press C key to cycle through available cameras
 • [b]Reset view:[/b] Press Home key
 
 [u]Resource Network Inspection:[/u]

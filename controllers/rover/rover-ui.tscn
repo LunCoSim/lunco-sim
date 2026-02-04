@@ -23,8 +23,16 @@ text = "Camera distance: -/+"
 layout_mode = 2
 text = "Rotate camera: RMB or Arrows"
 
+[node name="CameraSwitch" type="Label" parent="."]
+layout_mode = 2
+text = "Switch camera: C"
+
 [node name="HSeparator" type="HSeparator" parent="."]
 layout_mode = 2
+
+[node name="CurrentCamera" type="Label" parent="."]
+layout_mode = 2
+text = "Camera: Third Person (1/1)"
 
 [node name="SpeedLabel" type="Label" parent="."]
 layout_mode = 2
