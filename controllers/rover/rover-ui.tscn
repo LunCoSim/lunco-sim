@@ -51,6 +51,74 @@ popup/item_3/id = 3
 [node name="HSeparator2" type="HSeparator" parent="."]
 layout_mode = 2
 
+[node name="WheelControlsPanel" type="VBoxContainer" parent="."]
+layout_mode = 2
+visible = false
+
+[node name="WheelControlsLabel" type="Label" parent="WheelControlsPanel"]
+layout_mode = 2
+theme_type_variation = &"_section_header"
+text = "Individual Wheel Controls"
+
+[node name="FrontLeftPanel" type="VBoxContainer" parent="WheelControlsPanel"]
+layout_mode = 2
+
+[node name="Label" type="Label" parent="WheelControlsPanel/FrontLeftPanel"]
+layout_mode = 2
+text = "Front Left"
+
+[node name="FLMotor" type="HSlider" parent="WheelControlsPanel/FrontLeftPanel"]
+layout_mode = 2
+tooltip_text = "Motor power (-1 to 1)"
+min_value = -1.0
+max_value = 1.0
+step = 0.01
+
+[node name="FrontRightPanel" type="VBoxContainer" parent="WheelControlsPanel"]
+layout_mode = 2
+
+[node name="Label" type="Label" parent="WheelControlsPanel/FrontRightPanel"]
+layout_mode = 2
+text = "Front Right"
+
+[node name="FRMotor" type="HSlider" parent="WheelControlsPanel/FrontRightPanel"]
+layout_mode = 2
+tooltip_text = "Motor power (-1 to 1)"
+min_value = -1.0
+max_value = 1.0
+step = 0.01
+
+[node name="BackLeftPanel" type="VBoxContainer" parent="WheelControlsPanel"]
+layout_mode = 2
+
+[node name="Label" type="Label" parent="WheelControlsPanel/BackLeftPanel"]
+layout_mode = 2
+text = "Back Left"
+
+[node name="BLMotor" type="HSlider" parent="WheelControlsPanel/BackLeftPanel"]
+layout_mode = 2
+tooltip_text = "Motor power (-1 to 1)"
+min_value = -1.0
+max_value = 1.0
+step = 0.01
+
+[node name="BackRightPanel" type="VBoxContainer" parent="WheelControlsPanel"]
+layout_mode = 2
+
+[node name="Label" type="Label" parent="WheelControlsPanel/BackRightPanel"]
+layout_mode = 2
+text = "Back Right"
+
+[node name="BRMotor" type="HSlider" parent="WheelControlsPanel/BackRightPanel"]
+layout_mode = 2
+tooltip_text = "Motor power (-1 to 1)"
+min_value = -1.0
+max_value = 1.0
+step = 0.01
+
+[node name="HSeparator3" type="HSeparator" parent="."]
+layout_mode = 2
+
 [node name="CurrentCamera" type="Label" parent="."]
 layout_mode = 2
 text = "Camera: Third Person (1/1)"
@@ -68,3 +136,7 @@ layout_mode = 2
 text = "Steering: 0°"
 
 [connection signal="item_selected" from="DriveModeSelect" to="." method="_on_drive_mode_selected"]
+[connection signal="value_changed" from="WheelControlsPanel/FrontLeftPanel/FLMotor" to="." method="_on_fl_motor_changed"]
+[connection signal="value_changed" from="WheelControlsPanel/FrontRightPanel/FRMotor" to="." method="_on_fr_motor_changed"]
+[connection signal="value_changed" from="WheelControlsPanel/BackLeftPanel/BLMotor" to="." method="_on_bl_motor_changed"]
+[connection signal="value_changed" from="WheelControlsPanel/BackRightPanel/BRMotor" to="." method="_on_br_motor_changed"]

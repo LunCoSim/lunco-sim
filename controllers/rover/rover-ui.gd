@@ -7,6 +7,13 @@ extends LCControllerUI
 @onready var motor_label = get_node_or_null("MotorLabel")
 @onready var camera_label = get_node_or_null("CurrentCamera")
 @onready var drive_mode_select = get_node_or_null("DriveModeSelect")
+@onready var wheel_controls_panel = get_node_or_null("WheelControlsPanel")
+
+# Wheel control sliders
+@onready var fl_motor_slider = get_node_or_null("WheelControlsPanel/FrontLeftPanel/FLMotor")
+@onready var fr_motor_slider = get_node_or_null("WheelControlsPanel/FrontRightPanel/FRMotor")
+@onready var bl_motor_slider = get_node_or_null("WheelControlsPanel/BackLeftPanel/BLMotor")
+@onready var br_motor_slider = get_node_or_null("WheelControlsPanel/BackRightPanel/BRMotor")
 
 # UI update throttling
 var update_timer := 0.0
@@ -37,6 +44,7 @@ func _on_target_set():
 		# Initialize drive mode selector
 		if drive_mode_select and "drive_mode" in target:
 			drive_mode_select.selected = target.drive_mode
+			_update_wheel_controls_visibility()
 	else:
 		push_warning("RoverUI: Target is not a rover controller")
 
@@ -64,7 +72,37 @@ func _on_drive_mode_selected(index: int):
 	"""Handle drive mode selection change"""
 	if target and "drive_mode" in target:
 		target.drive_mode = index
+		# Enable individual control for Independent mode (index 3)
+		if "enable_individual_control" in target:
+			target.enable_individual_control = (index == 3)
 		print("RoverUI: Drive mode changed to: ", ["Standard", "Ackermann", "Differential", "Independent"][index])
+		_update_wheel_controls_visibility()
+
+func _update_wheel_controls_visibility():
+	"""Show/hide wheel controls based on drive mode"""
+	if not wheel_controls_panel or not target:
+		return
+	
+	# Show wheel controls only in Independent mode (index 3)
+	var show_controls = target.drive_mode == 3
+	wheel_controls_panel.visible = show_controls
+
+# Wheel control slider callbacks
+func _on_fl_motor_changed(value: float):
+	if target and "set_wheel_motor" in target:
+		target.set_wheel_motor("front_left", value)
+
+func _on_fr_motor_changed(value: float):
+	if target and "set_wheel_motor" in target:
+		target.set_wheel_motor("front_right", value)
+
+func _on_bl_motor_changed(value: float):
+	if target and "set_wheel_motor" in target:
+		target.set_wheel_motor("back_left", value)
+
+func _on_br_motor_changed(value: float):
+	if target and "set_wheel_motor" in target:
+		target.set_wheel_motor("back_right", value)
 
 func _update_ui_labels():
 	"""Update UI labels with current values"""
