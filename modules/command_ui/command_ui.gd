@@ -62,6 +62,7 @@ func _update_command_list():
 	for cmd_info in commands:
 		var row = command_row_scene.instantiate()
 		command_list.add_child(row)
+		await get_tree().process_frame
 		row.setup(selected_target, cmd_info)
 
 func _on_search_changed(new_text: String):

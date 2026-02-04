@@ -140,7 +140,7 @@ func _process_command(text: String):
 			args["value"] = _parse_value(arg_str)
 			
 	var cmd = LCCommand.new(cmd_name, NodePath(target), args, "console")
-	var result = LCCommandRouter.dispatch(cmd)
+	var result = await LCCommandRouter.dispatch(cmd)
 	
 	if result is String and (result.contains("not found") or result.contains("does not implement")):
 		output_log.append_text("[color=red]%s[/color]\n" % result)

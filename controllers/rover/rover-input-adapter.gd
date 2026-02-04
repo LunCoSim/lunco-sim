@@ -92,4 +92,4 @@ func _send_command(cmd_name: String, args: Dictionary):
 	if not _target: return
 	
 	var cmd = LCCommand.new(cmd_name, _target.get_path(), args, "local")
-	LCCommandRouter.dispatch(cmd)
+	LCCommandRouter.submit(cmd)

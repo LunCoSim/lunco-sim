@@ -110,5 +110,5 @@ func _on_execute_pressed():
 			args[arg_name] = ctrl.text
 	
 	var cmd = LCCommand.new(command_info.name, NodePath(target_path), args, "ui_dashboard")
-	var result = LCCommandRouter.dispatch(cmd)
+	var result = await LCCommandRouter.dispatch(cmd)
 	print("Command Result: ", result)

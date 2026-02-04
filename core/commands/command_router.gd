@@ -27,6 +27,10 @@ func unregister_executor(executor: Node):
 	if _executors.get(parent_path) == executor:
 		_executors.erase(parent_path)
 
+## Dispatches a command asynchronously without waiting for the result (Fire-and-forget).
+func submit(command: LCCommand) -> void:
+	call_deferred("dispatch", command)
+
 ## Dispatches a command to the appropriate executor.
 func dispatch(command: LCCommand) -> Variant:
 	var target_str = str(command.target_path)
