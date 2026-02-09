@@ -404,6 +404,42 @@ func cmd_take_image():
 		return await camera.cmd_take_image()
 	return "No camera found on rover"
 
+func get_command_metadata() -> Dictionary:
+	return {
+		"SET_MOTOR": {
+			"description": "Set main motor power (-1.0 to 1.0)",
+			"arguments": [
+				{"name": "value", "type": "float", "default": 0.0}
+			]
+		},
+		"SET_STEERING": {
+			"description": "Set steering angle (-1.0 to 1.0)",
+			"arguments": [
+				{"name": "value", "type": "float", "default": 0.0}
+			]
+		},
+		"SET_BRAKE": {
+			"description": "Set brake force (0.0 to 1.0)",
+			"arguments": [
+				{"name": "value", "type": "float", "default": 0.0}
+			]
+		},
+		"STOP": {
+			"description": "Emergency stop",
+			"arguments": []
+		},
+		"SET_DRIVE_MODE": {
+			"description": "Set drive mode (0:Standard, 1:Ackermann, 2:Differential, 3:Independent)",
+			"arguments": [
+				{"name": "mode", "type": "int", "default": 0}
+			]
+		},
+		"TAKE_IMAGE": {
+			"description": "Capture an image from the rover camera",
+			"arguments": []
+		}
+	}
+
 # New Basic Minimum Commands
 func cmd_stop():
 	"""

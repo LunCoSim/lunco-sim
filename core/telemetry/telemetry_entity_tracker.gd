@@ -105,10 +105,10 @@ func update_properties() -> Dictionary:
 	# Get position - use flat keys for OpenMCT compatibility
 	if _has_standard_methods.get_global_position:
 		var pos = entity.global_position
-		if pos != Vector3.ZERO:
-			props["position.x"] = pos.x
-			props["position.y"] = pos.y
-			props["position.z"] = pos.z
+		# Always send position even if zero, so graphs don't break
+		props["position.x"] = pos.x
+		props["position.y"] = pos.y
+		props["position.z"] = pos.z
 	
 	# Get rotation
 	if _has_standard_methods.get_global_rotation:

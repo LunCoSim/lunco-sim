@@ -99,10 +99,19 @@ func get_command_dictionary() -> Array:
 				# If metadata has detailed arguments, use them instead of the reflected 'args' dict
 				if cmd_meta.has("arguments"):
 					var detailed_args = []
-					for arg_name in cmd_meta.arguments:
-						var arg_info = cmd_meta.arguments[arg_name].duplicate()
-						arg_info["name"] = arg_name
-						detailed_args.append(arg_info)
+					var meta_args = cmd_meta.arguments
+					if meta_args is Dictionary:
+						for arg_name in meta_args:
+							var arg_info = meta_args[arg_name].duplicate()
+							arg_info["name"] = arg_name
+							detailed_args.append(arg_info)
+					elif meta_args is Array:
+						for arg in meta_args:
+							if arg is Dictionary:
+								detailed_args.append(arg.duplicate())
+							else:
+								# Fallback for simple arrays
+								detailed_args.append({"name": str(arg)})
 					cmd_info.arguments = detailed_args
 				
 				# Allow metadata to override/add other fields (description, etc.)
