@@ -1,0 +1,11 @@
+agencies:
+  - name: SpaceX
+    nodes: ["starlink_americas", "starlink_europe", "starlink_asia"]
+  - name: NASA
+    nodes: ["americas_north", "americas_south", "artemis_ii", "lunar_south_pole"]
+  - name: ESA
+    nodes: ["europe"]
+  - name: CNSA
+    nodes: ["asia_pac"]
+  - name: JAXA
+    nodes: ["oceania"]

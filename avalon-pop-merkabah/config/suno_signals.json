@@ -1,0 +1,9 @@
+{
+  "signals": [
+    {
+      "id": "harmonic_seed_01",
+      "url": "https://suno.com/s/31GL756DZiA20TeW",
+      "description": "Base harmonic signal for global synchronization"
+    }
+  ]
+}
