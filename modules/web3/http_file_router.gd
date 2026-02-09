@@ -54,18 +54,4 @@ func handle_get(request, response) -> void:
 		response.send_error(404, "File Not Found")
 
 func _serve_file(file_path: String, response) -> void:
-	# Get the file content
-	var file = FileAccess.open(file_path, FileAccess.READ)
-	if not file:
-		response.send_error(500, "Could not open file")
-		return
-	
-	var content = file.get_as_text()
-	file.close()
-	
-	# Set content type based on file extension
-	var extension = file_path.get_extension().to_lower()
-	var content_type = mime_types.get(extension, "application/octet-stream")
-	
-	# Send the file
-	response.send(content, content_type) 
+	response.send_file(file_path) 

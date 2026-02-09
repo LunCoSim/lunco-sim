@@ -42,7 +42,7 @@ func set_status(code: int, message: String = "") -> void:
 func send(content: String, type: String = "text/html") -> void:
 	body = content
 	set_content_type(type)
-	headers["Content-Length"] = str(content.length())
+	headers["Content-Length"] = str(content.to_utf8_buffer().size())
 	_send_response()
 
 func send_json(data) -> void:
