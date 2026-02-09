@@ -99,7 +99,7 @@ func update_properties() -> Dictionary:
 		"entity_id": entity_id,
 		"entity_name": entity_name,
 		"entity_type": entity_type,
-		"timestamp": int(Time.get_unix_time_from_system() * 1000)  # Integer milliseconds
+		"utc": int(Time.get_unix_time_from_system() * 1000)  # Integer milliseconds for OpenMCT UTC domain
 	}
 	
 	# Get position - use flat keys for OpenMCT compatibility

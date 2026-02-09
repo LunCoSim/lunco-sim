@@ -174,7 +174,7 @@ func _on_user_disconnected(user_id: int):
 
 func _track_global_event(event_type: String, data: Dictionary):
 	var event = {
-		"timestamp": int(Time.get_unix_time_from_system() * 1000),
+		"utc": int(Time.get_unix_time_from_system() * 1000),
 		"event_type": event_type,
 		"data": data
 	}
@@ -217,7 +217,7 @@ func get_history(entity_id: String, start_time: int = 0, end_time: int = 0) -> A
 	# Filter by time range
 	var filtered = []
 	for sample in history:
-		var timestamp = sample.get("timestamp", 0)
+		var timestamp = sample.get("utc", 0)
 		if (start_time == 0 or timestamp >= start_time) and (end_time == 0 or timestamp <= end_time):
 			filtered.append(sample)
 	
@@ -234,7 +234,7 @@ func get_global_events(start_time: int = 0, end_time: int = 0) -> Array:
 	
 	var filtered = []
 	for event in all_events:
-		var timestamp = event.get("timestamp", 0)
+		var timestamp = event.get("utc", 0)
 		if (start_time == 0 or timestamp >= start_time) and (end_time == 0 or timestamp <= end_time):
 			filtered.append(event)
 	
@@ -281,21 +281,51 @@ func get_openmct_dictionary() -> Dictionary:
 		var entity_name = tracker.entity_name
 		var entity_type = tracker.entity_type
 		
+		# Base values that are always present
+		var values = [
+			{"key": "utc", "name": "Timestamp", "format": "utc", "hints": {"domain": 1}}
+		]
+		
+		# Add all other properties dynamically from last_properties
+		var current_props = tracker.last_properties
+		var keys = current_props.keys()
+		keys.sort() # Consistent order
+		
+		for key in keys:
+			if key in ["utc", "entity_id", "entity_name", "entity_type"]:
+				continue
+				
+			var val = current_props[key]
+			
+			# Skip complex types that OpenMCT can't graph directly
+			if val is Vector3 or val is Color or val is Array or val is Dictionary:
+				continue
+				
+			var entry = {
+				"key": key,
+				"name": key.capitalize().replace(".", " "),
+				"format": "float" if (val is float or val is int) else "string",
+				"hints": {"range": 1}
+			}
+			
+			# Apply some smart defaults based on key names
+			if "power" in key or "voltage" in key or "current" in key:
+				entry["unit"] = "W" if "power" in key else ("V" if "voltage" in key else "A")
+			elif "position" in key or "distance" in key or "altitude" in key:
+				entry["unit"] = "m"
+			elif "velocity" in key:
+				entry["unit"] = "m/s"
+			elif "image" in key or "url" in key:
+				entry["format"] = "image"
+				entry["hints"] = {"image": true}
+				
+			values.append(entry)
+		
 		# Create measurement object for this entity
 		var measurement = {
 			"key": tracker.entity_id,
 			"name": entity_name + " (" + entity_type + ")",
-			"values": [
-				{"key": "timestamp", "name": "Timestamp", "format": "utc", "hints": {"domain": 1}},
-				{"key": "position.x", "name": "Position X", "unit": "m", "format": "float", "hints": {"range": 1}},
-				{"key": "position.y", "name": "Position Y", "unit": "m", "format": "float", "hints": {"range": 1}},
-				{"key": "position.z", "name": "Position Z", "unit": "m", "format": "float", "hints": {"range": 1}},
-				{"key": "velocity.x", "name": "Velocity X", "unit": "m/s", "format": "float", "hints": {"range": 1}},
-				{"key": "velocity.y", "name": "Velocity Y", "unit": "m/s", "format": "float", "hints": {"range": 1}},
-				{"key": "velocity.z", "name": "Velocity Z", "unit": "m/s", "format": "float", "hints": {"range": 1}},
-				{"key": "controller_id", "name": "Controller ID", "format": "integer", "hints": {"range": 1}},
-				{"key": "image_url", "name": "Camera Image", "format": "image", "hints": {"image": true}}
-			]
+			"values": values
 		}
 		
 		measurements.append(measurement)

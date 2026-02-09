@@ -233,57 +233,71 @@ document.addEventListener('DOMContentLoaded', function () {
                     }
 
                     const isCommands = identifier.key.endsWith('-commands');
-                    const baseId = isCommands ? identifier.key.replace('-commands', '') : identifier.key;
+                    const isTelePoint = identifier.key.includes('.');
+                    const baseId = isCommands ? identifier.key.replace('-commands', '') :
+                        (isTelePoint ? identifier.key.split('.')[0] : identifier.key);
+                    const pointKey = isTelePoint ? identifier.key.split('.').slice(1).join('.') : null;
 
-                    return fetch(`${TELEMETRY_API_URL}/entities`)
-                        .then(response => {
-                            if (!response.ok) throw new Error('Network response was not ok');
-                            return response.json();
-                        })
-                        .then(data => {
-                            const entity = data.entities.find(e => e.entity_id === baseId);
-                            if (entity) {
-                                if (isCommands) {
-                                    return {
-                                        identifier: identifier,
-                                        name: "Commands",
-                                        type: "luncosim.commands",
-                                        entity_name: entity.entity_name,
-                                        location: "luncosim:" + baseId
-                                    };
-                                }
+                    return Promise.all([
+                        fetch(`${TELEMETRY_API_URL}/entities`).then(r => r.json()),
+                        fetch(`${TELEMETRY_API_URL}/dictionary`).then(r => r.json())
+                    ]).then(([entityData, dictData]) => {
+                        const entity = entityData.entities.find(e => e.entity_id === baseId);
+                        if (entity) {
+                            if (isCommands) {
                                 return {
                                     identifier: identifier,
-                                    name: entity.entity_name + " (" + entity.entity_type + ")",
-                                    type: "luncosim.telemetry",
+                                    name: "Commands",
+                                    type: "luncosim.commands",
                                     entity_name: entity.entity_name,
-                                    telemetry: {
-                                        values: [
-                                            { key: "utc", source: "timestamp", name: "Timestamp", format: "utc", hints: { domain: 1 } },
-                                            { key: "position.x", name: "Position X", unit: "m", format: "float", hints: { range: 1 } },
-                                            { key: "position.y", name: "Position Y", unit: "m", format: "float", hints: { range: 1 } },
-                                            { key: "position.z", name: "Position Z", unit: "m", format: "float", hints: { range: 1 } },
-                                            { key: "velocity.x", name: "Velocity X", unit: "m/s", format: "float", hints: { range: 1 } },
-                                            { key: "velocity.y", name: "Velocity Y", unit: "m/s", format: "float", hints: { range: 1 } },
-                                            { key: "velocity.z", name: "Velocity Z", unit: "m/s", format: "float", hints: { range: 1 } },
-                                            { key: "angular_velocity.x", name: "Angular Velocity X", unit: "rad/s", format: "float", hints: { range: 1 } },
-                                            { key: "angular_velocity.y", name: "Angular Velocity Y", unit: "rad/s", format: "float", hints: { range: 1 } },
-                                            { key: "angular_velocity.z", name: "Angular Velocity Z", unit: "rad/s", format: "float", hints: { range: 1 } },
-                                            { key: "rotation.x", name: "Rotation X", unit: "rad", format: "float", hints: { range: 1 } },
-                                            { key: "rotation.y", name: "Rotation Y", unit: "rad", format: "float", hints: { range: 1 } },
-                                            { key: "rotation.z", name: "Rotation Z", unit: "rad", format: "float", hints: { range: 1 } },
-                                            { key: "mass", name: "Mass", unit: "kg", format: "float", hints: { range: 1 } },
-                                            { key: "controller_id", name: "Controller ID", format: "integer", hints: { range: 1 } },
-                                            { key: "image", source: "image_url", name: "Camera Image", format: "image", hints: { image: 1 } }
-                                        ]
-                                    },
-                                    location: "luncosim:luncosim"
+                                    location: "luncosim:" + baseId
                                 };
                             }
-                            throw new Error(`Entity not found: ${identifier.key}`);
-                        })
+
+                            // Find measurement in dictionary
+                            const measurement = dictData.measurements.find(m => m.key === baseId);
+
+                            // Normalize metadata: OpenMCT UTC system expects key "utc"
+                            const telemetryValues = (measurement ? measurement.values : []).map(val => {
+                                if (val.hints && val.hints.domain && (val.key === 'timestamp' || val.source === 'timestamp')) {
+                                    return { ...val, key: 'utc', source: 'timestamp', name: 'Timestamp' };
+                                }
+                                return val;
+                            });
+
+                            // Add a default UTC domain if none found
+                            if (!telemetryValues.find(v => v.hints && v.hints.domain)) {
+                                telemetryValues.unshift({ key: "utc", source: "utc", name: "Timestamp", format: "utc", hints: { domain: 1 } });
+                            }
+
+                            if (isTelePoint) {
+                                const valMetadata = telemetryValues.find(v => v.key === pointKey);
+                                return {
+                                    identifier: identifier,
+                                    name: valMetadata ? valMetadata.name : pointKey,
+                                    type: "luncosim.telemetry-point",
+                                    telemetry: {
+                                        values: telemetryValues.filter(v => v.key === 'utc' || v.key === pointKey)
+                                    },
+                                    location: "luncosim:" + baseId
+                                };
+                            }
+
+                            return {
+                                identifier: identifier,
+                                name: entity.entity_name + " (" + entity.entity_type + ")",
+                                type: "luncosim.telemetry",
+                                entity_name: entity.entity_name,
+                                telemetry: {
+                                    values: telemetryValues
+                                },
+                                location: "luncosim:luncosim"
+                            };
+                        }
+                        throw new Error(`Entity not found: ${identifier.key}`);
+                    })
                         .catch(err => {
-                            console.warn('Error fetching entity:', identifier.key, err);
+                            console.warn('Error fetching object metadata:', identifier.key, err);
                             return Promise.reject(err);
                         });
                 }
@@ -401,8 +415,13 @@ document.addEventListener('DOMContentLoaded', function () {
                     return fetch(`${url}?${params}`)
                         .then(response => response.json())
                         .then(data => {
-                            console.log('Historical data for', domainObject.identifier.key, ':', data.history?.length || 0, 'samples');
-                            return data.history || [];
+                            const history = data.history || [];
+                            // Normalize data: ensure 'utc' exists if 'timestamp' is present
+                            history.forEach(sample => {
+                                if (!sample.utc && sample.timestamp) sample.utc = sample.timestamp;
+                            });
+                            console.log('Historical data for', domainObject.identifier.key, ':', history.length, 'samples');
+                            return history;
                         })
                         .catch(err => {
                             console.error('Error fetching history:', err);
@@ -425,7 +444,8 @@ document.addEventListener('DOMContentLoaded', function () {
                         fetch(`${TELEMETRY_API_URL}/telemetry/${entityId}`)
                             .then(response => response.json())
                             .then(data => {
-                                if (data && data.timestamp) {
+                                if (data) {
+                                    if (!data.utc && data.timestamp) data.utc = data.timestamp;
                                     callback(data);
                                 }
                             })
@@ -791,6 +811,12 @@ document.addEventListener('DOMContentLoaded', function () {
                 name: 'Image Gallery',
                 description: 'A view of all images captured by rovers',
                 cssClass: 'icon-image'
+            });
+
+            openmct.types.addType('luncosim.telemetry-point', {
+                name: 'Telemetry Point',
+                description: 'A single telemetry channel',
+                cssClass: 'icon-telemetry'
             });
 
             openmct.types.addType('luncosim.telemetry', {
