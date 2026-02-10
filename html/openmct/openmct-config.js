@@ -233,9 +233,11 @@ document.addEventListener('DOMContentLoaded', function () {
                     }
 
                     const isCommands = identifier.key.endsWith('-commands');
-                    const isTelePoint = identifier.key.includes('.');
+                    const isTelemetryFolder = identifier.key.endsWith('-telemetry');
+                    const isTelePoint = identifier.key.includes('.') && !isTelemetryFolder;
                     const baseId = isCommands ? identifier.key.replace('-commands', '') :
-                        (isTelePoint ? identifier.key.split('.')[0] : identifier.key);
+                        (isTelemetryFolder ? identifier.key.replace('-telemetry', '') :
+                        (isTelePoint ? identifier.key.split('.')[0] : identifier.key));
                     const pointKey = isTelePoint ? identifier.key.split('.').slice(1).join('.') : null;
 
                     return Promise.all([
@@ -249,6 +251,17 @@ document.addEventListener('DOMContentLoaded', function () {
                                     identifier: identifier,
                                     name: "Commands",
                                     type: "luncosim.commands",
+                                    entity_name: entity.entity_name,
+                                    location: "luncosim:" + baseId
+                                };
+                            }
+
+                            if (isTelemetryFolder) {
+                                return {
+                                    identifier: identifier,
+                                    name: "Telemetry",
+                                    type: "luncosim.telemetry-folder",
+                                    entity_id: baseId,
                                     entity_name: entity.entity_name,
                                     location: "luncosim:" + baseId
                                 };
@@ -276,10 +289,11 @@ document.addEventListener('DOMContentLoaded', function () {
                                     identifier: identifier,
                                     name: valMetadata ? valMetadata.name : pointKey,
                                     type: "luncosim.telemetry-point",
+                                    entity_id: baseId,
                                     telemetry: {
                                         values: telemetryValues.filter(v => v.key === 'utc' || v.key === pointKey)
                                     },
-                                    location: "luncosim:" + baseId
+                                    location: "luncosim:" + baseId + '-telemetry'
                                 };
                             }
 
@@ -311,15 +325,51 @@ document.addEventListener('DOMContentLoaded', function () {
                             domainObject.identifier.key === 'entities' ||
                             domainObject.identifier.key === 'controllers' ||
                             domainObject.identifier.key === 'gallery' ||
-                            domainObject.type === 'luncosim.telemetry');
+                            domainObject.type === 'luncosim.telemetry' ||
+                            domainObject.type === 'luncosim.telemetry-folder');
                 },
                 load: function (domainObject) {
                     if (domainObject.type === 'luncosim.telemetry') {
-                        // Commands child for entities
-                        return Promise.resolve([{
-                            namespace: 'luncosim',
-                            key: domainObject.identifier.key + '-commands'
-                        }]);
+                        // Return Commands and Telemetry folder children for rover entities
+                        return Promise.resolve([
+                            {
+                                namespace: 'luncosim',
+                                key: domainObject.identifier.key + '-commands'
+                            },
+                            {
+                                namespace: 'luncosim',
+                                key: domainObject.identifier.key + '-telemetry'
+                            }
+                        ]);
+                    }
+
+                    if (domainObject.type === 'luncosim.telemetry-folder') {
+                        // Return individual telemetry points for the telemetry folder
+                        const entityId = domainObject.entity_id;
+                        return fetch(`${TELEMETRY_API_URL}/dictionary`)
+                            .then(r => r.json())
+                            .then(dictData => {
+                                const measurement = dictData.measurements.find(m => m.key === entityId);
+                                if (!measurement || !measurement.values) {
+                                    return [];
+                                }
+                                
+                                // Create child objects for each telemetry parameter (except domain)
+                                const children = [];
+                                measurement.values.forEach(val => {
+                                    if (!val.hints?.domain && val.key !== 'utc' && val.key !== 'timestamp') {
+                                        children.push({
+                                            namespace: 'luncosim',
+                                            key: entityId + '.' + val.key
+                                        });
+                                    }
+                                });
+                                return children;
+                            })
+                            .catch(err => {
+                                console.warn('Error loading telemetry points:', err);
+                                return [];
+                            });
                     }
 
                     if (domainObject.identifier.key === 'luncosim') {
@@ -395,14 +445,16 @@ document.addEventListener('DOMContentLoaded', function () {
             // Telemetry provider
             var telemetryProvider = {
                 supportsRequest: function (domainObject) {
-                    return domainObject.type === 'luncosim.telemetry';
+                    return domainObject.type === 'luncosim.telemetry' || 
+                           domainObject.type === 'luncosim.telemetry-point';
                 },
                 request: function (domainObject, options) {
-                    if (domainObject.identifier.key.startsWith('mock-')) {
-                        return Promise.resolve([getMockTelemetry(domainObject.identifier.key)]);
+                    const entityId = domainObject.entity_id || domainObject.identifier.key;
+                    if (entityId.startsWith('mock-')) {
+                        return Promise.resolve([getMockTelemetry(entityId)]);
                     }
 
-                    var url = `${TELEMETRY_API_URL}/telemetry/${domainObject.identifier.key}/history`;
+                    var url = `${TELEMETRY_API_URL}/telemetry/${entityId}/history`;
                     var params = new URLSearchParams();
 
                     if (options.start) {
@@ -429,10 +481,11 @@ document.addEventListener('DOMContentLoaded', function () {
                         });
                 },
                 supportsSubscribe: function (domainObject) {
-                    return domainObject.type === 'luncosim.telemetry';
+                    return domainObject.type === 'luncosim.telemetry' || 
+                           domainObject.type === 'luncosim.telemetry-point';
                 },
                 subscribe: function (domainObject, callback) {
-                    var entityId = domainObject.identifier.key;
+                    var entityId = domainObject.entity_id || domainObject.identifier.key;
                     console.log('Subscribing to telemetry for:', entityId);
 
                     var interval = setInterval(function () {
@@ -458,7 +511,8 @@ document.addEventListener('DOMContentLoaded', function () {
                     };
                 },
                 supportsMetadata: function (domainObject) {
-                    return domainObject.type === 'luncosim.telemetry';
+                    return domainObject.type === 'luncosim.telemetry' || 
+                           domainObject.type === 'luncosim.telemetry-point';
                 },
                 getMetadata: function (domainObject) {
                     // Return properly structured metadata for OpenMCT
@@ -481,6 +535,20 @@ document.addEventListener('DOMContentLoaded', function () {
             openmct.objects.addProvider('luncosim', objectProvider);
             openmct.composition.addProvider(compositionProvider);
             openmct.telemetry.addProvider(telemetryProvider);
+
+            // Composition policy to allow duplicate objects in flexible layouts
+            // This enables adding the same rover multiple times with different telemetry views
+            openmct.composition.addPolicy(function (parent, child) {
+                // Allow duplicates in flexible layouts and display layouts
+                if (parent.type === 'flexible-layout' || 
+                    parent.type === 'layout' || 
+                    parent.type === 'tabs') {
+                    return true; // Always allow adding objects to layouts
+                }
+                
+                // For other containers, use default behavior (no duplicates)
+                return true;
+            });
 
             // Command View Provider
             openmct.objectViews.addProvider({
@@ -811,6 +879,12 @@ document.addEventListener('DOMContentLoaded', function () {
                 name: 'Image Gallery',
                 description: 'A view of all images captured by rovers',
                 cssClass: 'icon-image'
+            });
+
+            openmct.types.addType('luncosim.telemetry-folder', {
+                name: 'Telemetry',
+                description: 'Telemetry parameters folder',
+                cssClass: 'icon-folder'
             });
 
             openmct.types.addType('luncosim.telemetry-point', {
