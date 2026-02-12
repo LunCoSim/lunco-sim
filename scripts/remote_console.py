@@ -132,7 +132,7 @@ def parse_args(arg_list):
 def main():
     print(f"LunCo Remote Console connecting to {API_URL}")
     print("Syntax: Target COMMAND(args) or Target COMMAND arg1=val1")
-    print("Example: Simulation2 SPAWN(Spacecraft)")
+    print("Example: Simulation SPAWN(Spacecraft)")
     print("         Avatar KEY_DOWN(w)")
     print("         Rover1 SET_MOTOR(0.5)")
     print("Type 'list' to see targets, 'Target list' for commands.")
@@ -250,7 +250,7 @@ def main():
                  targets = get_command_list()
                  sim_target = None
                  for t in targets:
-                     if "Simulation" in t:
+                     if "simulation" in t.lower():
                          sim_target = t
                          break
                  

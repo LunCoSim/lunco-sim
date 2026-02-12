@@ -10,7 +10,7 @@
 [ext_resource type="PackedScene" uid="uid://dpebcdtj4q5wq" path="res://apps/3dsim/entities/ui_display/modelica_display.tscn" id="8_mwx56"]
 [ext_resource type="PackedScene" uid="uid://cmdconsole" path="res://core/ui/command_console.tscn" id="9_console"]
 
-[node name="Simulation2" unique_id=701308856 node_paths=PackedStringArray("spawn_node") instance=ExtResource("1_dpa21")]
+[node name="Simulation" unique_id=701308856 node_paths=PackedStringArray("spawn_node") instance=ExtResource("1_dpa21")]
 spawn_node = NodePath("Universe/Sun/Earth/Moon/LangrenusCraterMap/Spawner")
 
 [node name="Universe_Sun_Earth_Moon_LangrenusCraterMap_Content#LaunchPad" type="Node3D" parent="." index="0" unique_id=2077097449]
