@@ -49,6 +49,13 @@ func _ready():
 	wheel_radius = wheel_radius_config
 	_update_visual_scale()
 	
+	# Ensure material is unique so shader parameters don't leak between instances
+	var mesh_instance = $MeshInstance3D
+	if mesh_instance:
+		var material = mesh_instance.get_surface_override_material(0)
+		if material:
+			mesh_instance.set_surface_override_material(0, material.duplicate())
+	
 	# Initialize telemetry
 	Telemetry["current_speed"] = 0.0
 	Telemetry["motor_torque"] = 0.0
