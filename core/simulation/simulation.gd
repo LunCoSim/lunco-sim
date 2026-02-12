@@ -233,46 +233,66 @@ func cmd_spawn(type: Variant, position: Variant = null) -> String:
 	spawn.rpc_id(1, entity_type, global_pos)
 	return "Spawned %s" % EntitiesDB.Entities.keys()[entity_type]
 
+@rpc("any_peer", "call_local", "reliable")
+func delete_entity(entity_name: String):
+	if multiplayer.is_server():
+		var entity_to_delete = null
+		
+		# Look for the entity in the managed entities list
+		for entity in entities:
+			if not is_instance_valid(entity):
+				continue
+			if entity.name == entity_name:
+				entity_to_delete = entity
+				break
+				
+		if entity_to_delete:
+			# Verify control state again on server
+			var entity_path = entity_to_delete.get_path()
+			if owners.has(entity_path):
+				print("Server: Cannot delete entity %s because it is controlled." % entity_name)
+				return
+			
+			entities.erase(entity_to_delete)
+			entity_to_delete.queue_free()
+			print("Server: Deleted entity ", entity_name)
+			
+			# Notify changes
+			entities_updated.emit(entities)
+		else:
+			print("Server: Delete request failed - Entity not found: ", entity_name)
+
 func cmd_delete(entity_id: Variant = null) -> String:
 	if entity_id == null or str(entity_id).is_empty():
 		return "Usage: DELETE <entity_id_or_name>"
 		
-	# Find entity by ID (instance ID as string) or by name
+	# Find local entity first to resolve Name/ID and validity
 	var entity_to_delete = null
 	var id_string = str(entity_id)
 	
 	for entity in entities:
 		if not is_instance_valid(entity):
 			continue
-		# Check if matches by instance ID
-		if str(entity.get_instance_id()) == id_string:
+		if str(entity.get_instance_id()) == id_string: # Match by Instance ID
 			entity_to_delete = entity
 			break
-		# Check if matches by name
-		if entity.name == id_string:
+		if entity.name == id_string: # Match by Name
 			entity_to_delete = entity
 			break
 	
 	if entity_to_delete == null:
-		return "Entity not found: %s" % id_string
+		return "Entity not found locally: %s" % id_string
 	
-	# Check if entity is currently being controlled
+	# Check if entity is currently being controlled (local check)
 	var entity_path = entity_to_delete.get_path()
 	if owners.has(entity_path):
 		var controller_id = owners[entity_path]
-		return "Cannot delete entity: %s is currently being controlled by peer %d" % [entity_to_delete.name, controller_id]
+		return "Cannot delete: %s is controlled by peer %d" % [entity_to_delete.name, controller_id]
 	
-	# Remove from entities array
-	entities.erase(entity_to_delete)
+	# Send delete request to server
+	delete_entity.rpc_id(1, entity_to_delete.name)
 	
-	# Queue the entity for deletion
-	var entity_name = entity_to_delete.name
-	entity_to_delete.queue_free()
-	
-	# Emit signal to update telemetry
-	entities_updated.emit(entities)
-	
-	return "Deleted entity: %s" % entity_name
+	return "Sent request to delete entity: %s" % entity_to_delete.name
 
 
 func cmd_list_entities() -> Array:
