@@ -550,6 +550,60 @@ document.addEventListener('DOMContentLoaded', function () {
                 return true;
             });
 
+            // Add delete action for entities
+            openmct.actions.register({
+                key: 'luncosim.delete',
+                name: 'Delete Entity',
+                description: 'Delete this entity from the simulation',
+                cssClass: 'icon-trash',
+                invoke: function (objectPath) {
+                    const domainObject = objectPath[0];
+                    const entityId = domainObject.identifier.key;
+                    
+                    // Don't allow deleting folders or special objects
+                    if (domainObject.type !== 'luncosim.telemetry') {
+                        return;
+                    }
+                    
+                    // Confirm deletion
+                    if (!confirm(`Are you sure you want to delete "${domainObject.name}"?`)) {
+                        return;
+                    }
+                    
+                    // Send DELETE request to API
+                    fetch(`${TELEMETRY_API_URL}/entities/${entityId}`, {
+                        method: 'DELETE',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        }
+                    })
+                    .then(response => {
+                        if (!response.ok) {
+                            throw new Error(`Failed to delete entity: ${response.statusText}`);
+                        }
+                        return response.json();
+                    })
+                    .then(data => {
+                        console.log('Entity deleted:', data);
+                        // Show success notification
+                        openmct.notifications.info(`Entity deleted: ${domainObject.name}`);
+                    })
+                    .catch(err => {
+                        console.error('Error deleting entity:', err);
+                        openmct.notifications.error(`Failed to delete entity: ${err.message}`);
+                    });
+                },
+                appliesTo: function (objectPath) {
+                    const domainObject = objectPath[0];
+                    // Only show delete action for entity objects (not folders, commands, etc.)
+                    return domainObject && 
+                           domainObject.identifier && 
+                           domainObject.identifier.namespace === 'luncosim' && 
+                           domainObject.type === 'luncosim.telemetry' &&
+                           !domainObject.identifier.key.startsWith('mock-');
+                }
+            });
+
             // Command View Provider
             openmct.objectViews.addProvider({
                 key: 'luncosim.command-view',

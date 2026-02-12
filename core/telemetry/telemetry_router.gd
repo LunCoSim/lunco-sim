@@ -6,7 +6,7 @@ extends HttpRouter
 func handle_get(request: HttpRequest, response: HttpResponse) -> void:
 	# Add CORS headers
 	response.set_header("Access-Control-Allow-Origin", "*")
-	response.set_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+	response.set_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
 	response.set_header("Access-Control-Allow-Headers", "Content-Type")
 	
 	var path = request.path
@@ -42,7 +42,7 @@ func _handle_image_list(_request: HttpRequest, response: HttpResponse) -> void:
 func handle_post(request: HttpRequest, response: HttpResponse) -> void:
 	# Add CORS headers
 	response.set_header("Access-Control-Allow-Origin", "*")
-	response.set_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+	response.set_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
 	response.set_header("Access-Control-Allow-Headers", "Content-Type")
 	
 	var path = request.path
@@ -54,10 +54,25 @@ func handle_post(request: HttpRequest, response: HttpResponse) -> void:
 	else:
 		response.send_error(404, "Not Found")
 
+func handle_delete(request: HttpRequest, response: HttpResponse) -> void:
+	# Add CORS headers
+	response.set_header("Access-Control-Allow-Origin", "*")
+	response.set_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+	response.set_header("Access-Control-Allow-Headers", "Content-Type")
+	
+	var path = request.path
+	if path.begins_with("/api"):
+		path = path.substr(4)
+		
+	if path.begins_with("/entities/"):
+		_handle_delete_entity(request, response)
+	else:
+		response.send_error(404, "Not Found")
+
 func handle_options(request: HttpRequest, response: HttpResponse) -> void:
 	# Handle CORS preflight
 	response.set_header("Access-Control-Allow-Origin", "*")
-	response.set_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+	response.set_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
 	response.set_header("Access-Control-Allow-Headers", "Content-Type")
 	response.send("", "text/plain")
 
@@ -161,6 +176,37 @@ func _handle_command(request: HttpRequest, response: HttpResponse) -> void:
 func _handle_command_definitions(_request: HttpRequest, response: HttpResponse) -> void:
 	var defs = LCCommandRouter.get_all_command_definitions()
 	response.send_json({"targets": defs})
+
+func _handle_delete_entity(request: HttpRequest, response: HttpResponse) -> void:
+	# Extract entity_id from path: /entities/{entity_id}
+	var path = request.path
+	if path.begins_with("/api"):
+		path = path.substr(4)
+	
+	var parts = path.split("/")
+	if parts.size() < 3:
+		response.send_error(400, "Invalid entity path")
+		return
+	
+	var entity_id = parts[2]
+	
+	# Execute DELETE command via LCCommandRouter
+	var command_data = {
+		"target_path": "Simulation",
+		"name": "DELETE",
+		"arguments": {"entity_id": entity_id},
+		"source": "http"
+	}
+	
+	var result = await LCCommandRouter.execute_raw(command_data)
+	
+	if result is String and result.begins_with("Entity not found"):
+		response.send_error(404, result)
+	elif result is String and result.begins_with("Cannot delete entity"):
+		# Entity is currently being controlled
+		response.send_error(409, result)  # 409 Conflict
+	else:
+		response.send_json({"status": "deleted", "result": result})
 
 func _handle_image_request(request: HttpRequest, response: HttpResponse) -> void:
 	var path = request.path

@@ -164,6 +164,7 @@ func _on_control_granted(peer_id, path):
 
 func _on_control_released(peer_id, entity_path: NodePath):
 	print("Simulation: Control released for entity: ", entity_path)
+	owners.erase(entity_path)
 
 func _on_control_request_denied(peer_id, entity_path: NodePath):
 	print("Simulation: Control declined for entity: ", entity_path)
@@ -189,6 +190,15 @@ func get_command_metadata() -> Dictionary:
 				"position": {
 					"type": "vector3",
 					"description": "Optional global position [x, y, z]."
+				}
+			}
+		},
+		"DELETE": {
+			"description": "Delete an entity from the simulation.",
+			"arguments": {
+				"entity_id": {
+					"type": "string",
+					"description": "The entity ID or name to delete."
 				}
 			}
 		},
@@ -222,6 +232,48 @@ func cmd_spawn(type: Variant, position: Variant = null) -> String:
 			
 	spawn.rpc_id(1, entity_type, global_pos)
 	return "Spawned %s" % EntitiesDB.Entities.keys()[entity_type]
+
+func cmd_delete(entity_id: Variant = null) -> String:
+	if entity_id == null or str(entity_id).is_empty():
+		return "Usage: DELETE <entity_id_or_name>"
+		
+	# Find entity by ID (instance ID as string) or by name
+	var entity_to_delete = null
+	var id_string = str(entity_id)
+	
+	for entity in entities:
+		if not is_instance_valid(entity):
+			continue
+		# Check if matches by instance ID
+		if str(entity.get_instance_id()) == id_string:
+			entity_to_delete = entity
+			break
+		# Check if matches by name
+		if entity.name == id_string:
+			entity_to_delete = entity
+			break
+	
+	if entity_to_delete == null:
+		return "Entity not found: %s" % id_string
+	
+	# Check if entity is currently being controlled
+	var entity_path = entity_to_delete.get_path()
+	if owners.has(entity_path):
+		var controller_id = owners[entity_path]
+		return "Cannot delete entity: %s is currently being controlled by peer %d" % [entity_to_delete.name, controller_id]
+	
+	# Remove from entities array
+	entities.erase(entity_to_delete)
+	
+	# Queue the entity for deletion
+	var entity_name = entity_to_delete.name
+	entity_to_delete.queue_free()
+	
+	# Emit signal to update telemetry
+	entities_updated.emit(entities)
+	
+	return "Deleted entity: %s" % entity_name
+
 
 func cmd_list_entities() -> Array:
 	return EntitiesDB.Entities.keys()

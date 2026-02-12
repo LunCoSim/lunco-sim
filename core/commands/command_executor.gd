@@ -151,12 +151,18 @@ func _convert_arguments(args: Variant, method_args: Array) -> Variant:
 	# If args is a Dictionary, convert to positional array based on parameter names
 	if args is Dictionary:
 		var result = []
-		for param in method_args:
+		for i in range(method_args.size()):
+			var param = method_args[i]
 			var param_name = param.name
 			var param_type = param.type
 			
 			# Get value from dictionary
 			var value = args.get(param_name, null)
+			
+			# Fallback: if this is the first argument and we didn't find it by name,
+			# check if there's a generic "value" key (common from console input)
+			if value == null and i == 0 and args.has("value"):
+				value = args["value"]
 			
 			# Convert to expected type
 			if value != null:
