@@ -37,7 +37,8 @@ var root_motion = Transform3D()
 # State variables (set via commands)
 var move_vector := Vector3.ZERO
 var view_quaternion := Quaternion.IDENTITY
-# input_motion is no longer used for direction calculation, but kept if needed for animation speed blend? 
+@export var input_motion = Vector2() # Raw input synced from client
+# input_motion is no longer used for direction calculation, but kept for legacy sync and potential animation speed blend.
 # actually we can just use move_vector length.
 
 # Restored State Variables
@@ -176,6 +177,7 @@ func cmd_jump():
 
 func cmd_set_move_vector(x: float, y: float, z: float):
 	move_vector = Vector3(x, y, z)
+	input_motion = Vector2(x, z) 
 	# Also update 'motion' vec2 for animation blend if needed?
 	# Original code used 'motion' (Vector2) for some logic, but we replaced it with move_vector (Vector3) in apply_input.
 	# We might need to map it back if other systems read 'motion'.
