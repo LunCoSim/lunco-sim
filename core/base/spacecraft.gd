@@ -70,6 +70,8 @@ var torque_input: Vector3 = Vector3.ZERO:
 func set_control_inputs(thrust: float, torque: Vector3):
 	thrust_input = thrust
 	torque_input = torque
+	if thrust > 0.01 or torque.length_squared() > 0.001:
+		sleeping = false
 
 ## Dispatches a control signal to all registered effectors
 func _dispatch_control(action: String, value: float):

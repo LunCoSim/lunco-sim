@@ -83,7 +83,7 @@ func _sync_client_control_granted(peer_id: int, entity_path: NodePath):
 	# Set authority on the actual node
 	var node = get_node_or_null(entity_path)
 	if node:
-		node.set_multiplayer_authority(peer_id)
+		node.set_multiplayer_authority(peer_id, true)
 	else:
 		print("ControlManager: Warning - Node not found for path ", entity_path)
 		
@@ -112,7 +112,7 @@ func _sync_client_control_released(peer_id: int, entity_path: NodePath):
 	# Reset authority to server
 	var node = get_node_or_null(entity_path)
 	if node:
-		node.set_multiplayer_authority(1) # Reset to server
+		node.set_multiplayer_authority(1, true) # Reset to server
 	else:
 		print("ControlManager: Warning - Node not found for path ", entity_path)
 		

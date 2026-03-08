@@ -102,7 +102,7 @@ func spawn(_entity: EntitiesDB.Entities, global_position=null): #TBD think of a 
 @rpc("any_peer", "call_local", "reliable")
 func set_authority(path, _owner):
 	var node = get_tree().get_root().get_node(path)
-	node.set_multiplayer_authority(_owner)
+	node.set_multiplayer_authority(_owner, true)
 	entities_updated.emit(entities)
 
 @rpc("any_peer", "call_local", "reliable")
