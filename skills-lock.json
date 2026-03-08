@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "skills": {
+    "godot-best-practices": {
+      "source": "jwynia/agent-skills",
+      "sourceType": "github",
+      "computedHash": "1137c05247cfcc6547064f99c6eeddcdb0e18fab9d76b2c40d8d4cf12b6c6025"
+    },
+    "godot-debugging": {
+      "source": "zate/cc-godot",
+      "sourceType": "github",
+      "computedHash": "3169dfe4d9502026658eb7e7cdcf2c78880370c905a3d1db731c94c5e841c4c5"
+    },
+    "godot-development": {
+      "source": "zate/cc-godot",
+      "sourceType": "github",
+      "computedHash": "3f647f022010f95c36b9e3a244aa38af45a37586c49beb9cddbe51de6bbbb211"
+    },
+    "godot-gdscript-patterns": {
+      "source": "sickn33/antigravity-awesome-skills",
+      "sourceType": "github",
+      "computedHash": "339e156aa0a97a9e6843ad2bb121d6a6bd6fe5c5112d173ca1e866b2f013a084"
+    },
+    "godot-master": {
+      "source": "thedivergentai/gd-agentic-skills",
+      "sourceType": "github",
+      "computedHash": "96cf5739eab78b50dab8c7f0fb488aa61629dbde51d16f8b08a2cb01f09dff42"
+    },
+    "godot-mcp-scene-builder": {
+      "source": "thedivergentai/gd-agentic-skills",
+      "sourceType": "github",
+      "computedHash": "c844b2cc98c785961ad6e47a4347b7168c5f2c39f1c2b618923d7dcf3c826325"
+    },
+    "godot-optimization": {
+      "source": "zate/cc-godot",
+      "sourceType": "github",
+      "computedHash": "53447fe537f8bba9efee7a0495c54603fa572058c2df7b533f9125e487c6871b"
+    },
+    "godot-save-load-systems": {
+      "source": "thedivergentai/gd-agentic-skills",
+      "sourceType": "github",
+      "computedHash": "88ff2da22b25aa0a05557e4f348e76eca24ad8b248d59a1f0848a41c2dce750a"
+    },
+    "godot-shaders-basics": {
+      "source": "thedivergentai/gd-agentic-skills",
+      "sourceType": "github",
+      "computedHash": "f0054d1a74581cb5cabe03b6684ce306e4601b3f6b82b16bb2f2d216c45b7436"
+    },
+    "godot-ui": {
+      "source": "zate/cc-godot",
+      "sourceType": "github",
+      "computedHash": "6dacfd4fd9f2ad8a51ebca86da470e3b9d37430914441a3c9efa4bfc5094c319"
+    },
+    "godot-ui-rich-text": {
+      "source": "thedivergentai/gd-agentic-skills",
+      "sourceType": "github",
+      "computedHash": "c351a9ea8f56fe699e4bda031ead3223bd9ee8889d214661cdcd1e3d41151d3d"
+    }
+  }
+}

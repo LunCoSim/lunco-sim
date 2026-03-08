@@ -20,3 +20,8 @@ webrtc/
 .raw_data/
 scripts/remote_console_commands_history.txt
 git_hash.txt
+
+
+# Agentic skills
+.agent/
+.agents/
