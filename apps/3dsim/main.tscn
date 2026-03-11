@@ -1,4 +1,4 @@
-[gd_scene load_steps=9 format=3 uid="uid://c4vgq4emswcqj"]
+[gd_scene format=3 uid="uid://c4vgq4emswcqj"]
 
 [ext_resource type="PackedScene" uid="uid://oulno1atrp8k" path="res://core/simulation/simulation.tscn" id="1_dpa21"]
 [ext_resource type="PackedScene" uid="uid://cpbv4fmfxppt1" path="res://modules/solar_system_planets/sun.tscn" id="2_lwo2e"]
@@ -28,6 +28,11 @@ spawn_path = NodePath("../Universe/Sun/Earth/Moon/LangrenusCraterMap/Spawner")
 [node name="DisplayController" type="Node" parent="." index="4" unique_id=1036454674]
 script = ExtResource("7_ukwid")
 
+[node name="UILayer" type="CanvasLayer" parent="." index="5" unique_id=792924192]
+
+[node name="CommandConsole" parent="UILayer" index="0" unique_id=1721089488 instance=ExtResource("9_console")]
+visible = false
+
 [node name="Sun" parent="Universe" index="1" unique_id=1574882939 instance=ExtResource("2_lwo2e")]
 
 [node name="Earth" parent="Universe/Sun" index="1" unique_id=1530454073 instance=ExtResource("3_2elmi")]
@@ -45,8 +50,3 @@ transform = Transform3D(1, 0, 0, 0, 0.96025, -0.279142, 0, 0.279142, 0.96025, -4
 
 [node name="ModelicaDisplay" parent="Universe/Sun/Earth/Moon/LangrenusCraterMap" index="3" unique_id=1486978284 instance=ExtResource("8_mwx56")]
 transform = Transform3D(1, 0, 0, 0, 0.96025, -0.279142, 0, 0.279142, 0.96025, 9.29662, 48.2416, -86.9162)
-
-[node name="UILayer" type="CanvasLayer" parent="." index="5"]
-
-[node name="CommandConsole" parent="UILayer" index="0" instance=ExtResource("9_console")]
-visible = false
