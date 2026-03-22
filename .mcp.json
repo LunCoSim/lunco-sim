@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "godot": {
+      "command": "npx",
+      "args": ["-y", "gopeak"],
+      "env": {
+        "GODOT_PATH": "/usr/bin/godot",
+        "GOPEAK_TOOL_PROFILE": "compact"
+      }
+    }
+  }
+}

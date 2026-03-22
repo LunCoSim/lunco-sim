@@ -24,7 +24,7 @@
     "godot-master": {
       "source": "thedivergentai/gd-agentic-skills",
       "sourceType": "github",
-      "computedHash": "96cf5739eab78b50dab8c7f0fb488aa61629dbde51d16f8b08a2cb01f09dff42"
+      "computedHash": "d85e7926be522a6fe5d66b4179d0713dd947839d548fefedf0962c8068cf2231"
     },
     "godot-mcp-scene-builder": {
       "source": "thedivergentai/gd-agentic-skills",
@@ -39,12 +39,12 @@
     "godot-save-load-systems": {
       "source": "thedivergentai/gd-agentic-skills",
       "sourceType": "github",
-      "computedHash": "88ff2da22b25aa0a05557e4f348e76eca24ad8b248d59a1f0848a41c2dce750a"
+      "computedHash": "564d1539efde170fdbc18b95161d9ead6509080a305cf3cb4a8b097886dcb021"
     },
     "godot-shaders-basics": {
       "source": "thedivergentai/gd-agentic-skills",
       "sourceType": "github",
-      "computedHash": "f0054d1a74581cb5cabe03b6684ce306e4601b3f6b82b16bb2f2d216c45b7436"
+      "computedHash": "d9720217e0442732ff69ecbead033fcc489828613aa75e092da57e69cacb9e94"
     },
     "godot-ui": {
       "source": "zate/cc-godot",
@@ -54,7 +54,7 @@
     "godot-ui-rich-text": {
       "source": "thedivergentai/gd-agentic-skills",
       "sourceType": "github",
-      "computedHash": "c351a9ea8f56fe699e4bda031ead3223bd9ee8889d214661cdcd1e3d41151d3d"
+      "computedHash": "5ffc9058c5f74f820257577d0e863c9819d455102f432de42e65a3729acbaf4e"
     }
   }
 }
