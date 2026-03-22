@@ -1,6 +1,5 @@
 shader_type spatial;
 
-uniform float angle = 0.0;
 uniform vec3 tire_color : source_color = vec3(0.1, 0.1, 0.1);
 uniform vec3 rim_color : source_color = vec3(0.7, 0.7, 0.7);
 uniform vec3 tread_color : source_color = vec3(0.05, 0.05, 0.05);
@@ -28,15 +27,9 @@ void fragment() {
         // Cylinder is along Y, so caps are in XZ plane.
         vec2 centered_uv = vec2(v_pos_obj.x, v_pos_obj.z);
         
-        // Rotate UVs
-        float s = sin(angle);
-        float c = cos(angle);
-        mat2 rot = mat2(vec2(c, -s), vec2(s, c));
-        vec2 rotated_uv = rot * centered_uv;
-        
         // Polar coordinates
-        float r = length(rotated_uv);
-        float phi = atan(rotated_uv.y, rotated_uv.x);
+        float r = length(centered_uv);
+        float phi = atan(centered_uv.y, centered_uv.x);
         
         // Rim pattern (spokes)
         // Adjust thresholds for physical radius (approx 0.3)
@@ -55,12 +48,9 @@ void fragment() {
         
     } else {
         // SIDE (Tread)
-        // UV.x is circumference
-        float rotated_uv_x = UV.x + angle / (2.0 * PI);
-        
         // Tread pattern
         // Chevrons or simple stripes
-        float tread_stripe = step(0.5, sin(rotated_uv_x * 40.0 * PI));
+        float tread_stripe = step(0.5, sin(UV.x * 40.0 * PI));
         
         // Make it look a bit more like a tire
         final_color = mix(tire_color, tread_color, tread_stripe);
