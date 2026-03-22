@@ -1,0 +1,28 @@
+{
+  "name": "@lunco/mcp-server",
+  "version": "1.0.0",
+  "main": "dist/index.js",
+  "bin": {
+    "lunco-mcp-server": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "tsx index.ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "description": "",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.27.1",
+    "dotenv": "^17.3.1",
+    "node-fetch": "^3.3.2"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "@types/node-fetch": "^2.6.13",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  }
+}
