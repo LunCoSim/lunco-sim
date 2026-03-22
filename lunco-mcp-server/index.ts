@@ -32,63 +32,60 @@ async function callSimApi(name: string, targetPath: string, args: Record<string,
   return await response.json();
 }
 
-server.setRequestHandler(ListToolsRequestSchema, async () => {
+async function fetchAvailableCommands() {
+  const response = await fetch(`${SIM_URL}/api/command`);
+  if (!response.ok) throw new Error(`API call failed: ${response.statusText}`);
+  return await response.json();
+}
+
+function mapCommandToTool(target: string, cmd: any) {
+  const properties: Record<string, any> = {};
+  const required: string[] = [];
+
+  for (const arg of (cmd.arguments || [])) {
+    properties[arg.name] = {
+      type: arg.type === "vector3" ? "array" : arg.type === "enum" ? "string" : arg.type,
+      description: arg.description || "",
+    };
+    if (arg.type === "enum") {
+        properties[arg.name].enum = arg.values;
+    }
+    if (arg.default === undefined) {
+      required.push(arg.name);
+    }
+  }
+
   return {
-    tools: [
-      {
-        name: "spawn_entity",
-        description: "Spawn an entity in the LunCo simulation.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            type: { type: "string", description: "Entity type (e.g., RoverRigid)" },
-            position: { type: "array", items: { type: "number" }, description: "Optional [x, y, z]" }
-          },
-          required: ["type"],
-        },
-      },
-      {
-        name: "take_control",
-        description: "Take control of an entity.",
-        inputSchema: {
-          type: "object",
-          properties: { target: { type: "string", description: "Entity name/path" } },
-          required: ["target"],
-        },
-      },
-      {
-        name: "list_entities",
-        description: "List all entity types available for spawning.",
-        inputSchema: { type: "object", properties: {} },
-      },
-      {
-        name: "get_commands",
-        description: "Get all available command definitions for the simulation.",
-        inputSchema: { type: "object", properties: {} },
-      },
-    ],
+    name: `${target}_${cmd.name}`,
+    description: cmd.description || `${target} command: ${cmd.name}`,
+    inputSchema: {
+      type: "object",
+      properties,
+      required,
+    },
   };
+}
+
+server.setRequestHandler(ListToolsRequestSchema, async () => {
+  const { targets } = await fetchAvailableCommands();
+  const tools = [];
+
+  for (const target in targets) {
+    for (const cmd of targets[target]) {
+      tools.push(mapCommandToTool(target, cmd));
+    }
+  }
+
+  return { tools };
 });
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   try {
-    switch (request.params.name) {
-      case "spawn_entity":
-        return { content: [{ type: "text", text: JSON.stringify(await callSimApi("SPAWN", "Simulation", (request.params.arguments || {}) as Record<string, any>)) }] };
-      case "take_control":
-        return { content: [{ type: "text", text: JSON.stringify(await callSimApi("TAKE_CONTROL", "Avatar", (request.params.arguments || {}) as Record<string, any>)) }] };
-      case "send_key":
-        const { key, action } = (request.params.arguments || {}) as any;
-        const cmd = action === "down" ? "KEY_DOWN" : "KEY_UP";
-        return { content: [{ type: "text", text: JSON.stringify(await callSimApi(cmd, "Avatar", { key })) }] };
-      case "list_entities":
-        return { content: [{ type: "text", text: JSON.stringify(await callSimApi("LIST_ENTITIES", "Simulation", {})) }] };
-      case "get_commands":
-        const resp = await fetch(`${SIM_URL}/api/command`);
-        return { content: [{ type: "text", text: JSON.stringify(await resp.json()) }] };
-      default:
-        throw new Error("Tool not found");
-    }
+    const [target, ...cmdParts] = request.params.name.split("_");
+    const cmdName = cmdParts.join("_");
+    
+    const result = await callSimApi(cmdName, target, (request.params.arguments || {}) as Record<string, any>);
+    return { content: [{ type: "text", text: JSON.stringify(result) }] };
   } catch (error: any) {
     return { content: [{ type: "text", text: `Error: ${error.message}` }], isError: true };
   }
