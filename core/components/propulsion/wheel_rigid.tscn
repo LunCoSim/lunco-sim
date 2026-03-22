@@ -1,0 +1,34 @@
+[gd_scene load_steps=6 format=3 uid="uid://wheel_rigid_component"]
+
+[ext_resource type="Script" path="res://core/components/propulsion/wheel_rigid.gd" id="1_script"]
+[ext_resource type="Shader" path="res://core/components/propulsion/wheel.gdshader" id="2_shader"]
+
+[sub_resource type="CylinderShape3D" id="CylinderShape3D_wheel"]
+height = 0.2
+radius = 0.3
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_wheel"]
+top_radius = 0.3
+bottom_radius = 0.3
+height = 0.2
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_wheel"]
+shader = ExtResource("2_shader")
+shader_parameter/tire_color = Color(0.1, 0.1, 0.1, 1)
+shader_parameter/rim_color = Color(0.7, 0.7, 0.7, 1)
+shader_parameter/tread_color = Color(0.05, 0.05, 0.05, 1)
+
+[node name="WheelRigid" type="RigidBody3D"]
+mass = 10.0
+center_of_mass_mode = 1
+center_of_mass = Vector3(0, 0, 0)
+script = ExtResource("1_script")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="."]
+transform = Transform3D(-4.37114e-08, -1, 0, 1, -4.37114e-08, 0, 0, 0, 1, 0, 0, 0)
+shape = SubResource("CylinderShape3D_wheel")
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="."]
+transform = Transform3D(-4.37114e-08, -1, 0, 1, -4.37114e-08, 0, 0, 0, 1, 0, 0, 0)
+mesh = SubResource("CylinderMesh_wheel")
+surface_material_override/0 = SubResource("ShaderMaterial_wheel")

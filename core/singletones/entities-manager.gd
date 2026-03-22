@@ -9,6 +9,7 @@ enum Entities {
 	Rover,
 	LunarLander,
 	MarsRover,
+	RoverRigid,
 }
 
 var Paths = {
@@ -19,6 +20,7 @@ var Paths = {
 	Entities.Rover: "res://apps/3dsim/entities/rover/rover.tscn",
 	Entities.LunarLander: "res://core/entities/vehicles/lunar_lander.tscn",
 	Entities.MarsRover: "res://core/entities/vehicles/mars_rover.tscn",
+	Entities.RoverRigid: "res://apps/3dsim/entities/rover_rigid.tscn",
 }
 
 var UIs = {
@@ -29,6 +31,7 @@ var UIs = {
 	Entities.Rover: "res://apps/3dsim/entities/rover/rover.tscn",
 	Entities.LunarLander: "res://content/starship/starship-ui.tscn", # Reuse starship UI for now
 	Entities.MarsRover: "res://apps/3dsim/entities/rover/rover.tscn", # Reuse rover UI
+	Entities.RoverRigid: "res://apps/3dsim/entities/rover_rigid.tscn",
 }
 
 var InputAdapters = {
@@ -39,6 +42,7 @@ var InputAdapters = {
 	Entities.Rover: "res://apps/3dsim/entities/rover/rover.tscn",
 	Entities.LunarLander: "res://content/starship/starship.tscn", # Reuse starship adapter
 	Entities.MarsRover: "res://apps/3dsim/entities/rover/rover.tscn", # Reuse rover adapter
+	Entities.RoverRigid: "res://apps/3dsim/entities/rover_rigid.tscn",
 }
 
 var Caches: = {

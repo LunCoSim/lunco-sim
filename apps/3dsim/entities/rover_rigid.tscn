@@ -1,0 +1,100 @@
+[gd_scene load_steps=6 format=3 uid="uid://rover_rigid_entity"]
+
+[ext_resource type="Script" path="res://controllers/rover/rover_rigid_controller.gd" id="1_ctrl"]
+[ext_resource type="PackedScene" uid="uid://wheel_rigid_component" path="res://core/components/propulsion/wheel_rigid.tscn" id="2_wheel"]
+[ext_resource type="Script" path="res://controllers/rover/rover_rigid_input_adapter.gd" id="3_adapter"]
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_chassis"]
+size = Vector3(1.5, 0.5, 2.0)
+
+[sub_resource type="BoxMesh" id="BoxMesh_chassis"]
+size = Vector3(1.5, 0.5, 2.0)
+
+[node name="RoverRigid" type="RigidBody3D"]
+mass = 50.0
+center_of_mass_mode = 1
+center_of_mass = Vector3(0, -0.2, 0)
+
+[node name="RigidController" type="Node3D" parent="." node_paths=PackedStringArray("fl_wheel", "fr_wheel", "bl_wheel", "br_wheel")]
+script = ExtResource("1_ctrl")
+fl_wheel = NodePath("../WheelFL")
+fr_wheel = NodePath("../WheelFR")
+bl_wheel = NodePath("../WheelBL")
+br_wheel = NodePath("../WheelBR")
+
+[node name="InputAdapter" type="Node" parent="RigidController"]
+script = ExtResource("3_adapter")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="."]
+shape = SubResource("BoxShape3D_chassis")
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="."]
+mesh = SubResource("BoxMesh_chassis")
+
+[node name="WheelFL" parent="." instance=ExtResource("2_wheel")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1, -0.5, -1)
+
+[node name="JointFL" type="Generic6DOFJoint3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1, -0.5, -1)
+node_a = NodePath("..")
+node_b = NodePath("../WheelFL")
+linear_limit_x/enabled = true
+linear_limit_y/enabled = false
+linear_limit_z/enabled = true
+linear_spring_y/enabled = true
+linear_spring_y/stiffness = 2000.0
+linear_spring_y/damping = 100.0
+angular_limit_x/enabled = false
+angular_limit_y/enabled = true
+angular_limit_z/enabled = true
+
+[node name="WheelFR" parent="." instance=ExtResource("2_wheel")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1, -0.5, -1)
+
+[node name="JointFR" type="Generic6DOFJoint3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1, -0.5, -1)
+node_a = NodePath("..")
+node_b = NodePath("../WheelFR")
+linear_limit_x/enabled = true
+linear_limit_y/enabled = false
+linear_limit_z/enabled = true
+linear_spring_y/enabled = true
+linear_spring_y/stiffness = 2000.0
+linear_spring_y/damping = 100.0
+angular_limit_x/enabled = false
+angular_limit_y/enabled = true
+angular_limit_z/enabled = true
+
+[node name="WheelBL" parent="." instance=ExtResource("2_wheel")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1, -0.5, 1)
+
+[node name="JointBL" type="Generic6DOFJoint3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1, -0.5, 1)
+node_a = NodePath("..")
+node_b = NodePath("../WheelBL")
+linear_limit_x/enabled = true
+linear_limit_y/enabled = false
+linear_limit_z/enabled = true
+linear_spring_y/enabled = true
+linear_spring_y/stiffness = 2000.0
+linear_spring_y/damping = 100.0
+angular_limit_x/enabled = false
+angular_limit_y/enabled = true
+angular_limit_z/enabled = true
+
+[node name="WheelBR" parent="." instance=ExtResource("2_wheel")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1, -0.5, 1)
+
+[node name="JointBR" type="Generic6DOFJoint3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1, -0.5, 1)
+node_a = NodePath("..")
+node_b = NodePath("../WheelBR")
+linear_limit_x/enabled = true
+linear_limit_y/enabled = false
+linear_limit_z/enabled = true
+linear_spring_y/enabled = true
+linear_spring_y/stiffness = 2000.0
+linear_spring_y/damping = 100.0
+angular_limit_x/enabled = false
+angular_limit_y/enabled = true
+angular_limit_z/enabled = true
