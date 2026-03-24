@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "lunco-mcp-server": {
+      "command": "npx",
+      "args": [
+        "tsx",
+        "index.ts"
+      ],
+      "cwd": "lunco-mcp-server"
+    }
+  }
+}
