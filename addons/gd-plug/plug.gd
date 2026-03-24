@@ -4,7 +4,7 @@ extends SceneTree
 signal updated(plugin)
 
 const VERSION = "0.2.6"
-const DEFAULT_PLUGIN_URL = "https://git::@github.com/%s.git"
+const DEFAULT_PLUGIN_URL = "https://github.com/%s.git"
 const DEFAULT_PLUG_DIR = "res://.plugged"
 const DEFAULT_CONFIG_PATH = DEFAULT_PLUG_DIR + "/index.cfg"
 const DEFAULT_USER_PLUG_SCRIPT_PATH = "res://plug.gd"
@@ -174,6 +174,7 @@ func show_config_syntax():
 
 func _process(delta):
 	threadpool.process(delta)
+	return false
 
 func _finalize():
 	_plug_end()

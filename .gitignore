@@ -5,8 +5,11 @@ build/
 .obsidian
 .plugged
 
-#Managed by gd-plug
-addons/panku_console/
+# Managed by gd-plug (exclude specific ones manually if they are submodules)
+addons/*
+!addons/gd-plug/
+!addons/lunco-cameras/
+!addons/lunco-content/
 
 #webrtc addon. Probably later could be managed by gd-plug
 webrtc/
