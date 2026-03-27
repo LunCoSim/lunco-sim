@@ -43,20 +43,28 @@ function mapCommandToTool(target: string, cmd: any) {
   const required: string[] = [];
 
   for (const arg of (cmd.arguments || [])) {
-    properties[arg.name] = {
+    const property: Record<string, any> = {
       type: arg.type === "vector3" ? "array" : arg.type === "enum" ? "string" : arg.type,
       description: arg.description || "",
     };
-    if (arg.type === "enum") {
-        properties[arg.name].enum = arg.values;
+    if (arg.type === "vector3") {
+      property.items = { type: "number" };
     }
-    if (arg.default === undefined) {
+    if (arg.type === "enum") {
+      property.enum = arg.values;
+    }
+    properties[arg.name] = property;
+    
+    const isOptional = arg.default !== undefined || (arg.description && arg.description.toLowerCase().includes("optional"));
+    if (!isOptional) {
       required.push(arg.name);
     }
   }
 
+  const name = (target === "Simulation" || target === "Avatar") ? cmd.name : `${target}_${cmd.name}`;
+
   return {
-    name: `${target}_${cmd.name}`,
+    name: name,
     description: cmd.description || `${target} command: ${cmd.name}`,
     inputSchema: {
       type: "object",
@@ -81,8 +89,20 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   try {
-    const [target, ...cmdParts] = request.params.name.split("_");
-    const cmdName = cmdParts.join("_");
+    let target: string;
+    let cmdName: string;
+
+    if (request.params.name === "SPAWN" || request.params.name === "DELETE" || request.params.name === "LIST_ENTITIES") {
+      target = "Simulation";
+      cmdName = request.params.name;
+    } else if (["TAKE_CONTROL", "STOP_CONTROL", "KEY_DOWN", "KEY_UP", "KEY_PRESS"].includes(request.params.name)) {
+      target = "Avatar";
+      cmdName = request.params.name;
+    } else {
+      const [targetPart, ...cmdParts] = request.params.name.split("_");
+      target = targetPart;
+      cmdName = cmdParts.join("_");
+    }
     
     const result = await callSimApi(cmdName, target, (request.params.arguments || {}) as Record<string, any>);
     return { content: [{ type: "text", text: JSON.stringify(result) }] };
