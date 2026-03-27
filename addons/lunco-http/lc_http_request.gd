@@ -1,4 +1,4 @@
-class_name HttpRequest
+class_name LCHttpRequest
 extends RefCounted
 
 var method: String = ""

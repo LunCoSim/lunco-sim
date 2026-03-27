@@ -1,2 +1,2 @@
 class_name Web3Router
-extends HttpFileRouter
+extends LCHttpFileRouter

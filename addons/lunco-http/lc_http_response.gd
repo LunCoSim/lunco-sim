@@ -1,4 +1,4 @@
-class_name HttpResponse
+class_name LCHttpResponse
 extends RefCounted
 
 var client  # Can be StreamPeerTCP or StreamPeerTLS

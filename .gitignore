@@ -12,6 +12,7 @@ addons/*
 !addons/lunco-cameras/
 !addons/lunco-content/
 !addons/lunco-logger/
+!addons/lunco-http/
 
 #webrtc addon. Probably later could be managed by gd-plug
 webrtc/

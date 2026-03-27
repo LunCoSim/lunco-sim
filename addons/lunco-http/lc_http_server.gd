@@ -1,4 +1,4 @@
-class_name HttpServer
+class_name LCHttpServer
 extends Node
 
 # HTTP server properties
@@ -137,13 +137,13 @@ func _handle_client_request(client) -> void:
 	print("Received request (%d bytes): %s" % [available, request_data.substr(0, 100)])
 	
 	# Parse request
-	var request = HttpRequest.new()
+	var request = LCHttpRequest.new()
 	request.parse(request_data)
 	
 	print("Parsed request: %s %s" % [request.method, request.path])
 	
 	# Create response object
-	var response = HttpResponse.new(client)
+	var response = LCHttpResponse.new(client)
 	
 	# Find the correct router
 	var router = null

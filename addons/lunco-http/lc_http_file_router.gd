@@ -1,5 +1,5 @@
-class_name HttpFileRouter
-extends HttpRouter
+class_name LCHttpFileRouter
+extends LCHttpRouter
 
 var root_path: String
 var default_file: String = "index.html"

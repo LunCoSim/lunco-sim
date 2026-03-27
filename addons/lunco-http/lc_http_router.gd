@@ -1,4 +1,4 @@
-class_name HttpRouter
+class_name LCHttpRouter
 extends RefCounted
 
 # Basic router implementation for HTTP server

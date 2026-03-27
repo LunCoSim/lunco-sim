@@ -1,8 +1,8 @@
 class_name Web3ResponseRouter
-extends HttpRouter
+extends LCHttpRouter
 
 # Handle a POST request
-func handle_post(request: HttpRequest, response: HttpResponse) -> void:
+func handle_post(request: LCHttpRequest, response: LCHttpResponse) -> void:
 	print('handle_post')
 	
 	#Panku.notify("Successfully logined")

@@ -1,9 +1,9 @@
 class_name TelemetryRouter
-extends HttpRouter
+extends LCHttpRouter
 
 # Router for telemetry API endpoints
 
-func handle_get(request: HttpRequest, response: HttpResponse) -> void:
+func handle_get(request: LCHttpRequest, response: LCHttpResponse) -> void:
 	# Add CORS headers
 	response.set_header("Access-Control-Allow-Origin", "*")
 	response.set_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
@@ -35,11 +35,11 @@ func handle_get(request: HttpRequest, response: HttpResponse) -> void:
 	else:
 		response.send_error(404, "Not Found")
 
-func _handle_image_list(_request: HttpRequest, response: HttpResponse) -> void:
+func _handle_image_list(_request: LCHttpRequest, response: LCHttpResponse) -> void:
 	var images = TelemetryManager.get_image_list()
 	response.send_json({"images": images})
 
-func handle_post(request: HttpRequest, response: HttpResponse) -> void:
+func handle_post(request: LCHttpRequest, response: LCHttpResponse) -> void:
 	# Add CORS headers
 	response.set_header("Access-Control-Allow-Origin", "*")
 	response.set_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
@@ -54,7 +54,7 @@ func handle_post(request: HttpRequest, response: HttpResponse) -> void:
 	else:
 		response.send_error(404, "Not Found")
 
-func handle_delete(request: HttpRequest, response: HttpResponse) -> void:
+func handle_delete(request: LCHttpRequest, response: LCHttpResponse) -> void:
 	# Add CORS headers
 	response.set_header("Access-Control-Allow-Origin", "*")
 	response.set_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
@@ -69,18 +69,18 @@ func handle_delete(request: HttpRequest, response: HttpResponse) -> void:
 	else:
 		response.send_error(404, "Not Found")
 
-func handle_options(request: HttpRequest, response: HttpResponse) -> void:
+func handle_options(request: LCHttpRequest, response: LCHttpResponse) -> void:
 	# Handle CORS preflight
 	response.set_header("Access-Control-Allow-Origin", "*")
 	response.set_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
 	response.set_header("Access-Control-Allow-Headers", "Content-Type")
 	response.send("", "text/plain")
 
-func _handle_entities(_request: HttpRequest, response: HttpResponse) -> void:
+func _handle_entities(_request: LCHttpRequest, response: LCHttpResponse) -> void:
 	var entities = TelemetryManager.get_entities()
 	response.send_json({"entities": entities})
 
-func _handle_telemetry(request: HttpRequest, response: HttpResponse) -> void:
+func _handle_telemetry(request: LCHttpRequest, response: LCHttpResponse) -> void:
 	# Extract entity_id from path: /telemetry/{entity_id} or /telemetry/{entity_id}/history
 	var path = request.path
 	if path.begins_with("/api"):
@@ -99,7 +99,7 @@ func _handle_telemetry(request: HttpRequest, response: HttpResponse) -> void:
 	else:
 		_handle_latest(entity_id, response)
 
-func _handle_latest(entity_id: String, response: HttpResponse) -> void:
+func _handle_latest(entity_id: String, response: LCHttpResponse) -> void:
 	var data = TelemetryManager.get_latest_telemetry(entity_id)
 	if data.is_empty():
 		response.send_error(404, "Entity not found")
@@ -107,7 +107,7 @@ func _handle_latest(entity_id: String, response: HttpResponse) -> void:
 		# print("DEBUG: Sending latest telemetry for ", entity_id, ": ", data.keys())
 		response.send_json(data)
 
-func _handle_history(entity_id: String, request: HttpRequest, response: HttpResponse) -> void:
+func _handle_history(entity_id: String, request: LCHttpRequest, response: LCHttpResponse) -> void:
 	# Parse query parameters for time range
 	var start_time = int(request.get_parameter("start", "0"))
 	var end_time = int(request.get_parameter("end", "0"))
@@ -115,11 +115,11 @@ func _handle_history(entity_id: String, request: HttpRequest, response: HttpResp
 	var history = TelemetryManager.get_history(entity_id, start_time, end_time)
 	response.send_json({"history": history})
 
-func _handle_dictionary(_request: HttpRequest, response: HttpResponse) -> void:
+func _handle_dictionary(_request: LCHttpRequest, response: LCHttpResponse) -> void:
 	var dictionary = TelemetryManager.get_openmct_dictionary()
 	response.send_json(dictionary)
 
-func _handle_global_events(request: HttpRequest, response: HttpResponse) -> void:
+func _handle_global_events(request: LCHttpRequest, response: LCHttpResponse) -> void:
 	# Parse query parameters for time range
 	var start_time = int(request.get_parameter("start", "0"))
 	var end_time = int(request.get_parameter("end", "0"))
@@ -127,7 +127,7 @@ func _handle_global_events(request: HttpRequest, response: HttpResponse) -> void
 	var events = TelemetryManager.get_global_events(start_time, end_time)
 	response.send_json({"events": events})
 
-func _handle_entity_events(request: HttpRequest, response: HttpResponse) -> void:
+func _handle_entity_events(request: LCHttpRequest, response: LCHttpResponse) -> void:
 	# Extract entity_id from path: /events/{entity_id}
 	var path = request.path
 	if path.begins_with("/api"):
@@ -147,7 +147,7 @@ func _handle_entity_events(request: HttpRequest, response: HttpResponse) -> void
 	var events = TelemetryManager.get_entity_events(entity_id, start_time, end_time)
 	response.send_json({"events": events})
 
-func _handle_command(request: HttpRequest, response: HttpResponse) -> void:
+func _handle_command(request: LCHttpRequest, response: LCHttpResponse) -> void:
 	var body_str = request.body
 	var json = JSON.new()
 	var err = json.parse(body_str)
@@ -173,11 +173,11 @@ func _handle_command(request: HttpRequest, response: HttpResponse) -> void:
 	else:
 		response.send_json({"status": "executed", "result": result})
 
-func _handle_command_definitions(_request: HttpRequest, response: HttpResponse) -> void:
+func _handle_command_definitions(_request: LCHttpRequest, response: LCHttpResponse) -> void:
 	var defs = LCCommandRouter.get_all_command_definitions()
 	response.send_json({"targets": defs})
 
-func _handle_delete_entity(request: HttpRequest, response: HttpResponse) -> void:
+func _handle_delete_entity(request: LCHttpRequest, response: LCHttpResponse) -> void:
 	# Extract entity_id from path: /entities/{entity_id}
 	var path = request.path
 	if path.begins_with("/api"):
@@ -208,7 +208,7 @@ func _handle_delete_entity(request: HttpRequest, response: HttpResponse) -> void
 	else:
 		response.send_json({"status": "deleted", "result": result})
 
-func _handle_image_request(request: HttpRequest, response: HttpResponse) -> void:
+func _handle_image_request(request: LCHttpRequest, response: LCHttpResponse) -> void:
 	var path = request.path
 	if path.begins_with("/api"):
 		path = path.substr(4)

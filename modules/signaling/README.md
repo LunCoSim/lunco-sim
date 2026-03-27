@@ -3,7 +3,7 @@ Signaling router for WebRTC
 This project includes a very small HTTP-based signaling router at `/signal` implemented by `SignalingRouter`.
 
 Purpose
-- Provide a simple way for WebRTC peers (clients) to exchange SDP offers/answers and ICE candidates via the existing `HttpServer`.
+- Provide a simple way for WebRTC peers (clients) to exchange SDP offers/answers and ICE candidates via the existing `LCHttpServer`.
 - Keep the project compatible with WebSocket-based multiplayer (no removal).
 
 Endpoints

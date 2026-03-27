@@ -2,7 +2,7 @@ extends Node
 
 # TelemetryServer - Singleton that configures and starts the HTTP server for telemetry API
 
-var http_server: HttpServer
+var http_server: LCHttpServer
 var telemetry_router: TelemetryRouter
 
 const TELEMETRY_PORT = 8082
@@ -12,7 +12,7 @@ const TELEMETRY_PORT = 8082
 # Otherwise, HTTP will be used (suitable for local development)
 func start_server(tls_cert_path: String = "", tls_key_path: String = ""):
 	# Create HTTP server
-	http_server = HttpServer.new()
+	http_server = LCHttpServer.new()
 	add_child(http_server)
 	
 	# Configure TLS if paths are provided
