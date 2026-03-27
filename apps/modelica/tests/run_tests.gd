@@ -22,13 +22,13 @@ var empty_directories = []
 func _init():
 	print("Loading base test from: " + ProjectSettings.globalize_path("res://apps/modelica/tests/base_test.gd"))
 	
-	var BaseTest = load("res://apps/modelica/tests/base_test.gd")
-	if BaseTest:
-		print("Successfully loaded BaseTest class")
+	var LCBaseTest = load("res://apps/modelica/tests/base_test.gd")
+	if LCBaseTest:
+		print("Successfully loaded LCBaseTest class")
 		print("Starting test runner...\n")
 		run_all_tests()
 	else:
-		print("Failed to load BaseTest class")
+		print("Failed to load LCBaseTest class")
 		
 	quit()
 
@@ -57,7 +57,7 @@ func run_all_tests():
 		else:
 			base_tests.append(test_file)
 	
-	# Run regular BaseTest tests first (these are more reliable)
+	# Run regular LCBaseTest tests first (these are more reliable)
 	for test_file in base_tests:
 		run_base_test(test_file)
 	
@@ -105,9 +105,9 @@ func file_is_scene_tree_test(file_path: String) -> bool:
 	
 	return false
 
-# Run a regular BaseTest test
+# Run a regular LCBaseTest test
 func run_base_test(test_path: String) -> bool:
-	print("\nRunning BaseTest in: " + test_path)
+	print("\nRunning LCBaseTest in: " + test_path)
 	
 	var test_script = load(test_path)
 	if test_script == null:
@@ -118,14 +118,14 @@ func run_base_test(test_path: String) -> bool:
 	test_classes_run += 1
 	
 	if test_instance:
-		# Check if it extends BaseTest using a different approach
-		var BaseTest = load("res://apps/modelica/tests/base_test.gd")
-		if BaseTest != null:
+		# Check if it extends LCBaseTest using a different approach
+		var LCBaseTest = load("res://apps/modelica/tests/base_test.gd")
+		if LCBaseTest != null:
 			# Try to run the test - will catch errors if not compatible
 			if test_instance.has_method("run_tests"):
 				var success = test_instance.run_tests()
 				
-				# Check if the instance has the expected properties from BaseTest
+				# Check if the instance has the expected properties from LCBaseTest
 				if "total_tests" in test_instance and "passed_tests" in test_instance:
 					# Add to global counters
 					total_tests += test_instance.total_tests
@@ -141,13 +141,13 @@ func run_base_test(test_path: String) -> bool:
 					else:
 						print("✅ PASSED: " + test_path + " (Tests: " + str(test_instance.total_tests) + ")")
 				else:
-					print("ERROR: Test does not have required BaseTest properties: " + test_path)
+					print("ERROR: Test does not have required LCBaseTest properties: " + test_path)
 					return false
 			else:
 				print("ERROR: Test file does not have run_tests method: " + test_path)
 				return false
 		else:
-			print("ERROR: Could not load BaseTest class")
+			print("ERROR: Could not load LCBaseTest class")
 			return false
 			
 		# Clean up

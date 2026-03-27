@@ -1,4 +1,4 @@
-class_name BaseTest
+class_name LCBaseTest
 extends Node
 
 # Test metadata
@@ -350,12 +350,12 @@ static func _run_tests_in_directory(dir_path: String) -> int:
 							file_name = dir.get_next()
 							continue
 						
-						# For direct BaseTest extensions
-						if test_instance is BaseTest:
+						# For direct LCBaseTest extensions
+						if test_instance is LCBaseTest:
 							if not test_instance.run_tests():
 								failed_tests += 1
 						else:
-							print("ERROR: Test file does not extend BaseTest: " + test_path)
+							print("ERROR: Test file does not extend LCBaseTest: " + test_path)
 							failed_tests += 1
 						
 						# Clean up
