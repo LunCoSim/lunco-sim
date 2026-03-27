@@ -37,6 +37,11 @@ LCResourceRegistry="*res://core/resources/resource_registry.gd"
 LCRecipeRegistry="*res://core/resources/recipe_registry.gd"
 LCCommandRouter="*res://core/commands/command_router.gd"
 LCCommandUI="*res://modules/command_ui/command_ui_manager.gd"
+LCLogger="*uid://ybql6d8t410m"
+
+[debug]
+
+file_logging/enable_file_logging.pc=false
 
 [editor]
 
@@ -45,14 +50,7 @@ export/convert_text_resources_to_binary=false
 
 [editor_plugins]
 
-logger/log_enabled=true
-logger/log_stdout=true
-logger/level=31
-logger/file/log_file_write=true
-logger/file/file_path="res://game.log"
-logger/stdout_format="[{hour}:{minute}:{second}][{level}]{text}"
-logger/file_format="[{hour}:{minute}:{second}][{level}]{text}"
-enabled=PackedStringArray("res://addons/lunco-content/plugin.cfg")
+enabled=PackedStringArray("res://addons/lunco-content/plugin.cfg", "res://addons/lunco-logger/plugin.cfg", "res://addons/gdUnit4/plugin.cfg")
 
 [filesystem]
 
@@ -493,6 +491,16 @@ camera_switch={
 "events": [Object(InputEventKey,"resource_local_to_scene":false,"resource_name":"","device":-1,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"pressed":false,"keycode":0,"physical_keycode":67,"key_label":0,"unicode":99,"location":0,"echo":false,"script":null)
 ]
 }
+
+[lunco]
+
+logger/path="user://logs"
+logger/file_name=""
+logger/max_files=5
+logger/stdout_level=31
+logger/file_level=31
+logger/native_logger_enabled=true
+logger/enable_file_logging=true
 
 [physics]
 

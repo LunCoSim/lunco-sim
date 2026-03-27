@@ -24,6 +24,7 @@ func _plugging():
 	#plug("LunCoSim/PankuConsole") #using LunCo's fork
 	# plug("godot-extended-libraries/godot-debug-menu")
 	#plug("Ericdowney/SignalVisualizer")
+	plug("godot-gdunit-labs/gdUnit4")
 	
 	## Libraries
 	# plug("maktoobgar/scene_manager") ## Scene manager

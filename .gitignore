@@ -1,6 +1,7 @@
 # Godot 4+ specific ignores
 .godot/
 build/
+reports/
 
 .obsidian
 .plugged
@@ -10,6 +11,7 @@ addons/*
 !addons/gd-plug/
 !addons/lunco-cameras/
 !addons/lunco-content/
+!addons/lunco-logger/
 
 #webrtc addon. Probably later could be managed by gd-plug
 webrtc/
