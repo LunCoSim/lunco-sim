@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3 uid="uid://test_logger_scene"]
+
+[ext_resource type="Script" path="res://addons/lunco-logger/tests/lc_logger_node_test.gd" id="1_script"]
+
+[node name="TestLoggerNode" type="Node"]
+script = ExtResource("1_script")
