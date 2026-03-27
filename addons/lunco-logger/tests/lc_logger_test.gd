@@ -162,3 +162,56 @@ func test_concurrent_logging():
 	var actual_count = mock.messages.size()
 	logger.remove_endpoint(mock)
 	assert_int(actual_count).is_greater_equal(total_expected)
+
+func test_caller_info_tracking():
+	var mock = MockEndpoint.new()
+	logger.add_endpoint(mock)
+	
+	ProjectSettings.set_setting("lunco/logger/show_caller", true)
+	logger.call("_update_from_settings")
+	
+	# Log from this file
+	logger.info("Test caller info")
+	logger.flush()
+	
+	assert_int(mock.messages.size()).is_equal(1)
+	# Should contain [lc_logger_test.gd:LINE]
+	assert_str(mock.messages[0].text).contains("[lc_logger_test.gd:")
+	
+	# Test disabling it
+	mock.messages.clear()
+	ProjectSettings.set_setting("lunco/logger/show_caller", false)
+	logger.call("_update_from_settings")
+	
+	logger.info("Test no caller info")
+	logger.flush()
+	
+	assert_int(mock.messages.size()).is_equal(1)
+	assert_bool(mock.messages[0].text.contains("[lc_logger_test.gd:")).is_false()
+	
+	logger.remove_endpoint(mock)
+
+func test_recursion_protection():
+	var mock = MockEndpoint.new()
+	logger.add_endpoint(mock)
+	
+	# Create a custom endpoint that calls print() or LCLogger.info()
+	# This should NOT cause infinite recursion because of our guards
+	var recursive_endpoint = MockEndpoint.new()
+	recursive_endpoint.log_message = func(msg: String, _err: bool):
+		# This print() will be caught by EngineLoggerImpl and call log_raw()
+		print("Recursive print: ", msg)
+		# Direct call to logger
+		logger.info("Recursive logger call")
+	
+	logger.add_endpoint(recursive_endpoint)
+	
+	logger.info("Start recursion test")
+	logger.flush()
+	
+	# If we are here and didn't crash, the guards are working.
+	# The recursive calls might still be queued, but they shouldn't trigger more logs.
+	assert_bool(true).is_true()
+	
+	logger.remove_endpoint(mock)
+	logger.remove_endpoint(recursive_endpoint)

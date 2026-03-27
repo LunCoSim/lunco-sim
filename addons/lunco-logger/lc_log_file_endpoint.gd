@@ -63,7 +63,12 @@ func _rotate_logs(path: String, max_files: int):
 		var to_delete = files.pop_front()
 		dir.remove(to_delete)
 
-func log_message(message: String, _is_error: bool) -> void:
+func log_message(message: String, _is_error: bool, _is_engine: bool = false) -> void:
+	# Ensure message is not empty or just a newline
+	var stripped = message.strip_edges()
+	if stripped.is_empty():
+		return
+		
 	_mutex.lock()
 	if _file:
 		_file.store_line(message)
@@ -71,13 +76,13 @@ func log_message(message: String, _is_error: bool) -> void:
 
 func log_error(function: String, file: String, line: int, code: String, 
 			rationale: String, _editor_notify: bool, error_type: int, 
-			_script_backtraces: Array) -> void:
+			_script_backtraces: Array, is_engine: bool = false) -> void:
 	
 	var type_str = "ERROR" if error_type == 0 else "WARNING"
 	var entry = "[%s] %s:%d in %s() - %s: %s" % [
 		type_str, file, line, function, code, rationale
 	]
-	log_message(entry, true)
+	log_message(entry, error_type == 0, is_engine)
 
 func flush() -> void:
 	_mutex.lock()
