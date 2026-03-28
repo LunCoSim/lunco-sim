@@ -8,6 +8,10 @@
 
 set -e  # Exit on any error
 
+# Ensure we are in the project root
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR/../.."
+
 # Use provided Godot path or default to 'godot' in PATH
 GODOT_PATH="${1:-godot}"
 
@@ -39,7 +43,7 @@ mkdir -p build/3dsim
 echo "Building 3D sim..."
 
 # Generate git_hash.txt for the build
-./generate_version.sh
+"$(dirname "${BASH_SOURCE[0]}")/../dev/gen_git_hash.sh"
 
 "$GODOT_PATH" $EXPORT_FLAG --headless "Web_3DSim" build/3dsim/index.html
 

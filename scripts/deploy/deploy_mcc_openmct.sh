@@ -5,7 +5,8 @@
 set -e  # Exit on any error
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SOURCE_DIR="$SCRIPT_DIR/html/openmct"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+SOURCE_DIR="$PROJECT_ROOT/html/openmct"
 TARGET_DIR="/var/www/html/mcc"
 
 echo "=== Starting OpenMCT deployment ==="

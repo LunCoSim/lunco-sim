@@ -6,8 +6,8 @@ set -e
 
 DOMAIN="${1:-langrenus.lunco.space}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CERT_DIR="$SCRIPT_DIR/pyscripts"
-LUNCO_PROJECT_DIR="$SCRIPT_DIR"
+LUNCO_PROJECT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+CERT_DIR="$LUNCO_PROJECT_DIR/pyscripts"
 
 echo "🔒 WSS Setup Script for LunCo"
 echo "=============================="
