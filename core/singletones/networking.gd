@@ -183,6 +183,9 @@ func host(port: int = 9000, tls_cert_path: String = "", tls_key_path: String = "
 func update_player_info(_username, _userwallet):
 	var id = multiplayer.get_remote_sender_id()
 	
+	if multiplayer.is_server():
+		print("Server: Player %d updated info: username='%s', wallet='%s'" % [id, _username, _userwallet])
+	
 	players[id] = {
 		"username": _username,
 		"wallet": _userwallet
@@ -194,7 +197,15 @@ func update_player_info(_username, _userwallet):
 
 # Function called when a peer connects
 func on_peer_connected(id):
-	print("on_peer_connected: ", id)
+	var peer_info = ""
+	if multiplayer.is_server():
+		var peer = multiplayer.multiplayer_peer
+		if peer is WebSocketMultiplayerPeer:
+			var ip = peer.get_peer_address(id)
+			var port = peer.get_peer_port(id)
+			peer_info = " (IP: %s, Port: %d)" % [ip, port]
+	
+	print("on_peer_connected: %d%s" % [id, peer_info])
 	
 	if multiplayer.is_server():
 		_send_version_to_peer(id)
