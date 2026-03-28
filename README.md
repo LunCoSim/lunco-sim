@@ -86,7 +86,9 @@ Built on the powerful **Godot 4** engine, it bridges the gap between gaming and 
 
 8. Wait till all the files are downloaded. You'll see the message in the Output tab.
 
-9. Restart editor and enjoy!
+9. Then install all addons via gd-plug. Use command from lunco.sh for that
+
+10. Restart editor and enjoy!
 
 
 ### Content Management Notes
