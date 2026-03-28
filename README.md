@@ -108,8 +108,4 @@ Join our vibrant community and stay updated on the latest developments:
 - [LinkedIn](https://www.linkedin.com/company/luncosim/)
 - [YouTube Channel](https://www.youtube.com/@LunCoSim)
 
-## 💖 Support Us
-
-Support development on [JuiceBox](https://juicebox.money/v2/p/763)!
-
 ## Want to contribute? Apply [here](https://tally.so/r/3jX6aE)
