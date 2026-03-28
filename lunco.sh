@@ -16,9 +16,9 @@ usage() {
     echo ""
     echo "Commands:"
     echo "  setup    Install dependencies and configure environment"
-    echo "    engine [version]       Install Godot engine"
+    echo "    godot [version]        Install Godot engine binary"
     echo "    templates [version]    Install Godot export templates"
-    echo "    addons [godot_path]    Install Godot addons"
+    echo "    addons [godot_path]    Install project-specific addons"
     echo "    wss [domain]           Setup WSS certificates"
     echo ""
     echo "  deploy   Deploy applications"
@@ -40,7 +40,7 @@ usage() {
 case "$1" in
     setup)
         case "$2" in
-            engine)
+            godot)
                 "$SCRIPTS_ROOT/setup/setup_godot_bin.sh" "${3:-4.7.dev3}"
                 ;;
             templates)
