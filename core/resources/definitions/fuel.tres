@@ -1,0 +1,19 @@
+[gd_resource type="Resource" script_class="LCResourceDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://core/resources/resource_definition.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+resource_id = "fuel"
+display_name = "Generic Fuel"
+description = "Generic liquid fuel for engines"
+category = "liquid"
+density = 800.0
+specific_heat = 2000.0
+phase_at_stp = "liquid"
+can_flow = true
+requires_pressure = true
+requires_temperature_control = false
+flow_rate_multiplier = 1.0
+color = Color(0.8, 0.4, 0.1, 1)
+tags = PackedStringArray("fuel", "propellant")

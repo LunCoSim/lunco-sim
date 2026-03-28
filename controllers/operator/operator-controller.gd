@@ -16,10 +16,7 @@ extends LCController
 var move_direction := Vector3.ZERO
 
 func _ready():
-	# Add command executor
-	var executor = LCCommandExecutor.new()
-	executor.name = "CommandExecutor"
-	add_child(executor)
+	pass
 
 func _physics_process(delta):
 	if has_authority():

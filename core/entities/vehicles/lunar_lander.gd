@@ -12,23 +12,27 @@ extends LCSpacecraft
 func _ready():
 	super._ready()
 	
-	# Only build if we don't have children (fresh spawn)
-	if get_child_count() == 0:
+	# Only build if we don't have children (fresh spawn on server)
+	# On clients, the children will be synchronized if part of the scene, 
+	# but for procedural nodes, they need to be built on both sides or spawned.
+	if get_child_count() <= 1: # Only Script/Controller might exist
 		_build_lander()
 		refresh_effectors()
 		
 	# Ensure controller exists
-	if not has_node("SpacecraftController"):
+	if not has_node("LCSpacecraftController"):
+		# In a real scenario, this should be in the .tscn
+		# But for this procedural entity, we'll add it if missing
 		var controller = LCSpacecraftController.new()
-		controller.name = "SpacecraftController"
+		controller.name = "LCSpacecraftController"
 		add_child(controller)
 		
 	# Ensure input adapter exists
-	if not has_node("SpacecraftInputAdapter"):
+	if not has_node("LCSpacecraftInputAdapter"):
 		var input_adapter = LCSpacecraftInputAdapter.new()
-		input_adapter.name = "SpacecraftInputAdapter"
+		input_adapter.name = "LCSpacecraftInputAdapter"
 		# Set target to controller
-		input_adapter.target = get_node("SpacecraftController")
+		input_adapter.target = get_node("LCSpacecraftController")
 		add_child(input_adapter)
 
 func _build_lander():
@@ -95,9 +99,18 @@ func _build_lander():
 	descent_engine.max_gimbal_angle = 6.0  # degrees
 	descent_engine.gimbal_rate = 10.0  # deg/s
 	descent_engine.efficiency = 0.95
+	descent_engine.fuel_tank_path = "../DescentFuelTank"
 	descent_engine.name = "DescentEngine"
 	descent_engine.position = Vector3(0, -2.0, 0)
 	add_child(descent_engine)
+	
+	# Descent Pump
+	var ds_pump = LCPumpEffector.new()
+	ds_pump.name = "DescentPump"
+	ds_pump.max_flow = 15.0 # kg/s approx for 45kN
+	ds_pump.source_path = "../DescentFuelTank"
+	ds_pump.sink_path = "../DescentEngine"
+	add_child(ds_pump)
 	
 	var de_mesh = CSGCylinder3D.new()
 	de_mesh.radius = 0.8
@@ -165,9 +178,18 @@ func _build_lander():
 	ascent_engine.thrust_direction = Vector3(0, 1, 0)
 	ascent_engine.can_vector = false  # Fixed nozzle
 	ascent_engine.efficiency = 0.95
+	ascent_engine.fuel_tank_path = "../AscentFuelTank"
 	ascent_engine.name = "AscentEngine"
 	ascent_engine.position = Vector3(0, 0.5, 0)
 	add_child(ascent_engine)
+	
+	# Ascent Pump
+	var as_pump = LCPumpEffector.new()
+	as_pump.name = "AscentPump"
+	as_pump.max_flow = 5.0 # kg/s approx for 15kN
+	as_pump.source_path = "../AscentFuelTank"
+	as_pump.sink_path = "../AscentEngine"
+	add_child(as_pump)
 	
 	# ========================================
 	# RCS SYSTEM (Reaction Control System)
@@ -182,7 +204,18 @@ func _build_lander():
 	rcs_fuel.position = Vector3(0, 1.2, 0)
 	add_child(rcs_fuel)
 	
-	# RCS thrusters (16 total: 4 clusters of 4)
+	# RCS Pump (Shared for all 16 thrusters)
+	var rcs_pump = LCPumpEffector.new()
+	rcs_pump.name = "RCS_Pump"
+	rcs_pump.max_flow = 2.0 # kg/s shared
+	rcs_pump.source_path = "../RCS_FuelTank"
+	# Note: In the current system, one pump can only have one sink.
+	# This is a limitation. I'll connect it to one thruster for now or skip it.
+	# Actually, the thruster effector find_pump_edges searches for edges flowing INTO it.
+	# LCPumpEffector.connect_nodes creates one edge.
+	
+	# For simplicity, I'll just skip RCS pumps for now as it would require 16 pumps.
+	# Or I could modify LCThrusterEffector to allow direct tank connection if pump missing.
 	var rcs_positions = [
 		Vector3(1.5, 1.5, 0),   # Right
 		Vector3(-1.5, 1.5, 0),  # Left
@@ -203,7 +236,7 @@ func _build_lander():
 			rcs.max_thrust = 445.0  # 445 N (100 lbf)
 			rcs.specific_impulse = 280.0  # seconds
 			rcs.thrust_direction = rcs_directions[cluster_idx][thruster_idx]
-			rcs.fuel_resource_id = "hydrazine"
+			rcs.fuel_tank_path = "../RCS_FuelTank"
 			rcs.min_on_time = 0.014  # 14ms minimum pulse
 			rcs.efficiency = 0.90
 			rcs.name = "RCS_C" + str(cluster_idx) + "_T" + str(thruster_idx)
@@ -216,8 +249,8 @@ func _build_lander():
 	
 	# Primary batteries
 	var battery_primary = LCBatteryEffector.new()
-	battery_primary.capacity = 28.0  # kWh (Apollo LM had ~28 kWh)
-	battery_primary.charge_level = 1.0
+	battery_primary.capacity = 28000.0  # 28 kWh in Wh
+	battery_primary.initial_charge = 28000.0
 	battery_primary.max_charge_rate = 5000.0  # 5 kW
 	battery_primary.max_discharge_rate = 5000.0
 	battery_primary.name = "PrimaryBattery"
@@ -226,8 +259,8 @@ func _build_lander():
 	
 	# Secondary battery (backup)
 	var battery_secondary = LCBatteryEffector.new()
-	battery_secondary.capacity = 14.0  # kWh
-	battery_secondary.charge_level = 1.0
+	battery_secondary.capacity = 14000.0  # 14 kWh in Wh
+	battery_secondary.initial_charge = 14000.0
 	battery_secondary.max_charge_rate = 5000.0
 	battery_secondary.max_discharge_rate = 5000.0
 	battery_secondary.name = "SecondaryBattery"

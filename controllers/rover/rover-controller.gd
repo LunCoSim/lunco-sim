@@ -91,11 +91,7 @@ func _ready():
 	if not parent is VehicleBody3D:
 		push_error("RoverController's parent must be a VehicleBody3D")
 	
-	# Add command executor
-	var executor = LCCommandExecutor.new()
-	executor.name = "CommandExecutor"
-	add_child(executor)
-	print("RoverController: _ready complete. Created executor: ", executor, " path: ", executor.get_path())
+	print("RoverController: _ready complete.")
 
 func _discover_wheels():
 	"""Automatically discover wheels if paths not set, or use explicit paths"""
@@ -130,7 +126,8 @@ func _find_wheel_by_name(wheel_name: String) -> LCWheelEffector:
 	if not parent:
 		return null
 	var wheel = parent.get_node_or_null(wheel_name)
-	if wheel and wheel is LCWheelEffector:
+	# Use duck typing to avoid class loading issues in some environments
+	if wheel and wheel.has_method("get_mass_contribution"):
 		return wheel
 	return null
 

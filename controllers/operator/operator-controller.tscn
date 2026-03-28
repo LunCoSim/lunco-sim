@@ -1,6 +1,10 @@
-[gd_scene load_steps=2 format=3 uid="uid://dpv63l3fgdrk5"]
+[gd_scene load_steps=3 format=3 uid="uid://dpv63l3fgdrk5"]
 
 [ext_resource type="Script" path="res://controllers/operator/operator-controller.gd" id="1_sct00"]
+[ext_resource type="Script" uid="uid://bn7j2357f6pp4" path="res://core/commands/command_executor.gd" id="2_executor"]
 
 [node name="OperatorController" type="Node3D"]
 script = ExtResource("1_sct00")
+
+[node name="CommandExecutor" type="Node" parent="."]
+script = ExtResource("2_executor")

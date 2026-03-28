@@ -40,6 +40,7 @@ var aiming_timer := 0.0
 # Previous state for change detection
 var _prev_move_vector := Vector3.ZERO
 var _prev_view_quat := Quaternion.IDENTITY
+var _prev_aim_rotation: float = 0.0
 var _prev_aiming := false
 var _prev_shooting := false
 
@@ -53,10 +54,6 @@ func _process(delta):
 	if not _target is LCCharacterController:
 		return
 	
-	# Only process input if we have authority over the character controller
-	if not _target.has_authority():
-		return
-		
 	# Check if input captured by UI
 	var can_process = should_process_input()
 	if not can_process:
@@ -101,6 +98,11 @@ func _process(delta):
 	if abs(view_quat.dot(_prev_view_quat)) < 0.9999:
 		_prev_view_quat = view_quat
 		_send_command("SET_VIEW_QUATERNION", {"x": view_quat.x, "y": view_quat.y, "z": view_quat.z, "w": view_quat.w})
+
+	var aim_rot = get_aim_rotation()
+	if abs(aim_rot - _prev_aim_rotation) > 0.01:
+		_prev_aim_rotation = aim_rot
+		_send_command("SET_AIM_ROTATION", {"value": aim_rot})
 
 	# --- Aiming Logic ---
 	var current_aim = false

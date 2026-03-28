@@ -1,9 +1,13 @@
-[gd_scene load_steps=2 format=3 uid="uid://btw1pbsrpnjx4"]
+[gd_scene load_steps=3 format=3 uid="uid://btw1pbsrpnjx4"]
 
 [ext_resource type="Script" path="res://controllers/spacecraft/spacecraft-controller.gd" id="1_u6u38"]
+[ext_resource type="Script" uid="uid://bn7j2357f6pp4" path="res://core/commands/command_executor.gd" id="2_executor"]
 
 [node name="SpacecraftController" type="Node3D"]
 script = ExtResource("1_u6u38")
+
+[node name="CommandExecutor" type="Node" parent="."]
+script = ExtResource("2_executor")
 
 [node name="Commands" type="Node" parent="."]
 

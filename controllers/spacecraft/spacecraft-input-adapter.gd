@@ -10,44 +10,45 @@ func _ready():
 var _prev_throttle := false
 var _prev_torque := Vector3.ZERO
 
-func _input(_event):
+func _physics_process(_delta):
 	var _target = get_resolved_target()
 	
 	# Only process input if the target is a spacecraft controller
-	var is_compatible_controller = _target is LCSpacecraftController
+	if not _target is LCSpacecraftController:
+		return
+
+	# Check if input is captured by UI
+	if not should_process_input():
+		if _prev_throttle:
+			_prev_throttle = false
+			_send_command("THROTTLE", {"enabled": false})
+		if _prev_torque != Vector3.ZERO:
+			_prev_torque = Vector3.ZERO
+			_send_command("ORIENTATION", {"x": 0.0, "y": 0.0, "z": 0.0})
+		return
+
+	# Throttle input
+	var new_throttle = Input.is_action_pressed("throttle")
 	
-	if is_compatible_controller:
-		# Check if input is captured by UI
-		if not should_process_input(_event):
-			if _prev_throttle:
-				_prev_throttle = false
-				_send_command("THROTTLE", {"enabled": false})
-			if _prev_torque != Vector3.ZERO:
-				_prev_torque = Vector3.ZERO
-				_send_command("ORIENTATION", {"x": 0.0, "y": 0.0, "z": 0.0})
-			return
+	if new_throttle != _prev_throttle:
+		_prev_throttle = new_throttle
+		_send_command("THROTTLE", {"enabled": new_throttle})
 
-		# Throttle input
-		var new_throttle = _prev_throttle
-		if _event.is_action_pressed("throttle", true):
-			new_throttle = true
-		elif _event.is_action_released("throttle"):
-			new_throttle = false
-		
-		if new_throttle != _prev_throttle:
-			_prev_throttle = new_throttle
-			_send_command("THROTTLE", {"enabled": new_throttle})
+	# Torque input (Orientation)
+	var torque_action := Vector3(
+		- Input.get_action_strength("pitch_up") + Input.get_action_strength("pitch_down"),
+		- Input.get_action_strength("yaw_right") + Input.get_action_strength("yaw_left"),
+		- Input.get_action_strength("roll_cw") + Input.get_action_strength("roll_ccw")
+	)
 
-		# Torque input
-		var torque_action := Vector3(
-			- Input.get_action_strength("pitch_up") + Input.get_action_strength("pitch_down"),
-			- Input.get_action_strength("yaw_right") + Input.get_action_strength("yaw_left"),
-			- Input.get_action_strength("roll_cw") + Input.get_action_strength("roll_ccw")
-		)
+	if not torque_action.is_equal_approx(_prev_torque):
+		_prev_torque = torque_action
+		_send_command("ORIENTATION", {"x": torque_action.x, "y": torque_action.y, "z": torque_action.z})
 
-		if not torque_action.is_equal_approx(_prev_torque):
-			_prev_torque = torque_action
-			_send_command("ORIENTATION", {"x": torque_action.x, "y": torque_action.y, "z": torque_action.z})
+func _input(_event):
+	# We use _physics_process for continuous polling, but we can still handle 
+	# one-off events here if needed in the future.
+	pass
 
 func _send_command(cmd_name: String, args: Dictionary):
 	var _target = get_resolved_target()

@@ -1,8 +1,9 @@
-[gd_scene load_steps=6 format=3 uid="uid://rover_rigid_entity"]
+[gd_scene load_steps=7 format=3 uid="uid://rover_rigid_entity"]
 
 [ext_resource type="Script" path="res://controllers/rover/rover_rigid_controller.gd" id="1_ctrl"]
 [ext_resource type="PackedScene" uid="uid://wheel_rigid_component" path="res://core/components/propulsion/wheel_rigid.tscn" id="2_wheel"]
 [ext_resource type="Script" path="res://controllers/rover/rover_rigid_input_adapter.gd" id="3_adapter"]
+[ext_resource type="Script" uid="uid://bn7j2357f6pp4" path="res://core/commands/command_executor.gd" id="2_executor"]
 
 [sub_resource type="BoxShape3D" id="BoxShape3D_chassis"]
 size = Vector3(1.5, 0.5, 2.0)
@@ -21,6 +22,9 @@ fl_wheel = NodePath("../WheelFL")
 fr_wheel = NodePath("../WheelFR")
 bl_wheel = NodePath("../WheelBL")
 br_wheel = NodePath("../WheelBR")
+
+[node name="CommandExecutor" type="Node" parent="RigidController"]
+script = ExtResource("2_executor")
 
 [node name="InputAdapter" type="Node" parent="RigidController"]
 script = ExtResource("3_adapter")

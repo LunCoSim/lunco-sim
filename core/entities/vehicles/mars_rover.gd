@@ -97,7 +97,9 @@ func _build_rover():
 		wheel.mass = 15.0  # kg per wheel
 		wheel.wheel_radius = 0.25  # 25cm radius
 		wheel.suspension_stiffness = 50.0
-		wheel.suspension_damping = 5.0
+		wheel.damping_compression = 5.0
+		wheel.damping_relaxation = 5.0
+
 		wheel.max_torque = 200.0  # Nm
 		
 		# Configure traction and steering
@@ -146,8 +148,8 @@ func _build_rover():
 	
 	# Lithium-ion battery (for peak power demands)
 	var battery = LCBatteryEffector.new()
-	battery.capacity = 5.0  # 5 kWh (42 Ah at 28V)
-	battery.charge_level = 1.0
+	battery.capacity = 5000.0  # 5 kWh in Wh
+	battery.initial_charge = 5000.0
 	battery.max_charge_rate = 200.0  # 200W charging
 	battery.max_discharge_rate = 500.0  # 500W peak discharge
 	battery.name = "Battery"

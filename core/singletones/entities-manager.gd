@@ -56,12 +56,24 @@ func _init():
 		Caches[entity] = load(path)
 		
 func make_entity(entity):
+	if not Paths.has(entity):
+		push_error("EntitiesManager: Unknown entity: " + str(entity))
+		return null
+		
 	var path : String = Paths[entity]
-	#return .instantiate()
-	#
-	if Caches.get(entity) != null:
+	
+	if Caches.get(entity) != null and Caches[entity] is PackedScene:
 		return Caches[entity].instantiate()
 	else:
-		Caches[entity] = ResourceLoader.load_threaded_get(path)
-		return Caches[entity].instantiate()
+		var scene = ResourceLoader.load_threaded_get(path)
+		if scene == null:
+			# Fallback to sync load if threaded get fails (e.g. not ready)
+			scene = load(path)
+			
+		if scene != null:
+			Caches[entity] = scene
+			return scene.instantiate()
+		else:
+			push_error("EntitiesManager: Failed to load scene for entity: " + str(entity) + " at path: " + path)
+			return null
 ##

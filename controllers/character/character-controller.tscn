@@ -1,6 +1,10 @@
-[gd_scene load_steps=2 format=3 uid="uid://cibc2v3g1bk4g"]
+[gd_scene load_steps=3 format=3 uid="uid://cibc2v3g1bk4g"]
 
 [ext_resource type="Script" uid="uid://co708qpvy2jp8" path="res://controllers/character/character-controller.gd" id="1_541sa"]
+[ext_resource type="Script" uid="uid://bn7j2357f6pp4" path="res://core/commands/command_executor.gd" id="2_executor"]
 
 [node name="CharacterController" type="Node3D"]
 script = ExtResource("1_541sa")
+
+[node name="CommandExecutor" type="Node" parent="."]
+script = ExtResource("2_executor")

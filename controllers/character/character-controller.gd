@@ -37,6 +37,7 @@ var root_motion = Transform3D()
 # State variables (set via commands)
 var move_vector := Vector3.ZERO
 var view_quaternion := Quaternion.IDENTITY
+@export var aim_rotation: float = 0.0
 @export var input_motion = Vector2() # Raw input synced from client
 # input_motion is no longer used for direction calculation, but kept for legacy sync and potential animation speed blend.
 # actually we can just use move_vector length.
@@ -52,30 +53,18 @@ func _ready():
 	if character_body == null:
 		character_body = get_parent()
 		
-	# Add command executor
-	var executor = LCCommandExecutor.new()
-	executor.name = "CommandExecutor"
-	add_child(executor)
-	
 	# Default view
 	view_quaternion = Quaternion.IDENTITY
 
 func _physics_process(delta: float):	
-	# Check if we have authority over the parent entity
+	# Check if we have authority over the parent entity (e.g., CharacterBody3D)
+	# Physics and simulation MUST only run on the authoritative peer.
 	if has_authority():
 		apply_input(delta)
 
 func apply_input(delta: float):
 	if character_body == null:
 		return
-	
-	# Interpolate motion for smoothness
-	# motion was Vector2 previously, but now we work with Vector3 world direction
-	# Let's keep 'motion' as the smoothed version of 'move_vector'
-	# Wait, original code had motion as Vector2. Let's adapt.
-	
-	# Move Vector is the target world velocity (normalized * intensity)
-	# We interpret move_vector.length() as speed intensity
 	
 	# Jump/in-air logic.
 	airborne_time += delta
@@ -92,6 +81,7 @@ func apply_input(delta: float):
 		airborne_time = MIN_AIRBORNE_TIME
 		jump.emit()
 
+	# Reset jumping state after processing.
 	jumping = false
 
 	if on_air:
@@ -104,9 +94,6 @@ func apply_input(delta: float):
 
 		if shooting and character_body.fire_cooldown.time_left == 0:
 			var shoot_origin = character_body.shoot_from.global_transform.origin
-			# Shoot direction is forward from orientation (since we aligned with view)
-			# or we can use the explicit shoot_target if provided. 
-			# Original code used shoot_target.
 			var shoot_dir = (shoot_target - shoot_origin).normalized()
 			
 			# If no target, use forward
@@ -132,7 +119,7 @@ func apply_input(delta: float):
 			var q_to = Transform3D().looking_at(target_dir, Vector3.UP).basis.get_rotation_quaternion()
 			orientation.basis = Basis(q_from.slerp(q_to, delta * ROTATION_INTERPOLATE_SPEED))
 
-	# Apply root motion to orientation.
+	# Apply root motion or direct movement to orientation.
 	if use_root_motion:
 		orientation *= root_motion
 	else:
@@ -141,6 +128,8 @@ func apply_input(delta: float):
 		orientation.origin += target_velocity * move_speed * delta
 
 	do_move(delta)
+	
+	# Reset orientation origin after move and ensure Basis is clean.
 	orientation.origin = Vector3()
 	orientation = orientation.orthonormalized()
 	
@@ -150,7 +139,10 @@ func do_move(delta):
 	character_body.velocity.x = h_velocity.x
 	character_body.velocity.z = h_velocity.z
 	character_body.velocity += gravity * delta
-	#character_body.set_velocity(character_body.velocity)
+	
+	# Apply orientation to the character body
+	character_body.global_transform.basis = orientation.basis
+	
 	character_body.set_up_direction(Vector3.UP)
 	character_body.move_and_slide()
 
@@ -187,6 +179,10 @@ func cmd_set_move_vector(x: float, y: float, z: float):
 func cmd_set_view_quaternion(x: float, y: float, z: float, w: float):
 	view_quaternion = Quaternion(x, y, z, w)
 	return "View quaternion set"
+
+func cmd_set_aim_rotation(value: float):
+	aim_rotation = value
+	return "Aim rotation set"
 
 func cmd_set_aiming(is_aiming: bool):
 	aiming = is_aiming

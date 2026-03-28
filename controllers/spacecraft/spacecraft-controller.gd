@@ -18,11 +18,6 @@ signal thrusted(enabled)
 func _ready():
 	print("LCSpacecraftController: Ready. Parent: ", parent.name if parent else "NULL")
 	
-	# Add command executor
-	var executor = LCCommandExecutor.new()
-	executor.name = "CommandExecutor"
-	add_child(executor)
-	
 	if parent:
 		print("LCSpacecraftController: Parent methods: ", parent.get_method_list().map(func(m): return m.name).filter(func(n): return "control" in n))
 
