@@ -4,6 +4,11 @@
 
 set -e
 
+# Ensure we are in the project root
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+cd "$PROJECT_ROOT"
+
 # Configuration - modify these paths if your certificates are in different locations
 DOMAIN="langrenus.lunco.space"
 CERT_DIR=".cert"

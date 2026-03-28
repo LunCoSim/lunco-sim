@@ -11,8 +11,9 @@ cd "$SCRIPT_DIR/../.."
 # Default Godot path if not provided
 GODOT_BIN=${1:-"godot"}
 
-if [ ! -f "$GODOT_BIN" ]; then
-    echo "Error: Godot binary not found at $GODOT_BIN"
+# Check if it's an executable in the PATH or a file
+if ! command -v "$GODOT_BIN" &> /dev/null; then
+    echo "Error: Godot binary not found: $GODOT_BIN"
     echo "Usage: $0 [path_to_godot]"
     exit 1
 fi
