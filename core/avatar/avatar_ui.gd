@@ -254,7 +254,13 @@ func update_entities(entities):
 		# Check if the entity has a multiplayer authority
 		var owner_id = entity.get_multiplayer_authority()
 		if owner_id != 1:  # Skip server authority
-			entity_name += "\n#" + str(owner_id)
+			var owner_name = "#" + str(owner_id)
+			if Users and Users.users.has(owner_id):
+				var owner_profile = Users.users[owner_id]
+				if owner_profile.username != "":
+					owner_name = owner_profile.username
+			
+			entity_name += "\n(" + owner_name + ")"
 		
 		print("UI: Creating button for entity ", entity_name, " at index ", idx)
 		button.text = entity_name

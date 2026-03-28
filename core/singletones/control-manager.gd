@@ -166,3 +166,6 @@ func _client_sync_control_state(server_controlled_entities):
 			node.set_multiplayer_authority(peer_id, true)
 		else:
 			print("ControlManager: Node not found yet for path ", entity_path, ". Authority will be set on spawn.")
+			
+		# Emit signal so UI and other systems update
+		control_granted.emit(peer_id, entity_path)
