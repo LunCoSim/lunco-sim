@@ -14,6 +14,8 @@ var ui_display_manager = null
 # Path to the avatar node (assuming it exists in the scene)
 @export var avatar_path: NodePath
 
+const FLOATING_MANAGER_SCRIPT = preload("res://apps/3dsim/managers/floating_screen_manager.gd")
+
 func _ready():
 	# Add to group for easy identification
 	add_to_group("display_controller")
@@ -86,13 +88,17 @@ func _connect_to_avatar():
 				avatar = potential_avatars[0]
 				print("DisplayController: Found Avatar of class LCAvatar: ", avatar)
 		
-		# Final attempt - look for a node named "Avatar" in the scene
+		# Final attempt - look for a node named "Avatar" in the tree
 		if not avatar:
-			avatar = get_tree().get_first_node_in_group("Avatar")
+			avatar = get_tree().root.find_child("Avatar", true, false)
 			if avatar:
-				print("DisplayController: Found node named Avatar: ", avatar)
+				print("DisplayController: Found node named Avatar via search: ", avatar)
 	
 	if avatar:
+		print("DisplayController: Found Avatar: ", avatar.name, " (", avatar.get_path(), ")")
+		# Setup floating manager
+		_setup_floating_manager(avatar)
+		
 		# Find the UiDisplayManager in the avatar
 		ui_display_manager = avatar.get_node_or_null("UiDisplayManager")
 		
@@ -104,6 +110,20 @@ func _connect_to_avatar():
 			print("DisplayController: Avatar does not have a UiDisplayManager component: ", avatar)
 	else:
 		print("DisplayController: Could not find any Avatar node in the scene")
+
+func _setup_floating_manager(avatar: Node) -> void:
+	if not avatar:
+		return
+		
+	# Check if already injected to prevent duplicates
+	if avatar.has_node("FloatingScreenManager"):
+		print("DisplayController: FloatingScreenManager already exists on Avatar")
+		return
+		
+	print("DisplayController: Injecting FloatingScreenManager into Avatar")
+	var floating_manager = FLOATING_MANAGER_SCRIPT.new()
+	floating_manager.name = "FloatingScreenManager"
+	avatar.add_child(floating_manager)
 
 # Toggle the supply chain display directly (for backwards compatibility or custom control)
 func toggle_supply_chain_display():

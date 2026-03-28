@@ -25,53 +25,66 @@ func _ready():
 		push_warning("FloatingScreenManager: BuilderManager not found")
 
 func _input(event):
-	if not current_target:
-		return
-	
 	# Check if input is captured by other UI (like console)
 	var avatar = get_parent()
 	if avatar and "ui_display_manager" in avatar and avatar.ui_display_manager:
-		if avatar.ui_display_manager.is_input_captured():
+		if avatar.ui_display_manager.is_input_captured(event):
 			return
 	
-	# Toggle floating display with 'G'
+	# Toggle floating display with 'G' (always allowed to toggle the preference)
 	if event is InputEventKey and event.pressed and not event.echo:
 		if event.keycode == KEY_G and not event.shift_pressed:
 			toggle_floating_display()
 			get_viewport().set_input_as_handled()
+			return
 		
-		# Open fullscreen with Shift+G
+		# Open fullscreen with Shift+G (requires target)
 		elif event.keycode == KEY_G and event.shift_pressed:
-			show_fullscreen()
-			get_viewport().set_input_as_handled()
+			if current_target:
+				show_fullscreen()
+				get_viewport().set_input_as_handled()
+			return
 		
 		# Close fullscreen with Esc
 		elif event.keycode == KEY_ESCAPE and current_mode == DisplayMode.FULLSCREEN:
 			hide_fullscreen()
 			get_viewport().set_input_as_handled()
+			return
+	
+	if not current_target:
+		return
 
 func _on_entity_selected(entity):
+	print("FloatingScreenManager: Entity selected: ", entity.name if entity else "null")
 	if entity == current_target:
 		return
 		
 	current_target = entity
 	
-	if entity and (entity is LCVehicle or entity.get("solver_graph")):
+	if entity and (entity is LCVehicle or entity.has_method("get_solver_graph") or entity.get("solver_graph") != null):
+		print("FloatingScreenManager: Target meets criteria, floating_enabled: ", floating_enabled)
 		if floating_enabled:
 			_show_floating_display(entity)
 	else:
+		print("FloatingScreenManager: Target DOES NOT meet criteria (no solver_graph)")
 		_hide_all_displays()
 
 func toggle_floating_display():
 	floating_enabled = !floating_enabled
+	print("FloatingScreenManager: Floating display ", "enabled" if floating_enabled else "disabled", " (Target: ", current_target.name if current_target else "null", ")")
 	if floating_enabled and current_target:
 		_show_floating_display(current_target)
 	else:
 		_hide_floating_display()
-	print("FloatingScreenManager: Floating display ", "enabled" if floating_enabled else "disabled")
 
 func show_fullscreen():
-	if not current_target or not current_target.get("solver_graph"):
+	if not current_target:
+		print("FloatingScreenManager: Cannot show fullscreen, no target")
+		return
+		
+	var graph = current_target.get("solver_graph")
+	if not graph:
+		print("FloatingScreenManager: Cannot show fullscreen, no solver_graph on ", current_target.name)
 		return
 	
 	_hide_floating_display()
@@ -81,13 +94,13 @@ func show_fullscreen():
 	
 	if viewer_fullscreen and viewer_instance_fullscreen:
 		viewer_fullscreen.visible = true
-		viewer_instance_fullscreen.set_graph(current_target.solver_graph)
+		viewer_instance_fullscreen.set_graph(graph)
 		current_mode = DisplayMode.FULLSCREEN
 		
 		# Pause game or capture input
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 		
-		print("FloatingScreenManager: Fullscreen mode activated")
+		print("FloatingScreenManager: Fullscreen mode activated for ", current_target.name)
 
 func hide_fullscreen():
 	if viewer_fullscreen:
@@ -102,6 +115,7 @@ func hide_fullscreen():
 
 func _show_floating_display(entity):
 	if not viewer_3d:
+		print("FloatingScreenManager: Creating 3D viewer")
 		_create_3d_viewer()
 	
 	if viewer_3d and viewer_instance_3d:
@@ -112,9 +126,12 @@ func _show_floating_display(entity):
 		viewer_3d.global_position = entity.global_position + Vector3(5.0, 3.0, 0.0)
 		
 		# Set graph
-		if entity.get("solver_graph"):
-			viewer_instance_3d.set_graph(entity.solver_graph)
-			print("FloatingScreenManager: Showing floating graph for ", entity.name, " with ", entity.solver_graph.nodes.size(), " nodes")
+		var graph = entity.get("solver_graph")
+		if graph:
+			viewer_instance_3d.set_graph(graph)
+			print("FloatingScreenManager: Showing floating graph for ", entity.name, " with ", graph.nodes.size(), " nodes")
+		else:
+			print("FloatingScreenManager: No graph found on ", entity.name)
 
 func _hide_floating_display():
 	if viewer_3d:
