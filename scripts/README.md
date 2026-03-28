@@ -38,6 +38,7 @@ Scripts for running simulation servers and persistent processes.
 
 - **`start_luncosim_server.sh`**: Starts the headless LunCoSim simulation server.
 - **`start_luncosim_daemon.sh`**: Starts the LunCoSim server in background mode with a PID file.
+- **`start_mcc_openmct.sh`**: Starts the OpenMCT Mission Control Center server.
 - **`web_server.py`**: Local HTTPS server for testing Godot web builds with COOP/COEP headers.
 - **`remote_console.py`**: Interactive console for remote simulation control via Telemetry API.
 
