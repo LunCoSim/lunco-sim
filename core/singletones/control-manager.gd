@@ -150,6 +150,7 @@ func _on_peer_disconnected(id):
 
 @rpc
 func _client_sync_control_state(server_controlled_entities):
+	print("ControlManager: Syncing control state from server: ", server_controlled_entities)
 	controlled_entities = server_controlled_entities
 	peer_controlled_entities.clear()
 	for entity_path in controlled_entities:
@@ -157,3 +158,11 @@ func _client_sync_control_state(server_controlled_entities):
 		if peer_id not in peer_controlled_entities:
 			peer_controlled_entities[peer_id] = []
 		peer_controlled_entities[peer_id].append(entity_path)
+		
+		# Set authority for each entity if node exists
+		var node = get_node_or_null(entity_path)
+		if node:
+			print("ControlManager: Setting authority for existing node ", entity_path, " to peer ", peer_id)
+			node.set_multiplayer_authority(peer_id, true)
+		else:
+			print("ControlManager: Node not found yet for path ", entity_path, ". Authority will be set on spawn.")

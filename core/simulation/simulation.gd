@@ -160,7 +160,8 @@ func control_released_notify(path):
 	control_released.emit(path)
 	
 func _on_control_granted(peer_id, path):
-	print("Simulation: Control granted for entity: ", path)
+	print("Simulation: Control granted for peer ", peer_id, " on entity: ", path)
+	owners[path] = peer_id
 
 func _on_control_released(peer_id, entity_path: NodePath):
 	print("Simulation: Control released for entity: ", entity_path)
@@ -302,6 +303,14 @@ func cmd_list_entities() -> Array:
 
 func _on_multiplayer_spawner_spawned(entity):	
 	entities.append(entity)
+	
+	# Check if someone is already controlling this entity according to ControlManager
+	var entity_path = entity.get_path()
+	var controlling_peer = ControlManager.get_controlling_peer(entity_path)
+	if controlling_peer != -1:
+		print("Simulation: Setting authority for newly spawned entity ", entity.name, " to peer ", controlling_peer)
+		entity.set_multiplayer_authority(controlling_peer, true)
+
 	entity_spawned.emit(entity)
 	entities_updated.emit(entities)
 	
