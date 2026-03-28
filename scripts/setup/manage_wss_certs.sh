@@ -91,23 +91,23 @@ case "$COMMAND" in
         fi
         
         # Copy certificates
-        CERT_DIR="$PROJECT_DIR/pyscripts"
+        CERT_DIR="$PROJECT_DIR/.cert"
         mkdir -p "$CERT_DIR"
         
         print_info "Copying certificates to $CERT_DIR..."
-        sudo cp "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" "$CERT_DIR/server.crt"
-        sudo cp "/etc/letsencrypt/live/$DOMAIN/privkey.pem" "$CERT_DIR/server.key"
+        sudo cp "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" "$CERT_DIR/fullchain.pem"
+        sudo cp "/etc/letsencrypt/live/$DOMAIN/privkey.pem" "$CERT_DIR/privkey.pem"
         
         # Fix permissions
-        sudo chown "$USER:$USER" "$CERT_DIR/server.crt"
-        sudo chown "$USER:$USER" "$CERT_DIR/server.key"
-        chmod 644 "$CERT_DIR/server.crt"
-        chmod 600 "$CERT_DIR/server.key"
+        sudo chown "$USER:$USER" "$CERT_DIR/fullchain.pem"
+        sudo chown "$USER:$USER" "$CERT_DIR/privkey.pem"
+        chmod 644 "$CERT_DIR/fullchain.pem"
+        chmod 600 "$CERT_DIR/privkey.pem"
         
         print_success "Certificates copied and permissions fixed"
         
         # Verify
-        if [ -f "$CERT_DIR/server.crt" ] && [ -f "$CERT_DIR/server.key" ]; then
+        if [ -f "$CERT_DIR/fullchain.pem" ] && [ -f "$CERT_DIR/privkey.pem" ]; then
             print_success "Certificate files verified"
         else
             print_error "Certificate files not found!"
@@ -120,11 +120,11 @@ case "$COMMAND" in
         
         sudo tee "$RENEWAL_HOOK" > /dev/null <<EOF
 #!/bin/bash
-cp /etc/letsencrypt/live/$DOMAIN/fullchain.pem $CERT_DIR/server.crt
-cp /etc/letsencrypt/live/$DOMAIN/privkey.pem $CERT_DIR/server.key
-chown $USER:$USER $CERT_DIR/server.*
-chmod 644 $CERT_DIR/server.crt
-chmod 600 $CERT_DIR/server.key
+cp /etc/letsencrypt/live/$DOMAIN/fullchain.pem $CERT_DIR/fullchain.pem
+cp /etc/letsencrypt/live/$DOMAIN/privkey.pem $CERT_DIR/privkey.pem
+chown $USER:$USER $CERT_DIR/*.pem
+chmod 644 $CERT_DIR/fullchain.pem
+chmod 600 $CERT_DIR/privkey.pem
 echo "✅ LunCo certificates renewed: \$(date)" >> /var/log/letsencrypt/lunco-renewal.log
 EOF
         
@@ -138,8 +138,8 @@ EOF
         
         print_header "✅ WSS Setup Complete!"
         echo ""
-        print_success "Certificate: $CERT_DIR/server.crt"
-        print_success "Private Key: $CERT_DIR/server.key"
+        print_success "Certificate: $CERT_DIR/fullchain.pem"
+        print_success "Private Key: $CERT_DIR/privkey.pem"
         echo ""
         echo "Next steps:"
         echo "1. Update Godot code to use tls=true"
@@ -170,10 +170,10 @@ EOF
         sudo certbot renew --force-renewal -d "$DOMAIN"
         
         # Copy renewed certificates
-        CERT_DIR="$PROJECT_DIR/pyscripts"
-        sudo cp "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" "$CERT_DIR/server.crt"
-        sudo cp "/etc/letsencrypt/live/$DOMAIN/privkey.pem" "$CERT_DIR/server.key"
-        sudo chown "$USER:$USER" "$CERT_DIR/server."*
+        CERT_DIR="$PROJECT_DIR/.cert"
+        sudo cp "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" "$CERT_DIR/fullchain.pem"
+        sudo cp "/etc/letsencrypt/live/$DOMAIN/privkey.pem" "$CERT_DIR/privkey.pem"
+        sudo chown "$USER:$USER" "$CERT_DIR/"*.pem
         
         print_success "Certificate renewed and copied"
         echo "Restart your Godot server to use the new certificate"
@@ -234,32 +234,32 @@ EOF
         
         echo ""
         print_info "2. Checking certificate files..."
-        CERT_DIR="$PROJECT_DIR/pyscripts"
+        CERT_DIR="$PROJECT_DIR/.cert"
         
-        if [ -f "$CERT_DIR/server.crt" ]; then
-            print_success "Found: $CERT_DIR/server.crt"
+        if [ -f "$CERT_DIR/fullchain.pem" ]; then
+            print_success "Found: $CERT_DIR/fullchain.pem"
         else
-            print_error "Missing: $CERT_DIR/server.crt"
+            print_error "Missing: $CERT_DIR/fullchain.pem"
         fi
         
-        if [ -f "$CERT_DIR/server.key" ]; then
-            print_success "Found: $CERT_DIR/server.key"
+        if [ -f "$CERT_DIR/privkey.pem" ]; then
+            print_success "Found: $CERT_DIR/privkey.pem"
         else
-            print_error "Missing: $CERT_DIR/server.key"
+            print_error "Missing: $CERT_DIR/privkey.pem"
         fi
         
         echo ""
         print_info "3. Checking certificate validity..."
-        if [ -f "$CERT_DIR/server.crt" ]; then
-            openssl x509 -in "$CERT_DIR/server.crt" -noout -text | grep -A 1 "Subject:" || true
+        if [ -f "$CERT_DIR/fullchain.pem" ]; then
+            openssl x509 -in "$CERT_DIR/fullchain.pem" -noout -text | grep -A 1 "Subject:" || true
             
-            EXPIRY=$(openssl x509 -enddate -noout -in "$CERT_DIR/server.crt" | cut -d= -f2)
+            EXPIRY=$(openssl x509 -enddate -noout -in "$CERT_DIR/fullchain.pem" | cut -d= -f2)
             print_success "Certificate expires: $EXPIRY"
         fi
         
         echo ""
         print_info "4. Checking permissions..."
-        ls -l "$CERT_DIR/server."* 2>/dev/null || print_warning "Certificate files not found"
+        ls -l "$CERT_DIR/"*.pem 2>/dev/null || print_warning "Certificate files not found"
         
         echo ""
         print_header "Verification Complete"

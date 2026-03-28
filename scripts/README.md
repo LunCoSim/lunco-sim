@@ -38,6 +38,8 @@ Scripts for running simulation servers and persistent processes.
 
 - **`start_luncosim_server.sh`**: Starts the headless LunCoSim simulation server.
 - **`start_luncosim_daemon.sh`**: Starts the LunCoSim server in background mode with a PID file.
+- **`web_server.py`**: Local HTTPS server for testing Godot web builds with COOP/COEP headers.
+- **`remote_console.py`**: Interactive console for remote simulation control via Telemetry API.
 
 ### 📂 Development & CI (`scripts/dev/`)
 Scripts for testing, verification, and build management.
@@ -45,6 +47,7 @@ Scripts for testing, verification, and build management.
 - **`test_modelica_app.sh`**: Executes tests for the Modelica application.
 - **`gen_git_hash.sh`**: Generates a version file based on the current Git hash.
 - **`check_telemetry_api.sh`**: Diagnostic tool to verify telemetry API and entity discovery.
+- **`displacement_to_normal.py`**: Utility for generating normal maps from displacement maps.
 
 ---
 

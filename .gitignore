@@ -31,3 +31,6 @@ git_hash.txt
 # Agentic skills
 .agent/
 .agents/
+
+# Remote console commands history
+remote_console_commands_history.txt

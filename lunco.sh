@@ -28,6 +28,9 @@ usage() {
     echo "  run      Run simulation and servers"
     echo "    server [godot_path]    Start headless simulation server"
     echo "    persistent             Start Godot in persistent background mode"
+    echo "    web [args]             Start Python web server for web builds"
+    echo "    mcc [port]             Start OpenMCT Mission Control Center"
+    echo "    console [args]         Start remote interactive console"
     echo ""
     echo "  test [godot_path]        Run Modelica tests"
     echo "  verify                   Verify telemetry and WSS setup"
@@ -80,6 +83,15 @@ case "$1" in
                 ;;
             persistent)
                 "$SCRIPTS_ROOT/run/start_luncosim_daemon.sh" "${3:-$DEFAULT_GODOT}"
+                ;;
+            web)
+                python3 "$SCRIPTS_ROOT/run/web_server.py" "${@:3}"
+                ;;
+            mcc)
+                "$SCRIPTS_ROOT/run/start_mcc_openmct.sh" "${3:-8080}"
+                ;;
+            console)
+                python3 "$SCRIPTS_ROOT/run/remote_console.py" "${@:3}"
                 ;;
             *)
                 usage

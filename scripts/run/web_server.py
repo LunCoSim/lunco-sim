@@ -37,10 +37,18 @@ def serve(root, port, run_browser):
     Handler = CORSRequestHandler
 
     script_dir = Path(__file__).resolve().parent
-    cert_path = script_dir / "server.crt"
-    key_path = script_dir / "server.key"
+    project_root = script_dir.parent.parent
+    
+    # Strictly use .cert/ in project root
+    cert_path = project_root / ".cert" / "fullchain.pem"
+    key_path = project_root / ".cert" / "privkey.pem"
+    
+    if not cert_path.exists() or not key_path.exists():
+        print(f"CRITICAL ERROR: Certificates NOT found in {project_root / '.cert'}")
+        print("Please run './lunco.sh setup wss' or place fullchain.pem/privkey.pem in .cert/ directory.")
+        sys.exit(1)
 
-    print(f"cert: {cert_path}, key: {key_path}")
+    print(f"Using cert: {cert_path}, key: {key_path}")
     with socketserver.TCPServer(("", port), Handler) as httpd:
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         context.load_cert_chain(certfile=str(cert_path), keyfile=str(key_path))

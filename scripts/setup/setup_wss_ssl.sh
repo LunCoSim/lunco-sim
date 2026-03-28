@@ -7,7 +7,7 @@ set -e
 DOMAIN="${1:-langrenus.lunco.space}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LUNCO_PROJECT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
-CERT_DIR="$LUNCO_PROJECT_DIR/pyscripts"
+CERT_DIR="$LUNCO_PROJECT_DIR/.cert"
 
 echo "🔒 WSS Setup Script for LunCo"
 echo "=============================="
@@ -31,27 +31,21 @@ else
 fi
 
 # Copy certificates to project
-echo "📋 Copying certificates to $CERT_DIR and .cert/..."
-mkdir -p "$LUNCO_PROJECT_DIR/.cert"
-sudo cp "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" "$CERT_DIR/server.crt"
-sudo cp "/etc/letsencrypt/live/$DOMAIN/privkey.pem" "$CERT_DIR/server.key"
-sudo cp "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" "$LUNCO_PROJECT_DIR/.cert/fullchain.pem"
-sudo cp "/etc/letsencrypt/live/$DOMAIN/privkey.pem" "$LUNCO_PROJECT_DIR/.cert/privkey.pem"
+echo "📋 Copying certificates to $CERT_DIR..."
+mkdir -p "$CERT_DIR"
+sudo cp "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" "$CERT_DIR/fullchain.pem"
+sudo cp "/etc/letsencrypt/live/$DOMAIN/privkey.pem" "$CERT_DIR/privkey.pem"
 
 # Fix permissions
 echo "🔓 Fixing permissions..."
-sudo chown "$USER:$USER" "$CERT_DIR/server.crt"
-sudo chown "$USER:$USER" "$CERT_DIR/server.key"
-sudo chown "$USER:$USER" "$LUNCO_PROJECT_DIR/.cert/fullchain.pem"
-sudo chown "$USER:$USER" "$LUNCO_PROJECT_DIR/.cert/privkey.pem"
-chmod 600 "$CERT_DIR/server.key"
-chmod 644 "$CERT_DIR/server.crt"
-chmod 600 "$LUNCO_PROJECT_DIR/.cert/privkey.pem"
-chmod 644 "$LUNCO_PROJECT_DIR/.cert/fullchain.pem"
+sudo chown "$USER:$USER" "$CERT_DIR/fullchain.pem"
+sudo chown "$USER:$USER" "$CERT_DIR/privkey.pem"
+chmod 600 "$CERT_DIR/privkey.pem"
+chmod 644 "$CERT_DIR/fullchain.pem"
 
 # Verify certificates
 echo "✔️  Verifying certificates..."
-openssl x509 -in "$CERT_DIR/server.crt" -noout -text | grep -A 2 "Subject:"
+openssl x509 -in "$CERT_DIR/fullchain.pem" -noout -text | grep -A 2 "Subject:"
 echo ""
 
 # Create renewal hook
@@ -60,19 +54,12 @@ RENEWAL_HOOK="/etc/letsencrypt/renewal-hooks/post/lunco-renewal.sh"
 
 sudo tee "$RENEWAL_HOOK" > /dev/null <<EOF
 #!/bin/bash
-# Sync to pyscripts/
-cp /etc/letsencrypt/live/$DOMAIN/fullchain.pem $CERT_DIR/server.crt
-cp /etc/letsencrypt/live/$DOMAIN/privkey.pem $CERT_DIR/server.key
-chown $USER:$USER $CERT_DIR/server.*
-chmod 600 $CERT_DIR/server.key
-chmod 644 $CERT_DIR/server.crt
-
 # Sync to .cert/
-cp /etc/letsencrypt/live/$DOMAIN/fullchain.pem $LUNCO_PROJECT_DIR/.cert/fullchain.pem
-cp /etc/letsencrypt/live/$DOMAIN/privkey.pem $LUNCO_PROJECT_DIR/.cert/privkey.pem
-chown $USER:$USER $LUNCO_PROJECT_DIR/.cert/*.pem
-chmod 600 $LUNCO_PROJECT_DIR/.cert/privkey.pem
-chmod 644 $LUNCO_PROJECT_DIR/.cert/fullchain.pem
+cp /etc/letsencrypt/live/$DOMAIN/fullchain.pem $CERT_DIR/fullchain.pem
+cp /etc/letsencrypt/live/$DOMAIN/privkey.pem $CERT_DIR/privkey.pem
+chown $USER:$USER $CERT_DIR/*.pem
+chmod 600 $CERT_DIR/privkey.pem
+chmod 644 $CERT_DIR/fullchain.pem
 
 echo "🔄 LunCo certificates renewed at \$(date)" >> /var/log/letsencrypt/lunco-renewal.log
 EOF
