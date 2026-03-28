@@ -86,18 +86,33 @@ func _ready():
 # RPC
 ## TBD: That's a factory method that spawns entities
 @rpc("any_peer", "call_local", "reliable")
-func spawn(_entity: EntitiesDB.Entities, global_position=null): #TBD think of a class entity
+func spawn(_entity, global_position=null): #TBD think of a class entity
+	print("Simulation: spawn RPC received for entity id: ", _entity, " from peer: ", multiplayer.get_remote_sender_id())
 	if multiplayer.is_server():
+		var entity_enum_name = EntitiesDB.Entities.keys()[_entity]
 		var entity = EntitiesDB.make_entity(_entity)
+		
 		if entity != null:
+			# Deterministic naming: Type_Count (e.g., Starship_1)
+			var count = 1
+			var base_name = entity_enum_name
+			var final_name = base_name
+			while spawn_node.has_node(final_name):
+				count += 1
+				final_name = base_name + "_" + str(count)
+			
+			entity.name = final_name
+			print("Simulation: Spawning entity with name: ", entity.name)
+			
 			if global_position != null:
 				entity.position = spawn_node.to_local(global_position)
 			else:
 				entity.position = spawn_node.global_position
 			
 			spawn_node.add_child(entity, true)
-			
 			_on_multiplayer_spawner_spawned(entity)
+		else:
+			push_error("Simulation: Failed to make entity for id: " + str(_entity))
 
 @rpc("any_peer", "call_local", "reliable")
 func set_authority(path, _owner):

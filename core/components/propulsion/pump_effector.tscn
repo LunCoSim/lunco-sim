@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3 uid="uid://pump_effector"]
+
+[ext_resource type="Script" path="res://core/effectors/dynamic/pump-effector.gd" id="1_script"]
+
+[node name="Pump" type="Node3D"]
+script = ExtResource("1_script")

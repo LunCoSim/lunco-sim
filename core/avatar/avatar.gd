@@ -601,9 +601,12 @@ func camera_global_position():
 
 ## Handles entity spawning requests from UI
 func _on_select_entity_to_spawn(entity_id=0, spawn_position=null):
+	print("Avatar: _on_select_entity_to_spawn called for entity_id: ", entity_id)
 	if is_multiplayer_authority():
+		print("Avatar: Sending spawn RPC to server (as authority/local)")
 		get_parent().spawn.rpc_id(1, entity_id, spawn_position)
 	else:
+		print("Avatar: Sending spawn RPC to server (as client)")
 		get_parent().spawn.rpc_id(1, entity_id, spawn_position)
 
 func _on_existing_entity_selected(idx):

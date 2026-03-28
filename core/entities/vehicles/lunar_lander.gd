@@ -21,15 +21,15 @@ func _ready():
 		
 	# Ensure controller exists
 	if not has_node("LCSpacecraftController"):
-		# In a real scenario, this should be in the .tscn
-		# But for this procedural entity, we'll add it if missing
-		var controller = LCSpacecraftController.new()
+		var controller_scene = load("res://controllers/spacecraft/spacecraft-controller.tscn")
+		var controller = controller_scene.instantiate()
 		controller.name = "LCSpacecraftController"
 		add_child(controller)
 		
 	# Ensure input adapter exists
 	if not has_node("LCSpacecraftInputAdapter"):
-		var input_adapter = LCSpacecraftInputAdapter.new()
+		var adapter_scene = load("res://controllers/spacecraft/spacecraft-input-adapter.tscn")
+		var input_adapter = adapter_scene.instantiate()
 		input_adapter.name = "LCSpacecraftInputAdapter"
 		# Set target to controller
 		input_adapter.target = get_node("LCSpacecraftController")
@@ -90,8 +90,12 @@ func _build_lander():
 	center_of_mass_mode = RigidBody3D.CENTER_OF_MASS_MODE_CUSTOM
 	center_of_mass = Vector3(0, 0.5, 0)
 	
+	# Preload component scenes
+	var thruster_scene = preload("res://core/components/propulsion/thruster_effector.tscn")
+	var pump_scene = preload("res://core/components/propulsion/pump_effector.tscn")
+	
 	# Descent engine
-	var descent_engine = LCThrusterEffector.new()
+	var descent_engine = thruster_scene.instantiate()
 	descent_engine.max_thrust = 45000.0  # 45 kN (10,000 lbf)
 	descent_engine.specific_impulse = 311.0  # seconds
 	descent_engine.thrust_direction = Vector3(0, 1, 0)  # Upward thrust
@@ -105,7 +109,7 @@ func _build_lander():
 	add_child(descent_engine)
 	
 	# Descent Pump
-	var ds_pump = LCPumpEffector.new()
+	var ds_pump = pump_scene.instantiate()
 	ds_pump.name = "DescentPump"
 	ds_pump.max_flow = 15.0 # kg/s approx for 45kN
 	ds_pump.source_path = "../DescentFuelTank"
@@ -172,7 +176,7 @@ func _build_lander():
 	add_child(ascent_fuel)
 	
 	# Ascent engine
-	var ascent_engine = LCThrusterEffector.new()
+	var ascent_engine = thruster_scene.instantiate()
 	ascent_engine.max_thrust = 15600.0  # 15.6 kN (3,500 lbf)
 	ascent_engine.specific_impulse = 311.0  # seconds
 	ascent_engine.thrust_direction = Vector3(0, 1, 0)
@@ -184,7 +188,7 @@ func _build_lander():
 	add_child(ascent_engine)
 	
 	# Ascent Pump
-	var as_pump = LCPumpEffector.new()
+	var as_pump = pump_scene.instantiate()
 	as_pump.name = "AscentPump"
 	as_pump.max_flow = 5.0 # kg/s approx for 15kN
 	as_pump.source_path = "../AscentFuelTank"
@@ -232,7 +236,7 @@ func _build_lander():
 	
 	for cluster_idx in range(4):
 		for thruster_idx in range(4):
-			var rcs = LCThrusterEffector.new()
+			var rcs = thruster_scene.instantiate()
 			rcs.max_thrust = 445.0  # 445 N (100 lbf)
 			rcs.specific_impulse = 280.0  # seconds
 			rcs.thrust_direction = rcs_directions[cluster_idx][thruster_idx]

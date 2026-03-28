@@ -12,20 +12,23 @@ extends LCVehicle
 func _ready():
 	super._ready()
 	
-	# Only build if we don't have children (fresh spawn)
-	if get_child_count() == 0:
+	# Only build if we don't have children (fresh spawn on server)
+	# On clients, we need to build the procedural parts too as they aren't synced nodes
+	if get_child_count() <= 1:
 		_build_rover()
 		refresh_effectors()
 		
 	# Ensure controller exists
 	if not has_node("RoverController"):
-		var controller = LCRoverController.new()
+		var controller_scene = load("res://controllers/rover/rover-controller.tscn")
+		var controller = controller_scene.instantiate()
 		controller.name = "RoverController"
 		add_child(controller)
 		
 	# Ensure input adapter exists
 	if not has_node("RoverInputAdapter"):
-		var input_adapter = LCRoverInputAdapter.new()
+		var adapter_scene = load("res://controllers/rover/rover-input-adapter.tscn")
+		var input_adapter = adapter_scene.instantiate()
 		input_adapter.name = "RoverInputAdapter"
 		# Set target to controller
 		input_adapter.target = get_node("RoverController")
@@ -81,8 +84,11 @@ func _build_rover():
 	# ========================================
 	# MOBILITY SYSTEM (6 wheels)
 	# ========================================
-	
-	# Wheel positions (rocker-bogie suspension)
+	# Preload component scenes
+	var wheel_scene = preload("res://core/components/propulsion/wheel_basic.tscn")
+
+	# Create wheels (6-wheel rocker-bogie style)
+	# Wheel layout: FL, ML, RL, FR, MR, RR
 	var wheel_positions = [
 		Vector3(0.8, 0, 1.2),   # Front left
 		Vector3(0.8, 0, 0),     # Middle left
@@ -91,14 +97,15 @@ func _build_rover():
 		Vector3(-0.8, 0, 0),    # Middle right
 		Vector3(-0.8, 0, -1.2), # Rear right
 	]
-	
+
 	for i in range(6):
-		var wheel = LCWheelEffector.new()
+		var wheel = wheel_scene.instantiate()
 		wheel.mass = 15.0  # kg per wheel
-		wheel.wheel_radius = 0.25  # 25cm radius
+		wheel.wheel_radius_config = 0.25  # Use the config property
 		wheel.suspension_stiffness = 50.0
 		wheel.damping_compression = 5.0
 		wheel.damping_relaxation = 5.0
+
 
 		wheel.max_torque = 200.0  # Nm
 		

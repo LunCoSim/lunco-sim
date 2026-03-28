@@ -212,6 +212,7 @@ _data = {
 
 [node name="Simulation" instance=ExtResource("1_kjl25")]
 script = ExtResource("2_iqwup")
+spawn_node = NodePath("Universe/Sun/Earth/Moon/LangrenusCraterMap/Spawner")
 
 [node name="Avatar" parent="." index="0"]
 transform = Transform3D(-0.82255, -0.00837469, 0.568631, 0.00348538, 0.999798, 0.0197666, -0.568682, 0.0182409, -0.822355, -12.653, 7.06782, 1.34696)
@@ -245,8 +246,8 @@ text = "Yes"
 text = "Yes"
 
 [node name="MultiplayerSpawner" parent="." index="1"]
-_spawnable_scenes = PackedStringArray("uid://bl8254ixsq42f", "uid://dxepfetvn7y3c", "uid://baunvflaucrbn", "uid://db37rii8injqd")
-spawn_path = NodePath("../Universe/Sun/Earth/Moon/LangrenusCraterMap/Spawner")
+_spawnable_scenes = PackedStringArray("res://content/starship/starship.tscn", "res://content/animated-astronaut-character-in-space-suit-loop/astronaut.tscn", "res://content/gobot/gobot.tscn", "res://core/entities/operator.tscn", "res://apps/3dsim/entities/rover_rigid.tscn", "res://apps/3dsim/entities/rover/rover.tscn", "res://core/entities/vehicles/lunar_lander.tscn", "res://core/entities/vehicles/mars_rover.tscn")
+spawn_path = NodePath("Universe/Sun/Earth/Moon/LangrenusCraterMap/Spawner")
 
 [node name="Sun" parent="Universe" index="1" instance=ExtResource("2_bjryh")]
 

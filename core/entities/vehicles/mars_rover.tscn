@@ -1,6 +1,23 @@
-[gd_scene load_steps=2 format=3 uid="uid://mars_rover_entity"]
+[gd_scene load_steps=4 format=3 uid="uid://mars_rover_entity"]
 
 [ext_resource type="Script" path="res://core/entities/vehicles/mars_rover.gd" id="1_script"]
 
+[sub_resource type="SceneReplicationConfig" id="SceneReplicationConfig_mars"]
+properties/0/path = NodePath(".:position")
+properties/0/spawn = true
+properties/0/replication_mode = 1
+properties/1/path = NodePath(".:rotation")
+properties/1/spawn = true
+properties/1/replication_mode = 1
+properties/2/path = NodePath(".:linear_velocity")
+properties/2/spawn = true
+properties/2/replication_mode = 1
+properties/3/path = NodePath(".:angular_velocity")
+properties/3/spawn = true
+properties/3/replication_mode = 1
+
 [node name="MarsRover" type="VehicleBody3D"]
 script = ExtResource("1_script")
+
+[node name="MultiplayerSynchronizer" type="MultiplayerSynchronizer" parent="."]
+replication_config = SubResource("SceneReplicationConfig_mars")

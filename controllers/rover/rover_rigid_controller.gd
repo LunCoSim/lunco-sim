@@ -10,11 +10,6 @@ extends LCController
 
 @onready var rover: RigidBody3D = get_parent()
 func _ready():
-	# Add command executor for compatibility
-	var executor = LCCommandExecutor.new()
-	executor.name = "CommandExecutor"
-	add_child(executor)
-
 	# Force wake up the rover and wheels
 	rover.sleeping = false
 	rover.can_sleep = false

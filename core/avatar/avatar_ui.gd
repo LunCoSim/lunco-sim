@@ -309,6 +309,7 @@ func _on_create_entity_button_pressed():
 		push_error("EntitiesDB singleton not found")
 	
 	popup.id_pressed.connect(func(id): 
+		print("DEBUG: CreateEntityPopup id_pressed: ", id)
 		_on_entities_item_selected(id)
 		popup.queue_free()
 	)
