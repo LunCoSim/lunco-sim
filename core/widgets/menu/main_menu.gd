@@ -105,6 +105,12 @@ func _update_version_label():
 	
 	$MarginContainer/ScrollContainer/MainContent/Version.text = ver_text
 
+func _input(event):
+	if event.is_action_pressed("ui_cancel") or event.is_action_pressed("main_menu"):
+		if LCWindows:
+			LCWindows.toggle_main_menu()
+			get_viewport().set_input_as_handled()
+
 func _on_server_version_received(_ver, _hash):
 	_update_version_label()
 

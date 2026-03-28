@@ -61,7 +61,6 @@ func _setup_command_window():
 		center_window(CommandWindow)
 	else:
 		push_error("[LCWindows] Failed to load command_ui.tscn!")
-	# win.position_changed.connect(_on_window_changed) # Not available in standard Godot 4.x Window
 
 func _notification(what):
 	if what == NOTIFICATION_WM_CLOSE_REQUEST or what == NOTIFICATION_APPLICATION_FOCUS_OUT:
@@ -90,7 +89,6 @@ func save_window_state():
 	config.set_value(CONFIG_SECTION, "current_screen", win.current_screen)
 	
 	config.save(CONFIG_PATH)
-	# print("Window state saved: ", win.position, win.size)
 
 func load_window_state():
 	var config = ConfigFile.new()
@@ -153,55 +151,55 @@ static func make_window(control, title, transparent_bg = true, borderless = fals
 	win.visible = false
 	win.close_requested.connect(win.hide)
 	
-	# Connect focus signals to update the window appearance
-	
 	return win
 
 func center_window(window: Window):
-	# Get the main window size and position
+	if not is_instance_valid(window): return
+	
 	var main_window_size = get_window().size
-	var main_window_position = get_window().position
 	
-	# Calculate the center position relative to the main window
-	var x = main_window_position.x + (main_window_size.x - window.size.x) / 2
-	var y = main_window_position.y + (main_window_size.y - window.size.y) / 2
+	# Calculate center position relative to the parent viewport
+	var x = (main_window_size.x - window.size.x) / 2
+	var y = (main_window_size.y - window.size.y) / 2
 	
-	# Set the window position
-	window.position = Vector2i(x, y)
-
-func position_top_left(window: Window):
-	# Get the main window position
-	var main_window_position = get_window().position
+	# If NOT embedded (OS window), we must add the main window's screen position
+	if not get_tree().root.gui_embed_subwindows:
+		var main_window_pos = get_window().position
+		x += main_window_pos.x
+		y += main_window_pos.y
 	
-	# Add a small margin from the edges
-	var margin = 20
-	var x = main_window_position.x + margin
-	var y = main_window_position.y + margin
+	# Ensure title bar is visible (minimum y margin for embedded windows)
+	y = max(y, 40)
 	
 	# Set the window position
 	window.position = Vector2i(x, y)
 
 func toggle_main_menu():
+	if not is_instance_valid(MainMenu): return
 	MainMenu.visible = !MainMenu.visible
 	if MainMenu.visible:
 		center_window(MainMenu)
 		MainMenu.grab_focus()
 
 func toggle_chat():
+	if not is_instance_valid(ChatWindow): return
 	ChatWindow.visible = !ChatWindow.visible
 	if ChatWindow.visible:
 		center_window(ChatWindow)
 		ChatWindow.grab_focus()
 
 func show_tutorial():
+	if not is_instance_valid(TutorialWindow): return
 	TutorialWindow.show()
 	center_window(TutorialWindow)
 	TutorialWindow.grab_focus()
 	
 func hide_tutorial():
-	TutorialWindow.hide()
+	if is_instance_valid(TutorialWindow):
+		TutorialWindow.hide()
 
 func toggle_command_ui():
+	if not is_instance_valid(CommandWindow): return
 	CommandWindow.visible = !CommandWindow.visible
 	if CommandWindow.visible:
 		center_window(CommandWindow)
