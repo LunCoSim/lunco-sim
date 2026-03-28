@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "skills": {
+    "spec-kit-skill": {
+      "source": "feiskyer/claude-code-settings",
+      "sourceType": "github",
+      "computedHash": "3cfc36c7d55442522876735674204f9d36a9fe93e28bbf5c7c5e06f5b9739c9d"
+    }
+  }
+}
