@@ -13,7 +13,7 @@ The LunCo MCP Server acts as a bridge between AI agents and the simulation envir
 3.  **Command Proxy**: When a tool is called, the server parses the tool name back into a `target` and `command`, and proxies the arguments to `POST /api/command`.
 
 ## Configuration
-The server environment is configured via `lunco-mcp-server/mcp-config.json` and standard environment variables:
+The server environment is configured via `mcp-server/mcp-config.json` and standard environment variables:
 
 - `LUNCO_SIM_URL`: The base URL of the running simulation (e.g., `http://localhost:8082`).
 
