@@ -1,7 +1,7 @@
 # Feature Specification: 005-sysml-integration
 
 ## Problem Statement
-The LunCoSim environment needs to be driven by formalized engineering models. We need to integrate a SysML v2 parser so that the `.sysml` files act as our **Signal Wiring Diagram**, defining the connections between `Sensors`, `Actuators`, and their corresponding `Ports`.
+The LunCoSim environment needs to be driven by formalized engineering models. We need to integrate a SysML v2 parser so that the `.sysml` files act as our **Master Specification**, defining the "Signal Wiring Diagram" for our Bevy physical plants.
 
 ## User Stories
 

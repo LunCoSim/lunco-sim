@@ -39,7 +39,8 @@ As a hardware engineer, I want to connect a physical microcontroller (e.g., ESP3
 - **FR-001**: **Actuator Components**: All physical work (torque, thrust, light) MUST be handled by "dumb" Actuator components that respond only to raw numerical signals (e.g., `-1.0 to 1.0` or Voltage).
 - **FR-002**: **Sensor Components**: All telemetry (IMU, Encoders, GPS, Power) MUST be captured by Sensor components that make data available for export.
 - **FR-003**: **Signal Bridge**: The system MUST implement a modular Bridge that can route signals between Bevy and external sources (UDP, Shared Memory, or Internal Rust logic).
-- **FR-004**: **Command Mux (Multiplexer)**: Every controllable entity MUST have a priority-based multiplexer to handle conflicting signals (e.g., FSW vs. Manual Override).
+- **FR-004**: **Command Mux (Multiplexer)**: Every controllable entity MUST have a priority-based multiplexer to handle conflicting signals (e.g., Manual Override vs. Internal Autopilot).
+- **FR-005**: **Future Compatibility**: The Bridge architecture SHOULD be designed to eventually support industry standards like ROS 2 / SpaceROS (see Feature 008).
 - **FR-005**: **Time Synchronization**: The Bridge MUST support synchronization modes to ensure the external controller and Bevy physics stay in sync (critical for SIL).
 
 ### Key Entities

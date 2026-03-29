@@ -1,0 +1,50 @@
+# Feature Specification: 007-realtime-assembly (Modular Building Blocks)
+
+**Feature Branch**: `007-realtime-assembly`  
+**Created**: 2026-03-29  
+**Status**: Draft  
+**Input**: Real-time vehicle assembly (KSP-like) with automatic signal port wiring.
+
+## User Scenarios & Testing
+
+### User Story 1 - Modular Part Assembly (Priority: P1)
+As a user, I want to snap a modular "Wheel" part to a "Chassis" part in real-time, so that I can build a custom rover without opening a CAD tool.
+
+**Acceptance Criteria:**
+- The simulation provides a "Construction Mode" UI.
+- Parts have defined attachment points and "snap" to each other using Bevy's transform hierarchy.
+- Snapping a part automatically creates a fixed physics joint in Rapier/Avian.
+
+---
+
+### User Story 2 - Automatic Signal Port Wiring (Priority: P2)
+As a user, I want parts to "just work" when attached, so that a wheel automatically connects to the chassis's command signal.
+
+**Acceptance Criteria:**
+- When a `WheelActuator` part is attached to a `Vessel` chassis, it automatically identifies its "Parent Vessel" and starts listening to the shared `ActionState` signal port.
+
+---
+
+### User Story 3 - Formal Architecture Fallback / Export (Priority: P2)
+As a systems engineer, I want the custom rover assembled in "Construction Mode" to dynamically serialize and export into a `.sysml` (SysML v2) file, so that impromptu real-time designs are captured as formalized Master Specifications.
+
+**Acceptance Criteria:**
+- Exiting Construction Mode triggers a two-way sync that writes the current entity hierarchy and signal port connections back to `.sysml`.
+- The real-time assembly UI serves as a visual, intuitive editor for the underlying SysML v2 data model, preventing architecture drift.
+
+## Requirements
+
+### Functional Requirements
+- **FR-001**: **Part Metadata**: Every modular part MUST define its physical properties (mass, collider) and its Signal Ports (Actuators/Sensors).
+- **FR-002**: **Real-time Hierarchy Update**: The engine MUST support dynamic parenting/unparenting of physics entities while the simulation is running (or paused in Construction Mode).
+- **FR-003**: **Signal Auto-Discovery**: Sub-entities (parts) MUST automatically discover their root `Vessel` and register their `Actuator/Sensor` ports to the vessel's central multiplexer.
+- **FR-004**: **SysML Serialization State**: The engine MUST be able to map its real-time component hierarchy back into a SysML v2 syntax tree and export it.
+
+### Key Entities
+- **Modular Part**: A pre-defined entity template (e.g., Solar Panel, Thruster, Wheel).
+- **Construction Mode**: A specialized camera/UI state for real-time assembly.
+- **Signal Discovery System**: A Bevy system that wires up ports when the hierarchy changes.
+
+## Success Criteria
+- **SC-001**: A user can assemble a 4-wheel drive rover from individual parts in under 60 seconds.
+- **SC-002**: No manual wiring required: The rover is driveable immediately after the last wheel is snapped into place.
