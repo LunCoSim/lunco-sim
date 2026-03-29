@@ -2,7 +2,7 @@
 
 ## Technology Stack
 - **Engine:** Bevy (Rust)
-- **Physics:** `bevy_rapier3d`
+- **Physics:** `avian3d` (Native Rust physics for Bevy)
 
 ## Architecture
 
@@ -15,7 +15,7 @@
 - **Responsibility:** A marker component for the rover entity to easily query it in systems.
 
 #### 3. Rover Spawner System
-- **Responsibility:** Spawns a `PbrBundle` (visuals) alongside Rapier physics components (`RigidBody::Dynamic`, `Collider`, `ColliderMassProperties::Mass(1.5)`).
+- **Responsibility:** Spawns a `PbrBundle` (visuals) alongside Avian physics components (`RigidBody::Dynamic`, `Collider`, `MassPropertiesBundle`).
 
 #### 4. Movement System
-- **Responsibility:** Queries for the `Rover` component and `Res<ButtonInput<KeyCode>>`. Applies kinematic movement or physical forces to the rover's `ExternalForce` or `Velocity` component.
+- **Responsibility:** Runs in Bevy's `FixedUpdate` schedule to ensure determinism. Queries for the `Rover` component and `Res<ButtonInput<KeyCode>>`. Applies physical forces or impulses to the rover's `ExternalForce` or `LinearVelocity` component.
