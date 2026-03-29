@@ -1,38 +1,53 @@
-# Feature Specification: 009-multiplayer-networking
+# Feature Specification: 009-authority-rbac
+
+**Feature Branch**: `009-authority-rbac`
+**Created**: 2026-03-29
+**Status**: Draft
+**Input**: Subsystem-level authority delegation, concurrent multi-user control, role-based access control.
+**Depends on**: `003-multiplayer-core`
 
 ## Problem Statement
-To enable collaborative missions, multiple players must be able to view and interact with the same "Physical Plants." Given the non-deterministic nature of standard physical simulation in floating-point physics engines, the networking system MUST employ a **Server-Authoritative Architecture with Client-Side Prediction** to ensure physical determinism and robust state reconciliation rather than simply syncing raw inputs blindly.
-Additionally, the system requires identity management to support distinct user profiles and access controls.\n\n> **Note on Scope:** Multiplayer networking focuses on the syncing and distributed control of users in a shared world. This is distinct from simulating network degradation (`019`), which is a feature modifying internal physics/signals that can run entirely independently (e.g., in solo operations).
+Basic multiplayer (`003`) provides single-operator vessel control. For professional concurrent engineering — where multiple specialists work on different subsystems of the same vessel simultaneously — we need fine-grained **authority delegation** and **role-based access control (RBAC)**.
+
+This is what makes LunCoSim unique compared to traditional simulators: real collaborative engineering, not just "watching someone else drive."
 
 ## User Stories
 
-### Story 1: Collaborative Telemetry
-As a mission participant, I want to see the sensor data from a rover controlled by another user, so that we can coordinate our actions.
+### Story 1: Subsystem-Level Authority Delegation (Priority: P1)
+As a vessel owner, I want to grant another engineer control over a specific subsystem (e.g., robotic arm) while I retain control of the drive system.
 
 **Acceptance Criteria:**
-- The `Sensor` component data is synchronized across the network.
-- Latency in sensor updates is minimized via state interpolation.
-- State prediction rollbacks are supported by tying into the `avian` ECS-native physics engine.
+- Each FSW module (Drive, Arm, Power, Comms, etc.) is independently authorizable.
+- The vessel owner can grant/revoke subsystem access from the multiplayer UI.
+- Multiple engineers can operate different subsystems of the same vessel concurrently.
+- Example: Player A drives while Player B operates the robotic arm. Simultaneously.
 
-### Story 2: Authority & Signal Sync
-As a rover operator, I want to see the effect of my commands reflected in the shared environment, and I want other users to be aware when I have "Manual Override" authority.
-
-**Acceptance Criteria:**
-- The `ControlAuthority` component and its corresponding `CommandMux` state are synchronized.
-- When Player A takes control, Player B is notified that "Manual Authority" is active.
-
-### Story 3: User Profiles
-As a mission participant, I want to have a user profile, so that my identity, roles, and configurations persist across networking sessions.
+### Story 2: Role-Based Access Control (Priority: P2)
+As a mission commander, I want to assign roles (Owner, Operator, Observer, AI Agent) to participants, so that access is structured and auditable.
 
 **Acceptance Criteria:**
-- Network architecture supports authenticating and synchronizing user profiles.
-- Participant identities and roles are broadcast appropriately to peers.
-- Authority checks (e.g., in Story 2) validate against role-based access defined in the profile.
+- Authority types: `Owner | Operator | Observer | AI_Agent`.
+- Owners have master authority over their vessels and can delegate subsystem access.
+- Operators can command only the subsystems they are granted.
+- Observers have read-only telemetry access — can watch but not command.
+- AI Agents can be granted subsystem authority (e.g., autonomous power management).
 
-### Story 4: Observer Presence
-As a mission participant, I want to see the presence and activity of other observers, so that I can understand the current state of collaborative exploration.
+### Story 3: Conflict Resolution (Priority: P2)
+As a systems engineer, I want clear conflict resolution when two operators accidentally target the same actuator.
 
 **Acceptance Criteria:**
-- The location and orientation of other users' cameras (Avatars) are synchronized.
-- Visual markers or presence indicators (e.g., "Spectator 1 is looking at Rover A") are displayed in the 3D environment or UI.
-- The state of which entities are currently under which user's control is broadcast globally.
+- If two operators send conflicting commands to the same actuator, a configurable priority system resolves the conflict.
+- Default priority: `Owner > Human Operator > AI Agent > Observer (blocked)`.
+- Conflicts are logged and optionally surfaced as notifications via the Unified Editor (`006`).
+
+### Story 4: Authority Audit Trail (Priority: P3)
+As a mission commander, I want a log of who controlled what and when, for post-mission review.
+
+**Acceptance Criteria:**
+- All authority grants, revocations, and control actions are logged with timestamps.
+- The audit trail is accessible via the REPL and exportable as part of the mission record (`020`).
+
+## Key Entities
+- **SubsystemAuthority**: Component mapping FSW modules to authorized players/agents.
+- **AuthorityRole**: Enum defining access levels: `Owner | Operator | Observer | AI_Agent`.
+- **ConflictResolver**: System handling simultaneous commands to the same actuator.
