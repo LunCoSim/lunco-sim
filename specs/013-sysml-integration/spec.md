@@ -24,5 +24,5 @@ As an industrial engineer, I want the formula for processing lunar regolith into
 As a systems engineer, after I interactively design a functional regolith-cracking factory inside the visual engine, I want the engine to export the exact stoichiometry and interface requirements back out as a valid `.sysml` file.
 
 **Acceptance Criteria:**
-- The engine supports a "SysML Serialization" hook that reads `ResourceRecipe` and `ChemicalSystem` components from the ECS.
+- The engine supports a "SysML Serialization" hook that reads `ResourceRecipe` and `ChemicalProcess` components from the ECS.
 - The engine outputs a valid SysML v2 syntax tree capturing the new block relationships and flows.

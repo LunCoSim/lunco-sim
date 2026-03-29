@@ -32,7 +32,7 @@ As a systems engineer evaluating a complex ISS-style radiators array, I want a p
 - Results stream asynchronously back to the CPU ECS payload for Modelica ingestion.
 
 ### User Story 4 - Synthetic Segmentation Gen (Machine Learning)
-As a Data Scientist, I need perfectly annotated visual data matching the exact physics frame to train my ML driving algorithms in Python (`008-dynamic-scripting`).
+As a Data Scientist, I need perfectly annotated visual data matching the exact physics frame to train my ML driving algorithms in Python (`006-developer-experience`).
 
 **Acceptance Criteria:**
 - Cameras support rendering an auxiliary `Semantic Mask` pass (e.g., Rocks = ID 1, Regolith = ID 2, Rovers = ID 3).
