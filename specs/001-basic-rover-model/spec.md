@@ -1,33 +1,25 @@
-# Feature Specification: Basic Driveable Rover
+# Feature Specification: Basic Rover Physical Plant
 
 ## Problem Statement
-To bootstrap the LunCoSim Bevy engine, we need a simple "Hello World" 3D environment. We need to spawn a basic physical representation of a rover (1.5kg) on a flat lunar surface and be able to drive it around using keyboard controls.
+To bootstrap the LunCoSim Bevy engine, we need to implement our first **Physical Plant**: a 1.5kg rover. This entity must expose **Actuators** (for movement) and **Sensors** (for state) to be driven by a local "Manual Signal Source" (keyboard).
 
 ## User Scenarios
 
-### Story 1: Basic 3D Scene
-As a developer
-I want to launch the Bevy app and see a 3D scene with lighting, a camera, and a ground plane
-So that I have a foundation to spawn the rover.
+### Story 1: Physical Plant Initialization
+As a developer, I want to spawn a rover entity that is physically "dumb"—it has wheels and motors but no internal driving logic, only **Actuator Ports** that respond to torque signals.
 
 **Acceptance Criteria:**
-- Window launches successfully.
-- Ground plane is visible and acts as a static physics collider.
+- Rover is spawned with a 1.5kg Rigidbody.
+- `WheelActuator` components are present on all wheels.
+- Sending a manual signal to the `WheelActuator` results in physical movement.
 
-### Story 2: Driveable Rover Entity
-As a user
-I want to spawn a rover and drive it around with keyboard controls (WASD/Arrows)
-So that I can verify the Bevy physics engine (`bevy_rapier3d`) and input handling are working.
+### Story 2: Manual Signal Bridge (WASD)
+As a user, I want to drive the rover using WASD, where the keyboard input acts as a temporary "Manual Controller" sending signals to the rover's actuator ports.
 
 **Acceptance Criteria:**
-- Rover is spawned with a visual representation (e.g., a simple box or primitive shapes).
-- Rover has a 1.5kg Rigidbody and realistic gravity.
-- Pressing movement keys applies forces/impulses to move the rover.
+- Pressing 'W' sends a positive torque signal to the `WheelActuators`.
+- The system uses a basic `CommandMux` to route these manual signals to the physical motors.
 
 ## Out of Scope
-Anything beyond a local desktop simulation is **strictly out of scope** for this initial feature, including:
-- Multiplayer / Networking
-- WebAssembly (WASM) browser compilation
-- OpenMCT Telemetry
-- SysML / Modelica integration
-- Complex terrain generation
+- External SIL/HIL (Reserved for Feature 002).
+- Complex autonomous navigation.

@@ -4,18 +4,23 @@
 - **Engine:** Bevy (Rust)
 - **Physics:** `avian3d` (Native Rust physics for Bevy)
 
-## Architecture
+## Architecture (Universal Vessel Pattern)
 
-### Component Design
+### 1. Avatar & Input (Local Client)
+- **Avatar Entity**: A marker component on the player's camera. Stores the ID of the currently possessed vessel.
+- **Input Adapter System**: Reads Bevy `ButtonInput<KeyCode>` and writes to the `ActionState` of the possessed vessel.
+    - `W/S` -> `ActionState.Throttle`
+    - `A/D` -> `ActionState.Steering`
 
-#### 1. Environment Setup
-- **Responsibility:** Spawns a 3D Camera, a directional light, and a static ground plane.
+### 2. Vessel Root (The Rover)
+- **Vessel Component**: A marker component for the physical assembly.
+- **ActionState Component**: Stores the semantic intent (Throttle/Steering).
+- **ControlAuthority Component**: Stores the `PlayerId` allowed to control this vessel.
+- **CommandModule Component**: Defines the "Forward" axis for the rover.
 
-#### 2. Rover Component (`Rover`)
-- **Responsibility:** A marker component for the rover entity to easily query it in systems.
-
-#### 3. Rover Spawner System
-- **Responsibility:** Spawns a `PbrBundle` (visuals) alongside Avian physics components (`RigidBody::Dynamic`, `Collider`, `MassPropertiesBundle`).
-
-#### 4. Movement System
-- **Responsibility:** Runs in Bevy's `FixedUpdate` schedule to ensure determinism. Queries for the `Rover` component and `Res<ButtonInput<KeyCode>>`. Applies physical forces or impulses to the rover's `ExternalForce` or `LinearVelocity` component.
+### 3. Actuators (The Wheels)
+- **WheelActuator Component**: Attached to each wheel entity.
+- **WheelSystem**: 
+    - Queries for `WheelActuator` on entities that are children of a `Vessel`.
+    - Reads `ActionState` from the parent `Vessel`.
+    - Applies torque/angle using `avian3d` (physics).
