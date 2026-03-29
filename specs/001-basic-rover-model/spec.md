@@ -10,6 +10,7 @@ As a developer, I want to spawn a rover entity that is physically "dumb"—it ha
 
 **Acceptance Criteria:**
 - Rover is spawned with a 1.5kg Rigidbody (`avian` solver standard instead of Rapier for ECS compatibility).
+- **Dynamic Mass & Inertia**: The mass and inertia tensors are computed dynamically. The ECS allows external plugins to mutate the Rigidbody's mass live (e.g., to simulate fuel burn or sample collection) without deleting and respawning the entity.
 - `WheelActuator` components are present on all wheels.
 - Sending a manual signal to the `WheelActuator` results in physical movement.
 

@@ -1,32 +1,31 @@
-# Feature Specification: 010-lunar-environment
+# Feature Specification: 017-astronomical-environment
 
-**Feature Branch**: `010-lunar-environment`
+**Feature Branch**: `017-astronomical-environment`
 **Created**: 2026-03-29
 **Status**: Draft
-**Input**: Lunar surface recreation, including high-resolution DEMs, regolith interaction, and celestial lighting.
+**Input**: Macroscopic celestial mechanics, Ephemeris data integration, and VRAM-optimized surface rendering.
 
 ## Problem Statement
-The high-fidelity rover models need an accurate environment to interact with. A flat plane is insufficient for testing suspension, traction, and obstacle avoidance. The simulation must load authentic lunar terrain datasets, physically simulate regolith, and provide realistic lighting conditions for optical sensors.
+A flat plane map is insufficient for an aerospace digital twin. The simulation must understand that a rover interacts with a massive sphere (the Moon) which orbits another sphere (Earth), both rotating relative to a light source (the Sun). Without establishing macroscopic mechanics first, tracking line-of-sight dropouts (`018`) and multi-day thermal limits (`014`) is impossible. We must generalize the environment to understand JPL SPICE or Ephemeris data, rather than localized XY planes.
 
 ## User Scenarios
 
-### User Story 1 - DEM Terrain Loading (Priority: P1)
-As a simulation engineer, I want to load standard Lunar Reconnaissance Orbiter (LRO) Digital Elevation Models (DEMs), so the rover can drive over historically accurate terrain like the Artemis III landing sites.
+### User Story 1 - Ephemeris & Celestial Mechanics (Priority: P1)
+As an optics and thermal engineer, I want the sun angle and Earth position accurately plotted mathematically based on a specific calendar date and lunar latitude, so that shadows and thermal inputs behave precisely as they would in real life.
 
 **Acceptance Criteria:**
-- The engine imports `.tif` or similar DEM formats and generates a Bevy mesh or heightfield collider.
-- Collisions are accurately handled by the Avian/Rapier physics engine.
+- The engine computes planetary positions dynamically using generic Ephemeris data or JPL SPICE kernels.
+- The `005` Scenario loader sets a `Timestamp` and a coordinate (e.g., `Lat/Lon` at the Lunar South Pole), and the Bevy lighting systems (Directional Light properties) are calculated automatically by the celestial mechanics module, not hard-coded floats.
 
-### User Story 2 - Regolith Interaction Mechanics (Priority: P2)
-As a robotics engineer, I want the wheels to slip and sink dynamically depending on the slope and terrain material, to accurately simulate the hazards of lunar driving.
-
-**Acceptance Criteria:**
-- Standard static friction is replaced or augmented by a custom regolith slip model (e.g., Bekker formula).
-- The rover experiences increased drag and slippage when traversing steep, loose crater walls.
-
-### User Story 3 - Celestial Lighting & Shadows (Priority: P3)
-As a vision systems engineer, I want the sun angle to accurately represent lunar polar lighting (long, harsh shadows), to test my optical obstacle avoidance algorithms.
+### User Story 2 - Spherical Occlusion (Priority: P2)
+As a communications engineer, I need to know when an orbiting relay satellite passes behind the horizon of the Moon relative to the surface rover, instantly cutting the signal.
 
 **Acceptance Criteria:**
-- A customizable directional light correctly simulates the sun's angle at any given latitude/longitude and mission time.
-- Harsh, un-diffused shadows (due to the lack of an atmosphere) are accurately rendered.
+- The math engine models celestial bodies as macroscopic `f64` spheres in the Large World Coordinate grid out to billions of meters.
+- The engine executes physics raycasts against these spheres to trigger `018-comm-degradation` dropouts, treating the Moon as a physical blocking object, not just a floor plane.
+
+### User Story 3 - Planetary Terrain Streaming & DEM Loader (Priority: P4 - Future Phase)
+As a scenario designer, I want to load specific APOLLO `.tif` heightmaps (DEMs) for the rover to physically drive on, but loading an entire regional map will crash standard GPUs.
+
+**Acceptance Criteria:**
+- **Future Optimization:** The engine will implement or interface with a Chunked QuadTree LOD system (Terrain Streaming). As the rover drives, the engine seamlessly pulls high-resolution `.tif` heightmap tiles from SSD to VRAM for the local rendering frustum, whilst drastically decimating geometry for distant mountains.

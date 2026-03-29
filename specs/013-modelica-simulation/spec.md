@@ -21,3 +21,12 @@ As a subsystem engineer, I want the rover's battery level to be calculated by a 
 - A Modelica model is integrated via `rumoca` (Rust-Modelica runtime).
 - The model reads signals from the Bevy `CommandMux` (Actuators) and feeds its results into the `Sensor` components.
 - Simulation uses `FixedUpdate` to ensure the Modelica math is deterministic and accurate.
+
+---
+
+### Story 3: Generic Physics Mutators (Hard Engineering Interop)
+As a physics engineer, I want the internal state of the Modelica simulation to dynamically alter the structural properties of the outward Bevy object, so that the simulation behaves realistically like KSP or Amesim.
+
+**Acceptance Criteria:**
+- Modelica holds mutator authority over generic `avian` structural components (e.g., dynamically altering a tire's `Friction` coefficient if Modelica dictates the tire has frozen, or actively dumping fuel mass to alter the Rigidbody's center of gravity).
+- This is achieved via a generic ECS Publisher/Subscriber framework, preventing hardcoded physics rules.
