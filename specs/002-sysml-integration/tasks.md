@@ -1,6 +1,11 @@
 # Tasks: SysML v2 Integration
 
-- [ ] 2.1 Research and define the subset of SysML v2 needed for the basic rover (parts, basic geometry, mass).
-- [ ] 2.2 Create a Rust parser or JSON deserializer (`serde`) to read the SysML structure into memory.
-- [ ] 2.3 Refactor the Rover spawning logic from `001` to loop through the parsed SysML structure instead of hardcoding the components.
-- [ ] 2.4 Verify that changing the SysML file updates the rover's mass/size in the simulation on restart.
+
+## Phase 1: Parsing SysML
+- [ ] 1.1 Write failing tests parsing a mock `.sysml` file representing a 1.5kg rover chassis.
+- [ ] 1.2 Implement the Rust parser/deserializer to pass the parsing tests.
+
+## Phase 2: Bevy ECS Integration
+- [ ] 2.1 Write failing unit tests asserting that reading a valid SysML struct correctly generates Bevy `MassPropertiesBundle` and `Collider` components.
+- [ ] 2.2 Refactor the `spawn_rover` logic from feature `001` to loop through the parsed SysML structure instead of using hardcoded values, passing the tests.
+- [ ] 2.3 Write an integration test to verify that loading a modified `.sysml` config correctly alters the rover's properties in the Bevy World.
