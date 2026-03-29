@@ -1,6 +1,6 @@
-# Feature Specification: 017-fmu-gmat-integration
+# Feature Specification: 022-fmu-gmat-integration
 
-**Feature Branch**: `017-fmu-gmat-integration`
+**Feature Branch**: `022-fmu-gmat-integration`
 **Created**: 2026-03-29
 **Status**: Draft
 **Input**: Server-side integration with FMUs (Functional Mock-up Units) via FMI, and astrodynamics tools like GMAT or Basilisk.

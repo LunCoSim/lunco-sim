@@ -1,6 +1,6 @@
-# Feature Specification: 008-scientific-visualization
+# Feature Specification: 016-scientific-visualization
 
-**Feature Branch**: `008-scientific-visualization`
+**Feature Branch**: `016-scientific-visualization`
 **Created**: 2026-03-29
 **Status**: Draft
 **Input**: Visual diagnostic overlays, spatial data rendering, and thermal gradient mapping for engineers natively in Bevy.

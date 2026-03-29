@@ -1,6 +1,6 @@
-# Feature Specification: 005-evaluation-oracle
+# Feature Specification: 006-evaluation-oracle
 
-**Feature Branch**: `005-evaluation-oracle`
+**Feature Branch**: `006-evaluation-oracle`
 **Created**: 2026-03-29
 **Status**: Draft
 **Input**: Integrated TDD Verification Node for Headless CI/CD testing.

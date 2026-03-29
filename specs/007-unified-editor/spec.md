@@ -1,6 +1,6 @@
-# Feature Specification: 005-unified-editor
+# Feature Specification: 007-unified-editor
 
-**Feature Branch**: `005-unified-editor`
+**Feature Branch**: `007-unified-editor`
 **Created**: 2026-03-29
 **Status**: Draft
 **Input**: Requirements for a Godot-like UI, Headless mode, and Omni-Control APIs.

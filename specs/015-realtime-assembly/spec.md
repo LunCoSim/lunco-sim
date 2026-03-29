@@ -1,6 +1,6 @@
-# Feature Specification: 007-realtime-assembly (Modular Building Blocks)
+# Feature Specification: 015-realtime-assembly
 
-**Feature Branch**: `007-realtime-assembly`  
+**Feature Branch**: `015-realtime-assembly`  
 **Created**: 2026-03-29  
 **Status**: Draft  
 **Input**: Real-time vehicle assembly (KSP-like) with automatic signal port wiring.

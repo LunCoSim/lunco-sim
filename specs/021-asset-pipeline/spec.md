@@ -1,6 +1,6 @@
-# Feature Specification: 021-generalized-asset-pipeline
+# Feature Specification: 021-asset-pipeline
 
-**Feature Branch**: `021-generalized-asset-pipeline`
+**Feature Branch**: `021-asset-pipeline`
 **Created**: 2026-03-29
 **Status**: Draft
 **Input**: Raw Engineering and Artistic Data (CAD, GeoTIFF, PNG, SysML/JSON).

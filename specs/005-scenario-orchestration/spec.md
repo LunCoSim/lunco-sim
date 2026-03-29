@@ -1,6 +1,6 @@
-# Feature Specification: 004-scenario-orchestration
+# Feature Specification: 005-scenario-orchestration
 
-**Feature Branch**: `004-scenario-orchestration`
+**Feature Branch**: `005-scenario-orchestration`
 **Created**: 2026-03-29
 **Status**: Draft
 **Input**: Data-driven test configuration using Bevy Scene Notation (BSN) / RON.

@@ -1,6 +1,6 @@
-# Feature Specification: 029-world-persistence
+# Feature Specification: 027-world-persistence
 
-**Feature Branch**: `029-world-persistence`
+**Feature Branch**: `027-world-persistence`
 **Created**: 2026-03-29
 **Status**: Draft
 **Input**: Unified State Persistence, Checkpointing, and ECS/Modelica/Chemistry snapshotting.

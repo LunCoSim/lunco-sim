@@ -1,6 +1,6 @@
-# Feature Specification: 008-advanced-interop (Industry Standards)
+# Feature Specification: 017-advanced-interop
 
-**Feature Branch**: `008-advanced-interop`  
+**Feature Branch**: `017-advanced-interop`  
 **Created**: 2026-03-29  
 **Status**: Draft  
 **Input**: Advanced interoperability with robotics and aerospace standards (ROS/SpaceROS, URDF, USD, Omniverse).

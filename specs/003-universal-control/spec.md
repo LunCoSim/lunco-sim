@@ -1,6 +1,6 @@
-# Feature Specification: Universal Signal-Based Control & Digital Twin Bridge
+# Feature Specification: 003-universal-control
 
-**Feature Branch**: `002-universal-control`  
+**Feature Branch**: `003-universal-control`  
 **Created**: 2026-03-29  
 **Status**: Draft  
 **Input**: Digital Twin / HIL / SIL Architecture. Simulation as a "Physical Plant" decoupled from controlling logic.

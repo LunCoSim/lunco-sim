@@ -1,6 +1,6 @@
-# Feature Specification: 003-simulation-time
+# Feature Specification: 004-simulation-time
 
-**Feature Branch**: `003-simulation-time`
+**Feature Branch**: `004-simulation-time`
 **Created**: 2026-03-29
 **Status**: Draft
 **Input**: Time decoupling requirements for SIL/HIL and ML training.

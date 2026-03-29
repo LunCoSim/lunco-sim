@@ -1,6 +1,6 @@
-# Feature Specification: 007-dynamic-scripting
+# Feature Specification: 008-dynamic-scripting
 
-**Feature Branch**: `007-dynamic-scripting`
+**Feature Branch**: `008-dynamic-scripting`
 **Created**: 2026-03-29
 **Status**: Draft
 **Input**: Multi-language runtime extensibility (Lua + Python) integrated natively into the Bevy ECS and Unified Editor.

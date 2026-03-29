@@ -1,6 +1,6 @@
-# Feature Specification: 017-astronomical-environment
+# Feature Specification: 018-astronomical-environment
 
-**Feature Branch**: `017-astronomical-environment`
+**Feature Branch**: `018-astronomical-environment`
 **Created**: 2026-03-29
 **Status**: Draft
 **Input**: Macroscopic celestial mechanics, Ephemeris data integration, and VRAM-optimized surface rendering.

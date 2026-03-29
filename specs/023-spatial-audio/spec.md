@@ -1,6 +1,6 @@
-# Feature Specification: 022-spatial-audio
+# Feature Specification: 023-spatial-audio
 
-**Feature Branch**: `022-spatial-audio`
+**Feature Branch**: `023-spatial-audio`
 **Created**: 2026-03-29
 **Status**: Draft
 **Input**: Spatial 3D sound propagation logic, vacuum vibration constraints, and UI telemetry klaxons.

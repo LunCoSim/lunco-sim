@@ -1,6 +1,6 @@
-# Feature Specification: 005-sensor-simulation (Complex Sensors)
+# Feature Specification: 012-sensor-simulation
 
-**Feature Branch**: `005-sensor-simulation`
+**Feature Branch**: `012-sensor-simulation`
 **Created**: 2026-03-29
 **Status**: Draft
 **Input**: Advanced sensor modeling (LIDAR, Depth Cameras, RGB Cameras, Star Trackers) for realistic telemetry and autonomous navigation.

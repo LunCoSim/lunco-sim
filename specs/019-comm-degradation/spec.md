@@ -1,6 +1,6 @@
-# Feature Specification: 013-comm-degradation
+# Feature Specification: 019-comm-degradation
 
-**Feature Branch**: `013-comm-degradation`
+**Feature Branch**: `019-comm-degradation`
 **Created**: 2026-03-29
 **Status**: Draft
 **Input**: Simulating real-world network constraints for space operations.

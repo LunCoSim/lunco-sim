@@ -1,6 +1,6 @@
-# Feature Specification: 023-advanced-render-pipelines
+# Feature Specification: 024-advanced-render-pipelines
 
-**Feature Branch**: `023-advanced-render`
+**Feature Branch**: `024-advanced-render-pipelines`
 **Created**: 2026-03-29
 **Status**: Draft
 **Input**: Compute shaders for pixel-perfect thermodynamics, custom Lunar BRDFs, and synthetic semantic segmentation.

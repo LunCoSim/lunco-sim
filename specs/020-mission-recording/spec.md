@@ -1,6 +1,6 @@
-# Feature Specification: 014-mission-recording
+# Feature Specification: 020-mission-recording
 
-**Feature Branch**: `014-mission-recording`
+**Feature Branch**: `020-mission-recording`
 **Created**: 2026-03-29
 **Status**: Draft
 **Input**: Saving and replaying missions for post-mortem analysis.

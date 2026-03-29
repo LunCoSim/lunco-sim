@@ -1,4 +1,4 @@
-# Feature Specification: 010-openmct-telemetry
+# Feature Specification: 011-openmct-telemetry
 
 ## Problem Statement
 To make the simulation act as a genuine digital twin, mission controllers need to view its data in real telemetry software, and AI agents need raw semantic context. We must implement a **Telemetry Bridge** that streams data from the rover's `Sensor` components directly to OpenMCT and Agent APIs.

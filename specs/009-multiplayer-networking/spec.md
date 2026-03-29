@@ -1,4 +1,4 @@
-# Feature Specification: 006-multiplayer-networking
+# Feature Specification: 009-multiplayer-networking
 
 ## Problem Statement
 To enable collaborative missions, multiple players must be able to view and interact with the same "Physical Plants." Given the non-deterministic nature of standard physical simulation in floating-point physics engines, the networking system MUST employ a **Server-Authoritative Architecture with Client-Side Prediction** to ensure physical determinism and robust state reconciliation rather than simply syncing raw inputs blindly.
