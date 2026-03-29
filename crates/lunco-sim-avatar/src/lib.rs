@@ -135,7 +135,7 @@ fn avatar_orbit_logic(
             let offset = rotation * Vec3::new(0.0, 0.0, orbit.distance);
             let desired_pos = target_pos + offset;
             
-            let lerp_factor = (10.0 * time.delta_secs()).min(1.0);
+            let lerp_factor = (5.0 * time.delta_secs()).min(1.0);
             transform.translation = transform.translation.lerp(desired_pos, lerp_factor);
             transform.look_at(target_pos, Vec3::Y);
         }

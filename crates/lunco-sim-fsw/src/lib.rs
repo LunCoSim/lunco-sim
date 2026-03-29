@@ -44,27 +44,36 @@ fn process_commands(
                     // Arg 0: Drive (-1.0 to 1.0)
                     // Arg 1: Steer (-1.0 to 1.0)
                     if cmd.args.len() >= 1 {
-                        let drive_power = (cmd.args[0] * 255.0).clamp(-255.0, 255.0) as i16;
+                        let drive_power = (cmd.args[0] * 255.0).clamp(-255.0, 255.0) as f32;
                         let steer_power = if cmd.args.len() >= 2 {
-                            (cmd.args[1] * 255.0).clamp(-255.0, 255.0) as i16
-                        } else { 0 };
+                            (cmd.args[1] * 255.0).clamp(-255.0, 255.0) as f32
+                        } else { 0.0 };
+
+                        // Differential Drive Mixing
+                        let left_mix = (drive_power + steer_power).clamp(-255.0, 255.0) as i16;
+                        let right_mix = (drive_power - steer_power).clamp(-255.0, 255.0) as i16;
 
                         if let Some(&drive_port_left) = fsw.port_map.get("drive_left") {
                             if let Ok(mut port) = q_digital_ports.get_mut(drive_port_left) {
-                                port.raw_value = drive_power;
+                                port.raw_value = left_mix;
                             }
                         }
                         if let Some(&drive_port_right) = fsw.port_map.get("drive_right") {
                             if let Ok(mut port) = q_digital_ports.get_mut(drive_port_right) {
-                                port.raw_value = drive_power;
-                            }
-                        }
-                        if let Some(&steer) = fsw.port_map.get("steer") {
-                            if let Ok(mut port) = q_digital_ports.get_mut(steer) {
-                                port.raw_value = steer_power;
+                                port.raw_value = right_mix;
                             }
                         }
                     }
+                }
+                "BRAKE_ROVER" => {
+                     // Set all drive channels to zero for now
+                     for name in ["drive_left", "drive_right"] {
+                        if let Some(&port_id) = fsw.port_map.get(name) {
+                            if let Ok(mut port) = q_digital_ports.get_mut(port_id) {
+                                port.raw_value = 0;
+                            }
+                        }
+                     }
                 }
                 _ => {}
             }

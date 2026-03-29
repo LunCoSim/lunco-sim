@@ -15,7 +15,7 @@ fn main() {
     App::new()
         .add_plugins(DefaultPlugins)
         .add_plugins(PhysicsPlugins::default()) // Avian3D
-        .add_plugins(PhysicsDebugPlugin::default()) 
+        // .add_plugins(PhysicsDebugPlugin::default()) // Uncomment to see colliders
         // LunCo Modules
         .add_plugins(LunCoSimPhysicsPlugin)
         .add_plugins(LunCoSimFswPlugin)
@@ -39,15 +39,15 @@ fn draw_wheel_diagnostics(
 ) {
     for (tf, _) in q_wheels.iter() {
         let pos = tf.translation();
-        gizmos.line(pos, pos + tf.right() * 2.0, Color::srgb(1.0, 0.0, 0.0)); // Local X (Red)
-        gizmos.line(pos, pos + tf.up() * 2.5, Color::srgb(0.0, 1.0, 0.0));    // Local Y (Green - Axle)
-        gizmos.line(pos, pos + tf.forward() * 2.0, Color::srgb(0.0, 0.0, 1.0)); // Local Z (Blue)
+        gizmos.line(pos, pos + tf.right() * 2.0, Color::srgb(1.0, 0.0, 0.0)); 
+        gizmos.line(pos, pos + tf.up() * 2.5, Color::srgb(0.0, 1.0, 0.0));    
+        gizmos.line(pos, pos + tf.forward() * 2.0, Color::srgb(0.0, 0.0, 1.0)); 
     }
 
     for (joint, tf) in q_joints.iter() {
         let world_hinge = tf.rotation() * joint.hinge_axis;
         let pos = tf.translation(); 
-        gizmos.line(pos, pos + world_hinge * 2.5, Color::WHITE); // World Hinge (White)
+        gizmos.line(pos, pos + world_hinge * 2.5, Color::WHITE); 
     }
 }
 
@@ -65,7 +65,7 @@ fn setup_scenario(
         Collider::half_space(Vec3::Y),
     ));
 
-    // 2. The Rover Chassis
+    // 2. The Rover Chassis (HEAVY & STABLE)
     let chassis_width = 1.8;
     let chassis_height = 0.5;
     let chassis_length = 3.0;
@@ -81,6 +81,13 @@ fn setup_scenario(
         RigidBody::Dynamic,
         Collider::cuboid(chassis_width, chassis_height, chassis_length),
         Friction::new(0.5),
+        // STABILITY FIXES (INSP BY BEVY_GARAGE)
+        Mass(1000.0), // High mass prevents jittery bouncing
+        CenterOfMass::from(Vec3::new(0.0, -0.4, 0.0)), // Low COM prevents flipping
+        LinearDamping(0.1),
+        AngularDamping(0.2),
+        // Standard inertia for a 1-ton cuboid (approximated)
+        Inertia(Vec3::new(5000.0, 5000.0, 2000.0)), 
     )).id();
 
     // 3. Digital Channels
@@ -112,34 +119,33 @@ fn setup_scenario(
 
     for (label, rel_pos, digital_source, mat) in wheel_configs {
         let motor_port = commands.spawn((Name::new(format!("port_{}", label)), PhysicalPort::default())).id();
-        commands.spawn((Wire { source: digital_source, target: motor_port, scale: 600.0 }));
+        // TORQUE SCALE increased to 5000.0 for the 1000kg chassis
+        commands.spawn(Wire { source: digital_source, target: motor_port, scale: 5000.0 });
 
-        // THE WHEEL ENTITY
         let wheel_entity = commands.spawn((
             Name::new(format!("wheel_{}", label)),
             Mesh3d(wheel_mesh.clone()),
             MeshMaterial3d(mat),
-            Transform::from_translation(rover_spawn_pos + rel_pos)
-                .with_rotation(wheel_tilt),
+            Transform::from_translation(rover_spawn_pos + rel_pos).with_rotation(wheel_tilt),
             RigidBody::Dynamic,
             Collider::cylinder(wheel_radius, wheel_width),
-            Friction::new(2.5), 
+            Friction::new(5.0), // High friction for better traction
+            Mass(20.0),
+            LinearDamping(0.1),
+            AngularDamping(0.1),
             ConstantLocalTorque(Vec3::ZERO),
             MotorActuator {
                 port_entity: motor_port,
-                axis: Vec3::Y, // This stays Y because the cylinder height is Y.
+                axis: Vec3::Y, 
             },
         )).id();
 
-        // THE JOINT FIX
-        // We must align the joint's frames so it doesn't snap the wheel back to 'pancake'
         commands.spawn((
             Name::new(format!("joint_{}", label)),
             RevoluteJoint::new(rover_entity, wheel_entity)
                 .with_local_anchor1(rel_pos)
                 .with_local_anchor2(Vec3::ZERO)
-                .with_hinge_axis(Vec3::X) // Chassis X is the world axle
-                // Specify that the wheel's local frame is already rotated
+                .with_hinge_axis(Vec3::X) 
                 .with_local_basis2(wheel_tilt.inverse()) 
         ));
     }
@@ -153,6 +159,7 @@ fn setup_scenario(
     // 7. Avatar
     let mut input_map = InputMap::default();
     input_map.insert(SpaceSystemAction::DriveForward, KeyCode::KeyW);
+    // Note: Binds are handled by the controller plugin
     commands.spawn((
         Avatar,
         Camera3d::default(),

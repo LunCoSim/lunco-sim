@@ -57,7 +57,7 @@ fn translate_intents_to_commands(
             commands.trigger(CommandMessage {
                 source: Entity::PLACEHOLDER,
                 target: link.vessel_entity,
-                name: "BRAKE".to_string(),
+                name: "BRAKE_ROVER".to_string(),
                 args: vec![],
             });
         }
