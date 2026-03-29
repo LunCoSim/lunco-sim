@@ -8,6 +8,11 @@
 ## Problem Statement
 The engine must support diverse operational environments: running as an interactive 3D desktop application (Godot-like) for test engineers, or running entirely headless in the cloud/server as a digital twin backend. Furthermore, controlling the environment (like changing the time of day) cannot be restricted to Rust code compilation. 
 
+To achieve this, the editor architecture must prioritize:
+1. **Interactive Scripting (Unified REPL)**: An integrated **Lua** console for live parameter editing, state inspection, and immediate property overrides without mission restart.
+2. **Remote/External Architecture**: All internal state and parameters MUST be exposed via a standardized API to allow for complete external control by HIL/SIL tools or custom scripts.
+3. **Headless Execution**: The editor must be capable of running in a headless mode for cloud orchestration and automated testing.
+
 ## User Scenarios
 
 ### User Story 1 - Godot-like In-Game UI (Priority: P1)

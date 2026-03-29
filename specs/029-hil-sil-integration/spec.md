@@ -15,8 +15,9 @@ To serve as a high-fidelity digital twin, the simulation must implement specific
 As a flight software engineer, I want to connect an external **Fprime** instance to the Bevy simulation over UDP, so my real flight code can drive the virtual rover.
 
 **Acceptance Scenarios**:
-1. **Given** a rover in Bevy, **When** Fprime sends a `SET_MOTOR` UDP packet, **Then** the proxy translates it and routes it into the Vessel's Mux.
-2. **Given** the rover is moving, **When** the encoder sensor updates natively, **Then** the telemetry is packed into Fprime formats and sent back via UDP.
+1. **Command Injection**: When Fprime sends a `GROUND_COMMAND`, the engine routes it **directly to the FSW Command Bus (Level 4)**, bypassing the human Avatar/Controller.
+2. **Device Driver Emulation**: When Fprime writes to its virtual hardware drivers, the engine maps those IO calls **directly to the OBC Pin Emulator (Level 2)**.
+3. **Telemetry Fidelity**: The rover's low-level sensors (Level 1) export raw readings that Fprime interprets as if it were on real hardware.
 
 ---
 
@@ -24,7 +25,7 @@ As a flight software engineer, I want to connect an external **Fprime** instance
 As a hardware engineer, I want to connect a physical microcontroller (e.g., ESP32) to the simulation.
 
 **Acceptance Scenarios**:
-1. **Given** a serial connection to a physical MCU, **When** the simulation exports sensor data through its generic Signal Bridge, **Then** the `SerialBridgeNode` streams it over USB/Serial and the MCU reacts in real-time.
+1. **Given** a serial connection to a physical MCU, **When** the simulation exports sensor data, **Then** the MCU reacts by sending electrical equivalents (PWM/GPIO states) **directly to the OBC Pin Map (Level 2)**, which then drives the Level 1 physical motors.
 
 ## Requirements
 

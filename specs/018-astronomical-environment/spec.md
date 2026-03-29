@@ -30,4 +30,5 @@ As a communications engineer, I need to know when an orbiting relay satellite pa
 As a scenario designer, I want to load specific APOLLO `.tif` heightmaps (DEMs) for the rover to physically drive on, but loading an entire regional map will crash standard GPUs.
 
 **Acceptance Criteria:**
-- **Future Optimization:** The engine will implement or interface with a Chunked QuadTree LOD system (Terrain Streaming). As the rover drives, the engine seamlessly pulls high-resolution `.tif` heightmap tiles from SSD to VRAM for the local rendering frustum, whilst drastically decimating geometry for distant mountains.
+- **Future Optimization**: The engine will implement or interface with a Chunked QuadTree LOD system (Terrain Streaming). As the rover drives, the engine seamlessly pulls high-resolution `.tif` heightmap tiles from SSD to VRAM for the local rendering frustum, whilst drastically decimating geometry for distant mountains.
+- **TBD - Soil Properties**: Planetary entities (Moon, Mars) will eventually require **Regolith Property Maps** (density, cohesion, grain size) to support high-fidelity Terramechanics (027) once implemented.
