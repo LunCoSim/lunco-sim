@@ -19,7 +19,7 @@ As a robotics developer, I want the simulation to act as a native ROS2 node (via
 - Bevy `Actuator` commands are received via ROS `Twist` or custom control messages seamlessly.
 
 ### User Story 2 - URDF Kinematic Import (Priority: P2)
-As a mechanical engineer, I want to import a URDF file of a new rover design, so its joint hierarchy and physics properties are automatically configured in Bevy.
+As a mechanical engineer, I want to import a URDF file of a new rover design, so its joint hierarchy and physics attributes are automatically configured in Bevy.
 
 **Acceptance Criteria:**
 - The engine can parse a `.urdf` file and its associated mesh files.
@@ -31,7 +31,7 @@ As a visualization specialist, I want to export the simulation state to Universa
 
 **Acceptance Criteria:**
 - Live-sync or batch export to `.usd`/`.usdc` formats.
-- Material properties and lighting are preserved.
+- Material attributes and lighting are preserved.
 
 ## Requirements
 

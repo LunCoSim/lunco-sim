@@ -6,7 +6,7 @@
 **Input**: Standardized cross-cutting logging logic, OpenTelemetry tracing, and semantic event interception.
 
 ## Problem Statement
-A digital twin requires robust data exhaust. If developers use uncoordinated `println!()` statements to debug the physics loop, capturing performance bottlenecks during headless cloud orchestration becomes impossible. We must standardize the logging and tracing ecosystem fundamentally early, so that every subsequent plugin (Networking, Scripts, Oracles) taps into the same centralized data sink.\n\n> **Note on Scope:** Technical logging is a foundational tool required *during development and debugging*. It is distinctly different from exporting semantic telemetry data to dashboards (`011`) or saving/restoring game simulation state via mission recording (`020`).
+A digital twin requires robust data exhaust. If developers use uncoordinated `println!()` statements to debug the physics loop, capturing performance bottlenecks during headless cloud orchestration becomes impossible. We must standardize the logging and tracing ecosystem fundamentally early, so that every subsequent plugin (Networking, Scripts, Verifiers) taps into the same centralized data sink.\n\n> **Note on Scope:** Technical logging is a foundational tool required *during development and debugging*. It is distinctly different from exporting semantic telemetry data to dashboards (`011`) or saving/restoring game simulation state via mission recording (`020`).
 
 ## User Scenarios
 
@@ -30,4 +30,4 @@ As a systems troubleshooter, I want to trace the "Path of a Signal" from a human
 **Acceptance Criteria:**
 - The engine uses `tracing` spans to correlate a single `Command` as it traverses the 5-layer model.
 - Logs include the `EntityID` of the `OBC.Port` and `Plant.Port` involved in the transaction.
-- **Trace Context**: Developers can enable "Signal Debug" mode to log every `i16` -> `f32` conversion event across `Wire` entities for a specific vessel.
+- **Trace Context**: Developers can enable "Signal Debug" mode to log every `i16` -> `f32` conversion event across `Wire` entities for a specific space system.

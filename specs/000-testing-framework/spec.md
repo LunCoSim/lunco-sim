@@ -6,7 +6,7 @@
 **Authority**: Project Constitution (Principle II, VIII, IX).
 
 ## Problem Statement
-A high-fidelity digital twin must be mathematically and structurally verifiable. For **Stage 1**, we require a **Functional Testing Framework** that enforces architectural integrity and core vessel logic (Action-to-Actuator). Advanced hardware-failure simulation is deferred to future milestones.
+A high-fidelity digital twin must be mathematically and structurally verifiable. For **Stage 1**, we require a **Functional Testing Framework** that enforces architectural integrity and core space system logic (Action-to-Actuator). Advanced hardware-failure simulation is deferred to future milestones.
 
 ---
 
@@ -18,7 +18,7 @@ The 5-layer model (Actions -> Controller -> FSW -> OBC -> Plant) is a **hard bou
 - **Compliance Rules**:
     - **Layer N** can only read/write to **Layer N-1** or **Layer N+1**.
     - **Prohibited**: A Level 1 Actuator reading from Level 5 ActionState (bypass).
-    - **Prohibited**: A Level 4 Controller writing directly to Level 2 OBC Pins (bypass).
+    - **Prohibited**: A Level 4 Controller writing directly to Level 2 OBC Ports (bypass).
 - **Automated Verification**:
     - **Dependency Graph Audit**: CI tools must verify that Bevy Plugins for different layers do not have "layer-skipping" dependencies.
 
@@ -36,11 +36,11 @@ The 5-layer model (Actions -> Controller -> FSW -> OBC -> Plant) is a **hard bou
 - **Sensor Return Path (ADC Path)**: Verify that physical state changes (L1 `f32`) correctly propagate and scale to the OBC's `DigitalPort` (L2 `i16`) and are readable by the FSW (L3).
 - **Resolution & Quantization**: Verify that low-resolution digital signals (e.g., 8-bit `-128` to `127`) result in expected "stepped" physical outputs on the Plant.
 
-### Tier 3: Functional Oracles (Headless Validation)
-Oracle-based tests run the simulation in **Headless Mode** at high speed.
-- **Motion Oracle**: Verify the baseline rover reaches $X$ velocity in $Y$ meters.
-- **Braking Oracle**: Verify the baseline rover reaching zero velocity within $S$ seconds of a `Brake` command.
-- **Platform Oracle**: Verify that the entire test suite runs and passes in **WASM (Browser)**.
+### Tier 3: Functional Verifiers (Headless Validation)
+Verifier-based tests run the simulation in **Headless Mode** at high speed.
+- **Motion Verifier**: Verify the baseline rover reaches $X$ velocity in $Y$ meters.
+- **Braking Verifier**: Verify the baseline rover reaching zero velocity within $S$ seconds of a `Brake` command.
+- **Platform Verifier**: Verify that the entire test suite runs and passes in **WASM (Browser)**.
 
 ---
 

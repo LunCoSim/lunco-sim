@@ -6,7 +6,7 @@
 **Input**: Biological agents, metabolic sinks, pressurization, and radiation tracking.
 
 ## Problem Statement
-A true lunar settlement simulation requires modeling its most fragile components: human beings. Treating vehicles and habitats purely as mechanical vessels ignores the driving constraints of Environmental Control and Life Support Systems (ECLSS). While the `014-modelica-simulation` engine handles the core thermodynamics (gas flow, heat exchange), the Bevy ECS needs an explicit representation of biological agents and habitat pressurization states to drive the human-in-the-loop requirements of the settlement.
+A true lunar settlement simulation requires modeling its most fragile components: human beings. Treating vehicles and habitats purely as mechanical space systems ignores the driving constraints of Environmental Control and Life Support Systems (ECLSS). While the `014-modelica-simulation` engine handles the core thermodynamics (gas flow, heat exchange), the Bevy ECS needs an explicit representation of biological agents and habitat pressurization states to drive the human-in-the-loop requirements of the settlement.
 
 > **Note on Scope**: This specification is slated for a future phase, building upon the established Modelica thermal and fluid libraries.
 
@@ -24,7 +24,7 @@ As a scenario designer, I want to place Crew Members into habitats, so that thei
 As a life support engineer, I want the interior volumes of rovers and bases to track pressure and gas mixture, so that hull breaches or airlock cycles have physical consequences.
 
 **Acceptance Criteria:**
-- Vessels define a `PressurizedVolume` component storing the current gas mix (N₂, O₂, trace).
+- Space Systems define a `PressurizedVolume` component storing the current gas mix (N₂, O₂, trace).
 - Overtaxing the air scrubbers or losing pressure below a threshold triggers ECLSS alarms.
 - Modelica continuously calculates the pressure delta and flow rates through the ECLSS hardware based on agent consumption.
 

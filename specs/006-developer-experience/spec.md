@@ -3,7 +3,7 @@
 **Feature Branch**: `006-developer-experience`
 **Created**: 2026-03-29
 **Status**: Draft
-**Input**: Unified Editor UI, Quake-style REPL, Dynamic Scripting (Lua/Python), Property Inspection, Remote API.
+**Input**: Unified Editor UI, Quake-style REPL, Dynamic Scripting (Lua/Python), Attribute Inspection, Remote API.
 **Consolidates**: Former specs `006-unified-scripting-repl`, `007-unified-editor`, `008-dynamic-scripting`.
 
 ## Problem Statement
@@ -20,7 +20,7 @@ As a scenario designer, I want a fully interactive UI pane inside the Bevy windo
 
 **Acceptance Criteria:**
 - The engine implements `bevy_egui` or a similar UI inspector layer.
-- Users can click on physics entities to view their properties (Transform, Sensors).
+- Users can click on physics entities to view their attributes (Transform, Sensors).
 - **Celestial Lighting**: Users can scrub "Time of Day" / "Sun Position" to preview shadows and thermal states.
 
 #### Story 2: Headless Backend Server (Priority: P0)
@@ -72,11 +72,11 @@ As a systems engineer, I want to press `~` to open a command console and execute
 - The REPL suggests autocompletions for ECS component names and common commands.
 - Commands are routed through the same logic as the Remote Control API (Story 3).
 
-#### Story 8: Property Inspection & Value Override (Priority: P1)
+#### Story 8: Attribute Inspection & Value Override (Priority: P1)
 As a physics researcher, I want to click on a rover wheel and see its `TireFriction` in a side-panel, then type a new value and see the results instantly.
 
 **Acceptance Criteria:**
-- The editor provides a "Property Inspector" pane.
+- The editor provides a "Attribute Inspector" pane.
 - Clicking an entity populates the pane with all public components and data fields.
 - Changing a value immediately mutates the underlying Bevy component.
 
@@ -108,12 +108,12 @@ As a machine learning engineer, I want to use Python (`numpy`, `tensorflow`) to 
 - Python scripts run on a decoupled evaluation tick (e.g., 10 Hz) due to GIL constraints.
 
 #### Story 12: Scripted Flight Software (FSW) (Priority: P2)
-As an autonomy engineer, I want to write a custom "Mission FSW" in Lua that receives **Commands** and executes them by toggling **OBC Pins**.
+As an autonomy engineer, I want to write a custom "Mission FSW" in Lua that receives **Commands** and executes them by toggling **OBC Ports**.
 
 **Acceptance Criteria:**
 - The engine supports registering a Lua script as the `ActiveFSW` (Level 3).
 - Scripts iterate over `Events<Command>` and write to `PinState` components.
-- Scripts can implement "Safety Monitors" that override pin states if sensor thresholds are breached.
+- Scripts can implement "Safety Monitors" that override port states if sensor thresholds are breached.
 
 #### Story 13: Timed Maneuver Plans (Priority: P2)
 As an autonomy engineer, I want to write a Lua script executing a timed sequence of motor signals ("Maneuver Plan").

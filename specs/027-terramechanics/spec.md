@@ -26,7 +26,7 @@ As a rover engineer, I want the wheels to interact with the terrain surface usin
 - Default parameters are provided for lunar regolith (JSC-1A simulant values).
 
 ### Story 2: Terrain Material Zones (Priority: P1)
-As a scenario designer, I want different areas of the terrain to have different soil properties, so that driving over loose dust feels different from driving over compacted regolith near a crater rim.
+As a scenario designer, I want different areas of the terrain to have different soil attributes, so that driving over loose dust feels different from driving over compacted regolith near a crater rim.
 
 **Acceptance Criteria:**
 - The terrain mesh supports a `TerrainMaterial` component or texture-map-based lookup that maps surface regions to soil parameter sets.

@@ -16,18 +16,18 @@ These are two halves of one system: sensors produce the data, the bridge deliver
 ### Sensor Simulation
 
 #### Story 1: Scalar Sensor Pipeline (IMU, Encoders, Temperature) (Priority: P0)
-As a controls engineer, I want the rover's IMU and wheel encoders to produce realistic readings routed through the OBC Pin pipeline.
+As a controls engineer, I want the rover's IMU and wheel encoders to produce realistic readings routed through the OBC Port pipeline.
 
 **Acceptance Criteria:**
 - `Sensor` components produce scalar values (acceleration, angular velocity, encoder ticks, temperature).
-- Sensor data flows: Level 1 (Sensor) → Level 2 (OBC Input Pins) → Level 3 (FSW Logic).
+- Sensor data flows: Level 1 (Sensor) → Level 2 (OBC Input Ports) → Level 3 (FSW Logic).
 - Sensors support configurable noise models (Gaussian noise, bias drift).
 
 #### Story 2: Depth Camera & Point Clouds (Priority: P1)
 As an autonomy engineer, I want a simulated stereo/depth camera that generates depth maps for obstacle detection.
 
 **Acceptance Criteria:**
-- A `DepthCamera` Sensor component can be attached to a vessel.
+- A `DepthCamera` Sensor component can be attached to a space system.
 - The engine leverages an additional Render Pass or Compute Shader to extract Z-buffer depth data.
 - Depth data is serialized and streamed via the telemetry bridge at ≥15 Hz.
 

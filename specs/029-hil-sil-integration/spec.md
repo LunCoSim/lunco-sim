@@ -16,7 +16,7 @@ As a flight software engineer, I want to connect an external **Fprime** instance
 
 **Acceptance Scenarios**:
 1. **Command Injection**: When Fprime sends a `GROUND_COMMAND`, the engine routes it **directly to the FSW Command Bus (Level 4)**, bypassing the human Avatar/Controller.
-2. **Device Driver Emulation**: When Fprime writes to its virtual hardware drivers, the engine maps those IO calls **directly to the OBC Pin Emulator (Level 2)**.
+2. **Device Driver Emulation**: When Fprime writes to its virtual hardware drivers, the engine maps those IO calls **directly to the OBC Port Emulator (Level 2)**.
 3. **Telemetry Fidelity**: The rover's low-level sensors (Level 1) export raw readings that Fprime interprets as if it were on real hardware.
 
 ---
@@ -25,7 +25,7 @@ As a flight software engineer, I want to connect an external **Fprime** instance
 As a hardware engineer, I want to connect a physical microcontroller (e.g., ESP32) to the simulation.
 
 **Acceptance Scenarios**:
-1. **Given** a serial connection to a physical MCU, **When** the simulation exports sensor data, **Then** the MCU reacts by sending electrical equivalents (PWM/GPIO states) **directly to the OBC Pin Map (Level 2)**, which then drives the Level 1 physical motors.
+1. **Given** a serial connection to a physical MCU, **When** the simulation exports sensor data, **Then** the MCU reacts by sending electrical equivalents (PWM/GPIO states) **directly to the OBC Port Map (Level 2)**, which then drives the Level 1 physical motors.
 
 ## Requirements
 

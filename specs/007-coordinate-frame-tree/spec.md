@@ -42,7 +42,7 @@ To maintain `f64` precision across solar-system distances, transforms are calcul
 
 1.  **Solar System Frame (f64 Global)**: Absolute origin at the solar system barycenter.
 2.  **Body-Fixed Frame (f64 Global)**: Centered on and rotating with a celestial body (e.g., Moon-Fixed).
-3.  **Model Root (Link)**: The `base_link` of a Vessel (e.g., the Rover chassis).
+3.  **Model Root (Link)**: The `base_link` of a Space System (e.g., the Rover chassis).
 4.  **Child Link**: A sub-part connected via a **Joint** (e.g., a robotic arm segment or a wheel).
 5.  **Port Offset**: The fixed point on a Link where a `Wire` connects.
 
@@ -60,6 +60,6 @@ To maintain `f64` precision across solar-system distances, transforms are calcul
 
 ### Functional Requirements
 - **FR-001**: **Link-Joint Hierarchy**: The engine MUST support a tree of `f64` Links connected by logical Joints.
-- **FR-002**: **Body-Fixed Conversion**: The engine MUST provide an "Anchor" system to pin Model Roots to a rotating celestial body (Body-Fixed Frame).
+- **FR-002**: **Body-Fixed Conversion**: The engine MUST provide an "Anchor" system to port Model Roots to a rotating celestial body (Body-Fixed Frame).
 - **FR-003**: **Direct Reference Update**: Child Links MUST update their global `f64` state by directly referencing their Parent Link's `f64` state (fast traversal).
 - **FR-004**: **Angular Precision**: All Joint rotations and Link orientations MUST use `DQuat` (f64) to prevent "quaternion drift" over long mission durations.

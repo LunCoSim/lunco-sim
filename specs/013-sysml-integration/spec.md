@@ -13,8 +13,8 @@ To ensure the simulation is a true digital twin, the engine performs a direct 1:
 | **`port`** | **Port** Component (`Digital` / `Physical`) | An interaction point for signals or physical flows. |
 | **`connection`** | **Wire** (Signal) or **Joint** (Spatial) | The logical or physical link between two ports or parts. |
 | **`interface`** | **PortType** & **Unit** Metadata | Defines the "Contract" of what a port can send/receive. |
-| **`attribute`** | **Component Data** (e.g., `Mass`, `MaxTorque`) | Numerical properties of a part or port. |
-| **`requirement`**| **Oracle Rule** (from Spec `000` / `005`) | Verification logic (e.g., `Rover.Mass < 50kg`). |
+| **`attribute`** | **Component Data** (e.g., `Mass`, `MaxTorque`) | Numerical attributes of a part or port. |
+| **`requirement`**| **Verifier Rule** (from Spec `000` / `005`) | Verification logic (e.g., `Rover.Mass < 50kg`). |
 | **`ItemFlow`** | **Resource Logic** (Spec `014` / `025`) | The transfer of mass/energy over time (Modelica). |
 
 ### 1. The SysML "Blueprint" Logic

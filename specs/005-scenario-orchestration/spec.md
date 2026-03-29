@@ -31,12 +31,12 @@ As a Data Scientist, I want an external Python runner to execute 10,000 parallel
 - The scenario loader accepts inline JSON-path arguments (e.g., `cargo run -- --scenario base.ron --override Rover.Mass=15.2 Rover.Friction=0.7`).
 - These overrides are injected dynamically into the Bevy ECS before the scenario begins ticking, mathematically proving that the engine seamlessly supports external Monte Carlo generation scripts out-of-the-box.
 
-### User Story 4 - Automated Evaluation Oracle (Priority: P1)
+### User Story 4 - Automated Evaluation Verifier (Priority: P1)
 As a test engineer, I want to define victory and failure rules alongside my scenario configuration, so that the simulation stops automatically when an endpoint is reached to enforce a Test-Driven Development (TDD) lifecycle without human visual review.
 
 **Acceptance Criteria:**
-- The engine implements an `Oracle` system evaluated during the `FixedUpdate` schedule.
+- The engine implements an `Verifier` system evaluated during the `FixedUpdate` schedule.
 - It interprets semantic rules parsed from the BSN/RON setup (e.g., `REQUIRE Rover.Transform.x > 100`, `FAIL_IF Rover.BatteryLevel < 0.05`).
-- The Oracle triggers an `AppExit` the moment a boundary is crossed.
+- The Verifier triggers an `AppExit` the moment a boundary is crossed.
 - Upon termination, the simulation writes a strict `test_report.json` detailing the exact frame, simulation time, trigger rule, and final sensor states.
 - Exits with standard POSIX codes.

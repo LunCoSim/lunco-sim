@@ -21,7 +21,7 @@ As a mission operator, I want to save the current state of my lunar base (includ
 As a CI/CD operator running 10,000 parallel Monte Carlo simulations in a headless cluster, I want automatic checkpointing over simulated time to prevent data loss.
 
 **Acceptance Criteria**:
-- The engine supports a `PeriodicSave` resource triggerable via CLI flags (e.g., `--autosave-interval 3600`), dumping state to disk gracefully without interrupting the headless TDD oracle.
+- The engine supports a `PeriodicSave` resource triggerable via CLI flags (e.g., `--autosave-interval 3600`), dumping state to disk gracefully without interrupting the headless TDD verifier.
 
 ### User Story 3 - Deterministic Replay (Priority: P1)
 As a test engineer, I want the simulation to produce **bit-identical** results when given the same inputs and random seed, so that I can reliably reproduce and debug any run.

@@ -27,8 +27,8 @@ To serve as a high-fidelity digital twin, LunCoSim treats all simulated entities
 
 | Layer | Concept | Implementation (Bevy ECS) | Role |
 | :--- | :--- | :--- | :--- |
-| **5** | **Action** | **`ActionState<VesselAction>`** | Human intent (e.g., `MoveForward`). Managed by Leafwing. |
-| **4** | **Controller**| **`VesselController` System** | Reads `ActionState`, emits **`Events<Command>`**. Mapping: `Action::W` -> `CMD_DRIVE(1.0)`. |
+| **5** | **Action** | **`ActionState<SpaceSystemAction>`** | Human intent (e.g., `MoveForward`). Managed by Leafwing. |
+| **4** | **Controller**| **`SpaceSystemController` System** | Reads `ActionState`, emits **`Events<Command>`**. Mapping: `Action::W` -> `CMD_DRIVE(1.0)`. |
 | **3** | **FSW** | **`FlightSoftware` Plugin** | Reads `Events<Command>`, translates to **`OBC.Port`** values via a **Hardware Map**. |
 | **2** | **OBC** | **`OBC_Emulator` Entity** | Collection of **`Port`** child entities (Digital/Analog Signals). |
 | **1** | **Plant** | **`Actuator / Sensor`** | Physics entities with **`Port`** components (Physical Units). |
@@ -83,7 +83,7 @@ As a developer, I want to validate the 5-layer architecture with a concrete "Sta
 - **Physics Feature**: A single physical **ramp** sufficient for launching the rover into the air.
 - **Lighting**: A single directional light source representing the Sun.
 
-**Vessel Configuration (The Baseline Rover):**
+**Space System Configuration (The Baseline Rover):**
 - **Body**: A primitive box collider.
 - **Wheels**: 4 independent wheel colliders.
 - **Actuators (6 Total)**:
@@ -113,7 +113,7 @@ To ensure the 5-layer architecture is computationally verifiable, all developmen
 
 1. **Architecture Compliance**: No layer-skipping or prohibited dependency flows.
 2. **Component-Level Logic Tests**: Mandatory unit tests for every Layer 2, 3, and 4 component (FR-010).
-3. **Headless Oracle Validation**: Automated, GUI-less physical state verification (Movement, Braking, Stability).
+3. **Headless Verifier Validation**: Automated, GUI-less physical state verification (Movement, Braking, Stability).
 
 ---
 
@@ -135,12 +135,12 @@ Bevy defaults to **Y-Up**. External aerospace software (Fprime, ROS) defaults to
 ## User Scenarios
 
 ### User Story 1 - Avatar Possession & Controller Mapping (Priority: P1)
-As a user, I want my Avatar to fly through the world and 'Possess' a rover, whereby my `ActionState<VesselAction>::MoveForward` is automatically mapped by the rover's **VesselController** into valid drive commands for its flight software. (Note: The Controller is logically 'boring'—it only passes intent; the FSW handles the actual steering/logic).
+As a user, I want my Avatar to fly through the world and 'Possess' a rover, whereby my `ActionState<SpaceSystemAction>::MoveForward` is automatically mapped by the rover's **SpaceSystemController** into valid drive commands for its flight software. (Note: The Controller is logically 'boring'—it only passes intent; the FSW handles the actual steering/logic).
 
 ### User Story 2 - CLI Command Overhaul (Priority: P1)
 As a mission operator, I want to bypass the Avatar and Controller by sending a raw `CMD_REBOOT` directly to the FSW via the command-line interface (CLI).
 
-### User Story 3 - Automated Success Oracles (Priority: P1)
+### User Story 3 - Automated Success Verifiers (Priority: P1)
 As a QA lead, I want to run 1,000 headless simulations of a rover landing to gather statistical success data without GPU overhead or windowing requirements.
 
 ---
@@ -150,7 +150,7 @@ As a QA lead, I want to run 1,000 headless simulations of a rover landing to gat
 ### Functional Requirements
 - **FR-001**: **Unified Action Bus**: Every Avatar executes an Action Bus (using `leafwing-input-manager` style mapping).
 - **FR-002**: **Command Handover**: The Flight Software MUST expose a unified interface for receiving **Commands** from the Controller, CLI, or internal autonomous sequences.
-- **FR-003**: **OBC Hardware Emulation**: The OBC MUST maintain a persistent state of its I/O registers, allowing telemetry probes to read real-time "Pin Levels".
+- **FR-003**: **OBC Hardware Emulation**: The OBC MUST maintain a persistent state of its I/O registers, allowing telemetry probes to read real-time "Port Levels".
 - **FR-005**: **f64 Physical Fidelity**: All physics calculations MUST be performed in **f64 (double precision)** using Avian3D.
 - **FR-006**: **Actuator Metadata Awareness**: Every Level 1 component MUST expose `MaxTorque`, `MinTravel`, and `Addressing` for control validation.
 - **FR-007**: **Headless Mode Compliance**: The core simulation MUST be capable of functioning without `RenderPlugin` or `WindowPlugin`.
@@ -159,4 +159,4 @@ As a QA lead, I want to run 1,000 headless simulations of a rover landing to gat
 - **FR-010**: **Testability Mandate**: Every Level 2, 3, and 4 component MUST be implementable in a mockable way, allowing for isolated unit testing of logic without the full physics engine.
 
 ### Key Entities & Terminology
-For a complete definition of all entities (Avatar, Vessel, Controller, OBC, etc.) and architectural terminology, refer to the authoritative **[Engineering Ontology](file:///home/rod/Documents/lunco/lunco-sim-bevy/specs/ontology.md)**.
+For a complete definition of all entities (Avatar, Space System, Controller, OBC, etc.) and architectural terminology, refer to the authoritative **[Engineering Ontology](file:///home/rod/Documents/lunco/lunco-sim-bevy/specs/ontology.md)**.

@@ -17,7 +17,7 @@ As an optics and thermal engineer, I want the sun angle and Earth position accur
 
 **Acceptance Criteria:**
 - The engine computes planetary positions dynamically using generic Ephemeris data or JPL SPICE kernels.
-- The `005` Scenario loader sets a `Timestamp` and a coordinate (e.g., `Lat/Lon` at the Lunar South Pole), and the Bevy lighting systems (Directional Light properties) are calculated automatically by the celestial mechanics module, not hard-coded floats.
+- The `005` Scenario loader sets a `Timestamp` and a coordinate (e.g., `Lat/Lon` at the Lunar South Pole), and the Bevy lighting systems (Directional Light attributes) are calculated automatically by the celestial mechanics module, not hard-coded floats.
 
 ### User Story 2 - Spherical Occlusion (Priority: P2)
 As a communications engineer, I need to know when an orbiting relay satellite passes behind the horizon of the Moon relative to the surface rover, instantly cutting the signal.
@@ -31,4 +31,4 @@ As a scenario designer, I want to load specific APOLLO `.tif` heightmaps (DEMs) 
 
 **Acceptance Criteria:**
 - **Future Optimization**: The engine will implement or interface with a Chunked QuadTree LOD system (Terrain Streaming). As the rover drives, the engine seamlessly pulls high-resolution `.tif` heightmap tiles from SSD to VRAM for the local rendering frustum, whilst drastically decimating geometry for distant mountains.
-- **TBD - Soil Properties**: Planetary entities (Moon, Mars) will eventually require **Regolith Property Maps** (density, cohesion, grain size) to support high-fidelity Terramechanics (027) once implemented.
+- **TBD - Soil Attributes**: Planetary entities (Moon, Mars) will eventually require **Regolith Attribute Maps** (density, cohesion, grain size) to support high-fidelity Terramechanics (027) once implemented.

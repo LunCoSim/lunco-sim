@@ -7,8 +7,12 @@ This document serves as the definitive source of truth for the architectural ter
 - **Space System**: The universal container for an independent, controllable entity in the simulation (e.g., Rover, Satellite, Ground Station, Base). Following CCSDS and XTCE standards, a Space System is a recursive hierarchy of Subsystems and structural Links.
 - **Verifier**: A persistent, independent monitoring system that validates simulation state against analytical truth. Verifiers are the "Judges" of the digital twin, ensuring that physics and logic remain within verified engineering bounds. Following SysML v2, Verifiers execute **Verification Cases** against mission requirements.
 - **Attribute**: A measurable, persistent data field belonging to a Link or Port (e.g., `Mass`, `Voltage`, `MaxTorque`). This term is used for 1:1 alignment with SysML v2 and USD.
-- **CommandRegistry**: A self-describing component attached to a **Space System** or **Link** that defines its available **CommandMessages**. Inspired by **XTCE MetaCommands** and **NASA FPrime Commands**, it contains documentation, parameter types, and validation ranges for AI discovery.
-- **CommandMessage**: The universal "Instruction" packet sent to an entity. Following **CCSDS Telecommand** standards, it contains a target ID, a command name, and typed arguments.
+- **CommandMessage**: The universal "Instruction" packet used for transport and communication. Inspired by **XTCE Telecommands (TC)** and **NASA FPrime Commands**, it's a discrete, serializable data structure containing a target `Entity`, command `name`, typed `args`, and `source`. This packet decouples senders from receivers, enables asynchronous operations, and provides a standardized format for AI/MCP discovery via the `CommandRegistry`. The abstract instruction itself is referred to as a "Command".
+- **CommandRegistry**: A self-describing component attached to a **Space System** or **Link** that defines its available abstract **Commands** and how they are represented as `CommandMessage`s. Inspired by **XTCE MetaCommands** and **NASA FPrime Command definitions**, it contains documentation, parameter types, and validation ranges for AI discovery.
+
+### Terminology Rationale
+...
+- **CommandMessage (vs. Direct Function Call / Abstract Command)**: We use "CommandMessage" to signify a structured, transportable packet of instructions, distinct from a direct function call or a high-level abstract "Command." This adheres to standards like **XTCE/CCSDS Telecommands**, enabling better decoupling, serialization, and AI discoverability via the **CommandRegistry**. It separates the *instruction concept* from its *data representation and transport*.
 
 ### Terminology Rationale
 
@@ -45,11 +49,12 @@ LunCoSim uses a layered approach to separate human intent from computer logic an
 
 | Layer | Name | Responsibility | Input | Output |
 | :--- | :--- | :--- | :--- | :--- |
-| **5** | **Action** | **Human Intent**: Platform-agnostic representation of what the user wants to do (e.g., `Move Forward`). | User Input (WASD, Joystick) | Command Map |
-| **4** | **Controller**| **Pilot Mapping (Boring)**: A thin translator that maps generic Actions into vessel-specific Commands. It carries no steering or control logic. | Actions | Commands |
-| **3** | **FSW (Flight Software)** | **The Brain**: Stateful logic that executes commands and manages autonomous behavior. | Commands (Controller, CLI, MCP) | I/O Requests (Pins) |
-| **2** | **OBC (Onboard Computer)** | **Hardware Emulator**: Stateful digital twin of an SBC/MCU (Pins, Registers, Power). | I/O Requests | Electrical Signals |
-| **1** | **Plant** | **The Mechanism**: Physical actuators, sensors, and rigidbodies (Physics). | Electrical Signals | Force/Torque/State |
+| **5** | **Intent** | **Human/AI Intent**: High-level goal (e.g., `MoveForward`). Functionally equivalent to Godot's "Input Actions". | Raw Input (WASD, Mouse) | `IntentState` |
+| **4** | **Controller**| **Pilot Mapping**: Translates `IntentState` into specific `CommandMessages`. | `IntentState` | `CommandMessages` |
+| **3** | **FSW** | **The Brain**: Stateless/Stateful logic that executes commands. | `CommandMessages` | `Port` Writes |
+| **2** | **OBC** | **The Interface**: Holds `DigitalPorts` (i16) and registers. | `Port` Writes | `Connection` Signal |
+| **1** | **Plant** | **The Mechanism**: Physical actuators, sensors, and rigidbodies. | `Connection` Signal | Force/Torque/State |
+
 
 ---
 

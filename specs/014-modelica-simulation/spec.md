@@ -22,7 +22,7 @@ As a subsystem engineer, I want the rover's battery level to be calculated by a 
 - The model reads signals from the Bevy `CommandMux` and feeds its mathematical results into the `Sensor` components.
 
 ### Story 3: Generic Physics Mutators (Hard Engineering Interop)
-As a physics engineer, I want the internal state of the Modelica simulation to dynamically alter the structural properties of the outward Bevy object.
+As a physics engineer, I want the internal state of the Modelica simulation to dynamically alter the structural attributes of the outward Bevy object.
 
 **Acceptance Criteria:**
 - Modelica holds mutator authority over generic `avian` structural components (e.g., altering a tire's `Friction` if Modelica dictates it has frozen).

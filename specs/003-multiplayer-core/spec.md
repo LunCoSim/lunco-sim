@@ -55,13 +55,13 @@ As a mission participant, I want to see the real-time positions, orientations, a
 - State prediction rollbacks are supported by tying into the `avian` ECS-native physics engine.
 
 ### Story 3: Single-Operator Control (Priority: P0)
-As a rover operator, I want to take control of a vessel and have my inputs reflected in the shared world, while other users observe.
+As a rover operator, I want to take control of a space system and have my inputs reflected in the shared world, while other users observe.
 
 **Acceptance Criteria:**
-- A `ControlAuthority` component tracks which player (if any) currently controls each vessel.
-- Only the player with authority can send Commands to that vessel's FSW.
-- When Player A takes control, all other clients are notified that the vessel is "under manual control."
-- Control is exclusive per-vessel at this level (concurrent subsystem access is spec `009`).
+- A `ControlAuthority` component tracks which player (if any) currently controls each space system.
+- Only the player with authority can send Commands to that space system's FSW.
+- When Player A takes control, all other clients are notified that the space system is "under manual control."
+- Control is exclusive per-space system at this level (concurrent subsystem access is spec `009`).
 
 ### Story 4: Observer Presence (Priority: P1)
 As a mission participant, I want to see the presence and activity of other observers in the world.
@@ -90,5 +90,5 @@ As a mission participant, I want to have a user profile so that my identity and 
 ### Key Entities
 - **GameServer**: The authoritative simulation host. Runs physics, FSW, and Modelica.
 - **GameClient**: A rendering-only consumer. Receives f32 state, renders, and sends inputs.
-- **ControlAuthority**: Component tracking which player has exclusive control of a vessel.
+- **ControlAuthority**: Component tracking which player has exclusive control of a space system.
 - **PlayerProfile**: Minimal identity and session data.

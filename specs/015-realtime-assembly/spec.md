@@ -83,9 +83,9 @@ As a systems engineer, I want the custom rover assembled in "Construction Mode" 
 ## Requirements
 
 ### Functional Requirements
-- **FR-001**: **Part Metadata**: Every modular part MUST define its physical properties (mass, collider) and its Signal Ports (Actuators/Sensors).
+- **FR-001**: **Part Metadata**: Every modular part MUST define its physical attributes (mass, collider) and its Signal Ports (Actuators/Sensors).
 - **FR-002**: **Real-time Hierarchy Update**: The engine MUST support dynamic parenting/unparenting of physics entities while the simulation is running (or paused in Construction Mode).
-- **FR-003**: **Signal Auto-Discovery**: Sub-entities (parts) MUST automatically discover their root `Vessel` and register their `Actuator/Sensor` ports to the vessel's central multiplexer.
+- **FR-003**: **Signal Auto-Discovery**: Sub-entities (parts) MUST automatically discover their root `Space System` and register their `Actuator/Sensor` ports to the space system's central multiplexer.
 - **FR-004**: **SysML Serialization State**: The engine MUST be able to map its real-time component hierarchy back into a SysML v2 syntax tree and export it.
 - **FR-005**: **Plugin Architecture**: The `SysmlConstraintsPlugin` MUST be a separate, optional Bevy plugin that can be added or removed independently.
 
