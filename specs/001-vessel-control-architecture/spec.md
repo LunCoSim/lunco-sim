@@ -35,6 +35,50 @@ To serve as a high-fidelity digital twin, LunCoSim treats all simulated entities
 
 ---
 
+## Technical Validation Scenarios
+
+### User Story 0 - Stage 1 Baseline (MVP) (Priority: P0)
+As a developer, I want to validate the 5-layer architecture with a concrete "Stage 1" rover experience that works in the browser.
+
+**Environment Setup:**
+- **Terrain**: A static 1x1km flat plane.
+- **Physics Feature**: A single physical **ramp** sufficient for launching the rover into the air.
+- **Lighting**: A single directional light source representing the Sun.
+
+**Vessel Configuration (The Baseline Rover):**
+- **Body**: A primitive box collider.
+- **Wheels**: 4 independent wheel colliders.
+- **Actuators (6 Total)**:
+    - **4x Drive Motors**: 1 per wheel (Forward/Backward torque).
+    - **2x Steering Motors**: Independent steering on the 2 front wheels.
+
+**Interaction Logic:**
+- **Initial State**: Avatar starts unpossessed (Free-cam).
+- **Possession Handover**: Avatar can "Enter" the rover to enable control.
+- **Controls**:
+    - **W/S**: Drive (Forward/Backward torque).
+    - **A/D**: Steer (Left/Right front wheel rotation).
+    - **Space**: **Brake** (Immediately stop wheel rotation).
+    - **Idle**: **Inertia** (Wheels transition to free-rolling when no keys are pressed).
+
+**Technical Acceptance Criteria:**
+- **Visual Accuracy**: Wheels MUST have a basic shader/texture allowing visual verification of rotation.
+- **Speed Matching**: Wheel rotation speed MUST physically match the rover's velocity (including air-borne inertia).
+- **Architecture Validation**: MUST pass all **[General Testing Framework (000-TEST)](file:///home/rod/Documents/lunco/lunco-sim-bevy/specs/000-testing-framework/spec.md)** compliance rules.
+- **WASM Compliance**: The entire scenario MUST be runnable in a modern web browser.
+
+---
+
+## Testing & Validation Mandate
+
+To ensure the 5-layer architecture is computationally verifiable, all development MUST adhere to the **[General Testing Framework (000-TEST)](file:///home/rod/Documents/lunco/lunco-sim-bevy/specs/000-testing-framework/spec.md)**. This includes:
+
+1. **Architecture Compliance**: No layer-skipping or prohibited dependency flows.
+2. **Component-Level Logic Tests**: Mandatory unit tests for every Layer 2, 3, and 4 component (FR-010).
+3. **Headless Oracle Validation**: Automated, GUI-less physical state verification (Movement, Braking, Stability).
+
+---
+
 ## Implementation Patterns
 
 ### 1. Camera-Relative Rendering (Origin Shifting)
@@ -72,6 +116,9 @@ As a QA lead, I want to run 1,000 headless simulations of a rover landing to gat
 - **FR-005**: **f64 Physical Fidelity**: All physics calculations MUST be performed in **f64 (double precision)** using Avian3D.
 - **FR-006**: **Actuator Metadata Awareness**: Every Level 1 component MUST expose `MaxTorque`, `MinTravel`, and `Addressing` for control validation.
 - **FR-007**: **Headless Mode Compliance**: The core simulation MUST be capable of functioning without `RenderPlugin` or `WindowPlugin`.
+- **FR-008**: **Actuator Multi-Mapping**: FSW MUST support simultaneous control of multiple actuator types (Drive vs. Steering) from a single user intent (e.g., A/D mapping and mixing).
+- **FR-009**: **Brake Capability**: Actuators MUST support a `Brake` state that overrides current torque/speed to halt rotation.
+- **FR-010**: **Testability Mandate**: Every Level 2, 3, and 4 component MUST be implementable in a mockable way, allowing for isolated unit testing of logic without the full physics engine.
 
 ### Key Entities & Terminology
 For a complete definition of all entities (Avatar, Vessel, Controller, OBC, etc.) and architectural terminology, refer to the authoritative **[Engineering Ontology](file:///home/rod/Documents/lunco/lunco-sim-bevy/specs/ontology.md)**.
