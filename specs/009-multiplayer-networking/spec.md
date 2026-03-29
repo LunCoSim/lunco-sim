@@ -2,6 +2,7 @@
 
 ## Problem Statement
 To enable collaborative missions, multiple players must be able to view and interact with the same "Physical Plants." Given the non-deterministic nature of standard physical simulation in floating-point physics engines, the networking system MUST employ a **Server-Authoritative Architecture with Client-Side Prediction** to ensure physical determinism and robust state reconciliation rather than simply syncing raw inputs blindly.
+Additionally, the system requires identity management to support distinct user profiles and access controls.
 
 ## User Stories
 
@@ -19,3 +20,11 @@ As a rover operator, I want to see the effect of my commands reflected in the sh
 **Acceptance Criteria:**
 - The `ControlAuthority` component and its corresponding `CommandMux` state are synchronized.
 - When Player A takes control, Player B is notified that "Manual Authority" is active.
+
+### Story 3: User Profiles
+As a mission participant, I want to have a user profile, so that my identity, roles, and configurations persist across networking sessions.
+
+**Acceptance Criteria:**
+- Network architecture supports authenticating and synchronizing user profiles.
+- Participant identities and roles are broadcast appropriately to peers.
+- Authority checks (e.g., in Story 2) validate against role-based access defined in the profile.
