@@ -23,3 +23,10 @@ As a CI/CD operator, I want to pass the scenario file via command line so the in
 
 **Acceptance Criteria:**
 - Engine boots with `cargo run -- --scenario <path_to_bsn/ron>`.
+
+### User Story 3 - Remote Asset Resolution (Priority: P3)
+As a project contributor, I want to define huge 3D assets (like a crater or a rover model) inside my scenario file without ever pushing them to GitHub or using Git-LFS, so that the main repository stays lightweight.
+
+**Acceptance Criteria:**
+- The scenario file supports Remote URIs for assets (e.g., `crater_tycho = "https://assets.lunco.space/tycho.gltf"`).
+- When a scenario loads, the engine checks a local AppData cache (e.g., `~/.lunco/assets/`). If missing, it downloads the asset automatically before spawning the scene (functioning exactly like a Cargo dependency manager).

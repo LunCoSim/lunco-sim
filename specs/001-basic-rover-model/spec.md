@@ -25,7 +25,14 @@ As a core engine architect, I want the simulation to handle vast Earth-Moon dist
 
 **Acceptance Criteria:**
 - Physics calculations (transforms and forces) are executed natively in `f64` (double precision) either natively via customized components or Avian overrides.
-- **Camera-Relative Rendering**: To prevent `f32` precision jitter in Bevy's GPU pipeline, the engine binds the active Camera near the origin `(0,0,0)`. Visual `Transforms` (`f32`) of entities are dynamically updated relative to the camera's true `f64` position every frame .
+- **Camera-Relative Rendering**: To prevent `f32` precision jitter in Bevy's GPU pipeline, the engine binds the active Camera near the origin `(0,0,0)`. Visual `Transforms` (`f32`) of entities are dynamically updated relative to the camera's true `f64` position every frame (mirroring the *Kitten Space Agency* methodology).
+
+### Story 4: Plugin-First Extensibility
+As a third-party developer, I want to add my own custom sensors, environments, or vehicle mechanics without modifying the core LunCoSim source code.
+
+**Acceptance Criteria:**
+- **Everything is a Plugin**: The architecture leverages Bevy's native `Plugin` system to the absolute maximum. The core engine executable is merely a lightweight shell that strings together modular plugins (e.g., `app.add_plugins(LuncoCorePlugin).add_plugins(RoverPhysicsPlugin)`).
+- Adding a new capability is as simple as adding a standard Rust crate to the workspace and registering its Plugin. No tangled monolithic dependencies.
 
 ## Out of Scope
 - External SIL/HIL (Reserved for Feature 002).
