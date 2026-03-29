@@ -12,6 +12,7 @@ This document serves as the definitive source of truth for the architectural ter
 
 ### Terminology Rationale
 ...
+- **AttributeRegistry**: A centralized, thread-safe Reflection server. While `Attributes` define the individual data properties of components, the `AttributeRegistry` maps semantic external strings (e.g. `sim.rover.motor_l.torque_limit`) directly to live ECS Component memory pointers. This allows UI tools, CLI interfaces, and MCP LLMs to dynamically read or write internal engineering state in real-time without needing compiled generic logic.
 - **CommandMessage (vs. Direct Function Call / Abstract Command)**: We use "CommandMessage" to signify a structured, transportable packet of instructions, distinct from a direct function call or a high-level abstract "Command." This adheres to standards like **XTCE/CCSDS Telecommands**, enabling better decoupling, serialization, and AI discoverability via the **CommandRegistry**. It separates the *instruction concept* from its *data representation and transport*.
 
 ### Terminology Rationale

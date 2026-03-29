@@ -143,6 +143,9 @@ As a mission operator, I want to bypass the Avatar and Controller by sending a r
 ### User Story 3 - Automated Success Verifiers (Priority: P1)
 As a QA lead, I want to run 1,000 headless simulations of a rover landing to gather statistical success data without GPU overhead or windowing requirements.
 
+### User Story 4 - SysML Attribute Telemetry Tweaking (Priority: P1)
+As a mission operator, I want to view and modify dynamic component configurations (Attributes) in real-time via external CLI or MCP tools without executing procedural commands. By using an `AttributeRegistry` that parses SysML strings (e.g. `set("rover1.motor_l.max_torque", 95.5)`), I can seamlessly tweak hardware calibrations and visualize the telemetry instantly affecting physical outcomes.
+
 ---
 
 ## Requirements
