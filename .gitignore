@@ -1,3 +1,4 @@
 
 # Godot-specific ignores
 .agents/
+target/

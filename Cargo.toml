@@ -1,0 +1,16 @@
+[workspace]
+members = [
+    "crates/lunco-sim-core",
+    "crates/lunco-sim-physics",
+    "crates/lunco-sim-obc",
+    "crates/lunco-sim-fsw",
+    "crates/lunco-sim-controller",
+    "crates/lunco-sim-client"
+]
+resolver = "2"
+
+[workspace.dependencies]
+bevy = "0.18.1"
+avian3d = "0.6.1"
+big_space = "0.12.0"
+leafwing-input-manager = "0.20.0"
