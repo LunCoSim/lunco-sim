@@ -28,3 +28,11 @@ As a mission participant, I want to have a user profile, so that my identity, ro
 - Network architecture supports authenticating and synchronizing user profiles.
 - Participant identities and roles are broadcast appropriately to peers.
 - Authority checks (e.g., in Story 2) validate against role-based access defined in the profile.
+
+### Story 4: Observer Presence
+As a mission participant, I want to see the presence and activity of other observers, so that I can understand the current state of collaborative exploration.
+
+**Acceptance Criteria:**
+- The location and orientation of other users' cameras (Avatars) are synchronized.
+- Visual markers or presence indicators (e.g., "Spectator 1 is looking at Rover A") are displayed in the 3D environment or UI.
+- The state of which entities are currently under which user's control is broadcast globally.
