@@ -44,21 +44,12 @@ fn translate_intents_to_commands(
         if action_state.pressed(&SpaceSystemAction::SteerLeft) { steer_intent -= 100.0; }
         if action_state.pressed(&SpaceSystemAction::SteerRight) { steer_intent += 100.0; }
 
-        if forward_intent != 0.0 {
+        if forward_intent != 0.0 || steer_intent != 0.0 {
             commands.trigger(CommandMessage {
                 source: Entity::PLACEHOLDER,
                 target: link.vessel_entity,
                 name: "DRIVE_ROVER".to_string(),
-                args: vec![forward_intent as f32], // FSW will parse scaling bounds
-            });
-        }
-        
-        if steer_intent != 0.0 {
-            commands.trigger(CommandMessage {
-                source: Entity::PLACEHOLDER,
-                target: link.vessel_entity,
-                name: "STEER_ROVER".to_string(),
-                args: vec![steer_intent as f32],
+                args: vec![forward_intent as f32 / 100.0, steer_intent as f32 / 100.0],
             });
         }
 

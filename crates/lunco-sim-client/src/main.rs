@@ -1,10 +1,11 @@
 use bevy::prelude::*;
 use avian3d::prelude::*;
 use leafwing_input_manager::prelude::*;
+use std::collections::HashMap;
 
 use lunco_sim_core::architecture::{DigitalPort, PhysicalPort, Wire};
 use lunco_sim_physics::{LunCoSimPhysicsPlugin, MotorActuator};
-use lunco_sim_fsw::LunCoSimFswPlugin;
+use lunco_sim_fsw::{LunCoSimFswPlugin, FlightSoftware};
 use lunco_sim_obc::LunCoSimObcPlugin;
 use lunco_sim_controller::{LunCoSimControllerPlugin, SpaceSystemAction};
 use lunco_sim_attributes::LunCoSimAttributesPlugin;
@@ -14,6 +15,7 @@ fn main() {
     App::new()
         .add_plugins(DefaultPlugins)
         .add_plugins(PhysicsPlugins::default()) // Avian3D
+        .add_plugins(PhysicsDebugPlugin::default()) 
         // LunCo Modules
         .add_plugins(LunCoSimPhysicsPlugin)
         .add_plugins(LunCoSimFswPlugin)
@@ -22,11 +24,32 @@ fn main() {
         .add_plugins(LunCoSimAttributesPlugin)
         .add_plugins(LunCoSimAvatarPlugin)
         .add_systems(Startup, setup_scenario)
+        .add_systems(Update, draw_wheel_diagnostics)
         .run();
 }
 
 #[derive(Component)]
 pub struct RoverVessel;
+
+/// Visual Diagnostic
+fn draw_wheel_diagnostics(
+    mut gizmos: Gizmos,
+    q_wheels: Query<(&GlobalTransform, &MotorActuator)>,
+    q_joints: Query<(&RevoluteJoint, &GlobalTransform)>,
+) {
+    for (tf, _) in q_wheels.iter() {
+        let pos = tf.translation();
+        gizmos.line(pos, pos + tf.right() * 2.0, Color::srgb(1.0, 0.0, 0.0)); // Local X (Red)
+        gizmos.line(pos, pos + tf.up() * 2.5, Color::srgb(0.0, 1.0, 0.0));    // Local Y (Green - Axle)
+        gizmos.line(pos, pos + tf.forward() * 2.0, Color::srgb(0.0, 0.0, 1.0)); // Local Z (Blue)
+    }
+
+    for (joint, tf) in q_joints.iter() {
+        let world_hinge = tf.rotation() * joint.hinge_axis;
+        let pos = tf.translation(); 
+        gizmos.line(pos, pos + world_hinge * 2.5, Color::WHITE); // World Hinge (White)
+    }
+}
 
 fn setup_scenario(
     mut commands: Commands,
@@ -35,54 +58,101 @@ fn setup_scenario(
 ) {
     // 1. Ground Plane
     commands.spawn((
+        Name::new("ground"),
         Mesh3d(meshes.add(Plane3d::default().mesh().size(100.0, 100.0))),
         MeshMaterial3d(materials.add(Color::srgb(0.2, 0.2, 0.2))),
         RigidBody::Static,
         Collider::half_space(Vec3::Y),
     ));
 
-    // 2. The Rover (Space System)
+    // 2. The Rover Chassis
+    let chassis_width = 1.8;
+    let chassis_height = 0.5;
+    let chassis_length = 3.0;
+    let rover_spawn_pos = Vec3::new(0.0, 1.0, 0.0);
+    
     let rover_entity = commands.spawn((
-        Name::new("rover_v1"),
+        Name::new("rover_chassis"),
         RoverVessel,
-        Vessel, // Marker for possession
-        Mesh3d(meshes.add(Cuboid::new(2.0, 1.0, 3.0))),
+        Vessel,
+        Mesh3d(meshes.add(Cuboid::new(chassis_width, chassis_height, chassis_length))),
         MeshMaterial3d(materials.add(Color::srgb(0.8, 0.4, 0.0))),
-        Transform::from_xyz(0.0, 2.0, 0.0),
+        Transform::from_translation(rover_spawn_pos),
         RigidBody::Dynamic,
-        Collider::cuboid(2.0, 1.0, 3.0),
+        Collider::cuboid(chassis_width, chassis_height, chassis_length),
+        Friction::new(0.5),
     )).id();
 
-    // 3. Ports & Wires
-    let motor_port = commands.spawn(PhysicalPort { value: 0.0 }).id();
-    let digital_drive = commands.spawn(DigitalPort::default()).id();
+    // 3. Digital Channels
+    let drive_l_digital = commands.spawn((Name::new("drive_l_reg"), DigitalPort::default())).id();
+    let drive_r_digital = commands.spawn((Name::new("drive_r_reg"), DigitalPort::default())).id();
 
-    commands.spawn(Wire { 
-        source: digital_drive, 
-        target: motor_port, 
-        scale: 50.0 
-    });
+    // 4. FSW
+    let mut port_map = HashMap::new();
+    port_map.insert("drive_left".to_string(), drive_l_digital);
+    port_map.insert("drive_right".to_string(), drive_r_digital);
+    commands.entity(rover_entity).insert(FlightSoftware { port_map });
 
-    // Link Actuator to Port
-    commands.entity(rover_entity).insert(MotorActuator {
-        port_entity: motor_port,
-        axis: Vec3::Z,
-    });
+    // 5. Wheels
+    let wheel_radius = 0.5;
+    let wheel_width = 0.4;
+    let wheel_mesh = meshes.add(Cylinder::new(wheel_radius, wheel_width));
 
-    // 4. Light
+    let f_mat = materials.add(Color::srgb(0.9, 0.1, 0.4)); 
+    let r_mat = materials.add(Color::srgb(0.1, 0.4, 0.8)); 
+
+    let wheel_configs = [
+        ("fl", Vec3::new(-1.2, -0.4, 1.2), drive_l_digital, f_mat.clone()),
+        ("rl", Vec3::new(-1.2, -0.4, -1.2), drive_l_digital, r_mat.clone()),
+        ("fr", Vec3::new(1.2, -0.4, 1.2), drive_r_digital, f_mat.clone()),
+        ("rr", Vec3::new(1.2, -0.4, -1.2), drive_r_digital, r_mat.clone()),
+    ];
+
+    let wheel_tilt = Quat::from_rotation_z(std::f32::consts::FRAC_PI_2);
+
+    for (label, rel_pos, digital_source, mat) in wheel_configs {
+        let motor_port = commands.spawn((Name::new(format!("port_{}", label)), PhysicalPort::default())).id();
+        commands.spawn((Wire { source: digital_source, target: motor_port, scale: 600.0 }));
+
+        // THE WHEEL ENTITY
+        let wheel_entity = commands.spawn((
+            Name::new(format!("wheel_{}", label)),
+            Mesh3d(wheel_mesh.clone()),
+            MeshMaterial3d(mat),
+            Transform::from_translation(rover_spawn_pos + rel_pos)
+                .with_rotation(wheel_tilt),
+            RigidBody::Dynamic,
+            Collider::cylinder(wheel_radius, wheel_width),
+            Friction::new(2.5), 
+            ConstantLocalTorque(Vec3::ZERO),
+            MotorActuator {
+                port_entity: motor_port,
+                axis: Vec3::Y, // This stays Y because the cylinder height is Y.
+            },
+        )).id();
+
+        // THE JOINT FIX
+        // We must align the joint's frames so it doesn't snap the wheel back to 'pancake'
+        commands.spawn((
+            Name::new(format!("joint_{}", label)),
+            RevoluteJoint::new(rover_entity, wheel_entity)
+                .with_local_anchor1(rel_pos)
+                .with_local_anchor2(Vec3::ZERO)
+                .with_hinge_axis(Vec3::X) // Chassis X is the world axle
+                // Specify that the wheel's local frame is already rotated
+                .with_local_basis2(wheel_tilt.inverse()) 
+        ));
+    }
+
+    // 6. Environment
     commands.spawn((
         DirectionalLight::default(),
         Transform::from_xyz(10.0, 20.0, 10.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
 
-    // 5. Avatar (The Human Pilot)
+    // 7. Avatar
     let mut input_map = InputMap::default();
     input_map.insert(SpaceSystemAction::DriveForward, KeyCode::KeyW);
-    input_map.insert(SpaceSystemAction::DriveReverse, KeyCode::KeyS);
-    input_map.insert(SpaceSystemAction::SteerLeft, KeyCode::KeyA);
-    input_map.insert(SpaceSystemAction::SteerRight, KeyCode::KeyD);
-    input_map.insert(SpaceSystemAction::Brake, KeyCode::Space);
-
     commands.spawn((
         Avatar,
         Camera3d::default(),

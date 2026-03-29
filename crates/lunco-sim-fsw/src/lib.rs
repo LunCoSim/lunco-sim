@@ -43,9 +43,11 @@ fn process_commands(
                     // Extracted MVP logic for Rover Drive mixing
                     // Arg 0: Drive (-1.0 to 1.0)
                     // Arg 1: Steer (-1.0 to 1.0)
-                    if cmd.args.len() >= 2 {
+                    if cmd.args.len() >= 1 {
                         let drive_power = (cmd.args[0] * 255.0).clamp(-255.0, 255.0) as i16;
-                        let steer_power = (cmd.args[1] * 255.0).clamp(-255.0, 255.0) as i16;
+                        let steer_power = if cmd.args.len() >= 2 {
+                            (cmd.args[1] * 255.0).clamp(-255.0, 255.0) as i16
+                        } else { 0 };
 
                         if let Some(&drive_port_left) = fsw.port_map.get("drive_left") {
                             if let Ok(mut port) = q_digital_ports.get_mut(drive_port_left) {

@@ -22,18 +22,16 @@ pub struct MotorActuator {
 }
 
 /// Applies Tier 1 Plant hardware scaled forces directly into our physics loop.
+/// Important: We use ConstantLocalTorque to ensure the torque is relative 
+/// to the wheel's orientation, not world-space.
 fn apply_motor_torques(
     q_ports: Query<&PhysicalPort>,
-    mut q_motors: Query<(&MotorActuator, &mut ConstantTorque)>,
+    mut q_motors: Query<(&MotorActuator, &mut ConstantLocalTorque)>,
 ) {
     for (motor, mut external_torque) in q_motors.iter_mut() {
         if let Ok(port) = q_ports.get(motor.port_entity) {
-            // port.value is Nm (Newton-meters). We multiply by the directional axis.
-            // Using standard f32 Vectors since cross-domain resolution maintains standard Bevy types 
-            // natively before the solver uses 'big_space' floating origins.
-            let torque_vec = motor.axis * port.value;
-            // Avian3d handles forces cumulatively, so we set or apply it based on configuration
-            external_torque.0 = torque_vec;
+            // Apply torque along the local axis defined in the component
+            external_torque.0 = motor.axis * port.value;
         }
     }
 }
@@ -65,13 +63,12 @@ mod tests {
     #[test]
     fn test_motor_actuator_integration() {
         let mut app = App::new();
-        // Include Avian Minimal logic if possible, or just mock the ConstantTorque component logic
         app.add_plugins(LunCoSimPhysicsPlugin);
 
         let port_id = app.world_mut().spawn(PhysicalPort { value: 15.0 }).id();
         let body_id = app.world_mut().spawn((
             RigidBody::Dynamic,
-            ConstantTorque(Vec3::ZERO),
+            ConstantLocalTorque(Vec3::ZERO),
             MotorActuator {
                 port_entity: port_id,
                 axis: Vec3::Y,
@@ -80,9 +77,8 @@ mod tests {
 
         app.update();
 
-        // 15 Nm applied down the Y axis
-        let torque = app.world().get::<ConstantTorque>(body_id).unwrap();
-        // Testing that logic modified the component correctly:
+        // 15 Nm applied down the LOCAL Y axis
+        let torque = app.world().get::<ConstantLocalTorque>(body_id).unwrap();
         assert_eq!(torque.0.y, 15.0);
     }
 }
