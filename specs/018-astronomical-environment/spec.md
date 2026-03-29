@@ -6,7 +6,9 @@
 **Input**: Macroscopic celestial mechanics, Ephemeris data integration, and VRAM-optimized surface rendering.
 
 ## Problem Statement
-A flat plane map is insufficient for an aerospace digital twin. The simulation must understand that a rover interacts with a massive sphere (the Moon) which orbits another sphere (Earth), both rotating relative to a light source (the Sun). Without establishing macroscopic mechanics first, tracking line-of-sight dropouts (`018`) and multi-day thermal limits (`014`) is impossible. We must generalize the environment to understand JPL SPICE or Ephemeris data, rather than localized XY planes.
+A flat plane map is insufficient for an aerospace digital twin. The simulation must understand that a rover interacts with a massive sphere (the Moon) which orbits another sphere (Earth), both rotating relative to a light source (the Sun). Without establishing macroscopic mechanics first, tracking line-of-sight dropouts (`019`) and multi-day thermal limits (`014`) is impossible. 
+
+**This is for Built-in Celestial Computation:** The engine MUST provide a native, high-performance source of truth for solar angles and planetary rotations using JPL SPICE or Ephemeris data. This ensures consistent lighting and geometry for all players and internal solvers without requiring external 3rd-party dependencies for core simulation loops.
 
 ## User Scenarios
 
@@ -22,7 +24,7 @@ As a communications engineer, I need to know when an orbiting relay satellite pa
 
 **Acceptance Criteria:**
 - The math engine models celestial bodies as macroscopic `f64` spheres in the Large World Coordinate grid out to billions of meters.
-- The engine executes physics raycasts against these spheres to trigger `018-comm-degradation` dropouts, treating the Moon as a physical blocking object, not just a floor plane.
+- The communication subsystem (`019`) performs raycasts against these celestial spheres to calculate line-of-sight dropouts, treating the Moon as a physical blocking object rather than just a floor plane.
 
 ### User Story 3 - Planetary Terrain Streaming & DEM Loader (Priority: P4 - Future Phase)
 As a scenario designer, I want to load specific APOLLO `.tif` heightmaps (DEMs) for the rover to physically drive on, but loading an entire regional map will crash standard GPUs.

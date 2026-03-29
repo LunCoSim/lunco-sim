@@ -27,7 +27,7 @@ As an educator or scenario designer, I want to create a tutorial that gradually 
 As a mission instructor, I want the tutorial system to evaluate whether the user has successfully completed a set of operational engineering goals, so I can provide automated, real-time feedback.
 
 **Acceptance Criteria:**
-- The tutorial integrates with the Evaluation Oracle (Spec 006) to passively monitor success/failure conditions (e.g., "Reach Crater Tycho with >20% battery remaining").
+- The tutorial integrates with the Evaluation Oracle (Spec 005) to passively monitor success/failure conditions (e.g., "Reach Crater Tycho with >20% battery remaining").
 - Real-time performance metrics and hints are displayed on the UI.
 
 ## Implementation Notes

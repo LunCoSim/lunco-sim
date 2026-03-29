@@ -1,7 +1,9 @@
 # Feature Specification: 014-modelica-simulation
 
 ## Problem Statement
-The rover's internal physical states (power, thermal, fluid flow) require rigorous, continuous 1D mathematical modeling. We will integrate **Modelica** models via the `rumoca` runtime as "Virtual Sensors/Actuators" that run synchronously inside the Bevy frame loop. **This is distinct from external FMI/FMU black boxes; Modelica here operates as a native mathematical expansion of Bevy’s physics.**
+The rover's internal physical states (power, thermal, fluid flow) require rigorous, continuous 1D mathematical modeling. We will integrate **Modelica** models via the `rumoca` runtime as "Virtual Sensors/Actuators" that run synchronously inside the Bevy frame loop. 
+
+**This is for Native Modeling:** Engineers can write Modelica code directly for the simulation to define custom subsystem logic. This is distinct from external FMI/FMU black boxes or pre-compiled chemistry kernels; Modelica here operates as a **native mathematical expansion** of Bevy’s physics.
 
 ## User Stories
 

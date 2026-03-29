@@ -6,7 +6,9 @@
 **Input**: Server-side integration with FMUs (Functional Mock-up Units) via FMI, and astrodynamics tools like GMAT and Basilisk.
 
 ## Problem Statement
-While Modelica (`014`) handles our *internal* 1D physics transparently, real-world mission planning often relies on compiled, proprietary black-box hardware models supplied by vendors (FMI standard) or macroscopic celestial mechanics solvers (GMAT / Basilisk). This specification handles the **External Astrodynamics and Black-Box Handoff**.
+While Modelica (`014`) handles our *internal* 1D physics transparently and the Astronomical Environment (`018`) handles our native celestial mechanics, real-world mission planning often relies on compiled, proprietary black-box hardware models supplied by vendors (FMI standard) or macroscopic celestial mechanics solvers (GMAT / Basilisk). 
+
+**This is for Co-Simulation & External Validation:** This specification handles the integration with external engineering tools. These tools act as a "Rigorous Cross-Check" and heavy co-simulation layer, ensuring the engine's built-in physics align with validated aerospace standards (FMUs and GMAT) during mission-critical sequences.
 
 ## User Scenarios
 

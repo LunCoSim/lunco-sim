@@ -28,5 +28,5 @@ As a machine learning engineer, I want to use standard Python packages (`numpy`,
 As a scenario designer, I want to interactively type script commands into a UI panel, so that I can teleport entities or adjust sun angles dynamically without modifying files.
 
 **Acceptance Criteria:**
-- The Unified Editor (`006`) implements an interactive Scripting REPL (Read-Eval-Print Loop) panel.
+- The Unified Editor (`007`) implements an interactive Scripting REPL (Read-Eval-Print Loop) panel.
 - Users can execute live Lua commands directly against the active Bevy `World`.

@@ -6,7 +6,9 @@
 **Input**: Spatial 3D sound propagation logic, vacuum vibration constraints, and UI telemetry klaxons.
 
 ## Problem Statement
-A hard-engineering simulator feels lifeless without auditory feedback. Operators need to hear motors straining, struts yielding, and telemetry alarms firing. However, space is a vacuum. Creating a realistic simulation means generic game-engine audio spheres are physically inaccurate. Sound must propagate according to absolute atmospheric and structural constraints.
+A hard-engineering simulator feels lifeless without auditory feedback. Operators need to hear motors straining, struts yielding, and telemetry alarms firing. However, space is a vacuum, and sound propagation involves significant mathematical and physical nuance that goes beyond simple game-engine audio spheres. 
+
+**Independent Domain**: Audio is treated as a distinct engineering domain. Sound must propagate according to absolute atmospheric and structural constraints. This is critical for authentic immersion and diagnostic feedback, even if it is a lower priority than core physics.
 
 ## User Scenarios
 
@@ -23,4 +25,4 @@ As a mission operator driving the rover via the `007-unified-editor`, I want lou
 
 **Acceptance Criteria:**
 - The engine exposes a flat (2D non-spatialized) auditory UI channel.
-- If `013-modelica-simulation` calculates a battery level dropping below 10%, or torque exceeding 90% of the `SysmlStressLimit`, repeating Klaxon `warnings` are fired natively into the editor speaker outputs.
+- If `014-modelica-simulation` calculates a battery level dropping below 10%, or torque exceeding 90% of the `SysmlStressLimit`, repeating Klaxon `warnings` are fired natively into the editor speaker outputs.
