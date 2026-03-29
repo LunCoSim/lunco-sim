@@ -2,7 +2,7 @@
 
 ## Problem Statement
 To enable collaborative missions, multiple players must be able to view and interact with the same "Physical Plants." Given the non-deterministic nature of standard physical simulation in floating-point physics engines, the networking system MUST employ a **Server-Authoritative Architecture with Client-Side Prediction** to ensure physical determinism and robust state reconciliation rather than simply syncing raw inputs blindly.
-Additionally, the system requires identity management to support distinct user profiles and access controls.
+Additionally, the system requires identity management to support distinct user profiles and access controls.\n\n> **Note on Scope:** Multiplayer networking focuses on the syncing and distributed control of users in a shared world. This is distinct from simulating network degradation (`019`), which is a feature modifying internal physics/signals that can run entirely independently (e.g., in solo operations).
 
 ## User Stories
 

@@ -41,3 +41,10 @@ As a systems architect, when I push a 2,000-line `.sysml` system specification o
 - The pipeline parses all semantic textual databases (`.sysml`, `.json`) during the build/import phase.
 - Output is serialized down into contiguous, zero-copy binary data structures (e.g., Binary Scene Notation `BSN`, `bincode`, or `FlatBuffers`).
 - At runtime, Bevy deserializes these binary clumps directly into ECS structs with zero parsing overhead.
+
+### User Story 5 - Remote Asset Resolution & Caching (Relocated)
+As a project contributor, I want to define huge 3D assets (like a crater or a rover model) without ever pushing them to GitHub or using Git-LFS, so that the main repository stays lightweight.
+
+**Acceptance Criteria:**
+- The asset pipeline supports Remote URIs for assets (e.g., `crater_tycho = "https://assets.lunco.space/tycho.gltf"`).
+- When resolving dependencies, the engine checks a local AppData cache (e.g., `~/.lunco/assets/`). If missing, it downloads the asset automatically before processing the scene (functioning exactly like a Cargo dependency manager).

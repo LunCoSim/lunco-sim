@@ -31,9 +31,12 @@ As a Data Scientist, I want an external Python runner to execute 10,000 parallel
 - The scenario loader accepts inline JSON-path arguments (e.g., `cargo run -- --scenario base.ron --override Rover.Mass=15.2 Rover.Friction=0.7`).
 - These overrides are injected dynamically into the Bevy ECS before the scenario begins ticking, mathematically proving that the engine seamlessly supports external Monte Carlo generation scripts out-of-the-box.
 
-### User Story 3 - Remote Asset Resolution (Priority: P3)
-As a project contributor, I want to define huge 3D assets (like a crater or a rover model) inside my scenario file without ever pushing them to GitHub or using Git-LFS, so that the main repository stays lightweight.
+### User Story 4 - Automated Evaluation Oracle (Priority: P1)
+As a test engineer, I want to define victory and failure rules alongside my scenario configuration, so that the simulation stops automatically when an endpoint is reached to enforce a Test-Driven Development (TDD) lifecycle without human visual review.
 
 **Acceptance Criteria:**
-- The scenario file supports Remote URIs for assets (e.g., `crater_tycho = "https://assets.lunco.space/tycho.gltf"`).
-- When a scenario loads, the engine checks a local AppData cache (e.g., `~/.lunco/assets/`). If missing, it downloads the asset automatically before spawning the scene (functioning exactly like a Cargo dependency manager).
+- The engine implements an `Oracle` system evaluated during the `FixedUpdate` schedule.
+- It interprets semantic rules parsed from the BSN/RON setup (e.g., `REQUIRE Rover.Transform.x > 100`, `FAIL_IF Rover.BatteryLevel < 0.05`).
+- The Oracle triggers an `AppExit` the moment a boundary is crossed.
+- Upon termination, the simulation writes a strict `test_report.json` detailing the exact frame, simulation time, trigger rule, and final sensor states.
+- Exits with standard POSIX codes.

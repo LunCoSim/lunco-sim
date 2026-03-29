@@ -6,7 +6,7 @@
 **Input**: Standardized cross-cutting logging logic, OpenTelemetry tracing, and semantic event interception.
 
 ## Problem Statement
-A digital twin requires robust data exhaust. If developers use uncoordinated `println!()` statements to debug the physics loop, capturing performance bottlenecks during headless cloud orchestration becomes impossible. We must standardize the logging and tracing ecosystem fundamentally early, so that every subsequent plugin (Networking, Scripts, Oracles) taps into the same centralized data sink.
+A digital twin requires robust data exhaust. If developers use uncoordinated `println!()` statements to debug the physics loop, capturing performance bottlenecks during headless cloud orchestration becomes impossible. We must standardize the logging and tracing ecosystem fundamentally early, so that every subsequent plugin (Networking, Scripts, Oracles) taps into the same centralized data sink.\n\n> **Note on Scope:** Technical logging is a foundational tool required *during development and debugging*. It is distinctly different from exporting semantic telemetry data to dashboards (`011`) or saving/restoring game simulation state via mission recording (`020`).
 
 ## User Scenarios
 

@@ -1,7 +1,7 @@
 # Feature Specification: 014-modelica-simulation
 
 ## Problem Statement
-The rover's internal physical state (power, thermal, etc.) requires rigorous mathematical modeling. We will integrate **Modelica** models as "Virtual Sensors/Actuators" that run in sync with the Bevy frame loop. This acts as the translation layer between the 3D graphics engine and the 1D mathematical domain.
+The rover's internal physical state (power, thermal, etc.) requires rigorous mathematical modeling. We will integrate **Modelica** models as "Virtual Sensors/Actuators" that run in sync with the Bevy frame loop. This acts as the translation layer between the 3D graphics engine and the 1D mathematical domain.\n\n> **Note on Scope:** Modelica (via `rumoca`) serves strictly as our internal math and thermodynamics tool. It is separated from general `FMI` standards (which are kept distinct for external solver integration, see `022`) and completely independent from complex natively compiled chemistry kinetics (see `026`).
 
 ## User Stories
 

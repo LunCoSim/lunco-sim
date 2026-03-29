@@ -6,7 +6,7 @@
 **Input**: Server-side integration with FMUs (Functional Mock-up Units) via FMI, and astrodynamics tools like GMAT or Basilisk.
 
 ## Problem Statement
-While Modelica handles internal 1D subsystem physics on the rover, complex mission dynamics (such as orbital trajectories of a relay satellite, or legacy proprietary hardware models from vendors) require connecting Bevy to specialized external solvers. Vendors often provide their black-box models as standard FMUs. Real-world mission planning relies heavily on tools like GMAT and Basilisk.
+While Modelica handles internal 1D subsystem physics on the rover, complex mission dynamics (such as orbital trajectories of a relay satellite, or legacy proprietary hardware models from vendors) require connecting Bevy to specialized external solvers. Vendors often provide their black-box models as standard FMUs. Real-world mission planning relies heavily on tools like GMAT and Basilisk.\n\n> **Note on Scope:** This specification handles FMI as a general and distinct protocol for integrating *external* black-box tools. This is intentionally separated from our *internal* Modelica-based math layer (`014`) and long-term native chemistry implementations (`026`).
 
 ## User Scenarios
 

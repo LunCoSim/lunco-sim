@@ -5,7 +5,7 @@
 **Status**: Long-Term Roadmap
 
 ## Problem Statement
-To eventually support highly complex In-Situ Resource Utilization (ISRU), the engine must transition from merely calculating *rates of change* via simple logic, to actually hosting rigorous chemical kinematics and thermodynamic fluid simulations. To scale up without sacrificing the ECS `FixedUpdate` loop performance, we need to bind existing, vetted C/C++ libraries deeply into the Rust engine natively, circumventing Python orchestration overhead.
+To eventually support highly complex In-Situ Resource Utilization (ISRU), the engine must transition from merely calculating *rates of change* via simple logic, to actually hosting rigorous chemical kinematics and thermodynamic fluid simulations. To scale up without sacrificing the ECS `FixedUpdate` loop performance, we need to bind existing, vetted C/C++ libraries deeply into the Rust engine natively, circumventing Python orchestration overhead.\n\n> **Note on Scope:** Native Chemistry simulation is completely separated from the FMI boundary (`022`) and the internal Modelica math layer (`014`). This represents a distinct future iteration dedicated solely to high-performance C++ solver abstractions.
 
 ## Vision (Long-Term Implementation)
 

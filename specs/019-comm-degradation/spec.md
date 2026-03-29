@@ -6,7 +6,7 @@
 **Input**: Simulating real-world network constraints for space operations.
 
 ## Problem Statement
-Commanding a rover on the moon involves significant latency (~2.5 seconds round-trip), packet loss, and line-of-sight dropouts. The Universal Control and Telemetry bridges must simulate these conditions so that operators and autonomous systems are robust against typical space-link dropouts(Direct to Earth/Relay).
+Commanding a rover on the moon involves significant latency (~2.5 seconds round-trip), packet loss, and line-of-sight dropouts. The Universal Control and Telemetry bridges must simulate these conditions so that operators and autonomous systems are robust against typical space-link dropouts(Direct to Earth/Relay).\n\n> **Note on Scope:** Comm degradation acts as a physics/signal modifier that can run independently, even in solo or automated environments. It does not handle the distributed sync of clients across a network topology (`009`).
 
 ## User Scenarios
 

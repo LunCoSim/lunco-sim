@@ -6,7 +6,7 @@
 **Input**: Saving and replaying missions for post-mortem analysis.
 
 ## Problem Statement
-Simulations run headless overnight. When a rover crashes due to an autonomous algorithm failure, developers need a way to review exactly what happened frame-by-frame. We need an industry-standard way to serialize Bevy ECS state and Telemetry to disk for later playback.
+Simulations run headless overnight. When a rover crashes due to an autonomous algorithm failure, developers need a way to review exactly what happened frame-by-frame. We need an industry-standard way to serialize Bevy ECS state and Telemetry to disk for later playback.\n\n> **Note on Scope:** Mission recording focuses on *saving and restoring a precise mission timeline*. It differs structurally from capturing internal technical logs (`002`) or streaming live telemetry interfaces (`011`).
 
 ## User Scenarios
 
