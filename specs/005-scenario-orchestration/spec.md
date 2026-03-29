@@ -24,6 +24,13 @@ As a CI/CD operator, I want to pass the scenario file via command line so the in
 **Acceptance Criteria:**
 - Engine boots with `cargo run -- --scenario <path_to_bsn/ron>`.
 
+### User Story 3 - CLI Parameter Overrides (Monte Carlo Fuzzing)
+As a Data Scientist, I want an external Python runner to execute 10,000 parallel test scenarios varying the rover's mass slightly each time, without needing to rewrite massive `.ron` payload files every iteration.
+
+**Acceptance Criteria:**
+- The scenario loader accepts inline JSON-path arguments (e.g., `cargo run -- --scenario base.ron --override Rover.Mass=15.2 Rover.Friction=0.7`).
+- These overrides are injected dynamically into the Bevy ECS before the scenario begins ticking, mathematically proving that the engine seamlessly supports external Monte Carlo generation scripts out-of-the-box.
+
 ### User Story 3 - Remote Asset Resolution (Priority: P3)
 As a project contributor, I want to define huge 3D assets (like a crater or a rover model) inside my scenario file without ever pushing them to GitHub or using Git-LFS, so that the main repository stays lightweight.
 
