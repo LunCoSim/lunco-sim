@@ -17,13 +17,14 @@ As a user, I want to snap a modular "Wheel" part to a "Chassis" part in real-tim
 
 ---
 
-### User Story 2 - Automatic Signal Port Wiring (Priority: P2)
-As a user, I want parts to "just work" when attached, so that a wheel automatically connects to the chassis's command signal.
+### User Story 2 - Automatic Signal and Resource Port Wiring (Priority: P2)
+As a user, I want parts to "just work" when attached, so that a wheel automatically connects to the chassis's command signal, and a mining rig automatically hooks up to my factory's fluid input.
 
 **Acceptance Criteria:**
-- Assembly tool verifies SysML constraints (e.g., matching a `MotorPort` to a `WheelHub`).
+- Assembly tool verifies SysML constraints (e.g., matching a `MotorPort` to a `WheelHub`, or an `O2_Pipe_Out` to an `O2_Tank_In`).
 - Connections are realized in Bevy via `avian` Physics joints (Fixed, Prismatic, Revolute).
 - Connections dynamically resolve communication signals (e.g., `PortA` sends voltage to `PortB`).
+- **Resource/Fluid Ports:** Placing pipe/conveyor pieces creates logistical flow networks between localized Entity inventories.
 
 ---
 
