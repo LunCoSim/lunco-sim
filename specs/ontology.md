@@ -2,6 +2,22 @@
 
 This document serves as the definitive source of truth for the architectural terminology and concepts used in the LunCoSim ecosystem. All specifications and code implementations MUST adhere to these definitions.
 
+### Key Concepts
+
+- **Space System**: The universal container for an independent, controllable entity in the simulation (e.g., Rover, Satellite, Ground Station, Base). Following CCSDS and XTCE standards, a Space System is a recursive hierarchy of Subsystems and structural Links.
+- **Verifier**: A persistent, independent monitoring system that validates simulation state against analytical truth. Verifiers are the "Judges" of the digital twin, ensuring that physics and logic remain within verified engineering bounds. Following SysML v2, Verifiers execute **Verification Cases** against mission requirements.
+- **Attribute**: A measurable, persistent data field belonging to a Link or Port (e.g., `Mass`, `Voltage`, `MaxTorque`). This term is used for 1:1 alignment with SysML v2 and USD.
+
+### Terminology Rationale
+
+To build a high-fidelity digital twin of a lunar city, we use terms that are globally recognized across the disparate fields of aerospace, robotics, and systems engineering.
+
+- **Space System (vs. Vessel/Vehicle)**: Following **XTCE (XML Telemetric and Command Exchange)** and **CCSDS** standards, "Space System" is a recursive container. This allows us to treat a single 3D-printed brick, a rover, a ground station, and the entire lunar city as the same class of object. It ensures that our simulation is "Mission Control Ready" out-of-the-box.
+- **Verifier (vs. Test/Assertion)**: In computer science, an **Verifier** is an independent mechanism for determining whether a system has passed a test. In LunCoSim, Verifiers represent the "Ground Truth" (Analytical Physics) that monitors the simulation (Engine Physics) to detect drift, ensuring mathematical integrity.
+- **Attribute (vs. Property)**: We use "Attribute" for 1:1 alignment with **SysML v2** and **Pixar's USD**. Prims have attributes; parts have attributes. This avoids the programming ambiguity of "Properties" (getter/setter functions).
+- **Port (vs. Pin/Connector)**: "Port" is the universal term used by **SysML v2**, **NASA FPrime**, and **ROS**. It defines a semantic interface point. While Modelica uses "Connector," we use "Connection" for the link (the Wire) to maintain consistency with SysML v2 and FPrime.
+- **Link & Joint (vs. Part/Bone)**: Adopting the **URDF** and **USD Physics** terminology ensures that any roboticist or CAD engineer can immediately map their kinematic chains into our coordinate frame tree.
+
 ---
 
 ## 1. Architectural Principles
@@ -37,13 +53,13 @@ LunCoSim uses a layered approach to separate human intent from computer logic an
 ## 3. Core Entities
 
 ### Avatar
-The user's physical representation in the simulation. It provides **Agency** (Camera management, Mouse/Keyboard capture). An Avatar interacts with the world by **Possessing** a Vessel and attaching a **VesselController**.
+The user's physical representation in the simulation. It provides **Agency** (Camera management, Mouse/Keyboard capture). An Avatar interacts with the world by **Possessing** a Space System and attaching a **Space SystemController**.
 
-### Vessel
-A high-level container entity (Rover, Satellite, Space Station). A Vessel is composed of a **Physical Plant** and an **OBC Emulator**.
+### Space System
+A high-level container entity (Rover, Satellite, Space Station). A Space System is composed of a **Physical Plant** and an **OBC Emulator**.
 
 ### Controller
-The "Pilot's Translator." It is a thin, logically "boring" bridge between the Avatar's generic Actions and the Vessel's specific Flight Software commands. It does NOT handle wheel mixing, steering, or system logic; those are delegated to the FSW.
+The "Pilot's Translator." It is a thin, logically "boring" bridge between the Avatar's generic Actions and the Space System's specific Flight Software commands. It does NOT handle wheel mixing, steering, or system logic; those are delegated to the FSW.
 
 ### FSW (Flight Software)
 The logic running on the OBC. It can be "Integrated" (Basic driving logic) or "Professional" (External HIL/SIL tools). It MUST be hot-swappable.
@@ -150,7 +166,7 @@ SysML `part` names map directly to Bevy entity `Name` components using dot-delim
 This dot-delimited path is the **canonical identifier** used across:
 - Telemetry keys in OpenMCT
 - CLI/REPL commands (`set rover_v2.chassis.left_front_wheel.friction 0.8`)
-- Scenario Oracle rules (`REQUIRE rover_v2.battery.level > 0.05`)
+- Scenario Verifier rules (`REQUIRE rover_v2.battery.level > 0.05`)
 - Log messages and tracing spans
 
 ---
@@ -166,4 +182,24 @@ Tick rate is configurable per-session via a `SimulationConfig` resource:
 | **Fast-Forward** | Uncapped (CPU-bound) | Monte Carlo, ML training, orbital propagation |
 | **Lockstep** | External clock | Fprime/ROS sync |
 
-Tick rate is a runtime parameter, NOT a compile-time constant.
+---
+
+## 9. Standard Industry Mapping
+
+To ensure interoperability with aerospace and robotics ecosystems, LunCoSim adheres to a 1:1 conceptual mapping with industry-standard modeling languages and simulation formats.
+
+| LunCoSim Concept | SysML v2 | URDF | USD / Isaac | Modelica | **NASA F'** | **XTCE / CCSDS** | **Physical Hardware** |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **Link** (f64) | `part` | `<link>` | `Xform` | `model` | **Component** | **Aggregate** | **Structural Link** |
+| **Joint** (Constraint) | `connection` | `<joint>` | `PhysicsJoint` | `Joint` | N/A | N/A | **Movable Joint** |
+| **Port** (Interface) | **`port`** | `transmission` | `PhysicsPort` | `connector` | **Port** | **Entry** | **Socket / Pinout** |
+| **Wire** (Signal) | **`connection`** | ROS Topic | `PhysicsAPI` | `connect()` | **Connection** | **Sequence** | **Wire / Harness** |
+| **Space System** | `part` | `<robot>` | `Articulation` | `model` | **Topology** | **SpaceSystem** | **Vehicle / Station** |
+| **Verifier** (Verifier) | `requirement` | N/A | `SceneCheck` | `assert()` | **Test Comp** | **Check** | **Validation Rig** |
+| **Attribute** | `attribute` | `<inertial>` | `MassAPI` | `parameter` | **Telemetry** | **Parameter** | **Spec Sheet** |
+
+
+### Coordinate Frame Tree (CFT) Alignment
+- **URDF Compatibility**: LunCoSim's **Joint** origin defines the parent-to-child `f64` offset, mirroring the URDF joint-centric hierarchy.
+- **USD/Isaac Sim Compatibility**: Every **Link** is a primary transformable prim, mirroring the prim-centric hierarchy used in Omniverse.
+- **SysML v2 Compatibility**: Semantic naming (dot-delimited paths) ensures that SysML `part` hierarchies map 1:1 to Bevy ECS parent-child structures.
