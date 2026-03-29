@@ -56,7 +56,7 @@ The "Mechanism" layer. Focused on high-fidelity `f64` space.
 - **Actuator**: Translates `OBC Pin` signals into physical work (Torque, Force). MUST expose metadata: `MaxTorque`, `MinTravel`, `Addressing`.
 - **Sensor**: The "Input Source." Translates physical states (IMU, Encoder, Spectrometer) into **`OBC Pin` Input States**.
     - **Telemetry Flow**: Level 1 (Sensor) -> Level 2 (OBC Input Pins) -> Level 3 (FSW Logic).
-    - **Authority**: The FSW is responsible for reading these raw pins, optionally performing sensor fusion/filtering, and packaging the data for the **Telemetry Bridge (011)**.
+    - **Authority**: The FSW is responsible for reading these raw pins, optionally performing sensor fusion/filtering, and packaging the data for the **Sensor-to-Dashboard Pipeline (011)**.
 
 ---
 
@@ -70,3 +70,88 @@ The semantic command stream (Level 4/3) sent to the FSW. Commands can come from 
 
 ### Pin Map (Wiring)
 The mapping between the OBC's software-accessible pins and the Physical Plant's hardware inputs. This defines the "Wiring" of the digital twin.
+
+---
+
+## 5. Precision Architecture (f64/f32 Split)
+
+### The Problem
+Bevy's `Transform` uses `f32`. Planetary-scale simulation requires `f64`. These are fundamentally separated.
+
+### The Solution: Dual-Component with Floating Origin
+
+Every entity has BOTH a high-precision truth position and a render-ready Bevy Transform:
+
+| Layer | Precision | Used By |
+| :--- | :--- | :--- |
+| **Simulation Truth** | `f64` (`HighPrecisionPosition`) | Physics (avian), OBC, FSW, Modelica, Networking (server) |
+| **Floating Origin** | `big_space` crate (128-bit integer grids) | Origin rebasing as camera moves |
+| **Render Transform** | `f32` (Bevy `Transform`) | Renderer, UI, Audio. Always near-origin, no precision loss |
+
+**Rules:**
+- Physics engine (avian) operates on `f64` components.
+- A `SyncTransformSystem` runs after physics, converting f64 → f32 relative to the floating origin.
+- `big_space` handles origin rebasing automatically as the camera moves.
+
+### Multiplayer f64/f32 Split
+- **Server**: Maintains all entity positions in `f64`. Runs all physics, FSW, Modelica.
+- **Server → Client**: Computes f32 positions relative to each client's floating origin and transmits f32 only.
+- **Client**: Receives f32, applies directly to Bevy `Transform`. **Zero f64 computation on clients.** Saves CPU and halves bandwidth.
+
+---
+
+## 6. Physics Mode (Entity-Level Propagation)
+
+Each entity's physics can be propagated differently depending on its spatial context. This is foundational to `004-time-and-integrators` and used by `022-fmu-gmat-integration`.
+
+### PhysicsMode Enum
+
+| Mode | Description | Physics Engine | Used When |
+| :--- | :--- | :--- | :--- |
+| `FullPhysics` | Avian RigidBody active. Thrust, collision, contacts. | avian (f64) | Entity is near player or on a surface |
+| `HybridBlend { blend_factor }` | Smooth interpolation between analytical and physics (3-5 sec). | Both, weighted | Transitioning between modes |
+| `OnRails` | No RigidBody. Position from orbit equation / GMAT propagator. | Analytical only | Entity is distant, orbiting, or time-warping |
+
+**Transition triggers:** Altitude boundary, proximity to active player, time-warp activation.
+**The HybridBlend zone** eliminates KSP-style "jitter pop" by smoothly cross-fading between propagators.
+
+---
+
+## 7. Units & Naming Conventions
+
+### SI Units (Mandatory)
+All simulation parameters MUST use SI units:
+- **Length**: meters (m)
+- **Mass**: kilograms (kg)
+- **Time**: seconds (s)
+- **Force**: Newtons (N)
+- **Pressure**: Pascals (Pa)
+- **Temperature**: Kelvin (K)
+- **Angles**: radians (rad)
+- **Electrical**: Volts (V), Amps (A), Watts (W)
+
+### Entity Naming Convention
+SysML `part` names map directly to Bevy entity `Name` components using dot-delimited paths:
+- SysML: `rover_v2::chassis::left_front_wheel`
+- Bevy Entity Name: `"rover_v2.chassis.left_front_wheel"`
+
+This dot-delimited path is the **canonical identifier** used across:
+- Telemetry keys in OpenMCT
+- CLI/REPL commands (`set rover_v2.chassis.left_front_wheel.friction 0.8`)
+- Scenario Oracle rules (`REQUIRE rover_v2.battery.level > 0.05`)
+- Log messages and tracing spans
+
+---
+
+## 8. Simulation Tick Rate
+
+Tick rate is configurable per-session via a `SimulationConfig` resource:
+
+| Mode | Tick Rate | Use Case |
+| :--- | :--- | :--- |
+| **Game** | 60 Hz | Interactive play, tutorials, assembly |
+| **Robotics** | 100–1000 Hz | HIL/SIL, control loop testing |
+| **Fast-Forward** | Uncapped (CPU-bound) | Monte Carlo, ML training, orbital propagation |
+| **Lockstep** | External clock | Fprime/ROS sync |
+
+Tick rate is a runtime parameter, NOT a compile-time constant.
