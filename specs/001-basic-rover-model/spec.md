@@ -9,7 +9,7 @@ To bootstrap the LunCoSim Bevy engine, we need to implement our first **Physical
 As a developer, I want to spawn a rover entity that is physically "dumb"—it has wheels and motors but no internal driving logic, only **Actuator Ports** that respond to torque signals.
 
 **Acceptance Criteria:**
-- Rover is spawned with a 1.5kg Rigidbody.
+- Rover is spawned with a 1.5kg Rigidbody (`avian` solver standard instead of Rapier for ECS compatibility).
 - `WheelActuator` components are present on all wheels.
 - Sending a manual signal to the `WheelActuator` results in physical movement.
 
