@@ -32,8 +32,9 @@ The 5-layer model (Actions -> Controller -> FSW -> OBC -> Plant) is a **hard bou
 - **Determinism**: All simulation systems must be deterministic (fixed timestep).
 
 ### Tier 2: Integration Testing (The Signal Path)
-- **Signal Integrity**: Verify the end-to-end path from **Action (L5)** -> **Command (L4)** -> **I/O (L2)** -> **Force (L1)**.
-- **Sensor Return Path**: Verify that physical state changes (L1) correctly propagate to the FSW's internal telemetry state (L3).
+- **Signal Integrity (DAC Path)**: Verify that writing an `i16` value to a `DigitalPort` (L2) correctly scales via the `Wire` to a `PhysicalPort` (L1) (e.g., `127` -> `0.5 * Max_Torque`).
+- **Sensor Return Path (ADC Path)**: Verify that physical state changes (L1 `f32`) correctly propagate and scale to the OBC's `DigitalPort` (L2 `i16`) and are readable by the FSW (L3).
+- **Resolution & Quantization**: Verify that low-resolution digital signals (e.g., 8-bit `-128` to `127`) result in expected "stepped" physical outputs on the Plant.
 
 ### Tier 3: Functional Oracles (Headless Validation)
 Oracle-based tests run the simulation in **Headless Mode** at high speed.
@@ -47,22 +48,38 @@ Oracle-based tests run the simulation in **Headless Mode** at high speed.
 
 The following matrix defines the exhaustive set of validation cases for the **Stage 1 Baseline Rover**. A "Pass" is only achieved if ALL listed layers reflect the expected state during the simulation step.
 
-### Stage 1: Functional Case Matrix
+### Stage 1: Functional Case Matrix (i16/f32 Mapping)
 
-| ID | Case | Input (L5) | Logic Result (L4/3) | Hardware State (L2) | Physical Result (L3/1) |
+| ID | Case | Input (L5) | Logic Result (L4/3) | Hardware (L2 `i16`) | Physical (L1 `f32`) |
 |---|---|---|---|---|---|
-| **F-01** | Drive Forward | `W` (Hold) | `CMD_DRIVE(1.0)` | `PWM_DRIVE` > 0 | $+Z$ Velocity > 0 |
-| **F-02** | Drive Backward | `S` (Hold) | `CMD_DRIVE(-1.0)`| `PWM_DRIVE` < 0 | $+Z$ Velocity < 0 |
-| **F-03** | Steer Left | `A` (Hold) | `CMD_STEER(-1.0)`| `PWM_STEER_FL` < 0| Wheel Yaw < 0 |
-| **F-04** | Steer Right | `D` (Hold) | `CMD_STEER(1.0)` | `PWM_STEER_FR` > 0| Wheel Yaw > 0 |
-| **F-05** | Brake | `Space` | `CMD_BRAKE` | `DIGITAL_BRAKE` = `HIGH` | Ang. Velocity $\to 0$ |
-| **F-06** | Idle/Coasting | None | `CMD_IDLE` | All `PWM` = 0 | Free-rolling Inertia |
-| **F-07** | Possession | `P` (Toggle) | `Avatar::Possess` | Controller Attached | Input Focus Swap |
-| **F-08** | Persistence | Save/Load | `FSW_STATE` persists| `PinStates` persist | Pos/Vel identical |
+| **F-01** | Drive Forward | `W` (Hold) | `CMD_DRIVE(1.0)` | `PORT_DRIVE` = `255` | $+Z$ Torque > 0 |
+| **F-02** | Drive Backward | `S` (Hold) | `CMD_DRIVE(-1.0)`| `PORT_DRIVE` = `-255`| $-Z$ Torque < 0 |
+| **F-03** | Steer Left | `A` (Hold) | `CMD_STEER(-1.0)`| `PORT_STEER` = `-255`| Steering Yaw < 0 |
+| **F-04** | Steer Right | `D` (Hold) | `CMD_STEER(1.0)` | `PORT_STEER` = `255` | Steering Yaw > 0 |
+| **F-05** | Brake | `Space` | `CMD_BRAKE` | `PORT_BRAKE` = `1` | Brake Friction Max |
+| **F-06** | Idle/Coasting | None | `CMD_IDLE` | All `PORT` = `0` | Zero Torque |
+| **F-07** | Possession | `P` (Toggle) | `Avatar::Possess` | N/A | Input Focus Swap |
+| **F-08** | Persistence | Save/Load | `FSW_STATE` persists| `DigitalPorts` persist | Pos/Vel identical |
 
 ---
 
-## 4. Future Verification Tiers (TBD)
+## 4. Mocking & Isolation Strategy
+
+To satisfy the **Testability Mandate (FR-010)**, the engine provides standard mocks:
+
+### Mock OBC (Level 2 Mock)
+Allows testing FSW (L3) logic without a physical plant.
+- Provides a fixed set of `DigitalPort` entities.
+- Records all `i16` writes for assertion: `assert_eq!(obc.get_port("M1"), 255)`.
+
+### Mock Plant (Level 1 Mock)
+Allows testing the full FSW->OBC signal path without the `avian` physics engine.
+- Replaces `PhysicalPort` with a `ValueTracker` component.
+- Asserts that `DAC` scaling is correct: `assert_eq!(plant.get_input("M1"), MaxTorque)`.
+
+---
+
+## 5. Future Verification Tiers (TBD)
 > [!NOTE]
 > The following requirements are deferred beyond Stage 1 and will be introduced as the hardware emulation matured.
 - **Signal Noise & Filtering**: Injecting Gaussian noise into OBC inputs.

@@ -29,13 +29,51 @@ To serve as a high-fidelity digital twin, LunCoSim treats all simulated entities
 | :--- | :--- | :--- | :--- |
 | **5** | **Action** | **`ActionState<VesselAction>`** | Human intent (e.g., `MoveForward`). Managed by Leafwing. |
 | **4** | **Controller**| **`VesselController` System** | Reads `ActionState`, emits **`Events<Command>`**. Mapping: `Action::W` -> `CMD_DRIVE(1.0)`. |
-| **3** | **FSW** | **`FlightSoftware` Plugin** | Reads `Events<Command>`, calculates logic, and writes to **`PinState`**. Consumes sensor **`PinState`** for fusion. |
-| **2** | **OBC** | **`OBC_Emulator` Entity** | Collection of **`PinState`** components (Output: PWM; Input: Digital/Analog Sensor Signals). |
-| **1** | **Plant** | **`Actuator / Sensor`** | Physics-ready components. Sensors write to **`PinState`** (Input). Actuators read from **`PinState`** (Output). |
+| **3** | **FSW** | **`FlightSoftware` Plugin** | Reads `Events<Command>`, translates to **`OBC.Port`** values via a **Hardware Map**. |
+| **2** | **OBC** | **`OBC_Emulator` Entity** | Collection of **`Port`** child entities (Digital/Analog Signals). |
+| **1** | **Plant** | **`Actuator / Sensor`** | Physics entities with **`Port`** components (Physical Units). |
+
+---
+
+## Implementation Patterns: Direct-Reference Port & Wire Architecture
+
+To ensure high-performance (1000Hz+) and robustness, the engine uses a direct entity-reference system for hardware signal flow.
+
+### 1. The Port Component
+Lightweight components attached to both digital and physical interfaces.
+```rust
+struct DigitalPort {
+    pub raw_value: i16, // -32768 to 32767 (Signed, e.g. -255 to 255 for 8-bit)
+}
+
+struct PhysicalPort {
+    pub value: f32, // SI Units (Nm, N, rad/s)
+}
+```
+
+### 2. The Wire Component (Signal Link)
+The `Wire` component scales signals between digital and physical domains.
+```rust
+struct Wire {
+    pub source: Entity, 
+    pub target: Entity, 
+    pub scale: f32, // Signal Gain (e.g., Max_Torque / 128.0)
+}
+```
+
+### 3. Symmetrical Signal Propagation
+- **Forward Path (FSW -> OBC -> Plant)**: FSW writes `-255` for "Full Reverse" into the OBC. `Wire` scales this to `-MaxTorque`.
+- **Reverse Path (Plant -> OBC -> FSW)**: Sensor writes `9.81` into its physical port. `Wire` scales this to its 16-bit digital representation (`i16`) for FSW retrieval.
+
+### 4. FSW Hardware Map (Level 3 Logic)
+The FSW populates a map of OBC Port Entity IDs during instantiation.
+- **Example**: `RoverFSW.drive_left = Entity(OBC_Port_5)`.
+- **Runtime Drive**: `ports.get_mut(fsw.drive_left).raw_value = -255; // Reverse drive command`
 
 ---
 
 ## Technical Validation Scenarios
+
 
 ### User Story 0 - Stage 1 Baseline (MVP) (Priority: P0)
 As a developer, I want to validate the 5-layer architecture with a concrete "Stage 1" rover experience that works in the browser.

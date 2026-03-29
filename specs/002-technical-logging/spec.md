@@ -23,3 +23,11 @@ As a performance optimization engineer, I want to see exactly how many milliseco
 **Acceptance Criteria:**
 - `tracing::instrument` and `tracing::span` are used extensively around critical Bevy systems.
 - The engine can optionally initialize an OpenTelemetry (OTel) or Jaeger exporter to visualize physics frame hiccups graphically.
+
+### User Story 3 - Signal Path Tracing (Priority: P1)
+As a systems troubleshooter, I want to trace the "Path of a Signal" from a human Action (L5) all the way to a physical Actuator (L1), so that I can identify exactly where a command is being lost or corrupted.
+
+**Acceptance Criteria:**
+- The engine uses `tracing` spans to correlate a single `Command` as it traverses the 5-layer model.
+- Logs include the `EntityID` of the `OBC.Port` and `Plant.Port` involved in the transaction.
+- **Trace Context**: Developers can enable "Signal Debug" mode to log every `i16` -> `f32` conversion event across `Wire` entities for a specific vessel.
