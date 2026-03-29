@@ -5,9 +5,13 @@ members = [
     "crates/lunco-sim-obc",
     "crates/lunco-sim-fsw",
     "crates/lunco-sim-controller",
+    "crates/lunco-sim-attributes",
     "crates/lunco-sim-client"
 ]
 resolver = "2"
+
+[workspace.package]
+description = "Initialize multi-crate workspace architecture for vessel control simulation"
 
 [workspace.dependencies]
 bevy = "0.18.1"

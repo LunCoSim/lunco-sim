@@ -2,14 +2,14 @@
 
 ## Phase 1: Foundation (Workspace Configuration)
 
-- [ ] 1.1 Set up multi-crate Cargo workspace
+- [x] 1.1 Set up multi-crate Cargo workspace
   - Init root `Cargo.toml`.
-  - Create members for `crates/lunco-sim-core`, `crates/lunco-sim-physics`, `crates/lunco-sim-obc`, `crates/lunco-sim-fsw`, `crates/lunco-sim-controller`, and `crates/lunco-sim-client`.
+  - Create members for `crates/lunco-sim-core`, `crates/lunco-sim-physics`, `crates/lunco-sim-obc`, `crates/lunco-sim-fsw`, `crates/lunco-sim-controller`, `crates/lunco-sim-attributes`, and `crates/lunco-sim-client`.
   - Add workspace dependency blocks for Bevy, Avian3D, and Leafwing-Input-Manager.
   - **Depends on**: None
   - **Requirement**: FR-005, Plugin First Mandate
 
-- [ ] 1.2 [P] Implement Level 1 & Level 2 primitives (`lunco-sim-core`)
+- [x] 1.2 [P] Implement Level 1 & Level 2 primitives (`lunco-sim-core`)
   - Create `DigitalPort` (i16) and `PhysicalPort` (f32) components.
   - Create `Wire` component with value signal scaling logic.
   - Create `CommandMessage` struct and `CommandRegistry`.
@@ -18,28 +18,34 @@
 
 ## Phase 2: Core Architecture Engines
 
-- [ ] 2.1 Implement the OBC Hardware Emulator (`lunco-sim-obc`)
+- [x] 2.1 Implement the OBC Hardware Emulator (`lunco-sim-obc`)
   - Build the system that processes `Wire` links between `DigitalPort` and `PhysicalPort` per simulation tick.
   - Enable scaling equations mapping -32768 to 32767 raw integer bounds to real-world metric scales.
   - **Depends on**: 1.2
   - **Requirement**: FR-003
 
-- [ ] 2.2 [P] Implement Avian3d f64 base & Origin Shifting (`lunco-sim-physics`)
+- [x] 2.2 [P] Implement Avian3d f64 base & Origin Shifting (`lunco-sim-physics`)
   - Setup Avian3D `PhysicsPlugins` configured for double precision.
   - Integrate `big_space` for camera-relative translations.
   - **Depends on**: 1.1
   - **Requirement**: FR-005, FR-007
 
-- [ ] 2.3 Implement the General FSW System Pipeline (`lunco-sim-fsw`)
+- [x] 2.3 Implement the General FSW System Pipeline (`lunco-sim-fsw`)
   - Create listener queues for generic `CommandMessage` structs.
   - Create a trait system or core plugin mapping Commands to targeted `DigitalPort` entities.
   - **Depends on**: 1.2
   - **Requirement**: FR-002, FR-008
 
-- [ ] 2.4 Implement Mocking Strategy (`lunco-sim-core` or tests)
+- [x] 2.4 Implement Mocking Strategy (`lunco-sim-core` or tests)
   - Build `MockOBC` (DigitalPort tracker) and `MockPlant` (Physical tracker) for isolated testing without `avian3d`.
   - **Depends on**: 1.2
   - **Requirement**: FR-010, 000-testing-framework Mocking Strategy
+
+- [x] 2.5 SysML Telemetry Attributes (`lunco-sim-attributes`)
+  - Build `AttributeRegistry` (SysML Value Properties) via Bevy Reflection mapping semantic strings to raw runtime ports.
+  - Enable MCP/CLI tools to dynamically tweak parameters without generic logic via `SetAttribute`.
+  - **Depends on**: 1.2
+  - **Requirement**: User Story 4
 
 ## Phase 3: Integration & Scenario Generation
 
@@ -59,12 +65,12 @@
 ## Phase 4: Headless Validation & Quality Gates (000-TEST)
 
 - [ ] 4.1 Tier 1 Unit Testing & State Persistence
-  - Write isolated tests for FSW Mixing and Controller mapping.
-  - Fix any State Drift in persistence save/load serialization loops.
+  - [x] Write isolated tests for FSW Mixing and Controller mapping.
+  - [ ] Fix any State Drift in persistence save/load serialization loops.
   - **Depends on**: 2.3, 3.1
   - **Requirement**: 000-TEST Tier 1
 
-- [ ] 4.2 Tier 2 Integration Testing (DAC / ADC Paths)
+- [x] 4.2 Tier 2 Integration Testing (DAC / ADC Paths)
   - Verify writing an `i16` DigitalPort scales properly via `Wire` to a `f32` PhysicalPort.
   - Verify return path quantizations.
   - **Depends on**: 2.1

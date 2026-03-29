@@ -1,9 +1,8 @@
 [package]
-name = "lunco-sim-physics"
+name = "lunco-sim-attributes"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
 bevy = { workspace = true, features = ["default"] }
-avian3d = { workspace = true }
 lunco-sim-core = { path = "../lunco-sim-core" }
