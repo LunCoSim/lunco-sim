@@ -49,13 +49,13 @@
 
 ## Phase 3: Integration & Scenario Generation
 
-- [ ] 3.1 Implement Avatar Controller logic (`lunco-sim-controller`)
+- [x] 3.1 Implement Avatar Controller logic (`lunco-sim-controller`)
   - Incorporate `leafwing-input-manager` configuration logic for WASD to logical Intent states.
   - Map specific intents (Forward, Steer Left, Stop) to broad `CommandMessage` events.
   - **Depends on**: 1.1
   - **Requirement**: FR-001
 
-- [ ] 3.2 Build the Stage 1 Baseline Rover & Ramp (`lunco-sim-client`)
+- [x] 3.2 Build the Stage 1 Baseline Rover & Ramp (`lunco-sim-client`)
   - Synthesize the primitive box bodies, wheels, and basic visual/material meshes inside `lunco-sim-client`.
   - Add the 4 Drive Motors and 2 Steering Motors mapped via OBC + FSW plugins.
   - Configure the static plane logic with Avian static collision bodies.

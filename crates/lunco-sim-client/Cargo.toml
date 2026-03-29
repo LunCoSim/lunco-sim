@@ -1,6 +1,15 @@
 [package]
 name = "lunco-sim-client"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 
 [dependencies]
+bevy = { workspace = true, features = ["default"] }
+avian3d = { workspace = true }
+leafwing-input-manager = { workspace = true }
+lunco-sim-core = { path = "../lunco-sim-core" }
+lunco-sim-physics = { path = "../lunco-sim-physics" }
+lunco-sim-controller = { path = "../lunco-sim-controller" }
+lunco-sim-fsw = { path = "../lunco-sim-fsw" }
+lunco-sim-obc = { path = "../lunco-sim-obc" }
+lunco-sim-attributes = { path = "../lunco-sim-attributes" }
