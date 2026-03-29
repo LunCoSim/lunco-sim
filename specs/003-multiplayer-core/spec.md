@@ -12,6 +12,8 @@ This spec covers the foundational networking layer: connecting, syncing entities
 
 > **Note on Scope:** Multiplayer networking focuses on syncing and distributed control of users in a shared world. This is distinct from simulating network degradation (`019`), which modifies internal physics/signals and runs independently (e.g., in solo operations).
 
+> **Architectural Decision (Simple vs Accurate):** We embrace a simplified approach for clients. We prioritize the *interactive experience*—allowing several rovers controlled by different entities to work together seamlessly—over perfect client-side accuracy. The server performs all precise, heavy-duty math, while connected users receive a "rough simulation" sufficient for operation and visual sync.
+
 ## Architecture
 
 ### Server-Client f64/f32 Split
@@ -24,11 +26,11 @@ Server (f64 Truth)
 ├── Computes per-client relative f32 positions
 └── Sends f32 deltas to each client
 
-Client (f32 Render-Only)
+Client (f32 Render-Only / Rough Simulation)
 ├── Receives f32 positions relative to own floating origin
 ├── Applies directly to Bevy Transform (zero conversion)
-├── Client-side prediction uses f32 (short-term, fine for <1s)
-└── NO f64 computation — saves CPU and bandwidth
+├── Client-side prediction uses f32 (accepting rough accuracy for speed)
+└── NO f64 computation — saves CPU and bandwidth, prioritizing interactivity
 ```
 
 **Bandwidth advantage:** f32 positions are half the bytes of f64. For 1000 synced entities at 60Hz, this saves ~144KB/s per client.

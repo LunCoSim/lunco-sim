@@ -5,7 +5,12 @@
 **Status**: Draft
 
 ## Problem Statement
-LunCoSim is designed to be rigorous enough for engineering simulations but must also be highly accessible for new users and game developers. We need an interactive tutorial system that teaches users how to assemble rovers, configure the lunar environment, and orchestrate missions. By leveraging our modular plugin architecture and adjustable simulation fidelity, these tutorials can smoothly guide a user from a simplistic "arcade" mode up to full engineering-grade Modelica simulations.
+While LunCoSim is rigorous enough for high-fidelity engineering simulations, it must also serve as a training platform. We need an interactive tutorial system that teaches users how to assemble rovers, configure the lunar environment, and orchestrate missions. 
+
+> **Architectural Separation:** The interactive tutorial framework MUST be built *on top* of what we have. It is a separate package incorporating game-like interactive elements for engagement. It is **not** part of the simulation core. 
+
+**Why is this needed?**
+We will use this simulation for training professional operators, and even children, to understand and run lunar rovers. Engaging, interactive elements are essential to lower the barrier to entry, explaining complex aerospace physics in an intuitive, hands-on manner before the user graduates to headless engineering scripts.
 
 ## User Stories
 

@@ -8,7 +8,7 @@
 ## Problem Statement
 A simulation feels lifeless without auditory feedback. Operators need to hear motors straining and telemetry alarms firing. This spec covers **basic, practical audio** — engine sounds, impact effects, and Master Caution alarms.
 
-> **Note on Reduced Scope:** Advanced vacuum-aware structural acoustic propagation (sound traveling through rigidbody chains) is deferred to a future phase. For now, audio is simplified to basic spatial sounds with distance falloff and flat UI alarms.
+> **Note on Reduced Scope:** We are keeping audio strictly basic. Advanced vacuum-aware structural acoustic propagation (sound traveling through rigidbody chains) is a distraction from core robotics and thermodynamics and has been permanently omitted from this phase. Audio is simplified to basic proximity sounds and flat UI alarms only.
 
 ## User Scenarios
 
