@@ -20,6 +20,13 @@ As a user, I want to drive the rover using WASD, where the keyboard input acts a
 - Pressing 'W' sends a positive torque signal to the `WheelActuators`.
 - The system uses a basic `CommandMux` to route these manual signals to the physical motors.
 
+### Story 3: Double-Precision Mathematical Foundation (Large World Coordinates)
+As a core engine architect, I want the simulation to handle vast Earth-Moon distances without vibrating physics, so that lunar orbiters and surface rovers can exist in the same mathematical space.
+
+**Acceptance Criteria:**
+- Physics calculations (transforms and forces) are executed natively in `f64` (double precision) either natively via customized components or Avian overrides.
+- **Camera-Relative Rendering**: To prevent `f32` precision jitter in Bevy's GPU pipeline, the engine binds the active Camera near the origin `(0,0,0)`. Visual `Transforms` (`f32`) of entities are dynamically updated relative to the camera's true `f64` position every frame .
+
 ## Out of Scope
 - External SIL/HIL (Reserved for Feature 002).
 - Complex autonomous navigation.
