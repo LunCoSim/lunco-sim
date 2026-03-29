@@ -3,7 +3,7 @@ use avian3d::prelude::*;
 use leafwing_input_manager::prelude::*;
 use std::collections::HashMap;
 
-use lunco_sim_core::architecture::{DigitalPort, PhysicalPort, Wire};
+use lunco_sim_core::architecture::{DigitalPort, PhysicalPort, Wire, CommandMessage};
 use lunco_sim_physics::{LunCoSimPhysicsPlugin, MotorActuator};
 use lunco_sim_fsw::{LunCoSimFswPlugin, FlightSoftware};
 use lunco_sim_obc::LunCoSimObcPlugin;
@@ -15,7 +15,6 @@ fn main() {
     App::new()
         .add_plugins(DefaultPlugins)
         .add_plugins(PhysicsPlugins::default()) // Avian3D
-        // .add_plugins(PhysicsDebugPlugin::default()) // Uncomment to see colliders
         // LunCo Modules
         .add_plugins(LunCoSimPhysicsPlugin)
         .add_plugins(LunCoSimFswPlugin)
@@ -62,10 +61,11 @@ fn setup_scenario(
         Mesh3d(meshes.add(Plane3d::default().mesh().size(100.0, 100.0))),
         MeshMaterial3d(materials.add(Color::srgb(0.2, 0.2, 0.2))),
         RigidBody::Static,
-        Collider::half_space(Vec3::Y),
+        Collider::cuboid(100.0, 0.1, 100.0),
+        Transform::from_xyz(0.0, -0.05, 0.0),
     ));
 
-    // 2. The Rover Chassis (HEAVY & STABLE)
+    // 2. The Rover Chassis (STABILIZED)
     let chassis_width = 1.8;
     let chassis_height = 0.5;
     let chassis_length = 3.0;
@@ -81,13 +81,11 @@ fn setup_scenario(
         RigidBody::Dynamic,
         Collider::cuboid(chassis_width, chassis_height, chassis_length),
         Friction::new(0.5),
-        // STABILITY FIXES (INSP BY BEVY_GARAGE)
-        Mass(1000.0), // High mass prevents jittery bouncing
-        CenterOfMass::from(Vec3::new(0.0, -0.4, 0.0)), // Low COM prevents flipping
-        LinearDamping(0.1),
-        AngularDamping(0.2),
-        // Standard inertia for a 1-ton cuboid (approximated)
-        Inertia(Vec3::new(5000.0, 5000.0, 2000.0)), 
+        Mass(1000.0), 
+        CenterOfMass(Vec3::new(0.0, -0.4, 0.0)), 
+        LinearDamping(0.2),
+        AngularDamping(0.3),
+        AngularInertia::new(Vec3::new(5000.0, 5000.0, 2000.0)), 
     )).id();
 
     // 3. Digital Channels
@@ -119,7 +117,6 @@ fn setup_scenario(
 
     for (label, rel_pos, digital_source, mat) in wheel_configs {
         let motor_port = commands.spawn((Name::new(format!("port_{}", label)), PhysicalPort::default())).id();
-        // TORQUE SCALE increased to 5000.0 for the 1000kg chassis
         commands.spawn(Wire { source: digital_source, target: motor_port, scale: 5000.0 });
 
         let wheel_entity = commands.spawn((
@@ -129,10 +126,8 @@ fn setup_scenario(
             Transform::from_translation(rover_spawn_pos + rel_pos).with_rotation(wheel_tilt),
             RigidBody::Dynamic,
             Collider::cylinder(wheel_radius, wheel_width),
-            Friction::new(5.0), // High friction for better traction
+            Friction::new(5.0), 
             Mass(20.0),
-            LinearDamping(0.1),
-            AngularDamping(0.1),
             ConstantLocalTorque(Vec3::ZERO),
             MotorActuator {
                 port_entity: motor_port,
@@ -159,7 +154,6 @@ fn setup_scenario(
     // 7. Avatar
     let mut input_map = InputMap::default();
     input_map.insert(SpaceSystemAction::DriveForward, KeyCode::KeyW);
-    // Note: Binds are handled by the controller plugin
     commands.spawn((
         Avatar,
         Camera3d::default(),
