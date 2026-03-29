@@ -3184,10 +3184,18 @@ dependencies = [
 [[package]]
 name = "lunco-sim-fsw"
 version = "0.1.0"
+dependencies = [
+ "bevy",
+ "lunco-sim-core",
+]
 
 [[package]]
 name = "lunco-sim-obc"
 version = "0.1.0"
+dependencies = [
+ "bevy",
+ "lunco-sim-core",
+]
 
 [[package]]
 name = "lunco-sim-physics"

@@ -53,8 +53,8 @@ mod tests {
     #[test]
     fn test_wire_scale_assignment() {
         let wire = Wire {
-            source: Entity::from_raw(0),
-            target: Entity::from_raw(1),
+            source: Entity::PLACEHOLDER,
+            target: Entity::PLACEHOLDER,
             scale: 2.5,
         };
 
