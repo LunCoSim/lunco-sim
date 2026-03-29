@@ -3,31 +3,31 @@
 **Feature Branch**: `028-supply-chain-visualization`
 **Created**: 2026-03-29
 **Status**: Draft
-**Input**: Requirements for high-level logistics and supply chain monitoring.
+**Input**: Macroscopic Logistics, SysML network mapping, and Global Supply/Demand visualizations.
 
 ## Problem Statement
-While Spec 025 (ISRU Resource Economy) handles the math of logistics, we need a way to visualize the macroscopic flow of materials between distant entities (e.g., Earth -> Lunar Station -> South Pole Base). A purely 3D-camera view makes it difficult to understand bottlenecks in a multi-node supply chain.
+While `025-isru-resource-economy` handles the local mechanics of specific factories cracking regolith into oxygen, mission planners need a macroscopic view of the *entire planetary supply chain*. The engine must provide a visualization layer that parses the overarching `013-sysml-integration` logistics network graph, mapping resource flows between distant outposts (Earth -> Lunar Gateway -> South Pole Base).
 
 ## User Scenarios
 
-### User Story 1 - Node-Link Logistics Graph
-As a logistics engineer, I want to see a 2D node-link graph showing all my active supply chain routes, so that I can visualize resource flow in real-time.
+### User Story 1 - SysML Node-Link Logistics Graph
+As a logistics engineer, I want to see a 2D/3D node-link overlay showing all my active supply chain routes as defined by the SysML architecture.
 
 **Acceptance Criteria:**
-- The Unified Editor (`Spec 007`) provides a "Logistics View" window.
-- Entities with an `Inventory` and active `LogisticsNetwork` (from Spec 025) are represented as nodes.
-- Animated edges (lines) visualize the rate and volume of resource transfer between nodes.
+- The Unified Editor (`007`) provides a "Logistics Macro-View" mode.
+- Global entities (like entire orbital stations or ground bases) are summarized as distinct nodes.
+- Animated edges (lines) visualize the macro-rate and volume of resource transfer (e.g., Cargo shipments arriving once a month) between nodes.
 
-### User Story 2 - Bottleneck Analysis Overlays
-As an operator, I want to see which inventories are nearly empty or full at a glance across my entire lunar infrastructure.
+### User Story 2 - Planetary Bottleneck Analysis
+As a mission manager, I want to see which outposts are resource-starved over long timescales across my entire lunar infrastructure.
 
 **Acceptance Criteria:**
-- The logistics view highlights nodes in red if they are "Resource Starved" or "Storage Full".
-- Tooltips provide detailed telemetry on inventory levels without needing to teleport the 3D camera to the site.
+- The logistics view highlights macroscopic nodes in red if their aggregated total inventory is "Starved" or "Storage Full".
+- Tooltips provide aggregated telemetry without needing to teleport the 3D camera to the base.
 
 ### User Story 3 - Global Supply/Demand Dashboard
-As a mission manager, I want a high-level dashboard summarizing my total production and consumption rates across all lunar assets.
+As a commander, I want a high-level dashboard summarizing total planetary production and consumption.
 
 **Acceptance Criteria:**
-- A dashboard aggregates the production (e.g., d(Oxygen)/dt) and consumption (e.g., d(Power)/dt) metrics from all active `FactoryNode`s.
-- Total "Stock on Hand" is visualized for the entire colony.
+- A dashboard aggregates the production (`d(Oxygen)/dt`) and consumption (`d(Power)/dt`) metrics from all active `FactoryNode`s across the entire simulation world.
+- Total "Planetary Stock on Hand" is visualized against predicted demand curves.

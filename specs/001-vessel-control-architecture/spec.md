@@ -85,6 +85,7 @@ As an operator, I want to manually override an autonomous script by simply press
 - **FR-004**: **Plugin-First & Hot-Swappable**: The core engine must be a shell; all vessel types, controllers, and actuators are modular plugins. The architecture MUST support swapping implementations (e.g., "Simple Physics Motor" vs. "High-Fidelity Modelica Motor") at runtime or via configuration without breaking the signal pipeline.
 - **FR-005**: **Coordinate Agnostic**: The system must handle transformations between Bevy's Y-up and industry-standard Z-up (ROS).
 - **FR-006**: **Interface-Driven Pipeline**: Each layer of the control pipeline (Input, Coordination, Signal, Actuator) MUST communicate via standardized interfaces/traits, allowing "drop-in" replacements of different algorithms (e.g., swapping a basic GNC for a Neural Network controller).
+- **FR-007**: **Headless Evaluation Oracle (Automated TDD)**: The architecture MUST strictly decouple logic from rendering so that the engine can be executed completely headlessly. All physical states, `CommandMux` inputs, and telemetry streams must be accessible and verifiable by automated scripts (e.g., Python `pytest` via `008-dynamic-scripting` or Rust native tests) to enable mathematically rigorous, visual-free Test-Driven Development (TDD) of aerospace components.
 
 ### Key Entities
 - **Plant (Vessel)**: The collection of Actuators, Sensors, and Physics.
