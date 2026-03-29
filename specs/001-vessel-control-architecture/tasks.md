@@ -62,6 +62,13 @@
   - **Depends on**: 2.1, 2.2, 2.3, 3.1
   - **Requirement**: Use Story 0 (Stage 1 MVP)
 
+- [ ] 3.3 Implement Avatar Free-Cam & Physical Possession (`lunco-sim-client` / `lunco-sim-controller`)
+  - Implement a free-moving 3D Avatar camera using `WASDQE` for translation and `Right Mouse Button` drag for rotation.
+  - Implement Godot-style Raycasting/Picking to detect clicks on the rover.
+  - Build state-machine logic transitioning input between the Avatar Camera and the `ControllerLink` (Rover) when clicked, and returning to the Avatar upon pressing `Backspace`.
+  - **Depends on**: 3.1, 3.2
+  - **Requirement**: FR-001, User Story 1
+
 ## Phase 4: Headless Validation & Quality Gates (000-TEST)
 
 - [ ] 4.1 Tier 1 Unit Testing & State Persistence
