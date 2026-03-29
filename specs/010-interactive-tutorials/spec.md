@@ -1,6 +1,6 @@
-# Feature Specification: 024-interactive-tutorials
+# Feature Specification: 010-interactive-tutorials
 
-**Feature Branch**: `024-interactive-tutorials`
+**Feature Branch**: `010-interactive-tutorials`
 **Created**: 2026-03-29
 **Status**: Draft
 
