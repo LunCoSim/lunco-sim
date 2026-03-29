@@ -26,14 +26,6 @@ As a hardware engineer, I want to connect a physical microcontroller (e.g., ESP3
 **Acceptance Scenarios**:
 1. **Given** a serial connection to a physical MCU, **When** the simulation exports sensor data through its generic Signal Bridge, **Then** the `SerialBridgeNode` streams it over USB/Serial and the MCU reacts in real-time.
 
----
-
-### User Story 3 - ROS2 Subsystem Emulation (Priority: P2)
-As a robotics engineer, I want the simulation to act as a native ROS2 node, exposing topics and services, so I can test my ROS2 logic stack without altering its network dependencies.
-
-**Acceptance Scenarios**:
-1. **Given** a running ROS2 network, **When** the spatial simulation is running, **Then** the engine natively emulates ROS2 compatibility (e.g., via native DDS or bridge protocols) and seamlessly publishes/subscribes to external ROS2 nodes.
-
 ## Requirements
 
 ### Functional Requirements
@@ -41,7 +33,6 @@ As a robotics engineer, I want the simulation to act as a native ROS2 node, expo
 - **FR-002**: **Specific Protocol Implementations**: Out of the box, the engine MUST implement at least a UDP/TCP network socket layer for SIL testing (e.g. Fprime, cFS) and a Serial port interface to receive commands from physical hardware (e.g. ESP32).
 - **FR-003**: **Time Synchronization (Lockstep)**: The transport layer MUST provide network synchronization modes to ensure the external software controller and Bevy physics ticks stay in strict lockstep, pausing Bevy if the external controller lags.
 - **FR-004**: **Protocol Decoding**: Implement protocol parsers (e.g., Fprime framing, Mavlink) specifically tailored for space software protocols.
-- **FR-005**: **ROS2 / DDS Emulation**: The connectivity layer MUST natively emulate ROS2 node behavior (e.g., by integrating a native Rust DDS implementation or an equivalent protocol emulation bridge) so external ROS networks treat the engine as a standard dependency.
 
 ### Key Entities
 - **UDPBridgeNode**: A system handling UDP sockets sending/receiving the generic actuator/sensor streams.
