@@ -28,7 +28,14 @@ As a core engine architect, I want the simulation to handle vast Earth-Moon dist
 - Physics calculations (transforms and forces) are executed natively in `f64` (double precision) either natively via customized components or Avian overrides.
 - **Camera-Relative Rendering**: To prevent `f32` precision jitter in Bevy's GPU pipeline, the engine binds the active Camera near the origin `(0,0,0)`. Visual `Transforms` (`f32`) of entities are dynamically updated relative to the camera's true `f64` position every frame (mirroring the *Kitten Space Agency* methodology).
 
-### Story 4: Plugin-First Extensibility
+### Story 4 - Propagator Mutability (On-Rails Transition Prep)
+As an orbital mechanics engineer, I want the physics engine architecture to legally allow a vehicle to swap from local physics to macroscopic Keplerian orbits when it enters deep space, without crashing the ECS.
+
+**Acceptance Criteria:**
+- The engine enforces "Propagator Component Swapping." The `AvianRigidBody` component is not permanently locked to the `Vessel` entity.
+- If a spatial condition is met, an external plugin (like `021-fmu-gmat-integration`) is authorized to delete the `AvianRigidBody` and insert a custom `KeplerianPropagator`, seamlessly putting the vessel "On-Rails."
+
+### Story 5: Plugin-First Extensibility
 As a third-party developer, I want to add my own custom sensors, environments, or vehicle mechanics without modifying the core LunCoSim source code.
 
 **Acceptance Criteria:**

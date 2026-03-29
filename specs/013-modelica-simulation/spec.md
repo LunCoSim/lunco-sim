@@ -30,3 +30,12 @@ As a physics engineer, I want the internal state of the Modelica simulation to d
 **Acceptance Criteria:**
 - Modelica holds mutator authority over generic `avian` structural components (e.g., dynamically altering a tire's `Friction` coefficient if Modelica dictates the tire has frozen, or actively dumping fuel mass to alter the Rigidbody's center of gravity).
 - This is achieved via a generic ECS Publisher/Subscriber framework, preventing hardcoded physics rules.
+
+---
+
+### Story 4: Spatial Thermodynamics (Bi-Directional LOD Data Flow)
+As a thermal systems engineer, I need my Modelica heat-rejection equations to automatically understand whether my physical radiator is facing the cold vacuum of deep space, or if it is accidentally blocked by my own robotic arm.
+
+**Acceptance Criteria:**
+- Bevy computes a "Sky View-Factor" geometrically and streams this spatial occlusion coefficient dynamically back into `rumoca`.
+- **Adjustable LOD:** The engine provides adjustable spatial-calculation modes to spare CPU cycles (e.g., `Low Quality`: Vector Dot-math / `Medium Quality`: 16-ray `avian` hemispherical casts / `Max Quality`: Delegated to `023` GPU Compute Shaders).

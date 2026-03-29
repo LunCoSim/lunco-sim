@@ -14,7 +14,18 @@ While Modelica handles internal 1D subsystem physics on the rover, complex missi
 As a systems engineer, I want the Bevy server to execute an external manufacturer's FMU (Functional Mock-up Unit) as part of the simulation tick, so that proprietary hardware (like specialized thrusters) accurately models its behavior.
 
 **Acceptance Criteria:**
-- The engine leverages the FMI (Functional Mock-up Interface) standard to step the FMU and exchange numerical inputs/outputs with the universal `CommandMux`.
+- The engine can load `.fmu` packages and provide inputs while reading outputs natively inside Bevy's execution pipeline.
+- FMU parameters are mapped to `Sysml` definitions for formal validation prior to execution.
+
+---
+
+### User Story 2 - ECS Orbital Handoff (Physics to On-Rails)
+As an orbital trajectory engineer, I want the spacecraft to seamlessly transition from bouncing on local regolith to a smooth Keplerian planetary orbit without my math drifting due to 3D game physics errors.
+
+**Acceptance Criteria:**
+- The engine executes a spatial State Machine (e.g., checking if Altitude > 100km).
+- Upon boundary crossing, the GMAT plugin intercepts the Vehicle, deletes the local `AvianRigidBody` component (authorized via `001-basic-rover-model`), and seamlessly injects a `GmatPropagator`.
+- The vehicle is now "On-Rails." Its spatial `Transform` is driven purely by mathematical Keplerian/Astrodynamics models instead of Bevy collision physics.iversal `CommandMux`.
 - To maintain deterministic constraints, this heavy execution happens *exclusively on the Headless Server*. Clients do not run the FMU; they merely receive the resulting physics/telemetry updates via the multiplayer prediction loop (`006`).
 
 ### User Story 2 - Astrodynamics Sync (Priority: P3)
