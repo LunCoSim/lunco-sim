@@ -2,63 +2,80 @@ use bevy::prelude::*;
 use avian3d::prelude::*;
 use leafwing_input_manager::prelude::*;
 
+use lunco_sim_core::architecture::{DigitalPort, PhysicalPort, Wire};
 use lunco_sim_physics::{LunCoSimPhysicsPlugin, MotorActuator};
-use lunco_sim_controller::{LunCoSimControllerPlugin, SpaceSystemAction, ControllerLink};
-use lunco_sim_core::architecture::{PhysicalPort, DigitalPort, Wire};
-use lunco_sim_obc::LunCoSimObcPlugin;
 use lunco_sim_fsw::LunCoSimFswPlugin;
+use lunco_sim_obc::LunCoSimObcPlugin;
+use lunco_sim_controller::{LunCoSimControllerPlugin, SpaceSystemAction};
 use lunco_sim_attributes::LunCoSimAttributesPlugin;
+use lunco_sim_avatar::{LunCoSimAvatarPlugin, Avatar, Vessel};
 
 fn main() {
     App::new()
         .add_plugins(DefaultPlugins)
-        .add_plugins(PhysicsPlugins::default())
-        .add_plugins(PhysicsDebugPlugin::default())
-        .add_plugins(LunCoSimObcPlugin)
-        .add_plugins(LunCoSimFswPlugin)
+        .add_plugins(PhysicsPlugins::default()) // Avian3D
+        // LunCo Modules
         .add_plugins(LunCoSimPhysicsPlugin)
+        .add_plugins(LunCoSimFswPlugin)
+        .add_plugins(LunCoSimObcPlugin)
         .add_plugins(LunCoSimControllerPlugin)
         .add_plugins(LunCoSimAttributesPlugin)
-        .add_systems(Startup, setup_scene)
+        .add_plugins(LunCoSimAvatarPlugin)
+        .add_systems(Startup, setup_scenario)
         .run();
 }
 
-fn setup_scene(
+#[derive(Component)]
+pub struct RoverVessel;
+
+fn setup_scenario(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    // 1. Camera & Light
+    // 1. Ground Plane
     commands.spawn((
-        Camera3d::default(),
-        Transform::from_xyz(0.0, 5.0, 10.0).looking_at(Vec3::ZERO, Vec3::Y),
-    ));
-    commands.spawn((
-        DirectionalLight::default(),
-        Transform::from_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_4)),
-    ));
-
-    // 2. Static Ground
-    commands.spawn((
-        Mesh3d(meshes.add(Plane3d::default().mesh().size(50.0, 50.0))),
-        MeshMaterial3d(materials.add(Color::srgb(0.3, 0.5, 0.3))),
+        Mesh3d(meshes.add(Plane3d::default().mesh().size(100.0, 100.0))),
+        MeshMaterial3d(materials.add(Color::srgb(0.2, 0.2, 0.2))),
         RigidBody::Static,
         Collider::half_space(Vec3::Y),
     ));
 
-    // 3. Rover Body
-    let rover_mesh = meshes.add(Cuboid::new(2.0, 1.0, 4.0));
-    let rover_mat = materials.add(Color::srgb(0.8, 0.7, 0.6));
-    
+    // 2. The Rover (Space System)
+    let rover_entity = commands.spawn((
+        Name::new("rover_v1"),
+        RoverVessel,
+        Vessel, // Marker for possession
+        Mesh3d(meshes.add(Cuboid::new(2.0, 1.0, 3.0))),
+        MeshMaterial3d(materials.add(Color::srgb(0.8, 0.4, 0.0))),
+        Transform::from_xyz(0.0, 2.0, 0.0),
+        RigidBody::Dynamic,
+        Collider::cuboid(2.0, 1.0, 3.0),
+    )).id();
+
+    // 3. Ports & Wires
     let motor_port = commands.spawn(PhysicalPort { value: 0.0 }).id();
-    let steer_port = commands.spawn(PhysicalPort { value: 0.0 }).id();
     let digital_drive = commands.spawn(DigitalPort::default()).id();
-    let digital_steer = commands.spawn(DigitalPort::default()).id();
 
-    // Wires linking OBC logic registers down to physical arrays
-    commands.spawn(Wire { source: digital_drive, target: motor_port, scale: 50.0 });
-    commands.spawn(Wire { source: digital_steer, target: steer_port, scale: 15.0 });
+    commands.spawn(Wire { 
+        source: digital_drive, 
+        target: motor_port, 
+        scale: 50.0 
+    });
 
+    // Link Actuator to Port
+    commands.entity(rover_entity).insert(MotorActuator {
+        port_entity: motor_port,
+        axis: Vec3::Z,
+    });
+
+    // 4. Light
+    commands.spawn((
+        DirectionalLight::default(),
+        Transform::from_xyz(10.0, 20.0, 10.0).looking_at(Vec3::ZERO, Vec3::Y),
+    ));
+
+    // 5. Avatar (The Human Pilot)
     let mut input_map = InputMap::default();
     input_map.insert(SpaceSystemAction::DriveForward, KeyCode::KeyW);
     input_map.insert(SpaceSystemAction::DriveReverse, KeyCode::KeyS);
@@ -66,21 +83,11 @@ fn setup_scene(
     input_map.insert(SpaceSystemAction::SteerRight, KeyCode::KeyD);
     input_map.insert(SpaceSystemAction::Brake, KeyCode::Space);
 
-    let rover = commands.spawn((
-        Mesh3d(rover_mesh),
-        MeshMaterial3d(rover_mat),
-        Transform::from_xyz(0.0, 2.0, 0.0),
-        RigidBody::Dynamic,
-        Collider::cuboid(2.0, 1.0, 4.0),
-        ConstantTorque(Vec3::ZERO),
-        MotorActuator {
-            port_entity: motor_port,
-            axis: Vec3::Z, // Drive forward along Z
-        },
+    commands.spawn((
+        Avatar,
+        Camera3d::default(),
+        Transform::from_xyz(10.0, 10.0, 10.0).looking_at(Vec3::ZERO, Vec3::Y),
         ActionState::<SpaceSystemAction>::default(),
         input_map,
-    )).id();
-
-    // Link the Controller logic to the vessel logic
-    commands.entity(rover).insert(ControllerLink { vessel_entity: rover });
+    ));
 }

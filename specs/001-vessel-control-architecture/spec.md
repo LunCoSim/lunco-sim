@@ -134,12 +134,13 @@ Bevy defaults to **Y-Up**. External aerospace software (Fprime, ROS) defaults to
 
 ## User Scenarios
 
-### User Story 1 - Avatar Possession & Interactive Viewpoint (Priority: P1)
+### User Story 1 - Avatar Possession & Orbit Interaction (Priority: P1)
 As a user, I want my **Avatar** to be the primary interactive element in the world:
 - By default, the Avatar operates as a free-camera, moving freely through the 3D space using the `WASDQE` keys.
 - By holding the **Right Mouse Button**, I can drag to rotate the Avatar's view direction.
-- When I **Click on the rover**, the Avatar "possesses" the space system, taking control over it. Controller intent (like `WASD`) is now passed to the rover's flight software instead of the free-camera.
-- By pressing **Backspace**, the Avatar terminates possession, releasing the rover to its idle state and returning input routing to the free-camera mode.
+- **Possession & Orbit**: When I **Click on the rover**, the Avatar "possesses" the vessel. The camera switches to **Orbit Mode**, centering the rover.
+- **Controllers**: While possessed, `WASD` commands move the rover; **Right Click + Drag** orbits the camera around the vessel.
+- **Release**: By pressing **Backspace**, the Avatar terminates possession, releasing the rover and returning to free-camera mode.
 
 ### User Story 2 - CLI Command Overhaul (Priority: P1)
 As a mission operator, I want to bypass the Avatar and Controller by sending a raw `CMD_REBOOT` directly to the FSW via the command-line interface (CLI).

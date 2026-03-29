@@ -3516,6 +3516,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "lunco-sim-avatar"
+version = "0.1.0"
+dependencies = [
+ "avian3d",
+ "bevy",
+ "leafwing-input-manager",
+ "lunco-sim-controller",
+ "lunco-sim-core",
+]
+
+[[package]]
 name = "lunco-sim-client"
 version = "0.1.0"
 dependencies = [
@@ -3523,6 +3534,7 @@ dependencies = [
  "bevy",
  "leafwing-input-manager",
  "lunco-sim-attributes",
+ "lunco-sim-avatar",
  "lunco-sim-controller",
  "lunco-sim-core",
  "lunco-sim-fsw",
