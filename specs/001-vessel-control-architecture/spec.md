@@ -57,13 +57,14 @@ As a user, I want to map my keyboard (WASD) or a Joystick to semantic actions, a
 
 ---
 
-### User Story 3 - Universal Signal Bridge (SIL/HIL) (Priority: P2)
-As a flight software engineer, I want to drive the virtual rover using an external **Fprime** instance or a physical **ESP32** microcontroller.
+### User Story 3 - Universal Signal Architecture (SIL/HIL Ready) (Priority: P2)
+As a flight software engineer, I want the underlying control architecture to be capable of receiving external signals (e.g., from an Fprime instance or ESP32) seamlessly when those transport layers are implemented later.
 
 **Acceptance Criteria:**
-- **Signal Bridge**: A modular I/O layer routes signals between Bevy and external sources (UDP/Serial).
-- **Transparency**: The Controller logic cannot distinguish between a virtual "Plant" and a real physical rover if the bridge protocol matches.
-- **Lockstep Sync**: Support for synchronization modes to ensure physics stays in sync with external controllers.
+- **Signal Abstraction**: A foundational `SignalRouting` trait interface is provided to route signals between Bevy and generic abstract sources.
+- **Transparency**: The local physics Controller logic MUST NOT be coupled to the source of the control signal, ensuring pure transparency for future SIL/HIL bridges.
+- **Lockstep Sync Foundation**: The architecture must support deterministic, tick-based execution to allow for future time-synchronization locking.
+*(Note: The actual UDP, Serial, and Fprime protocol implementations are deferred to Spec 029: HIL/SIL Integration).*
 
 ---
 
@@ -78,7 +79,7 @@ As an operator, I want to manually override an autonomous script by simply press
 ## Requirements
 
 ### Functional Requirements
-- **FR-001**: **Actuator Components & Addressing**: All physical work MUST be handled by components that respond only to raw numerical signals. Every actuator MUST be uniquely addressable via the `CommandMux` to allow for independent control of individual wheels, thrusters, or joints.
+- **FR-001**: **Actuator Components, Addressing & Continuous Signals**: All physical work MUST be handled by components that respond only to raw numerical signals. This MUST support both **continuous signals** (e.g., `-1.0 to 1.0` for engine throttling, motor speeds) and discrete signals. Every actuator MUST be uniquely addressable via the `CommandMux` to allow for independent control of individual wheels, thrusters, or joints.
 - **FR-002**: **Sensor Components**: All telemetry MUST be captured by components that make raw data available for export.
 - **FR-003**: **Propagator Swapping**: The architecture MUST allow swapping an `AvianRigidBody` for a `KeplerianPropagator` (On-Rails) seamlessly.
 - **FR-004**: **Plugin-First & Hot-Swappable**: The core engine must be a shell; all vessel types, controllers, and actuators are modular plugins. The architecture MUST support swapping implementations (e.g., "Simple Physics Motor" vs. "High-Fidelity Modelica Motor") at runtime or via configuration without breaking the signal pipeline.
