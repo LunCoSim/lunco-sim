@@ -32,34 +32,41 @@ pub struct ControllerLink {
 fn translate_intents_to_commands(
     q_controllers: Query<(&ActionState<SpaceSystemAction>, &ControllerLink)>,
     mut commands: Commands,
+    mut last_intents: Local<Option<(f32, f32, f32)>>,
 ) {
     for (action_state, link) in q_controllers.iter() {
         // Forward/Reverse Intent Mixing
         let mut forward_intent = 0.0;
-        if action_state.pressed(&SpaceSystemAction::DriveForward) { forward_intent += 100.0; }
-        if action_state.pressed(&SpaceSystemAction::DriveReverse) { forward_intent -= 100.0; }
+        if action_state.pressed(&SpaceSystemAction::DriveForward) { forward_intent += 1.0; }
+        if action_state.pressed(&SpaceSystemAction::DriveReverse) { forward_intent -= 1.0; }
         
         // Steering Intent Mixing
         let mut steer_intent = 0.0;
-        if action_state.pressed(&SpaceSystemAction::SteerLeft) { steer_intent -= 100.0; }
-        if action_state.pressed(&SpaceSystemAction::SteerRight) { steer_intent += 100.0; }
+        if action_state.pressed(&SpaceSystemAction::SteerLeft) { steer_intent -= 1.0; }
+        if action_state.pressed(&SpaceSystemAction::SteerRight) { steer_intent += 1.0; }
 
-        if forward_intent != 0.0 || steer_intent != 0.0 {
+        // Brake Intent (Stateful)
+        let brake_intent = if action_state.pressed(&SpaceSystemAction::Brake) { 1.0 } else { 0.0 };
+
+        let current = (forward_intent, steer_intent, brake_intent);
+        if last_intents.map_or(true, |last| last != current) {
+            // DRIVE_ROVER (includes steering)
             commands.trigger(CommandMessage {
                 source: Entity::PLACEHOLDER,
                 target: link.vessel_entity,
                 name: "DRIVE_ROVER".to_string(),
-                args: vec![forward_intent as f32 / 100.0, steer_intent as f32 / 100.0],
+                args: vec![forward_intent, steer_intent],
             });
-        }
 
-        if action_state.pressed(&SpaceSystemAction::Brake) {
+            // BRAKE_ROVER (Refined to pass duty/state)
             commands.trigger(CommandMessage {
                 source: Entity::PLACEHOLDER,
                 target: link.vessel_entity,
                 name: "BRAKE_ROVER".to_string(),
-                args: vec![],
+                args: vec![brake_intent],
             });
+
+            *last_intents = Some(current);
         }
     }
 }

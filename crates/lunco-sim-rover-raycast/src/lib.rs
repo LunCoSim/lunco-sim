@@ -17,6 +17,7 @@ impl Plugin for LunCoSimRoverRaycastPlugin {
                 apply_wheel_suspension,
                 apply_wheel_friction,
                 apply_wheel_drive,
+                update_wheel_steering,
                 visualize_wheel_suspension,
             )
                 .chain(),
@@ -34,6 +35,18 @@ pub struct RaycastWheel {
     pub stiffness: f32,
     pub damping: f32,
     pub friction: f32,
+}
+
+#[derive(Component, Reflect)]
+#[reflect(Component)]
+pub struct SteeringActuator {
+    pub port_entity: Entity,
+    pub max_angle: f32,
+}
+
+#[derive(Component)]
+pub struct BrakeActuator {
+    pub port_entity: Entity,
 }
 
 impl Default for RaycastWheel {
@@ -114,10 +127,11 @@ fn apply_wheel_suspension(
 }
 
 fn apply_wheel_friction(
-    wheels: Query<(&RaycastWheel, &RaycastWheelState, &GlobalTransform, &ChildOf)>,
+    wheels: Query<(Entity, &RaycastWheel, &RaycastWheelState, &GlobalTransform, &ChildOf, Option<&BrakeActuator>)>,
     mut parents: Query<(Forces, &CenterOfMass, &Transform), With<RigidBody>>,
+    ports: Query<&PhysicalPort>,
 ) {
-    for (wheel, state, global_transform, child_of) in wheels.iter() {
+    for (_entity, wheel, state, global_transform, child_of, maybe_brake) in wheels.iter() {
         if let Ok((mut parent_forces, com, parent_tf)) = parents.get_mut(child_of.0) {
             // 1. Calculate velocity of the contact point on the wheel
             let world_com = parent_tf.transform_point(com.0);
@@ -145,7 +159,35 @@ fn apply_wheel_friction(
             let longitudinal_force_mag = (forward_velocity * longitudinal_stiffness * state.normal_force * rolling_resistance).clamp(-max_friction, max_friction);
             let longitudinal_force = -longitudinal_force_mag * forward;
 
-            parent_forces.apply_force_at_point(lateral_force + longitudinal_force, state.surface_point);
+            let resistance_torque = lateral_force + longitudinal_force;
+
+            // 4. Braking Force
+            if let Some(brake) = maybe_brake {
+                if let Ok(port) = ports.get(brake.port_entity) {
+                    if port.value > 0.0 {
+                        let velocity_dir = contact_velocity.normalize_or_zero();
+                        let brake_mag = (port.value).clamp(0.0, max_friction);
+                        let brake_force = -velocity_dir * brake_mag;
+                        
+                        parent_forces.apply_force_at_point(brake_force, state.surface_point);
+                    }
+                }
+            }
+
+            parent_forces.apply_force_at_point(resistance_torque, state.surface_point);
+        }
+    }
+}
+
+fn update_wheel_steering(
+    mut wheels: Query<(&mut Transform, &SteeringActuator)>,
+    ports: Query<&PhysicalPort>,
+) {
+    for (mut tf, steer) in wheels.iter_mut() {
+        if let Ok(port) = ports.get(steer.port_entity) {
+            // port.value is roughly -1.0 to 1.0 (after scaling)
+            let angle = port.value * steer.max_angle;
+            tf.rotation = Quat::from_rotation_y(angle);
         }
     }
 }
@@ -237,8 +279,8 @@ mod tests {
     }
 }
 
-/// Blueprint for assembling a Raycast-based Rover.
-pub fn spawn_raycast_rover(
+/// Internal shared logic for Raycast Rover variants.
+fn spawn_raycast_rover_internal(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
@@ -246,6 +288,7 @@ pub fn spawn_raycast_rover(
     spawn_pos: Vec3,
     name: &str,
     color: Color,
+    steering_type: SteeringType,
 ) -> Entity {
     let chassis_width = 1.8;
     let chassis_height = 0.5;
@@ -264,67 +307,83 @@ pub fn spawn_raycast_rover(
         Collider::cuboid(chassis_width, chassis_height, chassis_length),
         Friction::new(0.5),
         Mass(1000.0), 
-        CenterOfMass(Vec3::new(0.0, -0.4, 0.0)), 
-        LinearDamping(0.2),
-        AngularDamping(0.3),
+        CenterOfMass(Vec3::new(0.0, -0.8, 0.0)), 
+        LinearDamping(0.5),
+        AngularDamping(1.0),
         AngularInertia::new(Vec3::new(5000.0, 5000.0, 2000.0)), 
     )).id();
 
     let drive_l_digital = commands.spawn((Name::new(format!("{}_drive_l_reg", name)), DigitalPort::default())).id();
     let drive_r_digital = commands.spawn((Name::new(format!("{}_drive_r_reg", name)), DigitalPort::default())).id();
+    let steer_digital = commands.spawn((Name::new(format!("{}_steer_reg", name)), DigitalPort::default())).id();
+    let brake_digital = commands.spawn((Name::new(format!("{}_brake_reg", name)), DigitalPort::default())).id();
 
     let mut port_map = HashMap::new();
     port_map.insert("drive_left".to_string(), drive_l_digital);
     port_map.insert("drive_right".to_string(), drive_r_digital);
-    commands.entity(rover_entity).insert(FlightSoftware { port_map });
+    port_map.insert("steering".to_string(), steer_digital);
+    port_map.insert("brake".to_string(), brake_digital);
+    commands.entity(rover_entity).insert(FlightSoftware { port_map, brake_active: false });
 
     let f_mat = materials.add(Color::srgb(0.9, 0.1, 0.4)); 
     let r_mat = materials.add(Color::srgb(0.1, 0.4, 0.8)); 
 
     let wheel_configs = [
-        ("fl", Vec3::new(-1.2, -0.4, 1.2), drive_l_digital, f_mat.clone()),
-        ("rl", Vec3::new(-1.2, -0.4, -1.2), drive_l_digital, r_mat.clone()),
-        ("fr", Vec3::new(1.2, -0.4, 1.2), drive_r_digital, f_mat.clone()),
-        ("rr", Vec3::new(1.2, -0.4, -1.2), drive_r_digital, r_mat.clone()),
+        ("fl", Vec3::new(-1.2, -0.4, -1.2), true, true), // Front Left at -Z
+        ("rl", Vec3::new(-1.2, -0.4, 1.2), true, false), // Rear Left at +Z
+        ("fr", Vec3::new(1.2, -0.4, -1.2), false, true), // Front Right at -Z
+        ("rr", Vec3::new(1.2, -0.4, 1.2), false, false), // Rear Right at +Z
     ];
 
     let wheel_tilt = Quat::from_rotation_z(std::f32::consts::FRAC_PI_2);
+    let steer_port = commands.spawn((Name::new(format!("{}_port_steer", name)), PhysicalPort::default())).id();
+    commands.spawn(Wire { source: steer_digital, target: steer_port, scale: 0.6 });
 
-    for (label, rel_pos, digital_source, mat) in wheel_configs {
-        let motor_port = commands.spawn((Name::new(format!("{}_port_{}", name, label)), PhysicalPort::default())).id();
-        commands.spawn(Wire { source: digital_source, target: motor_port, scale: 12000.0 });
+    for (label, rel_pos, is_left, is_front) in wheel_configs {
+        let mat = if is_front { f_mat.clone() } else { r_mat.clone() };
+        
+        let motor_port = commands.spawn((Name::new(format!("{}_port_{}_drive", name, label)), PhysicalPort::default())).id();
+        let brake_port = commands.spawn((Name::new(format!("{}_port_{}_brake", name, label)), PhysicalPort::default())).id();
+        
+        // Both front and rear follow their respective side channels
+        let drive_source = if is_left { drive_l_digital } else { drive_r_digital };
+        commands.spawn(Wire { source: drive_source, target: motor_port, scale: 12000.0 });
+        commands.spawn(Wire { source: brake_digital, target: brake_port, scale: 20000.0 });
 
         commands.entity(rover_entity).with_children(|parent| {
-            parent.spawn((
+            let mut wheel = parent.spawn((
                 Name::new(format!("{}_wheel_{}", name, label)),
-                RaycastWheel {
-                    radius: wheel_radius,
-                    stiffness: 15000.0,
-                    damping: 1000.0,
-                    friction: 1.0,
-                },
+                RaycastWheel { radius: wheel_radius, stiffness: 6000.0, damping: 2500.0, friction: 0.8 },
                 RaycastWheelState::default(),
                 Visibility::default(),
                 RayCaster::new(Vec3::ZERO, Dir3::NEG_Y)
                     .with_max_hits(1)
                     .with_max_distance(wheel_radius * 1.5)
                     .with_query_filter(SpatialQueryFilter::from_excluded_entities([rover_entity])),
-                MotorActuator {
-                    port_entity: motor_port,
-                    axis: Vec3::Z, 
-                },
+                MotorActuator { port_entity: motor_port, axis: Vec3::Z },
+                BrakeActuator { port_entity: brake_port },
                 Transform::from_translation(rel_pos),
-            )).with_children(|wheel| {
-                wheel.spawn((
-                    WheelVisual,
-                    Mesh3d(wheel_mesh.clone()),
-                    MeshMaterial3d(mat),
-                    Visibility::default(),
-                    Transform::from_rotation(wheel_tilt),
-                ));
+            ));
+            
+            if is_front && steering_type == SteeringType::Ackermann {
+                wheel.insert(SteeringActuator { port_entity: steer_port, max_angle: 0.6 });
+            }
+
+            wheel.with_children(|p| {
+                p.spawn((WheelVisual, Mesh3d(wheel_mesh.clone()), MeshMaterial3d(mat), Visibility::default(), Transform::from_rotation(wheel_tilt)));
             });
         });
     }
-
     rover_entity
+}
+
+#[derive(PartialEq, Eq)]
+pub enum SteeringType { Skid, Ackermann }
+
+pub fn spawn_raycast_skid_rover(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>, wheel_mesh: Handle<Mesh>, spawn_pos: Vec3, name: &str, color: Color) -> Entity {
+    spawn_raycast_rover_internal(commands, meshes, materials, wheel_mesh, spawn_pos, name, color, SteeringType::Skid)
+}
+
+pub fn spawn_raycast_ackermann_rover(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>, wheel_mesh: Handle<Mesh>, spawn_pos: Vec3, name: &str, color: Color) -> Entity {
+    spawn_raycast_rover_internal(commands, meshes, materials, wheel_mesh, spawn_pos, name, color, SteeringType::Ackermann)
 }

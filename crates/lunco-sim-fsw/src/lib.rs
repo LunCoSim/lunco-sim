@@ -14,15 +14,16 @@ impl Plugin for LunCoSimFswPlugin {
 #[derive(Component, Default)]
 pub struct FlightSoftware {
     pub port_map: HashMap<String, Entity>,
+    pub brake_active: bool,
 }
 
 fn process_commands(
     trigger: On<CommandMessage>,
-    q_fsw: Query<&FlightSoftware>,
+    mut q_fsw: Query<&mut FlightSoftware>,
     mut q_digital_ports: Query<&mut DigitalPort>,
 ) {
     let cmd = trigger.event();
-    if let Ok(fsw) = q_fsw.get(cmd.target) {
+    if let Ok(fsw) = q_fsw.get_mut(cmd.target) {
         match cmd.name.as_str() {
             "DRIVE_ROVER" => {
                 if cmd.args.len() >= 1 {
@@ -41,13 +42,28 @@ fn process_commands(
                     if let Some(&port_r) = fsw.port_map.get("drive_right") {
                         if let Ok(mut p) = q_digital_ports.get_mut(port_r) { p.raw_value = right_mix; }
                     }
+                    if let Some(&port_s) = fsw.port_map.get("steering") {
+                        if let Ok(mut p) = q_digital_ports.get_mut(port_s) { p.raw_value = steer_power as i16; }
+                    }
                 }
             }
             "BRAKE_ROVER" => {
-                for name in ["drive_left", "drive_right"] {
-                    if let Some(&port_id) = fsw.port_map.get(name) {
-                        if let Ok(mut port) = q_digital_ports.get_mut(port_id) {
-                            port.raw_value = 0;
+                let brake_val = if cmd.args.len() >= 1 { cmd.args[0] } else { 1.0 };
+                let mut fsw_mut = q_fsw.get_mut(cmd.target).unwrap();
+                fsw_mut.brake_active = brake_val > 0.5;
+
+                let port_val = if fsw_mut.brake_active { 32767 } else { 0 };
+                
+                if let Some(&port_b) = fsw_mut.port_map.get("brake") {
+                    if let Ok(mut p) = q_digital_ports.get_mut(port_b) { p.raw_value = port_val; }
+                }
+
+                if fsw_mut.brake_active {
+                    for name in ["drive_left", "drive_right"] {
+                        if let Some(&port_id) = fsw_mut.port_map.get(name) {
+                            if let Ok(mut port) = q_digital_ports.get_mut(port_id) {
+                                port.raw_value = 0;
+                            }
                         }
                     }
                 }
@@ -69,7 +85,7 @@ mod tests {
         let mut map = HashMap::new();
         map.insert("drive_left".to_string(), p_l);
         map.insert("drive_right".to_string(), p_r);
-        let fsw_entity = app.world_mut().spawn(FlightSoftware { port_map: map }).id();
+        let fsw_entity = app.world_mut().spawn(FlightSoftware { port_map: map, brake_active: false }).id();
         (app, fsw_entity, p_l, p_r)
     }
 

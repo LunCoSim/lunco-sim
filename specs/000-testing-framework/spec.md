@@ -2,7 +2,7 @@
 
 **Feature Branch**: `000-testing-framework`
 **Created**: 2026-03-29
-**Status**: Draft
+**Status**: Active
 **Authority**: Project Constitution (Principle II, VIII, IX).
 
 ## Problem Statement
@@ -32,9 +32,9 @@ The 5-layer model (Actions -> Controller -> FSW -> OBC -> Plant) is a **hard bou
 - **Determinism**: All simulation systems must be deterministic (fixed timestep).
 
 ### Tier 2: Integration Testing (The Signal Path)
-- **Signal Integrity (DAC Path)**: Verify that writing an `i16` value to a `DigitalPort` (L2) correctly scales via the `Wire` to a `PhysicalPort` (L1) (e.g., `127` -> `0.5 * Max_Torque`).
-- **Sensor Return Path (ADC Path)**: Verify that physical state changes (L1 `f32`) correctly propagate and scale to the OBC's `DigitalPort` (L2 `i16`) and are readable by the FSW (L3).
-- **Resolution & Quantization**: Verify that low-resolution digital signals (e.g., 8-bit `-128` to `127`) result in expected "stepped" physical outputs on the Plant.
+- **Signal Integrity (DAC Path)**: Verify that writing an `i16` value (e.g. `32767`) to a `DigitalPort` (L2) correctly scales via the `Wire` to a `PhysicalPort` (L1) (e.g., `32767` -> `Max_Torque`).
+- **Sensor Return Path (ADC Path)**: Verify that physical state changes (L1 `f32`) correctly propagate and scale to the OBC's `DigitalPort` (L2 `i16` / `32767`) and are readable by the FSW (L3).
+- **Resolution & Quantization**: Verify that low-resolution digital signals (e.g., 16-bit `-32768` to `32767`) result in expected "stepped" physical outputs on the Plant.
 
 ### Tier 3: Functional Verifiers (Headless Validation)
 Verifier-based tests run the simulation in **Headless Mode** at high speed.
@@ -50,16 +50,17 @@ The following matrix defines the exhaustive set of validation cases for the **St
 
 ### Stage 1: Functional Case Matrix (i16/f32 Mapping)
 
-| ID | Case | Input (L5) | Logic Result (L4/3) | Hardware (L2 `i16`) | Physical (L1 `f32`) |
-|---|---|---|---|---|---|
-| **F-01** | Drive Forward | `W` (Hold) | `CMD_DRIVE(1.0)` | `PORT_DRIVE` = `255` | $+Z$ Torque > 0 |
-| **F-02** | Drive Backward | `S` (Hold) | `CMD_DRIVE(-1.0)`| `PORT_DRIVE` = `-255`| $-Z$ Torque < 0 |
-| **F-03** | Steer Left | `A` (Hold) | `CMD_STEER(-1.0)`| `PORT_STEER` = `-255`| Steering Yaw < 0 |
-| **F-04** | Steer Right | `D` (Hold) | `CMD_STEER(1.0)` | `PORT_STEER` = `255` | Steering Yaw > 0 |
-| **F-05** | Brake | `Space` | `CMD_BRAKE` | `PORT_BRAKE` = `1` | Brake Friction Max |
-| **F-06** | Idle/Coasting | None | `CMD_IDLE` | All `PORT` = `0` | Zero Torque |
-| **F-07** | Possession | `P` (Toggle) | `Avatar::Possess` | N/A | Input Focus Swap |
-| **F-08** | Persistence | Save/Load | `FSW_STATE` persists| `DigitalPorts` persist | Pos/Vel identical |
+| ID | Case | Input (L5) | Logic Result (L4/3) | Hardware (L2 `i16`) | Physical (L1 `f32`) | Requirement |
+|---|---|---|---|---|---|---|
+| **F-01** | Drive Fwd | `W` (Hold) | `DRIVE(1.0)` | `PORT_DRIVE` = `32767` | $+Z$ Force/Torque | $v > 0$ |
+| **F-02** | Drive Back | `S` (Hold) | `DRIVE(-1.0)`| `PORT_DRIVE` = `-32768`| $-Z$ Force/Torque | $v < 0$ |
+| **F-03A**| Skid Left | `A` (Hold) | `MIX(-1.0, 1.0)`| `PORT_L` = `-32768` | Diff. Torque | $\omega > 0$ (Skid) |
+| **F-03B**| Steer Left | `A` (Hold) | `STEER(-1.0)`| `PORT_STEER` = `-32768`| Wheel Angle < 0 | $\omega > 0$ (Ackermann) |
+| **F-04A**| Skid Right | `D` (Hold) | `MIX(1.0, -1.0)`| `PORT_R` = `-32768` | Diff. Torque | $\omega < 0$ (Skid) |
+| **F-04B**| Steer Right | `D` (Hold) | `STEER(1.0)` | `PORT_STEER` = `32767` | Wheel Angle > 0 | $\omega < 0$ (Ackermann) |
+| **F-05** | Brake | `Space` | `BRAKE` | `PORT_BRAKE` = `32767` | Resistance Force > 0 | $v \to 0$ |
+| **F-06** | Coasting | None | `IDLE` | All `PORT` = `0` | Zero Torque | $\dot{v} \approx 0$ |
+| **F-08** | Persistence| Save/Load | `FSW_STATE` persists| `DigitalPorts` persist | Pos/Vel identical | $\Delta < \epsilon$ |
 
 ---
 

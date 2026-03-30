@@ -2,7 +2,7 @@
 
 **Feature Branch**: `001-unified-control-interaction`
 **Created**: 2026-03-29
-**Status**: Draft
+**Status**: Active
 **Input**: 5-Layer Action-to-Actuator Technical Architecture (Avian & Leafwing).
 
 ## Problem Statement
@@ -43,7 +43,7 @@ To ensure high-performance (1000Hz+) and robustness, the engine uses a direct en
 Lightweight components attached to both digital and physical interfaces.
 ```rust
 struct DigitalPort {
-    pub raw_value: i16, // -32768 to 32767 (Signed, e.g. -255 to 255 for 8-bit)
+    pub raw_value: i16, // -32768 to 32767 mapping to full physical bounds
 }
 
 struct PhysicalPort {
@@ -68,7 +68,7 @@ struct Wire {
 ### 4. FSW Hardware Map (Level 3 Logic)
 The FSW populates a map of OBC Port Entity IDs during instantiation.
 - **Example**: `RoverFSW.drive_left = Entity(OBC_Port_5)`.
-- **Runtime Drive**: `ports.get_mut(fsw.drive_left).raw_value = -255; // Reverse drive command`
+- **Runtime Drive**: `ports.get_mut(fsw.drive_left).raw_value = -32768; // Full reverse command`
 
 ---
 
@@ -99,9 +99,20 @@ As a developer, I want to validate the 5-layer architecture with a concrete "Sta
     - **Space**: **Brake** (Immediately stop wheel rotation).
     - **Idle**: **Inertia** (Wheels transition to free-rolling when no keys are pressed).
 
+**Baseline Rover Variants (The 4 Quadrants):**
+To ensure architectural robustness across different simulation fidelity needs, the engine supports 4 baseline rover configurations:
+
+| Variant | Physics Method | Steering Method | Use Case |
+|---|---|---|---|
+| **R-S** | Raycast | Skid (Differential) | High-performance, fast testing, web-stable. |
+| **R-A** | Raycast | Ackermann (Turning) | Precision racing/navigation, stable at speed. |
+| **J-S** | Joint-based | Skid (Differential) | High-fidelity suspension/bumps, no steering complexity. |
+| **J-A** | Joint-based | Ackermann (Turning) | Maximum fidelity, 1:1 engineering twin. |
+
 **Technical Acceptance Criteria:**
 - **Visual Accuracy**: Wheels MUST have a basic shader/texture allowing visual verification of rotation.
 - **Speed Matching**: Wheel rotation speed MUST physically match the rover's velocity (including air-borne inertia).
+- **Braking Realism**: Braking MUST apply a physical `BrakeForce` that slows the vessel according to mass/friction, rather than a hard teleport to zero velocity.
 - **Architecture Validation**: MUST pass all **[General Testing Framework (000-TEST)](file:///home/rod/Documents/lunco/lunco-sim-bevy/specs/000-testing-framework/spec.md)** compliance rules.
 - **WASM Compliance**: The entire scenario MUST be runnable in a modern web browser.
 
