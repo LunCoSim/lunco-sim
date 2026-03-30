@@ -16,7 +16,7 @@ resolver = "2"
 description = "Initialize multi-crate workspace architecture for vessel control simulation"
 
 [workspace.dependencies]
-bevy = "0.18.1"
+bevy = { version = "0.18.1", features = ["dynamic_linking"] }
 avian3d = "0.6.1"
 big_space = "0.12.0"
 leafwing-input-manager = "0.20.0"

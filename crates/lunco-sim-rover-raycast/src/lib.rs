@@ -40,8 +40,8 @@ impl Default for RaycastWheel {
     fn default() -> Self {
         Self {
             radius: 0.5,
-            stiffness: 10000.0,
-            damping: 500.0,
+            stiffness: 15000.0,
+            damping: 2000.0,
             friction: 0.8,
         }
     }
@@ -99,8 +99,8 @@ fn apply_wheel_suspension(
 
             // 3. Spring and Damping forces
             let spring_force = wheel.stiffness * state.compression;
-            let damping_force = (wheel.damping * compression_velocity).max(0.0);
-            let total_force_mag = spring_force + damping_force;
+            let damping_force = wheel.damping * compression_velocity;
+            let total_force_mag = (spring_force + damping_force).max(0.0);
 
             let force = total_force_mag * state.surface_normal;
 
@@ -175,9 +175,11 @@ fn apply_wheel_drive(
                 let forward = global_transform.forward();
 
                 // Port value is interpreted as force magnitude for now
-                let drive_force = port.value * forward.as_vec3();
+                let drive_force = (port.value * forward.as_vec3()).clamp_length_max(20000.0);
 
-                parent_forces.apply_force_at_point(drive_force, state.surface_point);
+                if state.compression > 0.0 {
+                    parent_forces.apply_force_at_point(drive_force, state.surface_point);
+                }
             }
         }
     }
@@ -290,7 +292,7 @@ pub fn spawn_raycast_rover(
 
     for (label, rel_pos, digital_source, mat) in wheel_configs {
         let motor_port = commands.spawn((Name::new(format!("{}_port_{}", name, label)), PhysicalPort::default())).id();
-        commands.spawn(Wire { source: digital_source, target: motor_port, scale: 20000.0 });
+        commands.spawn(Wire { source: digital_source, target: motor_port, scale: 4000.0 });
 
         commands.entity(rover_entity).with_children(|parent| {
             parent.spawn((
