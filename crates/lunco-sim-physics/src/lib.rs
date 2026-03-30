@@ -150,7 +150,7 @@ pub fn spawn_joint_rover(
 
     for (label, rel_pos, digital_source, mat) in wheel_configs {
         let motor_port = commands.spawn((Name::new(format!("{}_port_{}", name, label)), PhysicalPort::default())).id();
-        commands.spawn(Wire { source: digital_source, target: motor_port, scale: 5000.0 });
+        commands.spawn(Wire { source: digital_source, target: motor_port, scale: 400.0 });
 
         let wheel_entity = commands.spawn((
             Name::new(format!("{}_wheel_{}", name, label)),
@@ -160,8 +160,10 @@ pub fn spawn_joint_rover(
             RigidBody::Dynamic,
             Collider::cylinder(wheel_radius, wheel_width),
             CollisionLayers::new(Layer::RoverWheel, [Layer::Default]), // Only collide with world
-            Friction::new(5.0), 
-            Mass(20.0),
+            Friction::new(1.1),
+            Mass(40.0),
+            LinearDamping(0.5),
+            AngularDamping(0.5),
             ConstantLocalTorque(Vec3::ZERO),
             MotorActuator {
                 port_entity: motor_port,
