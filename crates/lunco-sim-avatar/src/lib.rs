@@ -2,6 +2,7 @@ use bevy::prelude::*;
 use bevy::input::mouse::MouseMotion;
 use avian3d::prelude::*;
 use lunco_sim_controller::ControllerLink;
+use lunco_sim_core::Vessel;
 
 pub struct LunCoSimAvatarPlugin;
 
@@ -38,9 +39,6 @@ impl Default for OrbitState {
         }
     }
 }
-
-#[derive(Component)]
-pub struct Vessel; // Generic marker for anything that can be possessed
 
 fn avatar_freecam_translation(
     keys: Res<ButtonInput<KeyCode>>,

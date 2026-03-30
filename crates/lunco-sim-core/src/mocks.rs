@@ -1,5 +1,4 @@
 use bevy::prelude::*;
-use crate::architecture::*;
 
 /// To satisfy the Testability Mandate (FR-010) we use Mocks
 /// These structs are used during unit testing and integration testing 
@@ -7,14 +6,14 @@ use crate::architecture::*;
 
 pub struct MockObcPlugin;
 impl Plugin for MockObcPlugin {
-    fn build(&self, app: &mut App) {
+    fn build(&self, _app: &mut App) {
         // Mock OBC might inject diagnostic systems directly monitoring DigitalPorts, OR simply setup test rigs.
     }
 }
 
 pub struct MockPlantPlugin;
 impl Plugin for MockPlantPlugin {
-    fn build(&self, app: &mut App) {
+    fn build(&self, _app: &mut App) {
         // Tracks physical outputs from the Tier 2 scaling loop correctly
     }
 }

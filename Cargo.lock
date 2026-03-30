@@ -3540,6 +3540,7 @@ dependencies = [
  "lunco-sim-fsw",
  "lunco-sim-obc",
  "lunco-sim-physics",
+ "lunco-sim-rover-raycast",
 ]
 
 [[package]]
@@ -3581,6 +3582,18 @@ dependencies = [
  "avian3d",
  "bevy",
  "lunco-sim-core",
+ "lunco-sim-fsw",
+]
+
+[[package]]
+name = "lunco-sim-rover-raycast"
+version = "0.1.0"
+dependencies = [
+ "avian3d",
+ "bevy",
+ "lunco-sim-core",
+ "lunco-sim-fsw",
+ "lunco-sim-physics",
 ]
 
 [[package]]

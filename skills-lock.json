@@ -1,6 +1,16 @@
 {
   "version": 1,
   "skills": {
+    "bevy": {
+      "source": "bfollington/terma",
+      "sourceType": "github",
+      "computedHash": "5f197a264fe4a9a106f9be137c7fb971a9813c9771bc0033fc40380f51439879"
+    },
+    "bevy-ecs-expert": {
+      "source": "sickn33/antigravity-awesome-skills",
+      "sourceType": "github",
+      "computedHash": "bde11bf254d7a8ea76c414944b18022cb47be6a01b0258fc77b33aec078334e2"
+    },
     "spec-kit-skill": {
       "source": "feiskyer/claude-code-settings",
       "sourceType": "github",

@@ -7,7 +7,8 @@ members = [
     "crates/lunco-sim-controller",
     "crates/lunco-sim-attributes",
     "crates/lunco-sim-avatar",
-    "crates/lunco-sim-client"
+    "crates/lunco-sim-client",
+    "crates/lunco-sim-rover-raycast"
 ]
 resolver = "2"
 
