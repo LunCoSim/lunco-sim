@@ -154,6 +154,10 @@ fn setup_scenario(
     // 7. Avatar
     let mut input_map = InputMap::default();
     input_map.insert(SpaceSystemAction::DriveForward, KeyCode::KeyW);
+    input_map.insert(SpaceSystemAction::DriveReverse, KeyCode::KeyS);
+    input_map.insert(SpaceSystemAction::SteerLeft, KeyCode::KeyA);
+    input_map.insert(SpaceSystemAction::SteerRight, KeyCode::KeyD);
+    input_map.insert(SpaceSystemAction::Brake, KeyCode::Space);
     commands.spawn((
         Avatar,
         Camera3d::default(),
