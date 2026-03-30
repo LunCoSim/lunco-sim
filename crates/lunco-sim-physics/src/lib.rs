@@ -177,7 +177,8 @@ fn spawn_joint_rover_internal(
     ];
 
     let steer_port = commands.spawn((Name::new(format!("{}_port_steer", name)), PhysicalPort::default())).id();
-    commands.spawn(Wire { source: steer_digital, target: steer_port, scale: 2000.0 });
+    // Increase scale to 6k to handle friction, and flip sign (-1.0 for Right-turn torque)
+    commands.spawn(Wire { source: steer_digital, target: steer_port, scale: -6000.0 });
 
     let wheel_tilt = Quat::from_rotation_z(std::f32::consts::FRAC_PI_2);
 
@@ -187,8 +188,8 @@ fn spawn_joint_rover_internal(
         
         let motor_port = commands.spawn((Name::new(format!("{}_port_{}_drive", name, label)), PhysicalPort::default())).id();
         let brake_port = commands.spawn((Name::new(format!("{}_port_{}_brake", name, label)), PhysicalPort::default())).id();
-        commands.spawn(Wire { source: digital_source, target: motor_port, scale: 3000.0 });
-        commands.spawn(Wire { source: brake_digital, target: brake_port, scale: 20000.0 });
+        commands.spawn(Wire { source: digital_source, target: motor_port, scale: 6000.0 });
+        commands.spawn(Wire { source: brake_digital, target: brake_port, scale: 32767.0 });
 
         let wheel_entity = commands.spawn((
             Name::new(format!("{}_wheel_{}", name, label)),

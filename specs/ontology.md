@@ -44,7 +44,27 @@ The simulation core (Level 1 & 2) is a "dumb" physical reactor. Intelligence and
 
 ---
 
-## 2. The 5-Layer Control Model
+## 2. Coordinate Frames & Orientation Standards
+
+To ensure consistency across heterogeneous plugins (Physics, Rendering, FSW), LunCoSim adheres to a strict canonical orientation in Bevy 3D space.
+
+### Bevy Standard (Simulation Space)
+- **Up Vector**: **$+Y$** (0.0, 1.0, 0.0)
+- **Forward Vector**: **$-Z$** (0.0, 0.0, -1.0)
+- **Right Vector**: **$+X$** (1.0, 0.0, 0.0)
+
+*Rationale*: This selection ensures 1:1 parity with Bevy's internal defaults for `Transform::looking_at()`, `Camera3dBundle`, and standard GLTF asset orientation.
+
+### Aerospace Mapping (Reference)
+When communicating with external aerospace tools, the following implicit conversions apply:
+- **ENU (East-North-Up)**: Bevy $+X$ (East), Bevy $-Z$ (North), Bevy $+Y$ (Up).
+- **NED (North-East-Down)**: Bevy $-Z$ (North), Bevy $+X$ (East), Bevy $-Y$ (Down).
+
+All "Forward/Reverse" logic in the **Controller (Level 4)** and **FSW (Level 3)** MUST resolve to the $-Z$ vector.
+
+---
+
+## 3. The 5-Layer Control Model
 
 LunCoSim uses a layered approach to separate human intent from computer logic and physical execution.
 

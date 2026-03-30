@@ -130,7 +130,37 @@ To ensure the 5-layer architecture is computationally verifiable, all developmen
 
 ## Implementation Patterns
 
-### 1. Camera-Relative Rendering (Origin Shifting)
+### 2. Coordinate Interoperability (Aerospace Standards)
+To ensure engine parity and reduce orientation errors, all development and simulation logic adheres to a project-wide coordinate standard.
+
+- **Bevy Standard**: **$-Z$ is Forward**, **$+Y$ is Up**.
+- **FSW Mapping**: The FSW-to-OBC driver handles the implicit rotation mapping when communicating with external ENU (+Y Forward) or NED (+X Forward) tools.
+
+---
+
+## 3. High-Fidelity Plant Baselines (Reference)
+
+To ensure consistency across the 4 Baseline Rover variants, the following parameters are suggested as the **"Standard Heavy Plant"** baseline for testing:
+
+- **Mass**: 1,000 kg (Chassis) + 100 kg/wheel.
+- **Suspension Stiffness**: 80,000 N/m.
+- **Suspension Damping**: 5,000 Ns/m.
+- **Linear Damping**: 0.5.
+- **Angular Damping**: 1.0.
+
+### Visual Orientation Mandate
+To prevent development orientation errors, all baseline vessels MUST possess **Distinct Front/Rear Visual Markers** (e.g. Red wheels at Front, Blue wheels at Rear) in development and verification builds.
+
+---
+
+## 4. Interaction Logic & Implementation Patterns
+
+### 1. Stateful FSW Control
+In accordance with the 5-layer model, human interaction (Momentary Keypress) is decoupled from hardware execution (Persistent State).
+- **BRAKE_ROVER**: This command represents a **Stateful Toggle** managed by the **Level 3 (FSW)**. The FSW is responsible for maintaining the "Brake Active" state until a release command is received.
+- **Center-on-Release**: The **Level 4 (Controller)** is responsible for emitting neutral control signals (e.g., zero drive/steering) when no human input is detected, facilitating passive self-centering.
+
+### 2. Camera-Relative Rendering (Origin Shifting)
 To prevent visual jitter (floating-point error) when the camera is thousands of kilometers from the world origin:
 - **CPU Space**: Entity transforms are stored in **`f64`** (Global Space).
 - **GPU Space**: The engine maintains a **`Camera_Origin`**. All mesh transforms sent to the GPU are calculated as `Global_Pos - Camera_Origin`, keeping them near `(0,0,0)` in **`f32`** space.

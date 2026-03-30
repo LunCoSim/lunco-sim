@@ -187,7 +187,8 @@ fn update_wheel_steering(
         if let Ok(port) = ports.get(steer.port_entity) {
             // port.value is roughly -1.0 to 1.0 (after scaling)
             let angle = port.value * steer.max_angle;
-            tf.rotation = Quat::from_rotation_y(angle);
+            // Flip for correct Bevy steering direction (-angle for CCW Right-turn)
+            tf.rotation = Quat::from_rotation_y(-angle);
         }
     }
 }
@@ -353,12 +354,12 @@ fn spawn_raycast_rover_internal(
         commands.entity(rover_entity).with_children(|parent| {
             let mut wheel = parent.spawn((
                 Name::new(format!("{}_wheel_{}", name, label)),
-                RaycastWheel { radius: wheel_radius, stiffness: 6000.0, damping: 2500.0, friction: 0.8 },
+                RaycastWheel { radius: wheel_radius, stiffness: 80000.0, damping: 5000.0, friction: 0.8 },
                 RaycastWheelState::default(),
                 Visibility::default(),
                 RayCaster::new(Vec3::ZERO, Dir3::NEG_Y)
                     .with_max_hits(1)
-                    .with_max_distance(wheel_radius * 1.5)
+                    .with_max_distance(wheel_radius * 2.0)
                     .with_query_filter(SpatialQueryFilter::from_excluded_entities([rover_entity])),
                 MotorActuator { port_entity: motor_port, axis: Vec3::Z },
                 BrakeActuator { port_entity: brake_port },
