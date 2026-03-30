@@ -42,7 +42,7 @@ impl Default for RaycastWheel {
             radius: 0.5,
             stiffness: 15000.0,
             damping: 2000.0,
-            friction: 0.8,
+            friction: 0.6,
         }
     }
 }
@@ -132,7 +132,7 @@ fn apply_wheel_friction(
             let lateral_velocity = contact_velocity.dot(right.as_vec3());
             
             // Lateral stiffness determines how quickly friction reaches its maximum
-            let lateral_stiffness = 20.0; 
+            let lateral_stiffness = 10.0; 
             let lateral_force_mag = (lateral_velocity * lateral_stiffness * state.normal_force).clamp(-max_friction, max_friction);
             let lateral_force = -lateral_force_mag * right;
 
@@ -292,7 +292,7 @@ pub fn spawn_raycast_rover(
 
     for (label, rel_pos, digital_source, mat) in wheel_configs {
         let motor_port = commands.spawn((Name::new(format!("{}_port_{}", name, label)), PhysicalPort::default())).id();
-        commands.spawn(Wire { source: digital_source, target: motor_port, scale: 4000.0 });
+        commands.spawn(Wire { source: digital_source, target: motor_port, scale: 12000.0 });
 
         commands.entity(rover_entity).with_children(|parent| {
             parent.spawn((
