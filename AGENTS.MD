@@ -16,6 +16,7 @@ LunCoSim is a digital twin of the solar system built with the Bevy engine. It fo
 - **TDD-First**: Write tests before feature code.
 - **Headless-First**: Simulation core must run without a GPU.
 - **SysML v2**: Used for high-level system models and "source of truth".
+- **Physical Precision**: All physical properties (mass, dimensions, forces, spring constants, axes) MUST use `f64`. Control signals and non-physics data (e.g., UI, ports, commands) may use `f32`.
 
 ## Tooling & Workflow
 - **Search Tools**: Always skip the `target/` directory when using `grep` or other search tools to avoid searching generated artifacts.

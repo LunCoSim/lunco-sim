@@ -44,6 +44,10 @@ All simulated entities, signal flows, and architectural layers MUST adhere to th
 - 100% test coverage for math and logic modules.
 - Performance benchmarks required for all physics and rendering updates.
 
+### Data Precision
+- **Physics**: All physical magnitudes, dimensions, and spatial vectors (forces, torques, axes) MUST use `f64` (double precision) to ensure simulation stability and accuracy at planetary scales.
+- **Signals & Control**: Logical control signals, digital-to-analog bridge values (`PhysicalPort`), and command arguments COULD use `f32` (single precision) to optimize for memory and bandwidth in high-frequency messaging.
+
 ## Governance
 This Constitution supersedes all ad-hoc development decisions. Any change to these core principles requires a formal amendment and a migration plan for existing models.
 
