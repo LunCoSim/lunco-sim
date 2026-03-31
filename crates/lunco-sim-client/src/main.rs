@@ -14,7 +14,9 @@ use lunco_sim_rover_raycast::{
     spawn_raycast_ackermann_rover, spawn_raycast_skid_rover, LunCoSimRoverRaycastPlugin,
 };
 mod blueprint_extension;
+mod rover_counter;
 use blueprint_extension::{BlueprintExtension, BlueprintMaterial};
+use rover_counter::RoverCountPlugin;
 
 fn main() {
     App::new()
@@ -31,6 +33,7 @@ fn main() {
         .add_plugins(LunCoSimAvatarPlugin)
         .add_plugins(LunCoSimRoverRaycastPlugin)
         .add_plugins(MaterialPlugin::<BlueprintMaterial>::default())
+        .add_plugins(RoverCountPlugin)
         .add_systems(Startup, setup_scenario)
         .add_systems(Update, draw_wheel_diagnostics)
         .run();

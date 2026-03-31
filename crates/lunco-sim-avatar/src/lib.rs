@@ -153,6 +153,7 @@ fn avatar_raycast_possession(
     if let Some(cursor_position) = window.cursor_position() {
         for (camera, camera_transform, avatar_entity) in camera_q.iter() {
             if let Ok(f32_ray) = camera.viewport_to_world(camera_transform, cursor_position) {
+                // In Bevy 0.18, spatial_query.cast_ray takes DVec3 origin and Dir3 direction (Dir alias).
                 if let Some(hit) = spatial_query.cast_ray(
                     f32_ray.origin.as_dvec3(),
                     f32_ray.direction,

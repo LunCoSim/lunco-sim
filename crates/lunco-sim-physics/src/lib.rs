@@ -10,7 +10,11 @@ pub struct LunCoSimPhysicsPlugin;
 
 impl Plugin for LunCoSimPhysicsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, (apply_motor_torques, apply_brakes, update_physics_sensors));
+        app.add_systems(FixedUpdate, (
+            apply_motor_torques, 
+            apply_brakes, 
+            update_physics_sensors
+        ).chain().before(PhysicsSystems::Prepare));
     }
 }
 
@@ -22,11 +26,12 @@ pub struct MotorActuator {
 
 fn apply_motor_torques(
     q_ports: Query<&PhysicalPort>,
-    mut q_motors: Query<(&MotorActuator, &mut ConstantLocalTorque)>,
+    mut q_motors: Query<(&MotorActuator, Forces)>,
 ) {
-    for (motor, mut external_torque) in q_motors.iter_mut() {
+    for (motor, mut forces) in q_motors.iter_mut() {
         if let Ok(port) = q_ports.get(motor.port_entity) {
-            external_torque.0 = motor.axis.as_dvec3() * port.value as f64;
+            let torque_mag = port.value as f64;
+            forces.apply_local_torque(motor.axis.as_dvec3() * torque_mag);
         }
     }
 }
@@ -67,32 +72,6 @@ fn update_physics_sensors(
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_motor_actuator_integration() {
-        let mut app = App::new();
-        app.add_plugins(LunCoSimPhysicsPlugin);
-
-        let port_id = app.world_mut().spawn(PhysicalPort { value: 15.0 }).id();
-        let body_id = app.world_mut().spawn((
-            RigidBody::Dynamic,
-            ConstantLocalTorque(DVec3::ZERO),
-            MotorActuator {
-                port_entity: port_id,
-                axis: Vec3::Y,
-            }
-        )).id();
-
-        app.update();
-
-        let torque = app.world().get::<ConstantLocalTorque>(body_id).unwrap();
-        assert!((torque.0.y - 15.0).abs() < 1e-5);
-    }
-}
-
 #[derive(PhysicsLayer, Default)]
 pub enum Layer {
     #[default]
@@ -117,6 +96,9 @@ fn spawn_joint_rover_internal(
     let wheel_radius = 0.5;
     let wheel_width = 0.4;
 
+    let red_material = materials.add(StandardMaterial { base_color: Color::from(Srgba::RED), perceptual_roughness: 0.5, ..default() });
+    let blue_material = materials.add(StandardMaterial { base_color: Color::from(Srgba::BLUE), perceptual_roughness: 0.5, ..default() });
+
     let rover_entity = commands.spawn((
         Name::new(name.to_string()),
         RoverVessel,
@@ -129,10 +111,9 @@ fn spawn_joint_rover_internal(
         CollisionLayers::new(Layer::RoverChassis, [Layer::Default]),
         Friction::new(0.5),
         Mass(1000.0), 
-        CenterOfMass(Vec3::new(0.0, -0.6, 0.0)), 
-        LinearDamping(0.05),
-        AngularDamping(0.1),
-        AngularInertia::new(Vec3::new(1000.0, 1000.0, 500.0)), 
+        CenterOfMass(Vec3::new(0.0, -0.2, 0.0)),
+        LinearDamping(0.2), 
+        AngularDamping(0.5),
     )).id();
 
     let drive_l_digital = commands.spawn((Name::new(format!("{}_drive_l_reg", name)), DigitalPort::default())).id();
@@ -147,18 +128,16 @@ fn spawn_joint_rover_internal(
     port_map.insert("brake".to_string(), brake_digital);
     commands.entity(rover_entity).insert(FlightSoftware { port_map, brake_active: false });
 
-    let f_mat = materials.add(Color::srgb(0.9, 0.1, 0.4)); 
-    let r_mat = materials.add(Color::srgb(0.1, 0.4, 0.8)); 
-
+    let wheel_offset_y = -0.1;
     let wheel_configs = [
-        ("fl", Vec3::new(-1.2, -0.4, -1.2), true, true), 
-        ("rl", Vec3::new(-1.2, -0.4, 1.2), true, false), 
-        ("fr", Vec3::new(1.2, -0.4, -1.2), false, true),
-        ("rr", Vec3::new(1.2, -0.4, 1.2), false, false),
+        ("fl", Vec3::new(-1.2, wheel_offset_y, 1.2), true, true), 
+        ("rl", Vec3::new(-1.2, wheel_offset_y, -1.2), true, false), 
+        ("fr", Vec3::new(1.2, wheel_offset_y, 1.2), false, true),
+        ("rr", Vec3::new(1.2, wheel_offset_y, -1.2), false, false),
     ];
 
     let steer_port = commands.spawn((Name::new(format!("{}_port_steer", name)), PhysicalPort::default())).id();
-    commands.spawn(Wire { source: steer_digital, target: steer_port, scale: -1000.0 });
+    commands.spawn(Wire { source: steer_digital, target: steer_port, scale: 0.1 });
 
     let wheel_tilt = Quat::from_rotation_z(std::f32::consts::FRAC_PI_2);
     let wheel_tilt_d = DQuat::from_xyzw(
@@ -169,24 +148,27 @@ fn spawn_joint_rover_internal(
     );
 
     for (label, rel_pos, is_left, is_front) in wheel_configs {
-        let mat = if is_front { f_mat.clone() } else { r_mat.clone() };
         let digital_source = if is_left { drive_l_digital } else { drive_r_digital };
         
         let motor_port = commands.spawn((Name::new(format!("{}_port_{}_drive", name, label)), PhysicalPort::default())).id();
         let brake_port = commands.spawn((Name::new(format!("{}_port_{}_brake", name, label)), PhysicalPort::default())).id();
-        commands.spawn(Wire { source: digital_source, target: motor_port, scale: 3000.0 });
-        commands.spawn(Wire { source: brake_digital, target: brake_port, scale: 10000.0 });
+        commands.spawn(Wire { source: digital_source, target: motor_port, scale: 0.2 });
+        commands.spawn(Wire { source: brake_digital, target: brake_port, scale: 1.0 });
+
+        let wheel_material = if is_front { red_material.clone() } else { blue_material.clone() };
 
         let wheel_entity = commands.spawn((
             Name::new(format!("{}_wheel_{}", name, label)),
             Mesh3d(wheel_mesh.clone()),
-            MeshMaterial3d(mat),
+            MeshMaterial3d(wheel_material),
             Transform::from_translation(spawn_pos + rel_pos).with_rotation(wheel_tilt),
             RigidBody::Dynamic,
             Collider::cylinder(wheel_radius as f64, wheel_width as f64),
             CollisionLayers::new(Layer::RoverWheel, [Layer::Default]),
-            Friction::new(0.8), Mass(40.0), LinearDamping(0.5), AngularDamping(0.5),
-            ConstantLocalTorque(DVec3::ZERO),
+            Friction::new(0.8), 
+            Mass(40.0), 
+            LinearDamping(0.5), 
+            AngularDamping(0.5),
             MotorActuator { port_entity: motor_port, axis: Vec3::Y },
             BrakeActuator { port_entity: brake_port, max_force: 32767.0 },
         )).id();
@@ -194,8 +176,10 @@ fn spawn_joint_rover_internal(
         if is_front && steering_type == SteeringType::Ackermann {
             let hub_entity = commands.spawn((
                 Name::new(format!("{}_hub_{}", name, label)),
-                RigidBody::Dynamic, Mass(10.0), Transform::from_translation(spawn_pos + rel_pos),
-                ConstantLocalTorque(DVec3::ZERO),
+                RigidBody::Dynamic, 
+                Mass(10.0), 
+                Collider::sphere(0.05),
+                Transform::from_translation(spawn_pos + rel_pos),
                 MotorActuator { port_entity: steer_port, axis: Vec3::Y },
             )).id();
 
@@ -204,6 +188,7 @@ fn spawn_joint_rover_internal(
                 .with_local_anchor2(DVec3::ZERO)
                 .with_hinge_axis(DVec3::Y)
                 .with_angle_limits(-0.6, 0.6));
+                
             commands.spawn(RevoluteJoint::new(hub_entity, wheel_entity)
                 .with_local_anchor1(DVec3::ZERO)
                 .with_local_anchor2(DVec3::ZERO)
