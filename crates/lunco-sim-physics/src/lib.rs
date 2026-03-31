@@ -10,12 +10,13 @@ pub struct LunCoSimPhysicsPlugin;
 
 impl Plugin for LunCoSimPhysicsPlugin {
     fn build(&self, app: &mut App) {
+        println!("LunCoSimPhysicsPlugin Build Called");
         app.add_systems(FixedUpdate, (
             apply_motor_torques, 
             apply_brakes, 
             update_physics_sensors,
             suspension_system,
-        ).chain().before(PhysicsSystems::Prepare));
+        ).chain());
     }
 }
 
@@ -56,15 +57,19 @@ fn suspension_system(
             let compression: f64 = (susp.rest_length - current_length).max(0.0);
             let spring_force_mag: f64 = compression * susp.spring_k;
             
-            // Damping: only resist compression (closing speed)
-            // relative_vel is positive when they are moving TOWARDS each other (if dot is increasing? wait).
-            // Let's re-calculate relative_vel as closing speed.
-            // damping_force_mag resists closing Speed
-            let closing_speed: f64 = rel_vel; // Positive if hub moves UP relative to chassis anchor (compressing)
+            let closing_speed: f64 = rel_vel;
             let damping_force_mag: f64 = (closing_speed * susp.damping_c).max(0.0);
             
             let total_force_mag: f64 = spring_force_mag + damping_force_mag;
             
+            static mut LOG_COUNT: i32 = 0;
+            unsafe {
+                if LOG_COUNT < 20 {
+                    println!("TICK {:?} - Susp Force: {} | Compression: {} | Length: {} | Pos1 Y: {} | Pos2 Y: {} | Anch1_Loc_None: {}", LOG_COUNT, total_force_mag, compression, current_length, pos1.y, pos2.y, joint.local_anchor1().is_none());
+                    LOG_COUNT += 1;
+                }
+            }
+
             if !total_force_mag.is_finite() { continue; }
             
             // Safety: Cap force to prevent numerical explosion
@@ -81,17 +86,19 @@ fn suspension_system(
 #[derive(Component)]
 pub struct MotorActuator {
     pub port_entity: Entity,
-    pub axis: Vec3,
+    pub axis: DVec3,
 }
 
 fn apply_motor_torques(
     q_ports: Query<&PhysicalPort>,
     mut q_motors: Query<(&MotorActuator, Forces)>,
 ) {
+    static mut ONCE: bool = false;
+    unsafe { if !ONCE { println!("Physics Heartbeat Running"); ONCE = true; } }
     for (motor, mut forces) in q_motors.iter_mut() {
         if let Ok(port) = q_ports.get(motor.port_entity) {
             let torque_mag = port.value as f64;
-            forces.apply_local_torque(motor.axis.as_dvec3() * torque_mag);
+            forces.apply_local_torque(motor.axis * torque_mag);
         }
     }
 }
@@ -99,7 +106,7 @@ fn apply_motor_torques(
 #[derive(Component)]
 pub struct BrakeActuator {
     pub port_entity: Entity,
-    pub max_force: f32,
+    pub max_force: f64,
 }
 
 fn apply_brakes(
@@ -108,7 +115,7 @@ fn apply_brakes(
 ) {
     for (brake, mut ang_vel, mut lin_vel) in q_brakes.iter_mut() {
         if let Ok(port) = q_ports.get(brake.port_entity) {
-            let brake_factor = (1.0 - (port.value / brake.max_force).clamp(0.0, 1.0)).powf(2.0) as f64;
+            let brake_factor = (1.0 - (port.value as f64 / brake.max_force).clamp(0.0, 1.0)).powf(2.0);
             ang_vel.0 *= brake_factor;
             lin_vel.0 *= brake_factor;
         }
@@ -118,7 +125,7 @@ fn apply_brakes(
 #[derive(Component)]
 pub struct AngularVelocitySensor {
     pub port_entity: Entity,
-    pub axis: Vec3,
+    pub axis: DVec3,
 }
 
 fn update_physics_sensors(
@@ -127,7 +134,7 @@ fn update_physics_sensors(
 ) {
     for (sensor, velocity) in q_sensors.iter() {
         if let Ok(mut port) = q_ports.get_mut(sensor.port_entity) {
-            port.value = velocity.0.dot(sensor.axis.as_dvec3()) as f32;
+            port.value = velocity.0.dot(sensor.axis) as f32;
         }
     }
 }
@@ -142,30 +149,20 @@ pub enum Layer {
 
 fn spawn_joint_rover_internal(
     commands: &mut Commands,
-    meshes: &mut Assets<Mesh>,
-    materials: &mut Assets<StandardMaterial>,
-    wheel_mesh: Handle<Mesh>,
+    _wheel_mesh: Handle<Mesh>,
     spawn_pos: Vec3,
     name: &str,
-    color: Color,
+    _color: Color,
     steering_type: SteeringType,
 ) -> Entity {
-    let chassis_width = 1.8;
-    let chassis_height = 0.5;
-    let chassis_length = 3.0;
-    let wheel_radius = 0.5;
-    let wheel_width = 0.4;
-    let suspension_travel = 0.3; // Total vertical travel
+    let chassis_width = 1.8_f64;
+    let chassis_height = 0.5_f64;
+    let chassis_length = 3.0_f64;
+    let wheel_radius = 0.5_f64;
+    let wheel_width = 0.4_f64;
+    let suspension_travel = 0.3_f64; // Total vertical travel
 
-
-    #[cfg(not(test))]
-    let red_material = Some(materials.add(StandardMaterial { base_color: Color::from(Srgba::RED), perceptual_roughness: 0.5, ..default() }));
-    #[cfg(not(test))]
-    let blue_material = Some(materials.add(StandardMaterial { base_color: Color::from(Srgba::BLUE), perceptual_roughness: 0.5, ..default() }));
-    #[cfg(test)]
-    let red_material: Option<Handle<StandardMaterial>> = None;
-    #[cfg(test)]
-    let blue_material: Option<Handle<StandardMaterial>> = None;
+    // No materials in tests to avoid shader panics
 
     let mut rover_builder = commands.spawn((
         Name::new(name.to_string()),
@@ -173,7 +170,7 @@ fn spawn_joint_rover_internal(
         Vessel,
         Transform::from_translation(spawn_pos),
         RigidBody::Dynamic,
-        Collider::cuboid(chassis_width as f64, chassis_height as f64, chassis_length as f64),
+        Collider::cuboid(chassis_width, chassis_height, chassis_length),
         CollisionLayers::new(Layer::RoverChassis, [Layer::Default]),
         Friction::new(0.5),
         Mass(1000.0), 
@@ -181,13 +178,24 @@ fn spawn_joint_rover_internal(
         LinearDamping(0.2), 
         AngularDamping(0.5),
     ));
-
+    let rover_entity = rover_builder.id();
+    
     #[cfg(not(test))]
     {
-        rover_builder.insert(Mesh3d(meshes.add(Cuboid::new(chassis_width, chassis_height, chassis_length))));
-        rover_builder.insert(MeshMaterial3d(materials.add(color)));
+        let color_val = _color;
+        commands.queue(move |world: &mut World| {
+            if world.contains_resource::<Assets<Mesh>>() && world.contains_resource::<Assets<StandardMaterial>>() {
+                world.resource_scope::<Assets<Mesh>, _>(|world, mut mesh_assets| {
+                    let mut material_assets = world.resource_mut::<Assets<StandardMaterial>>();
+                    let mesh = mesh_assets.add(Cuboid::new(chassis_width as f32, chassis_height as f32, chassis_length as f32));
+                    let material = material_assets.add(StandardMaterial::from(color_val));
+                    if let Ok(mut entity) = world.get_entity_mut(rover_entity) {
+                        entity.insert((Mesh3d(mesh), MeshMaterial3d(material)));
+                    }
+                });
+            }
+        });
     }
-    let rover_entity = rover_builder.id();
 
     let drive_l_digital = commands.spawn((Name::new(format!("{}_drive_l_reg", name)), DigitalPort::default())).id();
     let drive_r_digital = commands.spawn((Name::new(format!("{}_drive_r_reg", name)), DigitalPort::default())).id();
@@ -229,30 +237,36 @@ fn spawn_joint_rover_internal(
         commands.spawn(Wire { source: digital_source, target: motor_port, scale: 200.0 });
         commands.spawn(Wire { source: brake_digital, target: brake_port, scale: 1.0 });
 
-        let wheel_material = if is_front { red_material.clone() } else { blue_material.clone() };
-
-        let mut wheel_builder = commands.spawn((
+        let wheel_builder = commands.spawn((
             Name::new(format!("{}_wheel_{}", name, label)),
             Transform::from_translation(spawn_pos + rel_pos).with_rotation(wheel_tilt),
             RigidBody::Dynamic,
-            Collider::cylinder(wheel_radius as f64, wheel_width as f64),
+            Collider::cylinder(wheel_radius, wheel_width),
             CollisionLayers::new(Layer::RoverWheel, [Layer::Default]),
             Friction::new(1.0), 
             Mass(20.0), 
             LinearDamping(0.5), 
             AngularDamping(2.0),
-            MotorActuator { port_entity: motor_port, axis: Vec3::Y },
+            MotorActuator { port_entity: motor_port, axis: DVec3::Y },
             BrakeActuator { port_entity: brake_port, max_force: 32767.0 },
         ));
+        let wheel_entity = wheel_builder.id();
 
         #[cfg(not(test))]
         {
-            wheel_builder.insert(Mesh3d(wheel_mesh.clone()));
-            if let Some(mat) = wheel_material {
-                 wheel_builder.insert(MeshMaterial3d(mat));
-            }
+            let color_to_use = if is_front { Color::from(Srgba::RED) } else { Color::from(Srgba::BLUE) };
+            let wheel_mesh_handle = _wheel_mesh.clone();
+            commands.queue(move |world: &mut World| {
+                if world.contains_resource::<Assets<Mesh>>() && world.contains_resource::<Assets<StandardMaterial>>() {
+                    world.resource_scope::<Assets<StandardMaterial>, _>(|world, mut material_assets| {
+                        let material = material_assets.add(StandardMaterial { base_color: color_to_use, perceptual_roughness: 0.5, ..default() });
+                        if let Ok(mut entity) = world.get_entity_mut(wheel_entity) {
+                            entity.insert((Mesh3d(wheel_mesh_handle), MeshMaterial3d(material)));
+                        }
+                    });
+                }
+            });
         }
-        let wheel_entity = wheel_builder.id();
 
         // Intermediate hub for steering and/or suspension
         let hub_entity = commands.spawn((
@@ -271,11 +285,11 @@ fn spawn_joint_rover_internal(
                 .with_local_anchor1(rel_pos.as_dvec3())
                 .with_local_anchor2(DVec3::ZERO)
                 .with_slider_axis(DVec3::Y)
-                .with_limits(-suspension_travel as f64, suspension_travel as f64),
+                .with_limits(-suspension_travel, suspension_travel),
             Suspension {
-                rest_length: 0.0,
-                spring_k: 4000.0,
-                damping_c: 100.0,
+                rest_length: 0.4,   // Increased to ensure compression even at rest
+                spring_k: 50000.0,  // Increased to handle big mass
+                damping_c: 2000.0,  // Increased for stability
                 local_axis: DVec3::Y,
             }
         ));
@@ -289,7 +303,7 @@ fn spawn_joint_rover_internal(
                 Collider::sphere(0.04), // Small non-colliding trigger for inertia
                 CollisionLayers::from_bits(0, 0),
                 Transform::from_translation(spawn_pos + rel_pos),
-                MotorActuator { port_entity: steer_port, axis: Vec3::Y },
+                MotorActuator { port_entity: steer_port, axis: DVec3::Y },
             )).id();
 
             commands.spawn(RevoluteJoint::new(hub_entity, steering_hub)
@@ -317,10 +331,10 @@ fn spawn_joint_rover_internal(
 #[derive(PartialEq, Eq)]
 pub enum SteeringType { Skid, Ackermann }
 
-pub fn spawn_joint_skid_rover(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>, wheel_mesh: Handle<Mesh>, spawn_pos: Vec3, name: &str, color: Color) -> Entity {
-    spawn_joint_rover_internal(commands, meshes, materials, wheel_mesh, spawn_pos, name, color, SteeringType::Skid)
+pub fn spawn_joint_skid_rover(commands: &mut Commands, wheel_mesh: Handle<Mesh>, spawn_pos: Vec3, name: &str, color: Color) -> Entity {
+    spawn_joint_rover_internal(commands, wheel_mesh, spawn_pos, name, color, SteeringType::Skid)
 }
 
-pub fn spawn_joint_ackermann_rover(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>, wheel_mesh: Handle<Mesh>, spawn_pos: Vec3, name: &str, color: Color) -> Entity {
-    spawn_joint_rover_internal(commands, meshes, materials, wheel_mesh, spawn_pos, name, color, SteeringType::Ackermann)
+pub fn spawn_joint_ackermann_rover(commands: &mut Commands, wheel_mesh: Handle<Mesh>, spawn_pos: Vec3, name: &str, color: Color) -> Entity {
+    spawn_joint_rover_internal(commands, wheel_mesh, spawn_pos, name, color, SteeringType::Ackermann)
 }

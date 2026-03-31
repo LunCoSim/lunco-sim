@@ -30,12 +30,12 @@ pub struct WheelRaycast {
     pub suspension_port: Entity,
     pub drive_port: Entity,
     pub steer_port: Entity,
-    pub rest_length: f32,
-    pub spring_k: f32,
-    pub damping_c: f32,
-    pub wheel_radius: f32,
+    pub rest_length: f64,
+    pub spring_k: f64,
+    pub damping_c: f64,
+    pub wheel_radius: f64,
     pub visual_entity: Option<Entity>,
-    pub last_normal_force: f32,
+    pub last_normal_force: f64,
 }
 
 #[derive(Component)]
@@ -48,42 +48,42 @@ fn apply_wheel_suspension(
         &Transform,
         &ChildOf,
     )>,
-    mut q_chassis: Query<(Forces, &Position, &Rotation), With<RoverVessel>>,
+    mut q_chassis: Query<Forces, With<RoverVessel>>,
     mut q_visual: Query<&mut Transform, (Without<WheelRaycast>, Without<RoverVessel>)>,
 ) {
     for (mut wheel, hits, wheel_tf, parent) in q_wheels.iter_mut() {
         let parent_entity = Relationship::get(parent);
-        if let Ok((mut forces, chassis_pos, chassis_rot)) = q_chassis.get_mut(parent_entity) {
+        if let Ok(mut forces) = q_chassis.get_mut(parent_entity) {
             let mut closest_hit_dist = wheel.rest_length + wheel.wheel_radius;
             
             // Critical: Calculate world position from latest physics state to avoid GlobalTransform lag
-            let world_pos = chassis_pos.0 + chassis_rot.0 * wheel_tf.translation.as_dvec3();
-            let ray_dir_world = chassis_rot.0 * Vec3::NEG_Y.as_dvec3();
+            let world_pos = forces.position().0 + forces.rotation().0 * wheel_tf.translation.as_dvec3();
+            let ray_dir_world = forces.rotation().0 * Vec3::NEG_Y.as_dvec3();
             
             if let Some(hit) = hits.iter_sorted().next() {
-                let distance = hit.distance as f32;
+                let distance = hit.distance;
                 if distance < wheels_limit(&wheel) {
                     closest_hit_dist = distance;
                     let compression = ((wheel.rest_length + wheel.wheel_radius) - distance).max(0.0);
-                    let spring_force_mag = (compression * wheel.spring_k) as f64;
+                    let spring_force_mag = compression * wheel.spring_k;
                     
                     let lin_vel = forces.linear_velocity();
                     let ang_vel = forces.angular_velocity();
                     
-                    let velocity_at_wheel = lin_vel + ang_vel.cross(world_pos - chassis_pos.0);
+                    let velocity_at_wheel = lin_vel + ang_vel.cross(world_pos - forces.position().0);
                     
                     let relative_vel = velocity_at_wheel.dot(ray_dir_world); // Positive when compressing (moving down)
                     
                     // One-way damping: resist compression only
-                    let damping_force_mag = (relative_vel * wheel.damping_c as f64).max(0.0);
+                    let damping_force_mag = (relative_vel * wheel.damping_c).max(0.0);
                     let total_force_mag = (spring_force_mag + damping_force_mag).max(0.0);
                     
                     // Apply force at the hub's world position
                     let force_vec = hit.normal * total_force_mag;
                     forces.apply_force_at_point(force_vec, world_pos);
-
+                    
                     // Store normal force for friction calculation
-                    wheel.last_normal_force = total_force_mag as f32;
+                    wheel.last_normal_force = total_force_mag;
                 } else {
                     wheel.last_normal_force = 0.0;
                 }
@@ -96,15 +96,15 @@ fn apply_wheel_suspension(
                     // ray caster origin is wheel_tf.translation + (0, 0.5, 0)
                     // relative Ground Y = (wheel_tf.y + 0.5) - closest_hit_dist
                     // We want the wheel center to be Ground Y + radius
-                    let wheel_center_rel_y = (wheel_tf.translation.y + 0.5 - closest_hit_dist) + wheel.wheel_radius;
-                    visual_tf.translation.y = wheel_center_rel_y;
+                    let wheel_center_rel_y = (wheel_tf.translation.y as f64 + 0.5 - closest_hit_dist) + wheel.wheel_radius;
+                    visual_tf.translation.y = wheel_center_rel_y as f32;
                 }
             }
         }
     }
 }
 
-fn wheels_limit(wheel: &WheelRaycast) -> f32 {
+fn wheels_limit(wheel: &WheelRaycast) -> f64 {
     wheel.rest_length + wheel.wheel_radius
 }
 
@@ -124,7 +124,7 @@ fn apply_wheel_drive(
             if let Ok(port) = q_ports.get(wheel.drive_port) {
                 if hits.iter().next().is_some() {
                     let forward = wheel_tf.forward().as_dvec3();
-                    let drive_force_mag = (port.value * 12000.0) as f64; // Significant boost for 1k kg
+                    let drive_force_mag = port.value as f64 * 12000.0; // Significant boost for 1k kg
                     let force_vec = forward * drive_force_mag;
                     
                     // Main drive force
@@ -137,7 +137,7 @@ fn apply_wheel_drive(
                     let hub_vel = chassis_vel + chassis_ang_vel.cross(hub_pos_world - forces.position().0);
 
                     // Friction is proportional to how hard the tire is pressing into ground (Normal Force)
-                    let normal_force = wheel.last_normal_force as f64;
+                    let normal_force = wheel.last_normal_force;
                     let friction_k = 1.1; // "Stickiness" coefficient
                     
                     let right = wheel_tf.right().as_dvec3();
@@ -172,59 +172,65 @@ fn apply_wheel_steering(
 
 pub fn spawn_raycast_skid_rover(
     commands: &mut Commands,
-    meshes: &mut Assets<Mesh>,
-    materials: &mut Assets<StandardMaterial>,
     wheel_mesh: Handle<Mesh>,
     spawn_pos: Vec3,
     name: &str,
     color: Color,
 ) -> Entity {
-    spawn_raycast_rover_internal(commands, meshes, materials, wheel_mesh, spawn_pos, name, color, false)
+    spawn_raycast_rover_internal(commands, wheel_mesh, spawn_pos, name, color, false)
 }
 
 pub fn spawn_raycast_ackermann_rover(
     commands: &mut Commands,
-    meshes: &mut Assets<Mesh>,
-    materials: &mut Assets<StandardMaterial>,
     wheel_mesh: Handle<Mesh>,
     spawn_pos: Vec3,
     name: &str,
     color: Color,
 ) -> Entity {
-    spawn_raycast_rover_internal(commands, meshes, materials, wheel_mesh, spawn_pos, name, color, true)
+    spawn_raycast_rover_internal(commands, wheel_mesh, spawn_pos, name, color, true)
 }
 
 fn spawn_raycast_rover_internal(
     commands: &mut Commands,
-    meshes: &mut Assets<Mesh>,
-    materials: &mut Assets<StandardMaterial>,
-    wheel_mesh: Handle<Mesh>,
+    _wheel_mesh: Handle<Mesh>,
     spawn_pos: Vec3,
     name: &str,
-    color: Color,
+    _color: Color,
     is_ackermann: bool,
 ) -> Entity {
-    let chassis_width = 2.0_f32;
-    let chassis_height = 0.5_f32;
-    let chassis_length = 3.5_f32;
+    let chassis_width = 2.0_f64;
+    let chassis_height = 0.5_f64;
+    let chassis_length = 3.5_f64;
 
-    let red_material = materials.add(StandardMaterial { base_color: Color::from(Srgba::RED), perceptual_roughness: 0.5, ..default() });
-    let blue_material = materials.add(StandardMaterial { base_color: Color::from(Srgba::BLUE), perceptual_roughness: 0.5, ..default() });
+    // No materials in tests to avoid shader panics
 
-    let rover_entity = commands
-        .spawn((
-            Name::new(name.to_string()),
-            RoverVessel,
-            lunco_sim_core::Vessel,
-            Mesh3d(meshes.add(Cuboid::new(chassis_width, chassis_height, chassis_length))),
-            MeshMaterial3d(materials.add(color)),
-            Transform::from_translation(spawn_pos),
-            RigidBody::Dynamic,
-            Collider::cuboid(chassis_width as f64, chassis_height as f64, chassis_length as f64),
-            CollisionLayers::new(Layer::RoverChassis, [Layer::Default]),
-            Mass(1000.0),
-        ))
-        .id();
+    let rover_entity = commands.spawn((
+        Name::new(name.to_string()),
+        RoverVessel,
+        lunco_sim_core::Vessel,
+        Transform::from_translation(spawn_pos),
+        RigidBody::Dynamic,
+        Collider::cuboid(chassis_width, chassis_height, chassis_length),
+        CollisionLayers::new(Layer::RoverChassis, [Layer::Default]),
+        Mass(1000.0),
+    )).id();
+
+    #[cfg(not(test))]
+    {
+        let color_val = _color;
+        commands.queue(move |world: &mut World| {
+            if world.contains_resource::<Assets<Mesh>>() && world.contains_resource::<Assets<StandardMaterial>>() {
+                world.resource_scope::<Assets<Mesh>, _>(|world, mut mesh_assets| {
+                    let mut material_assets = world.resource_mut::<Assets<StandardMaterial>>();
+                    let mesh = mesh_assets.add(Cuboid::new(chassis_width as f32, chassis_height as f32, chassis_length as f32));
+                    let material = material_assets.add(StandardMaterial::from(color_val));
+                    if let Ok(mut entity) = world.get_entity_mut(rover_entity) {
+                        entity.insert((Mesh3d(mesh), MeshMaterial3d(material)));
+                    }
+                });
+            }
+        });
+    }
 
     let drive_l_digital = commands.spawn((Name::new(format!("{}_drive_l_reg", name)), DigitalPort::default())).id();
     let drive_r_digital = commands.spawn((Name::new(format!("{}_drive_r_reg", name)), DigitalPort::default())).id();
@@ -239,10 +245,10 @@ fn spawn_raycast_rover_internal(
     commands.entity(rover_entity).insert(FlightSoftware { port_map, brake_active: false });
 
     let wheel_configs = [
-        ("FR", Vec3::new(chassis_width * 0.6, -0.4, chassis_length * 0.4), false, true),
-        ("FL", Vec3::new(-chassis_width * 0.6, -0.4, chassis_length * 0.4), true, true),
-        ("RR", Vec3::new(chassis_width * 0.6, -0.4, -chassis_length * 0.4), false, false),
-        ("RL", Vec3::new(-chassis_width * 0.6, -0.4, -chassis_length * 0.4), true, false),
+        ("FR", Vec3::new((chassis_width * 0.6) as f32, -0.4, (chassis_length * 0.4) as f32), false, true),
+        ("FL", Vec3::new((-chassis_width * 0.6) as f32, -0.4, (chassis_length * 0.4) as f32), true, true),
+        ("RR", Vec3::new((chassis_width * 0.6) as f32, -0.4, (-chassis_length * 0.4) as f32), false, false),
+        ("RL", Vec3::new((-chassis_width * 0.6) as f32, -0.4, (-chassis_length * 0.4) as f32), true, false),
     ];
 
     let wheel_rot = Quat::from_rotation_z(std::f32::consts::FRAC_PI_2);
@@ -258,15 +264,30 @@ fn spawn_raycast_rover_internal(
             commands.spawn(Wire { source: steer_digital, target: steer_port, scale: 1.0 });
         }
 
-        let wheel_material = if is_front { red_material.clone() } else { blue_material.clone() };
-
-        let visual_wheel = commands.spawn((
+        let visual_wheel_builder = commands.spawn((
             Name::new(format!("{}_visual", label)),
-            Mesh3d(wheel_mesh.clone()),
-            MeshMaterial3d(wheel_material),
             Transform::from_translation(rel_pos).with_rotation(wheel_rot), 
             ChildOf(rover_entity),
-        )).id();
+        ));
+
+        let wheel_entity = visual_wheel_builder.id();
+
+        #[cfg(not(test))]
+        {
+            let wheel_mesh_handle = _wheel_mesh.clone();
+            commands.queue(move |world: &mut World| {
+                if world.contains_resource::<Assets<Mesh>>() && world.contains_resource::<Assets<StandardMaterial>>() {
+                    world.resource_scope::<Assets<Mesh>, _>(|world, mut mesh_assets| {
+                        let mut material_assets = world.resource_mut::<Assets<StandardMaterial>>();
+                        let color_to_use = if is_front { Color::from(Srgba::RED) } else { Color::from(Srgba::BLUE) };
+                        let material = material_assets.add(StandardMaterial { base_color: color_to_use, perceptual_roughness: 0.5, ..default() });
+                        if let Ok(mut entity) = world.get_entity_mut(wheel_entity) {
+                            entity.insert((Mesh3d(wheel_mesh_handle), MeshMaterial3d(material)));
+                        }
+                    });
+                }
+            });
+        }
 
         commands.spawn((
             Name::new(format!("{}_{}", name, label)),
@@ -278,7 +299,7 @@ fn spawn_raycast_rover_internal(
                 spring_k: 8000.0,   // Much softer, more travel
                 damping_c: 2800.0,  // Tuned for 1000kg chassis
                 wheel_radius: 0.4,
-                visual_entity: Some(visual_wheel),
+                visual_entity: Some(wheel_entity),
                 last_normal_force: 0.0,
             },
             RayCaster::new(Vector::new(0.0, 0.5, 0.0), Dir3::NEG_Y)

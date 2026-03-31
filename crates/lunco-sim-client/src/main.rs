@@ -28,7 +28,7 @@ fn main() {
         .add_plugins(LunCoSimObcPlugin)
         .add_plugins(LunCoSimControllerPlugin)
         .add_plugins(LunCoSimAttributesPlugin)
-        .add_plugins(LunCoSimAvatarPlugin),
+        .add_plugins(LunCoSimAvatarPlugin)
         .add_plugins(LunCoSimRoverRaycastPlugin)
         .add_plugins(MaterialPlugin::<BlueprintMaterial>::default())
         .add_systems(Startup, setup_scenario)
@@ -128,8 +128,6 @@ fn setup_scenario(
     // 2. Raycast Variants
     spawn_raycast_skid_rover(
         &mut commands,
-        &mut *meshes,
-        &mut *materials,
         wheel_mesh.clone(),
         Vec3::new(4.0, 1.0, 0.0),
         "Raycast Skid (R-S)",
@@ -137,8 +135,6 @@ fn setup_scenario(
     );
     spawn_raycast_ackermann_rover(
         &mut commands,
-        &mut *meshes,
-        &mut *materials,
         wheel_mesh.clone(),
         Vec3::new(10.0, 1.0, 0.0),
         "Raycast Ackermann (R-A)",
@@ -148,8 +144,6 @@ fn setup_scenario(
     // 3. Joint Variants
     spawn_joint_skid_rover(
         &mut commands,
-        &mut *meshes,
-        &mut *materials,
         wheel_mesh.clone(),
         Vec3::new(-4.0, 1.0, 0.0),
         "Joint Skid (J-S)",
@@ -157,8 +151,6 @@ fn setup_scenario(
     );
     spawn_joint_ackermann_rover(
         &mut commands,
-        &mut *meshes,
-        &mut *materials,
         wheel_mesh.clone(),
         Vec3::new(-10.0, 1.0, 0.0),
         "Joint Ackermann (J-A)",

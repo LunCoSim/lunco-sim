@@ -1,27 +1,26 @@
 use bevy::prelude::*;
 use avian3d::prelude::*;
 use lunco_sim_physics::*;
+use bevy::time::TimeUpdateStrategy;
 
 fn setup_headless_app() -> App {
     let mut app = App::new();
-    app.add_plugins(DefaultPlugins.build()
-        .disable::<bevy::render::RenderPlugin>()
-        .disable::<bevy::winit::WinitPlugin>()
-        .disable::<bevy::audio::AudioPlugin>()
-    );
-    app.add_plugins(bevy::app::ScheduleRunnerPlugin::run_once());
-    
+    app.add_plugins(MinimalPlugins);
+    app.add_plugins(bevy::log::LogPlugin::default());
+    app.add_plugins(TransformPlugin);
+    app.add_plugins(AssetPlugin::default());
+    app.add_plugins(bevy::diagnostic::DiagnosticsPlugin);
+
+    app.add_plugins(PhysicsPlugins::default());
     app.add_plugins(LunCoSimPhysicsPlugin);
     
-    // assets still need to exist as resources for resource_scope
-    app.init_resource::<Assets<Mesh>>();
-    app.init_resource::<Assets<StandardMaterial>>();
-    
-    // Initialize the Shader asset type to avoid the panic when handles are created
-    app.init_asset::<Shader>();
-    
     app.insert_resource(Gravity((Vec3::NEG_Y * 9.81).as_dvec3()));
+    app.insert_resource(Time::<Fixed>::from_hz(60.0));
+    app.insert_resource(TimeUpdateStrategy::FixedTimesteps(1));
     
+    app.finish();
+    app.cleanup();
+
     app.update();
     app
 }
@@ -32,24 +31,18 @@ fn test_joint_rover_idle_stability() {
 
     let spawn_pos = Vec3::new(0.0, 1.0, 0.0);
     
-    let rover_id = app.world_mut().resource_scope::<Assets<Mesh>, Entity>(|world, mut meshes| {
-        world.resource_scope::<Assets<StandardMaterial>, Entity>(|world, mut materials| {
-            let mut commands = world.commands();
-            spawn_joint_skid_rover(
-                &mut commands,
-                &mut meshes,
-                &mut materials,
-                Handle::default(),
-                spawn_pos,
-                "TestRover",
-                Color::WHITE,
-            )
-        })
-    });
+    let rover_id = {
+        let mut commands = app.world_mut().commands();
+        spawn_joint_skid_rover(
+            &mut commands,
+            Handle::default(),
+            spawn_pos,
+            "TestRover",
+            Color::WHITE,
+        )
+    };
 
-    let delta = std::time::Duration::from_secs_f32(1.0 / 60.0);
     for _ in 0..120 {
-        app.world_mut().resource_mut::<Time>().advance_by(delta);
         app.update();
     }
 
