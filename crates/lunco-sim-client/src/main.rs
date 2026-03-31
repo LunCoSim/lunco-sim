@@ -14,14 +14,11 @@ use lunco_sim_rover_raycast::{
     spawn_raycast_ackermann_rover, spawn_raycast_skid_rover, LunCoSimRoverRaycastPlugin,
 };
 mod blueprint_extension;
-mod rover_counter;
 use blueprint_extension::{BlueprintExtension, BlueprintMaterial};
-use rover_counter::RoverCountPlugin;
 
 fn main() {
     App::new()
         .insert_resource(Time::<Fixed>::from_hz(60.0))
-        .insert_resource(SubstepCount(8))
         .add_plugins(DefaultPlugins)
         .add_plugins(PhysicsPlugins::default()) // Avian3D
         // LunCo Modules
@@ -31,10 +28,9 @@ fn main() {
         .add_plugins(LunCoSimObcPlugin)
         .add_plugins(LunCoSimControllerPlugin)
         .add_plugins(LunCoSimAttributesPlugin)
-        .add_plugins(LunCoSimAvatarPlugin)
+        .add_plugins(LunCoSimAvatarPlugin),
         .add_plugins(LunCoSimRoverRaycastPlugin)
         .add_plugins(MaterialPlugin::<BlueprintMaterial>::default())
-        .add_plugins(RoverCountPlugin)
         .add_systems(Startup, setup_scenario)
         .add_systems(Update, draw_wheel_diagnostics)
         .run();

@@ -1,11 +1,11 @@
 use avian3d::prelude::*;
-use avian3d::math::{Vector, Dir};
+use avian3d::math::Vector;
 use bevy::prelude::*;
 use bevy::ecs::relationship::Relationship;
 use std::collections::HashMap;
 
 use lunco_sim_core::architecture::{PhysicalPort, DigitalPort, Wire};
-use lunco_sim_physics::{Layer, MotorActuator};
+use lunco_sim_physics::Layer;
 use lunco_sim_fsw::FlightSoftware;
 
 pub struct LunCoSimRoverRaycastPlugin;
@@ -35,14 +35,15 @@ pub struct WheelRaycast {
     pub damping_c: f32,
     pub wheel_radius: f32,
     pub visual_entity: Option<Entity>,
+    pub last_normal_force: f32,
 }
 
 #[derive(Component)]
 pub struct RoverVessel;
 
 fn apply_wheel_suspension(
-    q_wheels: Query<(
-        &WheelRaycast,
+    mut q_wheels: Query<(
+        &mut WheelRaycast,
         &RayHits,
         &Transform,
         &ChildOf,
@@ -50,7 +51,7 @@ fn apply_wheel_suspension(
     mut q_chassis: Query<(Forces, &Position, &Rotation), With<RoverVessel>>,
     mut q_visual: Query<&mut Transform, (Without<WheelRaycast>, Without<RoverVessel>)>,
 ) {
-    for (wheel, hits, wheel_tf, parent) in q_wheels.iter() {
+    for (mut wheel, hits, wheel_tf, parent) in q_wheels.iter_mut() {
         let parent_entity = Relationship::get(parent);
         if let Ok((mut forces, chassis_pos, chassis_rot)) = q_chassis.get_mut(parent_entity) {
             let mut closest_hit_dist = wheel.rest_length + wheel.wheel_radius;
@@ -61,7 +62,7 @@ fn apply_wheel_suspension(
             
             if let Some(hit) = hits.iter_sorted().next() {
                 let distance = hit.distance as f32;
-                if distance < wheels_limit(wheel) {
+                if distance < wheels_limit(&wheel) {
                     closest_hit_dist = distance;
                     let compression = ((wheel.rest_length + wheel.wheel_radius) - distance).max(0.0);
                     let spring_force_mag = (compression * wheel.spring_k) as f64;
@@ -80,7 +81,14 @@ fn apply_wheel_suspension(
                     // Apply force at the hub's world position
                     let force_vec = hit.normal * total_force_mag;
                     forces.apply_force_at_point(force_vec, world_pos);
+
+                    // Store normal force for friction calculation
+                    wheel.last_normal_force = total_force_mag as f32;
+                } else {
+                    wheel.last_normal_force = 0.0;
                 }
+            } else {
+                wheel.last_normal_force = 0.0;
             }
 
             if let Some(visual_entity) = wheel.visual_entity {
@@ -116,9 +124,27 @@ fn apply_wheel_drive(
             if let Ok(port) = q_ports.get(wheel.drive_port) {
                 if hits.iter().next().is_some() {
                     let forward = wheel_tf.forward().as_dvec3();
-                    let drive_force_mag = (port.value * 1000.0) as f64;
+                    let drive_force_mag = (port.value * 12000.0) as f64; // Significant boost for 1k kg
                     let force_vec = forward * drive_force_mag;
+                    
+                    // Main drive force
                     forces.apply_force_at_point(force_vec, wheel_tf.translation().as_dvec3());
+
+                    // --- LATERAL FRICTION (The "Grip" from bevy_car) ---
+                    let chassis_vel = forces.linear_velocity();
+                    let chassis_ang_vel = forces.angular_velocity();
+                    let hub_pos_world = wheel_tf.translation().as_dvec3();
+                    let hub_vel = chassis_vel + chassis_ang_vel.cross(hub_pos_world - forces.position().0);
+
+                    // Friction is proportional to how hard the tire is pressing into ground (Normal Force)
+                    let normal_force = wheel.last_normal_force as f64;
+                    let friction_k = 1.1; // "Stickiness" coefficient
+                    
+                    let right = wheel_tf.right().as_dvec3();
+                    let lateral_vel = hub_vel.dot(right);
+                    
+                    let lateral_friction_force = -lateral_vel * friction_k * normal_force * right;
+                    forces.apply_force_at_point(lateral_friction_force, hub_pos_world);
                 }
             }
         }
@@ -249,10 +275,11 @@ fn spawn_raycast_rover_internal(
                 drive_port,
                 steer_port: if is_front { steer_port } else { Entity::PLACEHOLDER },
                 rest_length: 0.4,
-                spring_k: 30000.0,
-                damping_c: 10000.0, 
+                spring_k: 8000.0,   // Much softer, more travel
+                damping_c: 2800.0,  // Tuned for 1000kg chassis
                 wheel_radius: 0.4,
                 visual_entity: Some(visual_wheel),
+                last_normal_force: 0.0,
             },
             RayCaster::new(Vector::new(0.0, 0.5, 0.0), Dir3::NEG_Y)
                 .with_max_distance(1.2)

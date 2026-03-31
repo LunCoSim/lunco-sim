@@ -4,20 +4,25 @@ use lunco_sim_physics::*;
 
 fn setup_headless_app() -> App {
     let mut app = App::new();
-    app.add_plugins((
-        MinimalPlugins.set(bevy::app::ScheduleRunnerPlugin::run_once()),
-        AssetPlugin::default(),
-        TransformPlugin,
-        PhysicsPlugins::default(),
-        LunCoSimPhysicsPlugin,
-    ));
+    app.add_plugins(DefaultPlugins.build()
+        .disable::<bevy::render::RenderPlugin>()
+        .disable::<bevy::winit::WinitPlugin>()
+        .disable::<bevy::audio::AudioPlugin>()
+    );
+    app.add_plugins(bevy::app::ScheduleRunnerPlugin::run_once());
+    
+    app.add_plugins(LunCoSimPhysicsPlugin);
+    
+    // assets still need to exist as resources for resource_scope
     app.init_resource::<Assets<Mesh>>();
     app.init_resource::<Assets<StandardMaterial>>();
+    
+    // Initialize the Shader asset type to avoid the panic when handles are created
+    app.init_asset::<Shader>();
+    
     app.insert_resource(Gravity((Vec3::NEG_Y * 9.81).as_dvec3()));
     
-    // Initial update to trigger any internal setup
     app.update();
-    
     app
 }
 
@@ -40,7 +45,6 @@ fn test_joint_rover_standing_clearance() {
         Transform::from_xyz(0.0, -0.05, 0.0),
     ));
 
-    let wheel_mesh = app.world_mut().resource_mut::<Assets<Mesh>>().add(Cylinder::new(0.5, 0.4));
     let spawn_pos = Vec3::new(0.0, 2.0, 0.0);
     
     let rover_id = app.world_mut().resource_scope::<Assets<Mesh>, Entity>(|world, mut meshes| {
@@ -50,7 +54,7 @@ fn test_joint_rover_standing_clearance() {
                 &mut commands,
                 &mut meshes,
                 &mut materials,
-                wheel_mesh,
+                Handle::default(),
                 spawn_pos,
                 "TestRover",
                 Color::WHITE,
@@ -78,8 +82,7 @@ fn test_joint_rover_suspension_travel() {
         Transform::from_xyz(0.0, -0.05, 0.0),
     ));
 
-    let wheel_mesh = app.world_mut().resource_mut::<Assets<Mesh>>().add(Cylinder::new(0.5, 0.4));
-    let spawn_pos = Vec3::new(0.0, 3.0, 0.0); // Start higher
+    let spawn_pos = Vec3::new(0.0, 3.0, 0.0);
     
     let rover_id = app.world_mut().resource_scope::<Assets<Mesh>, Entity>(|world, mut meshes| {
         world.resource_scope::<Assets<StandardMaterial>, Entity>(|world, mut materials| {
@@ -88,7 +91,7 @@ fn test_joint_rover_suspension_travel() {
                 &mut commands,
                 &mut meshes,
                 &mut materials,
-                wheel_mesh,
+                Handle::default(),
                 spawn_pos,
                 "TestRover",
                 Color::WHITE,
@@ -96,11 +99,9 @@ fn test_joint_rover_suspension_travel() {
         })
     });
 
-    // 1. Settle
     simulate(&mut app, 600);
     let y1 = app.world().get::<Transform>(rover_id).unwrap().translation.y;
 
-    // 2. Add mass to rover to see it compress
     app.world_mut().entity_mut(rover_id).insert(Mass(5000.0));
     
     simulate(&mut app, 600);

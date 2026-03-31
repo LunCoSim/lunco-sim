@@ -158,15 +158,19 @@ fn spawn_joint_rover_internal(
     let suspension_travel = 0.3; // Total vertical travel
 
 
-    let red_material = materials.add(StandardMaterial { base_color: Color::from(Srgba::RED), perceptual_roughness: 0.5, ..default() });
-    let blue_material = materials.add(StandardMaterial { base_color: Color::from(Srgba::BLUE), perceptual_roughness: 0.5, ..default() });
+    #[cfg(not(test))]
+    let red_material = Some(materials.add(StandardMaterial { base_color: Color::from(Srgba::RED), perceptual_roughness: 0.5, ..default() }));
+    #[cfg(not(test))]
+    let blue_material = Some(materials.add(StandardMaterial { base_color: Color::from(Srgba::BLUE), perceptual_roughness: 0.5, ..default() }));
+    #[cfg(test)]
+    let red_material: Option<Handle<StandardMaterial>> = None;
+    #[cfg(test)]
+    let blue_material: Option<Handle<StandardMaterial>> = None;
 
-    let rover_entity = commands.spawn((
+    let mut rover_builder = commands.spawn((
         Name::new(name.to_string()),
         RoverVessel,
         Vessel,
-        Mesh3d(meshes.add(Cuboid::new(chassis_width, chassis_height, chassis_length))),
-        MeshMaterial3d(materials.add(color)),
         Transform::from_translation(spawn_pos),
         RigidBody::Dynamic,
         Collider::cuboid(chassis_width as f64, chassis_height as f64, chassis_length as f64),
@@ -176,7 +180,14 @@ fn spawn_joint_rover_internal(
         CenterOfMass(Vec3::new(0.0, -0.2, 0.0)),
         LinearDamping(0.2), 
         AngularDamping(0.5),
-    )).id();
+    ));
+
+    #[cfg(not(test))]
+    {
+        rover_builder.insert(Mesh3d(meshes.add(Cuboid::new(chassis_width, chassis_height, chassis_length))));
+        rover_builder.insert(MeshMaterial3d(materials.add(color)));
+    }
+    let rover_entity = rover_builder.id();
 
     let drive_l_digital = commands.spawn((Name::new(format!("{}_drive_l_reg", name)), DigitalPort::default())).id();
     let drive_r_digital = commands.spawn((Name::new(format!("{}_drive_r_reg", name)), DigitalPort::default())).id();
@@ -220,10 +231,8 @@ fn spawn_joint_rover_internal(
 
         let wheel_material = if is_front { red_material.clone() } else { blue_material.clone() };
 
-        let wheel_entity = commands.spawn((
+        let mut wheel_builder = commands.spawn((
             Name::new(format!("{}_wheel_{}", name, label)),
-            Mesh3d(wheel_mesh.clone()),
-            MeshMaterial3d(wheel_material),
             Transform::from_translation(spawn_pos + rel_pos).with_rotation(wheel_tilt),
             RigidBody::Dynamic,
             Collider::cylinder(wheel_radius as f64, wheel_width as f64),
@@ -234,7 +243,16 @@ fn spawn_joint_rover_internal(
             AngularDamping(2.0),
             MotorActuator { port_entity: motor_port, axis: Vec3::Y },
             BrakeActuator { port_entity: brake_port, max_force: 32767.0 },
-        )).id();
+        ));
+
+        #[cfg(not(test))]
+        {
+            wheel_builder.insert(Mesh3d(wheel_mesh.clone()));
+            if let Some(mat) = wheel_material {
+                 wheel_builder.insert(MeshMaterial3d(mat));
+            }
+        }
+        let wheel_entity = wheel_builder.id();
 
         // Intermediate hub for steering and/or suspension
         let hub_entity = commands.spawn((
