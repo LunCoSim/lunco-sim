@@ -9,6 +9,8 @@ use lunco_sim_fsw::LunCoSimFswPlugin;
 use lunco_sim_obc::LunCoSimObcPlugin;
 use lunco_sim_physics::{spawn_joint_skid_rover, spawn_joint_ackermann_rover, LunCoSimPhysicsPlugin, MotorActuator};
 use lunco_sim_rover_raycast::{spawn_raycast_skid_rover, spawn_raycast_ackermann_rover, LunCoSimRoverRaycastPlugin};
+mod blueprint_extension;
+use blueprint_extension::{BlueprintExtension, BlueprintMaterial};
 
 fn main() {
     App::new()
@@ -24,6 +26,7 @@ fn main() {
         .add_plugins(LunCoSimAttributesPlugin)
         .add_plugins(LunCoSimAvatarPlugin)
         .add_plugins(LunCoSimRoverRaycastPlugin)
+        .add_plugins(MaterialPlugin::<BlueprintMaterial>::default())
         .add_systems(Startup, setup_scenario)
         .add_systems(Update, draw_wheel_diagnostics)
         .run();
@@ -65,15 +68,53 @@ fn setup_scenario(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut blueprint_materials: ResMut<Assets<BlueprintMaterial>>,
 ) {
-    // 1. Ground Plane
+    // 1. Massive Ground Plane (1000m)
+    let ground_size = 1000.0;
     commands.spawn((
         Name::new("ground"),
-        Mesh3d(meshes.add(Plane3d::default().mesh().size(100.0, 100.0))),
-        MeshMaterial3d(materials.add(Color::srgb(0.2, 0.2, 0.2))),
+        Mesh3d(meshes.add(Plane3d::default().mesh().size(ground_size, ground_size))),
+        MeshMaterial3d(blueprint_materials.add(BlueprintMaterial {
+            base: StandardMaterial {
+                base_color: Color::srgb(0.02, 0.1, 0.3), // Blueprint Blue
+                perceptual_roughness: 0.9,
+                ..default()
+            },
+            extension: BlueprintExtension {
+                line_color: LinearRgba::new(0.4, 0.8, 1.0, 1.0),
+                grid_scale: 10.0,
+                line_width: 2.0,
+                _padding: Vec2::ZERO,
+            },
+        })),
         RigidBody::Static,
-        Collider::cuboid(100.0, 0.1, 100.0),
+        Collider::cuboid(ground_size, 0.1, ground_size),
         Transform::from_xyz(0.0, -0.05, 0.0),
+    ));
+
+    // 2. Training Ramp (Using exact same blueprint look)
+    let ramp_size = Vec3::new(12.0, 1.0, 6.0);
+    commands.spawn((
+        Name::new("ramp"),
+        Mesh3d(meshes.add(Cuboid::from_size(ramp_size))),
+        MeshMaterial3d(blueprint_materials.add(BlueprintMaterial {
+            base: StandardMaterial {
+                base_color: Color::srgb(0.1, 0.3, 0.6), // Lighter Blue
+                perceptual_roughness: 0.9,
+                ..default()
+            },
+            extension: BlueprintExtension {
+                line_color: LinearRgba::new(0.6, 0.9, 1.0, 1.0),
+                grid_scale: 2.0,
+                line_width: 1.0,
+                _padding: Vec2::ZERO,
+            },
+        })),
+        RigidBody::Static,
+        Collider::cuboid(ramp_size.x, ramp_size.y, ramp_size.z),
+        Transform::from_xyz(0.0, 0.3, 40.0)
+            .with_rotation(Quat::from_rotation_x(-15.0_f32.to_radians())),
     ));
 
     let wheel_radius = 0.5;
@@ -102,7 +143,11 @@ fn setup_scenario(
 
     // 4. Environment
     commands.spawn((
-        DirectionalLight::default(),
+        DirectionalLight {
+            illuminance: 10000.0,
+            shadows_enabled: true,
+            ..default()
+        },
         Transform::from_xyz(10.0, 20.0, 10.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
 
@@ -116,7 +161,11 @@ fn setup_scenario(
     commands.spawn((
         Avatar,
         Camera3d::default(),
-        Transform::from_xyz(5.0, 10.0, -25.0).looking_at(Vec3::new(0.0, 0.0, 2.0), Vec3::Y),
+        AmbientLight {
+            brightness: 100.0,
+            ..default()
+        },
+        Transform::from_xyz(5.0, 10.0, -25.0).looking_at(Vec3::new(0.0, 0.0, 10.0), Vec3::Y),
         ActionState::<SpaceSystemAction>::default(),
         input_map,
     ));
