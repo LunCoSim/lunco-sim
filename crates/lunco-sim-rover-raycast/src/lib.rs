@@ -53,9 +53,9 @@ impl Default for RaycastWheel {
     fn default() -> Self {
         Self {
             radius: 0.5,
-            stiffness: 15000.0,
-            damping: 2000.0,
-            friction: 0.6,
+            stiffness: 40000.0, // Reduced from 80000 for smoother ride
+            damping: 2500.0,    // Reduced from 5000 for less harsh landing
+            friction: 0.8,
         }
     }
 }
@@ -78,16 +78,21 @@ fn update_wheel_state(
     mut wheels: Query<(&RaycastWheel, &mut RaycastWheelState, &RayHits, &RayCaster)>,
 ) {
     for (wheel, mut state, ray_hits, ray) in wheels.iter_mut() {
-        let ray_hit = ray_hits.get(0);
-        let distance = ray_hit.map_or(wheel.radius, |hit| hit.distance);
-        let hit_normal = ray_hit.map_or(Vec3::Y, |hit| hit.normal);
+        if let Some(hit) = ray_hits.get(0) {
+            let distance = hit.distance;
+            let hit_normal = hit.normal;
+            let hit_point = ray.global_origin() + distance * ray.global_direction();
+            let compression = (wheel.radius - distance).max(0.0);
 
-        let hit_point = ray.global_origin() + distance * ray.global_direction();
-        let compression = (wheel.radius - distance).max(0.0);
-
-        state.surface_point = hit_point;
-        state.surface_normal = hit_normal;
-        state.compression = compression;
+            state.surface_point = hit_point;
+            state.surface_normal = hit_normal;
+            state.compression = compression;
+        } else {
+            // No hit, reset state
+            state.compression = 0.0;
+            state.normal_force = 0.0;
+            state.compression_velocity = 0.0;
+        }
     }
 }
 
@@ -111,16 +116,21 @@ fn apply_wheel_suspension(
             state.compression_velocity = compression_velocity;
 
             // 3. Spring and Damping forces
-            let spring_force = wheel.stiffness * state.compression;
-            let damping_force = wheel.damping * compression_velocity;
-            let total_force_mag = (spring_force + damping_force).max(0.0);
+            // CRITICAL: We only apply suspension if the wheel is actually compressed (touching ground)
+            if state.compression > 0.0 {
+                let spring_force = wheel.stiffness * state.compression;
+                let damping_force = wheel.damping * compression_velocity;
+                let total_force_mag = (spring_force + damping_force).max(0.0);
 
-            let force = total_force_mag * state.surface_normal;
+                let force = total_force_mag * state.surface_normal;
 
-            // Apply the force to the parent at the wheel's position
-            parent_forces.apply_force_at_point(force, wheel_pos);
+                // Apply the force to the parent at the wheel's position
+                parent_forces.apply_force_at_point(force, wheel_pos);
 
-            state.normal_force = total_force_mag;
+                state.normal_force = total_force_mag;
+            } else {
+                state.normal_force = 0.0;
+            }
             state.velocity = wheel_velocity;
         }
     }
@@ -145,8 +155,9 @@ fn apply_wheel_friction(
             let right = global_transform.right();
             let lateral_velocity = contact_velocity.dot(right.as_vec3());
             
-            // Lateral stiffness determines how quickly friction reaches its maximum
-            let lateral_stiffness = 10.0; 
+            // Lateral stiffness determines how quickly friction reaches its maximum.
+            // Reduced to 2.0 to be less "snappy" and prevent tipping on landing.
+            let lateral_stiffness = 2.0; 
             let lateral_force_mag = (lateral_velocity * lateral_stiffness * state.normal_force).clamp(-max_friction, max_friction);
             let lateral_force = -lateral_force_mag * right;
 
@@ -154,12 +165,12 @@ fn apply_wheel_friction(
             let forward = global_transform.forward();
             let forward_velocity = contact_velocity.dot(forward.as_vec3());
             
-            let rolling_resistance = 0.1;
-            let longitudinal_stiffness = 10.0;
+            let rolling_resistance = 0.05; // Reduced rolling resistance
+            let longitudinal_stiffness = 2.0;
             let longitudinal_force_mag = (forward_velocity * longitudinal_stiffness * state.normal_force * rolling_resistance).clamp(-max_friction, max_friction);
             let longitudinal_force = -longitudinal_force_mag * forward;
 
-            let resistance_torque = lateral_force + longitudinal_force;
+            let friction_force = lateral_force + longitudinal_force;
 
             // 4. Braking Force
             if let Some(brake) = maybe_brake {
@@ -174,7 +185,7 @@ fn apply_wheel_friction(
                 }
             }
 
-            parent_forces.apply_force_at_point(resistance_torque, state.surface_point);
+            parent_forces.apply_force_at_point(friction_force, state.surface_point);
         }
     }
 }
@@ -308,10 +319,10 @@ fn spawn_raycast_rover_internal(
         Collider::cuboid(chassis_width, chassis_height, chassis_length),
         Friction::new(0.5),
         Mass(1000.0), 
-        CenterOfMass(Vec3::new(0.0, -0.8, 0.0)), 
-        LinearDamping(0.5),
-        AngularDamping(1.0),
-        AngularInertia::new(Vec3::new(5000.0, 5000.0, 2000.0)), 
+        CenterOfMass(Vec3::new(0.0, -0.6, 0.0)), 
+        LinearDamping(0.05),
+        AngularDamping(0.1),
+        AngularInertia::new(Vec3::new(1000.0, 1000.0, 500.0)), 
     )).id();
 
     let drive_l_digital = commands.spawn((Name::new(format!("{}_drive_l_reg", name)), DigitalPort::default())).id();
@@ -348,13 +359,13 @@ fn spawn_raycast_rover_internal(
         
         // Both front and rear follow their respective side channels
         let drive_source = if is_left { drive_l_digital } else { drive_r_digital };
-        commands.spawn(Wire { source: drive_source, target: motor_port, scale: 12000.0 });
-        commands.spawn(Wire { source: brake_digital, target: brake_port, scale: 20000.0 });
+        commands.spawn(Wire { source: drive_source, target: motor_port, scale: 2500.0 });
+        commands.spawn(Wire { source: brake_digital, target: brake_port, scale: 5000.0 });
 
         commands.entity(rover_entity).with_children(|parent| {
             let mut wheel = parent.spawn((
                 Name::new(format!("{}_wheel_{}", name, label)),
-                RaycastWheel { radius: wheel_radius, stiffness: 80000.0, damping: 5000.0, friction: 0.8 },
+                RaycastWheel { radius: wheel_radius, stiffness: 50000.0, damping: 3000.0, friction: 0.8 },
                 RaycastWheelState::default(),
                 Visibility::default(),
                 RayCaster::new(Vec3::ZERO, Dir3::NEG_Y)

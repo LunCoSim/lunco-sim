@@ -148,10 +148,10 @@ fn spawn_joint_rover_internal(
         CollisionLayers::new(Layer::RoverChassis, [Layer::Default]),
         Friction::new(0.5),
         Mass(1000.0), 
-        CenterOfMass(Vec3::new(0.0, -0.8, 0.0)), // Extremely low CoM
-        LinearDamping(0.5),
-        AngularDamping(1.0),
-        AngularInertia::new(Vec3::new(5000.0, 5000.0, 2000.0)), 
+        CenterOfMass(Vec3::new(0.0, -0.6, 0.0)), // Stable but not unnaturally low
+        LinearDamping(0.05), // Allowed to roll and glide
+        AngularDamping(0.1),
+        AngularInertia::new(Vec3::new(1000.0, 1000.0, 500.0)), // More realistic inertia
     )).id();
 
     let drive_l_digital = commands.spawn((Name::new(format!("{}_drive_l_reg", name)), DigitalPort::default())).id();
@@ -177,8 +177,8 @@ fn spawn_joint_rover_internal(
     ];
 
     let steer_port = commands.spawn((Name::new(format!("{}_port_steer", name)), PhysicalPort::default())).id();
-    // Increase scale to 6k to handle friction, and flip sign (-1.0 for Right-turn torque)
-    commands.spawn(Wire { source: steer_digital, target: steer_port, scale: -6000.0 });
+    // Reduced scale for more manageable steering
+    commands.spawn(Wire { source: steer_digital, target: steer_port, scale: -1000.0 });
 
     let wheel_tilt = Quat::from_rotation_z(std::f32::consts::FRAC_PI_2);
 
@@ -188,8 +188,9 @@ fn spawn_joint_rover_internal(
         
         let motor_port = commands.spawn((Name::new(format!("{}_port_{}_drive", name, label)), PhysicalPort::default())).id();
         let brake_port = commands.spawn((Name::new(format!("{}_port_{}_brake", name, label)), PhysicalPort::default())).id();
-        commands.spawn(Wire { source: digital_source, target: motor_port, scale: 6000.0 });
-        commands.spawn(Wire { source: brake_digital, target: brake_port, scale: 32767.0 });
+        // Reduced drive scale to prevent flipping
+        commands.spawn(Wire { source: digital_source, target: motor_port, scale: 3000.0 });
+        commands.spawn(Wire { source: brake_digital, target: brake_port, scale: 10000.0 });
 
         let wheel_entity = commands.spawn((
             Name::new(format!("{}_wheel_{}", name, label)),

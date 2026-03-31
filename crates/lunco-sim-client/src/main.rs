@@ -7,14 +7,18 @@ use lunco_sim_avatar::{Avatar, LunCoSimAvatarPlugin};
 use lunco_sim_controller::{LunCoSimControllerPlugin, SpaceSystemAction};
 use lunco_sim_fsw::LunCoSimFswPlugin;
 use lunco_sim_obc::LunCoSimObcPlugin;
-use lunco_sim_physics::{spawn_joint_skid_rover, spawn_joint_ackermann_rover, LunCoSimPhysicsPlugin, MotorActuator};
-use lunco_sim_rover_raycast::{spawn_raycast_skid_rover, spawn_raycast_ackermann_rover, LunCoSimRoverRaycastPlugin};
+use lunco_sim_physics::{
+    spawn_joint_ackermann_rover, spawn_joint_skid_rover, LunCoSimPhysicsPlugin, MotorActuator,
+};
+use lunco_sim_rover_raycast::{
+    spawn_raycast_ackermann_rover, spawn_raycast_skid_rover, LunCoSimRoverRaycastPlugin,
+};
 mod blueprint_extension;
 use blueprint_extension::{BlueprintExtension, BlueprintMaterial};
 
 fn main() {
     App::new()
-        .insert_resource(Time::<Fixed>::from_hz(256.0))
+        .insert_resource(Time::<Fixed>::from_hz(60.0))
         .add_plugins(DefaultPlugins)
         .add_plugins(PhysicsPlugins::default()) // Avian3D
         // LunCo Modules
@@ -123,22 +127,42 @@ fn setup_scenario(
 
     // 2. Raycast Variants
     spawn_raycast_skid_rover(
-        &mut commands, &mut *meshes, &mut *materials, wheel_mesh.clone(),
-        Vec3::new(4.0, 1.0, 0.0), "Raycast Skid (R-S)", Color::srgb(0.0, 0.8, 0.4),
+        &mut commands,
+        &mut *meshes,
+        &mut *materials,
+        wheel_mesh.clone(),
+        Vec3::new(4.0, 1.0, 0.0),
+        "Raycast Skid (R-S)",
+        Color::srgb(0.0, 0.8, 0.4),
     );
     spawn_raycast_ackermann_rover(
-        &mut commands, &mut *meshes, &mut *materials, wheel_mesh.clone(),
-        Vec3::new(10.0, 1.0, 0.0), "Raycast Ackermann (R-A)", Color::srgb(0.0, 0.4, 0.8),
+        &mut commands,
+        &mut *meshes,
+        &mut *materials,
+        wheel_mesh.clone(),
+        Vec3::new(10.0, 1.0, 0.0),
+        "Raycast Ackermann (R-A)",
+        Color::srgb(0.0, 0.4, 0.8),
     );
 
     // 3. Joint Variants
     spawn_joint_skid_rover(
-        &mut commands, &mut *meshes, &mut *materials, wheel_mesh.clone(),
-        Vec3::new(-4.0, 1.0, 0.0), "Joint Skid (J-S)", Color::srgb(0.8, 0.4, 0.0),
+        &mut commands,
+        &mut *meshes,
+        &mut *materials,
+        wheel_mesh.clone(),
+        Vec3::new(-4.0, 1.0, 0.0),
+        "Joint Skid (J-S)",
+        Color::srgb(0.8, 0.4, 0.0),
     );
     spawn_joint_ackermann_rover(
-        &mut commands, &mut *meshes, &mut *materials, wheel_mesh.clone(),
-        Vec3::new(-10.0, 1.0, 0.0), "Joint Ackermann (J-A)", Color::srgb(0.9, 0.1, 0.4),
+        &mut commands,
+        &mut *meshes,
+        &mut *materials,
+        wheel_mesh.clone(),
+        Vec3::new(-10.0, 1.0, 0.0),
+        "Joint Ackermann (J-A)",
+        Color::srgb(0.9, 0.1, 0.4),
     );
 
     // 4. Environment
