@@ -17,6 +17,6 @@ description = "Initialize multi-crate workspace architecture for vessel control 
 
 [workspace.dependencies]
 bevy = { version = "0.18.1", features = ["dynamic_linking"] }
-avian3d = "0.6.1"
+avian3d = { version = "0.6.1", default-features = false, features = ["3d", "f64", "parry-f64", "parallel", "debug-plugin", "default-collider"] }
 big_space = "0.12.0"
 leafwing-input-manager = "0.20.0"

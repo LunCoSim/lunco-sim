@@ -25,17 +25,17 @@ fn test_rover_long_duration_stop() {
     
     // THE "SPECIAL PURE CI" MESSAGE INITIALIZATION:
     // Required to satisfy MessageReader<T> validation in external plugins like Avian and FSW.
-    app.init_resource::<Messages<bevy::asset::AssetEvent<Mesh>>>();
-    app.init_resource::<Messages<bevy::asset::AssetEvent<StandardMaterial>>>();
-    app.init_resource::<Messages<bevy::input::mouse::MouseMotion>>();
-    app.init_resource::<Messages<bevy::input::mouse::MouseWheel>>();
-    app.init_resource::<Messages<bevy::input::keyboard::KeyboardInput>>();
-    app.init_resource::<Messages<bevy::input::mouse::MouseButtonInput>>();
+    app.init_resource::<Events<bevy::asset::AssetEvent<Mesh>>>();
+    app.init_resource::<Events<bevy::asset::AssetEvent<StandardMaterial>>>();
+    app.init_resource::<Events<bevy::input::mouse::MouseMotion>>();
+    app.init_resource::<Events<bevy::input::mouse::MouseWheel>>();
+    app.init_resource::<Events<bevy::input::keyboard::KeyboardInput>>();
+    app.init_resource::<Events<bevy::input::mouse::MouseButtonInput>>();
     
     // Physics messages from avian3d 0.6.1 in 0.18.1
     // (We use prelude to avoid private module access)
-    app.init_resource::<Messages<avian3d::prelude::CollisionStart>>();
-    app.init_resource::<Messages<avian3d::prelude::CollisionEnd>>();
+    app.init_resource::<Events<avian3d::prelude::CollisionStart>>();
+    app.init_resource::<Events<avian3d::prelude::CollisionEnd>>();
     
     app.add_plugins(PhysicsPlugins::default());
     app.add_plugins(LunCoSimPhysicsPlugin);
@@ -44,7 +44,7 @@ fn test_rover_long_duration_stop() {
     // 1. Ground Plane
     app.world_mut().spawn((
         RigidBody::Static,
-        Collider::cuboid(100.0, 0.1, 100.0),
+        Collider::cuboid(100.0_f64, 0.1_f64, 100.0_f64),
         Transform::from_xyz(0.0, -0.05, 0.0),
     ));
 

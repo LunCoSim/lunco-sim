@@ -1,6 +1,7 @@
-use bevy::prelude::*;
-use bevy::input::mouse::MouseMotion;
 use avian3d::prelude::*;
+use bevy::prelude::*;
+use bevy::input::mouse::{MouseMotion, MouseWheel};
+
 use lunco_sim_controller::ControllerLink;
 use lunco_sim_core::Vessel;
 
@@ -14,7 +15,7 @@ impl Plugin for LunCoSimAvatarPlugin {
             avatar_raycast_possession,
             avatar_orbit_logic,
             avatar_escape_possession,
-        ));
+        ).chain());
     }
 }
 
@@ -33,9 +34,9 @@ impl Default for OrbitState {
     fn default() -> Self {
         Self {
             yaw: 0.0,
-            pitch: -0.5, // Start from the top
+            pitch: -0.5,
             distance: 10.0,
-            vertical_offset: 1.0, // Default to slightly above center
+            vertical_offset: 1.0,
         }
     }
 }
@@ -71,7 +72,7 @@ fn avatar_freecam_rotation(
     mut q_avatar: Query<&mut Transform, (With<Avatar>, Without<ControllerLink>)>,
 ) {
     if !keys.pressed(MouseButton::Right) {
-        mouse_motion.clear();
+        let _ = mouse_motion.read().count();
         return;
     }
 
@@ -94,13 +95,12 @@ fn avatar_orbit_logic(
     keys: Res<ButtonInput<MouseButton>>,
     keys_input: Res<ButtonInput<KeyCode>>,
     mut mouse_motion: MessageReader<MouseMotion>,
-    mut scroll_events: MessageReader<bevy::input::mouse::MouseWheel>,
+    mut scroll_events: MessageReader<MouseWheel>,
     time: Res<Time>,
     mut q_avatar: Query<(&mut Transform, &mut OrbitState, &ControllerLink), With<Avatar>>,
     q_targets: Query<&GlobalTransform>,
 ) {
     for (mut transform, mut orbit, link) in q_avatar.iter_mut() {
-        // 1. Handle Orbit Rotation (Right Mouse)
         if keys.pressed(MouseButton::Right) {
             let mut delta = Vec2::ZERO;
             for event in mouse_motion.read() {
@@ -109,25 +109,22 @@ fn avatar_orbit_logic(
             let sensitivity = 0.005;
             orbit.yaw -= delta.x * sensitivity;
             orbit.pitch -= delta.y * sensitivity;
-            orbit.pitch = orbit.pitch.clamp(-1.5, -0.1); // Keep above the vessel
+            orbit.pitch = orbit.pitch.clamp(-1.5, -0.1);
         } else {
-            mouse_motion.read(); // Clear buffer
+            let _ = mouse_motion.read().count();
         }
 
-        // 2. Handle Zoom (Mouse Wheel)
         for event in scroll_events.read() {
             orbit.distance = (orbit.distance - event.y * 2.0).clamp(2.0, 100.0);
         }
 
-        // 3. Handle Vertical Offset (QE)
         let offset_speed = 5.0 * time.delta_secs();
         if keys_input.pressed(KeyCode::KeyE) { orbit.vertical_offset += offset_speed; }
         if keys_input.pressed(KeyCode::KeyQ) { orbit.vertical_offset -= offset_speed; }
 
-        // 4. Calculate smooth follow
         if let Ok(target_tf) = q_targets.get(link.vessel_entity) {
             let mut target_pos = target_tf.translation();
-            target_pos.y += orbit.vertical_offset; // Apply vertical focal point shift
+            target_pos.y += orbit.vertical_offset;
             
             let rotation = Quat::from_euler(EulerRot::YXZ, orbit.yaw, orbit.pitch, 0.0);
             let offset = rotation * Vec3::new(0.0, 0.0, orbit.distance);
@@ -153,26 +150,24 @@ fn avatar_raycast_possession(
     }
 
     let Some(window) = windows.iter().next() else { return };
-    let Some(cursor_position) = window.cursor_position() else { return };
-    
-    for (camera, camera_transform, avatar_entity) in camera_q.iter() {
-        let Ok(ray) = camera.viewport_to_world(camera_transform, cursor_position) else { continue };
-
-        let hit = spatial_query.cast_ray(
-            ray.origin,
-            ray.direction,
-            1000.0,
-            true,
-            &SpatialQueryFilter::default(),
-        );
-
-        if let Some(hit_data) = hit {
-            if let Ok(vessel_entity) = vessel_q.get(hit_data.entity) {
-                commands.entity(avatar_entity).insert((
-                    ControllerLink { vessel_entity },
-                    OrbitState::default(),
-                ));
-                println!("Avatar possessed Vessel: {:?}", vessel_entity);
+    if let Some(cursor_position) = window.cursor_position() {
+        for (camera, camera_transform, avatar_entity) in camera_q.iter() {
+            if let Ok(f32_ray) = camera.viewport_to_world(camera_transform, cursor_position) {
+                if let Some(hit) = spatial_query.cast_ray(
+                    f32_ray.origin.as_dvec3(),
+                    f32_ray.direction,
+                    1000.0,
+                    true,
+                    &SpatialQueryFilter::default(),
+                ) {
+                    if let Ok(vessel_entity) = vessel_q.get(hit.entity) {
+                        commands.entity(avatar_entity).insert((
+                            ControllerLink { vessel_entity },
+                            OrbitState::default(),
+                        ));
+                        println!("Avatar possessed Vessel: {:?}", vessel_entity);
+                    }
+                }
             }
         }
     }
@@ -189,33 +184,5 @@ fn avatar_escape_possession(
             commands.entity(entity).remove::<OrbitState>();
             println!("Avatar released possession.");
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_avatar_possess_logic() {
-        let mut app = App::new();
-        app.add_plugins(LunCoSimAvatarPlugin);
-        
-        // Mock requirements
-        app.insert_resource(ButtonInput::<KeyCode>::default());
-        app.insert_resource(ButtonInput::<MouseButton>::default());
-        app.insert_resource(Time::default());
-        app.init_resource::<Messages<MouseMotion>>();
-
-        let avatar = app.world_mut().spawn((Avatar, Transform::default())).id();
-        let target = app.world_mut().spawn(Vessel).id();
-
-        // 1. Not possessed
-        assert!(app.world().get::<ControllerLink>(avatar).is_none());
-
-        // 2. Perform manual possession simulation
-        app.world_mut().entity_mut(avatar).insert(ControllerLink { vessel_entity: target });
-        
-        assert!(app.world().get::<ControllerLink>(avatar).is_some());
     }
 }

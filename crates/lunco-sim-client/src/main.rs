@@ -62,7 +62,7 @@ fn draw_wheel_diagnostics(
     }
 
     for (joint, tf) in q_joints.iter() {
-        let world_hinge = tf.rotation() * joint.hinge_axis;
+        let world_hinge = tf.rotation() * joint.hinge_axis.as_vec3();
         let pos = tf.translation();
         gizmos.line(pos, pos + world_hinge * 2.5, Color::WHITE);
     }
@@ -93,7 +93,7 @@ fn setup_scenario(
             },
         })),
         RigidBody::Static,
-        Collider::cuboid(ground_size, 0.1, ground_size),
+        Collider::cuboid(ground_size as f64, 0.1_f64, ground_size as f64),
         Transform::from_xyz(0.0, -0.05, 0.0),
     ));
 
@@ -116,7 +116,7 @@ fn setup_scenario(
             },
         })),
         RigidBody::Static,
-        Collider::cuboid(ramp_size.x, ramp_size.y, ramp_size.z),
+        Collider::cuboid(ramp_size.x as f64, ramp_size.y as f64, ramp_size.z as f64),
         Transform::from_xyz(0.0, 0.3, 40.0)
             .with_rotation(Quat::from_rotation_x(-15.0_f32.to_radians())),
     ));
