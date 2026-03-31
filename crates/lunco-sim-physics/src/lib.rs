@@ -10,7 +10,6 @@ pub struct LunCoSimPhysicsPlugin;
 
 impl Plugin for LunCoSimPhysicsPlugin {
     fn build(&self, app: &mut App) {
-        println!("LunCoSimPhysicsPlugin Build Called");
         app.add_systems(FixedUpdate, (
             apply_motor_torques, 
             apply_brakes, 
@@ -26,6 +25,17 @@ pub struct Suspension {
     pub spring_k: f64,
     pub damping_c: f64,
     pub local_axis: DVec3,
+}
+
+impl Default for Suspension {
+    fn default() -> Self {
+        Self {
+            rest_length: 0.4,
+            spring_k: 50000.0,
+            damping_c: 2000.0,
+            local_axis: DVec3::Y,
+        }
+    }
 }
 
 fn suspension_system(
@@ -62,12 +72,10 @@ fn suspension_system(
             
             let total_force_mag: f64 = spring_force_mag + damping_force_mag;
             
-            static mut LOG_COUNT: i32 = 0;
-            unsafe {
-                if LOG_COUNT < 20 {
-                    println!("TICK {:?} - Susp Force: {} | Compression: {} | Length: {} | Pos1 Y: {} | Pos2 Y: {} | Anch1_Loc_None: {}", LOG_COUNT, total_force_mag, compression, current_length, pos1.y, pos2.y, joint.local_anchor1().is_none());
-                    LOG_COUNT += 1;
-                }
+            static LOG_COUNT: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+            let count = LOG_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if count < 20 {
+                println!("TICK {:?} - Susp Force: {} | Compression: {} | Length: {} | Pos1 Y: {} | Pos2 Y: {} | Anch1_Loc_None: {}", count, total_force_mag, compression, current_length, pos1.y, pos2.y, joint.local_anchor1().is_none());
             }
 
             if !total_force_mag.is_finite() { continue; }
@@ -164,7 +172,7 @@ fn spawn_joint_rover_internal(
 
     // No materials in tests to avoid shader panics
 
-    let mut rover_builder = commands.spawn((
+    let rover_builder = commands.spawn((
         Name::new(name.to_string()),
         RoverVessel,
         Vessel,

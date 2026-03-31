@@ -15,3 +15,5 @@ lunco-sim-obc = { path = "../lunco-sim-obc" }
 lunco-sim-attributes = { path = "../lunco-sim-attributes" }
 lunco-sim-avatar = { path = "../lunco-sim-avatar" }
 lunco-sim-rover-raycast = { path = "../lunco-sim-rover-raycast" }
+bevy_egui = { workspace = true }
+bevy-inspector-egui = { workspace = true }

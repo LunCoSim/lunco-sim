@@ -14,13 +14,32 @@ use lunco_sim_rover_raycast::{
     spawn_raycast_ackermann_rover, spawn_raycast_skid_rover, LunCoSimRoverRaycastPlugin,
 };
 mod blueprint_extension;
+mod ui;
 use blueprint_extension::{BlueprintExtension, BlueprintMaterial};
+use ui::LunCoSimUiPlugin;
+
+fn toggle_slow_motion(keyboard: Res<ButtonInput<KeyCode>>, mut time: ResMut<Time<Virtual>>) {
+    if keyboard.just_pressed(KeyCode::KeyT) {
+        // Toggle between 10% speed and normal speed
+        if time.relative_speed() < 1.0 {
+            time.set_relative_speed(1.0);
+            println!("Time: Normal Speed");
+        } else {
+            time.set_relative_speed(0.01);
+            println!("Time: Slow Motion (10%)");
+        }
+    }
+}
 
 fn main() {
     App::new()
         .insert_resource(Time::<Fixed>::from_hz(60.0))
         .add_plugins(DefaultPlugins)
-        .add_plugins(PhysicsPlugins::default()) // Avian3D
+        .add_plugins(
+            PhysicsPlugins::default()
+                .build()
+                .disable::<PhysicsInterpolationPlugin>(),
+        ) // Avian3D
         // LunCo Modules
         .add_plugins(lunco_sim_core::LunCoSimCorePlugin)
         .add_plugins(LunCoSimPhysicsPlugin)
@@ -31,8 +50,10 @@ fn main() {
         .add_plugins(LunCoSimAvatarPlugin)
         .add_plugins(LunCoSimRoverRaycastPlugin)
         .add_plugins(MaterialPlugin::<BlueprintMaterial>::default())
+        .add_plugins(LunCoSimUiPlugin)
         .add_systems(Startup, setup_scenario)
         .add_systems(Update, draw_wheel_diagnostics)
+        .add_systems(Update, toggle_slow_motion)
         .run();
 }
 

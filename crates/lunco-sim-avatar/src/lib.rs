@@ -15,12 +15,16 @@ impl Plugin for LunCoSimAvatarPlugin {
             avatar_raycast_possession,
             avatar_orbit_logic,
             avatar_escape_possession,
+            avatar_toggle_detached_mode,
         ).chain());
     }
 }
 
 #[derive(Component)]
 pub struct Avatar;
+
+#[derive(Component)]
+pub struct DetachedCamera;
 
 #[derive(Component)]
 pub struct OrbitState {
@@ -41,14 +45,41 @@ impl Default for OrbitState {
     }
 }
 
+fn avatar_toggle_detached_mode(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut commands: Commands,
+    q_avatar: Query<(Entity, Has<DetachedCamera>), (With<Avatar>, With<ControllerLink>)>,
+) {
+    if keys.just_pressed(KeyCode::KeyV) {
+        for (entity, is_detached) in q_avatar.iter() {
+            if is_detached {
+                commands.entity(entity).remove::<DetachedCamera>();
+                println!("Avatar Orbit Mode");
+            } else {
+                commands.entity(entity).insert(DetachedCamera);
+                println!("Avatar Detached Mode");
+            }
+        }
+    }
+}
+
 fn avatar_freecam_translation(
     keys: Res<ButtonInput<KeyCode>>,
     time: Res<Time>,
-    mut q_avatar: Query<&mut Transform, (With<Avatar>, Without<ControllerLink>)>,
+    mut q_avatar: Query<(&mut Transform, Has<DetachedCamera>), (With<Avatar>, Or<(Without<ControllerLink>, With<DetachedCamera>)>)>,
 ) {
-    let speed = 20.0 * time.delta_secs();
+    let mut speed = 20.0 * time.delta_secs();
+    if keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]) {
+        speed *= 2.0;
+    }
+    let ctrl_pressed = keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
     
-    for mut transform in q_avatar.iter_mut() {
+    for (mut transform, is_detached) in q_avatar.iter_mut() {
+        // If in detached mode (attached to rover but camera unlocked), require CTRL
+        if is_detached && !ctrl_pressed {
+            continue;
+        }
+
         let mut velocity = Vec3::ZERO;
         let forward = *transform.forward();
         let right = *transform.right();
@@ -69,7 +100,7 @@ fn avatar_freecam_translation(
 fn avatar_freecam_rotation(
     keys: Res<ButtonInput<MouseButton>>,
     mut mouse_motion: MessageReader<MouseMotion>,
-    mut q_avatar: Query<&mut Transform, (With<Avatar>, Without<ControllerLink>)>,
+    mut q_avatar: Query<&mut Transform, (With<Avatar>, Or<(Without<ControllerLink>, With<DetachedCamera>)>)>,
 ) {
     if !keys.pressed(MouseButton::Right) {
         let _ = mouse_motion.read().count();
@@ -97,7 +128,7 @@ fn avatar_orbit_logic(
     mut mouse_motion: MessageReader<MouseMotion>,
     mut scroll_events: MessageReader<MouseWheel>,
     time: Res<Time>,
-    mut q_avatar: Query<(&mut Transform, &mut OrbitState, &ControllerLink), With<Avatar>>,
+    mut q_avatar: Query<(&mut Transform, &mut OrbitState, &ControllerLink), (With<Avatar>, Without<DetachedCamera>)>,
     q_targets: Query<&GlobalTransform>,
 ) {
     for (mut transform, mut orbit, link) in q_avatar.iter_mut() {
@@ -183,6 +214,7 @@ fn avatar_escape_possession(
         for entity in q_avatar.iter_mut() {
             commands.entity(entity).remove::<ControllerLink>();
             commands.entity(entity).remove::<OrbitState>();
+            commands.entity(entity).remove::<DetachedCamera>();
             println!("Avatar released possession.");
         }
     }

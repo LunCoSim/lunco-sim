@@ -38,6 +38,22 @@ pub struct WheelRaycast {
     pub last_normal_force: f64,
 }
 
+impl Default for WheelRaycast {
+    fn default() -> Self {
+        Self {
+            suspension_port: Entity::PLACEHOLDER,
+            drive_port: Entity::PLACEHOLDER,
+            steer_port: Entity::PLACEHOLDER,
+            rest_length: 0.4,
+            spring_k: 8000.0,
+            damping_c: 2800.0,
+            wheel_radius: 0.4,
+            visual_entity: None,
+            last_normal_force: 0.0,
+        }
+    }
+}
+
 #[derive(Component)]
 pub struct RoverVessel;
 
@@ -277,7 +293,7 @@ fn spawn_raycast_rover_internal(
             let wheel_mesh_handle = _wheel_mesh.clone();
             commands.queue(move |world: &mut World| {
                 if world.contains_resource::<Assets<Mesh>>() && world.contains_resource::<Assets<StandardMaterial>>() {
-                    world.resource_scope::<Assets<Mesh>, _>(|world, mut mesh_assets| {
+                    world.resource_scope::<Assets<Mesh>, _>(|world, _mesh_assets| {
                         let mut material_assets = world.resource_mut::<Assets<StandardMaterial>>();
                         let color_to_use = if is_front { Color::from(Srgba::RED) } else { Color::from(Srgba::BLUE) };
                         let material = material_assets.add(StandardMaterial { base_color: color_to_use, perceptual_roughness: 0.5, ..default() });
