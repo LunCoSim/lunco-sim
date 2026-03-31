@@ -13,10 +13,14 @@ impl Plugin for LunCoSimAvatarPlugin {
             avatar_freecam_translation,
             avatar_freecam_rotation,
             avatar_raycast_possession,
-            avatar_orbit_logic,
+            avatar_orbit_input,
             avatar_escape_possession,
             avatar_toggle_detached_mode,
         ).chain());
+
+        app.add_systems(PostUpdate, (
+            avatar_camera_follow
+        ).after(PhysicsSystems::Writeback));
     }
 }
 
@@ -122,27 +126,25 @@ fn avatar_freecam_rotation(
     }
 }
 
-fn avatar_orbit_logic(
+fn avatar_orbit_input(
     keys: Res<ButtonInput<MouseButton>>,
     keys_input: Res<ButtonInput<KeyCode>>,
     mut mouse_motion: MessageReader<MouseMotion>,
     mut scroll_events: MessageReader<MouseWheel>,
     time: Res<Time>,
-    mut q_avatar: Query<(&mut Transform, &mut OrbitState, &ControllerLink), (With<Avatar>, Without<DetachedCamera>)>,
-    q_targets: Query<&GlobalTransform>,
+    mut q_avatar: Query<&mut OrbitState, (With<Avatar>, Without<DetachedCamera>)>,
 ) {
-    for (mut transform, mut orbit, link) in q_avatar.iter_mut() {
+    let mut delta = Vec2::ZERO;
+    for event in mouse_motion.read() {
+        delta += event.delta;
+    }
+
+    for mut orbit in q_avatar.iter_mut() {
         if keys.pressed(MouseButton::Right) {
-            let mut delta = Vec2::ZERO;
-            for event in mouse_motion.read() {
-                delta += event.delta;
-            }
             let sensitivity = 0.005;
             orbit.yaw -= delta.x * sensitivity;
             orbit.pitch -= delta.y * sensitivity;
             orbit.pitch = orbit.pitch.clamp(-1.5, -0.1);
-        } else {
-            let _ = mouse_motion.read().count();
         }
 
         for event in scroll_events.read() {
@@ -152,7 +154,15 @@ fn avatar_orbit_logic(
         let offset_speed = 5.0 * time.delta_secs();
         if keys_input.pressed(KeyCode::KeyE) { orbit.vertical_offset += offset_speed; }
         if keys_input.pressed(KeyCode::KeyQ) { orbit.vertical_offset -= offset_speed; }
+    }
+}
 
+fn avatar_camera_follow(
+    time: Res<Time>,
+    mut q_avatar: Query<(&mut Transform, &OrbitState, &ControllerLink), (With<Avatar>, Without<DetachedCamera>)>,
+    q_targets: Query<&GlobalTransform>,
+) {
+    for (mut transform, orbit, link) in q_avatar.iter_mut() {
         if let Ok(target_tf) = q_targets.get(link.vessel_entity) {
             let mut target_pos = target_tf.translation();
             target_pos.y += orbit.vertical_offset;
@@ -161,7 +171,7 @@ fn avatar_orbit_logic(
             let offset = rotation * Vec3::new(0.0, 0.0, orbit.distance);
             let desired_pos = target_pos + offset;
             
-            let lerp_factor = (5.0 * time.delta_secs()).min(1.0);
+            let lerp_factor = (10.0 * time.delta_secs()).min(1.0);
             transform.translation = transform.translation.lerp(desired_pos, lerp_factor);
             transform.look_at(target_pos, Vec3::Y);
         }

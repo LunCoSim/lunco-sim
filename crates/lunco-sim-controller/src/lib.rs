@@ -31,22 +31,29 @@ pub struct ControllerLink {
 /// Translates abstract human WASD actions into standardized FSW string intent.
 fn translate_intents_to_commands(
     q_controllers: Query<(&ActionState<SpaceSystemAction>, &ControllerLink)>,
+    keys: Res<ButtonInput<KeyCode>>,
     mut commands: Commands,
     mut last_intents: Local<Option<(f32, f32, f32)>>,
 ) {
-    for (action_state, link) in q_controllers.iter() {
-        // Forward/Reverse Intent Mixing
-        let mut forward_intent = 0.0;
-        if action_state.pressed(&SpaceSystemAction::DriveForward) { forward_intent += 1.0; }
-        if action_state.pressed(&SpaceSystemAction::DriveReverse) { forward_intent -= 1.0; }
-        
-        // Steering Intent Mixing
-        let mut steer_intent = 0.0;
-        if action_state.pressed(&SpaceSystemAction::SteerLeft) { steer_intent -= 1.0; }
-        if action_state.pressed(&SpaceSystemAction::SteerRight) { steer_intent += 1.0; }
+    let ctrl_pressed = keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
 
-        // Brake Intent (Stateful)
-        let brake_intent = if action_state.pressed(&SpaceSystemAction::Brake) { 1.0 } else { 0.0 };
+    for (action_state, link) in q_controllers.iter() {
+        // Forward/Reverse Intent Mixing (Inhibited by CTRL)
+        let mut forward_intent = 0.0;
+        if !ctrl_pressed {
+            if action_state.pressed(&SpaceSystemAction::DriveForward) { forward_intent += 1.0; }
+            if action_state.pressed(&SpaceSystemAction::DriveReverse) { forward_intent -= 1.0; }
+        }
+        
+        // Steering Intent Mixing (Inhibited by CTRL)
+        let mut steer_intent = 0.0;
+        if !ctrl_pressed {
+            if action_state.pressed(&SpaceSystemAction::SteerLeft) { steer_intent -= 1.0; }
+            if action_state.pressed(&SpaceSystemAction::SteerRight) { steer_intent += 1.0; }
+        }
+
+        // Brake Intent (Stateful, Inhibited by CTRL)
+        let brake_intent = if !ctrl_pressed && action_state.pressed(&SpaceSystemAction::Brake) { 1.0 } else { 0.0 };
 
         let current = (forward_intent, steer_intent, brake_intent);
         if last_intents.map_or(true, |last| last != current) {
