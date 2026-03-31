@@ -21,6 +21,7 @@ use rover_counter::RoverCountPlugin;
 fn main() {
     App::new()
         .insert_resource(Time::<Fixed>::from_hz(60.0))
+        .insert_resource(SubstepCount(8))
         .add_plugins(DefaultPlugins)
         .add_plugins(PhysicsPlugins::default()) // Avian3D
         // LunCo Modules

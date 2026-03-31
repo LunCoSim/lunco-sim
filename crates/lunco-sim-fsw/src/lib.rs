@@ -23,14 +23,19 @@ fn process_commands(
     mut q_digital_ports: Query<&mut DigitalPort>,
 ) {
     let cmd = trigger.event();
-    if let Ok(fsw) = q_fsw.get_mut(cmd.target) {
+    if let Ok(mut fsw) = q_fsw.get_mut(cmd.target) {
         match cmd.name.as_str() {
             "DRIVE_ROVER" => {
                 if cmd.args.len() >= 1 {
-                    let drive_power = (cmd.args[0] * 32767.0).clamp(-32767.0, 32767.0) as f32;
-                    let steer_power = if cmd.args.len() >= 2 {
+                    let mut drive_power = (cmd.args[0] * 32767.0).clamp(-32767.0, 32767.0) as f32;
+                    let mut steer_power = if cmd.args.len() >= 2 {
                         (cmd.args[1] * 32767.0).clamp(-32767.0, 32767.0) as f32
                     } else { 0.0 };
+
+                    if fsw.brake_active {
+                        drive_power = 0.0;
+                        steer_power = 0.0;
+                    }
 
                     // Differential Drive Mixing
                     let left_mix = (drive_power + steer_power).clamp(-32767.0, 32767.0) as i16;
@@ -49,18 +54,17 @@ fn process_commands(
             }
             "BRAKE_ROVER" => {
                 let brake_val = if cmd.args.len() >= 1 { cmd.args[0] } else { 1.0 };
-                let mut fsw_mut = q_fsw.get_mut(cmd.target).unwrap();
-                fsw_mut.brake_active = brake_val > 0.5;
+                fsw.brake_active = brake_val > 0.5;
 
-                let port_val = if fsw_mut.brake_active { 32767 } else { 0 };
+                let port_val = if fsw.brake_active { 32767 } else { 0 };
                 
-                if let Some(&port_b) = fsw_mut.port_map.get("brake") {
+                if let Some(&port_b) = fsw.port_map.get("brake") {
                     if let Ok(mut p) = q_digital_ports.get_mut(port_b) { p.raw_value = port_val; }
                 }
 
-                if fsw_mut.brake_active {
+                if fsw.brake_active {
                     for name in ["drive_left", "drive_right"] {
-                        if let Some(&port_id) = fsw_mut.port_map.get(name) {
+                        if let Some(&port_id) = fsw.port_map.get(name) {
                             if let Ok(mut port) = q_digital_ports.get_mut(port_id) {
                                 port.raw_value = 0;
                             }

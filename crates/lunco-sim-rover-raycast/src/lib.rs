@@ -44,45 +44,51 @@ fn apply_wheel_suspension(
     q_wheels: Query<(
         &WheelRaycast,
         &RayHits,
-        &GlobalTransform,
+        &Transform,
         &ChildOf,
     )>,
-    mut q_chassis: Query<Forces, With<RoverVessel>>,
-    mut q_visual: Query<&mut Transform, Without<WheelRaycast>>,
+    mut q_chassis: Query<(Forces, &Position, &Rotation), With<RoverVessel>>,
+    mut q_visual: Query<&mut Transform, (Without<WheelRaycast>, Without<RoverVessel>)>,
 ) {
     for (wheel, hits, wheel_tf, parent) in q_wheels.iter() {
         let parent_entity = Relationship::get(parent);
-        if let Ok(mut forces) = q_chassis.get_mut(parent_entity) {
+        if let Ok((mut forces, chassis_pos, chassis_rot)) = q_chassis.get_mut(parent_entity) {
             let mut closest_hit_dist = wheel.rest_length + wheel.wheel_radius;
+            
+            // Critical: Calculate world position from latest physics state to avoid GlobalTransform lag
+            let world_pos = chassis_pos.0 + chassis_rot.0 * wheel_tf.translation.as_dvec3();
+            let ray_dir_world = chassis_rot.0 * Vec3::NEG_Y.as_dvec3();
             
             if let Some(hit) = hits.iter_sorted().next() {
                 let distance = hit.distance as f32;
                 if distance < wheels_limit(wheel) {
                     closest_hit_dist = distance;
-                    let compression = (wheel.rest_length + wheel.wheel_radius) - distance;
-                    
+                    let compression = ((wheel.rest_length + wheel.wheel_radius) - distance).max(0.0);
                     let spring_force_mag = (compression * wheel.spring_k) as f64;
+                    
                     let lin_vel = forces.linear_velocity();
                     let ang_vel = forces.angular_velocity();
                     
-                    let world_pos = wheel_tf.translation().as_dvec3();
-                    let velocity_at_wheel = lin_vel + ang_vel.cross(world_pos - forces.position().0);
+                    let velocity_at_wheel = lin_vel + ang_vel.cross(world_pos - chassis_pos.0);
                     
-                    let ray_dir_world = (wheel_tf.rotation() * Vec3::NEG_Y).as_dvec3();
-                    let relative_vel = velocity_at_wheel.dot(ray_dir_world);
+                    let relative_vel = velocity_at_wheel.dot(ray_dir_world); // Positive when compressing (moving down)
                     
-                    let damping_force_mag = relative_vel * wheel.damping_c as f64;
+                    // One-way damping: resist compression only
+                    let damping_force_mag = (relative_vel * wheel.damping_c as f64).max(0.0);
                     let total_force_mag = (spring_force_mag + damping_force_mag).max(0.0);
                     
+                    // Apply force at the hub's world position
                     let force_vec = hit.normal * total_force_mag;
-                    let hit_point = world_pos + (ray_dir_world * hit.distance);
-                    forces.apply_force_at_point(force_vec, hit_point);
+                    forces.apply_force_at_point(force_vec, world_pos);
                 }
             }
 
             if let Some(visual_entity) = wheel.visual_entity {
                 if let Ok(mut visual_tf) = q_visual.get_mut(visual_entity) {
-                    let wheel_center_rel_y = -0.2 - closest_hit_dist + wheel.wheel_radius;
+                    // ray caster origin is wheel_tf.translation + (0, 0.5, 0)
+                    // relative Ground Y = (wheel_tf.y + 0.5) - closest_hit_dist
+                    // We want the wheel center to be Ground Y + radius
+                    let wheel_center_rel_y = (wheel_tf.translation.y + 0.5 - closest_hit_dist) + wheel.wheel_radius;
                     visual_tf.translation.y = wheel_center_rel_y;
                 }
             }
@@ -110,7 +116,7 @@ fn apply_wheel_drive(
             if let Ok(port) = q_ports.get(wheel.drive_port) {
                 if hits.iter().next().is_some() {
                     let forward = wheel_tf.forward().as_dvec3();
-                    let drive_force_mag = (port.value * 5000.0) as f64;
+                    let drive_force_mag = (port.value * 1000.0) as f64;
                     let force_vec = forward * drive_force_mag;
                     forces.apply_force_at_point(force_vec, wheel_tf.translation().as_dvec3());
                 }
@@ -221,9 +227,9 @@ fn spawn_raycast_rover_internal(
         let susp_port = commands.spawn(PhysicalPort { value: 0.0 }).id();
 
         let digital_source = if is_left { drive_l_digital } else { drive_r_digital };
-        commands.spawn(Wire { source: digital_source, target: drive_port, scale: 1.0 / 32767.0 });
+        commands.spawn(Wire { source: digital_source, target: drive_port, scale: 1.0 });
         if is_front && is_ackermann {
-            commands.spawn(Wire { source: steer_digital, target: steer_port, scale: 1.0 / 32767.0 });
+            commands.spawn(Wire { source: steer_digital, target: steer_port, scale: 1.0 });
         }
 
         let wheel_material = if is_front { red_material.clone() } else { blue_material.clone() };
@@ -243,12 +249,12 @@ fn spawn_raycast_rover_internal(
                 drive_port,
                 steer_port: if is_front { steer_port } else { Entity::PLACEHOLDER },
                 rest_length: 0.4,
-                spring_k: 40000.0,
-                damping_c: 2000.0, 
+                spring_k: 30000.0,
+                damping_c: 10000.0, 
                 wheel_radius: 0.4,
                 visual_entity: Some(visual_wheel),
             },
-            RayCaster::new(Vector::new(0.0, 0.2, 0.0), Dir3::NEG_Y)
+            RayCaster::new(Vector::new(0.0, 0.5, 0.0), Dir3::NEG_Y)
                 .with_max_distance(1.2)
                 .with_solidness(true)
                 .with_query_filter(SpatialQueryFilter::from_excluded_entities([rover_entity])),

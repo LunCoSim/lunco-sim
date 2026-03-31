@@ -15,6 +15,22 @@ pub struct Vessel;
 pub struct RoverVessel;
 
 impl Plugin for LunCoSimCorePlugin {
-    fn build(&self, _app: &mut App) {
+    fn build(&self, app: &mut App) {
+        app.add_systems(Update, wire_system);
+    }
+}
+
+fn wire_system(
+    q_wires: Query<&Wire>,
+    q_digital: Query<&DigitalPort>,
+    mut q_physical: Query<&mut PhysicalPort>,
+) {
+    for wire in q_wires.iter() {
+        if let Ok(digital) = q_digital.get(wire.source) {
+            if let Ok(mut physical) = q_physical.get_mut(wire.target) {
+                // Normalize i16 (-32768..32767) to -1.0..1.0 approximately, then apply scale
+                physical.value = (digital.raw_value as f32 / 32767.0) * wire.scale;
+            }
+        }
     }
 }
