@@ -9,14 +9,14 @@ members = [
     "crates/lunco-sim-avatar",
     "crates/lunco-sim-client",
     "crates/lunco-sim-rover-raycast"
-]
+, "crates/lunco-sim-celestial"]
 resolver = "2"
 
 [workspace.package]
 description = "Initialize multi-crate workspace architecture for vessel control simulation"
 
 [workspace.dependencies]
-bevy = { version = "0.18.1", features = ["dynamic_linking"] }
+bevy = { version = "0.18.1", features = ["default"] }
 avian3d = { version = "0.6.1", default-features = false, features = ["3d", "f64", "parry-f64", "parallel", "debug-plugin", "default-collider"] }
 big_space = "0.12.0"
 leafwing-input-manager = "0.20.0"
