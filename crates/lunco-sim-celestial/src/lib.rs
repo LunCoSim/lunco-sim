@@ -28,11 +28,7 @@ pub struct CelestialPlugin;
 
 impl Plugin for CelestialPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(CelestialClock { 
-            epoch: 2_451_545.0,
-            paused: false,
-            speed_multiplier: 100.0, 
-        }); // J2000 Epoch
+        app.init_resource::<CelestialClock>();
         app.init_resource::<TimeWarpState>();
         app.init_resource::<TerrainTileConfig>();
         app.insert_resource(CelestialBodyRegistry::default_system());
