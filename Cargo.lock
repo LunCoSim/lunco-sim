@@ -4225,12 +4225,14 @@ dependencies = [
 name = "lunco-sim-celestial"
 version = "0.1.0"
 dependencies = [
+ "avian3d",
  "bevy",
  "bevy_hierarchy",
  "big_space",
  "celestial-core",
  "celestial-ephemeris",
  "celestial-time",
+ "lunco-sim-core",
 ]
 
 [[package]]

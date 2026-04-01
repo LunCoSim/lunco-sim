@@ -3,6 +3,7 @@ use bevy_egui::{egui, EguiContexts, EguiPlugin, EguiPrimaryContextPass};
 use lunco_sim_physics::Suspension;
 use lunco_sim_rover_raycast::WheelRaycast;
 use lunco_sim_core::RoverVessel;
+use lunco_sim_celestial::CelestialClock;
 
 pub struct LunCoSimUiPlugin;
 
@@ -12,7 +13,7 @@ impl Plugin for LunCoSimUiPlugin {
             app.add_plugins(EguiPlugin::default());
         }
         app.init_resource::<SelectedRover>();
-        app.add_systems(EguiPrimaryContextPass, rover_control_ui);
+        app.add_systems(EguiPrimaryContextPass, main_ui_system);
     }
 }
 
@@ -21,13 +22,16 @@ struct SelectedRover {
     entity: Option<Entity>,
 }
 
-fn rover_control_ui(
+fn main_ui_system(
     mut contexts: EguiContexts,
     mut selected: ResMut<SelectedRover>,
     q_rovers: Query<(Entity, &Name), With<RoverVessel>>,
     mut q_suspension: Query<(Entity, &mut Suspension)>,
     mut q_raycast_wheels: Query<(Entity, &mut WheelRaycast)>,
     q_children: Query<&Children>,
+    mut world_clock: ResMut<CelestialClock>,
+    q_sun: Query<&GlobalTransform, (With<lunco_sim_celestial::CelestialBody>, With<lunco_sim_celestial::SolarSystemRoot>)>,
+    q_camera: Query<(&Camera, &GlobalTransform)>,
 ) {
     egui::Window::new("Rover Parameters")
         .default_width(300.0)
@@ -81,6 +85,73 @@ fn rover_control_ui(
                 }
             }
         });
+    
+    egui::Window::new("Celestial Control")
+        .default_width(300.0)
+        .show(contexts.ctx_mut().expect("No Egui context found"), |ui| {
+            ui.heading("Time Scrubber");
+            ui.separator();
+            
+            ui.label(format!("Julian Date: {:.4}", world_clock.epoch));
+            
+            ui.horizontal(|ui| {
+                if ui.button(if world_clock.paused { "▶ Play" } else { "⏸ Pause" }).clicked() {
+                    world_clock.paused = !world_clock.paused;
+                }
+            });
+
+            ui.label(format!("Speed: {:.0}x", world_clock.speed_multiplier));
+            
+            let multipliers = [1.0, 10.0, 100.0, 1000.0, 10000.0, 100000.0, 1000000.0];
+            ui.horizontal_wrapped(|ui| {
+                for &m in &multipliers {
+                    if ui.selectable_label(world_clock.speed_multiplier == m, format!("{}x", m)).clicked() {
+                        world_clock.speed_multiplier = m;
+                    }
+                }
+            });
+            
+            if ui.button("J2000").clicked() {
+                world_clock.epoch = 2_451_545.0;
+            }
+        });
+
+    // Sun Marker (FR-022)
+    draw_sun_marker(&mut contexts, &q_sun, &q_camera);
+}
+
+fn draw_sun_marker(
+    contexts: &mut EguiContexts,
+    q_sun: &Query<&GlobalTransform, (With<lunco_sim_celestial::CelestialBody>, With<lunco_sim_celestial::SolarSystemRoot>)>,
+    q_camera: &Query<(&Camera, &GlobalTransform)>,
+) {
+    let Some(sun_gtf) = q_sun.iter().next() else { return; };
+    let Some((camera, cam_gtf)) = q_camera.iter().next() else { return; };
+    
+    let sun_pos_abs = sun_gtf.translation();
+    let cam_pos_abs = cam_gtf.translation();
+    let dir_to_sun = (sun_pos_abs - cam_pos_abs).normalize_or_zero();
+    
+    // Project sun direction to screen
+    // We can't just project sun_pos_abs because it might be too far.
+    // Instead, project a point in the sun direction far away.
+    if let Ok(screen_pos) = camera.world_to_viewport(cam_gtf, cam_pos_abs + dir_to_sun * 1000.0) {
+        let ctx = contexts.ctx_mut().expect("No Egui context");
+        let painter = ctx.debug_painter();
+        
+        painter.circle_filled(
+            egui::pos2(screen_pos.x, screen_pos.y),
+            10.0,
+            egui::Color32::from_rgb(255, 255, 0),
+        );
+        painter.text(
+            egui::pos2(screen_pos.x, screen_pos.y + 15.0),
+            egui::Align2::CENTER_TOP,
+            "SUN",
+            egui::FontId::proportional(14.0),
+            egui::Color32::WHITE,
+        );
+    }
 }
 
 fn inspect_suspension_recursive(

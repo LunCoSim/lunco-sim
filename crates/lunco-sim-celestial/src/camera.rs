@@ -1,6 +1,6 @@
 use bevy::prelude::*;
-use bevy::input::mouse::{MouseWheel, MouseMotion};
-use bevy_hierarchy::Parent;
+use bevy::input::mouse::MouseWheel;
+// use bevy_hierarchy::Parent;
 use bevy::math::DVec3;
 use big_space::prelude::*;
 use crate::registry::CelestialBody;
@@ -61,13 +61,11 @@ pub fn update_camera_clip_planes_system(
             // Find distance to nearest body surface
             let mut min_altitude = 1.0e11; // Start large
             
-            for (body_gtf, _body) in q_bodies.iter() {
-                // In Phase 1, we don't have the radius in the component, so we might need it.
-                // For now, let's just use the center distance as an approximation or 
-                // just use the camera's absolute position if we had it.
+            for (body_gtf, body) in q_bodies.iter() {
                 let dist = cam_gtf.translation().distance(body_gtf.translation()) as f64;
-                if dist < min_altitude {
-                    min_altitude = dist;
+                let altitude = (dist - body.radius_m).max(1.0); // Surface or above
+                if altitude < min_altitude {
+                    min_altitude = altitude;
                 }
             }
             

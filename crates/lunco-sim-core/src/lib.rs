@@ -10,9 +10,15 @@ pub struct LunCoSimCorePlugin;
 
 #[derive(Component)]
 pub struct Vessel;
-
+ 
 #[derive(Component)]
 pub struct RoverVessel;
+
+#[derive(Resource, Default, Debug, Clone, Copy)]
+pub struct TimeWarpState {
+    pub speed: f64,
+    pub physics_enabled: bool,
+}
 
 impl Plugin for LunCoSimCorePlugin {
     fn build(&self, app: &mut App) {

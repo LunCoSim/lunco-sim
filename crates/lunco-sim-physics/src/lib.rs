@@ -15,7 +15,7 @@ impl Plugin for LunCoSimPhysicsPlugin {
             apply_brakes, 
             update_physics_sensors,
             suspension_system,
-        ).chain());
+        ).chain().run_if(|tw: Res<lunco_sim_core::TimeWarpState>| tw.physics_enabled));
     }
 }
 

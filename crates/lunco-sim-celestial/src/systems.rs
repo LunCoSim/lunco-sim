@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use bevy_hierarchy::Parent;
+// use bevy_hierarchy::Parent;
 use bevy::math::DQuat;
 use big_space::prelude::*;
 
@@ -12,7 +12,7 @@ use crate::coords::ecliptic_to_bevy;
 /// Each entity is relative to its parent grid origin.
 pub fn ephemeris_update_system(
     clock: Res<CelestialClock>,
-    registry: Res<CelestialBodyRegistry>,
+    _registry: Res<CelestialBodyRegistry>,
     ephemeris: Option<Res<EphemerisResource>>,
     mut q_entities: Query<(Entity, &mut CellCoord, &mut Transform, Option<&CelestialBody>, Option<&CelestialReferenceFrame>)>,
     q_all_parents: Query<&ChildOf>,

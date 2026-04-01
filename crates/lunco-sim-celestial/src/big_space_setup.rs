@@ -1,6 +1,8 @@
 use bevy::prelude::*;
 use big_space::prelude::*;
 use crate::registry::{CelestialBodyRegistry, CelestialReferenceFrame, CelestialBody};
+use crate::gravity::{GravityProvider, PointMassGravity};
+use crate::soi::SOI;
 
 #[derive(Component)]
 pub struct SolarSystemRoot;
@@ -74,6 +76,10 @@ pub fn setup_big_space_hierarchy(
             ephemeris_id: 399,
             radius_m: 6371.0e3,
         },
+        GravityProvider {
+            model: Box::new(PointMassGravity { gm: registry.bodies.iter().find(|d| d.ephemeris_id == 399).map(|d| d.gm).unwrap_or(3.986e14) }),
+        },
+        SOI { radius_m: registry.bodies.iter().find(|d| d.ephemeris_id == 399).and_then(|d| d.soi_radius_m).unwrap_or(924e6) },
         Name::new("Earth Frame"),
     )).id();
     commands.entity(earth_frame).set_parent_in_place(emb_root);
@@ -97,6 +103,10 @@ pub fn setup_big_space_hierarchy(
             ephemeris_id: 301,
             radius_m: 1737.0e3,
         },
+        GravityProvider {
+            model: Box::new(PointMassGravity { gm: registry.bodies.iter().find(|d| d.ephemeris_id == 301).map(|d| d.gm).unwrap_or(4.904e12) }),
+        },
+        SOI { radius_m: registry.bodies.iter().find(|d| d.ephemeris_id == 301).and_then(|d| d.soi_radius_m).unwrap_or(66e6) },
         Name::new("Moon Frame"),
     )).id();
     commands.entity(moon_frame).set_parent_in_place(emb_root);
@@ -118,6 +128,10 @@ pub fn setup_big_space_hierarchy(
                 base_color: Color::srgb(0.5, 0.5, 0.5),
                 ..default()
             })),
+            GravityProvider {
+                model: Box::new(PointMassGravity { gm: body_desc.gm }),
+            },
+            SOI { radius_m: body_desc.soi_radius_m.unwrap_or(1.0e12) },
             Name::new(body_desc.name.clone()),
         )).set_parent_in_place(solar_root);
     }
