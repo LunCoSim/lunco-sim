@@ -1,6 +1,5 @@
 use avian3d::prelude::*;
 use bevy::prelude::*;
-use bevy::input::mouse::{MouseMotion, MouseWheel};
 
 use lunco_sim_controller::ControllerLink;
 use lunco_sim_core::Vessel;
@@ -58,10 +57,8 @@ fn avatar_toggle_detached_mode(
         for (entity, is_detached) in q_avatar.iter() {
             if is_detached {
                 commands.entity(entity).remove::<DetachedCamera>();
-                println!("Avatar Orbit Mode");
             } else {
                 commands.entity(entity).insert(DetachedCamera);
-                println!("Avatar Detached Mode");
             }
         }
     }
@@ -73,48 +70,37 @@ fn avatar_freecam_translation(
     mut q_avatar: Query<(&mut Transform, Has<DetachedCamera>), (With<Avatar>, Or<(Without<ControllerLink>, With<DetachedCamera>)>)>,
 ) {
     let mut speed = 20.0 * time.delta_secs();
-    if keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]) {
-        speed *= 2.0;
-    }
+    if keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]) { speed *= 2.0; }
     let ctrl_pressed = keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
     
     for (mut transform, is_detached) in q_avatar.iter_mut() {
-        // If in detached mode (attached to rover but camera unlocked), require CTRL
-        if is_detached && !ctrl_pressed {
-            continue;
-        }
-
+        if is_detached && !ctrl_pressed { continue; }
         let mut velocity = Vec3::ZERO;
         let forward = *transform.forward();
         let right = *transform.right();
-        let up = Vec3::Y;
-
         if keys.pressed(KeyCode::KeyW) { velocity += forward; }
         if keys.pressed(KeyCode::KeyS) { velocity -= forward; }
         if keys.pressed(KeyCode::KeyD) { velocity += right; }
         if keys.pressed(KeyCode::KeyA) { velocity -= right; }
-        if keys.pressed(KeyCode::KeyE) { velocity += up; }
-        if keys.pressed(KeyCode::KeyQ) { velocity -= up; }
-
-        let normalized = velocity.normalize_or_zero();
-        transform.translation += normalized * speed;
+        if keys.pressed(KeyCode::KeyE) { velocity += Vec3::Y; }
+        if keys.pressed(KeyCode::KeyQ) { velocity -= Vec3::Y; }
+        transform.translation += velocity.normalize_or_zero() * speed;
     }
 }
 
 fn avatar_freecam_rotation(
     keys: Res<ButtonInput<MouseButton>>,
-    mut mouse_motion: MessageReader<MouseMotion>,
     mut q_avatar: Query<&mut Transform, (With<Avatar>, Or<(Without<ControllerLink>, With<DetachedCamera>)>)>,
+    windows: Query<&Window>,
+    mut last_mouse_pos: Local<Option<Vec2>>,
 ) {
-    if !keys.pressed(MouseButton::Right) {
-        let _ = mouse_motion.read().count();
-        return;
-    }
-
+    let window = windows.iter().next();
+    let curr = window.and_then(|w| w.cursor_position());
     let mut delta = Vec2::ZERO;
-    for event in mouse_motion.read() {
-        delta += event.delta;
+    if let (Some(c), Some(l)) = (curr, *last_mouse_pos) {
+        if keys.pressed(MouseButton::Right) { delta = c - l; }
     }
+    *last_mouse_pos = curr;
 
     let sensitivity = 0.005;
     for mut transform in q_avatar.iter_mut() {
@@ -129,15 +115,22 @@ fn avatar_freecam_rotation(
 fn avatar_orbit_input(
     keys: Res<ButtonInput<MouseButton>>,
     keys_input: Res<ButtonInput<KeyCode>>,
-    mut mouse_motion: MessageReader<MouseMotion>,
-    mut scroll_events: MessageReader<MouseWheel>,
     time: Res<Time>,
+    windows: Query<&Window>,
+    mut last_mouse_pos: Local<Option<Vec2>>,
     mut q_avatar: Query<&mut OrbitState, (With<Avatar>, Without<DetachedCamera>)>,
 ) {
+    let window = windows.iter().next();
+    let curr = window.and_then(|w| w.cursor_position());
     let mut delta = Vec2::ZERO;
-    for event in mouse_motion.read() {
-        delta += event.delta;
+    if let (Some(c), Some(l)) = (curr, *last_mouse_pos) {
+        if keys.pressed(MouseButton::Right) { delta = c - l; }
     }
+    *last_mouse_pos = curr;
+
+    let mut scroll = 0.0;
+    if keys_input.pressed(KeyCode::Equal) { scroll += 1.0; }
+    if keys_input.pressed(KeyCode::Minus) { scroll -= 1.0; }
 
     for mut orbit in q_avatar.iter_mut() {
         if keys.pressed(MouseButton::Right) {
@@ -146,11 +139,7 @@ fn avatar_orbit_input(
             orbit.pitch -= delta.y * sensitivity;
             orbit.pitch = orbit.pitch.clamp(-1.5, -0.1);
         }
-
-        for event in scroll_events.read() {
-            orbit.distance = (orbit.distance - event.y * 2.0).clamp(2.0, 100.0);
-        }
-
+        orbit.distance = (orbit.distance - scroll * 2.0).clamp(2.0, 100.0);
         let offset_speed = 5.0 * time.delta_secs();
         if keys_input.pressed(KeyCode::KeyE) { orbit.vertical_offset += offset_speed; }
         if keys_input.pressed(KeyCode::KeyQ) { orbit.vertical_offset -= offset_speed; }
@@ -166,13 +155,10 @@ fn avatar_camera_follow(
         if let Ok(target_tf) = q_targets.get(link.vessel_entity) {
             let mut target_pos = target_tf.translation();
             target_pos.y += orbit.vertical_offset;
-            
             let rotation = Quat::from_euler(EulerRot::YXZ, orbit.yaw, orbit.pitch, 0.0);
             let offset = rotation * Vec3::new(0.0, 0.0, orbit.distance);
-            let desired_pos = target_pos + offset;
-            
             let lerp_factor = (10.0 * time.delta_secs()).min(1.0);
-            transform.translation = transform.translation.lerp(desired_pos, lerp_factor);
+            transform.translation = transform.translation.lerp(target_pos + offset, lerp_factor);
             transform.look_at(target_pos, Vec3::Y);
         }
     }
@@ -182,32 +168,19 @@ fn avatar_raycast_possession(
     mouse: Res<ButtonInput<MouseButton>>,
     windows: Query<&Window>,
     camera_q: Query<(&Camera, &GlobalTransform, Entity), (With<Avatar>, Without<ControllerLink>)>,
-    spatial_query: SpatialQuery,
+    spatial_query: Option<SpatialQuery>,
     mut commands: Commands,
     vessel_q: Query<Entity, With<Vessel>>,
 ) {
-    if !mouse.just_pressed(MouseButton::Left) {
-        return;
-    }
-
+    let Some(spatial_query) = spatial_query else { return; };
+    if !mouse.just_pressed(MouseButton::Left) { return; }
     let Some(window) = windows.iter().next() else { return };
     if let Some(cursor_position) = window.cursor_position() {
         for (camera, camera_transform, avatar_entity) in camera_q.iter() {
             if let Ok(f32_ray) = camera.viewport_to_world(camera_transform, cursor_position) {
-                // In Bevy 0.18, spatial_query.cast_ray takes DVec3 origin and Dir3 direction (Dir alias).
-                if let Some(hit) = spatial_query.cast_ray(
-                    f32_ray.origin.as_dvec3(),
-                    f32_ray.direction,
-                    1000.0,
-                    true,
-                    &SpatialQueryFilter::default(),
-                ) {
+                if let Some(hit) = spatial_query.cast_ray(f32_ray.origin.as_dvec3(), f32_ray.direction, 1000.0, true, &SpatialQueryFilter::default()) {
                     if let Ok(vessel_entity) = vessel_q.get(hit.entity) {
-                        commands.entity(avatar_entity).insert((
-                            ControllerLink { vessel_entity },
-                            OrbitState::default(),
-                        ));
-                        println!("Avatar possessed Vessel: {:?}", vessel_entity);
+                        commands.entity(avatar_entity).insert((ControllerLink { vessel_entity }, OrbitState::default()));
                     }
                 }
             }
@@ -225,7 +198,6 @@ fn avatar_escape_possession(
             commands.entity(entity).remove::<ControllerLink>();
             commands.entity(entity).remove::<OrbitState>();
             commands.entity(entity).remove::<DetachedCamera>();
-            println!("Avatar released possession.");
         }
     }
 }

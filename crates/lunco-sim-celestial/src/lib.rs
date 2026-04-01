@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use bevy::math::DVec3;
 use lunco_sim_core::TimeWarpState;
 
 mod clock;
@@ -24,6 +25,18 @@ pub use soi::*;
 pub use terrain::*;
 pub use trajectories::*;
 
+#[derive(Event, Debug, Clone, Copy)]
+pub struct SurfaceClickEvent {
+    pub planet: Entity,
+    pub click_pos_local: DVec3, // Relative to planet center (solar/root units)
+    pub surface_normal: Vec3,
+}
+
+#[derive(Event, Debug, Clone, Copy)]
+pub struct RoverClickEvent {
+    pub rover: Entity,
+}
+
 pub struct CelestialPlugin;
 
 impl Plugin for CelestialPlugin {
@@ -37,6 +50,7 @@ impl Plugin for CelestialPlugin {
             provider: Box::new(ephemeris::CelestialEphemerisProvider::new()),
         });
         
+        // No add_event needed in Bevy 0.18 Observer pattern
         app.add_plugins(big_space::prelude::BigSpaceDefaultPlugins);
         app.add_plugins(trajectories::TrajectoryPlugin);
 
@@ -49,15 +63,13 @@ impl Plugin for CelestialPlugin {
             celestial_clock_tick_system,
             ephemeris_update_system,
             body_rotation_system,
-            camera::camera_migration_system,
-            camera::update_observer_camera_system,
             soi_transition_system,
         ).chain());
 
+        app.add_plugins(camera::CameraMigrationPlugin);
+
         app.add_systems(Update, (
             update_sun_light_system,
-            camera::camera_selection_system,
-            camera::update_camera_clip_planes_system,
             celestial_telemetry_system,
         ).chain());
         

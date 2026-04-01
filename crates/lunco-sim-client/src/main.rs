@@ -25,6 +25,10 @@ fn main() {
 
     app.add_plugins(MaterialPlugin::<BlueprintMaterial>::default())
         .add_plugins(LunCoSimUiPlugin) 
+        .add_plugins(lunco_sim_physics::LunCoSimPhysicsPlugin)
+        .add_plugins(lunco_sim_controller::LunCoSimControllerPlugin)
+        .add_plugins(lunco_sim_rover_raycast::LunCoSimRoverRaycastPlugin)
+        .add_plugins(lunco_sim_avatar::LunCoSimAvatarPlugin)
         .add_systems(Update, toggle_slow_motion)
         .run();
 }

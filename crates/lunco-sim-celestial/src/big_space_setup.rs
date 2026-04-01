@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use bevy::math::DVec3;
 use big_space::prelude::*;
 use crate::registry::{CelestialBodyRegistry, CelestialReferenceFrame, CelestialBody};
 use crate::gravity::{GravityProvider, PointMassGravity};
@@ -152,9 +153,11 @@ pub fn setup_big_space_hierarchy(
         GlobalTransform::default(),
         crate::ObserverCamera {
             focus_target: Some(earth_body),
+            mode: crate::ObserverMode::Orbital,
             distance: 15_000_000.0,
             pitch: -0.4,
             yaw: 0.0,
+            local_flyby_pos: DVec3::ZERO,
         },
         crate::ActiveCamera,
         Name::new("Observer Camera"),

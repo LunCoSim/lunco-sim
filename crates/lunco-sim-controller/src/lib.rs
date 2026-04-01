@@ -77,3 +77,14 @@ fn translate_intents_to_commands(
         }
     }
 }
+
+pub fn get_default_input_map() -> InputMap<SpaceSystemAction> {
+    use SpaceSystemAction::*;
+    InputMap::new([
+        (DriveForward, KeyCode::KeyW),
+        (DriveReverse, KeyCode::KeyS),
+        (SteerLeft, KeyCode::KeyA),
+        (SteerRight, KeyCode::KeyD),
+        (Brake, KeyCode::Space),
+    ])
+}

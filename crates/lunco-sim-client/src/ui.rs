@@ -1,8 +1,9 @@
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts, EguiPlugin, EguiPrimaryContextPass};
+use lunco_sim_core::{RoverVessel, Vessel};
+use lunco_sim_celestial::{CelestialClock, ObserverCamera, CelestialBody, ActiveCamera};
+use lunco_sim_controller::{ControllerLink, SpaceSystemAction, get_default_input_map};
 use lunco_sim_physics::Suspension;
-use lunco_sim_core::RoverVessel;
-use lunco_sim_celestial::{CelestialClock, ObserverCamera, CelestialBody, ActiveTerrainTile};
 
 pub struct LunCoSimUiPlugin;
 
@@ -11,190 +12,158 @@ impl Plugin for LunCoSimUiPlugin {
         if !app.is_plugin_added::<EguiPlugin>() {
             app.add_plugins(EguiPlugin::default());
         }
-        app.init_resource::<SelectedRover>()
-           .add_systems(PreUpdate, manual_egui_input_bridge) 
+        app.init_resource::<SelectedEntity>()
+           .init_resource::<PendingSpawn>()
+           .add_observer(on_surface_click)
+           .add_observer(on_rover_click)
            .add_systems(EguiPrimaryContextPass, main_ui_system);
     }
 }
 
 #[derive(Resource, Default)]
-struct SelectedRover {
+struct SelectedEntity {
     entity: Option<Entity>,
 }
 
-fn manual_egui_input_bridge(
-    mut contexts: EguiContexts,
-    mut click_events: MessageReader<bevy::input::mouse::MouseButtonInput>,
-) {
-    let Ok(ctx) = contexts.ctx_mut() else { return; };
-    for event in click_events.read() {
-        let pressed = event.state == bevy::input::ButtonState::Pressed;
-        let button = match event.button {
-            MouseButton::Left => egui::PointerButton::Primary,
-            MouseButton::Right => egui::PointerButton::Secondary,
-            _ => egui::PointerButton::Middle,
-        };
+#[derive(Resource, Default)]
+struct PendingSpawn {
+    request: Option<lunco_sim_celestial::SurfaceClickEvent>,
+}
 
-        ctx.input_mut(|i| {
-            i.events.push(egui::Event::PointerButton {
-                pos: i.pointer.hover_pos().unwrap_or(egui::Pos2::ZERO),
-                button,
-                pressed,
-                modifiers: egui::Modifiers::default(),
-            });
-        });
-    }
+fn on_surface_click(
+    trigger: On<lunco_sim_celestial::SurfaceClickEvent>,
+    mut pending: ResMut<PendingSpawn>,
+) {
+    let ev = trigger.event();
+    pending.request = Some(lunco_sim_celestial::SurfaceClickEvent {
+        planet: ev.planet,
+        click_pos_local: ev.click_pos_local,
+        surface_normal: ev.surface_normal,
+    });
+}
+
+fn on_rover_click(
+    trigger: On<lunco_sim_celestial::RoverClickEvent>,
+    mut selected: ResMut<SelectedEntity>,
+) {
+    selected.entity = Some(trigger.event().rover);
 }
 
 fn main_ui_system(
-    mut commands: Commands,
     mut contexts: EguiContexts,
-    mut selected: ResMut<SelectedRover>,
-    q_rovers: Query<(Entity, &Name), With<RoverVessel>>,
-    mut q_suspension: Query<(Entity, &mut Suspension)>,
+    mut selected: ResMut<SelectedEntity>,
+    mut pending: ResMut<PendingSpawn>,
+    mut clock: ResMut<CelestialClock>,
+    q_rovers: Query<(Entity, &Name, &Vessel), With<RoverVessel>>,
+    q_bodies: Query<(Entity, &Name, &CelestialBody)>,
+    mut q_camera: Query<(Entity, &mut ObserverCamera), With<ActiveCamera>>,
     q_children: Query<&Children>,
-    world_clock: Option<ResMut<CelestialClock>>,
-    q_sun: Query<&GlobalTransform, (With<CelestialBody>, With<lunco_sim_celestial::SolarSystemRoot>)>,
-    mut q_camera: Query<(Entity, &Camera, &GlobalTransform, &mut ObserverCamera)>,
-    q_bodies: Query<(Entity, &GlobalTransform, &CelestialBody, &Name)>,
-    q_tiles: Query<Entity, With<ActiveTerrainTile>>,
-    mut frame_timer: Local<u32>,
+    mut q_suspension: Query<(Entity, &mut Suspension)>,
+    mut commands: Commands,
+    mut scroll_res: ResMut<lunco_sim_celestial::CameraScroll>,
 ) {
-    *frame_timer += 1;
-    if *frame_timer < 5 { return; }
-
     let Ok(ctx) = contexts.ctx_mut() else { return; };
-    let Some(mut world_clock) = world_clock else { return; };
-
-    let mut focus_rover_ui = false;
-    let mut current_focus = None;
-    if let Some((_, _, _, obs)) = q_camera.iter().next() {
-        if let Some(target) = obs.focus_target {
-            current_focus = Some(target);
-            if q_rovers.contains(target) {
-                focus_rover_ui = true;
-            }
-        }
+    
+    // Capture scroll before Egui potentially consumes it (if not over window)
+    if !ctx.is_pointer_over_area() {
+        scroll_res.delta = ctx.input(|i| i.raw_scroll_delta.y);
     }
 
-    if focus_rover_ui {
-        egui::Window::new("Rover Parameters").default_width(300.0).show(ctx, |ui| {
-            ui.heading("Settings");
-            ui.separator();
-            ui.label("Select Rover:");
-            egui::ComboBox::from_id_salt("rover_select").selected_text(selected.entity.and_then(|e| q_rovers.get(e).ok()).map(|(_, name)| name.as_str()).unwrap_or("None")).show_ui(ui, |ui| {
-                for (entity, name) in q_rovers.iter() {
-                    ui.selectable_value(&mut selected.entity, Some(entity), name.as_str());
-                }
-            });
-            if let Some(rover_entity) = selected.entity {
-                if let Ok((_ent, name)) = q_rovers.get(rover_entity) {
-                    ui.group(|ui| {
-                        ui.label(format!("Editing: {}", name));
-                        if let Ok(children) = q_children.get(rover_entity) {
-                             ui.collapsing("Suspension Parameters", |ui| {
-                                for child in children.iter() {
-                                    inspect_suspension_recursive(ui, child, &q_children, &mut q_suspension);
-                                }
-                             });
-                        }
-                    });
-                }
+    egui::Window::new("Mission Control").show(ctx, |ui| {
+        ui.heading("Epoch & UTC Time");
+        ui.label(format!("JD: {:.4}", clock.epoch));
+        ui.label(format!("UTC: {}", clock.to_utc_string()));
+        
+        ui.horizontal(|ui| {
+            if ui.button(if clock.paused { "▶ Play" } else { "⏸ Pause" }).clicked() {
+                clock.paused = !clock.paused;
             }
         });
-    }
 
-    egui::Window::new("Celestial Control").default_width(320.0).show(ctx, |ui| {
-        ui.heading("Mission Status");
-        ui.separator();
-        
-        // Navigation Metadata
-        if let Some((_, _, cam_gtf, _)) = q_camera.iter().next() {
-            if let Some(target) = current_focus {
-                if let Ok((_, target_gtf, body, name)) = q_bodies.get(target) {
-                     let dist_m = cam_gtf.translation().distance(target_gtf.translation()) as f64;
-                     let altitude_km = (dist_m - body.radius_m) / 1000.0;
-                     
-                     ui.group(|ui| {
-                         ui.label(format!("TARGET: {}", name.as_str()));
-                         ui.label(format!("RANGE: {:.1} km", dist_m / 1000.0));
-                         if altitude_km < 100_000.0 {
-                             ui.colored_label(egui::Color32::from_rgb(0, 255, 150), format!("ALTITUDE: {:.2} km", altitude_km));
-                         }
-                     });
-                }
-            }
-        }
-
-        ui.separator();
-        // Landing Logic
-        if !q_tiles.is_empty() {
-             ui.group(|ui| {
-                ui.label("READY FOR LANDING");
-                if ui.button("L - SPAWN ROVER").clicked() {
-                    for (_, _, cam_gtf, mut obs) in q_camera.iter_mut() {
-                        let mut nearest_body = None;
-                        let mut min_dist = f32::MAX;
-                        for (body_ent, body_gtf, body, _) in q_bodies.iter() {
-                            let dist = cam_gtf.translation().distance(body_gtf.translation());
-                            if dist < min_dist {
-                                min_dist = dist;
-                                nearest_body = Some((body_ent, body_gtf, body));
-                            }
-                        }
-                        if let Some((body_ent, body_gtf, body)) = nearest_body {
-                            let rover_id = lunco_sim_celestial::spawn_rover_at_camera_surface(&mut commands, cam_gtf, body_gtf, body, body_ent);
-                            obs.focus_target = Some(rover_id);
-                            obs.distance = 50.0;
-                        }
-                    }
-                }
-             });
-        }
-
-        ui.separator();
-        ui.label(format!("UTC: {}", world_clock.to_utc_string()));
-        ui.label(format!("JD: {:.4}", world_clock.epoch));
-        ui.horizontal(|ui| { if ui.button(if world_clock.paused { "▶ Play" } else { "⏸ Pause" }).clicked() { world_clock.paused = !world_clock.paused; } });
         ui.horizontal_wrapped(|ui| { 
             let multipliers = [1.0, 10.0, 100.0, 1000.0, 10000.0, 100000.0, 1000000.0];
-            for &m in &multipliers { 
-               if ui.selectable_label(world_clock.speed_multiplier == m, format!("{}x", m)).clicked() { 
-                   world_clock.speed_multiplier = m; 
-               } 
-            } 
+            for &m in multipliers.iter() {
+                if ui.selectable_label(clock.speed_multiplier == m, format!("{}x", m)).clicked() {
+                    clock.speed_multiplier = m;
+                }
+            }
         });
-        
+
         ui.separator();
-        ui.label("Focus Target:");
-        for (_, _, _, mut obs) in q_camera.iter_mut() {
-            ui.horizontal_wrapped(|ui| {
-                for (entity, _, _, name) in q_bodies.iter() {
-                    if ui.selectable_label(obs.focus_target == Some(entity), name.as_str()).clicked() { obs.focus_target = Some(entity); }
+        ui.collapsing("Celestial Bodies", |ui| {
+            for (entity, name, _) in q_bodies.iter() {
+                if ui.selectable_label(selected.entity == Some(entity), format!("{}", name)).clicked() {
+                    selected.entity = Some(entity);
                 }
-                for (entity, name) in q_rovers.iter() {
-                    if ui.selectable_label(obs.focus_target == Some(entity), name.as_str()).clicked() { obs.focus_target = Some(entity); }
+            }
+        });
+
+        ui.collapsing("Local Vessels", |ui| {
+            for (entity, name, _) in q_rovers.iter() {
+                 if ui.selectable_label(selected.entity == Some(entity), format!("{}", name)).clicked() {
+                     selected.entity = Some(entity);
+                 }
+            }
+        });
+
+        if let Some(target) = selected.entity {
+            ui.separator();
+            ui.heading("Selection Details");
+            ui.label(format!("ID: {:?}", target));
+            
+            if ui.button("Focus Camera").clicked() {
+                for (_, mut obs) in q_camera.iter_mut() {
+                    obs.focus_target = Some(target);
                 }
-            });
+            }
+
+            if q_rovers.contains(target) {
+                if ui.button("Take Control (Possess)").clicked() {
+                    commands.entity(target).insert((
+                        leafwing_input_manager::prelude::ActionState::<SpaceSystemAction>::default(),
+                        get_default_input_map(),
+                        ControllerLink { vessel_entity: target },
+                    ));
+                    for (_, mut obs) in q_camera.iter_mut() {
+                        obs.focus_target = Some(target);
+                    }
+                }
+                
+                ui.collapsing("Mechanical Inspector", |ui| {
+                    inspect_suspension_recursive(ui, target, &q_children, &mut q_suspension);
+                });
+            }
+        }
+
+        if let Some(_) = pending.request {
+             ui.separator();
+             ui.heading("Surface Spawning");
+             if ui.button("Confirm Spawn: Lunar Explorer").clicked() {
+                 commands.spawn((Name::new("Lunar Explorer"), RoverVessel, Vessel));
+                 pending.request = None;
+             }
+             if ui.button("Cancel").clicked() {
+                 pending.request = None;
+             }
         }
     });
 
-    draw_sun_marker(contexts, &q_sun, &q_camera);
+    egui::Window::new("Telemetry").anchor(egui::Align2::RIGHT_TOP, [-10.0, 10.0]).show(ctx, |ui| {
+        for (_, obs) in q_camera.iter() {
+            ui.label(format!("Mode: {:?}", obs.mode));
+            ui.label(format!("Dist: {:.1}m", obs.distance));
+        }
+        ui.label("SCROLL or +/- to zoom");
+        ui.label("Right-Click rotate");
+    });
 }
 
-fn draw_sun_marker(mut contexts: EguiContexts, q_sun: &Query<&GlobalTransform, (With<CelestialBody>, With<lunco_sim_celestial::SolarSystemRoot>)>, q_camera: &Query<(Entity, &Camera, &GlobalTransform, &mut ObserverCamera)>) {
-    let Some(sun_gtf) = q_sun.iter().next() else { return; };
-    let Some((_, camera, cam_gtf, _)) = q_camera.iter().next() else { return; };
-    let dir_to_sun = (sun_gtf.translation() - cam_gtf.translation()).normalize_or_zero();
-    if let Ok(screen_pos) = camera.world_to_viewport(cam_gtf, cam_gtf.translation() + dir_to_sun * 100.0) {
-        let Ok(ctx) = contexts.ctx_mut() else { return; };
-        let painter = ctx.debug_painter();
-        painter.circle_filled(egui::pos2(screen_pos.x, screen_pos.y), 10.0, egui::Color32::from_rgb(255, 255, 0));
-        painter.text(egui::pos2(screen_pos.x, screen_pos.y + 15.0), egui::Align2::CENTER_TOP, "SUN", egui::FontId::proportional(14.0), egui::Color32::WHITE);
-    }
-}
-
-fn inspect_suspension_recursive(ui: &mut egui::Ui, entity: Entity, q_children: &Query<&Children>, q_suspension: &mut Query<(Entity, &mut Suspension)>) {
+fn inspect_suspension_recursive(
+    ui: &mut egui::Ui,
+    entity: Entity,
+    q_children: &Query<&Children>,
+    q_suspension: &mut Query<(Entity, &mut Suspension)>,
+) {
     if let Ok((_e, mut susp)) = q_suspension.get_mut(entity) {
         ui.label(format!("Hub: {:?}", entity));
         ui.add(egui::Slider::new(&mut susp.rest_length, 0.1..=2.0).text("Rest Length"));
@@ -202,5 +171,9 @@ fn inspect_suspension_recursive(ui: &mut egui::Ui, entity: Entity, q_children: &
         ui.add(egui::Slider::new(&mut susp.damping_c, 100.0..=10000.0).text("Damping C"));
         ui.separator();
     }
-    if let Ok(children) = q_children.get(entity) { for child in children.iter() { inspect_suspension_recursive(ui, child, q_children, q_suspension); } }
+    if let Ok(children) = q_children.get(entity) {
+        for child in children.iter() {
+            inspect_suspension_recursive(ui, child, q_children, q_suspension);
+        }
+    }
 }
