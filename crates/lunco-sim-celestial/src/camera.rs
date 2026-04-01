@@ -17,6 +17,7 @@ pub struct ObserverCamera {
 pub struct ActiveCamera;
 
 pub fn update_observer_camera_system(
+    mut commands: Commands,
     mut q_camera: Query<(bevy::prelude::Entity, &mut ObserverCamera, &mut big_space::prelude::CellCoord, &mut bevy::prelude::Transform, &ActiveCamera), bevy::prelude::Without<CelestialBody>>,
     q_targets: Query<(&big_space::prelude::CellCoord, &bevy::prelude::Transform, &bevy::prelude::GlobalTransform, &CelestialBody), bevy::prelude::Without<ObserverCamera>>,
     q_all_parents: Query<&bevy::prelude::ChildOf>,
@@ -46,7 +47,7 @@ pub fn update_observer_camera_system(
         }
 
         // 3. Keep camera at 'distance' from target in target's parent grid
-        if let (Ok(cam_child_of), Ok(target_child_of)) = (q_all_parents.get(entity), q_all_parents.get(target_entity)) {
+        if let Ok(target_child_of) = q_all_parents.get(target_entity) {
             let target_parent = target_child_of.parent();
             let Ok(grid) = q_grids.get(target_parent) else { continue; };
             
@@ -58,14 +59,21 @@ pub fn update_observer_camera_system(
 
             let (new_cell, new_tf) = grid.translation_to_grid(desired_pos);
             
-            if cam_child_of.parent() == target_parent {
-                *cam_cell = new_cell;
-                cam_tf.translation = new_tf;
-                
-                // Keep the target at center
-                let look_tgt = target_tf.translation;
-                cam_tf.look_at(look_tgt, Vec3::Y);
+            if let Ok(cam_child_of) = q_all_parents.get(entity) {
+                if cam_child_of.parent() != target_parent {
+                    // Move camera to target's grid
+                    commands.entity(entity).set_parent_in_place(target_parent);
+                }
             }
+            
+            // Apply new position (even if we just re-parented, next frame will be stable)
+            // But we can apply it now to target_tf in the same grid.
+            *cam_cell = new_cell;
+            cam_tf.translation = new_tf;
+            
+            // Keep the target at center
+            let look_tgt = target_tf.translation;
+            cam_tf.look_at(look_tgt, Vec3::Y);
         }
     }
 }

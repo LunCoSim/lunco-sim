@@ -33,7 +33,7 @@ pub fn soi_transition_system(
         }
 
         if let Some(new_parent_grid_ent) = best_body {
-            if new_parent_grid_ent != current_p_grid {
+            if new_parent_grid_ent != current_p_grid && q_all_grids.contains(new_parent_grid_ent) {
                 if let Ok(new_grid) = q_all_grids.get(new_parent_grid_ent) {
                     // Re-parent in big_space
                     let (new_cell, new_transform) = new_grid.translation_to_grid(current_pos - q_bodies.get(new_parent_grid_ent).unwrap().1.translation().as_dvec3());
