@@ -10,11 +10,36 @@ pub struct CelestialClock {
 
 impl Default for CelestialClock {
     fn default() -> Self {
-        // Initialize from system time or J2000
+        use chrono::Utc;
+        
+        // Initializing from current system time
+        let now = Utc::now();
+        let unix_timestamp = now.timestamp() as f64 + (now.timestamp_subsec_nanos() as f64 / 1e9);
+        
+        // JD = (Unix Timestamp / 86400.0) + 2440587.5
+        let epoch = (unix_timestamp / 86400.0) + 2440587.5;
+        
         Self {
-            epoch: 2_451_545.0, // J2000.0 epoch default
+            epoch,
             speed_multiplier: 1.0,
             paused: false,
+        }
+    }
+}
+
+impl CelestialClock {
+    pub fn to_utc_string(&self) -> String {
+        use chrono::{Utc, TimeZone};
+        
+        // Convert Julian Date to Unix Timestamp (seconds since 1970-01-01)
+        // JD 2440587.5 is Unix Epoch
+        let unix_secs = (self.epoch - 2440587.5) * 86400.0;
+        
+        // Handle negative JD? Not for this sim.
+        if let Some(dt) = Utc.timestamp_opt(unix_secs as i64, ((unix_secs.rem_euclid(1.0)) * 1e9) as u32).single() {
+             dt.format("%Y-%m-%d %H:%M:%S UTC").to_string()
+        } else {
+             format!("JD {:.2}", self.epoch)
         }
     }
 }

@@ -153,7 +153,8 @@ fn main_ui_system(
         }
 
         ui.separator();
-        ui.label(format!("Julian Date: {:.4}", world_clock.epoch));
+        ui.label(format!("UTC: {}", world_clock.to_utc_string()));
+        ui.label(format!("JD: {:.4}", world_clock.epoch));
         ui.horizontal(|ui| { if ui.button(if world_clock.paused { "▶ Play" } else { "⏸ Pause" }).clicked() { world_clock.paused = !world_clock.paused; } });
         ui.horizontal_wrapped(|ui| { 
             let multipliers = [1.0, 10.0, 100.0, 1000.0, 10000.0, 100000.0, 1000000.0];
