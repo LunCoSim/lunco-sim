@@ -1,7 +1,7 @@
 use bevy::math::DVec3;
 
 /// Obliquity of the ecliptic (J2000), radians
-pub const OBLIQUITY: f64 = 0.409_092_623_364_f64; // 23.4392911 degrees in radians
+// pub const OBLIQUITY: f64 = 0.409_092_623_364_f64; // 23.4392911 degrees in radians
 const AU_TO_M: f64 = 149_597_870_700.0;
 
 /// Convert ecliptic J2000 (AU) → Bevy world space (meters, Y-up)

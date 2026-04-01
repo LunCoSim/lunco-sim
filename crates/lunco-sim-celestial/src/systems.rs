@@ -1,8 +1,9 @@
 use bevy::prelude::*;
-// use bevy_hierarchy::Parent;
 use bevy::math::DQuat;
 use big_space::prelude::*;
 
+use crate::big_space_setup::{SolarSystemRoot, EarthRoot, MoonRoot};
+use crate::camera::ObserverCamera;
 use crate::clock::CelestialClock;
 use crate::ephemeris::EphemerisResource;
 use crate::registry::{CelestialBody, CelestialBodyRegistry, CelestialReferenceFrame};
@@ -72,24 +73,40 @@ pub fn body_rotation_system(
 }
 
 pub fn update_sun_light_system(
-    q_sun: Query<&GlobalTransform, (With<CelestialBody>, With<crate::big_space_setup::SolarSystemRoot>)>,
-    q_cam: Query<&GlobalTransform, With<Camera>>,
-    mut q_light: Query<&mut Transform, With<DirectionalLight>>,
+    mut q_light: Query<(&mut Transform, &DirectionalLight)>,
+    _q_sun: Query<&CelestialBody, With<SolarSystemRoot>>,
+    q_camera: Query<(Entity, &GlobalTransform), With<ObserverCamera>>,
+    q_all_parents: Query<&ChildOf>,
+    q_grids_only: Query<&big_space::grid::Grid>,
+    q_coords_only: Query<(&CellCoord, &Transform), Without<DirectionalLight>>,
 ) {
-    let Some(sun_gtf) = q_sun.iter().next() else { return; }; 
-    let Some(cam_gtf) = q_cam.iter().next() else { return; };
-    let Some(mut light_tf) = q_light.iter_mut().next() else { return; };
+    let Some((mut light_tf, _)) = q_light.iter_mut().next() else { return; };
+    let Some((cam_entity, _cam_gtf)) = q_camera.iter().next() else { return; };
     
-    let dir = (cam_gtf.translation() - sun_gtf.translation()).try_normalize().unwrap_or(Vec3::NEG_Z);
-    light_tf.look_at(cam_gtf.translation() + dir, Vec3::Y);
+    let mut current = cam_entity;
+    let mut total_pos = bevy::math::DVec3::ZERO;
+    
+    while let Ok(child_of) = q_all_parents.get(current) {
+        let parent = child_of.parent();
+        // The children are in the coordinate space defined by the parent's grid
+        if let Ok(grid) = q_grids_only.get(parent) {
+            if let Ok((cell, tf)) = q_coords_only.get(current) {
+                total_pos += grid.grid_position_double(cell, tf);
+            }
+        }
+        current = parent;
+    }
+    
+    let dir_to_cam = total_pos.normalize_or_zero().as_vec3();
+    light_tf.look_at(dir_to_cam, Vec3::Y);
 }
 
 pub fn celestial_telemetry_system(
     clock: Res<crate::clock::CelestialClock>,
-    q_earth: Query<(&Transform, &big_space::prelude::CellCoord), With<crate::big_space_setup::EarthRoot>>,
-    q_moon: Query<(&Transform, &big_space::prelude::CellCoord), With<crate::big_space_setup::MoonRoot>>,
-    q_sun: Query<&Transform, With<crate::big_space_setup::SolarSystemRoot>>,
-    q_cam: Query<(&crate::camera::ObserverCamera, &Transform)>,
+    q_earth: Query<(&Transform, &big_space::prelude::CellCoord), With<EarthRoot>>,
+    q_moon: Query<(&Transform, &big_space::prelude::CellCoord), With<MoonRoot>>,
+    q_sun: Query<&Transform, With<SolarSystemRoot>>,
+    q_cam: Query<(&ObserverCamera, &Transform)>,
     mut timer: Local<u32>,
 ) {
     if *timer % 60 == 0 {

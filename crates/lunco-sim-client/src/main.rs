@@ -55,7 +55,7 @@ fn setup_celestial_scenario(
     commands.spawn((
         Camera3d::default(),
         Projection::Perspective(PerspectiveProjection {
-            far: 1.0e11,
+            far: 2.0e11,
             ..default()
         }),
         big_space::prelude::FloatingOrigin,
@@ -63,6 +63,8 @@ fn setup_celestial_scenario(
         lunco_sim_celestial::ObserverCamera {
             focus_target: None,
             distance: 50_000_000.0,
+            yaw: 0.0,
+            pitch: -0.5,
         },
         lunco_sim_celestial::ActiveCamera,
         AmbientLight {

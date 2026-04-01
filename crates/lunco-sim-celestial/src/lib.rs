@@ -55,7 +55,7 @@ impl Plugin for CelestialPlugin {
             camera::update_observer_camera_system,
             camera::update_camera_clip_planes_system,
             gravity::update_global_gravity_system.run_if(resource_exists::<avian3d::prelude::Gravity>),
-            terrain::terrain_spawn_system.run_if(resource_exists::<avian3d::prelude::TerrainTileConfig>), // Actually resource_exists is good for stability
+            terrain::terrain_spawn_system.run_if(resource_exists::<terrain::TerrainTileConfig>), // Actually resource_exists is good for stability
             celestial_telemetry_system,
         ).chain());
     }

@@ -31,11 +31,23 @@ fn main_ui_system(
     q_children: Query<&Children>,
     mut world_clock: ResMut<CelestialClock>,
     q_sun: Query<&GlobalTransform, (With<lunco_sim_celestial::CelestialBody>, With<lunco_sim_celestial::SolarSystemRoot>)>,
-    q_camera: Query<(&Camera, &GlobalTransform)>,
+    mut q_camera: Query<(Entity, &Camera, &GlobalTransform, &mut lunco_sim_celestial::ObserverCamera)>,
+    q_bodies: Query<(Entity, &Name), With<lunco_sim_celestial::CelestialBody>>,
 ) {
-    egui::Window::new("Rover Parameters")
-        .default_width(300.0)
-        .show(contexts.ctx_mut().expect("No Egui context found"), |ui| {
+    let mut show_rover_ui = false;
+    
+    if let Some((_ent, _cam, _gtf, obs)) = q_camera.iter().next() {
+        if let Some(target) = obs.focus_target {
+            if q_rovers.contains(target) {
+                show_rover_ui = true;
+            }
+        }
+    }
+
+    if show_rover_ui {
+        egui::Window::new("Rover Parameters")
+            .default_width(300.0)
+            .show(contexts.ctx_mut().expect("No Egui context found"), |ui| {
             ui.heading("Settings");
             ui.separator();
 
@@ -80,12 +92,11 @@ fn main_ui_system(
                              });
                         }
                     });
-                } else {
-                    selected.entity = None;
                 }
             }
         });
-    
+    }
+
     egui::Window::new("Celestial Control")
         .default_width(300.0)
         .show(contexts.ctx_mut().expect("No Egui context found"), |ui| {
@@ -114,6 +125,31 @@ fn main_ui_system(
             if ui.button("J2000").clicked() {
                 world_clock.epoch = 2_451_545.0;
             }
+
+            ui.separator();
+            ui.label("Focus Target:");
+            if let Some((_, _, _, mut obs)) = q_camera.iter_mut().next() {
+                ui.horizontal_wrapped(|ui| {
+                    for (entity, name) in q_bodies.iter() {
+                        if ui.selectable_label(obs.focus_target == Some(entity), name.as_str()).clicked() {
+                            obs.focus_target = Some(entity);
+                        }
+                    }
+                    for (entity, name) in q_rovers.iter() {
+                        if ui.selectable_label(obs.focus_target == Some(entity), name.as_str()).clicked() {
+                            obs.focus_target = Some(entity);
+                        }
+                    }
+                });
+                
+                ui.separator();
+                ui.label(format!("Camera Scale: {:.0} km", obs.distance / 1000.0));
+                
+                let dist_au = obs.distance / 1.496e11;
+                if dist_au > 0.1 {
+                    ui.label(format!("({:.3} AU)", dist_au));
+                }
+            }
         });
 
     // Sun Marker (FR-022)
@@ -123,10 +159,10 @@ fn main_ui_system(
 fn draw_sun_marker(
     contexts: &mut EguiContexts,
     q_sun: &Query<&GlobalTransform, (With<lunco_sim_celestial::CelestialBody>, With<lunco_sim_celestial::SolarSystemRoot>)>,
-    q_camera: &Query<(&Camera, &GlobalTransform)>,
+    q_camera: &Query<(Entity, &Camera, &GlobalTransform, &mut lunco_sim_celestial::ObserverCamera)>,
 ) {
     let Some(sun_gtf) = q_sun.iter().next() else { return; };
-    let Some((camera, cam_gtf)) = q_camera.iter().next() else { return; };
+    let Some((_cam_ent, camera, cam_gtf, _)) = q_camera.iter().next() else { return; };
     
     let sun_pos_abs = sun_gtf.translation();
     let cam_pos_abs = cam_gtf.translation();
