@@ -4,11 +4,16 @@
 #import bevy_pbr::forward_io::FragmentOutput
 
 struct BlueprintExtension {
-    line_color: vec4<f32>,
+    high_color: vec4<f32>,
+    low_color: vec4<f32>,
+    high_line_color: vec4<f32>,
+    low_line_color: vec4<f32>,
+    subdivisions: vec2<f32>,
+    fade_range: vec2<f32>,
     grid_scale: f32,
     line_width: f32,
-    transition: f32, // 0.0 = Lat/Long (High), 1.0 = Blueprint (Low)
-    moon_radius: f32,
+    transition: f32, 
+    body_radius: f32,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100)
@@ -25,9 +30,7 @@ fn fragment(
     var pbr_input = pbr_input_from_standard_material(input, is_front);
     
     // --- Colors Transition ---
-    let color_grey = vec4<f32>(0.5, 0.5, 0.5, 1.0);
-    let color_blue = vec4<f32>(0.0, 0.05, 0.15, 1.0);
-    let base_color = mix(color_grey, color_blue, extension.transition);
+    let base_color = mix(extension.high_color, extension.low_color, extension.transition);
     pbr_input.material.base_color = base_color;
 
     // --- Lat/Long Grid (High Alt) ---
@@ -35,14 +38,18 @@ fn fragment(
     let lon = (atan2(n.z, n.x) + PI) / (2.0 * PI);
     let lat = (asin(n.y) + (PI / 2.0)) / PI;
     
-    let lat_long_coords = vec2<f32>(lon * 24.0, lat * 12.0);
-    let lat_long_f = abs(fract(lat_long_coords - 0.5) - 0.5) / fwidth(lat_long_coords);
+    // Parameterized subdivisions
+    let lat_long_coords = vec2<f32>(lon * extension.subdivisions.x, lat * extension.subdivisions.y);
+    let fw = fwidth(lat_long_coords);
+    let lat_long_f = abs(fract(lat_long_coords - 0.5) - 0.5) / fw;
     let lat_long_line = min(lat_long_f.x, lat_long_f.y);
-    let lat_long_mask = 1.0 - smoothstep(0.0, extension.line_width, lat_long_line);
+    
+    // Thinner coordinate lines when high, fade out using parameterized range
+    let lat_long_width = mix(0.5, extension.line_width, extension.transition);
+    let lat_long_fade = 1.0 - smoothstep(extension.fade_range.x, extension.fade_range.y, max(fw.x, fw.y));
+    let lat_long_mask = (1.0 - smoothstep(0.0, lat_long_width, lat_long_line)) * lat_long_fade;
 
     // --- Blueprint Grid (Low Alt) ---
-    // Standard XZ projection relative to moon center... 
-    // actually input.world_position is okay for local look.
     let blueprint_coords = input.world_position.xz / extension.grid_scale;
     let blueprint_f = abs(fract(blueprint_coords - 0.5) - 0.5) / fwidth(blueprint_coords);
     let blueprint_line = min(blueprint_f.x, blueprint_f.y);
@@ -50,7 +57,7 @@ fn fragment(
     
     // --- Mixing ---
     let grid_mask = mix(lat_long_mask, blueprint_mask, extension.transition);
-    let line_color = mix(vec4<f32>(1.0, 1.0, 1.0, 1.0), extension.line_color, extension.transition);
+    let line_color = mix(extension.high_line_color, extension.low_line_color, extension.transition);
     
     pbr_input.material.base_color = mix(base_color, line_color, grid_mask);
     

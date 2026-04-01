@@ -86,9 +86,14 @@ pub fn terrain_spawn_system(
                             ..default()
                         },
                         extension: crate::blueprint::BlueprintExtension {
-                            line_color: LinearRgba::new(0.0, 0.5, 1.0, 1.0),
+                            high_color: if body.name == "Earth" { LinearRgba::from(Color::srgb(0.05, 0.15, 0.8)) } else { LinearRgba::new(0.1, 0.1, 0.1, 1.0) },
+                            low_color: if body.name == "Earth" { LinearRgba::from(Color::srgb(0.05, 0.15, 0.8)) } else { LinearRgba::new(0.1, 0.1, 0.1, 1.0) },
+                            high_line_color: if body.name == "Earth" { LinearRgba::new(0.0, 0.5, 1.0, 1.0) } else { LinearRgba::new(0.6, 0.6, 0.6, 1.0) },
+                            low_line_color: if body.name == "Earth" { LinearRgba::new(0.0, 0.5, 1.0, 1.0) } else { LinearRgba::new(0.6, 0.6, 0.6, 1.0) },
                             grid_scale: 100.0,
                             line_width: 1.0,
+                            transition: 1.0, // Surface tiles are "low/blueprint" style
+                            body_radius: body.radius_m as f32,
                             ..default()
                         },
                     })),

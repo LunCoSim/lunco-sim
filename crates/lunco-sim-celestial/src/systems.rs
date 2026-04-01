@@ -130,32 +130,34 @@ pub fn celestial_telemetry_system(
     *timer += 1;
 }
 
-pub fn moon_visuals_system(
+pub fn celestial_visuals_system(
     mut materials: ResMut<Assets<BlueprintMaterial>>,
     q_camera: Query<(Entity, &CellCoord, &Transform, &ObserverCamera), With<crate::ActiveCamera>>,
-    q_moon: Query<(Entity, &CellCoord, &Transform, &MeshMaterial3d<BlueprintMaterial>, &CelestialBody)>,
+    q_bodies: Query<(Entity, &CellCoord, &Transform, &MeshMaterial3d<BlueprintMaterial>, &CelestialBody)>,
     q_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
     q_spatial: Query<(&CellCoord, &Transform)>,
 ) {
     let Some((cam_ent, cam_cell, cam_tf, _obs)) = q_camera.iter().next() else { return; };
-    let Some((moon_ent, moon_cell, moon_tf, mat_handle, body)) = q_moon.iter().find(|(_, _, _, _, b)| b.name == "Moon") else { return; };
-
-    // Resolve absolute positions to calculate distance
-    let cam_pos = get_absolute_pos_in_root_double_ghost_aware(cam_ent, cam_cell, cam_tf, &q_parents, &q_grids, &q_spatial);
-    let moon_pos = get_absolute_pos_in_root_double_ghost_aware(moon_ent, moon_cell, moon_tf, &q_parents, &q_grids, &q_spatial);
     
-    let distance = (cam_pos - moon_pos).length();
-    let altitude = (distance - body.radius_m).max(0.0);
-
-    if let Some(mat) = materials.get_mut(mat_handle) {
-        // High (0.0 transition) at 100km, Blueprint (1.0 transition) at 10km
-        let start_transition_alt = 100_000.0;
-        let end_transition_alt = 10_000.0;
+    for (body_ent, body_cell, body_tf, mat_handle, body) in q_bodies.iter() {
+        // Resolve absolute positions to calculate distance
+        let cam_pos = get_absolute_pos_in_root_double_ghost_aware(cam_ent, cam_cell, cam_tf, &q_parents, &q_grids, &q_spatial);
+        let body_pos = get_absolute_pos_in_root_double_ghost_aware(body_ent, body_cell, body_tf, &q_parents, &q_grids, &q_spatial);
         
-        let transition = ((start_transition_alt - altitude) / (start_transition_alt - end_transition_alt))
-            .clamp(0.0, 1.0) as f32;
+        let distance = (cam_pos - body_pos).length();
+        let altitude = (distance - body.radius_m).max(0.0);
+
+        if let Some(mat) = materials.get_mut(mat_handle) {
+            // High (0.0 transition) at 100km, Blueprint (1.0 transition) at 10km
+            let start_transition_alt = 100_000.0;
+            let end_transition_alt = 10_000.0;
             
-        mat.extension.transition = transition;
+            let transition = ((start_transition_alt - altitude) / (start_transition_alt - end_transition_alt))
+                .clamp(0.0, 1.0) as f32;
+                
+            mat.extension.transition = transition;
+            mat.extension.body_radius = body.radius_m as f32;
+        }
     }
 }

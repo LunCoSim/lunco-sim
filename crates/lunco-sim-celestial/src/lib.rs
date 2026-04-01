@@ -73,7 +73,7 @@ impl Plugin for CelestialPlugin {
         app.add_systems(Update, (
             update_sun_light_system,
             celestial_telemetry_system,
-            moon_visuals_system,
+            celestial_visuals_system,
         ).chain());
         
         app.add_systems(Update, (

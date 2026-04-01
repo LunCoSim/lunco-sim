@@ -94,10 +94,24 @@ pub fn setup_big_space_hierarchy(
         Transform::default(),
         GlobalTransform::default(),
         Mesh3d(meshes.add(Sphere::new(6371.0e3).mesh().ico(4).unwrap())),
-        MeshMaterial3d(materials.add(StandardMaterial {
-            base_color: Color::srgb(0.2, 0.4, 1.0),
-            unlit: false, 
-            ..default()
+        MeshMaterial3d(blueprint_materials.add(crate::blueprint::BlueprintMaterial {
+            base: StandardMaterial {
+                base_color: Color::srgb(0.2, 0.4, 1.0),
+                unlit: false, 
+                ..default()
+            },
+            extension: crate::blueprint::BlueprintExtension {
+                high_color: LinearRgba::from(Color::srgb(0.05, 0.15, 0.8)),
+                low_color: LinearRgba::from(Color::srgb(0.05, 0.15, 0.8)),
+                high_line_color: LinearRgba::new(0.0, 0.5, 1.0, 1.0),
+                low_line_color: LinearRgba::new(0.0, 0.5, 1.0, 1.0),
+                subdivisions: Vec2::new(36.0, 18.0), // Denser grid for Earth (10 deg)
+                fade_range: Vec2::new(0.2, 0.6),
+                grid_scale: 1000.0,
+                line_width: 1.0, 
+                transition: 0.0,
+                body_radius: 6371.0e3,
+            },
         })),
         GravityProvider {
             model: Box::new(PointMassGravity { gm: registry.bodies.iter().find(|d| d.ephemeris_id == 399).map(|d| d.gm).unwrap_or(3.986e14) }),
@@ -136,11 +150,16 @@ pub fn setup_big_space_hierarchy(
                 ..default()
             },
             extension: crate::blueprint::BlueprintExtension {
-                line_color: LinearRgba::new(0.0, 0.5, 1.0, 1.0),
+                high_color: LinearRgba::new(0.1, 0.1, 0.1, 1.0),
+                low_color: LinearRgba::new(0.1, 0.1, 0.1, 1.0),
+                high_line_color: LinearRgba::new(0.6, 0.6, 0.6, 1.0),
+                low_line_color: LinearRgba::new(0.6, 0.6, 0.6, 1.0),
+                subdivisions: Vec2::new(24.0, 12.0),
+                fade_range: Vec2::new(0.2, 0.6),
                 grid_scale: 1000.0, // Fine grid for blueprint
                 line_width: 2.0,
                 transition: 0.0, // Start with Lat/Long (High)
-                moon_radius: 1737_000.0,
+                body_radius: 1737_000.0,
             },
         })),
         GravityProvider {
