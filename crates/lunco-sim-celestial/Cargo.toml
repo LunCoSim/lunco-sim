@@ -5,7 +5,6 @@ edition = "2021"
 
 [dependencies]
 bevy = { workspace = true, features = ["default"] }
-bevy_hierarchy = "0.15.1"
 big_space = { workspace = true }
 celestial-ephemeris = "0.1.1-alpha.2"
 celestial-time = "0.1.1-alpha.2"

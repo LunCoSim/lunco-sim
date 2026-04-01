@@ -24,3 +24,5 @@ bevy-inspector-egui = { workspace = true }
 default = ["celestial"]
 celestial = []
 sandbox = []
+
+

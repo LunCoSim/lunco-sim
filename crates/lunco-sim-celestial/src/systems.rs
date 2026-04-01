@@ -25,28 +25,35 @@ pub fn ephemeris_update_system(
     for (entity, mut cell, mut tf, body, frame) in q_entities.iter_mut() {
         let ephemeris_id = if let Some(b) = body { b.ephemeris_id } else if let Some(f) = frame { f.ephemeris_id } else { continue; };
         
-        let parent_id = if let Ok(child_of) = q_all_parents.get(entity) {
-            if let Ok(parent_frame) = q_frames.get(child_of.parent()) {
-                Some(parent_frame.ephemeris_id)
-            } else { None }
-        } else { None };
+        let current_pos_au = ephemeris.provider.position(ephemeris_id, clock.epoch);
 
-        if let Ok(child_of) = q_all_parents.get(entity) {
-            if let Ok(grid) = q_grids.get(child_of.parent()) {
-                let mut pos_au = ephemeris.provider.position(ephemeris_id, clock.epoch);
-                
-                // Subtract parent position if it exists to get relative position
-                if let Some(pid) = parent_id {
-                    let parent_pos_au = ephemeris.provider.position(pid, clock.epoch);
-                    pos_au -= parent_pos_au;
+        // Walk up to find the nearest Grid parent
+        let mut parent = if let Ok(child_of) = q_all_parents.get(entity) { Some(child_of.parent()) } else { None };
+        
+        let mut depth = 0;
+        while let Some(p) = parent {
+            if depth > 10 { break; } // Safety break
+            depth += 1;
+
+            if let Ok(grid) = q_grids.get(p) {
+                // If we found a grid, we update relative to it.
+                let mut ref_ephemeris_id = None;
+                if let Ok(p_frame) = q_frames.get(p) {
+                   ref_ephemeris_id = Some(p_frame.ephemeris_id);
                 }
 
-                let pos_bevy_m = ecliptic_to_bevy(pos_au);
-                let (new_cell, new_translation) = grid.translation_to_grid(pos_bevy_m);
+                if let Some(ref_id) = ref_ephemeris_id {
+                    let parent_pos_au = ephemeris.provider.position(ref_id, clock.epoch);
+                    let relative_pos_au = current_pos_au - parent_pos_au;
+                    let pos_bevy_m = ecliptic_to_bevy(relative_pos_au);
+                    let (new_cell, new_translation) = grid.translation_to_grid(pos_bevy_m);
 
-                *cell = new_cell;
-                tf.translation = new_translation;
+                    *cell = new_cell;
+                    tf.translation = new_translation;
+                }
+                break;
             }
+            parent = q_all_parents.get(p).ok().map(|c| c.parent());
         }
     }
 }
@@ -86,8 +93,14 @@ pub fn update_sun_light_system(
     let mut current = cam_entity;
     let mut total_pos = bevy::math::DVec3::ZERO;
     
+    let mut depth = 0;
     while let Ok(child_of) = q_all_parents.get(current) {
+        if depth > 10 { break; } // Safety break
+        depth += 1;
+
         let parent = child_of.parent();
+        if parent == current { break; } // Self-parenting loop break
+
         // The children are in the coordinate space defined by the parent's grid
         if let Ok(grid) = q_grids_only.get(parent) {
             if let Ok((cell, tf)) = q_coords_only.get(current) {
@@ -98,7 +111,9 @@ pub fn update_sun_light_system(
     }
     
     let dir_to_cam = total_pos.normalize_or_zero().as_vec3();
-    light_tf.look_at(dir_to_cam, Vec3::Y);
+    if dir_to_cam != Vec3::ZERO {
+        light_tf.look_at(dir_to_cam, Vec3::Y);
+    }
 }
 
 pub fn celestial_telemetry_system(

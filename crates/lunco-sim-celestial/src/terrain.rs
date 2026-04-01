@@ -1,6 +1,5 @@
 use bevy::prelude::*;
 use avian3d::prelude::*;
-use big_space::prelude::*;
 use crate::registry::CelestialBody;
 
 #[derive(Resource)]
@@ -30,7 +29,7 @@ pub fn terrain_spawn_system(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    let Some((cam_gtf, cam_child_of)) = q_camera.iter().next() else { return; };
+    let Some((cam_gtf, _cam_child_of)) = q_camera.iter().next() else { return; };
     let cam_pos = cam_gtf.translation().as_dvec3();
     
     let mut nearest_body = None;

@@ -1,7 +1,6 @@
 use bevy::prelude::*;
-use bevy::input::mouse::MouseWheel;
-// use bevy_hierarchy::Parent;
-use bevy::math::{DVec3, DQuat};
+use bevy::input::mouse::{MouseWheel};
+use bevy::math::DVec3;
 use big_space::prelude::*;
 use crate::registry::CelestialBody;
 
@@ -9,96 +8,104 @@ use crate::registry::CelestialBody;
 pub struct ObserverCamera {
     pub focus_target: Option<Entity>,
     pub distance: f64,
-    pub yaw: f64,
-    pub pitch: f64,
 }
 
 #[derive(Component)]
 pub struct ActiveCamera;
 
-pub fn update_observer_camera_system(
+pub struct CameraMigrationPlugin;
+
+impl Plugin for CameraMigrationPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(Update, (
+            camera_migration_system,
+            update_observer_camera_system,
+            update_camera_clip_planes_system,
+        ).chain());
+    }
+}
+
+pub fn camera_migration_system(
     mut commands: Commands,
-    mut q_camera: Query<(bevy::prelude::Entity, &mut ObserverCamera, &mut big_space::prelude::CellCoord, &mut bevy::prelude::Transform, &ActiveCamera), bevy::prelude::Without<CelestialBody>>,
-    q_targets: Query<(&big_space::prelude::CellCoord, &bevy::prelude::Transform, &bevy::prelude::GlobalTransform, &CelestialBody), bevy::prelude::Without<ObserverCamera>>,
-    q_all_parents: Query<&bevy::prelude::ChildOf>,
-    q_grids: Query<&big_space::grid::Grid>,
-    mut scroll_evr: MessageReader<MouseWheel>,
-    mut motion_evr: MessageReader<bevy::input::mouse::MouseMotion>,
-    mouse_input: Res<ButtonInput<MouseButton>>,
+    q_camera: Query<(Entity, &ObserverCamera), Changed<ObserverCamera>>,
+    q_all_parents: Query<&ChildOf>,
+    q_grids: Query<&Grid>,
 ) {
-    for (entity, mut obs, mut cam_cell, mut cam_tf, _) in q_camera.iter_mut() {
-        let Some(target_entity) = obs.focus_target else { continue; };
-        let Ok((target_cell, target_tf, _target_gtf, _body)) = q_targets.get(target_entity) else { continue; };
-        
-        // 1. Process zoom input
-        for ev in scroll_evr.read() {
-            obs.distance = (obs.distance - (ev.y as f64) * (obs.distance * 0.2)).clamp(1_000.0, 1.0e13);
+    for (cam_entity, obs) in q_camera.iter() {
+        let Some(target) = obs.focus_target else { continue; };
+        let mut current = target;
+        let mut found_grid = None;
+        for _ in 0..10 { 
+           if q_grids.contains(current) {
+               found_grid = Some(current);
+               break;
+           }
+           if let Ok(child_of) = q_all_parents.get(current) {
+               current = child_of.parent();
+           } else {
+               break;
+           }
         }
-
-        // 2. Process rotation input (Right Mouse)
-        if mouse_input.pressed(MouseButton::Right) {
-            for ev in motion_evr.read() {
-                obs.yaw -= (ev.delta.x as f64) * 0.005;
-                obs.pitch -= (ev.delta.y as f64) * 0.005;
-                obs.pitch = obs.pitch.clamp(-1.5, 1.5);
+        if let Some(grid_parent) = found_grid {
+            let mut current_parent = None;
+            if let Ok(cam_child_of) = q_all_parents.get(cam_entity) {
+                current_parent = Some(cam_child_of.parent());
             }
-        } else {
-            let _ = motion_evr.read().count(); // Clear anyway
-        }
-
-        // 3. Keep camera at 'distance' from target in target's parent grid
-        if let Ok(target_child_of) = q_all_parents.get(target_entity) {
-            let target_parent = target_child_of.parent();
-            let Ok(grid) = q_grids.get(target_parent) else { continue; };
-            
-            let target_pos = grid.grid_position_double(target_cell, target_tf);
-            
-            let rot = DQuat::from_euler(EulerRot::YXZ, obs.yaw, obs.pitch, 0.0);
-            let offset = rot * (DVec3::Z * obs.distance);
-            let desired_pos = target_pos + offset;
-
-            let (new_cell, new_tf) = grid.translation_to_grid(desired_pos);
-            
-            if let Ok(cam_child_of) = q_all_parents.get(entity) {
-                if cam_child_of.parent() != target_parent {
-                    // Move camera to target's grid
-                    commands.entity(entity).set_parent_in_place(target_parent);
-                }
+            if current_parent != Some(grid_parent) {
+                info!("MIGRATING CAMERA to grid anchor: {:?}", grid_parent);
+                commands.entity(cam_entity).set_parent_in_place(grid_parent);
             }
-            
-            // Apply new position (even if we just re-parented, next frame will be stable)
-            // But we can apply it now to target_tf in the same grid.
-            *cam_cell = new_cell;
-            cam_tf.translation = new_tf;
-            
-            // Keep the target at center
-            let look_tgt = target_tf.translation;
-            cam_tf.look_at(look_tgt, Vec3::Y);
         }
     }
 }
 
+pub fn update_observer_camera_system(
+    mut q_camera: Query<(Entity, &mut ObserverCamera, &mut CellCoord, &mut Transform, &ActiveCamera), Without<CelestialBody>>,
+    q_targets: Query<(&CellCoord, &Transform), Without<ObserverCamera>>,
+    q_all_parents: Query<&ChildOf>,
+    q_grids: Query<&Grid>,
+    mut scroll_evr: MessageReader<MouseWheel>,
+) {
+    for (entity, mut obs, mut cam_cell, mut cam_tf, _) in q_camera.iter_mut() {
+        let Some(target_entity) = obs.focus_target else { continue; };
+        for ev in scroll_evr.read() {
+            obs.distance = (obs.distance - (ev.y as f64) * (obs.distance * 0.1)).clamp(100.0, 1.0e14);
+        }
+        let Ok(cam_child_of) = q_all_parents.get(entity) else { continue; };
+        let grid_entity = cam_child_of.parent();
+        let Ok(grid) = q_grids.get(grid_entity) else { continue; };
+        
+        if let Ok((target_cell, target_tf)) = q_targets.get(target_entity) {
+            let target_pos_local = grid.grid_position_double(target_cell, target_tf);
+            let offset = DVec3::new(0.0, obs.distance * 0.707, obs.distance * 0.707);
+            let desired_pos_local = target_pos_local + offset;
+            let (new_cell, new_tf) = grid.translation_to_grid(desired_pos_local);
+            *cam_cell = new_cell;
+            cam_tf.translation = new_tf;
+            cam_tf.look_at(target_pos_local.as_vec3(), Vec3::Y);
+        }
+    }
+}
 
-/// Dynamic near clip plane adjustment (FR-025)
 pub fn update_camera_clip_planes_system(
     mut q_camera: Query<(&mut Projection, &GlobalTransform), With<Camera>>,
     q_bodies: Query<(&GlobalTransform, &CelestialBody)>,
 ) {
     for (mut projection, cam_gtf) in q_camera.iter_mut() {
         if let Projection::Perspective(ref mut perspective) = *projection {
-            // Find distance to nearest body surface
-            let mut min_altitude = 1.0e15; // Start very large
+            perspective.far = 1.0e15; 
             
+            let mut min_dist_to_surface = 1.0e15;
             for (body_gtf, body) in q_bodies.iter() {
-                let dist = cam_gtf.translation().distance(body_gtf.translation()) as f64;
-                let altitude = (dist - body.radius_m).max(1.0); 
-                if altitude < min_altitude {
-                    min_altitude = altitude;
+                let dist_to_center = cam_gtf.translation().distance(body_gtf.translation()) as f64;
+                let dist_to_surface = (dist_to_center - body.radius_m).max(1.0);
+                if dist_to_surface < min_dist_to_surface {
+                    min_dist_to_surface = dist_to_surface;
                 }
             }
             
-            perspective.near = (min_altitude * 0.001).max(0.1).min(1000.0) as f32;
-            perspective.far = 2.0e12; // 2 trillion meters (20 AU)
+            // Adaptive near plane, but clamped to 10km to avoid 'eating' the Sun/Planets at scale
+            perspective.near = (min_dist_to_surface * 0.001).max(0.1).min(10000.0) as f32;
         }
     }
 }

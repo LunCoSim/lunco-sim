@@ -7,9 +7,19 @@ use ui::LunCoSimUiPlugin;
 
 fn main() {
     let mut app = App::new();
+    // CRITICAL: We are using big_space 0.12.0 for higher-precision planetary physics.
+    // big_space REQUIREs Bevy's default TransformPlugin to be disabled to avoid 
+    // coordinate fighting. However, disabling it 'blinds' the standard UI hit-testing.
     app.insert_resource(Time::<Fixed>::from_hz(60.0))
-        .add_plugins(DefaultPlugins.build().disable::<TransformPlugin>())
+        .insert_resource(ClearColor(Color::BLACK))
+        .add_plugins(DefaultPlugins.build().disable::<TransformPlugin>()) 
         .add_plugins(lunco_sim_core::LunCoSimCorePlugin);
+
+    // THE GOLDEN BRIDGE: This system manually calculates 'GlobalTransform' for 
+    // entities that are NOT part of the big_space grid (like Windows and UI Cameras).
+    // This allows bevy_egui and bevy_ui to continue 'hearing' mouse clicks even
+    // when the engine's default transform plugin is turned off.
+    app.add_systems(Update, fix_spatial_components_for_non_grid_entities);
 
     #[cfg(feature = "sandbox")]
     {
@@ -19,18 +29,15 @@ fn main() {
     #[cfg(not(feature = "sandbox"))]
     {
         app.add_plugins(lunco_sim_celestial::CelestialPlugin)
-            .insert_resource(ClearColor(Color::BLACK))
-            .add_systems(Update, (
-                setup_celestial_scenario,
-                initialize_camera_focus,
-            ).chain());
+            .insert_resource(ClearColor(Color::BLACK));
     }
 
     app.add_plugins(MaterialPlugin::<BlueprintMaterial>::default())
-        .add_plugins(LunCoSimUiPlugin)
+        .add_plugins(LunCoSimUiPlugin) 
         .add_systems(Update, toggle_slow_motion)
         .run();
 }
+
 
 fn toggle_slow_motion(keyboard: Res<ButtonInput<KeyCode>>, mut time: ResMut<Time<Virtual>>) {
     if keyboard.just_pressed(KeyCode::KeyT) {
@@ -42,49 +49,52 @@ fn toggle_slow_motion(keyboard: Res<ButtonInput<KeyCode>>, mut time: ResMut<Time
     }
 }
 
-#[cfg(not(feature = "sandbox"))]
-fn setup_celestial_scenario(
+/// THE RECOVERY BRIDGE MAPPING: 
+/// In Bevy with big_space, TransformPlugin is DISABLED engine-wide.
+/// This means GlobalTransform is NOT updated automatically.
+/// 
+/// However, bevy_egui and bevy_ui DEPEND on GlobalTransform to perform hit-tests
+/// between the Cursor and the Windows/Buttons. This system manually 'backfills' 
+/// those components for entities that are OUTSIDE of the big_space grid system 
+/// (like the Window itself and the 2D HUD Camera). 
+fn fix_spatial_components_for_non_grid_entities(
     mut commands: Commands,
-    q_solar: Query<Entity, With<lunco_sim_celestial::SolarSystemRoot>>,
-    mut spawned: Local<bool>,
+    mut set: ParamSet<(
+        Query<(Entity, &Transform, &mut GlobalTransform, Option<&ChildOf>), Without<big_space::prelude::CellCoord>>,
+        Query<(Entity, &GlobalTransform)>,
+    )>,
+    q_non_spatial: Query<Entity, (Or<(With<Window>, With<Visibility>)>, Without<GlobalTransform>, Without<big_space::prelude::CellCoord>)>,
 ) {
-    if *spawned { return; }
-    let Some(solar_root) = q_solar.iter().next() else { return; };
-    *spawned = true;
+    // 1. Correct components for windows/ui if missing
+    for entity in q_non_spatial.iter() {
+        commands.entity(entity).insert((Transform::default(), GlobalTransform::default(), InheritedVisibility::default(), ViewVisibility::default()));
+    }
 
-    commands.spawn((
-        Camera3d::default(),
-        Projection::Perspective(PerspectiveProjection {
-            far: 2.0e11,
-            ..default()
-        }),
-        big_space::prelude::FloatingOrigin,
-        big_space::prelude::BigSpatialBundle::default(),
-        lunco_sim_celestial::ObserverCamera {
-            focus_target: None,
-            distance: 50_000_000.0,
-            yaw: 0.0,
-            pitch: -0.5,
-        },
-        lunco_sim_celestial::ActiveCamera,
-        AmbientLight {
-            brightness: 1000.0,
-            ..default()
-        },
-        Name::new("Celestial Camera"),
-    )).set_parent_in_place(solar_root);
-}
+    // 2. Propagate passes
+    for _ in 0..3 {
+        let mut gtfs = std::collections::HashMap::new();
+        for (entity, gtf) in set.p1().iter() {
+            gtfs.insert(entity, *gtf);
+        }
 
-#[cfg(not(feature = "sandbox"))]
-fn initialize_camera_focus(
-    mut commands: Commands,
-    mut q_cam: Query<(Entity, &mut lunco_sim_celestial::ObserverCamera), Added<lunco_sim_celestial::ObserverCamera>>,
-    q_earth: Query<(Entity, &ChildOf), With<lunco_sim_celestial::EarthRoot>>,
-) {
-    let Some((cam_entity, mut cam)) = q_cam.iter_mut().next() else { return; };
-    let Some((earth, earth_child_of)) = q_earth.iter().next() else { return; };
-    cam.focus_target = Some(earth);
-    
-    // Re-parent camera to Earth's parent grid (EMB Frame) to match ObserverCamera expectations
-    commands.entity(cam_entity).set_parent_in_place(earth_child_of.parent());
+        for (entity, transform, mut global_transform, child_of_opt) in set.p0().iter_mut() {
+            let mut parent_gtf_val = None;
+            if let Some(child_of) = child_of_opt {
+                if let Some(parent_gtf) = gtfs.get(&child_of.parent()) {
+                    parent_gtf_val = Some(*parent_gtf);
+                }
+            }
+
+            let new_gtf = if let Some(parent_gtf) = parent_gtf_val {
+                parent_gtf.mul_transform(*transform)
+            } else {
+                GlobalTransform::from(*transform)
+            };
+
+            if *global_transform != new_gtf {
+                *global_transform = new_gtf;
+                gtfs.insert(entity, new_gtf);
+            }
+        }
+    }
 }

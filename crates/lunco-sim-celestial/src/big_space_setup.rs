@@ -16,123 +16,182 @@ pub struct EarthRoot;
 #[derive(Component)]
 pub struct MoonRoot;
 
-/// Initialize the big_space hierarchy for the solar system.
 pub fn setup_big_space_hierarchy(
     mut commands: Commands,
     registry: Res<CelestialBodyRegistry>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    // 1. Root Solar System grid (Sun-centered)
-    let solar_root = commands.spawn((
+    // 1. Root BigSpace marker
+    let big_space_root = commands.spawn((
+        big_space::prelude::BigSpace::default(),
+        Name::new("Big Space Root"),
+    )).id();
+
+    // Solar System grid anchor (1 Billion km cells, Effective Infinite bounds)
+    let solar_grid = commands.spawn((
         SolarSystemRoot,
         CelestialReferenceFrame { ephemeris_id: 10 }, 
-        BigSpaceRootBundle {
-            grid: Grid::new(1.5e11, 1.0e10), 
-            ..default()
-        },
-        // AD-9: No mesh for Sun. Use DirectionalLight.
-        DirectionalLight {
-            illuminance: 100_000.0,
-            shadows_enabled: true,
-            ..default()
-        },
+        Grid::new(1.0e9, 1.0e30), 
+        CellCoord::default(),
+        Transform::default(),
+        GlobalTransform::default(),
+        Name::new("Universe Grid (Solar)"),
+    )).set_parent_in_place(big_space_root).id();
+
+    // The Sun Body
+    commands.spawn((
         CelestialBody { 
             name: "Sun".to_string(), 
             ephemeris_id: 10,
-            radius_m: registry.bodies.iter().find(|d| d.ephemeris_id == 10).map(|d| d.radius_m).unwrap_or(695_700_000.0),
+            radius_m: 696_340.0e3,
         },
-        Name::new("Solar System Root (Sun)"),
-    )).id();
-
-    // 2. Earth-Moon Barycenter (child of Solar)
-    let emb_root = commands.spawn((
-        EMBRoot,
-        CelestialReferenceFrame { ephemeris_id: 3 },
-        BigGridBundle {
-            grid: Grid::new(1.0e9, 1.0e8),
-            ..default()
-        },
-        Name::new("EMB Frame"),
-    )).id();
-    commands.entity(emb_root).set_parent_in_place(solar_root);
-
-    // 3. Earth Frame (child of EMB)
-    let earth_frame = commands.spawn((
-        EarthRoot,
-        CelestialReferenceFrame { ephemeris_id: 399 },
-        BigGridBundle {
-            grid: Grid::new(1.0e7, 1.0e6),
-            ..default()
-        },
-        // Visual for Earth
-        Mesh3d(meshes.add(Sphere::new(6371.0e3).mesh().ico(4).unwrap())),
+        SOI { radius_m: 1.0e13 }, 
+        CellCoord::default(),
+        Transform::default(),
+        GlobalTransform::default(),
+        Mesh3d(meshes.add(Sphere::new(696_340.0e3).mesh().ico(4).unwrap())),
         MeshMaterial3d(materials.add(StandardMaterial {
-            base_color: Color::srgb(0.0, 1.0, 0.0),
+            base_color: Color::srgb(1.0, 0.9, 0.6),
+            emissive: LinearRgba::from(Color::srgb(1.0, 0.8, 0.1)),
+            unlit: true,
             ..default()
         })),
+        Name::new("Sun Body"),
+    )).set_parent_in_place(solar_grid);
+
+    // Realistic Sun Light
+    commands.spawn((
+        DirectionalLight {
+            illuminance: 10_000.0,
+            shadows_enabled: false,
+            ..default()
+        },
+        CellCoord::default(),
+        Transform::default(),
+        GlobalTransform::default(),
+        Name::new("Sun Light"),
+    )).set_parent_in_place(solar_grid);
+
+    // 2. EMB Anchor
+    let emb_grid = commands.spawn((
+        EMBRoot,
+        CelestialReferenceFrame { ephemeris_id: 3 },
+        Grid::new(1.0e8, 1.0e30),
+        CellCoord::default(),
+        Transform::default(),
+        GlobalTransform::default(),
+        Name::new("EMB Frame Grid"),
+    )).set_parent_in_place(solar_grid).id();
+
+    // 3. Earth Anchor
+    let earth_grid = commands.spawn((
+        EarthRoot,
+        CelestialReferenceFrame { ephemeris_id: 399 },
+        Grid::new(10_000.0, 1.0e30),
+        CellCoord::default(),
+        Transform::default(),
+        GlobalTransform::default(),
+        Name::new("Earth Local Grid"),
+    )).set_parent_in_place(emb_grid).id();
+
+    // Earth Body
+    let earth_body = commands.spawn((
         CelestialBody { 
             name: "Earth".to_string(), 
             ephemeris_id: 399,
             radius_m: 6371.0e3,
         },
+        CellCoord::default(),
+        Transform::default(),
+        GlobalTransform::default(),
+        Mesh3d(meshes.add(Sphere::new(6371.0e3).mesh().ico(4).unwrap())),
+        MeshMaterial3d(materials.add(StandardMaterial {
+            base_color: Color::srgb(0.2, 0.4, 1.0),
+            unlit: false, 
+            ..default()
+        })),
         GravityProvider {
             model: Box::new(PointMassGravity { gm: registry.bodies.iter().find(|d| d.ephemeris_id == 399).map(|d| d.gm).unwrap_or(3.986e14) }),
         },
         SOI { radius_m: registry.bodies.iter().find(|d| d.ephemeris_id == 399).and_then(|d| d.soi_radius_m).unwrap_or(924e6) },
-        Name::new("Earth Frame"),
-    )).id();
-    commands.entity(earth_frame).set_parent_in_place(emb_root);
+        Name::new("Earth Body"),
+    )).set_parent_in_place(earth_grid).id();
 
-    // 4. Moon Frame (child of EMB)
-    let moon_frame = commands.spawn((
+    // Initial Observer Camera
+    commands.spawn((
+        Camera3d::default(),
+        Projection::Perspective(PerspectiveProjection {
+            near: 1.0,
+            far: 1.0e15, 
+            ..default()
+        }),
+        FloatingOrigin, 
+        CellCoord::default(),
+        Transform::from_translation(Vec3::new(0.0, 10_000_000.0, 10_000_000.0)),
+        GlobalTransform::default(),
+        crate::ObserverCamera {
+            focus_target: Some(earth_body),
+            distance: 15_000_000.0,
+        },
+        crate::ActiveCamera,
+        Name::new("Observer Camera"),
+    )).set_parent_in_place(earth_grid);
+
+    // 4. Moon Anchor
+    let moon_grid = commands.spawn((
         MoonRoot,
         CelestialReferenceFrame { ephemeris_id: 301 },
-        BigGridBundle {
-            grid: Grid::new(1.0e6, 1.0e5),
-            ..default()
-        },
-        // Visual for Moon
-        Mesh3d(meshes.add(Sphere::new(1737.0e3).mesh().ico(4).unwrap())),
-        MeshMaterial3d(materials.add(StandardMaterial {
-            base_color: Color::srgb(0.8, 0.8, 0.8),
-            ..default()
-        })),
+        Grid::new(10_000.0, 1.0e30),
+        CellCoord::default(),
+        Transform::default(),
+        GlobalTransform::default(),
+        Name::new("Moon Local Grid"),
+    )).set_parent_in_place(emb_grid).id();
+
+    // Moon Body
+    let moon_body = commands.spawn((
         CelestialBody { 
             name: "Moon".to_string(), 
             ephemeris_id: 301,
             radius_m: 1737.0e3,
         },
+        CellCoord::default(),
+        Transform::default(),
+        GlobalTransform::default(),
+        Mesh3d(meshes.add(Sphere::new(1737.0e3).mesh().ico(4).unwrap())),
+        MeshMaterial3d(materials.add(StandardMaterial {
+            base_color: Color::srgb(0.8, 0.8, 0.8),
+            unlit: false,
+            ..default()
+        })),
         GravityProvider {
             model: Box::new(PointMassGravity { gm: registry.bodies.iter().find(|d| d.ephemeris_id == 301).map(|d| d.gm).unwrap_or(4.904e12) }),
         },
-        SOI { radius_m: registry.bodies.iter().find(|d| d.ephemeris_id == 301).and_then(|d| d.soi_radius_m).unwrap_or(66e6) },
-        Name::new("Moon Frame"),
-    )).id();
-    commands.entity(moon_frame).set_parent_in_place(emb_root);
+        SOI { radius_m: registry.bodies.iter().find(|d| d.ephemeris_id == 301).and_then(|d| d.soi_radius_m).unwrap_or(66.1e6) },
+        Name::new("Moon Body"),
+    )).set_parent_in_place(moon_grid).id();
 
-    // 5. Spawn other planets directly into Solar Root
+    // 5. Other planets
     for body_desc in registry.bodies.iter() {
-        if [10, 399, 301].contains(&body_desc.ephemeris_id) { continue; }
-
-        let mesh_size = body_desc.radius_m as f32;
+        if body_desc.ephemeris_id == 10 || body_desc.ephemeris_id == 399 || body_desc.ephemeris_id == 301 || body_desc.ephemeris_id == 3 {
+            continue; 
+        }
         commands.spawn((
-            CelestialBody {
-                name: body_desc.name.clone(),
+            CelestialBody { 
+                name: body_desc.name.clone(), 
                 ephemeris_id: body_desc.ephemeris_id,
                 radius_m: body_desc.radius_m,
             },
-            BigSpatialBundle::default(), 
-            Mesh3d(meshes.add(Sphere::new(mesh_size).mesh().ico(4).unwrap())),
+            CellCoord::default(),
+            Transform::default(),
+            GlobalTransform::default(),
+            Mesh3d(meshes.add(Sphere::new(body_desc.radius_m as f32).mesh().ico(2).unwrap())),
             MeshMaterial3d(materials.add(StandardMaterial {
                 base_color: Color::srgb(0.5, 0.5, 0.5),
                 ..default()
             })),
-            GravityProvider {
-                model: Box::new(PointMassGravity { gm: body_desc.gm }),
-            },
-            SOI { radius_m: body_desc.soi_radius_m.unwrap_or(1.0e12) },
-            Name::new(body_desc.name.clone()),
-        )).set_parent_in_place(solar_root);
+            Name::new(format!("{} Body", body_desc.name)),
+        )).set_parent_in_place(solar_grid);
     }
 }

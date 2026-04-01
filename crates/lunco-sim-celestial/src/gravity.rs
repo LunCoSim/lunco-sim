@@ -1,6 +1,5 @@
 use bevy::prelude::*;
 use bevy::math::DVec3;
-use bevy_hierarchy::DespawnRecursiveExt;
 
 pub trait GravityModel: Send + Sync + 'static {
     fn acceleration(&self, relative_pos: DVec3) -> DVec3;
