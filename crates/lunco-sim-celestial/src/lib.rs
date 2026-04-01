@@ -13,6 +13,7 @@ mod gravity;
 mod soi;
 mod terrain;
 mod trajectories;
+mod blueprint;
 
 pub use clock::*;
 pub use ephemeris::*;
@@ -24,6 +25,7 @@ pub use gravity::*;
 pub use soi::*;
 pub use terrain::*;
 pub use trajectories::*;
+pub use blueprint::*;
 
 #[derive(Event, Debug, Clone, Copy)]
 pub struct SurfaceClickEvent {
@@ -71,6 +73,7 @@ impl Plugin for CelestialPlugin {
         app.add_systems(Update, (
             update_sun_light_system,
             celestial_telemetry_system,
+            moon_visuals_system,
         ).chain());
         
         app.add_systems(Update, (

@@ -61,6 +61,7 @@ fn main_ui_system(
     mut q_suspension: Query<(Entity, &mut Suspension)>,
     mut commands: Commands,
     mut scroll_res: ResMut<lunco_sim_celestial::CameraScroll>,
+    mut meshes: ResMut<Assets<Mesh>>,
 ) {
     let Ok(ctx) = contexts.ctx_mut() else { return; };
     
@@ -119,14 +120,19 @@ fn main_ui_system(
 
             if q_rovers.contains(target) {
                 if ui.button("Take Control (Possess)").clicked() {
+                    for (cam_ent, mut obs) in q_camera.iter_mut() {
+                        obs.focus_target = Some(target);
+                        obs.distance = 10.0;
+                        commands.entity(cam_ent).insert((
+                            ControllerLink { vessel_entity: target },
+                            lunco_sim_core::OrbitState::default(),
+                        ));
+                    }
                     commands.entity(target).insert((
                         leafwing_input_manager::prelude::ActionState::<SpaceSystemAction>::default(),
                         get_default_input_map(),
-                        ControllerLink { vessel_entity: target },
                     ));
-                    for (_, mut obs) in q_camera.iter_mut() {
-                        obs.focus_target = Some(target);
-                    }
+                    info!("Possessing rover and focusing at 10m.");
                 }
                 
                 ui.collapsing("Mechanical Inspector", |ui| {
@@ -135,12 +141,23 @@ fn main_ui_system(
             }
         }
 
-        if let Some(_) = pending.request {
+        if let Some(spawn_req) = pending.request {
              ui.separator();
              ui.heading("Surface Spawning");
-             if ui.button("Confirm Spawn: Lunar Explorer").clicked() {
-                 commands.spawn((Name::new("Lunar Explorer"), RoverVessel, Vessel));
+             ui.label(format!("Surface: {:?}", spawn_req.planet));
+             
+             if ui.button("Spawn Ackermann Rover (Blue)").clicked() {
+                 let mesh_handle = meshes.add(Sphere::new(0.5).mesh().build());
+                 let rover = lunco_sim_physics::spawn_joint_ackermann_rover(
+                    &mut commands,
+                    mesh_handle,
+                    spawn_req.click_pos_local.as_vec3() + spawn_req.surface_normal * 1.5,
+                    "Lunar Explorer",
+                    Color::Srgba(bevy::color::palettes::basic::BLUE),
+                 );
+                 commands.entity(rover).set_parent_in_place(spawn_req.planet);
                  pending.request = None;
+                 info!("Spawned rover at surface interaction point.");
              }
              if ui.button("Cancel").clicked() {
                  pending.request = None;
@@ -151,6 +168,7 @@ fn main_ui_system(
     egui::Window::new("Telemetry").anchor(egui::Align2::RIGHT_TOP, [-10.0, 10.0]).show(ctx, |ui| {
         for (_, obs) in q_camera.iter() {
             ui.label(format!("Mode: {:?}", obs.mode));
+            ui.label(format!("Alt: {:.2} km", obs.altitude / 1000.0));
             ui.label(format!("Dist: {:.1}m", obs.distance));
         }
         ui.label("SCROLL or +/- to zoom");

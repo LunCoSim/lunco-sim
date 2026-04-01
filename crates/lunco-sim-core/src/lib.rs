@@ -14,6 +14,28 @@ pub struct Vessel;
 #[derive(Component)]
 pub struct RoverVessel;
 
+#[derive(Component)]
+pub struct Avatar;
+
+#[derive(Component)]
+pub struct OrbitState {
+    pub yaw: f32,
+    pub pitch: f32,
+    pub distance: f32,
+    pub vertical_offset: f32,
+}
+
+impl Default for OrbitState {
+    fn default() -> Self {
+        Self {
+            yaw: 0.0,
+            pitch: -0.5,
+            distance: 10.0,
+            vertical_offset: 1.0,
+        }
+    }
+}
+
 #[derive(Resource, Default, Debug, Clone, Copy)]
 pub struct TimeWarpState {
     pub speed: f64,

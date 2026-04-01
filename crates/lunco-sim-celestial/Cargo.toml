@@ -12,3 +12,4 @@ celestial-core = "0.1.1-alpha.2"
 lunco-sim-core = { path = "../lunco-sim-core" }
 avian3d = { workspace = true }
 chrono = { workspace = true }
+lunco-sim-controller = { path = "../lunco-sim-controller" }

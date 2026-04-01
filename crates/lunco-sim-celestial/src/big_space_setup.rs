@@ -22,6 +22,7 @@ pub fn setup_big_space_hierarchy(
     registry: Res<CelestialBodyRegistry>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut blueprint_materials: ResMut<Assets<crate::blueprint::BlueprintMaterial>>,
 ) {
     // 1. Minimalist BigSpace Root (No Name, No standard spatial components)
     let big_space_root = commands.spawn(BigSpace::default()).id();
@@ -117,7 +118,7 @@ pub fn setup_big_space_hierarchy(
     )).set_parent_in_place(emb_grid).id();
 
     // Moon Body
-    let _moon_body = commands.spawn((
+    let moon_body = commands.spawn((
         CelestialBody { 
             name: "Moon".to_string(), 
             ephemeris_id: 301,
@@ -126,11 +127,21 @@ pub fn setup_big_space_hierarchy(
         CellCoord::default(),
         Transform::default(),
         GlobalTransform::default(),
-        Mesh3d(meshes.add(Sphere::new(1737.0e3).mesh().ico(4).unwrap())),
-        MeshMaterial3d(materials.add(StandardMaterial {
-            base_color: Color::srgb(0.8, 0.8, 0.8),
-            unlit: false,
-            ..default()
+        Mesh3d(meshes.add(Sphere::new(1737.0e3).mesh().ico(6).unwrap())),
+        MeshMaterial3d(blueprint_materials.add(crate::blueprint::BlueprintMaterial {
+            base: StandardMaterial {
+                base_color: Color::srgb(0.5, 0.5, 0.5),
+                metallic: 0.2, // Less metallic for a moon
+                perceptual_roughness: 0.8,
+                ..default()
+            },
+            extension: crate::blueprint::BlueprintExtension {
+                line_color: LinearRgba::new(0.0, 0.5, 1.0, 1.0),
+                grid_scale: 1000.0, // Fine grid for blueprint
+                line_width: 2.0,
+                transition: 0.0, // Start with Lat/Long (High)
+                moon_radius: 1737_000.0,
+            },
         })),
         GravityProvider {
             model: Box::new(PointMassGravity { gm: registry.bodies.iter().find(|d| d.ephemeris_id == 301).map(|d| d.gm).unwrap_or(4.904e12) }),
@@ -152,16 +163,18 @@ pub fn setup_big_space_hierarchy(
         Transform::from_translation(Vec3::new(0.0, 10_000_000.0, 10_000_000.0)),
         GlobalTransform::default(),
         crate::ObserverCamera {
-            focus_target: Some(earth_body),
-            mode: crate::ObserverMode::Orbital,
-            distance: 15_000_000.0,
-            pitch: -0.4,
+            focus_target: Some(moon_body),
+            mode: crate::ObserverMode::Flyby,
+            distance: 2_137_000.0, // 400km alt
+            pitch: -0.8,
             yaw: 0.0,
-            local_flyby_pos: DVec3::ZERO,
+            local_flyby_pos: DVec3::new(0.0, 2_137_000.0, 0.0),
+            altitude: 400_000.0,
         },
         crate::ActiveCamera,
+        lunco_sim_core::Avatar,
         Name::new("Observer Camera"),
-    )).set_parent_in_place(earth_grid);
+    )).set_parent_in_place(moon_grid);
 
     // 5. Other planets
     for body_desc in registry.bodies.iter() {

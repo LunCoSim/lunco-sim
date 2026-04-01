@@ -1,8 +1,9 @@
-use avian3d::prelude::*;
 use bevy::prelude::*;
+use bevy::ecs::relationship::Relationship;
+use avian3d::prelude::*;
 
 use lunco_sim_controller::ControllerLink;
-use lunco_sim_core::Vessel;
+use lunco_sim_core::{Vessel, Avatar, OrbitState};
 
 pub struct LunCoSimAvatarPlugin;
 
@@ -24,29 +25,7 @@ impl Plugin for LunCoSimAvatarPlugin {
 }
 
 #[derive(Component)]
-pub struct Avatar;
-
-#[derive(Component)]
 pub struct DetachedCamera;
-
-#[derive(Component)]
-pub struct OrbitState {
-    pub yaw: f32,
-    pub pitch: f32,
-    pub distance: f32,
-    pub vertical_offset: f32,
-}
-
-impl Default for OrbitState {
-    fn default() -> Self {
-        Self {
-            yaw: 0.0,
-            pitch: -0.5,
-            distance: 10.0,
-            vertical_offset: 1.0,
-        }
-    }
-}
 
 fn avatar_toggle_detached_mode(
     keys: Res<ButtonInput<KeyCode>>,
@@ -148,18 +127,53 @@ fn avatar_orbit_input(
 
 fn avatar_camera_follow(
     time: Res<Time>,
-    mut q_avatar: Query<(&mut Transform, &OrbitState, &ControllerLink), (With<Avatar>, Without<DetachedCamera>)>,
-    q_targets: Query<&GlobalTransform>,
+    mut q_avatar: Query<(Entity, &mut Transform, &OrbitState, &ControllerLink), (With<Avatar>, Without<DetachedCamera>)>,
+    q_targets: Query<(&GlobalTransform, Option<&ChildOf>)>,
+    q_planets: Query<&GlobalTransform, With<lunco_sim_celestial::CelestialBody>>,
+    q_grids: Query<&big_space::grid::Grid>,
+    mut commands: Commands,
 ) {
-    for (mut transform, orbit, link) in q_avatar.iter_mut() {
-        if let Ok(target_tf) = q_targets.get(link.vessel_entity) {
-            let mut target_pos = target_tf.translation();
-            target_pos.y += orbit.vertical_offset;
-            let rotation = Quat::from_euler(EulerRot::YXZ, orbit.yaw, orbit.pitch, 0.0);
-            let offset = rotation * Vec3::new(0.0, 0.0, orbit.distance);
-            let lerp_factor = (10.0 * time.delta_secs()).min(1.0);
-            transform.translation = transform.translation.lerp(target_pos + offset, lerp_factor);
-            transform.look_at(target_pos, Vec3::Y);
+    for (cam_entity, mut transform, orbit, link) in q_avatar.iter_mut() {
+        if let Ok((target_gtf, parent_opt)) = q_targets.get(link.vessel_entity) {
+            let target_pos = target_gtf.translation();
+            
+            // Grid Migration for Local Stability
+            if let Some(child_of) = parent_opt {
+                let mut current = child_of.get();
+                let mut found_grid = None;
+                for _ in 0..10 {
+                    if q_grids.contains(current) { 
+                        found_grid = Some(current); 
+                        break; 
+                    }
+                    if let Ok((_, Some(p))) = q_targets.get(current) { 
+                        current = p.get(); 
+                    } else { 
+                        break; 
+                    }
+                }
+                if let Some(grid_parent) = found_grid {
+                    commands.entity(cam_entity).set_parent_in_place(grid_parent);
+                }
+            }
+
+            // Planet-relative orientation (surface at bottom)
+            let mut up = Vec3::Y;
+            if let Some(child_of) = parent_opt {
+                if let Ok(planet_gtf) = q_planets.get(child_of.get()) {
+                    up = (target_pos - planet_gtf.translation()).normalize();
+                }
+            }
+
+            let orbit_rot = Quat::from_euler(EulerRot::YXZ, orbit.yaw, orbit.pitch, 0.0);
+            let local_rot = Quat::from_rotation_arc(Vec3::Y, up) * orbit_rot;
+            
+            let offset = local_rot * Vec3::new(0.0, 0.0, orbit.distance);
+            let target_with_offset = target_pos + up * orbit.vertical_offset;
+            
+            let lerp_factor = (15.0 * time.delta_secs()).min(1.0);
+            transform.translation = transform.translation.lerp(target_with_offset + offset, lerp_factor);
+            transform.look_at(target_pos, up);
         }
     }
 }

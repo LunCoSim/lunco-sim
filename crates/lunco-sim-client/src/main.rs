@@ -1,9 +1,8 @@
 use bevy::prelude::*;
 use big_space::prelude::CellCoord;
 
-mod blueprint_extension;
 mod ui;
-use blueprint_extension::BlueprintMaterial;
+use lunco_sim_celestial::BlueprintMaterial;
 use ui::LunCoSimUiPlugin;
 
 fn main() {

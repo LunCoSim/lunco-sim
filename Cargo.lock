@@ -4000,7 +4000,9 @@ version = "0.1.0"
 dependencies = [
  "avian3d",
  "bevy",
+ "big_space",
  "leafwing-input-manager",
+ "lunco-sim-celestial",
  "lunco-sim-controller",
  "lunco-sim-core",
 ]
@@ -4016,6 +4018,7 @@ dependencies = [
  "celestial-ephemeris",
  "celestial-time",
  "chrono",
+ "lunco-sim-controller",
  "lunco-sim-core",
 ]
 

@@ -4,6 +4,7 @@ use big_space::prelude::{Grid, CellCoord};
 use crate::registry::CelestialBody;
 use crate::coords::get_absolute_pos_in_root_double_ghost_aware;
 use crate::{SurfaceClickEvent, RoverClickEvent};
+use lunco_sim_controller::ControllerLink;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ObserverMode {
@@ -19,6 +20,7 @@ pub struct ObserverCamera {
     pub pitch: f32,
     pub yaw: f32,
     pub local_flyby_pos: DVec3, 
+    pub altitude: f64,
 }
 
 impl Default for ObserverCamera {
@@ -30,6 +32,7 @@ impl Default for ObserverCamera {
             pitch: 0.0,
             yaw: 0.0,
             local_flyby_pos: DVec3::ZERO,
+            altitude: 0.0,
         }
     }
 }
@@ -50,9 +53,49 @@ impl Plugin for CameraMigrationPlugin {
         app.add_systems(Update, (
             camera_migration_system,
             camera_selection_system,
+            focus_transition_system,
             update_observer_camera_system,
             update_camera_clip_planes_system,
         ).chain());
+    }
+}
+
+pub fn focus_transition_system(
+    mut q_camera: Query<(&mut ObserverCamera, Entity), Changed<ObserverCamera>>,
+    q_bodies: Query<&CelestialBody>,
+    mut last_targets: Local<std::collections::HashMap<Entity, Option<Entity>>>,
+) {
+    for (mut obs, cam_ent) in q_camera.iter_mut() {
+        let new_target = obs.focus_target;
+        let old_target = last_targets.get(&cam_ent).copied().flatten();
+        
+        if new_target == old_target { continue; }
+        last_targets.insert(cam_ent, new_target);
+
+        if let Some(target_ent) = new_target {
+             let mut old_radius = 0.0;
+             if let Some(old_ent) = old_target {
+                 if let Ok(body) = q_bodies.get(old_ent) {
+                     old_radius = body.radius_m;
+                 }
+             }
+
+             if let Ok(new_body) = q_bodies.get(target_ent) {
+                 // Preserve altitude
+                 let current_altitude = if old_radius > 0.0 {
+                     obs.distance - old_radius
+                 } else {
+                     obs.altitude 
+                 };
+                 
+                 obs.distance = (new_body.radius_m + current_altitude).max(10.0);
+                 obs.altitude = current_altitude; 
+                 
+                 if new_body.name == "Earth" {
+                     obs.mode = ObserverMode::Orbital;
+                 }
+             }
+        }
     }
 }
 
@@ -159,7 +202,7 @@ pub fn camera_migration_system(
 }
 
 pub fn update_observer_camera_system(
-    mut q_camera: Query<(Entity, &mut ObserverCamera, &mut CellCoord, &mut Transform, &ActiveCamera), Without<CelestialBody>>,
+    mut q_camera: Query<(Entity, &mut ObserverCamera, &mut CellCoord, &mut Transform, &ActiveCamera), (Without<CelestialBody>, Without<ControllerLink>)>,
     q_spatial: Query<(&CellCoord, &Transform, Option<&CelestialBody>), Without<ObserverCamera>>,
     q_all_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
@@ -197,12 +240,16 @@ pub fn update_observer_camera_system(
         if let Some(body) = t_body {
             let dist_to_center = if obs.mode == ObserverMode::Orbital { obs.distance } else { obs.local_flyby_pos.length() };
             altitude = dist_to_center - body.radius_m;
-            if altitude < 1_000_000.0 && obs.mode == ObserverMode::Orbital {
+            
+            // Switch to Flyby: alt < 1,000km AND NOT Earth
+            if altitude < 1_000_000.0 && obs.mode == ObserverMode::Orbital && body.name != "Earth" {
                 obs.mode = ObserverMode::Flyby;
                 let rot = Quat::from_euler(EulerRot::YXZ, obs.yaw, obs.pitch, 0.0);
                 obs.local_flyby_pos = rot.mul_vec3(Vec3::Z).as_dvec3() * obs.distance;
             }
-            if altitude > 1_100_000.0 && obs.mode == ObserverMode::Flyby {
+            
+            // Switch to Orbital: alt > 1,500km (hysteresis) OR is Earth
+            if (altitude > 1_500_000.0 && obs.mode == ObserverMode::Flyby) || (body.name == "Earth" && obs.mode == ObserverMode::Flyby) {
                 obs.mode = ObserverMode::Orbital;
                 obs.distance = obs.local_flyby_pos.length();
                 let dir = obs.local_flyby_pos.normalize_or_zero().as_vec3();
@@ -210,6 +257,7 @@ pub fn update_observer_camera_system(
                 obs.pitch = (-dir.y).asin();
             }
         } else { altitude = 1_000_000.0; }
+        obs.altitude = altitude;
 
         let mut scroll = scroll_res.delta as f64 * -0.01;
         if keys.pressed(KeyCode::Equal) { scroll += 1.0; }
@@ -230,8 +278,8 @@ pub fn update_observer_camera_system(
             obs.pitch = (obs.pitch - mouse_delta.y * 0.01).clamp(-1.55, 1.55);
             let rotation = Quat::from_euler(EulerRot::YXZ, obs.yaw, obs.pitch, 0.0);
             cam_tf.rotation = rotation;
-            let base_speed = 100.0;
-            let speed = base_speed * (altitude / 1000.0).max(1.0) * time.delta_secs_f64();
+            let base_speed = if obs.altitude < 50_000.0 { 10_000.0 } else { 1000.0 };
+            let speed = base_speed * (obs.altitude / 1000.0).max(1.0) * time.delta_secs_f64();
             let mut move_vec = DVec3::ZERO;
             let forward = rotation.mul_vec3(Vec3::NEG_Z).as_dvec3();
             let right = rotation.mul_vec3(Vec3::X).as_dvec3();
@@ -262,7 +310,7 @@ pub fn update_camera_clip_planes_system(
                 let dist_to_surface = (dist_to_center - body.radius_m).max(1.0);
                 if dist_to_surface < min_dist_to_surface { min_dist_to_surface = dist_to_surface; }
             }
-            perspective.near = (min_dist_to_surface as f32 * 0.1).clamp(0.1, 1000.0);
+            perspective.near = (min_dist_to_surface as f32 * 0.01).clamp(0.1, 100.0);
         }
     }
 }
