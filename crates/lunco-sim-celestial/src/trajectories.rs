@@ -71,17 +71,12 @@ pub fn draw_trajectories_system(
     
     // Moon (Geocentric relative to Earth)
     if let Some(earth_w) = earth_world_pos {
-        let earth_sim_now = registry_resource.provider.position(399, current_epoch);
-        let moon_sim_now = registry_resource.provider.position(301, current_epoch);
-        let rel_now = moon_sim_now - earth_sim_now;
-        
         for i in 0..(cache.moon_path_geocentric.len() - 1) {
-            let p1_rel = cache.moon_path_geocentric[i] - rel_now;
-            let p2_rel = cache.moon_path_geocentric[i+1] - rel_now;
+            let p1_rel = cache.moon_path_geocentric[i];
+            let p2_rel = cache.moon_path_geocentric[i+1];
             
-            // p_rel points are small AU values, converting to meters is safe in f32
-            let p1 = ecliptic_to_bevy(p1_rel).as_vec3() + (gtf_translation_of(&q_bodies, 301).unwrap_or(earth_w));
-            let p2 = ecliptic_to_bevy(p2_rel).as_vec3() + (gtf_translation_of(&q_bodies, 301).unwrap_or(earth_w));
+            let p1 = ecliptic_to_bevy(p1_rel).as_vec3() + earth_w;
+            let p2 = ecliptic_to_bevy(p2_rel).as_vec3() + earth_w;
             
             gizmos.line(p1, p2, Color::srgba(0.5, 0.7, 1.0, 0.4));
         }
@@ -89,28 +84,15 @@ pub fn draw_trajectories_system(
     
     // Earth (Heliocentric relative to Sun)
     if let Some(sun_w) = sun_world_pos {
-        let sun_sim_now = registry_resource.provider.position(10, current_epoch);
-        let earth_sim_now = registry_resource.provider.position(399, current_epoch);
-        let rel_now = earth_sim_now - sun_sim_now;
-        
         for i in 0..(cache.earth_path_heliocentric.len() - 1) {
-            // helio position of Earth at track epoch
-            let p_track_helio = cache.earth_path_heliocentric[i]; 
-            // offset from current Earth helio
-            let p1_rel = p_track_helio - rel_now;
-            let p2_rel = cache.earth_path_heliocentric[i+1] - rel_now;
+            let p1_rel = cache.earth_path_heliocentric[i]; 
+            let p2_rel = cache.earth_path_heliocentric[i+1];
 
-            let p1 = ecliptic_to_bevy(p1_rel).as_vec3() + (gtf_translation_of(&q_bodies, 399).unwrap_or(sun_w));
-            let p2 = ecliptic_to_bevy(p2_rel).as_vec3() + (gtf_translation_of(&q_bodies, 399).unwrap_or(sun_w));
+            let p1 = ecliptic_to_bevy(p1_rel).as_vec3() + sun_w;
+            let p2 = ecliptic_to_bevy(p2_rel).as_vec3() + sun_w;
             
             gizmos.line(p1, p2, Color::srgba(1.0, 1.0, 0.6, 0.2));
         }
     }
 }
 
-fn gtf_translation_of(q_bodies: &Query<(&CelestialBody, &GlobalTransform)>, id: u32) -> Option<Vec3> {
-    for (body, gtf) in q_bodies.iter() {
-        if body.ephemeris_id == id { return Some(gtf.translation()); }
-    }
-    None
-}

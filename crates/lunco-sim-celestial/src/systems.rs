@@ -22,10 +22,9 @@ pub fn ephemeris_update_system(
 ) {
     let Some(ephemeris) = ephemeris else { return; };
     
-    // Only update if time advanced significantly (or first frame)
-    if (clock.epoch - *last_jd).abs() < 1e-12 && *last_jd != 0.0 {
-        return; 
-    }
+    // We must update every frame even if paused, because big_space's
+    // propagate_floating_origin_system mutates Transform to become the world position
+    // in PostUpdate. We need to reset it to the intra-cell offset here in PreUpdate.
     *last_jd = clock.epoch;
     
     for (entity, mut cell, mut tf, body, frame) in q_entities.iter_mut() {
@@ -66,7 +65,6 @@ pub fn body_rotation_system(
     mut q_bodies: Query<(&mut Transform, &CelestialBody)>,
     mut last_jd: Local<f64>,
 ) {
-    if (clock.epoch - *last_jd).abs() < 1e-12 && *last_jd != 0.0 { return; }
     *last_jd = clock.epoch;
     
     let days_since_j2000 = clock.epoch - 2_451_545.0;
