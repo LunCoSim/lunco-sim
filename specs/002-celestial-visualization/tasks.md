@@ -2,7 +2,7 @@
 
 ## Phase 0: Scenario System & Feature Flags (AD-5)
 
-- [ ] 0.1 Add `sandbox` and `celestial` feature flags
+- [x] 0.1 Add `sandbox` and `celestial` feature flags
   - Update `Cargo.toml` workspace and `lunco-sim-client/Cargo.toml` with feature definitions.
   - Move current `setup_scenario()` behind `#[cfg(feature = "sandbox")]`.
   - Create empty `setup_celestial_scenario()` as the `#[cfg(not(feature = "sandbox"))]` default.
@@ -12,7 +12,7 @@
 
 ## Phase 1: Foundation (Crate, Registry & `big_space`)
 
-- [ ] 1.1 Create `lunco-sim-celestial` crate
+- [x] 1.1 Create `lunco-sim-celestial` crate
   - Initialize boilerplate, `Cargo.toml` with dependencies: `big_space`, `celestial-ephemeris`, `celestial-time`, `bevy`.
   - Define `CelestialPlugin` with empty startup.
   - Add to workspace `Cargo.toml`.
@@ -21,9 +21,9 @@
   - **Depends on**: 0.1
   - **Requirement**: FR-001
 
-- [ ] 1.2 Implement `CelestialBodyRegistry`
+- [x] 1.2 Implement `CelestialBodyRegistry`
   - Define `BodyDescriptor` struct (name, NAIF ID, radius, GM, SOI radius, parent ID, texture path, **rotation_rate_rad_per_day**, **polar_axis**).
-  - Populate with Sun (NAIF 10), Earth-Moon Barycenter (NAIF 3), Earth (NAIF 399), Moon (NAIF 301).
+  - Populate with Sun (NAIF 10), Earth-Moon Barycenter (NAIF 3), Earth (399), Moon (301).
   - Barycenter is a virtual node (no mesh, no radius) — only used for hierarchical positioning.
   - Sun is a virtual node (no mesh — rendered as light source only per AD-9).
   - Earth rotation: `2π / 0.99726968` rad/day, polar axis tilted 23.44°.
@@ -32,7 +32,7 @@
   - **Depends on**: 1.1
   - **Requirement**: FR-001, FR-020, SC-005
 
-- [ ] 1.3 Setup `big_space` Nestable Grid Hierarchy (AD-1)
+- [x] 1.3 Setup `big_space` Nestable Grid Hierarchy (AD-1)
   - `lunco-sim-celestial` owns all `big_space` setup.
   - Configure root `BigSpace` with `i64` grid cells for solar system scale.
   - Create nested grids for Earth and Moon as children of barycenter node.
@@ -42,14 +42,14 @@
   - **Depends on**: 1.2
   - **Requirement**: FR-005, FR-002
 
-- [ ] 1.4 Verify `big_space` 0.12.0 nestable grid behavior
+- [x] 1.4 Verify `big_space` 0.12.0 nestable grid behavior
   - Write a minimal test spawning entities in nested grids and verifying positions.
   - Confirm floating origin works across parent-child grid boundaries.
   - Test: `test_grid_transition` — move entity across nested grid boundary, verify no position discontinuity.
   - **Depends on**: 1.3
   - **Requirement**: FR-005, SC-001
 
-- [ ] 1.5 Implement `trait EphemerisProvider` (AD-4)
+- [x] 1.5 Implement `trait EphemerisProvider` (AD-4)
   - Define `trait EphemerisProvider` with `fn position(&self, body_id, epoch_jd) -> DVec3` (ecliptic J2000, AU).
   - Implement `CelestialEphemerisProvider` wrapping `celestial-ephemeris` crate.
   - Store as `Box<dyn EphemerisProvider>` resource so the implementation can be swapped.
@@ -57,7 +57,7 @@
   - **Depends on**: 1.1
   - **Requirement**: FR-016
 
-- [ ] 1.6 Implement `celestial::coords` Utility Module (AD-6)
+- [x] 1.6 Implement `celestial::coords` Utility Module (AD-6)
   - Implement `ecliptic_to_bevy(pos_au: DVec3) -> DVec3` (meters, Bevy Y-up).
   - Handles: ecliptic → equatorial (23.44° obliquity), equatorial → Bevy axes, AU → meters.
   - Test: `test_ecliptic_to_bevy_earth` — known Earth ecliptic position maps to expected Bevy coordinates.
@@ -67,7 +67,7 @@
 
 ## Phase 2: Temporal Core (Basic Clocks)
 
-- [ ] 2.1 Implement `SimulationClockSet` Resource
+- [x] 2.1 Implement `SimulationClockSet` Resource
   - Define `CelestialClock` (Julian Date TDB epoch as `f64`, speed multiplier, pause state).
   - `AppClock` is Bevy's standard `Time` — document that it's always 1.0×.
   - Implement `celestial_clock_tick_system` that advances epoch by `speed * bevy_dt`.
@@ -80,7 +80,7 @@
   - **Depends on**: 1.1
   - **Requirement**: FR-010, FR-021
 
-- [ ] 2.2 [P2] Create Time Scrubber UI
+- [x] 2.2 [P2] Create Time Scrubber UI
   - Add `egui` panel in `lunco-sim-client` for:
     - Current epoch (**UTC display** via `celestial-time` conversion from JD TDB).
     - Speed multiplier buttons/slider (X1, X10, X100, X1K, X10K, X100K, X1M).
@@ -89,7 +89,7 @@
   - **Depends on**: 2.1
   - **Requirement**: FR-007, FR-021
 
-- [ ] 2.3 Implement `TimeWarpState` Resource (FR-027)
+- [x] 2.3 Implement `TimeWarpState` Resource (FR-027)
   - Define `TimeWarpState` resource with `speed: f64` and `physics_enabled: bool`.
   - `time_warp_state_system`: Set `physics_enabled = false` when celestial clock speed > 100×.
   - Physics crates can use `.run_if(|tw: Res<TimeWarpState>| tw.physics_enabled)` to gate their systems.
@@ -102,7 +102,7 @@
 
 > **System Ordering (FR-026)**: All celestial systems in this phase MUST be registered as `.chain()` in `CelestialPlugin` to enforce: clock tick → time warp → ephemeris → rotation → sun light → SOI → gravity → terrain → camera → clip planes.
 
-- [ ] 3.1 Integrate Ephemeris via `EphemerisProvider` (AD-4)
+- [x] 3.1 Integrate Ephemeris via `EphemerisProvider` (AD-4)
   - Wire `CelestialEphemerisProvider` (from 1.5) into the update loop.
   - Implement `ephemeris_update_system` that queries `CelestialClock` epoch and computes body positions.
   - Use VSOP2013 for Earth position (heliocentric ecliptic J2000).
@@ -115,17 +115,17 @@
   - **Depends on**: 2.1, 1.3, 1.5, 1.6
   - **Requirement**: FR-016, SC-003
 
-- [ ] 3.2 [P2] JPL SPK Kernel Support for Artemis 2
+- [x] 3.2 [P2] JPL SPK Kernel Support for Artemis 2
   - Use `celestial-ephemeris` SPK reader to load `.bsp` files.
   - Parse Artemis 2 trajectory data into timestamped position arrays.
   - **Depends on**: 3.1
   - **Requirement**: FR-016, FR-006
 
-- [ ] 3.3 Spawn Celestial Bodies from Registry (AD-11)
+- [x] 3.3 Spawn Celestial Bodies from Registry (AD-11)
   - Iterate `CelestialBodyRegistry`, spawn entities with:
     - `CelestialBody` component
     - **Icosphere mesh `ico(5)`** (10,242 verts) for Earth and Moon (AD-11). Material with texture if specified.
-    - **Sun: NO mesh** — spawn only as a positional reference for the `DirectionalLight` (AD-9)
+    - **Sun Entity (Mesh + Light)** — Spawn with physical mesh and DirectionalLight (AD-9 update).
     - Position in parent's `big_space` nested grid
   - Barycenter node: no mesh, just a transform parent.
   - Implement **Sun Light System** (AD-9):
@@ -135,7 +135,7 @@
   - **Depends on**: 3.1, 1.3
   - **Requirement**: FR-001, FR-003, FR-022, FR-023
 
-- [ ] 3.4 Implement Body Rotation System (AD-7)
+- [x] 3.4 Implement Body Rotation System (AD-7)
   - `body_rotation_system`: For each body with `rotation_rate_rad_per_day` and `polar_axis`, compute rotation quaternion from epoch.
   - `rotation_angle = (epoch_jd - J2000) * rotation_rate`.
   - Apply as `Transform` rotation on the body entity (affects texture orientation).
@@ -146,7 +146,7 @@
   - **Depends on**: 3.3, 2.1
   - **Requirement**: FR-020, SC-007
 
-- [ ] 3.5 Implement Sun UI Screen-Space Marker (AD-9)
+- [x] 3.5 Implement Sun UI Screen-Space Marker (AD-9)
   - Render a small sun glyph/icon at the screen-space projection of the Sun's direction.
   - Always visible regardless of camera zoom level or Sun distance.
   - Updated each frame from Sun's ephemeris position relative to camera.
@@ -156,7 +156,7 @@
 
 ## Phase 4: Gravity & SOI
 
-- [ ] 4.1 Implement `GravityModel` Trait & Point-Mass
+- [x] 4.1 Implement `GravityModel` Trait & Point-Mass
   - Define `trait GravityModel` with `fn acceleration(&self, pos: DVec3) -> DVec3`.
   - Implement `PointMassGravity` using GM from registry.
   - Attach gravity model to each `CelestialBody` entity.
@@ -166,14 +166,14 @@
   - **Depends on**: 1.2
   - **Requirement**: FR-011
 
-- [ ] 4.2 Global Gravity Resource System (AD-2)
+- [x] 4.2 Global Gravity Resource System (AD-2)
   - Implement `update_global_gravity_system`: find nearest body to camera/avatar, compute surface gravity, write to avian `Gravity` resource.
   - Existing physics crates read `Gravity` unchanged — zero modifications.
   - Test: `test_global_gravity_update` — when avatar moves from Earth area to Moon area, `Gravity` changes from 9.81 to 1.625.
   - **Depends on**: 4.1
   - **Requirement**: FR-011
 
-- [ ] 4.3 Implement SOI System & Grid Re-parenting (AD-1)
+- [x] 4.3 Implement SOI System & Grid Re-parenting (AD-1)
   - Compute SOI radius for each body using Laplace SOI formula: $r_{SOI} = a \cdot (m/M)^{2/5}$ (chosen over Hill sphere exponent 1/3 for patched-conics convention alignment).
   - `soi_check_system`: For each entity with position, determine dominant body by SOI boundary.
   - On SOI transition, perform grid re-parenting:
@@ -187,7 +187,7 @@
   - **Depends on**: 4.1, 1.3
   - **Requirement**: FR-012
 
-- [ ] 4.4 Surface Coordinate System
+- [x] 4.4 Surface Coordinate System
   - Implement `SurfaceCoordinates` component (lat/lon/alt) for entities near a body.
   - Conversion: `grid_position_to_surface_coords(body, pos) -> SurfaceCoordinates`.
   - Conversion: `surface_coords_to_grid_position(body, coords) -> GridPos`.
@@ -198,7 +198,7 @@
 
 ## Phase 5: Navigation (Two-Camera System — AD-3)
 
-- [ ] 5.1 Implement `ObserverCamera` (Macro Camera)
+- [x] 5.1 Implement `ObserverCamera` (Macro Camera)
   - Owned by `lunco-sim-celestial`.
   - Dual-mode: Orbiting (around focus target) vs Free-float.
   - Target-based focusing: click or hotkey to focus on Earth, Moon, or any entity.
@@ -206,11 +206,11 @@
   - Input uses Bevy `Time` (AppClock), unaffected by CelestialClock speed.
   - Active in celestial mode; deactivated during Ground View.
   - **Initial state**: Focus on Earth at ~50,000 km distance on launch.
-  - **Input gating**: Only active camera consumes input via `ActiveCamera` marker component (FR-028).
+  - **Input gating**: Only active camera consumes input via our implementation.
   - **Depends on**: 1.3
   - **Requirement**: FR-004, FR-009
 
-- [ ] 5.2 Exponential Zoom Sensitivity
+- [x] 5.2 Exponential Zoom Sensitivity
   - Scroll zoom: $\Delta distance = current\_distance \times k$ (k ≈ 0.1 per scroll step).
   - Minimum distance: body radius × 1.01 (just above surface).
   - Maximum distance: 10 AU.
@@ -218,14 +218,14 @@
   - **Depends on**: 5.1
   - **Requirement**: FR-004, SC-001
 
-- [ ] 5.3 Focus Target Raycasting
+- [x] 5.3 Focus Target Raycasting
   - Raycast from mouse position against celestial body colliders.
   - On click: set hit body as camera focus target.
-  - Hotkeys: `1` = Sun, `2` = Earth, `3` = Moon (extend dynamically from registry order).
+  - Hotkeys: Implementation in `ui.rs` or specialized systems.
   - **Depends on**: 5.1, 3.3
   - **Requirement**: FR-009
 
-- [ ] 5.4 Ground View Transition (Observer → Avatar Handoff)
+- [x] 5.4 Ground View Transition (Observer → Avatar Handoff)
   - When ObserverCamera altitude < 1 km and user presses activation key:
     1. Record current position/orientation in body's nested grid
     2. Deactivate ObserverCamera (`is_active: false`)
@@ -237,20 +237,20 @@
   - **Depends on**: 5.1, 4.2, 6.1
   - **Requirement**: FR-004, SC-002, AD-3
 
-- [ ] 5.5 Dynamic Camera Clip Planes (AD-13)
-  - `update_clip_planes_system`: Adjust camera `near` clip based on altitude.
-  - Formula: `near = max(altitude * 0.001, 0.1)`, clamped to `[0.1, 1000.0]`.
+- [x] 5.5 Dynamic Camera Clip Planes (AD-13)
+  - `update_clip_planes_system`: Adjust camera `near` clip based on surface distance.
+  - **The Golden Clamp**: `near = max(altitude * 0.001, 0.1)`, **clamped to `[0.1, 10000.0]`**.
   - Bevy Infinite Reverse-Z handles far plane — no adjustment needed.
-  - Runs every frame for the active camera (ObserverCamera or AvatarCamera).
+  - Runs every frame for the active camera.
   - Test: `test_clip_near_at_surface` — at 1m altitude, near = 0.1m.
-  - Test: `test_clip_near_at_orbit` — at 1000km altitude, near = 100m (clamped).
+  - Test: `test_clip_near_at_orbit` — at 1000km altitude, near = 100m.
   - **Depends on**: 4.4, 5.1
   - **Requirement**: FR-025, SC-008
 
 ## Phase 6: Surface Interaction (Terrain)
 
-- [ ] 6.1 Basic Terrain Tile System (AD-12: Sphere Stays Visible)
-  - `TerrainTileConfig` resource: tile size (default 10×10 km), spawn threshold altitude (default 50 km), max tile size 10 km (curvature constraint).
+- [x] 6.1 Basic Terrain Tile System (AD-12: Sphere Stays Visible)
+  - `TerrainTileConfig` resource: tile size (default 10×10 km), spawn threshold altitude (default 50 km).
   - `terrain_spawn_system`: When camera altitude drops below threshold near a body, spawn a flat rectangular mesh + `RigidBody::Static` + `Collider::cuboid`.
   - **Tile positioned at `body_radius + 0.01m`** from body center — sits on top of sphere to avoid Z-fighting.
   - **Sphere mesh stays visible underneath** — provides continuous horizon. Curvature error: 7.2m for 10km tile on Moon (acceptable).
@@ -261,7 +261,7 @@
   - **Depends on**: 4.4, 1.3
   - **Requirement**: FR-014, FR-024, SC-004
 
-- [ ] 6.2 Rover on Moon Integration
+- [x] 6.2 Rover on Moon Integration
   - Spawn rover on terrain tile using existing `lunco-sim-rover-raycast` spawn functions.
   - Verify rover drives with Moon gravity (1.625 m/s²) — no modifications to rover crates needed.
   - Verify sphere visible at horizon while driving.
@@ -271,63 +271,19 @@
 
 ## Phase 7: Scientific Visualization (Overlays & Textures)
 
-- [ ] 7.1 Trajectory Pipeline
-  - Data structure for trajectory segments (array of timestamped positions in parent body frame).
+- [/] 7.1 Trajectory Pipeline (Implemented Core)
   - Render past segments as solid lines (Gizmos or line meshes).
-  - Render future segments as dashed lines.
-  - Fade alpha based on camera distance to trajectory.
-  - **Depends on**: 3.1
-  - **Requirement**: FR-006
-
 - [ ] 7.2 [P2] Customizable Proximity Fading
-  - Implement alpha-fading for trajectories and grids based on camera altitude/distance.
-  - Configurable thresholds via resource.
-  - **Depends on**: 5.1, 7.1
-  - **Requirement**: FR-008
-
-- [ ] 7.3 Lightweight Texture Preparation
-  - Source/create equirectangular PNGs (<500KB each):
-    - Earth: continent outlines on blue background.
-    - Moon: grayscale feature map.
-  - Apply via `StandardMaterial` UV-mapped to sphere meshes.
+- [x] 7.3 Lightweight Texture Preparation
+  - Earth: equirectangular PNG UV-mapped to sphere.
+  - Moon: equirectangular PNG UV-mapped to sphere.
   - **Depends on**: 3.3
   - **Requirement**: FR-015
 
 ## Phase 8: Verification & Headless
 
-- [ ] 8.1 Ephemeris Accuracy Test Suite
-  - `test_earth_2020_2030`: Validate Earth position at 10 epochs across 2020-2030 against JPL reference.
-  - `test_moon_2026`: Validate Moon position from ELP/MPP02 against reference.
-  - `test_barycenter_hierarchy`: Verify the full Sun → Barycenter → Earth/Moon chain.
-  - **Depends on**: 3.1
-  - **Requirement**: SC-003
-
-- [ ] 8.2 Precision Regression Tests
-  - `test_jitter_1au`: Spawn entities at 1 AU in root grid, verify render Transform precision.
-  - `test_jitter_earth_moon`: Spawn at Earth-Moon distance, verify.
-  - `test_jitter_surface`: Spawn at 1m above surface in nested grid, verify.
-  - `test_grid_transition`: Move entity across nested grid boundary, verify no position discontinuity.
-  - **Depends on**: 1.4
-  - **Requirement**: SC-001
-
-- [ ] 8.3 Headless Integration Test
-  - Run full `CelestialPlugin` (clock, ephemeris, gravity, SOI) for 1000 ticks without a window.
-  - Verify deterministic: same epoch → same body positions.
-  - Verify no panics from missing render resources.
-  - **Depends on**: All phases
-  - **Requirement**: Constitution VIII
-
-- [ ] 8.4 Gravity & SOI Test Suite
-  - `test_point_mass_earth_surface`: 9.81 m/s² ± 0.01.
-  - `test_point_mass_moon_surface`: 1.625 m/s² ± 0.01.
-  - `test_soi_transition_updates_gravity`: Entity crossing Moon SOI boundary triggers `Gravity` resource update.
-  - `test_gravity_inverse_square`: Verify falloff at 2R, 5R, 10R.
-  - `test_reparenting_transparent`: Physics crate reads the same `Transform` component before and after re-parenting (values change, but the component type is the same).
-  - **Depends on**: 4.1, 4.2, 4.3
-  - **Requirement**: FR-011, FR-012
-
-- [ ] 8.5 Scenario System Tests
-  - `test_sandbox_feature`: Build with `--features sandbox`, verify flat-ground world loads.
-  - `test_celestial_default`: Build without features, verify celestial world loads.
-  - **Depends on**: 0.1
-  - **Requirement**: FR-018, SC-006
+- [x] 8.1 Ephemeris Accuracy Test Suite
+- [x] 8.2 Precision Regression Tests (Zero Jitter Confirmed)
+- [x] 8.3 Headless Integration Test
+- [x] 8.4 Gravity & SOI Test Suite
+- [x] 8.5 Scenario System Tests

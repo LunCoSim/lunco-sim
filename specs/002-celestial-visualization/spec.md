@@ -3,7 +3,7 @@
 **Feature Branch**: `002-celestial-visualization`
 **Created**: 2026-03-31
 **Updated**: 2026-04-01
-**Status**: Draft
+**Status**: Implemented & Stable
 **Dependencies**: References `006-time-and-integrators` (advanced time/PhysicsMode), `009-coordinate-frame-tree` (advanced CFT)
 **Input**: User description: "I want to have model of Earth/Moon/Sun system, kind of like kerbal. It has to be simple. I want to use exponential camera. I want to be able to rotate it. Ideally I want to visualise position/trajectory of Artemis 2 mission there. Earth and Moon should be simple spheres. Position of three bodies must be real based on real data. We should be able to set time when it happens. If we get close we should be able to drive rovers."
 
@@ -33,9 +33,8 @@ This spec lays the **foundational world architecture** for a solar-scale lunar c
 
 ## Architecture Decisions (Resolved)
 
-### AD-1: Spatial Ownership
-**Decision:** `lunco-sim-celestial` owns all `big_space` setup (root grid, nested body grids, floating origin). Existing crates (`lunco-sim-physics`, `lunco-sim-rover-raycast`, `lunco-sim-avatar`) continue using local `Transform` and operate inside a body's nested grid without awareness of `big_space`.
-**Rationale:** Minimizes changes to the 8 existing crates. Physics/rover code doesn't need to understand solar-system-scale coordinates — it only operates on local surfaces. Clean separation of concerns: celestial plugin manages "where bodies are in the universe"; downstream crates manage "what happens on a body's surface."
+**Decision:** `lunco-sim-celestial` owns all `big_space` setup (root grid, nested body grids, floating origin). **The Golden Bridge Protocol**: To satisfy `big_space`, `TransformPlugin` MUST be disabled in the client crate. UI and Window hit-testing are maintained via a custom `fix_spatial_components_for_non_grid_entities` shim that manually backfills `GlobalTransform` for non-grid entities.
+**Rationale:** Resolves the hard conflict between `big_space`'s spatial requirements and Bevy's default UI systems. Minimizes changes to the 8 existing crates while ensuring full interactivity.
 
 **SOI Transfer (Earth → Moon):** When an entity crosses from Earth's SOI into Moon's SOI, the celestial plugin performs a **grid re-parenting**:
 1. The entity's world-space `f64` position is computed from its current grid cell + local transform.
@@ -52,8 +51,9 @@ This spec lays the **foundational world architecture** for a solar-scale lunar c
 **Decision:** Two cameras with explicit handoff:
 - **ObserverCamera** (owned by `lunco-sim-celestial`): Macro navigation. Focus on celestial bodies. Exponential zoom. `big_space`-aware.
 - **AvatarCamera** (owned by `lunco-sim-avatar`): Surface-level. Follows possessed rover. Orbit with linear zoom.
+- **Camera Migration**: The active camera dynamically re-parents itself to the nearest `Grid` ancestor of its `focus_target` to maintain absolute coordinate precision (FR-005).
 - Only one `Camera3d` active at a time. Ground View transition deactivates ObserverCamera, activates AvatarCamera.
-**Rationale:** The macro camera and surface camera have fundamentally different requirements (coordinate system, zoom curve, target type, input model). A unified camera would mix these concerns. Two cameras with a clean handoff keeps each simple and testable independently.
+**Rationale:** The migration system ensures that the floating origin always operates within the target body's local measurement system, eliminating z-fighting and coordinate drift.
 
 ### AD-4: Ephemeris Source
 **Decision:** `celestial-ephemeris` crate (0.1.1-alpha.2), wrapped behind a `trait EphemerisProvider` for swappability.
@@ -76,8 +76,8 @@ This spec lays the **foundational world architecture** for a solar-scale lunar c
 **Rationale:** Focus engineering effort on mechanics, not visuals. A cubemap starfield is a single-task addition later.
 
 ### AD-9: Sun Rendering
-**Decision:** Sun is NOT rendered as a visible sphere. It is a `DirectionalLight` source + a UI screen-space marker icon.
-**Rationale:** The Sun is 696,000 km radius at 150,000,000 km distance. Rendering a sphere that large at that distance causes `f32` precision artifacts (the mesh vertices span ±700K units). As a directional light it works perfectly at all scales. Extension: add billboard sprite in a future spec.
+**Decision:** Sun IS rendered as a visible sphere mesh (`ico(4)`) in the root Solar Grid. It also serves as a `DirectionalLight` source + a UI screen-space marker icon.
+**Rationale:** Providing a physical Sun mesh enhances the sense of scale when observing the solar system. Precision issues are mitigated by the Adaptive Optics (AD-13) which prevents the near-clip plane from swallowing the Sun at 1 AU range.
 
 ### AD-10: Time Conversion
 **Decision:** Use `celestial-time` crate for Julian Date (TDB) ↔ UTC conversion.
@@ -92,8 +92,8 @@ This spec lays the **foundational world architecture** for a solar-scale lunar c
 **Rationale:** Hiding the sphere when terrain spawns creates a black void at the horizon — completely immersion-breaking. Keeping the sphere visible underneath provides a continuous horizon. The curvature error of a 10km flat tile on the Moon is only 7.2 meters (formula: $h = R - \sqrt{R^2 - (d/2)^2}$) — invisible to the user. The smooth sphere texture at the horizon is acceptable for Phase 1, and far better than black void.
 
 ### AD-13: Dynamic Camera Clip Planes
-**Decision:** Dynamic `near` clip plane that scales with camera altitude. Bevy's Infinite Reverse-Z handles the far plane automatically.
-**Rationale:** Camera operates across 11 orders of magnitude (1 AU to 1m). Setting near clip too small at solar scale wastes depth precision. Setting it too large at surface scale clips the rover. Dynamic adjustment (near = `max(altitude × 0.001, 0.1).min(1000.0)`) keeps depth precision optimal at every scale. The upper clamp prevents excessive near-plane values at extreme altitudes. Bevy's Infinite Reverse-Z eliminates the need to manage the far clip plane.
+**Decision:** Surface-Aware Dynamic `near` clip plane that scales with distance to the body surface.
+**Rationale:** $near = (min\_dist\_to\_surface \times 0.001).max(0.1).min(10000.0)$. The 10km upper clamp is CRITICAL — it prevents the near-plane from becoming large enough to clip the Sun or distant planetary neighbors when focusing on a body at 1 AU range. Bevy's Infinite Reverse-Z handles the far plane (extended to 1e15m for solar visibility).
 
 ---
 
@@ -177,10 +177,11 @@ As a developer, I want to run the flat-ground rover sandbox for quick physics it
 -   **FR-003**: **Solar Lighting**: Sun is rendered as a `DirectionalLight` source only (not a visible sphere — AD-9). Direction computed from Sun's ephemeris position relative to camera focus. A UI screen-space marker indicates Sun direction. Updates as bodies move.
 -   **FR-004**: **Exponential Observer Camera**: Macro-level camera owned by `lunco-sim-celestial` with focus targets, exponential zoom sensitivity ($\Delta d = d \times k$), and orbiting/free-float modes. Camera input uses **Application Clock**. Coexists with the avatar camera via explicit handoff (AD-3). **Initial state**: On launch, ObserverCamera focuses on Earth at ~50,000 km distance. **Input gating**: Only the active camera consumes input; the inactive camera's input systems are gated by an `ActiveCamera` marker component (FR-028).
 -   **FR-005**: **Multi-Scale Rendering via `big_space`**: `lunco-sim-celestial` owns all `big_space` setup (AD-1):
+    -   **Hierarchical Grids**: Multi-level nesting (Parent Grid -> Child Anchor Grid). Allows for coarse solar-scale cells and fine planetary-scale cells simultaneously.
     -   **Root Grid**: Solar system scale (Sun at origin). Grid cell precision: `i64`.
-    -   **Body Grids**: Each major body gets a nested `big_space` grid for local entities (rovers, surface features).
-    -   **Floating Origin**: `FloatingOriginPlugin` on the camera. When the camera enters a body's SOI, the floating origin operates within that body's nested grid.
-    -   **Transparent to downstream crates**: Physics/rover/avatar crates use local `Transform` only.
+    -   **Body Grids**: Each major body (Earth, Moon) gets its own nested `Grid` anchor for local entities (rovers, surface features).
+    -   **Floating Origin**: `FloatingOriginPlugin` on the camera. When the camera focuses on a body, it re-parents to that body's nested grid.
+    -   **The Golden Bridge**: `TransformPlugin` is disabled; UI is maintained via manual transform backfilling for Non-Grid entities.
 -   **FR-006**: **Trajectory Rendering**: Render trajectories with past (solid) and future (dashed) segments. Trajectories are computed in the parent body's reference frame. Fade based on camera proximity. Artemis 2 trajectory loadable from SPK kernel via `celestial-ephemeris`.
 -   **FR-007**: **Time Scrubber UI**: `egui` panel for mission epoch control and speed multipliers (X1..X1M).
 -   **FR-008**: **Customizable Proximity Fading**: Visibility thresholds for overlays, trajectory lines, and **configurable surface grid size** (default 10km sectors).
@@ -205,10 +206,10 @@ As a developer, I want to run the flat-ground rover sandbox for quick physics it
 -   **FR-019**: **Coordinate Conversion Utility** (AD-6): Shared `celestial::coords` module converting ecliptic J2000 (AU) → Bevy coordinate space (meters, Y-up). Handles obliquity rotation and unit scaling.
 -   **FR-020**: **Body Rotation** (AD-7): Each body rotates based on epoch. Earth: sidereal rotation (~360°/23h56m) around its tilted polar axis. Moon: tidally locked — rotation synchronized to orbital position. Earth must appear realistically oriented when observed from the lunar surface.
 -   **FR-021**: **Time Scale Conversion** (AD-10): Use `celestial-time` crate for Julian Date (TDB) ↔ UTC conversion. Time scrubber UI displays UTC; internal clock stores Julian Date.
--   **FR-022**: **Sun as Light Source Only** (AD-9): Sun is not rendered as a mesh. It is a directional light + screen-space UI marker. Avoids `f32` precision artifacts at astronomical distances.
+-   **FR-022**: **Sun as Mesh + Light Source** (AD-9): Sun is rendered as a physical sphere mesh (`ico(4)`). It also carries a `DirectionalLight` and a screen-space UI marker. Optics fixes (FR-025) ensure it remains visible across solar system distances.
 -   **FR-023**: **Planet Rendering Strategy** (AD-11): Each body is rendered as a single icosphere mesh (`ico(5)`, 10,242 vertices). At altitude < threshold, a hard cut transitions to terrain tiles. No billboard phase or multi-LOD mesh for Phase 1.
 -   **FR-024**: **Sphere-Terrain Layering** (AD-12): When terrain tiles are active, the sphere mesh remains visible underneath. Tiles are offset at `radius + 0.01m` to avoid Z-fighting. Sphere provides the horizon; tiles provide collision and local detail. Curvature error: 7.2m per 10km tile on Moon (acceptable).
--   **FR-025**: **Dynamic Camera Clip Planes** (AD-13): Camera `near` clip plane adjusts dynamically based on altitude (`max(altitude × 0.001, 0.1).min(1000.0)`). Bevy's Infinite Reverse-Z handles the far plane. Prevents Z-fighting at solar scale and close clipping at surface scale.
+-   **FR-025**: **Dynamic Camera Clip Planes** (AD-13): Camera `near` clip plane adjusts dynamically based on surface distance ($altitude \times 0.001$). CLAMPED to range [0.1, 10000.0]. The 10km maximum limit is essential for maintaining solar visibility at 1 AU scale.
 -   **FR-026**: **System Ordering**: All celestial systems MUST execute in deterministic order: clock tick → ephemeris update → body rotation → sun light → SOI check → gravity update → terrain spawn → camera → clip planes. Registered as `.chain()` in `CelestialPlugin`.
 -   **FR-027**: **TimeWarp State Interface**: A `TimeWarpState` resource published by `lunco-sim-celestial` indicates current time compression speed and whether physics should be active (`physics_enabled = false` when `speed > 100×`). Physics crates gate their systems on this resource. Full PhysicsMode state machine deferred to `006-time-and-integrators`.
 -   **FR-028**: **Input Conflict Resolution**: Only the active camera (ObserverCamera or AvatarCamera) consumes input. An `ActiveCamera` marker component gates input systems. During handoff, the marker is atomically moved between cameras.

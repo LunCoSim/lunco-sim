@@ -22,13 +22,10 @@ pub fn setup_big_space_hierarchy(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    // 1. Root BigSpace marker
-    let big_space_root = commands.spawn((
-        big_space::prelude::BigSpace::default(),
-        Name::new("Big Space Root"),
-    )).id();
+    // 1. Minimalist BigSpace Root (No Name, No standard spatial components)
+    let big_space_root = commands.spawn(BigSpace::default()).id();
 
-    // Solar System grid anchor (1 Billion km cells, Effective Infinite bounds)
+    // 2. Solar System Grid Anchor
     let solar_grid = commands.spawn((
         SolarSystemRoot,
         CelestialReferenceFrame { ephemeris_id: 10 }, 
@@ -39,8 +36,10 @@ pub fn setup_big_space_hierarchy(
         Name::new("Universe Grid (Solar)"),
     )).set_parent_in_place(big_space_root).id();
 
+    // All subsequent bodies/grids follow as children of solar_grid...
     // The Sun Body
-    commands.spawn((
+    let _sun_body = commands.spawn((
+        SolarSystemRoot, 
         CelestialBody { 
             name: "Sun".to_string(), 
             ephemeris_id: 10,
@@ -58,20 +57,7 @@ pub fn setup_big_space_hierarchy(
             ..default()
         })),
         Name::new("Sun Body"),
-    )).set_parent_in_place(solar_grid);
-
-    // Realistic Sun Light
-    commands.spawn((
-        DirectionalLight {
-            illuminance: 10_000.0,
-            shadows_enabled: false,
-            ..default()
-        },
-        CellCoord::default(),
-        Transform::default(),
-        GlobalTransform::default(),
-        Name::new("Sun Light"),
-    )).set_parent_in_place(solar_grid);
+    )).set_parent_in_place(solar_grid).id();
 
     // 2. EMB Anchor
     let emb_grid = commands.spawn((
@@ -118,26 +104,6 @@ pub fn setup_big_space_hierarchy(
         Name::new("Earth Body"),
     )).set_parent_in_place(earth_grid).id();
 
-    // Initial Observer Camera
-    commands.spawn((
-        Camera3d::default(),
-        Projection::Perspective(PerspectiveProjection {
-            near: 1.0,
-            far: 1.0e15, 
-            ..default()
-        }),
-        FloatingOrigin, 
-        CellCoord::default(),
-        Transform::from_translation(Vec3::new(0.0, 10_000_000.0, 10_000_000.0)),
-        GlobalTransform::default(),
-        crate::ObserverCamera {
-            focus_target: Some(earth_body),
-            distance: 15_000_000.0,
-        },
-        crate::ActiveCamera,
-        Name::new("Observer Camera"),
-    )).set_parent_in_place(earth_grid);
-
     // 4. Moon Anchor
     let moon_grid = commands.spawn((
         MoonRoot,
@@ -150,7 +116,7 @@ pub fn setup_big_space_hierarchy(
     )).set_parent_in_place(emb_grid).id();
 
     // Moon Body
-    let moon_body = commands.spawn((
+    let _moon_body = commands.spawn((
         CelestialBody { 
             name: "Moon".to_string(), 
             ephemeris_id: 301,
@@ -171,6 +137,28 @@ pub fn setup_big_space_hierarchy(
         SOI { radius_m: registry.bodies.iter().find(|d| d.ephemeris_id == 301).and_then(|d| d.soi_radius_m).unwrap_or(66.1e6) },
         Name::new("Moon Body"),
     )).set_parent_in_place(moon_grid).id();
+
+    // Initial Observer Camera
+    commands.spawn((
+        Camera3d::default(),
+        Projection::Perspective(PerspectiveProjection {
+            near: 1.0,
+            far: 1.0e15, 
+            ..default()
+        }),
+        FloatingOrigin, 
+        CellCoord::default(),
+        Transform::from_translation(Vec3::new(0.0, 10_000_000.0, 10_000_000.0)),
+        GlobalTransform::default(),
+        crate::ObserverCamera {
+            focus_target: Some(earth_body),
+            distance: 15_000_000.0,
+            pitch: -0.4,
+            yaw: 0.0,
+        },
+        crate::ActiveCamera,
+        Name::new("Observer Camera"),
+    )).set_parent_in_place(earth_grid);
 
     // 5. Other planets
     for body_desc in registry.bodies.iter() {
@@ -194,4 +182,17 @@ pub fn setup_big_space_hierarchy(
             Name::new(format!("{} Body", body_desc.name)),
         )).set_parent_in_place(solar_grid);
     }
+    
+    // Sun light
+    commands.spawn((
+        DirectionalLight {
+            illuminance: 10_000.0,
+            shadows_enabled: false,
+            ..default()
+        },
+        CellCoord::default(),
+        Transform::default(),
+        GlobalTransform::default(),
+        Name::new("Sun Light"),
+    )).set_parent_in_place(solar_grid);
 }

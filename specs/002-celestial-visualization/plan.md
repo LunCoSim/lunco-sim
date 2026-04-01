@@ -4,19 +4,19 @@
 
 | ID | Decision | Choice |
 |:---|:---|:---|
-| AD-1 | Spatial ownership | `lunco-sim-celestial` owns all `big_space`. Existing crates use local `Transform`. |
+| AD-1 | Spatial ownership | `lunco-sim-celestial` owns `big_space`. **Golden Bridge**: Disable `TransformPlugin`, manual backfill for UI. |
 | AD-2 | Gravity source | Global avian `Gravity` resource, set by celestial plugin. |
-| AD-3 | Camera architecture | Two cameras (Observer + Avatar), explicit handoff. |
+| AD-3 | Camera architecture | Two cameras. **Migration**: Camera re-parents to target grid ancestors for absolute precision. |
 | AD-4 | Ephemeris source | `celestial-ephemeris` (alpha accepted). Behind `trait EphemerisProvider` for swappability. |
 | AD-5 | Scenario system | Feature flags. Default = celestial. `--features sandbox` = flat ground. |
 | AD-6 | Coordinate conversion | Shared `celestial::coords` utility. Ecliptic J2000 (AU) → Bevy (meters, Y-up). |
 | AD-7 | Body rotation | Constant-rate. Earth: sidereal. Moon: tidally locked. Realistic Earth from Moon. |
 | AD-8 | Skybox | Skipped for Phase 1. Black background. |
-| AD-9 | Sun rendering | Light source only (`DirectionalLight` + UI marker). Not a visible sphere. |
+| AD-9 | Sun rendering | Physical mesh (`ico(4)`) in Solar Grid + directional light + UI marker. |
 | AD-10 | Time conversion | `celestial-time` crate (TDB ↔ UTC). Comes with `celestial-ephemeris`. |
 | AD-11 | Planet LOD | Single icosphere `ico(5)`. Hard cut to terrain. No billboard. |
 | AD-12 | Sphere-terrain layering | Sphere stays visible under terrain tile. Tile offset `radius + 0.01m`. |
-| AD-13 | Camera clip planes | Dynamic `near` based on altitude. Bevy Reverse-Z handles `far`. |
+| AD-13 | Camera clip planes | Surface-Aware Dynamic `near` based on altitude. **Essential 10km clamp** for solar visibility. |
 
 ---
 
@@ -69,28 +69,25 @@ pub struct BodyDescriptor {
 **Phase 1 bodies**: Sun (10), Earth-Moon Barycenter (3), Earth (399), Moon (301).
 **Extension path**: Add Mars (499), Phobos (401), etc. by appending to the registry — no code changes.
 
-### 3. `big_space` Integration — Nestable Grids (AD-1)
+### 3. `big_space` Integration — Hierarchical Local Grids (AD-1)
 
-`lunco-sim-celestial` owns all `big_space` setup. Existing crates are unaware of it.
+`lunco-sim-celestial` owns all `big_space` setup. The engine's `TransformPlugin` is disabled to satisfy `big_space` 0.12.0 requirements.
 
 ```
-Root BigSpace (Solar System, i64 grid cells)
-├── Sun entity (at grid origin)
-├── Earth-Moon Barycenter (positioned by VSOP2013)
-│   ├── Earth nested grid (offset ~4,671 km from barycenter)
-│   │   ├── Earth sphere + texture
-│   │   └── Surface entities (rovers, tiles) — use local Transform
-│   └── Moon nested grid (ELP/MPP02 geocentric → barycentric conversion applied)
-│       ├── Moon sphere + texture
-│       └── Surface entities (rovers, tiles) — use local Transform
-└── (Future: Mars nested grid, etc.)
+BigSpace Root
+├── Solar Grid (1e30m bounds, 1e9m cells)
+│   ├── Sun Entity (Mesh + Light)
+│   └── EMB Anchor (Sibling of Sun)
+│       └── Earth-Moon-Barycenter Grid (1e30m bounds, 1e8m cells)
+│           ├── Earth Anchor Grid (10km cells for local precision)
+│           │   └── Earth Body Mesh
+│           └── Moon Anchor Grid (10km cells for local precision)
+│               └── Moon Body Mesh
 ```
 
-**Grid cell type**: `i64` for root solar grid and body grids.
+**The Golden Bridge (UI Support)**: Since `TransformPlugin` is disabled, a custom system `fix_spatial_components_for_non_grid_entities` manually calculates `GlobalTransform` for entities WITHOUT `CellCoord` (UI, Windows, screen markers). This ensures full HUD interactivity.
 
-**Moon geocentric → barycentric conversion**: ELP/MPP02 returns the Moon relative to Earth's center. Since the hierarchy parent is the Earth-Moon Barycenter, positions must be adjusted: `moon_in_bary_frame = moon_geocentric - earth_offset_from_barycenter`. The Earth offset is derived from the mass ratio: `earth_offset = -barycenter_distance × (M_moon / (M_earth + M_moon))`.
-
-**Floating Origin**: The camera entity carries `FloatingOrigin`. When focused on the Moon, the floating origin operates within the Moon's nested grid, giving full `f32` precision locally.
+**Floating Origin Migration**: The camera entity re-parents itself to the nearest `Grid` parent of its current focus target. This ensures the camera is always 'local' to its subject, providing sub-millimeter precision at the lunar surface.
 
 **SOI Grid Re-parenting (Earth → Moon transfer):**
 1. Entity's world-space `f64` position is computed from current grid cell + local transform
@@ -243,7 +240,7 @@ fn main() {
 
 - **Earth**: Equirectangular PNG (<500KB) with continents. UV-mapped to sphere. Rotation applied per AD-7.
 - **Moon**: Grayscale equirectangular PNG (<500KB) with major features. UV-mapped. Rotation applied per AD-7.
-- **Sun**: Not rendered as a mesh (AD-9). `DirectionalLight` + UI screen-space marker.
+- **Sun**: Rendered as visible sphere mesh (AD-9) + `DirectionalLight` + UI screen-space marker.
 
 ### 11. Coordinate Conversion Utility (AD-6)
 
@@ -294,7 +291,7 @@ fn body_rotation(epoch_jd: f64, body: &BodyDescriptor) -> DQuat {
 
 - **Earth**: `rotation_rate = 2π / 0.99726968` rad/day (sidereal). Polar axis tilted 23.44° from ecliptic normal.
 - **Moon**: Rotation rate = orbital angular velocity (~2π / 27.321661 rad/day). Same face always toward Earth (tidal locking).
-- **Sun**: No rotation applied (not rendered as mesh).
+- **Sun**: No rotation applied.
 - The `BodyDescriptor` gains `rotation_rate_rad_per_day: f64` and `polar_axis: DVec3` fields.
 
 ### 13. Time Conversion (AD-10)
@@ -308,10 +305,9 @@ Use `celestial-time` (comes as a dependency of `celestial-ephemeris`):
 
 ### 14. Sun as Light Source (AD-9)
 
-- **No sphere mesh** for the Sun. No `big_space` grid entity needed.
+- **Sun carries a mesh** in the Solar Grid.
 - **`DirectionalLight`**: Rotation computed from Sun's ephemeris position relative to camera focus body. Updated each frame.
 - **UI marker**: Screen-space icon (small sun glyph) rendered at the projected Sun direction. Indicates where the Sun is even when not "visible."
-- **Extension path**: Future spec can add billboard sprite when camera is in solar system overview mode.
 
 ### 15. Planet Rendering LOD (AD-11)
 
@@ -319,9 +315,10 @@ Single mesh per body, hard cut to terrain at altitude threshold:
 
 | Camera Distance | What Renders | Method |
 |:---|:---|:---|
-| Any distance above threshold | Icosphere mesh `ico(5)` (10,242 verts) + texture | Always present |
-| Below terrain threshold (50 km) | Icosphere mesh + terrain tile ON TOP | Both visible (AD-12) |
-| Ground View (< 1 km) | Icosphere (horizon) + terrain tile (ground) | Sphere = horizon backdrop |
+| Solar Scale | Sun mesh + Planet ico(5) | Always present |
+| Orbital (1000km) | Body ico(5) + Surface Texture | Always present |
+| Near Surface (50km) | Body Mesh + Terrain Tile Overlay | AD-12 (on top) |
+| Ground View (<1km) | Sphere (Horizon) + Terrain Tile (Ground) | Stable backdrop |
 
 No billboard sprites for distant bodies in Phase 1. A 10,242-vertex icosphere renders in microseconds — GPU cost is negligible even when the body occupies 3 pixels.
 
@@ -359,13 +356,15 @@ The terrain tile is offset `radius + 0.01m` from body center to sit just above t
 
 ```rust
 fn update_clip_planes(
-    q_camera: Query<(&SurfaceCoordinates, &mut Projection), With<ActiveCamera>>,
+    q_camera: Query<(&GlobalTransform, &mut Projection), With<ActiveCamera>>,
+    q_bodies: Query<(&GlobalTransform, &CelestialBody)>,
 ) {
-    for (coords, mut proj) in q_camera.iter_mut() {
+    for (cam_gtf, mut proj) in q_camera.iter_mut() {
         if let Projection::Perspective(p) = proj.as_mut() {
-            // Near plane scales with altitude; at surface (1m) → 0.1m, at orbit (1000km) → 100m
-            p.near = (coords.altitude * 0.001).max(0.1).min(1000.0) as f32;
-            // Far plane: Bevy Infinite Reverse-Z — no adjustment needed
+            // Near plane scales with surface distance; max 10km clamp
+            let min_surface_dist = calculate_min_surface_dist(cam_gtf, &q_bodies);
+            p.near = (min_surface_dist * 0.001).max(0.1).min(10000.0) as f32;
+            p.far = 1.0e15; // Universal solar visibility
         }
     }
 }
@@ -456,7 +455,7 @@ graph TD
 
     subgraph "big_space Hierarchy (AD-1)"
         ROOT["Root BigSpace (i64)"]
-        ROOT --> SUN["Sun (positional ref only, no mesh — AD-9)"]
+        ROOT --> SUN["Sun (Mesh + Light)"]
         ROOT --> BMC["Earth-Moon Barycenter"]
         BMC --> EG["Earth Nested Grid"]
         BMC --> MG["Moon Nested Grid"]

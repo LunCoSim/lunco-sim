@@ -10,37 +10,38 @@ use crate::registry::{CelestialBody, CelestialBodyRegistry, CelestialReferenceFr
 use crate::coords::ecliptic_to_bevy;
 
 /// Update body and frame positions based on ephemeris data.
-/// Each entity is relative to its parent grid origin.
+/// Optimized: Only re-computes if Epoch has changed significantly.
 pub fn ephemeris_update_system(
     clock: Res<CelestialClock>,
-    _registry: Res<CelestialBodyRegistry>,
     ephemeris: Option<Res<EphemerisResource>>,
     mut q_entities: Query<(Entity, &mut CellCoord, &mut Transform, Option<&CelestialBody>, Option<&CelestialReferenceFrame>)>,
     q_all_parents: Query<&ChildOf>,
     q_frames: Query<&CelestialReferenceFrame>,
     q_grids: Query<&Grid>,
+    mut last_jd: Local<f64>,
 ) {
     let Some(ephemeris) = ephemeris else { return; };
+    
+    // Only update if time advanced significantly (or first frame)
+    if (clock.epoch - *last_jd).abs() < 1e-12 && *last_jd != 0.0 {
+        return; 
+    }
+    *last_jd = clock.epoch;
     
     for (entity, mut cell, mut tf, body, frame) in q_entities.iter_mut() {
         let ephemeris_id = if let Some(b) = body { b.ephemeris_id } else if let Some(f) = frame { f.ephemeris_id } else { continue; };
         
         let current_pos_au = ephemeris.provider.position(ephemeris_id, clock.epoch);
-
-        // Walk up to find the nearest Grid parent
         let mut parent = if let Ok(child_of) = q_all_parents.get(entity) { Some(child_of.parent()) } else { None };
         
         let mut depth = 0;
         while let Some(p) = parent {
-            if depth > 10 { break; } // Safety break
+            if depth > 10 { break; }
             depth += 1;
 
             if let Ok(grid) = q_grids.get(p) {
-                // If we found a grid, we update relative to it.
                 let mut ref_ephemeris_id = None;
-                if let Ok(p_frame) = q_frames.get(p) {
-                   ref_ephemeris_id = Some(p_frame.ephemeris_id);
-                }
+                if let Ok(p_frame) = q_frames.get(p) { ref_ephemeris_id = Some(p_frame.ephemeris_id); }
 
                 if let Some(ref_id) = ref_ephemeris_id {
                     let parent_pos_au = ephemeris.provider.position(ref_id, clock.epoch);
@@ -58,16 +59,17 @@ pub fn ephemeris_update_system(
     }
 }
 
-
-
 /// Rotate each celestial body around its polar axis.
 pub fn body_rotation_system(
     clock: Res<CelestialClock>,
     registry: Res<CelestialBodyRegistry>,
     mut q_bodies: Query<(&mut Transform, &CelestialBody)>,
+    mut last_jd: Local<f64>,
 ) {
-    let days_since_j2000 = clock.epoch - 2_451_545.0;
+    if (clock.epoch - *last_jd).abs() < 1e-12 && *last_jd != 0.0 { return; }
+    *last_jd = clock.epoch;
     
+    let days_since_j2000 = clock.epoch - 2_451_545.0;
     for (mut tf, b) in q_bodies.iter_mut() {
         if let Some(desc) = registry.bodies.iter().find(|d| d.ephemeris_id == b.ephemeris_id) {
             if desc.rotation_rate_rad_per_day != 0.0 {
@@ -92,16 +94,11 @@ pub fn update_sun_light_system(
     
     let mut current = cam_entity;
     let mut total_pos = bevy::math::DVec3::ZERO;
-    
     let mut depth = 0;
     while let Ok(child_of) = q_all_parents.get(current) {
-        if depth > 10 { break; } // Safety break
-        depth += 1;
-
+        if depth > 10 { break; } depth += 1;
         let parent = child_of.parent();
-        if parent == current { break; } // Self-parenting loop break
-
-        // The children are in the coordinate space defined by the parent's grid
+        if parent == current { break; }
         if let Ok(grid) = q_grids_only.get(parent) {
             if let Ok((cell, tf)) = q_coords_only.get(current) {
                 total_pos += grid.grid_position_double(cell, tf);
@@ -125,20 +122,10 @@ pub fn celestial_telemetry_system(
     mut timer: Local<u32>,
 ) {
     if *timer % 60 == 0 {
-        if let Some((tf, cell)) = q_earth.iter().next() {
-            info!("TELEMETRY: Epoch: {:.4}, Earth Cell: {:?}, Earth Pos: {:?}", clock.epoch, cell, tf.translation);
-        }
-        if let Some((tf, cell)) = q_moon.iter().next() {
-            info!("TELEMETRY: Moon Cell: {:?}, Moon Pos: {:?}", cell, tf.translation);
-        }
-        if let Some(tf) = q_sun.iter().next() {
-            info!("TELEMETRY: Sun Pos: {:?}", tf.translation);
-        }
-        if let Some((obs, tf)) = q_cam.iter().next() {
-            info!("TELEMETRY: Camera Focus: {:?}, Camera Local Pos: {:?}", obs.focus_target, tf.translation);
-        }
+        if let Some((tf, cell)) = q_earth.iter().next() { info!("TELEMETRY: Epoch: {:.4}, Earth Cell: {:?}, Earth Pos: {:?}", clock.epoch, cell, tf.translation); }
+        if let Some((tf, cell)) = q_moon.iter().next() { info!("TELEMETRY: Moon Cell: {:?}, Moon Pos: {:?}", cell, tf.translation); }
+        if let Some(tf) = q_sun.iter().next() { info!("TELEMETRY: Sun Pos: {:?}", tf.translation); }
+        if let Some((obs, tf)) = q_cam.iter().next() { info!("TELEMETRY: Camera Focus: {:?}, Camera Local Pos: {:?}", obs.focus_target, tf.translation); }
     }
     *timer += 1;
 }
-
-

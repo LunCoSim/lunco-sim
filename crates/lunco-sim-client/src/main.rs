@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use big_space::prelude::CellCoord;
 
 mod blueprint_extension;
 mod ui;
@@ -7,24 +8,14 @@ use ui::LunCoSimUiPlugin;
 
 fn main() {
     let mut app = App::new();
-    // CRITICAL: We are using big_space 0.12.0 for higher-precision planetary physics.
-    // big_space REQUIREs Bevy's default TransformPlugin to be disabled to avoid 
-    // coordinate fighting. However, disabling it 'blinds' the standard UI hit-testing.
     app.insert_resource(Time::<Fixed>::from_hz(60.0))
         .insert_resource(ClearColor(Color::BLACK))
         .add_plugins(DefaultPlugins.build().disable::<TransformPlugin>()) 
         .add_plugins(lunco_sim_core::LunCoSimCorePlugin);
 
-    // THE GOLDEN BRIDGE: This system manually calculates 'GlobalTransform' for 
-    // entities that are NOT part of the big_space grid (like Windows and UI Cameras).
-    // This allows bevy_egui and bevy_ui to continue 'hearing' mouse clicks even
-    // when the engine's default transform plugin is turned off.
-    app.add_systems(Update, fix_spatial_components_for_non_grid_entities);
-
-    #[cfg(feature = "sandbox")]
-    {
-        // Sandbox features currently disabled to focus on celestial stabilization
-    }
+    // THE UNIVERSAL SYNC BRIDGE
+    app.add_systems(PreUpdate, global_transform_propagation_system);
+    app.add_systems(PostUpdate, global_transform_propagation_system);
 
     #[cfg(not(feature = "sandbox"))]
     {
@@ -38,63 +29,66 @@ fn main() {
         .run();
 }
 
-
 fn toggle_slow_motion(keyboard: Res<ButtonInput<KeyCode>>, mut time: ResMut<Time<Virtual>>) {
     if keyboard.just_pressed(KeyCode::KeyT) {
-        if time.relative_speed() < 1.0 {
-            time.set_relative_speed(1.0);
-        } else {
-            time.set_relative_speed(0.01);
-        }
+        if time.relative_speed() < 1.0 { time.set_relative_speed(1.0); } else { time.set_relative_speed(0.01); }
     }
 }
 
-/// THE RECOVERY BRIDGE MAPPING: 
-/// In Bevy with big_space, TransformPlugin is DISABLED engine-wide.
-/// This means GlobalTransform is NOT updated automatically.
-/// 
-/// However, bevy_egui and bevy_ui DEPEND on GlobalTransform to perform hit-tests
-/// between the Cursor and the Windows/Buttons. This system manually 'backfills' 
-/// those components for entities that are OUTSIDE of the big_space grid system 
-/// (like the Window itself and the 2D HUD Camera). 
-fn fix_spatial_components_for_non_grid_entities(
+/// A robust multi-pass system to propagate GlobalTransform & Visibility across grids.
+fn global_transform_propagation_system(
     mut commands: Commands,
-    mut set: ParamSet<(
-        Query<(Entity, &Transform, &mut GlobalTransform, Option<&ChildOf>), Without<big_space::prelude::CellCoord>>,
-        Query<(Entity, &GlobalTransform)>,
-    )>,
-    q_non_spatial: Query<Entity, (Or<(With<Window>, With<Visibility>)>, Without<GlobalTransform>, Without<big_space::prelude::CellCoord>)>,
+    mut q_transformable: Query<(Entity, &Transform, &mut GlobalTransform, Option<&ChildOf>)>,
+    q_visibility_needs: Query<Entity, (Without<InheritedVisibility>, Or<(With<Visibility>, With<Mesh3d>, With<Text>)>, Without<CellCoord>)>,
+    mut q_visibility: Query<(Entity, &mut InheritedVisibility, &mut ViewVisibility, &Visibility, Option<&ChildOf>)>,
 ) {
-    // 1. Correct components for windows/ui if missing
-    for entity in q_non_spatial.iter() {
-        commands.entity(entity).insert((Transform::default(), GlobalTransform::default(), InheritedVisibility::default(), ViewVisibility::default()));
+    // 1. Initial backfill 
+    for ent in q_visibility_needs.iter() {
+        commands.entity(ent).insert((
+            InheritedVisibility::default(),
+            ViewVisibility::default(),
+            GlobalTransform::default(),
+        ));
     }
 
-    // 2. Propagate passes
-    for _ in 0..3 {
-        let mut gtfs = std::collections::HashMap::new();
-        for (entity, gtf) in set.p1().iter() {
-            gtfs.insert(entity, *gtf);
+    // 2. Multi-level Transform Resolution
+    for _ in 0..4 {
+        let mut cache = std::collections::HashMap::new();
+        for (ent, _, gtf, _) in q_transformable.iter() {
+            cache.insert(ent, *gtf);
         }
 
-        for (entity, transform, mut global_transform, child_of_opt) in set.p0().iter_mut() {
-            let mut parent_gtf_val = None;
+        for (_, tf, mut gtf, child_of_opt) in q_transformable.iter_mut() {
             if let Some(child_of) = child_of_opt {
-                if let Some(parent_gtf) = gtfs.get(&child_of.parent()) {
-                    parent_gtf_val = Some(*parent_gtf);
+                if let Some(parent_gtf) = cache.get(&child_of.parent()) {
+                    let new_gtf = parent_gtf.mul_transform(*tf);
+                    if *gtf != new_gtf { *gtf = new_gtf; }
                 }
-            }
-
-            let new_gtf = if let Some(parent_gtf) = parent_gtf_val {
-                parent_gtf.mul_transform(*transform)
             } else {
-                GlobalTransform::from(*transform)
-            };
-
-            if *global_transform != new_gtf {
-                *global_transform = new_gtf;
-                gtfs.insert(entity, new_gtf);
+                let new_gtf = GlobalTransform::from(*tf);
+                if *gtf != new_gtf { *gtf = new_gtf; }
             }
+        }
+
+        // 3. Visibility propagation (Boolean sync)
+        let mut vis_cache = std::collections::HashMap::new();
+        for (ent, inherited, _, _, _) in q_visibility.iter() {
+            vis_cache.insert(ent, inherited.get());
+        }
+
+        for (_, mut inherited, _view, visibility, child_of_opt) in q_visibility.iter_mut() {
+            let parent_visible = if let Some(child_of) = child_of_opt {
+                *vis_cache.get(&child_of.parent()).unwrap_or(&true)
+            } else {
+                true
+            };
+            
+            let is_visible = parent_visible && visibility != Visibility::Hidden;
+            if inherited.get() != is_visible {
+                *inherited = if is_visible { InheritedVisibility::VISIBLE } else { InheritedVisibility::HIDDEN };
+            }
+            // ViewVisibility is typically managed by the renderer based on InheritedVisibility and GlobalTransform
+            // Manual propagation is handled via InheritedVisibility.
         }
     }
 }

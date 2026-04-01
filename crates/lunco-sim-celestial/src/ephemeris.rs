@@ -61,9 +61,17 @@ impl EphemerisProvider for CelestialEphemerisProvider {
                 // Moon relative to Earth (Geocentric ICRS)
                 let p_m_geo_arr = self.moon.geocentric_position_icrs(&tdb).unwrap_or_else(|_| [0.0, 0.0, 0.0]);
                 const AU_KM: f64 = 149_597_870.7;
-                let p_m_geo_au = DVec3::new(p_m_geo_arr[0] / AU_KM, p_m_geo_arr[1] / AU_KM, p_m_geo_arr[2] / AU_KM);
+                let mut p_m_geo_au = DVec3::new(p_m_geo_arr[0] / AU_KM, p_m_geo_arr[1] / AU_KM, p_m_geo_arr[2] / AU_KM);
                 
-                // Earth helio
+                // --- Rotation from ICRS (Equatorial) to ECLIPTIC ---
+                let epsilon = (23.439281f64).to_radians();
+                let (sin_e, cos_e) = epsilon.sin_cos();
+                let y = p_m_geo_au.y * cos_e + p_m_geo_au.z * sin_e;
+                let z = -p_m_geo_au.y * sin_e + p_m_geo_au.z * cos_e;
+                p_m_geo_au.y = y;
+                p_m_geo_au.z = z;
+
+                // Earth helio (Ecliptic)
                 let p_e = self.earth.heliocentric_position(&tdb).unwrap_or_else(|_| Vector3::zeros());
                 let p_e_helio = DVec3::new(p_e.x, p_e.y, p_e.z);
                 
