@@ -24,8 +24,69 @@ pub fn configure_gizmos_system(mut config_store: ResMut<GizmoConfigStore>) {
 #[derive(Resource, Default)]
 pub struct TrajectoryCache {
     pub last_update_jd: f64,
-    pub moon_path_geocentric: Vec<bevy::math::DVec3>, // Relative to Earth Center (Meters)
-    pub earth_path_heliocentric: Vec<bevy::math::DVec3>, // Relative to Sun Center (Meters)
+    pub moon_path_geocentric: Vec<bevy::math::DVec3>, 
+    pub earth_path_heliocentric: Vec<bevy::math::DVec3>,
+}
+
+fn catmull_rom(p0: bevy::math::DVec3, p1: bevy::math::DVec3, p2: bevy::math::DVec3, p3: bevy::math::DVec3, t: f64) -> bevy::math::DVec3 {
+    let t2 = t * t;
+    let t3 = t2 * t;
+    0.5 * (
+        (2.0 * p1) +
+        (-p0 + p2) * t +
+        (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t2 +
+        (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t3
+    )
+}
+
+fn evaluate_spline(path: &[bevy::math::DVec3], start_jd: f64, spacing: f64, jd: f64) -> bevy::math::DVec3 {
+    if path.is_empty() { return bevy::math::DVec3::ZERO; }
+    
+    let idx_f = (jd - start_jd) / spacing;
+    let idx = idx_f.floor() as isize;
+    let t = idx_f - (idx as f64);
+    
+    let get_p = |i: isize| {
+        let clamped = i.clamp(0, path.len() as isize - 1) as usize;
+        path[clamped]
+    };
+    
+    let p0 = get_p(idx - 1);
+    let p1 = get_p(idx);
+    let p2 = get_p(idx + 1);
+    let p3 = get_p(idx + 2);
+    
+    catmull_rom(p0, p1, p2, p3, t)
+}
+
+fn generate_offsets(max_days: f64) -> Vec<f64> {
+    let mut offsets = Vec::new();
+    
+    let add_range = |offsets: &mut Vec<f64>, start: f64, end: f64, step: f64| {
+        let mut t = start;
+        while t < end - 1e-9 {
+            offsets.push(t);
+            t += step;
+        }
+    };
+    
+    // Negative
+    add_range(&mut offsets, -max_days, -max_days * 0.1, max_days * 0.02);
+    add_range(&mut offsets, -max_days * 0.1, -max_days * 0.01, max_days * 0.002);
+    add_range(&mut offsets, -max_days * 0.01, -max_days * 0.001, max_days * 0.0002);
+    add_range(&mut offsets, -max_days * 0.001, -max_days * 0.0001, max_days * 0.00002);
+    add_range(&mut offsets, -max_days * 0.0001, 0.0, max_days * 0.000002);
+    
+    offsets.push(0.0);
+    
+    // Positive
+    add_range(&mut offsets, max_days * 0.000002, max_days * 0.0001, max_days * 0.000002);
+    add_range(&mut offsets, max_days * 0.0001, max_days * 0.001, max_days * 0.00002);
+    add_range(&mut offsets, max_days * 0.001, max_days * 0.01, max_days * 0.0002);
+    add_range(&mut offsets, max_days * 0.01, max_days * 0.1, max_days * 0.002);
+    add_range(&mut offsets, max_days * 0.1, max_days + 1e-9, max_days * 0.02);
+    
+    offsets
 }
 
 pub fn draw_trajectories_system(
@@ -37,62 +98,95 @@ pub fn draw_trajectories_system(
 ) {
     let current_epoch = clock.epoch;
     
-    // Find centers in world-space (f32) AND their "true" current ephemeris centers (f64)
-    let mut sun_world_pos = None;
-    let mut earth_world_pos = None;
+    let earth_sim_now = registry_resource.provider.position(399, current_epoch);
+    let moon_sim_now = registry_resource.provider.position(301, current_epoch);
     
-    for (body, gtf) in q_bodies.iter() {
-        if body.ephemeris_id == 10 { sun_world_pos = Some(gtf.translation()); }
-        if body.ephemeris_id == 399 { earth_world_pos = Some(gtf.translation()); }
-    }
+    let moon_spacing = 0.05;
+    let moon_half = 300; // 300 * 0.05 = 15.0 days
     
-    // 1. Re-compute Relative Paths if epoch changed significantly
-    if (cache.last_update_jd - current_epoch).abs() > 0.05 || cache.moon_path_geocentric.is_empty() {
+    let earth_spacing = 1.0;
+    let earth_half = 210; // 210 * 1.0 = 210.0 days
+    
+    // 1. Re-compute Coarse Paths if epoch changed significantly
+    if (cache.last_update_jd - current_epoch).abs() > 2.0 || cache.moon_path_geocentric.is_empty() {
         cache.last_update_jd = current_epoch;
         cache.moon_path_geocentric.clear();
         cache.earth_path_heliocentric.clear();
         
-        for i in -28..28 {
-            let jd = current_epoch + (i as f64) * 0.5;
+        for i in -moon_half..=moon_half {
+            let jd = current_epoch + (i as f64) * moon_spacing;
             let m_au = registry_resource.provider.position(301, jd);
             let e_au = registry_resource.provider.position(399, jd);
-            // Result is in ecliptic AU
             cache.moon_path_geocentric.push(m_au - e_au);
         }
-        for i in -50..50 {
-            let jd = current_epoch + (i as f64) * 5.0;
+        for i in -earth_half..=earth_half {
+            let jd = current_epoch + (i as f64) * earth_spacing;
             let e_au = registry_resource.provider.position(399, jd);
-            // Result is in heliocentric ecliptic AU
             cache.earth_path_heliocentric.push(e_au);
         }
     }
     
-    // 2. High-Precision Drawing via Anchor-Relative offsets
+    // 2. Determine Local Rendering Anchor (f64 Precision Origin)
+    let mut best_ref_id = 10;
+    let mut best_ref_world = Vec3::ZERO;
+    let mut min_dist = f32::MAX;
     
-    // Moon (Geocentric relative to Earth)
-    if let Some(earth_w) = earth_world_pos {
-        for i in 0..(cache.moon_path_geocentric.len() - 1) {
-            let p1_rel = cache.moon_path_geocentric[i];
-            let p2_rel = cache.moon_path_geocentric[i+1];
-            
-            let p1 = ecliptic_to_bevy(p1_rel).as_vec3() + earth_w;
-            let p2 = ecliptic_to_bevy(p2_rel).as_vec3() + earth_w;
-            
-            gizmos.line(p1, p2, Color::srgba(0.5, 0.7, 1.0, 0.4));
+    for (body, gtf) in q_bodies.iter() {
+        if matches!(body.ephemeris_id, 10 | 399 | 301) {
+            let pos = gtf.translation();
+            let dist = pos.length_squared();
+            if dist < min_dist {
+                min_dist = dist;
+                best_ref_id = body.ephemeris_id;
+                best_ref_world = pos;
+            }
         }
     }
     
-    // Earth (Heliocentric relative to Sun)
-    if let Some(sun_w) = sun_world_pos {
-        for i in 0..(cache.earth_path_heliocentric.len() - 1) {
-            let p1_rel = cache.earth_path_heliocentric[i]; 
-            let p2_rel = cache.earth_path_heliocentric[i+1];
+    let ref_au = registry_resource.provider.position(best_ref_id, current_epoch);
+    let ref_meters = ecliptic_to_bevy(ref_au);
+    
+    let au_to_world = |p_au: bevy::math::DVec3| -> Vec3 {
+        let p_meters = ecliptic_to_bevy(p_au);
+        let offset_meters = p_meters - ref_meters;
+        best_ref_world + offset_meters.as_vec3()
+    };
 
-            let p1 = ecliptic_to_bevy(p1_rel).as_vec3() + sun_w;
-            let p2 = ecliptic_to_bevy(p2_rel).as_vec3() + sun_w;
+    // 3. Draw with Adaptive Spline Sampling
+    let earth_offsets = generate_offsets(200.0);
+    let moon_offsets = generate_offsets(14.0);
+    
+    let mut draw_spline_path = |path: &[bevy::math::DVec3], offsets: &[f64], spacing: f64, half_count: isize, is_geocentric: bool, exact_helio_now: bevy::math::DVec3, color: Color| {
+        if path.is_empty() { return; }
+        let start_jd = cache.last_update_jd - (half_count as f64) * spacing;
+        
+        let spline_now = evaluate_spline(path, start_jd, spacing, current_epoch);
+        let true_local_now = if is_geocentric { exact_helio_now - earth_sim_now } else { exact_helio_now };
+        let error_offset = true_local_now - spline_now;
+        let fade_duration = if is_geocentric { 0.5 } else { 2.0 };
+        
+        let mut world_pts = Vec::with_capacity(offsets.len());
+        
+        for &offset in offsets {
+            let jd = current_epoch + offset;
             
-            gizmos.line(p1, p2, Color::srgba(1.0, 1.0, 0.6, 0.2));
+            let mut p_spline = evaluate_spline(path, start_jd, spacing, jd);
+            
+            // Blend the error so the curve connects exactly to the true current position 
+            // without a sharp kink, spreading the sub-pixel error over millions of kilometers.
+            let fade = (1.0 - (offset.abs() / fade_duration)).max(0.0);
+            let smooth_fade = fade * fade * (3.0 - 2.0 * fade);
+            p_spline += error_offset * smooth_fade;
+            
+            let p_helio = if is_geocentric { earth_sim_now + p_spline } else { p_spline };
+            world_pts.push(au_to_world(p_helio));
         }
-    }
+        
+        for i in 0..(world_pts.len() - 1) {
+            gizmos.line(world_pts[i], world_pts[i+1], color);
+        }
+    };
+    
+    draw_spline_path(&cache.earth_path_heliocentric, &earth_offsets, earth_spacing, earth_half, false, earth_sim_now, Color::srgba(1.0, 1.0, 0.6, 0.2));
+    draw_spline_path(&cache.moon_path_geocentric, &moon_offsets, moon_spacing, moon_half, true, moon_sim_now, Color::srgba(0.5, 0.7, 1.0, 0.4));
 }
-
