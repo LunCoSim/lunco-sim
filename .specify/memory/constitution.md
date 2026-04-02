@@ -29,6 +29,9 @@ The simulation core MUST be runnable in a headless environment (no GPU, no windo
 ### IX. Authority of the Engineering Ontology
 All simulated entities, signal flows, and architectural layers MUST adhere to the definitions set forth in the [Engineering Ontology](file:///home/rod/Documents/lunco/lunco-sim-bevy/specs/ontology.md). Terminology drift between specifications and implementation is considered a constitutional violation.
 
+### X. Everything is a Tunable Parameter (Core Mandate)
+Hardcoded magic numbers are considered technical debt. All visual offsets, colors, physics thresholds, and system constants MUST be exposed as tunable parameters via Bevy Resources or Components. This enables fine-grained control for researchers and allows AI agents to explore the simulation's design space without re-compiling.
+
 ## Technical Standards
 
 ### Bevy ECS Architecture
