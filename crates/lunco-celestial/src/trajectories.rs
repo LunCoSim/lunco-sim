@@ -324,7 +324,7 @@ pub fn trajectory_alpha_update_system(
                     
                     let colors: Vec<[f32; 4]> = path.points.iter().enumerate().map(|(i, _)| {
                         let pt_epoch = start_epoch + (i as f64) * view.sampling_step;
-                        let alpha = if pt_epoch < clock.epoch { 0.2 } else { 1.0 };
+                        let alpha = if pt_epoch < clock.epoch { 0.05 } else { 1.0 };
                         [color.red, color.green, color.blue, alpha]
                     }).collect();
                     mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);

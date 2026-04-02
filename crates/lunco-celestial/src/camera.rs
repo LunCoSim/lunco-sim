@@ -104,7 +104,7 @@ pub fn camera_selection_system(
     mut q_camera: Query<&mut ObserverCamera, With<lunco_core::Avatar>>,
     q_bodies: Query<(Entity, &GlobalTransform, &CelestialBody)>,
     q_rovers: Query<Entity, With<lunco_core::RoverVessel>>,
-    q_spacecraft: Query<Entity, With<crate::missions::Spacecraft>>,
+    q_spacecraft: Query<(Entity, &crate::missions::Spacecraft)>,
     q_gtfs: Query<&GlobalTransform>,
     mut commands: Commands,
     mouse_button: Res<ButtonInput<MouseButton>>,
@@ -137,12 +137,9 @@ pub fn camera_selection_system(
         }
     }
 
-    // Check Rovers and Spacecraft
-    let vessels = q_rovers.iter().chain(q_spacecraft.iter());
-    for vessel_ent in vessels {
-        // Huge hit radius (100km) makes the spacecraft easily clickable from far away
-        let radius = 200_000.0; 
-        let Ok(vessel_gtf) = q_gtfs.get(vessel_ent) else { continue; };
+    for rover_ent in q_rovers.iter() {
+        let radius = 10.0;
+        let Ok(vessel_gtf) = q_gtfs.get(rover_ent) else { continue; };
         let center = vessel_gtf.translation();
         let oc = ray.origin - center;
         let b = oc.dot(ray.direction.as_vec3());
@@ -150,7 +147,21 @@ pub fn camera_selection_system(
         let h = b * b - c;
         if h >= 0.0 {
             let t = -b - h.sqrt();
-            if t > 0.0 && t < min_vessel_t { min_vessel_t = t; nearest_vessel = Some(vessel_ent); }
+            if t > 0.0 && t < min_vessel_t { min_vessel_t = t; nearest_vessel = Some(rover_ent); }
+        }
+    }
+    
+    for (sc_ent, sc) in q_spacecraft.iter() {
+        let radius = sc.hit_radius_m;
+        let Ok(vessel_gtf) = q_gtfs.get(sc_ent) else { continue; };
+        let center = vessel_gtf.translation();
+        let oc = ray.origin - center;
+        let b = oc.dot(ray.direction.as_vec3());
+        let c = oc.dot(oc) - radius * radius;
+        let h = b * b - c;
+        if h >= 0.0 {
+            let t = -b - h.sqrt();
+            if t > 0.0 && t < min_vessel_t { min_vessel_t = t; nearest_vessel = Some(sc_ent); }
         }
     }
     

@@ -4,6 +4,17 @@
   "description": "First crewed Artemis mission around the Moon.",
   "duration_days": 10.3,
   "start_epoch_jd": 2461132.58,
+  "ephemeris_sources": [
+    {
+      "target_id": -1024,
+      "command": "-1024",
+      "center": "500@399",
+      "ref_plane": "ECLIPTIC",
+      "start_time": "2026-04-02 01:59",
+      "stop_time": "2026-04-11 00:01",
+      "step_size": "10m"
+    }
+  ],
   "trajectories": [
     {
       "name": "Artemis 2 Trajectory (Earth-Relative)",
@@ -14,7 +25,7 @@
       "sampling_step": 0.01,
       "frame": "Inertial",
       "start_epoch_jd": 2461132.58,
-      "end_epoch_jd": 2461141.5
+      "end_epoch_jd": 2461141.501
     },
     {
       "name": "Artemis 2 Moon-Relative",
@@ -25,7 +36,7 @@
       "sampling_step": 0.001,
       "frame": "BodyFixed",
       "start_epoch_jd": 2461132.58,
-      "end_epoch_jd": 2461141.5
+      "end_epoch_jd": 2461141.501
     }
   ],
   "spacecraft": {
@@ -35,6 +46,9 @@
     "scale": 1.0,
     "focus_on_start": true,
     "start_epoch_jd": 2461132.58,
-    "end_epoch_jd": 2461141.5
+    "end_epoch_jd": 2461141.501,
+    "marker_radius_km": 500.0,
+    "hit_radius_km": 1000.0,
+    "marker_color": [0.0, 1.0, 1.0, 1.0]
   }
 }

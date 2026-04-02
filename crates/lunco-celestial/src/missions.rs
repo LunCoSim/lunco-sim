@@ -41,6 +41,9 @@ pub struct MissionSpacecraft {
     pub focus_on_start: bool,
     pub start_epoch_jd: Option<f64>,
     pub end_epoch_jd: Option<f64>,
+    pub marker_radius_km: Option<f32>,
+    pub hit_radius_km: Option<f32>,
+    pub marker_color: Option<[f32; 4]>,
 }
 
 #[derive(Component)]
@@ -49,6 +52,22 @@ pub struct Spacecraft {
     pub reference_id: i32,
     pub start_epoch_jd: Option<f64>,
     pub end_epoch_jd: Option<f64>,
+    pub hit_radius_m: f32,
+}
+
+#[derive(Component)]
+pub struct SpacecraftBillboard;
+
+pub fn spacecraft_billboard_system(
+    mut q_billboards: Query<&mut Transform, With<SpacecraftBillboard>>,
+    q_camera: Query<&GlobalTransform, With<crate::camera::ObserverCamera>>,
+) {
+    if let Some(cam_gtf) = q_camera.iter().next() {
+        let cam_rot = cam_gtf.compute_transform().rotation;
+        for mut tf in q_billboards.iter_mut() {
+            tf.rotation = cam_rot;
+        }
+    }
 }
 
 pub struct MissionPlugin;
@@ -62,6 +81,7 @@ impl Plugin for MissionPlugin {
             spacecraft_alignment_system,
             mission_focus_system,
             spacecraft_visibility_system,
+            spacecraft_billboard_system,
         ).chain());
     }
 }
@@ -105,34 +125,87 @@ pub fn load_missions_system(mut commands: Commands, mut registry: ResMut<Mission
                         
                         // Spawn spacecraft
                         if let Some(sc) = &mission.spacecraft {
-                            // Instead of a tiny realistic model, we use a giant UI marker sphere (100km radius)
-                            // so it's always clearly visible from anywhere in the Earth-Moon system.
-                            let marker_mesh = meshes.add(Sphere::new(100_000.0).mesh()); 
-                            let marker_mat = materials.add(StandardMaterial {
-                                base_color: Color::srgb(0.0, 1.0, 1.0),
-                                emissive: LinearRgba::from(Color::srgb(0.0, 10.0, 10.0)),
-                                unlit: true,
-                                ..default()
-                            });
+                            let radius_m = sc.marker_radius_km.unwrap_or(500.0) * 1000.0;
+                            let hit_radius_m = sc.hit_radius_km.unwrap_or(1000.0) * 1000.0;
+                            let color_arr = sc.marker_color.unwrap_or([0.0, 1.0, 1.0, 1.0]);
+                            let color = Color::srgba(color_arr[0], color_arr[1], color_arr[2], color_arr[3]);
+                            let emissive = LinearRgba::from(color) * 10.0;
 
-                            let mut ent = commands.spawn((
+                            let mut sc_ent = commands.spawn((
                                 Name::new(sc.name.clone()),
                                 Spacecraft {
                                     ephemeris_id: sc.ephemeris_id,
                                     reference_id: sc.reference_id,
                                     start_epoch_jd: sc.start_epoch_jd,
                                     end_epoch_jd: sc.end_epoch_jd,
+                                    hit_radius_m,
                                 },
-                                Mesh3d(marker_mesh), 
-                                MeshMaterial3d(marker_mat),
                                 Transform::from_scale(Vec3::splat(sc.scale)),
                                 GlobalTransform::default(),
                                 Visibility::default(),
                                 CellCoord::default(),
                             ));
+
+                            sc_ent.with_children(|parent| {
+                                // Main Body (Service Module)
+                                parent.spawn((
+                                    Mesh3d(meshes.add(Cylinder::new(radius_m, radius_m * 1.5).mesh())),
+                                    MeshMaterial3d(materials.add(StandardMaterial {
+                                        base_color: color,
+                                        emissive,
+                                        unlit: true,
+                                        ..default()
+                                    })),
+                                    Name::new("Service Module"),
+                                ));
+
+                                // Capsule (Command Module) - Offset slightly up
+                                parent.spawn((
+                                    Mesh3d(meshes.add(Cylinder::new(radius_m * 0.1, radius_m).mesh())),
+                                    MeshMaterial3d(materials.add(StandardMaterial {
+                                        base_color: color,
+                                        emissive,
+                                        unlit: true,
+                                        ..default()
+                                    })),
+                                    Transform::from_translation(Vec3::Y * radius_m * 1.25),
+                                    Name::new("Command Module"),
+                                ));
+
+                                // Solar Panels (Left and Right)
+                                let panel_width = radius_m * 4.0;
+                                let panel_height = radius_m * 0.8;
+                                let panel_thickness = radius_m * 0.1;
+                                
+                                for side in [-1.0, 1.0] {
+                                    parent.spawn((
+                                        Mesh3d(meshes.add(Cuboid::new(panel_width, panel_height, panel_thickness).mesh())),
+                                        MeshMaterial3d(materials.add(StandardMaterial {
+                                            base_color: color,
+                                            emissive,
+                                            unlit: true,
+                                            ..default()
+                                        })),
+                                        Transform::from_translation(Vec3::X * side * (radius_m + panel_width * 0.5)),
+                                        Name::new(if side < 0.0 { "Solar Panel Left" } else { "Solar Panel Right" }),
+                                    ));
+                                }
+
+                                // Billboard Label
+                                parent.spawn((
+                                    SpacecraftBillboard,
+                                    Text2d::new(sc.name.clone()),
+                                    TextFont {
+                                        font_size: 100.0,
+                                        ..default()
+                                    },
+                                    TextColor(Color::WHITE),
+                                    Transform::from_translation(Vec3::Y * radius_m * 5.0),
+                                ));
+                            });
                             
                             if sc.focus_on_start {
-                                ent.insert(FocusOnStart);
+                                sc_ent.insert(FocusOnStart);
                             }
                         }
                         
