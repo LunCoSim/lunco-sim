@@ -153,12 +153,15 @@ pub fn celestial_visuals_system(
     mut materials: ResMut<Assets<BlueprintMaterial>>,
     q_camera: Query<(Entity, &CellCoord, &Transform, &ObserverCamera), With<crate::ActiveCamera>>,
     q_bodies: Query<(Entity, &CellCoord, &Transform, &MeshMaterial3d<BlueprintMaterial>, &CelestialBody)>,
+    q_tiles: Query<(&MeshMaterial3d<BlueprintMaterial>, &crate::terrain::TileCoord), With<crate::terrain::ActiveTerrainTile>>,
     q_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
     q_spatial: Query<(&CellCoord, &Transform)>,
 ) {
     let Some((cam_ent, cam_cell, cam_tf, _obs)) = q_camera.iter().next() else { return; };
     
+    let mut body_transitions = std::collections::HashMap::new();
+
     for (body_ent, body_cell, body_tf, mat_handle, body) in q_bodies.iter() {
         // Resolve absolute positions to calculate distance
         let cam_pos = get_absolute_pos_in_root_double_ghost_aware(cam_ent, cam_cell, cam_tf, &q_parents, &q_grids, &q_spatial);
@@ -177,6 +180,15 @@ pub fn celestial_visuals_system(
                 
             mat.extension.transition = transition;
             mat.extension.body_radius = body.radius_m as f32;
+            body_transitions.insert(body_ent, transition);
+        }
+    }
+
+    for (mat_handle, coord) in q_tiles.iter() {
+        if let Some(transition) = body_transitions.get(&coord.body) {
+            if let Some(mat) = materials.get_mut(mat_handle) {
+                mat.extension.transition = *transition;
+            }
         }
     }
 }

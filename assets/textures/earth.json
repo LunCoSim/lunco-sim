@@ -1,0 +1,7 @@
+{
+  "name": "Earth Blue Marble (NASA Next Generation)",
+  "source_url": "https://eoimages.gsfc.nasa.gov/images/imagerecords/73000/73909/world.topo.bathy.200412.3x5400x2700.jpg",
+  "target_resolution": [4096, 2048],
+  "license": "NASA - Public Domain / Gov Use",
+  "license_url": "https://www.nasa.gov/multimedia/guidelines/index.html"
+}

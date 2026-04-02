@@ -30,8 +30,8 @@ fn fragment(
     var pbr_input = pbr_input_from_standard_material(input, is_front);
     
     // --- Colors Transition ---
-    let base_color = mix(extension.high_color, extension.low_color, extension.transition);
-    pbr_input.material.base_color = base_color;
+    let base_color_mix = mix(extension.high_color, extension.low_color, extension.transition);
+    let final_base_color = pbr_input.material.base_color * base_color_mix;
 
     // --- Lat/Long Grid (High Alt) ---
     let n = normalize(input.world_normal);
@@ -59,7 +59,7 @@ fn fragment(
     let grid_mask = mix(lat_long_mask, blueprint_mask, extension.transition) * (1.0 - smoothstep(0.9, 1.0, extension.transition));
     let line_color = mix(extension.high_line_color, extension.low_line_color, extension.transition);
     
-    pbr_input.material.base_color = mix(base_color, line_color, grid_mask);
+    pbr_input.material.base_color = mix(final_base_color, line_color, grid_mask);
     
     // 4. Apply standard lighting with our modified color
     var out: FragmentOutput;

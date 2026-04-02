@@ -157,6 +157,7 @@ pub enum Layer {
 
 fn spawn_joint_rover_internal(
     commands: &mut Commands,
+    parent: Entity,
     _wheel_mesh: Handle<Mesh>,
     spawn_pos: Vec3,
     name: &str,
@@ -172,7 +173,7 @@ fn spawn_joint_rover_internal(
 
     // No materials in tests to avoid shader panics
 
-    let rover_builder = commands.spawn((
+    let rover_entity = commands.spawn((
         Name::new(name.to_string()),
         RoverVessel,
         Vessel,
@@ -185,8 +186,8 @@ fn spawn_joint_rover_internal(
         CenterOfMass(Vec3::new(0.0, -0.2, 0.0)),
         LinearDamping(0.2), 
         AngularDamping(0.5),
-    ));
-    let rover_entity = rover_builder.id();
+    )).id();
+    commands.entity(parent).add_child(rover_entity);
     
     #[cfg(not(test))]
     {
@@ -206,9 +207,13 @@ fn spawn_joint_rover_internal(
     }
 
     let drive_l_digital = commands.spawn((Name::new(format!("{}_drive_l_reg", name)), DigitalPort::default())).id();
+    commands.entity(rover_entity).add_child(drive_l_digital);
     let drive_r_digital = commands.spawn((Name::new(format!("{}_drive_r_reg", name)), DigitalPort::default())).id();
+    commands.entity(rover_entity).add_child(drive_r_digital);
     let steer_digital = commands.spawn((Name::new(format!("{}_steer_reg", name)), DigitalPort::default())).id();
+    commands.entity(rover_entity).add_child(steer_digital);
     let brake_digital = commands.spawn((Name::new(format!("{}_brake_reg", name)), DigitalPort::default())).id();
+    commands.entity(rover_entity).add_child(brake_digital);
 
     let mut port_map = HashMap::new();
     port_map.insert("drive_left".to_string(), drive_l_digital);
@@ -227,7 +232,9 @@ fn spawn_joint_rover_internal(
     ];
 
     let steer_port = commands.spawn((Name::new(format!("{}_port_steer", name)), PhysicalPort::default())).id();
-    commands.spawn(Wire { source: steer_digital, target: steer_port, scale: 10.0 });
+    commands.entity(rover_entity).add_child(steer_port);
+    let wire_ent = commands.spawn(Wire { source: steer_digital, target: steer_port, scale: 10.0 }).id();
+    commands.entity(rover_entity).add_child(wire_ent);
 
     let wheel_tilt = Quat::from_rotation_z(std::f32::consts::FRAC_PI_2);
     let wheel_tilt_d = DQuat::from_xyzw(
@@ -241,11 +248,15 @@ fn spawn_joint_rover_internal(
         let digital_source = if is_left { drive_l_digital } else { drive_r_digital };
         
         let motor_port = commands.spawn((Name::new(format!("{}_port_{}_drive", name, label)), PhysicalPort::default())).id();
+        commands.entity(rover_entity).add_child(motor_port);
         let brake_port = commands.spawn((Name::new(format!("{}_port_{}_brake", name, label)), PhysicalPort::default())).id();
-        commands.spawn(Wire { source: digital_source, target: motor_port, scale: 200.0 });
-        commands.spawn(Wire { source: brake_digital, target: brake_port, scale: 1.0 });
+        commands.entity(rover_entity).add_child(brake_port);
+        let wire1 = commands.spawn(Wire { source: digital_source, target: motor_port, scale: 200.0 }).id();
+        commands.entity(rover_entity).add_child(wire1);
+        let wire2 = commands.spawn(Wire { source: brake_digital, target: brake_port, scale: 1.0 }).id();
+        commands.entity(rover_entity).add_child(wire2);
 
-        let wheel_builder = commands.spawn((
+        let wheel_entity = commands.spawn((
             Name::new(format!("{}_wheel_{}", name, label)),
             Transform::from_translation(spawn_pos + rel_pos).with_rotation(wheel_tilt),
             RigidBody::Dynamic,
@@ -257,8 +268,8 @@ fn spawn_joint_rover_internal(
             AngularDamping(2.0),
             MotorActuator { port_entity: motor_port, axis: DVec3::Y },
             BrakeActuator { port_entity: brake_port, max_force: 32767.0 },
-        ));
-        let wheel_entity = wheel_builder.id();
+        )).id();
+        commands.entity(parent).add_child(wheel_entity);
 
         #[cfg(not(test))]
         {
@@ -285,10 +296,11 @@ fn spawn_joint_rover_internal(
             CollisionLayers::from_bits(0, 0),
             Transform::from_translation(spawn_pos + rel_pos),
         )).id();
+        commands.entity(parent).add_child(hub_entity);
 
 
         // Chassis to Hub: Suspension (Prismatic)
-        commands.spawn((
+        let joint_ent1 = commands.spawn((
             PrismaticJoint::new(rover_entity, hub_entity)
                 .with_local_anchor1(rel_pos.as_dvec3())
                 .with_local_anchor2(DVec3::ZERO)
@@ -300,7 +312,8 @@ fn spawn_joint_rover_internal(
                 damping_c: 2000.0,  // Increased for stability
                 local_axis: DVec3::Y,
             }
-        ));
+        )).id();
+        commands.entity(parent).add_child(joint_ent1);
         
         // Hub to Wheel: Drive (Revolute) + Optional Steering (Hub rotation)
         if is_front && steering_type == SteeringType::Ackermann {
@@ -313,24 +326,28 @@ fn spawn_joint_rover_internal(
                 Transform::from_translation(spawn_pos + rel_pos),
                 MotorActuator { port_entity: steer_port, axis: DVec3::Y },
             )).id();
+            commands.entity(parent).add_child(steering_hub);
 
-            commands.spawn(RevoluteJoint::new(hub_entity, steering_hub)
+            let joint_ent2 = commands.spawn(RevoluteJoint::new(hub_entity, steering_hub)
                 .with_local_anchor1(DVec3::ZERO)
                 .with_local_anchor2(DVec3::ZERO)
                 .with_hinge_axis(DVec3::Y)
-                .with_angle_limits(-0.6, 0.6));
+                .with_angle_limits(-0.6, 0.6)).id();
+            commands.entity(parent).add_child(joint_ent2);
                 
-            commands.spawn(RevoluteJoint::new(steering_hub, wheel_entity)
+            let joint_ent3 = commands.spawn(RevoluteJoint::new(steering_hub, wheel_entity)
                 .with_local_anchor1(DVec3::ZERO)
                 .with_local_anchor2(DVec3::ZERO)
                 .with_hinge_axis(DVec3::X)
-                .with_local_basis2(wheel_tilt_d.inverse()));
+                .with_local_basis2(wheel_tilt_d.inverse())).id();
+            commands.entity(parent).add_child(joint_ent3);
         } else {
-            commands.spawn(RevoluteJoint::new(hub_entity, wheel_entity)
+            let joint_ent4 = commands.spawn(RevoluteJoint::new(hub_entity, wheel_entity)
                 .with_local_anchor1(DVec3::ZERO)
                 .with_local_anchor2(DVec3::ZERO)
                 .with_hinge_axis(DVec3::X)
-                .with_local_basis2(wheel_tilt_d.inverse()));
+                .with_local_basis2(wheel_tilt_d.inverse())).id();
+            commands.entity(parent).add_child(joint_ent4);
         }
     }
     rover_entity
@@ -339,10 +356,10 @@ fn spawn_joint_rover_internal(
 #[derive(PartialEq, Eq)]
 pub enum SteeringType { Skid, Ackermann }
 
-pub fn spawn_joint_skid_rover(commands: &mut Commands, wheel_mesh: Handle<Mesh>, spawn_pos: Vec3, name: &str, color: Color) -> Entity {
-    spawn_joint_rover_internal(commands, wheel_mesh, spawn_pos, name, color, SteeringType::Skid)
+pub fn spawn_joint_skid_rover(commands: &mut Commands, parent: Entity, wheel_mesh: Handle<Mesh>, spawn_pos: Vec3, name: &str, color: Color) -> Entity {
+    spawn_joint_rover_internal(commands, parent, wheel_mesh, spawn_pos, name, color, SteeringType::Skid)
 }
 
-pub fn spawn_joint_ackermann_rover(commands: &mut Commands, wheel_mesh: Handle<Mesh>, spawn_pos: Vec3, name: &str, color: Color) -> Entity {
-    spawn_joint_rover_internal(commands, wheel_mesh, spawn_pos, name, color, SteeringType::Ackermann)
+pub fn spawn_joint_ackermann_rover(commands: &mut Commands, parent: Entity, wheel_mesh: Handle<Mesh>, spawn_pos: Vec3, name: &str, color: Color) -> Entity {
+    spawn_joint_rover_internal(commands, parent, wheel_mesh, spawn_pos, name, color, SteeringType::Ackermann)
 }

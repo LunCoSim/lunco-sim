@@ -1,4 +1,4 @@
-use bevy::prelude::*;
+use bevy::{prelude::*, asset::io::AssetSourceBuilder};
 use big_space::prelude::CellCoord;
 
 mod ui;
@@ -9,6 +9,10 @@ fn main() {
     let mut app = App::new();
     app.insert_resource(Time::<Fixed>::from_hz(60.0))
         .insert_resource(ClearColor(Color::BLACK))
+        .register_asset_source(
+            "cached_textures",
+            AssetSourceBuilder::platform_default("../../.cache/textures", None),
+        )
         .add_plugins(DefaultPlugins.build().disable::<TransformPlugin>()) 
         .add_plugins(lunco_core::LunCoCorePlugin);
 

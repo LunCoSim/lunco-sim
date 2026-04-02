@@ -171,7 +171,7 @@ pub fn finalize_terrain_tiles(
     mut q_pending: Query<(Entity, &TileCoord, &mut PendingTile)>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<crate::blueprint::BlueprintMaterial>>,
-    q_bodies: Query<(&CelestialBody, &GlobalTransform)>,
+    q_bodies: Query<(&CelestialBody, &GlobalTransform, &MeshMaterial3d<crate::blueprint::BlueprintMaterial>)>,
     q_camera: Query<&GlobalTransform, With<Camera>>,
 ) {
     let Some(cam_gtf) = q_camera.iter().next() else { return; };
@@ -179,7 +179,7 @@ pub fn finalize_terrain_tiles(
 
     for (ent, coord, mut pending) in q_pending.iter_mut() {
         if let Some(data) = future::block_on(future::poll_once(&mut pending.0)) {
-            let Ok((body, _gtf)) = q_bodies.get(coord.body) else { 
+            let Ok((body, _gtf, body_mat_handle)) = q_bodies.get(coord.body) else { 
                 commands.entity(ent).despawn();
                 continue; 
             };
@@ -187,18 +187,28 @@ pub fn finalize_terrain_tiles(
             let dist = camera_pos.distance(_gtf.translation().as_dvec3());
             let altitude = dist - body.radius_m;
 
+            // Get texture from body material
+            let mut base_color = if body.name == "Moon" { Color::srgb(0.2, 0.2, 0.2) } else { Color::from(LinearRgba::new(0.005, 0.02, 0.05, 1.0)) };
+            let mut base_color_texture = None;
+            
+            if let Some(body_mat) = materials.get(body_mat_handle) {
+                base_color = body_mat.base.base_color;
+                base_color_texture = body_mat.base.base_color_texture.clone();
+            }
+
             let mut entity_cmds = commands.entity(ent);
             entity_cmds.insert((
                 Mesh3d(meshes.add(data.mesh)),
                 MeshMaterial3d(materials.add(crate::blueprint::BlueprintMaterial {
                     base: StandardMaterial {
-                        base_color: if body.name == "Moon" { Color::srgb(0.2, 0.2, 0.2) } else { Color::from(LinearRgba::new(0.005, 0.02, 0.05, 1.0)) },
+                        base_color,
+                        base_color_texture,
                         perceptual_roughness: 0.8,
                         ..default()
                     },
                     extension: crate::blueprint::BlueprintExtension {
-                        high_color: if body.name == "Earth" { LinearRgba::from(Color::srgb(0.05, 0.15, 0.8)) } else { LinearRgba::new(0.01, 0.01, 0.01, 1.0) },
-                        low_color: if body.name == "Earth" { LinearRgba::from(Color::srgb(0.05, 0.15, 0.8)) } else { LinearRgba::new(0.01, 0.01, 0.01, 1.0) },
+                        high_color: if body.name == "Earth" { LinearRgba::from(Color::srgb(0.2, 0.4, 1.0)) } else { LinearRgba::new(0.5, 0.5, 0.5, 1.0) },
+                        low_color: if body.name == "Earth" { LinearRgba::WHITE } else { LinearRgba::WHITE },
                         grid_scale: 100.0,
                         line_width: 1.0,
                         subdivisions: Vec2::new(360.0, 180.0),
@@ -364,21 +374,4 @@ pub fn setup_terrain_overrides(mut registry: ResMut<TerrainMapRegistry>, q_bodie
         }
     }
     registry.maps = Arc::new(maps);
-}
-
-pub fn spawn_rover_at_camera_surface(commands: &mut Commands, cam_gtf: &GlobalTransform, body_gtf: &GlobalTransform, body: &CelestialBody, body_entity: Entity) -> Entity {
-    let cam_pos = cam_gtf.translation().as_dvec3();
-    let body_pos = body_gtf.translation().as_dvec3();
-    let dir = (cam_pos - body_pos).normalize_or_zero();
-    let surface_pos_rel = dir * (body.radius_m + 2.0); 
-    let rot = Quat::from_rotation_arc(Vec3::Y, dir.as_vec3());
-    commands.spawn((
-        lunco_core::RoverVessel,
-        ENUFrame, 
-        RigidBody::Dynamic,
-        Collider::cuboid(2.0, 1.0, 4.0),
-        Transform::from_translation(surface_pos_rel.as_vec3()).with_rotation(rot),
-        GlobalTransform::default(),
-        Name::new(format!("Rover @ {}", body.name)),
-    )).set_parent_in_place(body_entity).id()
 }

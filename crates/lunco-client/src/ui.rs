@@ -206,14 +206,14 @@ fn main_ui_system(
              
              if ui.button("Spawn Ackermann Rover (Blue)").clicked() {
                  let mesh_handle = meshes.add(Sphere::new(0.5).mesh().build());
-                 let rover = lunco_physics::spawn_joint_ackermann_rover(
+                 let _rover = lunco_physics::spawn_joint_ackermann_rover(
                     &mut commands,
+                    spawn_req.planet,
                     mesh_handle,
                     spawn_req.click_pos_local.as_vec3() + spawn_req.surface_normal * 1.5,
                     "Lunar Explorer",
                     Color::Srgba(bevy::color::palettes::basic::BLUE),
                  );
-                 commands.entity(rover).set_parent_in_place(spawn_req.planet);
                  pending.request = None;
                  info!("Spawned rover at surface interaction point.");
              }

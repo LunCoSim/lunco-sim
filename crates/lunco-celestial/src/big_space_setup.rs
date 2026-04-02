@@ -23,6 +23,7 @@ pub fn setup_big_space_hierarchy(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut blueprint_materials: ResMut<Assets<crate::blueprint::BlueprintMaterial>>,
+    asset_server: Res<AssetServer>,
 ) {
     // 1. Minimalist BigSpace Root (No Name, No standard spatial components)
     let big_space_root = commands.spawn(BigSpace::default()).id();
@@ -100,13 +101,14 @@ pub fn setup_big_space_hierarchy(
         Mesh3d(meshes.add(Sphere::new(6371.0e3).mesh().ico(4).unwrap())),
         MeshMaterial3d(blueprint_materials.add(crate::blueprint::BlueprintMaterial {
             base: StandardMaterial {
-                base_color: Color::srgb(0.2, 0.4, 1.0),
+                base_color: Color::WHITE,
+                base_color_texture: Some(asset_server.load("cached_textures://earth.png")),
                 unlit: false, 
                 ..default()
             },
             extension: crate::blueprint::BlueprintExtension {
-                high_color: LinearRgba::from(Color::srgb(0.05, 0.15, 0.8)),
-                low_color: LinearRgba::from(Color::srgb(0.05, 0.15, 0.8)),
+                high_color: LinearRgba::from(Color::srgb(0.2, 0.4, 1.0)),
+                low_color: LinearRgba::WHITE,
                 high_line_color: LinearRgba::new(0.0, 0.5, 1.0, 1.0), // Cyan for Earth Blueprint
                 low_line_color: LinearRgba::new(0.0, 0.5, 1.0, 1.0),
                 subdivisions: Vec2::new(36.0, 18.0), // Denser grid for Earth (10 deg)
@@ -150,14 +152,15 @@ pub fn setup_big_space_hierarchy(
         Mesh3d(meshes.add(Sphere::new(1737.0e3).mesh().ico(6).unwrap())),
         MeshMaterial3d(blueprint_materials.add(crate::blueprint::BlueprintMaterial {
             base: StandardMaterial {
-                base_color: Color::srgb(0.5, 0.5, 0.5),
-                metallic: 0.2, // Less metallic for a moon
-                perceptual_roughness: 0.8,
+                base_color: Color::WHITE,
+                base_color_texture: Some(asset_server.load("cached_textures://moon.png")),
+                metallic: 0.1, 
+                perceptual_roughness: 0.9,
                 ..default()
             },
             extension: crate::blueprint::BlueprintExtension {
-                high_color: LinearRgba::new(0.1, 0.1, 0.1, 1.0),
-                low_color: LinearRgba::new(0.1, 0.1, 0.1, 1.0),
+                high_color: LinearRgba::new(0.5, 0.5, 0.5, 1.0),
+                low_color: LinearRgba::WHITE,
                 high_line_color: LinearRgba::new(0.6, 0.6, 0.6, 1.0), // Grey for Moon Blueprint
                 low_line_color: LinearRgba::new(0.6, 0.6, 0.6, 1.0),
                 subdivisions: Vec2::new(24.0, 12.0),
