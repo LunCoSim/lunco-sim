@@ -46,18 +46,14 @@ pub fn configure_gizmos_system(mut config_store: ResMut<GizmoConfigStore>) {
     config.depth_bias = 0.0;
 }
 
-pub struct TrajectoryData {
-    pub last_update_jd: f64,
-    pub moon_path_geocentric: Vec<bevy::math::DVec3>,
-    pub earth_path_heliocentric: Vec<bevy::math::DVec3>,
-}
-
 #[derive(Resource, Default)]
 pub struct TrajectoryCache {
-    pub last_update_jd: f64,
-    pub moon_path_geocentric: Vec<bevy::math::DVec3>, 
+    pub earth_last_update_jd: f64,
+    pub moon_last_update_jd: f64,
     pub earth_path_heliocentric: Vec<bevy::math::DVec3>,
-    pub task: Option<Task<TrajectoryData>>,
+    pub moon_path_geocentric: Vec<bevy::math::DVec3>, 
+    pub earth_task: Option<Task<Vec<bevy::math::DVec3>>>,
+    pub moon_task: Option<Task<Vec<bevy::math::DVec3>>>,
 }
 
 fn catmull_rom(p0: bevy::math::DVec3, p1: bevy::math::DVec3, p2: bevy::math::DVec3, p3: bevy::math::DVec3, t: f64) -> bevy::math::DVec3 {
@@ -138,57 +134,68 @@ pub fn spawn_trajectory_update_task(
     mut cache: ResMut<TrajectoryCache>,
 ) {
     let current_epoch = clock.epoch;
+    let pool = AsyncComputeTaskPool::get();
     
-    // 1. Check if we need to refresh (and or if we are already refreshing)
-    if cache.task.is_some() { return; }
-    
-    if (cache.last_update_jd - current_epoch).abs() > 2.0 || cache.moon_path_geocentric.is_empty() {
-        let pool = AsyncComputeTaskPool::get();
-        let provider = Arc::clone(&ephemeris.provider);
-        let aligned_epoch = (current_epoch / 2.0).round() * 2.0;
-        
-        let moon_spacing = 0.05;
-        let moon_half = 300;
-        let earth_spacing = 1.0;
-        let earth_half = 210;
+    // 1. Earth Update Logic
+    if cache.earth_task.is_none() {
+        if (cache.earth_last_update_jd - current_epoch).abs() > 2.0 || cache.earth_path_heliocentric.is_empty() {
+            let provider = Arc::clone(&ephemeris.provider);
+            let aligned_epoch = (current_epoch / 2.0).round() * 2.0;
+            let earth_spacing = 1.0;
+            let earth_half = 210;
 
-        let task = pool.spawn(async move {
-            let mut moon_path = Vec::with_capacity((moon_half * 2 + 1) as usize);
-            let mut earth_path = Vec::with_capacity((earth_half * 2 + 1) as usize);
-            
-            for i in -moon_half..=moon_half {
-                let jd = aligned_epoch + (i as f64) * moon_spacing;
-                let m_au = provider.position(301, jd);
-                let e_au = provider.position(399, jd);
-                moon_path.push(m_au - e_au);
-            }
-            for i in -earth_half..=earth_half {
-                let jd = aligned_epoch + (i as f64) * earth_spacing;
-                let e_au = provider.position(399, jd);
-                earth_path.push(e_au);
-            }
-            
-            TrajectoryData {
-                last_update_jd: aligned_epoch,
-                moon_path_geocentric: moon_path,
-                earth_path_heliocentric: earth_path,
-            }
-        });
-        
-        cache.task = Some(task);
+            cache.earth_task = Some(pool.spawn(async move {
+                let mut path = Vec::with_capacity((earth_half * 2 + 1) as usize);
+                for i in -earth_half..=earth_half {
+                    let jd = aligned_epoch + (i as f64) * earth_spacing;
+                    path.push(provider.position(399, jd));
+                }
+                path
+            }));
+            // Update the epoch expectation immediately to avoid spamming tasks
+            cache.earth_last_update_jd = aligned_epoch;
+        }
+    }
+
+    // 2. Moon Update Logic
+    if cache.moon_task.is_none() {
+        if (cache.moon_last_update_jd - current_epoch).abs() > 2.0 || cache.moon_path_geocentric.is_empty() {
+            let provider = Arc::clone(&ephemeris.provider);
+            let aligned_epoch = (current_epoch / 2.0).round() * 2.0;
+            let moon_spacing = 0.05;
+            let moon_half = 300;
+
+            cache.moon_task = Some(pool.spawn(async move {
+                let mut path = Vec::with_capacity((moon_half * 2 + 1) as usize);
+                for i in -moon_half..=moon_half {
+                    let jd = aligned_epoch + (i as f64) * moon_spacing;
+                    let m_au = provider.position(301, jd);
+                    let e_au = provider.position(399, jd);
+                    path.push(m_au - e_au);
+                }
+                path
+            }));
+            cache.moon_last_update_jd = aligned_epoch;
+        }
     }
 }
 
 pub fn handle_trajectory_tasks(mut cache: ResMut<TrajectoryCache>) {
-    if let Some(mut task) = cache.task.take() {
+    // Poll Earth
+    if let Some(mut task) = cache.earth_task.take() {
         if let Some(data) = future::block_on(future::poll_once(&mut task)) {
-            cache.last_update_jd = data.last_update_jd;
-            cache.moon_path_geocentric = data.moon_path_geocentric;
-            cache.earth_path_heliocentric = data.earth_path_heliocentric;
-            // task is already removed by .take()
+            cache.earth_path_heliocentric = data;
         } else {
-            // Put it back if not finished
-            cache.task = Some(task);
+            cache.earth_task = Some(task);
+        }
+    }
+    
+    // Poll Moon
+    if let Some(mut task) = cache.moon_task.take() {
+        if let Some(data) = future::block_on(future::poll_once(&mut task)) {
+            cache.moon_path_geocentric = data;
+        } else {
+            cache.moon_task = Some(task);
         }
     }
 }
@@ -244,9 +251,9 @@ pub fn draw_trajectories_system(
     let earth_jds = generate_fixed_jds(current_epoch, 200.0, 2.0);
     let moon_jds = generate_fixed_jds(current_epoch, 14.0, 0.2);
     
-    let mut draw_spline_path = |path: &[bevy::math::DVec3], jds: &[f64], spacing: f64, half_count: isize, is_geocentric: bool, exact_helio_now: bevy::math::DVec3, color: Color| {
+    let mut draw_spline_path = |path: &[bevy::math::DVec3], jds: &[f64], spacing: f64, half_count: isize, is_geocentric: bool, exact_helio_now: bevy::math::DVec3, color: Color, last_update_jd: f64| {
         if path.is_empty() { return; }
-        let start_jd = cache.last_update_jd - (half_count as f64) * spacing;
+        let start_jd = last_update_jd - (half_count as f64) * spacing;
         
         let spline_now = evaluate_spline(path, start_jd, spacing, current_epoch);
         let true_local_now = if is_geocentric { exact_helio_now - earth_sim_now } else { exact_helio_now };
@@ -276,6 +283,6 @@ pub fn draw_trajectories_system(
         }
     };
     
-    draw_spline_path(&cache.earth_path_heliocentric, &earth_jds, earth_spacing, earth_half, false, earth_sim_now, config.earth_color);
-    draw_spline_path(&cache.moon_path_geocentric, &moon_jds, moon_spacing, moon_half, true, moon_sim_now, config.moon_color);
+    draw_spline_path(&cache.earth_path_heliocentric, &earth_jds, earth_spacing, earth_half, false, earth_sim_now, config.earth_color, cache.earth_last_update_jd);
+    draw_spline_path(&cache.moon_path_geocentric, &moon_jds, moon_spacing, moon_half, true, moon_sim_now, config.moon_color, cache.moon_last_update_jd);
 }
