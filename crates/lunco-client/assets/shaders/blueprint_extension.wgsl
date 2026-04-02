@@ -34,23 +34,16 @@ fn fragment(
     let final_base_color = pbr_input.material.base_color;
 
     // --- Lat/Long Grid (High Alt) ---
-    let n = normalize(input.world_normal);
-    var lon = (atan2(-n.z, n.x) + PI) / (2.0 * PI);
-    let lat = (asin(n.y) + (PI / 2.0)) / PI;
-    
-    // Patch for the 180-degree longitude seam (prevents linear interpolation jump)
-    if (fwidth(lon) > 0.5) {
-        lon = 0.0; // Break interpolation at the exact seam
-    }
+    // Use mesh UVs directly - they rotate with the planet and are seam-corrected
+    let lon = input.uv.x;
+    let lat = input.uv.y;
 
     // Parameterized subdivisions
     let lon_scaled = lon * extension.subdivisions.x;
     let lat_scaled = lat * extension.subdivisions.y;
     let lat_long_coords = vec2<f32>(lon_scaled, lat_scaled);
     
-    // Antigravity Seam Patch: Avoid derivative spike at the 1.0 -> 0.0 wrap-around
-    let lon_centered = lon_scaled - extension.subdivisions.x * floor(lon + 0.5);
-    let fw = fwidth(vec2<f32>(lon_centered, lat_scaled));
+    let fw = fwidth(lat_long_coords);
     
     let lat_long_f = abs(fract(lat_long_coords - 0.5) - 0.5) / fw;
     let lat_long_line = min(lat_long_f.x, lat_long_f.y);
