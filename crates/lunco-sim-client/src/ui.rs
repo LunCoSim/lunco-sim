@@ -167,9 +167,20 @@ fn main_ui_system(
 
     egui::Window::new("Telemetry").anchor(egui::Align2::RIGHT_TOP, [-10.0, 10.0]).show(ctx, |ui| {
         for (_, obs) in q_camera.iter() {
-            ui.label(format!("Mode: {:?}", obs.mode));
-            ui.label(format!("Alt: {:.2} km", obs.altitude / 1000.0));
-            ui.label(format!("Dist: {:.1}m", obs.distance));
+            ui.horizontal(|ui| {
+                ui.label("Mode:");
+                match obs.mode {
+                    lunco_sim_celestial::ObserverMode::Orbital => ui.colored_label(egui::Color32::from_rgb(100, 150, 255), "ORBITAL"),
+                    lunco_sim_celestial::ObserverMode::Flyby => ui.colored_label(egui::Color32::from_rgb(255, 200, 50), "FLYBY"),
+                    lunco_sim_celestial::ObserverMode::Surface => ui.colored_label(egui::Color32::from_rgb(50, 255, 100), "SURFACE"),
+                };
+            });
+            ui.label(format!("Alt: {:.3} km", obs.altitude / 1000.0));
+            if obs.mode == lunco_sim_celestial::ObserverMode::Orbital {
+                ui.label(format!("Orbital Dist: {:.0} km", obs.distance / 1000.0));
+            } else {
+                ui.label(format!("Center Offset: {:.0} m", obs.local_flyby_pos.length()));
+            }
         }
         ui.label("SCROLL or +/- to zoom");
         ui.label("Right-Click rotate");

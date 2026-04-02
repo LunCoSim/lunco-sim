@@ -117,7 +117,7 @@ pub fn terrain_spawn_system(
             
             let mesh = create_quadsphere_tile_mesh(coord.body, coord.face, coord.level, coord.i, coord.j, body.radius_m, config.tile_resolution, &registry, tile_center_pos);
             
-            let mut entity = commands.spawn((
+            let tile_ent = commands.spawn((
                 ActiveTerrainTile,
                 TerrainTile,
                 coord,
@@ -129,10 +129,12 @@ pub fn terrain_spawn_system(
                         ..default()
                     },
                     extension: crate::blueprint::BlueprintExtension {
-                        high_color: if body.name == "Earth" { LinearRgba::from(Color::srgb(0.05, 0.15, 0.8)) } else { LinearRgba::new(0.1, 0.1, 0.1, 1.0) },
-                        low_color: if body.name == "Earth" { LinearRgba::from(Color::srgb(0.05, 0.15, 0.8)) } else { LinearRgba::new(0.1, 0.1, 0.1, 1.0) },
-                        grid_scale: 1.0,
-                        line_width: 0.2,
+                        high_color: if body.name == "Earth" { LinearRgba::from(Color::srgb(0.05, 0.15, 0.8)) } else { LinearRgba::new(0.01, 0.01, 0.01, 1.0) },
+                        low_color: if body.name == "Earth" { LinearRgba::from(Color::srgb(0.05, 0.15, 0.8)) } else { LinearRgba::new(0.01, 0.01, 0.01, 1.0) },
+                        grid_scale: 100.0, // 100m grid for surface
+                        line_width: 1.0,
+                        subdivisions: Vec2::new(360.0, 180.0),
+                        transition: (1.0 - (min_altitude / 50_000.0)).clamp(0.0, 1.0) as f32,
                         body_radius: body.radius_m as f32,
                         ..default()
                     },
@@ -140,11 +142,11 @@ pub fn terrain_spawn_system(
                 Transform::from_translation(tile_center_pos.as_vec3()),
                 GlobalTransform::default(),
                 Name::new(format!("Tile f{} l{} i{} j{}", coord.face, coord.level, coord.i, coord.j)),
-            ));
+            )).id();
             
-            entity.set_parent_in_place(body_ent);
+            commands.entity(body_ent).add_child(tile_ent);
             if coord.level >= config.physics_lod_threshold {
-                entity.insert((RigidBody::Static, Collider::trimesh_from_mesh(&mesh).unwrap()));
+                commands.entity(tile_ent).insert((RigidBody::Static, Collider::trimesh_from_mesh(&mesh).unwrap()));
             }
         }
     } else {

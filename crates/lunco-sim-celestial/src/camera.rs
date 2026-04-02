@@ -245,9 +245,13 @@ pub fn update_observer_camera_system(
             // Switch to Surface: alt < 10km
             if altitude < 10_000.0 && obs.mode != ObserverMode::Surface {
                 obs.mode = ObserverMode::Surface;
-                // Transition: Convert offset to body-relative (counter-rotate by body rotation)
-                let rel_offset = cam_tf.translation.as_dvec3() - target_pos_in_cam_grid;
+                // Transition: Position relative to body, but ensured above surface
+                let rel_offset = (cam_tf.translation.as_dvec3() - target_pos_in_cam_grid).normalize() * (body.radius_m + 10.0);
                 obs.local_flyby_pos = t_tf.rotation.inverse().mul_vec3(rel_offset.as_vec3()).as_dvec3();
+                
+                // Reset rotation to look level/forward on surface
+                obs.yaw = 0.0;
+                obs.pitch = 0.0;
             }
             
             // Switch to Flyby: alt > 15km (hysteresis)
@@ -309,6 +313,7 @@ pub fn update_observer_camera_system(
             let (new_cell, new_tf) = cam_grid.translation_to_grid(desired_pos_local);
             *cam_cell = new_cell; cam_tf.translation = new_tf;
         } else if obs.mode == ObserverMode::Surface {
+            let Some(body) = t_body else { continue; };
             // Surface Mode: Orientation aligned to local normal (surface tangent)
             // local_flyby_pos here is relative to body and rotated BY body
             let body_rot = t_tf.rotation;
@@ -317,17 +322,18 @@ pub fn update_observer_camera_system(
             
             let up = current_pos_offset.normalize_or_zero();
             
+            // Align orientation relative to local surface normal (gravity Up)
+            let surface_base_rot = Quat::from_rotation_arc(Vec3::Y, up);
+            
             // Rotation: yaw around local Up, pitch around local Right
             obs.yaw -= mouse_delta.x * 0.01;
             obs.pitch = (obs.pitch - mouse_delta.y * 0.01).clamp(-1.5, 1.5);
             
-            let look_quat = Quat::from_axis_angle(up, obs.yaw);
-            let final_rot = look_quat * Quat::from_axis_angle(look_quat.mul_vec3(Vec3::X), obs.pitch);
+            let final_rot = surface_base_rot * Quat::from_euler(EulerRot::YXZ, obs.yaw, obs.pitch, 0.0);
             cam_tf.rotation = final_rot;
 
             // Movement: Control in body-relative frame
             let speed = (obs.altitude * 0.5 + 50.0).max(10.0) * time.delta_secs_f64();
-            let _move_vec_body = DVec3::ZERO;
             
             // Controls relative to view
             let forward = final_rot.mul_vec3(Vec3::NEG_Z);
@@ -344,6 +350,16 @@ pub fn update_observer_camera_system(
             // Convert world move to body-relative move
             let move_vec_body_space = body_rot.inverse().mul_vec3(move_dir_world).as_dvec3() * speed;
             obs.local_flyby_pos += move_vec_body_space;
+            
+            // Constrain to surface (Pseudo-Gravity)
+            let curr_len = obs.local_flyby_pos.length();
+            if curr_len < body.radius_m + 2.0 {
+                obs.local_flyby_pos = obs.local_flyby_pos.normalize() * (body.radius_m + 2.0);
+            }
+            // Optional: Limit height in Surface mode
+            if curr_len > body.radius_m + 5000.0 {
+                obs.local_flyby_pos = obs.local_flyby_pos.normalize() * (body.radius_m + 5000.0);
+            }
             
             // Calculate final position in cam grid
             let final_pos_offset = body_rot.mul_vec3(obs.local_flyby_pos.as_vec3());
