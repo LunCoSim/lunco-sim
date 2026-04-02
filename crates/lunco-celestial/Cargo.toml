@@ -19,3 +19,5 @@ futures-lite = { workspace = true }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 ureq = { version = "2.9", features = ["tls"] }
+resvg = { workspace = true }
+tiny-skia = { workspace = true }

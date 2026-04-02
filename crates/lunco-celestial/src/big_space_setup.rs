@@ -195,6 +195,7 @@ pub fn setup_big_space_hierarchy(
             yaw: 0.0,
             local_flyby_pos: DVec3::new(0.0, 2_137_000.0, 0.0),
             altitude: 400_000.0,
+            ..default()
         },
         crate::ActiveCamera,
         lunco_core::Avatar,
@@ -227,8 +228,9 @@ pub fn setup_big_space_hierarchy(
     // Sun light
     commands.spawn((
         DirectionalLight {
-            illuminance: 10_000.0,
-            shadows_enabled: false,
+            color: Color::WHITE,
+            illuminance: 100_000.0,
+            shadows_enabled: true,
             ..default()
         },
         CellCoord::default(),
@@ -237,3 +239,4 @@ pub fn setup_big_space_hierarchy(
         Name::new("Sun Light"),
     )).set_parent_in_place(solar_grid);
 }
+

@@ -128,8 +128,6 @@ pub fn load_missions_system(mut commands: Commands, mut registry: ResMut<Mission
                             let radius_m = sc.marker_radius_km.unwrap_or(500.0) * 1000.0;
                             let hit_radius_m = sc.hit_radius_km.unwrap_or(1000.0) * 1000.0;
                             let color_arr = sc.marker_color.unwrap_or([0.0, 1.0, 1.0, 1.0]);
-                            let color = Color::srgba(color_arr[0], color_arr[1], color_arr[2], color_arr[3]);
-                            let emissive = LinearRgba::from(color) * 10.0;
 
                             let mut sc_ent = commands.spawn((
                                 Name::new(sc.name.clone()),
@@ -147,32 +145,32 @@ pub fn load_missions_system(mut commands: Commands, mut registry: ResMut<Mission
                             ));
 
                             sc_ent.with_children(|parent| {
-                                // Main Body (Service Module)
+                                // Main Body (Service Module) - Darker metallic grey
                                 parent.spawn((
                                     Mesh3d(meshes.add(Cylinder::new(radius_m, radius_m * 1.5).mesh())),
                                     MeshMaterial3d(materials.add(StandardMaterial {
-                                        base_color: color,
-                                        emissive,
-                                        unlit: true,
+                                        base_color: Color::srgb(0.2, 0.2, 0.2),
+                                        metallic: 0.8,
+                                        perceptual_roughness: 0.2,
                                         ..default()
                                     })),
                                     Name::new("Service Module"),
                                 ));
 
-                                // Capsule (Command Module) - Offset slightly up
+                                // Capsule (Command Module) - Silver metallic
                                 parent.spawn((
                                     Mesh3d(meshes.add(Cylinder::new(radius_m * 0.1, radius_m).mesh())),
                                     MeshMaterial3d(materials.add(StandardMaterial {
-                                        base_color: color,
-                                        emissive,
-                                        unlit: true,
+                                        base_color: Color::srgb(0.8, 0.8, 0.8),
+                                        metallic: 1.0,
+                                        perceptual_roughness: 0.1,
                                         ..default()
                                     })),
                                     Transform::from_translation(Vec3::Y * radius_m * 1.25),
                                     Name::new("Command Module"),
                                 ));
 
-                                // Solar Panels (Left and Right)
+                                // Solar Panels (Left and Right) - Blue solar look
                                 let panel_width = radius_m * 4.0;
                                 let panel_height = radius_m * 0.8;
                                 let panel_thickness = radius_m * 0.1;
@@ -181,9 +179,10 @@ pub fn load_missions_system(mut commands: Commands, mut registry: ResMut<Mission
                                     parent.spawn((
                                         Mesh3d(meshes.add(Cuboid::new(panel_width, panel_height, panel_thickness).mesh())),
                                         MeshMaterial3d(materials.add(StandardMaterial {
-                                            base_color: color,
-                                            emissive,
-                                            unlit: true,
+                                            base_color: Color::srgb(0.0, 0.1, 0.4), // Dark blue solar cells
+                                            emissive: LinearRgba::new(0.0, 0.2, 0.8, 1.0) * 2.0,
+                                            metallic: 0.5,
+                                            perceptual_roughness: 0.3,
                                             ..default()
                                         })),
                                         Transform::from_translation(Vec3::X * side * (radius_m + panel_width * 0.5)),
@@ -214,40 +213,6 @@ pub fn load_missions_system(mut commands: Commands, mut registry: ResMut<Mission
                 }
             }
         }
-    }
-}
-
-pub fn spacecraft_visibility_system(
-    clock: Res<crate::clock::CelestialClock>,
-    mut q_sc: Query<(&Spacecraft, &mut Visibility)>,
-) {
-    for (sc, mut vis) in q_sc.iter_mut() {
-        if let (Some(start), Some(end)) = (sc.start_epoch_jd, sc.end_epoch_jd) {
-            let should_be_visible = clock.epoch >= start && clock.epoch <= end;
-            let target_vis = if should_be_visible { Visibility::Inherited } else { Visibility::Hidden };
-            if *vis != target_vis {
-                *vis = target_vis;
-            }
-        }
-    }
-}
-
-
-#[derive(Component)]
-pub struct FocusOnStart;
-
-pub fn mission_focus_system(
-    q_focus: Query<Entity, Added<FocusOnStart>>,
-    mut q_camera: Query<&mut crate::camera::ObserverCamera>,
-    mut commands: Commands,
-) {
-    for ent in q_focus.iter() {
-        if let Some(mut obs) = q_camera.iter_mut().next() {
-            obs.focus_target = Some(ent);
-            obs.distance = 100.0; // Close focus for spacecraft
-            info!("Camera focused on spacecraft starting mission.");
-        }
-        commands.entity(ent).remove::<FocusOnStart>();
     }
 }
 
@@ -285,6 +250,39 @@ pub fn spacecraft_alignment_system(
                     commands.entity(sc_entity).set_parent_in_place(f_entity); 
                 }
                 break;
+            }
+        }
+    }
+}
+
+#[derive(Component)]
+pub struct FocusOnStart;
+
+pub fn mission_focus_system(
+    q_focus: Query<Entity, Added<FocusOnStart>>,
+    mut q_camera: Query<&mut crate::camera::ObserverCamera>,
+    mut commands: Commands,
+) {
+    for ent in q_focus.iter() {
+        if let Some(mut obs) = q_camera.iter_mut().next() {
+            obs.focus_target = Some(ent);
+            obs.distance = 100.0; // Close focus for spacecraft
+            info!("Camera focused on spacecraft starting mission.");
+        }
+        commands.entity(ent).remove::<FocusOnStart>();
+    }
+}
+
+pub fn spacecraft_visibility_system(
+    clock: Res<crate::clock::CelestialClock>,
+    mut q_sc: Query<(&Spacecraft, &mut Visibility)>,
+) {
+    for (sc, mut vis) in q_sc.iter_mut() {
+        if let (Some(start), Some(end)) = (sc.start_epoch_jd, sc.end_epoch_jd) {
+            let should_be_visible = clock.epoch >= start && clock.epoch <= end;
+            let target_vis = if should_be_visible { Visibility::Inherited } else { Visibility::Hidden };
+            if *vis != target_vis {
+                *vis = target_vis;
             }
         }
     }

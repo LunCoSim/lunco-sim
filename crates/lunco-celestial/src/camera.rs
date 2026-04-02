@@ -22,6 +22,8 @@ pub struct ObserverCamera {
     pub yaw: f32,
     pub local_flyby_pos: DVec3, 
     pub altitude: f64,
+    pub smooth_focus_pos: DVec3,
+    pub is_first_frame: bool,
 }
 
 impl Default for ObserverCamera {
@@ -34,6 +36,8 @@ impl Default for ObserverCamera {
             yaw: 0.0,
             local_flyby_pos: DVec3::ZERO,
             altitude: 0.0,
+            smooth_focus_pos: DVec3::ZERO,
+            is_first_frame: true,
         }
     }
 }
@@ -64,6 +68,7 @@ impl Plugin for CameraMigrationPlugin {
 pub fn focus_transition_system(
     mut q_camera: Query<(&mut ObserverCamera, Entity), Changed<ObserverCamera>>,
     q_bodies: Query<&CelestialBody>,
+    q_spacecraft: Query<&crate::missions::Spacecraft>,
     mut last_targets: Local<std::collections::HashMap<Entity, Option<Entity>>>,
 ) {
     for (mut obs, cam_ent) in q_camera.iter_mut() {
@@ -78,24 +83,30 @@ pub fn focus_transition_system(
              if let Some(old_ent) = old_target {
                  if let Ok(body) = q_bodies.get(old_ent) {
                      old_radius = body.radius_m;
+                 } else if let Ok(sc) = q_spacecraft.get(old_ent) {
+                     old_radius = sc.hit_radius_m as f64;
                  }
              }
 
+             let mut new_radius = 0.0;
              if let Ok(new_body) = q_bodies.get(target_ent) {
-                 // Preserve altitude
-                 let current_altitude = if old_radius > 0.0 {
-                     obs.distance - old_radius
-                 } else {
-                     obs.altitude 
-                 };
-                 
-                 obs.distance = (new_body.radius_m + current_altitude).max(10.0);
-                 obs.altitude = current_altitude; 
-                 
-                 if new_body.name == "Earth" {
-                     obs.mode = ObserverMode::Orbital;
-                 }
+                 new_radius = new_body.radius_m;
+             } else if let Ok(sc) = q_spacecraft.get(target_ent) {
+                 new_radius = sc.hit_radius_m as f64;
              }
+
+             // Preserve altitude: dist = radius + alt
+             let current_altitude = if old_radius > 0.0 {
+                 obs.distance - old_radius
+             } else {
+                 obs.altitude 
+             };
+             
+             obs.distance = (new_radius + current_altitude).max(10.0);
+             obs.altitude = current_altitude; 
+             
+             // Default all focuses to Orbital mode initially
+             obs.mode = ObserverMode::Orbital;
         }
     }
 }
@@ -255,6 +266,16 @@ pub fn update_observer_camera_system(
         let cam_grid_pos_solar = get_absolute_pos_in_root_double_ghost_aware(cam_grid_ent, cg_cell, cg_tf, &q_all_parents, &q_grids, &q_coords);
         let target_pos_in_cam_grid = target_pos_solar - cam_grid_pos_solar;
 
+        // Smooth focus transition
+        if obs.is_first_frame {
+            obs.smooth_focus_pos = target_pos_in_cam_grid;
+            obs.is_first_frame = false;
+        } else {
+            let lerp_factor = (time.delta_secs() * 5.0).min(1.0) as f64;
+            obs.smooth_focus_pos = obs.smooth_focus_pos.lerp(target_pos_in_cam_grid, lerp_factor);
+        }
+        let focus_pos = obs.smooth_focus_pos;
+
         let altitude;
         if let Some(body) = t_body {
             let dist_to_center = if obs.mode == ObserverMode::Orbital { obs.distance } else { obs.local_flyby_pos.length() };
@@ -307,10 +328,10 @@ pub fn update_observer_camera_system(
             obs.pitch = (obs.pitch - mouse_delta.y * 0.01).clamp(-1.5, 1.5);
             let rotation = Quat::from_euler(EulerRot::YXZ, obs.yaw, obs.pitch, 0.0);
             let offset = rotation.mul_vec3(Vec3::Z).as_dvec3() * obs.distance;
-            let desired_pos_local = target_pos_in_cam_grid + offset;
+            let desired_pos_local = focus_pos + offset;
             let (new_cell, new_tf) = cam_grid.translation_to_grid(desired_pos_local);
             *cam_cell = new_cell; cam_tf.translation = new_tf;
-            cam_tf.look_at(target_pos_in_cam_grid.as_vec3(), Vec3::Y);
+            cam_tf.look_at(focus_pos.as_vec3(), Vec3::Y);
         } else if obs.mode == ObserverMode::Flyby {
             obs.yaw -= mouse_delta.x * 0.01;
             obs.pitch = (obs.pitch - mouse_delta.y * 0.01).clamp(-1.55, 1.55);
@@ -326,17 +347,17 @@ pub fn update_observer_camera_system(
             let mut move_vec = DVec3::ZERO;
             let forward = rotation.mul_vec3(Vec3::NEG_Z).as_dvec3();
             let right = rotation.mul_vec3(Vec3::X).as_dvec3();
-            let body_up = obs.local_flyby_pos.normalize_or_zero();
+            let cam_up = rotation.mul_vec3(Vec3::Y).as_dvec3();
 
             if keys.pressed(KeyCode::KeyW) { move_vec += forward; }
             if keys.pressed(KeyCode::KeyS) { move_vec -= forward; }
             if keys.pressed(KeyCode::KeyD) { move_vec += right; }
             if keys.pressed(KeyCode::KeyA) { move_vec -= right; }
-            if keys.pressed(KeyCode::KeyE) { move_vec += body_up; }
-            if keys.pressed(KeyCode::KeyQ) { move_vec -= body_up; }
+            if keys.pressed(KeyCode::KeyE) { move_vec += cam_up; }
+            if keys.pressed(KeyCode::KeyQ) { move_vec -= cam_up; }
             
             obs.local_flyby_pos += move_vec * speed;
-            let desired_pos_local = target_pos_in_cam_grid + obs.local_flyby_pos;
+            let desired_pos_local = focus_pos + obs.local_flyby_pos;
             let (new_cell, new_tf) = cam_grid.translation_to_grid(desired_pos_local);
             *cam_cell = new_cell; cam_tf.translation = new_tf;
         } else if obs.mode == ObserverMode::Surface {
@@ -345,7 +366,7 @@ pub fn update_observer_camera_system(
             // local_flyby_pos here is relative to body and rotated BY body
             let body_rot = t_tf.rotation;
             let current_pos_offset = body_rot.mul_vec3(obs.local_flyby_pos.as_vec3());
-            let _cam_pos_local = target_pos_in_cam_grid + current_pos_offset.as_dvec3();
+            let _cam_pos_local = focus_pos + current_pos_offset.as_dvec3();
             
             let up = current_pos_offset.normalize_or_zero();
             
