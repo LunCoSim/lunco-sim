@@ -103,7 +103,7 @@ pub fn setup_big_space_hierarchy(
             extension: crate::blueprint::BlueprintExtension {
                 high_color: LinearRgba::from(Color::srgb(0.05, 0.15, 0.8)),
                 low_color: LinearRgba::from(Color::srgb(0.05, 0.15, 0.8)),
-                high_line_color: LinearRgba::new(0.0, 0.5, 1.0, 1.0),
+                high_line_color: LinearRgba::new(0.0, 0.5, 1.0, 1.0), // Cyan for Earth Blueprint
                 low_line_color: LinearRgba::new(0.0, 0.5, 1.0, 1.0),
                 subdivisions: Vec2::new(36.0, 18.0), // Denser grid for Earth (10 deg)
                 fade_range: Vec2::new(0.2, 0.6),
@@ -152,7 +152,7 @@ pub fn setup_big_space_hierarchy(
             extension: crate::blueprint::BlueprintExtension {
                 high_color: LinearRgba::new(0.1, 0.1, 0.1, 1.0),
                 low_color: LinearRgba::new(0.1, 0.1, 0.1, 1.0),
-                high_line_color: LinearRgba::new(0.6, 0.6, 0.6, 1.0),
+                high_line_color: LinearRgba::new(0.6, 0.6, 0.6, 1.0), // Grey for Moon Blueprint
                 low_line_color: LinearRgba::new(0.6, 0.6, 0.6, 1.0),
                 subdivisions: Vec2::new(24.0, 12.0),
                 fade_range: Vec2::new(0.2, 0.6),

@@ -6,9 +6,25 @@ use crate::coords::ecliptic_to_bevy;
 
 pub struct TrajectoryPlugin;
 
+#[derive(Resource, Debug, Clone, Copy)]
+pub struct TrajectoryConfig {
+    pub earth_color: Color,
+    pub moon_color: Color,
+}
+
+impl Default for TrajectoryConfig {
+    fn default() -> Self {
+        Self {
+            earth_color: Color::srgba(0.0, 0.5, 1.0, 0.4), // Blue
+            moon_color: Color::srgba(0.6, 0.6, 0.6, 0.3),  // Grey
+        }
+    }
+}
+
 impl Plugin for TrajectoryPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<TrajectoryCache>();
+        app.init_resource::<TrajectoryConfig>();
         app.add_systems(Startup, configure_gizmos_system);
         // Run in PostUpdate AFTER Transform propagation to avoid 1-frame lag 
         // during high-speed time compression.
@@ -106,6 +122,7 @@ pub fn draw_trajectories_system(
     registry_resource: Res<EphemerisResource>,
     q_bodies: Query<(&CelestialBody, &GlobalTransform)>,
     mut cache: ResMut<TrajectoryCache>,
+    config: Res<TrajectoryConfig>,
 ) {
     let current_epoch = clock.epoch;
     
@@ -202,6 +219,6 @@ pub fn draw_trajectories_system(
         }
     };
     
-    draw_spline_path(&cache.earth_path_heliocentric, &earth_jds, earth_spacing, earth_half, false, earth_sim_now, Color::srgba(1.0, 1.0, 0.6, 0.2));
-    draw_spline_path(&cache.moon_path_geocentric, &moon_jds, moon_spacing, moon_half, true, moon_sim_now, Color::srgba(0.5, 0.7, 1.0, 0.4));
+    draw_spline_path(&cache.earth_path_heliocentric, &earth_jds, earth_spacing, earth_half, false, earth_sim_now, config.earth_color);
+    draw_spline_path(&cache.moon_path_geocentric, &moon_jds, moon_spacing, moon_half, true, moon_sim_now, config.moon_color);
 }
