@@ -90,22 +90,39 @@ fn main_ui_system(
             }
         });
 
+        let mut target_to_focus = None;
+
         ui.separator();
         ui.collapsing("Celestial Bodies", |ui| {
             for (entity, name, _) in q_bodies.iter() {
-                if ui.selectable_label(selected.entity == Some(entity), format!("{}", name)).clicked() {
+                let res = ui.selectable_label(selected.entity == Some(entity), format!("{}", name));
+                if res.clicked() {
                     selected.entity = Some(entity);
+                }
+                if res.double_clicked() {
+                    target_to_focus = Some(entity);
                 }
             }
         });
 
         ui.collapsing("Local Vessels", |ui| {
             for (entity, name, _) in q_rovers.iter() {
-                 if ui.selectable_label(selected.entity == Some(entity), format!("{}", name)).clicked() {
+                 let res = ui.selectable_label(selected.entity == Some(entity), format!("{}", name));
+                 if res.clicked() {
                      selected.entity = Some(entity);
+                 }
+                 if res.double_clicked() {
+                     target_to_focus = Some(entity);
                  }
             }
         });
+
+        if let Some(target) = target_to_focus {
+            for (_, mut obs) in q_camera.iter_mut() {
+                obs.focus_target = Some(target);
+            }
+            selected.entity = Some(target);
+        }
 
         if let Some(target) = selected.entity {
             ui.separator();
