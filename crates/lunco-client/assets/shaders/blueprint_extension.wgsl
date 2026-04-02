@@ -30,8 +30,8 @@ fn fragment(
     var pbr_input = pbr_input_from_standard_material(input, is_front);
     
     // --- Colors Transition ---
-    let base_color_mix = mix(extension.high_color, extension.low_color, extension.transition);
-    let final_base_color = pbr_input.material.base_color * base_color_mix;
+    // We no longer multiply by base_color_mix as planetary maps provide the real colors now.
+    let final_base_color = pbr_input.material.base_color;
 
     // --- Lat/Long Grid (High Alt) ---
     let n = normalize(input.world_normal);

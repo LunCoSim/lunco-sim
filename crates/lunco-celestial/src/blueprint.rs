@@ -30,8 +30,8 @@ pub struct BlueprintExtension {
 impl Default for BlueprintExtension {
     fn default() -> Self {
         Self {
-            high_color: LinearRgba::new(0.5, 0.5, 0.5, 1.0),
-            low_color: LinearRgba::new(0.5, 0.5, 0.5, 1.0),
+            high_color: LinearRgba::WHITE,
+            low_color: LinearRgba::WHITE,
             high_line_color: LinearRgba::new(1.0, 1.0, 1.0, 1.0),
             low_line_color: LinearRgba::new(1.0, 1.0, 1.0, 1.0),
             subdivisions: Vec2::new(24.0, 12.0),

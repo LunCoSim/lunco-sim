@@ -207,8 +207,8 @@ pub fn finalize_terrain_tiles(
                         ..default()
                     },
                     extension: crate::blueprint::BlueprintExtension {
-                        high_color: if body.name == "Earth" { LinearRgba::from(Color::srgb(0.2, 0.4, 1.0)) } else { LinearRgba::new(0.5, 0.5, 0.5, 1.0) },
-                        low_color: if body.name == "Earth" { LinearRgba::WHITE } else { LinearRgba::WHITE },
+                        high_color: LinearRgba::WHITE,
+                        low_color: LinearRgba::WHITE,
                         grid_scale: 100.0,
                         line_width: 1.0,
                         subdivisions: Vec2::new(360.0, 180.0),
