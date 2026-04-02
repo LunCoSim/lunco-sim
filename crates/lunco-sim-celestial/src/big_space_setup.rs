@@ -84,7 +84,7 @@ pub fn setup_big_space_hierarchy(
     )).set_parent_in_place(emb_grid).id();
 
     // Earth Body
-    let earth_body = commands.spawn((
+    let _earth_body = commands.spawn((
         CelestialBody { 
             name: "Earth".to_string(), 
             ephemeris_id: 399,

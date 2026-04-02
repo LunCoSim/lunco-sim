@@ -10,6 +10,7 @@ use lunco_sim_controller::ControllerLink;
 pub enum ObserverMode {
     Orbital,
     Flyby,
+    Surface,
 }
 
 #[derive(Component)]
@@ -241,14 +242,29 @@ pub fn update_observer_camera_system(
             let dist_to_center = if obs.mode == ObserverMode::Orbital { obs.distance } else { obs.local_flyby_pos.length() };
             altitude = dist_to_center - body.radius_m;
             
-            // Switch to Flyby: alt < 1,000km AND NOT Earth
+            // Switch to Surface: alt < 10km
+            if altitude < 10_000.0 && obs.mode != ObserverMode::Surface {
+                obs.mode = ObserverMode::Surface;
+                // Transition: Convert offset to body-relative (counter-rotate by body rotation)
+                let rel_offset = cam_tf.translation.as_dvec3() - target_pos_in_cam_grid;
+                obs.local_flyby_pos = t_tf.rotation.inverse().mul_vec3(rel_offset.as_vec3()).as_dvec3();
+            }
+            
+            // Switch to Flyby: alt > 15km (hysteresis)
+            if altitude > 15_000.0 && obs.mode == ObserverMode::Surface {
+                obs.mode = ObserverMode::Flyby;
+                // Transition: Convert body-relative back to grid-relative
+                obs.local_flyby_pos = t_tf.rotation.mul_vec3(obs.local_flyby_pos.as_vec3()).as_dvec3();
+            }
+
+            // Switch to Flyby: alt < 1,000km AND NOT Earth AND NOT Surface
             if altitude < 1_000_000.0 && obs.mode == ObserverMode::Orbital && body.name != "Earth" {
                 obs.mode = ObserverMode::Flyby;
                 let rot = Quat::from_euler(EulerRot::YXZ, obs.yaw, obs.pitch, 0.0);
                 obs.local_flyby_pos = rot.mul_vec3(Vec3::Z).as_dvec3() * obs.distance;
             }
             
-            // Switch to Orbital: alt > 1,500km (hysteresis) OR is Earth
+            // Switch to Orbital: alt > 1,500km (hysteresis) OR is Earth (prevent Flyby for Earth at high alt)
             if (altitude > 1_500_000.0 && obs.mode == ObserverMode::Flyby) || (body.name == "Earth" && obs.mode == ObserverMode::Flyby) {
                 obs.mode = ObserverMode::Orbital;
                 obs.distance = obs.local_flyby_pos.length();
@@ -273,7 +289,7 @@ pub fn update_observer_camera_system(
             let (new_cell, new_tf) = cam_grid.translation_to_grid(desired_pos_local);
             *cam_cell = new_cell; cam_tf.translation = new_tf;
             cam_tf.look_at(target_pos_in_cam_grid.as_vec3(), Vec3::Y);
-        } else {
+        } else if obs.mode == ObserverMode::Flyby {
             obs.yaw -= mouse_delta.x * 0.01;
             obs.pitch = (obs.pitch - mouse_delta.y * 0.01).clamp(-1.55, 1.55);
             let rotation = Quat::from_euler(EulerRot::YXZ, obs.yaw, obs.pitch, 0.0);
@@ -290,6 +306,49 @@ pub fn update_observer_camera_system(
             if keys.pressed(KeyCode::Space) { move_vec += DVec3::Y; }
             obs.local_flyby_pos += move_vec * speed;
             let desired_pos_local = target_pos_in_cam_grid + obs.local_flyby_pos;
+            let (new_cell, new_tf) = cam_grid.translation_to_grid(desired_pos_local);
+            *cam_cell = new_cell; cam_tf.translation = new_tf;
+        } else if obs.mode == ObserverMode::Surface {
+            // Surface Mode: Orientation aligned to local normal (surface tangent)
+            // local_flyby_pos here is relative to body and rotated BY body
+            let body_rot = t_tf.rotation;
+            let current_pos_offset = body_rot.mul_vec3(obs.local_flyby_pos.as_vec3());
+            let _cam_pos_local = target_pos_in_cam_grid + current_pos_offset.as_dvec3();
+            
+            let up = current_pos_offset.normalize_or_zero();
+            
+            // Rotation: yaw around local Up, pitch around local Right
+            obs.yaw -= mouse_delta.x * 0.01;
+            obs.pitch = (obs.pitch - mouse_delta.y * 0.01).clamp(-1.5, 1.5);
+            
+            let look_quat = Quat::from_axis_angle(up, obs.yaw);
+            let final_rot = look_quat * Quat::from_axis_angle(look_quat.mul_vec3(Vec3::X), obs.pitch);
+            cam_tf.rotation = final_rot;
+
+            // Movement: Control in body-relative frame
+            let speed = (obs.altitude * 0.5 + 50.0).max(10.0) * time.delta_secs_f64();
+            let _move_vec_body = DVec3::ZERO;
+            
+            // Controls relative to view
+            let forward = final_rot.mul_vec3(Vec3::NEG_Z);
+            let right_move = final_rot.mul_vec3(Vec3::X);
+            
+            let mut move_dir_world = Vec3::ZERO;
+            if keys.pressed(KeyCode::KeyW) { move_dir_world += forward; }
+            if keys.pressed(KeyCode::KeyS) { move_dir_world -= forward; }
+            if keys.pressed(KeyCode::KeyD) { move_dir_world += right_move; }
+            if keys.pressed(KeyCode::KeyA) { move_dir_world -= right_move; }
+            if keys.pressed(KeyCode::Space) { move_dir_world += up; }
+            if keys.pressed(KeyCode::ShiftLeft) { move_dir_world -= up; }
+
+            // Convert world move to body-relative move
+            let move_vec_body_space = body_rot.inverse().mul_vec3(move_dir_world).as_dvec3() * speed;
+            obs.local_flyby_pos += move_vec_body_space;
+            
+            // Calculate final position in cam grid
+            let final_pos_offset = body_rot.mul_vec3(obs.local_flyby_pos.as_vec3());
+            let desired_pos_local = target_pos_in_cam_grid + final_pos_offset.as_dvec3();
+            
             let (new_cell, new_tf) = cam_grid.translation_to_grid(desired_pos_local);
             *cam_cell = new_cell; cam_tf.translation = new_tf;
         }

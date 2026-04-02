@@ -46,6 +46,9 @@ impl Plugin for CelestialPlugin {
         app.init_resource::<CelestialClock>();
         app.init_resource::<TimeWarpState>();
         app.init_resource::<TerrainTileConfig>();
+        app.init_resource::<TerrainMapRegistry>();
+        app.register_type::<TerrainTileConfig>();
+        app.register_type::<TileCoord>();
         app.insert_resource(CelestialBodyRegistry::default_system());
         
         app.insert_resource(ephemeris::EphemerisResource {
@@ -57,6 +60,7 @@ impl Plugin for CelestialPlugin {
         app.add_plugins(trajectories::TrajectoryPlugin);
 
         app.add_systems(Startup, big_space_setup::setup_big_space_hierarchy);
+        app.add_systems(PostStartup, setup_terrain_overrides);
         
         // --- LEAD-PHASE SYNCHRONIZATION ---
         // We move core celestial updates to PreUpdate 
