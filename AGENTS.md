@@ -24,6 +24,7 @@ As per Article X of the Project Constitution, **hardcoded magic numbers are forb
 - **Headless-First**: Simulation core must run without a GPU.
 - **SysML v2**: Used for high-level system models and "source of truth".
 - **Double Precision (f64)**: For all spatial math, physics, ephemeris calculations, and physical properties (mass, dimensions, forces, spring constants, axes), use `f64` or `DVec3`. Single precision (`f32`) is only acceptable for final rendering offsets, UI-level logic, or non-physics signals.
+- **Non-Blocking UI (Responsive Mandate)**: Performance-intensive tasks (mesh generation, large-scale ephemeris lookups, physics collider building) MUST be offloaded to `AsyncComputeTaskPool`. Synchronous execution of heavy math in the main thread is forbidden to prevent UI stuttering.
 
 ## 5. Implementation Patterns
 ### Dynamic Update Pattern

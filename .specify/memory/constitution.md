@@ -32,6 +32,9 @@ All simulated entities, signal flows, and architectural layers MUST adhere to th
 ### X. Everything is a Tunable Parameter (Core Mandate)
 Hardcoded magic numbers are considered technical debt. All visual offsets, colors, physics thresholds, and system constants MUST be exposed as tunable parameters via Bevy Resources or Components. This enables fine-grained control for researchers and allows AI agents to explore the simulation's design space without re-compiling.
 
+### XI. Responsive UI Mandate (Non-Blocking)
+The user interface MUST remain responsive at all times. Heavy calculations, including celestial trajectory sampling, terrain mesh generation, and physics collider building, MUST be offloaded to background threads using Bevy's `AsyncComputeTaskPool` or similar non-blocking patterns. Synchronous blocking of the main thread for heavy computations is a constitutional violation.
+
 ## Technical Standards
 
 ### Bevy ECS Architecture
