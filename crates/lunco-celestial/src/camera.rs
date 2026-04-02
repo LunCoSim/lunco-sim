@@ -101,13 +101,13 @@ pub fn focus_transition_system(
 }
 
 pub fn camera_selection_system(
-    mut q_camera: Query<&mut ObserverCamera, With<ActiveCamera>>,
+    mut q_camera: Query<&mut ObserverCamera, With<lunco_core::Avatar>>,
     q_bodies: Query<(Entity, &GlobalTransform, &CelestialBody)>,
     q_rovers: Query<Entity, With<lunco_core::RoverVessel>>,
     mut commands: Commands,
     mouse_button: Res<ButtonInput<MouseButton>>,
     windows: Query<&Window>,
-    cameras: Query<(&Camera, &GlobalTransform), With<ActiveCamera>>,
+    cameras: Query<(&Camera, &GlobalTransform), With<lunco_core::Avatar>>,
 ) {
     if !mouse_button.just_pressed(MouseButton::Left) { return; }
     
@@ -203,7 +203,7 @@ pub fn camera_migration_system(
 }
 
 pub fn update_observer_camera_system(
-    mut q_camera: Query<(Entity, &mut ObserverCamera, &mut CellCoord, &mut Transform, &ActiveCamera), (Without<CelestialBody>, Without<ControllerLink>)>,
+    mut q_camera: Query<(Entity, &mut ObserverCamera, &mut CellCoord, &mut Transform, &lunco_core::Avatar), (Without<CelestialBody>, Without<ControllerLink>)>,
     q_spatial: Query<(&CellCoord, &Transform, Option<&CelestialBody>), Without<ObserverCamera>>,
     q_all_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,

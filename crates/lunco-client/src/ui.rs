@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts, EguiPlugin, EguiPrimaryContextPass};
-use lunco_core::{RoverVessel, Vessel};
-use lunco_celestial::{CelestialClock, ObserverCamera, CelestialBody, ActiveCamera};
+use lunco_core::{RoverVessel, Vessel, Avatar};
+use lunco_celestial::{CelestialClock, ObserverCamera, CelestialBody};
 use lunco_controller::{ControllerLink, SpaceSystemAction, get_default_input_map};
 use lunco_physics::Suspension;
 
@@ -56,7 +56,7 @@ fn main_ui_system(
     mut clock: ResMut<CelestialClock>,
     q_rovers: Query<(Entity, &Name, &Vessel), With<RoverVessel>>,
     q_bodies: Query<(Entity, &Name, &CelestialBody)>,
-    mut q_camera: Query<(Entity, &mut ObserverCamera), With<ActiveCamera>>,
+    mut q_camera: Query<(Entity, &mut ObserverCamera), With<Avatar>>,
     q_children: Query<&Children>,
     mut q_suspension: Query<(Entity, &mut Suspension)>,
     mut commands: Commands,
@@ -183,6 +183,7 @@ fn main_ui_system(
     });
 
     egui::Window::new("Telemetry").anchor(egui::Align2::RIGHT_TOP, [-10.0, 10.0]).show(ctx, |ui| {
+        ui.heading("Avatar Status");
         for (_, obs) in q_camera.iter() {
             ui.horizontal(|ui| {
                 ui.label("Mode:");
@@ -205,6 +206,7 @@ fn main_ui_system(
         ui.label("SHIFT: Speed boost");
         ui.label("SCROLL or +/-: zoom (Orbital)");
         ui.label("Right-Click: rotate");
+        ui.label("SPACE: pause/unpause (Orbital/Flyby)");
     });
 }
 

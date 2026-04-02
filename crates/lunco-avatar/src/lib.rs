@@ -4,6 +4,7 @@ use avian3d::prelude::*;
 
 use lunco_controller::ControllerLink;
 use lunco_core::{Vessel, Avatar, OrbitState};
+use lunco_celestial::{CelestialClock, ObserverCamera, ObserverMode};
 
 pub struct LunCoAvatarPlugin;
 
@@ -16,6 +17,7 @@ impl Plugin for LunCoAvatarPlugin {
             avatar_orbit_input,
             avatar_escape_possession,
             avatar_toggle_detached_mode,
+            avatar_global_hotkeys,
         ).chain());
 
         app.add_systems(PostUpdate, (
@@ -38,6 +40,22 @@ fn avatar_toggle_detached_mode(
                 commands.entity(entity).remove::<DetachedCamera>();
             } else {
                 commands.entity(entity).insert(DetachedCamera);
+            }
+        }
+    }
+}
+
+fn avatar_global_hotkeys(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut clock: ResMut<CelestialClock>,
+    q_avatar: Query<&ObserverCamera, With<Avatar>>,
+) {
+    if keys.just_pressed(KeyCode::Space) {
+        for obs in q_avatar.iter() {
+            if obs.mode == ObserverMode::Orbital || obs.mode == ObserverMode::Flyby {
+                clock.paused = !clock.paused;
+                info!("Toggled simulation pause via avatar-space interaction. Paused: {}", clock.paused);
+                break;
             }
         }
     }
