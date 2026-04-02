@@ -14,7 +14,7 @@ fn main() {
 
     // THE UNIVERSAL SYNC BRIDGE
     app.add_systems(PreUpdate, global_transform_propagation_system);
-    app.add_systems(PostUpdate, global_transform_propagation_system);
+    app.add_systems(PostUpdate, global_transform_propagation_system.after(avian3d::prelude::PhysicsSystems::Writeback));
 
     #[cfg(not(feature = "sandbox"))]
     {

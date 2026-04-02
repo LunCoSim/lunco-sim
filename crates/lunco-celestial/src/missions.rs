@@ -53,19 +53,27 @@ pub struct Spacecraft {
     pub start_epoch_jd: Option<f64>,
     pub end_epoch_jd: Option<f64>,
     pub hit_radius_m: f32,
+    pub user_visible: bool,
 }
 
 #[derive(Component)]
 pub struct SpacecraftBillboard;
 
 pub fn spacecraft_billboard_system(
-    mut q_billboards: Query<&mut Transform, With<SpacecraftBillboard>>,
+    mut q_billboards: Query<(&mut Transform, &ChildOf), With<SpacecraftBillboard>>,
     q_camera: Query<&GlobalTransform, With<crate::camera::ObserverCamera>>,
+    q_global: Query<&GlobalTransform>,
 ) {
     if let Some(cam_gtf) = q_camera.iter().next() {
         let cam_rot = cam_gtf.compute_transform().rotation;
-        for mut tf in q_billboards.iter_mut() {
-            tf.rotation = cam_rot;
+        for (mut tf, child_of) in q_billboards.iter_mut() {
+            // To make a child face the camera in global space, we need to cancel out parent rotation
+            if let Ok(p_gtf) = q_global.get(child_of.parent()) {
+                let p_rot = p_gtf.compute_transform().rotation;
+                tf.rotation = p_rot.inverse() * cam_rot;
+            } else {
+                tf.rotation = cam_rot;
+            }
         }
     }
 }
@@ -110,6 +118,7 @@ pub fn load_missions_system(mut commands: Commands, mut registry: ResMut<Mission
                                     frame,
                                     color: Color::srgba(traj.color[0], traj.color[1], traj.color[2], traj.color[3]),
                                     is_visible: true,
+                                    user_visible: true,
                                     sampling_days: traj.sampling_days,
                                     sampling_step: traj.sampling_step,
                                     start_epoch: traj.start_epoch_jd,
@@ -127,7 +136,6 @@ pub fn load_missions_system(mut commands: Commands, mut registry: ResMut<Mission
                         if let Some(sc) = &mission.spacecraft {
                             let radius_m = sc.marker_radius_km.unwrap_or(500.0) * 1000.0;
                             let hit_radius_m = sc.hit_radius_km.unwrap_or(1000.0) * 1000.0;
-                            let color_arr = sc.marker_color.unwrap_or([0.0, 1.0, 1.0, 1.0]);
 
                             let mut sc_ent = commands.spawn((
                                 Name::new(sc.name.clone()),
@@ -137,6 +145,7 @@ pub fn load_missions_system(mut commands: Commands, mut registry: ResMut<Mission
                                     start_epoch_jd: sc.start_epoch_jd,
                                     end_epoch_jd: sc.end_epoch_jd,
                                     hit_radius_m,
+                                    user_visible: true,
                                 },
                                 Transform::from_scale(Vec3::splat(sc.scale)),
                                 GlobalTransform::default(),
@@ -229,6 +238,17 @@ pub fn update_spacecraft_position_system(
         
         tf.translation = rel_pos.as_vec3(); 
         *cell = CellCoord::default(); 
+
+        // Point solar panels towards the Sun
+        // Sun ID is 10
+        let p_sun = ephemeris.provider.global_position(10, jd);
+        let to_sun = crate::coords::ecliptic_to_bevy(p_sun - p_target).as_vec3().normalize_or_zero();
+        if to_sun.length_squared() > 0.0 {
+            // Bevy's look_to makes Local -Z point at the target.
+            // Our panels are in the XY plane (width X, height Y), so they face +Z and -Z.
+            // Pointing -Z at the sun ensures the panels are oriented correctly.
+            tf.look_to(to_sun, Vec3::Y);
+        }
     }
 }
 
@@ -278,12 +298,15 @@ pub fn spacecraft_visibility_system(
     mut q_sc: Query<(&Spacecraft, &mut Visibility)>,
 ) {
     for (sc, mut vis) in q_sc.iter_mut() {
+        let mut mission_visible = true;
         if let (Some(start), Some(end)) = (sc.start_epoch_jd, sc.end_epoch_jd) {
-            let should_be_visible = clock.epoch >= start && clock.epoch <= end;
-            let target_vis = if should_be_visible { Visibility::Inherited } else { Visibility::Hidden };
-            if *vis != target_vis {
-                *vis = target_vis;
-            }
+            mission_visible = clock.epoch >= start && clock.epoch <= end;
+        }
+        
+        let final_visible = mission_visible && sc.user_visible;
+        let target_vis = if final_visible { Visibility::Inherited } else { Visibility::Hidden };
+        if *vis != target_vis {
+            *vis = target_vis;
         }
     }
 }

@@ -18,7 +18,8 @@ pub struct TrajectoryView {
     pub reference_id: i32,
     pub frame: TrajectoryFrame,
     pub color: Color,
-    pub is_visible: bool,
+    pub is_visible: bool, // Controlled by mission range logic
+    pub user_visible: bool, // Controlled by UI checkbox
     pub sampling_days: f64,
     pub sampling_step: f64,
     pub start_epoch: Option<f64>,
@@ -40,6 +41,7 @@ impl Default for TrajectoryView {
             frame: TrajectoryFrame::Inertial,
             color: Color::WHITE,
             is_visible: true,
+            user_visible: true,
             sampling_days: 200.0,
             sampling_step: 1.0,
             start_epoch: None,
@@ -97,6 +99,7 @@ pub fn trajectory_setup_system(mut commands: Commands) {
             frame: TrajectoryFrame::Inertial,
             color: Color::srgba(0.0, 0.8, 1.0, 1.0),
             is_visible: true,
+            user_visible: true,
             sampling_days: 400.0,
             sampling_step: 0.5,
             start_epoch: None,
@@ -117,6 +120,7 @@ pub fn trajectory_setup_system(mut commands: Commands) {
             frame: TrajectoryFrame::Inertial,
             color: Color::srgba(1.0, 0.9, 0.2, 1.0),
             is_visible: true,
+            user_visible: true,
             sampling_days: 30.0,
             sampling_step: 0.02,
             start_epoch: None,
@@ -345,6 +349,11 @@ pub fn mission_visibility_system(
             if view.is_visible != should_be_visible {
                 view.is_visible = should_be_visible;
             }
+        } else {
+            // Non-mission trajectories are always active
+            if !view.is_visible {
+                view.is_visible = true;
+            }
         }
     }
 }
@@ -357,8 +366,10 @@ pub fn trajectory_visibility_system(
     for (view, children) in q_views.iter() {
         for child in children.iter() {
             if let Ok(mut vis) = q_visibility.get_mut(child) {
+                // Combine mission-controlled visibility and user-controlled visibility
+                let final_visible = view.is_visible && view.user_visible;
                 // Use Visible instead of Inherited to prevent frustum culling of large meshes
-                *vis = if view.is_visible { Visibility::Visible } else { Visibility::Hidden };
+                *vis = if final_visible { Visibility::Visible } else { Visibility::Hidden };
             }
         }
     }

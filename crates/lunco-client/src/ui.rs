@@ -56,7 +56,7 @@ fn main_ui_system(
     mut clock: ResMut<CelestialClock>,
     q_rovers: Query<(Entity, &Name, &Vessel), With<RoverVessel>>,
     q_bodies: Query<(Entity, &Name, &CelestialBody)>,
-    q_spacecraft: Query<(Entity, &Name), With<Spacecraft>>,
+    mut q_spacecraft: Query<(Entity, &Name, &mut Spacecraft)>,
     mut q_camera: Query<(Entity, &mut ObserverCamera), With<Avatar>>,
     mut q_trajectories: Query<(Entity, &Name, &mut TrajectoryView)>,
     q_children: Query<&Children>,
@@ -108,14 +108,18 @@ fn main_ui_system(
         });
 
         ui.collapsing("Spacecraft", |ui| {
-            for (entity, name) in q_spacecraft.iter() {
-                let res = ui.selectable_label(selected.entity == Some(entity), format!("{}", name));
-                if res.clicked() {
-                    selected.entity = Some(entity);
-                }
-                if res.double_clicked() {
-                    target_to_focus = Some(entity);
-                }
+            for (entity, name, mut sc) in q_spacecraft.iter_mut() {
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut sc.user_visible, "");
+
+                    let res = ui.selectable_label(selected.entity == Some(entity), format!("{}", name));
+                    if res.clicked() {
+                        selected.entity = Some(entity);
+                    }
+                    if res.double_clicked() {
+                        target_to_focus = Some(entity);
+                    }
+                });
             }
         });
 
@@ -134,7 +138,7 @@ fn main_ui_system(
         ui.collapsing("Orbit Visualizations", |ui| {
             for (entity, name, mut view) in q_trajectories.iter_mut() {
                 ui.horizontal(|ui| {
-                    ui.checkbox(&mut view.is_visible, "");
+                    ui.checkbox(&mut view.user_visible, "");
                     let res = ui.selectable_label(selected.entity == Some(entity), format!("{}", name));
                     if res.clicked() {
                         selected.entity = Some(entity);
