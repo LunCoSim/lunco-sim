@@ -182,8 +182,12 @@ fn main_ui_system(
                 ui.label(format!("Center Offset: {:.0} m", obs.local_flyby_pos.length()));
             }
         }
-        ui.label("SCROLL or +/- to zoom");
-        ui.label("Right-Click rotate");
+        ui.separator();
+        ui.label("WASD: move");
+        ui.label("QE: Up/Down");
+        ui.label("SHIFT: Speed boost");
+        ui.label("SCROLL or +/-: zoom (Orbital)");
+        ui.label("Right-Click: rotate");
     });
 }
 

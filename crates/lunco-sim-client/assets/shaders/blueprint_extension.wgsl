@@ -56,7 +56,7 @@ fn fragment(
     let blueprint_mask = 1.0 - smoothstep(0.0, extension.line_width, blueprint_line);
     
     // --- Mixing ---
-    let grid_mask = mix(lat_long_mask, blueprint_mask, extension.transition);
+    let grid_mask = mix(lat_long_mask, blueprint_mask, extension.transition) * (1.0 - smoothstep(0.9, 1.0, extension.transition));
     let line_color = mix(extension.high_line_color, extension.low_line_color, extension.transition);
     
     pbr_input.material.base_color = mix(base_color, line_color, grid_mask);

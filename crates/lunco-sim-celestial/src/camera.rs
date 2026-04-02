@@ -298,16 +298,25 @@ pub fn update_observer_camera_system(
             obs.pitch = (obs.pitch - mouse_delta.y * 0.01).clamp(-1.55, 1.55);
             let rotation = Quat::from_euler(EulerRot::YXZ, obs.yaw, obs.pitch, 0.0);
             cam_tf.rotation = rotation;
-            let base_speed = if obs.altitude < 50_000.0 { 10_000.0 } else { 1000.0 };
-            let speed = base_speed * (obs.altitude / 1000.0).max(1.0) * time.delta_secs_f64();
+            
+            let mut speed = if obs.altitude < 50_000.0 { 10_000.0 } else { 1000.0 };
+            if keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight) {
+                speed *= 10.0;
+            }
+            speed *= (obs.altitude / 1000.0).max(1.0) * time.delta_secs_f64();
+
             let mut move_vec = DVec3::ZERO;
             let forward = rotation.mul_vec3(Vec3::NEG_Z).as_dvec3();
             let right = rotation.mul_vec3(Vec3::X).as_dvec3();
+            let body_up = obs.local_flyby_pos.normalize_or_zero();
+
             if keys.pressed(KeyCode::KeyW) { move_vec += forward; }
             if keys.pressed(KeyCode::KeyS) { move_vec -= forward; }
             if keys.pressed(KeyCode::KeyD) { move_vec += right; }
             if keys.pressed(KeyCode::KeyA) { move_vec -= right; }
-            if keys.pressed(KeyCode::Space) { move_vec += DVec3::Y; }
+            if keys.pressed(KeyCode::KeyE) { move_vec += body_up; }
+            if keys.pressed(KeyCode::KeyQ) { move_vec -= body_up; }
+            
             obs.local_flyby_pos += move_vec * speed;
             let desired_pos_local = target_pos_in_cam_grid + obs.local_flyby_pos;
             let (new_cell, new_tf) = cam_grid.translation_to_grid(desired_pos_local);
@@ -333,7 +342,11 @@ pub fn update_observer_camera_system(
             cam_tf.rotation = final_rot;
 
             // Movement: Control in body-relative frame
-            let speed = (obs.altitude * 0.5 + 50.0).max(10.0) * time.delta_secs_f64();
+            let mut speed = (obs.altitude * 0.5 + 50.0).max(10.0);
+            if keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight) {
+                speed *= 10.0;
+            }
+            speed *= time.delta_secs_f64();
             
             // Controls relative to view
             let forward = final_rot.mul_vec3(Vec3::NEG_Z);
@@ -344,8 +357,8 @@ pub fn update_observer_camera_system(
             if keys.pressed(KeyCode::KeyS) { move_dir_world -= forward; }
             if keys.pressed(KeyCode::KeyD) { move_dir_world += right_move; }
             if keys.pressed(KeyCode::KeyA) { move_dir_world -= right_move; }
-            if keys.pressed(KeyCode::Space) { move_dir_world += up; }
-            if keys.pressed(KeyCode::ShiftLeft) { move_dir_world -= up; }
+            if keys.pressed(KeyCode::KeyE) { move_dir_world += up; }
+            if keys.pressed(KeyCode::KeyQ) { move_dir_world -= up; }
 
             // Convert world move to body-relative move
             let move_vec_body_space = body_rot.inverse().mul_vec3(move_dir_world).as_dvec3() * speed;
