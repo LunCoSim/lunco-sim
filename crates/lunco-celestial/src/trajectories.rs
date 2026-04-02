@@ -381,12 +381,7 @@ pub fn trajectory_alpha_update_system(
     mut meshes: ResMut<Assets<Mesh>>,
     q_paths: Query<(&TrajectoryPath, &TrajectoryView, &Children)>,
     q_marker: Query<&Mesh3d, With<TrajectoryMeshMarker>>,
-    mut last_update_jd: Local<f64>,
 ) {
-    if (clock.epoch - *last_update_jd).abs() < 0.01 {
-        return; // Only update alpha every ~14 minutes of simulation time to save performance
-    }
-    *last_update_jd = clock.epoch;
 
     for (path, view, children) in q_paths.iter() {
         if path.points.len() < 2 { continue; }
