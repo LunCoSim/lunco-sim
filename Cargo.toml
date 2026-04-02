@@ -1,15 +1,15 @@
 [workspace]
 members = [
-    "crates/lunco-sim-core",
-    "crates/lunco-sim-physics",
-    "crates/lunco-sim-obc",
-    "crates/lunco-sim-fsw",
-    "crates/lunco-sim-controller",
-    "crates/lunco-sim-attributes",
-    "crates/lunco-sim-avatar",
-    "crates/lunco-sim-client",
-    "crates/lunco-sim-rover-raycast"
-, "crates/lunco-sim-celestial"]
+    "crates/lunco-core",
+    "crates/lunco-physics",
+    "crates/lunco-obc",
+    "crates/lunco-fsw",
+    "crates/lunco-controller",
+    "crates/lunco-attributes",
+    "crates/lunco-avatar",
+    "crates/lunco-client",
+    "crates/lunco-rover-raycast"
+, "crates/lunco-celestial"]
 resolver = "2"
 
 [workspace.package]

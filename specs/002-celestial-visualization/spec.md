@@ -33,7 +33,7 @@ This spec lays the **foundational world architecture** for a solar-scale lunar c
 
 ## Architecture Decisions (Resolved)
 
-**Decision:** `lunco-sim-celestial` owns all `big_space` setup (root grid, nested body grids, floating origin). **The Golden Bridge Protocol**: To satisfy `big_space`, `TransformPlugin` MUST be disabled in the client crate. UI and Window hit-testing are maintained via a custom `fix_spatial_components_for_non_grid_entities` shim that manually backfills `GlobalTransform` for non-grid entities.
+**Decision:** `lunco-celestial` owns all `big_space` setup (root grid, nested body grids, floating origin). **The Golden Bridge Protocol**: To satisfy `big_space`, `TransformPlugin` MUST be disabled in the client crate. UI and Window hit-testing are maintained via a custom `fix_spatial_components_for_non_grid_entities` shim that manually backfills `GlobalTransform` for non-grid entities.
 **Rationale:** Resolves the hard conflict between `big_space`'s spatial requirements and Bevy's default UI systems. Minimizes changes to the 8 existing crates while ensuring full interactivity.
 
 **SOI Transfer (Earth → Moon):** When an entity crosses from Earth's SOI into Moon's SOI, the celestial plugin performs a **grid re-parenting**:
@@ -49,8 +49,8 @@ This spec lays the **foundational world architecture** for a solar-scale lunar c
 
 ### AD-3: Camera Architecture
 **Decision:** Two cameras with explicit handoff:
-- **ObserverCamera** (owned by `lunco-sim-celestial`): Macro navigation. Focus on celestial bodies. Exponential zoom. `big_space`-aware.
-- **AvatarCamera** (owned by `lunco-sim-avatar`): Surface-level. Follows possessed rover. Orbit with linear zoom.
+- **ObserverCamera** (owned by `lunco-celestial`): Macro navigation. Focus on celestial bodies. Exponential zoom. `big_space`-aware.
+- **AvatarCamera** (owned by `lunco-avatar`): Surface-level. Follows possessed rover. Orbit with linear zoom.
 - **Camera Migration**: The active camera dynamically re-parents itself to the nearest `Grid` ancestor of its `focus_target` to maintain absolute coordinate precision (FR-005).
 - Only one `Camera3d` active at a time. Ground View transition deactivates ObserverCamera, activates AvatarCamera.
 **Rationale:** The migration system ensures that the floating origin always operates within the target body's local measurement system, eliminating z-fighting and coordinate drift.
@@ -154,7 +154,7 @@ As a user, I want to land on the Moon and drive a rover on a simple flat terrain
 **Acceptance Scenarios**:
 
 1.  **Given** the camera is near the lunar surface, **When** "Ground View" is entered, **Then** a flat terrain tile (configurable size: 1×1 km to 10×10 km) spawns at the surface position with a collision mesh inside the Moon's nested `big_space` grid.
-2.  **Given** a terrain tile exists, **When** a rover is spawned, **Then** the rover drives on the tile using the existing `lunco-sim-physics` systems. The global `Gravity` resource is set to Moon gravity (1.625 m/s²).
+2.  **Given** a terrain tile exists, **When** a rover is spawned, **Then** the rover drives on the tile using the existing `lunco-physics` systems. The global `Gravity` resource is set to Moon gravity (1.625 m/s²).
 3.  **Given** the terrain tile size is changed via configuration, **When** the simulation restarts, **Then** the tile dimensions reflect the new configuration.
 
 ### User Story 7 - Sandbox Mode (Priority: P1)
@@ -175,8 +175,8 @@ As a developer, I want to run the flat-ground rover sandbox for quick physics it
 -   **FR-001**: **Extensible Body Registry**: A data-driven `CelestialBodyRegistry` resource that describes each body (name, ephemeris ID, radius, GM, parent body). Hardcoded for Sun/Earth/Moon now; extensible to any body that has ephemeris data.
 -   **FR-002**: **Hierarchical Reference Frames (Foundation)**: Each `CelestialBody` defines a local reference frame via a `big_space` nested grid. Child bodies are positioned relative to their parent. Earth-Moon barycenter offset (~4,671 km) MUST be accounted for in the hierarchy. **Moon geocentric → barycentric conversion**: ELP/MPP02 returns the Moon's position relative to Earth's center (geocentric). Since the hierarchy parent is the Earth-Moon Barycenter, the Moon's position MUST be converted: `moon_bary = moon_geocentric - earth_bary_offset`. This is the simple foundation for `009-coordinate-frame-tree`.
 -   **FR-003**: **Solar Lighting**: Sun is rendered as a `DirectionalLight` source only (not a visible sphere — AD-9). Direction computed from Sun's ephemeris position relative to camera focus. A UI screen-space marker indicates Sun direction. Updates as bodies move.
--   **FR-004**: **Exponential Observer Camera**: Macro-level camera owned by `lunco-sim-celestial` with focus targets, exponential zoom sensitivity ($\Delta d = d \times k$), and orbiting/free-float modes. Camera input uses **Application Clock**. Coexists with the avatar camera via explicit handoff (AD-3). **Initial state**: On launch, ObserverCamera focuses on Earth at ~50,000 km distance. **Input gating**: Only the active camera consumes input; the inactive camera's input systems are gated by an `ActiveCamera` marker component (FR-028).
--   **FR-005**: **Multi-Scale Rendering via `big_space`**: `lunco-sim-celestial` owns all `big_space` setup (AD-1):
+-   **FR-004**: **Exponential Observer Camera**: Macro-level camera owned by `lunco-celestial` with focus targets, exponential zoom sensitivity ($\Delta d = d \times k$), and orbiting/free-float modes. Camera input uses **Application Clock**. Coexists with the avatar camera via explicit handoff (AD-3). **Initial state**: On launch, ObserverCamera focuses on Earth at ~50,000 km distance. **Input gating**: Only the active camera consumes input; the inactive camera's input systems are gated by an `ActiveCamera` marker component (FR-028).
+-   **FR-005**: **Multi-Scale Rendering via `big_space`**: `lunco-celestial` owns all `big_space` setup (AD-1):
     -   **Hierarchical Grids**: Multi-level nesting (Parent Grid -> Child Anchor Grid). Allows for coarse solar-scale cells and fine planetary-scale cells simultaneously.
     -   **Root Grid**: Solar system scale (Sun at origin). Grid cell precision: `i64`.
     -   **Body Grids**: Each major body (Earth, Moon) gets its own nested `Grid` anchor for local entities (rovers, surface features).
@@ -211,7 +211,7 @@ As a developer, I want to run the flat-ground rover sandbox for quick physics it
 -   **FR-024**: **Sphere-Terrain Layering** (AD-12): When terrain tiles are active, the sphere mesh remains visible underneath. Tiles are offset at `radius + 0.01m` to avoid Z-fighting. Sphere provides the horizon; tiles provide collision and local detail. Curvature error: 7.2m per 10km tile on Moon (acceptable).
 -   **FR-025**: **Dynamic Camera Clip Planes** (AD-13): Camera `near` clip plane adjusts dynamically based on surface distance ($altitude \times 0.001$). CLAMPED to range [0.1, 10000.0]. The 10km maximum limit is essential for maintaining solar visibility at 1 AU scale.
 -   **FR-026**: **System Ordering**: All celestial systems MUST execute in deterministic order: clock tick → ephemeris update → body rotation → sun light → SOI check → gravity update → terrain spawn → camera → clip planes. Registered as `.chain()` in `CelestialPlugin`.
--   **FR-027**: **TimeWarp State Interface**: A `TimeWarpState` resource published by `lunco-sim-celestial` indicates current time compression speed and whether physics should be active (`physics_enabled = false` when `speed > 100×`). Physics crates gate their systems on this resource. Full PhysicsMode state machine deferred to `006-time-and-integrators`.
+-   **FR-027**: **TimeWarp State Interface**: A `TimeWarpState` resource published by `lunco-celestial` indicates current time compression speed and whether physics should be active (`physics_enabled = false` when `speed > 100×`). Physics crates gate their systems on this resource. Full PhysicsMode state machine deferred to `006-time-and-integrators`.
 -   **FR-028**: **Input Conflict Resolution**: Only the active camera (ObserverCamera or AvatarCamera) consumes input. An `ActiveCamera` marker component gates input systems. During handoff, the marker is atomically moved between cameras.
 
 ### Key Entities
@@ -219,7 +219,7 @@ As a developer, I want to run the flat-ground rover sandbox for quick physics it
 -   **CelestialBodyRegistry**: Resource listing all bodies with physical parameters.
 -   **CelestialBody**: Component on each body entity. References registry entry.
 -   **ObserverCamera**: Macro-level camera. Focus targets, exponential zoom, `big_space`-aware. Deactivated during Ground View.
--   **AvatarCamera**: Surface-level camera (existing `lunco-sim-avatar`). Activated during Ground View.
+-   **AvatarCamera**: Surface-level camera (existing `lunco-avatar`). Activated during Ground View.
 -   **SimulationClockSet**: Resource grouping Celestial and Application clocks.
 -   **GravityModel**: Trait for pluggable gravity computation.
 -   **SurfaceTile**: Component for flat terrain tiles with collision meshes.

@@ -1,9 +1,0 @@
-[package]
-name = "lunco-sim-controller"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-bevy = { workspace = true, features = ["default"] }
-leafwing-input-manager = { workspace = true }
-lunco-sim-core = { path = "../lunco-sim-core" }

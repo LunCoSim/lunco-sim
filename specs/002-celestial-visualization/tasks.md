@@ -3,7 +3,7 @@
 ## Phase 0: Scenario System & Feature Flags (AD-5)
 
 - [x] 0.1 Add `sandbox` and `celestial` feature flags
-  - Update `Cargo.toml` workspace and `lunco-sim-client/Cargo.toml` with feature definitions.
+  - Update `Cargo.toml` workspace and `lunco-client/Cargo.toml` with feature definitions.
   - Move current `setup_scenario()` behind `#[cfg(feature = "sandbox")]`.
   - Create empty `setup_celestial_scenario()` as the `#[cfg(not(feature = "sandbox"))]` default.
   - Verify: `cargo run --features sandbox` loads flat-ground world. `cargo run` loads empty celestial world.
@@ -12,11 +12,11 @@
 
 ## Phase 1: Foundation (Crate, Registry & `big_space`)
 
-- [x] 1.1 Create `lunco-sim-celestial` crate
+- [x] 1.1 Create `lunco-celestial` crate
   - Initialize boilerplate, `Cargo.toml` with dependencies: `big_space`, `celestial-ephemeris`, `celestial-time`, `bevy`.
   - Define `CelestialPlugin` with empty startup.
   - Add to workspace `Cargo.toml`.
-  - Add as dependency of `lunco-sim-client`.
+  - Add as dependency of `lunco-client`.
   - **Verify `celestial-ephemeris` compiles**: If it fails, switch to `vsop87` + `simple-elpmpp02` and adjust 3.1.
   - **Depends on**: 0.1
   - **Requirement**: FR-001
@@ -33,7 +33,7 @@
   - **Requirement**: FR-001, FR-020, SC-005
 
 - [x] 1.3 Setup `big_space` Nestable Grid Hierarchy (AD-1)
-  - `lunco-sim-celestial` owns all `big_space` setup.
+  - `lunco-celestial` owns all `big_space` setup.
   - Configure root `BigSpace` with `i64` grid cells for solar system scale.
   - Create nested grids for Earth and Moon as children of barycenter node.
   - Position Earth offset ~4,671 km from barycenter center.
@@ -81,7 +81,7 @@
   - **Requirement**: FR-010, FR-021
 
 - [x] 2.2 [P2] Create Time Scrubber UI
-  - Add `egui` panel in `lunco-sim-client` for:
+  - Add `egui` panel in `lunco-client` for:
     - Current epoch (**UTC display** via `celestial-time` conversion from JD TDB).
     - Speed multiplier buttons/slider (X1, X10, X100, X1K, X10K, X100K, X1M).
     - Pause/Play toggle.
@@ -199,7 +199,7 @@
 ## Phase 5: Navigation (Two-Camera System — AD-3)
 
 - [x] 5.1 Implement `ObserverCamera` (Macro Camera)
-  - Owned by `lunco-sim-celestial`.
+  - Owned by `lunco-celestial`.
   - Dual-mode: Orbiting (around focus target) vs Free-float.
   - Target-based focusing: click or hotkey to focus on Earth, Moon, or any entity.
   - When focus changes, smoothly transition into target body's nested grid.
@@ -229,7 +229,7 @@
   - When ObserverCamera altitude < 1 km and user presses activation key:
     1. Record current position/orientation in body's nested grid
     2. Deactivate ObserverCamera (`is_active: false`)
-    3. Spawn/activate AvatarCamera at same position (uses existing `lunco-sim-avatar`)
+    3. Spawn/activate AvatarCamera at same position (uses existing `lunco-avatar`)
     4. Spawn terrain tile at surface position (Phase 6)
     5. Set global `Gravity` to body surface gravity
     6. **Sphere mesh stays visible** — provides horizon (AD-12)
@@ -262,7 +262,7 @@
   - **Requirement**: FR-014, FR-024, SC-004
 
 - [x] 6.2 Rover on Moon Integration
-  - Spawn rover on terrain tile using existing `lunco-sim-rover-raycast` spawn functions.
+  - Spawn rover on terrain tile using existing `lunco-rover-raycast` spawn functions.
   - Verify rover drives with Moon gravity (1.625 m/s²) — no modifications to rover crates needed.
   - Verify sphere visible at horizon while driving.
   - Test: `test_rover_on_moon_tile` — rover sits on tile without falling through, wheels have traction.

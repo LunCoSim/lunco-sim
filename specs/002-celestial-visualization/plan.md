@@ -4,7 +4,7 @@
 
 | ID | Decision | Choice |
 |:---|:---|:---|
-| AD-1 | Spatial ownership | `lunco-sim-celestial` owns `big_space`. **Golden Bridge**: Disable `TransformPlugin`, manual backfill for UI. |
+| AD-1 | Spatial ownership | `lunco-celestial` owns `big_space`. **Golden Bridge**: Disable `TransformPlugin`, manual backfill for UI. |
 | AD-2 | Gravity source | Global avian `Gravity` resource, set by celestial plugin. |
 | AD-3 | Camera architecture | Two cameras. **Migration**: Camera re-parents to target grid ancestors for absolute precision. |
 | AD-4 | Ephemeris source | `celestial-ephemeris` (alpha accepted). Behind `trait EphemerisProvider` for swappability. |
@@ -71,7 +71,7 @@ pub struct BodyDescriptor {
 
 ### 3. `big_space` Integration — Hierarchical Local Grids (AD-1)
 
-`lunco-sim-celestial` owns all `big_space` setup. The engine's `TransformPlugin` is disabled to satisfy `big_space` 0.12.0 requirements.
+`lunco-celestial` owns all `big_space` setup. The engine's `TransformPlugin` is disabled to satisfy `big_space` 0.12.0 requirements.
 
 ```
 BigSpace Root
@@ -99,7 +99,7 @@ BigSpace Root
 ### 4. Gravity — Global Resource (AD-2)
 
 ```rust
-// lunco-sim-celestial sets this based on nearest body
+// lunco-celestial sets this based on nearest body
 fn update_gravity(
     registry: Res<CelestialBodyRegistry>,
     camera: Query<&GlobalTransform, With<ObserverCamera>>,
@@ -143,7 +143,7 @@ The trait exists for future extensibility (spherical harmonics, GMAT integration
 
 | | ObserverCamera | AvatarCamera |
 |:---|:---|:---|
-| **Owner** | `lunco-sim-celestial` | `lunco-sim-avatar` |
+| **Owner** | `lunco-celestial` | `lunco-avatar` |
 | **Scale** | Solar system → surface approach | Surface-level, rover follow |
 | **Zoom** | Exponential ($\Delta d = d \times k$) | Linear orbit distance |
 | **Coordinates** | `big_space` grid-aware | Local `Transform` only |
@@ -195,7 +195,7 @@ No external data files needed for basic Sun/Earth/Moon visualization. SPK kernel
 ### 8. Scenario System (AD-5)
 
 ```rust
-// In lunco-sim-client/src/main.rs
+// In lunco-client/src/main.rs
 
 fn main() {
     let mut app = App::new();
@@ -216,7 +216,7 @@ fn main() {
     }
 
     // Common plugins (physics, controller, FSW, etc.)
-    app.add_plugins(LunCoSimCorePlugin);
+    app.add_plugins(LunCoCorePlugin);
     // ...
     app.run();
 }
@@ -404,7 +404,7 @@ All celestial systems (1-8) are registered as `.chain()` in `CelestialPlugin`. C
 When the Celestial Clock speed exceeds X100, high-fidelity physics is meaningless. This spec defines the **interface**; the full PhysicsMode state machine is owned by `006-time-and-integrators`.
 
 ```rust
-/// Published by lunco-sim-celestial. Readable by physics crates.
+/// Published by lunco-celestial. Readable by physics crates.
 #[derive(Resource)]
 pub struct TimeWarpState {
     pub speed: f64,

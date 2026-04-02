@@ -1,0 +1,9 @@
+[package]
+name = "lunco-controller"
+version = "0.6.0"
+edition = "2021"
+
+[dependencies]
+bevy = { workspace = true, features = ["default"] }
+leafwing-input-manager = { workspace = true }
+lunco-core = { path = "../lunco-core" }

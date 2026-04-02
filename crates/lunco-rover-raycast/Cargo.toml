@@ -1,0 +1,11 @@
+[package]
+name = "lunco-rover-raycast"
+version = "0.6.0"
+edition = "2021"
+
+[dependencies]
+bevy = { workspace = true, features = ["default"] }
+avian3d = { workspace = true }
+lunco-core = { path = "../lunco-core" }
+lunco-physics = { path = "../lunco-physics" }
+lunco-fsw = { path = "../lunco-fsw" }
