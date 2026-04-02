@@ -117,8 +117,6 @@ impl Plugin for TrajectoryPlugin {
            .register_type::<TrajectoryFrame>()
            .register_type::<TrajectoryPath>();
            
-        app.add_plugins(MaterialPlugin::<TrajectoryMaterial>::default());
-           
         app.add_systems(Startup, trajectory_setup_system);
         
         app.add_systems(Update, (
@@ -130,7 +128,6 @@ impl Plugin for TrajectoryPlugin {
             trajectory_visibility_system,
             trajectory_alignment_system,
             mission_visibility_system,
-            animate_trajectory_material,
         ));
     }
 }
@@ -149,12 +146,9 @@ pub fn animate_trajectory_material(
 
 pub fn trajectory_setup_system(
     mut commands: Commands,
-    q_root: Single<Entity, With<crate::big_space_setup::SolarSystemRoot>>,
 ) {
-    let root = *q_root;
-    
     // Initial spawning. Reference centering handled by alignment system.
-    let earth_traj = commands.spawn((
+    commands.spawn((
         Name::new("Earth Orbit View"),
         TrajectoryView {
             tracked_id: 399,
@@ -172,13 +166,10 @@ pub fn trajectory_setup_system(
         Transform::default(),
         GlobalTransform::default(),
         Visibility::default(),
-        InheritedVisibility::default(),
         CellCoord::default(),
-    )).id();
+    ));
 
-    commands.entity(earth_traj).set_parent_in_place(root);
-
-    let moon_traj = commands.spawn((
+    commands.spawn((
         Name::new("Moon Orbit View"),
         TrajectoryView {
             tracked_id: 301,
@@ -196,11 +187,8 @@ pub fn trajectory_setup_system(
         Transform::default(),
         GlobalTransform::default(),
         Visibility::default(),
-        InheritedVisibility::default(),
         CellCoord::default(),
-    )).id();
-
-    commands.entity(moon_traj).set_parent_in_place(root);
+    ));
 }
 
 pub fn spawn_trajectory_update_task(
@@ -313,7 +301,7 @@ pub fn handle_trajectory_tasks(
 pub fn trajectory_mesh_init_system(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<TrajectoryMaterial>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
     q_new_views: Query<(Entity, &TrajectoryView), Added<TrajectoryPath>>,
 ) {
     for (entity, view) in q_new_views.iter() {
@@ -323,24 +311,17 @@ pub fn trajectory_mesh_init_system(
         );
         mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, Vec::<[f32; 3]>::new());
         mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, Vec::<[f32; 4]>::new());
-        mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, Vec::<[f32; 2]>::new());
         
         let mesh_handle = meshes.add(mesh);
+        let color = view.color;
+        let emissive_color = color * 100.0;
         
-        let mat_handle = materials.add(TrajectoryMaterial {
-            base: StandardMaterial {
-                base_color: Color::BLACK,
-                alpha_mode: AlphaMode::Add, // Additive for better glow overlap
-                unlit: false, // Must be false for emissive to work in StandardMaterial
-                ..default()
-            },
-            extension: TrajectoryExtension {
-                color: view.color,
-                emissive_mult: 20.0, // Reasonable intensity
-                pulse_width: 0.15,
-                noise_scale: 150.0,
-                ..default()
-            },
+        let mat_handle = materials.add(StandardMaterial {
+            base_color: Color::WHITE,
+            emissive: emissive_color,
+            unlit: true,
+            alpha_mode: AlphaMode::Blend,
+            ..default()
         });
 
         commands.entity(entity).with_children(|parent| {
@@ -348,8 +329,8 @@ pub fn trajectory_mesh_init_system(
                 Mesh3d(mesh_handle),
                 MeshMaterial3d(mat_handle),
                 TrajectoryMeshMarker,
-                Visibility::Visible, // Forces visibility, preventing frustum culling
-                NoFrustumCulling, // Critical for huge orbital meshes
+                Visibility::Visible,
+                NoFrustumCulling,
                 Transform::default(),
             ));
         });
@@ -362,41 +343,18 @@ pub fn trajectory_mesh_update_system(
     q_marker: Query<&Mesh3d, With<TrajectoryMeshMarker>>,
 ) {
     for (path, view, children) in q_paths.iter() {
-        if path.points.len() < 2 { continue; }
+        if path.points.is_empty() { continue; }
         
-        // 1. Convert to spline control points
-        let control_points: Vec<Vec3> = path.points.iter().map(|p| p.as_vec3()).collect();
-        
-        // 2. Generate smooth curve
-        // Catmull-Rom is good because it passes through all control points
-        let spline = CubicCardinalSpline::new_catmull_rom(control_points);
-        
-        // We want High resolution (5 segments per control point pair)
-        let segments = (path.points.len() - 1) * 5;
-        let curve = spline.to_curve().unwrap();
-        
-        let mut final_pts = Vec::new();
-        let mut uvs = Vec::new();
-        let mut colors = Vec::new();
-        
+        let pts: Vec<[f32; 3]> = path.points.iter().map(|p| p.as_vec3().to_array()).collect();
         let color = view.color;
-        
-        for i in 0..=segments {
-            let t = i as f32 / segments as f32;
-            let p = curve.position(t);
-            final_pts.push(p.to_array());
-            uvs.push([t, 0.0]); // U maps from 0.0 to 1.0 along the line
-            // Initial color with full alpha
-            colors.push([color.red, color.green, color.blue, 1.0]);
-        }
+        let colors: Vec<[f32; 4]> = vec![[color.red, color.green, color.blue, 1.0]; pts.len()];
 
-        info!("Updating trajectory mesh with {} spline points", final_pts.len());
+        info!("Updating trajectory mesh with {} points", pts.len());
 
         for child in children.iter() {
             if let Ok(mesh_handle) = q_marker.get(child) {
                 if let Some(mesh) = meshes.get_mut(&mesh_handle.0) {
-                    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, final_pts.clone());
-                    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs.clone());
+                    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, pts.clone());
                     mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors.clone());
                 }
             }
