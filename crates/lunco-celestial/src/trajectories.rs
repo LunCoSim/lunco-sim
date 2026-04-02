@@ -1,288 +1,290 @@
 use bevy::prelude::*;
 use bevy::tasks::{Task, AsyncComputeTaskPool};
+use bevy::render::render_resource::PrimitiveTopology;
+use bevy::asset::RenderAssetUsages;
+use big_space::prelude::CellCoord;
 use futures_lite::future;
 use std::sync::Arc;
-use crate::ephemeris::{EphemerisProvider, EphemerisResource};
+use crate::ephemeris::EphemerisResource;
 use crate::clock::CelestialClock;
-use crate::registry::CelestialBody;
-use crate::coords::ecliptic_to_bevy;
+use crate::registry::{CelestialBodyRegistry, CelestialReferenceFrame};
 
 pub struct TrajectoryPlugin;
 
-#[derive(Resource, Debug, Clone, Copy)]
-pub struct TrajectoryConfig {
-    pub earth_color: Color,
-    pub moon_color: Color,
+#[derive(Component, Reflect, Clone, Copy, Debug)]
+#[reflect(Component)]
+pub struct TrajectoryView {
+    pub tracked_id: u32,
+    pub reference_id: u32,
+    pub frame: TrajectoryFrame,
+    pub color: Color,
+    pub is_visible: bool,
+    pub sampling_days: f64,
+    pub sampling_step: f64,
 }
 
-impl Default for TrajectoryConfig {
+#[derive(Reflect, Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum TrajectoryFrame {
+    #[default]
+    Inertial,
+    BodyFixed,
+}
+
+impl Default for TrajectoryView {
     fn default() -> Self {
         Self {
-            earth_color: Color::srgba(0.0, 0.5, 1.0, 0.4), // Blue
-            moon_color: Color::srgba(0.6, 0.6, 0.6, 0.3),  // Grey
+            tracked_id: 399,
+            reference_id: 10,
+            frame: TrajectoryFrame::Inertial,
+            color: Color::WHITE,
+            is_visible: true,
+            sampling_days: 200.0,
+            sampling_step: 1.0,
         }
     }
 }
+
+#[derive(Component, Default, Reflect)]
+#[reflect(Component)]
+pub struct TrajectoryPath {
+    pub points: Vec<bevy::math::DVec3>,
+    pub update_epoch: f64,
+}
+
+#[derive(Component)]
+pub struct TrajectoryTask(pub Task<TrajectoryData>);
+
+pub struct TrajectoryData {
+    pub points: Vec<bevy::math::DVec3>,
+    pub epoch: f64,
+}
+
+#[derive(Component)]
+pub struct TrajectoryMeshMarker;
 
 impl Plugin for TrajectoryPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<TrajectoryCache>();
-        app.init_resource::<TrajectoryConfig>();
-        app.add_systems(Startup, configure_gizmos_system);
+        app.register_type::<TrajectoryView>()
+           .register_type::<TrajectoryFrame>()
+           .register_type::<TrajectoryPath>();
+           
+        app.add_systems(Startup, trajectory_setup_system);
         
-        // Background task handling
         app.add_systems(Update, (
             spawn_trajectory_update_task,
             handle_trajectory_tasks,
+            trajectory_mesh_init_system,
+            trajectory_mesh_update_system,
+            trajectory_visibility_system,
+            trajectory_alignment_system,
         ));
-
-        // Drawing in PostUpdate for visual stability
-        app.add_systems(PostUpdate, draw_trajectories_system.after(bevy::transform::TransformSystems::Propagate));
     }
 }
 
-pub fn configure_gizmos_system(mut config_store: ResMut<GizmoConfigStore>) {
-    let (config, _) = config_store.config_mut::<DefaultGizmoConfigGroup>();
-    config.depth_bias = 0.0;
-}
+pub fn trajectory_setup_system(mut commands: Commands) {
+    // Initial spawning. Reference centering handled by alignment system.
+    commands.spawn((
+        Name::new("Earth Orbit View"),
+        TrajectoryView {
+            tracked_id: 399,
+            reference_id: 10,
+            frame: TrajectoryFrame::Inertial,
+            color: Color::srgba(0.0, 0.8, 1.0, 1.0),
+            is_visible: true,
+            sampling_days: 400.0,
+            sampling_step: 2.0,
+        },
+        TrajectoryPath::default(),
+        Transform::default(),
+        GlobalTransform::default(),
+        Visibility::default(),
+        CellCoord::default(),
+    ));
 
-#[derive(Resource, Default)]
-pub struct TrajectoryCache {
-    pub earth_last_update_jd: f64,
-    pub moon_last_update_jd: f64,
-    pub earth_path_heliocentric: Vec<bevy::math::DVec3>,
-    pub moon_path_geocentric: Vec<bevy::math::DVec3>, 
-    pub earth_task: Option<Task<Vec<bevy::math::DVec3>>>,
-    pub moon_task: Option<Task<Vec<bevy::math::DVec3>>>,
-}
-
-fn catmull_rom(p0: bevy::math::DVec3, p1: bevy::math::DVec3, p2: bevy::math::DVec3, p3: bevy::math::DVec3, t: f64) -> bevy::math::DVec3 {
-    let t2 = t * t;
-    let t3 = t2 * t;
-    0.5 * (
-        (2.0 * p1) +
-        (-p0 + p2) * t +
-        (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t2 +
-        (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t3
-    )
-}
-
-fn evaluate_spline(path: &[bevy::math::DVec3], start_jd: f64, spacing: f64, jd: f64) -> bevy::math::DVec3 {
-    if path.is_empty() { return bevy::math::DVec3::ZERO; }
-    
-    let idx_f = (jd - start_jd) / spacing;
-    let idx = idx_f.floor() as isize;
-    let t = idx_f - (idx as f64);
-    
-    let get_p = |i: isize| {
-        let clamped = i.clamp(0, path.len() as isize - 1) as usize;
-        path[clamped]
-    };
-    
-    let p0 = get_p(idx - 1);
-    let p1 = get_p(idx);
-    let p2 = get_p(idx + 1);
-    let p3 = get_p(idx + 2);
-    
-    catmull_rom(p0, p1, p2, p3, t)
-}
-
-fn generate_fixed_jds(current_epoch: f64, max_days: f64, base_step: f64) -> Vec<f64> {
-    let mut jds = Vec::new();
-    
-    // Base step is the coarsest step (far away)
-    let step1 = base_step;
-    let step2 = base_step / 10.0;
-    let step3 = base_step / 100.0;
-    let step4 = base_step / 1000.0;
-    
-    let mut add_zone = |start_rel: f64, end_rel: f64, step: f64| {
-        let start_jd = current_epoch + start_rel;
-        let end_jd = current_epoch + end_rel;
-        
-        let mut jd = (start_jd / step).ceil() * step;
-        while jd <= end_jd + 1e-9 {
-            jds.push(jd);
-            jd += step;
-        }
-    };
-    
-    let z4 = max_days * 0.005;
-    let z3 = max_days * 0.05;
-    let z2 = max_days * 0.2;
-    let z1 = max_days;
-    
-    add_zone(-z1, -z2, step1);
-    add_zone(-z2, -z3, step2);
-    add_zone(-z3, -z4, step3);
-    add_zone(-z4, z4, step4);
-    add_zone(z4, z3, step3);
-    add_zone(z3, z2, step2);
-    add_zone(z2, z1, step1);
-    
-    jds.push(current_epoch);
-    
-    jds.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    jds.dedup_by(|a, b| (*a - *b).abs() < step4 * 0.1);
-    
-    jds
+    commands.spawn((
+        Name::new("Moon Orbit View"),
+        TrajectoryView {
+            tracked_id: 301,
+            reference_id: 399,
+            frame: TrajectoryFrame::Inertial,
+            color: Color::srgba(1.0, 0.9, 0.2, 1.0),
+            is_visible: true,
+            sampling_days: 30.0,
+            sampling_step: 0.1,
+        },
+        TrajectoryPath::default(),
+        Transform::default(),
+        GlobalTransform::default(),
+        Visibility::default(),
+        CellCoord::default(),
+    ));
 }
 
 pub fn spawn_trajectory_update_task(
     clock: Res<CelestialClock>,
     ephemeris: Res<EphemerisResource>,
-    mut cache: ResMut<TrajectoryCache>,
+    registry: Res<CelestialBodyRegistry>,
+    mut commands: Commands,
+    q_views: Query<(Entity, &TrajectoryView, &TrajectoryPath), Without<TrajectoryTask>>,
 ) {
     let current_epoch = clock.epoch;
     let pool = AsyncComputeTaskPool::get();
     
-    // 1. Earth Update Logic
-    if cache.earth_task.is_none() {
-        if (cache.earth_last_update_jd - current_epoch).abs() > 2.0 || cache.earth_path_heliocentric.is_empty() {
+    for (entity, view, path) in q_views.iter() {
+        if (path.update_epoch - current_epoch).abs() > 2.0 || path.points.is_empty() {
             let provider = Arc::clone(&ephemeris.provider);
+            let registry_arc = Arc::new((*registry).clone());
+            let view_copy = *view;
             let aligned_epoch = (current_epoch / 2.0).round() * 2.0;
-            let earth_spacing = 1.0;
-            let earth_half = 210;
 
-            cache.earth_task = Some(pool.spawn(async move {
-                let mut path = Vec::with_capacity((earth_half * 2 + 1) as usize);
-                for i in -earth_half..=earth_half {
-                    let jd = aligned_epoch + (i as f64) * earth_spacing;
-                    path.push(provider.position(399, jd));
+            let task = pool.spawn(async move {
+                let half_count = (view_copy.sampling_days / view_copy.sampling_step / 2.0).ceil() as isize;
+                let mut points = Vec::with_capacity((half_count * 2 + 1) as usize);
+                
+                for i in -half_count..=half_count {
+                    let jd = aligned_epoch + (i as f64) * view_copy.sampling_step;
+                    let p_target = provider.position(view_copy.tracked_id, jd);
+                    let p_ref = provider.position(view_copy.reference_id, jd);
+                    let mut rel_pos = crate::coords::ecliptic_to_bevy(p_target - p_ref);
+                    
+                    if view_copy.frame == TrajectoryFrame::BodyFixed {
+                        if let Some(desc) = registry_arc.bodies.iter().find(|b| b.ephemeris_id == view_copy.reference_id) {
+                            let days_since_j2000 = jd - 2_451_545.0;
+                            let angle = days_since_j2000 * desc.rotation_rate_rad_per_day;
+                            let rot = bevy::math::DQuat::from_axis_angle(desc.polar_axis, angle);
+                            rel_pos = rot.inverse() * rel_pos;
+                        }
+                    }
+                    
+                    points.push(rel_pos);
                 }
-                path
-            }));
-            // Update the epoch expectation immediately to avoid spamming tasks
-            cache.earth_last_update_jd = aligned_epoch;
-        }
-    }
-
-    // 2. Moon Update Logic
-    if cache.moon_task.is_none() {
-        if (cache.moon_last_update_jd - current_epoch).abs() > 2.0 || cache.moon_path_geocentric.is_empty() {
-            let provider = Arc::clone(&ephemeris.provider);
-            let aligned_epoch = (current_epoch / 2.0).round() * 2.0;
-            let moon_spacing = 0.05;
-            let moon_half = 300;
-
-            cache.moon_task = Some(pool.spawn(async move {
-                let mut path = Vec::with_capacity((moon_half * 2 + 1) as usize);
-                for i in -moon_half..=moon_half {
-                    let jd = aligned_epoch + (i as f64) * moon_spacing;
-                    let m_au = provider.position(301, jd);
-                    let e_au = provider.position(399, jd);
-                    path.push(m_au - e_au);
+                
+                TrajectoryData {
+                    points,
+                    epoch: aligned_epoch,
                 }
-                path
-            }));
-            cache.moon_last_update_jd = aligned_epoch;
+            });
+            
+            commands.entity(entity).insert(TrajectoryTask(task));
         }
     }
 }
 
-pub fn handle_trajectory_tasks(mut cache: ResMut<TrajectoryCache>) {
-    // Poll Earth
-    if let Some(mut task) = cache.earth_task.take() {
-        if let Some(data) = future::block_on(future::poll_once(&mut task)) {
-            cache.earth_path_heliocentric = data;
-        } else {
-            cache.earth_task = Some(task);
-        }
-    }
-    
-    // Poll Moon
-    if let Some(mut task) = cache.moon_task.take() {
-        if let Some(data) = future::block_on(future::poll_once(&mut task)) {
-            cache.moon_path_geocentric = data;
-        } else {
-            cache.moon_task = Some(task);
-        }
-    }
-}
-
-pub fn draw_trajectories_system(
-    mut gizmos: Gizmos,
-    clock: Res<CelestialClock>,
-    registry_resource: Res<EphemerisResource>,
-    q_bodies: Query<(&CelestialBody, &GlobalTransform)>,
-    cache: Res<TrajectoryCache>,
-    config: Res<TrajectoryConfig>,
+pub fn handle_trajectory_tasks(
+    mut commands: Commands,
+    mut q_tasks: Query<(Entity, &mut TrajectoryTask, &mut TrajectoryPath, &TrajectoryView)>,
 ) {
-    let current_epoch = clock.epoch;
-    
-    let earth_sim_now = registry_resource.provider.position(399, current_epoch);
-    let moon_sim_now = registry_resource.provider.position(301, current_epoch);
-    
-    let moon_spacing = 0.05;
-    let moon_half = 300;
-    
-    let earth_spacing = 1.0;
-    let earth_half = 210;
-    
-    // No cache refresh here anymore! It's handled by background systems.
-    
-    // 2. Determine Local Rendering Anchor (f64 Precision Origin)
-    let mut best_ref_id = 10;
-    let mut best_ref_world = Vec3::ZERO;
-    let mut min_dist = f32::MAX;
-    
-    for (body, gtf) in q_bodies.iter() {
-        if matches!(body.ephemeris_id, 10 | 399 | 301) {
-            let pos = gtf.translation();
-            let dist = pos.length_squared();
-            if dist < min_dist {
-                min_dist = dist;
-                best_ref_id = body.ephemeris_id;
-                best_ref_world = pos;
+    for (entity, mut task, mut path, view) in q_tasks.iter_mut() {
+        if let Some(data) = future::block_on(future::poll_once(&mut task.0)) {
+            path.points = data.points;
+            path.update_epoch = data.epoch;
+            commands.entity(entity).remove::<TrajectoryTask>();
+            info!("Trajectory updated for entity {:?} with {} points. Tracking {}, Reference {}", 
+                entity, path.points.len(), view.tracked_id, view.reference_id);
+        }
+    }
+}
+
+pub fn trajectory_mesh_init_system(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    q_new_views: Query<(Entity, &TrajectoryView), Added<TrajectoryPath>>,
+) {
+    for (entity, view) in q_new_views.iter() {
+        let mesh_handle = meshes.add(Mesh::new(
+            PrimitiveTopology::LineStrip,
+            RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+        ));
+        let color = view.color;
+        // High intensity for visibility
+        let emissive_color = LinearRgba::from(color) * 50.0;
+        
+        let mat_handle = materials.add(StandardMaterial {
+            base_color: color,
+            emissive: emissive_color,
+            unlit: true,
+            alpha_mode: AlphaMode::Opaque,
+            ..default()
+        });
+
+        commands.entity(entity).with_children(|parent| {
+            parent.spawn((
+                Mesh3d(mesh_handle),
+                MeshMaterial3d(mat_handle),
+                TrajectoryMeshMarker,
+                Visibility::default(),
+                Transform::default(),
+                // Aabb::from_min_max(Vec3::splat(-1e12), Vec3::splat(1e12)), 
+                // NoFrustumCulling,
+            ));
+        });
+    }
+}
+
+pub fn trajectory_mesh_update_system(
+    mut meshes: ResMut<Assets<Mesh>>,
+    q_paths: Query<(&TrajectoryPath, &Children), Changed<TrajectoryPath>>,
+    q_marker: Query<&Mesh3d, With<TrajectoryMeshMarker>>,
+) {
+    for (path, children) in q_paths.iter() {
+        for child in children.iter() {
+            if let Ok(mesh_handle) = q_marker.get(child) {
+                if let Some(mesh) = meshes.get_mut(&mesh_handle.0) {
+                    let pts: Vec<[f32; 3]> = path.points.iter().map(|p| p.as_vec3().to_array()).collect();
+                    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, pts);
+                }
             }
         }
     }
-    
-    let ref_au = registry_resource.provider.position(best_ref_id, current_epoch);
-    let ref_meters = ecliptic_to_bevy(ref_au);
-    
-    let au_to_world = |p_au: bevy::math::DVec3| -> Vec3 {
-        let p_meters = ecliptic_to_bevy(p_au);
-        let offset_meters = p_meters - ref_meters;
-        best_ref_world + offset_meters.as_vec3()
-    };
-
-    // 3. Draw with Adaptive Fixed-JD Spline Sampling
-    let earth_jds = generate_fixed_jds(current_epoch, 200.0, 2.0);
-    let moon_jds = generate_fixed_jds(current_epoch, 14.0, 0.2);
-    
-    let mut draw_spline_path = |path: &[bevy::math::DVec3], jds: &[f64], spacing: f64, half_count: isize, is_geocentric: bool, exact_helio_now: bevy::math::DVec3, color: Color, last_update_jd: f64| {
-        if path.is_empty() { return; }
-        let start_jd = last_update_jd - (half_count as f64) * spacing;
-        
-        let spline_now = evaluate_spline(path, start_jd, spacing, current_epoch);
-        let true_local_now = if is_geocentric { exact_helio_now - earth_sim_now } else { exact_helio_now };
-        let error_offset = true_local_now - spline_now;
-        
-        let fade_duration = if is_geocentric { 0.5 } else { 5.0 };
-        
-        let mut world_pts = Vec::with_capacity(jds.len());
-        
-        for &jd in jds {
-            let offset = jd - current_epoch;
-            let mut p_spline = evaluate_spline(path, start_jd, spacing, jd);
-            
-            // Seamlessly blend the exact ephemeris position into the spline
-            if offset.abs() < fade_duration {
-                let fade = 1.0 - (offset.abs() / fade_duration);
-                let smooth_fade = fade * fade * (3.0 - 2.0 * fade);
-                p_spline += error_offset * smooth_fade;
-            }
-            
-            let p_helio = if is_geocentric { earth_sim_now + p_spline } else { p_spline };
-            world_pts.push(au_to_world(p_helio));
-        }
-        
-        for i in 0..(world_pts.len() - 1) {
-            gizmos.line(world_pts[i], world_pts[i+1], color);
-        }
-    };
-    
-    draw_spline_path(&cache.earth_path_heliocentric, &earth_jds, earth_spacing, earth_half, false, earth_sim_now, config.earth_color, cache.earth_last_update_jd);
-    draw_spline_path(&cache.moon_path_geocentric, &moon_jds, moon_spacing, moon_half, true, moon_sim_now, config.moon_color, cache.moon_last_update_jd);
 }
+
+pub fn trajectory_visibility_system(
+    q_views: Query<(&TrajectoryView, &Children), Changed<TrajectoryView>>,
+    mut q_visibility: Query<&mut Visibility>,
+) {
+    for (view, children) in q_views.iter() {
+        for child in children.iter() {
+            if let Ok(mut vis) = q_visibility.get_mut(child) {
+                *vis = if view.is_visible { Visibility::Inherited } else { Visibility::Hidden };
+            }
+        }
+    }
+}
+
+pub fn trajectory_alignment_system(
+    mut commands: Commands,
+    q_frames: Query<(Entity, &CelestialReferenceFrame, &Transform, &CellCoord)>,
+    mut q_vistas: Query<(Entity, &TrajectoryView, &mut Transform, &mut CellCoord, Option<&ChildOf>), Without<CelestialReferenceFrame>>,
+) {
+    for (v_entity, view, mut transform, mut cell, current_parent) in q_vistas.iter_mut() {
+        let mut target_frame_found = false;
+        for (f_entity, frame, _frame_tf, _frame_cell) in q_frames.iter() {
+            if frame.ephemeris_id == view.reference_id {
+                let is_current_parent = if let Some(p) = current_parent {
+                    p.parent() == f_entity
+                } else {
+                    false
+                };
+                
+                if !is_current_parent {
+                    commands.entity(v_entity).set_parent_in_place(f_entity); 
+                }
+                
+                transform.translation = Vec3::ZERO;
+                transform.rotation = Quat::IDENTITY;
+                *cell = CellCoord::default();
+                target_frame_found = true;
+                break;
+            }
+        }
+        
+        if !target_frame_found && view.reference_id == 10 {
+            // Sun frame fallback if needed, but solar_grid should be caught above
+            transform.translation = Vec3::ZERO;
+            *cell = CellCoord::default();
+            transform.rotation = Quat::IDENTITY;
+        }
+    }
+}
+

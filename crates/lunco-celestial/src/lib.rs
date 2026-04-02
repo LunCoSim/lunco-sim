@@ -49,6 +49,9 @@ impl Plugin for CelestialPlugin {
         app.init_resource::<TerrainMapRegistry>();
         app.register_type::<TerrainTileConfig>();
         app.register_type::<TileCoord>();
+        app.register_type::<TrajectoryView>();
+        app.register_type::<TrajectoryFrame>();
+        app.register_type::<TrajectoryPath>();
         app.insert_resource(CelestialBodyRegistry::default_system());
         
         app.insert_resource(ephemeris::EphemerisResource {

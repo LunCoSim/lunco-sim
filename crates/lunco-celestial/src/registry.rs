@@ -1,7 +1,8 @@
 use bevy::prelude::*;
 use bevy::math::DVec3;
 
-#[derive(Resource)]
+#[derive(Resource, Clone, Reflect)]
+#[reflect(Resource)]
 pub struct CelestialBodyRegistry {
     pub bodies: Vec<BodyDescriptor>,
 }
@@ -18,7 +19,7 @@ pub struct CelestialReferenceFrame {
     pub ephemeris_id: u32,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Reflect)]
 pub struct BodyDescriptor {
     pub name: String,
     pub ephemeris_id: u32,         // NAIF ID
