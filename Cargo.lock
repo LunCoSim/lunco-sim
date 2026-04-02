@@ -4030,6 +4030,7 @@ dependencies = [
  "celestial-ephemeris",
  "celestial-time",
  "chrono",
+ "futures-lite",
  "lunco-controller",
  "lunco-core",
 ]

@@ -5,6 +5,8 @@ use celestial_time::julian::JulianDate;
 use celestial_ephemeris::{Vsop2013Earth, Vsop2013Sun, planets::Vsop2013Emb, moon::ElpMpp02Moon};
 use celestial_core::Vector3;
 
+use std::sync::Arc;
+
 pub trait EphemerisProvider: Send + Sync + 'static {
     /// Position of body relative to its parent, in ecliptic J2000, AU.
     fn position(&self, body_id: u32, epoch_jd: f64) -> DVec3;
@@ -12,7 +14,7 @@ pub trait EphemerisProvider: Send + Sync + 'static {
 
 #[derive(Resource)]
 pub struct EphemerisResource {
-    pub provider: Box<dyn EphemerisProvider>,
+    pub provider: Arc<dyn EphemerisProvider>,
 }
 
 pub struct CelestialEphemerisProvider {

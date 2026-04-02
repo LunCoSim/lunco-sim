@@ -1,7 +1,10 @@
 use bevy::prelude::*;
-use crate::registry::CelestialBody;
+use bevy::tasks::{Task, AsyncComputeTaskPool};
+use futures_lite::future;
+use std::sync::Arc;
+use crate::ephemeris::{EphemerisProvider, EphemerisResource};
 use crate::clock::CelestialClock;
-use crate::ephemeris::EphemerisResource;
+use crate::registry::CelestialBody;
 use crate::coords::ecliptic_to_bevy;
 
 pub struct TrajectoryPlugin;
@@ -26,8 +29,14 @@ impl Plugin for TrajectoryPlugin {
         app.init_resource::<TrajectoryCache>();
         app.init_resource::<TrajectoryConfig>();
         app.add_systems(Startup, configure_gizmos_system);
-        // Run in PostUpdate AFTER Transform propagation to avoid 1-frame lag 
-        // during high-speed time compression.
+        
+        // Background task handling
+        app.add_systems(Update, (
+            spawn_trajectory_update_task,
+            handle_trajectory_tasks,
+        ));
+
+        // Drawing in PostUpdate for visual stability
         app.add_systems(PostUpdate, draw_trajectories_system.after(bevy::transform::TransformSystems::Propagate));
     }
 }
@@ -37,11 +46,18 @@ pub fn configure_gizmos_system(mut config_store: ResMut<GizmoConfigStore>) {
     config.depth_bias = 0.0;
 }
 
+pub struct TrajectoryData {
+    pub last_update_jd: f64,
+    pub moon_path_geocentric: Vec<bevy::math::DVec3>,
+    pub earth_path_heliocentric: Vec<bevy::math::DVec3>,
+}
+
 #[derive(Resource, Default)]
 pub struct TrajectoryCache {
     pub last_update_jd: f64,
     pub moon_path_geocentric: Vec<bevy::math::DVec3>, 
     pub earth_path_heliocentric: Vec<bevy::math::DVec3>,
+    pub task: Option<Task<TrajectoryData>>,
 }
 
 fn catmull_rom(p0: bevy::math::DVec3, p1: bevy::math::DVec3, p2: bevy::math::DVec3, p3: bevy::math::DVec3, t: f64) -> bevy::math::DVec3 {
@@ -116,12 +132,73 @@ fn generate_fixed_jds(current_epoch: f64, max_days: f64, base_step: f64) -> Vec<
     jds
 }
 
+pub fn spawn_trajectory_update_task(
+    clock: Res<CelestialClock>,
+    ephemeris: Res<EphemerisResource>,
+    mut cache: ResMut<TrajectoryCache>,
+) {
+    let current_epoch = clock.epoch;
+    
+    // 1. Check if we need to refresh (and or if we are already refreshing)
+    if cache.task.is_some() { return; }
+    
+    if (cache.last_update_jd - current_epoch).abs() > 2.0 || cache.moon_path_geocentric.is_empty() {
+        let pool = AsyncComputeTaskPool::get();
+        let provider = Arc::clone(&ephemeris.provider);
+        let aligned_epoch = (current_epoch / 2.0).round() * 2.0;
+        
+        let moon_spacing = 0.05;
+        let moon_half = 300;
+        let earth_spacing = 1.0;
+        let earth_half = 210;
+
+        let task = pool.spawn(async move {
+            let mut moon_path = Vec::with_capacity((moon_half * 2 + 1) as usize);
+            let mut earth_path = Vec::with_capacity((earth_half * 2 + 1) as usize);
+            
+            for i in -moon_half..=moon_half {
+                let jd = aligned_epoch + (i as f64) * moon_spacing;
+                let m_au = provider.position(301, jd);
+                let e_au = provider.position(399, jd);
+                moon_path.push(m_au - e_au);
+            }
+            for i in -earth_half..=earth_half {
+                let jd = aligned_epoch + (i as f64) * earth_spacing;
+                let e_au = provider.position(399, jd);
+                earth_path.push(e_au);
+            }
+            
+            TrajectoryData {
+                last_update_jd: aligned_epoch,
+                moon_path_geocentric: moon_path,
+                earth_path_heliocentric: earth_path,
+            }
+        });
+        
+        cache.task = Some(task);
+    }
+}
+
+pub fn handle_trajectory_tasks(mut cache: ResMut<TrajectoryCache>) {
+    if let Some(mut task) = cache.task.take() {
+        if let Some(data) = future::block_on(future::poll_once(&mut task)) {
+            cache.last_update_jd = data.last_update_jd;
+            cache.moon_path_geocentric = data.moon_path_geocentric;
+            cache.earth_path_heliocentric = data.earth_path_heliocentric;
+            // task is already removed by .take()
+        } else {
+            // Put it back if not finished
+            cache.task = Some(task);
+        }
+    }
+}
+
 pub fn draw_trajectories_system(
     mut gizmos: Gizmos,
     clock: Res<CelestialClock>,
     registry_resource: Res<EphemerisResource>,
     q_bodies: Query<(&CelestialBody, &GlobalTransform)>,
-    mut cache: ResMut<TrajectoryCache>,
+    cache: Res<TrajectoryCache>,
     config: Res<TrajectoryConfig>,
 ) {
     let current_epoch = clock.epoch;
@@ -130,32 +207,12 @@ pub fn draw_trajectories_system(
     let moon_sim_now = registry_resource.provider.position(301, current_epoch);
     
     let moon_spacing = 0.05;
-    let moon_half = 300; // 300 * 0.05 = 15.0 days
+    let moon_half = 300;
     
     let earth_spacing = 1.0;
-    let earth_half = 210; // 210 * 1.0 = 210.0 days
+    let earth_half = 210;
     
-    // 1. Re-compute Coarse Paths if epoch changed significantly
-    if (cache.last_update_jd - current_epoch).abs() > 2.0 || cache.moon_path_geocentric.is_empty() {
-        // Align to grid to prevent any possibility of popping during cache refresh!
-        let aligned_epoch = (current_epoch / 2.0).round() * 2.0;
-        cache.last_update_jd = aligned_epoch;
-        
-        cache.moon_path_geocentric.clear();
-        cache.earth_path_heliocentric.clear();
-        
-        for i in -moon_half..=moon_half {
-            let jd = aligned_epoch + (i as f64) * moon_spacing;
-            let m_au = registry_resource.provider.position(301, jd);
-            let e_au = registry_resource.provider.position(399, jd);
-            cache.moon_path_geocentric.push(m_au - e_au);
-        }
-        for i in -earth_half..=earth_half {
-            let jd = aligned_epoch + (i as f64) * earth_spacing;
-            let e_au = registry_resource.provider.position(399, jd);
-            cache.earth_path_heliocentric.push(e_au);
-        }
-    }
+    // No cache refresh here anymore! It's handled by background systems.
     
     // 2. Determine Local Rendering Anchor (f64 Precision Origin)
     let mut best_ref_id = 10;

@@ -15,3 +15,4 @@ chrono = { workspace = true }
 lunco-controller = { path = "../lunco-controller" }
 bevy_mesh = "0.18.1"
 bevy_asset = "0.18.1"
+futures-lite = { workspace = true }

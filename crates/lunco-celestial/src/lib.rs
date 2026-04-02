@@ -52,7 +52,7 @@ impl Plugin for CelestialPlugin {
         app.insert_resource(CelestialBodyRegistry::default_system());
         
         app.insert_resource(ephemeris::EphemerisResource {
-            provider: Box::new(ephemeris::CelestialEphemerisProvider::new()),
+            provider: std::sync::Arc::new(ephemeris::CelestialEphemerisProvider::new()),
         });
         
         // No add_event needed in Bevy 0.18 Observer pattern
@@ -83,6 +83,7 @@ impl Plugin for CelestialPlugin {
         app.add_systems(Update, (
             gravity::update_global_gravity_system.run_if(resource_exists::<avian3d::prelude::Gravity>),
             terrain::terrain_spawn_system.run_if(resource_exists::<terrain::TerrainTileConfig>),
+            terrain::finalize_terrain_tiles,
         ).chain());
     }
 }

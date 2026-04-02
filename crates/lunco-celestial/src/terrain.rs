@@ -2,9 +2,12 @@ use bevy::prelude::*;
 use bevy::math::DVec3;
 use bevy::render::render_resource::PrimitiveTopology;
 use bevy_mesh::Indices;
+use bevy::tasks::{Task, AsyncComputeTaskPool};
+use futures_lite::future;
+use std::sync::Arc;
 use avian3d::prelude::*;
 use crate::registry::CelestialBody;
-use crate::camera::{ObserverCamera, ObserverMode};
+use crate::camera::ObserverCamera;
 
 #[derive(Resource, Reflect)]
 #[reflect(Resource)]
@@ -32,11 +35,12 @@ impl Default for TerrainTileConfig {
     }
 }
 
-#[derive(Resource, Default)]
+#[derive(Resource, Default, Clone)]
 pub struct TerrainMapRegistry {
-    pub maps: Vec<CustomMap>,
+    pub maps: Arc<Vec<CustomMap>>,
 }
 
+#[derive(Clone)]
 pub struct CustomMap {
     pub name: String,
     pub body_entity: Entity,
@@ -64,6 +68,14 @@ pub struct TileCoord {
 #[derive(Component)]
 pub struct TerrainTile;
 
+pub struct TileMeshData {
+    pub mesh: Mesh,
+    pub collider: Option<Collider>,
+}
+
+#[derive(Component)]
+pub struct PendingTile(pub Task<TileMeshData>);
+
 pub fn terrain_spawn_system(
     mut commands: Commands,
     config: Res<TerrainTileConfig>,
@@ -71,8 +83,6 @@ pub fn terrain_spawn_system(
     q_camera: Query<(&GlobalTransform, &ObserverCamera), With<Camera>>,
     q_bodies: Query<(Entity, &GlobalTransform, &CelestialBody)>,
     q_tiles: Query<(Entity, &TileCoord)>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<crate::blueprint::BlueprintMaterial>>,
 ) {
     let Some((cam_gtf, _obs)) = q_camera.iter().next() else { return; };
     let camera_pos = cam_gtf.translation().as_dvec3();
@@ -100,12 +110,13 @@ pub fn terrain_spawn_system(
 
         for (tile_ent, coord) in q_tiles.iter() {
             if !desired_tiles.contains(coord) {
-                 // Use simple despawn if hierarchy helper is not found
                 commands.entity(tile_ent).despawn();
             } else {
                 desired_tiles.remove(coord);
             }
         }
+
+        let pool = AsyncComputeTaskPool::get();
 
         for coord in desired_tiles {
             let tiles_at_level = 1 << coord.level;
@@ -115,13 +126,70 @@ pub fn terrain_spawn_system(
             let tile_center_dir = cube_to_sphere(coord.face, u_mid, v_mid);
             let tile_center_pos = tile_center_dir * body.radius_m;
             
-            let mesh = create_quadsphere_tile_mesh(coord.body, coord.face, coord.level, coord.i, coord.j, body.radius_m, config.tile_resolution, &registry, tile_center_pos);
+            // Task parameters
+            let body_ent_inner = coord.body;
+            let face_inner = coord.face;
+            let level_inner = coord.level;
+            let i_inner = coord.i;
+            let j_inner = coord.j;
+            let radius_inner = body.radius_m;
+            let res_inner = config.tile_resolution;
+            let registry_inner = registry.clone();
+            let tile_center_inner = tile_center_pos;
+            let physics_threshold = config.physics_lod_threshold;
+
+            let task = pool.spawn(async move {
+                let mesh = create_quadsphere_tile_mesh(body_ent_inner, face_inner, level_inner, i_inner, j_inner, radius_inner, res_inner, &registry_inner, tile_center_inner);
+                let mut collider = None;
+                if level_inner >= physics_threshold {
+                    collider = Collider::trimesh_from_mesh(&mesh);
+                }
+                TileMeshData { mesh, collider }
+            });
             
             let tile_ent = commands.spawn((
                 ActiveTerrainTile,
                 TerrainTile,
                 coord,
-                Mesh3d(meshes.add(mesh.clone())),
+                PendingTile(task),
+                Transform::from_translation(tile_center_pos.as_vec3()),
+                GlobalTransform::default(),
+                Name::new(format!("Tile f{} l{} i{} j{}", coord.face, coord.level, coord.i, coord.j)),
+            )).id();
+            
+            commands.entity(body_ent).add_child(tile_ent);
+        }
+    } else {
+        for (ent, _) in q_tiles.iter() {
+            commands.entity(ent).despawn(); 
+        }
+    }
+}
+
+pub fn finalize_terrain_tiles(
+    mut commands: Commands,
+    mut q_pending: Query<(Entity, &TileCoord, &mut PendingTile)>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<crate::blueprint::BlueprintMaterial>>,
+    q_bodies: Query<(&CelestialBody, &GlobalTransform)>,
+    q_camera: Query<&GlobalTransform, With<Camera>>,
+) {
+    let Some(cam_gtf) = q_camera.iter().next() else { return; };
+    let camera_pos = cam_gtf.translation().as_dvec3();
+
+    for (ent, coord, mut pending) in q_pending.iter_mut() {
+        if let Some(data) = future::block_on(future::poll_once(&mut pending.0)) {
+            let Ok((body, _gtf)) = q_bodies.get(coord.body) else { 
+                commands.entity(ent).despawn();
+                continue; 
+            };
+            
+            let dist = camera_pos.distance(_gtf.translation().as_dvec3());
+            let altitude = dist - body.radius_m;
+
+            let mut entity_cmds = commands.entity(ent);
+            entity_cmds.insert((
+                Mesh3d(meshes.add(data.mesh)),
                 MeshMaterial3d(materials.add(crate::blueprint::BlueprintMaterial {
                     base: StandardMaterial {
                         base_color: if body.name == "Moon" { Color::srgb(0.2, 0.2, 0.2) } else { Color::from(LinearRgba::new(0.005, 0.02, 0.05, 1.0)) },
@@ -131,27 +199,21 @@ pub fn terrain_spawn_system(
                     extension: crate::blueprint::BlueprintExtension {
                         high_color: if body.name == "Earth" { LinearRgba::from(Color::srgb(0.05, 0.15, 0.8)) } else { LinearRgba::new(0.01, 0.01, 0.01, 1.0) },
                         low_color: if body.name == "Earth" { LinearRgba::from(Color::srgb(0.05, 0.15, 0.8)) } else { LinearRgba::new(0.01, 0.01, 0.01, 1.0) },
-                        grid_scale: 100.0, // 100m grid for surface
+                        grid_scale: 100.0,
                         line_width: 1.0,
                         subdivisions: Vec2::new(360.0, 180.0),
-                        transition: (1.0 - (min_altitude / 50_000.0)).clamp(0.0, 1.0) as f32,
+                        transition: (1.0 - (altitude / 50_000.0)).clamp(0.0, 1.0) as f32,
                         body_radius: body.radius_m as f32,
                         ..default()
                     },
                 })),
-                Transform::from_translation(tile_center_pos.as_vec3()),
-                GlobalTransform::default(),
-                Name::new(format!("Tile f{} l{} i{} j{}", coord.face, coord.level, coord.i, coord.j)),
-            )).id();
+            ));
             
-            commands.entity(body_ent).add_child(tile_ent);
-            if coord.level >= config.physics_lod_threshold {
-                commands.entity(tile_ent).insert((RigidBody::Static, Collider::trimesh_from_mesh(&mesh).unwrap()));
+            if let Some(collider) = data.collider {
+                entity_cmds.insert((RigidBody::Static, collider));
             }
-        }
-    } else {
-        for (ent, _) in q_tiles.iter() {
-            commands.entity(ent).despawn(); 
+            
+            entity_cmds.remove::<PendingTile>();
         }
     }
 }
@@ -276,7 +338,7 @@ fn sample_height(body_ent: Entity, pos_sphere: DVec3, radius: f64, registry: &Te
     let long = pos_sphere.x.atan2(pos_sphere.z).to_degrees() as f32;
     let pos_geo = Vec2::new(lat, long);
 
-    for map in &registry.maps {
+    for map in registry.maps.iter() {
         if map.body_entity != body_ent { continue; }
         let dist_deg = pos_geo.distance(map.center_lat_long);
         let radius_deg = (map.radius_m / radius as f32).to_degrees();
@@ -289,9 +351,10 @@ fn sample_height(body_ent: Entity, pos_sphere: DVec3, radius: f64, registry: &Te
 }
 
 pub fn setup_terrain_overrides(mut registry: ResMut<TerrainMapRegistry>, q_bodies: Query<(Entity, &CelestialBody)>) {
+    let mut maps = (*registry.maps).clone();
     for (ent, body) in q_bodies.iter() {
         if body.name == "Moon" {
-            registry.maps.push(CustomMap {
+            maps.push(CustomMap {
                 name: "Langrenus Crater".into(),
                 body_entity: ent,
                 center_lat_long: Vec2::new(-8.9, 61.1),
@@ -300,6 +363,7 @@ pub fn setup_terrain_overrides(mut registry: ResMut<TerrainMapRegistry>, q_bodie
             });
         }
     }
+    registry.maps = Arc::new(maps);
 }
 
 pub fn spawn_rover_at_camera_surface(commands: &mut Commands, cam_gtf: &GlobalTransform, body_gtf: &GlobalTransform, body: &CelestialBody, body_entity: Entity) -> Entity {
