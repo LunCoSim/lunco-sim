@@ -51,6 +51,7 @@ pub fn setup_big_space_hierarchy(
         CellCoord::default(),
         Transform::default(),
         GlobalTransform::default(),
+        Visibility::Visible, // Prevent f32 frustum culling bugs at scale
         Mesh3d(meshes.add(Sphere::new(696_340.0e3).mesh().ico(4).unwrap())),
         MeshMaterial3d(materials.add(StandardMaterial {
             base_color: Color::srgb(1.0, 0.9, 0.6),
@@ -69,6 +70,7 @@ pub fn setup_big_space_hierarchy(
         CellCoord::default(),
         Transform::default(),
         GlobalTransform::default(),
+        Visibility::default(),
         Name::new("EMB Frame Grid"),
     )).set_parent_in_place(solar_grid).id();
 
@@ -80,6 +82,7 @@ pub fn setup_big_space_hierarchy(
         CellCoord::default(),
         Transform::default(),
         GlobalTransform::default(),
+        Visibility::default(),
         Name::new("Earth Local Grid"),
     )).set_parent_in_place(emb_grid).id();
 
@@ -93,6 +96,7 @@ pub fn setup_big_space_hierarchy(
         CellCoord::default(),
         Transform::default(),
         GlobalTransform::default(),
+        Visibility::Visible,
         Mesh3d(meshes.add(Sphere::new(6371.0e3).mesh().ico(4).unwrap())),
         MeshMaterial3d(blueprint_materials.add(crate::blueprint::BlueprintMaterial {
             base: StandardMaterial {
@@ -128,6 +132,7 @@ pub fn setup_big_space_hierarchy(
         CellCoord::default(),
         Transform::default(),
         GlobalTransform::default(),
+        Visibility::default(),
         Name::new("Moon Local Grid"),
     )).set_parent_in_place(emb_grid).id();
 
@@ -141,6 +146,7 @@ pub fn setup_big_space_hierarchy(
         CellCoord::default(),
         Transform::default(),
         GlobalTransform::default(),
+        Visibility::Visible,
         Mesh3d(meshes.add(Sphere::new(1737.0e3).mesh().ico(6).unwrap())),
         MeshMaterial3d(blueprint_materials.add(crate::blueprint::BlueprintMaterial {
             base: StandardMaterial {

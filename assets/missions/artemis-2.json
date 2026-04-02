@@ -1,0 +1,40 @@
+{
+  "id": "artemis-2",
+  "name": "Artemis II",
+  "description": "First crewed Artemis mission around the Moon.",
+  "duration_days": 10.3,
+  "start_epoch_jd": 2461132.58,
+  "trajectories": [
+    {
+      "name": "Artemis 2 Trajectory (Earth-Relative)",
+      "tracked_id": -1024,
+      "reference_id": 399,
+      "color": [1.0, 0.2, 0.2, 1.0],
+      "sampling_days": 12.0,
+      "sampling_step": 0.01,
+      "frame": "Inertial",
+      "start_epoch_jd": 2461132.58,
+      "end_epoch_jd": 2461141.5
+    },
+    {
+      "name": "Artemis 2 Moon-Relative",
+      "tracked_id": -1024,
+      "reference_id": 301,
+      "color": [0.2, 1.0, 0.2, 1.0],
+      "sampling_days": 2.0,
+      "sampling_step": 0.001,
+      "frame": "BodyFixed",
+      "start_epoch_jd": 2461132.58,
+      "end_epoch_jd": 2461141.5
+    }
+  ],
+  "spacecraft": {
+    "name": "Orion",
+    "ephemeris_id": -1024,
+    "reference_id": 399,
+    "scale": 1.0,
+    "focus_on_start": true,
+    "start_epoch_jd": 2461132.58,
+    "end_epoch_jd": 2461141.5
+  }
+}

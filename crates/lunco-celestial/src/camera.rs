@@ -104,6 +104,8 @@ pub fn camera_selection_system(
     mut q_camera: Query<&mut ObserverCamera, With<lunco_core::Avatar>>,
     q_bodies: Query<(Entity, &GlobalTransform, &CelestialBody)>,
     q_rovers: Query<Entity, With<lunco_core::RoverVessel>>,
+    q_spacecraft: Query<Entity, With<crate::missions::Spacecraft>>,
+    q_gtfs: Query<&GlobalTransform>,
     mut commands: Commands,
     mouse_button: Res<ButtonInput<MouseButton>>,
     windows: Query<&Window>,
@@ -118,19 +120,14 @@ pub fn camera_selection_system(
     let Ok(ray) = camera.viewport_to_world(cam_gtf, mouse_pos) else { return; };
     
     let mut nearest_body = None;
-    let mut nearest_rover = None;
+    let mut nearest_vessel = None;
     let mut min_body_t = f32::INFINITY;
-    let mut min_rover_t = f32::INFINITY;
+    let mut min_vessel_t = f32::INFINITY;
     
     for (entity, body_gtf, body) in q_bodies.iter() {
         let center = body_gtf.translation();
         let radius = body.radius_m as f32;
         let oc = ray.origin - center;
-        let h = oc.dot(oc) - radius * radius;
-        if h <= 0.0 {
-            let t = 0.01;
-            if t < min_body_t { min_body_t = t; nearest_body = Some((entity, body_gtf, body, t)); }
-        }
         let b = oc.dot(ray.direction.as_vec3());
         let c = oc.dot(oc) - radius * radius;
         let discr = b * b - c;
@@ -140,23 +137,33 @@ pub fn camera_selection_system(
         }
     }
 
-    for rover_ent in q_rovers.iter() {
-        let radius = 5.0;
-        let Ok((_, rover_gtf, _)) = q_bodies.get(rover_ent) else { continue; };
-        let center = rover_gtf.translation();
+    // Check Rovers and Spacecraft
+    let vessels = q_rovers.iter().chain(q_spacecraft.iter());
+    for vessel_ent in vessels {
+        // Huge hit radius (100km) makes the spacecraft easily clickable from far away
+        let radius = 200_000.0; 
+        let Ok(vessel_gtf) = q_gtfs.get(vessel_ent) else { continue; };
+        let center = vessel_gtf.translation();
         let oc = ray.origin - center;
         let b = oc.dot(ray.direction.as_vec3());
         let c = oc.dot(oc) - radius * radius;
         let h = b * b - c;
         if h >= 0.0 {
             let t = -b - h.sqrt();
-            if t > 0.0 && t < min_rover_t { min_rover_t = t; nearest_rover = Some(rover_ent); }
+            if t > 0.0 && t < min_vessel_t { min_vessel_t = t; nearest_vessel = Some(vessel_ent); }
         }
     }
     
-    if let Some(rover) = nearest_rover {
-        if min_rover_t < min_body_t {
-             commands.trigger(RoverClickEvent { rover });
+    if let Some(vessel) = nearest_vessel {
+        if min_vessel_t < min_body_t {
+             if q_rovers.contains(vessel) {
+                commands.trigger(RoverClickEvent { rover: vessel });
+             } else {
+                // For spacecraft, just focus
+                if let Some(mut obs) = q_camera.iter_mut().next() {
+                    obs.focus_target = Some(vessel);
+                }
+             }
              return;
         }
     }

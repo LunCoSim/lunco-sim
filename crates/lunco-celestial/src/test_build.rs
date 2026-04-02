@@ -1,1 +1,1 @@
-use bevy::prelude::*; use bevy::input::mouse::MouseWheel; fn t(mut r: EventReader<MouseWheel>) {}
+use bevy::prelude::*; fn test(c: &mut Commands) { c.spawn(NoFrustumCulling); }

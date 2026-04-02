@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts, EguiPlugin, EguiPrimaryContextPass};
 use lunco_core::{RoverVessel, Vessel, Avatar};
-use lunco_celestial::{CelestialClock, ObserverCamera, CelestialBody};
+use lunco_celestial::{CelestialClock, ObserverCamera, CelestialBody, TrajectoryView, TrajectoryFrame};
 use lunco_controller::{ControllerLink, SpaceSystemAction, get_default_input_map};
 use lunco_physics::Suspension;
 
@@ -57,6 +57,7 @@ fn main_ui_system(
     q_rovers: Query<(Entity, &Name, &Vessel), With<RoverVessel>>,
     q_bodies: Query<(Entity, &Name, &CelestialBody)>,
     mut q_camera: Query<(Entity, &mut ObserverCamera), With<Avatar>>,
+    mut q_trajectories: Query<(Entity, &Name, &mut TrajectoryView)>,
     q_children: Query<&Children>,
     mut q_suspension: Query<(Entity, &mut Suspension)>,
     mut commands: Commands,
@@ -114,6 +115,29 @@ fn main_ui_system(
                  if res.double_clicked() {
                      target_to_focus = Some(entity);
                  }
+            }
+        });
+
+        ui.collapsing("Orbit Visualizations", |ui| {
+            for (entity, name, mut view) in q_trajectories.iter_mut() {
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut view.is_visible, "");
+                    let res = ui.selectable_label(selected.entity == Some(entity), format!("{}", name));
+                    if res.clicked() {
+                        selected.entity = Some(entity);
+                    }
+                    if res.double_clicked() {
+                        target_to_focus = Some(entity);
+                    }
+                    
+                    ui.separator();
+                    if ui.selectable_label(view.frame == TrajectoryFrame::Inertial, "Inertial").on_hover_text("Fixed relative to stars").clicked() {
+                        view.frame = TrajectoryFrame::Inertial;
+                    }
+                    if ui.selectable_label(view.frame == TrajectoryFrame::BodyFixed, "Body-Fixed").on_hover_text("Fixed relative to rotating body").clicked() {
+                        view.frame = TrajectoryFrame::BodyFixed;
+                    }
+                });
             }
         });
 

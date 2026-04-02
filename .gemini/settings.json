@@ -1,0 +1,9 @@
+{
+  "skills": {
+    "disabled": [
+      "using-git-worktrees",
+      "subagent-driven-development",
+      "finishing-a-development-branch"
+    ]
+  }
+}

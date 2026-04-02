@@ -18,10 +18,11 @@ pub fn ecliptic_to_bevy(pos: bevy::math::DVec3) -> bevy::math::DVec3 {
     let z = pos_m.y * sin_e + pos_m.z * cos_e;
     
     // Map to Bevy Y-up axes: 
-    // Bevy X = Eq X (Vernal Equinox)
+    // Bevy X = Eq X
     // Bevy Y = Eq Z (North Pole)
-    // Bevy Z = Eq Y (RA 6h)
-    bevy::math::DVec3::new(x, z, y)
+    // Bevy Z = -Eq Y 
+    // (This is a standard right-handed mapping where Y is Up)
+    bevy::math::DVec3::new(x, z, -y)
 }
 
 /// Helper: Resolve any entity's absolute position relative to the solar system root.

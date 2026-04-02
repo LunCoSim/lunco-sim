@@ -14,13 +14,15 @@ pub struct TrajectoryPlugin;
 #[derive(Component, Reflect, Clone, Copy, Debug)]
 #[reflect(Component)]
 pub struct TrajectoryView {
-    pub tracked_id: u32,
-    pub reference_id: u32,
+    pub tracked_id: i32,
+    pub reference_id: i32,
     pub frame: TrajectoryFrame,
     pub color: Color,
     pub is_visible: bool,
     pub sampling_days: f64,
     pub sampling_step: f64,
+    pub start_epoch: Option<f64>,
+    pub end_epoch: Option<f64>,
 }
 
 #[derive(Reflect, Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -40,6 +42,8 @@ impl Default for TrajectoryView {
             is_visible: true,
             sampling_days: 200.0,
             sampling_step: 1.0,
+            start_epoch: None,
+            end_epoch: None,
         }
     }
 }
@@ -75,8 +79,10 @@ impl Plugin for TrajectoryPlugin {
             handle_trajectory_tasks,
             trajectory_mesh_init_system,
             trajectory_mesh_update_system,
+            trajectory_alpha_update_system,
             trajectory_visibility_system,
             trajectory_alignment_system,
+            mission_visibility_system,
         ));
     }
 }
@@ -92,7 +98,9 @@ pub fn trajectory_setup_system(mut commands: Commands) {
             color: Color::srgba(0.0, 0.8, 1.0, 1.0),
             is_visible: true,
             sampling_days: 400.0,
-            sampling_step: 2.0,
+            sampling_step: 0.5,
+            start_epoch: None,
+            end_epoch: None,
         },
         TrajectoryPath::default(),
         Transform::default(),
@@ -110,7 +118,9 @@ pub fn trajectory_setup_system(mut commands: Commands) {
             color: Color::srgba(1.0, 0.9, 0.2, 1.0),
             is_visible: true,
             sampling_days: 30.0,
-            sampling_step: 0.1,
+            sampling_step: 0.02,
+            start_epoch: None,
+            end_epoch: None,
         },
         TrajectoryPath::default(),
         Transform::default(),
@@ -131,32 +141,74 @@ pub fn spawn_trajectory_update_task(
     let pool = AsyncComputeTaskPool::get();
     
     for (entity, view, path) in q_views.iter() {
-        if (path.update_epoch - current_epoch).abs() > 2.0 || path.points.is_empty() {
+        let is_fixed = view.start_epoch.is_some() && view.end_epoch.is_some();
+        let needs_update = if is_fixed {
+            path.points.is_empty()
+        } else {
+            (path.update_epoch - current_epoch).abs() > view.sampling_step || path.points.is_empty()
+        };
+
+        if needs_update {
             let provider = Arc::clone(&ephemeris.provider);
             let registry_arc = Arc::new((*registry).clone());
             let view_copy = *view;
-            let aligned_epoch = (current_epoch / 2.0).round() * 2.0;
+            
+            let aligned_epoch = if is_fixed {
+                // If fixed range, update_epoch is not moving
+                view_copy.start_epoch.unwrap()
+            } else {
+                (current_epoch / view_copy.sampling_step).round() * view_copy.sampling_step
+            };
 
             let task = pool.spawn(async move {
-                let half_count = (view_copy.sampling_days / view_copy.sampling_step / 2.0).ceil() as isize;
-                let mut points = Vec::with_capacity((half_count * 2 + 1) as usize);
+                let mut points = Vec::new();
                 
-                for i in -half_count..=half_count {
-                    let jd = aligned_epoch + (i as f64) * view_copy.sampling_step;
-                    let p_target = provider.position(view_copy.tracked_id, jd);
-                    let p_ref = provider.position(view_copy.reference_id, jd);
-                    let mut rel_pos = crate::coords::ecliptic_to_bevy(p_target - p_ref);
+                if view_copy.start_epoch.is_some() && view_copy.end_epoch.is_some() {
+                    let start = view_copy.start_epoch.unwrap();
+                    let end = view_copy.end_epoch.unwrap();
+                    let count = ((end - start) / view_copy.sampling_step).ceil() as usize + 1;
+                    points.reserve(count);
                     
-                    if view_copy.frame == TrajectoryFrame::BodyFixed {
-                        if let Some(desc) = registry_arc.bodies.iter().find(|b| b.ephemeris_id == view_copy.reference_id) {
-                            let days_since_j2000 = jd - 2_451_545.0;
-                            let angle = days_since_j2000 * desc.rotation_rate_rad_per_day;
-                            let rot = bevy::math::DQuat::from_axis_angle(desc.polar_axis, angle);
-                            rel_pos = rot.inverse() * rel_pos;
+                    for i in 0..count {
+                        let jd = start + (i as f64) * view_copy.sampling_step;
+                        if jd > end { break; } // Don't overshoot
+                        
+                        let p_target = provider.global_position(view_copy.tracked_id, jd);
+                        let p_ref = provider.global_position(view_copy.reference_id, jd);
+                        let mut rel_pos = crate::coords::ecliptic_to_bevy(p_target - p_ref);
+                        
+                        if view_copy.frame == TrajectoryFrame::BodyFixed {
+                            if let Some(desc) = registry_arc.bodies.iter().find(|b| b.ephemeris_id == view_copy.reference_id) {
+                                let days_since_j2000 = jd - 2_451_545.0;
+                                let angle = days_since_j2000 * desc.rotation_rate_rad_per_day;
+                                let rot = bevy::math::DQuat::from_axis_angle(desc.polar_axis, angle);
+                                rel_pos = rot.inverse() * rel_pos;
+                            }
                         }
+                        
+                        points.push(rel_pos);
                     }
+                } else {
+                    let half_count = (view_copy.sampling_days / view_copy.sampling_step / 2.0).ceil() as isize;
+                    points.reserve((half_count * 2 + 1) as usize);
                     
-                    points.push(rel_pos);
+                    for i in -half_count..=half_count {
+                        let jd = aligned_epoch + (i as f64) * view_copy.sampling_step;
+                        let p_target = provider.global_position(view_copy.tracked_id, jd);
+                        let p_ref = provider.global_position(view_copy.reference_id, jd);
+                        let mut rel_pos = crate::coords::ecliptic_to_bevy(p_target - p_ref);
+                        
+                        if view_copy.frame == TrajectoryFrame::BodyFixed {
+                            if let Some(desc) = registry_arc.bodies.iter().find(|b| b.ephemeris_id == view_copy.reference_id) {
+                                let days_since_j2000 = jd - 2_451_545.0;
+                                let angle = days_since_j2000 * desc.rotation_rate_rad_per_day;
+                                let rot = bevy::math::DQuat::from_axis_angle(desc.polar_axis, angle);
+                                rel_pos = rot.inverse() * rel_pos;
+                            }
+                        }
+                        
+                        points.push(rel_pos);
+                    }
                 }
                 
                 TrajectoryData {
@@ -192,19 +244,23 @@ pub fn trajectory_mesh_init_system(
     q_new_views: Query<(Entity, &TrajectoryView), Added<TrajectoryPath>>,
 ) {
     for (entity, view) in q_new_views.iter() {
-        let mesh_handle = meshes.add(Mesh::new(
+        let mut mesh = Mesh::new(
             PrimitiveTopology::LineStrip,
             RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
-        ));
+        );
+        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, Vec::<[f32; 3]>::new());
+        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, Vec::<[f32; 4]>::new());
+        
+        let mesh_handle = meshes.add(mesh);
         let color = view.color;
         // High intensity for visibility
         let emissive_color = LinearRgba::from(color) * 50.0;
         
         let mat_handle = materials.add(StandardMaterial {
-            base_color: color,
+            base_color: Color::WHITE,
             emissive: emissive_color,
             unlit: true,
-            alpha_mode: AlphaMode::Opaque,
+            alpha_mode: AlphaMode::Blend,
             ..default()
         });
 
@@ -213,10 +269,8 @@ pub fn trajectory_mesh_init_system(
                 Mesh3d(mesh_handle),
                 MeshMaterial3d(mat_handle),
                 TrajectoryMeshMarker,
-                Visibility::default(),
+                Visibility::Visible, // Forces visibility, preventing frustum culling
                 Transform::default(),
-                // Aabb::from_min_max(Vec3::splat(-1e12), Vec3::splat(1e12)), 
-                // NoFrustumCulling,
             ));
         });
     }
@@ -224,20 +278,77 @@ pub fn trajectory_mesh_init_system(
 
 pub fn trajectory_mesh_update_system(
     mut meshes: ResMut<Assets<Mesh>>,
-    q_paths: Query<(&TrajectoryPath, &Children), Changed<TrajectoryPath>>,
+    q_paths: Query<(&TrajectoryPath, &TrajectoryView, &Children), Changed<TrajectoryPath>>,
     q_marker: Query<&Mesh3d, With<TrajectoryMeshMarker>>,
 ) {
-    for (path, children) in q_paths.iter() {
+    for (path, view, children) in q_paths.iter() {
         for child in children.iter() {
             if let Ok(mesh_handle) = q_marker.get(child) {
                 if let Some(mesh) = meshes.get_mut(&mesh_handle.0) {
                     let pts: Vec<[f32; 3]> = path.points.iter().map(|p| p.as_vec3().to_array()).collect();
                     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, pts);
+                    
+                    // We also insert a dummy color array initially
+                    let color = view.color.to_linear();
+                    let colors: Vec<[f32; 4]> = vec![[color.red, color.green, color.blue, 1.0]; path.points.len()];
+                    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
                 }
             }
         }
     }
 }
+
+pub fn trajectory_alpha_update_system(
+    clock: Res<CelestialClock>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    q_paths: Query<(&TrajectoryPath, &TrajectoryView, &Children)>,
+    q_marker: Query<&Mesh3d, With<TrajectoryMeshMarker>>,
+    mut last_update_jd: Local<f64>,
+) {
+    if (clock.epoch - *last_update_jd).abs() < 0.01 {
+        return; // Only update alpha every ~14 minutes of simulation time to save performance
+    }
+    *last_update_jd = clock.epoch;
+
+    for (path, view, children) in q_paths.iter() {
+        if path.points.is_empty() { continue; }
+        for child in children.iter() {
+            if let Ok(mesh_handle) = q_marker.get(child) {
+                if let Some(mesh) = meshes.get_mut(&mesh_handle.0) {
+                    let color = view.color.to_linear();
+                    let start_epoch = if let Some(s) = view.start_epoch {
+                        s
+                    } else {
+                        path.update_epoch - (view.sampling_days / 2.0)
+                    };
+                    
+                    let colors: Vec<[f32; 4]> = path.points.iter().enumerate().map(|(i, _)| {
+                        let pt_epoch = start_epoch + (i as f64) * view.sampling_step;
+                        let alpha = if pt_epoch < clock.epoch { 0.2 } else { 1.0 };
+                        [color.red, color.green, color.blue, alpha]
+                    }).collect();
+                    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
+                }
+            }
+        }
+    }
+}
+
+
+pub fn mission_visibility_system(
+    clock: Res<CelestialClock>,
+    mut q_views: Query<&mut TrajectoryView>,
+) {
+    for mut view in q_views.iter_mut() {
+        if let (Some(start), Some(end)) = (view.start_epoch, view.end_epoch) {
+            let should_be_visible = clock.epoch >= start && clock.epoch <= end;
+            if view.is_visible != should_be_visible {
+                view.is_visible = should_be_visible;
+            }
+        }
+    }
+}
+
 
 pub fn trajectory_visibility_system(
     q_views: Query<(&TrajectoryView, &Children), Changed<TrajectoryView>>,
@@ -246,7 +357,8 @@ pub fn trajectory_visibility_system(
     for (view, children) in q_views.iter() {
         for child in children.iter() {
             if let Ok(mut vis) = q_visibility.get_mut(child) {
-                *vis = if view.is_visible { Visibility::Inherited } else { Visibility::Hidden };
+                // Use Visible instead of Inherited to prevent frustum culling of large meshes
+                *vis = if view.is_visible { Visibility::Visible } else { Visibility::Hidden };
             }
         }
     }

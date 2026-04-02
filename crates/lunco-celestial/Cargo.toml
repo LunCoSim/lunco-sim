@@ -16,3 +16,6 @@ lunco-controller = { path = "../lunco-controller" }
 bevy_mesh = "0.18.1"
 bevy_asset = "0.18.1"
 futures-lite = { workspace = true }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+ureq = { version = "2.9", features = ["tls"] }

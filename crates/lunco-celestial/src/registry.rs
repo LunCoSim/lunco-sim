@@ -10,23 +10,23 @@ pub struct CelestialBodyRegistry {
 #[derive(Component, Debug, Clone)]
 pub struct CelestialBody {
     pub name: String,
-    pub ephemeris_id: u32,
+    pub ephemeris_id: i32,
     pub radius_m: f64,
 }
 
 #[derive(Component, Debug, Clone)]
 pub struct CelestialReferenceFrame {
-    pub ephemeris_id: u32,
+    pub ephemeris_id: i32,
 }
 
 #[derive(Clone, Debug, Reflect)]
 pub struct BodyDescriptor {
     pub name: String,
-    pub ephemeris_id: u32,         // NAIF ID
+    pub ephemeris_id: i32,         // NAIF ID
     pub radius_m: f64,
     pub gm: f64,                   // Gravitational parameter (m³/s²)
     pub soi_radius_m: Option<f64>, // None for Sun
-    pub parent_id: Option<u32>,    // NAIF ID of parent
+    pub parent_id: Option<i32>,    // NAIF ID of parent
     pub texture_path: Option<String>,
     pub rotation_rate_rad_per_day: f64, // Sidereal rotation rate
     pub polar_axis: DVec3,              // Body's rotation axis (unit vector)

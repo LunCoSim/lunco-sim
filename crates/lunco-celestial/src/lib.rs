@@ -14,6 +14,7 @@ mod soi;
 mod terrain;
 mod trajectories;
 mod blueprint;
+mod missions;
 
 pub use clock::*;
 pub use ephemeris::*;
@@ -26,6 +27,7 @@ pub use soi::*;
 pub use terrain::*;
 pub use trajectories::*;
 pub use blueprint::*;
+pub use missions::*;
 
 #[derive(Event, Debug, Clone, Copy)]
 pub struct SurfaceClickEvent {
@@ -61,6 +63,7 @@ impl Plugin for CelestialPlugin {
         // No add_event needed in Bevy 0.18 Observer pattern
         app.add_plugins(big_space::prelude::BigSpaceDefaultPlugins);
         app.add_plugins(trajectories::TrajectoryPlugin);
+        app.add_plugins(missions::MissionPlugin);
 
         app.add_systems(Startup, big_space_setup::setup_big_space_hierarchy);
         app.add_systems(PostStartup, setup_terrain_overrides);

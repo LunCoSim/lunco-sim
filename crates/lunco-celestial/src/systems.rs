@@ -17,45 +17,64 @@ pub fn ephemeris_update_system(
     clock: Res<CelestialClock>,
     ephemeris: Option<Res<EphemerisResource>>,
     mut q_entities: Query<(Entity, &mut CellCoord, &mut Transform, Option<&CelestialBody>, Option<&CelestialReferenceFrame>)>,
-    q_all_parents: Query<&ChildOf>,
-    q_frames: Query<&CelestialReferenceFrame>,
+    _q_all_parents: Query<&ChildOf>,
+    _q_frames: Query<&CelestialReferenceFrame>,
     q_grids: Query<&Grid>,
     mut last_jd: Local<f64>,
 ) {
     let Some(ephemeris) = ephemeris else { return; };
-    
-    // We must update every frame even if paused, because big_space's
-    // propagate_floating_origin_system mutates Transform to become the world position
-    // in PostUpdate. We need to reset it to the intra-cell offset here in PreUpdate.
     *last_jd = clock.epoch;
     
     for (entity, mut cell, mut tf, body, frame) in q_entities.iter_mut() {
         let ephemeris_id = if let Some(b) = body { b.ephemeris_id } else if let Some(f) = frame { f.ephemeris_id } else { continue; };
         
-        let current_pos_au = ephemeris.provider.position(ephemeris_id, clock.epoch);
-        let mut parent = if let Ok(child_of) = q_all_parents.get(entity) { Some(child_of.parent()) } else { None };
+        // EphemerisProvider::position returns position relative to its parent defined in registry/hierarchy
+        let rel_pos_au = ephemeris.provider.position(ephemeris_id, clock.epoch);
+        let pos_bevy_m = ecliptic_to_bevy(rel_pos_au);
+
+        // Find the grid this entity is in. Since body/frame entities are typically children of their reference frame grid:
+        // We need to resolve which grid we are relative to. 
+        // In our setup, Earth Body is child of Earth Local Grid.
+        // If the provider returns pos relative to parent, then for Earth (399) it is relative to EMB (3).
+        // But Earth Body is in Earth Local Grid, which is child of EMB Grid.
+        // This means Earth Body should have translation = ZERO in its own local grid.
+        
+        // WAIT: The design is:
+        // Solar Grid (10) -> Sun Body
+        // Solar Grid (10) -> EMB Grid (3)
+        // EMB Grid (3) -> Earth Grid (399)
+        // EMB Grid (3) -> Moon Grid (301)
+        // Earth Grid (399) -> Earth Body
+        // Moon Grid (301) -> Moon Body
+        
+        // So:
+        // EMB Grid position relative to Solar Grid = EMB helio (rel 10)
+        // Earth Grid position relative to EMB Grid = Earth rel EMB (rel 3)
+        // Moon Grid position relative to EMB Grid = Moon rel EMB (rel 3)
+        // Earth Body position relative to Earth Grid = ZERO
         
         let mut depth = 0;
-        while let Some(p) = parent {
-            if depth > 10 { break; }
-            depth += 1;
-
-            if let Ok(grid) = q_grids.get(p) {
-                let mut ref_ephemeris_id = None;
-                if let Ok(p_frame) = q_frames.get(p) { ref_ephemeris_id = Some(p_frame.ephemeris_id); }
-
-                if let Some(ref_id) = ref_ephemeris_id {
-                    let parent_pos_au = ephemeris.provider.position(ref_id, clock.epoch);
-                    let relative_pos_au = current_pos_au - parent_pos_au;
-                    let pos_bevy_m = ecliptic_to_bevy(relative_pos_au);
+        let mut current = entity;
+        // Search up for the first Grid parent
+        while let Ok(child_of) = _q_all_parents.get(current) {
+            if depth > 10 { break; } depth += 1;
+            let parent = child_of.parent();
+            if let Ok(grid) = q_grids.get(parent) {
+                // If this is a Body entity, its position relative to its own Local Grid should be zero?
+                // No, typically the Grid Anchor moves relative to ITS parent.
+                // If 'entity' is a ReferenceFrame (the Grid Anchor itself):
+                if frame.is_some() {
                     let (new_cell, new_translation) = grid.translation_to_grid(pos_bevy_m);
-
                     *cell = new_cell;
                     tf.translation = new_translation;
+                } else if body.is_some() {
+                    // Body is usually at center of its local grid
+                    *cell = CellCoord::default();
+                    tf.translation = Vec3::ZERO;
                 }
                 break;
             }
-            parent = q_all_parents.get(p).ok().map(|c| c.parent());
+            current = parent;
         }
     }
 }
