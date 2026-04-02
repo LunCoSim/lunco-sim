@@ -139,7 +139,7 @@ pub fn terrain_spawn_system(
             let physics_threshold = config.physics_lod_threshold;
 
             let task = pool.spawn(async move {
-                let mesh = create_quadsphere_tile_mesh(body_ent_inner, face_inner, level_inner, i_inner, j_inner, radius_inner, res_inner, &registry_inner, tile_center_inner);
+                let mesh = create_quadsphere_tile_mesh(body_ent_inner, face_inner, level_inner, i_inner, j_inner, radius_inner, res_inner, Some(&registry_inner), tile_center_inner);
                 let mut collider = None;
                 if level_inner >= physics_threshold {
                     collider = Collider::trimesh_from_mesh(&mesh);
@@ -272,11 +272,11 @@ fn cube_to_sphere(face: u8, u: f64, v: f64) -> DVec3 {
     };
     p.normalize()
 }
-
-fn create_quadsphere_tile_mesh(body_ent: Entity, face: u8, level: u32, i: i32, j: i32, radius: f64, res: u32, registry: &TerrainMapRegistry, tile_center: DVec3) -> Mesh {
+pub fn create_quadsphere_tile_mesh(body_ent: Entity, face: u8, level: u32, i: i32, j: i32, radius: f64, res: u32, registry: Option<&TerrainMapRegistry>, tile_center: DVec3) -> Mesh {
     let mut positions = Vec::new();
     let mut normals = Vec::new();
     let mut indices = Vec::new();
+    let mut uvs = Vec::new();
     let tiles_at_level = 1 << level;
     let step = 2.0 / tiles_at_level as f64;
     let start_u = -1.0 + (i as f64) * step;
@@ -290,6 +290,24 @@ fn create_quadsphere_tile_mesh(body_ent: Entity, face: u8, level: u32, i: i32, j
             let h = sample_height(body_ent, pos_sphere, radius, registry);
             positions.push((pos_sphere * h - tile_center).as_vec3());
             normals.push(pos_sphere.as_vec3());
+
+            // Equirectangular UV mapping (Seam handling with Mirrored fix)
+            let mut u_raw = (-pos_sphere.z).atan2(pos_sphere.x);
+            
+            // Compute tile's geometric center from face parameters (not tile_center which may be ZERO)
+            let center_u = start_u + step * 0.5;
+            let center_v = start_v + step * 0.5;
+            let tile_center_dir = cube_to_sphere(face, center_u, center_v);
+            let ref_lon = (-tile_center_dir.z).atan2(tile_center_dir.x);
+            if (u_raw - ref_lon) > std::f64::consts::PI {
+                u_raw -= 2.0 * std::f64::consts::PI;
+            } else if (u_raw - ref_lon) < -std::f64::consts::PI {
+                u_raw += 2.0 * std::f64::consts::PI;
+            }
+
+            let u_tex = (u_raw + std::f64::consts::PI) / (2.0 * std::f64::consts::PI);
+            let v_tex = (pos_sphere.y.asin() + (std::f64::consts::PI / 2.0)) / std::f64::consts::PI;
+            uvs.push(Vec2::new(u_tex as f32, 1.0 - v_tex as f32)); // Flip V for Bevy
         }
     }
 
@@ -299,8 +317,15 @@ fn create_quadsphere_tile_mesh(body_ent: Entity, face: u8, level: u32, i: i32, j
             let i1 = i0 + 1;
             let i2 = (y + 1) * (res + 1) + x;
             let i3 = i2 + 1;
-            indices.push(i0); indices.push(i2); indices.push(i1);
-            indices.push(i1); indices.push(i2); indices.push(i3);
+            
+            // CCW Winding for sides, CW for Top/Bottom
+            if face == 2 || face == 3 {
+                indices.push(i0); indices.push(i2); indices.push(i1);
+                indices.push(i1); indices.push(i2); indices.push(i3);
+            } else {
+                indices.push(i0); indices.push(i1); indices.push(i2);
+                indices.push(i1); indices.push(i3); indices.push(i2);
+            }
         }
     }
 
@@ -314,6 +339,7 @@ fn create_quadsphere_tile_mesh(body_ent: Entity, face: u8, level: u32, i: i32, j
             skirt_indices.push(positions.len() as u32);
             positions.push(skirt_pos);
             normals.push(norm);
+            uvs.push(uvs[idx as usize]); // Extend UVs to skirt
         }
         for i in 0..(indices_to_extrude.len() as u32 - 1) {
             let a = indices_to_extrude[i as usize];
@@ -333,6 +359,7 @@ fn create_quadsphere_tile_mesh(body_ent: Entity, face: u8, level: u32, i: i32, j
     let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, Default::default());
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
     mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
     mesh.insert_indices(Indices::U32(indices));
     mesh
 }
@@ -342,19 +369,21 @@ fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
-fn sample_height(body_ent: Entity, pos_sphere: DVec3, radius: f64, registry: &TerrainMapRegistry) -> f64 {
+fn sample_height(body_ent: Entity, pos_sphere: DVec3, radius: f64, registry: Option<&TerrainMapRegistry>) -> f64 {
     let mut h = radius;
     let lat = pos_sphere.y.asin().to_degrees() as f32;
     let long = pos_sphere.x.atan2(pos_sphere.z).to_degrees() as f32;
     let pos_geo = Vec2::new(lat, long);
 
-    for map in registry.maps.iter() {
-        if map.body_entity != body_ent { continue; }
-        let dist_deg = pos_geo.distance(map.center_lat_long);
-        let radius_deg = (map.radius_m / radius as f32).to_degrees();
-        if dist_deg < radius_deg {
-            let t = smoothstep(0.8, 1.0, 1.0 - (dist_deg / radius_deg));
-            h += (map.height_offset as f64) * (t as f64);
+    if let Some(registry) = registry {
+        for map in registry.maps.iter() {
+            if map.body_entity != body_ent { continue; }
+            let dist_deg = pos_geo.distance(map.center_lat_long);
+            let radius_deg = (map.radius_m / radius as f32).to_degrees();
+            if dist_deg < radius_deg {
+                let t = smoothstep(0.8, 1.0, 1.0 - (dist_deg / radius_deg));
+                h += (map.height_offset as f64) * (t as f64);
+            }
         }
     }
     h

@@ -45,7 +45,6 @@ fn toggle_slow_motion(keyboard: Res<ButtonInput<KeyCode>>, mut time: ResMut<Time
 /// A robust multi-pass system to propagate GlobalTransform & Visibility across grids.
 fn global_transform_propagation_system(
     mut commands: Commands,
-    mut q_transformable: Query<(Entity, &Transform, &mut GlobalTransform, Option<&ChildOf>)>,
     q_visibility_needs: Query<Entity, (Without<InheritedVisibility>, Or<(With<Visibility>, With<Mesh3d>, With<Text>)>, Without<CellCoord>)>,
     mut q_visibility: Query<(Entity, &mut InheritedVisibility, &mut ViewVisibility, &Visibility, Option<&ChildOf>)>,
 ) {
@@ -54,30 +53,12 @@ fn global_transform_propagation_system(
         commands.entity(ent).insert((
             InheritedVisibility::default(),
             ViewVisibility::default(),
-            GlobalTransform::default(),
         ));
     }
 
-    // 2. Multi-level Transform Resolution
+    // 2. Visibility propagation (Boolean sync)
+    // We do multiple passes to handle hierarchies
     for _ in 0..4 {
-        let mut cache = std::collections::HashMap::new();
-        for (ent, _, gtf, _) in q_transformable.iter() {
-            cache.insert(ent, *gtf);
-        }
-
-        for (_, tf, mut gtf, child_of_opt) in q_transformable.iter_mut() {
-            if let Some(child_of) = child_of_opt {
-                if let Some(parent_gtf) = cache.get(&child_of.parent()) {
-                    let new_gtf = parent_gtf.mul_transform(*tf);
-                    if *gtf != new_gtf { *gtf = new_gtf; }
-                }
-            } else {
-                let new_gtf = GlobalTransform::from(*tf);
-                if *gtf != new_gtf { *gtf = new_gtf; }
-            }
-        }
-
-        // 3. Visibility propagation (Boolean sync)
         let mut vis_cache = std::collections::HashMap::new();
         for (ent, inherited, _, _, _) in q_visibility.iter() {
             vis_cache.insert(ent, inherited.get());
@@ -94,8 +75,6 @@ fn global_transform_propagation_system(
             if inherited.get() != is_visible {
                 *inherited = if is_visible { InheritedVisibility::VISIBLE } else { InheritedVisibility::HIDDEN };
             }
-            // ViewVisibility is typically managed by the renderer based on InheritedVisibility and GlobalTransform
-            // Manual propagation is handled via InheritedVisibility.
         }
     }
 }

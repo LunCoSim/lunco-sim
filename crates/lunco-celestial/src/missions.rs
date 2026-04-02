@@ -116,7 +116,7 @@ pub fn load_missions_system(mut commands: Commands, mut registry: ResMut<Mission
                                     tracked_id: traj.tracked_id,
                                     reference_id: traj.reference_id,
                                     frame,
-                                    color: Color::srgba(traj.color[0], traj.color[1], traj.color[2], traj.color[3]),
+                                    color: LinearRgba::from(Color::srgba(traj.color[0], traj.color[1], traj.color[2], traj.color[3])),
                                     is_visible: true,
                                     user_visible: true,
                                     sampling_days: traj.sampling_days,
