@@ -344,16 +344,31 @@ pub fn trajectory_mesh_update_system(
     for (path, view, children) in q_paths.iter() {
         if path.points.is_empty() { continue; }
         
-        let pts: Vec<[f32; 3]> = path.points.iter().map(|p| p.as_vec3().to_array()).collect();
         let color = view.color;
-        let colors: Vec<[f32; 4]> = vec![[color.red, color.green, color.blue, 1.0]; pts.len()];
 
-        info!("Updating trajectory mesh with {} points", pts.len());
+        // Use Catmull-Rom spline for smooth curves (needs >= 4 points)
+        let final_pts: Vec<[f32; 3]> = if path.points.len() >= 4 {
+            let control_points: Vec<Vec3> = path.points.iter().map(|p| p.as_vec3()).collect();
+            let spline = CubicCardinalSpline::new_catmull_rom(control_points);
+            match spline.to_curve() {
+                Ok(curve) => {
+                    let n = (path.points.len() - 1) * 3;
+                    curve.iter_positions(n).map(|p| p.to_array()).collect()
+                }
+                Err(_) => path.points.iter().map(|p| p.as_vec3().to_array()).collect(),
+            }
+        } else {
+            path.points.iter().map(|p| p.as_vec3().to_array()).collect()
+        };
+
+        let colors: Vec<[f32; 4]> = vec![[color.red, color.green, color.blue, 1.0]; final_pts.len()];
+
+        info!("Updating trajectory mesh with {} points", final_pts.len());
 
         for child in children.iter() {
             if let Ok(mesh_handle) = q_marker.get(child) {
                 if let Some(mesh) = meshes.get_mut(&mesh_handle.0) {
-                    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, pts.clone());
+                    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, final_pts.clone());
                     mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors.clone());
                 }
             }
