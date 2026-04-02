@@ -314,13 +314,12 @@ pub fn trajectory_mesh_init_system(
         
         let mesh_handle = meshes.add(mesh);
         let color = view.color;
-        let emissive_color = color * 100.0;
+        let emissive_color = color * 15.0;
         
         let mat_handle = materials.add(StandardMaterial {
-            base_color: Color::WHITE,
-            emissive: emissive_color,
+            base_color: Color::linear_rgba(emissive_color.red, emissive_color.green, emissive_color.blue, 1.0),
             unlit: true,
-            alpha_mode: AlphaMode::Blend,
+            alpha_mode: AlphaMode::Add,
             ..default()
         });
 
@@ -396,7 +395,7 @@ pub fn trajectory_alpha_update_system(
                     let colors: Vec<[f32; 4]> = (0..num_points).map(|i| {
                         let t = i as f64 / (num_points - 1) as f64;
                         let pt_epoch = start_epoch + t * total_sampling_days;
-                        let alpha = if pt_epoch < clock.epoch { 0.4 } else { 1.0 };
+                        let alpha = if pt_epoch < clock.epoch { 0.05 } else { 1.0 };
                         [color.red, color.green, color.blue, alpha]
                     }).collect();
                     mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
