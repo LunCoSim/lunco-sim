@@ -278,7 +278,7 @@ pub fn camera_selection_system(
         }
     }
 
-    if let Some((body_ent, body_gtf, _, t)) = nearest_body {
+    if let Some((body_ent, _body_gtf, _, _t)) = nearest_body {
         if let Some(mut obs) = q_camera.iter_mut().next() {
             if obs.mode == ObserverMode::Orbital {
                  obs.focus_target = Some(body_ent);

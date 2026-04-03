@@ -1,6 +1,5 @@
 use bevy::prelude::*;
 use std::collections::HashMap;
-use lunco_core::architecture::{PhysicalPort, DigitalPort};
 use lunco_core::telemetry::{TelemetryValue};
 
 pub struct LunCoAttributesPlugin;

@@ -5,7 +5,7 @@ use bevy::ecs::relationship::Relationship;
 use big_space::prelude::CellCoord;
 use std::collections::HashMap;
 
-use lunco_core::architecture::{PhysicalPort, DigitalPort, Wire};
+use lunco_core::architecture::{PhysicalPort, DigitalPort, Wire, CommandMessage, CommandResponse, CommandStatus};
 use lunco_physics::Layer;
 use lunco_fsw::FlightSoftware;
 
@@ -13,6 +13,7 @@ pub struct LunCoRoverRaycastPlugin;
 
 impl Plugin for LunCoRoverRaycastPlugin {
     fn build(&self, app: &mut App) {
+        app.add_observer(on_command);
         app.add_systems(
             FixedUpdate,
             (
@@ -23,6 +24,72 @@ impl Plugin for LunCoRoverRaycastPlugin {
                 .chain()
                 .before(PhysicsSystems::Prepare),
         );
+    }
+}
+
+fn on_command(
+    trigger: On<CommandMessage>,
+    mut q_rovers: Query<(&mut FlightSoftware, &mut WheelRaycast), With<RoverVessel>>,
+    mut q_digital_ports: Query<&mut DigitalPort>,
+    mut commands: Commands,
+) {
+    let cmd = trigger.event();
+    
+    // We only process if this entity is a Raycast Rover AND target matches
+    if let Ok((mut fsw, _)) = q_rovers.get_mut(cmd.target) {
+        let mut status = CommandStatus::Ack;
+
+        match cmd.name.as_str() {
+            "DRIVE_ROVER" => {
+                if cmd.args.len() >= 1 {
+                    let drive_power = (cmd.args[0] * 32767.0).clamp(-32767.0, 32767.0) as i32;
+                    let steer_power = if cmd.args.len() >= 2 {
+                        (cmd.args[1] * 32767.0).clamp(-32767.0, 32767.0) as i32
+                    } else { 0 };
+
+                    let (left_power, right_power) = if fsw.brake_active {
+                        (0, 0)
+                    } else {
+                        // Mixing
+                        ((drive_power + steer_power).clamp(-32767, 32767), (drive_power - steer_power).clamp(-32767, 32767))
+                    };
+
+                    if let Some(&port_l) = fsw.port_map.get("drive_left") {
+                        if let Ok(mut p) = q_digital_ports.get_mut(port_l) { p.raw_value = left_power as i16; }
+                    }
+                    if let Some(&port_r) = fsw.port_map.get("drive_right") {
+                        if let Ok(mut p) = q_digital_ports.get_mut(port_r) { p.raw_value = right_power as i16; }
+                    }
+                    if let Some(&port_s) = fsw.port_map.get("steering") {
+                        if let Ok(mut p) = q_digital_ports.get_mut(port_s) { p.raw_value = steer_power as i16; }
+                    }
+                } else {
+                    status = CommandStatus::Failed("DRIVE_ROVER requires arguments".to_string());
+                }
+            }
+            "BRAKE_ROVER" => {
+                let brake_val = if cmd.args.len() >= 1 { cmd.args[0] } else { 1.0 };
+                fsw.brake_active = brake_val > 0.5;
+                let port_val = if fsw.brake_active { 32767 } else { 0 };
+                
+                if let Some(&port_b) = fsw.port_map.get("brake") {
+                    if let Ok(mut p) = q_digital_ports.get_mut(port_b) { p.raw_value = port_val; }
+                }
+                if fsw.brake_active {
+                    for name in ["drive_left", "drive_right"] {
+                        if let Some(&port_id) = fsw.port_map.get(name) {
+                            if let Ok(mut port) = q_digital_ports.get_mut(port_id) { port.raw_value = 0; }
+                        }
+                    }
+                }
+            }
+            _ => return, // Ignore unknown commands, don't NACK here as others might handle it
+        }
+
+        commands.trigger(CommandResponse {
+            command_id: cmd.id,
+            status,
+        });
     }
 }
 

@@ -2,10 +2,12 @@ pub mod architecture;
 pub mod mocks;
 pub mod telemetry;
 pub mod coords;
+pub mod log;
 
 pub use architecture::*;
 pub use mocks::*;
 pub use telemetry::*;
+pub use log::*;
 
 use bevy::prelude::*;
 
@@ -93,6 +95,7 @@ impl Default for CelestialClock {
 
 impl Plugin for LunCoCorePlugin {
     fn build(&self, app: &mut App) {
+        app.add_plugins(LunCoLogPlugin);
         app.register_type::<Severity>()
            .register_type::<TelemetryValue>()
            .register_type::<TelemetryEvent>()
