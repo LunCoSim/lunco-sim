@@ -146,14 +146,14 @@ fn avatar_orbit_input(
 fn avatar_camera_follow(
     time: Res<Time>,
     mut q_avatar: Query<(Entity, &mut Transform, &OrbitState, &ControllerLink), (With<Avatar>, Without<DetachedCamera>)>,
-    q_targets: Query<(&GlobalTransform, Option<&ChildOf>)>,
+    q_targets: Query<(&Transform, Option<&ChildOf>), (Without<lunco_celestial::CelestialBody>, Without<Avatar>)>,
     q_planets: Query<&GlobalTransform, With<lunco_celestial::CelestialBody>>,
     q_grids: Query<&big_space::grid::Grid>,
     mut commands: Commands,
 ) {
     for (cam_entity, mut transform, orbit, link) in q_avatar.iter_mut() {
-        if let Ok((target_gtf, parent_opt)) = q_targets.get(link.vessel_entity) {
-            let target_pos = target_gtf.translation();
+        if let Ok((target_transform, parent_opt)) = q_targets.get(link.vessel_entity) {
+            let target_pos = target_transform.translation;
             
             // Grid Migration for Local Stability
             if let Some(child_of) = parent_opt {
