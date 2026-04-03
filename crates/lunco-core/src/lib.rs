@@ -113,8 +113,6 @@ impl Plugin for LunCoCorePlugin {
            .register_type::<Spacecraft>()
            .register_type::<ActiveAction>()
            .register_type::<ActionStatus>()
-           .register_type::<DifferentialDrive>()
-           .register_type::<AckermannSteer>()
            .add_systems(Update, wire_system);
     }
 }

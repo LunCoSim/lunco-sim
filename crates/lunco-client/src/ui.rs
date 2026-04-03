@@ -3,8 +3,8 @@ use bevy_egui::{egui, EguiContexts, EguiPlugin, EguiPrimaryContextPass};
 use lunco_core::{RoverVessel, Vessel, Avatar, Spacecraft};
 use lunco_celestial::{CelestialClock, CelestialBody, TrajectoryView, TrajectoryFrame};
 use lunco_camera::{ObserverCamera, ObserverMode, CameraScroll};
-use lunco_controller::{ControllerLink, VesselIntent, get_default_input_map, get_avatar_input_map};
-use lunco_physics::Suspension;
+use lunco_controller::{ControllerLink, VesselIntent, get_default_input_map};
+use lunco_mobility::Suspension;
 
 pub struct LunCoUiPlugin;
 
@@ -65,6 +65,7 @@ fn main_ui_system(
     mut commands: Commands,
     mut scroll_res: ResMut<CameraScroll>,
     mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     let Ok(ctx) = contexts.ctx_mut() else { return; };
     
@@ -205,14 +206,15 @@ fn main_ui_system(
              ui.label(format!("Surface: {:?}", spawn_req.planet));
              
              if ui.button("Spawn Ackermann Rover (Blue)").clicked() {
-                 let mesh_handle = meshes.add(Sphere::new(0.5).mesh().build());
-                 let _rover = lunco_physics::spawn_joint_ackermann_rover(
+                 let _rover = lunco_robotics::rover::spawn_joint_rover(
                     &mut commands,
+                    &mut meshes,
+                    &mut materials,
                     spawn_req.planet,
-                    mesh_handle,
                     spawn_req.click_pos_local.as_vec3() + spawn_req.surface_normal * 1.5,
                     "Lunar Explorer",
                     Color::Srgba(bevy::color::palettes::basic::BLUE),
+                    lunco_robotics::rover::SteeringType::Ackermann,
                  );
                  pending.request = None;
                  info!("Spawned rover at surface interaction point.");

@@ -1,17 +1,19 @@
 [workspace]
 members = [
     "crates/lunco-core",
-    "crates/lunco-physics",
     "crates/lunco-obc",
     "crates/lunco-fsw",
     "crates/lunco-controller",
     "crates/lunco-attributes",
     "crates/lunco-avatar",
     "crates/lunco-client",
-    "crates/lunco-rover-raycast",
     "crates/lunco-telemetry",
-    "crates/lunco-camera"
-, "crates/lunco-celestial"]
+    "crates/lunco-camera",
+    "crates/lunco-celestial",
+    "crates/lunco-hardware",
+    "crates/lunco-mobility",
+    "crates/lunco-robotics"
+]
 resolver = "2"
 
 [workspace.package]

@@ -13,13 +13,14 @@ avian3d = { workspace = true }
 big_space = { workspace = true }
 leafwing-input-manager = { workspace = true }
 lunco-core = { path = "../lunco-core" }
-lunco-physics = { path = "../lunco-physics" }
+lunco-hardware = { path = "../lunco-hardware" }
+lunco-mobility = { path = "../lunco-mobility" }
+lunco-robotics = { path = "../lunco-robotics" }
 lunco-controller = { path = "../lunco-controller" }
 lunco-fsw = { path = "../lunco-fsw" }
 lunco-obc = { path = "../lunco-obc" }
 lunco-attributes = { path = "../lunco-attributes" }
 lunco-avatar = { path = "../lunco-avatar" }
-lunco-rover-raycast = { path = "../lunco-rover-raycast" }
 lunco-celestial = { path = "../lunco-celestial" }
 lunco-camera = { path = "../lunco-camera" }
 bevy_egui = { workspace = true }

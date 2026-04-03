@@ -4352,9 +4352,10 @@ dependencies = [
  "lunco-controller",
  "lunco-core",
  "lunco-fsw",
+ "lunco-hardware",
+ "lunco-mobility",
  "lunco-obc",
- "lunco-physics",
- "lunco-rover-raycast",
+ "lunco-robotics",
 ]
 
 [[package]]
@@ -4387,6 +4388,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "lunco-hardware"
+version = "0.6.0"
+dependencies = [
+ "avian3d",
+ "bevy",
+ "big_space",
+ "lunco-core",
+ "lunco-fsw",
+]
+
+[[package]]
+name = "lunco-mobility"
+version = "0.6.0"
+dependencies = [
+ "avian3d",
+ "bevy",
+ "big_space",
+ "leafwing-input-manager",
+ "lunco-core",
+ "lunco-fsw",
+ "smallvec",
+]
+
+[[package]]
 name = "lunco-obc"
 version = "0.6.0"
 dependencies = [
@@ -4395,26 +4420,18 @@ dependencies = [
 ]
 
 [[package]]
-name = "lunco-physics"
+name = "lunco-robotics"
 version = "0.6.0"
 dependencies = [
  "avian3d",
  "bevy",
  "big_space",
+ "leafwing-input-manager",
+ "lunco-controller",
  "lunco-core",
  "lunco-fsw",
-]
-
-[[package]]
-name = "lunco-rover-raycast"
-version = "0.6.0"
-dependencies = [
- "avian3d",
- "bevy",
- "big_space",
- "lunco-core",
- "lunco-fsw",
- "lunco-physics",
+ "lunco-hardware",
+ "lunco-mobility",
 ]
 
 [[package]]

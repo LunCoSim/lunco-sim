@@ -1,12 +1,11 @@
 [package]
-name = "lunco-rover-raycast"
+name = "lunco-hardware"
 version = "0.6.0"
 edition = "2021"
 
 [dependencies]
-bevy = { workspace = true, features = ["default"] }
+bevy = { workspace = true }
 avian3d = { workspace = true }
 big_space = { workspace = true }
 lunco-core = { path = "../lunco-core" }
-lunco-physics = { path = "../lunco-physics" }
 lunco-fsw = { path = "../lunco-fsw" }

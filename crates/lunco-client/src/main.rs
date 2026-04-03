@@ -29,9 +29,11 @@ fn main() {
 
     app.add_plugins(MaterialPlugin::<BlueprintMaterial>::default())
         .add_plugins(LunCoUiPlugin) 
-        .add_plugins(lunco_physics::LunCoPhysicsPlugin)
+        .add_plugins(lunco_fsw::LunCoFswPlugin)
+        .add_plugins(lunco_hardware::LunCoHardwarePlugin)
+        .add_plugins(lunco_mobility::LunCoMobilityPlugin)
+        .add_plugins(lunco_robotics::LunCoRoboticsPlugin)
         .add_plugins(lunco_controller::LunCoControllerPlugin)
-        .add_plugins(lunco_rover_raycast::LunCoRoverRaycastPlugin)
         .add_plugins(lunco_avatar::LunCoAvatarPlugin)
         .add_systems(Update, toggle_slow_motion)
         .run();

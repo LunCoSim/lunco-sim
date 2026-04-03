@@ -142,26 +142,6 @@ pub struct CommandResponse {
     pub status: CommandStatus,
 }
 
-/// Hotswappable Logic: Differential Drive mixing (Skid Steering).
-/// Calculated via `Left = Forward + Steer` and `Right = Forward - Steer`.
-#[derive(Component, Debug, Clone, Reflect, Default)]
-#[reflect(Component, Default)]
-pub struct DifferentialDrive {
-    pub left_port: String,
-    pub right_port: String,
-}
-
-/// Hotswappable Logic: Ackermann Steering.
-/// Calculated via `Drive = Forward` and `Angle = Steer * MaxAngle`.
-#[derive(Component, Debug, Clone, Reflect, Default)]
-#[reflect(Component, Default)]
-pub struct AckermannSteer {
-    pub drive_left_port: String,
-    pub drive_right_port: String,
-    pub steer_port: String,
-    pub max_steer_angle: f32,
-}
-
 /// Allows components to describe their capabilities for AI/MCP discovery
 pub trait CommandRegistry {
     fn discover_commands(&self) -> Vec<&'static str>;

@@ -1,22 +1,20 @@
-use bevy::{prelude::*, asset::io::AssetSourceBuilder, math::DVec3};
+use bevy::prelude::*;
+use bevy::asset::io::AssetSourceBuilder;
+use bevy::math::DVec3;
 use avian3d::prelude::*;
 use big_space::prelude::*;
 use leafwing_input_manager::prelude::*;
 
-use lunco_core::{Avatar, TimeWarpState};
-use lunco_physics::{
-    LunCoPhysicsPlugin, 
-    spawn_joint_skid_rover, 
-    spawn_joint_ackermann_rover,
+use lunco_core::{Avatar, TimeWarpState, IntentState};
+use lunco_hardware::LunCoHardwarePlugin;
+use lunco_mobility::LunCoMobilityPlugin;
+use lunco_robotics::{
+    LunCoRoboticsPlugin,
+    rover::{spawn_joint_rover, spawn_raycast_rover, SteeringType},
 };
 use lunco_fsw::LunCoFswPlugin; 
-use lunco_rover_raycast::{
-    LunCoRoverRaycastPlugin, 
-    spawn_raycast_skid_rover, 
-    spawn_raycast_ackermann_rover
-};
-use lunco_controller::{LunCoControllerPlugin, VesselIntent, get_default_input_map}; 
-use lunco_avatar::{LunCoAvatarPlugin, UserIntent, IntentAnalogState};
+use lunco_controller::LunCoControllerPlugin; 
+use lunco_avatar::{LunCoAvatarPlugin, IntentAnalogState};
 use lunco_celestial::{BlueprintMaterial, BlueprintExtension, CelestialClock, CelestialBody};
 use lunco_camera::{ObserverCamera, ObserverMode, ActiveCamera};
 
@@ -37,14 +35,79 @@ fn main() {
         .add_plugins(PhysicsPlugins::default())
         .add_plugins(MaterialPlugin::<BlueprintMaterial>::default())
         .add_plugins(LunCoFswPlugin) 
-        .add_plugins(LunCoPhysicsPlugin)
-        .add_plugins(LunCoRoverRaycastPlugin)
+        .add_plugins(LunCoHardwarePlugin)
+        .add_plugins(LunCoMobilityPlugin)
+        .add_plugins(LunCoRoboticsPlugin)
         .add_plugins(LunCoAvatarPlugin)
         .add_plugins(LunCoControllerPlugin);
+
+    // THE UNIVERSAL SYNC BRIDGE
+    app.add_systems(PreUpdate, global_transform_propagation_system);
+    app.add_systems(PostUpdate, global_transform_propagation_system.after(avian3d::prelude::PhysicsSystems::Writeback));
 
     app.add_systems(Startup, setup_sandbox);
     
     app.run();
+}
+
+/// A robust multi-pass system to propagate GlobalTransform & Visibility across grids.
+fn global_transform_propagation_system(
+    mut commands: Commands,
+    q_needs: Query<Entity, (Or<(With<Visibility>, With<Mesh3d>, With<Text>, With<Transform>)>, Without<InheritedVisibility>, Without<CellCoord>)>,
+    mut q_spatial: Query<(Entity, &mut GlobalTransform, &Transform, Option<&ChildOf>)>,
+    mut q_visibility: Query<(Entity, &mut InheritedVisibility, &mut ViewVisibility, &Visibility, Option<&ChildOf>)>,
+) {
+    // 1. Initial backfill 
+    for ent in q_needs.iter() {
+        commands.entity(ent).insert((
+            InheritedVisibility::default(),
+            ViewVisibility::default(),
+            GlobalTransform::default(),
+        ));
+    }
+
+    // 2. Transform propagation (Manual fallback for TransformPlugin)
+    // We do multiple passes to handle hierarchies (up to 4 levels)
+    for _ in 0..4 {
+        let mut gtf_cache = std::collections::HashMap::new();
+        for (ent, gtf, _, _) in q_spatial.iter() {
+            gtf_cache.insert(ent, *gtf);
+        }
+
+        for (_ent, mut gtf, local_tf, child_of_opt) in q_spatial.iter_mut() {
+            let parent_gtf = if let Some(child_of) = child_of_opt {
+                gtf_cache.get(&child_of.parent()).cloned().unwrap_or_default()
+            } else {
+                GlobalTransform::default()
+            };
+            
+            let new_gtf = parent_gtf.mul_transform(*local_tf);
+            if gtf.to_matrix() != new_gtf.to_matrix() {
+                *gtf = new_gtf;
+            }
+        }
+    }
+
+    // 3. Visibility propagation (Boolean sync)
+    for _ in 0..4 {
+        let mut vis_cache = std::collections::HashMap::new();
+        for (ent, inherited, _, _, _) in q_visibility.iter() {
+            vis_cache.insert(ent, inherited.get());
+        }
+
+        for (_, mut inherited, _view, visibility, child_of_opt) in q_visibility.iter_mut() {
+            let parent_visible = if let Some(child_of) = child_of_opt {
+                *vis_cache.get(&child_of.parent()).unwrap_or(&true)
+            } else {
+                true
+            };
+            
+            let is_visible = parent_visible && visibility != Visibility::Hidden;
+            if inherited.get() != is_visible {
+                *inherited = if is_visible { InheritedVisibility::VISIBLE } else { InheritedVisibility::HIDDEN };
+            }
+        }
+    }
 }
 
 fn setup_sandbox(
@@ -156,43 +219,51 @@ fn setup_sandbox(
         CellCoord::default(),
     )).set_parent_in_place(grid_entity).id();
     
-    let wheel_mesh = meshes.add(Cylinder::new(0.5, 0.4));
-    
     // Joint-Based Rovers
-    spawn_joint_skid_rover(
+    spawn_joint_rover(
         &mut commands, 
+        &mut meshes,
+        &mut materials,
         rovers_root, 
-        wheel_mesh.clone(), 
         Vec3::new(-15.0, 5.0, -10.0), 
         "Joint_Skid", 
-        Color::srgb(0.8, 0.2, 0.2)
+        Color::srgb(0.8, 0.2, 0.2),
+        SteeringType::Skid,
     );
 
-    spawn_joint_ackermann_rover(
+    spawn_joint_rover(
         &mut commands, 
+        &mut meshes,
+        &mut materials,
         rovers_root, 
-        wheel_mesh.clone(), 
         Vec3::new(-15.0, 5.0, 10.0), 
         "Joint_Ackermann", 
-        Color::srgb(0.2, 0.8, 0.2)
+        Color::srgb(0.2, 0.8, 0.2),
+        SteeringType::Ackermann,
     );
 
     // Raycast-Based Rovers
-    spawn_raycast_skid_rover(
+    let r_skid = spawn_raycast_rover(
         &mut commands, 
-        wheel_mesh.clone(), 
+        &mut meshes,
+        &mut materials,
         Vec3::new(15.0, 5.0, -10.0), 
         "Raycast_Skid", 
-        Color::srgb(0.2, 0.2, 0.8)
+        Color::srgb(0.2, 0.2, 0.8),
+        SteeringType::Skid,
     );
+    commands.entity(r_skid).set_parent_in_place(grid_entity);
 
-    spawn_raycast_ackermann_rover(
+    let r_ack = spawn_raycast_rover(
         &mut commands, 
-        wheel_mesh.clone(), 
+        &mut meshes,
+        &mut materials,
         Vec3::new(15.0, 5.0, 10.0), 
         "Raycast_Ackermann", 
-        Color::srgb(0.8, 0.8, 0.2)
+        Color::srgb(0.8, 0.8, 0.2),
+        SteeringType::Ackermann,
     );
+    commands.entity(r_ack).set_parent_in_place(grid_entity);
 
     // 6. Avatar & Camera
     commands.spawn((
@@ -213,13 +284,11 @@ fn setup_sandbox(
             focus_target: Some(rovers_root),
             altitude: 20.0,     // Prevents celestial system from resetting camera distance
             distance: 20.0,     // 20 meters away
-            pitch: -0.5,        // Looking softly down
-            yaw: -0.6,          // Looking from an angle
             ..default()
         },
         FloatingOrigin,
         CellCoord::default(),
-        ActionState::<UserIntent>::default(),
+        IntentState::default(),
         lunco_controller::get_avatar_input_map(),
         IntentAnalogState::default(),
         ActiveCamera,
