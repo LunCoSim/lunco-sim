@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 use leafwing_input_manager::prelude::*;
 use lunco_core::architecture::CommandMessage;
+use smallvec::smallvec;
 
 pub struct LunCoControllerPlugin;
 
@@ -33,7 +34,8 @@ fn translate_intents_to_commands(
     q_controllers: Query<(&ActionState<SpaceSystemAction>, &ControllerLink)>,
     keys: Res<ButtonInput<KeyCode>>,
     mut commands: Commands,
-    mut last_intents: Local<Option<(f32, f32, f32)>>,
+    mut last_intents: Local<Option<(f64, f64, f64)>>,
+    mut id_counter: Local<u64>,
 ) {
     let ctrl_pressed = keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
 
@@ -58,19 +60,23 @@ fn translate_intents_to_commands(
         let current = (forward_intent, steer_intent, brake_intent);
         if last_intents.map_or(true, |last| last != current) {
             // DRIVE_ROVER (includes steering)
+            *id_counter += 1;
             commands.trigger(CommandMessage {
+                id: *id_counter,
                 source: Entity::PLACEHOLDER,
                 target: link.vessel_entity,
                 name: "DRIVE_ROVER".to_string(),
-                args: vec![forward_intent, steer_intent],
+                args: smallvec![forward_intent, steer_intent],
             });
 
             // BRAKE_ROVER (Refined to pass duty/state)
+            *id_counter += 1;
             commands.trigger(CommandMessage {
+                id: *id_counter,
                 source: Entity::PLACEHOLDER,
                 target: link.vessel_entity,
                 name: "BRAKE_ROVER".to_string(),
-                args: vec![brake_intent],
+                args: smallvec![brake_intent],
             });
 
             *last_intents = Some(current);

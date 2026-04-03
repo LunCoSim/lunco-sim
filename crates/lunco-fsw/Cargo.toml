@@ -5,4 +5,5 @@ edition = "2021"
 
 [dependencies]
 bevy = { workspace = true, features = ["default"] }
+smallvec = { workspace = true }
 lunco-core = { path = "../lunco-core" }

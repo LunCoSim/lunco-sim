@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 use std::collections::HashMap;
-use lunco_core::architecture::{CommandMessage, DigitalPort};
+use lunco_core::architecture::{CommandMessage, CommandResponse, CommandStatus, DigitalPort};
+use smallvec::smallvec;
 
 pub struct LunCoFswPlugin;
 
@@ -21,12 +22,16 @@ fn process_commands(
     trigger: On<CommandMessage>,
     mut q_fsw: Query<&mut FlightSoftware>,
     mut q_digital_ports: Query<&mut DigitalPort>,
+    mut commands: Commands,
 ) {
     let cmd = trigger.event();
     if let Ok(mut fsw) = q_fsw.get_mut(cmd.target) {
+        let mut status = CommandStatus::Ack;
+
         match cmd.name.as_str() {
             "DRIVE_ROVER" => {
                 if cmd.args.len() >= 1 {
+                    // DRIVE: clamp -1.0 to 1.0, map to i16 precision
                     let mut drive_power = (cmd.args[0] * 32767.0).clamp(-32767.0, 32767.0) as f32;
                     let mut steer_power = if cmd.args.len() >= 2 {
                         (cmd.args[1] * 32767.0).clamp(-32767.0, 32767.0) as f32
@@ -50,6 +55,8 @@ fn process_commands(
                     if let Some(&port_s) = fsw.port_map.get("steering") {
                         if let Ok(mut p) = q_digital_ports.get_mut(port_s) { p.raw_value = steer_power as i16; }
                     }
+                } else {
+                    status = CommandStatus::Failed("DRIVE_ROVER requires at least 1 argument".to_string());
                 }
             }
             "BRAKE_ROVER" => {
@@ -72,8 +79,16 @@ fn process_commands(
                     }
                 }
             }
-            _ => {}
+            _ => {
+                status = CommandStatus::Nack;
+            }
         }
+
+        // Emit feedback
+        commands.trigger(CommandResponse {
+            command_id: cmd.id,
+            status,
+        });
     }
 }
 
@@ -99,14 +114,15 @@ mod tests {
 
         // Forward (1.0) + Steer Left (-1.0)
         app.world_mut().trigger(CommandMessage {
+            id: 1,
             target: fsw_entity,
             name: "DRIVE_ROVER".to_string(),
-            args: vec![1.0, -1.0], 
+            args: smallvec![1.0, -1.0], 
             source: Entity::PLACEHOLDER,
         });
 
         // Left = 1.0 + (-1.0) = 0
-        // Right = 1.0 - (-1.0) = 2.0 -> 255
+        // Right = 1.0 - (-1.0) = 2.0 -> 32767
         assert_eq!(app.world().get::<DigitalPort>(p_l).unwrap().raw_value, 0);
         assert_eq!(app.world().get::<DigitalPort>(p_r).unwrap().raw_value, 32767);
     }
@@ -117,13 +133,14 @@ mod tests {
 
         // Forward (1.0) + Steer Right (1.0)
         app.world_mut().trigger(CommandMessage {
+            id: 2,
             target: fsw_entity,
             name: "DRIVE_ROVER".to_string(),
-            args: vec![1.0, 1.0], 
+            args: smallvec![1.0, 1.0], 
             source: Entity::PLACEHOLDER,
         });
 
-        // Left = 1.0 + 1.0 = 2.0 -> 255
+        // Left = 1.0 + 1.0 = 2.0 -> 32767
         // Right = 1.0 - 1.0 = 0
         assert_eq!(app.world().get::<DigitalPort>(p_l).unwrap().raw_value, 32767);
         assert_eq!(app.world().get::<DigitalPort>(p_r).unwrap().raw_value, 0);
@@ -135,18 +152,20 @@ mod tests {
 
         // Start Moving
         app.world_mut().trigger(CommandMessage {
+            id: 3,
             target: fsw_entity,
             name: "DRIVE_ROVER".to_string(),
-            args: vec![1.0, 0.0], 
+            args: smallvec![1.0, 0.0], 
             source: Entity::PLACEHOLDER,
         });
         assert_eq!(app.world().get::<DigitalPort>(p_l).unwrap().raw_value, 32767);
 
         // Apply Brake
         app.world_mut().trigger(CommandMessage {
+            id: 4,
             target: fsw_entity,
             name: "BRAKE_ROVER".to_string(),
-            args: vec![],
+            args: smallvec![],
             source: Entity::PLACEHOLDER,
         });
 

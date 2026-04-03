@@ -4350,6 +4350,7 @@ dependencies = [
  "bevy",
  "leafwing-input-manager",
  "lunco-core",
+ "smallvec",
 ]
 
 [[package]]
@@ -4357,6 +4358,7 @@ name = "lunco-core"
 version = "0.6.0"
 dependencies = [
  "bevy",
+ "smallvec",
 ]
 
 [[package]]
@@ -4365,6 +4367,7 @@ version = "0.6.0"
 dependencies = [
  "bevy",
  "lunco-core",
+ "smallvec",
 ]
 
 [[package]]

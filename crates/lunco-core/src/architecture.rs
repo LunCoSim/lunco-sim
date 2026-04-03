@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use smallvec::SmallVec;
 
 /// Level 2: Digital Port (OBC Emulation)
 /// Uses i16 (-32768 to 32767) to emulate hardware bit-depth
@@ -26,10 +27,38 @@ pub struct Wire {
 /// Level 3-5: The universal "Instruction" packet 
 #[derive(Event, Debug, Clone)]
 pub struct CommandMessage {
+    /// Unique command ID for tracking and telemetry correlation
+    pub id: u64,
+    /// The entity intended to receive/process this command
     pub target: Entity,
+    /// Semantic name of the command (e.g., "DRIVE_ROVER")
     pub name: String,
-    pub args: Vec<f32>,
+    /// High-precision arguments. Inline 4 f64 values (32 bytes) for zero-allocation hotspots.
+    pub args: SmallVec<[f64; 4]>,
+    /// The entity that originated the command
     pub source: Entity,
+}
+
+/// Status of a command in the simulation lifecycle
+#[derive(Debug, Clone, PartialEq, Reflect)]
+pub enum CommandStatus {
+    /// Command received and accepted for processing
+    Ack,
+    /// Command rejected (e.g., invalid parameters or state)
+    Nack,
+    /// Command is currently being executed
+    Processing,
+    /// Command finished successfully
+    Completed,
+    /// Command failed during execution
+    Failed(String),
+}
+
+/// Feedback event for a previously sent CommandMessage
+#[derive(Event, Debug, Clone, Reflect)]
+pub struct CommandResponse {
+    pub command_id: u64,
+    pub status: CommandStatus,
 }
 
 /// Allows components to describe their capabilities for AI/MCP discovery
