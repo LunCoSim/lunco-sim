@@ -67,7 +67,7 @@ fn global_transform_propagation_system(
             gtf_cache.insert(ent, *gtf);
         }
 
-        for (ent, mut gtf, local_tf, child_of_opt) in q_spatial.iter_mut() {
+        for (_ent, mut gtf, local_tf, child_of_opt) in q_spatial.iter_mut() {
             let parent_gtf = if let Some(child_of) = child_of_opt {
                 gtf_cache.get(&child_of.parent()).cloned().unwrap_or_default()
             } else {

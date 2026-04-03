@@ -1,6 +1,5 @@
 use bevy::prelude::*;
 use bevy::math::DVec3;
-use lunco_core::TimeWarpState;
 
 mod clock;
 mod ephemeris;
@@ -43,7 +42,7 @@ pub struct CelestialPlugin;
 
 impl Plugin for CelestialPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<CelestialClock>();
+        app.insert_resource(get_default_celestial_clock());
         app.init_resource::<TimeWarpState>();
         app.init_resource::<TerrainTileConfig>();
         app.init_resource::<TerrainMapRegistry>();

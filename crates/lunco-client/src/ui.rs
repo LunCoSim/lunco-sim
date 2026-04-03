@@ -76,7 +76,7 @@ fn main_ui_system(
     egui::Window::new("Mission Control").show(ctx, |ui| {
         ui.heading("Epoch & UTC Time");
         ui.label(format!("JD: {:.4}", clock.epoch));
-        ui.label(format!("UTC: {}", clock.to_utc_string()));
+        ui.label(format!("UTC: {}", lunco_celestial::jd_to_utc_string(clock.epoch)));
         
         ui.horizontal(|ui| {
             if ui.button(if clock.paused { "▶ Play" } else { "⏸ Pause" }).clicked() {
@@ -226,6 +226,10 @@ fn main_ui_system(
 
     egui::Window::new("Telemetry").anchor(egui::Align2::RIGHT_TOP, [-10.0, 10.0]).show(ctx, |ui| {
         ui.heading("Avatar Status");
+        ui.label(format!("Epoch: {:.4}", clock.epoch));
+        ui.label(lunco_celestial::jd_to_utc_string(clock.epoch));
+        ui.separator();
+
         for (_, obs) in q_camera.iter() {
             ui.horizontal(|ui| {
                 ui.label("Mode:");

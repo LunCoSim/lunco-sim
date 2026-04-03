@@ -73,12 +73,32 @@ pub struct TimeWarpState {
     pub physics_enabled: bool,
 }
 
+#[derive(Resource, Debug, Clone, Copy, Reflect)]
+#[reflect(Resource)]
+pub struct CelestialClock {
+    pub epoch: f64,            // Julian Date (TDB)
+    pub speed_multiplier: f64, // 1.0 = real-time
+    pub paused: bool,
+}
+
+impl Default for CelestialClock {
+    fn default() -> Self {
+        Self {
+            epoch: 2451545.0, // J2000.0
+            speed_multiplier: 1.0,
+            paused: false,
+        }
+    }
+}
+
 impl Plugin for LunCoCorePlugin {
     fn build(&self, app: &mut App) {
         app.register_type::<Severity>()
            .register_type::<TelemetryValue>()
            .register_type::<TelemetryEvent>()
            .register_type::<Parameter>()
+           .register_type::<SampledParameter>()
+           .register_type::<CelestialClock>()
            .register_type::<OrbitState>()
            .register_type::<PhysicalPort>()
            .register_type::<DigitalPort>()

@@ -1,46 +1,34 @@
 use bevy::prelude::*;
-use lunco_core::TimeWarpState;
+pub use lunco_core::{TimeWarpState, CelestialClock};
 
-#[derive(Resource)]
-pub struct CelestialClock {
-    pub epoch: f64,            // Julian Date (TDB)
-    pub speed_multiplier: f64, // 1.0 = real-time
-    pub paused: bool,
-}
-
-impl Default for CelestialClock {
-    fn default() -> Self {
-        use chrono::Utc;
-        
-        // Initializing from current system time
-        let now = Utc::now();
-        let unix_timestamp = now.timestamp() as f64 + (now.timestamp_subsec_nanos() as f64 / 1e9);
-        
-        // JD = (Unix Timestamp / 86400.0) + 2440587.5
-        let epoch = (unix_timestamp / 86400.0) + 2440587.5;
-        
-        Self {
-            epoch,
-            speed_multiplier: 1.0,
-            paused: false,
-        }
+pub fn get_default_celestial_clock() -> CelestialClock {
+    use chrono::Utc;
+    
+    // Initializing from current system time
+    let now = Utc::now();
+    let unix_timestamp = now.timestamp() as f64 + (now.timestamp_subsec_nanos() as f64 / 1e9);
+    
+    // JD = (Unix Timestamp / 86400.0) + 2440587.5
+    let epoch = (unix_timestamp / 86400.0) + 2440587.5;
+    
+    CelestialClock {
+        epoch,
+        speed_multiplier: 1.0,
+        paused: false,
     }
 }
 
-impl CelestialClock {
-    pub fn to_utc_string(&self) -> String {
-        use chrono::{Utc, TimeZone};
-        
-        // Convert Julian Date to Unix Timestamp (seconds since 1970-01-01)
-        // JD 2440587.5 is Unix Epoch
-        let unix_secs = (self.epoch - 2440587.5) * 86400.0;
-        
-        // Handle negative JD? Not for this sim.
-        if let Some(dt) = Utc.timestamp_opt(unix_secs as i64, ((unix_secs.rem_euclid(1.0)) * 1e9) as u32).single() {
-             dt.format("%Y-%m-%d %H:%M:%S UTC").to_string()
-        } else {
-             format!("JD {:.2}", self.epoch)
-        }
+pub fn jd_to_utc_string(epoch: f64) -> String {
+    use chrono::{Utc, TimeZone};
+    
+    // Convert Julian Date to Unix Timestamp (seconds since 1970-01-01)
+    // JD 2440587.5 is Unix Epoch
+    let unix_secs = (epoch - 2440587.5) * 86400.0;
+    
+    if let Some(dt) = Utc.timestamp_opt(unix_secs as i64, ((unix_secs.rem_euclid(1.0)) * 1e9) as u32).single() {
+         dt.format("%Y-%m-%d %H:%M:%S UTC").to_string()
+    } else {
+         format!("JD {:.2}", epoch)
     }
 }
 
