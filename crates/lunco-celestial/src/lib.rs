@@ -8,7 +8,6 @@ mod registry;
 mod big_space_setup;
 mod systems;
 mod coords;
-mod camera;
 mod gravity;
 mod soi;
 mod terrain;
@@ -21,7 +20,6 @@ pub use ephemeris::*;
 pub use registry::*;
 pub use big_space_setup::*;
 pub use systems::*;
-pub use camera::*;
 pub use gravity::*;
 pub use soi::*;
 pub use terrain::*;
@@ -78,7 +76,7 @@ impl Plugin for CelestialPlugin {
             soi_transition_system,
         ).chain());
 
-        app.add_plugins(camera::CameraMigrationPlugin);
+        app.add_plugins(lunco_camera::LunCoCameraPlugin);
 
         app.add_systems(Update, (
             update_sun_light_system,

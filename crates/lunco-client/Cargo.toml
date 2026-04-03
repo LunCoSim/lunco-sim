@@ -21,6 +21,7 @@ lunco-attributes = { path = "../lunco-attributes" }
 lunco-avatar = { path = "../lunco-avatar" }
 lunco-rover-raycast = { path = "../lunco-rover-raycast" }
 lunco-celestial = { path = "../lunco-celestial" }
+lunco-camera = { path = "../lunco-camera" }
 bevy_egui = { workspace = true }
 bevy-inspector-egui = { workspace = true }
 

@@ -4,7 +4,8 @@ use avian3d::prelude::*;
 
 use lunco_controller::ControllerLink;
 use lunco_core::{Vessel, Avatar, OrbitState};
-use lunco_celestial::{CelestialClock, ObserverCamera, ObserverMode};
+use lunco_celestial::CelestialClock;
+use lunco_camera::{ObserverCamera, ObserverMode};
 
 pub struct LunCoAvatarPlugin;
 
@@ -23,9 +24,7 @@ impl Plugin for LunCoAvatarPlugin {
             avatar_global_hotkeys,
         ).chain());
 
-        app.add_systems(PostUpdate, (
-            avatar_camera_follow
-        ).after(PhysicsSystems::Writeback));
+        // Modular camera system handles follow via ObserverCamera in lunco-camera
     }
 }
 
@@ -98,6 +97,7 @@ fn capture_avatar_intent(
         if keys.pressed(KeyCode::KeyE) { elevation += 1.0; }
         if keys.pressed(KeyCode::KeyQ) { elevation -= 1.0; }
 
+        // Capture intent
         intent.forward = forward;
         intent.side = side;
         intent.elevation = elevation;
@@ -106,6 +106,11 @@ fn capture_avatar_intent(
         
         // Trigger the intent globally for the translator to pick up
         commands.trigger(intent.clone());
+
+        // Phase 5: Preemption - Manual input cancels active automated actions (ViewPoint transitions, etc)
+        if forward.abs() > 0.1 || side.abs() > 0.1 || elevation.abs() > 0.1 {
+             commands.entity(entity).remove::<lunco_core::ActiveAction>();
+        }
     }
 }
 
@@ -207,58 +212,7 @@ fn avatar_orbit_input(
     }
 }
 
-fn avatar_camera_follow(
-    time: Res<Time>,
-    mut q_avatar: Query<(Entity, &mut Transform, &OrbitState, &ControllerLink), (With<Avatar>, Without<DetachedCamera>)>,
-    q_targets: Query<(&Transform, Option<&ChildOf>), (Without<lunco_celestial::CelestialBody>, Without<Avatar>)>,
-    q_planets: Query<&GlobalTransform, With<lunco_celestial::CelestialBody>>,
-    q_grids: Query<&big_space::grid::Grid>,
-    mut commands: Commands,
-) {
-    for (cam_entity, mut transform, orbit, link) in q_avatar.iter_mut() {
-        if let Ok((target_transform, parent_opt)) = q_targets.get(link.vessel_entity) {
-            let target_pos = target_transform.translation;
-            
-            // Grid Migration for Local Stability
-            if let Some(child_of) = parent_opt {
-                let mut current = child_of.get();
-                let mut found_grid = None;
-                for _ in 0..10 {
-                    if q_grids.contains(current) { 
-                        found_grid = Some(current); 
-                        break; 
-                    }
-                    if let Ok((_, Some(p))) = q_targets.get(current) { 
-                        current = p.get(); 
-                    } else { 
-                        break; 
-                    }
-                }
-                if let Some(grid_parent) = found_grid {
-                    commands.entity(cam_entity).set_parent_in_place(grid_parent);
-                }
-            }
-
-            // Planet-relative orientation (surface at bottom)
-            let mut up = Vec3::Y;
-            if let Some(child_of) = parent_opt {
-                if let Ok(planet_gtf) = q_planets.get(child_of.get()) {
-                    up = (target_pos - planet_gtf.translation()).normalize();
-                }
-            }
-
-            let orbit_rot = Quat::from_euler(EulerRot::YXZ, orbit.yaw, orbit.pitch, 0.0);
-            let local_rot = Quat::from_rotation_arc(Vec3::Y, up) * orbit_rot;
-            
-            let offset = local_rot * Vec3::new(0.0, 0.0, orbit.distance);
-            let target_with_offset = target_pos + up * orbit.vertical_offset;
-            
-            let lerp_factor = (15.0 * time.delta_secs()).min(1.0);
-            transform.translation = transform.translation.lerp(target_with_offset + offset, lerp_factor);
-            transform.look_at(target_pos, up);
-        }
-    }
-}
+// avatar_camera_follow removed - functionality moved to lunco-camera::update_observer_camera_system
 
 fn avatar_raycast_possession(
     mouse: Res<ButtonInput<MouseButton>>,

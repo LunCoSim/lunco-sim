@@ -7,3 +7,4 @@ edition = "2021"
 bevy = { workspace = true, features = ["default"] }
 lunco-core = { path = "../lunco-core" }
 big_space = { workspace = true }
+smallvec = { workspace = true }

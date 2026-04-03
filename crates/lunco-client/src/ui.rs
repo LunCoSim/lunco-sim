@@ -1,7 +1,8 @@
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts, EguiPlugin, EguiPrimaryContextPass};
-use lunco_core::{RoverVessel, Vessel, Avatar};
-use lunco_celestial::{CelestialClock, ObserverCamera, CelestialBody, TrajectoryView, TrajectoryFrame, Spacecraft};
+use lunco_core::{RoverVessel, Vessel, Avatar, Spacecraft};
+use lunco_celestial::{CelestialClock, CelestialBody, TrajectoryView, TrajectoryFrame};
+use lunco_camera::{ObserverCamera, ObserverMode, CameraScroll};
 use lunco_controller::{ControllerLink, SpaceSystemAction, get_default_input_map};
 use lunco_physics::Suspension;
 
@@ -62,7 +63,7 @@ fn main_ui_system(
     q_children: Query<&Children>,
     mut q_suspension: Query<(Entity, &mut Suspension)>,
     mut commands: Commands,
-    mut scroll_res: ResMut<lunco_celestial::CameraScroll>,
+    mut scroll_res: ResMut<CameraScroll>,
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
     let Ok(ctx) = contexts.ctx_mut() else { return; };
@@ -229,13 +230,13 @@ fn main_ui_system(
             ui.horizontal(|ui| {
                 ui.label("Mode:");
                 match obs.mode {
-                    lunco_celestial::ObserverMode::Orbital => ui.colored_label(egui::Color32::from_rgb(100, 150, 255), "ORBITAL"),
-                    lunco_celestial::ObserverMode::Flyby => ui.colored_label(egui::Color32::from_rgb(255, 200, 50), "FLYBY"),
-                    lunco_celestial::ObserverMode::Surface => ui.colored_label(egui::Color32::from_rgb(50, 255, 100), "SURFACE"),
+                    ObserverMode::Orbital => ui.colored_label(egui::Color32::from_rgb(100, 150, 255), "ORBITAL"),
+                    ObserverMode::Flyby => ui.colored_label(egui::Color32::from_rgb(255, 200, 50), "FLYBY"),
+                    ObserverMode::Surface => ui.colored_label(egui::Color32::from_rgb(50, 255, 100), "SURFACE"),
                 };
             });
             ui.label(format!("Alt: {:.3} km", obs.altitude / 1000.0));
-            if obs.mode == lunco_celestial::ObserverMode::Orbital {
+            if obs.mode == ObserverMode::Orbital {
                 ui.label(format!("Orbital Dist: {:.0} km", obs.distance / 1000.0));
             } else {
                 ui.label(format!("Center Offset: {:.0} m", obs.local_flyby_pos.length()));

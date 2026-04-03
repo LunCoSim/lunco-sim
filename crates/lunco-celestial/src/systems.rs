@@ -3,7 +3,7 @@ use bevy::math::DQuat;
 use big_space::prelude::*;
 
 use crate::big_space_setup::{SolarSystemRoot, EarthRoot, MoonRoot};
-use crate::camera::ObserverCamera;
+use lunco_camera::ObserverCamera;
 use crate::clock::CelestialClock;
 use crate::ephemeris::EphemerisResource;
 use crate::registry::{CelestialBody, CelestialBodyRegistry, CelestialReferenceFrame};
@@ -151,7 +151,7 @@ pub fn celestial_telemetry_system(
 
 pub fn celestial_visuals_system(
     mut materials: ResMut<Assets<BlueprintMaterial>>,
-    q_camera: Query<(Entity, &CellCoord, &Transform, &ObserverCamera), With<crate::ActiveCamera>>,
+    q_camera: Query<(Entity, &CellCoord, &Transform, &ObserverCamera), With<lunco_camera::ActiveCamera>>,
     q_bodies: Query<(Entity, &CellCoord, &Transform, &MeshMaterial3d<BlueprintMaterial>, &CelestialBody)>,
     q_tiles: Query<(&MeshMaterial3d<BlueprintMaterial>, &crate::terrain::TileCoord), With<crate::terrain::ActiveTerrainTile>>,
     q_parents: Query<&ChildOf>,
@@ -175,12 +175,12 @@ pub fn celestial_visuals_system(
             let start_transition_alt = 100_000.0;
             let end_transition_alt = 10_000.0;
             
-            let transition = ((start_transition_alt - altitude) / (start_transition_alt - end_transition_alt))
-                .clamp(0.0, 1.0) as f32;
+            let transition = (((start_transition_alt - altitude) / (start_transition_alt - end_transition_alt)) as f64)
+                .clamp(0.0, 1.0);
                 
-            mat.extension.transition = transition;
+            mat.extension.transition = transition as f32;
             mat.extension.body_radius = body.radius_m as f32;
-            body_transitions.insert(body_ent, transition);
+            body_transitions.insert(body_ent, transition as f32);
         }
     }
 

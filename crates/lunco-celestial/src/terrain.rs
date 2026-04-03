@@ -7,7 +7,7 @@ use futures_lite::future;
 use std::sync::Arc;
 use avian3d::prelude::*;
 use crate::registry::CelestialBody;
-use crate::camera::ObserverCamera;
+use lunco_camera::ObserverCamera;
 
 #[derive(Resource, Reflect)]
 #[reflect(Resource)]
@@ -85,13 +85,17 @@ pub fn terrain_spawn_system(
     q_tiles: Query<(Entity, &TileCoord)>,
 ) {
     let Some((cam_gtf, _obs)) = q_camera.iter().next() else { return; };
-    let camera_pos = cam_gtf.translation().as_dvec3();
+    // Use compute_matrix for unambiguous coordinate extraction in Bevy 0.18
+    let c_trans = cam_gtf.to_matrix().transform_point3(Vec3::ZERO);
+    let camera_pos = DVec3::new(c_trans.x as f64, c_trans.y as f64, c_trans.z as f64);
     
     let mut nearest_body = None;
     let mut min_altitude = f64::MAX;
     
     for (body_ent, body_gtf, body) in q_bodies.iter() {
-        let dist = camera_pos.distance(body_gtf.translation().as_dvec3());
+        let b_trans = body_gtf.to_matrix().transform_point3(Vec3::ZERO);
+        let body_pos = DVec3::new(b_trans.x as f64, b_trans.y as f64, b_trans.z as f64);
+        let dist = camera_pos.distance(body_pos);
         let alt = dist - body.radius_m;
         if alt < min_altitude {
             min_altitude = alt;
@@ -100,7 +104,8 @@ pub fn terrain_spawn_system(
     }
 
     let Some((body_ent, body_gtf, body)) = nearest_body else { return; };
-    let body_pos = body_gtf.translation().as_dvec3();
+    let final_b_trans = body_gtf.to_matrix().transform_point3(Vec3::ZERO);
+    let body_pos = DVec3::new(final_b_trans.x as f64, final_b_trans.y as f64, final_b_trans.z as f64);
 
     if min_altitude < config.spawn_threshold {
         let mut desired_tiles = std::collections::HashSet::new();
@@ -175,7 +180,8 @@ pub fn finalize_terrain_tiles(
     q_camera: Query<&GlobalTransform, With<Camera>>,
 ) {
     let Some(cam_gtf) = q_camera.iter().next() else { return; };
-    let camera_pos = cam_gtf.translation().as_dvec3();
+    let c_trans = cam_gtf.to_matrix().transform_point3(Vec3::ZERO);
+    let camera_pos = DVec3::new(c_trans.x as f64, c_trans.y as f64, c_trans.z as f64);
 
     for (ent, coord, mut pending) in q_pending.iter_mut() {
         if let Some(data) = future::block_on(future::poll_once(&mut pending.0)) {
@@ -184,7 +190,9 @@ pub fn finalize_terrain_tiles(
                 continue; 
             };
             
-            let dist = camera_pos.distance(_gtf.translation().as_dvec3());
+            let b_trans = _gtf.to_matrix().transform_point3(Vec3::ZERO);
+            let body_pos = DVec3::new(b_trans.x as f64, b_trans.y as f64, b_trans.z as f64);
+            let dist = camera_pos.distance(body_pos);
             let altitude = dist - body.radius_m;
 
             // Get texture from body material

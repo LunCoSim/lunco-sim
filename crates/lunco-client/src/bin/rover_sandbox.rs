@@ -17,7 +17,8 @@ use lunco_rover_raycast::{
 };
 use lunco_controller::{LunCoControllerPlugin, SpaceSystemAction, get_default_input_map}; 
 use lunco_avatar::LunCoAvatarPlugin;
-use lunco_celestial::{BlueprintMaterial, BlueprintExtension, ObserverCamera, ObserverMode, CelestialClock, CelestialBody};
+use lunco_celestial::{BlueprintMaterial, BlueprintExtension, CelestialClock, CelestialBody};
+use lunco_camera::{ObserverCamera, ObserverMode, ActiveCamera};
 
 fn main() {
     let mut app = App::new();
@@ -220,6 +221,6 @@ fn setup_sandbox(
         CellCoord::default(),
         ActionState::<SpaceSystemAction>::default(),
         get_default_input_map(),
-        lunco_celestial::ActiveCamera,
+        ActiveCamera,
     )).set_parent_in_place(grid_entity);
 }

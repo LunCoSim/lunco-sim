@@ -47,22 +47,14 @@ pub struct MissionSpacecraft {
     pub marker_color: Option<[f32; 4]>,
 }
 
-#[derive(Component)]
-pub struct Spacecraft {
-    pub ephemeris_id: i32,
-    pub reference_id: i32,
-    pub start_epoch_jd: Option<f64>,
-    pub end_epoch_jd: Option<f64>,
-    pub hit_radius_m: f32,
-    pub user_visible: bool,
-}
+use lunco_core::Spacecraft;
 
 #[derive(Component)]
 pub struct SpacecraftBillboard;
 
 pub fn spacecraft_billboard_system(
     mut q_billboards: Query<(&mut Transform, &ChildOf), With<SpacecraftBillboard>>,
-    q_camera: Query<&GlobalTransform, With<crate::camera::ObserverCamera>>,
+    q_camera: Query<&GlobalTransform, With<lunco_camera::ObserverCamera>>,
     q_global: Query<&GlobalTransform>,
 ) {
     if let Some(cam_gtf) = q_camera.iter().next() {
@@ -141,6 +133,7 @@ pub fn load_missions_system(mut commands: Commands, mut registry: ResMut<Mission
                             let mut sc_ent = commands.spawn((
                                 Name::new(sc.name.clone()),
                                 Spacecraft {
+                                    name: sc.name.clone(),
                                     ephemeris_id: sc.ephemeris_id,
                                     reference_id: sc.reference_id,
                                     start_epoch_jd: sc.start_epoch_jd,
@@ -281,7 +274,7 @@ pub struct FocusOnStart;
 
 pub fn mission_focus_system(
     q_focus: Query<Entity, Added<FocusOnStart>>,
-    mut q_camera: Query<&mut crate::camera::ObserverCamera>,
+    mut q_camera: Query<&mut lunco_camera::ObserverCamera>,
     mut commands: Commands,
 ) {
     for ent in q_focus.iter() {

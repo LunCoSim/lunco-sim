@@ -7,12 +7,7 @@ pub struct CelestialBodyRegistry {
     pub bodies: Vec<BodyDescriptor>,
 }
 
-#[derive(Component, Debug, Clone)]
-pub struct CelestialBody {
-    pub name: String,
-    pub ephemeris_id: i32,
-    pub radius_m: f64,
-}
+pub use lunco_core::CelestialBody;
 
 #[derive(Component, Debug, Clone)]
 pub struct CelestialReferenceFrame {

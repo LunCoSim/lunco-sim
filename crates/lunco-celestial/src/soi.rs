@@ -1,6 +1,6 @@
 use bevy::prelude::*;
+use bevy::math::DVec3;
 use big_space::prelude::*;
-use crate::registry::CelestialBody;
 
 #[derive(Component)]
 pub struct SOI {
@@ -9,19 +9,22 @@ pub struct SOI {
 
 pub fn soi_transition_system(
     mut commands: Commands,
-    q_entities: Query<(Entity, &GlobalTransform, &ChildOf), (Without<CelestialBody>, Without<Grid>)>,
-    q_bodies: Query<(Entity, &GlobalTransform, &SOI, &CelestialBody)>,
+    q_entities: Query<(Entity, &GlobalTransform, &ChildOf), (Without<crate::registry::CelestialBody>, Without<Grid>)>,
+    q_bodies: Query<(Entity, &GlobalTransform, &SOI, &crate::registry::CelestialBody)>,
     q_all_grids: Query<&Grid>,
 ) {
     for (entity, gtf, child_of) in q_entities.iter() {
-        let current_pos = gtf.translation().as_dvec3();
+        // Use compute_matrix to get an unambiguous translation Vec3 in Bevy 0.18
+        let c_trans = gtf.to_matrix().transform_point3(Vec3::ZERO);
+        let current_pos = DVec3::new(c_trans.x as f64, c_trans.y as f64, c_trans.z as f64);
         let current_p_grid = child_of.parent();
         
         let mut best_body = None;
         let mut min_dist = f64::MAX;
 
         for (body_ent, body_gtf, soi, _body) in q_bodies.iter() {
-            let body_pos = body_gtf.translation().as_dvec3();
+            let b_trans = body_gtf.to_matrix().transform_point3(Vec3::ZERO);
+            let body_pos = DVec3::new(b_trans.x as f64, b_trans.y as f64, b_trans.z as f64);
             let dist = (current_pos - body_pos).length();
             
             if dist < soi.radius_m {
@@ -33,21 +36,19 @@ pub fn soi_transition_system(
         }
 
         if let Some(new_parent_grid_ent) = best_body {
-            if new_parent_grid_ent != current_p_grid && q_all_grids.contains(new_parent_grid_ent) {
+            if new_parent_grid_ent != current_p_grid {
                 if let Ok(new_grid) = q_all_grids.get(new_parent_grid_ent) {
                     // Re-parent in big_space
-                    let (new_cell, new_transform) = new_grid.translation_to_grid(current_pos - q_bodies.get(new_parent_grid_ent).unwrap().1.translation().as_dvec3());
-                    // Wait, GlobalTransform in big_space is relative to origin.
-                    // If we re-parent, we want the same global position.
-                    // big_space 0.12 has some helpers but let's do it manually for now if needed.
-                    
-                    // Actually, commands.entity(entity).set_parent_in_place(new_parent_grid_ent) might NOT work correctly with big_space coordinates.
-                    // We need to update CellCoord and Transform.
+                    let target_gtf = q_bodies.get(new_parent_grid_ent).unwrap().1;
+                    let t_trans = target_gtf.to_matrix().transform_point3(Vec3::ZERO);
+                    let target_pos = DVec3::new(t_trans.x as f64, t_trans.y as f64, t_trans.z as f64);
+                    let (new_cell, new_transform) = new_grid.translation_to_grid(current_pos - target_pos);
                     
                     commands.entity(entity).insert((
                         new_cell,
                         Transform::from_translation(new_transform),
-                    )).set_parent_in_place(new_parent_grid_ent);
+                    ));
+                    commands.entity(new_parent_grid_ent).add_child(entity);
                 }
             }
         }

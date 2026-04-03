@@ -27,6 +27,35 @@ pub struct Wire {
     pub scale: f32,
 }
 
+/// Status of a long-running simulation action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Reflect, Default)]
+pub enum ActionStatus {
+    #[default]
+    Running,
+    Completed,
+    Preempted,
+    Failed,
+}
+
+/// Component attached to entities currently performing a long-running action.
+#[derive(Component, Debug, Clone, Reflect)]
+#[reflect(Component)]
+pub struct ActiveAction {
+    pub name: String,
+    pub status: ActionStatus,
+    pub progress: f32, // 0.0 to 1.0
+}
+
+impl Default for ActiveAction {
+    fn default() -> Self {
+        Self {
+            name: "Unknown".to_string(),
+            status: ActionStatus::Running,
+            progress: 0.0,
+        }
+    }
+}
+
 /// Level 3-5: The universal "Instruction" packet 
 #[derive(Event, Debug, Clone)]
 pub struct CommandMessage {
