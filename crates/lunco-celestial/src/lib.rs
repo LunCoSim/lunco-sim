@@ -1,3 +1,12 @@
+//! Solar system simulation and celestial mechanics.
+//!
+//! This crate implements the core of the LunCo digital twin, including:
+//! - **Ephemeris**: High-precision planetary positioning and rotation data.
+//! - **Gravity**: Global gravity forces for orbits and surface interactions.
+//! - **SOI (Sphere of Influence)**: Automatic coordinate frame transitions.
+//! - **Terrain**: Dynamic procedural terrain generation for planetary surfaces.
+//! - **Trajectories**: Rendering of orbital paths and mission predictions.
+
 use bevy::prelude::*;
 use bevy::math::DVec3;
 

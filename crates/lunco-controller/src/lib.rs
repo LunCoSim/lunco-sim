@@ -1,8 +1,15 @@
+//! Input mapping and controller translation for simulation vessels.
+//!
+//! This crate translates raw user input (Keyboard, Gamepad) into 
+//! high-level [CommandMessage] events that the Flight Software can consume.
+//! It abstracts the UI/Input layer from the simulation core.
+
 use bevy::prelude::*;
 use leafwing_input_manager::prelude::*;
 use lunco_core::architecture::CommandMessage;
 use smallvec::smallvec;
 
+/// Plugin for managing vessel input and command translation.
 pub struct LunCoControllerPlugin;
 
 impl Plugin for LunCoControllerPlugin {
@@ -12,26 +19,36 @@ impl Plugin for LunCoControllerPlugin {
     }
 }
 
+/// Abstract intents specifically for controlling a vessel's movement.
 #[derive(Actionlike, PartialEq, Eq, Hash, Clone, Copy, Debug, Reflect)]
 pub enum VesselIntent {
+    /// Request forward longitudinal movement.
     DriveForward,
+    /// Request backward longitudinal movement.
     DriveReverse,
+    /// Request lateral rotation to the left.
     SteerLeft,
+    /// Request lateral rotation to the right.
     SteerRight,
+    /// Request activation of the braking system.
     Brake,
 }
 
+/// Alias for [ActionState] specialized for [VesselIntent].
 pub type VesselIntentState = ActionState<VesselIntent>;
 
-/// A marker component mapping the controller Entity (which has Leafwing) directly 
-/// to the Space System root Entity (which has the Flight Software observer).
+/// A marker component mapping the controller Entity directly 
+/// to the Space System root Entity (the focus of the control).
 #[derive(Component)]
 pub struct ControllerLink {
+    /// The entity representing the vehicle or vessel to be controlled.
     pub vessel_entity: Entity,
 }
 
-/// Level 4 (Controller) translation logic.
-/// Translates abstract human WASD actions into standardized FSW string intent.
+/// Translates abstract human WASD actions into standardized [CommandMessage] events.
+///
+/// This system implements the 'Level 4' Controller logic, mixing various 
+/// intents (like Forward + Left) into single [CommandMessage] packets.
 fn translate_intents_to_commands(
     q_controllers: Query<(&VesselIntentState, &ControllerLink)>,
     keys: Res<ButtonInput<KeyCode>>,
@@ -42,26 +59,27 @@ fn translate_intents_to_commands(
     let ctrl_pressed = keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
 
     for (intent_state, link) in q_controllers.iter() {
-        // Forward/Reverse Intent Mixing (Inhibited by CTRL)
+        // Forward/Reverse Intent Mixing (Inhibited by CTRL to ensure keys aren't
+        // processed twice if used for other hotkeys).
         let mut forward_intent = 0.0;
         if !ctrl_pressed {
             if intent_state.pressed(&VesselIntent::DriveForward) { forward_intent += 1.0; }
             if intent_state.pressed(&VesselIntent::DriveReverse) { forward_intent -= 1.0; }
         }
         
-        // Steering Intent Mixing (Inhibited by CTRL)
+        // Steering Intent Mixing.
         let mut steer_intent = 0.0;
         if !ctrl_pressed {
             if intent_state.pressed(&VesselIntent::SteerLeft) { steer_intent -= 1.0; }
             if intent_state.pressed(&VesselIntent::SteerRight) { steer_intent += 1.0; }
         }
 
-        // Brake Intent (Stateful, Inhibited by CTRL)
+        // Brake Intent.
         let brake_intent = if !ctrl_pressed && intent_state.pressed(&VesselIntent::Brake) { 1.0 } else { 0.0 };
 
         let current = (forward_intent, steer_intent, brake_intent);
         if last_intents.map_or(true, |last| last != current) {
-            // DRIVE_ROVER (includes steering)
+            // DRIVE_ROVER command: Mixed longitudinal and lateral intent.
             *id_counter += 1;
             commands.trigger(CommandMessage {
                 id: *id_counter,
@@ -71,7 +89,7 @@ fn translate_intents_to_commands(
                 args: smallvec![forward_intent, steer_intent],
             });
 
-            // BRAKE_ROVER (Refined to pass duty/state)
+            // BRAKE_ROVER command: Explicit braking request.
             *id_counter += 1;
             commands.trigger(CommandMessage {
                 id: *id_counter,
@@ -86,6 +104,7 @@ fn translate_intents_to_commands(
     }
 }
 
+/// Provides a standard WASD + Space mapping for vessel control.
 pub fn get_default_input_map() -> InputMap<VesselIntent> {
     use VesselIntent::*;
     InputMap::new([
@@ -97,6 +116,7 @@ pub fn get_default_input_map() -> InputMap<VesselIntent> {
     ])
 }
 
+/// Provides a standard WASD + EQ + Space mapping for generic avatar movement.
 pub fn get_avatar_input_map() -> InputMap<lunco_core::UserIntent> {
     use lunco_core::UserIntent::*;
     InputMap::new([
@@ -111,3 +131,4 @@ pub fn get_avatar_input_map() -> InputMap<lunco_core::UserIntent> {
         (Pause, KeyCode::Space),
     ])
 }
+

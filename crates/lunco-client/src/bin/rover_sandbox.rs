@@ -1,3 +1,10 @@
+//! A standalone sandbox for rapid testing of ground mobility and physics.
+//!
+//! This binary bypasses the full celestial ephemeris system to provide a 
+//! stable, flat-ground environment for debugging rovers, actuators, and FSW.
+//! It serves as the primary development playground for mechanical engineering 
+//! and control logic.
+
 use bevy::prelude::*;
 use bevy::asset::io::AssetSourceBuilder;
 use bevy::math::DVec3;
@@ -18,6 +25,7 @@ use lunco_avatar::{LunCoAvatarPlugin, IntentAnalogState};
 use lunco_celestial::{BlueprintMaterial, BlueprintExtension, CelestialClock, CelestialBody};
 use lunco_camera::{ObserverCamera, ObserverMode, ActiveCamera};
 
+/// Sandbox application entry point.
 fn main() {
     let mut app = App::new();
     app.insert_resource(Time::<Fixed>::from_hz(60.0))
@@ -28,6 +36,8 @@ fn main() {
             "cached_textures",
             AssetSourceBuilder::platform_default("../../.cache/textures", None),
         )
+        // BigSpace is used even in the sandbox to ensure architectural parity 
+        // with the main simulation client.
         .add_plugins(DefaultPlugins.build().disable::<TransformPlugin>())
         .add_plugins(BigSpaceDefaultPlugins.build().disable::<big_space::validation::BigSpaceValidationPlugin>())
         
@@ -42,6 +52,7 @@ fn main() {
         .add_plugins(LunCoControllerPlugin);
 
     // THE UNIVERSAL SYNC BRIDGE
+    // Required since TransformPlugin is disabled for BigSpace support.
     app.add_systems(PreUpdate, global_transform_propagation_system);
     app.add_systems(PostUpdate, global_transform_propagation_system.after(avian3d::prelude::PhysicsSystems::Writeback));
 
@@ -50,7 +61,7 @@ fn main() {
     app.run();
 }
 
-/// A robust multi-pass system to propagate GlobalTransform & Visibility across grids.
+/// A robust multi-pass system to propagate [GlobalTransform] and [Visibility] across grids.
 fn global_transform_propagation_system(
     mut commands: Commands,
     q_needs: Query<Entity, (Or<(With<Visibility>, With<Mesh3d>, With<Text>, With<Transform>)>, Without<InheritedVisibility>, Without<CellCoord>)>,
@@ -67,7 +78,6 @@ fn global_transform_propagation_system(
     }
 
     // 2. Transform propagation (Manual fallback for TransformPlugin)
-    // We do multiple passes to handle hierarchies (up to 4 levels)
     for _ in 0..4 {
         let mut gtf_cache = std::collections::HashMap::new();
         for (ent, gtf, _, _) in q_spatial.iter() {
@@ -110,6 +120,8 @@ fn global_transform_propagation_system(
     }
 }
 
+/// Initializes the sandbox scene, including lighting, a flat grounded grid, 
+/// and several rover prototypes for testing.
 fn setup_sandbox(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -134,7 +146,8 @@ fn setup_sandbox(
         Name::new("Sandbox_Grid"),
     )).set_parent_in_place(big_space_root).id();
 
-    // 1. Clip Plane Anchor (to force 0.1m near plane)
+    // 1. Clip Plane Anchor: Provides a reference for the camera's dynamic 
+    // clip plane adjustment system.
     commands.spawn((
         CelestialBody {
             name: "Sandbox_Focus".to_string(),
@@ -158,7 +171,7 @@ fn setup_sandbox(
         Name::new("Sandbox_Sun"),
     )).set_parent_in_place(grid_entity);
 
-    // 2b. Native Ambient Light (Bevy 0.18 uses a Component for this)
+    // Ambient light for general visibility.
     commands.spawn((
         AmbientLight {
             color: Color::WHITE,
@@ -168,10 +181,10 @@ fn setup_sandbox(
         Name::new("Sandbox_AmbientLight"),
     )).set_parent_in_place(grid_entity);
 
-    // 3. Ground
+    // 3. Ground with Blueprint Grid Material.
     let blueprint_mat = blueprint_materials.add(BlueprintMaterial {
         base: StandardMaterial {
-            base_color: Color::srgb(0.2, 0.2, 0.2), // Neutral dark ground
+            base_color: Color::srgb(0.2, 0.2, 0.2), 
             perceptual_roughness: 0.9,
             ..default()
         },
@@ -195,7 +208,7 @@ fn setup_sandbox(
         CellCoord::default(),
     )).set_parent_in_place(grid_entity);
 
-    // 4. Testing Ramp (Moved right next to the rovers!)
+    // 4. Testing Ramp for checking suspension and traction logic.
     let ramp_mat = materials.add(StandardMaterial {
         base_color: Color::srgb(0.7, 0.7, 0.7),
         ..default()
@@ -211,7 +224,7 @@ fn setup_sandbox(
         CellCoord::default(),
     )).set_parent_in_place(grid_entity);
 
-    // 5. ALL ROVERS RESTORED
+    // 5. Spawn prototype rovers of different steering and wheel types.
     let rovers_root = commands.spawn((
         Name::new("Rovers_Root"), 
         Transform::from_xyz(0.0, 0.0, 0.0), 
@@ -219,7 +232,7 @@ fn setup_sandbox(
         CellCoord::default(),
     )).set_parent_in_place(grid_entity).id();
     
-    // Joint-Based Rovers
+    // Joint-Based Rovers (Complex physics)
     spawn_joint_rover(
         &mut commands, 
         &mut meshes,
@@ -242,7 +255,7 @@ fn setup_sandbox(
         SteeringType::Ackermann,
     );
 
-    // Raycast-Based Rovers
+    // Raycast-Based Rovers (High-performance simulation)
     let r_skid = spawn_raycast_rover(
         &mut commands, 
         &mut meshes,
@@ -277,13 +290,12 @@ fn setup_sandbox(
         }),
         bevy::core_pipeline::tonemapping::Tonemapping::TonyMcMapface,
         bevy::post_process::bloom::Bloom::NATURAL,
-        // Start slightly from behind, looking softly from above
         Transform::default(), 
         ObserverCamera { 
             mode: ObserverMode::Orbital,
             focus_target: Some(rovers_root),
-            altitude: 20.0,     // Prevents celestial system from resetting camera distance
-            distance: 20.0,     // 20 meters away
+            altitude: 20.0,
+            distance: 20.0,
             ..default()
         },
         FloatingOrigin,
@@ -294,3 +306,4 @@ fn setup_sandbox(
         ActiveCamera,
     )).set_parent_in_place(grid_entity);
 }
+

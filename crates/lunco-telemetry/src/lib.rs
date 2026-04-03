@@ -1,32 +1,43 @@
+//! Automated telemetry sampling and monitoring systems.
+//!
+//! This crate implements a generic telemetry engine that uses Bevy's reflection
+//! system to sample any component field at runtime without requiring 
+//! specialized sampling code for every device.
+
 use bevy::prelude::*;
 use lunco_core::telemetry::{Parameter, TelemetryEvent, Severity, TelemetryValue};
 
+/// Plugin for managing the automated telemetry sampling cycle.
 pub struct LunCoTelemetryPlugin;
 
 impl Plugin for LunCoTelemetryPlugin {
     fn build(&self, app: &mut App) {
-        // Run sampling every Update frame for now; in a real simulation, we'd use a timer.
+        // Run sampling every Update frame to ensure live monitoring in the UI.
         app.add_systems(Update, sample_parameters_system);
     }
 }
 
+/// System wrapper for the world-based parameters sampling.
 fn sample_parameters_system(world: &mut World) {
     sample_parameters(world);
 }
 
-// Re-implementing as a world system for reflection access
+/// The core sampling logic using reflection.
+///
+/// Iterates over all entities with [Parameter] components and drills down 
+/// into their target component fields to extract current simulation values.
 pub fn sample_parameters(world: &mut World) {
     let type_registry = world.resource::<AppTypeRegistry>().clone();
     let registry_read = type_registry.read();
     
-    // We need to collect parameters first to avoid borrow checker issues with world
+    // We collect samples first to avoid multiple mutable borrows of the World.
     let mut samples = Vec::new();
     
     let mut query = world.query::<(Entity, &Parameter)>();
     for (entity, param) in query.iter(world) {
         if param.path.is_empty() { continue; }
         
-        // Split path (e.g., "PhysicalPort.value")
+        // Split path (e.g., "PhysicalPort.value") to identify the component and field.
         let mut parts = param.path.split('.');
         let component_name = parts.next().unwrap_or("");
         let field_path = parts.collect::<Vec<&str>>().join(".");
@@ -35,7 +46,7 @@ pub fn sample_parameters(world: &mut World) {
             if let Some(reflect_component) = reg.data::<ReflectComponent>() {
                 if let Ok(entity_ref) = world.get_entity(entity) {
                     if let Some(reflect_data) = reflect_component.reflect(entity_ref) {
-                        // Drill down
+                        // Dynamically navigate the reflection tree to the target field.
                         let target: Option<&dyn PartialReflect> = if field_path.is_empty() {
                             Some(reflect_data.as_partial_reflect())
                         } else {
@@ -43,6 +54,7 @@ pub fn sample_parameters(world: &mut World) {
                         };
                         
                         if let Some(value_reflect) = target {
+                            // Convert various reflected types into unified TelemetryValue types.
                             let val = if let Some(v) = value_reflect.try_downcast_ref::<f32>() {
                                 TelemetryValue::F64(*v as f64)
                             } else if let Some(v) = value_reflect.try_downcast_ref::<f64>() {
@@ -59,7 +71,7 @@ pub fn sample_parameters(world: &mut World) {
                                 name: param.name.clone(),
                                 severity: Severity::Info,
                                 data: val,
-                                timestamp: 0.0, 
+                                timestamp: 0.0, // TODO: Sync with simulation clock
                             });
                         }
                     }
@@ -68,11 +80,12 @@ pub fn sample_parameters(world: &mut World) {
         }
     }
     
-    // Trigger events as immediate pulses
+    // Trigger [TelemetryEvent] pulses for each sample captured.
     for sample in samples {
         world.trigger(sample);
     }
 }
+
 
 #[cfg(test)]
 mod tests {

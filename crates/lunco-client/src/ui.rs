@@ -1,3 +1,12 @@
+//! Graphical User Interface for the simulation client.
+//!
+//! This module implements the "Mission Control" center using `bevy_egui`. 
+//! It provides tools for:
+//! - **Time Management**: Controlling simulation epoch and time-warp speed.
+//! - **Selection & Focus**: Inspecting entities and controlling the camera.
+//! - **Mechanical Inspection**: Live tuning of suspension and motor parameters.
+//! - **Surface Spawning**: Interactive vessel deployment on planetary surfaces.
+
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts, EguiPlugin, EguiPrimaryContextPass};
 use lunco_core::{RoverVessel, Vessel, Avatar, Spacecraft};
@@ -6,6 +15,7 @@ use lunco_camera::{ObserverCamera, ObserverMode, CameraScroll};
 use lunco_controller::{ControllerLink, VesselIntent, get_default_input_map};
 use lunco_mobility::Suspension;
 
+/// Plugin for managing the simulation's graphical user interface.
 pub struct LunCoUiPlugin;
 
 impl Plugin for LunCoUiPlugin {
@@ -21,16 +31,19 @@ impl Plugin for LunCoUiPlugin {
     }
 }
 
+/// Resource tracking the currently selected entity in the UI.
 #[derive(Resource, Default)]
 struct SelectedEntity {
     entity: Option<Entity>,
 }
 
+/// Resource tracking a pending request to spawn a vessel on a surface.
 #[derive(Resource, Default)]
 struct PendingSpawn {
     request: Option<lunco_celestial::SurfaceClickEvent>,
 }
 
+/// Observer that captures surface clicks to initiate the spawning workflow.
 fn on_surface_click(
     trigger: On<lunco_celestial::SurfaceClickEvent>,
     mut pending: ResMut<PendingSpawn>,
@@ -43,6 +56,7 @@ fn on_surface_click(
     });
 }
 
+/// Observer that captures clicks on rovers to update the UI selection.
 fn on_rover_click(
     trigger: On<lunco_celestial::RoverClickEvent>,
     mut selected: ResMut<SelectedEntity>,
@@ -50,6 +64,7 @@ fn on_rover_click(
     selected.entity = Some(trigger.event().rover);
 }
 
+/// The primary UI system that renders the egui windows.
 fn main_ui_system(
     mut contexts: EguiContexts,
     mut selected: ResMut<SelectedEntity>,
@@ -69,12 +84,13 @@ fn main_ui_system(
 ) {
     let Ok(ctx) = contexts.ctx_mut() else { return; };
     
-    // Capture scroll before Egui potentially consumes it (if not over window)
+    // Process scroll input for camera zoom when not hovering over UI panels.
     if !ctx.is_pointer_over_area() {
         scroll_res.delta = ctx.input(|i| i.raw_scroll_delta.y);
     }
 
     egui::Window::new("Mission Control").show(ctx, |ui| {
+        // ... (egui window content)
         ui.heading("Epoch & UTC Time");
         ui.label(format!("JD: {:.4}", clock.epoch));
         ui.label(format!("UTC: {}", lunco_celestial::jd_to_utc_string(clock.epoch)));
@@ -257,6 +273,8 @@ fn main_ui_system(
     });
 }
 
+/// Recursively inspects the mechanical parameters (like suspension) of a vessel 
+/// and its children, rendering egui controls for real-time tuning.
 fn inspect_suspension_recursive(
     ui: &mut egui::Ui,
     entity: Entity,
@@ -276,3 +294,4 @@ fn inspect_suspension_recursive(
         }
     }
 }
+

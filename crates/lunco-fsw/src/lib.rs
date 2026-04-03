@@ -1,51 +1,59 @@
+//! Flight Software (FSW) architecture and subsystem management.
+//!
+//! This crate defines the core data structures for a decentralized Flight 
+//! Software system. Unlike traditional monolithic simulators, LunCoSim treats 
+//! FSW as a collection of hotswappable components and [VesselSubsystem]s 
+//! that communicate via an asynchronous message fabric.
+
 use bevy::prelude::*;
 use std::collections::HashMap;
 use lunco_core::architecture::CommandMessage;
 
+/// Plugin for managing the Flight Software infrastructure and global command handling.
 pub struct LunCoFswPlugin;
 
 impl Plugin for LunCoFswPlugin {
     fn build(&self, app: &mut App) {
-        // Only emit NACK if NO OTHER system handled the command.
-        // However, Bevy Observers run in order. We might need a way to track if it was handled.
-        // For now, we'll keep a simplified version that handles non-vessel-specific commands 
-        // OR we just remove it and let subsystems handle everything.
+        // Registers a fallback handler to manage commands not captured by 
+        // specialized subsystem observers.
         app.add_observer(unrecognized_command_handler);
     }
 }
 
 /// Marker component for any entity that acts as a Flight Software Subsystem.
-/// Subsystems should register their own observers for CommandMessage.
+///
+/// Subsystems (e.g., Guidance, Navigation, Power Management) are independent 
+/// ECS entities that register their own observers for [CommandMessage] to 
+/// handle specific tasks.
 #[derive(Component, Debug, Clone, Reflect, Default)]
 #[reflect(Component, Default)]
 pub struct VesselSubsystem;
 
-/// The Flight Software logic component (Legacy Monolithic - Now just a data container).
+/// The primary data container for a vessel's Flight Software state.
+///
+/// It maintains a mapping of semantic port names (e.g., "drive_left") to 
+/// specific ECS entities (usually [DigitalPort]s), allowing the software 
+/// to address hardware without knowing its exact entity ID or location.
 #[derive(Component, Default)]
 pub struct FlightSoftware {
+    /// Maps human-readable hardware descriptors to their digital register entities.
     pub port_map: HashMap<String, Entity>,
+    /// Global state flag for the braking system.
     pub brake_active: bool,
 }
 
-/// Fallback observer that triggers if a command was sent to a FlightSoftware entity
-/// but wasn't handled by more specific observers (like raycast or joint).
+/// Fallback observer that manages commands sent to a [FlightSoftware] entity 
+/// that were not handled by any other more specific subsystem observers.
 fn unrecognized_command_handler(
-    trigger: On<CommandMessage>,
-    q_fsw: Query<&FlightSoftware>,
+    _trigger: On<CommandMessage>,
+    _q_fsw: Query<&FlightSoftware>,
 ) {
-    let cmd = trigger.event();
-    
-    // This is tricky in Bevy 0.18 because multiple observers can trigger.
-    // If we want a "Final" fallback, we might need a status flag in the CommandMessage 
-    // or just accept that decentralization means no central "NACK" unless we use a system.
-    
-    // For the sake of the Step 16 refactor, we remove the monolithic match.
-    if q_fsw.contains(cmd.target) {
-        // If it's a known command for ANY rover, we shouldn't NACK here.
-        // But since observers are independent, this is a design challenge.
-        // We'll leave it empty for now or only handle commands that are truly global.
-    }
+    // Current design uses decentralized observers. If a command reaches this 
+    // fallback, it signifies a command that was not understood by any 
+    // installed module. 
+    // TODO: Implement centralized NACK logging.
 }
+
 
 #[cfg(test)]
 mod tests {

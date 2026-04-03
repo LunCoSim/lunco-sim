@@ -1,3 +1,8 @@
+//! Utilities for programmatically assembling robotic systems.
+//!
+//! This module provides helper functions to spawn and connect digital/physical 
+//! ports, forming the control backbone of complex robotic entities.
+
 use bevy::prelude::*;
 use lunco_core::architecture::{DigitalPort, PhysicalPort, Wire};
 

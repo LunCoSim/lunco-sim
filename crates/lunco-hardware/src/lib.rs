@@ -1,8 +1,15 @@
+//! Physical actuator and sensor implementations.
+//!
+//! This crate provides concrete implementations of the hardware described in
+//! the SysML models, bridging the gap between [PhysicalPort] values and 
+//! the [avian3d] physics engine.
+
 use bevy::prelude::*;
 use bevy::math::DVec3;
 use avian3d::prelude::*;
 use lunco_core::architecture::PhysicalPort;
 
+/// Plugin for managing physical hardware components (motors, sensors, etc.).
 pub struct LunCoHardwarePlugin;
 
 impl Plugin for LunCoHardwarePlugin {
@@ -18,11 +25,16 @@ impl Plugin for LunCoHardwarePlugin {
     }
 }
 
-/// Digital-to-Physical: Applies torque to a rigid body based on a PhysicalPort value.
+/// A motor that applies torque to a rigid body.
+///
+/// It samples a [PhysicalPort] for the torque magnitude and applies it 
+/// along a specified local axis.
 #[derive(Component, Debug, Clone, Reflect)]
 #[reflect(Component, Default)]
 pub struct MotorActuator {
+    /// Entity of the [PhysicalPort] providing the torque command.
     pub port_entity: Entity,
+    /// Local axis of rotation to apply torque along.
     pub axis: DVec3,
 }
 
@@ -35,6 +47,7 @@ impl Default for MotorActuator {
     }
 }
 
+/// System that applies torques from [MotorActuator] components.
 fn motor_actuator_system(
     q_ports: Query<&PhysicalPort>,
     mut q_motors: Query<(&MotorActuator, Forces)>,
@@ -47,11 +60,16 @@ fn motor_actuator_system(
     }
 }
 
-/// Digital-to-Physical: Applies damping to a joint/body based on a PhysicalPort value.
+/// A braking system that applies damping to reduce velocity.
+///
+/// This emulates a frictional brake by scaling down the entity's 
+/// linear and angular velocity based on a [PhysicalPort] value.
 #[derive(Component, Debug, Clone, Reflect)]
 #[reflect(Component, Default)]
 pub struct BrakeActuator {
+    /// Entity of the [PhysicalPort] providing the brake command.
     pub port_entity: Entity,
+    /// Maximum force limit for normalization.
     pub max_force: f64,
 }
 
@@ -64,6 +82,7 @@ impl Default for BrakeActuator {
     }
 }
 
+/// System that applies damping from [BrakeActuator] components.
 fn brake_actuator_system(
     q_ports: Query<&PhysicalPort>,
     mut q_brakes: Query<(&BrakeActuator, &mut AngularVelocity, &mut LinearVelocity)>,
@@ -77,11 +96,15 @@ fn brake_actuator_system(
     }
 }
 
-/// Physical-to-Digital: Samples angular velocity along an axis and writes to a PhysicalPort.
+/// A sensor that measures angular velocity along a specific axis.
+///
+/// Writes the sampled velocity into a [PhysicalPort] for software consumption (ADC).
 #[derive(Component, Debug, Clone, Reflect)]
 #[reflect(Component, Default)]
 pub struct AngularVelocitySensor {
+    /// Entity of the [PhysicalPort] to write the sensor output into.
     pub port_entity: Entity,
+    /// Local axis to measure rotation about.
     pub axis: DVec3,
 }
 
@@ -94,6 +117,7 @@ impl Default for AngularVelocitySensor {
     }
 }
 
+/// System that samples angular velocity for [AngularVelocitySensor] components.
 fn sensor_velocity_system(
     q_sensors: Query<(&AngularVelocitySensor, &AngularVelocity)>,
     mut q_ports: Query<&mut PhysicalPort>,
@@ -104,3 +128,4 @@ fn sensor_velocity_system(
         }
     }
 }
+

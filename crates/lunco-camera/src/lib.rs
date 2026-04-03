@@ -1,8 +1,9 @@
 use bevy::prelude::*;
 use bevy::math::DVec3;
 use big_space::prelude::{Grid, CellCoord};
-use lunco_core::{Avatar, CelestialBody, Spacecraft, RoverVessel};
+use lunco_core::{Avatar, CelestialBody, Spacecraft, RoverVessel, IntentState, UserIntent};
 use lunco_core::coords::get_absolute_pos_in_root_double_ghost_aware;
+use bevy_egui::EguiContexts;
 
 mod transitions;
 mod blender;
@@ -263,30 +264,39 @@ pub fn camera_migration_system(
 }
 
 pub fn update_observer_camera_system(
-    mut q_camera: Query<(Entity, &mut ObserverCamera, &mut CellCoord, &mut Transform, &Avatar)>,
+    mut q_camera: Query<(Entity, &mut ObserverCamera, &mut CellCoord, &mut Transform, &Avatar, &IntentState)>,
     q_spatial: Query<(&CellCoord, &Transform, Option<&CelestialBody>), Without<ObserverCamera>>,
     q_all_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
     q_coords: Query<(&CellCoord, &Transform), Without<ObserverCamera>>,
-    mouse_button: Res<ButtonInput<MouseButton>>,
-    keys: Res<ButtonInput<KeyCode>>,
     time: Res<Time>,
-    windows: Query<&Window>,
     mut scroll_res: ResMut<CameraScroll>,
     mut last_mouse_pos: Local<Option<Vec2>>,
+    windows: Query<&Window>,
+    mouse_button: Res<ButtonInput<MouseButton>>,
+    mut contexts: EguiContexts,
 ) {
     let window = windows.iter().next();
     let current_mouse_pos = window.and_then(|w| w.cursor_position());
     let mut mouse_delta = Vec2::ZERO;
 
-    if let (Some(curr), Some(last)) = (current_mouse_pos, *last_mouse_pos) {
-        if mouse_button.pressed(MouseButton::Middle) || mouse_button.pressed(MouseButton::Right) {
-            mouse_delta = curr - last;
+    let mut is_egui_focused = false;
+    if let Ok(ctx) = contexts.ctx_mut() {
+        if ctx.is_pointer_over_area() || ctx.is_using_pointer() {
+            is_egui_focused = true;
+        }
+    }
+
+    if !is_egui_focused {
+        if let (Some(curr), Some(last)) = (current_mouse_pos, *last_mouse_pos) {
+            if mouse_button.pressed(MouseButton::Middle) || mouse_button.pressed(MouseButton::Right) {
+                mouse_delta = curr - last;
+            }
         }
     }
     *last_mouse_pos = current_mouse_pos;
 
-    for (cam_entity, mut obs, mut cam_cell, mut cam_tf, _) in q_camera.iter_mut() {
+    for (cam_entity, mut obs, mut cam_cell, mut cam_tf, _, intent_state) in q_camera.iter_mut() {
         let Some(target_entity) = obs.focus_target else { continue; };
         let Ok((t_cell, t_tf, t_body)) = q_spatial.get(target_entity) else { continue; };
         
@@ -304,7 +314,7 @@ pub fn update_observer_camera_system(
             obs.smooth_focus_pos = target_pos_in_cam_grid;
             obs.is_first_frame = false;
         } else {
-            let lerp_factor = (time.delta_secs() * 5.0).min(1.0) as f64;
+            let lerp_factor = (time.delta_secs() * 10.0).min(1.0) as f64;
             obs.smooth_focus_pos = obs.smooth_focus_pos.lerp(target_pos_in_cam_grid, lerp_factor);
         }
         let focus_pos = obs.smooth_focus_pos;
@@ -344,9 +354,7 @@ pub fn update_observer_camera_system(
         obs.altitude = altitude;
 
         let mut scroll = scroll_res.delta as f64 * -0.01;
-        if keys.pressed(KeyCode::Equal) { scroll += 1.0; }
-        if keys.pressed(KeyCode::Minus) { scroll -= 1.0; }
-
+        
         if obs.mode == ObserverMode::Orbital {
             obs.distance = (obs.distance - (scroll as f64) * (obs.distance * 0.1)).clamp(10.0, 1.0e14);
             obs.yaw -= mouse_delta.x * 0.01;
@@ -363,21 +371,21 @@ pub fn update_observer_camera_system(
             let rotation = Quat::from_euler(EulerRot::YXZ, obs.yaw, obs.pitch, 0.0);
             cam_tf.rotation = rotation;
             
-            let mut speed = if obs.altitude < 50_000.0 { 10_000.0 } else { 1000.0 };
-            if keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight) { speed *= 10.0; }
-            speed *= (obs.altitude / 1000.0).max(1.0) * time.delta_secs_f64();
+            let base_speed = if obs.altitude < 50_000.0 { 10_000.0 } else { 1000.0 };
+            let speed = base_speed * (obs.altitude / 1000.0).max(1.0) * time.delta_secs_f64();
 
             let mut move_vec = DVec3::ZERO;
             let forward = rotation.mul_vec3(Vec3::NEG_Z).as_dvec3();
             let right = rotation.mul_vec3(Vec3::X).as_dvec3();
             let cam_up = rotation.mul_vec3(Vec3::Y).as_dvec3();
 
-            if keys.pressed(KeyCode::KeyW) { move_vec += forward; }
-            if keys.pressed(KeyCode::KeyS) { move_vec -= forward; }
-            if keys.pressed(KeyCode::KeyD) { move_vec += right; }
-            if keys.pressed(KeyCode::KeyA) { move_vec -= right; }
-            if keys.pressed(KeyCode::KeyE) { move_vec += cam_up; }
-            if keys.pressed(KeyCode::KeyQ) { move_vec -= cam_up; }
+            use lunco_core::UserIntent::*;
+            if intent_state.pressed(&MoveForward) { move_vec += forward; }
+            if intent_state.pressed(&MoveBackward) { move_vec -= forward; }
+            if intent_state.pressed(&MoveRight) { move_vec += right; }
+            if intent_state.pressed(&MoveLeft) { move_vec -= right; }
+            if intent_state.pressed(&MoveUp) { move_vec += cam_up; }
+            if intent_state.pressed(&MoveDown) { move_vec -= cam_up; }
             
             obs.local_flyby_pos += move_vec * speed;
             let desired_pos_local = focus_pos + obs.local_flyby_pos;
@@ -396,19 +404,19 @@ pub fn update_observer_camera_system(
             cam_tf.rotation = final_rot;
 
             let mut speed = (obs.altitude * 0.5 + 50.0).max(10.0);
-            if keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight) { speed *= 10.0; }
             speed *= time.delta_secs_f64();
             
             let forward = final_rot.mul_vec3(Vec3::NEG_Z);
             let right_move = final_rot.mul_vec3(Vec3::X);
             
             let mut move_dir_world = Vec3::ZERO;
-            if keys.pressed(KeyCode::KeyW) { move_dir_world += forward; }
-            if keys.pressed(KeyCode::KeyS) { move_dir_world -= forward; }
-            if keys.pressed(KeyCode::KeyD) { move_dir_world += right_move; }
-            if keys.pressed(KeyCode::KeyA) { move_dir_world -= right_move; }
-            if keys.pressed(KeyCode::KeyE) { move_dir_world += up; }
-            if keys.pressed(KeyCode::KeyQ) { move_dir_world -= up; }
+            use lunco_core::UserIntent::*;
+            if intent_state.pressed(&MoveForward) { move_dir_world += forward; }
+            if intent_state.pressed(&MoveBackward) { move_dir_world -= forward; }
+            if intent_state.pressed(&MoveRight) { move_dir_world += right_move; }
+            if intent_state.pressed(&MoveLeft) { move_dir_world -= right_move; }
+            if intent_state.pressed(&MoveUp) { move_dir_world += up; }
+            if intent_state.pressed(&MoveDown) { move_dir_world -= up; }
 
             let move_vec_body_space = body_rot.inverse().mul_vec3(move_dir_world).as_dvec3() * speed;
             obs.local_flyby_pos += move_vec_body_space;

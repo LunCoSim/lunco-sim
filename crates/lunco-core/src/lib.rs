@@ -1,3 +1,9 @@
+//! Core types and plugins for the LunCo simulation.
+//!
+//! This crate provides the foundational components, resources, and systems used
+//! across the simulation, including physical properties, celestial timing, 
+//! and the core plugin registration.
+
 pub mod architecture;
 pub mod mocks;
 pub mod telemetry;
@@ -11,50 +17,82 @@ pub use log::*;
 
 use bevy::prelude::*;
 
+/// The central plugin for the LunCo simulation core.
+///
+/// Registers all core types for reflection and initializes essential systems
+/// like the physical/digital port wiring.
 pub struct LunCoCorePlugin;
 
+/// Marker component for the user's active avatar/entity in the simulation.
 #[derive(Component)]
 pub struct Avatar;
 
+/// Defines a spacecraft entity with its ephemeris and physical constraints.
 #[derive(Component, Reflect, Default)]
 #[reflect(Component)]
 pub struct Spacecraft {
+    /// Human-readable name of the spacecraft.
     pub name: String,
+    /// ID used for ephemeris lookups (e.g., SPICE ID).
     pub ephemeris_id: i32,
+    /// Reference body ID (e.g., Earth, Moon).
     pub reference_id: i32,
+    /// Start of valid data range in Julian Date.
     pub start_epoch_jd: Option<f64>,
+    /// End of valid data range in Julian Date.
     pub end_epoch_jd: Option<f64>,
+    /// Collision/interaction radius for simple math-based proximity checks.
     pub hit_radius_m: f32,
+    /// Whether this spacecraft should be rendered and listed in the UI.
     pub user_visible: bool,
 }
- 
+
+/// Marker component for generic vessels.
 #[derive(Component)]
 pub struct Vessel;
- 
+
+/// Marker component specifically for surface exploration rovers.
 #[derive(Component)]
 pub struct RoverVessel;
 
-/// Physical properties of a vessel or celestial body.
+/// Physical properties used for gravity, collision, and mass-based calculations.
+/// 
+/// These properties use double precision (`f64`) to maintain simulation integrity
+/// over astronomical scales as mandated by the project constitution.
 #[derive(Component, Debug, Clone, Reflect, Default)]
 #[reflect(Component)]
 pub struct PhysicalProperties {
+    /// Radius of the body in meters.
     pub radius_m: f64,
+    /// Mass of the body in kilograms.
     pub mass_kg: f64,
 }
 
+/// Represents a major celestial body (planet, moon, asteroid) in the simulation.
 #[derive(Component, Debug, Clone, Reflect, Default)]
 #[reflect(Component)]
 pub struct CelestialBody {
+    /// Name of the celestial body.
     pub name: String,
+    /// Unique identifier for ephemeris data retrieval.
     pub ephemeris_id: i32,
+    /// Mean radius in meters, used for rendering and approximate physics.
     pub radius_m: f64,
 }
+
+/// State for 3rd-person orbital cameras or follow behaviors.
+///
+/// Stores spherical coordinate offsets relative to a target entity.
 #[derive(Component, Reflect, Clone, Debug)]
 #[reflect(Component)]
 pub struct OrbitState {
+    /// Rotation around the vertical axis (radians).
     pub yaw: f32,
+    /// Rotation up/down (radians).
     pub pitch: f32,
+    /// Radial distance from the target (meters).
     pub distance: f32,
+    /// Translation offset along the vertical axis.
     pub vertical_offset: f32,
 }
 
@@ -69,17 +107,27 @@ impl Default for OrbitState {
     }
 }
 
+/// Global simulation speed and physics state control.
 #[derive(Resource, Default, Debug, Clone, Copy)]
 pub struct TimeWarpState {
+    /// Multiplier for simulation time (e.g., 2.0 = 2x speed).
     pub speed: f64,
+    /// Whether the physics engine should be active (paused during warp).
     pub physics_enabled: bool,
 }
 
+/// Represents the current "wall clock" time in the simulation universe.
+///
+/// Uses Julian Date for astronomical precision and provides a mechanism
+/// for non-linear time progression.
 #[derive(Resource, Debug, Clone, Copy, Reflect)]
 #[reflect(Resource)]
 pub struct CelestialClock {
-    pub epoch: f64,            // Julian Date (TDB)
-    pub speed_multiplier: f64, // 1.0 = real-time
+    /// Current Julian Date (TDB - Terrestrial Dynamic Time).
+    pub epoch: f64,
+    /// Multiplier relative to real-time progression.
+    pub speed_multiplier: f64,
+    /// Pause state for the simulation clock.
     pub paused: bool,
 }
 
@@ -117,6 +165,10 @@ impl Plugin for LunCoCorePlugin {
     }
 }
 
+/// Syncs digital port values to physical actuators/sensors through wires.
+///
+/// This system bridges the gap between discrete digital control (i16) and
+/// continuous physical forces (f32).
 fn wire_system(
     q_wires: Query<&Wire>,
     q_digital: Query<&DigitalPort>,
@@ -131,3 +183,4 @@ fn wire_system(
         }
     }
 }
+

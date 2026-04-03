@@ -1,6 +1,15 @@
+//! On-Board Computer (OBC) emulation systems.
+//!
+//! This crate implements the interface between the high-level Flight Software 
+//! (digital) and the simulation physics (physical). It emulates hardware 
+//! signal processing:
+//! - **DAC (Digital-to-Analog)**: Maps `i16` register values to `f32` physical units.
+//! - **ADC (Analog-to-Digital)**: Samples `f32` physical sensors into `i16` registers.
+
 use bevy::prelude::*;
 use lunco_core::architecture::{DigitalPort, PhysicalPort, Wire};
 
+/// Plugin for emulating On-Board Computer signal processing pipelines.
 pub struct LunCoObcPlugin;
 
 impl Plugin for LunCoObcPlugin {
@@ -9,9 +18,11 @@ impl Plugin for LunCoObcPlugin {
     }
 }
 
-/// The Level 2 Hardware Execution Pipeline
-/// Matches the 001-vessel-control-architecture spec to map i16 commands 
-/// directly scaled to f32 limits to provide bounds-safety via analog hardware matching.
+/// The Level 2 Hardware Execution Pipeline (DAC).
+///
+/// Matches the 001-vessel-control-architecture spec to map `i16` commands 
+/// directly to `f32` physical outputs, scaled by the [Wire] gain. 
+/// This provides bounds-safety through hardware-faithful matching.
 fn scale_digital_to_physical(
     q_digital: Query<&DigitalPort>,
     mut q_physical: Query<&mut PhysicalPort>,
@@ -21,18 +32,19 @@ fn scale_digital_to_physical(
         if let Ok(digital) = q_digital.get(wire.source) {
             if let Ok(mut physical) = q_physical.get_mut(wire.target) {
                 // Tier 2 Integration Math (DAC Pathway):
-                // Takes the base signal gain and treats raw byte depths appropriately.
-                // Assuming standard 8-bit resolution map scaling (-255 to 255)
-                // mapped over the Wire gain (e.g. MaxTorque) 
+                // Maps the full range of a 16-bit signed integer (-32767 to 32767) 
+                // to a physical unit (e.g., Nm or Radians) defined by the Wire's scale.
                 physical.value = (digital.raw_value as f32 / 32767.0) * wire.scale;
             }
         }
     }
 }
 
-/// The Level 2 Hardware Execution Pipeline for Sensors
-/// Matches the 001-vessel-control-architecture spec to map f32 physical values
-/// directly down to i16 resolution registers for software consumption (ADC).
+/// The Level 2 Hardware Execution Pipeline for Sensors (ADC).
+///
+/// Maps raw physical values back into `i16` resolution registers for 
+/// software consumption, simulating the quantization and range limits 
+/// of real hardware sensors.
 fn scale_physical_to_digital(
     q_physical: Query<&PhysicalPort>,
     mut q_digital: Query<&mut DigitalPort>,
@@ -42,13 +54,15 @@ fn scale_physical_to_digital(
         if let Ok(physical) = q_physical.get(wire.source) {
             if let Ok(mut digital) = q_digital.get_mut(wire.target) {
                 // Tier 2 Integration Math (ADC Pathway):
-                // Takes physical value, divides by bounds (scale limit), returns scaled bit-depth.
+                // Takes physical value, divides by wire scale (limit), and 
+                // clamps to ensure the digital register does not overflow.
                 let clamped_ratio = (physical.value / wire.scale).clamp(-1.0, 1.0);
                 digital.raw_value = (clamped_ratio * 32767.0) as i16;
             }
         }
     }
 }
+
 
 #[cfg(test)]
 mod tests {

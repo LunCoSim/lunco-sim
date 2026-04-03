@@ -1,3 +1,11 @@
+//! Implementation of the user's presence and interaction within the simulation.
+//!
+//! This crate defines the [Avatar] entity, which can be in several states:
+//! - **Free-cam**: Flying freely through the scene for observation.
+//! - **Possessed**: Linked to a vessel via [ControllerLink], allowing direct 
+//!   piloting of rovers or spacecraft.
+//! - **Orbital**: Following a celestial body or vessel in a third-person view.
+
 use bevy::prelude::*;
 use leafwing_input_manager::prelude::*;
 use avian3d::prelude::*;
@@ -9,6 +17,7 @@ use lunco_celestial::CelestialClock;
 mod intents;
 pub use intents::*;
 
+/// Plugin for managing user avatar logic, input processing, and possession.
 pub struct LunCoAvatarPlugin;
 
 impl Plugin for LunCoAvatarPlugin {
@@ -28,9 +37,12 @@ impl Plugin for LunCoAvatarPlugin {
     }
 }
 
+/// Marker component for an avatar that is currently in a "detached" free-look mode
+/// even if linked to a vessel.
 #[derive(Component)]
 pub struct DetachedCamera;
 
+/// Toggles between fixed vessel-follow cameras and a detached free-look camera.
 fn avatar_toggle_detached_mode(
     keys: Res<ButtonInput<KeyCode>>,
     mut commands: Commands,
@@ -47,6 +59,10 @@ fn avatar_toggle_detached_mode(
     }
 }
 
+/// Captures high-level [UserIntent] from the InputManager and populates [IntentAnalogState].
+///
+/// This system acts as a bridge between discrete input events and continuous 
+/// analog control signals used by simulation subsystems.
 fn capture_avatar_intent(
     mut q_avatar: Query<(Entity, &IntentState, &mut IntentAnalogState), With<Avatar>>,
     mouse: Res<ButtonInput<MouseButton>>,
@@ -77,26 +93,28 @@ fn capture_avatar_intent(
         if intent_state.pressed(&UserIntent::MoveUp) { elevation += 1.0; }
         if intent_state.pressed(&UserIntent::MoveDown) { elevation -= 1.0; }
 
-        // Capture analog snapshot
+        // Update the analog snapshot used for high-frequency control loops.
         analog.forward = forward;
         analog.side = side;
         analog.elevation = elevation;
         analog.timestamp = clock.epoch;
         
-        // Trigger the analog state globally for observers (like on_user_intent)
+        // Trigger a global EntityEvent for other systems to react to the new intent state.
         commands.entity(entity).trigger(|e| {
             let mut a = analog.clone();
             a.entity = e;
             a
         });
 
-        // Phase 5: Preemption - Manual input cancels active automated actions (ViewPoint transitions, etc)
+        // Preemption logic: Any manual movement input cancels active automated 
+        // actions (e.g., stopping a camera transition if the user moves the mouse).
         if forward.abs() > 0.1 || side.abs() > 0.1 || elevation.abs() > 0.1 || mouse_moved {
              commands.entity(entity).remove::<lunco_core::ActiveAction>();
         }
     }
 }
 
+/// Handles global UI-level hotkeys captured through the Avatar's input mapping.
 fn avatar_global_hotkeys(
     q_avatar: Query<&IntentState, With<Avatar>>,
     mut clock: ResMut<CelestialClock>,
@@ -109,6 +127,7 @@ fn avatar_global_hotkeys(
     }
 }
 
+/// Updates the translation of the avatar in free-cam or detached mode.
 fn avatar_freecam_translation(
     time: Res<Time>,
     mut q_avatar: Query<(&mut Transform, &IntentState, Has<DetachedCamera>), (With<Avatar>, Or<(Without<ControllerLink>, With<DetachedCamera>)>)>,
@@ -131,6 +150,7 @@ fn avatar_freecam_translation(
     }
 }
 
+/// Updates the rotation (yaw/pitch) of the avatar camera based on mouse movement.
 fn avatar_freecam_rotation(
     mouse: Res<ButtonInput<MouseButton>>,
     mut q_avatar: Query<&mut Transform, (With<Avatar>, Or<(Without<ControllerLink>, With<DetachedCamera>)>)>,
@@ -155,6 +175,7 @@ fn avatar_freecam_rotation(
     }
 }
 
+/// Processes mouse/keyboard input for the third-person [OrbitState] mode.
 fn avatar_orbit_input(
     mouse: Res<ButtonInput<MouseButton>>,
     intent_q: Query<&IntentState, With<Avatar>>,
@@ -189,6 +210,10 @@ fn avatar_orbit_input(
     }
 }
 
+/// Allows the user to "possess" a vessel by clicking on it in the scene.
+///
+/// Uses raycasting to identify [Vessel] entities under the cursor and 
+/// inserts a [ControllerLink] to establish the pilot-vehicle relationship.
 fn avatar_raycast_possession(
     mouse: Res<ButtonInput<MouseButton>>,
     windows: Query<&Window>,
@@ -217,6 +242,7 @@ fn avatar_raycast_possession(
     }
 }
 
+/// Releases the current vessel possession, returning the avatar to free-cam mode.
 fn avatar_escape_possession(
     keys: Res<ButtonInput<KeyCode>>,
     mut q_avatar: Query<Entity, (With<Avatar>, With<ControllerLink>)>,
@@ -232,8 +258,8 @@ fn avatar_escape_possession(
     }
 }
 
-/// Observer that translates high-level analog intent into physical CommandMessages 
-/// specifically for the vessel linked to the avatar.
+/// Observer that translates high-level analog intent into physical [CommandMessage] 
+/// events specifically for the vessel linked to the avatar.
 fn on_user_intent(
     trigger: On<IntentAnalogState>,
     q_avatar: Query<&ControllerLink, With<Avatar>>,

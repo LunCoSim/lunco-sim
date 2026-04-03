@@ -1,7 +1,15 @@
+//! Simulation attribute management and reflection-based mutation.
+//!
+//! This crate provides a centralized [AttributeRegistry] that maps human-readable 
+//! paths (e.g., "vessel.rover1.motor_left.max_torque") directly to live ECS 
+//! memory locations. This enables external tuning (via UI or CLI) without 
+//! hardcoding every possible parameter.
+
 use bevy::prelude::*;
 use std::collections::HashMap;
 use lunco_core::telemetry::{TelemetryValue};
 
+/// Plugin for managing the simulation's dynamic attribute and tuning system.
 pub struct LunCoAttributesPlugin;
 
 impl Plugin for LunCoAttributesPlugin {
@@ -14,33 +22,41 @@ impl Plugin for LunCoAttributesPlugin {
 /// A specific memory address for an attribute within the ECS.
 #[derive(Debug, Clone)]
 pub struct AttributeAddress {
+    /// The target entity owning the component.
     pub entity: Entity,
-    /// The short name of the component (e.g., "PhysicalPort")
+    /// The short name of the component (e.g., "PhysicalPort").
     pub component: String,
-    /// The path within the component (e.g., "value")
+    /// The path within the component to the specific field (e.g., "value").
     pub field: String,
 }
 
-/// A centralized dictionary mapping SysML/XTCE string paths 
-/// directly to live ECS memory references for real-time manipulation.
+/// A centralized dictionary mapping string paths to live ECS memory references.
+///
+/// This serves as the "Source of Truth" for external control systems, 
+/// providing a stable API even if internal entity structures change.
 #[derive(Resource, Default)]
 pub struct AttributeRegistry {
+    /// The map of string-based attribute paths to their ECS addresses.
     pub map: HashMap<String, AttributeAddress>,
 }
 
-/// An abstract request from an external system (MCP, CLI) to mutate simulation state.
+/// An event representing a request to mutate a simulation attribute.
 #[derive(Event, Debug, Clone)]
 pub struct SetAttribute {
+    /// The canonical path to the attribute in the [AttributeRegistry].
     pub path: String,
+    /// The new value to apply.
     pub value: TelemetryValue,
 }
 
-// Re-implementing with a custom command for reflection mutation
-/// NOTE: This implementation performs optimized reflection access by using short type paths.
-/// For maximum real-time performance (60Hz+), we recommend further caching the ComponentId
-/// and using direct Pointer access, as noted in the master plan.
+/// A command that performs the heavy lifting of reflection-based mutation.
+///
+/// It finds the component on the entity, resolves the field path via reflection, 
+/// and applies the new value with appropriate type conversion.
 pub struct ApplyReflectedSet {
+    /// Target address to modify.
     pub address: AttributeAddress,
+    /// Value to inject.
     pub value: TelemetryValue,
 }
 
@@ -49,30 +65,29 @@ impl Command for ApplyReflectedSet {
         let type_registry = world.resource::<AppTypeRegistry>().clone();
         let registry_read = type_registry.read();
 
-        // 1. Get the entity
+        // 1. Resolve the entity.
         let mut entity_mut = if let Ok(e) = world.get_entity_mut(self.address.entity) {
             e
         } else { return; };
 
-        // 2. Find the component reflection data by short name
+        // 2. Locate the component's reflection data.
         let reflect_component = if let Some(reg) = registry_read.get_with_short_type_path(&self.address.component) {
             if let Some(reflect_comp) = reg.data::<ReflectComponent>() {
                 reflect_comp
             } else { return; }
         } else { return; };
 
-        // 3. Get the component as &mut dyn Reflect
-        // Optimization: In a real high-frequency system, we'd cache the ComponentId here.
+        // 3. Mutable access to the component via reflection.
         let mut reflect_mut = reflect_component.reflect_mut(&mut entity_mut).expect("Failed to get reflect_mut");
 
-        // 4. Drill down to the field path
+        // 4. Resolve the specific field within the component.
         let target_field: Option<&mut dyn PartialReflect> = if self.address.field.is_empty() {
             Some((*reflect_mut).as_partial_reflect_mut())
         } else {
             reflect_mut.reflect_path_mut(self.address.field.as_str()).ok()
         };
 
-        // 5. Apply the value
+        // 5. Update the field with type-safe conversion from TelemetryValue.
         if let Some(field) = target_field {
             match self.value {
                 TelemetryValue::F64(v) => { 
@@ -95,8 +110,7 @@ impl Command for ApplyReflectedSet {
     }
 }
 
-/// Observer that executes external requests safely on the main thread, 
-/// leveraging the Registry and Bevy Reflection to find and edit the true memory location.
+/// Observer that handles [SetAttribute] events by queueing [ApplyReflectedSet] commands.
 fn on_set_attribute(
     trigger: On<SetAttribute>,
     registry: Res<AttributeRegistry>,
@@ -110,6 +124,7 @@ fn on_set_attribute(
         });
     }
 }
+
 
 #[cfg(test)]
 mod tests {

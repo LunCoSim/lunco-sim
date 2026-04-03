@@ -4304,6 +4304,7 @@ name = "lunco-camera"
 version = "0.6.0"
 dependencies = [
  "bevy",
+ "bevy_egui",
  "big_space",
  "lunco-core",
  "smallvec",

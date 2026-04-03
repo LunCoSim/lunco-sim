@@ -1,3 +1,12 @@
+//! Physics-based mobility systems for surface exploration rovers.
+//!
+//! This crate implements various drive and steering models, including:
+//! - **Raycast Wheels**: High-performance wheel simulation using raycasts for 
+//!   suspension and friction.
+//! - **Drive Models**: Differential (Skid) drive and Ackermann steering logic.
+//! - **Suspension**: Physics-based spring-damper systems for joint-based 
+//!   vehicle chassis.
+
 use bevy::prelude::*;
 use bevy::math::DVec3;
 use avian3d::prelude::*;
@@ -5,6 +14,7 @@ use lunco_core::architecture::{DigitalPort, CommandMessage, CommandResponse, Com
 use lunco_fsw::FlightSoftware;
 use lunco_core::RoverVessel;
 
+/// Plugin for ground mobility physics and control systems.
 pub struct LunCoMobilityPlugin;
 
 impl Plugin for LunCoMobilityPlugin {
@@ -23,19 +33,30 @@ impl Plugin for LunCoMobilityPlugin {
     }
 }
 
-// ... [skipping drive/steer/suspension structs] ...
-
+/// A simplified wheel model that uses raycasting for ground interaction.
+///
+/// This avoids the complexity of simulating a full cylinder collider while
+/// providing believable suspension and traction behavior.
 #[derive(Component, Debug, Clone, Reflect)]
 #[reflect(Component, Default)]
 pub struct WheelRaycast {
+    /// Entity index of the suspension physical port.
     pub suspension_port: Entity,
+    /// Entity index of the drive physical port.
     pub drive_port: Entity,
+    /// Entity index of the steering physical port.
     pub steer_port: Entity,
+    /// Length of the suspension at rest (meters).
     pub rest_length: f64,
+    /// Spring stiffness constant (N/m).
     pub spring_k: f64,
+    /// Damping coefficient (Ns/m).
     pub damping_c: f64,
+    /// Visual radius of the wheel (meters).
     pub wheel_radius: f64,
+    /// Optional reference to the visual wheel entity for animation.
     pub visual_entity: Option<Entity>,
+    /// Cached normal force from the last physics step, used for friction.
     pub last_normal_force: f64,
 }
 
@@ -55,6 +76,10 @@ impl Default for WheelRaycast {
     }
 }
 
+/// Calculates and applies suspension forces for [WheelRaycast] components.
+///
+/// This system uses [RayHits] to find the distance to the ground and 
+/// applies a countering spring/damper force to the vehicle chassis.
 fn apply_wheel_suspension(
     mut q_wheels: Query<(
         &mut WheelRaycast,
@@ -98,6 +123,7 @@ fn apply_wheel_suspension(
                 wheel.last_normal_force = 0.0;
             }
 
+            // Sync visual position of the wheel mesh.
             if let Some(visual_entity) = wheel.visual_entity {
                 if let Ok(mut visual_tf) = q_visual.get_mut(visual_entity) {
                     let wheel_center_rel_y = (wheel_tf.translation.y as f64 + 0.5 - closest_hit_dist) + wheel.wheel_radius;
@@ -108,6 +134,10 @@ fn apply_wheel_suspension(
     }
 }
 
+/// Applies drive torque and lateral friction to wheels.
+///
+/// Translates physical port values into actual forces applied to the 
+/// chassis at the wheel's contact point.
 fn apply_wheel_drive(
     q_wheels: Query<(
         &WheelRaycast,
@@ -134,6 +164,7 @@ fn apply_wheel_drive(
                     let hub_pos_world = wheel_tf.translation().as_dvec3();
                     let hub_vel = chassis_vel + chassis_ang_vel.cross(hub_pos_world - forces.position().0);
 
+                    // Simplified lateral friction to prevent sliding.
                     let normal_force = wheel.last_normal_force;
                     let friction_k = 1.1; 
                     
@@ -148,6 +179,7 @@ fn apply_wheel_drive(
     }
 }
 
+/// Updates the rotation of wheels based on steering port inputs.
 fn apply_wheel_steering(
     mut q_wheels: Query<(&WheelRaycast, &mut Transform)>,
     q_ports: Query<&lunco_core::architecture::PhysicalPort>,
@@ -158,6 +190,7 @@ fn apply_wheel_steering(
             let target_angle = (port.value * 0.5) as f32;
             transform.rotation = Quat::from_rotation_y(target_angle);
             
+            // Sync visual rotation (including wheel spin representation).
             if let Some(visual_entity) = wheel.visual_entity {
                 if let Ok(mut visual_tf) = q_visual.get_mut(visual_entity) {
                     visual_tf.rotation = transform.rotation * Quat::from_rotation_z(std::f32::consts::FRAC_PI_2);
@@ -167,33 +200,45 @@ fn apply_wheel_steering(
     }
 }
 
-
 /// Hotswappable Logic: Differential Drive mixing (Skid Steering).
+/// 
 /// Calculated via `Left = Forward + Steer` and `Right = Forward - Steer`.
 #[derive(Component, Debug, Clone, Reflect, Default)]
 #[reflect(Component, Default)]
 pub struct DifferentialDrive {
+    /// Port name for left-side motors.
     pub left_port: String,
+    /// Port name for right-side motors.
     pub right_port: String,
 }
 
 /// Hotswappable Logic: Ackermann Steering.
+/// 
 /// Calculated via `Drive = Forward` and `Angle = Steer * MaxAngle`.
 #[derive(Component, Debug, Clone, Reflect, Default)]
 #[reflect(Component, Default)]
 pub struct AckermannSteer {
+    /// Port name for drive motors (left).
     pub drive_left_port: String,
+    /// Port name for drive motors (right).
     pub drive_right_port: String,
+    /// Port name for the steering servo.
     pub steer_port: String,
+    /// Maximum steering lock angle (radians).
     pub max_steer_angle: f32,
 }
 
+/// Suspension configuration for joint-based vehicles.
 #[derive(Component, Debug, Clone, Reflect)]
 #[reflect(Component, Default)]
 pub struct Suspension {
+    /// Target length of the spring (meters).
     pub rest_length: f64,
+    /// Spring stiffness (N/m).
     pub spring_k: f64,
+    /// Damping coefficient (Ns/m).
     pub damping_c: f64,
+    /// Local axis of compression.
     pub local_axis: DVec3,
 }
 
@@ -208,6 +253,7 @@ impl Default for Suspension {
     }
 }
 
+/// Solves spring-damper equations for entities connected by PrismaticJoints.
 fn suspension_system(
     q_joints: Query<(&PrismaticJoint, &Suspension)>,
     mut q_bodies: Query<Forces>,
@@ -252,6 +298,9 @@ fn suspension_system(
 }
 
 /// Unified observer for all ground mobility commands.
+///
+/// Translates semantic instructions (DRIVE, BRAKE) into low-level digital
+/// port signals based on the rover's specific drive model (Differential or Ackermann).
 fn on_mobility_command(
     trigger: On<CommandMessage>,
     mut q_rovers: Query<(&mut FlightSoftware, Entity), With<RoverVessel>>,
@@ -324,9 +373,11 @@ fn on_mobility_command(
             _ => return,
         }
 
+        // Send feedback regarding the command execution.
         commands.trigger(CommandResponse {
             command_id: cmd.id,
             status,
         });
     }
 }
+

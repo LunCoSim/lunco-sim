@@ -1,3 +1,10 @@
+//! Primary entry point for the LunCo simulation client.
+//!
+//! This crate assembles all simulation plugins (Celestial, FSW, Hardware, 
+//! Robotics, etc.) into a cohesive application. It handles the high-level 
+//! Bevy app configuration, including asset sourcing, plugin initialization, 
+//! and global coordinate synchronization.
+
 use bevy::{prelude::*, asset::io::AssetSourceBuilder};
 use big_space::prelude::CellCoord;
 
@@ -5,6 +12,11 @@ mod ui;
 use lunco_celestial::BlueprintMaterial;
 use ui::LunCoUiPlugin;
 
+/// Main entry point for the simulation.
+///
+/// Sets up the Bevy [App] with the required plugins, resources, and systems. 
+/// It also initializes the [big_space] coordinate system to allow for 
+/// solar-system-scale simulations.
 fn main() {
     let mut app = App::new();
     app.insert_resource(Time::<Fixed>::from_hz(60.0))
@@ -13,11 +25,14 @@ fn main() {
             "cached_textures",
             AssetSourceBuilder::platform_default("../../.cache/textures", None),
         )
+        // Note: TransformPlugin is disabled because big_space uses its own propagation systems.
         .add_plugins(DefaultPlugins.build().disable::<TransformPlugin>()) 
         .add_plugins(big_space::prelude::BigSpaceDefaultPlugins)
         .add_plugins(lunco_core::LunCoCorePlugin);
 
     // THE UNIVERSAL SYNC BRIDGE
+    // This system ensures that transforms and visibility are correctly propagated 
+    // across different coordinate grids (cells) in the large-scale simulation.
     app.add_systems(PreUpdate, global_transform_propagation_system);
     app.add_systems(PostUpdate, global_transform_propagation_system.after(avian3d::prelude::PhysicsSystems::Writeback));
 
@@ -39,20 +54,26 @@ fn main() {
         .run();
 }
 
+/// Toggles time dilation for debugging physics and high-speed maneuvers.
 fn toggle_slow_motion(keyboard: Res<ButtonInput<KeyCode>>, mut time: ResMut<Time<Virtual>>) {
     if keyboard.just_pressed(KeyCode::KeyT) {
         if time.relative_speed() < 1.0 { time.set_relative_speed(1.0); } else { time.set_relative_speed(0.01); }
     }
 }
 
-/// A robust multi-pass system to propagate GlobalTransform & Visibility across grids.
+/// A robust multi-pass system to propagate [GlobalTransform] and [Visibility] across [big_space] grids.
+///
+/// Since [big_space] disables Bevy's default [TransformPlugin] to prevent 
+/// floating-point precision loss, this system manually synchronizes 
+/// spatial data across parent-child hierarchies that span multiple grid cells.
 fn global_transform_propagation_system(
     mut commands: Commands,
     q_needs: Query<Entity, (Or<(With<Visibility>, With<Mesh3d>, With<Text>, With<Transform>)>, Without<InheritedVisibility>, Without<CellCoord>)>,
     mut q_spatial: Query<(Entity, &mut GlobalTransform, &Transform, Option<&ChildOf>)>,
     mut q_visibility: Query<(Entity, &mut InheritedVisibility, &mut ViewVisibility, &Visibility, Option<&ChildOf>)>,
 ) {
-    // 1. Initial backfill 
+    // 1. Initial backfill: Ensure all relevant entities have the required 
+    // spatial components for propagation.
     for ent in q_needs.iter() {
         commands.entity(ent).insert((
             InheritedVisibility::default(),
@@ -61,8 +82,9 @@ fn global_transform_propagation_system(
         ));
     }
 
-    // 2. Transform propagation (Manual fallback for TransformPlugin)
-    // We do multiple passes to handle hierarchies (up to 4 levels)
+    // 2. Transform propagation: Recursively calculate GlobalTransforms.
+    // Performed in multiple passes to handle deep hierarchies without 
+    // complex tree traversal.
     for _ in 0..4 {
         let mut gtf_cache = std::collections::HashMap::new();
         for (ent, gtf, _, _) in q_spatial.iter() {
@@ -83,7 +105,7 @@ fn global_transform_propagation_system(
         }
     }
 
-    // 3. Visibility propagation (Boolean sync)
+    // 3. Visibility propagation: Sync InheritedVisibility based on hierarchy.
     for _ in 0..4 {
         let mut vis_cache = std::collections::HashMap::new();
         for (ent, inherited, _, _, _) in q_visibility.iter() {
@@ -104,3 +126,4 @@ fn global_transform_propagation_system(
         }
     }
 }
+
