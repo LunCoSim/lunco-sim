@@ -82,31 +82,40 @@ fn setup_sandbox(
         Visibility::Visible,
     )).set_parent_in_place(grid_entity);
 
-    // 2. High Altitude Sky Light
+    // 2. Top-down Lighting (Sun directly overhead)
     commands.spawn((
         DirectionalLight {
             shadows_enabled: true,
-            illuminance: 140_000.0, // Blinding sun for high contrast
+            illuminance: 100_000.0, 
             ..default()
         },
-        // Very steep angle from high "in the sky"
-        Transform::from_rotation(Quat::from_rotation_x(90.0)),
+        Transform::from_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)),
         CellCoord::default(),
         Name::new("Sandbox_Sun"),
+    )).set_parent_in_place(grid_entity);
+
+    // 2b. Native Ambient Light (Bevy 0.18 uses a Component for this)
+    commands.spawn((
+        AmbientLight {
+            color: Color::WHITE,
+            brightness: 1_000.0,
+            affects_lightmapped_meshes: false,
+        },
+        Name::new("Sandbox_AmbientLight"),
     )).set_parent_in_place(grid_entity);
 
     // 3. Ground
     let blueprint_mat = blueprint_materials.add(BlueprintMaterial {
         base: StandardMaterial {
-            base_color: Color::srgb(0.25, 0.45, 0.85),
+            base_color: Color::srgb(0.2, 0.2, 0.2), // Neutral dark ground
             perceptual_roughness: 0.9,
             ..default()
         },
         extension: BlueprintExtension {
-            high_color: LinearRgba::new(0.7, 0.9, 1.0, 1.0),
-            low_color: LinearRgba::new(0.2, 0.3, 0.7, 1.0),
+            high_color: LinearRgba::new(0.5, 0.5, 0.5, 1.0),
+            low_color: LinearRgba::new(0.1, 0.1, 0.1, 1.0),
             grid_scale: 1.0,
-            line_width: 3.5,
+            line_width: 2.0,
             subdivisions: Vec2::new(10.0, 10.0),
             transition: 0.0, 
             ..default()
@@ -122,18 +131,18 @@ fn setup_sandbox(
         CellCoord::default(),
     )).set_parent_in_place(grid_entity);
 
-    // 4. Testing Ramp
+    // 4. Testing Ramp (Moved right next to the rovers!)
     let ramp_mat = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.8, 0.8, 0.8),
+        base_color: Color::srgb(0.7, 0.7, 0.7),
         ..default()
     });
     commands.spawn((
         Name::new("Ramp"),
-        Mesh3d(meshes.add(Cuboid::new(40.0, 1.0, 100.0))),
+        Mesh3d(meshes.add(Cuboid::new(30.0, 1.0, 40.0))),
         MeshMaterial3d(ramp_mat),
-        Transform::from_xyz(50.0, 8.0, 50.0).with_rotation(Quat::from_rotation_z(0.35)),
+        Transform::from_xyz(25.0, 4.0, 0.0).with_rotation(Quat::from_rotation_z(0.3)),
         RigidBody::Static,
-        Collider::cuboid(40.0, 1.0, 100.0),
+        Collider::cuboid(30.0, 1.0, 40.0),
         Friction::new(1.0),
         CellCoord::default(),
     )).set_parent_in_place(grid_entity);
@@ -196,13 +205,15 @@ fn setup_sandbox(
         }),
         bevy::core_pipeline::tonemapping::Tonemapping::TonyMcMapface,
         bevy::post_process::bloom::Bloom::NATURAL,
-        Transform::from_xyz(60.0, 400.0, 600.0).looking_at(Vec3::ZERO, Vec3::Y),
+        // Start slightly from behind, looking softly from above
+        Transform::default(), 
         ObserverCamera { 
             mode: ObserverMode::Orbital,
-            distance: 100.0,
-            pitch: -0.7, 
-            yaw: 0.8,    
-            focus_target: Some(rovers_root), 
+            focus_target: Some(rovers_root),
+            altitude: 20.0,     // Prevents celestial system from resetting camera distance
+            distance: 20.0,     // 20 meters away
+            pitch: -0.5,        // Looking softly down
+            yaw: -0.6,          // Looking from an angle
             ..default()
         },
         FloatingOrigin,
