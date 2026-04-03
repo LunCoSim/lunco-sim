@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 use bevy::math::{DVec3, DQuat};
 use avian3d::prelude::*;
+use big_space::prelude::CellCoord;
 use lunco_core::architecture::{PhysicalPort, DigitalPort, Wire};
 use lunco_core::{Vessel, RoverVessel};
 use lunco_fsw::FlightSoftware;
@@ -72,12 +73,6 @@ fn suspension_system(
             
             let total_force_mag: f64 = spring_force_mag + damping_force_mag;
             
-            static LOG_COUNT: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
-            let count = LOG_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            if count < 20 {
-                println!("TICK {:?} - Susp Force: {} | Compression: {} | Length: {} | Pos1 Y: {} | Pos2 Y: {} | Anch1_Loc_None: {}", count, total_force_mag, compression, current_length, pos1.y, pos2.y, joint.local_anchor1().is_none());
-            }
-
             if !total_force_mag.is_finite() { continue; }
             
             // Safety: Cap force to prevent numerical explosion
@@ -178,6 +173,7 @@ fn spawn_joint_rover_internal(
         RoverVessel,
         Vessel,
         Transform::from_translation(spawn_pos),
+        CellCoord::default(),
         RigidBody::Dynamic,
         Collider::cuboid(chassis_width, chassis_height, chassis_length),
         CollisionLayers::new(Layer::RoverChassis, [Layer::Default]),
@@ -266,6 +262,7 @@ fn spawn_joint_rover_internal(
             Mass(20.0), 
             LinearDamping(0.5), 
             AngularDamping(2.0),
+            CellCoord::default(),
             MotorActuator { port_entity: motor_port, axis: DVec3::Y },
             BrakeActuator { port_entity: brake_port, max_force: 32767.0 },
         )).id();
@@ -295,6 +292,7 @@ fn spawn_joint_rover_internal(
             Collider::sphere(0.05),
             CollisionLayers::from_bits(0, 0),
             Transform::from_translation(spawn_pos + rel_pos),
+            CellCoord::default(),
         )).id();
         commands.entity(parent).add_child(hub_entity);
 
@@ -311,7 +309,8 @@ fn spawn_joint_rover_internal(
                 spring_k: 50000.0,  // Increased to handle big mass
                 damping_c: 2000.0,  // Increased for stability
                 local_axis: DVec3::Y,
-            }
+            },
+            CellCoord::default(),
         )).id();
         commands.entity(parent).add_child(joint_ent1);
         
@@ -324,29 +323,39 @@ fn spawn_joint_rover_internal(
                 Collider::sphere(0.04), // Small non-colliding trigger for inertia
                 CollisionLayers::from_bits(0, 0),
                 Transform::from_translation(spawn_pos + rel_pos),
+                CellCoord::default(),
                 MotorActuator { port_entity: steer_port, axis: DVec3::Y },
             )).id();
             commands.entity(parent).add_child(steering_hub);
 
-            let joint_ent2 = commands.spawn(RevoluteJoint::new(hub_entity, steering_hub)
-                .with_local_anchor1(DVec3::ZERO)
-                .with_local_anchor2(DVec3::ZERO)
-                .with_hinge_axis(DVec3::Y)
-                .with_angle_limits(-0.6, 0.6)).id();
+            let joint_ent2 = commands.spawn((
+                RevoluteJoint::new(hub_entity, steering_hub)
+                    .with_local_anchor1(DVec3::ZERO)
+                    .with_local_anchor2(DVec3::ZERO)
+                    .with_hinge_axis(DVec3::Y)
+                    .with_angle_limits(-0.6, 0.6),
+                CellCoord::default(),
+            )).id();
             commands.entity(parent).add_child(joint_ent2);
                 
-            let joint_ent3 = commands.spawn(RevoluteJoint::new(steering_hub, wheel_entity)
-                .with_local_anchor1(DVec3::ZERO)
-                .with_local_anchor2(DVec3::ZERO)
-                .with_hinge_axis(DVec3::X)
-                .with_local_basis2(wheel_tilt_d.inverse())).id();
+            let joint_ent3 = commands.spawn((
+                RevoluteJoint::new(steering_hub, wheel_entity)
+                    .with_local_anchor1(DVec3::ZERO)
+                    .with_local_anchor2(DVec3::ZERO)
+                    .with_hinge_axis(DVec3::X)
+                    .with_local_basis2(wheel_tilt_d.inverse()),
+                CellCoord::default(),
+            )).id();
             commands.entity(parent).add_child(joint_ent3);
         } else {
-            let joint_ent4 = commands.spawn(RevoluteJoint::new(hub_entity, wheel_entity)
-                .with_local_anchor1(DVec3::ZERO)
-                .with_local_anchor2(DVec3::ZERO)
-                .with_hinge_axis(DVec3::X)
-                .with_local_basis2(wheel_tilt_d.inverse())).id();
+            let joint_ent4 = commands.spawn((
+                RevoluteJoint::new(hub_entity, wheel_entity)
+                    .with_local_anchor1(DVec3::ZERO)
+                    .with_local_anchor2(DVec3::ZERO)
+                    .with_hinge_axis(DVec3::X)
+                    .with_local_basis2(wheel_tilt_d.inverse()),
+                CellCoord::default(),
+            )).id();
             commands.entity(parent).add_child(joint_ent4);
         }
     }

@@ -4384,6 +4384,7 @@ version = "0.6.0"
 dependencies = [
  "avian3d",
  "bevy",
+ "big_space",
  "lunco-core",
  "lunco-fsw",
 ]
@@ -4394,6 +4395,7 @@ version = "0.6.0"
 dependencies = [
  "avian3d",
  "bevy",
+ "big_space",
  "lunco-core",
  "lunco-fsw",
  "lunco-physics",

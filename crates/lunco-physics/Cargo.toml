@@ -6,5 +6,6 @@ edition = "2021"
 [dependencies]
 bevy = { workspace = true, features = ["default"] }
 avian3d = { workspace = true }
+big_space = { workspace = true }
 lunco-core = { path = "../lunco-core" }
 lunco-fsw = { path = "../lunco-fsw" }

@@ -2,6 +2,7 @@ use avian3d::prelude::*;
 use avian3d::math::Vector;
 use bevy::prelude::*;
 use bevy::ecs::relationship::Relationship;
+use big_space::prelude::CellCoord;
 use std::collections::HashMap;
 
 use lunco_core::architecture::{PhysicalPort, DigitalPort, Wire};
@@ -225,6 +226,7 @@ fn spawn_raycast_rover_internal(
         RoverVessel,
         lunco_core::Vessel,
         Transform::from_translation(spawn_pos),
+        CellCoord::default(),
         RigidBody::Dynamic,
         Collider::cuboid(chassis_width, chassis_height, chassis_length),
         CollisionLayers::new(Layer::RoverChassis, [Layer::Default]),
@@ -283,6 +285,7 @@ fn spawn_raycast_rover_internal(
         let visual_wheel_builder = commands.spawn((
             Name::new(format!("{}_visual", label)),
             Transform::from_translation(rel_pos).with_rotation(wheel_rot), 
+            CellCoord::default(),
             ChildOf(rover_entity),
         ));
 
@@ -323,6 +326,7 @@ fn spawn_raycast_rover_internal(
                 .with_solidness(true)
                 .with_query_filter(SpatialQueryFilter::from_excluded_entities([rover_entity])),
             Transform::from_translation(rel_pos),
+            CellCoord::default(),
             ChildOf(rover_entity),
         ));
     }
