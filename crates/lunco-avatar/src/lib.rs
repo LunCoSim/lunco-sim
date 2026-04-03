@@ -80,10 +80,23 @@ fn avatar_toggle_detached_mode(
 
 fn capture_avatar_intent(
     keys: Res<ButtonInput<KeyCode>>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    windows: Query<&Window>,
+    mut last_mouse_pos: Local<Option<Vec2>>,
     clock: Res<lunco_celestial::CelestialClock>,
     mut q_avatar: Query<(Entity, &mut UserIntent), With<Avatar>>,
     mut commands: Commands,
 ) {
+    let window = windows.iter().next();
+    let current_mouse_pos = window.and_then(|w| w.cursor_position());
+    let mut mouse_moved = false;
+    if let (Some(curr), Some(last)) = (current_mouse_pos, *last_mouse_pos) {
+        if mouse.pressed(MouseButton::Right) && curr.distance(last) > 2.0 {
+            mouse_moved = true;
+        }
+    }
+    *last_mouse_pos = current_mouse_pos;
+
     for (entity, mut intent) in q_avatar.iter_mut() {
         let mut forward = 0.0;
         let mut side = 0.0;
@@ -107,7 +120,7 @@ fn capture_avatar_intent(
         commands.trigger(intent.clone());
 
         // Phase 5: Preemption - Manual input cancels active automated actions (ViewPoint transitions, etc)
-        if forward.abs() > 0.1 || side.abs() > 0.1 || elevation.abs() > 0.1 {
+        if forward.abs() > 0.1 || side.abs() > 0.1 || elevation.abs() > 0.1 || mouse_moved {
              commands.entity(entity).remove::<lunco_core::ActiveAction>();
         }
     }

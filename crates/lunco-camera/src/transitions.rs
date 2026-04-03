@@ -42,9 +42,8 @@ pub fn camera_transition_system(
         let t = trans.easing.sample(raw_t).unwrap_or(raw_t);
         
         // Interpolation with Easing
-        vp.offset = trans.start.offset.lerp(trans.target.offset, t);
-        vp.yaw = trans.start.yaw + (trans.target.yaw - trans.start.yaw) * t;
-        vp.pitch = trans.start.pitch + (trans.target.pitch - trans.start.pitch) * t;
+        vp.offset = trans.start.offset.lerp(trans.target.offset, t as f64);
+        vp.rotation = trans.start.rotation.slerp(trans.target.rotation, t);
         vp.fov = trans.start.fov + (trans.target.fov - trans.start.fov) * t;
         
         action.progress = raw_t; 

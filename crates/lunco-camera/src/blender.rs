@@ -42,13 +42,11 @@ fn viewpoint_blender_system(
                 let target_pos_in_cam_grid = target_pos_solar - cam_grid_pos_solar;
                 let current_pos_in_cam_grid = cam_grid.grid_position_double(&cam_cell, &tf);
 
-                // 2. Calculate Desired Rotation (Target Rotation + ViewPoint Local Yaw/Pitch)
-                let local_offset_rot = Quat::from_euler(EulerRot::YXZ, viewpoint.yaw, viewpoint.pitch, 0.0);
-                let target_rot = t_tf.rotation * local_offset_rot;
+                // 2. Calculate Desired Rotation (Target Rotation * ViewPoint Local Rotation)
+                let target_rot = t_tf.rotation * viewpoint.rotation;
 
                 // 3. Calculate Desired Position (Target Position + Rotated Offset)
-                let desired_offset_world = target_rot * viewpoint.offset;
-                let desired_pos_in_cam_grid = target_pos_in_cam_grid + desired_offset_world.as_dvec3();
+                let desired_pos_in_cam_grid = target_pos_in_cam_grid + (target_rot * viewpoint.offset.as_vec3()).as_dvec3();
                 
                 let new_pos_in_cam_grid = current_pos_in_cam_grid.lerp(desired_pos_in_cam_grid, lerp_factor);
                 

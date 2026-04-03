@@ -41,10 +41,9 @@ pub struct ViewPoint {
     /// The entity to follow/look at
     pub target: Option<Entity>,
     /// High-precision offset in the target's coordinate frame
-    pub offset: Vec3,
+    pub offset: DVec3,
     /// Desired rotation (relative to target or absolute if target is None)
-    pub yaw: f32,
-    pub pitch: f32,
+    pub rotation: Quat,
     /// Desired Field of View
     pub fov: f32,
     /// Blending speed multiplier
@@ -52,6 +51,11 @@ pub struct ViewPoint {
     /// Whether this viewpoint is currently active
     pub active: bool,
 }
+
+/// Marker component for a hardware camera device in the simulation.
+#[derive(Component, Debug, Clone, Reflect, Default)]
+#[reflect(Component, Default)]
+pub struct CameraDevice;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Reflect, Default)]
 pub enum ObserverMode {
