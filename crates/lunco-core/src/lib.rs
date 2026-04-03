@@ -102,6 +102,8 @@ impl Plugin for LunCoCorePlugin {
            .register_type::<Parameter>()
            .register_type::<SampledParameter>()
            .register_type::<CelestialClock>()
+           .register_type::<UserIntent>()
+           .register_type::<IntentAnalogState>()
            .register_type::<OrbitState>()
            .register_type::<PhysicalPort>()
            .register_type::<DigitalPort>()

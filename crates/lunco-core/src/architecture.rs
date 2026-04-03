@@ -1,5 +1,54 @@
 use bevy::prelude::*;
 use smallvec::SmallVec;
+use leafwing_input_manager::prelude::*;
+
+/// High-level semantic actions intended by the user.
+#[derive(Actionlike, PartialEq, Eq, Hash, Clone, Copy, Debug, Reflect)]
+pub enum UserIntent {
+    // Movement
+    MoveForward,
+    MoveBackward,
+    MoveLeft,
+    MoveRight,
+    MoveUp,
+    MoveDown,
+    
+    // Camera / View
+    Look, 
+    Zoom,
+    
+    // Interactions
+    Action,
+    SwitchMode,
+    Pause,
+}
+
+pub type IntentState = ActionState<UserIntent>;
+
+/// A component that stores the current analog values of intents.
+#[derive(Component, EntityEvent, Debug, Clone, Reflect)]
+#[reflect(Component, Default)]
+pub struct IntentAnalogState {
+    pub entity: Entity,
+    pub forward: f32,
+    pub side: f32,
+    pub elevation: f32,
+    pub look_delta: Vec2,
+    pub timestamp: f64,
+}
+
+impl Default for IntentAnalogState {
+    fn default() -> Self {
+        Self {
+            entity: Entity::PLACEHOLDER,
+            forward: 0.0,
+            side: 0.0,
+            elevation: 0.0,
+            look_delta: Vec2::ZERO,
+            timestamp: 0.0,
+        }
+    }
+}
 
 /// Level 2: Digital Port (OBC Emulation)
 /// Uses i16 (-32768 to 32767) to emulate hardware bit-depth

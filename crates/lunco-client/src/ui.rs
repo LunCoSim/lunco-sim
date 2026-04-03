@@ -3,7 +3,7 @@ use bevy_egui::{egui, EguiContexts, EguiPlugin, EguiPrimaryContextPass};
 use lunco_core::{RoverVessel, Vessel, Avatar, Spacecraft};
 use lunco_celestial::{CelestialClock, CelestialBody, TrajectoryView, TrajectoryFrame};
 use lunco_camera::{ObserverCamera, ObserverMode, CameraScroll};
-use lunco_controller::{ControllerLink, SpaceSystemAction, get_default_input_map};
+use lunco_controller::{ControllerLink, VesselIntent, get_default_input_map, get_avatar_input_map};
 use lunco_physics::Suspension;
 
 pub struct LunCoUiPlugin;
@@ -188,10 +188,9 @@ fn main_ui_system(
                         ));
                     }
                     commands.entity(target).insert((
-                        leafwing_input_manager::prelude::ActionState::<SpaceSystemAction>::default(),
+                        leafwing_input_manager::prelude::ActionState::<VesselIntent>::default(),
                         get_default_input_map(),
-                    ));
-                    info!("Possessing rover and focusing at 10m.");
+                    ));                    info!("Possessing rover and focusing at 10m.");
                 }
                 
                 ui.collapsing("Mechanical Inspector", |ui| {

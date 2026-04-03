@@ -4373,6 +4373,7 @@ version = "0.6.0"
 dependencies = [
  "bevy",
  "big_space",
+ "leafwing-input-manager",
  "smallvec",
 ]
 

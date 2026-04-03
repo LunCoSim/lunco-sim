@@ -7,3 +7,4 @@ edition = "2021"
 bevy = { workspace = true, features = ["default"] }
 smallvec = { workspace = true }
 big_space = { workspace = true }
+leafwing-input-manager.workspace = true

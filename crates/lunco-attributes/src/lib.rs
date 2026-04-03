@@ -36,9 +36,9 @@ pub struct SetAttribute {
 }
 
 // Re-implementing with a custom command for reflection mutation
-/// NOTE: This implementation performs optimized reflection access.
-/// For maximum performance (60Hz+), we recommend caching the ComponentId
-/// and using direct Pointer access, as hinted in the master plan.
+/// NOTE: This implementation performs optimized reflection access by using short type paths.
+/// For maximum real-time performance (60Hz+), we recommend further caching the ComponentId
+/// and using direct Pointer access, as noted in the master plan.
 pub struct ApplyReflectedSet {
     pub address: AttributeAddress,
     pub value: TelemetryValue,

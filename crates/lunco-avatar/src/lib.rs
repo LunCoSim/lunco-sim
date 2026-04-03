@@ -1,16 +1,19 @@
 use bevy::prelude::*;
+use leafwing_input_manager::prelude::*;
 use avian3d::prelude::*;
 
 use lunco_controller::ControllerLink;
 use lunco_core::{Vessel, Avatar, OrbitState};
 use lunco_celestial::CelestialClock;
-use lunco_camera::{ObserverCamera, ObserverMode};
+
+mod intents;
+pub use intents::*;
 
 pub struct LunCoAvatarPlugin;
 
 impl Plugin for LunCoAvatarPlugin {
     fn build(&self, app: &mut App) {
-        app.register_type::<UserIntent>();
+        app.add_plugins(InputManagerPlugin::<UserIntent>::default());
         app.add_observer(on_user_intent);
         app.add_systems(Update, (
             capture_avatar_intent,
@@ -22,40 +25,6 @@ impl Plugin for LunCoAvatarPlugin {
             avatar_toggle_detached_mode,
             avatar_global_hotkeys,
         ).chain());
-
-        // Modular camera system handles follow via ObserverCamera in lunco-camera
-    }
-}
-
-/// High-level semantic actions intended by the user.
-/// Decouples raw input (WASD/Keys) from simulation results.
-#[derive(Component, Event, Debug, Clone, Reflect)]
-#[reflect(Component)]
-pub struct UserIntent {
-    /// Semantic forward/backward movement (-1.0 to 1.0)
-    pub forward: f64,
-    /// Semantic side movement (-1.0 to 1.0)
-    pub side: f64,
-    /// Semantic rotation/yaw (-1.0 to 1.0)
-    pub turn: f64,
-    /// Semantic elevation Change (-1.0 to 1.0)
-    pub elevation: f64,
-    /// The avatar entity that generated this intent
-    pub source: Entity,
-    /// Timestamp of when this intent was formed
-    pub timestamp: f64,
-}
-
-impl Default for UserIntent {
-    fn default() -> Self {
-        Self {
-            forward: 0.0,
-            side: 0.0,
-            turn: 0.0,
-            elevation: 0.0,
-            source: Entity::PLACEHOLDER,
-            timestamp: 0.0,
-        }
     }
 }
 
@@ -79,12 +48,11 @@ fn avatar_toggle_detached_mode(
 }
 
 fn capture_avatar_intent(
-    keys: Res<ButtonInput<KeyCode>>,
+    mut q_avatar: Query<(Entity, &IntentState, &mut IntentAnalogState), With<Avatar>>,
     mouse: Res<ButtonInput<MouseButton>>,
     windows: Query<&Window>,
     mut last_mouse_pos: Local<Option<Vec2>>,
     clock: Res<lunco_celestial::CelestialClock>,
-    mut q_avatar: Query<(Entity, &mut UserIntent), With<Avatar>>,
     mut commands: Commands,
 ) {
     let window = windows.iter().next();
@@ -97,27 +65,30 @@ fn capture_avatar_intent(
     }
     *last_mouse_pos = current_mouse_pos;
 
-    for (entity, mut intent) in q_avatar.iter_mut() {
+    for (entity, intent_state, mut analog) in q_avatar.iter_mut() {
         let mut forward = 0.0;
         let mut side = 0.0;
         let mut elevation = 0.0;
         
-        if keys.pressed(KeyCode::KeyW) { forward += 1.0; }
-        if keys.pressed(KeyCode::KeyS) { forward -= 1.0; }
-        if keys.pressed(KeyCode::KeyA) { side -= 1.0; }
-        if keys.pressed(KeyCode::KeyD) { side += 1.0; }
-        if keys.pressed(KeyCode::KeyE) { elevation += 1.0; }
-        if keys.pressed(KeyCode::KeyQ) { elevation -= 1.0; }
+        if intent_state.pressed(&UserIntent::MoveForward) { forward += 1.0; }
+        if intent_state.pressed(&UserIntent::MoveBackward) { forward -= 1.0; }
+        if intent_state.pressed(&UserIntent::MoveRight) { side += 1.0; }
+        if intent_state.pressed(&UserIntent::MoveLeft) { side -= 1.0; }
+        if intent_state.pressed(&UserIntent::MoveUp) { elevation += 1.0; }
+        if intent_state.pressed(&UserIntent::MoveDown) { elevation -= 1.0; }
 
-        // Capture intent
-        intent.forward = forward;
-        intent.side = side;
-        intent.elevation = elevation;
-        intent.source = entity;
-        intent.timestamp = clock.epoch;
+        // Capture analog snapshot
+        analog.forward = forward;
+        analog.side = side;
+        analog.elevation = elevation;
+        analog.timestamp = clock.epoch;
         
-        // Trigger the intent globally for the translator to pick up
-        commands.trigger(intent.clone());
+        // Trigger the analog state globally for observers (like on_user_intent)
+        commands.entity(entity).trigger(|e| {
+            let mut a = analog.clone();
+            a.entity = e;
+            a
+        });
 
         // Phase 5: Preemption - Manual input cancels active automated actions (ViewPoint transitions, etc)
         if forward.abs() > 0.1 || side.abs() > 0.1 || elevation.abs() > 0.1 || mouse_moved {
@@ -127,47 +98,41 @@ fn capture_avatar_intent(
 }
 
 fn avatar_global_hotkeys(
-    keys: Res<ButtonInput<KeyCode>>,
+    q_avatar: Query<&IntentState, With<Avatar>>,
     mut clock: ResMut<CelestialClock>,
-    q_avatar: Query<&ObserverCamera, With<Avatar>>,
 ) {
-    if keys.just_pressed(KeyCode::Space) {
-        for obs in q_avatar.iter() {
-            if obs.mode == ObserverMode::Orbital || obs.mode == ObserverMode::Flyby {
-                clock.paused = !clock.paused;
-                info!("Toggled simulation pause via avatar-space interaction. Paused: {}", clock.paused);
-                break;
-            }
+    for intent_state in q_avatar.iter() {
+        if intent_state.just_pressed(&UserIntent::Pause) {
+            clock.paused = !clock.paused;
+            info!("Toggled simulation pause via UserIntent. Paused: {}", clock.paused);
         }
     }
 }
 
 fn avatar_freecam_translation(
-    keys: Res<ButtonInput<KeyCode>>,
     time: Res<Time>,
-    mut q_avatar: Query<(&mut Transform, Has<DetachedCamera>), (With<Avatar>, Or<(Without<ControllerLink>, With<DetachedCamera>)>)>,
+    mut q_avatar: Query<(&mut Transform, &IntentState, Has<DetachedCamera>), (With<Avatar>, Or<(Without<ControllerLink>, With<DetachedCamera>)>)>,
 ) {
-    let mut speed = 20.0 * time.delta_secs();
-    if keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]) { speed *= 2.0; }
-    let ctrl_pressed = keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
+    let speed = 20.0 * time.delta_secs();
     
-    for (mut transform, is_detached) in q_avatar.iter_mut() {
-        if is_detached && !ctrl_pressed { continue; }
+    for (mut transform, intent_state, _is_detached) in q_avatar.iter_mut() {
         let mut velocity = Vec3::ZERO;
         let forward = *transform.forward();
         let right = *transform.right();
-        if keys.pressed(KeyCode::KeyW) { velocity += forward; }
-        if keys.pressed(KeyCode::KeyS) { velocity -= forward; }
-        if keys.pressed(KeyCode::KeyD) { velocity += right; }
-        if keys.pressed(KeyCode::KeyA) { velocity -= right; }
-        if keys.pressed(KeyCode::KeyE) { velocity += Vec3::Y; }
-        if keys.pressed(KeyCode::KeyQ) { velocity -= Vec3::Y; }
+        
+        if intent_state.pressed(&UserIntent::MoveForward) { velocity += forward; }
+        if intent_state.pressed(&UserIntent::MoveBackward) { velocity -= forward; }
+        if intent_state.pressed(&UserIntent::MoveRight) { velocity += right; }
+        if intent_state.pressed(&UserIntent::MoveLeft) { velocity -= right; }
+        if intent_state.pressed(&UserIntent::MoveUp) { velocity += Vec3::Y; }
+        if intent_state.pressed(&UserIntent::MoveDown) { velocity -= Vec3::Y; }
+        
         transform.translation += velocity.normalize_or_zero() * speed;
     }
 }
 
 fn avatar_freecam_rotation(
-    keys: Res<ButtonInput<MouseButton>>,
+    mouse: Res<ButtonInput<MouseButton>>,
     mut q_avatar: Query<&mut Transform, (With<Avatar>, Or<(Without<ControllerLink>, With<DetachedCamera>)>)>,
     windows: Query<&Window>,
     mut last_mouse_pos: Local<Option<Vec2>>,
@@ -176,7 +141,7 @@ fn avatar_freecam_rotation(
     let curr = window.and_then(|w| w.cursor_position());
     let mut delta = Vec2::ZERO;
     if let (Some(c), Some(l)) = (curr, *last_mouse_pos) {
-        if keys.pressed(MouseButton::Right) { delta = c - l; }
+        if mouse.pressed(MouseButton::Right) { delta = c - l; }
     }
     *last_mouse_pos = curr;
 
@@ -191,8 +156,8 @@ fn avatar_freecam_rotation(
 }
 
 fn avatar_orbit_input(
-    keys: Res<ButtonInput<MouseButton>>,
-    keys_input: Res<ButtonInput<KeyCode>>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    intent_q: Query<&IntentState, With<Avatar>>,
     time: Res<Time>,
     windows: Query<&Window>,
     mut last_mouse_pos: Local<Option<Vec2>>,
@@ -202,29 +167,27 @@ fn avatar_orbit_input(
     let curr = window.and_then(|w| w.cursor_position());
     let mut delta = Vec2::ZERO;
     if let (Some(c), Some(l)) = (curr, *last_mouse_pos) {
-        if keys.pressed(MouseButton::Right) { delta = c - l; }
+        if mouse.pressed(MouseButton::Right) { delta = c - l; }
     }
     *last_mouse_pos = curr;
 
-    let mut scroll = 0.0;
-    if keys_input.pressed(KeyCode::Equal) { scroll += 1.0; }
-    if keys_input.pressed(KeyCode::Minus) { scroll -= 1.0; }
-
-    for mut orbit in q_avatar.iter_mut() {
-        if keys.pressed(MouseButton::Right) {
+    for (mut orbit, intent_state) in q_avatar.iter_mut().zip(intent_q.iter()) {
+        if mouse.pressed(MouseButton::Right) {
             let sensitivity = 0.005;
             orbit.yaw -= delta.x * sensitivity;
             orbit.pitch -= delta.y * sensitivity;
             orbit.pitch = orbit.pitch.clamp(-1.5, -0.1);
         }
-        orbit.distance = (orbit.distance - scroll * 2.0).clamp(2.0, 100.0);
+        
+        if intent_state.pressed(&UserIntent::Zoom) {
+            // Zoom logic would need to handle axis or button
+        }
+
         let offset_speed = 5.0 * time.delta_secs();
-        if keys_input.pressed(KeyCode::KeyE) { orbit.vertical_offset += offset_speed; }
-        if keys_input.pressed(KeyCode::KeyQ) { orbit.vertical_offset -= offset_speed; }
+        if intent_state.pressed(&UserIntent::MoveUp) { orbit.vertical_offset += offset_speed; }
+        if intent_state.pressed(&UserIntent::MoveDown) { orbit.vertical_offset -= offset_speed; }
     }
 }
-
-// avatar_camera_follow removed - functionality moved to lunco-camera::update_observer_camera_system
 
 fn avatar_raycast_possession(
     mouse: Res<ButtonInput<MouseButton>>,
@@ -245,7 +208,7 @@ fn avatar_raycast_possession(
                         commands.entity(avatar_entity).insert((
                             ControllerLink { vessel_entity }, 
                             OrbitState::default(),
-                            UserIntent::default()
+                            IntentAnalogState::default()
                         ));
                     }
                 }
@@ -264,28 +227,28 @@ fn avatar_escape_possession(
             commands.entity(entity).remove::<ControllerLink>();
             commands.entity(entity).remove::<OrbitState>();
             commands.entity(entity).remove::<DetachedCamera>();
-            commands.entity(entity).remove::<UserIntent>();
+            commands.entity(entity).remove::<IntentAnalogState>();
         }
     }
 }
 
-/// Observer that translates high-level UserIntent into physical CommandMessages 
+/// Observer that translates high-level analog intent into physical CommandMessages 
 /// specifically for the vessel linked to the avatar.
 fn on_user_intent(
-    trigger: On<UserIntent>,
+    trigger: On<IntentAnalogState>,
     q_avatar: Query<&ControllerLink, With<Avatar>>,
     mut commands: Commands,
 ) {
-    let intent = trigger.event();
-    let avatar_entity = intent.source;
+    let analog = trigger.event();
+    let avatar_entity = trigger.entity;
     
     if let Ok(link) = q_avatar.get(avatar_entity) {
-        if intent.forward.abs() > 0.01 || intent.side.abs() > 0.01 {
+        if analog.forward.abs() > 0.01 || analog.side.abs() > 0.01 {
             commands.trigger(lunco_core::architecture::CommandMessage {
-                id: intent.timestamp as u64, 
+                id: analog.timestamp as u64, 
                 target: link.vessel_entity,
                 name: "DRIVE_ROVER".to_string(),
-                args: smallvec::smallvec![intent.forward, intent.side],
+                args: smallvec::smallvec![analog.forward as f64, analog.side as f64],
                 source: avatar_entity,
             });
         }

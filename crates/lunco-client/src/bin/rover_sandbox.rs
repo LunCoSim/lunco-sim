@@ -15,8 +15,8 @@ use lunco_rover_raycast::{
     spawn_raycast_skid_rover, 
     spawn_raycast_ackermann_rover
 };
-use lunco_controller::{LunCoControllerPlugin, SpaceSystemAction, get_default_input_map}; 
-use lunco_avatar::LunCoAvatarPlugin;
+use lunco_controller::{LunCoControllerPlugin, VesselIntent, get_default_input_map}; 
+use lunco_avatar::{LunCoAvatarPlugin, UserIntent, IntentAnalogState};
 use lunco_celestial::{BlueprintMaterial, BlueprintExtension, CelestialClock, CelestialBody};
 use lunco_camera::{ObserverCamera, ObserverMode, ActiveCamera};
 
@@ -219,8 +219,9 @@ fn setup_sandbox(
         },
         FloatingOrigin,
         CellCoord::default(),
-        ActionState::<SpaceSystemAction>::default(),
-        get_default_input_map(),
+        ActionState::<UserIntent>::default(),
+        lunco_controller::get_avatar_input_map(),
+        IntentAnalogState::default(),
         ActiveCamera,
     )).set_parent_in_place(grid_entity);
 }

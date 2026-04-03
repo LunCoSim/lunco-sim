@@ -255,6 +255,9 @@ pub fn setup_big_space_hierarchy(
         },
         lunco_camera::ActiveCamera,
         lunco_core::Avatar,
+        lunco_core::IntentState::default(),
+        lunco_controller::get_avatar_input_map(),
+        lunco_core::IntentAnalogState::default(),
         Name::new("Observer Camera"),
     )).set_parent_in_place(moon_grid); // Parent camera back to moon_grid
 
