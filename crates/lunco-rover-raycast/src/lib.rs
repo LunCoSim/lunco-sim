@@ -5,7 +5,7 @@ use bevy::ecs::relationship::Relationship;
 use big_space::prelude::CellCoord;
 use std::collections::HashMap;
 
-use lunco_core::architecture::{PhysicalPort, DigitalPort, Wire, CommandMessage, CommandResponse, CommandStatus};
+use lunco_core::architecture::{PhysicalPort, DigitalPort, Wire, CommandMessage, CommandResponse, CommandStatus, DifferentialDrive, AckermannSteer};
 use lunco_physics::Layer;
 use lunco_fsw::FlightSoftware;
 
@@ -29,39 +29,56 @@ impl Plugin for LunCoRoverRaycastPlugin {
 
 fn on_command(
     trigger: On<CommandMessage>,
-    mut q_rovers: Query<(&mut FlightSoftware, &mut WheelRaycast), With<RoverVessel>>,
+    mut q_rovers: Query<(&mut FlightSoftware, Entity), With<RoverVessel>>,
+    q_diff: Query<&DifferentialDrive>,
+    q_ack: Query<&AckermannSteer>,
     mut q_digital_ports: Query<&mut DigitalPort>,
     mut commands: Commands,
 ) {
     let cmd = trigger.event();
     
     // We only process if this entity is a Raycast Rover AND target matches
-    if let Ok((mut fsw, _)) = q_rovers.get_mut(cmd.target) {
+    if let Ok((mut fsw, target_ent)) = q_rovers.get_mut(cmd.target) {
         let mut status = CommandStatus::Ack;
 
         match cmd.name.as_str() {
             "DRIVE_ROVER" => {
                 if cmd.args.len() >= 1 {
-                    let drive_power = (cmd.args[0] * 32767.0).clamp(-32767.0, 32767.0) as i32;
-                    let steer_power = if cmd.args.len() >= 2 {
-                        (cmd.args[1] * 32767.0).clamp(-32767.0, 32767.0) as i32
-                    } else { 0 };
+                    let forward = cmd.args[0];
+                    let steer = if cmd.args.len() >= 2 { cmd.args[1] } else { 0.0 };
 
-                    let (left_power, right_power) = if fsw.brake_active {
-                        (0, 0)
-                    } else {
-                        // Mixing
-                        ((drive_power + steer_power).clamp(-32767, 32767), (drive_power - steer_power).clamp(-32767, 32767))
-                    };
+                    if fsw.brake_active {
+                        // Apply zero to all relevant ports
+                        for name in ["drive_left", "drive_right", "steering"] {
+                            if let Some(&port_id) = fsw.port_map.get(name) {
+                                if let Ok(mut p) = q_digital_ports.get_mut(port_id) { p.raw_value = 0; }
+                            }
+                        }
+                    } else if let Ok(diff) = q_diff.get(target_ent) {
+                        // Differential Mixing
+                        let left_mix = ((forward + steer) * 32767.0).clamp(-32767.0, 32767.0) as i16;
+                        let right_mix = ((forward - steer) * 32767.0).clamp(-32767.0, 32767.0) as i16;
 
-                    if let Some(&port_l) = fsw.port_map.get("drive_left") {
-                        if let Ok(mut p) = q_digital_ports.get_mut(port_l) { p.raw_value = left_power as i16; }
-                    }
-                    if let Some(&port_r) = fsw.port_map.get("drive_right") {
-                        if let Ok(mut p) = q_digital_ports.get_mut(port_r) { p.raw_value = right_power as i16; }
-                    }
-                    if let Some(&port_s) = fsw.port_map.get("steering") {
-                        if let Ok(mut p) = q_digital_ports.get_mut(port_s) { p.raw_value = steer_power as i16; }
+                        if let Some(&port_l) = fsw.port_map.get(&diff.left_port) {
+                            if let Ok(mut p) = q_digital_ports.get_mut(port_l) { p.raw_value = left_mix; }
+                        }
+                        if let Some(&port_r) = fsw.port_map.get(&diff.right_port) {
+                            if let Ok(mut p) = q_digital_ports.get_mut(port_r) { p.raw_value = right_mix; }
+                        }
+                    } else if let Ok(ack) = q_ack.get(target_ent) {
+                        // Ackermann Mixing
+                        let drive_val = (forward * 32767.0).clamp(-32767.0, 32767.0) as i16;
+                        let steer_val = (steer * 32767.0).clamp(-32767.0, 32767.0) as i16;
+
+                        if let Some(&port_l) = fsw.port_map.get(&ack.drive_left_port) {
+                            if let Ok(mut p) = q_digital_ports.get_mut(port_l) { p.raw_value = drive_val; }
+                        }
+                        if let Some(&port_r) = fsw.port_map.get(&ack.drive_right_port) {
+                            if let Ok(mut p) = q_digital_ports.get_mut(port_r) { p.raw_value = drive_val; }
+                        }
+                        if let Some(&port_s) = fsw.port_map.get(&ack.steer_port) {
+                            if let Ok(mut p) = q_digital_ports.get_mut(port_s) { p.raw_value = steer_val; }
+                        }
                     }
                 } else {
                     status = CommandStatus::Failed("DRIVE_ROVER requires arguments".to_string());
@@ -288,7 +305,7 @@ fn spawn_raycast_rover_internal(
 
     // No materials in tests to avoid shader panics
 
-    let rover_entity = commands.spawn((
+    let mut rover_builder = commands.spawn((
         Name::new(name.to_string()),
         RoverVessel,
         lunco_core::Vessel,
@@ -298,7 +315,23 @@ fn spawn_raycast_rover_internal(
         Collider::cuboid(chassis_width, chassis_height, chassis_length),
         CollisionLayers::new(Layer::RoverChassis, [Layer::Default]),
         Mass(1000.0),
-    )).id();
+    ));
+
+    if is_ackermann {
+        rover_builder.insert(AckermannSteer {
+            drive_left_port: "drive_left".to_string(),
+            drive_right_port: "drive_right".to_string(),
+            steer_port: "steering".to_string(),
+            max_steer_angle: 0.5,
+        });
+    } else {
+        rover_builder.insert(DifferentialDrive {
+            left_port: "drive_left".to_string(),
+            right_port: "drive_right".to_string(),
+        });
+    }
+
+    let rover_entity = rover_builder.id();
 
     #[cfg(not(test))]
     {

@@ -5,7 +5,10 @@ use lunco_core::{Avatar, CelestialBody, Spacecraft, RoverVessel};
 use lunco_core::coords::get_absolute_pos_in_root_double_ghost_aware;
 
 mod transitions;
+mod blender;
+
 pub use transitions::*;
+pub use blender::*;
 
 pub struct LunCoCameraPlugin;
 
@@ -17,13 +20,14 @@ impl Plugin for LunCoCameraPlugin {
         app.register_type::<ObserverMode>();
         app.register_type::<CameraTransition>();
         
+        app.add_plugins(LunCoBlenderPlugin);
+
         app.add_systems(Update, (
             camera_migration_system,
             camera_selection_system,
             focus_transition_system,
             update_observer_camera_system,
             update_camera_clip_planes_system,
-            viewpoint_blender_system,
             camera_transition_system,
         ).chain());
     }
@@ -93,61 +97,6 @@ pub struct ActiveCamera;
 #[derive(Resource, Default)]
 pub struct CameraScroll {
     pub delta: f32,
-}
-
-/// System that smoothly interpolates the camera's transform and projection 
-/// toward the desired ViewPoint.
-fn viewpoint_blender_system(
-    time: Res<Time>,
-    mut q_camera: Query<(Entity, &mut CellCoord, &mut Transform, &mut Projection, &ViewPoint, &Avatar), With<Camera>>,
-    q_targets: Query<(Entity, &CellCoord, &Transform), Without<Camera>>,
-    q_all_grids: Query<&Grid>,
-    q_parents: Query<&ChildOf>,
-    q_spatial: Query<(&CellCoord, &Transform), Without<Camera>>,
-) {
-    let dt = time.delta_secs();
-    
-    for (cam_ent, mut cam_cell, mut tf, mut projection, viewpoint, _) in q_camera.iter_mut() {
-        if !viewpoint.active { continue; }
-        
-        if let Some(target_ent) = viewpoint.target {
-            if let Ok((t_ent, t_cell, t_tf)) = q_targets.get(target_ent) {
-                let lerp_factor = (viewpoint.speed * dt).min(1.0) as f64;
-                
-                // Get absolute positions
-                let target_pos_solar = get_absolute_pos_in_root_double_ghost_aware(t_ent, t_cell, t_tf, &q_parents, &q_all_grids, &q_spatial);
-                
-                let Ok(cam_child_of) = q_parents.get(cam_ent) else { continue; };
-                let cam_grid_ent = cam_child_of.parent();
-                let Ok(cam_grid) = q_all_grids.get(cam_grid_ent) else { continue; };
-                let Ok((cg_cell, cg_tf)) = q_spatial.get(cam_grid_ent) else { continue; };
-                let cam_grid_pos_solar = get_absolute_pos_in_root_double_ghost_aware(cam_grid_ent, cg_cell, cg_tf, &q_parents, &q_all_grids, &q_spatial);
-                
-                let target_pos_in_cam_grid = target_pos_solar - cam_grid_pos_solar;
-                let current_pos_in_cam_grid = cam_grid.grid_position_double(&cam_cell, &tf);
-
-                // Interpolate in absolute space relative to camera grid
-                let target_rot = t_tf.rotation;
-                let desired_offset_world = target_rot * viewpoint.offset;
-                let desired_pos_in_cam_grid = target_pos_in_cam_grid + desired_offset_world.as_dvec3();
-                
-                let new_pos_in_cam_grid = current_pos_in_cam_grid.lerp(desired_pos_in_cam_grid, lerp_factor);
-                
-                // Update grid coordinates
-                let (new_cell, new_tf) = cam_grid.translation_to_grid(new_pos_in_cam_grid);
-                *cam_cell = new_cell;
-                tf.translation = new_tf;
-                
-                // Interpolate Rotation toward target
-                tf.rotation = tf.rotation.slerp(target_rot, lerp_factor as f32);
-
-                // Interpolate FOV
-                if let Projection::Perspective(ref mut p) = *projection {
-                    p.fov = p.fov + (viewpoint.fov.to_radians() - p.fov) * lerp_factor as f32;
-                }
-            }
-        }
-    }
 }
 
 pub fn focus_transition_system(

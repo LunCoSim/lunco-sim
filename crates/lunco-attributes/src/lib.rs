@@ -47,7 +47,7 @@ impl Command for ApplyReflectedSet {
         let registry_read = type_registry.read();
 
         // 1. Get the entity
-        let entity_mut = if let Ok(e) = world.get_entity_mut(self.address.entity) {
+        let mut entity_mut = if let Ok(e) = world.get_entity_mut(self.address.entity) {
             e
         } else { return; };
 
@@ -59,10 +59,10 @@ impl Command for ApplyReflectedSet {
         } else { return; };
 
         // 3. Get the component as &mut dyn Reflect
-        let mut reflect_mut = reflect_component.reflect_mut(entity_mut).expect("Failed to get reflect_mut");
+        // Optimization: In a real high-frequency system, we'd cache the ComponentId here.
+        let mut reflect_mut = reflect_component.reflect_mut(&mut entity_mut).expect("Failed to get reflect_mut");
 
         // 4. Drill down to the field path
-        // We use &mut dyn PartialReflect as the common denominator for Bevy's path API.
         let target_field: Option<&mut dyn PartialReflect> = if self.address.field.is_empty() {
             Some((*reflect_mut).as_partial_reflect_mut())
         } else {

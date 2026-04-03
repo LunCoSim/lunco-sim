@@ -1,5 +1,4 @@
 use bevy::prelude::*;
-use bevy::ecs::relationship::Relationship;
 use avian3d::prelude::*;
 
 use lunco_controller::ControllerLink;

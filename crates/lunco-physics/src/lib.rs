@@ -2,7 +2,7 @@ use bevy::prelude::*;
 use bevy::math::{DVec3, DQuat};
 use avian3d::prelude::*;
 use big_space::prelude::CellCoord;
-use lunco_core::architecture::{PhysicalPort, DigitalPort, Wire, CommandMessage, CommandResponse, CommandStatus};
+use lunco_core::architecture::{PhysicalPort, DigitalPort, Wire, CommandMessage, CommandResponse, CommandStatus, DifferentialDrive, AckermannSteer};
 use lunco_core::{Vessel, RoverVessel};
 use lunco_fsw::FlightSoftware;
 use std::collections::HashMap;
@@ -23,53 +23,52 @@ impl Plugin for LunCoPhysicsPlugin {
 
 fn on_command(
     trigger: On<CommandMessage>,
-    mut q_rovers: Query<&mut FlightSoftware, With<RoverVessel>>,
-    q_has_suspension: Query<&Children, With<RoverVessel>>,
-    q_suspension: Query<&Suspension>,
+    mut q_rovers: Query<(&mut FlightSoftware, Entity), With<RoverVessel>>,
+    q_diff: Query<&DifferentialDrive>,
+    q_ack: Query<&AckermannSteer>,
     mut q_digital_ports: Query<&mut DigitalPort>,
     mut commands: Commands,
 ) {
     let cmd = trigger.event();
     
-    // We only process if this entity is a Joint Rover
-    // We check for children having Suspension to be sure it's the joint one
-    let mut is_joint_rover = false;
-    if let Ok(children) = q_has_suspension.get(cmd.target) {
-        for child in children.iter() {
-            if q_suspension.contains(child) {
-                is_joint_rover = true;
-                break;
-            }
-        }
-    }
-
-    if !is_joint_rover { return; }
-
-    if let Ok(mut fsw) = q_rovers.get_mut(cmd.target) {
+    if let Ok((mut fsw, target_ent)) = q_rovers.get_mut(cmd.target) {
         let mut status = CommandStatus::Ack;
 
         match cmd.name.as_str() {
             "DRIVE_ROVER" => {
                 if cmd.args.len() >= 1 {
-                    let drive_power = (cmd.args[0] * 32767.0).clamp(-32767.0, 32767.0) as i32;
-                    let steer_power = if cmd.args.len() >= 2 {
-                        (cmd.args[1] * 32767.0).clamp(-32767.0, 32767.0) as i32
-                    } else { 0 };
+                    let forward = cmd.args[0];
+                    let steer = if cmd.args.len() >= 2 { cmd.args[1] } else { 0.0 };
 
-                    let (left_power, right_power) = if fsw.brake_active {
-                        (0, 0)
-                    } else {
-                        ((drive_power + steer_power).clamp(-32767, 32767), (drive_power - steer_power).clamp(-32767, 32767))
-                    };
+                    if fsw.brake_active {
+                        for name in ["drive_left", "drive_right", "steering"] {
+                            if let Some(&port_id) = fsw.port_map.get(name) {
+                                if let Ok(mut p) = q_digital_ports.get_mut(port_id) { p.raw_value = 0; }
+                            }
+                        }
+                    } else if let Ok(diff) = q_diff.get(target_ent) {
+                        let left_mix = ((forward + steer) * 32767.0).clamp(-32767.0, 32767.0) as i16;
+                        let right_mix = ((forward - steer) * 32767.0).clamp(-32767.0, 32767.0) as i16;
 
-                    if let Some(&port_l) = fsw.port_map.get("drive_left") {
-                        if let Ok(mut p) = q_digital_ports.get_mut(port_l) { p.raw_value = left_power as i16; }
-                    }
-                    if let Some(&port_r) = fsw.port_map.get("drive_right") {
-                        if let Ok(mut p) = q_digital_ports.get_mut(port_r) { p.raw_value = right_power as i16; }
-                    }
-                    if let Some(&port_s) = fsw.port_map.get("steering") {
-                        if let Ok(mut p) = q_digital_ports.get_mut(port_s) { p.raw_value = steer_power as i16; }
+                        if let Some(&port_l) = fsw.port_map.get(&diff.left_port) {
+                            if let Ok(mut p) = q_digital_ports.get_mut(port_l) { p.raw_value = left_mix; }
+                        }
+                        if let Some(&port_r) = fsw.port_map.get(&diff.right_port) {
+                            if let Ok(mut p) = q_digital_ports.get_mut(port_r) { p.raw_value = right_mix; }
+                        }
+                    } else if let Ok(ack) = q_ack.get(target_ent) {
+                        let drive_val = (forward * 32767.0).clamp(-32767.0, 32767.0) as i16;
+                        let steer_val = (steer * 32767.0).clamp(-32767.0, 32767.0) as i16;
+
+                        if let Some(&port_l) = fsw.port_map.get(&ack.drive_left_port) {
+                            if let Ok(mut p) = q_digital_ports.get_mut(port_l) { p.raw_value = drive_val; }
+                        }
+                        if let Some(&port_r) = fsw.port_map.get(&ack.drive_right_port) {
+                            if let Ok(mut p) = q_digital_ports.get_mut(port_r) { p.raw_value = drive_val; }
+                        }
+                        if let Some(&port_s) = fsw.port_map.get(&ack.steer_port) {
+                            if let Ok(mut p) = q_digital_ports.get_mut(port_s) { p.raw_value = steer_val; }
+                        }
                     }
                 } else {
                     status = CommandStatus::Failed("DRIVE_ROVER requires arguments".to_string());
@@ -249,7 +248,7 @@ fn spawn_joint_rover_internal(
 
     // No materials in tests to avoid shader panics
 
-    let rover_entity = commands.spawn((
+    let mut rover_builder = commands.spawn((
         Name::new(name.to_string()),
         RoverVessel,
         Vessel,
@@ -263,7 +262,23 @@ fn spawn_joint_rover_internal(
         CenterOfMass(Vec3::new(0.0, -0.2, 0.0)),
         LinearDamping(0.2), 
         AngularDamping(0.5),
-    )).id();
+    ));
+
+    if steering_type == SteeringType::Ackermann {
+        rover_builder.insert(AckermannSteer {
+            drive_left_port: "drive_left".to_string(),
+            drive_right_port: "drive_right".to_string(),
+            steer_port: "steering".to_string(),
+            max_steer_angle: 0.6,
+        });
+    } else {
+        rover_builder.insert(DifferentialDrive {
+            left_port: "drive_left".to_string(),
+            right_port: "drive_right".to_string(),
+        });
+    }
+
+    let rover_entity = rover_builder.id();
     commands.entity(parent).add_child(rover_entity);
     
     #[cfg(not(test))]

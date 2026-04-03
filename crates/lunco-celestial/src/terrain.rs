@@ -257,17 +257,6 @@ fn subdivide_face(desired: &mut std::collections::HashSet<TileCoord>, body_ent: 
     }
 }
 
-fn project_to_cube(v: DVec3) -> (u8, f64, f64) {
-    let abs_v = v.abs();
-    if abs_v.x >= abs_v.y && abs_v.x >= abs_v.z {
-        if v.x > 0.0 { (0, -v.z / v.x, v.y / v.x) } else { (1, -v.z / v.x, -v.y / v.x) }
-    } else if abs_v.y >= abs_v.x && abs_v.y >= abs_v.z {
-        if v.y > 0.0 { (2, v.x / v.y, -v.z / v.y) } else { (3, -v.x / v.y, -v.z / v.y) }
-    } else {
-        if v.z > 0.0 { (4, v.x / v.z, v.y / v.z) } else { (5, v.x / v.z, -v.y / v.z) }
-    }
-}
-
 fn cube_to_sphere(face: u8, u: f64, v: f64) -> DVec3 {
     let p = match face {
         0 => DVec3::new(1.0, v, -u),
