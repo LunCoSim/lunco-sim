@@ -6,9 +6,16 @@ This document serves as the definitive source of truth for the architectural ter
 
 - **Space System**: The universal container for an independent, controllable entity in the simulation (e.g., Rover, Satellite, Ground Station, Base). Following CCSDS and XTCE standards, a Space System is a recursive hierarchy of Subsystems and structural Links.
 - **Verifier**: A persistent, independent monitoring system that validates simulation state against analytical truth. Verifiers are the "Judges" of the digital twin, ensuring that physics and logic remain within verified engineering bounds. Following SysML v2, Verifiers execute **Verification Cases** against mission requirements.
-- **Attribute**: A measurable, persistent data field belonging to a Link or Port (e.g., `Mass`, `Voltage`, `MaxTorque`). This term is used for 1:1 alignment with SysML v2 and USD.
-- **CommandMessage**: The universal "Instruction" packet used for transport and communication. Inspired by **XTCE Telecommands (TC)** and **NASA FPrime Commands**, it's a discrete, serializable data structure containing a target `Entity`, command `name`, typed `args`, and `source`. This packet decouples senders from receivers, enables asynchronous operations, and provides a standardized format for AI/MCP discovery via the `CommandRegistry`. The abstract instruction itself is referred to as a "Command".
+- **Attribute**: A measurable, persistent property of a physical model or structural link (e.g., `SuspensionStiffness`, `Mass`, `WheelRadius`). In our ECS, these are internal component fields exposed via **Bevy Reflection**. They are used for 1:1 alignment with SysML v2 and provide an "Engineering Backdoor" for real-time simulation calibration (Digital Twin tuning) without affecting FSW logic.
+- **CommandMessage**: The universal "Instruction" packet used for transport and communication. Inspired by **XTCE Telecommands (TC)**, it is a discrete, serializable data structure containing a unique `u64` ID, a target `Entity`, a source `Entity`, a command `name`, and high-precision **`f64`** arguments stored in a **`SmallVec<[f64; 4]>`** for stack-optimized performance. It serves as a "Dumb Transport" layer where spatial context is handled locally by the executor. The abstract instruction itself is referred to as a "Command".
+- **CommandResponse**: The **Feedback Loop** for the command fabric. Every `CommandMessage` triggers a response event containing an `ACK` (Accepted), `NACK` (Rejected), `InProgress`, or `Completed` status. This matches real-world Mission Control handshaking, ensuring that the USER or an AI Agent has definitive confirmation of execution truth.
+- **Parameter (TM)**: A dynamic, observable value representing the "Live State" of a system (e.g., `BatteryVoltage`, `CurrentSpeed`). Following **XTCE and YAMCS** standards, Parameters are sampled telemetry channels that form the continuous data stream monitored by ground stations.
+- **Action**: A stateful, long-running execution of a **Command**. While a Command is a discrete event (a "pulse"), an Action has a lifecycle (`Started`, `Running`, `Completed`, `Cancelled`) and can be **Preempted** by manual USER input. Inspired by **ROS Actions**, they are used for tasks like orbital transitions or automated docking.
+- **ViewPoint**: The logical "Eye" of an entity. It defines a position (`DVec3`), orientation (`Quat`), and field-of-view (`f32`) in the simulation's triple-precision space. It is decoupled from rendering; both humans and headless bots use ViewPoints to interact with the world spatially.
+- **CameraDevice**: A physicalised component representing a sensing hardware unit. A CameraDevice carries a **ViewPoint** and may optionally possess a physical **Collider** to prevent terrain clipping and inherit vibrations from its parent vessel.
+- **UserIntent**: The semantic mapping of raw inputs (Keyboard, Mouse, Gamepad) into abstract simulation goals (e.g., `MoveForward`, `LookAtTarget`). It serves as Level 5 of the control model, ensuring that the same physical key can trigger different actions depending on the context (e.g., free-fly vs. rover possession).
 - **CommandRegistry**: A self-describing component attached to a **Space System** or **Link** that defines its available abstract **Commands** and how they are represented as `CommandMessage`s. Inspired by **XTCE MetaCommands** and **NASA FPrime Command definitions**, it contains documentation, parameter types, and validation ranges for AI discovery.
+- **TelemetryEvent**: A discrete, timestamped occurrence in the simulation (e.g., "Airlock Opened", "Engine Cutoff"). Following the **YAMCS** standard, Events provide semantic context to the raw telemetry stream, carrying a severity level (Info, Warning, Critical) and a message.
 
 ### Terminology Rationale
 ...
@@ -172,7 +179,7 @@ Each entity's physics can be propagated differently depending on its spatial con
 | `HybridBlend { blend_factor }` | Smooth interpolation between analytical and physics (3-5 sec). | Both, weighted | Transitioning between modes |
 | `OnRails` | No RigidBody. Position from orbit equation / GMAT propagator. | Analytical only | Entity is distant, orbiting, or time-warping |
 
-**Transition triggers:** Altitude boundary, proximity to active player, time-warp activation.
+**Transition triggers:** Altitude boundary, proximity to active USER, time-warp activation.
 **The HybridBlend zone** eliminates KSP-style "jitter pop" by smoothly cross-fading between propagators.
 
 ---
