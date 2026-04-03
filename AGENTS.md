@@ -38,4 +38,9 @@ Always verify your implementation plan against `.specify/memory/constitution.md`
 
 ## 6. Tooling & Workflow
 - **Search Tools**: Always skip the `target/` directory when using `grep` or other search tools to avoid searching generated artifacts.
-.
+
+## 7. Documentation Standards
+- **MANDATORY Documentation**: All produced code MUST be documented using Rust's built-in doc comments (`///` for functions/structs/enums and `//!` for modules).
+- **Maintenance Focus**: Comments should primarily aid in **system maintenance** for both **human developers and AI agents**.
+- **The "Why" Over "How"**: Prioritize explaining the design intent, dependencies, and "why" a particular approach was chosen, rather than just restating what the code does. 
+- **Conciseness**: Aim for "the right amount" of documentation—clear, helpful, and never redundant.
