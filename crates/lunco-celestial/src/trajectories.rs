@@ -199,7 +199,7 @@ pub fn spawn_trajectory_update_task(
     q_views: Query<(Entity, &TrajectoryView, &TrajectoryPath), Without<TrajectoryTask>>,
 ) {
     let current_epoch = clock.epoch;
-    let pool = AsyncComputeTaskPool::get();
+    let pool = bevy::tasks::ComputeTaskPool::get();
     
     for (entity, view, path) in q_views.iter() {
         let is_fixed = view.start_epoch.is_some() && view.end_epoch.is_some();
@@ -410,7 +410,10 @@ pub fn trajectory_alpha_update_system(
                         let alpha = if days_past > 0.0 {
                             // Smoothly fade out the past trajectory over 10% of total duration (capped between 1 to 20 days)
                             let fade_days = (total_sampling_days * 0.1).clamp(1.0, 20.0);
-                            (1.0 - (days_past / fade_days)).max(0.05) as f32
+                            let a = 1.0 - (days_past / fade_days);
+                            // With additive blending at 15x brightness, we need alpha to approach zero, not 0.05!
+                            a.max(0.001) as f32; // Gentle curve drop-off
+                            0.05
                         } else {
                             1.0
                         };
@@ -464,33 +467,39 @@ pub fn trajectory_visibility_system(
 
 pub fn trajectory_alignment_system(
     mut commands: Commands,
-    q_frames: Query<(Entity, &CelestialReferenceFrame, &Transform, &CellCoord)>,
+    q_frames: Query<(Entity, &CelestialReferenceFrame)>,
+    q_bodies: Query<(Entity, &crate::registry::CelestialBody)>,
     mut q_vistas: Query<(Entity, &TrajectoryView, &mut Transform, &mut CellCoord, Option<&ChildOf>), Without<CelestialReferenceFrame>>,
 ) {
     for (v_entity, view, mut transform, mut cell, current_parent) in q_vistas.iter_mut() {
-        let mut target_frame_found = false;
-        for (f_entity, frame, _frame_tf, _frame_cell) in q_frames.iter() {
-            if frame.ephemeris_id == view.reference_id {
-                let is_current_parent = if let Some(p) = current_parent {
-                    p.parent() == f_entity
-                } else {
-                    false
-                };
-                
-                if !is_current_parent {
-                    commands.entity(f_entity).add_child(v_entity); 
+        let mut target_parent = None;
+        
+        if view.frame == TrajectoryFrame::BodyFixed {
+            for (b_entity, body) in q_bodies.iter() {
+                if body.ephemeris_id == view.reference_id {
+                    target_parent = Some(b_entity);
+                    break;
                 }
-                
-                transform.translation = Vec3::ZERO;
-                transform.rotation = Quat::IDENTITY;
-                *cell = CellCoord::default();
-                target_frame_found = true;
-                break;
+            }
+        } else {
+            for (f_entity, frame) in q_frames.iter() {
+                if frame.ephemeris_id == view.reference_id {
+                    target_parent = Some(f_entity);
+                    break;
+                }
             }
         }
         
-        if !target_frame_found && view.reference_id == 10 {
-            // Sun frame fallback if needed, but solar_grid should be caught above
+        if let Some(parent_ent) = target_parent {
+            let is_current_parent = current_parent.map(|p| p.parent() == parent_ent).unwrap_or(false);
+            if !is_current_parent {
+                commands.entity(parent_ent).add_child(v_entity);
+            }
+            transform.translation = Vec3::ZERO;
+            transform.rotation = Quat::IDENTITY;
+            *cell = CellCoord::default();
+        } else if view.reference_id == 10 {
+            // Sun frame fallback if needed
             transform.translation = Vec3::ZERO;
             *cell = CellCoord::default();
             transform.rotation = Quat::IDENTITY;

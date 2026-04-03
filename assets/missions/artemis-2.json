@@ -32,6 +32,7 @@
       "tracked_id": -1024,
       "reference_id": 301,
       "color": [0.2, 1.0, 0.2, 1.0],
+      "user_visible": false,
       "sampling_days": 2.0,
       "sampling_step": 0.001,
       "frame": "BodyFixed",

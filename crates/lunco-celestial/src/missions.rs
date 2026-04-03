@@ -27,6 +27,7 @@ pub struct MissionTrajectory {
     pub sampling_days: f64,
     pub sampling_step: f64,
     pub frame: String,
+    pub user_visible: Option<bool>,
     pub start_epoch_jd: Option<f64>,
     pub end_epoch_jd: Option<f64>,
 }
@@ -118,7 +119,7 @@ pub fn load_missions_system(mut commands: Commands, mut registry: ResMut<Mission
                                     frame,
                                     color: LinearRgba::from(Color::srgba(traj.color[0], traj.color[1], traj.color[2], traj.color[3])),
                                     is_visible: true,
-                                    user_visible: true,
+                                    user_visible: traj.user_visible.unwrap_or(true),
                                     sampling_days: traj.sampling_days,
                                     sampling_step: traj.sampling_step,
                                     start_epoch: traj.start_epoch_jd,
