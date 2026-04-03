@@ -3,6 +3,10 @@ name = "lunco-client"
 version = "0.6.0"
 edition = "2021"
 
+[[bin]]
+name = "rover_sandbox"
+path = "src/bin/rover_sandbox.rs"
+
 [dependencies]
 bevy = { workspace = true, features = ["default"] }
 avian3d = { workspace = true }
