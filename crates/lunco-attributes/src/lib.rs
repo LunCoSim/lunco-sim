@@ -1,15 +1,26 @@
-//! Simulation attribute management and reflection-based mutation.
+//! # Distributed Attribute Management
 //!
-//! This crate provides a centralized [AttributeRegistry] that maps human-readable 
-//! paths (e.g., "vessel.rover1.motor_left.max_torque") directly to live ECS 
-//! memory locations. This enables external tuning (via UI or CLI) without 
-//! hardcoding every possible parameter.
+//! This crate implements the simulation's "Tuning Registry"—a bridge between 
+//! raw ECS memory and external System Modeling (SysML) definitions.
+//!
+//! ## The "Why": SysML Path Mirroring
+//! Hardcoding every tunable value (mass, torque, PID gains) creates 
+//! brittle code. This system provides a **String-Based Addressing** layer:
+//! 1. **Friendly Names**: Allows referencing "vessel.rover1.suspension.k" 
+//!    instead of hunting for specific Entity IDs.
+//! 2. **Digital Twin Alignment**: Paths can be mapped 1:1 with the 
+//!    vessel's architectural model in SysML v2, ensuring the simulation 
+//!    exactly mirrors the design documentation.
+//! 3. **Headless Tuning**: Enables external processes (Python optimization 
+//!    scripts, GMAT optimizers) to mutate the live simulation state via 
+//!    generic reflection commands.
 
 use bevy::prelude::*;
 use std::collections::HashMap;
-use lunco_core::telemetry::{TelemetryValue};
+use lunco_core::telemetry::TelemetryValue;
+use lunco_core::PhysicalPort;
 
-/// Plugin for managing the simulation's dynamic attribute and tuning system.
+/// Plugin providing the reflection-ready tuning registry.
 pub struct LunCoAttributesPlugin;
 
 impl Plugin for LunCoAttributesPlugin {
@@ -19,24 +30,24 @@ impl Plugin for LunCoAttributesPlugin {
     }
 }
 
-/// A specific memory address for an attribute within the ECS.
+/// A specific simulation memory coordinate.
 #[derive(Debug, Clone)]
 pub struct AttributeAddress {
-    /// The target entity owning the component.
+    /// The owning Entity.
     pub entity: Entity,
-    /// The short name of the component (e.g., "PhysicalPort").
+    /// The component type name.
     pub component: String,
-    /// The path within the component to the specific field (e.g., "value").
+    /// The dot-separated path to the field.
     pub field: String,
 }
 
-/// A centralized dictionary mapping string paths to live ECS memory references.
+/// A centralized dictionary of engineering parameters.
 ///
-/// This serves as the "Source of Truth" for external control systems, 
-/// providing a stable API even if internal entity structures change.
+/// **Theory**: Provides a mapping of "Human Paths" to "ECS Locations", 
+/// acting as the primary API for external optimization and telemetry scripts.
 #[derive(Resource, Default)]
 pub struct AttributeRegistry {
-    /// The map of string-based attribute paths to their ECS addresses.
+    /// Map of canonical paths to simulation memory addresses.
     pub map: HashMap<String, AttributeAddress>,
 }
 

@@ -196,18 +196,15 @@ fn main_ui_system(
 
             if q_rovers.contains(target) {
                 if ui.button("Take Control (Possess)").clicked() {
-                    for (cam_ent, mut obs) in q_camera.iter_mut() {
-                        obs.focus_target = Some(target);
-                        obs.distance = 10.0;
-                        commands.entity(cam_ent).insert((
-                            ControllerLink { vessel_entity: target },
-                            lunco_core::OrbitState::default(),
-                        ));
-                    }
-                    commands.entity(target).insert((
-                        leafwing_input_manager::prelude::ActionState::<VesselIntent>::default(),
-                        get_default_input_map(),
-                    ));                    info!("Possessing rover and focusing at 10m.");
+                    let avatar_ent = q_camera.iter().next().map(|(e, _)| e).unwrap_or(Entity::PLACEHOLDER);
+                    commands.trigger(lunco_core::architecture::CommandMessage {
+                        id: 0,
+                        target: target,
+                        name: "POSSESS".to_string(),
+                        args: Default::default(),
+                        source: avatar_ent,
+                    });
+                    info!("Possessing rover and focusing at 10m.");
                 }
                 
                 ui.collapsing("Mechanical Inspector", |ui| {

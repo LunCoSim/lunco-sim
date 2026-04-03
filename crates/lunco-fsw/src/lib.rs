@@ -1,44 +1,54 @@
-//! Flight Software (FSW) architecture and subsystem management.
+//! # Flight Software (FSW) & Command Fabric
 //!
-//! This crate defines the core data structures for a decentralized Flight 
-//! Software system. Unlike traditional monolithic simulators, LunCoSim treats 
-//! FSW as a collection of hotswappable components and [VesselSubsystem]s 
-//! that communicate via an asynchronous message fabric.
+//! This crate implements the simulation's "Cerebellum"—the decentralized 
+//! control architecture responsible for coordinating vessel subsystems.
+//!
+//! ## The "Why": Decentralized vs. Monolithic
+//! Traditional simulators often use a single "Vessel Manager" script. 
+//! LunCoSim follows a **Decentralized Subsystem** pattern, mirroring 
+//! real aerospace hardware:
+//! 1. **Autonomous Entities**: Subsystems (e.g., GNC, Power, Mobility) are 
+//!    independent ECS entities. 
+//! 2. **Asynchronous Messages**: Communication occurs via [CommandMessage]s 
+//!    broadcast over the ECS event bus, allowing modules to be 
+//!    hotswapped or re-tasked in real-time.
+//! 3. **Hardware Abstraction**: The [FlightSoftware] component uses a 
+//!    [port_map] to decouple semantic software logic (e.g., "DEPLOY_PANEL") 
+//!    from the underlying physical Port entity, facilitating digital twin 
+//!    mirroring where the same code can run against different vehicle manifests.
 
 use bevy::prelude::*;
 use std::collections::HashMap;
 use lunco_core::architecture::CommandMessage;
 
-/// Plugin for managing the Flight Software infrastructure and global command handling.
+/// Plugin managing the asynchronous command fabric and FSW lifecycle.
 pub struct LunCoFswPlugin;
 
 impl Plugin for LunCoFswPlugin {
     fn build(&self, app: &mut App) {
-        // Registers a fallback handler to manage commands not captured by 
-        // specialized subsystem observers.
+        // Fallback handler captures orphaned commands for NACK telemetry.
         app.add_observer(unrecognized_command_handler);
     }
 }
 
-/// Marker component for any entity that acts as a Flight Software Subsystem.
+/// Marker component for an autonomous functional unit.
 ///
-/// Subsystems (e.g., Guidance, Navigation, Power Management) are independent 
-/// ECS entities that register their own observers for [CommandMessage] to 
-/// handle specific tasks.
+/// **Theory**: Represents a distinct piece of flight hardware (or emulated 
+/// process) that registers its own listeners for [CommandMessage].
 #[derive(Component, Debug, Clone, Reflect, Default)]
 #[reflect(Component, Default)]
 pub struct VesselSubsystem;
 
-/// The primary data container for a vessel's Flight Software state.
+/// The primary Flight Software container for a spacecraft or rover.
 ///
-/// It maintains a mapping of semantic port names (e.g., "drive_left") to 
-/// specific ECS entities (usually [DigitalPort]s), allowing the software 
-/// to address hardware without knowing its exact entity ID or location.
+/// **Logic**: Acts as the "Entity Manager" for the vessel, mapping 
+/// human-readable Port names (SysML mnemonics) to the physical/digital 
+/// registers they control.
 #[derive(Component, Default)]
 pub struct FlightSoftware {
-    /// Maps human-readable hardware descriptors to their digital register entities.
+    /// Maps mnemonic strings (e.g., "thruster_main") to their ECS entity ID.
     pub port_map: HashMap<String, Entity>,
-    /// Global state flag for the braking system.
+    /// Global state flag for overriding drive commands.
     pub brake_active: bool,
 }
 

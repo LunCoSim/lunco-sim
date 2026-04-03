@@ -1,3 +1,35 @@
+//! # Adaptive Observation & Targeting Subsystem
+//!
+//! This crate implements the core "Observer" logic for the simulation. 
+//! It provides a multi-mode camera system that scales from sub-millimeter 
+//! rover exploration to solar-system-scale orbital mechanics.
+//!
+//! ## The "Why": Observer Theory
+//! Human interactions in a solar system sim require different control 
+//! paradigms at different scales. This crate implements **Scale-Adaptive Modes**:
+//! 1. **Orbital Mode**: Logarithmic distance-based rotation; best for 
+//!    viewing planets and large-scale trajectories.
+//! 2. **Flyby Mode**: Free-look controls with velocity-relative movement; 
+//!    optimized for inspecting spacecraft in deep space.
+//! 3. **Surface Mode**: Horizon-locked Y-Up rotation; provides a standard 
+//!    "FPS-like" experience when exploring planetary terrains.
+//!
+//! ## The Solution: Dynamic Near/Far Clipping
+//! Space simulations suffer from the "Logarithmic Depth Buffer" problem: 
+//! how to render a 10cm battery and a 100M km planet in the same frame without 
+//! Z-fighting. 
+//! 
+//! This system dynamically calculates the distance to the nearest planetary 
+//! surface and adjust's the camera's **Near Plane** every frame. This ensures 
+//! that rovers don't clip through the ground while still allowing 
+//! trajectories to be visible millions of kilometers away.
+//!
+//! ## Numeric Stability during Tracking
+//! When "following" an object, the camera is dynamically re-parented to 
+//! the target's [big_space] Grid. This ensures that floating-point errors 
+//! in the camera's position are relative to the target, eliminating jitter 
+//! during high-speed flybys.
+
 use bevy::prelude::*;
 use bevy::math::DVec3;
 use big_space::prelude::{Grid, CellCoord};
@@ -11,6 +43,7 @@ mod blender;
 pub use transitions::*;
 pub use blender::*;
 
+/// Plugin facilitating all camera behaviors, targeting logic, and coordinate migrations.
 pub struct LunCoCameraPlugin;
 
 impl Plugin for LunCoCameraPlugin {
@@ -23,6 +56,8 @@ impl Plugin for LunCoCameraPlugin {
         
         app.add_plugins(LunCoBlenderPlugin);
 
+        app.add_observer(on_focus_command);
+
         app.add_systems(Update, (
             camera_migration_system,
             camera_selection_system,
@@ -34,49 +69,83 @@ impl Plugin for LunCoCameraPlugin {
     }
 }
 
+/// Handles global `"FOCUS"` CommandMessages to point the camera at a new target.
+fn on_focus_command(
+    trigger: On<lunco_core::architecture::CommandMessage>,
+    mut q_camera: Query<&mut ObserverCamera>,
+) {
+    let msg = trigger.event();
+    if msg.name == "FOCUS" {
+        for mut obs in q_camera.iter_mut() {
+            obs.focus_target = Some(msg.target);
+            if !msg.args.is_empty() {
+                obs.distance = msg.args[0] as f64;
+            }
+        }
+    }
+}
+
 /// A target-relative viewport configuration.
-/// Used for smooth transitions between different camera perspectives.
+///
+/// **Why**: Used by the [LunCoBlenderPlugin] to perform cinematographic 
+/// cuts and smooth transitions between hardware-defined viewports (e.g., 
+/// switching from a Rover's Cockpit to an External Mast-Cam).
 #[derive(Component, Debug, Clone, Reflect, Default)]
 #[reflect(Component)]
 pub struct ViewPoint {
-    /// The entity to follow/look at
+    /// The entity to follow/look at.
     pub target: Option<Entity>,
-    /// High-precision offset in the target's coordinate frame
+    /// High-precision offset in the target's LOCAL coordinate frame.
     pub offset: DVec3,
-    /// Desired rotation (relative to target or absolute if target is None)
+    /// Desired rotation relative to [target].
     pub rotation: Quat,
-    /// Desired Field of View
+    /// Vertical Field of View (radians).
     pub fov: f32,
-    /// Blending speed multiplier
+    /// Multiplier for the interpolation speed.
     pub speed: f32,
-    /// Whether this viewpoint is currently active
+    /// Indicates if this viewpoint is the current "Master" source for blending.
     pub active: bool,
 }
 
-/// Marker component for a hardware camera device in the simulation.
+/// Marker component for an entity that acts as a physical sensor/camera.
 #[derive(Component, Debug, Clone, Reflect, Default)]
 #[reflect(Component, Default)]
 pub struct CameraDevice;
 
+/// Operational modes for the [ObserverCamera].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Reflect, Default)]
 pub enum ObserverMode {
+    /// Focus-centric rotation (Orbiting).
     #[default]
     Orbital,
+    /// Translation-centric movement in deep space (Inspection).
     Flyby,
+    /// Horizon-locked movement on planetary terrains (Exploration).
     Surface,
 }
 
+/// Core component managing the simulation's primary user observation state.
 #[derive(Component, Reflect)]
 #[reflect(Component)]
 pub struct ObserverCamera {
+    /// The entity currently being tracked or looked at.
     pub focus_target: Option<Entity>,
+    /// Active interaction paradigm.
     pub mode: ObserverMode,
+    /// Distance from the focus target in meters.
     pub distance: f64,
+    /// Vertical look angle.
     pub pitch: f32,
+    /// Horizontal look angle.
     pub yaw: f32,
+    /// Local offset used when in [ObserverMode::Flyby].
     pub local_flyby_pos: DVec3, 
+    /// Current calculated altitude above the nearest planetary surface (m).
     pub altitude: f64,
+    /// Interpolated focus position in Grid-space to prevent "camera pop" 
+    /// during rapid target switching.
     pub smooth_focus_pos: DVec3,
+    /// Initialization flag for smoothing logic.
     pub is_first_frame: bool,
 }
 
@@ -96,14 +165,21 @@ impl Default for ObserverCamera {
     }
 }
 
+/// Marker for the active Bevy [Camera] entity used for final viewport rendering.
 #[derive(Component)]
 pub struct ActiveCamera;
 
+/// Resource capturing incremental mouse wheel movement for zoom controls.
 #[derive(Resource, Default)]
 pub struct CameraScroll {
     pub delta: f32,
 }
 
+/// System handling the logic of target-radius-aware focus transitions.
+///
+/// **Theory**: When switching between a Planet (6000km radius) and a 
+/// Spacecraft (10m radius), the camera distance must be scaled logarithmiclly 
+/// to maintain a consistent "Subject Framing" in the viewport.
 pub fn focus_transition_system(
     mut q_camera: Query<(&mut ObserverCamera, Entity), Changed<ObserverCamera>>,
     q_bodies: Query<&CelestialBody>,
@@ -134,6 +210,7 @@ pub fn focus_transition_system(
                  new_radius = sc.hit_radius_m as f64;
              }
 
+             // Maintain relative altitude during the jump to avoid disorienting the user.
              let current_altitude = if old_radius > 0.0 {
                  obs.distance - old_radius
              } else {
@@ -147,6 +224,11 @@ pub fn focus_transition_system(
     }
 }
 
+/// System implementing "Click-to-Target" logic via Screen-to-World raycasting.
+///
+/// **Logic**: Performs sphere-intersection checks for all major celestial 
+/// bodies and vessels to allow the user to select the next tracking target 
+/// from the 3D view.
 pub fn camera_selection_system(
     mut q_camera: Query<&mut ObserverCamera, With<Avatar>>,
     q_bodies: Query<(Entity, &GlobalTransform, &CelestialBody)>,
@@ -171,6 +253,7 @@ pub fn camera_selection_system(
     let mut min_body_t = f32::INFINITY;
     let mut min_vessel_t = f32::INFINITY;
     
+    // Intersection checks for planetary spheres
     for (entity, body_gtf, body) in q_bodies.iter() {
         let center = body_gtf.translation();
         let radius = body.radius_m as f32;
@@ -184,6 +267,7 @@ pub fn camera_selection_system(
         }
     }
 
+    // Intersection checks for vessel hitboxes
     for rover_ent in q_rovers.iter() {
         let radius = 10.0;
         let Ok(vessel_gtf) = q_gtfs.get(rover_ent) else { continue; };
@@ -215,7 +299,7 @@ pub fn camera_selection_system(
     if let Some(vessel) = nearest_vessel {
         if min_vessel_t < min_body_t {
              if q_rovers.contains(vessel) {
-                // Trigger event: Entity scoping will be handled by the caller
+                // Focus command for vessels can trigger UI transitions or subsystem scans
                 commands.trigger(lunco_core::architecture::CommandMessage {
                     id: 0, 
                     target: vessel,
@@ -241,6 +325,11 @@ pub fn camera_selection_system(
     }
 }
 
+/// Automatically re-parents the camera to the target's grid.
+///
+/// **Why**: Spatial stability. By placing the camera in the SAME [Grid] as 
+/// the target, we ensure that both share the same Floating Origin root, 
+/// eliminating relative jitter during high-precision tracking.
 pub fn camera_migration_system(
     mut commands: Commands,
     q_camera: Query<(Entity, &ObserverCamera), Changed<ObserverCamera>>,
@@ -263,6 +352,14 @@ pub fn camera_migration_system(
     }
 }
 
+/// The monolithic logic for scale-adaptive camera movement.
+///
+/// **Responsibilities**:
+/// 1. Calculate focused positions across cosmic distances (Solar -> Grid remapping).
+/// 2. Mode Switches: Transitions between [ObserverMode] based on altitude 
+///    (e.g., locking to Surface mode when near ground).
+/// 3. Handling User Input: Translates [UserIntent] and mouse deltas into 
+///    spherical and planar motion.
 pub fn update_observer_camera_system(
     mut q_camera: Query<(Entity, &mut ObserverCamera, &mut CellCoord, &mut Transform, &Avatar, &IntentState)>,
     q_spatial: Query<(&CellCoord, &Transform, Option<&CelestialBody>), Without<ObserverCamera>>,
@@ -280,6 +377,7 @@ pub fn update_observer_camera_system(
     let current_mouse_pos = window.and_then(|w| w.cursor_position());
     let mut mouse_delta = Vec2::ZERO;
 
+    // Check if UI is absorbing inputs to prevent camera rotation when clicking buttons
     let mut is_egui_focused = false;
     if let Ok(ctx) = contexts.ctx_mut() {
         if ctx.is_pointer_over_area() || ctx.is_using_pointer() {
@@ -300,6 +398,7 @@ pub fn update_observer_camera_system(
         let Some(target_entity) = obs.focus_target else { continue; };
         let Ok((t_cell, t_tf, t_body)) = q_spatial.get(target_entity) else { continue; };
         
+        // 1. Resolve Target Position precisely relative to the camera's current grid.
         let target_pos_solar = get_absolute_pos_in_root_double_ghost_aware(target_entity, t_cell, t_tf, &q_all_parents, &q_grids, &q_coords);
         
         let Ok(cam_child_of) = q_all_parents.get(cam_entity) else { continue; };
@@ -310,6 +409,7 @@ pub fn update_observer_camera_system(
         let cam_grid_pos_solar = get_absolute_pos_in_root_double_ghost_aware(cam_grid_ent, cg_cell, cg_tf, &q_all_parents, &q_grids, &q_coords);
         let target_pos_in_cam_grid = target_pos_solar - cam_grid_pos_solar;
 
+        // Apply focus smoothing to prevent sudden jumps
         if obs.is_first_frame {
             obs.smooth_focus_pos = target_pos_in_cam_grid;
             obs.is_first_frame = false;
@@ -319,11 +419,13 @@ pub fn update_observer_camera_system(
         }
         let focus_pos = obs.smooth_focus_pos;
 
+        // 2. Mode Threshold Logic (Cosmic Scale Aware)
         let altitude;
         if let Some(body) = t_body {
             let dist_to_center = if obs.mode == ObserverMode::Orbital { obs.distance } else { obs.local_flyby_pos.length() };
             altitude = dist_to_center - body.radius_m;
             
+            // TRANSITION: Atmosphere Entry -> Surface Mode
             if altitude < 10_000.0 && obs.mode != ObserverMode::Surface {
                 obs.mode = ObserverMode::Surface;
                 let rel_offset = (cam_tf.translation.as_dvec3() - target_pos_in_cam_grid).normalize() * (body.radius_m + 10.0);
@@ -332,17 +434,20 @@ pub fn update_observer_camera_system(
                 obs.pitch = 0.0;
             }
             
+            // TRANSITION: Space Launch -> Flyby Mode
             if altitude > 15_000.0 && obs.mode == ObserverMode::Surface {
                 obs.mode = ObserverMode::Flyby;
                 obs.local_flyby_pos = t_tf.rotation.mul_vec3(obs.local_flyby_pos.as_vec3()).as_dvec3();
             }
 
+            // TRANSITION: Low Orbit -> Flyby (for Moons/Asteroids)
             if altitude < 1_000_000.0 && obs.mode == ObserverMode::Orbital && body.name != "Earth" {
                 obs.mode = ObserverMode::Flyby;
                 let rot = Quat::from_euler(EulerRot::YXZ, obs.yaw, obs.pitch, 0.0);
                 obs.local_flyby_pos = rot.mul_vec3(Vec3::Z).as_dvec3() * obs.distance;
             }
             
+            // TRANSITION: High Orbit -> Orbital Mode
             if (altitude > 1_500_000.0 && obs.mode == ObserverMode::Flyby) || (body.name == "Earth" && obs.mode == ObserverMode::Flyby) {
                 obs.mode = ObserverMode::Orbital;
                 obs.distance = obs.local_flyby_pos.length();
@@ -353,9 +458,11 @@ pub fn update_observer_camera_system(
         } else { altitude = 1_000_000.0; }
         obs.altitude = altitude;
 
+        // 3. Movement Execution
         let mut scroll = scroll_res.delta as f64 * -0.01;
         
         if obs.mode == ObserverMode::Orbital {
+            // Logarithmic zooming ensures precision at both 1m and 1M km
             obs.distance = (obs.distance - (scroll as f64) * (obs.distance * 0.1)).clamp(10.0, 1.0e14);
             obs.yaw -= mouse_delta.x * 0.01;
             obs.pitch = (obs.pitch - mouse_delta.y * 0.01).clamp(-1.5, 1.5);
@@ -366,6 +473,7 @@ pub fn update_observer_camera_system(
             *cam_cell = new_cell; cam_tf.translation = new_tf;
             cam_tf.look_at(focus_pos.as_vec3(), Vec3::Y);
         } else if obs.mode == ObserverMode::Flyby {
+            // Free movement in deep space relative to target velocity
             obs.yaw -= mouse_delta.x * 0.01;
             obs.pitch = (obs.pitch - mouse_delta.y * 0.01).clamp(-1.55, 1.55);
             let rotation = Quat::from_euler(EulerRot::YXZ, obs.yaw, obs.pitch, 0.0);
@@ -392,6 +500,7 @@ pub fn update_observer_camera_system(
             let (new_cell, new_tf) = cam_grid.translation_to_grid(desired_pos_local);
             *cam_cell = new_cell; cam_tf.translation = new_tf;
         } else if obs.mode == ObserverMode::Surface {
+            // Horizon-locked navigation for ground exploration
             let Some(body) = t_body else { continue; };
             let body_rot = t_tf.rotation;
             let current_pos_offset = body_rot.mul_vec3(obs.local_flyby_pos.as_vec3());
@@ -435,6 +544,11 @@ pub fn update_observer_camera_system(
     scroll_res.delta = 0.0;
 }
 
+/// Adaptive clipping logic to prevent depth buffer precision loss.
+///
+/// **Theory**: Space is too large for a static [Projection]. We adjust 
+/// the `near` plane based on altitude to prevent rovers from clipping 
+/// into the dirt, while keeping the `far` plane at infinity (1e15m).
 pub fn update_camera_clip_planes_system(
     mut q_camera: Query<(Entity, &mut Projection, &CellCoord, &Transform), With<Camera>>,
     q_bodies: Query<(Entity, &CellCoord, &Transform, &CelestialBody), Without<Camera>>,
@@ -445,7 +559,7 @@ pub fn update_camera_clip_planes_system(
     for (cam_ent, mut projection, c_cell, c_tf) in q_camera.iter_mut() {
         let cam_pos = get_absolute_pos_in_root_double_ghost_aware(cam_ent, c_cell, c_tf, &q_parents, &q_all_grids, &q_spatial);
         if let Projection::Perspective(ref mut perspective) = *projection {
-            perspective.far = 1.0e15; 
+            perspective.far = 1.0e15; // "Infinite" for Trajectories
             let mut min_dist_to_surface = 1.0e15;
             for (body_ent, b_cell, b_tf, body) in q_bodies.iter() {
                 let body_pos = get_absolute_pos_in_root_double_ghost_aware(body_ent, b_cell, b_tf, &q_parents, &q_all_grids, &q_spatial);
@@ -453,6 +567,7 @@ pub fn update_camera_clip_planes_system(
                 let dist_to_surface = (dist_to_center - body.radius_m).max(1.0);
                 if dist_to_surface < min_dist_to_surface { min_dist_to_surface = dist_to_surface; }
             }
+            // Heuristic: near plane is 1% of altitude, clamped for UI/Physics interaction
             perspective.near = (min_dist_to_surface as f32 * 0.01).clamp(0.1, 100.0);
         }
     }

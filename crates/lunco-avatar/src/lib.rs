@@ -24,6 +24,7 @@ impl Plugin for LunCoAvatarPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(InputManagerPlugin::<UserIntent>::default());
         app.add_observer(on_user_intent);
+        app.add_observer(on_possess_command);
         app.add_systems(Update, (
             capture_avatar_intent,
             avatar_freecam_translation,
@@ -230,11 +231,13 @@ fn avatar_raycast_possession(
             if let Ok(f32_ray) = camera.viewport_to_world(camera_transform, cursor_position) {
                 if let Some(hit) = spatial_query.cast_ray(f32_ray.origin.as_dvec3(), f32_ray.direction, 1000.0, true, &SpatialQueryFilter::default()) {
                     if let Ok(vessel_entity) = vessel_q.get(hit.entity) {
-                        commands.entity(avatar_entity).insert((
-                            ControllerLink { vessel_entity }, 
-                            OrbitState::default(),
-                            IntentAnalogState::default()
-                        ));
+                        commands.trigger(lunco_core::architecture::CommandMessage {
+                            id: 0,
+                            target: vessel_entity,
+                            name: "POSSESS".to_string(),
+                            args: smallvec::smallvec![],
+                            source: avatar_entity,
+                        });
                     }
                 }
             }
@@ -278,5 +281,39 @@ fn on_user_intent(
                 source: avatar_entity,
             });
         }
+    }
+}
+
+/// Handles global `"POSSESS"` CommandMessages to establish a link between an avatar and a vessel.
+fn on_possess_command(
+    trigger: On<lunco_core::architecture::CommandMessage>,
+    mut commands: Commands,
+    q_avatar: Query<Entity, With<Avatar>>,
+) {
+    let msg = trigger.event();
+    if msg.name == "POSSESS" {
+        // We expect the avatar entity to be the source, but if it's missing, just take the first avatar.
+        let avatar_ent = if let Ok(e) = q_avatar.get(msg.source) { e } else { q_avatar.iter().next().unwrap() };
+        
+        commands.entity(avatar_ent).insert((
+            ControllerLink { vessel_entity: msg.target },
+            OrbitState::default(),
+            IntentAnalogState::default()
+        ));
+        
+        // Ensure the vessel has input maps configured to receive commands
+        commands.entity(msg.target).insert((
+            leafwing_input_manager::prelude::ActionState::<lunco_controller::VesselIntent>::default(),
+            lunco_controller::get_default_input_map(),
+        ));
+
+        // Trigger focus
+        commands.trigger(lunco_core::architecture::CommandMessage {
+            id: 0,
+            target: msg.target,
+            name: "FOCUS".to_string(),
+            args: smallvec::smallvec![10.0],
+            source: avatar_ent,
+        });
     }
 }

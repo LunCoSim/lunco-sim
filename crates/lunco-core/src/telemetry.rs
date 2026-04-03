@@ -1,6 +1,25 @@
+//! # Telemetry & Monitoring Standards
+//!
+//! This module defines the common data structures for the simulation's 
+//! monitoring fabric. It adheres to **XTCE/YAMCS** standards to ensure 
+//! compatibility with real-world mission control toolchains.
+//!
+//! ## Domain Standards
+//! 1. **Parameters**: Continuous data points (e.g., Temperature, Voltage) 
+//!    sampled at a specific frequency. These are typically broadcast as 
+//!    `SampledParameter` packets.
+//! 2. **Events**: Discrete notifications of system state changes (e.g., 
+//!    "Battery Low", "Command Ack"). These are typically broadcast as 
+//!    `TelemetryEvent` packets.
+//! 3. **Timekeeping**: All telemetry is timestamped using the [CelestialClock] 
+//!    epoch (Julian Date) to allow for precise post-mission analysis and 
+//!    correlation with ephemeris data.
+
 use bevy::prelude::*;
 
-/// Severity of a telemetry event (aligned with YAMCS/XTCE standards)
+/// Severity of a telemetry incident, ordered by urgency.
+///
+/// **Mapping**: Aligns with the 5-tier YAMCS alert hierarchy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Reflect, Default)]
 #[reflect(Default, Debug, PartialEq)]
 pub enum Severity {
@@ -12,7 +31,11 @@ pub enum Severity {
     Critical,
 }
 
-/// A polymorphic value for telemetry parameters and attributes
+/// A polymorphic container for telemetry values.
+///
+/// **Why**: Ensures that the telemetry transport layer is agnostic of the 
+/// internal Rust type (f32, i32, bool), allowing external subscribers to 
+/// deserialize data into a unified variant type.
 #[derive(Debug, Clone, PartialEq, Reflect)]
 #[reflect(Debug, PartialEq, Default)]
 pub enum TelemetryValue {
@@ -28,17 +51,19 @@ impl Default for TelemetryValue {
     }
 }
 
-/// A discrete pulse of telemetry data (e.g., "Battery Low" event)
+/// A discrete notification pulse.
+///
+/// **Example**: A "BATTERY_MINIMUM_REACHED" message with severity `Warning`.
 #[derive(Event, Debug, Clone, Reflect)]
 #[reflect(Debug, Default)]
 pub struct TelemetryEvent {
-    /// The name of the event (e.g., "BATTERY_DRAINED")
+    /// The unique mnemonic for the event.
     pub name: String,
-    /// The severity of the event
+    /// Alert level.
     pub severity: Severity,
-    /// Associated data for the event
+    /// Associated data payload.
     pub data: TelemetryValue,
-    /// Simulation epoch at which the event occurred
+    /// The simulation TDB epoch of the event.
     pub timestamp: f64,
 }
 
@@ -53,99 +78,34 @@ impl Default for TelemetryEvent {
     }
 }
 
-/// A live monitoring channel (TM Parameter)
+/// Metadata tag for a reflection-ready telemetry point.
+///
+/// **Usage**: Attach this to any component to expose its fields to the 
+/// [lunco-telemetry] sampling engine.
 #[derive(Component, Debug, Clone, Reflect, Default, PartialEq)]
 #[reflect(Component, Default, Debug, PartialEq)]
 pub struct Parameter {
+    /// Mnemonic name (e.g., "OBC_TEMP").
     pub name: String,
+    /// Engineering units (e.g., "degC").
     pub unit: String,
-    /// Path to the field to sample (e.g., "PhysicalPort.value")
+    /// The reflection path to the field (e.g., "PhysicalPort.value").
     pub path: String,
 }
 
-/// A periodic pulse of sampled telemetry
+/// A captured snapshot of a [Parameter].
+///
+/// **Logic**: Emitted periodically by the [lunco-telemetry] crate.
 #[derive(Event, Debug, Clone, Reflect)]
 #[reflect(Debug)]
 pub struct SampledParameter {
+    /// The mnemonic name of the parameter.
     pub name: String,
+    /// The engineering value at the time of sampling.
     pub value: TelemetryValue,
+    /// Engineering units for scale context.
     pub unit: String,
+    /// The simulation TDB epoch of the sample.
     pub timestamp: f64,
 }
 
-pub struct TelemetryBroadcasterPlugin;
-
-impl Plugin for TelemetryBroadcasterPlugin {
-    fn build(&self, app: &mut App) {
-        app.add_systems(Update, telemetry_broadcaster_system);
-    }
-}
-
-/// System that samples all entities with a `Parameter` component and emits `SampledParameter` events.
-pub fn telemetry_broadcaster_system(
-    q_parameters: Query<(Entity, &Parameter)>,
-    world: &World,
-    mut commands: Commands,
-    clock: Res<crate::CelestialClock>,
-    time: Res<Time>,
-    mut timer: Local<f32>,
-) {
-    *timer += time.delta_secs();
-    if *timer < 1.0 { return; }
-    *timer = 0.0;
-
-    let type_registry = world.resource::<AppTypeRegistry>().read();
-    
-    for (entity, param) in q_parameters.iter() {
-        // Parse the path: "Component.field"
-        let parts: Vec<&str> = param.path.split('.').collect();
-        if parts.is_empty() { continue; }
-        
-        let component_name = parts[0];
-        let field_path = if parts.len() > 1 { parts[1] } else { "" };
-
-        // Find the entity
-        let Ok(entity_ref) = world.get_entity(entity) else { continue; };
-
-        // Find component reflection data
-        let Some(reg) = type_registry.get_with_short_type_path(component_name) else { continue; };
-        let Some(reflect_comp) = reg.data::<ReflectComponent>() else { continue; };
-        
-        // Get the component as &dyn Reflect
-        let Some(reflect_data) = reflect_comp.reflect(entity_ref) else { continue; };
-
-        // Drill down to the field
-        let target_field = if field_path.is_empty() {
-            Some(reflect_data.as_partial_reflect())
-        } else {
-            reflect_data.reflect_path(field_path).ok()
-        };
-
-        if let Some(field) = target_field {
-            let value = if let Some(v) = field.try_downcast_ref::<f32>() {
-                TelemetryValue::F64(*v as f64)
-            } else if let Some(v) = field.try_downcast_ref::<f64>() {
-                TelemetryValue::F64(*v)
-            } else if let Some(v) = field.try_downcast_ref::<i16>() {
-                TelemetryValue::I64(*v as i64)
-            } else if let Some(v) = field.try_downcast_ref::<i32>() {
-                TelemetryValue::I64(*v as i64)
-            } else if let Some(v) = field.try_downcast_ref::<i64>() {
-                TelemetryValue::I64(*v)
-            } else if let Some(v) = field.try_downcast_ref::<bool>() {
-                TelemetryValue::Bool(*v)
-            } else if let Some(v) = field.try_downcast_ref::<String>() {
-                TelemetryValue::String(v.clone())
-            } else {
-                continue;
-            };
-
-            commands.trigger(SampledParameter {
-                name: param.name.clone(),
-                value,
-                unit: param.unit.clone(),
-                timestamp: clock.epoch,
-            });
-        }
-    }
-}

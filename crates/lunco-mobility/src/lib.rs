@@ -1,11 +1,27 @@
-//! Physics-based mobility systems for surface exploration rovers.
+//! # Surface Mobility & Traction Physics
 //!
-//! This crate implements various drive and steering models, including:
-//! - **Raycast Wheels**: High-performance wheel simulation using raycasts for 
-//!   suspension and friction.
-//! - **Drive Models**: Differential (Skid) drive and Ackermann steering logic.
-//! - **Suspension**: Physics-based spring-damper systems for joint-based 
-//!   vehicle chassis.
+//! This crate implements the core physics models for planetary rovers and 
+//! surface exploration vehicles. 
+//!
+//! ## The "Why": Raycast-Based Ground Interaction
+//! Traditional mesh-to-mesh collision for wheels is computationally expensive 
+//! and prone to "snagging" on terrain geometry. We use a **Raycast Wheel** 
+//! model to provide a stable, high-performance alternative:
+//! 1. **Suspension Logic**: An emulated spring-damper system computes normal 
+//!    forces based on ray length, preventing high-frequency jitter.
+//! 2. **Traction Physics**: Lateral and longitudinal friction are applied 
+//!    at the ray's contact point, allowing for complex skid and slip behaviors 
+//!    without the overhead of continuous contact manifolds.
+//! 3. **Numeric Stability**: By projecting a single ray, we ensure the wheel 
+//!    always "floats" at the correct elevation, even on highly irregular 
+//!    procedural terrain.
+//!
+//! ## Control Mixing Models
+//! The crate supports hotswappable steering architectures:
+//! - **Differential (Skid) Drive**: Common for heavy loaders and excavators; 
+//!   turns by varying velocity between left and right tracks.
+//! - **Ackermann Steering**: Standard for high-speed mobility; pivots leading 
+//!   wheels to maintain a common center of rotation, reducing tire scrub.
 
 use bevy::prelude::*;
 use bevy::math::DVec3;
@@ -14,7 +30,7 @@ use lunco_core::architecture::{DigitalPort, CommandMessage, CommandResponse, Com
 use lunco_fsw::FlightSoftware;
 use lunco_core::RoverVessel;
 
-/// Plugin for ground mobility physics and control systems.
+/// Manages the integration of mobility physics and control observers.
 pub struct LunCoMobilityPlugin;
 
 impl Plugin for LunCoMobilityPlugin {
@@ -33,30 +49,31 @@ impl Plugin for LunCoMobilityPlugin {
     }
 }
 
-/// A simplified wheel model that uses raycasting for ground interaction.
+/// A high-performance wheel model using emulated suspension rays.
 ///
-/// This avoids the complexity of simulating a full cylinder collider while
-/// providing believable suspension and traction behavior.
+/// **Theory**: Instead of a physical collider, this component projects a ray 
+/// downwards. The resulting distance is used to solve the spring-damper 
+/// equation, simulating the behavior of a physical tire and strut.
 #[derive(Component, Debug, Clone, Reflect)]
 #[reflect(Component, Default)]
 pub struct WheelRaycast {
-    /// Entity index of the suspension physical port.
+    /// Port mapping for suspension telemetry.
     pub suspension_port: Entity,
-    /// Entity index of the drive physical port.
+    /// Port mapping for drive torque actuation.
     pub drive_port: Entity,
-    /// Entity index of the steering physical port.
+    /// Port mapping for steering angle actuation.
     pub steer_port: Entity,
-    /// Length of the suspension at rest (meters).
+    /// Length of the suspension at rest in meters.
     pub rest_length: f64,
-    /// Spring stiffness constant (N/m).
+    /// Hooke's Law spring constant (Stiffness in N/m).
     pub spring_k: f64,
-    /// Damping coefficient (Ns/m).
+    /// Damping coefficient to suppress oscillations (Ns/m).
     pub damping_c: f64,
-    /// Visual radius of the wheel (meters).
+    /// Radius of the tire (effectively the minimum offset from ground).
     pub wheel_radius: f64,
-    /// Optional reference to the visual wheel entity for animation.
+    /// Entity for the visual mesh to be transformed.
     pub visual_entity: Option<Entity>,
-    /// Cached normal force from the last physics step, used for friction.
+    /// Resultant normal force from the last physics tick, used for friction calculations.
     pub last_normal_force: f64,
 }
 
@@ -76,10 +93,11 @@ impl Default for WheelRaycast {
     }
 }
 
-/// Calculates and applies suspension forces for [WheelRaycast] components.
+/// System solving the vertical suspension dynamics.
 ///
-/// This system uses [RayHits] to find the distance to the ground and 
-/// applies a countering spring/damper force to the vehicle chassis.
+/// **Logic**: Performs a ray-world intersection check. If a hit is detected 
+/// within the suspension travel range, it applies an upward force to the 
+/// parent chassis based on the compression distance and relative velocity.
 fn apply_wheel_suspension(
     mut q_wheels: Query<(
         &mut WheelRaycast,
@@ -102,9 +120,11 @@ fn apply_wheel_suspension(
                 let distance = hit.distance;
                 if distance < (wheel.rest_length + wheel.wheel_radius) {
                     closest_hit_dist = distance;
+                    // Compression = (RestLen + Radius) - HitDistance
                     let compression = ((wheel.rest_length + wheel.wheel_radius) - distance).max(0.0);
                     let spring_force_mag = compression * wheel.spring_k;
                     
+                    // Damping calculation based on relative normal velocity
                     let lin_vel = forces.linear_velocity();
                     let ang_vel = forces.angular_velocity();
                     let velocity_at_wheel = lin_vel + ang_vel.cross(world_pos - forces.position().0);
@@ -113,6 +133,7 @@ fn apply_wheel_suspension(
                     let damping_force_mag = (relative_vel * wheel.damping_c).max(0.0);
                     let total_force_mag = (spring_force_mag + damping_force_mag).max(0.0);
                     
+                    // Apply counter-force to the chassis to push it away from the ground
                     let force_vec = hit.normal * total_force_mag;
                     forces.apply_force_at_point(force_vec, world_pos);
                     wheel.last_normal_force = total_force_mag;
@@ -123,7 +144,7 @@ fn apply_wheel_suspension(
                 wheel.last_normal_force = 0.0;
             }
 
-            // Sync visual position of the wheel mesh.
+            // Sync visual position to make the wheel appear to move with the suspension
             if let Some(visual_entity) = wheel.visual_entity {
                 if let Ok(mut visual_tf) = q_visual.get_mut(visual_entity) {
                     let wheel_center_rel_y = (wheel_tf.translation.y as f64 + 0.5 - closest_hit_dist) + wheel.wheel_radius;
@@ -134,10 +155,11 @@ fn apply_wheel_suspension(
     }
 }
 
-/// Applies drive torque and lateral friction to wheels.
+/// System applying longitudinal drive torque and lateral friction.
 ///
-/// Translates physical port values into actual forces applied to the 
-/// chassis at the wheel's contact point.
+/// **Theory**: Drive force is applied along the wheel's forward vector. 
+/// Lateral friction is emulated by countering any side-velocity at the 
+/// contact hub, preventing rovers from sliding like they are on ice.
 fn apply_wheel_drive(
     q_wheels: Query<(
         &WheelRaycast,
@@ -152,9 +174,10 @@ fn apply_wheel_drive(
         let parent_entity = parent.parent();
         if let Ok(mut forces) = q_chassis.get_mut(parent_entity) {
             if let Ok(port) = q_ports.get(wheel.drive_port) {
+                // Traction only exists when the ray is hitting the ground
                 if hits.iter().next().is_some() {
                     let forward = wheel_tf.forward().as_dvec3();
-                    let drive_force_mag = port.value as f64 * 12000.0;
+                    let drive_force_mag = port.value as f64 * 12000.0; // Scaled to vessel mass
                     let force_vec = forward * drive_force_mag;
                     
                     forces.apply_force_at_point(force_vec, wheel_tf.translation().as_dvec3());
@@ -164,9 +187,9 @@ fn apply_wheel_drive(
                     let hub_pos_world = wheel_tf.translation().as_dvec3();
                     let hub_vel = chassis_vel + chassis_ang_vel.cross(hub_pos_world - forces.position().0);
 
-                    // Simplified lateral friction to prevent sliding.
+                    // Coulomb-like friction approximation
                     let normal_force = wheel.last_normal_force;
-                    let friction_k = 1.1; 
+                    let friction_k = 1.1; // Baseline static friction coefficient
                     
                     let right = wheel_tf.right().as_dvec3();
                     let lateral_vel = hub_vel.dot(right);
@@ -179,7 +202,7 @@ fn apply_wheel_drive(
     }
 }
 
-/// Updates the rotation of wheels based on steering port inputs.
+/// Updates steering angle based on physical port state.
 fn apply_wheel_steering(
     mut q_wheels: Query<(&WheelRaycast, &mut Transform)>,
     q_ports: Query<&lunco_core::architecture::PhysicalPort>,
@@ -187,10 +210,9 @@ fn apply_wheel_steering(
 ) {
     for (wheel, mut transform) in q_wheels.iter_mut() {
         if let Ok(port) = q_ports.get(wheel.steer_port) {
-            let target_angle = (port.value * 0.5) as f32;
+            let target_angle = (port.value * 0.5) as f32; // Limit to +/- 30 degrees roughly
             transform.rotation = Quat::from_rotation_y(target_angle);
             
-            // Sync visual rotation (including wheel spin representation).
             if let Some(visual_entity) = wheel.visual_entity {
                 if let Ok(mut visual_tf) = q_visual.get_mut(visual_entity) {
                     visual_tf.rotation = transform.rotation * Quat::from_rotation_z(std::f32::consts::FRAC_PI_2);
@@ -200,21 +222,23 @@ fn apply_wheel_steering(
     }
 }
 
-/// Hotswappable Logic: Differential Drive mixing (Skid Steering).
+/// Control Logic: Differential (Skid) mixing.
 /// 
-/// Calculated via `Left = Forward + Steer` and `Right = Forward - Steer`.
+/// **Math**: `Left = Forward + Steer`, `Right = Forward - Steer`. 
+/// Creates a torque differential that rotates the chassis.
 #[derive(Component, Debug, Clone, Reflect, Default)]
 #[reflect(Component, Default)]
 pub struct DifferentialDrive {
-    /// Port name for left-side motors.
+    /// Digital port identifier for left-side motors.
     pub left_port: String,
-    /// Port name for right-side motors.
+    /// Digital port identifier for right-side motors.
     pub right_port: String,
 }
 
-/// Hotswappable Logic: Ackermann Steering.
+/// Control Logic: Ackermann Steering.
 /// 
-/// Calculated via `Drive = Forward` and `Angle = Steer * MaxAngle`.
+/// **Math**: `Drive = Forward`, `SteerAngle = Input * MaxAngle`. 
+/// High-stability steering for vehicles with articulating front/rear axles.
 #[derive(Component, Debug, Clone, Reflect, Default)]
 #[reflect(Component, Default)]
 pub struct AckermannSteer {
@@ -228,17 +252,20 @@ pub struct AckermannSteer {
     pub max_steer_angle: f32,
 }
 
-/// Suspension configuration for joint-based vehicles.
+/// Suspension configuration for joint-based (non-raycast) chassis.
+///
+/// **Why**: Some vehicles use physical collision wheels for higher fidelity, 
+/// but still require emulated spring-damper logic for PrismaticJoints.
 #[derive(Component, Debug, Clone, Reflect)]
 #[reflect(Component, Default)]
 pub struct Suspension {
-    /// Target length of the spring (meters).
+    /// target static length of the strut.
     pub rest_length: f64,
-    /// Spring stiffness (N/m).
+    /// Stiffness (N/m).
     pub spring_k: f64,
-    /// Damping coefficient (Ns/m).
+    /// Dampening (Ns/m).
     pub damping_c: f64,
-    /// Local axis of compression.
+    /// Direction of extension.
     pub local_axis: DVec3,
 }
 
@@ -253,7 +280,7 @@ impl Default for Suspension {
     }
 }
 
-/// Solves spring-damper equations for entities connected by PrismaticJoints.
+/// Solves linear suspension equations forentities linked by joints.
 fn suspension_system(
     q_joints: Query<(&PrismaticJoint, &Suspension)>,
     mut q_bodies: Query<Forces>,
@@ -297,10 +324,11 @@ fn suspension_system(
     }
 }
 
-/// Unified observer for all ground mobility commands.
+/// Global command observer for all mobility-equipped vessels.
 ///
-/// Translates semantic instructions (DRIVE, BRAKE) into low-level digital
-/// port signals based on the rover's specific drive model (Differential or Ackermann).
+/// **Responsibility**: Translates high-level [CommandMessage]s into low-level 
+/// [DigitalPort] signals. It handles the "Mixing" logic appropriate for the 
+/// vessel's specific hardware configuration (Skid vs. Ackermann).
 fn on_mobility_command(
     trigger: On<CommandMessage>,
     mut q_rovers: Query<(&mut FlightSoftware, Entity), With<RoverVessel>>,
@@ -320,7 +348,9 @@ fn on_mobility_command(
                     let forward = cmd.args[0];
                     let steer = if cmd.args.len() >= 2 { cmd.args[1] } else { 0.0 };
 
+                    // Signal Multiplexing based on drive model
                     if fsw.brake_active {
+                        // Hard brake override
                         for name in ["drive_left", "drive_right", "steering"] {
                             if let Some(&port_id) = fsw.port_map.get(name) {
                                 if let Ok(mut p) = q_digital_ports.get_mut(port_id) { p.raw_value = 0; }
@@ -373,11 +403,12 @@ fn on_mobility_command(
             _ => return,
         }
 
-        // Send feedback regarding the command execution.
+        // Broadcast telemetry feedback for ground correlation
         commands.trigger(CommandResponse {
             command_id: cmd.id,
             status,
         });
     }
 }
+
 
