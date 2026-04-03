@@ -1,8 +1,10 @@
 pub mod architecture;
 pub mod mocks;
+pub mod telemetry;
 
 pub use architecture::*;
 pub use mocks::*;
+pub use telemetry::*;
 
 use bevy::prelude::*;
 
@@ -17,7 +19,8 @@ pub struct RoverVessel;
 #[derive(Component)]
 pub struct Avatar;
 
-#[derive(Component)]
+#[derive(Component, Reflect)]
+#[reflect(Component)]
 pub struct OrbitState {
     pub yaw: f32,
     pub pitch: f32,
@@ -44,7 +47,15 @@ pub struct TimeWarpState {
 
 impl Plugin for LunCoCorePlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, wire_system);
+        app.register_type::<Severity>()
+           .register_type::<TelemetryValue>()
+           .register_type::<TelemetryEvent>()
+           .register_type::<Parameter>()
+           .register_type::<OrbitState>()
+           .register_type::<PhysicalPort>()
+           .register_type::<DigitalPort>()
+           .register_type::<Wire>()
+           .add_systems(Update, wire_system);
     }
 }
 

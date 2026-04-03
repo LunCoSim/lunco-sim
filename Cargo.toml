@@ -8,7 +8,9 @@ members = [
     "crates/lunco-attributes",
     "crates/lunco-avatar",
     "crates/lunco-client",
-    "crates/lunco-rover-raycast"
+    "crates/lunco-rover-raycast",
+    "crates/lunco-telemetry",
+    "crates/lunco-camera"
 , "crates/lunco-celestial"]
 resolver = "2"
 

@@ -10,7 +10,10 @@ pub struct LunCoAvatarPlugin;
 
 impl Plugin for LunCoAvatarPlugin {
     fn build(&self, app: &mut App) {
+        app.register_type::<UserIntent>();
+        app.add_observer(on_user_intent);
         app.add_systems(Update, (
+            capture_avatar_intent,
             avatar_freecam_translation,
             avatar_freecam_rotation,
             avatar_raycast_possession,
@@ -23,6 +26,38 @@ impl Plugin for LunCoAvatarPlugin {
         app.add_systems(PostUpdate, (
             avatar_camera_follow
         ).after(PhysicsSystems::Writeback));
+    }
+}
+
+/// High-level semantic actions intended by the user.
+/// Decouples raw input (WASD/Keys) from simulation results.
+#[derive(Component, Event, Debug, Clone, Reflect)]
+#[reflect(Component)]
+pub struct UserIntent {
+    /// Semantic forward/backward movement (-1.0 to 1.0)
+    pub forward: f64,
+    /// Semantic side movement (-1.0 to 1.0)
+    pub side: f64,
+    /// Semantic rotation/yaw (-1.0 to 1.0)
+    pub turn: f64,
+    /// Semantic elevation Change (-1.0 to 1.0)
+    pub elevation: f64,
+    /// The avatar entity that generated this intent
+    pub source: Entity,
+    /// Timestamp of when this intent was formed
+    pub timestamp: f64,
+}
+
+impl Default for UserIntent {
+    fn default() -> Self {
+        Self {
+            forward: 0.0,
+            side: 0.0,
+            turn: 0.0,
+            elevation: 0.0,
+            source: Entity::PLACEHOLDER,
+            timestamp: 0.0,
+        }
     }
 }
 
@@ -42,6 +77,35 @@ fn avatar_toggle_detached_mode(
                 commands.entity(entity).insert(DetachedCamera);
             }
         }
+    }
+}
+
+fn capture_avatar_intent(
+    keys: Res<ButtonInput<KeyCode>>,
+    clock: Res<lunco_celestial::CelestialClock>,
+    mut q_avatar: Query<(Entity, &mut UserIntent), With<Avatar>>,
+    mut commands: Commands,
+) {
+    for (entity, mut intent) in q_avatar.iter_mut() {
+        let mut forward = 0.0;
+        let mut side = 0.0;
+        let mut elevation = 0.0;
+        
+        if keys.pressed(KeyCode::KeyW) { forward += 1.0; }
+        if keys.pressed(KeyCode::KeyS) { forward -= 1.0; }
+        if keys.pressed(KeyCode::KeyA) { side -= 1.0; }
+        if keys.pressed(KeyCode::KeyD) { side += 1.0; }
+        if keys.pressed(KeyCode::KeyE) { elevation += 1.0; }
+        if keys.pressed(KeyCode::KeyQ) { elevation -= 1.0; }
+
+        intent.forward = forward;
+        intent.side = side;
+        intent.elevation = elevation;
+        intent.source = entity;
+        intent.timestamp = clock.epoch;
+        
+        // Trigger the intent globally for the translator to pick up
+        commands.trigger(intent.clone());
     }
 }
 
@@ -212,7 +276,11 @@ fn avatar_raycast_possession(
             if let Ok(f32_ray) = camera.viewport_to_world(camera_transform, cursor_position) {
                 if let Some(hit) = spatial_query.cast_ray(f32_ray.origin.as_dvec3(), f32_ray.direction, 1000.0, true, &SpatialQueryFilter::default()) {
                     if let Ok(vessel_entity) = vessel_q.get(hit.entity) {
-                        commands.entity(avatar_entity).insert((ControllerLink { vessel_entity }, OrbitState::default()));
+                        commands.entity(avatar_entity).insert((
+                            ControllerLink { vessel_entity }, 
+                            OrbitState::default(),
+                            UserIntent::default()
+                        ));
                     }
                 }
             }
@@ -230,6 +298,30 @@ fn avatar_escape_possession(
             commands.entity(entity).remove::<ControllerLink>();
             commands.entity(entity).remove::<OrbitState>();
             commands.entity(entity).remove::<DetachedCamera>();
+            commands.entity(entity).remove::<UserIntent>();
+        }
+    }
+}
+
+/// Observer that translates high-level UserIntent into physical CommandMessages 
+/// specifically for the vessel linked to the avatar.
+fn on_user_intent(
+    trigger: On<UserIntent>,
+    q_avatar: Query<&ControllerLink, With<Avatar>>,
+    mut commands: Commands,
+) {
+    let intent = trigger.event();
+    let avatar_entity = intent.source;
+    
+    if let Ok(link) = q_avatar.get(avatar_entity) {
+        if intent.forward.abs() > 0.01 || intent.side.abs() > 0.01 {
+            commands.trigger(lunco_core::architecture::CommandMessage {
+                id: intent.timestamp as u64, 
+                target: link.vessel_entity,
+                name: "DRIVE_ROVER".to_string(),
+                args: smallvec::smallvec![intent.forward, intent.side],
+                source: avatar_entity,
+            });
         }
     }
 }

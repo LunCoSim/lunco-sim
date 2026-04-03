@@ -3,20 +3,23 @@ use smallvec::SmallVec;
 
 /// Level 2: Digital Port (OBC Emulation)
 /// Uses i16 (-32768 to 32767) to emulate hardware bit-depth
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Default, Reflect)]
+#[reflect(Component)]
 pub struct DigitalPort {
     pub raw_value: i16,
 }
 
 /// Level 1: Physical Port (Plant Actuators/Sensors)
 /// Uses f32 for physical units (Nm, rad/s)
-#[derive(Component, Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Component, Debug, Clone, Copy, PartialEq, Default, Reflect)]
+#[reflect(Component)]
 pub struct PhysicalPort {
     pub value: f32,
 }
 
 /// Link between Digital and Physical domains
-#[derive(Component, Debug, Clone, Copy)]
+#[derive(Component, Debug, Clone, Copy, Reflect)]
+#[reflect(Component)]
 pub struct Wire {
     pub source: Entity,
     pub target: Entity,

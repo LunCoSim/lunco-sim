@@ -1,0 +1,9 @@
+[package]
+name = "lunco-camera"
+version = "0.6.0"
+edition = "2021"
+
+[dependencies]
+bevy = { workspace = true, features = ["default"] }
+lunco-core = { path = "../lunco-core" }
+big_space = { workspace = true }

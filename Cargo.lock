@@ -4295,6 +4295,16 @@ dependencies = [
  "lunco-celestial",
  "lunco-controller",
  "lunco-core",
+ "smallvec",
+]
+
+[[package]]
+name = "lunco-camera"
+version = "0.6.0"
+dependencies = [
+ "bevy",
+ "big_space",
+ "lunco-core",
 ]
 
 [[package]]
@@ -4399,6 +4409,14 @@ dependencies = [
  "lunco-core",
  "lunco-fsw",
  "lunco-physics",
+]
+
+[[package]]
+name = "lunco-telemetry"
+version = "0.6.0"
+dependencies = [
+ "bevy",
+ "lunco-core",
 ]
 
 [[package]]
