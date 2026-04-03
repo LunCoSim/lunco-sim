@@ -58,8 +58,8 @@ impl Plugin for CelestialPlugin {
             provider: std::sync::Arc::new(ephemeris::CelestialEphemerisProvider::new()),
         });
         
-        // No add_event needed in Bevy 0.18 Observer pattern
-        app.add_plugins(big_space::prelude::BigSpaceDefaultPlugins);
+        // big_space::prelude::BigSpaceDefaultPlugins should be added by the application entry point
+        // after disabling TransformPlugin.
         app.add_plugins(trajectories::TrajectoryPlugin);
         app.add_plugins(missions::MissionPlugin);
 

@@ -99,29 +99,51 @@ pub struct CameraScroll {
 /// toward the desired ViewPoint.
 fn viewpoint_blender_system(
     time: Res<Time>,
-    mut q_camera: Query<(&mut Transform, &mut Projection, &ViewPoint, &Avatar), With<Camera>>,
-    q_targets: Query<&GlobalTransform>,
+    mut q_camera: Query<(Entity, &mut CellCoord, &mut Transform, &mut Projection, &ViewPoint, &Avatar), With<Camera>>,
+    q_targets: Query<(Entity, &CellCoord, &Transform), Without<Camera>>,
+    q_all_grids: Query<&Grid>,
+    q_parents: Query<&ChildOf>,
+    q_spatial: Query<(&CellCoord, &Transform), Without<Camera>>,
 ) {
     let dt = time.delta_secs();
     
-    for (mut tf, mut projection, viewpoint, _) in q_camera.iter_mut() {
+    for (cam_ent, mut cam_cell, mut tf, mut projection, viewpoint, _) in q_camera.iter_mut() {
         if !viewpoint.active { continue; }
         
         if let Some(target_ent) = viewpoint.target {
-            if let Ok(target_gtf) = q_targets.get(target_ent) {
-                let lerp_factor = (viewpoint.speed * dt).min(1.0);
+            if let Ok((t_ent, t_cell, t_tf)) = q_targets.get(target_ent) {
+                let lerp_factor = (viewpoint.speed * dt).min(1.0) as f64;
                 
-                // Interpolate Transform
-                let desired_pos = target_gtf.translation() + target_gtf.back() * viewpoint.offset.z + target_gtf.right() * viewpoint.offset.x + target_gtf.up() * viewpoint.offset.y;
-                tf.translation = tf.translation.lerp(desired_pos, lerp_factor);
+                // Get absolute positions
+                let target_pos_solar = get_absolute_pos_in_root_double_ghost_aware(t_ent, t_cell, t_tf, &q_parents, &q_all_grids, &q_spatial);
+                
+                let Ok(cam_child_of) = q_parents.get(cam_ent) else { continue; };
+                let cam_grid_ent = cam_child_of.parent();
+                let Ok(cam_grid) = q_all_grids.get(cam_grid_ent) else { continue; };
+                let Ok((cg_cell, cg_tf)) = q_spatial.get(cam_grid_ent) else { continue; };
+                let cam_grid_pos_solar = get_absolute_pos_in_root_double_ghost_aware(cam_grid_ent, cg_cell, cg_tf, &q_parents, &q_all_grids, &q_spatial);
+                
+                let target_pos_in_cam_grid = target_pos_solar - cam_grid_pos_solar;
+                let current_pos_in_cam_grid = cam_grid.grid_position_double(&cam_cell, &tf);
+
+                // Interpolate in absolute space relative to camera grid
+                let target_rot = t_tf.rotation;
+                let desired_offset_world = target_rot * viewpoint.offset;
+                let desired_pos_in_cam_grid = target_pos_in_cam_grid + desired_offset_world.as_dvec3();
+                
+                let new_pos_in_cam_grid = current_pos_in_cam_grid.lerp(desired_pos_in_cam_grid, lerp_factor);
+                
+                // Update grid coordinates
+                let (new_cell, new_tf) = cam_grid.translation_to_grid(new_pos_in_cam_grid);
+                *cam_cell = new_cell;
+                tf.translation = new_tf;
                 
                 // Interpolate Rotation toward target
-                let target_rot = target_gtf.compute_transform().rotation;
-                tf.rotation = tf.rotation.slerp(target_rot, lerp_factor);
+                tf.rotation = tf.rotation.slerp(target_rot, lerp_factor as f32);
 
                 // Interpolate FOV
                 if let Projection::Perspective(ref mut p) = *projection {
-                    p.fov = p.fov + (viewpoint.fov.to_radians() - p.fov) * lerp_factor;
+                    p.fov = p.fov + (viewpoint.fov.to_radians() - p.fov) * lerp_factor as f32;
                 }
             }
         }
@@ -453,15 +475,20 @@ pub fn update_observer_camera_system(
 }
 
 pub fn update_camera_clip_planes_system(
-    mut q_camera: Query<(&mut Projection, &GlobalTransform), With<Camera>>,
-    q_bodies: Query<(&GlobalTransform, &CelestialBody)>,
+    mut q_camera: Query<(Entity, &mut Projection, &CellCoord, &Transform), With<Camera>>,
+    q_bodies: Query<(Entity, &CellCoord, &Transform, &CelestialBody), Without<Camera>>,
+    q_all_grids: Query<&Grid>,
+    q_parents: Query<&ChildOf>,
+    q_spatial: Query<(&CellCoord, &Transform), Without<Camera>>,
 ) {
-    for (mut projection, cam_gtf) in q_camera.iter_mut() {
+    for (cam_ent, mut projection, c_cell, c_tf) in q_camera.iter_mut() {
+        let cam_pos = get_absolute_pos_in_root_double_ghost_aware(cam_ent, c_cell, c_tf, &q_parents, &q_all_grids, &q_spatial);
         if let Projection::Perspective(ref mut perspective) = *projection {
             perspective.far = 1.0e15; 
             let mut min_dist_to_surface = 1.0e15;
-            for (body_gtf, body) in q_bodies.iter() {
-                let dist_to_center = cam_gtf.translation().distance(body_gtf.translation()) as f64;
+            for (body_ent, b_cell, b_tf, body) in q_bodies.iter() {
+                let body_pos = get_absolute_pos_in_root_double_ghost_aware(body_ent, b_cell, b_tf, &q_parents, &q_all_grids, &q_spatial);
+                let dist_to_center = cam_pos.distance(body_pos);
                 let dist_to_surface = (dist_to_center - body.radius_m).max(1.0);
                 if dist_to_surface < min_dist_to_surface { min_dist_to_surface = dist_to_surface; }
             }

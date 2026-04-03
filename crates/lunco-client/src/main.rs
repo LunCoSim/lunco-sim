@@ -14,6 +14,7 @@ fn main() {
             AssetSourceBuilder::platform_default("../../.cache/textures", None),
         )
         .add_plugins(DefaultPlugins.build().disable::<TransformPlugin>()) 
+        .add_plugins(big_space::prelude::BigSpaceDefaultPlugins)
         .add_plugins(lunco_core::LunCoCorePlugin);
 
     // THE UNIVERSAL SYNC BRIDGE
@@ -45,19 +46,42 @@ fn toggle_slow_motion(keyboard: Res<ButtonInput<KeyCode>>, mut time: ResMut<Time
 /// A robust multi-pass system to propagate GlobalTransform & Visibility across grids.
 fn global_transform_propagation_system(
     mut commands: Commands,
-    q_visibility_needs: Query<Entity, (Without<InheritedVisibility>, Or<(With<Visibility>, With<Mesh3d>, With<Text>)>, Without<CellCoord>)>,
+    q_needs: Query<Entity, (Or<(With<Visibility>, With<Mesh3d>, With<Text>, With<Transform>)>, Without<InheritedVisibility>, Without<CellCoord>)>,
+    mut q_spatial: Query<(Entity, &mut GlobalTransform, &Transform, Option<&ChildOf>)>,
     mut q_visibility: Query<(Entity, &mut InheritedVisibility, &mut ViewVisibility, &Visibility, Option<&ChildOf>)>,
 ) {
     // 1. Initial backfill 
-    for ent in q_visibility_needs.iter() {
+    for ent in q_needs.iter() {
         commands.entity(ent).insert((
             InheritedVisibility::default(),
             ViewVisibility::default(),
+            GlobalTransform::default(),
         ));
     }
 
-    // 2. Visibility propagation (Boolean sync)
-    // We do multiple passes to handle hierarchies
+    // 2. Transform propagation (Manual fallback for TransformPlugin)
+    // We do multiple passes to handle hierarchies (up to 4 levels)
+    for _ in 0..4 {
+        let mut gtf_cache = std::collections::HashMap::new();
+        for (ent, gtf, _, _) in q_spatial.iter() {
+            gtf_cache.insert(ent, *gtf);
+        }
+
+        for (ent, mut gtf, local_tf, child_of_opt) in q_spatial.iter_mut() {
+            let parent_gtf = if let Some(child_of) = child_of_opt {
+                gtf_cache.get(&child_of.parent()).cloned().unwrap_or_default()
+            } else {
+                GlobalTransform::default()
+            };
+            
+            let new_gtf = parent_gtf.mul_transform(*local_tf);
+            if gtf.to_matrix() != new_gtf.to_matrix() {
+                *gtf = new_gtf;
+            }
+        }
+    }
+
+    // 3. Visibility propagation (Boolean sync)
     for _ in 0..4 {
         let mut vis_cache = std::collections::HashMap::new();
         for (ent, inherited, _, _, _) in q_visibility.iter() {

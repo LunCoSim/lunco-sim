@@ -27,11 +27,7 @@ pub fn setup_big_space_hierarchy(
     asset_server: Res<AssetServer>,
 ) {
     // 1. Minimalist BigSpace Root (No Name, No standard spatial components)
-    let big_space_root = commands.spawn((
-        BigSpace::default(),
-        InheritedVisibility::default(),
-        GlobalTransform::default(),
-    )).id();
+    let big_space_root = commands.spawn(BigSpace::default()).id();
 
     // 2. Solar System Grid Anchor
     let solar_grid = commands.spawn((

@@ -1,5 +1,4 @@
 use bevy::prelude::*;
-use bevy::math::DVec3;
 use big_space::prelude::*;
 
 #[derive(Component)]
@@ -9,22 +8,21 @@ pub struct SOI {
 
 pub fn soi_transition_system(
     mut commands: Commands,
-    q_entities: Query<(Entity, &GlobalTransform, &ChildOf), (Without<crate::registry::CelestialBody>, Without<Grid>)>,
-    q_bodies: Query<(Entity, &GlobalTransform, &SOI, &crate::registry::CelestialBody)>,
+    q_entities: Query<(Entity, &CellCoord, &Transform, &ChildOf), (Without<crate::registry::CelestialBody>, Without<Grid>)>,
+    q_bodies: Query<(Entity, &CellCoord, &Transform, &SOI, &crate::registry::CelestialBody)>,
     q_all_grids: Query<&Grid>,
+    q_parents: Query<&ChildOf>,
+    q_spatial: Query<(&CellCoord, &Transform)>,
 ) {
-    for (entity, gtf, child_of) in q_entities.iter() {
-        // Use compute_matrix to get an unambiguous translation Vec3 in Bevy 0.18
-        let c_trans = gtf.to_matrix().transform_point3(Vec3::ZERO);
-        let current_pos = DVec3::new(c_trans.x as f64, c_trans.y as f64, c_trans.z as f64);
+    for (entity, cell, tf, child_of) in q_entities.iter() {
+        let current_pos = lunco_core::coords::get_absolute_pos_in_root_double_ghost_aware(entity, cell, tf, &q_parents, &q_all_grids, &q_spatial);
         let current_p_grid = child_of.parent();
         
         let mut best_body = None;
         let mut min_dist = f64::MAX;
 
-        for (body_ent, body_gtf, soi, _body) in q_bodies.iter() {
-            let b_trans = body_gtf.to_matrix().transform_point3(Vec3::ZERO);
-            let body_pos = DVec3::new(b_trans.x as f64, b_trans.y as f64, b_trans.z as f64);
+        for (body_ent, b_cell, b_tf, soi, _body) in q_bodies.iter() {
+            let body_pos = lunco_core::coords::get_absolute_pos_in_root_double_ghost_aware(body_ent, b_cell, b_tf, &q_parents, &q_all_grids, &q_spatial);
             let dist = (current_pos - body_pos).length();
             
             if dist < soi.radius_m {
@@ -39,9 +37,8 @@ pub fn soi_transition_system(
             if new_parent_grid_ent != current_p_grid {
                 if let Ok(new_grid) = q_all_grids.get(new_parent_grid_ent) {
                     // Re-parent in big_space
-                    let target_gtf = q_bodies.get(new_parent_grid_ent).unwrap().1;
-                    let t_trans = target_gtf.to_matrix().transform_point3(Vec3::ZERO);
-                    let target_pos = DVec3::new(t_trans.x as f64, t_trans.y as f64, t_trans.z as f64);
+                    let (_, b_cell, b_tf, _, _) = q_bodies.get(new_parent_grid_ent).unwrap();
+                    let target_pos = lunco_core::coords::get_absolute_pos_in_root_double_ghost_aware(new_parent_grid_ent, b_cell, b_tf, &q_parents, &q_all_grids, &q_spatial);
                     let (new_cell, new_transform) = new_grid.translation_to_grid(current_pos - target_pos);
                     
                     commands.entity(entity).insert((
