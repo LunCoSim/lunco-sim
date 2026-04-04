@@ -73,9 +73,10 @@ struct MainUiParams<'w, 's> {
     q_rovers: Query<'w, 's, (Entity, &'static Name, &'static Vessel), With<RoverVessel>>,
     q_bodies: Query<'w, 's, (Entity, &'static Name, &'static CelestialBody)>,
     q_spacecraft: Query<'w, 's, (Entity, &'static Name, &'static mut Spacecraft)>,
-    q_camera: Query<'w, 's, (Entity, &'static mut OrbitalBehavior), With<Avatar>>,
-    q_flyby: Query<'w, 's, &'static mut FlybyBehavior, With<Avatar>>,
-    q_surface: Query<'w, 's, &'static mut SurfaceBehavior, With<Avatar>>,
+    q_camera: Query<'w, 's, Entity, With<Avatar>>,
+    q_orbital: Query<'w, 's, &'static mut OrbitalBehavior>,
+    q_flyby: Query<'w, 's, &'static mut FlybyBehavior>,
+    q_surface: Query<'w, 's, &'static mut SurfaceBehavior>,
     q_trajectories: Query<'w, 's, (Entity, &'static Name, &'static mut TrajectoryView)>,
     q_children: Query<'w, 's, &'static Children>,
     q_suspension: Query<'w, 's, (Entity, &'static mut Suspension)>,
@@ -188,7 +189,7 @@ fn main_ui_system(mut params: MainUiParams) {
                 target,
                 name: "FOCUS".to_string(),
                 args: Default::default(),
-                source: params.q_camera.iter().next().map(|(e, _)| e).unwrap_or(Entity::PLACEHOLDER),
+                source: params.q_camera.iter().next().unwrap_or(Entity::PLACEHOLDER),
             });
             params.selected.entity = Some(target);
         }
@@ -205,14 +206,14 @@ fn main_ui_system(mut params: MainUiParams) {
                         target,
                         name: "FOCUS".to_string(),
                         args: Default::default(),
-                        source: params.q_camera.iter().next().map(|(e, _)| e).unwrap_or(Entity::PLACEHOLDER),
+                        source: params.q_camera.iter().next().unwrap_or(Entity::PLACEHOLDER),
                     });
                 }
 
                 if ui.button("Release (Free Fly)").clicked() {
                     params.commands.trigger(lunco_core::architecture::CommandMessage {
                         id: 0,
-                        target: params.q_camera.iter().next().map(|(e, _)| e).unwrap_or(Entity::PLACEHOLDER),
+                        target: params.q_camera.iter().next().unwrap_or(Entity::PLACEHOLDER),
                         name: "RELEASE".to_string(),
                         args: Default::default(),
                         source: Entity::PLACEHOLDER,
@@ -222,7 +223,7 @@ fn main_ui_system(mut params: MainUiParams) {
 
             if params.q_rovers.contains(target) {
                 if ui.button("Take Control (Possess)").clicked() {
-                    let avatar_ent = params.q_camera.iter().next().map(|(e, _)| e).unwrap_or(Entity::PLACEHOLDER);
+                    let avatar_ent = params.q_camera.iter().next().unwrap_or(Entity::PLACEHOLDER);
                     params.commands.trigger(lunco_core::architecture::CommandMessage {
                         id: 0,
                         target: target,
@@ -270,7 +271,7 @@ fn main_ui_system(mut params: MainUiParams) {
         ui.label(lunco_celestial::jd_to_utc_string(params.clock.epoch));
         ui.separator();
 
-        for (ent, orbital) in params.q_camera.iter() {
+        for ent in params.q_camera.iter() {
             ui.horizontal(|ui| {
                 ui.label("Mode:");
                 if let Ok(flyby) = params.q_flyby.get(ent) {
@@ -279,7 +280,7 @@ fn main_ui_system(mut params: MainUiParams) {
                 } else if let Ok(surface) = params.q_surface.get(ent) {
                      ui.colored_label(egui::Color32::from_rgb(50, 255, 100), "SURFACE");
                      ui.label(format!("Height: {:.1} m", surface.height));
-                } else {
+                } else if let Ok(orbital) = params.q_orbital.get(ent) {
                      ui.colored_label(egui::Color32::from_rgb(100, 150, 255), "ORBITAL");
                      ui.label(format!("Orbital Dist: {:.0} km", orbital.distance / 1000.0));
                 }
@@ -316,4 +317,3 @@ fn inspect_suspension_recursive(
         }
     }
 }
-

@@ -13,10 +13,6 @@ use lunco_celestial::BlueprintMaterial;
 use ui::LunCoUiPlugin;
 
 /// Main entry point for the simulation.
-///
-/// Sets up the Bevy [App] with the required plugins, resources, and systems. 
-/// It also initializes the [big_space] coordinate system to allow for 
-/// solar-system-scale simulations.
 fn main() {
     let mut app = App::new();
     app.insert_resource(Time::<Fixed>::from_hz(60.0))
@@ -27,8 +23,13 @@ fn main() {
         )
         // Note: TransformPlugin is disabled because big_space uses its own propagation systems.
         .add_plugins(DefaultPlugins.build().disable::<TransformPlugin>()) 
-        .add_plugins(big_space::prelude::BigSpaceDefaultPlugins)
+        .add_plugins(big_space::prelude::BigSpaceDefaultPlugins.build().disable::<big_space::validation::BigSpaceValidationPlugin>())
         .add_plugins(lunco_core::LunCoCorePlugin);
+
+    // THE UNIVERSAL SYNC BRIDGE
+    // Required since TransformPlugin is disabled for BigSpace support.
+    app.add_systems(PreUpdate, global_transform_propagation_system);
+    app.add_systems(PostUpdate, global_transform_propagation_system.after(avian3d::prelude::PhysicsSystems::Writeback));
 
     #[cfg(not(feature = "sandbox"))]
     {
@@ -46,6 +47,65 @@ fn main() {
         .add_plugins(lunco_avatar::LunCoAvatarPlugin)
         .add_systems(Update, toggle_slow_motion)
         .run();
+}
+
+/// A robust multi-pass system to propagate [GlobalTransform] and [Visibility] across grids.
+fn global_transform_propagation_system(
+    mut commands: Commands,
+    q_needs: Query<Entity, (Or<(With<Visibility>, With<Mesh3d>, With<Text>, With<Transform>)>, Without<InheritedVisibility>, Without<big_space::prelude::CellCoord>)>,
+    mut q_spatial: Query<(Entity, &mut GlobalTransform, &Transform, Option<&ChildOf>)>,
+    mut q_visibility: Query<(Entity, &mut InheritedVisibility, &mut ViewVisibility, &Visibility, Option<&ChildOf>)>,
+) {
+    // 1. Initial backfill 
+    for ent in q_needs.iter() {
+        commands.entity(ent).insert((
+            InheritedVisibility::default(),
+            ViewVisibility::default(),
+            GlobalTransform::default(),
+        ));
+    }
+
+    // 2. Transform propagation (Manual fallback for TransformPlugin)
+    for _ in 0..4 {
+        let mut gtf_cache = std::collections::HashMap::new();
+        for (ent, gtf, _, _) in q_spatial.iter() {
+            gtf_cache.insert(ent, *gtf);
+        }
+
+        for (_ent, mut gtf, local_tf, child_of_opt) in q_spatial.iter_mut() {
+            let parent_gtf = if let Some(child_of) = child_of_opt {
+                gtf_cache.get(&child_of.parent()).cloned().unwrap_or_default()
+            } else {
+                GlobalTransform::default()
+            };
+            
+            let new_gtf = parent_gtf.mul_transform(*local_tf);
+            if gtf.to_matrix() != new_gtf.to_matrix() {
+                *gtf = new_gtf;
+            }
+        }
+    }
+
+    // 3. Visibility propagation (Boolean sync)
+    for _ in 0..4 {
+        let mut vis_cache = std::collections::HashMap::new();
+        for (ent, inherited, _, _, _) in q_visibility.iter() {
+            vis_cache.insert(ent, inherited.get());
+        }
+
+        for (_, mut inherited, _view, visibility, child_of_opt) in q_visibility.iter_mut() {
+            let parent_visible = if let Some(child_of) = child_of_opt {
+                *vis_cache.get(&child_of.parent()).unwrap_or(&true)
+            } else {
+                true
+            };
+            
+            let is_visible = parent_visible && visibility != Visibility::Hidden;
+            if inherited.get() != is_visible {
+                *inherited = if is_visible { InheritedVisibility::VISIBLE } else { InheritedVisibility::HIDDEN };
+            }
+        }
+    }
 }
 
 /// Toggles time dilation for debugging physics and high-speed maneuvers.
