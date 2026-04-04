@@ -10,7 +10,6 @@ use bevy::asset::io::AssetSourceBuilder;
 use bevy::math::DVec3;
 use avian3d::prelude::*;
 use big_space::prelude::*;
-use leafwing_input_manager::prelude::*;
 
 use lunco_core::{Avatar, TimeWarpState, IntentState};
 use lunco_hardware::LunCoHardwarePlugin;
@@ -21,9 +20,8 @@ use lunco_robotics::{
 };
 use lunco_fsw::LunCoFswPlugin; 
 use lunco_controller::LunCoControllerPlugin; 
-use lunco_avatar::{LunCoAvatarPlugin, IntentAnalogState};
+use lunco_avatar::{LunCoAvatarPlugin, IntentAnalogState, FlybyBehavior, AdaptiveNearPlane};
 use lunco_celestial::{BlueprintMaterial, BlueprintExtension, CelestialClock, CelestialBody};
-use lunco_camera::{ObserverCamera, ObserverMode, ActiveCamera};
 use bevy_egui::{egui, EguiContexts, EguiPlugin, EguiPrimaryContextPass};
 
 /// Tunable settings for the sandbox environment lighting.
@@ -322,6 +320,7 @@ fn setup_sandbox(
     commands.spawn((
         Name::new("Sandbox_Avatar"),
         Avatar,
+        Camera::default(),
         Camera3d::default(),
         Projection::Perspective(PerspectiveProjection {
             near: 0.1,
@@ -332,19 +331,18 @@ fn setup_sandbox(
         bevy::post_process::bloom::Bloom::NATURAL,
         Transform::from_xyz(-50.0, 20.0, -25.0)
             .with_rotation(Quat::from_euler(EulerRot::YXZ, -110.0f32.to_radians(), -26.0f32.to_radians(), 0.0)), 
-        ObserverCamera { 
-            mode: ObserverMode::Orbital,
-            focus_target: Some(rovers_root),
-            altitude: 20.0,
-            distance: 20.0,
-            ..default()
+        FlybyBehavior { 
+            target: Some(rovers_root),
+            offset: DVec3::new(-50.0, 20.0, -25.0),
+            yaw: -110.0f32.to_radians(),
+            pitch: -26.0f32.to_radians(),
         },
+        AdaptiveNearPlane,
         FloatingOrigin,
         CellCoord::default(),
         IntentState::default(),
         lunco_controller::get_avatar_input_map(),
         IntentAnalogState::default(),
-        ActiveCamera,
     )).set_parent_in_place(grid_entity);
 }
 

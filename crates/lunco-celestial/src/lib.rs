@@ -84,7 +84,6 @@ impl Plugin for CelestialPlugin {
             soi_transition_system,
         ).chain());
 
-        app.add_plugins(lunco_camera::LunCoCameraPlugin);
 
         app.add_systems(Update, (
             update_sun_light_system,

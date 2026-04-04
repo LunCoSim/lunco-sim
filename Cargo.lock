@@ -4292,20 +4292,8 @@ dependencies = [
  "bevy",
  "big_space",
  "leafwing-input-manager",
- "lunco-camera",
  "lunco-celestial",
  "lunco-controller",
- "lunco-core",
- "smallvec",
-]
-
-[[package]]
-name = "lunco-camera"
-version = "0.6.0"
-dependencies = [
- "bevy",
- "bevy_egui",
- "big_space",
  "lunco-core",
  "smallvec",
 ]
@@ -4325,12 +4313,12 @@ dependencies = [
  "chrono",
  "futures-lite",
  "image",
- "lunco-camera",
  "lunco-controller",
  "lunco-core",
  "resvg",
  "serde",
  "serde_json",
+ "smallvec",
  "tiny-skia",
  "ureq",
  "usvg",
@@ -4348,7 +4336,6 @@ dependencies = [
  "leafwing-input-manager",
  "lunco-attributes",
  "lunco-avatar",
- "lunco-camera",
  "lunco-celestial",
  "lunco-controller",
  "lunco-core",

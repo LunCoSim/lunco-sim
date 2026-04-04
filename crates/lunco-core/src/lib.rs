@@ -80,32 +80,6 @@ pub struct CelestialBody {
     pub radius_m: f64,
 }
 
-/// State for 3rd-person orbital cameras or follow behaviors.
-///
-/// Stores spherical coordinate offsets relative to a target entity.
-#[derive(Component, Reflect, Clone, Debug)]
-#[reflect(Component)]
-pub struct OrbitState {
-    /// Rotation around the vertical axis (radians).
-    pub yaw: f32,
-    /// Rotation up/down (radians).
-    pub pitch: f32,
-    /// Radial distance from the target (meters).
-    pub distance: f32,
-    /// Translation offset along the vertical axis.
-    pub vertical_offset: f32,
-}
-
-impl Default for OrbitState {
-    fn default() -> Self {
-        Self {
-            yaw: 0.0,
-            pitch: -0.5,
-            distance: 10.0,
-            vertical_offset: 1.0,
-        }
-    }
-}
 
 /// Global simulation speed and physics state control.
 #[derive(Resource, Default, Debug, Clone, Copy)]
@@ -152,7 +126,6 @@ impl Plugin for LunCoCorePlugin {
            .register_type::<CelestialClock>()
            .register_type::<UserIntent>()
            .register_type::<IntentAnalogState>()
-           .register_type::<OrbitState>()
            .register_type::<PhysicalPort>()
            .register_type::<DigitalPort>()
            .register_type::<Wire>()

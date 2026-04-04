@@ -3,7 +3,6 @@ use bevy::math::DQuat;
 use big_space::prelude::*;
 
 use crate::big_space_setup::{SolarSystemRoot, EarthRoot, MoonRoot};
-use lunco_camera::ObserverCamera;
 use crate::clock::CelestialClock;
 use crate::ephemeris::EphemerisResource;
 use crate::registry::{CelestialBody, CelestialBodyRegistry, CelestialReferenceFrame};
@@ -103,7 +102,7 @@ pub fn body_rotation_system(
 pub fn update_sun_light_system(
     mut q_light: Query<(&mut Transform, &DirectionalLight)>,
     _q_sun: Query<&CelestialBody, With<SolarSystemRoot>>,
-    q_camera: Query<(Entity, &GlobalTransform), With<ObserverCamera>>,
+    q_camera: Query<(Entity, &GlobalTransform), With<Camera>>,
     q_all_parents: Query<&ChildOf>,
     q_grids_only: Query<&big_space::grid::Grid>,
     q_coords_only: Query<(&CellCoord, &Transform), Without<DirectionalLight>>,
@@ -137,28 +136,28 @@ pub fn celestial_telemetry_system(
     q_earth: Query<(&Transform, &big_space::prelude::CellCoord), With<EarthRoot>>,
     q_moon: Query<(&Transform, &big_space::prelude::CellCoord), With<MoonRoot>>,
     q_sun: Query<&Transform, With<SolarSystemRoot>>,
-    q_cam: Query<(&ObserverCamera, &Transform)>,
+    q_cam: Query<&Transform, (With<Camera>, With<lunco_core::Avatar>)>,
     mut timer: Local<u32>,
 ) {
     if *timer % 60 == 0 {
         if let Some((tf, cell)) = q_earth.iter().next() { info!("TELEMETRY: Epoch: {:.4}, Earth Cell: {:?}, Earth Pos: {:?}", clock.epoch, cell, tf.translation); }
         if let Some((tf, cell)) = q_moon.iter().next() { info!("TELEMETRY: Moon Cell: {:?}, Moon Pos: {:?}", cell, tf.translation); }
         if let Some(tf) = q_sun.iter().next() { info!("TELEMETRY: Sun Pos: {:?}", tf.translation); }
-        if let Some((obs, tf)) = q_cam.iter().next() { info!("TELEMETRY: Camera Focus: {:?}, Camera Local Pos: {:?}", obs.focus_target, tf.translation); }
+        if let Some(tf) = q_cam.iter().next() { info!("TELEMETRY: Camera Local Pos: {:?}", tf.translation); }
     }
     *timer += 1;
 }
 
 pub fn celestial_visuals_system(
     mut materials: ResMut<Assets<BlueprintMaterial>>,
-    q_camera: Query<(Entity, &CellCoord, &Transform, &ObserverCamera), With<lunco_camera::ActiveCamera>>,
+    q_camera: Query<(Entity, &CellCoord, &Transform), (With<Camera>, With<lunco_core::Avatar>)>,
     q_bodies: Query<(Entity, &CellCoord, &Transform, &MeshMaterial3d<BlueprintMaterial>, &CelestialBody)>,
     q_tiles: Query<(&MeshMaterial3d<BlueprintMaterial>, &crate::terrain::TileCoord), With<crate::terrain::ActiveTerrainTile>>,
     q_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
     q_spatial: Query<(&CellCoord, &Transform)>,
 ) {
-    let Some((cam_ent, cam_cell, cam_tf, _obs)) = q_camera.iter().next() else { return; };
+    let Some((cam_ent, cam_cell, cam_tf)) = q_camera.iter().next() else { return; };
     
     let mut body_transitions = std::collections::HashMap::new();
 

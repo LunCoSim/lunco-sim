@@ -11,5 +11,4 @@ leafwing-input-manager = { workspace = true }
 lunco-controller = { path = "../lunco-controller" }
 lunco-celestial = { path = "../lunco-celestial" }
 lunco-core = { path = "../lunco-core" }
-lunco-camera = { path = "../lunco-camera" }
 smallvec = { workspace = true }

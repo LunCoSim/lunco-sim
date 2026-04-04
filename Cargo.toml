@@ -8,7 +8,6 @@ members = [
     "crates/lunco-avatar",
     "crates/lunco-client",
     "crates/lunco-telemetry",
-    "crates/lunco-camera",
     "crates/lunco-celestial",
     "crates/lunco-hardware",
     "crates/lunco-mobility",

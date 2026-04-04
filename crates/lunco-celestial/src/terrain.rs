@@ -7,7 +7,6 @@ use futures_lite::future;
 use std::sync::Arc;
 use avian3d::prelude::*;
 use crate::registry::CelestialBody;
-use lunco_camera::ObserverCamera;
 
 #[derive(Resource, Reflect)]
 #[reflect(Resource)]
@@ -80,14 +79,12 @@ pub fn terrain_spawn_system(
     mut commands: Commands,
     config: Res<TerrainTileConfig>,
     registry: Res<TerrainMapRegistry>,
-    q_camera: Query<(&GlobalTransform, &ObserverCamera), With<Camera>>,
+    q_camera: Query<&GlobalTransform, (With<Camera>, With<lunco_core::Avatar>)>,
     q_bodies: Query<(Entity, &GlobalTransform, &CelestialBody)>,
     q_tiles: Query<(Entity, &TileCoord)>,
 ) {
-    let Some((cam_gtf, _obs)) = q_camera.iter().next() else { return; };
-    // Use compute_matrix for unambiguous coordinate extraction in Bevy 0.18
-    let c_trans = cam_gtf.to_matrix().transform_point3(Vec3::ZERO);
-    let camera_pos = DVec3::new(c_trans.x as f64, c_trans.y as f64, c_trans.z as f64);
+    let Some(cam_gtf) = q_camera.iter().next() else { return; };
+    let camera_pos = cam_gtf.translation().as_dvec3();
     
     let mut nearest_body = None;
     let mut min_altitude = f64::MAX;
@@ -180,8 +177,7 @@ pub fn finalize_terrain_tiles(
     q_camera: Query<&GlobalTransform, With<Camera>>,
 ) {
     let Some(cam_gtf) = q_camera.iter().next() else { return; };
-    let c_trans = cam_gtf.to_matrix().transform_point3(Vec3::ZERO);
-    let camera_pos = DVec3::new(c_trans.x as f64, c_trans.y as f64, c_trans.z as f64);
+    let camera_pos = cam_gtf.translation().as_dvec3();
 
     for (ent, coord, mut pending) in q_pending.iter_mut() {
         if let Some(data) = future::block_on(future::poll_once(&mut pending.0)) {
@@ -190,10 +186,9 @@ pub fn finalize_terrain_tiles(
                 continue; 
             };
             
-            let b_trans = _gtf.to_matrix().transform_point3(Vec3::ZERO);
-            let body_pos = DVec3::new(b_trans.x as f64, b_trans.y as f64, b_trans.z as f64);
+            let body_pos = _gtf.translation().as_dvec3();
             let dist = camera_pos.distance(body_pos);
-            let altitude = dist - body.radius_m;
+            let altitude = (dist - body.radius_m).max(0.0);
 
             // Get texture from body material
             let mut base_color = if body.name == "Moon" { Color::srgb(0.2, 0.2, 0.2) } else { Color::from(LinearRgba::new(0.005, 0.02, 0.05, 1.0)) };
@@ -220,7 +215,7 @@ pub fn finalize_terrain_tiles(
                         grid_scale: 100.0,
                         line_width: 1.0,
                         subdivisions: Vec2::new(360.0, 180.0),
-                        transition: (1.0 - (altitude / 50_000.0)).clamp(0.0, 1.0) as f32,
+                        transition: (1.0f64 - (altitude / 50_000.0f64)).clamp(0.0, 1.0) as f32,
                         body_radius: body.radius_m as f32,
                         ..default()
                     },

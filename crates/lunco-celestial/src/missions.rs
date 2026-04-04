@@ -54,7 +54,7 @@ pub struct SpacecraftBillboard;
 
 pub fn spacecraft_billboard_system(
     mut q_billboards: Query<(&mut Transform, &ChildOf), With<SpacecraftBillboard>>,
-    q_camera: Query<&GlobalTransform, With<lunco_camera::ObserverCamera>>,
+    q_camera: Query<&GlobalTransform, (With<Camera>, With<lunco_core::Avatar>)>,
     q_global: Query<&GlobalTransform>,
 ) {
     if let Some(cam_gtf) = q_camera.iter().next() {
@@ -274,14 +274,19 @@ pub struct FocusOnStart;
 
 pub fn mission_focus_system(
     q_focus: Query<Entity, Added<FocusOnStart>>,
-    mut q_camera: Query<&mut lunco_camera::ObserverCamera>,
+    q_avatar: Query<Entity, With<lunco_core::Avatar>>,
     mut commands: Commands,
 ) {
     for ent in q_focus.iter() {
-        if let Some(mut obs) = q_camera.iter_mut().next() {
-            obs.focus_target = Some(ent);
-            obs.distance = 100.0; // Close focus for spacecraft
-            info!("Camera focused on spacecraft starting mission.");
+        if let Some(avatar_ent) = q_avatar.iter().next() {
+            commands.trigger(lunco_core::architecture::CommandMessage {
+                id: 0,
+                target: ent,
+                name: "POSSESS".to_string(),
+                args: smallvec::smallvec![],
+                source: avatar_ent,
+            });
+            info!("Camera focus command sent for spacecraft starting mission.");
         }
         commands.entity(ent).remove::<FocusOnStart>();
     }

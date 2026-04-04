@@ -220,6 +220,7 @@ pub fn setup_big_space_hierarchy(
 
     // Initial Observer Camera
     commands.spawn((
+        Camera::default(),
         Camera3d::default(),
         Projection::Perspective(PerspectiveProjection {
             near: 1.0,
@@ -243,17 +244,6 @@ pub fn setup_big_space_hierarchy(
         CellCoord::default(),
         Transform::from_translation(Vec3::new(0.0, 10_000_000.0, 10_000_000.0)),
         GlobalTransform::default(),
-        lunco_camera::ObserverCamera {
-            focus_target: Some(moon_body),
-            mode: lunco_camera::ObserverMode::Flyby,
-            distance: 2_137_000.0, // 400km alt
-            pitch: -0.8,
-            yaw: 0.0,
-            local_flyby_pos: DVec3::new(0.0, 2_137_000.0, 0.0),
-            altitude: 400_000.0,
-            ..default()
-        },
-        lunco_camera::ActiveCamera,
         lunco_core::Avatar,
         lunco_core::IntentState::default(),
         lunco_controller::get_avatar_input_map(),

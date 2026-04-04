@@ -18,7 +18,7 @@
 use bevy::prelude::*;
 use std::collections::HashMap;
 use lunco_core::telemetry::TelemetryValue;
-use lunco_core::PhysicalPort;
+
 
 /// Plugin providing the reflection-ready tuning registry.
 pub struct LunCoAttributesPlugin;
@@ -140,6 +140,7 @@ fn on_set_attribute(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lunco_core::PhysicalPort;
 
     #[test]
     fn test_reflection_attribute_modification() {
