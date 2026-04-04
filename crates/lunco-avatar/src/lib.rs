@@ -13,7 +13,7 @@ use big_space::prelude::{Grid, CellCoord};
 
 use lunco_controller::ControllerLink;
 use lunco_core::{Vessel, Avatar, ActiveAction, ActionStatus, CommandMessage, CelestialBody};
-use lunco_celestial::CelestialClock;
+use lunco_celestial::{CelestialClock, TrajectoryView};
 
 mod intents;
 pub use intents::*;
@@ -57,9 +57,9 @@ impl Plugin for LunCoAvatarPlugin {
            .register_type::<MouseSensitivity>();
 
         app.add_systems(Update, (
+            avatar_init_system,
             capture_avatar_intent,
             avatar_behavior_input_system,
-            avatar_unified_orientation_system,
             (
                 avatar_orbital_system,
                 avatar_surface_system,
@@ -72,6 +72,7 @@ impl Plugin for LunCoAvatarPlugin {
                 update_avatar_clip_planes_system,
             ).chain(),
         ));
+        app.add_systems(PostUpdate, avatar_unified_orientation_system);
     }
 }
 
@@ -158,20 +159,27 @@ fn capture_avatar_intent(
     clock: Res<lunco_celestial::CelestialClock>,
     mut commands: Commands,
     keys: Res<ButtonInput<KeyCode>>,
+    scroll_res: ResMut<CameraScroll>,
 ) {
     let window = windows.iter().next();
     let current_mouse_pos = window.and_then(|w| w.cursor_position());
     let mut delta = Vec2::ZERO;
     let mut mouse_moved = false;
-    if let (Some(curr), Some(last)) = (current_mouse_pos, *last_mouse_pos) {
-        if mouse.pressed(MouseButton::Right) && curr.distance(last) > 0.1 {
-            delta = curr - last;
-            mouse_moved = true;
-        }
-    }
+    
     *last_mouse_pos = current_mouse_pos;
 
     for (entity, intent_state, mut analog) in q_avatar.iter_mut() {
+        if mouse.pressed(MouseButton::Right) {
+            let d = intent_state.axis_pair(&UserIntent::Look);
+            // Leafwing MouseMove axis pair provides the delta directly.
+            // We multiply by 10.0 here because the raw mouse delta is often very small (e.g., 1-2 pixels)
+            // and the sensitivity/0.01 multiplier later would make it imperceptible.
+            if d.length_squared() > 0.00001 {
+                delta = d * 10.0;
+                mouse_moved = true;
+            }
+        }
+
         let mut forward = 0.0;
         let mut side = 0.0;
         let mut elevation = 0.0;
@@ -202,7 +210,7 @@ fn capture_avatar_intent(
 
         // Preemption logic: Any manual movement input cancels active automated 
         // actions (e.g., stopping a camera transition if the user moves the mouse).
-        if forward.abs() > 0.1 || side.abs() > 0.1 || elevation.abs() > 0.1 || mouse_moved {
+        if forward.abs() > 0.1 || side.abs() > 0.1 || elevation.abs() > 0.1 || mouse_moved || scroll_res.delta.abs() > 0.001 {
             commands.entity(entity).remove::<lunco_core::ActiveAction>();
         }
     }
@@ -281,22 +289,47 @@ fn avatar_global_hotkeys(
 /// Updates the Avatar's transform and cell based on OrbitalBehavior.
 fn avatar_orbital_system(
     time: Res<Time>,
-    mut q_avatar: Query<(&mut Transform, &mut CellCoord, &OrbitalBehavior, &ChildOf, Has<DetachedCamera>), With<Avatar>>,
+    mut q_avatar: Query<(Entity, &mut Transform, &mut CellCoord, &mut OrbitalBehavior, &ChildOf, Has<DetachedCamera>), With<Avatar>>,
     q_spatial: Query<(&CellCoord, &Transform), Without<Avatar>>,
     q_grids: Query<&Grid>,
+    q_parents: Query<&ChildOf>,
+    mut scroll_res: ResMut<CameraScroll>,
+    mut commands: Commands,
     keys: Res<ButtonInput<KeyCode>>,
 ) {
     let dt = time.delta_secs();
     let ctrl_pressed = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
 
-    for (mut tf, mut cell, orbital, child_of, is_detached) in q_avatar.iter_mut() {
-        let Ok(grid) = q_grids.get(child_of.0) else { continue; };
-        
-        // Skip follow if detached or holding CTRL (allows universal locomotion to take over)
+    for (avatar_ent, mut tf, mut cell, mut orbital, child_of, is_detached) in q_avatar.iter_mut() {
+        // Process scroll zoom - reduced sensitivity (0.05 instead of 0.1)
+        if scroll_res.delta != 0.0 {
+            orbital.distance *= (1.0 - scroll_res.delta as f64 * 0.05).clamp(0.1, 10.0);
+            // Limit distance: Min 1m, Max 10^11 m (approx 0.6 AU, plenty for solar system views)
+            orbital.distance = orbital.distance.clamp(1.0, 1.0e11);
+            scroll_res.delta = 0.0;
+        }
+
         if is_detached || ctrl_pressed { continue; }
 
         let Some(target_ent) = orbital.target else { continue; };
         let Ok((t_cell, t_tf)) = q_spatial.get(target_ent) else { continue; };
+        let Ok(target_child_of) = q_parents.get(target_ent) else { continue; };
+        let target_grid_ent = target_child_of.parent();
+
+        // 1. RE-PARENTING: If target is in a different grid, move avatar to that grid for stability.
+        if child_of.parent() != target_grid_ent {
+            info!("Re-parenting Avatar {:?} to target's grid {:?}", avatar_ent, target_grid_ent);
+            let target_abs_pos = lunco_core::coords::get_absolute_pos_in_root_double_ghost_aware(target_ent, t_cell, t_tf, &q_parents, &q_grids, &q_spatial);
+            let Ok(target_grid) = q_grids.get(target_grid_ent) else { continue; };
+            let (new_cell, new_tf_translation) = target_grid.translation_to_grid(target_abs_pos);
+            *cell = new_cell;
+            tf.translation = new_tf_translation;
+            commands.entity(avatar_ent).set_parent_in_place(target_grid_ent);
+            continue; 
+        }
+
+        // 2. MOVEMENT: Use LOCAL math within the same grid for maximum stability.
+        let Ok(grid) = q_grids.get(child_of.parent()) else { continue; };
 
         let mut rotation = Quat::from_euler(EulerRot::YXZ, orbital.yaw, orbital.pitch, 0.0);
         if orbital.use_target_frame {
@@ -305,34 +338,46 @@ fn avatar_orbital_system(
 
         let target_pos = grid.grid_position_double(t_cell, t_tf);
         let offset = rotation.mul_vec3(Vec3::Z).as_dvec3() * orbital.distance;
-        
         let desired_pos = target_pos + offset + Vec3::Y.as_dvec3() * orbital.vertical_offset as f64;
         
-        let lerp_factor = (dt * 10.0 * (1.0 - orbital.damping)).min(1.0) as f64;
+        let lerp_factor = (dt * 30.0 * (1.0 - orbital.damping)).min(1.0) as f64;
         let current_pos = grid.grid_position_double(&cell, &tf);
         let next_pos = current_pos.lerp(desired_pos, lerp_factor);
 
         let (new_cell, new_tf) = grid.translation_to_grid(next_pos);
         *cell = new_cell;
         tf.translation = new_tf;
-        tf.look_at(target_pos.as_vec3() + Vec3::Y * orbital.vertical_offset, Vec3::Y);
+
+        // 3. ORIENTATION: Direct look at target point in local grid space.
+        let forward = (target_pos - next_pos).normalize().as_vec3();
+        if forward.length_squared() > 0.01 {
+            let target_point = tf.translation + forward;
+            tf.look_at(target_point, Vec3::Y);
+        }
     }
 }
 
 /// Updates the Avatar's transform and cell based on SurfaceBehavior.
 fn avatar_surface_system(
     time: Res<Time>,
-    mut q_avatar: Query<(&mut Transform, &mut CellCoord, &SurfaceBehavior, &ChildOf, Has<DetachedCamera>), With<Avatar>>,
+    mut q_avatar: Query<(&mut Transform, &mut CellCoord, &mut SurfaceBehavior, &ChildOf, Has<DetachedCamera>), With<Avatar>>,
     q_spatial: Query<(&CellCoord, &Transform), (Without<Avatar>, With<Vessel>)>,
     q_grids: Query<&Grid>,
     keys: Res<ButtonInput<KeyCode>>,
+    mut scroll_res: ResMut<CameraScroll>,
 ) {
     let dt = time.delta_secs();
     let ctrl_pressed = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
 
-    for (mut tf, mut cell, surface, child_of, is_detached) in q_avatar.iter_mut() {
+    for (mut tf, mut cell, mut surface, child_of, is_detached) in q_avatar.iter_mut() {
         let Ok(grid) = q_grids.get(child_of.0) else { continue; };
         
+        // Process scroll zoom for height adjustment
+        if scroll_res.delta != 0.0 {
+            surface.height = (surface.height - scroll_res.delta * 2.0).clamp(1.0, 1000.0);
+            scroll_res.delta = 0.0;
+        }
+
         // Skip follow if detached or holding CTRL
         if is_detached || ctrl_pressed { continue; }
 
@@ -355,9 +400,6 @@ fn avatar_surface_system(
         let (new_cell, new_tf) = grid.translation_to_grid(next_pos);
         *cell = new_cell;
         tf.translation = new_tf;
-        
-        let target_vec = target_pos.as_vec3() + up * surface.height;
-        tf.look_at(target_vec, up);
     }
 }
 
@@ -365,34 +407,49 @@ fn avatar_surface_system(
 /// currently "unlocked" (DetachedMode or CTRL-pressed).
 fn avatar_universal_locomotion_system(
     time: Res<Time>,
-    mut q_avatar: Query<(&mut Transform, &mut CellCoord, &ChildOf, Option<&ControllerLink>, Has<DetachedCamera>, &IntentAnalogState, Has<FlybyBehavior>), With<Avatar>>,
+    mut q_avatar: Query<(&mut Transform, &mut CellCoord, &ChildOf, Option<&ControllerLink>, Has<DetachedCamera>, &IntentAnalogState, Option<&mut FlybyBehavior>), With<Avatar>>,
     q_grids: Query<&Grid>,
     keys: Res<ButtonInput<KeyCode>>,
+    mut scroll_res: ResMut<CameraScroll>,
 ) {
     let dt = time.delta_secs();
     let ctrl_pressed = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
     
-    for (mut tf, mut cell, child_of, possessed, is_detached, analog, has_flyby) in q_avatar.iter_mut() {
+    for (mut tf, mut cell, child_of, possessed, _is_detached, analog, mut flyby_opt) in q_avatar.iter_mut() {
         let Ok(grid) = q_grids.get(child_of.0) else { continue; };
         
         // Process locomotion ONLY if unlocked
-        // - Free-fly cameras (not possessed) are always unlocked.
+        // - Free-fly cameras (not possessed) are unlocked if they HAVE FlybyBehavior
         // - Possessed cameras (Follow or Detached) require CTRL to fly.
-        let is_unlocked = (possessed.is_none() && has_flyby) || ctrl_pressed;
-        if !is_unlocked { continue; }
-
+        let is_unlocked = (possessed.is_none() && flyby_opt.is_some()) || ctrl_pressed;
+        
         let mut move_vec = Vec3::ZERO;
-        move_vec += *tf.forward() * analog.forward;
-        move_vec += *tf.right() * analog.side;
-        move_vec += Vec3::Y * analog.elevation;
+        if is_unlocked {
+            move_vec += *tf.forward() * analog.forward;
+            move_vec += *tf.right() * analog.side;
+            move_vec += Vec3::Y * analog.elevation;
+        }
 
-        let speed = 20.0 * dt as f64;
+        // Always allow zoom-based translation in Flyby mode even if not "unlocked" for WASD
+        if flyby_opt.is_some() && scroll_res.delta != 0.0 {
+            move_vec += *tf.forward() * scroll_res.delta * 1000.0; // 1km per scroll click approx
+            scroll_res.delta = 0.0;
+        }
+
+        if move_vec.length_squared() < 0.00001 { continue; }
+
+        let speed = 100.0 * dt as f64;
         let current_pos = grid.grid_position_double(&cell, &tf);
         let next_pos = current_pos + move_vec.as_dvec3() * speed;
 
         let (new_cell, new_tf) = grid.translation_to_grid(next_pos);
         *cell = new_cell;
         tf.translation = new_tf;
+
+        // Sync behavior offset
+        if let Some(ref mut flyby) = flyby_opt {
+            flyby.offset = next_pos;
+        }
     }
 }
 
@@ -480,10 +537,11 @@ fn update_avatar_clip_planes_system(
 fn avatar_raycast_possession(
     mouse: Res<ButtonInput<MouseButton>>,
     windows: Query<&Window>,
-    camera_q: Query<(&Camera, &GlobalTransform, Entity), (With<Avatar>, Without<ControllerLink>)>,
+    camera_q: Query<(&Camera, &GlobalTransform, Entity), With<Avatar>>,
     spatial_query: Option<SpatialQuery>,
     mut commands: Commands,
     vessel_q: Query<Entity, With<Vessel>>,
+    body_q: Query<Entity, Or<(With<CelestialBody>, With<TrajectoryView>)>>,
 ) {
     let Some(spatial_query) = spatial_query else { return; };
     if !mouse.just_pressed(MouseButton::Left) { return; }
@@ -491,12 +549,20 @@ fn avatar_raycast_possession(
     if let Some(cursor_position) = window.cursor_position() {
         for (camera, camera_transform, avatar_entity) in camera_q.iter() {
             if let Ok(f32_ray) = camera.viewport_to_world(camera_transform, cursor_position) {
-                if let Some(hit) = spatial_query.cast_ray(f32_ray.origin.as_dvec3(), f32_ray.direction, 1000.0, true, &SpatialQueryFilter::default()) {
+                if let Some(hit) = spatial_query.cast_ray(f32_ray.origin.as_dvec3(), f32_ray.direction, 1.0e12, true, &SpatialQueryFilter::default()) {
                     if let Ok(vessel_entity) = vessel_q.get(hit.entity) {
                         commands.trigger(lunco_core::architecture::CommandMessage {
                             id: 0,
                             target: vessel_entity,
                             name: "POSSESS".to_string(),
+                            args: smallvec::smallvec![],
+                            source: avatar_entity,
+                        });
+                    } else if let Ok(body_entity) = body_q.get(hit.entity) {
+                        commands.trigger(lunco_core::architecture::CommandMessage {
+                            id: 0,
+                            target: body_entity,
+                            name: "FOCUS".to_string(),
                             args: smallvec::smallvec![],
                             source: avatar_entity,
                         });
@@ -661,22 +727,57 @@ fn on_focus_command(
     trigger: On<lunco_core::architecture::CommandMessage>,
     mut commands: Commands,
     q_avatar: Query<Entity, With<Avatar>>,
+    q_bodies: Query<&lunco_core::CelestialBody>,
 ) {
     let msg = trigger.event();
     if msg.name == "FOCUS" {
         let avatar_ent: Entity = if let Ok(e) = q_avatar.get(msg.source) { e } else { q_avatar.iter().next().unwrap() };
         
+        let mut distance = if msg.args.len() > 0 { msg.args[0] } else { 10.0 };
+        
+        // Adaptive default distance for celestial bodies
+        if msg.args.len() == 0 {
+            if let Ok(body) = q_bodies.get(msg.target) {
+                distance = body.radius_m * 3.0;
+            }
+        }
+
         // Transitions ensure mutual exclusivity between behaviors
         commands.entity(avatar_ent).remove::<FlybyBehavior>();
         commands.entity(avatar_ent).remove::<SurfaceBehavior>();
         commands.entity(avatar_ent).insert(OrbitalBehavior { 
             target: Some(msg.target), 
-            distance: if msg.args.len() > 0 { msg.args[0] } else { 10.0 }, 
+            distance, 
             pitch: -0.5, 
             yaw: 0.0, 
-            vertical_offset: 1.0, 
+            vertical_offset: 0.0, 
             damping: 0.1,
             use_target_frame: true,
         });
+    }
+}
+
+/// Ensures all [Avatar] entities have at least one behavior component and the 
+/// required scale-adaptive clipping planes.
+fn avatar_init_system(
+    mut commands: Commands,
+    q_avatar: Query<(Entity, &Transform), (With<Avatar>, Without<FlybyBehavior>, Without<OrbitalBehavior>, Without<SurfaceBehavior>)>,
+    q_proj: Query<Entity, (With<Avatar>, Without<AdaptiveNearPlane>, With<Projection>)>,
+) {
+    for (entity, tf) in q_avatar.iter() {
+        let pos = tf.translation.as_dvec3();
+        let (yaw, pitch, _) = tf.rotation.to_euler(EulerRot::YXZ);
+
+        info!("Initializing Avatar {:?} with FlybyBehavior at local {:?}", entity, pos);
+        commands.entity(entity).insert(FlybyBehavior {
+            target: None,
+            offset: pos,
+            yaw,
+            pitch,
+        });
+    }
+
+    for entity in q_proj.iter() {
+        commands.entity(entity).insert(AdaptiveNearPlane);
     }
 }

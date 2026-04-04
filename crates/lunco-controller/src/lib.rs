@@ -119,7 +119,7 @@ pub fn get_default_input_map() -> InputMap<VesselIntent> {
 /// Provides a standard WASD + EQ + Space mapping for generic avatar movement.
 pub fn get_avatar_input_map() -> InputMap<lunco_core::UserIntent> {
     use lunco_core::UserIntent::*;
-    InputMap::new([
+    let mut input_map = InputMap::new([
         (MoveForward, KeyCode::KeyW),
         (MoveBackward, KeyCode::KeyS),
         (MoveLeft, KeyCode::KeyA),
@@ -129,6 +129,9 @@ pub fn get_avatar_input_map() -> InputMap<lunco_core::UserIntent> {
         (Action, KeyCode::KeyF),
         (SwitchMode, KeyCode::KeyV),
         (Pause, KeyCode::Space),
-    ])
+    ]);
+    input_map.insert_dual_axis(Look, MouseMove::default());
+    input_map.insert_axis(Zoom, MouseScrollAxis::Y);
+    input_map
 }
 

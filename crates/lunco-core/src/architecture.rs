@@ -40,8 +40,10 @@ pub enum UserIntent {
     MoveDown,
     
     /// Camera look/orientation adjustment.
+    #[actionlike(DualAxis)]
     Look, 
     /// Camera focal length or distance adjustment.
+    #[actionlike(Axis)]
     Zoom,
     
     /// Context-sensitive primary interaction.

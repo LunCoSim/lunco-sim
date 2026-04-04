@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 use bevy::math::DVec3;
 use big_space::prelude::*;
+use avian3d::prelude::Collider;
 use bevy::camera::visibility::NoFrustumCulling;
 use crate::registry::{CelestialBodyRegistry, CelestialReferenceFrame, CelestialBody};
 use crate::gravity::{GravityProvider, PointMassGravity};
@@ -27,6 +28,7 @@ pub fn setup_big_space_hierarchy(
     asset_server: Res<AssetServer>,
 ) {
     // 1. Minimalist BigSpace Root (No Name, No standard spatial components)
+    // IMPORTANT: In big_space 0.12+, BigSpace component must be on a top-level entity.
     let big_space_root = commands.spawn(BigSpace::default()).id();
 
     // 2. Solar System Grid Anchor
@@ -40,7 +42,8 @@ pub fn setup_big_space_hierarchy(
         Visibility::default(),
         InheritedVisibility::default(),
         Name::new("Universe Grid (Solar)"),
-    )).set_parent_in_place(big_space_root).id();
+    )).id();
+    commands.entity(solar_grid).set_parent_in_place(big_space_root);
 
     // All subsequent bodies/grids follow as children of solar_grid...
     // The Sun Body
@@ -65,6 +68,7 @@ pub fn setup_big_space_hierarchy(
             ..default()
         })),
         Name::new("Sun Body"),
+        Collider::sphere(696_340.0e3),
     )).set_parent_in_place(solar_grid).id();
 
     // 2. EMB Anchor
@@ -109,6 +113,7 @@ pub fn setup_big_space_hierarchy(
         },
         SOI { radius_m: registry.bodies.iter().find(|d| d.ephemeris_id == 399).and_then(|d| d.soi_radius_m).unwrap_or(924e6) },
         Name::new("Earth Body"),
+        Collider::sphere(6371.0e3),
     )).set_parent_in_place(earth_grid).id();
 
     // --- 24-Tile Body Architecture (LOD 1 - Definitively No-Stitch) ---
@@ -178,6 +183,7 @@ pub fn setup_big_space_hierarchy(
         },
         SOI { radius_m: registry.bodies.iter().find(|d| d.ephemeris_id == 301).and_then(|d| d.soi_radius_m).unwrap_or(66.1e6) },
         Name::new("Moon Body"),
+        Collider::sphere(1737.0e3),
     )).set_parent_in_place(moon_grid).id();
 
     // --- 24-Tile Body Architecture (Moon - Definitively No-Stitch) ---
@@ -271,6 +277,7 @@ pub fn setup_big_space_hierarchy(
                 ..default()
             })),
             Name::new(format!("{} Body", body_desc.name)),
+            Collider::sphere(body_desc.radius_m),
         )).set_parent_in_place(solar_grid);
     }
     

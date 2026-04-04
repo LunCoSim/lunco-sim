@@ -30,12 +30,6 @@ fn main() {
         .add_plugins(big_space::prelude::BigSpaceDefaultPlugins)
         .add_plugins(lunco_core::LunCoCorePlugin);
 
-    // THE UNIVERSAL SYNC BRIDGE
-    // This system ensures that transforms and visibility are correctly propagated 
-    // across different coordinate grids (cells) in the large-scale simulation.
-    app.add_systems(PreUpdate, global_transform_propagation_system);
-    app.add_systems(PostUpdate, global_transform_propagation_system.after(avian3d::prelude::PhysicsSystems::Writeback));
-
     #[cfg(not(feature = "sandbox"))]
     {
         app.add_plugins(lunco_celestial::CelestialPlugin)
@@ -61,69 +55,4 @@ fn toggle_slow_motion(keyboard: Res<ButtonInput<KeyCode>>, mut time: ResMut<Time
     }
 }
 
-/// A robust multi-pass system to propagate [GlobalTransform] and [Visibility] across [big_space] grids.
-///
-/// Since [big_space] disables Bevy's default [TransformPlugin] to prevent 
-/// floating-point precision loss, this system manually synchronizes 
-/// spatial data across parent-child hierarchies that span multiple grid cells.
-fn global_transform_propagation_system(
-    mut commands: Commands,
-    q_needs: Query<Entity, (Or<(With<Visibility>, With<Mesh3d>, With<Text>, With<Transform>)>, Without<InheritedVisibility>, Without<CellCoord>)>,
-    mut q_spatial: Query<(Entity, &mut GlobalTransform, &Transform, Option<&ChildOf>)>,
-    mut q_visibility: Query<(Entity, &mut InheritedVisibility, &mut ViewVisibility, &Visibility, Option<&ChildOf>)>,
-) {
-    // 1. Initial backfill: Ensure all relevant entities have the required 
-    // spatial components for propagation.
-    for ent in q_needs.iter() {
-        commands.entity(ent).insert((
-            InheritedVisibility::default(),
-            ViewVisibility::default(),
-            GlobalTransform::default(),
-        ));
-    }
-
-    // 2. Transform propagation: Recursively calculate GlobalTransforms.
-    // Performed in multiple passes to handle deep hierarchies without 
-    // complex tree traversal.
-    for _ in 0..4 {
-        let mut gtf_cache = std::collections::HashMap::new();
-        for (ent, gtf, _, _) in q_spatial.iter() {
-            gtf_cache.insert(ent, *gtf);
-        }
-
-        for (_ent, mut gtf, local_tf, child_of_opt) in q_spatial.iter_mut() {
-            let parent_gtf = if let Some(child_of) = child_of_opt {
-                gtf_cache.get(&child_of.parent()).cloned().unwrap_or_default()
-            } else {
-                GlobalTransform::default()
-            };
-            
-            let new_gtf = parent_gtf.mul_transform(*local_tf);
-            if gtf.to_matrix() != new_gtf.to_matrix() {
-                *gtf = new_gtf;
-            }
-        }
-    }
-
-    // 3. Visibility propagation: Sync InheritedVisibility based on hierarchy.
-    for _ in 0..4 {
-        let mut vis_cache = std::collections::HashMap::new();
-        for (ent, inherited, _, _, _) in q_visibility.iter() {
-            vis_cache.insert(ent, inherited.get());
-        }
-
-        for (_, mut inherited, _view, visibility, child_of_opt) in q_visibility.iter_mut() {
-            let parent_visible = if let Some(child_of) = child_of_opt {
-                *vis_cache.get(&child_of.parent()).unwrap_or(&true)
-            } else {
-                true
-            };
-            
-            let is_visible = parent_visible && visibility != Visibility::Hidden;
-            if inherited.get() != is_visible {
-                *inherited = if is_visible { InheritedVisibility::VISIBLE } else { InheritedVisibility::HIDDEN };
-            }
-        }
-    }
-}
 
