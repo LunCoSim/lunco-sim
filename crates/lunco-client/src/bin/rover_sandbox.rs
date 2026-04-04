@@ -24,6 +24,42 @@ use lunco_controller::LunCoControllerPlugin;
 use lunco_avatar::{LunCoAvatarPlugin, IntentAnalogState};
 use lunco_celestial::{BlueprintMaterial, BlueprintExtension, CelestialClock, CelestialBody};
 use lunco_camera::{ObserverCamera, ObserverMode, ActiveCamera};
+use bevy_egui::{egui, EguiContexts, EguiPlugin, EguiPrimaryContextPass};
+
+/// Tunable settings for the sandbox environment lighting.
+///
+/// **Tunability Mandate**: All magic numbers for visuals must be exposed 
+/// for real-time adjustment.
+#[derive(Resource, Reflect)]
+#[reflect(Resource)]
+struct SandboxLightSettings {
+    /// Intensity of the directional sun light (lux).
+    pub sun_illuminance: f32,
+    /// Color of the primary sun source.
+    pub sun_color: Srgba,
+    /// Pitch angle of the sun in radians (-PI/2 is directly overhead).
+    pub sun_pitch: f32,
+    /// Yaw angle of the sun in radians.
+    pub sun_yaw: f32,
+    /// Brightness of the global ambient light.
+    pub ambient_brightness: f32,
+    /// Tint of the ambient light.
+    pub ambient_color: Srgba,
+}
+
+impl Default for SandboxLightSettings {
+    fn default() -> Self {
+        Self {
+            sun_illuminance: 10_000.0,
+            sun_color: Srgba::WHITE,
+            sun_pitch: -1.0,
+            sun_yaw: 0.0,
+            ambient_brightness: 1_000.0,
+            ambient_color: Srgba::WHITE,
+        }
+    }
+}
+
 
 /// Sandbox application entry point.
 fn main() {
@@ -49,7 +85,9 @@ fn main() {
         .add_plugins(LunCoMobilityPlugin)
         .add_plugins(LunCoRoboticsPlugin)
         .add_plugins(LunCoAvatarPlugin)
-        .add_plugins(LunCoControllerPlugin);
+        .add_plugins(LunCoControllerPlugin)
+        .add_plugins(EguiPlugin::default())
+        .init_resource::<SandboxLightSettings>();
 
     // THE UNIVERSAL SYNC BRIDGE
     // Required since TransformPlugin is disabled for BigSpace support.
@@ -57,6 +95,8 @@ fn main() {
     app.add_systems(PostUpdate, global_transform_propagation_system.after(avian3d::prelude::PhysicsSystems::Writeback));
 
     app.add_systems(Startup, setup_sandbox);
+    app.add_systems(Update, apply_sandbox_light_settings);
+    app.add_systems(EguiPrimaryContextPass, sandbox_light_ui_system);
     
     app.run();
 }
@@ -163,10 +203,10 @@ fn setup_sandbox(
     commands.spawn((
         DirectionalLight {
             shadows_enabled: true,
-            illuminance: 100_000.0, 
+            illuminance: 10_000.0, 
             ..default()
         },
-        Transform::from_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)),
+        Transform::from_rotation(Quat::from_rotation_x(-1.0)),
         CellCoord::default(),
         Name::new("Sandbox_Sun"),
     )).set_parent_in_place(grid_entity);
@@ -176,7 +216,7 @@ fn setup_sandbox(
         AmbientLight {
             color: Color::WHITE,
             brightness: 1_000.0,
-            affects_lightmapped_meshes: false,
+            ..default()
         },
         Name::new("Sandbox_AmbientLight"),
     )).set_parent_in_place(grid_entity);
@@ -305,5 +345,72 @@ fn setup_sandbox(
         IntentAnalogState::default(),
         ActiveCamera,
     )).set_parent_in_place(grid_entity);
+}
+
+/// Renders the egui control panel for real-time light tuning.
+fn sandbox_light_ui_system(
+    mut contexts: EguiContexts,
+    mut settings: ResMut<SandboxLightSettings>,
+) {
+    let Ok(ctx) = contexts.ctx_mut() else { return; };
+    
+    egui::Window::new("Environment Controls").show(ctx, |ui| {
+        ui.heading("Primary Sun (Directional)");
+        ui.add(egui::Slider::new(&mut settings.sun_illuminance, 0.0..=200_000.0).text("Illuminance (lux)"));
+        
+        ui.horizontal(|ui| {
+            ui.label("Sun Color");
+            let mut color = [settings.sun_color.red, settings.sun_color.green, settings.sun_color.blue];
+            if ui.color_edit_button_rgb(&mut color).changed() {
+                settings.sun_color.red = color[0];
+                settings.sun_color.green = color[1];
+                settings.sun_color.blue = color[2];
+            }
+        });
+
+        ui.add(egui::Slider::new(&mut settings.sun_pitch, -std::f32::consts::PI..=0.0).text("Pitch (Angle)"));
+        ui.add(egui::Slider::new(&mut settings.sun_yaw, -std::f32::consts::PI..=std::f32::consts::PI).text("Yaw (Angle)"));
+
+        ui.separator();
+        ui.heading("Ambient Light");
+        ui.add(egui::Slider::new(&mut settings.ambient_brightness, 0.0..=5_000.0).text("Brightness"));
+
+        ui.horizontal(|ui| {
+            ui.label("Ambient Color");
+            let mut color = [settings.ambient_color.red, settings.ambient_color.green, settings.ambient_color.blue];
+            if ui.color_edit_button_rgb(&mut color).changed() {
+                settings.ambient_color.red = color[0];
+                settings.ambient_color.green = color[1];
+                settings.ambient_color.blue = color[2];
+            }
+        });
+
+        if ui.button("Reset Defaults").clicked() {
+            *settings = SandboxLightSettings::default();
+        }
+    });
+}
+
+/// Syncs the [SandboxLightSettings] resource to the light entities in the scene.
+fn apply_sandbox_light_settings(
+    settings: Res<SandboxLightSettings>,
+    mut q_sun: Query<(&mut DirectionalLight, &mut Transform), With<Name>>,
+    mut q_ambient: Query<&mut AmbientLight, With<Name>>,
+) {
+    if settings.is_changed() {
+        for (mut sun, mut tf) in q_sun.iter_mut() {
+            // Find by name to ensure we only touch sandbox lights
+            // (Though in this binary there's likely only one).
+            // A more robust way would be a marker component.
+            sun.illuminance = settings.sun_illuminance;
+            sun.color = Color::Srgba(settings.sun_color);
+            tf.rotation = Quat::from_euler(EulerRot::YXZ, settings.sun_yaw, settings.sun_pitch, 0.0);
+        }
+
+        for mut ambient in q_ambient.iter_mut() {
+            ambient.brightness = settings.ambient_brightness;
+            ambient.color = Color::Srgba(settings.ambient_color);
+        }
+    }
 }
 
