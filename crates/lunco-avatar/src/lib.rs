@@ -26,7 +26,7 @@ pub struct MouseSensitivity {
 
 impl Default for MouseSensitivity {
     fn default() -> Self {
-        Self { sensitivity: 0.15 }
+        Self { sensitivity: 0.45 }
     }
 }
 
@@ -59,10 +59,11 @@ impl Plugin for LunCoAvatarPlugin {
         app.add_systems(Update, (
             capture_avatar_intent,
             avatar_behavior_input_system,
+            avatar_unified_orientation_system,
             (
                 avatar_orbital_system,
                 avatar_surface_system,
-                avatar_flyby_system,
+                avatar_universal_locomotion_system,
                 avatar_drag_lifecycle,
                 avatar_raycast_possession,
                 avatar_escape_possession,
@@ -156,6 +157,7 @@ fn capture_avatar_intent(
     mut last_mouse_pos: Local<Option<Vec2>>,
     clock: Res<lunco_celestial::CelestialClock>,
     mut commands: Commands,
+    keys: Res<ButtonInput<KeyCode>>,
 ) {
     let window = windows.iter().next();
     let current_mouse_pos = window.and_then(|w| w.cursor_position());
@@ -181,10 +183,13 @@ fn capture_avatar_intent(
         if intent_state.pressed(&UserIntent::MoveUp) { elevation += 1.0; }
         if intent_state.pressed(&UserIntent::MoveDown) { elevation -= 1.0; }
 
+        // Apply movement boost if Shift is held.
+        let boost = if keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight) { 10.0 } else { 1.0 };
+        
         // Update the analog snapshot used for high-frequency control loops.
-        analog.forward = forward;
-        analog.side = side;
-        analog.elevation = elevation;
+        analog.forward = forward * boost;
+        analog.side = side * boost;
+        analog.elevation = elevation * boost;
         analog.look_delta = delta;
         analog.timestamp = clock.epoch;
         
@@ -229,6 +234,37 @@ fn avatar_behavior_input_system(
     }
 }
 
+/// Unified orientation system that handles gimballing and target-frame linking for all behaviors.
+fn avatar_unified_orientation_system(
+    mut q_avatar: Query<(&mut Transform, Option<&FlybyBehavior>, Option<&OrbitalBehavior>, Option<&SurfaceBehavior>, Has<DetachedCamera>), With<Avatar>>,
+    q_spatial: Query<&Transform, Without<Avatar>>,
+    keys: Res<ButtonInput<KeyCode>>,
+) {
+    let ctrl_pressed = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
+    
+    for (mut tf, flyby_opt, orbital_opt, surface_opt, is_detached) in q_avatar.iter_mut() {
+        let (yaw, pitch, use_target_frame, target_ent) = if let Some(flyby) = flyby_opt {
+            (flyby.yaw, flyby.pitch, false, None)
+        } else if let Some(orbital) = orbital_opt {
+            (orbital.yaw, orbital.pitch, orbital.use_target_frame, orbital.target)
+        } else if let Some(surface) = surface_opt {
+            (surface.yaw, surface.pitch, surface.use_target_frame, surface.target)
+        } else { continue; };
+
+        let mut rotation = Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0);
+        
+        // Untether orientation if detached or holding CTRL
+        if use_target_frame && !is_detached && !ctrl_pressed {
+            if let Some(target) = target_ent {
+                if let Ok(t_tf) = q_spatial.get(target) {
+                    rotation = t_tf.rotation * rotation;
+                }
+            }
+        }
+        tf.rotation = rotation;
+    }
+}
+
 /// Handles global UI-level hotkeys captured through the Avatar's input mapping.
 fn avatar_global_hotkeys(
     q_avatar: Query<&IntentState, With<Avatar>>,
@@ -245,21 +281,29 @@ fn avatar_global_hotkeys(
 /// Updates the Avatar's transform and cell based on OrbitalBehavior.
 fn avatar_orbital_system(
     time: Res<Time>,
-    mut q_avatar: Query<(&mut Transform, &mut CellCoord, &mut OrbitalBehavior, &ChildOf), With<Avatar>>,
+    mut q_avatar: Query<(&mut Transform, &mut CellCoord, &OrbitalBehavior, &ChildOf, Has<DetachedCamera>), With<Avatar>>,
     q_spatial: Query<(&CellCoord, &Transform), Without<Avatar>>,
     q_grids: Query<&Grid>,
+    keys: Res<ButtonInput<KeyCode>>,
 ) {
     let dt = time.delta_secs();
-    for (mut tf, mut cell, orbital, child_of) in q_avatar.iter_mut() {
+    let ctrl_pressed = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
+
+    for (mut tf, mut cell, orbital, child_of, is_detached) in q_avatar.iter_mut() {
+        let Ok(grid) = q_grids.get(child_of.0) else { continue; };
+        
+        // Skip follow if detached or holding CTRL (allows universal locomotion to take over)
+        if is_detached || ctrl_pressed { continue; }
+
         let Some(target_ent) = orbital.target else { continue; };
         let Ok((t_cell, t_tf)) = q_spatial.get(target_ent) else { continue; };
-        let Ok(grid) = q_grids.get(child_of.0) else { continue; };
 
-        let target_pos = grid.grid_position_double(t_cell, t_tf);
         let mut rotation = Quat::from_euler(EulerRot::YXZ, orbital.yaw, orbital.pitch, 0.0);
         if orbital.use_target_frame {
             rotation = t_tf.rotation * rotation;
         }
+
+        let target_pos = grid.grid_position_double(t_cell, t_tf);
         let offset = rotation.mul_vec3(Vec3::Z).as_dvec3() * orbital.distance;
         
         let desired_pos = target_pos + offset + Vec3::Y.as_dvec3() * orbital.vertical_offset as f64;
@@ -278,19 +322,25 @@ fn avatar_orbital_system(
 /// Updates the Avatar's transform and cell based on SurfaceBehavior.
 fn avatar_surface_system(
     time: Res<Time>,
-    mut q_avatar: Query<(&mut Transform, &mut CellCoord, &mut SurfaceBehavior, &ChildOf), With<Avatar>>,
+    mut q_avatar: Query<(&mut Transform, &mut CellCoord, &SurfaceBehavior, &ChildOf, Has<DetachedCamera>), With<Avatar>>,
     q_spatial: Query<(&CellCoord, &Transform), (Without<Avatar>, With<Vessel>)>,
     q_grids: Query<&Grid>,
+    keys: Res<ButtonInput<KeyCode>>,
 ) {
     let dt = time.delta_secs();
-    for (mut tf, mut cell, surface, child_of) in q_avatar.iter_mut() {
+    let ctrl_pressed = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
+
+    for (mut tf, mut cell, surface, child_of, is_detached) in q_avatar.iter_mut() {
+        let Ok(grid) = q_grids.get(child_of.0) else { continue; };
+        
+        // Skip follow if detached or holding CTRL
+        if is_detached || ctrl_pressed { continue; }
+
         let Some(target_ent) = surface.target else { continue; };
         let Ok((t_cell, t_tf)) = q_spatial.get(target_ent) else { continue; };
-        let Ok(grid) = q_grids.get(child_of.0) else { continue; };
 
         let target_pos = grid.grid_position_double(t_cell, t_tf);
         let up: Dir3 = if surface.lock_up { t_tf.up() } else { Dir3::Y };
-        
         let mut rotation = Quat::from_euler(EulerRot::YXZ, surface.yaw, surface.pitch, 0.0);
         if surface.use_target_frame {
             rotation = t_tf.rotation * rotation;
@@ -311,43 +361,36 @@ fn avatar_surface_system(
     }
 }
 
-/// Updates the Avatar's transform and cell based on FlybyBehavior.
-fn avatar_flyby_system(
+/// Shared locomotion system that handles WASD translation for any avatar that is
+/// currently "unlocked" (DetachedMode or CTRL-pressed).
+fn avatar_universal_locomotion_system(
     time: Res<Time>,
-    mut q_avatar: Query<(&mut Transform, &mut CellCoord, &mut FlybyBehavior, &ChildOf, &IntentState, Option<&ControllerLink>), With<Avatar>>,
-    q_spatial: Query<(&CellCoord, &Transform), Without<Avatar>>,
+    mut q_avatar: Query<(&mut Transform, &mut CellCoord, &ChildOf, Option<&ControllerLink>, Has<DetachedCamera>, &IntentAnalogState, Has<FlybyBehavior>), With<Avatar>>,
     q_grids: Query<&Grid>,
+    keys: Res<ButtonInput<KeyCode>>,
 ) {
     let dt = time.delta_secs();
-    for (mut tf, mut cell, mut flyby, child_of, intent, possessed) in q_avatar.iter_mut() {
+    let ctrl_pressed = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
+    
+    for (mut tf, mut cell, child_of, possessed, is_detached, analog, has_flyby) in q_avatar.iter_mut() {
         let Ok(grid) = q_grids.get(child_of.0) else { continue; };
         
-        // Handle orientation
-        let rotation = Quat::from_euler(EulerRot::YXZ, flyby.yaw, flyby.pitch, 0.0);
-        tf.rotation = rotation;
-
-        // Skip translation if possessed (WASD controls the vessel, not the camera)
-        if possessed.is_some() { continue; }
+        // Process locomotion ONLY if unlocked
+        // - Free-fly cameras (not possessed) are always unlocked.
+        // - Possessed cameras (Follow or Detached) require CTRL to fly.
+        let is_unlocked = (possessed.is_none() && has_flyby) || ctrl_pressed;
+        if !is_unlocked { continue; }
 
         let mut move_vec = Vec3::ZERO;
-        if intent.pressed(&UserIntent::MoveForward) { move_vec += *tf.forward(); }
-        if intent.pressed(&UserIntent::MoveBackward) { move_vec -= *tf.forward(); }
-        if intent.pressed(&UserIntent::MoveRight) { move_vec += *tf.right(); }
-        if intent.pressed(&UserIntent::MoveLeft) { move_vec -= *tf.right(); }
-        if intent.pressed(&UserIntent::MoveUp) { move_vec += Vec3::Y; }
-        if intent.pressed(&UserIntent::MoveDown) { move_vec -= Vec3::Y; }
+        move_vec += *tf.forward() * analog.forward;
+        move_vec += *tf.right() * analog.side;
+        move_vec += Vec3::Y * analog.elevation;
 
         let speed = 20.0 * dt as f64;
-        let target_pos = if let Some(target) = flyby.target {
-            if let Ok((t_cell, t_tf)) = q_spatial.get(target) {
-                grid.grid_position_double(t_cell, t_tf)
-            } else { bevy::math::DVec3::ZERO }
-        } else { bevy::math::DVec3::ZERO };
+        let current_pos = grid.grid_position_double(&cell, &tf);
+        let next_pos = current_pos + move_vec.as_dvec3() * speed;
 
-        flyby.offset += move_vec.as_dvec3() * speed;
-        let desired_pos = target_pos + flyby.offset;
-        
-        let (new_cell, new_tf) = grid.translation_to_grid(desired_pos);
+        let (new_cell, new_tf) = grid.translation_to_grid(next_pos);
         *cell = new_cell;
         tf.translation = new_tf;
     }
@@ -524,12 +567,38 @@ fn on_user_intent(
     trigger: On<IntentAnalogState>,
     q_avatar: Query<&ControllerLink, With<Avatar>>,
     mut commands: Commands,
+    keys: Res<ButtonInput<KeyCode>>,
+    mut last_state: Local<(bool, bool)>, // (was_ctrl, was_moving)
 ) {
     let analog = trigger.event();
     let avatar_entity = trigger.entity;
     
+    let is_ctrl = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
+    let is_moving = analog.forward.abs() > 0.01 || analog.side.abs() > 0.01;
+    let (was_ctrl, was_moving) = *last_state;
+
     if let Ok(link) = q_avatar.get(avatar_entity) {
-        if analog.forward.abs() > 0.01 || analog.side.abs() > 0.01 {
+        // Handle transitions to CTRL-mode or key-release (Active Stop)
+        let needs_stop = (is_ctrl && !was_ctrl) || (!is_ctrl && was_moving && !is_moving);
+
+        if is_ctrl {
+            if needs_stop {
+                // Send one explicit stop command when switching to camera flight
+                commands.trigger(lunco_core::architecture::CommandMessage {
+                    id: analog.timestamp as u64, 
+                    target: link.vessel_entity,
+                    name: "DRIVE_ROVER".to_string(),
+                    args: smallvec::smallvec![0.0, 0.0],
+                    source: avatar_entity,
+                });
+            }
+            // Return early: Silence while camera is flying
+            *last_state = (is_ctrl, is_moving);
+            return;
+        }
+
+        // Standard movement: Only send if moving OR if we just released the keys
+        if is_moving || needs_stop {
             commands.trigger(lunco_core::architecture::CommandMessage {
                 id: analog.timestamp as u64, 
                 target: link.vessel_entity,
@@ -539,6 +608,8 @@ fn on_user_intent(
             });
         }
     }
+
+    *last_state = (is_ctrl, is_moving);
 }
 
 /// Handles global `"POSSESS"` CommandMessages to establish a link between an avatar and a vessel.
