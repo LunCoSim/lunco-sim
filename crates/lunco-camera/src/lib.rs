@@ -33,7 +33,7 @@
 use bevy::prelude::*;
 use bevy::math::DVec3;
 use big_space::prelude::{Grid, CellCoord};
-use lunco_core::{Avatar, CelestialBody, Spacecraft, RoverVessel, IntentState, UserIntent};
+use lunco_core::{Avatar, CelestialBody, Spacecraft, RoverVessel, IntentState, OrbitState};
 use lunco_core::coords::get_absolute_pos_in_root_double_ghost_aware;
 use bevy_egui::EguiContexts;
 
@@ -361,7 +361,7 @@ pub fn camera_migration_system(
 /// 3. Handling User Input: Translates [UserIntent] and mouse deltas into 
 ///    spherical and planar motion.
 pub fn update_observer_camera_system(
-    mut q_camera: Query<(Entity, &mut ObserverCamera, &mut CellCoord, &mut Transform, &Avatar, &IntentState)>,
+    mut q_camera: Query<(Entity, &mut ObserverCamera, &mut CellCoord, &mut Transform, &Avatar, &IntentState), Without<OrbitState>>,
     q_spatial: Query<(&CellCoord, &Transform, Option<&CelestialBody>), Without<ObserverCamera>>,
     q_all_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
@@ -459,7 +459,8 @@ pub fn update_observer_camera_system(
         obs.altitude = altitude;
 
         // 3. Movement Execution
-        let mut scroll = scroll_res.delta as f64 * -0.01;
+        let scroll = scroll_res.delta as f64 * -0.01;
+
         
         if obs.mode == ObserverMode::Orbital {
             // Logarithmic zooming ensures precision at both 1m and 1M km

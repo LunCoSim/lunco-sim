@@ -9,10 +9,12 @@
 use bevy::prelude::*;
 use leafwing_input_manager::prelude::*;
 use avian3d::prelude::*;
+use big_space::prelude::{Grid, CellCoord};
 
 use lunco_controller::ControllerLink;
 use lunco_core::{Vessel, Avatar, OrbitState};
 use lunco_celestial::CelestialClock;
+use lunco_camera::CameraScroll;
 
 mod intents;
 pub use intents::*;
@@ -22,6 +24,7 @@ pub struct LunCoAvatarPlugin;
 
 impl Plugin for LunCoAvatarPlugin {
     fn build(&self, app: &mut App) {
+        app.init_resource::<CameraScroll>();
         app.add_plugins(InputManagerPlugin::<UserIntent>::default());
         app.add_observer(on_user_intent);
         app.add_observer(on_possess_command);
@@ -31,12 +34,14 @@ impl Plugin for LunCoAvatarPlugin {
             avatar_freecam_rotation,
             avatar_raycast_possession,
             avatar_orbit_input,
+            avatar_orbit_translation,
             avatar_escape_possession,
             avatar_toggle_detached_mode,
             avatar_global_hotkeys,
         ).chain());
     }
 }
+
 
 /// Marker component for an avatar that is currently in a "detached" free-look mode
 /// even if linked to a vessel.
@@ -179,6 +184,7 @@ fn avatar_freecam_rotation(
 /// Processes mouse/keyboard input for the third-person [OrbitState] mode.
 fn avatar_orbit_input(
     mouse: Res<ButtonInput<MouseButton>>,
+    scroll_res: Res<CameraScroll>,
     intent_q: Query<&IntentState, With<Avatar>>,
     time: Res<Time>,
     windows: Query<&Window>,
@@ -193,6 +199,8 @@ fn avatar_orbit_input(
     }
     *last_mouse_pos = curr;
 
+    let scroll = scroll_res.delta;
+
     for (mut orbit, intent_state) in q_avatar.iter_mut().zip(intent_q.iter()) {
         if mouse.pressed(MouseButton::Right) {
             let sensitivity = 0.005;
@@ -201,6 +209,8 @@ fn avatar_orbit_input(
             orbit.pitch = orbit.pitch.clamp(-1.5, -0.1);
         }
         
+        orbit.distance = (orbit.distance - scroll * orbit.distance * 0.1).clamp(2.0, 1000.0);
+
         if intent_state.pressed(&UserIntent::Zoom) {
             // Zoom logic would need to handle axis or button
         }
@@ -208,6 +218,42 @@ fn avatar_orbit_input(
         let offset_speed = 5.0 * time.delta_secs();
         if intent_state.pressed(&UserIntent::MoveUp) { orbit.vertical_offset += offset_speed; }
         if intent_state.pressed(&UserIntent::MoveDown) { orbit.vertical_offset -= offset_speed; }
+    }
+}
+
+/// Translates the avatar camera to orbit the possessed vessel based on [OrbitState].
+fn avatar_orbit_translation(
+    mut q_avatar: Query<(&mut Transform, &mut CellCoord, &OrbitState, &ControllerLink, &ChildOf), (With<Avatar>, Without<DetachedCamera>)>,
+    q_vessel: Query<(&Transform, &CellCoord), (With<Vessel>, Without<Avatar>)>,
+    q_grids: Query<&Grid>,
+) {
+    for (mut avatar_tf, mut avatar_cell, orbit, link, child_of) in q_avatar.iter_mut() {
+        if let Ok((vessel_tf, vessel_cell)) = q_vessel.get(link.vessel_entity) {
+            let Ok(grid) = q_grids.get(child_of.parent()) else { continue; };
+            
+            // Calculate the vessel's high-precision position in the grid.
+            let vessel_pos = grid.grid_position_double(vessel_cell, vessel_tf);
+            
+            // Determine the camera's desired position relative to the vessel.
+            let rotation = Quat::from_euler(EulerRot::YXZ, orbit.yaw, orbit.pitch, 0.0);
+            let offset = rotation.mul_vec3(Vec3::Z).as_dvec3() * orbit.distance as f64;
+            
+            let look_target_pos = vessel_pos + Vec3::Y.as_dvec3() * orbit.vertical_offset as f64;
+            let desired_pos = look_target_pos + offset;
+            
+            // Update the avatar's grid-relative position.
+            let (new_cell, new_tf) = grid.translation_to_grid(desired_pos);
+            *avatar_cell = new_cell;
+            avatar_tf.translation = new_tf;
+            
+            // Point the camera toward the target. 
+            // We use grid-relative positions to ensure correct orientation even across cells.
+            let look_target_local = (look_target_pos - desired_pos).as_vec3();
+            if look_target_local.length_squared() > 0.001 {
+                let target_vec = avatar_tf.translation + look_target_local;
+                avatar_tf.look_at(target_vec, Vec3::Y);
+            }
+        }
     }
 }
 
