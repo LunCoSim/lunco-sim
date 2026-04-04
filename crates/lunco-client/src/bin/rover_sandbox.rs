@@ -96,7 +96,7 @@ fn main() {
 
     app.add_systems(Startup, setup_sandbox);
     app.add_systems(Update, apply_sandbox_light_settings);
-    app.add_systems(EguiPrimaryContextPass, sandbox_light_ui_system);
+    app.add_systems(EguiPrimaryContextPass, sandbox_debug_ui_system);
     
     app.run();
 }
@@ -330,7 +330,8 @@ fn setup_sandbox(
         }),
         bevy::core_pipeline::tonemapping::Tonemapping::TonyMcMapface,
         bevy::post_process::bloom::Bloom::NATURAL,
-        Transform::default(), 
+        Transform::from_xyz(-50.0, 20.0, -25.0)
+            .with_rotation(Quat::from_euler(EulerRot::YXZ, -110.0f32.to_radians(), -26.0f32.to_radians(), 0.0)), 
         ObserverCamera { 
             mode: ObserverMode::Orbital,
             focus_target: Some(rovers_root),
@@ -347,10 +348,11 @@ fn setup_sandbox(
     )).set_parent_in_place(grid_entity);
 }
 
-/// Renders the egui control panel for real-time light tuning.
-fn sandbox_light_ui_system(
+/// Renders debug information for the avatar and lights.
+fn sandbox_debug_ui_system(
     mut contexts: EguiContexts,
     mut settings: ResMut<SandboxLightSettings>,
+    q_avatar: Query<(&Transform, &CellCoord), With<lunco_core::Avatar>>,
 ) {
     let Ok(ctx) = contexts.ctx_mut() else { return; };
     
@@ -385,8 +387,27 @@ fn sandbox_light_ui_system(
             }
         });
 
-        if ui.button("Reset Defaults").clicked() {
+        ui.separator();
+        if ui.button("Reset Light Defaults").clicked() {
             *settings = SandboxLightSettings::default();
+        }
+    });
+
+    egui::Window::new("Avatar Telemetry").anchor(egui::Align2::RIGHT_TOP, [-10.0, 10.0]).show(ctx, |ui| {
+        for (tf, cell) in q_avatar.iter() {
+            ui.heading("Position (BigSpace)");
+            ui.label(format!("Cell: [{}, {}, {}]", cell.x, cell.y, cell.z));
+            ui.label(format!("Local: [{:.2}, {:.2}, {:.2}]", tf.translation.x, tf.translation.y, tf.translation.z));
+            
+            ui.separator();
+            ui.heading("Orientation");
+            let (yaw, pitch, roll) = tf.rotation.to_euler(EulerRot::YXZ);
+            ui.label(format!("Yaw: {:.2}°", yaw.to_degrees()));
+            ui.label(format!("Pitch: {:.2}°", pitch.to_degrees()));
+            ui.label(format!("Roll: {:.2}°", roll.to_degrees()));
+            
+            ui.separator();
+            ui.label(format!("Quat: {:?}", tf.rotation));
         }
     });
 }
