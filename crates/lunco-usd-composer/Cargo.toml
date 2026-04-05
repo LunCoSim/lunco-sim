@@ -1,0 +1,9 @@
+[package]
+name = "lunco-usd-composer"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+openusd = { path = "../../extern/openusd" }
+anyhow = "1.0"
+tracing = "0.1"

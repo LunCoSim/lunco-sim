@@ -4502,9 +4502,19 @@ dependencies = [
  "anyhow",
  "bevy",
  "futures-lite",
+ "lunco-usd-composer",
  "openusd",
  "serde",
  "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
+name = "lunco-usd-composer"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "openusd",
  "tracing",
 ]
 

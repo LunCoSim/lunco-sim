@@ -14,6 +14,8 @@ members = [
     "crates/lunco-robotics",
     "crates/lunco-usd-avian",
     "crates/lunco-usd-bevy",
+    "crates/lunco-usd-composer",
+    "crates/lunco-usd-physx",
     "crates/lunco-usd"
 ]
 resolver = "2"
