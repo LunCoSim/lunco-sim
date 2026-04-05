@@ -22,6 +22,7 @@ use lunco_fsw::LunCoFswPlugin;
 use lunco_controller::LunCoControllerPlugin; 
 use lunco_avatar::{LunCoAvatarPlugin, IntentAnalogState, FlybyBehavior, AdaptiveNearPlane};
 use lunco_celestial::{BlueprintMaterial, BlueprintExtension, CelestialClock, CelestialBody};
+use lunco_modelica::{LunCoModelicaPlugin, ui::ModelicaInspectorPlugin, ModelicaModel, ModelicaInput, ModelicaOutput};
 use bevy_egui::{egui, EguiContexts, EguiPlugin, EguiPrimaryContextPass};
 
 /// Tunable settings for the sandbox environment lighting.
@@ -84,6 +85,8 @@ fn main() {
         .add_plugins(LunCoRoboticsPlugin)
         .add_plugins(LunCoAvatarPlugin)
         .add_plugins(LunCoControllerPlugin)
+        .add_plugins(LunCoModelicaPlugin)
+        .add_plugins(ModelicaInspectorPlugin)
         .add_plugins(EguiPlugin::default())
         .init_resource::<SandboxLightSettings>();
 
@@ -292,17 +295,34 @@ fn setup_sandbox(
         Color::srgb(0.2, 0.8, 0.2),
         SteeringType::Ackermann,
     );
+// Raycast-Based Rovers (High-performance simulation)
+let r_skid = spawn_raycast_rover(
+    &mut commands, 
+    &mut meshes,
+    &mut materials,
+    rovers_root, 
+    Vec3::new(15.0, 5.0, -10.0), 
+    "Ray_Skid", 
+    Color::srgb(0.2, 0.2, 0.8),
+    SteeringType::Skid,
+);
 
-    // Raycast-Based Rovers (High-performance simulation)
-    let r_skid = spawn_raycast_rover(
-        &mut commands, 
-        &mut meshes,
-        &mut materials,
-        Vec3::new(15.0, 5.0, -10.0), 
-        "Raycast_Skid", 
-        Color::srgb(0.2, 0.2, 0.8),
-        SteeringType::Skid,
-    );
+commands.entity(r_skid).insert((
+    ModelicaModel {
+        model_path: "assets/models/Battery.mo".to_string(),
+        model_name: "Battery".to_string(),
+        ..default()
+    },
+    ModelicaInput {
+        variable_name: "current".to_string(),
+        value: 1.0, // Base standby draw
+    },
+    ModelicaOutput {
+        variable_name: "soc_out".to_string(),
+        ..default()
+    }
+));
+
     commands.entity(r_skid).set_parent_in_place(grid_entity);
 
     let r_ack = spawn_raycast_rover(
