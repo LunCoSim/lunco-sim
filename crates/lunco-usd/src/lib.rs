@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-pub use lunco_usd_bevy::{UsdBevyPlugin, UsdPrimPath, UsdStageResource};
+pub use lunco_usd_bevy::{UsdBevyPlugin, UsdPrimPath, UsdStageResource, UsdStageAsset};
 pub use lunco_usd_avian::UsdAvianPlugin;
 pub use lunco_usd_physx::UsdPhysxPlugin;
 
@@ -32,43 +32,35 @@ impl Plugin for UsdLunCoPlugin {
 fn on_add_lunco_prim(
     trigger: On<Add, UsdPrimPath>,
     query: Query<&UsdPrimPath>,
-    mut stage_query: Query<&mut UsdStageResource>,
+    stages: Res<Assets<UsdStageAsset>>,
     mut commands: Commands,
 ) {
     let entity = trigger.entity;
     let Ok(prim_path) = query.get(entity) else { return; };
-    let Ok(mut stage_res) = stage_query.get_mut(prim_path.stage_id) else { return; };
+    let Some(stage) = stages.get(&prim_path.stage_handle) else { return; };
     let Ok(sdf_path) = SdfPath::new(&prim_path.path) else { return; };
 
+    let mut reader = (*stage.reader).clone();
     let mut spacecraft = Spacecraft::default();
     let mut modified = false;
 
-    // Helper to get custom lunco attributes
-    let mut get_lunco_attr = |name: &str| -> Option<Value> {
-        if let Ok(prop_path) = sdf_path.append_property(&format!("lunco:{name}")) {
-            if let Ok(val) = stage_res.reader.get(&prop_path, "default") {
-                return Some((*val).clone());
-            }
-        }
-        None
-    };
-
-    if let Some(Value::String(name)) = get_lunco_attr("name") {
+    // Use new type-safe getters from fork
+    if let Some(name) = reader.get_prim_attribute_value::<String>(&sdf_path, "lunco:name") {
         spacecraft.name = name;
         modified = true;
     }
 
-    if let Some(Value::Int(id)) = get_lunco_attr("ephemeris_id") {
+    if let Some(id) = reader.get_prim_attribute_value::<i32>(&sdf_path, "lunco:ephemeris_id") {
         spacecraft.ephemeris_id = id;
         modified = true;
     }
 
-    if let Some(Value::Int(id)) = get_lunco_attr("reference_id") {
+    if let Some(id) = reader.get_prim_attribute_value::<i32>(&sdf_path, "lunco:reference_id") {
         spacecraft.reference_id = id;
         modified = true;
     }
 
-    if let Some(Value::Float(radius)) = get_lunco_attr("hit_radius_m") {
+    if let Some(radius) = reader.get_prim_attribute_value::<f32>(&sdf_path, "lunco:hit_radius_m") {
         spacecraft.hit_radius_m = radius;
         modified = true;
     }
