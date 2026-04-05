@@ -53,6 +53,7 @@ impl Plugin for LunCoAvatarPlugin {
         app.register_type::<OrbitalBehavior>()
            .register_type::<SurfaceBehavior>()
            .register_type::<FlybyBehavior>()
+           .register_type::<TransitionBehavior>()
            .register_type::<AdaptiveNearPlane>()
            .register_type::<MouseSensitivity>();
 
@@ -63,6 +64,7 @@ impl Plugin for LunCoAvatarPlugin {
             (
                 avatar_orbital_system,
                 avatar_surface_system,
+                avatar_transition_system,
                 avatar_universal_locomotion_system,
                 avatar_drag_lifecycle,
                 avatar_raycast_possession,
@@ -100,6 +102,34 @@ pub struct SurfaceBehavior {
     pub damping: f32,
     pub lock_up: bool,
     pub use_target_frame: bool,
+}
+
+#[derive(Component, Reflect, Clone, Debug)]
+#[reflect(Component)]
+pub struct TransitionBehavior {
+    pub target: Entity,
+    pub start_pos: bevy::math::DVec3,
+    pub start_rot: Quat,
+    pub end_dist: f64,
+    pub end_pitch: f32,
+    pub end_yaw: f32,
+    pub duration: f32,
+    pub elapsed: f32,
+}
+
+impl Default for TransitionBehavior {
+    fn default() -> Self {
+        Self {
+            target: Entity::PLACEHOLDER,
+            start_pos: bevy::math::DVec3::ZERO,
+            start_rot: Quat::IDENTITY,
+            end_dist: 10.0,
+            end_pitch: 0.0,
+            end_yaw: 0.0,
+            duration: 1.0,
+            elapsed: 0.0,
+        }
+    }
 }
 
 /// Parameters for 3D translation-centric exploration.
@@ -148,9 +178,6 @@ fn avatar_toggle_detached_mode(
 }
 
 /// Captures high-level [UserIntent] from the InputManager and populates [IntentAnalogState].
-///
-/// This system acts as a bridge between discrete input events and continuous 
-/// analog control signals used by simulation subsystems.
 fn capture_avatar_intent(
     mut q_avatar: Query<(Entity, &IntentState, &mut IntentAnalogState), With<Avatar>>,
     mouse: Res<ButtonInput<MouseButton>>,
@@ -204,6 +231,7 @@ fn capture_avatar_intent(
 
         if forward.abs() > 0.1 || side.abs() > 0.1 || elevation.abs() > 0.1 || mouse_moved || scroll_res.delta.abs() > 0.001 {
             commands.entity(entity).remove::<lunco_core::ActiveAction>();
+            commands.entity(entity).remove::<TransitionBehavior>();
         }
     }
 }
@@ -272,7 +300,6 @@ fn avatar_global_hotkeys(
     for intent_state in q_avatar.iter() {
         if intent_state.just_pressed(&UserIntent::Pause) {
             clock.paused = !clock.paused;
-            info!("Toggled simulation pause via UserIntent. Paused: {}", clock.paused);
         }
     }
 }
@@ -292,7 +319,6 @@ fn avatar_orbital_system(
     let ctrl_pressed = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
 
     for (avatar_ent, mut tf, mut cell, mut orbital, child_of, is_detached) in q_avatar.iter_mut() {
-        // Process scroll zoom - Restored EXACT math from reference commit
         if scroll_res.delta != 0.0 {
             let scroll = scroll_res.delta as f64 * -0.01;
             orbital.distance = (orbital.distance - (scroll * (orbital.distance * 0.1))).clamp(1.0, 1.0e11);
@@ -317,7 +343,6 @@ fn avatar_orbital_system(
         }
 
         let Ok(grid) = q_grids.get(child_of.parent()) else { continue; };
-
         let mut rotation = Quat::from_euler(EulerRot::YXZ, orbital.yaw, orbital.pitch, 0.0);
         if orbital.use_target_frame {
             rotation = t_tf.rotation * rotation;
@@ -387,8 +412,58 @@ fn avatar_surface_system(
     }
 }
 
-/// Shared locomotion system that handles WASD translation for any avatar that is
-/// currently "unlocked" (DetachedMode or CTRL-pressed).
+/// Smoothly interpolates the avatar toward a new focus target.
+fn avatar_transition_system(
+    time: Res<Time>,
+    mut q_avatar: Query<(Entity, &mut Transform, &mut CellCoord, &mut TransitionBehavior, &ChildOf), With<Avatar>>,
+    q_spatial: Query<(&CellCoord, &Transform, &ChildOf), Without<Avatar>>,
+    q_spatial_abs: Query<(&CellCoord, &Transform), Without<Avatar>>,
+    q_grids: Query<&Grid>,
+    q_parents: Query<&ChildOf>,
+    mut commands: Commands,
+) {
+    let dt = time.delta_secs();
+
+    for (avatar_ent, mut tf, mut cell, mut trans, child_of) in q_avatar.iter_mut() {
+        trans.elapsed += dt;
+        let t = (trans.elapsed / trans.duration).clamp(0.0, 1.0) as f64;
+        let ease_t = t * t * (3.0 - 2.0 * t); // Quadratic ease in-out
+
+        let Ok((t_cell, t_tf, _t_child_of)) = q_spatial.get(trans.target) else {
+             commands.entity(avatar_ent).remove::<TransitionBehavior>();
+             continue;
+        };
+        let target_abs_pos = lunco_core::coords::get_absolute_pos_in_root_double_ghost_aware(trans.target, t_cell, t_tf, &q_parents, &q_grids, &q_spatial_abs);
+
+        let end_rot = Quat::from_euler(EulerRot::YXZ, trans.end_yaw, trans.end_pitch, 0.0);
+        let end_offset = end_rot.mul_vec3(Vec3::Z).as_dvec3() * trans.end_dist;
+        let end_abs_pos = target_abs_pos + end_offset;
+
+        let current_abs_pos = trans.start_pos.lerp(end_abs_pos, ease_t);
+        let current_rot = trans.start_rot.slerp(end_rot, ease_t as f32);
+
+        let Ok(cam_grid) = q_grids.get(child_of.0) else { continue; };
+        let (new_cell, new_tf_trans) = cam_grid.translation_to_grid(current_abs_pos);
+        *cell = new_cell;
+        tf.translation = new_tf_trans;
+        tf.rotation = current_rot;
+
+        if t >= 1.0 {
+            commands.entity(avatar_ent).remove::<TransitionBehavior>();
+            commands.entity(avatar_ent).insert(OrbitalBehavior {
+                target: Some(trans.target),
+                distance: trans.end_dist,
+                pitch: trans.end_pitch,
+                yaw: trans.end_yaw,
+                vertical_offset: 0.0,
+                damping: 0.1,
+                use_target_frame: true,
+            });
+        }
+    }
+}
+
+/// Shared locomotion system.
 fn avatar_universal_locomotion_system(
     time: Res<Time>,
     mut q_avatar: Query<(&mut Transform, &mut CellCoord, &ChildOf, Option<&ControllerLink>, Has<DetachedCamera>, &IntentAnalogState, Option<&mut FlybyBehavior>, Option<&OrbitalBehavior>, Option<&SurfaceBehavior>), With<Avatar>>,
@@ -404,18 +479,12 @@ fn avatar_universal_locomotion_system(
     
     for (mut tf, mut cell, child_of, possessed, is_detached, analog, mut flyby_opt, orbital_opt, surface_opt) in q_avatar.iter_mut() {
         let Ok(grid) = q_grids.get(child_of.0) else { continue; };
-        
-        // Process locomotion ONLY if unlocked
         let is_unlocked = (possessed.is_none() && flyby_opt.is_some()) || is_detached || ctrl_pressed;
         if !is_unlocked { continue; }
 
         let current_pos = grid.grid_position_double(&cell, &tf);
-
-        // SPEED SCALING: 
-        // 1. Default to stable 100m/s (Perfect for rovers/sandbox).
         let mut speed = 100.0;
 
-        // 2. Scale exponentially if focused on a macro target (Planet or Spacecraft).
         let target_ent = flyby_opt.as_ref().and_then(|f| f.target)
             .or_else(|| orbital_opt.and_then(|o| o.target))
             .or_else(|| surface_opt.and_then(|s| s.target));
@@ -424,20 +493,13 @@ fn avatar_universal_locomotion_system(
             if let Ok((t_cell, t_tf, t_child_of, t_body, t_sc)) = spatial.p0().get(target) {
                 let mut target_radius = 0.0;
                 let mut should_scale = false;
-
-                if let Some(body) = t_body {
-                    target_radius = body.radius_m;
-                    should_scale = true;
-                } else if let Some(sc) = t_sc {
-                    target_radius = sc.hit_radius_m as f64;
-                    should_scale = true;
-                }
+                if let Some(body) = t_body { target_radius = body.radius_m; should_scale = true; }
+                else if let Some(sc) = t_sc { target_radius = sc.hit_radius_m as f64; should_scale = true; }
 
                 if should_scale {
                     if let Ok(t_grid) = q_grids.get(t_child_of.0) {
                         let t_pos = t_grid.grid_position_double(t_cell, t_tf);
-                        let distance = (current_pos.distance(t_pos) - target_radius).max(10.0);
-                        speed = distance * 0.5;
+                        speed = (current_pos.distance(t_pos) - target_radius).max(10.0) * 0.5;
                     }
                 }
             }
@@ -448,27 +510,20 @@ fn avatar_universal_locomotion_system(
         move_vec += *tf.right() * analog.side;
         move_vec += Vec3::Y * analog.elevation;
 
-        // Scroll translation (Macro-scale only, works in Orbital and Flyby)
         if (flyby_opt.is_some() || orbital_opt.is_some()) && scroll_res.delta != 0.0 {
             move_vec += *tf.forward() * scroll_res.delta * 0.1 * (speed as f32 / dt as f32); 
             scroll_res.delta = 0.0;
         }
 
         if move_vec.length_squared() < 0.00001 { continue; }
-
         let next_pos = current_pos + move_vec.as_dvec3() * speed * dt;
-
         let (new_cell, new_tf) = grid.translation_to_grid(next_pos);
-        *cell = new_cell;
-        tf.translation = new_tf;
-
-        if let Some(ref mut flyby) = flyby_opt {
-            flyby.offset = next_pos;
-        }
+        *cell = new_cell; tf.translation = new_tf;
+        if let Some(ref mut flyby) = flyby_opt { flyby.offset = next_pos; }
     }
 }
 
-/// Moves the dragged entity relative to the Avatar's viewpoint.
+/// Moves the dragged entity.
 fn avatar_drag_lifecycle(
     q_avatar: Query<(&Transform, &DragActivity, &ActiveAction), With<Avatar>>,
     mut q_targets: Query<(&mut Transform, &mut CellCoord, &ChildOf), Without<Avatar>>,
@@ -481,32 +536,22 @@ fn avatar_drag_lifecycle(
                 let forward = avatar_tf.forward();
                 let desired_world_pos = avatar_tf.translation.as_dvec3() + forward.as_dvec3() * drag.distance as f64;
                 let (new_cell, new_tf) = grid.translation_to_grid(desired_world_pos);
-                *t_cell = new_cell;
-                t_tf.translation = new_tf;
+                *t_cell = new_cell; t_tf.translation = new_tf;
             }
         }
     }
 }
 
-/// Handles DRAG commands from CLI or UI.
-fn on_drag_commands(
-    trigger: On<CommandMessage>,
-    mut commands: Commands,
-    q_avatar: Query<(Entity, &Transform), With<Avatar>>,
-) {
+/// Handles DRAG commands.
+fn on_drag_commands(trigger: On<CommandMessage>, mut commands: Commands, q_avatar: Query<(Entity, &Transform), With<Avatar>>) {
     let msg = trigger.event();
     let (avatar_ent, _avatar_tf) = q_avatar.get(msg.source).unwrap_or((q_avatar.iter().next().unwrap().0, q_avatar.iter().next().unwrap().1));
-    
     match msg.name.as_str() {
         "START_DRAG" => {
             let target = Entity::from_bits(msg.args[0] as u64);
             let distance = msg.args[1] as f32;
-            commands.entity(avatar_ent).insert((
-                DragActivity { target, distance },
-                ActiveAction { name: "Dragging".to_string(), status: ActionStatus::Running, progress: 0.0 }
-            ));
+            commands.entity(avatar_ent).insert((DragActivity { target, distance }, ActiveAction { name: "Dragging".to_string(), status: ActionStatus::Running, progress: 0.0 }));
         },
-        "UPDATE_DRAG" => {},
         "STOP_DRAG" => {
             commands.entity(avatar_ent).remove::<DragActivity>();
             commands.entity(avatar_ent).remove::<ActiveAction>();
@@ -515,7 +560,7 @@ fn on_drag_commands(
     }
 }
 
-/// Adaptive clipping logic to prevent depth buffer precision loss.
+/// Adaptive clipping logic.
 fn update_avatar_clip_planes_system(
     mut q_camera: Query<(&mut Projection, &Transform, &CellCoord, &ChildOf), (With<Camera>, With<AdaptiveNearPlane>)>,
     q_bodies: Query<(&CelestialBody, &Transform, &CellCoord, &ChildOf)>,
@@ -524,11 +569,9 @@ fn update_avatar_clip_planes_system(
     for (mut projection, cam_tf, cam_cell, cam_child_of) in q_camera.iter_mut() {
         let Ok(grid) = q_grids.get(cam_child_of.0) else { continue; };
         let cam_pos = grid.grid_position_double(cam_cell, cam_tf);
-        
         if let Projection::Perspective(ref mut perspective) = *projection {
             perspective.far = 1.0e15;
             let mut min_dist = 1.0e15;
-            
             for (body, b_tf, b_cell, b_child_of) in q_bodies.iter() {
                 let Ok(b_grid) = q_grids.get(b_child_of.0) else { continue; };
                 let b_pos = b_grid.grid_position_double(b_cell, b_tf);
@@ -540,7 +583,7 @@ fn update_avatar_clip_planes_system(
     }
 }
 
-/// Allows the user to "possess" a vessel by clicking on it in the scene.
+/// Allows the user to "possess" a vessel.
 fn avatar_raycast_possession(
     mouse: Res<ButtonInput<MouseButton>>,
     windows: Query<&Window>,
@@ -558,21 +601,9 @@ fn avatar_raycast_possession(
             if let Ok(f32_ray) = camera.viewport_to_world(camera_transform, cursor_position) {
                 if let Some(hit) = spatial_query.cast_ray(f32_ray.origin.as_dvec3(), f32_ray.direction, 1.0e12, true, &SpatialQueryFilter::default()) {
                     if let Ok(vessel_entity) = vessel_q.get(hit.entity) {
-                        commands.trigger(lunco_core::architecture::CommandMessage {
-                            id: 0,
-                            target: vessel_entity,
-                            name: "POSSESS".to_string(),
-                            args: smallvec::smallvec![],
-                            source: avatar_entity,
-                        });
+                        commands.trigger(lunco_core::architecture::CommandMessage { id: 0, target: vessel_entity, name: "POSSESS".to_string(), args: smallvec::smallvec![], source: avatar_entity });
                     } else if let Ok(body_entity) = body_q.get(hit.entity) {
-                        commands.trigger(lunco_core::architecture::CommandMessage {
-                            id: 0,
-                            target: body_entity,
-                            name: "FOCUS".to_string(),
-                            args: smallvec::smallvec![],
-                            source: avatar_entity,
-                        });
+                        commands.trigger(lunco_core::architecture::CommandMessage { id: 0, target: body_entity, name: "FOCUS".to_string(), args: smallvec::smallvec![], source: avatar_entity });
                     }
                 }
             }
@@ -580,26 +611,16 @@ fn avatar_raycast_possession(
     }
 }
 
-/// Releases the current vessel possession.
-fn avatar_escape_possession(
-    keys: Res<ButtonInput<KeyCode>>,
-    mut q_avatar: Query<Entity, (With<Avatar>, With<ControllerLink>)>,
-    mut commands: Commands,
-) {
+/// Releases possession.
+fn avatar_escape_possession(keys: Res<ButtonInput<KeyCode>>, mut q_avatar: Query<Entity, (With<Avatar>, With<ControllerLink>)>, mut commands: Commands) {
     if keys.just_pressed(KeyCode::Backspace) {
         for entity in q_avatar.iter_mut() {
-            commands.trigger(lunco_core::architecture::CommandMessage {
-                id: 0,
-                target: entity,
-                name: "RELEASE".to_string(),
-                args: smallvec::smallvec![],
-                source: entity,
-            });
+            commands.trigger(lunco_core::architecture::CommandMessage { id: 0, target: entity, name: "RELEASE".to_string(), args: smallvec::smallvec![], source: entity });
         }
     }
 }
 
-/// Handles global `"RELEASE"` CommandMessages.
+/// Handles `"RELEASE"`.
 fn on_release_command(
     trigger: On<lunco_core::architecture::CommandMessage>,
     mut commands: Commands,
@@ -612,150 +633,84 @@ fn on_release_command(
         let (pos, yaw, pitch) = if let Ok((tf, cell, child_of)) = q_avatar.get(avatar_ent) {
              let Ok(grid) = q_grids.get(child_of.0) else { return; };
              let p = grid.grid_position_double(cell, tf);
-             let (y, pitch, _) = tf.rotation.to_euler(EulerRot::YXZ);
-             (p, y, pitch)
+             let (y, p_pitch, _) = tf.rotation.to_euler(EulerRot::YXZ);
+             (p, y, p_pitch)
         } else { (bevy::math::DVec3::ZERO, 0.0, 0.0) };
-
         commands.entity(avatar_ent).remove::<ControllerLink>();
         commands.entity(avatar_ent).remove::<DetachedCamera>();
         commands.entity(avatar_ent).remove::<OrbitalBehavior>();
         commands.entity(avatar_ent).remove::<SurfaceBehavior>();
-        commands.entity(avatar_ent).insert(FlybyBehavior {
-            target: None,
-            offset: pos, 
-            yaw: yaw,
-            pitch: pitch,
-        });
+        commands.entity(avatar_ent).insert(FlybyBehavior { target: None, offset: pos, yaw: yaw as f32, pitch: pitch as f32 });
     }
 }
 
-/// Observer for high-level analog intent.
-fn on_user_intent(
-    trigger: On<IntentAnalogState>,
-    q_avatar: Query<&ControllerLink, With<Avatar>>,
-    mut commands: Commands,
-    keys: Res<ButtonInput<KeyCode>>,
-    mut last_state: Local<(bool, bool)>, 
-) {
+/// Observer for intent.
+fn on_user_intent(trigger: On<IntentAnalogState>, q_avatar: Query<&ControllerLink, With<Avatar>>, mut commands: Commands, keys: Res<ButtonInput<KeyCode>>, mut last_state: Local<(bool, bool)>) {
     let analog = trigger.event();
     let avatar_entity = trigger.entity;
     let is_ctrl = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
     let is_moving = analog.forward.abs() > 0.01 || analog.side.abs() > 0.01;
     let (was_ctrl, was_moving) = *last_state;
-
     if let Ok(link) = q_avatar.get(avatar_entity) {
         let needs_stop = (is_ctrl && !was_ctrl) || (!is_ctrl && was_moving && !is_moving);
         if is_ctrl {
-            if needs_stop {
-                commands.trigger(lunco_core::architecture::CommandMessage {
-                    id: analog.timestamp as u64, 
-                    target: link.vessel_entity,
-                    name: "DRIVE_ROVER".to_string(),
-                    args: smallvec::smallvec![0.0, 0.0],
-                    source: avatar_entity,
-                });
-            }
-            *last_state = (is_ctrl, is_moving);
-            return;
+            if needs_stop { commands.trigger(lunco_core::architecture::CommandMessage { id: analog.timestamp as u64, target: link.vessel_entity, name: "DRIVE_ROVER".to_string(), args: smallvec::smallvec![0.0, 0.0], source: avatar_entity }); }
+            *last_state = (is_ctrl, is_moving); return;
         }
-        if is_moving || needs_stop {
-            commands.trigger(lunco_core::architecture::CommandMessage {
-                id: analog.timestamp as u64, 
-                target: link.vessel_entity,
-                name: "DRIVE_ROVER".to_string(),
-                args: smallvec::smallvec![analog.forward as f64, analog.side as f64],
-                source: avatar_entity,
-            });
-        }
+        if is_moving || needs_stop { commands.trigger(lunco_core::architecture::CommandMessage { id: analog.timestamp as u64, target: link.vessel_entity, name: "DRIVE_ROVER".to_string(), args: smallvec::smallvec![analog.forward as f64, analog.side as f64], source: avatar_entity }); }
     }
     *last_state = (is_ctrl, is_moving);
 }
 
-/// Handles global `"POSSESS"` CommandMessages.
-fn on_possess_command(
-    trigger: On<lunco_core::architecture::CommandMessage>,
-    mut commands: Commands,
-    q_avatar: Query<Entity, With<Avatar>>,
-) {
+/// Handles `"POSSESS"`.
+fn on_possess_command(trigger: On<lunco_core::architecture::CommandMessage>, mut commands: Commands, q_avatar: Query<Entity, With<Avatar>>) {
     let msg = trigger.event();
     if msg.name == "POSSESS" {
         let avatar_ent: Entity = if let Ok(e) = q_avatar.get(msg.source) { e } else { q_avatar.iter().next().unwrap() };
         commands.entity(avatar_ent).remove::<FlybyBehavior>();
         commands.entity(avatar_ent).remove::<SurfaceBehavior>();
-        commands.entity(avatar_ent).insert((
-            ControllerLink { vessel_entity: msg.target },
-            OrbitalBehavior { 
-                target: Some(msg.target), 
-                distance: 10.0, 
-                pitch: -0.5, 
-                yaw: 0.0, 
-                vertical_offset: 1.0, 
-                damping: 0.1,
-                use_target_frame: true,
-            },
-            IntentAnalogState::default()
-        ));
-        commands.entity(msg.target).insert((
-            leafwing_input_manager::prelude::ActionState::<lunco_controller::VesselIntent>::default(),
-            lunco_controller::get_default_input_map(),
-        ));
-        commands.trigger(lunco_core::architecture::CommandMessage {
-            id: 0,
-            target: msg.target,
-            name: "FOCUS".to_string(),
-            args: smallvec::smallvec![10.0],
-            source: avatar_ent,
-        });
+        commands.entity(avatar_ent).insert((ControllerLink { vessel_entity: msg.target }, OrbitalBehavior { target: Some(msg.target), distance: 10.0, pitch: -0.5, yaw: 0.0, vertical_offset: 1.0, damping: 0.1, use_target_frame: true }, IntentAnalogState::default()));
+        commands.entity(msg.target).insert((leafwing_input_manager::prelude::ActionState::<lunco_controller::VesselIntent>::default(), lunco_controller::get_default_input_map()));
+        commands.trigger(lunco_core::architecture::CommandMessage { id: 0, target: msg.target, name: "FOCUS".to_string(), args: smallvec::smallvec![10.0], source: avatar_ent });
     }
 }
 
-/// Handles global `"FOCUS"` CommandMessages.
+/// Handles `"FOCUS"`.
 fn on_focus_command(
     trigger: On<lunco_core::architecture::CommandMessage>,
     mut commands: Commands,
-    q_avatar: Query<Entity, With<Avatar>>,
+    q_avatar: Query<(Entity, &Transform, &CellCoord, &ChildOf), With<Avatar>>,
+    q_grids: Query<&Grid>,
     q_bodies: Query<&lunco_core::CelestialBody>,
 ) {
     let msg = trigger.event();
     if msg.name == "FOCUS" {
-        let avatar_ent: Entity = if let Ok(e) = q_avatar.get(msg.source) { e } else { q_avatar.iter().next().unwrap() };
+        let (avatar_ent, cam_tf, cam_cell, child_of) = if let Ok(data) = q_avatar.get(msg.source) { data } else { 
+            let Some(first) = q_avatar.iter().next() else { return; }; first
+        };
         let mut distance = if msg.args.len() > 0 { msg.args[0] } else { 10.0 };
         if msg.args.len() == 0 {
-            if let Ok(body) = q_bodies.get(msg.target) {
-                distance = body.radius_m * 3.0;
-            }
+            if let Ok(body) = q_bodies.get(msg.target) { distance = body.radius_m * 3.0; }
         }
+        let Ok(cam_grid) = q_grids.get(child_of.0) else { return; };
+        let start_pos = cam_grid.grid_position_double(cam_cell, cam_tf);
         commands.entity(avatar_ent).remove::<FlybyBehavior>();
         commands.entity(avatar_ent).remove::<SurfaceBehavior>();
-        commands.entity(avatar_ent).insert(OrbitalBehavior { 
-            target: Some(msg.target), 
-            distance, 
-            pitch: -0.5, 
-            yaw: 0.0, 
-            vertical_offset: 0.0, 
-            damping: 0.1,
-            use_target_frame: true,
+        commands.entity(avatar_ent).remove::<OrbitalBehavior>();
+        commands.entity(avatar_ent).insert(TransitionBehavior {
+            target: msg.target, start_pos, start_rot: cam_tf.rotation,
+            end_dist: distance, end_pitch: -0.5, end_yaw: 0.0,
+            duration: 1.5, elapsed: 0.0,
         });
     }
 }
 
-/// Ensures all [Avatar] entities are initialized.
-fn avatar_init_system(
-    mut commands: Commands,
-    q_avatar: Query<(Entity, &Transform), (With<Avatar>, Without<FlybyBehavior>, Without<OrbitalBehavior>, Without<SurfaceBehavior>)>,
-    q_proj: Query<Entity, (With<Avatar>, Without<AdaptiveNearPlane>, With<Projection>)>,
-) {
+/// Initializes Avatars.
+fn avatar_init_system(mut commands: Commands, q_avatar: Query<(Entity, &Transform), (With<Avatar>, Without<FlybyBehavior>, Without<OrbitalBehavior>, Without<SurfaceBehavior>)>, q_proj: Query<Entity, (With<Avatar>, Without<AdaptiveNearPlane>, With<Projection>)>) {
     for (entity, tf) in q_avatar.iter() {
         let pos = tf.translation.as_dvec3();
         let (yaw, pitch, _) = tf.rotation.to_euler(EulerRot::YXZ);
-        commands.entity(entity).insert(FlybyBehavior {
-            target: None,
-            offset: pos,
-            yaw,
-            pitch,
-        });
+        commands.entity(entity).insert(FlybyBehavior { target: None, offset: pos, yaw, pitch });
     }
-    for entity in q_proj.iter() {
-        commands.entity(entity).insert(AdaptiveNearPlane);
-    }
+    for entity in q_proj.iter() { commands.entity(entity).insert(AdaptiveNearPlane); }
 }

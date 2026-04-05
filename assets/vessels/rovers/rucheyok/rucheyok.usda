@@ -1,0 +1,39 @@
+#usda 1.0
+
+def Xform "Rucheyok"
+{
+    def Cube "Chassis"
+    {
+        float3 xformOp:scale = (15.0, 4.0, 20.0)
+        double3 xformOp:translate = (0, 2.0, 0)
+        color3f primvars:displayColor = (0.2, 0.5, 0.8)
+    }
+
+    def Cylinder "Wheel_FL"
+    {
+        float3 xformOp:scale = (4.0, 2.0, 4.0)
+        double3 xformOp:translate = (-8.0, 0, 8.0)
+        color3f primvars:displayColor = (0.0, 0.0, 0.0)
+    }
+
+    def Cylinder "Wheel_FR"
+    {
+        float3 xformOp:scale = (4.0, 2.0, 4.0)
+        double3 xformOp:translate = (8.0, 0, 8.0)
+        color3f primvars:displayColor = (0.0, 0.0, 0.0)
+    }
+
+    def Cylinder "Wheel_RL"
+    {
+        float3 xformOp:scale = (4.0, 2.0, 4.0)
+        double3 xformOp:translate = (-8.0, 0, -8.0)
+        color3f primvars:displayColor = (0.0, 0.0, 0.0)
+    }
+
+    def Cylinder "Wheel_RR"
+    {
+        float3 xformOp:scale = (4.0, 2.0, 4.0)
+        double3 xformOp:translate = (8.0, 0, -8.0)
+        color3f primvars:displayColor = (0.0, 0.0, 0.0)
+    }
+}

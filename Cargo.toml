@@ -11,9 +11,16 @@ members = [
     "crates/lunco-celestial",
     "crates/lunco-hardware",
     "crates/lunco-mobility",
-    "crates/lunco-robotics"
+    "crates/lunco-robotics",
+    "crates/lunco-usd-avian",
+    "crates/lunco-usd-bevy",
+    "crates/lunco-usd"
 ]
 resolver = "2"
+
+[patch.crates-io]
+# Point to local folder for development, falls back to remote if folder missing
+openusd = { path = "extern/openusd" }
 
 [workspace.package]
 description = "Initialize multi-crate workspace architecture for vessel control simulation"

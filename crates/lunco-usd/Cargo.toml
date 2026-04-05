@@ -1,0 +1,14 @@
+[package]
+name = "lunco-usd"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bevy.workspace = true
+openusd = "0.1.4"
+lunco-usd-bevy = { path = "../lunco-usd-bevy" }
+lunco-usd-avian = { path = "../lunco-usd-avian" }
+lunco-usd-physx = { path = "../lunco-usd-physx" }
+lunco-core = { path = "../lunco-core" }
+serde = { version = "1.0", features = ["derive"] }
+tracing = "0.1"
