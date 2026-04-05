@@ -1,15 +1,13 @@
 use bevy::prelude::*;
 use avian3d::prelude::*;
-use lunco_usd::UsdPlugins;
-use lunco_usd_bevy::{UsdStageResource, UsdPrimPath};
-use openusd::usda::TextReader;
+use lunco_usd::{UsdPlugins, UsdStageAsset, UsdPrimPath};
 
 fn main() {
-    println!("--- LunCo Model Viewer (Truly Recursive) ---");
+    println!("--- LunCo Model Viewer (Asset Server Driven) ---");
     App::new()
         .add_plugins(DefaultPlugins)
         .add_plugins(PhysicsPlugins::default())
-        .add_plugins(UsdPlugins) // Standard + LunCo specific plugins
+        .add_plugins(UsdPlugins)
         .add_systems(Startup, setup)
         .add_systems(Update, (rotate_camera, model_timer))
         .run();
@@ -17,6 +15,12 @@ fn main() {
 
 #[derive(Resource)]
 struct ModelTimer(Timer);
+
+#[derive(Resource)]
+struct LoadedStages {
+    orion: Handle<UsdStageAsset>,
+    rucheyok: Handle<UsdStageAsset>,
+}
 
 #[derive(Component)]
 struct ViewerCamera;
@@ -26,6 +30,7 @@ struct ModelRoot;
 
 fn setup(
     mut commands: Commands,
+    asset_server: Res<AssetServer>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
@@ -62,38 +67,38 @@ fn setup(
 
     commands.insert_resource(ModelTimer(Timer::from_seconds(5.0, TimerMode::Repeating)));
     
-    load_usd_model(&mut commands, "assets/vessels/spacecrafts/orion/orion.usda", "/Orion", true);
-    load_usd_model(&mut commands, "assets/vessels/rovers/rucheyok/rucheyok.usda", "/Rucheyok", false);
-}
+    // ASSET SERVER LOADING
+    let orion_handle = asset_server.load("vessels/spacecrafts/orion/orion.usda");
+    let rucheyok_handle = asset_server.load("vessels/rovers/rucheyok/rucheyok.usda");
 
-fn load_usd_model(commands: &mut Commands, path: &str, root_prim: &str, visible: bool) {
-    info!("Loading USDA model: {}", path);
-    match TextReader::read(path) {
-        Ok(reader) => {
-            let stage_id = commands.spawn((
-                Name::new(format!("USD Stage: {}", path)),
-                ModelRoot,
-                UsdStageResource { reader },
-                Transform::default(),
-                if visible { Visibility::Visible } else { Visibility::Hidden },
-            )).id();
+    commands.insert_resource(LoadedStages {
+        orion: orion_handle.clone(),
+        rucheyok: rucheyok_handle.clone(),
+    });
 
-            // Spawn the root Prim
-            let root_entity = commands.spawn((
-                Name::new(root_prim.to_string()),
-                UsdPrimPath {
-                    stage_id,
-                    path: root_prim.to_string(),
-                },
-                Transform::default(),
-                Visibility::Inherited,
-            )).id();
-            commands.entity(stage_id).add_child(root_entity);
-        }
-        Err(e) => {
-            error!("CRITICAL: Failed to load USDA {}: {}", path, e);
-        }
-    }
+    // Create the initial root entities. 
+    // The UsdBevyPlugin will see these and start the recursive sync as soon as assets load!
+    commands.spawn((
+        Name::new("Orion Root"),
+        ModelRoot,
+        UsdPrimPath {
+            stage_handle: orion_handle,
+            path: "/Orion".to_string(),
+        },
+        Visibility::Visible,
+        Transform::default(),
+    ));
+
+    commands.spawn((
+        Name::new("Rucheyok Root"),
+        ModelRoot,
+        UsdPrimPath {
+            stage_handle: rucheyok_handle,
+            path: "/Rucheyok".to_string(),
+        },
+        Visibility::Hidden,
+        Transform::default(),
+    ));
 }
 
 fn rotate_camera(time: Res<Time>, mut query: Query<&mut Transform, With<ViewerCamera>>) {

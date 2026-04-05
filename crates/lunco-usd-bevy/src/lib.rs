@@ -3,7 +3,6 @@ use bevy::asset::{AssetLoader, LoadContext, io::Reader};
 use openusd::usda::TextReader;
 use openusd::sdf::{AbstractData, Path as SdfPath, Value};
 use std::sync::Arc;
-use futures_lite::AsyncReadExt;
 
 pub struct UsdBevyPlugin;
 
@@ -22,6 +21,7 @@ pub struct UsdStageAsset {
     pub reader: Arc<TextReader>,
 }
 
+#[derive(Default, TypePath)]
 pub struct UsdLoader;
 
 impl AssetLoader for UsdLoader {
@@ -33,17 +33,13 @@ impl AssetLoader for UsdLoader {
         &self,
         reader: &mut dyn Reader,
         _settings: &Self::Settings,
-        load_context: &mut LoadContext<'_>,
+        _load_context: &mut LoadContext<'_>,
     ) -> Result<Self::Asset, Self::Error> {
+        use futures_lite::AsyncReadExt;
         let mut bytes = Vec::new();
         reader.read_to_end(&mut bytes).await?;
         let data = String::from_utf8(bytes)?;
 
-        // Note: We'd ideally want TextReader::from_string in the fork, 
-        // but for now we can simulate it if needed or add it to fork.
-        // Actually, let's just use the existing fork's parser directly if possible.
-        
-        // For this version, we use a small hack to use the existing parser
         let mut parser = openusd::usda::parser::Parser::new(&data);
         let data_map = parser.parse().map_err(|e| anyhow::anyhow!("USD Parse Error: {}", e))?;
         let reader = TextReader::from_data(data_map);
@@ -91,32 +87,28 @@ fn sync_usd_visuals(
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     for (entity, prim_path) in query.iter() {
-        let Some(stage) = stages.get(&prim_path.stage_handle) else { continue; };
+        let Some(stage) = stages.get(&prim_handle_to_stage(&prim_path.stage_handle)) else { continue; };
         let Ok(sdf_path) = SdfPath::new(&prim_path.path) else { continue; };
 
-        // 1. Detect Visual Mesh based on USD TypeName
-        let mut mesh_handle = None;
-        
-        // We need a way to get the type name from the asset
-        // For now we'll use our existing logic, but we need to bypass the &mut requirement of openusd 0.1.4
-        // I'll add a 'get_const' or similar to the fork later, for now we do a local clone or fix.
-        
-        // HACK: TextReader::get currently requires &mut self because of internal caching
-        // We'll use a local mut clone for this frame until we fix the fork to be thread-safe.
+        // HACK: Clone reader for thread-safety in this frame
         let mut reader = (*stage.reader).clone();
 
+        // 1. DATA-DRIVEN Visual Mesh based on USD typeName
+        let mut mesh_handle = None;
         if let Ok(val) = reader.get(&sdf_path, "typeName") {
             if let Value::Token(ty) = &*val {
                 match ty.as_str() {
                     "Cube" => mesh_handle = Some(meshes.add(Cuboid::default())),
                     "Sphere" => mesh_handle = Some(meshes.add(Sphere::new(1.0).mesh().ico(32).unwrap())),
                     "Cylinder" => mesh_handle = Some(meshes.add(Cylinder::default())),
-                    _ => {}
+                    _ => {
+                        debug!("Prim {} has unknown typeName: {}", prim_path.path, ty);
+                    }
                 }
             }
         }
 
-        // 2. Map Color
+        // 2. Map Color from displayColor (Type-safe)
         let mut color = Color::WHITE;
         if let Some(v) = reader.get_prim_attribute_value::<Vec<f32>>(&sdf_path, "primvars:displayColor") {
             if v.len() >= 3 {
@@ -131,7 +123,7 @@ fn sync_usd_visuals(
             ));
         }
 
-        // 3. Map Transform
+        // 3. Map Transform (Type-safe)
         let mut transform = Transform::default();
         if let Some(v) = reader.get_prim_attribute_value::<Vec<f32>>(&sdf_path, "xformOp:scale")
             .or_else(|| reader.get_prim_attribute_value::<Vec<f32>>(&sdf_path, "scale")) 
@@ -145,8 +137,9 @@ fn sync_usd_visuals(
         }
 
         commands.entity(entity).insert((transform, UsdVisualSynced));
+        info!("Successfully LOADED visuals from USD for {}", prim_path.path);
 
-        // 4. Recursion
+        // 4. GENERIC RECURSION
         for child_path in reader.get_name_children(&sdf_path) {
             let child_entity = commands.spawn((
                 Name::new(child_path.to_string()),
@@ -160,4 +153,9 @@ fn sync_usd_visuals(
             commands.entity(entity).add_child(child_entity);
         }
     }
+}
+
+// Internal helper
+fn prim_handle_to_stage(handle: &Handle<UsdStageAsset>) -> AssetId<UsdStageAsset> {
+    handle.id()
 }

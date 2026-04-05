@@ -4499,7 +4499,9 @@ dependencies = [
 name = "lunco-usd-bevy"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "bevy",
+ "futures-lite",
  "openusd",
  "serde",
  "thiserror 2.0.18",
