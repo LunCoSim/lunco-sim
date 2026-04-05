@@ -12,7 +12,12 @@ pub struct ModelicaInspectorPlugin;
 impl Plugin for ModelicaInspectorPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<WorkbenchState>()
-           .add_systems(EguiPrimaryContextPass, workbench_ui);
+           .add_systems(EguiPrimaryContextPass, (
+               show_library_browser,
+               show_model_editor,
+               show_telemetry,
+               show_plots,
+           ));
     }
 }
 
@@ -33,9 +38,12 @@ impl Default for WorkbenchState {
         plotted.insert("soc_out".to_string());
         plotted.insert("voltage_out".to_string());
 
+        // Load default model if available
+        let editor_buffer = std::fs::read_to_string("assets/models/Battery.mo").unwrap_or_default();
+
         Self {
             current_path: PathBuf::from("assets/models"),
-            editor_buffer: String::new(),
+            editor_buffer,
             selected_entity: None,
             compilation_error: None,
             history: HashMap::new(),
@@ -45,160 +53,211 @@ impl Default for WorkbenchState {
     }
 }
 
-fn workbench_ui(
+/// Window 1: Library Browser
+fn show_library_browser(
     mut contexts: EguiContexts,
     mut state: ResMut<WorkbenchState>,
-    q_models: Query<(Entity, &ModelicaModel, Option<&Name>)>,
-    q_outputs: Query<&ModelicaOutput>,
-    channels: Option<Res<ModelicaChannels>>,
 ) {
     let Ok(ctx) = contexts.ctx_mut() else { return; };
-
-    egui::Window::new("📐 Modelica Engineering Workbench")
-        .default_size([1000.0, 600.0])
+    
+    egui::Window::new("📁 Library Browser")
+        .default_pos([10.0, 10.0])
+        .default_size([250.0, 400.0])
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
-                // --- LEFT PANE: Browser ---
-                ui.vertical(|ui| {
-                    ui.set_width(200.0);
-                    ui.heading("Library Browser");
-                    
-                    if ui.button("📁 MSL 4.0").clicked() {
-                        state.current_path = PathBuf::from(".cache/msl/ModelicaStandardLibrary-4.0.0");
-                    }
-                    if ui.button("📁 Projects").clicked() {
-                        state.current_path = PathBuf::from("assets/models");
-                    }
-
-                    ui.separator();
-
-                    egui::ScrollArea::vertical().id_salt("browser").show(ui, |ui| {
-                        render_browser(ui, &mut state);
-                    });
-                });
-
+                if ui.button("🏠").on_hover_text("Projects").clicked() {
+                    state.current_path = PathBuf::from("assets/models");
+                }
+                if ui.button("📚").on_hover_text("MSL 4.0").clicked() {
+                    state.current_path = PathBuf::from(".cache/msl/ModelicaStandardLibrary-4.0.0");
+                }
                 ui.separator();
+                if ui.button("⬆").clicked() {
+                    if let Some(parent) = state.current_path.parent() {
+                        if state.current_path.starts_with(".cache/msl") || state.current_path.starts_with("assets/models") {
+                             state.current_path = parent.to_path_buf();
+                        }
+                    }
+                }
+            });
+            
+            ui.label(format!("Path: {:?}", state.current_path));
+            ui.separator();
 
-                // --- CENTER PANE: Editor ---
-                ui.vertical(|ui| {
-                    ui.set_width(ui.available_width() * 0.6);
-                    ui.horizontal(|ui| {
-                        ui.heading("Model Editor");
-                        ui.add_space(ui.available_width() - 120.0);
-                        if ui.button("🚀 COMPILE & RUN").clicked() {
-                            if let (Some(entity), Some(channels)) = (state.selected_entity, &channels) {
-                                let _ = channels.tx.send(ModelicaCommand::Compile {
-                                    entity,
-                                    model_name: "Battery".to_string(), 
-                                    source: state.editor_buffer.clone(),
-                                });
+            egui::ScrollArea::vertical().id_salt("browser_scroll").show(ui, |ui| {
+                if let Ok(entries) = std::fs::read_dir(&state.current_path) {
+                    let mut entries: Vec<_> = entries.flatten().collect();
+                    // Sort directories first, then files
+                    entries.sort_by(|a, b| {
+                        let a_is_dir = a.path().is_dir();
+                        let b_is_dir = b.path().is_dir();
+                        if a_is_dir != b_is_dir {
+                            b_is_dir.cmp(&a_is_dir)
+                        } else {
+                            a.path().cmp(&b.path())
+                        }
+                    });
+
+                    for entry in entries {
+                        let path = entry.path();
+                        let name = path.file_name().unwrap_or_default().to_string_lossy();
+                        
+                        if path.is_dir() {
+                            if ui.link(format!("📁 {}", name)).clicked() {
+                                state.current_path = path;
+                            }
+                        } else if name.ends_with(".mo") {
+                            if ui.link(format!("📄 {}", name)).clicked() {
+                                if let Ok(content) = std::fs::read_to_string(&path) {
+                                    state.editor_buffer = content;
+                                }
                             }
                         }
-                    });
-
-                    // Manual code editor implementation using standard TextEdit to avoid version conflicts
-                    egui::ScrollArea::both()
-                        .id_salt("editor_scroll")
-                        .show(ui, |ui| {
-                            ui.add(
-                                egui::TextEdit::multiline(&mut state.editor_buffer)
-                                    .font(egui::TextStyle::Monospace)
-                                    .code_editor()
-                                    .desired_width(f32::INFINITY)
-                                    .lock_focus(true)
-                                    .desired_rows(30)
-                            );
-                        });
-
-                    if let Some(err) = &state.compilation_error {
-                        ui.colored_label(egui::Color32::LIGHT_RED, format!("❌ {}", err));
                     }
-                });
-
-                ui.separator();
-
-                // --- RIGHT PANE: Live Data ---
-                ui.vertical(|ui| {
-                    ui.set_width(ui.available_width());
-                    ui.heading("Live Telemetry");
-                    
-                    if state.selected_entity.is_none() {
-                        state.selected_entity = q_models.iter().next().map(|(e, _, _)| e);
-                    }
-
-                    if let Some(entity) = state.selected_entity {
-                        if let Ok((_, model, name)) = q_models.get(entity) {
-                            let label = name.map(|n| n.as_str()).unwrap_or("Unnamed Model");
-                            ui.label(format!("Active: {} (t={:.2}s)", label, model.current_time));
-                            
-                            ui.separator();
-                            ui.label("Plots");
-                            
-                            Plot::new("live_plot")
-                                .view_aspect(2.0)
-                                .legend(egui_plot::Legend::default())
-                                .show(ui, |plot_ui| {
-                                    for var_name in &state.plotted_variables {
-                                        if let Some(data) = state.history.get(var_name) {
-                                            let points: Vec<[f64; 2]> = data.iter().cloned().collect();
-                                            plot_ui.line(Line::new(var_name.clone(), PlotPoints::from(points)));
-                                        }
-                                    }
-                                });
-
-                            ui.separator();
-                            ui.label("Variables:");
-                            egui::ScrollArea::vertical().id_salt("vars").show(ui, |ui| {
-                                for output in q_outputs.iter() {
-                                    ui.horizontal(|ui| {
-                                        let mut is_plotted = state.plotted_variables.contains(&output.variable_name);
-                                        if ui.checkbox(&mut is_plotted, "").changed() {
-                                            if is_plotted {
-                                                state.plotted_variables.insert(output.variable_name.clone());
-                                            } else {
-                                                state.plotted_variables.remove(&output.variable_name);
-                                            }
-                                        }
-                                        ui.label(format!("{}: {:.4}", output.variable_name, output.value));
-                                    });
-                                }
-                            });
-                        }
-                    }
-                });
+                } else {
+                    ui.colored_label(egui::Color32::RED, "Failed to read directory");
+                }
             });
         });
 }
 
-fn render_browser(ui: &mut egui::Ui, state: &mut WorkbenchState) {
-    ui.horizontal(|ui| {
-        if ui.button("UP").clicked() {
-            if let Some(parent) = state.current_path.parent() {
-                state.current_path = parent.to_path_buf();
-            }
-        }
-        ui.label(format!("{:?}", state.current_path));
-    });
+/// Window 2: Model Editor
+fn show_model_editor(
+    mut contexts: EguiContexts,
+    mut state: ResMut<WorkbenchState>,
+    channels: Option<Res<ModelicaChannels>>,
+    q_models: Query<Entity, With<ModelicaModel>>,
+) {
+    let Ok(ctx) = contexts.ctx_mut() else { return; };
 
-    if let Ok(entries) = std::fs::read_dir(&state.current_path) {
-        let mut entries: Vec<_> = entries.flatten().collect();
-        entries.sort_by_key(|e| e.path());
+    // Auto-select first entity if none selected
+    if state.selected_entity.is_none() {
+        state.selected_entity = q_models.iter().next();
+    }
 
-        for entry in entries {
-            let path = entry.path();
-            let name = path.file_name().unwrap_or_default().to_string_lossy();
-            
-            if path.is_dir() {
-                if ui.link(format!("📁 {}", name)).clicked() {
-                    state.current_path = path;
-                }
-            } else if name.ends_with(".mo") {
-                if ui.link(format!("📄 {}", name)).clicked() {
-                    if let Ok(content) = std::fs::read_to_string(&path) {
-                        state.editor_buffer = content;
+    egui::Window::new("📝 Modelica Editor")
+        .default_pos([270.0, 10.0])
+        .default_size([600.0, 500.0])
+        .show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                if ui.button("🚀 COMPILE & RUN").clicked() {
+                    if let (Some(entity), Some(channels)) = (state.selected_entity, &channels) {
+                        let _ = channels.tx.send(ModelicaCommand::Compile {
+                            entity,
+                            model_name: "Battery".to_string(), // TODO: Regex name from source
+                            source: state.editor_buffer.clone(),
+                        });
                     }
                 }
+                
+                // Flexible spacer replacement
+                let space = ui.available_width() - 100.0;
+                if space > 0.0 { ui.add_space(space); }
+
+                if let Some(err) = &state.compilation_error {
+                    ui.colored_label(egui::Color32::LIGHT_RED, "Compilation failed!");
+                } else {
+                    ui.colored_label(egui::Color32::GREEN, "Ready");
+                }
+            });
+
+            ui.separator();
+
+            egui::ScrollArea::both().id_salt("editor_scroll").show(ui, |ui| {
+                ui.add(
+                    egui::TextEdit::multiline(&mut state.editor_buffer)
+                        .font(egui::TextStyle::Monospace)
+                        .code_editor()
+                        .desired_width(f32::INFINITY)
+                        .lock_focus(true)
+                        .desired_rows(40)
+                );
+            });
+
+            if let Some(err) = &state.compilation_error {
+                ui.separator();
+                egui::ScrollArea::vertical().max_height(100.0).show(ui, |ui| {
+                    ui.colored_label(egui::Color32::LIGHT_RED, err);
+                });
             }
-        }
-    }
+        });
+}
+
+/// Window 3: Live Telemetry
+fn show_telemetry(
+    mut contexts: EguiContexts,
+    mut state: ResMut<WorkbenchState>,
+    q_models: Query<(Entity, &ModelicaModel, Option<&Name>)>,
+    q_outputs: Query<&ModelicaOutput>,
+) {
+    let Ok(ctx) = contexts.ctx_mut() else { return; };
+
+    egui::Window::new("📊 Live Telemetry")
+        .default_pos([880.0, 10.0])
+        .default_size([300.0, 400.0])
+        .show(ctx, |ui| {
+            if let Some(entity) = state.selected_entity {
+                if let Ok((_, model, name)) = q_models.get(entity) {
+                    let label = name.map(|n| n.as_str()).unwrap_or("Unnamed Model");
+                    ui.heading(label);
+                    ui.label(format!("Simulation Time: {:.4} s", model.current_time));
+                    
+                    ui.separator();
+                    ui.label("Active Variables:");
+                    
+                    egui::ScrollArea::vertical().id_salt("telemetry_scroll").show(ui, |ui| {
+                        // Filter outputs for this entity or global
+                        for output in q_outputs.iter() {
+                            ui.horizontal(|ui| {
+                                let mut is_plotted = state.plotted_variables.contains(&output.variable_name);
+                                if ui.checkbox(&mut is_plotted, "").changed() {
+                                    if is_plotted {
+                                        state.plotted_variables.insert(output.variable_name.clone());
+                                    } else {
+                                        state.plotted_variables.remove(&output.variable_name);
+                                    }
+                                }
+                                ui.label(format!("{}:", output.variable_name));
+                                
+                                let space = ui.available_width() - 60.0;
+                                if space > 0.0 { ui.add_space(space); }
+
+                                // FIX: Use format! with precision to avoid "hundred digits"
+                                ui.monospace(format!("{:.4}", output.value));
+                            });
+                        }
+                    });
+                }
+            } else {
+                ui.label("No model selected.");
+            }
+        });
+}
+
+/// Window 4: Plots
+fn show_plots(
+    mut contexts: EguiContexts,
+    state: Res<WorkbenchState>,
+) {
+    let Ok(ctx) = contexts.ctx_mut() else { return; };
+
+    if state.plotted_variables.is_empty() { return; }
+
+    egui::Window::new("📈 Variable Plots")
+        .default_pos([270.0, 520.0])
+        .default_size([600.0, 300.0])
+        .show(ctx, |ui| {
+            Plot::new("workbench_plot")
+                .view_aspect(2.0)
+                .legend(egui_plot::Legend::default())
+                .show(ui, |plot_ui| {
+                    for var_name in &state.plotted_variables {
+                        if let Some(data) = state.history.get(var_name) {
+                            let points: Vec<[f64; 2]> = data.iter().cloned().collect();
+                            // FIX: Correct Line::new signature for egui_plot 0.34
+                            plot_ui.line(Line::new(var_name.clone(), PlotPoints::from(points)));
+                        }
+                    }
+                });
+        });
 }

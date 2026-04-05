@@ -1,5 +1,5 @@
 model Battery
-  parameter Real capacity = 100.0 "Total capacity in Ah";
+  parameter Real capacity = 1.0 "Total capacity in Ah";
   parameter Real voltage_nom = 12.0 "Nominal voltage in V";
   parameter Real R_internal = 0.01 "Internal resistance in Ohms";
   

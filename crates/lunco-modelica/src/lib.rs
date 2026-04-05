@@ -192,6 +192,8 @@ pub struct ModelicaModel {
     pub model_path: String,
     pub model_name: String,
     pub current_time: f64,
+    /// Last real-world time this model was stepped.
+    pub last_step_time: f64,
     #[reflect(ignore)]
     pub is_stepping: bool,
 }
@@ -214,9 +216,12 @@ pub struct ModelicaOutput {
 
 fn spawn_modelica_requests(
     channels: Res<ModelicaChannels>,
+    time: Res<Time>,
     mut q_models: Query<(Entity, &mut ModelicaModel, Option<&Children>)>,
     q_inputs: Query<&ModelicaInput>,
 ) {
+    let current_real_time = time.elapsed_secs_f64();
+
     for (entity, mut model, children) in q_models.iter_mut() {
         if model.is_stepping { continue; }
 
@@ -232,13 +237,21 @@ fn spawn_modelica_requests(
             inputs.push((input.variable_name.clone(), input.value));
         }
 
+        // Calculate dt based on real time elapsed since last request
+        let dt = if model.last_step_time == 0.0 {
+            0.016 // First step default
+        } else {
+            (current_real_time - model.last_step_time).max(0.001)
+        };
+        model.last_step_time = current_real_time;
+
         model.is_stepping = true;
         let _ = channels.tx.send(ModelicaCommand::Step {
             entity,
             model_path: model.model_path.clone(),
             model_name: model.model_name.clone(),
             inputs,
-            dt: 0.016,
+            dt,
         });
     }
 }
