@@ -12,7 +12,7 @@ use bevy::ecs::system::SystemParam;
 use bevy_egui::{egui, EguiContexts, EguiPlugin, EguiPrimaryContextPass};
 use lunco_core::{RoverVessel, Vessel, Avatar, Spacecraft};
 use lunco_celestial::{CelestialClock, CelestialBody, TrajectoryView, TrajectoryFrame};
-use lunco_avatar::{OrbitalBehavior, FlybyBehavior, SurfaceBehavior, CameraScroll};
+use lunco_avatar::{ObserverBehavior, ObserverMode, CameraScroll};
 use lunco_mobility::Suspension;
 
 /// Plugin for managing the simulation's graphical user interface.
@@ -73,10 +73,7 @@ struct MainUiParams<'w, 's> {
     q_rovers: Query<'w, 's, (Entity, &'static Name, &'static Vessel), With<RoverVessel>>,
     q_bodies: Query<'w, 's, (Entity, &'static Name, &'static CelestialBody)>,
     q_spacecraft: Query<'w, 's, (Entity, &'static Name, &'static mut Spacecraft)>,
-    q_camera: Query<'w, 's, Entity, With<Avatar>>,
-    q_orbital: Query<'w, 's, &'static mut OrbitalBehavior>,
-    q_flyby: Query<'w, 's, &'static mut FlybyBehavior>,
-    q_surface: Query<'w, 's, &'static mut SurfaceBehavior>,
+    q_camera: Query<'w, 's, (Entity, &'static mut ObserverBehavior), With<Avatar>>,
     q_trajectories: Query<'w, 's, (Entity, &'static Name, &'static mut TrajectoryView)>,
     q_children: Query<'w, 's, &'static Children>,
     q_suspension: Query<'w, 's, (Entity, &'static mut Suspension)>,
@@ -97,7 +94,6 @@ fn main_ui_system(mut params: MainUiParams) {
     }
 
     egui::Window::new("Mission Control").show(ctx, |ui| {
-        // ... (egui window content)
         ui.heading("Epoch & UTC Time");
         ui.label(format!("JD: {:.4}", params.clock.epoch));
         ui.label(format!("UTC: {}", lunco_celestial::jd_to_utc_string(params.clock.epoch)));
@@ -123,12 +119,8 @@ fn main_ui_system(mut params: MainUiParams) {
         ui.collapsing("Celestial Bodies", |ui| {
             for (entity, name, _) in params.q_bodies.iter() {
                 let res = ui.selectable_label(params.selected.entity == Some(entity), format!("{}", name));
-                if res.clicked() {
-                    params.selected.entity = Some(entity);
-                }
-                if res.double_clicked() {
-                    target_to_focus = Some(entity);
-                }
+                if res.clicked() { params.selected.entity = Some(entity); }
+                if res.double_clicked() { target_to_focus = Some(entity); }
             }
         });
 
@@ -136,14 +128,9 @@ fn main_ui_system(mut params: MainUiParams) {
             for (entity, name, mut sc) in params.q_spacecraft.iter_mut() {
                 ui.horizontal(|ui| {
                     ui.checkbox(&mut sc.user_visible, "");
-
                     let res = ui.selectable_label(params.selected.entity == Some(entity), format!("{}", name));
-                    if res.clicked() {
-                        params.selected.entity = Some(entity);
-                    }
-                    if res.double_clicked() {
-                        target_to_focus = Some(entity);
-                    }
+                    if res.clicked() { params.selected.entity = Some(entity); }
+                    if res.double_clicked() { target_to_focus = Some(entity); }
                 });
             }
         });
@@ -151,12 +138,8 @@ fn main_ui_system(mut params: MainUiParams) {
         ui.collapsing("Local Vessels", |ui| {
             for (entity, name, _) in params.q_rovers.iter() {
                  let res = ui.selectable_label(params.selected.entity == Some(entity), format!("{}", name));
-                 if res.clicked() {
-                     params.selected.entity = Some(entity);
-                 }
-                 if res.double_clicked() {
-                     target_to_focus = Some(entity);
-                 }
+                 if res.clicked() { params.selected.entity = Some(entity); }
+                 if res.double_clicked() { target_to_focus = Some(entity); }
             }
         });
 
@@ -165,31 +148,20 @@ fn main_ui_system(mut params: MainUiParams) {
                 ui.horizontal(|ui| {
                     ui.checkbox(&mut view.user_visible, "");
                     let res = ui.selectable_label(params.selected.entity == Some(entity), format!("{}", name));
-                    if res.clicked() {
-                        params.selected.entity = Some(entity);
-                    }
-                    if res.double_clicked() {
-                        target_to_focus = Some(entity);
-                    }
+                    if res.clicked() { params.selected.entity = Some(entity); }
+                    if res.double_clicked() { target_to_focus = Some(entity); }
                     
                     ui.separator();
-                    if ui.selectable_label(view.frame == TrajectoryFrame::Inertial, "Inertial").on_hover_text("Fixed relative to stars").clicked() {
-                        view.frame = TrajectoryFrame::Inertial;
-                    }
-                    if ui.selectable_label(view.frame == TrajectoryFrame::BodyFixed, "Body-Fixed").on_hover_text("Fixed relative to rotating body").clicked() {
-                        view.frame = TrajectoryFrame::BodyFixed;
-                    }
+                    if ui.selectable_label(view.frame == TrajectoryFrame::Inertial, "Inertial").on_hover_text("Fixed relative to stars").clicked() { view.frame = TrajectoryFrame::Inertial; }
+                    if ui.selectable_label(view.frame == TrajectoryFrame::BodyFixed, "Body-Fixed").on_hover_text("Fixed relative to rotating body").clicked() { view.frame = TrajectoryFrame::BodyFixed; }
                 });
             }
         });
 
         if let Some(target) = target_to_focus {
             params.commands.trigger(lunco_core::architecture::CommandMessage {
-                id: 0,
-                target,
-                name: "FOCUS".to_string(),
-                args: Default::default(),
-                source: params.q_camera.iter().next().unwrap_or(Entity::PLACEHOLDER),
+                id: 0, target, name: "FOCUS".to_string(), args: Default::default(),
+                source: params.q_camera.iter().next().map(|(e, _)| e).unwrap_or(Entity::PLACEHOLDER),
             });
             params.selected.entity = Some(target);
         }
@@ -202,41 +174,27 @@ fn main_ui_system(mut params: MainUiParams) {
             ui.horizontal(|ui| {
                 if ui.button("Focus Camera").clicked() {
                     params.commands.trigger(lunco_core::architecture::CommandMessage {
-                        id: 0,
-                        target,
-                        name: "FOCUS".to_string(),
-                        args: Default::default(),
-                        source: params.q_camera.iter().next().unwrap_or(Entity::PLACEHOLDER),
+                        id: 0, target, name: "FOCUS".to_string(), args: Default::default(),
+                        source: params.q_camera.iter().next().map(|(e, _)| e).unwrap_or(Entity::PLACEHOLDER),
                     });
                 }
 
                 if ui.button("Release (Free Fly)").clicked() {
                     params.commands.trigger(lunco_core::architecture::CommandMessage {
-                        id: 0,
-                        target: params.q_camera.iter().next().unwrap_or(Entity::PLACEHOLDER),
-                        name: "RELEASE".to_string(),
-                        args: Default::default(),
-                        source: Entity::PLACEHOLDER,
+                        id: 0, target: params.q_camera.iter().next().map(|(e, _)| e).unwrap_or(Entity::PLACEHOLDER),
+                        name: "RELEASE".to_string(), args: Default::default(), source: Entity::PLACEHOLDER,
                     });
                 }
             });
 
             if params.q_rovers.contains(target) {
                 if ui.button("Take Control (Possess)").clicked() {
-                    let avatar_ent = params.q_camera.iter().next().unwrap_or(Entity::PLACEHOLDER);
+                    let avatar_ent = params.q_camera.iter().next().map(|(e, _)| e).unwrap_or(Entity::PLACEHOLDER);
                     params.commands.trigger(lunco_core::architecture::CommandMessage {
-                        id: 0,
-                        target: target,
-                        name: "POSSESS".to_string(),
-                        args: Default::default(),
-                        source: avatar_ent,
+                        id: 0, target: target, name: "POSSESS".to_string(), args: Default::default(), source: avatar_ent,
                     });
-                    info!("Possessing rover and focusing at 10m.");
                 }
-                
-                ui.collapsing("Mechanical Inspector", |ui| {
-                    inspect_suspension_recursive(ui, target, &params.q_children, &mut params.q_suspension);
-                });
+                ui.collapsing("Mechanical Inspector", |ui| { inspect_suspension_recursive(ui, target, &params.q_children, &mut params.q_suspension); });
             }
         }
 
@@ -244,47 +202,27 @@ fn main_ui_system(mut params: MainUiParams) {
              ui.separator();
              ui.heading("Surface Spawning");
              ui.label(format!("Surface: {:?}", spawn_req.planet));
-             
              if ui.button("Spawn Ackermann Rover (Blue)").clicked() {
-                 let _rover = lunco_robotics::rover::spawn_joint_rover(
-                    &mut params.commands,
-                    &mut params.meshes,
-                    &mut params.materials,
-                    spawn_req.planet,
-                    spawn_req.click_pos_local.as_vec3() + spawn_req.surface_normal * 1.5,
-                    "Lunar Explorer",
-                    Color::Srgba(bevy::color::palettes::basic::BLUE),
-                    lunco_robotics::rover::SteeringType::Ackermann,
-                 );
-                 params.pending.request = None;
-                 info!("Spawned rover at surface interaction point.");
-             }
-             if ui.button("Cancel").clicked() {
+                 let _rover = lunco_robotics::rover::spawn_joint_rover(&mut params.commands, &mut params.meshes, &mut params.materials, spawn_req.planet, spawn_req.click_pos_local.as_vec3() + spawn_req.surface_normal * 1.5, "Lunar Explorer", Color::Srgba(bevy::color::palettes::basic::BLUE), lunco_robotics::rover::SteeringType::Ackermann);
                  params.pending.request = None;
              }
+             if ui.button("Cancel").clicked() { params.pending.request = None; }
         }
     });
 
     egui::Window::new("Telemetry").anchor(egui::Align2::RIGHT_TOP, [-10.0, 10.0]).show(ctx, |ui| {
         ui.heading("Avatar Status");
-        ui.label(format!("Epoch: {:.4}", params.clock.epoch));
-        ui.label(lunco_celestial::jd_to_utc_string(params.clock.epoch));
         ui.separator();
-
-        for ent in params.q_camera.iter() {
+        for (_, obs) in params.q_camera.iter() {
             ui.horizontal(|ui| {
                 ui.label("Mode:");
-                if let Ok(flyby) = params.q_flyby.get(ent) {
-                     ui.colored_label(egui::Color32::from_rgb(255, 200, 50), "FLYBY");
-                     ui.label(format!("Dist to Target: {:.1} m", flyby.offset.length()));
-                } else if let Ok(surface) = params.q_surface.get(ent) {
-                     ui.colored_label(egui::Color32::from_rgb(50, 255, 100), "SURFACE");
-                     ui.label(format!("Height: {:.1} m", surface.height));
-                } else if let Ok(orbital) = params.q_orbital.get(ent) {
-                     ui.colored_label(egui::Color32::from_rgb(100, 150, 255), "ORBITAL");
-                     ui.label(format!("Orbital Dist: {:.0} km", orbital.distance / 1000.0));
+                match obs.mode {
+                    ObserverMode::Flyby => { ui.colored_label(egui::Color32::from_rgb(255, 200, 50), "FLYBY"); },
+                    ObserverMode::Orbital => { ui.colored_label(egui::Color32::from_rgb(100, 150, 255), "ORBITAL"); },
+                    ObserverMode::Surface => { ui.colored_label(egui::Color32::from_rgb(50, 255, 100), "SURFACE"); },
                 }
             });
+            ui.label(format!("Distance: {:.1} m", obs.distance));
         }
         ui.separator();
         ui.label("WASD: move");
@@ -296,14 +234,8 @@ fn main_ui_system(mut params: MainUiParams) {
     });
 }
 
-/// Recursively inspects the mechanical parameters (like suspension) of a vessel 
-/// and its children, rendering egui controls for real-time tuning.
-fn inspect_suspension_recursive(
-    ui: &mut egui::Ui,
-    entity: Entity,
-    q_children: &Query<&Children>,
-    q_suspension: &mut Query<(Entity, &mut Suspension)>,
-) {
+/// Recursively inspects mechanical parameters.
+fn inspect_suspension_recursive(ui: &mut egui::Ui, entity: Entity, q_children: &Query<&Children>, q_suspension: &mut Query<(Entity, &mut Suspension)>) {
     if let Ok((_e, mut susp)) = q_suspension.get_mut(entity) {
         ui.label(format!("Hub: {:?}", entity));
         ui.add(egui::Slider::new(&mut susp.rest_length, 0.1..=2.0).text("Rest Length"));
@@ -312,8 +244,6 @@ fn inspect_suspension_recursive(
         ui.separator();
     }
     if let Ok(children) = q_children.get(entity) {
-        for child in children.iter() {
-            inspect_suspension_recursive(ui, child, q_children, q_suspension);
-        }
+        for child in children.iter() { inspect_suspension_recursive(ui, child, q_children, q_suspension); }
     }
 }
