@@ -7,6 +7,8 @@ description = "Native Modelica simulation integration for LunCoSim using Rumoca"
 [dependencies]
 bevy.workspace = true
 bevy_egui.workspace = true
+egui_plot = "0.34.1"
+egui_code_editor = "0.2.22"
 rumoca = { git = "https://github.com/cognipilot/rumoca", branch = "main" }
 rumoca-sim = { git = "https://github.com/cognipilot/rumoca", branch = "main" }
 anyhow = "1.0"

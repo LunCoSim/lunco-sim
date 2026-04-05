@@ -29,12 +29,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "accesskit"
+version = "0.24.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5351dcebb14b579ccab05f288596b2ae097005be7ee50a7c3d4ca9d0d5a66f6a"
+dependencies = [
+ "uuid",
+]
+
+[[package]]
 name = "accesskit_consumer"
 version = "0.31.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "db81010a6895d8707f9072e6ce98070579b43b717193d2614014abd5cb17dd43"
 dependencies = [
- "accesskit",
+ "accesskit 0.21.1",
  "hashbrown 0.15.5",
 ]
 
@@ -44,7 +53,7 @@ version = "0.22.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a0089e5c0ac0ca281e13ea374773898d9354cc28d15af9f0f7394d44a495b575"
 dependencies = [
- "accesskit",
+ "accesskit 0.21.1",
  "accesskit_consumer",
  "hashbrown 0.15.5",
  "objc2 0.5.2",
@@ -58,7 +67,7 @@ version = "0.29.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d2d63dd5041e49c363d83f5419a896ecb074d309c414036f616dc0b04faca971"
 dependencies = [
- "accesskit",
+ "accesskit 0.21.1",
  "accesskit_consumer",
  "hashbrown 0.15.5",
  "static_assertions",
@@ -72,7 +81,7 @@ version = "0.29.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c8cfabe59d0eaca7412bfb1f70198dd31e3b0496fee7e15b066f9c36a1a140a0"
 dependencies = [
- "accesskit",
+ "accesskit 0.21.1",
  "accesskit_macos",
  "accesskit_windows",
  "raw-window-handle",
@@ -256,7 +265,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -267,7 +276,7 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -664,7 +673,7 @@ dependencies = [
  "bevy_window",
  "bytemuck",
  "disqualified",
- "egui",
+ "egui 0.33.3",
  "fuzzy-matcher",
  "image",
  "opener",
@@ -690,7 +699,7 @@ version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e887b25c84f384ffe3278a17cf0e4b405eaa3c8fbc3db24d05d560a11780676d"
 dependencies = [
- "accesskit",
+ "accesskit 0.21.1",
  "bevy_app",
  "bevy_derive",
  "bevy_ecs",
@@ -1071,7 +1080,7 @@ dependencies = [
  "bevy_winit",
  "bytemuck",
  "crossbeam-channel",
- "egui",
+ "egui 0.33.3",
  "encase",
  "getrandom 0.3.4",
  "image",
@@ -1102,7 +1111,7 @@ version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1cb29be8f8443c5cc44e1c4710bbe02877e73703c60228ca043f20529a5496c6"
 dependencies = [
- "accesskit",
+ "accesskit 0.21.1",
  "bevy_a11y",
  "bevy_app",
  "bevy_asset",
@@ -1905,7 +1914,7 @@ version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1691a411014085e0d35f8bb8208e5f973edd7ace061a4b1c41c83de21579dc70"
 dependencies = [
- "accesskit",
+ "accesskit 0.21.1",
  "bevy_a11y",
  "bevy_app",
  "bevy_asset",
@@ -1971,7 +1980,7 @@ version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6a63cb818b0de41bdb14990e0ce1aaaa347f871750ab280f80c427e83d72712"
 dependencies = [
- "accesskit",
+ "accesskit 0.21.1",
  "bevy_a11y",
  "bevy_app",
  "bevy_camera",
@@ -2021,7 +2030,7 @@ version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2de1c13d32ab8528435b58eca7ab874a1068184c6d6f266ee11433ae99d4069"
 dependencies = [
- "accesskit",
+ "accesskit 0.21.1",
  "accesskit_winit",
  "approx",
  "bevy_a11y",
@@ -2564,6 +2573,15 @@ dependencies = [
  "serde",
  "termcolor",
  "unicode-width 0.2.2",
+]
+
+[[package]]
+name = "color"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a18ef4657441fb193b65f34dc39b3781f0dfec23d3bd94d0eeb4e88cde421edb"
+dependencies = [
+ "bytemuck",
 ]
 
 [[package]]
@@ -3425,7 +3443,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "71ddb8ac7643d1dba1bb02110e804406dd459a838efcb14011ced10556711a8e"
 dependencies = [
  "bytemuck",
- "emath",
+ "emath 0.33.3",
+]
+
+[[package]]
+name = "ecolor"
+version = "0.34.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "137c0ce4ce4152ff7e223a7ce22ee1057cdff61fce0a45c32459c3ccec64868d"
+dependencies = [
+ "emath 0.34.1",
 ]
 
 [[package]]
@@ -3436,13 +3463,51 @@ checksum = "6a9b567d356674e9a5121ed3fedfb0a7c31e059fe71f6972b691bcd0bfc284e3"
 dependencies = [
  "ahash",
  "bitflags 2.11.0",
- "emath",
- "epaint",
+ "emath 0.33.3",
+ "epaint 0.33.3",
  "log",
  "nohash-hasher",
  "profiling",
  "smallvec",
  "unicode-segmentation",
+]
+
+[[package]]
+name = "egui"
+version = "0.34.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f34aaf627da598dfadd64b0fee6101d22e9c451d1e5348157312720b7f459f0f"
+dependencies = [
+ "accesskit 0.24.0",
+ "ahash",
+ "bitflags 2.11.0",
+ "emath 0.34.1",
+ "epaint 0.34.1",
+ "log",
+ "nohash-hasher",
+ "profiling",
+ "smallvec",
+ "unicode-segmentation",
+]
+
+[[package]]
+name = "egui_code_editor"
+version = "0.2.23"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "26573fe7a122374ff9d0b02b1b4f7d3b36002d8a57c811514cd1053f6d9772ff"
+dependencies = [
+ "egui 0.34.1",
+]
+
+[[package]]
+name = "egui_plot"
+version = "0.34.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "67fc9b427a837264e55381a5cade6e28fe83ac5b165a61b9c888548c732a9c95"
+dependencies = [
+ "ahash",
+ "egui 0.33.3",
+ "emath 0.33.3",
 ]
 
 [[package]]
@@ -3459,6 +3524,12 @@ checksum = "491bdf728bf25ddd9ad60d4cf1c48588fa82c013a2440b91aa7fc43e34a07c32"
 dependencies = [
  "bytemuck",
 ]
+
+[[package]]
+name = "emath"
+version = "0.34.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0a05cd8bdf3b598488c627ca97c7fe8909448ffa26278dd3c7e535cdb554d721"
 
 [[package]]
 name = "ena"
@@ -3555,9 +3626,9 @@ dependencies = [
  "ab_glyph",
  "ahash",
  "bytemuck",
- "ecolor",
- "emath",
- "epaint_default_fonts",
+ "ecolor 0.33.3",
+ "emath 0.33.3",
+ "epaint_default_fonts 0.33.3",
  "log",
  "nohash-hasher",
  "parking_lot",
@@ -3565,10 +3636,37 @@ dependencies = [
 ]
 
 [[package]]
+name = "epaint"
+version = "0.34.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "04f3017dd67f147a697ee0c8484fb568fd9553e2a0c114be5020dbbc11962841"
+dependencies = [
+ "ahash",
+ "ecolor 0.34.1",
+ "emath 0.34.1",
+ "epaint_default_fonts 0.34.1",
+ "font-types 0.11.1",
+ "log",
+ "nohash-hasher",
+ "parking_lot",
+ "profiling",
+ "self_cell",
+ "skrifa 0.40.0",
+ "smallvec",
+ "vello_cpu",
+]
+
+[[package]]
 name = "epaint_default_fonts"
 version = "0.33.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5c4fbe202b6578d3d56428fa185cdf114a05e49da05f477b3c7f0fbb221f1862"
+
+[[package]]
+name = "epaint_default_fonts"
+version = "0.34.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8e3b85a2bb775a3ab02d077a65cc31575c11b2584581913253cc11ce49f48bba"
 
 [[package]]
 name = "equator"
@@ -3634,7 +3732,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3783,6 +3881,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1e6853b52649d4ac5c0bd02320cddc5ba956bdb407c4b75a2c6b75bf51500f8c"
 dependencies = [
  "simd-adler32",
+]
+
+[[package]]
+name = "fearless_simd"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8fb2907d1f08b2b316b9223ced5b0e89d87028ba8deae9764741dba8ff7f3903"
+dependencies = [
+ "bytemuck",
 ]
 
 [[package]]
@@ -4132,8 +4239,8 @@ dependencies = [
  "libc",
  "log",
  "rustversion",
- "windows-link 0.1.3",
- "windows-result 0.3.4",
+ "windows-link 0.2.1",
+ "windows-result 0.4.1",
 ]
 
 [[package]]
@@ -4928,7 +5035,7 @@ checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
 dependencies = [
  "hermit-abi",
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5127,6 +5234,17 @@ name = "kurbo"
 version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c62026ae44756f8a599ba21140f350303d4f08dcdcc71b5ad9c9bb8128c13c62"
+dependencies = [
+ "arrayvec",
+ "euclid",
+ "smallvec",
+]
+
+[[package]]
+name = "kurbo"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7564e90fe3c0d5771e1f0bc95322b21baaeaa0d9213fa6a0b61c99f8b17b3bfb"
 dependencies = [
  "arrayvec",
  "euclid",
@@ -5471,6 +5589,8 @@ dependencies = [
  "bevy",
  "bevy_egui",
  "crossbeam-channel",
+ "egui_code_editor",
+ "egui_plot",
  "futures-lite",
  "log",
  "lunco-core",
@@ -6036,7 +6156,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6734,6 +6854,19 @@ checksum = "f8ed6a7761f76e3b9f92dfb0a60a6a6477c61024b775147ff0973a02653abaf2"
 dependencies = [
  "digest",
  "hmac",
+]
+
+[[package]]
+name = "peniko"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9a2b6aadb221872732e87d465213e9be5af2849b0e8cc5300a8ba98fffa2e00a"
+dependencies = [
+ "bytemuck",
+ "color",
+ "kurbo 0.13.0",
+ "linebender_resource_handle",
+ "smallvec",
 ]
 
 [[package]]
@@ -7924,7 +8057,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -8346,7 +8479,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a766e1110788c36f4fa1c2b71b387a7815aa65f88ce0229841826633d93723e"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -8467,7 +8600,7 @@ version = "0.15.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "68c7541fff44b35860c1a7a47a7cadf3e4a304c457b58f9870d9706ece028afc"
 dependencies = [
- "kurbo",
+ "kurbo 0.11.3",
  "siphasher",
 ]
 
@@ -8595,10 +8728,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.2",
  "once_cell",
  "rustix 1.1.4",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -8617,7 +8750,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "230a1b821ccbd75b185820a1f1ff7b14d21da1e442e22c0863ea5f08771a8874"
 dependencies = [
  "rustix 1.1.4",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -9187,7 +9320,7 @@ dependencies = [
  "flate2",
  "fontdb",
  "imagesize",
- "kurbo",
+ "kurbo 0.11.3",
  "log",
  "pico-args",
  "roxmltree",
@@ -9260,6 +9393,32 @@ name = "vec_map"
 version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f1bddf1187be692e79c5ffeab891132dfb0f236ed36a43c7ed39f1165ee20191"
+
+[[package]]
+name = "vello_common"
+version = "0.0.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1bd1a4c633ce09e7d713df1a6e036644a125e15e0c169cfb5180ddf5836ca04b"
+dependencies = [
+ "bytemuck",
+ "fearless_simd",
+ "hashbrown 0.16.1",
+ "log",
+ "peniko",
+ "skrifa 0.40.0",
+ "smallvec",
+]
+
+[[package]]
+name = "vello_cpu"
+version = "0.0.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0162bfe48aabf6a9fdcd401b628c7d9f260c2cbabb343c70a65feba6f7849edc"
+dependencies = [
+ "bytemuck",
+ "hashbrown 0.16.1",
+ "vello_common",
+]
 
 [[package]]
 name = "version_check"
@@ -9800,7 +9959,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

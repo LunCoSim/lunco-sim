@@ -28,7 +28,7 @@ fn setup_test_bench(mut commands: Commands) {
     commands.spawn(Camera2d);
 
     // Spawn the battery test entity
-    commands.spawn((
+    let bench = commands.spawn((
         BatteryTestBench,
         Name::new("Battery_Test_Bench"),
         ModelicaModel {
@@ -40,25 +40,52 @@ fn setup_test_bench(mut commands: Commands) {
             variable_name: "current".to_string(),
             value: 0.0,
         },
-        ModelicaOutput {
-            variable_name: "soc_out".to_string(),
-            ..default()
-        }
-    ));
+    )).id();
+
+    // Spawn outputs as children since Bevy doesn't allow multiple components of same type on one entity
+    commands.entity(bench).with_children(|parent| {
+        parent.spawn((
+            ModelicaOutput {
+                variable_name: "soc_out".to_string(),
+                ..default()
+            },
+            Name::new("SOC_Output"),
+        ));
+        parent.spawn((
+            ModelicaOutput {
+                variable_name: "voltage_out".to_string(),
+                ..default()
+            },
+            Name::new("Voltage_Output"),
+        ));
+    });
 }
 
 fn battery_control_ui(
     mut contexts: EguiContexts,
-    mut q_battery: Query<(&mut ModelicaInput, &ModelicaOutput, &ModelicaModel), With<BatteryTestBench>>,
+    mut q_battery: Query<(&mut ModelicaInput, &ModelicaModel, &Children), With<BatteryTestBench>>,
+    q_outputs: Query<&ModelicaOutput>,
 ) {
     let Ok(ctx) = contexts.ctx_mut() else { return; };
 
     egui::Window::new("🔋 Battery Test Bench").show(ctx, |ui| {
-        if let Some((mut input, output, model)) = q_battery.iter_mut().next() {
+        if let Some((mut input, model, children)) = q_battery.iter_mut().next() {
             ui.heading("Status");
-            ui.add(egui::ProgressBar::new(output.value as f32)
-                .text(format!("State of Charge: {:.2}%", output.value * 100.0)));
             
+            // Find specific outputs from children
+            let mut soc = 0.0;
+            let mut voltage = 0.0;
+            for child in children.iter() {
+                if let Ok(output) = q_outputs.get(child) {
+                    if output.variable_name == "soc_out" { soc = output.value; }
+                    if output.variable_name == "voltage_out" { voltage = output.value; }
+                }
+            }
+
+            ui.add(egui::ProgressBar::new(soc as f32)
+                .text(format!("State of Charge: {:.2}%", soc * 100.0)));
+            
+            ui.label(format!("Terminal Voltage: {:.2}V", voltage));
             ui.label(format!("Simulation Time: {:.2}s", model.current_time));
             
             ui.separator();
@@ -70,16 +97,13 @@ fn battery_control_ui(
             
             ui.label("Note: Positive current discharges, negative charges.");
 
-            if ui.button("Reset SOC").clicked() {
-                ui.label("Reset not yet implemented in worker.");
-            }
-
             ui.separator();
             
             ui.collapsing("Technical Details", |ui| {
                 ui.label(format!("Model: {}", model.model_name));
                 ui.label(format!("Input [current]: {:.4}", input.value));
-                ui.label(format!("Output [soc_out]: {:.4}", output.value));
+                ui.label(format!("Output [soc_out]: {:.4}", soc));
+                ui.label(format!("Output [voltage_out]: {:.4}", voltage));
             });
         } else {
             ui.label("Waiting for battery entity...");

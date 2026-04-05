@@ -7,7 +7,7 @@
 //! a dedicated background worker thread because Rumoca steppers are !Send.
 
 use bevy::prelude::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use rumoca::Compiler;
 use rumoca_sim::with_diffsol::stepper::{SimStepper, StepperOptions};
 use crossbeam_channel::{unbounded, Receiver, Sender};
@@ -32,6 +32,8 @@ impl Plugin for LunCoModelicaPlugin {
             rx: res_rx,
         })
         .register_type::<ModelicaModel>()
+        .register_type::<ModelicaInput>()
+        .register_type::<ModelicaOutput>()
         .add_systems(Update, (
             spawn_modelica_requests,
             handle_modelica_responses,
@@ -40,12 +42,12 @@ impl Plugin for LunCoModelicaPlugin {
 }
 
 #[derive(Resource)]
-struct ModelicaChannels {
-    tx: Sender<ModelicaCommand>,
+pub struct ModelicaChannels {
+    pub tx: Sender<ModelicaCommand>,
     rx: Receiver<ModelicaResult>,
 }
 
-enum ModelicaCommand {
+pub enum ModelicaCommand {
     Step {
         entity: Entity,
         model_path: String,
@@ -53,15 +55,21 @@ enum ModelicaCommand {
         inputs: Vec<(String, f64)>,
         dt: f64,
     },
+    Compile {
+        entity: Entity,
+        model_name: String,
+        source: String,
+    },
     Despawn {
         entity: Entity,
     }
 }
 
-struct ModelicaResult {
-    entity: Entity,
-    new_time: f64,
-    outputs: Vec<(String, f64)>,
+pub struct ModelicaResult {
+    pub entity: Entity,
+    pub new_time: f64,
+    pub outputs: Vec<(String, f64)>,
+    pub error: Option<String>,
 }
 
 /// The background worker that owns the !Send SimSteppers.
@@ -70,18 +78,80 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
 
     while let Ok(cmd) = rx.recv() {
         match cmd {
+            ModelicaCommand::Compile { entity, model_name, source } => {
+                info!("Compiling live Modelica source for {}...", model_name);
+                let temp_path = format!(".cache/modelica_temp_{:?}.mo", entity);
+                if let Err(e) = std::fs::write(&temp_path, &source) {
+                    let _ = tx.send(ModelicaResult {
+                        entity,
+                        new_time: 0.0,
+                        outputs: Vec::new(),
+                        error: Some(format!("Failed to write temp file: {:?}", e)),
+                    });
+                    continue;
+                }
+
+                match Compiler::new().model(&model_name).compile_file(&temp_path) {
+                    Ok(comp_res) => {
+                        match SimStepper::new(&comp_res.dae, StepperOptions::default()) {
+                            Ok(stepper) => {
+                                steppers.insert(entity, stepper);
+                                info!("Hot-reload successful for {}", model_name);
+                                let _ = tx.send(ModelicaResult {
+                                    entity,
+                                    new_time: 0.0,
+                                    outputs: Vec::new(),
+                                    error: None,
+                                });
+                            }
+                            Err(e) => {
+                                let _ = tx.send(ModelicaResult {
+                                    entity,
+                                    new_time: 0.0,
+                                    outputs: Vec::new(),
+                                    error: Some(format!("Stepper Error: {:?}", e)),
+                                });
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        let _ = tx.send(ModelicaResult {
+                            entity,
+                            new_time: 0.0,
+                            outputs: Vec::new(),
+                            error: Some(format!("Compiler Error: {:?}", e)),
+                        });
+                    }
+                }
+            }
             ModelicaCommand::Step { entity, model_path, model_name, inputs, dt } => {
                 // Ensure stepper exists
-                let stepper = steppers.entry(entity).or_insert_with(|| {
+                if !steppers.contains_key(&entity) {
                     info!("Initializing Modelica stepper for {} ({})", model_name, model_path);
-                    let comp_res = Compiler::new()
+                    let res = Compiler::new()
                         .model(&model_name)
-                        .compile_file(&model_path)
-                        .expect("Failed to compile model"); // TODO: Handle error better
+                        .compile_file(&model_path);
                     
-                    SimStepper::new(&comp_res.dae, StepperOptions::default())
-                        .expect("Failed to create stepper")
-                });
+                    match res {
+                        Ok(comp_res) => {
+                            match SimStepper::new(&comp_res.dae, StepperOptions::default()) {
+                                Ok(stepper) => {
+                                    steppers.insert(entity, stepper);
+                                }
+                                Err(e) => {
+                                    error!("Failed to create stepper: {:?}", e);
+                                    continue;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            error!("Failed to compile model: {:?}", e);
+                            continue;
+                        }
+                    }
+                }
+
+                let stepper = steppers.get_mut(&entity).unwrap();
 
                 // Apply inputs
                 for (name, val) in inputs {
@@ -105,6 +175,7 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                     entity,
                     new_time: stepper.time(),
                     outputs,
+                    error: None,
                 });
             }
             ModelicaCommand::Despawn { entity } => {
@@ -176,18 +247,40 @@ fn handle_modelica_responses(
     channels: Res<ModelicaChannels>,
     mut q_models: Query<&mut ModelicaModel>,
     mut q_outputs: Query<(&mut ModelicaOutput, Option<&ChildOf>)>,
+    mut workbench_state: ResMut<ui::WorkbenchState>,
 ) {
     while let Ok(result) = channels.rx.try_recv() {
+        if result.error.is_some() {
+            workbench_state.compilation_error = result.error;
+        } else {
+            // Clear error if we got a successful result for the selected entity
+            if workbench_state.selected_entity == Some(result.entity) {
+                workbench_state.compilation_error = None;
+            }
+        }
+
         if let Ok(mut model) = q_models.get_mut(result.entity) {
             model.current_time = result.new_time;
             model.is_stepping = false;
+
+            // Update workbench history if this is the selected entity
+            if workbench_state.selected_entity == Some(result.entity) {
+                let time = result.new_time;
+                let max_history = workbench_state.max_history;
+                for (name, val) in &result.outputs {
+                    let history = workbench_state.history.entry(name.clone()).or_insert_with(|| VecDeque::with_capacity(max_history));
+                    history.push_back([time, *val]);
+                    if history.len() > max_history {
+                        history.pop_front();
+                    }
+                }
+            }
 
             for (name, val) in result.outputs {
                 for (mut output, child_of) in q_outputs.iter_mut() {
                     let is_target = if let Some(child_of) = child_of {
                         child_of.parent() == result.entity && output.variable_name == name
                     } else {
-                        // TODO: Also check if output is on the entity itself
                         false 
                     };
 
