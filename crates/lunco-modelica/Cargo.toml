@@ -1,0 +1,20 @@
+[package]
+name = "lunco-modelica"
+version = "0.1.0"
+edition = "2021"
+description = "Native Modelica simulation integration for LunCoSim using Rumoca"
+
+[dependencies]
+bevy.workspace = true
+bevy_egui.workspace = true
+rumoca = { git = "https://github.com/cognipilot/rumoca", branch = "main" }
+rumoca-sim = { git = "https://github.com/cognipilot/rumoca", branch = "main" }
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+crossbeam-channel = "0.5"
+tokio = { version = "1.0", features = ["full"] }
+futures-lite = "2.3.0"
+log = "0.4"
+lunco-core = { path = "../lunco-core" }
+lunco-hardware = { path = "../lunco-hardware" }

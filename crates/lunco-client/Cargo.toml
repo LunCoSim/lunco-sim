@@ -22,6 +22,7 @@ lunco-obc = { path = "../lunco-obc" }
 lunco-attributes = { path = "../lunco-attributes" }
 lunco-avatar = { path = "../lunco-avatar" }
 lunco-celestial = { path = "../lunco-celestial" }
+lunco-modelica = { path = "../lunco-modelica" }
 bevy_egui = { workspace = true }
 bevy-inspector-egui = { workspace = true }
 

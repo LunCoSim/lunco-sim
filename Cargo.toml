@@ -11,9 +11,16 @@ members = [
     "crates/lunco-celestial",
     "crates/lunco-hardware",
     "crates/lunco-mobility",
-    "crates/lunco-robotics"
+    "crates/lunco-robotics",
+    "crates/lunco-modelica"
 ]
 resolver = "2"
+
+[patch.crates-io]
+# Force scnr2 related crates to 0.3.3
+scnr2 = { git = "https://github.com/jsinger67/scnr2", tag = "0.3.3" }
+scnr2_generate = { git = "https://github.com/jsinger67/scnr2", tag = "0.3.3" }
+scnr2_macro = { git = "https://github.com/jsinger67/scnr2", tag = "0.3.3" }
 
 [workspace.package]
 description = "Initialize multi-crate workspace architecture for vessel control simulation"
