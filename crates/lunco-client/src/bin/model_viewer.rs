@@ -3,9 +3,12 @@ use avian3d::prelude::*;
 use lunco_usd::{UsdPlugins, UsdStageAsset, UsdPrimPath};
 
 fn main() {
-    println!("--- LunCo Model Viewer (Asset Server Driven) ---");
+    println!("--- LunCo Model Viewer (Composition Refactored) ---");
     App::new()
-        .add_plugins(DefaultPlugins)
+        .add_plugins(DefaultPlugins.set(AssetPlugin {
+            file_path: "../../assets".to_string(),
+            ..default()
+        }))
         .add_plugins(PhysicsPlugins::default())
         .add_plugins(UsdPlugins)
         .add_systems(Startup, setup)
@@ -67,7 +70,7 @@ fn setup(
 
     commands.insert_resource(ModelTimer(Timer::from_seconds(5.0, TimerMode::Repeating)));
     
-    // ASSET SERVER LOADING
+    // LOAD MISSIONS
     let orion_handle = asset_server.load("vessels/spacecrafts/orion/orion.usda");
     let rucheyok_handle = asset_server.load("vessels/rovers/rucheyok/rucheyok.usda");
 
@@ -76,16 +79,16 @@ fn setup(
         rucheyok: rucheyok_handle.clone(),
     });
 
-    // Create the initial root entities. 
-    // The UsdBevyPlugin will see these and start the recursive sync as soon as assets load!
     commands.spawn((
         Name::new("Orion Root"),
         ModelRoot,
         UsdPrimPath {
             stage_handle: orion_handle,
-            path: "/Orion".to_string(),
+            path: "/".to_string(),
         },
         Visibility::Visible,
+        InheritedVisibility::default(),
+        ViewVisibility::default(),
         Transform::default(),
     ));
 
@@ -94,9 +97,11 @@ fn setup(
         ModelRoot,
         UsdPrimPath {
             stage_handle: rucheyok_handle,
-            path: "/Rucheyok".to_string(),
+            path: "/".to_string(),
         },
         Visibility::Hidden,
+        InheritedVisibility::default(),
+        ViewVisibility::default(),
         Transform::default(),
     ));
 }
@@ -121,7 +126,6 @@ fn model_timer(
                 Visibility::Visible => Visibility::Hidden,
                 _ => Visibility::Visible,
             };
-            
             if *visibility == Visibility::Visible {
                 info!("SWITCH: Now showing {}", name);
             }

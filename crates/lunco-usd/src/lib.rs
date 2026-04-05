@@ -1,9 +1,9 @@
 use bevy::prelude::*;
-pub use lunco_usd_bevy::{UsdBevyPlugin, UsdPrimPath, UsdStageResource, UsdStageAsset};
+pub use lunco_usd_bevy::{UsdBevyPlugin, UsdPrimPath, UsdStageAsset};
 pub use lunco_usd_avian::UsdAvianPlugin;
 pub use lunco_usd_physx::UsdPhysxPlugin;
 
-use openusd::sdf::{AbstractData, Path as SdfPath, Value};
+use openusd::sdf::{Path as SdfPath};
 use lunco_core::Spacecraft;
 
 /// A bundle plugin that adds all modular USD integration layers.

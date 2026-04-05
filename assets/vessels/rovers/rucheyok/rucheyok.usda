@@ -1,39 +1,61 @@
 #usda 1.0
+(
+    defaultPrim = "Rucheyok"
+)
 
 def Xform "Rucheyok"
 {
     def Cube "Chassis"
     {
-        float3 xformOp:scale = (15.0, 4.0, 20.0)
+        double3 xformOp:scale = (15.0, 4.0, 20.0)
         double3 xformOp:translate = (0, 2.0, 0)
         color3f primvars:displayColor = (0.2, 0.5, 0.8)
     }
 
-    def Cylinder "Wheel_FL"
+    def "Wheel_FL" (
+        prepend references = </Rucheyok/Prototypes/Wheel>
+    )
     {
-        float3 xformOp:scale = (4.0, 2.0, 4.0)
-        double3 xformOp:translate = (-8.0, 0, 8.0)
-        color3f primvars:displayColor = (0.0, 0.0, 0.0)
+        double3 xformOp:translate = (-10.0, 0, 10.0)
+        float3 xformOp:rotateXYZ = (90, 0, 0) # Rotate to vertical
+        color3f primvars:displayColor = (0.0, 1.0, 0.0)
     }
 
-    def Cylinder "Wheel_FR"
+    def "Wheel_FR" (
+        prepend references = </Rucheyok/Prototypes/Wheel>
+    )
     {
-        float3 xformOp:scale = (4.0, 2.0, 4.0)
-        double3 xformOp:translate = (8.0, 0, 8.0)
-        color3f primvars:displayColor = (0.0, 0.0, 0.0)
+        double3 xformOp:translate = (10.0, 0, 10.0)
+        float3 xformOp:rotateXYZ = (90, 0, 0) # Rotate to vertical
+        color3f primvars:displayColor = (0.0, 1.0, 0.0)
     }
 
-    def Cylinder "Wheel_RL"
+    def "Wheel_RL" (
+        prepend references = </Rucheyok/Prototypes/Wheel>
+    )
     {
-        float3 xformOp:scale = (4.0, 2.0, 4.0)
-        double3 xformOp:translate = (-8.0, 0, -8.0)
-        color3f primvars:displayColor = (0.0, 0.0, 0.0)
+        double3 xformOp:translate = (-10.0, 0, -10.0)
+        float3 xformOp:rotateXYZ = (90, 0, 0) # Rotate to vertical
+        color3f primvars:displayColor = (1.0, 0.0, 0.0)
     }
 
-    def Cylinder "Wheel_RR"
+    def "Wheel_RR" (
+        prepend references = </Rucheyok/Prototypes/Wheel>
+    )
     {
-        float3 xformOp:scale = (4.0, 2.0, 4.0)
-        double3 xformOp:translate = (8.0, 0, -8.0)
-        color3f primvars:displayColor = (0.0, 0.0, 0.0)
+        double3 xformOp:translate = (10.0, 0, -10.0)
+        float3 xformOp:rotateXYZ = (90, 0, 0) # Rotate to vertical
+        color3f primvars:displayColor = (1.0, 0.0, 0.0)
+    }
+
+    def Scope "Prototypes" (
+        active = false
+    )
+    {
+        def Cylinder "Wheel"
+        {
+            double3 xformOp:scale = (4.0, 2.0, 4.0)
+            color3f primvars:displayColor = (0.5, 0.5, 0.5)
+        }
     }
 }

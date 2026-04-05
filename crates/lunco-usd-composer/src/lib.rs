@@ -1,9 +1,8 @@
 use openusd::usda::TextReader;
-use openusd::sdf::{self, schema::{FieldKey, ChildrenKey}, AbstractData, Value};
-use std::collections::{HashMap, HashSet};
+use openusd::sdf::{self, Value};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use anyhow::{bail, Context, Result};
-use tracing::{debug, info};
+use anyhow::{bail, Result};
 
 /// The `UsdComposer` is responsible for high-level USD operations like
 /// composition, reference resolution, and stage flattening.
@@ -26,11 +25,11 @@ impl UsdComposer {
         processed: &mut HashSet<PathBuf>
     ) -> Result<()> {
         let prim_paths: Vec<sdf::Path> = reader.data.keys().cloned().collect();
-        let mut pending_merges = Vec::new();
+        let mut pending_merges: Vec<(sdf::Path, sdf::Path, TextReader)> = Vec::new();
 
         for path in prim_paths {
             let spec = reader.data.get(&path).unwrap();
-            if let Some(Value::ReferenceListOp(list_op)) = spec.fields.get(FieldKey::References.as_str()) {
+            if let Some(Value::ReferenceListOp(list_op)) = spec.fields.get(sdf::schema::FieldKey::References.as_str()) {
                 let mut refs = list_op.explicit_items.clone();
                 refs.extend(list_op.added_items.clone());
                 refs.extend(list_op.prepended_items.clone());
@@ -40,7 +39,7 @@ impl UsdComposer {
                     let (ref_reader, source_root) = if reference.asset_path.is_empty() {
                         // INTERNAL REFERENCE
                         if reference.prim_path.is_empty() { continue; }
-                        (reader.clone(), reference.prim_path.clone())
+                        ((*reader).clone(), reference.prim_path.clone())
                     } else {
                         // EXTERNAL REFERENCE
                         let ref_path = if Path::new(&reference.asset_path).is_absolute() {
@@ -57,7 +56,7 @@ impl UsdComposer {
                         Self::flatten_recursive(&mut sub_reader, ref_base_dir, processed)?;
 
                         let root = if reference.prim_path.is_empty() {
-                            sub_reader.get_default_prim().ok_or_else(|| {
+                            Self::get_default_prim(&sub_reader).ok_or_else(|| {
                                 anyhow::anyhow!("No defaultPrim in referenced file {}", reference.asset_path)
                             })?
                         } else {
@@ -73,7 +72,7 @@ impl UsdComposer {
 
         // Apply merges: Weak-merge strategy (Local opinions win)
         for (target_root, source_root, ref_reader) in pending_merges {
-            let child_key = ChildrenKey::PrimChildren.as_str();
+            let child_key = sdf::schema::ChildrenKey::PrimChildren.as_str();
             
             // 1. Merge the referenced prim's attributes into the target
             if let Some(source_root_spec) = ref_reader.data.get(&source_root) {
@@ -87,13 +86,16 @@ impl UsdComposer {
                                 Vec::new()
                             };
                             for child in source_children {
-                                if !children.contains(child) { children.push(child.clone()); }
+                                if !children.contains(&child) {
+                                    children.push(child.clone());
+                                }
                             }
                             target_spec.fields.insert(child_key.to_string(), Value::TokenVec(children));
                         }
                         continue;
                     }
-                    target_spec.fields.entry(field_name.clone()).or_insert_with(|| field_value.clone());
+                    // Weak merge: Local opinions win
+                    target_spec.fields.entry(field_name.to_string()).or_insert_with(|| field_value.clone());
                 }
             }
 
@@ -111,6 +113,16 @@ impl UsdComposer {
         }
 
         Ok(())
+    }
+
+    /// Gets the defaultPrim from the reader's root spec.
+    pub fn get_default_prim(reader: &TextReader) -> Option<sdf::Path> {
+        if let Some(root_spec) = reader.data.get(&sdf::Path::abs_root()) {
+            if let Some(Value::Token(name)) = root_spec.fields.get(sdf::schema::FieldKey::DefaultPrim.as_str()) {
+                return sdf::Path::new(&name).ok();
+            }
+        }
+        None
     }
 
     /// Remaps a path from a referenced layer's namespace to the current stage's namespace.

@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 use avian3d::prelude::*;
-pub use lunco_usd_bevy::{UsdPrimPath, UsdStageResource, UsdStageAsset};
+pub use lunco_usd_bevy::{UsdPrimPath, UsdStageAsset};
 use openusd::sdf::{AbstractData, Path as SdfPath, Value};
 
 pub struct UsdAvianPlugin;

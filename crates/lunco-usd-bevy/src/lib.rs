@@ -36,7 +36,6 @@ impl AssetLoader for UsdLoader {
         _settings: &Self::Settings,
         load_context: &mut LoadContext<'_>,
     ) -> Result<Self::Asset, Self::Error> {
-        use futures_lite::AsyncReadExt;
         let mut bytes = Vec::new();
         reader.read_to_end(&mut bytes).await?;
         let data = String::from_utf8(bytes)?;
@@ -45,17 +44,11 @@ impl AssetLoader for UsdLoader {
         let data_map = parser.parse().map_err(|e| anyhow::anyhow!("USD Parse Error: {}", e))?;
         let mut reader = TextReader::from_data(data_map);
 
-        // RESOLVE REFERENCES (Now using the dedicated Composer crate)
+        // RESOLVE REFERENCES
         if let Some(parent) = load_context.path().path().parent() {
             let asset_root = std::path::Path::new("assets");
             let full_parent = asset_root.join(parent);
-            
-            let base_dir = if asset_root.exists() {
-                full_parent
-            } else {
-                parent.to_path_buf()
-            };
-
+            let base_dir = if asset_root.exists() { full_parent } else { parent.to_path_buf() };
             UsdComposer::flatten(&mut reader, &base_dir).map_err(|e| anyhow::anyhow!("USD Composition Error: {}", e))?;
         }
 
@@ -85,12 +78,6 @@ impl Default for UsdPrimPath {
     }
 }
 
-/// Resource that maps Stage Entities to their Handles for lookup
-#[derive(Component)]
-pub struct UsdStageResource {
-    pub handle: Handle<UsdStageAsset>,
-}
-
 #[derive(Component)]
 pub struct UsdVisualSynced;
 
@@ -109,18 +96,35 @@ fn sync_usd_visuals(
 
         // 1. Detect Visual Mesh
         let mut mesh_handle = None;
+        let base_rotation = Quat::IDENTITY;
         if let Ok(val) = reader.get(&sdf_path, "typeName") {
             if let Value::Token(ty) = &*val {
                 match ty.as_str() {
-                    "Cube" => mesh_handle = Some(meshes.add(Cuboid::default())),
-                    "Sphere" => mesh_handle = Some(meshes.add(Sphere::new(1.0).mesh().ico(32).unwrap())),
-                    "Cylinder" => mesh_handle = Some(meshes.add(Cylinder::default())),
+                    "Cube" => {
+                        // Use Bevy default size 1.0
+                        let size = reader.get_prim_attribute_value::<f64>(&sdf_path, "size").unwrap_or(1.0) as f32;
+                        mesh_handle = Some(meshes.add(Cuboid::from_size(Vec3::splat(size))));
+                    }
+                    "Sphere" => {
+                        // Use Bevy default radius 0.5
+                        let radius = reader.get_prim_attribute_value::<f64>(&sdf_path, "radius").unwrap_or(0.5) as f32;
+                        mesh_handle = Some(meshes.add(Sphere::new(radius).mesh().ico(32).unwrap()));
+                    }
+                    "Cylinder" => {
+                        // Use Bevy default radius 0.5, height 1.0
+                        let radius = reader.get_prim_attribute_value::<f64>(&sdf_path, "radius").unwrap_or(0.5) as f32;
+                        let height = reader.get_prim_attribute_value::<f64>(&sdf_path, "height").unwrap_or(1.0) as f32;
+                        mesh_handle = Some(meshes.add(Cylinder::new(radius, height)));
+                        
+                        // Note: USD default axis is Z, but we default to Y-up to match Bevy
+                        // and common asset authoring expectations in this project.
+                    }
                     _ => {}
                 }
             }
         }
 
-        // 2. Map Color (Explicit Precision Handling)
+        // 2. Map Color
         let mut color = Color::WHITE;
         if let Some(v) = get_attribute_as_vec3(&mut reader, &sdf_path, "primvars:displayColor") {
             color = Color::srgb(v.x, v.y, v.z);
@@ -133,36 +137,26 @@ fn sync_usd_visuals(
             ));
         }
 
-        // 3. Map Transform (Explicit Precision Handling)
+        // 3. Map Transform
         let mut transform = Transform::default();
-        
-        // Try Scale
         if let Some(v) = get_attribute_as_vec3(&mut reader, &sdf_path, "xformOp:scale")
             .or_else(|| get_attribute_as_vec3(&mut reader, &sdf_path, "scale")) 
         {
             transform.scale = v;
         }
-
-        // Try Translate
         if let Some(v) = get_attribute_as_vec3(&mut reader, &sdf_path, "xformOp:translate")
             .or_else(|| get_attribute_as_vec3(&mut reader, &sdf_path, "translate"))
         {
             transform.translation = v;
         }
-
-        // Try Rotate (XYZ Degrees to Radians)
         if let Some(v) = get_attribute_as_vec3(&mut reader, &sdf_path, "xformOp:rotateXYZ")
             .or_else(|| get_attribute_as_vec3(&mut reader, &sdf_path, "rotate"))
         {
-            transform.rotation = Quat::from_euler(
-                EulerRot::XYZ, 
-                v.x.to_radians(), 
-                v.y.to_radians(), 
-                v.z.to_radians()
-            );
+            transform.rotation = Quat::from_euler(EulerRot::XYZ, v.x.to_radians(), v.y.to_radians(), v.z.to_radians()) * base_rotation;
+        } else {
+            transform.rotation = base_rotation;
         }
 
-        // Ensure visibility stack exists
         if existing_vis.is_none() {
             commands.entity(entity).insert(Visibility::Inherited);
         }
@@ -192,13 +186,10 @@ fn sync_usd_visuals(
     }
 }
 
-/// Helper to explicitly check for f32 and f64 versions of a Vec3-like attribute
 fn get_attribute_as_vec3(reader: &mut TextReader, path: &SdfPath, attr: &str) -> Option<Vec3> {
-    // 1. Try f32 (float3)
     if let Some(v) = reader.get_prim_attribute_value::<Vec<f32>>(path, attr) {
         if v.len() >= 3 { return Some(Vec3::new(v[0], v[1], v[2])); }
     }
-    // 2. Try f64 (double3)
     if let Some(v) = reader.get_prim_attribute_value::<Vec<f64>>(path, attr) {
         if v.len() >= 3 { return Some(Vec3::new(v[0] as f32, v[1] as f32, v[2] as f32)); }
     }
