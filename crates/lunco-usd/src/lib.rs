@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 pub use lunco_usd_bevy::{UsdBevyPlugin, UsdPrimPath, UsdStageAsset};
 pub use lunco_usd_avian::UsdAvianPlugin;
-pub use lunco_usd_physx::UsdPhysxPlugin;
+pub use lunco_usd_sim::UsdSimPlugin;
 
 use openusd::sdf::{Path as SdfPath};
 use lunco_core::Spacecraft;
@@ -69,4 +69,5 @@ fn on_add_lunco_prim(
         commands.entity(entity).insert(spacecraft);
         info!("Mapped LunCo metadata for {}", prim_path.path);
     }
+}
 }

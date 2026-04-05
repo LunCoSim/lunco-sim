@@ -8,7 +8,7 @@ bevy.workspace = true
 openusd = "0.1.4"
 lunco-usd-bevy = { path = "../lunco-usd-bevy" }
 lunco-usd-avian = { path = "../lunco-usd-avian" }
-lunco-usd-physx = { path = "../lunco-usd-physx" }
+lunco-usd-sim = { path = "../lunco-usd-sim" }
 lunco-core = { path = "../lunco-core" }
 serde = { version = "1.0", features = ["derive"] }
 tracing = "0.1"

@@ -1,32 +1,26 @@
 # lunco-usd
 
-The **Engineering Ontology** bridge for LunCoSim, mapping custom OpenUSD attributes to simulation-specific components.
+The **High-Level Orchestrator and Engineering Metadata** bridge for USD.
 
 ## Rationale
-While `lunco-usd-avian` handles standard physics, this crate focuses on the **Engineering Metadata** required for LunCoSim. It allows us to use OpenUSD as the "Single Source of Truth" for vehicle configurations (Orion, Rovers, etc.). By authoring attributes like `ephemeris_id` or `battery_capacity` in a `.usda` file, the simulation automatically populates the correct Bevy components on load.
+This crate acts as the central integration hub for all USD-related modules. It provides the `UsdPlugins` bundle, which registers the visual, physics, and simulation layers in the correct order.
+
+Additionally, this crate maps **LunCo-specific Engineering Metadata** (`lunco:*` namespace). While standard USD schemas handle physics and visuals, LunCo rovers require simulation-only metadata like Ephemeris IDs, hit radii for sensors, and telemetry port mappings that aren't defined in standard OpenUSD.
 
 ## Key Functions & Features
 
-### 1. `LunCoUsdPlugin`
-The main plugin that registers observers for custom LunCo-specific USD attributes.
+### 1. `UsdPlugins`
+A convenience bundle that adds all modular USD layers:
+*   `UsdBevyPlugin`: Visuals and Transforms.
+*   `UsdAvianPlugin`: Standard OpenUSD Physics.
+*   `UsdSimPlugin`: NVIDIA vehicle schemas and simulation behavior intercepts.
+*   `UsdLunCoPlugin`: Engineering metadata mapping.
 
-### 2. Spacecraft Metadata Mapping
-Automatically maps attributes in the `lunco:` namespace to the `Spacecraft` component in `lunco-core`:
-*   `lunco:name` -> `Spacecraft.name`
-*   `lunco:ephemeris_id` -> `Spacecraft.ephemeris_id`
-*   `lunco:reference_id` -> `Spacecraft.reference_id`
-*   `lunco:hit_radius_m` -> `Spacecraft.hit_radius_m`
-*   `lunco:user_visible` -> `Spacecraft.user_visible`
+### 2. `UsdLunCoPlugin` (Metadata Mapping)
+Maps attributes in the `lunco:` namespace to Bevy components:
+*   `lunco:name` -> `Spacecraft::name`
+*   `lunco:ephemeris_id` -> `Spacecraft::ephemeris_id`
+*   `lunco:hit_radius_m` -> `Spacecraft::hit_radius_m`
 
-### 3. Modular Integration
-This crate depends on `lunco-usd-bevy` for the core `UsdPrimPath` component, ensuring that metadata mapping and physics mapping happen in parallel through the same observer pattern.
-
-## Usage Example (USDA)
-```usda
-def Xform "Orion" {
-    custom string lunco:name = "Orion Capsule"
-    custom int lunco:ephemeris_id = -1024
-    custom float lunco:hit_radius_m = 1000.0
-}
-```
-When this USD Prim is loaded into Bevy and tagged with `UsdPrimPath`, the `LunCoUsdPlugin` will automatically insert a `Spacecraft` component with the values above.
+## Architecture
+This crate ensures that standard-compliant USD models are enriched with the engineering data required for mission-critical lunar simulation without polluting standard visual or physics schemas.
