@@ -169,23 +169,25 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
 
                 let stepper = steppers.get_mut(&entity).unwrap();
 
-                // Apply inputs with "Soft-Start" / Slew-limiting
-                // This prevents the solver from crashing on sudden input jumps
-                for (name, target_val) in inputs {
-                    let current_val = stepper.get(&name).unwrap_or(target_val);
-                    let diff = target_val - current_val;
-                    let max_delta = 10.0; // Max 10 units per step slew rate
-                    let smoothed_val = if diff.abs() > max_delta {
-                        current_val + max_delta * diff.signum()
-                    } else {
-                        target_val
-                    };
-                    let _ = stepper.set_input(&name, smoothed_val);
+                // Apply inputs directly (Smoothing is now handled in the .mo model)
+                for (name, val) in inputs {
+                    let _ = stepper.set_input(&name, val);
                 }
 
-                // Step with stricter dt cap for stability
+                // Step with substapping for higher internal precision
+                // We perform 3 smaller steps per bevy frame to help the BDF solver stay stable
                 let capped_dt = dt.min(0.033); 
-                if let Err(e) = stepper.step(capped_dt) {
+                let sub_dt = capped_dt / 3.0;
+                
+                let mut step_err = None;
+                for _ in 0..3 {
+                    if let Err(e) = stepper.step(sub_dt) {
+                        step_err = Some(e);
+                        break;
+                    }
+                }
+
+                if let Some(e) = step_err {
                     error!("Modelica step failed for entity {:?}: {:?}. Resetting stepper.", entity, e);
                     // Send error result
                     let _ = tx.send(ModelicaResult {

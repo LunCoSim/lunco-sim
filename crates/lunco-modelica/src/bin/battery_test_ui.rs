@@ -37,7 +37,7 @@ fn setup_test_bench(mut commands: Commands) {
             ..default()
         },
         ModelicaInput {
-            variable_name: "current".to_string(),
+            variable_name: "current_in".to_string(),
             value: 0.0,
         },
     )).id();
