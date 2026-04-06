@@ -26,6 +26,7 @@ impl Plugin for ModelicaInspectorPlugin {
 pub struct WorkbenchState {
     pub current_path: PathBuf,
     pub editor_buffer: String,
+    pub selected_model_name: String,
     pub selected_entity: Option<Entity>,
     pub compilation_error: Option<String>,
     /// History of variables: Entity -> VariableName -> DataPoints
@@ -46,6 +47,7 @@ impl Default for WorkbenchState {
         Self {
             current_path: PathBuf::from("assets/models"),
             editor_buffer,
+            selected_model_name: "Battery".to_string(),
             selected_entity: None,
             compilation_error: None,
             history: HashMap::new(),
@@ -97,12 +99,11 @@ fn show_model_editor(
                     if let (Some(entity), Some(channels)) = (state.selected_entity, &channels) {
                         let _ = channels.tx.send(ModelicaCommand::Compile {
                             entity,
-                            model_name: "Battery".to_string(),
+                            model_name: state.selected_model_name.clone(),
                             source: state.editor_buffer.clone(),
                         });
                     }
                 }
-                
                 ui.add_space(20.0);
 
                 if state.compilation_error.is_some() {
@@ -179,7 +180,40 @@ fn show_telemetry(
 
                     ui.separator();
 
-                    ui.label("Controls (Inputs):");
+                    ui.horizontal(|ui| {
+                        ui.label("Parameters (Live Tuning):");
+                        ui.add_space(ui.available_width() - 180.0);
+                        if ui.button("Apply Params").on_hover_text("Re-init stepper with new parameters").clicked() {
+                            if let Some(channels) = &channels {
+                                let params: Vec<(String, f64)> = model.parameters.iter().map(|(k, v)| (k.clone(), *v)).collect();
+                                let _ = channels.tx.send(ModelicaCommand::UpdateParameters {
+                                    entity,
+                                    model_path: model.model_path.clone(),
+                                    model_name: model.model_name.clone(),
+                                    parameters: params,
+                                });
+                            }
+                        }
+                    });
+
+                    egui::ScrollArea::vertical().id_salt("params_scroll").max_height(100.0).show(ui, |ui| {
+                        let mut param_keys: Vec<_> = model.parameters.keys().cloned().collect();
+                        param_keys.sort();
+                        for key in param_keys {
+                            ui.horizontal(|ui| {
+                                ui.label(format!("{}:", key));
+                                let mut val = *model.parameters.get(&key).unwrap();
+                                if ui.add(egui::DragValue::new(&mut val).speed(0.01)).changed() {
+                                    model.parameters.insert(key, val);
+                                }
+                            });
+                        }
+                        if model.parameters.is_empty() {
+                            ui.label("No parameters defined. Edit .mo to add parameters.");
+                        }
+                    });
+
+                    ui.separator();
                     egui::ScrollArea::vertical().id_salt("inputs_scroll").max_height(150.0).show(ui, |ui| {
                         if let Ok(mut input) = q_inputs.get_mut(entity) {
                             ui.horizontal(|ui| {
@@ -200,24 +234,43 @@ fn show_telemetry(
                     });
 
                     ui.separator();
-                    ui.label("Active Variables (Outputs):");
+                    ui.label("Variables (Toggle to Plot):");
                     
                     egui::ScrollArea::vertical().id_salt("telemetry_scroll").show(ui, |ui| {
-                        for output in q_outputs.iter() {
+                        // Pre-collect to avoid borrow checker conflicts
+                        let var_names = if let Some(h) = state.history.get(&entity) {
+                            let mut names: Vec<_> = h.keys().cloned().collect();
+                            names.sort();
+                            names
+                        } else {
+                            Vec::new()
+                        };
+
+                        for name in var_names {
                             ui.horizontal(|ui| {
-                                let mut is_plotted = state.plotted_variables.contains(&output.variable_name);
+                                let mut is_plotted = state.plotted_variables.contains(&name);
                                 if ui.checkbox(&mut is_plotted, "").changed() {
                                     if is_plotted {
-                                        state.plotted_variables.insert(output.variable_name.clone());
+                                        state.plotted_variables.insert(name.clone());
                                     } else {
-                                        state.plotted_variables.remove(&output.variable_name);
+                                        state.plotted_variables.remove(&name);
                                     }
                                 }
-                                ui.label(format!("{}:", output.variable_name));
-                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                    ui.monospace(format!("{:.4}", output.value));
-                                });
+                                ui.label(format!("{}:", name));
+                                
+                                if let Some(entity_history) = state.history.get(&entity) {
+                                    if let Some(history) = entity_history.get(&name) {
+                                        if let Some([_, last_val]) = history.back() {
+                                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                                ui.monospace(format!("{:.4}", last_val));
+                                            });
+                                        }
+                                    }
+                                }
                             });
+                        }
+                        if state.history.get(&entity).is_none() {
+                            ui.label("Waiting for data...");
                         }
                     });
                 }
@@ -327,6 +380,7 @@ fn render_browser(ui: &mut egui::Ui, state: &mut WorkbenchState) {
                 if ui.link(format!("📄 {}", name)).clicked() {
                     if let Ok(content) = std::fs::read_to_string(&path) {
                         state.editor_buffer = content;
+                        state.selected_model_name = name.trim_end_matches(".mo").to_string();
                     }
                 }
             }

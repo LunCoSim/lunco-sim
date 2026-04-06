@@ -34,6 +34,14 @@ fn setup_test_bench(mut commands: Commands) {
         ModelicaModel {
             model_path: "assets/models/Battery.mo".to_string(),
             model_name: "Battery".to_string(),
+            parameters: {
+                let mut p = std::collections::HashMap::new();
+                p.insert("capacity".to_string(), 1.0);
+                p.insert("voltage_nom".to_string(), 12.0);
+                p.insert("R_internal".to_string(), 0.01);
+                p.insert("T_filter".to_string(), 0.1);
+                p
+            },
             ..default()
         },
         ModelicaInput {

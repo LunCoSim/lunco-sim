@@ -156,7 +156,14 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
             }
             ModelicaCommand::Compile { entity, model_name, source } => {
                 info!("Compiling live Modelica source for {}...", model_name);
-                let temp_path = format!(".cache/modelica_temp_{:?}.mo", entity);
+                
+                // Create entity-specific isolation directory to avoid "Duplicate class" errors
+                let temp_dir = format!(".cache/modelica/{:?}", entity);
+                if let Err(e) = std::fs::create_dir_all(&temp_dir) {
+                    error!("Failed to create temp directory {}: {:?}", temp_dir, e);
+                }
+                let temp_path = format!("{}/model.mo", temp_dir);
+
                 if let Err(e) = std::fs::write(&temp_path, &source) {
                     let _ = tx.send(ModelicaResult {
                         entity,
@@ -312,6 +319,8 @@ pub struct ModelicaModel {
     pub last_step_time: f64,
     /// If true, the simulation will not propagate.
     pub paused: bool,
+    /// Live overrides for Modelica parameters.
+    pub parameters: HashMap<String, f64>,
     #[reflect(ignore)]
     pub is_stepping: bool,
 }
