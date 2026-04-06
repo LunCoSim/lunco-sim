@@ -40,6 +40,7 @@ pub fn get_absolute_pos_in_root_double_ghost_aware<F: QueryFilter>(
                 if let Ok((_p_cell, p_tf)) = q_spatial.get(parent) {
                     current_tf.translation = p_tf.translation + p_tf.rotation * current_tf.translation;
                     current_tf.rotation = p_tf.rotation * current_tf.rotation;
+                    current_cell = *_p_cell;
                     current_entity = parent;
                 } else { 
                     total_pos += current_tf.translation.as_dvec3();

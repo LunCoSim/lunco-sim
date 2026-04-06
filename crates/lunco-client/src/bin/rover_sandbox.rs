@@ -163,7 +163,7 @@ fn setup_sandbox(
         Name::new("Rovers Root"),
     )).set_parent_in_place(grid).id();
 
-    let joint_skid = rover::spawn_joint_rover(
+    let _joint_skid = rover::spawn_joint_rover(
         &mut commands, 
         &mut meshes,
         &mut materials,

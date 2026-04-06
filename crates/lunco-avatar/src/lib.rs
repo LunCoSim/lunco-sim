@@ -468,7 +468,7 @@ fn avatar_transition_system(
 
         let end_rot = Quat::from_euler(EulerRot::YXZ, target_heading + trans.end_yaw, trans.end_pitch, 0.0);
         let end_offset_solar = end_rot.mul_vec3(Vec3::Z).as_dvec3() * trans.end_dist;
-        let end_pos_solar = target_abs_pos + end_offset_solar;
+        let end_pos_solar = target_abs_pos + end_offset_solar + Vec3::Y.as_dvec3() * trans.end_vertical_offset as f64;
 
         let current_pos_solar = trans.start_pos_solar.lerp(end_pos_solar, ease_t);
         let current_rot = trans.start_rot.slerp(end_rot, ease_t as f32);
@@ -707,11 +707,20 @@ fn on_possess_command(
         let start_pos = lunco_core::coords::get_absolute_pos_in_root_double_ghost_aware(
             avatar_ent, cam_cell, cam_tf, &q_parents, &q_grids, &q_spatial_abs,
         );
+        let target_pos = lunco_core::coords::get_absolute_pos_in_root_double_ghost_aware(
+            msg.target, &CellCoord::default(), &Transform::default(), &q_parents, &q_grids, &q_spatial_abs,
+        );
+        
+        let diff = start_pos - target_pos;
+        let mut diff_fwd = diff; diff_fwd.y = 0.0;
+        let visual_yaw = if diff_fwd.length_squared() > 0.001 { diff_fwd.x.atan2(diff_fwd.z) } else { 0.0 };
+        let mut rel_yaw = visual_yaw as f32;
+        if let Ok((_cell, tf)) = q_spatial_abs.get(msg.target) {
+            let mut target_fwd = tf.rotation.mul_vec3(Vec3::Z); target_fwd.y = 0.0;
+            let target_heading = if target_fwd.length_squared() > 0.001 { target_fwd.x.atan2(target_fwd.z) } else { 0.0 };
+            rel_yaw = (visual_yaw - target_heading as f64) as f32;
+        }
 
-        // Chase camera tuned defaults:
-        // - pitch: -0.25 (slightly above, looking down at vehicle)
-        // - vertical_offset: 2.0 (above rover center-of-gravity)
-        // - damping: 0.05 (snappy, responsive follow)
         commands.entity(avatar_ent)
             .remove::<ObserverBehavior>()
             .remove::<TransitionBehavior>()
@@ -723,7 +732,7 @@ fn on_possess_command(
                     start_rot: cam_tf.rotation,
                     end_dist: distance,
                     end_pitch: -0.25,
-                    end_yaw: 0.0,
+                    end_yaw: rel_yaw,
                     end_vertical_offset: 2.0,
                     end_damping: 0.05,
                     end_mode: ObserverMode::Chase,
