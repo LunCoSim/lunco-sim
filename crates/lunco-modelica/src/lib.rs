@@ -172,14 +172,17 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
 
                 // Step
                 if let Err(e) = stepper.step(dt) {
-                    error!("Modelica step failed for entity {:?}: {:?}", entity, e);
+                    error!("Modelica step failed for entity {:?}: {:?}. Resetting stepper.", entity, e);
+                    // Send error result
                     let _ = tx.send(ModelicaResult {
                         entity,
                         new_time: stepper.time(),
                         outputs: Vec::new(),
-                        error: Some(format!("Step Error: {:?}", e)),
+                        error: Some(format!("Solver Error: {:?}. Stepper has been reset.", e)),
                         is_new_model: false,
                     });
+                    // DROP broken stepper so it's re-initialized on next request
+                    steppers.remove(&entity);
                     continue;
                 }
 

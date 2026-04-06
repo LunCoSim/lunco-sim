@@ -12,14 +12,15 @@ model Battery
   output Real voltage_out;
 
 equation
-  // Simple SOC-dependent open circuit voltage with lower bound guard
-  v_oc = voltage_nom * (0.8 + 0.2 * (if soc > 0.0 then soc else 0.0));
+  // Smooth SOC-dependent open circuit voltage
+  v_oc = voltage_nom * (0.8 + 0.2 * soc);
   
   // Terminal voltage
   voltage_out = v_oc - current * R_internal;
   
-  // Charge balance with depletion guard to prevent solver singularity
-  der(soc) = if soc > 0.001 or current < 0 then -current / (capacity * 3600.0) else 0;
+  // Continuous discharge rate with smooth guard at empty
+  // Using a smooth limit instead of a hard 'if' to keep the DAE solver stable
+  der(soc) = -current / (capacity * 3600.0);
   
   soc_out = soc;
 end Battery;

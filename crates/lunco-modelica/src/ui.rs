@@ -155,8 +155,11 @@ fn show_model_editor(
                 let space = ui.available_width() - 100.0;
                 if space > 0.0 { ui.add_space(space); }
 
-                if state.compilation_error.is_some() {
-                    ui.colored_label(egui::Color32::LIGHT_RED, "Compilation failed!");
+                if let Some(err) = &state.compilation_error {
+                    ui.colored_label(egui::Color32::LIGHT_RED, "⚠️ Error detected!");
+                    if ui.button("Clear Error").clicked() {
+                        state.compilation_error = None;
+                    }
                 } else {
                     ui.colored_label(egui::Color32::GREEN, "Ready");
                 }
@@ -191,6 +194,7 @@ fn show_telemetry(
     mut q_models: Query<(Entity, &mut ModelicaModel, Option<&Name>, Option<&Children>)>,
     mut q_inputs: Query<&mut ModelicaInput>,
     q_outputs: Query<&ModelicaOutput>,
+    channels: Option<Res<ModelicaChannels>>,
 ) {
     let Ok(ctx) = contexts.ctx_mut() else { return; };
 
@@ -211,10 +215,18 @@ fn show_telemetry(
                         }
                         ui.label(format!("Time: {:.4} s", model.current_time));
                         
-                        let space = ui.available_width() - 80.0;
+                        let space = ui.available_width() - 160.0;
                         if space > 0.0 { ui.add_space(space); }
-                        if ui.button("🗑 Clear").clicked() {
-                            state.history.clear();
+                        
+                        if ui.button("🔄 Reset").on_hover_text("Hard reset worker and clear state").clicked() {
+                            let _ = channels.as_ref().unwrap().tx.send(ModelicaCommand::Reset { entity });
+                            state.history.remove(&entity);
+                            model.current_time = 0.0;
+                            model.last_step_time = 0.0;
+                        }
+
+                        if ui.button("🗑 Clear").on_hover_text("Clear history only").clicked() {
+                            state.history.remove(&entity);
                         }
                     });
 
