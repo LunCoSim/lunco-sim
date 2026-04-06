@@ -97,6 +97,7 @@ pub fn spawn_raycast_rover(
             Name::new(format!("{}_visual", label)),
             Transform::from_translation(rel_pos).with_rotation(wheel_rot), 
             CellCoord::default(),
+            Visibility::default(),
             Mesh3d(wheel_mesh.clone()),
             MeshMaterial3d(materials.add(StandardMaterial::from(if is_front { Color::from(Srgba::RED) } else { Color::from(Srgba::BLUE) }))),
             ChildOf(rover_entity),

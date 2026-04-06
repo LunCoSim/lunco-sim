@@ -6,25 +6,30 @@
 use bevy::prelude::*;
 use bevy::diagnostic::{FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin};
 use bevy::pbr::wireframe::WireframePlugin;
-use bevy_egui::{egui, EguiContexts, EguiPlugin};
+use bevy_egui::{egui, EguiContexts, EguiPlugin, EguiPrimaryContextPass};
 use big_space::prelude::*;
-use avian3d::prelude::{RigidBody, Collider};
+use avian3d::prelude::{RigidBody, Collider, Friction, PhysicsPlugins};
 use leafwing_input_manager::prelude::MouseMove;
 
 use lunco_mobility::{LunCoMobilityPlugin, Suspension};
 use lunco_robotics::{LunCoRoboticsPlugin, rover};
 use lunco_controller::LunCoControllerPlugin;
 use lunco_avatar::{LunCoAvatarPlugin, IntentAnalogState, ObserverBehavior, ObserverMode, AdaptiveNearPlane};
+use lunco_celestial::{BlueprintMaterial, BlueprintExtension};
 use lunco_core::{Vessel, architecture::CommandMessage};
 
 fn main() {
     App::new()
+        .insert_resource(Time::<Fixed>::from_hz(60.0))
+        .insert_resource(lunco_core::TimeWarpState { physics_enabled: true, ..default() })
         .add_plugins(DefaultPlugins.build().disable::<TransformPlugin>())
         .add_plugins(BigSpaceDefaultPlugins.build().disable::<big_space::validation::BigSpaceValidationPlugin>())
         .add_plugins(LogDiagnosticsPlugin::default())
         .add_plugins(FrameTimeDiagnosticsPlugin::default())
         .add_plugins(WireframePlugin::default())
         .add_plugins(EguiPlugin::default())
+        .add_plugins(PhysicsPlugins::default())
+        .add_plugins(MaterialPlugin::<BlueprintMaterial>::default())
         .add_plugins(lunco_core::LunCoCorePlugin)
         .add_plugins(LunCoMobilityPlugin)
         .add_plugins(LunCoRoboticsPlugin)
@@ -32,11 +37,11 @@ fn main() {
         .add_plugins(LunCoAvatarPlugin)
         .init_resource::<SandboxSettings>()
         .add_systems(Startup, setup_sandbox)
-        .add_systems(Update, (
-            sandbox_ui_system,
-            apply_sandbox_settings,
-            global_transform_propagation_system
-        ))
+        .add_systems(Update, apply_sandbox_settings)
+        .add_systems(PreUpdate, global_transform_propagation_system)
+        .configure_sets(PostUpdate, lunco_avatar::AvatarCameraSet.after(avian3d::prelude::PhysicsSystems::Writeback))
+        .add_systems(PostUpdate, global_transform_propagation_system.after(lunco_avatar::AvatarCameraSet))
+        .add_systems(EguiPrimaryContextPass, sandbox_ui_system)
         .run();
 }
 
@@ -65,25 +70,60 @@ fn setup_sandbox(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut blueprint_materials: ResMut<Assets<BlueprintMaterial>>,
 ) {
-    let grid = commands.spawn(BigSpace::default()).id();
-
-    // Spawn a ground plane for the sandbox
-    let ground_size = 500.0;
-    commands.spawn((
-        Mesh3d(meshes.add(Plane3d::default().mesh().size(ground_size, ground_size))),
-        MeshMaterial3d(materials.add(StandardMaterial {
-            base_color: Color::srgb(0.3, 0.3, 0.3),
-            perceptual_roughness: 0.8,
-            ..default()
-        })),
+    let big_space_root = commands.spawn(BigSpace::default()).id();
+    let grid = commands.spawn((
+        Grid::new(2000.0, 1.0e10),
+        CellCoord::default(),
         Transform::default(),
         GlobalTransform::default(),
         Visibility::default(),
-        CellCoord::default(),
+        InheritedVisibility::default(),
+        Name::new("Sandbox_Grid"),
+    )).set_parent_in_place(big_space_root).id();
+
+    let blueprint_mat = blueprint_materials.add(BlueprintMaterial {
+        base: StandardMaterial {
+            base_color: Color::srgb(0.2, 0.2, 0.2), 
+            perceptual_roughness: 0.9,
+            ..default()
+        },
+        extension: BlueprintExtension {
+            high_color: LinearRgba::new(0.5, 0.5, 0.5, 1.0),
+            low_color: LinearRgba::new(0.1, 0.1, 0.1, 1.0),
+            grid_scale: 1.0,
+            line_width: 2.0,
+            subdivisions: Vec2::new(10.0, 10.0),
+            transition: 0.0, 
+            ..default()
+        },
+    });
+
+    commands.spawn((
+        Name::new("Blueprint_Ground"),
+        Mesh3d(meshes.add(Plane3d::default().mesh().size(2000.0, 2000.0))),
+        MeshMaterial3d(blueprint_mat),
         RigidBody::Static,
-        Collider::cuboid(ground_size as f64, 0.1, ground_size as f64),
-        Name::new("Ground Plane"),
+        Collider::cuboid(2000.0, 0.1, 2000.0),
+        CellCoord::default(),
+        Visibility::default(),
+    )).set_parent_in_place(grid);
+
+    let ramp_mat = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.7, 0.7, 0.7),
+        ..default()
+    });
+    commands.spawn((
+        Name::new("Ramp"),
+        Mesh3d(meshes.add(Cuboid::new(30.0, 1.0, 40.0))),
+        MeshMaterial3d(ramp_mat),
+        Transform::from_xyz(25.0, 4.0, 0.0).with_rotation(Quat::from_rotation_z(0.3)),
+        RigidBody::Static,
+        Collider::cuboid(30.0, 1.0, 40.0),
+        Friction::new(1.0),
+        CellCoord::default(),
+        Visibility::default(),
     )).set_parent_in_place(grid);
 
     // Spawn a light source
@@ -108,17 +148,49 @@ fn setup_sandbox(
         Name::new("Rovers Root"),
     )).set_parent_in_place(grid).id();
 
-    // Spawn a test rover
-    let _rover = rover::spawn_joint_rover(
-        &mut commands,
+    let joint_skid = rover::spawn_joint_rover(
+        &mut commands, 
         &mut meshes,
         &mut materials,
-        rovers_root,
-        Vec3::ZERO,
-        "Sandbox Rover",
-        Color::Srgba(bevy::color::palettes::basic::LIME),
+        rovers_root, 
+        Vec3::new(-15.0, 5.0, -10.0), 
+        "Joint_Skid", 
+        Color::srgb(0.8, 0.2, 0.2),
+        rover::SteeringType::Skid,
+    );
+
+    rover::spawn_joint_rover(
+        &mut commands, 
+        &mut meshes,
+        &mut materials,
+        rovers_root, 
+        Vec3::new(-15.0, 5.0, 10.0), 
+        "Joint_Ackermann", 
+        Color::srgb(0.2, 0.8, 0.2),
         rover::SteeringType::Ackermann,
     );
+
+    let r_skid = rover::spawn_raycast_rover(
+        &mut commands, 
+        &mut meshes,
+        &mut materials,
+        Vec3::new(15.0, 5.0, -10.0), 
+        "Raycast_Skid", 
+        Color::srgb(0.2, 0.2, 0.8),
+        rover::SteeringType::Skid,
+    );
+    commands.entity(r_skid).set_parent_in_place(grid);
+
+    let r_ack = rover::spawn_raycast_rover(
+        &mut commands, 
+        &mut meshes,
+        &mut materials,
+        Vec3::new(15.0, 5.0, 10.0), 
+        "Raycast_Ackermann", 
+        Color::srgb(0.8, 0.8, 0.2),
+        rover::SteeringType::Ackermann,
+    );
+    commands.entity(r_ack).set_parent_in_place(grid);
 
     // Initialize the Avatar (Camera)
     commands.spawn((
@@ -126,14 +198,16 @@ fn setup_sandbox(
         ObserverBehavior {
             target: Some(rovers_root),
             mode: ObserverMode::Flyby,
-            flyby_offset: bevy::math::DVec3::new(0.0, 5.0, 10.0),
-            yaw: 0.0,
+            flyby_offset: bevy::math::DVec3::new(-30.0, 15.0, -20.0),
+            yaw: std::f32::consts::PI * 0.8,
             pitch: -0.3,
+            distance: 20.0,
             ..default()
         },
         AdaptiveNearPlane,
         Transform::default(),
         GlobalTransform::default(),
+        FloatingOrigin,
         CellCoord::default(),
         lunco_core::Avatar,
         IntentAnalogState::default(),
