@@ -161,13 +161,24 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                 // Step
                 if let Err(e) = stepper.step(dt) {
                     error!("Modelica step failed for entity {:?}: {:?}", entity, e);
+                    let _ = tx.send(ModelicaResult {
+                        entity,
+                        new_time: stepper.time(),
+                        outputs: Vec::new(),
+                        error: Some(format!("Step Error: {:?}", e)),
+                    });
+                    continue;
                 }
 
                 // Collect outputs
                 let mut outputs = Vec::new();
                 for name in stepper.variable_names() {
                     if let Some(val) = stepper.get(name) {
-                        outputs.push((name.clone(), val));
+                        if val.is_finite() {
+                            outputs.push((name.clone(), val));
+                        } else {
+                            warn!("Non-finite value for {} in entity {:?}", name, entity);
+                        }
                     }
                 }
 
@@ -194,6 +205,8 @@ pub struct ModelicaModel {
     pub current_time: f64,
     /// Last real-world time this model was stepped.
     pub last_step_time: f64,
+    /// If true, the simulation will not propagate.
+    pub paused: bool,
     #[reflect(ignore)]
     pub is_stepping: bool,
 }
@@ -223,7 +236,7 @@ fn spawn_modelica_requests(
     let current_real_time = time.elapsed_secs_f64();
 
     for (entity, mut model, children) in q_models.iter_mut() {
-        if model.is_stepping { continue; }
+        if model.is_stepping || model.paused { continue; }
 
         let mut inputs = Vec::new();
         if let Some(children) = children {

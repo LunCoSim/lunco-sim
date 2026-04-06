@@ -187,7 +187,7 @@ fn show_model_editor(
 fn show_telemetry(
     mut contexts: EguiContexts,
     mut state: ResMut<WorkbenchState>,
-    q_models: Query<(Entity, &ModelicaModel, Option<&Name>)>,
+    mut q_models: Query<(Entity, &mut ModelicaModel, Option<&Name>)>,
     q_outputs: Query<&ModelicaOutput>,
 ) {
     let Ok(ctx) = contexts.ctx_mut() else { return; };
@@ -197,12 +197,21 @@ fn show_telemetry(
         .default_size([300.0, 400.0])
         .show(ctx, |ui| {
             if let Some(entity) = state.selected_entity {
-                if let Ok((_, model, name)) = q_models.get(entity) {
+                if let Ok((_, mut model, name)) = q_models.get_mut(entity) {
                     let label = name.map(|n| n.as_str()).unwrap_or("Unnamed Model");
                     ui.heading(label);
-                    ui.label(format!("Simulation Time: {:.4} s", model.current_time));
-                    
+
+                    ui.horizontal(|ui| {
+                        if model.paused {
+                            if ui.button("▶ Play").clicked() { model.paused = false; }
+                        } else {
+                            if ui.button("⏸ Pause").clicked() { model.paused = true; }
+                        }
+                        ui.label(format!("Time: {:.4} s", model.current_time));
+                    });
+
                     ui.separator();
+
                     ui.label("Active Variables:");
                     
                     egui::ScrollArea::vertical().id_salt("telemetry_scroll").show(ui, |ui| {
