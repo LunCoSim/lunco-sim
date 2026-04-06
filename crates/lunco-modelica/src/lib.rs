@@ -70,6 +70,7 @@ pub struct ModelicaResult {
     pub new_time: f64,
     pub outputs: Vec<(String, f64)>,
     pub error: Option<String>,
+    pub is_new_model: bool,
 }
 
 /// The background worker that owns the !Send SimSteppers.
@@ -87,6 +88,7 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                         new_time: 0.0,
                         outputs: Vec::new(),
                         error: Some(format!("Failed to write temp file: {:?}", e)),
+                        is_new_model: false,
                     });
                     continue;
                 }
@@ -102,6 +104,7 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                                     new_time: 0.0,
                                     outputs: Vec::new(),
                                     error: None,
+                                    is_new_model: true,
                                 });
                             }
                             Err(e) => {
@@ -110,6 +113,7 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                                     new_time: 0.0,
                                     outputs: Vec::new(),
                                     error: Some(format!("Stepper Error: {:?}", e)),
+                                    is_new_model: false,
                                 });
                             }
                         }
@@ -120,6 +124,7 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                             new_time: 0.0,
                             outputs: Vec::new(),
                             error: Some(format!("Compiler Error: {:?}", e)),
+                            is_new_model: false,
                         });
                     }
                 }
@@ -166,6 +171,7 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                         new_time: stepper.time(),
                         outputs: Vec::new(),
                         error: Some(format!("Step Error: {:?}", e)),
+                        is_new_model: false,
                     });
                     continue;
                 }
@@ -187,6 +193,7 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                     new_time: stepper.time(),
                     outputs,
                     error: None,
+                    is_new_model: false,
                 });
             }
             ModelicaCommand::Despawn { entity } => {
@@ -251,12 +258,20 @@ fn spawn_modelica_requests(
         }
 
         // Calculate dt based on real time elapsed since last request
-        let dt = if model.last_step_time == 0.0 {
-            0.016 // First step default
+        let mut dt = if model.last_step_time == 0.0 || model.paused {
+            0.016 // First step default or reset timer while paused
         } else {
             (current_real_time - model.last_step_time).max(0.001)
         };
-        model.last_step_time = current_real_time;
+        
+        // Cap dt to prevent solver explosions (Article XI adherence)
+        if dt > 0.1 {
+            dt = 0.1;
+        }
+        
+        if !model.paused {
+            model.last_step_time = current_real_time;
+        }
 
         model.is_stepping = true;
         let _ = channels.tx.send(ModelicaCommand::Step {
@@ -282,6 +297,15 @@ fn handle_modelica_responses(
             // Clear error if we got a successful result for the selected entity
             if workbench_state.selected_entity == Some(result.entity) {
                 workbench_state.compilation_error = None;
+            }
+        }
+
+        if result.is_new_model {
+            // Reset everything for this entity on new model load
+            workbench_state.history.clear();
+            if let Ok(mut model) = q_models.get_mut(result.entity) {
+                model.current_time = 0.0;
+                model.last_step_time = 0.0;
             }
         }
 

@@ -5,7 +5,7 @@ use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
 use egui_plot::{Line, Plot, PlotPoints};
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
-use crate::{ModelicaModel, ModelicaOutput, ModelicaChannels, ModelicaCommand};
+use crate::{ModelicaModel, ModelicaInput, ModelicaOutput, ModelicaChannels, ModelicaCommand};
 
 pub struct ModelicaInspectorPlugin;
 
@@ -154,7 +154,7 @@ fn show_model_editor(
                 let space = ui.available_width() - 100.0;
                 if space > 0.0 { ui.add_space(space); }
 
-                if let Some(err) = &state.compilation_error {
+                if state.compilation_error.is_some() {
                     ui.colored_label(egui::Color32::LIGHT_RED, "Compilation failed!");
                 } else {
                     ui.colored_label(egui::Color32::GREEN, "Ready");
@@ -187,7 +187,8 @@ fn show_model_editor(
 fn show_telemetry(
     mut contexts: EguiContexts,
     mut state: ResMut<WorkbenchState>,
-    mut q_models: Query<(Entity, &mut ModelicaModel, Option<&Name>)>,
+    mut q_models: Query<(Entity, &mut ModelicaModel, Option<&Name>, Option<&Children>)>,
+    mut q_inputs: Query<&mut ModelicaInput>,
     q_outputs: Query<&ModelicaOutput>,
 ) {
     let Ok(ctx) = contexts.ctx_mut() else { return; };
@@ -197,7 +198,7 @@ fn show_telemetry(
         .default_size([300.0, 400.0])
         .show(ctx, |ui| {
             if let Some(entity) = state.selected_entity {
-                if let Ok((_, mut model, name)) = q_models.get_mut(entity) {
+                if let Ok((_, mut model, name, children)) = q_models.get_mut(entity) {
                     let label = name.map(|n| n.as_str()).unwrap_or("Unnamed Model");
                     ui.heading(label);
 
@@ -208,11 +209,40 @@ fn show_telemetry(
                             if ui.button("⏸ Pause").clicked() { model.paused = true; }
                         }
                         ui.label(format!("Time: {:.4} s", model.current_time));
+                        
+                        let space = ui.available_width() - 80.0;
+                        if space > 0.0 { ui.add_space(space); }
+                        if ui.button("🗑 Clear").clicked() {
+                            state.history.clear();
+                        }
                     });
 
                     ui.separator();
 
-                    ui.label("Active Variables:");
+                    ui.label("Controls (Inputs):");
+                    egui::ScrollArea::vertical().id_salt("inputs_scroll").max_height(150.0).show(ui, |ui| {
+                        // Show inputs on the model entity itself
+                        if let Ok(mut input) = q_inputs.get_mut(entity) {
+                            ui.horizontal(|ui| {
+                                ui.label(format!("{}:", input.variable_name));
+                                ui.add(egui::DragValue::new(&mut input.value).speed(0.1));
+                            });
+                        }
+                        // Show inputs on children
+                        if let Some(children) = children {
+                            for child in children.iter() {
+                                if let Ok(mut input) = q_inputs.get_mut(child) {
+                                    ui.horizontal(|ui| {
+                                        ui.label(format!("{}:", input.variable_name));
+                                        ui.add(egui::DragValue::new(&mut input.value).speed(0.1));
+                                    });
+                                }
+                            }
+                        }
+                    });
+
+                    ui.separator();
+                    ui.label("Active Variables (Outputs):");
                     
                     egui::ScrollArea::vertical().id_salt("telemetry_scroll").show(ui, |ui| {
                         // Filter outputs for this entity or global

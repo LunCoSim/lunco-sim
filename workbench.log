@@ -1,10 +1,10 @@
-[2m2026-04-05T18:16:59.216950Z[0m [32m INFO[0m [2mbevy_diagnostic::system_information_diagnostics_plugin::internal[0m[2m:[0m SystemInfo { os: "Linux (Pop!_OS 24.04)", kernel: "6.18.7-76061807-generic", cpu: "AMD Ryzen 9 8940HX with Radeon Graphics", core_count: "16", memory: "14.9 GiB" }
-[2m2026-04-05T18:16:59.759591Z[0m [32m INFO[0m [2mbevy_render::renderer[0m[2m:[0m AdapterInfo { name: "NVIDIA GeForce RTX 5060 Laptop GPU", vendor: 4318, device: 11545, device_type: DiscreteGpu, driver: "NVIDIA", driver_info: "580.126.18", backend: Vulkan }
-[2m2026-04-05T18:17:03.017239Z[0m [32m INFO[0m [2mbevy_render::batching::gpu_preprocessing[0m[2m:[0m GPU preprocessing is fully supported on this device.
-[2m2026-04-05T18:17:03.078233Z[0m [32m INFO[0m [2mbevy_egui::render[0m[2m:[0m Using bindless_mode_array_size 16 (Device maximum 1048576)
-[2m2026-04-05T18:17:03.103896Z[0m [32m INFO[0m [2mbevy_winit::system[0m[2m:[0m Creating new window battery_test_ui (0v0)
-[2m2026-04-05T18:17:03.265749Z[0m [32m INFO[0m [2mlunco_modelica[0m[2m:[0m Initializing Modelica stepper for Battery (assets/models/Battery.mo)
-[2m2026-04-05T18:17:03.415295Z[0m [32m INFO[0m [2mcranelift_jit::backend[0m[2m:[0m defining function funcid0: function u0:0(i64, i64, f64) -> f64 system_v {
+[2m2026-04-06T03:12:51.275078Z[0m [32m INFO[0m [2mbevy_diagnostic::system_information_diagnostics_plugin::internal[0m[2m:[0m SystemInfo { os: "Linux (Pop!_OS 24.04)", kernel: "6.18.7-76061807-generic", cpu: "AMD Ryzen 9 8940HX with Radeon Graphics", core_count: "16", memory: "14.9 GiB" }
+[2m2026-04-06T03:12:51.757623Z[0m [32m INFO[0m [2mbevy_render::renderer[0m[2m:[0m AdapterInfo { name: "NVIDIA GeForce RTX 5060 Laptop GPU", vendor: 4318, device: 11545, device_type: DiscreteGpu, driver: "NVIDIA", driver_info: "580.126.18", backend: Vulkan }
+[2m2026-04-06T03:12:52.560162Z[0m [32m INFO[0m [2mbevy_render::batching::gpu_preprocessing[0m[2m:[0m GPU preprocessing is fully supported on this device.
+[2m2026-04-06T03:12:52.569714Z[0m [32m INFO[0m [2mbevy_egui::render[0m[2m:[0m Using bindless_mode_array_size 16 (Device maximum 1048576)
+[2m2026-04-06T03:12:52.570473Z[0m [32m INFO[0m [2mbevy_winit::system[0m[2m:[0m Creating new window battery_test_ui (0v0)
+[2m2026-04-06T03:12:52.601394Z[0m [32m INFO[0m [2mlunco_modelica[0m[2m:[0m Initializing Modelica stepper for Battery (assets/models/Battery.mo)
+[2m2026-04-06T03:12:52.640107Z[0m [32m INFO[0m [2mcranelift_jit::backend[0m[2m:[0m defining function funcid0: function u0:0(i64, i64, f64) -> f64 system_v {
 block0(v0: i64, v1: i64, v2: f64):
     v3 = f64const 0.0
     v4 = f64const 0.0
@@ -25,7 +25,7 @@ block0(v0: i64, v1: i64, v2: f64):
     return v18
 }
 
-[2m2026-04-05T18:17:03.425970Z[0m [32m INFO[0m [2mcranelift_jit::backend[0m[2m:[0m defining function funcid1: function u0:0(i64, i64, f64) -> f64 system_v {
+[2m2026-04-06T03:12:52.642516Z[0m [32m INFO[0m [2mcranelift_jit::backend[0m[2m:[0m defining function funcid1: function u0:0(i64, i64, f64) -> f64 system_v {
 block0(v0: i64, v1: i64, v2: f64):
     v3 = f64const 0.0
     v4 = load.f64 v0+8
@@ -44,7 +44,7 @@ block0(v0: i64, v1: i64, v2: f64):
     return v16
 }
 
-[2m2026-04-05T18:17:03.427121Z[0m [32m INFO[0m [2mcranelift_jit::backend[0m[2m:[0m defining function funcid0: function u0:0(i64, i64, f64, i64) -> f64 system_v {
+[2m2026-04-06T03:12:52.643366Z[0m [32m INFO[0m [2mcranelift_jit::backend[0m[2m:[0m defining function funcid0: function u0:0(i64, i64, f64, i64) -> f64 system_v {
 block0(v0: i64, v1: i64, v2: f64, v3: i64):
     v4 = f64const 0.0
     v5 = f64const 0.0
@@ -107,7 +107,7 @@ block0(v0: i64, v1: i64, v2: f64, v3: i64):
     return v61
 }
 
-[2m2026-04-05T18:17:03.428864Z[0m [32m INFO[0m [2mcranelift_jit::backend[0m[2m:[0m defining function funcid1: function u0:0(i64, i64, f64, i64) -> f64 system_v {
+[2m2026-04-06T03:12:52.644811Z[0m [32m INFO[0m [2mcranelift_jit::backend[0m[2m:[0m defining function funcid1: function u0:0(i64, i64, f64, i64) -> f64 system_v {
 block0(v0: i64, v1: i64, v2: f64, v3: i64):
     v4 = f64const 0.0
     v5 = load.f64 v0+8
