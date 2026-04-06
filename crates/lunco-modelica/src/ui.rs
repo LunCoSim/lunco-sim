@@ -5,7 +5,7 @@ use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
 use egui_plot::{Line, Plot, PlotPoints};
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
-use crate::{ModelicaModel, ModelicaChannels, ModelicaCommand, extract_model_name};
+use crate::{ModelicaModel, ModelicaChannels, ModelicaCommand, extract_model_name, extract_parameters};
 
 pub struct ModelicaInspectorPlugin;
 
@@ -37,11 +37,9 @@ pub struct WorkbenchState {
 
 impl Default for WorkbenchState {
     fn default() -> Self {
-        let editor_buffer = std::fs::read_to_string("assets/models/Battery.mo").unwrap_or_default();
-
         Self {
             current_path: PathBuf::from("assets/models"),
-            editor_buffer,
+            editor_buffer: String::new(),
             selected_entity: None,
             compilation_error: None,
             history: HashMap::new(),
@@ -73,12 +71,13 @@ fn show_model_editor(
     mut contexts: EguiContexts,
     mut state: ResMut<WorkbenchState>,
     channels: Option<Res<ModelicaChannels>>,
-    q_models: Query<Entity, With<ModelicaModel>>,
+    mut q_models: Query<(Entity, &mut ModelicaModel)>,
 ) {
     let Ok(ctx) = contexts.ctx_mut() else { return; };
 
+    // Auto-select the first model if none selected
     if state.selected_entity.is_none() {
-        state.selected_entity = q_models.iter().next();
+        state.selected_entity = q_models.iter().map(|(e, _)| e).next();
     }
 
     egui::Window::new("📝 Modelica Editor")
@@ -97,6 +96,14 @@ fn show_model_editor(
                 if ui.button("🚀 COMPILE & RUN").clicked() {
                     if let Some(model_name) = detected_name {
                         if let (Some(entity), Some(channels)) = (state.selected_entity, &channels) {
+                            // Pre-discover parameters for immediate UI update
+                            let initial_params = extract_parameters(&state.editor_buffer);
+                            if let Ok((_, mut model)) = q_models.get_mut(entity) {
+                                model.parameters = initial_params;
+                                model.inputs.clear();
+                                model.variables.clear();
+                            }
+                            
                             let _ = channels.tx.send(ModelicaCommand::Compile {
                                 entity,
                                 model_name,
@@ -165,7 +172,7 @@ fn show_telemetry(
                         }
                         ui.label(format!("Time: {:.4} s", model.current_time));
                         
-                        ui.add_space(ui.available_width() - 120.0);
+                        ui.add_space(ui.available_width() - 80.0);
                         if ui.button("🔄 Reset").clicked() {
                             if let Some(channels) = &channels {
                                 let _ = channels.tx.send(ModelicaCommand::Reset { entity });
@@ -179,7 +186,7 @@ fn show_telemetry(
                     ui.separator();
 
                     if !model.parameters.is_empty() {
-                        ui.label("Parameters (Instant Sync):");
+                        ui.label("Parameters (Dynamic Tuning):");
                         egui::ScrollArea::vertical().id_salt("params_scroll").max_height(150.0).show(ui, |ui| {
                             let mut param_keys: Vec<_> = model.parameters.keys().cloned().collect();
                             param_keys.sort();
@@ -210,7 +217,7 @@ fn show_telemetry(
                     }
 
                     if !model.inputs.is_empty() {
-                        ui.label("Dynamic Inputs:");
+                        ui.label("Control Inputs (Real-time):");
                         egui::ScrollArea::vertical().id_salt("inputs_scroll").max_height(120.0).show(ui, |ui| {
                             let mut input_keys: Vec<_> = model.inputs.keys().cloned().collect();
                             input_keys.sort();
@@ -225,13 +232,10 @@ fn show_telemetry(
                         ui.separator();
                     }
 
-                    ui.label("Variables (Toggle to Plot):");
+                    ui.label("Live Variables (Toggle to Plot):");
                     egui::ScrollArea::vertical().id_salt("telemetry_scroll").show(ui, |ui| {
-                        let var_names = if let Some(h) = state.history.get(&entity) {
-                            let mut names: Vec<_> = h.keys().cloned().collect();
-                            names.sort();
-                            names
-                        } else { Vec::new() };
+                        let mut var_names: Vec<_> = model.variables.keys().cloned().collect();
+                        var_names.sort();
 
                         for name in var_names {
                             ui.horizontal(|ui| {
@@ -242,19 +246,19 @@ fn show_telemetry(
                                 }
                                 ui.label(format!("{}:", name));
                                 
-                                if let Some(entity_history) = state.history.get(&entity) {
-                                    if let Some(history) = entity_history.get(&name) {
-                                        if let Some([_, last_val]) = history.back() {
-                                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                                ui.monospace(format!("{:.4}", last_val));
-                                            });
-                                        }
-                                    }
+                                if let Some(val) = model.variables.get(&name) {
+                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                        ui.monospace(format!("{:.4}", val));
+                                    });
                                 }
                             });
                         }
                     });
                 }
+            } else {
+                ui.centered_and_justified(|ui| {
+                    ui.label("Waiting for model...");
+                });
             }
         });
 }
@@ -266,28 +270,32 @@ fn show_plots(
 ) {
     let Ok(ctx) = contexts.ctx_mut() else { return; };
 
-    if state.plotted_variables.is_empty() { return; }
-
     egui::Window::new("📈 Variable Plots")
         .default_pos([270.0, 520.0])
         .default_size([600.0, 300.0])
         .resizable(true)
         .show(ctx, |ui| {
-            Plot::new("workbench_plot")
-                .view_aspect(2.0)
-                .legend(egui_plot::Legend::default())
-                .show(ui, |plot_ui| {
-                    if let Some(entity) = state.selected_entity {
-                        if let Some(entity_history) = state.history.get(&entity) {
-                            for var_name in &state.plotted_variables {
-                                if let Some(data) = entity_history.get(var_name) {
-                                    let points: Vec<[f64; 2]> = data.iter().cloned().collect();
-                                    plot_ui.line(Line::new(var_name.clone(), PlotPoints::from(points)));
+            if state.plotted_variables.is_empty() {
+                ui.centered_and_justified(|ui| {
+                    ui.label("Check variables in Live Telemetry to plot them.");
+                });
+            } else {
+                Plot::new("workbench_plot")
+                    .view_aspect(2.0)
+                    .legend(egui_plot::Legend::default())
+                    .show(ui, |plot_ui| {
+                        if let Some(entity) = state.selected_entity {
+                            if let Some(entity_history) = state.history.get(&entity) {
+                                for var_name in &state.plotted_variables {
+                                    if let Some(data) = entity_history.get(var_name) {
+                                        let points: Vec<[f64; 2]> = data.iter().cloned().collect();
+                                        plot_ui.line(Line::new(var_name.clone(), PlotPoints::from(points)));
+                                    }
                                 }
                             }
                         }
-                    }
-                });
+                    });
+            }
         });
 }
 

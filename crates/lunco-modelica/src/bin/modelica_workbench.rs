@@ -27,19 +27,38 @@ fn main() {
 #[derive(Component)]
 struct ModelicaSandbox;
 
-fn setup_sandbox(mut commands: Commands) {
+fn setup_sandbox(
+    mut commands: Commands,
+    channels: Res<lunco_modelica::ModelicaChannels>,
+    mut workbench_state: ResMut<lunco_modelica::ui::WorkbenchState>,
+) {
     commands.spawn(Camera2d);
 
+    let model_path = "assets/models/Battery.mo".to_string();
+    let source = std::fs::read_to_string(&model_path).unwrap_or_default();
+    let model_name = lunco_modelica::extract_model_name(&source).unwrap_or_else(|| "Battery".to_string());
+    let initial_params = lunco_modelica::extract_parameters(&source);
+
+    // Initialize UI state with the default model's source
+    workbench_state.editor_buffer = source.clone();
+
     // Spawn a generic sandbox entity.
-    // All parameters, inputs, and outputs will be dynamically discovered 
-    // and populated by the workbench UI upon compilation.
-    commands.spawn((
+    let entity = commands.spawn((
         ModelicaSandbox,
         Name::new("Modelica_Sandbox"),
         ModelicaModel {
-            model_path: "assets/models/Battery.mo".to_string(),
-            model_name: "Battery".to_string(),
+            model_path: model_path.clone(),
+            model_name: model_name.clone(),
+            parameters: initial_params,
             ..default()
         },
-    ));
+    )).id();
+
+    // Trigger initial compilation
+    let _ = channels.tx.send(lunco_modelica::ModelicaCommand::Compile {
+        entity,
+        model_name,
+        source,
+    });
 }
+

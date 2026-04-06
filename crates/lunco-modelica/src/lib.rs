@@ -1,4 +1,4 @@
-//! Native Modelica simulation integration using the Rumoca platform.
+//! Professional Modelica simulation integration using the Rumoca platform.
 //! 
 //! This crate provides a Bevy plugin to execute Modelica models as asynchronous, 
 //! high-fidelity "Virtual Plants" within the simulation loop. 
@@ -7,7 +7,6 @@ use bevy::prelude::*;
 use std::collections::{HashMap, VecDeque};
 use rumoca::Compiler;
 use rumoca_sim::with_diffsol::stepper::{SimStepper, StepperOptions};
-use rumoca_session::{Session, SessionConfig};
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use regex::Regex;
 
@@ -96,64 +95,96 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                 info!("Resetting Modelica stepper for entity {:?}", entity);
             }
             ModelicaCommand::UpdateParameters { entity, model_path, model_name, parameters } => {
-                let res = Compiler::new()
-                    .model(&model_name)
-                    .compile_file(&model_path);
-                
-                match res {
-                    Ok(comp_res) => {
-                        let mut opts = StepperOptions::default();
-                        opts.atol = 1e-3;
-                        opts.rtol = 1e-3;
+                let mut success = false;
+                let mut current_time = 0.0;
+                let mut symbols = Vec::new();
 
-                        match SimStepper::new(&comp_res.dae, opts) {
-                            Ok(mut stepper) => {
-                                for (name, val) in parameters {
-                                    let _ = stepper.set_input(&name, val);
-                                }
-                                let mut symbols = Vec::new();
-                                for name in stepper.variable_names() {
-                                    if let Some(val) = stepper.get(&name) {
-                                        symbols.push((name.clone(), val));
-                                    }
-                                }
-                                steppers.insert(entity, stepper);
-                                let _ = tx.send(ModelicaResult {
-                                    entity,
-                                    new_time: 0.0,
-                                    outputs: Vec::new(),
-                                    detected_symbols: symbols,
-                                    error: None,
-                                    log_message: Some("Parameters applied successfully.".to_string()),
-                                    is_new_model: false,
-                                    is_parameter_update: true,
-                                });
-                            }
-                            Err(e) => {
-                                let _ = tx.send(ModelicaResult {
-                                    entity,
-                                    new_time: 0.0,
-                                    outputs: Vec::new(),
-                                    detected_symbols: Vec::new(),
-                                    error: Some(format!("Init Error: {:?}", e)),
-                                    log_message: None,
-                                    is_new_model: false,
-                                    is_parameter_update: true,
-                                });
-                            }
+                // Try warm-tuning first (apply to existing stepper)
+                if let Some(stepper) = steppers.get_mut(&entity) {
+                    for (name, val) in &parameters {
+                        let _ = stepper.set_input(name, *val);
+                    }
+                    current_time = stepper.time();
+                    for name in stepper.variable_names() {
+                        if let Some(val) = stepper.get(&name) {
+                            symbols.push((name.clone(), val));
                         }
                     }
-                    Err(e) => {
-                        let _ = tx.send(ModelicaResult {
-                            entity,
-                            new_time: 0.0,
-                            outputs: Vec::new(),
-                            detected_symbols: Vec::new(),
-                            error: Some(format!("Re-compile Error: {:?}", e)),
-                            log_message: None,
-                            is_new_model: false,
-                            is_parameter_update: true,
-                        });
+                    success = true;
+                }
+
+                if success {
+                    let _ = tx.send(ModelicaResult {
+                        entity,
+                        new_time: current_time,
+                        outputs: Vec::new(),
+                        detected_symbols: symbols,
+                        error: None,
+                        log_message: Some("Parameters tuned live.".to_string()),
+                        is_new_model: false,
+                        is_parameter_update: true,
+                    });
+                } else {
+                    // Fallback to full rebuild
+                    let res = Compiler::new()
+                        .model(&model_name)
+                        .compile_file(&model_path);
+                    
+                    match res {
+                        Ok(comp_res) => {
+                            let mut opts = StepperOptions::default();
+                            opts.atol = 1e-3;
+                            opts.rtol = 1e-3;
+
+                            match SimStepper::new(&comp_res.dae, opts) {
+                                Ok(mut stepper) => {
+                                    for (name, val) in parameters {
+                                        let _ = stepper.set_input(&name, val);
+                                    }
+                                    let mut symbols = Vec::new();
+                                    for name in stepper.variable_names() {
+                                        if let Some(val) = stepper.get(&name) {
+                                            symbols.push((name.clone(), val));
+                                        }
+                                    }
+                                    steppers.insert(entity, stepper);
+                                    let _ = tx.send(ModelicaResult {
+                                        entity,
+                                        new_time: 0.0,
+                                        outputs: Vec::new(),
+                                        detected_symbols: symbols,
+                                        error: None,
+                                        log_message: Some("Model re-initialized with new parameters.".to_string()),
+                                        is_new_model: false,
+                                        is_parameter_update: true,
+                                    });
+                                }
+                                Err(e) => {
+                                    let _ = tx.send(ModelicaResult {
+                                        entity,
+                                        new_time: 0.0,
+                                        outputs: Vec::new(),
+                                        detected_symbols: Vec::new(),
+                                        error: Some(format!("Init Error: {:?}", e)),
+                                        log_message: None,
+                                        is_new_model: false,
+                                        is_parameter_update: true,
+                                    });
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            let _ = tx.send(ModelicaResult {
+                                entity,
+                                new_time: 0.0,
+                                outputs: Vec::new(),
+                                detected_symbols: Vec::new(),
+                                error: Some(format!("Re-compile Error: {:?}", e)),
+                                log_message: None,
+                                is_new_model: false,
+                                is_parameter_update: true,
+                            });
+                        }
                     }
                 }
             }
@@ -311,9 +342,12 @@ pub struct ModelicaModel {
     pub current_time: f64,
     pub last_step_time: f64,
     pub paused: bool,
-    /// Schema of the model: detected variable names and their roles.
+    /// Tunable constants (parameter Real ...)
     pub parameters: HashMap<String, f64>,
+    /// Control inputs (input Real ..._in)
     pub inputs: HashMap<String, f64>,
+    /// All other observable variables (Real soc, etc)
+    pub variables: HashMap<String, f64>,
     #[reflect(ignore)]
     pub is_stepping: bool,
 }
@@ -369,26 +403,52 @@ fn handle_modelica_responses(
         }
 
         if let Ok(mut model) = q_models.get_mut(result.entity) {
-            if result.is_new_model {
-                workbench_state.history.remove(&result.entity);
-                if workbench_state.selected_entity == Some(result.entity) {
-                    workbench_state.plotted_variables.clear();
+            if result.is_new_model || result.is_parameter_update {
+                // Clear history only if it's a new model or a full re-initialization (t=0)
+                if result.is_new_model || result.new_time == 0.0 {
+                    workbench_state.history.remove(&result.entity);
+                    if result.is_new_model {
+                        if workbench_state.selected_entity == Some(result.entity) {
+                            workbench_state.plotted_variables.clear();
+                        }
+                        // Clear all schema maps for the new model
+                        model.parameters.clear();
+                        model.inputs.clear();
+                        model.variables.clear();
+                    }
+                    model.current_time = 0.0;
+                    model.last_step_time = 0.0;
                 }
-                model.current_time = 0.0;
-                model.last_step_time = 0.0;
             }
 
-            if result.is_new_model || result.is_parameter_update {
-                if !result.detected_symbols.is_empty() {
-                    model.parameters.clear();
-                    model.inputs.clear();
-                    for (name, val) in &result.detected_symbols {
-                        if name.ends_with("_in") {
+            // Categorize and sync symbols
+            if !result.detected_symbols.is_empty() {
+                // If this is a new model, we can try to extract the real parameters from source
+                // (This usually happens at a higher level, but we'll use a conservative heuristic here
+                // if they are not already set)
+                for (name, val) in &result.detected_symbols {
+                    if name.ends_with("_in") {
+                        if result.is_new_model || !model.inputs.contains_key(name) {
                             model.inputs.insert(name.clone(), *val);
-                        } else {
-                            model.parameters.insert(name.clone(), *val);
                         }
+                    } else if result.is_new_model && !model.parameters.contains_key(name) {
+                        // Only add to parameters if not an input and it's a new model
+                        // (Usually the UI will have populated the "real" parameters via regex)
+                        model.variables.insert(name.clone(), *val);
+                    } else if !model.parameters.contains_key(name) && !model.inputs.contains_key(name) {
+                        model.variables.insert(name.clone(), *val);
                     }
+                }
+            }
+
+            // Sync current values from outputs
+            for (name, val) in &result.outputs {
+                if model.inputs.contains_key(name) {
+                    // Don't overwrite user-set inputs with simulation values
+                } else if model.parameters.contains_key(name) {
+                    // Don't overwrite parameters
+                } else {
+                    model.variables.insert(name.clone(), *val);
                 }
             }
 
@@ -413,6 +473,21 @@ fn handle_modelica_responses(
 pub fn extract_model_name(source: &str) -> Option<String> {
     let re = Regex::new(r"(?m)^\s*(model|class|block|package)\s+([a-zA-Z0-9_]+)").ok()?;
     re.captures(source).map(|cap| cap[2].to_string())
+}
+
+/// Helper to discover parameters directly from Modelica source for initial UI population.
+pub fn extract_parameters(source: &str) -> HashMap<String, f64> {
+    let mut params = HashMap::new();
+    // Regex for: parameter Real name = value;
+    let re = Regex::new(r"parameter\s+Real\s+([a-zA-Z0-9_]+)\s*=\s*([-+]?[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?)").unwrap();
+    for cap in re.captures_iter(source) {
+        if let (Some(name), Some(val_str)) = (cap.get(1), cap.get(2)) {
+            if let Ok(val) = val_str.as_str().parse::<f64>() {
+                params.insert(name.as_str().to_string(), val);
+            }
+        }
+    }
+    params
 }
 
 /// Deprecated components for backward compatibility
