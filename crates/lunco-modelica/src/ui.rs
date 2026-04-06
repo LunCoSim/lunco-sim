@@ -27,7 +27,6 @@ pub struct WorkbenchState {
     pub editor_buffer: String,
     pub selected_entity: Option<Entity>,
     pub compilation_error: Option<String>,
-    /// History of variables: Entity -> VariableName -> DataPoints
     pub history: HashMap<Entity, HashMap<String, VecDeque<[f64; 2]>>>,
     pub plotted_variables: std::collections::HashSet<String>,
     pub max_history: usize,
@@ -39,7 +38,6 @@ impl Default for WorkbenchState {
         plotted.insert("soc_out".to_string());
         plotted.insert("voltage_out".to_string());
 
-        // Load default model if available
         let editor_buffer = std::fs::read_to_string("assets/models/Battery.mo").unwrap_or_default();
 
         Self {
@@ -64,6 +62,7 @@ fn show_library_browser(
     egui::Window::new("📁 Library Browser")
         .default_pos([10.0, 10.0])
         .default_size([250.0, 400.0])
+        .resizable(true)
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
                 if ui.button("🏠").on_hover_text("Projects").clicked() {
@@ -88,7 +87,6 @@ fn show_library_browser(
             egui::ScrollArea::vertical().id_salt("browser_scroll").show(ui, |ui| {
                 if let Ok(entries) = std::fs::read_dir(&state.current_path) {
                     let mut entries: Vec<_> = entries.flatten().collect();
-                    // Sort directories first, then files
                     entries.sort_by(|a, b| {
                         let a_is_dir = a.path().is_dir();
                         let b_is_dir = b.path().is_dir();
@@ -131,7 +129,6 @@ fn show_model_editor(
 ) {
     let Ok(ctx) = contexts.ctx_mut() else { return; };
 
-    // Auto-select first entity if none selected
     if state.selected_entity.is_none() {
         state.selected_entity = q_models.iter().next();
     }
@@ -139,25 +136,26 @@ fn show_model_editor(
     egui::Window::new("📝 Modelica Editor")
         .default_pos([270.0, 10.0])
         .default_size([600.0, 500.0])
+        .min_width(400.0)
+        .max_width(800.0) // Constraint to prevent taking all space
+        .resizable(true)
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
                 if ui.button("🚀 COMPILE & RUN").clicked() {
                     if let (Some(entity), Some(channels)) = (state.selected_entity, &channels) {
                         let _ = channels.tx.send(ModelicaCommand::Compile {
                             entity,
-                            model_name: "Battery".to_string(), // TODO: Regex name from source
+                            model_name: "Battery".to_string(),
                             source: state.editor_buffer.clone(),
                         });
                     }
                 }
                 
-                // Flexible spacer replacement
-                let space = ui.available_width() - 100.0;
-                if space > 0.0 { ui.add_space(space); }
+                ui.add_space(20.0);
 
                 if let Some(err) = &state.compilation_error {
-                    ui.colored_label(egui::Color32::LIGHT_RED, "⚠️ Error detected!");
-                    if ui.button("Clear Error").clicked() {
+                    ui.colored_label(egui::Color32::LIGHT_RED, "⚠️ Solver Error!");
+                    if ui.button("Clear").clicked() {
                         state.compilation_error = None;
                     }
                 } else {
@@ -174,13 +172,13 @@ fn show_model_editor(
                         .code_editor()
                         .desired_width(f32::INFINITY)
                         .lock_focus(true)
-                        .desired_rows(40)
+                        .desired_rows(35)
                 );
             });
 
             if let Some(err) = &state.compilation_error {
                 ui.separator();
-                egui::ScrollArea::vertical().max_height(100.0).show(ui, |ui| {
+                egui::ScrollArea::vertical().max_height(80.0).show(ui, |ui| {
                     ui.colored_label(egui::Color32::LIGHT_RED, err);
                 });
             }
@@ -201,6 +199,7 @@ fn show_telemetry(
     egui::Window::new("📊 Live Telemetry")
         .default_pos([880.0, 10.0])
         .default_size([300.0, 400.0])
+        .resizable(true)
         .show(ctx, |ui| {
             if let Some(entity) = state.selected_entity {
                 if let Ok((_, mut model, name, children)) = q_models.get_mut(entity) {
@@ -215,18 +214,14 @@ fn show_telemetry(
                         }
                         ui.label(format!("Time: {:.4} s", model.current_time));
                         
-                        let space = ui.available_width() - 160.0;
-                        if space > 0.0 { ui.add_space(space); }
-                        
-                        if ui.button("🔄 Reset").on_hover_text("Hard reset worker and clear state").clicked() {
-                            let _ = channels.as_ref().unwrap().tx.send(ModelicaCommand::Reset { entity });
+                        ui.add_space(ui.available_width() - 80.0);
+                        if ui.button("🔄 Reset").on_hover_text("Hard reset worker state").clicked() {
+                            if let Some(channels) = &channels {
+                                let _ = channels.tx.send(ModelicaCommand::Reset { entity });
+                            }
                             state.history.remove(&entity);
                             model.current_time = 0.0;
                             model.last_step_time = 0.0;
-                        }
-
-                        if ui.button("🗑 Clear").on_hover_text("Clear history only").clicked() {
-                            state.history.remove(&entity);
                         }
                     });
 
@@ -234,14 +229,12 @@ fn show_telemetry(
 
                     ui.label("Controls (Inputs):");
                     egui::ScrollArea::vertical().id_salt("inputs_scroll").max_height(150.0).show(ui, |ui| {
-                        // Show inputs on the model entity itself
                         if let Ok(mut input) = q_inputs.get_mut(entity) {
                             ui.horizontal(|ui| {
                                 ui.label(format!("{}:", input.variable_name));
                                 ui.add(egui::DragValue::new(&mut input.value).speed(0.1));
                             });
                         }
-                        // Show inputs on children
                         if let Some(children) = children {
                             for child in children.iter() {
                                 if let Ok(mut input) = q_inputs.get_mut(child) {
@@ -258,7 +251,6 @@ fn show_telemetry(
                     ui.label("Active Variables (Outputs):");
                     
                     egui::ScrollArea::vertical().id_salt("telemetry_scroll").show(ui, |ui| {
-                        // Filter outputs for this entity or global
                         for output in q_outputs.iter() {
                             ui.horizontal(|ui| {
                                 let mut is_plotted = state.plotted_variables.contains(&output.variable_name);
@@ -270,12 +262,9 @@ fn show_telemetry(
                                     }
                                 }
                                 ui.label(format!("{}:", output.variable_name));
-                                
-                                let space = ui.available_width() - 60.0;
-                                if space > 0.0 { ui.add_space(space); }
-
-                                // FIX: Use format! with precision to avoid "hundred digits"
-                                ui.monospace(format!("{:.4}", output.value));
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    ui.monospace(format!("{:.4}", output.value));
+                                });
                             });
                         }
                     });
@@ -298,6 +287,7 @@ fn show_plots(
     egui::Window::new("📈 Variable Plots")
         .default_pos([270.0, 520.0])
         .default_size([600.0, 300.0])
+        .resizable(true)
         .show(ctx, |ui| {
             Plot::new("workbench_plot")
                 .view_aspect(2.0)

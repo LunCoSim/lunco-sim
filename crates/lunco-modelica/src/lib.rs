@@ -147,7 +147,11 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                     match res {
                         Ok(comp_res) => {
                             match SimStepper::new(&comp_res.dae, StepperOptions::default()) {
-                                Ok(stepper) => {
+                                Ok(mut stepper) => {
+                                    // Apply initial inputs before solving ICs
+                                    for (name, val) in &inputs {
+                                        let _ = stepper.set_input(name, *val);
+                                    }
                                     steppers.insert(entity, stepper);
                                 }
                                 Err(e) => {
@@ -165,13 +169,23 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
 
                 let stepper = steppers.get_mut(&entity).unwrap();
 
-                // Apply inputs
-                for (name, val) in inputs {
-                    let _ = stepper.set_input(&name, val);
+                // Apply inputs with "Soft-Start" / Slew-limiting
+                // This prevents the solver from crashing on sudden input jumps
+                for (name, target_val) in inputs {
+                    let current_val = stepper.get(&name).unwrap_or(target_val);
+                    let diff = target_val - current_val;
+                    let max_delta = 10.0; // Max 10 units per step slew rate
+                    let smoothed_val = if diff.abs() > max_delta {
+                        current_val + max_delta * diff.signum()
+                    } else {
+                        target_val
+                    };
+                    let _ = stepper.set_input(&name, smoothed_val);
                 }
 
-                // Step
-                if let Err(e) = stepper.step(dt) {
+                // Step with stricter dt cap for stability
+                let capped_dt = dt.min(0.033); 
+                if let Err(e) = stepper.step(capped_dt) {
                     error!("Modelica step failed for entity {:?}: {:?}. Resetting stepper.", entity, e);
                     // Send error result
                     let _ = tx.send(ModelicaResult {
