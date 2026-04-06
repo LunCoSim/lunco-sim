@@ -17,6 +17,7 @@ impl Plugin for ModelicaInspectorPlugin {
                show_model_editor,
                show_telemetry,
                show_plots,
+               show_logs,
            ));
     }
 }
@@ -27,8 +28,10 @@ pub struct WorkbenchState {
     pub editor_buffer: String,
     pub selected_entity: Option<Entity>,
     pub compilation_error: Option<String>,
+    /// History of variables: Entity -> VariableName -> DataPoints
     pub history: HashMap<Entity, HashMap<String, VecDeque<[f64; 2]>>>,
     pub plotted_variables: std::collections::HashSet<String>,
+    pub logs: VecDeque<String>,
     pub max_history: usize,
 }
 
@@ -47,6 +50,7 @@ impl Default for WorkbenchState {
             compilation_error: None,
             history: HashMap::new(),
             plotted_variables: plotted,
+            logs: VecDeque::new(),
             max_history: 1000,
         }
     }
@@ -64,59 +68,7 @@ fn show_library_browser(
         .default_size([250.0, 400.0])
         .resizable(true)
         .show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                if ui.button("🏠").on_hover_text("Projects").clicked() {
-                    state.current_path = PathBuf::from("assets/models");
-                }
-                if ui.button("📚").on_hover_text("MSL 4.0").clicked() {
-                    state.current_path = PathBuf::from(".cache/msl/ModelicaStandardLibrary-4.0.0");
-                }
-                ui.separator();
-                if ui.button("⬆").clicked() {
-                    if let Some(parent) = state.current_path.parent() {
-                        if state.current_path.starts_with(".cache/msl") || state.current_path.starts_with("assets/models") {
-                             state.current_path = parent.to_path_buf();
-                        }
-                    }
-                }
-            });
-            
-            ui.label(format!("Path: {:?}", state.current_path));
-            ui.separator();
-
-            egui::ScrollArea::vertical().id_salt("browser_scroll").show(ui, |ui| {
-                if let Ok(entries) = std::fs::read_dir(&state.current_path) {
-                    let mut entries: Vec<_> = entries.flatten().collect();
-                    entries.sort_by(|a, b| {
-                        let a_is_dir = a.path().is_dir();
-                        let b_is_dir = b.path().is_dir();
-                        if a_is_dir != b_is_dir {
-                            b_is_dir.cmp(&a_is_dir)
-                        } else {
-                            a.path().cmp(&b.path())
-                        }
-                    });
-
-                    for entry in entries {
-                        let path = entry.path();
-                        let name = path.file_name().unwrap_or_default().to_string_lossy();
-                        
-                        if path.is_dir() {
-                            if ui.link(format!("📁 {}", name)).clicked() {
-                                state.current_path = path;
-                            }
-                        } else if name.ends_with(".mo") {
-                            if ui.link(format!("📄 {}", name)).clicked() {
-                                if let Ok(content) = std::fs::read_to_string(&path) {
-                                    state.editor_buffer = content;
-                                }
-                            }
-                        }
-                    }
-                } else {
-                    ui.colored_label(egui::Color32::RED, "Failed to read directory");
-                }
-            });
+            render_browser(ui, &mut state);
         });
 }
 
@@ -137,7 +89,7 @@ fn show_model_editor(
         .default_pos([270.0, 10.0])
         .default_size([600.0, 500.0])
         .min_width(400.0)
-        .max_width(800.0) // Constraint to prevent taking all space
+        .max_width(800.0)
         .resizable(true)
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
@@ -153,7 +105,7 @@ fn show_model_editor(
                 
                 ui.add_space(20.0);
 
-                if let Some(err) = &state.compilation_error {
+                if state.compilation_error.is_some() {
                     ui.colored_label(egui::Color32::LIGHT_RED, "⚠️ Solver Error!");
                     if ui.button("Clear").clicked() {
                         state.compilation_error = None;
@@ -305,4 +257,79 @@ fn show_plots(
                     }
                 });
         });
+}
+
+/// Window 5: Engineering Console (Logs)
+fn show_logs(
+    mut contexts: EguiContexts,
+    state: Res<WorkbenchState>,
+) {
+    let Ok(ctx) = contexts.ctx_mut() else { return; };
+
+    egui::Window::new("📟 Engineering Console")
+        .default_pos([10.0, 420.0])
+        .default_size([250.0, 200.0])
+        .resizable(true)
+        .show(ctx, |ui| {
+            egui::ScrollArea::vertical()
+                .id_salt("log_scroll")
+                .stick_to_bottom(true)
+                .show(ui, |ui| {
+                    for log in &state.logs {
+                        ui.label(log);
+                    }
+                });
+        });
+}
+
+fn render_browser(ui: &mut egui::Ui, state: &mut WorkbenchState) {
+    ui.horizontal(|ui| {
+        if ui.button("🏠").on_hover_text("Projects").clicked() {
+            state.current_path = PathBuf::from("assets/models");
+        }
+        if ui.button("📚").on_hover_text("MSL 4.0").clicked() {
+            state.current_path = PathBuf::from(".cache/msl/ModelicaStandardLibrary-4.0.0");
+        }
+        ui.separator();
+        if ui.button("⬆").clicked() {
+            if let Some(parent) = state.current_path.parent() {
+                if state.current_path.starts_with(".cache/msl") || state.current_path.starts_with("assets/models") {
+                     state.current_path = parent.to_path_buf();
+                }
+            }
+        }
+    });
+    
+    ui.label(format!("Path: {:?}", state.current_path));
+    ui.separator();
+
+    if let Ok(entries) = std::fs::read_dir(&state.current_path) {
+        let mut entries: Vec<_> = entries.flatten().collect();
+        entries.sort_by(|a, b| {
+            let a_is_dir = a.path().is_dir();
+            let b_is_dir = b.path().is_dir();
+            if a_is_dir != b_is_dir {
+                b_is_dir.cmp(&a_is_dir)
+            } else {
+                a.path().cmp(&b.path())
+            }
+        });
+
+        for entry in entries {
+            let path = entry.path();
+            let name = path.file_name().unwrap_or_default().to_string_lossy();
+            
+            if path.is_dir() {
+                if ui.link(format!("📁 {}", name)).clicked() {
+                    state.current_path = path;
+                }
+            } else if name.ends_with(".mo") {
+                if ui.link(format!("📄 {}", name)).clicked() {
+                    if let Ok(content) = std::fs::read_to_string(&path) {
+                        state.editor_buffer = content;
+                    }
+                }
+            }
+        }
+    }
 }

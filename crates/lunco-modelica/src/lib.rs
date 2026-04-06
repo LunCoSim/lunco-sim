@@ -60,6 +60,13 @@ pub enum ModelicaCommand {
         model_name: String,
         source: String,
     },
+    /// Re-initialize the stepper with new parameter values
+    UpdateParameters {
+        entity: Entity,
+        model_path: String,
+        model_name: String,
+        parameters: Vec<(String, f64)>,
+    },
     Reset {
         entity: Entity,
     },
@@ -73,6 +80,7 @@ pub struct ModelicaResult {
     pub new_time: f64,
     pub outputs: Vec<(String, f64)>,
     pub error: Option<String>,
+    pub log_message: Option<String>,
     pub is_new_model: bool,
 }
 
@@ -86,6 +94,66 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                 steppers.remove(&entity);
                 info!("Resetting Modelica stepper for entity {:?}", entity);
             }
+            ModelicaCommand::UpdateParameters { entity, model_path, model_name, parameters } => {
+                let _ = tx.send(ModelicaResult {
+                    entity,
+                    new_time: 0.0,
+                    outputs: Vec::new(),
+                    error: None,
+                    log_message: Some(format!("Updating parameters for {}...", model_name)),
+                    is_new_model: false,
+                });
+
+                // Re-initialize to apply parameters
+                let res = Compiler::new()
+                    .model(&model_name)
+                    .compile_file(&model_path);
+                
+                match res {
+                    Ok(comp_res) => {
+                        let mut opts = StepperOptions::default();
+                        opts.atol = 1e-3;
+                        opts.rtol = 1e-3;
+
+                        match SimStepper::new(&comp_res.dae, opts) {
+                            Ok(mut stepper) => {
+                                for (name, val) in parameters {
+                                    let _ = stepper.set_input(&name, val);
+                                }
+                                steppers.insert(entity, stepper);
+                                let _ = tx.send(ModelicaResult {
+                                    entity,
+                                    new_time: 0.0,
+                                    outputs: Vec::new(),
+                                    error: None,
+                                    log_message: Some("Parameters updated successfully.".to_string()),
+                                    is_new_model: true,
+                                });
+                            }
+                            Err(e) => {
+                                let _ = tx.send(ModelicaResult {
+                                    entity,
+                                    new_time: 0.0,
+                                    outputs: Vec::new(),
+                                    error: Some(format!("Init Error: {:?}", e)),
+                                    log_message: None,
+                                    is_new_model: false,
+                                });
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        let _ = tx.send(ModelicaResult {
+                            entity,
+                            new_time: 0.0,
+                            outputs: Vec::new(),
+                            error: Some(format!("Re-compile Error: {:?}", e)),
+                            log_message: None,
+                            is_new_model: false,
+                        });
+                    }
+                }
+            }
             ModelicaCommand::Compile { entity, model_name, source } => {
                 info!("Compiling live Modelica source for {}...", model_name);
                 let temp_path = format!(".cache/modelica_temp_{:?}.mo", entity);
@@ -95,6 +163,7 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                         new_time: 0.0,
                         outputs: Vec::new(),
                         error: Some(format!("Failed to write temp file: {:?}", e)),
+                        log_message: None,
                         is_new_model: false,
                     });
                     continue;
@@ -102,15 +171,19 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
 
                 match Compiler::new().model(&model_name).compile_file(&temp_path) {
                     Ok(comp_res) => {
-                        match SimStepper::new(&comp_res.dae, StepperOptions::default()) {
+                        let mut opts = StepperOptions::default();
+                        opts.atol = 1e-3;
+                        opts.rtol = 1e-3;
+
+                        match SimStepper::new(&comp_res.dae, opts) {
                             Ok(stepper) => {
                                 steppers.insert(entity, stepper);
-                                info!("Hot-reload successful for {}", model_name);
                                 let _ = tx.send(ModelicaResult {
                                     entity,
                                     new_time: 0.0,
                                     outputs: Vec::new(),
                                     error: None,
+                                    log_message: Some(format!("Hot-reload successful for {}", model_name)),
                                     is_new_model: true,
                                 });
                             }
@@ -120,6 +193,7 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                                     new_time: 0.0,
                                     outputs: Vec::new(),
                                     error: Some(format!("Stepper Error: {:?}", e)),
+                                    log_message: None,
                                     is_new_model: false,
                                 });
                             }
@@ -131,6 +205,7 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                             new_time: 0.0,
                             outputs: Vec::new(),
                             error: Some(format!("Compiler Error: {:?}", e)),
+                            log_message: None,
                             is_new_model: false,
                         });
                     }
@@ -147,13 +222,11 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                     match res {
                         Ok(comp_res) => {
                             let mut opts = StepperOptions::default();
-                            // Relax tolerances for real-time stability (Article XI optimization)
                             opts.atol = 1e-3;
                             opts.rtol = 1e-3;
 
                             match SimStepper::new(&comp_res.dae, opts) {
                                 Ok(mut stepper) => {
-                                    // Apply initial inputs before solving ICs
                                     for (name, val) in &inputs {
                                         let _ = stepper.set_input(name, *val);
                                     }
@@ -174,13 +247,10 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
 
                 let stepper = steppers.get_mut(&entity).unwrap();
 
-                // Apply inputs directly (Smoothing is now handled in the .mo model)
                 for (name, val) in inputs {
                     let _ = stepper.set_input(&name, val);
                 }
 
-                // Step with substapping for higher internal precision
-                // We perform 3 smaller steps per bevy frame to help the BDF solver stay stable
                 let capped_dt = dt.min(0.033); 
                 let sub_dt = capped_dt / 3.0;
                 
@@ -194,27 +264,23 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
 
                 if let Some(e) = step_err {
                     error!("Modelica step failed for entity {:?}: {:?}. Resetting stepper.", entity, e);
-                    // Send error result
                     let _ = tx.send(ModelicaResult {
                         entity,
                         new_time: stepper.time(),
                         outputs: Vec::new(),
-                        error: Some(format!("Solver Error: {:?}. Stepper has been reset.", e)),
+                        error: Some(format!("Solver Error: {:?}. Stepper reset.", e)),
+                        log_message: None,
                         is_new_model: false,
                     });
-                    // DROP broken stepper so it's re-initialized on next request
                     steppers.remove(&entity);
                     continue;
                 }
 
-                // Collect outputs
                 let mut outputs = Vec::new();
                 for name in stepper.variable_names() {
                     if let Some(val) = stepper.get(name) {
                         if val.is_finite() {
                             outputs.push((name.clone(), val));
-                        } else {
-                            warn!("Non-finite value for {} in entity {:?}", name, entity);
                         }
                     }
                 }
@@ -224,6 +290,7 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                     new_time: stepper.time(),
                     outputs,
                     error: None,
+                    log_message: None,
                     is_new_model: false,
                 });
             }
@@ -288,17 +355,13 @@ fn spawn_modelica_requests(
             inputs.push((input.variable_name.clone(), input.value));
         }
 
-        // Calculate dt based on real time elapsed since last request
         let mut dt = if model.last_step_time == 0.0 || model.paused {
-            0.016 // First step default or reset timer while paused
+            0.016 
         } else {
             (current_real_time - model.last_step_time).max(0.001)
         };
         
-        // Cap dt to prevent solver explosions (Article XI adherence)
-        if dt > 0.1 {
-            dt = 0.1;
-        }
+        if dt > 0.1 { dt = 0.1; }
         
         if !model.paused {
             model.last_step_time = current_real_time;
@@ -323,17 +386,19 @@ fn handle_modelica_responses(
     mut workbench_state: ResMut<ui::WorkbenchState>,
 ) {
     while let Ok(result) = channels.rx.try_recv() {
-        if result.error.is_some() {
-            workbench_state.compilation_error = result.error;
-        } else {
-            // Clear error if we got a successful result for the selected entity
-            if workbench_state.selected_entity == Some(result.entity) {
-                workbench_state.compilation_error = None;
-            }
+        if let Some(msg) = result.log_message {
+            workbench_state.logs.push_back(msg);
+            if workbench_state.logs.len() > 100 { workbench_state.logs.pop_front(); }
+        }
+
+        if let Some(err) = &result.error {
+            workbench_state.compilation_error = Some(err.clone());
+            workbench_state.logs.push_back(format!("ERROR: {}", err));
+        } else if workbench_state.selected_entity == Some(result.entity) {
+            workbench_state.compilation_error = None;
         }
 
         if result.is_new_model {
-            // Reset everything for this entity on new model load
             workbench_state.history.remove(&result.entity);
             if let Ok(mut model) = q_models.get_mut(result.entity) {
                 model.current_time = 0.0;
@@ -343,10 +408,9 @@ fn handle_modelica_responses(
 
         if let Ok(mut model) = q_models.get_mut(result.entity) {
             model.current_time = result.new_time;
-            model.last_step_time = time.elapsed_secs_f64(); // Keep in sync even if paused
+            model.last_step_time = time.elapsed_secs_f64();
             model.is_stepping = false;
 
-            // Update workbench history
             let time_val = result.new_time;
             let max_history = workbench_state.max_history;
             let entity_history = workbench_state.history.entry(result.entity).or_insert_with(HashMap::new);
