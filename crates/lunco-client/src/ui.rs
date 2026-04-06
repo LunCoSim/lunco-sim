@@ -12,7 +12,7 @@ use bevy::ecs::system::SystemParam;
 use bevy_egui::{egui, EguiContexts, EguiPlugin, EguiPrimaryContextPass};
 use lunco_core::{RoverVessel, Vessel, Avatar, Spacecraft};
 use lunco_celestial::{CelestialClock, CelestialBody, TrajectoryView, TrajectoryFrame};
-use lunco_avatar::{ObserverBehavior, ObserverMode, CameraScroll};
+use lunco_avatar::{SpringArmCamera, OrbitCamera, FreeFlightCamera, FrameBlend, CameraScroll};
 use lunco_mobility::Suspension;
 
 /// Plugin for managing the simulation's graphical user interface.
@@ -73,7 +73,11 @@ struct MainUiParams<'w, 's> {
     q_rovers: Query<'w, 's, (Entity, &'static Name, &'static Vessel), With<RoverVessel>>,
     q_bodies: Query<'w, 's, (Entity, &'static Name, &'static CelestialBody)>,
     q_spacecraft: Query<'w, 's, (Entity, &'static Name, &'static mut Spacecraft)>,
-    q_camera: Query<'w, 's, (Entity, &'static mut ObserverBehavior), With<Avatar>>,
+    q_camera: Query<'w, 's, Entity, With<Avatar>>,
+    q_camera_spring: Query<'w, 's, &'static SpringArmCamera, With<Avatar>>,
+    q_camera_orbit: Query<'w, 's, &'static OrbitCamera, With<Avatar>>,
+    q_camera_freeflight: Query<'w, 's, &'static FreeFlightCamera, With<Avatar>>,
+    q_camera_blend: Query<'w, 's, &'static FrameBlend, With<Avatar>>,
     q_trajectories: Query<'w, 's, (Entity, &'static Name, &'static mut TrajectoryView)>,
     q_children: Query<'w, 's, &'static Children>,
     q_suspension: Query<'w, 's, (Entity, &'static mut Suspension)>,
@@ -143,7 +147,7 @@ fn main_ui_system(mut params: MainUiParams) {
             }
         });
 
-        ui.collapsing("Orbit Visualizations", |ui| {
+        ui.collapsing("OrbitCamera Visualizations", |ui| {
             for (entity, name, mut view) in params.q_trajectories.iter_mut() {
                 ui.horizontal(|ui| {
                     ui.checkbox(&mut view.user_visible, "");
@@ -161,7 +165,7 @@ fn main_ui_system(mut params: MainUiParams) {
         if let Some(target) = target_to_focus {
             params.commands.trigger(lunco_core::architecture::CommandMessage {
                 id: 0, target, name: "FOCUS".to_string(), args: Default::default(),
-                source: params.q_camera.iter().next().map(|(e, _)| e).unwrap_or(Entity::PLACEHOLDER),
+                source: params.q_camera.iter().next().unwrap_or(Entity::PLACEHOLDER),
             });
             params.selected.entity = Some(target);
         }
@@ -175,13 +179,13 @@ fn main_ui_system(mut params: MainUiParams) {
                 if ui.button("Focus Camera").clicked() {
                     params.commands.trigger(lunco_core::architecture::CommandMessage {
                         id: 0, target, name: "FOCUS".to_string(), args: Default::default(),
-                        source: params.q_camera.iter().next().map(|(e, _)| e).unwrap_or(Entity::PLACEHOLDER),
+                        source: params.q_camera.iter().next().unwrap_or(Entity::PLACEHOLDER),
                     });
                 }
 
                 if ui.button("Release (Free Fly)").clicked() {
                     params.commands.trigger(lunco_core::architecture::CommandMessage {
-                        id: 0, target: params.q_camera.iter().next().map(|(e, _)| e).unwrap_or(Entity::PLACEHOLDER),
+                        id: 0, target: params.q_camera.iter().next().unwrap_or(Entity::PLACEHOLDER),
                         name: "RELEASE".to_string(), args: Default::default(), source: Entity::PLACEHOLDER,
                     });
                 }
@@ -189,7 +193,7 @@ fn main_ui_system(mut params: MainUiParams) {
 
             if params.q_rovers.contains(target) {
                 if ui.button("Take Control (Possess)").clicked() {
-                    let avatar_ent = params.q_camera.iter().next().map(|(e, _)| e).unwrap_or(Entity::PLACEHOLDER);
+                    let avatar_ent = params.q_camera.iter().next().unwrap_or(Entity::PLACEHOLDER);
                     params.commands.trigger(lunco_core::architecture::CommandMessage {
                         id: 0, target: target, name: "POSSESS".to_string(), args: Default::default(), source: avatar_ent,
                     });
@@ -213,25 +217,41 @@ fn main_ui_system(mut params: MainUiParams) {
     egui::Window::new("Telemetry").anchor(egui::Align2::RIGHT_TOP, [-10.0, 10.0]).show(ctx, |ui| {
         ui.heading("Avatar Status");
         ui.separator();
-        for (_, obs) in params.q_camera.iter() {
+
+        // Display active camera behavior.
+        if let Ok(blend) = params.q_camera_blend.single() {
+            let progress = (blend.t / blend.duration * 100.0).min(100.0) as i32;
             ui.horizontal(|ui| {
                 ui.label("Mode:");
-                match obs.mode {
-                    ObserverMode::Flyby => { ui.colored_label(egui::Color32::from_rgb(255, 200, 50), "FLYBY"); },
-                    ObserverMode::Orbital => { ui.colored_label(egui::Color32::from_rgb(100, 150, 255), "ORBITAL"); },
-                    ObserverMode::Surface => { ui.colored_label(egui::Color32::from_rgb(50, 255, 100), "SURFACE"); },
-                    ObserverMode::Chase => { ui.colored_label(egui::Color32::from_rgb(255, 100, 50), "CHASE"); },
-                }
+                ui.colored_label(egui::Color32::from_rgb(200, 200, 50), format!("TRANSITION ({}%)", progress));
             });
-            ui.label(format!("Distance: {:.1} m", obs.distance));
+        } else if let Ok(arm) = params.q_camera_spring.single() {
+            ui.horizontal(|ui| {
+                ui.label("Mode:");
+                ui.colored_label(egui::Color32::from_rgb(255, 100, 50), "SPRING ARM");
+            });
+            ui.label(format!("Distance: {:.1} m", arm.distance));
+        } else if let Ok(orbit) = params.q_camera_orbit.single() {
+            ui.horizontal(|ui| {
+                ui.label("Mode:");
+                ui.colored_label(egui::Color32::from_rgb(100, 150, 255), "ORBIT");
+            });
+            ui.label(format!("Distance: {:.1} m", orbit.distance));
+        } else if let Ok(_ff) = params.q_camera_freeflight.single() {
+            ui.horizontal(|ui| {
+                ui.label("Mode:");
+                ui.colored_label(egui::Color32::from_rgb(255, 200, 50), "FREE FLIGHT");
+            });
+        } else {
+            ui.label("Mode: UNKNOWN");
         }
         ui.separator();
         ui.label("WASD: move");
         ui.label("QE: Up/Down");
         ui.label("SHIFT: Speed boost");
-        ui.label("SCROLL or +/-: zoom (Orbital)");
+        ui.label("SCROLL or +/-: zoom (Spring/Orbit)");
         ui.label("Right-Click: rotate");
-        ui.label("SPACE: pause/unpause (Orbital/Flyby)");
+        ui.label("SPACE: pause/unpause");
     });
 }
 

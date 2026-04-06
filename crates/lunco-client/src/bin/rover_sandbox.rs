@@ -14,7 +14,7 @@ use leafwing_input_manager::prelude::*;
 use lunco_mobility::{LunCoMobilityPlugin, Suspension};
 use lunco_robotics::{LunCoRoboticsPlugin, rover};
 use lunco_controller::LunCoControllerPlugin;
-use lunco_avatar::{LunCoAvatarPlugin, IntentAnalogState, ObserverBehavior, ObserverMode, AdaptiveNearPlane, CameraScroll};
+use lunco_avatar::{LunCoAvatarPlugin, IntentAnalogState, FreeFlightCamera, SpringArmCamera, OrbitCamera, AdaptiveNearPlane, CameraScroll};
 use lunco_celestial::{BlueprintMaterial, BlueprintExtension};
 use lunco_core::{Vessel, architecture::CommandMessage};
 
@@ -271,17 +271,13 @@ fn setup_sandbox(
     // Using the centralized input map from lunco_controller ensures Zoom is mapped.
     commands.spawn((
         Camera3d::default(),
-        ObserverBehavior {
-            target: Some(rovers_root),
-            mode: ObserverMode::Flyby,
-            flyby_offset: bevy::math::DVec3::new(-30.0, 15.0, -20.0),
+        FreeFlightCamera {
             yaw: std::f32::consts::PI * 0.8,
             pitch: -0.3,
-            distance: 20.0,
-            ..default()
+            damping: None,
         },
         AdaptiveNearPlane,
-        Transform::default(),
+        Transform::from_translation(bevy::math::Vec3::new(-30.0, 15.0, -20.0)),
         GlobalTransform::default(),
         FloatingOrigin,
         CellCoord::default(),
@@ -297,7 +293,10 @@ fn sandbox_ui_system(
     mut settings: ResMut<SandboxSettings>,
     mut sens: ResMut<lunco_avatar::CameraScrollSensitivity>,
     mut grid_settings: ResMut<BlueprintGridSettings>,
-    q_camera: Query<(Entity, &Transform, &CellCoord, &ObserverBehavior), With<lunco_core::Avatar>>,
+    q_camera: Query<(Entity, &Transform, &CellCoord), With<lunco_core::Avatar>>,
+    q_camera_spring: Query<&SpringArmCamera, With<lunco_core::Avatar>>,
+    q_camera_orbit: Query<&OrbitCamera, With<lunco_core::Avatar>>,
+    q_camera_ff: Query<&FreeFlightCamera, With<lunco_core::Avatar>>,
     q_vessels: Query<(Entity, &Name, &Vessel)>,
     q_children: Query<&Children>,
     mut q_suspension: Query<(Entity, &mut Suspension)>,
@@ -332,17 +331,27 @@ fn sandbox_ui_system(
 
         ui.separator();
         ui.heading("Avatar Telemetry");
-        if let Some((_, tf, cell, obs)) = q_camera.iter().next() {
+        if let Some((_, tf, cell)) = q_camera.iter().next() {
             ui.label(format!("Position (BigSpace)\nCell: {:?}\nLocal: {:.2?}", cell, tf.translation));
             let (yaw, pitch, _): (f32, f32, f32) = tf.rotation.to_euler(EulerRot::YXZ);
             ui.label(format!("Orientation\nYaw: {:.2}°\nPitch: {:.2}°", yaw.to_degrees(), pitch.to_degrees()));
-            ui.label(format!("Mode: {:?}", obs.mode));
+            // Display active behavior.
+            let mode_str = if let Ok(arm) = q_camera_spring.single() {
+                format!("SPRING ARM (dist: {:.1} m)", arm.distance)
+            } else if let Ok(orbit) = q_camera_orbit.single() {
+                format!("ORBIT (dist: {:.1} m)", orbit.distance)
+            } else if q_camera_ff.single().is_ok() {
+                "FREE FLIGHT".to_string()
+            } else {
+                "TRANSITION".to_string()
+            };
+            ui.label(format!("Mode: {}", mode_str));
         }
 
         ui.separator();
         ui.heading("Vessels");
         // Get the real avatar entity for POSSESS commands.
-        let avatar_ent = q_camera.iter().next().map(|(e, _, _, _)| e);
+        let avatar_ent = q_camera.iter().next().map(|(e, _, _)| e);
         for (entity, name, _) in q_vessels.iter() {
             ui.collapsing(format!("{}", name), |ui| {
                 if ui.button("Possess").clicked() {
