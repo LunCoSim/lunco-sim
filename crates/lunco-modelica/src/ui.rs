@@ -38,10 +38,6 @@ pub struct WorkbenchState {
 
 impl Default for WorkbenchState {
     fn default() -> Self {
-        let mut plotted = std::collections::HashSet::new();
-        plotted.insert("soc_out".to_string());
-        plotted.insert("voltage_out".to_string());
-
         let editor_buffer = std::fs::read_to_string("assets/models/Battery.mo").unwrap_or_default();
 
         Self {
@@ -51,9 +47,9 @@ impl Default for WorkbenchState {
             selected_entity: None,
             compilation_error: None,
             history: HashMap::new(),
-            plotted_variables: plotted,
+            plotted_variables: std::collections::HashSet::new(),
             logs: VecDeque::new(),
-            max_history: 10000, // 10x more data points
+            max_history: 10000,
         }
     }
 }
@@ -139,12 +135,11 @@ fn show_model_editor(
         });
 }
 
-/// Window 3: Live Telemetry
+/// Window 3: Live Telemetry & Dynamic Controls
 fn show_telemetry(
     mut contexts: EguiContexts,
     mut state: ResMut<WorkbenchState>,
     mut q_models: Query<(Entity, &mut ModelicaModel, Option<&Name>, Option<&Children>)>,
-    mut q_inputs: Query<&mut ModelicaInput>,
     channels: Option<Res<ModelicaChannels>>,
 ) {
     let Ok(ctx) = contexts.ctx_mut() else { return; };
@@ -155,7 +150,7 @@ fn show_telemetry(
         .resizable(true)
         .show(ctx, |ui| {
             if let Some(entity) = state.selected_entity {
-                if let Ok((_, mut model, name, children)) = q_models.get_mut(entity) {
+                if let Ok((_, mut model, name, _)) = q_models.get_mut(entity) {
                     let label = name.map(|n| n.as_str()).unwrap_or("Unnamed Model");
                     ui.heading(label);
 
@@ -180,60 +175,54 @@ fn show_telemetry(
 
                     ui.separator();
 
-                    ui.horizontal(|ui| {
-                        ui.label("Parameters (Live Tuning):");
-                        ui.add_space(ui.available_width() - 100.0);
-                        if ui.button("Apply").on_hover_text("Apply parameter overrides").clicked() {
-                            if let Some(channels) = &channels {
-                                let params: Vec<(String, f64)> = model.parameters.iter().map(|(k, v)| (k.clone(), *v)).collect();
-                                let _ = channels.tx.send(ModelicaCommand::UpdateParameters {
-                                    entity,
-                                    model_path: model.model_path.clone(),
-                                    model_name: model.model_name.clone(),
-                                    parameters: params,
-                                });
-                            }
-                        }
-                    });
-
-                    egui::ScrollArea::vertical().id_salt("params_scroll").max_height(150.0).show(ui, |ui| {
-                        let mut param_keys: Vec<_> = model.parameters.keys().cloned().collect();
-                        param_keys.sort();
-                        for key in param_keys {
-                            ui.horizontal(|ui| {
-                                ui.label(format!("{}:", key));
-                                let mut val = *model.parameters.get(&key).unwrap();
-                                if ui.add(egui::DragValue::new(&mut val).speed(0.01)).changed() {
-                                    model.parameters.insert(key, val);
-                                }
-                            });
-                        }
-                    });
-
-                    ui.separator();
-                    ui.label("Controls (Inputs):");
-                    egui::ScrollArea::vertical().id_salt("inputs_scroll").max_height(100.0).show(ui, |ui| {
-                        if let Ok(mut input) = q_inputs.get_mut(entity) {
-                            ui.horizontal(|ui| {
-                                ui.label(format!("{}:", input.variable_name));
-                                ui.add(egui::DragValue::new(&mut input.value).speed(0.1));
-                            });
-                        }
-                        if let Some(children) = children {
-                            for child in children.iter() {
-                                if let Ok(mut input) = q_inputs.get_mut(child) {
-                                    ui.horizontal(|ui| {
-                                        ui.label(format!("{}:", input.variable_name));
-                                        ui.add(egui::DragValue::new(&mut input.value).speed(0.1));
+                    if !model.parameters.is_empty() {
+                        ui.horizontal(|ui| {
+                            ui.label("Parameters (Live Tuning):");
+                            ui.add_space(ui.available_width() - 100.0);
+                            if ui.button("Apply").on_hover_text("Re-init with these parameters").clicked() {
+                                if let Some(channels) = &channels {
+                                    let params: Vec<(String, f64)> = model.parameters.iter().map(|(k, v)| (k.clone(), *v)).collect();
+                                    let _ = channels.tx.send(ModelicaCommand::UpdateParameters {
+                                        entity,
+                                        model_path: model.model_path.clone(),
+                                        model_name: model.model_name.clone(),
+                                        parameters: params,
                                     });
                                 }
                             }
-                        }
-                    });
+                        });
 
-                    ui.separator();
+                        egui::ScrollArea::vertical().id_salt("params_scroll").max_height(120.0).show(ui, |ui| {
+                            let mut param_keys: Vec<_> = model.parameters.keys().cloned().collect();
+                            param_keys.sort();
+                            for key in param_keys {
+                                ui.horizontal(|ui| {
+                                    ui.label(format!("{}:", key));
+                                    let val = model.parameters.get_mut(&key).unwrap();
+                                    ui.add(egui::DragValue::new(val).speed(0.01));
+                                });
+                            }
+                        });
+                        ui.separator();
+                    }
+
+                    if !model.inputs.is_empty() {
+                        ui.label("Dynamic Inputs:");
+                        egui::ScrollArea::vertical().id_salt("inputs_scroll").max_height(120.0).show(ui, |ui| {
+                            let mut input_keys: Vec<_> = model.inputs.keys().cloned().collect();
+                            input_keys.sort();
+                            for key in input_keys {
+                                ui.horizontal(|ui| {
+                                    ui.label(format!("{}:", key));
+                                    let val = model.inputs.get_mut(&key).unwrap();
+                                    ui.add(egui::DragValue::new(val).speed(0.1));
+                                });
+                            }
+                        });
+                        ui.separator();
+                    }
+
                     ui.label("Variables (Toggle to Plot):");
-                    
                     egui::ScrollArea::vertical().id_salt("telemetry_scroll").show(ui, |ui| {
                         let var_names = if let Some(h) = state.history.get(&entity) {
                             let mut names: Vec<_> = h.keys().cloned().collect();

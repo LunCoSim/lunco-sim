@@ -5,8 +5,7 @@ use bevy_egui::EguiPlugin;
 use lunco_modelica::{
     LunCoModelicaPlugin, 
     ui::ModelicaInspectorPlugin, 
-    ModelicaModel, 
-    ModelicaInput
+    ModelicaModel
 };
 
 fn main() {
@@ -31,8 +30,9 @@ struct ModelicaSandbox;
 fn setup_sandbox(mut commands: Commands) {
     commands.spawn(Camera2d);
 
-    // Spawn a generic sandbox entity
-    // The workbench UI will populate parameters and variables automatically on first compile
+    // Spawn a generic sandbox entity.
+    // All parameters, inputs, and outputs will be dynamically discovered 
+    // and populated by the workbench UI upon compilation.
     commands.spawn((
         ModelicaSandbox,
         Name::new("Modelica_Sandbox"),
@@ -40,10 +40,6 @@ fn setup_sandbox(mut commands: Commands) {
             model_path: "assets/models/Battery.mo".to_string(),
             model_name: "Battery".to_string(),
             ..default()
-        },
-        ModelicaInput {
-            variable_name: "current_in".to_string(),
-            value: 0.0,
         },
     ));
 }
