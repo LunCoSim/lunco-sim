@@ -11,6 +11,8 @@ egui_plot = "0.34.1"
 egui_code_editor = "0.2.22"
 rumoca = { git = "https://github.com/cognipilot/rumoca", branch = "main" }
 rumoca-sim = { git = "https://github.com/cognipilot/rumoca", branch = "main" }
+rumoca-session = { git = "https://github.com/cognipilot/rumoca", branch = "main" }
+rumoca-phase-parse = { git = "https://github.com/cognipilot/rumoca", branch = "main" }
 anyhow = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

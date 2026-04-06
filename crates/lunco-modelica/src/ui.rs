@@ -5,8 +5,7 @@ use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
 use egui_plot::{Line, Plot, PlotPoints};
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
-use regex::Regex;
-use crate::{ModelicaModel, ModelicaInput, ModelicaOutput, ModelicaChannels, ModelicaCommand};
+use crate::{ModelicaModel, ModelicaChannels, ModelicaCommand, extract_model_name};
 
 pub struct ModelicaInspectorPlugin;
 
@@ -53,12 +52,6 @@ impl Default for WorkbenchState {
     }
 }
 
-/// Helper to extract the first model/class/block name from a Modelica source string.
-fn extract_model_name(source: &str) -> Option<String> {
-    let re = Regex::new(r"(?m)^\s*(model|class|block|package)\s+([a-zA-Z0-9_]+)").ok()?;
-    re.captures(source).map(|cap| cap[2].to_string())
-}
-
 /// Window 1: Library Browser
 fn show_library_browser(
     mut contexts: EguiContexts,
@@ -99,7 +92,7 @@ fn show_model_editor(
 
             ui.horizontal(|ui| {
                 ui.heading(format!("Editor: {}", detected_name.as_deref().unwrap_or("Unknown")));
-                ui.add_space(ui.available_width() - 300.0);
+                ui.add_space(ui.available_width() - 150.0);
 
                 if ui.button("🚀 COMPILE & RUN").clicked() {
                     if let Some(model_name) = detected_name {
@@ -111,17 +104,13 @@ fn show_model_editor(
                             });
                         }
                     } else {
-                        state.compilation_error = Some("Could not find a valid model/class declaration in source.".to_string());
+                        state.compilation_error = Some("Could not find a valid model declaration.".to_string());
                     }
                 }
                 
-                ui.add_space(20.0);
-
                 if state.compilation_error.is_some() {
-                    ui.colored_label(egui::Color32::LIGHT_RED, "⚠️ Solver Error!");
-                    if ui.button("Clear").clicked() {
-                        state.compilation_error = None;
-                    }
+                    ui.colored_label(egui::Color32::LIGHT_RED, "⚠️ Error!");
+                    if ui.button("Clear").clicked() { state.compilation_error = None; }
                 } else {
                     ui.colored_label(egui::Color32::GREEN, "Ready");
                 }
@@ -153,7 +142,7 @@ fn show_model_editor(
 fn show_telemetry(
     mut contexts: EguiContexts,
     mut state: ResMut<WorkbenchState>,
-    mut q_models: Query<(Entity, &mut ModelicaModel, Option<&Name>, Option<&Children>)>,
+    mut q_models: Query<(Entity, &mut ModelicaModel, Option<&Name>)>,
     channels: Option<Res<ModelicaChannels>>,
 ) {
     let Ok(ctx) = contexts.ctx_mut() else { return; };
@@ -164,7 +153,7 @@ fn show_telemetry(
         .resizable(true)
         .show(ctx, |ui| {
             if let Some(entity) = state.selected_entity {
-                if let Ok((_, mut model, name, _)) = q_models.get_mut(entity) {
+                if let Ok((_, mut model, name)) = q_models.get_mut(entity) {
                     let label = name.map(|n| n.as_str()).unwrap_or("Unnamed Model");
                     ui.heading(format!("{} ({})", label, model.model_name));
 
@@ -176,8 +165,8 @@ fn show_telemetry(
                         }
                         ui.label(format!("Time: {:.4} s", model.current_time));
                         
-                        ui.add_space(ui.available_width() - 80.0);
-                        if ui.button("🔄 Reset").on_hover_text("Hard reset worker state").clicked() {
+                        ui.add_space(ui.available_width() - 120.0);
+                        if ui.button("🔄 Reset").clicked() {
                             if let Some(channels) = &channels {
                                 let _ = channels.tx.send(ModelicaCommand::Reset { entity });
                             }
@@ -190,10 +179,22 @@ fn show_telemetry(
                     ui.separator();
 
                     if !model.parameters.is_empty() {
-                        ui.horizontal(|ui| {
-                            ui.label("Parameters (Live Tuning):");
-                            ui.add_space(ui.available_width() - 100.0);
-                            if ui.button("Apply").on_hover_text("Re-init with these parameters").clicked() {
+                        ui.label("Parameters (Instant Sync):");
+                        egui::ScrollArea::vertical().id_salt("params_scroll").max_height(150.0).show(ui, |ui| {
+                            let mut param_keys: Vec<_> = model.parameters.keys().cloned().collect();
+                            param_keys.sort();
+                            let mut changed = false;
+                            for key in param_keys {
+                                ui.horizontal(|ui| {
+                                    ui.label(format!("{}:", key));
+                                    let val = model.parameters.get_mut(&key).unwrap();
+                                    if ui.add(egui::DragValue::new(val).speed(0.01)).changed() {
+                                        changed = true;
+                                    }
+                                });
+                            }
+                            
+                            if changed {
                                 if let Some(channels) = &channels {
                                     let params: Vec<(String, f64)> = model.parameters.iter().map(|(k, v)| (k.clone(), *v)).collect();
                                     let _ = channels.tx.send(ModelicaCommand::UpdateParameters {
@@ -203,18 +204,6 @@ fn show_telemetry(
                                         parameters: params,
                                     });
                                 }
-                            }
-                        });
-
-                        egui::ScrollArea::vertical().id_salt("params_scroll").max_height(120.0).show(ui, |ui| {
-                            let mut param_keys: Vec<_> = model.parameters.keys().cloned().collect();
-                            param_keys.sort();
-                            for key in param_keys {
-                                ui.horizontal(|ui| {
-                                    ui.label(format!("{}:", key));
-                                    let val = model.parameters.get_mut(&key).unwrap();
-                                    ui.add(egui::DragValue::new(val).speed(0.01));
-                                });
                             }
                         });
                         ui.separator();
@@ -242,19 +231,14 @@ fn show_telemetry(
                             let mut names: Vec<_> = h.keys().cloned().collect();
                             names.sort();
                             names
-                        } else {
-                            Vec::new()
-                        };
+                        } else { Vec::new() };
 
                         for name in var_names {
                             ui.horizontal(|ui| {
                                 let mut is_plotted = state.plotted_variables.contains(&name);
                                 if ui.checkbox(&mut is_plotted, "").changed() {
-                                    if is_plotted {
-                                        state.plotted_variables.insert(name.clone());
-                                    } else {
-                                        state.plotted_variables.remove(&name);
-                                    }
+                                    if is_plotted { state.plotted_variables.insert(name.clone()); }
+                                    else { state.plotted_variables.remove(&name); }
                                 }
                                 ui.label(format!("{}:", name));
                                 

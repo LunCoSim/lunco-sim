@@ -2,15 +2,14 @@
 //! 
 //! This crate provides a Bevy plugin to execute Modelica models as asynchronous, 
 //! high-fidelity "Virtual Plants" within the simulation loop. 
-//! 
-//! Follows Constitution Article XI: All heavy math (solving) is offloaded to 
-//! a dedicated background worker thread because Rumoca steppers are !Send.
 
 use bevy::prelude::*;
 use std::collections::{HashMap, VecDeque};
 use rumoca::Compiler;
 use rumoca_sim::with_diffsol::stepper::{SimStepper, StepperOptions};
+use rumoca_session::{Session, SessionConfig};
 use crossbeam_channel::{unbounded, Receiver, Sender};
+use regex::Regex;
 
 pub mod ui;
 
@@ -32,8 +31,6 @@ impl Plugin for LunCoModelicaPlugin {
             rx: res_rx,
         })
         .register_type::<ModelicaModel>()
-        .register_type::<ModelicaInput>()
-        .register_type::<ModelicaOutput>()
         .add_systems(Update, (
             spawn_modelica_requests,
             handle_modelica_responses,
@@ -84,6 +81,8 @@ pub struct ModelicaResult {
     pub error: Option<String>,
     pub log_message: Option<String>,
     pub is_new_model: bool,
+    /// If true, history and selections should be preserved (just a tune)
+    pub is_parameter_update: bool,
 }
 
 /// The background worker that owns the !Send SimSteppers.
@@ -126,7 +125,8 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                                     detected_symbols: symbols,
                                     error: None,
                                     log_message: Some("Parameters applied successfully.".to_string()),
-                                    is_new_model: true,
+                                    is_new_model: false,
+                                    is_parameter_update: true,
                                 });
                             }
                             Err(e) => {
@@ -138,6 +138,7 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                                     error: Some(format!("Init Error: {:?}", e)),
                                     log_message: None,
                                     is_new_model: false,
+                                    is_parameter_update: true,
                                 });
                             }
                         }
@@ -151,6 +152,7 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                             error: Some(format!("Re-compile Error: {:?}", e)),
                             log_message: None,
                             is_new_model: false,
+                            is_parameter_update: true,
                         });
                     }
                 }
@@ -169,6 +171,7 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                         error: Some(format!("IO Error: {:?}", e)),
                         log_message: None,
                         is_new_model: false,
+                        is_parameter_update: false,
                     });
                     continue;
                 }
@@ -197,6 +200,7 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                                     error: None,
                                     log_message: Some(format!("Model '{}' compiled and loaded.", model_name)),
                                     is_new_model: true,
+                                    is_parameter_update: false,
                                 });
                             }
                             Err(e) => {
@@ -208,6 +212,7 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                                     error: Some(format!("Stepper Error: {:?}", e)),
                                     log_message: None,
                                     is_new_model: false,
+                                    is_parameter_update: false,
                                 });
                             }
                         }
@@ -221,6 +226,7 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                             error: Some(format!("Compiler Error: {:?}", e)),
                             log_message: None,
                             is_new_model: false,
+                            is_parameter_update: false,
                         });
                     }
                 }
@@ -262,6 +268,7 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                             error: Some(format!("Solver Error: {:?}", e)),
                             log_message: None,
                             is_new_model: false,
+                            is_parameter_update: false,
                         });
                         steppers.remove(&entity);
                         continue;
@@ -284,6 +291,7 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                         log_message: None,
                         is_new_model: false,
                         detected_symbols: Vec::new(),
+                        is_parameter_update: false,
                     });
                 }
             }
@@ -310,45 +318,19 @@ pub struct ModelicaModel {
     pub is_stepping: bool,
 }
 
-/// Component for mapping an ECS value to a Modelica input variable.
-#[derive(Component, Reflect, Default)]
-#[reflect(Component)]
-pub struct ModelicaInput {
-    pub variable_name: String,
-    pub value: f64,
-}
-
-/// Component for mapping a Modelica output variable to an ECS state.
-#[derive(Component, Reflect, Default)]
-#[reflect(Component)]
-pub struct ModelicaOutput {
-    pub variable_name: String,
-    pub value: f64,
-}
-
 fn spawn_modelica_requests(
     channels: Res<ModelicaChannels>,
     time: Res<Time>,
-    mut q_models: Query<(Entity, &mut ModelicaModel, Option<&Children>)>,
-    q_inputs: Query<&ModelicaInput>,
+    mut q_models: Query<(Entity, &mut ModelicaModel)>,
 ) {
     let current_real_time = time.elapsed_secs_f64();
 
-    for (entity, mut model, children) in q_models.iter_mut() {
+    for (entity, mut model) in q_models.iter_mut() {
         if model.is_stepping || model.paused { continue; }
 
         let mut inputs = Vec::new();
-        // Dynamic inputs from the model component itself
         for (name, val) in &model.inputs {
             inputs.push((name.clone(), *val));
-        }
-        // Backward compatibility with child ModelicaInput components
-        if let Some(children) = children {
-            for child in children.iter() {
-                if let Ok(input) = q_inputs.get(child) {
-                    inputs.push((input.variable_name.clone(), input.value));
-                }
-            }
         }
 
         let mut dt = if model.last_step_time == 0.0 || model.paused { 0.016 } 
@@ -371,7 +353,6 @@ fn handle_modelica_responses(
     channels: Res<ModelicaChannels>,
     time: Res<Time>,
     mut q_models: Query<&mut ModelicaModel>,
-    mut q_outputs: Query<(&mut ModelicaOutput, Option<&ChildOf>)>,
     mut workbench_state: ResMut<ui::WorkbenchState>,
 ) {
     while let Ok(result) = channels.rx.try_recv() {
@@ -390,14 +371,18 @@ fn handle_modelica_responses(
         if let Ok(mut model) = q_models.get_mut(result.entity) {
             if result.is_new_model {
                 workbench_state.history.remove(&result.entity);
+                if workbench_state.selected_entity == Some(result.entity) {
+                    workbench_state.plotted_variables.clear();
+                }
                 model.current_time = 0.0;
                 model.last_step_time = 0.0;
-                
+            }
+
+            if result.is_new_model || result.is_parameter_update {
                 if !result.detected_symbols.is_empty() {
                     model.parameters.clear();
                     model.inputs.clear();
                     for (name, val) in &result.detected_symbols {
-                        // Heuristic: inputs often end in _in, or we treat everything as tunable parameter
                         if name.ends_with("_in") {
                             model.inputs.insert(name.clone(), *val);
                         } else {
@@ -420,16 +405,18 @@ fn handle_modelica_responses(
                 history.push_back([time_val, *val]);
                 if history.len() > max_history { history.pop_front(); }
             }
-
-            for (name, val) in result.outputs {
-                for (mut output, child_of) in q_outputs.iter_mut() {
-                    if let Some(child_of) = child_of {
-                        if child_of.parent() == result.entity && output.variable_name == name {
-                            output.value = val;
-                        }
-                    }
-                }
-            }
         }
     }
 }
+
+/// Helper to extract the first model/class/block name from a Modelica source string.
+pub fn extract_model_name(source: &str) -> Option<String> {
+    let re = Regex::new(r"(?m)^\s*(model|class|block|package)\s+([a-zA-Z0-9_]+)").ok()?;
+    re.captures(source).map(|cap| cap[2].to_string())
+}
+
+/// Deprecated components for backward compatibility
+#[derive(Component, Reflect, Default)]
+pub struct ModelicaInput { pub variable_name: String, pub value: f64 }
+#[derive(Component, Reflect, Default)]
+pub struct ModelicaOutput { pub variable_name: String, pub value: f64 }

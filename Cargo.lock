@@ -5597,6 +5597,8 @@ dependencies = [
  "lunco-hardware",
  "regex",
  "rumoca",
+ "rumoca-phase-parse",
+ "rumoca-session",
  "rumoca-sim",
  "serde",
  "serde_json",
