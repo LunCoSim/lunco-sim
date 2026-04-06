@@ -347,8 +347,9 @@ fn avatar_observer_system(
             let offset = rotation.mul_vec3(Vec3::Z).as_dvec3() * obs.distance;
             let desired_pos = target_pos + offset + Vec3::Y.as_dvec3() * obs.vertical_offset as f64;
 
-            let lerp_factor = (dt * 30.0 * (1.0 - obs.damping)).min(1.0) as f64;
             let current_pos = grid.grid_position_double(&cell, &tf);
+            let dist_to_desired = current_pos.distance(desired_pos);
+            let lerp_factor = if dist_to_desired > 100.0 { 1.0 } else { (dt * 150.0 * (1.0 - obs.damping)).min(1.0) as f64 };
             let next_pos = current_pos.lerp(desired_pos, lerp_factor);
 
             let (new_cell, new_tf) = grid.translation_to_grid(next_pos);
@@ -360,15 +361,28 @@ fn avatar_observer_system(
                 tf.look_at(target_point, Vec3::Y);
             }
         } else if obs.mode == ObserverMode::Chase {
-            let target_fwd = target_rot.mul_vec3(Vec3::Z);
-            let target_yaw = target_fwd.x.atan2(target_fwd.z);
+            // Robust Chase Camera: Project target's forward vector onto XZ plane
+            let mut target_fwd = target_rot.mul_vec3(Vec3::Z);
+            target_fwd.y = 0.0;
+            let target_yaw = if target_fwd.length_squared() > 0.001 {
+                target_fwd.x.atan2(target_fwd.z)
+            } else {
+                // If rover is vertical, fallback to its local Up vector projected onto XZ
+                let mut target_up = target_rot.mul_vec3(Vec3::Y);
+                target_up.y = 0.0;
+                if target_up.length_squared() > 0.001 {
+                    target_up.x.atan2(target_up.z)
+                } else { 0.0 }
+            };
+            
             let rotation = Quat::from_euler(EulerRot::YXZ, target_yaw + obs.yaw, obs.pitch, 0.0);
 
             let offset = rotation.mul_vec3(Vec3::Z).as_dvec3() * obs.distance;
             let desired_pos = target_pos + offset + Vec3::Y.as_dvec3() * obs.vertical_offset as f64;
 
-            let lerp_factor = (dt * 30.0 * (1.0 - obs.damping)).min(1.0) as f64;
             let current_pos = grid.grid_position_double(&cell, &tf);
+            let dist_to_desired = current_pos.distance(desired_pos);
+            let lerp_factor = if dist_to_desired > 100.0 { 1.0 } else { (dt * 150.0 * (1.0 - obs.damping)).min(1.0) as f64 };
             let next_pos = current_pos.lerp(desired_pos, lerp_factor);
 
             let (new_cell, new_tf) = grid.translation_to_grid(next_pos);

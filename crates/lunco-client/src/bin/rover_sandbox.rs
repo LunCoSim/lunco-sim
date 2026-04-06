@@ -22,6 +22,7 @@ fn main() {
     App::new()
         .insert_resource(Time::<Fixed>::from_hz(60.0))
         .insert_resource(lunco_core::TimeWarpState { physics_enabled: true, ..default() })
+        .insert_resource(avian3d::prelude::Gravity(bevy::math::DVec3::NEG_Y * 9.81))
         .add_plugins(DefaultPlugins.build().disable::<TransformPlugin>())
         .add_plugins(BigSpaceDefaultPlugins.build().disable::<big_space::validation::BigSpaceValidationPlugin>())
         .add_plugins(LogDiagnosticsPlugin::default())
@@ -39,10 +40,24 @@ fn main() {
         .add_systems(Startup, setup_sandbox)
         .add_systems(Update, apply_sandbox_settings)
         .add_systems(PreUpdate, global_transform_propagation_system)
-        .configure_sets(PostUpdate, lunco_avatar::AvatarCameraSet.after(avian3d::prelude::PhysicsSystems::Writeback))
-        .add_systems(PostUpdate, global_transform_propagation_system.after(lunco_avatar::AvatarCameraSet))
+        .add_systems(PostUpdate, (
+            global_transform_propagation_system,
+            camera_render_propagation_system,
+        ).chain().after(avian3d::prelude::PhysicsSystems::Writeback))
+        .configure_sets(PostUpdate, lunco_avatar::AvatarCameraSet
+            .after(global_transform_propagation_system)
+            .before(camera_render_propagation_system))
         .add_systems(EguiPrimaryContextPass, sandbox_ui_system)
         .run();
+}
+
+fn camera_render_propagation_system(
+    commands: Commands,
+    q_needs: Query<Entity, (Or<(With<Visibility>, With<Mesh3d>, With<Text2d>, With<Transform>)>, Without<InheritedVisibility>, Without<CellCoord>)>,
+    q_spatial: Query<(Entity, &mut GlobalTransform, &Transform, Option<&ChildOf>)>,
+    q_visibility: Query<(Entity, &mut InheritedVisibility, &mut ViewVisibility, &Visibility, Option<&ChildOf>)>,
+) {
+    global_transform_propagation_system(commands, q_needs, q_spatial, q_visibility);
 }
 
 #[derive(Resource, Reflect)]
