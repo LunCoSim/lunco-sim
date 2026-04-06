@@ -27,7 +27,8 @@ pub struct WorkbenchState {
     pub editor_buffer: String,
     pub selected_entity: Option<Entity>,
     pub compilation_error: Option<String>,
-    pub history: HashMap<String, VecDeque<[f64; 2]>>,
+    /// History of variables: Entity -> VariableName -> DataPoints
+    pub history: HashMap<Entity, HashMap<String, VecDeque<[f64; 2]>>>,
     pub plotted_variables: std::collections::HashSet<String>,
     pub max_history: usize,
 }
@@ -290,11 +291,14 @@ fn show_plots(
                 .view_aspect(2.0)
                 .legend(egui_plot::Legend::default())
                 .show(ui, |plot_ui| {
-                    for var_name in &state.plotted_variables {
-                        if let Some(data) = state.history.get(var_name) {
-                            let points: Vec<[f64; 2]> = data.iter().cloned().collect();
-                            // FIX: Correct Line::new signature for egui_plot 0.34
-                            plot_ui.line(Line::new(var_name.clone(), PlotPoints::from(points)));
+                    if let Some(entity) = state.selected_entity {
+                        if let Some(entity_history) = state.history.get(&entity) {
+                            for var_name in &state.plotted_variables {
+                                if let Some(data) = entity_history.get(var_name) {
+                                    let points: Vec<[f64; 2]> = data.iter().cloned().collect();
+                                    plot_ui.line(Line::new(var_name.clone(), PlotPoints::from(points)));
+                                }
+                            }
                         }
                     }
                 });

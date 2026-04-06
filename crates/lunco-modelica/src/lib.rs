@@ -60,6 +60,9 @@ pub enum ModelicaCommand {
         model_name: String,
         source: String,
     },
+    Reset {
+        entity: Entity,
+    },
     Despawn {
         entity: Entity,
     }
@@ -79,6 +82,10 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
 
     while let Ok(cmd) = rx.recv() {
         match cmd {
+            ModelicaCommand::Reset { entity } => {
+                steppers.remove(&entity);
+                info!("Resetting Modelica stepper for entity {:?}", entity);
+            }
             ModelicaCommand::Compile { entity, model_name, source } => {
                 info!("Compiling live Modelica source for {}...", model_name);
                 let temp_path = format!(".cache/modelica_temp_{:?}.mo", entity);
@@ -286,6 +293,7 @@ fn spawn_modelica_requests(
 
 fn handle_modelica_responses(
     channels: Res<ModelicaChannels>,
+    time: Res<Time>,
     mut q_models: Query<&mut ModelicaModel>,
     mut q_outputs: Query<(&mut ModelicaOutput, Option<&ChildOf>)>,
     mut workbench_state: ResMut<ui::WorkbenchState>,
@@ -302,7 +310,7 @@ fn handle_modelica_responses(
 
         if result.is_new_model {
             // Reset everything for this entity on new model load
-            workbench_state.history.clear();
+            workbench_state.history.remove(&result.entity);
             if let Ok(mut model) = q_models.get_mut(result.entity) {
                 model.current_time = 0.0;
                 model.last_step_time = 0.0;
@@ -311,18 +319,19 @@ fn handle_modelica_responses(
 
         if let Ok(mut model) = q_models.get_mut(result.entity) {
             model.current_time = result.new_time;
+            model.last_step_time = time.elapsed_secs_f64(); // Keep in sync even if paused
             model.is_stepping = false;
 
-            // Update workbench history if this is the selected entity
-            if workbench_state.selected_entity == Some(result.entity) {
-                let time = result.new_time;
-                let max_history = workbench_state.max_history;
-                for (name, val) in &result.outputs {
-                    let history = workbench_state.history.entry(name.clone()).or_insert_with(|| VecDeque::with_capacity(max_history));
-                    history.push_back([time, *val]);
-                    if history.len() > max_history {
-                        history.pop_front();
-                    }
+            // Update workbench history
+            let time_val = result.new_time;
+            let max_history = workbench_state.max_history;
+            let entity_history = workbench_state.history.entry(result.entity).or_insert_with(HashMap::new);
+            
+            for (name, val) in &result.outputs {
+                let history = entity_history.entry(name.clone()).or_insert_with(|| VecDeque::with_capacity(max_history));
+                history.push_back([time_val, *val]);
+                if history.len() > max_history {
+                    history.pop_front();
                 }
             }
 
