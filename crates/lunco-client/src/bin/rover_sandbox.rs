@@ -164,44 +164,44 @@ fn setup_sandbox(
     )).set_parent_in_place(grid).id();
 
     let _joint_skid = rover::spawn_joint_rover(
-        &mut commands, 
+        &mut commands,
         &mut meshes,
         &mut materials,
-        rovers_root, 
-        Vec3::new(-15.0, 5.0, -10.0), 
-        "Joint_Skid", 
+        rovers_root,
+        Vec3::new(-15.0, 5.0, -10.0),
+        "Joint_Skid",
         Color::srgb(0.8, 0.2, 0.2),
         rover::SteeringType::Skid,
     );
 
     rover::spawn_joint_rover(
-        &mut commands, 
+        &mut commands,
         &mut meshes,
         &mut materials,
-        rovers_root, 
-        Vec3::new(-15.0, 5.0, 10.0), 
-        "Joint_Ackermann", 
+        rovers_root,
+        Vec3::new(-15.0, 5.0, 10.0),
+        "Joint_Ackermann",
         Color::srgb(0.2, 0.8, 0.2),
         rover::SteeringType::Ackermann,
     );
 
     let r_skid = rover::spawn_raycast_rover(
-        &mut commands, 
+        &mut commands,
         &mut meshes,
         &mut materials,
-        Vec3::new(15.0, 5.0, -10.0), 
-        "Raycast_Skid", 
+        Vec3::new(15.0, 5.0, -10.0),
+        "Raycast_Skid",
         Color::srgb(0.2, 0.2, 0.8),
         rover::SteeringType::Skid,
     );
     commands.entity(r_skid).set_parent_in_place(grid);
 
     let r_ack = rover::spawn_raycast_rover(
-        &mut commands, 
+        &mut commands,
         &mut meshes,
         &mut materials,
-        Vec3::new(15.0, 5.0, 10.0), 
-        "Raycast_Ackermann", 
+        Vec3::new(15.0, 5.0, 10.0),
+        "Raycast_Ackermann",
         Color::srgb(0.8, 0.8, 0.2),
         rover::SteeringType::Ackermann,
     );

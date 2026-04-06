@@ -724,6 +724,13 @@ fn on_possess_command(
             avatar_ent, cam_cell, cam_tf, &q_parents, &q_grids, &q_spatial_abs,
         );
 
+        // Compute the target vessel's heading so the camera follows behind
+        // it rather than snapping to world +Z (origin).
+        let end_yaw = if let Ok((_t_cell, t_tf)) = q_spatial_abs.get(msg.target) {
+            let fwd = t_tf.rotation.mul_vec3(Vec3::Z);
+            if fwd.length_squared() > 0.001 { fwd.x.atan2(fwd.z) } else { 0.0 }
+        } else { 0.0 };
+
         commands.entity(avatar_ent)
             .remove::<ObserverBehavior>()
             .remove::<TransitionBehavior>()
@@ -735,7 +742,7 @@ fn on_possess_command(
                     start_rot: cam_tf.rotation,
                     end_dist: distance,
                     end_pitch: -0.25,
-                    end_yaw: 0.0, // STRICT RESET behind the vehicle
+                    end_yaw,
                     end_vertical_offset: 2.0,
                     end_damping: 0.05,
                     end_mode: ObserverMode::Chase,

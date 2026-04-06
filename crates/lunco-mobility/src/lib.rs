@@ -51,8 +51,8 @@ impl Plugin for LunCoMobilityPlugin {
 
 /// A high-performance wheel model using emulated suspension rays.
 ///
-/// **Theory**: Instead of a physical collider, this component projects a ray 
-/// downwards. The resulting distance is used to solve the spring-damper 
+/// **Theory**: Instead of a physical collider, this component projects a ray
+/// downwards. The resulting distance is used to solve the spring-damper
 /// equation, simulating the behavior of a physical tire and strut.
 #[derive(Component, Debug, Clone, Reflect)]
 #[reflect(Component, Default)]
@@ -71,6 +71,9 @@ pub struct WheelRaycast {
     pub damping_c: f64,
     /// Radius of the tire (effectively the minimum offset from ground).
     pub wheel_radius: f64,
+    /// Y-offset of the ray origin relative to the wheel transform (meters).
+    /// Used for visual wheel positioning.
+    pub ray_origin_y: f64,
     /// Entity for the visual mesh to be transformed.
     pub visual_entity: Option<Entity>,
     /// Resultant normal force from the last physics tick, used for friction calculations.
@@ -87,6 +90,7 @@ impl Default for WheelRaycast {
             spring_k: 8000.0,
             damping_c: 2800.0,
             wheel_radius: 0.4,
+            ray_origin_y: 0.0,
             visual_entity: None,
             last_normal_force: 0.0,
         }
@@ -95,9 +99,21 @@ impl Default for WheelRaycast {
 
 /// System solving the vertical suspension dynamics.
 ///
-/// **Logic**: Performs a ray-world intersection check. If a hit is detected 
-/// within the suspension travel range, it applies an upward force to the 
+/// **Logic**: Performs a ray-world intersection check. If a hit is detected
+/// within the suspension travel range, it applies an upward force to the
 /// parent chassis based on the compression distance and relative velocity.
+///
+/// **Suspension model**: Spring-damper using Hooke's law:
+/// `F = k * compression + c * relative_velocity`
+/// Damping is bidirectional — it resists both compression and extension
+/// to prevent oscillation. Force is only applied upward (along hit normal)
+/// to avoid pulling the chassis into the ground.
+///
+/// **Geometry**: The ray origin is at the wheel entity transform (the
+/// suspension mount point on the chassis). The ray points straight down.
+/// `hit_distance` = distance from mount to ground. When `hit_distance <
+/// rest_length` the spring is compressed. The wheel visual is positioned at
+/// `ground_y + wheel_radius` so the tire rests on the terrain surface.
 fn apply_wheel_suspension(
     mut q_wheels: Query<(
         &mut WheelRaycast,
@@ -111,45 +127,46 @@ fn apply_wheel_suspension(
     for (mut wheel, hits, wheel_tf, parent) in q_wheels.iter_mut() {
         let parent_entity = parent.parent();
         if let Ok(mut forces) = q_chassis.get_mut(parent_entity) {
-            let mut closest_hit_dist = wheel.rest_length + wheel.wheel_radius;
-            
             let world_pos = forces.position().0 + forces.rotation().0 * wheel_tf.translation.as_dvec3();
-            let ray_dir_world = forces.rotation().0 * Vec3::NEG_Y.as_dvec3();
-            
+
             if let Some(hit) = hits.iter_sorted().next() {
                 let distance = hit.distance;
-                if distance < (wheel.rest_length + wheel.wheel_radius) {
-                    closest_hit_dist = distance;
-                    // Compression = (RestLen + Radius) - HitDistance
-                    let compression = ((wheel.rest_length + wheel.wheel_radius) - distance).max(0.0);
+                if distance < wheel.rest_length {
+                    // Suspension is compressed: apply spring-damper force.
+                    let compression = wheel.rest_length - distance;
                     let spring_force_mag = compression * wheel.spring_k;
-                    
-                    // Damping calculation based on relative normal velocity
+
+                    // Damping calculation based on relative normal velocity.
+                    // Positive relative_vel = wheel moving toward ground (compressing).
+                    // Negative relative_vel = wheel moving away from ground (extending).
+                    // Damping always opposes motion.
+                    let ray_dir_world = forces.rotation().0 * Vec3::NEG_Y.as_dvec3();
                     let lin_vel = forces.linear_velocity();
                     let ang_vel = forces.angular_velocity();
                     let velocity_at_wheel = lin_vel + ang_vel.cross(world_pos - forces.position().0);
-                    let relative_vel = velocity_at_wheel.dot(ray_dir_world); 
-                    
-                    let damping_force_mag = (relative_vel * wheel.damping_c).max(0.0);
+                    let relative_vel = velocity_at_wheel.dot(ray_dir_world);
+
+                    let damping_force_mag = relative_vel * wheel.damping_c;
                     let total_force_mag = (spring_force_mag + damping_force_mag).max(0.0);
-                    
-                    // Apply counter-force to the chassis to push it away from the ground
+
                     let force_vec = hit.normal * total_force_mag;
                     forces.apply_force_at_point(force_vec, world_pos);
                     wheel.last_normal_force = total_force_mag;
+
+                    // Position the wheel visual on the ground: ground_y + radius.
+                    // ground_local_y = wheel_tf.y + ray_origin_y - hit_distance
+                    // wheel_center_local_y = ground_local_y + wheel_radius
+                    if let Some(visual_entity) = wheel.visual_entity {
+                        if let Ok(mut visual_tf) = q_visual.get_mut(visual_entity) {
+                            let ground_y_local = wheel_tf.translation.y as f64 + wheel.ray_origin_y - distance;
+                            visual_tf.translation.y = (ground_y_local + wheel.wheel_radius) as f32;
+                        }
+                    }
                 } else {
                     wheel.last_normal_force = 0.0;
                 }
             } else {
                 wheel.last_normal_force = 0.0;
-            }
-
-            // Sync visual position to make the wheel appear to move with the suspension
-            if let Some(visual_entity) = wheel.visual_entity {
-                if let Ok(mut visual_tf) = q_visual.get_mut(visual_entity) {
-                    let wheel_center_rel_y = (wheel_tf.translation.y as f64 + 0.5 - closest_hit_dist) + wheel.wheel_radius;
-                    visual_tf.translation.y = wheel_center_rel_y as f32;
-                }
             }
         }
     }
@@ -157,9 +174,12 @@ fn apply_wheel_suspension(
 
 /// System applying longitudinal drive torque and lateral friction.
 ///
-/// **Theory**: Drive force is applied along the wheel's forward vector. 
-/// Lateral friction is emulated by countering any side-velocity at the 
-/// contact hub, preventing rovers from sliding like they are on ice.
+/// **Theory**: Drive force is applied along the wheel's forward vector at the
+/// world-space contact point. Both longitudinal (forward/back) and lateral
+/// (side-to-side) friction are computed using a Coulomb friction model where
+/// the maximum friction force is `mu * normal_force`. This prevents the rover
+/// from sliding like it's on ice and limits drive force to what the tire can
+/// actually grip.
 fn apply_wheel_drive(
     q_wheels: Query<(
         &WheelRaycast,
@@ -176,26 +196,51 @@ fn apply_wheel_drive(
             if let Ok(port) = q_ports.get(wheel.drive_port) {
                 // Traction only exists when the ray is hitting the ground
                 if hits.iter().next().is_some() {
-                    let forward = wheel_tf.forward().as_dvec3();
-                    let drive_force_mag = port.value as f64 * 12000.0; // Scaled to vessel mass
-                    let force_vec = forward * drive_force_mag;
-                    
-                    forces.apply_force_at_point(force_vec, wheel_tf.translation().as_dvec3());
+                    let normal_force = wheel.last_normal_force;
+                    if normal_force < 1.0 {
+                        // Not enough contact to transmit meaningful force
+                        continue;
+                    }
+
+                    // Compute wheel world-space position and basis vectors from the
+                    // GlobalTransform, which already includes parent transforms.
+                    let hub_pos_world = wheel_tf.translation().as_dvec3();
+                    let wheel_rot = wheel_tf.rotation();
+                    let forward: DVec3 = wheel_rot.mul_vec3(Vec3::NEG_Z).as_dvec3();
+                    let right: DVec3 = wheel_rot.mul_vec3(Vec3::X).as_dvec3();
+
+                    // --- Drive force ---
+                    // Physical port value is already scaled by the wire gain.
+                    // We treat it as a normalized 0-1 throttle and scale to a
+                    // reasonable per-wheel drive force based on vehicle weight.
+                    let throttle = (port.value as f64).clamp(0.0, 1.0);
+                    let drive_force_mag = throttle * normal_force * 2.0; // 2x weight as max drive
+                    let drive_force_vec = forward * drive_force_mag;
+                    forces.apply_force_at_point(drive_force_vec, hub_pos_world);
+
+                    // --- Friction (longitudinal + lateral) ---
+                    // Coulomb friction cone: total friction force magnitude <= mu * N
+                    let friction_mu = 1.0;
+                    let max_friction = friction_mu * normal_force;
 
                     let chassis_vel = forces.linear_velocity();
                     let chassis_ang_vel = forces.angular_velocity();
-                    let hub_pos_world = wheel_tf.translation().as_dvec3();
                     let hub_vel = chassis_vel + chassis_ang_vel.cross(hub_pos_world - forces.position().0);
 
-                    // Coulomb-like friction approximation
-                    let normal_force = wheel.last_normal_force;
-                    let friction_k = 1.1; // Baseline static friction coefficient
-                    
-                    let right = wheel_tf.right().as_dvec3();
-                    let lateral_vel = hub_vel.dot(right);
-                    
-                    let lateral_friction_force = -lateral_vel * friction_k * normal_force * right;
-                    forces.apply_force_at_point(lateral_friction_force, hub_pos_world);
+                    // Longitudinal slip velocity (how fast the wheel is spinning vs rolling)
+                    let long_vel = hub_vel.dot(forward);
+                    // Lateral slip velocity (sideways sliding)
+                    let lat_vel = hub_vel.dot(right);
+
+                    // Combined slip speed and direction
+                    let slip_speed = (long_vel * long_vel + lat_vel * lat_vel).sqrt();
+                    if slip_speed > 0.001 {
+                        let slip_dir = (long_vel * forward + lat_vel * right) / slip_speed;
+                        // Friction opposes slip, clamped to the friction cone
+                        let friction_mag = max_friction.min(slip_speed * 50.0); // High stiffness for low slip
+                        let friction_force = -slip_dir * friction_mag;
+                        forces.apply_force_at_point(friction_force, hub_pos_world);
+                    }
                 }
             }
         }
@@ -203,18 +248,29 @@ fn apply_wheel_drive(
 }
 
 /// Updates steering angle based on physical port state.
+///
+/// The steering port value (normalized -1 to 1) is mapped to a yaw rotation
+/// around the local Y axis. For front wheels on Ackermann rovers, this
+/// produces the steer angle. For non-steering wheels, the port is
+/// `Entity::PLACEHOLDER` and this system skips them.
 fn apply_wheel_steering(
     mut q_wheels: Query<(&WheelRaycast, &mut Transform)>,
     q_ports: Query<&lunco_core::architecture::PhysicalPort>,
     mut q_visual: Query<&mut Transform, Without<WheelRaycast>>,
 ) {
     for (wheel, mut transform) in q_wheels.iter_mut() {
+        if wheel.steer_port == Entity::PLACEHOLDER {
+            continue;
+        }
         if let Ok(port) = q_ports.get(wheel.steer_port) {
-            let target_angle = (port.value * 0.5) as f32; // Limit to +/- 30 degrees roughly
+            // Port value is -1.0 to 1.0; map to +/- 0.5 rad (~30 degrees)
+            let target_angle = (port.value as f32).clamp(-1.0, 1.0) * 0.5;
+            // Steer rotation is around local Y (up) axis
             transform.rotation = Quat::from_rotation_y(target_angle);
-            
+
             if let Some(visual_entity) = wheel.visual_entity {
                 if let Ok(mut visual_tf) = q_visual.get_mut(visual_entity) {
+                    // Visual wheel mesh is a cylinder lying on its side
                     visual_tf.rotation = transform.rotation * Quat::from_rotation_z(std::f32::consts::FRAC_PI_2);
                 }
             }
@@ -280,7 +336,12 @@ impl Default for Suspension {
     }
 }
 
-/// Solves linear suspension equations forentities linked by joints.
+/// Solves linear suspension equations for entities linked by joints.
+///
+/// **Model**: Spring-damper using Hooke's law applied along the prismatic
+/// joint's slider axis. Damping is bidirectional — it resists both compression
+/// and extension to prevent oscillation. The force is applied as an equal and
+/// opposite pair on the two connected bodies.
 fn suspension_system(
     q_joints: Query<(&PrismaticJoint, &Suspension)>,
     mut q_bodies: Query<Forces>,
@@ -294,30 +355,31 @@ fn suspension_system(
             let rot1 = forces1.rotation().0;
             let pos2 = forces2.position().0;
             let rot2 = forces2.rotation().0;
-            
+
             let world_axis: DVec3 = rot1 * susp.local_axis;
-            
+
             let anchor1_world: DVec3 = pos1 + rot1 * joint.local_anchor1().unwrap_or_default();
             let anchor2_world: DVec3 = pos2 + rot2 * joint.local_anchor2().unwrap_or_default();
-            
+
             let diff_world: DVec3 = anchor2_world - anchor1_world;
             let current_length: f64 = -diff_world.dot(world_axis);
             let vel1 = forces1.velocity_at_point(anchor1_world);
             let vel2 = forces2.velocity_at_point(anchor2_world);
             let rel_vel: f64 = (vel2 - vel1).dot(world_axis);
-            
+
             let compression: f64 = (susp.rest_length - current_length).max(0.0);
             let spring_force_mag: f64 = compression * susp.spring_k;
-            
-            let closing_speed: f64 = rel_vel;
-            let damping_force_mag: f64 = (closing_speed * susp.damping_c).max(0.0);
-            
+
+            // Damping opposes relative motion: positive when compressing (adds
+            // force), negative when extending (reduces force). Clamp total to
+            // zero minimum so we never pull bodies together.
+            let damping_force_mag: f64 = rel_vel * susp.damping_c;
             let total_force_mag: f64 = (spring_force_mag + damping_force_mag).clamp(0.0, 100_000.0);
-            
+
             if !total_force_mag.is_finite() { continue; }
-            
+
             let force_vec: DVec3 = world_axis * total_force_mag;
-            
+
             forces1.apply_force_at_point(force_vec, anchor1_world);
             forces2.apply_force_at_point(-force_vec, anchor2_world);
         }
