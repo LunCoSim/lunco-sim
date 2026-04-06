@@ -39,6 +39,7 @@ fn main() {
         .init_resource::<SandboxSettings>()
         .add_systems(Startup, setup_sandbox)
         .add_systems(Update, apply_sandbox_settings)
+        .add_systems(Update, apply_blueprint_grid_settings)
         .add_systems(PreUpdate, global_transform_propagation_system)
         .add_systems(PostUpdate, (
             global_transform_propagation_system,
@@ -81,6 +82,33 @@ impl Default for SandboxSettings {
     }
 }
 
+/// Tunable blueprint grid parameters exposed in the sandbox UI.
+#[derive(Resource)]
+struct BlueprintGridSettings {
+    /// Entity holding the BlueprintMaterial asset.
+    material_handle: Handle<BlueprintMaterial>,
+    major_spacing: f32,
+    minor_spacing: f32,
+    major_width: f32,
+    minor_width: f32,
+    minor_fade: f32,
+    dirty: bool,
+}
+
+impl Default for BlueprintGridSettings {
+    fn default() -> Self {
+        Self {
+            material_handle: Handle::default(),
+            major_spacing: 1.0,
+            minor_spacing: 0.5,
+            major_width: 1.0,
+            minor_width: 0.5,
+            minor_fade: 0.15,
+            dirty: true,
+        }
+    }
+}
+
 fn setup_sandbox(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -98,36 +126,67 @@ fn setup_sandbox(
         Name::new("Sandbox_Grid"),
     )).set_parent_in_place(big_space_root).id();
 
-    let blueprint_mat = blueprint_materials.add(BlueprintMaterial {
+    let blueprint_mat = BlueprintExtension {
+        high_color: LinearRgba::new(0.5, 0.5, 0.5, 1.0),
+        low_color: LinearRgba::new(0.1, 0.1, 0.1, 1.0),
+        high_line_color: LinearRgba::new(0.18, 0.18, 0.18, 1.0),
+        low_line_color: LinearRgba::new(0.18, 0.18, 0.18, 1.0),
+        surface_color: LinearRgba::new(0.15, 0.15, 0.18, 1.0),
+        grid_scale: 1.0,
+        line_width: 2.0,
+        subdivisions: Vec2::new(10.0, 10.0),
+        transition: 0.85,
+        major_grid_spacing: 1.0,
+        minor_grid_spacing: 0.5,
+        major_line_width: 1.0,
+        minor_line_width: 0.5,
+        minor_line_fade: 0.15,
+        ..default()
+    };
+    let blueprint_mat_handle = blueprint_materials.add(BlueprintMaterial {
         base: StandardMaterial {
-            base_color: Color::srgb(0.2, 0.2, 0.2), 
+            base_color: Color::srgb(0.2, 0.2, 0.2),
             perceptual_roughness: 0.9,
             ..default()
         },
-        extension: BlueprintExtension {
-            high_color: LinearRgba::new(0.5, 0.5, 0.5, 1.0),
-            low_color: LinearRgba::new(0.1, 0.1, 0.1, 1.0),
-            grid_scale: 1.0,
-            line_width: 2.0,
-            subdivisions: Vec2::new(10.0, 10.0),
-            transition: 0.0, 
-            ..default()
-        },
+        extension: blueprint_mat,
+    });
+
+    commands.insert_resource(BlueprintGridSettings {
+        material_handle: blueprint_mat_handle.clone(),
+        ..default()
     });
 
     commands.spawn((
         Name::new("Blueprint_Ground"),
         Mesh3d(meshes.add(Plane3d::default().mesh().size(2000.0, 2000.0))),
-        MeshMaterial3d(blueprint_mat),
+        MeshMaterial3d(blueprint_mat_handle),
         RigidBody::Static,
         Collider::cuboid(2000.0, 0.1, 2000.0),
         CellCoord::default(),
         Visibility::default(),
     )).set_parent_in_place(grid);
 
-    let ramp_mat = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.7, 0.7, 0.7),
-        ..default()
+    let ramp_mat = blueprint_materials.add(BlueprintMaterial {
+        base: StandardMaterial {
+            base_color: Color::srgb(0.25, 0.22, 0.18),
+            perceptual_roughness: 0.9,
+            ..default()
+        },
+        extension: BlueprintExtension {
+            surface_color: LinearRgba::new(0.25, 0.22, 0.18, 1.0),
+            high_line_color: LinearRgba::new(0.2, 0.18, 0.15, 1.0),
+            low_line_color: LinearRgba::new(0.2, 0.18, 0.15, 1.0),
+            major_grid_spacing: 1.0,
+            minor_grid_spacing: 0.5,
+            major_line_width: 1.0,
+            minor_line_width: 0.5,
+            minor_line_fade: 0.15,
+            transition: 0.85,
+            line_width: 2.0,
+            subdivisions: Vec2::new(10.0, 10.0),
+            ..default()
+        },
     });
     commands.spawn((
         Name::new("Ramp"),
@@ -236,6 +295,8 @@ fn setup_sandbox(
 fn sandbox_ui_system(
     mut contexts: EguiContexts,
     mut settings: ResMut<SandboxSettings>,
+    mut sens: ResMut<lunco_avatar::CameraScrollSensitivity>,
+    mut grid_settings: ResMut<BlueprintGridSettings>,
     q_camera: Query<(Entity, &Transform, &CellCoord, &ObserverBehavior), With<lunco_core::Avatar>>,
     q_vessels: Query<(Entity, &Name, &Vessel)>,
     q_children: Query<&Children>,
@@ -256,6 +317,18 @@ fn sandbox_ui_system(
         ui.add(egui::Slider::new(&mut settings.sun_pitch, -3.14..=0.0).text("Sun Pitch"));
         ui.add(egui::Slider::new(&mut settings.ambient_brightness, 0.0..=1000.0).text("Ambient"));
         ui.checkbox(&mut settings.wireframe, "Show Wireframe");
+
+        ui.separator();
+        ui.heading("Camera");
+        ui.add(egui::Slider::new(&mut sens.value, 0.1..=5.0).text("Scroll Sensitivity (m)"));
+
+        ui.separator();
+        ui.heading("Grid");
+        if ui.add(egui::Slider::new(&mut grid_settings.major_spacing, 0.1..=10.0).text("Major (m)")).changed() { grid_settings.dirty = true; }
+        if ui.add(egui::Slider::new(&mut grid_settings.minor_spacing, 0.01..=1.0).text("Minor (m)")).changed() { grid_settings.dirty = true; }
+        if ui.add(egui::Slider::new(&mut grid_settings.major_width, 0.5..=5.0).text("Major Width")).changed() { grid_settings.dirty = true; }
+        if ui.add(egui::Slider::new(&mut grid_settings.minor_width, 0.1..=2.0).text("Minor Width")).changed() { grid_settings.dirty = true; }
+        if ui.add(egui::Slider::new(&mut grid_settings.minor_fade, 0.0..=1.0).text("Minor Opacity")).changed() { grid_settings.dirty = true; }
 
         ui.separator();
         ui.heading("Avatar Telemetry");
@@ -317,6 +390,22 @@ fn apply_sandbox_settings(
         for mut ambient in q_ambient.iter_mut() {
             ambient.brightness = settings.ambient_brightness;
             ambient.color = Color::Srgba(settings.ambient_color.into());
+        }
+    }
+}
+
+fn apply_blueprint_grid_settings(
+    mut grid_settings: ResMut<BlueprintGridSettings>,
+    mut materials: ResMut<Assets<BlueprintMaterial>>,
+) {
+    if grid_settings.dirty {
+        grid_settings.dirty = false;
+        if let Some(mat) = materials.get_mut(&grid_settings.material_handle) {
+            mat.extension.major_grid_spacing = grid_settings.major_spacing;
+            mat.extension.minor_grid_spacing = grid_settings.minor_spacing;
+            mat.extension.major_line_width = grid_settings.major_width;
+            mat.extension.minor_line_width = grid_settings.minor_width;
+            mat.extension.minor_line_fade = grid_settings.minor_fade;
         }
     }
 }

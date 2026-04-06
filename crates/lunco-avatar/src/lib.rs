@@ -33,12 +33,25 @@ pub struct CameraScroll {
     pub delta: f32,
 }
 
+/// Resource for camera scroll sensitivity (meters per scroll unit).
+#[derive(Resource)]
+pub struct CameraScrollSensitivity {
+    pub value: f32,
+}
+
+impl Default for CameraScrollSensitivity {
+    fn default() -> Self {
+        Self { value: 0.1 }
+    }
+}
+
 /// Plugin for managing user avatar logic, input processing, and possession.
 pub struct LunCoAvatarPlugin;
 
 impl Plugin for LunCoAvatarPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<CameraScroll>()
+           .init_resource::<CameraScrollSensitivity>()
            .init_resource::<MouseSensitivity>();
         app.add_plugins(InputManagerPlugin::<UserIntent>::default());
         app.add_observer(on_user_intent);
@@ -305,6 +318,7 @@ fn avatar_observer_system(
     q_grids: Query<&Grid>,
     q_parents: Query<&ChildOf>,
     mut scroll_res: ResMut<CameraScroll>,
+    sens: Res<CameraScrollSensitivity>,
     mut commands: Commands,
     keys: Res<ButtonInput<KeyCode>>,
     _mouse: Res<ButtonInput<MouseButton>>,
@@ -317,6 +331,12 @@ fn avatar_observer_system(
         let force_free = is_detached || ctrl_pressed || (!is_possessed && obs.target.is_none());
 
         if force_free || obs.mode == ObserverMode::Flyby {
+            if scroll_res.delta != 0.0 {
+                let zoom = scroll_res.delta as f64 * -sens.value as f64;
+                let forward = tf.forward().as_dvec3();
+                obs.flyby_offset += forward * zoom;
+                scroll_res.delta = 0.0;
+            }
             if let Ok(grid) = q_grids.get(child_of.0) {
                 let (new_cell, new_tf) = grid.translation_to_grid(obs.flyby_offset);
                 *cell = new_cell; tf.translation = new_tf;
@@ -332,8 +352,8 @@ fn avatar_observer_system(
 
         // 1. Unified Scroll Zoom
         if scroll_res.delta != 0.0 {
-            let scroll = scroll_res.delta as f64 * -0.01;
-            obs.distance = (obs.distance - (scroll * (obs.distance * 0.1))).clamp(min_dist, 1.0e11);
+            let zoom_amount = scroll_res.delta as f64 * -sens.value as f64;
+            obs.distance = (obs.distance + zoom_amount).clamp(min_dist, 1.0e11);
             scroll_res.delta = 0.0;
         }
 
@@ -423,7 +443,7 @@ fn avatar_observer_system(
             tf.rotation = tf.rotation.slerp(desired_rot, rot_alpha);
 
             if scroll_res.delta != 0.0 {
-                obs.distance = (obs.distance - scroll_res.delta as f64 * 5.0).clamp(5.0, 200.0);
+                obs.distance = (obs.distance - scroll_res.delta as f64 * sens.value as f64).clamp(2.0, 200.0);
                 scroll_res.delta = 0.0;
             }
 
@@ -505,36 +525,14 @@ fn avatar_transition_system(
 
 /// Shared locomotion system.
 fn avatar_universal_locomotion_system(
-    time: Res<Time>,
     mut q_avatar: Query<(&mut Transform, &mut CellCoord, &ChildOf, Option<&ControllerLink>, Has<DetachedCamera>, &IntentAnalogState, Option<&mut ObserverBehavior>), With<Avatar>>,
     q_grids: Query<&Grid>,
     keys: Res<ButtonInput<KeyCode>>,
-    mut scroll_res: ResMut<CameraScroll>,
-    mut spatial: ParamSet<(Query<(&CellCoord, &Transform, &ChildOf, Option<&CelestialBody>, Option<&Spacecraft>), Without<Avatar>>, )>,
 ) {
-    let dt = time.delta_secs() as f64;
     let ctrl_pressed = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
     for (mut tf, mut cell, child_of, possessed, is_detached, analog, mut obs_opt) in q_avatar.iter_mut() {
         let Ok(grid) = q_grids.get(child_of.0) else { continue; };
         let current_pos = grid.grid_position_double(&cell, &tf);
-        let mut speed = 100.0;
-
-        if let Some(ref obs) = obs_opt {
-            if let Some(target) = obs.target {
-                if let Ok((t_cell, t_tf, t_child_of, t_body, t_sc)) = spatial.p0().get(target) {
-                    let mut radius = 0.0; let mut scale = false;
-                    if let Some(body) = t_body { radius = body.radius_m; scale = true; }
-                    else if let Some(sc) = t_sc { radius = sc.hit_radius_m as f64; scale = true; }
-                    if scale { if let Ok(t_grid) = q_grids.get(t_child_of.0) { speed = (current_pos.distance(t_grid.grid_position_double(t_cell, t_tf)) - radius).max(10.0) * 0.5; } }
-                }
-            }
-        }
-
-        let mut move_vec = Vec3::ZERO;
-        if obs_opt.is_some() && scroll_res.delta != 0.0 {
-            move_vec += *tf.forward() * scroll_res.delta * 0.1 * (speed as f32 / dt as f32); 
-            scroll_res.delta = 0.0;
-        }
 
         let is_unlocked = is_detached || ctrl_pressed || possessed.is_none();
         let curr_is_moving = analog.forward.abs() > 0.01 || analog.side.abs() > 0.01 || analog.elevation.abs() > 0.01;
@@ -549,6 +547,7 @@ fn avatar_universal_locomotion_system(
             }
         }
 
+        let mut move_vec = Vec3::ZERO;
         if is_unlocked {
             move_vec += *tf.forward() * analog.forward;
             move_vec += *tf.right() * analog.side;
@@ -556,7 +555,7 @@ fn avatar_universal_locomotion_system(
         }
 
         if move_vec.length_squared() < 0.00001 { continue; }
-        let next_pos = current_pos + move_vec.as_dvec3() * speed * dt;
+        let next_pos = current_pos + move_vec.as_dvec3() * 33.0 * (1.0 / 60.0);
         let (new_cell, new_tf) = grid.translation_to_grid(next_pos);
         *cell = new_cell; tf.translation = new_tf;
         
