@@ -220,6 +220,7 @@ fn main_ui_system(mut params: MainUiParams) {
                     ObserverMode::Flyby => { ui.colored_label(egui::Color32::from_rgb(255, 200, 50), "FLYBY"); },
                     ObserverMode::Orbital => { ui.colored_label(egui::Color32::from_rgb(100, 150, 255), "ORBITAL"); },
                     ObserverMode::Surface => { ui.colored_label(egui::Color32::from_rgb(50, 255, 100), "SURFACE"); },
+                    ObserverMode::Chase => { ui.colored_label(egui::Color32::from_rgb(255, 100, 50), "CHASE"); },
                 }
             });
             ui.label(format!("Distance: {:.1} m", obs.distance));

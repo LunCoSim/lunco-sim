@@ -9,12 +9,12 @@ use bevy::pbr::wireframe::WireframePlugin;
 use bevy_egui::{egui, EguiContexts, EguiPlugin, EguiPrimaryContextPass};
 use big_space::prelude::*;
 use avian3d::prelude::{RigidBody, Collider, Friction, PhysicsPlugins};
-use leafwing_input_manager::prelude::MouseMove;
+use leafwing_input_manager::prelude::*;
 
 use lunco_mobility::{LunCoMobilityPlugin, Suspension};
 use lunco_robotics::{LunCoRoboticsPlugin, rover};
 use lunco_controller::LunCoControllerPlugin;
-use lunco_avatar::{LunCoAvatarPlugin, IntentAnalogState, ObserverBehavior, ObserverMode, AdaptiveNearPlane};
+use lunco_avatar::{LunCoAvatarPlugin, IntentAnalogState, ObserverBehavior, ObserverMode, AdaptiveNearPlane, CameraScroll};
 use lunco_celestial::{BlueprintMaterial, BlueprintExtension};
 use lunco_core::{Vessel, architecture::CommandMessage};
 
@@ -208,6 +208,8 @@ fn setup_sandbox(
     commands.entity(r_ack).set_parent_in_place(grid);
 
     // Initialize the Avatar (Camera)
+    // ActionState<UserIntent> is REQUIRED alongside InputMap for leafwing to process input.
+    // Using the centralized input map from lunco_controller ensures Zoom is mapped.
     commands.spawn((
         Camera3d::default(),
         ObserverBehavior {
@@ -226,28 +228,28 @@ fn setup_sandbox(
         CellCoord::default(),
         lunco_core::Avatar,
         IntentAnalogState::default(),
-        leafwing_input_manager::prelude::InputMap::<lunco_avatar::UserIntent>::default()
-            .with_dual_axis(lunco_avatar::UserIntent::Look, MouseMove::default())
-            .with(lunco_avatar::UserIntent::MoveForward, KeyCode::KeyW)
-            .with(lunco_avatar::UserIntent::MoveBackward, KeyCode::KeyS)
-            .with(lunco_avatar::UserIntent::MoveLeft, KeyCode::KeyA)
-            .with(lunco_avatar::UserIntent::MoveRight, KeyCode::KeyD)
-            .with(lunco_avatar::UserIntent::MoveUp, KeyCode::KeyE)
-            .with(lunco_avatar::UserIntent::MoveDown, KeyCode::KeyQ)
-            .with(lunco_avatar::UserIntent::Pause, KeyCode::Space),
+        ActionState::<lunco_core::UserIntent>::default(),
+        lunco_controller::get_avatar_input_map(),
     )).set_parent_in_place(grid);
 }
 
 fn sandbox_ui_system(
     mut contexts: EguiContexts,
     mut settings: ResMut<SandboxSettings>,
-    q_camera: Query<(&Transform, &CellCoord, &ObserverBehavior)>,
+    q_camera: Query<(Entity, &Transform, &CellCoord, &ObserverBehavior), With<lunco_core::Avatar>>,
     q_vessels: Query<(Entity, &Name, &Vessel)>,
     q_children: Query<&Children>,
     mut q_suspension: Query<(Entity, &mut Suspension)>,
     mut commands: Commands,
+    mut scroll_res: ResMut<CameraScroll>,
 ) {
     let Ok(ctx) = contexts.ctx_mut() else { return; };
+
+    // Forward scroll input to the camera zoom resource when not hovering UI.
+    if !ctx.is_pointer_over_area() {
+        scroll_res.delta += ctx.input(|i| i.raw_scroll_delta.y);
+    }
+
     egui::Window::new("Sandbox Control").show(ctx, |ui| {
         ui.heading("Environment");
         ui.add(egui::Slider::new(&mut settings.sun_yaw, 0.0..=6.28).text("Sun Yaw"));
@@ -257,7 +259,7 @@ fn sandbox_ui_system(
 
         ui.separator();
         ui.heading("Avatar Telemetry");
-        if let Some((tf, cell, obs)) = q_camera.iter().next() {
+        if let Some((_, tf, cell, obs)) = q_camera.iter().next() {
             ui.label(format!("Position (BigSpace)\nCell: {:?}\nLocal: {:.2?}", cell, tf.translation));
             let (yaw, pitch, _): (f32, f32, f32) = tf.rotation.to_euler(EulerRot::YXZ);
             ui.label(format!("Orientation\nYaw: {:.2}°\nPitch: {:.2}°", yaw.to_degrees(), pitch.to_degrees()));
@@ -266,17 +268,20 @@ fn sandbox_ui_system(
 
         ui.separator();
         ui.heading("Vessels");
+        // Get the real avatar entity for POSSESS commands.
+        let avatar_ent = q_camera.iter().next().map(|(e, _, _, _)| e);
         for (entity, name, _) in q_vessels.iter() {
             ui.collapsing(format!("{}", name), |ui| {
                 if ui.button("Possess").clicked() {
-                    let avatar = commands.spawn_empty().id(); // Placeholder approach
-                    commands.trigger(CommandMessage {
-                        id: 0,
-                        target: entity,
-                        name: "POSSESS".to_string(),
-                        args: Default::default(),
-                        source: avatar,
-                    });
+                    if let Some(avatar) = avatar_ent {
+                        commands.trigger(CommandMessage {
+                            id: 0,
+                            target: entity,
+                            name: "POSSESS".to_string(),
+                            args: Default::default(),
+                            source: avatar,
+                        });
+                    }
                 }
                 ui.label("Mechanical Inspector");
                 inspect_suspension_recursive(ui, entity, &q_children, &mut q_suspension);
