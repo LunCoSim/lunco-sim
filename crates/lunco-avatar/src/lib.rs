@@ -637,17 +637,28 @@ fn avatar_escape_possession(keys: Res<ButtonInput<KeyCode>>, mut q_avatar: Query
 fn on_release_command(
     trigger: On<CommandMessage>,
     mut commands: Commands,
-    q_avatar: Query<(&Transform, &CellCoord, &ChildOf), With<Avatar>>,
+    q_avatar: Query<(&Transform, &CellCoord, &ChildOf, Option<&ControllerLink>), With<Avatar>>,
     q_grids: Query<&Grid>,
 ) {
     let msg = trigger.event();
     if msg.name == "RELEASE" {
         let avatar_ent = msg.target;
-        let (pos, yaw, pitch) = if let Ok((tf, cell, child_of)) = q_avatar.get(avatar_ent) {
+        let (pos, yaw, pitch, opt_link) = if let Ok((tf, cell, child_of, link)) = q_avatar.get(avatar_ent) {
              let Ok(grid) = q_grids.get(child_of.0) else { return; };
              let (y, p, _) = tf.rotation.to_euler(EulerRot::YXZ);
-             (grid.grid_position_double(cell, tf), y, p)
-        } else { (DVec3::ZERO, 0.0, 0.0) };
+             (grid.grid_position_double(cell, tf), y, p, link)
+        } else { (DVec3::ZERO, 0.0, 0.0, None) };
+        
+        // Hard stop the rover upon disengaging control!
+        if let Some(link) = opt_link {
+            commands.trigger(CommandMessage {
+                id: msg.id,
+                target: link.vessel_entity,
+                name: "DRIVE_ROVER".to_string(),
+                args: smallvec::smallvec![0.0, 0.0],
+                source: avatar_ent,
+            });
+        }
         // Remove possession link and switch directly to Flyby at current position.
         // The camera stays where it is — no jarring teleport.
         commands.entity(avatar_ent)
@@ -694,32 +705,19 @@ fn on_possess_command(
 ) {
     let msg = trigger.event();
     if msg.name == "POSSESS" {
-        let (avatar_ent, cam_tf, cam_cell, _child_of, obs_opt) = if let Ok(data) = q_avatar.get(msg.source) {
+        let (avatar_ent, cam_tf, cam_cell, _child_of, _obs_opt) = if let Ok(data) = q_avatar.get(msg.source) {
             data
         } else {
             let Some(first) = q_avatar.iter().next() else { return; };
             first
         };
         let radius = q_sc.get(msg.target).map(|s| s.hit_radius_m as f64).unwrap_or(2.0);
-        let distance = obs_opt.map(|o| o.distance).unwrap_or(15.0).clamp(radius * 2.0, 200.0);
+        let distance = 15.0_f64.clamp(radius * 2.0, 200.0); // STRICT RESET to target default
 
         // Compute current absolute position for smooth transition start.
         let start_pos = lunco_core::coords::get_absolute_pos_in_root_double_ghost_aware(
             avatar_ent, cam_cell, cam_tf, &q_parents, &q_grids, &q_spatial_abs,
         );
-        let target_pos = lunco_core::coords::get_absolute_pos_in_root_double_ghost_aware(
-            msg.target, &CellCoord::default(), &Transform::default(), &q_parents, &q_grids, &q_spatial_abs,
-        );
-        
-        let diff = start_pos - target_pos;
-        let mut diff_fwd = diff; diff_fwd.y = 0.0;
-        let visual_yaw = if diff_fwd.length_squared() > 0.001 { diff_fwd.x.atan2(diff_fwd.z) } else { 0.0 };
-        let mut rel_yaw = visual_yaw as f32;
-        if let Ok((_cell, tf)) = q_spatial_abs.get(msg.target) {
-            let mut target_fwd = tf.rotation.mul_vec3(Vec3::Z); target_fwd.y = 0.0;
-            let target_heading = if target_fwd.length_squared() > 0.001 { target_fwd.x.atan2(target_fwd.z) } else { 0.0 };
-            rel_yaw = (visual_yaw - target_heading as f64) as f32;
-        }
 
         commands.entity(avatar_ent)
             .remove::<ObserverBehavior>()
@@ -732,7 +730,7 @@ fn on_possess_command(
                     start_rot: cam_tf.rotation,
                     end_dist: distance,
                     end_pitch: -0.25,
-                    end_yaw: rel_yaw,
+                    end_yaw: 0.0, // STRICT RESET behind the vehicle
                     end_vertical_offset: 2.0,
                     end_damping: 0.05,
                     end_mode: ObserverMode::Chase,
