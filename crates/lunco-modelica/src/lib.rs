@@ -46,6 +46,7 @@ pub struct ModelicaChannels {
 pub enum ModelicaCommand {
     Step {
         entity: Entity,
+        session_id: u64,
         model_path: String,
         model_name: String,
         inputs: Vec<(String, f64)>,
@@ -53,12 +54,13 @@ pub enum ModelicaCommand {
     },
     Compile {
         entity: Entity,
+        session_id: u64,
         model_name: String,
         source: String,
     },
-    /// Re-initialize the stepper with new parameter values
     UpdateParameters {
         entity: Entity,
+        session_id: u64,
         model_path: String,
         model_name: String,
         parameters: Vec<(String, f64)>,
@@ -73,262 +75,144 @@ pub enum ModelicaCommand {
 
 pub struct ModelicaResult {
     pub entity: Entity,
+    pub session_id: u64,
     pub new_time: f64,
     pub outputs: Vec<(String, f64)>,
-    /// All detected variables and their current values
     pub detected_symbols: Vec<(String, f64)>,
     pub error: Option<String>,
     pub log_message: Option<String>,
     pub is_new_model: bool,
-    /// If true, history and selections should be preserved (just a tune)
     pub is_parameter_update: bool,
 }
 
 /// The background worker that owns the !Send SimSteppers.
 fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
-    let mut steppers: HashMap<Entity, SimStepper> = HashMap::default();
+    let mut steppers: HashMap<Entity, (u64, SimStepper)> = HashMap::default();
 
     while let Ok(cmd) = rx.recv() {
         match cmd {
             ModelicaCommand::Reset { entity } => {
                 steppers.remove(&entity);
-                info!("Resetting Modelica stepper for entity {:?}", entity);
             }
-            ModelicaCommand::UpdateParameters { entity, model_path, model_name, parameters } => {
-                let mut success = false;
-                let mut current_time = 0.0;
-                let mut symbols = Vec::new();
-
-                // Try warm-tuning first (apply to existing stepper)
-                if let Some(stepper) = steppers.get_mut(&entity) {
-                    for (name, val) in &parameters {
-                        let _ = stepper.set_input(name, *val);
-                    }
-                    current_time = stepper.time();
-                    for name in stepper.variable_names() {
-                        if let Some(val) = stepper.get(&name) {
-                            symbols.push((name.clone(), val));
-                        }
-                    }
-                    success = true;
-                }
-
-                if success {
-                    let _ = tx.send(ModelicaResult {
-                        entity,
-                        new_time: current_time,
-                        outputs: Vec::new(),
-                        detected_symbols: symbols,
-                        error: None,
-                        log_message: Some("Parameters tuned live.".to_string()),
-                        is_new_model: false,
-                        is_parameter_update: true,
-                    });
-                } else {
-                    // Fallback to full rebuild
-                    let res = Compiler::new()
-                        .model(&model_name)
-                        .compile_file(&model_path);
-                    
-                    match res {
-                        Ok(comp_res) => {
-                            let mut opts = StepperOptions::default();
-                            opts.atol = 1e-3;
-                            opts.rtol = 1e-3;
-
-                            match SimStepper::new(&comp_res.dae, opts) {
-                                Ok(mut stepper) => {
-                                    for (name, val) in parameters {
-                                        let _ = stepper.set_input(&name, val);
-                                    }
-                                    let mut symbols = Vec::new();
-                                    for name in stepper.variable_names() {
-                                        if let Some(val) = stepper.get(&name) {
-                                            symbols.push((name.clone(), val));
-                                        }
-                                    }
-                                    steppers.insert(entity, stepper);
-                                    let _ = tx.send(ModelicaResult {
-                                        entity,
-                                        new_time: 0.0,
-                                        outputs: Vec::new(),
-                                        detected_symbols: symbols,
-                                        error: None,
-                                        log_message: Some("Model re-initialized with new parameters.".to_string()),
-                                        is_new_model: false,
-                                        is_parameter_update: true,
-                                    });
-                                }
-                                Err(e) => {
-                                    let _ = tx.send(ModelicaResult {
-                                        entity,
-                                        new_time: 0.0,
-                                        outputs: Vec::new(),
-                                        detected_symbols: Vec::new(),
-                                        error: Some(format!("Init Error: {:?}", e)),
-                                        log_message: None,
-                                        is_new_model: false,
-                                        is_parameter_update: true,
-                                    });
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            let _ = tx.send(ModelicaResult {
-                                entity,
-                                new_time: 0.0,
-                                outputs: Vec::new(),
-                                detected_symbols: Vec::new(),
-                                error: Some(format!("Re-compile Error: {:?}", e)),
-                                log_message: None,
-                                is_new_model: false,
-                                is_parameter_update: true,
-                            });
-                        }
-                    }
-                }
-            }
-            ModelicaCommand::Compile { entity, model_name, source } => {
-                let temp_dir = format!(".cache/modelica/{:?}", entity);
-                let _ = std::fs::create_dir_all(&temp_dir);
-                let temp_path = format!("{}/model.mo", temp_dir);
-
-                if let Err(e) = std::fs::write(&temp_path, &source) {
-                    let _ = tx.send(ModelicaResult {
-                        entity,
-                        new_time: 0.0,
-                        outputs: Vec::new(),
-                        detected_symbols: Vec::new(),
-                        error: Some(format!("IO Error: {:?}", e)),
-                        log_message: None,
-                        is_new_model: false,
-                        is_parameter_update: false,
-                    });
-                    continue;
-                }
-
-                match Compiler::new().model(&model_name).compile_file(&temp_path) {
+            ModelicaCommand::UpdateParameters { entity, session_id, model_path, model_name, parameters } => {
+                let res = Compiler::new().model(&model_name).compile_file(&model_path);
+                match res {
                     Ok(comp_res) => {
                         let mut opts = StepperOptions::default();
                         opts.atol = 1e-3;
                         opts.rtol = 1e-3;
-
                         match SimStepper::new(&comp_res.dae, opts) {
-                            Ok(stepper) => {
+                            Ok(mut stepper) => {
+                                for (name, val) in parameters { let _ = stepper.set_input(&name, val); }
                                 let mut symbols = Vec::new();
                                 for name in stepper.variable_names() {
-                                    if let Some(val) = stepper.get(&name) {
-                                        symbols.push((name.clone(), val));
-                                    }
+                                    if let Some(val) = stepper.get(&name) { symbols.push((name.clone(), val)); }
                                 }
-
-                                steppers.insert(entity, stepper);
+                                steppers.insert(entity, (session_id, stepper));
                                 let _ = tx.send(ModelicaResult {
-                                    entity,
-                                    new_time: 0.0,
-                                    outputs: Vec::new(),
-                                    detected_symbols: symbols,
-                                    error: None,
-                                    log_message: Some(format!("Model '{}' compiled and loaded.", model_name)),
-                                    is_new_model: true,
-                                    is_parameter_update: false,
+                                    entity, session_id, new_time: 0.0, outputs: Vec::new(),
+                                    detected_symbols: symbols, error: None, log_message: Some("Model tuned.".to_string()),
+                                    is_new_model: false, is_parameter_update: true,
                                 });
                             }
                             Err(e) => {
                                 let _ = tx.send(ModelicaResult {
-                                    entity,
-                                    new_time: 0.0,
-                                    outputs: Vec::new(),
-                                    detected_symbols: Vec::new(),
-                                    error: Some(format!("Stepper Error: {:?}", e)),
-                                    log_message: None,
-                                    is_new_model: false,
-                                    is_parameter_update: false,
+                                    entity, session_id, new_time: 0.0, outputs: Vec::new(), detected_symbols: Vec::new(),
+                                    error: Some(format!("Init Error: {:?}", e)), log_message: None, is_new_model: false, is_parameter_update: true,
                                 });
                             }
                         }
                     }
                     Err(e) => {
                         let _ = tx.send(ModelicaResult {
-                            entity,
-                            new_time: 0.0,
-                            outputs: Vec::new(),
-                            detected_symbols: Vec::new(),
-                            error: Some(format!("Compiler Error: {:?}", e)),
-                            log_message: None,
-                            is_new_model: false,
-                            is_parameter_update: false,
+                            entity, session_id, new_time: 0.0, outputs: Vec::new(), detected_symbols: Vec::new(),
+                            error: Some(format!("Re-compile Error: {:?}", e)), log_message: None, is_new_model: false, is_parameter_update: true,
                         });
                     }
                 }
             }
-            ModelicaCommand::Step { entity, model_path, model_name, inputs, dt } => {
+            ModelicaCommand::Compile { entity, session_id, model_name, source } => {
+                let temp_dir = format!(".cache/modelica/{:?}", entity);
+                let _ = std::fs::create_dir_all(&temp_dir);
+                let temp_path = format!("{}/model.mo", temp_dir);
+                if let Err(e) = std::fs::write(&temp_path, &source) {
+                    let _ = tx.send(ModelicaResult {
+                        entity, session_id, new_time: 0.0, outputs: Vec::new(), detected_symbols: Vec::new(),
+                        error: Some(format!("IO Error: {:?}", e)), log_message: None, is_new_model: false, is_parameter_update: false,
+                    });
+                    continue;
+                }
+                match Compiler::new().model(&model_name).compile_file(&temp_path) {
+                    Ok(comp_res) => {
+                        let mut opts = StepperOptions::default();
+                        opts.atol = 1e-3; opts.rtol = 1e-3;
+                        match SimStepper::new(&comp_res.dae, opts) {
+                            Ok(stepper) => {
+                                let mut symbols = Vec::new();
+                                for name in stepper.variable_names() {
+                                    if let Some(val) = stepper.get(&name) { symbols.push((name.clone(), val)); }
+                                }
+                                steppers.insert(entity, (session_id, stepper));
+                                let _ = tx.send(ModelicaResult {
+                                    entity, session_id, new_time: 0.0, outputs: Vec::new(),
+                                    detected_symbols: symbols, error: None, log_message: Some(format!("Model '{}' compiled.", model_name)),
+                                    is_new_model: true, is_parameter_update: false,
+                                });
+                            }
+                            Err(e) => {
+                                let _ = tx.send(ModelicaResult {
+                                    entity, session_id, new_time: 0.0, outputs: Vec::new(), detected_symbols: Vec::new(),
+                                    error: Some(format!("Stepper Error: {:?}", e)), log_message: None, is_new_model: false, is_parameter_update: false,
+                                });
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        let _ = tx.send(ModelicaResult {
+                            entity, session_id, new_time: 0.0, outputs: Vec::new(), detected_symbols: Vec::new(),
+                            error: Some(format!("Compiler Error: {:?}", e)), log_message: None, is_new_model: false, is_parameter_update: false,
+                        });
+                    }
+                }
+            }
+            ModelicaCommand::Step { entity, session_id, model_path, model_name, inputs, dt } => {
                 if !steppers.contains_key(&entity) {
                     let res = Compiler::new().model(&model_name).compile_file(&model_path);
                     if let Ok(comp_res) = res {
                         let mut opts = StepperOptions::default();
-                        opts.atol = 1e-3;
-                        opts.rtol = 1e-3;
+                        opts.atol = 1e-3; opts.rtol = 1e-3;
                         if let Ok(mut s) = SimStepper::new(&comp_res.dae, opts) {
                             for (name, val) in &inputs { let _ = s.set_input(name, *val); }
-                            steppers.insert(entity, s);
+                            steppers.insert(entity, (session_id, s));
                         }
                     }
                 }
 
-                if let Some(stepper) = steppers.get_mut(&entity) {
+                if let Some((s_id, stepper)) = steppers.get_mut(&entity) {
+                    if *s_id != session_id { continue; } // Ignore old step requests
                     for (name, val) in inputs { let _ = stepper.set_input(&name, val); }
-
-                    let capped_dt = dt.min(0.033); 
-                    let sub_dt = capped_dt / 3.0;
-                    
+                    let capped_dt = dt.min(0.033); let sub_dt = capped_dt / 3.0;
                     let mut step_err = None;
-                    for _ in 0..3 {
-                        if let Err(e) = stepper.step(sub_dt) {
-                            step_err = Some(e);
-                            break;
-                        }
-                    }
-
+                    for _ in 0..3 { if let Err(e) = stepper.step(sub_dt) { step_err = Some(e); break; } }
                     if let Some(e) = step_err {
                         let _ = tx.send(ModelicaResult {
-                            entity,
-                            new_time: stepper.time(),
-                            outputs: Vec::new(),
-                            detected_symbols: Vec::new(),
-                            error: Some(format!("Solver Error: {:?}", e)),
-                            log_message: None,
-                            is_new_model: false,
-                            is_parameter_update: false,
+                            entity, session_id, new_time: stepper.time(), outputs: Vec::new(), detected_symbols: Vec::new(),
+                            error: Some(format!("Solver Error: {:?}", e)), log_message: None, is_new_model: false, is_parameter_update: false,
                         });
                         steppers.remove(&entity);
                         continue;
                     }
-
                     let mut outputs = Vec::new();
                     for name in stepper.variable_names() {
-                        if let Some(val) = stepper.get(name) {
-                            if val.is_finite() {
-                                outputs.push((name.clone(), val));
-                            }
-                        }
+                        if let Some(val) = stepper.get(name) { if val.is_finite() { outputs.push((name.clone(), val)); } }
                     }
-
                     let _ = tx.send(ModelicaResult {
-                        entity,
-                        new_time: stepper.time(),
-                        outputs,
-                        error: None,
-                        log_message: None,
-                        is_new_model: false,
-                        detected_symbols: Vec::new(),
-                        is_parameter_update: false,
+                        entity, session_id, new_time: stepper.time(), outputs, error: None, log_message: None,
+                        is_new_model: false, detected_symbols: Vec::new(), is_parameter_update: false,
                     });
                 }
             }
-            ModelicaCommand::Despawn { entity } => {
-                steppers.remove(&entity);
-            }
+            ModelicaCommand::Despawn { entity } => { steppers.remove(&entity); }
         }
     }
 }
@@ -341,6 +225,7 @@ pub struct ModelicaModel {
     pub model_name: String,
     pub current_time: f64,
     pub last_step_time: f64,
+    pub session_id: u64,
     pub paused: bool,
     /// Tunable constants (parameter Real ...)
     pub parameters: HashMap<String, f64>,
@@ -375,6 +260,7 @@ fn spawn_modelica_requests(
         model.is_stepping = true;
         let _ = channels.tx.send(ModelicaCommand::Step {
             entity,
+            session_id: model.session_id,
             model_path: model.model_path.clone(),
             model_name: model.model_name.clone(),
             inputs,
@@ -390,52 +276,52 @@ fn handle_modelica_responses(
     mut workbench_state: ResMut<ui::WorkbenchState>,
 ) {
     while let Ok(result) = channels.rx.try_recv() {
-        if let Some(msg) = result.log_message {
-            workbench_state.logs.push_back(msg);
-            if workbench_state.logs.len() > 100 { workbench_state.logs.pop_front(); }
-        }
-
-        if let Some(err) = &result.error {
-            workbench_state.compilation_error = Some(err.clone());
-            workbench_state.logs.push_back(format!("ERROR: {}", err));
-        } else if workbench_state.selected_entity == Some(result.entity) {
-            workbench_state.compilation_error = None;
-        }
-
         if let Ok(mut model) = q_models.get_mut(result.entity) {
-            if result.is_new_model || result.is_parameter_update {
-                // Clear history only if it's a new model or a full re-initialization (t=0)
-                if result.is_new_model || result.new_time == 0.0 {
-                    workbench_state.history.remove(&result.entity);
-                    if result.is_new_model {
-                        if workbench_state.selected_entity == Some(result.entity) {
-                            workbench_state.plotted_variables.clear();
-                        }
-                        // Clear all schema maps for the new model
-                        model.parameters.clear();
-                        model.inputs.clear();
-                        model.variables.clear();
-                    }
-                    model.current_time = 0.0;
-                    model.last_step_time = 0.0;
-                }
+            // Always reset stepping flag so we don't deadlock
+            model.is_stepping = false;
+
+            // Drop stale results from previous sessions
+            if result.session_id < model.session_id { continue; }
+
+            if let Some(msg) = result.log_message {
+                workbench_state.logs.push_back(msg);
+                if workbench_state.logs.len() > 100 { workbench_state.logs.pop_front(); }
             }
 
-            // Categorize and sync symbols
+            if let Some(err) = &result.error {
+                workbench_state.compilation_error = Some(err.clone());
+                workbench_state.logs.push_back(format!("ERROR: {}", err));
+            } else if workbench_state.selected_entity == Some(result.entity) {
+                workbench_state.compilation_error = None;
+            }
+
+            if result.is_new_model || result.is_parameter_update {
+                // Clear history for the new session
+                workbench_state.history.remove(&result.entity);
+                if result.is_new_model {
+                    if workbench_state.selected_entity == Some(result.entity) {
+                        workbench_state.plotted_variables.clear();
+                    }
+                    // Clear inputs and variables (they will be re-discovered)
+                    // but DO NOT clear parameters, as they are the source of truth from the UI
+                    model.inputs.clear();
+                    model.variables.clear();
+                }
+                model.current_time = 0.0;
+                model.last_step_time = 0.0;
+            }
+
+            // Sync symbols on new model or parameter update
             if !result.detected_symbols.is_empty() {
-                // If this is a new model, we can try to extract the real parameters from source
-                // (This usually happens at a higher level, but we'll use a conservative heuristic here
-                // if they are not already set)
                 for (name, val) in &result.detected_symbols {
-                    if name.ends_with("_in") {
-                        if result.is_new_model || !model.inputs.contains_key(name) {
-                            model.inputs.insert(name.clone(), *val);
+                    if model.parameters.contains_key(name) {
+                        // Keep it as a parameter, maybe update value if it's a new model
+                        if result.is_new_model {
+                            model.parameters.insert(name.clone(), *val);
                         }
-                    } else if result.is_new_model && !model.parameters.contains_key(name) {
-                        // Only add to parameters if not an input and it's a new model
-                        // (Usually the UI will have populated the "real" parameters via regex)
-                        model.variables.insert(name.clone(), *val);
-                    } else if !model.parameters.contains_key(name) && !model.inputs.contains_key(name) {
+                    } else if name.ends_with("_in") {
+                        model.inputs.insert(name.clone(), *val);
+                    } else {
                         model.variables.insert(name.clone(), *val);
                     }
                 }
@@ -443,18 +329,13 @@ fn handle_modelica_responses(
 
             // Sync current values from outputs
             for (name, val) in &result.outputs {
-                if model.inputs.contains_key(name) {
-                    // Don't overwrite user-set inputs with simulation values
-                } else if model.parameters.contains_key(name) {
-                    // Don't overwrite parameters
-                } else {
+                if !model.inputs.contains_key(name) && !model.parameters.contains_key(name) {
                     model.variables.insert(name.clone(), *val);
                 }
             }
 
             model.current_time = result.new_time;
             model.last_step_time = time.elapsed_secs_f64();
-            model.is_stepping = false;
 
             let time_val = result.new_time;
             let max_history = workbench_state.max_history;
@@ -478,8 +359,8 @@ pub fn extract_model_name(source: &str) -> Option<String> {
 /// Helper to discover parameters directly from Modelica source for initial UI population.
 pub fn extract_parameters(source: &str) -> HashMap<String, f64> {
     let mut params = HashMap::new();
-    // Regex for: parameter Real name = value;
-    let re = Regex::new(r"parameter\s+Real\s+([a-zA-Z0-9_]+)\s*=\s*([-+]?[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?)").unwrap();
+    // Regex for: parameter Real name = value; (handles spaces and comments)
+    let re = Regex::new(r"(?m)^\s*parameter\s+Real\s+([a-zA-Z0-9_]+)\s*=\s*([-+]?[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?)").unwrap();
     for cap in re.captures_iter(source) {
         if let (Some(name), Some(val_str)) = (cap.get(1), cap.get(2)) {
             if let Ok(val) = val_str.as_str().parse::<f64>() {

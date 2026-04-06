@@ -57,6 +57,7 @@ fn setup_sandbox(
     // Trigger initial compilation
     let _ = channels.tx.send(lunco_modelica::ModelicaCommand::Compile {
         entity,
+        session_id: 0,
         model_name,
         source,
     });

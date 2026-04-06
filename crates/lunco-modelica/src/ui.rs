@@ -99,16 +99,18 @@ fn show_model_editor(
                             // Pre-discover parameters for immediate UI update
                             let initial_params = extract_parameters(&state.editor_buffer);
                             if let Ok((_, mut model)) = q_models.get_mut(entity) {
+                                model.session_id += 1;
                                 model.parameters = initial_params;
                                 model.inputs.clear();
                                 model.variables.clear();
+                                
+                                let _ = channels.tx.send(ModelicaCommand::Compile {
+                                    entity,
+                                    session_id: model.session_id,
+                                    model_name,
+                                    source: state.editor_buffer.clone(),
+                                });
                             }
-                            
-                            let _ = channels.tx.send(ModelicaCommand::Compile {
-                                entity,
-                                model_name,
-                                source: state.editor_buffer.clone(),
-                            });
                         }
                     } else {
                         state.compilation_error = Some("Could not find a valid model declaration.".to_string());
@@ -175,6 +177,7 @@ fn show_telemetry(
                         ui.add_space(ui.available_width() - 80.0);
                         if ui.button("🔄 Reset").clicked() {
                             if let Some(channels) = &channels {
+                                model.session_id += 1;
                                 let _ = channels.tx.send(ModelicaCommand::Reset { entity });
                             }
                             state.history.remove(&entity);
@@ -203,9 +206,11 @@ fn show_telemetry(
                             
                             if changed {
                                 if let Some(channels) = &channels {
+                                    model.session_id += 1;
                                     let params: Vec<(String, f64)> = model.parameters.iter().map(|(k, v)| (k.clone(), *v)).collect();
                                     let _ = channels.tx.send(ModelicaCommand::UpdateParameters {
                                         entity,
+                                        session_id: model.session_id,
                                         model_path: model.model_path.clone(),
                                         model_name: model.model_name.clone(),
                                         parameters: params,
