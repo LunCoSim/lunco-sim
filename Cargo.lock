@@ -5595,6 +5595,7 @@ dependencies = [
  "log",
  "lunco-core",
  "lunco-hardware",
+ "regex",
  "rumoca",
  "rumoca-sim",
  "serde",

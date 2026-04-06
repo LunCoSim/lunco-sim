@@ -5,6 +5,7 @@ use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
 use egui_plot::{Line, Plot, PlotPoints};
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
+use regex::Regex;
 use crate::{ModelicaModel, ModelicaInput, ModelicaOutput, ModelicaChannels, ModelicaCommand};
 
 pub struct ModelicaInspectorPlugin;
@@ -26,7 +27,6 @@ impl Plugin for ModelicaInspectorPlugin {
 pub struct WorkbenchState {
     pub current_path: PathBuf,
     pub editor_buffer: String,
-    pub selected_model_name: String,
     pub selected_entity: Option<Entity>,
     pub compilation_error: Option<String>,
     /// History of variables: Entity -> VariableName -> DataPoints
@@ -43,7 +43,6 @@ impl Default for WorkbenchState {
         Self {
             current_path: PathBuf::from("assets/models"),
             editor_buffer,
-            selected_model_name: "Battery".to_string(),
             selected_entity: None,
             compilation_error: None,
             history: HashMap::new(),
@@ -52,6 +51,12 @@ impl Default for WorkbenchState {
             max_history: 10000,
         }
     }
+}
+
+/// Helper to extract the first model/class/block name from a Modelica source string.
+fn extract_model_name(source: &str) -> Option<String> {
+    let re = Regex::new(r"(?m)^\s*(model|class|block|package)\s+([a-zA-Z0-9_]+)").ok()?;
+    re.captures(source).map(|cap| cap[2].to_string())
 }
 
 /// Window 1: Library Browser
@@ -90,14 +95,23 @@ fn show_model_editor(
         .max_width(1000.0)
         .resizable(true)
         .show(ctx, |ui| {
+            let detected_name = extract_model_name(&state.editor_buffer);
+
             ui.horizontal(|ui| {
+                ui.heading(format!("Editor: {}", detected_name.as_deref().unwrap_or("Unknown")));
+                ui.add_space(ui.available_width() - 300.0);
+
                 if ui.button("🚀 COMPILE & RUN").clicked() {
-                    if let (Some(entity), Some(channels)) = (state.selected_entity, &channels) {
-                        let _ = channels.tx.send(ModelicaCommand::Compile {
-                            entity,
-                            model_name: state.selected_model_name.clone(),
-                            source: state.editor_buffer.clone(),
-                        });
+                    if let Some(model_name) = detected_name {
+                        if let (Some(entity), Some(channels)) = (state.selected_entity, &channels) {
+                            let _ = channels.tx.send(ModelicaCommand::Compile {
+                                entity,
+                                model_name,
+                                source: state.editor_buffer.clone(),
+                            });
+                        }
+                    } else {
+                        state.compilation_error = Some("Could not find a valid model/class declaration in source.".to_string());
                     }
                 }
                 
@@ -152,7 +166,7 @@ fn show_telemetry(
             if let Some(entity) = state.selected_entity {
                 if let Ok((_, mut model, name, _)) = q_models.get_mut(entity) {
                     let label = name.map(|n| n.as_str()).unwrap_or("Unnamed Model");
-                    ui.heading(label);
+                    ui.heading(format!("{} ({})", label, model.model_name));
 
                     ui.horizontal(|ui| {
                         if model.paused {
@@ -353,7 +367,6 @@ fn render_browser(ui: &mut egui::Ui, state: &mut WorkbenchState) {
                 if ui.link(format!("📄 {}", name)).clicked() {
                     if let Ok(content) = std::fs::read_to_string(&path) {
                         state.editor_buffer = content;
-                        state.selected_model_name = name.trim_end_matches(".mo").to_string();
                     }
                 }
             }
