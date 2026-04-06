@@ -146,7 +146,12 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                     
                     match res {
                         Ok(comp_res) => {
-                            match SimStepper::new(&comp_res.dae, StepperOptions::default()) {
+                            let mut opts = StepperOptions::default();
+                            // Relax tolerances for real-time stability (Article XI optimization)
+                            opts.atol = 1e-3;
+                            opts.rtol = 1e-3;
+
+                            match SimStepper::new(&comp_res.dae, opts) {
                                 Ok(mut stepper) => {
                                     // Apply initial inputs before solving ICs
                                     for (name, val) in &inputs {
