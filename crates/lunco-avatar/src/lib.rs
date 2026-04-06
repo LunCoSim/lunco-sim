@@ -404,23 +404,23 @@ fn avatar_observer_system(
             // Separate position and rotation smoothing for stability.
             let target_center = target_pos;
             
-            // Resolve Target Horizontal Heading
-            let mut target_fwd = target_rot.mul_vec3(Vec3::Z);
-            target_fwd.y = 0.0;
-            let target_heading = if target_fwd.length_squared() > 0.001 {
-                target_fwd.x.atan2(target_fwd.z)
+            // Resolve Target Horizontal Heading in double-precision to eliminate quantization noise (jitter).
+            let target_fwd_d = target_rot.mul_vec3(Vec3::Z).as_dvec3();
+            let target_heading_d = if target_fwd_d.x.abs() > 0.000001 || target_fwd_d.z.abs() > 0.000001 {
+                target_fwd_d.x.atan2(target_fwd_d.z)
             } else { 0.0 };
 
             // User yaw persists: the camera stays at whatever angle the user
             // set with right-click, giving full manual orbit control.
             
             // Combine with User Mouse Pan (relative to rear of vehicle)
-            let final_yaw = target_heading + obs.yaw;
+            let final_yaw = (target_heading_d + obs.yaw as f64) as f32;
             let desired_rot = Quat::from_euler(EulerRot::YXZ, final_yaw, obs.pitch, 0.0);
 
-            // Rotation: Separate slerp first for smooth orientation.
-            let rot_speed = (40.0 * (1.0 - obs.damping) * dt).min(1.0);
-            tf.rotation = tf.rotation.slerp(desired_rot, rot_speed);
+            // Rotation: Use high-frequency exponential decay for perfectly snappy but stable follow.
+            // Frequency 60.0 approx previous 40x snappy speed but is statistically smoother.
+            let rot_alpha = 1.0 - (-60.0 * (1.0 - obs.damping) * dt).exp();
+            tf.rotation = tf.rotation.slerp(desired_rot, rot_alpha);
 
             if scroll_res.delta != 0.0 {
                 obs.distance = (obs.distance - scroll_res.delta as f64 * 5.0).clamp(5.0, 200.0);
@@ -712,7 +712,12 @@ fn on_possess_command(
             first
         };
         let radius = q_sc.get(msg.target).map(|s| s.hit_radius_m as f64).unwrap_or(2.0);
-        let distance = 15.0_f64.clamp(radius * 2.0, 200.0); // STRICT RESET to target default
+        
+        // Dynamic distance reset: 15m for rovers, or 1.5x radius for larger spacecraft/bodies.
+        let target_dist = (radius * 1.5).max(15.0);
+        let min_dist = (radius * 1.1).max(5.0);
+        let max_dist = (radius * 10.0).max(200.0);
+        let distance = target_dist.clamp(min_dist, max_dist);
 
         // Compute current absolute position for smooth transition start.
         let start_pos = lunco_core::coords::get_absolute_pos_in_root_double_ghost_aware(

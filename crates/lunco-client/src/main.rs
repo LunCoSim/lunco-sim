@@ -6,7 +6,6 @@
 //! and global coordinate synchronization.
 
 use bevy::{prelude::*, asset::io::AssetSourceBuilder};
-use big_space::prelude::CellCoord;
 
 mod ui;
 use lunco_celestial::BlueprintMaterial;
