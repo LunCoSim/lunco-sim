@@ -1,11 +1,21 @@
 //! Professional Modelica Engineering Workbench.
+//!
+//! Provides a 5-window egui interface for Modelica model browsing, editing,
+//! simulation control, telemetry visualization, and logging.
+//!
+//! ## Windows
+//! - **Library Browser**: Navigate local models and MSL
+//! - **Model Editor**: Edit Modelica code with syntax highlighting
+//! - **Live Telemetry**: Real-time parameter tuning and variable monitoring
+//! - **Real-time Graphs**: Plot simulation history
+//! - **System Logs**: View compilation and runtime messages
 
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
 use egui_plot::{Line, Plot, PlotPoints};
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
-use crate::{ModelicaModel, ModelicaChannels, ModelicaCommand, extract_model_name, extract_parameters};
+use crate::{ModelicaModel, ModelicaChannels, ModelicaCommand, extract_model_name, extract_parameters, extract_input_names, extract_inputs_with_defaults};
 
 pub struct ModelicaInspectorPlugin;
 
@@ -33,6 +43,8 @@ pub struct WorkbenchState {
     pub plotted_variables: std::collections::HashSet<String>,
     pub logs: VecDeque<String>,
     pub max_history: usize,
+    /// When true, the next plot render will call `.reset()` to auto-fit the view.
+    pub plot_auto_fit: bool,
 }
 
 impl Default for WorkbenchState {
@@ -46,6 +58,7 @@ impl Default for WorkbenchState {
             plotted_variables: std::collections::HashSet::new(),
             logs: VecDeque::new(),
             max_history: 10000,
+            plot_auto_fit: false,
         }
     }
 }
@@ -62,6 +75,15 @@ fn show_library_browser(
         .default_size([250.0, 400.0])
         .resizable(true)
         .show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                if ui.selectable_label(state.current_path.starts_with("assets/models"), "📦 Models").clicked() {
+                    state.current_path = PathBuf::from("assets/models");
+                }
+                if ui.selectable_label(state.current_path.starts_with(".cache/msl"), "📚 MSL").clicked() {
+                    state.current_path = PathBuf::from(".cache/msl");
+                }
+            });
+            ui.separator();
             render_browser(ui, &mut state);
         });
 }
@@ -75,7 +97,6 @@ fn show_model_editor(
 ) {
     let Ok(ctx) = contexts.ctx_mut() else { return; };
 
-    // Auto-select the first model if none selected
     if state.selected_entity.is_none() {
         state.selected_entity = q_models.iter().map(|(e, _)| e).next();
     }
@@ -96,14 +117,37 @@ fn show_model_editor(
                 if ui.button("🚀 COMPILE & RUN").clicked() {
                     if let Some(model_name) = detected_name {
                         if let (Some(entity), Some(channels)) = (state.selected_entity, &channels) {
-                            // Pre-discover parameters for immediate UI update
-                            let initial_params = extract_parameters(&state.editor_buffer);
+                            let params = extract_parameters(&state.editor_buffer);
+                            let inputs_with_defaults = extract_inputs_with_defaults(&state.editor_buffer);
+                            let runtime_inputs = extract_input_names(&state.editor_buffer);
+
                             if let Ok((_, mut model)) = q_models.get_mut(entity) {
+                                // Preserve old input values where user may have adjusted them
+                                let old_inputs: std::collections::HashMap<String, f64> = std::mem::take(&mut model.inputs);
+
                                 model.session_id += 1;
-                                model.parameters = initial_params;
+                                model.is_stepping = true;
+                                model.model_name = model_name.clone();
+                                model.parameters = params;
+
+                                // Merge all inputs (with defaults + without defaults), preserving user values
                                 model.inputs.clear();
+                                for (name, val) in &inputs_with_defaults {
+                                    let existing = old_inputs.get(name).copied();
+                                    model.inputs.entry(name.clone())
+                                        .or_insert_with(|| existing.unwrap_or(*val));
+                                }
+                                for name in &runtime_inputs {
+                                    let existing = old_inputs.get(name).copied();
+                                    model.inputs.entry(name.clone())
+                                        .or_insert_with(|| existing.unwrap_or(0.0));
+                                }
+
                                 model.variables.clear();
-                                
+                                model.paused = false;
+                                model.current_time = 0.0;
+                                model.last_step_time = 0.0;
+
                                 let _ = channels.tx.send(ModelicaCommand::Compile {
                                     entity,
                                     session_id: model.session_id,
@@ -159,7 +203,9 @@ fn show_telemetry(
     egui::Window::new("📊 Live Telemetry")
         .default_pos([880.0, 10.0])
         .default_size([300.0, 400.0])
-        .resizable(true)
+        .min_width(250.0)
+        .max_width(400.0)
+        .resizable([false, true])
         .show(ctx, |ui| {
             if let Some(entity) = state.selected_entity {
                 if let Ok((_, mut model, name)) = q_models.get_mut(entity) {
@@ -178,7 +224,8 @@ fn show_telemetry(
                         if ui.button("🔄 Reset").clicked() {
                             if let Some(channels) = &channels {
                                 model.session_id += 1;
-                                let _ = channels.tx.send(ModelicaCommand::Reset { entity });
+                                model.is_stepping = true;
+                                let _ = channels.tx.send(ModelicaCommand::Reset { entity, session_id: model.session_id });
                             }
                             state.history.remove(&entity);
                             model.current_time = 0.0;
@@ -188,32 +235,40 @@ fn show_telemetry(
 
                     ui.separator();
 
+                    // Parameters section (parameter Real - require recompilation)
                     if !model.parameters.is_empty() {
-                        ui.label("Parameters (Dynamic Tuning):");
+                        ui.label("Parameters (Dynamic Tuning — requires recompile):");
                         egui::ScrollArea::vertical().id_salt("params_scroll").max_height(150.0).show(ui, |ui| {
                             let mut param_keys: Vec<_> = model.parameters.keys().cloned().collect();
                             param_keys.sort();
                             let mut changed = false;
-                            for key in param_keys {
+                            for key in &param_keys {
                                 ui.horizontal(|ui| {
-                                    ui.label(format!("{}:", key));
-                                    let val = model.parameters.get_mut(&key).unwrap();
-                                    if ui.add(egui::DragValue::new(val).speed(0.01)).changed() {
+                                    ui.set_min_width(200.0);
+                                    ui.set_max_width(f32::INFINITY);
+                                    ui.label(format!("{:16}:", key));
+                                    let val = model.parameters.get_mut(key).unwrap();
+                                    if ui.add(egui::DragValue::new(val).speed(0.01).fixed_decimals(2)).changed() {
                                         changed = true;
                                     }
                                 });
                             }
-                            
+
                             if changed {
+                                let modified_source = substitute_params_in_source(
+                                    &state.editor_buffer,
+                                    &model.parameters
+                                );
+
                                 if let Some(channels) = &channels {
                                     model.session_id += 1;
-                                    let params: Vec<(String, f64)> = model.parameters.iter().map(|(k, v)| (k.clone(), *v)).collect();
+                                    model.is_stepping = true;
+                                    state.editor_buffer = modified_source.clone();
                                     let _ = channels.tx.send(ModelicaCommand::UpdateParameters {
                                         entity,
                                         session_id: model.session_id,
-                                        model_path: model.model_path.clone(),
                                         model_name: model.model_name.clone(),
-                                        parameters: params,
+                                        source: modified_source,
                                     });
                                 }
                             }
@@ -221,28 +276,34 @@ fn show_telemetry(
                         ui.separator();
                     }
 
+                    // Inputs section (input Real — applied on every step, no recompile)
                     if !model.inputs.is_empty() {
-                        ui.label("Control Inputs (Real-time):");
+                        ui.label("Inputs (Real-time — no recompile needed):");
                         egui::ScrollArea::vertical().id_salt("inputs_scroll").max_height(120.0).show(ui, |ui| {
                             let mut input_keys: Vec<_> = model.inputs.keys().cloned().collect();
                             input_keys.sort();
                             for key in input_keys {
                                 ui.horizontal(|ui| {
-                                    ui.label(format!("{}:", key));
+                                    ui.set_min_width(200.0);
+                                    ui.set_max_width(f32::INFINITY);
+                                    ui.label(format!("{:16}:", key));
                                     let val = model.inputs.get_mut(&key).unwrap();
-                                    ui.add(egui::DragValue::new(val).speed(0.1));
+                                    ui.add(egui::DragValue::new(val).speed(0.1).fixed_decimals(2));
                                 });
                             }
                         });
                         ui.separator();
                     }
 
-                    ui.label("Live Variables (Toggle to Plot):");
+                    ui.label("Variables (Toggle to Plot):");
                     egui::ScrollArea::vertical().id_salt("telemetry_scroll").show(ui, |ui| {
-                        let mut var_names: Vec<_> = model.variables.keys().cloned().collect();
-                        var_names.sort();
+                        // Only variables and inputs — parameters are constants, no need to plot
+                        let mut all_names: Vec<_> = model.variables.keys().cloned().collect();
+                        all_names.extend(model.inputs.keys().cloned());
+                        all_names.sort();
+                        all_names.dedup();
 
-                        for name in var_names {
+                        for name in all_names {
                             ui.horizontal(|ui| {
                                 let mut is_plotted = state.plotted_variables.contains(&name);
                                 if ui.checkbox(&mut is_plotted, "").changed() {
@@ -250,118 +311,125 @@ fn show_telemetry(
                                     else { state.plotted_variables.remove(&name); }
                                 }
                                 ui.label(format!("{}:", name));
-                                
-                                if let Some(val) = model.variables.get(&name) {
-                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                        ui.monospace(format!("{:.4}", val));
-                                    });
+                                ui.add_space(ui.available_width() - 60.0);
+                                if let Some(&val) = model.variables.get(&name) {
+                                    ui.label(format!("{:.4}", val));
+                                } else if let Some(&val) = model.inputs.get(&name) {
+                                    ui.label(format!("{:.4}", val));
                                 }
                             });
                         }
                     });
                 }
             } else {
-                ui.centered_and_justified(|ui| {
-                    ui.label("Waiting for model...");
+                ui.vertical_centered(|ui| {
+                    ui.label("No model selected.");
+                    ui.label("Use the Library Browser to load a .mo file.");
                 });
             }
         });
 }
 
-/// Window 4: Plots
+/// Window 4: Real-time Plots
 fn show_plots(
     mut contexts: EguiContexts,
-    state: Res<WorkbenchState>,
+    mut state: ResMut<WorkbenchState>,
 ) {
     let Ok(ctx) = contexts.ctx_mut() else { return; };
 
-    egui::Window::new("📈 Variable Plots")
+    egui::Window::new("📈 Real-time Graphs")
         .default_pos([270.0, 520.0])
-        .default_size([600.0, 300.0])
+        .default_size([910.0, 350.0])
         .resizable(true)
         .show(ctx, |ui| {
-            if state.plotted_variables.is_empty() {
-                ui.centered_and_justified(|ui| {
-                    ui.label("Check variables in Live Telemetry to plot them.");
-                });
-            } else {
-                Plot::new("workbench_plot")
-                    .view_aspect(2.0)
-                    .legend(egui_plot::Legend::default())
-                    .show(ui, |plot_ui| {
-                        if let Some(entity) = state.selected_entity {
-                            if let Some(entity_history) = state.history.get(&entity) {
-                                for var_name in &state.plotted_variables {
-                                    if let Some(data) = entity_history.get(var_name) {
-                                        let points: Vec<[f64; 2]> = data.iter().cloned().collect();
-                                        plot_ui.line(Line::new(var_name.clone(), PlotPoints::from(points)));
-                                    }
-                                }
+            ui.horizontal(|ui| {
+                ui.heading("📈 Graphs");
+                ui.add_space(ui.available_width() - 100.0);
+                if ui.button("🎯 Auto-Fit").clicked() {
+                    state.plot_auto_fit = true;
+                }
+            });
+            ui.separator();
+
+            if let Some(entity) = state.selected_entity {
+                let do_reset = state.plot_auto_fit;
+                state.plot_auto_fit = false;
+
+                // Clone history to avoid borrow conflict with plot_auto_fit
+                let entity_history = state.history.get(&entity).cloned();
+                let plotted = state.plotted_variables.clone();
+
+                if let Some(entity_history) = entity_history {
+                    let plot = Plot::new("modelica_plot")
+                        .view_aspect(2.5)
+                        .legend(egui_plot::Legend::default())
+                        .allow_drag(true)
+                        .allow_zoom(true)
+                        .allow_scroll(true)
+                        .allow_double_click_reset(true);
+
+                    let plot = if do_reset { plot.reset() } else { plot };
+
+                    plot.show(ui, |plot_ui| {
+                        for name in &plotted {
+                            if let Some(points) = entity_history.get(name) {
+                                let plot_points: PlotPoints = points.iter().cloned().collect();
+                                plot_ui.line(Line::new(name, plot_points));
                             }
                         }
                     });
+                } else {
+                    ui.centered_and_justified(|ui| {
+                        ui.label("Wait for simulation data...");
+                    });
+                }
+            } else {
+                ui.centered_and_justified(|ui| {
+                    ui.label("Select a model to see plots.");
+                });
             }
         });
 }
 
-/// Window 5: Engineering Console (Logs)
+/// Window 5: System Logs
 fn show_logs(
     mut contexts: EguiContexts,
     state: Res<WorkbenchState>,
 ) {
     let Ok(ctx) = contexts.ctx_mut() else { return; };
 
-    egui::Window::new("📟 Engineering Console")
+    egui::Window::new("📋 System Logs")
         .default_pos([10.0, 420.0])
-        .default_size([250.0, 200.0])
+        .default_size([250.0, 450.0])
         .resizable(true)
         .show(ctx, |ui| {
-            egui::ScrollArea::vertical()
-                .id_salt("log_scroll")
-                .stick_to_bottom(true)
-                .show(ui, |ui| {
-                    for log in &state.logs {
-                        ui.label(log);
-                    }
-                });
+            egui::ScrollArea::vertical().stick_to_bottom(true).show(ui, |ui| {
+                for log in &state.logs {
+                    ui.label(log);
+                }
+            });
         });
 }
 
 fn render_browser(ui: &mut egui::Ui, state: &mut WorkbenchState) {
     ui.horizontal(|ui| {
-        if ui.button("🏠").on_hover_text("Projects").clicked() {
-            state.current_path = PathBuf::from("assets/models");
-        }
-        if ui.button("📚").on_hover_text("MSL 4.0").clicked() {
-            state.current_path = PathBuf::from(".cache/msl/ModelicaStandardLibrary-4.0.0");
-        }
-        ui.separator();
-        if ui.button("⬆").clicked() {
-            if let Some(parent) = state.current_path.parent() {
-                if state.current_path.starts_with(".cache/msl") || state.current_path.starts_with("assets/models") {
-                     state.current_path = parent.to_path_buf();
-                }
-            }
-        }
+        ui.label("Path:");
+        ui.label(state.current_path.to_string_lossy());
     });
-    
-    ui.label(format!("Path: {:?}", state.current_path));
     ui.separator();
 
     if let Ok(entries) = std::fs::read_dir(&state.current_path) {
         let mut entries: Vec<_> = entries.flatten().collect();
-        entries.sort_by_key(|e| e.path());
+        entries.sort_by_key(|e| e.file_name());
 
         for entry in entries {
             let path = entry.path();
-            let name = path.file_name().unwrap_or_default().to_string_lossy();
-            
             if path.is_dir() {
-                if ui.link(format!("📁 {}", name)).clicked() {
+                if ui.button(format!("📁 {}", path.file_name().unwrap().to_string_lossy())).clicked() {
                     state.current_path = path;
                 }
-            } else if name.ends_with(".mo") {
-                if ui.link(format!("📄 {}", name)).clicked() {
+            } else if path.extension().and_then(|s| s.to_str()) == Some("mo") {
+                if ui.button(format!("📄 {}", path.file_name().unwrap().to_string_lossy())).clicked() {
                     if let Ok(content) = std::fs::read_to_string(&path) {
                         state.editor_buffer = content;
                     }
@@ -369,4 +437,28 @@ fn render_browser(ui: &mut egui::Ui, state: &mut WorkbenchState) {
             }
         }
     }
+
+    if state.current_path != PathBuf::from("assets/models") && state.current_path != PathBuf::from(".cache/msl") {
+        if ui.button("⬅ Back").clicked() {
+            state.current_path.pop();
+        }
+    }
+}
+
+/// Substitute parameter values into Modelica source code.
+///
+/// This replaces `parameter Real <name> = <value>` lines with the given values,
+/// allowing recompilation with different parameter values.
+fn substitute_params_in_source(source: &str, parameters: &HashMap<String, f64>) -> String {
+    let mut modified = source.to_string();
+    for (name, value) in parameters {
+        let pattern = format!(
+            r"(?m)(^\s*parameter\s+Real\s+{}\s*=\s*)[-+]?[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?",
+            regex::escape(name)
+        );
+        if let Ok(re) = regex::Regex::new(&pattern) {
+            modified = re.replace_all(&modified, format!("${{1}}{}", value)).to_string();
+        }
+    }
+    modified
 }
