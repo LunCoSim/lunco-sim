@@ -14,7 +14,7 @@ impl Plugin for UsdPlugins {
         app.add_plugins((
             UsdBevyPlugin,
             UsdAvianPlugin,
-            UsdPhysxPlugin,
+            UsdSimPlugin,
             UsdLunCoPlugin,
         ));
     }
@@ -69,5 +69,4 @@ fn on_add_lunco_prim(
         commands.entity(entity).insert(spacecraft);
         info!("Mapped LunCo metadata for {}", prim_path.path);
     }
-}
 }

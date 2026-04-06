@@ -4472,11 +4472,13 @@ dependencies = [
 name = "lunco-usd"
 version = "0.1.0"
 dependencies = [
+ "avian3d",
  "bevy",
  "lunco-core",
+ "lunco-mobility",
  "lunco-usd-avian",
  "lunco-usd-bevy",
- "lunco-usd-physx",
+ "lunco-usd-sim",
  "openusd",
  "serde",
  "tracing",
@@ -4519,13 +4521,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "lunco-usd-physx"
+name = "lunco-usd-sim"
 version = "0.1.0"
 dependencies = [
+ "avian3d",
  "bevy",
+ "lunco-core",
+ "lunco-mobility",
  "lunco-usd-bevy",
  "openusd",
- "tracing",
 ]
 
 [[package]]

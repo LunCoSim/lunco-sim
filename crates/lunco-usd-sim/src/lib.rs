@@ -1,4 +1,6 @@
 use bevy::prelude::*;
+use bevy::math::DVec3;
+use avian3d::prelude::*;
 pub use lunco_usd_bevy::{UsdPrimPath, UsdStageAsset};
 use openusd::sdf::{Path as SdfPath};
 use lunco_mobility::WheelRaycast;
@@ -27,19 +29,40 @@ fn on_add_usd_sim_prim(
     let mut reader = (*stage.reader).clone();
 
     // 1. Detect PhysxVehicleWheelAPI (The "Duck Typing" Intercept)
-    // In USD, schemas are identified by their namespace. We check for a 
-    // core attribute from the WheelAPI to identify the mesh as a functional wheel.
     if let Some(radius) = reader.get_prim_attribute_value::<f32>(&sdf_path, "physxVehicleWheel:radius") {
         info!("Intercepted PhysxVehicleWheelAPI for {}, injecting LunCo Raycast Wheel", prim_path.path);
         
         // INTERCEPT & SUBSTITUTE: 
         // We inject our specialized RaycastWheel which overrides standard 
         // rigid-body collision logic for high-performance mobility.
-        commands.entity(entity).insert(WheelRaycast {
+        let mut wheel = WheelRaycast {
             wheel_radius: radius as f64,
+            visual_entity: Some(entity), // Point to itself for visual suspension offset
             ..default()
-        });
-    }
+        };
 
-    // TODO: Add mappings for PhysxVehicleTireAPI and PhysxVehicleSuspensionAPI
+        // 2. Map Suspension (from PhysxVehicleSuspensionAPI)
+        if let Some(rest_len) = reader.get_prim_attribute_value::<f32>(&sdf_path, "physxVehicleSuspension:restLength") {
+            wheel.rest_length = rest_len as f64;
+        }
+        if let Some(k) = reader.get_prim_attribute_value::<f32>(&sdf_path, "physxVehicleSuspension:springStiffness") {
+            wheel.spring_k = k as f64;
+        }
+        if let Some(d) = reader.get_prim_attribute_value::<f32>(&sdf_path, "physxVehicleSuspension:springDamping") {
+            wheel.damping_c = d as f64;
+        }
+
+        commands.entity(entity).insert((
+            wheel,
+            RayCaster::new(DVec3::ZERO, Dir3::NEG_Y),
+            RayHits::default(),
+        ));
+
+        // 3. PRIORITY: Remove standard physics if they were added by other plugins
+        // We want the wheel to be a raycast-only entity.
+        commands.entity(entity)
+            .remove::<Collider>()
+            .remove::<RigidBody>()
+            .remove::<Mass>();
+    }
 }

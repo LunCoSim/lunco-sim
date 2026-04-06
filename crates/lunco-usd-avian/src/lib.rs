@@ -37,17 +37,31 @@ fn on_add_usd_prim(
         commands.entity(entity).insert(Mass(mass as f32));
     }
 
-    // 3. Map Collider (Basic)
-    if let Ok(val) = reader.get(&sdf_path, "typeName") {
-        if let Value::Token(ty) = &*val {
-            match ty.as_str() {
-                "Cube" => {
-                    commands.entity(entity).insert(Collider::cuboid(1.0, 1.0, 1.0));
+    // 3. Map Collider (Basic Primitives)
+    // Check if collision is explicitly enabled or if it's a primitive mesh
+    let collision_enabled = reader.get_prim_attribute_value::<bool>(&sdf_path, "physics:collisionEnabled").unwrap_or(true);
+    
+    if collision_enabled {
+        if let Ok(val) = reader.get(&sdf_path, "typeName") {
+            if let Value::Token(ty) = &*val {
+                match ty.as_str() {
+                    "Cube" => {
+                        // USD default size is 1.0, but we should respect scale
+                        commands.entity(entity).insert(Collider::cuboid(1.0, 1.0, 1.0));
+                    }
+                    "Sphere" => {
+                        // USD default radius is 0.5
+                        let radius = reader.get_prim_attribute_value::<f64>(&sdf_path, "radius").unwrap_or(0.5);
+                        commands.entity(entity).insert(Collider::sphere(radius));
+                    }
+                    "Cylinder" => {
+                        // USD default radius is 0.5, height is 1.0
+                        let radius = reader.get_prim_attribute_value::<f64>(&sdf_path, "radius").unwrap_or(0.5);
+                        let height = reader.get_prim_attribute_value::<f64>(&sdf_path, "height").unwrap_or(1.0);
+                        commands.entity(entity).insert(Collider::cylinder(radius, height));
+                    }
+                    _ => {}
                 }
-                "Cylinder" => {
-                    commands.entity(entity).insert(Collider::cylinder(0.5, 1.0));
-                }
-                _ => {}
             }
         }
     }

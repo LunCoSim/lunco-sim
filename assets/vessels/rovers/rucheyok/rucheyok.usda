@@ -7,9 +7,15 @@ def Xform "Rucheyok"
 {
     def Cube "Chassis"
     {
+        # --- Visuals ---
         double3 xformOp:scale = (15.0, 4.0, 20.0)
         double3 xformOp:translate = (0, 2.0, 0)
         color3f primvars:displayColor = (0.2, 0.5, 0.8)
+
+        # --- Basic Physics (Avian) ---
+        bool physics:rigidBodyEnabled = true
+        float physics:mass = 800.0
+        bool physics:collisionEnabled = true
     }
 
     def "Wheel_FL" (
@@ -17,8 +23,14 @@ def Xform "Rucheyok"
     )
     {
         double3 xformOp:translate = (-10.0, 0, 10.0)
-        float3 xformOp:rotateXYZ = (90, 0, 0) # Rotate to vertical
+        float3 xformOp:rotateXYZ = (90, 0, 0)
         color3f primvars:displayColor = (0.0, 1.0, 0.0)
+
+        # --- Sim Physics (LunCo Sim Intercept) ---
+        float physxVehicleWheel:radius = 4.0
+        float physxVehicleSuspension:restLength = 0.5
+        float physxVehicleSuspension:springStiffness = 10000.0
+        float physxVehicleSuspension:springDamping = 3000.0
     }
 
     def "Wheel_FR" (
@@ -26,8 +38,10 @@ def Xform "Rucheyok"
     )
     {
         double3 xformOp:translate = (10.0, 0, 10.0)
-        float3 xformOp:rotateXYZ = (90, 0, 0) # Rotate to vertical
+        float3 xformOp:rotateXYZ = (90, 0, 0)
         color3f primvars:displayColor = (0.0, 1.0, 0.0)
+
+        float physxVehicleWheel:radius = 4.0
     }
 
     def "Wheel_RL" (
@@ -35,8 +49,10 @@ def Xform "Rucheyok"
     )
     {
         double3 xformOp:translate = (-10.0, 0, -10.0)
-        float3 xformOp:rotateXYZ = (90, 0, 0) # Rotate to vertical
+        float3 xformOp:rotateXYZ = (90, 0, 0)
         color3f primvars:displayColor = (1.0, 0.0, 0.0)
+
+        float physxVehicleWheel:radius = 4.0
     }
 
     def "Wheel_RR" (
@@ -44,8 +60,10 @@ def Xform "Rucheyok"
     )
     {
         double3 xformOp:translate = (10.0, 0, -10.0)
-        float3 xformOp:rotateXYZ = (90, 0, 0) # Rotate to vertical
+        float3 xformOp:rotateXYZ = (90, 0, 0)
         color3f primvars:displayColor = (1.0, 0.0, 0.0)
+
+        float physxVehicleWheel:radius = 4.0
     }
 
     def Scope "Prototypes" (
@@ -56,6 +74,9 @@ def Xform "Rucheyok"
         {
             double3 xformOp:scale = (4.0, 2.0, 4.0)
             color3f primvars:displayColor = (0.5, 0.5, 0.5)
+            
+            # Explicitly NOT adding colliders here to prototypes, 
+            # let the sim-plugin handle it via Raycast.
         }
     }
 }

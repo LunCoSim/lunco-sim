@@ -83,44 +83,56 @@ pub struct UsdVisualSynced;
 
 fn sync_usd_visuals(
     mut commands: Commands,
-    query: Query<(Entity, &UsdPrimPath, Option<&Visibility>), Without<UsdVisualSynced>>,
+    query: Query<(Entity, &UsdPrimPath, Option<&Visibility>, Option<&Transform>), Without<UsdVisualSynced>>,
     stages: Res<Assets<UsdStageAsset>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    for (entity, prim_path, existing_vis) in query.iter() {
+    for (entity, prim_path, existing_vis, existing_tf) in query.iter() {
         let Some(stage) = stages.get(&prim_path.stage_handle) else { continue; };
         let Ok(sdf_path) = SdfPath::new(&prim_path.path) else { continue; };
 
         let mut reader = (*stage.reader).clone();
-
+        
         // 1. Detect Visual Mesh
         let mut mesh_handle = None;
         let base_rotation = Quat::IDENTITY;
+        
+        // Try getting typeName from metadata or attributes
+        let mut prim_type = None;
         if let Ok(val) = reader.get(&sdf_path, "typeName") {
             if let Value::Token(ty) = &*val {
-                match ty.as_str() {
-                    "Cube" => {
-                        // Use Bevy default size 1.0
-                        let size = reader.get_prim_attribute_value::<f64>(&sdf_path, "size").unwrap_or(1.0) as f32;
-                        mesh_handle = Some(meshes.add(Cuboid::from_size(Vec3::splat(size))));
-                    }
-                    "Sphere" => {
-                        // Use Bevy default radius 0.5
-                        let radius = reader.get_prim_attribute_value::<f64>(&sdf_path, "radius").unwrap_or(0.5) as f32;
-                        mesh_handle = Some(meshes.add(Sphere::new(radius).mesh().ico(32).unwrap()));
-                    }
-                    "Cylinder" => {
-                        // Use Bevy default radius 0.5, height 1.0
-                        let radius = reader.get_prim_attribute_value::<f64>(&sdf_path, "radius").unwrap_or(0.5) as f32;
-                        let height = reader.get_prim_attribute_value::<f64>(&sdf_path, "height").unwrap_or(1.0) as f32;
-                        mesh_handle = Some(meshes.add(Cylinder::new(radius, height)));
-                        
-                        // Note: USD default axis is Z, but we default to Y-up to match Bevy
-                        // and common asset authoring expectations in this project.
-                    }
-                    _ => {}
+                prim_type = Some(ty.to_string());
+            }
+        }
+
+        // HEURISTIC: If typeName is missing, try to infer from attributes
+        if prim_type.is_none() {
+            if reader.get(&sdf_path, "size").is_ok() {
+                prim_type = Some("Cube".to_string());
+            } else if reader.get(&sdf_path, "height").is_ok() {
+                prim_type = Some("Cylinder".to_string());
+            } else if reader.get(&sdf_path, "radius").is_ok() {
+                prim_type = Some("Sphere".to_string());
+            }
+        }
+
+        if let Some(ty) = prim_type {
+            match ty.as_str() {
+                "Cube" => {
+                    let size = reader.get_prim_attribute_value::<f64>(&sdf_path, "size").unwrap_or(1.0) as f32;
+                    mesh_handle = Some(meshes.add(Cuboid::from_size(Vec3::splat(size))));
                 }
+                "Sphere" => {
+                    let radius = reader.get_prim_attribute_value::<f64>(&sdf_path, "radius").unwrap_or(0.5) as f32;
+                    mesh_handle = Some(meshes.add(Sphere::new(radius).mesh().ico(32).unwrap()));
+                }
+                "Cylinder" => {
+                    let radius = reader.get_prim_attribute_value::<f64>(&sdf_path, "radius").unwrap_or(0.5) as f32;
+                    let height = reader.get_prim_attribute_value::<f64>(&sdf_path, "height").unwrap_or(1.0) as f32;
+                    mesh_handle = Some(meshes.add(Cylinder::new(radius, height)));
+                }
+                _ => {}
             }
         }
 
@@ -130,40 +142,49 @@ fn sync_usd_visuals(
             color = Color::srgb(v.x, v.y, v.z);
         }
 
-        if let Some(m) = mesh_handle {
+        if let Some(ref m) = mesh_handle {
             commands.entity(entity).insert((
-                Mesh3d(m), 
-                MeshMaterial3d(materials.add(StandardMaterial::from(color)))
+                Mesh3d(m.clone()), 
+                MeshMaterial3d(materials.add(StandardMaterial {
+                    base_color: color,
+                    ..default()
+                }))
             ));
         }
 
         // 3. Map Transform
-        let mut transform = Transform::default();
+        let mut transform = existing_tf.cloned().unwrap_or_default();
+        let mut has_usd_tf = false;
+        
         if let Some(v) = get_attribute_as_vec3(&mut reader, &sdf_path, "xformOp:scale")
             .or_else(|| get_attribute_as_vec3(&mut reader, &sdf_path, "scale")) 
         {
             transform.scale = v;
+            has_usd_tf = true;
         }
         if let Some(v) = get_attribute_as_vec3(&mut reader, &sdf_path, "xformOp:translate")
             .or_else(|| get_attribute_as_vec3(&mut reader, &sdf_path, "translate"))
         {
+            // If it's the root prim and we have an existing transform, we might want to offset
+            // But for now, if USD has a translation, it's local.
             transform.translation = v;
+            has_usd_tf = true;
         }
         if let Some(v) = get_attribute_as_vec3(&mut reader, &sdf_path, "xformOp:rotateXYZ")
             .or_else(|| get_attribute_as_vec3(&mut reader, &sdf_path, "rotate"))
         {
             transform.rotation = Quat::from_euler(EulerRot::XYZ, v.x.to_radians(), v.y.to_radians(), v.z.to_radians()) * base_rotation;
-        } else {
+            has_usd_tf = true;
+        } else if has_usd_tf {
             transform.rotation = base_rotation;
         }
 
-        if existing_vis.is_none() {
-            commands.entity(entity).insert(Visibility::Inherited);
-        }
-        
+        let final_vis = existing_vis.cloned().unwrap_or(Visibility::Inherited);
+
         commands.entity(entity).insert((
             transform, 
             UsdVisualSynced, 
+            final_vis,
             InheritedVisibility::default(),
             ViewVisibility::default()
         ));
@@ -176,7 +197,6 @@ fn sync_usd_visuals(
                     stage_handle: prim_path.stage_handle.clone(),
                     path: child_path.to_string(),
                 },
-                Transform::default(),
                 Visibility::Inherited,
                 InheritedVisibility::default(),
                 ViewVisibility::default(),
