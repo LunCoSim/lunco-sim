@@ -79,6 +79,8 @@ pub struct ModelicaResult {
     pub entity: Entity,
     pub new_time: f64,
     pub outputs: Vec<(String, f64)>,
+    /// List of parameter names and their default values found in the model.
+    pub detected_parameters: Vec<(String, f64)>,
     pub error: Option<String>,
     pub log_message: Option<String>,
     pub is_new_model: bool,
@@ -99,6 +101,7 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                     entity,
                     new_time: 0.0,
                     outputs: Vec::new(),
+                    detected_parameters: Vec::new(),
                     error: None,
                     log_message: Some(format!("Updating parameters for {}...", model_name)),
                     is_new_model: false,
@@ -125,6 +128,7 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                                     entity,
                                     new_time: 0.0,
                                     outputs: Vec::new(),
+                                    detected_parameters: Vec::new(),
                                     error: None,
                                     log_message: Some("Parameters updated successfully.".to_string()),
                                     is_new_model: true,
@@ -135,6 +139,7 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                                     entity,
                                     new_time: 0.0,
                                     outputs: Vec::new(),
+                                    detected_parameters: Vec::new(),
                                     error: Some(format!("Init Error: {:?}", e)),
                                     log_message: None,
                                     is_new_model: false,
@@ -147,6 +152,7 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                             entity,
                             new_time: 0.0,
                             outputs: Vec::new(),
+                            detected_parameters: Vec::new(),
                             error: Some(format!("Re-compile Error: {:?}", e)),
                             log_message: None,
                             is_new_model: false,
@@ -157,7 +163,6 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
             ModelicaCommand::Compile { entity, model_name, source } => {
                 info!("Compiling live Modelica source for {}...", model_name);
                 
-                // Create entity-specific isolation directory to avoid "Duplicate class" errors
                 let temp_dir = format!(".cache/modelica/{:?}", entity);
                 if let Err(e) = std::fs::create_dir_all(&temp_dir) {
                     error!("Failed to create temp directory {}: {:?}", temp_dir, e);
@@ -169,6 +174,7 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                         entity,
                         new_time: 0.0,
                         outputs: Vec::new(),
+                        detected_parameters: Vec::new(),
                         error: Some(format!("Failed to write temp file: {:?}", e)),
                         log_message: None,
                         is_new_model: false,
@@ -184,11 +190,19 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
 
                         match SimStepper::new(&comp_res.dae, opts) {
                             Ok(stepper) => {
+                                let mut params = Vec::new();
+                                for name in stepper.variable_names() {
+                                    if let Some(val) = stepper.get(&name) {
+                                        params.push((name.clone(), val));
+                                    }
+                                }
+
                                 steppers.insert(entity, stepper);
                                 let _ = tx.send(ModelicaResult {
                                     entity,
                                     new_time: 0.0,
                                     outputs: Vec::new(),
+                                    detected_parameters: params,
                                     error: None,
                                     log_message: Some(format!("Hot-reload successful for {}", model_name)),
                                     is_new_model: true,
@@ -199,6 +213,7 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                                     entity,
                                     new_time: 0.0,
                                     outputs: Vec::new(),
+                                    detected_parameters: Vec::new(),
                                     error: Some(format!("Stepper Error: {:?}", e)),
                                     log_message: None,
                                     is_new_model: false,
@@ -211,6 +226,7 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                             entity,
                             new_time: 0.0,
                             outputs: Vec::new(),
+                            detected_parameters: Vec::new(),
                             error: Some(format!("Compiler Error: {:?}", e)),
                             log_message: None,
                             is_new_model: false,
@@ -219,7 +235,6 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                 }
             }
             ModelicaCommand::Step { entity, model_path, model_name, inputs, dt } => {
-                // Ensure stepper exists
                 if !steppers.contains_key(&entity) {
                     info!("Initializing Modelica stepper for {} ({})", model_name, model_path);
                     let res = Compiler::new()
@@ -275,6 +290,7 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                         entity,
                         new_time: stepper.time(),
                         outputs: Vec::new(),
+                        detected_parameters: Vec::new(),
                         error: Some(format!("Solver Error: {:?}. Stepper reset.", e)),
                         log_message: None,
                         is_new_model: false,
@@ -299,6 +315,7 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                     error: None,
                     log_message: None,
                     is_new_model: false,
+                    detected_parameters: Vec::new(),
                 });
             }
             ModelicaCommand::Despawn { entity } => {
@@ -412,6 +429,14 @@ fn handle_modelica_responses(
             if let Ok(mut model) = q_models.get_mut(result.entity) {
                 model.current_time = 0.0;
                 model.last_step_time = 0.0;
+                
+                // Populate parameters if detected
+                if !result.detected_parameters.is_empty() {
+                    model.parameters.clear();
+                    for (name, val) in &result.detected_parameters {
+                        model.parameters.insert(name.clone(), *val);
+                    }
+                }
             }
         }
 

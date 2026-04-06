@@ -53,7 +53,7 @@ impl Default for WorkbenchState {
             history: HashMap::new(),
             plotted_variables: plotted,
             logs: VecDeque::new(),
-            max_history: 1000,
+            max_history: 10000, // 10x more data points
         }
     }
 }
@@ -91,7 +91,7 @@ fn show_model_editor(
         .default_pos([270.0, 10.0])
         .default_size([600.0, 500.0])
         .min_width(400.0)
-        .max_width(800.0)
+        .max_width(1000.0)
         .resizable(true)
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
@@ -104,6 +104,7 @@ fn show_model_editor(
                         });
                     }
                 }
+                
                 ui.add_space(20.0);
 
                 if state.compilation_error.is_some() {
@@ -144,7 +145,6 @@ fn show_telemetry(
     mut state: ResMut<WorkbenchState>,
     mut q_models: Query<(Entity, &mut ModelicaModel, Option<&Name>, Option<&Children>)>,
     mut q_inputs: Query<&mut ModelicaInput>,
-    q_outputs: Query<&ModelicaOutput>,
     channels: Option<Res<ModelicaChannels>>,
 ) {
     let Ok(ctx) = contexts.ctx_mut() else { return; };
@@ -182,8 +182,8 @@ fn show_telemetry(
 
                     ui.horizontal(|ui| {
                         ui.label("Parameters (Live Tuning):");
-                        ui.add_space(ui.available_width() - 180.0);
-                        if ui.button("Apply Params").on_hover_text("Re-init stepper with new parameters").clicked() {
+                        ui.add_space(ui.available_width() - 100.0);
+                        if ui.button("Apply").on_hover_text("Apply parameter overrides").clicked() {
                             if let Some(channels) = &channels {
                                 let params: Vec<(String, f64)> = model.parameters.iter().map(|(k, v)| (k.clone(), *v)).collect();
                                 let _ = channels.tx.send(ModelicaCommand::UpdateParameters {
@@ -196,7 +196,7 @@ fn show_telemetry(
                         }
                     });
 
-                    egui::ScrollArea::vertical().id_salt("params_scroll").max_height(100.0).show(ui, |ui| {
+                    egui::ScrollArea::vertical().id_salt("params_scroll").max_height(150.0).show(ui, |ui| {
                         let mut param_keys: Vec<_> = model.parameters.keys().cloned().collect();
                         param_keys.sort();
                         for key in param_keys {
@@ -208,13 +208,11 @@ fn show_telemetry(
                                 }
                             });
                         }
-                        if model.parameters.is_empty() {
-                            ui.label("No parameters defined. Edit .mo to add parameters.");
-                        }
                     });
 
                     ui.separator();
-                    egui::ScrollArea::vertical().id_salt("inputs_scroll").max_height(150.0).show(ui, |ui| {
+                    ui.label("Controls (Inputs):");
+                    egui::ScrollArea::vertical().id_salt("inputs_scroll").max_height(100.0).show(ui, |ui| {
                         if let Ok(mut input) = q_inputs.get_mut(entity) {
                             ui.horizontal(|ui| {
                                 ui.label(format!("{}:", input.variable_name));
@@ -237,7 +235,6 @@ fn show_telemetry(
                     ui.label("Variables (Toggle to Plot):");
                     
                     egui::ScrollArea::vertical().id_salt("telemetry_scroll").show(ui, |ui| {
-                        // Pre-collect to avoid borrow checker conflicts
                         let var_names = if let Some(h) = state.history.get(&entity) {
                             let mut names: Vec<_> = h.keys().cloned().collect();
                             names.sort();
@@ -269,13 +266,8 @@ fn show_telemetry(
                                 }
                             });
                         }
-                        if state.history.get(&entity).is_none() {
-                            ui.label("Waiting for data...");
-                        }
                     });
                 }
-            } else {
-                ui.label("No model selected.");
             }
         });
 }
@@ -358,15 +350,7 @@ fn render_browser(ui: &mut egui::Ui, state: &mut WorkbenchState) {
 
     if let Ok(entries) = std::fs::read_dir(&state.current_path) {
         let mut entries: Vec<_> = entries.flatten().collect();
-        entries.sort_by(|a, b| {
-            let a_is_dir = a.path().is_dir();
-            let b_is_dir = b.path().is_dir();
-            if a_is_dir != b_is_dir {
-                b_is_dir.cmp(&a_is_dir)
-            } else {
-                a.path().cmp(&b.path())
-            }
-        });
+        entries.sort_by_key(|e| e.path());
 
         for entry in entries {
             let path = entry.path();
