@@ -1,0 +1,16 @@
+#usda 1.0
+(
+    defaultPrim = "RucheyokSandbox"
+    upAxis = "Y"
+)
+
+def Xform "RucheyokSandbox"
+{
+    def "Rucheyok" (
+        prepend references = @../vessels/rovers/rucheyok/rucheyok.usda@
+    )
+    {
+        custom string lunco:name = "Rucheyok Rover"
+        double3 xformOp:translate = (0, 0, 0)
+    }
+}

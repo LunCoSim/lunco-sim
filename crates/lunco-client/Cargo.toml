@@ -7,6 +7,10 @@ edition = "2021"
 name = "rover_sandbox"
 path = "src/bin/rover_sandbox.rs"
 
+[[bin]]
+name = "model_viewer"
+path = "src/bin/model_viewer.rs"
+
 [dependencies]
 bevy = { workspace = true, features = ["default"] }
 avian3d = { workspace = true }
@@ -22,6 +26,10 @@ lunco-obc = { path = "../lunco-obc" }
 lunco-attributes = { path = "../lunco-attributes" }
 lunco-avatar = { path = "../lunco-avatar" }
 lunco-celestial = { path = "../lunco-celestial" }
+lunco-usd = { path = "../lunco-usd" }
+lunco-usd-avian = { path = "../lunco-usd-avian" }
+lunco-usd-bevy = { path = "../lunco-usd-bevy" }
+openusd = { workspace = true }
 bevy_egui = { workspace = true }
 bevy-inspector-egui = { workspace = true }
 
@@ -29,5 +37,3 @@ bevy-inspector-egui = { workspace = true }
 default = ["celestial"]
 celestial = []
 sandbox = []
-
-
