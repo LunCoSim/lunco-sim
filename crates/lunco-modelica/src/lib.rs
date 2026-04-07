@@ -65,7 +65,7 @@ impl Plugin for ModelicaPlugin {
 
         app.insert_resource(ModelicaChannels { tx: tx_cmd, rx: rx_res })
            .register_type::<ModelicaModel>()
-           .add_plugins(ui::ModelicaInspectorPlugin)
+           .add_plugins(ui::ModelicaUiPlugin)
            .add_systems(Update, (
                spawn_modelica_requests,
                handle_modelica_responses,
@@ -795,6 +795,24 @@ pub fn extract_parameters(source: &str) -> HashMap<String, f64> {
         }
     }
     params
+}
+
+/// Substitute parameter values into Modelica source code.
+///
+/// Replaces `parameter Real <name> = <value>` lines with the given values,
+/// enabling recompilation with different parameter values.
+pub fn substitute_params_in_source(source: &str, parameters: &HashMap<String, f64>) -> String {
+    let mut modified = source.to_string();
+    for (name, value) in parameters {
+        let pattern = format!(
+            r"(?m)(^\s*parameter\s+Real\s+{}\s*=\s*)[-+]?[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?",
+            regex::escape(name)
+        );
+        if let Ok(re) = regex::Regex::new(&pattern) {
+            modified = re.replace_all(&modified, format!("${{1}}{}", value)).to_string();
+        }
+    }
+    modified
 }
 
 #[derive(Component, Reflect, Default)]
