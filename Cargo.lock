@@ -4278,7 +4278,7 @@ dependencies = [
 
 [[package]]
 name = "lunco-attributes"
-version = "0.6.0"
+version = "0.6.0-dev"
 dependencies = [
  "bevy",
  "lunco-core",
@@ -4286,7 +4286,7 @@ dependencies = [
 
 [[package]]
 name = "lunco-avatar"
-version = "0.6.0"
+version = "0.6.0-dev"
 dependencies = [
  "avian3d",
  "bevy",
@@ -4300,7 +4300,7 @@ dependencies = [
 
 [[package]]
 name = "lunco-celestial"
-version = "0.6.0"
+version = "0.6.0-dev"
 dependencies = [
  "avian3d",
  "bevy",
@@ -4326,7 +4326,7 @@ dependencies = [
 
 [[package]]
 name = "lunco-client"
-version = "0.6.0"
+version = "0.6.0-dev"
 dependencies = [
  "avian3d",
  "bevy",
@@ -4348,7 +4348,7 @@ dependencies = [
 
 [[package]]
 name = "lunco-controller"
-version = "0.6.0"
+version = "0.6.0-dev"
 dependencies = [
  "bevy",
  "leafwing-input-manager",
@@ -4358,7 +4358,7 @@ dependencies = [
 
 [[package]]
 name = "lunco-core"
-version = "0.6.0"
+version = "0.6.0-dev"
 dependencies = [
  "bevy",
  "big_space",
@@ -4368,7 +4368,7 @@ dependencies = [
 
 [[package]]
 name = "lunco-fsw"
-version = "0.6.0"
+version = "0.6.0-dev"
 dependencies = [
  "bevy",
  "lunco-core",
@@ -4377,7 +4377,7 @@ dependencies = [
 
 [[package]]
 name = "lunco-hardware"
-version = "0.6.0"
+version = "0.6.0-dev"
 dependencies = [
  "avian3d",
  "bevy",
@@ -4388,7 +4388,7 @@ dependencies = [
 
 [[package]]
 name = "lunco-mobility"
-version = "0.6.0"
+version = "0.6.0-dev"
 dependencies = [
  "avian3d",
  "bevy",
@@ -4401,7 +4401,7 @@ dependencies = [
 
 [[package]]
 name = "lunco-obc"
-version = "0.6.0"
+version = "0.6.0-dev"
 dependencies = [
  "bevy",
  "lunco-core",
@@ -4409,7 +4409,7 @@ dependencies = [
 
 [[package]]
 name = "lunco-robotics"
-version = "0.6.0"
+version = "0.6.0-dev"
 dependencies = [
  "avian3d",
  "bevy",
@@ -4424,7 +4424,7 @@ dependencies = [
 
 [[package]]
 name = "lunco-telemetry"
-version = "0.6.0"
+version = "0.6.0-dev"
 dependencies = [
  "bevy",
  "lunco-core",
