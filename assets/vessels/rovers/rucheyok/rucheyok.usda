@@ -11,12 +11,12 @@ def Xform "Rucheyok" (
         prepend apiSchemas = ["PhysxVehicleDriveSkidAPI"]
     )
     {
-        # --- Visuals ---
-        double3 xformOp:scale = (15.0, 4.0, 20.0)
+        double width = 15.0
+        double height = 4.0
+        double depth = 20.0
         double3 xformOp:translate = (0, 2.0, 0)
         color3f primvars:displayColor = (0.2, 0.5, 0.8)
 
-        # --- Basic Physics (Avian) ---
         bool physics:rigidBodyEnabled = true
         float physics:mass = 800.0
         bool physics:collisionEnabled = true
@@ -26,11 +26,12 @@ def Xform "Rucheyok" (
         prepend references = </Rucheyok/Prototypes/Wheel>
     )
     {
+        double radius = 2.0
+        double height = 4.0
         double3 xformOp:translate = (-10.0, 0, 10.0)
         float3 xformOp:rotateXYZ = (90, 0, 0)
         color3f primvars:displayColor = (0.0, 1.0, 0.0)
 
-        # --- Sim Physics (LunCo Sim Intercept) ---
         int physxVehicleWheel:index = 0
         float physxVehicleWheel:radius = 4.0
         float physxVehicleSuspension:restLength = 0.5
@@ -42,6 +43,8 @@ def Xform "Rucheyok" (
         prepend references = </Rucheyok/Prototypes/Wheel>
     )
     {
+        double radius = 2.0
+        double height = 4.0
         double3 xformOp:translate = (10.0, 0, 10.0)
         float3 xformOp:rotateXYZ = (90, 0, 0)
         color3f primvars:displayColor = (0.0, 1.0, 0.0)
@@ -54,6 +57,8 @@ def Xform "Rucheyok" (
         prepend references = </Rucheyok/Prototypes/Wheel>
     )
     {
+        double radius = 2.0
+        double height = 4.0
         double3 xformOp:translate = (-10.0, 0, -10.0)
         float3 xformOp:rotateXYZ = (90, 0, 0)
         color3f primvars:displayColor = (1.0, 0.0, 0.0)
@@ -66,6 +71,8 @@ def Xform "Rucheyok" (
         prepend references = </Rucheyok/Prototypes/Wheel>
     )
     {
+        double radius = 2.0
+        double height = 4.0
         double3 xformOp:translate = (10.0, 0, -10.0)
         float3 xformOp:rotateXYZ = (90, 0, 0)
         color3f primvars:displayColor = (1.0, 0.0, 0.0)
@@ -80,7 +87,8 @@ def Xform "Rucheyok" (
     {
         def Cylinder "Wheel"
         {
-            double3 xformOp:scale = (4.0, 2.0, 4.0)
+            double radius = 2.0
+            double height = 4.0
             color3f primvars:displayColor = (0.5, 0.5, 0.5)
         }
     }

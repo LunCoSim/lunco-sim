@@ -44,7 +44,7 @@ impl AssetLoader for UsdLoader {
         let data_map = parser.parse().map_err(|e| anyhow::anyhow!("USD Parse Error: {}", e))?;
         let reader = TextReader::from_data(data_map);
 
-        // RESOLVE REFERENCES
+        // Resolve external references
         let reader = if let Some(parent) = load_context.path().path().parent() {
             let asset_root = std::path::Path::new("assets");
             let full_parent = asset_root.join(parent);
@@ -94,70 +94,63 @@ fn sync_usd_visuals(
         let Some(stage) = stages.get(&prim_path.stage_handle) else { continue; };
         let Ok(sdf_path) = SdfPath::new(&prim_path.path) else { continue; };
 
-        let mut reader = (*stage.reader).clone();
-        
-        // 0. Check Active status
+        let reader = (*stage.reader).clone();
+
+        // Skip inactive prims
         if let Ok(val) = reader.get(&sdf_path, "active") {
             if let Value::Bool(active) = &*val {
                 if !*active {
-                    debug!("Skipping inactive prim and its subtree: {}", prim_path.path);
-                    commands.entity(entity).insert(UsdVisualSynced); 
-                    return; // EXIT EARLY - don't process visuals OR children
+                    commands.entity(entity).insert(UsdVisualSynced);
+                    return;
                 }
             }
         }
 
-        // 1. Detect Visual Mesh
-        let mut mesh_handle = None;
-        let base_rotation = Quat::IDENTITY;
-        
-        // Try getting typeName from metadata or attributes
-        let mut prim_type = None;
-        if let Ok(val) = reader.get(&sdf_path, "typeName") {
+        // Get prim type
+        let prim_type = if let Ok(val) = reader.get(&sdf_path, "typeName") {
             if let Value::Token(ty) = &*val {
-                prim_type = Some(ty.to_string());
+                Some(ty.clone())
+            } else {
+                None
             }
-        }
+        } else {
+            None
+        };
 
-        // HEURISTIC: If typeName is missing, try to infer from attributes
-        if prim_type.is_none() {
-            if reader.get(&sdf_path, "size").is_ok() {
-                prim_type = Some("Cube".to_string());
-            } else if reader.get(&sdf_path, "height").is_ok() {
-                prim_type = Some("Cylinder".to_string());
-            } else if reader.get(&sdf_path, "radius").is_ok() {
-                prim_type = Some("Sphere".to_string());
+        // Create mesh based on prim type and explicit dimensions
+        let mesh_handle = match prim_type.as_deref() {
+            Some("Cube") => {
+                let width = reader.prim_attribute_value::<f64>(&sdf_path, "width")
+                    .expect("Cube must have 'width' attribute") as f32;
+                let height = reader.prim_attribute_value::<f64>(&sdf_path, "height")
+                    .expect("Cube must have 'height' attribute") as f32;
+                let depth = reader.prim_attribute_value::<f64>(&sdf_path, "depth")
+                    .expect("Cube must have 'depth' attribute") as f32;
+                Some(meshes.add(Cuboid::new(width * 0.5, height * 0.5, depth * 0.5)))
             }
-        }
-
-        if let Some(ty) = prim_type {
-            match ty.as_str() {
-                "Cube" => {
-                    let size = reader.prim_attribute_value::<f64>(&sdf_path, "size").unwrap_or(1.0) as f32;
-                    mesh_handle = Some(meshes.add(Cuboid::from_size(Vec3::splat(size))));
-                }
-                "Sphere" => {
-                    let radius = reader.prim_attribute_value::<f64>(&sdf_path, "radius").unwrap_or(0.5) as f32;
-                    mesh_handle = Some(meshes.add(Sphere::new(radius).mesh().ico(32).unwrap()));
-                }
-                "Cylinder" => {
-                    let radius = reader.prim_attribute_value::<f64>(&sdf_path, "radius").unwrap_or(0.5) as f32;
-                    let height = reader.prim_attribute_value::<f64>(&sdf_path, "height").unwrap_or(1.0) as f32;
-                    mesh_handle = Some(meshes.add(Cylinder::new(radius, height)));
-                }
-                _ => {}
+            Some("Sphere") => {
+                let radius = reader.prim_attribute_value::<f64>(&sdf_path, "radius")
+                    .expect("Sphere must have 'radius' attribute") as f32;
+                Some(meshes.add(Sphere::new(radius).mesh().ico(32).unwrap()))
             }
-        }
+            Some("Cylinder") => {
+                let radius = reader.prim_attribute_value::<f64>(&sdf_path, "radius")
+                    .expect("Cylinder must have 'radius' attribute") as f32;
+                let height = reader.prim_attribute_value::<f64>(&sdf_path, "height")
+                    .expect("Cylinder must have 'height' attribute") as f32;
+                Some(meshes.add(Cylinder::new(radius, height)))
+            }
+            _ => None,
+        };
 
-        // 2. Map Color
-        let mut color = Color::WHITE;
-        if let Some(v) = get_attribute_as_vec3(&mut reader, &sdf_path, "primvars:displayColor") {
-            color = Color::srgb(v.x, v.y, v.z);
-        }
+        // Get color
+        let color = get_attribute_as_vec3(&reader, &sdf_path, "primvars:displayColor")
+            .map(|v| Color::srgb(v.x, v.y, v.z))
+            .unwrap_or(Color::WHITE);
 
         if let Some(ref m) = mesh_handle {
             commands.entity(entity).insert((
-                Mesh3d(m.clone()), 
+                Mesh3d(m.clone()),
                 MeshMaterial3d(materials.add(StandardMaterial {
                     base_color: color,
                     ..default()
@@ -165,46 +158,24 @@ fn sync_usd_visuals(
             ));
         }
 
-        // 3. Map Transform
+        // Transform (position only)
         let mut transform = existing_tf.cloned().unwrap_or_default();
-        let mut has_usd_tf = false;
-        
-        if let Some(v) = get_attribute_as_vec3(&mut reader, &sdf_path, "xformOp:scale")
-            .or_else(|| get_attribute_as_vec3(&mut reader, &sdf_path, "scale")) 
-        {
-            transform.scale = v;
-            has_usd_tf = true;
-        }
-        if let Some(v) = get_attribute_as_vec3(&mut reader, &sdf_path, "xformOp:translate")
-            .or_else(|| get_attribute_as_vec3(&mut reader, &sdf_path, "translate"))
-        {
-            // If it's the root prim and we have an existing transform, we might want to offset
-            // But for now, if USD has a translation, it's local.
+        if let Some(v) = get_attribute_as_vec3(&reader, &sdf_path, "xformOp:translate") {
             transform.translation = v;
-            has_usd_tf = true;
-        }
-        if let Some(v) = get_attribute_as_vec3(&mut reader, &sdf_path, "xformOp:rotateXYZ")
-            .or_else(|| get_attribute_as_vec3(&mut reader, &sdf_path, "rotate"))
-        {
-            transform.rotation = Quat::from_euler(EulerRot::XYZ, v.x.to_radians(), v.y.to_radians(), v.z.to_radians()) * base_rotation;
-            has_usd_tf = true;
-        } else if has_usd_tf {
-            transform.rotation = base_rotation;
         }
 
         let final_vis = existing_vis.cloned().unwrap_or(Visibility::Inherited);
 
         commands.entity(entity).insert((
-            transform, 
-            UsdVisualSynced, 
+            transform,
+            UsdVisualSynced,
             final_vis,
             InheritedVisibility::default(),
-            ViewVisibility::default()
+            ViewVisibility::default(),
         ));
 
-        // 4. Recursion
+        // Spawn children
         for child_path in reader.prim_children(&sdf_path) {
-            // Check if child is active before spawning
             if let Ok(val) = reader.get(&child_path, "active") {
                 if let Value::Bool(active) = &*val {
                     if !*active { continue; }
@@ -226,7 +197,7 @@ fn sync_usd_visuals(
     }
 }
 
-fn get_attribute_as_vec3(reader: &mut TextReader, path: &SdfPath, attr: &str) -> Option<Vec3> {
+fn get_attribute_as_vec3(reader: &TextReader, path: &SdfPath, attr: &str) -> Option<Vec3> {
     if let Some(v) = reader.prim_attribute_value::<Vec<f32>>(path, attr) {
         if v.len() >= 3 { return Some(Vec3::new(v[0], v[1], v[2])); }
     }

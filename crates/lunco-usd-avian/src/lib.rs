@@ -22,23 +22,21 @@ fn on_add_usd_prim(
     let Some(stage) = stages.get(&prim_path.stage_handle) else { return; };
     let Ok(sdf_path) = SdfPath::new(&prim_path.path) else { return; };
 
-    let mut reader = (*stage.reader).clone();
+    let reader = (*stage.reader).clone();
 
-    // 1. Map RigidBody
+    // Map RigidBody
     if let Some(true) = reader.prim_attribute_value::<bool>(&sdf_path, "physics:rigidBodyEnabled") {
         commands.entity(entity).insert(RigidBody::Dynamic);
-        info!("Mapped {} to RigidBody::Dynamic", prim_path.path);
     }
 
-    // 2. Map Mass
+    // Map Mass
     if let Some(mass) = reader.prim_attribute_value::<f32>(&sdf_path, "physics:mass") {
         commands.entity(entity).insert(Mass(mass));
     } else if let Some(mass) = reader.prim_attribute_value::<f64>(&sdf_path, "physics:mass") {
         commands.entity(entity).insert(Mass(mass as f32));
     }
 
-    // 3. Map Collider (Basic Primitives)
-    // Check if collision is explicitly enabled or if it's a primitive mesh
+    // Map Collider
     let collision_enabled = reader.prim_attribute_value::<bool>(&sdf_path, "physics:collisionEnabled").unwrap_or(true);
 
     if collision_enabled {
@@ -46,18 +44,25 @@ fn on_add_usd_prim(
             if let Value::Token(ty) = &*val {
                 match ty.as_str() {
                     "Cube" => {
-                        // USD default size is 1.0, but we should respect scale
-                        commands.entity(entity).insert(Collider::cuboid(1.0, 1.0, 1.0));
+                        let width = reader.prim_attribute_value::<f64>(&sdf_path, "width")
+                            .expect("Cube must have 'width' attribute");
+                        let height = reader.prim_attribute_value::<f64>(&sdf_path, "height")
+                            .expect("Cube must have 'height' attribute");
+                        let depth = reader.prim_attribute_value::<f64>(&sdf_path, "depth")
+                            .expect("Cube must have 'depth' attribute");
+                        // Collider::cuboid expects half-extents
+                        commands.entity(entity).insert(Collider::cuboid(width * 0.5, height * 0.5, depth * 0.5));
                     }
                     "Sphere" => {
-                        // USD default radius is 0.5
-                        let radius = reader.prim_attribute_value::<f64>(&sdf_path, "radius").unwrap_or(0.5);
+                        let radius = reader.prim_attribute_value::<f64>(&sdf_path, "radius")
+                            .expect("Sphere must have 'radius' attribute");
                         commands.entity(entity).insert(Collider::sphere(radius));
                     }
                     "Cylinder" => {
-                        // USD default radius is 0.5, height is 1.0
-                        let radius = reader.prim_attribute_value::<f64>(&sdf_path, "radius").unwrap_or(0.5);
-                        let height = reader.prim_attribute_value::<f64>(&sdf_path, "height").unwrap_or(1.0);
+                        let radius = reader.prim_attribute_value::<f64>(&sdf_path, "radius")
+                            .expect("Cylinder must have 'radius' attribute");
+                        let height = reader.prim_attribute_value::<f64>(&sdf_path, "height")
+                            .expect("Cylinder must have 'height' attribute");
                         commands.entity(entity).insert(Collider::cylinder(radius, height));
                     }
                     _ => {}

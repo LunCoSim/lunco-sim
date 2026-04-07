@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use bevy::math::DVec3;
 use avian3d::prelude::*;
 use lunco_usd::{UsdPlugins, UsdStageAsset, UsdPrimPath};
 
@@ -9,7 +10,9 @@ fn main() {
             file_path: "../../assets".to_string(),
             ..default()
         }))
+        // Physics without gravity - for visualization only
         .add_plugins(PhysicsPlugins::default())
+        .insert_resource(Gravity(DVec3::ZERO))
         .add_plugins(UsdPlugins)
         .add_systems(Startup, setup)
         .add_systems(Update, (rotate_camera, model_timer))
@@ -96,10 +99,10 @@ fn setup(
         Name::new("Rucheyok Root"),
         ModelRoot,
         UsdPrimPath {
-            stage_handle: rucheyok_handle,
+            stage_handle: rucheyok_handle.clone(),
             path: "/".to_string(),
         },
-        Visibility::Hidden,
+        Visibility::Visible,
         InheritedVisibility::default(),
         ViewVisibility::default(),
         Transform::default(),
