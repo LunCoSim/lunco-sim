@@ -1,0 +1,46 @@
+#usda 1.0
+(
+    defaultPrim = "Wheel"
+)
+
+"""
+Reusable wheel component for mobility systems.
+Can be referenced by rovers or other ground vehicles.
+
+Modelica class: LunCo.Mobility.Wheel.Motorized
+"""
+
+def Cylinder "Wheel" (
+    prepend apiSchemas = ["LunCoMobilityComponentAPI"]
+)
+{
+    # --- Geometry ---
+    double radius = 2.0
+    double height = 4.0
+    double3 xformOp:translate = (0, 0, 0)
+    color3f primvars:displayColor = (0.3, 0.3, 0.3)
+
+    # --- Modelica model ---
+    string lunco:modelicaModel = "models/wheel.mo"
+    string lunco:modelicaClassName = "LunCo.Mobility.Wheel.Motorized"
+
+    # --- Wheel mechanical properties ---
+    double lunco:springStiffness = 10000.0
+    double lunco:springDamping = 3000.0
+    double lunco:restLength = 0.5
+    double lunco:frictionCoefficient = 0.8
+    double lunco:maxSteerAngle = 0.5
+
+    # --- Motor electrical properties ---
+    double lunco:motorPower = 2000.0
+    double lunco:motorEfficiency = 0.85
+    double lunco:noLoadRpm = 300.0
+
+    # --- Power connections ---
+    rel lunco:powerInput
+
+    # --- Physics ---
+    bool physics:rigidBodyEnabled = true
+    float physics:mass = 25.0
+    bool physics:collisionEnabled = true
+}

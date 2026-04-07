@@ -1,0 +1,43 @@
+#usda 1.0
+(
+    defaultPrim = "Motor"
+)
+
+"""
+Reusable motor component for driving wheels or other actuators.
+Can be referenced by rovers, manipulators, or other mechanical systems.
+
+Modelica class: LunCo.Mobility.Motor.BLDC
+"""
+
+def Cylinder "Motor" (
+    prepend apiSchemas = ["LunCoActuatorAPI"]
+)
+{
+    # --- Geometry ---
+    double radius = 0.3
+    double height = 0.8
+    double3 xformOp:translate = (0, 0, 0)
+    color3f primvars:displayColor = (0.4, 0.4, 0.4)
+
+    # --- Modelica model ---
+    string lunco:modelicaModel = "models/motor.mo"
+    string lunco:modelicaClassName = "LunCo.Mobility.Motor.BLDC"
+
+    # --- Motor properties ---
+    double lunco:ratedPower = 2000.0
+    double lunco:peakPower = 4000.0
+    double lunco:ratedRpm = 300.0
+    double lunco:efficiency = 0.85
+    double lunco:torqueConstant = 0.1
+    double lunco:resistance = 0.05
+    double lunco:inductance = 0.001
+
+    # --- Power connections ---
+    rel lunco:powerInput
+
+    # --- Physics ---
+    bool physics:rigidBodyEnabled = true
+    float physics:mass = 8.0
+    bool physics:collisionEnabled = true
+}

@@ -109,11 +109,14 @@ fn sync_usd_visuals(
         // Get prim type
         let prim_type = if let Ok(val) = reader.get(&sdf_path, "typeName") {
             if let Value::Token(ty) = &*val {
+                info!("Prim {}: typeName={}", prim_path.path, ty);
                 Some(ty.clone())
             } else {
+                warn!("Prim {}: typeName exists but is not Token", prim_path.path);
                 None
             }
         } else {
+            warn!("Prim {}: no typeName found", prim_path.path);
             None
         };
 

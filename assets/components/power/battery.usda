@@ -1,0 +1,46 @@
+#usda 1.0
+(
+    defaultPrim = "Battery"
+)
+
+"""
+Reusable battery component for power systems.
+Can be referenced by rovers, landers, satellites, or habitats.
+
+Modelica class: LunCo.Power.Battery.LithiumIon
+"""
+
+def Cube "Battery" (
+    prepend apiSchemas = ["LunCoPowerComponentAPI"]
+)
+{
+    # --- Geometry ---
+    double width = 2.0
+    double height = 0.5
+    double depth = 3.0
+    double3 xformOp:translate = (0, 0, 0)
+    color3f primvars:displayColor = (0.8, 0.2, 0.2)
+
+    # --- Modelica model ---
+    string lunco:modelicaModel = "models/battery.mo"
+    string lunco:modelicaClassName = "LunCo.Power.Battery.LithiumIon"
+
+    # --- Electrical properties ---
+    double lunco:capacity = 10000.0
+    double lunco:voltage = 48.0
+    double lunco:maxChargeRate = 5000.0
+    double lunco:maxDischargeRate = 8000.0
+    double lunco:efficiency = 0.95
+    double lunco:internalResistance = 0.01
+
+    # --- Initial state ---
+    double lunco:initialCharge = 0.8
+
+    # --- Power connections ---
+    rel lunco:powerTerminal
+
+    # --- Physics ---
+    bool physics:rigidBodyEnabled = true
+    float physics:mass = 50.0
+    bool physics:collisionEnabled = true
+}

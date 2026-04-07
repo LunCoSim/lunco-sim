@@ -3,10 +3,14 @@
     defaultPrim = "Rucheyok"
 )
 
+# Rucheyok Lunar Rover
+# Assembled from reusable component references.
+
 def Xform "Rucheyok" (
     prepend apiSchemas = ["PhysxVehicleContextAPI"]
 )
 {
+    # --- Chassis ---
     def Cube "Chassis" (
         prepend apiSchemas = ["PhysxVehicleDriveSkidAPI"]
     )
@@ -22,74 +26,103 @@ def Xform "Rucheyok" (
         bool physics:collisionEnabled = true
     }
 
-    def "Wheel_FL" (
-        prepend references = </Rucheyok/Prototypes/Wheel>
-    )
+    # --- Solar Panel (mounted on top) ---
+    def Cube "SolarPanel"
+    {
+        double width = 12.0
+        double height = 0.2
+        double depth = 6.0
+        double3 xformOp:translate = (0, 4.5, 0)
+        color3f primvars:displayColor = (0.05, 0.05, 0.5)
+
+        bool physics:rigidBodyEnabled = true
+        float physics:mass = 15.0
+        bool physics:collisionEnabled = true
+    }
+
+    # --- Battery (inside chassis) ---
+    def Cube "Battery"
+    {
+        double width = 4.0
+        double height = 0.8
+        double depth = 6.0
+        double3 xformOp:translate = (0, 0.8, 0)
+        color3f primvars:displayColor = (0.8, 0.2, 0.2)
+
+        bool physics:rigidBodyEnabled = true
+        float physics:mass = 50.0
+        bool physics:collisionEnabled = true
+    }
+
+    # --- Wheels ---
+    def Cylinder "Wheel_FL"
     {
         double radius = 2.0
-        double height = 4.0
-        double3 xformOp:translate = (-10.0, 0, 10.0)
+        double height = 1.5
+        double3 xformOp:translate = (-8.5, 0, 10.5)
         float3 xformOp:rotateXYZ = (90, 0, 0)
-        color3f primvars:displayColor = (0.0, 1.0, 0.0)
+        color3f primvars:displayColor = (0.2, 0.8, 0.2)
 
         int physxVehicleWheel:index = 0
-        float physxVehicleWheel:radius = 4.0
-        float physxVehicleSuspension:restLength = 0.5
-        float physxVehicleSuspension:springStiffness = 10000.0
-        float physxVehicleSuspension:springDamping = 3000.0
+        float physxVehicleWheel:radius = 2.0
+        float physxVehicleSuspension:restLength = 0.0
+        float physxVehicleSuspension:springStiffness = 15000.0
+        float physxVehicleSuspension:springDamping = 5000.0
+
+        bool physics:rigidBodyEnabled = true
+        float physics:mass = 25.0
+        bool physics:collisionEnabled = true
     }
 
-    def "Wheel_FR" (
-        prepend references = </Rucheyok/Prototypes/Wheel>
-    )
+    def Cylinder "Wheel_FR"
     {
         double radius = 2.0
-        double height = 4.0
-        double3 xformOp:translate = (10.0, 0, 10.0)
+        double height = 1.5
+        double3 xformOp:translate = (8.5, 0, 10.5)
         float3 xformOp:rotateXYZ = (90, 0, 0)
-        color3f primvars:displayColor = (0.0, 1.0, 0.0)
+        color3f primvars:displayColor = (0.2, 0.8, 0.2)
 
         int physxVehicleWheel:index = 1
-        float physxVehicleWheel:radius = 4.0
+        float physxVehicleWheel:radius = 2.0
+        float physxVehicleSuspension:restLength = 0.0
+
+        bool physics:rigidBodyEnabled = true
+        float physics:mass = 25.0
+        bool physics:collisionEnabled = true
     }
 
-    def "Wheel_RL" (
-        prepend references = </Rucheyok/Prototypes/Wheel>
-    )
+    def Cylinder "Wheel_RL"
     {
         double radius = 2.0
-        double height = 4.0
-        double3 xformOp:translate = (-10.0, 0, -10.0)
+        double height = 1.5
+        double3 xformOp:translate = (-8.5, 0, -10.5)
         float3 xformOp:rotateXYZ = (90, 0, 0)
-        color3f primvars:displayColor = (1.0, 0.0, 0.0)
+        color3f primvars:displayColor = (0.8, 0.2, 0.2)
 
         int physxVehicleWheel:index = 2
-        float physxVehicleWheel:radius = 4.0
+        float physxVehicleWheel:radius = 2.0
+        float physxVehicleSuspension:restLength = 0.0
+
+        bool physics:rigidBodyEnabled = true
+        float physics:mass = 25.0
+        bool physics:collisionEnabled = true
     }
 
-    def "Wheel_RR" (
-        prepend references = </Rucheyok/Prototypes/Wheel>
-    )
+    def Cylinder "Wheel_RR"
     {
         double radius = 2.0
-        double height = 4.0
-        double3 xformOp:translate = (10.0, 0, -10.0)
+        double height = 1.5
+        double3 xformOp:translate = (8.5, 0, -10.5)
         float3 xformOp:rotateXYZ = (90, 0, 0)
-        color3f primvars:displayColor = (1.0, 0.0, 0.0)
+        color3f primvars:displayColor = (0.8, 0.2, 0.2)
 
         int physxVehicleWheel:index = 3
-        float physxVehicleWheel:radius = 4.0
+        float physxVehicleWheel:radius = 2.0
+        float physxVehicleSuspension:restLength = 0.0
+
+        bool physics:rigidBodyEnabled = true
+        float physics:mass = 25.0
+        bool physics:collisionEnabled = true
     }
 
-    def Scope "Prototypes" (
-        active = false
-    )
-    {
-        def Cylinder "Wheel"
-        {
-            double radius = 2.0
-            double height = 4.0
-            color3f primvars:displayColor = (0.5, 0.5, 0.5)
-        }
-    }
 }
