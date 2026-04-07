@@ -1,22 +1,26 @@
 //! Tests for USD parameter parsing.
 //!
 //! Verifies that all visual, physics, and electrical parameters
-//! are correctly extracted from rover USD files.
+//! are correctly extracted from rover USD files after composition.
 
+use lunco_usd_composer::UsdComposer;
 use openusd::sdf::{AbstractData, Path as SdfPath};
 use openusd::usda::TextReader;
 use std::path::PathBuf;
 
-/// Load the rover USD file and return the reader.
+/// Load the rover USD file with all references resolved.
 fn load_rover() -> TextReader {
-    let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    let asset_path = PathBuf::from(manifest_dir)
-        .parent().unwrap()
-        .parent().unwrap()
-        .join("assets/vessels/rovers/rucheyok/rucheyok.usda");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let asset_root = manifest_dir.parent().unwrap().parent().unwrap();
+    let usd_path = asset_root.join("assets/vessels/rovers/rucheyok/rucheyok.usda");
     
-    TextReader::read(&asset_path)
-        .unwrap_or_else(|e| panic!("Failed to load {:?}: {}", asset_path, e))
+    let reader = TextReader::read(&usd_path)
+        .unwrap_or_else(|e| panic!("Failed to load {:?}: {}", usd_path, e));
+    
+    // Compose all references
+    let assets_dir = asset_root.join("assets");
+    UsdComposer::flatten(&reader, &assets_dir)
+        .unwrap_or_else(|e| panic!("Failed to compose rover: {}", e))
 }
 
 #[test]
@@ -269,4 +273,56 @@ fn test_all_prims_have_color() {
             .unwrap_or_else(|| panic!("Prim {prim_path} should have displayColor"));
         assert_eq!(color.len(), 3, "Color should have 3 components");
     }
+}
+
+#[test]
+fn test_eps_relationships() {
+    let reader = load_rover();
+
+    // Solar panel connects to EPS bus
+    let solar_rel = SdfPath::new("/Rucheyok/SolarPanel.lunco:epsBus").unwrap();
+    assert!(
+        reader.has_spec(&solar_rel),
+        "SolarPanel should have epsBus relationship"
+    );
+
+    // Battery connects to EPS bus
+    let battery_rel = SdfPath::new("/Rucheyok/Battery.lunco:epsBus").unwrap();
+    assert!(
+        reader.has_spec(&battery_rel),
+        "Battery should have epsBus relationship"
+    );
+}
+
+#[test]
+fn test_component_eps_fields() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let asset_root = manifest_dir.parent().unwrap().parent().unwrap();
+
+    // Solar panel component should declare epsBus
+    let solar_path = asset_root.join("assets/components/power/solar_panel.usda");
+    let solar_reader = TextReader::read(&solar_path).expect("Solar panel component should load");
+    let solar_rel = SdfPath::new("/SolarPanel.lunco:epsBus").unwrap();
+    assert!(
+        solar_reader.has_spec(&solar_rel),
+        "Solar panel component should declare epsBus relationship field"
+    );
+
+    // Wheel component should declare epsBus
+    let wheel_path = asset_root.join("assets/components/mobility/wheel.usda");
+    let wheel_reader = TextReader::read(&wheel_path).expect("Wheel component should load");
+    let wheel_rel = SdfPath::new("/Wheel.lunco:epsBus").unwrap();
+    assert!(
+        wheel_reader.has_spec(&wheel_rel),
+        "Wheel component should declare epsBus relationship field"
+    );
+
+    // Battery component should declare epsBus
+    let battery_path = asset_root.join("assets/components/power/battery.usda");
+    let battery_reader = TextReader::read(&battery_path).expect("Battery component should load");
+    let battery_rel = SdfPath::new("/Battery.lunco:epsBus").unwrap();
+    assert!(
+        battery_reader.has_spec(&battery_rel),
+        "Battery component should declare epsBus relationship field"
+    );
 }

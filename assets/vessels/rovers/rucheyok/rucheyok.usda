@@ -5,12 +5,13 @@
 
 # Rucheyok Lunar Rover
 # Assembled from reusable component references.
+# Power flows: SolarPanel -> Battery -> Wheels via EPS bus
 
 def Xform "Rucheyok" (
     prepend apiSchemas = ["PhysxVehicleContextAPI"]
 )
 {
-    # --- Chassis ---
+    # --- Chassis (custom, not reusable) ---
     def Cube "Chassis" (
         prepend apiSchemas = ["PhysxVehicleDriveSkidAPI"]
     )
@@ -26,8 +27,10 @@ def Xform "Rucheyok" (
         bool physics:collisionEnabled = true
     }
 
-    # --- Solar Panel (mounted on top) ---
-    def Cube "SolarPanel"
+    # --- Solar Panel (from component, with rover-specific parameters) ---
+    def Xform "SolarPanel" (
+        prepend references = @/components/power/solar_panel.usda@</SolarPanel>
+    )
     {
         double width = 12.0
         double height = 0.2
@@ -38,10 +41,20 @@ def Xform "Rucheyok" (
         bool physics:rigidBodyEnabled = true
         float physics:mass = 15.0
         bool physics:collisionEnabled = true
+
+        # Override Modelica parameters for this specific rover
+        double lunco:nominalPower = 800.0        # Larger panel for lunar mission
+        double lunco:efficiency = 0.32           # High-efficiency multi-junction
+        double lunco:area = 72.0                 # 12x6m panel
+
+        # Solar panel connects to EPS bus
+        rel lunco:epsBus = [</Rucheyok/Battery>]
     }
 
-    # --- Battery (inside chassis) ---
-    def Cube "Battery"
+    # --- Battery (from component, with rover-specific parameters) ---
+    def Xform "Battery" (
+        prepend references = @/components/power/battery.usda@</Battery>
+    )
     {
         double width = 4.0
         double height = 0.8
@@ -52,10 +65,26 @@ def Xform "Rucheyok" (
         bool physics:rigidBodyEnabled = true
         float physics:mass = 50.0
         bool physics:collisionEnabled = true
+
+        # Override Modelica parameters for this specific rover
+        double lunco:capacity = 15000.0          # Larger battery for long missions
+        double lunco:maxDischargeRate = 10000.0  # Higher discharge for steep terrain
+        double lunco:initialCharge = 0.95        # Start fully charged
+
+        # Battery connects to EPS bus
+        rel lunco:epsBus = [
+            </Rucheyok/SolarPanel>,
+            </Rucheyok/Wheel_FL>,
+            </Rucheyok/Wheel_FR>,
+            </Rucheyok/Wheel_RL>,
+            </Rucheyok/Wheel_RR>
+        ]
     }
 
-    # --- Wheels ---
-    def Cylinder "Wheel_FL"
+    # --- Wheels (from component) ---
+    def Cylinder "Wheel_FL" (
+        prepend references = @/components/mobility/wheel.usda@</Wheel>
+    )
     {
         double radius = 2.0
         double height = 1.5
@@ -72,9 +101,17 @@ def Xform "Rucheyok" (
         bool physics:rigidBodyEnabled = true
         float physics:mass = 25.0
         bool physics:collisionEnabled = true
+
+        # Override Modelica parameters
+        double lunco:motorPower = 2000.0
+        double lunco:motorEfficiency = 0.88
+
+        rel lunco:epsBus = [</Rucheyok/Battery>]
     }
 
-    def Cylinder "Wheel_FR"
+    def Cylinder "Wheel_FR" (
+        prepend references = @/components/mobility/wheel.usda@</Wheel>
+    )
     {
         double radius = 2.0
         double height = 1.5
@@ -89,9 +126,16 @@ def Xform "Rucheyok" (
         bool physics:rigidBodyEnabled = true
         float physics:mass = 25.0
         bool physics:collisionEnabled = true
+
+        double lunco:motorPower = 2000.0
+        double lunco:motorEfficiency = 0.88
+
+        rel lunco:epsBus = [</Rucheyok/Battery>]
     }
 
-    def Cylinder "Wheel_RL"
+    def Cylinder "Wheel_RL" (
+        prepend references = @/components/mobility/wheel.usda@</Wheel>
+    )
     {
         double radius = 2.0
         double height = 1.5
@@ -106,9 +150,16 @@ def Xform "Rucheyok" (
         bool physics:rigidBodyEnabled = true
         float physics:mass = 25.0
         bool physics:collisionEnabled = true
+
+        double lunco:motorPower = 2000.0
+        double lunco:motorEfficiency = 0.88
+
+        rel lunco:epsBus = [</Rucheyok/Battery>]
     }
 
-    def Cylinder "Wheel_RR"
+    def Cylinder "Wheel_RR" (
+        prepend references = @/components/mobility/wheel.usda@</Wheel>
+    )
     {
         double radius = 2.0
         double height = 1.5
@@ -123,6 +174,10 @@ def Xform "Rucheyok" (
         bool physics:rigidBodyEnabled = true
         float physics:mass = 25.0
         bool physics:collisionEnabled = true
-    }
 
+        double lunco:motorPower = 2000.0
+        double lunco:motorEfficiency = 0.88
+
+        rel lunco:epsBus = [</Rucheyok/Battery>]
+    }
 }

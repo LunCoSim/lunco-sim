@@ -3,12 +3,8 @@
     defaultPrim = "Wheel"
 )
 
-"""
-Reusable wheel component for mobility systems.
-Can be referenced by rovers or other ground vehicles.
-
-Modelica class: LunCo.Mobility.Wheel.Motorized
-"""
+# Reusable motorized wheel component for mobility.
+# Modelica class: LunCo.Mobility.Wheel.Motorized
 
 def Cylinder "Wheel" (
     prepend apiSchemas = ["LunCoMobilityComponentAPI"]
@@ -24,20 +20,20 @@ def Cylinder "Wheel" (
     string lunco:modelicaModel = "models/wheel.mo"
     string lunco:modelicaClassName = "LunCo.Mobility.Wheel.Motorized"
 
-    # --- Wheel mechanical properties ---
-    double lunco:springStiffness = 10000.0
-    double lunco:springDamping = 3000.0
-    double lunco:restLength = 0.5
-    double lunco:frictionCoefficient = 0.8
-    double lunco:maxSteerAngle = 0.5
+    # --- Modelica Parameters (mechanical) ---
+    double lunco:springStiffness = 10000.0   # N/m suspension spring constant
+    double lunco:springDamping = 3000.0      # N·s/m damping coefficient
+    double lunco:restLength = 0.5            # m uncompressed suspension length
+    double lunco:frictionCoefficient = 0.8   # Tire-ground friction coefficient
+    double lunco:maxSteerAngle = 0.5         # rad maximum steering angle
 
-    # --- Motor electrical properties ---
-    double lunco:motorPower = 2000.0
-    double lunco:motorEfficiency = 0.85
-    double lunco:noLoadRpm = 300.0
+    # --- Modelica Parameters (motor electrical) ---
+    double lunco:motorPower = 2000.0         # W rated motor power
+    double lunco:motorEfficiency = 0.85      # Electrical-to-mechanical efficiency
+    double lunco:noLoadRpm = 300.0           # RPM motor speed at zero load
 
-    # --- Power connections ---
-    rel lunco:powerInput
+    # --- EPS connections ---
+    rel lunco:epsBus
 
     # --- Physics ---
     bool physics:rigidBodyEnabled = true

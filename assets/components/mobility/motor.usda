@@ -3,12 +3,6 @@
     defaultPrim = "Motor"
 )
 
-"""
-Reusable motor component for driving wheels or other actuators.
-Can be referenced by rovers, manipulators, or other mechanical systems.
-
-Modelica class: LunCo.Mobility.Motor.BLDC
-"""
 
 def Cylinder "Motor" (
     prepend apiSchemas = ["LunCoActuatorAPI"]

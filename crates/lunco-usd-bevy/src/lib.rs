@@ -47,8 +47,12 @@ impl AssetLoader for UsdLoader {
         // Resolve external references
         let reader = if let Some(parent) = load_context.path().path().parent() {
             let asset_root = std::path::Path::new("assets");
-            let full_parent = asset_root.join(parent);
-            let base_dir = if asset_root.exists() { full_parent } else { parent.to_path_buf() };
+            // Use asset root as base_dir for reference resolution
+            let base_dir = if asset_root.exists() { 
+                asset_root.to_path_buf() 
+            } else { 
+                parent.to_path_buf() 
+            };
             UsdComposer::flatten(&reader, &base_dir).map_err(|e| anyhow::anyhow!("USD Composition Error: {}", e))?
         } else {
             reader
@@ -109,14 +113,11 @@ fn sync_usd_visuals(
         // Get prim type
         let prim_type = if let Ok(val) = reader.get(&sdf_path, "typeName") {
             if let Value::Token(ty) = &*val {
-                info!("Prim {}: typeName={}", prim_path.path, ty);
                 Some(ty.clone())
             } else {
-                warn!("Prim {}: typeName exists but is not Token", prim_path.path);
                 None
             }
         } else {
-            warn!("Prim {}: no typeName found", prim_path.path);
             None
         };
 

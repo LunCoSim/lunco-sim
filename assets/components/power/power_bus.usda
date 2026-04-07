@@ -3,12 +3,6 @@
     defaultPrim = "PowerBus"
 )
 
-"""
-Reusable power distribution bus component.
-Manages power flow between generators, storage, and consumers.
-
-Modelica class: LunCo.Power.Bus.DCBus
-"""
 
 def Xform "PowerBus" (
     prepend apiSchemas = ["LunCoPowerDistributionAPI"]
@@ -24,10 +18,9 @@ def Xform "PowerBus" (
     double lunco:efficiency = 0.98
     double lunco:voltageRipple = 0.02
 
-    # --- Power connections ---
-    rel lunco:generators
-    rel lunco:storage
-    rel lunco:consumers
+    # --- EPS connections ---
+    # All components on this EPS bus
+    rel lunco:epsBus
 
     # --- Physics (invisible, no collider) ---
     bool physics:rigidBodyEnabled = false

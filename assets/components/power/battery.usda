@@ -3,12 +3,8 @@
     defaultPrim = "Battery"
 )
 
-"""
-Reusable battery component for power systems.
-Can be referenced by rovers, landers, satellites, or habitats.
-
-Modelica class: LunCo.Power.Battery.LithiumIon
-"""
+# Reusable battery component for power storage.
+# Modelica class: LunCo.Power.Battery.LithiumIon
 
 def Cube "Battery" (
     prepend apiSchemas = ["LunCoPowerComponentAPI"]
@@ -25,19 +21,19 @@ def Cube "Battery" (
     string lunco:modelicaModel = "models/battery.mo"
     string lunco:modelicaClassName = "LunCo.Power.Battery.LithiumIon"
 
-    # --- Electrical properties ---
-    double lunco:capacity = 10000.0
-    double lunco:voltage = 48.0
-    double lunco:maxChargeRate = 5000.0
-    double lunco:maxDischargeRate = 8000.0
-    double lunco:efficiency = 0.95
-    double lunco:internalResistance = 0.01
+    # --- Modelica Parameters (electrical) ---
+    double lunco:capacity = 10000.0          # Wh total energy capacity
+    double lunco:voltage = 48.0              # V nominal bus voltage
+    double lunco:maxChargeRate = 5000.0      # W maximum charging power
+    double lunco:maxDischargeRate = 8000.0   # W maximum discharging power
+    double lunco:efficiency = 0.95           # Round-trip charge/discharge efficiency
+    double lunco:internalResistance = 0.01   # Ohm equivalent series resistance
 
-    # --- Initial state ---
-    double lunco:initialCharge = 0.8
+    # --- Modelica Parameters (initial state) ---
+    double lunco:initialCharge = 0.8         # Initial state of charge (0.0 to 1.0)
 
-    # --- Power connections ---
-    rel lunco:powerTerminal
+    # --- EPS connections ---
+    rel lunco:epsBus
 
     # --- Physics ---
     bool physics:rigidBodyEnabled = true

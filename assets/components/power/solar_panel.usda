@@ -3,12 +3,8 @@
     defaultPrim = "SolarPanel"
 )
 
-"""
-Reusable solar panel component for power generation.
-Can be referenced by rovers, landers, satellites, or habitats.
-
-Modelica class: LunCo.Power.SolarArray.MultiJunction
-"""
+# Reusable solar panel component for power generation.
+# Modelica class: LunCo.Power.SolarArray.MultiJunction
 
 def Cube "SolarPanel" (
     prepend apiSchemas = ["LunCoPowerGeneratorAPI"]
@@ -25,18 +21,15 @@ def Cube "SolarPanel" (
     string lunco:modelicaModel = "models/solar_panel.mo"
     string lunco:modelicaClassName = "LunCo.Power.SolarArray.MultiJunction"
 
-    # --- Solar properties ---
-    double lunco:efficiency = 0.30
-    double lunco:nominalPower = 500.0
-    double lunco:temperatureCoefficient = -0.004
-    double lunco:area = 18.0
-    double lunco:degradationRate = 0.005
+    # --- Modelica Parameters (power generation) ---
+    double lunco:nominalPower = 500.0        # W at STC (Standard Test Conditions)
+    double lunco:efficiency = 0.30           # Solar-to-electrical conversion efficiency
+    double lunco:area = 18.0                 # m^2 active area
+    double lunco:temperatureCoefficient = -0.004  # Power loss per degree C above 25C
+    double lunco:degradationRate = 0.005     # Annual degradation fraction
 
-    # --- Orientation (default: facing up) ---
-    double3 xformOp:rotateXYZ = (0, 0, 0)
-
-    # --- Power connections ---
-    rel lunco:powerOutput
+    # --- EPS connections ---
+    rel lunco:epsBus
 
     # --- Physics ---
     bool physics:rigidBodyEnabled = true

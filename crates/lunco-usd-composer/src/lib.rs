@@ -46,11 +46,9 @@ impl UsdComposer {
                             (data_map.clone(), reference.prim_path.clone())
                         } else {
                             // EXTERNAL REFERENCE
-                            let ref_path = if Path::new(&reference.asset_path).is_absolute() {
-                                PathBuf::from(&reference.asset_path)
-                            } else {
-                                base_dir.join(&reference.asset_path)
-                            };
+                            // Strip leading '/' to treat as relative to base_dir
+                            let asset_path = reference.asset_path.strip_prefix('/').unwrap_or(&reference.asset_path);
+                            let ref_path = base_dir.join(asset_path);
 
                             if processed.contains(&ref_path) { continue; }
                             processed.insert(ref_path.clone());

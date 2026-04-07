@@ -4478,6 +4478,7 @@ dependencies = [
  "lunco-mobility",
  "lunco-usd-avian",
  "lunco-usd-bevy",
+ "lunco-usd-composer",
  "lunco-usd-sim",
  "openusd",
  "serde",
