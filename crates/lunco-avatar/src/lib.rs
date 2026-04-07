@@ -129,22 +129,24 @@ pub struct FreeFlightCamera {
     pub damping: Option<f32>,
 }
 
-/// Smooth focus transition with pre-computed endpoints.
+/// Smooth focus transition with target-relative endpoint recomputed each frame.
 ///
-/// Both source and target frames resolve to the same absolute solar coordinate
-/// space. We compute `end_pos` and `end_rot` once at transition start (when the
-/// target's pose is known), then lerp every frame. This gives a true "frame
-/// handoff" without recomputing both frames per tick.
+/// Blend positions are in **absolute solar coordinates** (root frame).
+/// Each frame, the blended result is converted to the camera's current grid.
+/// Rotation is set from `end_yaw`/`end_pitch` so the camera always points
+/// at the target during the approach.
 #[derive(Component, Reflect, Clone, Debug)]
 #[reflect(Component)]
 pub struct FrameBlend {
-    pub start_pos: DVec3,
-    pub end_pos: DVec3,
+    pub target: Entity,
+    pub start_pos: DVec3,         // Absolute solar position at transition start.
     pub start_rot: Quat,
-    pub end_rot: Quat,
+    pub end_distance: f64,
+    pub end_yaw: f32,
+    pub end_pitch: f32,
+    pub end_vertical_offset: f32,
     pub t: f32,
     pub duration: f32,
-    pub target: Entity,
     pub possess_target: Option<Entity>,
 }
 
@@ -180,6 +182,7 @@ impl Plugin for LunCoAvatarPlugin {
 
         app.register_type::<SpringArmCamera>()
            .register_type::<OrbitCamera>()
+           .register_type::<ChaseCamera>()
            .register_type::<FreeFlightCamera>()
            .register_type::<FrameBlend>()
            .register_type::<AdaptiveNearPlane>()
@@ -201,6 +204,7 @@ impl Plugin for LunCoAvatarPlugin {
         app.add_systems(PostUpdate, (
             frame_blend_system,
             spring_arm_system,
+            chase_camera_system,
             orbit_system,
             freeflight_system,
             avatar_universal_locomotion_system,
@@ -257,48 +261,53 @@ pub fn spawn_avatar_camera(
 
 // ─── Behavior Systems ────────────────────────────────────────────────────────
 
-/// SpringArmCamera system: positions the camera behind a target vessel with
+/// Chase camera: follows a target in 3D, respecting full orientation
+/// (heading, pitch, roll). Used for aircraft and flying vehicles.
+///
+/// **Reference Frame**: `Target` — the camera rotates with the target's
+/// full orientation, offset behind and above it.
+#[derive(Component, Reflect, Clone, Debug)]
+#[reflect(Component)]
+pub struct ChaseCamera {
+    pub target: Entity,
+    pub distance: f64,
+    pub yaw: f32,
+    pub pitch: f32,
+    pub damping: Option<f32>,
+    pub vertical_offset: f32,
+}
+
+/// SpringArmCamera system: positions the camera behind a ground vehicle with
 /// heading-locked offset and exponential rotation smoothing.
 ///
-/// Only runs when `SpringArmCamera` is present AND no `FrameBlend` is active.
-/// Scroll wheel adjusts `distance`. Right-click drag adjusts `yaw`/`pitch`
-/// via `avatar_behavior_input_system`.
+/// **Ground-vehicle only** — no surface reference for spacecraft.
+/// For aircraft use `ChaseCamera`. For orbit use `OrbitCamera`.
 fn spring_arm_system(
     time: Res<Time>,
     mut q_avatar: Query<(Entity, &mut Transform, &mut CellCoord, &mut SpringArmCamera, &ChildOf), (With<Avatar>, Without<FrameBlend>)>,
     q_spatial: Query<(&CellCoord, &Transform), Without<Avatar>>,
-    q_spatial_abs: Query<(&CellCoord, &Transform), Without<Avatar>>,
     q_grids: Query<&Grid>,
-    q_parents: Query<&ChildOf>,
     defaults: Res<CameraDefaults>,
     mut scroll_res: ResMut<CameraScroll>,
     sens: Res<CameraScrollSensitivity>,
     keys: Res<ButtonInput<KeyCode>>,
 ) {
-    // Skip when CTRL is held — user is in momentary free-flight mode.
     if keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight) { return; }
 
     let dt = time.delta_secs();
 
     for (_avatar_ent, mut tf, mut cell, mut arm, child_of) in q_avatar.iter_mut() {
-        // Safety: skip if target doesn't exist.
         let Ok((t_cell, t_tf)) = q_spatial.get(arm.target) else { continue; };
         let Ok(grid) = q_grids.get(child_of.0) else { continue; };
 
-        let target_abs_pos = lunco_core::coords::get_absolute_pos_in_root_double_ghost_aware(
-            arm.target, t_cell, t_tf, &q_parents, &q_grids, &q_spatial_abs,
-        );
-        let cam_grid_abs = if child_of.0 == Entity::PLACEHOLDER { DVec3::ZERO } else {
-            lunco_core::coords::get_absolute_pos_in_root_double_ghost_aware(
-                child_of.0, &CellCoord::default(), &Transform::default(), &q_parents, &q_grids, &q_spatial_abs,
-            )
-        };
-        let target_pos = target_abs_pos - cam_grid_abs;
+        // Target position in grid-local coordinates.
+        let target_pos = grid.grid_position_double(t_cell, t_tf);
 
-        // Scroll zoom.
+        // Scroll zoom (multiplicative, proportional to distance).
+        let min_dist = 2.0; // Ground vehicles — can get close.
         if scroll_res.delta != 0.0 {
-            let zoom = scroll_res.delta as f64 * -sens.value as f64;
-            arm.distance = (arm.distance + zoom).clamp(2.0, 200.0);
+            let scroll = scroll_res.delta as f64 * -sens.value as f64;
+            arm.distance = (arm.distance - (scroll * (arm.distance * 0.1))).clamp(min_dist, 200.0);
             scroll_res.delta = 0.0;
         }
 
@@ -319,7 +328,66 @@ fn spring_arm_system(
         let offset = tf.rotation.mul_vec3(Vec3::Z).as_dvec3() * arm.distance;
         let desired_pos = target_pos + offset + Vec3::Y.as_dvec3() * arm.vertical_offset as f64;
 
-        // Position: lerp toward desired (spring-like follow).
+        // Position lerp.
+        let current_pos = grid.grid_position_double(&cell, &tf);
+        let pos_alpha = (dt * 150.0 * (1.0 - damping)).min(1.0) as f64;
+        let next_pos = current_pos.lerp(desired_pos, pos_alpha);
+
+        let (new_cell, new_tf) = grid.translation_to_grid(next_pos);
+        *cell = new_cell;
+        tf.translation = new_tf;
+    }
+}
+
+/// ChaseCamera system: follows a target with full 3D orientation follow.
+///
+/// Used for aircraft and flying vehicles. Respects the target's roll, pitch,
+/// and heading — the camera rotates with the vehicle in all axes.
+fn chase_camera_system(
+    time: Res<Time>,
+    mut q_avatar: Query<(Entity, &mut Transform, &mut CellCoord, &mut ChaseCamera, &ChildOf), (With<Avatar>, Without<FrameBlend>)>,
+    q_spatial: Query<(&CellCoord, &Transform), Without<Avatar>>,
+    q_grids: Query<&Grid>,
+    defaults: Res<CameraDefaults>,
+    mut scroll_res: ResMut<CameraScroll>,
+    sens: Res<CameraScrollSensitivity>,
+    keys: Res<ButtonInput<KeyCode>>,
+) {
+    if keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight) { return; }
+
+    let dt = time.delta_secs();
+
+    for (_avatar_ent, mut tf, mut cell, mut chase, child_of) in q_avatar.iter_mut() {
+        let Ok((t_cell, t_tf)) = q_spatial.get(chase.target) else { continue; };
+        let Ok(grid) = q_grids.get(child_of.0) else { continue; };
+
+        // Target position in grid-local coordinates.
+        let target_pos = grid.grid_position_double(t_cell, t_tf);
+
+        // Scroll zoom.
+        let min_dist = 5.0;
+        if scroll_res.delta != 0.0 {
+            let scroll = scroll_res.delta as f64 * -sens.value as f64;
+            chase.distance = (chase.distance - (scroll * (chase.distance * 0.1))).clamp(min_dist, 1.0e6);
+            scroll_res.delta = 0.0;
+        }
+
+        // Follow target's FULL 3D orientation (heading + pitch + roll).
+        let target_rot = t_tf.rotation;
+        let damping = chase.damping.unwrap_or(defaults.damping);
+
+        // Desired rotation: target's rotation with user yaw/pitch offset applied.
+        let user_rot = Quat::from_euler(EulerRot::YXZ, chase.yaw, chase.pitch, 0.0);
+        let desired_rot = target_rot * user_rot;
+
+        // Exponential smoothing.
+        let rot_alpha = 1.0 - (-60.0 * (1.0 - damping) * dt).exp();
+        tf.rotation = tf.rotation.slerp(desired_rot, rot_alpha);
+
+        // Position: behind target along smoothed rotation, with vertical offset.
+        let offset = tf.rotation.mul_vec3(Vec3::Z).as_dvec3() * chase.distance;
+        let desired_pos = target_pos + offset + Vec3::Y.as_dvec3() * chase.vertical_offset as f64;
+
         let current_pos = grid.grid_position_double(&cell, &tf);
         let pos_alpha = (dt * 150.0 * (1.0 - damping)).min(1.0) as f64;
         let next_pos = current_pos.lerp(desired_pos, pos_alpha);
@@ -342,58 +410,97 @@ fn orbit_system(
     q_spatial_abs: Query<(&CellCoord, &Transform), Without<Avatar>>,
     q_grids: Query<&Grid>,
     q_parents: Query<&ChildOf>,
+    q_bodies: Query<&CelestialBody>,
+    q_sc: Query<&Spacecraft>,
     defaults: Res<CameraDefaults>,
     mut scroll_res: ResMut<CameraScroll>,
     sens: Res<CameraScrollSensitivity>,
     keys: Res<ButtonInput<KeyCode>>,
+    mut commands: Commands,
 ) {
-    // Skip when CTRL is held — user is in momentary free-flight mode.
     if keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight) { return; }
 
     let dt = time.delta_secs();
 
-    for (_avatar_ent, mut tf, mut cell, mut orbit, child_of) in q_avatar.iter_mut() {
+    for (avatar_ent, mut tf, mut cell, mut orbit, child_of) in q_avatar.iter_mut() {
         let Ok((t_cell, t_tf)) = q_spatial.get(orbit.target) else { continue; };
-        let Ok(grid) = q_grids.get(child_of.0) else { continue; };
 
-        let target_abs_pos = lunco_core::coords::get_absolute_pos_in_root_double_ghost_aware(
-            orbit.target, t_cell, t_tf, &q_parents, &q_grids, &q_spatial_abs,
-        );
-        let cam_grid_abs = if child_of.0 == Entity::PLACEHOLDER { DVec3::ZERO } else {
-            lunco_core::coords::get_absolute_pos_in_root_double_ghost_aware(
-                child_of.0, &CellCoord::default(), &Transform::default(), &q_parents, &q_grids, &q_spatial_abs,
-            )
+        // Find the target's grid.
+        let mut target_grid = orbit.target;
+        for _ in 0..10 {
+            if q_grids.contains(target_grid) { break; }
+            if let Ok(parent) = q_parents.get(target_grid) {
+                target_grid = parent.parent();
+            } else { break; }
+        }
+        if !q_grids.contains(target_grid) { continue; }
+
+        // Compute minimum distance to prevent zooming inside the target body.
+        let min_dist = if let Ok(body) = q_bodies.get(orbit.target) {
+            body.radius_m * 1.5
+        } else if let Ok(sc) = q_sc.get(orbit.target) {
+            (sc.hit_radius_m as f64).max(10.0)
+        } else {
+            10.0 // Generic fallback minimum distance.
         };
-        let target_pos = target_abs_pos - cam_grid_abs;
+        let current_grid = child_of.parent();
 
-        // Scroll zoom.
+        // If the target is on a different grid, migrate the camera to it.
+        // Preserve the camera's CURRENT absolute position during migration
+        // — don't snap to the target body.
+        if current_grid != target_grid {
+            let cam_abs = lunco_core::coords::get_absolute_pos_in_root_double_ghost_aware(
+                avatar_ent, &cell, &tf, &q_parents, &q_grids, &q_spatial_abs,
+            );
+            if let Ok(target_grid_ref) = q_grids.get(target_grid) {
+                let target_grid_abs = lunco_core::coords::get_absolute_pos_in_root_double_ghost_aware(
+                    target_grid, &CellCoord::default(), &Transform::default(), &q_parents, &q_grids, &q_spatial_abs,
+                );
+                let local_pos = cam_abs - target_grid_abs;
+                let (new_cell, new_tf) = target_grid_ref.translation_to_grid(local_pos);
+                *cell = new_cell;
+                tf.translation = new_tf;
+                commands.entity(avatar_ent).set_parent_in_place(target_grid);
+            }
+            // Skip this frame — set_parent_in_place command runs at end of stage.
+            // Next frame, child_of will resolve to the new grid.
+            continue;
+        }
+
+        // Now both camera and target are on the same grid — simple position lookup.
+        let (t_cell_now, t_tf_now) = if let Ok((c, t)) = q_spatial.get(orbit.target) {
+            (c, t)
+        } else { continue; };
+        let grid_ref = if let Ok(g) = q_grids.get(child_of.parent()) {
+            g
+        } else { continue; };
+
+        let target_pos = grid_ref.grid_position_double(t_cell_now, t_tf_now);
+
+        // Multiplicative zoom: proportional to current distance.
         if scroll_res.delta != 0.0 {
-            let zoom = scroll_res.delta as f64 * -sens.value as f64;
-            orbit.distance = (orbit.distance + zoom).clamp(1.0, 1.0e11);
+            let scroll = scroll_res.delta as f64 * -sens.value as f64;
+            orbit.distance = (orbit.distance - (scroll * (orbit.distance * 0.1))).clamp(min_dist, 1.0e11);
             scroll_res.delta = 0.0;
         }
 
-        // Camera rotation is purely user-controlled (ecliptic-locked).
+        // Camera rotation from user yaw/pitch (ecliptic-locked).
         let rotation = Quat::from_euler(EulerRot::YXZ, orbit.yaw, orbit.pitch, 0.0);
         let offset = rotation.mul_vec3(Vec3::Z).as_dvec3() * orbit.distance;
         let desired_pos = target_pos + offset + Vec3::Y.as_dvec3() * orbit.vertical_offset as f64;
 
+        // Damped position lerp toward desired orbit slot.
         let damping = orbit.damping.unwrap_or(defaults.damping);
-        let current_pos = grid.grid_position_double(&cell, &tf);
-        let dist_to_desired = current_pos.distance(desired_pos);
-        let lerp_factor = if dist_to_desired > 100.0 { 1.0 } else { (dt * 150.0 * (1.0 - damping)).min(1.0) as f64 };
+        let lerp_factor = (dt * 30.0 * (1.0 - damping)).min(1.0) as f64;
+        let current_pos = grid_ref.grid_position_double(&cell, &tf);
         let next_pos = current_pos.lerp(desired_pos, lerp_factor);
 
-        let (new_cell, new_tf) = grid.translation_to_grid(next_pos);
+        let (new_cell, new_tf) = grid_ref.translation_to_grid(next_pos);
         *cell = new_cell;
         tf.translation = new_tf;
 
-        // Look at target.
-        let forward = (target_pos - next_pos).normalize().as_vec3();
-        if forward.length_squared() > 0.01 {
-            let target_point = new_tf + forward;
-            tf.look_at(target_point, Vec3::Y);
-        }
+        // Apply rotation directly (no look_at — that clobbered yaw/pitch).
+        tf.rotation = rotation;
     }
 }
 
@@ -412,11 +519,11 @@ fn freeflight_system(
     }
 }
 
-/// Frame blend system: smoothly interpolates between pre-computed
-/// start and end camera positions/rotations.
+/// Frame blend system: smoothly interpolates between start position and a
+/// target-relative endpoint that is recomputed every frame.
 ///
-/// On completion, inserts the appropriate behavior component (`SpringArmCamera`
-/// for possession, `OrbitCamera` for focus) and removes itself.
+/// This mirrors the old working `avatar_transition_system` design:
+/// blend in absolute solar coordinates, convert result to camera's current grid.
 fn frame_blend_system(
     time: Res<Time>,
     mut q_avatar: Query<(Entity, &mut Transform, &mut CellCoord, &mut FrameBlend, &ChildOf), With<Avatar>>,
@@ -431,24 +538,37 @@ fn frame_blend_system(
     for (avatar_ent, mut tf, mut cell, mut blend, child_of) in q_avatar.iter_mut() {
         blend.t += dt;
         let raw_t = (blend.t / blend.duration).clamp(0.0, 1.0);
-        // Ease-in-out quadratic.
         let ease_t = if raw_t < 0.5 {
             2.0 * raw_t * raw_t
         } else {
             1.0 - (-2.0 * raw_t + 2.0).powi(2) / 2.0
         };
 
-        let current_pos = blend.start_pos.lerp(blend.end_pos, ease_t as f64);
-        let current_rot = blend.start_rot.slerp(blend.end_rot, ease_t);
-
         let Ok(grid) = q_grids.get(child_of.0) else { continue; };
+
+        // Recompute end position from target's CURRENT pose every frame.
+        let end_rot = Quat::from_euler(EulerRot::YXZ, blend.end_yaw, blend.end_pitch, 0.0);
+        let end_offset = end_rot.mul_vec3(Vec3::Z).as_dvec3() * blend.end_distance;
+        let target_abs = if let Ok((t_cell, t_tf)) = q_spatial.get(blend.target) {
+            lunco_core::coords::get_absolute_pos_in_root_double_ghost_aware(
+                blend.target, t_cell, t_tf, &q_parents, &q_grids, &q_spatial_abs,
+            )
+        } else {
+            blend.start_pos // Fallback: stay at start.
+        };
+        let end_pos = target_abs + end_offset + Vec3::Y.as_dvec3() * blend.end_vertical_offset as f64;
+
+        // Blend in absolute solar coordinates.
+        let blended_pos = blend.start_pos.lerp(end_pos, ease_t as f64);
+        let current_rot = blend.start_rot.slerp(end_rot, ease_t as f32);
+
+        // Convert to camera's current grid (same grid the camera is currently parented to).
         let cam_grid_abs = if child_of.0 == Entity::PLACEHOLDER { DVec3::ZERO } else {
             lunco_core::coords::get_absolute_pos_in_root_double_ghost_aware(
                 child_of.0, &CellCoord::default(), &Transform::default(), &q_parents, &q_grids, &q_spatial_abs,
             )
         };
-
-        let (new_cell, new_tf) = grid.translation_to_grid(current_pos - cam_grid_abs);
+        let (new_cell, new_tf) = grid.translation_to_grid(blended_pos - cam_grid_abs);
         *cell = new_cell;
         tf.translation = new_tf;
         tf.rotation = current_rot;
@@ -463,31 +583,37 @@ fn frame_blend_system(
                     lunco_controller::get_default_input_map(),
                 ));
 
-                // Determine SpringArmCamera config based on target archetype.
-                let (dist, vert_off, damp) = if q_spatial.get(vessel).is_ok() {
-                    // Check if it's a rover — use tighter follow.
-                    (15.0, 2.0, 0.05)
+                // Choose camera mode: OrbitCamera for spacecraft (no "up" in space),
+                // SpringArmCamera for surface rovers (heading-follow).
+                if blend.end_vertical_offset == 0.0 {
+                    commands.entity(avatar_ent)
+                        .insert(OrbitCamera {
+                            target: vessel,
+                            distance: blend.end_distance,
+                            yaw: blend.end_yaw,
+                            pitch: blend.end_pitch,
+                            damping: None,
+                            vertical_offset: 0.0,
+                        });
                 } else {
-                    (50.0, 5.0, 0.1)
-                };
-
-                commands.entity(avatar_ent)
-                    .insert(SpringArmCamera {
-                        target: vessel,
-                        distance: dist,
-                        yaw: 0.0,
-                        pitch: -0.25,
-                        damping: Some(damp),
-                        vertical_offset: vert_off,
-                    });
+                    commands.entity(avatar_ent)
+                        .insert(SpringArmCamera {
+                            target: vessel,
+                            distance: blend.end_distance,
+                            yaw: 0.0,
+                            pitch: blend.end_pitch,
+                            damping: Some(0.05),
+                            vertical_offset: blend.end_vertical_offset,
+                        });
+                }
             } else {
                 // Focus transition — insert OrbitCamera.
                 commands.entity(avatar_ent)
                     .insert(OrbitCamera {
                         target: blend.target,
-                        distance: blend.end_pos.distance(blend.start_pos).max(10.0),
-                        yaw: 0.0,
-                        pitch: blend.end_rot.to_euler(EulerRot::YXZ).1,
+                        distance: blend.end_distance,
+                        yaw: blend.end_yaw,
+                        pitch: blend.end_pitch,
                         damping: None,
                         vertical_offset: 0.0,
                     });
@@ -786,14 +912,18 @@ fn on_user_intent(trigger: On<IntentAnalogState>, q_avatar: Query<&ControllerLin
 /// Possesses a vessel with a smooth camera transition.
 ///
 /// Uses `FrameBlend` to smoothly fly to the chase position over 0.8 seconds,
-/// then lands in `SpringArmCamera` mode.
+/// then lands in the appropriate camera mode:
+/// - **Rovers** → `SpringArmCamera` (heading-follow, surface-relative)
+/// - **Spacecraft / celestial bodies** → `OrbitCamera` (star-fixed orbit)
 fn on_possess_command(
     trigger: On<CommandMessage>,
     mut commands: Commands,
     q_avatar: Query<(Entity, &Transform, &CellCoord, &ChildOf), With<Avatar>>,
+    q_spatial_abs: Query<(&CellCoord, &Transform), Without<Avatar>>,
     q_grids: Query<&Grid>,
     q_parents: Query<&ChildOf>,
-    q_spatial_abs: Query<(&CellCoord, &Transform), Without<Avatar>>,
+    q_spatial: Query<(&CellCoord, &Transform), Without<Avatar>>,
+    q_sc: Query<&Spacecraft>,
 ) {
     let msg = trigger.event();
     if msg.name == "POSSESS" {
@@ -804,23 +934,47 @@ fn on_possess_command(
             first
         };
 
-        // Compute current absolute position for smooth transition start.
-        let start_pos = lunco_core::coords::get_absolute_pos_in_root_double_ghost_aware(
+        // Compute camera absolute position in root frame.
+        let cam_abs = lunco_core::coords::get_absolute_pos_in_root_double_ghost_aware(
             avatar_ent, cam_cell, cam_tf, &q_parents, &q_grids, &q_spatial_abs,
         );
 
-        // Compute target vessel heading for camera behind-it.
-        let end_yaw = if let Ok((_t_cell, t_tf)) = q_spatial_abs.get(msg.target) {
-            let fwd = t_tf.rotation.mul_vec3(Vec3::Z);
-            if fwd.length_squared() > 0.001 { fwd.x.atan2(fwd.z) } else { 0.0 }
-        } else { 0.0 };
+        // Compute target absolute position for yaw/pitch computation.
+        let target_abs = if let Ok((t_cell, t_tf)) = q_spatial.get(msg.target) {
+            lunco_core::coords::get_absolute_pos_in_root_double_ghost_aware(
+                msg.target, t_cell, t_tf, &q_parents, &q_grids, &q_spatial_abs,
+            )
+        } else {
+            cam_abs // Fallback: keep camera looking in same direction.
+        };
 
-        let end_rot = Quat::from_euler(EulerRot::YXZ, end_yaw + 0.0, -0.25, 0.0);
-        let end_offset = end_rot.mul_vec3(Vec3::Z).as_dvec3() * 15.0;
-        let target_abs_pos = lunco_core::coords::get_absolute_pos_in_root_double_ghost_aware(
-            msg.target, &CellCoord::default(), &Transform::default(), &q_parents, &q_grids, &q_spatial_abs,
-        );
-        let end_pos = target_abs_pos + end_offset + Vec3::Y.as_dvec3() * 2.0;
+        // Route to the right camera based on target archetype.
+        // Each camera type handles its own behavior — no branching in systems.
+        let is_spacecraft = q_sc.contains(msg.target);
+
+        let (end_yaw, end_pitch, end_distance, end_vert_off, duration) = if is_spacecraft {
+            // Spacecraft in orbit → OrbitCamera (star-fixed orbit).
+            // Look AT the target from current position.
+            let to_target = target_abs - cam_abs;
+            let yaw = if to_target.length_squared() > 1.0 {
+                to_target.x.atan2(to_target.z) as f32
+            } else {
+                cam_tf.rotation.to_euler(EulerRot::YXZ).0
+            };
+            let pitch = if to_target.length_squared() > 1.0 {
+                (-to_target.y).atan2((to_target.x * to_target.x + to_target.z * to_target.z).sqrt()) as f32
+            } else {
+                cam_tf.rotation.to_euler(EulerRot::YXZ).1
+            };
+            (yaw, pitch, 50.0, 0.0, 1.5)
+        } else {
+            // Ground vehicle → SpringArmCamera (heading-follow).
+            let rover_yaw = if let Ok((_t_cell, t_tf)) = q_spatial.get(msg.target) {
+                let fwd = t_tf.rotation.mul_vec3(Vec3::Z);
+                if fwd.length_squared() > 0.001 { fwd.x.atan2(fwd.z) } else { 0.0 }
+            } else { 0.0 };
+            (rover_yaw, -0.25, 15.0, 2.0, 0.8)
+        };
 
         commands.entity(avatar_ent)
             .remove::<SpringArmCamera>()
@@ -829,13 +983,15 @@ fn on_possess_command(
             .remove::<FrameBlend>()
             .remove::<ControllerLink>()
             .insert(FrameBlend {
-                start_pos,
-                end_pos,
-                start_rot: cam_tf.rotation,
-                end_rot,
-                t: 0.0,
-                duration: 0.8,
                 target: msg.target,
+                start_pos: cam_abs,
+                start_rot: cam_tf.rotation,
+                end_distance,
+                end_yaw,
+                end_pitch,
+                end_vertical_offset: end_vert_off,
+                t: 0.0,
+                duration,
                 possess_target: Some(msg.target),
             });
     }
@@ -848,6 +1004,7 @@ fn on_focus_command(
     q_avatar: Query<(Entity, &Transform, &CellCoord, &ChildOf), With<Avatar>>,
     q_grids: Query<&Grid>,
     q_parents: Query<&ChildOf>,
+    q_spatial: Query<(&CellCoord, &Transform), Without<Avatar>>,
     q_spatial_abs: Query<(&CellCoord, &Transform), Without<Avatar>>,
     q_bodies: Query<&CelestialBody>,
     q_sc: Query<&Spacecraft>,
@@ -861,10 +1018,27 @@ fn on_focus_command(
             first
         };
 
-        let start_pos = lunco_core::coords::get_absolute_pos_in_root_double_ghost_aware(
+        // Compute camera absolute position in root frame.
+        let cam_abs = lunco_core::coords::get_absolute_pos_in_root_double_ghost_aware(
             avatar_ent, cam_cell, cam_tf, &q_parents, &q_grids, &q_spatial_abs,
         );
-        let (current_yaw, current_pitch, _) = cam_tf.rotation.to_euler(EulerRot::YXZ);
+
+        // Compute target absolute position.
+        let target_abs = if let Ok((t_cell, t_tf)) = q_spatial.get(msg.target) {
+            lunco_core::coords::get_absolute_pos_in_root_double_ghost_aware(
+                msg.target, t_cell, t_tf, &q_parents, &q_grids, &q_spatial_abs,
+            )
+        } else {
+            lunco_core::coords::get_absolute_pos_in_root_double_ghost_aware(
+                msg.target, &CellCoord::default(), &Transform::default(), &q_parents, &q_grids, &q_spatial_abs,
+            )
+        };
+
+        // Compute end_yaw/end_pitch so the camera looks AT the target during the blend.
+        // This is derived from the direction from camera to target in absolute space.
+        let to_target = target_abs - cam_abs;
+        let end_yaw = to_target.x.atan2(to_target.z) as f32;
+        let end_pitch = (-to_target.y).atan2((to_target.x * to_target.x + to_target.z * to_target.z).sqrt()) as f32;
 
         // Compute distance based on target type.
         let mut distance = 20.0;
@@ -876,26 +1050,21 @@ fn on_focus_command(
             distance = (sc.hit_radius_m as f64 * 5.0).max(100.0);
         }
 
-        let target_abs_pos = lunco_core::coords::get_absolute_pos_in_root_double_ghost_aware(
-            msg.target, &CellCoord::default(), &Transform::default(), &q_parents, &q_grids, &q_spatial_abs,
-        );
-        let end_rot = Quat::from_euler(EulerRot::YXZ, current_yaw, current_pitch, 0.0);
-        let end_offset = end_rot.mul_vec3(Vec3::Z).as_dvec3() * distance;
-        let end_pos = target_abs_pos + end_offset;
-
         commands.entity(avatar_ent)
             .remove::<SpringArmCamera>()
             .remove::<OrbitCamera>()
             .remove::<FreeFlightCamera>()
             .remove::<FrameBlend>()
             .insert(FrameBlend {
-                start_pos,
-                end_pos,
+                target: msg.target,
+                start_pos: cam_abs,
                 start_rot: cam_tf.rotation,
-                end_rot,
+                end_distance: distance,
+                end_yaw,
+                end_pitch,
+                end_vertical_offset: 0.0,
                 t: 0.0,
                 duration: 1.5,
-                target: msg.target,
                 possess_target: None,
             });
     }

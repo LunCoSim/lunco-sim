@@ -236,13 +236,19 @@ pub fn setup_big_space_hierarchy(
         }
     }
 
-    // Initial Observer Camera
+    // Initial Observer Camera — orbiting Earth at 3x Earth radius,
+    // looking at the planet with the Sun behind the camera for daylight visibility.
+    // `avatar_init_system` will add `FreeFlightCamera` as default; a startup system
+    // in the client binary triggers FOCUS on Earth to transition into `OrbitCamera`.
+    let earth_radius_m = 6_371_000.0;
+    let earth_orbit_distance = earth_radius_m * 3.0;
+    let cam_pos = Vec3::new(0.0, earth_orbit_distance * 0.4, earth_orbit_distance);
     commands.spawn((
         Camera::default(),
         Camera3d::default(),
         Projection::Perspective(PerspectiveProjection {
             near: 1.0,
-            far: 1.0e15, 
+            far: 1.0e15,
             ..default()
         }),
         bevy::post_process::bloom::Bloom {
@@ -258,16 +264,16 @@ pub fn setup_big_space_hierarchy(
             ..bevy::post_process::bloom::Bloom::NATURAL
         },
         bevy::core_pipeline::tonemapping::Tonemapping::TonyMcMapface,
-        FloatingOrigin, 
+        FloatingOrigin,
         CellCoord::default(),
-        Transform::from_translation(Vec3::new(0.0, 10_000_000.0, 10_000_000.0)),
+        Transform::from_translation(cam_pos).looking_at(Vec3::ZERO, Vec3::Y),
         GlobalTransform::default(),
         lunco_core::Avatar,
         lunco_core::IntentState::default(),
         lunco_controller::get_avatar_input_map(),
         lunco_core::IntentAnalogState::default(),
         Name::new("Observer Camera"),
-    )).set_parent_in_place(moon_grid); // Parent camera back to moon_grid
+    )).set_parent_in_place(earth_grid); // Parent to Earth grid for close-up view.
 
     // 5. Other planets
     for body_desc in registry.bodies.iter() {
