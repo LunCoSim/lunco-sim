@@ -29,7 +29,7 @@ fn main() {
         .add_plugins(FrameTimeDiagnosticsPlugin::default())
         .add_plugins(WireframePlugin::default())
         .add_plugins(EguiPlugin::default())
-        .add_plugins(PhysicsPlugins::default())
+        .add_plugins(PhysicsPlugins::default().set(avian3d::prelude::PhysicsInterpolationPlugin::interpolate_all()))
         .add_plugins(MaterialPlugin::<BlueprintMaterial>::default())
         .add_plugins(lunco_core::LunCoCorePlugin)
         .add_plugins(LunCoMobilityPlugin)
@@ -45,9 +45,6 @@ fn main() {
             global_transform_propagation_system,
             camera_render_propagation_system,
         ).chain().after(avian3d::prelude::PhysicsSystems::Writeback))
-        .configure_sets(PostUpdate, lunco_avatar::AvatarCameraSet
-            .after(global_transform_propagation_system)
-            .before(camera_render_propagation_system))
         .add_systems(EguiPrimaryContextPass, sandbox_ui_system)
         .run();
 }

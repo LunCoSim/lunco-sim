@@ -86,11 +86,11 @@ impl Default for CameraDefaults {
 
 // ─── Behavior Components ─────────────────────────────────────────────────────
 
-/// Chase camera: follows a vessel with heading-locked offset.
+/// Chase camera: follows a ground vehicle with smooth heading-follow.
 ///
-/// **Reference Frame**: `Vessel` — the camera rotates with the vessel's heading,
-/// providing a snappy pilot-follow perspective. Uses exponential smoothing on
-/// rotation to filter out physics jitter at 60Hz.
+/// Position snaps directly to the desired offset (no lerp), but rotation
+/// slerps smoothly toward the rover's heading + user yaw offset. This creates
+/// the natural "swing-around" feel of a proper spring arm camera.
 #[derive(Component, Reflect, Clone, Debug)]
 #[reflect(Component)]
 pub struct SpringArmCamera {
@@ -198,9 +198,6 @@ impl Plugin for LunCoAvatarPlugin {
             avatar_global_hotkeys,
         ));
 
-        // Mutual exclusion: FrameBlend runs first. Then exactly one behavior
-        // system runs (whichever component is present). Locomotion only moves
-        // FreeFlightCamera camera.
         app.add_systems(PostUpdate, (
             frame_blend_system,
             spring_arm_system,
@@ -278,7 +275,7 @@ pub struct ChaseCamera {
 }
 
 /// SpringArmCamera system: positions the camera behind a ground vehicle with
-/// heading-locked offset and exponential rotation smoothing.
+/// heading-locked offset.
 ///
 /// **Ground-vehicle only** — no surface reference for spacecraft.
 /// For aircraft use `ChaseCamera`. For orbit use `OrbitCamera`.
@@ -286,7 +283,9 @@ fn spring_arm_system(
     time: Res<Time>,
     mut q_avatar: Query<(Entity, &mut Transform, &mut CellCoord, &mut SpringArmCamera, &ChildOf), (With<Avatar>, Without<FrameBlend>)>,
     q_spatial: Query<(&CellCoord, &Transform), Without<Avatar>>,
+    q_spatial_abs: Query<(&CellCoord, &Transform), Without<Avatar>>,
     q_grids: Query<&Grid>,
+    q_parents: Query<&ChildOf>,
     defaults: Res<CameraDefaults>,
     mut scroll_res: ResMut<CameraScroll>,
     sens: Res<CameraScrollSensitivity>,
@@ -303,37 +302,37 @@ fn spring_arm_system(
         // Target position in grid-local coordinates.
         let target_pos = grid.grid_position_double(t_cell, t_tf);
 
-        // Scroll zoom (multiplicative, proportional to distance).
-        let min_dist = 2.0; // Ground vehicles — can get close.
+        // Scroll zoom: fixed multiplier (matches old working code).
+        let min_dist = 5.0;
         if scroll_res.delta != 0.0 {
-            let scroll = scroll_res.delta as f64 * -sens.value as f64;
-            arm.distance = (arm.distance - (scroll * (arm.distance * 0.1))).clamp(min_dist, 200.0);
+            arm.distance = (arm.distance - scroll_res.delta as f64 * 5.0).clamp(min_dist, 200.0);
             scroll_res.delta = 0.0;
         }
 
-        // Resolve target heading in f64 to eliminate quantization jitter.
-        let target_fwd = t_tf.rotation.mul_vec3(Vec3::Z).as_dvec3();
-        let target_heading = if target_fwd.x.abs() > 1e-6 || target_fwd.z.abs() > 1e-6 {
-            target_fwd.x.atan2(target_fwd.z)
+        // Resolve rover heading in double-precision to eliminate quantization jitter.
+        let target_fwd_d = t_tf.rotation.mul_vec3(Vec3::Z).as_dvec3();
+        let target_heading_d = if target_fwd_d.x.abs() > 1e-6 || target_fwd_d.z.abs() > 1e-6 {
+            target_fwd_d.x.atan2(target_fwd_d.z)
         } else { 0.0 };
 
-        let damping = arm.damping.unwrap_or(defaults.damping);
-        let desired_rot = Quat::from_euler(EulerRot::YXZ, target_heading as f32 + arm.yaw, arm.pitch, 0.0);
+        // Combine rover heading with user yaw offset.
+        let final_yaw = (target_heading_d + arm.yaw as f64) as f32;
+        let desired_rot = Quat::from_euler(EulerRot::YXZ, final_yaw, arm.pitch, 0.0);
 
-        // Exponential smoothing for snappy, jitter-free follow.
+        // Rotation: exponential decay for snappy but smooth heading follow.
+        // Frequency 60.0 — snappy without transmitting physics jitter.
+        let damping = arm.damping.unwrap_or(defaults.damping);
         let rot_alpha = 1.0 - (-60.0 * (1.0 - damping) * dt).exp();
         tf.rotation = tf.rotation.slerp(desired_rot, rot_alpha);
 
-        // Desired camera position: behind target along smoothed rotation.
+        // Position: snap directly to desired offset behind rover.
+        // The smooth rotation slerp creates the natural "swing-around" feel —
+        // no position smoothing needed. This is the exact formula from the
+        // old working code (commit dd3c330d).
         let offset = tf.rotation.mul_vec3(Vec3::Z).as_dvec3() * arm.distance;
         let desired_pos = target_pos + offset + Vec3::Y.as_dvec3() * arm.vertical_offset as f64;
 
-        // Position lerp.
-        let current_pos = grid.grid_position_double(&cell, &tf);
-        let pos_alpha = (dt * 150.0 * (1.0 - damping)).min(1.0) as f64;
-        let next_pos = current_pos.lerp(desired_pos, pos_alpha);
-
-        let (new_cell, new_tf) = grid.translation_to_grid(next_pos);
+        let (new_cell, new_tf) = grid.translation_to_grid(desired_pos);
         *cell = new_cell;
         tf.translation = new_tf;
     }
@@ -372,29 +371,23 @@ fn chase_camera_system(
             scroll_res.delta = 0.0;
         }
 
-        // Follow target's FULL 3D orientation (heading + pitch + roll).
-        let target_rot = t_tf.rotation;
-        let damping = chase.damping.unwrap_or(defaults.damping);
+        // Follow target's full 3D orientation (heading + pitch + roll).
+        // Same formula as SpringArmCamera: target rotation * user offset.
+        let rotation = t_tf.rotation * Quat::from_euler(EulerRot::YXZ, chase.yaw, chase.pitch, 0.0);
 
-        // Desired rotation: target's rotation with user yaw/pitch offset applied.
-        let user_rot = Quat::from_euler(EulerRot::YXZ, chase.yaw, chase.pitch, 0.0);
-        let desired_rot = target_rot * user_rot;
-
-        // Exponential smoothing.
-        let rot_alpha = 1.0 - (-60.0 * (1.0 - damping) * dt).exp();
-        tf.rotation = tf.rotation.slerp(desired_rot, rot_alpha);
-
-        // Position: behind target along smoothed rotation, with vertical offset.
-        let offset = tf.rotation.mul_vec3(Vec3::Z).as_dvec3() * chase.distance;
+        let offset = rotation.mul_vec3(Vec3::Z).as_dvec3() * chase.distance;
         let desired_pos = target_pos + offset + Vec3::Y.as_dvec3() * chase.vertical_offset as f64;
 
+        // Position lerp: same formula as SpringArmCamera and old working code.
+        let damping = chase.damping.unwrap_or(defaults.damping);
+        let lerp_factor = (dt * 30.0 * (1.0 - damping)).min(1.0) as f64;
         let current_pos = grid.grid_position_double(&cell, &tf);
-        let pos_alpha = (dt * 150.0 * (1.0 - damping)).min(1.0) as f64;
-        let next_pos = current_pos.lerp(desired_pos, pos_alpha);
+        let next_pos = current_pos.lerp(desired_pos, lerp_factor);
 
         let (new_cell, new_tf) = grid.translation_to_grid(next_pos);
         *cell = new_cell;
         tf.translation = new_tf;
+        tf.rotation = rotation;
     }
 }
 
@@ -969,11 +962,10 @@ fn on_possess_command(
             (yaw, pitch, 50.0, 0.0, 1.5)
         } else {
             // Ground vehicle → SpringArmCamera (heading-follow).
-            let rover_yaw = if let Ok((_t_cell, t_tf)) = q_spatial.get(msg.target) {
-                let fwd = t_tf.rotation.mul_vec3(Vec3::Z);
-                if fwd.length_squared() > 0.001 { fwd.x.atan2(fwd.z) } else { 0.0 }
-            } else { 0.0 };
-            (rover_yaw, -0.25, 15.0, 2.0, 0.8)
+            // end_yaw = 0 because the rotation formula is:
+            //   t_tf.rotation * Quat::from_euler(yaw, pitch, 0.0)
+            // The rover's heading is already included via t_tf.rotation.
+            (0.0, -0.25, 15.0, 2.0, 0.8)
         };
 
         commands.entity(avatar_ent)
