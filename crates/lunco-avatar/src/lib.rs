@@ -290,6 +290,7 @@ fn spring_arm_system(
     mut scroll_res: ResMut<CameraScroll>,
     sens: Res<CameraScrollSensitivity>,
     keys: Res<ButtonInput<KeyCode>>,
+    spatial_query: avian3d::prelude::SpatialQuery,
 ) {
     if keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight) { return; }
 
@@ -325,14 +326,32 @@ fn spring_arm_system(
         let rot_alpha = 1.0 - (-60.0 * (1.0 - damping) * dt).exp();
         tf.rotation = tf.rotation.slerp(desired_rot, rot_alpha);
 
-        // Position: snap directly to desired offset behind rover.
-        // The smooth rotation slerp creates the natural "swing-around" feel —
-        // no position smoothing needed. This is the exact formula from the
-        // old working code (commit dd3c330d).
+        // Desired camera position: behind target along smoothed rotation.
         let offset = tf.rotation.mul_vec3(Vec3::Z).as_dvec3() * arm.distance;
         let desired_pos = target_pos + offset + Vec3::Y.as_dvec3() * arm.vertical_offset as f64;
 
-        let (new_cell, new_tf) = grid.translation_to_grid(desired_pos);
+        // Raycast from rover toward desired camera position.
+        // If something blocks (wall, ramp, etc.), place the camera on the
+        // SAME SIDE as the rover so the user can see through the obstacle.
+        let ray_origin = target_pos;
+        let ray_dir = (desired_pos - target_pos).normalize_or(DVec3::Y);
+        let ray_len = desired_pos.distance(target_pos);
+        let filter = avian3d::prelude::SpatialQueryFilter::from_excluded_entities([arm.target]);
+        let hit = spatial_query.cast_ray(
+            ray_origin,
+            bevy::math::Dir3::new(ray_dir.as_vec3()).unwrap_or(bevy::math::Dir3::Y),
+            ray_len,
+            true,
+            &filter,
+        );
+
+        let final_pos = if let Some(hit_data) = hit {
+            ray_origin + ray_dir * (hit_data.distance - 0.5)
+        } else {
+            desired_pos
+        };
+
+        let (new_cell, new_tf) = grid.translation_to_grid(final_pos);
         *cell = new_cell;
         tf.translation = new_tf;
     }
