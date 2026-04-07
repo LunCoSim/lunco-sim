@@ -797,6 +797,15 @@ pub fn extract_parameters(source: &str) -> HashMap<String, f64> {
     params
 }
 
+/// Compute a simple hash of the source content for change detection.
+pub fn hash_content(source: &str) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut s = DefaultHasher::new();
+    source.hash(&mut s);
+    s.finish()
+}
+
 /// Substitute parameter values into Modelica source code.
 ///
 /// Replaces `parameter Real <name> = <value>` lines with the given values,
