@@ -217,6 +217,7 @@ pub fn finalize_terrain_tiles(
                         subdivisions: Vec2::new(360.0, 180.0),
                         transition: (1.0f64 - (altitude / 50_000.0f64)).clamp(0.0, 1.0) as f32,
                         body_radius: body.radius_m as f32,
+                        surface_color: LinearRgba::new(0.3, 0.3, 0.3, 1.0),
                         ..default()
                     },
                 })),

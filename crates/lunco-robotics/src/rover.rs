@@ -25,7 +25,7 @@ pub fn spawn_raycast_rover(
     steering_type: SteeringType,
 ) -> Entity {
     let chassis_width = 2.0_f64;
-    let chassis_height = 0.5_f64;
+    let chassis_height = 0.3_f64;
     let chassis_length = 3.5_f64;
 
     let mut rover_builder = commands.spawn((
@@ -37,6 +37,8 @@ pub fn spawn_raycast_rover(
         RigidBody::Dynamic,
         Collider::cuboid(chassis_width, chassis_height, chassis_length),
         Mass(1000.0),
+        LinearDamping(0.5),
+        AngularDamping(2.0),
         Mesh3d(meshes.add(Cuboid::new(chassis_width as f32, chassis_height as f32, chassis_length as f32))),
         MeshMaterial3d(materials.add(StandardMaterial::from(color))),
     ));
@@ -71,14 +73,14 @@ pub fn spawn_raycast_rover(
     commands.entity(rover_entity).insert(FlightSoftware { port_map, brake_active: false });
 
     let wheel_configs = [
-        ("FR", Vec3::new((chassis_width * 0.6) as f32, -0.4, (chassis_length * 0.4) as f32), false, true),
-        ("FL", Vec3::new((-chassis_width * 0.6) as f32, -0.4, (chassis_length * 0.4) as f32), true, true),
-        ("RR", Vec3::new((chassis_width * 0.6) as f32, -0.4, (-chassis_length * 0.4) as f32), false, false),
-        ("RL", Vec3::new((-chassis_width * 0.6) as f32, -0.4, (-chassis_length * 0.4) as f32), true, false),
+        ("FR", Vec3::new((chassis_width * 0.5) as f32, (-chassis_height / 2.0) as f32, (chassis_length * 0.35) as f32), false, true),
+        ("FL", Vec3::new((-chassis_width * 0.5) as f32, (-chassis_height / 2.0) as f32, (chassis_length * 0.35) as f32), true, true),
+        ("RR", Vec3::new((chassis_width * 0.5) as f32, (-chassis_height / 2.0) as f32, (-chassis_length * 0.35) as f32), false, false),
+        ("RL", Vec3::new((-chassis_width * 0.5) as f32, (-chassis_height / 2.0) as f32, (-chassis_length * 0.35) as f32), true, false),
     ];
 
     let wheel_rot = Quat::from_rotation_z(std::f32::consts::FRAC_PI_2);
-    let wheel_mesh = meshes.add(Cylinder::new(0.4, 0.4));
+    let wheel_mesh = meshes.add(Cylinder::new(0.4, 0.3));
 
     for (label, rel_pos, is_left, is_front) in wheel_configs {
         let drive_port = spawn_physical_port(commands, rover_entity, &format!("port_{}_drive", label));
@@ -88,15 +90,16 @@ pub fn spawn_raycast_rover(
         let digital_source = if is_left { drive_l_digital } else { drive_r_digital };
         connect_ports(commands, rover_entity, digital_source, drive_port, 1.0);
         connect_ports(commands, rover_entity, brake_digital, brake_port, 1.0);
-        
+
         if is_front && steering_type == SteeringType::Ackermann {
             connect_ports(commands, rover_entity, steer_digital, steer_port, 1.0);
         }
 
         let visual_wheel = commands.spawn((
             Name::new(format!("{}_visual", label)),
-            Transform::from_translation(rel_pos).with_rotation(wheel_rot), 
+            Transform::from_translation(rel_pos).with_rotation(wheel_rot),
             CellCoord::default(),
+            Visibility::default(),
             Mesh3d(wheel_mesh.clone()),
             MeshMaterial3d(materials.add(StandardMaterial::from(if is_front { Color::from(Srgba::RED) } else { Color::from(Srgba::BLUE) }))),
             ChildOf(rover_entity),
@@ -109,10 +112,19 @@ pub fn spawn_raycast_rover(
                 drive_port,
                 steer_port: if is_front { steer_port } else { Entity::PLACEHOLDER },
                 visual_entity: Some(visual_wheel),
+                rest_length: 0.7,
+                spring_k: 15000.0,
+                damping_c: 3000.0,
+                wheel_radius: 0.4,
+                ray_origin_y: 0.0,
                 ..default()
             },
-            RayCaster::new(Vec3::new(0.0, 0.5, 0.0).as_dvec3(), Dir3::NEG_Y)
-                .with_max_distance(1.2)
+            // Ray origin is at the wheel entity transform = suspension mount point on chassis bottom.
+            // Points straight down. The hit distance = distance from mount to ground.
+            // When compression = 0, hit_distance = rest_length.
+            // Suspension compression = rest_length - hit_distance.
+            RayCaster::new(DVec3::ZERO, Dir3::NEG_Y)
+                .with_max_distance(10.0)
                 .with_solidness(true)
                 .with_query_filter(SpatialQueryFilter::from_excluded_entities([rover_entity])),
             Transform::from_translation(rel_pos),

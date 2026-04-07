@@ -3912,6 +3912,7 @@ checksum = "843fba2746e448b37e26a819579957415c8cef339bf08564fe8b7ddbd959573c"
 dependencies = [
  "crc32fast",
  "miniz_oxide",
+ "zlib-rs",
 ]
 
 [[package]]
@@ -5436,6 +5437,38 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5e5032e24019045c762d3c0f28f5b6b8bbf38563a65908389bf7978758920897"
 
 [[package]]
+name = "logos"
+version = "0.16.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eb2c55a318a87600ea870ff8c2012148b44bf18b74fad48d0f835c38c7d07c5f"
+dependencies = [
+ "logos-derive",
+]
+
+[[package]]
+name = "logos-codegen"
+version = "0.16.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "58b3ffaa284e1350d017a57d04ada118c4583cf260c8fb01e0fe28a2e9cf8970"
+dependencies = [
+ "fnv",
+ "proc-macro2",
+ "quote",
+ "regex-automata",
+ "regex-syntax",
+ "syn 2.0.117",
+]
+
+[[package]]
+name = "logos-derive"
+version = "0.16.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "52d3a9855747c17eaf4383823f135220716ab49bea5fbea7dd42cc9a92f8aa31"
+dependencies = [
+ "logos-codegen",
+]
+
+[[package]]
 name = "loom"
 version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5459,7 +5492,7 @@ dependencies = [
 
 [[package]]
 name = "lunco-attributes"
-version = "0.6.0"
+version = "0.6.0-dev"
 dependencies = [
  "bevy",
  "lunco-core",
@@ -5467,7 +5500,7 @@ dependencies = [
 
 [[package]]
 name = "lunco-avatar"
-version = "0.6.0"
+version = "0.6.0-dev"
 dependencies = [
  "avian3d",
  "bevy",
@@ -5481,7 +5514,7 @@ dependencies = [
 
 [[package]]
 name = "lunco-celestial"
-version = "0.6.0"
+version = "0.6.0-dev"
 dependencies = [
  "avian3d",
  "bevy",
@@ -5507,7 +5540,7 @@ dependencies = [
 
 [[package]]
 name = "lunco-client"
-version = "0.6.0"
+version = "0.6.0-dev"
 dependencies = [
  "avian3d",
  "bevy",
@@ -5526,11 +5559,15 @@ dependencies = [
  "lunco-modelica",
  "lunco-obc",
  "lunco-robotics",
+ "lunco-usd",
+ "lunco-usd-avian",
+ "lunco-usd-bevy",
+ "openusd",
 ]
 
 [[package]]
 name = "lunco-controller"
-version = "0.6.0"
+version = "0.6.0-dev"
 dependencies = [
  "bevy",
  "leafwing-input-manager",
@@ -5540,7 +5577,7 @@ dependencies = [
 
 [[package]]
 name = "lunco-core"
-version = "0.6.0"
+version = "0.6.0-dev"
 dependencies = [
  "bevy",
  "big_space",
@@ -5550,7 +5587,7 @@ dependencies = [
 
 [[package]]
 name = "lunco-fsw"
-version = "0.6.0"
+version = "0.6.0-dev"
 dependencies = [
  "bevy",
  "lunco-core",
@@ -5559,7 +5596,7 @@ dependencies = [
 
 [[package]]
 name = "lunco-hardware"
-version = "0.6.0"
+version = "0.6.0-dev"
 dependencies = [
  "avian3d",
  "bevy",
@@ -5570,7 +5607,7 @@ dependencies = [
 
 [[package]]
 name = "lunco-mobility"
-version = "0.6.0"
+version = "0.6.0-dev"
 dependencies = [
  "avian3d",
  "bevy",
@@ -5607,7 +5644,7 @@ dependencies = [
 
 [[package]]
 name = "lunco-obc"
-version = "0.6.0"
+version = "0.6.0-dev"
 dependencies = [
  "bevy",
  "lunco-core",
@@ -5615,7 +5652,7 @@ dependencies = [
 
 [[package]]
 name = "lunco-robotics"
-version = "0.6.0"
+version = "0.6.0-dev"
 dependencies = [
  "avian3d",
  "bevy",
@@ -5630,10 +5667,87 @@ dependencies = [
 
 [[package]]
 name = "lunco-telemetry"
-version = "0.6.0"
+version = "0.6.0-dev"
 dependencies = [
  "bevy",
  "lunco-core",
+]
+
+[[package]]
+name = "lunco-usd"
+version = "0.1.0"
+dependencies = [
+ "avian3d",
+ "bevy",
+ "lunco-core",
+ "lunco-mobility",
+ "lunco-usd-avian",
+ "lunco-usd-bevy",
+ "lunco-usd-composer",
+ "lunco-usd-sim",
+ "openusd",
+ "serde",
+ "tracing",
+]
+
+[[package]]
+name = "lunco-usd-avian"
+version = "0.1.0"
+dependencies = [
+ "avian3d",
+ "bevy",
+ "lunco-usd-bevy",
+ "openusd",
+ "serde",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
+name = "lunco-usd-bevy"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bevy",
+ "futures-lite",
+ "lunco-usd-composer",
+ "openusd",
+ "serde",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
+name = "lunco-usd-composer"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "openusd",
+ "tracing",
+]
+
+[[package]]
+name = "lunco-usd-sim"
+version = "0.1.0"
+dependencies = [
+ "avian3d",
+ "bevy",
+ "lunco-core",
+ "lunco-fsw",
+ "lunco-hardware",
+ "lunco-mobility",
+ "lunco-robotics",
+ "lunco-usd-bevy",
+ "openusd",
+]
+
+[[package]]
+name = "lz4_flex"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "db9a0d582c2874f68138a16ce1867e0ffde6c0bb0a0df85e1f36d04146db488a"
+dependencies = [
+ "twox-hash",
 ]
 
 [[package]]
@@ -6644,6 +6758,22 @@ dependencies = [
  "bstr",
  "normpath",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "openusd"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "addea07a266d1a04d1cdd15109e080e6812cb619437a033f8aeedd73be6d3967"
+dependencies = [
+ "anyhow",
+ "bytemuck",
+ "half",
+ "logos",
+ "lz4_flex",
+ "num-traits",
+ "strum",
+ "zip 8.5.0",
 ]
 
 [[package]]
@@ -7725,7 +7855,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "walkdir",
- "zip",
+ "zip 2.4.2",
 ]
 
 [[package]]
@@ -8565,6 +8695,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 
 [[package]]
+name = "strum"
+version = "0.28.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9628de9b8791db39ceda2b119bbe13134770b56c138ec1d3af810d045c04f9bd"
+dependencies = [
+ "strum_macros",
+]
+
+[[package]]
+name = "strum_macros"
+version = "0.28.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ab85eea0270ee17587ed4156089e10b9e6880ee688791d45a905f5b1ca36f664"
+dependencies = [
+ "heck",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
 name = "subtle"
 version = "2.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9175,6 +9326,12 @@ name = "twox-hash"
 version = "2.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9ea3136b675547379c4bd395ca6b938e5ad3c3d20fad76e7fe85f9e0d011419c"
+
+[[package]]
+name = "typed-path"
+version = "0.12.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8e28f89b80c87b8fb0cf04ab448d5dd0dd0ade2f8891bae878de66a75a28600e"
 
 [[package]]
 name = "typeid"
@@ -10921,6 +11078,26 @@ dependencies = [
  "zopfli",
  "zstd",
 ]
+
+[[package]]
+name = "zip"
+version = "8.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2726508a48f38dceb22b35ecbbd2430efe34ff05c62bd3285f965d7911b33464"
+dependencies = [
+ "crc32fast",
+ "flate2",
+ "indexmap",
+ "memchr",
+ "typed-path",
+ "zopfli",
+]
+
+[[package]]
+name = "zlib-rs"
+version = "0.6.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3be3d40e40a133f9c916ee3f9f4fa2d9d63435b5fbe1bfc6d9dae0aa0ada1513"
 
 [[package]]
 name = "zmij"

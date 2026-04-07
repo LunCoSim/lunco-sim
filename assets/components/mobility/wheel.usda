@@ -1,0 +1,42 @@
+#usda 1.0
+(
+    defaultPrim = "Wheel"
+)
+
+# Reusable motorized wheel component for mobility.
+# Modelica class: LunCo.Mobility.Wheel.Motorized
+
+def Cylinder "Wheel" (
+    prepend apiSchemas = ["LunCoMobilityComponentAPI"]
+)
+{
+    # --- Geometry ---
+    double radius = 2.0
+    double height = 4.0
+    double3 xformOp:translate = (0, 0, 0)
+    color3f primvars:displayColor = (0.3, 0.3, 0.3)
+
+    # --- Modelica model ---
+    string lunco:modelicaModel = "models/wheel.mo"
+    string lunco:modelicaClassName = "LunCo.Mobility.Wheel.Motorized"
+
+    # --- Modelica Parameters (mechanical) ---
+    double lunco:springStiffness = 10000.0   # N/m suspension spring constant
+    double lunco:springDamping = 3000.0      # N·s/m damping coefficient
+    double lunco:restLength = 0.5            # m uncompressed suspension length
+    double lunco:frictionCoefficient = 0.8   # Tire-ground friction coefficient
+    double lunco:maxSteerAngle = 0.5         # rad maximum steering angle
+
+    # --- Modelica Parameters (motor electrical) ---
+    double lunco:motorPower = 2000.0         # W rated motor power
+    double lunco:motorEfficiency = 0.85      # Electrical-to-mechanical efficiency
+    double lunco:noLoadRpm = 300.0           # RPM motor speed at zero load
+
+    # --- EPS connections ---
+    rel lunco:epsBus
+
+    # --- Physics ---
+    bool physics:rigidBodyEnabled = true
+    float physics:mass = 25.0
+    bool physics:collisionEnabled = true
+}

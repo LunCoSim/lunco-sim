@@ -282,7 +282,7 @@ pub fn mission_focus_system(
             commands.trigger(lunco_core::architecture::CommandMessage {
                 id: 0,
                 target: ent,
-                name: "POSSESS".to_string(),
+                name: "FOCUS".to_string(),
                 args: smallvec::smallvec![],
                 source: avatar_ent,
             });

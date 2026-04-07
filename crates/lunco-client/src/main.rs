@@ -6,7 +6,6 @@
 //! and global coordinate synchronization.
 
 use bevy::{prelude::*, asset::io::AssetSourceBuilder};
-use big_space::prelude::CellCoord;
 
 mod ui;
 use lunco_celestial::BlueprintMaterial;
@@ -38,14 +37,14 @@ fn main() {
     }
 
     app.add_plugins(MaterialPlugin::<BlueprintMaterial>::default())
-        .add_plugins(LunCoUiPlugin) 
+        .add_plugins(LunCoUiPlugin)
         .add_plugins(lunco_fsw::LunCoFswPlugin)
         .add_plugins(lunco_hardware::LunCoHardwarePlugin)
         .add_plugins(lunco_mobility::LunCoMobilityPlugin)
         .add_plugins(lunco_robotics::LunCoRoboticsPlugin)
         .add_plugins(lunco_controller::LunCoControllerPlugin)
         .add_plugins(lunco_avatar::LunCoAvatarPlugin)
-        .add_systems(Update, toggle_slow_motion)
+        .add_systems(Update, (toggle_slow_motion, auto_focus_earth_once))
         .run();
 }
 
@@ -113,6 +112,42 @@ fn toggle_slow_motion(keyboard: Res<ButtonInput<KeyCode>>, mut time: ResMut<Time
     if keyboard.just_pressed(KeyCode::KeyT) {
         if time.relative_speed() < 1.0 { time.set_relative_speed(1.0); } else { time.set_relative_speed(0.01); }
     }
+}
+
+/// Directly inserts OrbitCamera targeting Earth on the first Update frame.
+///
+/// **Why**: Triggering FOCUS via command observer adds unnecessary indirection
+/// and a 1.5s transition. We just insert OrbitCamera directly so the camera
+/// is immediately usable in orbital mode.
+fn auto_focus_earth_once(
+    q_cameras: Query<(Entity, &Transform), With<lunco_core::Avatar>>,
+    q_bodies: Query<(Entity, &lunco_celestial::CelestialBody)>,
+    mut commands: Commands,
+    mut did_focus: Local<bool>,
+) {
+    if *did_focus { return; }
+    *did_focus = true;
+
+    let Some((camera_entity, cam_tf)) = q_cameras.iter().next() else { return };
+    let Some((earth_entity, earth_body)) = q_bodies.iter().find(|(_, body)| body.ephemeris_id == 399) else { return };
+
+    // Preserve current camera orientation.
+    let (yaw, pitch, _) = cam_tf.rotation.to_euler(bevy::prelude::EulerRot::YXZ);
+
+    commands.entity(camera_entity)
+        .remove::<lunco_avatar::FreeFlightCamera>()
+        .remove::<lunco_avatar::SpringArmCamera>()
+        .remove::<lunco_avatar::OrbitCamera>()
+        .remove::<lunco_avatar::FrameBlend>()
+        .insert(lunco_avatar::OrbitCamera {
+            target: earth_entity,
+            distance: earth_body.radius_m * 3.0,
+            yaw,
+            pitch,
+            damping: None,
+            vertical_offset: 0.0,
+        });
+    info!("Auto-focused Earth at startup → OrbitCamera");
 }
 
 

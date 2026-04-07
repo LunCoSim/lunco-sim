@@ -1,0 +1,38 @@
+#usda 1.0
+(
+    defaultPrim = "SolarPanel"
+)
+
+# Reusable solar panel component for power generation.
+# Modelica class: LunCo.Power.SolarArray.MultiJunction
+
+def Cube "SolarPanel" (
+    prepend apiSchemas = ["LunCoPowerGeneratorAPI"]
+)
+{
+    # --- Geometry ---
+    double width = 6.0
+    double height = 0.1
+    double depth = 3.0
+    double3 xformOp:translate = (0, 0, 0)
+    color3f primvars:displayColor = (0.1, 0.1, 0.6)
+
+    # --- Modelica model ---
+    string lunco:modelicaModel = "models/solar_panel.mo"
+    string lunco:modelicaClassName = "LunCo.Power.SolarArray.MultiJunction"
+
+    # --- Modelica Parameters (power generation) ---
+    double lunco:nominalPower = 500.0        # W at STC (Standard Test Conditions)
+    double lunco:efficiency = 0.30           # Solar-to-electrical conversion efficiency
+    double lunco:area = 18.0                 # m^2 active area
+    double lunco:temperatureCoefficient = -0.004  # Power loss per degree C above 25C
+    double lunco:degradationRate = 0.005     # Annual degradation fraction
+
+    # --- EPS connections ---
+    rel lunco:epsBus
+
+    # --- Physics ---
+    bool physics:rigidBodyEnabled = true
+    float physics:mass = 15.0
+    bool physics:collisionEnabled = true
+}

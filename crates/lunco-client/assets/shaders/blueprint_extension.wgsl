@@ -12,60 +12,73 @@ struct BlueprintExtension {
     fade_range: vec2<f32>,
     grid_scale: f32,
     line_width: f32,
-    transition: f32, 
+    transition: f32,
     body_radius: f32,
+    major_grid_spacing: f32,
+    minor_grid_spacing: f32,
+    major_line_width: f32,
+    minor_line_width: f32,
+    minor_line_fade: f32,
+    surface_color: vec4<f32>,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100)
 var<uniform> extension: BlueprintExtension;
-
-const PI: f32 = 3.14159265359;
 
 @fragment
 fn fragment(
     input: VertexOutput,
     @builtin(front_facing) is_front: bool,
 ) -> FragmentOutput {
-    // 1. Get the standard PBR input from the base material
     var pbr_input = pbr_input_from_standard_material(input, is_front);
-    
-    // --- Colors Transition ---
-    // We no longer multiply by base_color_mix as planetary maps provide the real colors now.
-    let final_base_color = pbr_input.material.base_color;
+    // Use the PBR-sampled base color (includes base_color_texture from StandardMaterial
+    // if present). The blueprint grid lines are layered on top as an overlay.
+    // When no texture is set, pbr_input.material.base_color falls back to the
+    // StandardMaterial's base_color field.
+    var final_base_color = pbr_input.material.base_color;
 
-    // --- Lat/Long Grid (High Alt) ---
-    // Use mesh UVs directly - they rotate with the planet and are seam-corrected
-    let lon = input.uv.x;
-    let lat = input.uv.y;
+    var grid_mask = 0.0;
 
-    // Parameterized subdivisions
-    let lon_scaled = lon * extension.subdivisions.x;
-    let lat_scaled = lat * extension.subdivisions.y;
-    let lat_long_coords = vec2<f32>(lon_scaled, lat_scaled);
-    
-    let fw = fwidth(lat_long_coords);
-    
-    let lat_long_f = abs(fract(lat_long_coords - 0.5) - 0.5) / fw;
-    let lat_long_line = min(lat_long_f.x, lat_long_f.y);
-    
-    // Thinner coordinate lines when high, fade out using parameterized range
-    let lat_long_width = mix(0.5, extension.line_width, extension.transition);
-    let lat_long_fade = 1.0 - smoothstep(extension.fade_range.x, extension.fade_range.y, max(fw.x, fw.y));
-    let lat_long_mask = (1.0 - smoothstep(0.0, lat_long_width, lat_long_line)) * lat_long_fade;
+    if extension.transition < 0.5 {
+        // --- Lat/Long Grid (spherical bodies) ---
+        let lon = input.uv.x;
+        let lat = input.uv.y;
+        let lon_scaled = lon * extension.subdivisions.x;
+        let lat_scaled = lat * extension.subdivisions.y;
+        let ll_coords = vec2<f32>(lon_scaled, lat_scaled);
+        let ll_f = abs(fract(ll_coords - 0.5) - 0.5) / fwidth(ll_coords);
+        let ll_line = min(ll_f.x, ll_f.y);
+        let ll_fade = 1.0 - smoothstep(extension.fade_range.x, extension.fade_range.y, max(fwidth(ll_coords).x, fwidth(ll_coords).y));
+        grid_mask = (1.0 - smoothstep(0.0, extension.line_width, ll_line)) * ll_fade;
+    } else {
+        // --- Blueprint Grid (Cartesian XZ, flat ground) ---
+        // fwidth on raw world position (smooth everywhere, no wrap discontinuities).
+        let pos = input.world_position.xz;
+        let world_per_px = abs(fwidth(pos));  // world units per pixel
 
-    // --- Blueprint Grid (Low Alt) ---
-    let blueprint_coords = input.world_position.xz / extension.grid_scale;
-    let blueprint_f = abs(fract(blueprint_coords - 0.5) - 0.5) / fwidth(blueprint_coords);
-    let blueprint_line = min(blueprint_f.x, blueprint_f.y);
-    let blueprint_mask = 1.0 - smoothstep(0.0, extension.line_width, blueprint_line);
-    
-    // --- Mixing ---
-    let grid_mask = mix(lat_long_mask, blueprint_mask, extension.transition) * (1.0 - smoothstep(0.9, 1.0, extension.transition));
+        // Major grid
+        let major_dist = vec2<f32>(
+            abs(fract(pos.x / extension.major_grid_spacing - 0.5) - 0.5) * extension.major_grid_spacing,
+            abs(fract(pos.y / extension.major_grid_spacing - 0.5) - 0.5) * extension.major_grid_spacing,
+        );
+        let major_px = min(major_dist.x / max(world_per_px.x, 1e-6), major_dist.y / max(world_per_px.y, 1e-6));
+        let major_m = 1.0 - smoothstep(0.0, extension.major_line_width, major_px);
+
+        // Minor grid
+        let minor_dist = vec2<f32>(
+            abs(fract(pos.x / extension.minor_grid_spacing - 0.5) - 0.5) * extension.minor_grid_spacing,
+            abs(fract(pos.y / extension.minor_grid_spacing - 0.5) - 0.5) * extension.minor_grid_spacing,
+        );
+        let minor_px = min(minor_dist.x / max(world_per_px.x, 1e-6), minor_dist.y / max(world_per_px.y, 1e-6));
+        let minor_raw = 1.0 - smoothstep(0.0, extension.minor_line_width, minor_px);
+        let minor_m = minor_raw * extension.minor_line_fade * (1.0 - major_m);
+
+        grid_mask = max(major_m, minor_m);
+    }
+
     let line_color = mix(extension.high_line_color, extension.low_line_color, extension.transition);
-    
     pbr_input.material.base_color = mix(final_base_color, line_color, grid_mask);
-    
-    // 4. Apply standard lighting with our modified color
+
     var out: FragmentOutput;
     out.color = main_pass_post_lighting_processing(pbr_input, apply_pbr_lighting(pbr_input));
     return out;

@@ -1,11 +1,15 @@
 [package]
 name = "lunco-client"
-version = "0.6.0"
+version = "0.6.0-dev"
 edition = "2021"
 
 [[bin]]
 name = "rover_sandbox"
 path = "src/bin/rover_sandbox.rs"
+
+[[bin]]
+name = "model_viewer"
+path = "src/bin/model_viewer.rs"
 
 [dependencies]
 bevy = { workspace = true, features = ["default"] }
@@ -23,6 +27,10 @@ lunco-attributes = { path = "../lunco-attributes" }
 lunco-avatar = { path = "../lunco-avatar" }
 lunco-celestial = { path = "../lunco-celestial" }
 lunco-modelica = { path = "../lunco-modelica" }
+lunco-usd = { path = "../lunco-usd" }
+lunco-usd-avian = { path = "../lunco-usd-avian" }
+lunco-usd-bevy = { path = "../lunco-usd-bevy" }
+openusd = { workspace = true }
 bevy_egui = { workspace = true }
 bevy-inspector-egui = { workspace = true }
 
@@ -30,5 +38,3 @@ bevy-inspector-egui = { workspace = true }
 default = ["celestial"]
 celestial = []
 sandbox = []
-
-

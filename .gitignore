@@ -4,3 +4,4 @@ target/
 
 # Downloaded mission data
 .cache/
+extern/

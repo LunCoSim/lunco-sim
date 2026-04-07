@@ -1,0 +1,16 @@
+#usda 1.0
+(
+    defaultPrim = "Artemis2"
+    upAxis = "Y"
+)
+
+def Xform "Artemis2"
+{
+    def "Orion" (
+        prepend references = @../vessels/spacecrafts/orion/orion.usda@
+    )
+    {
+        custom string lunco:name = "Artemis 2 Orion"
+        double3 xformOp:translate = (0, 0, 0)
+    }
+}

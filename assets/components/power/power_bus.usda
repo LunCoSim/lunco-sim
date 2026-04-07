@@ -1,0 +1,27 @@
+#usda 1.0
+(
+    defaultPrim = "PowerBus"
+)
+
+
+def Xform "PowerBus" (
+    prepend apiSchemas = ["LunCoPowerDistributionAPI"]
+)
+{
+    # --- Modelica model ---
+    string lunco:modelicaModel = "models/power_bus.mo"
+    string lunco:modelicaClassName = "LunCo.Power.Bus.DCBus"
+
+    # --- Electrical properties ---
+    double lunco:nominalVoltage = 48.0
+    double lunco:maxCurrent = 200.0
+    double lunco:efficiency = 0.98
+    double lunco:voltageRipple = 0.02
+
+    # --- EPS connections ---
+    # All components on this EPS bus
+    rel lunco:epsBus
+
+    # --- Physics (invisible, no collider) ---
+    bool physics:rigidBodyEnabled = false
+}
