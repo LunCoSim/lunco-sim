@@ -6,7 +6,10 @@ use lunco_mobility::*;
 fn main() {
     App::new()
         .add_plugins((
-            DefaultPlugins,
+            DefaultPlugins.set(AssetPlugin {
+                file_path: "../../".to_string(), // Set root to workspace root
+                ..default()
+            }),
             PhysicsPlugins::default(),
             lunco_core::LunCoCorePlugin,
             lunco_mobility::LunCoMobilityPlugin,
@@ -77,7 +80,7 @@ fn orbit_camera(
 }
 
 fn setup_rover(mut commands: Commands, asset_server: Res<AssetServer>) {
-    let stage_handle = asset_server.load("vessels/rovers/rucheyok/rucheyok.usda");
+    let stage_handle = asset_server.load("assets/vessels/rovers/rucheyok/rucheyok.usda");
     
     commands.spawn((
         Name::new("RucheyokRover"),

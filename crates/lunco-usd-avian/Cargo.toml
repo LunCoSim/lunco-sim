@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 bevy.workspace = true
 avian3d.workspace = true
-openusd = "0.1.4"
+openusd = { workspace = true }
 lunco-usd-bevy = { path = "../lunco-usd-bevy" }
 serde = { version = "1.0", features = ["derive"] }
 thiserror = "2.0"

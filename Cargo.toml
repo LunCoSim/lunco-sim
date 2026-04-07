@@ -20,10 +20,6 @@ members = [
 ]
 resolver = "2"
 
-[patch.crates-io]
-# Point to local folder for development, falls back to remote if folder missing
-openusd = { path = "extern/openusd" }
-
 [workspace.package]
 description = "Initialize multi-crate workspace architecture for vessel control simulation"
 
@@ -40,4 +36,4 @@ resvg = "0.45"
 tiny-skia = "0.11"
 image = { version = "0.25", features = ["tiff", "png", "jpeg"] }
 smallvec = "1.13"
-openusd = { path = "extern/openusd" }
+openusd = "0.2.0"

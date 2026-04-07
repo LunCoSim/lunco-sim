@@ -42,15 +42,17 @@ impl AssetLoader for UsdLoader {
 
         let mut parser = openusd::usda::parser::Parser::new(&data);
         let data_map = parser.parse().map_err(|e| anyhow::anyhow!("USD Parse Error: {}", e))?;
-        let mut reader = TextReader::from_data(data_map);
+        let reader = TextReader::from_data(data_map);
 
         // RESOLVE REFERENCES
-        if let Some(parent) = load_context.path().path().parent() {
+        let reader = if let Some(parent) = load_context.path().path().parent() {
             let asset_root = std::path::Path::new("assets");
             let full_parent = asset_root.join(parent);
             let base_dir = if asset_root.exists() { full_parent } else { parent.to_path_buf() };
-            UsdComposer::flatten(&mut reader, &base_dir).map_err(|e| anyhow::anyhow!("USD Composition Error: {}", e))?;
-        }
+            UsdComposer::flatten(&reader, &base_dir).map_err(|e| anyhow::anyhow!("USD Composition Error: {}", e))?
+        } else {
+            reader
+        };
 
         Ok(UsdStageAsset {
             reader: Arc::new(reader),
@@ -94,6 +96,17 @@ fn sync_usd_visuals(
 
         let mut reader = (*stage.reader).clone();
         
+        // 0. Check Active status
+        if let Ok(val) = reader.get(&sdf_path, "active") {
+            if let Value::Bool(active) = &*val {
+                if !*active {
+                    debug!("Skipping inactive prim and its subtree: {}", prim_path.path);
+                    commands.entity(entity).insert(UsdVisualSynced); 
+                    return; // EXIT EARLY - don't process visuals OR children
+                }
+            }
+        }
+
         // 1. Detect Visual Mesh
         let mut mesh_handle = None;
         let base_rotation = Quat::IDENTITY;
@@ -120,16 +133,16 @@ fn sync_usd_visuals(
         if let Some(ty) = prim_type {
             match ty.as_str() {
                 "Cube" => {
-                    let size = reader.get_prim_attribute_value::<f64>(&sdf_path, "size").unwrap_or(1.0) as f32;
+                    let size = reader.prim_attribute_value::<f64>(&sdf_path, "size").unwrap_or(1.0) as f32;
                     mesh_handle = Some(meshes.add(Cuboid::from_size(Vec3::splat(size))));
                 }
                 "Sphere" => {
-                    let radius = reader.get_prim_attribute_value::<f64>(&sdf_path, "radius").unwrap_or(0.5) as f32;
+                    let radius = reader.prim_attribute_value::<f64>(&sdf_path, "radius").unwrap_or(0.5) as f32;
                     mesh_handle = Some(meshes.add(Sphere::new(radius).mesh().ico(32).unwrap()));
                 }
                 "Cylinder" => {
-                    let radius = reader.get_prim_attribute_value::<f64>(&sdf_path, "radius").unwrap_or(0.5) as f32;
-                    let height = reader.get_prim_attribute_value::<f64>(&sdf_path, "height").unwrap_or(1.0) as f32;
+                    let radius = reader.prim_attribute_value::<f64>(&sdf_path, "radius").unwrap_or(0.5) as f32;
+                    let height = reader.prim_attribute_value::<f64>(&sdf_path, "height").unwrap_or(1.0) as f32;
                     mesh_handle = Some(meshes.add(Cylinder::new(radius, height)));
                 }
                 _ => {}
@@ -190,7 +203,14 @@ fn sync_usd_visuals(
         ));
 
         // 4. Recursion
-        for child_path in reader.get_name_children(&sdf_path) {
+        for child_path in reader.prim_children(&sdf_path) {
+            // Check if child is active before spawning
+            if let Ok(val) = reader.get(&child_path, "active") {
+                if let Value::Bool(active) = &*val {
+                    if !*active { continue; }
+                }
+            }
+
             let child_entity = commands.spawn((
                 Name::new(child_path.to_string()),
                 UsdPrimPath {
@@ -207,10 +227,10 @@ fn sync_usd_visuals(
 }
 
 fn get_attribute_as_vec3(reader: &mut TextReader, path: &SdfPath, attr: &str) -> Option<Vec3> {
-    if let Some(v) = reader.get_prim_attribute_value::<Vec<f32>>(path, attr) {
+    if let Some(v) = reader.prim_attribute_value::<Vec<f32>>(path, attr) {
         if v.len() >= 3 { return Some(Vec3::new(v[0], v[1], v[2])); }
     }
-    if let Some(v) = reader.get_prim_attribute_value::<Vec<f64>>(path, attr) {
+    if let Some(v) = reader.prim_attribute_value::<Vec<f64>>(path, attr) {
         if v.len() >= 3 { return Some(Vec3::new(v[0] as f32, v[1] as f32, v[2] as f32)); }
     }
     None

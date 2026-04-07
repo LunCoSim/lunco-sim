@@ -4527,7 +4527,10 @@ dependencies = [
  "avian3d",
  "bevy",
  "lunco-core",
+ "lunco-fsw",
+ "lunco-hardware",
  "lunco-mobility",
+ "lunco-robotics",
  "lunco-usd-bevy",
  "openusd",
 ]
@@ -5284,7 +5287,9 @@ dependencies = [
 
 [[package]]
 name = "openusd"
-version = "0.1.4"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "addea07a266d1a04d1cdd15109e080e6812cb619437a033f8aeedd73be6d3967"
 dependencies = [
  "anyhow",
  "bytemuck",

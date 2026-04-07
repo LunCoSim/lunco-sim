@@ -3,9 +3,13 @@
     defaultPrim = "Rucheyok"
 )
 
-def Xform "Rucheyok"
+def Xform "Rucheyok" (
+    prepend apiSchemas = ["PhysxVehicleContextAPI"]
+)
 {
-    def Cube "Chassis"
+    def Cube "Chassis" (
+        prepend apiSchemas = ["PhysxVehicleDriveSkidAPI"]
+    )
     {
         # --- Visuals ---
         double3 xformOp:scale = (15.0, 4.0, 20.0)
@@ -27,6 +31,7 @@ def Xform "Rucheyok"
         color3f primvars:displayColor = (0.0, 1.0, 0.0)
 
         # --- Sim Physics (LunCo Sim Intercept) ---
+        int physxVehicleWheel:index = 0
         float physxVehicleWheel:radius = 4.0
         float physxVehicleSuspension:restLength = 0.5
         float physxVehicleSuspension:springStiffness = 10000.0
@@ -41,6 +46,7 @@ def Xform "Rucheyok"
         float3 xformOp:rotateXYZ = (90, 0, 0)
         color3f primvars:displayColor = (0.0, 1.0, 0.0)
 
+        int physxVehicleWheel:index = 1
         float physxVehicleWheel:radius = 4.0
     }
 
@@ -52,6 +58,7 @@ def Xform "Rucheyok"
         float3 xformOp:rotateXYZ = (90, 0, 0)
         color3f primvars:displayColor = (1.0, 0.0, 0.0)
 
+        int physxVehicleWheel:index = 2
         float physxVehicleWheel:radius = 4.0
     }
 
@@ -63,6 +70,7 @@ def Xform "Rucheyok"
         float3 xformOp:rotateXYZ = (90, 0, 0)
         color3f primvars:displayColor = (1.0, 0.0, 0.0)
 
+        int physxVehicleWheel:index = 3
         float physxVehicleWheel:radius = 4.0
     }
 
@@ -74,9 +82,6 @@ def Xform "Rucheyok"
         {
             double3 xformOp:scale = (4.0, 2.0, 4.0)
             color3f primvars:displayColor = (0.5, 0.5, 0.5)
-            
-            # Explicitly NOT adding colliders here to prototypes, 
-            # let the sim-plugin handle it via Raycast.
         }
     }
 }

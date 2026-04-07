@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 bevy = { workspace = true }
-openusd = "0.1.4"
+openusd = { workspace = true }
 lunco-usd-bevy = { path = "../lunco-usd-bevy" }
 lunco-usd-avian = { path = "../lunco-usd-avian" }
 lunco-usd-sim = { path = "../lunco-usd-sim" }

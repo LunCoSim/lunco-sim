@@ -29,7 +29,7 @@ lunco-celestial = { path = "../lunco-celestial" }
 lunco-usd = { path = "../lunco-usd" }
 lunco-usd-avian = { path = "../lunco-usd-avian" }
 lunco-usd-bevy = { path = "../lunco-usd-bevy" }
-openusd = "0.1.4"
+openusd = { workspace = true }
 bevy_egui = { workspace = true }
 bevy-inspector-egui = { workspace = true }
 

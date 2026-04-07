@@ -40,27 +40,27 @@ fn on_add_lunco_prim(
     let Some(stage) = stages.get(&prim_path.stage_handle) else { return; };
     let Ok(sdf_path) = SdfPath::new(&prim_path.path) else { return; };
 
-    let mut reader = (*stage.reader).clone();
+    let reader = (*stage.reader).clone();
     let mut spacecraft = Spacecraft::default();
     let mut modified = false;
 
-    // Use new type-safe getters from fork
-    if let Some(name) = reader.get_prim_attribute_value::<String>(&sdf_path, "lunco:name") {
+    // Use new type-safe getters from v0.2.0
+    if let Some(name) = reader.prim_attribute_value::<String>(&sdf_path, "lunco:name") {
         spacecraft.name = name;
         modified = true;
     }
 
-    if let Some(id) = reader.get_prim_attribute_value::<i32>(&sdf_path, "lunco:ephemeris_id") {
+    if let Some(id) = reader.prim_attribute_value::<i32>(&sdf_path, "lunco:ephemeris_id") {
         spacecraft.ephemeris_id = id;
         modified = true;
     }
 
-    if let Some(id) = reader.get_prim_attribute_value::<i32>(&sdf_path, "lunco:reference_id") {
+    if let Some(id) = reader.prim_attribute_value::<i32>(&sdf_path, "lunco:reference_id") {
         spacecraft.reference_id = id;
         modified = true;
     }
 
-    if let Some(radius) = reader.get_prim_attribute_value::<f32>(&sdf_path, "lunco:hit_radius_m") {
+    if let Some(radius) = reader.prim_attribute_value::<f32>(&sdf_path, "lunco:hit_radius_m") {
         spacecraft.hit_radius_m = radius;
         modified = true;
     }

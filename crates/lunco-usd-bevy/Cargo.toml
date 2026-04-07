@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 bevy.workspace = true
-openusd = "0.1.4"
+openusd = { workspace = true }
 lunco-usd-composer = { path = "../lunco-usd-composer" }
 serde = { version = "1.0", features = ["derive"] }
 thiserror = "2.0"
