@@ -235,6 +235,8 @@ fn render_dock(
             .resizable(true)
             .frame(egui::Frame::side_top_panel(&ctx.style()).inner_margin(4.0))
             .show(ctx, |ui| {
+                // Fix width to prevent content-driven expansion
+                ui.set_width(right_size);
                 render_panel_region(ui, &mut layout.right, &mut state, &mut q_models, channels.as_deref());
             });
     }
