@@ -22,7 +22,7 @@ use big_space::prelude::{Grid, CellCoord, FloatingOrigin};
 
 use lunco_controller::ControllerLink;
 use lunco_core::{Vessel, Avatar, ActiveAction, ActionStatus, CommandMessage, CelestialBody, Spacecraft};
-use lunco_celestial::CelestialClock;
+use lunco_celestial::{CelestialClock, GravityBody, LocalGravityField};
 
 mod intents;
 pub use intents::*;
@@ -181,6 +181,8 @@ impl Plugin for LunCoAvatarPlugin {
         app.add_observer(on_release_command);
         app.add_observer(on_focus_command);
         app.add_observer(on_drag_commands);
+        app.add_observer(on_surface_teleport_command);
+        app.add_observer(on_leave_surface_command);
 
         app.register_type::<SpringArmCamera>()
            .register_type::<OrbitCamera>()
@@ -1222,4 +1224,199 @@ fn update_avatar_clip_planes_system(
             perspective.near = (min_dist as f32 * 0.01).clamp(0.1, 100.0);
         }
     }
+}
+
+// ─── Surface Teleport Commands ───────────────────────────────────────────────
+
+/// Teleports the avatar to a body's surface.
+///
+/// Command: `TELEPORT_SURFACE`
+/// - `args[0]` = target body entity index (as i64)
+/// - `args[1]` = latitude in degrees (optional, defaults to camera look projection)
+/// - `args[2]` = longitude in degrees (optional)
+///
+/// Migrates avatar to be a child of the Body entity, sets up surface-relative
+/// FreeFlightCamera, and initializes LocalGravityField.
+fn on_surface_teleport_command(
+    trigger: On<CommandMessage>,
+    mut commands: Commands,
+    q_avatar: Query<(Entity, &Transform, &CellCoord, &ChildOf), With<Avatar>>,
+    q_grids: Query<&Grid>,
+    q_parents: Query<&ChildOf>,
+    q_spatial_abs: Query<(&CellCoord, &Transform)>,
+    q_bodies: Query<(Entity, &CelestialBody, &ChildOf)>,
+    q_frames: Query<&lunco_celestial::CelestialReferenceFrame>,
+    mut field: ResMut<LocalGravityField>,
+) {
+    let msg = trigger.event();
+    if msg.name != "TELEPORT_SURFACE" { return; }
+
+    let Some((avatar_ent, cam_tf, cam_cell, cam_child_of)) = q_avatar.iter().next() else { return };
+
+    // Find target body entity
+    let target_body_entity: Option<Entity> = if !msg.args.is_empty() {
+        // args[0] = target body entity index
+        let idx = msg.args[0] as u64;
+        Entity::from_bits(idx).into()
+    } else { None };
+
+    let (body_entity, body_radius, _body_child_of) = if let Some(e) = target_body_entity {
+        if let Ok((e, b, c)) = q_bodies.get(e) {
+            (e, b.radius_m, c)
+        } else { return; }
+    } else {
+        // Find the body the camera is closest to (by distance to body surface)
+        let cam_abs = lunco_core::coords::get_absolute_pos_in_root_double_ghost_aware(
+            avatar_ent, cam_cell, cam_tf, &q_parents, &q_grids, &q_spatial_abs,
+        );
+        let mut best = None;
+        let mut best_dist = f64::MAX;
+        for (e, b, _) in q_bodies.iter() {
+            let d = (cam_abs.length() - b.radius_m).abs();
+            if d < best_dist { best_dist = d; best = Some((e, b.radius_m)); }
+        }
+        if let Some((e, r)) = best {
+            if let Ok((_, _, c)) = q_bodies.get(e) {
+                (e, r, c)
+            } else { return; }
+        } else { return; }
+    };
+
+    // Compute surface position
+    let lat_deg = if msg.args.len() > 1 { Some(msg.args[1]) } else { None };
+    let lon_deg = if msg.args.len() > 2 { Some(msg.args[2]) } else { Some(0.0) };
+
+    let (surface_local_pos, surface_normal) = if let Some(lat) = lat_deg {
+        // Specific coordinates
+        let lon = lon_deg.unwrap_or(0.0);
+        let lat_r = lat.to_radians();
+        let lon_r = lon.to_radians();
+        let normal = DVec3::new(
+            lat_r.cos() * lon_r.sin(),
+            lat_r.sin(),
+            lat_r.cos() * lon_r.cos(),
+        );
+        (normal * (body_radius + 50.0), normal)
+    } else {
+        // Project camera look direction onto body sphere
+        let cam_dir = -cam_tf.forward().as_dvec3();
+        let surface_normal = cam_dir.normalize();
+        (surface_normal * (body_radius + 50.0), surface_normal)
+    };
+
+    let surface_g = body_radius; // placeholder; actual GM/R² from GravityProvider
+
+    // Migrate avatar to Body entity
+    let spawn_pos = Vec3::new(surface_local_pos.x as f32, surface_local_pos.y as f32, surface_local_pos.z as f32);
+    let surface_rot = Quat::from_rotation_arc(DVec3::Y.as_vec3(), surface_normal.as_vec3());
+
+    commands.entity(avatar_ent)
+        .insert(Transform::from_translation(spawn_pos).with_rotation(surface_rot))
+        .insert(CellCoord::default())
+        .insert(GravityBody { body_entity })
+        .insert(FreeFlightCamera {
+            yaw: 0.0,
+            pitch: -0.2,
+            damping: None,
+        })
+        .remove::<OrbitCamera>()
+        .remove::<SpringArmCamera>()
+        .remove::<FrameBlend>();
+
+    // Re-parent to Body entity
+    commands.entity(body_entity).add_child(avatar_ent);
+
+    // Update LocalGravityField
+    field.body_entity = Some(body_entity);
+    field.local_up = surface_normal;
+    field.surface_g = surface_g;
+    field.up = surface_normal;
+
+    info!("Teleported to surface of body {:?} at {:?}", body_entity, surface_local_pos);
+}
+
+/// Leaves the surface and returns to orbit view.
+///
+/// Command: `LEAVE_SURFACE`
+/// Teleports camera to 3x body radius altitude and switches to OrbitCamera.
+fn on_leave_surface_command(
+    trigger: On<CommandMessage>,
+    mut commands: Commands,
+    q_avatar: Query<(Entity, &Transform, Option<&GravityBody>), With<Avatar>>,
+    q_bodies: Query<(Entity, &CelestialBody)>,
+    q_grids: Query<&Grid>,
+    q_parents: Query<&ChildOf>,
+    q_frames: Query<&lunco_celestial::CelestialReferenceFrame>,
+    mut field: ResMut<LocalGravityField>,
+) {
+    let msg = trigger.event();
+    if msg.name != "LEAVE_SURFACE" { return; }
+
+    let Some((avatar_ent, cam_tf, gravity_body)) = q_avatar.iter().next() else { return };
+
+    // Find the body we're leaving
+    let body_entity = if let Some(gb) = gravity_body {
+        gb.body_entity
+    } else {
+        // Try to find from current grid's CelestialReferenceFrame
+        let Some(cam_child_of) = q_parents.get(avatar_ent).ok() else { return; };
+        if let Ok(frame) = q_frames.get(cam_child_of.0) {
+            q_bodies.iter()
+                .find(|(_, b)| b.ephemeris_id == frame.ephemeris_id)
+                .map(|(e, _)| e)
+                .unwrap_or(Entity::PLACEHOLDER)
+        } else { return; }
+    };
+
+    let body_radius = if let Ok((_, body)) = q_bodies.get(body_entity) {
+        body.radius_m
+    } else { return; };
+
+    // Find the Body's Grid
+    let body_child_of = q_parents.get(body_entity).ok();
+    let body_grid = body_child_of.map(|c| c.0);
+
+    // Teleport to 3x body radius altitude
+    let altitude = body_radius * 3.0;
+    let orbit_pos_local = DVec3::new(0.0, altitude, altitude * 0.5);
+    let orbit_pos = Vec3::new(orbit_pos_local.x as f32, orbit_pos_local.y as f32, orbit_pos_local.z as f32);
+
+    // Re-parent to Grid (orbit frame)
+    if let Some(grid_entity) = body_grid {
+        if q_grids.contains(grid_entity) {
+            // Compute grid-local position
+            // Body is at Grid origin, so orbit_pos_local IS grid-local
+            let (new_cell, new_tf) = if let Ok(grid) = q_grids.get(grid_entity) {
+                grid.translation_to_grid(orbit_pos_local)
+            } else {
+                (CellCoord::default(), orbit_pos)
+            };
+
+            commands.entity(avatar_ent)
+                .insert(new_cell)
+                .insert(Transform::from_translation(new_tf).with_rotation(cam_tf.rotation))
+                .insert(OrbitCamera {
+                    target: body_entity,
+                    distance: altitude,
+                    yaw: 0.0,
+                    pitch: -0.3,
+                    damping: None,
+                    vertical_offset: 0.0,
+                })
+                .remove::<FreeFlightCamera>()
+                .remove::<SpringArmCamera>()
+                .remove::<FrameBlend>()
+                .remove::<GravityBody>();
+
+            commands.entity(grid_entity).add_child(avatar_ent);
+        }
+    }
+
+    // Clear gravity field
+    field.body_entity = None;
+    field.local_up = DVec3::Y;
+    field.surface_g = 0.0;
+    field.up = DVec3::Y;
+
+    info!("Left surface, returned to orbit around {:?}", body_entity);
 }

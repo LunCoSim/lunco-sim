@@ -1,6 +1,6 @@
 //! A standalone sandbox for rapid testing of ground mobility and physics.
 //!
-//! This binary bypasses the full celestial ephemeris system to provide a 
+//! This binary bypasses the full celestial ephemeris system to provide a
 //! stable, flat-ground environment for debugging rovers, actuators, and FSW.
 
 use bevy::prelude::*;
@@ -15,14 +15,14 @@ use lunco_mobility::{LunCoMobilityPlugin, Suspension};
 use lunco_robotics::{LunCoRoboticsPlugin, rover};
 use lunco_controller::LunCoControllerPlugin;
 use lunco_avatar::{LunCoAvatarPlugin, IntentAnalogState, FreeFlightCamera, SpringArmCamera, OrbitCamera, AdaptiveNearPlane, CameraScroll};
-use lunco_celestial::{BlueprintMaterial, BlueprintExtension};
+use lunco_celestial::{BlueprintMaterial, BlueprintExtension, Gravity, GravityPlugin};
 use lunco_core::{Vessel, architecture::CommandMessage};
 
 fn main() {
     App::new()
         .insert_resource(Time::<Fixed>::from_hz(60.0))
         .insert_resource(lunco_core::TimeWarpState { physics_enabled: true, ..default() })
-        .insert_resource(avian3d::prelude::Gravity(bevy::math::DVec3::NEG_Y * 9.81))
+        .insert_resource(Gravity::flat(9.81, bevy::math::DVec3::NEG_Y))
         .add_plugins(DefaultPlugins.build().disable::<TransformPlugin>())
         .add_plugins(BigSpaceDefaultPlugins.build().disable::<big_space::validation::BigSpaceValidationPlugin>())
         .add_plugins(LogDiagnosticsPlugin::default())
@@ -36,6 +36,7 @@ fn main() {
         .add_plugins(LunCoRoboticsPlugin)
         .add_plugins(LunCoControllerPlugin)
         .add_plugins(LunCoAvatarPlugin)
+        .add_plugins(GravityPlugin)
         .init_resource::<SandboxSettings>()
         .add_systems(Startup, setup_sandbox)
         .add_systems(Update, apply_sandbox_settings)
