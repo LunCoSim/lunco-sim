@@ -51,6 +51,18 @@ cd lunco-sim
 cargo run --release -p lunco-client --bin rover_sandbox
 ```
 
+### USD Rover Sandbox
+The USD-based rover sandbox loads rover definitions from declarative `.usda` files instead of
+spawning them procedurally. It includes both procedural joint-based rovers and USD raycast rovers
+with skid and Ackermann steering variants:
+
+```bash
+cargo run --release -p lunco-client --bin rover_sandbox_usd
+```
+
+See [USD System Documentation](docs/USD_SYSTEM.md) for the full architecture, entity layout,
+and how to add new rover variants.
+
 ---
 
 ## 🏗 Project Architecture

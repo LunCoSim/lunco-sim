@@ -1,3 +1,55 @@
+//! # LunCoSim USD → Simulation Mapping
+//!
+//! Detects USD simulation schemas (NVIDIA PhysX Vehicles) and maps them to LunCoSim
+//! simulation components. This is the **third** plugin in the USD processing pipeline,
+//! running after `UsdBevyPlugin` and alongside `UsdAvianPlugin`.
+//!
+//! ## Detected Schemas
+//!
+//! | USD Schema | LunCoSim Components | Description |
+//! |---|---|---|
+//! | `PhysxVehicleContextAPI` | `FlightSoftware`, `RoverVessel`, `Vessel` | Rover root entity |
+//! | `PhysxVehicleDriveSkidAPI` | `DifferentialDrive` | Skid steering |
+//! | `PhysxVehicleDrive4WAPI` | `AckermannSteer` | Ackermann steering |
+//! | `PhysxVehicleWheelAPI` | `WheelRaycast`, `RayCaster`, visual child | Raycast wheel |
+//!
+//! ## Wheel Entity Splitting
+//!
+//! USD defines each wheel as a **single entity** with a mesh and a rotation (90° Z for
+//! wheel orientation). However, LunCoSim's raycast wheels need two entities:
+//!
+//! 1. **Physics entity** — identity rotation so `RayCaster::new(Dir3::NEG_Y)` casts
+//!    straight down (local space). If rotated, rays go sideways and hit the chassis.
+//! 2. **Visual child entity** — 90° Z rotation + mesh so the cylinder renders as a
+//!    rolling wheel (not a flat pancake).
+//!
+//! The `process_usd_sim_prims` system performs this split at runtime:
+//!
+//! ```text
+//! USD Wheel Entity (has mesh + 90° Z rotation)
+//! ├── Before processing: single entity, mesh visible but rotated wrong for physics
+//! └── After processing:
+//!     ├── Physics entity: identity rotation, NO mesh, WheelRaycast + RayCaster
+//!     └── Visual child: 90° Z rotation, mesh, CellCoord (visible, correctly oriented)
+//! ```
+//!
+//! This matches the procedural `spawn_raycast_rover` pattern exactly.
+//!
+//! ## Raycast Exclusion Filter
+//!
+//! Wheel raycasters use `SpatialQueryFilter::from_excluded_entities([rover_entity])` so
+//! wheels don't hit their own chassis. Without this filter, downward rays immediately
+//! collide with the chassis collider, pushing the rover into the sky (jiggling bug).
+//!
+//! ## Why Deferred Processing?
+//!
+//! The `On<Add, UsdPrimPath>` observer fires when the entity is spawned, but the USD
+//! asset may not be loaded yet (async loading). The `process_usd_sim_prims` system runs
+//! in the `Update` schedule **after** `sync_usd_visuals` to ensure:
+//! 1. The USD asset is fully loaded
+//! 2. Meshes exist so we can split wheel entities into physics + visual
+//! 3. No duplicate processing or duplicate FSW ports
+
 use bevy::prelude::*;
 use bevy::math::DVec3;
 use avian3d::prelude::*;
@@ -14,12 +66,27 @@ use std::collections::HashMap;
 
 /// Plugin for mapping simulation-specific USD schemas (like NVIDIA PhysX Vehicles)
 /// to LunCo's optimized simulation models.
+///
+/// # Processing Order
+///
+/// The plugin registers three systems that run in the `Update` schedule:
+///
+/// 1. `process_usd_sim_prims` — maps schemas to components (runs after sync_usd_visuals)
+/// 2. `swap_raycast_to_joint` — converts raycast wheels to physical joint wheels
+/// 3. `try_wire_wheel` — connects wheel drive ports to FSW digital ports
+///
+/// The observer `on_add_usd_sim_prim` intentionally does minimal work — it only detects
+/// physics joints. All other processing is deferred to ensure assets are loaded first.
 pub struct UsdSimPlugin;
 
 impl Plugin for UsdSimPlugin {
     fn build(&self, app: &mut App) {
         app.add_observer(on_add_usd_sim_prim)
-           .add_systems(Update, (process_usd_sim_prims, swap_raycast_to_joint, try_wire_wheel).chain().after(lunco_usd_bevy::sync_usd_visuals));
+           .add_systems(Update, (
+               process_usd_sim_prims,
+               swap_raycast_to_joint,
+               try_wire_wheel,
+           ).chain().after(lunco_usd_bevy::sync_usd_visuals));
     }
 }
 
@@ -59,9 +126,25 @@ pub struct PendingWheelWiring {
 }
 
 /// Process USD prims for sim mapping AFTER their assets are loaded.
-/// Runs in Update, checking for prims that haven't been processed yet.
-/// This is needed because asset loading is async - the observer fires
-/// before the asset is ready, so we retry here.
+///
+/// This is the core system that maps USD schemas to LunCoSim components. It runs in the
+/// `Update` schedule **after** `sync_usd_visuals` to ensure meshes and transforms exist.
+///
+/// # What It Does
+///
+/// 1. **Detects `PhysxVehicleContextAPI`** → Creates `FlightSoftware` with 4 digital ports
+///    (`drive_left`, `drive_right`, `steering`, `brake`), plus `RoverVessel` and `Vessel`.
+/// 2. **Detects `PhysxVehicleDriveSkidAPI`** → Creates `DifferentialDrive` with port names.
+/// 3. **Detects `PhysxVehicleDrive4WAPI`** → Creates `AckermannSteer` with port names.
+/// 4. **Detects `PhysxVehicleWheelAPI`** → Splits the wheel entity into:
+///    - Physics entity: `WheelRaycast`, `RayCaster` (identity rotation, exclusion filter)
+///    - Visual child: mesh + 90° Z rotation for correct wheel rendering
+///
+/// # Why Not Just Use the Observer?
+///
+/// The observer fires when the entity is spawned, but the USD asset may not be loaded
+/// yet. This system retries every frame until the asset is available, then marks the
+/// entity with `UsdSimProcessed` to prevent re-processing.
 fn process_usd_sim_prims(
     mut commands: Commands,
     query: Query<(Entity, &UsdPrimPath, Option<&Transform>, Option<&Mesh3d>, Option<&MeshMaterial3d<StandardMaterial>>, Option<&ChildOf>), Without<UsdSimProcessed>>,
@@ -76,6 +159,7 @@ fn process_usd_sim_prims(
         let existing_tf = maybe_tf.cloned().unwrap_or_default();
 
         // 1. Detect PhysxVehicleContextAPI (The Rover Root)
+        // Creates FlightSoftware with 4 digital ports + RoverVessel + Vessel markers
         if has_api_schema(&mut reader, &sdf_path, "PhysxVehicleContextAPI") {
             info!("Intercepted PhysxVehicleContextAPI for {}, initializing Flight Software", prim_path.path);
 
@@ -138,34 +222,32 @@ fn process_usd_sim_prims(
 
         // 4. Detect PhysxVehicleWheelAPI (The Wheel Intercept)
         if let Some(radius) = reader.prim_attribute_value::<f32>(&sdf_path, "physxVehicleWheel:radius") {
-            // Skip if mesh doesn't exist yet — sync_usd_visuals may not have processed this prim.
-            // We'll retry next frame (not marking UsdSimProcessed).
+            // Skip if mesh doesn't exist yet — sync_usd_visuals may not have processed
+            // this prim. We'll retry next frame (not marking UsdSimProcessed).
             if maybe_mesh.is_none() {
                 debug!("Wheel {} has no mesh yet, skipping until next frame", prim_path.path);
                 continue;
             }
             info!("Intercepted PhysxVehicleWheelAPI for {}", prim_path.path);
 
+            // Create physical ports for drive and steering
             let p_drive = commands.spawn((PhysicalPort::default(), Name::new("PhysicalPort_Drive"))).id();
             let p_steer = commands.spawn((PhysicalPort::default(), Name::new("PhysicalPort_Steer"))).id();
 
             let index = reader.prim_attribute_value::<i32>(&sdf_path, "physxVehicleWheel:index").unwrap_or(0);
 
-            // Wire wheels to FSW ports
-            let _fsw_root = q_fsw.iter().find(|(path, _)| {
-                path.stage_handle == prim_path.stage_handle && prim_path.path.starts_with(&path.path)
-            });
-
+            // Mark for wiring — the try_wire_wheel system will connect ports once FSW exists
             commands.entity(entity).insert(PendingWheelWiring { index, p_drive, p_steer });
 
             let mut wheel = WheelRaycast {
                 wheel_radius: radius as f64,
-                visual_entity: Some(entity),
+                visual_entity: Some(entity), // Will be updated below after visual child is spawned
                 drive_port: p_drive,
                 steer_port: p_steer,
                 ..default()
             };
 
+            // Read suspension parameters from USD
             if let Some(rest_len) = reader.prim_attribute_value::<f32>(&sdf_path, "physxVehicleSuspension:restLength") {
                 wheel.rest_length = rest_len as f64;
             }
@@ -176,17 +258,18 @@ fn process_usd_sim_prims(
                 wheel.damping_c = d as f64;
             }
 
-            // CRITICAL: Split wheel entity into physics (no rotation) + visual (with rotation).
-            // The entity has rotation from USD (e.g., 90° Z for wheel alignment).
-            // RayCaster::new(Dir3::NEG_Y) uses LOCAL space direction.
-            // If entity is rotated, the ray direction gets rotated too → rays go sideways!
-            // Solution: Match procedural code - physics entity has identity rotation,
-            //           separate visual child has the rotation AND the mesh.
-
+            // --- Wheel Entity Splitting ---
+            //
+            // The USD file defines each wheel as a single entity with a mesh and a rotation
+            // (90° Z for wheel orientation). We need to split this into:
+            //
+            // 1. Physics entity: identity rotation (for correct raycasting), NO mesh
+            // 2. Visual child entity: 90° Z rotation + mesh (for correct rendering)
+            //
+            // This matches the procedural spawn_raycast_rover pattern exactly.
             let wheel_mesh = maybe_mesh.map(|m| m.clone());
             let wheel_rotation = existing_tf.rotation;
 
-            // Spawn visual child entity with rotation
             if wheel_mesh.is_some() && wheel_rotation != Quat::IDENTITY {
                 let visual_entity = commands.spawn((
                     Name::new(format!("{}_visual", prim_path.path.split('/').next_back().unwrap_or("wheel"))),
@@ -201,14 +284,15 @@ fn process_usd_sim_prims(
                     ViewVisibility::default(),
                     wheel_mesh.unwrap(),
                 )).id();
-                
+
                 // Add material if the physics entity had one
                 if let Some(mat) = maybe_mat.cloned() {
                     commands.entity(visual_entity).insert(mat);
                 }
-                
+
                 commands.entity(entity).add_child(visual_entity);
-                // Update WheelRaycast.visual_entity to point to the visual child
+                // CRITICAL: Update WheelRaycast.visual_entity to point to the visual child.
+                // The mobility system moves visual_entity to track suspension compression.
                 wheel.visual_entity = Some(visual_entity);
                 // Remove Mesh3d and material from physics entity to avoid duplicate rendering
                 commands.entity(entity).remove::<Mesh3d>();
@@ -240,6 +324,8 @@ fn process_usd_sim_prims(
                 wheel_tf,
             ));
 
+            // Remove any physics components that were added by the Avian plugin
+            // (wheels are raycast, not physical rigid bodies)
             commands.entity(entity)
                 .remove::<Collider>()
                 .remove::<RigidBody>()
@@ -254,20 +340,36 @@ fn process_usd_sim_prims(
 #[derive(Component)]
 struct UsdSimProcessed;
 
+/// Observer that fires when a USD prim entity is added.
+///
+/// **Intentionally minimal.** All processing is handled by `process_usd_sim_prims` in
+/// the `Update` schedule to ensure assets are loaded first. This observer exists only
+/// to satisfy the plugin structure — it does nothing.
 fn on_add_usd_sim_prim(
     _trigger: On<Add, UsdPrimPath>,
     _query: Query<(Entity, &UsdPrimPath)>,
     _stages: Res<Assets<UsdStageAsset>>,
     mut _commands: Commands,
 ) {
-    // Intentionally empty — all processing is handled by process_usd_sim_prims
-    // in the Update schedule, AFTER sync_usd_visuals creates meshes.
-    // This ensures:
+    // All processing is handled by process_usd_sim_prims in the Update schedule,
+    // AFTER sync_usd_visuals creates meshes. This ensures:
     // 1. Assets are fully loaded before processing
     // 2. Meshes exist so we can split wheel entities into physics + visual
     // 3. No duplicate processing or duplicate FSW ports
 }
 
+/// System that wires wheel drive/steer ports to FSW digital ports.
+///
+/// Runs every frame, checking for `PendingWheelWiring` markers. Once the FSW root entity
+/// exists (has `FlightSoftware`), it creates `Wire` entities connecting the wheel's
+/// physical ports to the appropriate digital ports.
+///
+/// # Wiring Rules
+///
+/// - **Left wheels** → `drive_left` digital port
+/// - **Right wheels** → `drive_right` digital port
+/// - **Front wheels** → `steering` digital port (for Ackermann)
+/// - **All wheels** → brake (handled separately)
 fn try_wire_wheel(
     q_pending: Query<(Entity, &UsdPrimPath, &PendingWheelWiring)>,
     q_fsw: Query<(&UsdPrimPath, &FlightSoftware)>,
@@ -305,6 +407,14 @@ fn try_wire_wheel(
     }
 }
 
+/// Converts raycast wheels to physical joint-based wheels.
+///
+/// This system watches for `PhysicalWheel` markers (created when a joint is detected
+/// in the USD file) and swaps the raycast wheel components for physical body components
+/// with a motor actuator.
+///
+/// This is used for joint-based rovers that use physical collision wheels instead of
+/// raycast suspension.
 fn swap_raycast_to_joint(
     q_physical: Query<(Entity, &WheelRaycast, &PhysicalWheel), Added<PhysicalWheel>>,
     mut commands: Commands,
@@ -318,7 +428,7 @@ fn swap_raycast_to_joint(
             .insert((
                 MotorActuator {
                     port_entity: wheel.drive_port,
-                    axis: DVec3::Y, 
+                    axis: DVec3::Y,
                 },
                 RigidBody::Dynamic,
                 Collider::cylinder(wheel.wheel_radius, wheel.wheel_radius * 0.5),
