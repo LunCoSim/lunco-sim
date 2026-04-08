@@ -104,9 +104,14 @@ fn setup_web_workbench(
             model_name: model_name.clone(),
             parameters: initial_params,
             inputs: initial_inputs,
+            paused: true, // Start paused; compile result will unpause
             ..default()
         },
     )).id();
+
+    // Select this entity so handle_modelica_responses populates plotted_variables
+    // on the initial compile result (is_new_model branch).
+    workbench_state.selected_entity = Some(entity);
 
     // Kick off initial compilation of the bundled model.
     let _ = channels.tx.send(lunco_modelica::ModelicaCommand::Compile {

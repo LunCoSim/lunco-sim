@@ -9,6 +9,34 @@
 use bevy::prelude::*;
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicPtr, Ordering};
+
+/// Static cell bridging JS file picker → Bevy system on wasm32.
+/// Set by `set_file_load_result` when user selects a .mo file.
+/// Read and cleared by `update_file_load_result` each frame.
+#[cfg(target_arch = "wasm32")]
+static FILE_LOAD_CELL: AtomicPtr<String> = AtomicPtr::new(std::ptr::null_mut());
+
+/// Called from JS when a .mo file is loaded via browser file picker.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn set_file_load_result(content: &str) {
+    let prev = FILE_LOAD_CELL.swap(Box::into_raw(Box::new(content.to_string())), Ordering::SeqCst);
+    if !prev.is_null() {
+        unsafe { drop(Box::from_raw(prev)); }
+    }
+}
+
+/// Consumes pending file load from browser file picker and updates editor buffer.
+/// Runs each frame on wasm32.
+#[cfg(target_arch = "wasm32")]
+pub fn update_file_load_result(mut state: ResMut<WorkbenchState>) {
+    let prev = FILE_LOAD_CELL.swap(std::ptr::null_mut(), Ordering::SeqCst);
+    if !prev.is_null() {
+        let content = unsafe { Box::from_raw(prev) };
+        state.editor_buffer = *content;
+    }
+}
 
 #[derive(Resource)]
 pub struct WorkbenchState {

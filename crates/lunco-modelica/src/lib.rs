@@ -132,6 +132,8 @@ impl Plugin for ModelicaPlugin {
             // Web: InlineWorker system processes commands synchronously each frame.
             // One command per frame to avoid stuttering the UI.
             app.add_systems(Update, inline_worker_process);
+            // Web: consume file picker results each frame.
+            app.add_systems(Update, ui::update_file_load_result);
         }
     }
 }
