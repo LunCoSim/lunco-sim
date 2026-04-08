@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rover Sandbox</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body { width: 100%; height: 100%; overflow: hidden; }
+        body { background: #1a1a1a; }
+        #bevy { width: 100%; height: 100%; display: block; }
+        #loading {
+            position: fixed; top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            color: #4CAF50; font-family: sans-serif; text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div id="loading">Loading Rover Sandbox...</div>
+    <canvas id="bevy"></canvas>
+    <script type="module">
+        import init from './pkg/rover_sandbox_web.js';
+
+        // Resize canvas to match window
+        function resize() {
+            const canvas = document.getElementById('bevy');
+            if (canvas) {
+                canvas.width = window.innerWidth;
+                canvas.height = window.innerHeight;
+            }
+        }
+
+        window.addEventListener('resize', resize);
+        resize();
+
+        init().then(() => {
+            document.getElementById('loading').remove();
+            resize();
+        });
+    </script>
+</body>
+</html>

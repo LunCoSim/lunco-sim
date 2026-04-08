@@ -141,7 +141,8 @@ impl CelestialEphemerisProvider {
                                             src.stop_time.replace(" ", "%20"),
                                             src.step_size.replace(" ", "%20")
                                         );
-                                        
+
+                                        #[cfg(not(target_arch = "wasm32"))]
                                         if let Ok(response) = ureq::get(&url).call() {
                                             if let Ok(text) = response.into_string() {
                                                 if let Some(start_idx) = text.find("$$SOE") {

@@ -1,9 +1,20 @@
 #!/bin/bash
 # ============================================================================
-# LunCoSim Modelica Workbench - Web Build Script
+# LunCoSim - Web Build Script
 # ============================================================================
-# Builds the Modelica Workbench for WebAssembly and serves it locally
-# Usage: ./scripts/build_web.sh [serve|build|help]
+# Builds LunCoSim applications for WebAssembly and serves them locally
+# Usage: ./scripts/build_web.sh [command] [binary]
+#
+# Commands:
+#   build <binary>    Build WASM and generate bindings
+#   serve <binary>    Start web server (requires built files)
+#   all <binary>      Build and serve
+#   clean             Remove build artifacts
+#   help              Show this help message
+#
+# Available binaries:
+#   modelica_workbench_web  - Modelica Workbench IDE
+#   rover_sandbox_web       - Rover Physics Sandbox
 # ============================================================================
 
 set -e
@@ -18,9 +29,6 @@ NC='\033[0m' # No Color
 # Directories
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-WEB_DIR="$PROJECT_DIR/crates/lunco-modelica/web"
-PKG_DIR="$WEB_DIR/pkg"
-TARGET_DIR="$PROJECT_DIR/target/wasm32-unknown-unknown/release"
 
 # Print colored message
 info() {
@@ -37,6 +45,24 @@ warn() {
 
 error() {
     echo -e "${RED}[ERROR]${NC} $1"
+}
+
+# Get binary config
+get_binary_config() {
+    local binary="$1"
+    case "$binary" in
+        modelica_workbench_web)
+            echo "lunco-modelica"
+            ;;
+        rover_sandbox_web)
+            echo "lunco-client"
+            ;;
+        *)
+            error "Unknown binary: $binary"
+            error "Available binaries: modelica_workbench_web, rover_sandbox_web"
+            exit 1
+            ;;
+    esac
 }
 
 # Check prerequisites
@@ -82,11 +108,15 @@ check_prerequisites() {
 
 # Build the WASM binary
 build_wasm() {
-    info "Building Modelica Workbench for WebAssembly..."
+    local binary="$1"
+    local crate="$2"
+    
+    info "Building $binary for WebAssembly..."
+    info "Crate: $crate"
     info "Target: wasm32-unknown-unknown"
     info "Profile: release"
     
-    cargo build --release --target wasm32-unknown-unknown --bin modelica_workbench_web
+    cargo build --release --target wasm32-unknown-unknown --bin "$binary" -p "$crate"
     
     if [ $? -eq 0 ]; then
         success "WASM binary built successfully"
@@ -98,13 +128,19 @@ build_wasm() {
 
 # Generate JavaScript bindings
 generate_bindings() {
+    local binary="$1"
+    local crate="$2"
+    local web_dir="$PROJECT_DIR/crates/$crate/web"
+    local pkg_dir="$web_dir/pkg"
+    local target_dir="$PROJECT_DIR/target/wasm32-unknown-unknown/release"
+    
     info "Generating JavaScript bindings..."
     
     # Create pkg directory if it doesn't exist
-    mkdir -p "$PKG_DIR"
+    mkdir -p "$pkg_dir"
     
-    wasm-bindgen "$TARGET_DIR/modelica_workbench_web.wasm" \
-        --out-dir "$PKG_DIR" \
+    wasm-bindgen "$target_dir/${binary}.wasm" \
+        --out-dir "$pkg_dir" \
         --target web
     
     if [ $? -eq 0 ]; then
@@ -115,56 +151,66 @@ generate_bindings() {
     fi
     
     # Show output size
-    WASM_SIZE=$(du -h "$PKG_DIR/modelica_workbench_web_bg.wasm" | cut -f1)
-    JS_SIZE=$(du -h "$PKG_DIR/modelica_workbench_web.js" | cut -f1)
+    WASM_SIZE=$(du -h "$pkg_dir/${binary}_bg.wasm" | cut -f1)
+    JS_SIZE=$(du -h "$pkg_dir/${binary}.js" | cut -f1)
     info "Output sizes: WASM=${WASM_SIZE}, JS=${JS_SIZE}"
 }
 
 # Serve the web application
 serve_web() {
-    info "Starting web server..."
-    info "Serving from: $WEB_DIR"
+    local binary="$1"
+    local crate="$2"
+    local web_dir="$PROJECT_DIR/crates/$crate/web"
+    local port="${3:-8080}"
     
-    cd "$WEB_DIR"
+    info "Starting web server for $binary..."
+    info "Serving from: $web_dir"
+    info "URL: http://localhost:$port"
+    
+    cd "$web_dir"
     
     if [ "$HTTP_SERVER_CMD" = "http-server" ]; then
         info "Using http-server (Node.js)"
-        info "URL: http://localhost:8080"
-        http-server -p 8080 -c-1 --cors
+        http-server -p "$port" -c-1 --cors
     else
         info "Using Python3 HTTP server"
-        info "URL: http://localhost:8080"
-        python3 -m http.server 8080
+        python3 -m http.server "$port"
     fi
 }
 
 # Clean build artifacts
 clean() {
     info "Cleaning build artifacts..."
-    rm -rf "$PKG_DIR"
-    rm -f "$TARGET_DIR/modelica_workbench_web.wasm"
-    rm -f "$TARGET_DIR/modelica_workbench_web.d"
+    rm -rf "$PROJECT_DIR/crates/lunco-modelica/web/pkg"
+    rm -rf "$PROJECT_DIR/crates/lunco-client/web/pkg"
+    rm -f "$PROJECT_DIR/target/wasm32-unknown-unknown/release/"*_web.wasm
+    rm -f "$PROJECT_DIR/target/wasm32-unknown-unknown/release/"*_web.d
     success "Cleaned"
 }
 
 # Show help
 show_help() {
-    echo "LunCoSim Modelica Workbench - Web Build Script"
+    echo "LunCoSim - Web Build Script"
     echo ""
-    echo "Usage: $0 [COMMAND]"
+    echo "Usage: $0 [COMMAND] [BINARY] [PORT]"
     echo ""
     echo "Commands:"
-    echo "  build       Build WASM and generate bindings (default)"
-    echo "  serve       Start web server (requires built files)"
-    echo "  all         Build and serve"
-    echo "  clean       Remove build artifacts"
-    echo "  help        Show this help message"
+    echo "  build <binary>    Build WASM and generate bindings"
+    echo "  serve <binary>    Start web server (requires built files)"
+    echo "  all <binary>      Build and serve"
+    echo "  clean             Remove build artifacts"
+    echo "  help              Show this help message"
+    echo ""
+    echo "Available binaries:"
+    echo "  modelica_workbench_web  - Modelica Workbench IDE (default port: 8080)"
+    echo "  rover_sandbox_web       - Rover Physics Sandbox (default port: 8081)"
     echo ""
     echo "Examples:"
-    echo "  $0 build          # Build only"
-    echo "  $0 serve          # Serve only"
-    echo "  $0 all            # Build and serve"
-    echo "  $0 clean          # Clean artifacts"
+    echo "  $0 build modelica_workbench_web    # Build Modelica Workbench"
+    echo "  $0 serve rover_sandbox_web         # Serve Rover Sandbox"
+    echo "  $0 all modelica_workbench_web      # Build and serve Modelica Workbench"
+    echo "  $0 all rover_sandbox_web 8082      # Build and serve on custom port"
+    echo "  $0 clean                           # Clean all artifacts"
     echo ""
     echo "Prerequisites:"
     echo "  - Rust with wasm32-unknown-unknown target"
@@ -174,24 +220,52 @@ show_help() {
 
 # Main execution
 main() {
-    local command="${1:-build}"
+    local command="${1:-help}"
+    local binary="${2:-}"
+    local port="${3:-}"
     
     case "$command" in
         build)
+            if [ -z "$binary" ]; then
+                error "Binary name required"
+                show_help
+                exit 1
+            fi
             check_prerequisites
-            build_wasm
-            generate_bindings
-            success "Build complete! Run '$0 serve' to start the server"
+            local crate=$(get_binary_config "$binary")
+            build_wasm "$binary" "$crate"
+            generate_bindings "$binary" "$crate"
+            success "Build complete! Run '$0 serve $binary' to start the server"
             ;;
         serve)
+            if [ -z "$binary" ]; then
+                error "Binary name required"
+                show_help
+                exit 1
+            fi
             check_prerequisites
-            serve_web
+            local crate=$(get_binary_config "$binary")
+            local default_port=8080
+            if [ "$binary" = "rover_sandbox_web" ]; then
+                default_port=8081
+            fi
+            serve_web "$binary" "$crate" "${port:-$default_port}"
             ;;
         all)
+            if [ -z "$binary" ]; then
+                error "Binary name required"
+                show_help
+                exit 1
+            fi
             check_prerequisites
-            build_wasm
-            generate_bindings
-            serve_web
+            local crate=$(get_binary_config "$binary")
+            local default_port=8080
+            if [ "$binary" = "rover_sandbox_web" ]; then
+                default_port=8081
+            fi
+            build_wasm "$binary" "$crate"
+            generate_bindings "$binary" "$crate"
+            serve_web "$binary" "$crate" "${port:-$default_port}"
             ;;
         clean)
             clean

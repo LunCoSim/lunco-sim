@@ -8,6 +8,7 @@ extern/
 
 # WebAssembly build artifacts
 crates/lunco-modelica/web/pkg/
+crates/lunco-client/web/pkg/
 
 # IDE/Editor
 .idea/
