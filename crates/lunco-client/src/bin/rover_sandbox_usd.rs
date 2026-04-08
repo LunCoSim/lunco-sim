@@ -20,7 +20,6 @@ use lunco_controller::LunCoControllerPlugin;
 use lunco_avatar::{LunCoAvatarPlugin, IntentAnalogState, FreeFlightCamera, SpringArmCamera, OrbitCamera, AdaptiveNearPlane, CameraScroll};
 use lunco_celestial::{BlueprintMaterial, BlueprintExtension};
 use lunco_core::{Vessel, architecture::CommandMessage};
-use lunco_robotics::rover;
 
 /// Marker for the sandbox scene entity.
 #[derive(Component)]
@@ -123,8 +122,6 @@ fn setup_sandbox(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
     mut blueprint_materials: ResMut<Assets<BlueprintMaterial>>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     let big_space_root = commands.spawn(BigSpace::default()).id();
     let grid = commands.spawn((
@@ -181,13 +178,17 @@ fn setup_sandbox(
         Name::new("Sun"),
     )).set_parent_in_place(grid);
 
-    // --- Load environment from USD (ground plane + ramp) ---
-    let env_handle = asset_server.load("scenes/sandbox/sandbox_scene.usda");
+    // --- Load scene from USD (ground + ramp + ALL rovers) ---
+    // The scene file references rover definitions from external .usda files
+    // with position overrides. The UsdComposer flattens everything into
+    // a single stage, then sync_usd_visuals spawns entities for all prims.
+    let scene_handle = asset_server.load("scenes/sandbox/sandbox_scene.usda");
+    info!("Loading sandbox scene from USD");
     commands.spawn((
-        Name::new("SandboxEnvironment"),
+        Name::new("SandboxScene"),
         SandboxScene,
         UsdPrimPath {
-            stage_handle: env_handle,
+            stage_handle: scene_handle,
             path: "/SandboxScene".to_string(),
         },
         Visibility::Visible,
@@ -196,67 +197,6 @@ fn setup_sandbox(
         Transform::default(),
         CellCoord::default(),
     )).set_parent_in_place(grid);
-
-    // --- Spawn 4 Rovers matching rover_sandbox ---
-    // 2 Joint-based (procedural) + 2 Raycast (USD)
-    let rovers_root = commands.spawn((
-        Transform::from_xyz(0.0, 0.0, 0.0),
-        GlobalTransform::default(),
-        CellCoord::default(),
-        Visibility::default(),
-        Name::new("Rovers Root"),
-    )).set_parent_in_place(grid).id();
-
-    // Joint-based rovers (procedural - matching rover_sandbox exactly)
-    rover::spawn_joint_rover(
-        &mut commands,
-        &mut meshes,
-        &mut materials,
-        rovers_root,
-        Vec3::new(-15.0, 5.0, -10.0),
-        "Joint_Skid",
-        Color::srgb(0.8, 0.2, 0.2),
-        rover::SteeringType::Skid,
-    );
-
-    rover::spawn_joint_rover(
-        &mut commands,
-        &mut meshes,
-        &mut materials,
-        rovers_root,
-        Vec3::new(-15.0, 5.0, 10.0),
-        "Joint_Ackermann",
-        Color::srgb(0.2, 0.8, 0.2),
-        rover::SteeringType::Ackermann,
-    );
-
-    // Raycast rovers from USD (matching rover_sandbox positions/colors)
-    let usd_rover_files = [
-        "vessels/rovers/sandbox_rover_1.usda",     // Red - Skid
-        "vessels/rovers/sandbox_rover_ackermann.usda", // Yellow - Ackermann
-    ];
-    let usd_positions = [
-        Vec3::new(15.0, 5.0, -10.0),
-        Vec3::new(15.0, 5.0, 10.0),
-    ];
-
-    for i in 0..2 {
-        let handle = asset_server.load(usd_rover_files[i]);
-        info!("Spawning USD rover {} from {} at {:?}", i+1, usd_rover_files[i], usd_positions[i]);
-        commands.spawn((
-            Name::new(format!("USD_Rover_{}", i + 1)),
-            UsdPrimPath {
-                stage_handle: handle,
-                path: "/SandboxRover".to_string(),
-            },
-            Transform::from_translation(usd_positions[i]),
-            ChildOf(rovers_root),
-            Visibility::Visible,
-            InheritedVisibility::default(),
-            ViewVisibility::default(),
-            CellCoord::default(),
-        ));
-    }
 
     // --- Initialize the Avatar (Camera) ---
     commands.spawn((

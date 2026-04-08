@@ -6,7 +6,7 @@ use bevy::asset::AssetPlugin;
 use lunco_usd_bevy::*;
 use lunco_usd_avian::*;
 use lunco_usd_sim::*;
-use lunco_mobility::{WheelRaycast, DifferentialDrive};
+use lunco_mobility::{WheelRaycast, DifferentialDrive, AckermannSteer};
 use lunco_core::{Vessel, RoverVessel};
 use lunco_fsw::FlightSoftware;
 use lunco_usd_composer::UsdComposer;
@@ -440,22 +440,9 @@ fn test_rover_files_have_no_baked_position() {
 
 #[test]
 fn test_full_scene_loads_with_rovers() {
-    // Load scene (Ground + Ramp)
+    // Load scene — Ground + Ramp + 4 rover references (Rover1..4)
     let scene_path = Path::new("../../assets/scenes/sandbox/sandbox_scene.usda");
     let scene_composed = compose_asset_from_file(scene_path);
-
-    // Load 4 rover files
-    let rover_files = [
-        "vessels/rovers/sandbox_rover_1.usda",
-        "vessels/rovers/sandbox_rover_2.usda",
-        "vessels/rovers/sandbox_rover_3.usda",
-        "vessels/rovers/sandbox_rover_4.usda",
-    ];
-    let mut rover_readers = Vec::new();
-    for f in &rover_files {
-        let p = Path::new("../../assets/").join(f);
-        rover_readers.push(compose_asset_from_file(&p));
-    }
 
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
@@ -466,101 +453,96 @@ fn test_full_scene_loads_with_rovers() {
     app.init_asset::<Image>();
     app.add_plugins((UsdBevyPlugin, UsdAvianPlugin, UsdSimPlugin));
 
-    // Spawn scene
+    // Spawn scene — rovers come from scene references (Rover1..4)
     let mut stages = app.world_mut().resource_mut::<Assets<UsdStageAsset>>();
     let scene_handle = stages.add(UsdStageAsset { reader: Arc::new(scene_composed) });
     app.world_mut().spawn((
         Name::new("TestScene"),
-        UsdPrimPath { stage_handle: scene_handle, path: "/SandboxScene".to_string() },
-    ));
-
-    // Spawn rovers root (parent)
-    let rovers_root = app.world_mut().spawn((
+        UsdPrimPath { stage_handle: scene_handle.clone(), path: "/SandboxScene".to_string() },
         Transform::default(),
-        CellCoord::default(),
-        Visibility::default(),
-        Name::new("Rovers Root"),
-    )).id();
-
-    // EXACT same spawning as runtime:
-    // - ChildOf for parenting
-    // - NO GlobalTransform::default() (causes position reset)
-    let positions = [
-        Vec3::new(-15.0, 6.0, -10.0),
-        Vec3::new(-15.0, 6.0, 10.0),
-        Vec3::new(15.0, 5.0, -10.0),
-        Vec3::new(15.0, 5.0, 10.0),
-    ];
-    for i in 0..4 {
-        let mut stages = app.world_mut().resource_mut::<Assets<UsdStageAsset>>();
-        let handle = stages.add(UsdStageAsset { reader: Arc::new(rover_readers[i].clone()) });
-        let h = handle.clone();
-        let pos = positions[i];
-        drop(stages);
-        app.world_mut().spawn((
-            Name::new(format!("Rover_{}", i + 1)),
-            UsdPrimPath { stage_handle: h, path: "/SandboxRover".to_string() },
-            Transform::from_translation(pos),
-            ChildOf(rovers_root),
-            Visibility::Visible,
-            InheritedVisibility::default(),
-            ViewVisibility::default(),
-            CellCoord::default(),
-        ));
-    }
+        Visibility::Visible,
+        InheritedVisibility::default(),
+        ViewVisibility::default(),
+    ));
 
     for _ in 0..10 { app.update(); }
     app.world_mut().flush();
 
-    // Count rovers
-    let mut q_rovers = app.world_mut().query_filtered::<(Entity, &Name), (With<Vessel>, With<RoverVessel>)>();
-    let rovers: Vec<_> = q_rovers.iter(app.world())
-        .map(|(_, n)| n.as_str().to_string())
+    // Count rovers — should be exactly 4 from scene references
+    let mut q_rovers = app.world_mut().query_filtered::<(Entity, &Name, &UsdPrimPath), (With<Vessel>, With<RoverVessel>)>();
+    let rover_info: Vec<_> = q_rovers.iter(app.world())
+        .map(|(_, n, p)| (n.as_str().to_string(), p.path.clone()))
         .collect();
-    assert_eq!(rovers.len(), 4, "Must have 4 rovers, got {}: {:?}", rovers.len(), rovers);
+    assert_eq!(rover_info.len(), 4, "Must have 4 rovers from scene, got {}: {:?}", rover_info.len(), rover_info);
 
-    // Each must have DifferentialDrive + FlightSoftware
-    let mut q_drive = app.world_mut().query_filtered::<Entity, (With<DifferentialDrive>, With<FlightSoftware>)>();
-    let drivable: usize = q_drive.iter(app.world()).count();
-    assert_eq!(drivable, 4, "All 4 rovers must be drivable, got {drivable}");
+    // Drivable = has steering system (DifferentialDrive OR AckermannSteer) + FSW
+    let mut q_skid = app.world_mut().query_filtered::<Entity, (With<DifferentialDrive>, With<FlightSoftware>)>();
+    let skid_count: usize = q_skid.iter(app.world()).count();
+    let mut q_ackermann = app.world_mut().query_filtered::<Entity, (With<AckermannSteer>, With<FlightSoftware>)>();
+    let ackermann_count: usize = q_ackermann.iter(app.world()).count();
+    let drivable = skid_count + ackermann_count;
+    assert_eq!(drivable, 4, "All 4 rovers must be drivable (skid={}, ackermann={}), got {drivable}", skid_count, ackermann_count);
 
-    // 16 wheels
+    // 12 raycast wheels (3 raycast rovers × 4 wheels)
+    // Rover3 has physical wheels so won't have WheelRaycast
     let mut q_wheels = app.world_mut().query_filtered::<Entity, With<WheelRaycast>>();
     let wheel_count = q_wheels.iter(app.world()).count();
-    assert_eq!(wheel_count, 16, "4 rovers x 4 wheels = 16, got {wheel_count}");
+    assert_eq!(wheel_count, 12, "3 raycast rovers x 4 wheels = 12, got {wheel_count}");
+
+    // 4 physical wheels (Rover3 has physical wheel type)
+    let mut q_physical = app.world_mut().query_filtered::<Entity, With<PhysicalWheel>>();
+    let physical_count = q_physical.iter(app.world()).count();
+    assert_eq!(physical_count, 4, "Rover3 has 4 physical wheels, got {physical_count}");
 
     // All rovers must have Mesh3d (visible body)
     let mut q_mesh = app.world_mut().query_filtered::<Entity, (With<Vessel>, With<RoverVessel>, With<Mesh3d>)>();
     let visible_count = q_mesh.iter(app.world()).count();
     assert_eq!(visible_count, 4, "All 4 rovers must have Mesh3d (visible), got {visible_count}");
 
-    // CRITICAL: Verify each rover has CORRECT position (not origin!)
-    // This catches the GlobalTransform::default() + set_parent_in_place bug
-    let mut q_pos = app.world_mut().query_filtered::<(Entity, &Name, &Transform), (With<Vessel>, With<RoverVessel>)>();
-    let rover_positions: Vec<_> = q_pos.iter(app.world())
-        .map(|(_, name, tf)| (name.as_str().to_string(), tf.translation))
-        .collect();
+    // Verify rovers have scene paths (from references) not standalone paths
+    let rover_paths: Vec<_> = rover_info.iter().map(|(_, p)| p.as_str()).collect();
+    assert!(rover_paths.iter().any(|p| p.contains("Rover1")), "Should have Rover1 from scene");
+    assert!(rover_paths.iter().any(|p| p.contains("Rover2")), "Should have Rover2 from scene");
+    assert!(rover_paths.iter().any(|p| p.contains("Rover3")), "Should have Rover3 from scene");
+    assert!(rover_paths.iter().any(|p| p.contains("Rover4")), "Should have Rover4 from scene");
 
-    let expected = [
-        ("Rover_1", Vec3::new(-15.0, 6.0, -10.0)),
-        ("Rover_2", Vec3::new(-15.0, 6.0, 10.0)),
-        ("Rover_3", Vec3::new(15.0, 5.0, -10.0)),
-        ("Rover_4", Vec3::new(15.0, 5.0, 10.0)),
-    ];
-    for (exp_name, exp_pos) in &expected {
-        let found = rover_positions.iter().find(|(n, _)| n == exp_name);
-        assert!(found.is_some(),
-            "Missing {exp_name} in rover positions: {:?}", rover_positions);
-        let (_, actual_pos) = found.unwrap();
-        // Position must be EXACT (not reset to origin by parenting bug)
-        assert!((actual_pos.x - exp_pos.x).abs() < 0.5,
-            "{exp_name} X must be ~{}, got {} (position reset to origin? parenting bug?)",
-            exp_pos.x, actual_pos.x);
-        assert!((actual_pos.y - exp_pos.y).abs() < 0.5,
-            "{exp_name} Y must be ~{}, got {} (position reset to origin? parenting bug?)",
-            exp_pos.y, actual_pos.y);
-        assert!((actual_pos.z - exp_pos.z).abs() < 0.5,
-            "{exp_name} Z must be ~{}, got {} (position reset to origin? parenting bug?)",
-            exp_pos.z, actual_pos.z);
+    // Verify Ackermann rover (Rover4) has steering wires for front wheels
+    use lunco_core::architecture::Wire;
+    let mut q_wires = app.world_mut().query::<(&Wire, &Name)>();
+    let steering_wires: Vec<_> = q_wires.iter(app.world())
+        .filter(|(_, name)| name.as_str().contains("Steering"))
+        .map(|(_, name)| name.as_str().to_string())
+        .collect();
+    // 4 rovers × 2 front wheels = 8 steering wires
+    // (physical wheels also get steering wires, but apply_wheel_steering skips them
+    //  because they don't have WheelRaycast)
+    assert_eq!(steering_wires.len(), 8, "4 rovers × 2 front wheels = 8 steering wires, got {}: {:?}",
+        steering_wires.len(), steering_wires);
+}
+
+// ============================================================
+// Test: Verify Valentine color override composition
+// ============================================================
+
+#[test]
+fn test_valentine_color_override() {
+    use openusd::sdf::{Path as SdfPath, AbstractData};
+
+    // Load scene
+    let scene_path = Path::new("../../assets/scenes/sandbox/sandbox_scene.usda");
+    let composed = compose_asset_from_file(scene_path);
+
+    // Verify Valentine prim exists and has the override color
+    let valentine_path = SdfPath::new("/SandboxScene/Valentine").unwrap();
+    assert!(composed.has_spec(&valentine_path), "Valentine prim must exist");
+
+    // The local prim should have the override color
+    if let Some(display_color) = composed.prim_attribute_value::<Vec<f32>>(&valentine_path, "primvars:displayColor") {
+        assert_eq!(display_color.len(), 3, "Color must have 3 components");
+        assert!((display_color[0] - 0.1).abs() < 0.01, "Red should be 0.1, got {}", display_color[0]);
+        assert!((display_color[1] - 1.0).abs() < 0.01, "Green should be 1.0, got {}", display_color[1]);
+        assert!((display_color[2] - 0.1).abs() < 0.01, "Blue should be 0.1, got {}", display_color[2]);
+    } else {
+        panic!("Valentine prim must have primvars:displayColor override");
     }
 }

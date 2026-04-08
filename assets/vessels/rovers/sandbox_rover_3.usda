@@ -17,6 +17,9 @@ def Cube "SandboxRover" (
     double depth = 3.5
     color3f primvars:displayColor = (0.2, 0.2, 0.8)
 
+    # Wheel type: "raycast" (suspension simulation) or "physical" (rigid body collision)
+    string lunco:wheelType = "raycast"
+
     bool physics:rigidBodyEnabled = true
     float physics:mass = 1000.0
     bool physics:collisionEnabled = true

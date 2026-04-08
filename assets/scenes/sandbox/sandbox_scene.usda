@@ -5,6 +5,7 @@
 
 def Xform "SandboxScene"
 {
+    # --- Ground plane (static, non-rigid blueprint grid surface) ---
     def Cube "Ground"
     {
         double width = 4000.0
@@ -23,6 +24,7 @@ def Xform "SandboxScene"
         float physics:friction = 1.0
     }
 
+    # --- Ramp obstacle (static, angled blueprint grid surface) ---
     def Cube "Ramp"
     {
         double width = 60.0
@@ -43,7 +45,71 @@ def Xform "SandboxScene"
         float physics:friction = 1.0
     }
 
-    # 4 rovers loaded from sandbox_rover.usda via Rust spawning
-    # (see rover_sandbox_usd.rs setup_sandbox)
-    # The scene provides Ground + Ramp only.
+    def Cube "Ramp1"
+    {
+        double width = 60.0
+        double height = 2.0
+        double depth = 80.0
+        double3 xformOp:translate = (25, 4, 80)
+        double3 xformOp:rotateXYZ = (0, 0, 17.1887)
+        string lunco:material = "BlueprintGrid"
+        double lunco:gridMajorSpacing = 1.0
+        double lunco:gridMinorSpacing = 0.5
+        double lunco:gridMajorWidth = 1.0
+        double lunco:gridMinorWidth = 0.5
+        double lunco:gridMinorFade = 0.15
+        double3 lunco:gridSurfaceColor = (0.25, 0.52, 0.18)
+        color3f primvars:displayColor = (0.25, 0.22, 0.18)
+        bool physics:rigidBodyEnabled = false
+        bool physics:collisionEnabled = true
+        float physics:friction = 1.0
+    }
+
+
+
+    # --- Rovers (loaded from external .usda files with position overrides) ---
+    # Each rover references an external rover definition and overrides position.
+
+    # Rover 1: Red skid-steer, raycast wheels — right side, near ramp
+    def Cube "Rover1" (
+        prepend references = @/vessels/rovers/sandbox_rover_1.usda@</SandboxRover>
+    )
+    {
+        double3 xformOp:translate = (15.0, 5.0, -10.0)
+    }
+
+    # Rover 2: Green skid-steer, raycast wheels — right side
+    def Cube "Rover2" (
+        prepend references = @/vessels/rovers/sandbox_rover_2.usda@</SandboxRover>
+    )
+    {
+        double3 xformOp:translate = (15.0, 5.0, 10.0)
+    }
+
+     # Valentine: Green skid-steer, raycast wheels — right side, color override
+    def Cube "Valentine" (
+        prepend references = @/vessels/rovers/sandbox_rover_2.usda@</SandboxRover>
+    )
+    {
+        color3f primvars:displayColor = (0.1, 1, 1)
+        double3 xformOp:translate = (25.0, 50.0, 20.0)
+    }
+
+    # Rover 3: Blue skid-steer, physical wheels — left side, far from ramp
+    def Cube "Rover3" (
+        prepend references = @/vessels/rovers/sandbox_rover_3.usda@</SandboxRover>
+    )
+    {
+        double3 xformOp:translate = (-15.0, 5.0, -10.0)
+        # Override wheel type to physical for this rover
+        string lunco:wheelType = "physical"
+    }
+
+    # Rover 4: Yellow Ackermann steer, raycast wheels — left side
+    def Cube "Rover4" (
+        prepend references = @/vessels/rovers/sandbox_rover_ackermann.usda@</SandboxRover>
+    )
+    {
+        double3 xformOp:translate = (-15.0, 5.0, 10.0)
+    }
 }
