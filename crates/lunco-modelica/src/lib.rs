@@ -70,6 +70,10 @@ impl ModelicaCompiler {
 
 pub mod ui;
 
+/// Bundled Modelica models for web deployment.
+/// Available on all targets, but primarily used for wasm builds.
+pub mod models;
+
 /// Bevy plugin for Modelica integration.
 ///
 /// Sets up the background worker thread, channel resources, and response systems.
@@ -87,9 +91,17 @@ impl Plugin for ModelicaPlugin {
             }
         }
 
-        thread::spawn(move || {
-            modelica_worker(rx_cmd, tx_res);
-        });
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            thread::spawn(move || {
+                modelica_worker(rx_cmd, tx_res);
+            });
+        }
+
+        #[allow(unused_variables)]
+        let (tx_cmd, rx_cmd) = (tx_cmd, rx_cmd);
+        #[allow(unused_variables)]
+        let (tx_res, rx_res) = (tx_res, rx_res);
 
         app.insert_resource(ModelicaChannels { tx: tx_cmd, rx: rx_res })
            .register_type::<ModelicaModel>()
