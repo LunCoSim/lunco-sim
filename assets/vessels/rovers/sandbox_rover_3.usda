@@ -15,7 +15,7 @@ def Cube "SandboxRover" (
     double width = 2.0
     double height = 0.3
     double depth = 3.5
-    color3f primvars:displayColor = (0.5, 0.5, 0.5)
+    color3f primvars:displayColor = (0.2, 0.2, 0.8)
 
     bool physics:rigidBodyEnabled = true
     float physics:mass = 1000.0
@@ -30,8 +30,10 @@ def Cube "SandboxRover" (
     {
         double radius = 0.4
         double height = 0.3
+        # Position relative to chassis center: (-1, -0.15, 1.225)
         double3 xformOp:translate = (-1.0, -0.15, 1.225)
         float3 xformOp:rotateXYZ = (0, 0, 90)
+        color3f primvars:displayColor = (1.0, 0.0, 0.0)
 
         int physxVehicleWheel:index = 0
         float physxVehicleWheel:radius = 0.4
@@ -51,6 +53,7 @@ def Cube "SandboxRover" (
         double height = 0.3
         double3 xformOp:translate = (1.0, -0.15, 1.225)
         float3 xformOp:rotateXYZ = (0, 0, 90)
+        color3f primvars:displayColor = (1.0, 0.0, 0.0)
 
         int physxVehicleWheel:index = 1
         float physxVehicleWheel:radius = 0.4
@@ -70,6 +73,7 @@ def Cube "SandboxRover" (
         double height = 0.3
         double3 xformOp:translate = (-1.0, -0.15, -1.225)
         float3 xformOp:rotateXYZ = (0, 0, 90)
+        color3f primvars:displayColor = (0.0, 0.0, 1.0)
 
         int physxVehicleWheel:index = 2
         float physxVehicleWheel:radius = 0.4
@@ -89,6 +93,7 @@ def Cube "SandboxRover" (
         double height = 0.3
         double3 xformOp:translate = (1.0, -0.15, -1.225)
         float3 xformOp:rotateXYZ = (0, 0, 90)
+        color3f primvars:displayColor = (0.0, 0.0, 1.0)
 
         int physxVehicleWheel:index = 3
         float physxVehicleWheel:radius = 0.4

@@ -1,7 +1,8 @@
 //! A standalone sandbox for rapid testing of ground mobility and physics.
 //!
-//! This binary loads the entire scene from a single USD file.
-//! All positions, colors, terrain, and rovers are declared in USD.
+//! Loads the entire scene from USD **synchronously** during Startup,
+//! so all entities (rover chassis + wheels) exist before physics runs.
+//! This matches the original rover_sandbox behavior exactly.
 
 use bevy::prelude::*;
 use bevy::asset::AssetPlugin;
@@ -9,7 +10,7 @@ use bevy::diagnostic::{FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin};
 use bevy::pbr::wireframe::WireframePlugin;
 use bevy_egui::{egui, EguiContexts, EguiPlugin, EguiPrimaryContextPass};
 use big_space::prelude::*;
-use avian3d::prelude::{PhysicsPlugins};
+use avian3d::prelude::PhysicsPlugins;
 use leafwing_input_manager::prelude::*;
 
 use lunco_mobility::{LunCoMobilityPlugin, Suspension};
@@ -20,13 +21,13 @@ use lunco_avatar::{LunCoAvatarPlugin, IntentAnalogState, FreeFlightCamera, Sprin
 use lunco_celestial::{BlueprintMaterial, BlueprintExtension};
 use lunco_core::{Vessel, architecture::CommandMessage};
 
-/// Marker applied to entities whose material has been swapped to BlueprintMaterial.
-#[derive(Component)]
-struct BlueprintMaterialApplied;
-
 /// Marker for the sandbox scene entity.
 #[derive(Component)]
 struct SandboxScene;
+
+/// Marker applied to entities whose material has been swapped to BlueprintMaterial.
+#[derive(Component)]
+struct BlueprintMaterialApplied;
 
 fn main() {
     App::new()
@@ -92,7 +93,6 @@ impl Default for SandboxSettings {
     }
 }
 
-/// Tunable blueprint grid parameters exposed in the sandbox UI.
 #[derive(Resource)]
 struct BlueprintGridSettings {
     material_handle: Handle<BlueprintMaterial>,
@@ -134,7 +134,6 @@ fn setup_sandbox(
         Name::new("Sandbox_Grid"),
     )).set_parent_in_place(big_space_root).id();
 
-    // --- Blueprint material for ground plane ---
     let blueprint_mat = BlueprintExtension {
         high_color: LinearRgba::new(0.5, 0.5, 0.5, 1.0),
         low_color: LinearRgba::new(0.1, 0.1, 0.1, 1.0),
@@ -179,14 +178,13 @@ fn setup_sandbox(
         Name::new("Sun"),
     )).set_parent_in_place(grid);
 
-    // --- Load the entire scene from a single USD file ---
-    // Contains: ground, ramp, and 4 rover instances with positions + colors.
-    let scene_handle = asset_server.load("scenes/sandbox/sandbox_scene.usda");
+    // --- Load environment from USD (ground plane + ramp) ---
+    let env_handle = asset_server.load("scenes/sandbox/sandbox_scene.usda");
     commands.spawn((
-        Name::new("SandboxScene"),
+        Name::new("SandboxEnvironment"),
         SandboxScene,
         UsdPrimPath {
-            stage_handle: scene_handle,
+            stage_handle: env_handle,
             path: "/SandboxScene".to_string(),
         },
         Visibility::Visible,
@@ -195,6 +193,46 @@ fn setup_sandbox(
         Transform::default(),
         CellCoord::default(),
     )).set_parent_in_place(grid);
+
+    // --- Spawn 4 Rovers from USD files ---
+    let rovers_root = commands.spawn((
+        Transform::from_xyz(0.0, 0.0, 0.0),
+        GlobalTransform::default(),
+        CellCoord::default(),
+        Visibility::default(),
+        Name::new("Rovers Root"),
+    )).set_parent_in_place(grid).id();
+
+    let rover_files = [
+        "vessels/rovers/sandbox_rover_1.usda",
+        "vessels/rovers/sandbox_rover_2.usda",
+        "vessels/rovers/sandbox_rover_3.usda",
+        "vessels/rovers/sandbox_rover_4.usda",
+    ];
+    let positions = [
+        Vec3::new(-15.0, 6.0, -10.0),
+        Vec3::new(-15.0, 6.0, 10.0),
+        Vec3::new(15.0, 5.0, -10.0),
+        Vec3::new(15.0, 5.0, 10.0),
+    ];
+
+    for i in 0..4 {
+        let handle = asset_server.load(rover_files[i]);
+        info!("Spawning rover {} from {} at {:?}", i+1, rover_files[i], positions[i]);
+        commands.spawn((
+            Name::new(format!("Rover_{}", i + 1)),
+            UsdPrimPath {
+                stage_handle: handle,
+                path: "/SandboxRover".to_string(),
+            },
+            Transform::from_translation(positions[i]),
+            ChildOf(rovers_root),
+            Visibility::Visible,
+            InheritedVisibility::default(),
+            ViewVisibility::default(),
+            CellCoord::default(),
+        ));
+    }
 
     // --- Initialize the Avatar (Camera) ---
     commands.spawn((
@@ -216,11 +254,6 @@ fn setup_sandbox(
     )).set_parent_in_place(grid);
 }
 
-/// Applies per-rover chassis colors read from USD.
-///
-/// Each rover instance declares `double3 lunco:chassisColor` as an override
-/// on the referenced prim. This system reads the color from the USD stage
-/// and applies it to the Chassis entity's material.
 fn sandbox_ui_system(
     mut contexts: EguiContexts,
     mut settings: ResMut<SandboxSettings>,
@@ -334,9 +367,6 @@ fn apply_sandbox_settings(
 }
 
 /// Applies BlueprintMaterial to USD terrain entities (Ground and Ramp).
-///
-/// Material is declared in USD via `string lunco:material = "BlueprintGrid"`
-/// along with grid parameters.
 fn apply_blueprint_to_usd_terrain(
     mut commands: Commands,
     q_all_meshes: Query<(Entity, &Name, &UsdPrimPath), (With<Mesh3d>, Without<BlueprintMaterialApplied>)>,

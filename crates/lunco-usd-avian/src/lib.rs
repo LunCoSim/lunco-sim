@@ -10,7 +10,106 @@ pub struct UsdAvianPlugin;
 impl Plugin for UsdAvianPlugin {
     fn build(&self, app: &mut App) {
         app.add_observer(on_add_usd_prim)
-            .add_systems(Update, build_usd_physics_joints);
+            .add_systems(Update, (process_usd_avian_prims, build_usd_physics_joints).chain());
+    }
+}
+
+/// Marker to indicate a prim has been processed by the avian physics system.
+#[derive(Component)]
+struct UsdAvianProcessed;
+
+/// Process USD prims for physics mapping AFTER their assets are loaded.
+/// This is needed because asset loading is async - the observer fires
+/// before the asset is ready, so we retry here.
+fn process_usd_avian_prims(
+    mut commands: Commands,
+    query: Query<(Entity, &UsdPrimPath), Without<UsdAvianProcessed>>,
+    stages: Res<Assets<UsdStageAsset>>,
+) {
+    for (entity, prim_path) in query.iter() {
+        let Some(stage) = stages.get(&prim_path.stage_handle) else { continue; };
+        let Ok(sdf_path) = SdfPath::new(&prim_path.path) else { continue; };
+
+        let reader = (*stage.reader).clone();
+
+        // Skip wheel prims — the sim plugin handles those (raycast wheels don't need physical bodies)
+        if reader.prim_attribute_value::<f32>(&sdf_path, "physxVehicleWheel:radius").is_some() {
+            commands.entity(entity).insert(UsdAvianProcessed);
+            continue;
+        }
+
+        // --- Standard Physics Prim Mapping ---
+
+        // Map RigidBody
+        if let Some(true) = reader.prim_attribute_value::<bool>(&sdf_path, "physics:rigidBodyEnabled") {
+            commands.entity(entity).insert(RigidBody::Dynamic);
+        }
+
+        // Map Mass
+        if let Some(mass) = reader.prim_attribute_value::<f32>(&sdf_path, "physics:mass") {
+            commands.entity(entity).insert(Mass(mass));
+        } else if let Some(mass) = reader.prim_attribute_value::<f64>(&sdf_path, "physics:mass") {
+            commands.entity(entity).insert(Mass(mass as f32));
+        }
+
+        // Map Damping (matching original procedural rovers: linear=0.5, angular=2.0)
+        if let Some(damping) = reader.prim_attribute_value::<f32>(&sdf_path, "physics:linearDamping") {
+            commands.entity(entity).insert(LinearDamping(damping as f64));
+        }
+        if let Some(damping) = reader.prim_attribute_value::<f32>(&sdf_path, "physics:angularDamping") {
+            commands.entity(entity).insert(AngularDamping(damping as f64));
+        }
+
+        // Map Collider
+        let collision_enabled = reader.prim_attribute_value::<bool>(&sdf_path, "physics:collisionEnabled").unwrap_or(true);
+
+        if collision_enabled {
+            if let Ok(val) = reader.get(&sdf_path, "typeName") {
+                if let Value::Token(ty) = &*val {
+                    match ty.as_str() {
+                        "Cube" => {
+                            if let (Some(width), Some(height), Some(depth)) = (
+                                reader.prim_attribute_value::<f64>(&sdf_path, "width"),
+                                reader.prim_attribute_value::<f64>(&sdf_path, "height"),
+                                reader.prim_attribute_value::<f64>(&sdf_path, "depth"),
+                            ) {
+                                // Collider::cuboid takes FULL dimensions (matches procedural: Collider::cuboid(2.0, 0.3, 3.5))
+                                // Half-extents are computed internally: hx=1.0, hy=0.15, hz=1.75
+                                commands.entity(entity).insert(Collider::cuboid(width, height, depth));
+                            }
+                        }
+                        "Sphere" => {
+                            if let Some(radius) = reader.prim_attribute_value::<f64>(&sdf_path, "radius") {
+                                commands.entity(entity).insert(Collider::sphere(radius));
+                            }
+                        }
+                        "Cylinder" => {
+                            if let (Some(radius), Some(height)) = (
+                                reader.prim_attribute_value::<f64>(&sdf_path, "radius"),
+                                reader.prim_attribute_value::<f64>(&sdf_path, "height"),
+                            ) {
+                                commands.entity(entity).insert(Collider::cylinder(radius, height));
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+
+        // Map Friction (for static and dynamic bodies)
+        if let Some(friction) = reader.prim_attribute_value::<f32>(&sdf_path, "physics:friction") {
+            commands.entity(entity).insert(Friction::new(friction.into()));
+        }
+
+        // Map Static bodies: when physics:rigidBodyEnabled is explicitly false but collisionEnabled is true
+        if let Some(false) = reader.prim_attribute_value::<bool>(&sdf_path, "physics:rigidBodyEnabled") {
+            if collision_enabled {
+                commands.entity(entity).insert(RigidBody::Static);
+            }
+        }
+
+        commands.entity(entity).insert(UsdAvianProcessed);
     }
 }
 
@@ -47,11 +146,15 @@ fn on_add_usd_prim(
 
     let reader = (*stage.reader).clone();
 
-    // --- Detect Physics Joint Prims (PhysicsPrismaticJoint, PhysicsRevoluteJoint, etc.) ---
+    // Skip wheel prims — the sim plugin handles those (raycast wheels don't need physical bodies)
+    if reader.prim_attribute_value::<f32>(&sdf_path, "physxVehicleWheel:radius").is_some() {
+        return;
+    }
+
+    // --- Detect Physics Joint Prims ---
     if let Ok(val) = reader.get(&sdf_path, "typeName") {
         if let Value::Token(type_name) = &*val {
             if type_name.starts_with("Physics") && type_name.ends_with("Joint") {
-                // Read rel:physics:body0 and rel:physics:body1 from child relationship specs
                 let body0 = read_rel_target(&reader, &sdf_path, "physics:body0");
                 let body1 = read_rel_target(&reader, &sdf_path, "physics:body1");
 
@@ -82,72 +185,10 @@ fn on_add_usd_prim(
                 }
             }
         }
-    } else {
-        // No typeName — this prim may be a relationship or attribute spec, skip.
     }
 
-    // --- Standard Physics Prim Mapping ---
-
-    // Map RigidBody
-    if let Some(true) = reader.prim_attribute_value::<bool>(&sdf_path, "physics:rigidBodyEnabled") {
-        commands.entity(entity).insert(RigidBody::Dynamic);
-    }
-
-    // Map Mass
-    if let Some(mass) = reader.prim_attribute_value::<f32>(&sdf_path, "physics:mass") {
-        commands.entity(entity).insert(Mass(mass));
-    } else if let Some(mass) = reader.prim_attribute_value::<f64>(&sdf_path, "physics:mass") {
-        commands.entity(entity).insert(Mass(mass as f32));
-    }
-
-    // Map Collider
-    let collision_enabled = reader.prim_attribute_value::<bool>(&sdf_path, "physics:collisionEnabled").unwrap_or(true);
-
-    if collision_enabled {
-        if let Ok(val) = reader.get(&sdf_path, "typeName") {
-            if let Value::Token(ty) = &*val {
-                match ty.as_str() {
-                    "Cube" => {
-                        if let (Some(width), Some(height), Some(depth)) = (
-                            reader.prim_attribute_value::<f64>(&sdf_path, "width"),
-                            reader.prim_attribute_value::<f64>(&sdf_path, "height"),
-                            reader.prim_attribute_value::<f64>(&sdf_path, "depth"),
-                        ) {
-                            // Collider::cuboid expects half-extents
-                            commands.entity(entity).insert(Collider::cuboid(width * 0.5, height * 0.5, depth * 0.5));
-                        }
-                    }
-                    "Sphere" => {
-                        if let Some(radius) = reader.prim_attribute_value::<f64>(&sdf_path, "radius") {
-                            commands.entity(entity).insert(Collider::sphere(radius));
-                        }
-                    }
-                    "Cylinder" => {
-                        if let (Some(radius), Some(height)) = (
-                            reader.prim_attribute_value::<f64>(&sdf_path, "radius"),
-                            reader.prim_attribute_value::<f64>(&sdf_path, "height"),
-                        ) {
-                            commands.entity(entity).insert(Collider::cylinder(radius, height));
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        }
-    }
-
-    // Map Friction (for static and dynamic bodies)
-    if let Some(friction) = reader.prim_attribute_value::<f32>(&sdf_path, "physics:friction") {
-        commands.entity(entity).insert(Friction::new(friction.into()));
-    }
-
-    // Map Static bodies: when physics:rigidBodyEnabled is explicitly false but collisionEnabled is true,
-    // the prim should be a static collider (doesn't move but participates in collision detection).
-    if let Some(false) = reader.prim_attribute_value::<bool>(&sdf_path, "physics:rigidBodyEnabled") {
-        if collision_enabled {
-            commands.entity(entity).insert(RigidBody::Static);
-        }
-    }
+    // Note: Physics mapping (RigidBody, Mass, Collider, Damping) is handled by
+    // process_usd_avian_prims system to ensure assets are fully loaded first.
 }
 
 /// Reads a relationship target from a child relationship spec.

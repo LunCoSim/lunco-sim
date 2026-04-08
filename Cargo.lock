@@ -5680,7 +5680,9 @@ version = "0.1.0"
 dependencies = [
  "avian3d",
  "bevy",
+ "big_space",
  "lunco-core",
+ "lunco-fsw",
  "lunco-mobility",
  "lunco-usd-avian",
  "lunco-usd-bevy",
@@ -5710,6 +5712,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bevy",
+ "big_space",
  "futures-lite",
  "lunco-usd-composer",
  "openusd",
@@ -5733,6 +5736,7 @@ version = "0.1.0"
 dependencies = [
  "avian3d",
  "bevy",
+ "big_space",
  "lunco-core",
  "lunco-fsw",
  "lunco-hardware",

@@ -4,6 +4,28 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use anyhow::{bail, Result};
 
+/// Find the assets root by walking up from the starting directory
+/// until we find a directory containing an "assets" subdirectory.
+fn find_assets_root(start: &Path) -> PathBuf {
+    // Make absolute so ancestor walking works correctly
+    let abs_start = if start.is_absolute() {
+        start.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map(|cwd| cwd.join(start))
+            .unwrap_or_else(|_| start.to_path_buf())
+    };
+    // Walk up from the starting directory to find the assets root
+    for ancestor in abs_start.ancestors() {
+        let assets = ancestor.join("assets");
+        if assets.exists() && assets.is_dir() {
+            return assets;
+        }
+    }
+    // Fallback: use the original start
+    start.to_path_buf()
+}
+
 /// The `UsdComposer` is responsible for high-level USD operations like
 /// composition, reference resolution, and stage flattening.
 ///
@@ -17,13 +39,16 @@ impl UsdComposer {
     pub fn flatten(reader: &TextReader, base_dir: &Path) -> Result<TextReader> {
         let mut data_map: HashMap<sdf::Path, sdf::Spec> = reader.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
         let mut processed_references = HashSet::new();
-        Self::flatten_recursive(&mut data_map, base_dir, &mut processed_references)?;
+        // Find the actual assets root for resolving "/"-prefixed absolute USD paths
+        let usd_root = find_assets_root(base_dir);
+        Self::flatten_recursive(&mut data_map, &usd_root, base_dir, &mut processed_references)?;
         Ok(TextReader::from_data(data_map))
     }
 
     fn flatten_recursive(
         data_map: &mut HashMap<sdf::Path, sdf::Spec>,
-        base_dir: &Path,
+        asset_root: &Path,
+        current_dir: &Path,
         processed: &mut HashSet<PathBuf>
     ) -> Result<()> {
         // Collect all prim paths and prepare merges
@@ -46,19 +71,23 @@ impl UsdComposer {
                             (data_map.clone(), reference.prim_path.clone())
                         } else {
                             // EXTERNAL REFERENCE
-                            // Strip leading '/' to treat as relative to base_dir
-                            let asset_path = reference.asset_path.strip_prefix('/').unwrap_or(&reference.asset_path);
-                            let ref_path = base_dir.join(asset_path);
+                            // "/"-prefixed paths are absolute from USD assets root
+                            let ref_path = if reference.asset_path.starts_with('/') {
+                                let asset_path = reference.asset_path.strip_prefix('/').unwrap();
+                                asset_root.join(asset_path)
+                            } else {
+                                current_dir.join(&reference.asset_path)
+                            };
 
                             let sub_reader = TextReader::read(&ref_path)?;
-                            let ref_base_dir = ref_path.parent().unwrap_or(Path::new("."));
+                            let ref_current_dir = ref_path.parent().unwrap_or(Path::new("."));
                             let mut sub_data: HashMap<sdf::Path, sdf::Spec> = sub_reader.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
 
                             // Only recurse into referenced file's own refs if not already processed
                             // (prevents infinite loops from circular references)
                             if !processed.contains(&ref_path) {
                                 processed.insert(ref_path.clone());
-                                Self::flatten_recursive(&mut sub_data, ref_base_dir, processed)?;
+                                Self::flatten_recursive(&mut sub_data, asset_root, ref_current_dir, processed)?;
                             }
 
                             let root = if reference.prim_path.is_empty() {

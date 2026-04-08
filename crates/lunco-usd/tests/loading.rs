@@ -70,16 +70,25 @@ def Xform "Rover" {
         },
     )).id();
 
+    // Create mesh handle first
+    let wheel_mesh_handle: Handle<Mesh> = {
+        let mut meshes = app.world_mut().resource_mut::<Assets<Mesh>>();
+        meshes.add(Cylinder::new(0.4, 0.3))
+    };
+
     let wheel = app.world_mut().spawn((
         Name::new("Wheel"),
         UsdPrimPath {
             stage_handle: stage_handle.clone(),
             path: "/Rover/Wheel".to_string(),
         },
+        // Mesh3d is required for wheel processing (matches real pipeline behavior)
+        Mesh3d(wheel_mesh_handle),
     )).id();
 
     // 4. Run systems to process mapping
-    // Observers trigger on Add
+    // Observers trigger on Add, then Update systems run
+    app.update();
     app.update(); 
 
     // 5. Verify Chassis (Basic Physics)

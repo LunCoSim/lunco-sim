@@ -3,6 +3,7 @@ use bevy::asset::{AssetLoader, LoadContext, io::Reader};
 use openusd::usda::TextReader;
 use openusd::sdf::{AbstractData, Path as SdfPath, Value};
 use lunco_usd_composer::UsdComposer;
+use big_space::prelude::CellCoord;
 use std::sync::Arc;
 
 pub struct UsdBevyPlugin;
@@ -46,13 +47,8 @@ impl AssetLoader for UsdLoader {
 
         // Resolve external references
         let reader = if let Some(parent) = load_context.path().path().parent() {
-            let asset_root = std::path::Path::new("assets");
-            // Use asset root as base_dir for reference resolution
-            let base_dir = if asset_root.exists() { 
-                asset_root.to_path_buf() 
-            } else { 
-                parent.to_path_buf() 
-            };
+            // Pass the file's parent directory - the composer will find the assets root from here
+            let base_dir = parent.to_path_buf();
             UsdComposer::flatten(&reader, &base_dir).map_err(|e| anyhow::anyhow!("USD Composition Error: {}", e))?
         } else {
             reader
@@ -105,7 +101,7 @@ pub fn sync_usd_visuals(
             if let Value::Bool(active) = &*val {
                 if !*active {
                     commands.entity(entity).insert(UsdVisualSynced);
-                    return;
+                    continue;
                 }
             }
         }
@@ -129,7 +125,8 @@ pub fn sync_usd_visuals(
                     reader.prim_attribute_value::<f64>(&sdf_path, "height"),
                     reader.prim_attribute_value::<f64>(&sdf_path, "depth"),
                 ) {
-                    Some(meshes.add(Cuboid::new(width as f32 * 0.5, height as f32 * 0.5, depth as f32 * 0.5)))
+                    // Bevy Cuboid::new takes full dimensions
+                    Some(meshes.add(Cuboid::new(width as f32, height as f32, depth as f32)))
                 } else { None }
             }
             Some("Sphere") => {
@@ -186,12 +183,24 @@ pub fn sync_usd_visuals(
             ViewVisibility::default(),
         ));
 
-        // Spawn children
+        // Spawn children with their transforms pre-populated so physics sees them correctly
         for child_path in reader.prim_children(&sdf_path) {
             if let Ok(val) = reader.get(&child_path, "active") {
                 if let Value::Bool(active) = &*val {
                     if !*active { continue; }
                 }
+            }
+
+            // Pre-read child transform
+            let mut child_tf = Transform::default();
+            if let Some(v) = get_attribute_as_vec3(&reader, &child_path, "xformOp:translate") {
+                child_tf.translation = v;
+            }
+            if let Some(v) = get_attribute_as_vec3(&reader, &child_path, "xformOp:rotateXYZ") {
+                let rx = v.x.to_radians();
+                let ry = v.y.to_radians();
+                let rz = v.z.to_radians();
+                child_tf.rotation = Quat::from_euler(EulerRot::XYZ, rx, ry, rz);
             }
 
             let child_entity = commands.spawn((
@@ -200,6 +209,8 @@ pub fn sync_usd_visuals(
                     stage_handle: prim_path.stage_handle.clone(),
                     path: child_path.to_string(),
                 },
+                child_tf,
+                CellCoord::default(),
                 Visibility::Inherited,
                 InheritedVisibility::default(),
                 ViewVisibility::default(),

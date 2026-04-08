@@ -13,3 +13,4 @@ lunco-fsw = { path = "../lunco-fsw" }
 lunco-hardware = { path = "../lunco-hardware" }
 lunco-robotics = { path = "../lunco-robotics" }
 avian3d = { workspace = true }
+big_space = { workspace = true }

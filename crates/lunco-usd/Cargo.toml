@@ -15,5 +15,7 @@ tracing = "0.1"
 
 [dev-dependencies]
 avian3d = { workspace = true }
+big_space = { workspace = true }
 lunco-mobility = { path = "../lunco-mobility" }
 lunco-usd-composer = { path = "../lunco-usd-composer" }
+lunco-fsw = { path = "../lunco-fsw" }
