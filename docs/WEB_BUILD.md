@@ -46,9 +46,27 @@ rustup target add wasm32-unknown-unknown
 
 # Install wasm-bindgen CLI
 cargo install wasm-bindgen-cli
+
+# Optional: Node.js http-server (recommended, fallback to python3)
+npm install -g http-server
 ```
 
-## Build
+## Quick Build (Recommended)
+
+A convenience script is provided for Linux/macOS:
+
+```bash
+# Build WASM and generate bindings
+./scripts/build_web.sh build
+
+# Serve locally
+./scripts/build_web.sh serve
+
+# Or build and serve in one command
+./scripts/build_web.sh all
+```
+
+## Manual Build
 
 ```bash
 # Compile to WebAssembly
@@ -68,7 +86,14 @@ wasm-bindgen target/wasm32-unknown-unknown/release/modelica_workbench_web.wasm \
 ## Run
 
 ```bash
-# Serve the web files (HTTP server required for WASM MIME types)
+# Option 1: Using the build script
+./scripts/build_web.sh serve
+
+# Option 2: Using http-server (recommended)
+cd crates/lunco-modelica/web
+http-server -p 8080 -c-1 --cors
+
+# Option 3: Using Python (fallback)
 cd crates/lunco-modelica/web
 python3 -m http.server 8080
 
@@ -98,6 +123,8 @@ python3 -m http.server 8080
 ## File Structure
 
 ```
+scripts/
+└── build_web.sh              # Automated build script (Linux/macOS)
 crates/lunco-modelica/
 ├── web/
 │   ├── index.html          # Minimal HTML with canvas + JS loader
