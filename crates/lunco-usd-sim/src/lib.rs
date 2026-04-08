@@ -56,7 +56,7 @@
 use bevy::prelude::*;
 use bevy::math::DVec3;
 use avian3d::prelude::*;
-use big_space::prelude::CellCoord;
+use big_space::prelude::{CellCoord, FloatingOrigin, Grid};
 pub use lunco_usd_bevy::{UsdPrimPath, UsdStageAsset};
 use openusd::sdf::{Path as SdfPath, AbstractData, Value};
 use openusd::usda::TextReader;
@@ -65,6 +65,11 @@ use lunco_fsw::FlightSoftware;
 use lunco_core::architecture::{DigitalPort, PhysicalPort, Wire};
 use lunco_hardware::MotorActuator;
 use lunco_core::RoverVessel;
+use lunco_avatar::{FreeFlightCamera, OrbitCamera, SpringArmCamera, AdaptiveNearPlane};
+use lunco_core::Avatar;
+use lunco_core::architecture::IntentAnalogState;
+use leafwing_input_manager::prelude::ActionState;
+use lunco_controller::get_avatar_input_map;
 use std::collections::HashMap;
 
 /// Determines how wheels interact with terrain.
@@ -182,6 +187,7 @@ pub struct PendingWheelWiring {
 fn process_usd_sim_prims(
     mut commands: Commands,
     query: Query<(Entity, &UsdPrimPath, Option<&Transform>, Option<&Mesh3d>, Option<&MeshMaterial3d<StandardMaterial>>, Option<&ChildOf>), Without<UsdSimProcessed>>,
+    q_grids: Query<Entity, With<Grid>>,
     stages: Res<Assets<UsdStageAsset>>,
 ) {
     // --- Pass 1: Detect all chassis types first ---
@@ -207,6 +213,103 @@ fn process_usd_sim_prims(
 
         let mut reader = (*stage.reader).clone();
         let existing_tf = maybe_tf.cloned().unwrap_or_default();
+
+        // 0. Detect Avatar prim
+        if reader.prim_attribute_value::<String>(&sdf_path, "lunco:avatar").is_some() {
+            info!("Detected Avatar prim at {}, setting up camera", prim_path.path);
+            let camera_mode = reader.prim_attribute_value::<String>(&sdf_path, "lunco:cameraMode")
+                .unwrap_or_else(|| "freeflight".to_string());
+            let yaw = reader.prim_attribute_value::<f32>(&sdf_path, "lunco:cameraYaw")
+                .unwrap_or(std::f32::consts::PI * 0.8);
+            let pitch = reader.prim_attribute_value::<f32>(&sdf_path, "lunco:cameraPitch")
+                .unwrap_or(-0.3);
+
+            // Avatar position from USD transform
+            let avatar_tf = Transform {
+                translation: existing_tf.translation,
+                rotation: existing_tf.rotation,
+                scale: existing_tf.scale,
+            };
+
+            // Build camera based on mode, then parent to Grid for FloatingOrigin
+            match camera_mode.as_str() {
+                "freeflight" => {
+                    commands.entity(entity).insert((
+                        Camera3d::default(),
+                        FreeFlightCamera { yaw, pitch, damping: None },
+                        AdaptiveNearPlane,
+                        avatar_tf,
+                        FloatingOrigin,
+                        CellCoord::default(),
+                        Avatar,
+                        IntentAnalogState::default(),
+                        ActionState::<lunco_core::UserIntent>::default(),
+                        get_avatar_input_map(),
+                    ));
+                }
+                "orbit" => {
+                    commands.entity(entity).insert((
+                        Camera3d::default(),
+                        OrbitCamera {
+                            target: Entity::PLACEHOLDER,
+                            distance: 30.0,
+                            yaw,
+                            pitch,
+                            damping: None,
+                            vertical_offset: 0.0,
+                        },
+                        AdaptiveNearPlane,
+                        avatar_tf,
+                        FloatingOrigin,
+                        CellCoord::default(),
+                        Avatar,
+                        IntentAnalogState::default(),
+                        ActionState::<lunco_core::UserIntent>::default(),
+                        get_avatar_input_map(),
+                    ));
+                }
+                "springarm" => {
+                    commands.entity(entity).insert((
+                        Camera3d::default(),
+                        SpringArmCamera {
+                            target: Entity::PLACEHOLDER,
+                            distance: 15.0,
+                            yaw,
+                            pitch,
+                            damping: None,
+                            vertical_offset: 2.0,
+                        },
+                        AdaptiveNearPlane,
+                        avatar_tf,
+                        FloatingOrigin,
+                        CellCoord::default(),
+                        Avatar,
+                        IntentAnalogState::default(),
+                        ActionState::<lunco_core::UserIntent>::default(),
+                        get_avatar_input_map(),
+                    ));
+                }
+                _ => {
+                    warn!("Unknown camera mode '{}' for avatar at {}, using freeflight", camera_mode, prim_path.path);
+                    commands.entity(entity).insert((
+                        Camera3d::default(),
+                        FreeFlightCamera { yaw, pitch, damping: None },
+                        AdaptiveNearPlane,
+                        avatar_tf,
+                        FloatingOrigin,
+                        CellCoord::default(),
+                        Avatar,
+                        IntentAnalogState::default(),
+                        ActionState::<lunco_core::UserIntent>::default(),
+                        get_avatar_input_map(),
+                    ));
+                }
+            }
+            // Parent to Grid so FloatingOrigin works
+            if let Some(g) = q_grids.iter().next() {
+                commands.entity(entity).insert(ChildOf(g));
+            }
+        }
 
         // 1. Detect PhysxVehicleContextAPI (The Rover Root)
         // Creates FlightSoftware with 4 digital ports + RoverVessel + Vessel markers

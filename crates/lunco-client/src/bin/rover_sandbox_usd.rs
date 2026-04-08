@@ -19,7 +19,8 @@ use lunco_usd_bevy::sync_usd_visuals;
 use lunco_controller::LunCoControllerPlugin;
 use lunco_avatar::{LunCoAvatarPlugin, IntentAnalogState, FreeFlightCamera, SpringArmCamera, OrbitCamera, AdaptiveNearPlane, CameraScroll};
 use lunco_celestial::{BlueprintMaterial, BlueprintExtension};
-use lunco_core::{Vessel, architecture::CommandMessage};
+use lunco_core::{Vessel, architecture::CommandMessage, Avatar};
+use big_space::prelude::Grid;
 
 /// Marker for the sandbox scene entity.
 #[derive(Component)]
@@ -54,6 +55,8 @@ fn main() {
         .add_systems(Startup, setup_sandbox)
         .add_systems(Update, (apply_sandbox_settings, apply_blueprint_to_usd_terrain.after(sync_usd_visuals)))
         .add_systems(Update, apply_blueprint_grid_settings)
+        // Spawn a default avatar if the USD scene didn't define one
+        .add_systems(Update, spawn_fallback_avatar.after(sync_usd_visuals))
         .add_systems(PreUpdate, global_transform_propagation_system)
         .add_systems(PostUpdate, (
             global_transform_propagation_system,
@@ -197,8 +200,26 @@ fn setup_sandbox(
         Transform::default(),
         CellCoord::default(),
     )).set_parent_in_place(grid);
+}
 
-    // --- Initialize the Avatar (Camera) ---
+/// Spawns a default avatar if no USD-defined Avatar was loaded.
+///
+/// This acts as a fallback when the scene file doesn't contain an Avatar prim,
+/// ensuring the user always has a controllable camera.
+fn spawn_fallback_avatar(
+    q_avatars: Query<Entity, With<Avatar>>,
+    q_grids: Query<Entity, With<Grid>>,
+    mut commands: Commands,
+    mut done: Local<bool>,
+) {
+    if *done { return; }
+    if q_avatars.iter().next().is_some() {
+        *done = true;
+        return;
+    }
+    let Some(grid) = q_grids.iter().next() else { return; };
+
+    info!("No USD Avatar found, spawning fallback FreeFlightCamera");
     commands.spawn((
         Camera3d::default(),
         FreeFlightCamera {
@@ -207,15 +228,17 @@ fn setup_sandbox(
             damping: None,
         },
         AdaptiveNearPlane,
-        Transform::from_translation(bevy::math::Vec3::new(-30.0, 15.0, -20.0)),
+        Transform::from_translation(Vec3::new(-30.0, 15.0, -20.0)),
         GlobalTransform::default(),
         FloatingOrigin,
         CellCoord::default(),
-        lunco_core::Avatar,
+        Avatar,
         IntentAnalogState::default(),
         ActionState::<lunco_core::UserIntent>::default(),
         lunco_controller::get_avatar_input_map(),
-    )).set_parent_in_place(grid);
+        ChildOf(grid),
+    ));
+    *done = true;
 }
 
 fn sandbox_ui_system(

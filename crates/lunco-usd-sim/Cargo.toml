@@ -11,6 +11,9 @@ lunco-mobility = { path = "../lunco-mobility" }
 lunco-core = { path = "../lunco-core" }
 lunco-fsw = { path = "../lunco-fsw" }
 lunco-hardware = { path = "../lunco-hardware" }
+lunco-avatar = { path = "../lunco-avatar" }
+lunco-controller = { path = "../lunco-controller" }
 lunco-robotics = { path = "../lunco-robotics" }
 avian3d = { workspace = true }
 big_space = { workspace = true }
+leafwing-input-manager = { workspace = true }

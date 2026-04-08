@@ -65,6 +65,18 @@ def Xform "SandboxScene"
         float physics:friction = 1.0
     }
 
+    # --- Avatar (Camera) ---
+    # Position, camera mode, and orientation defined in USD.
+    # lunco:cameraMode = "freeflight" | "orbit" | "springarm"
+    def Xform "Avatar"
+    {
+        string lunco:avatar = "true"
+        string lunco:cameraMode = "freeflight"
+        float lunco:cameraYaw = 2.51327412287  # 144 degrees (PI * 0.8)
+        float lunco:cameraPitch = -0.3
+        double3 xformOp:translate = (-30.0, 15.0, -20.0)
+    }
+
     # --- Rovers ---
     # Only 2 base rover files exist. Each instance below references a base file
     # and overrides color, position, and optionally wheel type.
