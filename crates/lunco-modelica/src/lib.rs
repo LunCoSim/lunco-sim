@@ -33,12 +33,40 @@
 //! reported as "Solver Error" in the logs rather than crashing the application.
 
 use bevy::prelude::*;
-use rumoca::Compiler;
+use rumoca_session::{Session, SessionConfig};
 use rumoca_sim::{StepperOptions, SimStepper};
 use std::collections::{HashMap, VecDeque};
 use crossbeam_channel::{unbounded, Sender, Receiver};
 use std::thread;
 use regex::Regex;
+
+/// Simple wrapper around rumoca-session for compiling Modelica models.
+///
+/// Replaces the `rumoca::Compiler` API with a session-based approach.
+pub struct ModelicaCompiler {
+    session: Session,
+}
+
+impl ModelicaCompiler {
+    /// Create a new ModelicaCompiler instance.
+    pub fn new() -> Self {
+        Self {
+            session: Session::new(SessionConfig::default()),
+        }
+    }
+
+    /// Compile Modelica source string and return DAE result.
+    ///
+    /// # Arguments
+    /// * `model_name` - Name of the model to compile
+    /// * `source` - Modelica source code
+    /// * `filename` - Virtual filename for error reporting
+    pub fn compile_str(&mut self, model_name: &str, source: &str, filename: &str) -> Result<rumoca_session::compile::CompilationResult, String> {
+        self.session.update_document(filename, source);
+        self.session.compile_model(model_name)
+            .map_err(|e| format!("{:?}", e))
+    }
+}
 
 pub mod ui;
 
@@ -162,7 +190,7 @@ struct CachedModel {
     #[allow(dead_code)]
     source: String,
     #[allow(dead_code)]
-    dae: rumoca::CompilationResult,
+    dae: rumoca_session::compile::CompilationResult,
 }
 
 /// Helper to build a ModelicaResult with defaults.
@@ -215,7 +243,8 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                             let mut opts = StepperOptions::default();
                             opts.atol = 1e-3; opts.rtol = 1e-3;
                             // Recompile stripped source to get a fresh stepper with input slots
-                            match Compiler::new().model(&cached.model_name).compile_str(&stripped_source, "model.mo") {
+                            let mut compiler = ModelicaCompiler::new();
+                            match compiler.compile_str(&cached.model_name, &stripped_source, "model.mo") {
                                 Ok(comp_res) => {
                                     match SimStepper::new(&comp_res.dae, opts) {
                                         Ok(mut stepper) => {
@@ -281,7 +310,8 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                         // Strip input defaults so they become real runtime slots
                         let (stripped_source, input_defaults) = strip_input_defaults(&source);
 
-                        match Compiler::new().model(&model_name).compile_str(&stripped_source, "model.mo") {
+                        let mut compiler = ModelicaCompiler::new();
+                        match compiler.compile_str(&model_name, &stripped_source, "model.mo") {
                             Ok(comp_res) => {
                                 let mut opts = StepperOptions::default();
                                 opts.atol = 1e-3; opts.rtol = 1e-3;
@@ -334,7 +364,8 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                         // Strip input defaults so they become real runtime slots
                         let (stripped_source, input_defaults) = strip_input_defaults(&source);
 
-                        match Compiler::new().model(&model_name).compile_str(&stripped_source, "model.mo") {
+                        let mut compiler = ModelicaCompiler::new();
+                        match compiler.compile_str(&model_name, &stripped_source, "model.mo") {
                             Ok(comp_res) => {
                                 let mut opts = StepperOptions::default();
                                 opts.atol = 1e-3; opts.rtol = 1e-3;
@@ -401,7 +432,8 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                             if let Some(cached) = cached_models.get(&entity) {
                                 if cached.model_name == model_name {
                                     let (stripped_source, input_defaults) = strip_input_defaults(&cached.source);
-                                    if let Ok(comp_res) = Compiler::new().model(&cached.model_name).compile_str(&stripped_source, "model.mo") {
+                                    let mut compiler = ModelicaCompiler::new();
+                                    if let Ok(comp_res) = compiler.compile_str(&cached.model_name, &stripped_source, "model.mo") {
                                         let mut opts = StepperOptions::default();
                                         opts.atol = 1e-3; opts.rtol = 1e-3;
                                         if let Ok(mut s) = SimStepper::new(&comp_res.dae, opts) {
@@ -420,7 +452,9 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                             }
                             // Fallback: compile from file on disk
                             if !steppers.contains_key(&entity) {
-                                match Compiler::new().model(&model_name).compile_file(&model_path) {
+                                let source = std::fs::read_to_string(&model_path).unwrap_or_default();
+                                let mut compiler = ModelicaCompiler::new();
+                                match compiler.compile_str(&model_name, &source, &model_path) {
                                     Ok(comp_res) => {
                                         let mut opts = StepperOptions::default();
                                         opts.atol = 1e-3; opts.rtol = 1e-3;
@@ -826,5 +860,6 @@ pub fn substitute_params_in_source(source: &str, parameters: &HashMap<String, f6
 
 #[derive(Component, Reflect, Default)]
 pub struct ModelicaInput { pub variable_name: String, pub value: f64 }
+
 #[derive(Component, Reflect, Default)]
 pub struct ModelicaOutput { pub variable_name: String, pub value: f64 }
