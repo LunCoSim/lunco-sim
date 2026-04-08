@@ -1,23 +1,27 @@
 #usda 1.0
 (
-    defaultPrim = "SandboxRover"
+    defaultPrim = "AckermannRover"
 )
 
-# Sandbox Rover — the rover root IS the chassis.
-# Wheels are children. Matches original rover_sandbox where
-# Vessel + RigidBody + Collider are on the same entity.
+# Base Ackermann-Steer Rover — reusable component definition.
+# Instantiate in scenes via reference + overrides:
+#   - color3f primvars:displayColor  → change appearance
+#   - double3 xformOp:translate      → set position
+#   - string lunco:wheelType = "physical" → switch to physical wheels (default: "raycast")
+#
 # Chassis: 2.0m x 0.3m x 3.5m, Mass: 1000kg
 
-def Cube "SandboxRover" (
+def Cube "AckermannRover" (
     prepend apiSchemas = ["PhysxVehicleContextAPI", "PhysxVehicleDrive4WAPI"]
 )
 {
     double width = 2.0
     double height = 0.3
     double depth = 3.5
-    color3f primvars:displayColor = (0.8, 0.8, 0.2)
+    color3f primvars:displayColor = (0.8, 0.8, 0.8)
 
     # Wheel type: "raycast" (suspension simulation) or "physical" (rigid body collision)
+    # Default is "raycast" — override in scene for physical variant.
     string lunco:wheelType = "raycast"
 
     bool physics:rigidBodyEnabled = true
@@ -33,7 +37,6 @@ def Cube "SandboxRover" (
     {
         double radius = 0.4
         double height = 0.3
-        # Position relative to chassis center: (-1, -0.15, 1.225)
         double3 xformOp:translate = (-1.0, -0.15, 1.225)
         float3 xformOp:rotateXYZ = (0, 0, 90)
         color3f primvars:displayColor = (1.0, 0.0, 0.0)

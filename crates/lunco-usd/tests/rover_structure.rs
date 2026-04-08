@@ -7,8 +7,8 @@ use big_space::prelude::CellCoord;
 use lunco_usd_bevy::*;
 use lunco_usd_avian::*;
 use lunco_usd_sim::*;
+use lunco_mobility::{WheelRaycast, DifferentialDrive, AckermannSteer};
 use avian3d::prelude::*;
-use lunco_mobility::{WheelRaycast, DifferentialDrive};
 use lunco_fsw::FlightSoftware;
 use lunco_core::{Vessel, RoverVessel};
 use lunco_usd_composer::UsdComposer;
@@ -60,11 +60,8 @@ fn compose_and_load(file_path: &Path, prim_path: &str) -> App {
 #[test]
 fn test_all_rover_files_match_procedural() {
     let files = [
-        ("vessels/rovers/sandbox_rover.usda", "/SandboxRover"),
-        ("vessels/rovers/sandbox_rover_1.usda", "/SandboxRover"),
-        ("vessels/rovers/sandbox_rover_2.usda", "/SandboxRover"),
-        ("vessels/rovers/sandbox_rover_3.usda", "/SandboxRover"),
-        ("vessels/rovers/sandbox_rover_4.usda", "/SandboxRover"),
+        ("vessels/rovers/skid_rover.usda", "/SkidRover"),
+        ("vessels/rovers/ackermann_rover.usda", "/AckermannRover"),
     ];
 
     for (file, prim) in &files {
@@ -101,10 +98,17 @@ fn test_all_rover_files_match_procedural() {
         assert!(app.world().get::<MeshMaterial3d<StandardMaterial>>(rover).is_some(),
             "{label}: missing MeshMaterial3d (body invisible!)");
 
-        // DifferentialDrive
-        let diff = app.world().get::<DifferentialDrive>(rover).expect(&format!("{label}: missing DifferentialDrive"));
-        assert_eq!(diff.left_port, "drive_left", "{label}: wrong left_port");
-        assert_eq!(diff.right_port, "drive_right", "{label}: wrong right_port");
+        // Steering: Skid has DifferentialDrive, Ackermann has AckermannSteer
+        if file.contains("ackermann") {
+            let ack = app.world().get::<AckermannSteer>(rover).expect(&format!("{label}: missing AckermannSteer"));
+            assert_eq!(ack.drive_left_port, "drive_left", "{label}: wrong drive_left_port");
+            assert_eq!(ack.drive_right_port, "drive_right", "{label}: wrong drive_right_port");
+            assert_eq!(ack.steer_port, "steering", "{label}: wrong steer_port");
+        } else {
+            let diff = app.world().get::<DifferentialDrive>(rover).expect(&format!("{label}: missing DifferentialDrive"));
+            assert_eq!(diff.left_port, "drive_left", "{label}: wrong left_port");
+            assert_eq!(diff.right_port, "drive_right", "{label}: wrong right_port");
+        }
 
         // FlightSoftware
         let fsw = app.world().get::<FlightSoftware>(rover).expect(&format!("{label}: missing FlightSoftware"));

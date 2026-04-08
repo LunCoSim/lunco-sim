@@ -65,51 +65,67 @@ def Xform "SandboxScene"
         float physics:friction = 1.0
     }
 
+    # --- Rovers ---
+    # Only 2 base rover files exist. Each instance below references a base file
+    # and overrides color, position, and optionally wheel type.
+    #
+    # Matrix: 2 steering types × 2 wheel types = 4 variants
+    #   - skid_rover.usda       → PhysxVehicleDriveSkidAPI
+    #   - ackermann_rover.usda  → PhysxVehicleDrive4WAPI
+    #   - lunco:wheelType = "physical" → override for physical wheels (default: "raycast")
 
+    # === Skid-Steer, Raycast Wheels ===
 
-    # --- Rovers (loaded from external .usda files with position overrides) ---
-    # Each rover references an external rover definition and overrides position.
-
-    # Rover 1: Red skid-steer, raycast wheels — right side, near ramp
-    def Cube "Rover1" (
-        prepend references = @/vessels/rovers/sandbox_rover_1.usda@</SandboxRover>
+    # Skid 1: Red, raycast — right side, near ramp
+    def Cube "Skid_Raycast_1" (
+        prepend references = @/vessels/rovers/skid_rover.usda@</SkidRover>
     )
     {
+        color3f primvars:displayColor = (0.8, 0.2, 0.2)
         double3 xformOp:translate = (15.0, 5.0, -10.0)
     }
 
-    # Rover 2: Green skid-steer, raycast wheels — right side
-    def Cube "Rover2" (
-        prepend references = @/vessels/rovers/sandbox_rover_2.usda@</SandboxRover>
+    # Skid 2: Green, raycast — right side
+    def Cube "Skid_Raycast_2" (
+        prepend references = @/vessels/rovers/skid_rover.usda@</SkidRover>
     )
     {
+        color3f primvars:displayColor = (0.2, 0.8, 0.2)
         double3 xformOp:translate = (15.0, 5.0, 10.0)
     }
 
-     # Valentine: Green skid-steer, raycast wheels — right side, color override
-    def Cube "Valentine" (
-        prepend references = @/vessels/rovers/sandbox_rover_2.usda@</SandboxRover>
-    )
-    {
-        color3f primvars:displayColor = (0.1, 1, 1)
-        double3 xformOp:translate = (25.0, 50.0, 20.0)
-    }
+    # === Skid-Steer, Physical Wheels ===
 
-    # Rover 3: Blue skid-steer, physical wheels — left side, far from ramp
-    def Cube "Rover3" (
-        prepend references = @/vessels/rovers/sandbox_rover_3.usda@</SandboxRover>
+    # Skid 3: Blue, physical — left side, far from ramp
+    def Cube "Skid_Physical_1" (
+        prepend references = @/vessels/rovers/skid_rover.usda@</SkidRover>
     )
     {
+        color3f primvars:displayColor = (0.2, 0.2, 0.8)
         double3 xformOp:translate = (-15.0, 5.0, -10.0)
-        # Override wheel type to physical for this rover
         string lunco:wheelType = "physical"
     }
 
-    # Rover 4: Yellow Ackermann steer, raycast wheels — left side
-    def Cube "Rover4" (
-        prepend references = @/vessels/rovers/sandbox_rover_ackermann.usda@</SandboxRover>
+    # === Ackermann, Raycast Wheels ===
+
+    # Ackermann 1: Yellow, raycast — left side
+    def Cube "Ackermann_Raycast_1" (
+        prepend references = @/vessels/rovers/ackermann_rover.usda@</AckermannRover>
     )
     {
+        color3f primvars:displayColor = (0.8, 0.8, 0.2)
         double3 xformOp:translate = (-15.0, 5.0, 10.0)
+    }
+
+    # === Ackermann, Physical Wheels ===
+
+    # Ackermann 2: Orange, physical — far left
+    def Cube "Ackermann_Physical_1" (
+        prepend references = @/vessels/rovers/ackermann_rover.usda@</AckermannRover>
+    )
+    {
+        color3f primvars:displayColor = (0.8, 0.5, 0.1)
+        double3 xformOp:translate = (-25.0, 5.0, 0.0)
+        string lunco:wheelType = "physical"
     }
 }
