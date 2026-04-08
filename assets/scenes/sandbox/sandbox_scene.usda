@@ -1,0 +1,110 @@
+#usda 1.0
+(
+    defaultPrim = "SandboxScene"
+)
+
+# Sandbox Scene
+# Ground plane, ramp obstacle, and 4 rover instances.
+# All positions, colors, and materials are declared here — no hardcoded Rust spawning.
+
+def Xform "SandboxScene"
+{
+    # --- Ground Plane (Static, large collider) ---
+    # Original: Plane3d size 2000x2000, Collider::cuboid(2000, 0.1, 2000).
+    # USD pipeline halves dimensions for mesh + collider.
+    def Cube "Ground"
+    {
+        double width = 4000.0
+        double height = 0.2
+        double depth = 4000.0
+        double3 xformOp:translate = (0, -0.1, 0)
+
+        # Material: Blueprint grid shader with dark gray theme
+        string lunco:material = "BlueprintGrid"
+        double lunco:gridMajorSpacing = 1.0
+        double lunco:gridMinorSpacing = 0.5
+        double lunco:gridMajorWidth = 1.0
+        double lunco:gridMinorWidth = 0.5
+        double lunco:gridMinorFade = 0.15
+        double3 lunco:gridSurfaceColor = (0.15, 0.15, 0.18)
+
+        # Static body (not dynamic, but collidable)
+        bool physics:rigidBodyEnabled = false
+        bool physics:collisionEnabled = true
+        float physics:friction = 1.0
+    }
+
+    # --- Ramp Obstacle (Static, high friction) ---
+    # Original: Cuboid::new(30.0, 1.0, 40.0) → half-extents 30×1×40.
+    # USD doubles for mesh/collider → width=60, height=2, depth=80.
+    def Cube "Ramp"
+    {
+        double width = 60.0
+        double height = 2.0
+        double depth = 80.0
+        # Original: Transform::from_xyz(25.0, 4.0, 0.0).with_rotation(Quat::from_rotation_z(0.3))
+        double3 xformOp:translate = (25, 4, 0)
+        double3 xformOp:rotateXYZ = (0, 0, 17.1887)  # 0.3 radians in degrees
+
+        # Material: Blueprint grid with brown tint
+        string lunco:material = "BlueprintGrid"
+        double lunco:gridMajorSpacing = 1.0
+        double lunco:gridMinorSpacing = 0.5
+        double lunco:gridMajorWidth = 1.0
+        double lunco:gridMinorWidth = 0.5
+        double lunco:gridMinorFade = 0.15
+        double3 lunco:gridSurfaceColor = (0.25, 0.22, 0.18)
+        color3f primvars:displayColor = (0.25, 0.22, 0.18)
+
+        bool physics:rigidBodyEnabled = false
+        bool physics:collisionEnabled = true
+        float physics:friction = 1.0
+    }
+
+    # --- Rover Instances ---
+    # All 4 load the same sandbox_rover.usda, each with unique position and color.
+
+    def Xform "Rover_1" (
+        prepend references = @/vessels/rovers/sandbox_rover.usda@</SandboxRover>
+    )
+    {
+        double3 xformOp:translate = (-15, 6, -10)
+
+        def Cube "Chassis" {
+            color3f primvars:displayColor = (0.8, 0.2, 0.2)
+        }
+    }
+
+    def Xform "Rover_2" (
+        prepend references = @/vessels/rovers/sandbox_rover.usda@</SandboxRover>
+    )
+    {
+        double3 xformOp:translate = (-15, 6, 10)
+
+        def Cube "Chassis" {
+            color3f primvars:displayColor = (0.2, 0.8, 0.2)
+        }
+    }
+
+    def Xform "Rover_3" (
+        prepend references = @/vessels/rovers/sandbox_rover.usda@</SandboxRover>
+    )
+    {
+        double3 xformOp:translate = (15, 5, -10)
+
+        def Cube "Chassis" {
+            color3f primvars:displayColor = (0.2, 0.2, 0.8)
+        }
+    }
+
+    def Xform "Rover_4" (
+        prepend references = @/vessels/rovers/sandbox_rover.usda@</SandboxRover>
+    )
+    {
+        double3 xformOp:translate = (15, 5, 10)
+
+        def Cube "Chassis" {
+            color3f primvars:displayColor = (0.8, 0.8, 0.2)
+        }
+    }
+}

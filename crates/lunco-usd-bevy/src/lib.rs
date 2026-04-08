@@ -87,7 +87,7 @@ impl Default for UsdPrimPath {
 #[derive(Component)]
 pub struct UsdVisualSynced;
 
-fn sync_usd_visuals(
+pub fn sync_usd_visuals(
     mut commands: Commands,
     query: Query<(Entity, &UsdPrimPath, Option<&Visibility>, Option<&Transform>), Without<UsdVisualSynced>>,
     stages: Res<Assets<UsdStageAsset>>,
@@ -124,25 +124,26 @@ fn sync_usd_visuals(
         // Create mesh based on prim type and explicit dimensions
         let mesh_handle = match prim_type.as_deref() {
             Some("Cube") => {
-                let width = reader.prim_attribute_value::<f64>(&sdf_path, "width")
-                    .expect("Cube must have 'width' attribute") as f32;
-                let height = reader.prim_attribute_value::<f64>(&sdf_path, "height")
-                    .expect("Cube must have 'height' attribute") as f32;
-                let depth = reader.prim_attribute_value::<f64>(&sdf_path, "depth")
-                    .expect("Cube must have 'depth' attribute") as f32;
-                Some(meshes.add(Cuboid::new(width * 0.5, height * 0.5, depth * 0.5)))
+                if let (Some(width), Some(height), Some(depth)) = (
+                    reader.prim_attribute_value::<f64>(&sdf_path, "width"),
+                    reader.prim_attribute_value::<f64>(&sdf_path, "height"),
+                    reader.prim_attribute_value::<f64>(&sdf_path, "depth"),
+                ) {
+                    Some(meshes.add(Cuboid::new(width as f32 * 0.5, height as f32 * 0.5, depth as f32 * 0.5)))
+                } else { None }
             }
             Some("Sphere") => {
-                let radius = reader.prim_attribute_value::<f64>(&sdf_path, "radius")
-                    .expect("Sphere must have 'radius' attribute") as f32;
-                Some(meshes.add(Sphere::new(radius).mesh().ico(32).unwrap()))
+                if let Some(radius) = reader.prim_attribute_value::<f64>(&sdf_path, "radius") {
+                    Some(meshes.add(Sphere::new(radius as f32).mesh().ico(32).unwrap()))
+                } else { None }
             }
             Some("Cylinder") => {
-                let radius = reader.prim_attribute_value::<f64>(&sdf_path, "radius")
-                    .expect("Cylinder must have 'radius' attribute") as f32;
-                let height = reader.prim_attribute_value::<f64>(&sdf_path, "height")
-                    .expect("Cylinder must have 'height' attribute") as f32;
-                Some(meshes.add(Cylinder::new(radius, height)))
+                if let (Some(radius), Some(height)) = (
+                    reader.prim_attribute_value::<f64>(&sdf_path, "radius"),
+                    reader.prim_attribute_value::<f64>(&sdf_path, "height"),
+                ) {
+                    Some(meshes.add(Cylinder::new(radius as f32, height as f32)))
+                } else { None }
             }
             _ => None,
         };
@@ -162,10 +163,17 @@ fn sync_usd_visuals(
             ));
         }
 
-        // Transform (position only)
+        // Transform (position and rotation)
         let mut transform = existing_tf.cloned().unwrap_or_default();
         if let Some(v) = get_attribute_as_vec3(&reader, &sdf_path, "xformOp:translate") {
             transform.translation = v;
+        }
+        if let Some(v) = get_attribute_as_vec3(&reader, &sdf_path, "xformOp:rotateXYZ") {
+            // USD stores rotation in degrees; convert to radians for Bevy
+            let rx = v.x.to_radians();
+            let ry = v.y.to_radians();
+            let rz = v.z.to_radians();
+            transform.rotation = Quat::from_euler(EulerRot::XYZ, rx, ry, rz);
         }
 
         let final_vis = existing_vis.cloned().unwrap_or(Visibility::Inherited);

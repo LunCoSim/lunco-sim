@@ -8,6 +8,10 @@ name = "rover_sandbox"
 path = "src/bin/rover_sandbox.rs"
 
 [[bin]]
+name = "rover_sandbox_usd"
+path = "src/bin/rover_sandbox_usd.rs"
+
+[[bin]]
 name = "model_viewer"
 path = "src/bin/model_viewer.rs"
 
@@ -30,6 +34,7 @@ lunco-modelica = { path = "../lunco-modelica" }
 lunco-usd = { path = "../lunco-usd" }
 lunco-usd-avian = { path = "../lunco-usd-avian" }
 lunco-usd-bevy = { path = "../lunco-usd-bevy" }
+lunco-usd-sim = { path = "../lunco-usd-sim" }
 openusd = { workspace = true }
 bevy_egui = { workspace = true }
 bevy-inspector-egui = { workspace = true }

@@ -77,6 +77,7 @@ fn on_add_usd_sim_prim(
                 brake_active: false,
             },
             RoverVessel,
+            lunco_core::Vessel,
         ));
         info!("Successfully initialized FSW for {}", prim_path.path);
     }

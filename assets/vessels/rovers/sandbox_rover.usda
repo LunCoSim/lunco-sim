@@ -1,0 +1,122 @@
+#usda 1.0
+(
+    defaultPrim = "SandboxRover"
+)
+
+# Sandbox Rover — sized to match the original procedural rovers.
+# Chassis: 2.0m x 0.3m x 3.5m, Mass: 1000kg
+# Wheels: radius 0.4m, reference reusable wheel component.
+# This is the single rover definition for rover_sandbox_usd.
+
+def Xform "SandboxRover" (
+    prepend apiSchemas = ["PhysxVehicleContextAPI"]
+)
+{
+    # --- Chassis (skid-steer via differential drive) ---
+    def Cube "Chassis" (
+        prepend apiSchemas = ["PhysxVehicleDriveSkidAPI"]
+    )
+    {
+        double width = 2.0
+        double height = 0.3
+        double depth = 3.5
+        double3 xformOp:translate = (0, 0, 0)
+
+        # Per-instance chassis color (read by apply_rover_colors)
+        double3 lunco:chassisColor = (0.5, 0.5, 0.5)
+
+        bool physics:rigidBodyEnabled = true
+        float physics:mass = 1000.0
+        bool physics:collisionEnabled = true
+    }
+
+    # --- Wheels (reference the reusable mobility component) ---
+    def Cylinder "Wheel_FL" (
+        prepend references = @../../components/mobility/wheel.usda@</Wheel>
+    )
+    {
+        double radius = 0.4
+        double height = 0.3
+        # Position: (-chassis_width/2, -chassis_height/2, chassis_length*0.35)
+        double3 xformOp:translate = (-1.0, -0.15, 1.225)
+        float3 xformOp:rotateXYZ = (90, 0, 0)
+        color3f primvars:displayColor = (1.0, 0.0, 0.0)
+
+        int physxVehicleWheel:index = 0
+        float physxVehicleWheel:radius = 0.4
+        float physxVehicleSuspension:restLength = 0.7
+        float physxVehicleSuspension:springStiffness = 15000.0
+        float physxVehicleSuspension:springDamping = 3000.0
+
+        double lunco:motorPower = 2000.0
+        double lunco:motorEfficiency = 0.85
+
+        rel lunco:epsBus = [</SandboxRover/Chassis>]
+    }
+
+    def Cylinder "Wheel_FR" (
+        prepend references = @../../components/mobility/wheel.usda@</Wheel>
+    )
+    {
+        double radius = 0.4
+        double height = 0.3
+        double3 xformOp:translate = (1.0, -0.15, 1.225)
+        float3 xformOp:rotateXYZ = (90, 0, 0)
+        color3f primvars:displayColor = (1.0, 0.0, 0.0)
+
+        int physxVehicleWheel:index = 1
+        float physxVehicleWheel:radius = 0.4
+        float physxVehicleSuspension:restLength = 0.7
+        float physxVehicleSuspension:springStiffness = 15000.0
+        float physxVehicleSuspension:springDamping = 3000.0
+
+        double lunco:motorPower = 2000.0
+        double lunco:motorEfficiency = 0.85
+
+        rel lunco:epsBus = [</SandboxRover/Chassis>]
+    }
+
+    def Cylinder "Wheel_RL" (
+        prepend references = @../../components/mobility/wheel.usda@</Wheel>
+    )
+    {
+        double radius = 0.4
+        double height = 0.3
+        double3 xformOp:translate = (-1.0, -0.15, -1.225)
+        float3 xformOp:rotateXYZ = (90, 0, 0)
+        color3f primvars:displayColor = (0.0, 0.0, 1.0)
+
+        int physxVehicleWheel:index = 2
+        float physxVehicleWheel:radius = 0.4
+        float physxVehicleSuspension:restLength = 0.7
+        float physxVehicleSuspension:springStiffness = 15000.0
+        float physxVehicleSuspension:springDamping = 3000.0
+
+        double lunco:motorPower = 2000.0
+        double lunco:motorEfficiency = 0.85
+
+        rel lunco:epsBus = [</SandboxRover/Chassis>]
+    }
+
+    def Cylinder "Wheel_RR" (
+        prepend references = @../../components/mobility/wheel.usda@</Wheel>
+    )
+    {
+        double radius = 0.4
+        double height = 0.3
+        double3 xformOp:translate = (1.0, -0.15, -1.225)
+        float3 xformOp:rotateXYZ = (90, 0, 0)
+        color3f primvars:displayColor = (0.0, 0.0, 1.0)
+
+        int physxVehicleWheel:index = 3
+        float physxVehicleWheel:radius = 0.4
+        float physxVehicleSuspension:restLength = 0.7
+        float physxVehicleSuspension:springStiffness = 15000.0
+        float physxVehicleSuspension:springDamping = 3000.0
+
+        double lunco:motorPower = 2000.0
+        double lunco:motorEfficiency = 0.85
+
+        rel lunco:epsBus = [</SandboxRover/Chassis>]
+    }
+}

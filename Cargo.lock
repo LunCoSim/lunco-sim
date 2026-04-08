@@ -5562,6 +5562,7 @@ dependencies = [
  "lunco-usd",
  "lunco-usd-avian",
  "lunco-usd-bevy",
+ "lunco-usd-sim",
  "openusd",
 ]
 

@@ -50,13 +50,16 @@ impl UsdComposer {
                             let asset_path = reference.asset_path.strip_prefix('/').unwrap_or(&reference.asset_path);
                             let ref_path = base_dir.join(asset_path);
 
-                            if processed.contains(&ref_path) { continue; }
-                            processed.insert(ref_path.clone());
-
                             let sub_reader = TextReader::read(&ref_path)?;
                             let ref_base_dir = ref_path.parent().unwrap_or(Path::new("."));
                             let mut sub_data: HashMap<sdf::Path, sdf::Spec> = sub_reader.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-                            Self::flatten_recursive(&mut sub_data, ref_base_dir, processed)?;
+
+                            // Only recurse into referenced file's own refs if not already processed
+                            // (prevents infinite loops from circular references)
+                            if !processed.contains(&ref_path) {
+                                processed.insert(ref_path.clone());
+                                Self::flatten_recursive(&mut sub_data, ref_base_dir, processed)?;
+                            }
 
                             let root = if reference.prim_path.is_empty() {
                                 Self::get_default_prim_from_data(&sub_data).ok_or_else(|| {
