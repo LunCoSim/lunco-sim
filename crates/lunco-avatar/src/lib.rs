@@ -1245,7 +1245,7 @@ fn on_surface_teleport_command(
     q_parents: Query<&ChildOf>,
     q_spatial_abs: Query<(&CellCoord, &Transform)>,
     q_bodies: Query<(Entity, &CelestialBody, &ChildOf)>,
-    q_frames: Query<&lunco_celestial::CelestialReferenceFrame>,
+    q_gravity_providers: Query<&lunco_celestial::GravityProvider>,
     mut field: ResMut<LocalGravityField>,
 ) {
     let msg = trigger.event();
@@ -1304,27 +1304,46 @@ fn on_surface_teleport_command(
         (surface_normal * (body_radius + 50.0), surface_normal)
     };
 
-    let surface_g = body_radius; // placeholder; actual GM/R² from GravityProvider
+    // Surface gravity from body's GravityProvider
+    let surface_g = if let Ok(gp) = q_gravity_providers.get(body_entity) {
+        let accel = gp.model.acceleration(surface_normal * body_radius);
+        accel.length()
+    } else {
+        0.0
+    };
 
-    // Migrate avatar to Body entity
+    // IMPORTANT: avatar has FloatingOrigin — MUST stay on a Grid, NOT on Body.
+    // Body is at Grid origin, so surface_local_pos IS also grid-local.
+    // Find the Body's Grid and reparent there.
+    let body_child_of = q_bodies.get(body_entity).ok().map(|(_, _, c)| c.0);
+    let target_grid = body_child_of.filter(|e| q_grids.contains(*e));
+
     let spawn_pos = Vec3::new(surface_local_pos.x as f32, surface_local_pos.y as f32, surface_local_pos.z as f32);
     let surface_rot = Quat::from_rotation_arc(DVec3::Y.as_vec3(), surface_normal.as_vec3());
 
-    commands.entity(avatar_ent)
-        .insert(Transform::from_translation(spawn_pos).with_rotation(surface_rot))
-        .insert(CellCoord::default())
-        .insert(GravityBody { body_entity })
-        .insert(FreeFlightCamera {
-            yaw: 0.0,
-            pitch: -0.2,
-            damping: None,
-        })
-        .remove::<OrbitCamera>()
-        .remove::<SpringArmCamera>()
-        .remove::<FrameBlend>();
+    if let Some(grid_entity) = target_grid {
+        if let Ok(grid) = q_grids.get(grid_entity) {
+            let (new_cell, new_tf) = grid.translation_to_grid(surface_local_pos);
+            commands.entity(avatar_ent)
+                .insert(new_cell)
+                .insert(Transform::from_translation(new_tf).with_rotation(surface_rot))
+                .insert(GravityBody { body_entity })
+                .insert(FreeFlightCamera {
+                    yaw: 0.0,
+                    pitch: -0.2,
+                    damping: None,
+                })
+                .remove::<OrbitCamera>()
+                .remove::<SpringArmCamera>()
+                .remove::<FrameBlend>();
 
-    // Re-parent to Body entity
-    commands.entity(body_entity).add_child(avatar_ent);
+            // Re-parent to Grid (NOT Body — FloatingOrigin must be on a Grid)
+            commands.entity(grid_entity).add_child(avatar_ent);
+        }
+    } else {
+        warn!("TELEPORT_SURFACE: body {:?} has no Grid parent", body_entity);
+        return;
+    }
 
     // Update LocalGravityField
     field.body_entity = Some(body_entity);

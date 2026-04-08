@@ -11,7 +11,7 @@ use bevy::prelude::*;
 use bevy::ecs::system::SystemParam;
 use bevy_egui::{egui, EguiContexts, EguiPlugin, EguiPrimaryContextPass};
 use lunco_core::{RoverVessel, Vessel, Avatar, Spacecraft};
-use lunco_celestial::{CelestialClock, CelestialBody, TrajectoryView, TrajectoryFrame};
+use lunco_celestial::{CelestialClock, CelestialBody, TrajectoryView, TrajectoryFrame, LocalGravityField};
 use lunco_avatar::{SpringArmCamera, OrbitCamera, FreeFlightCamera, FrameBlend, CameraScroll};
 use lunco_mobility::Suspension;
 
@@ -70,6 +70,7 @@ struct MainUiParams<'w, 's> {
     selected: ResMut<'w, SelectedEntity>,
     pending: ResMut<'w, PendingSpawn>,
     clock: ResMut<'w, CelestialClock>,
+    gravity_field: Res<'w, LocalGravityField>,
     q_rovers: Query<'w, 's, (Entity, &'static Name, &'static Vessel), With<RoverVessel>>,
     q_bodies: Query<'w, 's, (Entity, &'static Name, &'static CelestialBody)>,
     q_spacecraft: Query<'w, 's, (Entity, &'static Name, &'static mut Spacecraft)>,
@@ -191,6 +192,20 @@ fn main_ui_system(mut params: MainUiParams) {
                 }
             });
 
+            // Go to Surface — when a celestial body is selected
+            if params.q_bodies.contains(target) {
+                if ui.button("🌕 Go to Surface").clicked() {
+                    let avatar_ent = params.q_camera.iter().next().unwrap_or(Entity::PLACEHOLDER);
+                    // Pass body entity index so teleport knows which body
+                    let args: Vec<f64> = vec![target.to_bits() as f64];
+                    params.commands.trigger(lunco_core::architecture::CommandMessage {
+                        id: 0, target, name: "TELEPORT_SURFACE".to_string(),
+                        args: args.into_iter().collect(),
+                        source: avatar_ent,
+                    });
+                }
+            }
+
             if params.q_rovers.contains(target) {
                 if ui.button("Take Control (Possess)").clicked() {
                     let avatar_ent = params.q_camera.iter().next().unwrap_or(Entity::PLACEHOLDER);
@@ -217,6 +232,28 @@ fn main_ui_system(mut params: MainUiParams) {
     egui::Window::new("Telemetry").anchor(egui::Align2::RIGHT_TOP, [-10.0, 10.0]).show(ctx, |ui| {
         ui.heading("Avatar Status");
         ui.separator();
+
+        // Surface mode: show Return to Orbit button
+        if let Some(body) = params.gravity_field.body_entity {
+            ui.horizontal(|ui| {
+                ui.label("Surface Mode — Body:");
+                ui.colored_label(egui::Color32::from_rgb(255, 180, 50), format!("{:?}", body));
+            });
+            ui.label(format!("Gravity: {:.3} m/s²", params.gravity_field.surface_g));
+            ui.label(format!("Up: {:.3}, {:.3}, {:.3}",
+                params.gravity_field.local_up.x,
+                params.gravity_field.local_up.y,
+                params.gravity_field.local_up.z));
+            if ui.button("🏠 Return to Orbit").clicked() {
+                let avatar_ent = params.q_camera.iter().next().unwrap_or(Entity::PLACEHOLDER);
+                params.commands.trigger(lunco_core::architecture::CommandMessage {
+                    id: 0, target: body, name: "LEAVE_SURFACE".to_string(),
+                    args: Default::default(),
+                    source: avatar_ent,
+                });
+            }
+            ui.separator();
+        }
 
         // Display active camera behavior.
         if let Ok(blend) = params.q_camera_blend.single() {
