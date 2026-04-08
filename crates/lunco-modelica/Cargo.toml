@@ -17,9 +17,13 @@ bevy.workspace = true
 bevy_egui.workspace = true
 egui_plot = "0.34.1"
 egui_code_editor = "0.2.22"
-rumoca-sim = { git = "https://github.com/cognipilot/rumoca", branch = "main" }
-rumoca-session = { git = "https://github.com/cognipilot/rumoca", branch = "main" }
-rumoca-phase-parse = { git = "https://github.com/cognipilot/rumoca", branch = "main" }
+# Uses LunCoSim/rumoca fork (web-fix branch) which adds `instant` crate for
+# wasm32 time support. std::time::Instant panics on wasm32-unknown-unknown
+# because browsers restrict high-resolution clocks (Spectre mitigation).
+# The fork replaces 3 imports: std::time::Instant → instant::Instant on wasm32.
+rumoca-sim = { git = "https://github.com/LunCoSim/rumoca", branch = "web-fix" }
+rumoca-session = { git = "https://github.com/LunCoSim/rumoca", branch = "web-fix" }
+rumoca-phase-parse = { git = "https://github.com/LunCoSim/rumoca", branch = "web-fix" }
 anyhow = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -30,9 +34,12 @@ log = "0.4"
 lunco-core = { path = "../lunco-core" }
 lunco-hardware = { path = "../lunco-hardware" }
 
-# Desktop-only dependencies
+# Desktop-only: async runtime for potential future async simulation features.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio = { version = "1.0", features = ["full"] }
+
+# Web-specific: wasm32-unknown-unknown needs JS interop for console output,
+# panic hooks, and RNG (std::time is unavailable).
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"

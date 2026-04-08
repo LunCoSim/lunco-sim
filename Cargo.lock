@@ -4889,6 +4889,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "instant"
+version = "0.1.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e0242819d153cba4b4b05a5a8f2a7e9bbf97b6055b2a002b395c96b5ff3c0222"
+dependencies = [
+ "cfg-if",
+ "js-sys",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
 name = "interpol"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7674,7 +7686,7 @@ dependencies = [
 [[package]]
 name = "rumoca-core"
 version = "0.8.12"
-source = "git+https://github.com/cognipilot/rumoca?branch=main#0b46599e61c732363487bec8f829d3a95ece2969"
+source = "git+https://github.com/LunCoSim/rumoca?branch=web-fix#dcfea00a741cc8f1610ffc78b22b7872ed89136d"
 dependencies = [
  "miette",
  "serde",
@@ -7683,7 +7695,7 @@ dependencies = [
 [[package]]
 name = "rumoca-eval-ast"
 version = "0.8.12"
-source = "git+https://github.com/cognipilot/rumoca?branch=main#0b46599e61c732363487bec8f829d3a95ece2969"
+source = "git+https://github.com/LunCoSim/rumoca?branch=web-fix#dcfea00a741cc8f1610ffc78b22b7872ed89136d"
 dependencies = [
  "rumoca-core",
  "rumoca-ir-ast",
@@ -7694,7 +7706,7 @@ dependencies = [
 [[package]]
 name = "rumoca-eval-dae"
 version = "0.8.12"
-source = "git+https://github.com/cognipilot/rumoca?branch=main#0b46599e61c732363487bec8f829d3a95ece2969"
+source = "git+https://github.com/LunCoSim/rumoca?branch=web-fix#dcfea00a741cc8f1610ffc78b22b7872ed89136d"
 dependencies = [
  "cranelift-codegen",
  "cranelift-frontend",
@@ -7711,7 +7723,7 @@ dependencies = [
 [[package]]
 name = "rumoca-eval-flat"
 version = "0.8.12"
-source = "git+https://github.com/cognipilot/rumoca?branch=main#0b46599e61c732363487bec8f829d3a95ece2969"
+source = "git+https://github.com/LunCoSim/rumoca?branch=web-fix#dcfea00a741cc8f1610ffc78b22b7872ed89136d"
 dependencies = [
  "indexmap",
  "rumoca-core",
@@ -7723,7 +7735,7 @@ dependencies = [
 [[package]]
 name = "rumoca-ir-ast"
 version = "0.8.12"
-source = "git+https://github.com/cognipilot/rumoca?branch=main#0b46599e61c732363487bec8f829d3a95ece2969"
+source = "git+https://github.com/LunCoSim/rumoca?branch=web-fix#dcfea00a741cc8f1610ffc78b22b7872ed89136d"
 dependencies = [
  "indexmap",
  "rumoca-core",
@@ -7735,7 +7747,7 @@ dependencies = [
 [[package]]
 name = "rumoca-ir-core"
 version = "0.8.12"
-source = "git+https://github.com/cognipilot/rumoca?branch=main#0b46599e61c732363487bec8f829d3a95ece2969"
+source = "git+https://github.com/LunCoSim/rumoca?branch=web-fix#dcfea00a741cc8f1610ffc78b22b7872ed89136d"
 dependencies = [
  "serde",
 ]
@@ -7743,7 +7755,7 @@ dependencies = [
 [[package]]
 name = "rumoca-ir-dae"
 version = "0.8.12"
-source = "git+https://github.com/cognipilot/rumoca?branch=main#0b46599e61c732363487bec8f829d3a95ece2969"
+source = "git+https://github.com/LunCoSim/rumoca?branch=web-fix#dcfea00a741cc8f1610ffc78b22b7872ed89136d"
 dependencies = [
  "indexmap",
  "rumoca-core",
@@ -7754,7 +7766,7 @@ dependencies = [
 [[package]]
 name = "rumoca-ir-flat"
 version = "0.8.12"
-source = "git+https://github.com/cognipilot/rumoca?branch=main#0b46599e61c732363487bec8f829d3a95ece2969"
+source = "git+https://github.com/LunCoSim/rumoca?branch=web-fix#dcfea00a741cc8f1610ffc78b22b7872ed89136d"
 dependencies = [
  "indexmap",
  "rumoca-core",
@@ -7765,7 +7777,7 @@ dependencies = [
 [[package]]
 name = "rumoca-phase-codegen"
 version = "0.8.12"
-source = "git+https://github.com/cognipilot/rumoca?branch=main#0b46599e61c732363487bec8f829d3a95ece2969"
+source = "git+https://github.com/LunCoSim/rumoca?branch=web-fix#dcfea00a741cc8f1610ffc78b22b7872ed89136d"
 dependencies = [
  "miette",
  "minijinja",
@@ -7780,7 +7792,7 @@ dependencies = [
 [[package]]
 name = "rumoca-phase-dae"
 version = "0.8.12"
-source = "git+https://github.com/cognipilot/rumoca?branch=main#0b46599e61c732363487bec8f829d3a95ece2969"
+source = "git+https://github.com/LunCoSim/rumoca?branch=web-fix#dcfea00a741cc8f1610ffc78b22b7872ed89136d"
 dependencies = [
  "indexmap",
  "miette",
@@ -7796,7 +7808,7 @@ dependencies = [
 [[package]]
 name = "rumoca-phase-flatten"
 version = "0.8.12"
-source = "git+https://github.com/cognipilot/rumoca?branch=main#0b46599e61c732363487bec8f829d3a95ece2969"
+source = "git+https://github.com/LunCoSim/rumoca?branch=web-fix#dcfea00a741cc8f1610ffc78b22b7872ed89136d"
 dependencies = [
  "indexmap",
  "miette",
@@ -7812,7 +7824,7 @@ dependencies = [
 [[package]]
 name = "rumoca-phase-instantiate"
 version = "0.8.12"
-source = "git+https://github.com/cognipilot/rumoca?branch=main#0b46599e61c732363487bec8f829d3a95ece2969"
+source = "git+https://github.com/LunCoSim/rumoca?branch=web-fix#dcfea00a741cc8f1610ffc78b22b7872ed89136d"
 dependencies = [
  "indexmap",
  "miette",
@@ -7826,7 +7838,7 @@ dependencies = [
 [[package]]
 name = "rumoca-phase-parse"
 version = "0.8.12"
-source = "git+https://github.com/cognipilot/rumoca?branch=main#0b46599e61c732363487bec8f829d3a95ece2969"
+source = "git+https://github.com/LunCoSim/rumoca?branch=web-fix#dcfea00a741cc8f1610ffc78b22b7872ed89136d"
 dependencies = [
  "anyhow",
  "indexmap",
@@ -7842,7 +7854,7 @@ dependencies = [
 [[package]]
 name = "rumoca-phase-resolve"
 version = "0.8.12"
-source = "git+https://github.com/cognipilot/rumoca?branch=main#0b46599e61c732363487bec8f829d3a95ece2969"
+source = "git+https://github.com/LunCoSim/rumoca?branch=web-fix#dcfea00a741cc8f1610ffc78b22b7872ed89136d"
 dependencies = [
  "anyhow",
  "indexmap",
@@ -7856,7 +7868,7 @@ dependencies = [
 [[package]]
 name = "rumoca-phase-solve"
 version = "0.8.12"
-source = "git+https://github.com/cognipilot/rumoca?branch=main#0b46599e61c732363487bec8f829d3a95ece2969"
+source = "git+https://github.com/LunCoSim/rumoca?branch=web-fix#dcfea00a741cc8f1610ffc78b22b7872ed89136d"
 dependencies = [
  "indexmap",
  "rumoca-core",
@@ -7869,7 +7881,7 @@ dependencies = [
 [[package]]
 name = "rumoca-phase-typecheck"
 version = "0.8.12"
-source = "git+https://github.com/cognipilot/rumoca?branch=main#0b46599e61c732363487bec8f829d3a95ece2969"
+source = "git+https://github.com/LunCoSim/rumoca?branch=web-fix#dcfea00a741cc8f1610ffc78b22b7872ed89136d"
 dependencies = [
  "miette",
  "rumoca-core",
@@ -7883,7 +7895,7 @@ dependencies = [
 [[package]]
 name = "rumoca-session"
 version = "0.8.12"
-source = "git+https://github.com/cognipilot/rumoca?branch=main#0b46599e61c732363487bec8f829d3a95ece2969"
+source = "git+https://github.com/LunCoSim/rumoca?branch=web-fix#dcfea00a741cc8f1610ffc78b22b7872ed89136d"
 dependencies = [
  "anyhow",
  "bincode",
@@ -7914,11 +7926,12 @@ dependencies = [
 [[package]]
 name = "rumoca-sim"
 version = "0.8.12"
-source = "git+https://github.com/cognipilot/rumoca?branch=main#0b46599e61c732363487bec8f829d3a95ece2969"
+source = "git+https://github.com/LunCoSim/rumoca?branch=web-fix#dcfea00a741cc8f1610ffc78b22b7872ed89136d"
 dependencies = [
  "diffsol",
  "getrandom 0.3.4",
  "indexmap",
+ "instant",
  "levenberg-marquardt",
  "nalgebra",
  "rumoca-core",

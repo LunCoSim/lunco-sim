@@ -1,6 +1,20 @@
-//! LunCo Modelica Workbench - Web version.
+//! LunCo Modelica Workbench — Web entry point.
 //!
-//! Compiled to WebAssembly for browser deployment with WebGPU rendering.
+//! ## Why a separate binary?
+//!
+//! Desktop uses `std::thread::spawn` for the simulation worker. On wasm32
+//! this panics because `std::time::Instant` and `std::thread` are not
+//! implemented in the browser sandbox. The web binary:
+//!
+//! 1. Uses `wasm_bindgen(start)` instead of `fn main()` — the browser calls
+//!    this automatically when the WASM module loads.
+//! 2. Embeds model files via `include_str!` at compile time (no filesystem).
+//! 3. Points to the LunCoSim/rumoca `web-fix` branch which replaces
+//!    `std::time::Instant` with `instant::Instant` (backed by `performance.now()`).
+//! 4. Disables `std::time`-dependent Bevy systems; `spawn_modelica_requests`
+//!    uses a fixed 16ms timestep instead of `Time::elapsed_secs_f64()`.
+//!
+//! See `../lib.rs` for the inline worker implementation.
 
 use bevy::prelude::*;
 use bevy_egui::EguiPlugin;
@@ -13,15 +27,19 @@ use lunco_modelica::{
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
+// Empty main — entry point is `run()` via wasm_bindgen(start).
 #[cfg(target_arch = "wasm32")]
 pub fn main() {}
 
-/// Initialize Bevy app with bundled models
+/// Browser entry point. Called automatically when the WASM module loads.
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen(start))]
 pub fn run() {
+    // Panic messages go to browser console instead of being silent failures.
     #[cfg(target_arch = "wasm32")]
     console_error_panic_hook::set_once();
 
+    // Load the first bundled model (Battery.mo) as the default.
+    // Models are embedded at compile time via include_str! — no filesystem access.
     let default_model = BUNDLED_MODELS.first().unwrap_or(&("", ""));
     let (default_filename, default_source) = default_model;
 
@@ -30,8 +48,11 @@ pub fn run() {
             primary_window: Some(Window {
                 title: "LunCo Modelica Workbench".into(),
                 resolution: bevy::window::WindowResolution::new(1280, 720),
+                // Render into the <canvas id="bevy"> element from index.html.
                 canvas: Some("#bevy".into()),
+                // Auto-resize to fill the browser window.
                 fit_canvas_to_parent: true,
+                // Prevent Bevy from swallowing keyboard events (egui needs them too).
                 prevent_default_event_handling: true,
                 ..default()
             }),
@@ -47,15 +68,18 @@ pub fn run() {
         .run();
 }
 
+/// Resource holding the default model info passed to the startup system.
 #[derive(Resource)]
 struct BundledModelInfo {
     default_filename: String,
     default_source: String,
 }
 
+/// Marker component for the initial workbench entity.
 #[derive(Component)]
 struct WebWorkbench;
 
+/// Spawns the initial Modelica sandbox with the bundled default model.
 fn setup_web_workbench(
     mut commands: Commands,
     channels: Res<lunco_modelica::ModelicaChannels>,
@@ -84,6 +108,7 @@ fn setup_web_workbench(
         },
     )).id();
 
+    // Kick off initial compilation of the bundled model.
     let _ = channels.tx.send(lunco_modelica::ModelicaCommand::Compile {
         entity,
         session_id: 0,

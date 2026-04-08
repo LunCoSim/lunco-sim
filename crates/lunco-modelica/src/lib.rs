@@ -93,23 +93,46 @@ impl Plugin for ModelicaPlugin {
 
         #[cfg(not(target_arch = "wasm32"))]
         {
+            // Desktop: spawn a background thread that owns !Send SimStepper instances.
+            // The main Bevy thread communicates via crossbeam channels.
             thread::spawn(move || {
                 modelica_worker(rx_cmd, tx_res);
             });
         }
 
-        #[allow(unused_variables)]
-        let (tx_cmd, rx_cmd) = (tx_cmd, rx_cmd);
-        #[allow(unused_variables)]
-        let (tx_res, rx_res) = (tx_res, rx_res);
+        #[cfg(target_arch = "wasm32")]
+        {
+            // Web: wasm32-unknown-unknown has no std::thread support. Instead we use
+            // an InlineWorker Resource that processes one command per frame in a Bevy
+            // system. This avoids blocking the main render thread while still running
+            // the full Modelica compilation + simulation pipeline.
+            app.insert_resource(InlineWorker::default());
+        }
 
-        app.insert_resource(ModelicaChannels { tx: tx_cmd, rx: rx_res })
-           .register_type::<ModelicaModel>()
+        #[cfg(not(target_arch = "wasm32"))]
+        app.insert_resource(ModelicaChannels { tx: tx_cmd, rx: rx_res });
+        #[cfg(target_arch = "wasm32")]
+        {
+            // Web: needs separate rx_cmd (worker reads commands) and tx_res (worker
+            // sends results). On desktop the background thread uses rx_cmd/tx_res
+            // directly via move closure. On wasm32 the InlineWorker system needs
+            // Res<ModelicaChannels> access to both sides.
+            app.insert_resource(ModelicaChannels { tx: tx_cmd, rx: rx_res, rx_cmd, tx_res });
+        }
+
+        app.register_type::<ModelicaModel>()
            .add_plugins(ui::ModelicaUiPlugin)
            .add_systems(Update, (
                spawn_modelica_requests,
                handle_modelica_responses,
            ));
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            // Web: InlineWorker system processes commands synchronously each frame.
+            // One command per frame to avoid stuttering the UI.
+            app.add_systems(Update, inline_worker_process);
+        }
     }
 }
 
@@ -123,6 +146,12 @@ pub struct ModelicaChannels {
     pub tx: Sender<ModelicaCommand>,
     /// Receiver for `ModelicaResult` <- worker
     pub rx: Receiver<ModelicaResult>,
+    /// Receiver for `ModelicaCommand` <- UI (used by wasm32 inline worker)
+    #[cfg(target_arch = "wasm32")]
+    pub rx_cmd: Receiver<ModelicaCommand>,
+    /// Sender for `ModelicaResult` -> UI (used by wasm32 inline worker)
+    #[cfg(target_arch = "wasm32")]
+    pub tx_res: Sender<ModelicaResult>,
 }
 
 /// Commands sent to the background simulation worker.
@@ -582,6 +611,300 @@ fn is_squashable(last: &ModelicaCommand, next: &ModelicaCommand) -> bool {
     }
 }
 
+// =============================================================================
+// WebAssembly Inline Worker (wasm32 only - no thread support in browser)
+// =============================================================================
+//
+// Why this exists:
+//   - std::thread::spawn panics on wasm32-unknown-unknown (no OS thread support)
+//   - Web Workers are not available from Rust/wasm-bindgen without additional
+//     tooling (wasm-bindgen-rayon, etc.)
+//   - Instead, we process one simulation command per frame in a Bevy system.
+//     This keeps the UI responsive while still running full Modelica simulation.
+//
+// Trade-offs:
+//   - One command per frame limits throughput (fine for interactive use)
+//   - No back-pressure: commands pile up in the channel if the worker falls behind
+//   - All state lives in a Resource, so it resets on page reload (by design)
+
+/// Inner simulation state for wasm32 inline worker.
+/// Mirrors the local variables in `modelica_worker` on desktop.
+#[cfg(target_arch = "wasm32")]
+#[derive(Default)]
+struct InlineWorkerInner {
+    steppers: HashMap<Entity, (u64, String, SimStepper)>,
+    current_sessions: HashMap<Entity, u64>,
+    cached_models: HashMap<Entity, CachedModel>,
+}
+
+/// Thread-safe wrapper for wasm32 inline worker state.
+///
+/// SAFETY: wasm32-unknown-unknown has no threads, so Send/Sync are vacuously true.
+/// SimStepper internally uses Rc<RefCell<>> which is !Send, but since no threads
+/// exist on this target, we can safely implement Send/Sync.
+#[cfg(target_arch = "wasm32")]
+#[derive(Resource, Default)]
+struct InlineWorker {
+    inner: InlineWorkerInner,
+}
+
+// SAFETY: wasm32-unknown-unknown has no threads, so Send/Sync are vacuously true.
+#[cfg(target_arch = "wasm32")]
+unsafe impl Send for InlineWorker {}
+#[cfg(target_arch = "wasm32")]
+unsafe impl Sync for InlineWorker {}
+
+/// Processes Modelica commands inline on wasm32 (no background thread).
+///
+/// Runs each frame in the Update schedule. Drains one command from the
+/// channel and processes it synchronously, sending results back immediately.
+#[cfg(target_arch = "wasm32")]
+fn inline_worker_process(
+    mut worker: ResMut<InlineWorker>,
+    channels: Res<ModelicaChannels>,
+) {
+    let w = &mut worker.inner;
+    // Process one command per frame to avoid blocking the main thread
+    let Ok(cmd) = channels.rx_cmd.try_recv() else { return };
+
+    match cmd {
+        ModelicaCommand::Step { entity, session_id, model_name, inputs, dt, model_path: _ } => {
+            let tx = &channels.tx_res;
+
+            // Auto-init: compile if stepper doesn't exist
+            if !w.steppers.contains_key(&entity) {
+                // Try cached DAE first
+                if let Some(cached) = w.cached_models.get(&entity) {
+                    if cached.model_name == model_name {
+                        let (stripped_source, input_defaults) = strip_input_defaults(&cached.source);
+                        let mut compiler = ModelicaCompiler::new();
+                        if let Ok(comp_res) = compiler.compile_str(&cached.model_name, &stripped_source, "model.mo") {
+                            let mut opts = StepperOptions::default();
+                            opts.atol = 1e-3; opts.rtol = 1e-3;
+                            if let Ok(mut s) = SimStepper::new(&comp_res.dae, opts) {
+                                for (name, val) in &input_defaults { let _ = s.set_input(name, *val); }
+                                for (name, val) in &inputs { let _ = s.set_input(name, *val); }
+                                w.steppers.insert(entity, (session_id, model_name.clone(), s));
+                            }
+                        }
+                    }
+                }
+                // Fallback: try to compile from model_path (won't work in web)
+                // In web mode, models must be pre-compiled via Compile command first
+            }
+
+            if let Some((s_id, _, stepper)) = w.steppers.get_mut(&entity) {
+                if *s_id == session_id {
+                    for (name, val) in &inputs { let _ = stepper.set_input(name, *val); }
+                    let capped_dt = dt.min(0.033);
+                    let sub_dt = capped_dt / 3.0;
+                    let mut step_err = None;
+                    for _ in 0..3 { if let Err(e) = stepper.step(sub_dt) { step_err = Some(e); break; } }
+
+                    if let Some(e) = step_err {
+                        let _ = tx.send(ModelicaResult {
+                            entity, session_id, new_time: stepper.time(), outputs: Vec::new(),
+                            detected_symbols: Vec::new(), error: Some(format!("Solver Error: {:?}", e)),
+                            log_message: None, is_new_model: false, is_parameter_update: false,
+                            is_reset: false, detected_input_names: Vec::new(),
+                        });
+                        w.steppers.remove(&entity);
+                    } else {
+                        let mut outputs = Vec::new();
+                        for name in stepper.variable_names() {
+                            if let Some(val) = stepper.get(name) { if val.is_finite() { outputs.push((name.clone(), val)); } }
+                        }
+                        for name in stepper.input_names() {
+                            if let Some(val) = stepper.get(name) { if val.is_finite() { outputs.push((name.clone(), val)); } }
+                        }
+                        let _ = tx.send(ModelicaResult {
+                            entity, session_id, new_time: stepper.time(), outputs, error: None,
+                            log_message: None, is_new_model: false, detected_symbols: Vec::new(),
+                            is_parameter_update: false, is_reset: false, detected_input_names: Vec::new(),
+                        });
+                    }
+                } else {
+                    let _ = tx.send(result_ok(entity, session_id));
+                }
+            } else {
+                let _ = tx.send(ModelicaResult {
+                    entity, session_id, new_time: 0.0, outputs: Vec::new(),
+                    detected_symbols: Vec::new(), error: Some("Sim engine failed to start.".to_string()),
+                    log_message: None, is_new_model: false, is_parameter_update: false,
+                    is_reset: false, detected_input_names: Vec::new(),
+                });
+            }
+        }
+        ModelicaCommand::Compile { entity, session_id, model_name, source } => {
+            w.current_sessions.insert(entity, session_id);
+            let (stripped_source, input_defaults) = strip_input_defaults(&source);
+
+            let mut opts = StepperOptions::default();
+            opts.atol = 1e-3; opts.rtol = 1e-3;
+            let tx = &channels.tx_res;
+
+            let mut compiler = ModelicaCompiler::new();
+            match compiler.compile_str(&model_name, &stripped_source, "model.mo") {
+                Ok(comp_res) => {
+                    match SimStepper::new(&comp_res.dae, opts) {
+                        Ok(mut stepper) => {
+                            for (name, val) in &input_defaults { let _ = stepper.set_input(name, *val); }
+                            let input_names: Vec<String> = stepper.input_names().to_vec();
+                            let mut symbols = Vec::new();
+                            for name in stepper.variable_names() {
+                                if let Some(val) = stepper.get(name) { symbols.push((name.clone(), val)); }
+                            }
+                            w.cached_models.insert(entity, CachedModel {
+                                session_id, model_name: model_name.clone(), source: source.clone(),
+                                dae: comp_res.clone(),
+                            });
+                            w.steppers.insert(entity, (session_id, model_name.clone(), stepper));
+                            let _ = tx.send(ModelicaResult {
+                                entity, session_id, new_time: 0.0, outputs: Vec::new(),
+                                detected_symbols: symbols, error: None,
+                                log_message: Some("Compiled successfully.".to_string()),
+                                is_new_model: true, is_parameter_update: false, is_reset: false,
+                                detected_input_names: input_names,
+                            });
+                        }
+                        Err(e) => {
+                            let _ = tx.send(ModelicaResult {
+                                entity, session_id, new_time: 0.0, outputs: Vec::new(),
+                                detected_symbols: Vec::new(), error: Some(format!("Stepper Init Error: {:?}", e)),
+                                log_message: None, is_new_model: true, is_parameter_update: false, is_reset: false,
+                                detected_input_names: Vec::new(),
+                            });
+                        }
+                    }
+                }
+                Err(e) => {
+                    let _ = tx.send(ModelicaResult {
+                        entity, session_id, new_time: 0.0, outputs: Vec::new(),
+                        detected_symbols: Vec::new(), error: Some(format!("Compile Error: {:?}", e)),
+                        log_message: None, is_new_model: true, is_parameter_update: false, is_reset: false,
+                        detected_input_names: Vec::new(),
+                    });
+                }
+            }
+        }
+        ModelicaCommand::Reset { entity, session_id } => {
+            w.current_sessions.insert(entity, session_id);
+            let tx = &channels.tx_res;
+
+            if let Some(cached) = w.cached_models.get(&entity) {
+                let (stripped_source, input_defaults) = strip_input_defaults(&cached.source);
+                let mut opts = StepperOptions::default();
+                opts.atol = 1e-3; opts.rtol = 1e-3;
+                let mut compiler = ModelicaCompiler::new();
+                match compiler.compile_str(&cached.model_name, &stripped_source, "model.mo") {
+                    Ok(comp_res) => {
+                        if let Ok(mut stepper) = SimStepper::new(&comp_res.dae, opts) {
+                            for (name, val) in &input_defaults { let _ = stepper.set_input(name, *val); }
+                            let input_names: Vec<String> = stepper.input_names().to_vec();
+                            let mut symbols = Vec::new();
+                            for name in stepper.variable_names() {
+                                if let Some(val) = stepper.get(name) { symbols.push((name.clone(), val)); }
+                            }
+                            w.steppers.insert(entity, (session_id, cached.model_name.clone(), stepper));
+                            let _ = tx.send(ModelicaResult {
+                                entity, session_id, new_time: 0.0, outputs: Vec::new(),
+                                detected_symbols: symbols, error: None,
+                                log_message: Some("Reset complete.".to_string()),
+                                is_new_model: false, is_parameter_update: false, is_reset: true,
+                                detected_input_names: input_names,
+                            });
+                        } else {
+                            let _ = tx.send(ModelicaResult {
+                                entity, session_id, new_time: 0.0, outputs: Vec::new(),
+                                detected_symbols: Vec::new(), error: Some("Stepper init failed".to_string()),
+                                log_message: None, is_new_model: false, is_parameter_update: false, is_reset: true,
+                                detected_input_names: Vec::new(),
+                            });
+                        }
+                    }
+                    Err(e) => {
+                        let _ = tx.send(ModelicaResult {
+                            entity, session_id, new_time: 0.0, outputs: Vec::new(),
+                            detected_symbols: Vec::new(), error: Some(format!("Reset compile error: {:?}", e)),
+                            log_message: None, is_new_model: false, is_parameter_update: false, is_reset: true,
+                            detected_input_names: Vec::new(),
+                        });
+                    }
+                }
+            } else {
+                w.steppers.remove(&entity);
+                let _ = tx.send(ModelicaResult {
+                    entity, session_id, new_time: 0.0, outputs: Vec::new(),
+                    detected_symbols: Vec::new(), error: None,
+                    log_message: Some("Reset complete (no cached model).".to_string()),
+                    is_new_model: false, is_parameter_update: false, is_reset: true,
+                    detected_input_names: Vec::new(),
+                });
+            }
+        }
+        ModelicaCommand::UpdateParameters { entity, session_id, model_name, source } => {
+            if session_id < *w.current_sessions.get(&entity).unwrap_or(&0) {
+                let _ = channels.tx_res.send(result_ok(entity, session_id));
+                return;
+            }
+            w.current_sessions.insert(entity, session_id);
+            let (stripped_source, input_defaults) = strip_input_defaults(&source);
+
+            let mut opts = StepperOptions::default();
+            opts.atol = 1e-3; opts.rtol = 1e-3;
+            let tx = &channels.tx_res;
+
+            let mut compiler = ModelicaCompiler::new();
+            match compiler.compile_str(&model_name, &stripped_source, "model.mo") {
+                Ok(comp_res) => {
+                    match SimStepper::new(&comp_res.dae, opts) {
+                        Ok(mut stepper) => {
+                            for (name, val) in &input_defaults { let _ = stepper.set_input(name, *val); }
+                            let input_names: Vec<String> = stepper.input_names().to_vec();
+                            let mut symbols = Vec::new();
+                            for name in stepper.variable_names() {
+                                if let Some(val) = stepper.get(name) { symbols.push((name.clone(), val)); }
+                            }
+                            w.cached_models.insert(entity, CachedModel {
+                                session_id, model_name: model_name.clone(), source: source.clone(),
+                                dae: comp_res,
+                            });
+                            w.steppers.insert(entity, (session_id, model_name.clone(), stepper));
+                            let _ = tx.send(ModelicaResult {
+                                entity, session_id, new_time: 0.0, outputs: Vec::new(),
+                                detected_symbols: symbols, error: None,
+                                log_message: Some("Parameters applied.".to_string()),
+                                is_new_model: false, is_parameter_update: true, is_reset: false,
+                                detected_input_names: input_names,
+                            });
+                        }
+                        Err(e) => {
+                            let _ = tx.send(ModelicaResult {
+                                entity, session_id, new_time: 0.0, outputs: Vec::new(),
+                                detected_symbols: Vec::new(), error: Some(format!("Stepper Init Error: {:?}", e)),
+                                log_message: None, is_new_model: false, is_parameter_update: true, is_reset: false,
+                                detected_input_names: Vec::new(),
+                            });
+                        }
+                    }
+                }
+                Err(e) => {
+                    let _ = tx.send(ModelicaResult {
+                        entity, session_id, new_time: 0.0, outputs: Vec::new(),
+                        detected_symbols: Vec::new(), error: Some(format!("Re-compile Error: {:?}", e)),
+                        log_message: None, is_new_model: false, is_parameter_update: true, is_reset: false,
+                        detected_input_names: Vec::new(),
+                    });
+                }
+            }
+        }
+        ModelicaCommand::Despawn { entity } => {
+            w.steppers.remove(&entity);
+            w.cached_models.remove(&entity);
+        }
+    }
+}
+
 /// Component that attaches a Modelica model to an entity.
 ///
 /// Holds the model path, name, session ID, parameters, inputs, and observable variables.
@@ -613,6 +936,7 @@ pub struct ModelicaModel {
 ///
 /// Inputs from the UI (e.g., `current_in` in Battery) are sent with every Step command
 /// via `model.inputs`, enabling real-time input injection without recompilation.
+#[cfg(not(target_arch = "wasm32"))]
 fn spawn_modelica_requests(
     channels: Res<ModelicaChannels>,
     time: Res<Time>,
@@ -645,6 +969,40 @@ fn spawn_modelica_requests(
     }
 }
 
+/// Web version of spawn_modelica_requests.
+///
+/// Why fixed timestep: std::time is not available on wasm32-unknown-unknown
+/// (performance.now() is restricted by browsers). We use a fixed 16ms timestep
+/// (~60 FPS) which is sufficient for interactive simulation.
+///
+/// The desktop version uses time.elapsed_secs_f64() for adaptive dt.
+#[cfg(target_arch = "wasm32")]
+fn spawn_modelica_requests(
+    channels: Res<ModelicaChannels>,
+    mut q_models: Query<(Entity, &mut ModelicaModel)>,
+) {
+    const FIXED_DT: f64 = 0.016; // ~60 FPS
+
+    for (entity, mut model) in q_models.iter_mut() {
+        if model.is_stepping || model.paused { continue; }
+
+        let mut inputs = Vec::new();
+        for (name, val) in &model.inputs {
+            inputs.push((name.clone(), *val));
+        }
+
+        model.is_stepping = true;
+        let _ = channels.tx.send(ModelicaCommand::Step {
+            entity,
+            session_id: model.session_id,
+            model_path: model.model_path.clone(),
+            model_name: model.model_name.clone(),
+            inputs,
+            dt: FIXED_DT,
+        });
+    }
+}
+
 /// System that processes results from the background worker.
 ///
 /// Updates `ModelicaModel` components with fresh simulation outputs, handles
@@ -652,7 +1010,7 @@ fn spawn_modelica_requests(
 /// UI display. On `is_new_model`, clears old data and unpauses the simulation.
 fn handle_modelica_responses(
     channels: Res<ModelicaChannels>,
-    time: Res<Time>,
+    #[cfg(not(target_arch = "wasm32"))] time: Res<Time>,
     mut q_models: Query<&mut ModelicaModel>,
     mut workbench_state: ResMut<ui::WorkbenchState>,
 ) {
@@ -732,7 +1090,10 @@ fn handle_modelica_responses(
             }
 
             model.current_time = result.new_time;
-            model.last_step_time = time.elapsed_secs_f64();
+            #[cfg(not(target_arch = "wasm32"))]
+            { model.last_step_time = time.elapsed_secs_f64(); }
+            #[cfg(target_arch = "wasm32")]
+            { model.last_step_time = result.new_time; }
 
             // Record history for plotted variables
             let time_val = result.new_time;
