@@ -56,6 +56,7 @@ impl Plugin for CelestialPlugin {
         app.init_resource::<TerrainTileConfig>();
         app.init_resource::<TerrainMapRegistry>();
         app.insert_resource(Gravity::surface());
+        app.insert_resource(terrain::TerrainSpawnCooldown::default());
         app.register_type::<TerrainTileConfig>();
         app.register_type::<TileCoord>();
         app.register_type::<TrajectoryView>();
@@ -81,10 +82,17 @@ impl Plugin for CelestialPlugin {
         // Core celestial updates in PreUpdate for Coordinate Stability
         // for Gizmos (Update) and Physics (FixedUpdate).
         // Gravity is handled by GravityPlugin (see above).
+        //
+        // System ordering is critical:
+        // 1. big_space propagation runs first (default PreUpdate ordering)
+        // 2. Our systems run AFTER to override GlobalTransform with body rotation
         app.add_systems(PreUpdate, (
             celestial_clock_tick_system,
             ephemeris_update_system,
             body_rotation_system,
+            tile_rotation_sync_system
+                .after(bevy::transform::TransformSystems::Propagate)
+                .after(big_space::prelude::BigSpaceSystems::PropagateHighPrecision),
             soi_transition_system,
         ).chain());
 

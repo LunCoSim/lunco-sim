@@ -160,6 +160,10 @@ pub fn setup_big_space_hierarchy(
     )).set_parent_in_place(emb_grid).id();
 
     // ── Earth Body (rotating child of Earth Grid) ─────────────────────────
+    // Note: Body does NOT have CellCoord. It's a low-precision entity whose
+    // GlobalTransform = Grid × local Transform. This allows rotation from
+    // body_rotation_system to propagate to tile children via propagate_low_precision.
+    // Position is handled by the parent Grid's ephemeris updates.
     let earth_gm = registry.bodies.iter()
         .find(|d| d.ephemeris_id == 399)
         .map(|d| d.gm)
@@ -189,10 +193,17 @@ pub fn setup_big_space_hierarchy(
         Name::new("Earth Body (Rotating)"),
     )).set_parent_in_place(earth_grid).id();
 
-    // Earth terrain tiles — children of Earth Body, inherit rotation.
+    // Earth terrain tiles — spawned with CellCoord, parented to Earth Grid.
+    // Rotation is synced separately via body_rotation_system.
+    let earth_grid_ref = Grid::new(10_000.0, 1.0e30);
     for face in 0..6 {
         for i in 0..2 {
             for j in 0..2 {
+                let (u, v) = crate::terrain::tile_center_uv(face, 1, i, j);
+                let tile_center_dir = crate::terrain::cube_to_sphere(face, u, v);
+                let tile_body_local = tile_center_dir * 6371.0e3;
+                let (tile_cell, tile_local_pos) = earth_grid_ref.translation_to_grid(tile_body_local);
+
                 commands.spawn((
                     Mesh3d(meshes.add(crate::terrain::create_quadsphere_tile_mesh(
                         earth_body, face, 1, i, j, 6371.0e3, 32, None, DVec3::ZERO
@@ -223,13 +234,14 @@ pub fn setup_big_space_hierarchy(
                             surface_color: LinearRgba::new(0.3, 0.3, 0.3, 1.0),
                         },
                     })),
-                    Transform::default(),
+                    tile_cell,
+                    Transform::from_translation(tile_local_pos),
                     GlobalTransform::default(),
                     Visibility::Visible,
                     InheritedVisibility::default(),
                     NoFrustumCulling,
                     Name::new(format!("Earth Tile f{} i{} j{}", face, i, j)),
-                )).set_parent_in_place(earth_body);
+                )).set_parent_in_place(earth_grid);
             }
         }
     }
@@ -277,10 +289,17 @@ pub fn setup_big_space_hierarchy(
         Name::new("Moon Body (Rotating)"),
     )).set_parent_in_place(moon_grid).id();
 
-    // Moon terrain tiles — children of Moon Body, inherit rotation.
+    // Moon terrain tiles — spawned with CellCoord, parented to Moon Grid.
+    // Rotation is synced separately via body_rotation_system.
+    let moon_grid_ref = Grid::new(10_000.0, 1.0e30);
     for face in 0..6 {
         for i in 0..2 {
             for j in 0..2 {
+                let (u, v) = crate::terrain::tile_center_uv(face, 1, i, j);
+                let tile_center_dir = crate::terrain::cube_to_sphere(face, u, v);
+                let tile_body_local = tile_center_dir * 1737.0e3;
+                let (tile_cell, tile_local_pos) = moon_grid_ref.translation_to_grid(tile_body_local);
+
                 commands.spawn((
                     Mesh3d(meshes.add(crate::terrain::create_quadsphere_tile_mesh(
                         moon_body, face, 1, i, j, 1737.0e3, 32, None, DVec3::ZERO
@@ -312,13 +331,14 @@ pub fn setup_big_space_hierarchy(
                             surface_color: LinearRgba::new(0.35, 0.35, 0.35, 1.0),
                         },
                     })),
-                    Transform::default(),
+                    tile_cell,
+                    Transform::from_translation(tile_local_pos),
                     GlobalTransform::default(),
                     Visibility::Visible,
                     InheritedVisibility::default(),
                     NoFrustumCulling,
                     Name::new(format!("Moon Tile f{} i{} j{}", face, i, j)),
-                )).set_parent_in_place(moon_body);
+                )).set_parent_in_place(moon_grid);
             }
         }
     }

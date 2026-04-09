@@ -82,19 +82,48 @@ pub fn ephemeris_update_system(
 pub fn body_rotation_system(
     clock: Res<CelestialClock>,
     registry: Res<CelestialBodyRegistry>,
-    mut q_bodies: Query<(&mut Transform, &CelestialBody)>,
+    mut q_bodies: Query<(Entity, &mut Transform, &mut GlobalTransform, &CelestialBody), Without<crate::terrain::TileCoord>>,
     mut last_jd: Local<f64>,
+    mut debug_timer: Local<f32>,
 ) {
     *last_jd = clock.epoch;
-    
+    *debug_timer += 1.0 / 60.0;
+    let do_debug = *debug_timer > 2.0;
+    if do_debug { *debug_timer = 0.0; }
+
     let days_since_j2000 = clock.epoch - 2_451_545.0;
-    for (mut tf, b) in q_bodies.iter_mut() {
+
+    for (_body_ent, mut tf, mut gtf, b) in q_bodies.iter_mut() {
         if let Some(desc) = registry.bodies.iter().find(|d| d.ephemeris_id == b.ephemeris_id) {
             if desc.rotation_rate_rad_per_day != 0.0 {
                 let angle = days_since_j2000 * desc.rotation_rate_rad_per_day;
-                let rot = DQuat::from_axis_angle(desc.polar_axis, angle);
-                tf.rotation = rot.as_quat();
+                let rot = DQuat::from_axis_angle(desc.polar_axis, angle).as_quat();
+                tf.rotation = rot;
+                let (scale, _, translation) = gtf.to_scale_rotation_translation();
+                *gtf = GlobalTransform::from_scale(scale)
+                    * GlobalTransform::from_rotation(rot)
+                    * GlobalTransform::from_translation(translation);
+                if do_debug && b.ephemeris_id == 301 {
+                    warn!("BODY_ROT: Moon angle={:.4} rad", angle);
+                }
             }
+        }
+    }
+}
+
+/// Propagate body rotation to terrain tile GlobalTransforms.
+/// Runs after body_rotation_system to ensure bodies have their latest rotation.
+pub fn tile_rotation_sync_system(
+    q_bodies: Query<&Transform, (With<CelestialBody>, Without<crate::terrain::TileCoord>)>,
+    mut q_tiles: Query<(&mut Transform, &mut GlobalTransform, &crate::terrain::TileCoord)>,
+) {
+    for (mut tile_tf, mut tile_gtf, tile_coord) in q_tiles.iter_mut() {
+        if let Ok(body_tf) = q_bodies.get(tile_coord.body) {
+            tile_tf.rotation = body_tf.rotation;
+            let (scale, _, translation) = tile_gtf.to_scale_rotation_translation();
+            *tile_gtf = GlobalTransform::from_scale(scale)
+                * GlobalTransform::from_rotation(body_tf.rotation)
+                * GlobalTransform::from_translation(translation);
         }
     }
 }
