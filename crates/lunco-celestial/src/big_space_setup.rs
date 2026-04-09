@@ -77,8 +77,23 @@ pub fn setup_big_space_hierarchy(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut blueprint_materials: ResMut<Assets<crate::blueprint::BlueprintMaterial>>,
     asset_server: Res<AssetServer>,
+    #[cfg(target_arch = "wasm32")] embedded_earth: Option<Res<crate::embedded_assets::EmbeddedEarthTexture>>,
+    #[cfg(target_arch = "wasm32")] embedded_moon: Option<Res<crate::embedded_assets::EmbeddedMoonTexture>>,
 ) {
-    // ── BigSpace Root ─────────────────────────────────────────────────────
+    // Helper to get Earth texture: embedded on wasm32, from cache on desktop
+    #[cfg(not(target_arch = "wasm32"))]
+    let earth_texture = asset_server.load("cached_textures://earth.png");
+    #[cfg(target_arch = "wasm32")]
+    let earth_texture = embedded_earth.as_ref().map(|e| e.0.clone()).unwrap_or_default();
+
+    // Helper to get Moon texture: embedded on wasm32 (optional), from cache on desktop
+    #[cfg(not(target_arch = "wasm32"))]
+    let moon_texture = asset_server.load("cached_textures://moon.png");
+    #[cfg(target_arch = "wasm32")]
+    let moon_texture = embedded_moon.as_ref().and_then(|e| e.0.clone()).unwrap_or_default();
+
+    // 1. Minimalist BigSpace Root (No Name, No standard spatial components)
+    // IMPORTANT: In big_space 0.12+, BigSpace component must be on a top-level entity.
     let big_space_root = commands.spawn(BigSpace::default()).id();
 
     // ── Solar System Grid (inertial anchor) ────────────────────────────────
@@ -211,7 +226,7 @@ pub fn setup_big_space_hierarchy(
                     MeshMaterial3d(blueprint_materials.add(crate::blueprint::BlueprintMaterial {
                         base: StandardMaterial {
                             base_color: Color::WHITE,
-                            base_color_texture: Some(asset_server.load("cached_textures://earth.png")),
+                            base_color_texture: Some(earth_texture.clone()),
                             unlit: false,
                             ..default()
                         },
@@ -307,7 +322,7 @@ pub fn setup_big_space_hierarchy(
                     MeshMaterial3d(blueprint_materials.add(crate::blueprint::BlueprintMaterial {
                         base: StandardMaterial {
                             base_color: Color::srgb(0.5, 0.5, 0.5),
-                            base_color_texture: Some(asset_server.load("cached_textures://moon.png")),
+                            base_color_texture: Some(moon_texture.clone()),
                             metallic: 0.1,
                             perceptual_roughness: 0.9,
                             ..default()

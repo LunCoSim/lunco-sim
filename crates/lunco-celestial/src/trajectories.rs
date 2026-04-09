@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use bevy::tasks::Task;
 use bevy::render::render_resource::PrimitiveTopology;
-use bevy::asset::RenderAssetUsages;
+use bevy::asset::{RenderAssetUsages, load_internal_asset};
 use big_space::prelude::CellCoord;
 use futures_lite::future;
 use std::sync::Arc;
@@ -14,6 +14,7 @@ use bevy::render::render_resource::AsBindGroup;
 use bevy::math::cubic_splines::CubicCardinalSpline;
 use bevy::pbr::{MaterialExtension, ExtendedMaterial};
 use bevy::camera::visibility::NoFrustumCulling;
+use bevy_shader::Shader;
 
 pub struct TrajectoryPlugin;
 
@@ -35,9 +36,28 @@ pub struct TrajectoryExtension {
 
 impl MaterialExtension for TrajectoryExtension {
     fn fragment_shader() -> ShaderRef {
-        "shaders/trajectory.wgsl".into()
+        // Returns the handle to our embedded shader (set by EmbeddedAssetsPlugin on wasm32)
+        crate::embedded_assets::TRAJECTORY_SHADER_HANDLE.clone().into()
     }
 }
+
+/// Registers the embedded trajectory shader into the asset server.
+pub struct TrajectoryShaderPlugin;
+
+impl Plugin for TrajectoryShaderPlugin {
+    fn build(&self, app: &mut App) {
+        load_internal_asset!(
+            app,
+            crate::embedded_assets::TRAJECTORY_SHADER_HANDLE,
+            "../../../assets/shaders/trajectory.wgsl",
+            Shader::from_wgsl
+        );
+    }
+}
+
+/// Holds the compiled trajectory shader handle.
+#[derive(Resource)]
+pub struct TrajectoryShaderHandle(pub Handle<Shader>);
 
 pub type TrajectoryMaterial = ExtendedMaterial<StandardMaterial, TrajectoryExtension>;
 

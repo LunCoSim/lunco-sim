@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 bevy = { workspace = true, features = ["default"] }
+bevy_shader = "0.18.1"
 big_space = { workspace = true }
 celestial-ephemeris = "0.1.1-alpha.2"
 celestial-time = "0.1.1-alpha.2"
@@ -18,9 +19,14 @@ bevy_asset = "0.18.1"
 futures-lite = { workspace = true }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-ureq = { version = "2.9", features = ["tls"] }
 resvg = { workspace = true }
 tiny-skia = { workspace = true }
 image = { workspace = true }
 usvg = "0.45"
 smallvec = { workspace = true }
+uuid = { version = "1", features = ["v4"] }
+
+# ureq is desktop-only: HTTP client with TLS for downloading ephemeris data
+# On wasm32, use browser fetch() via web-sys instead
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+ureq = { version = "2.9", features = ["tls"] }

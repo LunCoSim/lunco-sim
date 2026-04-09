@@ -22,6 +22,7 @@ mod terrain;
 mod trajectories;
 mod blueprint;
 mod missions;
+mod embedded_assets;
 
 pub use clock::*;
 pub use ephemeris::*;
@@ -34,6 +35,7 @@ pub use terrain::*;
 pub use trajectories::*;
 pub use blueprint::*;
 pub use missions::*;
+pub use embedded_assets::*;
 
 #[derive(Event, Debug, Clone, Copy)]
 pub struct SurfaceClickEvent {
@@ -51,6 +53,16 @@ pub struct CelestialPlugin;
 
 impl Plugin for CelestialPlugin {
     fn build(&self, app: &mut App) {
+        // EmbeddedAssetsPlugin embeds shaders/textures/missions on wasm32, no-op on desktop
+        app.add_plugins(embedded_assets::EmbeddedAssetsPlugin);
+
+        // Register embedded shaders BEFORE any materials are created (desktop only, wasm32 handled by EmbeddedAssetsPlugin)
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            app.add_plugins(blueprint::BlueprintShaderPlugin);
+            app.add_plugins(trajectories::TrajectoryShaderPlugin);
+        }
+
         app.insert_resource(get_default_celestial_clock());
         app.init_resource::<TimeWarpState>();
         app.init_resource::<TerrainTileConfig>();
@@ -64,6 +76,9 @@ impl Plugin for CelestialPlugin {
         app.register_type::<TrajectoryPath>();
         app.insert_resource(CelestialBodyRegistry::default_system());
 
+        // On wasm32, EphemerisResource is set by EmbeddedAssetsPlugin using embedded CSV data.
+        // On desktop, it's initialized here with filesystem access.
+        #[cfg(not(target_arch = "wasm32"))]
         app.insert_resource(ephemeris::EphemerisResource {
             provider: std::sync::Arc::new(ephemeris::CelestialEphemerisProvider::new()),
         });
@@ -79,7 +94,7 @@ impl Plugin for CelestialPlugin {
         app.add_systems(PostStartup, setup_terrain_overrides);
 
         // --- LEAD-PHASE SYNCHRONIZATION ---
-        // Core celestial updates in PreUpdate for Coordinate Stability
+        // Core celestial updates in PreUpdatefor Coordinate Stability
         // for Gizmos (Update) and Physics (FixedUpdate).
         // Gravity is handled by GravityPlugin (see above).
         //
@@ -99,6 +114,9 @@ impl Plugin for CelestialPlugin {
         app.add_systems(Update, (
             celestial_telemetry_system,
             celestial_visuals_system,
+        ).chain());
+
+        app.add_systems(Update, (
             terrain::terrain_spawn_system.run_if(resource_exists::<terrain::TerrainTileConfig>),
             terrain::finalize_terrain_tiles,
         ).chain());
