@@ -22,6 +22,7 @@ mod terrain;
 mod trajectories;
 mod blueprint;
 mod missions;
+mod embedded_assets;
 
 pub use clock::*;
 pub use ephemeris::*;
@@ -34,6 +35,7 @@ pub use terrain::*;
 pub use trajectories::*;
 pub use blueprint::*;
 pub use missions::*;
+pub use embedded_assets::*;
 
 #[derive(Event, Debug, Clone, Copy)]
 pub struct SurfaceClickEvent {
@@ -51,9 +53,15 @@ pub struct CelestialPlugin;
 
 impl Plugin for CelestialPlugin {
     fn build(&self, app: &mut App) {
-        // Register embedded shaders BEFORE any materials are created
-        app.add_plugins(blueprint::BlueprintShaderPlugin);
-        app.add_plugins(trajectories::TrajectoryShaderPlugin);
+        // EmbeddedAssetsPlugin embeds shaders/textures/missions on wasm32, no-op on desktop
+        app.add_plugins(embedded_assets::EmbeddedAssetsPlugin);
+
+        // Register embedded shaders BEFORE any materials are created (desktop only, wasm32 handled by EmbeddedAssetsPlugin)
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            app.add_plugins(blueprint::BlueprintShaderPlugin);
+            app.add_plugins(trajectories::TrajectoryShaderPlugin);
+        }
 
         app.insert_resource(get_default_celestial_clock());
         app.init_resource::<TimeWarpState>();
@@ -66,6 +74,9 @@ impl Plugin for CelestialPlugin {
         app.register_type::<TrajectoryPath>();
         app.insert_resource(CelestialBodyRegistry::default_system());
 
+        // On wasm32, EphemerisResource is set by EmbeddedAssetsPlugin using embedded CSV data.
+        // On desktop, it's initialized here with filesystem access.
+        #[cfg(not(target_arch = "wasm32"))]
         app.insert_resource(ephemeris::EphemerisResource {
             provider: std::sync::Arc::new(ephemeris::CelestialEphemerisProvider::new()),
         });

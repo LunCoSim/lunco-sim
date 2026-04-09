@@ -12,6 +12,10 @@ name = "rover_sandbox_web"
 path = "src/bin/rover_sandbox_web.rs"
 
 [[bin]]
+name = "lunco_client_web"
+path = "src/bin/lunco_client_web.rs"
+
+[[bin]]
 name = "model_viewer"
 path = "src/bin/model_viewer.rs"
 

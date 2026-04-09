@@ -3,11 +3,11 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Rover Sandbox</title>
+    <title>LunCo Client</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         html, body { width: 100%; height: 100%; overflow: hidden; }
-        body { background: #1a1a1a; }
+        body { background: #000; }
         #bevy { width: 100%; height: 100%; display: block; }
         #loading {
             position: fixed; top: 50%; left: 50%;
@@ -17,10 +17,10 @@
     </style>
 </head>
 <body>
-    <div id="loading">Loading Rover Sandbox...</div>
+    <div id="loading">Loading LunCo Client...</div>
     <canvas id="bevy"></canvas>
     <script type="module">
-        import init from './pkg/rover_sandbox_web.js';
+        import init from './pkg/lunco_client_web.js';
         function resize() {
             const canvas = document.getElementById('bevy');
             if (canvas) { canvas.width = window.innerWidth; canvas.height = window.innerHeight; }

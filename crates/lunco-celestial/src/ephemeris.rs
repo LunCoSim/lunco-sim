@@ -197,6 +197,45 @@ impl CelestialEphemerisProvider {
             custom_data,
         }
     }
+
+    /// Wasm32 constructor that accepts embedded ephemeris CSV data.
+    /// Used when filesystem access is unavailable.
+    pub fn new_with_embedded_ephemeris(ephemeris_csvs: &[(&str, &str)]) -> Self {
+        let mut custom_data = std::collections::HashMap::new();
+        // Parse embedded CSV data: each entry is (target_id_string, csv_content)
+        for (target_id_str, csv_content) in ephemeris_csvs {
+            if let Ok(target_id) = target_id_str.parse::<i32>() {
+                let mut points = Vec::new();
+                for line in csv_content.lines() {
+                    if line.trim().is_empty() || line.contains("$$") { continue; }
+                    let parts: Vec<&str> = line.split(',').collect();
+                    if parts.len() >= 5 {
+                        if let (Ok(jd), Ok(x), Ok(y), Ok(z)) = (
+                            parts[0].trim().parse::<f64>(),
+                            parts[2].trim().parse::<f64>(),
+                            parts[3].trim().parse::<f64>(),
+                            parts[4].trim().parse::<f64>(),
+                        ) {
+                            const AU_KM: f64 = 149_597_870.7;
+                            points.push(CsvDataPoint {
+                                jd,
+                                pos_au: DVec3::new(x / AU_KM, y / AU_KM, z / AU_KM),
+                            });
+                        }
+                    }
+                }
+                points.sort_by(|a, b| a.jd.partial_cmp(&b.jd).unwrap_or(std::cmp::Ordering::Equal));
+                custom_data.insert(target_id, points);
+            }
+        }
+        Self {
+            _sun: Vsop2013Sun,
+            earth: Vsop2013Earth::new(),
+            emb: Vsop2013Emb,
+            moon: ElpMpp02Moon::new(),
+            custom_data,
+        }
+    }
 }
 
 impl Default for CelestialEphemerisProvider {

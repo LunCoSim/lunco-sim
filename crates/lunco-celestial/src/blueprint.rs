@@ -2,9 +2,7 @@ use bevy::prelude::*;
 use bevy::pbr::{MaterialExtension, ExtendedMaterial};
 use bevy::render::render_resource::AsBindGroup;
 use bevy_shader::Shader;
-
-// Shader source embedded at compile time from root assets/shaders/
-const BLUEPRINT_SHADER_SRC: &str = include_str!("../../../assets/shaders/blueprint_extension.wgsl");
+use bevy_asset::load_internal_asset;
 
 #[derive(Asset, TypePath, AsBindGroup, Debug, Clone, Copy)]
 pub struct BlueprintExtension {
@@ -72,12 +70,12 @@ pub struct BlueprintShaderPlugin;
 
 impl Plugin for BlueprintShaderPlugin {
     fn build(&self, app: &mut App) {
-        let mut shaders = app.world_mut().resource_mut::<Assets<Shader>>();
-        let handle = shaders.add(Shader::from_wgsl(
-            BLUEPRINT_SHADER_SRC,
-            "shaders/blueprint_extension.wgsl",
-        ));
-        app.insert_resource(BlueprintShaderHandle(handle));
+        load_internal_asset!(
+            app,
+            crate::embedded_assets::BLUEPRINT_SHADER_HANDLE,
+            "../../../assets/shaders/blueprint_extension.wgsl",
+            Shader::from_wgsl
+        );
     }
 }
 
@@ -87,8 +85,8 @@ pub struct BlueprintShaderHandle(pub Handle<Shader>);
 
 impl MaterialExtension for BlueprintExtension {
     fn fragment_shader() -> bevy::shader::ShaderRef {
-        // Returns the path key that matches our embedded shader registration
-        "shaders/blueprint_extension.wgsl".into()
+        // Returns the handle to our embedded shader (set by EmbeddedAssetsPlugin on wasm32)
+        crate::embedded_assets::BLUEPRINT_SHADER_HANDLE.clone().into()
     }
 }
 
