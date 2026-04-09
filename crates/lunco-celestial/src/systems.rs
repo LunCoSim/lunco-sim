@@ -100,34 +100,21 @@ pub fn body_rotation_system(
 }
 
 pub fn update_sun_light_system(
-    mut q_light: Query<(&mut Transform, &DirectionalLight)>,
-    _q_sun: Query<&CelestialBody, With<SolarSystemRoot>>,
-    q_camera: Query<(Entity, &GlobalTransform), With<Camera>>,
-    q_all_parents: Query<&ChildOf>,
-    q_grids_only: Query<&big_space::grid::Grid>,
-    q_coords_only: Query<(&CellCoord, &Transform), Without<DirectionalLight>>,
+    mut q_light: Query<&mut Transform, With<DirectionalLight>>,
+    mut first_run: Local<bool>,
 ) {
-    let Some((mut light_tf, _)) = q_light.iter_mut().next() else { return; };
-    let Some((cam_entity, _cam_gtf)) = q_camera.iter().next() else { return; };
-    
-    let mut current = cam_entity;
-    let mut total_pos = bevy::math::DVec3::ZERO;
-    let mut depth = 0;
-    while let Ok(child_of) = q_all_parents.get(current) {
-        if depth > 10 { break; } depth += 1;
-        let parent = child_of.parent();
-        if parent == current { break; }
-        if let Ok(grid) = q_grids_only.get(parent) {
-            if let Ok((cell, tf)) = q_coords_only.get(current) {
-                total_pos += grid.grid_position_double(cell, tf);
-            }
-        }
-        current = parent;
+    if !*first_run {
+        *first_run = true;
+        warn!("SUN_LIGHT: system running");
     }
-    
-    let dir_to_cam = total_pos.normalize_or_zero().as_vec3();
-    if dir_to_cam != Vec3::ZERO {
-        light_tf.look_at(dir_to_cam, Vec3::Y);
+
+    // Point sun light along +Z axis (toward Earth at current epoch).
+    // This is a fixed direction that illuminates the Earth-Moon system.
+    // The exact direction varies with Earth's orbit, but +Z is a reasonable
+    // approximation that keeps the Moon illuminated from most viewing angles.
+    let dir = bevy::math::Vec3::NEG_Z;
+    if let Ok(mut light_tf) = q_light.single_mut() {
+        light_tf.look_to(dir, bevy::math::Vec3::Y);
     }
 }
 

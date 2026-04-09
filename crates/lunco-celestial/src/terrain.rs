@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use bevy::camera::visibility::NoFrustumCulling;
 use bevy::math::DVec3;
 use bevy::render::render_resource::PrimitiveTopology;
 use bevy_mesh::Indices;
@@ -6,6 +7,7 @@ use bevy::tasks::{Task, AsyncComputeTaskPool};
 use futures_lite::future;
 use std::sync::Arc;
 use avian3d::prelude::*;
+use big_space::prelude::{CellCoord, Grid};
 use crate::registry::CelestialBody;
 
 #[derive(Resource, Reflect)]
@@ -25,8 +27,8 @@ impl Default for TerrainTileConfig {
         Self {
             tile_size_m: 500.0,
             tile_resolution: 32,
-            grid_radius: 4,
-            spawn_threshold: 100_000.0,
+            grid_radius: 4, // Limit tile spawning to ~4 grid cells around camera
+            spawn_threshold: 100_000.0, // 100 km — tiles visible from low orbit
             max_lod: 12,
             lod_distance_factor: 2.0,
             physics_lod_threshold: 8,
@@ -79,36 +81,56 @@ pub fn terrain_spawn_system(
     mut commands: Commands,
     config: Res<TerrainTileConfig>,
     registry: Res<TerrainMapRegistry>,
-    q_camera: Query<&GlobalTransform, (With<Camera>, With<lunco_core::Avatar>)>,
-    q_bodies: Query<(Entity, &GlobalTransform, &CelestialBody)>,
+    q_camera: Query<(Entity, &GlobalTransform, &CellCoord, &Transform, &ChildOf), (With<Camera>, With<lunco_core::Avatar>)>,
+    q_bodies: Query<(Entity, &GlobalTransform, &CellCoord, &Transform, &ChildOf, &CelestialBody)>,
     q_tiles: Query<(Entity, &TileCoord)>,
+    q_grids: Query<&Grid>,
+    q_parents: Query<&ChildOf>,
+    q_spatial: Query<(&CellCoord, &Transform)>,
 ) {
-    let Some(cam_gtf) = q_camera.iter().next() else { return; };
-    let camera_pos = cam_gtf.translation().as_dvec3();
-    
+    let Some((cam_ent, _, cam_cell, cam_tf, _)) = q_camera.iter().next() else { return; };
+
+    // Use absolute coordinates for both camera and bodies so altitudes are correct.
+    // GlobalTransform alone is insufficient because big_space splits world position
+    // across CellCoord (integer cell index) and Transform (local remainder).
+    let camera_abs = crate::coords::get_absolute_pos_in_root_double_ghost_aware(
+        cam_ent, cam_cell, cam_tf, &q_parents, &q_grids, &q_spatial,
+    );
+
     let mut nearest_body = None;
     let mut min_altitude = f64::MAX;
-    
-    for (body_ent, body_gtf, body) in q_bodies.iter() {
-        let b_trans = body_gtf.to_matrix().transform_point3(Vec3::ZERO);
-        let body_pos = DVec3::new(b_trans.x as f64, b_trans.y as f64, b_trans.z as f64);
-        let dist = camera_pos.distance(body_pos);
+
+    for (body_ent, _, b_cell, b_tf, _, body) in q_bodies.iter() {
+        let body_abs = crate::coords::get_absolute_pos_in_root_double_ghost_aware(
+            body_ent, b_cell, b_tf, &q_parents, &q_grids, &q_spatial,
+        );
+        let dist = (camera_abs - body_abs).length();
         let alt = dist - body.radius_m;
         if alt < min_altitude {
             min_altitude = alt;
-            nearest_body = Some((body_ent, body_gtf, body));
+            nearest_body = Some((body_ent, body_abs, body.radius_m));
         }
     }
 
-    let Some((body_ent, body_gtf, body)) = nearest_body else { return; };
-    let final_b_trans = body_gtf.to_matrix().transform_point3(Vec3::ZERO);
-    let body_pos = DVec3::new(final_b_trans.x as f64, final_b_trans.y as f64, final_b_trans.z as f64);
+    let Some((body_ent, body_abs, body_radius)) = nearest_body else { return; };
+
+    // Debug: log altitude every ~2 seconds
+    static mut DEBUG_TIMER: f32 = 0.0;
+    unsafe { DEBUG_TIMER += 1.0 / 60.0; }
+    if unsafe { DEBUG_TIMER > 2.0 } {
+        unsafe { DEBUG_TIMER = 0.0; }
+        warn!("TERRAIN: alt={:.0}m threshold={} tiles_on_screen={}",
+              min_altitude, config.spawn_threshold, q_tiles.iter().count());
+    }
 
     if min_altitude < config.spawn_threshold {
         let mut desired_tiles = std::collections::HashSet::new();
         for face in 0..6 {
-            subdivide_face(&mut desired_tiles, body_ent, face, 0, 0, 0, camera_pos, body_pos, body.radius_m, &config);
+            subdivide_face(&mut desired_tiles, body_ent, face, 0, 0, 0, camera_abs, body_abs, body_radius, &config);
         }
+
+        let new_tile_count = desired_tiles.len();
+        info!("TERRAIN: spawning {} tiles", new_tile_count);
 
         for (tile_ent, coord) in q_tiles.iter() {
             if !desired_tiles.contains(coord) {
@@ -126,15 +148,15 @@ pub fn terrain_spawn_system(
             let u_mid = -1.0 + (coord.i as f64 + 0.5) * step;
             let v_mid = -1.0 + (coord.j as f64 + 0.5) * step;
             let tile_center_dir = cube_to_sphere(coord.face, u_mid, v_mid);
-            let tile_center_pos = tile_center_dir * body.radius_m;
-            
+            let tile_center_pos = tile_center_dir * body_radius;
+
             // Task parameters
             let body_ent_inner = coord.body;
             let face_inner = coord.face;
             let level_inner = coord.level;
             let i_inner = coord.i;
             let j_inner = coord.j;
-            let radius_inner = body.radius_m;
+            let radius_inner = body_radius;
             let res_inner = config.tile_resolution;
             let registry_inner = registry.clone();
             let tile_center_inner = tile_center_pos;
@@ -156,11 +178,20 @@ pub fn terrain_spawn_system(
                 PendingTile(task),
                 Transform::from_translation(tile_center_pos.as_vec3()),
                 GlobalTransform::default(),
+                Visibility::Visible,
+                InheritedVisibility::default(),
+                NoFrustumCulling,
                 Name::new(format!("Tile f{} l{} i{} j{}", coord.face, coord.level, coord.i, coord.j)),
             )).id();
-            
+
+            // Parent tiles to the Body entity so they inherit rotation.
+            // The Body is a child of the Grid, so tiles share the same
+            // big_space Grid ancestor as the camera.
             commands.entity(body_ent).add_child(tile_ent);
         }
+
+        warn!("TERRAIN: spawned {} tile entities, {} already on screen",
+              new_tile_count, q_tiles.iter().count());
     } else {
         for (ent, _) in q_tiles.iter() {
             commands.entity(ent).despawn(); 
@@ -173,21 +204,28 @@ pub fn finalize_terrain_tiles(
     mut q_pending: Query<(Entity, &TileCoord, &mut PendingTile)>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<crate::blueprint::BlueprintMaterial>>,
-    q_bodies: Query<(&CelestialBody, &GlobalTransform, &MeshMaterial3d<crate::blueprint::BlueprintMaterial>)>,
-    q_camera: Query<&GlobalTransform, With<Camera>>,
+    q_bodies: Query<(Entity, &CelestialBody, &CellCoord, &Transform, &ChildOf, &MeshMaterial3d<crate::blueprint::BlueprintMaterial>)>,
+    q_camera: Query<(Entity, &CellCoord, &Transform, &ChildOf), (With<Camera>, With<lunco_core::Avatar>)>,
+    q_grids: Query<&Grid>,
+    q_parents: Query<&ChildOf>,
+    q_spatial: Query<(&CellCoord, &Transform)>,
 ) {
-    let Some(cam_gtf) = q_camera.iter().next() else { return; };
-    let camera_pos = cam_gtf.translation().as_dvec3();
+    let Some((cam_ent, cam_cell, cam_tf, _)) = q_camera.iter().next() else { return; };
+    let camera_abs = crate::coords::get_absolute_pos_in_root_double_ghost_aware(
+        cam_ent, cam_cell, cam_tf, &q_parents, &q_grids, &q_spatial,
+    );
 
     for (ent, coord, mut pending) in q_pending.iter_mut() {
         if let Some(data) = future::block_on(future::poll_once(&mut pending.0)) {
-            let Ok((body, _gtf, body_mat_handle)) = q_bodies.get(coord.body) else { 
+            let Ok((body_ent, body, b_cell, b_tf, _, body_mat_handle)) = q_bodies.get(coord.body) else {
                 commands.entity(ent).despawn();
-                continue; 
+                continue;
             };
-            
-            let body_pos = _gtf.translation().as_dvec3();
-            let dist = camera_pos.distance(body_pos);
+
+            let body_abs = crate::coords::get_absolute_pos_in_root_double_ghost_aware(
+                body_ent, b_cell, b_tf, &q_parents, &q_grids, &q_spatial,
+            );
+            let dist = (camera_abs - body_abs).length();
             let altitude = (dist - body.radius_m).max(0.0);
 
             // Get texture from body material

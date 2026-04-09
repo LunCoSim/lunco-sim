@@ -4,42 +4,52 @@
 //!
 //! ```rust
 //! // Sandbox / flat ground:
-//! app.insert_resource(Gravity::Flat(9.81, DVec3::NEG_Y));
+//! app.insert_resource(Gravity::flat(9.81, DVec3::NEG_Y));
 //!
 //! // Full client (surface gravity):
-//! app.insert_resource(Gravity::Surface);
+//! app.insert_resource(Gravity::surface());
 //! ```
 //!
-//! The gravity system runs in `FixedUpdate` and automatically applies
-//! forces to all `RigidBody` entities. No per-entity gravity component needed.
+//! ## Architecture
 //!
-//! ## Gravity modes
+//! The gravity system runs in `FixedUpdate` and automatically applies forces
+//! to all `RigidBody` entities. This is a drop-in replacement for Avian3D's
+//! built-in gravity.
 //!
-//! - **`Gravity::Flat(g, direction)`** — constant gravity, same for all entities.
-//!   Used for sandbox, tests, and flat-ground simulations. Equivalent to
-//!   `avian3d::prelude::Gravity`.
+//! ### Gravity modes
+//!
+//! - **`Gravity::Flat`** — constant gravity, same for all entities.
+//!   Used for sandbox, tests, and flat-ground simulations.
+//!   Equivalent to `avian3d::prelude::Gravity`.
 //!
 //! - **`Gravity::Surface`** — surface gravity for spherical bodies.
 //!   Direction = `-normalize(entity_body_local_position)`.
 //!   Entities must have `GravityBody` to identify which body they're on.
+//!
+//! ### Body-local positions
+//!
+//! In the merged Body+Grid design, the Body entity IS the Grid. Surface
+//! entities (rovers, tiles) are children of Body/Grid. Their `Transform.translation`
+//! is in the body-fixed frame (origin = body center). For these entities,
+//! `Transform.translation` IS the body-local position — no Grid lookup needed.
+//!
+//! For orbit cameras and entities NOT on the Body/Grid, we compute the
+//! absolute position and subtract the body's absolute position to get
+//! the body-relative offset.
 
 use bevy::prelude::*;
 use bevy::math::DVec3;
 use avian3d::prelude::{Forces, Mass, RigidBody, WriteRigidBodyForces};
+use big_space::prelude::{Grid, CellCoord};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Legacy: Orbital gravity models (kept for future multi-body transfers)
+// Gravity models (orbital / multi-body)
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Trait for computing gravitational acceleration at a position.
 pub trait GravityModel: Send + Sync + 'static {
+    /// Compute acceleration vector at `relative_pos` (meters from body center).
     fn acceleration(&self, relative_pos: DVec3) -> DVec3;
-}
-
-/// Component marking an entity as a gravity source.
-#[derive(Component)]
-pub struct GravityProvider {
-    pub model: Box<dyn GravityModel>,
 }
 
 /// Point-mass gravity: a = GM/r² toward center.
@@ -56,11 +66,21 @@ impl GravityModel for PointMassGravity {
     }
 }
 
+/// Component marking an entity as a gravity source.
+///
+/// Placed on Body entities. The `GravityProvider` wraps a `GravityModel`
+/// (typically `PointMassGravity`) to compute acceleration at any position.
+#[derive(Component)]
+pub struct GravityProvider {
+    /// The gravity model (e.g. point-mass, spherical harmonics).
+    pub model: Box<dyn GravityModel>,
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
-// Global Gravity Resource (replacement for avian3d::prelude::Gravity)
+// Global Gravity Resource
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Global gravity — replaces `avian3d::prelude::Gravity`.
+/// Global gravity configuration — replaces `avian3d::prelude::Gravity`.
 ///
 /// Set this once during app setup. The gravity system runs in `FixedUpdate`
 /// and automatically applies forces to all `RigidBody` entities.
@@ -69,15 +89,14 @@ impl GravityModel for PointMassGravity {
 ///
 /// ```rust
 /// // Sandbox: flat Earth gravity
-/// app.insert_resource(Gravity::Flat(9.81, DVec3::NEG_Y));
+/// app.insert_resource(Gravity::flat(9.81, DVec3::NEG_Y));
 ///
 /// // Full client: surface gravity on spherical bodies
-/// app.insert_resource(Gravity::Surface);
+/// app.insert_resource(Gravity::surface());
 /// ```
 #[derive(Resource)]
 pub enum Gravity {
     /// Flat constant gravity — same magnitude and direction for all bodies.
-    /// Equivalent to `avian3d::prelude::Gravity`.
     Flat {
         /// Surface gravity magnitude (m/s²).
         g: f64,
@@ -141,25 +160,21 @@ pub struct LocalGravityField {
 /// Applies gravity to all `RigidBody` entities.
 ///
 /// Runs in `FixedUpdate`. Reads the global `Gravity` resource and applies
-/// forces accordingly. This is a drop-in replacement for Avian3D's
-/// built-in gravity.
+/// forces accordingly.
 ///
-/// - `Gravity::Flat` — same constant force applied to every body
-/// - `Gravity::Surface` — direction from body-local position, magnitude from body's GM
+/// - **`Gravity::Flat`** — same constant force applied to every body.
+/// - **`Gravity::Surface`** — direction from body-local position, magnitude
+///   from body's `GravityProvider`. For surface entities (children of Body/Grid),
+///   `Transform.translation` IS the body-local position since the entity origin
+///   coincides with the body center.
 pub fn gravity_system(
     gravity: Res<Gravity>,
-    mut q_entities: Query<(
-        Entity,
-        &Transform,
-        &Mass,
-        Option<&GravityBody>,
-    ), With<RigidBody>>,
+    mut q_entities: Query<(Entity, &Transform, &Mass, Option<&GravityBody>), With<RigidBody>>,
     q_bodies: Query<&GravityProvider>,
     mut forces: Query<Forces>,
 ) {
     match gravity.as_ref() {
         Gravity::Flat { g, direction } => {
-            // Same as avian3d::prelude::Gravity — constant pull in one direction
             for (entity, _tf, mass, _) in q_entities.iter_mut() {
                 let force = *direction * g * mass.0 as f64;
                 if let Ok(mut f) = forces.get_mut(entity) {
@@ -168,15 +183,17 @@ pub fn gravity_system(
             }
         }
         Gravity::Surface => {
-            // Direction = -normalize(body_local_position), magnitude = GM/R²
             for (entity, tf, mass, gb) in q_entities.iter_mut() {
                 let Some(gb) = gb else { continue; };
+
+                // The entity is a child of Body/Grid. Its Transform.translation
+                // is in the body-fixed frame (origin = body center).
                 let local_pos = tf.translation.as_dvec3();
                 let dist = local_pos.length();
                 if dist < 1e-6 { continue; }
                 let dir = -local_pos / dist;
 
-                // Look up surface g from the body's GravityProvider
+                // Look up surface g from the body's GravityProvider.
                 let g = if let Ok(gp) = q_bodies.get(gb.body_entity) {
                     let accel = gp.model.acceleration(local_pos);
                     accel.length()
@@ -198,28 +215,73 @@ pub fn gravity_system(
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Updates `LocalGravityField` based on avatar position.
+///
+/// Uses the avatar's full grid position (CellCoord + Transform) to compute
+/// the direction from the body center via absolute coordinate arithmetic.
+/// This correctly handles nested grids and reparenting.
+///
+/// Runs in `PreUpdate` so camera systems see fresh data.
 pub fn update_local_gravity_field(
-    q_avatar: Query<(&Transform, Option<&GravityBody>)>,
+    q_avatar: Query<(Entity, &Transform, &CellCoord, &ChildOf, Option<&GravityBody>)>,
+    q_parents: Query<&ChildOf>,
+    q_grids: Query<&Grid>,
+    q_spatial: Query<(&CellCoord, &Transform)>,
     q_bodies: Query<&GravityProvider>,
     gravity: Res<Gravity>,
     mut field: ResMut<LocalGravityField>,
 ) {
-    let Some((tf, gravity_body)) = q_avatar.iter().next() else { return };
+    let Some((avatar_ent, tf, cell, _, gravity_body)) = q_avatar.iter().next() else { return };
 
-    let local_pos = tf.translation.as_dvec3();
-    let dist = local_pos.length();
-    field.local_up = if dist > 1e-6 { local_pos / dist } else { DVec3::Y };
+    // Avatar absolute position in root frame.
+    let cam_abs = crate::coords::get_absolute_pos_in_root_double_ghost_aware(
+        avatar_ent, cell, tf, &q_parents, &q_grids, &q_spatial,
+    );
+
+    let (body_local, surface_g) = if let Some(gb) = gravity_body {
+        // Compute body absolute position.
+        let body_abs = if let Ok((b_cell, b_tf)) = q_spatial.get(gb.body_entity) {
+            crate::coords::get_absolute_pos_in_root_double_ghost_aware(
+                gb.body_entity, b_cell, b_tf, &q_parents, &q_grids, &q_spatial,
+            )
+        } else {
+            DVec3::ZERO
+        };
+
+        let rel = cam_abs - body_abs;
+        let g = if let Ok(gp) = q_bodies.get(gb.body_entity) {
+            gp.model.acceleration(rel).length()
+        } else {
+            0.0
+        };
+        (rel, g)
+    } else if let Some(body_ent) = field.body_entity {
+        // Fall back to the last-known body from LocalGravityField.
+        let body_abs = if let Ok((b_cell, b_tf)) = q_spatial.get(body_ent) {
+            crate::coords::get_absolute_pos_in_root_double_ghost_aware(
+                body_ent, b_cell, b_tf, &q_parents, &q_grids, &q_spatial,
+            )
+        } else {
+            DVec3::ZERO
+        };
+
+        let rel = cam_abs - body_abs;
+        let g = if let Ok(gp) = q_bodies.get(body_ent) {
+            gp.model.acceleration(rel).length()
+        } else {
+            0.0
+        };
+        (rel, g)
+    } else {
+        (cam_abs, 0.0)
+    };
+
+    field.surface_g = surface_g;
+
+    let dist = body_local.length();
+    field.local_up = if dist > 1e-6 { body_local / dist } else { DVec3::Y };
     field.up = field.local_up;
 
-    if let Some(gb) = gravity_body {
-        field.body_entity = Some(gb.body_entity);
-        if let Ok(gp) = q_bodies.get(gb.body_entity) {
-            let accel = gp.model.acceleration(tf.translation.as_dvec3());
-            field.surface_g = accel.length();
-        }
-    }
-
-    // For flat gravity, use the configured g
+    // For flat gravity, use the configured g.
     if let Gravity::Flat { g, direction } = gravity.as_ref() {
         field.surface_g = *g;
         field.local_up = -*direction / direction.length();

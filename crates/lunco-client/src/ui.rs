@@ -13,7 +13,7 @@ use bevy::math::DVec3;
 use bevy_egui::{egui, EguiContexts, EguiPlugin, EguiPrimaryContextPass};
 use lunco_core::{RoverVessel, Vessel, Avatar, Spacecraft};
 use lunco_celestial::{CelestialClock, CelestialBody, TrajectoryView, TrajectoryFrame, LocalGravityField};
-use lunco_avatar::{SpringArmCamera, OrbitCamera, FreeFlightCamera, FrameBlend, CameraScroll, SurfaceRelativeMode};
+use lunco_avatar::{SpringArmCamera, OrbitCamera, FreeFlightCamera, FrameBlend, CameraScroll};
 use lunco_mobility::Suspension;
 
 /// Plugin for managing the simulation's graphical user interface.
@@ -79,7 +79,6 @@ struct MainUiParams<'w, 's> {
     q_camera_tf: Query<'w, 's, &'static Transform, With<Avatar>>,
     q_camera_cell: Query<'w, 's, &'static big_space::prelude::CellCoord, With<Avatar>>,
     q_camera_child_of: Query<'w, 's, &'static ChildOf, With<Avatar>>,
-    q_camera_surface: Query<'w, 's, Has<SurfaceRelativeMode>, With<Avatar>>,
     q_grids: Query<'w, 's, &'static big_space::prelude::Grid>,
     q_camera_spring: Query<'w, 's, &'static SpringArmCamera, With<Avatar>>,
     q_camera_orbit: Query<'w, 's, &'static OrbitCamera, With<Avatar>>,
@@ -198,14 +197,22 @@ fn main_ui_system(mut params: MainUiParams) {
                 }
             });
 
-            // Go to Surface — when a celestial body is selected
-            if params.q_bodies.contains(target) {
-                if ui.button("🌕 Go to Surface").clicked() {
+            // Go to Surface — show when the camera is in OrbitCamera mode targeting a body.
+            // Also show when a body is explicitly selected in the UI.
+            let orbit_target_body = params.q_camera_orbit.iter().next()
+                .and_then(|orbit| params.q_bodies.get(orbit.target).ok())
+                .map(|(e, _, _)| e);
+            let surface_target = orbit_target_body.or_else(|| {
+                params.selected.entity.filter(|t| params.q_bodies.contains(*t))
+            });
+
+            if let Some(body_ent) = surface_target {
+                let (_, _, body) = params.q_bodies.get(body_ent).unwrap();
+                if ui.button(format!("🌕 Go to Surface ({})", body.name)).clicked() {
                     let avatar_ent = params.q_camera.iter().next().unwrap_or(Entity::PLACEHOLDER);
-                    // Pass body entity index so teleport knows which body
-                    let args: Vec<f64> = vec![target.to_bits() as f64];
+                    let args: Vec<f64> = vec![body_ent.to_bits() as f64];
                     params.commands.trigger(lunco_core::architecture::CommandMessage {
-                        id: 0, target, name: "TELEPORT_SURFACE".to_string(),
+                        id: 0, target: body_ent, name: "TELEPORT_SURFACE".to_string(),
                         args: args.into_iter().collect(),
                         source: avatar_ent,
                     });

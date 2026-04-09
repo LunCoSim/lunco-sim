@@ -89,12 +89,20 @@ impl Plugin for CelestialPlugin {
         ).chain());
 
         app.add_systems(Update, (
-            update_sun_light_system,
             celestial_telemetry_system,
             celestial_visuals_system,
             terrain::terrain_spawn_system.run_if(resource_exists::<terrain::TerrainTileConfig>),
             terrain::finalize_terrain_tiles,
         ).chain());
+
+        // Sun light runs in PostUpdate AFTER big_space propagates GlobalTransform,
+        // so the camera world position is correct for light direction.
+        app.add_systems(
+            PostUpdate,
+            update_sun_light_system
+                .after(bevy::transform::TransformSystems::Propagate)
+                .after(big_space::prelude::BigSpaceSystems::PropagateHighPrecision),
+        );
     }
 }
 
