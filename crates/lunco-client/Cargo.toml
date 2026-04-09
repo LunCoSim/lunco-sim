@@ -35,6 +35,7 @@ lunco-usd = { path = "../lunco-usd" }
 lunco-usd-avian = { path = "../lunco-usd-avian" }
 lunco-usd-bevy = { path = "../lunco-usd-bevy" }
 lunco-usd-sim = { path = "../lunco-usd-sim" }
+lunco-sandbox-edit = { path = "../lunco-sandbox-edit" }
 openusd = { workspace = true }
 bevy_egui = { workspace = true }
 bevy-inspector-egui = { workspace = true }

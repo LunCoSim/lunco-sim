@@ -17,7 +17,8 @@ members = [
     "crates/lunco-usd-bevy",
     "crates/lunco-usd-composer",
     "crates/lunco-usd-sim",
-    "crates/lunco-usd"
+    "crates/lunco-usd",
+    "crates/lunco-sandbox-edit"
 ]
 resolver = "2"
 
@@ -37,6 +38,8 @@ big_space = "0.12.0"
 leafwing-input-manager = "0.20.0"
 bevy_egui = "0.39.1"
 bevy-inspector-egui = "0.36.0"
+transform-gizmo-bevy = "0.9.0"
+avian_pickup = "0.5.0-rc.1"
 chrono = "0.4.40"
 futures-lite = "2.3.0"
 resvg = "0.45"

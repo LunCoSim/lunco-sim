@@ -16,6 +16,7 @@ use leafwing_input_manager::prelude::*;
 use lunco_mobility::{LunCoMobilityPlugin, Suspension};
 use lunco_usd::{UsdPlugins, UsdPrimPath, UsdStageAsset};
 use lunco_usd_bevy::sync_usd_visuals;
+use lunco_sandbox_edit::SandboxEditPlugin;
 use lunco_controller::LunCoControllerPlugin;
 use lunco_avatar::{LunCoAvatarPlugin, IntentAnalogState, FreeFlightCamera, SpringArmCamera, OrbitCamera, AdaptiveNearPlane, CameraScroll};
 use lunco_celestial::{BlueprintMaterial, BlueprintExtension};
@@ -49,18 +50,18 @@ fn main() {
         .add_plugins(lunco_core::LunCoCorePlugin)
         .add_plugins(LunCoMobilityPlugin)
         .add_plugins(UsdPlugins)
+        .add_plugins(SandboxEditPlugin)
         .add_plugins(LunCoControllerPlugin)
         .add_plugins(LunCoAvatarPlugin)
         .init_resource::<SandboxSettings>()
         .add_systems(Startup, setup_sandbox)
         .add_systems(Update, (apply_sandbox_settings, apply_blueprint_to_usd_terrain.after(sync_usd_visuals)))
         .add_systems(Update, apply_blueprint_grid_settings)
-        // Spawn a default avatar if the USD scene didn't define one
-        .add_systems(Update, spawn_fallback_avatar.after(sync_usd_visuals))
         .add_systems(PreUpdate, global_transform_propagation_system)
         .add_systems(PostUpdate, (
             global_transform_propagation_system,
             camera_render_propagation_system,
+            spawn_fallback_avatar,
         ).chain().after(avian3d::prelude::PhysicsSystems::Writeback))
         .add_systems(EguiPrimaryContextPass, sandbox_ui_system)
         .run();
@@ -207,19 +208,20 @@ fn setup_sandbox(
 /// This acts as a fallback when the scene file doesn't contain an Avatar prim,
 /// ensuring the user always has a controllable camera.
 fn spawn_fallback_avatar(
-    q_avatars: Query<Entity, With<Avatar>>,
+    q_cameras: Query<Entity, With<Camera3d>>,
     q_grids: Query<Entity, With<Grid>>,
     mut commands: Commands,
     mut done: Local<bool>,
 ) {
     if *done { return; }
-    if q_avatars.iter().next().is_some() {
+    // Check if ANY camera already exists (USD avatar or fallback)
+    if q_cameras.iter().next().is_some() {
         *done = true;
         return;
     }
     let Some(grid) = q_grids.iter().next() else { return; };
 
-    info!("No USD Avatar found, spawning fallback FreeFlightCamera");
+    info!("No camera found, spawning fallback FreeFlightCamera");
     commands.spawn((
         Camera3d::default(),
         FreeFlightCamera {

@@ -33,6 +33,7 @@ Monitor your missions using the **XML Telemetry and Command Exchange (XTCE)** st
 - **Headless-First Architecture**: Core simulation logic is decoupled from rendering, enabling high-speed automated validation and massive parallel Monte Carlo analysis.
 - **Planetary Precision (f64)**: All spatial math and physics use double-precision floating point (f64) for absolute stability across the scales of a lunar base or the entire solar system.
 - **Hotswappable Plugins**: A highly dynamic architecture where every feature — from flight software to physics integrators — is a modular plugin that can be swapped without a restart.
+- **In-Scene Editing**: Spawn rovers, props, and terrain directly in the running simulation. Transform and inspect objects with gizmo tools.
 
 ---
 
@@ -51,17 +52,22 @@ cd lunco-sim
 cargo run --release -p lunco-client --bin rover_sandbox
 ```
 
-### USD Rover Sandbox
-The USD-based rover sandbox loads rover definitions from declarative `.usda` files instead of
-spawning them procedurally. It includes both procedural joint-based rovers and USD raycast rovers
-with skid and Ackermann steering variants:
+### USD Rover Sandbox (with Editing Tools)
+
+The USD-based rover sandbox loads the entire scene — rovers, terrain, and camera — from declarative `.usda` files. It includes an in-scene editing toolkit:
 
 ```bash
 cargo run --release -p lunco-client --bin rover_sandbox_usd
 ```
 
-See [USD System Documentation](docs/USD_SYSTEM.md) for the full architecture, entity layout,
-and how to add new rover variants.
+**Editing Tools:**
+- **Spawn Palette** — Click or drag rovers, balls, ramps, and walls into the scene
+- **Transform Gizmo** — Select objects and use **G** (translate) / **R** (rotate) to manipulate them
+- **Inspector Panel** — View entity parameters (position, mass, physics)
+- **Undo** — **Ctrl+Z** to revert spawns and moves
+- **Escape** — Cancel current operation
+
+See [USD System Documentation](docs/USD_SYSTEM.md) for rover definitions, scene composition, wheel types, and the full editing tools architecture.
 
 ---
 
@@ -69,18 +75,20 @@ and how to add new rover variants.
 
 LunCoSim is built as a modular multi-crate workspace:
 
-- `lunco-core`: Headless simulation core and base traits.
-- `lunco-celestial`: Planetary mechanics, SOI handling, and environments.
-- `lunco-physics`: Precision f64 physics integration via Avian3D.
-- `lunco-telemetry`: XTCE-based monitoring and signaling.
-- `lunco-fsw`: Flight software and subsystem logic.
-- `lunco-client`: Visual client for Desktop and Browser (WASM).
-- `lunco-avatar`: User presence, perspective, and authority management.
+- **`lunco-core`**: Headless simulation core, CommandMessage architecture, and base traits.
+- **`lunco-celestial`**: Planetary mechanics, SOI handling, and environments.
+- **`lunco-mobility`**: Rover locomotion — differential drive, Ackermann steering, raycast suspension.
+- **`lunco-fsw`**: Flight software — digital ports, wires, and subsystem logic.
+- **`lunco-avatar`**: User presence, camera modes (freeflight, orbit, spring arm), and possession.
+- **`lunco-controller`**: Input translation — keyboard/intent to CommandMessage.
+- **`lunco-sandbox-edit`**: In-scene editing — spawn palette, transform gizmo, inspector, undo.
+- **`lunco-usd`**: USD integration — 3-plugin pipeline for visual, physics, and simulation mapping.
+- **`lunco-client`**: Visual desktop client — combines all subsystems into the sandbox binary.
 
 ---
 
 ## 📜 Legacy Support
-The original Godot 4 implementation of LunCoSim is still available on the [**main-godot4**](https://github.com/LunCoSim/lunco-sim/tree/main-godot4) branch. 
+The original Godot 4 implementation of LunCoSim is still available on the [**main-godot4**](https://github.com/LunCoSim/lunco-sim/tree/main-godot4) branch.
 
 ---
 
