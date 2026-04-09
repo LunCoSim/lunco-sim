@@ -18,12 +18,17 @@ use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
 use egui_plot::{Line, Plot, PlotPoints};
 use std::path::PathBuf;
-use crate::{ModelicaModel, ModelicaChannels, ModelicaCommand,
+use crate::{ModelicaModel, ModelicaChannels, ModelicaCommand, models::BUNDLED_MODELS,
             extract_model_name, extract_parameters, extract_inputs_with_defaults,
             extract_input_names, substitute_params_in_source, hash_content};
 
 mod state;
 pub use state::*;
+
+#[cfg(target_arch = "wasm32")]
+pub use state::update_file_load_result;
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::JsCast;
 
 // ─── Viewport Types ─────────────────────────────────────────────────────
 
@@ -230,6 +235,8 @@ fn render_dock(
             .resizable(true)
             .frame(egui::Frame::side_top_panel(&ctx.style()).inner_margin(4.0))
             .show(ctx, |ui| {
+                // Fix width to prevent content-driven expansion
+                ui.set_width(right_size);
                 render_panel_region(ui, &mut layout.right, &mut state, &mut q_models, channels.as_deref());
             });
     }
@@ -344,27 +351,96 @@ fn render_browser(ui: &mut egui::Ui, state: &mut WorkbenchState) {
     ui.separator();
 
     egui::ScrollArea::both().id_salt("browser_scroll").show(ui, |ui| {
-        if let Ok(entries) = std::fs::read_dir(&state.current_path) {
-            let mut entries: Vec<_> = entries.flatten().collect();
-            entries.sort_by_key(|e| e.file_name());
-            for entry in entries {
-                let path = entry.path();
-                if path.is_dir() {
-                    if ui.button(format!("📁 {}", path.file_name().unwrap().to_string_lossy())).clicked() {
-                        state.current_path = path;
+        #[cfg(target_arch = "wasm32")]
+        {
+            use web_sys::HtmlInputElement;
+
+            // Load .mo file from browser file picker
+            if ui.button("📂 Load .mo File").clicked() {
+                if let Some(window) = web_sys::window() {
+                    if let Some(existing) = window.document().and_then(|d| d.get_element_by_id("__modelica_load")) {
+                        existing.remove();
                     }
-                } else if path.extension().and_then(|s| s.to_str()) == Some("mo") {
-                    if ui.button(format!("📄 {}", path.file_name().unwrap().to_string_lossy())).clicked() {
-                        if let Ok(content) = std::fs::read_to_string(&path) {
-                            state.editor_buffer = content;
+                    let document = window.document().unwrap();
+                    let input = document.create_element("input").unwrap();
+                    let input = input.dyn_into::<HtmlInputElement>().unwrap();
+                    input.set_type("file");
+                    input.set_attribute("accept", ".mo").unwrap();
+                    input.set_attribute("style", "display:none").unwrap();
+                    input.set_id("__modelica_load");
+                    document.body().unwrap().append_child(&input).unwrap();
+
+                    let onchange = wasm_bindgen::closure::Closure::once(move |_: web_sys::Event| {
+                        if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
+                            if let Some(inp) = doc.get_element_by_id("__modelica_load")
+                                .and_then(|e| e.dyn_into::<HtmlInputElement>().ok())
+                            {
+                                if let Some(files) = inp.files() {
+                                    if let Some(file) = files.get(0) {
+                                        let reader = web_sys::FileReader::new().unwrap();
+                                        let reader2 = reader.clone();
+                                        let onload = wasm_bindgen::closure::Closure::once(move |_: web_sys::Event| {
+                                            let text = reader2.result().unwrap().as_string().unwrap_or_default();
+                                        crate::ui::state::set_file_load_result(&text);
+                                        });
+                                        reader.set_onload(Some(onload.as_ref().unchecked_ref()));
+                                        reader.read_as_text(&file).unwrap();
+                                        onload.forget();
+                                    }
+                                }
+                                inp.remove();
+                            }
+                        }
+                    });
+                    input.set_onchange(Some(onchange.as_ref().unchecked_ref()));
+                    onchange.forget();
+                    input.click();
+                }
+            }
+            ui.separator();
+
+            // Web: show bundled models (no filesystem access in browser)
+            if state.current_path.starts_with("assets/models") || state.current_path == PathBuf::new() {
+                for (name, _source) in BUNDLED_MODELS {
+                    if ui.button(format!("📄 {}", name)).clicked() {
+                        // Load bundled model source
+                        let source = BUNDLED_MODELS.iter()
+                            .find(|(n, _)| *n == *name)
+                            .map(|(_, s)| *s)
+                            .unwrap_or("");
+                        state.editor_buffer = source.to_string();
+                    }
+                }
+            } else if state.current_path.starts_with(".cache/msl") {
+                ui.label("MSL not available in web mode.");
+            }
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            // Desktop: use filesystem
+            if let Ok(entries) = std::fs::read_dir(&state.current_path) {
+                let mut entries: Vec<_> = entries.flatten().collect();
+                entries.sort_by_key(|e| e.file_name());
+                for entry in entries {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        if ui.button(format!("📁 {}", path.file_name().unwrap().to_string_lossy())).clicked() {
+                            state.current_path = path;
+                        }
+                    } else if path.extension().and_then(|s| s.to_str()) == Some("mo") {
+                        if ui.button(format!("📄 {}", path.file_name().unwrap().to_string_lossy())).clicked() {
+                            if let Ok(content) = std::fs::read_to_string(&path) {
+                                state.editor_buffer = content;
+                            }
                         }
                     }
                 }
             }
-        }
-        if state.current_path != PathBuf::from("assets/models") && state.current_path != PathBuf::from(".cache/msl") {
-            ui.separator();
-            if ui.button("⬅ Back").clicked() { state.current_path.pop(); }
+            if state.current_path != PathBuf::from("assets/models") && state.current_path != PathBuf::from(".cache/msl") {
+                ui.separator();
+                if ui.button("⬅ Back").clicked() { state.current_path.pop(); }
+            }
         }
     });
 }

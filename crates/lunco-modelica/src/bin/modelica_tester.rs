@@ -2,7 +2,7 @@
 //!
 //! Provides a way to validate engineering models independently from the Bevy engine.
 
-use rumoca::Compiler;
+use lunco_modelica::ModelicaCompiler;
 use std::path::PathBuf;
 use anyhow::Context;
 
@@ -24,23 +24,23 @@ fn main() -> anyhow::Result<()> {
 
     // 1. Compile
     let model_path_str = model_path.to_str().context("Invalid path encoding")?;
-    let result = Compiler::new()
-        .model(&model_name)
-        .compile_file(model_path_str)
+    let source = std::fs::read_to_string(model_path_str).context("Failed to read model file")?;
+    let mut compiler = ModelicaCompiler::new();
+    let result = compiler.compile_str(&model_name, &source, model_path_str)
         .context("Failed to compile Modelica model")?;
 
     println!("Successfully compiled to DAE IR.");
 
     // 2. Export DAE IR
-    let json_ir = result.to_json().context("Failed to export DAE IR")?;
+    let json_ir = serde_json::to_string(&result.dae).context("Failed to export DAE IR")?;
     println!("DAE IR Size: {} bytes", json_ir.len());
 
     // 3. Simple Mock Simulation Step
     println!("Starting mock simulation (t=0.0 to t=1.0)...");
-    
+
     let mut current_time = 0.0;
     let dt = 0.1;
-    
+
     while current_time < 1.0 {
         // TODO: Use rumoca-sim to actually step the model
         current_time += dt;
