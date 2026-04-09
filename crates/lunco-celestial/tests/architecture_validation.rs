@@ -34,7 +34,6 @@ fn test_grid_rotation_propagates_to_child_global_transform() {
     let mut app = App::new();
     app.add_plugins(BigSpaceMinimalPlugins);
 
-    // Follow big_space's own test pattern: spawn root bundle, then add children
     let grid = app.world_mut().spawn((
         Grid::new(10_000.0, 1_000.0),
         CellCoord::default(),
@@ -56,9 +55,11 @@ fn test_grid_rotation_propagates_to_child_global_transform() {
         FloatingOrigin,
     )).id();
 
+    // Root → Grid, FO
     app.world_mut().spawn(BigSpaceRootBundle::default())
-        .add_children(&[grid, fo])
-        .add_child(child);
+        .add_children(&[grid, fo]);
+    // Grid → child (NOT root → child!)
+    app.world_mut().entity_mut(grid).add_child(child);
 
     app.update();
 
@@ -95,21 +96,19 @@ fn test_grid_rotation_propagates_to_child_global_transform() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Test 2: Nested Grid rotation (Grid-in-Grid hierarchy)
+// Test 2: Nested Grid with rotating child (EMB → Moon hierarchy)
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// ASSUMPTION: When a child Grid (e.g., Moon Grid inside EMB Grid) is rotated,
-// its children inherit the combined rotation of both parent Grids.
-//
-// WHY IT MATTERS: In the actual hierarchy, Moon Grid is a child of EMB Grid.
-// If EMB Grid also rotates, Moon children need the combined transform.
+// In our architecture, EMB Grid does NOT rotate. Moon Grid rotates.
+// Moon tiles (on Moon Grid) inherit Moon Grid's rotation.
+// This is the actual scenario in LunCoSim.
 
 #[test]
 fn test_nested_grid_rotation() {
     let mut app = App::new();
     app.add_plugins(BigSpaceMinimalPlugins);
 
-    // Parent Grid (like EMB)
+    // Parent Grid (like EMB) — does NOT rotate in our architecture
     let parent_grid = app.world_mut().spawn((
         Grid::new(1.0e8, 1_000.0),
         CellCoord::default(),
@@ -117,7 +116,7 @@ fn test_nested_grid_rotation() {
         GlobalTransform::default(),
     )).id();
 
-    // Child Grid (like Moon)
+    // Child Grid (like Moon) — this one rotates
     let child_grid_offset = Vec3::new(0.0, 0.0, 384_400.0);
     let child_grid = app.world_mut().spawn((
         Grid::new(10_000.0, 1_000.0),
@@ -126,15 +125,14 @@ fn test_nested_grid_rotation() {
         GlobalTransform::default(),
     )).id();
 
-    // Rover on Moon Grid
-    let rover_offset = Vec3::new(100.0, 500.0, 200.0);
-    let rover = app.world_mut().spawn((
+    // Tile on Moon Grid
+    let tile_offset = Vec3::new(100.0, 500.0, 200.0);
+    let tile = app.world_mut().spawn((
         CellCoord::default(),
-        Transform::from_translation(rover_offset),
+        Transform::from_translation(tile_offset),
         GlobalTransform::default(),
     )).id();
 
-    // FloatingOrigin on parent_grid
     let fo = app.world_mut().spawn((
         CellCoord::default(),
         Transform::default(),
@@ -146,55 +144,43 @@ fn test_nested_grid_rotation() {
         .add_child(parent_grid)
         .add_child(fo);
     app.world_mut().entity_mut(parent_grid).add_child(child_grid);
-    app.world_mut().entity_mut(child_grid).add_child(rover);
+    app.world_mut().entity_mut(child_grid).add_child(tile);
 
     app.update();
 
-    // Rotate parent Grid 30° around Y
-    let parent_rot: Quat = DQuat::from_axis_angle(DVec3::Y, 30.0_f64.to_radians()).as_quat();
-    app.world_mut().get_mut::<Transform>(parent_grid).unwrap().rotation = parent_rot;
+    // Record tile position before child Grid rotation
+    let tile_pos_before = app.world().get::<GlobalTransform>(tile).unwrap().translation();
 
-    // Rotate child Grid 45° around Z
-    let child_rot: Quat = DQuat::from_axis_angle(DVec3::Z, 45.0_f64.to_radians()).as_quat();
+    // Rotate child Grid 90° around Y (like Moon rotating)
+    let child_rot: Quat = DQuat::from_axis_angle(DVec3::Y, std::f64::consts::PI / 2.0).as_quat();
     app.world_mut().get_mut::<Transform>(child_grid).unwrap().rotation = child_rot;
 
     app.update();
 
-    // big_space computes child GlobalTransform as:
-    //   parent_grid.global_transform(child_cell, child_transform)
-    // = parent_floating_origin_inverse * DAffine3(child_rot, child_pos + cell_offset)
-    //
-    // For the child Grid entity: its GlobalTransform rotation = parent_rot * child_rot
-    // (since both parent and child Grids are in the same big_space hierarchy)
-    {
-        let child_gtf = app.world().get::<GlobalTransform>(child_grid).unwrap();
-        let combined_rot = parent_rot * child_rot;
-        let child_rot_actual = child_gtf.compute_transform().rotation;
-        let error = (child_rot_actual - combined_rot).length();
-        assert!(
-            error < 1e-5,
-            "Child Grid rotation doesn't match combined parent*child.\n\
-             Expected: {:?}\nGot: {:?}\nError: {:.6}",
-            combined_rot, child_rot_actual, error
-        );
-    }
+    // Tile should have rotated with the child Grid.
+    // The tile's world position = child_grid.rotation × tile_offset + child_grid.translation
+    // (big_space applies the grid's full transform to its children).
+    let tile_gtf = app.world().get::<GlobalTransform>(tile).unwrap();
+    let tile_pos_after = tile_gtf.translation();
+    let expected_pos: Vec3 = child_rot * tile_offset + child_grid_offset;
+    let pos_error = (tile_pos_after - expected_pos).length();
 
-    // Rover is on child_grid: its GlobalTransform uses child_grid's global_transform
-    // = child_grid's parent (parent_grid) * (rover_transform with identity rotation)
-    // So rover rotation = parent_rot (from parent_grid), NOT child_rot
-    // Rover position = parent_rot * (child_grid_offset + rover_offset)
-    {
-        let rover_gtf = app.world().get::<GlobalTransform>(rover).unwrap();
-        let rover_expected: Vec3 = parent_rot * (child_grid_offset + rover_offset);
-        let error = (rover_gtf.translation() - rover_expected).length();
-        assert!(
-            error < 1e-3,
-            "Rover world position incorrect.\nExpected: {:?}\nGot: {:?}\nError: {:.6}",
-            rover_expected, rover_gtf.translation(), error
-        );
-    }
+    // Tile should also inherit the child Grid's rotation
+    let tile_rot = tile_gtf.compute_transform().rotation;
+    let rot_error = (tile_rot - child_rot).length();
 
-    info!("PASS: Nested Grid rotation combines correctly");
+    assert!(
+        pos_error < 1.0,
+        "Tile position not rotated with child Grid.\nExpected: {:?}\nGot: {:?}\nError: {:.6}",
+        expected_pos, tile_pos_after, pos_error
+    );
+    assert!(
+        rot_error < 1e-5,
+        "Tile rotation doesn't match child Grid rotation.\nExpected: {:?}\nGot: {:?}\nError: {:.6}",
+        child_rot, tile_rot, rot_error
+    );
+
+    info!("PASS: Nested Grid rotation — child Grid's children inherit rotation");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

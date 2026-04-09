@@ -280,7 +280,7 @@ pub fn finalize_terrain_tiles(
     mut q_pending: Query<(Entity, &TileCoord, &mut PendingTile)>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<crate::blueprint::BlueprintMaterial>>,
-    q_bodies: Query<(Entity, &CelestialBody, &CellCoord, &Transform, &ChildOf, &MeshMaterial3d<crate::blueprint::BlueprintMaterial>)>,
+    q_bodies: Query<(Entity, &CelestialBody, &CellCoord, &Transform, &ChildOf)>,
     q_camera: Query<(Entity, &CellCoord, &Transform, &ChildOf), (With<Camera>, With<lunco_core::Avatar>)>,
     q_grids: Query<&Grid>,
     q_parents: Query<&ChildOf>,
@@ -293,7 +293,7 @@ pub fn finalize_terrain_tiles(
 
     for (ent, coord, mut pending) in q_pending.iter_mut() {
         if let Some(data) = future::block_on(future::poll_once(&mut pending.0)) {
-            let Ok((body_ent, body, b_cell, b_tf, _, body_mat_handle)) = q_bodies.get(coord.body) else {
+            let Ok((body_ent, body, b_cell, b_tf, _)) = q_bodies.get(coord.body) else {
                 commands.entity(ent).despawn();
                 continue;
             };
@@ -304,14 +304,12 @@ pub fn finalize_terrain_tiles(
             let dist = (camera_abs - body_abs).length();
             let altitude = (dist - body.radius_m).max(0.0);
 
-            // Get texture from body material
-            let mut base_color = if body.name == "Moon" { Color::srgb(0.2, 0.2, 0.2) } else { Color::from(LinearRgba::new(0.005, 0.02, 0.05, 1.0)) };
-            let mut base_color_texture = None;
-            
-            if let Some(body_mat) = materials.get(body_mat_handle) {
-                base_color = body_mat.base.base_color;
-                base_color_texture = body_mat.base.base_color_texture.clone();
-            }
+            // Body defaults based on name (bodies don't carry BlueprintMaterial)
+            let base_color = if body.name == "Moon" {
+                Color::srgb(0.2, 0.2, 0.2)
+            } else {
+                Color::from(LinearRgba::new(0.005, 0.02, 0.05, 1.0))
+            };
 
             let mut entity_cmds = commands.entity(ent);
             entity_cmds.insert((
@@ -319,20 +317,29 @@ pub fn finalize_terrain_tiles(
                 MeshMaterial3d(materials.add(crate::blueprint::BlueprintMaterial {
                     base: StandardMaterial {
                         base_color,
-                        base_color_texture,
+                        unlit: true, // Unlit so surface is always visible regardless of sun direction
                         perceptual_roughness: 0.8,
                         ..default()
                     },
                     extension: crate::blueprint::BlueprintExtension {
                         high_color: LinearRgba::WHITE,
                         low_color: LinearRgba::WHITE,
+                        // Bright lines for surface visibility
+                        high_line_color: LinearRgba::new(1.0, 1.0, 0.0, 1.0),
+                        low_line_color: LinearRgba::new(1.0, 1.0, 0.0, 1.0),
+                        subdivisions: Vec2::new(360.0, 180.0),
+                        fade_range: Vec2::new(0.2, 0.6),
                         grid_scale: 100.0,
                         line_width: 1.0,
-                        subdivisions: Vec2::new(360.0, 180.0),
                         transition: (1.0f64 - (altitude / 50_000.0f64)).clamp(0.0, 1.0) as f32,
                         body_radius: body.radius_m as f32,
+                        // Grid: 100m spacing, lines 3-5 pixels wide
+                        major_grid_spacing: 100.0,
+                        minor_grid_spacing: 25.0,
+                        major_line_width: 3.0,   // 3 pixels
+                        minor_line_width: 2.0,   // 2 pixels
+                        minor_line_fade: 0.3,
                         surface_color: LinearRgba::new(0.3, 0.3, 0.3, 1.0),
-                        ..default()
                     },
                 })),
             ));
@@ -398,7 +405,7 @@ pub fn create_quadsphere_tile_mesh(body_ent: Entity, face: u8, level: u32, i: i3
     let step = 2.0 / tiles_at_level as f64;
     let start_u = -1.0 + (i as f64) * step;
     let start_v = -1.0 + (j as f64) * step;
-    
+
     for y in 0..=res {
         for x in 0..=res {
             let u = start_u + (x as f64 / res as f64) * step;
@@ -456,7 +463,7 @@ pub fn create_quadsphere_tile_mesh(body_ent: Entity, face: u8, level: u32, i: i3
             skirt_indices.push(positions.len() as u32);
             positions.push(skirt_pos);
             normals.push(norm);
-            uvs.push(uvs[idx as usize]); // Extend UVs to skirt
+            uvs.push(uvs[idx as usize]);
         }
         for i in 0..(indices_to_extrude.len() as u32 - 1) {
             let a = indices_to_extrude[i as usize];

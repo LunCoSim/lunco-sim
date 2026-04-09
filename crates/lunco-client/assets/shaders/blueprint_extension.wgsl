@@ -31,12 +31,7 @@ fn fragment(
     @builtin(front_facing) is_front: bool,
 ) -> FragmentOutput {
     var pbr_input = pbr_input_from_standard_material(input, is_front);
-    // Use the PBR-sampled base color (includes base_color_texture from StandardMaterial
-    // if present). The blueprint grid lines are layered on top as an overlay.
-    // When no texture is set, pbr_input.material.base_color falls back to the
-    // StandardMaterial's base_color field.
     var final_base_color = pbr_input.material.base_color;
-
     var grid_mask = 0.0;
 
     if extension.transition < 0.5 {
@@ -51,25 +46,33 @@ fn fragment(
         let ll_fade = 1.0 - smoothstep(extension.fade_range.x, extension.fade_range.y, max(fwidth(ll_coords).x, fwidth(ll_coords).y));
         grid_mask = (1.0 - smoothstep(0.0, extension.line_width, ll_line)) * ll_fade;
     } else {
-        // --- Blueprint Grid (Cartesian XZ, flat ground) ---
-        // fwidth on raw world position (smooth everywhere, no wrap discontinuities).
-        let pos = input.world_position.xz;
-        let world_per_px = abs(fwidth(pos));  // world units per pixel
+        // --- Blueprint Grid (Cartesian, body-local) ---
+        // world_normal is the body-local unit vector from center to surface,
+        // rotated into world space by Body rotation. Multiplying by body_radius
+        // gives the body-local position in world-space coords (~1.7M m range).
+        let body_local = input.world_normal * extension.body_radius;
+        let world_per_px = abs(fwidth(body_local));
 
-        // Major grid
-        let major_dist = vec2<f32>(
-            abs(fract(pos.x / extension.major_grid_spacing - 0.5) - 0.5) * extension.major_grid_spacing,
-            abs(fract(pos.y / extension.major_grid_spacing - 0.5) - 0.5) * extension.major_grid_spacing,
-        );
-        let major_px = min(major_dist.x / max(world_per_px.x, 1e-6), major_dist.y / max(world_per_px.y, 1e-6));
+        // 3D grid: distance to nearest grid plane along each axis.
+        // This gives consistent lines on ALL cube-to-sphere faces (no degenerate
+        // projections at face centers where 2 of 3 coords are near zero).
+        let gx = abs(fract(body_local.x / extension.major_grid_spacing - 0.5) - 0.5) * extension.major_grid_spacing;
+        let gy = abs(fract(body_local.y / extension.major_grid_spacing - 0.5) - 0.5) * extension.major_grid_spacing;
+        let gz = abs(fract(body_local.z / extension.major_grid_spacing - 0.5) - 0.5) * extension.major_grid_spacing;
+        let major_px_x = gx / max(world_per_px.x, 1e-6);
+        let major_px_y = gy / max(world_per_px.y, 1e-6);
+        let major_px_z = gz / max(world_per_px.z, 1e-6);
+        let major_px = min(major_px_x, min(major_px_y, major_px_z));
         let major_m = 1.0 - smoothstep(0.0, extension.major_line_width, major_px);
 
-        // Minor grid
-        let minor_dist = vec2<f32>(
-            abs(fract(pos.x / extension.minor_grid_spacing - 0.5) - 0.5) * extension.minor_grid_spacing,
-            abs(fract(pos.y / extension.minor_grid_spacing - 0.5) - 0.5) * extension.minor_grid_spacing,
-        );
-        let minor_px = min(minor_dist.x / max(world_per_px.x, 1e-6), minor_dist.y / max(world_per_px.y, 1e-6));
+        // Minor grid (same pattern, finer spacing)
+        let gx2 = abs(fract(body_local.x / extension.minor_grid_spacing - 0.5) - 0.5) * extension.minor_grid_spacing;
+        let gy2 = abs(fract(body_local.y / extension.minor_grid_spacing - 0.5) - 0.5) * extension.minor_grid_spacing;
+        let gz2 = abs(fract(body_local.z / extension.minor_grid_spacing - 0.5) - 0.5) * extension.minor_grid_spacing;
+        let minor_px_x = gx2 / max(world_per_px.x, 1e-6);
+        let minor_px_y = gy2 / max(world_per_px.y, 1e-6);
+        let minor_px_z = gz2 / max(world_per_px.z, 1e-6);
+        let minor_px = min(minor_px_x, min(minor_px_y, minor_px_z));
         let minor_raw = 1.0 - smoothstep(0.0, extension.minor_line_width, minor_px);
         let minor_m = minor_raw * extension.minor_line_fade * (1.0 - major_m);
 

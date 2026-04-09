@@ -194,7 +194,7 @@ pub fn setup_big_space_hierarchy(
     )).set_parent_in_place(earth_grid).id();
 
     // Earth terrain tiles — spawned with CellCoord, parented to Earth Grid.
-    // Rotation is synced separately via body_rotation_system.
+    // big_space's propagate_high_precision inherits Grid rotation to all children.
     let earth_grid_ref = Grid::new(10_000.0, 1.0e30);
     for face in 0..6 {
         for i in 0..2 {
