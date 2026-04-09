@@ -6,6 +6,7 @@
 use bevy::prelude::*;
 use transform_gizmo_bevy::GizmoTarget;
 use avian3d::prelude::*;
+use avian3d::spatial_query::SpatialQueryFilter;
 use lunco_core::Avatar;
 
 use crate::{SpawnState, SelectedEntity, ToolMode};
@@ -25,23 +26,29 @@ fn cursor_ray(
 }
 
 /// Finds the most appropriate entity to select from a hit entity.
-/// Returns the hit entity itself if it has a Name and is not a wheel/visual/ghost.
-/// If the hit entity has no Name, walks up one level to its parent.
-/// Stops before reaching the Grid or BigSpace root.
+/// Walks up the parent chain and returns the first entity that:
+/// - Has a Name that identifies it as a top-level object (rover body, panel, prop)
+/// - Is NOT a wheel, collider, visual, ghost, ground, or child component
+/// - Stops at the Grid or BigSpace root
 fn find_selectable(
     mut entity: Entity,
-    q_names: &Query<&Name>,
+    q_names: &Query<(Entity, &Name)>,
     q_parents: &Query<&ChildOf>,
 ) -> Option<Entity> {
     let mut depth = 0;
     const MAX_DEPTH: usize = 5;
 
     loop {
-        // Check if this entity is a valid selection target
-        if let Ok(name) = q_names.get(entity) {
+        if let Ok((_, name)) = q_names.get(entity) {
             let name_str = name.as_str();
-            // Skip wheels, visuals, ghosts
-            if !name_str.contains("Wheel") && !name_str.contains("Visual") && !name_str.contains("Ghost") {
+            // Only select top-level objects: rover bodies, ramps, solar panels, props
+            // Reject wheels, colliders, visuals, ghosts, ground, and child components
+            let is_selectable = !name_str.contains("Wheel")
+                && !name_str.contains("Collider")
+                && !name_str.contains("Visual")
+                && !name_str.contains("Ghost")
+                && name_str != "Ground";
+            if is_selectable {
                 return Some(entity);
             }
         }
@@ -50,23 +57,24 @@ fn find_selectable(
         if let Ok(parent) = q_parents.get(entity) {
             entity = parent.parent();
         } else {
-            break; // No parent — use whatever we have
+            break;
         }
 
         depth += 1;
         if depth >= MAX_DEPTH {
-            break; // Don't walk all the way to BigSpace root
+            break;
         }
     }
 
-    // Return the last entity we checked (even if no Name)
-    Some(entity)
+    None
 }
 
 /// Handles entity selection via Shift+Left-click.
 ///
 /// Regular Left-click is reserved for camera possession.
 /// Shift+Left-click selects the entity closest to the camera under the cursor.
+/// Only hits selectable entities (rover bodies, props, panels) — ignores ground,
+/// wheels, and invisible colliders.
 pub fn handle_entity_selection(
     mut selected: ResMut<SelectedEntity>,
     spawn_state: Res<SpawnState>,
@@ -75,7 +83,7 @@ pub fn handle_entity_selection(
     mouse: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
     raycaster: SpatialQuery,
-    q_names: Query<&Name>,
+    q_names: Query<(Entity, &Name)>,
     q_parents: Query<&ChildOf>,
     q_selectable: Query<(Entity, &Name, &GlobalTransform), Without<Avatar>>,
     q_selected_old: Query<Entity, With<Selected>>,
@@ -110,8 +118,22 @@ pub fn handle_entity_selection(
     let Some(cursor) = window.cursor_position() else { return };
     let Some((origin, direction)) = cursor_ray(camera, cam_tf, cursor) else { return };
 
-    // Get the FIRST hit (closest to camera)
-    let hit = raycaster.cast_ray(origin.into(), direction, 1000.0, false, &SpatialQueryFilter::default());
+    // Build exclusion filter: ground, wheels, and other non-selectable colliders.
+    // Ramps, rover bodies, solar panels, and props are all selectable.
+    let exclude: Vec<Entity> = q_names.iter()
+        .filter_map(|(e, name)| {
+            let n = name.as_str();
+            if n == "Ground" || n.contains("Wheel") || n.contains("Ghost") {
+                Some(e)
+            } else {
+                None
+            }
+        })
+        .collect();
+    let filter = SpatialQueryFilter::default().with_excluded_entities(exclude);
+
+    // Get the closest hit among selectable entities
+    let hit = raycaster.cast_ray(origin.into(), direction, 1000.0, false, &filter);
 
     let Some(hit_data) = hit else {
         // Missed everything — deselect
@@ -123,11 +145,11 @@ pub fn handle_entity_selection(
         return;
     };
 
-    // Find the best selectable entity from the hit
+    // Find the best selectable entity from the hit (walks up parent chain)
     let target = find_selectable(hit_data.entity, &q_names, &q_parents);
 
-    let Some(target_entity) = target else {
-        // No valid target — deselect
+    let Some(entity) = target else {
+        // No valid selectable target — deselect
         for old in q_selected_old.iter() {
             commands.entity(old).remove::<Selected>().remove::<GizmoTarget>();
         }
@@ -137,7 +159,7 @@ pub fn handle_entity_selection(
     };
 
     // Verify the target is in the selectable query
-    let Ok((_, name, _)) = q_selectable.get(target_entity) else {
+    let Ok((_, name, _)) = q_selectable.get(entity) else {
         // Not selectable — deselect
         for old in q_selected_old.iter() {
             commands.entity(old).remove::<Selected>().remove::<GizmoTarget>();
@@ -153,10 +175,10 @@ pub fn handle_entity_selection(
     }
 
     // Select the target entity
-    commands.entity(target_entity).insert((Selected, GizmoTarget::default()));
-    selected.entity = Some(target_entity);
+    commands.entity(entity).insert((Selected, GizmoTarget::default()));
+    selected.entity = Some(entity);
     let name_str = name.as_str();
-    info!("Selected entity {:?} ({})", target_entity, name_str);
+    info!("Selected entity {:?} ({})", entity, name_str);
 
     // Auto-switch to translate mode
     if selected.mode == ToolMode::Select {

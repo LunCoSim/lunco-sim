@@ -848,11 +848,26 @@ fn on_drag_commands(trigger: On<CommandMessage>, mut commands: Commands, q_avata
 
 // ─── Raycasting ──────────────────────────────────────────────────────────────
 
-fn avatar_raycast_possession(mouse: Res<ButtonInput<MouseButton>>, windows: Query<&Window>, camera_q: Query<(&Camera, &GlobalTransform, Entity), With<Avatar>>, mut commands: Commands, q_bodies: Query<(Entity, &GlobalTransform, &CelestialBody)>, q_spacecraft: Query<(Entity, &GlobalTransform, &Spacecraft)>, q_rovers: Query<(Entity, &GlobalTransform), With<Vessel>>) {
+fn avatar_raycast_possession(
+    mouse: Res<ButtonInput<MouseButton>>,
+    windows: Query<&Window>,
+    camera_q: Query<(&Camera, &GlobalTransform, Entity), With<Avatar>>,
+    q_link: Query<&lunco_controller::ControllerLink, With<Avatar>>,
+    mut commands: Commands,
+    q_bodies: Query<(Entity, &GlobalTransform, &CelestialBody)>,
+    q_spacecraft: Query<(Entity, &GlobalTransform, &Spacecraft)>,
+    q_rovers: Query<(Entity, &GlobalTransform), With<Vessel>>,
+) {
     if !mouse.just_pressed(MouseButton::Left) { return; }
     let Some(pos) = windows.iter().next().and_then(|w| w.cursor_position()) else { return; };
     let Some((camera, cam_gtf, avatar_entity)) = camera_q.iter().next() else { return; };
     let Ok(ray) = camera.viewport_to_world(cam_gtf, pos) else { return; };
+
+    // If the avatar is already possessing a vessel, skip raycast possession entirely.
+    // This prevents unwanted camera repositioning when the user is interacting with
+    // the scene (e.g., selecting/moving a rover in sandbox mode) or when they're
+    // actively driving a vessel.
+    if q_link.iter().next().is_some() { return; }
     let mut nearest = None; let mut min_t = f32::INFINITY; let mut is_possessable = false;
     for (entity, gtf, body) in q_bodies.iter() {
         let oc = ray.origin - gtf.translation(); let b = oc.dot(ray.direction.as_vec3()); let c = oc.dot(oc) - (body.radius_m as f32).powi(2);
