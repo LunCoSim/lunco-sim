@@ -5,6 +5,7 @@
 
 use bevy::prelude::*;
 use lunco_usd_bevy::UsdPrimPath;
+use big_space::prelude::CellCoord;
 
 /// Registry of all spawnable object types.
 #[derive(Resource)]
@@ -30,6 +31,15 @@ impl Default for SpawnCatalog {
             category: SpawnCategory::Rover,
             source: SpawnSource::UsdFile("vessels/rovers/ackermann_rover.usda".into()),
             default_transform: Transform::default(),
+        });
+
+        // --- Components ---
+        catalog.add(SpawnableEntry {
+            id: "solar_panel".into(),
+            display_name: "Solar Panel".into(),
+            category: SpawnCategory::Component,
+            source: SpawnSource::UsdFile("components/power/solar_panel.usda".into()),
+            default_transform: Transform::from_xyz(0.0, 3.0, 0.0),  // 3m above ground
         });
 
         // --- Props ---
@@ -103,6 +113,7 @@ pub struct SpawnableEntry {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SpawnCategory {
     Rover,
+    Component,
     Prop,
     Terrain,
 }
@@ -111,6 +122,7 @@ impl std::fmt::Display for SpawnCategory {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             SpawnCategory::Rover => write!(f, "Rovers"),
+            SpawnCategory::Component => write!(f, "Components"),
             SpawnCategory::Prop => write!(f, "Props"),
             SpawnCategory::Terrain => write!(f, "Terrain"),
         }
@@ -236,6 +248,9 @@ pub fn spawn_procedural(
 ///
 /// Returns the root entity that was spawned. The USD asset is loaded
 /// asynchronously — the caller should handle the loading state.
+///
+/// The USD prim path is derived from the entry ID by converting snake_case
+/// to PascalCase (e.g., "solar_panel" → "/SolarPanel", "skid_rover" → "/SkidRover").
 pub fn spawn_usd_entry(
     commands: &mut Commands,
     asset_server: &AssetServer,
@@ -245,19 +260,30 @@ pub fn spawn_usd_entry(
 ) -> SpawnResult {
     if let SpawnSource::UsdFile(ref path) = entry.source {
         let handle = asset_server.load(path.clone());
+
+        // Derive USD prim path from entry id: "solar_panel" → "/SolarPanel"
+        let prim_path = entry.id.split('_')
+            .map(|part| {
+                let mut chars = part.chars();
+                match chars.next() {
+                    None => String::new(),
+                    Some(c) => c.to_uppercase().chain(chars).collect(),
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("");
+        let prim_path = format!("/{}", prim_path);
+
         let root = commands.spawn((
             Name::new(entry.display_name.clone()),
             UsdPrimPath {
                 stage_handle: handle,
-                path: if entry.id == "skid_rover" {
-                    "/SkidRover".to_string()
-                } else {
-                    "/AckermannRover".to_string()
-                },
+                path: prim_path,
             },
             Transform::from_translation(world_pos),
+            big_space::prelude::CellCoord::default(),
             ChildOf(grid),
-            Visibility::Visible,
+            Visibility::Inherited,
             InheritedVisibility::default(),
             ViewVisibility::default(),
         )).id();
@@ -278,6 +304,7 @@ mod tests {
 
         // Verify categories exist
         assert!(catalog.by_category(SpawnCategory::Rover).count() >= 2);
+        assert!(catalog.by_category(SpawnCategory::Component).count() >= 1);
         assert!(catalog.by_category(SpawnCategory::Prop).count() >= 2);
         assert!(catalog.by_category(SpawnCategory::Terrain).count() >= 2);
     }
@@ -287,6 +314,7 @@ mod tests {
         let catalog = SpawnCatalog::default();
         assert!(catalog.get("skid_rover").is_some());
         assert!(catalog.get("ackermann_rover").is_some());
+        assert!(catalog.get("solar_panel").is_some());
         assert!(catalog.get("ball_dynamic").is_some());
         assert!(catalog.get("ramp").is_some());
         assert!(catalog.get("wall").is_some());
@@ -296,6 +324,7 @@ mod tests {
     #[test]
     fn test_spawn_category_display() {
         assert_eq!(format!("{}", SpawnCategory::Rover), "Rovers");
+        assert_eq!(format!("{}", SpawnCategory::Component), "Components");
         assert_eq!(format!("{}", SpawnCategory::Prop), "Props");
         assert_eq!(format!("{}", SpawnCategory::Terrain), "Terrain");
     }

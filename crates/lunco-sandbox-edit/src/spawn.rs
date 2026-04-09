@@ -5,6 +5,7 @@ use bevy::math::DVec3;
 use avian3d::prelude::*;
 use big_space::prelude::Grid;
 
+use crate::catalog::{SpawnCatalog, SpawnCategory};
 use crate::SpawnState;
 
 /// Ghost entity shown at the spawn placement point.
@@ -90,6 +91,7 @@ pub fn update_spawn_ghost(
 pub fn handle_spawn_placement(
     mut commands: Commands,
     mut spawn_state: ResMut<SpawnState>,
+    catalog: Res<SpawnCatalog>,
     cameras: Query<(&Camera, &GlobalTransform), With<Camera3d>>,
     windows: Query<&Window>,
     mouse: Res<ButtonInput<MouseButton>>,
@@ -130,7 +132,19 @@ pub fn handle_spawn_placement(
 
     if let Some(hit_data) = hit {
         let point = origin + direction.as_dvec3() * hit_data.distance;
-        let point3 = Vec3::new(point.x as f32, point.y as f32, point.z as f32);
+
+        // Apply Y offset based on entry category so components spawn above the ground
+        let offset_y = if let Some(entry) = catalog.get(&entry_id) {
+            match entry.category {
+                SpawnCategory::Component => 2.0,  // Components float above ground
+                SpawnCategory::Rover => 1.0,      // Rovers slightly above
+                SpawnCategory::Prop | SpawnCategory::Terrain => 0.0,  // Props/terrain on ground
+            }
+        } else {
+            0.0
+        };
+
+        let point3 = Vec3::new(point.x as f32, point.y as f32 + offset_y, point.z as f32);
         let grid = match q_grids.iter().next() {
             Some(g) => g,
             None => return,

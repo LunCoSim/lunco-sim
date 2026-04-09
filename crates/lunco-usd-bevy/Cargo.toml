@@ -13,3 +13,4 @@ thiserror = "2.0"
 tracing = "0.1"
 anyhow = "1.0"
 futures-lite = "2.3"
+

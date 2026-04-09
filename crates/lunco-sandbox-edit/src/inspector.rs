@@ -60,14 +60,32 @@ pub fn inspector_panel(
                 ui.label("No entity selected.");
                 ui.label("Press Shift+Left-click on an object to select it.");
                 ui.separator();
-                ui.heading("Mode");
-                let mode_str = match selected.mode {
-                    ToolMode::Select => "Select",
-                    ToolMode::Translate => "Translate (G)",
-                    ToolMode::Rotate => "Rotate (R)",
-                    ToolMode::Pickup => "Pickup",
+                ui.heading("Tool Mode");
+
+                let current_mode = selected.mode;
+                let mut new_mode = current_mode;
+
+                let mode_btn = |ui: &mut egui::Ui, _mode: ToolMode, label: &str, shortcut: &str, active: bool| {
+                    let btn = egui::Button::new(format!("{} {}", label, shortcut));
+                    let btn = if active {
+                        btn.fill(egui::Color32::DARK_GREEN)
+                    } else {
+                        btn
+                    };
+                    ui.add(btn).clicked()
                 };
-                ui.label(format!("Current: {}", mode_str));
+
+                if mode_btn(ui, ToolMode::Select, "Select", "(Q)", current_mode == ToolMode::Select) {
+                    new_mode = ToolMode::Select;
+                }
+                if mode_btn(ui, ToolMode::Translate, "Translate", "(G)", current_mode == ToolMode::Translate) {
+                    new_mode = ToolMode::Translate;
+                }
+                if mode_btn(ui, ToolMode::Rotate, "Rotate", "(R)", current_mode == ToolMode::Rotate) {
+                    new_mode = ToolMode::Rotate;
+                }
+                selected.mode = new_mode;
+
                 return;
             };
 
@@ -77,6 +95,33 @@ pub fn inspector_panel(
             if let Ok(name) = q_names.get(entity) {
                 ui.label(format!("Name: {}", name.as_str()));
             }
+
+            ui.separator();
+            ui.heading("Tool Mode");
+
+            let current_mode = selected.mode;
+            let mut new_mode = current_mode;
+
+            let mode_btn = |ui: &mut egui::Ui, _mode: ToolMode, label: &str, shortcut: &str, active: bool| {
+                let btn = egui::Button::new(format!("{} {}", label, shortcut));
+                let btn = if active {
+                    btn.fill(egui::Color32::DARK_GREEN)
+                } else {
+                    btn
+                };
+                ui.add(btn).clicked()
+            };
+
+            if mode_btn(ui, ToolMode::Select, "Select", "(Q)", current_mode == ToolMode::Select) {
+                new_mode = ToolMode::Select;
+            }
+            if mode_btn(ui, ToolMode::Translate, "Translate", "(G)", current_mode == ToolMode::Translate) {
+                new_mode = ToolMode::Translate;
+            }
+            if mode_btn(ui, ToolMode::Rotate, "Rotate", "(R)", current_mode == ToolMode::Rotate) {
+                new_mode = ToolMode::Rotate;
+            }
+            selected.mode = new_mode;
 
             ui.separator();
             ui.heading("Transform");

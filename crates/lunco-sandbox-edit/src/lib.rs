@@ -24,6 +24,7 @@
 
 pub mod catalog;
 pub mod commands;
+pub mod entity_list;
 pub mod gizmo;
 pub mod inspector;
 pub mod palette;
@@ -60,6 +61,8 @@ impl Plugin for SandboxEditPlugin {
         app.add_systems(Update, gizmo::apply_gizmo_results);
         // Inspector panel MUST run in EguiPrimaryContextPass to access ctx_mut()
         app.add_systems(bevy_egui::EguiPrimaryContextPass, inspector::inspector_panel);
+        // Entity list panel runs in EguiPrimaryContextPass
+        app.add_systems(bevy_egui::EguiPrimaryContextPass, entity_list::entity_list_panel);
         app.add_systems(Update, pickup::sync_pickup_enabled);
         app.add_systems(Update, undo::handle_undo_input);
     }

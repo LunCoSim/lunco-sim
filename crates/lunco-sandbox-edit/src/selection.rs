@@ -83,6 +83,18 @@ pub fn handle_entity_selection(
 ) {
     // Skip if in spawn mode
     if !matches!(spawn_state.as_ref(), SpawnState::Idle) { return; }
+
+    // Escape exits transform mode and deselects
+    if keys.just_pressed(KeyCode::Escape) {
+        for old in q_selected_old.iter() {
+            commands.entity(old).remove::<Selected>().remove::<GizmoTarget>();
+        }
+        selected.entity = None;
+        selected.mode = ToolMode::Select;
+        selected.is_picking_up = false;
+        return;
+    }
+
     // Use Shift+Left-click for selection (regular Left-click is for camera possession)
     if !mouse.just_pressed(MouseButton::Left) { return; }
     if !keys.pressed(KeyCode::ShiftLeft) && !keys.pressed(KeyCode::ShiftRight) { return; }

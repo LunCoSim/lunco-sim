@@ -54,7 +54,7 @@ pub fn spawn_palette_panel(
             }
 
             // Group by category
-            for category in [SpawnCategory::Rover, SpawnCategory::Prop, SpawnCategory::Terrain] {
+            for category in [SpawnCategory::Rover, SpawnCategory::Component, SpawnCategory::Prop, SpawnCategory::Terrain] {
                 let entries: Vec<_> = catalog.by_category(category).collect();
                 if entries.is_empty() { continue; }
 
