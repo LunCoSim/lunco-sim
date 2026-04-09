@@ -85,8 +85,8 @@ pub fn update_spawn_ghost(
 
 /// Handles placement when the user clicks while in spawn mode.
 ///
-/// Instead of spawning directly, this triggers a `SPAWN_ENTITY` [CommandMessage]
-/// so that the same spawn path is used for both UI clicks and CLI commands.
+/// Uses left-click for placement (right-click is for selection).
+/// Triggers a SPAWN_ENTITY CommandMessage so the same path is used for CLI.
 pub fn handle_spawn_placement(
     mut commands: Commands,
     mut spawn_state: ResMut<SpawnState>,

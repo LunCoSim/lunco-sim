@@ -1,23 +1,72 @@
-//! Entity selection via mouse pick.
+//! Entity selection via Shift+Left-click.
+//!
+//! Uses Shift+Left-click to avoid conflict with regular left-click camera possession.
+//! Selects the entity closest to the camera under the cursor.
 
 use bevy::prelude::*;
-use bevy::math::DVec3;
 use transform_gizmo_bevy::GizmoTarget;
 use avian3d::prelude::*;
+use lunco_core::Avatar;
 
 use crate::{SpawnState, SelectedEntity, ToolMode};
+
+/// Component marking an entity as currently selected.
+#[derive(Component)]
+pub struct Selected;
 
 /// Computes a world-space ray from the camera through the cursor position.
 fn cursor_ray(
     camera: &Camera,
     cam_tf: &GlobalTransform,
     cursor: Vec2,
-) -> Option<(DVec3, Dir3)> {
+) -> Option<(Vec3, Dir3)> {
     let ray = camera.viewport_to_world(cam_tf, cursor).ok()?;
-    Some((ray.origin.as_dvec3(), ray.direction))
+    Some((ray.origin, ray.direction))
 }
 
-/// Handles entity selection via mouse click.
+/// Finds the most appropriate entity to select from a hit entity.
+/// Returns the hit entity itself if it has a Name and is not a wheel/visual/ghost.
+/// If the hit entity has no Name, walks up one level to its parent.
+/// Stops before reaching the Grid or BigSpace root.
+fn find_selectable(
+    mut entity: Entity,
+    q_names: &Query<&Name>,
+    q_parents: &Query<&ChildOf>,
+) -> Option<Entity> {
+    let mut depth = 0;
+    const MAX_DEPTH: usize = 5;
+
+    loop {
+        // Check if this entity is a valid selection target
+        if let Ok(name) = q_names.get(entity) {
+            let name_str = name.as_str();
+            // Skip wheels, visuals, ghosts
+            if !name_str.contains("Wheel") && !name_str.contains("Visual") && !name_str.contains("Ghost") {
+                return Some(entity);
+            }
+        }
+
+        // Walk up one parent level
+        if let Ok(parent) = q_parents.get(entity) {
+            entity = parent.parent();
+        } else {
+            break; // No parent — use whatever we have
+        }
+
+        depth += 1;
+        if depth >= MAX_DEPTH {
+            break; // Don't walk all the way to BigSpace root
+        }
+    }
+
+    // Return the last entity we checked (even if no Name)
+    Some(entity)
+}
+
+/// Handles entity selection via Shift+Left-click.
+///
+/// Regular Left-click is reserved for camera possession.
+/// Shift+Left-click selects the entity closest to the camera under the cursor.
 pub fn handle_entity_selection(
     mut selected: ResMut<SelectedEntity>,
     spawn_state: Res<SpawnState>,
@@ -26,11 +75,17 @@ pub fn handle_entity_selection(
     mouse: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
     raycaster: SpatialQuery,
-    q_names: Query<(Entity, &Name, &GlobalTransform)>,
+    q_names: Query<&Name>,
+    q_parents: Query<&ChildOf>,
+    q_selectable: Query<(Entity, &Name, &GlobalTransform), Without<Avatar>>,
+    q_selected_old: Query<Entity, With<Selected>>,
     mut commands: Commands,
 ) {
+    // Skip if in spawn mode
     if !matches!(spawn_state.as_ref(), SpawnState::Idle) { return; }
+    // Use Shift+Left-click for selection (regular Left-click is for camera possession)
     if !mouse.just_pressed(MouseButton::Left) { return; }
+    if !keys.pressed(KeyCode::ShiftLeft) && !keys.pressed(KeyCode::ShiftRight) { return; }
 
     let (camera, cam_tf) = match cameras.iter().next() {
         Some(c) => c,
@@ -43,41 +98,58 @@ pub fn handle_entity_selection(
     let Some(cursor) = window.cursor_position() else { return };
     let Some((origin, direction)) = cursor_ray(camera, cam_tf, cursor) else { return };
 
-    let hit = raycaster.cast_ray(origin, direction, 1000.0, false, &SpatialQueryFilter::default());
+    // Get the FIRST hit (closest to camera)
+    let hit = raycaster.cast_ray(origin.into(), direction, 1000.0, false, &SpatialQueryFilter::default());
 
-    if let Some(hit_data) = hit {
-        let hit_point = origin + direction.as_dvec3() * hit_data.distance;
-        let mut best_entity = None;
-        let mut best_dist = f64::MAX;
-
-        for (entity, _, gtf) in q_names.iter() {
-            let pos = gtf.translation();
-            let dist = (pos.as_dvec3() - hit_point).length();
-            if dist < best_dist && dist < 2.0 {
-                best_dist = dist;
-                best_entity = Some(entity);
-            }
+    let Some(hit_data) = hit else {
+        // Missed everything — deselect
+        for old in q_selected_old.iter() {
+            commands.entity(old).remove::<Selected>().remove::<GizmoTarget>();
         }
+        selected.entity = None;
+        selected.mode = ToolMode::Select;
+        return;
+    };
 
-        if let Some(entity) = best_entity {
-            if let Some(old) = selected.entity {
-                commands.entity(old).remove::<GizmoTarget>();
-            }
-            commands.entity(entity).insert(GizmoTarget::default());
-            selected.entity = Some(entity);
-            if selected.mode == ToolMode::Select {
-                selected.mode = ToolMode::Translate;
-            }
-            return;
+    // Find the best selectable entity from the hit
+    let target = find_selectable(hit_data.entity, &q_names, &q_parents);
+
+    let Some(target_entity) = target else {
+        // No valid target — deselect
+        for old in q_selected_old.iter() {
+            commands.entity(old).remove::<Selected>().remove::<GizmoTarget>();
         }
+        selected.entity = None;
+        selected.mode = ToolMode::Select;
+        return;
+    };
+
+    // Verify the target is in the selectable query
+    let Ok((_, name, _)) = q_selectable.get(target_entity) else {
+        // Not selectable — deselect
+        for old in q_selected_old.iter() {
+            commands.entity(old).remove::<Selected>().remove::<GizmoTarget>();
+        }
+        selected.entity = None;
+        selected.mode = ToolMode::Select;
+        return;
+    };
+
+    // Clear old selection
+    for old in q_selected_old.iter() {
+        commands.entity(old).remove::<Selected>().remove::<GizmoTarget>();
     }
 
-    // Clicked empty space — deselect
-    if let Some(old) = selected.entity {
-        commands.entity(old).remove::<GizmoTarget>();
+    // Select the target entity
+    commands.entity(target_entity).insert((Selected, GizmoTarget::default()));
+    selected.entity = Some(target_entity);
+    let name_str = name.as_str();
+    info!("Selected entity {:?} ({})", target_entity, name_str);
+
+    // Auto-switch to translate mode
+    if selected.mode == ToolMode::Select {
+        selected.mode = ToolMode::Translate;
     }
-    selected.entity = None;
-    selected.mode = ToolMode::Select;
 
     // Tool mode hotkeys
     if keys.just_pressed(KeyCode::KeyG) {
@@ -91,25 +163,10 @@ pub fn handle_entity_selection(
     }
 }
 
-/// Keeps the GizmoTarget on the selected entity in sync.
-pub fn sync_gizmo_target(
-    selected: Res<SelectedEntity>,
-    mut commands: Commands,
-) {
-    let Some(entity) = selected.entity else { return };
-
-    let mode_supports_gizmo = matches!(selected.mode, ToolMode::Translate | ToolMode::Rotate);
-
-    if mode_supports_gizmo {
-        commands.entity(entity).insert(GizmoTarget::default());
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::SpawnState;
-    use crate::UndoStack;
 
     #[test]
     fn test_selected_entity_default() {

@@ -1,11 +1,11 @@
 //! Transform gizmo integration.
 //!
 //! Uses `transform-gizmo-bevy` to provide translate/rotate gizmos on
-//! the selected entity.
+//! the selected entity. Applies gizmo drag results back to entity transforms.
 
 use bevy::prelude::*;
-use transform_gizmo_bevy::{GizmoMode, GizmoOptions, GizmoOrientation, GizmoTarget};
-use lunco_avatar::{FreeFlightCamera, OrbitCamera, SpringArmCamera};
+use transform_gizmo_bevy::{GizmoCamera, GizmoMode, GizmoOptions, GizmoOrientation, GizmoTarget};
+use lunco_core::Avatar;
 
 use crate::{SelectedEntity, ToolMode};
 
@@ -19,18 +19,16 @@ pub fn sync_gizmo_mode(
     // Use mode_override to force a specific gizmo mode
     gizmo_options.mode_override = match selected.mode {
         ToolMode::Translate => {
-            let modes = GizmoMode::all();
-            modes.iter().find(|m| {
-                matches!(m, 
-                    GizmoMode::TranslateX | GizmoMode::TranslateY | 
+            GizmoMode::all().iter().find(|m| {
+                matches!(m,
+                    GizmoMode::TranslateX | GizmoMode::TranslateY |
                     GizmoMode::TranslateZ | GizmoMode::TranslateView)
             })
         }
         ToolMode::Rotate => {
-            let modes = GizmoMode::all();
-            modes.iter().find(|m| {
-                matches!(m, 
-                    GizmoMode::RotateX | GizmoMode::RotateY | 
+            GizmoMode::all().iter().find(|m| {
+                matches!(m,
+                    GizmoMode::RotateX | GizmoMode::RotateY |
                     GizmoMode::RotateZ | GizmoMode::RotateView)
             })
         }
@@ -38,27 +36,50 @@ pub fn sync_gizmo_mode(
     };
 }
 
-/// Adds GizmoTarget to the selected entity.
-/// Skips avatar entities (those with FreeFlightCamera, OrbitCamera, SpringArmCamera)
-/// to prevent gizmo interference with camera controls.
-pub fn sync_gizmo_target(
-    selected: Res<SelectedEntity>,
-    q_avatars: Query<(), Or<(
-        With<FreeFlightCamera>,
-        With<OrbitCamera>,
-        With<SpringArmCamera>,
-    )>>,
+/// Ensures the camera has GizmoCamera marker.
+/// Does NOT add GizmoTarget to anything - that's handled by selection.
+pub fn sync_gizmo_camera(
+    q_cameras: Query<Entity, (With<Camera3d>, Without<GizmoCamera>)>,
     mut commands: Commands,
 ) {
-    let Some(entity) = selected.entity else { return };
+    for camera in q_cameras.iter() {
+        commands.entity(camera).insert(GizmoCamera);
+    }
+}
 
-    // Don't add gizmo to avatar entities
-    if q_avatars.get(entity).is_ok() { return; }
+/// Applies gizmo drag results back to entity transforms.
+///
+/// This is the critical system that makes gizmo manipulation actually work.
+/// When the user drags a gizmo handle, `GizmoTarget.latest_result()` returns
+/// the result. This system reads those results and applies them to the entity's Transform.
+pub fn apply_gizmo_results(
+    selected: Res<SelectedEntity>,
+    gizmo_targets: Query<&GizmoTarget>,
+    mut q_transforms: Query<&mut Transform>,
+) {
+    let Some(entity) = selected.entity else { return; };
 
-    let mode_supports_gizmo = matches!(selected.mode, ToolMode::Translate | ToolMode::Rotate);
-
-    if mode_supports_gizmo {
-        commands.entity(entity).insert(GizmoTarget::default());
+    if let Ok(gizmo_target) = gizmo_targets.get(entity) {
+        if let Some(result) = gizmo_target.latest_result() {
+            if let Ok(mut tf) = q_transforms.get_mut(entity) {
+                match result {
+                    transform_gizmo_bevy::GizmoResult::Translation { total, .. } => {
+                        tf.translation = Vec3::new(total.x as f32, total.y as f32, total.z as f32);
+                    }
+                    transform_gizmo_bevy::GizmoResult::Rotation { axis, total, .. } => {
+                        let axis = Vec3::new(axis.x as f32, axis.y as f32, axis.z as f32);
+                        tf.rotation = Quat::from_axis_angle(axis, total as f32);
+                    }
+                    transform_gizmo_bevy::GizmoResult::Scale { total } => {
+                        tf.scale = Vec3::new(total.x as f32, total.y as f32, total.z as f32);
+                    }
+                    transform_gizmo_bevy::GizmoResult::Arcball { total, .. } => {
+                        let q = bevy::math::DQuat::from_xyzw(total.v.x, total.v.y, total.v.z, total.s);
+                        tf.rotation = Quat::from_xyzw(q.x as f32, q.y as f32, q.z as f32, q.w as f32);
+                    }
+                }
+            }
+        }
     }
 }
 

@@ -34,7 +34,7 @@ pub mod undo;
 
 use bevy::prelude::*;
 
-pub use undo::UndoStack;
+pub use undo::{UndoStack, UndoAction};
 
 /// Master plugin for all sandbox editing tools.
 pub struct SandboxEditPlugin;
@@ -56,7 +56,8 @@ impl Plugin for SandboxEditPlugin {
         app.add_systems(Update, spawn::handle_spawn_placement);
         app.add_systems(Update, selection::handle_entity_selection);
         app.add_systems(Update, gizmo::sync_gizmo_mode);
-        app.add_systems(Update, gizmo::sync_gizmo_target);
+        app.add_systems(Update, gizmo::sync_gizmo_camera);
+        app.add_systems(Update, gizmo::apply_gizmo_results);
         // Inspector panel MUST run in EguiPrimaryContextPass to access ctx_mut()
         app.add_systems(bevy_egui::EguiPrimaryContextPass, inspector::inspector_panel);
         app.add_systems(Update, pickup::sync_pickup_enabled);
