@@ -82,6 +82,12 @@ build_web() {
         --out-dir "$pkg_dir" \
         --target web
     
+    # Copy root assets to web directory (shaders, models, etc.)
+    info "Copying assets for web serving..."
+    if [ -d "$PROJECT_DIR/assets" ]; then
+        rsync -a --delete "$PROJECT_DIR/assets/" "$web_dir/assets/" 2>/dev/null || cp -r "$PROJECT_DIR/assets/"* "$web_dir/assets/"
+    fi
+    
     # Show sizes
     WASM_SIZE=$(du -h "$pkg_dir/rover_sandbox_web_bg.wasm" | cut -f1)
     JS_SIZE=$(du -h "$pkg_dir/rover_sandbox_web.js" | cut -f1)

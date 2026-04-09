@@ -14,6 +14,10 @@ use bevy::render::render_resource::AsBindGroup;
 use bevy::math::cubic_splines::CubicCardinalSpline;
 use bevy::pbr::{MaterialExtension, ExtendedMaterial};
 use bevy::camera::visibility::NoFrustumCulling;
+use bevy_shader::Shader;
+
+// Shader source embedded at compile time from root assets/shaders/
+const TRAJECTORY_SHADER_SRC: &str = include_str!("../../../assets/shaders/trajectory.wgsl");
 
 pub struct TrajectoryPlugin;
 
@@ -38,6 +42,24 @@ impl MaterialExtension for TrajectoryExtension {
         "shaders/trajectory.wgsl".into()
     }
 }
+
+/// Registers the embedded trajectory shader into the asset server.
+pub struct TrajectoryShaderPlugin;
+
+impl Plugin for TrajectoryShaderPlugin {
+    fn build(&self, app: &mut App) {
+        let mut shaders = app.world_mut().resource_mut::<Assets<Shader>>();
+        let handle = shaders.add(Shader::from_wgsl(
+            TRAJECTORY_SHADER_SRC,
+            "shaders/trajectory.wgsl",
+        ));
+        app.insert_resource(TrajectoryShaderHandle(handle));
+    }
+}
+
+/// Holds the compiled trajectory shader handle.
+#[derive(Resource)]
+pub struct TrajectoryShaderHandle(pub Handle<Shader>);
 
 pub type TrajectoryMaterial = ExtendedMaterial<StandardMaterial, TrajectoryExtension>;
 

@@ -21,23 +21,13 @@
     <canvas id="bevy"></canvas>
     <script type="module">
         import init from './pkg/rover_sandbox_web.js';
-
-        // Resize canvas to match window
         function resize() {
             const canvas = document.getElementById('bevy');
-            if (canvas) {
-                canvas.width = window.innerWidth;
-                canvas.height = window.innerHeight;
-            }
+            if (canvas) { canvas.width = window.innerWidth; canvas.height = window.innerHeight; }
         }
-
         window.addEventListener('resize', resize);
         resize();
-
-        init().then(() => {
-            document.getElementById('loading').remove();
-            resize();
-        });
+        init().then(() => { document.getElementById('loading').remove(); resize(); });
     </script>
 </body>
 </html>

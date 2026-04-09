@@ -5415,6 +5415,7 @@ dependencies = [
  "bevy",
  "bevy_asset",
  "bevy_mesh",
+ "bevy_shader",
  "big_space",
  "celestial-core",
  "celestial-ephemeris",

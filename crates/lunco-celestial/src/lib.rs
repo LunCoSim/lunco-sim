@@ -51,6 +51,10 @@ pub struct CelestialPlugin;
 
 impl Plugin for CelestialPlugin {
     fn build(&self, app: &mut App) {
+        // Register embedded shaders BEFORE any materials are created
+        app.add_plugins(blueprint::BlueprintShaderPlugin);
+        app.add_plugins(trajectories::TrajectoryShaderPlugin);
+
         app.insert_resource(get_default_celestial_clock());
         app.init_resource::<TimeWarpState>();
         app.init_resource::<TerrainTileConfig>();
@@ -61,11 +65,11 @@ impl Plugin for CelestialPlugin {
         app.register_type::<TrajectoryFrame>();
         app.register_type::<TrajectoryPath>();
         app.insert_resource(CelestialBodyRegistry::default_system());
-        
+
         app.insert_resource(ephemeris::EphemerisResource {
             provider: std::sync::Arc::new(ephemeris::CelestialEphemerisProvider::new()),
         });
-        
+
         // big_space::prelude::BigSpaceDefaultPlugins should be added by the application entry point
         // after disabling TransformPlugin.
         app.add_plugins(trajectories::TrajectoryPlugin);
@@ -73,9 +77,9 @@ impl Plugin for CelestialPlugin {
 
         app.add_systems(Startup, big_space_setup::setup_big_space_hierarchy);
         app.add_systems(PostStartup, setup_terrain_overrides);
-        
+
         // --- LEAD-PHASE SYNCHRONIZATION ---
-        // We move core celestial updates to PreUpdate 
+        // We move core celestial updates to PreUpdate
         // to ensure Coordinate Stability for Gizmos (Update) and Physics (FixedUpdate)
         app.add_systems(PreUpdate, (
             celestial_clock_tick_system,
@@ -90,7 +94,7 @@ impl Plugin for CelestialPlugin {
             celestial_telemetry_system,
             celestial_visuals_system,
         ).chain());
-        
+
         app.add_systems(Update, (
             gravity::update_global_gravity_system.run_if(resource_exists::<avian3d::prelude::Gravity>),
             terrain::terrain_spawn_system.run_if(resource_exists::<terrain::TerrainTileConfig>),
