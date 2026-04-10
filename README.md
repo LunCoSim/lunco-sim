@@ -67,6 +67,13 @@ LunCoSim is built as a modular multi-crate workspace:
 
 ---
 
+## 🗺️ Roadmap & Detailed Specifications
+
+For those interested in the deep technical details, future architecture, and granular implementation plans, we maintain a comprehensive set of specifications in the [**specs/**](specs/) directory.
+
+---
+
+
 ## 📜 Legacy Support
 The original Godot 4 implementation of LunCoSim is still available on the [**main-godot4**](https://github.com/LunCoSim/lunco-sim/tree/main-godot4) branch. 
 
@@ -79,4 +86,4 @@ The original Godot 4 implementation of LunCoSim is still available on the [**mai
 -   [LinkedIn](https://www.linkedin.com/company/luncosim/)
 -   [YouTube Channel](https://www.youtube.com/@LunCoSim)
 
-**Want to contribute?** We follow a strict TDD and Documentation mandate. [Apply here](https://tally.so/r/3jX6aE) to join our team! Check our [Constitution](.specify/memory/constitution.md) to understand our core principles.
+**Want to contribute?** We follow a strict TDD and Documentation mandate. [Apply here](https://tally.so/r/3jX6aE) to join our team! Check our [Constitution](.specify/memory/constitution.md) and [Detailed Specifications](specs/) to understand our core principles and roadmap.
