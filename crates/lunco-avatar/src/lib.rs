@@ -978,6 +978,53 @@ fn on_drag_commands(trigger: On<CommandMessage>, mut commands: Commands, q_avata
 
 // ─── Raycasting ──────────────────────────────────────────────────────────────
 
+/// Finds the root Vessel entity from a hit collider by walking up the parent chain.
+/// Returns None if no vessel is found or if the hit is on ground/terrain.
+fn find_vessel_from_hit(
+    mut entity: Entity,
+    q_names: &Query<&Name>,
+    q_parents: &Query<&ChildOf>,
+    q_vessel: &Query<Entity, With<Vessel>>,
+) -> Option<Entity> {
+    let mut depth = 0;
+    const MAX_DEPTH: usize = 8;
+
+    // Walk up parent chain looking for a Vessel
+    loop {
+        // Skip ground/terrain by name
+        if let Ok(name) = q_names.get(entity) {
+            let n = name.as_str();
+            if n == "Ground" || n.contains("Terrain") {
+                return None;
+            }
+        }
+
+        // Check if this entity is a vessel
+        if q_vessel.get(entity).is_ok() {
+            return Some(entity);
+        }
+
+        depth += 1;
+        if depth >= MAX_DEPTH {
+            break;
+        }
+
+        // Walk up to parent
+        if let Ok(parent) = q_parents.get(entity) {
+            entity = parent.parent();
+        } else {
+            break;
+        }
+    }
+
+    None
+}
+
+/// Raycasts possession against actual collider geometry.
+///
+/// Uses Avian3D SpatialQuery to hit real mesh colliders, not invisible spheres.
+/// Walks up parent chain to find the root Vessel entity for possession.
+/// Celestial bodies still use sphere intersection (they have no colliders).
 pub fn avatar_raycast_possession(
     mouse: Res<ButtonInput<MouseButton>>,
     windows: Query<&Window>,
@@ -987,37 +1034,96 @@ pub fn avatar_raycast_possession(
     mut commands: Commands,
     q_bodies: Query<(Entity, &GlobalTransform, &CelestialBody)>,
     q_spacecraft: Query<(Entity, &GlobalTransform, &Spacecraft)>,
-    q_rovers: Query<(Entity, &GlobalTransform), With<Vessel>>,
+    q_rovers: Query<Entity, With<Vessel>>,
+    q_names: Query<&Name>,
+    q_parents: Query<&ChildOf>,
+    raycaster: avian3d::prelude::SpatialQuery,
 ) {
     if !mouse.just_pressed(MouseButton::Left) { return; }
-    
+
     // Skip possession check if entity dragging is active
     // This prevents camera possession from interfering with drag operations
     if drag_mode_active.active { return; }
-    
+
+    // If the avatar is already possessing a vessel, skip raycast possession entirely.
+    if q_link.iter().next().is_some() { return; }
+
     let Some(pos) = windows.iter().next().and_then(|w| w.cursor_position()) else { return; };
     let Some((camera, cam_gtf, avatar_entity)) = camera_q.iter().next() else { return; };
     let Ok(ray) = camera.viewport_to_world(cam_gtf, pos) else { return; };
 
-    // If the avatar is already possessing a vessel, skip raycast possession entirely.
-    // This prevents unwanted camera repositioning when the user is interacting with
-    // the scene (e.g., selecting/moving a rover in sandbox mode) or when they're
-    // actively driving a vessel.
-    if q_link.iter().next().is_some() { return; }
-    let mut nearest = None; let mut min_t = f32::INFINITY; let mut is_possessable = false;
-    for (entity, gtf, body) in q_bodies.iter() {
-        let oc = ray.origin - gtf.translation(); let b = oc.dot(ray.direction.as_vec3()); let c = oc.dot(oc) - (body.radius_m as f32).powi(2);
-        let discr = b * b - c; if discr >= 0.0 { let t = -b - discr.sqrt(); if t > 0.0 && t < min_t { min_t = t; nearest = Some(entity); is_possessable = false; } }
+    // Raycast against colliders to find vessels
+    let filter = avian3d::prelude::SpatialQueryFilter::default();
+    let hit = raycaster.cast_ray(ray.origin.into(), ray.direction, 1000.0, false, &filter);
+
+    let mut nearest_vessel: Option<Entity> = None;
+    let mut min_vessel_t = f32::INFINITY;
+
+    if let Some(hit_data) = hit {
+        // Walk up parent chain to find the vessel
+        let vessel = find_vessel_from_hit(hit_data.entity, &q_names, &q_parents, &q_rovers);
+        if let Some(vessel_entity) = vessel {
+            min_vessel_t = hit_data.distance as f32;
+            nearest_vessel = Some(vessel_entity);
+        }
     }
+
+    // Also check celestial bodies and spacecraft (no colliders)
+    let mut nearest = nearest_vessel;
+    let mut min_t = min_vessel_t;
+    let mut is_possessable = nearest_vessel.is_some();
+
+    // Check spacecraft with sphere intersection (they may not have colliders)
     for (entity, gtf, sc) in q_spacecraft.iter() {
-        let oc = ray.origin - gtf.translation(); let b = oc.dot(ray.direction.as_vec3()); let c = oc.dot(oc) - sc.hit_radius_m.powi(2);
-        let discr = b * b - c; if discr >= 0.0 { let t = -b - discr.sqrt(); if t > 0.0 && t < min_t { min_t = t; nearest = Some(entity); is_possessable = true; } }
+        let oc = ray.origin - gtf.translation();
+        let b = oc.dot(ray.direction.as_vec3());
+        let c = oc.dot(oc) - sc.hit_radius_m.powi(2);
+        let discr = b * b - c;
+        if discr >= 0.0 {
+            let t = -b - discr.sqrt();
+            if t > 0.0 && t < min_t {
+                min_t = t;
+                nearest = Some(entity);
+                is_possessable = true;
+            }
+        }
     }
-    for (entity, gtf) in q_rovers.iter() {
-        let oc = ray.origin - gtf.translation(); let b = oc.dot(ray.direction.as_vec3()); let c = oc.dot(oc) - 100.0; // 10m squared radius
-        let discr = b * b - c; if discr >= 0.0 { let t = -b - discr.sqrt(); if t > 0.0 && t < min_t { min_t = t; nearest = Some(entity); is_possessable = true; } }
+
+    // Check celestial bodies with sphere intersection
+    for (entity, gtf, body) in q_bodies.iter() {
+        let oc = ray.origin - gtf.translation();
+        let b = oc.dot(ray.direction.as_vec3());
+        let c = oc.dot(oc) - (body.radius_m as f32).powi(2);
+        let discr = b * b - c;
+        if discr >= 0.0 {
+            let t = -b - discr.sqrt();
+            if t > 0.0 && t < min_t {
+                min_t = t;
+                nearest = Some(entity);
+                is_possessable = false; // Focus, not possess
+            }
+        }
     }
-    if let Some(target) = nearest { if is_possessable { commands.trigger(CommandMessage { id: 0, target, name: "POSSESS".to_string(), args: smallvec::smallvec![], source: avatar_entity }); } else { commands.trigger(CommandMessage { id: 0, target, name: "FOCUS".to_string(), args: smallvec::smallvec![], source: avatar_entity }); } }
+
+    if let Some(target) = nearest {
+        if is_possessable {
+            commands.trigger(CommandMessage {
+                id: 0,
+                target,
+                name: "POSSESS".to_string(),
+                args: smallvec::smallvec![],
+                source: avatar_entity,
+            });
+        } else {
+            commands.trigger(CommandMessage {
+                id: 0,
+                target,
+                name: "FOCUS".to_string(),
+                args: smallvec::smallvec![],
+                source: avatar_entity,
+            });
+        }
+    }
 }
 
 fn avatar_escape_possession(keys: Res<ButtonInput<KeyCode>>, mut q_avatar: Query<Entity, (With<Avatar>, With<ControllerLink>)>, mut commands: Commands) {
