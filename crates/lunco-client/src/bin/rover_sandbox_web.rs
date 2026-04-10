@@ -1,11 +1,20 @@
-//! A standalone sandbox for rapid testing of ground mobility and physics.
+//! Rover Sandbox — Web entry point.
 //!
-//! This binary bypasses the full celestial ephemeris system to provide a
-//! stable, flat-ground environment for debugging rovers, actuators, and FSW.
+//! ## Why a separate binary?
+//!
+//! Desktop uses `std::thread::spawn` and other desktop-specific features. On wasm32
+//! we need:
+//!
+//! 1. `wasm_bindgen(start)` instead of `fn main()` — the browser calls this automatically.
+//! 2. `console_error_panic_hook` so panic messages appear in browser console.
+//! 3. Canvas configured to render into the HTML `<canvas>` element.
+//! 4. WebGPU rendering via Bevy/wgpu.
+//!
+//! The rover sandbox uses BigSpace (floating origin), Avian3D (physics), and
+//! leafwing-input-manager — all of which are pure Rust and compile to wasm32.
 
 use bevy::prelude::*;
 use bevy::diagnostic::{FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin};
-use bevy::pbr::wireframe::WireframePlugin;
 use bevy_egui::{egui, EguiContexts, EguiPlugin, EguiPrimaryContextPass};
 use big_space::prelude::*;
 use avian3d::prelude::{RigidBody, Collider, Friction, PhysicsPlugins};
@@ -15,28 +24,54 @@ use lunco_mobility::{LunCoMobilityPlugin, Suspension};
 use lunco_robotics::{LunCoRoboticsPlugin, rover};
 use lunco_controller::LunCoControllerPlugin;
 use lunco_avatar::{LunCoAvatarPlugin, IntentAnalogState, FreeFlightCamera, SpringArmCamera, OrbitCamera, AdaptiveNearPlane, CameraScroll};
-use lunco_celestial::{BlueprintMaterial, BlueprintExtension, Gravity, GravityPlugin};
+use lunco_celestial::{BlueprintMaterial, BlueprintExtension, EmbeddedAssetsPlugin, GravityPlugin};
 use lunco_core::{Vessel, architecture::CommandMessage};
 
-fn main() {
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::prelude::*;
+
+// Empty main — entry point is `run()` via wasm_bindgen(start).
+#[cfg(target_arch = "wasm32")]
+pub fn main() {}
+
+/// Browser entry point. Called automatically when the WASM module loads.
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen(start))]
+pub fn run() {
+    // Panic messages go to browser console instead of being silent failures.
+    #[cfg(target_arch = "wasm32")]
+    console_error_panic_hook::set_once();
+
     App::new()
         .insert_resource(Time::<Fixed>::from_hz(60.0))
         .insert_resource(lunco_core::TimeWarpState { physics_enabled: true, ..default() })
-        .insert_resource(Gravity::flat(9.81, bevy::math::DVec3::NEG_Y))
-        .add_plugins(DefaultPlugins.build().disable::<TransformPlugin>())
-        .add_plugins(BigSpaceDefaultPlugins.build().disable::<big_space::validation::BigSpaceValidationPlugin>())
+        .insert_resource(avian3d::prelude::Gravity(bevy::math::DVec3::NEG_Y * 9.81))
+        .insert_resource(lunco_celestial::Gravity::flat(9.81, bevy::math::DVec3::NEG_Y))
+        .add_plugins(DefaultPlugins.build().disable::<TransformPlugin>().set(WindowPlugin {
+            primary_window: Some(Window {
+                title: "Rover Sandbox".into(),
+                resolution: bevy::window::WindowResolution::new(1280, 720),
+                // Render into the <canvas id="bevy"> element from index.html.
+                canvas: Some("#bevy".into()),
+                // Auto-resize to fill the browser window.
+                fit_canvas_to_parent: true,
+                // Prevent Bevy from swallowing keyboard events (egui needs them too).
+                prevent_default_event_handling: true,
+                ..default()
+            }),
+            ..default()
+        }))
         .add_plugins(LogDiagnosticsPlugin::default())
         .add_plugins(FrameTimeDiagnosticsPlugin::default())
-        .add_plugins(WireframePlugin::default())
         .add_plugins(EguiPlugin::default())
         .add_plugins(PhysicsPlugins::default().set(avian3d::prelude::PhysicsInterpolationPlugin::interpolate_all()))
         .add_plugins(MaterialPlugin::<BlueprintMaterial>::default())
+        .add_plugins(EmbeddedAssetsPlugin)
         .add_plugins(lunco_core::LunCoCorePlugin)
+        .add_plugins(GravityPlugin)
         .add_plugins(LunCoMobilityPlugin)
         .add_plugins(LunCoRoboticsPlugin)
         .add_plugins(LunCoControllerPlugin)
         .add_plugins(LunCoAvatarPlugin)
-        .add_plugins(GravityPlugin)
         .init_resource::<SandboxSettings>()
         .add_systems(Startup, setup_sandbox)
         .add_systems(Update, apply_sandbox_settings)
@@ -65,7 +100,6 @@ struct SandboxSettings {
     sun_pitch: f32,
     ambient_brightness: f32,
     ambient_color: LinearRgba,
-    wireframe: bool,
 }
 
 impl Default for SandboxSettings {
@@ -75,7 +109,6 @@ impl Default for SandboxSettings {
             sun_pitch: -0.8,
             ambient_brightness: 400.0,
             ambient_color: LinearRgba::WHITE,
-            wireframe: false,
         }
     }
 }
@@ -313,7 +346,6 @@ fn sandbox_ui_system(
         ui.add(egui::Slider::new(&mut settings.sun_yaw, 0.0..=6.28).text("Sun Yaw"));
         ui.add(egui::Slider::new(&mut settings.sun_pitch, -3.14..=0.0).text("Sun Pitch"));
         ui.add(egui::Slider::new(&mut settings.ambient_brightness, 0.0..=1000.0).text("Ambient"));
-        ui.checkbox(&mut settings.wireframe, "Show Wireframe");
 
         ui.separator();
         ui.heading("Camera");

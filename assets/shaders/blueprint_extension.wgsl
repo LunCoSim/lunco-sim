@@ -31,12 +31,7 @@ fn fragment(
     @builtin(front_facing) is_front: bool,
 ) -> FragmentOutput {
     var pbr_input = pbr_input_from_standard_material(input, is_front);
-    // Use the PBR-sampled base color (includes base_color_texture from StandardMaterial
-    // if present). The blueprint grid lines are layered on top as an overlay.
-    // When no texture is set, pbr_input.material.base_color falls back to the
-    // StandardMaterial's base_color field.
     var final_base_color = pbr_input.material.base_color;
-
     var grid_mask = 0.0;
 
     if extension.transition < 0.5 {

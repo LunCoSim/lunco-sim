@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use bevy::camera::visibility::NoFrustumCulling;
 use bevy::math::DVec3;
 use bevy::render::render_resource::PrimitiveTopology;
 use bevy_mesh::Indices;
@@ -6,6 +7,7 @@ use bevy::tasks::{Task, AsyncComputeTaskPool};
 use futures_lite::future;
 use std::sync::Arc;
 use avian3d::prelude::*;
+use big_space::prelude::{CellCoord, Grid};
 use crate::registry::CelestialBody;
 
 #[derive(Resource, Reflect)]
@@ -18,6 +20,12 @@ pub struct TerrainTileConfig {
     pub max_lod: u32,
     pub lod_distance_factor: f64,
     pub physics_lod_threshold: u32,
+    /// Maximum number of tile entities allowed at once.
+    /// Prevents memory exhaustion at high time warp.
+    pub max_tile_entities: usize,
+    /// Minimum frames between terrain spawn cycles.
+    /// Prevents thrashing when camera moves rapidly.
+    pub spawn_cooldown_frames: u32,
 }
 
 impl Default for TerrainTileConfig {
@@ -25,11 +33,13 @@ impl Default for TerrainTileConfig {
         Self {
             tile_size_m: 500.0,
             tile_resolution: 32,
-            grid_radius: 4,
-            spawn_threshold: 100_000.0,
+            grid_radius: 4, // Limit tile spawning to ~4 grid cells around camera
+            spawn_threshold: 100_000.0, // 100 km — tiles visible from low orbit
             max_lod: 12,
             lod_distance_factor: 2.0,
             physics_lod_threshold: 8,
+            max_tile_entities: 2000,
+            spawn_cooldown_frames: 10,
         }
     }
 }
@@ -75,40 +85,99 @@ pub struct TileMeshData {
 #[derive(Component)]
 pub struct PendingTile(pub Task<TileMeshData>);
 
+/// Tracks the last frame number when terrain tiles were spawned.
+/// Used to throttle spawn cycles at high time warp.
+#[derive(Resource, Default)]
+pub struct TerrainSpawnCooldown {
+    pub last_spawn_frame: u32,
+}
+
 pub fn terrain_spawn_system(
     mut commands: Commands,
     config: Res<TerrainTileConfig>,
     registry: Res<TerrainMapRegistry>,
-    q_camera: Query<&GlobalTransform, (With<Camera>, With<lunco_core::Avatar>)>,
-    q_bodies: Query<(Entity, &GlobalTransform, &CelestialBody)>,
+    q_camera: Query<(Entity, &GlobalTransform, &CellCoord, &Transform, &ChildOf), (With<Camera>, With<lunco_core::Avatar>)>,
+    q_bodies: Query<(Entity, &GlobalTransform, &CellCoord, &Transform, &ChildOf, &CelestialBody)>,
     q_tiles: Query<(Entity, &TileCoord)>,
+    q_grids: Query<&Grid>,
+    q_parents: Query<&ChildOf>,
+    q_spatial: Query<(&CellCoord, &Transform)>,
+    mut cooldown: ResMut<TerrainSpawnCooldown>,
+    mut frame_counter: Local<u32>,
+    mut debug_timer: Local<f32>,
 ) {
-    let Some(cam_gtf) = q_camera.iter().next() else { return; };
-    let camera_pos = cam_gtf.translation().as_dvec3();
-    
+    *frame_counter += 1;
+    let current_frame = *frame_counter;
+
+    // Throttle: skip spawn if we recently spawned (prevents thrashing at high time warp)
+    let frames_since_spawn = current_frame.saturating_sub(cooldown.last_spawn_frame);
+    if frames_since_spawn < config.spawn_cooldown_frames {
+        return;
+    }
+
+    let Some((cam_ent, _, cam_cell, cam_tf, _)) = q_camera.iter().next() else { return; };
+
+    // Use absolute coordinates for both camera and bodies so altitudes are correct.
+    // GlobalTransform alone is insufficient because big_space splits world position
+    // across CellCoord (integer cell index) and Transform (local remainder).
+    let camera_abs = crate::coords::get_absolute_pos_in_root_double_ghost_aware(
+        cam_ent, cam_cell, cam_tf, &q_parents, &q_grids, &q_spatial,
+    );
+
     let mut nearest_body = None;
     let mut min_altitude = f64::MAX;
-    
-    for (body_ent, body_gtf, body) in q_bodies.iter() {
-        let b_trans = body_gtf.to_matrix().transform_point3(Vec3::ZERO);
-        let body_pos = DVec3::new(b_trans.x as f64, b_trans.y as f64, b_trans.z as f64);
-        let dist = camera_pos.distance(body_pos);
+
+    for (body_ent, _, b_cell, b_tf, _, body) in q_bodies.iter() {
+        let body_abs = crate::coords::get_absolute_pos_in_root_double_ghost_aware(
+            body_ent, b_cell, b_tf, &q_parents, &q_grids, &q_spatial,
+        );
+        let dist = (camera_abs - body_abs).length();
         let alt = dist - body.radius_m;
         if alt < min_altitude {
             min_altitude = alt;
-            nearest_body = Some((body_ent, body_gtf, body));
+            nearest_body = Some((body_ent, body_abs, body.radius_m));
         }
     }
 
-    let Some((body_ent, body_gtf, body)) = nearest_body else { return; };
-    let final_b_trans = body_gtf.to_matrix().transform_point3(Vec3::ZERO);
-    let body_pos = DVec3::new(final_b_trans.x as f64, final_b_trans.y as f64, final_b_trans.z as f64);
+    let Some((body_ent, body_abs, body_radius)) = nearest_body else { return; };
+
+    // Debug: log altitude every ~2 seconds
+    *debug_timer += 1.0 / 60.0;
+    let do_debug = *debug_timer > 2.0;
+    if do_debug { *debug_timer = 0.0; }
+
+    if do_debug {
+        warn!("TERRAIN: alt={:.0}m threshold={} tiles_on_screen={}",
+              min_altitude, config.spawn_threshold, q_tiles.iter().count());
+    }
 
     if min_altitude < config.spawn_threshold {
+        // Compute camera position relative to body center (body-local space).
+        // This is invariant to ephemeris motion — only depends on camera's position
+        // relative to the body, preventing thrashing at high time warp.
+        let camera_body_local = camera_abs - body_abs;
+
         let mut desired_tiles = std::collections::HashSet::new();
         for face in 0..6 {
-            subdivide_face(&mut desired_tiles, body_ent, face, 0, 0, 0, camera_pos, body_pos, body.radius_m, &config);
+            subdivide_face(&mut desired_tiles, body_ent, face, 0, 0, 0, camera_body_local, body_radius, &config);
         }
+
+        let new_tile_count = desired_tiles.len();
+        info!("TERRAIN: spawning {} tiles", new_tile_count);
+
+        // Find the Body's parent Grid so we can compute tile CellCoords and parent tiles to it.
+        // Tiles MUST be parented to the Grid (not Body) for big_space's propagate_high_precision
+        // to compute their world position correctly from CellCoord.
+        // Rotation is synced separately via body_rotation_system.
+        let tile_grid_ent = q_parents.get(body_ent)
+            .ok()
+            .map(|c| c.parent())
+            .filter(|e| q_grids.contains(*e))
+            .or_else(|| q_grids.get(body_ent).ok().map(|_| body_ent));
+        let tile_grid = tile_grid_ent.and_then(|e| q_grids.get(e).ok());
+
+        // Count existing tiles BEFORE despawning (despawn doesn't remove entities immediately)
+        let existing_total = q_tiles.iter().count();
 
         for (tile_ent, coord) in q_tiles.iter() {
             if !desired_tiles.contains(coord) {
@@ -118,6 +187,22 @@ pub fn terrain_spawn_system(
             }
         }
 
+        // Cap total tile entities to prevent memory exhaustion at high time warp.
+        let max_new = config.max_tile_entities.saturating_sub(existing_total);
+        if desired_tiles.len() > max_new {
+            warn!("TERRAIN: capping spawns from {} to {} (max_tile_entities={})",
+                  desired_tiles.len(), max_new, config.max_tile_entities);
+            // Keep only the first `max_new` tiles (arbitrary order, but prevents OOM)
+            let kept: std::collections::HashSet<_> = desired_tiles.into_iter().take(max_new).collect();
+            desired_tiles = kept;
+        }
+
+        // Update cooldown now that we're committed to spawning
+        cooldown.last_spawn_frame = current_frame;
+
+        info!("TERRAIN: {} desired, {} existing, spawning {}",
+              new_tile_count, existing_total, desired_tiles.len());
+
         let pool = AsyncComputeTaskPool::get();
 
         for coord in desired_tiles {
@@ -126,19 +211,30 @@ pub fn terrain_spawn_system(
             let u_mid = -1.0 + (coord.i as f64 + 0.5) * step;
             let v_mid = -1.0 + (coord.j as f64 + 0.5) * step;
             let tile_center_dir = cube_to_sphere(coord.face, u_mid, v_mid);
-            let tile_center_pos = tile_center_dir * body.radius_m;
-            
+            let tile_center_pos = tile_center_dir * body_radius;
+
+            // Compute CellCoord + local Transform from body-relative position.
+            // This ensures the tile participates in propagate_high_precision
+            // and inherits Body rotation correctly.
+            let (tile_cell, tile_local_pos) = if let Some(grid) = tile_grid {
+                grid.translation_to_grid(tile_center_pos)
+            } else {
+                (CellCoord::default(), tile_center_pos.as_vec3())
+            };
+
             // Task parameters
             let body_ent_inner = coord.body;
             let face_inner = coord.face;
             let level_inner = coord.level;
             let i_inner = coord.i;
             let j_inner = coord.j;
-            let radius_inner = body.radius_m;
+            let radius_inner = body_radius;
             let res_inner = config.tile_resolution;
             let registry_inner = registry.clone();
             let tile_center_inner = tile_center_pos;
             let physics_threshold = config.physics_lod_threshold;
+            let tile_cell_inner = tile_cell;
+            let tile_local_pos_inner = tile_local_pos;
 
             let task = pool.spawn(async move {
                 let mesh = create_quadsphere_tile_mesh(body_ent_inner, face_inner, level_inner, i_inner, j_inner, radius_inner, res_inner, Some(&registry_inner), tile_center_inner);
@@ -148,19 +244,30 @@ pub fn terrain_spawn_system(
                 }
                 TileMeshData { mesh, collider }
             });
-            
+
             let tile_ent = commands.spawn((
                 ActiveTerrainTile,
                 TerrainTile,
                 coord,
                 PendingTile(task),
-                Transform::from_translation(tile_center_pos.as_vec3()),
+                tile_cell_inner,
+                Transform::from_translation(tile_local_pos_inner),
                 GlobalTransform::default(),
+                Visibility::Visible,
+                InheritedVisibility::default(),
+                NoFrustumCulling,
                 Name::new(format!("Tile f{} l{} i{} j{}", coord.face, coord.level, coord.i, coord.j)),
             )).id();
-            
-            commands.entity(body_ent).add_child(tile_ent);
+
+            // Parent tiles to the Grid (not Body) so big_space's propagate_high_precision
+            // can compute world position from CellCoord. Rotation is synced separately.
+            if let Some(grid_ent) = tile_grid_ent {
+                commands.entity(grid_ent).add_child(tile_ent);
+            }
         }
+
+        warn!("TERRAIN: spawned {} tile entities, {} already on screen",
+              new_tile_count, q_tiles.iter().count());
     } else {
         for (ent, _) in q_tiles.iter() {
             commands.entity(ent).despawn(); 
@@ -173,31 +280,36 @@ pub fn finalize_terrain_tiles(
     mut q_pending: Query<(Entity, &TileCoord, &mut PendingTile)>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<crate::blueprint::BlueprintMaterial>>,
-    q_bodies: Query<(&CelestialBody, &GlobalTransform, &MeshMaterial3d<crate::blueprint::BlueprintMaterial>)>,
-    q_camera: Query<&GlobalTransform, With<Camera>>,
+    q_bodies: Query<(Entity, &CelestialBody, &CellCoord, &Transform, &ChildOf)>,
+    q_camera: Query<(Entity, &CellCoord, &Transform, &ChildOf), (With<Camera>, With<lunco_core::Avatar>)>,
+    q_grids: Query<&Grid>,
+    q_parents: Query<&ChildOf>,
+    q_spatial: Query<(&CellCoord, &Transform)>,
 ) {
-    let Some(cam_gtf) = q_camera.iter().next() else { return; };
-    let camera_pos = cam_gtf.translation().as_dvec3();
+    let Some((cam_ent, cam_cell, cam_tf, _)) = q_camera.iter().next() else { return; };
+    let camera_abs = crate::coords::get_absolute_pos_in_root_double_ghost_aware(
+        cam_ent, cam_cell, cam_tf, &q_parents, &q_grids, &q_spatial,
+    );
 
     for (ent, coord, mut pending) in q_pending.iter_mut() {
         if let Some(data) = future::block_on(future::poll_once(&mut pending.0)) {
-            let Ok((body, _gtf, body_mat_handle)) = q_bodies.get(coord.body) else { 
+            let Ok((body_ent, body, b_cell, b_tf, _)) = q_bodies.get(coord.body) else {
                 commands.entity(ent).despawn();
-                continue; 
+                continue;
             };
-            
-            let body_pos = _gtf.translation().as_dvec3();
-            let dist = camera_pos.distance(body_pos);
+
+            let body_abs = crate::coords::get_absolute_pos_in_root_double_ghost_aware(
+                body_ent, b_cell, b_tf, &q_parents, &q_grids, &q_spatial,
+            );
+            let dist = (camera_abs - body_abs).length();
             let altitude = (dist - body.radius_m).max(0.0);
 
-            // Get texture from body material
-            let mut base_color = if body.name == "Moon" { Color::srgb(0.2, 0.2, 0.2) } else { Color::from(LinearRgba::new(0.005, 0.02, 0.05, 1.0)) };
-            let mut base_color_texture = None;
-            
-            if let Some(body_mat) = materials.get(body_mat_handle) {
-                base_color = body_mat.base.base_color;
-                base_color_texture = body_mat.base.base_color_texture.clone();
-            }
+            // Body defaults based on name (bodies don't carry BlueprintMaterial)
+            let base_color = if body.name == "Moon" {
+                Color::srgb(0.2, 0.2, 0.2)
+            } else {
+                Color::from(LinearRgba::new(0.005, 0.02, 0.05, 1.0))
+            };
 
             let mut entity_cmds = commands.entity(ent);
             entity_cmds.insert((
@@ -205,20 +317,29 @@ pub fn finalize_terrain_tiles(
                 MeshMaterial3d(materials.add(crate::blueprint::BlueprintMaterial {
                     base: StandardMaterial {
                         base_color,
-                        base_color_texture,
+                        unlit: true, // Unlit so surface is always visible regardless of sun direction
                         perceptual_roughness: 0.8,
                         ..default()
                     },
                     extension: crate::blueprint::BlueprintExtension {
                         high_color: LinearRgba::WHITE,
                         low_color: LinearRgba::WHITE,
+                        // Bright lines for surface visibility
+                        high_line_color: LinearRgba::new(1.0, 1.0, 0.0, 1.0),
+                        low_line_color: LinearRgba::new(1.0, 1.0, 0.0, 1.0),
+                        subdivisions: Vec2::new(360.0, 180.0),
+                        fade_range: Vec2::new(0.2, 0.6),
                         grid_scale: 100.0,
                         line_width: 1.0,
-                        subdivisions: Vec2::new(360.0, 180.0),
                         transition: (1.0f64 - (altitude / 50_000.0f64)).clamp(0.0, 1.0) as f32,
                         body_radius: body.radius_m as f32,
+                        // Grid: 100m spacing, lines 3-5 pixels wide
+                        major_grid_spacing: 100.0,
+                        minor_grid_spacing: 25.0,
+                        major_line_width: 3.0,   // 3 pixels
+                        minor_line_width: 2.0,   // 2 pixels
+                        minor_line_fade: 0.3,
                         surface_color: LinearRgba::new(0.3, 0.3, 0.3, 1.0),
-                        ..default()
                     },
                 })),
             ));
@@ -232,20 +353,21 @@ pub fn finalize_terrain_tiles(
     }
 }
 
-fn subdivide_face(desired: &mut std::collections::HashSet<TileCoord>, body_ent: Entity, face: u8, level: u32, i: i32, j: i32, camera_pos: DVec3, body_pos: DVec3, radius: f64, config: &TerrainTileConfig) {
+fn subdivide_face(desired: &mut std::collections::HashSet<TileCoord>, body_ent: Entity, face: u8, level: u32, i: i32, j: i32, camera_body_local: DVec3, body_radius: f64, config: &TerrainTileConfig) {
     let tiles_at_level = 1 << level;
     let step = 2.0 / tiles_at_level as f64;
     let u = -1.0 + (i as f64 + 0.5) * step;
     let v = -1.0 + (j as f64 + 0.5) * step;
     let tile_center_sphere = cube_to_sphere(face, u, v);
-    let tile_center_world = body_pos + tile_center_sphere * radius;
-    let dist = camera_pos.distance(tile_center_world);
-    let tile_size = (radius * std::f64::consts::PI * 0.5) / tiles_at_level as f64;
+    // Tile center in body-local space (body center is origin)
+    let tile_center_local = tile_center_sphere * body_radius;
+    let dist = camera_body_local.distance(tile_center_local);
+    let tile_size = (body_radius * std::f64::consts::PI * 0.5) / tiles_at_level as f64;
     
     if level < config.max_lod && dist < tile_size * config.lod_distance_factor {
         for di in 0..2 {
             for dj in 0..2 {
-                subdivide_face(desired, body_ent, face, level + 1, i * 2 + di, j * 2 + dj, camera_pos, body_pos, radius, config);
+                subdivide_face(desired, body_ent, face, level + 1, i * 2 + di, j * 2 + dj, camera_body_local, body_radius, config);
             }
         }
     } else {
@@ -253,7 +375,7 @@ fn subdivide_face(desired: &mut std::collections::HashSet<TileCoord>, body_ent: 
     }
 }
 
-fn cube_to_sphere(face: u8, u: f64, v: f64) -> DVec3 {
+pub fn cube_to_sphere(face: u8, u: f64, v: f64) -> DVec3 {
     let p = match face {
         0 => DVec3::new(1.0, v, -u),
         1 => DVec3::new(-1.0, v, u),
@@ -265,6 +387,15 @@ fn cube_to_sphere(face: u8, u: f64, v: f64) -> DVec3 {
     };
     p.normalize()
 }
+
+/// Compute u,v tile center coordinates from face/level/i/j for LOD 1 tiles.
+pub fn tile_center_uv(_face: u8, level: u32, i: i32, j: i32) -> (f64, f64) {
+    let tiles_at_level = 1 << level;
+    let step = 2.0 / tiles_at_level as f64;
+    let u_mid = -1.0 + (i as f64 + 0.5) * step;
+    let v_mid = -1.0 + (j as f64 + 0.5) * step;
+    (u_mid, v_mid)
+}
 pub fn create_quadsphere_tile_mesh(body_ent: Entity, face: u8, level: u32, i: i32, j: i32, radius: f64, res: u32, registry: Option<&TerrainMapRegistry>, tile_center: DVec3) -> Mesh {
     let mut positions = Vec::new();
     let mut normals = Vec::new();
@@ -274,7 +405,7 @@ pub fn create_quadsphere_tile_mesh(body_ent: Entity, face: u8, level: u32, i: i3
     let step = 2.0 / tiles_at_level as f64;
     let start_u = -1.0 + (i as f64) * step;
     let start_v = -1.0 + (j as f64) * step;
-    
+
     for y in 0..=res {
         for x in 0..=res {
             let u = start_u + (x as f64 / res as f64) * step;
@@ -332,7 +463,7 @@ pub fn create_quadsphere_tile_mesh(body_ent: Entity, face: u8, level: u32, i: i3
             skirt_indices.push(positions.len() as u32);
             positions.push(skirt_pos);
             normals.push(norm);
-            uvs.push(uvs[idx as usize]); // Extend UVs to skirt
+            uvs.push(uvs[idx as usize]);
         }
         for i in 0..(indices_to_extrude.len() as u32 - 1) {
             let a = indices_to_extrude[i as usize];

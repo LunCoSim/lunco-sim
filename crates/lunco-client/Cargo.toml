@@ -12,6 +12,10 @@ name = "rover_sandbox_usd"
 path = "src/bin/rover_sandbox_usd.rs"
 
 [[bin]]
+name = "lunco_client_web"
+path = "src/bin/lunco_client_web.rs"
+
+[[bin]]
 name = "model_viewer"
 path = "src/bin/model_viewer.rs"
 
@@ -44,3 +48,14 @@ bevy-inspector-egui = { workspace = true }
 default = ["celestial"]
 celestial = []
 sandbox = []
+
+# Web-specific: wasm32-unknown-unknown needs JS interop for console output,
+# panic hooks, and RNG (std::time is unavailable on wasm32).
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = ["console", "Document", "HtmlInputElement", "Window"] }
+console_error_panic_hook = "0.1"
+# getrandom with js feature enables wasm32 support for rand/uuid and other transitive deps
+getrandom = { version = "0.2", features = ["js"] }
+instant = "0.1"

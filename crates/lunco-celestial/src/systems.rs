@@ -78,56 +78,57 @@ pub fn ephemeris_update_system(
     }
 }
 
-/// Rotate each celestial body around its polar axis.
+/// Rotate each celestial body's Grid around its polar axis.
+/// Per big_space docs: "if you have a planet rotating and orbiting around
+/// its star... you can place the planet and all objects on its surface in
+/// the same grid. The motion of the planet will be inherited by all children
+/// in that grid, in high precision."
+/// We rotate the Grid so tiles (and future rovers) automatically inherit rotation.
 pub fn body_rotation_system(
     clock: Res<CelestialClock>,
     registry: Res<CelestialBodyRegistry>,
-    mut q_bodies: Query<(&mut Transform, &CelestialBody)>,
-    mut last_jd: Local<f64>,
+    mut q_grids: Query<(&mut Transform, &CelestialReferenceFrame)>,
 ) {
-    *last_jd = clock.epoch;
-    
     let days_since_j2000 = clock.epoch - 2_451_545.0;
-    for (mut tf, b) in q_bodies.iter_mut() {
-        if let Some(desc) = registry.bodies.iter().find(|d| d.ephemeris_id == b.ephemeris_id) {
+    for (mut tf, frame) in q_grids.iter_mut() {
+        if let Some(desc) = registry.bodies.iter().find(|d| d.ephemeris_id == frame.ephemeris_id) {
             if desc.rotation_rate_rad_per_day != 0.0 {
                 let angle = days_since_j2000 * desc.rotation_rate_rad_per_day;
-                let rot = DQuat::from_axis_angle(desc.polar_axis, angle);
-                tf.rotation = rot.as_quat();
+                tf.rotation = DQuat::from_axis_angle(desc.polar_axis, angle).as_quat();
             }
         }
     }
 }
 
-pub fn update_sun_light_system(
-    mut q_light: Query<(&mut Transform, &DirectionalLight)>,
-    _q_sun: Query<&CelestialBody, With<SolarSystemRoot>>,
-    q_camera: Query<(Entity, &GlobalTransform), With<Camera>>,
-    q_all_parents: Query<&ChildOf>,
-    q_grids_only: Query<&big_space::grid::Grid>,
-    q_coords_only: Query<(&CellCoord, &Transform), Without<DirectionalLight>>,
+/// Propagate body rotation to terrain tile local transforms.
+/// Currently NO-OP: terrain tiles are fixed in the Grid frame.
+/// The Body rotation affects surface entities (rovers, cameras) that are
+/// children of Body, not terrain tiles on the Grid.
+/// If body rotation needs to affect tiles in the future, tiles should be
+/// re-parented to Body or use a different coordinate scheme.
+pub fn tile_rotation_sync_system(
+    _q_bodies: Query<&Transform, (With<CelestialBody>, Without<crate::terrain::TileCoord>)>,
+    _q_tiles: Query<(&mut Transform, &crate::terrain::TileCoord)>,
 ) {
-    let Some((mut light_tf, _)) = q_light.iter_mut().next() else { return; };
-    let Some((cam_entity, _cam_gtf)) = q_camera.iter().next() else { return; };
-    
-    let mut current = cam_entity;
-    let mut total_pos = bevy::math::DVec3::ZERO;
-    let mut depth = 0;
-    while let Ok(child_of) = q_all_parents.get(current) {
-        if depth > 10 { break; } depth += 1;
-        let parent = child_of.parent();
-        if parent == current { break; }
-        if let Ok(grid) = q_grids_only.get(parent) {
-            if let Ok((cell, tf)) = q_coords_only.get(current) {
-                total_pos += grid.grid_position_double(cell, tf);
-            }
-        }
-        current = parent;
+    // Intentionally empty — tiles stay at identity rotation in Grid frame.
+}
+
+pub fn update_sun_light_system(
+    mut q_light: Query<&mut Transform, With<DirectionalLight>>,
+    mut first_run: Local<bool>,
+) {
+    if !*first_run {
+        *first_run = true;
+        warn!("SUN_LIGHT: system running");
     }
-    
-    let dir_to_cam = total_pos.normalize_or_zero().as_vec3();
-    if dir_to_cam != Vec3::ZERO {
-        light_tf.look_at(dir_to_cam, Vec3::Y);
+
+    // Point sun light along +Z axis (toward Earth at current epoch).
+    // This is a fixed direction that illuminates the Earth-Moon system.
+    // The exact direction varies with Earth's orbit, but +Z is a reasonable
+    // approximation that keeps the Moon illuminated from most viewing angles.
+    let dir = bevy::math::Vec3::NEG_Z;
+    if let Ok(mut light_tf) = q_light.single_mut() {
+        light_tf.look_to(dir, bevy::math::Vec3::Y);
     }
 }
 
@@ -151,42 +152,45 @@ pub fn celestial_telemetry_system(
 pub fn celestial_visuals_system(
     mut materials: ResMut<Assets<BlueprintMaterial>>,
     q_camera: Query<(Entity, &CellCoord, &Transform), (With<Camera>, With<lunco_core::Avatar>)>,
-    q_bodies: Query<(Entity, &CellCoord, &Transform, &MeshMaterial3d<BlueprintMaterial>, &CelestialBody)>,
+    q_bodies: Query<(Entity, &CellCoord, &Transform, &CelestialBody)>,
     q_tiles: Query<(&MeshMaterial3d<BlueprintMaterial>, &crate::terrain::TileCoord), With<crate::terrain::ActiveTerrainTile>>,
     q_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
     q_spatial: Query<(&CellCoord, &Transform)>,
 ) {
     let Some((cam_ent, cam_cell, cam_tf)) = q_camera.iter().next() else { return; };
-    
-    let mut body_transitions = std::collections::HashMap::new();
+    let cam_abs = get_absolute_pos_in_root_double_ghost_aware(cam_ent, cam_cell, cam_tf, &q_parents, &q_grids, &q_spatial);
 
-    for (body_ent, body_cell, body_tf, mat_handle, body) in q_bodies.iter() {
-        // Resolve absolute positions to calculate distance
-        let cam_pos = get_absolute_pos_in_root_double_ghost_aware(cam_ent, cam_cell, cam_tf, &q_parents, &q_grids, &q_spatial);
-        let body_pos = get_absolute_pos_in_root_double_ghost_aware(body_ent, body_cell, body_tf, &q_parents, &q_grids, &q_spatial);
-        
-        let distance = (cam_pos - body_pos).length();
-        let altitude = (distance - body.radius_m).max(0.0);
-
-        if let Some(mat) = materials.get_mut(mat_handle) {
-            // High (0.0 transition) at 100km, Blueprint (1.0 transition) at 10km
-            let start_transition_alt = 100_000.0;
-            let end_transition_alt = 10_000.0;
-            
-            let transition = (((start_transition_alt - altitude) / (start_transition_alt - end_transition_alt)) as f64)
-                .clamp(0.0, 1.0);
-                
-            mat.extension.transition = transition as f32;
-            mat.extension.body_radius = body.radius_m as f32;
-            body_transitions.insert(body_ent, transition as f32);
+    // Find nearest body and compute altitude using body-local distance.
+    // Using body-local coords (camera relative to body center) prevents
+    // thrashing at high time warp — only depends on camera's position
+    // relative to the body, not where the body happens to be in orbit.
+    let mut nearest_altitude = f64::MAX;
+    let mut nearest_body_entity = None;
+    for (body_ent, body_cell, body_tf, body) in q_bodies.iter() {
+        let body_abs = get_absolute_pos_in_root_double_ghost_aware(body_ent, body_cell, body_tf, &q_parents, &q_grids, &q_spatial);
+        // Body-local distance: camera position relative to body center
+        let camera_body_local = cam_abs - body_abs;
+        let altitude = (camera_body_local.length() - body.radius_m).max(0.0);
+        if altitude < nearest_altitude {
+            nearest_altitude = altitude;
+            nearest_body_entity = Some(body_ent);
         }
     }
 
+    let Some(nearest_body) = nearest_body_entity else { return };
+
+    // High (0.0 transition) at 100km, Blueprint (1.0 transition) at 10km
+    let start_transition_alt = 100_000.0;
+    let end_transition_alt = 10_000.0;
+    let transition = (((start_transition_alt - nearest_altitude) / (start_transition_alt - end_transition_alt)) as f64)
+        .clamp(0.0, 1.0) as f32;
+
+    // Update all tiles belonging to the nearest body
     for (mat_handle, coord) in q_tiles.iter() {
-        if let Some(transition) = body_transitions.get(&coord.body) {
+        if coord.body == nearest_body {
             if let Some(mat) = materials.get_mut(mat_handle) {
-                mat.extension.transition = *transition;
+                mat.extension.transition = transition;
             }
         }
     }

@@ -5,7 +5,6 @@
 //! direction. Hold and drag to increase force magnitude.
 
 use bevy::prelude::*;
-use avian3d::prelude::*;
 
 use crate::{SelectedEntity, ToolMode};
 

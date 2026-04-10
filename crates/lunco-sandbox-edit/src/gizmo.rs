@@ -5,7 +5,6 @@
 
 use bevy::prelude::*;
 use transform_gizmo_bevy::{GizmoCamera, GizmoMode, GizmoOptions, GizmoOrientation, GizmoTarget};
-use lunco_core::Avatar;
 
 use crate::{SelectedEntity, ToolMode};
 

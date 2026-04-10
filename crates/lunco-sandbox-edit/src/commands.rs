@@ -5,7 +5,6 @@
 //! via both the UI palette and the CLI.
 
 use bevy::prelude::*;
-use avian3d::prelude::*;
 use big_space::prelude::Grid;
 use lunco_core::architecture::CommandMessage;
 

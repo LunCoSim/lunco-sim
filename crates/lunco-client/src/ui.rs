@@ -9,9 +9,10 @@
 
 use bevy::prelude::*;
 use bevy::ecs::system::SystemParam;
+use bevy::math::DVec3;
 use bevy_egui::{egui, EguiContexts, EguiPlugin, EguiPrimaryContextPass};
 use lunco_core::{RoverVessel, Vessel, Avatar, Spacecraft};
-use lunco_celestial::{CelestialClock, CelestialBody, TrajectoryView, TrajectoryFrame};
+use lunco_celestial::{CelestialClock, CelestialBody, TrajectoryView, TrajectoryFrame, LocalGravityField};
 use lunco_avatar::{SpringArmCamera, OrbitCamera, FreeFlightCamera, FrameBlend, CameraScroll};
 use lunco_mobility::Suspension;
 
@@ -70,10 +71,15 @@ struct MainUiParams<'w, 's> {
     selected: ResMut<'w, SelectedEntity>,
     pending: ResMut<'w, PendingSpawn>,
     clock: ResMut<'w, CelestialClock>,
+    gravity_field: Res<'w, LocalGravityField>,
     q_rovers: Query<'w, 's, (Entity, &'static Name, &'static Vessel), With<RoverVessel>>,
     q_bodies: Query<'w, 's, (Entity, &'static Name, &'static CelestialBody)>,
     q_spacecraft: Query<'w, 's, (Entity, &'static Name, &'static mut Spacecraft)>,
     q_camera: Query<'w, 's, Entity, With<Avatar>>,
+    q_camera_tf: Query<'w, 's, &'static Transform, With<Avatar>>,
+    q_camera_cell: Query<'w, 's, &'static big_space::prelude::CellCoord, With<Avatar>>,
+    q_camera_child_of: Query<'w, 's, &'static ChildOf, With<Avatar>>,
+    q_grids: Query<'w, 's, &'static big_space::prelude::Grid>,
     q_camera_spring: Query<'w, 's, &'static SpringArmCamera, With<Avatar>>,
     q_camera_orbit: Query<'w, 's, &'static OrbitCamera, With<Avatar>>,
     q_camera_freeflight: Query<'w, 's, &'static FreeFlightCamera, With<Avatar>>,
@@ -191,6 +197,28 @@ fn main_ui_system(mut params: MainUiParams) {
                 }
             });
 
+            // Go to Surface — show when the camera is in OrbitCamera mode targeting a body.
+            // Also show when a body is explicitly selected in the UI.
+            let orbit_target_body = params.q_camera_orbit.iter().next()
+                .and_then(|orbit| params.q_bodies.get(orbit.target).ok())
+                .map(|(e, _, _)| e);
+            let surface_target = orbit_target_body.or_else(|| {
+                params.selected.entity.filter(|t| params.q_bodies.contains(*t))
+            });
+
+            if let Some(body_ent) = surface_target {
+                let (_, _, body) = params.q_bodies.get(body_ent).unwrap();
+                if ui.button(format!("🌕 Go to Surface ({})", body.name)).clicked() {
+                    let avatar_ent = params.q_camera.iter().next().unwrap_or(Entity::PLACEHOLDER);
+                    let args: Vec<f64> = vec![body_ent.to_bits() as f64];
+                    params.commands.trigger(lunco_core::architecture::CommandMessage {
+                        id: 0, target: body_ent, name: "TELEPORT_SURFACE".to_string(),
+                        args: args.into_iter().collect(),
+                        source: avatar_ent,
+                    });
+                }
+            }
+
             if params.q_rovers.contains(target) {
                 if ui.button("Take Control (Possess)").clicked() {
                     let avatar_ent = params.q_camera.iter().next().unwrap_or(Entity::PLACEHOLDER);
@@ -217,6 +245,56 @@ fn main_ui_system(mut params: MainUiParams) {
     egui::Window::new("Telemetry").anchor(egui::Align2::RIGHT_TOP, [-10.0, 10.0]).show(ctx, |ui| {
         ui.heading("Avatar Status");
         ui.separator();
+
+        // Surface mode: show Return to Orbit button and coordinates
+        if let Some(body) = params.gravity_field.body_entity {
+            ui.horizontal(|ui| {
+                ui.label("Surface Mode — Body:");
+                ui.colored_label(egui::Color32::from_rgb(255, 180, 50), format!("{:?}", body));
+            });
+            ui.label(format!("Gravity: {:.3} m/s²", params.gravity_field.surface_g));
+
+            // Compute lat/lon/height from avatar's body-local position
+            let mut lat_lon_height = None;
+            if let Ok(avatar_ent) = params.q_camera.single() {
+                let Ok(tf) = params.q_camera_tf.get(avatar_ent) else { return };
+                let Ok(cell) = params.q_camera_cell.get(avatar_ent) else { return };
+                let Ok(child_of) = params.q_camera_child_of.get(avatar_ent) else { return };
+                let Ok(grid) = params.q_grids.get(child_of.0) else { return };
+
+                let body_local = grid.grid_position_double(cell, tf);
+                let dist = body_local.length();
+                if let Ok((_, _, body_comp)) = params.q_bodies.get(body) {
+                    let height = dist - body_comp.radius_m;
+                    let body_local_norm = if dist > 1e-6 { body_local / dist } else { DVec3::Y };
+                    // Convert body-fixed unit vector to lat/lon (Y-up convention)
+                    let lat = body_local_norm.y.asin().to_degrees();
+                    let lon = body_local_norm.x.atan2(body_local_norm.z).to_degrees();
+                    lat_lon_height = Some((lat, lon, height));
+                }
+            }
+
+            if let Some((lat, lon, height)) = lat_lon_height {
+                ui.separator();
+                ui.heading("Position");
+                let lat_dir = if lat >= 0.0 { "N" } else { "S" };
+                let lon_dir = if lon >= 0.0 { "E" } else { "W" };
+                ui.label(format!("Lat: {:.4}° {}", lat.abs(), lat_dir));
+                ui.label(format!("Lon: {:.4}° {}", lon.abs(), lon_dir));
+                ui.label(format!("Alt: {:.1} m", height));
+            }
+
+            ui.separator();
+            if ui.button("🏠 Return to Orbit").clicked() {
+                let avatar_ent = params.q_camera.iter().next().unwrap_or(Entity::PLACEHOLDER);
+                params.commands.trigger(lunco_core::architecture::CommandMessage {
+                    id: 0, target: body, name: "LEAVE_SURFACE".to_string(),
+                    args: Default::default(),
+                    source: avatar_ent,
+                });
+            }
+            ui.separator();
+        }
 
         // Display active camera behavior.
         if let Ok(blend) = params.q_camera_blend.single() {

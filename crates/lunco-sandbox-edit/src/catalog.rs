@@ -5,7 +5,6 @@
 
 use bevy::prelude::*;
 use lunco_usd_bevy::UsdPrimPath;
-use big_space::prelude::CellCoord;
 
 /// Registry of all spawnable object types.
 #[derive(Resource)]

@@ -8,10 +8,11 @@ fn test_query() {
 }
 
 fn my_system(
-    q: Query<(Entity, &CellCoord, &Transform, &Parent)>,
+    q: Query<(Entity, &CellCoord, &Transform, &ChildOf)>,
     q_grids: Query<&Grid>,
 ) {
-    for (entity, _cell, _tf, parent) in q.iter() {
-        let _ = q_grids.get(parent.get());
+    for (entity, _cell, _tf, child_of) in q.iter() {
+        let parent = child_of.parent();
+        let _ = q_grids.get(parent);
     }
 }

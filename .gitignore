@@ -5,3 +5,16 @@ target/
 # Downloaded mission data
 .cache/
 extern/
+
+# WebAssembly build artifacts
+crates/lunco-modelica/web/pkg/
+crates/lunco-client/web/pkg/
+
+# AI tool configs
+external/
+
+# IDE/Editor
+.idea/
+.vscode/
+*.swp
+*.swo

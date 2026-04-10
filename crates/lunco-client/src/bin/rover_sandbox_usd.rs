@@ -19,7 +19,7 @@ use lunco_usd_bevy::sync_usd_visuals;
 use lunco_sandbox_edit::SandboxEditPlugin;
 use lunco_controller::LunCoControllerPlugin;
 use lunco_avatar::{LunCoAvatarPlugin, IntentAnalogState, FreeFlightCamera, SpringArmCamera, OrbitCamera, AdaptiveNearPlane, CameraScroll};
-use lunco_celestial::{BlueprintMaterial, BlueprintExtension};
+use lunco_celestial::{BlueprintMaterial, BlueprintExtension, GravityPlugin, EmbeddedAssetsPlugin, BlueprintShaderPlugin};
 use lunco_core::{Vessel, architecture::CommandMessage, Avatar};
 use big_space::prelude::Grid;
 
@@ -36,6 +36,7 @@ fn main() {
         .insert_resource(Time::<Fixed>::from_hz(60.0))
         .insert_resource(lunco_core::TimeWarpState { physics_enabled: true, ..default() })
         .insert_resource(avian3d::prelude::Gravity(bevy::math::DVec3::NEG_Y * 9.81))
+        .insert_resource(lunco_celestial::Gravity::flat(9.81, bevy::math::DVec3::NEG_Y))
         .add_plugins(DefaultPlugins.set(AssetPlugin {
             file_path: std::env::current_dir().unwrap_or_default().join("assets").to_string_lossy().to_string(),
             ..default()
@@ -48,6 +49,11 @@ fn main() {
         .add_plugins(PhysicsPlugins::default().set(avian3d::prelude::PhysicsInterpolationPlugin::interpolate_all()))
         .add_plugins(MaterialPlugin::<BlueprintMaterial>::default())
         .add_plugins(lunco_core::LunCoCorePlugin)
+        // EmbeddedAssetsPlugin is no-op on desktop, handles shaders/textures/missions on wasm32
+        .add_plugins(EmbeddedAssetsPlugin)
+        // Register blueprint shader on desktop (wasm32 handled by EmbeddedAssetsPlugin)
+        .add_plugins(BlueprintShaderPlugin)
+        .add_plugins(GravityPlugin)
         .add_plugins(LunCoMobilityPlugin)
         .add_plugins(UsdPlugins)
         .add_plugins(SandboxEditPlugin)

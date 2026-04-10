@@ -87,134 +87,157 @@ impl Plugin for MissionPlugin {
     }
 }
 
-pub fn load_missions_system(mut commands: Commands, mut registry: ResMut<MissionRegistry>, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>) {
-    let missions_dir = "assets/missions";
-    if let Ok(entries) = fs::read_dir(missions_dir) {
-        for entry in entries.flatten() {
-            if entry.path().extension().map(|e| e == "json").unwrap_or(false) {
-                if let Ok(content) = fs::read_to_string(entry.path()) {
-                    if let Ok(mission) = serde_json::from_str::<MissionData>(&content) {
-                        info!("Loaded mission: {}", mission.name);
-                        
-                        // Spawn trajectories
-                        for traj in &mission.trajectories {
-                            let frame = match traj.frame.as_str() {
-                                "BodyFixed" => TrajectoryFrame::BodyFixed,
-                                _ => TrajectoryFrame::Inertial,
-                            };
-                            
-                            commands.spawn((
-                                Name::new(traj.name.clone()),
-                                TrajectoryView {
-                                    tracked_id: traj.tracked_id,
-                                    reference_id: traj.reference_id,
-                                    frame,
-                                    color: LinearRgba::from(Color::srgba(traj.color[0], traj.color[1], traj.color[2], traj.color[3])),
-                                    is_visible: true,
-                                    user_visible: traj.user_visible.unwrap_or(true),
-                                    sampling_days: traj.sampling_days,
-                                    sampling_step: traj.sampling_step,
-                                    start_epoch: traj.start_epoch_jd,
-                                    end_epoch: traj.end_epoch_jd,
-                                },
-                                TrajectoryPath::default(),
-                                Transform::default(),
-                                GlobalTransform::default(),
-                                Visibility::default(),
-                                CellCoord::default(),
-                            ));
-                        }
-                        
-                        // Spawn spacecraft
-                        if let Some(sc) = &mission.spacecraft {
-                            let radius_m = sc.marker_radius_km.unwrap_or(500.0) * 1000.0;
-                            let hit_radius_m = sc.hit_radius_km.unwrap_or(1000.0) * 1000.0;
+pub fn load_missions_system(
+    mut commands: Commands,
+    mut registry: ResMut<MissionRegistry>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    #[cfg(target_arch = "wasm32")] embedded: Option<Res<crate::embedded_assets::EmbeddedMissionData>>,
+) {
+    // Helper: process a single mission JSON string
+    let spawn_mission = |commands: &mut Commands, meshes: &mut ResMut<Assets<Mesh>>, materials: &mut ResMut<Assets<StandardMaterial>>, registry: &mut ResMut<MissionRegistry>, content: &str| {
+        if let Ok(mission) = serde_json::from_str::<MissionData>(content) {
+            info!("Loaded mission: {}", mission.name);
 
-                            let mut sc_ent = commands.spawn((
-                                Name::new(sc.name.clone()),
-                                Spacecraft {
-                                    name: sc.name.clone(),
-                                    ephemeris_id: sc.ephemeris_id,
-                                    reference_id: sc.reference_id,
-                                    start_epoch_jd: sc.start_epoch_jd,
-                                    end_epoch_jd: sc.end_epoch_jd,
-                                    hit_radius_m,
-                                    user_visible: true,
-                                },
-                                Transform::from_scale(Vec3::splat(sc.scale)),
-                                GlobalTransform::default(),
-                                Visibility::default(),
-                                CellCoord::default(),
-                            ));
+            // Spawn trajectories
+            for traj in &mission.trajectories {
+                let frame = match traj.frame.as_str() {
+                    "BodyFixed" => TrajectoryFrame::BodyFixed,
+                    _ => TrajectoryFrame::Inertial,
+                };
 
-                            sc_ent.with_children(|parent| {
-                                // Main Body (Service Module) - Darker metallic grey
-                                parent.spawn((
-                                    Mesh3d(meshes.add(Cylinder::new(radius_m, radius_m * 1.5).mesh())),
-                                    MeshMaterial3d(materials.add(StandardMaterial {
-                                        base_color: Color::srgb(0.2, 0.2, 0.2),
-                                        metallic: 0.8,
-                                        perceptual_roughness: 0.2,
-                                        ..default()
-                                    })),
-                                    Name::new("Service Module"),
-                                ));
+                commands.spawn((
+                    Name::new(traj.name.clone()),
+                    TrajectoryView {
+                        tracked_id: traj.tracked_id,
+                        reference_id: traj.reference_id,
+                        frame,
+                        color: LinearRgba::from(Color::srgba(traj.color[0], traj.color[1], traj.color[2], traj.color[3])),
+                        is_visible: true,
+                        user_visible: traj.user_visible.unwrap_or(true),
+                        sampling_days: traj.sampling_days,
+                        sampling_step: traj.sampling_step,
+                        start_epoch: traj.start_epoch_jd,
+                        end_epoch: traj.end_epoch_jd,
+                    },
+                    TrajectoryPath::default(),
+                    Transform::default(),
+                    GlobalTransform::default(),
+                    Visibility::default(),
+                    CellCoord::default(),
+                ));
+            }
 
-                                // Capsule (Command Module) - Silver metallic
-                                parent.spawn((
-                                    Mesh3d(meshes.add(Cylinder::new(radius_m * 0.1, radius_m).mesh())),
-                                    MeshMaterial3d(materials.add(StandardMaterial {
-                                        base_color: Color::srgb(0.8, 0.8, 0.8),
-                                        metallic: 1.0,
-                                        perceptual_roughness: 0.1,
-                                        ..default()
-                                    })),
-                                    Transform::from_translation(Vec3::Y * radius_m * 1.25),
-                                    Name::new("Command Module"),
-                                ));
+            // Spawn spacecraft
+            if let Some(sc) = &mission.spacecraft {
+                let radius_m = sc.marker_radius_km.unwrap_or(500.0) * 1000.0;
+                let hit_radius_m = sc.hit_radius_km.unwrap_or(1000.0) * 1000.0;
 
-                                // Solar Panels (Left and Right) - Blue solar look
-                                let panel_width = radius_m * 4.0;
-                                let panel_height = radius_m * 0.8;
-                                let panel_thickness = radius_m * 0.1;
-                                
-                                for side in [-1.0, 1.0] {
-                                    parent.spawn((
-                                        Mesh3d(meshes.add(Cuboid::new(panel_width, panel_height, panel_thickness).mesh())),
-                                        MeshMaterial3d(materials.add(StandardMaterial {
-                                            base_color: Color::srgb(0.0, 0.1, 0.4), // Dark blue solar cells
-                                            emissive: LinearRgba::new(0.0, 0.2, 0.8, 1.0) * 2.0,
-                                            metallic: 0.5,
-                                            perceptual_roughness: 0.3,
-                                            ..default()
-                                        })),
-                                        Transform::from_translation(Vec3::X * side * (radius_m + panel_width * 0.5)),
-                                        Name::new(if side < 0.0 { "Solar Panel Left" } else { "Solar Panel Right" }),
-                                    ));
-                                }
+                let mut sc_ent = commands.spawn((
+                    Name::new(sc.name.clone()),
+                    Spacecraft {
+                        name: sc.name.clone(),
+                        ephemeris_id: sc.ephemeris_id,
+                        reference_id: sc.reference_id,
+                        start_epoch_jd: sc.start_epoch_jd,
+                        end_epoch_jd: sc.end_epoch_jd,
+                        hit_radius_m,
+                        user_visible: true,
+                    },
+                    Transform::from_scale(Vec3::splat(sc.scale)),
+                    GlobalTransform::default(),
+                    Visibility::default(),
+                    CellCoord::default(),
+                ));
 
-                                // Billboard Label
-                                parent.spawn((
-                                    SpacecraftBillboard,
-                                    Text2d::new(sc.name.clone()),
-                                    TextFont {
-                                        font_size: 100.0,
-                                        ..default()
-                                    },
-                                    TextColor(Color::WHITE),
-                                    Transform::from_translation(Vec3::Y * radius_m * 5.0),
-                                ));
-                            });
-                            
-                            if sc.focus_on_start {
-                                sc_ent.insert(FocusOnStart);
-                            }
-                        }
-                        
-                        registry.missions.push(mission);
+                sc_ent.with_children(|parent| {
+                    // Main Body (Service Module) - Darker metallic grey
+                    parent.spawn((
+                        Mesh3d(meshes.add(Cylinder::new(radius_m, radius_m * 1.5).mesh())),
+                        MeshMaterial3d(materials.add(StandardMaterial {
+                            base_color: Color::srgb(0.2, 0.2, 0.2),
+                            metallic: 0.8,
+                            perceptual_roughness: 0.2,
+                            ..default()
+                        })),
+                        Name::new("Service Module"),
+                    ));
+
+                    // Capsule (Command Module) - Silver metallic
+                    parent.spawn((
+                        Mesh3d(meshes.add(Cylinder::new(radius_m * 0.1, radius_m).mesh())),
+                        MeshMaterial3d(materials.add(StandardMaterial {
+                            base_color: Color::srgb(0.8, 0.8, 0.8),
+                            metallic: 1.0,
+                            perceptual_roughness: 0.1,
+                            ..default()
+                        })),
+                        Transform::from_translation(Vec3::Y * radius_m * 1.25),
+                        Name::new("Command Module"),
+                    ));
+
+                    // Solar Panels (Left and Right) - Blue solar look
+                    let panel_width = radius_m * 4.0;
+                    let panel_height = radius_m * 0.8;
+                    let panel_thickness = radius_m * 0.1;
+
+                    for side in [-1.0, 1.0] {
+                        parent.spawn((
+                            Mesh3d(meshes.add(Cuboid::new(panel_width, panel_height, panel_thickness).mesh())),
+                            MeshMaterial3d(materials.add(StandardMaterial {
+                                base_color: Color::srgb(0.0, 0.1, 0.4), // Dark blue solar cells
+                                emissive: LinearRgba::new(0.0, 0.2, 0.8, 1.0) * 2.0,
+                                metallic: 0.5,
+                                perceptual_roughness: 0.3,
+                                ..default()
+                            })),
+                            Transform::from_translation(Vec3::X * side * (radius_m + panel_width * 0.5)),
+                            Name::new(if side < 0.0 { "Solar Panel Left" } else { "Solar Panel Right" }),
+                        ));
+                    }
+
+                    // Billboard Label
+                    parent.spawn((
+                        SpacecraftBillboard,
+                        Text2d::new(sc.name.clone()),
+                        TextFont {
+                            font_size: 100.0,
+                            ..default()
+                        },
+                        TextColor(Color::WHITE),
+                        Transform::from_translation(Vec3::Y * radius_m * 5.0),
+                    ));
+                });
+
+                if sc.focus_on_start {
+                    sc_ent.insert(FocusOnStart);
+                }
+            }
+
+            registry.missions.push(mission);
+        }
+    };
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        // Desktop: load from filesystem
+        let missions_dir = "assets/missions";
+        if let Ok(entries) = fs::read_dir(missions_dir) {
+            for entry in entries.flatten() {
+                if entry.path().extension().map(|e| e == "json").unwrap_or(false) {
+                    if let Ok(content) = fs::read_to_string(entry.path()) {
+                        spawn_mission(&mut commands, &mut meshes, &mut materials, &mut registry, &content);
                     }
                 }
             }
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        // Web: use embedded mission data
+        if let Some(embedded) = embedded {
+            spawn_mission(&mut commands, &mut meshes, &mut materials, &mut registry, &embedded.artemis_2);
         }
     }
 }
