@@ -334,6 +334,7 @@ fn process_usd_sim_prims(
                     brake_active: false,
                 },
                 RoverVessel,
+                lunco_core::SelectableRoot,
                 lunco_core::Vessel,
                 ChassisWheelType(wheel_type),
             ));

@@ -190,6 +190,7 @@ fn setup_sandbox(
 
     commands.spawn((
         Name::new("Blueprint_Ground"),
+        lunco_core::Ground,
         Mesh3d(meshes.add(Plane3d::default().mesh().size(2000.0, 2000.0))),
         MeshMaterial3d(blueprint_mat_handle),
         RigidBody::Static,

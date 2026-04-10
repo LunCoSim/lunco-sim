@@ -175,6 +175,7 @@ pub fn spawn_procedural(
             });
             commands.spawn((
                 Name::new("Dynamic Ball"),
+                lunco_core::SelectableRoot,
                 Transform::from_translation(world_pos),
                 avian3d::prelude::RigidBody::Dynamic,
                 avian3d::prelude::Collider::sphere(radius as f64),
@@ -194,6 +195,7 @@ pub fn spawn_procedural(
             });
             commands.spawn((
                 Name::new("Static Ball"),
+                lunco_core::SelectableRoot,
                 Transform::from_translation(world_pos),
                 avian3d::prelude::Collider::sphere(radius as f64),
                 Mesh3d(mesh),
@@ -210,6 +212,7 @@ pub fn spawn_procedural(
             });
             commands.spawn((
                 Name::new("Ramp"),
+                lunco_core::SelectableRoot,
                 Transform::from_translation(world_pos)
                     .with_rotation(Quat::from_rotation_z(17.1887_f32.to_radians())),
                 avian3d::prelude::RigidBody::Static,
@@ -229,6 +232,7 @@ pub fn spawn_procedural(
             });
             commands.spawn((
                 Name::new("Wall"),
+                lunco_core::SelectableRoot,
                 Transform::from_translation(world_pos),
                 avian3d::prelude::RigidBody::Static,
                 avian3d::prelude::Collider::cuboid(w, h, d),
