@@ -55,6 +55,20 @@ pub struct Vessel;
 #[derive(Component)]
 pub struct RoverVessel;
 
+/// Marker component indicating an entity can be selected as a root object
+/// in editing tools (e.g., rover bodies, props, ramps, solar panels).
+///
+/// Child entities like wheels, colliders, and visuals do NOT have this marker,
+/// preventing them from being independently selected. Selection systems should
+/// query for this component rather than filtering by name strings.
+#[derive(Component)]
+pub struct SelectableRoot;
+
+/// Marker component for terrain/ground entities that should be excluded
+/// from vessel possession and editing interactions.
+#[derive(Component)]
+pub struct Ground;
+
 /// Physical properties used for gravity, collision, and mass-based calculations.
 /// 
 /// These properties use double precision (`f64`) to maintain simulation integrity
