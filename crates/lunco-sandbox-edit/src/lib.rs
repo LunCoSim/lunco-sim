@@ -45,7 +45,9 @@ impl Plugin for SandboxEditPlugin {
         app.init_resource::<SpawnState>()
             .init_resource::<SelectedEntity>()
             .init_resource::<UndoStack>()
-            .init_resource::<catalog::SpawnCatalog>();
+            .init_resource::<catalog::SpawnCatalog>()
+            .init_resource::<spawn::DragConfig>()
+            .insert_resource(lunco_core::DragModeActive { active: false });
 
         app.add_plugins(transform_gizmo_bevy::TransformGizmoPlugin);
         app.add_plugins(commands::SpawnCommandPlugin);
@@ -54,8 +56,9 @@ impl Plugin for SandboxEditPlugin {
         // Palette panel MUST run in EguiPrimaryContextPass to access ctx_mut()
         app.add_systems(bevy_egui::EguiPrimaryContextPass, palette::spawn_palette_panel);
         app.add_systems(Update, spawn::update_spawn_ghost);
+        app.add_systems(FixedUpdate, spawn::update_selected_entity_drag);
         app.add_systems(Update, spawn::handle_spawn_placement);
-        app.add_systems(Update, selection::handle_entity_selection);
+        // Selection system is registered in the binary with proper ordering (before avatar possession)
         app.add_systems(Update, gizmo::sync_gizmo_mode);
         app.add_systems(Update, gizmo::sync_gizmo_camera);
         app.add_systems(Update, gizmo::apply_gizmo_results);
@@ -90,6 +93,8 @@ pub struct SelectedEntity {
     pub mode: ToolMode,
     /// Whether the physics pickup tool is currently active.
     pub is_picking_up: bool,
+    /// Whether the selected entity is currently following the cursor.
+    pub is_dragging: bool,
 }
 
 /// Tool mode determining what the user can do with the selected entity.

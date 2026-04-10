@@ -87,10 +87,14 @@ pub fn handle_entity_selection(
     q_parents: Query<&ChildOf>,
     q_selectable: Query<(Entity, &Name, &GlobalTransform), Without<Avatar>>,
     q_selected_old: Query<Entity, With<Selected>>,
+    mut drag_mode: ResMut<lunco_core::DragModeActive>,
     mut commands: Commands,
 ) {
     // Skip if in spawn mode
     if !matches!(spawn_state.as_ref(), SpawnState::Idle) { return; }
+
+    // Skip if currently dragging an entity (placement click is handled elsewhere)
+    if selected.is_dragging { return; }
 
     // Escape exits transform mode and deselects
     if keys.just_pressed(KeyCode::Escape) {
@@ -100,6 +104,8 @@ pub fn handle_entity_selection(
         selected.entity = None;
         selected.mode = ToolMode::Select;
         selected.is_picking_up = false;
+        selected.is_dragging = false;
+        drag_mode.active = false;
         return;
     }
 
@@ -158,8 +164,8 @@ pub fn handle_entity_selection(
         return;
     };
 
-    // Verify the target is in the selectable query
-    let Ok((_, name, _)) = q_selectable.get(entity) else {
+    // Verify the target is in the selectable query and get its name
+    let Ok((_, name, _gtf)) = q_selectable.get(entity) else {
         // Not selectable — deselect
         for old in q_selected_old.iter() {
             commands.entity(old).remove::<Selected>().remove::<GizmoTarget>();
@@ -174,16 +180,16 @@ pub fn handle_entity_selection(
         commands.entity(old).remove::<Selected>().remove::<GizmoTarget>();
     }
 
-    // Select the target entity
-    commands.entity(entity).insert((Selected, GizmoTarget::default()));
+    // Select the target entity and enter drag mode
+    // NOTE: GizmoTarget is NOT added here to avoid interfering with Avian3D physics.
+    // It gets added after placement (see spawn.rs).
+    commands.entity(entity).insert(Selected);
     selected.entity = Some(entity);
+    selected.is_dragging = true;
+    // Set drag mode flag immediately so possession can see it in the same frame
+    drag_mode.active = true;
     let name_str = name.as_str();
-    info!("Selected entity {:?} ({})", entity, name_str);
-
-    // Auto-switch to translate mode
-    if selected.mode == ToolMode::Select {
-        selected.mode = ToolMode::Translate;
-    }
+    info!("Selected entity {:?} ({}) - drag mode active", entity, name_str);
 
     // Tool mode hotkeys
     if keys.just_pressed(KeyCode::KeyG) {
@@ -207,5 +213,20 @@ mod tests {
         let selected = SelectedEntity::default();
         assert!(selected.entity.is_none());
         assert_eq!(selected.mode, ToolMode::Select);
+        assert!(!selected.is_dragging);
+    }
+
+    #[test]
+    fn test_selected_entity_dragging_flag() {
+        let mut selected = SelectedEntity::default();
+        assert!(!selected.is_dragging);
+        
+        // Simulate entering drag mode
+        selected.is_dragging = true;
+        assert!(selected.is_dragging);
+        
+        // Simulate exiting drag mode
+        selected.is_dragging = false;
+        assert!(!selected.is_dragging);
     }
 }

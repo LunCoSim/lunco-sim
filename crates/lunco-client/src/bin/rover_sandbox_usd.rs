@@ -6,7 +6,6 @@
 
 use bevy::prelude::*;
 use bevy::asset::AssetPlugin;
-use bevy::diagnostic::{FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin};
 use bevy::pbr::wireframe::WireframePlugin;
 use bevy_egui::{egui, EguiContexts, EguiPlugin, EguiPrimaryContextPass};
 use big_space::prelude::*;
@@ -42,8 +41,9 @@ fn main() {
             ..default()
         }).build().disable::<TransformPlugin>())
         .add_plugins(BigSpaceDefaultPlugins.build().disable::<big_space::validation::BigSpaceValidationPlugin>())
-        .add_plugins(LogDiagnosticsPlugin::default())
-        .add_plugins(FrameTimeDiagnosticsPlugin::default())
+        // Diagnostics disabled for cleaner output - uncomment to debug performance
+        // .add_plugins(LogDiagnosticsPlugin::default())
+        // .add_plugins(FrameTimeDiagnosticsPlugin::default())
         .add_plugins(WireframePlugin::default())
         .add_plugins(EguiPlugin::default())
         .add_plugins(PhysicsPlugins::default().set(avian3d::prelude::PhysicsInterpolationPlugin::interpolate_all()))
@@ -63,6 +63,8 @@ fn main() {
         .add_systems(Startup, setup_sandbox)
         .add_systems(Update, (apply_sandbox_settings, apply_blueprint_to_usd_terrain.after(sync_usd_visuals)))
         .add_systems(Update, apply_blueprint_grid_settings)
+        // Selection must run before avatar possession so DragModeActive flag is set
+        .add_systems(Update, lunco_sandbox_edit::selection::handle_entity_selection.before(lunco_avatar::avatar_raycast_possession))
         .add_systems(PreUpdate, global_transform_propagation_system)
         .add_systems(PostUpdate, (
             global_transform_propagation_system,

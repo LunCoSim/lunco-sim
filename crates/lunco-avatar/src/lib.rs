@@ -978,17 +978,23 @@ fn on_drag_commands(trigger: On<CommandMessage>, mut commands: Commands, q_avata
 
 // ─── Raycasting ──────────────────────────────────────────────────────────────
 
-fn avatar_raycast_possession(
+pub fn avatar_raycast_possession(
     mouse: Res<ButtonInput<MouseButton>>,
     windows: Query<&Window>,
     camera_q: Query<(&Camera, &GlobalTransform, Entity), With<Avatar>>,
     q_link: Query<&lunco_controller::ControllerLink, With<Avatar>>,
+    drag_mode_active: Res<lunco_core::DragModeActive>,
     mut commands: Commands,
     q_bodies: Query<(Entity, &GlobalTransform, &CelestialBody)>,
     q_spacecraft: Query<(Entity, &GlobalTransform, &Spacecraft)>,
-    q_rovers: Query<(Entity, &GlobalTransform), With<Vessel>>,
+    _q_rovers: Query<(Entity, &GlobalTransform), With<Vessel>>,
 ) {
     if !mouse.just_pressed(MouseButton::Left) { return; }
+    
+    // Skip possession check if entity dragging is active
+    // This prevents camera possession from interfering with drag operations
+    if drag_mode_active.active { return; }
+    
     let Some(pos) = windows.iter().next().and_then(|w| w.cursor_position()) else { return; };
     let Some((camera, cam_gtf, avatar_entity)) = camera_q.iter().next() else { return; };
     let Ok(ray) = camera.viewport_to_world(cam_gtf, pos) else { return; };
@@ -1007,10 +1013,12 @@ fn avatar_raycast_possession(
         let oc = ray.origin - gtf.translation(); let b = oc.dot(ray.direction.as_vec3()); let c = oc.dot(oc) - sc.hit_radius_m.powi(2);
         let discr = b * b - c; if discr >= 0.0 { let t = -b - discr.sqrt(); if t > 0.0 && t < min_t { min_t = t; nearest = Some(entity); is_possessable = true; } }
     }
-    for (entity, gtf) in q_rovers.iter() {
-        let oc = ray.origin - gtf.translation(); let b = oc.dot(ray.direction.as_vec3()); let c = oc.dot(oc) - 100.0; // 10m squared radius
-        let discr = b * b - c; if discr >= 0.0 { let t = -b - discr.sqrt(); if t > 0.0 && t < min_t { min_t = t; nearest = Some(entity); is_possessable = true; } }
-    }
+    // Rover possession via click disabled - 10m sphere was interfering with gizmo/drag interactions.
+    // Rovers can still be possessed via UI selection or CommandMessage.
+    // for (entity, gtf) in q_rovers.iter() {
+    //     let oc = ray.origin - gtf.translation(); let b = oc.dot(ray.direction.as_vec3()); let c = oc.dot(oc) - 100.0; // 10m squared radius
+    //     let discr = b * b - c; if discr >= 0.0 { let t = -b - discr.sqrt(); if t > 0.0 && t < min_t { min_t = t; nearest = Some(entity); is_possessable = true; } }
+    // }
     if let Some(target) = nearest { if is_possessable { commands.trigger(CommandMessage { id: 0, target, name: "POSSESS".to_string(), args: smallvec::smallvec![], source: avatar_entity }); } else { commands.trigger(CommandMessage { id: 0, target, name: "FOCUS".to_string(), args: smallvec::smallvec![], source: avatar_entity }); } }
 }
 

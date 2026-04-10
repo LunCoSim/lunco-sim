@@ -90,6 +90,22 @@ pub struct TimeWarpState {
     pub physics_enabled: bool,
 }
 
+/// Marker resource indicating that entity dragging is active.
+///
+/// Used by sandbox editing systems to signal other systems (like avatar possession)
+/// to disable conflicting interactions during drag operations.
+#[derive(Resource)]
+pub struct DragModeActive {
+    /// Whether dragging is currently active.
+    pub active: bool,
+}
+
+impl Default for DragModeActive {
+    fn default() -> Self {
+        Self { active: false }
+    }
+}
+
 /// Represents the current "wall clock" time in the simulation universe.
 ///
 /// Uses Julian Date for astronomical precision and provides a mechanism
