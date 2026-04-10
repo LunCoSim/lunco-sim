@@ -192,6 +192,7 @@ pub fn update_selected_entity_drag(
 
         // Add GizmoTarget + GizmoStartPos after drag ends (physics safe now)
         // Using deferred commands so this runs after physics step completes
+        // GizmoStartPos is a placeholder - it gets captured properly when user starts dragging the gizmo
         let world_pos = gtf.translation();
         commands.entity(entity)
             .insert(GizmoTarget::default())

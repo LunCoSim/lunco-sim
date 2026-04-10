@@ -59,9 +59,17 @@ impl Plugin for SandboxEditPlugin {
         app.add_systems(FixedUpdate, spawn::update_selected_entity_drag);
         app.add_systems(Update, spawn::handle_spawn_placement);
         // Selection system is registered in the binary with proper ordering (before avatar possession)
+        // Gizmo systems run in Last schedule (after transform-gizmo-bevy's update_gizmos):
+        // 1. capture_gizmo_start_pos - captures start pos, makes body kinematic
+        // 2. restore_gizmo_dynamic - restores dynamic when drag ends
+        // 3. apply_gizmo_results - applies transform changes + computes velocity
+        app.add_systems(Last, (
+            gizmo::capture_gizmo_start_pos,
+            gizmo::restore_gizmo_dynamic.after(gizmo::capture_gizmo_start_pos),
+            gizmo::apply_gizmo_results.after(gizmo::capture_gizmo_start_pos),
+        ));
         app.add_systems(Update, gizmo::sync_gizmo_mode);
         app.add_systems(Update, gizmo::sync_gizmo_camera);
-        app.add_systems(Update, gizmo::apply_gizmo_results);
         // Inspector panel MUST run in EguiPrimaryContextPass to access ctx_mut()
         app.add_systems(bevy_egui::EguiPrimaryContextPass, inspector::inspector_panel);
         // Entity list panel runs in EguiPrimaryContextPass

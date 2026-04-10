@@ -987,7 +987,7 @@ pub fn avatar_raycast_possession(
     mut commands: Commands,
     q_bodies: Query<(Entity, &GlobalTransform, &CelestialBody)>,
     q_spacecraft: Query<(Entity, &GlobalTransform, &Spacecraft)>,
-    _q_rovers: Query<(Entity, &GlobalTransform), With<Vessel>>,
+    q_rovers: Query<(Entity, &GlobalTransform), With<Vessel>>,
 ) {
     if !mouse.just_pressed(MouseButton::Left) { return; }
     
@@ -1013,12 +1013,10 @@ pub fn avatar_raycast_possession(
         let oc = ray.origin - gtf.translation(); let b = oc.dot(ray.direction.as_vec3()); let c = oc.dot(oc) - sc.hit_radius_m.powi(2);
         let discr = b * b - c; if discr >= 0.0 { let t = -b - discr.sqrt(); if t > 0.0 && t < min_t { min_t = t; nearest = Some(entity); is_possessable = true; } }
     }
-    // Rover possession via click disabled - 10m sphere was interfering with gizmo/drag interactions.
-    // Rovers can still be possessed via UI selection or CommandMessage.
-    // for (entity, gtf) in q_rovers.iter() {
-    //     let oc = ray.origin - gtf.translation(); let b = oc.dot(ray.direction.as_vec3()); let c = oc.dot(oc) - 100.0; // 10m squared radius
-    //     let discr = b * b - c; if discr >= 0.0 { let t = -b - discr.sqrt(); if t > 0.0 && t < min_t { min_t = t; nearest = Some(entity); is_possessable = true; } }
-    // }
+    for (entity, gtf) in q_rovers.iter() {
+        let oc = ray.origin - gtf.translation(); let b = oc.dot(ray.direction.as_vec3()); let c = oc.dot(oc) - 100.0; // 10m squared radius
+        let discr = b * b - c; if discr >= 0.0 { let t = -b - discr.sqrt(); if t > 0.0 && t < min_t { min_t = t; nearest = Some(entity); is_possessable = true; } }
+    }
     if let Some(target) = nearest { if is_possessable { commands.trigger(CommandMessage { id: 0, target, name: "POSSESS".to_string(), args: smallvec::smallvec![], source: avatar_entity }); } else { commands.trigger(CommandMessage { id: 0, target, name: "FOCUS".to_string(), args: smallvec::smallvec![], source: avatar_entity }); } }
 }
 
