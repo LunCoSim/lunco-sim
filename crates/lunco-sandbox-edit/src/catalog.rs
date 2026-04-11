@@ -279,6 +279,7 @@ pub fn spawn_usd_entry(
 
         let root = commands.spawn((
             Name::new(entry.display_name.clone()),
+            lunco_core::SelectableRoot,
             UsdPrimPath {
                 stage_handle: handle,
                 path: prim_path,

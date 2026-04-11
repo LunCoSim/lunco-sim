@@ -116,9 +116,12 @@ fn process_usd_avian_prims(
             continue;
         }
 
-        // Map RigidBody
+        // Map RigidBody — also mark as selectable root
         if let Some(true) = reader.prim_attribute_value::<bool>(&sdf_path, "physics:rigidBodyEnabled") {
-            commands.entity(entity).insert(RigidBody::Dynamic);
+            commands.entity(entity).insert((
+                RigidBody::Dynamic,
+                lunco_core::SelectableRoot,
+            ));
         }
 
         // Map Mass
