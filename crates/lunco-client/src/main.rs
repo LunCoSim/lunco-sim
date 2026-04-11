@@ -15,6 +15,7 @@
 //! the root cause of camera roll in surface mode.
 
 use bevy::{prelude::*, asset::io::AssetSourceBuilder};
+use avian3d::prelude::PhysicsPlugins;
 
 mod ui;
 use lunco_celestial::BlueprintMaterial;
@@ -31,7 +32,8 @@ fn main() {
         )
         .add_plugins(DefaultPlugins.build().disable::<TransformPlugin>())
         .add_plugins(big_space::prelude::BigSpaceDefaultPlugins.build().disable::<big_space::validation::BigSpaceValidationPlugin>())
-        .add_plugins(lunco_core::LunCoCorePlugin);
+        .add_plugins(lunco_core::LunCoCorePlugin)
+        .insert_resource(lunco_core::DragModeActive { active: false });
 
     #[cfg(not(feature = "sandbox"))]
     {
@@ -40,6 +42,7 @@ fn main() {
     }
 
     app.add_plugins(MaterialPlugin::<BlueprintMaterial>::default())
+        .add_plugins(PhysicsPlugins::default())
         .add_plugins(LunCoUiPlugin)
         .add_plugins(lunco_fsw::LunCoFswPlugin)
         .add_plugins(lunco_hardware::LunCoHardwarePlugin)
