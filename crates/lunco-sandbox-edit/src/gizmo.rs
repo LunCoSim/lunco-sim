@@ -54,18 +54,25 @@ pub struct GizmoPrevPos {
 /// This runs in `Last` schedule (after transform-gizmo-bevy's update_gizmos)
 /// so it sees the correct `is_active()` state for the current frame.
 /// Only triggers when the gizmo is actively being dragged (not just hovered).
+///
+/// IMPORTANT: Skipped when the entity is possessed (has a ControllerLink),
+/// because possession requires dynamic physics for proper vehicle control.
 pub fn capture_gizmo_start_pos(
     selected: Res<SelectedEntity>,
     gizmo_targets: Query<&GizmoTarget>,
     q_transforms: Query<&Transform>,
     mut q_gizmo_starts: Query<&mut GizmoStartPos>,
     q_was_kinematic: Query<&GizmoKinematic>,
+    q_controller_links: Query<&lunco_controller::ControllerLink>,
     mut commands: Commands,
 ) {
     // Skip while physics drag is active
     if selected.is_dragging { return; }
 
     let Some(entity) = selected.entity else { return; };
+
+    // Skip if entity is possessed - gizmo would break physics control
+    if q_controller_links.iter().any(|link| link.vessel_entity == entity) { return; }
 
     // Only trigger when gizmo is actively being dragged (not just hovered/focused)
     let Ok(gizmo_target) = gizmo_targets.get(entity) else { return; };
@@ -94,16 +101,22 @@ pub fn capture_gizmo_start_pos(
 /// This system runs in `Last` after `capture_gizmo_start_pos`.
 /// It detects when a gizmo drag ends (was active, now not active) and restores
 /// the body to dynamic so physics (gravity) takes over.
+///
+/// IMPORTANT: Skipped when the entity is possessed (has a ControllerLink).
 pub fn restore_gizmo_dynamic(
     selected: Res<SelectedEntity>,
     gizmo_targets: Query<&GizmoTarget>,
     q_was_kinematic: Query<(Entity, &GizmoKinematic, &GizmoPrevPos)>,
+    q_controller_links: Query<&lunco_controller::ControllerLink>,
     mut commands: Commands,
 ) {
     // Skip while physics drag is active
     if selected.is_dragging { return; }
 
     let Some(entity) = selected.entity else { return; };
+
+    // Skip if entity is possessed - don't interfere with possession
+    if q_controller_links.iter().any(|link| link.vessel_entity == entity) { return; }
 
     // Only process entities we made kinematic
     if q_was_kinematic.get(entity).is_err() { return; }
@@ -126,6 +139,8 @@ pub fn restore_gizmo_dynamic(
 /// computed from position change for proper collision detection.
 ///
 /// IMPORTANT: Skipped when `SelectedEntity.is_dragging` is true (physics drag takes priority).
+/// IMPORTANT: Skipped when the entity is possessed (has a ControllerLink) to avoid
+/// conflicting with vehicle control physics.
 ///
 /// ## Coordinate System
 /// The gizmo reports translation as a **delta** from the starting position.
@@ -136,6 +151,7 @@ pub fn apply_gizmo_results(
     q_gizmo_starts: Query<&GizmoStartPos>,
     mut q_transforms: Query<&mut Transform>,
     mut q_lin_vel: Query<&mut LinearVelocity>,
+    q_controller_links: Query<&lunco_controller::ControllerLink>,
     time: Res<Time>,
     mut commands: Commands,
 ) {
@@ -143,6 +159,9 @@ pub fn apply_gizmo_results(
     if selected.is_dragging { return; }
 
     let Some(entity) = selected.entity else { return; };
+
+    // Skip if entity is possessed - gizmo would break physics control
+    if q_controller_links.iter().any(|link| link.vessel_entity == entity) { return; }
 
     let Ok(gizmo_target) = gizmo_targets.get(entity) else { return; };
 

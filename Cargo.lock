@@ -5657,6 +5657,7 @@ dependencies = [
  "big_space",
  "enumset",
  "lunco-avatar",
+ "lunco-controller",
  "lunco-core",
  "lunco-mobility",
  "lunco-usd",
