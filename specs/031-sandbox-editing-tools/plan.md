@@ -5,8 +5,8 @@
 The system adds a new crate `lunco-sandbox-edit` that provides:
 1. **SpawnCatalog** — registry of spawnable things
 2. **Spawn system** — click-to-place via mouse raycast
-3. **Selection system** — click to select entities
-4. **Gizmo systems** — translate, rotate, force tools
+3. **Selection system** — Shift+click to select entities with immediate gizmo
+4. **Gizmo systems** — translate, rotate tools
 5. **Inspector panel** — parameter editing via EGUI
 
 All spawned entities become children of the Grid (same as USD rovers).
@@ -19,35 +19,18 @@ All spawned entities become children of the Grid (same as USD rovers).
 |-------|---------|---------|--------|
 | **transform-gizmo-bevy** | `0.9.0` | 3D transform gizmo (translate/rotate/scale arrows+rings) | New dependency |
 | **bevy-inspector-egui** | `0.36.0` | Runtime component inspection & editing via EGUI | **Already in workspace** |
-| **avian_pickup** | `0.5.0-rc.1` | Gravity-gun style rigid body pickup (HL2 style) | New dependency |
-
-### Why These Choices
-
-**transform-gizmo-bevy** over custom gizmos:
-- Full-featured: translate, rotate, scale modes with proper screen-space projection
-- `GizmoCamera` + `GizmoTarget` architecture matches our selection model perfectly
-- Events: `GizmoDragStarted`, `GizmoDragging`, `GizmoResult` for undo tracking
-- Saves ~2000 lines of custom gizmo rendering and interaction math
-
-**bevy-inspector-egui** (already in workspace):
-- Used by `lunco-client` already
-- Auto-generates UI from `#[derive(Reflect)]` components
-- `WorldInspectorPlugin` for browsing entire world
-- `ReflectInspector` widget for embedding in our custom EGUI panels
-- No need to manually build sliders for every component type
-
-**avian_pickup** over custom force tool:
-- HL2 gravity gun style — click to grab, hold to carry, release to throw
-- Handles physics constraints, mass scaling, and force application internally
-- Much more polished than a click-drag force vector approach
 
 ### Crate Structure
 - **`lunco-sandbox-edit`** (new) — spawn catalog, selection, and tool orchestration
   - `catalog.rs` — SpawnCatalog, SpawnableEntry
   - `spawn.rs` — click-to-place system via mouse raycast
-  - `selection.rs` — entity selection + tool mode switching
-  - `inspector.rs` — EGUI panel wrapping bevy-inspector-egui
-  - `undo.rs` — undo stack for gizmo/spawn/param changes
+  - `selection.rs` — Shift+click entity selection + GizmoTarget management
+  - `gizmo.rs` — kinematic/dynamic body switching, Position + GlobalTransform sync
+  - `inspector.rs` — EGUI parameter panel
+  - `entity_list.rs` — clickable list of scene entities
+  - `palette.rs` — spawn palette UI
+  - `undo.rs` — undo stack for spawn/transform changes
+  - `commands.rs` — SPAWN_ENTITY command message handling
   - `lib.rs` — plugin wiring all subsystems together
 
 ## Component Design
@@ -77,47 +60,16 @@ pub struct SpawnableEntry {
 #[derive(Resource, Default)]
 pub struct SelectedEntity {
     pub entity: Option<Entity>,
-    pub tool_mode: ToolMode, // Select, Translate, Rotate, Force
-}
-
-pub enum ToolMode {
-    Select,
-    Translate,
-    Rotate,
-    Force,
 }
 ```
 
-### UndoAction Enum
+### Gizmo Lifecycle
 
-```rust
-pub enum UndoAction {
-    Spawned { entity: Entity },
-    Moved { entity: Entity, from: Transform, to: Transform },
-    Rotated { entity: Entity, from: Quat, to: Quat },
-    ParamChanged { entity: Entity, param: String, old: ParamValue, new: ParamValue },
-}
 ```
-
-## System Design
-
-### Spawn Flow
-```
-User clicks palette → SpawnState::Active(entry)
-User hovers → Raycast from camera → Show ghost at hit point
-User clicks → SpawnEntry at hit point → Clear SpawnState
-```
-
-### Selection Flow  
-```
-User in Select mode → Clicks → Raycast picks entity → SelectedEntity.entity = Some(picked)
-User in Gizmo mode → Drags gizmo axis → Mutates Transform → Records UndoAction
-```
-
-### Inspector Panel
-```
-SelectedEntity.entity = Some(e) → Query components on e → Show sliders
-User changes value → Commands mutates component → Record UndoAction
+Shift+Left-click → Select entity → Add GizmoTarget → Gizmo appears immediately
+Drag gizmo handle → Body becomes kinematic → Transform updated by gizmo library
+                     → Position synced (prevent writeback) → GlobalTransform synced (correct rendering)
+Release gizmo handle → Body restored to dynamic → Physics resumes
 ```
 
 ## Gizmo Approach
@@ -126,80 +78,67 @@ User changes value → Commands mutates component → Record UndoAction
 - `TransformGizmoPlugin` — drop-in plugin
 - `GizmoCamera` — mark our camera entity
 - `GizmoTarget` — mark the selected entity
-- `GizmoOptions` — configure which modes are active (Translate, Rotate, Scale)
-- Built-in hotkey switching: G=translate, R=rotate, S=scale
+- `GizmoOptions` — configure which modes are active
 
-We only need to wire:
+We handle:
 1. Adding/removing `GizmoTarget` when selection changes
 2. Ensuring our camera has `GizmoCamera`
-3. Subscribing to `GizmoResult` events for undo tracking
+3. Making bodies kinematic during drag (so physics doesn't fight transforms)
+4. Syncing `Position` from `Transform` (prevents Avian3D writeback overwrite)
+5. Syncing `GlobalTransform` from `Transform` (prevents mesh rendering at stale position)
+6. Restoring dynamic bodies when drag ends
 
 ## File Structure
 
 ```
 crates/lunco-sandbox-edit/
 ├── Cargo.toml
-└── src/
-    ├── lib.rs              — Plugin, resource definitions
-    ├── catalog.rs          — SpawnCatalog, registration
-    ├── spawn.rs            — SpawnState, ghost preview, placement system
-    ├── selection.rs        — Mouse pick → entity selection
-    ├── gizmo.rs            — Gizmo rendering + interaction (single file for all 3)
-    ├── force_tool.rs       — Force application via click-drag
-    ├── inspector.rs        — EGUI parameter panel
-    └── undo.rs             — Undo stack system
-
-assets/
-└── catalog/
-    └── spawn_catalog.ron   — Optional: RON-based catalog config
+├── src/
+│   ├── lib.rs              — Plugin, resource definitions
+│   ├── catalog.rs          — SpawnCatalog, registration
+│   ├── spawn.rs            — SpawnState, ghost preview, placement system
+│   ├── selection.rs        — Shift+click entity selection
+│   ├── gizmo.rs            — Kinematic switching, Position/GlobalTransform sync
+│   ├── inspector.rs        — EGUI parameter panel
+│   ├── entity_list.rs      — Clickable entity list UI
+│   ├── palette.rs          — Spawn palette UI
+│   ├── commands.rs         — SPAWN_ENTITY command handling
+│   └── undo.rs             — Undo stack system
 ```
-
-## Spawn Sources
-
-Each `SpawnableEntry` has a `SpawnSource`:
-
-| Source | How it spawns |
-|--------|--------------|
-| `UsdFile("vessels/rovers/skid_rover.usda")` | Load via AssetServer, compose, spawn entities |
-| `UsdFile("vessels/rovers/ackermann_rover.usda")` | Same, with wheelType override |
-| `Procedural(ProcedureId::SolarPanel)` | Rust factory function |
-| `Procedural(ProcedureId::BallDynamic)` | Sphere mesh + RigidBody + Collider |
-| `Procedural(ProcedureId::BallStatic)` | Sphere mesh + Collider only |
-| `Procedural(ProcedureId::Ramp)` | Cuboid + rotated transform |
-| `Procedural(ProcedureId::Wall)` | Cuboid |
 
 ## Risk Analysis
 
 | Risk | Mitigation |
 |------|-----------|
-| Gizmo rendering complexity | Start with simple colored debug lines, iterate |
+| Transform overshoot (gizmo + physics conflict) | Body made kinematic during drag, Position synced to prevent writeback |
+| Mesh renders at wrong position | GlobalTransform synced from Transform each frame during drag |
 | USD spawn latency (async loading) | Show "loading" indicator, use ghost placeholder |
-| Component inspection genericity | Use trait-based approach: `InspectableComponent` |
 | Undo for complex spawns (USD rovers) | Undo spawn = despawn entire entity tree (entity + children) |
 
 ## Implementation Phases
 
-### Phase 1: Foundation (spawn catalog + click placement)
+### Phase 1: Foundation (spawn catalog + click placement) ✅ DONE
 - Create `lunco-sandbox-edit` crate
 - SpawnCatalog resource with rovers + ball
 - Click-to-place via mouse raycast
 - Ghost preview
 
-### Phase 2: Selection + Translation Gizmo
-- Entity selection via mouse pick
-- Translate gizmo (3 arrows)
-- Drag-to-move with undo
+### Phase 2: Selection + Translation Gizmo ✅ DONE
+- Entity selection via Shift+Left-click
+- Transform gizmo appears immediately (all modes)
+- Kinematic body switching during drag
+- Position + GlobalTransform sync
 
-### Phase 3: Inspector Panel
+### Phase 3: Inspector Panel ✅ DONE
 - EGUI panel showing parameters
 - Editable sliders for mass, damping, spring constants
 - Real-time parameter application
 
-### Phase 4: Rotation Gizmo + Force Tool
-- Rotate gizmo (3 rings)
-- Force application via click-drag
+### Phase 4: Physics Interaction
+
+_Note: Originally planned to use `avian_pickup` for gravity-gun style grab. Simplified — the gizmo system handles all transform needs directly._
 
 ### Phase 5: More Spawn Types + Polish
 - Solar panel, ramp, wall, static ball
 - Undo system
-- Keyboard shortcuts
+- Keyboard shortcuts (Escape, Delete)

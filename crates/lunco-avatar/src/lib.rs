@@ -21,7 +21,7 @@ use leafwing_input_manager::prelude::*;
 use big_space::prelude::{Grid, CellCoord, FloatingOrigin};
 
 use lunco_controller::ControllerLink;
-use lunco_core::{Vessel, Avatar, ActiveAction, ActionStatus, CommandMessage, CelestialBody, Spacecraft};
+use lunco_core::{Vessel, Avatar, CommandMessage, CelestialBody, Spacecraft};
 use lunco_celestial::{CelestialClock, GravityBody, LocalGravityField};
 
 mod intents;
@@ -225,13 +225,6 @@ impl Default for SurfaceModeThreshold {
     }
 }
 
-/// Activity state for dragging entities in the 3D scene.
-#[derive(Component, Debug, Clone)]
-pub struct DragActivity {
-    pub target: Entity,
-    pub distance: f32,
-}
-
 // ─── Plugin ──────────────────────────────────────────────────────────────────
 
 /// Plugin for managing user avatar logic, input processing, and possession.
@@ -249,7 +242,6 @@ impl Plugin for LunCoAvatarPlugin {
         app.add_observer(on_possess_command);
         app.add_observer(on_release_command);
         app.add_observer(on_focus_command);
-        app.add_observer(on_drag_commands);
         app.add_observer(on_surface_teleport_command);
         app.add_observer(on_leave_surface_command);
 
@@ -268,7 +260,6 @@ impl Plugin for LunCoAvatarPlugin {
             avatar_init_system,
             capture_avatar_intent,
             avatar_behavior_input_system,
-            avatar_drag_lifecycle,
             avatar_raycast_possession,
             avatar_escape_possession,
             avatar_global_hotkeys,
@@ -949,30 +940,6 @@ fn avatar_global_hotkeys(q_avatar: Query<&IntentState, With<Avatar>>, mut clock:
                 clock.paused = !clock.paused;
             }
         }
-    }
-}
-
-// ─── Drag ────────────────────────────────────────────────────────────────────
-
-fn avatar_drag_lifecycle(q_avatar: Query<(&Transform, &DragActivity, &ActiveAction), With<Avatar>>, mut q_targets: Query<(&mut Transform, &mut CellCoord, &ChildOf), Without<Avatar>>, q_grids: Query<&Grid>) {
-    for (avatar_tf, drag, action) in q_avatar.iter() {
-        if action.status == ActionStatus::Running && action.name == "Dragging" {
-            if let Ok((mut t_tf, mut t_cell, t_child_of)) = q_targets.get_mut(drag.target) {
-                let Ok(grid) = q_grids.get(t_child_of.0) else { continue; };
-                let (new_cell, new_tf) = grid.translation_to_grid(avatar_tf.translation.as_dvec3() + avatar_tf.forward().as_dvec3() * drag.distance as f64);
-                *t_cell = new_cell; t_tf.translation = new_tf;
-            }
-        }
-    }
-}
-
-fn on_drag_commands(trigger: On<CommandMessage>, mut commands: Commands, q_avatar: Query<(Entity, &Transform), With<Avatar>>) {
-    let msg = trigger.event();
-    let (avatar_ent, _) = q_avatar.get(msg.source).unwrap_or((q_avatar.iter().next().unwrap().0, q_avatar.iter().next().unwrap().1));
-    match msg.name.as_str() {
-        "START_DRAG" => { commands.entity(avatar_ent).insert((DragActivity { target: Entity::from_bits(msg.args[0] as u64), distance: msg.args[1] as f32 }, ActiveAction { name: "Dragging".to_string(), status: ActionStatus::Running, progress: 0.0 })); },
-        "STOP_DRAG" => { commands.entity(avatar_ent).remove::<DragActivity>().remove::<ActiveAction>(); },
-        _ => {}
     }
 }
 
