@@ -29,31 +29,40 @@ The gizmo library modifies `Transform` directly in its `update_gizmos` system. *
 
 Our systems only:
 1. **`capture_gizmo_start`** — make body kinematic when drag starts
-2. **`sync_gizmo_transforms`** — update `GlobalTransform` from `Transform` so the mesh renders at the correct position (the gizmo modifies Transform in `Last`, after PostUpdate's GlobalTransform propagation)
+2. **`sync_gizmo_transforms`** — update `GlobalTransform` from `Transform` so the mesh renders at the correct position
 3. **`restore_gizmo_dynamic`** — restore dynamic body when drag ends
 
 ### Why GlobalTransform Must Be Synced
 
-`global_transform_propagation_system` runs in `PostUpdate`, but the gizmo modifies `Transform` in `Last`. Without syncing, `GlobalTransform` is stale and the mesh renders at the old position while the gizmo is at the new position — causing visual mismatch and over-dragging.
+`global_transform_propagation_system` runs in `PostUpdate`, but the gizmo modifies `Transform` in `Last`. Without syncing, `GlobalTransform` is stale and the mesh renders at the old position while the gizmo is at the new position.
 
-### Why Position Is NOT Synced
+## USD Compound Rigid Bodies
 
-Initially, we synced `Position` from `Transform` to prevent Avian3D writeback from overwriting. However, this caused the gizmo library to double-apply transforms on subsequent frames (it reads the synced Position via Transform and adds the cumulative delta on top). Position sync was removed — the kinematic body state prevents writeback interference.
+Multi-part USD assemblies (solar panels, rovers, houses) follow the OpenUSD standard for compound rigid bodies:
 
-### System Schedule
+```usda
+def Xform "SolarPanel" (
+    prepend apiSchemas = ["PhysicsRigidBodyAPI"]   # ONE rigid body
+) {
+    float physics:mass = 15.0
 
+    def Cube "PanelFrame" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]  # Collider only
+    ) { ... }
+
+    def Cube "PanelSurface" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]  # Collider only
+    ) { ... }
+}
 ```
-PostUpdate:
-  1. Avian3D Writeback: Position → Transform (stale, but body is kinematic so no change)
-  2. global_transform_propagation: GlobalTransform = parent * Transform (stale)
 
-Last:
-  3. update_gizmos: Transform = gizmo_result (new)                    ← transform-gizmo-bevy
-  4. draw_gizmos: renders gizmo at new position                       ← transform-gizmo-bevy
-  5. capture_gizmo_start: makes body kinematic                        ← our code
-  6. sync_gizmo_transforms: GlobalTransform = parent * Transform      ← our code
-  7. restore_gizmo_dynamic: restores dynamic when drag ends           ← our code
-```
+**How it works:**
+- Parent with `PhysicsRigidBodyAPI` → ONE `RigidBody::Dynamic` + `SelectableRoot`
+- Children with `PhysicsCollisionAPI` → shapes collected into parent's `Collider::compound()`
+- Children are pure visuals — no independent physics
+- Gizmo appears on root, whole assembly moves together
+
+This follows the OpenUSD specification: `PhysicsRigidBodyAPI` on a parent aggregates all descendant colliders into one compound rigid body. No joints needed.
 
 ## User Interaction
 

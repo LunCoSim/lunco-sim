@@ -3,16 +3,25 @@
 //! Maps USD physics attributes to Avian3D components. This is the **second** plugin in
 //! the USD processing pipeline, running after `UsdBevyPlugin` and alongside `UsdSimPlugin`.
 //!
+//! ## USD Standard: Compound Rigid Bodies
+//!
+//! Per the OpenUSD specification, a prim with `PhysicsRigidBodyAPI` aggregates all
+//! descendant colliders into a **single compound rigid body**. Children with only
+//! `PhysicsCollisionAPI` contribute collider shapes but are NOT independent bodies.
+//!
+//! Our loader follows this standard:
+//! - **Parent with RigidBodyAPI** → ONE `RigidBody::Dynamic` + `SelectableRoot`
+//! - **Children with CollisionAPI** → `Collider` only (no independent `RigidBody`)
+//!
 //! ## Mapped Attributes
 //!
 //! | USD Attribute | Avian3D Component | Notes |
 //! |---|---|---|
-//! | `physics:rigidBodyEnabled = true` | `RigidBody::Dynamic` | |
-//! | `physics:rigidBodyEnabled = false` | `RigidBody::Static` | Only if collision enabled |
-//! | `physics:mass` | `Mass` | Supports f32 and f64 |
+//! | `PhysicsRigidBodyAPI` (parent) | `RigidBody::Dynamic` | ONE per compound assembly |
+//! | `PhysicsCollisionAPI` (child) | `Collider` | Aggregated into parent compound |
+//! | `physics:mass` | `Mass` | On the rigid body root |
 //! | `physics:linearDamping` | `LinearDamping` | |
 //! | `physics:angularDamping` | `AngularDamping` | |
-//! | `physics:collisionEnabled = true` | `Collider` | Based on prim type |
 //! | `physics:friction` | `Friction` | |
 //!
 //! ## Collider Mapping
@@ -35,6 +44,7 @@
 use bevy::prelude::*;
 use bevy::math::DVec3;
 use avian3d::prelude::*;
+use avian3d::physics_transform::{Position, Rotation};
 pub use lunco_usd_bevy::{UsdPrimPath, UsdStageAsset};
 use openusd::sdf::{AbstractData, Path as SdfPath, Value};
 use openusd::usda::TextReader;
@@ -81,27 +91,148 @@ pub struct PendingUsdJoint {
     pub joint_type: String,
 }
 
+/// Checks if a USD prim has a specific API schema applied.
+///
+/// Reads the `apiSchemas` attribute. Handles all value types including
+/// `TokenListOp` which stores `prepend`/`append`/`add` operations separately.
+fn has_api_schema(reader: &TextReader, sdf_path: &SdfPath, schema_name: &str) -> bool {
+    if let Ok(val) = reader.get(sdf_path, "apiSchemas") {
+        match &*val {
+            Value::Token(s) => return s.contains(schema_name),
+            Value::TokenVec(ss) => return ss.iter().any(|s| s.contains(schema_name)),
+            Value::String(s) => return s.contains(schema_name),
+            Value::TokenListOp(list_op) => {
+                for s in &list_op.explicit_items { if s.as_str() == schema_name { return true; } }
+                for s in &list_op.prepended_items { if s.as_str() == schema_name { return true; } }
+                for s in &list_op.appended_items { if s.as_str() == schema_name { return true; } }
+                for s in &list_op.added_items { if s.as_str() == schema_name { return true; } }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+/// Collects collider shapes from all child prims of a compound body root,
+/// reading directly from the USD stage.
+///
+/// Returns a list of `(Position, Rotation, Collider)` tuples for `Collider::compound()`.
+fn collect_child_colliders_from_usd(
+    reader: &TextReader,
+    parent_path: &SdfPath,
+) -> Vec<(Position, Rotation, Collider)> {
+    let mut shapes = Vec::new();
+
+    for child_path in reader.prim_children(parent_path) {
+        // Check if child has collision enabled
+        let child_collision = reader
+            .prim_attribute_value::<bool>(&child_path, "physics:collisionEnabled")
+            .unwrap_or(true);
+        if !child_collision { continue; }
+
+        // Read child's local transform
+        let child_tf = read_transform_from_usd(reader, &child_path);
+
+        // Build collider from child's geometry
+        if let Some(collider) = build_collider_from_usd(reader, &child_path) {
+            let pos = Position(DVec3::new(
+                child_tf.translation.x as f64,
+                child_tf.translation.y as f64,
+                child_tf.translation.z as f64,
+            ));
+            let rot = Rotation(child_tf.rotation.as_dquat());
+            shapes.push((pos, rot, collider));
+        }
+    }
+
+    shapes
+}
+
+/// Builds a Collider from a USD prim's geometry type and dimensions.
+fn build_collider_from_usd(reader: &TextReader, sdf_path: &SdfPath) -> Option<Collider> {
+    let Ok(val) = reader.get(sdf_path, "typeName") else { return None; };
+    let Value::Token(ty) = &*val else { return None; };
+
+    match ty.as_str() {
+        "Cube" => {
+            let width = reader.prim_attribute_value::<f64>(sdf_path, "width")?;
+            let height = reader.prim_attribute_value::<f64>(sdf_path, "height")?;
+            let depth = reader.prim_attribute_value::<f64>(sdf_path, "depth")?;
+            Some(Collider::cuboid(width, height, depth))
+        }
+        "Sphere" => {
+            let radius = reader.prim_attribute_value::<f64>(sdf_path, "radius")?;
+            Some(Collider::sphere(radius))
+        }
+        "Cylinder" => {
+            let radius = reader.prim_attribute_value::<f64>(sdf_path, "radius")?;
+            let height = reader.prim_attribute_value::<f64>(sdf_path, "height")?;
+            Some(Collider::cylinder(radius, height))
+        }
+        _ => None,
+    }
+}
+
+/// Reads the local transform from a USD prim.
+fn read_transform_from_usd(reader: &TextReader, sdf_path: &SdfPath) -> Transform {
+    let translation = read_vec3_attribute(reader, sdf_path, "xformOp:translate")
+        .map(|v| Vec3::new(v.x as f32, v.y as f32, v.z as f32))
+        .unwrap_or(Vec3::ZERO);
+
+    // Read rotation as Euler angles (degrees from USD → radians for Bevy)
+    let rotation = if let Some(rot) = read_vec3_attribute(reader, sdf_path, "xformOp:rotateXYZ") {
+        Quat::from_euler(
+            EulerRot::XYZ,
+            (rot.x as f32).to_radians(),
+            (rot.y as f32).to_radians(),
+            (rot.z as f32).to_radians(),
+        )
+    } else {
+        Quat::IDENTITY
+    };
+
+    Transform { translation, rotation, scale: Vec3::ONE }
+}
+
+/// Adds a collider component to an entity based on USD prim type and dimensions.
+fn add_collider_from_usd(
+    commands: &mut Commands,
+    entity: Entity,
+    reader: &TextReader,
+    sdf_path: &SdfPath,
+) {
+    if let Some(collider) = build_collider_from_usd(reader, sdf_path) {
+        commands.entity(entity).insert(collider);
+    }
+}
+
 /// Deferred system that maps USD physics attributes to Avian3D components.
 ///
 /// This system runs in the `Update` schedule and processes all `UsdPrimPath` entities
-/// that haven't been marked with `UsdAvianProcessed` yet. It checks if the USD asset
-/// is loaded and, if so, maps physics attributes.
+/// that haven't been marked with `UsdAvianProcessed` yet.
 ///
-/// # What It Maps
+/// # USD Compound Rigid Body Standard
 ///
-/// For non-wheel prims (chassis, ground, ramp, etc.):
-/// - `physics:rigidBodyEnabled = true` → `RigidBody::Dynamic`
-/// - `physics:rigidBodyEnabled = false` → `RigidBody::Static` (if collision enabled)
-/// - `physics:mass` → `Mass`
-/// - `physics:linearDamping` → `LinearDamping`
-/// - `physics:angularDamping` → `AngularDamping`
-/// - `physics:collisionEnabled = true` → `Collider` (based on prim type)
-/// - `physics:friction` → `Friction`
+/// Per OpenUSD spec, a prim with `PhysicsRigidBodyAPI` aggregates all descendant
+/// colliders into ONE compound rigid body. Children with only `PhysicsCollisionAPI`
+/// contribute collider shapes but are NOT independent bodies.
 ///
-/// For wheel prims: skipped (handled by the sim plugin which creates `WheelRaycast`).
+/// # Processing
+///
+/// **Compound body root (PhysicsRigidBodyAPI):**
+/// - Reads all child collider shapes from USD
+/// - Builds ONE `Collider::compound()` on the parent
+/// - Adds `RigidBody::Dynamic` + `SelectableRoot` + mass/damping/friction
+///
+/// **Collider children (PhysicsCollisionAPI only):**
+/// - Become pure visuals — no RigidBody, no Collider
+/// - Their shapes are included in the parent's compound collider
+///
+/// **Legacy fallback:** `physics:rigidBodyEnabled` attribute for old-style USD files.
 fn process_usd_avian_prims(
     mut commands: Commands,
     query: Query<(Entity, &UsdPrimPath), Without<UsdAvianProcessed>>,
+    q_child_of: Query<&ChildOf>,
     stages: Res<Assets<UsdStageAsset>>,
 ) {
     for (entity, prim_path) in query.iter() {
@@ -110,85 +241,90 @@ fn process_usd_avian_prims(
 
         let reader = (*stage.reader).clone();
 
-        // Skip wheel prims — the sim plugin handles those (raycast wheels don't need physical bodies)
+        // Skip wheel prims — the sim plugin handles those
         if reader.prim_attribute_value::<f32>(&sdf_path, "physxVehicleWheel:radius").is_some() {
             commands.entity(entity).insert(UsdAvianProcessed);
             continue;
         }
 
-        // Map RigidBody — also mark as selectable root
-        if let Some(true) = reader.prim_attribute_value::<bool>(&sdf_path, "physics:rigidBodyEnabled") {
+        // Detect API schemas
+        let has_rigid_body_api = has_api_schema(&reader, &sdf_path, "PhysicsRigidBodyAPI");
+        let has_collision_api = has_api_schema(&reader, &sdf_path, "PhysicsCollisionAPI");
+
+        if has_rigid_body_api {
+            // ── COMPOUND BODY ROOT ──
+            // Read child collider shapes from USD and build compound collider
+            let compound_shapes = collect_child_colliders_from_usd(&reader, &sdf_path);
+
+            if !compound_shapes.is_empty() {
+                let compound = Collider::compound(compound_shapes);
+                commands.entity(entity).insert(compound);
+            } else {
+                // No children with colliders — try this prim itself
+                add_collider_from_usd(&mut commands, entity, &reader, &sdf_path);
+            }
+
             commands.entity(entity).insert((
                 RigidBody::Dynamic,
                 lunco_core::SelectableRoot,
             ));
-        }
 
-        // Map Mass
-        if let Some(mass) = reader.prim_attribute_value::<f32>(&sdf_path, "physics:mass") {
-            commands.entity(entity).insert(Mass(mass));
-        } else if let Some(mass) = reader.prim_attribute_value::<f64>(&sdf_path, "physics:mass") {
-            commands.entity(entity).insert(Mass(mass as f32));
-        }
-
-        // Map Damping (matching original procedural rovers: linear=0.5, angular=2.0)
-        if let Some(damping) = reader.prim_attribute_value::<f32>(&sdf_path, "physics:linearDamping") {
-            commands.entity(entity).insert(LinearDamping(damping as f64));
-        }
-        if let Some(damping) = reader.prim_attribute_value::<f32>(&sdf_path, "physics:angularDamping") {
-            commands.entity(entity).insert(AngularDamping(damping as f64));
-        }
-
-        // Map Collider
-        let collision_enabled = reader.prim_attribute_value::<bool>(&sdf_path, "physics:collisionEnabled").unwrap_or(true);
-
-        if collision_enabled {
-            if let Ok(val) = reader.get(&sdf_path, "typeName") {
-                if let Value::Token(ty) = &*val {
-                    match ty.as_str() {
-                        "Cube" => {
-                            if let (Some(width), Some(height), Some(depth)) = (
-                                reader.prim_attribute_value::<f64>(&sdf_path, "width"),
-                                reader.prim_attribute_value::<f64>(&sdf_path, "height"),
-                                reader.prim_attribute_value::<f64>(&sdf_path, "depth"),
-                            ) {
-                                // Collider::cuboid takes FULL dimensions (matches procedural: Collider::cuboid(2.0, 0.3, 3.5))
-                                // Half-extents are computed internally: hx=1.0, hy=0.15, hz=1.75
-                                commands.entity(entity).insert(Collider::cuboid(width, height, depth));
-                            }
-                        }
-                        "Sphere" => {
-                            if let Some(radius) = reader.prim_attribute_value::<f64>(&sdf_path, "radius") {
-                                commands.entity(entity).insert(Collider::sphere(radius));
-                            }
-                        }
-                        "Cylinder" => {
-                            if let (Some(radius), Some(height)) = (
-                                reader.prim_attribute_value::<f64>(&sdf_path, "radius"),
-                                reader.prim_attribute_value::<f64>(&sdf_path, "height"),
-                            ) {
-                                commands.entity(entity).insert(Collider::cylinder(radius, height));
-                            }
-                        }
-                        _ => {}
-                    }
-                }
+            // Map mass, damping, friction
+            if let Some(mass) = reader.prim_attribute_value::<f32>(&sdf_path, "physics:mass") {
+                commands.entity(entity).insert(Mass(mass));
+            } else if let Some(mass) = reader.prim_attribute_value::<f64>(&sdf_path, "physics:mass") {
+                commands.entity(entity).insert(Mass(mass as f32));
             }
-        }
+            if let Some(d) = reader.prim_attribute_value::<f32>(&sdf_path, "physics:linearDamping") {
+                commands.entity(entity).insert(LinearDamping(d as f64));
+            }
+            if let Some(d) = reader.prim_attribute_value::<f32>(&sdf_path, "physics:angularDamping") {
+                commands.entity(entity).insert(AngularDamping(d as f64));
+            }
+            if let Some(f) = reader.prim_attribute_value::<f32>(&sdf_path, "physics:friction") {
+                commands.entity(entity).insert(Friction::new(f.into()));
+            }
 
-        // Map Friction (for static and dynamic bodies)
-        if let Some(friction) = reader.prim_attribute_value::<f32>(&sdf_path, "physics:friction") {
-            commands.entity(entity).insert(Friction::new(friction.into()));
-        }
-
-        // Map Static bodies: when physics:rigidBodyEnabled is explicitly false but collisionEnabled is true
-        if let Some(false) = reader.prim_attribute_value::<bool>(&sdf_path, "physics:rigidBodyEnabled") {
-            if collision_enabled {
+            commands.entity(entity).insert(UsdAvianProcessed);
+        } else if has_collision_api {
+            // ── COLLIDER CHILD ──
+            // Part of parent's compound body — pure visual, no physics components.
+            // Exception: root-level (no parent) → static collider.
+            if q_child_of.get(entity).is_err() {
                 commands.entity(entity).insert(RigidBody::Static);
+                add_collider_from_usd(&mut commands, entity, &reader, &sdf_path);
             }
-        }
 
-        commands.entity(entity).insert(UsdAvianProcessed);
+            commands.entity(entity).insert(UsdAvianProcessed);
+        } else {
+            // ── FALLBACK: legacy physics:rigidBodyEnabled ──
+            if let Some(true) = reader.prim_attribute_value::<bool>(&sdf_path, "physics:rigidBodyEnabled") {
+                commands.entity(entity).insert((
+                    RigidBody::Dynamic,
+                    lunco_core::SelectableRoot,
+                ));
+                if let Some(mass) = reader.prim_attribute_value::<f32>(&sdf_path, "physics:mass") {
+                    commands.entity(entity).insert(Mass(mass));
+                } else if let Some(mass) = reader.prim_attribute_value::<f64>(&sdf_path, "physics:mass") {
+                    commands.entity(entity).insert(Mass(mass as f32));
+                }
+                if let Some(d) = reader.prim_attribute_value::<f32>(&sdf_path, "physics:linearDamping") {
+                    commands.entity(entity).insert(LinearDamping(d as f64));
+                }
+                if let Some(d) = reader.prim_attribute_value::<f32>(&sdf_path, "physics:angularDamping") {
+                    commands.entity(entity).insert(AngularDamping(d as f64));
+                }
+                if let Some(f) = reader.prim_attribute_value::<f32>(&sdf_path, "physics:friction") {
+                    commands.entity(entity).insert(Friction::new(f.into()));
+                }
+                add_collider_from_usd(&mut commands, entity, &reader, &sdf_path);
+            } else if let Some(false) = reader.prim_attribute_value::<bool>(&sdf_path, "physics:rigidBodyEnabled") {
+                commands.entity(entity).insert(RigidBody::Static);
+                add_collider_from_usd(&mut commands, entity, &reader, &sdf_path);
+            }
+
+            commands.entity(entity).insert(UsdAvianProcessed);
+        }
     }
 }
 

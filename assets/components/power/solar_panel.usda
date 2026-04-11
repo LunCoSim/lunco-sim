@@ -5,9 +5,13 @@
 
 # Reusable Solar Panel Assembly — configurable photovoltaic panel.
 #
-# Architecture:
-#   - PanelFrame: Structural aluminum frame (Cube prim, metallic material)
-#   - PanelSurface: Thin substrate with solar cell shader (Cube prim, SolarPanelMaterial)
+# Architecture (USD Standard Compound Rigid Body):
+#   - SolarPanel (Xform): PhysicsRigidBodyAPI — ONE dynamic rigid body
+#   - PanelFrame (Cube): PhysicsCollisionAPI — structural aluminum frame
+#   - PanelSurface (Cube): PhysicsCollisionAPI — thin substrate with solar cells
+#
+# Per OpenUSD spec: PhysicsRigidBodyAPI on parent aggregates all child
+# colliders into ONE compound collider. Children have CollisionAPI only.
 #
 # All dimensions are tunable. The shader renders a realistic multi-cell grid
 # pattern with bus lines, glass reflections, and frame border.
@@ -15,10 +19,13 @@
 # Modelica class: LunCo.Power.SolarArray.MultiJunction
 
 def Xform "SolarPanel" (
-    prepend apiSchemas = ["LunCoPowerGeneratorAPI"]
+    prepend apiSchemas = ["PhysicsRigidBodyAPI", "LunCoPowerGeneratorAPI"]
 )
 {
     double3 xformOp:translate = (0, 0, 0)
+
+    # --- Rigid Body Mass ---
+    float physics:mass = 15.0          # Total assembly mass (frame + surface)
 
     # --- Modelica model ---
     string lunco:modelicaModel = "models/solar_panel.mo"
@@ -35,9 +42,11 @@ def Xform "SolarPanel" (
     rel lunco:epsBus
 
     # ============================================================
-    # Panel Frame — structural aluminum border
+    # Panel Frame — structural aluminum border (COLLIDER ONLY)
     # ============================================================
-    def Cube "PanelFrame"
+    def Cube "PanelFrame" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
     {
         # Frame dimensions (slightly larger than surface to create border)
         double width = 6.2      # meters (panel_width + 2*frame_width)
@@ -46,17 +55,15 @@ def Xform "SolarPanel" (
 
         double3 xformOp:translate = (0, -0.025, 0)  # Slightly below surface
         color3f primvars:displayColor = (0.45, 0.45, 0.48)  # Aluminum gray
-
-        # Physics
-        bool physics:rigidBodyEnabled = true
-        float physics:mass = 8.0  # Frame mass
-        bool physics:collisionEnabled = true
+        # No physics:rigidBodyEnabled — this is a collider, not a body
     }
 
     # ============================================================
-    # Panel Surface — thin substrate with solar cell shader
+    # Panel Surface — thin substrate with solar cell shader (COLLIDER ONLY)
     # ============================================================
-    def Cube "PanelSurface"
+    def Cube "PanelSurface" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
     {
         # Active panel dimensions (excluding frame border)
         double width = 6.0      # meters (active width)
@@ -86,10 +93,6 @@ def Xform "SolarPanel" (
         float lunco:glassReflectivity = 0.15   # Glass surface reflections
         float lunco:glassRoughness = 0.05      # Very smooth glass
         float lunco:specularIntensity = 0.8    # Sun glare intensity
-
-        # Physics
-        bool physics:rigidBodyEnabled = true
-        float physics:mass = 7.0  # Surface mass (cells + substrate)
-        bool physics:collisionEnabled = true
+        # No physics:rigidBodyEnabled — this is a collider, not a body
     }
 }

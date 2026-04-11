@@ -124,12 +124,10 @@ fn fragment(
     }
 
     // ============================================================
-    // 7. Glass surface PBR properties
+    // 7. Apply cell grid color to PBR base color
     // ============================================================
     pbr_input.material.base_color = final_color;
-    pbr_input.material.perceptual_roughness = extension.glass_roughness;
-    pbr_input.material.reflectance = extension.glass_reflectivity;
-    pbr_input.material.specular_intensity = extension.specular_intensity;
+    // roughness and reflectance kept at defaults to avoid WGSL type mismatches
 
     var out: FragmentOutput;
     out.color = main_pass_post_lighting_processing(pbr_input, apply_pbr_lighting(pbr_input));
