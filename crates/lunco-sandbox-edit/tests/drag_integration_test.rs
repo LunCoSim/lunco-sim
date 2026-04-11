@@ -1,140 +1,116 @@
-//! End-to-end tests for drag selection and possession interaction.
+//! End-to-end tests for selection and gizmo interaction.
 //!
-//! These tests simulate the full workflow:
-//! 1. Shift+Left-click selects entity and activates drag mode
-//! 2. DragModeActive blocks avatar possession
-//! 3. Right-click/Escape exits drag mode
-//! 4. Possession is allowed again after drag mode exits
+//! Tests verify:
+//! 1. Shift+Left-click selects entity and enables gizmo
+//! 2. DragModeActive blocks avatar possession during selection
+//! 3. Escape exits selection and clears gizmo
+//! 4. Possession is allowed again after deselection
 
 use bevy::prelude::*;
-use lunco_sandbox_edit::{SelectedEntity, spawn::DragConfig};
+use lunco_sandbox_edit::SelectedEntity;
 use lunco_core::DragModeActive;
 
-// ─── Simulated Input Flow Tests ──────────────────────────────────────────────
+// ─── Selection Flow Tests ─────────────────────────────────────────────────────
 
 /// Simulates what happens when user presses Shift+Left-click on a rover
 #[test]
-fn test_shift_left_click_full_flow() {
+fn test_shift_left_click_selects_entity() {
     let mut selected = SelectedEntity::default();
     let mut drag_mode = DragModeActive { active: false };
     let rover = Entity::from_bits(42);
 
-    // --- BEFORE: No selection, drag mode off ---
+    // --- BEFORE: No selection ---
     assert!(selected.entity.is_none());
-    assert!(!selected.is_dragging);
     assert!(!drag_mode.active);
 
     // --- ACTION: User presses Shift+Left-click on rover ---
     // Selection system runs:
     selected.entity = Some(rover);
-    selected.is_dragging = true;
-    drag_mode.active = true;  // Set immediately (not via commands)
+    drag_mode.active = true;
 
     // --- AFTER SELECTION ---
     assert_eq!(selected.entity, Some(rover));
-    assert!(selected.is_dragging, "Should be in drag mode");
-    assert!(drag_mode.active, "Drag mode should block possession");
-
-    // Avatar possession checks: `if drag_mode_active.active { return; }`
-    let possession_blocked = drag_mode.active;
-    assert!(possession_blocked, "Possession MUST be blocked during drag");
+    assert!(drag_mode.active, "Drag mode should be set to block possession");
 }
 
-/// Simulates what happens when user exits drag mode (Escape or Right-click)
+/// Simulates what happens when user deselects with Escape
 #[test]
-fn test_exit_drag_mode_allows_possession() {
+fn test_escape_deselects() {
     let mut selected = SelectedEntity::default();
     let mut drag_mode = DragModeActive { active: false };
     let rover = Entity::from_bits(42);
 
-    // Start in drag mode (simulated Shift+click)
+    // Start selected (simulated Shift+click)
     selected.entity = Some(rover);
-    selected.is_dragging = true;
     drag_mode.active = true;
 
-    // --- ACTION: User presses Escape or Right-click ---
-    selected.is_dragging = false;
+    // --- ACTION: User presses Escape ---
+    selected.entity = None;
     drag_mode.active = false;
 
-    // --- AFTER EXIT ---
-    assert!(!selected.is_dragging, "Should exit drag mode");
+    // --- AFTER DESELECTION ---
+    assert!(selected.entity.is_none(), "Entity should be deselected");
     assert!(!drag_mode.active, "Drag mode should be cleared");
-
-    // Avatar possession checks: `if drag_mode_active.active { return; }`
-    let possession_allowed = !drag_mode.active;
-    assert!(possession_allowed, "Possession MUST be allowed after drag exits");
 }
 
 /// Verifies that possession check returns early when drag mode is active.
 /// Simulates the exact logic from avatar_raycast_possession:
-/// ```ignore
-/// if drag_mode_active.active { return; } // Block possession
-/// ```
+/// `if drag_mode_active.active { return; } // Block possession`
 #[test]
-fn test_possession_blocked_every_frame() {
+fn test_possession_blocked_during_selection() {
     let drag_mode = DragModeActive { active: true };
     let mut possession_attempted = false;
 
     // Simulate what avatar_raycast_possession does:
-    // if drag_mode_active.active { return; }
     if drag_mode.active {
-        // Possession blocked - early return (don't trigger POSSESS command)
+        // Possession blocked - early return
         possession_attempted = false;
     } else {
         // Possession allowed
         possession_attempted = true;
     }
 
-    assert!(!possession_attempted, "Possession should NOT be attempted when drag mode is active");
+    assert!(!possession_attempted, "Possession should NOT be attempted during selection");
 }
 
-// ─── Configuration Tests ─────────────────────────────────────────────────────
-
+/// Verifies that after deselection, possession is allowed again
 #[test]
-fn test_drag_config_tunable() {
-    let mut config = DragConfig::default();
+fn test_deselection_allows_possession() {
+    let mut drag_mode = DragModeActive { active: false };
 
-    // Verify defaults are reasonable
-    assert!(config.spring_constant > 0.0);
-    assert!(config.max_force > 0.0);
-    assert!(config.stop_distance > 0.0);
+    // Select
+    drag_mode.active = true;
+    assert!(drag_mode.active);
 
-    // Verify they can be tuned
-    config.spring_constant = 100.0;
-    config.max_force = 1000.0;
-    config.stop_distance = 0.5;
+    // Deselect
+    drag_mode.active = false;
 
-    assert_eq!(config.spring_constant, 100.0);
-    assert_eq!(config.max_force, 1000.0);
-    assert_eq!(config.stop_distance, 0.5);
+    // Verify possession is now allowed
+    let mut possession_attempted = false;
+    if drag_mode.active {
+        possession_attempted = false; // blocked
+    } else {
+        possession_attempted = true; // allowed
+    }
+    assert!(possession_attempted, "Possession MUST be allowed after deselection");
 }
 
-// ─── State Machine Tests ─────────────────────────────────────────────────────
-
-/// Tests the complete state machine: Idle → Dragging → Idle
+/// Tests switching selection between entities
 #[test]
-fn test_drag_state_machine() {
+fn test_switching_selection() {
     let mut selected = SelectedEntity::default();
     let mut drag_mode = DragModeActive { active: false };
-    let rover = Entity::from_bits(100);
+    let rover1 = Entity::from_bits(100);
+    let rover2 = Entity::from_bits(200);
 
-    // State: IDLE
-    assert!(selected.entity.is_none() && !selected.is_dragging);
-
-    // Transition: Shift+Left-click → DRAGGING
-    selected.entity = Some(rover);
-    selected.is_dragging = true;
+    // Select first rover
+    selected.entity = Some(rover1);
     drag_mode.active = true;
-    assert!(selected.is_dragging && drag_mode.active);
 
-    // Verify possession is blocked
-    assert!(drag_mode.active, "Possession should be blocked in dragging state");
+    // Select second rover (replace selection)
+    selected.entity = Some(rover2);
+    // drag_mode stays true
 
-    // Transition: Escape/Right-click → IDLE
-    selected.is_dragging = false;
-    drag_mode.active = false;
-    assert!(!selected.is_dragging && !drag_mode.active);
-
-    // Verify possession is allowed
-    assert!(!drag_mode.active, "Possession should be allowed in idle state");
+    assert_eq!(selected.entity, Some(rover2), "Should now select second rover");
+    assert!(drag_mode.active, "Possession should still be blocked");
 }

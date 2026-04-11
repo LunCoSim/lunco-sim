@@ -3,7 +3,7 @@
 //! Provides a suite of in-scene editing tools for the LunCoSim sandbox:
 //!
 //! - **Spawn System** — click-to-place rovers, props, and terrain
-//! - **Selection** — click entities to select them
+//! - **Selection** — Shift+click entities to select them with transform gizmo
 //! - **Transform Gizmo** — translate/rotate selected entities
 //! - **Inspector Panel** — view entity parameters
 //! - **Undo** — Ctrl+Z to revert spawns
@@ -46,30 +46,28 @@ impl Plugin for SandboxEditPlugin {
             .init_resource::<SelectedEntity>()
             .init_resource::<UndoStack>()
             .init_resource::<catalog::SpawnCatalog>()
-            .init_resource::<spawn::DragConfig>()
             .insert_resource(lunco_core::DragModeActive { active: false });
 
         app.add_plugins(transform_gizmo_bevy::TransformGizmoPlugin);
         app.add_plugins(commands::SpawnCommandPlugin);
 
-        // Systems registered individually to avoid chain() tuple limits
         // Palette panel MUST run in EguiPrimaryContextPass to access ctx_mut()
         app.add_systems(bevy_egui::EguiPrimaryContextPass, palette::spawn_palette_panel);
         app.add_systems(Update, spawn::update_spawn_ghost);
-        app.add_systems(FixedUpdate, spawn::update_selected_entity_drag);
         app.add_systems(Update, spawn::handle_spawn_placement);
         // Selection system is registered in the binary with proper ordering (before avatar possession)
+
         // Gizmo systems run in Last schedule (after transform-gizmo-bevy's update_gizmos):
-        // 1. capture_gizmo_start_pos - captures start pos, makes body kinematic
-        // 2. restore_gizmo_dynamic - restores dynamic when drag ends
-        // 3. apply_gizmo_results - applies transform changes + computes velocity
+        // 1. capture_gizmo_start - makes body kinematic when drag starts
+        // 2. sync_gizmo_transforms - syncs Position + GlobalTransform from Transform
+        // 3. restore_gizmo_dynamic - restores dynamic when drag ends
         app.add_systems(Last, (
-            gizmo::capture_gizmo_start_pos,
-            gizmo::restore_gizmo_dynamic.after(gizmo::capture_gizmo_start_pos),
-            gizmo::apply_gizmo_results.after(gizmo::capture_gizmo_start_pos),
+            gizmo::capture_gizmo_start,
+            gizmo::sync_gizmo_transforms.after(gizmo::capture_gizmo_start),
+            gizmo::restore_gizmo_dynamic.after(gizmo::sync_gizmo_transforms),
         ));
-        app.add_systems(Update, gizmo::sync_gizmo_mode);
         app.add_systems(Update, gizmo::sync_gizmo_camera);
+
         // Inspector panel MUST run in EguiPrimaryContextPass to access ctx_mut()
         app.add_systems(bevy_egui::EguiPrimaryContextPass, inspector::inspector_panel);
         // Entity list panel runs in EguiPrimaryContextPass
@@ -92,29 +90,9 @@ pub enum SpawnState {
     },
 }
 
-/// Tracks which entity is currently selected and what tool is active.
+/// Tracks which entity is currently selected.
 #[derive(Resource, Default)]
 pub struct SelectedEntity {
     /// The selected entity, if any.
     pub entity: Option<Entity>,
-    /// Current gizmo/tool mode.
-    pub mode: ToolMode,
-    /// Whether the physics pickup tool is currently active.
-    pub is_picking_up: bool,
-    /// Whether the selected entity is currently following the cursor.
-    pub is_dragging: bool,
-}
-
-/// Tool mode determining what the user can do with the selected entity.
-#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ToolMode {
-    /// Click to select entities.
-    #[default]
-    Select,
-    /// Translate (move) selected entity.
-    Translate,
-    /// Rotate selected entity.
-    Rotate,
-    /// Grab and throw dynamic rigid bodies.
-    Pickup,
 }

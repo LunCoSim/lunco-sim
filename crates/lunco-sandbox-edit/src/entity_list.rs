@@ -5,7 +5,7 @@
 use bevy::prelude::*;
 use bevy_inspector_egui::bevy_egui::{EguiContexts, egui};
 
-use crate::{SelectedEntity, ToolMode};
+use crate::SelectedEntity;
 
 /// Plugin that registers the entity list panel system.
 pub struct EntityListPlugin;
@@ -22,7 +22,7 @@ pub fn entity_list_panel(
     mut selected: ResMut<SelectedEntity>,
     q_names: Query<(Entity, &Name, Option<&Transform>)>,
 ) {
-    let Ok(ctx) = contexts.ctx_mut() else { return };
+    let Ok(ctx) = contexts.ctx_mut() else { return; };
 
     egui::Window::new("Scene Entities")
         .resizable(true)
@@ -50,8 +50,6 @@ pub fn entity_list_panel(
 
                     if ui.add(button).clicked() {
                         selected.entity = Some(*entity);
-                        selected.mode = ToolMode::Translate;
-                        selected.is_picking_up = false;
                     }
                 }
             });

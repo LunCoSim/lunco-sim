@@ -1,14 +1,15 @@
 //! Entity selection via Shift+Left-click.
 //!
 //! Uses Shift+Left-click to avoid conflict with regular left-click camera possession.
-//! Selects the entity closest to the camera under the cursor.
+//! Selects the entity closest to the camera under the cursor and immediately
+//! attaches a transform gizmo for manipulation.
 
 use bevy::prelude::*;
 use transform_gizmo_bevy::GizmoTarget;
 use avian3d::prelude::*;
 use avian3d::spatial_query::SpatialQueryFilter;
 
-use crate::{SpawnState, SelectedEntity, ToolMode};
+use crate::{SpawnState, SelectedEntity};
 
 /// Component marking an entity as currently selected.
 #[derive(Component)]
@@ -63,7 +64,8 @@ fn find_selectable(
 /// Handles entity selection via Shift+Left-click.
 ///
 /// Regular Left-click is reserved for camera possession.
-/// Shift+Left-click selects the entity closest to the camera under the cursor.
+/// Shift+Left-click selects the entity closest to the camera under the cursor
+/// and immediately enables the transform gizmo.
 /// Only hits selectable entities (rover bodies, props, panels) — ignores ground,
 /// wheels, and invisible colliders.
 pub fn handle_entity_selection(
@@ -84,18 +86,12 @@ pub fn handle_entity_selection(
     // Skip if in spawn mode
     if !matches!(spawn_state.as_ref(), SpawnState::Idle) { return; }
 
-    // Skip if currently dragging an entity (placement click is handled elsewhere)
-    if selected.is_dragging { return; }
-
-    // Escape exits transform mode and deselects
+    // Escape deselects
     if keys.just_pressed(KeyCode::Escape) {
         for old in q_selected_old.iter() {
             commands.entity(old).remove::<Selected>().remove::<GizmoTarget>();
         }
         selected.entity = None;
-        selected.mode = ToolMode::Select;
-        selected.is_picking_up = false;
-        selected.is_dragging = false;
         drag_mode.active = false;
         return;
     }
@@ -129,7 +125,7 @@ pub fn handle_entity_selection(
             commands.entity(old).remove::<Selected>().remove::<GizmoTarget>();
         }
         selected.entity = None;
-        selected.mode = ToolMode::Select;
+        drag_mode.active = false;
         return;
     };
 
@@ -142,17 +138,7 @@ pub fn handle_entity_selection(
             commands.entity(old).remove::<Selected>().remove::<GizmoTarget>();
         }
         selected.entity = None;
-        selected.mode = ToolMode::Select;
-        return;
-    };
-
-    let Ok(_gtf) = q_selectable.get(entity) else {
-        // Not selectable — deselect
-        for old in q_selected_old.iter() {
-            commands.entity(old).remove::<Selected>().remove::<GizmoTarget>();
-        }
-        selected.entity = None;
-        selected.mode = ToolMode::Select;
+        drag_mode.active = false;
         return;
     };
 
@@ -161,52 +147,22 @@ pub fn handle_entity_selection(
         commands.entity(old).remove::<Selected>().remove::<GizmoTarget>();
     }
 
-    // Select the target entity and enter drag mode
-    // NOTE: GizmoTarget is NOT added here to avoid interfering with Avian3D physics.
-    // It gets added after placement (see spawn.rs).
-    commands.entity(entity).insert(Selected);
+    // Select the target entity and enable gizmo immediately
+    commands.entity(entity)
+        .insert(Selected)
+        .insert(GizmoTarget::default());
     selected.entity = Some(entity);
-    selected.is_dragging = true;
-    // Set drag mode flag immediately so possession can see it in the same frame
     drag_mode.active = true;
-    info!("Selected entity {:?} - drag mode active", entity);
-
-    // Tool mode hotkeys
-    if keys.just_pressed(KeyCode::KeyG) {
-        selected.mode = ToolMode::Translate;
-    }
-    if keys.just_pressed(KeyCode::KeyR) {
-        selected.mode = ToolMode::Rotate;
-    }
-    if keys.just_pressed(KeyCode::KeyQ) {
-        selected.mode = ToolMode::Select;
-    }
+    info!("Selected entity {:?} - gizmo enabled", entity);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::SpawnState;
 
     #[test]
     fn test_selected_entity_default() {
         let selected = SelectedEntity::default();
         assert!(selected.entity.is_none());
-        assert_eq!(selected.mode, ToolMode::Select);
-        assert!(!selected.is_dragging);
-    }
-
-    #[test]
-    fn test_selected_entity_dragging_flag() {
-        let mut selected = SelectedEntity::default();
-        assert!(!selected.is_dragging);
-        
-        // Simulate entering drag mode
-        selected.is_dragging = true;
-        assert!(selected.is_dragging);
-        
-        // Simulate exiting drag mode
-        selected.is_dragging = false;
-        assert!(!selected.is_dragging);
     }
 }
