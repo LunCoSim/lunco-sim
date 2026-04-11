@@ -12,6 +12,7 @@ transform-gizmo-bevy = "0.9.0"
 bevy-inspector-egui = { workspace = true }
 lunco-core = { path = "../lunco-core" }
 lunco-avatar = { path = "../lunco-avatar" }
+lunco-controller = { path = "../lunco-controller" }
 lunco-mobility = { path = "../lunco-mobility" }
 lunco-usd = { path = "../lunco-usd" }
 lunco-usd-bevy = { path = "../lunco-usd-bevy" }

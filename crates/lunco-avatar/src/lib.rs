@@ -982,21 +982,18 @@ fn on_drag_commands(trigger: On<CommandMessage>, mut commands: Commands, q_avata
 /// Returns None if no vessel is found or if the hit is on ground/terrain.
 fn find_vessel_from_hit(
     mut entity: Entity,
-    q_names: &Query<&Name>,
     q_parents: &Query<&ChildOf>,
     q_vessel: &Query<Entity, With<Vessel>>,
+    q_ground: &Query<Entity, With<lunco_core::Ground>>,
 ) -> Option<Entity> {
     let mut depth = 0;
     const MAX_DEPTH: usize = 8;
 
     // Walk up parent chain looking for a Vessel
     loop {
-        // Skip ground/terrain by name
-        if let Ok(name) = q_names.get(entity) {
-            let n = name.as_str();
-            if n == "Ground" || n.contains("Terrain") {
-                return None;
-            }
+        // Skip ground/terrain entities
+        if q_ground.get(entity).is_ok() {
+            return None;
         }
 
         // Check if this entity is a vessel
@@ -1035,8 +1032,8 @@ pub fn avatar_raycast_possession(
     q_bodies: Query<(Entity, &GlobalTransform, &CelestialBody)>,
     q_spacecraft: Query<(Entity, &GlobalTransform, &Spacecraft)>,
     q_rovers: Query<Entity, With<Vessel>>,
-    q_names: Query<&Name>,
     q_parents: Query<&ChildOf>,
+    q_ground: Query<Entity, With<lunco_core::Ground>>,
     raycaster: avian3d::prelude::SpatialQuery,
 ) {
     if !mouse.just_pressed(MouseButton::Left) { return; }
@@ -1061,7 +1058,7 @@ pub fn avatar_raycast_possession(
 
     if let Some(hit_data) = hit {
         // Walk up parent chain to find the vessel
-        let vessel = find_vessel_from_hit(hit_data.entity, &q_names, &q_parents, &q_rovers);
+        let vessel = find_vessel_from_hit(hit_data.entity, &q_parents, &q_rovers, &q_ground);
         if let Some(vessel_entity) = vessel {
             min_vessel_t = hit_data.distance as f32;
             nearest_vessel = Some(vessel_entity);
