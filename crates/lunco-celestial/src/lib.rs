@@ -9,6 +9,9 @@
 
 use bevy::prelude::*;
 use bevy::math::DVec3;
+#[cfg(not(target_arch = "wasm32"))]
+use bevy::asset::load_internal_asset;
+use bevy_shader::Shader;
 
 mod clock;
 mod ephemeris;
@@ -57,10 +60,17 @@ impl Plugin for CelestialPlugin {
         // EmbeddedAssetsPlugin embeds shaders/textures/missions on wasm32, no-op on desktop
         app.add_plugins(embedded_assets::EmbeddedAssetsPlugin);
 
-        // Register blueprint material shader (canonical source is lunco-materials)
+        // Register blueprint shader only on desktop (wasm32 handled by EmbeddedAssetsPlugin).
+        // MaterialPlugin is added separately by each binary — this avoids requiring full
+        // render resources in headless/integration tests.
         #[cfg(not(target_arch = "wasm32"))]
         {
-            app.add_plugins(lunco_materials::BlueprintMaterialPlugin);
+            load_internal_asset!(
+                app,
+                BLUEPRINT_SHADER_HANDLE,
+                "../../../assets/shaders/blueprint_extension.wgsl",
+                Shader::from_wgsl
+            );
             app.add_plugins(trajectories::TrajectoryShaderPlugin);
         }
 

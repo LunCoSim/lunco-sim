@@ -14,6 +14,9 @@ use bevy::image::{ImageSampler, ImageSamplerDescriptor, ImageAddressMode, ImageF
 use std::marker::PhantomData;
 use uuid::Uuid;
 
+#[cfg(target_arch = "wasm32")]
+use lunco_materials::BLUEPRINT_SHADER_HANDLE;
+
 // ============================================================================
 // Embedded Shaders
 // Shader source is embedded at compile time from root assets/ folder.

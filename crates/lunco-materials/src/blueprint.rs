@@ -107,12 +107,14 @@ impl Plugin for BlueprintMaterialPlugin {
 pub struct BlueprintMaterialApplied;
 
 /// Post-sync system that applies BlueprintMaterial to matching USD entities.
+/// Gracefully skips if no USD stage assets are loaded (e.g. in headless tests).
 pub fn apply_blueprint_material(
     mut commands: Commands,
-    stages: Res<Assets<lunco_usd_bevy::UsdStageAsset>>,
+    stages: Option<Res<Assets<lunco_usd_bevy::UsdStageAsset>>>,
     mut materials: ResMut<Assets<BlueprintMaterial>>,
     q_all: Query<(Entity, &lunco_usd_bevy::UsdPrimPath), (With<Mesh3d>, Without<BlueprintMaterialApplied>)>,
 ) {
+    let Some(stages) = stages else { return };
     for (entity, prim_path) in q_all.iter() {
         let Some(stage) = stages.get(&prim_path.stage_handle) else { continue };
         let Ok(sdf_path) = SdfPath::new(&prim_path.path) else { continue };

@@ -3,11 +3,12 @@ use big_space::prelude::*;
 use lunco_celestial::CelestialPlugin;
 use lunco_celestial::CelestialBody;
 use lunco_celestial::CelestialClock;
+use lunco_materials::BlueprintMaterial;
 
 #[test]
 fn test_celestial_startup_and_movement() {
     let mut app = App::new();
-    
+
     // Minimum plugins for headless simulation
     app.add_plugins(MinimalPlugins);
     app.add_plugins(bevy::input::InputPlugin::default());
@@ -15,6 +16,9 @@ fn test_celestial_startup_and_movement() {
     app.add_plugins(bevy::asset::AssetPlugin::default());
     app.init_resource::<Assets<Mesh>>();
     app.init_resource::<Assets<StandardMaterial>>();
+    app.init_resource::<Assets<bevy_shader::Shader>>();
+    app.init_resource::<Assets<BlueprintMaterial>>();
+    app.init_asset::<Image>();
     app.add_plugins(bevy::gizmos::GizmoPlugin);
     app.add_plugins(CelestialPlugin);
     
