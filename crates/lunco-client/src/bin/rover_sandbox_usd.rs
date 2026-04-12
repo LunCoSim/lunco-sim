@@ -378,20 +378,22 @@ fn apply_blueprint_to_usd_terrain(
         let Ok(sdf_path) = openusd::sdf::Path::new(&prim_path.path) else { continue };
         let reader = (*stage.reader).clone();
 
-        let mat_type: Option<String> = reader.prim_attribute_value(&sdf_path, "lunco:material");
+        // Material type detection via primvars namespace (USD-standard)
+        let mat_type: Option<String> = reader.prim_attribute_value(&sdf_path, "primvars:materialType");
         if mat_type.as_deref() != Some("BlueprintGrid") { continue; }
 
-        let surface_color = reader.prim_attribute_value::<Vec<f64>>(&sdf_path, "lunco:gridSurfaceColor")
+        // Read all grid parameters from primvars
+        let surface_color = reader.prim_attribute_value::<Vec<f64>>(&sdf_path, "primvars:gridSurfaceColor")
             .unwrap_or_else(|| vec![0.2, 0.2, 0.2]);
-        let major_spacing = reader.prim_attribute_value::<f64>(&sdf_path, "lunco:gridMajorSpacing")
+        let major_spacing = reader.prim_attribute_value::<f64>(&sdf_path, "primvars:gridMajorSpacing")
             .unwrap_or(1.0) as f32;
-        let minor_spacing = reader.prim_attribute_value::<f64>(&sdf_path, "lunco:gridMinorSpacing")
+        let minor_spacing = reader.prim_attribute_value::<f64>(&sdf_path, "primvars:gridMinorSpacing")
             .unwrap_or(0.5) as f32;
-        let major_width = reader.prim_attribute_value::<f64>(&sdf_path, "lunco:gridMajorWidth")
+        let major_width = reader.prim_attribute_value::<f64>(&sdf_path, "primvars:gridMajorWidth")
             .unwrap_or(1.0) as f32;
-        let minor_width = reader.prim_attribute_value::<f64>(&sdf_path, "lunco:gridMinorWidth")
+        let minor_width = reader.prim_attribute_value::<f64>(&sdf_path, "primvars:gridMinorWidth")
             .unwrap_or(0.5) as f32;
-        let minor_fade = reader.prim_attribute_value::<f64>(&sdf_path, "lunco:gridMinorFade")
+        let minor_fade = reader.prim_attribute_value::<f64>(&sdf_path, "primvars:gridMinorFade")
             .unwrap_or(0.15) as f32;
 
         let r = surface_color.get(0).copied().unwrap_or(0.2) as f32;

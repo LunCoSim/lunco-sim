@@ -163,9 +163,10 @@ pub struct UsdVisualSynced;
 ///
 /// # Material Handling
 ///
-/// If the prim has `lunco:materialType = "solar_panel"`, the system creates a
-/// `SolarPanelMaterial` with custom shader parameters read from USD attributes.
-/// Otherwise, it uses a standard `StandardMaterial` with `primvars:displayColor`.
+/// Material type is detected via `primvars:materialType` attribute:
+/// - `"solar_panel"` → `SolarPanelMaterial` with custom shader
+/// - `"BlueprintGrid"` → handled by post-sync system in the application binary
+/// - Other/None → `StandardMaterial` with `primvars:displayColor`
 ///
 /// # Important
 ///
