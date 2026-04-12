@@ -1,11 +1,7 @@
 //! Blueprint Material
 //!
-//! Custom PBR material extension for rendering blueprint-style grid patterns.
-//!
-//! ## Architecture
-//! - Shader: `assets/shaders/blueprint_extension.wgsl`
-//! - Parameters: Defined in USD prim attributes via `primvars:` namespace
-//! - Material type: `BlueprintMaterial` = `ExtendedMaterial<StandardMaterial, BlueprintExtension>`
+//! Blueprint grid shader + material type + USD post-sync system.
+//! The canonical definition lives here — `lunco-celestial` imports it.
 
 use bevy::prelude::*;
 use bevy::pbr::{MaterialExtension, MaterialPlugin, ExtendedMaterial};
@@ -15,10 +11,7 @@ use bevy::shader::{Shader, ShaderRef};
 use std::marker::PhantomData;
 use uuid::Uuid;
 
-use lunco_usd_bevy::UsdPrimPath;
-use openusd::usda::TextReader;
 use openusd::sdf::Path as SdfPath;
-use crate::get_attribute_as_vec3;
 
 /// UUID for the blueprint shader.
 const BLUEPRINT_SHADER_UUID: Uuid = Uuid::from_u128(0x1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d);
@@ -90,11 +83,10 @@ impl MaterialExtension for BlueprintExtension {
     }
 }
 
-/// Plugin that registers the blueprint shader and material.
-///
-/// This embeds the WGSL shader at compile time and registers a post-sync
-/// system that applies BlueprintMaterial to entities with
-/// `primvars:materialType = "BlueprintGrid"`.
+/// Blueprint material type.
+pub type BlueprintMaterial = ExtendedMaterial<StandardMaterial, BlueprintExtension>;
+
+/// Plugin that registers the blueprint shader, material, and USD post-sync system.
 pub struct BlueprintMaterialPlugin;
 
 impl Plugin for BlueprintMaterialPlugin {
@@ -110,9 +102,6 @@ impl Plugin for BlueprintMaterialPlugin {
     }
 }
 
-/// Blueprint material type.
-pub type BlueprintMaterial = ExtendedMaterial<StandardMaterial, BlueprintExtension>;
-
 /// Marker component preventing re-processing.
 #[derive(Component)]
 pub struct BlueprintMaterialApplied;
@@ -122,7 +111,7 @@ pub fn apply_blueprint_material(
     mut commands: Commands,
     stages: Res<Assets<lunco_usd_bevy::UsdStageAsset>>,
     mut materials: ResMut<Assets<BlueprintMaterial>>,
-    q_all: Query<(Entity, &UsdPrimPath), (With<Mesh3d>, Without<BlueprintMaterialApplied>)>,
+    q_all: Query<(Entity, &lunco_usd_bevy::UsdPrimPath), (With<Mesh3d>, Without<BlueprintMaterialApplied>)>,
 ) {
     for (entity, prim_path) in q_all.iter() {
         let Some(stage) = stages.get(&prim_path.stage_handle) else { continue };
@@ -142,7 +131,7 @@ pub fn apply_blueprint_material(
 
 /// Creates a BlueprintMaterial from USD primvars attributes.
 fn create_blueprint_material(
-    reader: &TextReader,
+    reader: &openusd::usda::TextReader,
     sdf_path: &SdfPath,
     materials: &mut ResMut<Assets<BlueprintMaterial>>,
 ) -> Handle<BlueprintMaterial> {

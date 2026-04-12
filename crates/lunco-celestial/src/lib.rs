@@ -20,7 +20,6 @@ mod gravity;
 mod soi;
 mod terrain;
 mod trajectories;
-mod blueprint;
 mod missions;
 mod embedded_assets;
 
@@ -33,9 +32,11 @@ pub use gravity::*;
 pub use soi::*;
 pub use terrain::*;
 pub use trajectories::*;
-pub use blueprint::*;
 pub use missions::*;
 pub use embedded_assets::*;
+
+// Re-export blueprint material types from lunco-materials (the canonical source).
+pub use lunco_materials::{BlueprintExtension, BlueprintMaterial, BlueprintMaterialPlugin, BLUEPRINT_SHADER_HANDLE};
 
 #[derive(Event, Debug, Clone, Copy)]
 pub struct SurfaceClickEvent {
@@ -56,10 +57,10 @@ impl Plugin for CelestialPlugin {
         // EmbeddedAssetsPlugin embeds shaders/textures/missions on wasm32, no-op on desktop
         app.add_plugins(embedded_assets::EmbeddedAssetsPlugin);
 
-        // Register embedded shaders BEFORE any materials are created (desktop only, wasm32 handled by EmbeddedAssetsPlugin)
+        // Register blueprint material shader (canonical source is lunco-materials)
         #[cfg(not(target_arch = "wasm32"))]
         {
-            app.add_plugins(blueprint::BlueprintShaderPlugin);
+            app.add_plugins(lunco_materials::BlueprintMaterialPlugin);
             app.add_plugins(trajectories::TrajectoryShaderPlugin);
         }
 

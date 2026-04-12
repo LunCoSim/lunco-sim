@@ -47,6 +47,7 @@ use bevy::camera::visibility::NoFrustumCulling;
 use crate::registry::{CelestialBodyRegistry, CelestialReferenceFrame, CelestialBody};
 use crate::gravity::{GravityProvider, PointMassGravity};
 use crate::soi::SOI;
+use lunco_materials::{BlueprintMaterial, BlueprintExtension};
 
 /// Marker for the solar system root grid (inertial, no rotation).
 #[derive(Component)]
@@ -75,7 +76,7 @@ pub fn setup_big_space_hierarchy(
     registry: Res<CelestialBodyRegistry>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    mut blueprint_materials: ResMut<Assets<crate::blueprint::BlueprintMaterial>>,
+    mut blueprint_materials: ResMut<Assets<BlueprintMaterial>>,
     asset_server: Res<AssetServer>,
     #[cfg(target_arch = "wasm32")] embedded_earth: Option<Res<crate::embedded_assets::EmbeddedEarthTexture>>,
     #[cfg(target_arch = "wasm32")] embedded_moon: Option<Res<crate::embedded_assets::EmbeddedMoonTexture>>,
@@ -223,14 +224,14 @@ pub fn setup_big_space_hierarchy(
                     Mesh3d(meshes.add(crate::terrain::create_quadsphere_tile_mesh(
                         earth_body, face, 1, i, j, 6371.0e3, 32, None, DVec3::ZERO
                     ))),
-                    MeshMaterial3d(blueprint_materials.add(crate::blueprint::BlueprintMaterial {
+                    MeshMaterial3d(blueprint_materials.add(BlueprintMaterial {
                         base: StandardMaterial {
                             base_color: Color::WHITE,
                             base_color_texture: Some(earth_texture.clone()),
                             unlit: false,
                             ..default()
                         },
-                        extension: crate::blueprint::BlueprintExtension {
+                        extension: BlueprintExtension {
                             high_color: LinearRgba::WHITE,
                             low_color: LinearRgba::WHITE,
                             high_line_color: LinearRgba::new(0.0, 0.5, 1.0, 1.0),
@@ -319,7 +320,7 @@ pub fn setup_big_space_hierarchy(
                     Mesh3d(meshes.add(crate::terrain::create_quadsphere_tile_mesh(
                         moon_body, face, 1, i, j, 1737.0e3, 32, None, DVec3::ZERO
                     ))),
-                    MeshMaterial3d(blueprint_materials.add(crate::blueprint::BlueprintMaterial {
+                    MeshMaterial3d(blueprint_materials.add(BlueprintMaterial {
                         base: StandardMaterial {
                             base_color: Color::srgb(0.5, 0.5, 0.5),
                             base_color_texture: Some(moon_texture.clone()),
@@ -327,7 +328,7 @@ pub fn setup_big_space_hierarchy(
                             perceptual_roughness: 0.9,
                             ..default()
                         },
-                        extension: crate::blueprint::BlueprintExtension {
+                        extension: BlueprintExtension {
                             high_color: LinearRgba::WHITE,
                             low_color: LinearRgba::WHITE,
                             high_line_color: LinearRgba::new(0.6, 0.6, 0.6, 1.0),

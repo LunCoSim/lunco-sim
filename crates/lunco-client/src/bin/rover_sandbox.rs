@@ -15,7 +15,8 @@ use lunco_mobility::{LunCoMobilityPlugin, Suspension};
 use lunco_robotics::{LunCoRoboticsPlugin, rover};
 use lunco_controller::LunCoControllerPlugin;
 use lunco_avatar::{LunCoAvatarPlugin, IntentAnalogState, FreeFlightCamera, SpringArmCamera, OrbitCamera, AdaptiveNearPlane, CameraScroll};
-use lunco_celestial::{BlueprintMaterial, BlueprintExtension, Gravity, GravityPlugin};
+use lunco_celestial::{Gravity, GravityPlugin};
+use lunco_materials::{BlueprintMaterial, BlueprintExtension};
 use lunco_core::{Vessel, architecture::CommandMessage};
 
 fn main() {

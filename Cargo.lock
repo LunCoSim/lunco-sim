@@ -5496,6 +5496,7 @@ dependencies = [
  "image",
  "lunco-controller",
  "lunco-core",
+ "lunco-materials",
  "resvg",
  "serde",
  "serde_json",

@@ -22,11 +22,11 @@
 //!
 //! No changes to `lunco-usd-bevy` needed.
 
-mod blueprint;
 mod solar_panel;
+mod blueprint;
 
-pub use blueprint::*;
 pub use solar_panel::*;
+pub use blueprint::*;
 
 use bevy::prelude::*;
 use openusd::usda::TextReader;

@@ -18,7 +18,7 @@ use bevy::{prelude::*, asset::io::AssetSourceBuilder};
 use avian3d::prelude::PhysicsPlugins;
 
 mod ui;
-use lunco_celestial::BlueprintMaterial;
+use lunco_materials::BlueprintMaterial;
 use ui::LunCoUiPlugin;
 
 /// Main entry point for the simulation.

@@ -9,6 +9,7 @@ use std::sync::Arc;
 use avian3d::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 use crate::registry::CelestialBody;
+use lunco_materials::{BlueprintMaterial, BlueprintExtension};
 
 #[derive(Resource, Reflect)]
 #[reflect(Resource)]
@@ -279,7 +280,7 @@ pub fn finalize_terrain_tiles(
     mut commands: Commands,
     mut q_pending: Query<(Entity, &TileCoord, &mut PendingTile)>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<crate::blueprint::BlueprintMaterial>>,
+    mut materials: ResMut<Assets<BlueprintMaterial>>,
     q_bodies: Query<(Entity, &CelestialBody, &CellCoord, &Transform, &ChildOf)>,
     q_camera: Query<(Entity, &CellCoord, &Transform, &ChildOf), (With<Camera>, With<lunco_core::Avatar>)>,
     q_grids: Query<&Grid>,
@@ -314,14 +315,14 @@ pub fn finalize_terrain_tiles(
             let mut entity_cmds = commands.entity(ent);
             entity_cmds.insert((
                 Mesh3d(meshes.add(data.mesh)),
-                MeshMaterial3d(materials.add(crate::blueprint::BlueprintMaterial {
+                MeshMaterial3d(materials.add(BlueprintMaterial {
                     base: StandardMaterial {
                         base_color,
                         unlit: true, // Unlit so surface is always visible regardless of sun direction
                         perceptual_roughness: 0.8,
                         ..default()
                     },
-                    extension: crate::blueprint::BlueprintExtension {
+                    extension: BlueprintExtension {
                         high_color: LinearRgba::WHITE,
                         low_color: LinearRgba::WHITE,
                         // Bright lines for surface visibility

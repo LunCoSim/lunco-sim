@@ -20,13 +20,9 @@ use uuid::Uuid;
 // Registered with known UUID handles at runtime so MaterialExtension can resolve them.
 // ============================================================================
 
-/// UUID for the blueprint shader — must match what `BlueprintExtension::fragment_shader()` returns.
-const BLUEPRINT_SHADER_UUID: Uuid = Uuid::from_u128(0x1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d);
 /// UUID for the trajectory shader — must match what `TrajectoryExtension::fragment_shader()` returns.
 const TRAJECTORY_SHADER_UUID: Uuid = Uuid::from_u128(0x2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e);
 
-/// Const UUID-based handle for the blueprint shader.
-pub const BLUEPRINT_SHADER_HANDLE: Handle<Shader> = Handle::Uuid(BLUEPRINT_SHADER_UUID, PhantomData);
 /// Const UUID-based handle for the trajectory shader.
 pub const TRAJECTORY_SHADER_HANDLE: Handle<Shader> = Handle::Uuid(TRAJECTORY_SHADER_UUID, PhantomData);
 

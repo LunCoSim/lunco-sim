@@ -15,7 +15,8 @@ use big_space::prelude::*;
 use avian3d::prelude::PhysicsPlugins;
 use leafwing_input_manager::prelude::*;
 
-use lunco_celestial::{BlueprintMaterial, CelestialBody};
+use lunco_materials::BlueprintMaterial;
+use lunco_celestial::CelestialBody;
 
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;

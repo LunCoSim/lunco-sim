@@ -8,7 +8,7 @@ use crate::ephemeris::EphemerisResource;
 use crate::registry::{CelestialBody, CelestialBodyRegistry, CelestialReferenceFrame};
 use crate::coords::ecliptic_to_bevy;
 use crate::coords::get_absolute_pos_in_root_double_ghost_aware;
-use crate::blueprint::BlueprintMaterial;
+use lunco_materials::BlueprintMaterial;
 
 /// Update body and frame positions based on ephemeris data.
 /// Optimized: Only re-computes if Epoch has changed significantly.
