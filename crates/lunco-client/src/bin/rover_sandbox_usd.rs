@@ -15,7 +15,7 @@ use leafwing_input_manager::prelude::*;
 use lunco_mobility::LunCoMobilityPlugin;
 use lunco_usd::{UsdPlugins, UsdPrimPath, UsdStageAsset};
 use lunco_usd_bevy::sync_usd_visuals;
-use lunco_sandbox_edit::{SandboxEditPlugin, ui::SandboxEditUiPlugin};
+use lunco_sandbox_edit::SandboxEditPlugin;
 use lunco_ui::LuncoUiPlugin;
 use lunco_controller::LunCoControllerPlugin;
 use lunco_avatar::{LunCoAvatarPlugin, IntentAnalogState, FreeFlightCamera, AdaptiveNearPlane};
@@ -61,8 +61,15 @@ fn main() {
         .add_plugins(UsdPlugins)
         .add_plugins(SandboxEditPlugin)
         .add_plugins(LuncoUiPlugin)
-        .add_plugins(bevy_workbench::WorkbenchPlugin::default())
-        .add_plugins(SandboxEditUiPlugin)
+        .add_plugins(bevy_workbench::WorkbenchPlugin {
+            config: bevy_workbench::WorkbenchConfig {
+                show_menu_bar: false,    // No menu bar
+                show_toolbar: false,     // No play/stop toolbar
+                enable_game_view: false, // No Game View panel
+                ..default()
+            },
+        })
+        .add_plugins(lunco_sandbox_edit::ui::SandboxEditUiPlugin)
         .add_plugins(center_spacer::CenterSpacerPlugin)
         .add_plugins(LunCoControllerPlugin)
         .add_plugins(LunCoAvatarPlugin)
