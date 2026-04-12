@@ -4,7 +4,6 @@
 
 use lunco_modelica::ModelicaCompiler;
 use std::path::PathBuf;
-use anyhow::Context;
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
@@ -23,16 +22,18 @@ fn main() -> anyhow::Result<()> {
     println!("Model Name: {}", model_name);
 
     // 1. Compile
-    let model_path_str = model_path.to_str().context("Invalid path encoding")?;
-    let source = std::fs::read_to_string(model_path_str).context("Failed to read model file")?;
+    let model_path_str = model_path.to_str().ok_or_else(|| anyhow::anyhow!("Invalid path encoding"))?;
+    let source = std::fs::read_to_string(model_path_str)
+        .map_err(|e| anyhow::anyhow!("Failed to read model file: {e}"))?;
     let mut compiler = ModelicaCompiler::new();
     let result = compiler.compile_str(&model_name, &source, model_path_str)
-        .context("Failed to compile Modelica model")?;
+        .map_err(|e| anyhow::anyhow!("Failed to compile Modelica model: {e}"))?;
 
     println!("Successfully compiled to DAE IR.");
 
     // 2. Export DAE IR
-    let json_ir = serde_json::to_string(&result.dae).context("Failed to export DAE IR")?;
+    let json_ir = serde_json::to_string(&result.dae)
+        .map_err(|e| anyhow::anyhow!("Failed to export DAE IR: {e}"))?;
     println!("DAE IR Size: {} bytes", json_ir.len());
 
     // 3. Simple Mock Simulation Step

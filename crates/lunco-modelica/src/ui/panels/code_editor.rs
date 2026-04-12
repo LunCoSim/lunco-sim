@@ -21,7 +21,9 @@ impl WorkbenchPanel for CodeEditorPanel {
 
     /// No tab bar — acts as the main viewport.
     fn hide_tab(&self) -> bool { true }
-    fn bg_color(&self) -> Option<egui::Color32> { None }
+    fn bg_color(&self) -> Option<egui::Color32> {
+        Some(egui::Color32::from_rgb(40, 40, 45))
+    }
 
     fn ui(&mut self, _ui: &mut egui::Ui) {}
 
@@ -63,12 +65,11 @@ impl WorkbenchPanel for CodeEditorPanel {
         // Step 2: Top bar
         ui.horizontal(|ui| {
             let detected = extract_model_name(&editor_buffer);
-            ui.heading(format!("{} ({})",
+            ui.label(format!("{} ({})",
                 display_name.as_deref().unwrap_or("Unnamed Model"),
                 detected.as_deref().unwrap_or("Unknown")));
 
-            let spacer = ui.available_width() - 300.0;
-            if spacer > 0.0 { ui.add_space(spacer); }
+            ui.separator();
 
             if compilation_error.is_some() {
                 ui.colored_label(egui::Color32::LIGHT_RED, "⚠️ Error");
@@ -140,7 +141,7 @@ impl WorkbenchPanel for CodeEditorPanel {
         });
         ui.separator();
 
-        // Step 3: Editor area
+        // Step 3: Editor area — fills ALL remaining space in this tile
         let editor_id = egui::Id::new("editor_content_hash");
         let content_changed = {
             let prev_hash = ui.memory(|mem| mem.data.get_temp::<u64>(editor_id));
@@ -149,30 +150,26 @@ impl WorkbenchPanel for CodeEditorPanel {
             prev_hash != Some(curr_hash)
         };
 
-        let scroll_id = if content_changed { "editor_reset" } else { "editor" };
-        let avail_width = ui.available_width();
+        let _scroll_id = if content_changed { "editor_reset" } else { "editor" };
 
-        egui::ScrollArea::vertical()
-            .id_salt(scroll_id)
-            .auto_shrink([false, true])
-            .stick_to_bottom(true)
-            .show(ui, |ui| {
-                ui.set_max_width(avail_width);
-                let mut buf = editor_buffer.clone();
-                ui.add(
-                    egui::TextEdit::multiline(&mut buf)
-                        .font(egui::TextStyle::Monospace)
-                        .code_editor()
-                        .desired_width(avail_width)
-                        .lock_focus(true)
-                        .desired_rows(35),
-                );
-                // Sync buffer back if changed
-                if buf != editor_buffer {
-                    if let Some(mut s) = world.get_resource_mut::<WorkbenchState>() {
-                        s.editor_buffer = buf;
-                    }
-                }
-            });
+        // Use max_rect (the tile's bounded rect) to stay within tile boundaries
+        let tile_rect = ui.max_rect();
+        let line_h = ui.text_style_height(&egui::TextStyle::Monospace);
+        let rows = ((tile_rect.height() / line_h) + 0.5).ceil().max(10.0) as usize;
+        let mut buf = editor_buffer.clone();
+        ui.add(
+            egui::TextEdit::multiline(&mut buf)
+                .font(egui::TextStyle::Monospace)
+                .code_editor()
+                .desired_width(tile_rect.width())
+                .desired_rows(rows)
+                .lock_focus(true),
+        );
+        // Sync buffer back if changed
+        if buf != editor_buffer {
+            if let Some(mut s) = world.get_resource_mut::<WorkbenchState>() {
+                s.editor_buffer = buf;
+            }
+        }
     }
 }
