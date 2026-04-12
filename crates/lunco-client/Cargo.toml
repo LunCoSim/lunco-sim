@@ -37,7 +37,7 @@ lunco-usd-avian = { path = "../lunco-usd-avian" }
 lunco-usd-bevy = { path = "../lunco-usd-bevy" }
 lunco-usd-sim = { path = "../lunco-usd-sim" }
 lunco-sandbox-edit = { path = "../lunco-sandbox-edit" }
-bevy_workbench = { git = "https://github.com/LunCoSim/bevy_workbench.git" }
+bevy_workbench = { workspace = true }
 lunco-ui = { path = "../lunco-ui" }
 openusd = { workspace = true }
 bevy_egui = { workspace = true }

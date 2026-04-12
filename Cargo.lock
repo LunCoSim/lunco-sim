@@ -5787,6 +5787,7 @@ dependencies = [
  "egui-snarl",
  "egui_plot",
  "lunco-avatar",
+ "lunco-celestial",
  "lunco-core",
  "smallvec",
 ]
@@ -11190,7 +11191,3 @@ checksum = "27bc9d5b815bc103f142aa054f561d9187d191692ec7c2d1e2b4737f8dbd7296"
 dependencies = [
  "zune-core 0.5.1",
 ]
-
-[[patch.unused]]
-name = "bevy_workbench"
-version = "0.3.2"

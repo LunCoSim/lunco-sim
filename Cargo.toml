@@ -40,6 +40,7 @@ avian3d = { version = "0.6.1", default-features = false, features = ["3d", "f64"
 big_space = "0.12.0"
 leafwing-input-manager = "0.20.0"
 bevy_egui = "0.39.1"
+bevy_workbench = { git = "https://github.com/LunCoSim/bevy_workbench.git" }
 bevy-inspector-egui = "0.36.0"
 transform-gizmo-bevy = "0.9.0"
 avian_pickup = "0.5.0-rc.1"

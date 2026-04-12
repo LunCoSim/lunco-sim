@@ -1,5 +1,0 @@
-# Local development override — patches crates.io source with your local fork clone.
-# This takes precedence over the workspace [patch.crates-io] git URL.
-# File is gitignored so it only affects your local machine.
-[patch.crates-io]
-bevy_workbench = { path = "crates/bevy_workbench_fork" }

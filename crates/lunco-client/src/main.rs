@@ -17,9 +17,24 @@
 use bevy::{prelude::*, asset::io::AssetSourceBuilder};
 use avian3d::prelude::PhysicsPlugins;
 
-mod ui;
 use lunco_materials::BlueprintMaterial;
-use ui::LunCoUiPlugin;
+use lunco_ui::LuncoUiPlugin;
+use bevy_egui::{EguiPrimaryContextPass, EguiContexts};
+
+mod center_spacer;
+use center_spacer::CenterSpacerPlugin;
+
+/// Collects egui scroll input and feeds it to the camera zoom system.
+/// Runs in EguiPrimaryContextPass so egui context is available.
+/// Always passes scroll through to the camera — egui panels don't consume scroll.
+fn collect_scroll_input(
+    mut egui_contexts: EguiContexts,
+    mut scroll_res: ResMut<lunco_avatar::CameraScroll>,
+) {
+    if let Ok(ctx) = egui_contexts.ctx_mut() {
+        scroll_res.delta += ctx.input(|i: &bevy_egui::egui::InputState| i.raw_scroll_delta.y);
+    }
+}
 
 /// Main entry point for the simulation.
 fn main() {
@@ -33,7 +48,30 @@ fn main() {
         .add_plugins(DefaultPlugins.build().disable::<TransformPlugin>())
         .add_plugins(big_space::prelude::BigSpaceDefaultPlugins.build().disable::<big_space::validation::BigSpaceValidationPlugin>())
         .add_plugins(lunco_core::LunCoCorePlugin)
-        .insert_resource(lunco_core::DragModeActive { active: false });
+        .insert_resource(lunco_core::DragModeActive { active: false })
+        .add_plugins(bevy_workbench::WorkbenchPlugin {
+            config: bevy_workbench::WorkbenchConfig {
+                show_menu_bar: false,
+                show_toolbar: false,
+                enable_game_view: false, // GameView disabled — CenterSpacer provides transparent viewport
+                show_console: false,
+                ..default()
+            },
+        })
+        .add_plugins(CenterSpacerPlugin)
+        .add_systems(EguiPrimaryContextPass, collect_scroll_input);
+
+    // Register UI panels
+    {
+        use bevy_workbench::WorkbenchApp;
+        app.register_panel(lunco_ui::MissionControl);
+        app.register_panel(lunco_ui::TelemetryPanel);
+
+        // Hide the default workbench inspector — we provide our own UI
+        if let Some(mut tile_state) = app.world_mut().get_resource_mut::<bevy_workbench::dock::TileLayoutState>() {
+            tile_state.set_default_hidden("workbench_inspector");
+        }
+    }
 
     #[cfg(not(feature = "sandbox"))]
     {
@@ -43,7 +81,7 @@ fn main() {
 
     app.add_plugins(MaterialPlugin::<BlueprintMaterial>::default())
         .add_plugins(PhysicsPlugins::default())
-        .add_plugins(LunCoUiPlugin)
+        .add_plugins(LuncoUiPlugin)
         .add_plugins(lunco_fsw::LunCoFswPlugin)
         .add_plugins(lunco_hardware::LunCoHardwarePlugin)
         .add_plugins(lunco_mobility::LunCoMobilityPlugin)
