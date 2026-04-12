@@ -7,24 +7,27 @@
 use bevy::prelude::*;
 use bevy::asset::AssetPlugin;
 use bevy::pbr::wireframe::WireframePlugin;
-use bevy_egui::{egui, EguiContexts, EguiPlugin, EguiPrimaryContextPass};
+use bevy_egui::EguiPlugin;
 use big_space::prelude::*;
 use avian3d::prelude::PhysicsPlugins;
 use leafwing_input_manager::prelude::*;
 
-use lunco_mobility::{LunCoMobilityPlugin, Suspension};
+use lunco_mobility::LunCoMobilityPlugin;
 use lunco_usd::{UsdPlugins, UsdPrimPath, UsdStageAsset};
 use lunco_usd_bevy::sync_usd_visuals;
-use lunco_sandbox_edit::SandboxEditPlugin;
+use lunco_sandbox_edit::{SandboxEditPlugin, ui::SandboxEditUiPlugin};
+use lunco_ui::LuncoUiPlugin;
 use lunco_controller::LunCoControllerPlugin;
-use lunco_avatar::{LunCoAvatarPlugin, IntentAnalogState, FreeFlightCamera, SpringArmCamera, OrbitCamera, AdaptiveNearPlane, CameraScroll};
+use lunco_avatar::{LunCoAvatarPlugin, IntentAnalogState, FreeFlightCamera, AdaptiveNearPlane};
 use lunco_celestial::{BlueprintMaterial, BlueprintExtension, GravityPlugin, EmbeddedAssetsPlugin, BlueprintShaderPlugin};
-use lunco_core::{Vessel, architecture::CommandMessage, Avatar};
+use lunco_core::Avatar;
 use big_space::prelude::Grid;
 
 /// Marker for the sandbox scene entity.
 #[derive(Component)]
 struct SandboxScene;
+
+mod center_spacer;
 
 /// Marker applied to entities whose material has been swapped to BlueprintMaterial.
 #[derive(Component)]
@@ -57,6 +60,10 @@ fn main() {
         .add_plugins(LunCoMobilityPlugin)
         .add_plugins(UsdPlugins)
         .add_plugins(SandboxEditPlugin)
+        .add_plugins(LuncoUiPlugin)
+        .add_plugins(bevy_workbench::WorkbenchPlugin::default())
+        .add_plugins(SandboxEditUiPlugin)
+        .add_plugins(center_spacer::CenterSpacerPlugin)
         .add_plugins(LunCoControllerPlugin)
         .add_plugins(LunCoAvatarPlugin)
         .init_resource::<SandboxSettings>()
@@ -71,7 +78,6 @@ fn main() {
             camera_render_propagation_system,
             spawn_fallback_avatar,
         ).chain().after(avian3d::prelude::PhysicsSystems::Writeback))
-        .add_systems(EguiPrimaryContextPass, sandbox_ui_system)
         .run();
 }
 
@@ -251,101 +257,6 @@ fn spawn_fallback_avatar(
     *done = true;
 }
 
-fn sandbox_ui_system(
-    mut contexts: EguiContexts,
-    mut settings: ResMut<SandboxSettings>,
-    mut sens: ResMut<lunco_avatar::CameraScrollSensitivity>,
-    mut grid_settings: ResMut<BlueprintGridSettings>,
-    q_camera: Query<(Entity, &Transform, &CellCoord), With<lunco_core::Avatar>>,
-    q_camera_spring: Query<&SpringArmCamera, With<lunco_core::Avatar>>,
-    q_camera_orbit: Query<&OrbitCamera, With<lunco_core::Avatar>>,
-    q_camera_ff: Query<&FreeFlightCamera, With<lunco_core::Avatar>>,
-    q_vessels: Query<(Entity, &Name, &Vessel)>,
-    q_children: Query<&Children>,
-    mut q_suspension: Query<(Entity, &mut Suspension)>,
-    mut commands: Commands,
-    mut scroll_res: ResMut<CameraScroll>,
-) {
-    let Ok(ctx) = contexts.ctx_mut() else { return; };
-
-    if !ctx.is_pointer_over_area() {
-        scroll_res.delta += ctx.input(|i| i.raw_scroll_delta.y);
-    }
-
-    egui::Window::new("Sandbox Control").show(ctx, |ui| {
-        ui.heading("Environment");
-        ui.add(egui::Slider::new(&mut settings.sun_yaw, 0.0..=6.28).text("Sun Yaw"));
-        ui.add(egui::Slider::new(&mut settings.sun_pitch, -3.14..=0.0).text("Sun Pitch"));
-        ui.add(egui::Slider::new(&mut settings.ambient_brightness, 0.0..=1000.0).text("Ambient"));
-        ui.checkbox(&mut settings.wireframe, "Show Wireframe");
-
-        ui.separator();
-        ui.heading("Camera");
-        ui.add(egui::Slider::new(&mut sens.value, 0.1..=5.0).text("Scroll Sensitivity (m)"));
-
-        ui.separator();
-        ui.heading("Grid");
-        if ui.add(egui::Slider::new(&mut grid_settings.major_spacing, 0.1..=10.0).text("Major (m)")).changed() { grid_settings.dirty = true; }
-        if ui.add(egui::Slider::new(&mut grid_settings.minor_spacing, 0.01..=1.0).text("Minor (m)")).changed() { grid_settings.dirty = true; }
-        if ui.add(egui::Slider::new(&mut grid_settings.major_width, 0.5..=5.0).text("Major Width")).changed() { grid_settings.dirty = true; }
-        if ui.add(egui::Slider::new(&mut grid_settings.minor_width, 0.1..=2.0).text("Minor Width")).changed() { grid_settings.dirty = true; }
-        if ui.add(egui::Slider::new(&mut grid_settings.minor_fade, 0.0..=1.0).text("Minor Opacity")).changed() { grid_settings.dirty = true; }
-
-        ui.separator();
-        ui.heading("Avatar Telemetry");
-        if let Some((_, tf, cell)) = q_camera.iter().next() {
-            ui.label(format!("Position (BigSpace)\nCell: {:?}\nLocal: {:.2?}", cell, tf.translation));
-            let (yaw, pitch, _): (f32, f32, f32) = tf.rotation.to_euler(EulerRot::YXZ);
-            ui.label(format!("Orientation\nYaw: {:.2}°\nPitch: {:.2}°", yaw.to_degrees(), pitch.to_degrees()));
-            let mode_str = if let Ok(arm) = q_camera_spring.single() {
-                format!("SPRING ARM (dist: {:.1} m)", arm.distance)
-            } else if let Ok(orbit) = q_camera_orbit.single() {
-                format!("ORBIT (dist: {:.1} m)", orbit.distance)
-            } else if q_camera_ff.single().is_ok() {
-                "FREE FLIGHT".to_string()
-            } else {
-                "TRANSITION".to_string()
-            };
-            ui.label(format!("Mode: {}", mode_str));
-        }
-
-        ui.separator();
-        ui.heading("Vessels");
-        let avatar_ent = q_camera.iter().next().map(|(e, _, _)| e);
-        for (entity, name, _) in q_vessels.iter() {
-            ui.collapsing(format!("{}", name), |ui| {
-                if ui.button("Possess").clicked() {
-                    if let Some(avatar) = avatar_ent {
-                        commands.trigger(CommandMessage {
-                            id: 0,
-                            target: entity,
-                            name: "POSSESS".to_string(),
-                            args: Default::default(),
-                            source: avatar,
-                        });
-                    }
-                }
-                ui.label("Mechanical Inspector");
-                inspect_suspension_recursive(ui, entity, &q_children, &mut q_suspension);
-            });
-        }
-    });
-}
-
-fn inspect_suspension_recursive(ui: &mut egui::Ui, entity: Entity, q_children: &Query<&Children>, q_suspension: &mut Query<(Entity, &mut Suspension)>) {
-    if let Ok((_e, mut susp)) = q_suspension.get_mut(entity) {
-        ui.label(format!("Hub: {:?}", entity));
-        ui.add(egui::Slider::new(&mut susp.rest_length, 0.1..=2.0).text("Rest Length"));
-        ui.add(egui::Slider::new(&mut susp.spring_k, 1000.0..=100000.0).text("Spring K"));
-        ui.add(egui::Slider::new(&mut susp.damping_c, 100.0..=10000.0).text("Damping C"));
-        ui.separator();
-    }
-    if let Ok(children) = q_children.get(entity) {
-        for child in children.iter() {
-            inspect_suspension_recursive(ui, child, q_children, q_suspension);
-        }
-    }
-}
 
 fn apply_sandbox_settings(
     settings: Res<SandboxSettings>,

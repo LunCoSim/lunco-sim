@@ -5,8 +5,14 @@
 //! - **Spawn System** — click-to-place rovers, props, and terrain
 //! - **Selection** — Shift+click entities to select them with transform gizmo
 //! - **Transform Gizmo** — translate/rotate selected entities
-//! - **Inspector Panel** — view entity parameters
+//! - **Inspector Panel** — view entity parameters (in `ui/` module)
 //! - **Undo** — Ctrl+Z to revert spawns
+//!
+//! ## UI
+//!
+//! All UI panels live in the `ui/` subdirectory and are registered via
+//! [`ui::SandboxEditUiPlugin`](ui::SandboxEditUiPlugin). This plugin should
+//! be added alongside `SandboxEditPlugin` for full functionality.
 //!
 //! ## Adding New Spawn Types
 //!
@@ -24,13 +30,16 @@
 
 pub mod catalog;
 pub mod commands;
-pub mod entity_list;
 pub mod gizmo;
-pub mod inspector;
-pub mod palette;
 pub mod selection;
 pub mod spawn;
 pub mod undo;
+
+/// UI panels — WorkbenchPanel implementations (for editor mode).
+pub mod ui;
+
+/// Overlay panels for 3D-embedded mode.
+pub mod overlay;
 
 use bevy::prelude::*;
 
@@ -50,8 +59,7 @@ impl Plugin for SandboxEditPlugin {
         app.add_plugins(transform_gizmo_bevy::TransformGizmoPlugin);
         app.add_plugins(commands::SpawnCommandPlugin);
 
-        // Palette panel MUST run in EguiPrimaryContextPass to access ctx_mut()
-        app.add_systems(bevy_egui::EguiPrimaryContextPass, palette::spawn_palette_panel);
+        // Non-UI systems
         app.add_systems(Update, spawn::update_spawn_ghost);
         app.add_systems(Update, spawn::handle_spawn_placement);
         // Selection system is registered in the binary with proper ordering (before avatar possession)
@@ -66,11 +74,6 @@ impl Plugin for SandboxEditPlugin {
             gizmo::restore_gizmo_dynamic.after(gizmo::sync_gizmo_transforms),
         ));
         app.add_systems(Update, gizmo::sync_gizmo_camera);
-
-        // Inspector panel MUST run in EguiPrimaryContextPass to access ctx_mut()
-        app.add_systems(bevy_egui::EguiPrimaryContextPass, inspector::inspector_panel);
-        // Entity list panel runs in EguiPrimaryContextPass
-        app.add_systems(bevy_egui::EguiPrimaryContextPass, entity_list::entity_list_panel);
         app.add_systems(Update, undo::handle_undo_input);
     }
 }

@@ -7,6 +7,8 @@
 //!
 //! Docking, theming, inspector, console, layout persistence — all provided by `bevy_workbench`.
 
+use bevy::prelude::*;
+
 pub mod widget;
 pub use widget::*;
 
@@ -40,8 +42,6 @@ pub mod prelude {
     };
 }
 
-use bevy::prelude::*;
-
 /// Minimal plugin that initializes LunCoSim-specific UI resources.
 /// The heavy lifting (docking, themes, inspector, console) is done by `bevy_workbench`.
 #[derive(Default)]
@@ -51,42 +51,5 @@ impl Plugin for LuncoUiPlugin {
     fn build(&self, app: &mut App) {
         // LunCoSim-specific resources (no overlap with bevy_workbench)
         app.init_resource::<UiSelection>();
-
-        // 3D UI LOD system — updates visibility based on camera distance
-        app.add_systems(PostUpdate, update_3d_ui_lod);
-    }
-}
-
-/// System that updates 3D UI visibility based on LOD and camera distance.
-/// Runs in PostUpdate after transforms are propagated.
-fn update_3d_ui_lod(
-    mut q_panels: Query<(&WorldPanel, &mut Visibility, &GlobalTransform)>,
-    mut q_labels: Query<(&Label3D, &mut Visibility, &GlobalTransform)>,
-    q_camera: Query<&GlobalTransform, With<lunco_core::Avatar>>,
-) {
-    let camera_pos = q_camera.single().ok().map(|gt| gt.translation());
-
-    for (panel, mut visibility, gt) in q_panels.iter_mut() {
-        let Some(cam) = camera_pos else { continue };
-        let dist = gt.translation().distance(cam);
-        if let Some(lod) = panel.lod {
-            if crate::components::WorldLod::visible(&lod, dist as f64) {
-                *visibility = Visibility::Visible;
-            } else {
-                *visibility = Visibility::Hidden;
-            }
-        }
-    }
-
-    for (label, mut visibility, gt) in q_labels.iter_mut() {
-        let Some(cam) = camera_pos else { continue };
-        let dist = gt.translation().distance(cam);
-        if let Some(lod) = label.lod {
-            if crate::components::WorldLod::visible(&lod, dist as f64) {
-                *visibility = Visibility::Visible;
-            } else {
-                *visibility = Visibility::Hidden;
-            }
-        }
     }
 }

@@ -28,6 +28,8 @@ resolver = "2"
 scnr2 = { git = "https://github.com/jsinger67/scnr2", tag = "0.3.3" }
 scnr2_generate = { git = "https://github.com/jsinger67/scnr2", tag = "0.3.3" }
 scnr2_macro = { git = "https://github.com/jsinger67/scnr2", tag = "0.3.3" }
+# LunCoSim fork with 3D-embedded support (transparent CentralPanel + bg_color())
+bevy_workbench = { git = "https://github.com/LunCoSim/bevy_workbench.git" }
 
 [workspace.package]
 description = "Initialize multi-crate workspace architecture for vessel control simulation"
