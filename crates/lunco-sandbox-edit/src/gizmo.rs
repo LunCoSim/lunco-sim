@@ -26,7 +26,7 @@ pub struct GizmoPrevPos {
 /// Runs in `Last` schedule, after transform-gizmo-bevy's `update_gizmos`.
 /// Only triggers when the gizmo is actively being dragged.
 ///
-/// Skips possessed entities (those with a `ControllerLink`).
+/// Skips possessed entities (those with a `ControllerLink` pointing to them).
 pub fn capture_gizmo_start(
     selected: Res<SelectedEntity>,
     gizmo_targets: Query<&GizmoTarget>,

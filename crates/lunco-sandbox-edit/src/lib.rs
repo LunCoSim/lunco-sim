@@ -68,6 +68,9 @@ impl Plugin for SandboxEditPlugin {
         // 1. capture_gizmo_start - makes body kinematic when drag starts
         // 2. sync_gizmo_transforms - syncs Position + GlobalTransform from Transform
         // 3. restore_gizmo_dynamic - restores dynamic when drag ends
+        //
+        // NOTE: TransformGizmoPlugin is added before this plugin, so its update_gizmos
+        // system runs first in the Last schedule (systems run in registration order).
         app.add_systems(Last, (
             gizmo::capture_gizmo_start,
             gizmo::sync_gizmo_transforms.after(gizmo::capture_gizmo_start),
