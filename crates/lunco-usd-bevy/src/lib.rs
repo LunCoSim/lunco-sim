@@ -236,19 +236,20 @@ pub fn sync_usd_visuals(
         };
 
         // Determine material type from USD primvars attribute
-        let _material_type = reader.prim_attribute_value::<String>(&sdf_path, "primvars:lunco_materialType");
+        let material_type = reader.prim_attribute_value::<String>(&sdf_path, "primvars:materialType");
 
         if let Some(ref m) = mesh_handle {
-            // PanelSurface: use SolarPanelMaterial custom shader
-            // Frame and other prims: standard PBR material with USD color
-            if prim_path.path.contains("PanelSurface") {
-                let solar_mat = create_solar_panel_material(&reader, &sdf_path, &mut solar_panel_materials);
-                commands.entity(entity).insert((
-                    Mesh3d(m.clone()),
-                    MeshMaterial3d(solar_mat),
-                ));
-            } else {
-                apply_standard_material(&reader, &sdf_path, m, &mut materials, &mut commands.entity(entity));
+            match material_type.as_deref() {
+                Some("solar_panel") => {
+                    let solar_mat = create_solar_panel_material(&reader, &sdf_path, &mut solar_panel_materials);
+                    commands.entity(entity).insert((
+                        Mesh3d(m.clone()),
+                        MeshMaterial3d(solar_mat),
+                    ));
+                }
+                _ => {
+                    apply_standard_material(&reader, &sdf_path, m, &mut materials, &mut commands.entity(entity));
+                }
             }
         }
 
