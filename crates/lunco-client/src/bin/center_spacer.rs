@@ -21,6 +21,9 @@ impl WorkbenchPanel for CenterSpacer {
     /// Transparent — lets 3D scene show through.
     fn bg_color(&self) -> Option<egui::Color32> { None }
 
+    /// Hide the tab bar — this panel acts as a viewport for the 3D scene.
+    fn hide_tab(&self) -> bool { true }
+
     fn ui(&mut self, _ui: &mut egui::Ui) {
         // No UI — just reserves space
     }
