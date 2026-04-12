@@ -82,6 +82,26 @@ commands.spawn((
 ));
 ```
 
+### Diagram Widgets
+
+**Time-series charts** — `time_series_plot()` is a pure rendering function. Zero data copies: the domain panel borrows its data, wraps it in `ChartSeries` references, and passes to the widget.
+
+```rust
+// Domain panel borrows data, no copying
+let series: Vec<ChartSeries> = plotted.names.iter()
+    .filter_map(|name| channels.get(name).map(|ch| ChartSeries {
+        name,
+        y_values: ch.history.as_slice(),  // borrowed slice
+        dt: Some(ch.dt),
+        color: None,
+    }))
+    .collect();
+
+time_series_plot(ui, "modelica_plot", &series);
+```
+
+**Node graphs** — re-exports `egui-snarl` types. Domain crates define their own node type and `SnarlViewer`, then call `snarl.show()`.
+
 ## Design Decisions
 
 | Mechanism | What it gives us |

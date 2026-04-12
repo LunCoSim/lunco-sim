@@ -19,6 +19,9 @@ pub use context::*;
 pub mod helpers;
 pub use helpers::*;
 
+pub mod diagrams;
+pub use diagrams::*;
+
 /// Common exports. Use `use lunco_ui::prelude::*;`
 pub mod prelude {
     pub use bevy_egui::egui;
@@ -31,6 +34,10 @@ pub mod prelude {
     pub use crate::CommandBuilder;
     pub use crate::WorldPanel;
     pub use crate::Label3D;
+    pub use crate::diagrams::{
+        time_series_plot, ChartSeries,
+        Snarl, SnarlViewer, NodeId, InPin, InPinId, OutPin, OutPinId,
+    };
 }
 
 use bevy::prelude::*;

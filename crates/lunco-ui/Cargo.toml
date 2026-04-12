@@ -12,3 +12,5 @@ big_space = { workspace = true }
 lunco-core = { path = "../lunco-core" }
 lunco-avatar = { path = "../lunco-avatar" }
 smallvec = { workspace = true }
+egui-snarl = "0.9"
+egui_plot = "0.34"

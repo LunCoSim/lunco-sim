@@ -3469,6 +3469,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "egui-scale"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b7964ad2697e2b2df7157e5a0104c812c3773172c2a7b7dea95b57d9b5fd285f"
+dependencies = [
+ "egui 0.33.3",
+]
+
+[[package]]
+name = "egui-snarl"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c6358986338c35fe268c0647b410725babd5de772010e8e739e88cb11f5665da"
+dependencies = [
+ "egui 0.33.3",
+ "egui-scale",
+ "slab",
+ "smallvec",
+]
+
+[[package]]
 name = "egui_code_editor"
 version = "0.2.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5810,6 +5831,8 @@ dependencies = [
  "bevy_egui",
  "bevy_workbench",
  "big_space",
+ "egui-snarl",
+ "egui_plot",
  "lunco-avatar",
  "lunco-core",
  "smallvec",
