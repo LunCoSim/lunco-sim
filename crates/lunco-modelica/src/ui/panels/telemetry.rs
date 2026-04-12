@@ -7,8 +7,6 @@ use bevy_workbench::dock::WorkbenchPanel;
 use crate::ui::WorkbenchState;
 use crate::{ModelicaModel, ModelicaChannels, ModelicaCommand};
 
-
-
 /// Telemetry panel — model parameters, inputs, and variable plotting toggles.
 pub struct TelemetryPanel;
 

@@ -69,8 +69,12 @@ impl WorkbenchPanel for GraphsPanel {
             egui::Color32::from_rgb(200, 120, 255),
         ];
 
+        // Size plot to fill its tile's bounded rect
+        let tile_rect = ui.max_rect();
         let mut plot = Plot::new("modelica_plot")
-            .view_aspect(2.0)
+            .view_aspect(3.0)
+            .width(tile_rect.width())
+            .height(tile_rect.height())
             .include_y(0.0);
 
         if auto_fit {

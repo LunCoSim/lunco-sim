@@ -1018,7 +1018,7 @@ fn handle_modelica_responses(
 ) {
     while let Ok(result) = channels.rx.try_recv() {
         if result.entity == Entity::PLACEHOLDER {
-            workbench_state.logs.push_back("CRITICAL: Simulation Worker crashed and restarted.".to_string());
+            warn!("Simulation Worker crashed and restarted.");
             continue;
         }
 
@@ -1029,14 +1029,14 @@ fn handle_modelica_responses(
 
             model.is_stepping = false;
 
+            // Forward log messages to console via bevy_workbench's console system
             if let Some(msg) = result.log_message {
-                workbench_state.logs.push_back(msg);
-                if workbench_state.logs.len() > 100 { workbench_state.logs.pop_front(); }
+                info!("[Modelica] {msg}");
             }
 
             if let Some(err) = &result.error {
                 workbench_state.compilation_error = Some(err.clone());
-                workbench_state.logs.push_back(format!("ERROR: {}", err));
+                warn!("[Modelica] {err}");
                 model.paused = true;
             } else if workbench_state.selected_entity == Some(result.entity) {
                 workbench_state.compilation_error = None;

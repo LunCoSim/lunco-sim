@@ -17,7 +17,6 @@ bevy.workspace = true
 bevy_egui.workspace = true
 bevy_workbench = "0.3"
 egui_plot = "0.34.1"
-egui_code_editor = "0.2.22"
 # Uses LunCoSim/rumoca fork (web-fix branch) which adds `instant` crate for
 # wasm32 time support. std::time::Instant panics on wasm32-unknown-unknown
 # because browsers restrict high-resolution clocks (Spectre mitigation).
@@ -30,14 +29,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 regex = "1.10"
 crossbeam-channel = "0.5"
-futures-lite = "2.3.0"
 log = "0.4"
-lunco-core = { path = "../lunco-core" }
-lunco-hardware = { path = "../lunco-hardware" }
-
-# Desktop-only: async runtime for potential future async simulation features.
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-tokio = { version = "1.0", features = ["full"] }
 
 # Web-specific: wasm32-unknown-unknown needs JS interop for console output,
 # panic hooks, and RNG (std::time is unavailable).

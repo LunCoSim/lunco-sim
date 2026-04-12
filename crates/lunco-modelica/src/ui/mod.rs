@@ -5,7 +5,6 @@
 //! - Code Editor (center viewport, no tab)
 //! - Telemetry (right dock)
 //! - Graphs (bottom dock)
-//! - Logs (bottom dock)
 
 use bevy::prelude::*;
 use bevy_workbench::WorkbenchApp;
@@ -24,7 +23,6 @@ impl Plugin for ModelicaUiPlugin {
             .register_panel(panels::library_browser::LibraryBrowserPanel)
             .register_panel(panels::code_editor::CodeEditorPanel)
             .register_panel(panels::telemetry::TelemetryPanel)
-            .register_panel(panels::graphs::GraphsPanel)
-            .register_panel(panels::logs::LogsPanel);
+            .register_panel(panels::graphs::GraphsPanel);
     }
 }
