@@ -261,6 +261,35 @@ App::new()
 
 Existing integration tests (`lunco-avatar/tests/`) use this pattern.
 
+## 3D UI LOD
+
+`WorldPanel` and `Label3D` support distance-based fade/hide:
+
+```rust
+commands.spawn((
+    Label3D {
+        text: "Earth".into(),
+        offset: DVec3::Y * (radius + 2000.0),
+        billboard: true,
+        lod: Some(WorldLod { fade_start: 1e7, fade_end: 5e7 }), // fade 10k–50k km
+    },
+    ChildOf(earth_entity),
+));
+```
+
+The LOD system runs in `PostUpdate`, after transforms propagate. It hides widgets beyond `fade_end` to prevent visual clutter at large distances.
+
+## Command Tracking
+
+`CommandBuilder::build()` assigns monotonically increasing unique IDs:
+
+```rust
+let cmd1 = CommandBuilder::new("FOCUS").build();  // id = 1
+let cmd2 = CommandBuilder::new("FOCUS").build();  // id = 2
+```
+
+This enables command-response correlation: observers can emit `CommandResponse { command_id }` and UI/AI can track which commands succeeded or failed.
+
 ## File Structure
 
 ```
