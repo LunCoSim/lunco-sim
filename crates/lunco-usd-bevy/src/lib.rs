@@ -235,6 +235,9 @@ pub fn sync_usd_visuals(
             _ => None,
         };
 
+        // Determine material type from USD primvars attribute
+        let _material_type = reader.prim_attribute_value::<String>(&sdf_path, "primvars:lunco_materialType");
+
         if let Some(ref m) = mesh_handle {
             // PanelSurface: use SolarPanelMaterial custom shader
             // Frame and other prims: standard PBR material with USD color
@@ -322,7 +325,7 @@ pub fn sync_usd_visuals(
     }
 }
 
-/// Creates a SolarPanelMaterial from USD prim attributes.
+/// Creates a SolarPanelMaterial from USD primvars attributes.
 fn create_solar_panel_material(
     reader: &TextReader,
     sdf_path: &SdfPath,
@@ -337,56 +340,56 @@ fn create_solar_panel_material(
         extension.panel_half_depth = (d / 2.0) as f32;
     }
 
-    if let Some(rows) = reader.prim_attribute_value::<i32>(sdf_path, "lunco:cellRows") {
+    if let Some(rows) = reader.prim_attribute_value::<i32>(sdf_path, "primvars:cellRows") {
         extension.cell_rows = rows as f32;
-    } else if let Some(rows) = reader.prim_attribute_value::<f64>(sdf_path, "lunco:cellRows") {
+    } else if let Some(rows) = reader.prim_attribute_value::<f64>(sdf_path, "primvars:cellRows") {
         extension.cell_rows = rows as f32;
     }
-    if let Some(cols) = reader.prim_attribute_value::<i32>(sdf_path, "lunco:cellCols") {
+    if let Some(cols) = reader.prim_attribute_value::<i32>(sdf_path, "primvars:cellCols") {
         extension.cell_cols = cols as f32;
-    } else if let Some(cols) = reader.prim_attribute_value::<f64>(sdf_path, "lunco:cellCols") {
+    } else if let Some(cols) = reader.prim_attribute_value::<f64>(sdf_path, "primvars:cellCols") {
         extension.cell_cols = cols as f32;
     }
 
-    if let Some(c) = get_attribute_as_vec3(reader, sdf_path, "lunco:cellColor") {
+    if let Some(c) = get_attribute_as_vec3(reader, sdf_path, "primvars:cellColor") {
         extension.cell_color = LinearRgba::new(c.x, c.y, c.z, 1.0);
     }
-    if let Some(c) = get_attribute_as_vec3(reader, sdf_path, "lunco:busLineColor") {
+    if let Some(c) = get_attribute_as_vec3(reader, sdf_path, "primvars:busLineColor") {
         extension.bus_line_color = LinearRgba::new(c.x, c.y, c.z, 1.0);
     }
-    if let Some(c) = get_attribute_as_vec3(reader, sdf_path, "lunco:frameBorderColor") {
+    if let Some(c) = get_attribute_as_vec3(reader, sdf_path, "primvars:frameBorderColor") {
         extension.frame_border_color = LinearRgba::new(c.x, c.y, c.z, 1.0);
     }
 
-    if let Some(v) = reader.prim_attribute_value::<f32>(sdf_path, "lunco:cellGap") {
+    if let Some(v) = reader.prim_attribute_value::<f32>(sdf_path, "primvars:cellGap") {
         extension.cell_gap = v;
-    } else if let Some(v) = reader.prim_attribute_value::<f64>(sdf_path, "lunco:cellGap") {
+    } else if let Some(v) = reader.prim_attribute_value::<f64>(sdf_path, "primvars:cellGap") {
         extension.cell_gap = v as f32;
     }
-    if let Some(v) = reader.prim_attribute_value::<f32>(sdf_path, "lunco:busLineWidth") {
+    if let Some(v) = reader.prim_attribute_value::<f32>(sdf_path, "primvars:busLineWidth") {
         extension.bus_line_width = v;
-    } else if let Some(v) = reader.prim_attribute_value::<f64>(sdf_path, "lunco:busLineWidth") {
+    } else if let Some(v) = reader.prim_attribute_value::<f64>(sdf_path, "primvars:busLineWidth") {
         extension.bus_line_width = v as f32;
     }
-    if let Some(v) = reader.prim_attribute_value::<f32>(sdf_path, "lunco:frameBorderWidth") {
+    if let Some(v) = reader.prim_attribute_value::<f32>(sdf_path, "primvars:frameBorderWidth") {
         extension.frame_border_width = v;
-    } else if let Some(v) = reader.prim_attribute_value::<f64>(sdf_path, "lunco:frameBorderWidth") {
+    } else if let Some(v) = reader.prim_attribute_value::<f64>(sdf_path, "primvars:frameBorderWidth") {
         extension.frame_border_width = v as f32;
     }
 
-    if let Some(v) = reader.prim_attribute_value::<f32>(sdf_path, "lunco:glassReflectivity") {
+    if let Some(v) = reader.prim_attribute_value::<f32>(sdf_path, "primvars:glassReflectivity") {
         extension.glass_reflectivity = v;
-    } else if let Some(v) = reader.prim_attribute_value::<f64>(sdf_path, "lunco:glassReflectivity") {
+    } else if let Some(v) = reader.prim_attribute_value::<f64>(sdf_path, "primvars:glassReflectivity") {
         extension.glass_reflectivity = v as f32;
     }
-    if let Some(v) = reader.prim_attribute_value::<f32>(sdf_path, "lunco:glassRoughness") {
+    if let Some(v) = reader.prim_attribute_value::<f32>(sdf_path, "primvars:glassRoughness") {
         extension.glass_roughness = v;
-    } else if let Some(v) = reader.prim_attribute_value::<f64>(sdf_path, "lunco:glassRoughness") {
+    } else if let Some(v) = reader.prim_attribute_value::<f64>(sdf_path, "primvars:glassRoughness") {
         extension.glass_roughness = v as f32;
     }
-    if let Some(v) = reader.prim_attribute_value::<f32>(sdf_path, "lunco:specularIntensity") {
+    if let Some(v) = reader.prim_attribute_value::<f32>(sdf_path, "primvars:specularIntensity") {
         extension.specular_intensity = v;
-    } else if let Some(v) = reader.prim_attribute_value::<f64>(sdf_path, "lunco:specularIntensity") {
+    } else if let Some(v) = reader.prim_attribute_value::<f64>(sdf_path, "primvars:specularIntensity") {
         extension.specular_intensity = v as f32;
     }
 

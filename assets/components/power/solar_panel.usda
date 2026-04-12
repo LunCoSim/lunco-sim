@@ -38,19 +38,19 @@ def Xform "SolarPanel" (
         bool physics:collisionEnabled = true
 
         # Tell the USD loader to use the solar panel shader
-        string lunco:materialType = "solar_panel"
+        string primvars:materialType = "solar_panel"
 
         # Solar cell shader parameters
-        int lunco:cellRows = 12
-        int lunco:cellCols = 6
-        color3f lunco:cellColor = (0.05, 0.05, 0.35)
-        color3f lunco:busLineColor = (0.85, 0.85, 0.90)
-        color3f lunco:frameBorderColor = (0.35, 0.35, 0.38)
-        float lunco:cellGap = 0.02
-        float lunco:busLineWidth = 0.003
-        float lunco:frameBorderWidth = 0.05
-        float lunco:glassReflectivity = 0.15
-        float lunco:glassRoughness = 0.05
-        float lunco:specularIntensity = 0.8
+        int primvars:cellRows = 12
+        int primvars:cellCols = 6
+        color3f primvars:cellColor = (0.05, 0.05, 0.35)
+        color3f primvars:busLineColor = (0.85, 0.85, 0.90)
+        color3f primvars:frameBorderColor = (0.35, 0.35, 0.38)
+        float primvars:cellGap = 0.02
+        float primvars:busLineWidth = 0.003
+        float primvars:frameBorderWidth = 0.05
+        float primvars:glassReflectivity = 0.15
+        float primvars:glassRoughness = 0.05
+        float primvars:specularIntensity = 0.8
     }
 }
