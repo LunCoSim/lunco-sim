@@ -3,96 +3,54 @@
     defaultPrim = "SolarPanel"
 )
 
-# Reusable Solar Panel Assembly — configurable photovoltaic panel.
-#
-# Architecture (USD Standard Compound Rigid Body):
-#   - SolarPanel (Xform): PhysicsRigidBodyAPI — ONE dynamic rigid body
-#   - PanelFrame (Cube): PhysicsCollisionAPI — structural aluminum frame
-#   - PanelSurface (Cube): PhysicsCollisionAPI — thin substrate with solar cells
-#
-# Per OpenUSD spec: PhysicsRigidBodyAPI on parent aggregates all child
-# colliders into ONE compound collider. Children have CollisionAPI only.
-#
-# All dimensions are tunable. The shader renders a realistic multi-cell grid
-# pattern with bus lines, glass reflections, and frame border.
-#
-# Modelica class: LunCo.Power.SolarArray.MultiJunction
-
+# Solar Panel Assembly — compound rigid body
+# Per OpenUSD spec: root Xform has PhysicsRigidBodyAPI,
+# children have PhysicsCollisionAPI only.
 def Xform "SolarPanel" (
-    prepend apiSchemas = ["PhysicsRigidBodyAPI", "LunCoPowerGeneratorAPI"]
+    prepend apiSchemas = ["PhysicsRigidBodyAPI"]
 )
 {
-    double3 xformOp:translate = (0, 0, 0)
+    float physics:mass = 15.0
 
-    # --- Rigid Body Mass ---
-    float physics:mass = 15.0          # Total assembly mass (frame + surface)
-
-    # --- Modelica model ---
-    string lunco:modelicaModel = "models/solar_panel.mo"
-    string lunco:modelicaClassName = "LunCo.Power.SolarArray.MultiJunction"
-
-    # --- Modelica Parameters (power generation) ---
-    double lunco:nominalPower = 500.0        # W at STC (Standard Test Conditions)
-    double lunco:efficiency = 0.30           # Solar-to-electrical conversion efficiency
-    double lunco:area = 18.0                 # m^2 active area
-    double lunco:temperatureCoefficient = -0.004  # Power loss per degree C above 25C
-    double lunco:degradationRate = 0.005     # Annual degradation fraction
-
-    # --- EPS connections ---
-    rel lunco:epsBus
-
-    # ============================================================
-    # Panel Frame — structural aluminum border (COLLIDER ONLY)
-    # ============================================================
+    # Panel Frame — structural aluminum
     def Cube "PanelFrame" (
         prepend apiSchemas = ["PhysicsCollisionAPI"]
     )
     {
-        # Frame dimensions (slightly larger than surface to create border)
-        double width = 6.2      # meters (panel_width + 2*frame_width)
-        double height = 0.15    # meters (frame thickness)
-        double depth = 3.2      # meters (panel_depth + 2*frame_width)
-
-        double3 xformOp:translate = (0, -0.025, 0)  # Slightly below surface
+        double width = 6.2
+        double height = 0.02
+        double depth = 3.2
+        double3 xformOp:translate = (0, -0.005, 0)
         color3f primvars:displayColor = (0.45, 0.45, 0.48)  # Aluminum gray
-        # No physics:rigidBodyEnabled — this is a collider, not a body
+        bool physics:collisionEnabled = true
     }
 
-    # ============================================================
-    # Panel Surface — thin substrate with solar cell shader (COLLIDER ONLY)
-    # ============================================================
+    # Panel Surface — photovoltaic cells (very thin, on top of frame)
     def Cube "PanelSurface" (
         prepend apiSchemas = ["PhysicsCollisionAPI"]
     )
     {
-        # Active panel dimensions (excluding frame border)
-        double width = 6.0      # meters (active width)
-        double height = 0.05    # meters (substrate thickness — very thin)
-        double depth = 3.0      # meters (active depth)
+        double width = 6.0
+        double height = 0.003
+        double depth = 3.0
+        double3 xformOp:translate = (0, 0.0115, 0)
+        color3f primvars:displayColor = (0.05, 0.05, 0.85)  # Deep blue
+        bool physics:collisionEnabled = true
 
-        double3 xformOp:translate = (0, 0, 0)
-
-        # Custom material marker — tells USD loader to apply SolarPanelMaterial
+        # Tell the USD loader to use the solar panel shader
         string lunco:materialType = "solar_panel"
 
-        # --- Solar Cell Shader Parameters ---
-        # Grid layout: number of cells in each direction
-        int lunco:cellRows = 12      # cells along width (X axis)
-        int lunco:cellCols = 6       # cells along depth (Z axis)
-
-        # Cell appearance
-        color3f lunco:cellColor = (0.05, 0.05, 0.35)        # Deep blue silicon
-        color3f lunco:busLineColor = (0.85, 0.85, 0.90)     # Silver bus lines
-        color3f lunco:frameBorderColor = (0.35, 0.35, 0.38) # Dark frame edge
-
-        float lunco:cellGap = 0.02          # meters gap between cells
-        float lunco:busLineWidth = 0.003    # meters (3mm bus bars)
-        float lunco:frameBorderWidth = 0.05 # meters (5cm frame edge visible on top)
-
-        # Optical properties
-        float lunco:glassReflectivity = 0.15   # Glass surface reflections
-        float lunco:glassRoughness = 0.05      # Very smooth glass
-        float lunco:specularIntensity = 0.8    # Sun glare intensity
-        # No physics:rigidBodyEnabled — this is a collider, not a body
+        # Solar cell shader parameters
+        int lunco:cellRows = 12
+        int lunco:cellCols = 6
+        color3f lunco:cellColor = (0.05, 0.05, 0.35)
+        color3f lunco:busLineColor = (0.85, 0.85, 0.90)
+        color3f lunco:frameBorderColor = (0.35, 0.35, 0.38)
+        float lunco:cellGap = 0.02
+        float lunco:busLineWidth = 0.003
+        float lunco:frameBorderWidth = 0.05
+        float lunco:glassReflectivity = 0.15
+        float lunco:glassRoughness = 0.05
+        float lunco:specularIntensity = 0.8
     }
 }

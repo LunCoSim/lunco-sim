@@ -468,9 +468,19 @@ fn global_transform_propagation_system(
         let mut vis_cache = std::collections::HashMap::new();
         for (ent, inherited, _, _, _) in q_visibility.iter() { vis_cache.insert(ent, inherited.get()); }
         for (_, mut inherited, _view, visibility, child_of_opt) in q_visibility.iter_mut() {
+            // If entity is explicitly Visible, it's always visible regardless of parent
+            if *visibility == Visibility::Visible {
+                *inherited = InheritedVisibility::VISIBLE;
+                continue;
+            }
+            // If entity is explicitly Hidden, it's always hidden
+            if *visibility == Visibility::Hidden {
+                *inherited = InheritedVisibility::HIDDEN;
+                continue;
+            }
+            // Otherwise inherit from parent
             let parent_visible = if let Some(child_of) = child_of_opt { *vis_cache.get(&child_of.parent()).unwrap_or(&true) } else { true };
-            let is_visible = parent_visible && visibility != Visibility::Hidden;
-            *inherited = if is_visible { InheritedVisibility::VISIBLE } else { InheritedVisibility::HIDDEN };
+            *inherited = if parent_visible { InheritedVisibility::VISIBLE } else { InheritedVisibility::HIDDEN };
         }
     }
 }

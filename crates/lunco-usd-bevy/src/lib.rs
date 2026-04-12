@@ -41,7 +41,7 @@ use openusd::sdf::{AbstractData, Path as SdfPath, Value};
 use lunco_usd_composer::UsdComposer;
 use big_space::prelude::CellCoord;
 mod solar_panel_material;
-pub use solar_panel_material::{SolarPanelExtension, SolarPanelMaterial};
+pub use solar_panel_material::{SolarPanelExtension, SolarPanelMaterial, SolarPanelShaderPlugin};
 use std::sync::Arc;
 
 /// Bevy plugin for USD visual synchronization.
@@ -55,6 +55,7 @@ impl Plugin for UsdBevyPlugin {
         app.init_asset::<UsdStageAsset>()
             .register_asset_loader(UsdLoader)
             .register_type::<UsdPrimPath>()
+            .add_plugins(SolarPanelShaderPlugin)
             .add_plugins(MaterialPlugin::<SolarPanelMaterial>::default())
             .add_systems(Update, sync_usd_visuals);
     }
@@ -207,9 +208,8 @@ pub fn sync_usd_visuals(
         };
 
         // Create mesh based on prim type and explicit dimensions.
-        // Bevy's Cuboid::new() takes FULL dimensions (not half-extents),
-        // matching the USD file's width/height/depth attributes.
-        let mesh_handle = match prim_type.as_deref() {
+        // Use explicit mesh builders to ensure mesh creation succeeds.
+        let mesh_handle: Option<Handle<Mesh>> = match prim_type.as_deref() {
             Some("Cube") => {
                 if let (Some(width), Some(height), Some(depth)) = (
                     reader.prim_attribute_value::<f64>(&sdf_path, "width"),
@@ -235,24 +235,16 @@ pub fn sync_usd_visuals(
             _ => None,
         };
 
-        // Determine material type from USD attribute
-        let material_type = reader.prim_attribute_value::<String>(&sdf_path, "lunco:materialType");
-
         if let Some(ref m) = mesh_handle {
-            // Check if this prim uses a custom material type
-            if let Some(ref mat_type) = material_type {
-                if mat_type == "solar_panel" {
-                    let solar_mat = create_solar_panel_material(&reader, &sdf_path, &mut solar_panel_materials);
-                    commands.entity(entity).insert((
-                        Mesh3d(m.clone()),
-                        MeshMaterial3d(solar_mat),
-                    ));
-                } else {
-                    // Fallback to standard material
-                    apply_standard_material(&reader, &sdf_path, m, &mut materials, &mut commands.entity(entity));
-                }
+            // PanelSurface: use SolarPanelMaterial custom shader
+            // Frame and other prims: standard PBR material with USD color
+            if prim_path.path.contains("PanelSurface") {
+                let solar_mat = create_solar_panel_material(&reader, &sdf_path, &mut solar_panel_materials);
+                commands.entity(entity).insert((
+                    Mesh3d(m.clone()),
+                    MeshMaterial3d(solar_mat),
+                ));
             } else {
-                // No custom material type — use standard material
                 apply_standard_material(&reader, &sdf_path, m, &mut materials, &mut commands.entity(entity));
             }
         }
@@ -320,8 +312,9 @@ pub fn sync_usd_visuals(
                 },
                 child_tf,
                 CellCoord::default(),
-                Visibility::Inherited,
-                InheritedVisibility::default(),
+                GlobalTransform::default(),
+                Visibility::Visible,
+                InheritedVisibility::VISIBLE,
                 ViewVisibility::default(),
             )).id();
             commands.entity(entity).add_child(child_entity);
@@ -330,13 +323,6 @@ pub fn sync_usd_visuals(
 }
 
 /// Creates a SolarPanelMaterial from USD prim attributes.
-///
-/// Reads solar panel shader parameters from the USD prim:
-/// - `width`, `depth` — panel dimensions (for grid anchoring)
-/// - `lunco:cellRows`, `lunco:cellCols` — grid layout
-/// - `lunco:cellColor`, `lunco:busLineColor`, `lunco:frameBorderColor` — colors
-/// - `lunco:cellGap`, `lunco:busLineWidth`, `lunco:frameBorderWidth` — dimensions
-/// - `lunco:glassReflectivity`, `lunco:glassRoughness`, `lunco:specularIntensity` — optics
 fn create_solar_panel_material(
     reader: &TextReader,
     sdf_path: &SdfPath,
@@ -344,7 +330,6 @@ fn create_solar_panel_material(
 ) -> Handle<SolarPanelMaterial> {
     let mut extension = SolarPanelExtension::default();
 
-    // Read panel dimensions from standard USD Cube attributes
     if let Some(w) = reader.prim_attribute_value::<f64>(sdf_path, "width") {
         extension.panel_half_width = (w / 2.0) as f32;
     }
@@ -352,27 +337,17 @@ fn create_solar_panel_material(
         extension.panel_half_depth = (d / 2.0) as f32;
     }
 
-    // Read grid layout — USD int → i32, USD int64 → i64
     if let Some(rows) = reader.prim_attribute_value::<i32>(sdf_path, "lunco:cellRows") {
-        extension.cell_rows = rows as f32;
-    } else if let Some(rows) = reader.prim_attribute_value::<i64>(sdf_path, "lunco:cellRows") {
         extension.cell_rows = rows as f32;
     } else if let Some(rows) = reader.prim_attribute_value::<f64>(sdf_path, "lunco:cellRows") {
         extension.cell_rows = rows as f32;
-    } else if let Some(rows) = reader.prim_attribute_value::<f32>(sdf_path, "lunco:cellRows") {
-        extension.cell_rows = rows;
     }
     if let Some(cols) = reader.prim_attribute_value::<i32>(sdf_path, "lunco:cellCols") {
         extension.cell_cols = cols as f32;
-    } else if let Some(cols) = reader.prim_attribute_value::<i64>(sdf_path, "lunco:cellCols") {
-        extension.cell_cols = cols as f32;
     } else if let Some(cols) = reader.prim_attribute_value::<f64>(sdf_path, "lunco:cellCols") {
         extension.cell_cols = cols as f32;
-    } else if let Some(cols) = reader.prim_attribute_value::<f32>(sdf_path, "lunco:cellCols") {
-        extension.cell_cols = cols;
     }
 
-    // Read colors
     if let Some(c) = get_attribute_as_vec3(reader, sdf_path, "lunco:cellColor") {
         extension.cell_color = LinearRgba::new(c.x, c.y, c.z, 1.0);
     }
@@ -383,7 +358,6 @@ fn create_solar_panel_material(
         extension.frame_border_color = LinearRgba::new(c.x, c.y, c.z, 1.0);
     }
 
-    // Read dimensions — USD float → f32
     if let Some(v) = reader.prim_attribute_value::<f32>(sdf_path, "lunco:cellGap") {
         extension.cell_gap = v;
     } else if let Some(v) = reader.prim_attribute_value::<f64>(sdf_path, "lunco:cellGap") {
@@ -400,7 +374,6 @@ fn create_solar_panel_material(
         extension.frame_border_width = v as f32;
     }
 
-    // Read optical properties — USD float → f32
     if let Some(v) = reader.prim_attribute_value::<f32>(sdf_path, "lunco:glassReflectivity") {
         extension.glass_reflectivity = v;
     } else if let Some(v) = reader.prim_attribute_value::<f64>(sdf_path, "lunco:glassReflectivity") {

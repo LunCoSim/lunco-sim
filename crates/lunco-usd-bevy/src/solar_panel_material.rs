@@ -19,7 +19,16 @@
 use bevy::prelude::*;
 use bevy::pbr::{MaterialExtension, ExtendedMaterial};
 use bevy::render::render_resource::AsBindGroup;
-use bevy::shader::ShaderRef;
+use bevy::asset::load_internal_asset;
+use bevy::shader::{Shader, ShaderRef};
+use std::marker::PhantomData;
+use uuid::Uuid;
+
+/// UUID for the solar panel shader.
+const SOLAR_PANEL_SHADER_UUID: Uuid = Uuid::from_u128(0x9a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d);
+
+/// Handle to the solar panel shader, registered via `load_internal_asset!`.
+pub const SOLAR_PANEL_SHADER_HANDLE: Handle<Shader> = Handle::Uuid(SOLAR_PANEL_SHADER_UUID, PhantomData);
 
 /// Material extension for solar panel cell grid rendering.
 ///
@@ -118,7 +127,24 @@ impl Default for SolarPanelExtension {
 
 impl MaterialExtension for SolarPanelExtension {
     fn fragment_shader() -> ShaderRef {
-        "shaders/solar_panel_extension.wgsl".into()
+        SOLAR_PANEL_SHADER_HANDLE.into()
+    }
+}
+
+/// Plugin that registers the solar panel shader via `load_internal_asset!`.
+///
+/// This embeds the WGSL shader into the binary at compile time, ensuring
+/// it's always available regardless of runtime asset paths.
+pub struct SolarPanelShaderPlugin;
+
+impl Plugin for SolarPanelShaderPlugin {
+    fn build(&self, app: &mut App) {
+        load_internal_asset!(
+            app,
+            SOLAR_PANEL_SHADER_HANDLE,
+            "../../../assets/shaders/solar_panel_extension.wgsl",
+            Shader::from_wgsl
+        );
     }
 }
 

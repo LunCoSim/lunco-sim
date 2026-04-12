@@ -287,8 +287,8 @@ pub fn spawn_usd_entry(
             Transform::from_translation(world_pos),
             big_space::prelude::CellCoord::default(),
             ChildOf(grid),
-            Visibility::Inherited,
-            InheritedVisibility::default(),
+            Visibility::Visible,
+            InheritedVisibility::VISIBLE,
             ViewVisibility::default(),
         )).id();
 

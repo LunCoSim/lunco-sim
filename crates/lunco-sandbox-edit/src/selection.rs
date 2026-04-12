@@ -80,6 +80,8 @@ pub fn handle_entity_selection(
     q_ground: Query<Entity, With<lunco_core::Ground>>,
     q_parents: Query<&ChildOf>,
     q_selected_old: Query<Entity, With<Selected>>,
+    q_names: Query<&Name>,
+    q_global_transforms: Query<&GlobalTransform>,
     mut drag_mode: ResMut<lunco_core::DragModeActive>,
     mut commands: Commands,
 ) {
@@ -129,6 +131,12 @@ pub fn handle_entity_selection(
         return;
     };
 
+    // DEBUG: Log raycast hit info
+    if let Ok(name) = q_names.get(hit_data.entity) {
+        let gtf = q_global_transforms.get(hit_data.entity).map(|g| g.translation()).unwrap_or_default();
+        info!("Raycast hit: {:?} at distance {:.2}, GlobalTransform translation: {:?}", name, hit_data.distance, gtf);
+    }
+
     // Find the best selectable entity from the hit (walks up parent chain)
     let target = find_selectable(hit_data.entity, &q_selectable, &q_parents);
 
@@ -142,6 +150,11 @@ pub fn handle_entity_selection(
         return;
     };
 
+    // DEBUG: Log selected entity details
+    let name = q_names.get(entity).map(|n| n.as_str()).unwrap_or("unnamed");
+    let gtf = q_global_transforms.get(entity).map(|g| g.translation()).unwrap_or_default();
+    info!("Selected entity {:?} - name: '{}', GlobalTransform translation: {:?}", entity, name, gtf);
+
     // Clear old selection
     for old in q_selected_old.iter() {
         commands.entity(old).remove::<Selected>().remove::<GizmoTarget>();
@@ -153,7 +166,6 @@ pub fn handle_entity_selection(
         .insert(GizmoTarget::default());
     selected.entity = Some(entity);
     drag_mode.active = true;
-    info!("Selected entity {:?} - gizmo enabled", entity);
 }
 
 #[cfg(test)]

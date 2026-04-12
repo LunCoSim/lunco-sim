@@ -60,13 +60,11 @@ fn fragment(
     // ============================================================
     // 1. Local mesh coordinates (panel is centered at origin)
     // ============================================================
-    // The panel mesh is a Cuboid centered at (0,0,0). Local XZ coords
-    // range from -half_dim to +half_dim, perfectly aligned with panel edges.
-    // We derive local coords from world position by subtracting the model
-    // matrix translation. In Bevy 0.18, use world_position and transform
-    // to get local coordinates.
-    let local_x = input.world_position.x;
-    let local_z = input.world_position.z;
+    // The panel mesh is a Cuboid centered at (0,0,0).
+    // We use UV coordinates mapped to local panel space.
+    // UV [0,1] → local [-half, +half]
+    let local_x = (input.uv.x - 0.5) * extension.panel_half_width * 2.0;
+    let local_z = (input.uv.y - 0.5) * extension.panel_half_depth * 2.0;
 
     // ============================================================
     // 2. Cell spacing derived from panel dimensions / cell count
@@ -79,8 +77,6 @@ fn fragment(
     // ============================================================
     // 3. Frame border detection
     // ============================================================
-    // Frame border is a strip around the panel edges.
-    // Detect by checking if we're near the panel boundary.
     let frame_inner_half_x = extension.panel_half_width - extension.frame_border_width;
     let frame_inner_half_z = extension.panel_half_depth - extension.frame_border_width;
     let is_frame = (abs(local_x) > frame_inner_half_x) || (abs(local_z) > frame_inner_half_z);
@@ -88,7 +84,6 @@ fn fragment(
     // ============================================================
     // 4. Cell grid — only render inside the active area
     // ============================================================
-    // Active area = panel bounds minus frame border
     let cell_gap_half = extension.cell_gap * 0.5;
     let cell_gap_x = grid_line_sdf(local_x, cell_spacing_x, cell_gap_half);
     let cell_gap_z = grid_line_sdf(local_z, cell_spacing_z, cell_gap_half);
@@ -97,7 +92,6 @@ fn fragment(
     // ============================================================
     // 5. Bus lines (metallic conductors running through cells)
     // ============================================================
-    // Bus lines run along cell boundaries, slightly wider than gaps.
     let bus_half = extension.bus_line_width * 0.5;
     let bus_x = grid_line_sdf(local_x, cell_spacing_x, bus_half);
     let bus_z = grid_line_sdf(local_z, cell_spacing_z, bus_half);
@@ -108,26 +102,24 @@ fn fragment(
     // ============================================================
     var final_color = extension.cell_color;
 
-    // Apply cell gaps (dark separator lines between cells)
     if (is_cell_gap) {
         final_color = vec4<f32>(0.02, 0.02, 0.02, 1.0);
     }
 
-    // Apply bus lines (metallic silver on top of cells)
     if (is_bus && !is_cell_gap) {
         final_color = mix(extension.cell_color, extension.bus_line_color, 0.9);
     }
 
-    // Apply frame border (dark structural edge)
     if (is_frame) {
         final_color = extension.frame_border_color;
     }
 
     // ============================================================
-    // 7. Apply cell grid color to PBR base color
+    // 7. Solar panel cell grid rendering
     // ============================================================
     pbr_input.material.base_color = final_color;
-    // roughness and reflectance kept at defaults to avoid WGSL type mismatches
+    pbr_input.material.perceptual_roughness = extension.glass_roughness;
+    pbr_input.material.reflectance = vec3<f32>(extension.glass_reflectivity);
 
     var out: FragmentOutput;
     out.color = main_pass_post_lighting_processing(pbr_input, apply_pbr_lighting(pbr_input));
