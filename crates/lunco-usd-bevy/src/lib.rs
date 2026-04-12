@@ -40,8 +40,6 @@ use openusd::usda::TextReader;
 use openusd::sdf::{AbstractData, Path as SdfPath, Value};
 use lunco_usd_composer::UsdComposer;
 use big_space::prelude::CellCoord;
-mod solar_panel_material;
-pub use solar_panel_material::{SolarPanelExtension, SolarPanelMaterial, SolarPanelShaderPlugin};
 use std::sync::Arc;
 
 /// Bevy plugin for USD visual synchronization.
@@ -55,8 +53,6 @@ impl Plugin for UsdBevyPlugin {
         app.init_asset::<UsdStageAsset>()
             .register_asset_loader(UsdLoader)
             .register_type::<UsdPrimPath>()
-            .add_plugins(SolarPanelShaderPlugin)
-            .add_plugins(MaterialPlugin::<SolarPanelMaterial>::default())
             .add_systems(Update, sync_usd_visuals);
     }
 }
@@ -163,10 +159,10 @@ pub struct UsdVisualSynced;
 ///
 /// # Material Handling
 ///
-/// Material type is detected via `primvars:materialType` attribute:
-/// - `"solar_panel"` → `SolarPanelMaterial` with custom shader
-/// - `"BlueprintGrid"` → handled by post-sync system in the application binary
-/// - Other/None → `StandardMaterial` with `primvars:displayColor`
+/// This system applies `StandardMaterial` to all prims with a mesh.
+/// Custom materials (solar panels, blueprint grids, etc.) are applied
+/// by independent material plugins in `lunco-materials` that run
+/// `.after(sync_usd_visuals)`.
 ///
 /// # Important
 ///
@@ -179,7 +175,6 @@ pub fn sync_usd_visuals(
     stages: Res<Assets<UsdStageAsset>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    mut solar_panel_materials: ResMut<Assets<SolarPanelMaterial>>,
 ) {
     for (entity, prim_path, existing_vis, existing_tf) in query.iter() {
         let Some(stage) = stages.get(&prim_path.stage_handle) else { continue; };
@@ -236,22 +231,9 @@ pub fn sync_usd_visuals(
             _ => None,
         };
 
-        // Determine material type from USD primvars attribute
-        let material_type = reader.prim_attribute_value::<String>(&sdf_path, "primvars:materialType");
-
+        // Apply standard PBR material with USD color
         if let Some(ref m) = mesh_handle {
-            match material_type.as_deref() {
-                Some("solar_panel") => {
-                    let solar_mat = create_solar_panel_material(&reader, &sdf_path, &mut solar_panel_materials);
-                    commands.entity(entity).insert((
-                        Mesh3d(m.clone()),
-                        MeshMaterial3d(solar_mat),
-                    ));
-                }
-                _ => {
-                    apply_standard_material(&reader, &sdf_path, m, &mut materials, &mut commands.entity(entity));
-                }
-            }
+            apply_standard_material(&reader, &sdf_path, m, &mut materials, &mut commands.entity(entity));
         }
 
         // Transform (position and rotation)
@@ -325,83 +307,6 @@ pub fn sync_usd_visuals(
             commands.entity(entity).add_child(child_entity);
         }
     }
-}
-
-/// Creates a SolarPanelMaterial from USD primvars attributes.
-fn create_solar_panel_material(
-    reader: &TextReader,
-    sdf_path: &SdfPath,
-    materials: &mut ResMut<Assets<SolarPanelMaterial>>,
-) -> Handle<SolarPanelMaterial> {
-    let mut extension = SolarPanelExtension::default();
-
-    if let Some(w) = reader.prim_attribute_value::<f64>(sdf_path, "width") {
-        extension.panel_half_width = (w / 2.0) as f32;
-    }
-    if let Some(d) = reader.prim_attribute_value::<f64>(sdf_path, "depth") {
-        extension.panel_half_depth = (d / 2.0) as f32;
-    }
-
-    if let Some(rows) = reader.prim_attribute_value::<i32>(sdf_path, "primvars:cellRows") {
-        extension.cell_rows = rows as f32;
-    } else if let Some(rows) = reader.prim_attribute_value::<f64>(sdf_path, "primvars:cellRows") {
-        extension.cell_rows = rows as f32;
-    }
-    if let Some(cols) = reader.prim_attribute_value::<i32>(sdf_path, "primvars:cellCols") {
-        extension.cell_cols = cols as f32;
-    } else if let Some(cols) = reader.prim_attribute_value::<f64>(sdf_path, "primvars:cellCols") {
-        extension.cell_cols = cols as f32;
-    }
-
-    if let Some(c) = get_attribute_as_vec3(reader, sdf_path, "primvars:cellColor") {
-        extension.cell_color = LinearRgba::new(c.x, c.y, c.z, 1.0);
-    }
-    if let Some(c) = get_attribute_as_vec3(reader, sdf_path, "primvars:busLineColor") {
-        extension.bus_line_color = LinearRgba::new(c.x, c.y, c.z, 1.0);
-    }
-    if let Some(c) = get_attribute_as_vec3(reader, sdf_path, "primvars:frameBorderColor") {
-        extension.frame_border_color = LinearRgba::new(c.x, c.y, c.z, 1.0);
-    }
-
-    if let Some(v) = reader.prim_attribute_value::<f32>(sdf_path, "primvars:cellGap") {
-        extension.cell_gap = v;
-    } else if let Some(v) = reader.prim_attribute_value::<f64>(sdf_path, "primvars:cellGap") {
-        extension.cell_gap = v as f32;
-    }
-    if let Some(v) = reader.prim_attribute_value::<f32>(sdf_path, "primvars:busLineWidth") {
-        extension.bus_line_width = v;
-    } else if let Some(v) = reader.prim_attribute_value::<f64>(sdf_path, "primvars:busLineWidth") {
-        extension.bus_line_width = v as f32;
-    }
-    if let Some(v) = reader.prim_attribute_value::<f32>(sdf_path, "primvars:frameBorderWidth") {
-        extension.frame_border_width = v;
-    } else if let Some(v) = reader.prim_attribute_value::<f64>(sdf_path, "primvars:frameBorderWidth") {
-        extension.frame_border_width = v as f32;
-    }
-
-    if let Some(v) = reader.prim_attribute_value::<f32>(sdf_path, "primvars:glassReflectivity") {
-        extension.glass_reflectivity = v;
-    } else if let Some(v) = reader.prim_attribute_value::<f64>(sdf_path, "primvars:glassReflectivity") {
-        extension.glass_reflectivity = v as f32;
-    }
-    if let Some(v) = reader.prim_attribute_value::<f32>(sdf_path, "primvars:glassRoughness") {
-        extension.glass_roughness = v;
-    } else if let Some(v) = reader.prim_attribute_value::<f64>(sdf_path, "primvars:glassRoughness") {
-        extension.glass_roughness = v as f32;
-    }
-    if let Some(v) = reader.prim_attribute_value::<f32>(sdf_path, "primvars:specularIntensity") {
-        extension.specular_intensity = v;
-    } else if let Some(v) = reader.prim_attribute_value::<f64>(sdf_path, "primvars:specularIntensity") {
-        extension.specular_intensity = v as f32;
-    }
-
-    materials.add(SolarPanelMaterial {
-        base: StandardMaterial {
-            base_color: Color::LinearRgba(extension.cell_color),
-            ..default()
-        },
-        extension,
-    })
 }
 
 /// Applies a standard PBR material to an entity, using USD prim attributes.

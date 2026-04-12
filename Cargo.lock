@@ -5526,6 +5526,7 @@ dependencies = [
  "lunco-core",
  "lunco-fsw",
  "lunco-hardware",
+ "lunco-materials",
  "lunco-mobility",
  "lunco-modelica",
  "lunco-obc",
@@ -5579,6 +5580,16 @@ dependencies = [
  "big_space",
  "lunco-core",
  "lunco-fsw",
+]
+
+[[package]]
+name = "lunco-materials"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "lunco-usd-bevy",
+ "openusd",
+ "uuid",
 ]
 
 [[package]]
@@ -5721,7 +5732,6 @@ dependencies = [
  "serde",
  "thiserror 2.0.18",
  "tracing",
- "uuid",
 ]
 
 [[package]]

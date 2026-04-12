@@ -1,0 +1,10 @@
+[package]
+name = "lunco-materials"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bevy.workspace = true
+openusd = { workspace = true }
+lunco-usd-bevy = { path = "../lunco-usd-bevy" }
+uuid = "1"

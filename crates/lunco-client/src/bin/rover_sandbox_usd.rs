@@ -13,22 +13,14 @@ use avian3d::prelude::PhysicsPlugins;
 use leafwing_input_manager::prelude::*;
 
 use lunco_mobility::{LunCoMobilityPlugin, Suspension};
-use lunco_usd::{UsdPlugins, UsdPrimPath, UsdStageAsset};
-use lunco_usd_bevy::sync_usd_visuals;
+use lunco_usd::{UsdPlugins, UsdPrimPath};
 use lunco_sandbox_edit::SandboxEditPlugin;
 use lunco_controller::LunCoControllerPlugin;
 use lunco_avatar::{LunCoAvatarPlugin, IntentAnalogState, FreeFlightCamera, SpringArmCamera, OrbitCamera, AdaptiveNearPlane, CameraScroll};
-use lunco_celestial::{BlueprintMaterial, BlueprintExtension, GravityPlugin, EmbeddedAssetsPlugin, BlueprintShaderPlugin};
+use lunco_celestial::{GravityPlugin};
 use lunco_core::{Vessel, architecture::CommandMessage, Avatar};
 use big_space::prelude::Grid;
-
-/// Marker for the sandbox scene entity.
-#[derive(Component)]
-struct SandboxScene;
-
-/// Marker applied to entities whose material has been swapped to BlueprintMaterial.
-#[derive(Component)]
-struct BlueprintMaterialApplied;
+use lunco_materials::{BlueprintMaterialPlugin, SolarPanelMaterialPlugin};
 
 fn main() {
     App::new()
@@ -41,28 +33,21 @@ fn main() {
             ..default()
         }).build().disable::<TransformPlugin>())
         .add_plugins(BigSpaceDefaultPlugins.build().disable::<big_space::validation::BigSpaceValidationPlugin>())
-        // Diagnostics disabled for cleaner output - uncomment to debug performance
-        // .add_plugins(LogDiagnosticsPlugin::default())
-        // .add_plugins(FrameTimeDiagnosticsPlugin::default())
         .add_plugins(WireframePlugin::default())
         .add_plugins(EguiPlugin::default())
         .add_plugins(PhysicsPlugins::default().set(avian3d::prelude::PhysicsInterpolationPlugin::interpolate_all()))
-        .add_plugins(MaterialPlugin::<BlueprintMaterial>::default())
         .add_plugins(lunco_core::LunCoCorePlugin)
-        // EmbeddedAssetsPlugin is no-op on desktop, handles shaders/textures/missions on wasm32
-        .add_plugins(EmbeddedAssetsPlugin)
-        // Register blueprint shader on desktop (wasm32 handled by EmbeddedAssetsPlugin)
-        .add_plugins(BlueprintShaderPlugin)
         .add_plugins(GravityPlugin)
         .add_plugins(LunCoMobilityPlugin)
         .add_plugins(UsdPlugins)
         .add_plugins(SandboxEditPlugin)
         .add_plugins(LunCoControllerPlugin)
         .add_plugins(LunCoAvatarPlugin)
+        .add_plugins(BlueprintMaterialPlugin)
+        .add_plugins(SolarPanelMaterialPlugin)
         .init_resource::<SandboxSettings>()
         .add_systems(Startup, setup_sandbox)
-        .add_systems(Update, (apply_sandbox_settings, apply_blueprint_to_usd_terrain.after(sync_usd_visuals)))
-        .add_systems(Update, apply_blueprint_grid_settings)
+        .add_systems(Update, apply_sandbox_settings)
         // Selection must run before avatar possession so DragModeActive flag is set
         .add_systems(Update, lunco_sandbox_edit::selection::handle_entity_selection.before(lunco_avatar::avatar_raycast_possession))
         .add_systems(PreUpdate, global_transform_propagation_system)
@@ -105,35 +90,9 @@ impl Default for SandboxSettings {
     }
 }
 
-#[derive(Resource)]
-struct BlueprintGridSettings {
-    material_handle: Handle<BlueprintMaterial>,
-    major_spacing: f32,
-    minor_spacing: f32,
-    major_width: f32,
-    minor_width: f32,
-    minor_fade: f32,
-    dirty: bool,
-}
-
-impl Default for BlueprintGridSettings {
-    fn default() -> Self {
-        Self {
-            material_handle: Handle::default(),
-            major_spacing: 1.0,
-            minor_spacing: 0.5,
-            major_width: 1.0,
-            minor_width: 0.5,
-            minor_fade: 0.15,
-            dirty: true,
-        }
-    }
-}
-
 fn setup_sandbox(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
-    mut blueprint_materials: ResMut<Assets<BlueprintMaterial>>,
 ) {
     let big_space_root = commands.spawn(BigSpace::default()).id();
     let grid = commands.spawn((
@@ -145,37 +104,6 @@ fn setup_sandbox(
         InheritedVisibility::default(),
         Name::new("Sandbox_Grid"),
     )).set_parent_in_place(big_space_root).id();
-
-    let blueprint_mat = BlueprintExtension {
-        high_color: LinearRgba::new(0.5, 0.5, 0.5, 1.0),
-        low_color: LinearRgba::new(0.1, 0.1, 0.1, 1.0),
-        high_line_color: LinearRgba::new(0.18, 0.18, 0.18, 1.0),
-        low_line_color: LinearRgba::new(0.18, 0.18, 0.18, 1.0),
-        surface_color: LinearRgba::new(0.15, 0.15, 0.18, 1.0),
-        grid_scale: 1.0,
-        line_width: 2.0,
-        subdivisions: Vec2::new(10.0, 10.0),
-        transition: 0.85,
-        major_grid_spacing: 1.0,
-        minor_grid_spacing: 0.5,
-        major_line_width: 1.0,
-        minor_line_width: 0.5,
-        minor_line_fade: 0.15,
-        ..default()
-    };
-    let blueprint_mat_handle = blueprint_materials.add(BlueprintMaterial {
-        base: StandardMaterial {
-            base_color: Color::srgb(0.2, 0.2, 0.2),
-            perceptual_roughness: 0.9,
-            ..default()
-        },
-        extension: blueprint_mat,
-    });
-
-    commands.insert_resource(BlueprintGridSettings {
-        material_handle: blueprint_mat_handle.clone(),
-        ..default()
-    });
 
     // --- Sun (directional light) ---
     commands.spawn((
@@ -198,7 +126,6 @@ fn setup_sandbox(
     info!("Loading sandbox scene from USD");
     commands.spawn((
         Name::new("SandboxScene"),
-        SandboxScene,
         UsdPrimPath {
             stage_handle: scene_handle,
             path: "/SandboxScene".to_string(),
@@ -255,7 +182,6 @@ fn sandbox_ui_system(
     mut contexts: EguiContexts,
     mut settings: ResMut<SandboxSettings>,
     mut sens: ResMut<lunco_avatar::CameraScrollSensitivity>,
-    mut grid_settings: ResMut<BlueprintGridSettings>,
     q_camera: Query<(Entity, &Transform, &CellCoord), With<lunco_core::Avatar>>,
     q_camera_spring: Query<&SpringArmCamera, With<lunco_core::Avatar>>,
     q_camera_orbit: Query<&OrbitCamera, With<lunco_core::Avatar>>,
@@ -282,14 +208,6 @@ fn sandbox_ui_system(
         ui.separator();
         ui.heading("Camera");
         ui.add(egui::Slider::new(&mut sens.value, 0.1..=5.0).text("Scroll Sensitivity (m)"));
-
-        ui.separator();
-        ui.heading("Grid");
-        if ui.add(egui::Slider::new(&mut grid_settings.major_spacing, 0.1..=10.0).text("Major (m)")).changed() { grid_settings.dirty = true; }
-        if ui.add(egui::Slider::new(&mut grid_settings.minor_spacing, 0.01..=1.0).text("Minor (m)")).changed() { grid_settings.dirty = true; }
-        if ui.add(egui::Slider::new(&mut grid_settings.major_width, 0.5..=5.0).text("Major Width")).changed() { grid_settings.dirty = true; }
-        if ui.add(egui::Slider::new(&mut grid_settings.minor_width, 0.1..=2.0).text("Minor Width")).changed() { grid_settings.dirty = true; }
-        if ui.add(egui::Slider::new(&mut grid_settings.minor_fade, 0.0..=1.0).text("Minor Opacity")).changed() { grid_settings.dirty = true; }
 
         ui.separator();
         ui.heading("Avatar Telemetry");
@@ -359,92 +277,6 @@ fn apply_sandbox_settings(
         for mut ambient in q_ambient.iter_mut() {
             ambient.brightness = settings.ambient_brightness;
             ambient.color = Color::Srgba(settings.ambient_color.into());
-        }
-    }
-}
-
-/// Applies BlueprintMaterial to USD terrain entities (Ground and Ramp).
-fn apply_blueprint_to_usd_terrain(
-    mut commands: Commands,
-    q_all_meshes: Query<(Entity, &Name, &UsdPrimPath), (With<Mesh3d>, Without<BlueprintMaterialApplied>)>,
-    q_scene: Query<Entity, With<SandboxScene>>,
-    stages: Res<Assets<UsdStageAsset>>,
-    mut materials: ResMut<Assets<BlueprintMaterial>>,
-) {
-    if q_scene.is_empty() { return; }
-
-    for (ent, name, prim_path) in q_all_meshes.iter() {
-        let Some(stage) = stages.get(&prim_path.stage_handle) else { continue };
-        let Ok(sdf_path) = openusd::sdf::Path::new(&prim_path.path) else { continue };
-        let reader = (*stage.reader).clone();
-
-        // Material type detection via primvars namespace (USD-standard)
-        let mat_type: Option<String> = reader.prim_attribute_value(&sdf_path, "primvars:materialType");
-        if mat_type.as_deref() != Some("BlueprintGrid") { continue; }
-
-        // Read all grid parameters from primvars
-        let surface_color = reader.prim_attribute_value::<Vec<f64>>(&sdf_path, "primvars:gridSurfaceColor")
-            .unwrap_or_else(|| vec![0.2, 0.2, 0.2]);
-        let major_spacing = reader.prim_attribute_value::<f64>(&sdf_path, "primvars:gridMajorSpacing")
-            .unwrap_or(1.0) as f32;
-        let minor_spacing = reader.prim_attribute_value::<f64>(&sdf_path, "primvars:gridMinorSpacing")
-            .unwrap_or(0.5) as f32;
-        let major_width = reader.prim_attribute_value::<f64>(&sdf_path, "primvars:gridMajorWidth")
-            .unwrap_or(1.0) as f32;
-        let minor_width = reader.prim_attribute_value::<f64>(&sdf_path, "primvars:gridMinorWidth")
-            .unwrap_or(0.5) as f32;
-        let minor_fade = reader.prim_attribute_value::<f64>(&sdf_path, "primvars:gridMinorFade")
-            .unwrap_or(0.15) as f32;
-
-        let r = surface_color.get(0).copied().unwrap_or(0.2) as f32;
-        let g = surface_color.get(1).copied().unwrap_or(0.2) as f32;
-        let b = surface_color.get(2).copied().unwrap_or(0.2) as f32;
-
-        let bp_ext = BlueprintExtension {
-            high_color: LinearRgba::new(0.5, 0.5, 0.5, 1.0),
-            low_color: LinearRgba::new(0.1, 0.1, 0.1, 1.0),
-            high_line_color: LinearRgba::new(r + 0.05, g + 0.05, b + 0.05, 1.0),
-            low_line_color: LinearRgba::new(r + 0.05, g + 0.05, b + 0.05, 1.0),
-            surface_color: LinearRgba::new(r, g, b, 1.0),
-            grid_scale: 1.0,
-            line_width: 2.0,
-            subdivisions: Vec2::new(10.0, 10.0),
-            transition: 0.85,
-            major_grid_spacing: major_spacing,
-            minor_grid_spacing: minor_spacing,
-            major_line_width: major_width,
-            minor_line_width: minor_width,
-            minor_line_fade: minor_fade,
-            ..Default::default()
-        };
-        let bp_mat = BlueprintMaterial {
-            base: StandardMaterial {
-                base_color: Color::srgb(r, g, b),
-                perceptual_roughness: 0.9,
-                ..default()
-            },
-            extension: bp_ext,
-        };
-        let mat_handle = materials.add(bp_mat);
-        commands.entity(ent)
-            .remove::<MeshMaterial3d<StandardMaterial>>()
-            .insert((MeshMaterial3d(mat_handle), BlueprintMaterialApplied));
-        info!("Applied BlueprintMaterial to {}", name.as_str());
-    }
-}
-
-fn apply_blueprint_grid_settings(
-    mut grid_settings: ResMut<BlueprintGridSettings>,
-    mut materials: ResMut<Assets<BlueprintMaterial>>,
-) {
-    if grid_settings.dirty {
-        grid_settings.dirty = false;
-        if let Some(mat) = materials.get_mut(&grid_settings.material_handle) {
-            mat.extension.major_grid_spacing = grid_settings.major_spacing;
-            mat.extension.minor_grid_spacing = grid_settings.minor_spacing;
-            mat.extension.major_line_width = grid_settings.major_width;
-            mat.extension.minor_line_width = grid_settings.minor_width;
-            mat.extension.minor_line_fade = grid_settings.minor_fade;
         }
     }
 }

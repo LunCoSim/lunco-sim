@@ -18,7 +18,8 @@ members = [
     "crates/lunco-usd-composer",
     "crates/lunco-usd-sim",
     "crates/lunco-usd",
-    "crates/lunco-sandbox-edit"
+    "crates/lunco-sandbox-edit",
+    "crates/lunco-materials"
 ]
 resolver = "2"
 
