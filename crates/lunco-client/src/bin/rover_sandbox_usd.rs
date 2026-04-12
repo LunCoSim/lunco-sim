@@ -16,8 +16,8 @@ use lunco_usd::{UsdPlugins, UsdPrimPath};
 use lunco_sandbox_edit::SandboxEditPlugin;
 use lunco_controller::LunCoControllerPlugin;
 use lunco_avatar::{LunCoAvatarPlugin, IntentAnalogState, FreeFlightCamera, AdaptiveNearPlane};
-use lunco_celestial::{GravityPlugin};
-use lunco_core::{Avatar};
+use lunco_celestial::GravityPlugin;
+use lunco_core::Avatar;
 use big_space::prelude::Grid;
 use lunco_materials::{BlueprintMaterialPlugin, SolarPanelMaterialPlugin};
 
@@ -46,12 +46,11 @@ fn main() {
                 show_menu_bar: false,    // No menu bar
                 show_toolbar: false,     // No play/stop toolbar
                 enable_game_view: false, // No Game View panel
-                show_console: false,     // No console panel
                 ..default()
             },
         })
-        .add_plugins(center_spacer::CenterSpacerPlugin)
         .add_plugins(lunco_sandbox_edit::ui::SandboxEditUiPlugin)
+        .add_plugins(center_spacer::CenterSpacerPlugin)
         .add_plugins(LunCoControllerPlugin)
         .add_plugins(LunCoAvatarPlugin)
         .add_plugins(BlueprintMaterialPlugin)
@@ -187,6 +186,7 @@ fn spawn_fallback_avatar(
     ));
     *done = true;
 }
+
 
 fn apply_sandbox_settings(
     settings: Res<SandboxSettings>,

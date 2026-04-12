@@ -34,14 +34,14 @@ lunco-obc = { path = "../lunco-obc" }
 lunco-attributes = { path = "../lunco-attributes" }
 lunco-avatar = { path = "../lunco-avatar" }
 lunco-celestial = { path = "../lunco-celestial" }
+lunco-materials = { path = "../lunco-materials" }
 lunco-modelica = { path = "../lunco-modelica" }
 lunco-usd = { path = "../lunco-usd" }
 lunco-usd-avian = { path = "../lunco-usd-avian" }
 lunco-usd-bevy = { path = "../lunco-usd-bevy" }
 lunco-usd-sim = { path = "../lunco-usd-sim" }
 lunco-sandbox-edit = { path = "../lunco-sandbox-edit" }
-lunco-materials = { path = "../lunco-materials" }
-bevy_workbench = "0.3"
+bevy_workbench = { git = "https://github.com/LunCoSim/bevy_workbench.git" }
 lunco-ui = { path = "../lunco-ui" }
 openusd = { workspace = true }
 bevy_egui = { workspace = true }
