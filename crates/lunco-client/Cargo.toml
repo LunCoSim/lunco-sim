@@ -42,6 +42,7 @@ lunco-usd-sim = { path = "../lunco-usd-sim" }
 lunco-sandbox-edit = { path = "../lunco-sandbox-edit" }
 lunco-materials = { path = "../lunco-materials" }
 bevy_workbench = "0.3"
+lunco-ui = { path = "../lunco-ui" }
 openusd = { workspace = true }
 bevy_egui = { workspace = true }
 bevy-inspector-egui = { workspace = true }

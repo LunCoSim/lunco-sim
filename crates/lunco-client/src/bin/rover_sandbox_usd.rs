@@ -7,7 +7,7 @@
 use bevy::prelude::*;
 use bevy::asset::AssetPlugin;
 use bevy::pbr::wireframe::WireframePlugin;
-use bevy_egui::{egui, EguiContexts, EguiPlugin, EguiPrimaryContextPass};
+use bevy_egui::EguiPlugin;
 use big_space::prelude::*;
 use avian3d::prelude::PhysicsPlugins;
 use leafwing_input_manager::prelude::*;
@@ -17,10 +17,19 @@ use lunco_usd::{UsdPlugins, UsdPrimPath};
 use lunco_sandbox_edit::SandboxEditPlugin;
 use lunco_controller::LunCoControllerPlugin;
 use lunco_avatar::{LunCoAvatarPlugin, IntentAnalogState, FreeFlightCamera, SpringArmCamera, OrbitCamera, AdaptiveNearPlane, CameraScroll};
-use lunco_celestial::{GravityPlugin};
+use lunco_celestial::{BlueprintMaterial, BlueprintExtension, GravityPlugin, EmbeddedAssetsPlugin, BlueprintShaderPlugin};
 use lunco_core::{Vessel, architecture::CommandMessage, Avatar};
 use big_space::prelude::Grid;
-use lunco_materials::{BlueprintMaterialPlugin, SolarPanelMaterialPlugin};
+
+/// Marker for the sandbox scene entity.
+#[derive(Component)]
+struct SandboxScene;
+
+mod center_spacer;
+
+/// Marker applied to entities whose material has been swapped to BlueprintMaterial.
+#[derive(Component)]
+struct BlueprintMaterialApplied;
 
 fn main() {
     App::new()
@@ -41,6 +50,10 @@ fn main() {
         .add_plugins(LunCoMobilityPlugin)
         .add_plugins(UsdPlugins)
         .add_plugins(SandboxEditPlugin)
+        .add_plugins(LuncoUiPlugin)
+        .add_plugins(bevy_workbench::WorkbenchPlugin::default())
+        .add_plugins(SandboxEditUiPlugin)
+        .add_plugins(center_spacer::CenterSpacerPlugin)
         .add_plugins(LunCoControllerPlugin)
         .add_plugins(LunCoAvatarPlugin)
         .add_plugins(BlueprintMaterialPlugin)
@@ -56,7 +69,6 @@ fn main() {
             camera_render_propagation_system,
             spawn_fallback_avatar,
         ).chain().after(avian3d::prelude::PhysicsSystems::Writeback))
-        .add_systems(EguiPrimaryContextPass, sandbox_ui_system)
         .run();
 }
 

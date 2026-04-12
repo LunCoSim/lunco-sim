@@ -2048,8 +2048,6 @@ dependencies = [
 [[package]]
 name = "bevy_workbench"
 version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b8ab81ce2c96094dc8a7da194943d79f06c7f68e12aeb9847f3213c0b9ecfce4"
 dependencies = [
  "bevy",
  "bevy-inspector-egui",
@@ -2106,7 +2104,7 @@ dependencies = [
  "bitflags 2.11.0",
  "cexpr",
  "clang-sys",
- "itertools 0.13.0",
+ "itertools 0.10.5",
  "proc-macro2",
  "quote",
  "regex",
@@ -2550,7 +2548,7 @@ checksum = "fe6d2e5af09e8c8ad56c969f2157a3d4238cebc7c55f0a517728c38f7b200f81"
 dependencies = [
  "serde",
  "termcolor",
- "unicode-width 0.2.2",
+ "unicode-width 0.1.14",
 ]
 
 [[package]]
@@ -2561,7 +2559,7 @@ checksum = "af491d569909a7e4dee0ad7db7f5341fef5c614d5b8ec8cf765732aba3cff681"
 dependencies = [
  "serde",
  "termcolor",
- "unicode-width 0.2.2",
+ "unicode-width 0.1.14",
 ]
 
 [[package]]
@@ -5173,15 +5171,6 @@ dependencies = [
 
 [[package]]
 name = "itertools"
-version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "413ee7dfc52ee1a4949ceeb7dbc8a33f2d6c088194d9f922fb8318faf1f01186"
-dependencies = [
- "either",
-]
-
-[[package]]
-name = "itertools"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2b192c782037fadd9cfa75548310488aabdbf3d2da73885b31bd0abd03351285"
@@ -5669,6 +5658,7 @@ dependencies = [
  "lunco-obc",
  "lunco-robotics",
  "lunco-sandbox-edit",
+ "lunco-ui",
  "lunco-usd",
  "lunco-usd-avian",
  "lunco-usd-bevy",
@@ -5802,12 +5792,14 @@ dependencies = [
  "bevy",
  "bevy-inspector-egui",
  "bevy_egui",
+ "bevy_workbench",
  "big_space",
  "enumset",
  "lunco-avatar",
  "lunco-controller",
  "lunco-core",
  "lunco-mobility",
+ "lunco-ui",
  "lunco-usd",
  "lunco-usd-bevy",
  "smallvec",
