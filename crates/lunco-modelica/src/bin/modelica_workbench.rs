@@ -5,6 +5,7 @@ use bevy_egui::EguiPlugin;
 use lunco_modelica::{
     ModelicaPlugin,
     ModelicaModel,
+    ui::WorkbenchState,
 };
 
 fn main() {
@@ -17,6 +18,14 @@ fn main() {
             ..default()
         }))
         .add_plugins(EguiPlugin::default())
+        .add_plugins(bevy_workbench::WorkbenchPlugin {
+            config: bevy_workbench::WorkbenchConfig {
+                show_menu_bar: false,
+                show_toolbar: false,
+                enable_game_view: false,
+                ..default()
+            },
+        })
         .add_plugins(ModelicaPlugin)
         .add_systems(Startup, setup_sandbox)
         .run();
@@ -28,7 +37,7 @@ struct ModelicaSandbox;
 fn setup_sandbox(
     mut commands: Commands,
     channels: Res<lunco_modelica::ModelicaChannels>,
-    mut workbench_state: ResMut<lunco_modelica::ui::WorkbenchState>,
+    mut workbench_state: ResMut<WorkbenchState>,
 ) {
     commands.spawn(Camera2d);
 
