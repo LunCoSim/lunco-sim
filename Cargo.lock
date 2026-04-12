@@ -5727,6 +5727,7 @@ dependencies = [
  "anyhow",
  "bevy",
  "bevy_egui",
+ "bevy_workbench",
  "console_error_panic_hook",
  "crossbeam-channel",
  "egui_code_editor",

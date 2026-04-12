@@ -15,6 +15,7 @@ path = "src/bin/modelica_workbench_web.rs"
 [dependencies]
 bevy.workspace = true
 bevy_egui.workspace = true
+bevy_workbench = "0.3"
 egui_plot = "0.34.1"
 egui_code_editor = "0.2.22"
 # Uses LunCoSim/rumoca fork (web-fix branch) which adds `instant` crate for
