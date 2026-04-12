@@ -45,7 +45,8 @@ fn main() {
             config: bevy_workbench::WorkbenchConfig {
                 show_menu_bar: false,    // No menu bar
                 show_toolbar: false,     // No play/stop toolbar
-                enable_game_view: false, // No Game View panel
+                enable_game_view: false, // GameView disabled — CenterSpacer provides viewport
+                show_console: false,     // No console panel
                 ..default()
             },
         })

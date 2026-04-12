@@ -4,10 +4,6 @@ version = "0.6.0-dev"
 edition = "2021"
 
 [[bin]]
-name = "rover_sandbox"
-path = "src/bin/rover_sandbox.rs"
-
-[[bin]]
 name = "rover_sandbox_usd"
 path = "src/bin/rover_sandbox_usd.rs"
 
