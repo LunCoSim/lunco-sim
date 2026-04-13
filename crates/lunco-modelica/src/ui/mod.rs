@@ -4,7 +4,8 @@
 //! - Library Browser (left dock)
 //! - Code Editor (center viewport, no tab)
 //! - Telemetry (right dock)
-//! - Graphs (bottom dock)
+//! - Graphs (bottom dock — time-series plots)
+//! - Diagram (dockable — component/node graph)
 
 use bevy::prelude::*;
 use bevy_workbench::WorkbenchApp;
@@ -20,9 +21,11 @@ pub struct ModelicaUiPlugin;
 impl Plugin for ModelicaUiPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<WorkbenchState>()
+            .init_resource::<panels::diagram::DiagramState>()
             .register_panel(panels::library_browser::LibraryBrowserPanel)
             .register_panel(panels::code_editor::CodeEditorPanel)
             .register_panel(panels::telemetry::TelemetryPanel)
-            .register_panel(panels::graphs::GraphsPanel);
+            .register_panel(panels::graphs::GraphsPanel)
+            .register_panel(panels::diagram::DiagramPanel);
     }
 }

@@ -107,6 +107,11 @@ impl ModelicaComponentBuilder {
                     qualified,
                     ports,
                 );
+                // Store component type name in meta for display
+                graph.nodes[node_id.0 as usize].meta.insert(
+                    "type_name".to_string(),
+                    comp.type_name.to_string(),
+                );
                 name_to_id.insert(comp_name.clone(), node_id);
             }
 
