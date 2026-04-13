@@ -8,6 +8,7 @@
 use bevy::prelude::*;
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
+use lunco_assets::assets_dir;
 #[cfg(target_arch = "wasm32")]
 use std::sync::atomic::{AtomicPtr, Ordering};
 
@@ -53,7 +54,7 @@ pub struct WorkbenchState {
 impl Default for WorkbenchState {
     fn default() -> Self {
         Self {
-            current_path: PathBuf::from("assets/models"),
+            current_path: assets_dir().join("models"),
             editor_buffer: String::new(),
             selected_entity: None,
             compilation_error: None,

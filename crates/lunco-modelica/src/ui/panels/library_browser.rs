@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use bevy::prelude::*;
 use bevy_egui::egui;
 use bevy_workbench::dock::WorkbenchPanel;
+use lunco_assets::{assets_dir, msl_dir};
 
 use crate::ui::WorkbenchState;
 
@@ -31,12 +32,14 @@ impl WorkbenchPanel for LibraryBrowserPanel {
         };
 
         // Navigation bar
+        let models_dir = assets_dir().join("models");
+        let msl = msl_dir();
         ui.horizontal(|ui| {
-            if ui.selectable_label(state.current_path.starts_with("assets/models"), "📦 Models").clicked() {
-                state.current_path = PathBuf::from("assets/models");
+            if ui.selectable_label(state.current_path.starts_with(&models_dir), "📦 Models").clicked() {
+                state.current_path = models_dir.clone();
             }
-            if ui.selectable_label(state.current_path.starts_with(".cache/msl"), "📚 MSL").clicked() {
-                state.current_path = PathBuf::from(".cache/msl");
+            if ui.selectable_label(state.current_path.starts_with(&msl), "📚 MSL").clicked() {
+                state.current_path = msl.clone();
             }
         });
         ui.separator();
@@ -115,8 +118,8 @@ impl WorkbenchPanel for LibraryBrowserPanel {
                         }
                     }
                 }
-                if state.current_path != PathBuf::from("assets/models")
-                    && state.current_path != PathBuf::from(".cache/msl")
+                if state.current_path != models_dir
+                    && state.current_path != msl
                 {
                     ui.separator();
                     if ui.button("⬅ Back").clicked() {

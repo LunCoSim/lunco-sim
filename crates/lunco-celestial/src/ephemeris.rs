@@ -32,6 +32,7 @@ use std::sync::Arc;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use serde::Deserialize;
+use lunco_assets::ephemeris_path_for_target;
 
 #[derive(Debug, Clone)]
 pub struct CsvDataPoint {
@@ -110,7 +111,7 @@ impl CelestialEphemerisProvider {
     /// cached mission data in `assets/missions`.
     pub fn new() -> Self {
         let mut custom_data = std::collections::HashMap::new();
-        let missions_dir = "assets/missions";
+        let missions_dir = lunco_assets::assets_dir().join("missions");
         
         // Dynamic discovery of mission CSVs to support hotswappable scenarios.
         if let Ok(entries) = std::fs::read_dir(missions_dir) {
@@ -123,7 +124,7 @@ impl CelestialEphemerisProvider {
                                     // Cache pathing and JPL Horizons sync logic...
                                     let safe_start = src.start_time.replace(" ", "_").replace(":", "");
                                     let safe_stop = src.stop_time.replace(" ", "_").replace(":", "");
-                                    let csv_path = format!(".cache/ephemeris/target_{}_{}_{}.csv", src.target_id, safe_start, safe_stop);
+                                    let csv_path = ephemeris_path_for_target(&src.target_id.to_string(), &safe_start, &safe_stop);
                                     
                                     // Automatic synchronization with External Authorities (JPL)
                                     if !std::path::Path::new(&csv_path).exists() {

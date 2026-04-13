@@ -17,6 +17,7 @@
 //! See `../lib.rs` for the inline worker implementation.
 
 use bevy::prelude::*;
+use std::path::PathBuf;
 use bevy_egui::EguiPlugin;
 use lunco_modelica::{
     ModelicaPlugin,
@@ -91,7 +92,7 @@ fn setup_web_workbench(
 ) {
     commands.spawn(Camera2d);
 
-    let model_path = model_info.default_filename.clone();
+    let model_path = PathBuf::from(&model_info.default_filename);
     let source = model_info.default_source.clone();
     let model_name = lunco_modelica::extract_model_name(&source).unwrap_or_else(|| "Model".to_string());
     let initial_params = lunco_modelica::extract_parameters(&source);

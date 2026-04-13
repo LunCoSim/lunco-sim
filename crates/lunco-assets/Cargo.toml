@@ -1,0 +1,8 @@
+[package]
+name = "lunco-assets"
+version = "0.1.0"
+edition = "2021"
+description = "Unified asset management for LunCoSim — cache resolution, asset sources, and loading abstraction"
+
+[dependencies]
+bevy = { workspace = true }

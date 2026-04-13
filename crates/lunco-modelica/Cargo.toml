@@ -16,6 +16,7 @@ path = "src/bin/modelica_workbench_web.rs"
 bevy.workspace = true
 bevy_egui.workspace = true
 bevy_workbench = { workspace = true }
+lunco-assets = { workspace = true }
 egui_plot = "0.34.1"
 # Uses LunCoSim/rumoca fork (web-fix branch) which adds `instant` crate for
 # wasm32 time support. std::time::Instant panics on wasm32-unknown-unknown

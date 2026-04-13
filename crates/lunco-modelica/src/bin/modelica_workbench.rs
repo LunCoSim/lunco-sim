@@ -2,6 +2,7 @@
 
 use bevy::prelude::*;
 use bevy_egui::EguiPlugin;
+use lunco_assets::assets_dir;
 use lunco_modelica::{
     ModelicaPlugin,
     ModelicaModel,
@@ -41,7 +42,7 @@ fn setup_sandbox(
 ) {
     commands.spawn(Camera2d);
 
-    let model_path = "assets/models/Battery.mo".to_string();
+    let model_path = assets_dir().join("models/Battery.mo");
     let source = std::fs::read_to_string(&model_path).unwrap_or_default();
     let model_name = lunco_modelica::extract_model_name(&source).unwrap_or_else(|| "Battery".to_string());
     let initial_params = lunco_modelica::extract_parameters(&source);
@@ -55,7 +56,7 @@ fn setup_sandbox(
         ModelicaSandbox,
         Name::new("Modelica_Sandbox"),
         ModelicaModel {
-            model_path: model_path.clone(),
+            model_path,
             model_name: model_name.clone(),
             parameters: initial_params,
             inputs: initial_inputs,

@@ -11,6 +11,7 @@ celestial-ephemeris = "0.1.1-alpha.2"
 celestial-time = "0.1.1-alpha.2"
 celestial-core = "0.1.1-alpha.2"
 lunco-core = { path = "../lunco-core" }
+lunco-assets = { workspace = true }
 avian3d = { workspace = true }
 chrono = { workspace = true }
 lunco-controller = { path = "../lunco-controller" }

@@ -3,6 +3,7 @@ use serde::Deserialize;
 use std::fs;
 use crate::trajectories::{TrajectoryView, TrajectoryPath, TrajectoryFrame};
 use big_space::prelude::CellCoord;
+use lunco_assets::assets_dir;
 
 #[derive(Debug, Deserialize, Resource, Default)]
 pub struct MissionRegistry {
@@ -221,7 +222,7 @@ pub fn load_missions_system(
     #[cfg(not(target_arch = "wasm32"))]
     {
         // Desktop: load from filesystem
-        let missions_dir = "assets/missions";
+        let missions_dir = assets_dir().join("missions");
         if let Ok(entries) = fs::read_dir(missions_dir) {
             for entry in entries.flatten() {
                 if entry.path().extension().map(|e| e == "json").unwrap_or(false) {

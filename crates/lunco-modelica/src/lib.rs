@@ -36,9 +36,11 @@ use bevy::prelude::*;
 use rumoca_session::{Session, SessionConfig};
 use rumoca_sim::{StepperOptions, SimStepper};
 use std::collections::{HashMap, VecDeque};
+use std::path::PathBuf;
 use crossbeam_channel::{unbounded, Sender, Receiver};
 use std::thread;
 use regex::Regex;
+use lunco_assets::{msl_dir, modelica_dir};
 
 /// Simple wrapper around rumoca-session for compiling Modelica models.
 ///
@@ -85,8 +87,9 @@ impl Plugin for ModelicaPlugin {
         let (tx_res, rx_res) = unbounded();
 
         // Set MSL path globally before starting worker
-        if std::path::Path::new(".cache/msl").exists() {
-            if let Ok(abs_path) = std::fs::canonicalize(".cache/msl") {
+        let msl = msl_dir();
+        if msl.exists() {
+            if let Ok(abs_path) = std::fs::canonicalize(&msl) {
                 std::env::set_var("MODELICAPATH", abs_path.to_string_lossy().to_string());
             }
         }
@@ -165,7 +168,7 @@ pub enum ModelicaCommand {
     Step {
         entity: Entity,
         session_id: u64,
-        model_path: String,
+        model_path: PathBuf,
         model_name: String,
         inputs: Vec<(String, f64)>,
         dt: f64,
@@ -340,9 +343,9 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                         }
                         current_sessions.insert(entity, session_id);
 
-                        let temp_dir = format!(".cache/modelica/{}_{}", entity.index(), entity.generation());
+                        let temp_dir = modelica_dir().join(format!("{}_{}", entity.index(), entity.generation()));
                         let _ = std::fs::create_dir_all(&temp_dir);
-                        let temp_path = format!("{}/model.mo", temp_dir);
+                        let temp_path = temp_dir.join("model.mo");
                         if let Err(e) = std::fs::write(&temp_path, &source) {
                             let mut r = result_ok(entity, session_id);
                             r.error = Some(format!("IO Error: {:?}", e));
@@ -425,9 +428,9 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                                                 symbols.push((name.clone(), val));
                                             }
                                         }
-                                        let temp_dir = format!(".cache/modelica/{}_{}", entity.index(), entity.generation());
+                                        let temp_dir = modelica_dir().join(format!("{}_{}", entity.index(), entity.generation()));
                                         let _ = std::fs::create_dir_all(&temp_dir);
-                                        let temp_path = format!("{}/model.mo", temp_dir);
+                                        let temp_path = temp_dir.join("model.mo");
                                         let _ = std::fs::write(&temp_path, &source);
 
                                         cached_models.insert(entity, CachedModel {
@@ -497,7 +500,7 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                             if !steppers.contains_key(&entity) {
                                 let source = std::fs::read_to_string(&model_path).unwrap_or_default();
                                 let mut compiler = ModelicaCompiler::new();
-                                match compiler.compile_str(&model_name, &source, &model_path) {
+                                match compiler.compile_str(&model_name, &source, &model_path.to_string_lossy()) {
                                     Ok(comp_res) => {
                                         let mut opts = StepperOptions::default();
                                         opts.atol = 1e-3; opts.rtol = 1e-3;
@@ -914,7 +917,7 @@ fn inline_worker_process(
 #[derive(Component, Reflect, Default)]
 #[reflect(Component)]
 pub struct ModelicaModel {
-    pub model_path: String,
+    pub model_path: PathBuf,
     pub model_name: String,
     pub current_time: f64,
     pub last_step_time: f64,
@@ -1044,7 +1047,9 @@ fn handle_modelica_responses(
 
             if result.is_new_model {
                 workbench_state.history.remove(&result.entity);
-                model.model_path = format!(".cache/modelica/{}_{}/model.mo", result.entity.index(), result.entity.generation());
+                model.model_path = modelica_dir()
+                    .join(format!("{}_{}", result.entity.index(), result.entity.generation()))
+                    .join("model.mo");
                 model.variables.clear();
                 model.paused = false;
 

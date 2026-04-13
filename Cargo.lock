@@ -5546,6 +5546,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "lunco-assets"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+]
+
+[[package]]
 name = "lunco-attributes"
 version = "0.6.0-dev"
 dependencies = [
@@ -5583,6 +5590,7 @@ dependencies = [
  "chrono",
  "futures-lite",
  "image",
+ "lunco-assets",
  "lunco-controller",
  "lunco-core",
  "lunco-materials",
@@ -5610,6 +5618,7 @@ dependencies = [
  "getrandom 0.2.17",
  "instant",
  "leafwing-input-manager",
+ "lunco-assets",
  "lunco-attributes",
  "lunco-avatar",
  "lunco-celestial",
@@ -5710,6 +5719,7 @@ dependencies = [
  "egui_plot",
  "getrandom 0.3.4",
  "log",
+ "lunco-assets",
  "regex",
  "rumoca-phase-parse",
  "rumoca-session",

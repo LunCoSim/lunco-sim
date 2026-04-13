@@ -19,6 +19,7 @@ use avian3d::prelude::PhysicsPlugins;
 
 use lunco_materials::BlueprintMaterial;
 use lunco_ui::LuncoUiPlugin;
+use lunco_assets::textures_dir;
 use bevy_egui::{EguiPrimaryContextPass, EguiContexts};
 
 mod center_spacer;
@@ -43,7 +44,7 @@ fn main() {
         .insert_resource(ClearColor(Color::BLACK))
         .register_asset_source(
             "cached_textures",
-            AssetSourceBuilder::platform_default("../../.cache/textures", None),
+            AssetSourceBuilder::platform_default(&textures_dir().to_string_lossy(), None),
         )
         .add_plugins(DefaultPlugins.build().disable::<TransformPlugin>())
         .add_plugins(big_space::prelude::BigSpaceDefaultPlugins.build().disable::<big_space::validation::BigSpaceValidationPlugin>())
