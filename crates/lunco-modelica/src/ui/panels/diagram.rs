@@ -1,7 +1,21 @@
 //! Diagram panel — renders Modelica component graphs as interactive node diagrams.
 //!
-//! Displays a `ComponentGraph` (built from Modelica AST) as an egui-snarl node graph
-//! with draggable nodes, typed ports, bezier wire connections, and click-to-navigate.
+//! ## Entity Viewer Pattern
+//!
+//! This panel watches `WorkbenchState.selected_entity` and renders a
+//! `ComponentGraph` (built from the Modelica AST) as an egui-snarl node graph.
+//! It doesn't care if it's in a workbench, 3D overlay, or mission dashboard.
+//!
+//! ## Diagram Types
+//!
+//! - **Block Diagram**: Components as nodes, `connect()` as edges
+//! - **Connection Diagram**: Like block diagram but connector instances expanded
+//! - **Package Hierarchy**: Packages as subsystem nodes with containment edges
+//!
+//! ## Layout Convention
+//!
+//! Panel ID `modelica_diagram_preview` → auto-slots to **Center** (contains "preview").
+//! Tabs with Code Editor by default. Users can drag to split vertically/horizontally.
 
 use bevy::prelude::*;
 use bevy_egui::egui;
@@ -208,7 +222,7 @@ impl SnarlViewer<ModelicaNode> for ModelicaDiagramViewer {
 pub struct DiagramPanel;
 
 impl WorkbenchPanel for DiagramPanel {
-    fn id(&self) -> &str { "modelica_diagram" }
+    fn id(&self) -> &str { "modelica_diagram_preview" }
     fn title(&self) -> String { "🔗 Diagram".into() }
     fn closable(&self) -> bool { true }
     fn default_visible(&self) -> bool { true }

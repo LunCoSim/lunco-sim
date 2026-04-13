@@ -1,9 +1,21 @@
 //! Shared simulation state for the Modelica workbench UI.
 //!
-//! This resource holds data shared across all panels:
-//! - `selected_entity`: which model entity is active
-//! - `history`: time-series data for plotted variables
-//! - `editor_buffer`: current source code
+//! ## Entity Viewer Pattern
+//!
+//! This resource is the **selection bridge** between any context (library browser,
+//! 3D viewport click, colony tree) and the Modelica editor panels.
+//!
+//! `selected_entity` is the single source of truth — panels watch it and
+//! render data for the active `ModelicaModel`. Any context can set it:
+//!
+//! ```rust,ignore
+//! // Library Browser: double-click a .mo file
+//! // 3D viewport: click a rover's solar panel
+//! // Colony tree: select a subsystem node
+//! state.selected_entity = Some(entity);
+//! ```
+//!
+//! Panels don't know where the entity came from. They just render it.
 
 use bevy::prelude::*;
 use std::collections::{HashMap, VecDeque};
@@ -39,15 +51,28 @@ pub fn update_file_load_result(mut state: ResMut<WorkbenchState>) {
     }
 }
 
+/// Shared state for the Modelica workbench UI.
+///
+/// This is the **selection bridge** — `selected_entity` connects any
+/// triggering context (library, 3D click, tree) to the editor panels.
 #[derive(Resource)]
 pub struct WorkbenchState {
+    /// Current directory path for the library browser.
     pub current_path: PathBuf,
+    /// Current Modelica source code in the editor.
     pub editor_buffer: String,
+    /// **Selection bridge**: which `ModelicaModel` entity panels are viewing.
+    /// Set by any context (library, 3D viewport, colony tree).
     pub selected_entity: Option<Entity>,
+    /// Last compilation error message, if any.
     pub compilation_error: Option<String>,
+    /// Time-series data for plotted variables, keyed by entity → variable name.
     pub history: HashMap<Entity, HashMap<String, VecDeque<[f64; 2]>>>,
+    /// Variable names the user has toggled for plotting.
     pub plotted_variables: std::collections::HashSet<String>,
+    /// Maximum history points to retain per variable.
     pub max_history: usize,
+    /// Whether plots should auto-fit their axes.
     pub plot_auto_fit: bool,
 }
 
