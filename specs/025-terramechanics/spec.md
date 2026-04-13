@@ -10,12 +10,12 @@ A lunar rover simulation without soil interaction is a toy. The engine needs a b
 
 **Phase 1 scope is deliberately Gazebo-level:** A simple parametric model using the Bekker-Wong equations. No deformable terrain, no particle simulation. Those are future enhancements.
 
-> **Note on Scope:** Detailed deformable terrain (tire tracks, digging, particle simulation) is deferred to a future phase. Contact dynamics for manipulation/docking are deferred to potential MuJoCo integration.
+> **Note on Scope:** Detailed deformable terrain (tire tracks, digging, [rigid wheel & dry granular media interaction which is granular RFT (Resistive Force Theory) and MPM (Material Point Method)](https://crablab.gatech.edu/pages/publications/pdf/Terramechanics-2019.pdf)) is deferred to a future phase. Contact dynamics for manipulation/docking are deferred to potential MuJoCo integration.
 
 ## User Stories
 
 ### Story 1: Basic Wheel-Soil Contact Model (Priority: P0)
-As a rover engineer, I want the wheels to interact with the terrain surface using a parametric friction/slip model, so that the rover behaves realistically on regolith.
+As a rover engineer, I want the wheels to interact with the terrain surface using a parametric friction/slip model, so that the rover behaves realistically on regolith. 
 
 **Acceptance Criteria:**
 - The engine implements a basic **Bekker-Wong** terramechanics model computing:
@@ -26,14 +26,14 @@ As a rover engineer, I want the wheels to interact with the terrain surface usin
 - Default parameters are provided for lunar regolith (JSC-1A simulant values).
 
 ### Story 2: Terrain Material Zones (Priority: P1)
-As a scenario designer, I want different areas of the terrain to have different soil attributes, so that driving over loose dust feels different from driving over compacted regolith near a crater rim.
+As a terrain material engineer, I want different areas of the terrain to have different soil attributes, so that driving over loose dust feels different from driving over compacted regolith near a crater rim.
 
 **Acceptance Criteria:**
 - The terrain mesh supports a `TerrainMaterial` component or texture-map-based lookup that maps surface regions to soil parameter sets.
 - The wheel contact system queries the terrain material at the contact point and applies the matching soil parameters.
 
 ### Story 3: Slope and Gravity Effects (Priority: P1)
-As a systems engineer, I want the rover to struggle on steep slopes and behave correctly in 1/6th gravity, so that mission planning accounts for realistic terrain traversability.
+As a rover engineer, I want the rover to struggle on steep slopes and behave correctly in 1/6th gravity, so that mission planning accounts for realistic terrain traversability.
 
 **Acceptance Criteria:**
 - The terramechanics model accounts for slope angle in the force calculations.
@@ -48,7 +48,7 @@ As a thermal engineer, I want wheel-soil friction heating to feed into the Model
 - This value is available to `014-modelica-simulation` for thermal coupling.
 
 ### Story 5: Deformable Terrain (Priority: P4 — Future Phase)
-As a scenario designer, I want the rover to leave visible tire tracks and for ISRU mining equipment to visibly excavate soil.
+As a terrain material engineer, I want the rover to leave visible tire tracks and for ISRU mining equipment to visibly excavate soil.
 
 **Acceptance Criteria:**
 - **Deferred.** Future implementation may modify the terrain mesh or heightmap at contact points.
