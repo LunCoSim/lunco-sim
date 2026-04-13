@@ -5,9 +5,11 @@ use bevy_egui::egui;
 use bevy_workbench::dock::WorkbenchPanel;
 
 use crate::ui::WorkbenchState;
-use crate::{ModelicaModel, ModelicaChannels, ModelicaCommand,
-            extract_model_name, extract_parameters, extract_inputs_with_defaults,
-            extract_input_names, hash_content};
+use crate::{ModelicaModel, ModelicaChannels, ModelicaCommand};
+use crate::ast_extract::{
+    extract_model_name, extract_parameters, extract_inputs_with_defaults,
+    extract_input_names, hash_content,
+};
 
 /// Code Editor panel — central viewport for Modelica source code.
 pub struct CodeEditorPanel;
