@@ -66,7 +66,6 @@ fn main() {
     {
         use bevy_workbench::WorkbenchApp;
         app.register_panel(lunco_ui::MissionControl);
-        app.register_panel(lunco_ui::TelemetryPanel);
 
         // Hide the default workbench inspector — we provide our own UI
         if let Some(mut tile_state) = app.world_mut().get_resource_mut::<bevy_workbench::dock::TileLayoutState>() {
@@ -83,6 +82,7 @@ fn main() {
     app.add_plugins(MaterialPlugin::<BlueprintMaterial>::default())
         .add_plugins(PhysicsPlugins::default())
         .add_plugins(LuncoUiPlugin)
+        .add_plugins(lunco_avatar::ui::AvatarUiPlugin)
         .add_plugins(lunco_fsw::LunCoFswPlugin)
         .add_plugins(lunco_hardware::LunCoHardwarePlugin)
         .add_plugins(lunco_mobility::LunCoMobilityPlugin)

@@ -26,6 +26,9 @@ mod trajectories;
 mod missions;
 mod embedded_assets;
 
+/// UI panels for celestial time control and body browser.
+pub mod ui;
+
 pub use clock::*;
 pub use ephemeris::*;
 pub use registry::*;

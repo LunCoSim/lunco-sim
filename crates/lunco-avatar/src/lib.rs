@@ -25,6 +25,9 @@ use lunco_core::{Vessel, Avatar, CommandMessage, CelestialBody, Spacecraft};
 use lunco_celestial::{CelestialClock, GravityBody, LocalGravityField};
 
 mod intents;
+
+/// UI panels for avatar status, camera mode, and surface coordinates.
+pub mod ui;
 pub use intents::*;
 
 // ─── Resources ───────────────────────────────────────────────────────────────

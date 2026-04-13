@@ -54,7 +54,8 @@ pub struct Spacecraft {
 pub struct Vessel;
 
 /// Marker component specifically for surface exploration rovers.
-#[derive(Component)]
+#[derive(Component, Clone, Copy, Reflect, Default)]
+#[reflect(Component, Default)]
 pub struct RoverVessel;
 
 /// Marker component indicating an entity can be selected as a root object

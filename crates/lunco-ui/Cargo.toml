@@ -8,10 +8,10 @@ description = "Thin UI adapter layer for LunCoSim on top of bevy_workbench"
 bevy = { workspace = true }
 bevy_egui = { workspace = true }
 bevy_workbench = { workspace = true }
-big_space = { workspace = true }
 lunco-core = { path = "../lunco-core" }
-lunco-avatar = { path = "../lunco-avatar" }
 lunco-celestial = { path = "../lunco-celestial" }
+lunco-avatar = { path = "../lunco-avatar" }
 smallvec = { workspace = true }
+chrono = { workspace = true }
 egui-snarl = "0.9"
 egui_plot = "0.34"

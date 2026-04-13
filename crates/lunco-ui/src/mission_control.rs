@@ -1,17 +1,14 @@
-//! Mission Control panel — WorkbenchPanel implementation.
-//!
-//! Restores the old "Mission Control" egui window as a docked panel.
-//! Provides time management, entity navigation, focus/possession/surface controls.
+//! Mission Control panel — single unified panel for time, bodies, spacecraft, rovers, and actions.
 
 use bevy::prelude::*;
 use bevy_egui::egui;
 use bevy_workbench::dock::WorkbenchPanel;
+use chrono::TimeZone;
 
-use lunco_core::{Avatar, RoverVessel, Spacecraft, architecture::CommandMessage};
-use lunco_celestial::{CelestialClock, CelestialBody};
-use lunco_avatar::OrbitCamera;
+use lunco_core::{Avatar, RoverVessel, Spacecraft, CelestialClock, architecture::CommandMessage};
+use lunco_celestial::CelestialBody;
 
-/// Mission Control panel — time, entities, and navigation controls.
+/// Mission Control panel — everything in one place.
 pub struct MissionControl;
 
 impl WorkbenchPanel for MissionControl {
@@ -29,11 +26,16 @@ impl WorkbenchPanel for MissionControl {
         ui.style_mut().visuals.widgets.inactive.weak_bg_fill = egui::Color32::from_rgba_unmultiplied(30, 30, 35, 230);
         ui.style_mut().visuals.widgets.inactive.bg_fill = egui::Color32::from_rgba_unmultiplied(30, 30, 35, 230);
 
+        let avatar_ent = {
+            let mut q = world.query_filtered::<Entity, With<Avatar>>();
+            q.iter(world).next()
+        };
+
         // ── Time Control ──
-        ui.heading("Epoch & UTC Time");
+        ui.heading("Time Control");
         if let Some(clock) = world.get_resource::<CelestialClock>() {
             ui.label(format!("JD: {:.4}", clock.epoch));
-            ui.label(format!("UTC: {}", lunco_celestial::jd_to_utc_string(clock.epoch)));
+            ui.label(format!("UTC: {}", jd_to_utc_string(clock.epoch)));
         }
         if let Some(mut clock) = world.get_resource_mut::<CelestialClock>() {
             ui.horizontal(|ui| {
@@ -51,12 +53,6 @@ impl WorkbenchPanel for MissionControl {
             });
         }
         ui.separator();
-
-        // Find avatar entity for commands
-        let avatar_ent = {
-            let mut q = world.query_filtered::<Entity, With<Avatar>>();
-            q.iter(world).next()
-        };
 
         // ── Celestial Bodies ──
         ui.collapsing("Celestial Bodies", |ui| {
@@ -151,17 +147,22 @@ impl WorkbenchPanel for MissionControl {
                 });
             }
 
-            // Return to Orbit — show when camera is in OrbitCamera mode
-            let orbit_target_body = {
-                let mut orbit_q = world.query::<&OrbitCamera>();
-                orbit_q.iter(world).next().map(|o| o.target)
+            // Return to Orbit — show when avatar is in surface mode
+            let on_surface = {
+                let mut q = world.query::<&lunco_avatar::SurfaceCamera>();
+                q.iter(world).next().is_some()
             };
-            if let Some(body_ent) = orbit_target_body {
+            if on_surface {
                 if ui.button("🏠 Return to Orbit").clicked() {
-                    world.commands().trigger(CommandMessage {
-                        id: 0, target: body_ent, name: "LEAVE_SURFACE".to_string(),
-                        args: Default::default(), source: av,
-                    });
+                    // Get the body we're on surface of from the gravity field resource
+                    let target = world.get_resource::<lunco_celestial::LocalGravityField>()
+                        .and_then(|gf| gf.body_entity);
+                    if let Some(body_ent) = target {
+                        world.commands().trigger(CommandMessage {
+                            id: 0, target: body_ent, name: "LEAVE_SURFACE".to_string(),
+                            args: Default::default(), source: av,
+                        });
+                    }
                 }
             }
         }
@@ -171,4 +172,12 @@ impl WorkbenchPanel for MissionControl {
         ui.label("WASD: move  |  QE: Up/Down");
         ui.label("Right-Click: rotate  |  SPACE: pause");
     }
+}
+
+fn jd_to_utc_string(jd: f64) -> String {
+    let j2000 = 2451545.0;
+    let days_since_j2000 = (jd - j2000) as i64;
+    let base = chrono::Utc.with_ymd_and_hms(2000, 1, 1, 12, 0, 0).unwrap()
+        + chrono::Duration::days(days_since_j2000);
+    base.format("%Y-%m-%d %H:%M:%S UTC").to_string()
 }
