@@ -39,8 +39,19 @@ use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use crossbeam_channel::{unbounded, Sender, Receiver};
 use std::thread;
-use regex::Regex;
 use lunco_assets::{msl_dir, modelica_dir};
+
+use self::ast_extract::strip_input_defaults;
+
+/// AST-based extraction functions for Modelica source code.
+///
+/// Walks the full Modelica AST (via `rumoca_phase_parse`) to extract model names,
+/// parameters, inputs, and other symbols. Replaces the legacy regex-based extraction.
+pub mod ast_extract;
+
+/// Modelica-to-diagram graph builder — converts AST into DiagramGraph.
+pub mod diagram;
+
 
 /// Simple wrapper around rumoca-session for compiling Modelica models.
 ///
@@ -1119,124 +1130,32 @@ fn handle_modelica_responses(
     }
 }
 
-/// Extract the model name from Modelica source code.
-///
-/// Finds the first `model|class|block|package <name>` declaration and returns the name.
-pub fn extract_model_name(source: &str) -> Option<String> {
-    let re = Regex::new(r"(?m)^\s*(model|class|block|package)\s+([a-zA-Z0-9_]+)").ok()?;
-    re.captures(source).map(|cap| cap[2].to_string())
-}
+// ---------------------------------------------------------------------------
+// Re-export AST extraction for public API compatibility
+// ---------------------------------------------------------------------------
+// These functions live in `ast_extract` but are re-exported here so external
+// callers (workbench binaries, UI panels) can import from the crate root.
+pub use ast_extract::{
+    extract_model_name,
+    extract_parameters,
+    extract_inputs_with_defaults,
+    extract_input_names,
+    substitute_params_in_source,
+    hash_content,
+    extract_from_source,
+    ModelicaSymbols,
+};
+// `strip_input_defaults` is already imported via `use self::ast_extract::strip_input_defaults`
+// above and is available publicly through the `pub mod ast_extract` declaration.
 
-/// Strip default values from `input Real` declarations in source code.
-///
-/// Rumoca compiles `input Real g = 9.81` as a constant (not a runtime slot).
-/// By stripping the default, the input becomes a true runtime slot that can be
-/// changed via `set_input()`. The original default value is returned so the UI
-/// can initialize the input correctly.
-pub fn strip_input_defaults(source: &str) -> (String, HashMap<String, f64>) {
-    let mut defaults = HashMap::new();
-    let re = Regex::new(
-        r"(?m)(^\s*input\s+Real\s+)([a-zA-Z0-9_]+)(\s*=\s*[-+]?[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?)",
-    ).ok().unwrap();
-
-    let modified = re.replace_all(source, |caps: &regex::Captures| {
-        let prefix = &caps[1];
-        let name = &caps[2];
-        // Extract the default value
-        let val_part = &caps[3];
-        let val_str = val_part.split('=').nth(1).unwrap_or("0.0").trim();
-        if let Ok(val) = val_str.parse::<f64>() {
-            defaults.insert(name.to_string(), val);
-        }
-        format!("{}{}", prefix, name)
-    }).to_string();
-
-    (modified, defaults)
-}
-///
-/// Only returns inputs **without** default values. Inputs with defaults like
-/// `input Real g = 9.81` are treated as parameters by the Modelica compiler
-/// (they become constants in the DAE, not runtime-settable slots).
-/// Those should be extracted via `extract_parameters` or handled separately.
-pub fn extract_input_names(source: &str) -> Vec<String> {
-    let mut inputs = Vec::new();
-    // Match inputs WITHOUT default values (no `=` after the name)
-    let re_no_default = Regex::new(r"(?m)^\s*input\s+Real\s+([a-zA-Z0-9_]+)\s*$").ok().unwrap();
-    // Also match inputs with `=` but followed by a string/quoted value (not numeric)
-    for cap in re_no_default.captures_iter(source) {
-        if let Some(name) = cap.get(1) {
-            inputs.push(name.as_str().to_string());
-        }
-    }
-    inputs
-}
-
-/// Extract input variables that have runtime-settable default values.
-///
-/// NOTE: In rumoca, inputs with default bindings (like `input Real g = 9.81`)
-/// are compiled as constants in the DAE and cannot be changed at runtime via `set_input()`.
-/// This function returns them separately so the UI can treat them as parameters (recompile on change).
-pub fn extract_inputs_with_defaults(source: &str) -> HashMap<String, f64> {
-    let mut inputs = HashMap::new();
-    let re = Regex::new(
-        r"(?m)^\s*input\s+Real\s+([a-zA-Z0-9_]+)\s*=\s*([-+]?[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?)"
-    ).ok().unwrap();
-    for cap in re.captures_iter(source) {
-        if let (Some(name), Some(val_str)) = (cap.get(1), cap.get(2)) {
-            if let Ok(val) = val_str.as_str().parse::<f64>() {
-                inputs.insert(name.as_str().to_string(), val);
-            }
-        }
-    }
-    inputs
-}
-
-/// Extract parameter values from Modelica source code.
-///
-/// Finds `parameter Real <name> = <value>` declarations only.
-/// Note: `input Real <name> = <value>` is handled separately via `extract_inputs_with_defaults`
-/// since inputs with defaults get stripped to runtime slots by the worker.
-pub fn extract_parameters(source: &str) -> HashMap<String, f64> {
-    let mut params = HashMap::new();
-    let re = Regex::new(
-        r"(?m)^\s*parameter\s+Real\s+([a-zA-Z0-9_]+)\s*=\s*([-+]?[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?)"
-    ).unwrap();
-    for cap in re.captures_iter(source) {
-        if let (Some(name), Some(val_str)) = (cap.get(1), cap.get(2)) {
-            if let Ok(val) = val_str.as_str().parse::<f64>() {
-                params.insert(name.as_str().to_string(), val);
-            }
-        }
-    }
-    params
-}
-
-/// Compute a simple hash of the source content for change detection.
-pub fn hash_content(source: &str) -> u64 {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    let mut s = DefaultHasher::new();
-    source.hash(&mut s);
-    s.finish()
-}
-
-/// Substitute parameter values into Modelica source code.
-///
-/// Replaces `parameter Real <name> = <value>` lines with the given values,
-/// enabling recompilation with different parameter values.
-pub fn substitute_params_in_source(source: &str, parameters: &HashMap<String, f64>) -> String {
-    let mut modified = source.to_string();
-    for (name, value) in parameters {
-        let pattern = format!(
-            r"(?m)(^\s*parameter\s+Real\s+{}\s*=\s*)[-+]?[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?",
-            regex::escape(name)
-        );
-        if let Ok(re) = regex::Regex::new(&pattern) {
-            modified = re.replace_all(&modified, format!("${{1}}{}", value)).to_string();
-        }
-    }
-    modified
-}
+// ---------------------------------------------------------------------------
+// Re-export diagram types for public API
+// ---------------------------------------------------------------------------
+pub use diagram::{
+    DiagramType,
+    ModelicaComponentBuilder,
+    list_class_names,
+};
 
 #[derive(Component, Reflect, Default)]
 pub struct ModelicaInput { pub variable_name: String, pub value: f64 }

@@ -5720,6 +5720,7 @@ dependencies = [
  "getrandom 0.3.4",
  "log",
  "lunco-assets",
+ "lunco-core",
  "regex",
  "rumoca-phase-parse",
  "rumoca-session",
