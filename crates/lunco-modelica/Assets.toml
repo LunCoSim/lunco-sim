@@ -1,0 +1,13 @@
+# lunco-modelica Assets
+#
+# External assets required by this crate.
+# Mirrors Cargo.toml — each crate owns its own asset dependencies.
+#
+# Usage: cargo run -p lunco-assets -- download
+
+[msl]
+name = "Modelica Standard Library"
+version = "4.1.0"
+url = "https://github.com/modelica/ModelicaStandardLibrary/archive/refs/tags/v4.1.0.tar.gz"
+dest = "msl"
+# sha256 = ""  # fill after first download

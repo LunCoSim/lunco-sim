@@ -1,7 +1,0 @@
-{
-  "name": "Moon Color Map (NASA CGI Moon Kit)",
-  "source_url": "https://svs.gsfc.nasa.gov/vis/a000000/a004700/a004720/lroc_color_16bit_srgb_4k.tif",
-  "target_resolution": [4096, 2048],
-  "license": "NASA - Public Domain / Gov Use",
-  "license_url": "https://www.nasa.gov/multimedia/guidelines/index.html"
-}
