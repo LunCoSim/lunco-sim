@@ -10,7 +10,7 @@ A lunar rover simulation without soil interaction is a toy. The engine needs a b
 
 **Phase 1 scope is deliberately Gazebo-level:** A simple parametric model using the Bekker-Wong equations. No deformable terrain, no particle simulation. Those are future enhancements.
 
-> **Note on Scope:** Detailed deformable terrain (tire tracks, digging, [rigid wheel & dry granular media interaction which is granular RFT (Resistive Force Theory) and MPM (Material Point Method)](https://crablab.gatech.edu/pages/publications/pdf/Terramechanics-2019.pdf)) is deferred to a future phase. Contact dynamics for manipulation/docking are deferred to potential MuJoCo integration.
+> **Note on Scope:** Detailed deformable terrain (tire tracks, digging, [rigid wheel & dry granular media interaction which implementing the granular RFT (Resistive Force Theory) and MPM (Material Point Method)](https://crablab.gatech.edu/pages/publications/pdf/Terramechanics-2019.pdf)) is deferred to a future phase. Contact dynamics for manipulation/docking are deferred to potential MuJoCo integration.
 
 ## User Stories
 
