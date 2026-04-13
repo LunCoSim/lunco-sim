@@ -16,8 +16,8 @@ Real-time collaborative engineering where multiple participants interact in the 
 ### 2. 🧱 Modular Digital Twins (USD)
 We leverage **Universal Scene Description (USD)** for 3D world composition. This ensures industrial-grade interoperability with Pixar USD and NVIDIA Isaac Sim, allowing you to author once and simulate everywhere.
 
-### 3. 📐 Mathematical Rigor (Modelica)
-Native integration of **Modelica** provides high-fidelity 1D physics for critical subsystems. Calculate power draw, thermal rejection, and life support levels with professional-grade mathematical certainty.
+### 3. 📐 Mathematics & Engineering Physics Rigor (Modelica)
+Native integration of **Modelica** provides high-fidelity 2D and 3D engineering physics emulation for critical subsystems. Compute the power draw, thermal rejection, and life support levels with professional-grade, rigorous and realistic mathematical models.
 
 ### 4. 🔗 Structural Truth (SysML v2)
 We use the next-generation **SysML v2** standard as our structural blueprint. Every entity and its state is defined by an engineering model, serving as the ultimate "Source of Truth" for the simulation.
