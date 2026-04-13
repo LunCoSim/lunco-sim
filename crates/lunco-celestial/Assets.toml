@@ -1,0 +1,25 @@
+# lunco-celestial Assets
+#
+# External assets required by the celestial simulation crate.
+# Run: cargo run -p lunco-assets -- download
+# Run: cargo run -p lunco-assets -- process
+
+[earth]
+name = "Earth Blue Marble (NASA Next Generation)"
+url = "https://eoimages.gsfc.nasa.gov/images/imagerecords/73000/73909/world.topo.bathy.200412.3x5400x2700.jpg"
+dest = "textures/earth_source.jpg"
+# sha256 = ""  # fill after first download
+
+[earth.process]
+target_resolution = [4096, 2048]
+output = "textures/earth.png"
+
+[moon]
+name = "Moon Color Map (NASA CGI Moon Kit)"
+url = "https://svs.gsfc.nasa.gov/vis/a000000/a004700/a004720/lroc_color_16bit_srgb_4k.tif"
+dest = "textures/moon_source.tif"
+# sha256 = ""  # fill after first download
+
+[moon.process]
+target_resolution = [4096, 2048]
+output = "textures/moon.png"

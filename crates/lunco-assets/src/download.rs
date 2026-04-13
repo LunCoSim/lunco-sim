@@ -26,7 +26,7 @@ use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use serde::Deserialize;
-use crate::cache_dir;
+use crate::{cache_dir, process::ProcessConfig};
 
 /// A single asset entry from `Assets.toml`.
 #[derive(Debug, Clone, Deserialize)]
@@ -44,6 +44,9 @@ pub struct AssetEntry {
     pub dest: String,
     /// Expected SHA-256 hex digest. Empty string means "compute and suggest".
     pub sha256: Option<String>,
+    /// Optional post-processing step (resize, convert).
+    #[serde(default)]
+    pub process: Option<ProcessConfig>,
 }
 
 /// Parsed `Assets.toml` from a crate.
@@ -260,7 +263,8 @@ pub fn list_for_crate(crate_dir: &Path) -> Result<(), std::io::Error> {
         };
 
         let version = entry.version.as_deref().unwrap_or("latest");
-        println!("  {} [{}] {} → {}", key, version, entry.name, status);
+        let has_process = if entry.process.is_some() { " [process]" } else { "" };
+        println!("  {} [{}] {} → {}{}", key, version, entry.name, status, has_process);
     }
 
     Ok(())

@@ -2,7 +2,7 @@
 name = "lunco-assets"
 version = "0.1.0"
 edition = "2021"
-description = "Unified asset management for LunCoSim — cache resolution, versioned downloads, and loading abstraction"
+description = "Unified asset management for LunCoSim — cache resolution, versioned downloads, texture processing, and loading abstraction"
 
 [dependencies]
 bevy = { workspace = true }
@@ -10,6 +10,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 toml = "0.8"
 thiserror = "2.0"
+image = { workspace = true }
 
 # Desktop-only: HTTP client for asset downloads, tarball extraction, hashing
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
@@ -18,3 +19,6 @@ sha2 = "0.10"
 chrono = "0.4"
 flate2 = "1.0"
 tar = "0.4"
+resvg = { workspace = true }
+tiny-skia = { workspace = true }
+usvg = { workspace = true }

@@ -5563,13 +5563,17 @@ dependencies = [
  "bevy",
  "chrono",
  "flate2",
+ "image",
+ "resvg",
  "serde",
  "serde_json",
  "sha2",
  "tar",
  "thiserror 2.0.18",
+ "tiny-skia",
  "toml",
  "ureq",
+ "usvg",
 ]
 
 [[package]]
@@ -5609,18 +5613,14 @@ dependencies = [
  "celestial-time",
  "chrono",
  "futures-lite",
- "image",
  "lunco-assets",
  "lunco-controller",
  "lunco-core",
  "lunco-materials",
- "resvg",
  "serde",
  "serde_json",
  "smallvec",
- "tiny-skia",
  "ureq",
- "usvg",
  "uuid",
 ]
 
