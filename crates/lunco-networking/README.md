@@ -10,8 +10,14 @@ Networking layer for LunCoSim — the transparent bridge between simulation stat
 
 - [Architecture Overview](#architecture-overview)
 - [Transport Abstraction](#transport-abstraction)
+- [Authentication & Authorization](#authentication--authorization)
+- [Two Event Types: CommandMessage vs AuthorizedCommand](#two-event-types-commandmessage-vs-authorizedcommand)
 - [ECS Replication Model](#ecs-replication-model)
 - [Authority & Possession](#authority--possession)
+- [Collaborative Editing](#collaborative-editing)
+- [Edit History & Networked Undo](#edit-history--networked-undo)
+- [Yjs for Modelica Code Collaboration](#yjs-for-modelica-code-collaboration)
+- [Dynamic USD Support](#dynamic-usd-support)
 - [Client-Side Prediction](#client-side-prediction)
 - [Compression Stack](#compression-stack)
 - [Space-Standards Compatibility](#space-standards-compatibility)
@@ -21,6 +27,8 @@ Networking layer for LunCoSim — the transparent bridge between simulation stat
 - [Existing Solutions Evaluated](#existing-solutions-evaluated)
 - [Implementation Phases](#implementation-phases)
 - [Bandwidth Budget](#bandwidth-budget)
+- [Cargo Feature Matrix](#cargo-feature-matrix)
+- [References](#references)
 
 ---
 
@@ -59,11 +67,30 @@ LunCoSim networking follows the same layered model as Godot's `MultiplayerAPI` a
 Layer 4: UIPlugins            — bevy_workbench, lunco-ui, domain ui/panels
 Layer 3: SimulationPlugins    — Rendering, Cameras, Lighting, 3D viewport, Gizmos
 Layer 2: DomainPlugins        — Celestial, Avatar, Mobility, Robotics, OBC, FSW
-Layer 2b: NetworkingPlugin    — lunco-networking (transport, replication, bridges)
+Layer 2b: NetworkingPlugin    — lunco-networking (transport, replication, auth, bridges)
 Layer 1: SimCore              — MinimalPlugins, ScheduleRunner, big_space, Avian3D
 ```
 
 Networking is a **Layer 2b** domain plugin — self-contained, headless-compatible, removable without affecting simulation correctness.
+
+### Layered Auth Model
+
+```
+┌─── Domain Systems ───────────────────────────────────────┐
+│  Observers react to CommandMessage (local)               │
+│  Observers react to AuthorizedCommand (remote, verified) │
+└───────────────────┬──────────────────────────────────────┘
+                    │
+    ┌───────────────┼────────────────┐
+    ▼               ▼                ▼
+┌─────────┐  ┌──────────┐   ┌──────────────┐
+│ Proven- │  │ Auth     │   │ Transport    │
+│ ance    │  │ Layer    │   │ Layer        │
+│ Inject  │  │          │   │ (renet2)     │
+└─────────┘  └──────────┘   └──────────────┘
+```
+
+**Key principle**: `CommandMessage` stays pure. It never carries origin. Local systems trigger it directly. Remote commands arrive as raw bytes, get auth-verified, then get wrapped in `AuthorizedCommand` at the ECS boundary.
 
 ---
 
@@ -108,6 +135,272 @@ app.add_plugins(RenetPlugin::<WebSocketTransport>::default());
 
 ---
 
+## Authentication & Authorization
+
+### The Problem
+
+The transport layer (renet2) knows **which connection** sent a message (a numeric handle). But domain systems need to know **who** sent it, **what they're allowed to do**, and this identity must be **cryptographically verifiable** — not a client-provided field that can be forged.
+
+### The Architecture
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  Transport Layer (renet2)                               │
+│  "Message came from connection handle #47"              │
+│  → Provides: connection_id (opaque handle)              │
+│  → Doesn't know: identity, roles, permissions           │
+└──────────────┬──────────────────────────────────────────┘
+               │
+               ▼
+┌─────────────────────────────────────────────────────────┐
+│  Auth Layer                                             │
+│  "Connection #47 = session 'abc123', role: Operator"    │
+│  → Maps connection_id → verified Session               │
+│  → Validates: can this session send this command?       │
+│  → Rejects: unauthorized, expired, revoked sessions     │
+└──────────────┬──────────────────────────────────────────┘
+               │
+               ▼
+┌─────────────────────────────────────────────────────────┐
+│  Provenance Injection                                   │
+│  Wraps the command with verified authorship            │
+│  → AuthorizedCommand { session_id, command }            │
+│  → This is a DIFFERENT event type from CommandMessage   │
+└──────────────┬──────────────────────────────────────────┘
+               │
+               ▼
+┌─────────────────────────────────────────────────────────┐
+│  Domain Systems (edit log, physics, FSW, etc.)          │
+│  → Listen to AuthorizedCommand for attributed actions   │
+│  → Listen to CommandMessage for local-only actions      │
+│  → Neither needs to know WHERE the command came from    │
+└─────────────────────────────────────────────────────────┘
+```
+
+### Session
+
+```rust
+/// A verified connection with identity and permissions.
+/// Created on successful authentication.
+/// Destroyed on disconnect or timeout.
+#[derive(Clone, Debug)]
+pub struct Session {
+    pub id: SessionId,              // Cryptographically random
+    pub connection_id: u64,         // Maps to renet2's client_id
+    pub identity: Identity,         // Who you are (verified)
+    pub roles: HashSet<Role>,       // What you can do
+    pub connected_at: Instant,
+    pub last_activity: Instant,
+}
+
+/// Proven identity, verified at connect time.
+pub enum Identity {
+    /// Shared secret token (simple, for local dev)
+    Token(String),
+    /// Public key (Ed25519 signature verified)
+    PublicKey([u8; 32]),
+    /// Certificate chain (for production with CA)
+    Certificate(Vec<u8>),
+}
+
+#[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Role {
+    /// Can observe state but send NO commands
+    Observer,
+    /// Can possess vessels, drive, edit scene
+    Operator,
+    /// Can edit Modelica code, run simulations
+    ModelicaEngineer,
+    /// Can configure FSW parameters, upload command sequences
+    FswEngineer,
+    /// Can manage sessions, kick users, change sim settings
+    Admin,
+}
+```
+
+### ACL (Access Control Lists)
+
+```rust
+// Role → allowed command names (wildcard "*" = all)
+let mut acl = HashMap::new();
+
+acl.insert(Role::Observer, HashSet::new()); // Nothing
+
+acl.insert(Role::Operator, HashSet::from([
+    "POSSESS", "RELEASE",
+    "DRIVE_ROVER", "BRAKE_ROVER",
+    "SPAWN_ENTITY:*",          // Wildcard for all spawn types
+    "TRANSFORM_CHANGED",
+    "PARAMETER_CHANGED",
+    "WIRE_CONNECTED",
+    "UNDO",
+]));
+
+acl.insert(Role::Admin, HashSet::from(["*"]));  // Everything
+```
+
+### The Auth Registry
+
+```rust
+#[derive(Resource)]
+pub struct AuthRegistry {
+    /// Active sessions indexed by connection_id (from transport)
+    by_connection: HashMap<u64, SessionId>,
+    /// Sessions indexed by ID
+    sessions: HashMap<SessionId, Session>,
+    /// Session secrets (HMAC keys, one per session)
+    secrets: HashMap<SessionId, HmacKey>,
+    /// Role → allowed command names
+    command_acl: HashMap<Role, HashSet<String>>,
+}
+
+impl AuthRegistry {
+    /// Called when a new connection authenticates.
+    pub fn authenticate(
+        &mut self,
+        connection_id: u64,
+        credentials: AuthCredentials,
+    ) -> Result<SessionToken, AuthError>;
+
+    /// Called for every incoming message. Returns None if unauthorized.
+    pub fn resolve(&mut self, connection_id: u64) -> Option<&Session>;
+
+    /// Can this session send a command with the given name?
+    pub fn can_send(&self, session_id: &SessionId, command_name: &str) -> bool;
+
+    /// Called on disconnect
+    pub fn disconnect(&mut self, connection_id: u64);
+}
+```
+
+---
+
+## Two Event Types: CommandMessage vs AuthorizedCommand
+
+This is the key architectural distinction. **`CommandMessage` stays clean.** It never carries origin information.
+
+```rust
+/// Local command — no provenance needed.
+/// Generated by local UI input, simulation systems, timers.
+#[derive(Event, Debug, Clone)]
+pub struct CommandMessage {
+    pub id: u64,
+    pub target: Entity,
+    pub name: String,
+    pub args: SmallVec<[f64; 4]>,
+    pub source: Entity,
+    // NO origin field. NO client_id. Pure data.
+}
+
+/// Networked command — authorship verified by auth layer.
+/// Only created by the networking plugin when injecting remote messages.
+#[derive(Event, Debug)]
+pub struct AuthorizedCommand {
+    pub session_id: SessionId,  // Verified identity
+    pub timestamp: Instant,     // Server time of receipt
+    pub command: CommandMessage,
+}
+```
+
+### How They Flow
+
+```
+LOCAL USER clicks "spawn rover"
+  → CommandMessage { name: "SPAWN_ENTITY:skid_rover", ... }
+  → commands.trigger(cmd)  ← EventReader<CommandMessage> catches it
+  → Observer runs, entity spawns
+  → No edit history attribution needed (local action)
+
+REMOTE USER clicks "spawn rover"
+  → Client serializes: NetworkCommand { command_id, target_global_id, args }
+  → renet2 sends bytes → server receives from connection_id #47
+  → Auth layer: resolve(#47) → Session { id: "abc123", roles: [Operator] }
+  → ACL check: can "abc123" send "SPAWN_ENTITY"? YES
+  → Entity resolver: target_global_id → local Entity
+  → commands.trigger(AuthorizedCommand {
+        session_id: "abc123",
+        timestamp: Instant::now(),
+        command: CommandMessage { name: "SPAWN_ENTITY:skid_rover", ... },
+    })
+  → EventReader<AuthorizedCommand> catches it
+  → Observer runs, entity spawns
+  → EditLog records: "Session abc123 spawned skid_rover" (verified attribution)
+```
+
+**Domain observers can listen to either or both:**
+
+```rust
+fn on_spawn_command(
+    mut local: EventReader<CommandMessage>,      // Local spawns
+    mut remote: EventReader<AuthorizedCommand>,  // Remote spawns (with verified authorship)
+    mut commands: Commands,
+    catalog: Res<SpawnCatalog>,
+    mut edit_log: ResMut<EditLog>,
+    lamport: ResMut<LamportClock>,
+) {
+    for cmd in local.read() {
+        // ... spawn ...
+    }
+    for auth_cmd in remote.read() {
+        // ... spawn ...
+        edit_log.push(EditEvent::Spawn {
+            author: auth_cmd.session_id,  // Verified, can't forge
+            // ...
+        });
+    }
+}
+```
+
+### Network Injection Point (Server Side)
+
+```rust
+/// Server: receives raw bytes, outputs AuthorizedCommand events.
+fn process_incoming_commands(
+    mut renet_server: ResMut<RenetServer>,
+    mut commands: Commands,
+    mut auth: ResMut<AuthRegistry>,
+    entity_resolver: Res<EntityResolver>,
+    cmd_dict: Res<CommandDictionary>,
+) {
+    for connection_id in renet_server.clients_id() {
+        let Some(session) = auth.resolve(connection_id) else {
+            renet_server.disconnect(connection_id);
+            continue;
+        };
+
+        while let Some(msg) = renet_server.receive_message(CHANNEL_CMD, connection_id) {
+            let net_cmd: NetworkCommand = bincode::deserialize(&msg).unwrap();
+            let cmd_name = cmd_dict.name_from_id(net_cmd.command_id);
+
+            // Authorization: can this session send this command?
+            if !auth.can_send(&session.id, &cmd_name) {
+                warn!("Session {} denied permission for command {}", session.id, cmd_name);
+                continue;
+            }
+
+            // Resolve global ID → local Entity
+            let target = entity_resolver.resolve(net_cmd.target_global_id).unwrap();
+
+            // Inject as AuthorizedCommand — provenance attached HERE,
+            // at the boundary between network and ECS world.
+            commands.trigger(AuthorizedCommand {
+                session_id: session.id,
+                timestamp: Instant::now(),
+                command: CommandMessage {
+                    id: generate_command_id(),
+                    target,
+                    name: cmd_name,
+                    args: net_cmd.args.iter().map(|&f| f as f64).collect(),
+                    source: Entity::PLACEHOLDER, // Not meaningful for remote commands
+                },
+            });
+        }
+    }
+}
+```
+
+---
+
 ## ECS Replication Model
 
 ### How It Works
@@ -139,7 +432,83 @@ Replicon diffs components every tick, sends only changes. The serializer convert
 | `RoverMobilityState` | Server → All | Wheel angles, speeds, brake state |
 | `CelestialBody` | Server → All | Ephemeris = shared ground truth |
 | `NetworkAuthority` | Server → All | Who controls what |
+| `GlobalEntityId` | Server → All | Stable identity for all clients |
 | Avatar camera | Local only | **Never replicated** — per-client input device |
+
+### Domain-Owned Replication (No Central Registry)
+
+Replication declarations live in each domain crate, not in a central registry. This mirrors the UI plugin pattern:
+
+```
+lunco-mobility/src/replication.rs  → LunCoMobilityReplicationPlugin
+lunco-fsw/src/replication.rs       → LunCoFswReplicationPlugin
+lunco-celestial/src/replication.rs → LunCoCelestialReplicationPlugin
+lunco-hardware/src/replication.rs  → LunCoHardwareReplicationPlugin
+```
+
+Each domain declares what crosses the network:
+
+```rust
+// lunco-mobility/src/replication.rs — declares its own physical state
+app.replicate::<RoverMobilityState>();
+app.replicate::<DifferentialDrive>();
+app.replicate::<WheelRaycast>();
+app.replicate::<Suspension>();
+
+// lunco-fsw/src/replication.rs
+app.replicate::<DigitalPort>();
+app.replicate::<PhysicalPort>();
+app.replicate::<Wire>()
+    .set_serialization(/* custom serializer: serialize scale, skip Entity fields */);
+```
+
+The binary wires it up for multiplayer:
+
+```rust
+app.add_plugins(LunCoMobilityPlugin)
+   .add_plugins(LunCoFswPlugin)
+   .add_plugins(LunCoNetworkingPlugin)              // transport + auth + EditLog
+   .add_plugins(LunCoMobilityReplicationPlugin)      // mobility types
+   .add_plugins(LunCoFswReplicationPlugin);          // fsw types
+```
+
+**Single-player:** replication plugins are not added. Zero networking footprint. `bevy_replicon` is an optional dependency, compiled out.
+
+**Dependency direction:**
+
+```
+lunco-mobility  → lunco-networking (optional, feature: networking)
+lunco-fsw       → lunco-networking (optional, feature: networking)
+lunco-networking → lunco-core (for GlobalEntityId type only)
+
+NO reverse dependencies.
+NO aggregator crate.
+```
+
+### What Replicates vs What Stays Local
+
+```
+REPLICATED (declared in domain replication submodules):
+  GlobalTransform          ← Position/orientation
+  DigitalPort              ← FSW register state
+  PhysicalPort             ← Engineering value
+  RoverMobilityState       ← Wheel angles, speeds
+  CelestialBody params     ← Orbital state
+  MotorActuator            ← Torque being applied
+  BrakeActuator            ← Brake pressure
+
+NOT REPLICATED (never registered):
+  Wire.source/target       ← Local join, rebuilt per-process
+  FlightSoftware.port_map  ← Local port map, rebuilt per-process
+  ControllerLink           ← Avatar + vessel always in same World
+  PendingWheelWiring       ← Temporary during USD loading
+  FrameBlend               ← Local camera animation
+  Selected, GizmoPrevPos   ← Local editor state
+  SpawnGhost               ← Local spawn preview
+  Avatar cameras           ← Per-client input device
+```
+
+Component fields like `Wire.source` and `FlightSoftware.port_map` **are not changed**. They use `Entity` and stay as `Entity`. When processes split, each process creates its own Wire entities and port maps — the local join is rebuilt, not serialized. Per-field serialization is handled by custom serializers in domain replication submodules.
 
 ---
 
@@ -162,49 +531,519 @@ Click rover → RequestAuthority → Server grants/denies → ControllerLink →
 ```rust
 #[derive(Component)]
 pub struct NetworkAuthority {
-    pub owner_client_id: Option<u64>,  // None = uncontrolled
-    pub pending_request: Option<u64>,   // Client ID waiting for control
+    pub owner_session: Option<SessionId>,  // Which session controls this
+    pub pending_request: Option<SessionId>, // Session waiting for control
 }
 ```
 
 ### Possession Negotiation Flow
 
 ```
-Client A                          Server                          Client B
-   │                                │                                │
-   │── RequestAuthority(rover1) ───>│                                │
-   │                                │── GrantAuthority(rover1) ───>  │ (notify: A controls rover1)
-   │<─ AuthorityGranted(rover1) ────│                                │
-   │                                │                                │
-   │ [Local control begins]        │                                │
-   │ [DRIVE_ROVER → server]        │                                │
-   │                                │── Replicate(rover1 state) ───> │
-   │                                │                                │
-   │── ReleaseAuthority(rover1) ──> │                                │
-   │                                │── AuthorityReleased(rover1) ──>│ (notify: rover1 free)
+Session A (Operator)                  Server                         Session B (Observer)
+   │                                    │                                │
+   │── RequestAuthority(rover1) ───────>│                                │
+   │                                    │── GrantAuthority(rover1) ───>  │ (notify: A controls rover1)
+   │<─ AuthorityGranted(rover1) ────────│                                │
+   │                                    │                                │
+   │ [Local control begins]            │                                │
+   │ [DRIVE_ROVER → server]            │                                │
+   │                                    │── Replicate(rover1 state) ───> │
+   │                                    │                                │
+   │── ReleaseAuthority(rover1) ──────> │                                │
+   │                                    │── AuthorityReleased(rover1) ──>│ (notify: rover1 free)
 ```
 
-### CommandMessage Over Network
+### Command Flow Over Network
 
-The existing `CommandMessage` fabric serializes directly:
+```
+Client:
+  User clicks rover → raycast → CommandMessage { "POSSESS", target: rover }
+  → Serialize: NetworkCommand { command_id: POSSESS_ID, target_global_id, args }
+  → renet2 send
+
+Server:
+  Receive from connection #47
+  → Auth: resolve(#47) → session "abc123" (Operator role)
+  → ACL: can Operator send POSSESS? YES
+  → Resolve global_id → server Entity
+  → commands.trigger(AuthorizedCommand { session_id: "abc123", command: ... })
+  → Existing on_possess_command observer runs — zero changes needed
+  → NetworkAuthority updated: owner_session = Some("abc123")
+  → Replicated to all clients via replicon
+```
+
+---
+
+## Collaborative Editing
+
+### The Model: Event Sourcing
+
+Every sandbox edit is recorded as a structured `EditEvent`. The `EditLog` is the append-only history — enough data to replay or reverse any operation.
 
 ```rust
-// Client side:
-let cmd = CommandMessage { name: "POSSESS", target: rover, source: avatar, .. };
-let net_cmd = NetworkCommand {
-    name: cmd.name.clone(),
-    target_global_id: entity_to_global_id(cmd.target),
-    source_client_id: MY_CLIENT_ID,
-    args: cmd.args.clone(),
-};
-renet_client.send_message(CHANNEL_RELIABLE, bincode::serialize(&net_cmd));
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub enum EditEvent {
+    /// Entity was spawned (rover, prop, terrain, component)
+    Spawn {
+        entity_id: GlobalEntityId,
+        op_id: u64,            // Lamport clock — defines ordering
+        author: SessionId,     // Verified by auth layer
+        timestamp_ms: u64,
+        asset_path: String,     // "vessels/rovers/skid_rover.usda"
+        transform: TransformData,
+        parent_grid: GlobalEntityId,
+    },
 
-// Server side:
-// Deserialize → resolve GlobalEntityId → Entity → commands.trigger(cmd)
-// Same observer runs. Zero changes to on_possess_command.
+    /// Entity was deleted
+    Delete {
+        entity_id: GlobalEntityId,
+        op_id: u64,
+        author: SessionId,
+        timestamp_ms: u64,
+    },
+
+    /// Transform was changed (gizmo drag)
+    TransformChanged {
+        entity_id: GlobalEntityId,
+        op_id: u64,
+        author: SessionId,
+        timestamp_ms: u64,
+        old_transform: TransformData,
+        new_transform: TransformData,
+    },
+
+    /// Component parameter was changed (inspector panel)
+    ParameterChanged {
+        entity_id: GlobalEntityId,
+        op_id: u64,
+        author: SessionId,
+        timestamp_ms: u64,
+        component: String,     // "Suspension"
+        field: String,         // "spring_constant"
+        old_value: serde_json::Value,
+        new_value: serde_json::Value,
+    },
+
+    /// Wire was connected (FSW port → physical port)
+    WireConnected {
+        wire_id: GlobalEntityId,
+        op_id: u64,
+        author: SessionId,
+        timestamp_ms: u64,
+        source_entity: GlobalEntityId,
+        target_entity: GlobalEntityId,
+        scale: f32,
+    },
+
+    /// Undo of a previous operation (networked undo)
+    Undo {
+        undone_op_id: u64,     // Which operation is being reversed
+        op_id: u64,
+        author: SessionId,
+        timestamp_ms: u64,
+    },
+
+    /// Spawn catalog was modified (new entry added at runtime)
+    CatalogEntryAdded {
+        op_id: u64,
+        author: SessionId,
+        timestamp_ms: u64,
+        entry: SpawnCatalogEntry,
+    },
+}
 ```
 
-**Key insight**: `CommandMessage` is structurally equivalent to cFS Software Bus messages. The bridge is serialization format, not architecture.
+### Recording — Zero Changes to Existing Observers
+
+The existing observers (`on_spawn_entity_command`, gizmo systems) don't change. A **recording system** watches their results:
+
+```rust
+/// Records EditEvents when entities are spawned/deleted/modified.
+/// Runs on the SERVER only — server is the source of truth for history.
+fn record_edit_events(
+    mut commands: Commands,
+    mut edit_log: ResMut<EditLog>,
+    lamport: ResMut<LamportClock>,
+    q_new: Query<(Entity, &GlobalEntityId), Added<SpawnedMarker>>,
+    spawn_meta: Query<&SpawnMetadata>,
+) {
+    for (entity, global_id) in q_new.iter() {
+        let meta = spawn_meta.get(entity).unwrap();
+        edit_log.push(EditEvent::Spawn {
+            entity_id: *global_id,
+            op_id: lamport.tick(),
+            author: meta.author_session_id,
+            timestamp_ms: unix_millis(),
+            asset_path: meta.asset_path.clone(),
+            transform: TransformData::from_entity(&entity, &commands),
+            parent_grid: meta.grid_id,
+        });
+        commands.entity(entity).insert(HistoryRecorded);
+    }
+}
+```
+
+### Lamport Clock for Ordering
+
+```rust
+#[derive(Resource)]
+pub struct LamportClock {
+    counter: u64,
+}
+
+impl LamportClock {
+    pub fn tick(&mut self) -> u64 {
+        self.counter += 1;
+        self.counter
+    }
+
+    /// Merge with incoming remote timestamp — always advance
+    pub fn receive(&mut self, remote: u64) -> u64 {
+        self.counter = self.counter.max(remote) + 1;
+        self.counter
+    }
+}
+```
+
+This guarantees that all `op_id` values are monotonically increasing across all clients, defining a total order for the edit history.
+
+### Conflict Resolution
+
+When two users edit the same entity simultaneously:
+
+```
+User A: moves Rover to position X (client clock = 10)
+User B: moves Rover to position Y (client clock = 7)
+
+Both commands arrive at server:
+Server receives A's move → assigns op_id = 11
+Server receives B's move → assigns op_id = 12
+
+Server applies in op_id order:
+  1. A's move (Rover → X)
+  2. B's move (Rover → Y)  ← final state
+
+Both clients receive both events in op_id order:
+  Client A sees: my move applied, then B's move overwrote it
+  Client B sees: A's move applied, then my move applied
+  → Both converge to position Y
+```
+
+### Replication: State, Not Topology
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  REPLICATE (sent over network)                               │
+│                                                              │
+│  DigitalPort.raw_value          ← FSW register state         │
+│  PhysicalPort.value             ← Engineering value          │
+│  Wire.scale                     ← Calibrator coefficient     │
+│  FlightSoftware.brake_active    ← Boolean state              │
+│  DifferentialDrive config       ← Steering parameters        │
+│  Suspension settings            ← Spring/damper constants    │
+│  WheelRaycast hit data          ← Ground contact info        │
+│  GlobalTransform                ← Position/orientation       │
+│  RoverVessel / Vessel markers   ← Entity type                │
+│  CelestialBody params           ← Orbital state              │
+│  MotorActuator state            ← Torque being applied       │
+│  BrakeActuator state            ← Brake pressure             │
+│                                                              │
+├─────────────────────────────────────────────────────────────┤
+│  DON'T REPLICATE (reconstructed locally from USD)            │
+│                                                              │
+│  Wire.source/target Entity      ← Same USD on both sides    │
+│  FlightSoftware.port_map        ← Same USD on both sides    │
+│  PendingWheelWiring             ← Rebuilt during USD load   │
+│  ModelicaModel state            ← Runs server-side only     │
+│  FrameBlend animation           ← Local camera effect       │
+│  Avatar camera components       ← Per-client input device   │
+│  Selected / GizmoPrevPos        ← Local editor state        │
+│  SpawnGhost                     ← Local spawn preview       │
+│  TerrainHeightmap / SurfaceMesh ← Loaded from asset         │
+│  GravityModel / Propagators     ← Loaded from asset/config  │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Edit History & Networked Undo
+
+### The Edit Log
+
+```rust
+#[derive(Resource)]
+pub struct EditLog {
+    events: Vec<EditEvent>,
+    /// Checkpoint for fast replay — full state snapshot at this point
+    last_checkpoint: Option<Checkpoint>,
+}
+
+impl EditLog {
+    /// Replay all events from start (or checkpoint) to reconstruct state.
+    /// Used when a new client joins — they get the full history.
+    pub fn replay_from_start(&self, world: &mut World) {
+        let events = self.last_checkpoint
+            .as_ref()
+            .map(|cp| &self.events[cp.event_index..])
+            .unwrap_or(&self.events);
+        for event in events {
+            self.apply_event(world, event);
+        }
+    }
+
+    /// Reverse an event (undo).
+    pub fn reverse_event(&self, world: &mut World, op_id: u64) {
+        let event = self.events.iter().find(|e| e.op_id() == op_id).unwrap();
+        match event {
+            EditEvent::Spawn { entity_id, .. } => {
+                despawn_by_global_id(world, *entity_id);
+            }
+            EditEvent::Delete { entity_id, asset_path, transform, .. } => {
+                respawn_entity(world, *entity_id, asset_path, transform);
+            }
+            EditEvent::TransformChanged { entity_id, old_transform, .. } => {
+                set_transform(world, *entity_id, *old_transform);
+            }
+            EditEvent::ParameterChanged { entity_id, component, field, old_value, .. } => {
+                set_parameter(world, *entity_id, component, field, old_value);
+            }
+            _ => {}
+        }
+    }
+}
+```
+
+### Networked Undo
+
+Current undo is local-only (Ctrl+Z → `UndoStack::pop()` → despawn). For networking:
+
+```
+User A presses Ctrl+Z
+  → Client sends UNDO command (referencing the last op_id they authored)
+  → Server receives UNDO, auth verifies session A
+  → Server reverses the operation
+  → Server broadcasts the reversal as EditEvent::Undo
+  → All clients (including User A) apply the reversal
+```
+
+```rust
+fn handle_networked_undo(
+    mut edit_log: ResMut<EditLog>,
+    lamport: ResMut<LamportClock>,
+    incoming_undos: EventReader<AuthorizedCommand>,
+) {
+    for auth_cmd in incoming_undos.read() {
+        let op_to_reverse = auth_cmd.command.args[0] as u64;
+        edit_log.reverse_event(&mut commands, op_to_reverse);
+
+        // Broadcast the reversal to all clients as a notification
+        broadcast_notification(EditEvent::Undo {
+            undone_op_id: op_to_reverse,
+            op_id: lamport.tick(),
+            author: auth_cmd.session_id,
+            timestamp_ms: unix_millis(),
+        });
+    }
+}
+```
+
+### Edit History Timeline Panel
+
+The UI can display a full audit trail:
+
+```
+┌─ Edit History ──────────────────────────────────┐
+│ 14:32:01  Alice    Spawned "Skid Rover"          │
+│ 14:32:15  Bob      Moved "Skid Rover" (gizmo)    │
+│ 14:32:42  Alice    Changed Suspension.k_damp     │
+│ 14:33:01  Bob      Spawned "Solar Panel"          │
+│ 14:33:10  Alice    Undid "Moved Skid Rover"       │
+│ 14:33:45  System   USD file reloaded: scene.usda  │
+└──────────────────────────────────────────────────┘
+```
+
+---
+
+## Yjs for Modelica Code Collaboration
+
+### Why Yjs
+
+Modelica `.mo` files are **text**. Multiple users editing the same file simultaneously requires a **CRDT** (Conflict-free Replicated Data Type) to guarantee merge consistency. Regular last-write-wins doesn't work for concurrent text edits.
+
+Yjs solves this deterministically:
+
+```
+User A types "parameter Real mass = 100;" at position 0
+User B types "// Author: Bob\n" at position 0 (same time)
+
+Yjs CRDT merges both:
+  "// Author: Bob\nparameter Real mass = 100;"
+
+No conflict. No merge dialog. Deterministic convergence.
+```
+
+### Architecture
+
+```
+┌── Modelica Workbench Client A ───────────────┐
+│  Code Editor Panel                            │
+│  ┌─────────────────────────────────────────┐ │
+│  │ parameter Real mass = 100;  ← cursor A  │ │
+│  └─────────────────────────────────────────┘ │
+│                                               │
+│  yrs::Doc ("modelica_file_123")              │
+│  └ Text: "// content"                        │
+│     └ User A types → Update binary ──────────┼──┐
+└──────────────────────────────────────────────┘  │
+                                                  │ renet2
+                                                  │ CHANNEL_YJS_UPDATE
+                                                  │
+┌── Modelica Workbench Client B ───────────────┐  │
+│  Code Editor Panel                            │  │
+│  ┌─────────────────────────────────────────┐ │  │
+│  │ // Author: Bob               ← cursor B  │ │  │
+│  └─────────────────────────────────────────┘ │  │
+│                                               │  │
+│  yrs::Doc ("modelica_file_123")              │  │
+│  └ Text: "// content"                        │  │
+│     └ User B types → Update binary ──────────┼──┼──┐
+└──────────────────────────────────────────────┘  │  │
+                                                  │  │
+                                     ┌────────────┼──┼──┐
+                                     │  Server    │  │  │
+                                     │ Broadcasts │  │  │
+                                     │ updates to │  │  │
+                                     │ all peers  ←┼──┘  │
+                                     │            ←──────┘
+                                     └────────────────────┘
+```
+
+### Implementation
+
+```rust
+use yrs::{Doc, Text, Transact, Update, UndoManager};
+
+/// Shared collaborative document for a Modelica file.
+pub struct CollaborativeModelicaDoc {
+    doc: Doc,
+    text: Text,
+    undo_manager: UndoManager,
+}
+
+impl CollaborativeModelicaDoc {
+    pub fn new(file_id: &str) -> Self {
+        let doc = Doc::with_guid(file_id);
+        let text = doc.get_or_insert_text("content");
+        let undo_manager = UndoManager::with_scope(&doc, &text);
+        Self { doc, text, undo_manager }
+    }
+
+    /// Called when update arrives from network.
+    pub fn apply_remote_update(&mut self, data: &[u8]) {
+        let update = Update::decode_v1(data).unwrap();
+        let mut txn = self.doc.transact_mut();
+        txn.apply_update(update);
+        // Editor UI updates from doc.text().get_string(&txn)
+    }
+}
+
+/// Network message for Yjs updates.
+#[derive(Serialize, Deserialize)]
+pub struct YjsUpdate {
+    pub file_id: String,   // Which Modelica file
+    pub update: Vec<u8>,   // Yjs binary update
+    pub author: SessionId,
+}
+```
+
+### Collaborative Cursors
+
+Yjs awareness protocol shows where other users' cursors are:
+
+```rust
+// In the code editor UI panel:
+fn render_collaborative_cursors(awareness: Res<YjsAwareness>, mut ui: egui::Ui) {
+    for (session_id, cursor_state) in awareness.clients() {
+        if cursor_state.file_id == current_file_id {
+            draw_cursor_indicator(cursor_state.position, session_color(session_id));
+            draw_user_label(session_name(session_id));
+        }
+    }
+}
+```
+
+---
+
+## Dynamic USD Support
+
+### File Watching → Broadcast
+
+```rust
+/// Watches USD files for changes and triggers reload.
+fn watch_usd_files(
+    mut watcher: ResMut<UsdFileWatcher>,
+    mut commands: Commands,
+    usd_entities: Query<(Entity, &UsdPrimPath, &GlobalEntityId)>,
+) {
+    for changed_path in watcher.poll() {
+        // Find all entities loaded from this USD file
+        for (entity, usd_path, global_id) in usd_entities.iter() {
+            if usd_path.path.contains(&changed_path) {
+                commands.trigger(CommandMessage {
+                    name: "RELOAD_USD_FILE".into(),
+                    target: entity,
+                    args: smallvec![],
+                    source: Entity::PLACEHOLDER,
+                });
+            }
+        }
+    }
+}
+```
+
+### RELOAD_USD Command Flow
+
+```
+Server detects USD file change:
+  1. Record "delete all entities from this file" as EditEvents
+  2. Actually delete them
+  3. Reload USD scene (new entities get new GlobalEntityIds)
+  4. Record "spawn all new entities" as EditEvents
+  5. Broadcast all EditEvents to clients
+
+Clients receive EditEvents:
+  1. Apply deletes (entities vanish)
+  2. Apply spawns (new entities appear from shared asset library)
+  → Scene converges to match server's reloaded USD
+```
+
+### Runtime Catalog Modification
+
+When a user imports a new USD file or adds a custom rover:
+
+```rust
+/// Add a new entry to the spawn catalog at runtime.
+/// This is itself an EditEvent — it gets recorded and broadcast.
+fn handle_add_catalog_entry(
+    mut catalog: ResMut<SpawnCatalog>,
+    mut edit_log: ResMut<EditLog>,
+    lamport: ResMut<LamportClock>,
+    entry: SpawnCatalogEntry,
+    author: Res<CurrentEditAuthor>,
+) {
+    catalog.add(entry.clone());
+
+    edit_log.push(EditEvent::CatalogEntryAdded {
+        op_id: lamport.tick(),
+        author: author.session_id,
+        timestamp_ms: unix_millis(),
+        entry: entry.clone(),
+    });
+
+    // Broadcast to all clients so they also add it to their catalogs
+    broadcast_catalog_entry(entry);
+}
+```
 
 ---
 
@@ -316,6 +1155,7 @@ enum CompressionPolicy {
 | Reliable commands | Threshold(32) | Commands vary in size |
 | State snapshots | Threshold(64) | Can be large for full state |
 | Ephemeris data | Always | Large bulk transfers |
+| Yjs updates | Always | Binary updates benefit from LZ4 |
 
 ---
 
@@ -334,6 +1174,7 @@ enum CompressionPolicy {
 | `GlobalEntityId` | `Parameter` name path | — |
 | `ActionStatus` | `EnumeratedArgumentType` | Enum encoding |
 | `CommandResponse` | PUS acknowledgment | PUS secondary header |
+| `Session` / `AuthRegistry` | PUS User Management | Service type 1 |
 
 **`DigitalPort` being `i16` isn't coincidence** — it's exactly the size of a typical spacecraft telemetry register.
 
@@ -454,24 +1295,6 @@ LOW interest (rest of lunar city):
   → Event-driven updates only, no entity-level detail
 ```
 
-### Dynamic Interest Updates
-
-```rust
-fn update_client_interests(
-    avatars: Query<(&GlobalTransform, &PossessedEntity), With<Avatar>>,
-    mut interests: Query<&mut NetworkInterest>,
-) {
-    for (avatar_pos, possessed) in avatars.iter() {
-        // HIGH: possessed entity
-        if let Some(entity) = possessed.0 {
-            interest.detail_level.insert(client_id, InterestDetail::Full);
-        }
-        // MEDIUM: everything within 2km radius
-        // LOW: everything else → aggregate stats only
-    }
-}
-```
-
 ### Bandwidth Budget After Interest Management
 
 ```
@@ -493,38 +1316,140 @@ Without interest management: ~500 KB/s (33x more)
 
 ### The Problem
 
-Bevy `Entity` IDs are process-local. Entity `5v3` on client means nothing on server.
+Bevy `Entity` IDs are process-local. Entity `5v3` on client means nothing on server. `Entity` is an index into this specific World's entity storage — it has no meaning outside this process, like a file descriptor.
 
-### Solution: GlobalEntityId
+### Solution: GlobalEntityId as a Component
+
+`GlobalEntityId` is a **component** attached to every entity at spawn time. Domain code assigns it once and never interacts with it again. The networking layer reads it from entities at boundary crossings.
 
 ```rust
-/// Stable identifier valid across client/server boundary
-#[derive(Component, Clone, Copy)]
-pub struct GlobalEntityId(pub u64);  // ULID or snowflake ID
+// Defined in lunco-core — just a type, like DigitalPort
+#[derive(Component, Clone, Copy, PartialEq, Eq, Hash, Reflect, Default)]
+#[reflect(Component, Default)]
+pub struct GlobalEntityId(pub u64);  // ULID-derived
+```
 
-/// Per-client registry
+### The Key Design Rule
+
+**GlobalEntityId is a component, never a field type.** Domain code uses `Entity` everywhere — in queries, in component fields (`Wire.source`, `ControllerLink.vessel_entity`, `FlightSoftware.port_map`), in hierarchy (`ChildOf`). The networking layer reads `GlobalEntityId` from entities when crossing boundaries (serialization, command resolution, edit logging).
+
+```
+Domain code (always uses Entity):
+  query.iter() → Entity → access components
+  Wire { source: Entity, target: Entity }
+  CommandMessage { target: Entity }
+
+Networking layer (translates at boundary):
+  Send:    Entity(2v0) → read GlobalEntityId component → send u64
+  Receive: network bytes → resolve GlobalEntityId → Entity(4v0)
+
+Domain code (always uses Entity):
+  CommandMessage { target: Entity(4v0) } → observer runs
+```
+
+### Why Not GlobalEntityId Everywhere
+
+Using `GlobalEntityId` in component fields would add a HashMap lookup to every system iteration:
+
+```rust
+// BAD: every system needs Entity to access components
+fn some_system(
+    query: Query<(Entity, &GlobalEntityId, &SomeComponent)>,
+    resolver: Res<EntityResolver>,
+) {
+    for (local_entity, global_id, component) in query.iter() {
+        // Can't avoid Entity — Bevy requires it for component access.
+        // GlobalEntityId is just extra baggage here.
+    }
+}
+
+// GOOD: networking layer reads GlobalEntityId at boundary
+fn replicate_state(
+    q_changed: Query<(Entity, &GlobalEntityId, &SomeComponent), Changed<SomeComponent>>,
+) {
+    for (entity, global_id, component) in q_changed.iter() {
+        // Only the networking layer reads GlobalEntityId.
+        // Domain systems never see it.
+    }
+}
+```
+
+### Assignment: Automatic via Observer
+
+Domain code never manually assigns `GlobalEntityId`. The networking layer's observer catches entities that become replicated:
+
+```rust
+// In lunco-networking: fires when bevy_replicon marks an entity as replicated
+app.add_observer(|trigger: On<Add<Replicated>>, mut commands: Commands,
+                 q_has_id: Query<(), With<GlobalEntityId>>| {
+    let entity = trigger.target();
+    if q_has_id.get(entity).is_err() {
+        commands.entity(entity)
+            .insert(GlobalEntityId(ulid::Ulid::new().as_u128() as u64));
+    }
+});
+```
+
+`Replicated` is a marker component added by bevy_replicon when an entity has at least one registered replication component. This observer fires automatically — zero changes to spawn sites.
+
+| Creation Path | Gets GlobalEntityId? | How |
+|---|---|---|
+| USD-loaded rover | ✅ Yes | Has `RoverMobilityState` → registered → observer fires |
+| DigitalPort spawned by FSW | ✅ Yes | Has `DigitalPort` → registered → observer fires |
+| User-spawned rover (sandbox) | ✅ Yes | Has `RoverVessel` → registered → observer fires |
+| Avatar / camera | ❌ No | No replicated components → observer never fires |
+| SpawnGhost | ❌ No | No replicated components → observer never fires |
+| UI panels | ❌ No | No replicated components → observer never fires |
+
+### The EntityRegistry
+
+Each process maintains a bidirectional map, auto-populated from `Added<GlobalEntityId>`:
+
+```rust
+#[derive(Resource)]
 pub struct EntityRegistry {
     local_to_global: HashMap<Entity, GlobalEntityId>,
     global_to_local: HashMap<GlobalEntityId, Entity>,
 }
+
+fn sync_entity_registry(
+    mut registry: ResMut<EntityRegistry>,
+    new_entities: Query<(Entity, &GlobalEntityId), Added<GlobalEntityId>>,
+    removed: RemovedComponents<GlobalEntityId>,
+) {
+    for (entity, id) in new_entities.iter() {
+        registry.local_to_global.insert(entity, *id);
+        registry.global_to_local.insert(*id, entity);
+    }
+    // Clean up despawned entries...
+}
 ```
 
-### Lifecycle
+### Cross-Process Resolution
 
 ```
-Server spawns rover:
-  → Assign GlobalEntityId(ulid::new())
-  → Replicate GlobalEntityId to all clients
-  → Clients create local entity, store mapping
+Server's World:
+  Entity(2v0) + GlobalEntityId(0xDEADBEEF0001) = /SkidRover
+  Entity(3v0) + GlobalEntityId(0xDEADBEEF0002) = /SkidRover/Wheel_FL
 
-Client sends command:
-  → Resolves local Entity → GlobalEntityId
-  → Sends GlobalEntityId over network
+Client's World (same scene, different process):
+  Entity(4v0) + GlobalEntityId(0xDEADBEEF0001) = /SkidRover     ← SAME GlobalEntityId
+  Entity(5v0) + GlobalEntityId(0xDEADBEEF0002) = /SkidRover/Wheel_FL
 
-Server receives command:
-  → Resolves GlobalEntityId → server Entity
-  → Triggers CommandMessage with local Entity
+Command resolution:
+  Client: Entity(4v0) → GlobalEntityId(0xDEADBEEF0001) → network
+  Server: network → GlobalEntityId(0xDEADBEEF0001) → Entity(2v0) → trigger observer
 ```
+
+### Why ULID-Derived u64
+
+| Option | Size | Ordering | Collision Risk |
+|---|---|---|---|
+| UUID (u128) | 16 bytes | No | Near-zero |
+| String | 36+ bytes | Lexicographic | None |
+| ULID subset (u64) | 8 bytes | **Monotonic** | Near-zero |
+
+ULID gives time-ordered IDs (timestamp in high bits) — useful for the EditLog, since op_id ordering matches entity creation order. Two entities spawned at the same millisecond get different random portions.
 
 ---
 
@@ -550,7 +1475,7 @@ fn apply_drive_commands(
 }
 ```
 
-That's it. Replication, compression, CCSDS export, YAMCS bridge — all handled by `lunco-networking` plugin registered at startup.
+That's it. Replication, compression, CCSDS export, YAMCS bridge, auth, edit history — all handled by `lunco-networking` plugin registered at startup.
 
 ---
 
@@ -606,30 +1531,38 @@ LunCoSim maps to this pattern:
 
 ## Implementation Phases
 
-### Phase 1: Foundation (Transport + Replication)
+### Phase 1: Foundation (Transport + Replication + Auth)
 
-- [ ] **1.1** Add dependencies: `bevy_renet2`, `bevy_replicon`, `bevy_replicon_renet2`, `ulid`, `bincode`, `serde`, `lz4_flex`
-- [ ] **1.2** Implement `GlobalEntityId` component + `EntityRegistry` resource
-- [ ] **1.3** Implement transport abstraction with feature-gated selection (UDP/WebSocket)
-- [ ] **1.4** Integrate `bevy_replicon` with renet2 backend
-- [ ] **1.5** Register baseline component serializers (`GlobalTransform`, `DigitalPort`, `PhysicalPort`)
+- [ ] **1.1** Add `bevy_replicon` as optional dependency to each domain crate (`[features] networking = ["dep:bevy_replicon"]`)
+- [ ] **1.2** Add `replication.rs` submodules to domain crates (`lunco-mobility`, `lunco-fsw`, `lunco-celestial`, `lunco-hardware`)
+- [ ] **1.3** Implement `Session`, `SessionId`, `Identity`, `Role`, `AuthRegistry` in lunco-networking
+- [ ] **1.4** Implement `AuthorizedCommand` event type
+- [ ] **1.5** Implement transport abstraction with feature-gated selection (UDP/WebSocket)
+- [ ] **1.6** Integrate `bevy_replicon` with renet2 backend in lunco-networking
+- [ ] **1.7** Observer: `On<Add<Replicated>>` → auto-assign `GlobalEntityId` to replicated entities
+- [ ] **1.8** Implement `EntityRegistry` (local ↔ global ID mapping)
+- [ ] **1.9** Implement per-field serializers in domain replication submodules (e.g., Wire scale-only serialization)
+- [ ] **1.10** Implement server-side command injection (auth check → `AuthorizedCommand`)
+- [ ] **1.11** Implement `CommandDictionary` (string → u8 encoding)
+- [ ] **1.12** Wire replication plugins in multiplayer binary configuration
 
-### Phase 2: Authority & Commands
+### Phase 2: Collaborative Editing
 
-- [ ] **2.1** Implement `NetworkAuthority` component + possession negotiation systems
-- [ ] **2.2** Implement `NetworkCommand` serialization (CommandMessage over wire)
-- [ ] **2.3** Implement command dictionary (string → u8 encoding)
-- [ ] **2.4** Implement server-side command injection (deserialize → `commands.trigger()`)
-- [ ] **2.5** Implement client disconnect → release all authority
+- [ ] **2.1** Implement `EditEvent` enum with all variants
+- [ ] **2.2** Implement `EditLog` resource with append-only history
+- [ ] **2.3** Implement `LamportClock` resource for total ordering
+- [ ] **2.4** Implement recording system (reads `Added<GlobalEntityId>` → creates EditEvent)
+- [ ] **2.5** Implement gizmo edit recording (TransformChanged events)
+- [ ] **2.6** Implement parameter change recording (ParameterChanged events)
+- [ ] **2.7** Implement EditLog replay (for new client join)
+- [ ] **2.8** Implement EditLog checkpoint (periodic state snapshot)
 
-### Phase 3: Compression
+### Phase 3: Networked Undo
 
-- [ ] **3.1** Implement position quantization (`DVec3` → `u16×3` relative to grid origin)
-- [ ] **3.2** Implement quaternion compression (smallest-three, 8 bytes)
-- [ ] **3.3** Implement delta encoding tracker (only send changed fields)
-- [ ] **3.4** Implement dead reckoning for constant-velocity entities
-- [ ] **3.5** Implement LZ4 per-channel compression with threshold policy
-- [ ] **3.6** Implement boolean bit-packing and VarInt encoding
+- [ ] **3.1** Implement `EditLog::reverse_event()` for all EditEvent variants
+- [ ] **3.2** Implement UNDO command handling via AuthorizedCommand
+- [ ] **3.3** Implement undo broadcast as StateNotification to all clients
+- [ ] **3.4** Implement edit history timeline panel (UI plugin)
 
 ### Phase 4: Client-Side Prediction
 
@@ -639,37 +1572,65 @@ LunCoSim maps to this pattern:
 - [ ] **4.4** Implement reconciliation system (snap + replay pending inputs)
 - [ ] **4.5** Implement input sequence tracking and confirmation
 
-### Phase 5: Interest Management
+### Phase 5: Compression
 
-- [ ] **5.1** Implement `NetworkInterest` component + `InterestDetail` enum
-- [ ] **5.2** Implement spatial interest system (distance-based subscription)
-- [ ] **5.3** Implement possession-based interest (auto-HIGH for controlled entity)
-- [ ] **5.4** Implement aggregate stats system for LOW-interest entities
-- [ ] **5.5** Implement interest-based replication filter
+- [ ] **5.1** Implement position quantization (`DVec3` → `u16×3` relative to grid origin)
+- [ ] **5.2** Implement quaternion compression (smallest-three, 8 bytes)
+- [ ] **5.3** Implement delta encoding tracker (only send changed fields)
+- [ ] **5.4** Implement dead reckoning for constant-velocity entities
+- [ ] **5.5** Implement LZ4 per-channel compression with threshold policy
+- [ ] **5.6** Implement boolean bit-packing and VarInt encoding
 
-### Phase 6: Space Standards Bridge
+### Phase 6: Interest Management
 
-- [ ] **6.1** Implement CCSDS primary header encoder/decoder
-- [ ] **6.2** Implement PUS secondary header encoder/decoder
-- [ ] **6.3** Implement CCSDS time code (7-byte format)
-- [ ] **6.4** Implement XTCE auto-generator from Bevy `Reflect` registry
-- [ ] **6.5** Implement YAMCS WebSocket bridge
-- [ ] **6.6** Implement CCSDS packet builder from `DigitalPort`/`PhysicalPort`
+- [ ] **6.1** Implement `NetworkInterest` component + `InterestDetail` enum
+- [ ] **6.2** Implement spatial interest system (distance-based subscription)
+- [ ] **6.3** Implement possession-based interest (auto-HIGH for controlled entity)
+- [ ] **6.4** Implement aggregate stats system for LOW-interest entities
+- [ ] **6.5** Implement interest-based replication filter
 
-### Phase 7: ROS/DDS Bridge (Hardware-in-Loop)
+### Phase 7: Yjs for Modelica Collaboration
 
-- [ ] **7.1** Implement DDS topic bridge (DDS topics ↔ CommandMessage)
-- [ ] **7.2** Implement cFS Software Bus UDP bridge
-- [ ] **7.3** Implement F Prime Protobuf bridge
-- [ ] **7.4** Implement SpaceROS node integration
+- [ ] **7.1** Add `yrs` dependency to `lunco-modelica`
+- [ ] **7.2** Implement `CollaborativeModelicaDoc` wrapper
+- [ ] **7.3** Implement Yjs update channel (renet2 CHANNEL_YJS_UPDATE)
+- [ ] **7.4** Implement sync systems (local edit → network, network → local doc)
+- [ ] **7.5** Implement Yjs awareness protocol (collaborative cursors)
+- [ ] **7.6** Update code editor panel to use Yjs-backed document
 
-### Phase 8: UI Plugin
+### Phase 8: Dynamic USD Support
 
-- [ ] **8.1** Implement `lunco-networking-ui` (Layer 4)
-- [ ] **8.2** Connection status panel (connect/disconnect, latency, packet loss)
-- [ ] **8.3** Authority panel (request/release vessel control)
-- [ ] **8.4** Peer list viewer (who's connected, what they possess)
-- [ ] **8.5** Interest debug visualizer (show what you're subscribed to)
+- [ ] **8.1** Implement USD file watcher (`notify` crate)
+- [ ] **8.2** Implement `RELOAD_USD_FILE` command handler
+- [ ] **8.3** Implement USD reload → record deletes + spawns as EditEvents
+- [ ] **8.4** Implement runtime catalog modification + broadcast
+- [ ] **8.5** Implement catalog entry sync to all clients
+
+### Phase 9: Space Standards Bridge
+
+- [ ] **9.1** Implement CCSDS primary header encoder/decoder
+- [ ] **9.2** Implement PUS secondary header encoder/decoder
+- [ ] **9.3** Implement CCSDS time code (7-byte format)
+- [ ] **9.4** Implement XTCE auto-generator from Bevy `Reflect` registry
+- [ ] **9.5** Implement YAMCS WebSocket bridge
+- [ ] **9.6** Implement CCSDS packet builder from `DigitalPort`/`PhysicalPort`
+
+### Phase 10: ROS/DDS Bridge (Hardware-in-Loop)
+
+- [ ] **10.1** Implement DDS topic bridge (DDS topics ↔ CommandMessage)
+- [ ] **10.2** Implement cFS Software Bus UDP bridge
+- [ ] **10.3** Implement F Prime Protobuf bridge
+- [ ] **10.4** Implement SpaceROS node integration
+
+### Phase 11: UI Plugin
+
+- [ ] **11.1** Implement `lunco-networking-ui` (Layer 4)
+- [ ] **11.2** Connection status panel (connect/disconnect, latency, packet loss)
+- [ ] **11.3** Authority panel (request/release vessel control)
+- [ ] **11.4** Peer list viewer (who's connected, what they possess)
+- [ ] **11.5** Interest debug visualizer (show what you're subscribed to)
+- [ ] **11.6** Edit history timeline panel
+- [ ] **11.7** Collaboration panel (who's editing what, collaborative cursors)
 
 ---
 
@@ -734,6 +1695,10 @@ Prediction           ✅                ✅                ❌ (server doesn't p
 CCSDS export         ✅                ❌ (no raw sockets)✅
 YAMCS bridge         ✅                ❌                ✅
 DDS bridge           ✅                ❌                ✅
+Edit history         ✅                ✅                ✅ (server-side)
+Yjs collaboration    ✅                ✅                ✅
+USD file watch       ✅                ❌ (no fs access) ✅
+────────────────────────────────────────────────────────────────────────
 ```
 
 ---
@@ -743,6 +1708,7 @@ DDS bridge           ✅                ❌                ✅
 - [renet2](https://github.com/UkoeHB/renet2) — Transport abstraction (UDP, WS, WT, Steam)
 - [bevy_replicon](https://github.com/simgine/bevy_replicon) — ECS replication for Bevy
 - [bevy_replicon_renet2](https://github.com/simgine/bevy_replicon_renet) — Renet2 backend for replicon
+- [yrs (Yjs Rust)](https://github.com/y-crdt/y-crdt) — CRDT-based collaborative editing
 - [CCSDS 133.0-B-2 Space Packet Protocol](https://ccsds.org/Pubs/133x0b2e2.pdf) — 6-byte primary header standard
 - [CCSDS 660.0-B-2 XTCE](https://ccsds.org/Pubs/660x0b2.pdf) — XML Telemetric and Command Exchange
 - [YAMCS](https://docs.yamcs.org/) — Mission control system with WebSocket API
