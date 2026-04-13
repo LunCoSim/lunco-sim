@@ -20,7 +20,8 @@ members = [
     "crates/lunco-usd",
     "crates/lunco-sandbox-edit",
     "crates/lunco-ui",
-    "crates/lunco-assets"
+    "crates/lunco-assets",
+    "crates/lunco-networking"
 ]
 resolver = "2"
 

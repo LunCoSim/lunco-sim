@@ -1,0 +1,23 @@
+[package]
+name = "lunco-networking"
+version = "0.1.0-dev"
+edition = "2021"
+description = "Networking layer for LunCoSim — transport abstraction, ECS replication, and space-standards compatibility"
+
+[dependencies]
+bevy = { workspace = true }
+lunco-core = { path = "../lunco-core" }
+# bevy_renet2 = { version = "..." }       # Transport backend (feature-gated)
+# bevy_replicon = { version = "..." }     # ECS entity/component replication
+# lz4_flex = { version = "..." }          # Optional general-purpose compression
+# ulid = { version = "..." }              # Global stable entity identifiers
+# bincode = { version = "..." }           # Serialization
+# serde = { version = "1", features = ["derive"] }
+
+[features]
+default = []
+# Transport selection (compile-time, Godot-like swapping)
+# transport-udp = ["bevy_renet2/netcode"]         # Desktop: native UDP
+# transport-ws = ["bevy_renet2/ws_client"]        # Browser: WebSockets
+# transport-wt = ["bevy_renet2/webtransport"]     # Future: WebTransport
+# transport-server = ["bevy_renet2/netcode"]      # Dedicated server mode
