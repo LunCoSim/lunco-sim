@@ -5710,6 +5710,7 @@ dependencies = [
  "egui_plot",
  "getrandom 0.3.4",
  "log",
+ "lunco-core",
  "regex",
  "rumoca-phase-parse",
  "rumoca-session",

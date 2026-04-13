@@ -9,6 +9,8 @@ pub mod mocks;
 pub mod telemetry;
 pub mod coords;
 pub mod log;
+/// Unified diagram data model — pure Rust, no Bevy dependency.
+pub mod diagram;
 
 pub use architecture::*;
 pub use mocks::*;

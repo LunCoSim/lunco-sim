@@ -46,6 +46,9 @@ use self::ast_extract::strip_input_defaults;
 /// parameters, inputs, and other symbols. Replaces the legacy regex-based extraction.
 pub mod ast_extract;
 
+/// Modelica-to-diagram graph builder — converts AST into DiagramGraph.
+pub mod diagram;
+
 /// Simple wrapper around rumoca-session for compiling Modelica models.
 ///
 /// Replaces the `rumoca::Compiler` API with a session-based approach.
@@ -1137,6 +1140,15 @@ pub use ast_extract::{
 };
 // `strip_input_defaults` is already imported via `use self::ast_extract::strip_input_defaults`
 // above and is available publicly through the `pub mod ast_extract` declaration.
+
+// ---------------------------------------------------------------------------
+// Re-export diagram types for public API
+// ---------------------------------------------------------------------------
+pub use diagram::{
+    DiagramType,
+    ModelicaComponentBuilder,
+    list_class_names,
+};
 
 #[derive(Component, Reflect, Default)]
 pub struct ModelicaInput { pub variable_name: String, pub value: f64 }
