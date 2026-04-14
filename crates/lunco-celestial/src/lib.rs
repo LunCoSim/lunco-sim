@@ -21,10 +21,15 @@ mod systems;
 mod coords;
 mod gravity;
 mod soi;
-mod terrain;
 mod trajectories;
 mod missions;
 mod embedded_assets;
+
+/// Re-export terrain types from lunco-terrain for backward compatibility.
+pub use lunco_terrain::*;
+
+// Re-export TerrainTileConfig explicitly since it's used by celestial code
+pub use lunco_terrain::TerrainTileConfig;
 
 /// UI panels for celestial time control and body browser.
 pub mod ui;
@@ -38,7 +43,6 @@ pub use big_space_setup::*;
 pub use systems::*;
 pub use gravity::*;
 pub use soi::*;
-pub use terrain::*;
 pub use trajectories::*;
 pub use missions::*;
 pub use embedded_assets::*;
@@ -66,8 +70,6 @@ impl Plugin for CelestialPlugin {
         app.add_plugins(embedded_assets::EmbeddedAssetsPlugin);
 
         // Register blueprint shader only on desktop (wasm32 handled by EmbeddedAssetsPlugin).
-        // MaterialPlugin is added separately by each binary — this avoids requiring full
-        // render resources in headless/integration tests.
         #[cfg(not(target_arch = "wasm32"))]
         {
             load_internal_asset!(
@@ -79,14 +81,13 @@ impl Plugin for CelestialPlugin {
             app.add_plugins(trajectories::TrajectoryShaderPlugin);
         }
 
+        // Terrain is now in lunco-terrain crate — register it here
+        app.add_plugins(lunco_terrain::TerrainPlugin);
+
         app.insert_resource(get_default_celestial_clock());
         app.init_resource::<TimeWarpState>();
-        app.init_resource::<TerrainTileConfig>();
         app.init_resource::<TerrainMapRegistry>();
         app.insert_resource(Gravity::surface());
-        app.insert_resource(terrain::TerrainSpawnCooldown::default());
-        app.register_type::<TerrainTileConfig>();
-        app.register_type::<TileCoord>();
         app.register_type::<TrajectoryView>();
         app.register_type::<TrajectoryFrame>();
         app.register_type::<TrajectoryPath>();
@@ -107,10 +108,9 @@ impl Plugin for CelestialPlugin {
         app.add_plugins(GravityPlugin);
 
         app.add_systems(Startup, big_space_setup::setup_big_space_hierarchy);
-        app.add_systems(PostStartup, setup_terrain_overrides);
 
         // --- LEAD-PHASE SYNCHRONIZATION ---
-        // Core celestial updates in PreUpdatefor Coordinate Stability
+        // Core celestial updates in PreUpdate for Coordinate Stability
         // for Gizmos (Update) and Physics (FixedUpdate).
         // Gravity is handled by GravityPlugin (see above).
         //
@@ -132,10 +132,8 @@ impl Plugin for CelestialPlugin {
             celestial_visuals_system,
         ).chain());
 
-        app.add_systems(Update, (
-            terrain::terrain_spawn_system.run_if(resource_exists::<terrain::TerrainTileConfig>),
-            terrain::finalize_terrain_tiles,
-        ).chain());
+        // Terrain spawning is now handled by lunco-terrain plugin
+        // Systems like terrain_spawn_system run in that crate
 
         // Sun light runs in PostUpdate AFTER big_space propagates GlobalTransform,
         // so the camera world position is correct for light direction.

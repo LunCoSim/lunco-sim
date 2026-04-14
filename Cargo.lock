@@ -5598,6 +5598,7 @@ dependencies = [
  "lunco-controller",
  "lunco-core",
  "lunco-mobility",
+ "lunco-terrain",
  "smallvec",
 ]
 
@@ -5622,6 +5623,7 @@ dependencies = [
  "lunco-controller",
  "lunco-core",
  "lunco-materials",
+ "lunco-terrain",
  "serde",
  "serde_json",
  "smallvec",
@@ -5833,6 +5835,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "lunco-terrain"
+version = "0.1.0-dev"
+dependencies = [
+ "avian3d",
+ "bevy",
+ "bevy_mesh",
+ "bevy_render",
+ "big_space",
+ "lunco-core",
+]
+
+[[package]]
 name = "lunco-ui"
 version = "0.1.0"
 dependencies = [
@@ -5845,6 +5859,7 @@ dependencies = [
  "lunco-avatar",
  "lunco-celestial",
  "lunco-core",
+ "lunco-terrain",
  "smallvec",
 ]
 

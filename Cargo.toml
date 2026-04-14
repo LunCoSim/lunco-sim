@@ -22,7 +22,8 @@ members = [
     "crates/lunco-ui",
     "crates/lunco-assets",
     "crates/lunco-networking",
-    "crates/lunco-command-macro"
+    "crates/lunco-command-macro",
+    "crates/lunco-terrain"
 ]
 resolver = "2"
 
@@ -59,3 +60,4 @@ openusd = "0.2.0"
 instant = "0.1"
 # getrandom 0.2 with js feature for wasm32 support (needed by rand, uuid, etc.)
 getrandom_02 = { package = "getrandom", version = "0.2", features = ["js"] }
+lunco-terrain = { path = "crates/lunco-terrain" }

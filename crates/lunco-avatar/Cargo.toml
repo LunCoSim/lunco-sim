@@ -12,6 +12,7 @@ big_space = { workspace = true }
 leafwing-input-manager = { workspace = true }
 lunco-controller = { path = "../lunco-controller" }
 lunco-celestial = { path = "../lunco-celestial" }
+lunco-terrain = { path = "../lunco-terrain" }
 lunco-core = { path = "../lunco-core" }
 lunco-mobility = { path = "../lunco-mobility" }
 smallvec = { workspace = true }

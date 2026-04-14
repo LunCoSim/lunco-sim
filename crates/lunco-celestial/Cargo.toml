@@ -25,6 +25,7 @@ serde_json = "1.0"
 smallvec = { workspace = true }
 uuid = { version = "1", features = ["v4"] }
 lunco-materials = { path = "../lunco-materials" }
+lunco-terrain = { path = "../lunco-terrain" }
 
 # ureq is desktop-only: HTTP client with TLS for downloading ephemeris data
 # On wasm32, use browser fetch() via web-sys instead

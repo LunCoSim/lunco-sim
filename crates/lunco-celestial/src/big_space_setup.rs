@@ -215,14 +215,14 @@ pub fn setup_big_space_hierarchy(
     for face in 0..6 {
         for i in 0..2 {
             for j in 0..2 {
-                let (u, v) = crate::terrain::tile_center_uv(face, 1, i, j);
-                let tile_center_dir = crate::terrain::cube_to_sphere(face, u, v);
+                let (u, v) = lunco_terrain::quad_sphere::tile_center_uv(face, 1, i, j);
+                let tile_center_dir = lunco_terrain::quad_sphere::cube_to_sphere(face, u, v);
                 let tile_body_local = tile_center_dir * 6371.0e3;
                 let (tile_cell, tile_local_pos) = earth_grid_ref.translation_to_grid(tile_body_local);
 
                 commands.spawn((
-                    Mesh3d(meshes.add(crate::terrain::create_quadsphere_tile_mesh(
-                        earth_body, face, 1, i, j, 6371.0e3, 32, None, DVec3::ZERO
+                    Mesh3d(meshes.add(lunco_terrain::create_quadsphere_tile_mesh(
+                        earth_body, face, 1, i, j, 6371.0e3, 32, DVec3::ZERO
                     ))),
                     MeshMaterial3d(blueprint_materials.add(BlueprintMaterial {
                         base: StandardMaterial {
@@ -311,14 +311,14 @@ pub fn setup_big_space_hierarchy(
     for face in 0..6 {
         for i in 0..2 {
             for j in 0..2 {
-                let (u, v) = crate::terrain::tile_center_uv(face, 1, i, j);
-                let tile_center_dir = crate::terrain::cube_to_sphere(face, u, v);
+                let (u, v) = lunco_terrain::quad_sphere::tile_center_uv(face, 1, i, j);
+                let tile_center_dir = lunco_terrain::quad_sphere::cube_to_sphere(face, u, v);
                 let tile_body_local = tile_center_dir * 1737.0e3;
                 let (tile_cell, tile_local_pos) = moon_grid_ref.translation_to_grid(tile_body_local);
 
                 commands.spawn((
-                    Mesh3d(meshes.add(crate::terrain::create_quadsphere_tile_mesh(
-                        moon_body, face, 1, i, j, 1737.0e3, 32, None, DVec3::ZERO
+                    Mesh3d(meshes.add(lunco_terrain::create_quadsphere_tile_mesh(
+                        moon_body, face, 1, i, j, 1737.0e3, 32, DVec3::ZERO
                     ))),
                     MeshMaterial3d(blueprint_materials.add(BlueprintMaterial {
                         base: StandardMaterial {

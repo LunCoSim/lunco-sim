@@ -1,0 +1,13 @@
+[package]
+name = "lunco-terrain"
+version = "0.1.0-dev"
+edition = "2021"
+description = "Terrain generation, QuadSphere tiling, and collision for LunCoSim"
+
+[dependencies]
+bevy = { workspace = true, features = ["default"] }
+bevy_mesh = "0.18.1"
+bevy_render = "0.18.1"
+avian3d = { workspace = true }
+lunco-core = { path = "../lunco-core" }
+big_space = { workspace = true }
