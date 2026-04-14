@@ -5,8 +5,8 @@ use bevy::math::DVec3;
 use bevy_egui::egui;
 use bevy_workbench::dock::WorkbenchPanel;
 
-use lunco_core::{Avatar, LeaveSurface};
-use lunco_celestial::{CelestialBody, LocalGravityField};
+use lunco_core::Avatar;
+use lunco_celestial::{CelestialBody, LocalGravityField, LeaveSurface};
 use big_space::prelude::{CellCoord, Grid};
 
 use crate::{SpringArmCamera, OrbitCamera, FreeFlightCamera, FrameBlend};

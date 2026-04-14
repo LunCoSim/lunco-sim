@@ -11,14 +11,11 @@ pub mod coords;
 pub mod log;
 /// Unified diagram data model — pure Rust, no Bevy dependency.
 pub mod diagram;
-/// Avatar command types for vessel possession, focus, and surface operations.
-pub mod avatar_commands;
 
 pub use architecture::*;
 pub use mocks::*;
 pub use telemetry::*;
 pub use log::*;
-pub use avatar_commands::*;
 
 // ── Typed Command Macros ──────────────────────────────────────────────────────
 //
@@ -35,6 +32,23 @@ pub use avatar_commands::*;
 //   → generates pub fn register_all_commands(app) that wires everything up
 
 pub use lunco_command_macro::{Command, on_command, register_commands};
+
+// ── Generic Commands (cross-domain) ───────────────────────────────────────────
+//
+// These commands are not tied to any specific domain. They are triggered by
+// various UI panels and observed by the avatar camera system.
+
+/// Focus on a target entity without taking control.
+///
+/// Switches the camera to orbit/track mode centered on the target.
+/// Observed by `lunco-avatar` to update camera behavior.
+#[Command]
+pub struct FocusTarget {
+    /// The camera/avatar entity that is focusing.
+    pub avatar: Entity,
+    /// The entity to focus on.
+    pub target: Entity,
+}
 
 use bevy::prelude::*;
 

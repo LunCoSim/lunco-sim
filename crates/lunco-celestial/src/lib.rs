@@ -28,6 +28,8 @@ mod embedded_assets;
 
 /// UI panels for celestial time control and body browser.
 pub mod ui;
+pub mod commands;
+pub use commands::*;
 
 pub use clock::*;
 pub use ephemeris::*;

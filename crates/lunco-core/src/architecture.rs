@@ -40,32 +40,6 @@
 use bevy::prelude::*;
 use leafwing_input_manager::prelude::*;
 
-// ── Command trait ─────────────────────────────────────────────────────────────
-
-/// A typed command that carries intent to mutate simulation state.
-///
-/// Commands are **events** (triggered via `On<T>` observers) that also
-/// implement `Reflect` so the API layer can discover and deserialize them.
-///
-/// Use `#[derive(Command)]` (re-exported from `lunco_core`) to implement
-/// this trait — it adds `Event + Reflect + Clone + Debug` automatically.
-///
-/// # Example
-/// ```ignore
-/// #[derive(Command)]
-/// pub struct DriveRover {
-///     pub target: Entity,
-///     pub forward: f64,
-///     pub steer: f64,
-/// }
-/// ```
-pub trait SimCommand: Event + Reflect + Clone + Send + Sync + 'static {}
-
-// Re-export for convenience
-pub mod command {
-    pub use super::SimCommand;
-}
-
 // ── User Intent (Input Abstraction) ───────────────────────────────────────────
 
 /// High-level semantic actions intended by the user.

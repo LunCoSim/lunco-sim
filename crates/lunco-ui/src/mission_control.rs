@@ -5,8 +5,9 @@ use bevy_egui::egui;
 use bevy_workbench::dock::WorkbenchPanel;
 use chrono::TimeZone;
 
-use lunco_core::{Avatar, RoverVessel, Spacecraft, CelestialClock, PossessVessel, ReleaseVessel, FocusTarget, TeleportToSurface, LeaveSurface};
-use lunco_celestial::CelestialBody;
+use lunco_core::{Avatar, RoverVessel, Spacecraft, CelestialClock, FocusTarget};
+use lunco_celestial::{CelestialBody, TeleportToSurface, LeaveSurface};
+use lunco_avatar::{PossessVessel, ReleaseVessel};
 
 /// Mission Control panel — everything in one place.
 pub struct MissionControl;

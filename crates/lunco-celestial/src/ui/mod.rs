@@ -4,7 +4,8 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use bevy_workbench::dock::WorkbenchPanel;
 
-use lunco_core::{Avatar, CelestialBody, CelestialClock, FocusTarget, TeleportToSurface};
+use lunco_core::{Avatar, CelestialBody, CelestialClock};
+use crate::commands::TeleportToSurface;
 use chrono::TimeZone;
 
 /// Celestial time control panel.
@@ -79,11 +80,6 @@ impl WorkbenchPanel for CelestialBodiesPanel {
         for (entity, name, radius) in &bodies {
             ui.horizontal(|ui| {
                 ui.label(format!("{} ({})", name, radius));
-                if ui.small_button("Focus").clicked() {
-                    if let Some(av) = avatar_ent {
-                        world.commands().trigger(FocusTarget { avatar: av, target: *entity });
-                    }
-                }
                 if ui.small_button("🌕 Surface").clicked() {
                     if let Some(av) = avatar_ent {
                         world.commands().trigger(TeleportToSurface {

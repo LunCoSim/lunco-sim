@@ -21,8 +21,11 @@ use leafwing_input_manager::prelude::*;
 use big_space::prelude::{Grid, CellCoord, FloatingOrigin};
 
 use lunco_controller::ControllerLink;
-use lunco_core::{Vessel, Avatar, CelestialBody, Spacecraft, PossessVessel, ReleaseVessel, FocusTarget, TeleportToSurface, LeaveSurface};
-use lunco_celestial::{CelestialClock, GravityBody, LocalGravityField};
+use lunco_core::{Vessel, Avatar, CelestialBody, Spacecraft, FocusTarget};
+use lunco_celestial::{CelestialClock, GravityBody, LocalGravityField, TeleportToSurface, LeaveSurface};
+
+pub mod commands;
+pub use commands::*;
 
 mod intents;
 
