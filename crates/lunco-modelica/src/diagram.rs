@@ -107,6 +107,11 @@ impl ModelicaComponentBuilder {
                     qualified,
                     ports,
                 );
+                // Store component type name in meta for display
+                graph.nodes[node_id.0 as usize].meta.insert(
+                    "type_name".to_string(),
+                    comp.type_name.to_string(),
+                );
                 name_to_id.insert(comp_name.clone(), node_id);
             }
 
@@ -247,7 +252,7 @@ impl ModelicaComponentBuilder {
         // Create nodes
         for (qualified_name, class_type) in &all_classes {
             let short_name = qualified_name.split('.').last().unwrap_or(qualified_name);
-            let parent = qualified_name.rsplit_once('.').map(|(p, _)| p.to_string());
+            let _parent = qualified_name.rsplit_once('.').map(|(p, _)| p.to_string());
 
             let kind = match class_type {
                 ClassType::Package | ClassType::Class => NodeKind::Subsystem,
@@ -340,6 +345,7 @@ impl ModelicaComponentBuilder {
 /// Information about a connector instance in a Modelica model.
 #[derive(Debug, Clone)]
 struct ConnectorInfo {
+    #[allow(dead_code)]
     name: String,
     comp_name: String,
     port_name: String,

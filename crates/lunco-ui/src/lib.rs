@@ -6,6 +6,26 @@
 //! - **3D World-Space UI** — in-cockpit panels, floating labels over celestial bodies
 //!
 //! Docking, theming, inspector, console, layout persistence — all provided by `bevy_workbench`.
+//!
+//! ## Architecture: Entity Viewers
+//!
+//! UI panels are **entity viewers** — they watch a selected entity and render its data.
+//! The same panel works in a standalone workbench, a 3D overlay, or a mission dashboard.
+//!
+//! ```text
+//!   Domain crate (lunco-modelica, lunco-fsw, etc.)
+//!     ├── Defines entity component (ModelicaModel, FswConfig, etc.)
+//!     ├── Defines viewer panel (DiagramPanel, CodeEditor, etc.)
+//!     └── Panel watches WorkbenchState.selected_entity
+//!           │
+//!           ▼
+//!   lunco-ui
+//!     ├── Re-exports egui-snarl types for node graphs
+//!     ├── Provides WidgetSystem for cached widget rendering
+//!     └── Provides WorldPanel for 3D space panels
+//! ```
+//!
+//! See `docs/research-ui-ux-architecture.md` for full architecture.
 
 use bevy::prelude::*;
 

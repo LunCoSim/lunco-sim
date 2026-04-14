@@ -84,6 +84,40 @@ LunCoSim is built as a modular multi-crate workspace:
 - **`lunco-sandbox-edit`**: In-scene editing — spawn palette, transform gizmo, inspector, undo.
 - **`lunco-usd`**: USD integration — 3-plugin pipeline for visual, physics, and simulation mapping.
 - **`lunco-client`**: Visual desktop client — combines all subsystems into the sandbox binary.
+- **`lunco-modelica`**: Modelica simulation — AST-based parsing, component diagrams, workbench UI.
+- **`lunco-ui`**: Reusable UI mechanisms — WidgetSystem, node graphs, 3D world-space UI.
+- **`lunco-attributes`**: Reflection-based attribute system for SysML v2 alignment.
+
+---
+
+## 🎨 UI Architecture
+
+All UI panels are **entity viewers** — they watch a selected entity and render its data. The same panel works in a standalone workbench, a 3D overlay, or a mission dashboard.
+
+```
+                    Entity (ModelicaModel, FswConfig, etc.)
+                              │
+           ┌──────────────────┼──────────────────┐
+           ▼                  ▼                  ▼
+     DiagramPanel      CodeEditorPanel    TelemetryPanel
+     (egui-snarl)      (text editor)      (params/inputs)
+```
+
+`WorkbenchState.selected_entity` is the **selection bridge** — any context (library browser, 3D viewport click, colony tree) can set it to open the editor for any entity.
+
+### Panel Layout
+
+Panels are dockable, tabbable, resizable, and persist across sessions:
+
+| Panel | Position | Purpose |
+|-------|----------|---------|
+| Library Browser | Left dock | File navigation, drag `.mo` files |
+| Code Editor | Center tab | Source code editing, compile & run |
+| Diagram | Center tab | Component block diagram (egui-snarl) |
+| Telemetry | Right dock | Parameters, inputs, variable toggles |
+| Graphs | Bottom dock | Time-series plots |
+
+See [UI/UX Architecture Research](docs/research-ui-ux-architecture.md) for the full analysis of professional tools and our design decisions.
 
 ---
 
