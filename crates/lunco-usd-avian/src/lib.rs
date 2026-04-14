@@ -46,6 +46,7 @@ use bevy::math::DVec3;
 use avian3d::prelude::*;
 use avian3d::physics_transform::{Position, Rotation};
 pub use lunco_usd_bevy::{UsdPrimPath, UsdStageAsset};
+use lunco_terrain::TerrainTile;
 use openusd::sdf::{AbstractData, Path as SdfPath, Value};
 use openusd::usda::TextReader;
 
@@ -250,6 +251,19 @@ fn process_usd_avian_prims(
         // Detect API schemas
         let has_rigid_body_api = has_api_schema(&reader, &sdf_path, "PhysicsRigidBodyAPI");
         let has_collision_api = has_api_schema(&reader, &sdf_path, "PhysicsCollisionAPI");
+        let has_terrain_api = has_api_schema(&reader, &sdf_path, "PhysxTerrainAPI");
+
+        // ── TERRAIN HANDLING ──
+        // Terrain is a static collider with the TerrainTile marker.
+        if has_terrain_api {
+            commands.entity(entity).insert((
+                RigidBody::Static,
+                lunco_terrain::TerrainTile,
+            ));
+            add_collider_from_usd(&mut commands, entity, &reader, &sdf_path);
+            commands.entity(entity).insert(UsdAvianProcessed);
+            continue;
+        }
 
         if has_rigid_body_api {
             // ── COMPOUND BODY ROOT ──

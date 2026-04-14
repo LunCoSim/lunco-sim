@@ -5,8 +5,11 @@
 
 def Xform "SandboxScene"
 {
-    # --- Ground plane (static, non-rigid blueprint grid surface) ---
+    # --- Ground plane (static terrain surface) ---
     def Cube "Ground"
+    (
+        prepend apiSchemas = ["PhysicsCollisionAPI", "PhysxTerrainAPI"]
+    )
     {
         double width = 4000.0
         double height = 0.2
@@ -24,8 +27,11 @@ def Xform "SandboxScene"
         float physics:friction = 1.0
     }
 
-    # --- Ramp obstacle (static, angled blueprint grid surface) ---
+    # --- Ramp obstacle (static terrain obstacle) ---
     def Cube "Ramp"
+    (
+        prepend apiSchemas = ["PhysicsCollisionAPI", "PhysxTerrainAPI"]
+    )
     {
         double width = 60.0
         double height = 2.0
@@ -46,6 +52,9 @@ def Xform "SandboxScene"
     }
 
     def Cube "Ramp1"
+    (
+        prepend apiSchemas = ["PhysicsCollisionAPI", "PhysxTerrainAPI"]
+    )
     {
         double width = 60.0
         double height = 2.0

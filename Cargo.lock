@@ -5889,6 +5889,7 @@ dependencies = [
  "avian3d",
  "bevy",
  "lunco-core",
+ "lunco-terrain",
  "lunco-usd-bevy",
  "openusd",
  "serde",
