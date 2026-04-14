@@ -8,3 +8,4 @@ bevy = { workspace = true, features = ["default"] }
 smallvec = { workspace = true }
 leafwing-input-manager = { workspace = true }
 lunco-core = { path = "../lunco-core" }
+lunco-mobility = { path = "../lunco-mobility" }

@@ -5,7 +5,7 @@ use bevy::math::DVec3;
 use bevy_egui::egui;
 use bevy_workbench::dock::WorkbenchPanel;
 
-use lunco_core::{Avatar, architecture::CommandMessage};
+use lunco_core::{Avatar, LeaveSurface};
 use lunco_celestial::{CelestialBody, LocalGravityField};
 use big_space::prelude::{CellCoord, Grid};
 
@@ -64,10 +64,7 @@ impl WorkbenchPanel for AvatarStatusPanel {
                 ui.separator();
                 if ui.button("🏠 Return to Orbit").clicked() {
                     if let Some(avatar_ent) = avatar_ent {
-                        world.commands().trigger(CommandMessage {
-                            id: 0, target: body, name: "LEAVE_SURFACE".to_string(),
-                            args: Default::default(), source: avatar_ent,
-                        });
+                        world.commands().trigger(LeaveSurface { target: avatar_ent });
                     }
                 }
                 ui.separator();

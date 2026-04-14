@@ -1,7 +1,7 @@
 //! Core types and plugins for the LunCo simulation.
 //!
 //! This crate provides the foundational components, resources, and systems used
-//! across the simulation, including physical properties, celestial timing, 
+//! across the simulation, including physical properties, celestial timing,
 //! and the core plugin registration.
 
 pub mod architecture;
@@ -11,11 +11,30 @@ pub mod coords;
 pub mod log;
 /// Unified diagram data model — pure Rust, no Bevy dependency.
 pub mod diagram;
+/// Avatar command types for vessel possession, focus, and surface operations.
+pub mod avatar_commands;
 
 pub use architecture::*;
 pub use mocks::*;
 pub use telemetry::*;
 pub use log::*;
+pub use avatar_commands::*;
+
+// ── Typed Command Macros ──────────────────────────────────────────────────────
+//
+// Import these in your crate for clean usage:
+//   use lunco_core::{Command, on_command, register_commands};
+//
+// #[Command]
+//   → struct becomes #[derive(Event, Reflect, Clone, Debug)]
+//
+// #[on_command(StructName)]
+//   → fn wrapped with On<T>, generates __register_<fn>(app)
+//
+// register_commands!(fn_a, fn_b)
+//   → generates pub fn register_all_commands(app) that wires everything up
+
+pub use lunco_command_macro::{Command, on_command, register_commands};
 
 use bevy::prelude::*;
 
@@ -73,7 +92,7 @@ pub struct SelectableRoot;
 pub struct Ground;
 
 /// Physical properties used for gravity, collision, and mass-based calculations.
-/// 
+///
 /// These properties use double precision (`f64`) to maintain simulation integrity
 /// over astronomical scales as mandated by the project constitution.
 #[derive(Component, Debug, Clone, Reflect, Default)]
@@ -96,7 +115,6 @@ pub struct CelestialBody {
     /// Mean radius in meters, used for rendering and approximate physics.
     pub radius_m: f64,
 }
-
 
 /// Global simulation speed and physics state control.
 #[derive(Resource, Default, Debug, Clone, Copy)]
@@ -189,4 +207,3 @@ fn wire_system(
         }
     }
 }
-

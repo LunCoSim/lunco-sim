@@ -2,7 +2,7 @@
 //!
 //! A thin adapter layer on top of `bevy_workbench` that provides:
 //! - **WidgetSystem** — O(1) cached widget pattern for 1,000s of graph/diagram widgets
-//! - **CommandMessage integration** — all UI interactions flow through CommandMessage events
+//! - **Typed command integration** — all UI interactions flow through typed command events
 //! - **3D World-Space UI** — in-cockpit panels, floating labels over celestial bodies
 //!
 //! Docking, theming, inspector, console, layout persistence — all provided by `bevy_workbench`.
@@ -59,7 +59,6 @@ pub mod prelude {
     pub use crate::WidgetCache;
     pub use crate::UiContext;
     pub use crate::UiSelection;
-    pub use crate::CommandBuilder;
     pub use crate::WorldPanel;
     pub use crate::Label3D;
     pub use crate::diagrams::{

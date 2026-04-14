@@ -302,14 +302,8 @@ pub fn mission_focus_system(
     mut commands: Commands,
 ) {
     for ent in q_focus.iter() {
-        if let Some(avatar_ent) = q_avatar.iter().next() {
-            commands.trigger(lunco_core::architecture::CommandMessage {
-                id: 0,
-                target: ent,
-                name: "FOCUS".to_string(),
-                args: smallvec::smallvec![],
-                source: avatar_ent,
-            });
+        if let Some(av) = q_avatar.iter().next() {
+            commands.trigger(lunco_core::FocusTarget { avatar: av, target: ent });
             info!("Camera focus command sent for spacecraft starting mission.");
         }
         commands.entity(ent).remove::<FocusOnStart>();

@@ -5,7 +5,7 @@ use bevy_egui::egui;
 use bevy_workbench::dock::WorkbenchPanel;
 use chrono::TimeZone;
 
-use lunco_core::{Avatar, RoverVessel, Spacecraft, CelestialClock, architecture::CommandMessage};
+use lunco_core::{Avatar, RoverVessel, Spacecraft, CelestialClock, PossessVessel, ReleaseVessel, FocusTarget, TeleportToSurface, LeaveSurface};
 use lunco_celestial::CelestialBody;
 
 /// Mission Control panel — everything in one place.
@@ -65,18 +65,14 @@ impl WorkbenchPanel for MissionControl {
                     ui.label(format!("{} ({})", name, radius));
                     if ui.small_button("Focus").clicked() {
                         if let Some(av) = avatar_ent {
-                            world.commands().trigger(CommandMessage {
-                                id: 0, target: *entity, name: "FOCUS".to_string(),
-                                args: Default::default(), source: av,
-                            });
+                            world.commands().trigger(FocusTarget { avatar: av, target: *entity });
                         }
                     }
                     if ui.small_button("🌕 Surface").clicked() {
                         if let Some(av) = avatar_ent {
-                            let args: Vec<f64> = vec![entity.to_bits() as f64];
-                            world.commands().trigger(CommandMessage {
-                                id: 0, target: *entity, name: "TELEPORT_SURFACE".to_string(),
-                                args: args.into_iter().collect(), source: av,
+                            world.commands().trigger(TeleportToSurface {
+                                target: av,
+                                body_entity: entity.to_bits(),
                             });
                         }
                     }
@@ -96,10 +92,7 @@ impl WorkbenchPanel for MissionControl {
                     ui.label(name);
                     if ui.small_button("Focus").clicked() {
                         if let Some(av) = avatar_ent {
-                            world.commands().trigger(CommandMessage {
-                                id: 0, target: *entity, name: "FOCUS".to_string(),
-                                args: Default::default(), source: av,
-                            });
+                            world.commands().trigger(FocusTarget { avatar: av, target: *entity });
                         }
                     }
                 });
@@ -118,18 +111,12 @@ impl WorkbenchPanel for MissionControl {
                     ui.label(name);
                     if ui.small_button("Focus").clicked() {
                         if let Some(av) = avatar_ent {
-                            world.commands().trigger(CommandMessage {
-                                id: 0, target: *entity, name: "FOCUS".to_string(),
-                                args: Default::default(), source: av,
-                            });
+                            world.commands().trigger(FocusTarget { avatar: av, target: *entity });
                         }
                     }
                     if ui.small_button("🚗 Possess").clicked() {
                         if let Some(av) = avatar_ent {
-                            world.commands().trigger(CommandMessage {
-                                id: 0, target: *entity, name: "POSSESS".to_string(),
-                                args: Default::default(), source: av,
-                            });
+                            world.commands().trigger(PossessVessel { avatar: av, target: *entity });
                         }
                     }
                 });
@@ -141,10 +128,7 @@ impl WorkbenchPanel for MissionControl {
         ui.heading("Quick Actions");
         if let Some(av) = avatar_ent {
             if ui.button("🚀 Release (Free Fly)").clicked() {
-                world.commands().trigger(CommandMessage {
-                    id: 0, target: av, name: "RELEASE".to_string(),
-                    args: Default::default(), source: Entity::PLACEHOLDER,
-                });
+                world.commands().trigger(ReleaseVessel { target: av });
             }
 
             // Return to Orbit — show when avatar is in surface mode
@@ -154,14 +138,10 @@ impl WorkbenchPanel for MissionControl {
             };
             if on_surface {
                 if ui.button("🏠 Return to Orbit").clicked() {
-                    // Get the body we're on surface of from the gravity field resource
                     let target = world.get_resource::<lunco_celestial::LocalGravityField>()
                         .and_then(|gf| gf.body_entity);
-                    if let Some(body_ent) = target {
-                        world.commands().trigger(CommandMessage {
-                            id: 0, target: body_ent, name: "LEAVE_SURFACE".to_string(),
-                            args: Default::default(), source: av,
-                        });
+                    if target.is_some() {
+                        world.commands().trigger(LeaveSurface { target: av });
                     }
                 }
             }

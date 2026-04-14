@@ -5597,6 +5597,7 @@ dependencies = [
  "lunco-celestial",
  "lunco-controller",
  "lunco-core",
+ "lunco-mobility",
  "smallvec",
 ]
 
@@ -5668,12 +5669,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "lunco-command-macro"
+version = "0.1.0-dev"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
 name = "lunco-controller"
 version = "0.6.0-dev"
 dependencies = [
  "bevy",
  "leafwing-input-manager",
  "lunco-core",
+ "lunco-mobility",
  "smallvec",
 ]
 
@@ -5684,6 +5695,7 @@ dependencies = [
  "bevy",
  "big_space",
  "leafwing-input-manager",
+ "lunco-command-macro",
  "smallvec",
 ]
 

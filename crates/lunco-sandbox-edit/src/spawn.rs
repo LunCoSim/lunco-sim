@@ -149,18 +149,11 @@ pub fn handle_spawn_placement(
             None => return,
         };
 
-        // Trigger spawn via CommandMessage (same path as CLI)
-        commands.trigger(lunco_core::architecture::CommandMessage {
-            id: 0,
+        // Trigger spawn via typed command
+        commands.trigger(crate::commands::SpawnEntity {
             target: grid,
-            name: format!("SPAWN_ENTITY:{}", entry_id),
-            args: smallvec::smallvec![
-                point3.x as f64,
-                point3.y as f64,
-                point3.z as f64,
-                0.0,
-            ],
-            source: Entity::PLACEHOLDER,
+            entry_id: entry_id.clone(),
+            position: point3,
         });
 
         info!("Spawn request: {} at {:?}", entry_id, point3);

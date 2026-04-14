@@ -40,10 +40,10 @@ impl<'w, 's> UiContext<'w, 's> {
         self.world.get_entity(entity).is_ok()
     }
 
-    /// Trigger a CommandMessage event.
-    /// All UI interactions should flow through CommandMessage for AI compatibility.
-    pub fn trigger(&mut self, cmd: lunco_core::architecture::CommandMessage) {
-        self.commands.trigger(cmd);
+    /// Get mutable access to commands for triggering events.
+    /// Use `ctx.commands.trigger(TypedCommand { ... })` to fire commands.
+    pub fn commands(&mut self) -> &mut Commands<'w, 's> {
+        &mut self.commands
     }
 
     /// Render a nested widget using the WidgetSystem pattern.
