@@ -24,3 +24,14 @@ pub struct ReleaseVessel {
     /// The avatar entity releasing possession.
     pub target: Entity,
 }
+
+/// Focus on a target without taking control.
+///
+/// Switches the avatar to `OrbitCamera` mode centered on the target.
+#[Command]
+pub struct FocusTarget {
+    /// The avatar entity that is focusing.
+    pub avatar: Entity,
+    /// The entity to focus on.
+    pub target: Entity,
+}

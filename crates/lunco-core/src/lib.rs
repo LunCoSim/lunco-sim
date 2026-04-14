@@ -33,23 +33,6 @@ pub use log::*;
 
 pub use lunco_command_macro::{Command, on_command, register_commands};
 
-// ── Generic Commands (cross-domain) ───────────────────────────────────────────
-//
-// These commands are not tied to any specific domain. They are triggered by
-// various UI panels and observed by the avatar camera system.
-
-/// Focus on a target entity without taking control.
-///
-/// Switches the camera to orbit/track mode centered on the target.
-/// Observed by `lunco-avatar` to update camera behavior.
-#[Command]
-pub struct FocusTarget {
-    /// The camera/avatar entity that is focusing.
-    pub avatar: Entity,
-    /// The entity to focus on.
-    pub target: Entity,
-}
-
 use bevy::prelude::*;
 
 /// The central plugin for the LunCo simulation core.

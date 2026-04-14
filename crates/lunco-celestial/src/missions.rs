@@ -39,8 +39,6 @@ pub struct MissionSpacecraft {
     pub ephemeris_id: i32,
     pub reference_id: i32,
     pub scale: f32,
-    #[serde(default)]
-    pub focus_on_start: bool,
     pub start_epoch_jd: Option<f64>,
     pub end_epoch_jd: Option<f64>,
     pub marker_radius_km: Option<f32>,
@@ -81,7 +79,6 @@ impl Plugin for MissionPlugin {
         app.add_systems(Update, (
             update_spacecraft_position_system,
             spacecraft_alignment_system,
-            mission_focus_system,
             spacecraft_visibility_system,
             spacecraft_billboard_system,
         ).chain());
@@ -209,10 +206,6 @@ pub fn load_missions_system(
                         Transform::from_translation(Vec3::Y * radius_m * 5.0),
                     ));
                 });
-
-                if sc.focus_on_start {
-                    sc_ent.insert(FocusOnStart);
-                }
             }
 
             registry.missions.push(mission);
@@ -290,23 +283,6 @@ pub fn spacecraft_alignment_system(
                 break;
             }
         }
-    }
-}
-
-#[derive(Component)]
-pub struct FocusOnStart;
-
-pub fn mission_focus_system(
-    q_focus: Query<Entity, Added<FocusOnStart>>,
-    q_avatar: Query<Entity, With<lunco_core::Avatar>>,
-    mut commands: Commands,
-) {
-    for ent in q_focus.iter() {
-        if let Some(av) = q_avatar.iter().next() {
-            commands.trigger(lunco_core::FocusTarget { avatar: av, target: ent });
-            info!("Camera focus command sent for spacecraft starting mission.");
-        }
-        commands.entity(ent).remove::<FocusOnStart>();
     }
 }
 
