@@ -50,6 +50,7 @@ fn setup_sandbox(
 
     // Initialize UI state with the default model's source
     workbench_state.editor_buffer = source.clone();
+    workbench_state.loaded_file_path = Some(model_path.clone());
 
     // Spawn a generic sandbox entity.
     let entity = commands.spawn((

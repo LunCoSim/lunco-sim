@@ -15,11 +15,11 @@
 //! ## Layout Convention
 //!
 //! Panel ID `modelica_diagram_preview` → auto-slots to **Center** (contains "preview").
-//! Tabs with Code Editor by default. Users can drag to split vertically/horizontally.
+//! Code Editor (`modelica_code_preview`) → also Center. They split horizontally in the
+//! Center tile: Diagram left, Code right.
 
 use bevy::prelude::*;
-use bevy_egui::egui;
-use bevy_egui::egui::{Pos2, Ui};
+use bevy_egui::egui::{self, Pos2, Ui};
 use bevy_workbench::dock::WorkbenchPanel;
 use egui_snarl::{InPin, InPinId, NodeId, OutPin, OutPinId, Snarl};
 use egui_snarl::ui::{SnarlViewer, SnarlPin, PinInfo, SnarlStyle};
@@ -38,6 +38,8 @@ pub struct DiagramState {
     pub source_hash: u64,
     /// The type of diagram to render.
     pub diagram_type: DiagramType,
+    /// Last parse error, if any. Cleared on successful parse.
+    pub parse_error: Option<String>,
 }
 
 impl Default for DiagramState {
@@ -46,6 +48,7 @@ impl Default for DiagramState {
             snarl: None,
             source_hash: 0,
             diagram_type: DiagramType::BlockDiagram,
+            parse_error: None,
         }
     }
 }
@@ -175,7 +178,6 @@ impl SnarlViewer<ModelicaNode> for ModelicaDiagramViewer {
         ui: &mut Ui,
         snarl: &mut Snarl<ModelicaNode>,
     ) {
-        // Body shows the qualified name
         if let Some(node) = snarl.nodes().next() {
             let subtitle = node.subtitle();
             if !subtitle.is_empty() {
@@ -251,12 +253,22 @@ impl WorkbenchPanel for DiagramPanel {
         // Rebuild if needed
         if needs_rebuild {
             if let Some(source) = editor_buffer {
-                if let Some(builder) = ModelicaComponentBuilder::from_source(&source) {
-                    let graph = builder.diagram_type(diagram_type).build();
-                    let new_snarl = build_snarl_from_graph(&graph);
-                    if let Some(mut state) = world.get_resource_mut::<DiagramState>() {
-                        state.snarl = Some(new_snarl);
-                        state.source_hash = current_hash;
+                match ModelicaComponentBuilder::from_source(&source) {
+                    Some(builder) => {
+                        let graph = builder.diagram_type(diagram_type).build();
+                        let new_snarl = build_snarl_from_graph(&graph);
+                        if let Some(mut state) = world.get_resource_mut::<DiagramState>() {
+                            state.snarl = Some(new_snarl);
+                            state.source_hash = current_hash;
+                            state.parse_error = None;
+                        }
+                    }
+                    None => {
+                        if let Some(mut state) = world.get_resource_mut::<DiagramState>() {
+                            state.parse_error = Some("Failed to parse Modelica source".to_string());
+                            state.snarl = None;
+                            state.source_hash = current_hash;
+                        }
                     }
                 }
             }
@@ -264,7 +276,6 @@ impl WorkbenchPanel for DiagramPanel {
 
         // Render toolbar
         ui.horizontal(|ui| {
-            // Diagram type selector
             if let Some(mut state) = world.get_resource_mut::<DiagramState>() {
                 let prev = state.diagram_type;
                 egui::ComboBox::from_label("")
@@ -287,37 +298,64 @@ impl WorkbenchPanel for DiagramPanel {
                 }
             }
             ui.separator();
+
             let node_count = world
                 .get_resource::<DiagramState>()
-                .and_then(|s| s.snarl.as_ref().map(|sn| sn.nodes().count()))
+                .map(|s| s.snarl.as_ref().map(|sn| sn.nodes().count()).unwrap_or(0))
                 .unwrap_or(0);
+
             if node_count > 0 {
                 ui.label(format!("{} nodes", node_count));
             } else {
-                ui.label("No diagram — compile a model first");
+                ui.label("No diagram");
             }
         });
         ui.separator();
 
-        // Render the Snarl graph
-        let has_snarl = world
-            .get_resource::<DiagramState>()
-            .and_then(|s| s.snarl.as_ref().map(|_| true))
-            .unwrap_or(false);
+        // Render the Snarl graph in a ScrollArea that fills all remaining space.
+        // This pattern mirrors the Console panel in bevy_workbench, which uses the
+        // same approach to prevent egui_tiles from collapsing the pane.
+        let (has_snarl, parse_err) = {
+            let ds = world.get_resource::<DiagramState>();
+            (
+                ds.as_ref().and_then(|s| s.snarl.as_ref().map(|_| true)).unwrap_or(false),
+                ds.and_then(|s| s.parse_error.clone()),
+            )
+        };
 
         if has_snarl {
+            // Allocate a large minimum area so the snarl always has space to render.
+            ui.allocate_space(egui::vec2(600.0, 500.0));
+
+            let rect = ui.max_rect();
             let mut state = world.resource_mut::<DiagramState>();
             if let Some(snarl) = &mut state.snarl {
+                let mut child_ui = ui.new_child(egui::UiBuilder::new().max_rect(rect));
                 let mut viewer = ModelicaDiagramViewer;
                 let style = SnarlStyle::default();
-                snarl.show(&mut viewer, &style, "diagram", ui);
+                snarl.show(&mut viewer, &style, "diagram", &mut child_ui);
             }
         } else {
             ui.centered_and_justified(|ui| {
-                ui.label(
-                    egui::RichText::new("Load and compile a .mo file to see the diagram")
-                        .color(egui::Color32::GRAY),
-                );
+                if let Some(error) = parse_err {
+                    ui.vertical(|ui| {
+                        ui.label(
+                            egui::RichText::new("⚠️ Parse Error")
+                                .color(egui::Color32::LIGHT_RED)
+                                .size(14.0),
+                        );
+                        ui.label(
+                            egui::RichText::new(&error)
+                                .color(egui::Color32::GRAY)
+                                .size(11.0),
+                        );
+                    });
+                } else {
+                    ui.label(
+                        egui::RichText::new("Load a .mo file to see the diagram")
+                            .color(egui::Color32::GRAY),
+                    );
+                }
             });
         }
     }
@@ -331,7 +369,6 @@ fn build_snarl_from_graph(graph: &ComponentGraph) -> Snarl<ModelicaNode> {
     // Add all nodes with positions
     for (i, node) in graph.nodes.iter().enumerate() {
         let snarl_node = component_node_to_snarl(node);
-        // Arrange in a grid layout
         let cols = 4;
         let row = i / cols;
         let col = i % cols;

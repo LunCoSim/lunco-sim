@@ -92,8 +92,11 @@ impl WorkbenchPanel for LibraryBrowserPanel {
 
                 use crate::models::BUNDLED_MODELS;
                 for (name, source) in BUNDLED_MODELS {
-                    if ui.button(format!("📄 {name}")).clicked() {
+                    let is_active = state.loaded_file_path.as_ref().map_or(false, |p| p.file_name().map_or(false, |n| n == *name));
+                    let resp = ui.selectable_label(is_active, format!("📄 {name}"));
+                    if resp.clicked() {
                         state.editor_buffer = source.to_string();
+                        state.loaded_file_path = Some(PathBuf::from("assets/models/").join(name));
                     }
                 }
             }
@@ -110,9 +113,13 @@ impl WorkbenchPanel for LibraryBrowserPanel {
                                 state.current_path = path;
                             }
                         } else if path.extension().and_then(|s| s.to_str()) == Some("mo") {
-                            if ui.button(format!("📄 {}", path.file_name().unwrap().to_string_lossy())).clicked() {
+                            let file_name = path.file_name().unwrap().to_string_lossy().to_string();
+                            let is_active = state.loaded_file_path.as_ref() == Some(&path);
+                            let resp = ui.selectable_label(is_active, format!("📄 {}", file_name));
+                            if resp.clicked() {
                                 if let Ok(content) = std::fs::read_to_string(&path) {
                                     state.editor_buffer = content;
+                                    state.loaded_file_path = Some(path);
                                 }
                             }
                         }

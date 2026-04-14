@@ -61,6 +61,9 @@ pub struct WorkbenchState {
     pub current_path: PathBuf,
     /// Current Modelica source code in the editor.
     pub editor_buffer: String,
+    /// Path of the file that produced the current editor buffer.
+    /// Used to highlight the active file in the library browser.
+    pub loaded_file_path: Option<PathBuf>,
     /// **Selection bridge**: which `ModelicaModel` entity panels are viewing.
     /// Set by any context (library, 3D viewport, colony tree).
     pub selected_entity: Option<Entity>,
@@ -81,6 +84,7 @@ impl Default for WorkbenchState {
         Self {
             current_path: assets_dir().join("models"),
             editor_buffer: String::new(),
+            loaded_file_path: None,
             selected_entity: None,
             compilation_error: None,
             history: HashMap::new(),

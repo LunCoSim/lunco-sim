@@ -15,14 +15,12 @@ use crate::ast_extract::{
 pub struct CodeEditorPanel;
 
 impl WorkbenchPanel for CodeEditorPanel {
-    fn id(&self) -> &str { "modelica_preview" }
+    fn id(&self) -> &str { "modelica_code_preview" }
     fn title(&self) -> String { "📝 Code Editor".into() }
     fn closable(&self) -> bool { false }
     fn default_visible(&self) -> bool { true }
     fn needs_world(&self) -> bool { true }
 
-    /// No tab bar — acts as the main viewport.
-    fn hide_tab(&self) -> bool { true }
     fn bg_color(&self) -> Option<egui::Color32> {
         Some(egui::Color32::from_rgb(40, 40, 45))
     }
