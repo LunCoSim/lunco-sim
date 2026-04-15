@@ -41,6 +41,84 @@ use bevy::prelude::*;
 /// like the physical/digital port wiring.
 pub struct LunCoCorePlugin;
 
+/// Stable identity for entities across the simulation and API.
+///
+/// Implements a **53-bit** time-sorted identifier, safe for use as a 
+/// raw Number in JavaScript/JSON without precision loss.
+/// - 32 bits: Seconds since LunCo Epoch (2025-01-01)
+/// - 21 bits: Random instance ID + sequence
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Hash, Reflect, serde::Serialize, serde::Deserialize)]
+#[reflect(Component)]
+pub struct GlobalEntityId(pub u64);
+
+impl GlobalEntityId {
+    /// Create a new globally unique, time-sorted ID (53-bit).
+    pub fn new() -> Self {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        // LunCo Epoch: 2025-01-01 00:00:00 UTC
+        const LUNCO_EPOCH_SECS: u64 = 1735689600;
+
+        static LAST_ID: AtomicU64 = AtomicU64::new(0);
+
+        let now_secs = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        
+        let timestamp = now_secs.saturating_sub(LUNCO_EPOCH_SECS) & 0xFFFFFFFF; // 32 bits
+        
+        // Base ID with timestamp shifted into the upper part of the 53 bits
+        let id_base = timestamp << 21;
+
+        // Atomic update to ensure monotonicity and uniqueness within the same second
+        loop {
+            let last = LAST_ID.load(Ordering::Relaxed);
+            let last_ts = last >> 21;
+            
+            let next = if last_ts == timestamp {
+                // Same second, increment sequence
+                (last + 1) & 0x1FFFFFFFFFFFFF // Keep within 53 bits
+            } else {
+                // New second, start with random entropy in the lower 21 bits
+                id_base | (rand_entropy().to_bits() as u64 & 0x1FFFFF)
+            };
+
+            if LAST_ID.compare_exchange(last, next, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
+                return Self(next);
+            }
+        }
+    }
+}
+
+/// Simple entropy helper without full 'rand' dependency
+fn rand_entropy() -> f32 {
+    static SEED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(12345);
+    let old = SEED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    // Simple LCG-like transformation
+    ((old.wrapping_mul(1103515245).wrapping_add(12345)) & 0x7FFFFFFF) as f32
+}
+
+impl Default for GlobalEntityId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl std::fmt::Display for GlobalEntityId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl std::str::FromStr for GlobalEntityId {
+    type Err = std::num::ParseIntError;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        s.parse::<u64>().map(GlobalEntityId)
+    }
+}
+
 /// Marker component for the user's active avatar/entity in the simulation.
 #[derive(Component)]
 pub struct Avatar;
@@ -182,7 +260,19 @@ impl Plugin for LunCoCorePlugin {
            .register_type::<Spacecraft>()
            .register_type::<ActiveAction>()
            .register_type::<ActionStatus>()
-           .add_systems(Update, wire_system);
+           .register_type::<GlobalEntityId>()
+           .add_systems(Update, wire_system)
+           .add_systems(PostUpdate, assign_global_entity_ids);
+    }
+}
+
+/// Automatically assigns a [GlobalEntityId] to every entity that lacks one.
+fn assign_global_entity_ids(
+    mut commands: Commands,
+    q_new: Query<Entity, Without<GlobalEntityId>>,
+) {
+    for entity in q_new.iter() {
+        commands.entity(entity).insert(GlobalEntityId::new());
     }
 }
 

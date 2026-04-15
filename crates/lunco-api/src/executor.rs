@@ -116,6 +116,7 @@ fn execute_request(
         }
         ApiRequest::ListEntities => {
             let entities: Vec<serde_json::Value> = registry.entities()
+                .into_iter()
                 .map(|(api_id, entity)| {
                     let (name, rover, body) = q_meta.get(entity).unwrap_or((None, None, None));
                     let kind = if rover.is_some() { "rover" } else if body.is_some() { "planet" } else { "unknown" };

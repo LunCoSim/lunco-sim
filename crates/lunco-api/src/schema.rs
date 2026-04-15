@@ -9,35 +9,7 @@
 //! available as an API endpoint — zero hardcoding.
 
 use serde::{Deserialize, Serialize};
-use ulid::Ulid;
-
-/// Stable entity identifier for external API clients.
-///
-/// Bevy `Entity` IDs are process-local and recycled. This ULID-based ID
-/// provides stable, cross-process identity for API consumers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct ApiEntityId(pub Ulid);
-
-impl ApiEntityId {
-    pub fn new() -> Self { Self(Ulid::new()) }
-}
-
-impl Default for ApiEntityId {
-    fn default() -> Self { Self::new() }
-}
-
-impl std::fmt::Display for ApiEntityId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl std::str::FromStr for ApiEntityId {
-    type Err = ulid::DecodeError;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ulid::from_str(s).map(ApiEntityId)
-    }
-}
+pub use lunco_core::GlobalEntityId as ApiEntityId;
 
 /// Telemetry subscription filter.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

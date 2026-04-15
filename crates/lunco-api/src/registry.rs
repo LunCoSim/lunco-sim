@@ -1,32 +1,20 @@
-//! Entity identity registry — maps stable ULID-based API IDs to Bevy Entity.
+//! Entity identity registry — maps stable ULID-based GlobalEntityId to Bevy Entity.
 
 use std::collections::HashMap;
 use bevy::prelude::*;
-use ulid::Ulid;
-use crate::schema::ApiEntityId;
-
-/// Marker component assigned by the registry to entities with API identity.
-#[derive(Component)]
-pub struct ApiIdentity { pub id: ApiEntityId }
+use lunco_core::GlobalEntityId;
 
 /// Bidirectional mapping between API entity IDs and Bevy entities.
 #[derive(Resource, Default)]
 pub struct ApiEntityRegistry {
-    api_to_bevy: HashMap<ApiEntityId, Entity>,
-    bevy_to_api: HashMap<Entity, ApiEntityId>,
+    api_to_bevy: HashMap<GlobalEntityId, Entity>,
+    bevy_to_api: HashMap<Entity, GlobalEntityId>,
 }
 
 impl ApiEntityRegistry {
-    fn next_ulid(&mut self) -> Ulid {
-        Ulid::new()
-    }
-
-    pub fn assign(&mut self, entity: Entity) -> ApiEntityId {
-        if let Some(&id) = self.bevy_to_api.get(&entity) { return id; }
-        let id = ApiEntityId(self.next_ulid());
+    pub fn assign(&mut self, entity: Entity, id: GlobalEntityId) {
         self.api_to_bevy.insert(id, entity);
         self.bevy_to_api.insert(entity, id);
-        id
     }
 
     pub fn remove(&mut self, entity: Entity) {
@@ -35,56 +23,41 @@ impl ApiEntityRegistry {
         }
     }
 
-    pub fn resolve(&self, id: &ApiEntityId) -> Option<Entity> {
+    pub fn resolve(&self, id: &GlobalEntityId) -> Option<Entity> {
         self.api_to_bevy.get(id).copied()
     }
 
-    pub fn api_id_for(&self, entity: Entity) -> Option<ApiEntityId> {
+    pub fn api_id_for(&self, entity: Entity) -> Option<GlobalEntityId> {
         self.bevy_to_api.get(&entity).copied()
     }
 
-    pub fn entities(&self) -> impl Iterator<Item = (ApiEntityId, Entity)> + '_ {
-        self.api_to_bevy.iter().map(|(&id, &entity)| (id, entity))
+    pub fn entities(&self) -> Vec<(GlobalEntityId, Entity)> {
+        self.api_to_bevy.iter().map(|(&id, &entity)| (id, entity)).collect()
     }
 }
 
-/// System that assigns API identities to entities.
-///
-/// Only assigns to root entities (no ChildOf) to avoid assigning to children
-/// like wheels, visuals, etc.
-pub fn assign_api_id(
-    mut commands: Commands,
+/// System that synchronizes [GlobalEntityId] components into the [ApiEntityRegistry].
+pub fn sync_api_registry(
     mut registry: ResMut<ApiEntityRegistry>,
-    q_new: Query<Entity, (Without<ApiIdentity>, Without<ChildOf>)>,
+    q_added: Query<(Entity, &GlobalEntityId), Added<GlobalEntityId>>,
+    mut q_removed: RemovedComponents<GlobalEntityId>,
 ) {
-    let count = q_new.iter().count();
-    if count > 0 {
-        eprintln!("[lunco-api] assign_api_id: found {} new root entities", count);
+    for (entity, id) in q_added.iter() {
+        registry.assign(entity, *id);
     }
-    for entity in q_new.iter() {
-        let id = registry.assign(entity);
-        commands.entity(entity).insert(ApiIdentity { id });
-    }
-}
-
-/// System that removes API identities from despawned entities.
-pub fn cleanup_api_id(
-    mut registry: ResMut<ApiEntityRegistry>,
-    mut q_removed: RemovedComponents<ApiIdentity>,
-) {
     for entity in q_removed.read() {
         registry.remove(entity);
     }
 }
 
-/// Plugin that registers the entity registry and lifecycle systems.
+/// Plugin that registers the entity registry and synchronization system.
 pub struct ApiEntityRegistryPlugin;
 
 impl Plugin for ApiEntityRegistryPlugin {
     fn build(&self, app: &mut App) {
         eprintln!("[lunco-api] Registering ApiEntityRegistryPlugin");
         app.init_resource::<ApiEntityRegistry>()
-            .add_systems(Update, (assign_api_id, cleanup_api_id));
+            .add_systems(Update, sync_api_registry);
     }
 }
 
@@ -96,7 +69,8 @@ mod tests {
     fn test_assign_and_resolve() {
         let mut registry = ApiEntityRegistry::default();
         let entity = Entity::PLACEHOLDER;
-        let id = registry.assign(entity);
+        let id = GlobalEntityId::new();
+        registry.assign(entity, id);
         assert_eq!(registry.resolve(&id), Some(entity));
     }
 
@@ -104,17 +78,9 @@ mod tests {
     fn test_remove() {
         let mut registry = ApiEntityRegistry::default();
         let entity = Entity::PLACEHOLDER;
-        let id = registry.assign(entity);
+        let id = GlobalEntityId::new();
+        registry.assign(entity, id);
         registry.remove(entity);
         assert_eq!(registry.resolve(&id), None);
-    }
-
-    #[test]
-    fn test_idempotent_assign() {
-        let mut registry = ApiEntityRegistry::default();
-        let entity = Entity::PLACEHOLDER;
-        let id1 = registry.assign(entity);
-        let id2 = registry.assign(entity);
-        assert_eq!(id1, id2);
     }
 }
