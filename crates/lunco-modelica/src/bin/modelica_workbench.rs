@@ -11,8 +11,8 @@ use lunco_modelica::{
 };
 
 fn main() {
-    App::new()
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
+    let mut app = App::new();
+    app.add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "LunCo Modelica Workbench".into(),
                 ..default()
@@ -29,8 +29,12 @@ fn main() {
             },
         })
         .add_plugins(ModelicaPlugin)
-        .add_systems(Startup, setup_sandbox)
-        .run();
+        .add_systems(Startup, setup_sandbox);
+
+    #[cfg(feature = "api")]
+    app.add_plugins(lunco_api::LunCoApiPlugin::default());
+
+    app.run();
 }
 
 #[derive(Component)]
@@ -75,4 +79,3 @@ fn setup_sandbox(
         source,
     });
 }
-

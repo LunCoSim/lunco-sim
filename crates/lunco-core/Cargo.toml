@@ -8,4 +8,5 @@ bevy = { workspace = true, features = ["default"] }
 smallvec = { workspace = true }
 big_space = { workspace = true }
 leafwing-input-manager.workspace = true
+serde = { version = "1", features = ["derive"] }
 lunco-command-macro = { path = "../lunco-command-macro" }

@@ -33,6 +33,7 @@ serde_json = "1.0"
 regex = "1.10"
 futures-lite = "2.3"
 crossbeam-channel = "0.5"
+lunco-api = { path = "../lunco-api", optional = true }
 log = "0.4"
 uuid = { version = "1", features = ["v4", "serde"] }
 
