@@ -89,6 +89,7 @@ fn main() {
         .add_plugins(lunco_robotics::LunCoRoboticsPlugin)
         .add_plugins(lunco_controller::LunCoControllerPlugin)
         .add_plugins(lunco_avatar::LunCoAvatarPlugin)
+        .add_plugins(lunco_api::LunCoApiPlugin::default())
         .add_systems(Update, (toggle_slow_motion, auto_focus_earth_once))
         .run();
 }

@@ -44,13 +44,25 @@ use syn::{
 /// Attribute macro that marks a struct as a typed simulation command.
 ///
 /// Replaces the struct with one that has `Event + Reflect + Clone + Debug` derives.
+///
+/// Use `#[Command(default)]` to also derive `Default` for reflect-based construction:
+/// ```ignore
+/// #[Command(default)]  // Adds Default derive + #[reflect(Default)]
+/// pub struct CaptureScreenshot {
+///     pub target: Option<Entity>,
+/// }
+/// ```
 #[proc_macro_attribute]
-pub fn Command(_attr: TokenStream, item: TokenStream) -> TokenStream {
+pub fn Command(attr: TokenStream, item: TokenStream) -> TokenStream {
     let input = parse_macro_input!(item as DeriveInput);
     let name = &input.ident;
     let vis = &input.vis;
     let generics = &input.generics;
     let (_impl_generics, _ty_generics, where_clause) = generics.split_for_impl();
+
+    // Check for "default" keyword in attributes
+    let attr_str = attr.to_string();
+    let wants_default = attr_str.trim() == "default";
 
     let fields = match &input.data {
         Data::Struct(ds) => match &ds.fields {
@@ -63,9 +75,21 @@ pub fn Command(_attr: TokenStream, item: TokenStream) -> TokenStream {
             .to_compile_error().into(),
     };
 
+    let (derive, reflect) = if wants_default {
+        (
+            quote!(bevy::prelude::Event, bevy::prelude::Reflect, Clone, Debug, Default),
+            quote!(#[reflect(Event, Default)]),
+        )
+    } else {
+        (
+            quote!(bevy::prelude::Event, bevy::prelude::Reflect, Clone, Debug),
+            quote!(#[reflect(Event)]),
+        )
+    };
+
     let expanded = quote! {
-        #[derive(bevy::prelude::Event, bevy::prelude::Reflect, Clone, Debug)]
-        #[reflect(Event)]
+        #[derive(#derive)]
+        #reflect
         #vis struct #name #generics #where_clause {
             #fields
         }
