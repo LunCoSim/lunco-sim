@@ -70,6 +70,7 @@ pub struct FileLoadResult {
     pub source: std::sync::Arc<str>,
     pub line_starts: std::sync::Arc<[usize]>,
     pub detected_name: Option<String>,
+    pub layout_job: Option<bevy_egui::egui::text::LayoutJob>,
 }
 
 #[derive(Resource)]
@@ -205,6 +206,7 @@ fn find_and_update_node(nodes: &mut [PackageNode], parent_id: &str, children: Ve
 pub fn handle_package_loading_tasks(
     mut cache: ResMut<PackageTreeCache>,
     mut workbench: ResMut<WorkbenchState>,
+    mut egui_ctx: bevy_egui::EguiContexts,
 ) {
     let mut finished_results = Vec::new();
 
@@ -233,18 +235,25 @@ pub fn handle_package_loading_tasks(
     });
 
     for result in finished_files {
+        // Final font-dependent shaping on main thread
+        let cached_galley = result.layout_job.map(|job| {
+            egui_ctx.ctx_mut().unwrap().fonts_mut(|f| f.layout_job(job))
+        });
+
         workbench.open_model = Some(OpenModel {
             model_path: result.id,
             display_name: result.name,
             source: result.source,
             line_starts: result.line_starts,
             detected_name: result.detected_name,
+            cached_galley,
             read_only: result.library != ModelLibrary::InMemory && result.library != ModelLibrary::User,
             library: result.library,
         });
         workbench.diagram_dirty = true;
         workbench.is_loading = false;
     }
+
 }
 
 // ---------------------------------------------------------------------------
@@ -517,6 +526,7 @@ fn open_model(world: &mut World, id: String, name: String, library: ModelLibrary
                 source: source_arc.clone(),
                 line_starts: vec![0].into(),
                 detected_name: Some(mem_name_str),
+                cached_galley: None,
                 read_only: false,
                 library,
             });
@@ -562,8 +572,12 @@ fn open_model(world: &mut World, id: String, name: String, library: ModelLibrary
         }
 
         // Use the name from the UI immediately instead of parsing the whole AST.
-        // The AST is only needed when the user clicks "Compile & Run".
         let detected_name = Some(name_clone);
+
+        // Pre-compute text layout in the background (no fonts needed for LayoutJob logic)
+        let style = egui::Style::default();
+        let mut layout_job = crate::ui::panels::code_editor::modelica_layouter(&style, &source_text);
+        layout_job.wrap.max_width = f32::INFINITY;
 
         FileLoadResult {
             id: id_clone,
@@ -572,6 +586,7 @@ fn open_model(world: &mut World, id: String, name: String, library: ModelLibrary
             source: source_text.into(),
             line_starts: line_starts.into(),
             detected_name,
+            layout_job: Some(layout_job),
         }
     });
 
@@ -632,6 +647,7 @@ fn show_new_model_dialog(ui: &mut egui::Ui, world: &mut World) {
                             source: source_arc.clone(),
                             line_starts: vec![0].into(),
                             detected_name: Some(name.clone()),
+                            cached_galley: None,
                             read_only: false,
                             library: ModelLibrary::InMemory,
                         });

@@ -12,12 +12,12 @@
 //! This is separate from the "parsed model view" which shows existing `.mo` files.
 
 use bevy::prelude::*;
+use bevy::tasks::Task;
 use bevy_egui::egui;
 use bevy_workbench::dock::WorkbenchPanel;
 use egui_snarl::{InPin, InPinId, OutPin, OutPinId, Snarl};
 use egui_snarl::ui::{SnarlViewer, SnarlPin, PinInfo, SnarlStyle};
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use crate::visual_diagram::{
     DiagramNodeId, VisualDiagram, MSLComponentDef,
@@ -47,6 +47,8 @@ pub struct DiagramState {
     pub model_counter: u32,
     /// Counter for component placement positions.
     pub placement_counter: u32,
+    /// Active background parsing task.
+    pub parse_task: Option<Task<Option<VisualDiagram>>>,
 }
 
 impl DiagramState {
@@ -82,6 +84,7 @@ impl Default for DiagramState {
             compile_ok: false,
             model_counter: 0,
             placement_counter: 0,
+            parse_task: None,
         }
     }
 }
@@ -253,6 +256,12 @@ fn import_model_to_diagram(source: &str) -> Option<VisualDiagram> {
         return None;
     }
 
+    // Safety: prevent importing massive packages (like Units) as diagrams
+    if graph.node_count() > 100 {
+        warn!("[Diagram] Model too complex ({} nodes). Skipping diagram generation.", graph.node_count());
+        return None;
+    }
+
     // Convert ComponentGraph → VisualDiagram
     let mut diagram = VisualDiagram::default();
 
@@ -403,7 +412,7 @@ impl WorkbenchPanel for DiagramPanel {
             world.insert_resource(DiagramState::default());
         }
 
-        // ── Check if open_model changed → import diagram ──
+        // ── Check if open_model changed → trigger import task ──
         {
             let dirty = world.get_resource::<WorkbenchState>()
                 .map(|s| s.diagram_dirty)
@@ -411,12 +420,13 @@ impl WorkbenchPanel for DiagramPanel {
             if dirty {
                 if let Some(state) = world.get_resource::<WorkbenchState>() {
                     if let Some(ref model) = state.open_model {
-                        // Parse source → build VisualDiagram
-                        if let Some(diagram) = import_model_to_diagram(&model.source) {
-                            if let Some(mut ds) = world.get_resource_mut::<DiagramState>() {
-                                ds.diagram = diagram;
-                                ds.rebuild_snarl();
-                            }
+                        let source = model.source.clone();
+                        let pool = bevy::tasks::AsyncComputeTaskPool::get();
+                        let task = pool.spawn(async move {
+                            import_model_to_diagram(&source)
+                        });
+                        if let Some(mut ds) = world.get_resource_mut::<DiagramState>() {
+                            ds.parse_task = Some(task);
                         }
                     }
                 }
@@ -424,6 +434,32 @@ impl WorkbenchPanel for DiagramPanel {
                     state.diagram_dirty = false;
                 }
             }
+        }
+
+        // ── Poll import task ──
+        let mut is_parsing = false;
+        if let Some(mut ds) = world.get_resource_mut::<DiagramState>() {
+            if let Some(mut task) = ds.parse_task.take() {
+                if let Some(diagram_opt) = futures_lite::future::block_on(futures_lite::future::poll_once(&mut task)) {
+                    if let Some(diagram) = diagram_opt {
+                        ds.diagram = diagram;
+                        ds.rebuild_snarl();
+                    }
+                } else {
+                    ds.parse_task = Some(task);
+                    is_parsing = true;
+                }
+            }
+        }
+
+        if is_parsing {
+            ui.vertical_centered(|ui| {
+                ui.add_space(100.0);
+                ui.spinner();
+                ui.heading("Analyzing model structure...");
+                ui.label(egui::RichText::new("Parsing Modelica AST for diagram visualization").size(10.0).color(egui::Color32::GRAY));
+            });
+            return;
         }
 
         // ── Breadcrumb bar ──

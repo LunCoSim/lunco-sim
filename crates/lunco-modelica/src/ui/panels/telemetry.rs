@@ -25,6 +25,9 @@ impl WorkbenchPanel for TelemetryPanel {
     fn ui(&mut self, _ui: &mut egui::Ui) {}
 
     fn ui_world(&mut self, ui: &mut egui::Ui, world: &mut World) {
+        // Fix selection leakage
+        ui.style_mut().interaction.selectable_labels = false;
+
         // Auto-select first ModelicaModel entity if none selected (matches old behavior)
         {
             let needs_select = world.get_resource::<WorkbenchState>()

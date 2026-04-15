@@ -27,6 +27,8 @@ pub struct EditorBufferState {
     pub line_starts: Arc<[usize]>,
     /// Memoized detected name to avoid per-frame regex on large strings.
     pub detected_name: Option<String>,
+    /// Pre-computed text layout for high-performance rendering.
+    pub cached_galley: Option<Arc<egui::Galley>>,
 }
 
 impl Default for EditorBufferState {
@@ -37,6 +39,7 @@ impl Default for EditorBufferState {
             text: String::new(),
             line_starts: vec![0].into(),
             detected_name: None,
+            cached_galley: None,
         }
     }
 }
@@ -88,17 +91,16 @@ impl WorkbenchPanel for CodeEditorPanel {
         }
 
         if let Some(ref path) = model_path {
-
             let needs_sync = {
                 let buf_state = world.resource::<EditorBufferState>();
                 buf_state.model_path != *path
             };
 
             if needs_sync {
-                let (source, line_starts, detected_name) = {
+                let (source, line_starts, detected_name, galley) = {
                     let state = world.resource::<WorkbenchState>();
                     let m = state.open_model.as_ref().unwrap();
-                    (m.source.to_string(), m.line_starts.clone(), m.detected_name.clone())
+                    (m.source.to_string(), m.line_starts.clone(), m.detected_name.clone(), m.cached_galley.clone())
                 };
                 
                 let mut buf_state = world.resource_mut::<EditorBufferState>();
@@ -107,6 +109,7 @@ impl WorkbenchPanel for CodeEditorPanel {
                 buf_state.model_path = path.clone();
                 buf_state.source_hash = hash_content(&buf_state.text);
                 buf_state.detected_name = detected_name;
+                buf_state.cached_galley = galley;
             }
         }
 
@@ -246,78 +249,78 @@ impl WorkbenchPanel for CodeEditorPanel {
         let mut buffer_changed = false;
         let mut new_text = String::new();
 
-        if is_read_only {
-            // High-performance virtualized viewer for large read-only STL files
-            let buf_state = world.resource::<EditorBufferState>();
-            let source = &buf_state.text;
-            let line_starts = &buf_state.line_starts;
-            let font_id = egui::TextStyle::Monospace.resolve(ui.style());
-            let row_height = ui.spacing().interact_size.y.max(font_id.size);
+        let available_height = ui.available_height();
 
-            egui::ScrollArea::both()
-                .auto_shrink([false; 2])
-                .show_rows(ui, row_height, line_starts.len(), |ui, row_range| {
-                    ui.style_mut().spacing.item_spacing.y = 0.0;
-                    for row in row_range {
-                        let start = line_starts[row];
-                        let end = if row + 1 < line_starts.len() {
-                            line_starts[row + 1].saturating_sub(1) // exclude \n
-                        } else {
-                            source.len()
-                        };
-                        
-                        let line_str = source.get(start..end).unwrap_or("");
-                        let job = modelica_layouter(ui, line_str);
-                        
-                        // Line numbers (non-selectable)
-                        ui.horizontal(|ui| {
+        egui::ScrollArea::both()
+            .auto_shrink([false; 2])
+            .min_scrolled_height(available_height)
+            .show(ui, |ui| {
+                // Fetch data needed for the closure first
+                let (text_str, line_starts_len, galley_cache) = {
+                    let buf_state = world.resource::<EditorBufferState>();
+                    (buf_state.text.clone(), buf_state.line_starts.len(), buf_state.cached_galley.clone())
+                };
+                let mut text = text_str.as_str();
+                let is_ro = is_read_only;
+
+                ui.horizontal_top(|ui| {
+                    ui.spacing_mut().item_spacing.x = 0.0;
+
+                    // Gutter
+                    let font_id = egui::TextStyle::Monospace.resolve(ui.style());
+                    let row_height = ui.spacing().interact_size.y.max(font_id.size);
+
+                    ui.vertical(|ui| {
+                        ui.set_width(35.0);
+                        for i in 1..=line_starts_len {
                             ui.add_sized([30.0, row_height], egui::Label::new(
-                                egui::RichText::new(format!("{:>3}", row + 1))
+                                egui::RichText::new(format!("{:>3}", i))
                                     .size(10.0)
                                     .color(egui::Color32::DARK_GRAY)
                             ).selectable(false));
-                            ui.label(job);
-                        });
+                        }
+                    });
+
+                    // TextEdit
+                    let output = ui.add(egui::TextEdit::multiline(&mut text)
+                        .font(egui::TextStyle::Monospace)
+                        .code_editor()
+                        .desired_width(f32::INFINITY)
+                        .desired_rows(1)
+                        .lock_focus(true)
+                        .interactive(true) // Always interactive for selection
+                        .layouter(&mut |ui, string, _wrap_width| {
+                            if is_ro {
+                                if let Some(galley) = &galley_cache {
+                                    return galley.clone();
+                                }
+                            }
+                            let mut layout_job = modelica_layouter(&ui.style(), string.as_str());
+                            layout_job.wrap.max_width = f32::INFINITY;
+                            ui.painter().layout_job(layout_job)
+                        })
+                    );
+
+                    if output.changed() && !is_ro {
+                        new_text = text.to_string();
+                        buffer_changed = true;
                     }
                 });
-        } else {
-            // Standard editor for writable files
-            egui::ScrollArea::both().auto_shrink([false; 2]).show(ui, |ui| {
-                let mut buf_state = world.resource_mut::<EditorBufferState>();
-                let mut text = buf_state.text.as_str();
-                
-                let output = egui::TextEdit::multiline(&mut text)
-                    .font(egui::TextStyle::Monospace)
-                    .code_editor()
-                    .desired_width(f32::INFINITY)
-                    .desired_rows(40)
-                    .lock_focus(true)
-                    .interactive(true)
-                    .layouter(&mut |ui, string, wrap_width| {
-                        let mut layout_job = modelica_layouter(ui, string.as_str());
-                        layout_job.wrap.max_width = wrap_width;
-                        ui.painter().layout_job(layout_job)
-                    })
-                    .show(ui);
-
-                if output.response.changed() {
-                    buf_state.text = text.to_string();
-                    // Recompute line starts for the editor buffer if changed
-                    let mut new_starts = vec![0];
-                    for (i, byte) in buf_state.text.as_bytes().iter().enumerate() {
-                        if *byte == b'\n' {
-                            new_starts.push(i + 1);
-                        }
-                    }
-                    buf_state.line_starts = new_starts.into();
-                    buf_state.detected_name = extract_model_name(&buf_state.text);
-                    new_text = buf_state.text.clone();
-                    buffer_changed = true;
-                }
             });
-        }
 
         if buffer_changed {
+            let mut buf_state = world.resource_mut::<EditorBufferState>();
+            buf_state.text = new_text.clone();
+            // Recompute line starts for the editor buffer if changed
+            let mut new_starts = vec![0];
+            for (i, byte) in buf_state.text.as_bytes().iter().enumerate() {
+                if *byte == b'\n' {
+                    new_starts.push(i + 1);
+                }
+            }
+            buf_state.line_starts = new_starts.into();
+            buf_state.detected_name = extract_model_name(&buf_state.text);
+
             if let Some(mut state) = world.get_resource_mut::<WorkbenchState>() {
                 if state.editor_buffer != new_text {
                     state.editor_buffer = new_text;
@@ -327,9 +330,9 @@ impl WorkbenchPanel for CodeEditorPanel {
     }
 }
 
-fn modelica_layouter(ui: &egui::Ui, src: &str) -> egui::text::LayoutJob {
+pub fn modelica_layouter(style: &egui::Style, src: &str) -> egui::text::LayoutJob {
     let mut job = egui::text::LayoutJob::default();
-    let font_id = egui::TextStyle::Monospace.resolve(ui.style());
+    let font_id = egui::TextStyle::Monospace.resolve(style);
 
     // Expanded Modelica keywords
     let keywords = [

@@ -44,6 +44,8 @@ pub struct OpenModel {
     pub line_starts: Arc<[usize]>,
     /// Memoized model name from AST.
     pub detected_name: Option<String>,
+    /// Pre-computed text layout for high-performance rendering.
+    pub cached_galley: Option<Arc<bevy_egui::egui::Galley>>,
     /// Whether this model is read-only.
     pub read_only: bool,
     /// Which library this model came from.
