@@ -81,7 +81,6 @@ impl Plugin for ModelicaUiPlugin {
             .insert_resource(panels::package_browser::PackageTreeCache::new())
             .add_systems(Update, panels::package_browser::handle_package_loading_tasks)
             .register_panel(panels::package_browser::PackageBrowserPanel)
-            .register_panel(panels::msl_palette::MSLPalettePanel)
             .register_panel(panels::code_editor::CodeEditorPanel)
             .register_panel(panels::telemetry::TelemetryPanel)
             .register_panel(panels::graphs::GraphsPanel)

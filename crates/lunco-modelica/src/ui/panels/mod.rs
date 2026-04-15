@@ -5,4 +5,3 @@ pub mod code_editor;
 pub mod telemetry;
 pub mod graphs;
 pub mod diagram;
-pub mod msl_palette;

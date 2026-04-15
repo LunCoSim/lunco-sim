@@ -115,13 +115,13 @@ impl Default for DiagramTheme {
             node_inner_margin: 6,
             node_rounding: 4,
 
-            header_name_size: 12.0,
-            header_type_size: 9.0,
-            header_type_color: egui::Color32::from_rgb(140, 140, 150),
+            header_name_size: 10.0,
+            header_type_size: 8.0,
+            header_type_color: egui::Color32::from_rgb(120, 120, 130),
 
             symbol_stroke_width: 2.0,
             symbol_color: egui::Color32::from_rgb(200, 200, 210),
-            body_min_size: egui::Vec2::new(80.0, 50.0),
+            body_min_size: egui::Vec2::new(100.0, 100.0),
 
             port_dot_radius: 5.0,
             color_electrical: egui::Color32::from_rgb(70, 140, 255),
@@ -173,6 +173,8 @@ impl DiagramState {
             id: node_id,
             instance_name: self.diagram.get_node(node_id).unwrap().instance_name.clone(),
             type_name: def.name,
+            description: def.description,
+            icon_text: def.icon_text,
             ports,
             connector_types,
         };
@@ -212,6 +214,8 @@ pub enum DiagramNode {
         id: DiagramNodeId,
         instance_name: String,
         type_name: String,
+        description: Option<String>,
+        icon_text: Option<String>,
         ports: Vec<String>,
         connector_types: Vec<String>,
     },
@@ -803,35 +807,10 @@ fn draw_step(painter: &egui::Painter, rect: egui::Rect, theme: &DiagramTheme) {
     );
 }
 
-/// Draw a generic/fallback component symbol (simple rectangle with label).
-fn draw_generic(painter: &egui::Painter, rect: egui::Rect, type_name: &str, theme: &DiagramTheme) {
-    let stroke = egui::Stroke::new(theme.symbol_stroke_width, theme.symbol_color);
-    let cx = rect.center().x;
-    let cy = rect.center().y;
-    let bw = rect.width() * 0.6;
-    let bh = rect.height() * 0.6;
-
-    painter.rect_stroke(
-        egui::Rect::from_center_size(egui::Pos2::new(cx, cy), egui::Vec2::new(bw, bh)),
-        2.0,
-        stroke,
-        egui::StrokeKind::Outside,
-    );
-
-    // Short label
-    let label = if type_name.len() > 6 { &type_name[..6] } else { type_name };
-    let font = egui::FontId::proportional(bh * 0.3);
-    painter.text(
-        egui::Pos2::new(cx, cy),
-        egui::Align2::CENTER_CENTER,
-        label,
-        font,
-        theme.symbol_color,
-    );
-}
 
 /// Dispatch the correct symbol drawing function based on component type.
-fn draw_symbol(painter: &egui::Painter, rect: egui::Rect, type_name: &str, theme: &DiagramTheme) {
+fn draw_symbol_v2(painter: &egui::Painter, rect: egui::Rect, node: &DiagramNode, theme: &DiagramTheme) {
+    let type_name = node.subtitle();
     match type_name {
         "Resistor" => draw_resistor(painter, rect, theme),
         "Capacitor" => draw_capacitor(painter, rect, theme),
@@ -849,10 +828,53 @@ fn draw_symbol(painter: &egui::Painter, rect: egui::Rect, type_name: &str, theme
         "Gain" => draw_gain(painter, rect, theme),
         "Add" => draw_add(painter, rect, theme),
         "Integrator" => draw_integrator(painter, rect, theme),
-        "Step" => draw_step(painter, rect, theme),
-        other => draw_generic(painter, rect, other, theme),
+        "Step" | "Constant" | "Cosh" | "Sinh" | "Tanh" | "Exp" | "Log" | "Log10" | "Sin" | "Cos" | "Tan" | "Asin" | "Acos" | "Atan" | "Atan2" 
+            | "Sqrt" | "ABS" | "Sign" => draw_generic_block_v2(painter, rect, node, theme),
+        _ => {
+             draw_generic_block_v2(painter, rect, node, theme)
+        }
     }
 }
+
+/// Draw a block-style component symbol (math blocks).
+fn draw_generic_block_v2(painter: &egui::Painter, rect: egui::Rect, node: &DiagramNode, theme: &DiagramTheme) {
+    let stroke = egui::Stroke::new(theme.symbol_stroke_width, theme.symbol_color);
+    let cx = rect.center().x;
+    let cy = rect.center().y;
+    let bw = rect.width() * 0.7;
+    let bh = rect.height() * 0.7;
+
+    painter.rect_stroke(
+        egui::Rect::from_center_size(egui::Pos2::new(cx, cy), egui::Vec2::new(bw, bh)),
+        0.0,
+        stroke,
+        egui::StrokeKind::Outside,
+    );
+
+    let type_name = node.subtitle();
+    // Use icon_text (e.g. "cosh") or first 8 chars of type name
+    let label = match node {
+        DiagramNode::Component { icon_text, .. } => icon_text.as_deref().unwrap_or(type_name),
+    };
+    let label = if label.len() > 10 { &label[..10] } else { label };
+    
+    let font = egui::FontId::proportional(bh * 0.3);
+    painter.text(
+        egui::Pos2::new(cx, cy),
+        egui::Align2::CENTER_CENTER,
+        label,
+        font,
+        theme.symbol_color,
+    );
+}
+
+/// Helper to get icon text from a node (used by draw_symbol).
+fn get_node_icon_text(snarl: &Snarl<DiagramNode>, node_id: NodeId) -> Option<String> {
+    match &snarl[node_id] {
+        DiagramNode::Component { icon_text, .. } => icon_text.clone(),
+    }
+}
+
 
 // ---------------------------------------------------------------------------
 // Connector-colour helper
@@ -882,6 +904,7 @@ pub struct DiagramViewer<'a> {
 }
 
 impl<'a> SnarlViewer<DiagramNode> for DiagramViewer<'a> {
+
     fn title(&mut self, node: &DiagramNode) -> String {
         node.title().to_string()
     }
@@ -955,29 +978,17 @@ impl<'a> SnarlViewer<DiagramNode> for DiagramViewer<'a> {
 
     // ── Header — instance name + type ──
 
+    // ── Header — disabled to save space (labels moved to body) ──
+
+
     fn show_header(
         &mut self,
-        node_id: NodeId,
+        _node_id: NodeId,
         _inputs: &[InPin],
         _outputs: &[OutPin],
-        ui: &mut egui::Ui,
-        snarl: &mut Snarl<DiagramNode>,
-    ) {
-        let node = &snarl[node_id];
-        ui.horizontal(|ui| {
-            ui.label(
-                egui::RichText::new(node.title())
-                    .size(self.theme.header_name_size)
-                    .strong()
-                    .color(egui::Color32::WHITE),
-            );
-            ui.label(
-                egui::RichText::new(format!("({})", node.subtitle()))
-                    .size(self.theme.header_type_size)
-                    .color(self.theme.header_type_color),
-            );
-        });
-    }
+        _ui: &mut egui::Ui,
+        _snarl: &mut Snarl<DiagramNode>,
+    ) {}
 
     // ── Body — custom component shapes ──
 
@@ -985,6 +996,7 @@ impl<'a> SnarlViewer<DiagramNode> for DiagramViewer<'a> {
         self.schematic_mode
     }
 
+        
     fn show_body(
         &mut self,
         node_id: NodeId,
@@ -994,12 +1006,28 @@ impl<'a> SnarlViewer<DiagramNode> for DiagramViewer<'a> {
         snarl: &mut Snarl<DiagramNode>,
     ) {
         let node = &snarl[node_id];
-        let type_name = node.subtitle();
-
+        let instance_name = node.title();
+        
         // Allocate a drawing area
-        let (rect, _) = ui.allocate_exact_size(self.theme.body_min_size, egui::Sense::hover());
+        let body_size = self.theme.body_min_size;
+        let desired_size = egui::vec2(body_size.x, body_size.y + 15.0);
+        let (rect, _) = ui.allocate_exact_size(desired_size, egui::Sense::hover());
+        
+        let symbol_rect = egui::Rect::from_min_size(rect.min, body_size);
         let painter = ui.painter();
-        draw_symbol(painter, rect, type_name, self.theme);
+
+        // Pass the whole node to draw_symbol so it can access icon_text
+        draw_symbol_v2(painter, symbol_rect, node, self.theme);
+
+        // Draw the instance name BELOW
+        let label_pos = egui::pos2(rect.center().x, symbol_rect.bottom() + 8.0);
+        painter.text(
+            label_pos,
+            egui::Align2::CENTER_CENTER,
+            instance_name,
+            egui::FontId::proportional(11.0),
+            egui::Color32::from_rgb(180, 180, 190),
+        );
     }
 
     fn has_footer(&mut self, _node: &DiagramNode) -> bool {
@@ -1086,11 +1114,14 @@ impl<'a> SnarlViewer<DiagramNode> for DiagramViewer<'a> {
                         let connector_types: Vec<String> = comp.ports.iter().map(|p| p.connector_type.clone()).collect();
                         let node = DiagramNode::Component {
                             id: DiagramNodeId::new(),
-                            instance_name: format!("New{}", comp.name), // will be reconciled on sync
+                            instance_name: format!("New{}", comp.name),
                             type_name: comp.name.clone(),
+                            description: comp.description.clone(),
+                            icon_text: comp.icon_text.clone(),
                             ports,
                             connector_types,
                         };
+                        // Place node at click.
                         snarl.insert_node(_pos, node);
                         ui.close();
                     }
@@ -1163,6 +1194,8 @@ impl<'a> SnarlViewer<DiagramNode> for DiagramViewer<'a> {
                         id: DiagramNodeId::new(),
                         instance_name: format!("New{}", comp.name),
                         type_name: comp.name.clone(),
+                        description: comp.description.clone(),
+                        icon_text: comp.icon_text.clone(),
                         ports,
                         connector_types,
                     };
@@ -1251,12 +1284,13 @@ fn import_model_to_diagram(source: &str) -> Option<VisualDiagram> {
         .map(|c| (c.name.as_str(), c))
         .collect();
 
-    // Place nodes in a grid layout
+    // Place nodes in a grid layout (fallback for unannotated components)
     let node_spacing_x = 200.0;
     let node_spacing_y = 150.0;
     let cols = 3;
+    let mut placement_idx = 0;
 
-    for (idx, node) in graph.nodes.iter().enumerate() {
+    for node in graph.nodes.iter() {
         if node.qualified_name.is_empty() {
             continue;
         }
@@ -1271,9 +1305,33 @@ fn import_model_to_diagram(source: &str) -> Option<VisualDiagram> {
             .cloned();
 
         if let Some(def) = component_def {
-            let row = idx / cols;
-            let col = idx % cols;
-            let pos = egui::Pos2::new(col as f32 * node_spacing_x, row as f32 * node_spacing_y);
+            let mut pos = None;
+            
+            // Try to find annotation coordinate for this instance
+            let safe_name = regex::escape(short_name);
+            let pattern = safe_name + r"(?:\s*\([^)]*\))?\s+annotation\s*\(\s*Placement\s*\(\s*transformation\s*\(\s*extent\s*=\s*\{\{\s*([-\d\.]+)\s*,\s*([-\d\.]+)\s*\}\s*,\s*\{\s*([-\d\.]+)\s*,\s*([-\d\.]+)\s*\}\}\s*\)\s*\)\s*\)";
+            if let Ok(re) = regex::Regex::new(&pattern) {
+                if let Some(cap) = re.captures(source) {
+                    if let (Ok(x1), Ok(y1), Ok(x2), Ok(y2)) = (
+                        cap[1].parse::<f32>(),
+                        cap[2].parse::<f32>(),
+                        cap[3].parse::<f32>(),
+                        cap[4].parse::<f32>(),
+                    ) {
+                        let x = (x1 + x2) / 2.0;
+                        let y = -((y1 + y2) / 2.0); // Modelica is +UP, Snarl is +DOWN
+                        pos = Some(egui::Pos2::new(x, y));
+                    }
+                }
+            }
+
+            // Fallback to grid pos if no annotation
+            let pos = pos.unwrap_or_else(|| {
+                let row = placement_idx / cols;
+                let col = placement_idx % cols;
+                placement_idx += 1;
+                egui::Pos2::new(col as f32 * node_spacing_x, row as f32 * node_spacing_y)
+            });
 
             let node_id = diagram.add_node(def.clone(), pos);
 
@@ -1330,6 +1388,8 @@ fn build_snarl(diagram: &VisualDiagram) -> Snarl<DiagramNode> {
             id: node.id,
             instance_name: node.instance_name.clone(),
             type_name: node.component_def.name.clone(),
+            description: node.component_def.description.clone(),
+            icon_text: node.component_def.icon_text.clone(),
             ports,
             connector_types,
         };
@@ -1366,9 +1426,9 @@ fn sync_connections(snarl: &Snarl<DiagramNode>, diagram: &mut VisualDiagram) {
     // 1. Reconcile: add any snarl nodes that are missing from the diagram
     //    (created via right-click → Add Component on the canvas).
     for (_sid, _pos, snarl_node) in snarl.nodes_pos_ids() {
-        if let DiagramNode::Component { id, type_name, .. } = snarl_node {
-            let exists = diagram.nodes.iter().any(|n| n.id == *id);
-            if !exists {
+        let DiagramNode::Component { id, type_name, .. } = snarl_node;
+        let exists = diagram.nodes.iter().any(|n| n.id == *id);
+        if !exists {
                 // Look up the MSL def for this type
                 let msl_lib = msl_component_library();
                 if let Some(def) = msl_lib.iter().find(|c| c.name == *type_name) {
@@ -1380,23 +1440,20 @@ fn sync_connections(snarl: &Snarl<DiagramNode>, diagram: &mut VisualDiagram) {
                 }
             }
         }
-    }
 
     // 2. Remove diagram nodes that no longer exist in snarl (deleted via menu).
     diagram.nodes.retain(|n| {
         snarl.nodes().any(|snarl_node| {
-            match snarl_node {
-                DiagramNode::Component { id, .. } => *id == n.id,
-            }
+            let DiagramNode::Component { id, .. } = snarl_node;
+            *id == n.id
         })
     });
 
     // 3. Update positions from snarl drag results.
     for (_sid, pos, snarl_node) in snarl.nodes_pos_ids() {
-        if let DiagramNode::Component { id, .. } = snarl_node {
-            if let Some(diagram_node) = diagram.get_node_mut(*id) {
-                diagram_node.position = egui::Pos2::new(pos.x, pos.y);
-            }
+        let DiagramNode::Component { id, .. } = snarl_node;
+        if let Some(diagram_node) = diagram.get_node_mut(*id) {
+            diagram_node.position = egui::Pos2::new(pos.x, pos.y);
         }
     }
 
@@ -1621,6 +1678,7 @@ impl WorkbenchPanel for DiagramPanel {
         // Build custom snarl style
         let mut snarl_style = SnarlStyle::default();
         snarl_style.pin_size = Some(theme.port_dot_radius * 2.0);
+        snarl_style.collapsible = Some(false);
 
         if let Some(mut ds) = world.get_resource_mut::<DiagramState>() {
             let mut viewer = DiagramViewer {
@@ -1703,3 +1761,4 @@ fn do_compile(world: &mut World) {
         s.compile_status = Some("Compiling…".into());
     }
 }
+ 

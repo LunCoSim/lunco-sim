@@ -101,6 +101,10 @@ pub struct MSLComponentDef {
     pub category: String,
     /// Icon/display name.
     pub display_name: String,
+    /// Detailed description.
+    pub description: Option<String>,
+    /// Schematic text (e.g. "cosh").
+    pub icon_text: Option<String>,
     /// Ports defined by this component.
     pub ports: Vec<PortDef>,
     /// Parameters that can be configured.
@@ -223,255 +227,29 @@ impl VisualDiagram {
 // MSL Component Library
 // ---------------------------------------------------------------------------
 
-/// Returns the built-in MSL component definitions available in the palette.
-pub fn msl_component_library() -> Vec<MSLComponentDef> {
-    vec![
-        // ── Electrical: Analog Basic ──
-        MSLComponentDef {
-            name: "Resistor".into(),
-            msl_path: "Modelica.Electrical.Analog.Basic.Resistor".into(),
-            category: "Electrical/Analog/Basic".into(),
-            display_name: "⚡ Resistor".into(),
-            ports: vec![
-                PortDef { name: "p".into(), connector_type: "Pin".into(), msl_path: "Modelica.Electrical.Analog.Interfaces.Pin".into(), is_flow: true },
-                PortDef { name: "n".into(), connector_type: "Pin".into(), msl_path: "Modelica.Electrical.Analog.Interfaces.Pin".into(), is_flow: true },
-            ],
-            parameters: vec![
-                ParamDef { name: "R".into(), param_type: "Real".into(), default: "100".into(), unit: Some("Ohm".into()) },
-            ],
-        },
-        MSLComponentDef {
-            name: "Capacitor".into(),
-            msl_path: "Modelica.Electrical.Analog.Basic.Capacitor".into(),
-            category: "Electrical/Analog/Basic".into(),
-            display_name: "⚡ Capacitor".into(),
-            ports: vec![
-                PortDef { name: "p".into(), connector_type: "Pin".into(), msl_path: "Modelica.Electrical.Analog.Interfaces.Pin".into(), is_flow: true },
-                PortDef { name: "n".into(), connector_type: "Pin".into(), msl_path: "Modelica.Electrical.Analog.Interfaces.Pin".into(), is_flow: true },
-            ],
-            parameters: vec![
-                ParamDef { name: "C".into(), param_type: "Real".into(), default: "0.001".into(), unit: Some("F".into()) },
-            ],
-        },
-        MSLComponentDef {
-            name: "Inductor".into(),
-            msl_path: "Modelica.Electrical.Analog.Basic.Inductor".into(),
-            category: "Electrical/Analog/Basic".into(),
-            display_name: "⚡ Inductor".into(),
-            ports: vec![
-                PortDef { name: "p".into(), connector_type: "Pin".into(), msl_path: "Modelica.Electrical.Analog.Interfaces.Pin".into(), is_flow: true },
-                PortDef { name: "n".into(), connector_type: "Pin".into(), msl_path: "Modelica.Electrical.Analog.Interfaces.Pin".into(), is_flow: true },
-            ],
-            parameters: vec![
-                ParamDef { name: "L".into(), param_type: "Real".into(), default: "0.1".into(), unit: Some("H".into()) },
-            ],
-        },
-        MSLComponentDef {
-            name: "Conductor".into(),
-            msl_path: "Modelica.Electrical.Analog.Basic.Conductor".into(),
-            category: "Electrical/Analog/Basic".into(),
-            display_name: "⚡ Conductor".into(),
-            ports: vec![
-                PortDef { name: "p".into(), connector_type: "Pin".into(), msl_path: "Modelica.Electrical.Analog.Interfaces.Pin".into(), is_flow: true },
-                PortDef { name: "n".into(), connector_type: "Pin".into(), msl_path: "Modelica.Electrical.Analog.Interfaces.Pin".into(), is_flow: true },
-            ],
-            parameters: vec![
-                ParamDef { name: "G".into(), param_type: "Real".into(), default: "1".into(), unit: Some("S".into()) },
-            ],
-        },
-        MSLComponentDef {
-            name: "Ground".into(),
-            msl_path: "Modelica.Electrical.Analog.Basic.Ground".into(),
-            category: "Electrical/Analog/Basic".into(),
-            display_name: "⏚ Ground".into(),
-            ports: vec![
-                PortDef { name: "p".into(), connector_type: "Pin".into(), msl_path: "Modelica.Electrical.Analog.Interfaces.Pin".into(), is_flow: true },
-            ],
-            parameters: vec![],
-        },
+use std::sync::OnceLock;
 
-        // ── Electrical: Sources ──
-        MSLComponentDef {
-            name: "ConstantVoltage".into(),
-            msl_path: "Modelica.Electrical.Analog.Sources.ConstantVoltage".into(),
-            category: "Electrical/Analog/Sources".into(),
-            display_name: "🔋 Constant Voltage".into(),
-            ports: vec![
-                PortDef { name: "p".into(), connector_type: "Pin".into(), msl_path: "Modelica.Electrical.Analog.Interfaces.Pin".into(), is_flow: true },
-                PortDef { name: "n".into(), connector_type: "Pin".into(), msl_path: "Modelica.Electrical.Analog.Interfaces.Pin".into(), is_flow: true },
-            ],
-            parameters: vec![
-                ParamDef { name: "V".into(), param_type: "Real".into(), default: "10".into(), unit: Some("V".into()) },
-            ],
-        },
-        MSLComponentDef {
-            name: "ConstantCurrent".into(),
-            msl_path: "Modelica.Electrical.Analog.Sources.ConstantCurrent".into(),
-            category: "Electrical/Analog/Sources".into(),
-            display_name: "🔌 Constant Current".into(),
-            ports: vec![
-                PortDef { name: "p".into(), connector_type: "Pin".into(), msl_path: "Modelica.Electrical.Analog.Interfaces.Pin".into(), is_flow: true },
-                PortDef { name: "n".into(), connector_type: "Pin".into(), msl_path: "Modelica.Electrical.Analog.Interfaces.Pin".into(), is_flow: true },
-            ],
-            parameters: vec![
-                ParamDef { name: "I".into(), param_type: "Real".into(), default: "1".into(), unit: Some("A".into()) },
-            ],
-        },
+static MSL_LIBRARY: OnceLock<Vec<MSLComponentDef>> = OnceLock::new();
 
-        // ── Electrical: Sensors ──
-        MSLComponentDef {
-            name: "VoltageSensor".into(),
-            msl_path: "Modelica.Electrical.Analog.Sensors.VoltageSensor".into(),
-            category: "Electrical/Analog/Sensors".into(),
-            display_name: "📊 Voltage Sensor".into(),
-            ports: vec![
-                PortDef { name: "p".into(), connector_type: "Pin".into(), msl_path: "Modelica.Electrical.Analog.Interfaces.Pin".into(), is_flow: true },
-                PortDef { name: "n".into(), connector_type: "Pin".into(), msl_path: "Modelica.Electrical.Analog.Interfaces.Pin".into(), is_flow: true },
-            ],
-            parameters: vec![],
-        },
-        MSLComponentDef {
-            name: "CurrentSensor".into(),
-            msl_path: "Modelica.Electrical.Analog.Sensors.CurrentSensor".into(),
-            category: "Electrical/Analog/Sensors".into(),
-            display_name: "📊 Current Sensor".into(),
-            ports: vec![
-                PortDef { name: "p".into(), connector_type: "Pin".into(), msl_path: "Modelica.Electrical.Analog.Interfaces.Pin".into(), is_flow: true },
-                PortDef { name: "n".into(), connector_type: "Pin".into(), msl_path: "Modelica.Electrical.Analog.Interfaces.Pin".into(), is_flow: true },
-            ],
-            parameters: vec![],
-        },
-
-        // ── Electrical: Ideal ──
-        MSLComponentDef {
-            name: "IdealOpeningSwitch".into(),
-            msl_path: "Modelica.Electrical.Analog.Ideal.IdealOpeningSwitch".into(),
-            category: "Electrical/Analog/Ideal".into(),
-            display_name: "🔘 Switch (open)".into(),
-            ports: vec![
-                PortDef { name: "p".into(), connector_type: "Pin".into(), msl_path: "Modelica.Electrical.Analog.Interfaces.Pin".into(), is_flow: true },
-                PortDef { name: "n".into(), connector_type: "Pin".into(), msl_path: "Modelica.Electrical.Analog.Interfaces.Pin".into(), is_flow: true },
-            ],
-            parameters: vec![
-                ParamDef { name: "Goff".into(), param_type: "Real".into(), default: "1e-8".into(), unit: Some("S".into()) },
-            ],
-        },
-
-        // ── Mechanical: Translational ──
-        MSLComponentDef {
-            name: "Spring".into(),
-            msl_path: "Modelica.Mechanics.Translational.Components.Spring".into(),
-            category: "Mechanics/Translational/Components".into(),
-            display_name: "🔩 Spring".into(),
-            ports: vec![
-                PortDef { name: "flange_a".into(), connector_type: "Flange_a".into(), msl_path: "Modelica.Mechanics.Translational.Interfaces.Flange_a".into(), is_flow: true },
-                PortDef { name: "flange_b".into(), connector_type: "Flange_b".into(), msl_path: "Modelica.Mechanics.Translational.Interfaces.Flange_b".into(), is_flow: true },
-            ],
-            parameters: vec![
-                ParamDef { name: "c".into(), param_type: "Real".into(), default: "100".into(), unit: Some("N/m".into()) },
-            ],
-        },
-        MSLComponentDef {
-            name: "Damper".into(),
-            msl_path: "Modelica.Mechanics.Translational.Components.Damper".into(),
-            category: "Mechanics/Translational/Components".into(),
-            display_name: "🔩 Damper".into(),
-            ports: vec![
-                PortDef { name: "flange_a".into(), connector_type: "Flange_a".into(), msl_path: "Modelica.Mechanics.Translational.Interfaces.Flange_a".into(), is_flow: true },
-                PortDef { name: "flange_b".into(), connector_type: "Flange_b".into(), msl_path: "Modelica.Mechanics.Translational.Interfaces.Flange_b".into(), is_flow: true },
-            ],
-            parameters: vec![
-                ParamDef { name: "d".into(), param_type: "Real".into(), default: "10".into(), unit: Some("N·s/m".into()) },
-            ],
-        },
-        MSLComponentDef {
-            name: "Mass".into(),
-            msl_path: "Modelica.Mechanics.Translational.Components.Mass".into(),
-            category: "Mechanics/Translational/Components".into(),
-            display_name: "🔩 Mass".into(),
-            ports: vec![
-                PortDef { name: "flange_a".into(), connector_type: "Flange_a".into(), msl_path: "Modelica.Mechanics.Translational.Interfaces.Flange_a".into(), is_flow: true },
-            ],
-            parameters: vec![
-                ParamDef { name: "m".into(), param_type: "Real".into(), default: "1".into(), unit: Some("kg".into()) },
-            ],
-        },
-        MSLComponentDef {
-            name: "Fixed".into(),
-            msl_path: "Modelica.Mechanics.Translational.Components.Fixed".into(),
-            category: "Mechanics/Translational/Components".into(),
-            display_name: "🔒 Fixed".into(),
-            ports: vec![
-                PortDef { name: "flange_a".into(), connector_type: "Flange_a".into(), msl_path: "Modelica.Mechanics.Translational.Interfaces.Flange_a".into(), is_flow: true },
-            ],
-            parameters: vec![],
-        },
-
-        // ── Blocks (signal) ──
-        MSLComponentDef {
-            name: "Gain".into(),
-            msl_path: "Modelica.Blocks.Math.Gain".into(),
-            category: "Blocks/Math".into(),
-            display_name: "📐 Gain".into(),
-            ports: vec![
-                PortDef { name: "u".into(), connector_type: "RealInput".into(), msl_path: "Modelica.Blocks.Interfaces.RealInput".into(), is_flow: false },
-                PortDef { name: "y".into(), connector_type: "RealOutput".into(), msl_path: "Modelica.Blocks.Interfaces.RealOutput".into(), is_flow: false },
-            ],
-            parameters: vec![
-                ParamDef { name: "k".into(), param_type: "Real".into(), default: "1".into(), unit: None },
-            ],
-        },
-        MSLComponentDef {
-            name: "Add".into(),
-            msl_path: "Modelica.Blocks.Math.Add".into(),
-            category: "Blocks/Math".into(),
-            display_name: "➕ Add".into(),
-            ports: vec![
-                PortDef { name: "u1".into(), connector_type: "RealInput".into(), msl_path: "Modelica.Blocks.Interfaces.RealInput".into(), is_flow: false },
-                PortDef { name: "u2".into(), connector_type: "RealInput".into(), msl_path: "Modelica.Blocks.Interfaces.RealInput".into(), is_flow: false },
-                PortDef { name: "y".into(), connector_type: "RealOutput".into(), msl_path: "Modelica.Blocks.Interfaces.RealOutput".into(), is_flow: false },
-            ],
-            parameters: vec![
-                ParamDef { name: "k1".into(), param_type: "Real".into(), default: "1".into(), unit: None },
-                ParamDef { name: "k2".into(), param_type: "Real".into(), default: "1".into(), unit: None },
-            ],
-        },
-        MSLComponentDef {
-            name: "Integrator".into(),
-            msl_path: "Modelica.Blocks.Continuous.Integrator".into(),
-            category: "Blocks/Continuous".into(),
-            display_name: "∫ Integrator".into(),
-            ports: vec![
-                PortDef { name: "u".into(), connector_type: "RealInput".into(), msl_path: "Modelica.Blocks.Interfaces.RealInput".into(), is_flow: false },
-                PortDef { name: "y".into(), connector_type: "RealOutput".into(), msl_path: "Modelica.Blocks.Interfaces.RealOutput".into(), is_flow: false },
-            ],
-            parameters: vec![
-                ParamDef { name: "initType".into(), param_type: "Modelica.Blocks.Types.Init".into(), default: "NoInit".into(), unit: None },
-                ParamDef { name: "y_start".into(), param_type: "Real".into(), default: "0".into(), unit: None },
-            ],
-        },
-        MSLComponentDef {
-            name: "Step".into(),
-            msl_path: "Modelica.Blocks.Sources.Step".into(),
-            category: "Blocks/Sources".into(),
-            display_name: "📶 Step".into(),
-            ports: vec![
-                PortDef { name: "y".into(), connector_type: "RealOutput".into(), msl_path: "Modelica.Blocks.Interfaces.RealOutput".into(), is_flow: false },
-            ],
-            parameters: vec![
-                ParamDef { name: "height".into(), param_type: "Real".into(), default: "1".into(), unit: None },
-                ParamDef { name: "offset".into(), param_type: "Real".into(), default: "0".into(), unit: None },
-                ParamDef { name: "startTime".into(), param_type: "Real".into(), default: "0".into(), unit: Some("s".into()) },
-            ],
-        },
-    ]
+/// Returns the MSL component definitions available in the palette.
+/// Loaded from the preprocessed MSL index.
+pub fn msl_component_library() -> &'static [MSLComponentDef] {
+    MSL_LIBRARY.get_or_init(|| {
+        let index_path = lunco_assets::msl_dir().join("msl_index.json");
+        if let Ok(content) = std::fs::read_to_string(index_path) {
+            if let Ok(lib) = serde_json::from_str(&content) {
+                return lib;
+            }
+        }
+        Vec::new()
+    })
 }
 
 /// Get unique categories from the MSL library.
 pub fn msl_categories() -> Vec<String> {
     let mut cats: Vec<String> = msl_component_library()
-        .into_iter()
-        .map(|c| c.category)
+        .iter()
+        .map(|c| c.category.clone())
         .collect();
     cats.sort();
     cats.dedup();
@@ -481,9 +259,18 @@ pub fn msl_categories() -> Vec<String> {
 /// Get components in a category.
 pub fn msl_components_in_category(category: &str) -> Vec<MSLComponentDef> {
     msl_component_library()
-        .into_iter()
+        .iter()
         .filter(|c| c.category == category)
+        .cloned()
         .collect()
+}
+
+/// Lookup a component definition by its MSL path.
+pub fn msl_component_by_path(path: &str) -> Option<MSLComponentDef> {
+    msl_component_library()
+        .iter()
+        .find(|c| c.msl_path == path)
+        .cloned()
 }
 
 // ---------------------------------------------------------------------------
@@ -528,9 +315,19 @@ pub fn generate_modelica_source(diagram: &VisualDiagram, model_name: &str) -> St
         } else {
             format!("({})", params.join(", "))
         };
+        
+        let x = node.position.x;
+        let y = node.position.y;
+        // Note: Modelica coordinate space is typically +Y up, Snarl is +Y down.
+        // We invert Y here, mapping 1:1 pixels to coordinate space.
+        let annotation = format!(
+            " annotation(Placement(transformation(extent={{{{ {}, {} }}, {{ {}, {} }}}})))",
+            x - 20.0, -y - 20.0, x + 20.0, -y + 20.0
+        );
+
         source.push_str(&format!(
-            "  {} {}{};\n",
-            short_name, node.instance_name, param_str
+            "  {} {}{}{};\n",
+            short_name, node.instance_name, param_str, annotation
         ));
     }
     source.push_str("\nequation\n");

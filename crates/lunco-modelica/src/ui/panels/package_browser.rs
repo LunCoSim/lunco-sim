@@ -283,7 +283,7 @@ impl WorkbenchPanel for PackageBrowserPanel {
             }
         });
 
-        let mut to_open = None;
+
         let mut show_dialog = false;
 
         // Fetch needed state from World before borrowing tree_cache mutably
@@ -296,6 +296,7 @@ impl WorkbenchPanel for PackageBrowserPanel {
             (path, mem)
         };
         let active_path = active_path_str.as_deref();
+        let mut to_open: Option<PackageAction> = None;
 
         {
             let mut tree_cache = world.resource_mut::<PackageTreeCache>();
@@ -304,7 +305,7 @@ impl WorkbenchPanel for PackageBrowserPanel {
                 // ── Section 1: MSL Library ──
                 ui.add_space(4.0);
                 ui.label(egui::RichText::new("📚 Modelica Standard Library").size(12.0).color(egui::Color32::from_rgb(100, 180, 255)).strong());
-                ui.label(egui::RichText::new("Read-only — reference components").size(9.0).color(egui::Color32::GRAY));
+                ui.label(egui::RichText::new("Right-click to instantiate in diagram").size(9.0).color(egui::Color32::GRAY));
 
                 // MSL root is first root
                 let cache = &mut *tree_cache;
@@ -363,14 +364,22 @@ impl WorkbenchPanel for PackageBrowserPanel {
             ui.memory_mut(|m| m.data.insert_temp(egui::Id::new("show_new_model_dialog"), true));
         }
 
-        if let Some((id, name, library)) = to_open {
-            open_model(world, id, name, library);
+        if let Some(action) = to_open {
+            match action {
+                PackageAction::Open(id, name, lib) => open_model(world, id, name, lib),
+                PackageAction::Instantiate(id) => instantiate_model(world, id),
+            }
         }
 
         if ui.memory(|m| m.data.get_temp::<bool>(egui::Id::new("show_new_model_dialog")).unwrap_or(false)) {
             show_new_model_dialog(ui, world);
         }
     }
+}
+
+enum PackageAction {
+    Open(String, String, ModelLibrary),
+    Instantiate(String),
 }
 
 // ---------------------------------------------------------------------------
@@ -383,7 +392,7 @@ fn render_node(
     active_path: Option<&str>,
     depth: usize,
     tasks: &mut Vec<Task<ScanResult>>,
-) -> Option<(String, String, ModelLibrary)> {
+) -> Option<PackageAction> {
     let indent = depth as f32 * 16.0 + 4.0;
     let mut result = None;
 
@@ -477,8 +486,20 @@ fn render_node(
                 ui.painter().rect_filled(resp.rect, 2.0, bg);
             }
 
-            if resp.clicked() {
-                result = Some((id.clone(), name.clone(), library.clone()));
+            let mut instantiate_requested = false;
+            if library == &ModelLibrary::MSL {
+                resp.context_menu(|ui| {
+                    if ui.button("➕ Instantiate in Diagram").clicked() {
+                        instantiate_requested = true;
+                        ui.close_menu();
+                    }
+                });
+            }
+
+            if instantiate_requested {
+                result = Some(PackageAction::Instantiate(id.clone()));
+            } else if resp.clicked() {
+                result = Some(PackageAction::Open(id.clone(), name.clone(), library.clone()));
             }
 
             if resp.hovered() {
@@ -592,6 +613,27 @@ fn open_model(world: &mut World, id: String, name: String, library: ModelLibrary
 
     if let Some(mut cache) = world.get_resource_mut::<PackageTreeCache>() {
         cache.file_tasks.push(task);
+    }
+}
+
+fn instantiate_model(world: &mut World, id: String) {
+    let msl_path = if let Some(stripped) = id.strip_prefix("msl_path:") {
+        format!("Modelica.{}", stripped)
+    } else {
+        id.clone()
+    };
+
+    if let Some(def) = crate::visual_diagram::msl_component_by_path(&msl_path) {
+        if let Some(mut state) = world.get_resource_mut::<crate::ui::panels::diagram::DiagramState>() {
+            state.placement_counter += 1;
+            let x = 100.0 + (state.placement_counter % 3) as f32 * 200.0;
+            let y = 80.0 + (state.placement_counter / 3) as f32 * 160.0;
+            state.add_component(def, egui::Pos2::new(x, y));
+            // Ensure diagram switches to the active tab if necessary
+            world.resource_mut::<WorkbenchState>().diagram_dirty = true;
+        }
+    } else {
+        log::warn!("Component definition not found for MSL path: {}", msl_path);
     }
 }
 
