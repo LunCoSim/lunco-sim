@@ -4,9 +4,8 @@ use avian3d::prelude::*;
 use lunco_usd::{UsdPlugins, UsdStageAsset, UsdPrimPath};
 
 fn main() {
-    println!("--- LunCo Model Viewer (Rover Only) ---");
-    App::new()
-        .add_plugins(DefaultPlugins.set(AssetPlugin {
+    let mut app = App::new();
+    app.add_plugins(DefaultPlugins.set(AssetPlugin {
             file_path: "../../assets".to_string(),
             ..default()
         }))
@@ -15,7 +14,9 @@ fn main() {
         .add_plugins(UsdPlugins)
         .add_systems(Startup, setup)
         .add_systems(Update, rotate_camera)
-        .run();
+        .add_plugins(lunco_api::LunCoApiPlugin::default());
+
+    app.run();
 }
 
 #[derive(Component)]

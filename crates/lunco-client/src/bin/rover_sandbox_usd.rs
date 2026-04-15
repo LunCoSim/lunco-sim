@@ -23,9 +23,12 @@ use lunco_materials::{BlueprintMaterialPlugin, SolarPanelMaterialPlugin};
 
 mod center_spacer;
 
+/// Parse API port from CLI args.
+/// 
+/// Supports:
 fn main() {
-    App::new()
-        .insert_resource(Time::<Fixed>::from_hz(60.0))
+    let mut app = App::new();
+    app.insert_resource(Time::<Fixed>::from_hz(60.0))
         .insert_resource(lunco_core::TimeWarpState { physics_enabled: true, ..default() })
         .insert_resource(avian3d::prelude::Gravity(bevy::math::DVec3::NEG_Y * 9.81))
         .insert_resource(lunco_celestial::Gravity::flat(9.81, bevy::math::DVec3::NEG_Y))
@@ -67,7 +70,9 @@ fn main() {
             camera_render_propagation_system,
             spawn_fallback_avatar,
         ).chain().after(avian3d::prelude::PhysicsSystems::Writeback))
-        .run();
+        .add_plugins(lunco_api::LunCoApiPlugin::default());
+
+    app.run();
 }
 
 fn camera_render_propagation_system(
