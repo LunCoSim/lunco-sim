@@ -58,8 +58,8 @@ sleep 2
 ENTITIES=$(curl -s "${BASE}/entities")
 if echo "${ENTITIES}" | jq . > /dev/null 2>&1; then
     ENTITY_COUNT=$(echo "${ENTITIES}" | jq '.data.count // 0' 2>/dev/null || echo "0")
-    echo "  Found ${ENTITY_COUNT} entities:"
-    echo "${ENTITIES}" | jq -r '.data.entities[:5][] | "    • \(.api_id) (index: \(.entity_index))"' 2>/dev/null || echo "  (unable to parse entities)"
+    echo "  Found ${ENTITY_COUNT} entities (showing first 5):"
+    echo "${ENTITIES}" | jq -r '.data.entities[:5][] | "    • [\(.type)] \(.api_id): \(.name)"' 2>/dev/null || echo "  (unable to parse entities)"
     if [ "$ENTITY_COUNT" -gt 5 ] 2>/dev/null; then
         echo "    ... and $((ENTITY_COUNT - 5)) more"
     fi
@@ -72,6 +72,7 @@ echo ""
 echo "🔎 4. Query First Entity"
 FIRST_ID=$(echo "${ENTITIES}" | jq -r '.data.entities[0].api_id // empty' 2>/dev/null)
 if [ -n "$FIRST_ID" ]; then
+    echo "Querying ID: ${FIRST_ID}"
     ENTITY_DATA=$(curl -s "${BASE}/entities/${FIRST_ID}")
     echo "${ENTITY_DATA}" | jq . 2>/dev/null || echo "  ${ENTITY_DATA}"
 else
@@ -81,7 +82,8 @@ echo ""
 
 # 5. Query an entity that doesn't exist (error case)
 echo "❌ 5. Query Non-existent Entity (expect 404)"
-ERROR_RESP=$(curl -s -w "\n  HTTP Status: %{http_code}" "${BASE}/entities/00000000000000000000000000")
+# Use a zero ID which shouldn't exist in TSID
+ERROR_RESP=$(curl -s -w "\n  HTTP Status: %{http_code}" "${BASE}/entities/0")
 echo "  ${ERROR_RESP}"
 echo ""
 

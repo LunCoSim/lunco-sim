@@ -30,17 +30,18 @@ echo ""
 
 # Step 2: Find a rover
 echo "🔍 Step 2: Finding rover entities..."
-ROVER_ID=$(curl -s "${BASE}/entities" | jq -r '
-  .data.entities[] | select(.api_id != null) | .api_id
-' | head -1)
+# Find first entity with type 'rover'
+ROVER_JSON=$(curl -s "${BASE}/entities" | jq -c '.data.entities[] | select(.type == "rover")' | head -1)
+
+ROVER_ID=$(echo "${ROVER_JSON}" | jq -r '.api_id // empty')
+ROVER_NAME=$(echo "${ROVER_JSON}" | jq -r '.name // empty')
 
 if [ -z "$ROVER_ID" ] || [ "$ROVER_ID" = "null" ]; then
-    echo "⚠️  No entities found. Make sure the sim has rovers spawned."
-    echo "   Hint: In the sim, spawn a rover first."
+    echo "⚠️  No rovers found. Make sure the sim has rovers spawned."
     exit 1
 fi
 
-echo "Found rover: ${ROVER_ID}"
+echo "Found rover: ${ROVER_NAME} (ID: ${ROVER_ID})"
 echo ""
 
 # Step 3: Drive forward
@@ -50,7 +51,7 @@ curl -s -X POST "${BASE}/commands" \
   -d "{
     \"command\": \"DriveRover\",
     \"params\": {
-      \"target\": \"${ROVER_ID}\",
+      \"target\": ${ROVER_ID},
       \"forward\": 0.8,
       \"steer\": 0.0
     }
@@ -66,7 +67,7 @@ curl -s -X POST "${BASE}/commands" \
   -d "{
     \"command\": \"BrakeRover\",
     \"params\": {
-      \"target\": \"${ROVER_ID}\",
+      \"target\": ${ROVER_ID},
       \"intensity\": 1.0
     }
   }" | jq .

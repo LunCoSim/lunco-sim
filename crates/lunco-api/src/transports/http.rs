@@ -65,20 +65,14 @@ pub struct ApiResponseEnvelope {
 
 impl From<ApiResponse> for (StatusCode, Json<ApiResponseEnvelope>) {
     fn from(response: ApiResponse) -> Self {
-        match response {
-            ApiResponse::Ok { command_id, data } => (
-                StatusCode::OK,
-                Json(ApiResponseEnvelope { command_id, data, error: None }),
-            ),
-            ApiResponse::Error { code, message } => {
-                let status = match code { 400 => StatusCode::BAD_REQUEST, 404 => StatusCode::NOT_FOUND, _ => StatusCode::INTERNAL_SERVER_ERROR };
-                (status, Json(ApiResponseEnvelope { command_id: None, data: None, error: Some(message) }))
-            }
-            ApiResponse::TelemetryEvent(event) => (
-                StatusCode::OK,
-                Json(ApiResponseEnvelope { command_id: None, data: Some(serde_json::json!(event)), error: None }),
-            ),
-        }
+        let envelope = match response {
+            ApiResponse::Ok { command_id, data } => ApiResponseEnvelope { command_id, data, error: None },
+            ApiResponse::Error { code, message } => ApiResponseEnvelope { command_id: None, data: None, error: Some(message) },
+            ApiResponse::TelemetryEvent(event) => ApiResponseEnvelope { command_id: None, data: Some(serde_json::json!(event)), error: None },
+        };
+        
+        let status = if envelope.error.is_some() { StatusCode::INTERNAL_SERVER_ERROR } else { StatusCode::OK };
+        (status, Json(envelope))
     }
 }
 

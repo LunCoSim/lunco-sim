@@ -35,7 +35,7 @@ use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::{
-    parse_macro_input, DeriveInput, Ident, ItemFn, Token, Data, Fields, FieldsNamed,
+    parse_macro_input, DeriveInput, Ident, ItemFn, Token, Data, Fields,
     punctuated::Punctuated,
 };
 
@@ -50,7 +50,7 @@ pub fn Command(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let name = &input.ident;
     let vis = &input.vis;
     let generics = &input.generics;
-    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+    let (_impl_generics, _ty_generics, where_clause) = generics.split_for_impl();
 
     let fields = match &input.data {
         Data::Struct(ds) => match &ds.fields {
@@ -65,6 +65,7 @@ pub fn Command(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let expanded = quote! {
         #[derive(bevy::prelude::Event, bevy::prelude::Reflect, Clone, Debug)]
+        #[reflect(Event)]
         #vis struct #name #generics #where_clause {
             #fields
         }

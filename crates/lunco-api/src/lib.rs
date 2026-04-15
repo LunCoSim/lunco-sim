@@ -128,6 +128,7 @@ impl LunCoApiPlugin {
 
 impl Plugin for LunCoApiPlugin {
     fn build(&self, app: &mut App) {
+        eprintln!("[lunco-api] Building plugin. HTTP enabled: {}", cfg!(feature = "transport-http"));
         // Core systems (always enabled)
         app.add_plugins((
             ApiEntityRegistryPlugin,

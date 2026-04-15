@@ -31,13 +31,11 @@ pub struct ApiResponseEvent {
 
 /// A deserialized command from the API, carrying the command name and raw JSON params.
 ///
-/// Domain observers that want to be API-accessible should observe `On<ApiCommandEvent>`
-/// and parse the params themselves. This avoids the complexity of dynamic event triggering.
-#[derive(Event, Debug, Clone)]
+/// This is used internally by the API layer to bridge requests into simulation events.
+#[derive(Event, Debug, Clone, Reflect)]
 pub struct ApiCommandEvent {
-    /// The command type name (e.g. "DriveRover").
     pub command: String,
-    /// Raw JSON params.
+    #[reflect(ignore)]
     pub params: serde_json::Value,
 }
 
@@ -67,6 +65,97 @@ pub fn api_request_observer(
     commands.trigger(ApiResponseEvent { response, correlation_id });
 }
 
+/// Dynamic dispatcher: converts generic [ApiCommandEvent] into pure simulation events.
+///
+/// This system listens for all API-triggered commands and uses reflection to
+/// fire the specific [Event] types (e.g. `DriveRover`).
+pub fn api_command_dispatcher(
+    trigger: On<ApiCommandEvent>,
+    mut commands: Commands,
+    type_registry: Res<AppTypeRegistry>,
+    registry: Res<ApiEntityRegistry>,
+) {
+    let event = trigger.event();
+    let type_reg = type_registry.read();
+
+    // 1. Find type registration by short name (e.g. "DriveRover")
+    let Some(registration) = type_reg.get_with_short_type_path(&event.command) else {
+        eprintln!("[lunco-api] Dispatcher error: Command '{}' not found in registry", event.command);
+        return;
+    };
+
+    // 2. Resolve IDs: recursively find fields that should be Entities and look them up in the registry
+    let mut resolved_params = event.params.clone();
+    resolve_ids_in_json(&mut resolved_params, &registry);
+
+    // 3. Deserialize JSON into reflected struct
+    let reflect_deserializer = bevy::reflect::serde::TypedReflectDeserializer::new(registration, &type_reg);
+    
+    use serde::de::DeserializeSeed;
+    match reflect_deserializer.deserialize(resolved_params.clone()) {
+        Ok(reflected) => {
+            // 4. Trigger the event dynamically via commands.queue to access World
+            let cmd_name = event.command.clone();
+            
+            commands.queue(move |world: &mut World| {
+                let registry = world.resource::<AppTypeRegistry>().clone();
+                let type_reg = registry.read();
+                
+                let Some(registration) = type_reg.get_with_short_type_path(&cmd_name) else { return };
+                let Some(reflect_event) = registration.data::<bevy::ecs::reflect::ReflectEvent>() else { return };
+                
+                // Re-deserialize inside the world queue where we have access to everything
+                let reflect_deserializer = bevy::reflect::serde::TypedReflectDeserializer::new(registration, &type_reg);
+                if let Ok(reflected) = reflect_deserializer.deserialize(resolved_params) {
+                    reflect_event.trigger(world, reflected.as_ref(), &type_reg);
+                    eprintln!("[lunco-api] Dispatched command: {}", cmd_name);
+                }
+            });
+        },
+        Err(e) => {
+            eprintln!("[lunco-api] Deserialization error for {}: {}", event.command, e);
+        }
+    }
+}
+
+/// Recursively finds fields that look like stable IDs and resolves them to Bevy Entity indices.
+///
+/// Note: This is a heuristic. We assume fields named 'target', 'entity', or 'body'
+/// that contain a large number or numeric string are meant to be GlobalEntityIds.
+fn resolve_ids_in_json(value: &mut serde_json::Value, registry: &ApiEntityRegistry) {
+    use lunco_core::GlobalEntityId;
+
+    match value {
+        serde_json::Value::Object(map) => {
+            for (k, v) in map.iter_mut() {
+                // Heuristic: fields that typically store Entity IDs
+                if k == "target" || k == "entity" || k == "body" || k == "parent" {
+                    if let Some(id_u64) = v.as_u64() {
+                        if let Some(entity) = registry.resolve(&GlobalEntityId(id_u64)) {
+                            // Replace with raw Bevy index for reflection deserializer
+                            *v = serde_json::json!(entity.index().index());
+                        }
+                    } else if let Some(id_str) = v.as_str() {
+                        if let Ok(id_u64) = id_str.parse::<u64>() {
+                            if let Some(entity) = registry.resolve(&GlobalEntityId(id_u64)) {
+                                *v = serde_json::json!(entity.index().index());
+                            }
+                        }
+                    }
+                } else {
+                    resolve_ids_in_json(v, registry);
+                }
+            }
+        }
+        serde_json::Value::Array(list) => {
+            for v in list.iter_mut() {
+                resolve_ids_in_json(v, registry);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Execute a single API request against the ECS world.
 fn execute_request(
     request: &ApiRequest,
@@ -78,19 +167,15 @@ fn execute_request(
 ) -> ApiResponse {
     match request {
         ApiRequest::ExecuteCommand { command, params } => {
-            // Validate command exists in type registry (Event + Reflect types)
-            let exists = type_registry.iter().any(|reg| {
-                let info = reg.type_info();
-                let short_name = info.type_path_table().short_path();
-                // Check if type is a struct with matching name (all #[Command] types are registered)
-                matches!(info, bevy::reflect::TypeInfo::Struct(_)) && short_name == command.as_str()
-            });
+            // Validate command exists and has ReflectEvent
+            let registration = type_registry.get_with_short_type_path(command);
+            let has_reflect_event = registration.map(|r| r.data::<bevy::ecs::reflect::ReflectEvent>().is_some()).unwrap_or(false);
 
-            if !exists {
-                return ApiResponse::error(ApiErrorCode::CommandNotFound, format!("Command '{}' not found", command));
+            if !has_reflect_event {
+                return ApiResponse::error(ApiErrorCode::CommandNotFound, format!("Command '{}' not found or not API-accessible", command));
             }
 
-            // Trigger as ApiCommandEvent — domain observers parse params
+            // Trigger as ApiCommandEvent — handled by api_command_dispatcher
             let command_id = id_counter.next();
             commands.trigger(ApiCommandEvent {
                 command: command.clone(),
@@ -105,8 +190,7 @@ fn execute_request(
                     let (name, rover, body) = q_meta.get(e).unwrap_or((None, None, None));
                     let kind = if rover.is_some() { "rover" } else if body.is_some() { "planet" } else { "unknown" };
                     ApiResponse::ok(serde_json::json!({
-                        "entity": e.index().to_string(),
-                        "api_id": id.to_string(),
+                        "api_id": id,
                         "name": name.map(|n| n.as_str()).unwrap_or(""),
                         "type": kind,
                     }))
@@ -121,8 +205,7 @@ fn execute_request(
                     let (name, rover, body) = q_meta.get(entity).unwrap_or((None, None, None));
                     let kind = if rover.is_some() { "rover" } else if body.is_some() { "planet" } else { "unknown" };
                     serde_json::json!({
-                        "api_id": api_id.to_string(),
-                        "entity_index": entity.index().to_string(),
+                        "api_id": api_id,
                         "name": name.map(|n| n.as_str()).unwrap_or(""),
                         "type": kind,
                     })
@@ -190,7 +273,8 @@ impl Plugin for ApiExecutorPlugin {
     fn build(&self, app: &mut App) {
         eprintln!("[lunco-api] Registering ApiExecutorPlugin");
         app.init_resource::<ApiIdCounter>()
-            .add_observer(api_request_observer);
+            .add_observer(api_request_observer)
+            .add_observer(api_command_dispatcher);
     }
 }
 
