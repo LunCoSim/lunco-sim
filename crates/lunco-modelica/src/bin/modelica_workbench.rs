@@ -1,6 +1,7 @@
 //! Generic engineering workbench for testing any Modelica model.
 
 use bevy::prelude::*;
+use std::sync::Arc;
 use bevy_egui::EguiPlugin;
 use lunco_assets::assets_dir;
 use lunco_modelica::{
@@ -59,6 +60,7 @@ fn setup_sandbox(
         ModelicaModel {
             model_path,
             model_name: model_name.clone(),
+            original_source: Arc::from(source.clone()),
             parameters: initial_params,
             inputs: initial_inputs,
             ..default()

@@ -17,6 +17,7 @@
 //! See `../lib.rs` for the inline worker implementation.
 
 use bevy::prelude::*;
+use std::sync::Arc;
 use std::path::PathBuf;
 use bevy_egui::EguiPlugin;
 use lunco_modelica::{
@@ -106,6 +107,7 @@ fn setup_web_workbench(
         ModelicaModel {
             model_path,
             model_name: model_name.clone(),
+            original_source: Arc::from(source.clone()),
             parameters: initial_params,
             inputs: initial_inputs,
             paused: true, // Start paused; compile result will unpause

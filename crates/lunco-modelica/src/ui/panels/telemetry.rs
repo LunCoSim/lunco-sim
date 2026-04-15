@@ -3,6 +3,7 @@
 use bevy::prelude::*;
 use bevy_egui::egui;
 use bevy_workbench::dock::WorkbenchPanel;
+use std::collections::HashMap;
 
 use crate::ui::WorkbenchState;
 use crate::{ModelicaModel, ModelicaChannels, ModelicaCommand};
@@ -124,8 +125,35 @@ impl WorkbenchPanel for TelemetryPanel {
                         ui.label(format!("{key:16}:"));
                         let mut v = val;
                         if ui.add(egui::DragValue::new(&mut v).speed(0.01).fixed_decimals(2)).changed() {
+                            let mut trigger_update = false;
+                            let mut model_name = String::new();
+                            let mut session_id = 0;
+                            let mut source = String::new();
+                            let mut new_params = HashMap::new();
+
                             if let Ok(mut m) = world.query::<&mut ModelicaModel>().get_mut(world, entity) {
-                                if let Some(p) = m.parameters.get_mut(key) { *p = v; }
+                                if let Some(p) = m.parameters.get_mut(key) {
+                                    *p = v;
+                                    trigger_update = true;
+                                    model_name = m.model_name.clone();
+                                    m.session_id += 1;
+                                    session_id = m.session_id;
+                                    source = m.original_source.to_string();
+                                    new_params = m.parameters.clone();
+                                    m.is_stepping = true; // prevent steps while updating
+                                }
+                            }
+
+                            if trigger_update {
+                                if let Some(channels) = world.get_resource::<ModelicaChannels>() {
+                                    let new_source = crate::ast_extract::substitute_params_in_source(&source, &new_params);
+                                    let _ = channels.tx.send(ModelicaCommand::UpdateParameters {
+                                        entity,
+                                        session_id,
+                                        model_name,
+                                        source: new_source,
+                                    });
+                                }
                             }
                         }
                     });

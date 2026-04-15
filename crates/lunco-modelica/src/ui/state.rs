@@ -18,11 +18,51 @@
 //! Panels don't know where the entity came from. They just render it.
 
 use bevy::prelude::*;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use lunco_assets::assets_dir;
 #[cfg(target_arch = "wasm32")]
 use std::sync::atomic::{AtomicPtr, Ordering};
+
+use std::sync::Arc;
+
+// ---------------------------------------------------------------------------
+// Model File Tracking
+// ---------------------------------------------------------------------------
+
+/// Which model is currently open in the editor.
+#[derive(Debug, Clone, Default)]
+pub struct OpenModel {
+    /// Modelica package path (e.g., "Modelica.Electrical.Analog.Basic.Resistor")
+    /// or file path for user models (e.g., "Battery.mo").
+    pub model_path: String,
+    /// Display name shown in breadcrumb (e.g., "Resistor" or "Battery").
+    pub display_name: String,
+    /// Source code text.
+    pub source: Arc<str>,
+    /// Byte offsets of the start of each line (prevents O(N) string allocations).
+    pub line_starts: Arc<[usize]>,
+    /// Memoized model name from AST.
+    pub detected_name: Option<String>,
+    /// Whether this model is read-only.
+    pub read_only: bool,
+    /// Which library this model came from.
+    pub library: ModelLibrary,
+}
+
+/// Which library a model belongs to.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum ModelLibrary {
+    /// Modelica Standard Library (read-only).
+    MSL,
+    /// Bundled models shipped with LunCoSim (read-only for now).
+    #[default]
+    Bundled,
+    /// User-created models (writable, from opened folder).
+    User,
+    /// In-memory model created by user (writable until saved).
+    InMemory,
+}
 
 /// Static cell bridging JS file picker → Bevy system on wasm32.
 /// Set by `set_file_load_result` when user selects a .mo file.
@@ -72,11 +112,24 @@ pub struct WorkbenchState {
     /// Time-series data for plotted variables, keyed by entity → variable name.
     pub history: HashMap<Entity, HashMap<String, VecDeque<[f64; 2]>>>,
     /// Variable names the user has toggled for plotting.
-    pub plotted_variables: std::collections::HashSet<String>,
+    pub plotted_variables: HashSet<String>,
     /// Maximum history points to retain per variable.
     pub max_history: usize,
     /// Whether plots should auto-fit their axes.
     pub plot_auto_fit: bool,
+
+    // ── Dymola-style navigation ──
+
+    /// Which model is currently open in the editor area.
+    /// Set when user clicks a file in the package browser.
+    pub open_model: Option<OpenModel>,
+    /// Navigation stack for back-button support.
+    /// Each entry is a model_path that was previously open.
+    pub navigation_stack: Vec<String>,
+    /// Flag to signal the diagram panel should rebuild from open_model source.
+    pub diagram_dirty: bool,
+    /// Whether a model is currently being loaded in the background.
+    pub is_loading: bool,
 }
 
 impl Default for WorkbenchState {
@@ -88,9 +141,13 @@ impl Default for WorkbenchState {
             selected_entity: None,
             compilation_error: None,
             history: HashMap::new(),
-            plotted_variables: std::collections::HashSet::new(),
+            plotted_variables: HashSet::new(),
             max_history: 10000,
             plot_auto_fit: false,
+            open_model: None,
+            navigation_stack: Vec::new(),
+            diagram_dirty: false,
+            is_loading: false,
         }
     }
 }

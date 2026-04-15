@@ -1,0 +1,6 @@
+[build]
+target-dir = "../shared_target"
+rustc-wrapper = "sccache"
+
+[env]
+LUNCOSIM_CACHE = { value = "/home/rod/Documents/luncosim-workspace/.cache", force = false }

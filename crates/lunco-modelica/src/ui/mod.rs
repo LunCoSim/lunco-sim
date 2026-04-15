@@ -21,7 +21,7 @@
 //!
 //! `WorkbenchState.selected_entity` is the single source of truth.
 //! Any context can trigger an editor by setting it:
-//! - Library Browser: double-click a `.mo` file
+//! - Package Browser: click a model in the tree
 //! - 3D viewport: click a rover's solar panel
 //! - Colony tree: select a subsystem node
 //!
@@ -51,7 +51,7 @@
 //!
 //! ## Panels
 //!
-//! - **Library Browser** (left dock) — file system navigation, drag `.mo` files
+//! - **Package Browser** (left dock) — Dymola-style library tree, click to open
 //! - **Code Editor** (center tab) — source code editing, compile & run
 //! - **Diagram** (center tab) — component block diagram via egui-snarl
 //! - **Telemetry** (right dock) — parameters, inputs, variable toggles
@@ -76,7 +76,11 @@ impl Plugin for ModelicaUiPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<WorkbenchState>()
             .init_resource::<panels::diagram::DiagramState>()
-            .register_panel(panels::library_browser::LibraryBrowserPanel)
+            .init_resource::<panels::code_editor::EditorBufferState>()
+            .insert_resource(panels::package_browser::PackageTreeCache::new())
+            .add_systems(Update, panels::package_browser::handle_package_loading_tasks)
+            .register_panel(panels::package_browser::PackageBrowserPanel)
+            .register_panel(panels::msl_palette::MSLPalettePanel)
             .register_panel(panels::code_editor::CodeEditorPanel)
             .register_panel(panels::telemetry::TelemetryPanel)
             .register_panel(panels::graphs::GraphsPanel)
