@@ -158,7 +158,11 @@ impl VisualDiagram {
 
     /// Add a node to the diagram.
     pub fn add_node(&mut self, def: MSLComponentDef, position: Pos2) -> DiagramNodeId {
-        let id = DiagramNodeId::new();
+        self.add_node_with_id(DiagramNodeId::new(), def, position)
+    }
+
+    /// Add a node with a specific ID.
+    pub fn add_node_with_id(&mut self, id: DiagramNodeId, def: MSLComponentDef, position: Pos2) -> DiagramNodeId {
         let instance_name = self.next_instance_name(&def.name);
         let mut parameter_values = HashMap::new();
         for param in &def.parameters {

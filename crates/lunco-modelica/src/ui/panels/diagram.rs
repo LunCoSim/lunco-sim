@@ -63,18 +63,8 @@ pub struct DiagramTheme {
     pub node_bg: egui::Color32,
     /// Node card border stroke.
     pub node_stroke: egui::Stroke,
-    /// Inner margin inside the card (i8 per egui 0.34 `Margin::same`).
-    pub node_inner_margin: i8,
     /// Node card corner rounding (u8 per egui 0.34 `CornerRadius::same`).
     pub node_rounding: u8,
-
-    // ── Header ──
-    /// Instance-name font size.
-    pub header_name_size: f32,
-    /// Type-name (subtitle) font size.
-    pub header_type_size: f32,
-    /// Subtitle colour.
-    pub header_type_color: egui::Color32,
 
     // ── Schematic body ──
     /// Line width for component symbols.
@@ -95,29 +85,18 @@ pub struct DiagramTheme {
     pub color_signal: egui::Color32,
     /// Colour for unknown/generic connectors.
     pub color_generic: egui::Color32,
-
-    // ── Wire ──
-    /// Wire thickness.
-    pub wire_width: f32,
-    /// Default wire colour.
-    pub wire_color: egui::Color32,
 }
 
 impl Default for DiagramTheme {
     fn default() -> Self {
         Self {
-            grid_spacing: 20.0,
+            grid_spacing: 15.0,
             grid_dot_radius: 1.0,
             grid_dot_color: egui::Color32::from_gray(55),
 
-            node_bg: egui::Color32::from_rgba_premultiplied(30, 30, 35, 230),
-            node_stroke: egui::Stroke::new(1.0, egui::Color32::from_rgb(65, 65, 75)),
-            node_inner_margin: 6,
-            node_rounding: 4,
-
-            header_name_size: 10.0,
-            header_type_size: 8.0,
-            header_type_color: egui::Color32::from_rgb(120, 120, 130),
+            node_bg: egui::Color32::from_rgba_premultiplied(20, 20, 25, 200),
+            node_stroke: egui::Stroke::new(1.0, egui::Color32::from_rgb(50, 50, 60)),
+            node_rounding: 2,
 
             symbol_stroke_width: 2.0,
             symbol_color: egui::Color32::from_rgb(200, 200, 210),
@@ -128,9 +107,6 @@ impl Default for DiagramTheme {
             color_mechanical: egui::Color32::from_rgb(80, 200, 120),
             color_signal: egui::Color32::from_rgb(230, 160, 50),
             color_generic: egui::Color32::from_rgb(180, 180, 180),
-
-            wire_width: 1.5,
-            wire_color: egui::Color32::from_rgb(100, 150, 255),
         }
     }
 }
@@ -147,7 +123,6 @@ pub struct DiagramState {
     /// The egui-snarl state for the canvas.
     pub snarl: Snarl<DiagramNode>,
     /// Generated source from last compile.
-    pub last_source: Option<String>,
     /// Compile status message.
     pub compile_status: Option<String>,
     /// Whether last compile succeeded.
@@ -192,7 +167,6 @@ impl Default for DiagramState {
         Self {
             diagram: VisualDiagram::default(),
             snarl: Snarl::default(),
-            last_source: None,
             compile_status: None,
             compile_ok: false,
             model_counter: 0,
@@ -774,39 +748,6 @@ fn draw_integrator(painter: &egui::Painter, rect: egui::Rect, theme: &DiagramThe
     );
 }
 
-/// Draw a step source symbol (step function waveform).
-fn draw_step(painter: &egui::Painter, rect: egui::Rect, theme: &DiagramTheme) {
-    let stroke = egui::Stroke::new(theme.symbol_stroke_width, theme.color_signal);
-    let cx = rect.center().x;
-    let cy = rect.center().y;
-    let bw = rect.width() * 0.45;
-    let bh = rect.height() * 0.55;
-
-    painter.rect_stroke(
-        egui::Rect::from_center_size(egui::Pos2::new(cx, cy), egui::Vec2::new(bw, bh)),
-        0.0,
-        stroke,
-        egui::StrokeKind::Outside,
-    );
-
-    // Step waveform inside
-    let step_stroke = egui::Stroke::new(theme.symbol_stroke_width * 0.8, theme.color_signal);
-    let x0 = cx - bw * 0.3;
-    let x1 = cx;
-    let x2 = cx + bw * 0.3;
-    let y_lo = cy + bh * 0.2;
-    let y_hi = cy - bh * 0.2;
-    painter.line_segment([egui::Pos2::new(x0, y_lo), egui::Pos2::new(x1, y_lo)], step_stroke);
-    painter.line_segment([egui::Pos2::new(x1, y_lo), egui::Pos2::new(x1, y_hi)], step_stroke);
-    painter.line_segment([egui::Pos2::new(x1, y_hi), egui::Pos2::new(x2, y_hi)], step_stroke);
-
-    // Output wire only (single output port)
-    painter.line_segment(
-        [egui::Pos2::new(cx + bw / 2.0, cy), egui::Pos2::new(rect.right() - 2.0, cy)],
-        stroke,
-    );
-}
-
 
 /// Dispatch the correct symbol drawing function based on component type.
 fn draw_symbol_v2(painter: &egui::Painter, rect: egui::Rect, node: &DiagramNode, theme: &DiagramTheme) {
@@ -868,13 +809,6 @@ fn draw_generic_block_v2(painter: &egui::Painter, rect: egui::Rect, node: &Diagr
     );
 }
 
-/// Helper to get icon text from a node (used by draw_symbol).
-fn get_node_icon_text(snarl: &Snarl<DiagramNode>, node_id: NodeId) -> Option<String> {
-    match &snarl[node_id] {
-        DiagramNode::Component { icon_text, .. } => icon_text.clone(),
-    }
-}
-
 
 // ---------------------------------------------------------------------------
 // Connector-colour helper
@@ -922,7 +856,7 @@ impl<'a> SnarlViewer<DiagramNode> for DiagramViewer<'a> {
     fn show_input(
         &mut self,
         pin: &InPin,
-        ui: &mut egui::Ui,
+        _ui: &mut egui::Ui,
         snarl: &mut Snarl<DiagramNode>,
     ) -> impl SnarlPin + 'static {
         let node = &snarl[pin.id.node];
@@ -930,17 +864,7 @@ impl<'a> SnarlViewer<DiagramNode> for DiagramViewer<'a> {
         let color = connector_color(ct, self.theme);
 
         if self.schematic_mode {
-            // Minimal space — just a tiny label for the port name
-            let port_label = match node {
-                DiagramNode::Component { ports, .. } => {
-                    ports.get(pin.id.input).map(|s| s.as_str()).unwrap_or("")
-                }
-            };
-            ui.label(
-                egui::RichText::new(port_label)
-                    .size(8.0)
-                    .color(color),
-            );
+             // Hide labels in schematic mode to keep dots centered and clean
         }
 
         PinInfo::circle()
@@ -950,7 +874,7 @@ impl<'a> SnarlViewer<DiagramNode> for DiagramViewer<'a> {
     fn show_output(
         &mut self,
         pin: &OutPin,
-        ui: &mut egui::Ui,
+        _ui: &mut egui::Ui,
         snarl: &mut Snarl<DiagramNode>,
     ) -> impl SnarlPin + 'static {
         let node = &snarl[pin.id.node];
@@ -958,18 +882,7 @@ impl<'a> SnarlViewer<DiagramNode> for DiagramViewer<'a> {
         let color = connector_color(ct, self.theme);
 
         if self.schematic_mode {
-            let port_label = match node {
-                DiagramNode::Component { ports, .. } => {
-                    ports.get(pin.id.output).map(|s| s.as_str()).unwrap_or("")
-                }
-            };
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(
-                    egui::RichText::new(port_label)
-                        .size(8.0)
-                        .color(color),
-                );
-            });
+             // Hide labels in schematic mode
         }
 
         PinInfo::circle()
@@ -991,12 +904,11 @@ impl<'a> SnarlViewer<DiagramNode> for DiagramViewer<'a> {
     ) {}
 
     // ── Body — custom component shapes ──
-
     fn has_body(&mut self, _node: &DiagramNode) -> bool {
         self.schematic_mode
     }
 
-        
+
     fn show_body(
         &mut self,
         node_id: NodeId,
@@ -1008,26 +920,26 @@ impl<'a> SnarlViewer<DiagramNode> for DiagramViewer<'a> {
         let node = &snarl[node_id];
         let instance_name = node.title();
         
-        // Allocate a drawing area
-        let body_size = self.theme.body_min_size;
-        let desired_size = egui::vec2(body_size.x, body_size.y + 15.0);
-        let (rect, _) = ui.allocate_exact_size(desired_size, egui::Sense::hover());
-        
-        let symbol_rect = egui::Rect::from_min_size(rect.min, body_size);
-        let painter = ui.painter();
+        let body_height = self.theme.body_min_size.y;
+        let symbol_size = self.theme.body_min_size.x;
 
-        // Pass the whole node to draw_symbol so it can access icon_text
-        draw_symbol_v2(painter, symbol_rect, node, self.theme);
+        // Use fixed width based on theme to prevent infinite expansion feedback loop
+        ui.vertical_centered(|ui| {
+            ui.set_width(symbol_size);
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(symbol_size, body_height), egui::Sense::hover());
+            let painter = ui.painter();
 
-        // Draw the instance name BELOW
-        let label_pos = egui::pos2(rect.center().x, symbol_rect.bottom() + 8.0);
-        painter.text(
-            label_pos,
-            egui::Align2::CENTER_CENTER,
-            instance_name,
-            egui::FontId::proportional(11.0),
-            egui::Color32::from_rgb(180, 180, 190),
-        );
+            // Draw schematic symbol
+            draw_symbol_v2(painter, rect, node, self.theme);
+
+            // Draw instance label
+            ui.add_space(4.0);
+            ui.label(
+                egui::RichText::new(instance_name)
+                    .size(11.0)
+                    .color(egui::Color32::from_rgb(180, 180, 190)),
+            );
+        });
     }
 
     fn has_footer(&mut self, _node: &DiagramNode) -> bool {
@@ -1047,7 +959,7 @@ impl<'a> SnarlViewer<DiagramNode> for DiagramViewer<'a> {
         egui::Frame {
             fill: self.theme.node_bg,
             stroke: self.theme.node_stroke,
-            inner_margin: egui::Margin::same(self.theme.node_inner_margin),
+            inner_margin: egui::Margin::same(0),
             corner_radius: egui::CornerRadius::same(self.theme.node_rounding),
             ..Default::default()
         }
@@ -1090,13 +1002,14 @@ impl<'a> SnarlViewer<DiagramNode> for DiagramViewer<'a> {
 
     fn show_graph_menu(
         &mut self,
-        _pos: egui::Pos2,
+        pos: egui::Pos2,
         ui: &mut egui::Ui,
         snarl: &mut Snarl<DiagramNode>,
     ) {
+        let mouse = ui.input(|i| i.pointer.hover_pos());
         ui.label(
-            egui::RichText::new("➕ Add Component")
-                .size(12.0)
+            egui::RichText::new(format!("➕ Add Component (Graph: {:?}, Screen: {:?})", pos, mouse))
+                .size(10.0)
                 .strong()
                 .color(egui::Color32::WHITE),
         );
@@ -1122,7 +1035,8 @@ impl<'a> SnarlViewer<DiagramNode> for DiagramViewer<'a> {
                             connector_types,
                         };
                         // Place node at click.
-                        snarl.insert_node(_pos, node);
+                        println!("Inserting node at graph pos: {:?}", pos);
+                        snarl.insert_node(pos, node);
                         ui.close();
                     }
                 }
@@ -1231,23 +1145,6 @@ impl<'a> SnarlViewer<DiagramNode> for DiagramViewer<'a> {
                     ui.label(egui::RichText::new(format!("  • {}", p)).size(10.0));
                 }
             }
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Quick Place (for empty diagram hints)
-// ---------------------------------------------------------------------------
-
-fn auto_place_component(world: &mut World, component_name: &str) {
-    let lib = crate::visual_diagram::msl_component_library();
-    let comp = lib.iter().find(|c| c.name == component_name).cloned();
-    if let Some(def) = comp {
-        if let Some(mut ds) = world.get_resource_mut::<DiagramState>() {
-            ds.placement_counter += 1;
-            let x = 100.0 + (ds.placement_counter % 3) as f32 * 200.0;
-            let y = 80.0 + (ds.placement_counter / 3) as f32 * 160.0;
-            ds.add_component(def, egui::Pos2::new(x, y));
         }
     }
 }
@@ -1432,11 +1329,8 @@ fn sync_connections(snarl: &Snarl<DiagramNode>, diagram: &mut VisualDiagram) {
                 // Look up the MSL def for this type
                 let msl_lib = msl_component_library();
                 if let Some(def) = msl_lib.iter().find(|c| c.name == *type_name) {
-                    let new_id = diagram.add_node(def.clone(), egui::Pos2::new(_pos.x, _pos.y));
-                    // Note: The diagram's auto-generated instance name might differ from snarl's,
-                    // but the IDs won't match anyway for newly‐inserted nodes. We'll fix this
-                    // by using the diagram's ID. For now it keeps the workflow functional.
-                    let _ = new_id;
+                    println!("Sync: adding missing node {:?} to diagram", id);
+                    diagram.add_node_with_id(*id, def.clone(), egui::Pos2::new(_pos.x, _pos.y));
                 }
             }
         }
@@ -1596,6 +1490,10 @@ impl WorkbenchPanel for DiagramPanel {
                     }
                 }
             }
+            // Bundle Examples
+            if ui.button("📁 Load RC Example").clicked() {
+                auto_place_rc_circuit(world);
+            }
             ui.separator();
 
             // Compile & Run
@@ -1634,39 +1532,9 @@ impl WorkbenchPanel for DiagramPanel {
         });
         ui.separator();
 
-        // ── Empty canvas helper ──
-        let has_nodes = {
-            world.get_resource::<DiagramState>()
-                .map(|s| !s.diagram.nodes.is_empty())
-                .unwrap_or(false)
-        };
-
-        if !has_nodes {
-            ui.horizontal(|ui| {
-                ui.colored_label(egui::Color32::LIGHT_BLUE, "ℹ Canvas empty.");
-                ui.label("Add from MSL palette or right-click canvas. Quick Place:");
-
-                if ui.button("⚡ Resistor").clicked() {
-                    auto_place_component(world, "Resistor");
-                }
-                if ui.button("🔋 Const Voltage").clicked() {
-                    auto_place_component(world, "ConstantVoltage");
-                }
-                if ui.button("⏚ Ground").clicked() {
-                    auto_place_component(world, "Ground");
-                }
-                if ui.button("|| Capacitor").clicked() {
-                    auto_place_component(world, "Capacitor");
-                }
-            });
-            ui.separator();
-        }
 
         // ── Canvas (egui-snarl) ──
-        let available_size = ui.available_size();
-        let (rect, _) = ui.allocate_exact_size(available_size, egui::Sense::hover());
-        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
-
+        ui.set_min_height(600.0);
         // Read theme + schematic mode
         let theme = world.get_resource::<DiagramTheme>()
             .cloned()
@@ -1679,13 +1547,23 @@ impl WorkbenchPanel for DiagramPanel {
         let mut snarl_style = SnarlStyle::default();
         snarl_style.pin_size = Some(theme.port_dot_radius * 2.0);
         snarl_style.collapsible = Some(false);
+        snarl_style.header_drag_space = Some(egui::vec2(0.0, 0.0));
+
+        // ── Canvas (egui-snarl) ──
+        let available_size = ui.available_size().max(egui::vec2(100.0, 500.0));
+        let (rect, _) = ui.allocate_exact_size(available_size, egui::Sense::hover());
 
         if let Some(mut ds) = world.get_resource_mut::<DiagramState>() {
             let mut viewer = DiagramViewer {
                 schematic_mode,
                 theme: &theme,
             };
-            ds.snarl.show(&mut viewer, &snarl_style, "diagram", &mut child);
+
+            // Render snarl inside the allocated rect using a stable child UI
+            // The rect.min must match the panel's start point for correct coordinate mapping
+            ui.allocate_ui_at_rect(rect, |child_ui| {
+                ds.snarl.show(&mut viewer, &snarl_style, "diagram", child_ui);
+            });
 
             // Sync
             let DiagramState { snarl, diagram, .. } = &mut *ds;
@@ -1759,6 +1637,53 @@ fn do_compile(world: &mut World) {
     if let Some(mut s) = world.get_resource_mut::<DiagramState>() {
         s.model_counter = model_counter;
         s.compile_status = Some("Compiling…".into());
+    }
+}
+
+/// Auto-place a classic RC circuit (Voltage -> Resistor -> Capacitor -> Ground).
+fn auto_place_rc_circuit(world: &mut World) {
+    let lib = msl_component_library();
+    
+    // Define layout
+    let components = [
+        ("Modelica.Electrical.Analog.Sources.ConstantVoltage", egui::pos2(-200.0, 0.0)),
+        ("Modelica.Electrical.Analog.Basic.Resistor", egui::pos2(0.0, -100.0)),
+        ("Modelica.Electrical.Analog.Basic.Capacitor", egui::pos2(200.0, 0.0)),
+        ("Modelica.Electrical.Analog.Basic.Ground", egui::pos2(0.0, 100.0)),
+    ];
+
+    for (msl_path, pos) in components {
+        if let Some(def) = lib.iter().find(|c| c.msl_path == msl_path) {
+             if let Some(mut state) = world.get_resource_mut::<DiagramState>() {
+                 state.add_component(def.clone(), pos);
+             }
+        }
+    }
+
+    // Auto-connect
+    if let Some(mut ds) = world.get_resource_mut::<DiagramState>() {
+        // CVoltage.p -> Resistor.p
+        // Resistor.n -> Capacitor.p
+        // Capacitor.n -> Ground.p
+        // Ground.p -> CVoltage.n
+        
+         let nodes = ds.diagram.nodes.clone();
+         if nodes.len() >= 4 {
+             let v = nodes.iter().find(|n| n.component_def.name == "ConstantVoltage").map(|n| n.id);
+             let r = nodes.iter().find(|n| n.component_def.name == "Resistor").map(|n| n.id);
+             let c = nodes.iter().find(|n| n.component_def.name == "Capacitor").map(|n| n.id);
+             let g = nodes.iter().find(|n| n.component_def.name == "Ground").map(|n| n.id);
+
+             if let (Some(vid), Some(rid), Some(cid), Some(gid)) = (v, r, c, g) {
+                 ds.diagram.add_edge(vid, "p".to_string(), rid, "p".to_string());
+                 ds.diagram.add_edge(rid, "n".to_string(), cid, "p".to_string());
+                 ds.diagram.add_edge(cid, "n".to_string(), gid, "p".to_string());
+                 ds.diagram.add_edge(gid, "p".to_string(), vid, "n".to_string());
+                 
+                 // Rebuild snarl to show connections
+                 ds.rebuild_snarl();
+             }
+         }
     }
 }
  

@@ -31,7 +31,7 @@ fn main() {
         .add_plugins(ModelicaPlugin)
         .add_systems(Startup, setup_sandbox);
 
-    #[cfg(feature = "api")]
+    #[cfg(feature = "lunco-api")]
     app.add_plugins(lunco_api::LunCoApiPlugin::default());
 
     app.run();

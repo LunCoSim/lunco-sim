@@ -36,7 +36,6 @@ pub enum PackageNode {
         id: String,
         name: String,
         library: ModelLibrary,
-        file_path: std::path::PathBuf,  // Path on disk, read lazily
     },
 }
 
@@ -44,12 +43,6 @@ impl PackageNode {
     pub fn name(&self) -> &str {
         match self {
             PackageNode::Category { name, .. } | PackageNode::Model { name, .. } => name,
-        }
-    }
-
-    pub fn id(&self) -> &str {
-        match self {
-            PackageNode::Category { id, .. } | PackageNode::Model { id, .. } => id,
         }
     }
 }
@@ -159,7 +152,6 @@ fn scan_msl_dir(dir: &std::path::Path, package_path: String) -> Vec<PackageNode>
                     id,
                     name: display_name,
                     library: ModelLibrary::MSL,
-                    file_path: path,
                 });
             }
         }
@@ -176,7 +168,6 @@ fn build_bundled_tree() -> Vec<PackageNode> {
             id: format!("bundled://{}", filename),
             name: filename.strip_suffix(".mo").unwrap_or(filename).to_string(),
             library: ModelLibrary::Bundled,
-            file_path: std::path::PathBuf::new(),
         }
     }).collect()
 }
@@ -491,7 +482,7 @@ fn render_node(
                 resp.context_menu(|ui| {
                     if ui.button("➕ Instantiate in Diagram").clicked() {
                         instantiate_requested = true;
-                        ui.close_menu();
+                        ui.close();
                     }
                 });
             }
