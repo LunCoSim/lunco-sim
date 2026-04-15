@@ -8,15 +8,13 @@ use lunco_core::{Command, on_command};
 #[Command(default)]
 pub struct CaptureScreenshot {}
 
-/// System to trigger screenshot capture on a camera entity.
+/// System to trigger screenshot capture of the primary window.
 #[on_command(CaptureScreenshot)]
 pub fn on_capture_screenshot(
     _cmd: CaptureScreenshot,
     mut commands: Commands,
-    q_cameras: Query<Entity, With<Camera3d>>,
 ) {
-    // Grab first camera and trigger screenshot
-    if let Some(entity) = q_cameras.iter().next() {
-        commands.entity(entity).insert(Screenshot::primary_window());
-    }
+    // Spawn a transient entity — do NOT insert on the camera, which carries
+    // FloatingOrigin and would confuse BigSpace if its components are touched.
+    commands.spawn(Screenshot::primary_window());
 }
