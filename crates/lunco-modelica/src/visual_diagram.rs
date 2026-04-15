@@ -575,6 +575,7 @@ mod tests {
         let r1 = diagram.add_node(r1_def, Pos2::new(200.0, 0.0));
         let c1 = diagram.add_node(c1_def, Pos2::new(400.0, 0.0));
         let gnd = diagram.add_node(gnd_def, Pos2::new(200.0, 200.0));
+        diagram.get_node_mut(gnd).unwrap().instance_name = "GND".into();
 
         diagram.add_edge(v1, "p".into(), r1, "p".into());
         diagram.add_edge(r1, "n".into(), c1, "p".into());

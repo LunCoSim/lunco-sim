@@ -76,6 +76,7 @@ impl Plugin for ModelicaUiPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<WorkbenchState>()
             .init_resource::<panels::diagram::DiagramState>()
+            .init_resource::<panels::diagram::DiagramTheme>()
             .init_resource::<panels::code_editor::EditorBufferState>()
             .insert_resource(panels::package_browser::PackageTreeCache::new())
             .add_systems(Update, panels::package_browser::handle_package_loading_tasks)

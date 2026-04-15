@@ -5,7 +5,6 @@ use bevy_egui::egui;
 use bevy_workbench::dock::WorkbenchPanel;
 
 use crate::ui::panels::diagram::DiagramState;
-use crate::ui::WorkbenchState;
 use crate::visual_diagram::{
     msl_categories, msl_components_in_category,
 };
@@ -28,25 +27,6 @@ impl WorkbenchPanel for MSLPalettePanel {
     fn ui_world(&mut self, ui: &mut egui::Ui, world: &mut World) {
         if world.get_resource::<DiagramState>().is_none() {
             world.insert_resource(DiagramState::default());
-        }
-
-        // Check if current model is writable
-        let is_writable = world.get_resource::<WorkbenchState>()
-            .map(|s| s.open_model.as_ref()
-                .map(|m| !m.read_only)
-                .unwrap_or(false))
-            .unwrap_or(false);
-
-        if !is_writable {
-            ui.add_space(12.0);
-            ui.label(egui::RichText::new("Components are locked.").size(11.0).color(egui::Color32::LIGHT_RED));
-            ui.add_space(8.0);
-            ui.label(egui::RichText::new("Place components by:").size(10.0));
-            ui.label("");
-            ui.label("• Create \"➕ New Model\" in Package Browser");
-            ui.label("• Click a bundled model (e.g., Battery)");
-            ui.label("• Then this panel becomes active");
-            return;
         }
 
         // Category selection

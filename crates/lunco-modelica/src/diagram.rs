@@ -615,7 +615,7 @@ end MyLib;
                 local: false,
                 parts: parts
                     .iter()
-                    .map(|(name, text)| ComponentRefPart {
+                    .map(|(_name, text)| ComponentRefPart {
                         ident: AstToken {
                             text: Arc::from(*text),
                             ..Default::default()
