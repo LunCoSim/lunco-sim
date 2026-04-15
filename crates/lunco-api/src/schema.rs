@@ -50,6 +50,9 @@ pub enum ApiResponse {
     Ok { command_id: Option<u64>, data: Option<serde_json::Value> },
     Error { code: u16, message: String },
     TelemetryEvent(TelemetryResponse),
+    /// Raw screenshot PNG bytes — returned directly by the HTTP transport.
+    #[serde(skip)]
+    Screenshot { png_bytes: Vec<u8> },
 }
 
 impl ApiResponse {

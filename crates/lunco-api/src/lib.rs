@@ -128,7 +128,6 @@ impl LunCoApiPlugin {
 
 impl Plugin for LunCoApiPlugin {
     fn build(&self, app: &mut App) {
-        eprintln!("[lunco-api] Building plugin. HTTP enabled: {}", cfg!(feature = "transport-http"));
         // Core systems (always enabled)
         app.add_plugins((
             ApiEntityRegistryPlugin,
@@ -187,7 +186,6 @@ pub fn http_bridge_request_router(
     while let Ok(msg) = receiver.0.try_recv() {
         *id_counter += 1;
         let correlation_id = *id_counter;
-        eprintln!("[lunco-api] HTTP bridge received request: {:?}, correlation_id={}", msg.request, correlation_id);
         pending.0.insert(correlation_id, msg.reply);
         commands.trigger(executor::ApiRequestEvent {
             request: msg.request,
@@ -203,10 +201,7 @@ pub fn http_response_observer(
     mut pending: ResMut<ApiHttpResponsePending>,
 ) {
     let event = trigger.event();
-    eprintln!("[lunco-api] Response for correlation_id={}: {:?}", event.correlation_id, event.response);
     if let Some(sender) = pending.0.remove(&event.correlation_id) {
         let _ = sender.send(event.response.clone());
-    } else {
-        eprintln!("[lunco-api] No pending HTTP sender for correlation_id={}", event.correlation_id);
     }
 }

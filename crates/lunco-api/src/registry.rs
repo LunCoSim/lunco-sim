@@ -55,7 +55,6 @@ pub struct ApiEntityRegistryPlugin;
 
 impl Plugin for ApiEntityRegistryPlugin {
     fn build(&self, app: &mut App) {
-        eprintln!("[lunco-api] Registering ApiEntityRegistryPlugin");
         app.init_resource::<ApiEntityRegistry>()
             .add_systems(Update, sync_api_registry);
     }

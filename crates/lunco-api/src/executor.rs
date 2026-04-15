@@ -10,6 +10,7 @@
 
 use bevy::prelude::*;
 use bevy::reflect::{TypeRegistry, NamedField};
+use std::io::Cursor;
 use crate::{
     registry::ApiEntityRegistry,
     schema::{ApiErrorCode, ApiRequest, ApiResponse, ApiSchema, CommandSchema, FieldSchema},
@@ -52,17 +53,20 @@ pub fn api_request_observer(
     registry: Res<ApiEntityRegistry>,
     type_registry: Res<AppTypeRegistry>,
     q_meta: Query<(Option<&Name>, Option<&lunco_core::RoverVessel>, Option<&lunco_core::CelestialBody>)>,
+    q_cameras: Query<Entity, With<Camera3d>>,
 ) {
     let req = trigger.event();
-    eprintln!("[lunco-api] Processing request: {:?}", req.request);
     let correlation_id = req.correlation_id;
 
-    let response = {
+    let maybe_response = {
         let type_reg = type_registry.read();
-        execute_request(&req.request, &mut commands, &mut id_counter, &registry, &type_reg, &q_meta)
+        execute_request(&req.request, &mut commands, &mut id_counter, &registry, &type_reg, &q_meta, &q_cameras, correlation_id)
     };
 
-    commands.trigger(ApiResponseEvent { response, correlation_id });
+    // None means the response is deferred (e.g. waiting for ScreenshotCaptured).
+    if let Some(response) = maybe_response {
+        commands.trigger(ApiResponseEvent { response, correlation_id });
+    }
 }
 
 /// Dynamic dispatcher: converts generic [ApiCommandEvent] into pure simulation events.
@@ -80,7 +84,7 @@ pub fn api_command_dispatcher(
 
     // 1. Find type registration by short name (e.g. "DriveRover")
     let Some(registration) = type_reg.get_with_short_type_path(&event.command) else {
-        eprintln!("[lunco-api] Dispatcher error: Command '{}' not found in registry", event.command);
+        warn!("[lunco-api] Command '{}' not found in type registry", event.command);
         return;
     };
 
@@ -108,12 +112,11 @@ pub fn api_command_dispatcher(
                 let reflect_deserializer = bevy::reflect::serde::TypedReflectDeserializer::new(registration, &type_reg);
                 if let Ok(reflected) = reflect_deserializer.deserialize(resolved_params) {
                     reflect_event.trigger(world, reflected.as_ref(), &type_reg);
-                    eprintln!("[lunco-api] Dispatched command: {}", cmd_name);
                 }
             });
         },
         Err(e) => {
-            eprintln!("[lunco-api] Deserialization error for {}: {}", event.command, e);
+            warn!("[lunco-api] Deserialization error for '{}': {}", event.command, e);
         }
     }
 }
@@ -157,6 +160,7 @@ fn resolve_ids_in_json(value: &mut serde_json::Value, registry: &ApiEntityRegist
 }
 
 /// Execute a single API request against the ECS world.
+/// Returns `None` when the response is deferred (e.g. waiting for ScreenshotCaptured).
 fn execute_request(
     request: &ApiRequest,
     commands: &mut Commands,
@@ -164,15 +168,53 @@ fn execute_request(
     registry: &ApiEntityRegistry,
     type_registry: &TypeRegistry,
     q_meta: &Query<(Option<&Name>, Option<&lunco_core::RoverVessel>, Option<&lunco_core::CelestialBody>)>,
-) -> ApiResponse {
+    _q_cameras: &Query<Entity, With<Camera3d>>,
+    correlation_id: u64,
+) -> Option<ApiResponse> {
     match request {
         ApiRequest::ExecuteCommand { command, params } => {
+            // Special-case: CaptureScreenshot — response depends on save_to_file param.
+            if command == "CaptureScreenshot" {
+                let save_to_file = params
+                    .get("save_to_file")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+
+                if save_to_file {
+                    let path = format!("screenshot_{}.png",
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap()
+                            .as_secs());
+                    commands.insert_resource(PendingScreenshotRequest {
+                        correlation_id: None,   // response already sent
+                        save_path: Some(path.clone()),
+                    });
+                    commands.trigger(ApiCommandEvent {
+                        command: command.clone(),
+                        params: serde_json::json!({}),
+                    });
+                    return Some(ApiResponse::ok(serde_json::json!({ "path": path })));
+                } else {
+                    // Raw-PNG mode: defer response until ScreenshotCaptured fires.
+                    commands.insert_resource(PendingScreenshotRequest {
+                        correlation_id: Some(correlation_id),
+                        save_path: None,
+                    });
+                    commands.trigger(ApiCommandEvent {
+                        command: command.clone(),
+                        params: serde_json::json!({}),
+                    });
+                    return None; // response deferred
+                }
+            }
+
             // Validate command exists and has ReflectEvent
             let registration = type_registry.get_with_short_type_path(command);
             let has_reflect_event = registration.map(|r| r.data::<bevy::ecs::reflect::ReflectEvent>().is_some()).unwrap_or(false);
 
             if !has_reflect_event {
-                return ApiResponse::error(ApiErrorCode::CommandNotFound, format!("Command '{}' not found or not API-accessible", command));
+                return Some(ApiResponse::error(ApiErrorCode::CommandNotFound, format!("Command '{}' not found or not API-accessible", command)));
             }
 
             // Trigger as ApiCommandEvent — handled by api_command_dispatcher
@@ -182,10 +224,10 @@ fn execute_request(
                 params: params.clone(),
             });
 
-            ApiResponse::command_accepted(command_id)
+            Some(ApiResponse::command_accepted(command_id))
         }
         ApiRequest::QueryEntity { id } => {
-            match registry.resolve(id) {
+            Some(match registry.resolve(id) {
                 Some(e) => {
                     let (name, rover, body) = q_meta.get(e).unwrap_or((None, None, None));
                     let kind = if rover.is_some() { "rover" } else if body.is_some() { "planet" } else { "unknown" };
@@ -196,7 +238,7 @@ fn execute_request(
                     }))
                 },
                 None => ApiResponse::error(ApiErrorCode::EntityNotFound, format!("Entity {} not found", id)),
-            }
+            })
         }
         ApiRequest::ListEntities => {
             let entities: Vec<serde_json::Value> = registry.entities()
@@ -211,36 +253,21 @@ fn execute_request(
                     })
                 })
                 .collect();
-            eprintln!("[lunco-api] Listing {} entities", entities.len());
-            ApiResponse::ok(serde_json::json!({ "entities": entities, "count": entities.len() }))
+            Some(ApiResponse::ok(serde_json::json!({ "entities": entities, "count": entities.len() })))
         }
         ApiRequest::DiscoverSchema => {
             let cmds = discover_commands(type_registry);
-            ApiResponse::ok(serde_json::to_value(&ApiSchema { commands: cmds }).unwrap_or_default())
+            Some(ApiResponse::ok(serde_json::to_value(&ApiSchema { commands: cmds }).unwrap_or_default()))
         }
         ApiRequest::SubscribeTelemetry { filter: _ } => {
-            ApiResponse::ok(serde_json::json!({ "message": "Subscription created" }))
+            Some(ApiResponse::ok(serde_json::json!({ "message": "Subscription created" })))
         }
     }
 }
 
 /// Discover all typed commands from the type registry.
 fn discover_commands(type_registry: &TypeRegistry) -> Vec<CommandSchema> {
-    eprintln!("[lunco-api] discover_commands: scanning type registry");
-
-    // First, list all Struct types to debug
-    let struct_types: Vec<_> = type_registry.iter()
-        .filter_map(|reg| {
-            if matches!(reg.type_info(), bevy::reflect::TypeInfo::Struct(_)) {
-                Some(reg.type_info().type_path_table().short_path().to_string())
-            } else {
-                None
-            }
-        })
-        .collect();
-    eprintln!("[lunco-api] Found {} Struct types: {:?}", struct_types.len(), struct_types);
-
-    let commands: Vec<CommandSchema> = type_registry.iter()
+    type_registry.iter()
         .filter_map(|reg| {
             let info = reg.type_info();
             if !matches!(info, bevy::reflect::TypeInfo::Struct(_)) { return None; }
@@ -256,14 +283,20 @@ fn discover_commands(type_registry: &TypeRegistry) -> Vec<CommandSchema> {
             }).collect();
             Some(CommandSchema { name: short_name, fields })
         })
-        .collect();
+        .collect()
+}
 
-    eprintln!("[lunco-api] Discovered {} commands", commands.len());
-    for cmd in &commands {
-        eprintln!("[lunco-api]   - {} ({} fields)", cmd.name, cmd.fields.len());
-    }
+use bevy::render::view::screenshot::ScreenshotCaptured;
 
-    commands
+/// Pending screenshot request — set before the screenshot is triggered so the
+/// ScreenshotCaptured observer knows what to do with the image.
+#[derive(Resource, Default)]
+pub struct PendingScreenshotRequest {
+    /// correlation_id of the HTTP request waiting for the screenshot (raw-PNG mode).
+    /// None when save_to_file is true (response is already sent).
+    pub correlation_id: Option<u64>,
+    /// When Some, save to this path and do not return bytes to the caller.
+    pub save_path: Option<String>,
 }
 
 /// Plugin that registers the API executor observer.
@@ -271,10 +304,44 @@ pub struct ApiExecutorPlugin;
 
 impl Plugin for ApiExecutorPlugin {
     fn build(&self, app: &mut App) {
-        eprintln!("[lunco-api] Registering ApiExecutorPlugin");
         app.init_resource::<ApiIdCounter>()
+            .init_resource::<PendingScreenshotRequest>()
             .add_observer(api_request_observer)
-            .add_observer(api_command_dispatcher);
+            .add_observer(api_command_dispatcher)
+            .add_observer(save_screenshot);
+    }
+}
+
+fn save_screenshot(
+    trigger: On<ScreenshotCaptured>,
+    mut pending: ResMut<PendingScreenshotRequest>,
+    mut commands: Commands,
+) {
+    let event = trigger.event();
+    let correlation_id = pending.correlation_id.take();
+    let save_path = pending.save_path.take();
+
+    let Ok(dyn_img) = event.image.clone().try_into_dynamic() else {
+        error!("[lunco-api] Screenshot: failed to convert image");
+        return;
+    };
+
+    if let Some(path) = save_path {
+        // save_to_file mode — write to disk, response already sent
+        if let Err(e) = dyn_img.save(&path) {
+            error!("[lunco-api] Failed to save screenshot to '{}': {}", path, e);
+        }
+    } else if let Some(cid) = correlation_id {
+        // raw-PNG mode — encode and send back via the deferred HTTP response
+        let mut png_bytes: Vec<u8> = Vec::new();
+        if let Ok(()) = dyn_img.write_to(&mut Cursor::new(&mut png_bytes), image::ImageFormat::Png) {
+            commands.trigger(ApiResponseEvent {
+                response: crate::schema::ApiResponse::Screenshot { png_bytes },
+                correlation_id: cid,
+            });
+        } else {
+            error!("[lunco-api] Failed to encode screenshot as PNG");
+        }
     }
 }
 
