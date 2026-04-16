@@ -5947,6 +5947,7 @@ dependencies = [
  "lunco-api",
  "lunco-assets",
  "lunco-core",
+ "lunco-doc",
  "regex",
  "rumoca-phase-parse",
  "rumoca-session",

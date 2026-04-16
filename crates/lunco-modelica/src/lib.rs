@@ -49,6 +49,12 @@ use self::ast_extract::strip_input_defaults;
 /// parameters, inputs, and other symbols. Replaces the legacy regex-based extraction.
 pub mod ast_extract;
 
+/// `ModelicaDocument` — the Document System representation of a `.mo` file.
+///
+/// Introduced dormant (no panels use it yet). See the module-level docstring
+/// for migration order.
+pub mod document;
+
 /// Modelica-to-diagram graph builder — converts AST into DiagramGraph.
 pub mod diagram;
 
