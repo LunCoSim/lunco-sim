@@ -90,68 +90,91 @@ pub mod ui;
 /// Available on all targets, but primarily used for wasm builds.
 pub mod models;
 
+/// System sets for Modelica stepping in [`FixedUpdate`].
+///
+/// These sets let downstream code (e.g., balloon_setup) order its sync systems
+/// relative to the Modelica worker communication.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ModelicaSet {
+    /// Receive async results from the worker thread.
+    HandleResponses,
+    /// Send the next step command to the worker thread.
+    SpawnRequests,
+}
+
 /// Bevy plugin for Modelica integration.
 ///
 /// Sets up the background worker thread, channel resources, and response systems.
+/// Modelica stepping runs in [`FixedUpdate`] so all co-simulation engines share
+/// the same fixed timestep.
 pub struct ModelicaPlugin;
+
+/// Headless variant of [`ModelicaPlugin`] without UI panels.
+///
+/// Use in tests and non-windowed binaries. Starts the worker, inserts channels,
+/// schedules stepping systems, but skips `ModelicaUiPlugin`.
+pub struct ModelicaCorePlugin;
+
+impl Plugin for ModelicaCorePlugin {
+    fn build(&self, app: &mut App) {
+        build_modelica_core(app);
+    }
+}
 
 impl Plugin for ModelicaPlugin {
     fn build(&self, app: &mut App) {
-        let (tx_cmd, rx_cmd) = unbounded();
-        let (tx_res, rx_res) = unbounded();
+        build_modelica_core(app);
+        app.add_plugins(ui::ModelicaUiPlugin);
+    }
+}
 
-        // Set MSL path globally before starting worker
-        let msl = msl_dir();
-        if msl.exists() {
-            if let Ok(abs_path) = std::fs::canonicalize(&msl) {
-                std::env::set_var("MODELICAPATH", abs_path.to_string_lossy().to_string());
-            }
+fn build_modelica_core(app: &mut App) {
+    let (tx_cmd, rx_cmd) = unbounded();
+    let (tx_res, rx_res) = unbounded();
+
+    let msl = msl_dir();
+    if msl.exists() {
+        if let Ok(abs_path) = std::fs::canonicalize(&msl) {
+            std::env::set_var("MODELICAPATH", abs_path.to_string_lossy().to_string());
         }
+    }
 
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            // Desktop: spawn a background thread that owns !Send SimStepper instances.
-            // The main Bevy thread communicates via crossbeam channels.
-            thread::spawn(move || {
-                modelica_worker(rx_cmd, tx_res);
-            });
-        }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        thread::spawn(move || {
+            modelica_worker(rx_cmd, tx_res);
+        });
+    }
 
-        #[cfg(target_arch = "wasm32")]
-        {
-            // Web: wasm32-unknown-unknown has no std::thread support. Instead we use
-            // an InlineWorker Resource that processes one command per frame in a Bevy
-            // system. This avoids blocking the main render thread while still running
-            // the full Modelica compilation + simulation pipeline.
-            app.insert_resource(InlineWorker::default());
-        }
+    #[cfg(target_arch = "wasm32")]
+    {
+        app.insert_resource(InlineWorker::default());
+    }
 
-        #[cfg(not(target_arch = "wasm32"))]
-        app.insert_resource(ModelicaChannels { tx: tx_cmd, rx: rx_res });
-        #[cfg(target_arch = "wasm32")]
-        {
-            // Web: needs separate rx_cmd (worker reads commands) and tx_res (worker
-            // sends results). On desktop the background thread uses rx_cmd/tx_res
-            // directly via move closure. On wasm32 the InlineWorker system needs
-            // Res<ModelicaChannels> access to both sides.
-            app.insert_resource(ModelicaChannels { tx: tx_cmd, rx: rx_res, rx_cmd, tx_res });
-        }
+    #[cfg(not(target_arch = "wasm32"))]
+    app.insert_resource(ModelicaChannels { tx: tx_cmd, rx: rx_res });
+    #[cfg(target_arch = "wasm32")]
+    {
+        app.insert_resource(ModelicaChannels { tx: tx_cmd, rx: rx_res, rx_cmd, tx_res });
+    }
 
-        app.register_type::<ModelicaModel>()
-           .add_plugins(ui::ModelicaUiPlugin)
-           .add_systems(Update, (
-               spawn_modelica_requests,
-               handle_modelica_responses,
-           ));
+    app.init_resource::<ui::WorkbenchState>();
 
-        #[cfg(target_arch = "wasm32")]
-        {
-            // Web: InlineWorker system processes commands synchronously each frame.
-            // One command per frame to avoid stuttering the UI.
-            app.add_systems(Update, inline_worker_process);
-            // Web: consume file picker results each frame.
-            app.add_systems(Update, ui::update_file_load_result);
-        }
+    app.configure_sets(
+        FixedUpdate,
+        (ModelicaSet::HandleResponses, ModelicaSet::SpawnRequests).chain(),
+    );
+
+    app.register_type::<ModelicaModel>()
+        .add_systems(FixedUpdate, (
+            handle_modelica_responses.in_set(ModelicaSet::HandleResponses),
+            spawn_modelica_requests.in_set(ModelicaSet::SpawnRequests),
+        ));
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        app.add_systems(Update, inline_worker_process);
+        app.add_systems(Update, ui::update_file_load_result);
     }
 }
 
@@ -1001,34 +1024,23 @@ pub struct ModelicaModel {
     pub is_stepping: bool,
 }
 
-/// System that sends `Step` commands for each active model.
+/// Sends `Step` commands for each active model.
 ///
-/// Runs every frame in the `Update` schedule. Calculates the elapsed real time
-/// since the last step and caps it to prevent solver instability. Sets `is_stepping`
-/// to true to prevent duplicate step commands while waiting for results.
-///
-/// Inputs from the UI (e.g., `current_in` in Battery) are sent with every Step command
-/// via `model.inputs`, enabling real-time input injection without recompilation.
-#[cfg(not(target_arch = "wasm32"))]
+/// Runs in [`FixedUpdate`] using the fixed timestep delta. All models step with
+/// the same dt, matching Avian physics and wire propagation.
 fn spawn_modelica_requests(
     channels: Res<ModelicaChannels>,
-    time: Res<Time>,
+    time: Res<Time<Fixed>>,
     mut q_models: Query<(Entity, &mut ModelicaModel)>,
 ) {
-    let current_real_time = time.elapsed_secs_f64();
+    let dt = time.delta_secs_f64();
 
     for (entity, mut model) in q_models.iter_mut() {
         if model.is_stepping || model.paused { continue; }
 
-        let mut inputs = Vec::new();
-        for (name, val) in &model.inputs {
-            inputs.push((name.clone(), *val));
-        }
-
-        let mut dt = if model.last_step_time == 0.0 || model.paused { 0.016 }
-                     else { (current_real_time - model.last_step_time).max(0.001) };
-        if dt > 0.1 { dt = 0.1; }
-        if !model.paused { model.last_step_time = current_real_time; }
+        let inputs: Vec<(String, f64)> = model.inputs.iter()
+            .map(|(name, val)| (name.clone(), *val))
+            .collect();
 
         model.is_stepping = true;
         let _ = channels.tx.send(ModelicaCommand::Step {
@@ -1042,40 +1054,6 @@ fn spawn_modelica_requests(
     }
 }
 
-/// Web version of spawn_modelica_requests.
-///
-/// Why fixed timestep: std::time is not available on wasm32-unknown-unknown
-/// (performance.now() is restricted by browsers). We use a fixed 16ms timestep
-/// (~60 FPS) which is sufficient for interactive simulation.
-///
-/// The desktop version uses time.elapsed_secs_f64() for adaptive dt.
-#[cfg(target_arch = "wasm32")]
-fn spawn_modelica_requests(
-    channels: Res<ModelicaChannels>,
-    mut q_models: Query<(Entity, &mut ModelicaModel)>,
-) {
-    const FIXED_DT: f64 = 0.016; // ~60 FPS
-
-    for (entity, mut model) in q_models.iter_mut() {
-        if model.is_stepping || model.paused { continue; }
-
-        let mut inputs = Vec::new();
-        for (name, val) in &model.inputs {
-            inputs.push((name.clone(), *val));
-        }
-
-        model.is_stepping = true;
-        let _ = channels.tx.send(ModelicaCommand::Step {
-            entity,
-            session_id: model.session_id,
-            model_path: model.model_path.clone(),
-            model_name: model.model_name.clone(),
-            inputs,
-            dt: FIXED_DT,
-        });
-    }
-}
-
 /// System that processes results from the background worker.
 ///
 /// Updates `ModelicaModel` components with fresh simulation outputs, handles
@@ -1083,7 +1061,6 @@ fn spawn_modelica_requests(
 /// UI display. On `is_new_model`, clears old data and unpauses the simulation.
 fn handle_modelica_responses(
     channels: Res<ModelicaChannels>,
-    #[cfg(not(target_arch = "wasm32"))] time: Res<Time>,
     mut q_models: Query<&mut ModelicaModel>,
     mut workbench_state: ResMut<ui::WorkbenchState>,
 ) {
@@ -1170,10 +1147,7 @@ fn handle_modelica_responses(
             }
 
             model.current_time = result.new_time;
-            #[cfg(not(target_arch = "wasm32"))]
-            { model.last_step_time = time.elapsed_secs_f64(); }
-            #[cfg(target_arch = "wasm32")]
-            { model.last_step_time = result.new_time; }
+            model.last_step_time = result.new_time;
 
             // Record history for plotted variables
             let time_val = result.new_time;

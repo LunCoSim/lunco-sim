@@ -19,7 +19,9 @@ use lunco_avatar::{LunCoAvatarPlugin, IntentAnalogState, FreeFlightCamera, Adapt
 use lunco_celestial::GravityPlugin;
 use lunco_core::Avatar;
 use lunco_cosim::CoSimPlugin;
-use lunco_modelica::ModelicaPlugin;
+use lunco_cosim::systems::propagate::CosimSet as PropagateCosimSet;
+use lunco_cosim::systems::apply_forces::CosimSet as ApplyForcesCosimSet;
+use lunco_modelica::{ModelicaPlugin, ModelicaSet};
 use big_space::prelude::Grid;
 use lunco_materials::{BlueprintMaterialPlugin, SolarPanelMaterialPlugin};
 
@@ -69,10 +71,25 @@ fn main() {
         .init_resource::<SandboxSettings>()
         .add_systems(Startup, setup_sandbox)
         .add_systems(Update, apply_sandbox_settings)
+        // One-shot setup systems stay in Update (fire only on Added<BalloonModelMarker>)
         .add_systems(Update, balloon_setup::compile_balloon_model)
         .add_systems(Update, balloon_setup::setup_balloon_wires)
-        .add_systems(Update, balloon_setup::sync_modelica_outputs)
-        .add_systems(Update, balloon_setup::sync_inputs_to_modelica)
+        // Per-tick sync systems run in FixedUpdate, ordered within the cosim pipeline:
+        //   HandleResponses → sync_outputs → Propagate → ApplyForces → sync_inputs → SpawnRequests
+        .configure_sets(FixedUpdate, (
+            ModelicaSet::HandleResponses,
+            PropagateCosimSet::Propagate,
+            ApplyForcesCosimSet::ApplyForces,
+            ModelicaSet::SpawnRequests,
+        ).chain())
+        .add_systems(FixedUpdate,
+            balloon_setup::sync_modelica_outputs
+                .after(ModelicaSet::HandleResponses)
+                .before(PropagateCosimSet::Propagate))
+        .add_systems(FixedUpdate,
+            balloon_setup::sync_inputs_to_modelica
+                .after(ApplyForcesCosimSet::ApplyForces)
+                .before(ModelicaSet::SpawnRequests))
         // Selection must run before avatar possession so DragModeActive flag is set
         .add_systems(Update, lunco_sandbox_edit::selection::handle_entity_selection.before(lunco_avatar::avatar_raycast_possession))
         .add_systems(PreUpdate, global_transform_propagation_system)
