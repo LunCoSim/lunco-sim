@@ -227,7 +227,22 @@ impl WorkbenchLayout {
     /// We always pick the fraction so the panel we just added gets a
     /// small share (20% side, 22% right, 30% bottom).
     pub(crate) fn rebuild_dock(&mut self) {
-        let center_tabs = self.center.clone();
+        // Filter slot intent down to panels actually registered in this
+        // app, so workspace presets can optimistically list panels that
+        // may only exist in some binaries (e.g. a rover-only Code tab
+        // referenced from the shared `BuildWorkspace`).
+        let known = |ids: &[PanelId]| -> Vec<PanelId> {
+            ids.iter().copied().filter(|id| self.panels.contains_key(id)).collect()
+        };
+        let side_browser_tabs = known(&self.side_browser);
+        let right_inspector_tabs = known(&self.right_inspector);
+        let bottom_tabs = known(&self.bottom);
+        let center_tabs: Vec<PanelId> = self
+            .center
+            .iter()
+            .copied()
+            .filter(|id| self.panels.contains_key(id))
+            .collect();
 
         // 3D apps: no central tabs → don't build a dock tree at all.
         // The renderer will lay out side panels with egui's SidePanels
@@ -242,13 +257,12 @@ impl WorkbenchLayout {
         // and bottom spans the central column's width (sandwiched between
         // them). Each subsequent split at NodeIndex::root() wraps the
         // previous tree, so the outermost splits dominate the layout.
-        let mut dock = DockState::new(center_tabs);
+        let mut dock = DockState::new(center_tabs.clone());
         let mut central = NodeIndex::root();
 
-        if !self.bottom.is_empty() {
+        if !bottom_tabs.is_empty() {
             let main = dock.main_surface_mut();
-            let [center_after, _below] =
-                main.split_below(central, 0.7, self.bottom.clone());
+            let [center_after, _below] = main.split_below(central, 0.7, bottom_tabs);
             central = center_after;
         }
 
@@ -260,18 +274,18 @@ impl WorkbenchLayout {
         //   split_left  with f_left  = 0.15  → side = 0.15 of total
         //   Right after compounding  = 0.235 × (1 - 0.15) = 0.200 ✓
         //   Centre after compounding = 0.765 × (1 - 0.15) = 0.650 ✓
-        if !self.right_inspector.is_empty() {
+        if !right_inspector_tabs.is_empty() {
             let main = dock.main_surface_mut();
             let [_old_root, _right] =
-                main.split_right(NodeIndex::root(), 0.765, self.right_inspector.clone());
+                main.split_right(NodeIndex::root(), 0.765, right_inspector_tabs);
         }
 
-        if !self.side_browser.is_empty() {
+        if !side_browser_tabs.is_empty() {
             let main = dock.main_surface_mut();
             // For split_left, fraction is the NEW (left) share — see
             // the table in the doc above.
             let [_old_root, _left] =
-                main.split_left(NodeIndex::root(), 0.15, self.side_browser.clone());
+                main.split_left(NodeIndex::root(), 0.15, side_browser_tabs);
         }
 
         let _ = central;

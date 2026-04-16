@@ -63,92 +63,109 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, world: &mut Worl
         }
 
         ui.separator();
-        ui.heading("Transform");
 
-        // Transform — needs undo tracking, so read then mutate
-        if let Some((old_tf, new_vals)) = world.query::<&Transform>().get(world, entity).ok().map(|tf| {
-            (
-                (tf.translation, tf.rotation),
-                (tf.translation.x, tf.translation.y, tf.translation.z),
-            )
-        }) {
-            let mut x = new_vals.0;
-            let mut y = new_vals.1;
-            let mut z = new_vals.2;
-            let changed = ui.add(egui::Slider::new(&mut x, -1000.0..=1000.0).text("X")).changed()
-                | ui.add(egui::Slider::new(&mut y, -1000.0..=1000.0).text("Y")).changed()
-                | ui.add(egui::Slider::new(&mut z, -1000.0..=1000.0).text("Z")).changed();
-            if changed {
-                if let Some(mut undo) = world.get_resource_mut::<UndoStack>() {
-                    undo.push(UndoAction::TransformChanged { entity, old_translation: old_tf.0, old_rotation: old_tf.1 });
-                }
-                if let Ok(mut tf) = world.query::<&mut Transform>().get_mut(world, entity) {
-                    tf.translation = Vec3::new(x, y, z);
-                }
-            }
+        // ── Transform component ──────────────────────────────────────
+        // First component: open by default — most users want to nudge
+        // position immediately. Other components start collapsed.
+        if world.query::<&Transform>().get(world, entity).is_ok() {
+            egui::CollapsingHeader::new("Transform")
+                .default_open(true)
+                .show(ui, |ui| {
+                    if let Some((old_tf, new_vals)) =
+                        world.query::<&Transform>().get(world, entity).ok().map(|tf| {
+                            (
+                                (tf.translation, tf.rotation),
+                                (tf.translation.x, tf.translation.y, tf.translation.z),
+                            )
+                        })
+                    {
+                        let mut x = new_vals.0;
+                        let mut y = new_vals.1;
+                        let mut z = new_vals.2;
+                        let changed = ui.add(egui::Slider::new(&mut x, -1000.0..=1000.0).text("X")).changed()
+                            | ui.add(egui::Slider::new(&mut y, -1000.0..=1000.0).text("Y")).changed()
+                            | ui.add(egui::Slider::new(&mut z, -1000.0..=1000.0).text("Z")).changed();
+                        if changed {
+                            if let Some(mut undo) = world.get_resource_mut::<UndoStack>() {
+                                undo.push(UndoAction::TransformChanged {
+                                    entity,
+                                    old_translation: old_tf.0,
+                                    old_rotation: old_tf.1,
+                                });
+                            }
+                            if let Ok(mut tf) = world.query::<&mut Transform>().get_mut(world, entity) {
+                                tf.translation = Vec3::new(x, y, z);
+                            }
+                        }
+                    }
+                });
         }
 
-        ui.separator();
-        ui.heading("Physics");
-
-        // Rigid body type (read-only)
-        if let Ok(rb) = world.query::<&avian3d::prelude::RigidBody>().get(world, entity) {
-            ui.label(format!("Type: {rb:?}"));
+        // ── Physics component ────────────────────────────────────────
+        let has_physics = world.query::<&avian3d::prelude::RigidBody>().get(world, entity).is_ok()
+            || world.query::<&avian3d::prelude::Mass>().get(world, entity).is_ok()
+            || world.query::<&avian3d::prelude::LinearDamping>().get(world, entity).is_ok()
+            || world.query::<&avian3d::prelude::AngularDamping>().get(world, entity).is_ok();
+        if has_physics {
+            egui::CollapsingHeader::new("Physics")
+                .default_open(false)
+                .show(ui, |ui| {
+                    if let Ok(rb) = world.query::<&avian3d::prelude::RigidBody>().get(world, entity) {
+                        ui.label(format!("Type: {rb:?}"));
+                    }
+                    if let Ok(current) = world.query::<&avian3d::prelude::Mass>().get(world, entity) {
+                        let mut m = current.0;
+                        if ui.add(egui::Slider::new(&mut m, 0.1..=100000.0).text("Mass (kg)").logarithmic(true)).changed() {
+                            if let Ok(mut mass) = world.query::<&mut avian3d::prelude::Mass>().get_mut(world, entity) {
+                                mass.0 = m;
+                            }
+                        }
+                    }
+                    if let Ok(current) = world.query::<&avian3d::prelude::LinearDamping>().get(world, entity) {
+                        let mut d = current.0 as f32;
+                        if ui.add(egui::Slider::new(&mut d, 0.0..=10.0).text("Linear Damping")).changed() {
+                            if let Ok(mut damp) = world.query::<&mut avian3d::prelude::LinearDamping>().get_mut(world, entity) {
+                                damp.0 = d as f64;
+                            }
+                        }
+                    }
+                    if let Ok(current) = world.query::<&avian3d::prelude::AngularDamping>().get(world, entity) {
+                        let mut d = current.0 as f32;
+                        if ui.add(egui::Slider::new(&mut d, 0.0..=10.0).text("Angular Damping")).changed() {
+                            if let Ok(mut damp) = world.query::<&mut avian3d::prelude::AngularDamping>().get_mut(world, entity) {
+                                damp.0 = d as f64;
+                            }
+                        }
+                    }
+                });
         }
 
-        // Mass
-        if let Ok(current) = world.query::<&avian3d::prelude::Mass>().get(world, entity) {
-            let mut m = current.0;
-            if ui.add(egui::Slider::new(&mut m, 0.1..=100000.0).text("Mass (kg)").logarithmic(true)).changed() {
-                if let Ok(mut mass) = world.query::<&mut avian3d::prelude::Mass>().get_mut(world, entity) {
-                    mass.0 = m;
-                }
-            }
-        }
+        // ── Wheel (Raycast) component ────────────────────────────────
+        if world.query::<&WheelRaycast>().get(world, entity).is_ok() {
+            egui::CollapsingHeader::new("Wheel (Raycast)")
+                .default_open(false)
+                .show(ui, |ui| {
+                    if let Ok(current) = world.query::<&WheelRaycast>().get(world, entity) {
+                        let mut rest = current.rest_length as f32;
+                        let mut k = current.spring_k as f32;
+                        let mut d = current.damping_c as f32;
+                        let mut radius = current.wheel_radius as f32;
 
-        // Linear damping
-        if let Ok(current) = world.query::<&avian3d::prelude::LinearDamping>().get(world, entity) {
-            let mut d = current.0 as f32;
-            if ui.add(egui::Slider::new(&mut d, 0.0..=10.0).text("Linear Damping")).changed() {
-                if let Ok(mut damp) = world.query::<&mut avian3d::prelude::LinearDamping>().get_mut(world, entity) {
-                    damp.0 = d as f64;
-                }
-            }
-        }
+                        let rest_changed = ui.add(egui::Slider::new(&mut rest, 0.1..=2.0).text("Rest Length (m)")).changed();
+                        let k_changed = ui.add(egui::Slider::new(&mut k, 100.0..=100000.0).text("Spring K (N/m)").logarithmic(true)).changed();
+                        let d_changed = ui.add(egui::Slider::new(&mut d, 100.0..=10000.0).text("Damping C (N·s/m)").logarithmic(true)).changed();
+                        let r_changed = ui.add(egui::Slider::new(&mut radius, 0.1..=2.0).text("Wheel Radius (m)")).changed();
 
-        // Angular damping
-        if let Ok(current) = world.query::<&avian3d::prelude::AngularDamping>().get(world, entity) {
-            let mut d = current.0 as f32;
-            if ui.add(egui::Slider::new(&mut d, 0.0..=10.0).text("Angular Damping")).changed() {
-                if let Ok(mut damp) = world.query::<&mut avian3d::prelude::AngularDamping>().get_mut(world, entity) {
-                    damp.0 = d as f64;
-                }
-            }
-        }
-
-        // Wheel parameters
-        if let Ok(current) = world.query::<&WheelRaycast>().get(world, entity) {
-            ui.separator();
-            ui.heading("Wheel (Raycast)");
-
-            let mut rest = current.rest_length as f32;
-            let mut k = current.spring_k as f32;
-            let mut d = current.damping_c as f32;
-            let mut radius = current.wheel_radius as f32;
-
-            let rest_changed = ui.add(egui::Slider::new(&mut rest, 0.1..=2.0).text("Rest Length (m)")).changed();
-            let k_changed = ui.add(egui::Slider::new(&mut k, 100.0..=100000.0).text("Spring K (N/m)").logarithmic(true)).changed();
-            let d_changed = ui.add(egui::Slider::new(&mut d, 100.0..=10000.0).text("Damping C (N·s/m)").logarithmic(true)).changed();
-            let r_changed = ui.add(egui::Slider::new(&mut radius, 0.1..=2.0).text("Wheel Radius (m)")).changed();
-
-            if rest_changed || k_changed || d_changed || r_changed {
-                if let Ok(mut wheel) = world.query::<&mut WheelRaycast>().get_mut(world, entity) {
-                    if rest_changed { wheel.rest_length = rest as f64; }
-                    if k_changed { wheel.spring_k = k as f64; }
-                    if d_changed { wheel.damping_c = d as f64; }
-                    if r_changed { wheel.wheel_radius = radius as f64; }
-                }
-            }
+                        if rest_changed || k_changed || d_changed || r_changed {
+                            if let Ok(mut wheel) = world.query::<&mut WheelRaycast>().get_mut(world, entity) {
+                                if rest_changed { wheel.rest_length = rest as f64; }
+                                if k_changed { wheel.spring_k = k as f64; }
+                                if d_changed { wheel.damping_c = d as f64; }
+                                if r_changed { wheel.wheel_radius = radius as f64; }
+                            }
+                        }
+                    }
+                });
         }
 
         // Delete button

@@ -30,6 +30,10 @@ use lunco_materials::{BlueprintMaterialPlugin, SolarPanelMaterialPlugin};
 mod balloon_setup;
 #[path = "../python_balloon_setup.rs"]
 mod python_balloon_setup;
+#[path = "../code_panel.rs"]
+mod code_panel;
+#[path = "../models_palette.rs"]
+mod models_palette;
 
 /// Parse API port from CLI args.
 /// 
@@ -74,6 +78,20 @@ fn main() {
         .add_plugins(BlueprintMaterialPlugin)
         .add_plugins(SolarPanelMaterialPlugin)
         .add_plugins(lunco_scripting::LunCoScriptingPlugin)
+        // Rover-specific panels and the attach-a-model click flow.
+        .add_plugins(|app: &mut App| {
+            use lunco_workbench::WorkbenchAppExt;
+            app.register_panel(code_panel::CodePanel);
+            app.register_panel(models_palette::ModelsPalette);
+            app.init_resource::<models_palette::AttachState>();
+            // Attach click runs BEFORE shift-click selection so a ball
+            // click in attach-mode lands as an attach, not a select.
+            app.add_systems(
+                Update,
+                models_palette::handle_attach_click
+                    .before(lunco_sandbox_edit::selection::handle_entity_selection),
+            );
+        })
         .init_resource::<SandboxSettings>()
         .add_systems(Startup, setup_sandbox)
         // ModelicaPlugin's AnalyzeWorkspace is registered before SandboxEditUiPlugin's

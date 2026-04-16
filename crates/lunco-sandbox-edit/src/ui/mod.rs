@@ -73,11 +73,20 @@ impl Workspace for BuildWorkspace {
     fn title(&self) -> String { "🏗 Build".into() }
     fn apply(&self, layout: &mut WorkbenchLayout) {
         layout.set_activity_bar(false);
-        layout.set_side_browser(Some(PanelId("spawn_palette")));
+        layout.set_side_browser_tabs(vec![
+            PanelId("spawn_palette"),
+            // Optional — registered by the rover binary; filtered out
+            // in other apps.
+            PanelId("rover_models"),
+        ]);
         layout.set_center(vec![VIEWPORT_PANEL_ID]);
         layout.set_right_inspector_tabs(vec![
             PanelId("sandbox_inspector"),
             PanelId("entity_list"),
+            // Optional — only renders if the host binary registers a
+            // panel with this id (the rover binary does, modelica
+            // workbench doesn't). The workbench filters unknown ids.
+            PanelId("rover_code"),
         ]);
         layout.set_bottom(None);
     }
