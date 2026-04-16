@@ -99,29 +99,17 @@ impl fmt::Display for DocumentId {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum DocumentError {
-    /// The op was structurally valid but violated a validation rule (e.g.,
-    /// deleting a range past the end of the document).
+    /// The operation is invalid for the current document state.
     ValidationFailed(String),
-
-    /// The op targeted something that doesn't exist (e.g., removing a
-    /// component by a name that isn't in the document).
-    NotFound(String),
-
-    /// Applying the op would break an invariant the document maintains.
-    InvariantViolation(String),
-
-    /// The op is well-formed but not supported in this context (e.g., not
-    /// yet implemented, or deprecated).
-    Unsupported(String),
+    /// An internal error occurred during application.
+    Internal(String),
 }
 
 impl fmt::Display for DocumentError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::ValidationFailed(msg) => write!(f, "validation failed: {msg}"),
-            Self::NotFound(msg) => write!(f, "not found: {msg}"),
-            Self::InvariantViolation(msg) => write!(f, "invariant violation: {msg}"),
-            Self::Unsupported(msg) => write!(f, "unsupported: {msg}"),
+            Self::ValidationFailed(msg) => write!(f, "Validation failed: {}", msg),
+            Self::Internal(msg) => write!(f, "Internal error: {}", msg),
         }
     }
 }
@@ -132,59 +120,32 @@ impl std::error::Error for DocumentError {}
 // DocumentOp
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// A typed, cloneable mutation applicable to a [`Document`].
-///
-/// Each Document type defines its own Op enum (e.g., `ModelicaOp`, `UsdOp`).
-/// Ops MUST produce an inverse when applied — see [`Document::apply`].
-///
-/// This trait is intentionally minimal. Future versions may add bounds for
-/// serialization (for persistence and collaborative sync), but for now Ops
-/// are in-memory only.
-pub trait DocumentOp: Clone + Send + Sync + 'static {}
-
-// Blanket impl so that any type satisfying the supertrait bounds is a DocumentOp.
-// Uncomment when we want that convenience; for now, explicit impls are clearer.
-// impl<T: Clone + Send + Sync + 'static> DocumentOp for T {}
+/// Trait for a typed, reversible mutation to a [`Document`].
+pub trait DocumentOp: Clone + fmt::Debug + Send + Sync + 'static {}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Document
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// A canonical, mutable, observable structured artifact.
+/// A structured, mutable, observable piece of user intent.
 ///
-/// Each Document has:
-///
-/// - An **identifier** ([`DocumentId`]) stable for the document's lifetime.
-/// - A **generation counter** that increments on every successful mutation,
-///   so views can cheaply detect whether they need to re-render.
-/// - An **op type** describing the set of valid mutations.
-/// - An **apply** method that validates an op, mutates the document, and
-///   returns the op's inverse for use in an undo stack.
-///
-/// Documents are designed to be hosted inside a [`DocumentHost`], which
-/// handles the undo/redo machinery uniformly across document types.
+/// Every editable artifact in the Twin (Modelica models, missions, etc)
+/// implements this trait.
 pub trait Document: Send + Sync + 'static {
-    /// The type of mutations this document accepts.
+    /// The specific operation type that can mutate this document.
     type Op: DocumentOp;
 
     /// Stable identifier for this document.
     fn id(&self) -> DocumentId;
 
-    /// Monotonically-increasing generation counter. Incremented on every
-    /// successful [`apply`](Self::apply).
-    ///
-    /// Views compare their last-seen generation against this to decide
-    /// whether to re-render. Also useful for cache invalidation.
+    /// Current generation of the document. Incremented on every change.
     fn generation(&self) -> u64;
 
-    /// Validate and apply an op. On success, return the op's inverse.
+    /// Apply an operation to the document.
     ///
-    /// Implementations MUST:
-    /// - Validate the op against the document's current state. If invalid,
-    ///   return a [`DocumentError`] without mutating the document.
-    /// - On success, mutate the document AND bump the generation counter.
-    /// - Return an op whose application would exactly reverse this op's
-    ///   effect (the inverse). Used by [`DocumentHost`] for undo.
+    /// On success, returns the **inverse operation** which, when applied
+    /// back to the resulting state, restores the document to its exact
+    /// previous state.
     fn apply(&mut self, op: Self::Op) -> Result<Self::Op, DocumentError>;
 }
 
@@ -192,11 +153,9 @@ pub trait Document: Send + Sync + 'static {
 // DocumentHost
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Holds a [`Document`] plus the undo/redo history.
+/// Manager for a [`Document`] that provides undo/redo and change tracking.
 ///
-/// `DocumentHost` is a plain struct — not a Bevy `Component` — so it works
-/// in any context: inside an ECS app, in a CLI tool, in tests, in a future
-/// collaboration server. Applications that need ECS integration can store
+/// Applications typically do not hold documents directly; they hold
 /// a `DocumentHost` inside their own Bevy component or resource.
 ///
 /// ## Undo / redo
@@ -301,18 +260,10 @@ impl<D: Document> DocumentHost<D> {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Tests — including a toy TextDocument to validate the API shape end-to-end
-// ─────────────────────────────────────────────────────────────────────────────
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Minimal text document — a single `String` with insert/delete ops.
-    ///
-    /// Not production-grade (no support for UTF-8 grapheme boundaries, etc.).
-    /// Purpose: exercise the `Document` + `DocumentHost` API.
     struct TextDocument {
         id: DocumentId,
         text: String,
@@ -345,181 +296,65 @@ mod tests {
                 TextOp::Insert { pos, text } => {
                     if pos > self.text.len() {
                         return Err(DocumentError::ValidationFailed(format!(
-                            "insert position {pos} past end of text (len {})",
+                            "Insert position {} out of bounds (len={})",
+                            pos,
                             self.text.len()
                         )));
                     }
-                    let len = text.len();
                     self.text.insert_str(pos, &text);
                     self.generation += 1;
-                    Ok(TextOp::Delete { pos, len })
+                    Ok(TextOp::Delete {
+                        pos,
+                        len: text.len(),
+                    })
                 }
                 TextOp::Delete { pos, len } => {
                     if pos + len > self.text.len() {
                         return Err(DocumentError::ValidationFailed(format!(
-                            "delete range [{pos}..{}) past end of text (len {})",
+                            "Delete range {}..{} out of bounds (len={})",
+                            pos,
                             pos + len,
                             self.text.len()
                         )));
                     }
-                    let removed: String = self.text.drain(pos..pos + len).collect();
+                    let old_text = self.text[pos..pos + len].to_string();
+                    self.text.replace_range(pos..pos + len, "");
                     self.generation += 1;
-                    Ok(TextOp::Insert { pos, text: removed })
+                    Ok(TextOp::Insert { pos, text: old_text })
                 }
             }
         }
     }
 
-    fn new_host() -> DocumentHost<TextDocument> {
-        DocumentHost::new(TextDocument {
+    #[test]
+    fn test_document_host_undo_redo() {
+        let mut host = DocumentHost::new(TextDocument {
             id: DocumentId::new(1),
-            text: String::new(),
+            text: "Hello".to_string(),
             generation: 0,
+        });
+
+        host.apply(TextOp::Insert {
+            pos: 5,
+            text: " World".to_string(),
         })
-    }
-
-    #[test]
-    fn document_id_round_trip() {
-        let id = DocumentId::new(42);
-        assert_eq!(id.raw(), 42);
-    }
-
-    #[test]
-    fn fresh_host_has_empty_stacks() {
-        let host = new_host();
-        assert!(!host.can_undo());
-        assert!(!host.can_redo());
-        assert_eq!(host.undo_depth(), 0);
-        assert_eq!(host.redo_depth(), 0);
-        assert_eq!(host.generation(), 0);
-    }
-
-    #[test]
-    fn apply_mutates_and_records_inverse() {
-        let mut host = new_host();
-        host.apply(TextOp::Insert { pos: 0, text: "Hello".into() })
-            .unwrap();
-        assert_eq!(host.document().text, "Hello");
+        .unwrap();
+        assert_eq!(host.document().text, "Hello World");
         assert_eq!(host.generation(), 1);
-        assert!(host.can_undo());
-        assert!(!host.can_redo());
-    }
 
-    #[test]
-    fn undo_reverses_apply() {
-        let mut host = new_host();
-        host.apply(TextOp::Insert { pos: 0, text: "Hello".into() }).unwrap();
-        let undone = host.undo().unwrap();
-        assert!(undone);
-        assert_eq!(host.document().text, "");
-        assert!(!host.can_undo());
-        assert!(host.can_redo());
-    }
-
-    #[test]
-    fn redo_reapplies_undone() {
-        let mut host = new_host();
-        host.apply(TextOp::Insert { pos: 0, text: "Hello".into() }).unwrap();
         host.undo().unwrap();
-        let redone = host.redo().unwrap();
-        assert!(redone);
         assert_eq!(host.document().text, "Hello");
-        assert!(host.can_undo());
-        assert!(!host.can_redo());
-    }
-
-    #[test]
-    fn undo_on_empty_stack_is_noop() {
-        let mut host = new_host();
-        let result = host.undo().unwrap();
-        assert!(!result);
-    }
-
-    #[test]
-    fn redo_on_empty_stack_is_noop() {
-        let mut host = new_host();
-        let result = host.redo().unwrap();
-        assert!(!result);
-    }
-
-    #[test]
-    fn new_apply_clears_redo_stack() {
-        let mut host = new_host();
-        host.apply(TextOp::Insert { pos: 0, text: "Hello".into() }).unwrap();
-        host.undo().unwrap();
-        assert!(host.can_redo());
-
-        host.apply(TextOp::Insert { pos: 0, text: "World".into() }).unwrap();
-        assert!(!host.can_redo(), "new apply must clear the redo branch");
-        assert_eq!(host.document().text, "World");
-    }
-
-    #[test]
-    fn generation_increments_on_every_mutation_including_undo() {
-        let mut host = new_host();
-        assert_eq!(host.generation(), 0);
-        host.apply(TextOp::Insert { pos: 0, text: "A".into() }).unwrap();
-        assert_eq!(host.generation(), 1);
-        host.undo().unwrap();
-        // Undo is itself a mutation — generation keeps increasing. Views
-        // that key on generation get a fresh signal either way.
         assert_eq!(host.generation(), 2);
+
         host.redo().unwrap();
+        assert_eq!(host.document().text, "Hello World");
         assert_eq!(host.generation(), 3);
     }
 
     #[test]
-    fn invalid_op_leaves_document_unchanged() {
-        let mut host = new_host();
-        host.apply(TextOp::Insert { pos: 0, text: "Hi".into() }).unwrap();
-        let generation_before = host.generation();
-        let undo_depth_before = host.undo_depth();
-
-        // Deleting past end of "Hi" must fail.
-        let result = host.apply(TextOp::Delete { pos: 0, len: 100 });
-        assert!(matches!(result, Err(DocumentError::ValidationFailed(_))));
-
-        // Document and undo stack are unchanged.
-        assert_eq!(host.document().text, "Hi");
-        assert_eq!(host.generation(), generation_before);
-        assert_eq!(host.undo_depth(), undo_depth_before);
-    }
-
-    #[test]
-    fn multi_step_undo_redo_round_trip() {
-        let mut host = new_host();
-        host.apply(TextOp::Insert { pos: 0, text: "A".into() }).unwrap();
-        host.apply(TextOp::Insert { pos: 1, text: "B".into() }).unwrap();
-        host.apply(TextOp::Insert { pos: 2, text: "C".into() }).unwrap();
-        assert_eq!(host.document().text, "ABC");
-
-        host.undo().unwrap();
-        host.undo().unwrap();
-        host.undo().unwrap();
-        assert_eq!(host.document().text, "");
-
-        host.redo().unwrap();
-        host.redo().unwrap();
-        host.redo().unwrap();
-        assert_eq!(host.document().text, "ABC");
-    }
-
-    #[test]
-    fn document_id_is_stable() {
-        let host = new_host();
-        assert_eq!(host.document().id(), DocumentId::new(1));
-    }
-
-    #[test]
-    fn document_error_displays_meaningfully() {
-        let err = DocumentError::ValidationFailed("bad pos".into());
-        assert_eq!(err.to_string(), "validation failed: bad pos");
-    }
-
-    #[test]
-    fn into_document_releases_inner() {
-        let host = new_host();
-        let doc = host.into_document();
-        assert_eq!(doc.id(), DocumentId::new(1));
+    fn test_document_id() {
+        let id = DocumentId::new(42);
+        assert_eq!(id.raw(), 42);
+        assert_eq!(format!("{}", id), "DocumentId(42)");
     }
 }

@@ -29,6 +29,11 @@ pub enum ApiRequest {
         command: String,
         params: serde_json::Value,
     },
+    /// Execute a raw Python/Lua script snippet.
+    ExecuteScript {
+        language: String,
+        code: String,
+    },
     QueryEntity { id: ApiEntityId },
     ListEntities,
     DiscoverSchema,

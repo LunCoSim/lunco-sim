@@ -40,6 +40,13 @@ pub struct ApiCommandEvent {
     pub params: serde_json::Value,
 }
 
+/// Request to execute a script snippet.
+#[derive(Event, Debug, Clone, Reflect)]
+pub struct ScriptRequestEvent {
+    pub language: String,
+    pub code: String,
+}
+
 /// System counter for generating unique IDs.
 #[derive(Resource, Default)]
 pub struct ApiIdCounter { next: u64 }
@@ -97,7 +104,7 @@ pub fn api_command_dispatcher(
     
     use serde::de::DeserializeSeed;
     match reflect_deserializer.deserialize(resolved_params.clone()) {
-        Ok(reflected) => {
+        Ok(_reflected) => {
             // 4. Trigger the event dynamically via commands.queue to access World
             let cmd_name = event.command.clone();
             
@@ -225,6 +232,13 @@ fn execute_request(
             });
 
             Some(ApiResponse::command_accepted(command_id))
+        }
+        ApiRequest::ExecuteScript { language, code } => {
+            commands.trigger(ScriptRequestEvent {
+                language: language.clone(),
+                code: code.clone(),
+            });
+            Some(ApiResponse::ok(serde_json::json!({ "status": "sent_to_engine" })))
         }
         ApiRequest::QueryEntity { id } => {
             Some(match registry.resolve(id) {
