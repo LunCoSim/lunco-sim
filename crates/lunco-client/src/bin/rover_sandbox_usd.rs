@@ -64,6 +64,11 @@ fn main() {
         .add_plugins(lunco_scripting::LunCoScriptingPlugin)
         .init_resource::<SandboxSettings>()
         .add_systems(Startup, setup_sandbox)
+        // ModelicaPlugin's AnalyzeWorkspace is registered before SandboxEditUiPlugin's
+        // BuildWorkspace, so without this nudge we'd boot into the Modelica layout.
+        .add_systems(Startup, |mut layout: ResMut<lunco_workbench::WorkbenchLayout>| {
+            layout.activate_workspace(lunco_workbench::WorkspaceId("rover_build"));
+        })
         .add_systems(Update, apply_sandbox_settings)
         // One-shot setup systems stay in Update (fire only on Added<BalloonModelMarker>)
         .add_systems(Update, balloon_setup::compile_balloon_model)

@@ -1,8 +1,8 @@
 //! Workspaces — named layout presets the user switches between.
 //!
-//! See `docs/architecture/11-workbench.md` § 4 for the design. v0.1 ships
-//! the mechanism (trait + registry + switcher UI); the five standard
-//! workspaces (Build / Simulate / Analyze / Plan / Observe) are composed
+//! See `docs/architecture/11-workbench.md` § 4 for the design. v0.2 ships
+//! the mechanism (trait + registry + switcher UI); the standard set of
+//! workspaces (Build / Simulate / Analyze / Plan / Observe) is composed
 //! by the host app as it registers panels, not hardcoded here.
 
 use crate::{PanelId, WorkbenchLayout};
@@ -21,10 +21,10 @@ impl WorkspaceId {
 /// A named slot-assignment preset.
 ///
 /// Panels are registered once and exist for the life of the app. A
-/// workspace decides **which panels occupy which slots, and whether
-/// the bottom dock is open**, for this UX mode. Switching workspaces
-/// is non-destructive — no panel is torn down — only slot assignments
-/// change.
+/// workspace decides **which panels occupy which slots** for this UX
+/// mode and triggers a rebuild of the underlying `egui_dock` tree.
+/// Switching workspaces is non-destructive — no panel is torn down,
+/// only the dock layout changes.
 pub trait Workspace: Send + Sync + 'static {
     /// Stable ID used as a registry key and in the tab label.
     fn id(&self) -> WorkspaceId;
@@ -34,20 +34,21 @@ pub trait Workspace: Send + Sync + 'static {
 
     /// Apply this workspace's slot assignments to the layout.
     ///
-    /// Implementations typically read panel ids from their own config
-    /// and call [`SlotAssignments`] helpers on the layout.
+    /// Implementations call the slot setters on `layout`; each setter
+    /// updates the slot intent and triggers a dock rebuild.
     fn apply(&self, layout: &mut WorkbenchLayout);
 }
 
-/// Slot-assignment helpers callable from `Workspace::apply`.
-///
-/// Kept as methods on `WorkbenchLayout` so `apply` implementations
-/// have one `&mut layout` parameter and a clear surface.
+// ─────────────────────────────────────────────────────────────────────
+// Slot-assignment helpers callable from `Workspace::apply`.
+// ─────────────────────────────────────────────────────────────────────
+
 impl WorkbenchLayout {
-    /// Dock a specific panel in the side browser. Overrides any prior
-    /// occupant. Pass `None` to hide the side browser.
+    /// Dock a specific panel in the side browser. Pass `None` to remove
+    /// the side browser from the current workspace's preset.
     pub fn set_side_browser(&mut self, id: Option<PanelId>) {
         self.side_browser = id;
+        self.rebuild_dock();
     }
 
     /// Replace the Center-slot tab set with the given panels (in tab
@@ -58,17 +59,20 @@ impl WorkbenchLayout {
             self.active_center_tab = ids.len().saturating_sub(1);
         }
         self.center = ids;
+        self.rebuild_dock();
     }
 
     /// Append a panel to the Center tab strip if not already present.
     pub fn add_to_center(&mut self, id: PanelId) {
         if !self.center.contains(&id) {
             self.center.push(id);
+            self.rebuild_dock();
         }
     }
 
     /// Select which Center tab is visible (by index). Out-of-range is a
-    /// no-op.
+    /// no-op. Note: under egui_dock, the user can also click tabs
+    /// directly to switch.
     pub fn set_active_center_tab(&mut self, index: usize) {
         if index < self.center.len() {
             self.active_center_tab = index;
@@ -83,26 +87,25 @@ impl WorkbenchLayout {
         }
     }
 
-    /// Dock a specific panel in the right inspector. `None` hides it.
+    /// Dock a specific panel in the right inspector. `None` removes it.
     pub fn set_right_inspector(&mut self, id: Option<PanelId>) {
         self.right_inspector = id;
+        self.rebuild_dock();
     }
 
-    /// Dock a specific panel in the bottom dock. `None` clears + hides.
+    /// Dock a specific panel in the bottom dock. `None` removes it.
     pub fn set_bottom(&mut self, id: Option<PanelId>) {
         self.bottom = id;
-        if id.is_none() {
-            self.bottom_visible = false;
-        } else {
-            self.bottom_visible = true;
-        }
+        self.rebuild_dock();
     }
 
-    /// Explicitly set bottom-dock visibility without changing the
-    /// occupant. Useful for workspaces like Simulate that keep the
-    /// same bottom content as Build but start it collapsed.
-    pub fn set_bottom_visible(&mut self, visible: bool) {
-        self.bottom_visible = visible;
+    /// Compatibility shim — under egui_dock there is no "hidden but
+    /// docked" state. To hide the bottom panel, call
+    /// [`set_bottom`](Self::set_bottom)`(None)`. Kept as a no-op so
+    /// existing workspace presets compile during the migration.
+    #[deprecated(note = "Use set_bottom(None) to hide. Under egui_dock visibility = membership in the tree.")]
+    pub fn set_bottom_visible(&mut self, _visible: bool) {
+        // intentionally a no-op
     }
 
     /// Show or hide the activity bar on the far left.

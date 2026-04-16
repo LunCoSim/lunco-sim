@@ -1071,7 +1071,6 @@ impl<'a> SnarlViewer<DiagramNode> for DiagramViewer<'a> {
                  let graph_y = (pos.y - self.canvas_rect.min.y) * scale_y + viewport.min.y;
                  
                  self.last_click_pos = egui::Pos2::new(graph_x, graph_y);
-                 println!("[DEBUG] has_graph_menu mapped SCREEN {:?} to GRAPH: {:?}", pos, self.last_click_pos);
             } else {
                  // Fallback if viewport not yet captured
                  self.last_click_pos = pos;

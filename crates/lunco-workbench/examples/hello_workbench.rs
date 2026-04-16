@@ -67,8 +67,8 @@ impl Workspace for SimulateWorkspace {
         layout.set_activity_bar(false);
         layout.set_side_browser(None);
         layout.set_right_inspector(Some(PanelId("hello::inspector")));
-        layout.set_bottom(Some(PanelId("hello::console")));
-        layout.set_bottom_visible(false); // start collapsed
+        // No bottom dock in Simulate — minimise chrome.
+        layout.set_bottom(None);
     }
 }
 

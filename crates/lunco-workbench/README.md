@@ -87,22 +87,34 @@ The `hello_workbench` example demonstrates two workspaces (Build and
 Simulate) with different slot presets — click the tabs in the transport
 bar to switch.
 
-## What ships in v0.1 (today)
+## What ships in v0.2 (today)
 
-- Frame layout (menu / transport / activity / side / viewport / right / bottom / status)
-- `Panel` trait with uniform `&mut World` signature (no `ui` vs `ui_world` split)
-- Default-slot registration — panel goes where its author said it should
-- **Workspaces** — register any number, their tabs appear in the transport bar, clicking applies the slot preset
+- **`egui_dock`-backed dock tree** — drag tabs to rearrange, drag to
+  edges to split horizontally/vertically, double-click tabs to maximise,
+  multiple tabs per region.
+- `Panel` trait with uniform `&mut World` signature (no `ui` vs
+  `ui_world` split inherited from `bevy_workbench`)
+- Default-slot registration — panel goes where its author said it
+  should the first time it's registered
+- Slot-setter DSL (`set_side_browser` / `set_center` / `set_right_inspector`
+  / `set_bottom`) — convenience for workspace presets; under the hood
+  it builds a standard cross layout in the dock state
+- **Workspaces** — register any number, their tabs appear in the
+  transport bar, clicking applies the slot preset (rebuilds the dock)
 - First-registered workspace auto-activates
-- Bottom-dock toggle and activity-bar toggle under the View menu
+- 3D-friendly: when no panels are docked the central region stays
+  transparent so a Bevy 3D scene shows through
 
 ## What's explicitly NOT shipped yet
 
-- **Standard workspace presets** (Build / Simulate / Analyze / Plan / Observe) — the mechanism is there, host apps define the five LunCoSim workspaces themselves as they migrate panels
-- **Layout persistence** — dock sizes and the active workspace reset on launch
+- **Standard workspace presets** (Build / Simulate / Analyze / Plan /
+  Observe) — the mechanism is there, host apps define the five
+  LunCoSim workspaces themselves as they migrate panels
+- **Layout persistence** — dock changes reset on launch (egui_dock has
+  serde support for the tree; wiring it is a follow-up)
 - **Command palette** — `Ctrl+P` unbound
-- **Detachable windows** — `PanelSlot::Floating` is a placeholder
-- **Tabbing and splitting** — one panel per slot in v0.1
+- **`PanelSlot::Floating`** — placeholder; egui_dock's window support
+  is there but not wired to our `Panel` registration yet
 - **Theming / keybinds** — egui defaults only
 
 Each of these lands in its own commit once a concrete panel migration
