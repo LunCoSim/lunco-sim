@@ -29,7 +29,8 @@ members = [
     "crates/lunco-environment",
     "crates/lunco-doc",
     "crates/lunco-twin",
-    "crates/lunco-workbench"
+    "crates/lunco-workbench",
+    "crates/lunco-scripting"
 ]
 resolver = "2"
 

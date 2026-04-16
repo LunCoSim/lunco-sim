@@ -11,6 +11,10 @@ use lunco_usd_bevy::UsdPrimPath;
 #[derive(Component, Default)]
 pub struct BalloonModelMarker;
 
+/// Marker component for balloon entities awaiting Python setup.
+#[derive(Component, Default)]
+pub struct PythonBalloonMarker;
+
 /// Registry of all spawnable object types.
 #[derive(Resource)]
 pub struct SpawnCatalog {
@@ -63,9 +67,16 @@ impl Default for SpawnCatalog {
         });
         catalog.add(SpawnableEntry {
             id: "balloon".into(),
-            display_name: "Weather Balloon".into(),
+            display_name: "Weather Balloon (Red)".into(),
             category: SpawnCategory::Component,
             source: SpawnSource::Procedural(ProceduralId::Balloon),
+            default_transform: Transform::default(),
+        });
+        catalog.add(SpawnableEntry {
+            id: "green_balloon".into(),
+            display_name: "Python Balloon (Green)".into(),
+            category: SpawnCategory::Component,
+            source: SpawnSource::Procedural(ProceduralId::PythonBalloon),
             default_transform: Transform::default(),
         });
 
@@ -162,6 +173,8 @@ pub enum ProceduralId {
     Wall,
     /// Weather balloon (RigidBody + Modelica balloon.mo + AvianSim wires).
     Balloon,
+    /// Python-driven balloon.
+    PythonBalloon,
 }
 
 /// Result of spawning an entry. Contains the root entity/entities created.
@@ -281,6 +294,29 @@ pub fn spawn_procedural(
                 MeshMaterial3d(mat),
                 ChildOf(grid),
                 BalloonModelMarker::default(),
+            )).id()
+        }
+        SpawnSource::Procedural(ProceduralId::PythonBalloon) => {
+            let radius = 1.0_f32;
+            let balloon_mass = 4.5_f32;
+            let spawn_offset = world_pos;
+            let mesh = meshes.add(Sphere::new(radius).mesh().ico(16).unwrap());
+            let mat = materials.add(StandardMaterial {
+                base_color: Color::srgb(0.15, 0.95, 0.35),  // vibrant green
+                emissive: LinearRgba::rgb(0.0, 0.05, 0.0),
+                ..default()
+            });
+            commands.spawn((
+                Name::new("Green Balloon (Python)"),
+                lunco_core::SelectableRoot,
+                Transform::from_translation(spawn_offset),
+                avian3d::prelude::RigidBody::Dynamic,
+                avian3d::prelude::Collider::sphere(radius as f64),
+                avian3d::prelude::Mass(balloon_mass),
+                Mesh3d(mesh),
+                MeshMaterial3d(mat),
+                ChildOf(grid),
+                PythonBalloonMarker::default(),
             )).id()
         }
         _ => panic!("Unknown procedural spawn: {:?}", entry.source),

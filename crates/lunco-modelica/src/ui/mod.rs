@@ -122,6 +122,7 @@ impl Plugin for ModelicaUiPlugin {
             .register_panel(panels::telemetry::TelemetryPanel)
             .register_panel(panels::graphs::GraphsPanel)
             .register_panel(panels::diagram::DiagramPanel)
+            .register_panel(panels::inspector::InspectorPanel)
             .register_workspace(AnalyzeWorkspace);
     }
 }
