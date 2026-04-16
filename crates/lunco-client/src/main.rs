@@ -76,6 +76,7 @@ fn main() {
     #[cfg(not(feature = "sandbox"))]
     {
         app.add_plugins(lunco_celestial::CelestialPlugin)
+            .add_plugins(lunco_environment::EnvironmentPlugin)
             .insert_resource(ClearColor(Color::BLACK));
     }
 

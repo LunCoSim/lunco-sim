@@ -146,13 +146,21 @@ impl Plugin for CelestialPlugin {
     }
 }
 
-/// Standalone gravity plugin — for sandbox, tests, and headless sims.
+/// Standalone gravity plugin — registers gravity configuration types.
 ///
-/// Registers `gravity_system` (FixedUpdate), `update_local_gravity_field` (PreUpdate),
-/// and initializes `LocalGravityField`. Does NOT require ephemeris, terrain, or SOI.
+/// Provides:
+/// - [`Gravity`] resource (Flat or Surface mode)
+/// - [`GravityProvider`] / [`GravityBody`] components
+/// - [`LocalGravityField`] resource + `update_local_gravity_field` for the
+///   avatar's "up" direction (camera/UI use)
 ///
-/// Use this when you only need gravity without the full `CelestialPlugin`.
-/// The full client should use `CelestialPlugin` which includes this.
+/// Does **NOT** apply gravity forces to `RigidBody` entities. For that, also
+/// add [`lunco_environment::EnvironmentPlugin`](https://docs.rs/lunco-environment),
+/// which computes per-entity `LocalGravity` and applies forces to Avian.
+///
+/// Use this when you only need gravity configuration without the full
+/// `CelestialPlugin`. The full client should use `CelestialPlugin` which
+/// includes this.
 pub struct GravityPlugin;
 
 impl Plugin for GravityPlugin {
@@ -160,6 +168,8 @@ impl Plugin for GravityPlugin {
         app.init_resource::<LocalGravityField>();
         app.register_type::<GravityBody>();
         app.add_systems(PreUpdate, update_local_gravity_field);
-        app.add_systems(FixedUpdate, gravity_system);
+        // NOTE: `gravity_system` (force application to RigidBodies) lives in
+        // `lunco-environment`'s `EnvironmentPlugin` and consumes `LocalGravity`.
+        // Add EnvironmentPlugin alongside GravityPlugin for full gravity behavior.
     }
 }

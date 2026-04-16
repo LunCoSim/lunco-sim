@@ -5810,6 +5810,7 @@ dependencies = [
  "lunco-controller",
  "lunco-core",
  "lunco-cosim",
+ "lunco-environment",
  "lunco-fsw",
  "lunco-hardware",
  "lunco-materials",

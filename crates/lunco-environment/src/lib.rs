@@ -8,18 +8,22 @@
 //! Currently implements **gravity only**. Other domains follow the same
 //! pattern — see the README for templates.
 
+use avian3d::prelude::{Forces, Mass, RigidBody, WriteRigidBodyForces};
 use bevy::prelude::*;
 use bevy::math::DVec3;
 use lunco_celestial::{Gravity, GravityBody, GravityProvider};
 
-/// System sets for environment computation.
+/// System sets for environment computation and consumption.
 ///
-/// All environment systems run in [`FixedUpdate`] before any consumer reads
-/// the values (e.g., the gravity force application, cosim input injection).
+/// Ordered chain in [`FixedUpdate`]:
+/// 1. [`Compute`](EnvironmentSet::Compute) — write `Local*` components from providers
+/// 2. [`Apply`](EnvironmentSet::Apply) — consumers like Avian gravity force application
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EnvironmentSet {
     /// Computes per-entity environment components from body providers.
     Compute,
+    /// Applies environment effects (e.g., gravity force on RigidBodies).
+    Apply,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -85,22 +89,54 @@ pub fn compute_local_gravity(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Consumer: apply gravity force to Avian RigidBodies
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Applies the cached [`LocalGravity`] vector as a force on every entity that
+/// has a [`RigidBody`] and a [`Mass`].
+///
+/// Replaces the recomputing-each-tick `gravity_system` that previously lived
+/// in `lunco-celestial`. Reading `LocalGravity` instead of recomputing means
+/// every consumer (this system, cosim injection, future systems) sees the same
+/// authoritative value with no duplicated work.
+pub fn apply_gravity_to_rigid_bodies(
+    q: Query<(Entity, &LocalGravity, &Mass), With<RigidBody>>,
+    mut forces: Query<Forces>,
+) {
+    for (entity, gravity, mass) in &q {
+        let force = gravity.0 * mass.0 as f64;
+        if let Ok(mut f) = forces.get_mut(entity) {
+            f.apply_force(force);
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Plugin
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Registers environment components and computation systems.
+/// Registers environment components, computation, and consumption systems.
 ///
-/// Add after [`lunco_celestial::GravityPlugin`]. The compute systems run in
-/// [`FixedUpdate`] before any consumer reads the values.
+/// Add after [`lunco_celestial::GravityPlugin`]. Ordering in `FixedUpdate`:
+/// 1. [`EnvironmentSet::Compute`] — writes `LocalGravity` (and future `Local*`)
+/// 2. [`EnvironmentSet::Apply`] — applies gravity forces to Avian RigidBodies
 pub struct EnvironmentPlugin;
 
 impl Plugin for EnvironmentPlugin {
     fn build(&self, app: &mut App) {
         app.register_type::<LocalGravity>();
 
+        app.configure_sets(
+            FixedUpdate,
+            (EnvironmentSet::Compute, EnvironmentSet::Apply).chain(),
+        );
+
         app.add_systems(
             FixedUpdate,
-            compute_local_gravity.in_set(EnvironmentSet::Compute),
+            (
+                compute_local_gravity.in_set(EnvironmentSet::Compute),
+                apply_gravity_to_rigid_bodies.in_set(EnvironmentSet::Apply),
+            ),
         );
     }
 }

@@ -17,6 +17,7 @@ use lunco_sandbox_edit::SandboxEditPlugin;
 use lunco_controller::LunCoControllerPlugin;
 use lunco_avatar::{LunCoAvatarPlugin, IntentAnalogState, FreeFlightCamera, AdaptiveNearPlane};
 use lunco_celestial::GravityPlugin;
+use lunco_environment::EnvironmentPlugin;
 use lunco_core::Avatar;
 use lunco_cosim::CoSimPlugin;
 use lunco_cosim::systems::propagate::CosimSet as PropagateCosimSet;
@@ -59,6 +60,7 @@ fn main() {
         .add_plugins(ModelicaPlugin)
         .add_plugins(lunco_core::LunCoCorePlugin)
         .add_plugins(GravityPlugin)
+        .add_plugins(EnvironmentPlugin)
         .add_plugins(LunCoMobilityPlugin)
         .add_plugins(UsdPlugins)
         .add_plugins(SandboxEditPlugin)

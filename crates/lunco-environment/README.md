@@ -32,7 +32,7 @@ Three layers, mapped to ECS:
         PROVIDERS                       COMPUTED                CONSUMERS
    (on celestial Body entity)        (on each entity)
 
-   ┌─ GravityProvider ─────────►  ┌─ LocalGravity ──────► gravity_system (Avian forces)
+   ┌─ GravityProvider ─────────►  ┌─ LocalGravity ──────► apply_gravity_to_rigid_bodies (Avian)
    │                              │                       inject_environment (cosim)
    ├─ AtmosphereProvider ──sys──► ├─ LocalAtmosphere ──► aerodynamic models
    │                              │                       inject_environment

@@ -39,7 +39,7 @@
 
 use bevy::prelude::*;
 use bevy::math::DVec3;
-use avian3d::prelude::{Forces, Mass, RigidBody, WriteRigidBodyForces};
+use avian3d::prelude::RigidBody;
 use big_space::prelude::{Grid, CellCoord};
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -153,62 +153,9 @@ pub struct LocalGravityField {
     pub surface_g: f64,
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Gravity System
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Applies gravity to all `RigidBody` entities.
-///
-/// Runs in `FixedUpdate`. Reads the global `Gravity` resource and applies
-/// forces accordingly.
-///
-/// - **`Gravity::Flat`** — same constant force applied to every body.
-/// - **`Gravity::Surface`** — direction from body-local position, magnitude
-///   from body's `GravityProvider`. For surface entities (children of Body/Grid),
-///   `Transform.translation` IS the body-local position since the entity origin
-///   coincides with the body center.
-pub fn gravity_system(
-    gravity: Res<Gravity>,
-    mut q_entities: Query<(Entity, &Transform, &Mass, Option<&GravityBody>), With<RigidBody>>,
-    q_bodies: Query<&GravityProvider>,
-    mut forces: Query<Forces>,
-) {
-    match gravity.as_ref() {
-        Gravity::Flat { g, direction } => {
-            for (entity, _tf, mass, _) in q_entities.iter_mut() {
-                let force = *direction * g * mass.0 as f64;
-                if let Ok(mut f) = forces.get_mut(entity) {
-                    f.apply_force(force);
-                }
-            }
-        }
-        Gravity::Surface => {
-            for (entity, tf, mass, gb) in q_entities.iter_mut() {
-                let Some(gb) = gb else { continue; };
-
-                // The entity is a child of Body/Grid. Its Transform.translation
-                // is in the body-fixed frame (origin = body center).
-                let local_pos = tf.translation.as_dvec3();
-                let dist = local_pos.length();
-                if dist < 1e-6 { continue; }
-                let dir = -local_pos / dist;
-
-                // Look up surface g from the body's GravityProvider.
-                let g = if let Ok(gp) = q_bodies.get(gb.body_entity) {
-                    let accel = gp.model.acceleration(local_pos);
-                    accel.length()
-                } else {
-                    0.0
-                };
-
-                let force = dir * g * mass.0 as f64;
-                if let Ok(mut f) = forces.get_mut(entity) {
-                    f.apply_force(force);
-                }
-            }
-        }
-    }
-}
+// Note: Gravity force application moved to `lunco-environment`.
+// See `lunco_environment::apply_gravity_to_rigid_bodies` — it consumes the
+// per-entity `LocalGravity` component instead of recomputing per tick.
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Local gravity field update (camera/UI)

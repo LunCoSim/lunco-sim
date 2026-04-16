@@ -33,6 +33,7 @@ lunco-celestial = { path = "../lunco-celestial" }
 lunco-materials = { path = "../lunco-materials" }
 lunco-modelica = { path = "../lunco-modelica" }
 lunco-cosim = { path = "../lunco-cosim" }
+lunco-environment = { path = "../lunco-environment" }
 lunco-usd = { path = "../lunco-usd" }
 lunco-usd-avian = { path = "../lunco-usd-avian" }
 lunco-usd-bevy = { path = "../lunco-usd-bevy" }

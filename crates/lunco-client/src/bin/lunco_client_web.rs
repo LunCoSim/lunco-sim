@@ -52,6 +52,7 @@ pub fn run() {
         .add_plugins(get_big_space_plugins())
         .add_plugins(lunco_core::LunCoCorePlugin)
         .add_plugins(lunco_celestial::CelestialPlugin)
+        .add_plugins(lunco_environment::EnvironmentPlugin)
         .add_plugins(lunco_mobility::LunCoMobilityPlugin)
         .add_plugins(lunco_controller::LunCoControllerPlugin)
         .add_plugins(lunco_avatar::LunCoAvatarPlugin)
