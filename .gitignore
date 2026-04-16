@@ -19,3 +19,4 @@ external/
 *.swp
 *.swo
 .claude/settings.local.json
+node_modules/
