@@ -6035,6 +6035,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "lunco-twin"
+version = "0.1.0"
+dependencies = [
+ "lunco-doc",
+ "serde",
+ "tempfile",
+ "thiserror 1.0.69",
+ "toml",
+ "walkdir",
+]
+
+[[package]]
 name = "lunco-ui"
 version = "0.1.0"
 dependencies = [
