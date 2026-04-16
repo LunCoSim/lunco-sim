@@ -5,25 +5,19 @@
 
 use bevy::prelude::*;
 use bevy_egui::egui;
-use bevy_workbench::dock::WorkbenchPanel;
+use lunco_workbench::{Panel, PanelId, PanelSlot};
 
 use crate::SelectedEntity;
 
 /// Entity list panel — selectable list of scene entities.
 pub struct EntityList;
 
-impl WorkbenchPanel for EntityList {
-    fn id(&self) -> &str { "entity_list" }
+impl Panel for EntityList {
+    fn id(&self) -> PanelId { PanelId("entity_list") }
     fn title(&self) -> String { "Entities".into() }
-    fn closable(&self) -> bool { true }
-    fn default_visible(&self) -> bool { true }
-    fn needs_world(&self) -> bool { true }
+    fn default_slot(&self) -> PanelSlot { PanelSlot::SideBrowser }
 
-    fn ui(&mut self, ui: &mut egui::Ui) {
-        ui.label("Entity list requires world access.");
-    }
-
-    fn ui_world(&mut self, ui: &mut egui::Ui, world: &mut World) {
+    fn render(&mut self, ui: &mut egui::Ui, world: &mut World) {
         // Draw opaque background for this panel
         ui.style_mut().visuals.widgets.inactive.weak_bg_fill = egui::Color32::from_rgba_unmultiplied(30, 30, 35, 230);
         ui.style_mut().visuals.widgets.inactive.bg_fill = egui::Color32::from_rgba_unmultiplied(30, 30, 35, 230);

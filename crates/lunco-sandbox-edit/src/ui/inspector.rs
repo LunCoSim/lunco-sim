@@ -5,7 +5,7 @@
 
 use bevy::prelude::*;
 use bevy_egui::egui;
-use bevy_workbench::dock::WorkbenchPanel;
+use lunco_workbench::{Panel, PanelId, PanelSlot};
 use lunco_mobility::WheelRaycast;
 
 use crate::{SelectedEntity, UndoStack, UndoAction};
@@ -13,18 +13,12 @@ use crate::{SelectedEntity, UndoStack, UndoAction};
 /// Inspector panel — editable entity parameters.
 pub struct Inspector;
 
-impl WorkbenchPanel for Inspector {
-    fn id(&self) -> &str { "sandbox_inspector" }
+impl Panel for Inspector {
+    fn id(&self) -> PanelId { PanelId("sandbox_inspector") }
     fn title(&self) -> String { "Inspector".into() }
-    fn closable(&self) -> bool { true }
-    fn default_visible(&self) -> bool { true }
-    fn needs_world(&self) -> bool { true }
+    fn default_slot(&self) -> PanelSlot { PanelSlot::RightInspector }
 
-    fn ui(&mut self, ui: &mut egui::Ui) {
-        ui.label("Inspector requires world access.");
-    }
-
-    fn ui_world(&mut self, ui: &mut egui::Ui, world: &mut World) {
+    fn render(&mut self, ui: &mut egui::Ui, world: &mut World) {
         // Draw opaque background for this panel
         ui.style_mut().visuals.widgets.inactive.weak_bg_fill = egui::Color32::from_rgba_unmultiplied(30, 30, 35, 230);
         ui.style_mut().visuals.widgets.inactive.bg_fill = egui::Color32::from_rgba_unmultiplied(30, 30, 35, 230);

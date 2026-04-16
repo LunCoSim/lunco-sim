@@ -65,12 +65,16 @@ pub use workspace::{Workspace, WorkspaceId};
 /// Plugin that installs the workbench shell into a Bevy app.
 ///
 /// Adds an `EguiPrimaryContextPass` system that draws the menu bar,
-/// activity bar, docks, and status bar. Requires [`bevy_egui::EguiPlugin`]
-/// to be added by the host app.
+/// activity bar, docks, and status bar. Auto-adds [`bevy_egui::EguiPlugin`]
+/// if the host hasn't already (matching `bevy_workbench`'s behaviour, so
+/// migrating apps don't have to remember to add it explicitly).
 pub struct WorkbenchPlugin;
 
 impl Plugin for WorkbenchPlugin {
     fn build(&self, app: &mut App) {
+        if !app.is_plugin_added::<bevy_egui::EguiPlugin>() {
+            app.add_plugins(bevy_egui::EguiPlugin::default());
+        }
         app.init_resource::<WorkbenchLayout>()
             .add_systems(EguiPrimaryContextPass, render_workbench);
     }
