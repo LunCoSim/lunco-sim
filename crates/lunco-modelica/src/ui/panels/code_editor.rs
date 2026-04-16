@@ -255,7 +255,6 @@ impl WorkbenchPanel for CodeEditorPanel {
                         model.session_id += 1;
                         model.is_stepping = true;
                         model.model_name = model_name.clone();
-                        model.original_source = source.clone().into();
                         model.parameters = params;
                         model.inputs.clear();
                         for (name, val) in &inputs_with_defaults {
@@ -281,7 +280,6 @@ impl WorkbenchPanel for CodeEditorPanel {
                         ModelicaModel {
                             model_path: "".into(),
                             model_name: model_name.clone(),
-                            original_source: source.clone().into(),
                             current_time: 0.0,
                             last_step_time: 0.0,
                             session_id,
@@ -304,10 +302,9 @@ impl WorkbenchPanel for CodeEditorPanel {
                         .and_then(|s| s.selected_entity).unwrap_or(Entity::PLACEHOLDER);
 
                     // Checkpoint the just-compiled source into the Document
-                    // registry. This is the first hop of the Document System
-                    // migration: the registry mirrors ModelicaModel.original_source
-                    // today, and will become its authoritative source in a
-                    // later commit.
+                    // registry before sending the Compile command — the
+                    // registry is the single source of truth for this
+                    // entity's Modelica source.
                     if target != Entity::PLACEHOLDER {
                         let mut registry = world.resource_mut::<ModelicaDocumentRegistry>();
                         registry.checkpoint_source(target, source.clone());

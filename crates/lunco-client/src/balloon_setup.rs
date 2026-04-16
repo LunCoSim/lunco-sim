@@ -10,6 +10,7 @@ use lunco_cosim::{SimComponent, SimStatus, SimConnection};
 use lunco_modelica::{
     ModelicaChannels, ModelicaCommand, ModelicaModel,
     extract_model_name, extract_parameters, extract_inputs_with_defaults,
+    ui::ModelicaDocumentRegistry,
 };
 use lunco_sandbox_edit::catalog::BalloonModelMarker;
 
@@ -18,6 +19,7 @@ pub fn compile_balloon_model(
     mut commands: Commands,
     q_new: Query<(Entity, &Name), Added<BalloonModelMarker>>,
     channels: Res<ModelicaChannels>,
+    mut doc_registry: ResMut<ModelicaDocumentRegistry>,
 ) {
     for (entity, name) in &q_new {
         let model_path = assets_dir().join("models/balloon.mo");
@@ -46,8 +48,11 @@ pub fn compile_balloon_model(
             session_id: 0,
             paused: false,
             is_stepping: false,
-            original_source: std::sync::Arc::from(source.as_str()),
         });
+
+        // Register the Modelica source with the Document registry —
+        // it's now the single source of truth for this entity's source.
+        doc_registry.checkpoint_source(entity, source.clone());
 
         let _ = channels.tx.send(ModelicaCommand::Compile {
             entity,

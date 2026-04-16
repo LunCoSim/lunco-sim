@@ -143,20 +143,23 @@ pub struct WorkbenchState {
 
 /// Per-entity registry of [`DocumentHost<ModelicaDocument>`] instances.
 ///
-/// Each `ModelicaModel` entity gets a `DocumentHost` whose [`ModelicaDocument`]
-/// mirrors the **last-compiled source** for that entity. The document is
-/// checkpointed via [`checkpoint_source`](Self::checkpoint_source) on every
-/// successful compile, giving us:
+/// **The single source of truth for per-entity Modelica source.** Every
+/// spawn path (CodeEditor Compile, Diagram auto-compile, `balloon_setup`,
+/// the workbench binaries) calls [`checkpoint_source`](Self::checkpoint_source)
+/// before sending a `Compile` or `UpdateParameters` command to the worker.
 ///
-/// - A canonical per-entity source history (undo/redo)
-/// - A generation counter other panels can observe for change detection
-/// - The foundation for cross-panel source-sharing once the Diagram /
-///   Telemetry panels migrate off `ModelicaModel.original_source`
+/// Consumers of the committed source — Telemetry (for parameter
+/// substitution), Diagram (eventually, for re-rendering on generation
+/// change), and future panels — read through
+/// [`host`](Self::host)`(entity).document().source()`.
 ///
-/// This is intentionally **shadow state** during the current migration step.
-/// The live editing pipeline still flows through `EditorBufferState` and
-/// `ModelicaModel`; the registry tracks committed sources alongside. Later
-/// migrations will collapse the two.
+/// Still separate from this registry:
+///
+/// - `EditorBufferState.text` — the egui TextEdit working buffer
+///   (keystroke-responsive; committed into the Document on Compile).
+/// - `WorkbenchState.open_model.source` — the library browser's
+///   "current file" slot, used before any compile has produced an
+///   entity. Will fold into the registry in a future migration.
 #[derive(Resource, Default)]
 pub struct ModelicaDocumentRegistry {
     hosts: HashMap<Entity, DocumentHost<ModelicaDocument>>,

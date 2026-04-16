@@ -1,13 +1,12 @@
 //! Generic engineering workbench for testing any Modelica model.
 
 use bevy::prelude::*;
-use std::sync::Arc;
 use bevy_egui::EguiPlugin;
 use lunco_assets::assets_dir;
 use lunco_modelica::{
     ModelicaPlugin,
     ModelicaModel,
-    ui::WorkbenchState,
+    ui::{ModelicaDocumentRegistry, WorkbenchState},
 };
 
 fn main() {
@@ -44,6 +43,7 @@ fn setup_sandbox(
     mut commands: Commands,
     channels: Res<lunco_modelica::ModelicaChannels>,
     mut workbench_state: ResMut<WorkbenchState>,
+    mut doc_registry: ResMut<ModelicaDocumentRegistry>,
 ) {
     commands.spawn(Camera2d);
 
@@ -64,12 +64,15 @@ fn setup_sandbox(
         ModelicaModel {
             model_path,
             model_name: model_name.clone(),
-            original_source: Arc::from(source.clone()),
             parameters: initial_params,
             inputs: initial_inputs,
             ..default()
         },
     )).id();
+
+    // Register the source with the Document registry — this is the
+    // single source of truth for the entity's Modelica text.
+    doc_registry.checkpoint_source(entity, source.clone());
 
     // Trigger initial compilation
     let _ = channels.tx.send(lunco_modelica::ModelicaCommand::Compile {

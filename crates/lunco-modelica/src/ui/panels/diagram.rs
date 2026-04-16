@@ -1667,7 +1667,6 @@ fn do_compile(world: &mut World) {
         ModelicaModel {
             model_path: temp_path,
             model_name: model_name.clone(),
-            original_source: source.clone().into(),
             current_time: 0.0,
             last_step_time: 0.0,
             session_id,
@@ -1678,6 +1677,13 @@ fn do_compile(world: &mut World) {
             is_stepping: true,
         },
     )).id();
+
+    // Checkpoint the source into the Document registry before sending
+    // the Compile command — registry is the canonical source.
+    {
+        let mut registry = world.resource_mut::<crate::ui::ModelicaDocumentRegistry>();
+        registry.checkpoint_source(entity, source.clone());
+    }
 
     // Send command
     if let Some(channels) = world.get_resource::<ModelicaChannels>() {

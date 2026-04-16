@@ -133,15 +133,15 @@ impl WorkbenchPanel for TelemetryPanel {
                             let mut session_id = 0;
                             let mut new_params = HashMap::new();
 
-                            // Read canonical source from the Document registry
-                            // (falls back to the legacy component field only if
-                            // the entity was somehow never checkpointed — e.g.
-                            // a pre-migration Modelica flow we haven't touched
-                            // yet). Once every Modelica spawn path goes through
-                            // the registry, the fallback can be dropped.
+                            // Read canonical source from the Document registry.
+                            // The registry is populated on every Compile and
+                            // every UpdateParameters — if it's empty, the
+                            // entity hasn't been through either yet and there's
+                            // nothing coherent to substitute params into.
                             let source = world
-                                .get_resource::<ModelicaDocumentRegistry>()
-                                .and_then(|r| r.host(entity).map(|h| h.document().source().to_string()));
+                                .resource::<ModelicaDocumentRegistry>()
+                                .host(entity)
+                                .map(|h| h.document().source().to_string());
 
                             if let Ok(mut m) = world.query::<&mut ModelicaModel>().get_mut(world, entity) {
                                 if let Some(p) = m.parameters.get_mut(key) {
@@ -155,23 +155,25 @@ impl WorkbenchPanel for TelemetryPanel {
                                 }
                             }
 
-                            let source = source.unwrap_or_else(|| {
-                                world
-                                    .query::<&ModelicaModel>()
-                                    .get(world, entity)
-                                    .map(|m| m.original_source.to_string())
-                                    .unwrap_or_default()
-                            });
-
                             if trigger_update {
-                                if let Some(channels) = world.get_resource::<ModelicaChannels>() {
+                                if let Some(source) = source {
                                     let new_source = crate::ast_extract::substitute_params_in_source(&source, &new_params);
-                                    let _ = channels.tx.send(ModelicaCommand::UpdateParameters {
-                                        entity,
-                                        session_id,
-                                        model_name,
-                                        source: new_source,
-                                    });
+                                    // Checkpoint the parameter-substituted
+                                    // source into the Document BEFORE sending
+                                    // to the worker — the Document remains the
+                                    // single source of truth even if the
+                                    // worker result never arrives.
+                                    world
+                                        .resource_mut::<ModelicaDocumentRegistry>()
+                                        .checkpoint_source(entity, new_source.clone());
+                                    if let Some(channels) = world.get_resource::<ModelicaChannels>() {
+                                        let _ = channels.tx.send(ModelicaCommand::UpdateParameters {
+                                            entity,
+                                            session_id,
+                                            model_name,
+                                            source: new_source,
+                                        });
+                                    }
                                 }
                             }
                         }

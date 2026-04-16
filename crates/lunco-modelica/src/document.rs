@@ -1,28 +1,29 @@
 //! `ModelicaDocument` — the Document System representation of one `.mo` file.
 //!
-//! # Status: dormant first migration step
+//! # Status: live source-of-truth for per-entity Modelica text
 //!
-//! This module exists so the rest of the crate can start depending on a real
-//! [`Document`] type, but no panel uses it yet. The current `EditorBufferState`
-//! / `OpenModel` / `ModelicaModel.original_source` trio is still the live
-//! editing pipeline — see `ui/panels/code_editor.rs`.
+//! Every place that spawns a `ModelicaModel` entity (CodeEditor's Compile,
+//! the Diagram panel's auto-compile, `balloon_setup`, the workbench binaries)
+//! checkpoints the source into [`ui::ModelicaDocumentRegistry`] before
+//! sending a `Compile` or `UpdateParameters` command to the worker. The
+//! registry's `DocumentHost<ModelicaDocument>` is the single authority for
+//! per-entity Modelica source.
 //!
-//! The migration is split for safety:
+//! Still outside the Document System:
 //!
-//! 1. **This commit**: introduce `ModelicaDocument` + `ModelicaOp` with the
-//!    minimum viable op (`ReplaceSource`), plus tests. Nothing calls it.
-//! 2. **Next commit**: migrate the CodeEditor panel to drive a
-//!    [`DocumentHost<ModelicaDocument>`] for its canonical source text,
-//!    replacing `EditorBufferState.text` as the source of truth.
-//! 3. **Later**: grow the op set (granular text ops, then AST-level ops like
-//!    `AddComponent`, `SetParameter`, `AddConnection`) as more panels migrate.
+//! - **`EditorBufferState.text`** — the egui TextEdit working buffer. Keeps
+//!   per-keystroke edits responsive; committed into the Document on Compile.
+//! - **`WorkbenchState.open_model.source`** — the "current file" slot used
+//!   by the library browser to feed the Code view before any compile has
+//!   produced an entity. Separate concern; a future migration will unify it.
 //!
 //! # Op set today
 //!
 //! Exactly one op: [`ModelicaOp::ReplaceSource`]. Coarse on purpose — it's
 //! enough to make CodeEditor participate in Document-level undo/redo and in
 //! the cross-panel change notification story (generation counter). Finer
-//! ops come when we need them.
+//! ops (granular text Insert/Delete, AST-level `AddComponent`,
+//! `SetParameter`, `AddConnection`) come when we need them.
 //!
 //! The inverse of `ReplaceSource { new }` is `ReplaceSource { new: old }`,
 //! where `old` is the source text as it was before the op applied.
