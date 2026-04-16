@@ -13,13 +13,13 @@
 //! | **SimComponent** (Modelica) | `height`, `velocity`, `g` | `netForce`, `volume`, ... |
 //! | **SimComponent** (FMU)     | `current_in`            | `soc`, `voltage`, ...         |
 //!
-//! [`SimWire`] connects any output to any input, following the FMI/SSP pattern.
+//! [`SimConnection`] connects any output to any input, following the FMI/SSP pattern.
 //!
 //! ## Example
 //!
 //! ```rust,ignore
 //! // Wire: Modelica netForce → Avian force_y
-//! commands.spawn(SimWire {
+//! commands.spawn(SimConnection {
 //!     start_element: balloon_entity,
 //!     start_connector: "netForce".into(),
 //!     end_element: balloon_entity,
@@ -28,7 +28,7 @@
 //! });
 //!
 //! // Wire: Avian height → Modelica height input
-//! commands.spawn(SimWire {
+//! commands.spawn(SimConnection {
 //!     start_element: balloon_entity,
 //!     start_connector: "height".into(),
 //!     end_element: balloon_entity,
@@ -46,16 +46,16 @@ pub mod avian;
 pub mod component;
 pub mod suggestion;
 pub mod systems;
-pub mod wire;
+pub mod connection;
 
 pub use avian::*;
 pub use component::*;
 pub use suggestion::*;
-pub use wire::*;
+pub use connection::*;
 
 /// Plugin for co-simulation orchestration.
 ///
-/// Registers [`SimComponent`], [`AvianSim`], and [`SimWire`] types,
+/// Registers [`SimComponent`], [`AvianSim`], and [`SimConnection`] types,
 /// and adds systems for wire propagation and Avian manual stepping.
 ///
 /// ## Usage
@@ -72,7 +72,7 @@ impl Plugin for CoSimPlugin {
     fn build(&self, app: &mut App) {
         app.register_type::<SimComponent>()
             .register_type::<AvianSim>()
-            .register_type::<SimWire>()
+            .register_type::<SimConnection>()
             .register_type::<systems::apply_forces::BalloonVelocity>();
 
         app.add_observer(on_add_rigid_body);

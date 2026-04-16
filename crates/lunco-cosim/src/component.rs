@@ -40,7 +40,7 @@ pub struct SimComponent {
     pub inputs: HashMap<String, f64>,
     /// Output connectors — values produced by the model.
     ///
-    /// Other models and Avian read these through [`SimWire`] connections.
+    /// Other models and Avian read these through [`SimConnection`] connections.
     pub outputs: HashMap<String, f64>,
     /// Compile-time parameters — set before simulation starts.
     ///

@@ -261,8 +261,7 @@ pub fn spawn_procedural(
             // Kinematic bodies participate in collision response but are not affected
             // by forces or gravity. Collider is synced from Modelica volume each frame.
             let radius = 1.0_f32;
-            // Spawn high so there's room to rise before hitting ground.
-            let spawn_offset = Vec3::new(world_pos.x, world_pos.y.max(15.0), world_pos.z);
+            let spawn_offset = world_pos;
             let mesh = meshes.add(Sphere::new(radius).mesh().ico(16).unwrap());
             let mat = materials.add(StandardMaterial {
                 base_color: Color::srgb(0.95, 0.35, 0.15),  // warm orange-red

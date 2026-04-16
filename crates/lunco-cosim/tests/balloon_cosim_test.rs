@@ -25,7 +25,7 @@ use bevy::time::TimePlugin;
 use std::time::Duration;
 
 use avian3d::prelude::{RigidBody, Position, LinearVelocity};
-use lunco_cosim::{CoSimPlugin, SimComponent, SimWire, AvianSim};
+use lunco_cosim::{CoSimPlugin, SimComponent, SimConnection, AvianSim};
 use lunco_cosim::systems::apply_forces::BalloonVelocity;
 use lunco_modelica::{
     ModelicaCorePlugin, ModelicaModel, ModelicaCommand, ModelicaChannels,
@@ -101,15 +101,15 @@ fn setup_balloon_wires(
         commands.entity(entity).insert(comp);
         commands.entity(entity).insert(BalloonVelocity(Vec3::ZERO));
 
-        commands.spawn(SimWire {
+        commands.spawn(SimConnection {
             start_element: entity, start_connector: "netForce".into(),
             end_element: entity, end_connector: "force_y".into(), scale: 1.0,
         });
-        commands.spawn(SimWire {
+        commands.spawn(SimConnection {
             start_element: entity, start_connector: "height".into(),
             end_element: entity, end_connector: "height".into(), scale: 1.0,
         });
-        commands.spawn(SimWire {
+        commands.spawn(SimConnection {
             start_element: entity, start_connector: "velocity_y".into(),
             end_element: entity, end_connector: "velocity".into(), scale: 1.0,
         });

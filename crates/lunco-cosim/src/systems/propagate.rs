@@ -1,12 +1,12 @@
 //! Wire propagation system.
 //!
-//! Copies output values to input values through [`SimWire`] connections.
+//! Copies output values to input values through [`SimConnection`] connections.
 //! This is the core of the co-simulation master algorithm — follows the
 //! FMI pattern of "read outputs, write inputs."
 
 use bevy::prelude::*;
 
-use crate::{AvianSim, SimComponent, SimWire};
+use crate::{AvianSim, SimComponent, SimConnection};
 
 /// System sets for co-simulation propagation.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -15,9 +15,9 @@ pub enum CosimSet {
     Propagate,
 }
 
-/// Propagates values through all [`SimWire`] connections.
+/// Propagates values through all [`SimConnection`] connections.
 pub fn propagate_wires(
-    q_wires: Query<&SimWire>,
+    q_wires: Query<&SimConnection>,
     mut set: ParamSet<(
         Query<&SimComponent>,
         Query<&AvianSim>,

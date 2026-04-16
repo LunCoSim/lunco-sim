@@ -14,7 +14,7 @@ Every simulation engine is treated as a model with named inputs and outputs:
 | **SimComponent** (Modelica) | `height`, `velocity`, ...  | `netForce`, `volume`, ...            |
 | **SimComponent** (FMU)      | `current_in`, ...          | `soc`, `voltage`, ...                |
 
-A [`SimWire`] connects any output to any input. The co-sim master runs in
+A [`SimConnection`] connects any output to any input. The co-sim master runs in
 `FixedUpdate` in two ordered sets:
 
 1. **`Propagate`** — `propagate_wires` reads every source output and writes

@@ -22,7 +22,7 @@ use bevy::prelude::*;
 ///
 /// ```rust,ignore
 /// // Wire: Modelica netForce → Avian force_y
-/// commands.spawn(SimWire {
+/// commands.spawn(SimConnection {
 ///     start_element: balloon_entity,
 ///     start_connector: "netForce".into(),
 ///     end_element: balloon_entity,
@@ -32,7 +32,7 @@ use bevy::prelude::*;
 /// ```
 #[derive(Component, Debug, Clone, Reflect)]
 #[reflect(Component)]
-pub struct SimWire {
+pub struct SimConnection {
     /// Entity owning the start (source) connector.
     pub start_element: Entity,
     /// Name of the start connector (must be an output).
@@ -45,7 +45,7 @@ pub struct SimWire {
     pub scale: f64,
 }
 
-impl Default for SimWire {
+impl Default for SimConnection {
     fn default() -> Self {
         Self {
             start_element: Entity::PLACEHOLDER,

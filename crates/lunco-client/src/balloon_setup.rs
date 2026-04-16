@@ -6,7 +6,7 @@
 
 use bevy::prelude::*;
 use lunco_assets::assets_dir;
-use lunco_cosim::{SimComponent, SimStatus, SimWire};
+use lunco_cosim::{SimComponent, SimStatus, SimConnection};
 use lunco_cosim::systems::apply_forces::BalloonVelocity;
 use lunco_modelica::{
     ModelicaChannels, ModelicaCommand, ModelicaModel,
@@ -98,22 +98,22 @@ pub fn setup_balloon_wires(
         commands.entity(entity).insert(BalloonVelocity(Vec3::ZERO));
 
         // Wire: balloon.netForce → avian.force_y (netForce already = buoyancy - weight - drag)
-        commands.spawn(SimWire {
+        commands.spawn(SimConnection {
             start_element: entity, start_connector: "netForce".into(),
             end_element: entity, end_connector: "force_y".into(), scale: 1.0,
         });
         // Wire: balloon.volume → self.collider
-        commands.spawn(SimWire {
+        commands.spawn(SimConnection {
             start_element: entity, start_connector: "volume".into(),
             end_element: entity, end_connector: "collider".into(), scale: 1.0,
         });
         // Wire: avian.height → balloon.height
-        commands.spawn(SimWire {
+        commands.spawn(SimConnection {
             start_element: entity, start_connector: "height".into(),
             end_element: entity, end_connector: "height".into(), scale: 1.0,
         });
         // Wire: avian.velocity_y → balloon.velocity
-        commands.spawn(SimWire {
+        commands.spawn(SimConnection {
             start_element: entity, start_connector: "velocity_y".into(),
             end_element: entity, end_connector: "velocity".into(), scale: 1.0,
         });

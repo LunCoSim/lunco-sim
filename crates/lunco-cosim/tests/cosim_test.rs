@@ -86,12 +86,12 @@ fn test_avian_sim_read_state() {
 }
 
 // ---------------------------------------------------------------------------
-// SimWire Tests
+// SimConnection Tests
 // ---------------------------------------------------------------------------
 
 #[test]
 fn test_sim_wire_default() {
-    let wire = SimWire::default();
+    let wire = SimConnection::default();
     assert_eq!(wire.start_element, Entity::PLACEHOLDER);
     assert_eq!(wire.end_element, Entity::PLACEHOLDER);
     assert_eq!(wire.scale, 1.0);
@@ -119,7 +119,7 @@ fn test_propagate_sim_component_to_sim_component() {
     }).id();
 
     // Create wire: Source.netForce → Target.force_in
-    app.world_mut().spawn(SimWire {
+    app.world_mut().spawn(SimConnection {
         start_element: source,
         start_connector: "netForce".into(),
         end_element: target,
@@ -154,7 +154,7 @@ fn test_propagate_with_scale() {
         ..default()
     }).id();
 
-    app.world_mut().spawn(SimWire {
+    app.world_mut().spawn(SimConnection {
         start_element: source,
         start_connector: "current".into(),
         end_element: target,
@@ -191,7 +191,7 @@ fn test_propagate_avian_to_sim_component() {
     )).id();
 
     // Wire: AvianSim.height → SimComponent.height
-    app.world_mut().spawn(SimWire {
+    app.world_mut().spawn(SimConnection {
         start_element: entity,
         start_connector: "height".into(),
         end_element: entity,
@@ -263,14 +263,14 @@ fn test_apply_sim_forces_accumulates_multiple_wires() {
     )).id();
 
     // Two wires to same force target: netForce + buoyancy → force_y
-    app.world_mut().spawn(SimWire {
+    app.world_mut().spawn(SimConnection {
         start_element: source,
         start_connector: "netForce".into(),
         end_element: target,
         end_connector: "force_y".into(),
         scale: 1.0,
     });
-    app.world_mut().spawn(SimWire {
+    app.world_mut().spawn(SimConnection {
         start_element: source,
         start_connector: "buoyancy".into(),
         end_element: target,

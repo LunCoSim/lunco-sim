@@ -1,7 +1,7 @@
 //! Wire suggestions — UI-only recommendations, never auto-applied.
 //!
 //! Generated when a [`SimComponent`] or [`AvianSim`] is created.
-//! The UI displays these for user review; clicking `[Accept]` creates a [`SimWire`].
+//! The UI displays these for user review; clicking `[Accept]` creates a [`SimConnection`].
 
 use bevy::prelude::*;
 
