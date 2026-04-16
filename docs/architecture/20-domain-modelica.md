@@ -330,6 +330,8 @@ fork (unlocks acausal connectors).
 - [`../../crates/lunco-modelica/`](../../crates/lunco-modelica/) — source
 - [`../../crates/lunco-cosim/README.md`](../../crates/lunco-cosim/README.md) — cosim-level engineering docs
 - [`10-document-system.md`](10-document-system.md) — the data model Modelica will migrate into
+- [`13-twin-and-workflow.md`](13-twin-and-workflow.md) — how Modelica files live inside a Twin
 - [`22-domain-cosim.md`](22-domain-cosim.md) — cosim pipeline ordering
 - [`23-domain-environment.md`](23-domain-environment.md) — how environment (gravity, atmosphere) flows into Modelica inputs
+- [`24-domain-sysml.md`](24-domain-sysml.md) — SysML as the structural peer; references Modelica models as realizations
 - `specs/014-modelica-simulation` — detailed spec

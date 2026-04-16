@@ -204,8 +204,10 @@ but not a prerequisite for features — work can parallelize.
 
 ## 8. Where to look next
 
-- **Framework design:** [10-document-system.md](10-document-system.md) and [11-workbench.md](11-workbench.md)
-- **Domain specifics:** 20-domain-*.md files (written when each domain migration begins)
+- **Framework design:** [10-document-system.md](10-document-system.md), [11-workbench.md](11-workbench.md), [13-twin-and-workflow.md](13-twin-and-workflow.md)
+- **Per-domain design:** [20-domain-modelica.md](20-domain-modelica.md), [21-domain-usd.md](21-domain-usd.md), [22-domain-cosim.md](22-domain-cosim.md), [23-domain-environment.md](23-domain-environment.md), [24-domain-sysml.md](24-domain-sysml.md)
+- **Project principles:** [`../principles.md`](../principles.md)
+- **Terminology:** [01-ontology.md](01-ontology.md)
 - **Historical research:** [research/](research/) contains inspiration and rejected-path writeups
 - **Crate-level quick starts:** each crate has its own `README.md` focused on
   "how do I use this crate right now," not architecture.

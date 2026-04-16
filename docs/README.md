@@ -18,11 +18,12 @@ design, and reference documentation.
 ## Reading order for newcomers
 
 1. **[`architecture/00-overview.md`](architecture/00-overview.md)** — what LunCoSim is, the three-tier model, how the crates layer together
-2. **[`principles.md`](principles.md)** — how we work (TDD, plugin-first, hot-swappable, documentation mandate)
+2. **[`principles.md`](principles.md)** — how we work (TDD, plugin-first, hot-swappable, interop principle, documentation mandate)
 3. **[`architecture/01-ontology.md`](architecture/01-ontology.md)** — vocabulary (Space System, Port, Connection, Attribute, CommandMessage, etc.)
 4. **[`architecture/10-document-system.md`](architecture/10-document-system.md)** — the foundational data model: Documents, DocumentOps, DocumentViews
 5. **[`architecture/11-workbench.md`](architecture/11-workbench.md)** — UI/UX architecture: workspaces, panels, detachable windows, command palette
-6. Domain docs as relevant: `20-domain-modelica.md`, `21-domain-usd.md`, `22-domain-cosim.md`, `23-domain-environment.md`
+6. **[`architecture/13-twin-and-workflow.md`](architecture/13-twin-and-workflow.md)** — what a Twin is, two-file strategy, save/load/workflow
+7. Domain docs as relevant: `20-domain-modelica.md`, `21-domain-usd.md`, `22-domain-cosim.md`, `23-domain-environment.md`, `24-domain-sysml.md`
 
 ## Numbering convention
 

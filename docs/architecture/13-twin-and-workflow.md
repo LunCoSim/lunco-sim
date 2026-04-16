@@ -1,10 +1,9 @@
 # 13 — Twin and Workflow
 
 > **Twin** is LunCoSim's top-level persistent artifact: a folder of related
-> Documents (Modelica models, USD scenes, missions, connections) plus a
-> manifest. This doc defines what's in a Twin, how it loads/saves, how
-> users work inside and outside a Twin, and how cross-document references
-> survive edits.
+> domain-standard files plus a tool-specific manifest. This doc defines
+> what's in a Twin, how it loads/saves, how users work inside and outside
+> a Twin, and how cross-document references survive edits.
 
 ## 1. What a Twin is
 
@@ -14,10 +13,36 @@ constellation, an electrical subsystem study. On disk:
 
 ```
 my_lunar_base/              ← a Twin
-├── twin.toml               ← manifest (the only required file)
-├── ... (domain documents — structure is flexible)
+├── twin.toml               ← tool manifest (the only file required to BE a Twin)
+├── ... (domain-standard files — structure is flexible)
 └── .lunco/                 ← session / workspace state (gitignored)
 ```
+
+### The two-file strategy
+
+A Twin separates **tool configuration** from **system modeling** into
+different file formats. Each format does what it's best at:
+
+| File kind | Format | Owns | Interop |
+|-----------|--------|------|---------|
+| Tool manifest | TOML (`twin.toml`) | Paths, UI preferences, reference strategy, environment selection | None expected — tool-specific |
+| System structure | SysML v2 (`.sysml`) | Parts, ports, connections, requirements, verifications | ✅ Full, via any SysML v2 tool (Cameo, OpenMBEE, etc.) |
+| Behavior | Modelica (`.mo`) | Equations, dynamics, parameters | ✅ Full, via Dymola, OMEdit, OpenModelica |
+| Geometry | USD (`.usda` / `.usdc`) | Scenes, meshes, materials, transforms | ✅ Full, via Omniverse, Blender, USDView |
+| Missions | RON/YAML (`.mission.ron`) | Timeline, events, maneuvers | Custom for now |
+
+**Interop principle:** Each domain-standard file MUST contain only that
+domain's standard syntax. No LunCoSim-specific annotations inside `.sysml`,
+`.mo`, or `.usda` files. Tool-specific configuration lives in `twin.toml`
+(or per-user state under `.lunco/`). This guarantees lossless round-trips
+with external domain tools — a `system.sysml` opens cleanly in Cameo
+because it's pure SysML v2, not SysML-with-LunCoSim-dialect.
+
+The Twin manifest (`twin.toml`) is like `.vscode/settings.json`,
+`Cargo.toml`, `.unity` project files, or `.git/config` — tool-specific
+by design, not expected to round-trip through external tools. This is
+the standard separation used by every mature engineering / creative
+software stack.
 
 Conceptually: a Twin is to LunCoSim what a project is to an IDE, a scene
 is to a game engine, a stage is to Omniverse. It's the **unit of
@@ -55,7 +80,9 @@ live wherever the user wants:
 
 ```
 my_lunar_base/
-├── twin.toml
+├── twin.toml                       ← tool config (LunCoSim-specific)
+├── system.sysml                    ← SysML system structure + requirements (standard)
+├── requirements.sysml              ← more SysML (user's choice to split files)
 ├── balloon.mo                      ← Modelica at top level, fine
 ├── electrical/
 │   ├── package.mo                  ← Modelica package (user's choice)
@@ -92,6 +119,12 @@ name = "Lunar Base Alpha"
 version = "0.3.0"
 description = "South pole colony with ISRU plant"
 lunco_version = ">=0.6"
+
+[sysml]
+# Entry-point SysML file for system structure + requirements.
+# Additional `.sysml` files are picked up recursively from `paths`.
+root = "system.sysml"
+paths = ["."]
 
 [modelica]
 # Recursive scan from twin root for `.mo` files and `package.mo` markers.

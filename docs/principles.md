@@ -8,8 +8,12 @@ Every feature, from high-level flight software to low-level physics propagators,
 ### II. TDD-First (Non-Negotiable)
 Test-Driven Development is our baseline. No feature code is written until a corresponding test exists and fails. This ensures our digital twin remains verifiable as complexity scales from a lunar base to the entire solar system.
 
-### III. SysML v2 as the "Source of Truth"
-We use SysML v2 to define high-level system models, interactions, and state. SysML v2 models are not just documentation; they serve as our **SAVE file format** and the structural blueprint for the Bevy ECS hierarchy.
+### III. SysML v2 as the Source of Truth for System Structure
+We use SysML v2 to define system architecture, requirements, and verifications. Within a project, `.sysml` files are the authoritative description of **what the system IS** — its parts, ports, connections, and traceable requirements.
+
+Other domains own other concerns: **Modelica** owns behavior (equations, dynamics), **USD** owns geometry (meshes, scenes), **LunCoSim's tool manifest** (`twin.toml`) owns configuration (paths, settings). A Twin is a folder that contains files from all of these domains, each in its native standard format for maximum interoperability.
+
+**Interop principle:** Each domain file MUST use only that domain's standard syntax, with no LunCoSim-specific extensions. This guarantees that a SysML engineer can open our `.sysml` files in Cameo, a controls engineer can open our `.mo` files in Dymola, and a USD artist can open our `.usda` files in Omniverse — without lossy round-trips. Tool-specific configuration lives in separate tool-manifest files (`twin.toml`) that external tools are not expected to understand.
 
 ### IV. Mathematical Rigor with Modelica
 All complex physical and system dynamics (power, thermal, life support) are modeled using Modelica. Bevy acts as the "glue" that executes these models, while Modelica ensures the mathematical integrity of the simulation.
