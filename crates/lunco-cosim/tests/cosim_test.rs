@@ -244,7 +244,7 @@ fn test_avian_sim_auto_added_on_rigid_body() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn test_apply_sim_forces_accumulates_multiple_wires() {
+fn test_apply_sim_forces_accumulates_multiple_connections() {
     let mut app = build_test_app();
 
     // Entity with SimComponent output
@@ -262,7 +262,7 @@ fn test_apply_sim_forces_accumulates_multiple_wires() {
         AvianSim::default(),
     )).id();
 
-    // Two wires to same force target: netForce + buoyancy → force_y
+    // Two connections to same force target: netForce + buoyancy → force_y
     app.world_mut().spawn(SimConnection {
         start_element: source,
         start_connector: "netForce".into(),
@@ -278,16 +278,24 @@ fn test_apply_sim_forces_accumulates_multiple_wires() {
         scale: 1.0,
     });
 
-    // Run force application
+    // Propagate — should accumulate both connections into AvianSim.inputs["force_y"]
+    app.world_mut().run_system_cached(
+        lunco_cosim::systems::propagate::propagate_connections,
+    ).unwrap();
+
+    {
+        let avian = app.world().get::<AvianSim>(target).unwrap();
+        assert_eq!(avian.inputs["force_y"], 50.0, "forces should accumulate: 30 + 20 = 50");
+    }
+
+    // apply_sim_forces should drain the inputs (they're taken via take_inputs)
     app.world_mut().run_system_cached(
         lunco_cosim::systems::apply_forces::apply_sim_forces,
-    )
-    .unwrap();
+    ).unwrap();
 
-    // Verify forces were applied (Forces component should have non-zero force)
-    // Note: The actual force application goes through WriteRigidBodyForces,
-    // so we verify the system ran without error and AvianSim exists
-    assert!(app.world().get::<AvianSim>(target).is_some());
+    let avian = app.world().get::<AvianSim>(target).unwrap();
+    assert!(!avian.inputs.contains_key("force_y"),
+        "apply_sim_forces should drain force_y from AvianSim.inputs");
 }
 
 // ---------------------------------------------------------------------------

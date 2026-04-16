@@ -72,8 +72,7 @@ impl Plugin for CoSimPlugin {
     fn build(&self, app: &mut App) {
         app.register_type::<SimComponent>()
             .register_type::<AvianSim>()
-            .register_type::<SimConnection>()
-            .register_type::<systems::apply_forces::BalloonVelocity>();
+            .register_type::<SimConnection>();
 
         app.add_observer(on_add_rigid_body);
         app.add_observer(on_add_rigid_body_forces);

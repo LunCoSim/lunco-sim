@@ -24,9 +24,8 @@ use bevy::app::ScheduleRunnerPlugin;
 use bevy::time::TimePlugin;
 use std::time::Duration;
 
-use avian3d::prelude::{RigidBody, Position, LinearVelocity};
+use avian3d::prelude::{Position, RigidBody};
 use lunco_cosim::{CoSimPlugin, SimComponent, SimConnection, AvianSim};
-use lunco_cosim::systems::apply_forces::BalloonVelocity;
 use lunco_modelica::{
     ModelicaCorePlugin, ModelicaModel, ModelicaCommand, ModelicaChannels,
     extract_model_name, extract_parameters, extract_inputs_with_defaults,
@@ -99,7 +98,6 @@ fn setup_balloon_wires(
             ..default()
         };
         commands.entity(entity).insert(comp);
-        commands.entity(entity).insert(BalloonVelocity(Vec3::ZERO));
 
         commands.spawn(SimConnection {
             start_element: entity, start_connector: "netForce".into(),
@@ -172,8 +170,7 @@ fn balloon_netforce_flows_through_cosim_pipeline() {
         Name::new("Test Balloon"),
         Transform::from_xyz(0.0, 15.0, 0.0),
         Position::from_xyz(0.0, 15.0, 0.0),
-        RigidBody::Kinematic,
-        LinearVelocity::default(),
+        RigidBody::Dynamic,
         AvianSim::default(),
         BalloonModelMarker::default(),
     )).id();
@@ -198,18 +195,19 @@ fn balloon_netforce_flows_through_cosim_pipeline() {
     //   - spawn_modelica_requests send Step commands
     //   - handle_modelica_responses update model.variables with fresh outputs
     //   - sync_modelica_outputs copy them to SimComponent.outputs
-    //   - propagate_connections write AvianSim.inputs["force_y"]
-    //   - apply_sim_forces integrate velocity into LinearVelocity
+    //   - propagate_connections write AvianSim.inputs["force_y"] AND
+    //     SimComponent.inputs["force_y"] (both written by the same system)
+    //   - apply_sim_forces route the force into Avian via Forces::apply_force
     //
-    // Note: apply_sim_forces calls `avian.take_inputs()`, which drains
-    // `AvianSim.inputs["force_y"]` every tick. So we can't sample that field
-    // from Update. Instead we sample:
+    // We sample:
     //   * `SimComponent.outputs["netForce"]` — the persistent Modelica output
-    //   * `SimComponent.inputs["force_y"]` — written alongside AvianSim.inputs
-    //     by `propagate_connections`, and cleared at the top of the NEXT propagate
-    //     (one frame later), so it's observable.
-    //   * `LinearVelocity.y` — persistent, accumulates across frames.
-    let mut max_abs_vel = 0.0_f64;
+    //   * `SimComponent.inputs["force_y"]` — written by propagate each tick
+    //     alongside AvianSim.inputs, observable until the next propagate.
+    //
+    // We do NOT assert on `LinearVelocity` or `Position` because this test
+    // intentionally skips `PhysicsPlugins` — Avian's integrator isn't running,
+    // so force application won't produce motion here. That's covered by
+    // manual testing in the running app and by Avian's own tests.
     let mut last_netforce = 0.0_f64;
     let mut last_force_y_seen = 0.0_f64;
 
@@ -229,11 +227,6 @@ fn balloon_netforce_flows_through_cosim_pipeline() {
                 }
             }
         }
-        if let Some(v) = app.world().get::<LinearVelocity>(balloon) {
-            if v.0.y.abs() > max_abs_vel {
-                max_abs_vel = v.0.y.abs();
-            }
-        }
     }
 
     // Dump final state for debuggability when the test fails.
@@ -248,24 +241,18 @@ fn balloon_netforce_flows_through_cosim_pipeline() {
         eprintln!("test: ModelicaModel.variables keys = {:?}", model.variables.keys().collect::<Vec<_>>());
     }
     eprintln!("test: last Modelica netForce = {}", last_netforce);
-    eprintln!("test: max |force_y| through wire = {}", last_force_y_seen.abs());
-    eprintln!("test: max |vel_y| observed   = {}", max_abs_vel);
+    eprintln!("test: max |force_y| through connection = {}", last_force_y_seen.abs());
 
     // Chain assertions — each one localizes the failure.
     assert!(
         last_netforce.is_finite() && last_netforce > 0.0,
-        "balloon netForce should be positive (buoyancy > weight) but was {last_netforce}. \
+        "balloon netForce should be positive (buoyancy > drag, at rest) but was {last_netforce}. \
          If NaN or missing: rumoca failed to return the algebraic. \
          If <= 0: balloon.mo parameters are wrong."
     );
     assert!(
         last_force_y_seen.abs() > 0.1,
         "propagate_connections never wrote a non-zero force_y into SimComponent.inputs. \
-         This means the netForce → force_y wire isn't routing correctly."
-    );
-    assert!(
-        max_abs_vel > 0.01,
-        "apply_sim_forces never produced a non-zero LinearVelocity.y despite seeing \
-         netForce = {last_netforce}. max |vel_y| = {max_abs_vel}"
+         This means the netForce → force_y connection isn't routing correctly."
     );
 }

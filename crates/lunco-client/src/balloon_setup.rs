@@ -7,7 +7,6 @@
 use bevy::prelude::*;
 use lunco_assets::assets_dir;
 use lunco_cosim::{SimComponent, SimStatus, SimConnection};
-use lunco_cosim::systems::apply_forces::BalloonVelocity;
 use lunco_modelica::{
     ModelicaChannels, ModelicaCommand, ModelicaModel,
     extract_model_name, extract_parameters, extract_inputs_with_defaults,
@@ -94,10 +93,7 @@ pub fn setup_balloon_wires(
         };
         commands.entity(entity).insert(comp);
 
-        // BalloonVelocity tracks kinematic velocity — needed by apply_sim_forces
-        commands.entity(entity).insert(BalloonVelocity(Vec3::ZERO));
-
-        // Wire: balloon.netForce → avian.force_y (netForce already = buoyancy - weight - drag)
+        // Wire: balloon.netForce → avian.force_y (aerodynamic force; gravity applied by Avian)
         commands.spawn(SimConnection {
             start_element: entity, start_connector: "netForce".into(),
             end_element: entity, end_connector: "force_y".into(), scale: 1.0,

@@ -256,11 +256,13 @@ pub fn spawn_procedural(
             )).id()
         }
         SpawnSource::Procedural(ProceduralId::Balloon) => {
-            // Spawn as Kinematic — we drive position directly from Modelica netForce,
-            // bypassing Avian's integrator entirely (apply_sim_forces handles integration).
-            // Kinematic bodies participate in collision response but are not affected
-            // by forces or gravity. Collider is synced from Modelica volume each frame.
+            // Spawn as Dynamic — Modelica's netForce is routed into Avian's
+            // external force system (apply_sim_forces → Forces::apply_force),
+            // and Avian integrates velocity + position. Gravity is applied
+            // automatically by lunco-environment's apply_gravity_to_rigid_bodies.
+            // Mass matches the balloon.mo parameter for consistent bookkeeping.
             let radius = 1.0_f32;
+            let balloon_mass = 4.5_f32;  // must match balloon.mo `parameter Real mass`
             let spawn_offset = world_pos;
             let mesh = meshes.add(Sphere::new(radius).mesh().ico(16).unwrap());
             let mat = materials.add(StandardMaterial {
@@ -272,13 +274,9 @@ pub fn spawn_procedural(
                 Name::new("Weather Balloon"),
                 lunco_core::SelectableRoot,
                 Transform::from_translation(spawn_offset),
-                // Kinematic: Avian doesn't apply forces or gravity — we set
-                // LinearVelocity directly in apply_sim_forces, and Avian
-                // integrates Position from velocity via integrate_positions.
-                // Not writing Position directly is critical: it lets
-                // transform_to_position pick up gizmo drags that update Transform.
-                avian3d::prelude::RigidBody::Kinematic,
+                avian3d::prelude::RigidBody::Dynamic,
                 avian3d::prelude::Collider::sphere(radius as f64),
+                avian3d::prelude::Mass(balloon_mass),
                 Mesh3d(mesh),
                 MeshMaterial3d(mat),
                 ChildOf(grid),

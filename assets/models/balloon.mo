@@ -1,7 +1,10 @@
 model Balloon
   parameter Real g = 9.81 "Gravity acceleration m/s²";
-  // 1m radius sphere: envelope + helium + payload ≈ 4.5 kg
-  parameter Real mass = 4.5 "Total balloon mass kg";
+  // Note: balloon mass lives on the Avian RigidBody entity as `Mass`.
+  // Modelica no longer subtracts weight from netForce — Avian's gravity
+  // system applies `F = -m*g` as a separate force. Keep the Avian Mass
+  // value in sync with `mass` here if you tune it.
+  parameter Real mass = 4.5 "Reference balloon mass kg (matches Avian Mass)";
   // Max gas volume: slightly larger than sphere mesh (r=1m → V≈4.19 m³)
   parameter Real maxVolume = 6.0 "Maximum gas volume m³";
   parameter Real gasConstant = 287.058 "J/(kg·K) for air";
@@ -24,9 +27,8 @@ model Balloon
   output Real temperature "Ambient temperature K (standard atmosphere)";
   output Real airDensity "Air density kg/m³";
   output Real buoyancy "Buoyancy force N = rho * V * g";
-  output Real weight "Weight force N = m * g";
   output Real drag "Drag force N opposing motion";
-  output Real netForce "Net force N = buoyancy - weight - drag";
+  output Real netForce "External force N from balloon physics = buoyancy - drag (gravity applied by Avian)";
 
 equation
   // Standard atmosphere (linear approximation, valid 0–11 km)
@@ -41,9 +43,6 @@ equation
   // Buoyancy (Archimedes' principle)
   buoyancy = airDensity * volume * g;
 
-  // Weight
-  weight = mass * g;
-
   // Drag: F = 0.5 * rho * Cd * A * v^2, cross-section A = pi * r^2
   // Sphere radius from volume: r = cbrt(3*V / (4*pi))
   // Using volume^(2/3) as proxy for A (proportional to r^2).
@@ -51,6 +50,8 @@ equation
   drag = 0.5 * airDensity * dragCoeff * (3.14159 * volume ^ (2.0 / 3.0))
          * velocity * abs(velocity);
 
-  // Net force = buoyancy - weight - drag
-  netForce = buoyancy - weight - drag;
+  // Net external force routed to Avian. Gravity (weight) is applied by
+  // Avian's gravity system separately — we export only the aerodynamic
+  // contribution (lift minus drag).
+  netForce = buoyancy - drag;
 end Balloon;
