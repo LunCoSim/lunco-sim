@@ -1,0 +1,10 @@
+[package]
+name = "lunco-environment"
+version = "0.1.0"
+edition = "2021"
+description = "Per-entity environmental state (gravity, atmosphere, radiation) computed from celestial body providers."
+
+[dependencies]
+bevy.workspace = true
+avian3d.workspace = true
+lunco-celestial = { path = "../lunco-celestial" }

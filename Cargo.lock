@@ -5873,6 +5873,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "lunco-environment"
+version = "0.1.0"
+dependencies = [
+ "avian3d",
+ "bevy",
+ "lunco-celestial",
+]
+
+[[package]]
 name = "lunco-fsw"
 version = "0.6.0-dev"
 dependencies = [
