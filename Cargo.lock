@@ -5953,6 +5953,7 @@ dependencies = [
  "rumoca-sim",
  "serde",
  "serde_json",
+ "usvg",
  "uuid",
  "wasm-bindgen",
  "wasm-bindgen-futures",

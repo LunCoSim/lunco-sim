@@ -91,16 +91,16 @@ impl Default for DiagramTheme {
     fn default() -> Self {
         Self {
             grid_spacing: 15.0,
-            grid_dot_radius: 1.0,
-            grid_dot_color: egui::Color32::from_gray(55),
+            grid_dot_radius: 0.8,
+            grid_dot_color: egui::Color32::from_gray(40),
 
-            node_bg: egui::Color32::from_rgba_premultiplied(20, 20, 25, 200),
-            node_stroke: egui::Stroke::new(1.0, egui::Color32::from_rgb(50, 50, 60)),
+            node_bg: egui::Color32::from_rgba_premultiplied(15, 15, 20, 230),
+            node_stroke: egui::Stroke::new(0.5, egui::Color32::from_rgb(60, 60, 70)),
             node_rounding: 2,
 
-            symbol_stroke_width: 2.0,
-            symbol_color: egui::Color32::from_rgb(200, 200, 210),
-            body_min_size: egui::Vec2::new(100.0, 100.0),
+            symbol_stroke_width: 1.5,
+            symbol_color: egui::Color32::from_rgb(220, 220, 230),
+            body_min_size: egui::Vec2::new(80.0, 80.0),
 
             port_dot_radius: 5.0,
             color_electrical: egui::Color32::from_rgb(70, 140, 255),
@@ -137,6 +137,8 @@ pub struct DiagramState {
     pub schematic_mode: bool,
     /// Persistent storage for the last graph-space position where a menu was triggered.
     pub last_click_pos: egui::Pos2,
+    /// The currently selected node for inspection.
+    pub selected_node: Option<DiagramNodeId>,
 }
 
 impl DiagramState {
@@ -149,12 +151,14 @@ impl DiagramState {
         let snarl_node = DiagramNode::Component {
             id: node_id,
             instance_name: self.diagram.get_node(node_id).unwrap().instance_name.clone(),
-            type_name: def.name,
-            description: def.description,
-            icon_text: def.icon_text,
+            type_name: def.name.clone(),
+            description: def.description.clone(),
+            icon_text: def.icon_text.clone(),
+            icon_asset: def.icon_asset.clone(),
             ports,
             connector_types,
         };
+
         self.snarl.insert_node(pos, snarl_node);
     }
 
@@ -176,6 +180,7 @@ impl Default for DiagramState {
             parse_task: None,
             schematic_mode: true,
             last_click_pos: egui::Pos2::ZERO,
+            selected_node: None,
         }
     }
 }
@@ -193,6 +198,7 @@ pub enum DiagramNode {
         type_name: String,
         description: Option<String>,
         icon_text: Option<String>,
+        icon_asset: Option<String>,
         ports: Vec<String>,
         connector_types: Vec<String>,
     },
@@ -208,6 +214,7 @@ impl DiagramNode {
             type_name: comp.name.clone(),
             description: comp.description.clone(),
             icon_text: comp.icon_text.clone(),
+            icon_asset: comp.icon_asset.clone(),
             ports,
             connector_types,
         }
@@ -249,38 +256,30 @@ fn draw_resistor(painter: &egui::Painter, rect: egui::Rect, theme: &DiagramTheme
     let stroke = egui::Stroke::new(theme.symbol_stroke_width, theme.symbol_color);
     let cx = rect.center().x;
     let cy = rect.center().y;
-    let w = rect.width() * 0.8;
-    let h = rect.height() * 0.35;
-    let half_w = w / 2.0;
-    let segments = 5;
-    let seg_w = w / segments as f32;
+    let rw = rect.width() * 0.5;
+    let rh = rect.height() * 0.22;
 
-    // Lead-in wire (left)
-    let start_x = cx - half_w - seg_w;
-    painter.line_segment(
-        [egui::Pos2::new(start_x, cy), egui::Pos2::new(cx - half_w, cy)],
-        stroke,
-    );
+    // Sharper standard zigzag (3 peaks)
+    let left = cx - rw/2.0;
+    let dx = rw / 6.0;
+    let points = vec![
+        egui::Pos2::new(left, cy),
+        egui::Pos2::new(left + dx/2.0, cy - rh),
+        egui::Pos2::new(left + dx * 1.5, cy + rh),
+        egui::Pos2::new(left + dx * 2.5, cy - rh),
+        egui::Pos2::new(left + dx * 3.5, cy + rh),
+        egui::Pos2::new(left + dx * 4.5, cy - rh),
+        egui::Pos2::new(left + dx * 5.5, cy + rh),
+        egui::Pos2::new(left + rw, cy),
+    ];
 
-    // Zigzag
-    let mut points = Vec::with_capacity(segments + 2);
-    points.push(egui::Pos2::new(cx - half_w, cy));
-    for i in 0..segments {
-        let x = cx - half_w + (i as f32 + 0.5) * seg_w;
-        let y = if i % 2 == 0 { cy - h } else { cy + h };
-        points.push(egui::Pos2::new(x, y));
-    }
-    points.push(egui::Pos2::new(cx + half_w, cy));
-    for pair in points.windows(2) {
-        painter.line_segment([pair[0], pair[1]], stroke);
+    for window in points.windows(2) {
+        painter.line_segment([window[0], window[1]], stroke);
     }
 
-    // Lead-out wire (right)
-    let end_x = cx + half_w + seg_w;
-    painter.line_segment(
-        [egui::Pos2::new(cx + half_w, cy), egui::Pos2::new(end_x, cy)],
-        stroke,
-    );
+    // Lead wires
+    painter.line_segment([egui::Pos2::new(rect.left() + 2.0, cy), egui::Pos2::new(left, cy)], stroke);
+    painter.line_segment([egui::Pos2::new(rect.right() - 2.0, cy), egui::Pos2::new(left + rw, cy)], stroke);
 }
 
 /// Draw a capacitor symbol (two parallel plates) inside the given rectangle.
@@ -289,26 +288,26 @@ fn draw_capacitor(painter: &egui::Painter, rect: egui::Rect, theme: &DiagramThem
     let cx = rect.center().x;
     let cy = rect.center().y;
     let plate_h = rect.height() * 0.6;
-    let gap = rect.width() * 0.10;
+    let gap = rect.width() * 0.08;
 
     // Left wire
     painter.line_segment(
-        [egui::Pos2::new(rect.left() + 4.0, cy), egui::Pos2::new(cx - gap, cy)],
+        [egui::Pos2::new(rect.left() + 2.0, cy), egui::Pos2::new(cx - gap, cy)],
         stroke,
     );
     // Left plate
     painter.line_segment(
         [egui::Pos2::new(cx - gap, cy - plate_h / 2.0), egui::Pos2::new(cx - gap, cy + plate_h / 2.0)],
-        egui::Stroke::new(theme.symbol_stroke_width + 1.0, theme.symbol_color),
+        egui::Stroke::new(theme.symbol_stroke_width + 0.5, theme.symbol_color),
     );
     // Right plate
     painter.line_segment(
         [egui::Pos2::new(cx + gap, cy - plate_h / 2.0), egui::Pos2::new(cx + gap, cy + plate_h / 2.0)],
-        egui::Stroke::new(theme.symbol_stroke_width + 1.0, theme.symbol_color),
+        egui::Stroke::new(theme.symbol_stroke_width + 0.5, theme.symbol_color),
     );
     // Right wire
     painter.line_segment(
-        [egui::Pos2::new(cx + gap, cy), egui::Pos2::new(rect.right() - 4.0, cy)],
+        [egui::Pos2::new(cx + gap, cy), egui::Pos2::new(rect.right() - 2.0, cy)],
         stroke,
     );
 }
@@ -768,6 +767,17 @@ fn draw_integrator(painter: &egui::Painter, rect: egui::Rect, theme: &DiagramThe
 
 /// Dispatch the correct symbol drawing function based on component type.
 fn draw_symbol_v2(painter: &egui::Painter, rect: egui::Rect, node: &DiagramNode, theme: &DiagramTheme) {
+    // 1. Try to draw SVG icon if present (Authentic Dymola/Modelica look)
+    let DiagramNode::Component { icon_asset, .. } = node;
+    if let Some(asset_path) = icon_asset {
+        let full_path = lunco_assets::msl_dir().join(asset_path);
+        if let Ok(svg_data) = std::fs::read(&full_path) {
+            super::svg_renderer::draw_svg_to_egui(painter, rect, &svg_data);
+            return;
+        }
+    }
+
+    // 2. Fallback to hardcoded symbols for common components
     let type_name = node.subtitle();
     match type_name {
         "Resistor" => draw_resistor(painter, rect, theme),
@@ -858,6 +868,8 @@ pub struct DiagramViewer<'a> {
     graph_viewport: Option<egui::Rect>,
     /// Transient storage for the click location within this frame.
     last_click_pos: egui::Pos2,
+    /// The currently selected node for inspection.
+    selected_node: &'a mut Option<DiagramNodeId>,
     /// Reference to egui context for input checking.
     ctx: egui::Context,
 }
@@ -944,18 +956,24 @@ impl<'a> SnarlViewer<DiagramNode> for DiagramViewer<'a> {
     ) {
         let node = &snarl[node_id];
         let instance_name = node.title();
+        let DiagramNode::Component { id, .. } = node;
         
         let body_height = self.theme.body_min_size.y;
         let symbol_size = self.theme.body_min_size.x;
 
         // Use fixed width based on theme to prevent infinite expansion feedback loop
-        ui.vertical_centered(|ui| {
+        let response = ui.vertical_centered(|ui| {
             ui.set_width(symbol_size);
-            let (rect, _) = ui.allocate_exact_size(egui::vec2(symbol_size, body_height), egui::Sense::hover());
+            let (rect, response) = ui.allocate_exact_size(egui::vec2(symbol_size, body_height), egui::Sense::click());
             let painter = ui.painter();
 
             // Draw schematic symbol
             draw_symbol_v2(painter, rect, node, self.theme);
+
+            // Highlight if selected
+            if Some(*id) == *self.selected_node {
+                painter.rect_stroke(rect.expand(2.0), 4.0, egui::Stroke::new(2.0, egui::Color32::LIGHT_BLUE), egui::StrokeKind::Outside);
+            }
 
             // Draw instance label
             ui.add_space(4.0);
@@ -964,7 +982,12 @@ impl<'a> SnarlViewer<DiagramNode> for DiagramViewer<'a> {
                     .size(11.0)
                     .color(egui::Color32::from_rgb(180, 180, 190)),
             );
-        });
+            response
+        }).inner;
+
+        if response.clicked() {
+            *self.selected_node = Some(*id);
+        }
     }
 
     fn has_footer(&mut self, _node: &DiagramNode) -> bool {
@@ -1360,6 +1383,7 @@ fn build_snarl(diagram: &VisualDiagram) -> Snarl<DiagramNode> {
             type_name: node.component_def.name.clone(),
             description: node.component_def.description.clone(),
             icon_text: node.component_def.icon_text.clone(),
+            icon_asset: node.component_def.icon_asset.clone(),
             ports,
             connector_types,
         };
@@ -1627,12 +1651,14 @@ impl WorkbenchPanel for DiagramPanel {
         let (rect, _) = ui.allocate_exact_size(available_size, egui::Sense::hover());
 
         if let Some(mut ds) = world.get_resource_mut::<DiagramState>() {
+            let mut selected_node = ds.selected_node;
             let mut viewer = DiagramViewer {
                 schematic_mode,
                 theme: &theme,
                 canvas_rect: rect,
                 graph_viewport: None,
                 last_click_pos: ds.last_click_pos,
+                selected_node: &mut selected_node,
                 ctx: ui.ctx().clone(),
             };
 
@@ -1643,8 +1669,9 @@ impl WorkbenchPanel for DiagramPanel {
                 ds.snarl.show(&mut viewer, &snarl_style, "diagram", child_ui);
             });
 
-            // Save back the click position if it was updated (e.g. in has_graph_menu)
+            // Save back the click position and selection if they were updated
             ds.last_click_pos = viewer.last_click_pos;
+            ds.selected_node = selected_node;
 
             // Sync
             let DiagramState { snarl, diagram, .. } = &mut *ds;

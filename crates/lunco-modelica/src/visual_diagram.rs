@@ -105,6 +105,8 @@ pub struct MSLComponentDef {
     pub description: Option<String>,
     /// Schematic text (e.g. "cosh").
     pub icon_text: Option<String>,
+    /// Path to SVG icon asset, relative to assets root.
+    pub icon_asset: Option<String>,
     /// Ports defined by this component.
     pub ports: Vec<PortDef>,
     /// Parameters that can be configured.

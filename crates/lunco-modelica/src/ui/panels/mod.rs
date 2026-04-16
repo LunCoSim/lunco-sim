@@ -5,3 +5,5 @@ pub mod code_editor;
 pub mod telemetry;
 pub mod graphs;
 pub mod diagram;
+pub mod svg_renderer;
+pub mod inspector;
