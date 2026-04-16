@@ -1069,6 +1069,7 @@ fn handle_modelica_responses(
     channels: Res<ModelicaChannels>,
     mut q_models: Query<&mut ModelicaModel>,
     mut workbench_state: ResMut<ui::WorkbenchState>,
+    mut doc_registry: ResMut<ui::ModelicaDocumentRegistry>,
 ) {
     while let Ok(result) = channels.rx.try_recv() {
         if result.entity == Entity::PLACEHOLDER {
@@ -1083,8 +1084,12 @@ fn handle_modelica_responses(
 
             model.is_stepping = false;
 
-            // Sync original source back to component (needed for parameter updates)
+            // Sync original source back to component and Document registry.
+            // The worker may return a mutated source (e.g. after
+            // UpdateParameters bakes new parameter values into the source),
+            // and both the Document and the legacy field must reflect it.
             if let Some(source) = result.original_source {
+                doc_registry.checkpoint_source(result.entity, source.as_ref().to_string());
                 model.original_source = source;
             }
 

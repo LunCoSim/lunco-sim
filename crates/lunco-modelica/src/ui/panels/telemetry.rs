@@ -5,7 +5,7 @@ use bevy_egui::egui;
 use bevy_workbench::dock::WorkbenchPanel;
 use std::collections::HashMap;
 
-use crate::ui::WorkbenchState;
+use crate::ui::{ModelicaDocumentRegistry, WorkbenchState};
 use crate::{ModelicaModel, ModelicaChannels, ModelicaCommand};
 
 /// Telemetry panel — model parameters, inputs, and variable plotting toggles.
@@ -131,8 +131,17 @@ impl WorkbenchPanel for TelemetryPanel {
                             let mut trigger_update = false;
                             let mut model_name = String::new();
                             let mut session_id = 0;
-                            let mut source = String::new();
                             let mut new_params = HashMap::new();
+
+                            // Read canonical source from the Document registry
+                            // (falls back to the legacy component field only if
+                            // the entity was somehow never checkpointed — e.g.
+                            // a pre-migration Modelica flow we haven't touched
+                            // yet). Once every Modelica spawn path goes through
+                            // the registry, the fallback can be dropped.
+                            let source = world
+                                .get_resource::<ModelicaDocumentRegistry>()
+                                .and_then(|r| r.host(entity).map(|h| h.document().source().to_string()));
 
                             if let Ok(mut m) = world.query::<&mut ModelicaModel>().get_mut(world, entity) {
                                 if let Some(p) = m.parameters.get_mut(key) {
@@ -141,11 +150,18 @@ impl WorkbenchPanel for TelemetryPanel {
                                     model_name = m.model_name.clone();
                                     m.session_id += 1;
                                     session_id = m.session_id;
-                                    source = m.original_source.to_string();
                                     new_params = m.parameters.clone();
                                     m.is_stepping = true; // prevent steps while updating
                                 }
                             }
+
+                            let source = source.unwrap_or_else(|| {
+                                world
+                                    .query::<&ModelicaModel>()
+                                    .get(world, entity)
+                                    .map(|m| m.original_source.to_string())
+                                    .unwrap_or_default()
+                            });
 
                             if trigger_update {
                                 if let Some(channels) = world.get_resource::<ModelicaChannels>() {

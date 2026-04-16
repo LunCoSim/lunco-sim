@@ -65,6 +65,19 @@ pub use state::*;
 
 mod panels;
 
+use crate::ModelicaModel;
+
+/// Drop `ModelicaDocumentRegistry` entries whose entity was despawned.
+fn cleanup_removed_documents(
+    mut removed: RemovedComponents<ModelicaModel>,
+    registry: Option<ResMut<ModelicaDocumentRegistry>>,
+) {
+    let Some(mut registry) = registry else { return };
+    for entity in removed.read() {
+        registry.remove(entity);
+    }
+}
+
 /// Plugin that registers all Modelica workbench UI panels.
 ///
 /// Panels are entity viewers — they watch `WorkbenchState.selected_entity`
@@ -75,11 +88,13 @@ pub struct ModelicaUiPlugin;
 impl Plugin for ModelicaUiPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<WorkbenchState>()
+            .init_resource::<ModelicaDocumentRegistry>()
             .init_resource::<panels::diagram::DiagramState>()
             .init_resource::<panels::diagram::DiagramTheme>()
             .init_resource::<panels::code_editor::EditorBufferState>()
             .insert_resource(panels::package_browser::PackageTreeCache::new())
             .add_systems(Update, panels::package_browser::handle_package_loading_tasks)
+            .add_systems(Update, cleanup_removed_documents)
             .register_panel(panels::package_browser::PackageBrowserPanel)
             .register_panel(panels::code_editor::CodeEditorPanel)
             .register_panel(panels::telemetry::TelemetryPanel)
