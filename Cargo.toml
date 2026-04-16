@@ -28,7 +28,8 @@ members = [
     "crates/lunco-cosim",
     "crates/lunco-environment",
     "crates/lunco-doc",
-    "crates/lunco-twin"
+    "crates/lunco-twin",
+    "crates/lunco-workbench"
 ]
 resolver = "2"
 
