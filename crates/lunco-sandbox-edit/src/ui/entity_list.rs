@@ -16,11 +16,18 @@ impl Panel for EntityList {
     fn id(&self) -> PanelId { PanelId("entity_list") }
     fn title(&self) -> String { "Entities".into() }
     fn default_slot(&self) -> PanelSlot { PanelSlot::SideBrowser }
+    fn transparent_background(&self) -> bool { true }
 
     fn render(&mut self, ui: &mut egui::Ui, world: &mut World) {
-        // Draw opaque background for this panel
-        ui.style_mut().visuals.widgets.inactive.weak_bg_fill = egui::Color32::from_rgba_unmultiplied(30, 30, 35, 230);
-        ui.style_mut().visuals.widgets.inactive.bg_fill = egui::Color32::from_rgba_unmultiplied(30, 30, 35, 230);
+        egui::Frame::new()
+            .fill(lunco_workbench::PANEL_BACKDROP)
+            .inner_margin(8.0)
+            .corner_radius(4)
+            .show(ui, |ui| entity_list_content(self, ui, world));
+    }
+}
+
+fn entity_list_content(_panel: &mut EntityList, ui: &mut egui::Ui, world: &mut World) {
 
         ui.label("Click to select an entity. Use gizmos to move it.");
         ui.separator();
@@ -58,4 +65,3 @@ impl Panel for EntityList {
             }
         });
     }
-}

@@ -17,12 +17,21 @@ impl Panel for SpawnPalette {
     fn id(&self) -> PanelId { PanelId("spawn_palette") }
     fn title(&self) -> String { "Spawn".into() }
     fn default_slot(&self) -> PanelSlot { PanelSlot::Bottom }
+    fn transparent_background(&self) -> bool { true }
 
     fn render(&mut self, ui: &mut egui::Ui, world: &mut World) {
-        // Draw opaque background for this panel
-        ui.style_mut().visuals.widgets.inactive.weak_bg_fill = egui::Color32::from_rgba_unmultiplied(30, 30, 35, 230);
-        ui.style_mut().visuals.widgets.inactive.bg_fill = egui::Color32::from_rgba_unmultiplied(30, 30, 35, 230);
+        // Uses the workbench's shared `PANEL_BACKDROP` colour so the
+        // panel body matches the colour of its tab header (set
+        // globally via the workbench's tab-style override).
+        egui::Frame::new()
+            .fill(lunco_workbench::PANEL_BACKDROP)
+            .inner_margin(8.0)
+            .corner_radius(4)
+            .show(ui, |ui| { spawn_palette_content(self, ui, world); });
+    }
+}
 
+fn spawn_palette_content(_panel: &mut SpawnPalette, ui: &mut egui::Ui, world: &mut World) {
         ui.heading("Spawn");
 
         // Read current state
@@ -121,4 +130,3 @@ impl Panel for SpawnPalette {
             }
         }
     }
-}

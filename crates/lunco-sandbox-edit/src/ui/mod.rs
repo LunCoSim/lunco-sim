@@ -60,7 +60,12 @@ impl Workspace for ViewWorkspace {
     }
 }
 
-/// Build mode — 3D + Entities, Inspector, Spawn around the edges.
+/// Build mode — Spawn left, 3D centre, Inspector + Entities tabbed right.
+///
+/// Spawn lives on the left because it's the primary "add stuff" tool;
+/// Entities + Inspector tab together on the right because the entity
+/// list is rarely the main view (you mostly click in the 3D scene to
+/// select). Bottom dock is empty — fewer rows of chrome.
 pub struct BuildWorkspace;
 
 impl Workspace for BuildWorkspace {
@@ -68,9 +73,12 @@ impl Workspace for BuildWorkspace {
     fn title(&self) -> String { "🏗 Build".into() }
     fn apply(&self, layout: &mut WorkbenchLayout) {
         layout.set_activity_bar(false);
-        layout.set_side_browser(Some(PanelId("entity_list")));
+        layout.set_side_browser(Some(PanelId("spawn_palette")));
         layout.set_center(vec![VIEWPORT_PANEL_ID]);
-        layout.set_right_inspector(Some(PanelId("sandbox_inspector")));
-        layout.set_bottom(Some(PanelId("spawn_palette")));
+        layout.set_right_inspector_tabs(vec![
+            PanelId("sandbox_inspector"),
+            PanelId("entity_list"),
+        ]);
+        layout.set_bottom(None);
     }
 }

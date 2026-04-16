@@ -17,11 +17,18 @@ impl Panel for Inspector {
     fn id(&self) -> PanelId { PanelId("sandbox_inspector") }
     fn title(&self) -> String { "Inspector".into() }
     fn default_slot(&self) -> PanelSlot { PanelSlot::RightInspector }
+    fn transparent_background(&self) -> bool { true }
 
     fn render(&mut self, ui: &mut egui::Ui, world: &mut World) {
-        // Draw opaque background for this panel
-        ui.style_mut().visuals.widgets.inactive.weak_bg_fill = egui::Color32::from_rgba_unmultiplied(30, 30, 35, 230);
-        ui.style_mut().visuals.widgets.inactive.bg_fill = egui::Color32::from_rgba_unmultiplied(30, 30, 35, 230);
+        egui::Frame::new()
+            .fill(lunco_workbench::PANEL_BACKDROP)
+            .inner_margin(8.0)
+            .corner_radius(4)
+            .show(ui, |ui| inspector_content(self, ui, world));
+    }
+}
+
+fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, world: &mut World) {
 
         // Delete hotkey
         if ui.input(|i| i.key_pressed(egui::Key::Delete)) {
@@ -158,4 +165,3 @@ impl Panel for Inspector {
             }
         }
     }
-}

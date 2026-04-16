@@ -65,7 +65,10 @@ impl Panel for ViewportPanel {
     }
 
     fn title(&self) -> String {
-        "🎬 Viewport".into()
+        // Empty title — there's nothing useful to show in a tab header
+        // for "the 3D viewport". egui_dock still draws the bar (we
+        // can't hide it per-leaf in 0.18) but the content is blank.
+        String::new()
     }
 
     fn default_slot(&self) -> PanelSlot {

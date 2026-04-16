@@ -54,6 +54,14 @@ pub use panel::{Panel, PanelId, PanelSlot};
 pub use viewport::{ViewportPanel, WorkbenchViewportCamera, VIEWPORT_PANEL_ID};
 pub use workspace::{Workspace, WorkspaceId};
 
+/// Shared backdrop colour for translucent panels, so panel bodies and
+/// their tab headers can match. Use this for `Frame::fill` inside any
+/// `Panel::render` that returns `transparent_background = true`; the
+/// workbench's tab-style override paints active tab headers with the
+/// same colour for a continuous look.
+pub const PANEL_BACKDROP: bevy_egui::egui::Color32 =
+    bevy_egui::egui::Color32::from_rgba_premultiplied(24, 24, 28, 245);
+
 /// Plugin that installs the workbench shell into a Bevy app.
 ///
 /// Auto-adds [`bevy_egui::EguiPlugin`] if the host hasn't (so apps
@@ -87,12 +95,13 @@ pub struct WorkbenchLayout {
 
     // Slot intent — kept so workspaces can rebuild the dock when activated.
     // User drags after that mutate `dock` directly; intent goes stale until
-    // the next workspace activation.
-    pub(crate) side_browser: Option<PanelId>,
+    // the next workspace activation. Each side slot is a Vec so multiple
+    // panels can be tabbed in the same dock region.
+    pub(crate) side_browser: Vec<PanelId>,
     pub(crate) center: Vec<PanelId>,
     pub(crate) active_center_tab: usize,
-    pub(crate) right_inspector: Option<PanelId>,
-    pub(crate) bottom: Option<PanelId>,
+    pub(crate) right_inspector: Vec<PanelId>,
+    pub(crate) bottom: Vec<PanelId>,
 
     pub(crate) status: Option<StatusContent>,
 
@@ -107,11 +116,11 @@ impl Default for WorkbenchLayout {
             workspaces: Vec::new(),
             active_workspace: None,
             activity_bar: false,
-            side_browser: None,
+            side_browser: Vec::new(),
             center: Vec::new(),
             active_center_tab: 0,
-            right_inspector: None,
-            bottom: None,
+            right_inspector: Vec::new(),
+            bottom: Vec::new(),
             status: None,
             dock: DockState::new(Vec::new()),
         }
@@ -125,8 +134,8 @@ impl WorkbenchLayout {
         let slot = panel.default_slot();
         match slot {
             PanelSlot::SideBrowser => {
-                if self.side_browser.is_none() {
-                    self.side_browser = Some(id);
+                if !self.side_browser.contains(&id) {
+                    self.side_browser.push(id);
                 }
             }
             PanelSlot::Center => {
@@ -135,13 +144,13 @@ impl WorkbenchLayout {
                 }
             }
             PanelSlot::RightInspector => {
-                if self.right_inspector.is_none() {
-                    self.right_inspector = Some(id);
+                if !self.right_inspector.contains(&id) {
+                    self.right_inspector.push(id);
                 }
             }
             PanelSlot::Bottom => {
-                if self.bottom.is_none() {
-                    self.bottom = Some(id);
+                if !self.bottom.contains(&id) {
+                    self.bottom.push(id);
                 }
             }
             PanelSlot::Floating => { /* not yet rendered */ }
@@ -236,30 +245,33 @@ impl WorkbenchLayout {
         let mut dock = DockState::new(center_tabs);
         let mut central = NodeIndex::root();
 
-        if let Some(id) = self.bottom {
+        if !self.bottom.is_empty() {
             let main = dock.main_surface_mut();
-            let [center_after, _below] = main.split_below(central, 0.7, vec![id]);
+            let [center_after, _below] =
+                main.split_below(central, 0.7, self.bottom.clone());
             central = center_after;
         }
 
-        // Target initial split: 15% side / 70% centre / 15% right.
+        // Target initial split: 15% side / 65% centre / 20% right.
         // Splits compound: split_right runs first, then split_left wraps
         // the whole tree and shrinks the previous splits proportionally.
         // To land at the target after compounding:
-        //   split_right with f_right = 0.824 → inspector = (1 - 0.824) of pre-left-split = 0.176
+        //   split_right with f_right = 0.765 → right = (1 - 0.765) of pre-left-split = 0.235
         //   split_left  with f_left  = 0.15  → side = 0.15 of total
-        //   Inspector after compounding = 0.176 × (1 - 0.15) = 0.150 ✓
-        //   Centre after compounding   = 0.824 × (1 - 0.15) = 0.700 ✓
-        if let Some(id) = self.right_inspector {
+        //   Right after compounding  = 0.235 × (1 - 0.15) = 0.200 ✓
+        //   Centre after compounding = 0.765 × (1 - 0.15) = 0.650 ✓
+        if !self.right_inspector.is_empty() {
             let main = dock.main_surface_mut();
-            let [_old_root, _right] = main.split_right(NodeIndex::root(), 0.824, vec![id]);
+            let [_old_root, _right] =
+                main.split_right(NodeIndex::root(), 0.765, self.right_inspector.clone());
         }
 
-        if let Some(id) = self.side_browser {
+        if !self.side_browser.is_empty() {
             let main = dock.main_surface_mut();
             // For split_left, fraction is the NEW (left) share — see
             // the table in the doc above.
-            let [_old_root, _left] = main.split_left(NodeIndex::root(), 0.15, vec![id]);
+            let [_old_root, _left] =
+                main.split_left(NodeIndex::root(), 0.15, self.side_browser.clone());
         }
 
         let _ = central;
@@ -380,6 +392,46 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
             None => true,
         }
     }
+
+    fn tab_style_override(
+        &self,
+        tab: &Self::Tab,
+        global_style: &egui_dock::TabStyle,
+    ) -> Option<egui_dock::TabStyle> {
+        // The viewport tab's header is dead space (the panel itself
+        // renders nothing — the 3D scene shows behind). Make the tab
+        // header fully invisible: transparent background, outline, and
+        // text. The bar still occupies its 24-px row because
+        // egui_dock 0.18 has no per-leaf hide-bar option.
+        if *tab == viewport::VIEWPORT_PANEL_ID {
+            let mut style = global_style.clone();
+            let invisible = egui::Color32::TRANSPARENT;
+            for s in [
+                &mut style.active,
+                &mut style.inactive,
+                &mut style.focused,
+                &mut style.hovered,
+            ] {
+                s.bg_fill = invisible;
+                s.outline_color = invisible;
+                s.text_color = invisible;
+            }
+            return Some(style);
+        }
+        // For every other tab: paint the active/focused tab header with
+        // the same colour the panel uses for its `Frame` backdrop, so
+        // the tab and the panel body below it visually merge into a
+        // single shape. Inactive (other tabs in the same bar) gets a
+        // slightly darker shade so the user can tell them apart.
+        let active_color = PANEL_BACKDROP;
+        let inactive_color = egui::Color32::from_rgba_premultiplied(14, 14, 18, 220);
+        let mut style = global_style.clone();
+        style.active.bg_fill = active_color;
+        style.focused.bg_fill = active_color;
+        style.hovered.bg_fill = active_color;
+        style.inactive.bg_fill = inactive_color;
+        Some(style)
+    }
 }
 
 fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut World) {
@@ -397,25 +449,73 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
                     layout.toggle_activity_bar();
                     ui.close();
                 }
+                ui.separator();
+                ui.label(egui::RichText::new("Panels").weak().small());
+                // List every registered panel with a checkbox showing
+                // whether it's currently in the dock. Clicking a closed
+                // panel re-docks it in its default slot.
+                let panels_meta: Vec<(PanelId, String, PanelSlot, bool)> = {
+                    let docked: std::collections::HashSet<PanelId> =
+                        layout.dock.iter_all_tabs().map(|(_, id)| *id).collect();
+                    let mut sorted: Vec<(PanelId, String, PanelSlot, bool)> = layout
+                        .panels
+                        .values()
+                        .map(|p| {
+                            let id = p.id();
+                            (id, p.title(), p.default_slot(), docked.contains(&id))
+                        })
+                        .collect();
+                    sorted.sort_by(|a, b| a.1.cmp(&b.1));
+                    sorted
+                };
+                for (id, title, slot, is_open) in panels_meta {
+                    let mut checked = is_open;
+                    if ui.checkbox(&mut checked, title).clicked() {
+                        if checked && !is_open {
+                            // Re-dock into the panel's default slot.
+                            match slot {
+                                PanelSlot::SideBrowser => {
+                                    if !layout.side_browser.contains(&id) {
+                                        layout.side_browser.push(id);
+                                    }
+                                }
+                                PanelSlot::Center => {
+                                    if !layout.center.contains(&id) {
+                                        layout.center.push(id);
+                                    }
+                                }
+                                PanelSlot::RightInspector => {
+                                    if !layout.right_inspector.contains(&id) {
+                                        layout.right_inspector.push(id);
+                                    }
+                                }
+                                PanelSlot::Bottom => {
+                                    if !layout.bottom.contains(&id) {
+                                        layout.bottom.push(id);
+                                    }
+                                }
+                                PanelSlot::Floating => {}
+                            }
+                            layout.rebuild_dock();
+                        } else if !checked && is_open {
+                            // Closing via this checkbox: remove from
+                            // every slot AND from the live dock tree.
+                            layout.side_browser.retain(|p| *p != id);
+                            layout.center.retain(|p| *p != id);
+                            layout.right_inspector.retain(|p| *p != id);
+                            layout.bottom.retain(|p| *p != id);
+                            layout.rebuild_dock();
+                        }
+                        ui.close();
+                    }
+                }
             });
             ui.menu_button("Help", |ui| {
                 ui.label("LunCoSim workbench v0.2 (egui_dock)");
             });
+            // Workspace tabs live in the menu bar (right-aligned).
+            // No separate transport bar — saves a row of vertical space.
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.add_enabled(
-                    false,
-                    egui::Button::new(egui::RichText::new("Ctrl+P  search anything").weak()),
-                );
-            });
-        });
-    });
-
-    // ── Transport bar with workspace tabs ───────────────────────────
-    egui::TopBottomPanel::top("lunco_workbench_transport_bar").show(ctx, |ui| {
-        ui.horizontal(|ui| {
-            if layout.workspaces.is_empty() {
-                ui.label(egui::RichText::new("(no workspaces registered)").weak());
-            } else {
                 let active = layout.active_workspace;
                 let tabs: Vec<(WorkspaceId, String, bool)> = layout
                     .workspaces
@@ -424,6 +524,9 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
                         let id = w.id();
                         (id, w.title(), active == Some(id))
                     })
+                    // Iterate in reverse so right-to-left layout still puts
+                    // them in registration order from left to right.
+                    .rev()
                     .collect();
                 for (id, title, is_active) in tabs {
                     let button = egui::Button::new(title.as_str()).selected(is_active);
@@ -431,9 +534,6 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
                         layout.activate_workspace(id);
                     }
                 }
-            }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(egui::RichText::new("(transport — todo)").weak());
             });
         });
     });
@@ -478,9 +578,27 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
     if has_dock_tabs {
         let WorkbenchLayout { panels, dock, .. } = &mut *layout;
         let mut viewer = PanelTabViewer { panels, world };
-        DockArea::new(dock)
-            .style(Style::from_egui(ctx.style().as_ref()))
-            .show(ctx, &mut viewer);
+        let mut style = Style::from_egui(ctx.style().as_ref());
+        // Drop the outer dock border — it shows up as a thin line along
+        // the inside edge of the side panels and looks like dead pixels
+        // when the dock is otherwise transparent.
+        style.main_surface_border_stroke = egui::Stroke::NONE;
+        // Drop the resize separator's idle colour — that's the 1px line
+        // between docked panels. Hover/drag colours stay so the user
+        // can still find and grab the divider.
+        style.separator.color_idle = egui::Color32::TRANSPARENT;
+        // Drop the per-tab body border (the rectangle around every
+        // panel content area). This is the "border when unfolded".
+        style.tab.tab_body.stroke = egui::Stroke::NONE;
+        // Transparent tab-bar background so the bar over the viewport
+        // doesn't show as a coloured strip. Individual tabs that live
+        // in real panels (Inspector / Entities / Spawn) still draw
+        // their own bg_fill via TabInteractionStyle and remain visible.
+        style.tab_bar.bg_fill = egui::Color32::TRANSPARENT;
+        // Drop the hairline under the active tab name too — same
+        // visual-noise reason as the tab body stroke.
+        style.tab_bar.hline_color = egui::Color32::TRANSPARENT;
+        DockArea::new(dock).style(style).show(ctx, &mut viewer);
     } else {
         // 3D-app mode — explicit side panels, transparent centre.
         // Defaults are percentages of the current window so the layout
@@ -491,21 +609,21 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
         let side_default = (screen.width() * 0.15).max(140.0);
         let bottom_default = (screen.height() * 0.20).max(120.0);
 
-        if let Some(id) = layout.side_browser {
+        if let Some(id) = layout.side_browser.first().copied() {
             egui::SidePanel::left("lunco_workbench_side_panel_left")
                 .resizable(true)
                 .default_width(side_default)
                 .min_width(120.0)
                 .show(ctx, |ui| render_panel_solo(ui, &id, layout, world));
         }
-        if let Some(id) = layout.right_inspector {
+        if let Some(id) = layout.right_inspector.first().copied() {
             egui::SidePanel::right("lunco_workbench_side_panel_right")
                 .resizable(true)
                 .default_width(side_default)
                 .min_width(140.0)
                 .show(ctx, |ui| render_panel_solo(ui, &id, layout, world));
         }
-        if let Some(id) = layout.bottom {
+        if let Some(id) = layout.bottom.first().copied() {
             egui::TopBottomPanel::bottom("lunco_workbench_bottom_panel")
                 .resizable(true)
                 .default_height(bottom_default)
@@ -574,7 +692,7 @@ mod tests {
         });
 
         assert_eq!(layout.active_workspace(), Some(WorkspaceId("a")));
-        assert_eq!(layout.side_browser, Some(PanelId("panel_a")));
+        assert_eq!(layout.side_browser, vec![PanelId("panel_a")]);
     }
 
     #[test]
@@ -592,7 +710,7 @@ mod tests {
         });
 
         assert_eq!(layout.active_workspace(), Some(WorkspaceId("a")));
-        assert_eq!(layout.side_browser, Some(PanelId("panel_a")));
+        assert_eq!(layout.side_browser, vec![PanelId("panel_a")]);
     }
 
     #[test]
@@ -611,7 +729,7 @@ mod tests {
 
         layout.activate_workspace(WorkspaceId("b"));
         assert_eq!(layout.active_workspace(), Some(WorkspaceId("b")));
-        assert_eq!(layout.side_browser, Some(PanelId("panel_b")));
+        assert_eq!(layout.side_browser, vec![PanelId("panel_b")]);
     }
 
     #[test]
@@ -625,7 +743,7 @@ mod tests {
 
         layout.activate_workspace(WorkspaceId("ghost"));
         assert_eq!(layout.active_workspace(), Some(WorkspaceId("a")));
-        assert_eq!(layout.side_browser, Some(PanelId("panel_a")));
+        assert_eq!(layout.side_browser, vec![PanelId("panel_a")]);
     }
 
     #[test]
