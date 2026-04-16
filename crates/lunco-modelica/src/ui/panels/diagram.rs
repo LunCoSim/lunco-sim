@@ -858,6 +858,8 @@ pub struct DiagramViewer<'a> {
     graph_viewport: Option<egui::Rect>,
     /// Transient storage for the click location within this frame.
     last_click_pos: egui::Pos2,
+    /// Reference to egui context for input checking.
+    ctx: egui::Context,
 }
 
 impl<'a> SnarlViewer<DiagramNode> for DiagramViewer<'a> {
@@ -1025,7 +1027,34 @@ impl<'a> SnarlViewer<DiagramNode> for DiagramViewer<'a> {
     // ── Right-click on empty canvas — add components ──
 
     fn has_graph_menu(&mut self, pos: egui::Pos2, _snarl: &mut Snarl<DiagramNode>) -> bool {
-        self.last_click_pos = pos;
+        // [LOCK COORDINATES]
+        // IMPORTANT: has_graph_menu receives SCREEN coordinates (interact_pos).
+        // show_graph_menu receives transformed GRAPH coordinates (but broken by menu offset).
+        // We must map the SCREEN coordinates from has_graph_menu into GRAPH space manually.
+        
+        let is_clicking = self.ctx.input(|i| {
+            i.pointer.secondary_down() || 
+            i.pointer.secondary_clicked() || 
+            i.pointer.secondary_released()
+        });
+        
+        if is_clicking {
+            // Map the screen 'pos' to graph space using our captured transformation
+            if let Some(viewport) = self.graph_viewport {
+                 let scale_x = viewport.width() / self.canvas_rect.width();
+                 let scale_y = viewport.height() / self.canvas_rect.height();
+                 
+                 let graph_x = (pos.x - self.canvas_rect.min.x) * scale_x + viewport.min.x;
+                 let graph_y = (pos.y - self.canvas_rect.min.y) * scale_y + viewport.min.y;
+                 
+                 self.last_click_pos = egui::Pos2::new(graph_x, graph_y);
+                 println!("[DEBUG] has_graph_menu mapped SCREEN {:?} to GRAPH: {:?}", pos, self.last_click_pos);
+            } else {
+                 // Fallback if viewport not yet captured
+                 self.last_click_pos = pos;
+            }
+        }
+        
         true
     }
 
@@ -1100,32 +1129,29 @@ impl<'a> SnarlViewer<DiagramNode> for DiagramViewer<'a> {
         _src_pins: egui_snarl::ui::AnyPins,
         _snarl: &mut Snarl<DiagramNode>,
     ) -> bool {
-        // Unfortunately, has_dropped_wire_menu doesn't receive the position in 0.9.0.
-        // We will fallback to the viewport mapping for this specific case as it's triggered
-        // by a drag-release rather than a right-click.
+        // Capture the interaction origin for dropped wires
+        if let Some(click_pos) = self.ctx.input(|i| i.pointer.press_origin()) {
+            if let Some(viewport) = self.graph_viewport {
+                 let scale_x = viewport.width() / self.canvas_rect.width();
+                 let scale_y = viewport.height() / self.canvas_rect.height();
+                 let graph_x = (click_pos.x - self.canvas_rect.min.x) * scale_x + viewport.min.x;
+                 let graph_y = (click_pos.y - self.canvas_rect.min.y) * scale_y + viewport.min.y;
+                 self.last_click_pos = egui::Pos2::new(graph_x, graph_y);
+                 println!("[DEBUG] has_dropped_wire_menu locked pos: {:?}", self.last_click_pos);
+            }
+        }
         true
     }
 
     fn show_dropped_wire_menu(
         &mut self,
-        mut pos: egui::Pos2,
+        _pos: egui::Pos2,
         ui: &mut egui::Ui,
         _src_pins: egui_snarl::ui::AnyPins,
         snarl: &mut Snarl<DiagramNode>,
     ) {
-        // [STABLE CLICK POSITION] 
-        // We use the fallback calculation for dropped wires because the trigger 
-        // timing is different from right-click graph menus.
-        let mouse = ui.input(|i| i.pointer.press_origin()).unwrap_or(pos);
-
-        // [PROPER FIX] Coordinate Mapping
-        if let Some(viewport) = self.graph_viewport {
-             let scale_x = viewport.width() / self.canvas_rect.width();
-             let scale_y = viewport.height() / self.canvas_rect.height();
-             let graph_x = (mouse.x - self.canvas_rect.min.x) * scale_x + viewport.min.x;
-             let graph_y = (mouse.y - self.canvas_rect.min.y) * scale_y + viewport.min.y;
-             pos = egui::Pos2::new(graph_x, graph_y);
-        }
+        // Use the locked position
+        let pos = self.last_click_pos;
 
         ui.label(
             egui::RichText::new("Connect to new component:")
@@ -1607,6 +1633,7 @@ impl WorkbenchPanel for DiagramPanel {
                 canvas_rect: rect,
                 graph_viewport: None,
                 last_click_pos: ds.last_click_pos,
+                ctx: ui.ctx().clone(),
             };
 
             // Render snarl inside the allocated rect using a stable child UI
