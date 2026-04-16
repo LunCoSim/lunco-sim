@@ -556,18 +556,97 @@ Three categories:
   op-replay-based conflict resolution using the typed op stream, not
   textual diff.
 
-## 12. Per-app specializations
+## 12. App composition and startup
 
-Each app shows/hides UI elements based on what it knows how to edit:
+### Key insight: apps differentiate by plugins, not by hardcoded scenes
 
-| App | New menu items | Open-as filter | Default workspace |
-|-----|---------------|-----------------|-------------------|
-| `modelica_workbench` | New Modelica Model, New Package | `.mo` + Twins containing Modelica | Analyze |
-| `rover_sandbox_usd` | New Scene, New Spawn Palette Item | `.usda` + Twins | Build |
-| `lunco_client` | New Scene, New Modelica Model, New Mission, New Twin | Anything | Build |
+The three binaries — `modelica_workbench`, `rover_sandbox_usd`,
+`lunco_client` — share the **same Twin-loading machinery** from
+`lunco-workbench` and `lunco-twin`. They differ only in:
+
+1. **Which domain plugins they register** (what Document types the app
+   can open and edit).
+2. **Which Workspaces they enable by default**.
+3. **Which examples their Welcome Screen surfaces**.
+
+No app hardcodes a scene or a default file. The startup flow in § 6 runs
+uniformly for all of them.
+
+### Per-app plugin composition
+
+| App | Default Workspace | Domain plugins registered | Welcome examples shown |
+|-----|-------------------|---------------------------|------------------------|
+| `modelica_workbench` | **Analyze** | `ModelicaPlugin` + `ModelicaInspectorPlugin` | Modelica examples only (circuit, spring-mass, thermal, …) |
+| `rover_sandbox_usd` | **Build** | `CoSimPlugin`, `ModelicaCorePlugin`, `SandboxEditPlugin`, `EnvironmentPlugin`, `UsdPlugins`, `Mobility`, `Controller`, `Avatar`, … | Sandbox examples (rover-on-moon, balloon-test, …) |
+| `lunco_client` | **Build** (or last-used) | All of the above + `CelestialPlugin` + `LuncoUiPlugin` (MissionControl) | All examples, categorized |
+
+A `lunco-workbench` config type (passed to `WorkbenchPlugin`) declares
+which domains + workspaces this app supports. The workbench uses it to:
+
+- Filter Welcome Screen examples
+- Populate File → Open / New menus
+- Enable / disable Workspaces
+- Decide which file extensions are "known types" for the orphan-open path
+
+### What replaces current `setup_sandbox` startup code
+
+Today each binary has a `setup_sandbox` function that hardcodes scene
+setup — spawning a Camera2d, reading `assets/models/Battery.mo`, inserting
+a specific `ModelicaModel` component, etc. Under the new model, **all of
+that goes away**. Startup belongs to `lunco-workbench`:
+
+```rust
+// modelica_workbench (before)
+fn main() {
+    app.add_plugins(DefaultPlugins)
+       .add_plugins(EguiPlugin::default())
+       .add_plugins(bevy_workbench::WorkbenchPlugin { ... })
+       .add_plugins(ModelicaPlugin)
+       .add_systems(Startup, setup_sandbox);   // hardcodes Battery.mo
+}
+
+// modelica_workbench (after)
+fn main() {
+    app.add_plugins(DefaultPlugins)
+       .add_plugins(EguiPlugin::default())
+       .add_plugins(lunco_workbench::WorkbenchPlugin::new()
+           .workspace_default(Workspace::Analyze)
+           .examples_dir("examples/modelica/"))
+       .add_plugins(lunco_twin::TwinPlugin)
+       .add_plugins(ModelicaPlugin);
+    // No setup_sandbox. Workbench handles startup.
+}
+```
+
+The old `setup_sandbox` logic — "load Battery.mo and spawn it" — becomes
+a *ship-with-app example Twin* that the user can open from the Welcome
+Screen. Examples live in `examples/modelica/<example_name>/` directories,
+each with a `twin.toml` and its Documents.
+
+### Per-app: "New file" menu entries
+
+Each app exposes relevant `File → New →` items based on what it can edit:
+
+| App | New menu items |
+|-----|---------------|
+| `modelica_workbench` | New Modelica Model, New Modelica Package |
+| `rover_sandbox_usd` | New Scene (USD), New Twin, New Modelica Model |
+| `lunco_client` | New Scene, New Modelica Model, New Mission, New SysML Block, New Twin |
 
 Across all three, the Command Palette can find any action — even if a
 menu item isn't exposed. Power users get uniform access.
+
+### No legacy coexistence
+
+The migration from `bevy_workbench` to `lunco-workbench` is a **clean
+cutover**, not a feature-flagged coexistence. Each domain migrates its
+panels when ready; the final commit removes the `bevy_workbench`
+dependency and the now-unused `setup_sandbox` functions in one pass.
+
+We accept short periods during migration where a particular domain's
+panels might look rough as they move to the new Panel trait, rather than
+maintain two parallel UI stacks with flags to switch between them. The
+reward is code that doesn't carry transitional scar tissue.
 
 ## 13. Future: live-collab Twins
 

@@ -190,17 +190,21 @@ At time of writing (April 2026):
 - ✅ Tier 3 (views) has most panels, built on `bevy_workbench` (being retired).
 - ❌ Tier 1 (documents) not formalized — source of truth is ECS today.
 
-The arc is:
-1. **Phase 1:** build `lunco-workbench` (app scaffold) to replace bevy_workbench.
-   Simultaneously design the Document System. (~8 weeks)
-2. **Phase 2:** implement the Document System in `lunco-ui`. Migrate one
-   domain (Modelica) end-to-end. (~4–6 weeks)
-3. **Phase 3:** migrate USD to the Document System. (~3 weeks)
-4. **Phase 4:** add SysML, Mission, other domain documents as needed.
-5. **Phase N:** collaboration layer.
+The arc (from bottom of the stack up):
 
-Each phase delivers standalone value. The documents system is high-leverage
-but not a prerequisite for features — work can parallelize.
+1. **`lunco-doc`** — Document trait, DocumentOp, DocumentHost, undo/redo. UI-free, headless-capable. Tier 1 foundation.
+2. **`lunco-twin`** — Twin struct, `twin.toml` manifest, DocumentRegistry, CacheRegistry (AST, DAE). Tier 1 container.
+3. **`lunco-workbench`** — app scaffold: root layout, Panel trait, Workspace enum, Welcome Screen. Tier 3 framework.
+4. **Panel migration** — sandbox, Modelica, UI panels move from `bevy_workbench::WorkbenchPanel` to `lunco-workbench::Panel`, domain by domain.
+5. **`bevy_workbench` retirement** — single cleanup commit once all panels have migrated.
+6. **Per-domain Document System adoption** — Modelica first (`ModelicaDocument` + `ModelicaInstance` split), then USD, then Mission, then SysML.
+7. **Collaboration layer** — years out; Op streams are already serializable.
+
+Migration is a **clean cutover, not a parallel coexistence.** No feature
+flags for old-vs-new UI; the workbench in `main` is always the only
+workbench. See [`11-workbench.md § 13`](11-workbench.md) for the detailed
+phase breakdown and [`13-twin-and-workflow.md § 12`](13-twin-and-workflow.md)
+for per-app composition.
 
 ## 8. Where to look next
 

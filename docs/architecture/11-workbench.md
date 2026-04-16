@@ -349,20 +349,42 @@ in Build; `lunco_client` in Observe with quick access to all others.
 
 ## 13. Migration strategy (from bevy_workbench)
 
-The migration happens incrementally over 6–8 weeks:
+**Clean cutover, not parallel coexistence.** Each domain migrates its
+panels when `lunco-workbench` can host them; the final commit removes
+`bevy_workbench` entirely in one step.
+
+Phases (each one a discrete commit or small commit series):
 
 | Phase | Scope |
 |-------|-------|
 | 1 | Design complete (this doc). |
-| 2 | Implement `lunco-workbench` MVP: root layout, Panel trait, one workspace. Ship alongside `bevy_workbench` during transition. |
-| 3 | Port domain panels — SpawnPalette, Inspector, EntityList, ModelicaInspector. |
-| 4 | Port Modelica workbench panels (Diagram, CodeEditor, PackageBrowser, etc.). |
-| 5 | Activity bar, status bar, transport controls. |
-| 6 | Workspace switcher + per-workspace layouts. |
-| 7 | Command palette, detachable windows. |
-| 8 | Retire `bevy_workbench` dep. |
+| 2 | Build `lunco-doc` crate (Document, DocumentOp, DocumentHost, undo/redo). |
+| 3 | Build `lunco-twin` crate (Twin, TwinManifest, DocumentRegistry, CacheRegistry). |
+| 4 | Build `lunco-workbench` crate skeleton (root layout, Panel trait, Workspace enum, Welcome Screen). |
+| 5 | First panel migration: `SpawnPalette` moves to `lunco-workbench::Panel`. Proves the API. |
+| 6 | Migrate remaining `lunco-sandbox-edit` panels. |
+| 7 | Migrate `lunco-modelica` panels (Diagram, CodeEditor, Inspector, Telemetry, Graphs, PackageBrowser). |
+| 8 | Migrate `lunco-ui` panels (MissionControl). |
+| 9 | Add activity bar, status bar, transport controls, command palette, detachable windows. |
+| 10 | Retire `bevy_workbench` dep — single commit removing it and all `setup_sandbox` hardcoded-scene code from the three binaries. |
 
-Each phase delivers standalone value. The sandbox keeps working throughout.
+Between phases, short-lived rough edges are acceptable — some panels
+may look sparse while migrating, some default layouts may need tuning.
+The reward is no transitional scar tissue in the final codebase.
+
+### Migration discipline
+
+- **Panels migrate whole, not partially.** When we start migrating a
+  panel, we finish it before moving on. No half-migrated panel sits in
+  the codebase.
+- **No feature flags for old vs. new UI.** The workbench in `main` is
+  the only workbench.
+- **Commit per panel or per closely-coupled panel group.** Git history
+  reads as "Migrated SpawnPalette to lunco-workbench Panel trait,"
+  easy to revert if needed.
+- **Examples ship with the apps.** The `setup_sandbox` code in each
+  binary becomes an example Twin under `examples/` before being deleted
+  from the binary.
 
 ## 14. Open questions
 
