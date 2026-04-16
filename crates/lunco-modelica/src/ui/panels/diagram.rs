@@ -95,14 +95,14 @@ impl Default for DiagramTheme {
             grid_dot_color: egui::Color32::from_gray(40),
 
             node_bg: egui::Color32::from_rgba_premultiplied(15, 15, 20, 230),
-            node_stroke: egui::Stroke::new(0.5, egui::Color32::from_rgb(60, 60, 70)),
-            node_rounding: 2,
+            node_stroke: egui::Stroke::new(1.0, egui::Color32::from_rgb(130, 130, 140)),
+            node_rounding: 0,
 
-            symbol_stroke_width: 1.5,
+            symbol_stroke_width: 2.0,
             symbol_color: egui::Color32::from_rgb(220, 220, 230),
             body_min_size: egui::Vec2::new(80.0, 80.0),
 
-            port_dot_radius: 5.0,
+            port_dot_radius: 4.0,
             color_electrical: egui::Color32::from_rgb(70, 140, 255),
             color_mechanical: egui::Color32::from_rgb(80, 200, 120),
             color_signal: egui::Color32::from_rgb(230, 160, 50),
@@ -876,8 +876,8 @@ pub struct DiagramViewer<'a> {
 
 impl<'a> SnarlViewer<DiagramNode> for DiagramViewer<'a> {
 
-    fn title(&mut self, node: &DiagramNode) -> String {
-        node.title().to_string()
+    fn title(&mut self, _node: &DiagramNode) -> String {
+        "".to_string()
     }
 
     fn inputs(&mut self, node: &DiagramNode) -> usize {
@@ -900,10 +900,6 @@ impl<'a> SnarlViewer<DiagramNode> for DiagramViewer<'a> {
         let ct = node.connector_type_at(pin.id.input).unwrap_or("Pin");
         let color = connector_color(ct, self.theme);
 
-        if self.schematic_mode {
-             // Hide labels in schematic mode to keep dots centered and clean
-        }
-
         PinInfo::circle()
             .with_fill(color)
     }
@@ -917,10 +913,6 @@ impl<'a> SnarlViewer<DiagramNode> for DiagramViewer<'a> {
         let node = &snarl[pin.id.node];
         let ct = node.connector_type_at(pin.id.output).unwrap_or("Pin");
         let color = connector_color(ct, self.theme);
-
-        if self.schematic_mode {
-             // Hide labels in schematic mode
-        }
 
         PinInfo::circle()
             .with_fill(color)
@@ -961,29 +953,32 @@ impl<'a> SnarlViewer<DiagramNode> for DiagramViewer<'a> {
         let body_height = self.theme.body_min_size.y;
         let symbol_size = self.theme.body_min_size.x;
 
-        // Use fixed width based on theme to prevent infinite expansion feedback loop
-        let response = ui.vertical_centered(|ui| {
-            ui.set_width(symbol_size);
-            let (rect, response) = ui.allocate_exact_size(egui::vec2(symbol_size, body_height), egui::Sense::click());
-            let painter = ui.painter();
+        // Use fixed size for the symbol box
+        let (rect, response) = ui.allocate_exact_size(egui::vec2(symbol_size, body_height), egui::Sense::click());
+        let painter = ui.painter();
 
-            // Draw schematic symbol
-            draw_symbol_v2(painter, rect, node, self.theme);
+        // 1. Draw manual component border (the "box")
+        painter.rect_stroke(rect, 0.0, self.theme.node_stroke, egui::StrokeKind::Middle);
+        
+        // 2. Fill background slightly to keep it opaque
+        painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(20, 20, 25));
 
-            // Highlight if selected
-            if Some(*id) == *self.selected_node {
-                painter.rect_stroke(rect.expand(2.0), 4.0, egui::Stroke::new(2.0, egui::Color32::LIGHT_BLUE), egui::StrokeKind::Outside);
-            }
+        // 3. Draw schematic symbol inside
+        draw_symbol_v2(painter, rect, node, self.theme);
 
-            // Draw instance label
-            ui.add_space(4.0);
-            ui.label(
-                egui::RichText::new(instance_name)
-                    .size(11.0)
-                    .color(egui::Color32::from_rgb(180, 180, 190)),
-            );
-            response
-        }).inner;
+        // 4. Highlight if selected
+        if Some(*id) == *self.selected_node {
+            painter.rect_stroke(rect.expand(2.0), 0.0, egui::Stroke::new(2.0, egui::Color32::LIGHT_BLUE), egui::StrokeKind::Middle);
+        }
+
+        // 5. Draw instance label centered below the box
+        painter.text(
+            egui::pos2(rect.center().x, rect.bottom() + 8.0),
+            egui::Align2::CENTER_TOP,
+            instance_name,
+            egui::FontId::proportional(12.0),
+            egui::Color32::from_rgb(220, 220, 230),
+        );
 
         if response.clicked() {
             *self.selected_node = Some(*id);
@@ -1004,13 +999,9 @@ impl<'a> SnarlViewer<DiagramNode> for DiagramViewer<'a> {
         _outputs: &[OutPin],
         _snarl: &Snarl<DiagramNode>,
     ) -> egui::Frame {
-        egui::Frame {
-            fill: self.theme.node_bg,
-            stroke: self.theme.node_stroke,
-            inner_margin: egui::Margin::same(0),
-            corner_radius: egui::CornerRadius::same(self.theme.node_rounding),
-            ..Default::default()
-        }
+        egui::Frame::NONE
+            .inner_margin(0.0)
+            .outer_margin(0.0)
     }
 
     // ── Background — dot grid ──
@@ -1440,10 +1431,13 @@ fn sync_connections(snarl: &Snarl<DiagramNode>, diagram: &mut VisualDiagram) {
     });
 
     // 3. Update positions from snarl drag results.
+    let grid_spacing = 15.0;
     for (_sid, pos, snarl_node) in snarl.nodes_pos_ids() {
         let DiagramNode::Component { id, .. } = snarl_node;
         if let Some(diagram_node) = diagram.get_node_mut(*id) {
-            diagram_node.position = egui::Pos2::new(pos.x, pos.y);
+            let snapped_x = (pos.x / grid_spacing).round() * grid_spacing;
+            let snapped_y = (pos.y / grid_spacing).round() * grid_spacing;
+            diagram_node.position = egui::Pos2::new(snapped_x, snapped_y);
         }
     }
 
@@ -1636,11 +1630,21 @@ impl Panel for DiagramPanel {
             .map(|ds| ds.schematic_mode)
             .unwrap_or(true);
 
-        // Build custom snarl style
         let mut snarl_style = SnarlStyle::default();
         snarl_style.pin_size = Some(theme.port_dot_radius * 2.0);
         snarl_style.collapsible = Some(false);
-        snarl_style.header_drag_space = Some(egui::vec2(0.0, 0.0));
+        snarl_style.header_drag_space = Some(egui::Vec2::ZERO);
+        snarl_style.header_frame = Some(egui::Frame::NONE);
+        snarl_style.pin_placement = Some(egui_snarl::ui::PinPlacement::Edge);
+        snarl_style.node_layout = Some(egui_snarl::ui::NodeLayout {
+            kind: egui_snarl::ui::NodeLayoutKind::Coil,
+            min_pin_row_height: 0.0,
+            ..Default::default()
+        });
+        snarl_style.wire_width = Some(2.0);
+        snarl_style.wire_style = Some(egui_snarl::ui::WireStyle::AxisAligned {
+            corner_radius: 0.0, // Sharp corners for authentic Dymola look
+        });
 
         // ── Canvas (egui-snarl) ──
         let available_size = ui.available_size().max(egui::vec2(100.0, 500.0));

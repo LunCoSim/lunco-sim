@@ -25,7 +25,7 @@ lunco-doc = { path = "../lunco-doc" }
 lunco-workbench = { path = "../lunco-workbench" }
 egui-snarl = "0.9"
 egui_plot = "0.34.1"
-usvg = "0.45"
+usvg = { version = "0.45", default-features = false }
 # Uses LunCoSim/rumoca fork (web-fix branch) which adds `instant` crate for
 # wasm32 time support. std::time::Instant panics on wasm32-unknown-unknown
 # because browsers restrict high-resolution clocks (Spectre mitigation).
