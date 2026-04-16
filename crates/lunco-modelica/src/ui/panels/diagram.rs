@@ -196,6 +196,20 @@ pub enum DiagramNode {
 }
 
 impl DiagramNode {
+    fn from_msl(comp: &MSLComponentDef) -> Self {
+        let ports: Vec<String> = comp.ports.iter().map(|p| p.name.clone()).collect();
+        let connector_types: Vec<String> = comp.ports.iter().map(|p| p.connector_type.clone()).collect();
+        DiagramNode::Component {
+            id: DiagramNodeId::new(),
+            instance_name: format!("New{}", comp.name),
+            type_name: comp.name.clone(),
+            description: comp.description.clone(),
+            icon_text: comp.icon_text.clone(),
+            ports,
+            connector_types,
+        }
+    }
+
     fn title(&self) -> &str {
         match self {
             DiagramNode::Component { instance_name, .. } => instance_name,
@@ -1022,18 +1036,7 @@ impl<'a> SnarlViewer<DiagramNode> for DiagramViewer<'a> {
                 let components = msl_components_in_category(cat);
                 for comp in &components {
                     if ui.button(format!("{} {}", comp.display_name, comp.name)).clicked() {
-                        // Build a new diagram node and insert into snarl
-                        let ports: Vec<String> = comp.ports.iter().map(|p| p.name.clone()).collect();
-                        let connector_types: Vec<String> = comp.ports.iter().map(|p| p.connector_type.clone()).collect();
-                        let node = DiagramNode::Component {
-                            id: DiagramNodeId::new(),
-                            instance_name: format!("New{}", comp.name),
-                            type_name: comp.name.clone(),
-                            description: comp.description.clone(),
-                            icon_text: comp.icon_text.clone(),
-                            ports,
-                            connector_types,
-                        };
+                        let node = DiagramNode::from_msl(comp);
                         // Place node at click.
                         println!("Inserting node at graph pos: {:?}", pos);
                         snarl.insert_node(pos, node);
@@ -1096,23 +1099,32 @@ impl<'a> SnarlViewer<DiagramNode> for DiagramViewer<'a> {
         );
         ui.separator();
 
-        // Show a flat list of common components
+        // 1. MSL Categories (The "All Options" request)
+        let categories = msl_categories();
+        for cat in &categories {
+            let short = cat.split('/').last().unwrap_or(cat);
+            ui.menu_button(short, |ui| {
+                let components = msl_components_in_category(cat);
+                for comp in &components {
+                    if ui.button(format!("{} {}", comp.display_name, comp.name)).clicked() {
+                        let node = DiagramNode::from_msl(comp);
+                        snarl.insert_node(pos, node);
+                        ui.close();
+                    }
+                }
+            });
+        }
+
+        ui.separator();
+        ui.label(egui::RichText::new("Common:").size(10.0).color(egui::Color32::GRAY));
+
+        // 2. Quick list for convenience
         let quick = ["Resistor", "Capacitor", "Ground", "ConstantVoltage", "Inductor"];
         for name in &quick {
             if ui.button(*name).clicked() {
                 let lib = msl_component_library();
                 if let Some(comp) = lib.iter().find(|c| c.name == *name) {
-                    let ports: Vec<String> = comp.ports.iter().map(|p| p.name.clone()).collect();
-                    let connector_types: Vec<String> = comp.ports.iter().map(|p| p.connector_type.clone()).collect();
-                    let node = DiagramNode::Component {
-                        id: DiagramNodeId::new(),
-                        instance_name: format!("New{}", comp.name),
-                        type_name: comp.name.clone(),
-                        description: comp.description.clone(),
-                        icon_text: comp.icon_text.clone(),
-                        ports,
-                        connector_types,
-                    };
+                    let node = DiagramNode::from_msl(comp);
                     snarl.insert_node(pos, node);
                 }
                 ui.close();
