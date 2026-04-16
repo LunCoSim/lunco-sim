@@ -125,10 +125,10 @@ pub fn setup_balloon_wires(
 
 /// Syncs ModelicaModel.variables → SimComponent.outputs every frame.
 ///
-/// Also copies inputs to outputs so that propagate_wires can read them
+/// Also copies inputs to outputs so that propagate_connections can read them
 /// for self-loop wires (e.g., avian.height → balloon.height where the
 /// wire reads from SimComponent.outputs to get the height value that was
-/// written to SimComponent.inputs by the same propagate_wires system).
+/// written to SimComponent.inputs by the same propagate_connections system).
 pub fn sync_modelica_outputs(
     mut q_models: Query<(&ModelicaModel, &mut SimComponent), Without<BalloonModelMarker>>,
 ) {
@@ -136,7 +136,7 @@ pub fn sync_modelica_outputs(
         // Copy computed variables (outputs) from the Modelica worker: netForce,
         // volume, temperature, buoyancy, etc.
         // Do NOT copy model.inputs here — if input names (height, velocity) were
-        // in comp.outputs, propagate_wires would read them instead of the actual
+        // in comp.outputs, propagate_connections would read them instead of the actual
         // AvianSim.outputs, creating a self-loop disconnected from physics.
         for (name, val) in &model.variables {
             comp.outputs.insert(name.clone(), *val);

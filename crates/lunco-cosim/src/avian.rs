@@ -57,7 +57,7 @@ pub struct AvianSim {
     pub inputs: HashMap<String, f64>,
     /// Output connectors — position, velocity, derived values.
     ///
-    /// Read by [`systems::propagate::propagate_wires`] every frame.
+    /// Read by [`systems::propagate::propagate_connections`] every frame.
     pub outputs: HashMap<String, f64>,
 }
 

@@ -17,7 +17,7 @@ Every simulation engine is treated as a model with named inputs and outputs:
 A [`SimConnection`] connects any output to any input. The co-sim master runs in
 `FixedUpdate` in two ordered sets:
 
-1. **`Propagate`** — `propagate_wires` reads every source output and writes
+1. **`Propagate`** — `propagate_connections` reads every source output and writes
    the target input (accumulating with `+=` so multiple wires can sum into one
    input).
 2. **`ApplyForces`** — `apply_sim_forces` integrates `netForce → LinearVelocity`

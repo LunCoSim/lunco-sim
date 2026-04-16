@@ -129,7 +129,7 @@ fn test_propagate_sim_component_to_sim_component() {
 
     // Run wire propagation
     app.world_mut().run_system_cached(
-        lunco_cosim::systems::propagate::propagate_wires,
+        lunco_cosim::systems::propagate::propagate_connections,
     )
     .unwrap();
 
@@ -163,7 +163,7 @@ fn test_propagate_with_scale() {
     });
 
     app.world_mut().run_system_cached(
-        lunco_cosim::systems::propagate::propagate_wires,
+        lunco_cosim::systems::propagate::propagate_connections,
     )
     .unwrap();
 
@@ -204,7 +204,7 @@ fn test_propagate_avian_to_sim_component() {
         .unwrap();
 
     // Then propagate wires
-    app.world_mut().run_system_cached(lunco_cosim::systems::propagate::propagate_wires)
+    app.world_mut().run_system_cached(lunco_cosim::systems::propagate::propagate_connections)
         .unwrap();
 
     let comp = app.world().get::<SimComponent>(entity).unwrap();

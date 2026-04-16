@@ -28,7 +28,7 @@ pub enum CosimSet {
 
 /// Applies balloon physics from Modelica outputs to Avian LinearVelocity.
 ///
-/// - Reads netForce from `AvianSim::inputs` (delivered by propagate_wires)
+/// - Reads netForce from `AvianSim::inputs` (delivered by propagate_connections)
 /// - Integrates acceleration: `dv = F/m * dt`
 /// - Writes total velocity to `LinearVelocity`, which Avian's `integrate_positions`
 ///   then uses to advance `Position`

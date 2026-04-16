@@ -94,7 +94,7 @@ impl Plugin for CoSimPlugin {
         app.add_systems(
             FixedUpdate,
             (
-                systems::propagate::propagate_wires.in_set(systems::propagate::CosimSet::Propagate),
+                systems::propagate::propagate_connections.in_set(systems::propagate::CosimSet::Propagate),
                 systems::apply_forces::apply_sim_forces.in_set(systems::apply_forces::CosimSet::ApplyForces),
             ),
         );

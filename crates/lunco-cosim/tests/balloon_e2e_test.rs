@@ -54,7 +54,7 @@ fn test_balloon_force_propagation() {
 
     // Run wire propagation
     app.world_mut().run_system_cached(
-        lunco_cosim::systems::propagate::propagate_wires,
+        lunco_cosim::systems::propagate::propagate_connections,
     ).unwrap();
 
     // Verify: SimComponent inputs should have been updated with Avian state
@@ -102,7 +102,7 @@ fn test_balloon_wire_accumulation() {
 
     // Run propagation (copies outputs to AvianSim inputs)
     app.world_mut().run_system_cached(
-        lunco_cosim::systems::propagate::propagate_wires,
+        lunco_cosim::systems::propagate::propagate_connections,
     ).unwrap();
 
     // Verify AvianSim inputs

@@ -6,7 +6,7 @@
 //!   1. the worker to compile the model and return its variables,
 //!   2. `setup_balloon_wires` to insert `SimComponent` + wires,
 //!   3. `sync_modelica_outputs` to populate `SimComponent.outputs["netForce"]`,
-//!   4. `propagate_wires` to write `AvianSim.inputs["force_y"]`,
+//!   4. `propagate_connections` to write `AvianSim.inputs["force_y"]`,
 //!   5. `apply_sim_forces` to integrate velocity into `LinearVelocity`.
 //!
 //! This is the canonical regression test for the balloon co-sim architecture.
@@ -151,7 +151,7 @@ fn balloon_netforce_flows_through_cosim_pipeline() {
 
     app.insert_resource(Time::<Fixed>::from_hz(60.0));
 
-    // Co-sim systems (propagate_wires + apply_sim_forces) live in FixedUpdate.
+    // Co-sim systems (propagate_connections + apply_sim_forces) live in FixedUpdate.
     app.add_plugins(CoSimPlugin);
     // Headless Modelica worker (no UI panels, no bevy_egui).
     app.add_plugins(ModelicaCorePlugin);
@@ -198,7 +198,7 @@ fn balloon_netforce_flows_through_cosim_pipeline() {
     //   - spawn_modelica_requests send Step commands
     //   - handle_modelica_responses update model.variables with fresh outputs
     //   - sync_modelica_outputs copy them to SimComponent.outputs
-    //   - propagate_wires write AvianSim.inputs["force_y"]
+    //   - propagate_connections write AvianSim.inputs["force_y"]
     //   - apply_sim_forces integrate velocity into LinearVelocity
     //
     // Note: apply_sim_forces calls `avian.take_inputs()`, which drains
@@ -206,7 +206,7 @@ fn balloon_netforce_flows_through_cosim_pipeline() {
     // from Update. Instead we sample:
     //   * `SimComponent.outputs["netForce"]` — the persistent Modelica output
     //   * `SimComponent.inputs["force_y"]` — written alongside AvianSim.inputs
-    //     by `propagate_wires`, and cleared at the top of the NEXT propagate
+    //     by `propagate_connections`, and cleared at the top of the NEXT propagate
     //     (one frame later), so it's observable.
     //   * `LinearVelocity.y` — persistent, accumulates across frames.
     let mut max_abs_vel = 0.0_f64;
@@ -260,7 +260,7 @@ fn balloon_netforce_flows_through_cosim_pipeline() {
     );
     assert!(
         last_force_y_seen.abs() > 0.1,
-        "propagate_wires never wrote a non-zero force_y into SimComponent.inputs. \
+        "propagate_connections never wrote a non-zero force_y into SimComponent.inputs. \
          This means the netForce → force_y wire isn't routing correctly."
     );
     assert!(
