@@ -92,63 +92,90 @@ pub mod models;
 /// Sets up the background worker thread, channel resources, and response systems.
 pub struct ModelicaPlugin;
 
+/// Headless variant of [`ModelicaPlugin`] that skips the UI panels.
+///
+/// Starts the Modelica worker thread, inserts [`ModelicaChannels`], registers
+/// [`ModelicaModel`], and schedules `spawn_modelica_requests` +
+/// `handle_modelica_responses`. Does NOT add `ModelicaUiPlugin`, so it has
+/// no dependency on `bevy_workbench` / `bevy_egui` / the renderer. Use this
+/// in headless tests and any non-windowed binary.
+///
+/// A default [`ui::WorkbenchState`] resource is inserted (so
+/// `handle_modelica_responses` can still borrow it), but the UI systems
+/// never run.
+pub struct ModelicaCorePlugin;
+
+impl Plugin for ModelicaCorePlugin {
+    fn build(&self, app: &mut App) {
+        build_modelica_core(app);
+    }
+}
+
 impl Plugin for ModelicaPlugin {
     fn build(&self, app: &mut App) {
-        let (tx_cmd, rx_cmd) = unbounded();
-        let (tx_res, rx_res) = unbounded();
+        build_modelica_core(app);
+        app.add_plugins(ui::ModelicaUiPlugin);
+    }
+}
 
-        // Set MSL path globally before starting worker
-        let msl = msl_dir();
-        if msl.exists() {
-            if let Ok(abs_path) = std::fs::canonicalize(&msl) {
-                std::env::set_var("MODELICAPATH", abs_path.to_string_lossy().to_string());
-            }
+fn build_modelica_core(app: &mut App) {
+    let (tx_cmd, rx_cmd) = unbounded();
+    let (tx_res, rx_res) = unbounded();
+
+    // Set MSL path globally before starting worker
+    let msl = msl_dir();
+    if msl.exists() {
+        if let Ok(abs_path) = std::fs::canonicalize(&msl) {
+            std::env::set_var("MODELICAPATH", abs_path.to_string_lossy().to_string());
         }
+    }
 
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            // Desktop: spawn a background thread that owns !Send SimStepper instances.
-            // The main Bevy thread communicates via crossbeam channels.
-            thread::spawn(move || {
-                modelica_worker(rx_cmd, tx_res);
-            });
-        }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        // Desktop: spawn a background thread that owns !Send SimStepper instances.
+        // The main Bevy thread communicates via crossbeam channels.
+        thread::spawn(move || {
+            modelica_worker(rx_cmd, tx_res);
+        });
+    }
 
-        #[cfg(target_arch = "wasm32")]
-        {
-            // Web: wasm32-unknown-unknown has no std::thread support. Instead we use
-            // an InlineWorker Resource that processes one command per frame in a Bevy
-            // system. This avoids blocking the main render thread while still running
-            // the full Modelica compilation + simulation pipeline.
-            app.insert_resource(InlineWorker::default());
-        }
+    #[cfg(target_arch = "wasm32")]
+    {
+        // Web: wasm32-unknown-unknown has no std::thread support. Instead we use
+        // an InlineWorker Resource that processes one command per frame in a Bevy
+        // system. This avoids blocking the main render thread while still running
+        // the full Modelica compilation + simulation pipeline.
+        app.insert_resource(InlineWorker::default());
+    }
 
-        #[cfg(not(target_arch = "wasm32"))]
-        app.insert_resource(ModelicaChannels { tx: tx_cmd, rx: rx_res });
-        #[cfg(target_arch = "wasm32")]
-        {
-            // Web: needs separate rx_cmd (worker reads commands) and tx_res (worker
-            // sends results). On desktop the background thread uses rx_cmd/tx_res
-            // directly via move closure. On wasm32 the InlineWorker system needs
-            // Res<ModelicaChannels> access to both sides.
-            app.insert_resource(ModelicaChannels { tx: tx_cmd, rx: rx_res, rx_cmd, tx_res });
-        }
+    #[cfg(not(target_arch = "wasm32"))]
+    app.insert_resource(ModelicaChannels { tx: tx_cmd, rx: rx_res });
+    #[cfg(target_arch = "wasm32")]
+    {
+        // Web: needs separate rx_cmd (worker reads commands) and tx_res (worker
+        // sends results). On desktop the background thread uses rx_cmd/tx_res
+        // directly via move closure. On wasm32 the InlineWorker system needs
+        // Res<ModelicaChannels> access to both sides.
+        app.insert_resource(ModelicaChannels { tx: tx_cmd, rx: rx_res, rx_cmd, tx_res });
+    }
 
-        app.register_type::<ModelicaModel>()
-           .add_plugins(ui::ModelicaUiPlugin)
-           .add_systems(Update, (
-               spawn_modelica_requests,
-               handle_modelica_responses,
-           ));
+    // handle_modelica_responses borrows WorkbenchState; insert a default so
+    // the system runs in both UI and headless configurations.
+    app.init_resource::<ui::WorkbenchState>();
 
-        #[cfg(target_arch = "wasm32")]
-        {
-            // Web: InlineWorker system processes commands synchronously each frame.
-            // One command per frame to avoid stuttering the UI.
-            app.add_systems(Update, inline_worker_process);
-            // Web: consume file picker results each frame.
-            app.add_systems(Update, ui::update_file_load_result);
-        }
+    app.register_type::<ModelicaModel>()
+        .add_systems(Update, (
+            spawn_modelica_requests,
+            handle_modelica_responses,
+        ));
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        // Web: InlineWorker system processes commands synchronously each frame.
+        // One command per frame to avoid stuttering the UI.
+        app.add_systems(Update, inline_worker_process);
+        // Web: consume file picker results each frame.
+        app.add_systems(Update, ui::update_file_load_result);
     }
 }
 
@@ -244,7 +271,6 @@ struct CachedModel {
     #[allow(dead_code)]
     session_id: u64,
     model_name: String,
-    #[allow(dead_code)]
     source: String,
     #[allow(dead_code)]
     dae: rumoca_session::compile::CompilationResult,
@@ -259,6 +285,40 @@ fn result_ok(entity: Entity, session_id: u64) -> ModelicaResult {
         is_parameter_update: false, is_reset: false,
         detected_input_names: Vec::new(),
     }
+}
+
+/// Collect all variable (name, value) pairs by unioning the stepper's solver
+/// state variable names with every declared non-parameter/non-input/non-constant
+/// variable extracted from the source AST.
+///
+/// Rumoca's `SimStepper::variable_names()` only lists solver-state entries
+/// (typically just states after DAE reduction eliminates algebraics). Algebraic
+/// variables like `netForce`, `buoyancy`, etc. can still be queried by name via
+/// `SimStepper::get()`, so we augment the iteration with names parsed from the
+/// source to recover those values.
+fn collect_all_variables(stepper: &SimStepper, source: &str) -> Vec<(String, f64)> {
+    let mut symbols: Vec<(String, f64)> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for name in stepper.variable_names() {
+        if seen.insert(name.clone()) {
+            if let Some(val) = stepper.get(name) {
+                if val.is_finite() {
+                    symbols.push((name.clone(), val));
+                }
+            }
+        }
+    }
+    for name in ast_extract::extract_variable_names(source) {
+        if seen.insert(name.clone()) {
+            if let Some(val) = stepper.get(&name) {
+                if val.is_finite() {
+                    symbols.push((name, val));
+                }
+            }
+        }
+    }
+    symbols
 }
 
 /// The background worker that owns the !Send SimSteppers and cached DAEs.
@@ -309,12 +369,7 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                                                 let _ = stepper.set_input(name, *val);
                                             }
                                             let input_names: Vec<String> = stepper.input_names().to_vec();
-                                            let mut symbols = Vec::new();
-                                            for name in stepper.variable_names() {
-                                                if let Some(val) = stepper.get(name) {
-                                                    symbols.push((name.clone(), val));
-                                                }
-                                            }
+                                            let symbols = collect_all_variables(&stepper, &cached.source);
                                             steppers.insert(entity, (session_id, cached.model_name.clone(), stepper));
                                             let _ = tx_inner.send(ModelicaResult {
                                                 entity, session_id, new_time: 0.0, outputs: Vec::new(),
@@ -378,16 +433,11 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                                             let _ = stepper.set_input(name, *val);
                                         }
                                         let input_names: Vec<String> = stepper.input_names().to_vec();
-                                        let mut symbols = Vec::new();
-                                        for name in stepper.variable_names() {
-                                            if let Some(val) = stepper.get(name) {
-                                                symbols.push((name.clone(), val));
-                                            }
-                                        }
+                                        let symbols = collect_all_variables(&stepper, &source);
                                         cached_models.insert(entity, CachedModel {
                                             session_id,
                                             model_name: model_name.clone(),
-                                            source,
+                                            source: source.clone(),
                                             dae: comp_res,
                                         });
                                         steppers.insert(entity, (session_id, model_name.clone(), stepper));
@@ -433,12 +483,7 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                                             let _ = stepper.set_input(name, *val);
                                         }
                                         let input_names: Vec<String> = stepper.input_names().to_vec();
-                                        let mut symbols = Vec::new();
-                                        for name in stepper.variable_names() {
-                                            if let Some(val) = stepper.get(name) {
-                                                symbols.push((name.clone(), val));
-                                            }
-                                        }
+                                        let symbols = collect_all_variables(&stepper, &source);
                                         let temp_dir = modelica_dir().join(format!("{}_{}", entity.index(), entity.generation()));
                                         let _ = std::fs::create_dir_all(&temp_dir);
                                         let temp_path = temp_dir.join("model.mo");
@@ -447,7 +492,7 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                                         cached_models.insert(entity, CachedModel {
                                             session_id,
                                             model_name: model_name.clone(),
-                                            source,
+                                            source: source.clone(),
                                             dae: comp_res,
                                         });
                                         steppers.insert(entity, (session_id, model_name.clone(), stepper));
@@ -488,6 +533,9 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                             // Try cached DAE first — recompile stripped source for input slots
                             if let Some(cached) = cached_models.get(&entity) {
                                 if cached.model_name == model_name {
+                                    // Use cached source directly — no file re-read needed.
+                                    // File comparison was broken because model_path points to
+                                    // the temp file (set after Compile), not the original source.
                                     let (stripped_source, input_defaults) = strip_input_defaults(&cached.source);
                                     let mut compiler = ModelicaCompiler::new();
                                     if let Ok(comp_res) = compiler.compile_str(&cached.model_name, &stripped_source, "model.mo") {
@@ -520,7 +568,7 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                                             cached_models.insert(entity, CachedModel {
                                                 session_id,
                                                 model_name: model_name.clone(),
-                                                source: std::fs::read_to_string(&model_path).unwrap_or_default(),
+                                                source: source.clone(),
                                                 dae: comp_res,
                                             });
                                             steppers.insert(entity, (session_id, model_name.clone(), s));
@@ -549,11 +597,23 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                                     let _ = tx_inner.send(r);
                                     steppers.remove(&entity);
                                 } else {
-                                    let mut outputs = Vec::new();
-                                    // Include state variables
-                                    for name in stepper.variable_names() {
-                                        if let Some(val) = stepper.get(name) { if val.is_finite() { outputs.push((name.clone(), val)); } }
-                                    }
+                                    // Include states + algebraics (from source AST) + inputs.
+                                    // `stepper.variable_names()` alone typically only gives states
+                                    // after DAE reduction, so augment with source-extracted names.
+                                    let source_opt: Option<String> = cached_models
+                                        .get(&entity)
+                                        .map(|c| c.source.clone());
+                                    let mut outputs = if let Some(src) = source_opt.as_deref() {
+                                        collect_all_variables(stepper, src)
+                                    } else {
+                                        let mut v = Vec::new();
+                                        for name in stepper.variable_names() {
+                                            if let Some(val) = stepper.get(name) {
+                                                if val.is_finite() { v.push((name.clone(), val)); }
+                                            }
+                                        }
+                                        v
+                                    };
                                     // Also include input values so UI can plot them
                                     for name in stepper.input_names() {
                                         if let Some(val) = stepper.get(name) { if val.is_finite() { outputs.push((name.clone(), val)); } }
@@ -974,6 +1034,7 @@ fn spawn_modelica_requests(
         if !model.paused { model.last_step_time = current_real_time; }
 
         model.is_stepping = true;
+        debug!("Sending Step command for {:?} (dt={:.3})", entity, dt);
         let _ = channels.tx.send(ModelicaCommand::Step {
             entity,
             session_id: model.session_id,
@@ -1008,6 +1069,7 @@ fn spawn_modelica_requests(
         }
 
         model.is_stepping = true;
+        debug!("Sending Step command for {:?} (dt={:.3})", entity, dt);
         let _ = channels.tx.send(ModelicaCommand::Step {
             entity,
             session_id: model.session_id,
@@ -1042,6 +1104,7 @@ fn handle_modelica_responses(
             if result.session_id < model.session_id { continue; }
 
             model.is_stepping = false;
+            debug!("Received Step result for {:?} (new_time={:.3}, outputs={})", result.entity, result.new_time, result.outputs.len());
 
             // Forward log messages to console via bevy_workbench's console system
             if let Some(msg) = result.log_message {
@@ -1140,6 +1203,7 @@ pub use ast_extract::{
     extract_parameters,
     extract_inputs_with_defaults,
     extract_input_names,
+    extract_variable_names,
     substitute_params_in_source,
     hash_content,
     extract_from_source,

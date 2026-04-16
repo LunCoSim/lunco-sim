@@ -5809,6 +5809,7 @@ dependencies = [
  "lunco-celestial",
  "lunco-controller",
  "lunco-core",
+ "lunco-cosim",
  "lunco-fsw",
  "lunco-hardware",
  "lunco-materials",
@@ -5858,6 +5859,17 @@ dependencies = [
  "lunco-command-macro",
  "serde",
  "smallvec",
+]
+
+[[package]]
+name = "lunco-cosim"
+version = "0.1.0"
+dependencies = [
+ "avian3d",
+ "bevy",
+ "lunco-core",
+ "lunco-modelica",
+ "lunco-sandbox-edit",
 ]
 
 [[package]]
