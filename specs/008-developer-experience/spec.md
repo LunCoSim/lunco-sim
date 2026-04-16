@@ -130,4 +130,4 @@ As an autonomy engineer, I want to write a Lua script executing a timed sequence
 - The scripting runtime powers the REPL; the REPL lives inside the editor; the editor exposes everything via the API. One system.
 
 ## Key Entities & Terminology
-For a complete definition of all entities (OBC, FSW, PinState, etc.) and architectural terminology, refer to the authoritative **[Engineering Ontology](file:///home/rod/Documents/lunco/lunco-bevy/specs/ontology.md)**.
+For a complete definition of all entities (OBC, FSW, PinState, etc.) and architectural terminology, refer to the authoritative **[Engineering Ontology](../../docs/architecture/01-ontology.md)**.

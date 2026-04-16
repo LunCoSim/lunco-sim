@@ -140,4 +140,4 @@ The original Godot 4 implementation of LunCoSim is still available on the [**mai
 -   [LinkedIn](https://www.linkedin.com/company/luncosim/)
 -   [YouTube Channel](https://www.youtube.com/@LunCoSim)
 
-**Want to contribute?** We follow a strict TDD and Documentation mandate. [Apply here](https://tally.so/r/3jX6aE) to join our team! Check our [Constitution](.specify/memory/constitution.md) and [Detailed Specifications](specs/) to understand our core principles and roadmap.
+**Want to contribute?** We follow a strict TDD and Documentation mandate. [Apply here](https://tally.so/r/3jX6aE) to join our team! Check our [Principles](docs/principles.md) and [Detailed Specifications](specs/) to understand our core principles and roadmap.

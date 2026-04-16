@@ -77,8 +77,8 @@ When adding a new tunable parameter:
 2.  Use that resource in your `System` queries.
 3.  Ensure the system updates every frame or reacts to resource changes (`ResChanged`).
 
-### Constitutional Hierarchy
-Always verify your implementation plan against `.specify/memory/constitution.md`. If a feature request conflicts with the constitution (e.g., suggesting a non-plugin-based architecture), you must flag this to the user and prioritize constitutional integrity.
+### Principle Hierarchy
+Always verify your implementation plan against `docs/principles.md`. If a feature request conflicts with the project's principles (e.g., suggesting a non-plugin-based architecture), you must flag this to the user and prioritize principle integrity.
 
 ## 6. Tooling & Workflow
 - **Search Tools**: Always skip the `target/` directory when using `grep` or other search tools to avoid searching generated artifacts.

@@ -105,4 +105,4 @@ Allows testing the full FSW->OBC signal path without the `avian` physics engine.
 ---
 
 ## Key Entities & Terminology
-For a complete definition of all entities (OBC, FSW, etc.), refer to the authoritative **[Engineering Ontology](file:///home/rod/Documents/lunco/lunco-bevy/specs/ontology.md)**.
+For a complete definition of all entities (OBC, FSW, etc.), refer to the authoritative **[Engineering Ontology](../../docs/architecture/01-ontology.md)**.

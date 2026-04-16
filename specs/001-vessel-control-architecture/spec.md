@@ -113,14 +113,14 @@ To ensure architectural robustness across different simulation fidelity needs, t
 - **Visual Accuracy**: Wheels MUST have a basic shader/texture allowing visual verification of rotation.
 - **Speed Matching**: Wheel rotation speed MUST physically match the rover's velocity (including air-borne inertia).
 - **Braking Realism**: Braking MUST apply a physical `BrakeForce` that slows the vessel according to mass/friction, rather than a hard teleport to zero velocity.
-- **Architecture Validation**: MUST pass all **[General Testing Framework (000-TEST)](file:///home/rod/Documents/lunco/lunco-bevy/specs/000-testing-framework/spec.md)** compliance rules.
+- **Architecture Validation**: MUST pass all **[General Testing Framework (000-TEST)](../000-testing-framework/spec.md)** compliance rules.
 - **WASM Compliance**: The entire scenario MUST be runnable in a modern web browser.
 
 ---
 
 ## Testing & Validation Mandate
 
-To ensure the 5-layer architecture is computationally verifiable, all development MUST adhere to the **[General Testing Framework (000-TEST)](file:///home/rod/Documents/lunco/lunco-bevy/specs/000-testing-framework/spec.md)**. This includes:
+To ensure the 5-layer architecture is computationally verifiable, all development MUST adhere to the **[General Testing Framework (000-TEST)](../000-testing-framework/spec.md)**. This includes:
 
 1. **Architecture Compliance**: No layer-skipping or prohibited dependency flows.
 2. **Component-Level Logic Tests**: Mandatory unit tests for every Layer 2, 3, and 4 component (FR-010).
@@ -208,4 +208,4 @@ As a mission operator, I want to view and modify dynamic component configuration
 - **FR-010**: **Testability Mandate**: Every Level 2, 3, and 4 component MUST be implementable in a mockable way, allowing for isolated unit testing of logic without the full physics engine.
 
 ### Key Entities & Terminology
-For a complete definition of all entities (Avatar, Space System, Controller, OBC, etc.) and architectural terminology, refer to the authoritative **[Engineering Ontology](file:///home/rod/Documents/lunco/lunco-bevy/specs/ontology.md)**.
+For a complete definition of all entities (Avatar, Space System, Controller, OBC, etc.) and architectural terminology, refer to the authoritative **[Engineering Ontology](../../docs/architecture/01-ontology.md)**.

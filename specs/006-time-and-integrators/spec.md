@@ -38,7 +38,7 @@ As a simulation operator, I want to set the physics tick rate per-session withou
 
 **Acceptance Criteria:**
 - The engine exposes a `SimulationConfig` resource configurable via CLI flags or the REPL.
-- Supported modes (as defined in the [Engineering Ontology](file:///home/rod/Documents/lunco/lunco-bevy/specs/ontology.md)):
+- Supported modes (as defined in the [Engineering Ontology](../../docs/architecture/01-ontology.md)):
   - **Game Mode**: 60 Hz (interactive play, tutorials)
   - **Robotics Mode**: 100–1000 Hz (HIL/SIL testing)
   - **Fast-Forward**: Uncapped CPU-bound (Monte Carlo, ML)
