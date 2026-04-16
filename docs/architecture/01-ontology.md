@@ -29,7 +29,7 @@ To build a high-fidelity digital twin of a lunar city, we use terms that are glo
 - **Space System (vs. Vessel/Vehicle)**: Following **XTCE (XML Telemetric and Command Exchange)** and **CCSDS** standards, "Space System" is a recursive container. This allows us to treat a single 3D-printed brick, a rover, a ground station, and the entire lunar city as the same class of object. It ensures that our simulation is "Mission Control Ready" out-of-the-box.
 - **Verifier (vs. Test/Assertion)**: In computer science, an **Verifier** is an independent mechanism for determining whether a system has passed a test. In LunCoSim, Verifiers represent the "Ground Truth" (Analytical Physics) that monitors the simulation (Engine Physics) to detect drift, ensuring mathematical integrity.
 - **Attribute (vs. Property)**: We use "Attribute" for 1:1 alignment with **SysML v2** and **Pixar's USD**. Prims have attributes; parts have attributes. This avoids the programming ambiguity of "Properties" (getter/setter functions).
-- **Port (vs. Pin/Connector)**: "Port" is the universal term used by **SysML v2**, **NASA FPrime**, and **ROS**. It defines a semantic interface point. While Modelica uses "Connector," we use "Connection" for the link (the Wire) to maintain consistency with SysML v2 and FPrime.
+- **Port (vs. Pin/Connector)**: "Port" is the universal term used by **SysML v2**, **NASA FPrime**, and **ROS**. It defines a semantic interface point. While Modelica uses "Connector," we use **Port** for the interface point and **Connection** for the link — consistent with SysML v2, FPrime, and FMI/SSP.
 - **Link & Joint (vs. Part/Bone)**: Adopting the **URDF** and **USD Physics** terminology ensures that any roboticist or CAD engineer can immediately map their kinematic chains into our coordinate frame tree.
 - **CommandRegistry**: The "Brain-Interface" of a Space System. Instead of a fixed, hardcoded list of actions, each entity describes its own capabilities. This is the "secret sauce" for AI-native simulation: it allows an LLM or an MCP agent to look at a new, unknown rover and immediately "know" how to drive it by reading its live documentation. It creates a single, unified channel where human inputs (WASD), automated scripts, and AI agents all speak the same language to the simulation.
 
@@ -130,13 +130,87 @@ The universal interface for data and power flow between architectural layers.
 - **Logic Port (Level 3/Internal)**: Logical endpoints within the FSW hardware map.
 - **Compatibility**: Maps 1:1 to SysML `Proxy Ports`, Modelica `Connectors`, and ROS `Hardware Interfaces`.
 
-### Wire (Connector)
-The logical and electrical "link" between two **Ports**. A Wire is a Bevy entity that facilitates the high-speed transfer of `PortState` between Level 1 (Plant) and Level 2 (OBC).
+### Connection
+The logical and electrical link between two **Ports**. A Connection is a Bevy entity (typically [`SimConnection`](../../crates/lunco-cosim/src/connection.rs)) that facilitates the transfer of `PortState` between ports — for example, between Level 1 (Plant) and Level 2 (OBC), or between two `SimComponent`s in a co-simulation graph.
+
+*Historical note:* earlier drafts of this ontology and early code used the term "Wire" for the same concept. The canonical term is **Connection**, matching SysML v2, FMI/SSP, and Modelica's `connect()` statement. "Wire" may still appear in historical docs or legacy code; treat them as synonyms, prefer `Connection` in new work.
 
 ### Port Mapping (Wiring)
 The configuration defining which OBC Ports are connected to which Physical Plant Ports. 
 - **Explicit Mapping**: Hardcoded or `.ron` defined links used for the Stage 1 Baseline Rover.
 - **Heuristic Mapping**: Dynamic discovery of ports based on semantic tags (e.g., "drive", "left", "motor") for modular robot building.
+
+---
+
+## 4a. Co-Simulation Concepts (`lunco-cosim`)
+
+The co-simulation layer connects multiple simulation engines (Modelica, FMU, GMAT, Avian) as model instances with named inputs and outputs. See [`22-domain-cosim.md`](22-domain-cosim.md) for details.
+
+### SimComponent
+A Bevy component that wraps a simulation model instance (typically Modelica or FMU). Exposes named **inputs** and **outputs** as hashmaps. Status: `Idle | Running | Paused | Error`.
+
+### SimConnection
+A Bevy entity that links a source port on one component to a target port on another. Implements the FMI/SSP `<Connection>` pattern: `startElement.startConnector → endElement.endConnector` with an optional `scale` factor.
+
+### SimPort
+Metadata for a named interface point — `{ name, direction: In|Out|InOut, type: Force|Kinematic|Electrical|Thermal|Signal }`. Used by UI to list connectable endpoints and by connection validators to enforce type compatibility.
+
+### AvianSim
+A Bevy component that represents Avian physics as a co-simulation model. Inputs = forces (`force_x`, `force_y`, `force_z`). Outputs = state (`position_*`, `velocity_*`, `height`). Auto-added to any entity with a `RigidBody`.
+
+---
+
+## 4b. Environment Concepts (`lunco-environment`)
+
+The environment layer computes per-entity physical state (gravity, atmosphere, radiation) from celestial-body providers. See [`23-domain-environment.md`](23-domain-environment.md).
+
+### Provider (`GravityProvider`, `AtmosphereProvider`, ...)
+A component on a celestial-body entity that defines **how** an environment quantity varies with position. Example: a `GravityProvider` wraps a `GravityModel` (point-mass, spherical harmonics, etc.) that can compute gravitational acceleration at any world position.
+
+### Local\* component (`LocalGravity`, `LocalAtmosphere`, ...)
+A cached, per-entity result of applying a provider at the entity's position. Computed each `FixedUpdate` by the environment systems. Read by Avian force application, cosim input injection, UI displays — anything that needs "what gravity does this entity feel right now."
+
+### GravityBody
+A link component on a non-body entity that identifies which celestial-body entity it is gravitationally bound to. Needed for `Gravity::Surface` mode. In Modelica terms: this is the ECS analog of `outer World`.
+
+---
+
+## 4c. Document System Concepts (`lunco-ui`)
+
+The Document System is the canonical data model. Every structured artifact users edit (Modelica model, USD scene, SysML block, mission) is a Document. See [`10-document-system.md`](10-document-system.md).
+
+### Document
+The canonical, persistent, serialized representation of a user-editable artifact. Lives in Tier 1 of the three-tier architecture. Examples: `ModelicaDocument` (wraps a `.mo` AST), `UsdDocument` (wraps a Stage), `MissionDocument` (wraps an event graph).
+
+### DocumentOp (Op)
+A typed, serializable, reversible mutation of a Document. Examples: `AddComponent`, `RemoveConnection`, `SetParameter`, `MoveComponent`. Every op carries its inverse (for undo). Op streams are the unit of collaboration (future) and replay.
+
+### DocumentView
+A panel that observes a Document and renders a projection of it. The same document may have many views — e.g., a `ModelicaDocument` is viewed by DiagramPanel (egui-snarl), CodeEditorPanel (text), ParameterInspectorPanel (form), PlotPanel (time series). Views emit ops; they never mutate the document directly.
+
+### DocumentHost
+Runtime plumbing that owns a Document, routes ops from views, records undo history, and broadcasts change notifications to other views.
+
+---
+
+## 4d. Workbench Concepts (`lunco-workbench`)
+
+The UI application scaffold. See [`11-workbench.md`](11-workbench.md).
+
+### Panel
+A dockable UI element in the workbench. A Panel typically implements `DocumentView<D>` for some Document type, or is a non-document tool (Scene Tree, Spawn Palette, Console).
+
+### Workspace
+A named task-specific UI configuration. Each Workspace has its own default panel layout, toolbar set, and optionally a camera/view state. Standard LunCoSim Workspaces: **Build** (edit scenes and subsystems), **Simulate** (minimal chrome, maximize viewport), **Analyze** (Modelica/system model deep dive), **Plan** (mission timeline), **Observe** (presentation/cinema mode). Analogous to CATIA's workbenches or Blender's workspaces.
+
+### Activity
+A primary navigation category displayed in a vertical strip at the far left (VS Code activity bar pattern). Examples: Scene, Subsystems, Assets, Console, Search. Selecting an Activity opens its browser in a slide-in panel.
+
+### Viewport
+The 3D world view — NOT a panel, NOT a tile. Structurally persistent as the central area of the workbench window. Docks are arranged around the Viewport, never on top of it. This is a first-class architectural primitive, distinct from panels.
+
+### Command Palette
+Keyboard-invoked (Ctrl+P / Cmd+P) universal search for actions, entities, parameters, and commands. Integrates with the `CommandRegistry` of each Space System for AI-discoverable actions.
 
 ---
 

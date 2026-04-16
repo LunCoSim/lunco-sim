@@ -206,6 +206,6 @@ but not a prerequisite for features — work can parallelize.
 
 - **Framework design:** [10-document-system.md](10-document-system.md) and [11-workbench.md](11-workbench.md)
 - **Domain specifics:** 20-domain-*.md files (written when each domain migration begins)
-- **Historical research:** [99-research/](99-research/) contains inspiration and rejected-path writeups
+- **Historical research:** [research/](research/) contains inspiration and rejected-path writeups
 - **Crate-level quick starts:** each crate has its own `README.md` focused on
   "how do I use this crate right now," not architecture.
