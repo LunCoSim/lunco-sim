@@ -27,7 +27,9 @@ members = [
     "crates/lunco-api",
     "crates/lunco-cosim",
     "crates/lunco-environment",
-    "crates/lunco-doc"
+    "crates/lunco-doc",
+    "crates/lunco-twin",
+    "crates/lunco-workbench"
 ]
 resolver = "2"
 
@@ -36,8 +38,6 @@ resolver = "2"
 scnr2 = { git = "https://github.com/jsinger67/scnr2", tag = "0.3.3" }
 scnr2_generate = { git = "https://github.com/jsinger67/scnr2", tag = "0.3.3" }
 scnr2_macro = { git = "https://github.com/jsinger67/scnr2", tag = "0.3.3" }
-# LunCoSim fork with 3D-embedded support (transparent CentralPanel + bg_color())
-bevy_workbench = { git = "https://github.com/LunCoSim/bevy_workbench.git" }
 
 [workspace.package]
 description = "Initialize multi-crate workspace architecture for vessel control simulation"
@@ -48,8 +48,7 @@ lunco-assets = { path = "crates/lunco-assets" }
 avian3d = { version = "0.6.1", default-features = false, features = ["3d", "f64", "parry-f64", "parallel", "debug-plugin", "default-collider", "collider-from-mesh"] }
 big_space = "0.12.0"
 leafwing-input-manager = "0.20.0"
-bevy_egui = "0.39.1"
-bevy_workbench = { git = "https://github.com/LunCoSim/bevy_workbench.git" }
+bevy_egui = { version = "0.39.1", features = ["serde"] }
 bevy-inspector-egui = "0.36.0"
 transform-gizmo-bevy = "0.9.0"
 avian_pickup = "0.5.0-rc.1"

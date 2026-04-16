@@ -2,7 +2,7 @@
 
 use bevy::prelude::*;
 use bevy_egui::egui;
-use bevy_workbench::dock::WorkbenchPanel;
+use lunco_workbench::{Panel, PanelId, PanelSlot};
 use chrono::TimeZone;
 
 use lunco_core::{Avatar, RoverVessel, Spacecraft, CelestialClock};
@@ -12,18 +12,12 @@ use lunco_avatar::{PossessVessel, ReleaseVessel, FocusTarget};
 /// Mission Control panel — everything in one place.
 pub struct MissionControl;
 
-impl WorkbenchPanel for MissionControl {
-    fn id(&self) -> &str { "mission_control" }
+impl Panel for MissionControl {
+    fn id(&self) -> PanelId { PanelId("mission_control") }
     fn title(&self) -> String { "Mission Control".into() }
-    fn closable(&self) -> bool { true }
-    fn default_visible(&self) -> bool { true }
-    fn needs_world(&self) -> bool { true }
+    fn default_slot(&self) -> PanelSlot { PanelSlot::RightInspector }
 
-    fn ui(&mut self, ui: &mut egui::Ui) {
-        ui.label("Mission Control requires world access.");
-    }
-
-    fn ui_world(&mut self, ui: &mut egui::Ui, world: &mut World) {
+    fn render(&mut self, ui: &mut egui::Ui, world: &mut World) {
         ui.style_mut().visuals.widgets.inactive.weak_bg_fill = egui::Color32::from_rgba_unmultiplied(30, 30, 35, 230);
         ui.style_mut().visuals.widgets.inactive.bg_fill = egui::Color32::from_rgba_unmultiplied(30, 30, 35, 230);
 

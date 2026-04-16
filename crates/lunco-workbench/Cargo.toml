@@ -1,0 +1,18 @@
+[package]
+name = "lunco-workbench"
+version = "0.1.0"
+edition = "2021"
+description = "LunCoSim's own workbench shell — activity bar, side browsers, central viewport, right inspector, bottom dock, status bar. Native replacement for bevy_workbench."
+
+[dependencies]
+bevy = { workspace = true }
+bevy_egui = { workspace = true }
+lunco-doc = { path = "../lunco-doc" }
+
+[dev-dependencies]
+# For the hello_workbench example. The full DefaultPlugins pull in a winit
+# window + renderer so the example produces an actual window.
+
+[[example]]
+name = "hello_workbench"
+path = "examples/hello_workbench.rs"

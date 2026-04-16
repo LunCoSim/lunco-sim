@@ -17,7 +17,6 @@
 //! See `../lib.rs` for the inline worker implementation.
 
 use bevy::prelude::*;
-use std::sync::Arc;
 use std::path::PathBuf;
 use bevy_egui::EguiPlugin;
 use lunco_modelica::{
@@ -89,6 +88,7 @@ fn setup_web_workbench(
     mut commands: Commands,
     channels: Res<lunco_modelica::ModelicaChannels>,
     mut workbench_state: ResMut<lunco_modelica::ui::WorkbenchState>,
+    mut doc_registry: ResMut<lunco_modelica::ui::ModelicaDocumentRegistry>,
     model_info: Res<BundledModelInfo>,
 ) {
     commands.spawn(Camera2d);
@@ -107,13 +107,16 @@ fn setup_web_workbench(
         ModelicaModel {
             model_path,
             model_name: model_name.clone(),
-            original_source: Arc::from(source.clone()),
             parameters: initial_params,
             inputs: initial_inputs,
             paused: true, // Start paused; compile result will unpause
             ..default()
         },
     )).id();
+
+    // Register the source with the Document registry — the single source
+    // of truth for this entity's Modelica text.
+    doc_registry.checkpoint_source(entity, source.clone());
 
     // Select this entity so handle_modelica_responses populates plotted_variables
     // on the initial compile result (is_new_model branch).

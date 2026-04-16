@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use bevy::prelude::*;
 use bevy_egui::egui;
-use bevy_workbench::dock::WorkbenchPanel;
+use lunco_workbench::{Panel, PanelId, PanelSlot};
 use lunco_assets::{assets_dir, msl_dir};
 
 use crate::ui::WorkbenchState;
@@ -12,20 +12,12 @@ use crate::ui::WorkbenchState;
 /// Library Browser panel — file system navigation for Modelica models.
 pub struct LibraryBrowserPanel;
 
-impl WorkbenchPanel for LibraryBrowserPanel {
-    fn id(&self) -> &str { "library_browser" }
+impl Panel for LibraryBrowserPanel {
+    fn id(&self) -> PanelId { PanelId("library_browser") }
     fn title(&self) -> String { "📁 Library".into() }
-    fn closable(&self) -> bool { true }
-    fn default_visible(&self) -> bool { true }
-    fn needs_world(&self) -> bool { true }
+    fn default_slot(&self) -> PanelSlot { PanelSlot::SideBrowser }
 
-    fn bg_color(&self) -> Option<egui::Color32> {
-        Some(egui::Color32::from_rgb(35, 35, 40))
-    }
-
-    fn ui(&mut self, _ui: &mut egui::Ui) {}
-
-    fn ui_world(&mut self, ui: &mut egui::Ui, world: &mut World) {
+    fn render(&mut self, ui: &mut egui::Ui, world: &mut World) {
         let mut state = match world.get_resource_mut::<WorkbenchState>() {
             Some(s) => s,
             None => return,

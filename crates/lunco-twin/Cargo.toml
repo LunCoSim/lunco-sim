@@ -1,0 +1,15 @@
+[package]
+name = "lunco-twin"
+version = "0.1.0"
+edition = "2021"
+description = "Twin — LunCoSim's top-level persistent artifact. Folder + twin.toml manifest. Headless, UI-free, ECS-free."
+
+[dependencies]
+lunco-doc = { path = "../lunco-doc" }
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.8"
+walkdir = "2.5"
+thiserror = "1.0"
+
+[dev-dependencies]
+tempfile = "3.10"

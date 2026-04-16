@@ -530,11 +530,38 @@ iterate in `lunco-doc` before going broader.
 
 These need real code to resolve. Don't answer speculatively.
 
-## 14. See also
+## 14. Why not use an existing undo/redo library?
+
+Short answer: we evaluated [`undo`](https://docs.rs/undo/),
+[`redo`](https://crates.io/crates/redo), [`yrs`](https://docs.rs/yrs),
+and [`automerge`](https://docs.rs/automerge/) and kept our own
+`DocumentHost`. Three architectural differences matter:
+
+- **Ops-as-pure-data vs. stateful commands.** Our ops are plain enum
+  values — serializable, replayable, network-transportable. `undo`'s
+  `Edit` trait puts methods on the command object itself, which is
+  hostile to serialization (the Nucleus/live-sync future).
+- **Inverse computed in one pass by domain logic.** Our `apply(op) ->
+  inverse_op` is a single function with all the state context.
+  `undo` requires two methods (`edit` + `undo`) that each reason
+  about the same transition — two places for semantics to drift.
+- **`Result`-typed apply.** We reject invalid ops at the boundary;
+  `undo` assumes success.
+
+`yrs` and `automerge` are CRDTs over JSON-like blobs. They don't
+replace typed domain ops like `AddConnection { from, to }`; they're
+candidates for use *inside* specific Document types (e.g. equation
+bodies as `YText`), not in place of `Document`.
+
+Full research write-up, maturity comparison, and triggers to revisit
+this decision: [`research/undo-redo-libraries.md`](research/undo-redo-libraries.md).
+
+## 15. See also
 
 - [`00-overview.md`](00-overview.md) — three-tier architecture, where Documents fit
 - [`01-ontology.md`](01-ontology.md) § 4c — Document/DocumentOp/DocumentView in the ontology
 - [`11-workbench.md`](11-workbench.md) — how panels (DocumentViews) are hosted by the workbench
 - [`20-domain-modelica.md`](20-domain-modelica.md) — first planned domain implementation (ModelicaDocument)
 - [`21-domain-usd.md`](21-domain-usd.md) — USD as a second Document domain
+- [`research/undo-redo-libraries.md`](research/undo-redo-libraries.md) — library survey & decision rationale
 

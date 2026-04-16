@@ -1,11 +1,11 @@
 //! # LunCoSim UI Foundation
 //!
-//! A thin adapter layer on top of `bevy_workbench` that provides:
+//! A thin adapter layer on top of `lunco-workbench` that provides:
 //! - **WidgetSystem** — O(1) cached widget pattern for 1,000s of graph/diagram widgets
 //! - **Typed command integration** — all UI interactions flow through typed command events
 //! - **3D World-Space UI** — in-cockpit panels, floating labels over celestial bodies
 //!
-//! Docking, theming, inspector, console, layout persistence — all provided by `bevy_workbench`.
+//! Docking, theming, layout — provided by `lunco-workbench`.
 //!
 //! ## Architecture: Entity Viewers
 //!
@@ -68,13 +68,13 @@ pub mod prelude {
 }
 
 /// Minimal plugin that initializes LunCoSim-specific UI resources.
-/// The heavy lifting (docking, themes, inspector, console) is done by `bevy_workbench`.
+/// The heavy lifting (docking, themes, layout) is done by `lunco-workbench`.
 #[derive(Default)]
 pub struct LuncoUiPlugin;
 
 impl Plugin for LuncoUiPlugin {
     fn build(&self, app: &mut App) {
-        // LunCoSim-specific resources (no overlap with bevy_workbench)
+        // LunCoSim-specific resources (no overlap with lunco-workbench)
         app.init_resource::<UiSelection>();
     }
 }

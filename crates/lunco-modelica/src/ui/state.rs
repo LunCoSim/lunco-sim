@@ -21,10 +21,13 @@ use bevy::prelude::*;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use lunco_assets::assets_dir;
+use lunco_doc::{DocumentHost, DocumentId};
 #[cfg(target_arch = "wasm32")]
 use std::sync::atomic::{AtomicPtr, Ordering};
 
 use std::sync::Arc;
+
+use crate::document::{ModelicaDocument, ModelicaOp};
 
 // ---------------------------------------------------------------------------
 // Model File Tracking
@@ -134,6 +137,87 @@ pub struct WorkbenchState {
     pub is_loading: bool,
 }
 
+// ---------------------------------------------------------------------------
+// ModelicaDocumentRegistry — per-entity DocumentHost tracking
+// ---------------------------------------------------------------------------
+
+/// Per-entity registry of [`DocumentHost<ModelicaDocument>`] instances.
+///
+/// **The single source of truth for per-entity Modelica source.** Every
+/// spawn path (CodeEditor Compile, Diagram auto-compile, `balloon_setup`,
+/// the workbench binaries) calls [`checkpoint_source`](Self::checkpoint_source)
+/// before sending a `Compile` or `UpdateParameters` command to the worker.
+///
+/// Consumers of the committed source — Telemetry (for parameter
+/// substitution), Diagram (eventually, for re-rendering on generation
+/// change), and future panels — read through
+/// [`host`](Self::host)`(entity).document().source()`.
+///
+/// Still separate from this registry:
+///
+/// - `EditorBufferState.text` — the egui TextEdit working buffer
+///   (keystroke-responsive; committed into the Document on Compile).
+/// - `WorkbenchState.open_model.source` — the library browser's
+///   "current file" slot, used before any compile has produced an
+///   entity. Will fold into the registry in a future migration.
+#[derive(Resource, Default)]
+pub struct ModelicaDocumentRegistry {
+    hosts: HashMap<Entity, DocumentHost<ModelicaDocument>>,
+    next_doc_id: u64,
+}
+
+impl ModelicaDocumentRegistry {
+    /// Record a compile: create-or-update the document for `entity` to hold
+    /// `source`. Returns `true` if the document changed (was new, or had a
+    /// different prior source). A no-op compile (same source as last time)
+    /// returns `false` and does not bump generation.
+    pub fn checkpoint_source(&mut self, entity: Entity, source: String) -> bool {
+        match self.hosts.get_mut(&entity) {
+            Some(host) => {
+                if host.document().source() == source {
+                    return false;
+                }
+                // Best-effort: ReplaceSource cannot fail today, but the trait
+                // signature is fallible so we swallow the Result rather than
+                // propagate it. Callers don't care about the details.
+                let _ = host.apply(ModelicaOp::ReplaceSource { new: source });
+                true
+            }
+            None => {
+                self.next_doc_id = self.next_doc_id.saturating_add(1);
+                let doc = ModelicaDocument::new(DocumentId::new(self.next_doc_id), source);
+                self.hosts.insert(entity, DocumentHost::new(doc));
+                true
+            }
+        }
+    }
+
+    /// Immutable access to an entity's document host, if registered.
+    pub fn host(&self, entity: Entity) -> Option<&DocumentHost<ModelicaDocument>> {
+        self.hosts.get(&entity)
+    }
+
+    /// Mutable access to an entity's document host, if registered.
+    pub fn host_mut(&mut self, entity: Entity) -> Option<&mut DocumentHost<ModelicaDocument>> {
+        self.hosts.get_mut(&entity)
+    }
+
+    /// Drop the host for an entity (called when the entity is despawned).
+    pub fn remove(&mut self, entity: Entity) {
+        self.hosts.remove(&entity);
+    }
+
+    /// Number of registered entity documents.
+    pub fn len(&self) -> usize {
+        self.hosts.len()
+    }
+
+    /// Whether the registry currently tracks any documents.
+    pub fn is_empty(&self) -> bool {
+        self.hosts.is_empty()
+    }
+}
+
 impl Default for WorkbenchState {
     fn default() -> Self {
         Self {
@@ -151,5 +235,106 @@ impl Default for WorkbenchState {
             diagram_dirty: false,
             is_loading: false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lunco_doc::Document;
+
+    fn fake_entity(bits: u64) -> Entity {
+        Entity::from_bits(bits)
+    }
+
+    #[test]
+    fn checkpoint_creates_host_on_first_call() {
+        let mut reg = ModelicaDocumentRegistry::default();
+        let e = fake_entity(0x0000_0001_0000_0001);
+
+        assert!(reg.host(e).is_none());
+        assert!(reg.is_empty());
+
+        let changed = reg.checkpoint_source(e, "model A end A;".into());
+        assert!(changed);
+        assert_eq!(reg.len(), 1);
+
+        let host = reg.host(e).expect("host registered");
+        assert_eq!(host.document().source(), "model A end A;");
+        assert_eq!(host.generation(), 0, "first registration doesn't apply an op");
+    }
+
+    #[test]
+    fn checkpoint_applies_op_on_change() {
+        let mut reg = ModelicaDocumentRegistry::default();
+        let e = fake_entity(0x0000_0002_0000_0002);
+
+        reg.checkpoint_source(e, "model A end A;".into());
+        let changed = reg.checkpoint_source(e, "model B end B;".into());
+        assert!(changed);
+
+        let host = reg.host(e).unwrap();
+        assert_eq!(host.document().source(), "model B end B;");
+        assert_eq!(host.generation(), 1);
+        assert!(host.can_undo());
+    }
+
+    #[test]
+    fn checkpoint_no_op_when_source_unchanged() {
+        let mut reg = ModelicaDocumentRegistry::default();
+        let e = fake_entity(0x0000_0003_0000_0003);
+
+        reg.checkpoint_source(e, "same".into());
+        let changed = reg.checkpoint_source(e, "same".into());
+        assert!(!changed, "re-checkpointing identical source must not bump generation");
+        assert_eq!(reg.host(e).unwrap().generation(), 0);
+    }
+
+    #[test]
+    fn undo_restores_previous_source() {
+        let mut reg = ModelicaDocumentRegistry::default();
+        let e = fake_entity(0x0000_0004_0000_0004);
+
+        reg.checkpoint_source(e, "v1".into());
+        reg.checkpoint_source(e, "v2".into());
+        reg.checkpoint_source(e, "v3".into());
+
+        let host = reg.host_mut(e).unwrap();
+        host.undo().unwrap();
+        assert_eq!(host.document().source(), "v2");
+        host.undo().unwrap();
+        assert_eq!(host.document().source(), "v1");
+    }
+
+    #[test]
+    fn remove_drops_host() {
+        let mut reg = ModelicaDocumentRegistry::default();
+        let e = fake_entity(0x0000_0005_0000_0005);
+
+        reg.checkpoint_source(e, "x".into());
+        assert_eq!(reg.len(), 1);
+
+        reg.remove(e);
+        assert!(reg.is_empty());
+        assert!(reg.host(e).is_none());
+    }
+
+    #[test]
+    fn multiple_entities_tracked_independently() {
+        let mut reg = ModelicaDocumentRegistry::default();
+        let a = fake_entity(0x0000_0006_0000_0006);
+        let b = fake_entity(0x0000_0007_0000_0007);
+
+        reg.checkpoint_source(a, "source_a".into());
+        reg.checkpoint_source(b, "source_b".into());
+        reg.checkpoint_source(a, "source_a_v2".into());
+
+        assert_eq!(reg.host(a).unwrap().document().source(), "source_a_v2");
+        assert_eq!(reg.host(b).unwrap().document().source(), "source_b");
+        assert_ne!(
+            reg.host(a).unwrap().document().id(),
+            reg.host(b).unwrap().document().id(),
+            "each entity gets a distinct DocumentId"
+        );
     }
 }

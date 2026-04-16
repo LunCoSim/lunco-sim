@@ -2,11 +2,11 @@
 
 use bevy::prelude::*;
 use bevy_egui::egui;
-use bevy_workbench::dock::WorkbenchPanel;
+use lunco_workbench::{Panel, PanelId, PanelSlot};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::ui::WorkbenchState;
+use crate::ui::{ModelicaDocumentRegistry, WorkbenchState};
 use crate::ui::panels::diagram::DiagramState;
 use crate::{ModelicaModel, ModelicaChannels, ModelicaCommand};
 use crate::ast_extract::{
@@ -47,20 +47,13 @@ impl Default for EditorBufferState {
 /// Code Editor panel — central viewport for Modelica source code.
 pub struct CodeEditorPanel;
 
-impl WorkbenchPanel for CodeEditorPanel {
-    fn id(&self) -> &str { "modelica_code_preview" }
+impl Panel for CodeEditorPanel {
+    fn id(&self) -> PanelId { PanelId("modelica_code_preview") }
     fn title(&self) -> String { "📝 Code Editor".into() }
+    fn default_slot(&self) -> PanelSlot { PanelSlot::Center }
     fn closable(&self) -> bool { false }
-    fn default_visible(&self) -> bool { true }
-    fn needs_world(&self) -> bool { true }
 
-    fn bg_color(&self) -> Option<egui::Color32> {
-        Some(egui::Color32::from_rgb(40, 40, 45))
-    }
-
-    fn ui(&mut self, _ui: &mut egui::Ui) {}
-
-    fn ui_world(&mut self, ui: &mut egui::Ui, world: &mut World) {
+    fn render(&mut self, ui: &mut egui::Ui, world: &mut World) {
         // ── Ensure persistent buffer exists ──
         if world.get_resource::<EditorBufferState>().is_none() {
             world.insert_resource(EditorBufferState::default());
@@ -127,9 +120,20 @@ impl WorkbenchPanel for CodeEditorPanel {
 
         let display_name = display_name.unwrap();
 
+        // ── Document summary for the selected entity (if any) ──
+        // Pulled out of the Registry up-front so the top-bar closure can
+        // read it without re-borrowing World.
+        let doc_summary = selected_entity.and_then(|e| {
+            world.resource::<ModelicaDocumentRegistry>().host(e).map(|h| {
+                (h.generation(), h.can_undo(), h.can_redo(), h.undo_depth(), h.redo_depth())
+            })
+        });
+
         // ── Top bar ──
         let mut compile_clicked = false;
         let mut clear_error = false;
+        let mut undo_clicked = false;
+        let mut redo_clicked = false;
 
         ui.horizontal(|ui| {
             let buf_state = world.resource::<EditorBufferState>();
@@ -153,6 +157,22 @@ impl WorkbenchPanel for CodeEditorPanel {
                 ui.colored_label(egui::Color32::GREEN, "Ready");
             }
 
+            // Document status + Undo/Redo for the selected entity's source.
+            if let Some((gen, can_undo, can_redo, undo_n, redo_n)) = doc_summary {
+                ui.separator();
+                if ui.add_enabled(can_undo, egui::Button::new("↶")).on_hover_text("Undo last compile").clicked() {
+                    undo_clicked = true;
+                }
+                if ui.add_enabled(can_redo, egui::Button::new("↷")).on_hover_text("Redo").clicked() {
+                    redo_clicked = true;
+                }
+                ui.label(
+                    egui::RichText::new(format!("gen {} · ↶{} ↷{}", gen, undo_n, redo_n))
+                        .size(10.0)
+                        .color(egui::Color32::GRAY),
+                );
+            }
+
             if !is_read_only && ui.button("🚀 COMPILE & RUN").clicked() {
                 compile_clicked = true;
             }
@@ -162,6 +182,52 @@ impl WorkbenchPanel for CodeEditorPanel {
         if clear_error {
             if let Some(mut s) = world.get_resource_mut::<WorkbenchState>() {
                 s.compilation_error = None;
+            }
+        }
+
+        // ── Handle undo / redo clicks on the Document for selected_entity ──
+        if (undo_clicked || redo_clicked) && !is_read_only {
+            if let Some(entity) = selected_entity {
+                let new_source = {
+                    let mut registry = world.resource_mut::<ModelicaDocumentRegistry>();
+                    registry.host_mut(entity).and_then(|host| {
+                        let changed = if undo_clicked {
+                            host.undo().ok().unwrap_or(false)
+                        } else {
+                            host.redo().ok().unwrap_or(false)
+                        };
+                        changed.then(|| host.document().source().to_string())
+                    })
+                };
+
+                if let Some(source) = new_source {
+                    // Sync the reverted/advanced source into the editor
+                    // buffer. User re-compiles to re-run the simulation
+                    // against this source — consistent with "undo in editor
+                    // rewinds the buffer, next compile commits it".
+                    let mut new_starts = vec![0];
+                    for (i, b) in source.as_bytes().iter().enumerate() {
+                        if *b == b'\n' {
+                            new_starts.push(i + 1);
+                        }
+                    }
+                    let detected = extract_model_name(&source);
+                    let hash = hash_content(&source);
+
+                    {
+                        let mut buf_state = world.resource_mut::<EditorBufferState>();
+                        buf_state.text = source.clone();
+                        buf_state.line_starts = new_starts.into();
+                        buf_state.detected_name = detected;
+                        buf_state.source_hash = hash;
+                    }
+
+                    // Also mirror into WorkbenchState.editor_buffer so any
+                    // other consumer using that field sees the change.
+                    if let Some(mut s) = world.get_resource_mut::<WorkbenchState>() {
+                        s.editor_buffer = source;
+                    }
+                }
             }
         }
 
@@ -182,7 +248,6 @@ impl WorkbenchPanel for CodeEditorPanel {
                         model.session_id += 1;
                         model.is_stepping = true;
                         model.model_name = model_name.clone();
-                        model.original_source = source.clone().into();
                         model.parameters = params;
                         model.inputs.clear();
                         for (name, val) in &inputs_with_defaults {
@@ -208,7 +273,6 @@ impl WorkbenchPanel for CodeEditorPanel {
                         ModelicaModel {
                             model_path: "".into(),
                             model_name: model_name.clone(),
-                            original_source: source.clone().into(),
                             current_time: 0.0,
                             last_step_time: 0.0,
                             session_id,
@@ -227,9 +291,19 @@ impl WorkbenchPanel for CodeEditorPanel {
                 }
 
                 if should_compile {
+                    let target = world.get_resource::<WorkbenchState>()
+                        .and_then(|s| s.selected_entity).unwrap_or(Entity::PLACEHOLDER);
+
+                    // Checkpoint the just-compiled source into the Document
+                    // registry before sending the Compile command — the
+                    // registry is the single source of truth for this
+                    // entity's Modelica source.
+                    if target != Entity::PLACEHOLDER {
+                        let mut registry = world.resource_mut::<ModelicaDocumentRegistry>();
+                        registry.checkpoint_source(target, source.clone());
+                    }
+
                     if let Some(channels) = world.get_resource::<ModelicaChannels>() {
-                        let target = world.get_resource::<WorkbenchState>()
-                            .and_then(|s| s.selected_entity).unwrap_or(Entity::PLACEHOLDER);
                         let _ = channels.tx.send(ModelicaCommand::Compile {
                             entity: target,
                             session_id,

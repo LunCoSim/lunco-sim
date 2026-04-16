@@ -118,6 +118,21 @@ the time comes:
 We're not building any of this now. We're ensuring the design
 doesn't foreclose it.
 
+## Why not `undo` / `yrs` / `automerge`?
+
+We evaluated the obvious Rust candidates ([`undo`](https://docs.rs/undo/)
+for local history; [`yrs`](https://docs.rs/yrs) and
+[`automerge`](https://docs.rs/automerge/) for CRDT-based collab) and
+kept our own `DocumentHost`. Core reason: our ops are **pure enum
+values** (serializable, replayable, network-transportable), and
+`apply` returns the **inverse op as data** computed in one pass by
+domain logic. `undo::Edit` puts methods on the command object (hostile
+to serialization); `yrs` / `automerge` operate on JSON-like blobs
+(no typed domain ops like `AddConnection { from, to }`).
+
+Full rationale + triggers to revisit:
+[`docs/architecture/research/undo-redo-libraries.md`](../../docs/architecture/research/undo-redo-libraries.md).
+
 ## Tests
 
 ```bash

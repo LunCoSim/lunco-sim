@@ -49,6 +49,12 @@ use self::ast_extract::strip_input_defaults;
 /// parameters, inputs, and other symbols. Replaces the legacy regex-based extraction.
 pub mod ast_extract;
 
+/// `ModelicaDocument` — the Document System representation of a `.mo` file.
+///
+/// Introduced dormant (no panels use it yet). See the module-level docstring
+/// for migration order.
+pub mod document;
+
 /// Modelica-to-diagram graph builder — converts AST into DiagramGraph.
 pub mod diagram;
 
@@ -251,8 +257,6 @@ pub struct ModelicaResult {
     pub entity: Entity,
     pub session_id: u64,
     pub new_time: f64,
-    /// The original source code of the model, sent back on initial compile or update.
-    pub original_source: Option<Arc<str>>,
     pub outputs: Vec<(String, f64)>,
     pub detected_symbols: Vec<(String, f64)>,
     pub error: Option<String>,
@@ -286,7 +290,6 @@ fn result_ok(entity: Entity, session_id: u64) -> ModelicaResult {
         entity,
         session_id,
         new_time: 0.0,
-        original_source: None,
         outputs: Vec::new(),
  detected_symbols: Vec::new(),
         error: None, log_message: None, is_new_model: false,
@@ -352,7 +355,6 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                                             steppers.insert(entity, (session_id, cached.model_name.clone(), stepper));
                                             let _ = tx_inner.send(ModelicaResult {
                                                 entity, session_id, new_time: 0.0,
-                                                original_source: None,
                                                 outputs: Vec::new(),
                                                 detected_symbols: symbols, error: None,
                                                 log_message: Some("Reset complete.".to_string()),
@@ -429,7 +431,6 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                                         steppers.insert(entity, (session_id, model_name.clone(), stepper));
                                         let _ = tx_inner.send(ModelicaResult {
                                             entity, session_id, new_time: 0.0,
-                                            original_source: Some(Arc::from(source)),
                                             outputs: Vec::new(),
                                             detected_symbols: symbols, error: None,
                                             log_message: Some("Parameters applied.".to_string()),
@@ -441,7 +442,6 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                                         let mut r = result_ok(entity, session_id);
                                         r.error = Some(format!("Stepper Init Error: {:?}", e));
                                         r.is_parameter_update = true;
-                                        r.original_source = None;
                                         let _ = tx_inner.send(r);
                                     }
                                 }
@@ -450,7 +450,6 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                                 let mut r = result_ok(entity, session_id);
                                 r.error = Some(format!("Re-compile Error: {:?}", e));
                                 r.is_parameter_update = true;
-                                r.original_source = None;
                                 let _ = tx_inner.send(r);
                             }
                         }
@@ -493,7 +492,6 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                                         steppers.insert(entity, (session_id, model_name.clone(), stepper));
                                         let _ = tx_inner.send(ModelicaResult {
                                             entity, session_id, new_time: 0.0,
-                                            original_source: Some(Arc::from(source)),
                                             outputs: Vec::new(),
                                             detected_symbols: symbols, error: None,
                                             log_message: Some(format!("Model '{}' compiled.", model_name)),
@@ -572,7 +570,6 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                                     Err(e) => {
                                         let mut r = result_ok(entity, session_id);
                                         r.error = Some(format!("Initialization Failed: {:?}", e));
-                                        r.original_source = None;
                                         let _ = tx_inner.send(r);
                                         return;
                                     }
@@ -604,7 +601,6 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                                     }
                                     let _ = tx_inner.send(ModelicaResult {
                                         entity, session_id, new_time: stepper.time(),
-                                        original_source: None,
                                         outputs, error: None, log_message: None,
                                         is_new_model: false, detected_symbols: Vec::new(),
                                         is_parameter_update: false, is_reset: false,
@@ -631,7 +627,6 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                 let _ = tx.send(ModelicaResult {
                     entity: Entity::PLACEHOLDER,
                     session_id: 0, new_time: 0.0,
-                    original_source: None,
                     outputs: Vec::new(), detected_symbols: Vec::new(),
                     error: Some("Internal Worker Panic!".to_string()), log_message: None,
                     is_new_model: false, is_parameter_update: false, is_reset: false,
@@ -768,7 +763,6 @@ fn inline_worker_process(
                     if let Some(e) = step_err {
                         let _ = tx.send(ModelicaResult {
                             entity, session_id, new_time: stepper.time(),
-                            original_source: None,
                             outputs: Vec::new(),
                             detected_symbols: Vec::new(), error: Some(format!("Solver Error: {:?}", e)),
                             log_message: None, is_new_model: false, is_parameter_update: false,
@@ -785,7 +779,6 @@ fn inline_worker_process(
                         }
                         let _ = tx.send(ModelicaResult {
                             entity, session_id, new_time: stepper.time(),
-                            original_source: None,
                             outputs, error: None,
                             log_message: None, is_new_model: false, detected_symbols: Vec::new(),
                             is_parameter_update: false, is_reset: false, detected_input_names: Vec::new(),
@@ -797,7 +790,6 @@ fn inline_worker_process(
             } else {
                 let _ = tx.send(ModelicaResult {
                     entity, session_id, new_time: 0.0,
-                    original_source: None,
                     outputs: Vec::new(),
                     detected_symbols: Vec::new(), error: Some("Sim engine failed to start.".to_string()),
                     log_message: None, is_new_model: false, is_parameter_update: false,
@@ -832,7 +824,6 @@ fn inline_worker_process(
                             w.steppers.insert(entity, (session_id, model_name.clone(), stepper));
                             let _ = tx.send(ModelicaResult {
                                 entity, session_id, new_time: 0.0,
-                                original_source: Some(Arc::from(source)),
                                 outputs: Vec::new(),
                                 detected_symbols: symbols, error: None,
                                 log_message: Some("Compiled successfully.".to_string()),
@@ -843,7 +834,6 @@ fn inline_worker_process(
                         Err(e) => {
                             let _ = tx.send(ModelicaResult {
                                 entity, session_id, new_time: 0.0,
-                                original_source: None,
                                 outputs: Vec::new(),
                                 detected_symbols: Vec::new(), error: Some(format!("Stepper Init Error: {:?}", e)),
                                 log_message: None, is_new_model: true, is_parameter_update: false, is_reset: false,
@@ -855,7 +845,6 @@ fn inline_worker_process(
                 Err(e) => {
                     let _ = tx.send(ModelicaResult {
                         entity, session_id, new_time: 0.0,
-                        original_source: None,
                         outputs: Vec::new(),
                         detected_symbols: Vec::new(), error: Some(format!("Compile Error: {:?}", e)),
                         log_message: None, is_new_model: true, is_parameter_update: false, is_reset: false,
@@ -885,7 +874,6 @@ fn inline_worker_process(
                             w.steppers.insert(entity, (session_id, cached.model_name.clone(), stepper));
                             let _ = tx.send(ModelicaResult {
                                 entity, session_id, new_time: 0.0,
-                                original_source: None,
                                 outputs: Vec::new(),
                                 detected_symbols: symbols, error: None,
                                 log_message: Some("Reset complete.".to_string()),
@@ -896,7 +884,6 @@ fn inline_worker_process(
                                 } else {
                                 let _ = tx.send(ModelicaResult {
                                 entity, session_id, new_time: 0.0,
-                                original_source: None,
                                 outputs: Vec::new(),
                                 detected_symbols: Vec::new(), error: Some("Stepper init failed".to_string()),
                                 log_message: None, is_new_model: false, is_parameter_update: false, is_reset: true,
@@ -907,7 +894,6 @@ fn inline_worker_process(
                                 Err(e) => {
                                 let _ = tx.send(ModelicaResult {
                                 entity, session_id, new_time: 0.0,
-                                original_source: None,
                                 outputs: Vec::new(),
                                 detected_symbols: Vec::new(), error: Some(format!("Reset compile error: {:?}", e)),
                                 log_message: None, is_new_model: false, is_parameter_update: false, is_reset: true,
@@ -919,7 +905,6 @@ fn inline_worker_process(
                                 w.steppers.remove(&entity);
                                 let _ = tx.send(ModelicaResult {
                                 entity, session_id, new_time: 0.0,
-                                original_source: None,
                                 outputs: Vec::new(),
                                 detected_symbols: Vec::new(), error: None,
                                 log_message: Some("Reset complete (no cached model).".to_string()),
@@ -960,7 +945,6 @@ fn inline_worker_process(
                             w.steppers.insert(entity, (session_id, model_name.clone(), stepper));
                             let _ = tx.send(ModelicaResult {
                                 entity, session_id, new_time: 0.0,
-                                original_source: Some(Arc::from(source)),
                                 outputs: Vec::new(),
                                 detected_symbols: symbols, error: None,
                                 log_message: Some("Parameters applied.".to_string()),
@@ -971,7 +955,6 @@ fn inline_worker_process(
                         Err(e) => {
                             let _ = tx.send(ModelicaResult {
                                 entity, session_id, new_time: 0.0,
-                                original_source: None,
                                 outputs: Vec::new(),
                                 detected_symbols: Vec::new(), error: Some(format!("Stepper Init Error: {:?}", e)),
                                 log_message: None, is_new_model: false, is_parameter_update: true, is_reset: false,
@@ -983,7 +966,6 @@ fn inline_worker_process(
                 Err(e) => {
                     let _ = tx.send(ModelicaResult {
                         entity, session_id, new_time: 0.0,
-                        original_source: None,
                         outputs: Vec::new(),
                         detected_symbols: Vec::new(), error: Some(format!("Re-compile Error: {:?}", e)),
                         log_message: None, is_new_model: false, is_parameter_update: true, is_reset: false,
@@ -1008,8 +990,6 @@ fn inline_worker_process(
 pub struct ModelicaModel {
     pub model_path: PathBuf,
     pub model_name: String,
-    /// The original source code of the model, used for parameter substitution.
-    pub original_source: Arc<str>,
     pub current_time: f64,
     pub last_step_time: f64,
     pub session_id: u64,
@@ -1076,11 +1056,6 @@ fn handle_modelica_responses(
             if result.session_id < model.session_id { continue; }
 
             model.is_stepping = false;
-
-            // Sync original source back to component (needed for parameter updates)
-            if let Some(source) = result.original_source {
-                model.original_source = source;
-            }
 
             // Forward log messages to console via bevy_workbench's console system
             if let Some(msg) = result.log_message {

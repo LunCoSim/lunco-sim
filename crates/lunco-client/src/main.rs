@@ -19,11 +19,9 @@ use avian3d::prelude::PhysicsPlugins;
 
 use lunco_materials::BlueprintMaterial;
 use lunco_ui::LuncoUiPlugin;
+use lunco_workbench::WorkbenchAppExt;
 use lunco_assets::textures_dir;
 use bevy_egui::{EguiPrimaryContextPass, EguiContexts};
-
-mod center_spacer;
-use center_spacer::CenterSpacerPlugin;
 
 /// Collects egui scroll input and feeds it to the camera zoom system.
 /// Runs in EguiPrimaryContextPass so egui context is available.
@@ -50,28 +48,12 @@ fn main() {
         .add_plugins(big_space::prelude::BigSpaceDefaultPlugins.build().disable::<big_space::validation::BigSpaceValidationPlugin>())
         .add_plugins(lunco_core::LunCoCorePlugin)
         .insert_resource(lunco_core::DragModeActive { active: false })
-        .add_plugins(bevy_workbench::WorkbenchPlugin {
-            config: bevy_workbench::WorkbenchConfig {
-                show_menu_bar: false,
-                show_toolbar: false,
-                enable_game_view: false, // GameView disabled — CenterSpacer provides transparent viewport
-                show_console: false,
-                ..default()
-            },
-        })
-        .add_plugins(CenterSpacerPlugin)
+        .add_plugins(lunco_workbench::WorkbenchPlugin)
         .add_systems(EguiPrimaryContextPass, collect_scroll_input);
 
-    // Register UI panels
-    {
-        use bevy_workbench::WorkbenchApp;
-        app.register_panel(lunco_ui::MissionControl);
-
-        // Hide the default workbench inspector — we provide our own UI
-        if let Some(mut tile_state) = app.world_mut().get_resource_mut::<bevy_workbench::dock::TileLayoutState>() {
-            tile_state.set_default_hidden("workbench_inspector");
-        }
-    }
+    // Register UI panels — Mission Control as the right inspector. The
+    // central region stays empty so the 3D world shows through.
+    app.register_panel(lunco_ui::MissionControl);
 
     #[cfg(not(feature = "sandbox"))]
     {

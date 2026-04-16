@@ -2,29 +2,21 @@
 
 use bevy::prelude::*;
 use bevy_egui::egui;
-use bevy_workbench::dock::WorkbenchPanel;
+use lunco_workbench::{Panel, PanelId, PanelSlot};
 use std::collections::HashMap;
 
-use crate::ui::WorkbenchState;
+use crate::ui::{ModelicaDocumentRegistry, WorkbenchState};
 use crate::{ModelicaModel, ModelicaChannels, ModelicaCommand};
 
 /// Telemetry panel — model parameters, inputs, and variable plotting toggles.
 pub struct TelemetryPanel;
 
-impl WorkbenchPanel for TelemetryPanel {
-    fn id(&self) -> &str { "modelica_inspector" }
+impl Panel for TelemetryPanel {
+    fn id(&self) -> PanelId { PanelId("modelica_inspector") }
     fn title(&self) -> String { "📊 Telemetry".into() }
-    fn closable(&self) -> bool { true }
-    fn default_visible(&self) -> bool { true }
-    fn needs_world(&self) -> bool { true }
+    fn default_slot(&self) -> PanelSlot { PanelSlot::RightInspector }
 
-    fn bg_color(&self) -> Option<egui::Color32> {
-        Some(egui::Color32::from_rgb(35, 35, 40))
-    }
-
-    fn ui(&mut self, _ui: &mut egui::Ui) {}
-
-    fn ui_world(&mut self, ui: &mut egui::Ui, world: &mut World) {
+    fn render(&mut self, ui: &mut egui::Ui, world: &mut World) {
         // Fix selection leakage
         ui.style_mut().interaction.selectable_labels = false;
 
@@ -131,8 +123,17 @@ impl WorkbenchPanel for TelemetryPanel {
                             let mut trigger_update = false;
                             let mut model_name = String::new();
                             let mut session_id = 0;
-                            let mut source = String::new();
                             let mut new_params = HashMap::new();
+
+                            // Read canonical source from the Document registry.
+                            // The registry is populated on every Compile and
+                            // every UpdateParameters — if it's empty, the
+                            // entity hasn't been through either yet and there's
+                            // nothing coherent to substitute params into.
+                            let source = world
+                                .resource::<ModelicaDocumentRegistry>()
+                                .host(entity)
+                                .map(|h| h.document().source().to_string());
 
                             if let Ok(mut m) = world.query::<&mut ModelicaModel>().get_mut(world, entity) {
                                 if let Some(p) = m.parameters.get_mut(key) {
@@ -141,21 +142,30 @@ impl WorkbenchPanel for TelemetryPanel {
                                     model_name = m.model_name.clone();
                                     m.session_id += 1;
                                     session_id = m.session_id;
-                                    source = m.original_source.to_string();
                                     new_params = m.parameters.clone();
                                     m.is_stepping = true; // prevent steps while updating
                                 }
                             }
 
                             if trigger_update {
-                                if let Some(channels) = world.get_resource::<ModelicaChannels>() {
+                                if let Some(source) = source {
                                     let new_source = crate::ast_extract::substitute_params_in_source(&source, &new_params);
-                                    let _ = channels.tx.send(ModelicaCommand::UpdateParameters {
-                                        entity,
-                                        session_id,
-                                        model_name,
-                                        source: new_source,
-                                    });
+                                    // Checkpoint the parameter-substituted
+                                    // source into the Document BEFORE sending
+                                    // to the worker — the Document remains the
+                                    // single source of truth even if the
+                                    // worker result never arrives.
+                                    world
+                                        .resource_mut::<ModelicaDocumentRegistry>()
+                                        .checkpoint_source(entity, new_source.clone());
+                                    if let Some(channels) = world.get_resource::<ModelicaChannels>() {
+                                        let _ = channels.tx.send(ModelicaCommand::UpdateParameters {
+                                            entity,
+                                            session_id,
+                                            model_name,
+                                            source: new_source,
+                                        });
+                                    }
                                 }
                             }
                         }

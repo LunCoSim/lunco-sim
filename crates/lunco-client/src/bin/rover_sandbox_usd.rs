@@ -26,8 +26,6 @@ use lunco_modelica::{ModelicaPlugin, ModelicaSet};
 use big_space::prelude::Grid;
 use lunco_materials::{BlueprintMaterialPlugin, SolarPanelMaterialPlugin};
 
-#[path = "../center_spacer.rs"]
-mod center_spacer;
 #[path = "../balloon_setup.rs"]
 mod balloon_setup;
 
@@ -48,15 +46,7 @@ fn main() {
         .add_plugins(WireframePlugin::default())
         .add_plugins(PhysicsPlugins::default().set(avian3d::prelude::PhysicsInterpolationPlugin::interpolate_all()))
         .add_plugins(CoSimPlugin)
-        .add_plugins(bevy_workbench::WorkbenchPlugin {
-            config: bevy_workbench::WorkbenchConfig {
-                show_menu_bar: false,    // No menu bar
-                show_toolbar: false,     // No play/stop toolbar
-                enable_game_view: false, // GameView disabled — CenterSpacer provides viewport
-                show_console: false,     // No console panel
-                ..default()
-            },
-        })
+        .add_plugins(lunco_workbench::WorkbenchPlugin)
         .add_plugins(ModelicaPlugin)
         .add_plugins(lunco_core::LunCoCorePlugin)
         .add_plugins(GravityPlugin)
@@ -65,7 +55,6 @@ fn main() {
         .add_plugins(UsdPlugins)
         .add_plugins(SandboxEditPlugin)
         .add_plugins(lunco_sandbox_edit::ui::SandboxEditUiPlugin)
-        .add_plugins(center_spacer::CenterSpacerPlugin)
         .add_plugins(LunCoControllerPlugin)
         .add_plugins(LunCoAvatarPlugin)
         .add_plugins(BlueprintMaterialPlugin)

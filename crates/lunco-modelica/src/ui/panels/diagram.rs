@@ -26,7 +26,7 @@
 use bevy::prelude::*;
 use bevy::tasks::Task;
 use bevy_egui::egui;
-use bevy_workbench::dock::WorkbenchPanel;
+use lunco_workbench::{Panel, PanelId, PanelSlot};
 use egui_snarl::{InPin, InPinId, OutPin, OutPinId, NodeId, Snarl};
 use egui_snarl::ui::{SnarlViewer, SnarlPin, PinInfo, SnarlStyle, BackgroundPattern};
 use std::collections::HashMap;
@@ -1447,15 +1447,12 @@ fn sync_connections(snarl: &Snarl<DiagramNode>, diagram: &mut VisualDiagram) {
 /// Diagram canvas panel — Dymola-style visual editor for Modelica models.
 pub struct DiagramPanel;
 
-impl WorkbenchPanel for DiagramPanel {
-    fn id(&self) -> &str { "modelica_diagram_preview" }
+impl Panel for DiagramPanel {
+    fn id(&self) -> PanelId { PanelId("modelica_diagram_preview") }
     fn title(&self) -> String { "🔗 Diagram".into() }
-    fn closable(&self) -> bool { true }
-    fn default_visible(&self) -> bool { true }
-    fn needs_world(&self) -> bool { true }
-    fn ui(&mut self, _ui: &mut egui::Ui) {}
+    fn default_slot(&self) -> PanelSlot { PanelSlot::Center }
 
-    fn ui_world(&mut self, ui: &mut egui::Ui, world: &mut World) {
+    fn render(&mut self, ui: &mut egui::Ui, world: &mut World) {
         if world.get_resource::<DiagramState>().is_none() {
             world.insert_resource(DiagramState::default());
         }
@@ -1694,7 +1691,6 @@ fn do_compile(world: &mut World) {
         ModelicaModel {
             model_path: temp_path,
             model_name: model_name.clone(),
-            original_source: source.clone().into(),
             current_time: 0.0,
             last_step_time: 0.0,
             session_id,
@@ -1705,6 +1701,13 @@ fn do_compile(world: &mut World) {
             is_stepping: true,
         },
     )).id();
+
+    // Checkpoint the source into the Document registry before sending
+    // the Compile command — registry is the canonical source.
+    {
+        let mut registry = world.resource_mut::<crate::ui::ModelicaDocumentRegistry>();
+        registry.checkpoint_source(entity, source.clone());
+    }
 
     // Send command
     if let Some(channels) = world.get_resource::<ModelicaChannels>() {
