@@ -47,9 +47,11 @@ use egui_dock::{DockArea, DockState, NodeIndex, Style, TabViewer};
 use std::collections::HashMap;
 
 mod panel;
+mod viewport;
 mod workspace;
 
 pub use panel::{Panel, PanelId, PanelSlot};
+pub use viewport::{ViewportPanel, WorkbenchViewportCamera, VIEWPORT_PANEL_ID};
 pub use workspace::{Workspace, WorkspaceId};
 
 /// Plugin that installs the workbench shell into a Bevy app.
@@ -361,6 +363,23 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
     fn id(&mut self, tab: &mut Self::Tab) -> egui::Id {
         egui::Id::new(("lunco_workbench_tab", tab.as_str()))
     }
+
+    fn clear_background(&self, tab: &Self::Tab) -> bool {
+        // Honour the panel's preference: transparent panels (e.g. the
+        // 3D viewport) skip the dock's background fill so the scene
+        // behind egui shows through.
+        match self.panels.get(tab) {
+            Some(panel) => !panel.transparent_background(),
+            None => true,
+        }
+    }
+
+    fn is_closeable(&self, tab: &Self::Tab) -> bool {
+        match self.panels.get(tab) {
+            Some(panel) => panel.closable(),
+            None => true,
+        }
+    }
 }
 
 fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut World) {
@@ -464,24 +483,32 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
             .show(ctx, &mut viewer);
     } else {
         // 3D-app mode — explicit side panels, transparent centre.
+        // Defaults are percentages of the current window so the layout
+        // looks right whether the user runs in 1280×720 or 4K. Targets
+        // mirror the centre-driven 15/70/15 split: side panels 15% of
+        // window width each; bottom dock 20% of window height.
+        let screen = ctx.content_rect();
+        let side_default = (screen.width() * 0.15).max(140.0);
+        let bottom_default = (screen.height() * 0.20).max(120.0);
+
         if let Some(id) = layout.side_browser {
             egui::SidePanel::left("lunco_workbench_side_panel_left")
                 .resizable(true)
-                .default_width(220.0)
+                .default_width(side_default)
                 .min_width(120.0)
                 .show(ctx, |ui| render_panel_solo(ui, &id, layout, world));
         }
         if let Some(id) = layout.right_inspector {
             egui::SidePanel::right("lunco_workbench_side_panel_right")
                 .resizable(true)
-                .default_width(280.0)
-                .min_width(160.0)
+                .default_width(side_default)
+                .min_width(140.0)
                 .show(ctx, |ui| render_panel_solo(ui, &id, layout, world));
         }
         if let Some(id) = layout.bottom {
             egui::TopBottomPanel::bottom("lunco_workbench_bottom_panel")
                 .resizable(true)
-                .default_height(180.0)
+                .default_height(bottom_default)
                 .min_height(60.0)
                 .show(ctx, |ui| render_panel_solo(ui, &id, layout, world));
         }

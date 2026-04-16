@@ -78,6 +78,46 @@ impl Plugin for SandboxEditPlugin {
         ));
         app.add_systems(Update, gizmo::sync_gizmo_camera);
         app.add_systems(Update, undo::handle_undo_input);
+
+        // Custom picking backend: always report selected `GizmoTarget`s as
+        // hit by the pointer. Counteracts the gizmo's internal
+        // `gizmo_picking_backend` gate (`any_gizmo_hovered`) which would
+        // otherwise leave the gizmo inert when the cursor is over an
+        // egui dock surface. We can't disable that feature on
+        // `transform-gizmo-bevy 0.9` because its `gizmo_picking_backend`
+        // feature gate is incomplete (unconditional `use bevy_picking::...`
+        // imports), so we replicate the always-on behaviour here.
+        app.add_systems(
+            bevy::prelude::PreUpdate,
+            always_pick_gizmo_targets.in_set(bevy_picking::PickingSystems::Backend),
+        );
+    }
+}
+
+/// Picking backend that always reports `GizmoTarget` entities as hit
+/// by the pointer. See the comment in `SandboxEditPlugin::build` for
+/// why this is necessary.
+fn always_pick_gizmo_targets(
+    q_targets: Query<bevy::prelude::Entity, bevy::prelude::With<transform_gizmo_bevy::GizmoTarget>>,
+    pointers: Query<(&bevy_picking::pointer::PointerId, &bevy_picking::pointer::PointerLocation)>,
+    mut output: bevy::prelude::MessageWriter<bevy_picking::backend::PointerHits>,
+) {
+    let targets: Vec<bevy::prelude::Entity> = q_targets.iter().collect();
+    if targets.is_empty() {
+        return;
+    }
+    for (pointer_id, pointer_location) in &pointers {
+        if pointer_location.location.is_none() {
+            continue;
+        }
+        let hits: Vec<(bevy::prelude::Entity, bevy_picking::backend::HitData)> = targets
+            .iter()
+            .map(|e| (*e, bevy_picking::backend::HitData::new(*e, 0.0, None, None)))
+            .collect();
+        // High order so we sit above other picking backends in the
+        // HoverMap; the gizmo just needs to see the target as hit
+        // (it does its own handle hit-testing internally).
+        output.write(bevy_picking::backend::PointerHits::new(*pointer_id, hits, f32::INFINITY));
     }
 }
 

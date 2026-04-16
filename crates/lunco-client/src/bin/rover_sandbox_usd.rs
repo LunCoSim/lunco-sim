@@ -40,10 +40,22 @@ fn main() {
         .insert_resource(lunco_core::TimeWarpState { physics_enabled: true, ..default() })
         .insert_resource(avian3d::prelude::Gravity::ZERO)
         .insert_resource(lunco_celestial::Gravity::flat(9.81, bevy::math::DVec3::NEG_Y))
-        .add_plugins(DefaultPlugins.set(AssetPlugin {
-            file_path: std::env::current_dir().unwrap_or_default().join("assets").to_string_lossy().to_string(),
-            ..default()
-        }).build().disable::<TransformPlugin>())
+        .add_plugins(DefaultPlugins
+            .set(AssetPlugin {
+                file_path: std::env::current_dir().unwrap_or_default().join("assets").to_string_lossy().to_string(),
+                ..default()
+            })
+            .set(WindowPlugin {
+                primary_window: Some(Window {
+                    title: "rover_sandbox_usd".into(),
+                    resolution: bevy::window::WindowResolution::new(1600, 1000),
+                    position: WindowPosition::Centered(MonitorSelection::Primary),
+                    ..default()
+                }),
+                ..default()
+            })
+            .build()
+            .disable::<TransformPlugin>())
         .add_plugins(BigSpaceDefaultPlugins.build().disable::<big_space::validation::BigSpaceValidationPlugin>())
         .add_plugins(WireframePlugin::default())
         .add_plugins(PhysicsPlugins::default().set(avian3d::prelude::PhysicsInterpolationPlugin::interpolate_all()))
@@ -65,9 +77,11 @@ fn main() {
         .init_resource::<SandboxSettings>()
         .add_systems(Startup, setup_sandbox)
         // ModelicaPlugin's AnalyzeWorkspace is registered before SandboxEditUiPlugin's
-        // BuildWorkspace, so without this nudge we'd boot into the Modelica layout.
+        // workspaces, so without this nudge we'd boot into the Modelica layout.
+        // Activate the 3D-only View workspace by default — full-screen scene,
+        // no panels. User can switch to Build via the workspace tabs.
         .add_systems(Startup, |mut layout: ResMut<lunco_workbench::WorkbenchLayout>| {
-            layout.activate_workspace(lunco_workbench::WorkspaceId("rover_build"));
+            layout.activate_workspace(lunco_workbench::WorkspaceId("rover_view"));
         })
         .add_systems(Update, apply_sandbox_settings)
         // One-shot setup systems stay in Update (fire only on Added<BalloonModelMarker>)

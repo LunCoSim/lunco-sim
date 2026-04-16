@@ -68,6 +68,16 @@ pub trait Panel: Send + Sync + 'static {
         true
     }
 
+    /// Whether the dock should leave the panel's tab body transparent
+    /// instead of filling it with the theme background colour.
+    ///
+    /// Default `false` (opaque) — what every normal panel wants. The
+    /// viewport panel returns `true` so Bevy's 3D scene, which renders
+    /// behind egui, shows through the rect.
+    fn transparent_background(&self) -> bool {
+        false
+    }
+
     /// Render the panel contents. Panels own their reads and writes to
     /// the world; the workbench shell only provides the `&mut egui::Ui`.
     fn render(&mut self, ui: &mut egui::Ui, world: &mut World);
