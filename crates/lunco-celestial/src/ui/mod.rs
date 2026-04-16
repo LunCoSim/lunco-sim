@@ -2,7 +2,7 @@
 
 use bevy::prelude::*;
 use bevy_egui::egui;
-use bevy_workbench::dock::WorkbenchPanel;
+use lunco_workbench::{Panel, PanelId, PanelSlot, WorkbenchAppExt};
 
 use lunco_core::{Avatar, CelestialBody, CelestialClock};
 use crate::commands::TeleportToSurface;
@@ -11,18 +11,12 @@ use chrono::TimeZone;
 /// Celestial time control panel.
 pub struct CelestialTimePanel;
 
-impl WorkbenchPanel for CelestialTimePanel {
-    fn id(&self) -> &str { "celestial_time" }
+impl Panel for CelestialTimePanel {
+    fn id(&self) -> PanelId { PanelId("celestial_time") }
     fn title(&self) -> String { "Time Control".into() }
-    fn closable(&self) -> bool { true }
-    fn default_visible(&self) -> bool { true }
-    fn needs_world(&self) -> bool { true }
+    fn default_slot(&self) -> PanelSlot { PanelSlot::Bottom }
 
-    fn ui(&mut self, ui: &mut egui::Ui) {
-        ui.label("Time Control requires world access.");
-    }
-
-    fn ui_world(&mut self, ui: &mut egui::Ui, world: &mut World) {
+    fn render(&mut self, ui: &mut egui::Ui, world: &mut World) {
         ui.style_mut().visuals.widgets.inactive.weak_bg_fill = egui::Color32::from_rgba_unmultiplied(30, 30, 35, 230);
         ui.style_mut().visuals.widgets.inactive.bg_fill = egui::Color32::from_rgba_unmultiplied(30, 30, 35, 230);
 
@@ -52,18 +46,12 @@ impl WorkbenchPanel for CelestialTimePanel {
 /// Celestial bodies browser panel.
 pub struct CelestialBodiesPanel;
 
-impl WorkbenchPanel for CelestialBodiesPanel {
-    fn id(&self) -> &str { "celestial_bodies" }
+impl Panel for CelestialBodiesPanel {
+    fn id(&self) -> PanelId { PanelId("celestial_bodies") }
     fn title(&self) -> String { "Celestial Bodies".into() }
-    fn closable(&self) -> bool { true }
-    fn default_visible(&self) -> bool { true }
-    fn needs_world(&self) -> bool { true }
+    fn default_slot(&self) -> PanelSlot { PanelSlot::SideBrowser }
 
-    fn ui(&mut self, ui: &mut egui::Ui) {
-        ui.label("Celestial Bodies requires world access.");
-    }
-
-    fn ui_world(&mut self, ui: &mut egui::Ui, world: &mut World) {
+    fn render(&mut self, ui: &mut egui::Ui, world: &mut World) {
         ui.style_mut().visuals.widgets.inactive.weak_bg_fill = egui::Color32::from_rgba_unmultiplied(30, 30, 35, 230);
         ui.style_mut().visuals.widgets.inactive.bg_fill = egui::Color32::from_rgba_unmultiplied(30, 30, 35, 230);
 
@@ -107,7 +95,6 @@ pub struct CelestialUiPlugin;
 
 impl Plugin for CelestialUiPlugin {
     fn build(&self, app: &mut App) {
-        use bevy_workbench::WorkbenchApp;
         app.register_panel(CelestialTimePanel);
         app.register_panel(CelestialBodiesPanel);
     }

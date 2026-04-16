@@ -19,7 +19,6 @@ path = "src/bin/msl_indexer.rs"
 [dependencies]
 bevy.workspace = true
 bevy_egui.workspace = true
-bevy_workbench = { workspace = true }
 lunco-assets = { workspace = true }
 lunco-core = { path = "../lunco-core" }
 lunco-doc = { path = "../lunco-doc" }

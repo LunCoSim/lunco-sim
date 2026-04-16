@@ -3,7 +3,7 @@
 use bevy::prelude::*;
 use bevy::math::DVec3;
 use bevy_egui::egui;
-use bevy_workbench::dock::WorkbenchPanel;
+use lunco_workbench::{Panel, PanelId, PanelSlot, WorkbenchAppExt};
 
 use lunco_core::Avatar;
 use lunco_celestial::{CelestialBody, LocalGravityField, LeaveSurface};
@@ -14,18 +14,12 @@ use crate::{SpringArmCamera, OrbitCamera, FreeFlightCamera, FrameBlend};
 /// Avatar status panel — camera mode and surface coordinates.
 pub struct AvatarStatusPanel;
 
-impl WorkbenchPanel for AvatarStatusPanel {
-    fn id(&self) -> &str { "avatar_status" }
+impl Panel for AvatarStatusPanel {
+    fn id(&self) -> PanelId { PanelId("avatar_status") }
     fn title(&self) -> String { "Telemetry".into() }
-    fn closable(&self) -> bool { true }
-    fn default_visible(&self) -> bool { true }
-    fn needs_world(&self) -> bool { true }
+    fn default_slot(&self) -> PanelSlot { PanelSlot::RightInspector }
 
-    fn ui(&mut self, ui: &mut egui::Ui) {
-        ui.label("Telemetry requires world access.");
-    }
-
-    fn ui_world(&mut self, ui: &mut egui::Ui, world: &mut World) {
+    fn render(&mut self, ui: &mut egui::Ui, world: &mut World) {
         ui.style_mut().visuals.widgets.inactive.weak_bg_fill = egui::Color32::from_rgba_unmultiplied(30, 30, 35, 230);
         ui.style_mut().visuals.widgets.inactive.bg_fill = egui::Color32::from_rgba_unmultiplied(30, 30, 35, 230);
 
@@ -149,7 +143,7 @@ fn get_camera_mode_info(world: &mut World) -> (egui::Color32, String, String) {
 pub struct AvatarUiPlugin;
 
 impl Plugin for AvatarUiPlugin {
-    fn build(&self, _app: &mut App) {
-        // Panels register themselves via WorkbenchPanel trait implementation.
+    fn build(&self, app: &mut App) {
+        app.register_panel(AvatarStatusPanel);
     }
 }

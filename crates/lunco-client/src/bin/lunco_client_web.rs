@@ -56,15 +56,7 @@ pub fn run() {
         .add_plugins(lunco_mobility::LunCoMobilityPlugin)
         .add_plugins(lunco_controller::LunCoControllerPlugin)
         .add_plugins(lunco_avatar::LunCoAvatarPlugin)
-        .add_plugins(bevy_workbench::WorkbenchPlugin {
-            config: bevy_workbench::WorkbenchConfig {
-                show_menu_bar: false,
-                show_toolbar: false,
-                enable_game_view: true,
-                show_console: false,
-                ..default()
-            },
-        });
+        .add_plugins(lunco_workbench::WorkbenchPlugin);
 
     // THE UNIVERSAL SYNC BRIDGE
     // Required since TransformPlugin is disabled for BigSpace support.
