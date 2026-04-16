@@ -54,13 +54,15 @@ pub use panel::{Panel, PanelId, PanelSlot};
 pub use viewport::{ViewportPanel, WorkbenchViewportCamera, VIEWPORT_PANEL_ID};
 pub use workspace::{Workspace, WorkspaceId};
 
-/// Shared backdrop colour for translucent panels, so panel bodies and
-/// their tab headers can match. Use this for `Frame::fill` inside any
-/// `Panel::render` that returns `transparent_background = true`; the
-/// workbench's tab-style override paints active tab headers with the
-/// same colour for a continuous look.
+/// Shared backdrop colour for panel bodies, tab headers, and the tab
+/// bar — fully opaque so "all opaque" apps (e.g. `modelica_workbench`)
+/// get a solid continuous tile. Translucent-panel apps (e.g. the
+/// rover sandbox) still get see-through behaviour: they set
+/// `Panel::transparent_background = true`, which causes `egui_dock`
+/// to skip the body fill AND the workbench renderer keeps the tab
+/// bar transparent, so 3D shows through.
 pub const PANEL_BACKDROP: bevy_egui::egui::Color32 =
-    bevy_egui::egui::Color32::from_rgba_premultiplied(24, 24, 28, 245);
+    bevy_egui::egui::Color32::from_rgb(24, 24, 28);
 
 /// Plugin that installs the workbench shell into a Bevy app.
 ///
@@ -432,19 +434,10 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
             }
             return Some(style);
         }
-        // For every other tab: paint the active/focused tab header with
-        // the same colour the panel uses for its `Frame` backdrop, so
-        // the tab and the panel body below it visually merge into a
-        // single shape. Inactive (other tabs in the same bar) gets a
-        // slightly darker shade so the user can tell them apart.
-        let active_color = PANEL_BACKDROP;
-        let inactive_color = egui::Color32::from_rgba_premultiplied(14, 14, 18, 220);
-        let mut style = global_style.clone();
-        style.active.bg_fill = active_color;
-        style.focused.bg_fill = active_color;
-        style.hovered.bg_fill = active_color;
-        style.inactive.bg_fill = inactive_color;
-        Some(style)
+        // All other tabs: use egui_dock's theme-derived defaults.
+        // Earlier attempts to hand-pick colours drifted away from
+        // egui's own visuals and looked out-of-place.
+        None
     }
 }
 
@@ -590,6 +583,24 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
     let has_dock_tabs = layout.dock.iter_all_tabs().next().is_some();
 
     if has_dock_tabs {
+        // Compute this BEFORE we split-borrow `panels` mutably below.
+        let any_transparent = layout
+            .panels
+            .values()
+            .any(|p| p.transparent_background());
+
+        // In opaque-panels mode (no 3D viewport), paint a solid backdrop
+        // on the lowest egui layer so that any gap in the dock — the
+        // separator handles, the hairline around leaves, the margin
+        // around the central frame — renders as PANEL_BACKDROP rather
+        // than bleeding the window's clear colour through. This is
+        // what makes the tab bar actually look contained rather than
+        // floating on a transparent strip.
+        if !any_transparent {
+            let painter = ctx.layer_painter(egui::LayerId::background());
+            painter.rect_filled(ctx.screen_rect(), 0.0, PANEL_BACKDROP);
+        }
+
         let WorkbenchLayout { panels, dock, .. } = &mut *layout;
         let mut viewer = PanelTabViewer { panels, world };
         let mut style = Style::from_egui(ctx.style().as_ref());
@@ -604,11 +615,21 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
         // Drop the per-tab body border (the rectangle around every
         // panel content area). This is the "border when unfolded".
         style.tab.tab_body.stroke = egui::Stroke::NONE;
-        // Transparent tab-bar background so the bar over the viewport
-        // doesn't show as a coloured strip. Individual tabs that live
-        // in real panels (Inspector / Entities / Spawn) still draw
-        // their own bg_fill via TabInteractionStyle and remain visible.
-        style.tab_bar.bg_fill = egui::Color32::TRANSPARENT;
+        // Opaque body fill matching the tab-header colour, so that
+        // panels with `transparent_background = false` (e.g. the
+        // Modelica workbench's panels) render on a solid tile rather
+        // than inheriting a theme-dependent colour that can look
+        // washed out over an empty central region. Panels that opt
+        // into `transparent_background = true` (e.g. the rover's
+        // side panels) cause `clear_background` to return false and
+        // this fill is skipped for them — 3D still shows through.
+        style.tab.tab_body.bg_fill = PANEL_BACKDROP;
+        // Always opaque, in every app. Transparency on the bar made
+        // the Modelica workbench look broken, and the rover sandbox's
+        // centre is a transparent `ViewportPanel` anyway — a dark
+        // strip above its invisible header just looks like the top
+        // edge of the viewport tile, which is fine.
+        style.tab_bar.bg_fill = PANEL_BACKDROP;
         // Drop the hairline under the active tab name too — same
         // visual-noise reason as the tab body stroke.
         style.tab_bar.hline_color = egui::Color32::TRANSPARENT;

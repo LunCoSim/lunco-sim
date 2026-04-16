@@ -5959,6 +5959,7 @@ dependencies = [
  "lunco-controller",
  "lunco-core",
  "lunco-mobility",
+ "lunco-modelica",
  "lunco-ui",
  "lunco-usd",
  "lunco-usd-bevy",

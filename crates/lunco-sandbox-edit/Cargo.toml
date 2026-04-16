@@ -17,6 +17,7 @@ lunco-controller = { path = "../lunco-controller" }
 lunco-mobility = { path = "../lunco-mobility" }
 lunco-ui = { path = "../lunco-ui" }
 lunco-workbench = { path = "../lunco-workbench" }
+lunco-modelica = { path = "../lunco-modelica" }
 lunco-usd = { path = "../lunco-usd" }
 lunco-usd-bevy = { path = "../lunco-usd-bevy" }
 smallvec.workspace = true
