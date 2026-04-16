@@ -88,6 +88,8 @@ pub struct WorkbenchLayout {
     pub(crate) active_workspace: Option<WorkspaceId>,
     pub(crate) activity_bar: bool,
     pub(crate) side_browser: Option<PanelId>,
+    pub(crate) center: Vec<PanelId>,
+    pub(crate) active_center_tab: usize,
     pub(crate) right_inspector: Option<PanelId>,
     pub(crate) bottom: Option<PanelId>,
     pub(crate) bottom_visible: bool,
@@ -103,6 +105,11 @@ impl WorkbenchLayout {
             PanelSlot::SideBrowser => {
                 if self.side_browser.is_none() {
                     self.side_browser = Some(id);
+                }
+            }
+            PanelSlot::Center => {
+                if !self.center.contains(&id) {
+                    self.center.push(id);
                 }
             }
             PanelSlot::RightInspector => {
@@ -295,6 +302,32 @@ mod tests {
         // Still on A; the side_browser from A's apply is still set.
         assert_eq!(layout.active_workspace(), Some(WorkspaceId("a")));
         assert_eq!(layout.side_browser, Some(PanelId("panel_a")));
+    }
+
+    #[test]
+    fn center_tabs_stack_in_order() {
+        let mut layout = WorkbenchLayout::default();
+        layout.add_to_center(PanelId("a"));
+        layout.add_to_center(PanelId("b"));
+        layout.add_to_center(PanelId("a")); // duplicate — no-op
+        assert_eq!(layout.center, vec![PanelId("a"), PanelId("b")]);
+    }
+
+    #[test]
+    fn set_active_center_panel_selects_by_id() {
+        let mut layout = WorkbenchLayout::default();
+        layout.set_center(vec![PanelId("code"), PanelId("diagram")]);
+        layout.set_active_center_panel(PanelId("diagram"));
+        assert_eq!(layout.active_center_tab, 1);
+    }
+
+    #[test]
+    fn set_center_clamps_active_tab() {
+        let mut layout = WorkbenchLayout::default();
+        layout.set_center(vec![PanelId("a"), PanelId("b"), PanelId("c")]);
+        layout.set_active_center_tab(2);
+        layout.set_center(vec![PanelId("x")]); // shrink
+        assert_eq!(layout.active_center_tab, 0);
     }
 
     #[test]

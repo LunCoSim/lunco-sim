@@ -2,7 +2,7 @@
 
 use bevy::prelude::*;
 use bevy_egui::egui;
-use bevy_workbench::dock::WorkbenchPanel;
+use lunco_workbench::{Panel, PanelId, PanelSlot};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -47,20 +47,13 @@ impl Default for EditorBufferState {
 /// Code Editor panel — central viewport for Modelica source code.
 pub struct CodeEditorPanel;
 
-impl WorkbenchPanel for CodeEditorPanel {
-    fn id(&self) -> &str { "modelica_code_preview" }
+impl Panel for CodeEditorPanel {
+    fn id(&self) -> PanelId { PanelId("modelica_code_preview") }
     fn title(&self) -> String { "📝 Code Editor".into() }
+    fn default_slot(&self) -> PanelSlot { PanelSlot::Center }
     fn closable(&self) -> bool { false }
-    fn default_visible(&self) -> bool { true }
-    fn needs_world(&self) -> bool { true }
 
-    fn bg_color(&self) -> Option<egui::Color32> {
-        Some(egui::Color32::from_rgb(40, 40, 45))
-    }
-
-    fn ui(&mut self, _ui: &mut egui::Ui) {}
-
-    fn ui_world(&mut self, ui: &mut egui::Ui, world: &mut World) {
+    fn render(&mut self, ui: &mut egui::Ui, world: &mut World) {
         // ── Ensure persistent buffer exists ──
         if world.get_resource::<EditorBufferState>().is_none() {
             world.insert_resource(EditorBufferState::default());

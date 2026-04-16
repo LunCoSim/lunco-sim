@@ -2,7 +2,7 @@
 
 use bevy::prelude::*;
 use bevy_egui::egui;
-use bevy_workbench::dock::WorkbenchPanel;
+use lunco_workbench::{Panel, PanelId, PanelSlot};
 use std::collections::HashMap;
 
 use crate::ui::{ModelicaDocumentRegistry, WorkbenchState};
@@ -11,20 +11,12 @@ use crate::{ModelicaModel, ModelicaChannels, ModelicaCommand};
 /// Telemetry panel — model parameters, inputs, and variable plotting toggles.
 pub struct TelemetryPanel;
 
-impl WorkbenchPanel for TelemetryPanel {
-    fn id(&self) -> &str { "modelica_inspector" }
+impl Panel for TelemetryPanel {
+    fn id(&self) -> PanelId { PanelId("modelica_inspector") }
     fn title(&self) -> String { "📊 Telemetry".into() }
-    fn closable(&self) -> bool { true }
-    fn default_visible(&self) -> bool { true }
-    fn needs_world(&self) -> bool { true }
+    fn default_slot(&self) -> PanelSlot { PanelSlot::RightInspector }
 
-    fn bg_color(&self) -> Option<egui::Color32> {
-        Some(egui::Color32::from_rgb(35, 35, 40))
-    }
-
-    fn ui(&mut self, _ui: &mut egui::Ui) {}
-
-    fn ui_world(&mut self, ui: &mut egui::Ui, world: &mut World) {
+    fn render(&mut self, ui: &mut egui::Ui, world: &mut World) {
         // Fix selection leakage
         ui.style_mut().interaction.selectable_labels = false;
 

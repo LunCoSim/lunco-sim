@@ -2,7 +2,7 @@
 
 use bevy::prelude::*;
 use bevy_egui::egui;
-use bevy_workbench::dock::WorkbenchPanel;
+use lunco_workbench::{Panel, PanelId, PanelSlot};
 use egui_plot::{Line, Plot, PlotPoints};
 
 use crate::ui::WorkbenchState;
@@ -10,20 +10,12 @@ use crate::ui::WorkbenchState;
 /// Graphs panel — time-series plots of Modelica variables.
 pub struct GraphsPanel;
 
-impl WorkbenchPanel for GraphsPanel {
-    fn id(&self) -> &str { "modelica_console" }
+impl Panel for GraphsPanel {
+    fn id(&self) -> PanelId { PanelId("modelica_console") }
     fn title(&self) -> String { "📈 Graphs".into() }
-    fn closable(&self) -> bool { true }
-    fn default_visible(&self) -> bool { true }
-    fn needs_world(&self) -> bool { true }
+    fn default_slot(&self) -> PanelSlot { PanelSlot::Bottom }
 
-    fn bg_color(&self) -> Option<egui::Color32> {
-        Some(egui::Color32::from_rgb(35, 35, 40))
-    }
-
-    fn ui(&mut self, _ui: &mut egui::Ui) {}
-
-    fn ui_world(&mut self, ui: &mut egui::Ui, world: &mut World) {
+    fn render(&mut self, ui: &mut egui::Ui, world: &mut World) {
         // Auto-select first ModelicaModel entity if none selected (matches old behavior)
         {
             let needs_select = world.get_resource::<WorkbenchState>()

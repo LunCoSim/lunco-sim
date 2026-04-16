@@ -58,7 +58,7 @@
 //! - **Graphs** (bottom dock) — time-series plots of simulation variables
 
 use bevy::prelude::*;
-use bevy_workbench::WorkbenchApp;
+use lunco_workbench::{Workspace, WorkspaceId, WorkbenchAppExt, WorkbenchLayout, PanelId};
 
 pub mod state;
 pub use state::*;
@@ -75,6 +75,28 @@ fn cleanup_removed_documents(
     let Some(mut registry) = registry else { return };
     for entity in removed.read() {
         registry.remove(entity);
+    }
+}
+
+/// The Modelica workbench's default workspace preset.
+///
+/// Mirrors the "Analyze — Modelica deep dive" slot map from the workbench
+/// design doc ([`docs/architecture/11-workbench.md`] § 4).
+pub struct AnalyzeWorkspace;
+
+impl Workspace for AnalyzeWorkspace {
+    fn id(&self) -> WorkspaceId { WorkspaceId("modelica_analyze") }
+    fn title(&self) -> String { "📊 Analyze".into() }
+    fn apply(&self, layout: &mut WorkbenchLayout) {
+        layout.set_activity_bar(false);
+        layout.set_side_browser(Some(PanelId("modelica_package_browser")));
+        layout.set_center(vec![
+            PanelId("modelica_code_preview"),
+            PanelId("modelica_diagram_preview"),
+        ]);
+        layout.set_active_center_tab(0);
+        layout.set_right_inspector(Some(PanelId("modelica_inspector")));
+        layout.set_bottom(Some(PanelId("modelica_console")));
     }
 }
 
@@ -99,6 +121,7 @@ impl Plugin for ModelicaUiPlugin {
             .register_panel(panels::code_editor::CodeEditorPanel)
             .register_panel(panels::telemetry::TelemetryPanel)
             .register_panel(panels::graphs::GraphsPanel)
-            .register_panel(panels::diagram::DiagramPanel);
+            .register_panel(panels::diagram::DiagramPanel)
+            .register_workspace(AnalyzeWorkspace);
     }
 }

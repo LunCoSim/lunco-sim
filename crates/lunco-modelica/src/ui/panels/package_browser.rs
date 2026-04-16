@@ -6,7 +6,7 @@
 
 use bevy::prelude::*;
 use bevy_egui::egui;
-use bevy_workbench::dock::WorkbenchPanel;
+use lunco_workbench::{Panel, PanelId, PanelSlot};
 
 use crate::models::BUNDLED_MODELS;
 use crate::ui::state::{ModelLibrary, OpenModel, WorkbenchState};
@@ -253,20 +253,12 @@ pub fn handle_package_loading_tasks(
 
 pub struct PackageBrowserPanel;
 
-impl WorkbenchPanel for PackageBrowserPanel {
-    fn id(&self) -> &str { "modelica_package_browser" }
+impl Panel for PackageBrowserPanel {
+    fn id(&self) -> PanelId { PanelId("modelica_package_browser") }
     fn title(&self) -> String { "📚 Package Browser".into() }
-    fn closable(&self) -> bool { true }
-    fn default_visible(&self) -> bool { true }
-    fn needs_world(&self) -> bool { true }
+    fn default_slot(&self) -> PanelSlot { PanelSlot::SideBrowser }
 
-    fn bg_color(&self) -> Option<egui::Color32> {
-        Some(egui::Color32::from_rgb(35, 35, 40))
-    }
-
-    fn ui(&mut self, _ui: &mut egui::Ui) {}
-
-    fn ui_world(&mut self, ui: &mut egui::Ui, world: &mut World) {
+    fn render(&mut self, ui: &mut egui::Ui, world: &mut World) {
         // Expand Bundled by default (first run)
         ui.memory_mut(|m| {
             if m.data.get_temp::<bool>(egui::Id::new("tree_expand_bundled_root")).is_none() {

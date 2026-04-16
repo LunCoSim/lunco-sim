@@ -23,6 +23,7 @@ bevy_workbench = { workspace = true }
 lunco-assets = { workspace = true }
 lunco-core = { path = "../lunco-core" }
 lunco-doc = { path = "../lunco-doc" }
+lunco-workbench = { path = "../lunco-workbench" }
 egui-snarl = "0.9"
 egui_plot = "0.34.1"
 # Uses LunCoSim/rumoca fork (web-fix branch) which adds `instant` crate for

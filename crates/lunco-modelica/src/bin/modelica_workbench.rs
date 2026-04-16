@@ -19,14 +19,7 @@ fn main() {
             ..default()
         }))
         .add_plugins(EguiPlugin::default())
-        .add_plugins(bevy_workbench::WorkbenchPlugin {
-            config: bevy_workbench::WorkbenchConfig {
-                show_menu_bar: false,
-                show_toolbar: false,
-                enable_game_view: false,
-                ..default()
-            },
-        })
+        .add_plugins(lunco_workbench::WorkbenchPlugin)
         .add_plugins(ModelicaPlugin)
         .add_systems(Startup, setup_sandbox);
 

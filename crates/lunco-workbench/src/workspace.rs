@@ -50,6 +50,39 @@ impl WorkbenchLayout {
         self.side_browser = id;
     }
 
+    /// Replace the Center-slot tab set with the given panels (in tab
+    /// order). Active tab is clamped to the new length. Pass an empty
+    /// list to leave the central region free for a 3D viewport.
+    pub fn set_center(&mut self, ids: Vec<PanelId>) {
+        if self.active_center_tab >= ids.len() {
+            self.active_center_tab = ids.len().saturating_sub(1);
+        }
+        self.center = ids;
+    }
+
+    /// Append a panel to the Center tab strip if not already present.
+    pub fn add_to_center(&mut self, id: PanelId) {
+        if !self.center.contains(&id) {
+            self.center.push(id);
+        }
+    }
+
+    /// Select which Center tab is visible (by index). Out-of-range is a
+    /// no-op.
+    pub fn set_active_center_tab(&mut self, index: usize) {
+        if index < self.center.len() {
+            self.active_center_tab = index;
+        }
+    }
+
+    /// Select which Center tab is visible by panel id. No-op if not
+    /// registered as a Center tab.
+    pub fn set_active_center_panel(&mut self, id: PanelId) {
+        if let Some(pos) = self.center.iter().position(|p| *p == id) {
+            self.active_center_tab = pos;
+        }
+    }
+
     /// Dock a specific panel in the right inspector. `None` hides it.
     pub fn set_right_inspector(&mut self, id: Option<PanelId>) {
         self.right_inspector = id;

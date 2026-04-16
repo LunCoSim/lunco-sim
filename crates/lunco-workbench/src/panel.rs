@@ -27,6 +27,14 @@ pub enum PanelSlot {
     /// Left side browser, slides out from the activity bar.
     /// Typical: Scene Tree, Library Browser, Mission Outline.
     SideBrowser,
+    /// Central tabbed region — where the primary content lives in apps
+    /// without a 3D viewport (e.g. `modelica_workbench` shows Code /
+    /// Diagram / Documentation as central tabs). 3D apps leave this
+    /// empty so their world renders through.
+    ///
+    /// Multiple panels can share Center; they appear as tabs at the top
+    /// of the central region. Exactly one is visible at a time.
+    Center,
     /// Right-side context-aware inspector.
     /// Typical: Properties, Modelica Inspector, Attribute Editor.
     RightInspector,

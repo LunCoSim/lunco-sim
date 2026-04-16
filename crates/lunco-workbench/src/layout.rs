@@ -146,30 +146,38 @@ pub(crate) fn render(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &
         }
     }
 
-    // ── Central viewport slot ───────────────────────────────────────────
-    // Never dockable, never subdivided — the 3D world owns this region
-    // (or, in headless contexts, whoever is currently rendering the
-    // main canvas). v0.1 shows a placeholder so the layout reads right
-    // in the example; the host app replaces this by drawing into the
-    // primary egui context's CentralPanel themselves.
-    egui::CentralPanel::default().show(ctx, |ui| {
-        ui.vertical_centered(|ui| {
-            ui.add_space(ui.available_height() * 0.4);
-            ui.label(
-                egui::RichText::new("VIEWPORT")
-                    .weak()
-                    .size(20.0),
-            );
-            ui.label(
-                egui::RichText::new(
-                    "(host app draws here — 3D world, in rover_sandbox_usd; \n\
-                     reserved central tab in modelica_workbench)",
-                )
-                .weak()
-                .small(),
-            );
+    // ── Central region ──────────────────────────────────────────────────
+    // Two modes:
+    //   1. If Center tabs are registered, render CentralPanel with a tab
+    //      strip + the active tab's body. This is the modelica-workbench
+    //      case (Code / Diagram as central tabs).
+    //   2. If Center is empty, skip CentralPanel entirely. The 3D scene
+    //      (if any) shows through. This is the rover_sandbox_usd case.
+    if !layout.center.is_empty() {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            // Tab strip — one button per Center panel, highlighted for active.
+            let tabs: Vec<(PanelId, String)> = layout
+                .center
+                .iter()
+                .filter_map(|id| layout.panels.get(id).map(|p| (*id, p.title())))
+                .collect();
+            let active_idx = layout.active_center_tab.min(tabs.len().saturating_sub(1));
+            ui.horizontal(|ui| {
+                for (i, (_id, title)) in tabs.iter().enumerate() {
+                    let button = egui::Button::new(title.as_str()).selected(i == active_idx);
+                    if ui.add(button).clicked() {
+                        layout.active_center_tab = i;
+                    }
+                }
+            });
+            ui.separator();
+            // Active tab body.
+            if let Some((id, _)) = tabs.get(active_idx) {
+                render_panel_body(ui, *id, layout, world);
+            }
         });
-    });
+    }
+    // else: no CentralPanel, 3D viewport shows through.
 }
 
 fn render_panel_header(ui: &mut egui::Ui, id: &PanelId, layout: &mut WorkbenchLayout) {

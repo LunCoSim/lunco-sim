@@ -5948,6 +5948,7 @@ dependencies = [
  "lunco-assets",
  "lunco-core",
  "lunco-doc",
+ "lunco-workbench",
  "regex",
  "rumoca-phase-parse",
  "rumoca-session",
