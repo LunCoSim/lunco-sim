@@ -1,0 +1,12 @@
+[package]
+name = "lunco-doc"
+version = "0.1.0"
+edition = "2021"
+description = "Document System foundation for LunCoSim — Document, DocumentOp, DocumentHost with undo/redo. UI-free, headless-capable."
+
+[dependencies]
+# Deliberately zero runtime dependencies. lunco-doc is pure data model.
+# No bevy, no egui, no serde (yet). Domain crates layer those on as needed.
+
+[dev-dependencies]
+# Only for tests. The toy TextDocument needs no external crates.

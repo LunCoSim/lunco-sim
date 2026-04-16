@@ -114,9 +114,76 @@ A view:
 
 This is classic MVC/MVP, formalized for ECS.
 
+## 2a. Documents, file references, and endpoints
+
+Not every thing the user references from a Twin is a Document. We
+distinguish three kinds of persisted/addressable artifacts. Only the
+first is in scope for `lunco-doc` today; the others are named so we
+know what we are *not* building yet and why.
+
+| Kind | Editable inside LunCoSim? | Addressing | Examples | Crate |
+|---|---|---|---|---|
+| **Document** | Yes — via typed ops on structured content | `DocumentId` (+ path in Twin) | `.mo`, `.usda`, `.sysml`, `mission.ron` | `lunco-doc` |
+| **File reference** | No — opaque blob, edited externally | Path in Twin | `.png`, `.glb`, `.wav`, `.stl`, `.pdf` | (Twin manifest only) |
+| **Endpoint** | N/A — live, remote | URL | FMI slave, telemetry stream, Nucleus connection | future |
+
+**Unix convention — Document ⊆ file.** Every Document is a file inside
+a Twin folder. We do not invent a bespoke container format. A `.mo`
+file on disk *is* the serialized form of a `ModelicaDocument`; a
+`.usda` file *is* the serialized form of a `UsdDocument`. This keeps
+domain files editable in their native tools (Dymola, usdview) and
+makes LunCoSim a *participant* in each ecosystem rather than a walled
+garden.
+
+**File references are tracked, not edited.** A PNG used as a texture
+is listed in the Twin and versioned by the user's VCS of choice, but
+LunCoSim does not expose ops for editing pixels. If you want to edit
+the PNG, open it in an external editor and save — the Twin notices
+the file changed. Same for meshes, audio, PDFs. Mutating them inside
+the simulator is not a goal of the Document System.
+
+**Endpoints are out of scope today.** FMI slaves, live telemetry
+streams, and Omniverse Nucleus connections are addressable resources
+the simulator talks to, but they aren't local structured artifacts
+with ops. When we build the co-sim bridge and Nucleus integration we
+will likely introduce a `Resource` or `Endpoint` trait sitting next
+to `Document`. We don't introduce it now because:
+
+- We have exactly one concrete kind today — Documents.
+- We don't know the shape yet (sync? subscribe? RPC?) — designing
+  an abstraction over one example invents constraints we'll regret.
+- Nothing in `Document` / `DocumentOp` forecloses it.
+
+### Forward compatibility with live-sync (Nucleus, Yjs, CRDT)
+
+LunCoSim will eventually support multi-user live editing similar to
+Omniverse Nucleus (USD layers) and Yjs/Automerge (documents). That
+implies, in the long run, ops that may need to commute, merge, or
+apply out of order, and possibly *binary* edits with delta/xdelta
+encoding.
+
+The current `DocumentOp` trait is deliberately minimal so it can
+evolve to support those without breaking callers:
+
+- `apply` today assumes a single authoritative order. A future
+  `apply_remote` or a CRDT-capable `merge` can be added in addition.
+- Ops are not yet `Serialize + Deserialize`. When collab lands we add
+  those bounds; domain Op types already derive serde in practice.
+- Binary editing (e.g., streaming texture updates over Nucleus) will
+  likely live behind a different trait (not `Document`), so we don't
+  stretch `Document` to cover opaque blobs with weak op semantics.
+
+Key rule: **don't foreclose Nucleus-style live sync**, but **don't
+pay for it until we need it**.
+
 ## 3. API sketch
 
-**In `lunco-ui`**:
+> The real, working version of this API ships in the `lunco-doc`
+> crate (zero runtime deps, headless-capable). The sketch below is
+> kept close to what's actually implemented; see `crates/lunco-doc/`
+> for the authoritative source.
+
+**In `lunco-doc`**:
 
 ```rust
 /// Canonical identifier for a document. Usually maps to a Bevy Entity,
@@ -159,39 +226,30 @@ pub trait DocumentView<D: Document> {
 }
 ```
 
-**In `lunco-workbench`** (host):
+**Also in `lunco-doc`** (host — already implemented):
 
 ```rust
-/// Runs the doc-view loop: collect ops from views, apply to documents,
-/// broadcast change events, record undo history.
+/// Holds a Document plus its undo/redo stacks. Headless-capable:
+/// not a Bevy component, works in tests and CLI tools.
 pub struct DocumentHost<D: Document> {
     document: D,
-    history: UndoStack<D::Op>,
-    views: Vec<Box<dyn DocumentView<D>>>,
+    undo_stack: Vec<D::Op>,
+    redo_stack: Vec<D::Op>,
 }
 
 impl<D: Document> DocumentHost<D> {
-    pub fn frame(&mut self, ui: &mut egui::Ui) {
-        for view in &mut self.views {
-            let ops = view.render(ui, &self.document);
-            for op in ops {
-                if let Ok(inverse) = self.document.apply(op.clone()) {
-                    self.history.push(op.clone(), inverse);
-                    for other in &mut self.views {
-                        other.on_change(&self.document, &op);
-                    }
-                }
-            }
-        }
-    }
-
-    pub fn undo(&mut self) { /* ... */ }
-    pub fn redo(&mut self) { /* ... */ }
+    pub fn apply(&mut self, op: D::Op) -> Result<(), DocumentError>;
+    pub fn undo(&mut self) -> Result<bool, DocumentError>;
+    pub fn redo(&mut self) -> Result<bool, DocumentError>;
+    pub fn document(&self) -> &D;
+    pub fn generation(&self) -> u64;
 }
 ```
 
-Shape is approximate — real implementation needs Bevy system integration
-(`Res<T>` access, `World` borrow, etc.) — but the conceptual API is this.
+`DocumentHost` knows nothing about views, UI, or Bevy. Panels (in
+`lunco-ui`, future) drive it: they read via `document()`, emit ops
+by calling `apply()`, and re-render when `generation()` advances.
+This keeps the core headless and testable.
 
 ## 4. Documents and the ECS projection
 
@@ -259,37 +317,53 @@ Gets the best of both. Starting point for implementation.
 
 ## 5. Serialization
 
-Each domain owns its file format. No LunCoSim-proprietary monolithic save.
+**Unix convention: every Document is a file; every file is either a
+Document or a file reference (§ 2a).** No LunCoSim-proprietary
+monolithic save. No hidden container. A Twin is a folder; its contents
+are real files a user can grep, diff, and edit in external tools.
 
-| Domain    | File format             | Library / code   |
-|-----------|-------------------------|------------------|
-| Modelica  | `.mo`                   | `rumoca_parser`  |
-| USD       | `.usda` / `.usdc`       | `openusd`        |
-| SysML     | `.sysml` (text) or XMI  | future           |
-| Mission   | `.ron` or `.yaml`       | future           |
-| Project   | directory + manifest    | future           |
+Each Document domain owns its file format:
 
-A LunCoSim "project" is a directory:
+| Domain    | File format             | Library / code   | Kind |
+|-----------|-------------------------|------------------|------|
+| Modelica  | `.mo`                   | `rumoca_parser`  | Document |
+| USD       | `.usda` / `.usdc`       | `openusd`        | Document |
+| SysML     | `.sysml` (text) or XMI  | future           | Document |
+| Mission   | `.ron` or `.yaml`       | future           | Document |
+| Textures  | `.png`, `.jpg`, `.exr`  | —                | File reference |
+| Meshes    | `.glb`, `.obj`, `.stl`  | —                | File reference |
+| Docs      | `.md`, `.pdf`           | —                | File reference (today) |
+| Twin      | folder + `twin.toml`    | `lunco-twin`     | — |
+
+A LunCoSim Twin is a directory (see `13-twin-and-workflow.md` for the
+full workflow):
 
 ```
-my_colony/
-├── project.toml           ← manifest: references, version, settings
-├── scenes/
-│   ├── base.usda
-│   └── rover_yard.usda
-├── models/
-│   ├── solar_panel.mo
-│   ├── battery.mo
-│   └── balloon.mo
-├── missions/
-│   └── day1.mission.ron
-└── assets/
-    └── ...
+my_colony/                  ← Twin root
+├── twin.toml               ← tool config (which workspaces, panel layout)
+├── system.sysml            ← optional: SysML source of truth for structure
+├── base.usda               ← USD Documents at any level
+├── rover.usda
+├── solar_panel.mo          ← Modelica Documents at any level
+├── battery.mo
+├── day1.mission.ron
+└── textures/
+    └── regolith.png        ← file reference, edited externally
 ```
 
-Each document is independently editable in its native tool. A user can edit
-`solar_panel.mo` in Dymola, commit it, and LunCoSim picks up the change on
-next load. This is a major interoperability win.
+Folder structure inside a Twin is **convention, not enforced** — users
+can organise files however they want. `lunco-twin` discovers Documents
+by file extension, not by directory.
+
+Each Document is independently editable in its native tool. A user
+can edit `solar_panel.mo` in Dymola, commit it, and LunCoSim picks
+up the change on next load. This is the core interop property — the
+Document System is the *in-editor* mutation path, not a replacement
+for the standard file format.
+
+File references are tracked in the Twin (for dependency listing,
+asset browser, missing-file warnings) but have no ops. Edit them
+externally; the Twin notices.
 
 ## 6. Undo/redo
 
@@ -328,26 +402,40 @@ DocumentHost after applying. Synchronous, ordered.
 Synchronous dispatch means a view that wants to react to its *own* op
 (e.g., to clear an error banner) gets the callback, simplifying logic.
 
-## 8. Future: collaboration
+## 8. Future: collaboration and live sync
 
 Ops are the right abstraction for networked editing. Multiple clients
 each have a local copy of the Document and apply local ops immediately
 (optimistic concurrency). Ops are broadcast over the network; remote
 ops are applied on each other client.
 
-Conflict resolution options:
+Target ecosystems we want to align with:
+
+- **Omniverse Nucleus** — USD-native, layer-based live sync. Multiple
+  clients edit the same `.usda` stage; the server reconciles layers.
+  Our USD Document domain should be able to *act as* a Nucleus client
+  when the Nucleus integration lands.
+- **Yjs / Automerge** — CRDT libraries for text and structured JSON.
+  Our text-heavy Documents (SysML prose, Modelica equation bodies,
+  mission scripts) could use a CRDT text type underneath.
+- **Plain Git** — not live, but the default "collab" for engineering
+  work: branches, merges, PRs. All Documents round-trip through
+  their domain file format so Git-based collab already works today.
+
+Conflict resolution options for live sync:
 
 - **Last-writer-wins** on concurrent edits to the same field (simplest)
 - **Operational Transformation (OT)** — rewrite ops against concurrent
   ops so they still make sense (Google Docs model)
-- **CRDT** — design ops to always commute (Automerge / Yjs model)
+- **CRDT** — design ops to always commute (Automerge / Yjs / Nucleus)
 
-Our `DocumentOp::commutes_with(other)` method is the first step toward
-CRDT. It's `false` by default (conservative); domain crates can mark
-specific op pairs as commuting.
+The current `DocumentOp` trait is minimal but leaves room: a future
+`commutes_with(other)` hook, stable ids on structural ops (so renames
+don't break concurrent edits), and a `merge` path for CRDT-backed
+fields are all additive.
 
-Actual implementation is out of scope for the initial Document System.
-We're just ensuring the design doesn't foreclose it.
+Actual live-sync implementation is out of scope for the initial
+Document System. The design explicitly does not foreclose it.
 
 See [30-collab-roadmap.md](30-collab-roadmap.md) when written.
 
@@ -405,32 +493,40 @@ Once the Document System is in place:
 
 ## 12. Roadmap
 
-| Phase | Scope | Duration |
-|-------|-------|----------|
-| 1 | Design complete (this doc). | ✅ done when reviewed |
-| 2 | Implement Document / DocumentOp / DocumentHost in `lunco-ui`. Minimal Modelica op set. One view migrated (CodeEditor) to prove the API. | 2 weeks |
-| 3 | Modelica document: full op set, Diagram ↔ Code sync working. Solves `modelica-editor-gaps.md` P0 items. | 3–4 weeks |
-| 4 | USD document: basic ops (prim add/remove, attribute set, transform). Scene tree + 3D viewport + USDA text all view the same document. | 3 weeks |
-| 5 | Save/load: project directory format, per-domain file I/O. | 2 weeks |
-| 6 | Mission document (first entirely-new domain). | 2–3 weeks |
-| 7 | SysML document. | 4 weeks |
-| 8 | Collaboration layer. | 8–12 weeks |
+| Phase | Scope | Status |
+|-------|-------|--------|
+| 1 | Design complete (this doc). | ✅ |
+| 2 | Implement `Document` / `DocumentOp` / `DocumentHost` / `DocumentError` / `DocumentId` in `lunco-doc`. Zero runtime deps. Unit tests. | ✅ |
+| 3 | `lunco-twin` crate: TwinManifest, DocumentRegistry, CacheRegistry, TwinTransaction. File I/O per domain. | next |
+| 4 | Modelica domain: `ModelicaDocument` + ops, migrate CodeEditor to DocumentView pattern to prove the API. | |
+| 5 | Modelica: full op set, Diagram ↔ Code sync, solves `modelica-editor-gaps.md` P0 items. | |
+| 6 | USD domain: basic ops (prim add/remove, attribute set, transform). Scene tree + 3D viewport + USDA text all view the same document. | |
+| 7 | Mission document (first entirely-new domain). | |
+| 8 | SysML document (structure + requirements only — see principles.md Article III). | |
+| 9 | Live-sync layer (Nucleus / CRDT / Yjs integration). | |
 
-Phase 2 is the go-no-go. If the API feels right after migrating one panel,
-commit to the pattern across the codebase. If it feels wrong, iterate before
-going broader.
+Phase 4 is the go-no-go. If the API feels right after migrating one
+panel, commit to the pattern across the codebase. If it feels wrong,
+iterate in `lunco-doc` before going broader.
 
-## 13. Open questions (to resolve during Phase 2)
+## 13. Open questions (to resolve as we migrate the first domain)
 
-- Should ops be typed per-domain (current sketch) or a universal serializable
-  format (dynamic)? Typed is safer and faster; dynamic enables generic
-  tooling.
-- How to handle cross-document ops (e.g., an op that creates a USD prim AND
-  attaches a Modelica model)? Transactional batch? Saga pattern?
-- Should the DocumentHost live in `lunco-ui` (framework) or `lunco-workbench`
-  (app scaffold)? Leaning `lunco-ui` so headless tests can use it.
-- Projection-to-ECS: `Changed<T>` filter vs. generation diffing — which
-  scales better with 1000+ entity documents?
+- Should ops be typed per-domain (current answer: yes) or a universal
+  serializable format (dynamic)? Typed is safer and faster; dynamic
+  enables generic tooling. Revisit if we grow a serialization need.
+- How to handle cross-document ops (e.g., an op that creates a USD
+  prim AND attaches a Modelica model)? Transactional batch? Saga
+  pattern? Planned: `TwinTransaction` in `lunco-twin` — a stack of
+  per-Document ops that commit/rollback together.
+- Projection-to-ECS: `Changed<T>` filter vs. generation diffing —
+  which scales better with 1000+ entity documents? Start with
+  generation diffing per Document; measure when it matters.
+- When do we introduce a `Resource` / `Endpoint` trait? Once we have
+  at least two concrete kinds (FMI slave + Nucleus connection, most
+  likely) so the abstraction is grounded in real examples. See § 2a.
+- Binary editing ops (delta/xdelta) for Nucleus-synced textures: add
+  behind a separate trait rather than stretching `Document`, because
+  binary "undo" is memory-expensive and rarely structured.
 
 These need real code to resolve. Don't answer speculatively.
 

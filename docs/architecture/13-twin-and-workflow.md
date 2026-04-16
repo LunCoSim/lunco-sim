@@ -73,6 +73,31 @@ the current orphan or folder into a full Twin by writing a `twin.toml`
 manifest and registering content. No migration required — the files
 don't move.
 
+## 1b. What's in a Twin — Documents, file references, endpoints
+
+Following Unix convention, **every file in a Twin is just a file**.
+We classify them by *how they're edited*, not by where they live:
+
+| Kind | Editable inside LunCoSim? | How user edits | Examples |
+|------|---------------------------|----------------|----------|
+| **Document** | Yes — typed ops, undo/redo | LunCoSim panels (CodeEditor, Diagram, ParameterInspector, ...) or external domain tool | `*.mo`, `*.usda`, `*.sysml`, `*.mission.ron` |
+| **File reference** | No — opaque container | External tool only (Photoshop, Blender, a text editor) | `*.png`, `*.glb`, `*.wav`, `*.pdf`, `*.md` |
+| **Endpoint** *(future)* | N/A — remote, live | Connection config in `twin.toml`; not stored in Twin | FMI slave URL, telemetry stream, Nucleus server |
+
+Most files the user creates during normal engineering work (models,
+scenes, missions, requirements) are Documents. Assets referenced by
+those Documents (textures on a material, mesh for a prim, PDF in
+requirements) are file references — the Twin tracks them for
+dependency listing and broken-reference detection, but LunCoSim does
+not expose ops for editing them. Open a PNG in your image editor of
+choice; save it; the Twin picks up the change.
+
+Endpoints — live resources the Twin *references* but doesn't contain
+— are an explicit future concern (see `10-document-system.md` § 2a).
+We name the category now so we know not to stretch "Document" to
+cover it; the abstraction is deferred until FMI and Nucleus land and
+we can ground it in two concrete examples.
+
 ## 2. Structure inside a Twin — flexible
 
 There is **no required folder structure** inside a Twin. Documents can

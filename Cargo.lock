@@ -5874,6 +5874,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "lunco-doc"
+version = "0.1.0"
+
+[[package]]
 name = "lunco-environment"
 version = "0.1.0"
 dependencies = [
