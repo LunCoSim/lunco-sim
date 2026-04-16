@@ -19,6 +19,8 @@ use crate::SelectedEntity;
 pub struct GizmoPrevPos {
     /// Position in the previous frame.
     pub pos: Vec3,
+    /// Original RigidBody type before drag started — restored on drag end.
+    pub original_body: RigidBody,
 }
 
 /// Makes the selected entity kinematic when gizmo drag starts.
@@ -31,6 +33,8 @@ pub fn capture_gizmo_start(
     selected: Res<SelectedEntity>,
     gizmo_targets: Query<&GizmoTarget>,
     q_transforms: Query<&Transform>,
+    q_rigid_bodies: Query<&RigidBody>,
+    q_prev_pos: Query<&GizmoPrevPos>,
     q_controller_links: Query<&lunco_controller::ControllerLink>,
     mut commands: Commands,
 ) {
@@ -43,12 +47,18 @@ pub fn capture_gizmo_start(
     let Ok(gizmo_target) = gizmo_targets.get(entity) else { return; };
     if !gizmo_target.is_active() { return; }
 
+    // Skip if already tracking this drag
+    if q_prev_pos.get(entity).is_ok() { return; }
+
     // Capture the entity's current position (already updated by transform-gizmo-bevy)
     let Ok(tf) = q_transforms.get(entity) else { return; };
 
+    // Record original body type so we can restore it correctly on drag end.
+    let original_body = q_rigid_bodies.get(entity).copied().unwrap_or(RigidBody::Dynamic);
+
     commands.entity(entity)
         .insert(RigidBody::Kinematic)
-        .insert(GizmoPrevPos { pos: tf.translation });
+        .insert(GizmoPrevPos { pos: tf.translation, original_body });
 }
 
 /// Syncs Avian3D `Position` and `GlobalTransform` from `Transform` during gizmo drag.
@@ -125,10 +135,10 @@ fn propagate_global_transform(
     }
 }
 
-/// Restores gizmo-kinematic bodies to dynamic when gizmo drag ends.
+/// Restores gizmo-kinematic bodies to their original body type when gizmo drag ends.
 ///
-/// Detects when a gizmo drag ends and restores the body to dynamic
-/// so physics (gravity) takes over.
+/// Detects when a gizmo drag ends and restores the body to its original type
+/// (Dynamic for physics objects, Kinematic for co-sim balloons, etc.).
 ///
 /// Skips possessed entities to avoid interfering with possession.
 pub fn restore_gizmo_dynamic(
@@ -144,15 +154,17 @@ pub fn restore_gizmo_dynamic(
     if q_controller_links.iter().any(|link| link.vessel_entity == entity) { return; }
 
     // Only process entities we made kinematic
-    if q_prev_pos.get(entity).is_err() { return; }
+    let Ok(prev) = q_prev_pos.get(entity) else { return; };
 
     // Check if gizmo is no longer active (drag ended)
     let Ok(gizmo_target) = gizmo_targets.get(entity) else { return; };
     if gizmo_target.is_active() { return; } // Still dragging gizmo
 
-    // Restore dynamic body and clear tracking data
+    // Restore to the original body type and clear tracking data.
+    // This preserves Kinematic for co-sim entities (e.g. balloon) instead of
+    // unconditionally switching to Dynamic (which would enable Avian integration).
     commands.entity(entity)
-        .insert(RigidBody::Dynamic)
+        .insert(prev.original_body)
         .remove::<GizmoPrevPos>();
 }
 
@@ -172,7 +184,7 @@ mod tests {
 
     #[test]
     fn test_gizmo_prev_pos_component() {
-        let pos = GizmoPrevPos { pos: Vec3::new(1.0, 2.0, 3.0) };
+        let pos = GizmoPrevPos { pos: Vec3::new(1.0, 2.0, 3.0), original_body: RigidBody::Dynamic };
         assert_eq!(pos.pos, Vec3::new(1.0, 2.0, 3.0));
     }
 }

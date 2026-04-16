@@ -24,7 +24,8 @@ members = [
     "crates/lunco-networking",
     "crates/lunco-command-macro",
     "crates/lunco-terrain",
-    "crates/lunco-api"
+    "crates/lunco-api",
+    "crates/lunco-cosim"
 ]
 resolver = "2"
 
@@ -63,3 +64,4 @@ instant = "0.1"
 getrandom_02 = { package = "getrandom", version = "0.2", features = ["js"] }
 lunco-api = { path = "crates/lunco-api" }
 lunco-terrain = { path = "crates/lunco-terrain" }
+lunco-cosim = { path = "crates/lunco-cosim" }

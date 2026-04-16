@@ -1,7 +1,7 @@
 //! Center spacer panel — reserves space in the center of the dock for 3D scene.
 //!
-//! This invisible panel has no background (transparent) so the 3D scene
-//! renders directly through the egui layer.
+//! This invisible panel has no background (transparent) and absorbs no input,
+//! so the 3D scene shows through.
 
 use bevy::prelude::*;
 use bevy_egui::egui;

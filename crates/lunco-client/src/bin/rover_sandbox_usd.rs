@@ -18,10 +18,15 @@ use lunco_controller::LunCoControllerPlugin;
 use lunco_avatar::{LunCoAvatarPlugin, IntentAnalogState, FreeFlightCamera, AdaptiveNearPlane};
 use lunco_celestial::GravityPlugin;
 use lunco_core::Avatar;
+use lunco_cosim::CoSimPlugin;
+use lunco_modelica::ModelicaPlugin;
 use big_space::prelude::Grid;
 use lunco_materials::{BlueprintMaterialPlugin, SolarPanelMaterialPlugin};
 
+#[path = "../center_spacer.rs"]
 mod center_spacer;
+#[path = "../balloon_setup.rs"]
+mod balloon_setup;
 
 /// Parse API port from CLI args.
 /// 
@@ -30,7 +35,7 @@ fn main() {
     let mut app = App::new();
     app.insert_resource(Time::<Fixed>::from_hz(60.0))
         .insert_resource(lunco_core::TimeWarpState { physics_enabled: true, ..default() })
-        .insert_resource(avian3d::prelude::Gravity(bevy::math::DVec3::NEG_Y * 9.81))
+        .insert_resource(avian3d::prelude::Gravity::ZERO)
         .insert_resource(lunco_celestial::Gravity::flat(9.81, bevy::math::DVec3::NEG_Y))
         .add_plugins(DefaultPlugins.set(AssetPlugin {
             file_path: std::env::current_dir().unwrap_or_default().join("assets").to_string_lossy().to_string(),
@@ -39,11 +44,7 @@ fn main() {
         .add_plugins(BigSpaceDefaultPlugins.build().disable::<big_space::validation::BigSpaceValidationPlugin>())
         .add_plugins(WireframePlugin::default())
         .add_plugins(PhysicsPlugins::default().set(avian3d::prelude::PhysicsInterpolationPlugin::interpolate_all()))
-        .add_plugins(lunco_core::LunCoCorePlugin)
-        .add_plugins(GravityPlugin)
-        .add_plugins(LunCoMobilityPlugin)
-        .add_plugins(UsdPlugins)
-        .add_plugins(SandboxEditPlugin)
+        .add_plugins(CoSimPlugin)
         .add_plugins(bevy_workbench::WorkbenchPlugin {
             config: bevy_workbench::WorkbenchConfig {
                 show_menu_bar: false,    // No menu bar
@@ -53,6 +54,12 @@ fn main() {
                 ..default()
             },
         })
+        .add_plugins(ModelicaPlugin)
+        .add_plugins(lunco_core::LunCoCorePlugin)
+        .add_plugins(GravityPlugin)
+        .add_plugins(LunCoMobilityPlugin)
+        .add_plugins(UsdPlugins)
+        .add_plugins(SandboxEditPlugin)
         .add_plugins(lunco_sandbox_edit::ui::SandboxEditUiPlugin)
         .add_plugins(center_spacer::CenterSpacerPlugin)
         .add_plugins(LunCoControllerPlugin)
@@ -62,6 +69,10 @@ fn main() {
         .init_resource::<SandboxSettings>()
         .add_systems(Startup, setup_sandbox)
         .add_systems(Update, apply_sandbox_settings)
+        .add_systems(Update, balloon_setup::compile_balloon_model)
+        .add_systems(Update, balloon_setup::setup_balloon_wires)
+        .add_systems(Update, balloon_setup::sync_modelica_outputs)
+        .add_systems(Update, balloon_setup::sync_inputs_to_modelica)
         // Selection must run before avatar possession so DragModeActive flag is set
         .add_systems(Update, lunco_sandbox_edit::selection::handle_entity_selection.before(lunco_avatar::avatar_raycast_possession))
         .add_systems(PreUpdate, global_transform_propagation_system)

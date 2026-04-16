@@ -97,6 +97,25 @@ pub fn extract_inputs_with_defaults(source: &str) -> HashMap<String, f64> {
     inputs
 }
 
+/// Extract names of all continuous (non-parameter, non-constant, non-input) variables.
+///
+/// These are the model's state and algebraic variables — everything that would
+/// normally appear as a "variable" in the simulation (e.g., `volume`, `netForce`,
+/// `buoyancy`). We need this because rumoca's `SimStepper::variable_names()`
+/// returns only solver-state entries (often just states after DAE reduction),
+/// omitting algebraics that were eliminated by substitution. Querying each
+/// extracted name via `SimStepper::get()` recovers the algebraic values.
+pub fn extract_variable_names(source: &str) -> Vec<String> {
+    let ast = match parse(source) {
+        Some(a) => a,
+        None => return Vec::new(),
+    };
+
+    let mut names = Vec::new();
+    collect_variable_names_from_classes(ast.classes, &mut names);
+    names
+}
+
 /// Extract input variable names **without** default values.
 ///
 /// These are true runtime-settable slots that can be changed via `set_input()`
@@ -282,6 +301,23 @@ fn collect_inputs_with_defaults_from_classes(classes: impl IntoIterator<Item = (
     }
 }
 
+fn collect_variable_names_from_classes(
+    classes: impl IntoIterator<Item = (String, ClassDef)>,
+    names: &mut Vec<String>,
+) {
+    for (_, class) in classes {
+        for component in class.components.values() {
+            let is_parameter = matches!(component.variability, Variability::Parameter(_));
+            let is_constant = matches!(component.variability, Variability::Constant(_));
+            let is_input = matches!(component.causality, Causality::Input(_));
+            if !is_parameter && !is_constant && !is_input {
+                names.push(component.name.clone());
+            }
+        }
+        collect_variable_names_from_classes(class.classes, names);
+    }
+}
+
 fn collect_input_names_from_classes(classes: impl IntoIterator<Item = (String, ClassDef)>, inputs: &mut Vec<String>) {
     for (_, class) in classes {
         for component in class.components.values() {
@@ -463,6 +499,52 @@ end Test;
         assert!(modified.contains("input Real g"));
         assert!(!modified.contains("input Real g = 9.81"));
         assert!(modified.contains("input Real u"));
+    }
+
+    // --- extract_variable_names ---
+
+    #[test]
+    fn test_extract_variable_names_balloon() {
+        // A minimal balloon-like model mirroring the real one's variable declarations.
+        let source = r#"
+model Balloon
+  parameter Real g = 9.81;
+  parameter Real mass = 4.5;
+  parameter Real initVolume = 4.0;
+  input Real height = 0;
+  input Real velocity = 0;
+  Real volume(start = initVolume);
+  Real temperature;
+  Real airDensity;
+  Real buoyancy;
+  Real weight;
+  Real drag;
+  Real netForce;
+equation
+  temperature = 288.15 - 0.0065 * height;
+  airDensity = 1.225;
+  volume = initVolume;
+  buoyancy = airDensity * volume * g;
+  weight = mass * g;
+  drag = 0.0;
+  netForce = buoyancy - weight - drag;
+end Balloon;
+"#;
+        let mut names = extract_variable_names(source);
+        names.sort();
+        // Parameters (g, mass, initVolume) and inputs (height, velocity) must NOT appear.
+        // All declared Real variables should appear.
+        let mut expected = vec![
+            "airDensity".to_string(),
+            "buoyancy".to_string(),
+            "drag".to_string(),
+            "netForce".to_string(),
+            "temperature".to_string(),
+            "volume".to_string(),
+            "weight".to_string(),
+        ];
+        expected.sort();
+        assert_eq!(names, expected, "expected all 7 continuous variables to be extracted");
     }
 
     // --- extract_from_source (single-pass) ---

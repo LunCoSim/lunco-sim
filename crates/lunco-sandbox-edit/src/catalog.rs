@@ -6,6 +6,11 @@
 use bevy::prelude::*;
 use lunco_usd_bevy::UsdPrimPath;
 
+/// Marker component for balloon entities awaiting Modelica setup.
+/// Attached by the spawn catalog when a balloon is spawned.
+#[derive(Component, Default)]
+pub struct BalloonModelMarker;
+
 /// Registry of all spawnable object types.
 #[derive(Resource)]
 pub struct SpawnCatalog {
@@ -54,6 +59,13 @@ impl Default for SpawnCatalog {
             display_name: "Static Ball".into(),
             category: SpawnCategory::Prop,
             source: SpawnSource::Procedural(ProceduralId::BallStatic),
+            default_transform: Transform::default(),
+        });
+        catalog.add(SpawnableEntry {
+            id: "balloon".into(),
+            display_name: "Weather Balloon".into(),
+            category: SpawnCategory::Component,
+            source: SpawnSource::Procedural(ProceduralId::Balloon),
             default_transform: Transform::default(),
         });
 
@@ -148,6 +160,8 @@ pub enum ProceduralId {
     Ramp,
     /// Tall cuboid wall (static RigidBody).
     Wall,
+    /// Weather balloon (RigidBody + Modelica balloon.mo + AvianSim wires).
+    Balloon,
 }
 
 /// Result of spawning an entry. Contains the root entity/entities created.
@@ -239,6 +253,37 @@ pub fn spawn_procedural(
                 Mesh3d(mesh),
                 MeshMaterial3d(mat),
                 ChildOf(grid),
+            )).id()
+        }
+        SpawnSource::Procedural(ProceduralId::Balloon) => {
+            // Spawn as Kinematic — we drive position directly from Modelica netForce,
+            // bypassing Avian's integrator entirely (apply_sim_forces handles integration).
+            // Kinematic bodies participate in collision response but are not affected
+            // by forces or gravity. Collider is synced from Modelica volume each frame.
+            let radius = 1.0_f32;
+            // Spawn high so there's room to rise before hitting ground.
+            let spawn_offset = Vec3::new(world_pos.x, world_pos.y.max(15.0), world_pos.z);
+            let mesh = meshes.add(Sphere::new(radius).mesh().ico(16).unwrap());
+            let mat = materials.add(StandardMaterial {
+                base_color: Color::srgb(0.95, 0.35, 0.15),  // warm orange-red
+                emissive: LinearRgba::rgb(0.05, 0.0, 0.0),
+                ..default()
+            });
+            commands.spawn((
+                Name::new("Weather Balloon"),
+                lunco_core::SelectableRoot,
+                Transform::from_translation(spawn_offset),
+                // Kinematic: Avian doesn't apply forces or gravity — we set
+                // LinearVelocity directly in apply_sim_forces, and Avian
+                // integrates Position from velocity via integrate_positions.
+                // Not writing Position directly is critical: it lets
+                // transform_to_position pick up gizmo drags that update Transform.
+                avian3d::prelude::RigidBody::Kinematic,
+                avian3d::prelude::Collider::sphere(radius as f64),
+                Mesh3d(mesh),
+                MeshMaterial3d(mat),
+                ChildOf(grid),
+                BalloonModelMarker::default(),
             )).id()
         }
         _ => panic!("Unknown procedural spawn: {:?}", entry.source),
