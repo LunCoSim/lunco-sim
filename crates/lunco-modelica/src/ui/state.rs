@@ -18,7 +18,7 @@
 //! Panels don't know where the entity came from. They just render it.
 
 use bevy::prelude::*;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use lunco_assets::assets_dir;
 use lunco_doc::{DocumentHost, DocumentId, DocumentOrigin};
@@ -119,14 +119,19 @@ pub struct WorkbenchState {
     pub selected_entity: Option<Entity>,
     /// Last compilation error message, if any.
     pub compilation_error: Option<String>,
-    /// Time-series data for plotted variables, keyed by entity → variable name.
-    pub history: HashMap<Entity, HashMap<String, VecDeque<[f64; 2]>>>,
-    /// Variable names the user has toggled for plotting.
-    pub plotted_variables: HashSet<String>,
-    /// Maximum history points to retain per variable.
-    pub max_history: usize,
-    /// Whether plots should auto-fit their axes.
-    pub plot_auto_fit: bool,
+
+    // Plot-related fields (`history`, `plotted_variables`,
+    // `max_history`, `plot_auto_fit`) used to live here. They were
+    // removed when the Graphs panel migrated to `lunco-viz`:
+    //
+    // * Time-series data lives in `lunco_viz::SignalRegistry`,
+    //   populated by the Modelica worker each step.
+    // * "Which variables to plot" lives in
+    //   `lunco_viz::VisualizationConfig.inputs` for the default
+    //   plot — Telemetry checkboxes write directly there.
+    // * Auto-fit is a transient request via
+    //   `lunco_viz::VizFitRequests`, drained by the viz kind on its
+    //   next render.
 
     // ── Dymola-style navigation ──
 
@@ -461,10 +466,6 @@ impl Default for WorkbenchState {
             loaded_file_path: None,
             selected_entity: None,
             compilation_error: None,
-            history: HashMap::new(),
-            plotted_variables: HashSet::new(),
-            max_history: 10000,
-            plot_auto_fit: false,
             open_model: None,
             navigation_stack: Vec::new(),
             diagram_dirty: false,

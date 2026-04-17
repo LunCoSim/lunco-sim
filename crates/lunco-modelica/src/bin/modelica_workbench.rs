@@ -15,6 +15,11 @@ fn main() {
         }))
         .add_plugins(EguiPlugin::default())
         .add_plugins(lunco_workbench::WorkbenchPlugin)
+        // LuncoVizPlugin must come before any plugin that publishes
+        // signals (ModelicaPlugin below) so the `SignalRegistry`
+        // resource is present when the worker starts mirroring
+        // samples into it.
+        .add_plugins(lunco_viz::LuncoVizPlugin)
         .add_plugins(ModelicaPlugin)
         .add_systems(Startup, setup_sandbox);
 

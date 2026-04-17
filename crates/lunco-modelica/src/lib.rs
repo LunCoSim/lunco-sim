@@ -1118,6 +1118,12 @@ fn handle_modelica_responses(
     // those setups without forcing them to pull in the UI module.
     compile_states: Option<ResMut<ui::CompileStates>>,
     console: Option<ResMut<ui::panels::console::ConsoleLog>>,
+    // Optional — a headless cosim harness may skip `LuncoVizPlugin`
+    // entirely. When present, every outgoing sample is published into
+    // the registry, and the default Modelica plot's bindings are
+    // seeded on first compile of each entity.
+    mut signals: Option<ResMut<lunco_viz::SignalRegistry>>,
+    mut viz_registry: Option<ResMut<lunco_viz::VisualizationRegistry>>,
 ) {
     let mut compile_states = compile_states;
     let mut console = console;
@@ -1205,7 +1211,6 @@ fn handle_modelica_responses(
             }
 
             if result.is_new_model {
-                workbench_state.history.remove(&result.entity);
                 model.model_path = modelica_dir()
                     .join(format!("{}_{}", result.entity.index(), result.entity.generation()))
                     .join("model.mo");
@@ -1217,31 +1222,19 @@ fn handle_modelica_responses(
                 // which is more reliable than the worker's DAE-discovered names (which may have 0.0).
                 let ui_inputs: HashMap<String, f64> = std::mem::take(&mut model.inputs);
                 for name in &result.detected_input_names {
-                    // Only insert if the UI didn't already provide a value
                     model.inputs.entry(name.clone())
                         .or_insert_with(|| *ui_inputs.get(name).unwrap_or(&0.0));
                 }
-                // Also add any UI-discovered inputs the worker missed (e.g., inputs with default values)
                 for (name, val) in ui_inputs {
                     model.inputs.entry(name).or_insert(val);
                 }
 
-                if workbench_state.selected_entity == Some(result.entity) {
-                    workbench_state.plotted_variables.clear();
-                    for (name, _) in &result.detected_symbols {
-                        if !name.ends_with("_in") && !model.parameters.contains_key(name) {
-                            workbench_state.plotted_variables.insert(name.clone());
-                        }
-                    }
-                }
                 model.current_time = 0.0;
                 model.last_step_time = 0.0;
             } else if result.is_parameter_update {
-                workbench_state.history.remove(&result.entity);
                 model.current_time = 0.0;
                 model.last_step_time = 0.0;
             } else if result.is_reset {
-                workbench_state.history.remove(&result.entity);
                 model.current_time = 0.0;
                 model.last_step_time = 0.0;
                 model.variables.clear();
@@ -1257,18 +1250,63 @@ fn handle_modelica_responses(
 
             model.current_time = result.new_time;
             model.last_step_time = result.new_time;
-
-            // Record history for plotted variables
             let time_val = result.new_time;
-            let max_history = workbench_state.max_history;
-            let plotted: Vec<String> = workbench_state.plotted_variables.iter().cloned().collect();
-            let entity_history = workbench_state.history.entry(result.entity).or_insert_with(HashMap::new);
 
-            for (name, val) in &result.outputs {
-                if plotted.contains(name) {
-                    let history = entity_history.entry(name.clone()).or_insert_with(|| VecDeque::with_capacity(max_history));
-                    history.push_back([time_val, *val]);
-                    if history.len() > max_history { history.pop_front(); }
+            // Publish every outgoing scalar sample into the global
+            // `SignalRegistry`. The Graphs panel and any future
+            // visualization (Avian / USD / scripts) read uniformly
+            // from here — there is no longer a Modelica-specific
+            // shadow history.
+            if let Some(sigs) = signals.as_deref_mut() {
+                // Compile-type results reset the signal's horizon so
+                // the old run's tail doesn't bleed into the new one.
+                if result.is_new_model || result.is_reset || result.is_parameter_update {
+                    for (name, _) in result.detected_symbols.iter().chain(result.outputs.iter()) {
+                        sigs.clear_history(&lunco_viz::SignalRef::new(
+                            result.entity,
+                            name.clone(),
+                        ));
+                    }
+                }
+                for (name, val) in result.outputs.iter().chain(result.detected_symbols.iter()) {
+                    sigs.push_scalar(
+                        lunco_viz::SignalRef::new(result.entity, name.clone()),
+                        time_val,
+                        *val,
+                    );
+                }
+                // Publish / refresh description metadata on compile-
+                // type results so the viz inspector can show tooltips
+                // sourced the same way Telemetry does today.
+                if result.is_new_model || result.is_parameter_update {
+                    for (name, desc) in &result.detected_descriptions {
+                        sigs.update_meta(
+                            lunco_viz::SignalRef::new(result.entity, name.clone()),
+                            lunco_viz::SignalMeta {
+                                description: Some(desc.clone()),
+                                unit: None,
+                                provenance: Some("modelica".to_string()),
+                            },
+                        );
+                    }
+                }
+            }
+
+            // Auto-seed the default Modelica plot with every observable
+            // from a freshly-compiled model. Preserves the pre-viz UX
+            // where compiling immediately filled the graph with all
+            // the model's observables. Does nothing when the user has
+            // already curated the bindings — `auto_bind_observables`
+            // skips already-present bindings.
+            if result.is_new_model {
+                if let Some(reg) = viz_registry.as_deref_mut() {
+                    let parameters = model.parameters.clone();
+                    ui::viz::auto_bind_observables(
+                        reg,
+                        result.entity,
+                        &result.detected_symbols,
+                        |name| parameters.contains_key(name),
+                    );
                 }
             }
         }

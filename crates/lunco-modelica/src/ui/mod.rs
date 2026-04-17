@@ -67,6 +67,7 @@ pub mod commands;
 pub use commands::{CompileModel, CreateNewScratchModel, ModelicaCommandsPlugin};
 
 pub mod panels;
+pub mod viz;
 
 use crate::ModelicaModel;
 
@@ -111,15 +112,27 @@ fn cleanup_removed_documents(
     mut removed: RemovedComponents<ModelicaModel>,
     registry: Option<ResMut<ModelicaDocumentRegistry>>,
     compile_states: Option<ResMut<CompileStates>>,
+    signals: Option<ResMut<lunco_viz::SignalRegistry>>,
+    viz_registry: Option<ResMut<lunco_viz::VisualizationRegistry>>,
 ) {
     let Some(mut registry) = registry else { return };
     let mut compile_states = compile_states;
+    let mut signals = signals;
+    let mut viz_registry = viz_registry;
     for entity in removed.read() {
         if let Some(doc) = registry.unlink_entity(entity) {
             registry.remove_document(doc);
             if let Some(states) = compile_states.as_mut() {
                 states.remove(doc);
             }
+        }
+        // Drop every registered signal + plot binding for this entity
+        // so stale plots don't keep reading the last values forever.
+        if let Some(sigs) = signals.as_mut() {
+            sigs.drop_entity(entity);
+        }
+        if let Some(reg) = viz_registry.as_mut() {
+            crate::ui::viz::drop_entity_bindings(reg, entity);
         }
     }
 }
@@ -156,12 +169,15 @@ impl Workspace for AnalyzeWorkspace {
             PanelId("modelica_inspector"),
             PanelId("modelica_component_palette"),
         ]);
-        // Bottom dock: Console first (where all compile / save /
-        // error output goes) + Graphs as a tab beside it. Matches
-        // VS Code's Terminal/Output/Problems pattern.
+        // Bottom dock: Graphs first so it's the default active tab —
+        // the simulation plot is what a user running a model wants
+        // to see on landing, not the log stream. Console stays one
+        // click away for compile / save / error output (VS Code's
+        // Terminal/Output/Problems pattern, just with a different
+        // default active tab).
         layout.set_bottom_tabs(vec![
-            PanelId("modelica_console"),
             PanelId("modelica_graphs"),
+            PanelId("modelica_console"),
         ]);
     }
 }

@@ -6034,6 +6034,7 @@ dependencies = [
  "lunco-core",
  "lunco-doc",
  "lunco-doc-bevy",
+ "lunco-viz",
  "lunco-workbench",
  "regex",
  "rfd",
@@ -6248,6 +6249,18 @@ dependencies = [
  "lunco-robotics",
  "lunco-usd-bevy",
  "openusd",
+]
+
+[[package]]
+name = "lunco-viz"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "bevy_egui",
+ "egui_plot",
+ "lunco-workbench",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

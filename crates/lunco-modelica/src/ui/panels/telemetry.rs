@@ -6,6 +6,7 @@ use lunco_workbench::{Panel, PanelId, PanelSlot};
 use std::collections::HashMap;
 
 use crate::ui::{CompileState, CompileStates, ModelicaDocumentRegistry, WorkbenchState};
+use crate::ui::viz::{is_signal_plotted, set_signal_plotted};
 use crate::{ModelicaModel, ModelicaChannels, ModelicaCommand};
 
 /// Telemetry panel — model parameters, inputs, and variable plotting toggles.
@@ -102,9 +103,9 @@ impl Panel for TelemetryPanel {
                 if let (Some(sid), Some(channels)) = (sid, world.get_resource::<ModelicaChannels>()) {
                     let _ = channels.tx.send(ModelicaCommand::Reset { entity, session_id: sid });
                 }
-                if let Some(mut s) = world.get_resource_mut::<WorkbenchState>() {
-                    s.history.remove(&entity);
-                }
+                // The worker's Reset handler pushes a fresh set of
+                // samples into `SignalRegistry`; clearing per-signal
+                // history is handled there.
             }
         });
         ui.separator();
@@ -224,21 +225,32 @@ impl Panel for TelemetryPanel {
             ui.separator();
         }
 
-        // Variables (Toggle to Plot)
+        // Variables (Toggle to Plot).
+        //
+        // Checkboxes read / write the default Modelica plot's
+        // `VisualizationConfig.inputs` directly — no shadow state,
+        // no per-frame sync. Toggling here instantly shows/hides the
+        // variable in the Graphs panel since both read the same
+        // config.
         ui.label("Variables (Toggle to Plot):");
         egui::ScrollArea::vertical().id_salt("telemetry_scroll").show(ui, |ui| {
-            // Read current plotted variables and model variables
-            let (plotted, model_vars, model_inputs) = {
-                let state = world.resource::<WorkbenchState>();
-                let p = state.plotted_variables.clone();
-                let (vars, inps) = if let Some(m) = world.get::<ModelicaModel>(entity) {
-                    (m.variables.keys().cloned().collect::<Vec<_>>(),
-                     m.inputs.keys().cloned().collect::<Vec<_>>())
-                } else {
-                    (Vec::new(), Vec::new())
-                };
-                (p, vars, inps)
+            let (model_vars, model_inputs) = if let Some(m) = world.get::<ModelicaModel>(entity) {
+                (m.variables.keys().cloned().collect::<Vec<_>>(),
+                 m.inputs.keys().cloned().collect::<Vec<_>>())
+            } else {
+                (Vec::new(), Vec::new())
             };
+
+            // Read plotted-set from the viz registry. Clone once so
+            // we don't reborrow the resource inside the loop.
+            let plotted: std::collections::HashSet<String> = world
+                .get_resource::<lunco_viz::VisualizationRegistry>()
+                .and_then(|r| r.get(crate::ui::viz::DEFAULT_MODELICA_GRAPH))
+                .map(|cfg| cfg.inputs.iter()
+                    .filter(|b| b.source.entity == entity)
+                    .map(|b| b.source.path.clone())
+                    .collect())
+                .unwrap_or_default();
 
             let mut all_names: Vec<_> = model_vars;
             all_names.extend(model_inputs);
@@ -249,12 +261,14 @@ impl Panel for TelemetryPanel {
                 let mut is_plotted = plotted.contains(&name);
                 ui.horizontal(|ui| {
                     if ui.checkbox(&mut is_plotted, "").changed() {
-                        if let Some(mut s) = world.get_resource_mut::<WorkbenchState>() {
-                            if is_plotted {
-                                s.plotted_variables.insert(name.clone());
-                            } else {
-                                s.plotted_variables.remove(&name);
-                            }
+                        if let Some(mut reg) =
+                            world.get_resource_mut::<lunco_viz::VisualizationRegistry>()
+                        {
+                            set_signal_plotted(
+                                &mut reg,
+                                lunco_viz::SignalRef::new(entity, name.clone()),
+                                is_plotted,
+                            );
                         }
                     }
                     let label = egui::Label::new(&name).sense(egui::Sense::hover());
@@ -263,6 +277,7 @@ impl Panel for TelemetryPanel {
                         resp.on_hover_text(desc);
                     }
                 });
+                let _ = is_signal_plotted; // re-export available for future UIs
             }
         });
 

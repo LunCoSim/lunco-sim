@@ -141,8 +141,9 @@ fn setup_web_workbench(
         doc_id.raw(),
     );
 
-    // Select this entity so handle_modelica_responses populates plotted_variables
-    // on the initial compile result (is_new_model branch).
+    // Select this entity so panels default to viewing it. Observable
+    // auto-binding into the default plot happens inside
+    // `handle_modelica_responses` on the `is_new_model` branch.
     workbench_state.selected_entity = Some(entity);
 
     // Kick off initial compilation of the bundled model.
