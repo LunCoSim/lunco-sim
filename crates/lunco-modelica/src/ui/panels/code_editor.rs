@@ -144,12 +144,15 @@ impl Panel for CodeEditorPanel {
             .auto_shrink([false; 2])
             .min_scrolled_height(available_height)
             .show(ui, |ui| {
-                // Fetch data needed for the closure first
-                let (text_str, line_starts_len, galley_cache) = {
+                // Fetch data needed for the closure first. `text` must
+                // be a `&mut String` — egui's `TextBuffer` impl for
+                // `&str` is read-only, so passing `&mut &str` to
+                // `TextEdit::multiline` silently produces a non-editable
+                // widget. (This was the "can't edit my new model" bug.)
+                let (mut text, line_starts_len, galley_cache) = {
                     let buf_state = world.resource::<EditorBufferState>();
                     (buf_state.text.clone(), buf_state.line_starts.len(), buf_state.cached_galley.clone())
                 };
-                let mut text = text_str.as_str();
                 let is_ro = is_read_only;
 
                 ui.horizontal_top(|ui| {
@@ -191,7 +194,7 @@ impl Panel for CodeEditorPanel {
                     );
 
                     if output.changed() && !is_ro {
-                        new_text = text.to_string();
+                        new_text = text.clone();
                         buffer_changed = true;
                     }
                     // Commit the buffer into the Document when the user
@@ -203,7 +206,7 @@ impl Panel for CodeEditorPanel {
                     // separate refactor.
                     if output.lost_focus() && !is_ro {
                         if new_text.is_empty() {
-                            new_text = text.to_string();
+                            new_text = text.clone();
                         }
                         buffer_commit = true;
                     }

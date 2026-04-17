@@ -43,7 +43,9 @@
 
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
-use egui_dock::{DockArea, DockState, NodeIndex, Style, TabViewer};
+use egui_dock::{
+    widgets::tab_viewer::OnCloseResponse, DockArea, DockState, NodeIndex, Style, TabViewer,
+};
 use std::collections::HashMap;
 
 mod panel;
@@ -115,6 +117,7 @@ impl Plugin for WorkbenchPlugin {
             app.add_plugins(bevy_egui::EguiPlugin::default());
         }
         app.init_resource::<WorkbenchLayout>()
+            .init_resource::<PendingTabCloses>()
             .add_observer(on_open_tab)
             .add_observer(on_close_tab)
             .add_systems(EguiPrimaryContextPass, render_workbench);
@@ -156,6 +159,37 @@ pub struct WorkbenchLayout {
     /// [`TabId`]s so both singleton panels and multi-instance tabs
     /// coexist in the same tree.
     pub(crate) dock: DockState<TabId>,
+}
+
+/// Queue of tabs whose close-X was clicked but whose close the
+/// [`TabViewer`] vetoed so a domain handler can prompt
+/// (e.g. unsaved-changes dialog) before the final close.
+///
+/// Only multi-instance tabs use this pipeline; singleton panels
+/// honour [`Panel::closable`] directly. Kept as a standalone resource
+/// (not a field on [`WorkbenchLayout`]) because the layout is
+/// *extracted* from the world during `render_workbench`, and `on_close`
+/// fires from inside that render — so anything it touches has to live
+/// on a different resource.
+#[derive(Resource, Default)]
+pub struct PendingTabCloses {
+    pending: Vec<TabId>,
+}
+
+impl PendingTabCloses {
+    /// Drain queued close requests. Domain-side systems call this
+    /// each frame, decide per-tab (clean → confirm & close, dirty →
+    /// prompt, then fire [`CloseTab`] on user confirmation).
+    pub fn drain(&mut self) -> Vec<TabId> {
+        std::mem::take(&mut self.pending)
+    }
+
+    /// Push a tab id to the queue. Used by the workbench's own
+    /// `on_close` hook; domain crates usually go via
+    /// [`drain`](Self::drain) instead.
+    pub fn push(&mut self, tab: TabId) {
+        self.pending.push(tab);
+    }
 }
 
 impl Default for WorkbenchLayout {
@@ -629,6 +663,27 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
                 Some(panel) => panel.closable(),
                 None => true,
             },
+        }
+    }
+
+    /// Called when the user clicks the tab's × button. Returning
+    /// [`OnCloseResponse::Ignore`] cancels the close; the tab stays.
+    /// For multi-instance tabs we queue the id and cancel, so
+    /// domain crates can confirm-on-unsaved-changes before the tab
+    /// actually goes away. Singleton panels close immediately.
+    fn on_close(&mut self, tab: &mut Self::Tab) -> OnCloseResponse {
+        match *tab {
+            TabId::Singleton(_) => OnCloseResponse::Close,
+            TabId::Instance { .. } => {
+                // `WorkbenchLayout` is extracted during render, so we
+                // use the standalone `PendingTabCloses` resource. A
+                // domain-side system drains it each frame, prompts
+                // if needed, and fires `CloseTab` on user confirmation.
+                self.world
+                    .resource_mut::<PendingTabCloses>()
+                    .push(*tab);
+                OnCloseResponse::Ignore
+            }
         }
     }
 

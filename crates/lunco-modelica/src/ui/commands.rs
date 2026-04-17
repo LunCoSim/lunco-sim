@@ -20,6 +20,7 @@
 //! kept in sync via focus-loss / commit-on-switch).
 
 use bevy::prelude::*;
+use bevy_egui::egui;
 use lunco_doc::DocumentId;
 use lunco_doc_bevy::{
     CloseDocument, DocumentSaved, EditorIntent, RedoDocument, SaveDocument, UndoDocument,
@@ -82,14 +83,223 @@ pub struct ModelicaCommandsPlugin;
 
 impl Plugin for ModelicaCommandsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_observer(on_undo_document)
+        app.init_resource::<CloseDialogState>()
+            .add_observer(on_undo_document)
             .add_observer(on_redo_document)
             .add_observer(on_save_document)
             .add_observer(on_close_document)
+            .add_observer(on_document_closed_cleanup)
             .add_observer(on_compile_model)
             .add_observer(on_create_new_scratch_model)
             .add_observer(resolve_editor_intent)
-            .add_observer(resolve_new_document_intent);
+            .add_observer(resolve_new_document_intent)
+            .add_systems(
+                bevy::prelude::Update,
+                drain_pending_tab_closes,
+            )
+            .add_systems(
+                bevy_egui::EguiPrimaryContextPass,
+                render_close_dialogs,
+            );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Unsaved-changes close prompt
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Per-doc confirmation state for "close tab with unsaved changes".
+///
+/// The [`CloseTab`](lunco_workbench::CloseTab) event on a dirty doc is
+/// gated by this queue: the workbench's on-close hook pushes the tab
+/// id into `PendingTabCloses`, `drain_pending_tab_closes` inspects the
+/// dirty flag, and dirty tabs land here to await a user decision. The
+/// `render_close_dialogs` system draws a modal per entry.
+#[derive(Resource, Default)]
+pub struct CloseDialogState {
+    /// Docs with an open close-confirmation modal.
+    pub pending: Vec<DocumentId>,
+}
+
+/// Drain `PendingTabCloses` from `lunco_workbench`. Clean docs close
+/// immediately; dirty docs get queued for the user-confirmation modal.
+///
+/// Runs on `Update`, so it picks up both the tab × button (queued by
+/// the workbench's `on_close`) and Ctrl+W (pushed by the
+/// EditorIntent::Close resolver below).
+fn drain_pending_tab_closes(
+    mut pending: ResMut<lunco_workbench::PendingTabCloses>,
+    registry: Res<ModelicaDocumentRegistry>,
+    mut dialogs: ResMut<CloseDialogState>,
+    mut commands: Commands,
+) {
+    for tab in pending.drain() {
+        let lunco_workbench::TabId::Instance { kind, instance } = tab else {
+            continue; // Singleton — not our concern.
+        };
+        if kind != crate::ui::panels::model_view::MODEL_VIEW_KIND {
+            continue; // Another domain's tab.
+        }
+        let doc = DocumentId::new(instance);
+        let is_dirty = registry
+            .host(doc)
+            .map(|h| h.document().is_dirty())
+            .unwrap_or(false);
+        if is_dirty {
+            if !dialogs.pending.contains(&doc) {
+                dialogs.pending.push(doc);
+            }
+        } else {
+            // Clean — go straight through.
+            commands.trigger(lunco_workbench::CloseTab { kind, instance });
+            commands.trigger(CloseDocument { doc });
+        }
+    }
+}
+
+/// Render one modal per entry in [`CloseDialogState`]. Three choices:
+/// **Save** (disabled for Untitled until Save-As lands), **Don't save**,
+/// **Cancel**. The Save path fires `SaveDocument` + full close; Don't
+/// save fires the close directly; Cancel dismisses the dialog.
+fn render_close_dialogs(
+    mut egui_ctx: bevy_egui::EguiContexts,
+    registry: Res<ModelicaDocumentRegistry>,
+    mut dialogs: ResMut<CloseDialogState>,
+    mut commands: Commands,
+) {
+    let Ok(ctx) = egui_ctx.ctx_mut() else {
+        return;
+    };
+    // Drain-and-reinsert pattern so we can mutate individual entries
+    // without fighting the Vec during iteration.
+    let pending = std::mem::take(&mut dialogs.pending);
+    let mut survivors = Vec::with_capacity(pending.len());
+    for doc in pending {
+        let Some(host) = registry.host(doc) else {
+            // Doc vanished (another system closed it). Drop the dialog.
+            continue;
+        };
+        let document = host.document();
+        let display_name = document
+            .canonical_path()
+            .and_then(|p| {
+                let s = p.to_string_lossy();
+                if let Some(name) = s.strip_prefix("mem://") {
+                    Some(name.to_string())
+                } else {
+                    p.file_stem().map(|x| x.to_string_lossy().into_owned())
+                }
+            })
+            .unwrap_or_else(|| format!("Model #{}", doc.raw()));
+        let is_untitled = document
+            .canonical_path()
+            .map(|p| p.to_string_lossy().starts_with("mem://"))
+            .unwrap_or(true);
+        let can_save_directly = !is_untitled && !document.is_read_only();
+
+        enum DialogAction {
+            None,
+            Save,
+            DontSave,
+            Cancel,
+        }
+        let mut action = DialogAction::None;
+
+        let window_id = egui::Id::new(("unsaved_close_prompt", doc.raw()));
+        let mut open = true;
+        egui::Window::new(format!("Save changes to '{}'?", display_name))
+            .id(window_id)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.add_space(4.0);
+                ui.label(
+                    egui::RichText::new(
+                        "Your changes will be lost if you don't save them.",
+                    )
+                    .size(12.0),
+                );
+                if is_untitled {
+                    ui.add_space(4.0);
+                    ui.colored_label(
+                        egui::Color32::from_rgb(200, 150, 50),
+                        "This is an Untitled model. Save-As is not \
+                         implemented yet, so the only options are Don't \
+                         Save or Cancel.",
+                    );
+                }
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    let save_btn = ui.add_enabled(
+                        can_save_directly,
+                        egui::Button::new(egui::RichText::new("Save").strong()),
+                    );
+                    if save_btn.clicked() {
+                        action = DialogAction::Save;
+                    }
+                    if ui.button("Don't save").clicked() {
+                        action = DialogAction::DontSave;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        action = DialogAction::Cancel;
+                    }
+                });
+            });
+        // Close via the title-bar X also dismisses — treat as Cancel.
+        if !open {
+            action = DialogAction::Cancel;
+        }
+
+        match action {
+            DialogAction::None => {
+                survivors.push(doc);
+            }
+            DialogAction::Save => {
+                // Save, then close. Observers fire in order on the
+                // next command-flush; save runs before close.
+                commands.trigger(SaveDocument { doc });
+                commands.trigger(lunco_workbench::CloseTab {
+                    kind: crate::ui::panels::model_view::MODEL_VIEW_KIND,
+                    instance: doc.raw(),
+                });
+                commands.trigger(CloseDocument { doc });
+            }
+            DialogAction::DontSave => {
+                commands.trigger(lunco_workbench::CloseTab {
+                    kind: crate::ui::panels::model_view::MODEL_VIEW_KIND,
+                    instance: doc.raw(),
+                });
+                commands.trigger(CloseDocument { doc });
+            }
+            DialogAction::Cancel => { /* drop from pending */ }
+        }
+    }
+    dialogs.pending = survivors;
+}
+
+/// Observer fired after a document is removed from the registry.
+/// Cleans up the domain-side state that trailed the document:
+/// `ModelTabs` entry, `PackageTreeCache.in_memory_models` entry,
+/// `CompileStates` entry.
+fn on_document_closed_cleanup(
+    trigger: On<lunco_doc_bevy::DocumentClosed>,
+    mut model_tabs: ResMut<crate::ui::panels::model_view::ModelTabs>,
+    mut cache: ResMut<crate::ui::panels::package_browser::PackageTreeCache>,
+    mut compile_states: ResMut<CompileStates>,
+    mut workbench: ResMut<WorkbenchState>,
+) {
+    let doc = trigger.event().doc;
+    model_tabs.close(doc);
+    cache.in_memory_models.retain(|e| e.doc != doc);
+    compile_states.remove(doc);
+    // If the closed doc was the active open_model, clear the slot so
+    // the welcome panel / another tab's sync can take over.
+    if workbench.open_model.as_ref().and_then(|m| m.doc) == Some(doc) {
+        workbench.open_model = None;
+        workbench.editor_buffer.clear();
+        workbench.compilation_error = None;
     }
 }
 
@@ -114,6 +324,7 @@ fn resolve_editor_intent(
     trigger: On<EditorIntent>,
     workbench: Res<WorkbenchState>,
     registry: Res<ModelicaDocumentRegistry>,
+    mut pending_closes: ResMut<lunco_workbench::PendingTabCloses>,
     mut commands: Commands,
 ) {
     let Some(doc) = workbench.open_model.as_ref().and_then(|m| m.doc) else {
@@ -133,7 +344,16 @@ fn resolve_editor_intent(
             // the intent landed, at least.
             warn!("[Intent] SaveAs not implemented yet for doc {doc}");
         }
-        EditorIntent::Close => commands.trigger(CloseDocument { doc }),
+        EditorIntent::Close => {
+            // Ctrl+W goes through the same dirty-check + modal-prompt
+            // pipeline as the tab × button. Push the tab id into the
+            // workbench's close-request queue; `drain_pending_tab_closes`
+            // decides whether to close immediately or prompt.
+            pending_closes.push(lunco_workbench::TabId::Instance {
+                kind: crate::ui::panels::model_view::MODEL_VIEW_KIND,
+                instance: doc.raw(),
+            });
+        }
         EditorIntent::Compile => commands.trigger(CompileModel { doc }),
         // `NewDocument` doesn't need an active doc — it's handled by
         // `NewDocumentNoDoc` resolver below (the resolver that runs
