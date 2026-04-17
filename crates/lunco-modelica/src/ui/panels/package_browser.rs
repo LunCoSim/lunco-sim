@@ -98,6 +98,10 @@ pub struct PackageTreeCache {
     /// Currently-open Twin folder (if any) + its scanned file tree.
     /// Populated by the "Open Folder" button, cleared by "Close Twin".
     pub twin: Option<TwinState>,
+    /// In-flight async scan of a just-picked folder. Polled by
+    /// `handle_package_loading_tasks`. While set, the Twin section
+    /// shows a spinner so the UI never freezes.
+    pub twin_scan_task: Option<Task<TwinState>>,
 }
 
 /// User's Twin workspace — a folder on disk being browsed as a tree.
@@ -108,26 +112,32 @@ pub struct PackageTreeCache {
 pub struct TwinState {
     /// Root folder the user picked via Open Folder.
     pub root: std::path::PathBuf,
-    /// Flat list of entries (files + folders), with nesting captured
-    /// by `depth`. Built via one synchronous `walkdir` at open time;
-    /// cheap for hundreds-of-files twins, can become lazy later.
-    pub entries: Vec<TwinEntry>,
+    /// Recursive tree of files + subfolders under `root`.
+    pub root_node: TwinNode,
 }
 
-/// One row in the Twin Explorer tree.
+/// One file or folder inside a Twin. Tree-shaped so `CollapsingHeader`
+/// renders it cleanly (one level of nesting per depth step).
 #[derive(Clone)]
-pub struct TwinEntry {
+pub struct TwinNode {
     /// Absolute path on disk.
     pub path: std::path::PathBuf,
-    /// Display name — just the file/folder name (no directory path).
+    /// Display name — just the file/folder name.
     pub name: String,
-    /// Nesting depth for indentation (0 = direct child of root).
-    pub depth: usize,
-    /// Whether this is a directory (rendered as `📁`) or a file.
-    pub is_dir: bool,
-    /// Whether this entry is a Modelica source (`.mo`). Other files
-    /// are shown but greyed out / non-clickable.
+    /// Directory nodes have `children`; file nodes have an empty vec.
+    pub children: Vec<TwinNode>,
+    /// True for `.mo` files (clickable, opens a tab). Other files
+    /// are rendered greyed out / non-clickable so users see the
+    /// structure but don't accidentally try to open non-Modelica docs.
     pub is_modelica: bool,
+}
+
+impl TwinNode {
+    fn is_dir(&self) -> bool {
+        // An empty file looks like an empty dir; distinguish by
+        // file-system check on the path.
+        !self.children.is_empty() || self.path.is_dir()
+    }
 }
 
 impl PackageTreeCache {
@@ -177,50 +187,72 @@ impl PackageTreeCache {
             file_tasks: Vec::new(),
             in_memory_models: Vec::new(),
             twin: None,
+            twin_scan_task: None,
         }
     }
 }
 
-/// Scan `root` for a Twin tree. Skips hidden dirs + `.git` + common
-/// build dirs. `.mo` files are flagged as instantiable; other files
-/// are listed for context but can't be opened.
+/// Recursively scan `root` into a [`TwinNode`] tree.
+/// Skips hidden dirs, `.git`, common build / dependency caches.
+/// Synchronous — callers run this on a background task so the UI
+/// never blocks.
 pub fn scan_twin_folder(root: std::path::PathBuf) -> TwinState {
-    use walkdir::WalkDir;
-    let mut entries = Vec::new();
-    for entry in WalkDir::new(&root)
-        .follow_links(false)
-        .into_iter()
-        .filter_entry(|e| {
-            let n = e.file_name().to_string_lossy();
-            !n.starts_with('.')
-                && n != "target"
-                && n != "shared_target"
-                && n != "node_modules"
-        })
-        .flatten()
-    {
-        let path = entry.path().to_path_buf();
-        if path == root {
-            continue; // Skip the root itself.
-        }
-        let depth = entry.depth().saturating_sub(1);
+    let name = root
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| root.display().to_string());
+    let root_node = TwinNode {
+        children: scan_children(&root),
+        path: root.clone(),
+        name,
+        is_modelica: false,
+    };
+    TwinState { root, root_node }
+}
+
+fn scan_children(dir: &std::path::Path) -> Vec<TwinNode> {
+    let Ok(iter) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for entry in iter.flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
-        let is_dir = entry.file_type().is_dir();
+        if should_skip(&name) {
+            continue;
+        }
+        let path = entry.path();
+        let is_dir = entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
         let is_modelica = !is_dir
             && path
                 .extension()
                 .and_then(|e| e.to_str())
                 .map(|e| e.eq_ignore_ascii_case("mo"))
                 .unwrap_or(false);
-        entries.push(TwinEntry {
+        let children = if is_dir { scan_children(&path) } else { Vec::new() };
+        out.push(TwinNode {
             path,
             name,
-            depth,
-            is_dir,
+            children,
             is_modelica,
         });
     }
-    TwinState { root, entries }
+    // Directories first, then files, each alphabetically. Standard
+    // explorer ordering — nothing sadder than a file tree with files
+    // interleaved with folders in creation order.
+    out.sort_by(|a, b| {
+        let a_dir = !a.children.is_empty() || a.path.is_dir();
+        let b_dir = !b.children.is_empty() || b.path.is_dir();
+        b_dir.cmp(&a_dir).then_with(|| a.name.cmp(&b.name))
+    });
+    out
+}
+
+fn should_skip(name: &str) -> bool {
+    name.starts_with('.')
+        || matches!(
+            name,
+            "target" | "shared_target" | "node_modules" | "__pycache__"
+        )
 }
 
 // ---------------------------------------------------------------------------
@@ -331,6 +363,18 @@ pub fn handle_package_loading_tasks(
         }
     });
 
+    // Poll any in-flight Twin folder scan. When it finishes, install
+    // the scanned tree into `cache.twin`. Keeps the spinner up while
+    // pending; drops it to `None` when done.
+    if let Some(mut task) = cache.twin_scan_task.take() {
+        if let Some(scanned) = future::block_on(future::poll_once(&mut task)) {
+            cache.twin = Some(scanned);
+            cache.twin_scan_task = None;
+        } else {
+            cache.twin_scan_task = Some(task);
+        }
+    }
+
     for result in finished_files {
         // Final font-dependent shaping on main thread
         let cached_galley = result.layout_job.map(|job| {
@@ -412,146 +456,94 @@ impl Panel for PackageBrowserPanel {
 
             egui::ScrollArea::vertical().show(ui, |ui| {
                 let cache = &mut *tree_cache;
-                let roots = &mut cache.roots;
-                let tasks = &mut cache.tasks;
-                let in_memory = &cache.in_memory_models;
 
                 // ── Section 1: Your Models ──
-                // Session's scratch models (Untitled-N) + the future
-                // Twin file tree live here. MSL is NOT in this browser
-                // anymore — it's the Component Palette's responsibility.
-                ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("📁 Your Models").size(12.0).color(egui::Color32::YELLOW).strong());
-                    if ui.small_button("➕")
-                        .on_hover_text("New untitled model (Ctrl+N)")
+                // Scratch / Untitled models created this session.
+                section_header(ui, "Your Models", |ui| {
+                    if ui
+                        .small_button("➕")
+                        .on_hover_text("New model (Ctrl+N)")
                         .clicked()
                     {
                         create_new = true;
                     }
                 });
-
-                if in_memory.is_empty() {
-                    ui.label(
-                        egui::RichText::new("(no models — click ➕ or press Ctrl+N)")
-                            .size(10.0)
-                            .color(egui::Color32::GRAY),
-                    );
-                } else if let Some(id) = render_in_memory_models(ui, in_memory, active_path) {
+                if cache.in_memory_models.is_empty() {
+                    section_empty_state(ui, "No models. Press ➕ or Ctrl+N.");
+                } else if let Some(id) =
+                    render_in_memory_models(ui, &cache.in_memory_models, active_path)
+                {
                     reopen_in_memory = Some(id);
                 }
 
-                ui.add_space(4.0);
-                ui.separator();
-
                 // ── Section 2: Examples ──
-                // Complete example models shipped with the app. Open to
-                // study or simulate — these are files, not drag-drop
-                // building blocks (those live in the Component Palette).
-                ui.label(
-                    egui::RichText::new("📦 Examples")
-                        .size(12.0)
-                        .color(egui::Color32::from_rgb(100, 255, 100))
-                        .strong(),
-                );
-
-                if roots.len() > 1 {
-                    if let Some(req) = render_node(&mut roots[1], ui, active_path, 0, tasks) {
+                // Read-only models shipped with the app.
+                section_header(ui, "Examples", |_| {});
+                if cache.roots.len() > 1 {
+                    if let Some(req) = render_node(
+                        &mut cache.roots[1],
+                        ui,
+                        active_path,
+                        0,
+                        &mut cache.tasks,
+                    ) {
                         to_open = Some(req);
                     }
                 }
 
-                ui.add_space(4.0);
-                ui.separator();
-
                 // ── Section 3: Twin (folder on disk) ──
-                ui.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new("📂 Twin")
-                            .size(12.0)
-                            .color(egui::Color32::from_rgb(140, 200, 255))
-                            .strong(),
-                    );
-                    if cache.twin.is_some() {
-                        if ui.small_button("✕ close").on_hover_text("Close this folder").clicked() {
+                section_header(ui, "Workspace", |ui| {
+                    if cache.twin_scan_task.is_some() {
+                        ui.spinner();
+                    } else if cache.twin.is_some() {
+                        if ui
+                            .small_button("✕")
+                            .on_hover_text("Close folder")
+                            .clicked()
+                        {
                             close_twin = true;
                         }
-                    } else if ui.small_button("📁 Open…")
-                        .on_hover_text("Pick a folder to browse as your workspace")
+                    } else if ui
+                        .small_button("📁 Open…")
+                        .on_hover_text("Pick a folder to browse")
                         .clicked()
                     {
                         open_twin_picker = true;
                     }
                 });
 
-                if let Some(twin) = cache.twin.as_ref() {
-                    // Root label
-                    let root_name = twin
-                        .root
-                        .file_name()
-                        .map(|s| s.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| twin.root.display().to_string());
-                    ui.label(
-                        egui::RichText::new(format!("📁 {}", root_name))
-                            .size(11.0)
-                            .color(egui::Color32::from_rgb(200, 220, 255)),
-                    );
+                if cache.twin_scan_task.is_some() {
+                    ui.horizontal(|ui| {
+                        ui.add_space(12.0);
+                        ui.spinner();
+                        ui.label(
+                            egui::RichText::new("Scanning folder…")
+                                .size(11.0)
+                                .color(egui::Color32::GRAY),
+                        );
+                    });
+                } else if let Some(twin) = cache.twin.as_ref() {
+                    if twin.root_node.children.is_empty() {
+                        section_empty_state(
+                            ui,
+                            "Empty folder. Add a .mo file on disk and reopen.",
+                        );
+                    } else {
+                        for child in &twin.root_node.children {
+                            if let Some(picked) = render_twin_node(ui, child, 0) {
+                                open_twin_file = Some(picked);
+                            }
+                        }
+                    }
+                    // Footer hint with the full path (small, grey).
+                    ui.add_space(4.0);
                     ui.label(
                         egui::RichText::new(twin.root.display().to_string())
                             .size(9.0)
                             .color(egui::Color32::DARK_GRAY),
                     );
-                    ui.add_space(2.0);
-
-                    if twin.entries.is_empty() {
-                        ui.label(
-                            egui::RichText::new("(empty folder)")
-                                .size(10.0)
-                                .color(egui::Color32::GRAY),
-                        );
-                    } else {
-                        for entry in &twin.entries {
-                            let indent = entry.depth as f32 * 12.0 + 4.0;
-                            let icon = if entry.is_dir {
-                                "📁"
-                            } else if entry.is_modelica {
-                                "📄"
-                            } else {
-                                "·"
-                            };
-                            let text = egui::RichText::new(format!("{icon} {}", entry.name))
-                                .size(10.5)
-                                .color(if entry.is_modelica {
-                                    egui::Color32::from_rgb(220, 220, 160)
-                                } else if entry.is_dir {
-                                    egui::Color32::from_rgb(160, 200, 240)
-                                } else {
-                                    egui::Color32::DARK_GRAY
-                                });
-                            let resp = ui
-                                .horizontal(|ui| {
-                                    ui.add_space(indent);
-                                    ui.add(
-                                        egui::Label::new(text)
-                                            .sense(if entry.is_modelica {
-                                                egui::Sense::click()
-                                            } else {
-                                                egui::Sense::hover()
-                                            }),
-                                    )
-                                })
-                                .inner;
-                            if entry.is_modelica && resp.clicked() {
-                                open_twin_file = Some(entry.path.clone());
-                            }
-                        }
-                    }
                 } else {
-                    ui.label(
-                        egui::RichText::new("(no folder open)")
-                            .size(10.0)
-                            .color(egui::Color32::GRAY),
-                    );
+                    section_empty_state(ui, "No folder open. Click 📁 Open…");
                 }
             });
         }
@@ -565,19 +557,24 @@ impl Panel for PackageBrowserPanel {
 
         // ── Twin lifecycle ──────────────────────────────────────
         if open_twin_picker {
-            // Synchronous native picker — blocks the UI thread for
-            // the short moment the dialog is visible. Async version
-            // lands when we want multi-window.
+            // Native dialog still blocks the main thread while visible,
+            // but the scan afterwards moves to AsyncComputeTaskPool so
+            // a huge twin doesn't freeze the UI on open.
             if let Some(folder) = rfd::FileDialog::new()
                 .set_title("Open Twin folder")
                 .pick_folder()
             {
-                let scanned = scan_twin_folder(folder);
-                world.resource_mut::<PackageTreeCache>().twin = Some(scanned);
+                let pool = AsyncComputeTaskPool::get();
+                let task = pool.spawn(async move { scan_twin_folder(folder) });
+                let mut cache = world.resource_mut::<PackageTreeCache>();
+                cache.twin = None; // clear old tree so spinner shows
+                cache.twin_scan_task = Some(task);
             }
         }
         if close_twin {
-            world.resource_mut::<PackageTreeCache>().twin = None;
+            let mut cache = world.resource_mut::<PackageTreeCache>();
+            cache.twin = None;
+            cache.twin_scan_task = None;
         }
         if let Some(path) = open_twin_file {
             // Treat the clicked .mo as a user-writable file. Use the
@@ -811,6 +808,97 @@ fn commit_current_model_edits(world: &mut World) {
                 .checkpoint_source(doc_id, src);
         }
     }
+}
+
+/// Uniform section header for the sidebar. Label on the left in
+/// muted caps, optional right-aligned action slot (e.g. `➕`, spinner,
+/// close button). Matches VS Code Explorer's section-heading cadence.
+fn section_header<F: FnOnce(&mut egui::Ui)>(
+    ui: &mut egui::Ui,
+    title: &str,
+    right_actions: F,
+) {
+    ui.add_space(8.0);
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new(title.to_uppercase())
+                .size(10.0)
+                .color(egui::Color32::from_rgb(160, 160, 180))
+                .strong(),
+        );
+        // Push actions to the right edge.
+        let remaining = ui.available_width() - 60.0;
+        if remaining > 0.0 {
+            ui.add_space(remaining);
+        }
+        right_actions(ui);
+    });
+    ui.separator();
+}
+
+/// Muted placeholder text for empty sections. Keeps sections visually
+/// present but non-noisy when there's nothing to show.
+fn section_empty_state(ui: &mut egui::Ui, text: &str) {
+    ui.horizontal(|ui| {
+        ui.add_space(12.0);
+        ui.label(
+            egui::RichText::new(text)
+                .size(10.0)
+                .italics()
+                .color(egui::Color32::from_rgb(130, 130, 140)),
+        );
+    });
+}
+
+/// Render one Twin tree node. Directories use `CollapsingHeader` so
+/// the twisty arrow / indentation / hover highlight come from egui
+/// for free. Files are a simple selectable row. Non-Modelica files
+/// render greyed + disabled so the tree structure is visible but
+/// users can't accidentally try to open a README as a model.
+///
+/// Returns `Some(path)` when the user clicks a `.mo` file — the
+/// caller opens it as a tab.
+fn render_twin_node(
+    ui: &mut egui::Ui,
+    node: &TwinNode,
+    depth: usize,
+) -> Option<std::path::PathBuf> {
+    let mut picked = None;
+    if node.is_dir() {
+        let id = egui::Id::new(("twin_node", node.path.as_os_str()));
+        egui::CollapsingHeader::new(
+            egui::RichText::new(format!("📁 {}", node.name))
+                .size(11.0)
+                .color(egui::Color32::from_rgb(180, 200, 230)),
+        )
+        .id_salt(id)
+        .default_open(depth == 0)
+        .show(ui, |ui| {
+            for child in &node.children {
+                if let Some(p) = render_twin_node(ui, child, depth + 1) {
+                    picked = Some(p);
+                }
+            }
+        });
+    } else {
+        // File row — one `SelectableLabel` so hover / click feel right.
+        let (icon, color) = if node.is_modelica {
+            ("📄", egui::Color32::from_rgb(220, 220, 160))
+        } else {
+            ("·", egui::Color32::from_rgb(110, 110, 120))
+        };
+        let row = egui::Button::selectable(
+            false,
+            egui::RichText::new(format!("{icon}  {}", node.name))
+                .size(11.0)
+                .color(color),
+        );
+        let resp = ui.add_enabled(node.is_modelica, row);
+        if resp.clicked() {
+            picked = Some(node.path.clone());
+        }
+    }
+    picked
 }
 
 /// Render every in-memory model the user has created this session.
