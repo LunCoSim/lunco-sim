@@ -332,29 +332,49 @@ impl Panel for PackageBrowserPanel {
             let mut tree_cache = world.resource_mut::<PackageTreeCache>();
 
             egui::ScrollArea::vertical().show(ui, |ui| {
-                // ── Section 1: MSL Library ──
-                ui.add_space(4.0);
-                ui.label(egui::RichText::new("📚 Modelica Standard Library").size(12.0).color(egui::Color32::from_rgb(100, 180, 255)).strong());
-                ui.label(egui::RichText::new("Right-click to instantiate in diagram").size(9.0).color(egui::Color32::GRAY));
-
-                // MSL root is first root
                 let cache = &mut *tree_cache;
                 let roots = &mut cache.roots;
                 let tasks = &mut cache.tasks;
                 let in_memory = &cache.in_memory_models;
 
-                if let Some(msl_root) = roots.first_mut() {
-                    if let Some(req) = render_node(msl_root, ui, active_path, 0, tasks) {
-                        to_open = Some(req);
+                // ── Section 1: Your Models ──
+                // Session's scratch models (Untitled-N) + the future
+                // Twin file tree live here. MSL is NOT in this browser
+                // anymore — it's the Component Palette's responsibility.
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("📁 Your Models").size(12.0).color(egui::Color32::YELLOW).strong());
+                    if ui.small_button("➕")
+                        .on_hover_text("New untitled model (Ctrl+N)")
+                        .clicked()
+                    {
+                        create_new = true;
                     }
+                });
+
+                if in_memory.is_empty() {
+                    ui.label(
+                        egui::RichText::new("(no models — click ➕ or press Ctrl+N)")
+                            .size(10.0)
+                            .color(egui::Color32::GRAY),
+                    );
+                } else if let Some(id) = render_in_memory_models(ui, in_memory, active_path) {
+                    reopen_in_memory = Some(id);
                 }
 
                 ui.add_space(4.0);
                 ui.separator();
 
-                // ── Section 2: Bundled Models ──
-                ui.label(egui::RichText::new("📦 Bundled Models").size(12.0).color(egui::Color32::from_rgb(100, 255, 100)).strong());
-                ui.label(egui::RichText::new("Read-only — shipped examples").size(9.0).color(egui::Color32::GRAY));
+                // ── Section 2: Examples ──
+                // Complete example models shipped with the app. Open to
+                // study or simulate — these are files, not drag-drop
+                // building blocks (those live in the Component Palette).
+                ui.label(
+                    egui::RichText::new("📦 Examples")
+                        .size(12.0)
+                        .color(egui::Color32::from_rgb(100, 255, 100))
+                        .strong(),
+                );
 
                 if roots.len() > 1 {
                     if let Some(req) = render_node(&mut roots[1], ui, active_path, 0, tasks) {
@@ -365,38 +385,15 @@ impl Panel for PackageBrowserPanel {
                 ui.add_space(4.0);
                 ui.separator();
 
-                // ── Section 3: Your Models ──
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("📁 Your Models").size(12.0).color(egui::Color32::YELLOW).strong());
-                    if ui.small_button("➕")
-                        .on_hover_text("New untitled model (Ctrl+N)")
-                        .clicked()
-                    {
-                        create_new = true;
-                    }
-                });
-                ui.label(egui::RichText::new("Writable — your custom models").size(9.0).color(egui::Color32::GRAY));
-
-                // Every in-memory model the user created this session.
-                // Clicking a non-active one switches back to it (restored
-                // from the registry, not regenerated from a template).
-                if let Some(id) = render_in_memory_models(ui, in_memory, active_path) {
-                    reopen_in_memory = Some(id);
-                }
-
-                if ui.button("➕ New model")
-                    .on_hover_text("Creates an Untitled tab (Ctrl+N)")
-                    .clicked()
-                {
-                    create_new = true;
-                }
-
-                // Show Open Folder placeholder
-                if roots.len() > 2 {
-                    ui.add_space(4.0);
-                    ui.label(egui::RichText::new("📂 Open Folder").size(10.0).color(egui::Color32::DARK_GRAY));
-                    ui.label(egui::RichText::new("(coming soon)").size(8.0).color(egui::Color32::DARK_GRAY));
-                }
+                // ── Section 3: Open Folder / Twin (future) ──
+                ui.label(
+                    egui::RichText::new("📂 Twin").size(10.0).color(egui::Color32::DARK_GRAY),
+                );
+                ui.label(
+                    egui::RichText::new("(Open Folder / workspace tree — coming soon)")
+                        .size(9.0)
+                        .color(egui::Color32::DARK_GRAY),
+                );
             });
         }
 
