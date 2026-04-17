@@ -63,6 +63,7 @@ fn compile_balloon_model(
             session_id: 0,
             paused: false,
             is_stepping: false,
+            document: Default::default(),
         });
 
         let _ = channels.tx.send(ModelicaCommand::Compile {

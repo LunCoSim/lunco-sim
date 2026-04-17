@@ -623,6 +623,11 @@ impl Panel for PackageBrowserPanel {
                 .set_title("Open Twin folder")
                 .pick_folder()
             {
+                if let Some(mut console) = world
+                    .get_resource_mut::<crate::ui::panels::console::ConsoleLog>()
+                {
+                    console.info(format!("Scanning twin folder: {}", folder.display()));
+                }
                 let pool = AsyncComputeTaskPool::get();
                 let task = pool.spawn(async move { scan_twin_folder(folder) });
                 let mut cache = world.resource_mut::<PackageTreeCache>();
@@ -653,14 +658,36 @@ impl Panel for PackageBrowserPanel {
         // retry or cancel.
         if let Some((from, to)) = pending_rename {
             if to.exists() {
-                log::warn!(
-                    "[Rename] Target already exists: {:?} — rename cancelled.",
-                    to
+                let msg = format!(
+                    "Rename cancelled: '{}' already exists.",
+                    to.display()
                 );
+                log::warn!("[Rename] {msg}");
+                if let Some(mut console) = world
+                    .get_resource_mut::<crate::ui::panels::console::ConsoleLog>()
+                {
+                    console.warn(msg);
+                }
             } else if let Err(e) = std::fs::rename(&from, &to) {
-                log::error!("[Rename] Failed: {:?} -> {:?}: {}", from, to, e);
+                let msg = format!(
+                    "Rename failed: {} -> {}: {e}",
+                    from.display(),
+                    to.display()
+                );
+                log::error!("[Rename] {msg}");
+                if let Some(mut console) = world
+                    .get_resource_mut::<crate::ui::panels::console::ConsoleLog>()
+                {
+                    console.error(msg);
+                }
             } else {
-                log::info!("[Rename] {:?} -> {:?}", from, to);
+                let msg = format!("Renamed {} -> {}", from.display(), to.display());
+                log::info!("[Rename] {msg}");
+                if let Some(mut console) = world
+                    .get_resource_mut::<crate::ui::panels::console::ConsoleLog>()
+                {
+                    console.info(msg);
+                }
                 // Re-scan the twin to pick up the new name. Same
                 // async path as Open Folder.
                 if let Some(root) = world

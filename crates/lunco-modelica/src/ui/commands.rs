@@ -460,6 +460,7 @@ fn sync_editor_buffer_to_source(
 fn on_save_document(
     trigger: On<SaveDocument>,
     mut registry: ResMut<ModelicaDocumentRegistry>,
+    mut console: ResMut<crate::ui::panels::console::ConsoleLog>,
     mut commands: Commands,
 ) {
     let doc = trigger.event().doc;
@@ -471,24 +472,25 @@ fn on_save_document(
         };
         let document = host.document();
         if document.origin().is_untitled() {
-            warn!(
-                "[Save] Document {doc} is untitled ({}); Save-As required.",
+            let msg = format!(
+                "Save skipped — '{}' is an untitled model. Save-As required.",
                 document.origin().display_name()
             );
+            warn!("[Save] {msg}");
+            console.warn(msg);
             return;
         }
         let Some(path) = document.canonical_path() else {
-            warn!(
-                "[Save] Document {doc} has no canonical path — Save-As not implemented yet."
-            );
+            console.warn(format!(
+                "Save skipped — doc {doc} has no canonical path"
+            ));
             return;
         };
         if document.is_read_only() {
-            warn!(
-                "[Save] Document {} is read-only ({:?}) — refusing to overwrite.",
-                doc,
-                document.origin()
-            );
+            let name = document.origin().display_name();
+            let msg = format!("Save blocked — '{name}' is read-only (library / bundled example).");
+            warn!("[Save] {msg}");
+            console.warn(msg);
             return;
         }
         (path.to_path_buf(), document.source().to_string())
@@ -496,10 +498,14 @@ fn on_save_document(
 
     let (path, source) = to_save;
     if let Err(e) = std::fs::write(&path, &source) {
-        error!("[Save] Failed to write {:?}: {e}", path);
+        let msg = format!("Save failed: {}: {e}", path.display());
+        error!("[Save] {msg}");
+        console.error(msg);
         return;
     }
-    info!("[Save] Wrote {} bytes to {:?}", source.len(), path);
+    let msg = format!("Saved {} bytes to {}", source.len(), path.display());
+    info!("[Save] {msg}");
+    console.info(msg);
 
     registry.mark_document_saved(doc);
     commands.trigger(DocumentSaved::local(doc));
@@ -522,6 +528,7 @@ fn on_compile_model(
     mut registry: ResMut<ModelicaDocumentRegistry>,
     mut workbench: ResMut<WorkbenchState>,
     mut compile_states: ResMut<CompileStates>,
+    mut console: ResMut<crate::ui::panels::console::ConsoleLog>,
     diagram_state: Res<DiagramState>,
     channels: Option<Res<ModelicaChannels>>,
     mut q_models: Query<&mut ModelicaModel>,
@@ -536,8 +543,9 @@ fn on_compile_model(
         None => return,
     };
     let Some(model_name) = extract_model_name(&source) else {
-        workbench.compilation_error =
-            Some("Could not find a valid model declaration.".to_string());
+        let msg = "Could not find a valid model declaration.".to_string();
+        workbench.compilation_error = Some(msg.clone());
+        console.error(format!("Compile failed: {msg}"));
         return;
     };
     let params = extract_parameters(&source);
@@ -615,6 +623,7 @@ fn on_compile_model(
         .unwrap_or_else(|_| diagram_state.model_counter as u64 + 1);
 
     compile_states.set(doc, CompileState::Compiling);
+    console.info(format!("Compiling '{model_name}'…"));
 
     if let Some(channels) = channels {
         let _ = channels.tx.send(ModelicaCommand::Compile {
@@ -623,6 +632,8 @@ fn on_compile_model(
             model_name,
             source,
         });
+    } else {
+        console.error("Modelica worker channel not available — compile dispatch dropped.");
     }
 }
 

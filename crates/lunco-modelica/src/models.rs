@@ -33,8 +33,14 @@ pub const ROCKET_ENGINE: &str = include_str!("../../../assets/models/RocketEngin
 /// Battery — simple SOC integrator with configurable capacity + current.
 pub const BATTERY: &str = include_str!("../../../assets/models/Battery.mo");
 
-/// RC circuit — resistor + capacitor with voltage source (schematic).
+/// Single-stage RC circuit — source, resistor, capacitor, ground.
 pub const RC_CIRCUIT: &str = include_str!("../../../assets/models/RC_Circuit.mo");
+
+/// Two-stage RC low-pass filter — 6 MSL components + 7 connects.
+/// The example to run when you want to see the Diagram view
+/// actually render a block schematic.
+pub const CASCADED_RC_FILTER: &str =
+    include_str!("../../../assets/models/CascadedRCFilter.mo");
 
 /// BouncyBall — projectile-under-gravity with ideal floor collisions.
 pub const BOUNCY_BALL: &str = include_str!("../../../assets/models/BouncyBall.mo");
@@ -46,19 +52,24 @@ pub const SPRING_MASS: &str = include_str!("../../../assets/models/SpringMass.mo
 /// Order matters: the first entry is the one the web binary auto-opens.
 pub const BUNDLED_MODELS: &[BundledModel] = &[
     BundledModel {
+        filename: "CascadedRCFilter.mo",
+        source: CASCADED_RC_FILTER,
+        tagline: "Two-stage RC low-pass filter — 6 MSL blocks, renders as a schematic",
+    },
+    BundledModel {
         filename: "RocketEngine.mo",
         source: ROCKET_ENGINE,
-        tagline: "Liquid rocket — thrust, mass flow, total impulse",
+        tagline: "Liquid rocket — thrust, mass flow, total impulse (equation-only)",
     },
     BundledModel {
         filename: "Battery.mo",
         source: BATTERY,
-        tagline: "Battery — state-of-charge integrator",
+        tagline: "Battery — state-of-charge integrator (equation-only)",
     },
     BundledModel {
         filename: "RC_Circuit.mo",
         source: RC_CIRCUIT,
-        tagline: "RC circuit — schematic with source, resistor, capacitor",
+        tagline: "Single-stage RC — the minimal schematic",
     },
     BundledModel {
         filename: "BouncyBall.mo",

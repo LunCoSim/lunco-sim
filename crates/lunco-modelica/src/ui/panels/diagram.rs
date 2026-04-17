@@ -1713,136 +1713,322 @@ pub fn do_compile(world: &mut World) {
     }
 }
 
+/// Cached per-document signature used by the equation-only empty
+/// state. Populated lazily the first time we render this view for a
+/// (doc, generation) pair; invalidated when the generation bumps.
+///
+/// Shipped because the naive version re-ran `extract_parameters` +
+/// `extract_inputs_with_defaults` + `extract_input_names` every
+/// frame, regex-scanning the full source at 60 fps. On anything but
+/// a trivial model that crushed rendering — caching drops it to one
+/// scan per edit.
+#[derive(Resource, Default)]
+pub struct ModelSignatureCache {
+    by_doc: std::collections::HashMap<lunco_doc::DocumentId, CachedSignature>,
+}
+
+struct CachedSignature {
+    generation: u64,
+    sig: ModelSignature,
+}
+
+/// Structural summary of a Modelica model — what its parameters,
+/// inputs, and observable variables are. Rendered as an icon-style
+/// block when the model has no visual components to draw.
+pub struct ModelSignature {
+    pub params: Vec<(String, f64)>,
+    pub inputs: Vec<(String, Option<f64>)>,
+    pub observables: Vec<String>,
+}
+
+impl ModelSignatureCache {
+    /// Return the cached signature for `doc`, recomputing if the
+    /// document's generation changed since the last query.
+    pub fn get_or_compute(
+        &mut self,
+        doc: lunco_doc::DocumentId,
+        generation: u64,
+        source: &str,
+    ) -> &ModelSignature {
+        let needs_rebuild = self
+            .by_doc
+            .get(&doc)
+            .map(|c| c.generation != generation)
+            .unwrap_or(true);
+        if needs_rebuild {
+            let sig = compute_signature(source);
+            self.by_doc.insert(doc, CachedSignature { generation, sig });
+        }
+        &self.by_doc.get(&doc).unwrap().sig
+    }
+}
+
+fn compute_signature(source: &str) -> ModelSignature {
+    let params_map = crate::ast_extract::extract_parameters(source);
+    let mut params: Vec<(String, f64)> =
+        params_map.into_iter().collect();
+    params.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let inputs_with_defaults = crate::ast_extract::extract_inputs_with_defaults(source);
+    let runtime_inputs = crate::ast_extract::extract_input_names(source);
+    let mut inputs: Vec<(String, Option<f64>)> = inputs_with_defaults
+        .iter()
+        .map(|(k, v)| (k.clone(), Some(*v)))
+        .chain(
+            runtime_inputs
+                .iter()
+                .filter(|n| !inputs_with_defaults.contains_key(*n))
+                .map(|n| (n.clone(), None)),
+        )
+        .collect();
+    inputs.sort_by(|a, b| a.0.cmp(&b.0));
+
+    // Observables: `Real X`, `Integer X`, `Boolean X` declarations
+    // that aren't parameters or inputs. Quick line-based scan — not
+    // AST-accurate, but good enough for a tab-header preview.
+    let mut observables: Vec<String> = Vec::new();
+    let param_keys: std::collections::HashSet<_> =
+        params.iter().map(|(k, _)| k.clone()).collect();
+    let input_keys: std::collections::HashSet<_> =
+        inputs.iter().map(|(k, _)| k.clone()).collect();
+    for line in source.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("parameter") || trimmed.starts_with("input") {
+            continue;
+        }
+        for kw in ["Real ", "Integer ", "Boolean "] {
+            if let Some(rest) = trimmed.strip_prefix(kw) {
+                let name: String = rest
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_')
+                    .collect();
+                if !name.is_empty()
+                    && !param_keys.contains(&name)
+                    && !input_keys.contains(&name)
+                    && !observables.contains(&name)
+                {
+                    observables.push(name);
+                }
+                break;
+            }
+        }
+    }
+
+    ModelSignature {
+        params,
+        inputs,
+        observables,
+    }
+}
+
 /// Shown when the active model has no visual components — i.e.
 /// equation-based (RocketEngine, Battery, BouncyBall, SpringMass).
-/// Explains the situation + previews the model's signature so the
-/// Diagram view still conveys what the model does at a glance.
+/// Renders the model as an **icon-style block** (Modelica `Icon`
+/// convention): rounded rect with title, input port dots on the left,
+/// observable port dots on the right. Matches how the model would
+/// look if dropped into another diagram as a component.
 fn render_equation_only_empty_state(ui: &mut egui::Ui, world: &mut World) {
-    let (model_name, source) = {
+    let (model_name, doc_id, generation, source) = {
         let state = world.resource::<WorkbenchState>();
         let Some(open) = state.open_model.as_ref() else {
-            // No model at all — different empty state.
             ui.vertical_centered(|ui| {
                 ui.add_space(80.0);
                 ui.heading("🔗 No model open");
                 ui.label(
-                    egui::RichText::new("Pick a model from the sidebar or the Welcome tab.")
-                        .size(12.0)
+                    egui::RichText::new(
+                        "Pick a model from the sidebar or the Welcome tab.",
+                    )
+                    .size(12.0)
+                    .color(egui::Color32::GRAY),
+                );
+            });
+            return;
+        };
+        let doc = open.doc;
+        let Some(doc) = doc else {
+            // Open but no DocumentId yet (rare transient) — don't
+            // bother with signature; show minimal state.
+            ui.vertical_centered(|ui| {
+                ui.add_space(80.0);
+                ui.heading(format!("🔗 {}", open.display_name));
+                ui.label(
+                    egui::RichText::new("Preparing…")
+                        .size(11.0)
                         .color(egui::Color32::GRAY),
                 );
             });
             return;
         };
-        (open.display_name.clone(), open.source.to_string())
+        let generation = world
+            .get_resource::<crate::ui::state::ModelicaDocumentRegistry>()
+            .and_then(|r| r.host(doc))
+            .map(|h| h.generation())
+            .unwrap_or(0);
+        (
+            open.display_name.clone(),
+            doc,
+            generation,
+            open.source.to_string(),
+        )
     };
 
-    // Extract the model's shape for the preview — cheap regex-based
-    // (we already use these in ast_extract for compile-time work).
-    let params = crate::ast_extract::extract_parameters(&source);
-    let inputs = crate::ast_extract::extract_inputs_with_defaults(&source);
-    let runtime_inputs = crate::ast_extract::extract_input_names(&source);
+    // Ensure the cache resource exists (panels run with &mut World
+    // and can introduce resources lazily).
+    if world.get_resource::<ModelSignatureCache>().is_none() {
+        world.insert_resource(ModelSignatureCache::default());
+    }
 
-    egui::ScrollArea::vertical().show(ui, |ui| {
-        ui.add_space(32.0);
-        ui.vertical_centered(|ui| {
-            ui.set_max_width(540.0);
+    // Clone-out the signature so we can release the cache borrow
+    // before drawing (drawing doesn't need the cache, and we'd
+    // rather not hold a ResMut across the full painter pass).
+    let (params, inputs, observables) = {
+        let mut cache = world.resource_mut::<ModelSignatureCache>();
+        let sig = cache.get_or_compute(doc_id, generation, &source);
+        (
+            sig.params.clone(),
+            sig.inputs.clone(),
+            sig.observables.clone(),
+        )
+    };
 
-            ui.heading(
-                egui::RichText::new(format!("🔗 {}", model_name))
-                    .size(18.0),
+    draw_model_icon_block(ui, &model_name, &params, &inputs, &observables);
+}
+
+/// Paint a Modelica "Icon"-style block centered in the current
+/// panel. Rounded rect, title bar at top, input ports on the left,
+/// observable ports on the right, parameters listed inside.
+///
+/// No interaction — the block is read-only visualization. Future:
+/// draggable onto another diagram, rename via double-click, etc.
+fn draw_model_icon_block(
+    ui: &mut egui::Ui,
+    name: &str,
+    params: &[(String, f64)],
+    inputs: &[(String, Option<f64>)],
+    observables: &[String],
+) {
+    let avail = ui.available_rect_before_wrap();
+    let port_rows = inputs.len().max(observables.len()) as f32;
+    let param_rows = params.len() as f32;
+
+    // Block size scales to content, centered in the view.
+    let block_w = 420.0_f32.min(avail.width() - 40.0).max(260.0);
+    let title_h = 36.0;
+    let port_h = 20.0;
+    let param_padding = if param_rows > 0.0 { 10.0 } else { 0.0 };
+    let content_h = (port_h * port_rows.max(1.0))
+        + (16.0 * param_rows)
+        + param_padding;
+    let block_h = (title_h + content_h + 24.0).max(180.0);
+
+    let center = avail.center();
+    let block_rect = egui::Rect::from_center_size(
+        egui::pos2(center.x, (avail.top() + 60.0 + block_h / 2.0).min(center.y)),
+        egui::vec2(block_w, block_h),
+    );
+
+    let painter = ui.painter();
+
+    // Body + title bar.
+    let bg = egui::Color32::from_rgb(38, 42, 52);
+    let border = egui::Color32::from_rgb(120, 140, 180);
+    let title_bg = egui::Color32::from_rgb(60, 70, 92);
+    painter.rect_filled(block_rect, 10.0, bg);
+    painter.rect_stroke(
+        block_rect,
+        10.0,
+        egui::Stroke::new(1.5, border),
+        egui::StrokeKind::Outside,
+    );
+    let title_rect =
+        egui::Rect::from_min_size(block_rect.min, egui::vec2(block_rect.width(), title_h));
+    painter.rect_filled(
+        title_rect,
+        egui::CornerRadius {
+            nw: 10,
+            ne: 10,
+            sw: 0,
+            se: 0,
+        },
+        title_bg,
+    );
+    painter.text(
+        title_rect.center(),
+        egui::Align2::CENTER_CENTER,
+        name,
+        egui::FontId::proportional(14.5),
+        egui::Color32::WHITE,
+    );
+
+    // Port colors (match Palette category conventions roughly).
+    let input_color = egui::Color32::from_rgb(230, 190, 100); // amber
+    let output_color = egui::Color32::from_rgb(120, 200, 120); // green
+    let label_color = egui::Color32::from_rgb(220, 220, 220);
+    let muted = egui::Color32::from_rgb(160, 160, 170);
+
+    // Inputs on the left edge.
+    let content_top = title_rect.bottom() + 14.0;
+    for (i, (name, _default)) in inputs.iter().enumerate() {
+        let y = content_top + i as f32 * port_h + port_h * 0.5;
+        let pos = egui::pos2(block_rect.left(), y);
+        painter.circle_filled(pos, 4.5, input_color);
+        painter.text(
+            pos + egui::vec2(8.0, 0.0),
+            egui::Align2::LEFT_CENTER,
+            name,
+            egui::FontId::monospace(11.0),
+            label_color,
+        );
+    }
+    // Observables on the right edge.
+    for (i, name) in observables.iter().enumerate() {
+        let y = content_top + i as f32 * port_h + port_h * 0.5;
+        let pos = egui::pos2(block_rect.right(), y);
+        painter.circle_filled(pos, 4.5, output_color);
+        painter.text(
+            pos + egui::vec2(-8.0, 0.0),
+            egui::Align2::RIGHT_CENTER,
+            name,
+            egui::FontId::monospace(11.0),
+            label_color,
+        );
+    }
+
+    // Parameters listed in the middle below ports, centered.
+    if !params.is_empty() {
+        let params_top = content_top + port_h * port_rows.max(1.0) + 8.0;
+        painter.text(
+            egui::pos2(block_rect.center().x, params_top),
+            egui::Align2::CENTER_TOP,
+            format!("parameters ({})", params.len()),
+            egui::FontId::proportional(10.0),
+            muted,
+        );
+        for (i, (k, v)) in params.iter().enumerate() {
+            let y = params_top + 14.0 + i as f32 * 14.0;
+            painter.text(
+                egui::pos2(block_rect.center().x, y),
+                egui::Align2::CENTER_TOP,
+                format!("{} = {}", k, v),
+                egui::FontId::monospace(10.5),
+                label_color,
             );
-            ui.add_space(6.0);
-            ui.label(
-                egui::RichText::new(
-                    "Equation-based model — no block diagram to render.",
-                )
-                .size(13.0)
-                .color(egui::Color32::from_rgb(200, 200, 160)),
-            );
-            ui.label(
-                egui::RichText::new(
-                    "Open 📝 Text above to read the equations, then 🚀 Compile (or F5) to simulate.",
-                )
-                .size(11.0)
-                .color(egui::Color32::GRAY),
-            );
+        }
+    }
 
-            ui.add_space(20.0);
-            ui.separator();
-            ui.add_space(12.0);
+    // Claim the block area so egui knows we drew something (prevents
+    // the panel from collapsing to zero height).
+    ui.allocate_rect(block_rect, egui::Sense::hover());
 
-            // ── Shape preview ──
-            ui.horizontal_wrapped(|ui| {
-                ui.label(
-                    egui::RichText::new("Signature")
-                        .size(11.0)
-                        .strong()
-                        .color(egui::Color32::from_rgb(180, 180, 200)),
-                );
-            });
-            ui.add_space(4.0);
-
-            // Parameters
-            ui.vertical(|ui| {
-                ui.set_max_width(500.0);
-                if !params.is_empty() {
-                    let mut sorted: Vec<_> = params.iter().collect();
-                    sorted.sort_by_key(|(k, _)| k.as_str());
-                    ui.label(
-                        egui::RichText::new(format!("Parameters ({})", sorted.len()))
-                            .size(10.0)
-                            .color(egui::Color32::from_rgb(160, 200, 240)),
-                    );
-                    for (k, v) in sorted {
-                        ui.label(
-                            egui::RichText::new(format!("    {} = {}", k, v))
-                                .size(11.0)
-                                .monospace()
-                                .color(egui::Color32::from_rgb(210, 210, 210)),
-                        );
-                    }
-                    ui.add_space(6.0);
-                }
-
-                let all_inputs: Vec<String> = inputs
-                    .iter()
-                    .map(|(k, v)| format!("{} = {}", k, v))
-                    .chain(
-                        runtime_inputs
-                            .iter()
-                            .filter(|n| !inputs.contains_key(*n))
-                            .map(|n| n.clone()),
-                    )
-                    .collect();
-                if !all_inputs.is_empty() {
-                    ui.label(
-                        egui::RichText::new(format!("Inputs ({})", all_inputs.len()))
-                            .size(10.0)
-                            .color(egui::Color32::from_rgb(230, 190, 100)),
-                    );
-                    for i in &all_inputs {
-                        ui.label(
-                            egui::RichText::new(format!("    {}", i))
-                                .size(11.0)
-                                .monospace()
-                                .color(egui::Color32::from_rgb(210, 210, 210)),
-                        );
-                    }
-                    ui.add_space(6.0);
-                }
-
-                if params.is_empty() && all_inputs.is_empty() {
-                    ui.label(
-                        egui::RichText::new(
-                            "(model has no parameters or inputs declared)",
-                        )
-                        .size(10.0)
-                        .italics()
-                        .color(egui::Color32::GRAY),
-                    );
-                }
-            });
-        });
-    });
+    // Below the block, a short explainer — the user can still read
+    // this line if they're new to why the canvas is "empty".
+    let below_y = block_rect.bottom() + 16.0;
+    ui.painter().text(
+        egui::pos2(center.x, below_y),
+        egui::Align2::CENTER_TOP,
+        "Equation-only model — switch to 📝 Text to read or 🚀 Compile (F5) to simulate.",
+        egui::FontId::proportional(11.0),
+        muted,
+    );
 }
 

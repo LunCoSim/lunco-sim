@@ -27,13 +27,16 @@ lunco-workbench = { path = "../lunco-workbench" }
 egui-snarl = "0.9"
 egui_plot = "0.34.1"
 usvg = { version = "0.45", default-features = false }
-# Uses LunCoSim/rumoca fork (web-fix branch) which adds `instant` crate for
-# wasm32 time support. std::time::Instant panics on wasm32-unknown-unknown
-# because browsers restrict high-resolution clocks (Spectre mitigation).
-# The fork replaces 3 imports: std::time::Instant → instant::Instant on wasm32.
-rumoca-sim = { git = "https://github.com/LunCoSim/rumoca", branch = "web-fix" }
-rumoca-session = { git = "https://github.com/LunCoSim/rumoca", branch = "web-fix" }
-rumoca-phase-parse = { git = "https://github.com/LunCoSim/rumoca", branch = "web-fix" }
+# LunCoSim/rumoca fork, `main` branch.
+# Tracks upstream rumoca. `main` already carries:
+#   - the `instant::Instant` wasm32 fix that `web-fix` was carrying
+#     (std::time::Instant panics on wasm32-unknown-unknown)
+#   - `SimStepper` reconstruction of algebraic/output variables via the
+#     retained `EliminationResult` (state()/get() now return every
+#     variable, not just solver-vector entries).
+rumoca-sim = { git = "https://github.com/LunCoSim/rumoca", branch = "main" }
+rumoca-session = { git = "https://github.com/LunCoSim/rumoca", branch = "main" }
+rumoca-phase-parse = { git = "https://github.com/LunCoSim/rumoca", branch = "main" }
 anyhow = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

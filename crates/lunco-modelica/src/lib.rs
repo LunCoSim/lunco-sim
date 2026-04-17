@@ -71,10 +71,25 @@ pub struct ModelicaCompiler {
 
 impl ModelicaCompiler {
     /// Create a new ModelicaCompiler instance.
+    ///
+    /// MSL auto-loading is currently disabled: `Session::compile_model`
+    /// runs the Resolve phase across every loaded source root, and
+    /// rumoca's strict validator rejects real constructs in
+    /// `Modelica.Fluid` / `Modelica.Media` / `Modelica.Mechanics`
+    /// (connector prefix requirements, record-type constraints,
+    /// `cardinality()` on connector arrays, `inner/outer` `world`
+    /// resolution). Loading MSL therefore fails compilation even for
+    /// models that never reference those packages.
+    ///
+    /// TODO: switch to
+    /// `Session::compile_model_dae_strict_reachable_uncached_with_recovery`
+    /// (which walks only the reachable closure from the target class)
+    /// once we move off the plain `compile_model` API. That path is
+    /// intended for editor-style compiles and should tolerate broken
+    /// unreachable classes in MSL.
     pub fn new() -> Self {
-        Self {
-            session: Session::new(SessionConfig::default()),
-        }
+        let session = Session::new(SessionConfig::default());
+        Self { session }
     }
 
     /// Compile Modelica source string and return DAE result.
@@ -284,6 +299,21 @@ struct CachedModel {
     dae: rumoca_session::compile::CompilationResult,
 }
 
+/// Collect every readable variable from the stepper — states, inputs, and
+/// (on rumoca `main`) algebraic / output reconstructions via
+/// `EliminationResult`. Non-finite values are dropped so the UI never
+/// plots NaN. Filtering out parameters / inputs happens downstream in
+/// [`handle_modelica_responses`]; we report everything here so the UI has
+/// the full picture and decides what goes into `model.variables`.
+fn collect_stepper_observables(stepper: &SimStepper) -> Vec<(String, f64)> {
+    stepper
+        .state()
+        .values
+        .into_iter()
+        .filter(|(name, val)| val.is_finite() && name != "time")
+        .collect()
+}
+
 /// Helper to build a ModelicaResult with defaults.
 fn result_ok(entity: Entity, session_id: u64) -> ModelicaResult {
     ModelicaResult {
@@ -346,12 +376,7 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                                                 let _ = stepper.set_input(name, *val);
                                             }
                                             let input_names: Vec<String> = stepper.input_names().to_vec();
-                                            let mut symbols = Vec::new();
-                                            for name in stepper.variable_names() {
-                                                if let Some(val) = stepper.get(name) {
-                                                    symbols.push((name.clone(), val));
-                                                }
-                                            }
+                                            let symbols = collect_stepper_observables(&stepper);
                                             steppers.insert(entity, (session_id, cached.model_name.clone(), stepper));
                                             let _ = tx_inner.send(ModelicaResult {
                                                 entity, session_id, new_time: 0.0,
@@ -416,12 +441,7 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                                             let _ = stepper.set_input(name, *val);
                                         }
                                         let input_names: Vec<String> = stepper.input_names().to_vec();
-                                        let mut symbols = Vec::new();
-                                        for name in stepper.variable_names() {
-                                            if let Some(val) = stepper.get(name) {
-                                                symbols.push((name.clone(), val));
-                                            }
-                                        }
+                                        let symbols = collect_stepper_observables(&stepper);
                                         cached_models.insert(entity, CachedModel {
                                             session_id,
                                             model_name: model_name.clone(),
@@ -472,12 +492,7 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                                             let _ = stepper.set_input(name, *val);
                                         }
                                         let input_names: Vec<String> = stepper.input_names().to_vec();
-                                        let mut symbols = Vec::new();
-                                        for name in stepper.variable_names() {
-                                            if let Some(val) = stepper.get(name) {
-                                                symbols.push((name.clone(), val));
-                                            }
-                                        }
+                                        let symbols = collect_stepper_observables(&stepper);
                                         let temp_dir = modelica_dir().join(format!("{}_{}", entity.index(), entity.generation()));
                                         let _ = std::fs::create_dir_all(&temp_dir);
                                         let temp_path = temp_dir.join("model.mo");
@@ -502,6 +517,12 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                                     Err(e) => {
                                         let mut r = result_ok(entity, session_id);
                                         r.error = Some(format!("Stepper Error: {:?}", e));
+                                        // Stepper init failure during
+                                        // Compile IS a compile-attempt
+                                        // result — the UI classifies
+                                        // and transitions state on
+                                        // this flag.
+                                        r.is_new_model = true;
                                         let _ = tx_inner.send(r);
                                     }
                                 }
@@ -509,6 +530,7 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                             Err(e) => {
                                 let mut r = result_ok(entity, session_id);
                                 r.error = Some(format!("Compiler Error: {:?}", e));
+                                r.is_new_model = true;
                                 let _ = tx_inner.send(r);
                             }
                         }
@@ -590,15 +612,11 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                                     let _ = tx_inner.send(r);
                                     steppers.remove(&entity);
                                 } else {
-                                    let mut outputs = Vec::new();
-                                    // Include state variables
-                                    for name in stepper.variable_names() {
-                                        if let Some(val) = stepper.get(name) { if val.is_finite() { outputs.push((name.clone(), val)); } }
-                                    }
-                                    // Also include input values so UI can plot them
-                                    for name in stepper.input_names() {
-                                        if let Some(val) = stepper.get(name) { if val.is_finite() { outputs.push((name.clone(), val)); } }
-                                    }
+                                    // `state()` reconstructs algebraics / outputs via
+                                    // `EliminationResult` and also includes inputs, so
+                                    // this single call supersedes the old two-loop
+                                    // variable_names + input_names collection.
+                                    let outputs = collect_stepper_observables(stepper);
                                     let _ = tx_inner.send(ModelicaResult {
                                         entity, session_id, new_time: stepper.time(),
                                         outputs, error: None, log_message: None,
@@ -770,13 +788,7 @@ fn inline_worker_process(
                         });
                         w.steppers.remove(&entity);
                     } else {
-                        let mut outputs = Vec::new();
-                        for name in stepper.variable_names() {
-                            if let Some(val) = stepper.get(name) { if val.is_finite() { outputs.push((name.clone(), val)); } }
-                        }
-                        for name in stepper.input_names() {
-                            if let Some(val) = stepper.get(name) { if val.is_finite() { outputs.push((name.clone(), val)); } }
-                        }
+                        let outputs = collect_stepper_observables(stepper);
                         let _ = tx.send(ModelicaResult {
                             entity, session_id, new_time: stepper.time(),
                             outputs, error: None,
@@ -812,10 +824,7 @@ fn inline_worker_process(
                         Ok(mut stepper) => {
                             for (name, val) in &input_defaults { let _ = stepper.set_input(name, *val); }
                             let input_names: Vec<String> = stepper.input_names().to_vec();
-                            let mut symbols = Vec::new();
-                            for name in stepper.variable_names() {
-                                if let Some(val) = stepper.get(name) { symbols.push((name.clone(), val)); }
-                            }
+                            let symbols = collect_stepper_observables(&stepper);
                             w.cached_models.insert(entity, CachedModel {
                                 session_id, model_name: model_name.clone(), source: Arc::from(source.clone()),
                                 dae: comp_res.clone(),
@@ -867,10 +876,7 @@ fn inline_worker_process(
                         if let Ok(mut stepper) = SimStepper::new(&comp_res.dae, opts) {
                             for (name, val) in &input_defaults { let _ = stepper.set_input(name, *val); }
                             let input_names: Vec<String> = stepper.input_names().to_vec();
-                            let mut symbols = Vec::new();
-                            for name in stepper.variable_names() {
-                                if let Some(val) = stepper.get(name) { symbols.push((name.clone(), val)); }
-                            }
+                            let symbols = collect_stepper_observables(&stepper);
                             w.steppers.insert(entity, (session_id, cached.model_name.clone(), stepper));
                             let _ = tx.send(ModelicaResult {
                                 entity, session_id, new_time: 0.0,
@@ -933,10 +939,7 @@ fn inline_worker_process(
                         Ok(mut stepper) => {
                             for (name, val) in &input_defaults { let _ = stepper.set_input(name, *val); }
                             let input_names: Vec<String> = stepper.input_names().to_vec();
-                            let mut symbols = Vec::new();
-                            for name in stepper.variable_names() {
-                                if let Some(val) = stepper.get(name) { symbols.push((name.clone(), val)); }
-                            }
+                            let symbols = collect_stepper_observables(&stepper);
                             w.cached_models.insert(entity, CachedModel {
                                 session_id, model_name: model_name.clone(), source: Arc::from(source.clone()),
                                 dae: comp_res,
@@ -1050,11 +1053,22 @@ fn handle_modelica_responses(
     channels: Res<ModelicaChannels>,
     mut q_models: Query<&mut ModelicaModel>,
     mut workbench_state: ResMut<ui::WorkbenchState>,
-    mut compile_states: ResMut<ui::CompileStates>,
+    // Headless callers (e.g. cosim tests) run this system without the
+    // UI plugin, so the console + compile-state resources may be
+    // absent. Make both optional so the core stepping path survives
+    // those setups without forcing them to pull in the UI module.
+    compile_states: Option<ResMut<ui::CompileStates>>,
+    console: Option<ResMut<ui::panels::console::ConsoleLog>>,
 ) {
+    let mut compile_states = compile_states;
+    let mut console = console;
     while let Ok(result) = channels.rx.try_recv() {
         if result.entity == Entity::PLACEHOLDER {
-            warn!("Simulation Worker crashed and restarted.");
+            let msg = "Simulation worker crashed and restarted.";
+            warn!("{msg}");
+            if let Some(c) = console.as_mut() {
+                c.error(msg);
+            }
             continue;
         }
 
@@ -1066,8 +1080,16 @@ fn handle_modelica_responses(
             model.is_stepping = false;
 
             // Forward log messages to console via bevy_workbench's console system
-            if let Some(msg) = result.log_message {
+            if let Some(msg) = &result.log_message {
                 info!("[Modelica] {msg}");
+                // Only forward lifecycle notes (compile / reset / param
+                // update). Skip the per-Step logs so the console doesn't
+                // flood at 60 Hz.
+                if result.is_new_model || result.is_reset || result.is_parameter_update {
+                    if let Some(c) = console.as_mut() {
+                        c.info(format!("[{}] {msg}", model.model_name));
+                    }
+                }
             }
 
             // Transition compile state for this entity's document, but
@@ -1081,12 +1103,30 @@ fn handle_modelica_responses(
                 } else {
                     ui::CompileState::Ready
                 };
-                compile_states.set(model.document, new_state);
+                if let Some(cs) = compile_states.as_mut() {
+                    cs.set(model.document, new_state);
+                }
             }
 
             if let Some(err) = &result.error {
                 workbench_state.compilation_error = Some(err.clone());
                 warn!("[Modelica] {err}");
+                // Classify for the console: compile-time errors are
+                // distinct from solver blowups during Step. Both are
+                // Error-level; the prefix tells the user where it came
+                // from at a glance.
+                let prefix = if result.is_new_model {
+                    "Compile error"
+                } else if result.is_parameter_update {
+                    "Parameter update error"
+                } else if result.is_reset {
+                    "Reset error"
+                } else {
+                    "Solver error"
+                };
+                if let Some(c) = console.as_mut() {
+                    c.error(format!("[{}] {prefix}: {err}", model.model_name));
+                }
                 model.paused = true;
             } else if workbench_state.selected_entity == Some(result.entity) {
                 workbench_state.compilation_error = None;
@@ -1195,3 +1235,52 @@ pub struct ModelicaInput { pub variable_name: String, pub value: f64 }
 
 #[derive(Component, Reflect, Default)]
 pub struct ModelicaOutput { pub variable_name: String, pub value: f64 }
+
+#[cfg(test)]
+mod observables_smoke {
+    use super::*;
+    use rumoca_sim::{SimStepper, StepperOptions};
+
+    /// End-to-end smoke test for the observables pipeline: compile the
+    /// bundled RocketEngine, run one step at full throttle, and assert
+    /// every algebraic observable shows up with a physically-sensible
+    /// value in [`collect_stepper_observables`]. Protects against
+    /// (a) bumping rumoca to a version that drops `EliminationResult`
+    ///     from the stepper again, and
+    /// (b) reintroducing a Boolean intermediate in the bundled model
+    ///     that rumoca's elimination pass can't reconstruct.
+    #[test]
+    fn rocket_engine_observables_round_trip() {
+        let raw = include_str!("../../../assets/models/RocketEngine.mo");
+        let (src, _) = ast_extract::strip_input_defaults(raw);
+        let mut c = ModelicaCompiler::new();
+        let r = c.compile_str("RocketEngine", &src, "RocketEngine.mo")
+            .expect("compile ok");
+        let mut stepper = SimStepper::new(&r.dae, StepperOptions::default())
+            .expect("stepper ok");
+        stepper.set_input("throttle", 1.0).expect("throttle is an input");
+        stepper.step(0.01).expect("step ok");
+
+        let obs = collect_stepper_observables(&stepper);
+        let by_name: std::collections::HashMap<_, _> =
+            obs.into_iter().collect();
+
+        for name in ["m_prop", "impulse", "m_dot", "thrust", "p_chamber", "isp"] {
+            assert!(by_name.contains_key(name), "missing observable: {name}");
+        }
+        // Values that should be nonzero at full throttle with propellant
+        // remaining (m_prop starts at 4000).
+        assert!(by_name["m_dot"] > 0.0,
+            "m_dot should be nonzero at throttle=1, got {}", by_name["m_dot"]);
+        assert!(by_name["thrust"] > 0.0,
+            "thrust should be nonzero, got {}", by_name["thrust"]);
+        assert!(by_name["p_chamber"] > 0.0,
+            "p_chamber should be nonzero, got {}", by_name["p_chamber"]);
+        assert!((by_name["isp"] - 2900.0 / 9.80665).abs() < 1e-3,
+            "isp should equal v_e / g, got {}", by_name["isp"]);
+    }
+}
+
+
+
+

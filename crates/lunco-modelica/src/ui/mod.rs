@@ -156,7 +156,13 @@ impl Workspace for AnalyzeWorkspace {
             PanelId("modelica_inspector"),
             PanelId("modelica_component_palette"),
         ]);
-        layout.set_bottom(Some(PanelId("modelica_console")));
+        // Bottom dock: Console first (where all compile / save /
+        // error output goes) + Graphs as a tab beside it. Matches
+        // VS Code's Terminal/Output/Problems pattern.
+        layout.set_bottom_tabs(vec![
+            PanelId("modelica_console"),
+            PanelId("modelica_graphs"),
+        ]);
     }
 }
 
@@ -193,6 +199,8 @@ impl Plugin for ModelicaUiPlugin {
             .init_resource::<panels::diagram::DiagramTheme>()
             .init_resource::<panels::code_editor::EditorBufferState>()
             .init_resource::<panels::palette::PaletteState>()
+            .init_resource::<panels::diagram::ModelSignatureCache>()
+            .init_resource::<panels::console::ConsoleLog>()
             .insert_resource(panels::package_browser::PackageTreeCache::new())
             .add_systems(Update, panels::package_browser::handle_package_loading_tasks)
             .add_systems(Update, cleanup_removed_documents)
@@ -201,6 +209,7 @@ impl Plugin for ModelicaUiPlugin {
             .register_panel(panels::welcome::WelcomePanel)
             .register_panel(panels::telemetry::TelemetryPanel)
             .register_panel(panels::graphs::GraphsPanel)
+            .register_panel(panels::console::ConsolePanel)
             .register_panel(panels::inspector::InspectorPanel)
             .register_panel(panels::palette::ComponentPalettePanel)
             // Multi-instance: one tab per open document. Instances are

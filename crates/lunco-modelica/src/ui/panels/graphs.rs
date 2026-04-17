@@ -11,7 +11,7 @@ use crate::ui::WorkbenchState;
 pub struct GraphsPanel;
 
 impl Panel for GraphsPanel {
-    fn id(&self) -> PanelId { PanelId("modelica_console") }
+    fn id(&self) -> PanelId { PanelId("modelica_graphs") }
     fn title(&self) -> String { "📈 Graphs".into() }
     fn default_slot(&self) -> PanelSlot { PanelSlot::Bottom }
 

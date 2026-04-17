@@ -15,19 +15,19 @@ model RocketEngine
   Real impulse(start=0) "Total impulse delivered (N·s)";
 
   // ── Observables ──
+  // Inline the "engine is burning" test everywhere instead of a Boolean
+  // intermediate: rumoca's algebraic-elimination reconstructor only
+  // evaluates continuous substitutions, so a separate Boolean `burning`
+  // would read as 0 at runtime and zero out all dependent observables.
   Real m_dot "Instantaneous mass flow (kg/s)";
   Real thrust "Thrust (N)";
   Real p_chamber "Chamber pressure (Pa)";
   Real isp "Specific impulse (s)";
-  Boolean burning "Engine is producing thrust";
 
 equation
-  // Engine shuts off when propellant is exhausted.
-  burning = m_prop > 0.0 and throttle > 0.01;
-
-  m_dot = if burning then m_dot_max * throttle else 0.0;
+  m_dot = if m_prop > 0.0 and throttle > 0.01 then m_dot_max * throttle else 0.0;
   thrust = m_dot * v_e;
-  p_chamber = p_chamber_max * throttle * (if burning then 1.0 else 0.0);
+  p_chamber = if m_prop > 0.0 and throttle > 0.01 then p_chamber_max * throttle else 0.0;
   isp = v_e / 9.80665;
 
   der(m_prop) = -m_dot;

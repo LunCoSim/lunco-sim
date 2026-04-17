@@ -498,7 +498,24 @@ fn render_unified_toolbar(
                 world.commands().trigger(crate::ui::CompileModel { doc });
             }
             ModelViewMode::Diagram => {
-                crate::ui::panels::diagram::do_compile(world);
+                // Diagram-mode compile regenerates source from the
+                // visual-node graph. That only makes sense when the
+                // user actually composed something visually — for an
+                // equation-only model (e.g. RocketEngine) the graph
+                // is empty and the generated source is a bare
+                // `model X end X;`, which trips EmptySystem in the
+                // solver. Fall back to compiling the document source
+                // in that case so Compile always "does the obvious
+                // thing" regardless of view.
+                let diagram_is_empty = world
+                    .get_resource::<crate::ui::panels::diagram::DiagramState>()
+                    .map(|s| s.diagram.nodes.is_empty())
+                    .unwrap_or(true);
+                if diagram_is_empty {
+                    world.commands().trigger(crate::ui::CompileModel { doc });
+                } else {
+                    crate::ui::panels::diagram::do_compile(world);
+                }
             }
         }
     }
