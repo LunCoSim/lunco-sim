@@ -31,8 +31,9 @@ use bevy_egui::egui;
 use lunco_workbench::{Panel, PanelId, PanelSlot};
 
 use crate::ModelicaModel;
-use crate::ui::{CompileState, CompileStates, ModelicaDocumentRegistry, WorkbenchState};
+use crate::ui::panels::code_editor::EditorBufferState;
 use crate::ui::panels::{code_editor::CodeEditorPanel, diagram::DiagramPanel};
+use crate::ui::{CompileState, CompileStates, ModelicaDocumentRegistry, WorkbenchState};
 
 /// Which rendering mode the model view is showing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -117,8 +118,8 @@ impl Panel for ModelViewPanel {
 /// the underlying panels for now and are re-triggered via the existing
 /// channels.
 fn render_unified_toolbar(panel: &mut ModelViewPanel, ui: &mut egui::Ui, world: &mut World) {
-    // Resolve the display name + doc + compile state once up front so
-    // the closure isn't fighting borrow checker over `world`.
+    // Resolve everything we need from the world up front so the
+    // closure below doesn't re-borrow mid-layout.
     let display_name = world
         .resource::<WorkbenchState>()
         .open_model
@@ -126,10 +127,20 @@ fn render_unified_toolbar(panel: &mut ModelViewPanel, ui: &mut egui::Ui, world: 
         .map(|m| m.display_name.clone())
         .unwrap_or_else(|| "(no model)".to_string());
 
+    // Prefer open_model.doc — it's set on every open/create path,
+    // including in-memory models before they have a selected entity.
+    // Fall back to entity → doc for pre-command-bus paths.
     let doc_id = world
         .resource::<WorkbenchState>()
-        .selected_entity
-        .and_then(|e| world.get::<ModelicaModel>(e).map(|m| m.document))
+        .open_model
+        .as_ref()
+        .and_then(|m| m.doc)
+        .or_else(|| {
+            world
+                .resource::<WorkbenchState>()
+                .selected_entity
+                .and_then(|e| world.get::<ModelicaModel>(e).map(|m| m.document))
+        })
         .filter(|d| !d.is_unassigned());
 
     let compile_state = doc_id
@@ -145,14 +156,42 @@ fn render_unified_toolbar(panel: &mut ModelViewPanel, ui: &mut egui::Ui, world: 
 
     let compilation_error = world.resource::<WorkbenchState>().compilation_error.clone();
 
+    // Dirty + save-availability info, derived from the document.
+    let (is_dirty, can_save) = doc_id
+        .and_then(|d| world.resource::<ModelicaDocumentRegistry>().host(d))
+        .map(|h| {
+            let doc = h.document();
+            let has_real_path = doc
+                .canonical_path()
+                .map(|p| !p.to_string_lossy().starts_with("mem://"))
+                .unwrap_or(false);
+            (doc.is_dirty(), !doc.is_read_only() && has_real_path)
+        })
+        .unwrap_or((false, false));
+
+    // Undo/redo availability snapshot.
+    let undo_redo = doc_id
+        .and_then(|d| world.resource::<ModelicaDocumentRegistry>().host(d))
+        .map(|h| (h.can_undo(), h.can_redo(), h.undo_depth(), h.redo_depth()));
+
+    // Collect button presses without mutating world inside the closure.
+    let mut compile_clicked = false;
+    let mut save_clicked = false;
+    let mut undo_clicked = false;
+    let mut redo_clicked = false;
+    let mut dismiss_error = false;
+    let mut new_view_mode = panel.view_mode;
+
     ui.horizontal(|ui| {
-        // ── Model identity ──
-        ui.label(egui::RichText::new(&display_name).strong());
+        // ── Model identity (+ dirty dot) ──
+        let title = if is_dirty {
+            format!("● {}", display_name)
+        } else {
+            display_name.clone()
+        };
+        ui.label(egui::RichText::new(title).strong());
         if is_read_only {
-            ui.colored_label(
-                egui::Color32::from_rgb(200, 150, 50),
-                "👁 read-only",
-            );
+            ui.colored_label(egui::Color32::from_rgb(200, 150, 50), "👁 read-only");
         }
         ui.separator();
 
@@ -160,10 +199,10 @@ fn render_unified_toolbar(panel: &mut ModelViewPanel, ui: &mut egui::Ui, world: 
         let text_sel = panel.view_mode == ModelViewMode::Text;
         let diag_sel = panel.view_mode == ModelViewMode::Diagram;
         if ui.selectable_label(text_sel, "📝 Text").clicked() {
-            panel.view_mode = ModelViewMode::Text;
+            new_view_mode = ModelViewMode::Text;
         }
         if ui.selectable_label(diag_sel, "🔗 Diagram").clicked() {
-            panel.view_mode = ModelViewMode::Diagram;
+            new_view_mode = ModelViewMode::Diagram;
         }
         ui.separator();
 
@@ -173,9 +212,7 @@ fn render_unified_toolbar(panel: &mut ModelViewPanel, ui: &mut egui::Ui, world: 
                 .colored_label(egui::Color32::LIGHT_RED, "⚠ Error")
                 .on_hover_text(err);
             if chip.clicked() {
-                if let Some(mut s) = world.get_resource_mut::<WorkbenchState>() {
-                    s.compilation_error = None;
-                }
+                dismiss_error = true;
             }
         } else {
             match compile_state {
@@ -197,51 +234,92 @@ fn render_unified_toolbar(panel: &mut ModelViewPanel, ui: &mut egui::Ui, world: 
             }
         }
 
-        // ── Undo/redo (document-level) ──
-        // Goes through `apply_document_undo` / `apply_document_redo` so
-        // the editor buffer stays in sync with the reverted source.
-        if let Some(doc) = doc_id {
-            let summary = world
-                .resource::<ModelicaDocumentRegistry>()
-                .host(doc)
-                .map(|h| (h.can_undo(), h.can_redo(), h.undo_depth(), h.redo_depth()));
-            if let Some((can_undo, can_redo, undo_n, redo_n)) = summary {
-                ui.separator();
-                let undo_clicked = ui
-                    .add_enabled(can_undo, egui::Button::new("↶"))
-                    .on_hover_text(format!("Undo — {undo_n} available"))
-                    .clicked();
-                let redo_clicked = ui
-                    .add_enabled(can_redo, egui::Button::new("↷"))
-                    .on_hover_text(format!("Redo — {redo_n} available"))
-                    .clicked();
-                if undo_clicked {
-                    crate::ui::panels::code_editor::apply_document_undo(world);
-                } else if redo_clicked {
-                    crate::ui::panels::code_editor::apply_document_redo(world);
-                }
-            }
+        // ── Undo / Redo ──
+        if let Some((can_undo, can_redo, undo_n, redo_n)) = undo_redo {
+            ui.separator();
+            undo_clicked = ui
+                .add_enabled(can_undo, egui::Button::new("↶"))
+                .on_hover_text(format!("Undo — {undo_n} available (Ctrl+Z)"))
+                .clicked();
+            redo_clicked = ui
+                .add_enabled(can_redo, egui::Button::new("↷"))
+                .on_hover_text(format!("Redo — {redo_n} available (Ctrl+Shift+Z)"))
+                .clicked();
         }
 
-        // Compile: Text mode dispatches from the editor buffer; Diagram
-        // mode regenerates source from the visual diagram and dispatches
-        // that. One button, same semantics as a user would expect.
+        // ── Save ──
+        ui.separator();
+        let save_tip = if !can_save {
+            "Save not available (read-only or Save-As required for in-memory models)"
+        } else if is_dirty {
+            "Save to disk (Ctrl+S)"
+        } else {
+            "Already saved"
+        };
+        save_clicked = ui
+            .add_enabled(can_save && is_dirty, egui::Button::new("💾 Save"))
+            .on_hover_text(save_tip)
+            .clicked();
+
+        // ── Compile ──
         ui.separator();
         let compile_enabled = !is_read_only
+            && doc_id.is_some()
             && !matches!(compile_state, CompileState::Compiling);
-        let compile_clicked = ui
+        compile_clicked = ui
             .add_enabled(compile_enabled, egui::Button::new("🚀 Compile"))
-            .on_hover_text("Compile the current model and run it")
+            .on_hover_text("Compile the current model and run it (F5)")
             .clicked();
+    });
+
+    // Apply side effects *outside* the ui closure. All mutations that
+    // land a Document op go through the command bus now — no direct
+    // helper calls — so the Twin journal and every other subscriber
+    // sees the same events regardless of whether a button, shortcut,
+    // or script triggered them.
+    if new_view_mode != panel.view_mode {
+        panel.view_mode = new_view_mode;
+    }
+    if dismiss_error {
+        if let Some(mut s) = world.get_resource_mut::<WorkbenchState>() {
+            s.compilation_error = None;
+        }
+    }
+    if let Some(doc) = doc_id {
+        if undo_clicked {
+            world.commands().trigger(lunco_doc_bevy::UndoDocument { doc });
+        }
+        if redo_clicked {
+            world.commands().trigger(lunco_doc_bevy::RedoDocument { doc });
+        }
+        if save_clicked {
+            world.commands().trigger(lunco_doc_bevy::SaveDocument { doc });
+        }
         if compile_clicked {
+            // Flush the active view's state into the Document first so
+            // the compile observer reads the user's latest work. Text
+            // mode uses the editor buffer; Diagram mode regenerates
+            // source from the visual diagram.
             match panel.view_mode {
                 ModelViewMode::Text => {
-                    crate::ui::panels::code_editor::dispatch_compile_from_buffer(world);
+                    let buffer = world.resource::<EditorBufferState>().text.clone();
+                    if !buffer.is_empty() {
+                        world
+                            .resource_mut::<ModelicaDocumentRegistry>()
+                            .checkpoint_source(doc, buffer);
+                    }
+                    world.commands().trigger(crate::ui::CompileModel { doc });
                 }
                 ModelViewMode::Diagram => {
+                    // Diagram regenerates source from DiagramState via
+                    // the domain-specific do_compile path, which already
+                    // handles temp-file write + entity spawn + worker
+                    // dispatch. Once the visual-ops refactor lands,
+                    // Diagram will generate source, checkpoint it, and
+                    // fire CompileModel the same as Text.
                     crate::ui::panels::diagram::do_compile(world);
                 }
             }
         }
-    });
+    }
 }

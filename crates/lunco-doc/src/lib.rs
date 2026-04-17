@@ -197,6 +197,20 @@ impl<D: Document> DocumentHost<D> {
         &self.document
     }
 
+    /// Direct mutable access to the wrapped document, **bypassing** the
+    /// op / undo machinery.
+    ///
+    /// Only the minimum is exposed because direct mutations defeat the
+    /// point of the Document System — use [`apply`](Self::apply) for
+    /// anything that should be undoable. The legitimate callers are
+    /// bookkeeping fields that aren't part of the document's
+    /// user-visible state: cached layout, "last saved at generation N"
+    /// markers, telemetry counters. The caller is responsible for not
+    /// touching fields that should flow through ops.
+    pub fn document_mut(&mut self) -> &mut D {
+        &mut self.document
+    }
+
     /// The document's current generation. See [`Document::generation`].
     pub fn generation(&self) -> u64 {
         self.document.generation()

@@ -422,6 +422,15 @@ impl ModelicaDocumentRegistry {
         self.by_entity.retain(|_, d| *d != doc);
     }
 
+    /// Mark the given document as persisted at its current generation.
+    /// Called by the `SaveDocument` observer after a successful disk
+    /// write. Bookkeeping-only — not an op, not undoable.
+    pub fn mark_document_saved(&mut self, doc: DocumentId) {
+        if let Some(host) = self.hosts.get_mut(&doc) {
+            host.document_mut().mark_saved();
+        }
+    }
+
     /// Drop the entity→document link without removing the document itself.
     /// Returns the id that was unlinked (if any) so callers can decide
     /// whether to also [`remove_document`](Self::remove_document) it.

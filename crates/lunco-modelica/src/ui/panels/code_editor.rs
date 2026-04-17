@@ -3,16 +3,10 @@
 use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_workbench::{Panel, PanelId, PanelSlot};
-use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::ast_extract::{extract_model_name, hash_content};
 use crate::ui::{ModelicaDocumentRegistry, WorkbenchState};
-use crate::ui::panels::diagram::DiagramState;
-use crate::{ModelicaModel, ModelicaChannels, ModelicaCommand};
-use crate::ast_extract::{
-    extract_model_name, extract_parameters, extract_inputs_with_defaults,
-    extract_input_names, hash_content,
-};
 
 /// Tracks which model the editor buffer belongs to, to detect model switches.
 #[derive(Resource)]
@@ -251,225 +245,15 @@ impl Panel for CodeEditorPanel {
     }
 }
 
-/// Dispatch a Compile command from the current editor buffer.
-///
-/// Moved out of the panel's toolbar so [`crate::ui::panels::model_view::ModelViewPanel`]
-/// (and any future caller — keyboard shortcut, script, API) can trigger
-/// the same flow. Reads [`EditorBufferState`], parses params/inputs,
-/// ensures a backing [`crate::document::ModelicaDocument`] exists
-/// (spawning an entity if none is selected yet), checkpoints the source,
-/// marks the document as `Compiling`, and sends
-/// [`ModelicaCommand::Compile`] to the worker.
-///
-/// On parse failure (no `model <name>` declaration found) sets
-/// `WorkbenchState.compilation_error` and returns without dispatching.
-pub fn dispatch_compile_from_buffer(world: &mut World) {
-    let buf_state = world.resource::<EditorBufferState>();
-    let Some(model_name) = buf_state.detected_name.clone() else {
-        if let Some(mut s) = world.get_resource_mut::<WorkbenchState>() {
-            s.compilation_error = Some("Could not find a valid model declaration.".to_string());
-        }
-        return;
-    };
-    let source = buf_state.text.clone();
-    let params = extract_parameters(&source);
-    let inputs_with_defaults = extract_inputs_with_defaults(&source);
-    let runtime_inputs = extract_input_names(&source);
-
-    let is_read_only = world
-        .resource::<WorkbenchState>()
-        .open_model
-        .as_ref()
-        .map(|m| m.read_only)
-        .unwrap_or(false);
-    if is_read_only {
-        return;
-    }
-
-    let selected_entity = world.resource::<WorkbenchState>().selected_entity;
-
-    let mut session_id = 0;
-    let mut should_compile = false;
-
-    if let Some(entity) = selected_entity {
-        if let Ok(mut model) = world.query::<&mut ModelicaModel>().get_mut(world, entity) {
-            let old_inputs = std::mem::take(&mut model.inputs);
-            model.session_id += 1;
-            model.is_stepping = true;
-            model.model_name = model_name.clone();
-            model.parameters = params;
-            model.inputs.clear();
-            for (name, val) in &inputs_with_defaults {
-                let existing = old_inputs.get(name).copied();
-                model.inputs.entry(name.clone()).or_insert_with(|| existing.unwrap_or(*val));
-            }
-            for name in &runtime_inputs {
-                let existing = old_inputs.get(name).copied();
-                model.inputs.entry(name.clone()).or_insert_with(|| existing.unwrap_or(0.0));
-            }
-            model.variables.clear();
-            model.paused = false;
-            model.current_time = 0.0;
-            model.last_step_time = 0.0;
-            session_id = model.session_id;
-            should_compile = true;
-        }
-    } else {
-        let ds = world.resource::<DiagramState>();
-        session_id = ds.model_counter as u64 + 1;
-        // Reuse the Document already attached to `open_model` when one
-        // exists (in-memory models allocate at creation time). This
-        // preserves undo history and keeps the in-memory entry in the
-        // Package Browser pointing at the same source. Only allocate a
-        // fresh Document when the open model has none (on-disk files
-        // allocate lazily on first compile).
-        let reuse_doc = world
-            .resource::<WorkbenchState>()
-            .open_model
-            .as_ref()
-            .and_then(|m| m.doc);
-        let doc = match reuse_doc {
-            Some(d) => {
-                world
-                    .resource_mut::<ModelicaDocumentRegistry>()
-                    .checkpoint_source(d, source.clone());
-                d
-            }
-            None => world
-                .resource_mut::<ModelicaDocumentRegistry>()
-                .allocate(source.clone()),
-        };
-        let entity = world.spawn((
-            Name::new(model_name.clone()),
-            ModelicaModel {
-                model_path: "".into(),
-                model_name: model_name.clone(),
-                current_time: 0.0,
-                last_step_time: 0.0,
-                session_id,
-                paused: false,
-                parameters: params,
-                inputs: runtime_inputs.into_iter().map(|n| (n, 0.0)).collect(),
-                variables: HashMap::new(),
-                document: doc,
-                is_stepping: true,
-            },
-        )).id();
-        world.resource_mut::<ModelicaDocumentRegistry>().link(entity, doc);
-        if let Some(mut s) = world.get_resource_mut::<WorkbenchState>() {
-            s.selected_entity = Some(entity);
-        }
-        should_compile = true;
-    }
-
-    if !should_compile {
-        return;
-    }
-
-    let target = world.get_resource::<WorkbenchState>()
-        .and_then(|s| s.selected_entity).unwrap_or(Entity::PLACEHOLDER);
-
-    let target_doc = if target != Entity::PLACEHOLDER {
-        let mut registry = world.resource_mut::<ModelicaDocumentRegistry>();
-        let doc = registry.document_of(target);
-        let doc = if let Some(d) = doc {
-            registry.checkpoint_source(d, source.clone());
-            d
-        } else {
-            let d = registry.allocate(source.clone());
-            registry.link(target, d);
-            d
-        };
-        if let Ok(mut m) = world.query::<&mut ModelicaModel>().get_mut(world, target) {
-            if m.document != doc {
-                m.document = doc;
-            }
-        }
-        Some(doc)
-    } else { None };
-
-    if let Some(doc) = target_doc {
-        world.resource_mut::<crate::ui::CompileStates>()
-            .set(doc, crate::ui::CompileState::Compiling);
-    }
-
-    if let Some(channels) = world.get_resource::<ModelicaChannels>() {
-        let _ = channels.tx.send(ModelicaCommand::Compile {
-            entity: target,
-            session_id,
-            model_name,
-            source,
-        });
-    }
-}
-
-/// Undo one op on the currently-selected document and sync the editor
-/// buffer to match. No-op if nothing is selected, read-only, or there's
-/// nothing to undo.
-pub fn apply_document_undo(world: &mut World) {
-    apply_document_undo_or_redo(world, /*is_undo=*/ true);
-}
-
-/// Redo one op on the currently-selected document and sync the editor
-/// buffer to match. Counterpart of [`apply_document_undo`].
-pub fn apply_document_redo(world: &mut World) {
-    apply_document_undo_or_redo(world, /*is_undo=*/ false);
-}
-
-fn apply_document_undo_or_redo(world: &mut World, is_undo: bool) {
-    let is_read_only = world
-        .resource::<WorkbenchState>()
-        .open_model
-        .as_ref()
-        .map(|m| m.read_only)
-        .unwrap_or(false);
-    if is_read_only {
-        return;
-    }
-    let Some(entity) = world.resource::<WorkbenchState>().selected_entity else { return };
-    let Some(doc) = world.resource::<ModelicaDocumentRegistry>().document_of(entity) else { return };
-
-    let new_source = {
-        let mut registry = world.resource_mut::<ModelicaDocumentRegistry>();
-        let result = registry.host_mut(doc).and_then(|host| {
-            let changed = if is_undo {
-                host.undo().ok().unwrap_or(false)
-            } else {
-                host.redo().ok().unwrap_or(false)
-            };
-            changed.then(|| host.document().source().to_string())
-        });
-        // Bypasses `checkpoint_source`, so emit a change notification
-        // so observers (diagram re-parse, etc.) see the revert.
-        if result.is_some() {
-            registry.mark_changed(doc);
-        }
-        result
-    };
-
-    let Some(source) = new_source else { return };
-
-    // Sync the reverted / advanced source into the editor buffer so the
-    // user sees the change immediately.
-    let mut new_starts = vec![0];
-    for (i, b) in source.as_bytes().iter().enumerate() {
-        if *b == b'\n' {
-            new_starts.push(i + 1);
-        }
-    }
-    let detected = extract_model_name(&source);
-    let hash = hash_content(&source);
-    {
-        let mut buf_state = world.resource_mut::<EditorBufferState>();
-        buf_state.text = source.clone();
-        buf_state.line_starts = new_starts.into();
-        buf_state.detected_name = detected;
-        buf_state.source_hash = hash;
-    }
-    if let Some(mut s) = world.get_resource_mut::<WorkbenchState>() {
-        s.editor_buffer = source;
-    }
-}
+// ─────────────────────────────────────────────────────────────────────────────
+// Previously this module exported `dispatch_compile_from_buffer`,
+// `apply_document_undo`, and `apply_document_redo` — ad-hoc helpers the
+// ModelViewPanel toolbar called directly. All of that logic now lives in
+// command observers in `crate::ui::commands` (`on_compile_model`,
+// `on_undo_document`, `on_redo_document`). Buttons fire the corresponding
+// `#[Command]` events instead of calling helpers, so keyboard shortcuts,
+// scripting, and the remote API share one write path. This comment is
+// the only thing left of them — the observers *are* the documentation.
 
 pub fn modelica_layouter(style: &egui::Style, src: &str) -> egui::text::LayoutJob {
     let mut job = egui::text::LayoutJob::default();

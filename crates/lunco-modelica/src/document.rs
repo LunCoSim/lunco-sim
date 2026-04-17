@@ -56,11 +56,16 @@ pub struct ModelicaDocument {
     generation: u64,
     canonical_path: Option<PathBuf>,
     library: ModelLibrary,
+    /// Generation at which the document was last persisted to disk.
+    /// `None` means never saved (freshly created in-memory); `Some(g)`
+    /// means last saved at generation `g`. See [`is_dirty`](Self::is_dirty).
+    last_saved_generation: Option<u64>,
 }
 
 impl ModelicaDocument {
     /// Build an in-memory `ModelicaDocument` with no canonical path.
-    /// `library` defaults to [`ModelLibrary::InMemory`].
+    /// `library` defaults to [`ModelLibrary::InMemory`] and the document
+    /// starts dirty (never-saved).
     pub fn new(id: DocumentId, source: impl Into<String>) -> Self {
         Self {
             id,
@@ -68,24 +73,34 @@ impl ModelicaDocument {
             generation: 0,
             canonical_path: None,
             library: ModelLibrary::InMemory,
+            last_saved_generation: None,
         }
     }
 
     /// Build a `ModelicaDocument` backed by a file on disk (or a bundled
     /// asset path), carrying its library classification for read-only
     /// rules and UI hints.
+    ///
+    /// For on-disk / bundled / library-provided origins the source is
+    /// assumed to already match disk at generation 0, so the document
+    /// starts clean. In-memory origins start dirty.
     pub fn with_origin(
         id: DocumentId,
         source: impl Into<String>,
         canonical_path: Option<PathBuf>,
         library: ModelLibrary,
     ) -> Self {
+        let last_saved_generation = match library {
+            ModelLibrary::InMemory => None,
+            _ => Some(0),
+        };
         Self {
             id,
             source: source.into(),
             generation: 0,
             canonical_path,
             library,
+            last_saved_generation,
         }
     }
 
@@ -126,6 +141,22 @@ impl ModelicaDocument {
     /// untitled document). Does not re-classify `library`.
     pub fn set_canonical_path(&mut self, path: Option<PathBuf>) {
         self.canonical_path = path;
+    }
+
+    /// Whether the document has unsaved changes — current generation
+    /// differs from the last-saved one, or it has never been saved.
+    pub fn is_dirty(&self) -> bool {
+        match self.last_saved_generation {
+            Some(g) => g != self.generation,
+            None => true,
+        }
+    }
+
+    /// Record that the document was just persisted at its current
+    /// generation. The Save observer calls this after a successful
+    /// disk write.
+    pub fn mark_saved(&mut self) {
+        self.last_saved_generation = Some(self.generation);
     }
 }
 

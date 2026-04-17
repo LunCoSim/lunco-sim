@@ -63,6 +63,9 @@ use lunco_workbench::{Workspace, WorkspaceId, WorkbenchAppExt, WorkbenchLayout, 
 pub mod state;
 pub use state::*;
 
+pub mod commands;
+pub use commands::{CompileModel, ModelicaCommandsPlugin};
+
 mod panels;
 
 use crate::ModelicaModel;
@@ -156,6 +159,17 @@ impl Plugin for ModelicaUiPlugin {
         // lifecycle events this plugin fires. One journal per App —
         // adding the plugin multiple times is a no-op on `init_resource`.
         app.add_plugins(lunco_doc_bevy::TwinJournalPlugin);
+
+        // Intent layer: key chords → EditorIntent. Domain resolvers
+        // (installed by ModelicaCommandsPlugin below) translate intents
+        // into concrete commands for the docs they own.
+        app.add_plugins(lunco_doc_bevy::EditorIntentPlugin);
+
+        // Command bus for Modelica documents — Undo / Redo / Save /
+        // Close (generic) + Compile (domain-specific) — plus the
+        // EditorIntent resolver. UI buttons, keyboard shortcuts,
+        // scripts, and the remote API all funnel through these.
+        app.add_plugins(ModelicaCommandsPlugin);
 
         app.init_resource::<WorkbenchState>()
             .init_resource::<ModelicaDocumentRegistry>()
