@@ -6,7 +6,10 @@ use lunco_assets::assets_dir;
 use lunco_modelica::{
     ModelicaPlugin,
     ModelicaModel,
-    ui::{CompileState, CompileStates, ModelicaDocumentRegistry, ModelLibrary, WorkbenchState},
+    ui::{
+        panels::model_view::{ModelTabs, MODEL_VIEW_KIND},
+        CompileState, CompileStates, ModelicaDocumentRegistry, ModelLibrary, WorkbenchState,
+    },
 };
 
 fn main() {
@@ -38,6 +41,8 @@ fn setup_sandbox(
     mut workbench_state: ResMut<WorkbenchState>,
     mut doc_registry: ResMut<ModelicaDocumentRegistry>,
     mut compile_states: ResMut<CompileStates>,
+    mut model_tabs: ResMut<ModelTabs>,
+    mut layout: ResMut<lunco_workbench::WorkbenchLayout>,
 ) {
     commands.spawn(Camera2d);
 
@@ -76,6 +81,11 @@ fn setup_sandbox(
 
     doc_registry.link(entity, doc_id);
     compile_states.set(doc_id, CompileState::Compiling);
+
+    // Open a model tab for the bundled default so the user lands on
+    // the Battery view instead of the Welcome placeholder.
+    model_tabs.ensure(doc_id);
+    layout.open_instance(MODEL_VIEW_KIND, doc_id.raw());
 
     // Trigger initial compilation
     let _ = channels.tx.send(lunco_modelica::ModelicaCommand::Compile {

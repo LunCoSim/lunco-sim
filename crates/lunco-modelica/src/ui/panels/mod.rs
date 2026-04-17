@@ -8,3 +8,4 @@ pub mod diagram;
 pub mod svg_renderer;
 pub mod inspector;
 pub mod model_view;
+pub mod welcome;

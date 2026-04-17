@@ -1540,45 +1540,6 @@ impl Panel for DiagramPanel {
             return;
         }
 
-        // Empty-state hint: the current diagram has no nodes (e.g. just
-        // created a new model, or the source is equations-only). Show a
-        // one-line tip above the canvas *without* returning — the Snarl
-        // canvas below owns the right-click "add component" menu, so we
-        // must keep rendering it for the hint to be actionable.
-        let has_no_nodes = world
-            .get_resource::<DiagramState>()
-            .map(|ds| ds.diagram.nodes.is_empty())
-            .unwrap_or(true);
-        let has_open_model = world
-            .get_resource::<WorkbenchState>()
-            .map(|s| s.open_model.is_some())
-            .unwrap_or(false);
-        if has_no_nodes {
-            ui.horizontal(|ui| {
-                ui.colored_label(egui::Color32::from_rgb(180, 180, 90), "💡");
-                if has_open_model {
-                    ui.label(
-                        egui::RichText::new(
-                            "Empty diagram — right-click the canvas to add a component, \
-                             or switch to 📝 Text to edit source directly.",
-                        )
-                        .size(11.0)
-                        .color(egui::Color32::from_rgb(170, 170, 170)),
-                    );
-                } else {
-                    ui.label(
-                        egui::RichText::new(
-                            "No model open — right-click the canvas to start a diagram, \
-                             or pick one from the Package Browser.",
-                        )
-                        .size(11.0)
-                        .color(egui::Color32::from_rgb(170, 170, 170)),
-                    );
-                }
-            });
-            ui.separator();
-        }
-
         // Body only. Identity (model name, read-only state), compile
         // button and view-mode switching all live on the ModelView panel's
         // unified toolbar. The Schematic/NodeGraph toggle and diagram-

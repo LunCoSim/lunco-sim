@@ -39,6 +39,17 @@ use crate::{ModelicaChannels, ModelicaCommand, ModelicaModel};
 // Modelica-specific commands
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Request to create a new untitled Modelica model and open its tab.
+///
+/// Matches VS Code's "New File" flow — no name dialog, no Save-As
+/// prompt. The observer picks the next free `Untitled<N>` name,
+/// allocates an in-memory [`ModelicaDocument`](crate::document::ModelicaDocument)
+/// with a `mem://Untitled<N>` marker path, records it in the Package
+/// Browser's in-memory list, and triggers an [`OpenTab`](lunco_workbench::OpenTab)
+/// so the user lands on the editable tab immediately.
+#[derive(Event, Clone, Debug)]
+pub struct CreateNewScratchModel;
+
 /// Request to compile a Modelica document and run the resulting
 /// simulation.
 ///
@@ -76,7 +87,9 @@ impl Plugin for ModelicaCommandsPlugin {
             .add_observer(on_save_document)
             .add_observer(on_close_document)
             .add_observer(on_compile_model)
-            .add_observer(resolve_editor_intent);
+            .add_observer(on_create_new_scratch_model)
+            .add_observer(resolve_editor_intent)
+            .add_observer(resolve_new_document_intent);
     }
 }
 
@@ -122,6 +135,23 @@ fn resolve_editor_intent(
         }
         EditorIntent::Close => commands.trigger(CloseDocument { doc }),
         EditorIntent::Compile => commands.trigger(CompileModel { doc }),
+        // `NewDocument` doesn't need an active doc — it's handled by
+        // `NewDocumentNoDoc` resolver below (the resolver that runs
+        // even when there's no active doc).
+        EditorIntent::NewDocument => {}
+    }
+}
+
+/// Second EditorIntent resolver that fires regardless of whether an
+/// active document is owned by Modelica — handles the intents that
+/// have no existing-doc target, currently just `NewDocument`.
+///
+/// Kept separate from [`resolve_editor_intent`] so the active-doc
+/// ownership check there can stay a hard precondition for all other
+/// intent variants.
+fn resolve_new_document_intent(trigger: On<EditorIntent>, mut commands: Commands) {
+    if matches!(*trigger.event(), EditorIntent::NewDocument) {
+        commands.trigger(CreateNewScratchModel);
     }
 }
 
@@ -395,4 +425,67 @@ fn on_compile_model(
             source,
         });
     }
+}
+
+fn on_create_new_scratch_model(
+    _trigger: On<CreateNewScratchModel>,
+    mut registry: ResMut<ModelicaDocumentRegistry>,
+    mut cache: ResMut<crate::ui::panels::package_browser::PackageTreeCache>,
+    mut model_tabs: ResMut<crate::ui::panels::model_view::ModelTabs>,
+    mut workbench: ResMut<WorkbenchState>,
+    mut commands: Commands,
+) {
+    // Find the lowest `Untitled<N>` not already taken — matches VS
+    // Code's `Untitled-1`, `Untitled-2` … semantics.
+    let taken: std::collections::HashSet<String> = cache
+        .in_memory_models
+        .iter()
+        .map(|e| e.display_name.clone())
+        .collect();
+    let mut n: u32 = 1;
+    let name = loop {
+        let candidate = format!("Untitled{n}");
+        if !taken.contains(&candidate) {
+            break candidate;
+        }
+        n += 1;
+    };
+
+    let source = format!("model {name}\n\nend {name};\n");
+    let mem_id = format!("mem://{name}");
+    let doc_id = registry.allocate_with_origin(
+        source.clone(),
+        Some(std::path::PathBuf::from(&mem_id)),
+        crate::ui::state::ModelLibrary::InMemory,
+    );
+
+    cache.in_memory_models.retain(|e| e.id != mem_id);
+    cache
+        .in_memory_models
+        .push(crate::ui::panels::package_browser::InMemoryEntry {
+            display_name: name.clone(),
+            id: mem_id.clone(),
+            doc: doc_id,
+        });
+
+    let source_arc: std::sync::Arc<str> = source.into();
+    workbench.open_model = Some(crate::ui::OpenModel {
+        model_path: mem_id,
+        display_name: name.clone(),
+        source: source_arc.clone(),
+        line_starts: vec![0].into(),
+        detected_name: Some(name),
+        cached_galley: None,
+        read_only: false,
+        library: crate::ui::state::ModelLibrary::InMemory,
+        doc: Some(doc_id),
+    });
+    workbench.editor_buffer = source_arc.to_string();
+    workbench.diagram_dirty = true;
+
+    model_tabs.ensure(doc_id);
+    commands.trigger(lunco_workbench::OpenTab {
+        kind: crate::ui::panels::model_view::MODEL_VIEW_KIND,
+        instance: doc_id.raw(),
+    });
 }

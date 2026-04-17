@@ -90,6 +90,8 @@ fn setup_web_workbench(
     mut workbench_state: ResMut<lunco_modelica::ui::WorkbenchState>,
     mut doc_registry: ResMut<lunco_modelica::ui::ModelicaDocumentRegistry>,
     mut compile_states: ResMut<lunco_modelica::ui::CompileStates>,
+    mut model_tabs: ResMut<lunco_modelica::ui::panels::model_view::ModelTabs>,
+    mut layout: ResMut<lunco_workbench::WorkbenchLayout>,
     model_info: Res<BundledModelInfo>,
 ) {
     commands.spawn(Camera2d);
@@ -127,6 +129,14 @@ fn setup_web_workbench(
 
     doc_registry.link(entity, doc_id);
     compile_states.set(doc_id, lunco_modelica::ui::CompileState::Compiling);
+
+    // Open the model tab so the user lands on the actual model view
+    // instead of the Welcome placeholder.
+    model_tabs.ensure(doc_id);
+    layout.open_instance(
+        lunco_modelica::ui::panels::model_view::MODEL_VIEW_KIND,
+        doc_id.raw(),
+    );
 
     // Select this entity so handle_modelica_responses populates plotted_variables
     // on the initial compile result (is_new_model branch).

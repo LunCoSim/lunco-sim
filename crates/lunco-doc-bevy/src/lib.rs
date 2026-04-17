@@ -222,6 +222,10 @@ pub enum EditorIntent {
     /// Modelica translates this to `CompileModel`; other domains may
     /// ignore or repurpose).
     Compile,
+    /// Create a new untitled document and open a tab for it. Domain
+    /// resolvers handle this without any active-doc ownership check —
+    /// "new" by definition has no existing target.
+    NewDocument,
 }
 
 /// A key chord (modifier + key) that triggers an [`EditorIntent`].
@@ -277,6 +281,7 @@ impl Default for Keybindings {
         map.insert(KeyChord::ctrl(KeyCode::KeyS), EditorIntent::Save);
         map.insert(KeyChord::ctrl_shift(KeyCode::KeyS), EditorIntent::SaveAs);
         map.insert(KeyChord::ctrl(KeyCode::KeyW), EditorIntent::Close);
+        map.insert(KeyChord::ctrl(KeyCode::KeyN), EditorIntent::NewDocument);
         map.insert(KeyChord::plain(KeyCode::F5), EditorIntent::Compile);
         Self { map }
     }

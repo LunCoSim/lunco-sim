@@ -64,9 +64,9 @@ pub mod state;
 pub use state::*;
 
 pub mod commands;
-pub use commands::{CompileModel, ModelicaCommandsPlugin};
+pub use commands::{CompileModel, CreateNewScratchModel, ModelicaCommandsPlugin};
 
-mod panels;
+pub mod panels;
 
 use crate::ModelicaModel;
 
@@ -136,10 +136,17 @@ impl Workspace for AnalyzeWorkspace {
     fn apply(&self, layout: &mut WorkbenchLayout) {
         layout.set_activity_bar(false);
         layout.set_side_browser(Some(PanelId("modelica_package_browser")));
-        // One center tab per open model (today still a singleton — the
-        // `TabId`-enum multi-tab refactor lands later). View mode
-        // (Text / Diagram) toggles inside the panel itself.
-        layout.set_center(vec![PanelId("modelica_model_view")]);
+        // Center is seeded with no singleton tab — model views are
+        // multi-instance tabs opened dynamically by the Package Browser
+        // (one tab per open document). An app that boots with a
+        // default model can pre-open a tab after setup via
+        // `WorkbenchLayout::open_instance(MODEL_VIEW_KIND, doc.raw())`.
+        //
+        // Keep a placeholder center tab so the dock's cross layout
+        // still builds on apps with nothing open yet. When the first
+        // real model tab opens, the placeholder stays docked next
+        // to it — users can close it.
+        layout.set_center(vec![PanelId("modelica_welcome")]);
         layout.set_active_center_tab(0);
         layout.set_right_inspector(Some(PanelId("modelica_inspector")));
         layout.set_bottom(Some(PanelId("modelica_console")));
@@ -174,6 +181,7 @@ impl Plugin for ModelicaUiPlugin {
         app.init_resource::<WorkbenchState>()
             .init_resource::<ModelicaDocumentRegistry>()
             .init_resource::<CompileStates>()
+            .init_resource::<panels::model_view::ModelTabs>()
             .init_resource::<panels::diagram::DiagramState>()
             .init_resource::<panels::diagram::DiagramTheme>()
             .init_resource::<panels::code_editor::EditorBufferState>()
@@ -182,10 +190,13 @@ impl Plugin for ModelicaUiPlugin {
             .add_systems(Update, cleanup_removed_documents)
             .add_systems(Update, drain_document_changes)
             .register_panel(panels::package_browser::PackageBrowserPanel)
-            .register_panel(panels::model_view::ModelViewPanel::default())
+            .register_panel(panels::welcome::WelcomePanel)
             .register_panel(panels::telemetry::TelemetryPanel)
             .register_panel(panels::graphs::GraphsPanel)
             .register_panel(panels::inspector::InspectorPanel)
+            // Multi-instance: one tab per open document. Instances are
+            // opened at runtime by the Package Browser.
+            .register_instance_panel(panels::model_view::ModelViewPanel::default())
             .register_workspace(AnalyzeWorkspace);
     }
 }

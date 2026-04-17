@@ -224,6 +224,9 @@ fn find_and_update_node(nodes: &mut [PackageNode], parent_id: &str, children: Ve
 pub fn handle_package_loading_tasks(
     mut cache: ResMut<PackageTreeCache>,
     mut workbench: ResMut<WorkbenchState>,
+    mut registry: ResMut<ModelicaDocumentRegistry>,
+    mut model_tabs: ResMut<crate::ui::panels::model_view::ModelTabs>,
+    mut layout: ResMut<lunco_workbench::WorkbenchLayout>,
     mut egui_ctx: bevy_egui::EguiContexts,
 ) {
     let mut finished_results = Vec::new();
@@ -258,6 +261,19 @@ pub fn handle_package_loading_tasks(
             egui_ctx.ctx_mut().unwrap().fonts_mut(|f| f.layout_job(job))
         });
 
+        // Allocate the Document *now* so we have a stable DocumentId
+        // to key a tab by. Previously we deferred allocation until the
+        // first Compile, but multi-tab needs the id up front. The
+        // canonical-path heuristic: use the `result.id` scheme string
+        // as the path (real FS path for User models, synthetic for
+        // bundled/msl — harmless, informational only).
+        let canonical_path = Some(std::path::PathBuf::from(&result.id));
+        let doc_id = registry.allocate_with_origin(
+            result.source.to_string(),
+            canonical_path,
+            result.library.clone(),
+        );
+
         workbench.open_model = Some(OpenModel {
             model_path: result.id,
             display_name: result.name,
@@ -265,17 +281,21 @@ pub fn handle_package_loading_tasks(
             line_starts: result.line_starts,
             detected_name: result.detected_name,
             cached_galley,
-            read_only: result.library != ModelLibrary::InMemory && result.library != ModelLibrary::User,
+            read_only: result.library != ModelLibrary::InMemory
+                && result.library != ModelLibrary::User,
             library: result.library,
-            // On-disk / bundled models allocate their Document lazily on
-            // first compile. The browser doesn't pre-allocate so we avoid
-            // churning the registry when the user scrolls through files.
-            doc: None,
+            doc: Some(doc_id),
         });
         workbench.diagram_dirty = true;
         workbench.is_loading = false;
-    }
 
+        // Open (or focus) the multi-instance tab for this document.
+        model_tabs.ensure(doc_id);
+        layout.open_instance(
+            crate::ui::panels::model_view::MODEL_VIEW_KIND,
+            doc_id.raw(),
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -298,8 +318,6 @@ impl Panel for PackageBrowserPanel {
         });
 
 
-        let mut show_dialog = false;
-
         // Fetch needed state from World before borrowing tree_cache mutably
         let active_path_str = {
             let state = world.resource::<WorkbenchState>();
@@ -308,6 +326,7 @@ impl Panel for PackageBrowserPanel {
         let active_path = active_path_str.as_deref();
         let mut to_open: Option<PackageAction> = None;
         let mut reopen_in_memory: Option<String> = None;
+        let mut create_new = false;
 
         {
             let mut tree_cache = world.resource_mut::<PackageTreeCache>();
@@ -349,8 +368,11 @@ impl Panel for PackageBrowserPanel {
                 // ── Section 3: Your Models ──
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new("📁 Your Models").size(12.0).color(egui::Color32::YELLOW).strong());
-                    if ui.small_button("➕").clicked() {
-                        show_dialog = true;
+                    if ui.small_button("➕")
+                        .on_hover_text("New untitled model (Ctrl+N)")
+                        .clicked()
+                    {
+                        create_new = true;
                     }
                 });
                 ui.label(egui::RichText::new("Writable — your custom models").size(9.0).color(egui::Color32::GRAY));
@@ -362,8 +384,11 @@ impl Panel for PackageBrowserPanel {
                     reopen_in_memory = Some(id);
                 }
 
-                if ui.button("➕ Create new model…").clicked() {
-                    show_dialog = true;
+                if ui.button("➕ New model")
+                    .on_hover_text("Creates an Untitled tab (Ctrl+N)")
+                    .clicked()
+                {
+                    create_new = true;
                 }
 
                 // Show Open Folder placeholder
@@ -375,8 +400,11 @@ impl Panel for PackageBrowserPanel {
             });
         }
 
-        if show_dialog {
-            ui.memory_mut(|m| m.data.insert_temp(egui::Id::new("show_new_model_dialog"), true));
+        if create_new {
+            // VS Code-style: one click → new Untitled tab immediately.
+            // The observer in `ui::commands` picks a unique
+            // `Untitled<N>` name, allocates the doc, and opens a tab.
+            world.commands().trigger(crate::ui::commands::CreateNewScratchModel);
         }
 
         if let Some(action) = to_open {
@@ -394,10 +422,6 @@ impl Panel for PackageBrowserPanel {
             // Name is the part after "mem://".
             let name = id.strip_prefix("mem://").unwrap_or(&id).to_string();
             open_model(world, id, name, ModelLibrary::InMemory);
-        }
-
-        if ui.memory(|m| m.data.get_temp::<bool>(egui::Id::new("show_new_model_dialog")).unwrap_or(false)) {
-            show_new_model_dialog(ui, world);
         }
     }
 }
@@ -696,7 +720,7 @@ fn open_model(world: &mut World, id: String, name: String, library: ModelLibrary
         if let Some(mut state) = world.get_resource_mut::<WorkbenchState>() {
             let source_arc: std::sync::Arc<str> = source.into();
             state.open_model = Some(OpenModel {
-                model_path: id,
+                model_path: id.clone(),
                 display_name: name,
                 source: source_arc.clone(),
                 line_starts: line_starts.into(),
@@ -710,6 +734,23 @@ fn open_model(world: &mut World, id: String, name: String, library: ModelLibrary
             state.diagram_dirty = true;
             state.is_loading = false;
         }
+
+        // Open (or focus) the tab for this in-memory model.
+        // Panels render inside `render_workbench`, which extracts
+        // `WorkbenchLayout` from the world for the duration — touching
+        // the resource directly here would panic. Fire an event; the
+        // workbench's `on_open_tab` observer picks it up after the
+        // render system completes.
+        if let Some(doc) = doc_id {
+            world
+                .resource_mut::<crate::ui::panels::model_view::ModelTabs>()
+                .ensure(doc);
+            world.commands().trigger(lunco_workbench::OpenTab {
+                kind: crate::ui::panels::model_view::MODEL_VIEW_KIND,
+                instance: doc.raw(),
+            });
+        }
+        let _ = id;
         return;
     }
 
@@ -792,118 +833,8 @@ fn instantiate_model(world: &mut World, id: String) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// New Model Dialog
-// ---------------------------------------------------------------------------
-
-fn show_new_model_dialog(ui: &mut egui::Ui, world: &mut World) {
-    egui::Window::new("Create New Model")
-        .id(egui::Id::new("new_model_dialog"))
-        .collapsible(false)
-        .resizable(false)
-        .default_width(380.0)
-        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-        .show(ui.ctx(), |ui| {
-            let mut name_buf = ui.memory_mut(|m| {
-                m.data.get_temp::<String>(egui::Id::new("new_model_name"))
-                    .unwrap_or_else(|| "MyModel".to_string())
-            });
-
-            ui.label("Name for the new model:");
-            let text_edit = ui.add(
-                egui::TextEdit::singleline(&mut name_buf)
-                    .desired_width(280.0)
-                    .hint_text("e.g., MyRC_Circuit")
-            );
-            ui.memory_mut(|m| m.data.insert_temp(egui::Id::new("new_model_name"), name_buf.clone()));
-
-            if text_edit.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                ui.memory_mut(|m| m.data.insert_temp(egui::Id::new("show_new_model_dialog"), false));
-            }
-
-            ui.horizontal(|ui| {
-                if ui.button("Create").clicked() || (text_edit.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))) {
-                    let name = name_buf.trim().to_string();
-                    if name.is_empty() { return; }
-
-                    let valid = name.chars().next().map(|c| c.is_alphabetic()).unwrap_or(false)
-                        && name.chars().all(|c| c.is_alphanumeric() || c == '_');
-
-                    if !valid {
-                        ui.colored_label(egui::Color32::LIGHT_RED, "Must start with a letter, only letters/numbers/_ allowed.");
-                        return;
-                    }
-
-                    // Flush edits from whatever model is currently open
-                    // before we replace it — matches the behavior of
-                    // clicking a different library entry.
-                    commit_current_model_edits(world);
-
-                    let source = format!("model {}\n\nend {};\n", name, name);
-                    let mem_id = format!("mem://{}", name);
-
-                    // Allocate the Document up front so the new scratch
-                    // model survives navigation (switching to another
-                    // file and coming back). The Package Browser lists
-                    // it under "Your Models" by consulting
-                    // `PackageTreeCache.in_memory_models`.
-                    let doc_id = world
-                        .resource_mut::<ModelicaDocumentRegistry>()
-                        .allocate_with_origin(
-                            source.clone(),
-                            Some(std::path::PathBuf::from(&mem_id)),
-                            ModelLibrary::InMemory,
-                        );
-                    if let Some(mut cache) = world.get_resource_mut::<PackageTreeCache>() {
-                        // De-dupe by id: overwrite an entry with the same
-                        // name (recreating "MyModel" shouldn't leave a
-                        // stale line).
-                        cache.in_memory_models.retain(|e| e.id != mem_id);
-                        cache.in_memory_models.push(InMemoryEntry {
-                            display_name: name.clone(),
-                            id: mem_id.clone(),
-                            doc: doc_id,
-                        });
-                    }
-
-                    if let Some(mut state) = world.get_resource_mut::<WorkbenchState>() {
-                        let source_arc: std::sync::Arc<str> = source.into();
-                        state.open_model = Some(OpenModel {
-                            model_path: mem_id,
-                            display_name: name.clone(),
-                            source: source_arc.clone(),
-                            line_starts: vec![0].into(),
-                            detected_name: Some(name.clone()),
-                            cached_galley: None,
-                            read_only: false,
-                            library: ModelLibrary::InMemory,
-                            doc: Some(doc_id),
-                        });
-                        state.editor_buffer = source_arc.to_string();
-                        state.diagram_dirty = true;
-
-                        if let Some(mut ds) = world.get_resource_mut::<crate::ui::panels::diagram::DiagramState>() {
-                            ds.diagram = crate::visual_diagram::VisualDiagram::default();
-                            ds.model_counter += 1;
-                            ds.compile_status = None;
-                        }
-                    }
-
-                    ui.memory_mut(|m| {
-                        m.data.insert_temp(egui::Id::new("show_new_model_dialog"), false);
-                        m.data.remove_temp::<String>(egui::Id::new("new_model_name"));
-                    });
-                }
-
-                if ui.button("Cancel").clicked() {
-                    ui.memory_mut(|m| m.data.insert_temp(egui::Id::new("show_new_model_dialog"), false));
-                }
-            });
-
-            ui.add_space(8.0);
-            ui.separator();
-            ui.add_space(4.0);
-            ui.label("📌 The model is in-memory (shown as 💾 in Package Browser).");
-            ui.label("Add components from the MSL Library panel, then COMPILE & RUN.");
-        });
-}
+// The legacy "New Model" modal (name-prompt dialog) used to live here.
+// VS Code's one-click "New Untitled" flow replaces it — the ➕
+// buttons fire `CreateNewScratchModel`, the observer in
+// `ui::commands` picks the next free `UntitledN` name, allocates the
+// doc, and opens a tab. Rename is deferred to Save-As.

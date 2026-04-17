@@ -50,7 +50,46 @@ mod panel;
 mod viewport;
 mod workspace;
 
-pub use panel::{Panel, PanelId, PanelSlot};
+pub use panel::{InstancePanel, Panel, PanelId, PanelSlot, TabId};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tab-management commands
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Request the workbench open (or focus) a multi-instance tab.
+///
+/// Fire via `commands.trigger(OpenTab { kind, instance })` from
+/// anywhere — a panel's render fn, a system, a domain-crate observer.
+/// The workbench installs an observer that handles the event by
+/// calling [`WorkbenchLayout::open_instance`] on its own schedule,
+/// which avoids the re-entrance trap of touching `WorkbenchLayout`
+/// while it's extracted for rendering.
+#[derive(Event, Clone, Copy, Debug)]
+pub struct OpenTab {
+    /// The [`InstancePanel::kind`] to open.
+    pub kind: PanelId,
+    /// The tab's instance discriminant (typically a raw `DocumentId`).
+    pub instance: u64,
+}
+
+/// Request the workbench close a multi-instance tab, if open.
+#[derive(Event, Clone, Copy, Debug)]
+pub struct CloseTab {
+    /// The [`InstancePanel::kind`] to close.
+    pub kind: PanelId,
+    /// The tab's instance discriminant.
+    pub instance: u64,
+}
+
+fn on_open_tab(trigger: On<OpenTab>, mut layout: ResMut<WorkbenchLayout>) {
+    let ev = *trigger.event();
+    layout.open_instance(ev.kind, ev.instance);
+}
+
+fn on_close_tab(trigger: On<CloseTab>, mut layout: ResMut<WorkbenchLayout>) {
+    let ev = *trigger.event();
+    layout.close_instance(ev.kind, ev.instance);
+}
 pub use viewport::{ViewportPanel, WorkbenchViewportCamera, VIEWPORT_PANEL_ID};
 pub use workspace::{Workspace, WorkspaceId};
 
@@ -76,6 +115,8 @@ impl Plugin for WorkbenchPlugin {
             app.add_plugins(bevy_egui::EguiPlugin::default());
         }
         app.init_resource::<WorkbenchLayout>()
+            .add_observer(on_open_tab)
+            .add_observer(on_close_tab)
             .add_systems(EguiPrimaryContextPass, render_workbench);
     }
 }
@@ -91,6 +132,10 @@ impl Plugin for WorkbenchPlugin {
 #[derive(Resource)]
 pub struct WorkbenchLayout {
     pub(crate) panels: HashMap<PanelId, Box<dyn Panel>>,
+    /// Registered multi-instance panel kinds (one entry per
+    /// [`InstancePanel::kind`]). Instances share the same renderer;
+    /// each tab picks its behaviour via `TabId::Instance { kind, … }`.
+    pub(crate) instance_panels: HashMap<PanelId, Box<dyn InstancePanel>>,
     pub(crate) workspaces: Vec<Box<dyn Workspace>>,
     pub(crate) active_workspace: Option<WorkspaceId>,
     pub(crate) activity_bar: bool,
@@ -107,14 +152,17 @@ pub struct WorkbenchLayout {
 
     pub(crate) status: Option<StatusContent>,
 
-    /// The live dock tree — what egui_dock actually renders.
-    pub(crate) dock: DockState<PanelId>,
+    /// The live dock tree — what egui_dock actually renders. Stores
+    /// [`TabId`]s so both singleton panels and multi-instance tabs
+    /// coexist in the same tree.
+    pub(crate) dock: DockState<TabId>,
 }
 
 impl Default for WorkbenchLayout {
     fn default() -> Self {
         Self {
             panels: HashMap::new(),
+            instance_panels: HashMap::new(),
             workspaces: Vec::new(),
             active_workspace: None,
             activity_bar: false,
@@ -159,6 +207,87 @@ impl WorkbenchLayout {
         }
         self.panels.insert(id, Box::new(panel));
         self.rebuild_dock();
+    }
+
+    /// Register a multi-instance panel *kind*. Tabs of this kind are
+    /// opened via [`open_instance`](Self::open_instance) and dispatched
+    /// to this [`InstancePanel`] by the workbench's tab viewer.
+    ///
+    /// A given kind should only be registered once per App; re-registering
+    /// replaces the previous renderer.
+    pub fn register_instance_panel<P: InstancePanel + 'static>(&mut self, panel: P) {
+        self.instance_panels.insert(panel.kind(), Box::new(panel));
+    }
+
+    /// Open (or focus, if already open) a multi-instance tab of `kind`
+    /// with the given `instance` discriminant. Slot comes from the
+    /// kind's [`InstancePanel::default_slot`] on first open.
+    ///
+    /// The workbench scans the dock for an existing tab matching the
+    /// id and focuses it if found; otherwise adds a new tab to the
+    /// **center** leaf — identified by matching any singleton tab
+    /// currently in the `center` slot intent.
+    pub fn open_instance(&mut self, kind: PanelId, instance: u64) {
+        if !self.instance_panels.contains_key(&kind) {
+            bevy::log::warn!(
+                "open_instance: no InstancePanel registered for kind {:?}",
+                kind
+            );
+            return;
+        }
+        let tab = TabId::Instance { kind, instance };
+        // Already open? Focus it.
+        if let Some((surface, node, tab_idx)) = self.dock.find_tab(&tab) {
+            self.dock.set_focused_node_and_surface((surface, node));
+            self.dock
+                .set_active_tab((surface, node, tab_idx));
+            return;
+        }
+
+        // Find the center leaf. We identify it as the one containing
+        // any tab whose `PanelId` is in our `center` slot intent —
+        // or, failing that, any existing `TabId::Instance` of this
+        // same `kind` (because instance tabs of a kind belong in its
+        // `default_slot`, which for model views is Center).
+        //
+        // Falling back to "first leaf" was wrong: after split_left /
+        // split_right / split_below, the tree's first leaf in walk
+        // order is the left side panel, and new tabs landed inside
+        // the Package Browser instead of the center.
+        let center_ids: std::collections::HashSet<PanelId> =
+            self.center.iter().copied().collect();
+        let target_leaf = {
+            let main = self.dock.main_surface_mut();
+            find_leaf_matching(main, |t| match *t {
+                TabId::Singleton(id) => center_ids.contains(&id),
+                TabId::Instance { kind: k, .. } => k == kind,
+            })
+            .or_else(|| first_leaf(main))
+        };
+
+        if let Some(leaf) = target_leaf {
+            let main = self.dock.main_surface_mut();
+            main[leaf].append_tab(tab);
+            // Focus the just-appended tab.
+            if let Some(count) = main[leaf].tabs_count().checked_sub(1) {
+                main.set_active_tab(leaf, count);
+            }
+            // Focus the leaf/surface too so egui_dock foregrounds it.
+            self.dock
+                .set_focused_node_and_surface((egui_dock::SurfaceIndex::main(), leaf));
+        } else {
+            // Empty dock (e.g. 3D app with no center tabs). Seed a
+            // single leaf with this tab so at least something shows.
+            self.dock = DockState::new(vec![tab]);
+        }
+    }
+
+    /// Close a multi-instance tab if present. Idempotent.
+    pub fn close_instance(&mut self, kind: PanelId, instance: u64) {
+        let tab = TabId::Instance { kind, instance };
+        if let Some(pos) = self.dock.find_tab(&tab) {
+            self.dock.remove_tab(pos);
+        }
     }
 
     /// Toggle visibility of the activity bar on the far left.
@@ -233,17 +362,27 @@ impl WorkbenchLayout {
         // app, so workspace presets can optimistically list panels that
         // may only exist in some binaries (e.g. a rover-only Code tab
         // referenced from the shared `BuildWorkspace`).
-        let known = |ids: &[PanelId]| -> Vec<PanelId> {
-            ids.iter().copied().filter(|id| self.panels.contains_key(id)).collect()
+        //
+        // Workspace slot-setters still use `PanelId` — slot presets
+        // describe singleton-panel layouts. Instance-panel tabs are
+        // opened dynamically at runtime (e.g. Package Browser opens a
+        // model tab) and don't come from the workspace preset.
+        let known = |ids: &[PanelId]| -> Vec<TabId> {
+            ids.iter()
+                .copied()
+                .filter(|id| self.panels.contains_key(id))
+                .map(TabId::Singleton)
+                .collect()
         };
         let side_browser_tabs = known(&self.side_browser);
         let right_inspector_tabs = known(&self.right_inspector);
         let bottom_tabs = known(&self.bottom);
-        let center_tabs: Vec<PanelId> = self
+        let center_tabs: Vec<TabId> = self
             .center
             .iter()
             .copied()
             .filter(|id| self.panels.contains_key(id))
+            .map(TabId::Singleton)
             .collect();
 
         // 3D apps: no central tabs → don't build a dock tree at all.
@@ -306,6 +445,11 @@ pub trait WorkbenchAppExt {
     /// Register a panel with the default workbench layout.
     fn register_panel<P: Panel + 'static>(&mut self, panel: P) -> &mut Self;
 
+    /// Register a multi-instance panel kind (e.g. model tabs).
+    /// Instances are opened at runtime via
+    /// [`WorkbenchLayout::open_instance`].
+    fn register_instance_panel<P: InstancePanel + 'static>(&mut self, panel: P) -> &mut Self;
+
     /// Register a workspace. The first workspace registered becomes
     /// active and its `apply` seeds the initial slot assignments.
     fn register_workspace<W: Workspace + 'static>(&mut self, workspace: W) -> &mut Self;
@@ -317,6 +461,16 @@ impl WorkbenchAppExt for App {
             self.init_resource::<WorkbenchLayout>();
         }
         self.world_mut().resource_mut::<WorkbenchLayout>().register(panel);
+        self
+    }
+
+    fn register_instance_panel<P: InstancePanel + 'static>(&mut self, panel: P) -> &mut Self {
+        if !self.world().contains_resource::<WorkbenchLayout>() {
+            self.init_resource::<WorkbenchLayout>();
+        }
+        self.world_mut()
+            .resource_mut::<WorkbenchLayout>()
+            .register_instance_panel(panel);
         self
     }
 
@@ -355,57 +509,126 @@ fn render_workbench(world: &mut World) {
     world.insert_resource(layout);
 }
 
-/// `egui_dock::TabViewer` impl that delegates each tab's render to the
-/// `Panel` trait, looking the panel up by id.
+/// First leaf node (in walk order) in a `Surface`'s tree, if any.
+/// Used as a last-resort fallback when no more specific target leaf
+/// can be identified.
+fn first_leaf(
+    surface: &mut egui_dock::Tree<TabId>,
+) -> Option<NodeIndex> {
+    for (index, node) in surface.iter_mut().enumerate() {
+        if node.is_leaf() {
+            return Some(NodeIndex(index));
+        }
+    }
+    None
+}
+
+/// First leaf containing any tab for which `pred` returns `true`.
+/// Used by [`WorkbenchLayout::open_instance`] to find the center
+/// tabset after workspace splits have moved it around.
+fn find_leaf_matching<F>(
+    surface: &mut egui_dock::Tree<TabId>,
+    pred: F,
+) -> Option<NodeIndex>
+where
+    F: Fn(&TabId) -> bool,
+{
+    for (index, node) in surface.iter_mut().enumerate() {
+        if node.is_leaf() {
+            if let Some(tabs) = node.tabs() {
+                if tabs.iter().any(&pred) {
+                    return Some(NodeIndex(index));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// `egui_dock::TabViewer` impl that delegates each tab's render to
+/// the matching `Panel` (for singletons) or `InstancePanel` (for
+/// multi-instance tabs), looking them up by the tab's [`TabId`].
 struct PanelTabViewer<'a> {
     panels: &'a mut HashMap<PanelId, Box<dyn Panel>>,
+    instance_panels: &'a mut HashMap<PanelId, Box<dyn InstancePanel>>,
     world: &'a mut World,
 }
 
 impl<'a> TabViewer for PanelTabViewer<'a> {
-    type Tab = PanelId;
+    type Tab = TabId;
 
     fn title(&mut self, tab: &mut Self::Tab) -> egui::WidgetText {
-        match self.panels.get(tab) {
-            Some(p) => p.dynamic_title(self.world).into(),
-            None => format!("?{}?", tab.as_str()).into(),
+        match *tab {
+            TabId::Singleton(id) => match self.panels.get(&id) {
+                Some(p) => p.dynamic_title(self.world).into(),
+                None => format!("?{}?", id.as_str()).into(),
+            },
+            TabId::Instance { kind, instance } => match self.instance_panels.get(&kind) {
+                Some(p) => p.title(self.world, instance).into(),
+                None => format!("?{}#{}?", kind.as_str(), instance).into(),
+            },
         }
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab) {
-        // Take the panel out, render it, put it back. This avoids keeping
-        // a mutable borrow on `self.panels` for the duration of `render`,
-        // which would conflict if the panel ever needed to look up sibling
-        // panel metadata via the layout (unlikely today, future-proof).
-        if let Some(mut panel) = self.panels.remove(tab) {
-            panel.render(ui, self.world);
-            self.panels.insert(*tab, panel);
-        } else {
-            ui.colored_label(
-                egui::Color32::LIGHT_RED,
-                format!("Panel `{}` not registered", tab.as_str()),
-            );
+        match *tab {
+            TabId::Singleton(id) => {
+                // Take-and-return pattern so the panel can itself borrow
+                // other panels' metadata via the layout (future-proof).
+                if let Some(mut panel) = self.panels.remove(&id) {
+                    panel.render(ui, self.world);
+                    self.panels.insert(id, panel);
+                } else {
+                    ui.colored_label(
+                        egui::Color32::LIGHT_RED,
+                        format!("Panel `{}` not registered", id.as_str()),
+                    );
+                }
+            }
+            TabId::Instance { kind, instance } => {
+                if let Some(mut panel) = self.instance_panels.remove(&kind) {
+                    panel.render(ui, self.world, instance);
+                    self.instance_panels.insert(kind, panel);
+                } else {
+                    ui.colored_label(
+                        egui::Color32::LIGHT_RED,
+                        format!(
+                            "InstancePanel kind `{}` not registered",
+                            kind.as_str()
+                        ),
+                    );
+                }
+            }
         }
     }
 
     fn id(&mut self, tab: &mut Self::Tab) -> egui::Id {
-        egui::Id::new(("lunco_workbench_tab", tab.as_str()))
+        egui::Id::new(("lunco_workbench_tab", tab.debug_id()))
     }
 
     fn clear_background(&self, tab: &Self::Tab) -> bool {
-        // Honour the panel's preference: transparent panels (e.g. the
-        // 3D viewport) skip the dock's background fill so the scene
-        // behind egui shows through.
-        match self.panels.get(tab) {
-            Some(panel) => !panel.transparent_background(),
-            None => true,
+        match *tab {
+            TabId::Singleton(id) => match self.panels.get(&id) {
+                Some(panel) => !panel.transparent_background(),
+                None => true,
+            },
+            TabId::Instance { kind, .. } => match self.instance_panels.get(&kind) {
+                Some(panel) => !panel.transparent_background(),
+                None => true,
+            },
         }
     }
 
     fn is_closeable(&self, tab: &Self::Tab) -> bool {
-        match self.panels.get(tab) {
-            Some(panel) => panel.closable(),
-            None => true,
+        match *tab {
+            TabId::Singleton(id) => match self.panels.get(&id) {
+                Some(panel) => panel.closable(),
+                None => true,
+            },
+            TabId::Instance { kind, .. } => match self.instance_panels.get(&kind) {
+                Some(panel) => panel.closable(),
+                None => true,
+            },
         }
     }
 
@@ -419,7 +642,7 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
         // header fully invisible: transparent background, outline, and
         // text. The bar still occupies its 24-px row because
         // egui_dock 0.18 has no per-leaf hide-bar option.
-        if *tab == viewport::VIEWPORT_PANEL_ID {
+        if *tab == TabId::Singleton(viewport::VIEWPORT_PANEL_ID) {
             let mut style = global_style.clone();
             let invisible = egui::Color32::TRANSPARENT;
             for s in [
@@ -434,9 +657,6 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
             }
             return Some(style);
         }
-        // All other tabs: use egui_dock's theme-derived defaults.
-        // Earlier attempts to hand-pick colours drifted away from
-        // egui's own visuals and looked out-of-place.
         None
     }
 }
@@ -462,8 +682,17 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
                 // whether it's currently in the dock. Clicking a closed
                 // panel re-docks it in its default slot.
                 let panels_meta: Vec<(PanelId, String, PanelSlot, bool)> = {
-                    let docked: std::collections::HashSet<PanelId> =
-                        layout.dock.iter_all_tabs().map(|(_, id)| *id).collect();
+                    // Only track singleton tabs for the "Panels" menu —
+                    // instance tabs (one per open doc) aren't a menu
+                    // concept.
+                    let docked: std::collections::HashSet<PanelId> = layout
+                        .dock
+                        .iter_all_tabs()
+                        .filter_map(|(_, id)| match id {
+                            TabId::Singleton(pid) => Some(*pid),
+                            TabId::Instance { .. } => None,
+                        })
+                        .collect();
                     let mut sorted: Vec<(PanelId, String, PanelSlot, bool)> = layout
                         .panels
                         .values()
@@ -601,8 +830,17 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
             painter.rect_filled(ctx.screen_rect(), 0.0, PANEL_BACKDROP);
         }
 
-        let WorkbenchLayout { panels, dock, .. } = &mut *layout;
-        let mut viewer = PanelTabViewer { panels, world };
+        let WorkbenchLayout {
+            panels,
+            instance_panels,
+            dock,
+            ..
+        } = &mut *layout;
+        let mut viewer = PanelTabViewer {
+            panels,
+            instance_panels,
+            world,
+        };
         let mut style = Style::from_egui(ctx.style().as_ref());
         // Drop the outer dock border — it shows up as a thin line along
         // the inside edge of the side panels and looks like dead pixels
