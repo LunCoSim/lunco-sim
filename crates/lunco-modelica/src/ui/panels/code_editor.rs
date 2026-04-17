@@ -134,94 +134,66 @@ impl Panel for CodeEditorPanel {
             });
 
         // ── Editor area ──
+        //
+        // Single full-bleed TextEdit. I originally shipped a
+        // line-number gutter next to this, but the gutter's nested
+        // ScrollArea took unconstrained horizontal width and shoved
+        // the editor to the right. Dropped the gutter until it can be
+        // done properly (layouter-prefix or synchronized-scroll).
+        // Full-width editor beats a half-broken gutter.
         let mut buffer_changed = false;
         let mut buffer_commit = false;
         let mut new_text = String::new();
 
-        let available_height = ui.available_height();
-        let available_width = ui.available_width();
+        let avail = ui.available_size();
 
-        egui::ScrollArea::both()
-            .auto_shrink([false; 2])
-            .min_scrolled_height(available_height)
-            .show(ui, |ui| {
-                // Claim the whole tab body so small files still fill
-                // the height (matches the diagram canvas behaviour).
-                // Without this, TextEdit's `desired_rows` shrinks the
-                // widget to a few lines and leaves the rest blank.
-                ui.set_min_size(egui::vec2(available_width, available_height));
-                // Fetch data needed for the closure first. `text` must
-                // be a `&mut String` — egui's `TextBuffer` impl for
-                // `&str` is read-only, so passing `&mut &str` to
-                // `TextEdit::multiline` silently produces a non-editable
-                // widget. (This was the "can't edit my new model" bug.)
-                let (mut text, line_starts_len, galley_cache) = {
-                    let buf_state = world.resource::<EditorBufferState>();
-                    (buf_state.text.clone(), buf_state.line_starts.len(), buf_state.cached_galley.clone())
-                };
-                let is_ro = is_read_only;
+        // `text` must be a `&mut String` — egui's `TextBuffer` impl
+        // for `&str` is read-only, so passing `&mut &str` to
+        // `TextEdit::multiline` silently produces a non-editable
+        // widget.
+        let (mut text, galley_cache) = {
+            let buf_state = world.resource::<EditorBufferState>();
+            (buf_state.text.clone(), buf_state.cached_galley.clone())
+        };
+        let is_ro = is_read_only;
+        let editor_width = avail.x.max(100.0);
+        let editor_height = avail.y.max(200.0);
 
-                ui.horizontal_top(|ui| {
-                    ui.spacing_mut().item_spacing.x = 0.0;
-
-                    // Gutter
-                    let font_id = egui::TextStyle::Monospace.resolve(ui.style());
-                    let row_height = ui.spacing().interact_size.y.max(font_id.size);
-
-                    ui.vertical(|ui| {
-                        ui.set_width(35.0);
-                        for i in 1..=line_starts_len {
-                            ui.add_sized([30.0, row_height], egui::Label::new(
-                                egui::RichText::new(format!("{:>3}", i))
-                                    .size(10.0)
-                                    .color(egui::Color32::DARK_GRAY)
-                            ).selectable(false));
+        let output = ui.add_sized(
+            [editor_width, editor_height],
+            egui::TextEdit::multiline(&mut text)
+                .font(egui::TextStyle::Monospace)
+                .code_editor()
+                .desired_width(editor_width)
+                .desired_rows(((editor_height / 16.0) as usize).max(10))
+                .lock_focus(true)
+                .interactive(true)
+                .layouter(&mut |ui, string, _wrap_width| {
+                    if is_ro {
+                        if let Some(galley) = &galley_cache {
+                            return galley.clone();
                         }
-                    });
-
-                    // TextEdit — `desired_rows` is the *minimum* height
-                    // rendered; set it high so short files still look
-                    // like "an editor you can write in" instead of a
-                    // cramped 3-line widget.
-                    let desired_rows = (available_height / 16.0).max(20.0) as usize;
-                    let output = ui.add(egui::TextEdit::multiline(&mut text)
-                        .font(egui::TextStyle::Monospace)
-                        .code_editor()
-                        .desired_width(f32::INFINITY)
-                        .desired_rows(desired_rows)
-                        .lock_focus(true)
-                        .interactive(true) // Always interactive for selection
-                        .layouter(&mut |ui, string, _wrap_width| {
-                            if is_ro {
-                                if let Some(galley) = &galley_cache {
-                                    return galley.clone();
-                                }
-                            }
-                            let mut layout_job = modelica_layouter(&ui.style(), string.as_str());
-                            layout_job.wrap.max_width = f32::INFINITY;
-                            ui.painter().layout_job(layout_job)
-                        })
-                    );
-
-                    if output.changed() && !is_ro {
-                        new_text = text.clone();
-                        buffer_changed = true;
                     }
-                    // Commit the buffer into the Document when the user
-                    // leaves the editor (clicks elsewhere, tabs away,
-                    // presses Esc, etc.). This is the point at which edits
-                    // flow into the Document without requiring a Compile —
-                    // so splits / diagram / other observers see the change.
-                    // Coarse (whole-buffer) op for now; granular ops are a
-                    // separate refactor.
-                    if output.lost_focus() && !is_ro {
-                        if new_text.is_empty() {
-                            new_text = text.clone();
-                        }
-                        buffer_commit = true;
-                    }
-                });
-            });
+                    let mut layout_job =
+                        modelica_layouter(ui.style(), string.as_str());
+                    layout_job.wrap.max_width = f32::INFINITY;
+                    ui.painter().layout_job(layout_job)
+                }),
+        );
+
+        if output.changed() && !is_ro {
+            new_text = text.clone();
+            buffer_changed = true;
+        }
+        // Focus-loss commit: edits flow into the Document so other
+        // observers (diagram re-parse, dirty tracker) see them
+        // without requiring Compile.
+        if output.lost_focus() && !is_ro {
+            if new_text.is_empty() {
+                new_text = text.clone();
+            }
+            buffer_commit = true;
+        }
 
         if buffer_changed {
             let mut buf_state = world.resource_mut::<EditorBufferState>();

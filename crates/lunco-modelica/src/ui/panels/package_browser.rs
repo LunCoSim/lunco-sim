@@ -102,6 +102,8 @@ pub struct PackageTreeCache {
     /// `handle_package_loading_tasks`. While set, the Twin section
     /// shows a spinner so the UI never freezes.
     pub twin_scan_task: Option<Task<TwinState>>,
+    /// Path currently being renamed (if any) + its edit buffer.
+    pub rename: RenameState,
 }
 
 /// User's Twin workspace — a folder on disk being browsed as a tree.
@@ -114,6 +116,20 @@ pub struct TwinState {
     pub root: std::path::PathBuf,
     /// Recursive tree of files + subfolders under `root`.
     pub root_node: TwinNode,
+}
+
+/// Transient rename state — which path is in rename mode + the
+/// buffer the user is typing into. Lives on the cache so
+/// render-state survives frame boundaries.
+#[derive(Default, Clone)]
+pub struct RenameState {
+    /// The tree entry the user invoked Rename on.
+    pub target: Option<std::path::PathBuf>,
+    /// Current buffer (defaults to the original name on entry).
+    pub buffer: String,
+    /// When Some, the inline TextEdit should steal focus this frame
+    /// (first frame of the rename — so the user can immediately type).
+    pub needs_focus: bool,
 }
 
 /// One file or folder inside a Twin. Tree-shaped so `CollapsingHeader`
@@ -188,6 +204,7 @@ impl PackageTreeCache {
             in_memory_models: Vec::new(),
             twin: None,
             twin_scan_task: None,
+            rename: RenameState::default(),
         }
     }
 }
@@ -455,6 +472,7 @@ impl Panel for PackageBrowserPanel {
         let mut open_twin_picker = false;
         let mut close_twin = false;
         let mut open_twin_file: Option<std::path::PathBuf> = None;
+        let mut pending_rename: Option<(std::path::PathBuf, std::path::PathBuf)> = None;
 
         {
             let mut tree_cache = world.resource_mut::<PackageTreeCache>();
@@ -540,16 +558,35 @@ impl Panel for PackageBrowserPanel {
                                 .color(egui::Color32::GRAY),
                         );
                     });
-                } else if let Some(twin) = cache.twin.as_ref() {
+                } else if let Some(twin) = cache.twin.clone() {
                     if twin.root_node.children.is_empty() {
                         section_empty_state(
                             ui,
                             "Empty folder. Add a .mo file on disk and reopen.",
                         );
                     } else {
+                        // `cache.rename` is borrowed mutably into
+                        // every node render so the active rename row
+                        // can own the TextEdit buffer. `twin` is
+                        // cloned above to avoid aliasing.
                         for child in &twin.root_node.children {
-                            if let Some(picked) = render_twin_node(ui, child, 0) {
-                                open_twin_file = Some(picked);
+                            let action = render_twin_node(ui, child, &mut cache.rename);
+                            if let Some(path) = action.open {
+                                open_twin_file = Some(path);
+                            }
+                            if let Some(path) = action.rename {
+                                cache.rename.target = Some(path.clone());
+                                cache.rename.buffer = path
+                                    .file_name()
+                                    .map(|s| s.to_string_lossy().into_owned())
+                                    .unwrap_or_default();
+                                cache.rename.needs_focus = true;
+                            }
+                            if let Some((from, to)) = action.commit_rename {
+                                pending_rename = Some((from, to));
+                            }
+                            if action.cancel_rename {
+                                cache.rename = RenameState::default();
                             }
                         }
                     }
@@ -608,6 +645,38 @@ impl Panel for PackageBrowserPanel {
                 .map(|s| s.to_string_lossy().into_owned())
                 .unwrap_or_else(|| id.clone());
             open_model(world, id, name, ModelLibrary::User);
+        }
+
+        // Commit a rename — std::fs::rename, then trigger a rescan so
+        // the tree reflects the new name. If rename fails (conflict,
+        // permissions) log and leave state unchanged so the user can
+        // retry or cancel.
+        if let Some((from, to)) = pending_rename {
+            if to.exists() {
+                log::warn!(
+                    "[Rename] Target already exists: {:?} — rename cancelled.",
+                    to
+                );
+            } else if let Err(e) = std::fs::rename(&from, &to) {
+                log::error!("[Rename] Failed: {:?} -> {:?}: {}", from, to, e);
+            } else {
+                log::info!("[Rename] {:?} -> {:?}", from, to);
+                // Re-scan the twin to pick up the new name. Same
+                // async path as Open Folder.
+                if let Some(root) = world
+                    .resource::<PackageTreeCache>()
+                    .twin
+                    .as_ref()
+                    .map(|t| t.root.clone())
+                {
+                    use bevy::tasks::AsyncComputeTaskPool;
+                    let pool = AsyncComputeTaskPool::get();
+                    let task = pool.spawn(async move { scan_twin_folder(root) });
+                    let mut cache = world.resource_mut::<PackageTreeCache>();
+                    cache.twin_scan_task = Some(task);
+                }
+            }
+            world.resource_mut::<PackageTreeCache>().rename = RenameState::default();
         }
 
         if let Some(action) = to_open {
@@ -872,38 +941,105 @@ fn section_empty_state(ui: &mut egui::Ui, text: &str) {
     });
 }
 
+/// Signals that can come out of rendering a single tree node.
+/// Returned from `render_twin_node`; the outer loop applies them
+/// after the render pass so we don't mutate the cache while walking
+/// the tree.
+#[derive(Default)]
+pub struct TwinNodeAction {
+    /// User clicked a `.mo` file — open it as a tab.
+    pub open: Option<std::path::PathBuf>,
+    /// User invoked "Rename" from the context menu — enter rename
+    /// mode for this path.
+    pub rename: Option<std::path::PathBuf>,
+    /// User pressed Enter in the rename TextEdit — commit rename
+    /// from the first path to the second.
+    pub commit_rename: Option<(std::path::PathBuf, std::path::PathBuf)>,
+    /// User cancelled rename (Escape / blur).
+    pub cancel_rename: bool,
+}
+
+impl TwinNodeAction {
+    fn merge(&mut self, other: TwinNodeAction) {
+        if other.open.is_some() {
+            self.open = other.open;
+        }
+        if other.rename.is_some() {
+            self.rename = other.rename;
+        }
+        if other.commit_rename.is_some() {
+            self.commit_rename = other.commit_rename;
+        }
+        if other.cancel_rename {
+            self.cancel_rename = true;
+        }
+    }
+}
+
 /// Render one Twin tree node. Directories use `CollapsingHeader` so
 /// the twisty arrow / indentation / hover highlight come from egui
-/// for free. Files are a simple selectable row. Non-Modelica files
-/// render greyed + disabled so the tree structure is visible but
-/// users can't accidentally try to open a README as a model.
+/// for free. Files are a selectable row with a right-click context
+/// menu (Rename). Non-Modelica files render greyed + disabled so the
+/// tree structure is visible but users can't try to open a README.
 ///
-/// Returns `Some(path)` when the user clicks a `.mo` file — the
-/// caller opens it as a tab.
-fn render_twin_node(
+/// `rename` holds the current rename state; when the rendered node's
+/// path matches `rename.target`, the row becomes an inline TextEdit.
+pub fn render_twin_node(
     ui: &mut egui::Ui,
     node: &TwinNode,
-    depth: usize,
-) -> Option<std::path::PathBuf> {
-    let mut picked = None;
+    rename: &mut RenameState,
+) -> TwinNodeAction {
+    let mut action = TwinNodeAction::default();
+
+    // Rename mode — replace the normal row with an inline TextEdit.
+    // Shared for files and folders; the commit handler checks what
+    // was at the path and renames.
+    if rename.target.as_deref() == Some(node.path.as_path()) {
+        let response = ui.add(
+            egui::TextEdit::singleline(&mut rename.buffer)
+                .desired_width(f32::INFINITY),
+        );
+        if rename.needs_focus {
+            response.request_focus();
+            rename.needs_focus = false;
+        }
+        // Enter → commit, Escape → cancel, loss of focus → cancel.
+        if response.lost_focus() {
+            if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                let new_name = rename.buffer.trim().to_string();
+                if !new_name.is_empty() && new_name != node.name {
+                    let parent = node.path.parent().unwrap_or(std::path::Path::new(""));
+                    let new_path = parent.join(&new_name);
+                    action.commit_rename = Some((node.path.clone(), new_path));
+                } else {
+                    action.cancel_rename = true;
+                }
+            } else {
+                // Escape or click-away — treat as cancel.
+                action.cancel_rename = true;
+            }
+        }
+        return action;
+    }
+
     if node.is_dir() {
         let id = egui::Id::new(("twin_node", node.path.as_os_str()));
-        egui::CollapsingHeader::new(
+        let header = egui::CollapsingHeader::new(
             egui::RichText::new(format!("📁 {}", node.name))
                 .size(11.0)
                 .color(egui::Color32::from_rgb(180, 200, 230)),
         )
         .id_salt(id)
-        .default_open(depth == 0)
-        .show(ui, |ui| {
-            for child in &node.children {
-                if let Some(p) = render_twin_node(ui, child, depth + 1) {
-                    picked = Some(p);
+        .default_open(false);
+        let header_response = header
+            .show(ui, |ui| {
+                for child in &node.children {
+                    action.merge(render_twin_node(ui, child, rename));
                 }
-            }
-        });
+            })
+            .header_response;
+        node_context_menu(&header_response, node, &mut action);
     } else {
-        // File row — one `SelectableLabel` so hover / click feel right.
         let (icon, color) = if node.is_modelica {
             ("📄", egui::Color32::from_rgb(220, 220, 160))
         } else {
@@ -915,12 +1051,29 @@ fn render_twin_node(
                 .size(11.0)
                 .color(color),
         );
-        let resp = ui.add_enabled(node.is_modelica, row);
-        if resp.clicked() {
-            picked = Some(node.path.clone());
+        let resp = ui.add_enabled(node.is_modelica || !node.is_modelica, row);
+        if resp.clicked() && node.is_modelica {
+            action.open = Some(node.path.clone());
         }
+        node_context_menu(&resp, node, &mut action);
     }
-    picked
+    action
+}
+
+/// Attach a right-click context menu to `resp` with Rename.
+/// Kept small today — Delete + New File land in the next phase
+/// alongside filesystem guards for dangerous operations.
+fn node_context_menu(
+    resp: &egui::Response,
+    node: &TwinNode,
+    action: &mut TwinNodeAction,
+) {
+    resp.context_menu(|ui| {
+        if ui.button("✏  Rename").clicked() {
+            action.rename = Some(node.path.clone());
+            ui.close();
+        }
+    });
 }
 
 /// Render every in-memory model the user has created this session.

@@ -1540,6 +1540,29 @@ impl Panel for DiagramPanel {
             return;
         }
 
+        // ── Equation-only empty state ──
+        //
+        // Models like RocketEngine / Battery are pure equations, with
+        // no component instantiations or `connect` statements. There
+        // is nothing to draw — `import_model_to_diagram` returned
+        // `None`, so `ds.diagram.nodes` is empty. Rather than render a
+        // silent blank canvas, show the user *why* nothing is there
+        // and preview the model's shape (parameters, inputs,
+        // observables) so the Diagram view still communicates
+        // something.
+        //
+        // Users with components that *should* show up see the canvas
+        // as normal; this branch only triggers when there's genuinely
+        // nothing visual.
+        let is_diagram_empty = world
+            .get_resource::<DiagramState>()
+            .map(|ds| ds.diagram.nodes.is_empty())
+            .unwrap_or(true);
+        if is_diagram_empty {
+            render_equation_only_empty_state(ui, world);
+            return;
+        }
+
         // Body only. Identity (model name, read-only state), compile
         // button and view-mode switching all live on the ModelView panel's
         // unified toolbar. The Schematic/NodeGraph toggle and diagram-
@@ -1688,5 +1711,138 @@ pub fn do_compile(world: &mut World) {
         s.model_counter = model_counter;
         s.compile_status = Some("Compiling…".into());
     }
+}
+
+/// Shown when the active model has no visual components — i.e.
+/// equation-based (RocketEngine, Battery, BouncyBall, SpringMass).
+/// Explains the situation + previews the model's signature so the
+/// Diagram view still conveys what the model does at a glance.
+fn render_equation_only_empty_state(ui: &mut egui::Ui, world: &mut World) {
+    let (model_name, source) = {
+        let state = world.resource::<WorkbenchState>();
+        let Some(open) = state.open_model.as_ref() else {
+            // No model at all — different empty state.
+            ui.vertical_centered(|ui| {
+                ui.add_space(80.0);
+                ui.heading("🔗 No model open");
+                ui.label(
+                    egui::RichText::new("Pick a model from the sidebar or the Welcome tab.")
+                        .size(12.0)
+                        .color(egui::Color32::GRAY),
+                );
+            });
+            return;
+        };
+        (open.display_name.clone(), open.source.to_string())
+    };
+
+    // Extract the model's shape for the preview — cheap regex-based
+    // (we already use these in ast_extract for compile-time work).
+    let params = crate::ast_extract::extract_parameters(&source);
+    let inputs = crate::ast_extract::extract_inputs_with_defaults(&source);
+    let runtime_inputs = crate::ast_extract::extract_input_names(&source);
+
+    egui::ScrollArea::vertical().show(ui, |ui| {
+        ui.add_space(32.0);
+        ui.vertical_centered(|ui| {
+            ui.set_max_width(540.0);
+
+            ui.heading(
+                egui::RichText::new(format!("🔗 {}", model_name))
+                    .size(18.0),
+            );
+            ui.add_space(6.0);
+            ui.label(
+                egui::RichText::new(
+                    "Equation-based model — no block diagram to render.",
+                )
+                .size(13.0)
+                .color(egui::Color32::from_rgb(200, 200, 160)),
+            );
+            ui.label(
+                egui::RichText::new(
+                    "Open 📝 Text above to read the equations, then 🚀 Compile (or F5) to simulate.",
+                )
+                .size(11.0)
+                .color(egui::Color32::GRAY),
+            );
+
+            ui.add_space(20.0);
+            ui.separator();
+            ui.add_space(12.0);
+
+            // ── Shape preview ──
+            ui.horizontal_wrapped(|ui| {
+                ui.label(
+                    egui::RichText::new("Signature")
+                        .size(11.0)
+                        .strong()
+                        .color(egui::Color32::from_rgb(180, 180, 200)),
+                );
+            });
+            ui.add_space(4.0);
+
+            // Parameters
+            ui.vertical(|ui| {
+                ui.set_max_width(500.0);
+                if !params.is_empty() {
+                    let mut sorted: Vec<_> = params.iter().collect();
+                    sorted.sort_by_key(|(k, _)| k.as_str());
+                    ui.label(
+                        egui::RichText::new(format!("Parameters ({})", sorted.len()))
+                            .size(10.0)
+                            .color(egui::Color32::from_rgb(160, 200, 240)),
+                    );
+                    for (k, v) in sorted {
+                        ui.label(
+                            egui::RichText::new(format!("    {} = {}", k, v))
+                                .size(11.0)
+                                .monospace()
+                                .color(egui::Color32::from_rgb(210, 210, 210)),
+                        );
+                    }
+                    ui.add_space(6.0);
+                }
+
+                let all_inputs: Vec<String> = inputs
+                    .iter()
+                    .map(|(k, v)| format!("{} = {}", k, v))
+                    .chain(
+                        runtime_inputs
+                            .iter()
+                            .filter(|n| !inputs.contains_key(*n))
+                            .map(|n| n.clone()),
+                    )
+                    .collect();
+                if !all_inputs.is_empty() {
+                    ui.label(
+                        egui::RichText::new(format!("Inputs ({})", all_inputs.len()))
+                            .size(10.0)
+                            .color(egui::Color32::from_rgb(230, 190, 100)),
+                    );
+                    for i in &all_inputs {
+                        ui.label(
+                            egui::RichText::new(format!("    {}", i))
+                                .size(11.0)
+                                .monospace()
+                                .color(egui::Color32::from_rgb(210, 210, 210)),
+                        );
+                    }
+                    ui.add_space(6.0);
+                }
+
+                if params.is_empty() && all_inputs.is_empty() {
+                    ui.label(
+                        egui::RichText::new(
+                            "(model has no parameters or inputs declared)",
+                        )
+                        .size(10.0)
+                        .italics()
+                        .color(egui::Color32::GRAY),
+                    );
+                }
+            });
+        });
+    });
 }
 
