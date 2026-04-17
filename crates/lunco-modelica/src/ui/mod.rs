@@ -148,7 +148,14 @@ impl Workspace for AnalyzeWorkspace {
         // to it — users can close it.
         layout.set_center(vec![PanelId("modelica_welcome")]);
         layout.set_active_center_tab(0);
-        layout.set_right_inspector(Some(PanelId("modelica_inspector")));
+        // Right dock gets two tabs: Inspector (params/variables) and
+        // the Component Palette (MSL instantiation). Figma / Unreal
+        // pattern — asset browser on the right, always visible while
+        // the user is working in the center canvas.
+        layout.set_right_inspector_tabs(vec![
+            PanelId("modelica_inspector"),
+            PanelId("modelica_component_palette"),
+        ]);
         layout.set_bottom(Some(PanelId("modelica_console")));
     }
 }
@@ -185,6 +192,7 @@ impl Plugin for ModelicaUiPlugin {
             .init_resource::<panels::diagram::DiagramState>()
             .init_resource::<panels::diagram::DiagramTheme>()
             .init_resource::<panels::code_editor::EditorBufferState>()
+            .init_resource::<panels::palette::PaletteState>()
             .insert_resource(panels::package_browser::PackageTreeCache::new())
             .add_systems(Update, panels::package_browser::handle_package_loading_tasks)
             .add_systems(Update, cleanup_removed_documents)
@@ -194,6 +202,7 @@ impl Plugin for ModelicaUiPlugin {
             .register_panel(panels::telemetry::TelemetryPanel)
             .register_panel(panels::graphs::GraphsPanel)
             .register_panel(panels::inspector::InspectorPanel)
+            .register_panel(panels::palette::ComponentPalettePanel)
             // Multi-instance: one tab per open document. Instances are
             // opened at runtime by the Package Browser.
             .register_instance_panel(panels::model_view::ModelViewPanel::default())
