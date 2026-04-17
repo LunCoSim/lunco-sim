@@ -53,6 +53,11 @@ pub struct OpenModel {
     pub read_only: bool,
     /// Which library this model came from.
     pub library: ModelLibrary,
+    /// The Document this model is a view of, if one is already allocated
+    /// in [`ModelicaDocumentRegistry`]. In-memory models allocate
+    /// up-front (so the user's work survives switching files); on-disk
+    /// models allocate lazily on the first compile.
+    pub doc: Option<DocumentId>,
 }
 
 /// Which library a model belongs to.
@@ -138,23 +143,16 @@ pub struct WorkbenchState {
 }
 
 // ---------------------------------------------------------------------------
-// DocumentChanged — per-document change notification
+// Document lifecycle events
 // ---------------------------------------------------------------------------
-
-/// Fired whenever a [`ModelicaDocument`] in the registry has its source
-/// mutated (allocate, checkpoint_source that actually changes the text,
-/// undo/redo applied through `host_mut()`).
-///
-/// Panels subscribe via `On<DocumentChanged>` observers to re-render
-/// without polling. The registry does not fire directly; it queues doc
-/// ids in `pending_changes`, and `drain_document_changes` (in
-/// `ui::mod`) drains the queue into observer triggers each frame. This
-/// decouples mutation call sites from the Bevy trigger machinery.
-#[derive(Event, Clone, Debug)]
-pub struct DocumentChanged {
-    /// The document whose generation just advanced.
-    pub doc: DocumentId,
-}
+//
+// `DocumentChanged` / `DocumentOpened` / `DocumentClosed` / `DocumentSaved`
+// are now defined as *generic* events in `lunco_doc_bevy`. The registry
+// queues pending events in per-kind `Vec<DocumentId>` buffers, and
+// `drain_document_changes` (in `ui::mod`) drains them and fires the
+// typed triggers. This decouples registry mutations from the Bevy
+// trigger machinery and lets every domain funnel through the same
+// events — the `TwinJournal` picks them all up.
 
 // ---------------------------------------------------------------------------
 // CompileState — per-document compile lifecycle
@@ -256,14 +254,21 @@ pub struct ModelicaDocumentRegistry {
     hosts: HashMap<DocumentId, DocumentHost<ModelicaDocument>>,
     by_entity: HashMap<Entity, DocumentId>,
     next_doc_id: u64,
-    /// Doc ids whose source was just mutated via registry methods.
-    /// Drained by [`drain_pending_changes`](Self::drain_pending_changes)
-    /// each frame and fanned out as [`DocumentChanged`] observer triggers.
+    /// Docs that were just added via `allocate*`. Drained into
+    /// [`lunco_doc_bevy::DocumentOpened`] triggers each frame.
+    pending_opened: Vec<DocumentId>,
+    /// Docs whose source just advanced (allocate initial source,
+    /// `checkpoint_source` with different text, explicit
+    /// [`mark_changed`](Self::mark_changed) after `host_mut` undo/redo).
+    /// Drained into [`lunco_doc_bevy::DocumentChanged`] triggers.
     ///
-    /// Direct mutations through [`host_mut`](Self::host_mut) (e.g. undo /
-    /// redo) must call [`mark_changed`](Self::mark_changed) explicitly —
-    /// the registry cannot intercept arbitrary uses of a `&mut DocumentHost`.
+    /// Direct mutations through [`host_mut`](Self::host_mut) must call
+    /// [`mark_changed`](Self::mark_changed) explicitly — the registry
+    /// cannot intercept arbitrary uses of a `&mut DocumentHost`.
     pending_changes: Vec<DocumentId>,
+    /// Docs that were just dropped via [`remove_document`](Self::remove_document).
+    /// Drained into [`lunco_doc_bevy::DocumentClosed`] triggers.
+    pending_closed: Vec<DocumentId>,
 }
 
 impl ModelicaDocumentRegistry {
@@ -288,6 +293,10 @@ impl ModelicaDocumentRegistry {
         let id = DocumentId::new(self.next_doc_id);
         let doc = ModelicaDocument::with_origin(id, source, canonical_path, library);
         self.hosts.insert(id, DocumentHost::new(doc));
+        // One `Opened` for the lifecycle, then one `Changed` so any
+        // subscriber that only listens to changes (diagram re-parse,
+        // plot variable-list refresh, …) still sees the initial source.
+        self.pending_opened.push(id);
         self.pending_changes.push(id);
         id
     }
@@ -371,9 +380,22 @@ impl ModelicaDocumentRegistry {
 
     /// Drain queued change notifications. The `drain_document_changes`
     /// system calls this each frame and fans the ids out as
-    /// [`DocumentChanged`] triggers.
+    /// [`lunco_doc_bevy::DocumentChanged`] triggers.
     pub fn drain_pending_changes(&mut self) -> Vec<DocumentId> {
         std::mem::take(&mut self.pending_changes)
+    }
+
+    /// Drain queued Opened notifications. The same drain-and-fire
+    /// system in `ui::mod` turns these into
+    /// [`lunco_doc_bevy::DocumentOpened`] triggers.
+    pub fn drain_pending_opened(&mut self) -> Vec<DocumentId> {
+        std::mem::take(&mut self.pending_opened)
+    }
+
+    /// Drain queued Closed notifications. Fanned out as
+    /// [`lunco_doc_bevy::DocumentClosed`] triggers.
+    pub fn drain_pending_closed(&mut self) -> Vec<DocumentId> {
+        std::mem::take(&mut self.pending_closed)
     }
 
     /// Immutable access to a document host by id.
@@ -392,8 +414,11 @@ impl ModelicaDocumentRegistry {
     }
 
     /// Drop a document. Any entity linked to it is unlinked too.
+    /// Queues a `Closed` notification for observers / the Twin journal.
     pub fn remove_document(&mut self, doc: DocumentId) {
-        self.hosts.remove(&doc);
+        if self.hosts.remove(&doc).is_some() {
+            self.pending_closed.push(doc);
+        }
         self.by_entity.retain(|_, d| *d != doc);
     }
 

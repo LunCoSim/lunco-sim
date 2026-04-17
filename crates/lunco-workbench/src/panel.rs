@@ -58,7 +58,21 @@ pub trait Panel: Send + Sync + 'static {
     fn id(&self) -> PanelId;
 
     /// Human-readable title rendered in the tab / header bar.
+    ///
+    /// This is the static fallback. Override [`dynamic_title`](Self::dynamic_title)
+    /// when the tab label should reflect live content (e.g. the currently
+    /// open file).
     fn title(&self) -> String;
+
+    /// Title used by the dock, called once per frame with world access.
+    ///
+    /// Defaults to [`title`](Self::title). Override to show live state —
+    /// e.g. a Model-view tab returning the open file's name instead of a
+    /// static label. Panels that don't override pay no overhead beyond
+    /// a virtual dispatch.
+    fn dynamic_title(&self, _world: &World) -> String {
+        self.title()
+    }
 
     /// Where to dock this panel by default when registered.
     fn default_slot(&self) -> PanelSlot;

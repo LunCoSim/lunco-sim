@@ -367,7 +367,7 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
 
     fn title(&mut self, tab: &mut Self::Tab) -> egui::WidgetText {
         match self.panels.get(tab) {
-            Some(p) => p.title().into(),
+            Some(p) => p.dynamic_title(self.world).into(),
             None => format!("?{}?", tab.as_str()).into(),
         }
     }

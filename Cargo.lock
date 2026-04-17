@@ -5829,6 +5829,14 @@ name = "lunco-doc"
 version = "0.1.0"
 
 [[package]]
+name = "lunco-doc-bevy"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "lunco-doc",
+]
+
+[[package]]
 name = "lunco-environment"
 version = "0.1.0"
 dependencies = [
@@ -5898,6 +5906,7 @@ dependencies = [
  "lunco-assets",
  "lunco-core",
  "lunco-doc",
+ "lunco-doc-bevy",
  "lunco-workbench",
  "regex",
  "rumoca-phase-parse",
@@ -5976,6 +5985,7 @@ dependencies = [
  "bevy",
  "crossbeam-channel",
  "libloading",
+ "lunco-api",
  "lunco-core",
  "lunco-doc",
  "mlua",

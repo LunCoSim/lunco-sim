@@ -67,19 +67,32 @@ mod panels;
 
 use crate::ModelicaModel;
 
-/// Fan queued document-change notifications out as observer triggers.
+/// Fan queued document lifecycle notifications out as observer triggers.
 ///
-/// The registry accumulates ids on every `checkpoint_source` / `allocate_*`
-/// / explicit `mark_changed` call. This system drains the queue once per
-/// frame and emits [`DocumentChanged`] so any observer (panel re-render,
-/// diagram re-parse, plot variable-list refresh, …) can react without
-/// polling document generation counters.
+/// The registry accumulates ids on every mutation (allocate → Opened +
+/// Changed, `checkpoint_source` with new text → Changed, explicit
+/// `mark_changed` after `host_mut` undo/redo → Changed, `remove_document`
+/// → Closed). This system drains all three queues once per frame and
+/// emits the matching generic events from [`lunco_doc_bevy`] so any
+/// observer (panel re-render, diagram re-parse, plot variable-list
+/// refresh, Twin journal, …) reacts without polling generation
+/// counters.
+///
+/// Fire order per frame: Opened, Changed, Closed. Opened-before-Changed
+/// means subscribers that key on "track docs I've seen Opened for" can
+/// safely skip Changed events for unknown ids.
 fn drain_document_changes(
     mut registry: ResMut<ModelicaDocumentRegistry>,
     mut commands: Commands,
 ) {
+    for doc in registry.drain_pending_opened() {
+        commands.trigger(lunco_doc_bevy::DocumentOpened { doc });
+    }
     for doc in registry.drain_pending_changes() {
-        commands.trigger(DocumentChanged { doc });
+        commands.trigger(lunco_doc_bevy::DocumentChanged { doc });
+    }
+    for doc in registry.drain_pending_closed() {
+        commands.trigger(lunco_doc_bevy::DocumentClosed { doc });
     }
 }
 
@@ -120,10 +133,10 @@ impl Workspace for AnalyzeWorkspace {
     fn apply(&self, layout: &mut WorkbenchLayout) {
         layout.set_activity_bar(false);
         layout.set_side_browser(Some(PanelId("modelica_package_browser")));
-        layout.set_center(vec![
-            PanelId("modelica_code_preview"),
-            PanelId("modelica_diagram_preview"),
-        ]);
+        // One center tab per open model (today still a singleton — the
+        // `TabId`-enum multi-tab refactor lands later). View mode
+        // (Text / Diagram) toggles inside the panel itself.
+        layout.set_center(vec![PanelId("modelica_model_view")]);
         layout.set_active_center_tab(0);
         layout.set_right_inspector(Some(PanelId("modelica_inspector")));
         layout.set_bottom(Some(PanelId("modelica_console")));
@@ -139,6 +152,11 @@ pub struct ModelicaUiPlugin;
 
 impl Plugin for ModelicaUiPlugin {
     fn build(&self, app: &mut App) {
+        // Twin-level change journal subscribes to the generic document
+        // lifecycle events this plugin fires. One journal per App —
+        // adding the plugin multiple times is a no-op on `init_resource`.
+        app.add_plugins(lunco_doc_bevy::TwinJournalPlugin);
+
         app.init_resource::<WorkbenchState>()
             .init_resource::<ModelicaDocumentRegistry>()
             .init_resource::<CompileStates>()
@@ -150,10 +168,9 @@ impl Plugin for ModelicaUiPlugin {
             .add_systems(Update, cleanup_removed_documents)
             .add_systems(Update, drain_document_changes)
             .register_panel(panels::package_browser::PackageBrowserPanel)
-            .register_panel(panels::code_editor::CodeEditorPanel)
+            .register_panel(panels::model_view::ModelViewPanel::default())
             .register_panel(panels::telemetry::TelemetryPanel)
             .register_panel(panels::graphs::GraphsPanel)
-            .register_panel(panels::diagram::DiagramPanel)
             .register_panel(panels::inspector::InspectorPanel)
             .register_workspace(AnalyzeWorkspace);
     }

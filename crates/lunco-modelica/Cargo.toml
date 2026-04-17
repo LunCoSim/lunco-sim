@@ -22,6 +22,7 @@ bevy_egui.workspace = true
 lunco-assets = { workspace = true }
 lunco-core = { path = "../lunco-core" }
 lunco-doc = { path = "../lunco-doc" }
+lunco-doc-bevy = { path = "../lunco-doc-bevy" }
 lunco-workbench = { path = "../lunco-workbench" }
 egui-snarl = "0.9"
 egui_plot = "0.34.1"

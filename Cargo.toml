@@ -28,6 +28,7 @@ members = [
     "crates/lunco-cosim",
     "crates/lunco-environment",
     "crates/lunco-doc",
+    "crates/lunco-doc-bevy",
     "crates/lunco-twin",
     "crates/lunco-workbench",
     "crates/lunco-scripting"

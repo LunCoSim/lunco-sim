@@ -641,9 +641,12 @@ end Test;
         let source = include_str!("../../../assets/models/RC_Circuit.mo");
         let symbols = extract_from_source(source);
         assert_eq!(symbols.model_name, Some("RC_Circuit".to_string()));
-        assert_eq!(symbols.parameters.len(), 2);
+        // RC_Circuit is now a proper schematic with three tunable
+        // parameters (V_source, R, C) feeding component modifications.
+        assert_eq!(symbols.parameters.len(), 3);
         assert!(symbols.parameters.contains_key("R"));
         assert!(symbols.parameters.contains_key("C"));
+        assert!(symbols.parameters.contains_key("V_source"));
     }
 
     #[test]

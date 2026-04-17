@@ -9,10 +9,11 @@ use bevy_egui::egui;
 use lunco_workbench::{Panel, PanelId, PanelSlot};
 
 use crate::models::BUNDLED_MODELS;
-use crate::ui::state::{ModelLibrary, OpenModel, WorkbenchState};
+use crate::ui::state::{ModelicaDocumentRegistry, ModelLibrary, OpenModel, WorkbenchState};
 
 use bevy::tasks::{AsyncComputeTaskPool, Task};
 use futures_lite::future;
+use lunco_doc::DocumentId;
 
 // ---------------------------------------------------------------------------
 // Tree Nodes
@@ -66,6 +67,23 @@ pub struct FileLoadResult {
     pub layout_job: Option<bevy_egui::egui::text::LayoutJob>,
 }
 
+/// Tracks one in-memory ("scratch") model the user has created this
+/// session. The document itself lives in [`ModelicaDocumentRegistry`];
+/// this is the Package Browser's view of it (display name + id).
+#[derive(Debug, Clone)]
+pub struct InMemoryEntry {
+    /// Human-readable name (matches the `model <name>` declaration).
+    pub display_name: String,
+    /// The `mem://<name>` id used as a stable `OpenModel.model_path`.
+    pub id: String,
+    /// DocumentId in the registry — source of truth for the model's text.
+    /// Kept for direct lookups (close-entry, duplicate, etc.); the
+    /// re-open path currently resolves via `find_by_path(id)` and
+    /// doesn't strictly need this field.
+    #[allow(dead_code)]
+    pub doc: DocumentId,
+}
+
 #[derive(Resource)]
 pub struct PackageTreeCache {
     pub roots: Vec<PackageNode>,
@@ -73,6 +91,10 @@ pub struct PackageTreeCache {
     pub tasks: Vec<Task<ScanResult>>,
     /// Active file loading tasks.
     pub file_tasks: Vec<Task<FileLoadResult>>,
+    /// In-memory models created via "New Model…" this session. Listed
+    /// under "Your Models" so the user can click back into one after
+    /// they've navigated away.
+    pub in_memory_models: Vec<InMemoryEntry>,
 }
 
 impl PackageTreeCache {
@@ -116,7 +138,12 @@ impl PackageTreeCache {
             is_loading: false,
         });
 
-        Self { roots, tasks: Vec::new(), file_tasks: Vec::new() }
+        Self {
+            roots,
+            tasks: Vec::new(),
+            file_tasks: Vec::new(),
+            in_memory_models: Vec::new(),
+        }
     }
 }
 
@@ -240,6 +267,10 @@ pub fn handle_package_loading_tasks(
             cached_galley,
             read_only: result.library != ModelLibrary::InMemory && result.library != ModelLibrary::User,
             library: result.library,
+            // On-disk / bundled models allocate their Document lazily on
+            // first compile. The browser doesn't pre-allocate so we avoid
+            // churning the registry when the user scrolls through files.
+            doc: None,
         });
         workbench.diagram_dirty = true;
         workbench.is_loading = false;
@@ -270,16 +301,13 @@ impl Panel for PackageBrowserPanel {
         let mut show_dialog = false;
 
         // Fetch needed state from World before borrowing tree_cache mutably
-        let (active_path_str, in_memory_model) = {
+        let active_path_str = {
             let state = world.resource::<WorkbenchState>();
-            let path = state.open_model.as_ref().map(|m| m.model_path.clone());
-            let mem = state.open_model.as_ref()
-                .filter(|m| m.library == ModelLibrary::InMemory)
-                .map(|m| m.clone());
-            (path, mem)
+            state.open_model.as_ref().map(|m| m.model_path.clone())
         };
         let active_path = active_path_str.as_deref();
         let mut to_open: Option<PackageAction> = None;
+        let mut reopen_in_memory: Option<String> = None;
 
         {
             let mut tree_cache = world.resource_mut::<PackageTreeCache>();
@@ -294,6 +322,7 @@ impl Panel for PackageBrowserPanel {
                 let cache = &mut *tree_cache;
                 let roots = &mut cache.roots;
                 let tasks = &mut cache.tasks;
+                let in_memory = &cache.in_memory_models;
 
                 if let Some(msl_root) = roots.first_mut() {
                     if let Some(req) = render_node(msl_root, ui, active_path, 0, tasks) {
@@ -326,8 +355,11 @@ impl Panel for PackageBrowserPanel {
                 });
                 ui.label(egui::RichText::new("Writable — your custom models").size(9.0).color(egui::Color32::GRAY));
 
-                if let Some(ref model) = in_memory_model {
-                    render_active_model(ui, &model);
+                // Every in-memory model the user created this session.
+                // Clicking a non-active one switches back to it (restored
+                // from the registry, not regenerated from a template).
+                if let Some(id) = render_in_memory_models(ui, in_memory, active_path) {
+                    reopen_in_memory = Some(id);
                 }
 
                 if ui.button("➕ Create new model…").clicked() {
@@ -352,6 +384,16 @@ impl Panel for PackageBrowserPanel {
                 PackageAction::Open(id, name, lib) => open_model(world, id, name, lib),
                 PackageAction::Instantiate(id) => instantiate_model(world, id),
             }
+        }
+
+        // Re-open an already-allocated in-memory model. We pass the id;
+        // `open_model`'s mem:// branch now consults the registry to
+        // restore the user's current source rather than regenerating
+        // from a template.
+        if let Some(id) = reopen_in_memory {
+            // Name is the part after "mem://".
+            let name = id.strip_prefix("mem://").unwrap_or(&id).to_string();
+            open_model(world, id, name, ModelLibrary::InMemory);
         }
 
         if ui.memory(|m| m.data.get_temp::<bool>(egui::Id::new("show_new_model_dialog")).unwrap_or(false)) {
@@ -500,16 +542,112 @@ fn render_node(
     result
 }
 
-/// Render the currently active in-memory model in "Your Models" section.
-fn render_active_model(ui: &mut egui::Ui, model: &OpenModel) {
-    ui.add_space(4.0);
-    ui.horizontal(|ui| {
-        ui.add_space(16.0);
-        ui.label(egui::RichText::new(format!("💾 {} ✏️", model.display_name)).size(11.0).color(egui::Color32::YELLOW));
-    }).response.on_hover_text("Your in-memory model — currently open in editor");
+/// Flush any in-progress edits on the currently-open model into its
+/// Document so navigating away doesn't lose work.
+///
+/// Two paths are covered:
+///
+/// 1. **Text edits in the code editor** — the TextEdit focus-loss hook
+///    already handles the common case, but a click in the Package
+///    Browser doesn't always trigger `lost_focus()` on the editor. We
+///    re-commit defensively from `EditorBufferState.text`.
+/// 2. **Visual diagram edits** — `DiagramState.diagram` holds the
+///    user's placed components / wires. If non-empty, regenerate
+///    Modelica source and checkpoint it into the Document. This is the
+///    diagram equivalent of focus-loss commit.
+///
+/// Both write through `ModelicaDocumentRegistry::checkpoint_source`,
+/// which fires `DocumentChanged` so any subscriber (including the
+/// re-open path via `find_by_path`) sees the fresh source.
+///
+/// No-op when the current model is read-only, has no backing Document,
+/// or both buffers are empty.
+fn commit_current_model_edits(world: &mut World) {
+    // Snapshot everything we need up-front so we don't fight the borrow
+    // checker when mutating the registry below.
+    let (doc_id, is_read_only, model_name) = {
+        let state = world.resource::<WorkbenchState>();
+        let Some(m) = state.open_model.as_ref() else { return };
+        (m.doc, m.read_only, m.detected_name.clone().unwrap_or_else(|| m.display_name.clone()))
+    };
+    let Some(doc_id) = doc_id else { return };
+    if is_read_only {
+        return;
+    }
+
+    // Visual diagram → source. If the user has placed components this
+    // takes precedence over the text buffer; in the current UX only one
+    // of the two is edited at a time.
+    let diagram_source = world
+        .get_resource::<crate::ui::panels::diagram::DiagramState>()
+        .filter(|ds| !ds.diagram.nodes.is_empty())
+        .map(|ds| crate::visual_diagram::generate_modelica_source(&ds.diagram, &model_name));
+
+    if let Some(src) = diagram_source {
+        world
+            .resource_mut::<ModelicaDocumentRegistry>()
+            .checkpoint_source(doc_id, src);
+        return;
+    }
+
+    // Fallback: commit the text buffer. If the user was in Text mode,
+    // their latest keystrokes may not have triggered `lost_focus()`
+    // before the click on the Package Browser.
+    let buffer = world
+        .get_resource::<crate::ui::panels::code_editor::EditorBufferState>()
+        .map(|b| b.text.clone());
+    if let Some(src) = buffer {
+        if !src.is_empty() {
+            world
+                .resource_mut::<ModelicaDocumentRegistry>()
+                .checkpoint_source(doc_id, src);
+        }
+    }
+}
+
+/// Render every in-memory model the user has created this session.
+/// Returns the id of the one the user clicked (if any).
+///
+/// `active_id` is the currently-open model's `model_path`, used to mark
+/// the active entry so the user can see which one is being edited.
+fn render_in_memory_models(
+    ui: &mut egui::Ui,
+    entries: &[InMemoryEntry],
+    active_id: Option<&str>,
+) -> Option<String> {
+    if entries.is_empty() {
+        return None;
+    }
+    let mut clicked = None;
+    for entry in entries {
+        let is_active = active_id == Some(entry.id.as_str());
+        let label = if is_active {
+            egui::RichText::new(format!("💾 {} ✏️", entry.display_name))
+                .size(11.0)
+                .color(egui::Color32::YELLOW)
+                .strong()
+        } else {
+            egui::RichText::new(format!("💾 {}", entry.display_name))
+                .size(11.0)
+                .color(egui::Color32::from_rgb(220, 220, 180))
+        };
+        let resp = ui.horizontal(|ui| {
+            ui.add_space(16.0);
+            ui.add(egui::Label::new(label).sense(egui::Sense::click()))
+        }).inner;
+        if resp.clicked() && !is_active {
+            clicked = Some(entry.id.clone());
+        }
+    }
+    clicked
 }
 
 fn open_model(world: &mut World, id: String, name: String, library: ModelLibrary) {
+    // Before navigating away, flush any in-progress work on the current
+    // model into its Document. Matches the text editor's focus-loss
+    // commit so the user's changes survive a round-trip.
+    commit_current_model_edits(world);
+
     if let Some(mut state) = world.get_resource_mut::<WorkbenchState>() {
         let prev_path = state.open_model.as_ref().map(|m| m.model_path.clone());
         if let Some(p) = prev_path {
@@ -521,18 +659,52 @@ fn open_model(world: &mut World, id: String, name: String, library: ModelLibrary
     // Determine the loading strategy based on the ID scheme
     if id.starts_with("mem://") {
         let mem_name_str = id.strip_prefix("mem://").unwrap_or("NewModel").to_string();
-        let source = format!("model {}\n\nend {};\n", mem_name_str, mem_name_str);
+
+        // Find the existing Document for this in-memory model. If one
+        // exists (user created it earlier this session), we restore its
+        // *current* source and hold on to the id so further edits keep
+        // landing on the same Document. Only fall back to a fresh
+        // template if nothing is registered — a defensive path; shouldn't
+        // normally fire because New Model allocates up front.
+        let mem_path = std::path::PathBuf::from(&id);
+        let (source, doc_id) = {
+            let registry = world.resource::<ModelicaDocumentRegistry>();
+            match registry.find_by_path(&mem_path) {
+                Some(doc) => {
+                    let src = registry
+                        .host(doc)
+                        .map(|h| h.document().source().to_string())
+                        .unwrap_or_default();
+                    (src, Some(doc))
+                }
+                None => (
+                    format!("model {}\n\nend {};\n", mem_name_str, mem_name_str),
+                    None,
+                ),
+            }
+        };
+
+        // Compute line starts for the restored source so the code editor
+        // can lay it out correctly.
+        let mut line_starts = vec![0usize];
+        for (i, byte) in source.as_bytes().iter().enumerate() {
+            if *byte == b'\n' {
+                line_starts.push(i + 1);
+            }
+        }
+
         if let Some(mut state) = world.get_resource_mut::<WorkbenchState>() {
             let source_arc: std::sync::Arc<str> = source.into();
             state.open_model = Some(OpenModel {
                 model_path: id,
                 display_name: name,
                 source: source_arc.clone(),
-                line_starts: vec![0].into(),
+                line_starts: line_starts.into(),
                 detected_name: Some(mem_name_str),
                 cached_galley: None,
                 read_only: false,
                 library,
+                doc: doc_id,
             });
             state.editor_buffer = source_arc.to_string();
             state.diagram_dirty = true;
@@ -662,12 +834,42 @@ fn show_new_model_dialog(ui: &mut egui::Ui, world: &mut World) {
                         return;
                     }
 
+                    // Flush edits from whatever model is currently open
+                    // before we replace it — matches the behavior of
+                    // clicking a different library entry.
+                    commit_current_model_edits(world);
+
                     let source = format!("model {}\n\nend {};\n", name, name);
+                    let mem_id = format!("mem://{}", name);
+
+                    // Allocate the Document up front so the new scratch
+                    // model survives navigation (switching to another
+                    // file and coming back). The Package Browser lists
+                    // it under "Your Models" by consulting
+                    // `PackageTreeCache.in_memory_models`.
+                    let doc_id = world
+                        .resource_mut::<ModelicaDocumentRegistry>()
+                        .allocate_with_origin(
+                            source.clone(),
+                            Some(std::path::PathBuf::from(&mem_id)),
+                            ModelLibrary::InMemory,
+                        );
+                    if let Some(mut cache) = world.get_resource_mut::<PackageTreeCache>() {
+                        // De-dupe by id: overwrite an entry with the same
+                        // name (recreating "MyModel" shouldn't leave a
+                        // stale line).
+                        cache.in_memory_models.retain(|e| e.id != mem_id);
+                        cache.in_memory_models.push(InMemoryEntry {
+                            display_name: name.clone(),
+                            id: mem_id.clone(),
+                            doc: doc_id,
+                        });
+                    }
 
                     if let Some(mut state) = world.get_resource_mut::<WorkbenchState>() {
                         let source_arc: std::sync::Arc<str> = source.into();
                         state.open_model = Some(OpenModel {
-                            model_path: format!("mem://{}", name),
+                            model_path: mem_id,
                             display_name: name.clone(),
                             source: source_arc.clone(),
                             line_starts: vec![0].into(),
@@ -675,6 +877,7 @@ fn show_new_model_dialog(ui: &mut egui::Ui, world: &mut World) {
                             cached_galley: None,
                             read_only: false,
                             library: ModelLibrary::InMemory,
+                            doc: Some(doc_id),
                         });
                         state.editor_buffer = source_arc.to_string();
                         state.diagram_dirty = true;

@@ -1478,21 +1478,32 @@ impl Panel for DiagramPanel {
         }
 
         // ── Check if open_model changed → trigger import task ──
+        //
+        // When the Package Browser opens a new model, it sets
+        // `diagram_dirty = true`. We spawn the parse task *and* clear the
+        // current visual state so the user sees either the reparsed
+        // diagram or an empty canvas — never a stale carry-over from a
+        // previously-open file or a user-built diagram that no longer
+        // belongs to the active source.
         {
             let dirty = world.get_resource::<WorkbenchState>()
                 .map(|s| s.diagram_dirty)
                 .unwrap_or(false);
             if dirty {
-                if let Some(state) = world.get_resource::<WorkbenchState>() {
-                    if let Some(ref model) = state.open_model {
-                        let source = model.source.clone();
-                        let pool = bevy::tasks::AsyncComputeTaskPool::get();
-                        let task = pool.spawn(async move {
-                            import_model_to_diagram(&source)
-                        });
-                        if let Some(mut ds) = world.get_resource_mut::<DiagramState>() {
-                            ds.parse_task = Some(task);
-                        }
+                let source = world.get_resource::<WorkbenchState>()
+                    .and_then(|s| s.open_model.as_ref().map(|m| m.source.clone()));
+                if let Some(mut ds) = world.get_resource_mut::<DiagramState>() {
+                    ds.diagram = VisualDiagram::default();
+                    ds.snarl = egui_snarl::Snarl::default();
+                    ds.compile_status = None;
+                }
+                if let Some(source) = source {
+                    let pool = bevy::tasks::AsyncComputeTaskPool::get();
+                    let task = pool.spawn(async move {
+                        import_model_to_diagram(&source)
+                    });
+                    if let Some(mut ds) = world.get_resource_mut::<DiagramState>() {
+                        ds.parse_task = Some(task);
                     }
                 }
                 if let Some(mut state) = world.get_resource_mut::<WorkbenchState>() {
@@ -1502,14 +1513,16 @@ impl Panel for DiagramPanel {
         }
 
         // ── Poll import task ──
+        //
+        // Treat a `None` result as "no diagram representable from this
+        // source" — keep the cleared canvas so the view honestly reflects
+        // the active model rather than silently falling back to old state.
         let mut is_parsing = false;
         if let Some(mut ds) = world.get_resource_mut::<DiagramState>() {
             if let Some(mut task) = ds.parse_task.take() {
                 if let Some(diagram_opt) = futures_lite::future::block_on(futures_lite::future::poll_once(&mut task)) {
-                    if let Some(diagram) = diagram_opt {
-                        ds.diagram = diagram;
-                        ds.rebuild_snarl();
-                    }
+                    ds.diagram = diagram_opt.unwrap_or_default();
+                    ds.rebuild_snarl();
                 } else {
                     ds.parse_task = Some(task);
                     is_parsing = true;
@@ -1527,58 +1540,51 @@ impl Panel for DiagramPanel {
             return;
         }
 
-        // ── Breadcrumb bar ──
-        let (has_model, display_name, is_read_only, has_back) = {
-            let state = world.get_resource::<WorkbenchState>();
-            state.map(|s| {
-                s.open_model.as_ref().map(|m| {
-                    (true, m.display_name.clone(), m.read_only, !s.navigation_stack.is_empty())
-                }).unwrap_or((false, String::new(), false, false))
-            }).unwrap_or((false, String::new(), false, false))
-        };
-
-        // ── Toolbar ──
-        // Identity (model name, read-only state, navigation) lives on the
-        // tab header / Package Browser, not here. This toolbar is strictly
-        // the Diagram view's own controls.
-        let _ = (has_model, is_read_only, display_name, has_back);
-        ui.horizontal(|ui| {
-            // Mode toggle
-            {
-                let schematic = world.get_resource::<DiagramState>()
-                    .map(|ds| ds.schematic_mode)
-                    .unwrap_or(true);
-                let label = if schematic { "🖼 Schematic" } else { "📊 NodeGraph" };
-                if ui.selectable_label(schematic, label).clicked() {
-                    if let Some(mut ds) = world.get_resource_mut::<DiagramState>() {
-                        ds.schematic_mode = !ds.schematic_mode;
-                    }
+        // Empty-state hint: the current diagram has no nodes (e.g. just
+        // created a new model, or the source is equations-only). Show a
+        // one-line tip above the canvas *without* returning — the Snarl
+        // canvas below owns the right-click "add component" menu, so we
+        // must keep rendering it for the hint to be actionable.
+        let has_no_nodes = world
+            .get_resource::<DiagramState>()
+            .map(|ds| ds.diagram.nodes.is_empty())
+            .unwrap_or(true);
+        let has_open_model = world
+            .get_resource::<WorkbenchState>()
+            .map(|s| s.open_model.is_some())
+            .unwrap_or(false);
+        if has_no_nodes {
+            ui.horizontal(|ui| {
+                ui.colored_label(egui::Color32::from_rgb(180, 180, 90), "💡");
+                if has_open_model {
+                    ui.label(
+                        egui::RichText::new(
+                            "Empty diagram — right-click the canvas to add a component, \
+                             or switch to 📝 Text to edit source directly.",
+                        )
+                        .size(11.0)
+                        .color(egui::Color32::from_rgb(170, 170, 170)),
+                    );
+                } else {
+                    ui.label(
+                        egui::RichText::new(
+                            "No model open — right-click the canvas to start a diagram, \
+                             or pick one from the Package Browser.",
+                        )
+                        .size(11.0)
+                        .color(egui::Color32::from_rgb(170, 170, 170)),
+                    );
                 }
-            }
+            });
             ui.separator();
+        }
 
-            // Compile & Run
-            if ui.button("🚀 COMPILE & RUN").clicked() {
-                // handled below
-                ui.memory_mut(|m| m.data.insert_temp(egui::Id::new("diagram_compile"), true));
-            }
-            ui.separator();
-
-            // Stats + compile status (compact, grey)
-            if let Some(st) = world.get_resource::<DiagramState>() {
-                ui.label(
-                    egui::RichText::new(format!("{} comps · {} wires", st.diagram.nodes.len(), st.diagram.edges.len()))
-                        .size(10.0)
-                        .color(egui::Color32::from_rgb(160, 160, 170)),
-                );
-                if let Some(status) = &st.compile_status {
-                    ui.separator();
-                    let color = if st.compile_ok { egui::Color32::GREEN } else { egui::Color32::LIGHT_RED };
-                    ui.colored_label(color, status);
-                }
-            }
-        });
-        ui.separator();
+        // Body only. Identity (model name, read-only state), compile
+        // button and view-mode switching all live on the ModelView panel's
+        // unified toolbar. The Schematic/NodeGraph toggle and diagram-
+        // specific stats will migrate up as a contextual sub-toolbar in a
+        // follow-up; for now schematic mode stays at its persisted value
+        // and users can flip it via code / script / future menu entry.
 
 
         // ── Canvas (egui-snarl) ──
@@ -1639,20 +1645,18 @@ impl Panel for DiagramPanel {
             sync_connections(snarl, diagram);
         }
 
-        // ── Compile (deferred check) ──
-        let compile_clicked = ui.memory(|m| {
-            m.data.get_temp::<bool>(egui::Id::new("diagram_compile")).unwrap_or(false)
-        });
-        if compile_clicked {
-            ui.memory_mut(|m| m.data.insert_temp(egui::Id::new("diagram_compile"), false));
-            do_compile(world);
-        }
+        // The Compile button lives on the ModelViewPanel unified toolbar
+        // now; in Diagram mode it calls `do_compile` below directly.
     }
 }
 
-/// Execute the compile-and-run workflow: generate source → write temp file
-/// → spawn entity → send compile command.
-fn do_compile(world: &mut World) {
+/// Execute the diagram-to-compile workflow: generate Modelica source from
+/// the current [`DiagramState`] → write temp file → spawn or update a
+/// `ModelicaModel` entity → send [`ModelicaCommand::Compile`] to the
+/// worker. Public so [`crate::ui::panels::model_view::ModelViewPanel`]
+/// can dispatch it from the unified toolbar when the user is in
+/// Diagram mode.
+pub fn do_compile(world: &mut World) {
     // Extract data first
     let (model_counter, source, temp_path) = {
         let Some(s) = world.get_resource::<DiagramState>() else { return };
