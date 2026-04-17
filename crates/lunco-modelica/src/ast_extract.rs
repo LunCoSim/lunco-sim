@@ -59,6 +59,86 @@ pub fn extract_model_name(source: &str) -> Option<String> {
     package_name
 }
 
+/// Extract the Modelica description string (`"..."` after a
+/// declaration, per MLS §A.2.5) for every component across all classes
+/// in the source. Returns a `name → description` map.
+///
+/// Rumoca's compiled DAE drops component descriptions during
+/// compile → DAE lowering (as of rumoca `main` at the time of writing),
+/// so we can't read them from `Dae.states[name].description`. The
+/// AST-level `Component.description: Vec<Token>` still has them,
+/// which is what we walk here.
+///
+/// Used by the worker to feed hover tooltips in the Telemetry panel,
+/// the Diagram icon block, and anywhere else a variable name appears
+/// that benefits from inline docs.
+pub fn extract_descriptions(source: &str) -> HashMap<String, String> {
+    let ast = match parse(source) {
+        Some(a) => a,
+        None => return HashMap::new(),
+    };
+    let mut out: HashMap<String, String> = HashMap::new();
+    collect_descriptions_from_classes(ast.classes, &mut out);
+    out
+}
+
+fn collect_descriptions_from_classes(
+    classes: impl IntoIterator<Item = (String, ClassDef)>,
+    out: &mut HashMap<String, String>,
+) {
+    for (_, class) in classes {
+        for component in class.components.values() {
+            if component.description.is_empty() {
+                continue;
+            }
+            // Rumoca's AST stores the already-unquoted string-literal
+            // text in each Token. Concatenate (Modelica allows
+            // adjacent-string concatenation `"a" " b"` → `a b`) and
+            // trim. We still keep a quote-strip fallback in case a
+            // future rumoca revision includes the quotes verbatim.
+            let joined: String = component
+                .description
+                .iter()
+                .map(|t| t.text.as_ref())
+                .collect::<Vec<_>>()
+                .join(" ");
+            let cleaned = if joined.contains('"') {
+                dequote_description(&joined)
+            } else {
+                joined.trim().to_string()
+            };
+            if !cleaned.is_empty() {
+                out.insert(component.name.clone(), cleaned);
+            }
+        }
+        collect_descriptions_from_classes(class.classes, out);
+    }
+}
+
+/// Strip bounding `"..."` wrappers from a concatenation of description
+/// tokens, e.g. `"a" " b"` → `a b`. Used as a fallback when a rumoca
+/// revision surfaces raw quoted text in the description tokens; the
+/// current revision pre-unquotes each literal.
+fn dequote_description(raw: &str) -> String {
+    let mut out = String::new();
+    let mut in_str = false;
+    let mut escape = false;
+    for ch in raw.chars() {
+        if escape {
+            out.push(ch);
+            escape = false;
+            continue;
+        }
+        match ch {
+            '\\' if in_str => escape = true,
+            '"' => in_str = !in_str,
+            c if in_str => out.push(c),
+            _ => {}
+        }
+    }
+    out.trim().to_string()
+}
+
 /// Extract parameter values from Modelica source code.
 ///
 /// Finds all components with `parameter` variability across all classes and

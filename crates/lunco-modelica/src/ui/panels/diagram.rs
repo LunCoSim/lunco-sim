@@ -1683,6 +1683,7 @@ pub fn do_compile(world: &mut World) {
             parameters: HashMap::new(),
             inputs: HashMap::new(),
             variables: HashMap::new(),
+            descriptions: HashMap::new(),
             document: doc_id,
             is_stepping: true,
         },
@@ -1891,7 +1892,22 @@ fn render_equation_only_empty_state(ui: &mut egui::Ui, world: &mut World) {
         )
     };
 
-    draw_model_icon_block(ui, &model_name, &params, &inputs, &observables);
+    // Pull per-variable description strings from the compiled model, if
+    // any entity is linked to this document. Populated by the worker
+    // on compile-type results (see `handle_modelica_responses`). Empty
+    // when the user hasn't compiled yet — tooltips just no-op.
+    let descriptions: std::collections::HashMap<String, String> = world
+        .resource::<crate::ui::state::ModelicaDocumentRegistry>()
+        .entities_linked_to(doc_id)
+        .into_iter()
+        .find_map(|e| {
+            world
+                .get::<crate::ModelicaModel>(e)
+                .map(|m| m.descriptions.clone())
+        })
+        .unwrap_or_default();
+
+    draw_model_icon_block(ui, &model_name, &params, &inputs, &observables, &descriptions);
 }
 
 /// Paint a Modelica "Icon"-style block centered in the current
@@ -1906,6 +1922,7 @@ fn draw_model_icon_block(
     params: &[(String, f64)],
     inputs: &[(String, Option<f64>)],
     observables: &[String],
+    descriptions: &std::collections::HashMap<String, String>,
 ) {
     let avail = ui.available_rect_before_wrap();
     let port_rows = inputs.len().max(observables.len()) as f32;
@@ -1967,34 +1984,55 @@ fn draw_model_icon_block(
     let muted = egui::Color32::from_rgb(160, 160, 170);
 
     // Inputs on the left edge.
+    //
+    // Each port gets both a painter-drawn visual (dot + label) and an
+    // interactive rect covering the dot plus the label's full extent,
+    // so hovering shows the variable's Modelica description string as
+    // a tooltip. Painter draws don't produce egui Responses on their
+    // own; allocating an invisible rect is the standard workaround.
     let content_top = title_rect.bottom() + 14.0;
-    for (i, (name, _default)) in inputs.iter().enumerate() {
-        let y = content_top + i as f32 * port_h + port_h * 0.5;
-        let pos = egui::pos2(block_rect.left(), y);
-        painter.circle_filled(pos, 4.5, input_color);
-        painter.text(
-            pos + egui::vec2(8.0, 0.0),
-            egui::Align2::LEFT_CENTER,
-            name,
-            egui::FontId::monospace(11.0),
-            label_color,
-        );
-    }
-    // Observables on the right edge.
-    for (i, name) in observables.iter().enumerate() {
-        let y = content_top + i as f32 * port_h + port_h * 0.5;
-        let pos = egui::pos2(block_rect.right(), y);
-        painter.circle_filled(pos, 4.5, output_color);
-        painter.text(
-            pos + egui::vec2(-8.0, 0.0),
-            egui::Align2::RIGHT_CENTER,
-            name,
-            egui::FontId::monospace(11.0),
-            label_color,
-        );
-    }
+    let hover_rects: Vec<(egui::Rect, String)> = {
+        let mut rects = Vec::new();
+        for (i, (name, _default)) in inputs.iter().enumerate() {
+            let y = content_top + i as f32 * port_h + port_h * 0.5;
+            let pos = egui::pos2(block_rect.left(), y);
+            painter.circle_filled(pos, 4.5, input_color);
+            painter.text(
+                pos + egui::vec2(8.0, 0.0),
+                egui::Align2::LEFT_CENTER,
+                name,
+                egui::FontId::monospace(11.0),
+                label_color,
+            );
+            // Rect covers ~140px of label + the dot.
+            let r = egui::Rect::from_min_max(
+                egui::pos2(pos.x - 6.0, y - 8.0),
+                egui::pos2(pos.x + 150.0, y + 8.0),
+            );
+            rects.push((r, name.clone()));
+        }
+        for (i, name) in observables.iter().enumerate() {
+            let y = content_top + i as f32 * port_h + port_h * 0.5;
+            let pos = egui::pos2(block_rect.right(), y);
+            painter.circle_filled(pos, 4.5, output_color);
+            painter.text(
+                pos + egui::vec2(-8.0, 0.0),
+                egui::Align2::RIGHT_CENTER,
+                name,
+                egui::FontId::monospace(11.0),
+                label_color,
+            );
+            let r = egui::Rect::from_min_max(
+                egui::pos2(pos.x - 150.0, y - 8.0),
+                egui::pos2(pos.x + 6.0, y + 8.0),
+            );
+            rects.push((r, name.clone()));
+        }
+        rects
+    };
 
     // Parameters listed in the middle below ports, centered.
+    let mut param_hover_rects: Vec<(egui::Rect, String)> = Vec::new();
     if !params.is_empty() {
         let params_top = content_top + port_h * port_rows.max(1.0) + 8.0;
         painter.text(
@@ -2013,12 +2051,29 @@ fn draw_model_icon_block(
                 egui::FontId::monospace(10.5),
                 label_color,
             );
+            let r = egui::Rect::from_min_max(
+                egui::pos2(block_rect.center().x - 150.0, y),
+                egui::pos2(block_rect.center().x + 150.0, y + 14.0),
+            );
+            param_hover_rects.push((r, k.clone()));
         }
     }
 
     // Claim the block area so egui knows we drew something (prevents
     // the panel from collapsing to zero height).
     ui.allocate_rect(block_rect, egui::Sense::hover());
+
+    // Stamp each port/param hover rect on top. We use `interact_at`
+    // (not `allocate_rect`) so the rects overlap the block without
+    // disturbing layout. When the description is absent the hover
+    // still fires; `.on_hover_text` is a no-op with empty text.
+    for (rect, var) in hover_rects.into_iter().chain(param_hover_rects.into_iter()) {
+        let id = ui.id().with(("icon_block_hover", &var));
+        let resp = ui.interact(rect, id, egui::Sense::hover());
+        if let Some(desc) = descriptions.get(&var) {
+            resp.on_hover_text(desc);
+        }
+    }
 
     // Below the block, a short explainer — the user can still read
     // this line if they're new to why the canvas is "empty".

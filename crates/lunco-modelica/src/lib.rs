@@ -282,6 +282,31 @@ pub struct ModelicaResult {
     /// Input variable names discovered from the model (input Real ...).
     /// These can be changed at runtime without recompilation.
     pub detected_input_names: Vec<String>,
+    /// Per-variable Modelica description strings (the `"..."` comment after
+    /// a declaration — MLS §A.2.5 `description-string`). Collected from
+    /// the compiled DAE on `is_new_model` / `is_parameter_update` so the
+    /// UI can show them as hover tooltips. Only populated on compile-type
+    /// results; Step results leave this empty.
+    pub detected_descriptions: Vec<(String, String)>,
+}
+
+impl Default for ModelicaResult {
+    fn default() -> Self {
+        Self {
+            entity: Entity::PLACEHOLDER,
+            session_id: 0,
+            new_time: 0.0,
+            outputs: Vec::new(),
+            detected_symbols: Vec::new(),
+            error: None,
+            log_message: None,
+            is_new_model: false,
+            is_parameter_update: false,
+            is_reset: false,
+            detected_input_names: Vec::new(),
+            detected_descriptions: Vec::new(),
+        }
+    }
 }
 
 /// Cached compilation result per entity.
@@ -321,11 +346,26 @@ fn result_ok(entity: Entity, session_id: u64) -> ModelicaResult {
         session_id,
         new_time: 0.0,
         outputs: Vec::new(),
- detected_symbols: Vec::new(),
+        detected_symbols: Vec::new(),
         error: None, log_message: None, is_new_model: false,
         is_parameter_update: false, is_reset: false,
         detected_input_names: Vec::new(),
+        detected_descriptions: Vec::new(),
     }
+}
+
+/// Pull every variable's Modelica description string (`"..."` after a
+/// declaration, per MLS §A.2.5) straight from the source AST.
+///
+/// Rumoca's DAE drops component descriptions during compile → DAE
+/// lowering (as of the rumoca commit pinned in `Cargo.lock` — the
+/// field `Dae::Variable.description` is always `None` in practice),
+/// so we re-parse the source AST instead. Cheap enough for compile /
+/// parameter-update events (rumoca parse is fast and cached).
+fn collect_variable_descriptions(source: &str) -> Vec<(String, String)> {
+    ast_extract::extract_descriptions(source)
+        .into_iter()
+        .collect()
 }
 
 /// The background worker that owns the !Send SimSteppers and cached DAEs.
@@ -377,6 +417,7 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                                             }
                                             let input_names: Vec<String> = stepper.input_names().to_vec();
                                             let symbols = collect_stepper_observables(&stepper);
+                                            let descriptions = collect_variable_descriptions(&stripped_source);
                                             steppers.insert(entity, (session_id, cached.model_name.clone(), stepper));
                                             let _ = tx_inner.send(ModelicaResult {
                                                 entity, session_id, new_time: 0.0,
@@ -385,6 +426,7 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                                                 log_message: Some("Reset complete.".to_string()),
                                                 is_new_model: false, is_parameter_update: false, is_reset: true,
                                                 detected_input_names: input_names,
+                                                detected_descriptions: descriptions,
                                             });
                                         }
                                         Err(e) => {
@@ -442,6 +484,7 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                                         }
                                         let input_names: Vec<String> = stepper.input_names().to_vec();
                                         let symbols = collect_stepper_observables(&stepper);
+                                        let descriptions = collect_variable_descriptions(&stripped_source);
                                         cached_models.insert(entity, CachedModel {
                                             session_id,
                                             model_name: model_name.clone(),
@@ -456,6 +499,7 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                                             log_message: Some("Parameters applied.".to_string()),
                                             is_new_model: false, is_parameter_update: true, is_reset: false,
                                             detected_input_names: input_names,
+                                            detected_descriptions: descriptions,
                                         });
                                     }
                                     Err(e) => {
@@ -493,6 +537,7 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                                         }
                                         let input_names: Vec<String> = stepper.input_names().to_vec();
                                         let symbols = collect_stepper_observables(&stepper);
+                                        let descriptions = collect_variable_descriptions(&stripped_source);
                                         let temp_dir = modelica_dir().join(format!("{}_{}", entity.index(), entity.generation()));
                                         let _ = std::fs::create_dir_all(&temp_dir);
                                         let temp_path = temp_dir.join("model.mo");
@@ -512,6 +557,7 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                                             log_message: Some(format!("Model '{}' compiled.", model_name)),
                                             is_new_model: true, is_parameter_update: false, is_reset: false,
                                             detected_input_names: input_names,
+                                            detected_descriptions: descriptions,
                                         });
                                     }
                                     Err(e) => {
@@ -622,7 +668,7 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                                         outputs, error: None, log_message: None,
                                         is_new_model: false, detected_symbols: Vec::new(),
                                         is_parameter_update: false, is_reset: false,
-                                        detected_input_names: Vec::new(),
+                                        detected_input_names: Vec::new(), detected_descriptions: Vec::new(),
                                     });
                                 }
                             } else {
@@ -648,7 +694,7 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                     outputs: Vec::new(), detected_symbols: Vec::new(),
                     error: Some("Internal Worker Panic!".to_string()), log_message: None,
                     is_new_model: false, is_parameter_update: false, is_reset: false,
-                    detected_input_names: Vec::new(),
+                    detected_input_names: Vec::new(), detected_descriptions: Vec::new(),
                 });
             }
         }
@@ -784,7 +830,7 @@ fn inline_worker_process(
                             outputs: Vec::new(),
                             detected_symbols: Vec::new(), error: Some(format!("Solver Error: {:?}", e)),
                             log_message: None, is_new_model: false, is_parameter_update: false,
-                            is_reset: false, detected_input_names: Vec::new(),
+                            is_reset: false, detected_input_names: Vec::new(), detected_descriptions: Vec::new(),
                         });
                         w.steppers.remove(&entity);
                     } else {
@@ -793,7 +839,7 @@ fn inline_worker_process(
                             entity, session_id, new_time: stepper.time(),
                             outputs, error: None,
                             log_message: None, is_new_model: false, detected_symbols: Vec::new(),
-                            is_parameter_update: false, is_reset: false, detected_input_names: Vec::new(),
+                            is_parameter_update: false, is_reset: false, detected_input_names: Vec::new(), detected_descriptions: Vec::new(),
                         });
                     }
                 } else {
@@ -805,7 +851,7 @@ fn inline_worker_process(
                     outputs: Vec::new(),
                     detected_symbols: Vec::new(), error: Some("Sim engine failed to start.".to_string()),
                     log_message: None, is_new_model: false, is_parameter_update: false,
-                    is_reset: false, detected_input_names: Vec::new(),
+                    is_reset: false, detected_input_names: Vec::new(), detected_descriptions: Vec::new(),
                 });
             }
         }
@@ -825,6 +871,7 @@ fn inline_worker_process(
                             for (name, val) in &input_defaults { let _ = stepper.set_input(name, *val); }
                             let input_names: Vec<String> = stepper.input_names().to_vec();
                             let symbols = collect_stepper_observables(&stepper);
+                            let descriptions = collect_variable_descriptions(&stripped_source);
                             w.cached_models.insert(entity, CachedModel {
                                 session_id, model_name: model_name.clone(), source: Arc::from(source.clone()),
                                 dae: comp_res.clone(),
@@ -838,6 +885,7 @@ fn inline_worker_process(
                                 log_message: Some("Compiled successfully.".to_string()),
                                 is_new_model: true, is_parameter_update: false, is_reset: false,
                                 detected_input_names: input_names,
+                                detected_descriptions: descriptions,
                             });
                         }
                         Err(e) => {
@@ -846,7 +894,7 @@ fn inline_worker_process(
                                 outputs: Vec::new(),
                                 detected_symbols: Vec::new(), error: Some(format!("Stepper Init Error: {:?}", e)),
                                 log_message: None, is_new_model: true, is_parameter_update: false, is_reset: false,
-                                detected_input_names: Vec::new(),
+                                detected_input_names: Vec::new(), detected_descriptions: Vec::new(),
                             });
                         }
                     }
@@ -857,7 +905,7 @@ fn inline_worker_process(
                         outputs: Vec::new(),
                         detected_symbols: Vec::new(), error: Some(format!("Compile Error: {:?}", e)),
                         log_message: None, is_new_model: true, is_parameter_update: false, is_reset: false,
-                        detected_input_names: Vec::new(),
+                        detected_input_names: Vec::new(), detected_descriptions: Vec::new(),
                     });
                 }
             }
@@ -877,6 +925,7 @@ fn inline_worker_process(
                             for (name, val) in &input_defaults { let _ = stepper.set_input(name, *val); }
                             let input_names: Vec<String> = stepper.input_names().to_vec();
                             let symbols = collect_stepper_observables(&stepper);
+                            let descriptions = collect_variable_descriptions(&stripped_source);
                             w.steppers.insert(entity, (session_id, cached.model_name.clone(), stepper));
                             let _ = tx.send(ModelicaResult {
                                 entity, session_id, new_time: 0.0,
@@ -885,6 +934,7 @@ fn inline_worker_process(
                                 log_message: Some("Reset complete.".to_string()),
                                 is_new_model: false, is_parameter_update: false, is_reset: true,
                                 detected_input_names: input_names,
+                                detected_descriptions: descriptions,
                             });
 
                                 } else {
@@ -893,7 +943,7 @@ fn inline_worker_process(
                                 outputs: Vec::new(),
                                 detected_symbols: Vec::new(), error: Some("Stepper init failed".to_string()),
                                 log_message: None, is_new_model: false, is_parameter_update: false, is_reset: true,
-                                detected_input_names: Vec::new(),
+                                detected_input_names: Vec::new(), detected_descriptions: Vec::new(),
                                 });
                                 }
                                 }
@@ -903,7 +953,7 @@ fn inline_worker_process(
                                 outputs: Vec::new(),
                                 detected_symbols: Vec::new(), error: Some(format!("Reset compile error: {:?}", e)),
                                 log_message: None, is_new_model: false, is_parameter_update: false, is_reset: true,
-                                detected_input_names: Vec::new(),
+                                detected_input_names: Vec::new(), detected_descriptions: Vec::new(),
                                 });
                                 }
                                 }
@@ -915,7 +965,7 @@ fn inline_worker_process(
                                 detected_symbols: Vec::new(), error: None,
                                 log_message: Some("Reset complete (no cached model).".to_string()),
                                 is_new_model: false, is_parameter_update: false, is_reset: true,
-                                detected_input_names: Vec::new(),
+                                detected_input_names: Vec::new(), detected_descriptions: Vec::new(),
                                 });
                                 }
 
@@ -940,6 +990,7 @@ fn inline_worker_process(
                             for (name, val) in &input_defaults { let _ = stepper.set_input(name, *val); }
                             let input_names: Vec<String> = stepper.input_names().to_vec();
                             let symbols = collect_stepper_observables(&stepper);
+                            let descriptions = collect_variable_descriptions(&stripped_source);
                             w.cached_models.insert(entity, CachedModel {
                                 session_id, model_name: model_name.clone(), source: Arc::from(source.clone()),
                                 dae: comp_res,
@@ -953,6 +1004,7 @@ fn inline_worker_process(
                                 log_message: Some("Parameters applied.".to_string()),
                                 is_new_model: false, is_parameter_update: true, is_reset: false,
                                 detected_input_names: input_names,
+                                detected_descriptions: descriptions,
                             });
                         }
                         Err(e) => {
@@ -961,7 +1013,7 @@ fn inline_worker_process(
                                 outputs: Vec::new(),
                                 detected_symbols: Vec::new(), error: Some(format!("Stepper Init Error: {:?}", e)),
                                 log_message: None, is_new_model: false, is_parameter_update: true, is_reset: false,
-                                detected_input_names: Vec::new(),
+                                detected_input_names: Vec::new(), detected_descriptions: Vec::new(),
                             });
                         }
                     }
@@ -972,7 +1024,7 @@ fn inline_worker_process(
                         outputs: Vec::new(),
                         detected_symbols: Vec::new(), error: Some(format!("Re-compile Error: {:?}", e)),
                         log_message: None, is_new_model: false, is_parameter_update: true, is_reset: false,
-                        detected_input_names: Vec::new(),
+                        detected_input_names: Vec::new(), detected_descriptions: Vec::new(),
                     });
                 }
             }
@@ -1003,6 +1055,13 @@ pub struct ModelicaModel {
     pub inputs: HashMap<String, f64>,
     /// All other observable variables (Real soc, etc)
     pub variables: HashMap<String, f64>,
+    /// Per-variable description strings lifted from the Modelica source
+    /// (MLS §A.2.5). Populated on compile-type results so the UI can
+    /// render them as hover tooltips in Telemetry, Inspector, Diagram,
+    /// etc. Not reflected — these are derived from the source and can
+    /// be recomputed on reload.
+    #[reflect(ignore)]
+    pub descriptions: HashMap<String, String>,
     /// Canonical id of the Modelica source document backing this entity,
     /// looked up in [`ui::ModelicaDocumentRegistry`]. `DocumentId::default()`
     /// (`0`) means "no document assigned yet"; systems should treat it as
@@ -1105,6 +1164,19 @@ fn handle_modelica_responses(
                 };
                 if let Some(cs) = compile_states.as_mut() {
                     cs.set(model.document, new_state);
+                }
+            }
+
+            // Variable description strings for hover tooltips (Telemetry,
+            // Inspector, Diagram). Populated on compile-type results only;
+            // step results leave `detected_descriptions` empty so we
+            // don't blow away the map on every step.
+            if (result.is_new_model || result.is_parameter_update || result.is_reset)
+                && !result.detected_descriptions.is_empty()
+            {
+                model.descriptions.clear();
+                for (name, desc) in &result.detected_descriptions {
+                    model.descriptions.insert(name.clone(), desc.clone());
                 }
             }
 
@@ -1268,8 +1340,6 @@ mod observables_smoke {
         for name in ["m_prop", "impulse", "m_dot", "thrust", "p_chamber", "isp"] {
             assert!(by_name.contains_key(name), "missing observable: {name}");
         }
-        // Values that should be nonzero at full throttle with propellant
-        // remaining (m_prop starts at 4000).
         assert!(by_name["m_dot"] > 0.0,
             "m_dot should be nonzero at throttle=1, got {}", by_name["m_dot"]);
         assert!(by_name["thrust"] > 0.0,
@@ -1278,6 +1348,31 @@ mod observables_smoke {
             "p_chamber should be nonzero, got {}", by_name["p_chamber"]);
         assert!((by_name["isp"] - 2900.0 / 9.80665).abs() < 1e-3,
             "isp should equal v_e / g, got {}", by_name["isp"]);
+    }
+
+    /// Verifies that `"..."` description strings (MLS §A.2.5) survive
+    /// the AST-based extraction pipeline and reach the worker's
+    /// description map. If this regresses, Telemetry tooltips go dark.
+    #[test]
+    fn rocket_engine_descriptions_populate() {
+        let raw = include_str!("../../../assets/models/RocketEngine.mo");
+        let (src, _) = ast_extract::strip_input_defaults(raw);
+        let descs: std::collections::HashMap<String, String> =
+            collect_variable_descriptions(&src).into_iter().collect();
+        for (var, needle) in [
+            ("m_dot_max", "mass flow"),
+            ("throttle",  "Throttle"),
+            ("m_prop",    "Propellant"),
+            ("thrust",    "Thrust"),
+        ] {
+            let desc = descs.get(var)
+                .unwrap_or_else(|| panic!(
+                    "no description for '{var}'; got {:?}",
+                    descs.keys().collect::<Vec<_>>()
+                ));
+            assert!(desc.contains(needle),
+                "'{var}' description should contain '{needle}', got: {desc:?}");
+        }
     }
 }
 

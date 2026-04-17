@@ -56,10 +56,11 @@ impl Panel for TelemetryPanel {
         }
 
         // Read model snapshot for display
-        let (model_name, is_paused, current_time, parameters, inputs) = {
+        let (model_name, is_paused, current_time, parameters, inputs, descriptions) = {
             if let Some(model) = world.get::<ModelicaModel>(entity) {
                 (model.model_name.clone(), model.paused, model.current_time,
-                 model.parameters.clone(), model.inputs.clone())
+                 model.parameters.clone(), model.inputs.clone(),
+                 model.descriptions.clone())
             } else {
                 ui.label("Model not found.");
                 return;
@@ -117,7 +118,19 @@ impl Panel for TelemetryPanel {
                 for key in &param_keys {
                     let val = parameters.get(key).copied().unwrap_or(0.0);
                     ui.horizontal(|ui| {
-                        ui.label(format!("{key:16}:"));
+                        // Hover the name label for the Modelica
+                        // description string (MLS §A.2.5), if any.
+                        //
+                        // `ui.label()` makes a non-interactive widget;
+                        // `on_hover_text` silently no-ops there. Go
+                        // through `Label::new(...).sense(Sense::hover())`
+                        // so the response is actually hoverable.
+                        let label = egui::Label::new(format!("{key:16}:"))
+                            .sense(egui::Sense::hover());
+                        let resp = ui.add(label);
+                        if let Some(desc) = descriptions.get(key) {
+                            resp.on_hover_text(desc);
+                        }
                         let mut v = val;
                         if ui.add(egui::DragValue::new(&mut v).speed(0.01).fixed_decimals(2)).changed() {
                             let mut trigger_update = false;
@@ -192,7 +205,12 @@ impl Panel for TelemetryPanel {
                 for key in input_keys {
                     let val = inputs.get(&key).copied().unwrap_or(0.0);
                     ui.horizontal(|ui| {
-                        ui.label(format!("{key:16}:"));
+                        let label = egui::Label::new(format!("{key:16}:"))
+                            .sense(egui::Sense::hover());
+                        let resp = ui.add(label);
+                        if let Some(desc) = descriptions.get(&key) {
+                            resp.on_hover_text(desc);
+                        }
                         let mut v = val;
                         ui.add(egui::DragValue::new(&mut v).speed(0.1).fixed_decimals(2));
                         if (v - val).abs() > 1e-10 {
@@ -239,19 +257,18 @@ impl Panel for TelemetryPanel {
                             }
                         }
                     }
-                    ui.label(&name);
+                    let label = egui::Label::new(&name).sense(egui::Sense::hover());
+                    let resp = ui.add(label);
+                    if let Some(desc) = descriptions.get(&name) {
+                        resp.on_hover_text(desc);
+                    }
                 });
             }
         });
 
-        ui.separator();
-        ui.horizontal(|ui| {
-            ui.add_space(ui.available_width() - 80.0);
-            if ui.button("🔍 Auto-Fit").clicked() {
-                if let Some(mut st) = world.get_resource_mut::<WorkbenchState>() {
-                    st.plot_auto_fit = true;
-                }
-            }
-        });
+        // Auto-Fit button was here but moved to the Graphs panel's own
+        // toolbar — users couldn't find it buried at the bottom of
+        // Telemetry. Telemetry now does parameters / inputs / variable
+        // toggles only; graph-axis controls live on the graph itself.
     }
 }

@@ -240,91 +240,141 @@ impl Panel for CodeEditorPanel {
 // scripting, and the remote API share one write path. This comment is
 // the only thing left of them — the observers *are* the documentation.
 
+// Modelica keyword categories — each gets its own colour so declaration
+// intent (`parameter`, `input`, …) reads at a glance against structural
+// keywords (`model`, `equation`, …) and control flow (`if`, `when`, …).
+// Lists are kept small on purpose: MLS §A.1 defines the full reserved-word
+// set, but the editor only needs to highlight the ones users actually
+// type and read.
+const MODIFIER_KEYWORDS: &[&str] = &[
+    "parameter", "input", "output", "constant", "discrete",
+    "flow", "stream", "final", "inner", "outer",
+    "replaceable", "redeclare", "each", "partial",
+];
+const STRUCTURAL_KEYWORDS: &[&str] = &[
+    "model", "block", "connector", "function", "package", "record", "type",
+    "class", "operator", "equation", "algorithm", "initial", "annotation",
+    "end", "extends", "within", "import", "public", "protected",
+];
+const CONTROL_KEYWORDS: &[&str] = &[
+    "if", "then", "else", "elseif", "for", "in", "loop",
+    "while", "when", "elsewhen", "break", "return",
+];
+const OPERATOR_KEYWORDS: &[&str] = &[
+    "and", "or", "not", "der", "connect", "time", "true", "false",
+];
+const BUILTIN_TYPES: &[&str] = &[
+    "Real", "Integer", "Boolean", "String", "enum",
+];
+
+fn keyword_color(word: &str) -> Option<egui::Color32> {
+    if MODIFIER_KEYWORDS.contains(&word) {
+        // Amber — declaration modifiers (parameter, input, output, …).
+        Some(egui::Color32::from_rgb(240, 180, 80))
+    } else if STRUCTURAL_KEYWORDS.contains(&word) {
+        // Coral — class / section structure (model, equation, end, …).
+        Some(egui::Color32::from_rgb(255, 120, 120))
+    } else if CONTROL_KEYWORDS.contains(&word) {
+        // Violet — control flow (if/then/else, for, when, …).
+        Some(egui::Color32::from_rgb(200, 150, 230))
+    } else if OPERATOR_KEYWORDS.contains(&word) {
+        // Teal — builtin operators / named ops (and, or, not, der, …).
+        Some(egui::Color32::from_rgb(120, 200, 200))
+    } else if BUILTIN_TYPES.contains(&word) {
+        // Cyan — primitive types (Real, Integer, Boolean, String).
+        Some(egui::Color32::from_rgb(120, 200, 255))
+    } else {
+        None
+    }
+}
+
 pub fn modelica_layouter(style: &egui::Style, src: &str) -> egui::text::LayoutJob {
     let mut job = egui::text::LayoutJob::default();
     let font_id = egui::TextStyle::Monospace.resolve(style);
 
-    // Expanded Modelica keywords
-    let keywords = [
-        "model", "end", "parameter", "Real", "Integer", "Boolean", "String",
-        "equation", "algorithm", "if", "then", "else", "elseif", "for", "loop",
-        "connect", "connector", "input", "output", "partial", "extends",
-        "package", "type", "within", "final", "inner", "outer", "der",
-        "function", "class", "record", "block", "constant", "discrete",
-        "while", "when", "initial", "protected", "public", "import", "flow", "stream",
-    ];
+    let comment_color = egui::Color32::from_rgb(110, 150, 110);
+    let string_color = egui::Color32::from_rgb(200, 220, 140);
+    let number_color = egui::Color32::from_rgb(150, 200, 255);
+    let op_color = egui::Color32::from_rgb(230, 200, 120);
+    let upper_ident_color = egui::Color32::from_rgb(150, 200, 255);
+    let ident_color = egui::Color32::from_rgb(230, 230, 230);
+    let default_color = egui::Color32::from_rgb(180, 180, 180);
+
+    let mut push = |job: &mut egui::text::LayoutJob, text: &str, color: egui::Color32| {
+        job.append(text, 0.0, egui::TextFormat {
+            font_id: font_id.clone(),
+            color,
+            ..Default::default()
+        });
+    };
 
     let mut current_idx = 0;
     while current_idx < src.len() {
         let remaining = &src[current_idx..];
-        
-        // Single line comments
+
+        // Single-line comment.
         if remaining.starts_with("//") {
             let line_end = remaining.find('\n').unwrap_or(remaining.len());
-            job.append(&remaining[..line_end], 0.0, egui::TextFormat {
-                font_id: font_id.clone(),
-                color: egui::Color32::from_rgb(100, 150, 100),
-                ..Default::default()
-            });
+            push(&mut job, &remaining[..line_end], comment_color);
             current_idx += line_end;
             continue;
         }
 
-        // Multi-line comment (basic handling for single line segments in virtualized view)
+        // Multi-line comment (spans may extend beyond the current
+        // chunk; fall back to end-of-buffer if no closing `*/`).
         if remaining.starts_with("/*") {
             let end_idx = remaining.find("*/").map(|i| i + 2).unwrap_or(remaining.len());
-            job.append(&remaining[..end_idx], 0.0, egui::TextFormat {
-                font_id: font_id.clone(),
-                color: egui::Color32::from_rgb(100, 150, 100),
-                ..Default::default()
-            });
+            push(&mut job, &remaining[..end_idx], comment_color);
             current_idx += end_idx;
             continue;
         }
 
-        let mut chars = remaining.chars();
-        let first_char = match chars.next() {
+        // Modelica description strings + general string literals. We
+        // accept a simple `"…"` (no escape tracking yet); this is good
+        // enough for the `"description"` idiom that follows most
+        // declarations. Strings that reach end-of-buffer are coloured
+        // anyway so an unterminated literal in mid-edit looks sane.
+        if remaining.starts_with('"') {
+            let after_quote = &remaining[1..];
+            let close_rel = after_quote.find('"').map(|i| i + 2).unwrap_or(remaining.len());
+            push(&mut job, &remaining[..close_rel], string_color);
+            current_idx += close_rel;
+            continue;
+        }
+
+        let first_char = match remaining.chars().next() {
             Some(c) => c,
             None => break,
         };
-        
-        if first_char.is_alphabetic() || first_char == '_' {
-            let word_end = remaining.find(|c: char| !c.is_alphanumeric() && c != '_').unwrap_or(remaining.len());
-            let word = &remaining[..word_end];
-            
-            let color = if keywords.contains(&word) {
-                egui::Color32::from_rgb(255, 120, 120) // Keywords
-            } else if word.chars().next().unwrap().is_uppercase() {
-                egui::Color32::from_rgb(120, 180, 255) // Types/Classes
-            } else {
-                egui::Color32::from_rgb(230, 230, 230) // Names
-            };
 
-            job.append(word, 0.0, egui::TextFormat {
-                font_id: font_id.clone(),
-                color,
-                ..Default::default()
+        if first_char.is_alphabetic() || first_char == '_' {
+            let word_end = remaining
+                .find(|c: char| !c.is_alphanumeric() && c != '_')
+                .unwrap_or(remaining.len());
+            let word = &remaining[..word_end];
+
+            let color = keyword_color(word).unwrap_or_else(|| {
+                if word.chars().next().map_or(false, |c| c.is_uppercase()) {
+                    upper_ident_color
+                } else {
+                    ident_color
+                }
             });
+            push(&mut job, word, color);
             current_idx += word_end;
         } else if first_char.is_numeric() {
-            let num_end = remaining.find(|c: char| !c.is_numeric() && c != '.' && c != 'e' && c != 'E').unwrap_or(remaining.len());
-            job.append(&remaining[..num_end], 0.0, egui::TextFormat {
-                font_id: font_id.clone(),
-                color: egui::Color32::from_rgb(150, 200, 255), // Numbers
-                ..Default::default()
-            });
+            let num_end = remaining
+                .find(|c: char| !c.is_numeric() && c != '.' && c != 'e' && c != 'E')
+                .unwrap_or(remaining.len());
+            push(&mut job, &remaining[..num_end], number_color);
             current_idx += num_end;
         } else {
-            let color = if "+-*/=^<>(){}[],;".contains(first_char) {
-                egui::Color32::from_rgb(255, 200, 100) // Operators
+            let color = if "+-*/=^<>(){}[],;:".contains(first_char) {
+                op_color
             } else {
-                egui::Color32::from_rgb(180, 180, 180) // Whitespace/Other
+                default_color
             };
-            job.append(&remaining[..first_char.len_utf8()], 0.0, egui::TextFormat {
-                font_id: font_id.clone(),
-                color,
-                ..Default::default()
-            });
+            push(&mut job, &remaining[..first_char.len_utf8()], color);
             current_idx += first_char.len_utf8();
         }
     }

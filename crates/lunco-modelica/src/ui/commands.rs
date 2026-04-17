@@ -603,6 +603,7 @@ fn on_compile_model(
                     parameters: params,
                     inputs: runtime_inputs.into_iter().map(|n| (n, 0.0)).collect(),
                     variables: HashMap::new(),
+                    descriptions: HashMap::new(),
                     document: doc,
                     is_stepping: true,
                 },
