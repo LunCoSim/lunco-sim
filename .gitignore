@@ -20,3 +20,5 @@ external/
 *.swo
 .claude/settings.local.json
 node_modules/
+
+.cargo/
