@@ -83,12 +83,16 @@ impl Panel for LibraryBrowserPanel {
                 ui.separator();
 
                 use crate::models::BUNDLED_MODELS;
-                for (name, source) in BUNDLED_MODELS {
-                    let is_active = state.loaded_file_path.as_ref().map_or(false, |p| p.file_name().map_or(false, |n| n == *name));
-                    let resp = ui.selectable_label(is_active, format!("📄 {name}"));
+                for model in BUNDLED_MODELS {
+                    let is_active = state
+                        .loaded_file_path
+                        .as_ref()
+                        .map_or(false, |p| p.file_name().map_or(false, |n| n == model.filename));
+                    let resp = ui.selectable_label(is_active, format!("📄 {}", model.filename));
                     if resp.clicked() {
-                        state.editor_buffer = source.to_string();
-                        state.loaded_file_path = Some(PathBuf::from("assets/models/").join(name));
+                        state.editor_buffer = model.source.to_string();
+                        state.loaded_file_path =
+                            Some(PathBuf::from("assets/models/").join(model.filename));
                     }
                 }
             }

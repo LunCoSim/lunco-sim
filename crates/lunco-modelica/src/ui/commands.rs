@@ -528,18 +528,13 @@ fn on_compile_model(
 ) {
     let doc = trigger.event().doc;
 
-    // Ownership check.
-    let (source, is_read_only) = match registry.host(doc) {
-        Some(h) => (
-            h.document().source().to_string(),
-            h.document().is_read_only(),
-        ),
+    // Ownership check. Read-only docs are fair game to compile —
+    // the Save button is what's gated on writability, not compile.
+    // Users *simulate* examples; they just can't overwrite them.
+    let source = match registry.host(doc) {
+        Some(h) => h.document().source().to_string(),
         None => return,
     };
-    if is_read_only {
-        warn!("[Compile] Document {} is read-only.", doc);
-        return;
-    }
     let Some(model_name) = extract_model_name(&source) else {
         workbench.compilation_error =
             Some("Could not find a valid model declaration.".to_string());

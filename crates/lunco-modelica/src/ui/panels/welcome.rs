@@ -1,21 +1,26 @@
-//! Welcome center placeholder.
+//! Welcome tab — the app's landing page.
 //!
-//! The Modelica workspace's center slot is populated at runtime by
-//! multi-instance model tabs opened from the Package Browser. Until
-//! the first tab opens — and after the user closes every model tab —
-//! the dock would otherwise be empty, and `WorkbenchLayout::rebuild_dock`
-//! bails when center is empty (skipping the side/right/bottom splits
-//! too). This singleton panel sits in center so the cross layout
-//! always has something to anchor.
+//! Shown in the center dock at startup and any time the user has no
+//! model tabs open. Two roles:
 //!
-//! Non-closable so the user can't accidentally remove the anchor.
-//! Shows a short hint about opening a model.
+//! 1. **Getting started** — the discoverable paths into the app
+//!    (New Model, Open Folder).
+//! 2. **Learn by example** — the bundled examples used to live in
+//!    the sidebar, which confused "my work" with "sample material".
+//!    They live here instead, with one-line taglines explaining
+//!    what each teaches.
+//!
+//! The panel is non-closable so the dock layout always has a center
+//! anchor — even with no tabs open, the user has somewhere to land.
 
 use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_workbench::{Panel, PanelId, PanelSlot};
 
-/// Panel id under which the welcome placeholder is registered.
+use crate::models::BUNDLED_MODELS;
+use crate::ui::state::ModelLibrary;
+
+/// Panel id.
 pub const WELCOME_PANEL_ID: PanelId = PanelId("modelica_welcome");
 
 /// The welcome placeholder panel. Zero-sized.
@@ -38,31 +43,192 @@ impl Panel for WelcomePanel {
         false
     }
 
-    fn render(&mut self, ui: &mut egui::Ui, _world: &mut World) {
-        ui.vertical_centered(|ui| {
-            ui.add_space(60.0);
-            ui.heading("LunCoSim Modelica Workbench");
-            ui.add_space(20.0);
-            ui.label(
-                egui::RichText::new(
-                    "Click a model in the 📚 Package Browser to open it as a tab.",
-                )
-                .size(13.0)
-                .color(egui::Color32::GRAY),
-            );
-            ui.label(
-                egui::RichText::new("Or ➕ create a new model to start from scratch.")
+    fn render(&mut self, ui: &mut egui::Ui, world: &mut World) {
+        // Scroll area so narrow/short windows still let users reach
+        // the examples list.
+        let mut create_new = false;
+        let mut open_folder = false;
+        let mut open_example: Option<&'static str> = None;
+
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            ui.add_space(40.0);
+
+            // ── Headline ───────────────────────────────────
+            ui.vertical_centered(|ui| {
+                ui.heading(
+                    egui::RichText::new("LunCoSim Modelica Workbench")
+                        .size(24.0),
+                );
+                ui.label(
+                    egui::RichText::new(
+                        "Build physics models, simulate them, see the numbers.",
+                    )
                     .size(13.0)
                     .color(egui::Color32::GRAY),
-            );
-            ui.add_space(20.0);
-            ui.label(
-                egui::RichText::new(
-                    "Shortcuts: Ctrl+S Save · Ctrl+Z Undo · Ctrl+Shift+Z Redo · F5 Compile",
-                )
-                .size(10.0)
-                .color(egui::Color32::DARK_GRAY),
-            );
+                );
+            });
+
+            ui.add_space(32.0);
+
+            // ── Getting Started ────────────────────────────
+            // Two big buttons: New Model, Open Folder.
+            ui.vertical_centered(|ui| {
+                ui.set_max_width(520.0);
+                ui.heading(egui::RichText::new("Get started").size(16.0));
+                ui.add_space(8.0);
+
+                ui.horizontal(|ui| {
+                    let new_btn = ui.add_sized(
+                        [240.0, 48.0],
+                        egui::Button::new(
+                            egui::RichText::new("➕  New Model")
+                                .size(14.0)
+                                .strong(),
+                        ),
+                    );
+                    if new_btn
+                        .on_hover_text("Create a new untitled model (Ctrl+N)")
+                        .clicked()
+                    {
+                        create_new = true;
+                    }
+
+                    let open_btn = ui.add_sized(
+                        [240.0, 48.0],
+                        egui::Button::new(
+                            egui::RichText::new("📁  Open Folder")
+                                .size(14.0)
+                                .strong(),
+                        ),
+                    );
+                    if open_btn
+                        .on_hover_text("Pick a folder of .mo files to browse")
+                        .clicked()
+                    {
+                        open_folder = true;
+                    }
+                });
+            });
+
+            ui.add_space(40.0);
+
+            // ── Learn by example ───────────────────────────
+            // Each bundled model renders as a selectable row with
+            // name + tagline. Click opens it as a read-only tab.
+            ui.vertical_centered(|ui| {
+                ui.set_max_width(560.0);
+                ui.heading(egui::RichText::new("Learn by example").size(16.0));
+                ui.add_space(4.0);
+                ui.label(
+                    egui::RichText::new(
+                        "Open any example in a read-only tab — simulate, \
+                         read the source, copy what you need.",
+                    )
+                    .size(10.5)
+                    .color(egui::Color32::GRAY),
+                );
+                ui.add_space(10.0);
+
+                for model in BUNDLED_MODELS {
+                    let display = model
+                        .filename
+                        .strip_suffix(".mo")
+                        .unwrap_or(model.filename);
+
+                    // One row per example: left-aligned title + grey
+                    // tagline underneath, full width, selectable.
+                    let resp = ui
+                        .add_sized(
+                            [560.0, 48.0],
+                            egui::Button::new("")
+                                .fill(egui::Color32::from_rgb(35, 35, 42))
+                                .stroke(egui::Stroke::new(
+                                    1.0,
+                                    egui::Color32::from_rgb(70, 70, 85),
+                                )),
+                        )
+                        .on_hover_text(format!("Open {} as a read-only tab", display));
+                    let rect = resp.rect;
+
+                    // Paint the label + tagline manually inside the
+                    // button rect so alignment/sizing is consistent
+                    // regardless of tagline length.
+                    let painter = ui.painter_at(rect);
+                    let title_pos = rect.min + egui::vec2(16.0, 8.0);
+                    let tagline_pos = rect.min + egui::vec2(16.0, 28.0);
+                    painter.text(
+                        title_pos,
+                        egui::Align2::LEFT_TOP,
+                        format!("📄  {}", display),
+                        egui::FontId::proportional(13.5),
+                        egui::Color32::from_rgb(220, 220, 160),
+                    );
+                    painter.text(
+                        tagline_pos,
+                        egui::Align2::LEFT_TOP,
+                        model.tagline,
+                        egui::FontId::proportional(10.5),
+                        egui::Color32::GRAY,
+                    );
+
+                    if resp.clicked() {
+                        open_example = Some(model.filename);
+                    }
+                    ui.add_space(4.0);
+                }
+            });
+
+            ui.add_space(40.0);
+
+            // ── Keyboard shortcuts footer ──────────────────
+            ui.vertical_centered(|ui| {
+                ui.label(
+                    egui::RichText::new(
+                        "Ctrl+N  new    ·    Ctrl+S  save    ·    \
+                         Ctrl+Z / Ctrl+Shift+Z  undo/redo    ·    F5  compile",
+                    )
+                    .size(10.0)
+                    .color(egui::Color32::DARK_GRAY),
+                );
+            });
+
+            ui.add_space(40.0);
         });
+
+        // Side effects after the render closure.
+        if create_new {
+            world
+                .commands()
+                .trigger(crate::ui::commands::CreateNewScratchModel);
+        }
+        if open_folder {
+            // Same synchronous picker the sidebar uses. Scan is async
+            // so a huge folder doesn't freeze us.
+            if let Some(folder) = rfd::FileDialog::new()
+                .set_title("Open workspace folder")
+                .pick_folder()
+            {
+                use bevy::tasks::AsyncComputeTaskPool;
+                let pool = AsyncComputeTaskPool::get();
+                let task = pool.spawn(async move {
+                    crate::ui::panels::package_browser::scan_twin_folder(folder)
+                });
+                let mut cache = world.resource_mut::<
+                    crate::ui::panels::package_browser::PackageTreeCache,
+                >();
+                cache.twin = None;
+                cache.twin_scan_task = Some(task);
+            }
+        }
+        if let Some(filename) = open_example {
+            let id = format!("bundled://{}", filename);
+            let name = filename.strip_suffix(".mo").unwrap_or(filename).to_string();
+            crate::ui::panels::package_browser::open_model(
+                world,
+                id,
+                name,
+                ModelLibrary::Bundled,
+            );
+        }
     }
 }

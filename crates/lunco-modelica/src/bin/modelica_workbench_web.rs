@@ -44,8 +44,12 @@ pub fn run() {
 
     // Load the first bundled model (Battery.mo) as the default.
     // Models are embedded at compile time via include_str! — no filesystem access.
-    let default_model = BUNDLED_MODELS.first().unwrap_or(&("", ""));
-    let (default_filename, default_source) = default_model;
+    // Bevy requires some default; RocketEngine is first in the list.
+    let default_model = BUNDLED_MODELS
+        .first()
+        .expect("at least one bundled model");
+    let default_filename = default_model.filename;
+    let default_source = default_model.source;
 
     App::new()
         .add_plugins(DefaultPlugins.set(WindowPlugin {

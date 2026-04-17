@@ -462,8 +462,12 @@ fn render_unified_toolbar(
         }
 
         ui.separator();
-        let compile_enabled =
-            !is_read_only && !matches!(compile_state, CompileState::Compiling);
+        // Compile is independent of writability — simulating a
+        // read-only Example is a valid (and common) workflow. Save
+        // stays gated on writable; Compile only waits for an
+        // in-flight compile to settle.
+        let _ = is_read_only;
+        let compile_enabled = !matches!(compile_state, CompileState::Compiling);
         compile_clicked = ui
             .add_enabled(compile_enabled, egui::Button::new("🚀 Compile"))
             .on_hover_text("Compile the current model and run it (F5)")

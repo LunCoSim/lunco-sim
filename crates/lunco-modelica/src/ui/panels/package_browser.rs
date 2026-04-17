@@ -297,14 +297,19 @@ fn scan_msl_dir(dir: &std::path::Path, package_path: String) -> Vec<PackageNode>
 }
 
 fn build_bundled_tree() -> Vec<PackageNode> {
-    // Use the bundled:// URL scheme as the id so open_model can find it
-    BUNDLED_MODELS.iter().map(|(filename, _source)| {
-        PackageNode::Model {
-            id: format!("bundled://{}", filename),
-            name: filename.strip_suffix(".mo").unwrap_or(filename).to_string(),
+    // Use the bundled:// URL scheme as the id so open_model can find it.
+    BUNDLED_MODELS
+        .iter()
+        .map(|m| PackageNode::Model {
+            id: format!("bundled://{}", m.filename),
+            name: m
+                .filename
+                .strip_suffix(".mo")
+                .unwrap_or(m.filename)
+                .to_string(),
             library: ModelLibrary::Bundled,
-        }
-    }).collect()
+        })
+        .collect()
 }
 
 fn find_and_update_node(nodes: &mut [PackageNode], parent_id: &str, children: Vec<PackageNode>) -> bool {
@@ -457,9 +462,24 @@ impl Panel for PackageBrowserPanel {
             egui::ScrollArea::vertical().show(ui, |ui| {
                 let cache = &mut *tree_cache;
 
-                // ── Section 1: Your Models ──
-                // Scratch / Untitled models created this session.
-                section_header(ui, "Your Models", |ui| {
+                // ── WORKSPACE ──
+                // One unified section. Header shows the open Twin
+                // folder's name (or "No folder") and exposes the
+                // open/close action. Inside, an always-visible
+                // (Untitled) virtual group gathers scratch models
+                // that aren't yet bound to a path — matches VS Code's
+                // handling of untitled buffers in Explorer.
+                let twin_label = if let Some(twin) = cache.twin.as_ref() {
+                    twin.root
+                        .file_name()
+                        .map(|s| s.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| twin.root.display().to_string())
+                } else {
+                    "No folder".to_string()
+                };
+                section_header(ui, &twin_label, |ui| {
+                    // ➕ New is always here (VS Code parity — you can
+                    // always make a scratch model).
                     if ui
                         .small_button("➕")
                         .on_hover_text("New model (Ctrl+N)")
@@ -467,32 +487,6 @@ impl Panel for PackageBrowserPanel {
                     {
                         create_new = true;
                     }
-                });
-                if cache.in_memory_models.is_empty() {
-                    section_empty_state(ui, "No models. Press ➕ or Ctrl+N.");
-                } else if let Some(id) =
-                    render_in_memory_models(ui, &cache.in_memory_models, active_path)
-                {
-                    reopen_in_memory = Some(id);
-                }
-
-                // ── Section 2: Examples ──
-                // Read-only models shipped with the app.
-                section_header(ui, "Examples", |_| {});
-                if cache.roots.len() > 1 {
-                    if let Some(req) = render_node(
-                        &mut cache.roots[1],
-                        ui,
-                        active_path,
-                        0,
-                        &mut cache.tasks,
-                    ) {
-                        to_open = Some(req);
-                    }
-                }
-
-                // ── Section 3: Twin (folder on disk) ──
-                section_header(ui, "Workspace", |ui| {
                     if cache.twin_scan_task.is_some() {
                         ui.spinner();
                     } else if cache.twin.is_some() {
@@ -504,14 +498,38 @@ impl Panel for PackageBrowserPanel {
                             close_twin = true;
                         }
                     } else if ui
-                        .small_button("📁 Open…")
-                        .on_hover_text("Pick a folder to browse")
+                        .small_button("📁")
+                        .on_hover_text("Open a folder")
                         .clicked()
                     {
                         open_twin_picker = true;
                     }
                 });
 
+                // Untitled virtual folder — only rendered when there's
+                // at least one scratch model. Always top of the tree
+                // so recently-created items stay visible.
+                if !cache.in_memory_models.is_empty() {
+                    egui::CollapsingHeader::new(
+                        egui::RichText::new("(Untitled)")
+                            .size(11.0)
+                            .italics()
+                            .color(egui::Color32::from_rgb(220, 220, 160)),
+                    )
+                    .id_salt("workspace_untitled")
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        if let Some(id) = render_in_memory_models(
+                            ui,
+                            &cache.in_memory_models,
+                            active_path,
+                        ) {
+                            reopen_in_memory = Some(id);
+                        }
+                    });
+                }
+
+                // Twin folder (if any).
                 if cache.twin_scan_task.is_some() {
                     ui.horizontal(|ui| {
                         ui.add_space(12.0);
@@ -535,15 +553,19 @@ impl Panel for PackageBrowserPanel {
                             }
                         }
                     }
-                    // Footer hint with the full path (small, grey).
                     ui.add_space(4.0);
                     ui.label(
                         egui::RichText::new(twin.root.display().to_string())
                             .size(9.0)
                             .color(egui::Color32::DARK_GRAY),
                     );
-                } else {
-                    section_empty_state(ui, "No folder open. Click 📁 Open…");
+                } else if cache.in_memory_models.is_empty() {
+                    // No Twin AND no scratch — show the real empty
+                    // state so the sidebar isn't a blank rectangle.
+                    section_empty_state(
+                        ui,
+                        "No work open. Open a folder, or ➕ for a new model.",
+                    );
                 }
             });
         }
@@ -938,7 +960,7 @@ fn render_in_memory_models(
     clicked
 }
 
-fn open_model(world: &mut World, id: String, name: String, library: ModelLibrary) {
+pub(crate) fn open_model(world: &mut World, id: String, name: String, library: ModelLibrary) {
     // Before navigating away, flush any in-progress work on the current
     // model into its Document. Matches the text editor's focus-loss
     // commit so the user's changes survive a round-trip.
