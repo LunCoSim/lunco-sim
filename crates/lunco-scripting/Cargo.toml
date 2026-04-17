@@ -7,6 +7,7 @@ edition = "2021"
 bevy = { workspace = true }
 lunco-core = { path = "../lunco-core" }
 lunco-doc = { path = "../lunco-doc" }
+lunco-api = { path = "../lunco-api" }
 pyo3 = { version = "0.23", optional = true }
 mlua = { version = "0.10", features = ["lua54", "vendored"] }
 libloading = { version = "0.8", optional = true }

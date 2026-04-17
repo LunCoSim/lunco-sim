@@ -280,8 +280,8 @@ fn spawn_fallback_avatar(
     commands.spawn((
         Camera3d::default(),
         FreeFlightCamera {
-            yaw: std::f32::consts::PI * 0.8,
-            pitch: -0.3,
+            yaw: -2.245559,
+            pitch: -0.303039,
             damping: None,
         },
         AdaptiveNearPlane,
