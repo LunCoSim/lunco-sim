@@ -67,14 +67,44 @@ mod panels;
 
 use crate::ModelicaModel;
 
-/// Drop `ModelicaDocumentRegistry` entries whose entity was despawned.
+/// Fan queued document-change notifications out as observer triggers.
+///
+/// The registry accumulates ids on every `checkpoint_source` / `allocate_*`
+/// / explicit `mark_changed` call. This system drains the queue once per
+/// frame and emits [`DocumentChanged`] so any observer (panel re-render,
+/// diagram re-parse, plot variable-list refresh, …) can react without
+/// polling document generation counters.
+fn drain_document_changes(
+    mut registry: ResMut<ModelicaDocumentRegistry>,
+    mut commands: Commands,
+) {
+    for doc in registry.drain_pending_changes() {
+        commands.trigger(DocumentChanged { doc });
+    }
+}
+
+/// Drop the document linked to a despawned `ModelicaModel` entity, and
+/// any compile-state bookkeeping attached to that document.
+///
+/// Behavior preserved from the entity-keyed era: when an entity is
+/// despawned, its backing [`ModelicaDocument`](crate::document::ModelicaDocument)
+/// is also removed. The long-term design lets documents outlive entities
+/// (edit-without-running, cosim re-spawn), so this will become opt-in
+/// once the tab/view layer can explicitly unload a document.
 fn cleanup_removed_documents(
     mut removed: RemovedComponents<ModelicaModel>,
     registry: Option<ResMut<ModelicaDocumentRegistry>>,
+    compile_states: Option<ResMut<CompileStates>>,
 ) {
     let Some(mut registry) = registry else { return };
+    let mut compile_states = compile_states;
     for entity in removed.read() {
-        registry.remove(entity);
+        if let Some(doc) = registry.unlink_entity(entity) {
+            registry.remove_document(doc);
+            if let Some(states) = compile_states.as_mut() {
+                states.remove(doc);
+            }
+        }
     }
 }
 
@@ -111,12 +141,14 @@ impl Plugin for ModelicaUiPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<WorkbenchState>()
             .init_resource::<ModelicaDocumentRegistry>()
+            .init_resource::<CompileStates>()
             .init_resource::<panels::diagram::DiagramState>()
             .init_resource::<panels::diagram::DiagramTheme>()
             .init_resource::<panels::code_editor::EditorBufferState>()
             .insert_resource(panels::package_browser::PackageTreeCache::new())
             .add_systems(Update, panels::package_browser::handle_package_loading_tasks)
             .add_systems(Update, cleanup_removed_documents)
+            .add_systems(Update, drain_document_changes)
             .register_panel(panels::package_browser::PackageBrowserPanel)
             .register_panel(panels::code_editor::CodeEditorPanel)
             .register_panel(panels::telemetry::TelemetryPanel)

@@ -5,7 +5,7 @@ use bevy_egui::egui;
 use lunco_workbench::{Panel, PanelId, PanelSlot};
 use std::collections::HashMap;
 
-use crate::ui::{ModelicaDocumentRegistry, WorkbenchState};
+use crate::ui::{CompileState, CompileStates, ModelicaDocumentRegistry, WorkbenchState};
 use crate::{ModelicaModel, ModelicaChannels, ModelicaCommand};
 
 /// Telemetry panel — model parameters, inputs, and variable plotting toggles.
@@ -125,15 +125,17 @@ impl Panel for TelemetryPanel {
                             let mut session_id = 0;
                             let mut new_params = HashMap::new();
 
-                            // Read canonical source from the Document registry.
-                            // The registry is populated on every Compile and
-                            // every UpdateParameters — if it's empty, the
-                            // entity hasn't been through either yet and there's
-                            // nothing coherent to substitute params into.
-                            let source = world
-                                .resource::<ModelicaDocumentRegistry>()
-                                .host(entity)
-                                .map(|h| h.document().source().to_string());
+                            // Resolve entity → DocumentId → source via the
+                            // registry. If either lookup misses, the entity
+                            // hasn't been through Compile/UpdateParameters yet
+                            // and there's nothing coherent to substitute into.
+                            let (doc_id, source) = {
+                                let registry = world.resource::<ModelicaDocumentRegistry>();
+                                let doc = registry.document_of(entity);
+                                let src = doc.and_then(|d| registry.host(d))
+                                    .map(|h| h.document().source().to_string());
+                                (doc, src)
+                            };
 
                             if let Ok(mut m) = world.query::<&mut ModelicaModel>().get_mut(world, entity) {
                                 if let Some(p) = m.parameters.get_mut(key) {
@@ -148,7 +150,7 @@ impl Panel for TelemetryPanel {
                             }
 
                             if trigger_update {
-                                if let Some(source) = source {
+                                if let (Some(doc), Some(source)) = (doc_id, source) {
                                     let new_source = crate::ast_extract::substitute_params_in_source(&source, &new_params);
                                     // Checkpoint the parameter-substituted
                                     // source into the Document BEFORE sending
@@ -157,7 +159,13 @@ impl Panel for TelemetryPanel {
                                     // worker result never arrives.
                                     world
                                         .resource_mut::<ModelicaDocumentRegistry>()
-                                        .checkpoint_source(entity, new_source.clone());
+                                        .checkpoint_source(doc, new_source.clone());
+                                    // UpdateParameters recompiles on the
+                                    // worker side, so mark the document as
+                                    // compiling until the result lands.
+                                    world
+                                        .resource_mut::<CompileStates>()
+                                        .set(doc, CompileState::Compiling);
                                     if let Some(channels) = world.get_resource::<ModelicaChannels>() {
                                         let _ = channels.tx.send(ModelicaCommand::UpdateParameters {
                                             entity,

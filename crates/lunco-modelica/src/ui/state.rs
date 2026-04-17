@@ -138,76 +138,273 @@ pub struct WorkbenchState {
 }
 
 // ---------------------------------------------------------------------------
-// ModelicaDocumentRegistry — per-entity DocumentHost tracking
+// DocumentChanged — per-document change notification
 // ---------------------------------------------------------------------------
 
-/// Per-entity registry of [`DocumentHost<ModelicaDocument>`] instances.
+/// Fired whenever a [`ModelicaDocument`] in the registry has its source
+/// mutated (allocate, checkpoint_source that actually changes the text,
+/// undo/redo applied through `host_mut()`).
 ///
-/// **The single source of truth for per-entity Modelica source.** Every
-/// spawn path (CodeEditor Compile, Diagram auto-compile, `balloon_setup`,
-/// the workbench binaries) calls [`checkpoint_source`](Self::checkpoint_source)
-/// before sending a `Compile` or `UpdateParameters` command to the worker.
+/// Panels subscribe via `On<DocumentChanged>` observers to re-render
+/// without polling. The registry does not fire directly; it queues doc
+/// ids in `pending_changes`, and `drain_document_changes` (in
+/// `ui::mod`) drains the queue into observer triggers each frame. This
+/// decouples mutation call sites from the Bevy trigger machinery.
+#[derive(Event, Clone, Debug)]
+pub struct DocumentChanged {
+    /// The document whose generation just advanced.
+    pub doc: DocumentId,
+}
+
+// ---------------------------------------------------------------------------
+// CompileState — per-document compile lifecycle
+// ---------------------------------------------------------------------------
+
+/// Current compile-lifecycle state for a single [`ModelicaDocument`].
 ///
-/// Consumers of the committed source — Telemetry (for parameter
-/// substitution), Diagram (eventually, for re-rendering on generation
-/// change), and future panels — read through
-/// [`host`](Self::host)`(entity).document().source()`.
+/// Separate from [`ModelicaModel::is_stepping`] (a per-entity simulation
+/// tick guard) and from error *content* (which lives in
+/// [`WorkbenchState::compilation_error`] today). This enum is the
+/// answer to "is a compile in flight for this document?" — UI uses it
+/// to disable the Compile button while the worker is busy and to show
+/// an at-a-glance status chip.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum CompileState {
+    /// Nothing has been compiled yet (or the last result has been
+    /// invalidated by an edit — we don't track that today, but the
+    /// default "fresh" state maps here).
+    #[default]
+    Idle,
+    /// A `ModelicaCommand::Compile` has been sent to the worker and we
+    /// are waiting for the matching result.
+    Compiling,
+    /// The last compile succeeded. The worker's cached DAE is current.
+    Ready,
+    /// The last compile failed. See `WorkbenchState::compilation_error`
+    /// for details (will migrate to per-document error storage later).
+    Error,
+}
+
+/// Per-document compile-state map.
 ///
-/// Still separate from this registry:
+/// Populated when a compile is dispatched and updated when the worker
+/// responds. UI reads it through
+/// [`state_of`](Self::state_of). Missing entries are treated as
+/// [`CompileState::Idle`].
+#[derive(Resource, Default)]
+pub struct CompileStates {
+    by_doc: HashMap<DocumentId, CompileState>,
+}
+
+impl CompileStates {
+    /// Current state for `doc`. Missing → [`CompileState::Idle`].
+    pub fn state_of(&self, doc: DocumentId) -> CompileState {
+        self.by_doc.get(&doc).copied().unwrap_or_default()
+    }
+
+    /// True when `doc` has a compile currently in flight.
+    pub fn is_compiling(&self, doc: DocumentId) -> bool {
+        matches!(self.state_of(doc), CompileState::Compiling)
+    }
+
+    /// Overwrite the state for `doc`.
+    pub fn set(&mut self, doc: DocumentId, state: CompileState) {
+        self.by_doc.insert(doc, state);
+    }
+
+    /// Drop any recorded state for `doc` (e.g. when a document is removed).
+    pub fn remove(&mut self, doc: DocumentId) {
+        self.by_doc.remove(&doc);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ModelicaDocumentRegistry — DocumentId-keyed DocumentHost storage
+// ---------------------------------------------------------------------------
+
+/// Registry of [`DocumentHost<ModelicaDocument>`] instances, keyed by
+/// [`DocumentId`].
+///
+/// **The single source of truth for Modelica source text.** Every spawn
+/// path (CodeEditor Compile, Diagram auto-compile, `balloon_setup`, the
+/// workbench binaries) allocates a document here and stores its id in
+/// [`crate::ModelicaModel::document`]. The entity becomes a runtime
+/// *reference* to the document, not its owner — a document can exist
+/// before any entity is spawned and can outlive an entity (e.g. a user
+/// stops a sim but keeps editing).
+///
+/// A secondary `entity → DocumentId` index is maintained so despawn
+/// cleanup (`ui::cleanup_removed_documents`) and "which doc does this
+/// entity view?" lookups stay cheap. The index is an optimization; the
+/// authoritative storage is `hosts`.
+///
+/// Consumers read source/parameters through
+/// [`host`](Self::host)`(doc).document().source()` — resolving
+/// `entity → DocumentId` via [`document_of`](Self::document_of) (or
+/// reading `ModelicaModel.document` directly) first.
+///
+/// Still outside this registry:
 ///
 /// - `EditorBufferState.text` — the egui TextEdit working buffer
-///   (keystroke-responsive; committed into the Document on Compile).
+///   (keystroke-responsive; committed into the Document on focus-loss
+///   or Compile).
 /// - `WorkbenchState.open_model.source` — the library browser's
-///   "current file" slot, used before any compile has produced an
-///   entity. Will fold into the registry in a future migration.
+///   "current file" slot, used before any compile/spawn. Will fold into
+///   the registry once file-open creates a Document directly.
 #[derive(Resource, Default)]
 pub struct ModelicaDocumentRegistry {
-    hosts: HashMap<Entity, DocumentHost<ModelicaDocument>>,
+    hosts: HashMap<DocumentId, DocumentHost<ModelicaDocument>>,
+    by_entity: HashMap<Entity, DocumentId>,
     next_doc_id: u64,
+    /// Doc ids whose source was just mutated via registry methods.
+    /// Drained by [`drain_pending_changes`](Self::drain_pending_changes)
+    /// each frame and fanned out as [`DocumentChanged`] observer triggers.
+    ///
+    /// Direct mutations through [`host_mut`](Self::host_mut) (e.g. undo /
+    /// redo) must call [`mark_changed`](Self::mark_changed) explicitly —
+    /// the registry cannot intercept arbitrary uses of a `&mut DocumentHost`.
+    pending_changes: Vec<DocumentId>,
 }
 
 impl ModelicaDocumentRegistry {
-    /// Record a compile: create-or-update the document for `entity` to hold
-    /// `source`. Returns `true` if the document changed (was new, or had a
-    /// different prior source). A no-op compile (same source as last time)
-    /// returns `false` and does not bump generation.
-    pub fn checkpoint_source(&mut self, entity: Entity, source: String) -> bool {
-        match self.hosts.get_mut(&entity) {
-            Some(host) => {
-                if host.document().source() == source {
-                    return false;
-                }
-                // Best-effort: ReplaceSource cannot fail today, but the trait
-                // signature is fallible so we swallow the Result rather than
-                // propagate it. Callers don't care about the details.
-                let _ = host.apply(ModelicaOp::ReplaceSource { new: source });
-                true
-            }
-            None => {
-                self.next_doc_id = self.next_doc_id.saturating_add(1);
-                let doc = ModelicaDocument::new(DocumentId::new(self.next_doc_id), source);
-                self.hosts.insert(entity, DocumentHost::new(doc));
-                true
-            }
+    /// Allocate a fresh in-memory [`DocumentId`] + [`DocumentHost`] holding
+    /// `source`. No canonical path, classified as
+    /// [`ModelLibrary::InMemory`]. Not linked to any entity.
+    pub fn allocate(&mut self, source: String) -> DocumentId {
+        self.allocate_with_origin(source, None, ModelLibrary::InMemory)
+    }
+
+    /// Allocate a fresh [`DocumentId`] + [`DocumentHost`], recording where
+    /// the source came from (`canonical_path`) and which library's rules
+    /// apply. Use this when opening from disk or bundled assets so
+    /// `SaveDocument` / read-only badges work.
+    pub fn allocate_with_origin(
+        &mut self,
+        source: String,
+        canonical_path: Option<PathBuf>,
+        library: ModelLibrary,
+    ) -> DocumentId {
+        self.next_doc_id = self.next_doc_id.saturating_add(1);
+        let id = DocumentId::new(self.next_doc_id);
+        let doc = ModelicaDocument::with_origin(id, source, canonical_path, library);
+        self.hosts.insert(id, DocumentHost::new(doc));
+        self.pending_changes.push(id);
+        id
+    }
+
+    /// Link `entity` to `doc`. Replaces any prior link for `entity`.
+    /// The document must already exist (call [`allocate`](Self::allocate)
+    /// first); linking to an unknown id is a no-op in release builds and
+    /// a debug assertion failure otherwise.
+    pub fn link(&mut self, entity: Entity, doc: DocumentId) {
+        debug_assert!(self.hosts.contains_key(&doc), "link to unknown DocumentId {doc}");
+        self.by_entity.insert(entity, doc);
+    }
+
+    /// Convenience: [`allocate`](Self::allocate) + [`link`](Self::link).
+    /// Returns the new [`DocumentId`] — the caller must also write it into
+    /// `ModelicaModel::document` so downstream systems can resolve it
+    /// without touching the registry.
+    pub fn open_for(&mut self, entity: Entity, source: String) -> DocumentId {
+        let id = self.allocate(source);
+        self.by_entity.insert(entity, id);
+        id
+    }
+
+    /// Convenience: [`allocate_with_origin`](Self::allocate_with_origin) + [`link`](Self::link).
+    pub fn open_for_with_origin(
+        &mut self,
+        entity: Entity,
+        source: String,
+        canonical_path: Option<PathBuf>,
+        library: ModelLibrary,
+    ) -> DocumentId {
+        let id = self.allocate_with_origin(source, canonical_path, library);
+        self.by_entity.insert(entity, id);
+        id
+    }
+
+    /// Look up a document by its canonical path. Returns `None` for
+    /// untitled docs or if no document was opened from that path.
+    /// Used by API / scripting to resolve `path` → `DocumentId`.
+    pub fn find_by_path(&self, path: &std::path::Path) -> Option<DocumentId> {
+        self.hosts.iter().find_map(|(id, host)| {
+            (host.document().canonical_path() == Some(path)).then_some(*id)
+        })
+    }
+
+    /// Entities currently linked to this document. Typically 0 (editing
+    /// without a running sim) or 1; >1 in cosim scenarios.
+    pub fn entities_linked_to(&self, doc: DocumentId) -> Vec<Entity> {
+        self.by_entity
+            .iter()
+            .filter_map(|(e, d)| (*d == doc).then_some(*e))
+            .collect()
+    }
+
+    /// Replace the source on an existing document. Returns `true` if the
+    /// document changed (different source), `false` on no-op (identical
+    /// source) or unknown id.
+    ///
+    /// Queues a [`DocumentChanged`] notification when the source actually
+    /// changes; [`drain_pending_changes`](Self::drain_pending_changes)
+    /// emits the observer trigger on the next system run.
+    pub fn checkpoint_source(&mut self, doc: DocumentId, source: String) -> bool {
+        let Some(host) = self.hosts.get_mut(&doc) else { return false };
+        if host.document().source() == source {
+            return false;
         }
+        // Best-effort: ReplaceSource cannot fail today, but the trait
+        // signature is fallible so we swallow the Result rather than
+        // propagate it. Callers don't care about the details.
+        let _ = host.apply(ModelicaOp::ReplaceSource { new: source });
+        self.pending_changes.push(doc);
+        true
     }
 
-    /// Immutable access to an entity's document host, if registered.
-    pub fn host(&self, entity: Entity) -> Option<&DocumentHost<ModelicaDocument>> {
-        self.hosts.get(&entity)
+    /// Explicitly mark a document as changed. Required after direct
+    /// mutations through [`host_mut`](Self::host_mut) (undo / redo),
+    /// since the registry cannot observe those through a bare `&mut`.
+    pub fn mark_changed(&mut self, doc: DocumentId) {
+        self.pending_changes.push(doc);
     }
 
-    /// Mutable access to an entity's document host, if registered.
-    pub fn host_mut(&mut self, entity: Entity) -> Option<&mut DocumentHost<ModelicaDocument>> {
-        self.hosts.get_mut(&entity)
+    /// Drain queued change notifications. The `drain_document_changes`
+    /// system calls this each frame and fans the ids out as
+    /// [`DocumentChanged`] triggers.
+    pub fn drain_pending_changes(&mut self) -> Vec<DocumentId> {
+        std::mem::take(&mut self.pending_changes)
     }
 
-    /// Drop the host for an entity (called when the entity is despawned).
-    pub fn remove(&mut self, entity: Entity) {
-        self.hosts.remove(&entity);
+    /// Immutable access to a document host by id.
+    pub fn host(&self, doc: DocumentId) -> Option<&DocumentHost<ModelicaDocument>> {
+        self.hosts.get(&doc)
     }
 
-    /// Number of registered entity documents.
+    /// Mutable access to a document host by id.
+    pub fn host_mut(&mut self, doc: DocumentId) -> Option<&mut DocumentHost<ModelicaDocument>> {
+        self.hosts.get_mut(&doc)
+    }
+
+    /// Which [`DocumentId`] does `entity` reference, if any.
+    pub fn document_of(&self, entity: Entity) -> Option<DocumentId> {
+        self.by_entity.get(&entity).copied()
+    }
+
+    /// Drop a document. Any entity linked to it is unlinked too.
+    pub fn remove_document(&mut self, doc: DocumentId) {
+        self.hosts.remove(&doc);
+        self.by_entity.retain(|_, d| *d != doc);
+    }
+
+    /// Drop the entity→document link without removing the document itself.
+    /// Returns the id that was unlinked (if any) so callers can decide
+    /// whether to also [`remove_document`](Self::remove_document) it.
+    pub fn unlink_entity(&mut self, entity: Entity) -> Option<DocumentId> {
+        self.by_entity.remove(&entity)
+    }
+
+    /// Number of registered documents.
     pub fn len(&self) -> usize {
         self.hosts.len()
     }
@@ -248,32 +445,27 @@ mod tests {
     }
 
     #[test]
-    fn checkpoint_creates_host_on_first_call() {
+    fn allocate_creates_host() {
         let mut reg = ModelicaDocumentRegistry::default();
-        let e = fake_entity(0x0000_0001_0000_0001);
 
-        assert!(reg.host(e).is_none());
         assert!(reg.is_empty());
-
-        let changed = reg.checkpoint_source(e, "model A end A;".into());
-        assert!(changed);
+        let doc = reg.allocate("model A end A;".into());
         assert_eq!(reg.len(), 1);
 
-        let host = reg.host(e).expect("host registered");
+        let host = reg.host(doc).expect("host registered");
         assert_eq!(host.document().source(), "model A end A;");
-        assert_eq!(host.generation(), 0, "first registration doesn't apply an op");
+        assert_eq!(host.generation(), 0, "allocate doesn't apply an op");
     }
 
     #[test]
     fn checkpoint_applies_op_on_change() {
         let mut reg = ModelicaDocumentRegistry::default();
-        let e = fake_entity(0x0000_0002_0000_0002);
+        let doc = reg.allocate("model A end A;".into());
 
-        reg.checkpoint_source(e, "model A end A;".into());
-        let changed = reg.checkpoint_source(e, "model B end B;".into());
+        let changed = reg.checkpoint_source(doc, "model B end B;".into());
         assert!(changed);
 
-        let host = reg.host(e).unwrap();
+        let host = reg.host(doc).unwrap();
         assert_eq!(host.document().source(), "model B end B;");
         assert_eq!(host.generation(), 1);
         assert!(host.can_undo());
@@ -282,24 +474,29 @@ mod tests {
     #[test]
     fn checkpoint_no_op_when_source_unchanged() {
         let mut reg = ModelicaDocumentRegistry::default();
-        let e = fake_entity(0x0000_0003_0000_0003);
+        let doc = reg.allocate("same".into());
 
-        reg.checkpoint_source(e, "same".into());
-        let changed = reg.checkpoint_source(e, "same".into());
+        let changed = reg.checkpoint_source(doc, "same".into());
         assert!(!changed, "re-checkpointing identical source must not bump generation");
-        assert_eq!(reg.host(e).unwrap().generation(), 0);
+        assert_eq!(reg.host(doc).unwrap().generation(), 0);
+    }
+
+    #[test]
+    fn checkpoint_unknown_doc_is_noop() {
+        let mut reg = ModelicaDocumentRegistry::default();
+        let changed = reg.checkpoint_source(DocumentId::new(999), "x".into());
+        assert!(!changed);
+        assert!(reg.is_empty());
     }
 
     #[test]
     fn undo_restores_previous_source() {
         let mut reg = ModelicaDocumentRegistry::default();
-        let e = fake_entity(0x0000_0004_0000_0004);
+        let doc = reg.allocate("v1".into());
+        reg.checkpoint_source(doc, "v2".into());
+        reg.checkpoint_source(doc, "v3".into());
 
-        reg.checkpoint_source(e, "v1".into());
-        reg.checkpoint_source(e, "v2".into());
-        reg.checkpoint_source(e, "v3".into());
-
-        let host = reg.host_mut(e).unwrap();
+        let host = reg.host_mut(doc).unwrap();
         host.undo().unwrap();
         assert_eq!(host.document().source(), "v2");
         host.undo().unwrap();
@@ -307,34 +504,52 @@ mod tests {
     }
 
     #[test]
-    fn remove_drops_host() {
+    fn open_for_links_entity_and_document() {
         let mut reg = ModelicaDocumentRegistry::default();
-        let e = fake_entity(0x0000_0005_0000_0005);
+        let e = fake_entity(0x0000_0001_0000_0001);
 
-        reg.checkpoint_source(e, "x".into());
-        assert_eq!(reg.len(), 1);
-
-        reg.remove(e);
-        assert!(reg.is_empty());
-        assert!(reg.host(e).is_none());
+        let doc = reg.open_for(e, "model A end A;".into());
+        assert_eq!(reg.document_of(e), Some(doc));
+        assert_eq!(reg.host(doc).unwrap().document().source(), "model A end A;");
     }
 
     #[test]
-    fn multiple_entities_tracked_independently() {
+    fn remove_document_drops_host_and_unlinks_entity() {
         let mut reg = ModelicaDocumentRegistry::default();
-        let a = fake_entity(0x0000_0006_0000_0006);
-        let b = fake_entity(0x0000_0007_0000_0007);
+        let e = fake_entity(0x0000_0002_0000_0002);
+        let doc = reg.open_for(e, "x".into());
+        assert_eq!(reg.len(), 1);
 
-        reg.checkpoint_source(a, "source_a".into());
-        reg.checkpoint_source(b, "source_b".into());
-        reg.checkpoint_source(a, "source_a_v2".into());
+        reg.remove_document(doc);
+        assert!(reg.is_empty());
+        assert!(reg.host(doc).is_none());
+        assert_eq!(reg.document_of(e), None);
+    }
 
-        assert_eq!(reg.host(a).unwrap().document().source(), "source_a_v2");
-        assert_eq!(reg.host(b).unwrap().document().source(), "source_b");
-        assert_ne!(
-            reg.host(a).unwrap().document().id(),
-            reg.host(b).unwrap().document().id(),
-            "each entity gets a distinct DocumentId"
-        );
+    #[test]
+    fn unlink_entity_returns_doc_but_keeps_document() {
+        let mut reg = ModelicaDocumentRegistry::default();
+        let e = fake_entity(0x0000_0003_0000_0003);
+        let doc = reg.open_for(e, "x".into());
+
+        let unlinked = reg.unlink_entity(e);
+        assert_eq!(unlinked, Some(doc));
+        assert_eq!(reg.document_of(e), None);
+        assert!(reg.host(doc).is_some(), "document outlives the link");
+    }
+
+    #[test]
+    fn multiple_documents_tracked_independently() {
+        let mut reg = ModelicaDocumentRegistry::default();
+        let a = fake_entity(0x0000_0004_0000_0004);
+        let b = fake_entity(0x0000_0005_0000_0005);
+
+        let doc_a = reg.open_for(a, "source_a".into());
+        let doc_b = reg.open_for(b, "source_b".into());
+        reg.checkpoint_source(doc_a, "source_a_v2".into());
+
+        assert_eq!(reg.host(doc_a).unwrap().document().source(), "source_a_v2");
+        assert_eq!(reg.host(doc_b).unwrap().document().source(), "source_b");
+        assert_ne!(doc_a, doc_b, "each allocation gets a distinct DocumentId");
     }
 }

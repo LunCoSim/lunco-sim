@@ -121,13 +121,19 @@ impl Panel for CodeEditorPanel {
         let display_name = display_name.unwrap();
 
         // ── Document summary for the selected entity (if any) ──
-        // Pulled out of the Registry up-front so the top-bar closure can
-        // read it without re-borrowing World.
-        let doc_summary = selected_entity.and_then(|e| {
-            world.resource::<ModelicaDocumentRegistry>().host(e).map(|h| {
+        // Resolve entity → DocumentId → DocumentHost. Pulled out up-front
+        // so the top-bar closure can read it without re-borrowing World.
+        let doc_id = selected_entity.and_then(|e| {
+            world.resource::<ModelicaDocumentRegistry>().document_of(e)
+        });
+        let doc_summary = doc_id.and_then(|d| {
+            world.resource::<ModelicaDocumentRegistry>().host(d).map(|h| {
                 (h.generation(), h.can_undo(), h.can_redo(), h.undo_depth(), h.redo_depth())
             })
         });
+        let compile_state = doc_id
+            .map(|d| world.resource::<crate::ui::CompileStates>().state_of(d))
+            .unwrap_or_default();
 
         // ── Top bar ──
         let mut compile_clicked = false;
@@ -147,33 +153,54 @@ impl Panel for CodeEditorPanel {
 
             ui.separator();
 
+            // Compile status chip — single source of truth for at-a-glance
+            // state, keyed by the document's CompileState (Idle/Compiling/
+            // Ready/Error). On Error we show the message as a hover tooltip
+            // and let a click dismiss it.
+            use crate::ui::CompileState;
             if let Some(ref err) = compilation_error {
-                ui.colored_label(egui::Color32::LIGHT_RED, "⚠️ Error");
-                ui.label(err);
-                if ui.button("Clear").clicked() {
+                let chip = ui.colored_label(egui::Color32::LIGHT_RED, "⚠ Error")
+                    .on_hover_text(err);
+                if chip.clicked() {
                     clear_error = true;
                 }
             } else {
-                ui.colored_label(egui::Color32::GREEN, "Ready");
+                match compile_state {
+                    CompileState::Compiling => {
+                        ui.colored_label(egui::Color32::from_rgb(220, 200, 80), "⏳ Compiling…");
+                    }
+                    CompileState::Ready => {
+                        ui.colored_label(egui::Color32::GREEN, "✓ Ready");
+                    }
+                    CompileState::Error => {
+                        ui.colored_label(egui::Color32::LIGHT_RED, "⚠ Error");
+                    }
+                    CompileState::Idle => {
+                        ui.colored_label(egui::Color32::GRAY, "◌ Idle");
+                    }
+                }
             }
 
-            // Document status + Undo/Redo for the selected entity's source.
+            // Undo / redo for the selected entity's document. Counters live
+            // in the hover tooltip rather than the visible header.
             if let Some((gen, can_undo, can_redo, undo_n, redo_n)) = doc_summary {
                 ui.separator();
-                if ui.add_enabled(can_undo, egui::Button::new("↶")).on_hover_text("Undo last compile").clicked() {
+                let undo_tip = format!("Undo last compile — {undo_n} available (gen {gen})");
+                let redo_tip = format!("Redo — {redo_n} available (gen {gen})");
+                if ui.add_enabled(can_undo, egui::Button::new("↶")).on_hover_text(undo_tip).clicked() {
                     undo_clicked = true;
                 }
-                if ui.add_enabled(can_redo, egui::Button::new("↷")).on_hover_text("Redo").clicked() {
+                if ui.add_enabled(can_redo, egui::Button::new("↷")).on_hover_text(redo_tip).clicked() {
                     redo_clicked = true;
                 }
-                ui.label(
-                    egui::RichText::new(format!("gen {} · ↶{} ↷{}", gen, undo_n, redo_n))
-                        .size(10.0)
-                        .color(egui::Color32::GRAY),
-                );
             }
 
-            if !is_read_only && ui.button("🚀 COMPILE & RUN").clicked() {
+            // Disable Compile while a compile is already in flight for
+            // this document — prevents double-fire from button + shortcut
+            // or an impatient click.
+            let compile_enabled = !is_read_only
+                && !matches!(compile_state, crate::ui::CompileState::Compiling);
+            if ui.add_enabled(compile_enabled, egui::Button::new("🚀 COMPILE & RUN")).clicked() {
                 compile_clicked = true;
             }
         });
@@ -187,17 +214,23 @@ impl Panel for CodeEditorPanel {
 
         // ── Handle undo / redo clicks on the Document for selected_entity ──
         if (undo_clicked || redo_clicked) && !is_read_only {
-            if let Some(entity) = selected_entity {
+            if let Some(doc) = doc_id {
                 let new_source = {
                     let mut registry = world.resource_mut::<ModelicaDocumentRegistry>();
-                    registry.host_mut(entity).and_then(|host| {
+                    let result = registry.host_mut(doc).and_then(|host| {
                         let changed = if undo_clicked {
                             host.undo().ok().unwrap_or(false)
                         } else {
                             host.redo().ok().unwrap_or(false)
                         };
                         changed.then(|| host.document().source().to_string())
-                    })
+                    });
+                    // Undo/redo bypasses `checkpoint_source` — record the
+                    // mutation so observers receive a DocumentChanged.
+                    if result.is_some() {
+                        registry.mark_changed(doc);
+                    }
+                    result
                 };
 
                 if let Some(source) = new_source {
@@ -268,6 +301,11 @@ impl Panel for CodeEditorPanel {
                 } else {
                     let ds = world.resource::<DiagramState>();
                     session_id = ds.model_counter as u64 + 1;
+                    // Allocate the Document first so the entity is spawned
+                    // with a valid `document` id from the start.
+                    let new_doc = world
+                        .resource_mut::<ModelicaDocumentRegistry>()
+                        .allocate(source.clone());
                     let entity = world.spawn((
                         Name::new(model_name.clone()),
                         ModelicaModel {
@@ -280,9 +318,11 @@ impl Panel for CodeEditorPanel {
                             parameters: params,
                             inputs: runtime_inputs.into_iter().map(|n| (n, 0.0)).collect(),
                             variables: HashMap::new(),
+                            document: new_doc,
                             is_stepping: true,
                         },
                     )).id();
+                    world.resource_mut::<ModelicaDocumentRegistry>().link(entity, new_doc);
 
                     if let Some(mut s) = world.get_resource_mut::<WorkbenchState>() {
                         s.selected_entity = Some(entity);
@@ -295,12 +335,35 @@ impl Panel for CodeEditorPanel {
                         .and_then(|s| s.selected_entity).unwrap_or(Entity::PLACEHOLDER);
 
                     // Checkpoint the just-compiled source into the Document
-                    // registry before sending the Compile command — the
-                    // registry is the single source of truth for this
-                    // entity's Modelica source.
-                    if target != Entity::PLACEHOLDER {
+                    // backing this entity — the Document remains the single
+                    // source of truth even if the worker result never arrives.
+                    // If the entity somehow has no document yet (e.g. it was
+                    // spawned by an older code path), allocate one lazily and
+                    // write it back into the component.
+                    let target_doc = if target != Entity::PLACEHOLDER {
                         let mut registry = world.resource_mut::<ModelicaDocumentRegistry>();
-                        registry.checkpoint_source(target, source.clone());
+                        let doc = registry.document_of(target);
+                        let doc = if let Some(d) = doc {
+                            registry.checkpoint_source(d, source.clone());
+                            d
+                        } else {
+                            let d = registry.allocate(source.clone());
+                            registry.link(target, d);
+                            d
+                        };
+                        if let Ok(mut m) = world.query::<&mut ModelicaModel>().get_mut(world, target) {
+                            if m.document != doc {
+                                m.document = doc;
+                            }
+                        }
+                        Some(doc)
+                    } else { None };
+
+                    // Mark the document as compiling so UI can reflect
+                    // in-flight state and the Compile button can disable.
+                    if let Some(doc) = target_doc {
+                        world.resource_mut::<crate::ui::CompileStates>()
+                            .set(doc, crate::ui::CompileState::Compiling);
                     }
 
                     if let Some(channels) = world.get_resource::<ModelicaChannels>() {
@@ -321,6 +384,7 @@ impl Panel for CodeEditorPanel {
 
         // ── Editor area ──
         let mut buffer_changed = false;
+        let mut buffer_commit = false;
         let mut new_text = String::new();
 
         let available_height = ui.available_height();
@@ -379,6 +443,19 @@ impl Panel for CodeEditorPanel {
                         new_text = text.to_string();
                         buffer_changed = true;
                     }
+                    // Commit the buffer into the Document when the user
+                    // leaves the editor (clicks elsewhere, tabs away,
+                    // presses Esc, etc.). This is the point at which edits
+                    // flow into the Document without requiring a Compile —
+                    // so splits / diagram / other observers see the change.
+                    // Coarse (whole-buffer) op for now; granular ops are a
+                    // separate refactor.
+                    if output.lost_focus() && !is_ro {
+                        if new_text.is_empty() {
+                            new_text = text.to_string();
+                        }
+                        buffer_commit = true;
+                    }
                 });
             });
 
@@ -399,6 +476,19 @@ impl Panel for CodeEditorPanel {
                 if state.editor_buffer != new_text {
                     state.editor_buffer = new_text;
                 }
+            }
+        }
+
+        // Commit the buffer into the Document on focus-loss. No-op when
+        // there's no backing document yet (the user is typing before any
+        // compile has produced an entity) — the existing "spawn fresh
+        // entity on Compile" path still handles that case.
+        if buffer_commit && !is_read_only {
+            if let Some(doc) = doc_id {
+                let committed = world.resource::<EditorBufferState>().text.clone();
+                world
+                    .resource_mut::<ModelicaDocumentRegistry>()
+                    .checkpoint_source(doc, committed);
             }
         }
     }

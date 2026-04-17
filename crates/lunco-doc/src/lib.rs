@@ -67,7 +67,7 @@ use std::fmt;
 /// an incrementing counter, a hash of a file path, a Bevy entity bits, etc.
 /// `lunco-doc` treats ids as opaque and only requires them to be unique within
 /// the app's Document population.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct DocumentId(u64);
 
 impl DocumentId {
@@ -79,6 +79,11 @@ impl DocumentId {
     /// Extract the raw `u64` value.
     pub const fn raw(self) -> u64 {
         self.0
+    }
+
+    /// True when this id is the default / unassigned sentinel (`0`).
+    pub const fn is_unassigned(self) -> bool {
+        self.0 == 0
     }
 }
 

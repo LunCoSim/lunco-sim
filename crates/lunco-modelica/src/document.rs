@@ -1,13 +1,16 @@
 //! `ModelicaDocument` — the Document System representation of one `.mo` file.
 //!
-//! # Status: live source-of-truth for per-entity Modelica text
+//! # Status: live source-of-truth for Modelica text
 //!
-//! Every place that spawns a `ModelicaModel` entity (CodeEditor's Compile,
-//! the Diagram panel's auto-compile, `balloon_setup`, the workbench binaries)
-//! checkpoints the source into [`ui::ModelicaDocumentRegistry`] before
-//! sending a `Compile` or `UpdateParameters` command to the worker. The
-//! registry's `DocumentHost<ModelicaDocument>` is the single authority for
-//! per-entity Modelica source.
+//! Documents are keyed by [`lunco_doc::DocumentId`] inside
+//! [`ui::ModelicaDocumentRegistry`]. Every place that spawns a
+//! `ModelicaModel` entity (CodeEditor's Compile, the Diagram panel's
+//! auto-compile, `balloon_setup`, the workbench binaries) allocates a
+//! document in the registry and writes its id into
+//! [`crate::ModelicaModel::document`]. Later Compile / UpdateParameters
+//! calls checkpoint new source onto that id. The registry's
+//! `DocumentHost<ModelicaDocument>` is the single authority for model
+//! source — entities just hold references.
 //!
 //! Still outside the Document System:
 //!
@@ -28,7 +31,11 @@
 //! The inverse of `ReplaceSource { new }` is `ReplaceSource { new: old }`,
 //! where `old` is the source text as it was before the op applied.
 
+use std::path::PathBuf;
+
 use lunco_doc::{Document, DocumentError, DocumentId, DocumentOp};
+
+use crate::ui::state::ModelLibrary;
 
 /// The canonical Document representation of one Modelica source file.
 ///
@@ -36,20 +43,49 @@ use lunco_doc::{Document, DocumentError, DocumentId, DocumentOp};
 /// today — callers continue to parse on demand via
 /// `crate::ast_extract::parse_to_ast` until a concrete caller makes caching
 /// worth the complexity (invalidation on every op).
+///
+/// The document knows *where it came from*: `canonical_path` is the file
+/// this source was loaded from (and where `SaveDocument` will write back),
+/// and `library` tells UI code which library rules apply (MSL is read-only,
+/// user models are writable, etc.). A `None` path means an untitled,
+/// in-memory document — `SaveDocument` must resolve a path before writing.
 #[derive(Debug, Clone)]
 pub struct ModelicaDocument {
     id: DocumentId,
     source: String,
     generation: u64,
+    canonical_path: Option<PathBuf>,
+    library: ModelLibrary,
 }
 
 impl ModelicaDocument {
-    /// Build a new `ModelicaDocument` from source text.
+    /// Build an in-memory `ModelicaDocument` with no canonical path.
+    /// `library` defaults to [`ModelLibrary::InMemory`].
     pub fn new(id: DocumentId, source: impl Into<String>) -> Self {
         Self {
             id,
             source: source.into(),
             generation: 0,
+            canonical_path: None,
+            library: ModelLibrary::InMemory,
+        }
+    }
+
+    /// Build a `ModelicaDocument` backed by a file on disk (or a bundled
+    /// asset path), carrying its library classification for read-only
+    /// rules and UI hints.
+    pub fn with_origin(
+        id: DocumentId,
+        source: impl Into<String>,
+        canonical_path: Option<PathBuf>,
+        library: ModelLibrary,
+    ) -> Self {
+        Self {
+            id,
+            source: source.into(),
+            generation: 0,
+            canonical_path,
+            library,
         }
     }
 
@@ -66,6 +102,30 @@ impl ModelicaDocument {
     /// True when the source buffer is empty.
     pub fn is_empty(&self) -> bool {
         self.source.is_empty()
+    }
+
+    /// File path the source was loaded from, if any. `None` for untitled
+    /// in-memory documents (save-as required before write-back).
+    pub fn canonical_path(&self) -> Option<&std::path::Path> {
+        self.canonical_path.as_deref()
+    }
+
+    /// Which library classification this document belongs to. Determines
+    /// writability and UI badges.
+    pub fn library(&self) -> &ModelLibrary {
+        &self.library
+    }
+
+    /// True when this document is treated as read-only by the UI.
+    /// MSL and Bundled libraries are read-only today.
+    pub fn is_read_only(&self) -> bool {
+        matches!(self.library, ModelLibrary::MSL | ModelLibrary::Bundled)
+    }
+
+    /// Set or change the canonical path (e.g. after Save-As on an
+    /// untitled document). Does not re-classify `library`.
+    pub fn set_canonical_path(&mut self, path: Option<PathBuf>) {
+        self.canonical_path = path;
     }
 }
 

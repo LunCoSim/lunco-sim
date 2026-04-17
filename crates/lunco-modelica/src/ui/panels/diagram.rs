@@ -1537,33 +1537,11 @@ impl Panel for DiagramPanel {
             }).unwrap_or((false, String::new(), false, false))
         };
 
-        if has_model {
-            ui.horizontal(|ui| {
-                // Read-only badge
-                if is_read_only {
-                    ui.colored_label(egui::Color32::from_rgb(200, 150, 50), "👁 Read-only");
-                } else {
-                    ui.colored_label(egui::Color32::GREEN, "✏️ Editing");
-                }
-                ui.label(format!("• {}", display_name));
-
-                // Back button
-                if has_back {
-                    if ui.small_button("← Back").clicked() {
-                        if let Some(mut state) = world.get_resource_mut::<WorkbenchState>() {
-                            if let Some(prev_path) = state.navigation_stack.pop() {
-                                state.open_model = None;
-                                state.diagram_dirty = true;
-                                let _ = prev_path;
-                            }
-                        }
-                    }
-                }
-            });
-            ui.separator();
-        }
-
         // ── Toolbar ──
+        // Identity (model name, read-only state, navigation) lives on the
+        // tab header / Package Browser, not here. This toolbar is strictly
+        // the Diagram view's own controls.
+        let _ = (has_model, is_read_only, display_name, has_back);
         ui.horizontal(|ui| {
             // Mode toggle
             {
@@ -1577,10 +1555,6 @@ impl Panel for DiagramPanel {
                     }
                 }
             }
-            // Bundle Examples
-            if ui.button("📁 Load RC Example").clicked() {
-                auto_place_rc_circuit(world);
-            }
             ui.separator();
 
             // Compile & Run
@@ -1590,30 +1564,17 @@ impl Panel for DiagramPanel {
             }
             ui.separator();
 
-            // Stats
-            {
-                let s = world.get_resource::<DiagramState>();
-                if let Some(st) = s {
-                    ui.label(
-                        egui::RichText::new(format!("{} components · {} wires", st.diagram.nodes.len(), st.diagram.edges.len()))
-                            .size(10.0)
-                            .color(egui::Color32::from_rgb(160, 160, 170)),
-                    );
-                    if let Some(status) = &st.compile_status {
-                        ui.separator();
-                        let color = if st.compile_ok { egui::Color32::GREEN } else { egui::Color32::LIGHT_RED };
-                        ui.colored_label(color, status);
-                    }
-                }
-            }
-            ui.separator();
-
-            // Clear
-            if ui.small_button("🗑 Clear").clicked() {
-                if let Some(mut s) = world.get_resource_mut::<DiagramState>() {
-                    s.diagram = VisualDiagram::default();
-                    s.snarl = Snarl::default();
-                    s.compile_status = None;
+            // Stats + compile status (compact, grey)
+            if let Some(st) = world.get_resource::<DiagramState>() {
+                ui.label(
+                    egui::RichText::new(format!("{} comps · {} wires", st.diagram.nodes.len(), st.diagram.edges.len()))
+                        .size(10.0)
+                        .color(egui::Color32::from_rgb(160, 160, 170)),
+                );
+                if let Some(status) = &st.compile_status {
+                    ui.separator();
+                    let color = if st.compile_ok { egui::Color32::GREEN } else { egui::Color32::LIGHT_RED };
+                    ui.colored_label(color, status);
                 }
             }
         });
@@ -1713,6 +1674,12 @@ fn do_compile(world: &mut World) {
         return;
     }
 
+    // Allocate a Document up-front so the new entity is spawned with a
+    // valid `document` id pointing at the source we're about to compile.
+    let doc_id = world
+        .resource_mut::<crate::ui::ModelicaDocumentRegistry>()
+        .allocate(source.clone());
+
     // Spawn entity
     let session_id = model_counter as u64;
     let model_name = format!("VisualModel{}", model_counter);
@@ -1728,16 +1695,20 @@ fn do_compile(world: &mut World) {
             parameters: HashMap::new(),
             inputs: HashMap::new(),
             variables: HashMap::new(),
+            document: doc_id,
             is_stepping: true,
         },
     )).id();
 
-    // Checkpoint the source into the Document registry before sending
-    // the Compile command — registry is the canonical source.
-    {
-        let mut registry = world.resource_mut::<crate::ui::ModelicaDocumentRegistry>();
-        registry.checkpoint_source(entity, source.clone());
-    }
+    world
+        .resource_mut::<crate::ui::ModelicaDocumentRegistry>()
+        .link(entity, doc_id);
+
+    // Mark the document as compiling — UI (status chips, disabled button)
+    // reads this to reflect in-flight state.
+    world
+        .resource_mut::<crate::ui::CompileStates>()
+        .set(doc_id, crate::ui::CompileState::Compiling);
 
     // Send command
     if let Some(channels) = world.get_resource::<ModelicaChannels>() {
@@ -1754,50 +1725,3 @@ fn do_compile(world: &mut World) {
     }
 }
 
-/// Auto-place a classic RC circuit (Voltage -> Resistor -> Capacitor -> Ground).
-fn auto_place_rc_circuit(world: &mut World) {
-    let lib = msl_component_library();
-    
-    // Define layout
-    let components = [
-        ("Modelica.Electrical.Analog.Sources.ConstantVoltage", egui::pos2(-200.0, 0.0)),
-        ("Modelica.Electrical.Analog.Basic.Resistor", egui::pos2(0.0, -100.0)),
-        ("Modelica.Electrical.Analog.Basic.Capacitor", egui::pos2(200.0, 0.0)),
-        ("Modelica.Electrical.Analog.Basic.Ground", egui::pos2(0.0, 100.0)),
-    ];
-
-    for (msl_path, pos) in components {
-        if let Some(def) = lib.iter().find(|c| c.msl_path == msl_path) {
-             if let Some(mut state) = world.get_resource_mut::<DiagramState>() {
-                 state.add_component(def.clone(), pos);
-             }
-        }
-    }
-
-    // Auto-connect
-    if let Some(mut ds) = world.get_resource_mut::<DiagramState>() {
-        // CVoltage.p -> Resistor.p
-        // Resistor.n -> Capacitor.p
-        // Capacitor.n -> Ground.p
-        // Ground.p -> CVoltage.n
-        
-         let nodes = ds.diagram.nodes.clone();
-         if nodes.len() >= 4 {
-             let v = nodes.iter().find(|n| n.component_def.name == "ConstantVoltage").map(|n| n.id);
-             let r = nodes.iter().find(|n| n.component_def.name == "Resistor").map(|n| n.id);
-             let c = nodes.iter().find(|n| n.component_def.name == "Capacitor").map(|n| n.id);
-             let g = nodes.iter().find(|n| n.component_def.name == "Ground").map(|n| n.id);
-
-             if let (Some(vid), Some(rid), Some(cid), Some(gid)) = (v, r, c, g) {
-                 ds.diagram.add_edge(vid, "p".to_string(), rid, "p".to_string());
-                 ds.diagram.add_edge(rid, "n".to_string(), cid, "p".to_string());
-                 ds.diagram.add_edge(cid, "n".to_string(), gid, "p".to_string());
-                 ds.diagram.add_edge(gid, "p".to_string(), vid, "n".to_string());
-                 
-                 // Rebuild snarl to show connections
-                 ds.rebuild_snarl();
-             }
-         }
-    }
-}
- 

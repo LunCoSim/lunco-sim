@@ -1000,6 +1000,13 @@ pub struct ModelicaModel {
     pub inputs: HashMap<String, f64>,
     /// All other observable variables (Real soc, etc)
     pub variables: HashMap<String, f64>,
+    /// Canonical id of the Modelica source document backing this entity,
+    /// looked up in [`ui::ModelicaDocumentRegistry`]. `DocumentId::default()`
+    /// (`0`) means "no document assigned yet"; systems should treat it as
+    /// a miss. Not reflected — ids are session-local allocations, not
+    /// scene-serializable.
+    #[reflect(ignore)]
+    pub document: lunco_doc::DocumentId,
     #[reflect(ignore)]
     pub is_stepping: bool,
 }
@@ -1043,6 +1050,7 @@ fn handle_modelica_responses(
     channels: Res<ModelicaChannels>,
     mut q_models: Query<&mut ModelicaModel>,
     mut workbench_state: ResMut<ui::WorkbenchState>,
+    mut compile_states: ResMut<ui::CompileStates>,
 ) {
     while let Ok(result) = channels.rx.try_recv() {
         if result.entity == Entity::PLACEHOLDER {
@@ -1060,6 +1068,20 @@ fn handle_modelica_responses(
             // Forward log messages to console via bevy_workbench's console system
             if let Some(msg) = result.log_message {
                 info!("[Modelica] {msg}");
+            }
+
+            // Transition compile state for this entity's document, but
+            // only on compile-style results (new-model / parameter-update).
+            // Step results arrive continuously and must not clobber
+            // Ready/Error classifications.
+            let is_compile_result = result.is_new_model || result.is_parameter_update;
+            if is_compile_result && !model.document.is_unassigned() {
+                let new_state = if result.error.is_some() {
+                    ui::CompileState::Error
+                } else {
+                    ui::CompileState::Ready
+                };
+                compile_states.set(model.document, new_state);
             }
 
             if let Some(err) = &result.error {

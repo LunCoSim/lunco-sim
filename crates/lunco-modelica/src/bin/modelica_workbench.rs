@@ -6,7 +6,7 @@ use lunco_assets::assets_dir;
 use lunco_modelica::{
     ModelicaPlugin,
     ModelicaModel,
-    ui::{ModelicaDocumentRegistry, WorkbenchState},
+    ui::{CompileState, CompileStates, ModelicaDocumentRegistry, ModelLibrary, WorkbenchState},
 };
 
 fn main() {
@@ -37,6 +37,7 @@ fn setup_sandbox(
     channels: Res<lunco_modelica::ModelicaChannels>,
     mut workbench_state: ResMut<WorkbenchState>,
     mut doc_registry: ResMut<ModelicaDocumentRegistry>,
+    mut compile_states: ResMut<CompileStates>,
 ) {
     commands.spawn(Camera2d);
 
@@ -50,7 +51,16 @@ fn setup_sandbox(
     workbench_state.editor_buffer = source.clone();
     workbench_state.loaded_file_path = Some(model_path.clone());
 
-    // Spawn a generic sandbox entity.
+    // Allocate the Document first so the entity is spawned with a valid
+    // `document` id from the start — the Document is the single source of
+    // truth for this model's text. Record its origin so `SaveDocument` and
+    // read-only classification work.
+    let doc_id = doc_registry.allocate_with_origin(
+        source.clone(),
+        Some(model_path.clone()),
+        ModelLibrary::Bundled,
+    );
+
     let entity = commands.spawn((
         ModelicaSandbox,
         Name::new("Modelica_Sandbox"),
@@ -59,13 +69,13 @@ fn setup_sandbox(
             model_name: model_name.clone(),
             parameters: initial_params,
             inputs: initial_inputs,
+            document: doc_id,
             ..default()
         },
     )).id();
 
-    // Register the source with the Document registry — this is the
-    // single source of truth for the entity's Modelica text.
-    doc_registry.checkpoint_source(entity, source.clone());
+    doc_registry.link(entity, doc_id);
+    compile_states.set(doc_id, CompileState::Compiling);
 
     // Trigger initial compilation
     let _ = channels.tx.send(lunco_modelica::ModelicaCommand::Compile {

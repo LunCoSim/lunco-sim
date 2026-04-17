@@ -89,6 +89,7 @@ fn setup_web_workbench(
     channels: Res<lunco_modelica::ModelicaChannels>,
     mut workbench_state: ResMut<lunco_modelica::ui::WorkbenchState>,
     mut doc_registry: ResMut<lunco_modelica::ui::ModelicaDocumentRegistry>,
+    mut compile_states: ResMut<lunco_modelica::ui::CompileStates>,
     model_info: Res<BundledModelInfo>,
 ) {
     commands.spawn(Camera2d);
@@ -101,6 +102,15 @@ fn setup_web_workbench(
 
     workbench_state.editor_buffer = source.clone();
 
+    // Allocate the Document up-front so the entity is spawned with a
+    // valid `document` id pointing at its source. Record the bundled-asset
+    // origin for read-only classification.
+    let doc_id = doc_registry.allocate_with_origin(
+        source.clone(),
+        Some(model_path.clone()),
+        lunco_modelica::ui::ModelLibrary::Bundled,
+    );
+
     let entity = commands.spawn((
         WebWorkbench,
         Name::new("Modelica_Sandbox"),
@@ -110,13 +120,13 @@ fn setup_web_workbench(
             parameters: initial_params,
             inputs: initial_inputs,
             paused: true, // Start paused; compile result will unpause
+            document: doc_id,
             ..default()
         },
     )).id();
 
-    // Register the source with the Document registry — the single source
-    // of truth for this entity's Modelica text.
-    doc_registry.checkpoint_source(entity, source.clone());
+    doc_registry.link(entity, doc_id);
+    compile_states.set(doc_id, lunco_modelica::ui::CompileState::Compiling);
 
     // Select this entity so handle_modelica_responses populates plotted_variables
     // on the initial compile result (is_new_model branch).
