@@ -141,15 +141,23 @@ impl InstancePanel for ModelViewPanel {
     }
 
     fn title(&self, world: &World, instance: u64) -> String {
-        // Tab title mirrors VS Code: base name + a leading `●` when
-        // the underlying document has unsaved changes. The dot is the
-        // only save-status indicator — there's no explicit Save button.
+        // Tab title mirrors VS Code's pattern:
+        //   `●` prefix   → unsaved changes
+        //   `🔒` prefix  → read-only (Example / library — edits won't save)
+        // Both can stack: `🔒 ● Battery` = read-only model the user tried to edit.
         let doc = DocumentId::new(instance);
-        let (base, dirty) = resolve_tab_title(world, doc);
+        let (base, dirty, read_only) = resolve_tab_title(world, doc);
+        let mut prefix = String::new();
+        if read_only {
+            prefix.push_str("🔒 ");
+        }
         if dirty {
-            format!("● {}", base)
-        } else {
+            prefix.push_str("● ");
+        }
+        if prefix.is_empty() {
             base
+        } else {
+            format!("{prefix}{base}")
         }
     }
 
@@ -194,38 +202,30 @@ impl InstancePanel for ModelViewPanel {
     }
 }
 
-/// Compute the base tab title (no dirty dot) and dirty flag for
-/// `doc`. The tab's `InstancePanel::title` uses these to render.
-fn resolve_tab_title(world: &World, doc: DocumentId) -> (String, bool) {
+/// Compute `(base, dirty, read_only)` for `doc`. The tab's
+/// `InstancePanel::title` prefixes icons accordingly.
+fn resolve_tab_title(world: &World, doc: DocumentId) -> (String, bool, bool) {
     if let Some(host) = world
         .get_resource::<ModelicaDocumentRegistry>()
         .and_then(|r| r.host(doc))
     {
         let document = host.document();
-        let base = document
-            .canonical_path()
-            .and_then(|p| {
-                // `mem://Untitled1` → "Untitled1"; real paths → file stem.
-                let s = p.to_string_lossy();
-                if let Some(name) = s.strip_prefix("mem://") {
-                    Some(name.to_string())
-                } else {
-                    p.file_stem().map(|x| x.to_string_lossy().into_owned())
-                }
-            })
-            .unwrap_or_else(|| format!("Untitled"));
-        return (base, document.is_dirty());
+        return (
+            document.origin().display_name(),
+            document.is_dirty(),
+            document.is_read_only(),
+        );
     }
 
     // Fall back to any live `open_model.display_name` if it matches.
     if let Some(state) = world.get_resource::<WorkbenchState>() {
         if let Some(open) = state.open_model.as_ref() {
             if open.doc == Some(doc) {
-                return (open.display_name.clone(), false);
+                return (open.display_name.clone(), false, open.read_only);
             }
         }
     }
-    (format!("Model #{}", doc.raw()), false)
+    (format!("Model #{}", doc.raw()), false, false)
 }
 
 /// Point the singleton `WorkbenchState.open_model` / `editor_buffer`
@@ -258,20 +258,33 @@ fn sync_active_tab_to_doc(world: &mut World, doc: DocumentId) {
         let registry = world.resource::<ModelicaDocumentRegistry>();
         registry.host(doc).map(|h| {
             let document = h.document();
+            let display_name = document.origin().display_name();
             let path_str = document
                 .canonical_path()
                 .map(|p| p.to_string_lossy().into_owned())
-                .unwrap_or_else(|| format!("doc://{}", doc.raw()));
-            let display_name = document
-                .canonical_path()
-                .and_then(|p| p.file_stem().map(|s| s.to_string_lossy().into_owned()))
-                .unwrap_or_else(|| format!("Model #{}", doc.raw()));
+                .unwrap_or_else(|| format!("mem://{display_name}"));
+            // Classify for Package Browser / UI badges — we've lost
+            // the MSL-vs-Bundled distinction at the doc level (both
+            // are just read-only files now); Package Browser-side
+            // code that *needs* that distinction should consult its
+            // own origin-tracking.
+            let library = match document.origin() {
+                lunco_doc::DocumentOrigin::Untitled { .. } => {
+                    crate::ui::state::ModelLibrary::InMemory
+                }
+                lunco_doc::DocumentOrigin::File { writable: true, .. } => {
+                    crate::ui::state::ModelLibrary::User
+                }
+                lunco_doc::DocumentOrigin::File { writable: false, .. } => {
+                    crate::ui::state::ModelLibrary::Bundled
+                }
+            };
             (
                 path_str,
                 display_name,
                 document.source().to_string(),
                 document.is_read_only(),
-                document.library().clone(),
+                library,
             )
         })
     };

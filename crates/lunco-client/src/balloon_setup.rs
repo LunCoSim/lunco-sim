@@ -7,10 +7,11 @@
 use bevy::prelude::*;
 use lunco_assets::assets_dir;
 use lunco_cosim::{SimComponent, SimStatus, SimConnection};
+use lunco_doc::DocumentOrigin;
 use lunco_modelica::{
     ModelicaChannels, ModelicaCommand, ModelicaModel,
     extract_model_name, extract_parameters, extract_inputs_with_defaults,
-    ui::{CompileState, CompileStates, ModelicaDocumentRegistry, ModelLibrary},
+    ui::{CompileState, CompileStates, ModelicaDocumentRegistry},
 };
 use lunco_sandbox_edit::catalog::BalloonModelMarker;
 
@@ -42,8 +43,7 @@ pub fn compile_balloon_model(
         let doc_id = doc_registry.open_for_with_origin(
             entity,
             source.clone(),
-            Some(model_path.clone()),
-            ModelLibrary::Bundled,
+            DocumentOrigin::readonly_file(model_path.clone()),
         );
 
         // Create ModelicaModel BEFORE compiling — handle_modelica_responses

@@ -58,6 +58,42 @@ use bevy::prelude::*;
 use lunco_doc::DocumentId;
 
 // ─────────────────────────────────────────────────────────────────────────────
+// EventOrigin — which side of the wire produced this event
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Seed for the server/collaboration future. Today every event is
+// `EventOrigin::Local` (fired by this client's own user action). The
+// field exists so that when networking lands, observers can filter
+// `my edits` vs `incoming edits` without a cross-crate refactor, and
+// a replay harness (tests, journal replay, CI fixtures) can clearly
+// mark synthetic events.
+
+/// Which side of a (current or future) wire fired an event.
+///
+/// Kept deliberately coarse — enough to distinguish local/remote/replay
+/// for rendering and journaling. Finer attribution (which specific
+/// remote client / which keystroke within a session) lives on
+/// [`UserId`] / journal entries, not here.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+pub enum EventOrigin {
+    /// The event was produced by a user action in this client's
+    /// session. Default — covers every case until networking arrives.
+    #[default]
+    Local,
+    /// The event arrived from a remote peer over the sync transport.
+    /// `peer` is the originating client's identity as reported by the
+    /// transport.
+    Remote {
+        /// Opaque peer identity from the transport layer.
+        peer: String,
+    },
+    /// The event was emitted by journal replay (test fixtures, "open
+    /// this twin" reconstruction). Observers that persist side-effects
+    /// should skip these to avoid re-writing the journal.
+    Replay,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Lifecycle events
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -72,6 +108,15 @@ use lunco_doc::DocumentId;
 pub struct DocumentChanged {
     /// The document whose generation just advanced.
     pub doc: DocumentId,
+    /// Which side of the wire produced this event. Local by default.
+    pub origin: EventOrigin,
+}
+
+impl DocumentChanged {
+    /// Local-origin constructor. Default for UI-triggered paths.
+    pub fn local(doc: DocumentId) -> Self {
+        Self { doc, origin: EventOrigin::Local }
+    }
 }
 
 /// A new [`Document`](lunco_doc::Document) was added to a domain
@@ -84,6 +129,15 @@ pub struct DocumentChanged {
 pub struct DocumentOpened {
     /// The newly-registered document.
     pub doc: DocumentId,
+    /// Which side of the wire produced this event.
+    pub origin: EventOrigin,
+}
+
+impl DocumentOpened {
+    /// Local-origin constructor.
+    pub fn local(doc: DocumentId) -> Self {
+        Self { doc, origin: EventOrigin::Local }
+    }
 }
 
 /// A [`Document`](lunco_doc::Document) was removed from its registry
@@ -96,6 +150,15 @@ pub struct DocumentOpened {
 pub struct DocumentClosed {
     /// The document that no longer exists in the registry.
     pub doc: DocumentId,
+    /// Which side of the wire produced this event.
+    pub origin: EventOrigin,
+}
+
+impl DocumentClosed {
+    /// Local-origin constructor.
+    pub fn local(doc: DocumentId) -> Self {
+        Self { doc, origin: EventOrigin::Local }
+    }
 }
 
 /// A [`Document`](lunco_doc::Document)'s contents were persisted to
@@ -107,6 +170,15 @@ pub struct DocumentClosed {
 pub struct DocumentSaved {
     /// The document that was just persisted.
     pub doc: DocumentId,
+    /// Which side of the wire produced this event.
+    pub origin: EventOrigin,
+}
+
+impl DocumentSaved {
+    /// Local-origin constructor.
+    pub fn local(doc: DocumentId) -> Self {
+        Self { doc, origin: EventOrigin::Local }
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -347,6 +419,82 @@ impl Plugin for EditorIntentPlugin {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Presence — placeholder for multi-user collaboration
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Architectural seed: when the Twin grows into a server that hosts
+// live collaboration (USD-Nucleus style), each connected client shows
+// up here. Cursors, selections, and per-user color identity render
+// from this resource. For the single-user app today it stays empty
+// and panels that read it skip their collaboration UI.
+//
+// Zero code touches this today. Planting the type now so that when
+// networking lands, the rest of the codebase doesn't need a
+// cross-cutting refactor to start rendering presence.
+
+/// Opaque user identifier. Small (`u64`) so it's cheap to copy
+/// around in events. Mapped to a display name + visual identity in
+/// [`Presence`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct UserId(pub u64);
+
+impl UserId {
+    /// Reserved id for "this client's local user" in a single-user
+    /// session. Once authentication lands, real ids start at 1.
+    pub const LOCAL: UserId = UserId(0);
+}
+
+/// Everything the UI needs to render a collaborator's presence —
+/// display name, identifying color (for avatar chip, cursor tint),
+/// and optional pointers into the workspace (which doc / where in
+/// it they're looking at).
+#[derive(Debug, Clone)]
+pub struct PresenceInfo {
+    /// Human-readable name shown in avatar chips / tooltips.
+    pub display_name: String,
+    /// RGB tint for this user's cursor, selection halo, edit
+    /// indicators. Chosen by the server so clients agree.
+    pub color: [u8; 3],
+    /// Document the user is currently viewing, if any. `None` means
+    /// the user is in the workspace root / no doc focused.
+    pub active_doc: Option<DocumentId>,
+}
+
+impl PresenceInfo {
+    /// Convenience: `egui::Color32` form for the UI layer.
+    ///
+    /// Kept here (not on [`UserId`]) because the RGB triple lives in
+    /// `PresenceInfo`. Callers that need the color can `.color32()`.
+    pub fn color_rgba(&self) -> [u8; 4] {
+        [self.color[0], self.color[1], self.color[2], 255]
+    }
+}
+
+/// Global presence registry — who else is in this Twin session, and
+/// where they are.
+///
+/// Single-user today: stays empty, panels that consult it render
+/// nothing. Multi-user future: populated by the sync transport on
+/// connect/disconnect events; panels iterate it to draw cursors,
+/// avatar chips, "someone else is editing this doc" indicators.
+#[derive(Resource, Default)]
+pub struct Presence {
+    /// Connected users keyed by id. Insertion order is not stable;
+    /// consumers that need stable display order should sort by
+    /// [`PresenceInfo::display_name`] or by [`UserId`].
+    pub users: HashMap<UserId, PresenceInfo>,
+}
+
+impl Presence {
+    /// Users that are currently viewing the given document.
+    pub fn viewers_of(&self, doc: DocumentId) -> impl Iterator<Item = (&UserId, &PresenceInfo)> {
+        self.users
+            .iter()
+            .filter(move |(_, info)| info.active_doc == Some(doc))
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // TwinJournal
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -354,12 +502,16 @@ impl Plugin for EditorIntentPlugin {
 ///
 /// Journal entries intentionally do *not* carry op payloads — ops live
 /// on their `DocumentHost`'s undo stack. The journal is a *summary*
-/// timeline: "at time `t`, event `kind` happened on document `doc`."
-/// Consumers that need the full op walk the host.
+/// timeline: "at time `t`, event `kind` happened on document `doc`,
+/// attributed to `origin`." Consumers that need the full op walk the
+/// host.
 #[derive(Clone, Debug)]
 pub struct TwinEvent {
     /// Wall-clock time the event was appended (session-local).
     pub at: Instant,
+    /// Who / what produced the event (`Local` user, `Remote` peer,
+    /// `Replay` harness). Audit and filter-by-source both use this.
+    pub origin: EventOrigin,
     /// What happened.
     pub kind: TwinEventKind,
 }
@@ -410,12 +562,19 @@ pub struct TwinJournal {
 }
 
 impl TwinJournal {
-    /// Append an event. Internal helper — prefer firing one of the
-    /// lifecycle events and letting the journal's own subscribers pick
-    /// it up. Exposed for tests and manual seeding.
+    /// Append an event with the default [`EventOrigin::Local`].
+    /// Convenience for tests / ad-hoc seeding; observer-path uses
+    /// [`push_with_origin`](Self::push_with_origin) so remote-sourced
+    /// events retain their provenance.
     pub fn push(&mut self, kind: TwinEventKind) {
+        self.push_with_origin(kind, EventOrigin::Local);
+    }
+
+    /// Append an event with an explicit origin.
+    pub fn push_with_origin(&mut self, kind: TwinEventKind, origin: EventOrigin) {
         self.entries.push(TwinEvent {
             at: Instant::now(),
+            origin,
             kind,
         });
     }
@@ -470,6 +629,7 @@ pub struct TwinJournalPlugin;
 impl Plugin for TwinJournalPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<TwinJournal>()
+            .init_resource::<Presence>()
             .add_observer(on_document_opened)
             .add_observer(on_document_changed)
             .add_observer(on_document_saved)
@@ -478,19 +638,23 @@ impl Plugin for TwinJournalPlugin {
 }
 
 fn on_document_opened(trigger: On<DocumentOpened>, mut journal: ResMut<TwinJournal>) {
-    journal.push(TwinEventKind::Opened { doc: trigger.event().doc });
+    let ev = trigger.event();
+    journal.push_with_origin(TwinEventKind::Opened { doc: ev.doc }, ev.origin.clone());
 }
 
 fn on_document_changed(trigger: On<DocumentChanged>, mut journal: ResMut<TwinJournal>) {
-    journal.push(TwinEventKind::Changed { doc: trigger.event().doc });
+    let ev = trigger.event();
+    journal.push_with_origin(TwinEventKind::Changed { doc: ev.doc }, ev.origin.clone());
 }
 
 fn on_document_saved(trigger: On<DocumentSaved>, mut journal: ResMut<TwinJournal>) {
-    journal.push(TwinEventKind::Saved { doc: trigger.event().doc });
+    let ev = trigger.event();
+    journal.push_with_origin(TwinEventKind::Saved { doc: ev.doc }, ev.origin.clone());
 }
 
 fn on_document_closed(trigger: On<DocumentClosed>, mut journal: ResMut<TwinJournal>) {
-    journal.push(TwinEventKind::Closed { doc: trigger.event().doc });
+    let ev = trigger.event();
+    journal.push_with_origin(TwinEventKind::Closed { doc: ev.doc }, ev.origin.clone());
 }
 
 #[cfg(test)]

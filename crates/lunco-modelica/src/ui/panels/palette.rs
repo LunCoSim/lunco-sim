@@ -279,66 +279,77 @@ impl Panel for ComponentPalettePanel {
         let shown = scored.len().min(shown_cap);
 
         // ── Result list ──
-        // Defer world mutations until after the render closure to
-        // avoid holding a ResMut across egui callbacks.
+        // When the user is searching or filtered to a single category,
+        // render a flat (score-sorted) list — matches VS Code's
+        // search-results behaviour. With no filter, group by category
+        // into collapsible sections (Figma Assets style, OMEdit's
+        // component-tree style). Each section is closed by default
+        // except the first, keeping long category chains scannable.
         let mut clicked: Option<MSLComponentDef> = None;
+        let is_searching = !query_lc.is_empty() || selected_category.is_some();
+
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                for (comp, _score) in scored.iter().take(shown) {
-                    let cat_name = category_of(&comp.msl_path);
-                    let cat_color = category_info(cat_name)
-                        .map(|c| c.egui_color())
-                        .unwrap_or(egui::Color32::GRAY);
-
-                    let resp = ui
-                        .horizontal(|ui| {
-                            // Colored category dot (Figma-style tint).
-                            let (rect, _) = ui.allocate_exact_size(
-                                egui::vec2(8.0, 8.0),
-                                egui::Sense::hover(),
-                            );
-                            ui.painter().circle_filled(rect.center(), 4.0, cat_color);
-
-                            ui.vertical(|ui| {
-                                ui.add(egui::Label::new(
-                                    egui::RichText::new(&comp.display_name).size(12.0),
-                                ));
-                                ui.add(egui::Label::new(
-                                    egui::RichText::new(&comp.category)
-                                        .size(9.0)
-                                        .color(egui::Color32::GRAY),
-                                ));
-                            });
-                        })
-                        .response
-                        .interact(egui::Sense::click());
-
-                    let tooltip = comp
-                        .description
-                        .as_deref()
-                        .unwrap_or(comp.msl_path.as_str());
-                    let resp = resp.on_hover_text(format!(
-                        "{}\n\n{}\n\nClick to add to the active diagram.",
-                        comp.msl_path, tooltip
-                    ));
-
-                    if resp.clicked() {
-                        clicked = Some((*comp).clone());
+                if is_searching {
+                    // Flat list (top-100 matches, score-ordered).
+                    for (comp, _score) in scored.iter().take(shown) {
+                        if render_component_row(ui, comp) {
+                            clicked = Some((*comp).clone());
+                        }
                     }
-
-                    ui.separator();
-                }
-                if scored.len() > shown_cap {
-                    ui.label(
-                        egui::RichText::new(format!(
-                            "+ {} more — refine the search",
-                            scored.len() - shown_cap
-                        ))
-                        .size(10.0)
-                        .italics()
-                        .color(egui::Color32::GRAY),
-                    );
+                    if scored.len() > shown_cap {
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "+ {} more — refine the search",
+                                scored.len() - shown_cap
+                            ))
+                            .size(10.0)
+                            .italics()
+                            .color(egui::Color32::GRAY),
+                        );
+                    }
+                } else {
+                    // Grouped by top-level category — collapsible. First
+                    // group (highest-count Electrical usually) is
+                    // expanded by default so users see something
+                    // immediately.
+                    let mut groups: std::collections::BTreeMap<
+                        &'static str,
+                        Vec<&MSLComponentDef>,
+                    > = std::collections::BTreeMap::new();
+                    for (comp, _score) in scored.iter() {
+                        let cat = category_of(&comp.msl_path);
+                        groups.entry(cat).or_default().push(*comp);
+                    }
+                    // Render in CATEGORIES order so the color story is
+                    // consistent across sessions.
+                    let mut first = true;
+                    for cat in CATEGORIES {
+                        let Some(list) = groups.get(cat.name) else {
+                            continue;
+                        };
+                        let header =
+                            egui::CollapsingHeader::new(
+                                egui::RichText::new(format!(
+                                    "{} ({})",
+                                    cat.name,
+                                    list.len()
+                                ))
+                                .color(cat.egui_color())
+                                .strong(),
+                            )
+                            .default_open(first)
+                            .id_salt(("palette_cat", cat.name));
+                        header.show(ui, |ui| {
+                            for comp in list {
+                                if render_component_row(ui, comp) {
+                                    clicked = Some((*comp).clone());
+                                }
+                            }
+                        });
+                        first = false;
+                    }
                 }
             });
 
@@ -352,6 +363,48 @@ impl Panel for ComponentPalettePanel {
             }
         }
     }
+}
+
+/// Draw one component row (category dot + name + subtitle). Returns
+/// `true` if the user just clicked it (instantiate target).
+/// Used by both the flat-search list and the grouped-by-category list.
+fn render_component_row(ui: &mut egui::Ui, comp: &MSLComponentDef) -> bool {
+    let cat_name = category_of(&comp.msl_path);
+    let cat_color = category_info(cat_name)
+        .map(|c| c.egui_color())
+        .unwrap_or(egui::Color32::GRAY);
+
+    let resp = ui
+        .horizontal(|ui| {
+            let (rect, _) = ui.allocate_exact_size(
+                egui::vec2(8.0, 8.0),
+                egui::Sense::hover(),
+            );
+            ui.painter().circle_filled(rect.center(), 4.0, cat_color);
+
+            ui.vertical(|ui| {
+                ui.add(egui::Label::new(
+                    egui::RichText::new(&comp.display_name).size(12.0),
+                ));
+                ui.add(egui::Label::new(
+                    egui::RichText::new(&comp.category)
+                        .size(9.0)
+                        .color(egui::Color32::GRAY),
+                ));
+            });
+        })
+        .response
+        .interact(egui::Sense::click());
+
+    let tooltip = comp
+        .description
+        .as_deref()
+        .unwrap_or(comp.msl_path.as_str());
+    resp.on_hover_text(format!(
+        "{}\n\n{}\n\nClick to add to the active diagram.",
+        comp.msl_path, tooltip
+    ))
+    .clicked()
 }
 
 /// Draw one category chip. Returns `true` if the user just clicked

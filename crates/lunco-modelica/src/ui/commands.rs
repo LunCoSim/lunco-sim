@@ -180,21 +180,8 @@ fn render_close_dialogs(
             continue;
         };
         let document = host.document();
-        let display_name = document
-            .canonical_path()
-            .and_then(|p| {
-                let s = p.to_string_lossy();
-                if let Some(name) = s.strip_prefix("mem://") {
-                    Some(name.to_string())
-                } else {
-                    p.file_stem().map(|x| x.to_string_lossy().into_owned())
-                }
-            })
-            .unwrap_or_else(|| format!("Model #{}", doc.raw()));
-        let is_untitled = document
-            .canonical_path()
-            .map(|p| p.to_string_lossy().starts_with("mem://"))
-            .unwrap_or(true);
+        let display_name = document.origin().display_name();
+        let is_untitled = document.origin().is_untitled();
         let can_save_directly = !is_untitled && !document.is_read_only();
 
         enum DialogAction {
@@ -483,27 +470,24 @@ fn on_save_document(
             return; // Foreign / unknown id.
         };
         let document = host.document();
-        let Some(path) = document.canonical_path() else {
+        if document.origin().is_untitled() {
             warn!(
-                "[Save] Document {} has no canonical path — Save-As not implemented yet.",
-                doc
-            );
-            return;
-        };
-        // `mem://` paths are our in-memory marker, not real filesystem
-        // paths. Treat them as "needs Save-As" until that dialog lands.
-        if path.to_string_lossy().starts_with("mem://") {
-            warn!(
-                "[Save] Document {} is in-memory (path {:?}); Save-As required.",
-                doc, path
+                "[Save] Document {doc} is untitled ({}); Save-As required.",
+                document.origin().display_name()
             );
             return;
         }
+        let Some(path) = document.canonical_path() else {
+            warn!(
+                "[Save] Document {doc} has no canonical path — Save-As not implemented yet."
+            );
+            return;
+        };
         if document.is_read_only() {
             warn!(
-                "[Save] Document {} is read-only ({:?} library) — refusing to overwrite.",
+                "[Save] Document {} is read-only ({:?}) — refusing to overwrite.",
                 doc,
-                document.library()
+                document.origin()
             );
             return;
         }
@@ -518,7 +502,7 @@ fn on_save_document(
     info!("[Save] Wrote {} bytes to {:?}", source.len(), path);
 
     registry.mark_document_saved(doc);
-    commands.trigger(DocumentSaved { doc });
+    commands.trigger(DocumentSaved::local(doc));
 }
 
 fn on_close_document(
@@ -675,8 +659,7 @@ fn on_create_new_scratch_model(
     let mem_id = format!("mem://{name}");
     let doc_id = registry.allocate_with_origin(
         source.clone(),
-        Some(std::path::PathBuf::from(&mem_id)),
-        crate::ui::state::ModelLibrary::InMemory,
+        lunco_doc::DocumentOrigin::untitled(name.clone()),
     );
 
     cache.in_memory_models.retain(|e| e.id != mem_id);

@@ -95,6 +95,39 @@ pub struct PackageTreeCache {
     /// under "Your Models" so the user can click back into one after
     /// they've navigated away.
     pub in_memory_models: Vec<InMemoryEntry>,
+    /// Currently-open Twin folder (if any) + its scanned file tree.
+    /// Populated by the "Open Folder" button, cleared by "Close Twin".
+    pub twin: Option<TwinState>,
+}
+
+/// User's Twin workspace — a folder on disk being browsed as a tree.
+///
+/// Read-only in this first pass: scanning + open-on-click. Edits
+/// (new/rename/delete, drag-move) land in the next phase.
+#[derive(Clone)]
+pub struct TwinState {
+    /// Root folder the user picked via Open Folder.
+    pub root: std::path::PathBuf,
+    /// Flat list of entries (files + folders), with nesting captured
+    /// by `depth`. Built via one synchronous `walkdir` at open time;
+    /// cheap for hundreds-of-files twins, can become lazy later.
+    pub entries: Vec<TwinEntry>,
+}
+
+/// One row in the Twin Explorer tree.
+#[derive(Clone)]
+pub struct TwinEntry {
+    /// Absolute path on disk.
+    pub path: std::path::PathBuf,
+    /// Display name — just the file/folder name (no directory path).
+    pub name: String,
+    /// Nesting depth for indentation (0 = direct child of root).
+    pub depth: usize,
+    /// Whether this is a directory (rendered as `📁`) or a file.
+    pub is_dir: bool,
+    /// Whether this entry is a Modelica source (`.mo`). Other files
+    /// are shown but greyed out / non-clickable.
+    pub is_modelica: bool,
 }
 
 impl PackageTreeCache {
@@ -143,8 +176,51 @@ impl PackageTreeCache {
             tasks: Vec::new(),
             file_tasks: Vec::new(),
             in_memory_models: Vec::new(),
+            twin: None,
         }
     }
+}
+
+/// Scan `root` for a Twin tree. Skips hidden dirs + `.git` + common
+/// build dirs. `.mo` files are flagged as instantiable; other files
+/// are listed for context but can't be opened.
+pub fn scan_twin_folder(root: std::path::PathBuf) -> TwinState {
+    use walkdir::WalkDir;
+    let mut entries = Vec::new();
+    for entry in WalkDir::new(&root)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|e| {
+            let n = e.file_name().to_string_lossy();
+            !n.starts_with('.')
+                && n != "target"
+                && n != "shared_target"
+                && n != "node_modules"
+        })
+        .flatten()
+    {
+        let path = entry.path().to_path_buf();
+        if path == root {
+            continue; // Skip the root itself.
+        }
+        let depth = entry.depth().saturating_sub(1);
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let is_dir = entry.file_type().is_dir();
+        let is_modelica = !is_dir
+            && path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.eq_ignore_ascii_case("mo"))
+                .unwrap_or(false);
+        entries.push(TwinEntry {
+            path,
+            name,
+            depth,
+            is_dir,
+            is_modelica,
+        });
+    }
+    TwinState { root, entries }
 }
 
 // ---------------------------------------------------------------------------
@@ -263,15 +339,15 @@ pub fn handle_package_loading_tasks(
 
         // Allocate the Document *now* so we have a stable DocumentId
         // to key a tab by. Previously we deferred allocation until the
-        // first Compile, but multi-tab needs the id up front. The
-        // canonical-path heuristic: use the `result.id` scheme string
-        // as the path (real FS path for User models, synthetic for
-        // bundled/msl — harmless, informational only).
-        let canonical_path = Some(std::path::PathBuf::from(&result.id));
+        // first Compile, but multi-tab needs the id up front.
+        let writable = matches!(result.library, ModelLibrary::User);
+        let origin = lunco_doc::DocumentOrigin::File {
+            path: std::path::PathBuf::from(&result.id),
+            writable,
+        };
         let doc_id = registry.allocate_with_origin(
             result.source.to_string(),
-            canonical_path,
-            result.library.clone(),
+            origin,
         );
 
         workbench.open_model = Some(OpenModel {
@@ -327,6 +403,9 @@ impl Panel for PackageBrowserPanel {
         let mut to_open: Option<PackageAction> = None;
         let mut reopen_in_memory: Option<String> = None;
         let mut create_new = false;
+        let mut open_twin_picker = false;
+        let mut close_twin = false;
+        let mut open_twin_file: Option<std::path::PathBuf> = None;
 
         {
             let mut tree_cache = world.resource_mut::<PackageTreeCache>();
@@ -385,15 +464,95 @@ impl Panel for PackageBrowserPanel {
                 ui.add_space(4.0);
                 ui.separator();
 
-                // ── Section 3: Open Folder / Twin (future) ──
-                ui.label(
-                    egui::RichText::new("📂 Twin").size(10.0).color(egui::Color32::DARK_GRAY),
-                );
-                ui.label(
-                    egui::RichText::new("(Open Folder / workspace tree — coming soon)")
-                        .size(9.0)
-                        .color(egui::Color32::DARK_GRAY),
-                );
+                // ── Section 3: Twin (folder on disk) ──
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new("📂 Twin")
+                            .size(12.0)
+                            .color(egui::Color32::from_rgb(140, 200, 255))
+                            .strong(),
+                    );
+                    if cache.twin.is_some() {
+                        if ui.small_button("✕ close").on_hover_text("Close this folder").clicked() {
+                            close_twin = true;
+                        }
+                    } else if ui.small_button("📁 Open…")
+                        .on_hover_text("Pick a folder to browse as your workspace")
+                        .clicked()
+                    {
+                        open_twin_picker = true;
+                    }
+                });
+
+                if let Some(twin) = cache.twin.as_ref() {
+                    // Root label
+                    let root_name = twin
+                        .root
+                        .file_name()
+                        .map(|s| s.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| twin.root.display().to_string());
+                    ui.label(
+                        egui::RichText::new(format!("📁 {}", root_name))
+                            .size(11.0)
+                            .color(egui::Color32::from_rgb(200, 220, 255)),
+                    );
+                    ui.label(
+                        egui::RichText::new(twin.root.display().to_string())
+                            .size(9.0)
+                            .color(egui::Color32::DARK_GRAY),
+                    );
+                    ui.add_space(2.0);
+
+                    if twin.entries.is_empty() {
+                        ui.label(
+                            egui::RichText::new("(empty folder)")
+                                .size(10.0)
+                                .color(egui::Color32::GRAY),
+                        );
+                    } else {
+                        for entry in &twin.entries {
+                            let indent = entry.depth as f32 * 12.0 + 4.0;
+                            let icon = if entry.is_dir {
+                                "📁"
+                            } else if entry.is_modelica {
+                                "📄"
+                            } else {
+                                "·"
+                            };
+                            let text = egui::RichText::new(format!("{icon} {}", entry.name))
+                                .size(10.5)
+                                .color(if entry.is_modelica {
+                                    egui::Color32::from_rgb(220, 220, 160)
+                                } else if entry.is_dir {
+                                    egui::Color32::from_rgb(160, 200, 240)
+                                } else {
+                                    egui::Color32::DARK_GRAY
+                                });
+                            let resp = ui
+                                .horizontal(|ui| {
+                                    ui.add_space(indent);
+                                    ui.add(
+                                        egui::Label::new(text)
+                                            .sense(if entry.is_modelica {
+                                                egui::Sense::click()
+                                            } else {
+                                                egui::Sense::hover()
+                                            }),
+                                    )
+                                })
+                                .inner;
+                            if entry.is_modelica && resp.clicked() {
+                                open_twin_file = Some(entry.path.clone());
+                            }
+                        }
+                    }
+                } else {
+                    ui.label(
+                        egui::RichText::new("(no folder open)")
+                            .size(10.0)
+                            .color(egui::Color32::GRAY),
+                    );
+                }
             });
         }
 
@@ -402,6 +561,34 @@ impl Panel for PackageBrowserPanel {
             // The observer in `ui::commands` picks a unique
             // `Untitled<N>` name, allocates the doc, and opens a tab.
             world.commands().trigger(crate::ui::commands::CreateNewScratchModel);
+        }
+
+        // ── Twin lifecycle ──────────────────────────────────────
+        if open_twin_picker {
+            // Synchronous native picker — blocks the UI thread for
+            // the short moment the dialog is visible. Async version
+            // lands when we want multi-window.
+            if let Some(folder) = rfd::FileDialog::new()
+                .set_title("Open Twin folder")
+                .pick_folder()
+            {
+                let scanned = scan_twin_folder(folder);
+                world.resource_mut::<PackageTreeCache>().twin = Some(scanned);
+            }
+        }
+        if close_twin {
+            world.resource_mut::<PackageTreeCache>().twin = None;
+        }
+        if let Some(path) = open_twin_file {
+            // Treat the clicked .mo as a user-writable file. Use the
+            // existing disk-load path so loading + tab-open flows are
+            // consistent with clicks on Examples (minus writability).
+            let id = path.to_string_lossy().into_owned();
+            let name = path
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| id.clone());
+            open_model(world, id, name, ModelLibrary::User);
         }
 
         if let Some(action) = to_open {

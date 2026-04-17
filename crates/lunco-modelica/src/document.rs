@@ -31,31 +31,24 @@
 //! The inverse of `ReplaceSource { new }` is `ReplaceSource { new: old }`,
 //! where `old` is the source text as it was before the op applied.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use lunco_doc::{Document, DocumentError, DocumentId, DocumentOp};
-
-use crate::ui::state::ModelLibrary;
+use lunco_doc::{Document, DocumentError, DocumentId, DocumentOp, DocumentOrigin};
 
 /// The canonical Document representation of one Modelica source file.
 ///
-/// Owns the source text. The parsed AST is **not** cached on the document
-/// today — callers continue to parse on demand via
-/// `crate::ast_extract::parse_to_ast` until a concrete caller makes caching
-/// worth the complexity (invalidation on every op).
-///
-/// The document knows *where it came from*: `canonical_path` is the file
-/// this source was loaded from (and where `SaveDocument` will write back),
-/// and `library` tells UI code which library rules apply (MSL is read-only,
-/// user models are writable, etc.). A `None` path means an untitled,
-/// in-memory document — `SaveDocument` must resolve a path before writing.
+/// Owns the source text + a [`DocumentOrigin`] describing where it
+/// came from (which drives save behavior, tab title, read-only
+/// badge). The parsed AST is **not** cached on the document today —
+/// callers continue to parse on demand via
+/// `crate::ast_extract::parse_to_ast` until a concrete caller makes
+/// caching worth the complexity (invalidation on every op).
 #[derive(Debug, Clone)]
 pub struct ModelicaDocument {
     id: DocumentId,
     source: String,
     generation: u64,
-    canonical_path: Option<PathBuf>,
-    library: ModelLibrary,
+    origin: DocumentOrigin,
     /// Generation at which the document was last persisted to disk.
     /// `None` means never saved (freshly created in-memory); `Some(g)`
     /// means last saved at generation `g`. See [`is_dirty`](Self::is_dirty).
@@ -63,43 +56,36 @@ pub struct ModelicaDocument {
 }
 
 impl ModelicaDocument {
-    /// Build an in-memory `ModelicaDocument` with no canonical path.
-    /// `library` defaults to [`ModelLibrary::InMemory`] and the document
-    /// starts dirty (never-saved).
+    /// Build an in-memory `ModelicaDocument` with the given name as
+    /// its Untitled identifier. Starts dirty (never-saved).
     pub fn new(id: DocumentId, source: impl Into<String>) -> Self {
-        Self {
+        Self::with_origin(
             id,
-            source: source.into(),
-            generation: 0,
-            canonical_path: None,
-            library: ModelLibrary::InMemory,
-            last_saved_generation: None,
-        }
+            source,
+            DocumentOrigin::untitled(format!("Untitled-{}", id.raw())),
+        )
     }
 
-    /// Build a `ModelicaDocument` backed by a file on disk (or a bundled
-    /// asset path), carrying its library classification for read-only
-    /// rules and UI hints.
+    /// Build a `ModelicaDocument` with an explicit origin.
     ///
-    /// For on-disk / bundled / library-provided origins the source is
-    /// assumed to already match disk at generation 0, so the document
-    /// starts clean. In-memory origins start dirty.
+    /// For on-disk origins (read-only library entries, writable user
+    /// files) the source is assumed to match disk at generation 0, so
+    /// the document starts clean. Untitled origins start dirty.
     pub fn with_origin(
         id: DocumentId,
         source: impl Into<String>,
-        canonical_path: Option<PathBuf>,
-        library: ModelLibrary,
+        origin: DocumentOrigin,
     ) -> Self {
-        let last_saved_generation = match library {
-            ModelLibrary::InMemory => None,
-            _ => Some(0),
+        let last_saved_generation = if origin.is_untitled() {
+            None
+        } else {
+            Some(0)
         };
         Self {
             id,
             source: source.into(),
             generation: 0,
-            canonical_path,
-            library,
+            origin,
             last_saved_generation,
         }
     }
@@ -119,28 +105,47 @@ impl ModelicaDocument {
         self.source.is_empty()
     }
 
-    /// File path the source was loaded from, if any. `None` for untitled
-    /// in-memory documents (save-as required before write-back).
-    pub fn canonical_path(&self) -> Option<&std::path::Path> {
-        self.canonical_path.as_deref()
+    /// Where this document came from — drives Save behaviour, tab
+    /// title, read-only badges. See [`DocumentOrigin`].
+    pub fn origin(&self) -> &DocumentOrigin {
+        &self.origin
     }
 
-    /// Which library classification this document belongs to. Determines
-    /// writability and UI badges.
-    pub fn library(&self) -> &ModelLibrary {
-        &self.library
+    /// File path the source was loaded from, if any. `None` for
+    /// untitled in-memory documents (Save-As required before
+    /// write-back). Convenience wrapper over
+    /// [`DocumentOrigin::canonical_path`].
+    pub fn canonical_path(&self) -> Option<&Path> {
+        self.origin.canonical_path()
     }
 
     /// True when this document is treated as read-only by the UI.
-    /// MSL and Bundled libraries are read-only today.
+    /// Read-only == library / bundled origin or untitled with no path.
     pub fn is_read_only(&self) -> bool {
-        matches!(self.library, ModelLibrary::MSL | ModelLibrary::Bundled)
+        !self.origin.is_writable()
     }
 
-    /// Set or change the canonical path (e.g. after Save-As on an
-    /// untitled document). Does not re-classify `library`.
+    /// Set or change the origin (e.g. after Save-As binds a path to
+    /// an untitled document). Does not touch generation or source.
+    pub fn set_origin(&mut self, origin: DocumentOrigin) {
+        self.origin = origin;
+    }
+
+    /// Back-compat setter: change the canonical path while keeping
+    /// the current writability classification. For Untitled docs,
+    /// binding a path promotes them to a writable `File` origin.
     pub fn set_canonical_path(&mut self, path: Option<PathBuf>) {
-        self.canonical_path = path;
+        match path {
+            Some(p) => {
+                let writable = self.origin.is_writable() || self.origin.is_untitled();
+                self.origin = DocumentOrigin::File { path: p, writable };
+            }
+            None => {
+                // Reverting to untitled drops the path; name defaults
+                // to the current display name.
+                self.origin = DocumentOrigin::untitled(self.origin.display_name());
+            }
+        }
     }
 
     /// Whether the document has unsaved changes — current generation

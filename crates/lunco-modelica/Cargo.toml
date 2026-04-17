@@ -43,6 +43,12 @@ crossbeam-channel = "0.5"
 lunco-api = { path = "../lunco-api", optional = true }
 log = "0.4"
 uuid = { version = "1", features = ["v4", "serde"] }
+# Native file-picker dialogs for Open Folder + Save-As. Uses the
+# OS-native picker (GTK3 on Linux, COM on Windows, Cocoa on macOS)
+# via rfd's default feature set.
+rfd = "0.15"
+# Recursive directory walking for the Twin Explorer scan.
+walkdir = "2.5"
 
 # Web-specific: wasm32-unknown-unknown needs JS interop for console output,
 # panic hooks, and RNG (std::time is unavailable).

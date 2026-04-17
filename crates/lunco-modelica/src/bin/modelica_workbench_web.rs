@@ -109,8 +109,7 @@ fn setup_web_workbench(
     // origin for read-only classification.
     let doc_id = doc_registry.allocate_with_origin(
         source.clone(),
-        Some(model_path.clone()),
-        lunco_modelica::ui::ModelLibrary::Bundled,
+        lunco_doc::DocumentOrigin::readonly_file(model_path.clone()),
     );
 
     let entity = commands.spawn((

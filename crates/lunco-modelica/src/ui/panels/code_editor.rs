@@ -139,11 +139,17 @@ impl Panel for CodeEditorPanel {
         let mut new_text = String::new();
 
         let available_height = ui.available_height();
+        let available_width = ui.available_width();
 
         egui::ScrollArea::both()
             .auto_shrink([false; 2])
             .min_scrolled_height(available_height)
             .show(ui, |ui| {
+                // Claim the whole tab body so small files still fill
+                // the height (matches the diagram canvas behaviour).
+                // Without this, TextEdit's `desired_rows` shrinks the
+                // widget to a few lines and leaves the rest blank.
+                ui.set_min_size(egui::vec2(available_width, available_height));
                 // Fetch data needed for the closure first. `text` must
                 // be a `&mut String` — egui's `TextBuffer` impl for
                 // `&str` is read-only, so passing `&mut &str` to
@@ -173,12 +179,16 @@ impl Panel for CodeEditorPanel {
                         }
                     });
 
-                    // TextEdit
+                    // TextEdit — `desired_rows` is the *minimum* height
+                    // rendered; set it high so short files still look
+                    // like "an editor you can write in" instead of a
+                    // cramped 3-line widget.
+                    let desired_rows = (available_height / 16.0).max(20.0) as usize;
                     let output = ui.add(egui::TextEdit::multiline(&mut text)
                         .font(egui::TextStyle::Monospace)
                         .code_editor()
                         .desired_width(f32::INFINITY)
-                        .desired_rows(1)
+                        .desired_rows(desired_rows)
                         .lock_focus(true)
                         .interactive(true) // Always interactive for selection
                         .layouter(&mut |ui, string, _wrap_width| {

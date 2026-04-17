@@ -89,13 +89,13 @@ fn drain_document_changes(
     mut commands: Commands,
 ) {
     for doc in registry.drain_pending_opened() {
-        commands.trigger(lunco_doc_bevy::DocumentOpened { doc });
+        commands.trigger(lunco_doc_bevy::DocumentOpened::local(doc));
     }
     for doc in registry.drain_pending_changes() {
-        commands.trigger(lunco_doc_bevy::DocumentChanged { doc });
+        commands.trigger(lunco_doc_bevy::DocumentChanged::local(doc));
     }
     for doc in registry.drain_pending_closed() {
-        commands.trigger(lunco_doc_bevy::DocumentClosed { doc });
+        commands.trigger(lunco_doc_bevy::DocumentClosed::local(doc));
     }
 }
 

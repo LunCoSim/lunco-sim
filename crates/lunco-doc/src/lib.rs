@@ -56,6 +56,7 @@
 #![warn(missing_docs)]
 
 use std::fmt;
+use std::path::{Path, PathBuf};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // DocumentId
@@ -90,6 +91,99 @@ impl DocumentId {
 impl fmt::Display for DocumentId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "DocumentId({})", self.0)
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DocumentOrigin — where a document came from + whether it can be saved
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Where a document originated, which drives save behavior +
+/// UI affordances (tab title, read-only badge, Save button).
+///
+/// Deliberately minimal: two variants. Fancier classifications
+/// (MSL / bundled / third-party library / user project) are a
+/// *Package Browser* concern — at the document level, all that
+/// matters is "does it have a path we can write to?".
+///
+/// Architectural seed: when documents can come from a remote Nucleus
+/// server or a URL-addressed library, a `Remote { url }` variant slots
+/// in here without touching Document trait surface.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DocumentOrigin {
+    /// Never written to disk; `name` is the in-session display id
+    /// (e.g. `"Untitled1"`). Saving requires Save-As to bind a path.
+    Untitled {
+        /// Human-readable identifier (shown on the tab until saved).
+        name: String,
+    },
+    /// Backed by a filesystem path. `writable` gates the Save button
+    /// so library / bundled assets stay read-only even though they
+    /// have a concrete path.
+    File {
+        /// Canonical filesystem path (absolute preferred).
+        path: PathBuf,
+        /// Whether writes are permitted. `false` for library /
+        /// bundled-example files.
+        writable: bool,
+    },
+}
+
+impl DocumentOrigin {
+    /// Shorthand: a user-writable filesystem document.
+    pub fn writable_file(path: impl Into<PathBuf>) -> Self {
+        Self::File {
+            path: path.into(),
+            writable: true,
+        }
+    }
+
+    /// Shorthand: a read-only filesystem document (library entry,
+    /// bundled example).
+    pub fn readonly_file(path: impl Into<PathBuf>) -> Self {
+        Self::File {
+            path: path.into(),
+            writable: false,
+        }
+    }
+
+    /// Shorthand: an in-memory untitled scratch document.
+    pub fn untitled(name: impl Into<String>) -> Self {
+        Self::Untitled { name: name.into() }
+    }
+
+    /// Filesystem path, if any. `None` for [`Untitled`](Self::Untitled).
+    pub fn canonical_path(&self) -> Option<&Path> {
+        match self {
+            Self::File { path, .. } => Some(path.as_path()),
+            Self::Untitled { .. } => None,
+        }
+    }
+
+    /// Whether Save may write to this origin. `false` for read-only
+    /// library entries and for untitled docs without a bound path
+    /// (Save-As is required for the latter).
+    pub fn is_writable(&self) -> bool {
+        matches!(self, Self::File { writable: true, .. })
+    }
+
+    /// Whether this document has never been written to disk in this
+    /// session (Save-As is required before Save can work).
+    pub fn is_untitled(&self) -> bool {
+        matches!(self, Self::Untitled { .. })
+    }
+
+    /// Best-effort display name — the tab title before any
+    /// domain-specific overrides. File stem for `File`, the stashed
+    /// `name` for `Untitled`.
+    pub fn display_name(&self) -> String {
+        match self {
+            Self::Untitled { name } => name.clone(),
+            Self::File { path, .. } => path
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| path.display().to_string()),
+        }
     }
 }
 

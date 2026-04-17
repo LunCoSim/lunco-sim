@@ -21,7 +21,7 @@ use bevy::prelude::*;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use lunco_assets::assets_dir;
-use lunco_doc::{DocumentHost, DocumentId};
+use lunco_doc::{DocumentHost, DocumentId, DocumentOrigin};
 #[cfg(target_arch = "wasm32")]
 use std::sync::atomic::{AtomicPtr, Ordering};
 
@@ -272,26 +272,31 @@ pub struct ModelicaDocumentRegistry {
 }
 
 impl ModelicaDocumentRegistry {
-    /// Allocate a fresh in-memory [`DocumentId`] + [`DocumentHost`] holding
-    /// `source`. No canonical path, classified as
-    /// [`ModelLibrary::InMemory`]. Not linked to any entity.
+    /// Allocate a fresh Untitled [`DocumentId`] + [`DocumentHost`]
+    /// holding `source`. Display name is `Untitled-<id>`. Not linked
+    /// to any entity.
     pub fn allocate(&mut self, source: String) -> DocumentId {
-        self.allocate_with_origin(source, None, ModelLibrary::InMemory)
+        self.next_doc_id = self.next_doc_id.saturating_add(1);
+        let id = DocumentId::new(self.next_doc_id);
+        let origin = DocumentOrigin::untitled(format!("Untitled-{}", id.raw()));
+        let doc = ModelicaDocument::with_origin(id, source, origin);
+        self.hosts.insert(id, DocumentHost::new(doc));
+        self.pending_opened.push(id);
+        self.pending_changes.push(id);
+        id
     }
 
-    /// Allocate a fresh [`DocumentId`] + [`DocumentHost`], recording where
-    /// the source came from (`canonical_path`) and which library's rules
-    /// apply. Use this when opening from disk or bundled assets so
-    /// `SaveDocument` / read-only badges work.
+    /// Allocate a fresh [`DocumentId`] + [`DocumentHost`] with an
+    /// explicit origin. Use this when opening from disk or bundled
+    /// assets so `SaveDocument` + read-only badges work.
     pub fn allocate_with_origin(
         &mut self,
         source: String,
-        canonical_path: Option<PathBuf>,
-        library: ModelLibrary,
+        origin: DocumentOrigin,
     ) -> DocumentId {
         self.next_doc_id = self.next_doc_id.saturating_add(1);
         let id = DocumentId::new(self.next_doc_id);
-        let doc = ModelicaDocument::with_origin(id, source, canonical_path, library);
+        let doc = ModelicaDocument::with_origin(id, source, origin);
         self.hosts.insert(id, DocumentHost::new(doc));
         // One `Opened` for the lifecycle, then one `Changed` so any
         // subscriber that only listens to changes (diagram re-parse,
@@ -325,10 +330,9 @@ impl ModelicaDocumentRegistry {
         &mut self,
         entity: Entity,
         source: String,
-        canonical_path: Option<PathBuf>,
-        library: ModelLibrary,
+        origin: DocumentOrigin,
     ) -> DocumentId {
-        let id = self.allocate_with_origin(source, canonical_path, library);
+        let id = self.allocate_with_origin(source, origin);
         self.by_entity.insert(entity, id);
         id
     }
