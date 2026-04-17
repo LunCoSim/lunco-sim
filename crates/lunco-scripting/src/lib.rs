@@ -29,6 +29,9 @@ impl Plugin for LunCoScriptingPlugin {
         app.register_type::<ScriptedModel>()
            .register_type::<doc::ScriptLanguage>();
 
+        let python_status = python::get_python_status();
+        app.insert_resource(python_status);
+
         app.add_systems(Update, repl::process_repl_commands);
         app.add_systems(FixedUpdate, run_scripted_models);
 
@@ -40,6 +43,7 @@ impl Plugin for LunCoScriptingPlugin {
 fn run_scripted_models(
     mut q_models: Query<&mut ScriptedModel>,
     registry: Res<ScriptRegistry>,
+    python_status: Res<python::PythonStatus>,
 ) {
     for mut model in q_models.iter_mut() {
         if model.paused { continue; }
@@ -51,56 +55,77 @@ fn run_scripted_models(
 
         // Execution logic for Python/Lua
         if doc.language == doc::ScriptLanguage::Python {
-            pyo3::prepare_freethreaded_python();
-            pyo3::Python::with_gil(|py| {
-                // 1. Prepare inputs
-                let locals = pyo3::types::PyDict::new(py);
-                let inputs_dict = pyo3::types::PyDict::new(py);
-                for (k, v) in &model.inputs {
-                    let _ = inputs_dict.set_item(k, v);
+            #[cfg(feature = "python")]
+            {
+                if *python_status != python::PythonStatus::Available {
+                    error_once!("Python is not available on this system. Cannot run Python scripts.");
+                    continue;
                 }
-                let outputs_dict = pyo3::types::PyDict::new(py);
-                for (k, v) in &model.outputs {
-                    let _ = outputs_dict.set_item(k, v);
-                }
-                let _ = locals.set_item("inputs", inputs_dict);
-                let _ = locals.set_item("outputs", outputs_dict);
+                pyo3::Python::with_gil(|py| {
+                    // 1. Prepare inputs
+                    let locals = pyo3::types::PyDict::new(py);
+                    let inputs_dict = pyo3::types::PyDict::new(py);
+                    for (k, v) in &model.inputs {
+                        let _ = inputs_dict.set_item(k, v);
+                    }
+                    let outputs_dict = pyo3::types::PyDict::new(py);
+                    for (k, v) in &model.outputs {
+                        let _ = outputs_dict.set_item(k, v);
+                    }
+                    let _ = locals.set_item("inputs", inputs_dict);
+                    let _ = locals.set_item("outputs", outputs_dict);
 
-                // 2. Run source
-                let c_str = std::ffi::CString::new(doc.source.as_str()).unwrap();
-                if let Err(e) = py.run(&c_str, None, Some(&locals)) {
-                    error!("ScriptedModel Python Error: {}", e);
-                } else {
-                    // 3. Extract outputs
-                    if let Ok(Some(outputs)) = locals.get_item("outputs") {
-                        if let Ok(dict) = outputs.downcast::<pyo3::types::PyDict>() {
-                            for (k, v) in dict.iter() {
-                                if let (Ok(key), Ok(val)) = (k.extract::<String>(), v.extract::<f64>()) {
-                                    model.outputs.insert(key, val);
+                    // 2. Run source
+                    let c_str = std::ffi::CString::new(doc.source.as_str()).unwrap();
+                    if let Err(e) = py.run(&c_str, None, Some(&locals)) {
+                        error!("ScriptedModel Python Error: {}", e);
+                    } else {
+                        // 3. Extract outputs
+                        if let Ok(Some(outputs)) = locals.get_item("outputs") {
+                            if let Ok(dict) = outputs.downcast::<pyo3::types::PyDict>() {
+                                for (k, v) in dict.iter() {
+                                    if let (Ok(key), Ok(val)) = (k.extract::<String>(), v.extract::<f64>()) {
+                                        model.outputs.insert(key, val);
+                                    }
                                 }
                             }
                         }
                     }
-                }
-            });
+                });
+            }
+            #[cfg(not(feature = "python"))]
+            {
+                error_once!("Python support was not compiled into this binary.");
+            }
         }
     }
 }
 
 fn handle_script_request(
     trigger: On<lunco_api::ScriptRequestEvent>,
+    python_status: Res<python::PythonStatus>,
 ) {
     let event = trigger.event();
     info!("Executing Remote Script ({}): {}", event.language, event.code);
     
     if event.language.to_lowercase() == "python" {
-        pyo3::prepare_freethreaded_python();
-        pyo3::Python::with_gil(|py| {
-            let c_str = std::ffi::CString::new(event.code.as_str()).unwrap();
-            if let Err(e) = py.run(&c_str, None, None) {
-                error!("Remote Python Error: {}", e);
+        #[cfg(feature = "python")]
+        {
+            if *python_status != python::PythonStatus::Available {
+                error!("Python is not available on this system. Cannot execute remote Python script.");
+                return;
             }
-        });
+            pyo3::Python::with_gil(|py| {
+                let c_str = std::ffi::CString::new(event.code.as_str()).unwrap();
+                if let Err(e) = py.run(&c_str, None, None) {
+                    error!("Remote Python Error: {}", e);
+                }
+            });
+        }
+        #[cfg(not(feature = "python"))]
+        {
+            error!("Python support was not compiled into this binary.");
+        }
     } else {
         warn!("Unsupported script language: {}", event.language);
     }

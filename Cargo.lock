@@ -5975,7 +5975,7 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "crossbeam-channel",
- "lunco-api",
+ "libloading",
  "lunco-core",
  "lunco-doc",
  "mlua",

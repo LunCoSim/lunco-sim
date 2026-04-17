@@ -26,17 +26,27 @@ pub fn spawn_repl_thread() -> ReplResource {
     ReplResource { receiver: rx }
 }
 
-pub fn process_repl_commands(repl: Res<ReplResource>) {
+pub fn process_repl_commands(
+    repl: Res<ReplResource>,
+    python_status: Res<crate::python::PythonStatus>,
+) {
     while let Ok(cmd) = repl.receiver.try_recv() {
         info!("Executing REPL: {}", cmd);
-        Python::with_gil(|py| {
-            let c_str = CString::new(cmd.as_str()).unwrap();
-            match py.run(&c_str, None, None) {
-                Ok(_) => {}
-                Err(e) => {
-                    error!("Python Error: {}", e);
+        if *python_status != crate::python::PythonStatus::Available {
+            error!("Python is not available. Cannot execute REPL command.");
+            continue;
+        }
+        #[cfg(feature = "python")]
+        {
+            Python::with_gil(|py| {
+                let c_str = CString::new(cmd.as_str()).unwrap();
+                match py.run(&c_str, None, None) {
+                    Ok(_) => {}
+                    Err(e) => {
+                        error!("Python Error: {}", e);
+                    }
                 }
-            }
-        });
+            });
+        }
     }
 }

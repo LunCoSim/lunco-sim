@@ -49,6 +49,10 @@ impl Document for ScriptDocument {
     }
 
     fn apply(&mut self, op: ScriptOp) -> Result<ScriptOp, DocumentError> {
+        if self.language == ScriptLanguage::Python && crate::python::get_python_status() != crate::python::PythonStatus::Available {
+            return Err(DocumentError::ValidationFailed("Python is not available on this system. Editing Python scripts is disabled.".to_string()));
+        }
+
         let inverse = match op {
             ScriptOp::SetSource(new_source) => {
                 let old = self.source.clone();
