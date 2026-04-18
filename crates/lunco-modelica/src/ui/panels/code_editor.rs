@@ -78,9 +78,27 @@ impl Panel for CodeEditorPanel {
         }
 
         if let Some(ref path) = model_path {
+            // Resync from `open_model.source` when either
+            //   (a) the model itself changed (`model_path` diverged), or
+            //   (b) some other panel mutated `open_model.source` —
+            //       currently the diagram panel after applying AST
+            //       ops — and the content hash now differs from what
+            //       this buffer last synced.
+            //
+            // Case (b) is what propagates diagram edits (add / delete
+            // component) into the code view. Gap: if the user has
+            // un-committed text edits in this buffer AND triggers a
+            // diagram edit, the resync clobbers them. That's a known
+            // transitional gap until the code editor writes every
+            // keystroke through the Document (its own `EditText` op).
             let needs_sync = {
                 let buf_state = world.resource::<EditorBufferState>();
-                buf_state.model_path != *path
+                let external_hash = world.resource::<WorkbenchState>()
+                    .open_model
+                    .as_ref()
+                    .map(|m| hash_content(&m.source))
+                    .unwrap_or(0);
+                buf_state.model_path != *path || buf_state.source_hash != external_hash
             };
 
             if needs_sync {
@@ -89,7 +107,7 @@ impl Panel for CodeEditorPanel {
                     let m = state.open_model.as_ref().unwrap();
                     (m.source.to_string(), m.line_starts.clone(), m.detected_name.clone(), m.cached_galley.clone())
                 };
-                
+
                 let mut buf_state = world.resource_mut::<EditorBufferState>();
                 buf_state.text = source;
                 buf_state.line_starts = line_starts;
