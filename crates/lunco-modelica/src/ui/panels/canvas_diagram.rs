@@ -738,8 +738,28 @@ impl CanvasDiagramState {
 /// poll loop can tell whether we've moved on since and should drop a
 /// stale result. The owning doc is implicit: each task lives on that
 /// doc's [`CanvasDocState`].
+///
+/// # Cancellation
+///
+/// Bevy tasks can't be preempted — "cancel" is cooperative. We
+/// give the task a shared `AtomicBool` and a deadline; it polls
+/// them at phase boundaries (build → edges recovery → project)
+/// and returns an empty `Scene` if either fires. The poll loop
+/// drops the handle when the deadline elapses even if the task
+/// hasn't noticed yet — the pool runs it to completion but nobody
+/// reads the result.
+///
+/// Two independent "stop" signals:
+///
+/// - **`cancel`** — flipped to `true` explicitly (user hits
+///   cancel, new generation supersedes, tab closed, etc.).
+/// - **`deadline`** — wall-clock elapsed > configured max. Reads
+///   live via `spawned_at.elapsed() > deadline`.
 pub struct ProjectionTask {
     pub gen_at_spawn: u64,
+    pub spawned_at: std::time::Instant,
+    pub deadline: std::time::Duration,
+    pub cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
     pub task: bevy::tasks::Task<Scene>,
 }
 
@@ -843,15 +863,16 @@ impl Panel for CanvasDiagramPanel {
                 let ast = doc.ast().result.as_ref().ok().cloned();
                 (doc.source().to_string(), ast)
             };
-            // Snapshot the configurable projection cap so the bg
+            // Snapshot the configurable projection caps so the bg
             // task doesn't need to reach back into the world (it
             // can't — it runs off-thread with only owned data).
-            let max_nodes_snapshot = world
+            let (max_nodes_snapshot, max_duration_snapshot) = world
                 .get_resource::<DiagramProjectionLimits>()
-                .map(|l| l.max_nodes)
-                .unwrap_or(
+                .map(|l| (l.max_nodes, l.max_duration))
+                .unwrap_or((
                     crate::ui::panels::diagram::DEFAULT_MAX_DIAGRAM_NODES,
-                );
+                    std::time::Duration::from_secs(60),
+                ));
             // Target class for the projection: the fully-qualified
             // name the drill-in tab points at, stripped of its
             // `msl://` URI scheme. Lets the builder descend into
@@ -910,43 +931,73 @@ impl Panel for CanvasDiagramPanel {
                     docstate.last_seen_gen = gen;
                 } else {
                     let pool = bevy::tasks::AsyncComputeTaskPool::get();
+                    let spawned_at = std::time::Instant::now();
+                    let cancel = std::sync::Arc::new(
+                        std::sync::atomic::AtomicBool::new(false),
+                    );
+                    let cancel_for_task = std::sync::Arc::clone(&cancel);
+                    let deadline = max_duration_snapshot;
+                    let target_for_log = target_class_snapshot.clone();
+                    let source_bytes_for_log = source.len();
                     let task = pool.spawn(async move {
-                        // Heavy path (zero rumoca parses — we reuse
-                        // the document's AST):
-                        //   1. `import_model_to_diagram_from_ast` builds
-                        //      the component graph from the pre-parsed
-                        //      AST, no re-parse. `Arc<StoredDefinition>`
-                        //      on the wire — a pointer bump, not a tree
-                        //      clone. Critical: MSL package ASTs are
-                        //      tens of MB; deep-cloning them froze the
-                        //      whole device.
-                        //   2. `recover_edges_from_source` — regex pass
-                        //      backfilling connect equations the AST
-                        //      path drops for unresolved ports.
-                        //   3. `project_scene` — cheap.
+                        use std::sync::atomic::Ordering;
+                        let should_stop = || {
+                            cancel_for_task.load(Ordering::Relaxed)
+                                || spawned_at.elapsed() > deadline
+                        };
+                        bevy::log::info!(
+                            "[Projection] start: {} bytes target={:?}",
+                            source_bytes_for_log,
+                            target_for_log,
+                        );
+                        if should_stop() {
+                            return Scene::new();
+                        }
+                        let t0 = std::time::Instant::now();
                         let mut diagram = if let Some(ast) = ast_arc {
                             crate::ui::panels::diagram::import_model_to_diagram_from_ast(
                                 ast,
                                 &source,
                                 max_nodes_snapshot,
-                                target_class_snapshot.as_deref(),
+                                target_for_log.as_deref(),
                             )
                             .unwrap_or_default()
                         } else {
-                            // Parse error on the doc → fall back to the
-                            // recovering top-level entry point. This only
-                            // hits when the user typed invalid Modelica;
-                            // for any well-formed doc we're on the fast
-                            // path above.
                             crate::ui::panels::diagram::import_model_to_diagram(&source)
                                 .unwrap_or_default()
                         };
+                        bevy::log::info!(
+                            "[Projection] import done in {:.0}ms: {} nodes {} edges",
+                            t0.elapsed().as_secs_f64() * 1000.0,
+                            diagram.nodes.len(),
+                            diagram.edges.len(),
+                        );
+                        if should_stop() {
+                            return Scene::new();
+                        }
+                        let t1 = std::time::Instant::now();
                         recover_edges_from_source(&source, &mut diagram);
+                        bevy::log::info!(
+                            "[Projection] recover_edges done in {:.0}ms: {} edges",
+                            t1.elapsed().as_secs_f64() * 1000.0,
+                            diagram.edges.len(),
+                        );
+                        if should_stop() {
+                            return Scene::new();
+                        }
+                        let t2 = std::time::Instant::now();
                         let (scene, _id_map) = project_scene(&diagram);
+                        bevy::log::info!(
+                            "[Projection] project_scene done in {:.0}ms",
+                            t2.elapsed().as_secs_f64() * 1000.0,
+                        );
                         scene
                     });
                     docstate.projection_task = Some(ProjectionTask {
                         gen_at_spawn: gen,
+                        spawned_at,
+                        deadline,
+                        cancel,
                         task,
                     });
                 }
@@ -968,9 +1019,52 @@ impl Panel for CanvasDiagramPanel {
                 .open_model
                 .as_ref()
                 .and_then(|m| m.doc);
+            // Pre-fetch current gen from the registry before we
+            // take the mutable borrow of CanvasDiagramState, so we
+            // can use it inside the deadline-guard block below
+            // without fighting borrow rules.
+            let current_gen_for_deadline = active_doc.and_then(|d| {
+                world
+                    .get_resource::<ModelicaDocumentRegistry>()
+                    .and_then(|r| r.host(d))
+                    .map(|h| h.document().generation())
+            });
             let mut state = world.resource_mut::<CanvasDiagramState>();
             let docstate = state.get_mut(active_doc);
             let is_initial_projection = docstate.last_seen_gen == 0;
+
+            // Deadline guard. If the task has been running past its
+            // configured budget, flip its cancel flag and drop the
+            // handle. The pool still runs the task to completion
+            // (Bevy tasks can't be preempted), but the cooperative
+            // `should_stop` check inside the task short-circuits
+            // the remaining phases and nobody waits on the result.
+            // We mark `last_seen_gen = current_gen` so the render
+            // loop doesn't respawn the same doomed task next frame;
+            // the user has to edit the doc (generation bump) to
+            // retry — which is the correct recovery action.
+            let timed_out = docstate
+                .projection_task
+                .as_ref()
+                .map(|t| t.spawned_at.elapsed() > t.deadline)
+                .unwrap_or(false);
+            if timed_out {
+                use std::sync::atomic::Ordering;
+                if let Some(t) = docstate.projection_task.as_ref() {
+                    t.cancel.store(true, Ordering::Relaxed);
+                    bevy::log::warn!(
+                        "[CanvasDiagram] projection exceeded {:.1}s deadline \
+                         — cancelled. Raise Settings → Diagram → Timeout \
+                         to allow longer.",
+                        t.deadline.as_secs_f32(),
+                    );
+                }
+                docstate.projection_task = None;
+                if let Some(g) = current_gen_for_deadline {
+                    docstate.last_seen_gen = g;
+                }
+            }
+
             let done_task = docstate
                 .projection_task
                 .as_mut()
@@ -1371,12 +1465,23 @@ pub struct DiagramProjectionLimits {
     /// (1000). Users building power-system or multi-body models
     /// with hundreds of components can raise this in Settings.
     pub max_nodes: usize,
+    /// Wall-clock deadline for a single projection task. If the bg
+    /// task hasn't resolved within this window, the poll loop
+    /// flips the task's `cancel` flag AND drops the handle. Task
+    /// finishes (waste, but bounded), result is discarded, canvas
+    /// stays empty with a "projection timed out" overlay.
+    ///
+    /// Deliberately high (60 s default) — only catches truly
+    /// catastrophic work, not normal drill-ins. Raise in Settings
+    /// if you're profiling something slow on purpose.
+    pub max_duration: std::time::Duration,
 }
 
 impl Default for DiagramProjectionLimits {
     fn default() -> Self {
         Self {
             max_nodes: crate::ui::panels::diagram::DEFAULT_MAX_DIAGRAM_NODES,
+            max_duration: std::time::Duration::from_secs(60),
         }
     }
 }
@@ -1793,14 +1898,16 @@ fn render_empty_diagram_overlay(
     let source = open.source.as_ref();
     let class_name = open.detected_name.clone().unwrap_or_else(|| "(unnamed)".into());
 
-    let param_count = count_matches(source, r"(?m)^\s*parameter\s+");
-    let input_count = count_matches(source, r"(?m)^\s*input\s+");
-    let output_count = count_matches(source, r"(?m)^\s*output\s+");
-    let equation_count = count_matches(
-        source,
-        r"(?m)^\s*(?:der\s*\(|[A-Za-z_]\w*\s*=\s*[^=])",
-    );
-    let connect_count = count_matches(source, r"\bconnect\s*\(");
+    // Cheap cached fetch — rescans source only when source identity
+    // changes (len + 4KB-prefix hash). Previously recompiled 5
+    // regexes per frame on the 184KB source, saturating the UI
+    // thread on drill-in tabs.
+    let counts = empty_overlay_counts_cached(source);
+    let param_count = counts.params;
+    let input_count = counts.inputs;
+    let output_count = counts.outputs;
+    let equation_count = counts.equations;
+    let connect_count = counts.connects;
 
     crate::ui::panels::placeholder::render_centered_card(
         ui,
@@ -1871,13 +1978,86 @@ fn render_empty_diagram_overlay(
     );
 }
 
-/// Count regex matches in `source`. Each regex is compiled once
-/// per call — cheap because this runs only on empty-scene frames.
-fn count_matches(source: &str, pattern: &str) -> usize {
-    regex::Regex::new(pattern)
-        .ok()
-        .map(|re| re.find_iter(source).count())
-        .unwrap_or(0)
+/// One-time-compiled regexes used by the empty-diagram summary.
+///
+/// Previously [`count_matches`] compiled a fresh `Regex` on every
+/// call — fine for small user sources, catastrophic for 184 KB
+/// drill-ins where the overlay fires 5× per frame at 60 Hz. Cached
+/// here via `OnceLock` so compile cost is paid once at first use
+/// and the per-frame work collapses to scan-only.
+fn empty_overlay_regexes() -> &'static [(&'static str, regex::Regex); 5] {
+    use std::sync::OnceLock;
+    static RE: OnceLock<[(&str, regex::Regex); 5]> = OnceLock::new();
+    RE.get_or_init(|| {
+        [
+            ("parameters", regex::Regex::new(r"(?m)^\s*parameter\s+").unwrap()),
+            ("inputs", regex::Regex::new(r"(?m)^\s*input\s+").unwrap()),
+            ("outputs", regex::Regex::new(r"(?m)^\s*output\s+").unwrap()),
+            (
+                "equations",
+                regex::Regex::new(
+                    r"(?m)^\s*(?:der\s*\(|[A-Za-z_]\w*\s*=\s*[^=])",
+                )
+                .unwrap(),
+            ),
+            (
+                "connects",
+                regex::Regex::new(r"\bconnect\s*\(").unwrap(),
+            ),
+        ]
+    })
+}
+
+/// Counts for the empty-diagram overlay, cached per source so the
+/// ~5 regex scans on large MSL files aren't re-run every frame.
+/// Key is `(source length, blake3 hash of the first 4 KB)` — cheap
+/// to compute, collision rate negligible for this use.
+#[derive(Clone, Copy, Default)]
+struct EmptyOverlayCounts {
+    params: usize,
+    inputs: usize,
+    outputs: usize,
+    equations: usize,
+    connects: usize,
+}
+
+fn empty_overlay_counts_cached(source: &str) -> EmptyOverlayCounts {
+    use std::sync::Mutex;
+    use std::sync::OnceLock;
+    // Source-len keyed cache is intentionally small (1 slot). The
+    // overlay only shows one source at a time per active tab; if
+    // two tabs alternate, worst case is we rescan once on switch.
+    // Can be promoted to a HashMap keyed by DocumentId if tab
+    // switching turns out to be frequent.
+    static CACHE: OnceLock<Mutex<Option<(usize, u64, EmptyOverlayCounts)>>> =
+        OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(None));
+    let prefix_hash = {
+        let mut h: u64 = source.len() as u64;
+        for b in source.as_bytes().iter().take(4096) {
+            h = h.wrapping_mul(0x100000001b3).wrapping_add(*b as u64);
+        }
+        h
+    };
+    if let Ok(guard) = cache.lock() {
+        if let Some((len, hash, counts)) = *guard {
+            if len == source.len() && hash == prefix_hash {
+                return counts;
+            }
+        }
+    }
+    let regexes = empty_overlay_regexes();
+    let counts = EmptyOverlayCounts {
+        params: regexes[0].1.find_iter(source).count(),
+        inputs: regexes[1].1.find_iter(source).count(),
+        outputs: regexes[2].1.find_iter(source).count(),
+        equations: regexes[3].1.find_iter(source).count(),
+        connects: regexes[4].1.find_iter(source).count(),
+    };
+    if let Ok(mut guard) = cache.lock() {
+        *guard = Some((source.len(), prefix_hash, counts));
+    }
+    counts
 }
 
 // ─── Drill-in ───────────────────────────────────────────────────────

@@ -45,8 +45,16 @@ fn parse(source: &str) -> Option<StoredDefinition> {
 /// This is a drop-in replacement for the regex-based `extract_model_name`.
 pub fn extract_model_name(source: &str) -> Option<String> {
     let ast = parse(source)?;
+    extract_model_name_from_ast(&ast)
+}
 
-    // Prefer non-package classes first (models, blocks, functions, etc.)
+/// AST-based variant. Callers that already have a parsed
+/// `StoredDefinition` (the document registry caches one per doc)
+/// MUST use this path — calling [`extract_model_name`] from the
+/// main thread on a 184 KB MSL source means a fresh uncached
+/// rumoca parse that runs for tens of seconds in debug builds and
+/// visibly freezes the app.
+pub fn extract_model_name_from_ast(ast: &StoredDefinition) -> Option<String> {
     let mut package_name: Option<String> = None;
     for (name, class) in &ast.classes {
         if class.class_type != ClassType::Package {

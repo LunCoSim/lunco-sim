@@ -280,7 +280,11 @@ pub(crate) fn sync_active_tab_to_doc(world: &mut World, doc: DocumentId) {
     }
 
     // Gather read-side data up front so we don't hold two borrows
-    // at once.
+    // at once. `detected_name` comes from the doc's cached AST —
+    // MUST NOT re-parse here. Previously this called
+    // `ast_extract::extract_model_name(source)` which kicked off an
+    // uncached rumoca parse on the main thread; on a 184 KB
+    // drill-in source that froze the UI for ~200 s in debug builds.
     let snapshot = {
         let registry = world.resource::<ModelicaDocumentRegistry>();
         registry.host(doc).map(|h| {
@@ -316,12 +320,17 @@ pub(crate) fn sync_active_tab_to_doc(world: &mut World, doc: DocumentId) {
             // User files are both editable.
             let read_only =
                 matches!(library, crate::ui::state::ModelLibrary::Bundled);
+            let detected_name = document
+                .ast()
+                .ast()
+                .and_then(crate::ast_extract::extract_model_name_from_ast);
             (
                 path_str,
                 display_name,
                 document.source().to_string(),
                 read_only,
                 library,
+                detected_name,
             )
         })
     };
@@ -346,13 +355,16 @@ pub(crate) fn sync_active_tab_to_doc(world: &mut World, doc: DocumentId) {
             .unwrap_or_else(|| qualified.clone());
         Some((
             format!("msl://{qualified}"),
-            short,
+            short.clone(),
             String::new(),
             true,
             crate::ui::state::ModelLibrary::Bundled,
+            Some(short),
         ))
     });
-    let Some((path_str, display_name, source, read_only, library)) = snapshot else {
+    let Some((path_str, display_name, source, read_only, library, detected_name)) =
+        snapshot
+    else {
         return;
     };
 
@@ -363,7 +375,6 @@ pub(crate) fn sync_active_tab_to_doc(world: &mut World, doc: DocumentId) {
             line_starts.push(i + 1);
         }
     }
-    let detected_name = crate::ast_extract::extract_model_name(&source);
 
     // Update WorkbenchState.
     {

@@ -311,5 +311,26 @@ fn register_settings_menu(world: &mut World) {
                  lower if projections feel slow on modest hardware.",
             );
         });
+        ui.horizontal(|ui| {
+            ui.label("Timeout (s)");
+            let mut secs = limits.max_duration.as_secs();
+            if ui
+                .add(
+                    egui::DragValue::new(&mut secs)
+                        .range(1_u64..=3600)
+                        .speed(1.0),
+                )
+                .on_hover_text(
+                    "Wall-clock deadline for a single projection. \
+                     If the background parse + build takes longer, \
+                     the task is cancelled and the canvas stays empty \
+                     with a log warning. Default 60 s — only huge or \
+                     pathological models get close.",
+                )
+                .changed()
+            {
+                limits.max_duration = std::time::Duration::from_secs(secs);
+            }
+        });
     });
 }
