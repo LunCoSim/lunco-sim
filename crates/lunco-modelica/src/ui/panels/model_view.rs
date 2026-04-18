@@ -25,7 +25,7 @@ use lunco_workbench::{InstancePanel, Panel, PanelId, PanelSlot};
 
 use crate::ui::panels::code_editor::EditorBufferState;
 use crate::ui::panels::{
-    canvas_diagram::CanvasDiagramPanel, code_editor::CodeEditorPanel, diagram::DiagramPanel,
+    canvas_diagram::CanvasDiagramPanel, code_editor::CodeEditorPanel,
 };
 use crate::ui::{CompileState, CompileStates, ModelicaDocumentRegistry, WorkbenchState};
 
@@ -39,11 +39,8 @@ pub enum ModelViewMode {
     /// Raw Modelica source (egui TextEdit).
     #[default]
     Text,
-    /// Block-diagram canvas (egui-snarl).
-    Diagram,
-    /// Block-diagram canvas (lunco-canvas rewrite). Parallel to
-    /// `Diagram` during the transition; retires the snarl variant
-    /// once the canvas path covers every feature we ship.
+    /// Block-diagram canvas (lunco-canvas). Replaced the old
+    /// egui-snarl-based variant.
     Canvas,
     /// The class's own `Icon` annotation rendering — what the
     /// component looks like when instantiated in a parent diagram.
@@ -106,6 +103,13 @@ impl ModelTabs {
         self.tabs.get(&doc)
     }
 
+    /// Iterate the document ids of every currently-open tab.
+    /// Used by drill-in to avoid re-allocating a document when the
+    /// same class is already open in a tab.
+    pub fn iter_docs(&self) -> impl Iterator<Item = DocumentId> + '_ {
+        self.tabs.keys().copied()
+    }
+
     /// Mutable lookup.
     pub fn get_mut(&mut self, doc: DocumentId) -> Option<&mut ModelTabState> {
         self.tabs.get_mut(&doc)
@@ -125,7 +129,6 @@ pub struct ModelViewPanel {
     /// rendered by [`render_unified_toolbar`] before dispatching to
     /// one of these based on the tab's current view mode.
     code: CodeEditorPanel,
-    diagram: DiagramPanel,
     canvas: CanvasDiagramPanel,
 }
 
@@ -133,7 +136,6 @@ impl Default for ModelViewPanel {
     fn default() -> Self {
         Self {
             code: CodeEditorPanel,
-            diagram: DiagramPanel,
             canvas: CanvasDiagramPanel,
         }
     }
@@ -209,7 +211,6 @@ impl InstancePanel for ModelViewPanel {
         // pointed at this tab's document).
         match new_view_mode {
             ModelViewMode::Text => self.code.render(ui, world),
-            ModelViewMode::Diagram => self.diagram.render(ui, world),
             ModelViewMode::Canvas => self.canvas.render(ui, world),
             ModelViewMode::Icon => render_icon_view(ui, world),
         }
@@ -430,18 +431,14 @@ fn render_unified_toolbar(
         }
 
         let text_sel = view_mode == ModelViewMode::Text;
-        let diag_sel = view_mode == ModelViewMode::Diagram;
         let canv_sel = view_mode == ModelViewMode::Canvas;
+        let icon_sel = view_mode == ModelViewMode::Icon;
         if ui.selectable_label(text_sel, "📝 Text").clicked() {
             new_view_mode = ModelViewMode::Text;
         }
-        if ui.selectable_label(diag_sel, "🔗 Diagram").clicked() {
-            new_view_mode = ModelViewMode::Diagram;
-        }
-        if ui.selectable_label(canv_sel, "🧩 Canvas").clicked() {
+        if ui.selectable_label(canv_sel, "🔗 Diagram").clicked() {
             new_view_mode = ModelViewMode::Canvas;
         }
-        let icon_sel = view_mode == ModelViewMode::Icon;
         if ui.selectable_label(icon_sel, "🎨 Icon").clicked() {
             new_view_mode = ModelViewMode::Icon;
         }
@@ -518,26 +515,6 @@ fn render_unified_toolbar(
                         .checkpoint_source(doc, buffer);
                 }
                 world.commands().trigger(crate::ui::CompileModel { doc });
-            }
-            ModelViewMode::Diagram => {
-                // Diagram-mode compile regenerates source from the
-                // visual-node graph. That only makes sense when the
-                // user actually composed something visually — for an
-                // equation-only model (e.g. RocketEngine) the graph
-                // is empty and the generated source is a bare
-                // `model X end X;`, which trips EmptySystem in the
-                // solver. Fall back to compiling the document source
-                // in that case so Compile always "does the obvious
-                // thing" regardless of view.
-                let diagram_is_empty = world
-                    .get_resource::<crate::ui::panels::diagram::DiagramState>()
-                    .map(|s| s.diagram.nodes.is_empty())
-                    .unwrap_or(true);
-                if diagram_is_empty {
-                    world.commands().trigger(crate::ui::CompileModel { doc });
-                } else {
-                    crate::ui::panels::diagram::do_compile(world);
-                }
             }
             ModelViewMode::Canvas => {
                 // Canvas is a read-only view in B2 — compile just

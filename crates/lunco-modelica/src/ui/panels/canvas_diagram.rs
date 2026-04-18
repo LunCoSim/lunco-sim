@@ -44,9 +44,7 @@ use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 
 use crate::ui::state::{ModelicaDocumentRegistry, WorkbenchState};
-use crate::visual_diagram::{
-    msl_categories, msl_components_in_category, DiagramNodeId, MSLComponentDef, VisualDiagram,
-};
+use crate::visual_diagram::{DiagramNodeId, MSLComponentDef, VisualDiagram};
 // `Document` is the trait that exposes `.generation()` on
 // `ModelicaDocument`; `DocumentHost::document()` returns a bare `&D`
 // so we need the trait in scope to call generation on it.
@@ -287,11 +285,14 @@ fn segment_dist_sq(
 fn build_registry() -> VisualRegistry {
     let mut reg = VisualRegistry::new();
     reg.register_node_kind("modelica.icon", |data: &JsonValue| {
-        let type_label = data
+        // `type` is the fully-qualified path (used by drill-in);
+        // show only its tail under the icon so the label isn't a
+        // 50-character package path.
+        let qualified = data
             .get("type")
             .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
+            .unwrap_or("");
+        let type_label = qualified.rsplit('.').next().unwrap_or(qualified).to_string();
         let icon_asset = data
             .get("icon_asset")
             .and_then(|v| v.as_str())
@@ -539,7 +540,12 @@ fn project_scene(diagram: &VisualDiagram) -> (Scene, HashMap<DiagramNodeId, Canv
             ),
             kind: "modelica.icon".into(),
             data: serde_json::json!({
-                "type": node.component_def.name,
+                // Full qualified name — what the drill-in resolver
+                // feeds into Modelica's package layout lookup. The
+                // short `name` is fine for labels, but breaks
+                // drill-in (which needs the path) and the type
+                // hint shown under the label.
+                "type": node.component_def.msl_path,
                 "icon_asset": node.component_def.icon_asset.clone().unwrap_or_default(),
             }),
             ports,
@@ -594,6 +600,23 @@ pub struct CanvasDiagramState {
     /// popup on the next frame and cleared when the user clicks
     /// outside or picks an entry.
     pub context_menu: Option<PendingContextMenu>,
+    /// In-flight projection task, if any. `import_model_to_diagram`
+    /// + regex edge recovery on a 72 KB MSL package file takes 5-10
+    /// seconds on the UI thread — blocking the frame for that long
+    /// freezes the whole workbench. We offload the work to a Bevy
+    /// `AsyncComputeTaskPool`: the panel stays interactive, a
+    /// "Projecting…" overlay shows progress, and the scene swaps
+    /// in atomically when the task completes.
+    pub projection_task: Option<ProjectionTask>,
+}
+
+/// Running projection task + the doc + generation that spawned it,
+/// so the poll loop can tell whether we've moved on since and
+/// should drop the stale result.
+pub struct ProjectionTask {
+    pub doc: lunco_doc::DocumentId,
+    pub gen_at_spawn: u64,
+    pub task: bevy::tasks::Task<Scene>,
 }
 
 /// Snapshot of a right-click: where to anchor the popup + what it
@@ -619,12 +642,6 @@ pub enum ContextMenuTarget {
 impl Default for CanvasDiagramState {
     fn default() -> Self {
         let mut canvas = Canvas::new(build_registry());
-        // Drop the default `SelectionLayer` — IconNodeVisual draws
-        // its own selection halo at the exact same corner radius
-        // as the icon body, so a separate selection layer would
-        // show a mismatched outline. Removing it here keeps the
-        // canvas crate's default pipeline generic while the
-        // Modelica panel opts out.
         canvas.layers.retain(|layer| layer.name() != "selection");
         canvas.overlays.push(Box::new(NavBarOverlay::default()));
         Self {
@@ -632,6 +649,7 @@ impl Default for CanvasDiagramState {
             last_seen_gen: 0,
             bound_doc: None,
             context_menu: None,
+            projection_task: None,
         }
     }
 }
@@ -688,77 +706,118 @@ impl Panel for CanvasDiagramPanel {
         };
 
         if let Some((doc_id, gen)) = project_now {
-            // Read the source directly from the document host and
-            // parse it into a VisualDiagram ourselves — do NOT rely
-            // on the snarl panel's `DiagramState.diagram` being
-            // populated, which only happens if that panel was
-            // rendered first.
+            // Spawn a background task (or reuse an in-flight one
+            // for the same doc+gen) that parses the Modelica source,
+            // runs edge-recovery, and builds a `Scene`. The UI
+            // thread stays interactive the whole time; we poll the
+            // task below and swap the scene in once it resolves.
             let source = world
                 .resource::<ModelicaDocumentRegistry>()
                 .host(doc_id)
                 .map(|h| h.document().source().to_string())
                 .unwrap_or_default();
-            let mut diagram = crate::ui::panels::diagram::import_model_to_diagram(&source)
-                .unwrap_or_default();
-            // AST-based edge construction inside `import_model_to_diagram`
-            // drops connect equations whose port names don't resolve
-            // through its component-graph port index — common when
-            // the MSL palette entry carries synthetic / partial
-            // port names that don't exactly match the Modelica
-            // class's actual connectors. Source text is authoritative,
-            // so do a regex recovery pass: any `connect(a.b, c.d)`
-            // with both components present in the diagram becomes
-            // an edge. Gives us "text says it, diagram shows it"
-            // without touching upstream parser behaviour.
-            recover_edges_from_source(&source, &mut diagram);
-            bevy::log::info!(
-                "[CanvasDiagram] project: {} nodes, {} edges from diagram",
-                diagram.nodes.len(),
-                diagram.edges.len(),
-            );
-            let (scene, _id_map) = project_scene(&diagram);
-            bevy::log::info!(
-                "[CanvasDiagram] project: {} scene nodes, {} scene edges after projection",
-                scene.node_count(),
-                scene.edge_count(),
-            );
             let mut state = world.resource_mut::<CanvasDiagramState>();
-            let doc_switched = state.bound_doc != Some(doc_id);
-            state.canvas.scene = scene;
-            state.canvas.selection.clear();
-            state.last_seen_gen = gen;
-            state.bound_doc = Some(doc_id);
-            // On first bind / doc switch, frame the scene so users
-            // land with content centered. If the scene is empty
-            // (fresh model), fall back to physical zoom so the
-            // first component the user adds lands at a legible size
-            // — world units are Modelica millimetres, `physical_mm_zoom`
-            // maps them 1 : 1 to the screen using the DPI reported
-            // by the egui context.
-            if doc_switched {
-                let physical_zoom =
-                    lunco_canvas::Viewport::physical_mm_zoom(ui.ctx());
-                if let Some(world_rect) = state.canvas.scene.bounds() {
-                    let screen = lunco_canvas::Rect::from_min_max(
-                        lunco_canvas::Pos::new(0.0, 0.0),
-                        lunco_canvas::Pos::new(800.0, 600.0),
-                    );
-                    let (c, z) = state
-                        .canvas
-                        .viewport
-                        .fit_values(world_rect, screen, 40.0);
-                    // Clamp the fit zoom to at least physical, so a
-                    // small scene doesn't zoom absurdly far in.
-                    let z = z.min(physical_zoom * 2.0).max(physical_zoom * 0.5);
-                    state.canvas.viewport.snap_to(c, z);
-                } else {
-                    // Empty scene — land at physical mm zoom,
-                    // centred on the Modelica origin.
-                    state.canvas.viewport.snap_to(
-                        lunco_canvas::Pos::new(0.0, 0.0),
-                        physical_zoom,
-                    );
+            // Drop any in-flight projection whose input is now
+            // stale (different doc, or older generation of the
+            // same doc). We can't cancel a `Task` cleanly in
+            // Bevy's API, but dropping the handle releases our
+            // interest — the pool still runs it to completion,
+            // the result is just thrown away when we poll.
+            let stale = match &state.projection_task {
+                Some(t) => t.doc != doc_id || t.gen_at_spawn != gen,
+                None => false,
+            };
+            if stale {
+                state.projection_task = None;
+            }
+            if state.projection_task.is_none() {
+                let pool = bevy::tasks::AsyncComputeTaskPool::get();
+                let task = pool.spawn(async move {
+                    // Heavy path:
+                    //   1. `import_model_to_diagram` (rumoca parse
+                    //      + component-graph construction — the
+                    //      multi-second MSL package cost).
+                    //   2. `recover_edges_from_source` — regex pass
+                    //      that backfills connect() equations whose
+                    //      ports the AST-driven path drops.
+                    //   3. `project_scene` — cheap arrangement of
+                    //      `VisualDiagram` into `lunco_canvas::Scene`.
+                    let mut diagram =
+                        crate::ui::panels::diagram::import_model_to_diagram(&source)
+                            .unwrap_or_default();
+                    recover_edges_from_source(&source, &mut diagram);
+                    let (scene, _id_map) = project_scene(&diagram);
+                    scene
+                });
+                state.projection_task = Some(ProjectionTask {
+                    doc: doc_id,
+                    gen_at_spawn: gen,
+                    task,
+                });
+            }
+            // DO NOT update last_seen_gen here — only after the
+            // task completes and the scene is actually swapped in.
+            // Otherwise the `project_now` check on later frames
+            // would think we're up-to-date and never swap.
+            let _ = state;
+        }
+
+        // Poll the in-flight projection task. When it finishes,
+        // swap the scene in, update the sync cursor, and (on doc
+        // switch) frame the scene with a sensible initial zoom.
+        {
+            let mut state = world.resource_mut::<CanvasDiagramState>();
+            let done_task = state
+                .projection_task
+                .as_mut()
+                .and_then(|t| {
+                    futures_lite::future::block_on(
+                        futures_lite::future::poll_once(&mut t.task),
+                    )
+                    .map(|scene| (t.doc, t.gen_at_spawn, scene))
+                });
+            if let Some((doc_id, gen, scene)) = done_task {
+                state.projection_task = None;
+                let doc_switched = state.bound_doc != Some(doc_id);
+                bevy::log::info!(
+                    "[CanvasDiagram] project done: {} nodes, {} edges (doc_switched={})",
+                    scene.node_count(),
+                    scene.edge_count(),
+                    doc_switched,
+                );
+                state.canvas.scene = scene;
+                state.canvas.selection.clear();
+                state.last_seen_gen = gen;
+                state.bound_doc = Some(doc_id);
+                if doc_switched {
+                    let physical_zoom =
+                        lunco_canvas::Viewport::physical_mm_zoom(ui.ctx());
+                    if let Some(world_rect) = state.canvas.scene.bounds() {
+                        let screen = lunco_canvas::Rect::from_min_max(
+                            lunco_canvas::Pos::new(0.0, 0.0),
+                            lunco_canvas::Pos::new(800.0, 600.0),
+                        );
+                        let (c, z) = state
+                            .canvas
+                            .viewport
+                            .fit_values(world_rect, screen, 40.0);
+                        let z = z.min(physical_zoom * 2.0).max(physical_zoom * 0.5);
+                        state.canvas.viewport.snap_to(c, z);
+                    } else {
+                        state.canvas.viewport.snap_to(
+                            lunco_canvas::Pos::new(0.0, 0.0),
+                            physical_zoom,
+                        );
+                    }
                 }
+                // A projection just finished — request a repaint so
+                // the user sees the new scene immediately rather
+                // than on the next input tick.
+                ui.ctx().request_repaint();
+            } else if state.projection_task.is_some() {
+                // Still parsing — repaint so the "Projecting…"
+                // indicator animates smoothly.
+                ui.ctx().request_repaint();
             }
         }
 
@@ -780,17 +839,30 @@ impl CanvasDiagramPanel {
             state.canvas.ui(ui)
         };
 
-        // Empty-diagram overlay: when the class has no components
-        // (equation-only models like Battery, SpringMass,
-        // RocketEngine), show a summary card instead of an
-        // uninformative empty grid. OMEdit's diagram view is empty
-        // for these too, but we can do better by giving users a
-        // direct cue about what's in the model and where to find it.
-        let show_empty_overlay = {
+        // Overlay state machine, in priority order:
+        //   1. Drill-in load in flight → "Loading <class>…" card.
+        //      Highest priority because the document is a placeholder
+        //      and anything else (empty summary, etc.) would
+        //      misrepresent what's going on.
+        //   2. Projection task in flight → "Projecting…" spinner.
+        //   3. Empty scene, no task → equation-only model summary.
+        let (loading_label, projecting, show_empty_overlay) = {
             let state = world.resource::<CanvasDiagramState>();
-            state.canvas.scene.node_count() == 0
+            let loads = world.resource::<DrillInLoads>();
+            let label = state
+                .bound_doc
+                .and_then(|d| loads.detail(d).map(str::to_string));
+            (
+                label,
+                state.projection_task.is_some(),
+                state.canvas.scene.node_count() == 0 && state.projection_task.is_none(),
+            )
         };
-        if show_empty_overlay {
+        if let Some(class) = loading_label {
+            render_drill_in_loading_overlay(ui, response.rect, &class);
+        } else if projecting {
+            render_projecting_overlay(ui, response.rect);
+        } else if show_empty_overlay {
             render_empty_diagram_overlay(ui, response.rect, world);
         }
 
@@ -971,6 +1043,114 @@ impl CanvasDiagramPanel {
     }
 }
 
+// ─── MSL package tree (for nested add-component menu) ──────────────
+
+/// One node in the MSL package hierarchy. `classes` are instantiable
+/// at this level (instances we'd add to the diagram), `subpackages`
+/// are deeper navigation. `BTreeMap` for stable alphabetical order
+/// regardless of the source list's order.
+struct MslPackageNode {
+    subpackages: std::collections::BTreeMap<String, MslPackageNode>,
+    classes: Vec<&'static MSLComponentDef>,
+}
+
+impl MslPackageNode {
+    fn new() -> Self {
+        Self {
+            subpackages: Default::default(),
+            classes: Vec::new(),
+        }
+    }
+}
+
+/// Lazily-built package tree. Walks every entry in
+/// [`crate::visual_diagram::msl_component_library`] once and
+/// inserts it under its dotted package path. Cached for the life
+/// of the process — MSL content doesn't change at runtime.
+fn msl_package_tree() -> &'static MslPackageNode {
+    use std::sync::OnceLock;
+    static TREE: OnceLock<MslPackageNode> = OnceLock::new();
+    TREE.get_or_init(|| {
+        let mut root = MslPackageNode::new();
+        for comp in crate::visual_diagram::msl_component_library() {
+            // Split the qualified path into package segments + a
+            // trailing class name. `Modelica.Electrical.Analog.
+            // Basic.Resistor` → walk subpackages
+            // [Modelica, Electrical, Analog, Basic], attach class
+            // `Resistor`.
+            let mut parts: Vec<&str> = comp.msl_path.split('.').collect();
+            let Some(_class_name) = parts.pop() else { continue };
+            let mut node = &mut root;
+            for seg in parts {
+                node = node
+                    .subpackages
+                    .entry(seg.to_string())
+                    .or_insert_with(MslPackageNode::new);
+            }
+            node.classes.push(comp);
+        }
+        root
+    })
+}
+
+/// Recursively render a package node as egui submenus.
+///
+/// Ordering per level: subpackages first (alphabetical via
+/// `BTreeMap`), then a thin separator, then classes at this
+/// level (own-package classes). Matches how OMEdit's library
+/// browser reads: packages above, classes below.
+///
+/// On click of a class item we emit `AddComponent` through `out`
+/// exactly as the flat menu did.
+fn render_msl_package_menu(
+    ui: &mut egui::Ui,
+    node: &MslPackageNode,
+    click_world: lunco_canvas::Pos,
+    editing_class: Option<&str>,
+    out: &mut Vec<ModelicaOp>,
+) {
+    for (name, child) in &node.subpackages {
+        ui.menu_button(name, |ui| {
+            render_msl_package_menu(ui, child, click_world, editing_class, out);
+        });
+    }
+    if !node.subpackages.is_empty() && !node.classes.is_empty() {
+        ui.separator();
+    }
+    // Sort classes alphabetically by short name for predictable
+    // navigation — the library's JSON order isn't guaranteed.
+    let mut classes = node.classes.clone();
+    classes.sort_by(|a, b| a.name.cmp(&b.name));
+    for comp in classes {
+        // Display: icon character (if any) + short name. The
+        // icon character gives a quick visual cue without
+        // loading the SVG.
+        let label = if let Some(ic) = comp.icon_text.as_deref() {
+            if !ic.is_empty() {
+                format!("{ic}  {}", comp.name)
+            } else {
+                comp.name.clone()
+            }
+        } else {
+            comp.name.clone()
+        };
+        if ui
+            .button(label)
+            .on_hover_text(
+                comp.description
+                    .clone()
+                    .unwrap_or_else(|| comp.msl_path.clone()),
+            )
+            .clicked()
+        {
+            if let Some(class) = editing_class {
+                out.push(op_add_component(comp, click_world, class));
+            }
+            ui.close();
+        }
+    }
+}
+
 // ─── Context-menu renderers ────────────────────────────────────────
 
 fn render_node_menu(
@@ -1037,22 +1217,19 @@ fn render_empty_menu(
 ) {
     ui.label(egui::RichText::new("Add component").strong());
     ui.separator();
-    for cat in msl_categories() {
-        let short = cat.split('/').last().unwrap_or(&cat).to_string();
-        ui.menu_button(short, |ui| {
-            for comp in msl_components_in_category(&cat) {
-                if ui
-                    .button(format!("{} {}", comp.display_name, comp.name))
-                    .clicked()
-                {
-                    if let Some(class) = editing_class {
-                        out.push(op_add_component(&comp, click_world, class));
-                    }
-                    ui.close();
-                }
-            }
-        });
-    }
+
+    // Hierarchical package navigation — each submenu level mirrors
+    // Modelica's package tree (Modelica → Electrical → Analog →
+    // Basic → Resistor). Matches how OMEdit and Dymola present
+    // the library: user drills down by package instead of
+    // scanning a flat list. Tree is built once, cached.
+    render_msl_package_menu(
+        ui,
+        msl_package_tree(),
+        click_world,
+        editing_class,
+        out,
+    );
     ui.separator();
     ui.label(egui::RichText::new("Common").weak().small());
     for quick_name in ["Resistor", "Capacitor", "Ground", "ConstantVoltage", "Inductor"] {
@@ -1087,6 +1264,123 @@ fn render_empty_menu(
         state.canvas.viewport.set_target(c, 1.0);
         ui.close();
     }
+}
+
+// ─── Drill-in loading overlay ──────────────────────────────────────
+
+/// Rendered while a background file-read (and subsequent
+/// `ReplaceSource` re-parse) is running for a drill-in target.
+/// Named class, animated dots — same visual language as the
+/// projection overlay but a different message so the user knows
+/// it's a fresh load, not a re-project.
+fn render_drill_in_loading_overlay(
+    ui: &mut egui::Ui,
+    canvas_rect: egui::Rect,
+    class_name: &str,
+) {
+    let card_w = 340.0;
+    let card_h = 84.0;
+    let card_rect = egui::Rect::from_center_size(
+        canvas_rect.center(),
+        egui::vec2(card_w, card_h),
+    );
+    let painter = ui.painter();
+    painter.rect_filled(
+        card_rect.translate(egui::vec2(0.0, 3.0)),
+        8.0,
+        egui::Color32::from_rgba_premultiplied(0, 0, 0, 100),
+    );
+    painter.rect_filled(card_rect, 8.0, egui::Color32::from_rgb(34, 38, 48));
+    painter.rect_stroke(
+        card_rect,
+        8.0,
+        egui::Stroke::new(1.0, egui::Color32::from_rgb(60, 70, 88)),
+        egui::StrokeKind::Outside,
+    );
+    let t = ui.ctx().input(|i| i.time) as f32;
+    let spinner_center = egui::pos2(card_rect.min.x + 28.0, card_rect.center().y);
+    for i in 0..3 {
+        let phase = (t * 2.5 - i as f32 * 0.4).rem_euclid(std::f32::consts::TAU);
+        let alpha = ((phase.sin() * 0.5 + 0.5) * 255.0) as u8;
+        let col = egui::Color32::from_rgba_unmultiplied(140, 200, 255, alpha);
+        painter.circle_filled(
+            spinner_center + egui::vec2(i as f32 * 9.0 - 9.0, 0.0),
+            3.5,
+            col,
+        );
+    }
+    painter.text(
+        egui::pos2(card_rect.min.x + 60.0, card_rect.center().y - 8.0),
+        egui::Align2::LEFT_CENTER,
+        "Loading resource…",
+        egui::FontId::proportional(13.0),
+        egui::Color32::from_rgb(220, 225, 235),
+    );
+    // Trim long qualified names with ellipsis on the left so the
+    // short class name stays visible.
+    let display = if class_name.len() > 40 {
+        format!("…{}", &class_name[class_name.len() - 39..])
+    } else {
+        class_name.to_string()
+    };
+    painter.text(
+        egui::pos2(card_rect.min.x + 60.0, card_rect.center().y + 10.0),
+        egui::Align2::LEFT_CENTER,
+        display,
+        egui::FontId::monospace(11.0),
+        egui::Color32::from_rgb(180, 200, 225),
+    );
+    // Animating — request repaint so the spinner moves smoothly.
+    ui.ctx().request_repaint();
+}
+
+// ─── Loading / projection overlay ──────────────────────────────────
+
+/// Small "Projecting…" card centred on the canvas while an
+/// `AsyncComputeTaskPool` projection task is in flight. Includes
+/// a rotating dot so users can see the UI is responsive.
+fn render_projecting_overlay(ui: &mut egui::Ui, canvas_rect: egui::Rect) {
+    let card_w = 260.0;
+    let card_h = 72.0;
+    let card_rect = egui::Rect::from_center_size(
+        canvas_rect.center(),
+        egui::vec2(card_w, card_h),
+    );
+    let painter = ui.painter();
+    painter.rect_filled(
+        card_rect.translate(egui::vec2(0.0, 3.0)),
+        8.0,
+        egui::Color32::from_rgba_premultiplied(0, 0, 0, 90),
+    );
+    painter.rect_filled(card_rect, 8.0, egui::Color32::from_rgb(34, 38, 48));
+    painter.rect_stroke(
+        card_rect,
+        8.0,
+        egui::Stroke::new(1.0, egui::Color32::from_rgb(60, 70, 88)),
+        egui::StrokeKind::Outside,
+    );
+
+    // Animated spinner — three dots pulsing in sequence via
+    // `ctx.input(|i| i.time)`. Frame-rate independent.
+    let t = ui.ctx().input(|i| i.time) as f32;
+    let spinner_center = egui::pos2(card_rect.min.x + 28.0, card_rect.center().y);
+    for i in 0..3 {
+        let phase = (t * 2.5 - i as f32 * 0.4).rem_euclid(std::f32::consts::TAU);
+        let alpha = ((phase.sin() * 0.5 + 0.5) * 255.0) as u8;
+        let col = egui::Color32::from_rgba_unmultiplied(140, 200, 255, alpha);
+        painter.circle_filled(
+            spinner_center + egui::vec2(i as f32 * 9.0 - 9.0, 0.0),
+            3.0,
+            col,
+        );
+    }
+    painter.text(
+        egui::pos2(card_rect.min.x + 60.0, card_rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        "Loading resource…",
+        egui::FontId::proportional(13.0),
+        egui::Color32::from_rgb(220, 225, 235),
+    );
 }
 
 // ─── Empty-diagram summary ──────────────────────────────────────────
@@ -1219,25 +1513,78 @@ fn count_matches(source: &str, pattern: &str) -> usize {
 
 // ─── Drill-in ───────────────────────────────────────────────────────
 
-/// Open the Modelica class with `qualified` name in a new model-view
-/// tab alongside the current one. Mirrors Dymola / OMEdit's
-/// "double-click to go into component" behaviour.
-///
-/// Resolution strategy (best-effort; MSL files are organised as
-/// packages so a class might live inside any parent-level `.mo`):
-///
-/// 1. Try the per-class file `Modelica/…/{Short}.mo`.
-/// 2. Walk parents — try `Modelica/…/Parent.mo` and check whether
-///    `model Short` / `class Short` / `block Short` is declared
-///    inside. Returns the matching file's full source (the whole
-///    package file — the user may navigate among sibling classes).
-///
-/// If nothing resolves, logs a warning and no tab is opened. A
-/// richer "Could not find class" toast is a follow-up.
+/// In-flight drill-in file reads, keyed by the placeholder document
+/// we allocated when the tab opened. A Bevy system polls these and
+/// applies `ReplaceSource` to the doc once the read finishes, so
+/// the user sees the tab appear instantly ("Loading…" overlay) and
+/// content populates when the bg read completes.
+#[derive(bevy::prelude::Resource, Default)]
+pub struct DrillInLoads {
+    pending: std::collections::HashMap<lunco_doc::DocumentId, DrillInLoadEntry>,
+}
+
+pub struct DrillInLoadEntry {
+    pub qualified: String,
+    pub file_path: std::path::PathBuf,
+    pub task: bevy::tasks::Task<std::io::Result<String>>,
+}
+
+impl DrillInLoads {
+    pub fn is_loading(&self, doc: lunco_doc::DocumentId) -> bool {
+        self.pending.contains_key(&doc)
+    }
+    pub fn detail(&self, doc: lunco_doc::DocumentId) -> Option<&str> {
+        self.pending.get(&doc).map(|e| e.qualified.as_str())
+    }
+}
+
+/// Bevy system: poll every in-flight drill-in load, apply the
+/// loaded source to the doc when ready.
+pub fn drive_drill_in_loads(
+    mut loads: bevy::prelude::ResMut<DrillInLoads>,
+    mut registry: bevy::prelude::ResMut<ModelicaDocumentRegistry>,
+) {
+    use bevy::prelude::*;
+    let keys: Vec<lunco_doc::DocumentId> = loads.pending.keys().copied().collect();
+    for doc_id in keys {
+        let entry = loads.pending.get_mut(&doc_id).unwrap();
+        let result = futures_lite::future::block_on(
+            futures_lite::future::poll_once(&mut entry.task),
+        );
+        let Some(result) = result else { continue };
+        let qualified = entry.qualified.clone();
+        let file_display = entry.file_path.display().to_string();
+        loads.pending.remove(&doc_id);
+        match result {
+            Ok(source) => {
+                if let Some(host) = registry.host_mut(doc_id) {
+                    match host.apply(ModelicaOp::ReplaceSource { new: source }) {
+                        Ok(_) => info!(
+                            "[CanvasDiagram] drill-in: loaded `{}` from `{}`",
+                            qualified, file_display
+                        ),
+                        Err(e) => warn!(
+                            "[CanvasDiagram] drill-in: ReplaceSource failed for `{}`: {}",
+                            qualified, e
+                        ),
+                    }
+                }
+            }
+            Err(e) => warn!(
+                "[CanvasDiagram] drill-in: file read failed for `{}`: {}",
+                qualified, e
+            ),
+        }
+    }
+}
+
+/// Open the Modelica class with `qualified` name in a new tab.
+/// The tab appears immediately with an empty document showing a
+/// "Loading…" overlay; the file read happens on a background task
+/// and the source is applied via `ReplaceSource` when the read
+/// completes. This matches what users expect: the tab opens, a
+/// spinner says "loading", content lands when it's ready.
 fn drill_into_class(world: &mut World, qualified: &str) {
-    // Only MSL classes supported in this first cut. User-defined
-    // classes live in their own `.mo` files which the user has
-    // presumably opened separately via the Package Browser.
     if !qualified.starts_with("Modelica.") {
         bevy::log::info!(
             "[CanvasDiagram] drill-in skipped — `{}` is not an MSL class (user classes TBD)",
@@ -1245,148 +1592,193 @@ fn drill_into_class(world: &mut World, qualified: &str) {
         );
         return;
     }
-    let Some((source, file_path)) = resolve_msl_class_source(qualified) else {
+    let Some(file_path) = resolve_msl_class_path(qualified) else {
         bevy::log::warn!(
-            "[CanvasDiagram] drill-in: could not find MSL file containing `{}`",
+            "[CanvasDiagram] drill-in: could not locate MSL file for `{}`",
             qualified
         );
         return;
     };
-    open_readonly_tab(world, qualified, &source, &file_path);
+    open_drill_in_tab(world, qualified, &file_path);
 }
 
-/// Resolve a fully-qualified MSL class name to its source file via
-/// the Modelica Specification's package layout rules — NOT by
-/// guessing with regex across sibling files.
+/// Reverse index: qualified class name → on-disk source file.
 ///
-/// MSL (and every conforming Modelica library) uses one of two
-/// on-disk layouts per class, per MLS §13.3:
+/// Built once lazily on first drill-in, from the static MSL
+/// component library we already load at startup. For every class
+/// in the library, we walk the MLS §13.2.2 candidate paths
+/// (own-file, package.mo, flat parent, …) using `Path::exists()`
+/// checks only — never `read_to_string` at index time, so
+/// building the whole index costs a few thousand stat calls
+/// (~10 ms) and zero file reads. Subsequent drill-ins are O(1)
+/// HashMap lookups followed by exactly one file read on the hit.
 ///
-/// 1. **Own-file class** — `A/B/C/Name.mo` containing `model Name
-///    ... end Name;` at file scope. The common case for MSL leaf
-///    classes.
-/// 2. **Package-aggregated class** — `A/B/C/Name/package.mo`
-///    declaring a `within A.B.C;` followed by `package Name
-///    ... end Name;`. Used when the class itself hosts child
-///    packages (e.g. `Modelica.Electrical.Analog`).
-///
-/// Given `A.B.C.Name`, this function tries those two paths in
-/// order and returns the first that exists. No regex — the layout
-/// is deterministic.
-///
-/// Returns `None` if neither path exists, which means either the
-/// library snapshot is incomplete or the class lives outside the
-/// MSL snapshot (future: also try user-project libraries). A
-/// proper resolver would consult `MODELICAPATH` + any loaded
-/// `package.mo`'s `within` declarations, but for MSL-only drill-in
-/// the two-case layout check is sufficient and exact.
-fn resolve_msl_class_source(qualified: &str) -> Option<(String, std::path::PathBuf)> {
+/// Running this at drill-in time (rather than app startup) keeps
+/// the cold-start path fast for users who never drill in, and
+/// avoids coupling MSL indexing to Bevy startup ordering.
+fn msl_class_to_file_index() -> &'static std::collections::HashMap<String, std::path::PathBuf> {
+    use std::sync::OnceLock;
+    static INDEX: OnceLock<std::collections::HashMap<String, std::path::PathBuf>> =
+        OnceLock::new();
+    INDEX.get_or_init(build_msl_class_to_file_index)
+}
+
+fn build_msl_class_to_file_index() -> std::collections::HashMap<String, std::path::PathBuf> {
+    let start = std::time::Instant::now();
+    let lib = crate::visual_diagram::msl_component_library();
+    let mut map = std::collections::HashMap::with_capacity(lib.len());
+    for comp in lib {
+        if let Some(path) = locate_msl_file(&comp.msl_path) {
+            map.insert(comp.msl_path.clone(), path);
+        }
+    }
+    bevy::log::info!(
+        "[CanvasDiagram] MSL class index built: {} classes in {:?}",
+        map.len(),
+        start.elapsed()
+    );
+    map
+}
+
+/// Walk the MLS §13.2.2 candidate paths for `qualified`, returning
+/// the first that `Path::exists()`. Stat-only, no reads. Callers
+/// that need the source do `fs::read_to_string` on the returned
+/// path themselves.
+fn locate_msl_file(qualified: &str) -> Option<std::path::PathBuf> {
     let msl_root = lunco_assets::msl_dir();
     let segments: Vec<&str> = qualified.split('.').collect();
-
-    // Build the directory `A/B/C/Name/`, then try:
-    //   A/B/C/Name.mo            (own-file class)
-    //   A/B/C/Name/package.mo    (package-aggregated class)
-    let mut base = msl_root.clone();
-    for seg in &segments {
-        base.push(seg);
+    if segments.is_empty() {
+        return None;
     }
-
-    let own_file = base.with_extension("mo");
-    if let Ok(source) = std::fs::read_to_string(&own_file) {
-        return Some((source, own_file));
+    // Candidates, most-specific first:
+    //   Modelica/A/B/C/Name.mo           (own-file class)
+    //   Modelica/A/B/C/Name/package.mo   (package-aggregated)
+    //   Modelica/A/B/C.mo                (flat parent file)
+    //   Modelica/A/B/C/package.mo
+    //   Modelica/A/B.mo
+    //   Modelica/A/B/package.mo
+    //   …
+    for i in (1..=segments.len()).rev() {
+        let mut dir = msl_root.clone();
+        for seg in &segments[..i] {
+            dir.push(seg);
+        }
+        if i == segments.len() {
+            let own = dir.with_extension("mo");
+            if own.exists() {
+                return Some(own);
+            }
+        } else {
+            let pkg = dir.join("package.mo");
+            if pkg.exists() {
+                return Some(pkg);
+            }
+            let flat = dir.with_extension("mo");
+            if flat.exists() {
+                return Some(flat);
+            }
+        }
     }
-
-    let package_file = base.join("package.mo");
-    if let Ok(source) = std::fs::read_to_string(&package_file) {
-        return Some((source, package_file));
-    }
-
     None
 }
 
-/// Allocate a read-only document for `qualified` class and open a
-/// model-view tab. If a tab for the same document is already open,
-/// the workbench focuses it instead of duplicating.
-fn open_readonly_tab(
+/// Look the class up in the index and return its on-disk path.
+/// No file reads here — drill-in reads the file on a background
+/// task so the UI thread doesn't block on large MSL package files.
+fn resolve_msl_class_path(qualified: &str) -> Option<std::path::PathBuf> {
+    msl_class_to_file_index().get(qualified).cloned()
+}
+
+/// Open a tab for `qualified` class backed by a **placeholder
+/// document** — empty source, parses instantly. Spawns a bg task
+/// that reads the file; a later Bevy system applies `ReplaceSource`
+/// when the read completes.
+///
+/// The user sees:
+///  1. Instant: a new tab titled with the class short name.
+///  2. Immediately: an "Loading…" overlay on the canvas.
+///  3. A moment later: the real source + diagram populates.
+///
+/// If a tab for the same file path is already open (from a
+/// previous drill-in), we focus it instead of making a second.
+fn open_drill_in_tab(
     world: &mut World,
     qualified: &str,
-    source: &str,
     file_path: &std::path::Path,
 ) {
-    // Skip if we already have an open tab on this exact path.
+    // Find or allocate the doc. Reuse an existing one if the same
+    // msl:// path was opened before, so re-drilling into the same
+    // class focuses instead of spawning a duplicate.
     let model_path_id = format!("msl://{qualified}");
-    let existing_doc = world
-        .resource::<WorkbenchState>()
-        .open_model
-        .as_ref()
-        .filter(|m| m.model_path == model_path_id)
-        .and_then(|m| m.doc);
-    if let Some(doc_id) = existing_doc {
-        // Already open — just focus.
-        if let Some(mut layout) = world
-            .get_resource_mut::<lunco_workbench::WorkbenchLayout>()
-        {
-            layout.open_instance(
-                crate::ui::panels::model_view::MODEL_VIEW_KIND,
-                doc_id.raw(),
-            );
-        }
-        return;
-    }
-
-    let origin = lunco_doc::DocumentOrigin::File {
-        path: file_path.to_path_buf(),
-        writable: false,
+    let existing_doc = {
+        let registry = world.resource::<ModelicaDocumentRegistry>();
+        // ModelicaDocumentRegistry doesn't expose a find-by-path
+        // API, so we look through existing tabs for a match.
+        let tabs = world.resource::<crate::ui::panels::model_view::ModelTabs>();
+        tabs.iter_docs().find(|&doc_id| {
+            registry
+                .host(doc_id)
+                .and_then(|h| match h.document().origin() {
+                    lunco_doc::DocumentOrigin::File { path, .. } => {
+                        Some(path == file_path)
+                    }
+                    _ => None,
+                })
+                .unwrap_or(false)
+        })
     };
-    let doc_id = {
+    let (doc_id, needs_load) = if let Some(id) = existing_doc {
+        (id, false)
+    } else {
+        // Allocate with empty source — parses instantly. The real
+        // source lands later via the bg load task + ReplaceSource.
+        let origin = lunco_doc::DocumentOrigin::File {
+            path: file_path.to_path_buf(),
+            writable: false,
+        };
         let mut registry = world.resource_mut::<ModelicaDocumentRegistry>();
-        registry.allocate_with_origin(source.to_string(), origin)
+        let id = registry.allocate_with_origin(String::new(), origin);
+        (id, true)
     };
 
-    // Update WorkbenchState.open_model so text/canvas panels bind
-    // to the new doc. Same pattern the Package Browser uses.
-    let source_arc: std::sync::Arc<str> = source.into();
-    let mut line_starts = vec![0usize];
-    for (i, b) in source.as_bytes().iter().enumerate() {
-        if *b == b'\n' {
-            line_starts.push(i + 1);
-        }
-    }
-    {
-        let short = qualified.rsplit('.').next().unwrap_or(qualified).to_string();
-        let mut ws = world.resource_mut::<WorkbenchState>();
-        ws.open_model = Some(crate::ui::OpenModel {
-            model_path: model_path_id.clone(),
-            display_name: short.clone(),
-            source: source_arc,
-            line_starts: line_starts.into(),
-            detected_name: Some(short),
-            cached_galley: None,
-            read_only: true,
-            library: crate::ui::state::ModelLibrary::MSL,
-            doc: Some(doc_id),
-        });
-        ws.diagram_dirty = true;
+    // Kick off the background file read if this is a fresh doc.
+    // Existing-doc case means we already loaded it; no reload.
+    if needs_load {
+        let path = file_path.to_path_buf();
+        let pool = bevy::tasks::AsyncComputeTaskPool::get();
+        let task = pool.spawn(async move { std::fs::read_to_string(&path) });
+        let mut loads = world.resource_mut::<DrillInLoads>();
+        loads.pending.insert(
+            doc_id,
+            DrillInLoadEntry {
+                qualified: qualified.to_string(),
+                file_path: file_path.to_path_buf(),
+                task,
+            },
+        );
     }
 
-    // Open a new model-view tab.
+    let _ = model_path_id;
+
+    // Register the tab + land the user in Canvas view (they
+    // drilled FROM a canvas, so the canvas is what they expect
+    // to see). Default `view_mode` is Text for newly-created
+    // scratch models; drill-in is a different use case.
     {
         let mut model_tabs =
             world.resource_mut::<crate::ui::panels::model_view::ModelTabs>();
         model_tabs.ensure(doc_id);
+        if let Some(tab) = model_tabs.get_mut(doc_id) {
+            tab.view_mode = crate::ui::panels::model_view::ModelViewMode::Canvas;
+        }
     }
-    if let Some(mut layout) =
-        world.get_resource_mut::<lunco_workbench::WorkbenchLayout>()
-    {
-        layout.open_instance(
-            crate::ui::panels::model_view::MODEL_VIEW_KIND,
-            doc_id.raw(),
-        );
-    }
+    world.commands().trigger(lunco_workbench::OpenTab {
+        kind: crate::ui::panels::model_view::MODEL_VIEW_KIND,
+        instance: doc_id.raw(),
+    });
 
     bevy::log::info!(
-        "[CanvasDiagram] drill-in: opened `{}` from `{}`",
+        "[CanvasDiagram] drill-in: opened placeholder tab for `{}` (file: `{}`) — loading in background",
         qualified,
         file_path.display()
     );

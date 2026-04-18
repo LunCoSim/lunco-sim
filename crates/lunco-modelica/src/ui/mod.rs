@@ -234,6 +234,8 @@ impl Plugin for ModelicaUiPlugin {
             .register_panel(panels::inspector::InspectorPanel)
             .register_panel(panels::canvas_diagram::CanvasDiagramPanel)
             .init_resource::<panels::canvas_diagram::CanvasDiagramState>()
+            .init_resource::<panels::canvas_diagram::DrillInLoads>()
+            .add_systems(Update, panels::canvas_diagram::drive_drill_in_loads)
             .register_panel(panels::palette::ComponentPalettePanel)
             // Multi-instance: one tab per open document. Instances are
             // opened at runtime by the Package Browser.
