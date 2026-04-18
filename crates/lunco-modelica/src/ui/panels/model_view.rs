@@ -294,16 +294,52 @@ fn sync_active_tab_to_doc(world: &mut World, doc: DocumentId) {
                     crate::ui::state::ModelLibrary::Bundled
                 }
             };
+            // `document.is_read_only()` means "can't Save without
+            // Save-As" — true for Untitled docs despite Untitled
+            // being fully editable. For UI purposes (right-click
+            // menu, apply_ops gate) "read-only" means "library
+            // class the user isn't allowed to mutate", so tie it
+            // to the library classification instead: only Bundled
+            // (MSL, drill-in target) is read-only; Untitled and
+            // User files are both editable.
+            let read_only =
+                matches!(library, crate::ui::state::ModelLibrary::Bundled);
             (
                 path_str,
                 display_name,
                 document.source().to_string(),
-                document.is_read_only(),
+                read_only,
                 library,
             )
         })
     };
 
+    // Fallback: the doc is a placeholder reserved by drill-in and
+    // its bg load hasn't finished yet (so `registry.host(doc)` is
+    // still None). We still need to flip `open_model.doc` to this
+    // tab's id — otherwise every per-doc lookup downstream (canvas
+    // state, loading overlay, read-only gate) keeps routing to the
+    // PREVIOUS tab's doc and the new tab visually mirrors it until
+    // the parse completes. Use the DrillInLoads entry for a
+    // display name; the source stays empty until the real document
+    // is installed.
+    let snapshot = snapshot.or_else(|| {
+        let loads = world
+            .get_resource::<crate::ui::panels::canvas_diagram::DrillInLoads>()?;
+        let qualified = loads.detail(doc)?.to_string();
+        let short = qualified
+            .rsplit('.')
+            .next()
+            .map(str::to_string)
+            .unwrap_or_else(|| qualified.clone());
+        Some((
+            format!("msl://{qualified}"),
+            short,
+            String::new(),
+            true,
+            crate::ui::state::ModelLibrary::Bundled,
+        ))
+    });
     let Some((path_str, display_name, source, read_only, library)) = snapshot else {
         return;
     };

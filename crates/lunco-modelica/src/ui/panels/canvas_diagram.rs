@@ -583,18 +583,19 @@ fn project_scene(diagram: &VisualDiagram) -> (Scene, HashMap<DiagramNodeId, Canv
 
 // ─── Panel state + Bevy resource ───────────────────────────────────
 
-/// Per-panel state carried across frames. Stored as a Bevy resource so
-/// the panel's `render` can pull it out via `world.resource_mut`.
-#[derive(Resource)]
-pub struct CanvasDiagramState {
+/// Per-document canvas state. Each open model tab owns one of
+/// these, keyed by [`DocumentId`] on [`CanvasDiagramState`]. Holds
+/// the transform + selection + in-flight projection task for that
+/// specific document so switching tabs doesn't leak viewport,
+/// selection, or a stale projection into a neighbour.
+pub struct CanvasDocState {
     pub canvas: Canvas,
     pub last_seen_gen: u64,
-    pub bound_doc: Option<lunco_doc::DocumentId>,
     pub context_menu: Option<PendingContextMenu>,
     pub projection_task: Option<ProjectionTask>,
 }
 
-impl Default for CanvasDiagramState {
+impl Default for CanvasDocState {
     fn default() -> Self {
         let mut canvas = Canvas::new(build_registry());
         canvas.layers.retain(|layer| layer.name() != "selection");
@@ -602,18 +603,59 @@ impl Default for CanvasDiagramState {
         Self {
             canvas,
             last_seen_gen: 0,
-            bound_doc: None,
             context_menu: None,
             projection_task: None,
         }
     }
 }
 
-/// Running projection task + the doc + generation that spawned it,
-/// so the poll loop can tell whether we've moved on since and
-/// should drop the stale result.
+/// Per-panel state carried across frames. Stored as a Bevy resource
+/// so the panel's `render` can pull it out via `world.resource_mut`.
+///
+/// State is sharded per-document — each open model tab has its own
+/// [`CanvasDocState`] entry so viewport/selection/projection/context
+/// menu never bleed between tabs. `fallback` is used only when no
+/// document is bound (startup, every tab closed).
+#[derive(Resource, Default)]
+pub struct CanvasDiagramState {
+    per_doc: std::collections::HashMap<lunco_doc::DocumentId, CanvasDocState>,
+    fallback: CanvasDocState,
+}
+
+impl CanvasDiagramState {
+    /// Read-only view of the state for a given doc. Falls back to an
+    /// empty canvas when `doc` is `None` or no entry exists yet — used
+    /// during the one-frame window between panel mount and first
+    /// projection.
+    pub fn get(&self, doc: Option<lunco_doc::DocumentId>) -> &CanvasDocState {
+        doc.and_then(|d| self.per_doc.get(&d)).unwrap_or(&self.fallback)
+    }
+
+    /// Mutable view, creating the entry on first access. `None` routes
+    /// writes to the shared fallback so "no doc bound" doesn't crash.
+    pub fn get_mut(
+        &mut self,
+        doc: Option<lunco_doc::DocumentId>,
+    ) -> &mut CanvasDocState {
+        match doc {
+            Some(d) => self.per_doc.entry(d).or_default(),
+            None => &mut self.fallback,
+        }
+    }
+
+    /// Drop a doc's entry when its document is removed from the
+    /// registry (tab closed, file unloaded). Called from
+    /// [`cleanup_removed_documents`].
+    pub fn drop_doc(&mut self, doc: lunco_doc::DocumentId) {
+        self.per_doc.remove(&doc);
+    }
+}
+
+/// Running projection task + the generation that spawned it, so the
+/// poll loop can tell whether we've moved on since and should drop a
+/// stale result. The owning doc is implicit: each task lives on that
+/// doc's [`CanvasDocState`].
 pub struct ProjectionTask {
-    pub doc: lunco_doc::DocumentId,
     pub gen_at_spawn: u64,
     pub task: bevy::tasks::Task<Scene>,
 }
@@ -660,16 +702,16 @@ impl Panel for CanvasDiagramPanel {
             world.insert_resource(CanvasDiagramState::default());
         }
 
-        // Decide whether to rebuild the scene. We use the existing
-        // snarl panel's `DiagramState.diagram` as the projection
-        // source — both panels read from it, only the snarl one
-        // currently writes to it. When canvas gains write-back,
-        // this indirection can go away.
+        // Decide whether to rebuild the scene. Per-doc state means
+        // "bound_doc" is implicit in the map key — a fresh entry has
+        // `last_seen_gen == 0` so the first render after tab open
+        // always re-projects.
         let project_now = {
             let Some(open) = world.resource::<WorkbenchState>().open_model.clone() else {
-                // No model open — render empty canvas and bail.
+                // No model open — reset fallback canvas and bail.
                 world
                     .resource_mut::<CanvasDiagramState>()
+                    .get_mut(None)
                     .canvas
                     .scene = Scene::new();
                 self.render_canvas(ui, world);
@@ -684,10 +726,13 @@ impl Panel for CanvasDiagramPanel {
                 .host(doc_id)
                 .map(|h| h.document().generation())
                 .unwrap_or(0);
-            let state = world.resource::<CanvasDiagramState>();
-            let bound_changed = state.bound_doc != Some(doc_id);
-            let gen_advanced = gen != state.last_seen_gen;
-            (bound_changed || gen_advanced).then_some((doc_id, gen))
+            let docstate = world.resource::<CanvasDiagramState>().get(Some(doc_id));
+            // Fresh entry has last_seen_gen == 0; any real edit
+            // bumps the doc's generation, so gen_advanced alone
+            // triggers both initial projection and subsequent
+            // re-projects. No separate "doc switched" bit needed.
+            let gen_advanced = gen != docstate.last_seen_gen;
+            gen_advanced.then_some((doc_id, gen))
         };
 
         if let Some((doc_id, gen)) = project_now {
@@ -709,20 +754,22 @@ impl Panel for CanvasDiagramPanel {
                 (doc.source().to_string(), ast)
             };
             let mut state = world.resource_mut::<CanvasDiagramState>();
+            let docstate = state.get_mut(Some(doc_id));
             // Drop any in-flight projection whose input is now
-            // stale (different doc, or older generation of the
-            // same doc). We can't cancel a `Task` cleanly in
-            // Bevy's API, but dropping the handle releases our
-            // interest — the pool still runs it to completion,
-            // the result is just thrown away when we poll.
-            let stale = match &state.projection_task {
-                Some(t) => t.doc != doc_id || t.gen_at_spawn != gen,
+            // stale (older generation of this doc). We can't cancel
+            // a `Task` cleanly in Bevy's API, but dropping the
+            // handle releases our interest — the pool still runs it
+            // to completion, the result is just thrown away when we
+            // poll. Cross-doc staleness is no longer possible now
+            // that tasks live on per-doc state.
+            let stale = match &docstate.projection_task {
+                Some(t) => t.gen_at_spawn != gen,
                 None => false,
             };
             if stale {
-                state.projection_task = None;
+                docstate.projection_task = None;
             }
-            if state.projection_task.is_none() {
+            if docstate.projection_task.is_none() {
                 let pool = bevy::tasks::AsyncComputeTaskPool::get();
                 let task = pool.spawn(async move {
                     // Heavy path (zero rumoca parses — we reuse
@@ -752,8 +799,7 @@ impl Panel for CanvasDiagramPanel {
                     let (scene, _id_map) = project_scene(&diagram);
                     scene
                 });
-                state.projection_task = Some(ProjectionTask {
-                    doc: doc_id,
+                docstate.projection_task = Some(ProjectionTask {
                     gen_at_spawn: gen,
                     task,
                 });
@@ -765,49 +811,55 @@ impl Panel for CanvasDiagramPanel {
             let _ = state;
         }
 
-        // Poll the in-flight projection task. When it finishes,
-        // swap the scene in, update the sync cursor, and (on doc
-        // switch) frame the scene with a sensible initial zoom.
+        // Poll the in-flight projection task for the ACTIVE doc.
+        // When it finishes, swap the scene in, update the sync
+        // cursor, and (on first projection for this tab) frame the
+        // scene with a sensible initial zoom.
         {
+            let active_doc = world
+                .resource::<WorkbenchState>()
+                .open_model
+                .as_ref()
+                .and_then(|m| m.doc);
             let mut state = world.resource_mut::<CanvasDiagramState>();
-            let done_task = state
+            let docstate = state.get_mut(active_doc);
+            let is_initial_projection = docstate.last_seen_gen == 0;
+            let done_task = docstate
                 .projection_task
                 .as_mut()
                 .and_then(|t| {
                     futures_lite::future::block_on(
                         futures_lite::future::poll_once(&mut t.task),
                     )
-                    .map(|scene| (t.doc, t.gen_at_spawn, scene))
+                    .map(|scene| (t.gen_at_spawn, scene))
                 });
-            if let Some((doc_id, gen, scene)) = done_task {
-                state.projection_task = None;
-                let doc_switched = state.bound_doc != Some(doc_id);
+            if let Some((gen, scene)) = done_task {
+                docstate.projection_task = None;
                 bevy::log::info!(
-                    "[CanvasDiagram] project done: {} nodes, {} edges (doc_switched={})",
+                    "[CanvasDiagram] project done: {} nodes, {} edges (initial={})",
                     scene.node_count(),
                     scene.edge_count(),
-                    doc_switched,
+                    is_initial_projection,
                 );
-                state.canvas.scene = scene;
-                state.canvas.selection.clear();
-                state.last_seen_gen = gen;
-                state.bound_doc = Some(doc_id);
-                if doc_switched {
+                docstate.canvas.scene = scene;
+                docstate.canvas.selection.clear();
+                docstate.last_seen_gen = gen;
+                if is_initial_projection {
                     let physical_zoom =
                         lunco_canvas::Viewport::physical_mm_zoom(ui.ctx());
-                    if let Some(world_rect) = state.canvas.scene.bounds() {
+                    if let Some(world_rect) = docstate.canvas.scene.bounds() {
                         let screen = lunco_canvas::Rect::from_min_max(
                             lunco_canvas::Pos::new(0.0, 0.0),
                             lunco_canvas::Pos::new(800.0, 600.0),
                         );
-                        let (c, z) = state
+                        let (c, z) = docstate
                             .canvas
                             .viewport
                             .fit_values(world_rect, screen, 40.0);
                         let z = z.min(physical_zoom * 2.0).max(physical_zoom * 0.5);
-                        state.canvas.viewport.snap_to(c, z);
+                        docstate.canvas.viewport.snap_to(c, z);
                     } else {
-                        state.canvas.viewport.snap_to(
+                        docstate.canvas.viewport.snap_to(
                             lunco_canvas::Pos::new(0.0, 0.0),
                             physical_zoom,
                         );
@@ -817,7 +869,7 @@ impl Panel for CanvasDiagramPanel {
                 // the user sees the new scene immediately rather
                 // than on the next input tick.
                 ui.ctx().request_repaint();
-            } else if state.projection_task.is_some() {
+            } else if docstate.projection_task.is_some() {
                 // Still parsing — repaint so the "Projecting…"
                 // indicator animates smoothly.
                 ui.ctx().request_repaint();
@@ -836,10 +888,27 @@ impl CanvasDiagramPanel {
         // but translate to nothing, matching "no-op on empty doc".
         let (doc_id, editing_class) = resolve_doc_context(world);
 
+        // Active doc — the tab whose canvas should respond to
+        // input this frame. All state accesses below route through
+        // this id so neighbour tabs stay untouched.
+        let active_doc = doc_id;
+
+        // Read-only library class (MSL, imported file the user
+        // opened via drill-in) — no editing gestures should take
+        // effect here. We gate the whole right-click menu on this
+        // so readonly tabs don't even offer "Add component" etc.;
+        // the canvas itself stays fully navigable (pan/zoom/select).
+        let tab_read_only = world
+            .resource::<WorkbenchState>()
+            .open_model
+            .as_ref()
+            .map(|m| m.read_only)
+            .unwrap_or(false);
+
         // Render the canvas and collect its events.
         let (response, events) = {
             let mut state = world.resource_mut::<CanvasDiagramState>();
-            state.canvas.ui(ui)
+            state.get_mut(active_doc).canvas.ui(ui)
         };
 
         // Overlay state machine, in priority order:
@@ -852,23 +921,13 @@ impl CanvasDiagramPanel {
         let (loading_label, projecting, show_empty_overlay) = {
             let state = world.resource::<CanvasDiagramState>();
             let loads = world.resource::<DrillInLoads>();
-            // Use the CURRENT TAB's doc (via WorkbenchState.open_model
-            // which `sync_active_tab_to_doc` keeps in sync with the
-            // active tab), not `state.bound_doc`. With shared canvas
-            // state, `bound_doc` may lag behind when the user switches
-            // tabs — tying the loading overlay to the *active* tab's
-            // doc means the indicator only appears in the tab that's
-            // actually loading.
-            let active_doc = world
-                .resource::<WorkbenchState>()
-                .open_model
-                .as_ref()
-                .and_then(|m| m.doc);
+            let docstate = state.get(active_doc);
             let label = active_doc.and_then(|d| loads.detail(d).map(str::to_string));
             (
                 label,
-                state.projection_task.is_some(),
-                state.canvas.scene.node_count() == 0 && state.projection_task.is_none(),
+                docstate.projection_task.is_some(),
+                docstate.canvas.scene.node_count() == 0
+                    && docstate.projection_task.is_none(),
             )
         };
         if let Some(class) = loading_label {
@@ -903,47 +962,88 @@ impl CanvasDiagramPanel {
         // click to close). If so, we SKIP `response.context_menu()`
         // entirely for this frame so egui doesn't re-open on the
         // same secondary_clicked signal.
-        let mut suppress_menu = false;
+        let mut suppress_menu = tab_read_only;
 
-        if response.secondary_clicked() {
+        if tab_read_only {
+            // Belt-and-braces: if egui has a popup cached from a
+            // previous (editable) tab, close it so switching tabs
+            // doesn't leave an orphan menu around. Cheap no-op when
+            // nothing is open.
+            if popup_was_open_before {
+                ui.ctx().memory_mut(|m| m.close_all_popups());
+            }
+            world
+                .resource_mut::<CanvasDiagramState>()
+                .get_mut(active_doc)
+                .context_menu = None;
+        }
+
+        if !tab_read_only && response.secondary_clicked() {
             let press = ui.ctx().input(|i| i.pointer.press_origin());
             if let Some(p) = press.or_else(|| response.interact_pointer_pos()) {
-                if popup_was_open_before {
+                // Only treat as "dismiss" if this tab itself has a
+                // cached menu open. egui's global popup memory can
+                // carry a stale popup from a tab we just switched
+                // away from (readonly → editable); without this
+                // check the first right-click on the new tab gets
+                // eaten as a dismiss and the user has to click
+                // twice.
+                let our_menu_open = popup_was_open_before
+                    && world
+                        .resource::<CanvasDiagramState>()
+                        .get(active_doc)
+                        .context_menu
+                        .is_some();
+                if our_menu_open {
                     // Second right-click while the menu is up → dismiss.
                     // We BOTH clear our cache AND ask egui to close
                     // any popup. Skipping `context_menu` below prevents
                     // egui from re-opening on this same frame.
-                    world.resource_mut::<CanvasDiagramState>().context_menu = None;
+                    world
+                        .resource_mut::<CanvasDiagramState>()
+                        .get_mut(active_doc)
+                        .context_menu = None;
                     ui.ctx().memory_mut(|m| m.close_all_popups());
                     suppress_menu = true;
                 } else {
+                    // If egui still thinks a popup is open (from a
+                    // previous tab), close it so this frame's
+                    // `response.context_menu()` can open our fresh
+                    // one without egui deduping against the stale
+                    // popup id.
+                    if popup_was_open_before {
+                        ui.ctx().memory_mut(|m| m.close_all_popups());
+                    }
                     // Fresh right-click: capture world position +
                     // hit-test origin while `press_origin` still
                     // reflects the right-click (before any menu-entry
                     // click overwrites it).
                     let state = world.resource::<CanvasDiagramState>();
-                    let world_pos = state.canvas.viewport.screen_to_world(
+                    let docstate = state.get(active_doc);
+                    let world_pos = docstate.canvas.viewport.screen_to_world(
                         lunco_canvas::Pos::new(p.x, p.y),
                         screen_rect,
                     );
-                    let hit_node = state.canvas.scene.hit_node(world_pos, 6.0);
-                    let hit_edge = state.canvas.scene.hit_edge(world_pos, 4.0);
+                    let hit_node = docstate.canvas.scene.hit_node(world_pos, 6.0);
+                    let hit_edge = docstate.canvas.scene.hit_edge(world_pos, 4.0);
                     let target = match (hit_node, hit_edge) {
                         (Some((id, _)), _) => ContextMenuTarget::Node(id),
                         (_, Some(id)) => ContextMenuTarget::Edge(id),
                         _ => ContextMenuTarget::Empty,
                     };
-                    drop(state);
+                    let _ = state;
                     bevy::log::info!(
                         "[CanvasDiagram] right-click screen=({:.1},{:.1}) world=({:.1},{:.1}) target={:?}",
                         p.x, p.y, world_pos.x, world_pos.y, target
                     );
-                    world.resource_mut::<CanvasDiagramState>().context_menu =
-                        Some(PendingContextMenu {
-                            screen_pos: p,
-                            world_pos,
-                            target,
-                        });
+                    world
+                        .resource_mut::<CanvasDiagramState>()
+                        .get_mut(active_doc)
+                        .context_menu = Some(PendingContextMenu {
+                        screen_pos: p,
+                        world_pos,
+                        target,
+                    });
                 }
             }
         }
@@ -957,6 +1057,7 @@ impl CanvasDiagramPanel {
             let mut collected: Vec<ModelicaOp> = Vec::new();
             let cached = world
                 .resource::<CanvasDiagramState>()
+                .get(active_doc)
                 .context_menu
                 .clone();
             response.context_menu(|ui| {
@@ -1010,10 +1111,14 @@ impl CanvasDiagramPanel {
         if !popup_open_now
             && world
                 .resource::<CanvasDiagramState>()
+                .get(active_doc)
                 .context_menu
                 .is_some()
         {
-            world.resource_mut::<CanvasDiagramState>().context_menu = None;
+            world
+                .resource_mut::<CanvasDiagramState>()
+                .get_mut(active_doc)
+                .context_menu = None;
         }
 
         // Double-click on a node → "drill in". Open the class that
@@ -1025,6 +1130,7 @@ impl CanvasDiagramPanel {
                 let type_name = {
                     let state = world.resource::<CanvasDiagramState>();
                     state
+                        .get(active_doc)
                         .canvas
                         .scene
                         .node(*id)
@@ -1260,23 +1366,39 @@ fn render_empty_menu(
     }
     ui.separator();
     if ui.button("⎚ Fit all (F)").clicked() {
+        let active_doc = active_doc_from_world(world);
         let mut state = world.resource_mut::<CanvasDiagramState>();
-        if let Some(bounds) = state.canvas.scene.bounds() {
+        let docstate = state.get_mut(active_doc);
+        if let Some(bounds) = docstate.canvas.scene.bounds() {
             let sr = lunco_canvas::Rect::from_min_max(
                 lunco_canvas::Pos::new(0.0, 0.0),
                 lunco_canvas::Pos::new(800.0, 600.0),
             );
-            let (c, z) = state.canvas.viewport.fit_values(bounds, sr, 40.0);
-            state.canvas.viewport.set_target(c, z);
+            let (c, z) = docstate.canvas.viewport.fit_values(bounds, sr, 40.0);
+            docstate.canvas.viewport.set_target(c, z);
         }
         ui.close();
     }
     if ui.button("⟲ Reset zoom").clicked() {
+        let active_doc = active_doc_from_world(world);
         let mut state = world.resource_mut::<CanvasDiagramState>();
-        let c = state.canvas.viewport.center;
-        state.canvas.viewport.set_target(c, 1.0);
+        let docstate = state.get_mut(active_doc);
+        let c = docstate.canvas.viewport.center;
+        docstate.canvas.viewport.set_target(c, 1.0);
         ui.close();
     }
+}
+
+/// Shorthand used by free helpers that don't already have the
+/// active doc threaded through: resolve it from `WorkbenchState`.
+/// Kept inline so callers outside the main render flow don't grow a
+/// parameter just to pass a one-line lookup.
+fn active_doc_from_world(world: &World) -> Option<lunco_doc::DocumentId> {
+    world
+        .resource::<WorkbenchState>()
+        .open_model
+        .as_ref()
+        .and_then(|m| m.doc)
 }
 
 // ─── Drill-in loading overlay ──────────────────────────────────────
@@ -1858,8 +1980,9 @@ fn build_ops_from_events(
     class: &str,
 ) -> Vec<ModelicaOp> {
     use lunco_canvas::SceneEvent;
+    let active_doc = active_doc_from_world(world);
     let state = world.resource::<CanvasDiagramState>();
-    let scene = &state.canvas.scene;
+    let scene = &state.get(active_doc).canvas.scene;
     let mut ops: Vec<ModelicaOp> = Vec::new();
 
     for ev in events {
@@ -1923,8 +2046,9 @@ fn component_headers(
     world: &World,
     id: lunco_canvas::NodeId,
 ) -> (String, String) {
+    let active_doc = active_doc_from_world(world);
     let state = world.resource::<CanvasDiagramState>();
-    let Some(node) = state.canvas.scene.node(id) else {
+    let Some(node) = state.get(active_doc).canvas.scene.node(id) else {
         return (String::new(), String::new());
     };
     let instance = node.label.clone();
@@ -1988,8 +2112,9 @@ fn op_remove_component(
     id: lunco_canvas::NodeId,
     class: &str,
 ) -> Option<ModelicaOp> {
+    let active_doc = active_doc_from_world(world);
     let state = world.resource::<CanvasDiagramState>();
-    op_remove_node_inner(&state.canvas.scene, id, class)
+    op_remove_node_inner(&state.get(active_doc).canvas.scene, id, class)
 }
 
 fn op_remove_edge(
@@ -1997,8 +2122,9 @@ fn op_remove_edge(
     id: lunco_canvas::EdgeId,
     class: &str,
 ) -> Option<ModelicaOp> {
+    let active_doc = active_doc_from_world(world);
     let state = world.resource::<CanvasDiagramState>();
-    op_remove_edge_inner(&state.canvas.scene, id, class)
+    op_remove_edge_inner(&state.get(active_doc).canvas.scene, id, class)
 }
 
 fn op_remove_node_inner(

@@ -112,11 +112,13 @@ fn cleanup_removed_documents(
     mut removed: RemovedComponents<ModelicaModel>,
     registry: Option<ResMut<ModelicaDocumentRegistry>>,
     compile_states: Option<ResMut<CompileStates>>,
+    canvas_state: Option<ResMut<panels::canvas_diagram::CanvasDiagramState>>,
     signals: Option<ResMut<lunco_viz::SignalRegistry>>,
     viz_registry: Option<ResMut<lunco_viz::VisualizationRegistry>>,
 ) {
     let Some(mut registry) = registry else { return };
     let mut compile_states = compile_states;
+    let mut canvas_state = canvas_state;
     let mut signals = signals;
     let mut viz_registry = viz_registry;
     for entity in removed.read() {
@@ -124,6 +126,12 @@ fn cleanup_removed_documents(
             registry.remove_document(doc);
             if let Some(states) = compile_states.as_mut() {
                 states.remove(doc);
+            }
+            // Drop the per-doc canvas entry (viewport, selection,
+            // in-flight projection task) so a later tab reusing the
+            // id starts fresh. Matches how CompileStates is cleaned.
+            if let Some(canvas) = canvas_state.as_mut() {
+                canvas.drop_doc(doc);
             }
         }
         // Drop every registered signal + plot binding for this entity
