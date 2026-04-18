@@ -1717,67 +1717,91 @@ impl Panel for DiagramPanel {
             }
         }
 
-        // ── Check if open_model changed → trigger import task ──
+        // ── Phase α Step 3: document-driven snarl sync ──
         //
-        // When the Package Browser opens a new model, it sets
-        // `diagram_dirty = true`. We spawn the parse task *and* clear the
-        // current visual state so the user sees either the reparsed
-        // diagram or an empty canvas — never a stale carry-over from a
-        // previously-open file or a user-built diagram that no longer
-        // belongs to the active source.
+        // Whenever the bound document's generation has advanced past
+        // `last_seen_gen` — either because another panel (code
+        // editor) committed a ReplaceSource / EditText, because a
+        // fresh document just bound, or because the retention window
+        // dropped entries we'd have needed — we rebuild snarl from
+        // the document's current source.
+        //
+        // Our own ops emitted in the previous frame also bump the
+        // generation; to avoid a rebuild ping-pong we explicitly
+        // advance `last_seen_gen` after applying ops at the bottom of
+        // this render function (see `advance_cursor_after_apply`).
+        //
+        // The rebuild is synchronous — re-parsing a small Modelica
+        // file takes well under a frame budget. The old
+        // `AsyncComputeTaskPool`-driven background parse is gone
+        // (and with it the "Analyzing model structure..." spinner
+        // that flashed on every edit).
         {
-            let dirty = world.get_resource::<WorkbenchState>()
-                .map(|s| s.diagram_dirty)
-                .unwrap_or(false);
-            if dirty {
-                let source = world.get_resource::<WorkbenchState>()
-                    .and_then(|s| s.open_model.as_ref().map(|m| m.source.clone()));
-                if let Some(mut ds) = world.get_resource_mut::<DiagramState>() {
-                    ds.diagram = VisualDiagram::default();
-                    ds.snarl = egui_snarl::Snarl::default();
+            let sync_needed = {
+                let gen = world
+                    .get_resource::<crate::ui::ModelicaDocumentRegistry>()
+                    .and_then(|r| {
+                        world
+                            .get_resource::<DiagramState>()
+                            .and_then(|ds| ds.document)
+                            .and_then(|doc| r.host(doc))
+                            .map(|h| h.generation())
+                    });
+                let last = world
+                    .get_resource::<DiagramState>()
+                    .map(|ds| ds.last_seen_gen)
+                    .unwrap_or(0);
+                gen.map(|g| g != last).unwrap_or(false)
+            };
+
+            if sync_needed {
+                let source = world
+                    .get_resource::<DiagramState>()
+                    .and_then(|ds| ds.document)
+                    .and_then(|doc| {
+                        world
+                            .get_resource::<crate::ui::ModelicaDocumentRegistry>()
+                            .and_then(|r| r.host(doc))
+                            .map(|h| h.document().source().to_string())
+                    });
+                let new_gen = world
+                    .get_resource::<DiagramState>()
+                    .and_then(|ds| ds.document)
+                    .and_then(|doc| {
+                        world
+                            .get_resource::<crate::ui::ModelicaDocumentRegistry>()
+                            .and_then(|r| r.host(doc))
+                            .map(|h| h.generation())
+                    })
+                    .unwrap_or(0);
+                if let (Some(src), Some(mut ds)) =
+                    (source, world.get_resource_mut::<DiagramState>())
+                {
+                    // Synchronous rebuild. `import_model_to_diagram`
+                    // parses + walks the AST + emits a VisualDiagram;
+                    // we then rebuild snarl from it via the existing
+                    // `build_snarl` helper (invoked inside
+                    // `rebuild_snarl`).
+                    ds.diagram = import_model_to_diagram(&src).unwrap_or_default();
+                    ds.rebuild_snarl();
+                    // Diff caches are now stale — they referenced
+                    // snarl node state from before the rebuild. Clear
+                    // so the next frame establishes a fresh baseline
+                    // instead of firing spurious Add/Remove/SetPlacement
+                    // ops.
+                    ds.last_wires = read_wire_set(&ds.snarl);
+                    ds.last_positions = None;
+                    ds.last_seen_gen = new_gen;
                     ds.compile_status = None;
                 }
-                if let Some(source) = source {
-                    let pool = bevy::tasks::AsyncComputeTaskPool::get();
-                    let task = pool.spawn(async move {
-                        import_model_to_diagram(&source)
-                    });
-                    if let Some(mut ds) = world.get_resource_mut::<DiagramState>() {
-                        ds.parse_task = Some(task);
-                    }
-                }
+                // Legacy: the package browser still flips
+                // `diagram_dirty` on model switch; clear it so the
+                // flag doesn't linger after our sync has already
+                // handled the change.
                 if let Some(mut state) = world.get_resource_mut::<WorkbenchState>() {
                     state.diagram_dirty = false;
                 }
             }
-        }
-
-        // ── Poll import task ──
-        //
-        // Treat a `None` result as "no diagram representable from this
-        // source" — keep the cleared canvas so the view honestly reflects
-        // the active model rather than silently falling back to old state.
-        let mut is_parsing = false;
-        if let Some(mut ds) = world.get_resource_mut::<DiagramState>() {
-            if let Some(mut task) = ds.parse_task.take() {
-                if let Some(diagram_opt) = futures_lite::future::block_on(futures_lite::future::poll_once(&mut task)) {
-                    ds.diagram = diagram_opt.unwrap_or_default();
-                    ds.rebuild_snarl();
-                } else {
-                    ds.parse_task = Some(task);
-                    is_parsing = true;
-                }
-            }
-        }
-
-        if is_parsing {
-            ui.vertical_centered(|ui| {
-                ui.add_space(100.0);
-                ui.spinner();
-                ui.heading("Analyzing model structure...");
-                ui.label(egui::RichText::new("Parsing Modelica AST for diagram visualization").size(10.0).color(egui::Color32::GRAY));
-            });
-            return;
         }
 
         // ── Empty-diagram policy ──
@@ -2046,35 +2070,39 @@ impl Panel for DiagramPanel {
                     // Mirror the fresh source back to the cached
                     // `open_model.source` so the code editor and any
                     // other panel reading that field sees the update.
-                    // Do NOT flip `diagram_dirty` here — the snarl has
-                    // already been mutated by the viewer, and the
-                    // import path (`import_model_to_diagram`) would
-                    // wipe the snarl, spawn an "Analyzing..." task,
-                    // and drop components whose MSL lookup doesn't
-                    // round-trip. Keeping the snarl as the canvas
-                    // truth during Phase α avoids that flicker loop;
-                    // Step 3 introduces an AST→snarl sync that makes
-                    // the snarl wipe safe.
-                    let fresh_source = world
+                    let fresh = world
                         .get_resource::<crate::ui::ModelicaDocumentRegistry>()
                         .and_then(|r| r.host(doc_id))
-                        .map(|h| h.document().source().to_string());
-                    if let (Some(src), Some(mut ws)) =
-                        (fresh_source, world.get_resource_mut::<WorkbenchState>())
-                    {
-                        if let Some(open) = ws.open_model.as_mut() {
-                            // Recompute line starts alongside the
-                            // source update — the code editor reads
-                            // these for layout/navigation.
-                            let mut line_starts = vec![0usize];
-                            for (i, b) in src.as_bytes().iter().enumerate() {
-                                if *b == b'\n' {
-                                    line_starts.push(i + 1);
+                        .map(|h| (h.document().source().to_string(), h.generation()));
+                    if let Some((src, new_gen)) = fresh {
+                        if let Some(mut ws) = world.get_resource_mut::<WorkbenchState>() {
+                            if let Some(open) = ws.open_model.as_mut() {
+                                // Recompute line starts alongside the
+                                // source update — the code editor
+                                // reads these for layout/navigation.
+                                let mut line_starts = vec![0usize];
+                                for (i, b) in src.as_bytes().iter().enumerate() {
+                                    if *b == b'\n' {
+                                        line_starts.push(i + 1);
+                                    }
                                 }
+                                open.source = std::sync::Arc::from(src.as_str());
+                                open.line_starts = line_starts.into();
+                                open.cached_galley = None;
                             }
-                            open.source = std::sync::Arc::from(src.as_str());
-                            open.line_starts = line_starts.into();
-                            open.cached_galley = None;
+                        }
+                        // Advance the sync cursor past our own ops so
+                        // the next frame's Step-3 sync doesn't
+                        // rebuild snarl in response to changes we
+                        // just produced. The viewer already applied
+                        // them to snarl directly.
+                        if let Some(mut ds) = world.get_resource_mut::<DiagramState>() {
+                            ds.last_seen_gen = new_gen;
+                            // `last_wires` / `last_positions` were
+                            // updated from snarl state earlier in
+                            // this same frame, so they already
+                            // reflect the post-edit snarl. No reset
+                            // needed here.
                         }
                     }
                 }
@@ -2086,26 +2114,59 @@ impl Panel for DiagramPanel {
     }
 }
 
-/// Execute the diagram-to-compile workflow: generate Modelica source from
-/// the current [`DiagramState`] → write temp file → spawn or update a
-/// `ModelicaModel` entity → send [`ModelicaCommand::Compile`] to the
-/// worker. Public so [`crate::ui::panels::model_view::ModelViewPanel`]
-/// can dispatch it from the unified toolbar when the user is in
-/// Diagram mode.
+/// Execute the diagram-to-compile workflow for the *bound* document:
+/// read its current source → write temp file → spawn or reuse a
+/// `ModelicaModel` entity linked to that document → send
+/// [`ModelicaCommand::Compile`] to the worker.
+///
+/// Public so [`crate::ui::panels::model_view::ModelViewPanel`] can
+/// dispatch it from the unified toolbar when the user is in Diagram
+/// mode.
+///
+/// Phase α retires the old regenerate-from-VisualDiagram path that
+/// synthesised a fresh `VisualModel{n}.mo` on every compile. Every
+/// compile now targets the document the diagram is editing (stored on
+/// `DiagramState.document`) and uses its authoritative source —
+/// including whatever the code editor has typed and whatever the
+/// diagram's AST ops have spliced in.
 pub fn do_compile(world: &mut World) {
-    // Extract data first
-    let (model_counter, source, temp_path) = {
-        let Some(s) = world.get_resource::<DiagramState>() else { return };
-        let mc = s.model_counter + 1;
-        let model_name = format!("VisualModel{}", mc);
-        let source = generate_modelica_source(&s.diagram, &model_name);
-        let temp_dir = std::env::temp_dir().join("luncosim");
-        let _ = std::fs::create_dir_all(&temp_dir);
-        let temp_path = temp_dir.join(format!("{}.mo", model_name));
-        (mc, source, temp_path)
+    // 1. Resolve the bound document + its current source + class name.
+    let Some(doc_id) = world
+        .get_resource::<DiagramState>()
+        .and_then(|s| s.document)
+    else {
+        if let Some(mut s) = world.get_resource_mut::<DiagramState>() {
+            s.compile_status = Some("No document bound to diagram".into());
+            s.compile_ok = false;
+        }
+        return;
     };
 
-    // Write file
+    let (source, model_name) = {
+        let Some(registry) = world.get_resource::<crate::ui::ModelicaDocumentRegistry>() else {
+            return;
+        };
+        let Some(host) = registry.host(doc_id) else {
+            if let Some(mut s) = world.get_resource_mut::<DiagramState>() {
+                s.compile_status = Some("Bound document missing from registry".into());
+                s.compile_ok = false;
+            }
+            return;
+        };
+        let doc = host.document();
+        let source = doc.source().to_string();
+        let name = doc
+            .ast()
+            .ast()
+            .and_then(|s| s.classes.keys().next().cloned())
+            .unwrap_or_else(|| "Model".into());
+        (source, name)
+    };
+
+    // 2. Write the source to a temp file for the compiler worker.
+    let temp_dir = std::env::temp_dir().join("luncosim");
+    let _ = std::fs::create_dir_all(&temp_dir);
+    let temp_path = temp_dir.join(format!("{}.mo", model_name));
     if let Err(e) = std::fs::write(&temp_path, &source) {
         if let Some(mut s) = world.get_resource_mut::<DiagramState>() {
             s.compile_status = Some(format!("Write error: {}", e));
@@ -2114,44 +2175,45 @@ pub fn do_compile(world: &mut World) {
         return;
     }
 
-    // Allocate a Document up-front so the new entity is spawned with a
-    // valid `document` id pointing at the source we're about to compile.
-    let doc_id = world
-        .resource_mut::<crate::ui::ModelicaDocumentRegistry>()
-        .allocate(source.clone());
+    // 3. Bump the session counter (used as a fence for stale results).
+    let session_id = {
+        let mut s = world.resource_mut::<DiagramState>();
+        s.model_counter = s.model_counter.saturating_add(1);
+        s.model_counter as u64
+    };
 
-    // Spawn entity
-    let session_id = model_counter as u64;
-    let model_name = format!("VisualModel{}", model_counter);
-    let entity = world.spawn((
-        Name::new(model_name.clone()),
-        ModelicaModel {
-            model_path: temp_path,
-            model_name: model_name.clone(),
-            current_time: 0.0,
-            last_step_time: 0.0,
-            session_id,
-            paused: false,
-            parameters: HashMap::new(),
-            inputs: HashMap::new(),
-            variables: HashMap::new(),
-            descriptions: HashMap::new(),
-            document: doc_id,
-            is_stepping: true,
-        },
-    )).id();
+    // 4. Spawn the entity and link it to the existing document.
+    let entity = world
+        .spawn((
+            Name::new(model_name.clone()),
+            ModelicaModel {
+                model_path: temp_path,
+                model_name: model_name.clone(),
+                current_time: 0.0,
+                last_step_time: 0.0,
+                session_id,
+                paused: false,
+                parameters: HashMap::new(),
+                inputs: HashMap::new(),
+                variables: HashMap::new(),
+                descriptions: HashMap::new(),
+                document: doc_id,
+                is_stepping: true,
+            },
+        ))
+        .id();
 
     world
         .resource_mut::<crate::ui::ModelicaDocumentRegistry>()
         .link(entity, doc_id);
 
-    // Mark the document as compiling — UI (status chips, disabled button)
-    // reads this to reflect in-flight state.
+    // 5. Mark the document as compiling so UI chips / disabled states
+    //    reflect in-flight work.
     world
         .resource_mut::<crate::ui::CompileStates>()
         .set(doc_id, crate::ui::CompileState::Compiling);
 
-    // Send command
+    // 6. Dispatch to the worker.
     if let Some(channels) = world.get_resource::<ModelicaChannels>() {
         let _ = channels.tx.send(ModelicaCommand::Compile {
             entity,
@@ -2161,7 +2223,6 @@ pub fn do_compile(world: &mut World) {
         });
     }
     if let Some(mut s) = world.get_resource_mut::<DiagramState>() {
-        s.model_counter = model_counter;
         s.compile_status = Some("Compiling…".into());
     }
 }
