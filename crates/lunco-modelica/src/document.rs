@@ -273,6 +273,66 @@ pub enum ModelicaOp {
         /// Equation payload. See [`pretty::ConnectEquation`].
         eq: ConnectEquation,
     },
+    /// Remove a component declaration from `class` by instance name.
+    ///
+    /// Removes the whole declaration line(s) including the trailing
+    /// semicolon and newline. Uses `Component.location` as the span
+    /// anchor. Inverse is an [`EditText`] that reinserts the deleted
+    /// text verbatim — including any comments / annotations that were
+    /// attached to the declaration.
+    RemoveComponent {
+        /// Target class name (top-level today).
+        class: String,
+        /// Instance name to remove.
+        name: String,
+    },
+    /// Remove a `connect(from.component.from.port, to.component.to.port)`
+    /// equation from `class`. Matches by component+port pair (order
+    /// insensitive).
+    ///
+    /// Spans the full equation including the trailing semicolon and
+    /// any trailing `annotation(Line(...))`. Inverse is a byte-exact
+    /// [`EditText`] reinsertion.
+    RemoveConnection {
+        /// Target class name.
+        class: String,
+        /// One endpoint of the connection.
+        from: pretty::PortRef,
+        /// Other endpoint.
+        to: pretty::PortRef,
+    },
+    /// Set or replace the `Placement` annotation on a component.
+    ///
+    /// If the component already has an `annotation(Placement(...))`,
+    /// the Placement fragment is replaced in place. Otherwise a fresh
+    /// `annotation(Placement(...))` is inserted just before the
+    /// declaration's trailing semicolon. Other annotations (Dialog,
+    /// Documentation, etc.) are preserved in both cases.
+    SetPlacement {
+        /// Target class name.
+        class: String,
+        /// Component instance name.
+        name: String,
+        /// New placement.
+        placement: pretty::Placement,
+    },
+    /// Set or replace a parameter modification on a component.
+    ///
+    /// If the component declaration already carries a modifications
+    /// list with `param = …`, the right-hand side is replaced. If the
+    /// list exists but the param is absent, `param = value` is appended.
+    /// If no modifications list exists yet, a `(param = value)` is
+    /// inserted after the component name.
+    SetParameter {
+        /// Target class name.
+        class: String,
+        /// Component instance name.
+        component: String,
+        /// Parameter / modifier name.
+        param: String,
+        /// Replacement value expression (emitted verbatim).
+        value: String,
+    },
 }
 
 impl DocumentOp for ModelicaOp {}
@@ -299,6 +359,34 @@ impl Document for ModelicaDocument {
             }
             ModelicaOp::AddConnection { class, eq } => {
                 let patch = compute_add_connection_patch(&self.source, &self.ast, &class, &eq)?;
+                self.apply(ModelicaOp::EditText {
+                    range: patch.0,
+                    replacement: patch.1,
+                })
+            }
+            ModelicaOp::RemoveComponent { class, name } => {
+                let patch = compute_remove_component_patch(&self.source, &self.ast, &class, &name)?;
+                self.apply(ModelicaOp::EditText {
+                    range: patch.0,
+                    replacement: patch.1,
+                })
+            }
+            ModelicaOp::RemoveConnection { class, from, to } => {
+                let patch = compute_remove_connection_patch(&self.source, &self.ast, &class, &from, &to)?;
+                self.apply(ModelicaOp::EditText {
+                    range: patch.0,
+                    replacement: patch.1,
+                })
+            }
+            ModelicaOp::SetPlacement { class, name, placement } => {
+                let patch = compute_set_placement_patch(&self.source, &self.ast, &class, &name, &placement)?;
+                self.apply(ModelicaOp::EditText {
+                    range: patch.0,
+                    replacement: patch.1,
+                })
+            }
+            ModelicaOp::SetParameter { class, component, param, value } => {
+                let patch = compute_set_parameter_patch(&self.source, &self.ast, &class, &component, &param, &value)?;
                 self.apply(ModelicaOp::EditText {
                     range: patch.0,
                     replacement: patch.1,
@@ -470,6 +558,467 @@ fn class_section_insertion_point(
         .end_name_token
         .as_ref()
         .map(|t| t.location.start as usize)
+}
+
+/// Extend a declaration/equation span to swallow leading indentation
+/// and a trailing newline, so removal leaves a clean source buffer
+/// without a dangling blank line.
+fn extend_span_to_whole_lines(source: &str, raw: Range<usize>) -> Range<usize> {
+    let line_start = source[..raw.start].rfind('\n').map(|i| i + 1).unwrap_or(0);
+    // Extend backward only past whitespace on the same line.
+    let preceding = &source[line_start..raw.start];
+    let start = if preceding.chars().all(|c| c == ' ' || c == '\t') {
+        line_start
+    } else {
+        raw.start
+    };
+    // Extend forward to and past the following newline if any.
+    let end = source[raw.end..]
+        .find('\n')
+        .map(|i| raw.end + i + 1)
+        .unwrap_or(source.len());
+    start..end
+}
+
+/// Locate the byte position of the semicolon that ends a declaration /
+/// equation whose first token starts at `from_byte`. Respects nested
+/// parentheses and braces so a `;` inside `annotation(...)` doesn't
+/// fool us.
+fn find_statement_terminator(source: &str, from_byte: usize) -> Option<usize> {
+    let bytes = source.as_bytes();
+    let mut depth: i32 = 0;
+    let mut i = from_byte;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'(' | b'{' | b'[' => depth += 1,
+            b')' | b'}' | b']' => depth -= 1,
+            b';' if depth <= 0 => return Some(i),
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Compute the text patch for `RemoveComponent`.
+fn compute_remove_component_patch(
+    source: &str,
+    ast: &AstCache,
+    class: &str,
+    name: &str,
+) -> Result<(Range<usize>, String), DocumentError> {
+    let class_def = resolve_class(ast, class)?;
+    let component = class_def.components.get(name).ok_or_else(|| {
+        DocumentError::ValidationFailed(format!(
+            "component `{}` not found in class `{}`",
+            name, class
+        ))
+    })?;
+    let raw_start = component.location.start as usize;
+    // Component.location.end sometimes stops before the semicolon
+    // depending on rumoca's recording — be conservative and extend
+    // via terminator scan.
+    let term = find_statement_terminator(source, component.name_token.location.start as usize)
+        .ok_or_else(|| {
+            DocumentError::ValidationFailed(format!(
+                "could not find `;` terminating component `{}`",
+                name
+            ))
+        })?;
+    let span = extend_span_to_whole_lines(source, raw_start..(term + 1));
+    Ok((span, String::new()))
+}
+
+/// Match a `ComponentReference` against a `PortRef` (expected form
+/// `component.port`). Returns true when the dotted AST path equals the
+/// two-part PortRef pair, in that order.
+fn cref_matches_port(
+    cref: &rumoca_session::parsing::ast::ComponentReference,
+    port: &pretty::PortRef,
+) -> bool {
+    use rumoca_session::parsing::ast::ComponentRefPart;
+    let parts: Vec<&ComponentRefPart> = cref.parts.iter().collect();
+    if parts.len() != 2 {
+        return false;
+    }
+    parts[0].ident.text.as_ref() == port.component
+        && parts[1].ident.text.as_ref() == port.port
+}
+
+/// Compute the text patch for `RemoveConnection`.
+fn compute_remove_connection_patch(
+    source: &str,
+    ast: &AstCache,
+    class: &str,
+    from: &pretty::PortRef,
+    to: &pretty::PortRef,
+) -> Result<(Range<usize>, String), DocumentError> {
+    use rumoca_session::parsing::ast::Equation;
+    let class_def = resolve_class(ast, class)?;
+    let eq = class_def
+        .equations
+        .iter()
+        .find(|e| match e {
+            Equation::Connect { lhs, rhs } => {
+                (cref_matches_port(lhs, from) && cref_matches_port(rhs, to))
+                    || (cref_matches_port(lhs, to) && cref_matches_port(rhs, from))
+            }
+            _ => false,
+        })
+        .ok_or_else(|| {
+            DocumentError::ValidationFailed(format!(
+                "connect({}.{}, {}.{}) not found in class `{}`",
+                from.component, from.port, to.component, to.port, class
+            ))
+        })?;
+    let start_loc = eq.get_location().ok_or_else(|| {
+        DocumentError::Internal("matched connect equation has no location".into())
+    })?;
+    let raw_start = start_loc.start as usize;
+    // Scan backward to the `connect` keyword if it precedes the first
+    // component-ref token (it always does for a well-formed connect
+    // equation, but ComponentReference.get_location reports the lhs
+    // cref's first token).
+    let connect_start = source[..raw_start]
+        .rfind("connect")
+        .filter(|&i| source[i..].starts_with("connect") && i + 7 <= raw_start)
+        .unwrap_or(raw_start);
+    let term = find_statement_terminator(source, raw_start).ok_or_else(|| {
+        DocumentError::ValidationFailed("could not find `;` terminating connect equation".into())
+    })?;
+    let span = extend_span_to_whole_lines(source, connect_start..(term + 1));
+    Ok((span, String::new()))
+}
+
+/// Locate a top-level `annotation(` substring inside `[start, end)`,
+/// respecting nesting (i.e. must not be inside another parenthesized
+/// expression). Returns the byte range covering the whole
+/// `annotation(...)` including the outer parens.
+fn find_annotation_span(source: &str, span: Range<usize>) -> Option<Range<usize>> {
+    let slice = source.get(span.clone())?;
+    // Walk the slice tracking paren depth; look for `annotation(` at
+    // depth 0.
+    let bytes = slice.as_bytes();
+    let mut depth: i32 = 0;
+    let mut i: usize = 0;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if c == b'(' || c == b'{' || c == b'[' {
+            depth += 1;
+            i += 1;
+            continue;
+        }
+        if c == b')' || c == b'}' || c == b']' {
+            depth -= 1;
+            i += 1;
+            continue;
+        }
+        if depth == 0 && bytes[i..].starts_with(b"annotation") {
+            // Check that the preceding char is not an ident char so we
+            // don't match `myannotation(`.
+            let prev_ok = i == 0
+                || !(bytes[i - 1].is_ascii_alphanumeric() || bytes[i - 1] == b'_');
+            if prev_ok {
+                // Skip the keyword and locate the `(`.
+                let mut j = i + "annotation".len();
+                while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                    j += 1;
+                }
+                if j < bytes.len() && bytes[j] == b'(' {
+                    // Find matching `)`.
+                    let mut d = 0;
+                    let mut k = j;
+                    while k < bytes.len() {
+                        match bytes[k] {
+                            b'(' | b'{' | b'[' => d += 1,
+                            b')' | b'}' | b']' => {
+                                d -= 1;
+                                if d == 0 {
+                                    return Some((span.start + i)..(span.start + k + 1));
+                                }
+                            }
+                            _ => {}
+                        }
+                        k += 1;
+                    }
+                    return None;
+                }
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Find the span of the first `Placement(...)` call inside a byte
+/// range, matched at top level (paren depth 0 within the range).
+fn find_placement_span(source: &str, span: Range<usize>) -> Option<Range<usize>> {
+    let slice = source.get(span.clone())?;
+    let bytes = slice.as_bytes();
+    let mut i: usize = 0;
+    while i < bytes.len() {
+        if bytes[i..].starts_with(b"Placement") {
+            let prev_ok = i == 0
+                || !(bytes[i - 1].is_ascii_alphanumeric() || bytes[i - 1] == b'_');
+            if prev_ok {
+                let mut j = i + "Placement".len();
+                while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                    j += 1;
+                }
+                if j < bytes.len() && bytes[j] == b'(' {
+                    let mut d = 0;
+                    let mut k = j;
+                    while k < bytes.len() {
+                        match bytes[k] {
+                            b'(' | b'{' | b'[' => d += 1,
+                            b')' | b'}' | b']' => {
+                                d -= 1;
+                                if d == 0 {
+                                    return Some((span.start + i)..(span.start + k + 1));
+                                }
+                            }
+                            _ => {}
+                        }
+                        k += 1;
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Compute the text patch for `SetPlacement`.
+///
+/// Strategy:
+///   1. If the component's decl has an `annotation(...)` block and that
+///      block contains `Placement(...)`, replace the `Placement` call
+///      in place — other annotations (Dialog, Documentation) untouched.
+///   2. If the decl has an `annotation(...)` block without `Placement`,
+///      prepend `Placement(...), ` inside it.
+///   3. If there is no annotation at all, insert
+///      ` annotation(Placement(...))` just before the decl's `;`.
+fn compute_set_placement_patch(
+    source: &str,
+    ast: &AstCache,
+    class: &str,
+    name: &str,
+    placement: &pretty::Placement,
+) -> Result<(Range<usize>, String), DocumentError> {
+    let class_def = resolve_class(ast, class)?;
+    let component = class_def.components.get(name).ok_or_else(|| {
+        DocumentError::ValidationFailed(format!(
+            "component `{}` not found in class `{}`",
+            name, class
+        ))
+    })?;
+    let decl_start = component.location.start as usize;
+    let term = find_statement_terminator(source, component.name_token.location.start as usize)
+        .ok_or_else(|| {
+            DocumentError::ValidationFailed("component decl has no terminating `;`".into())
+        })?;
+    let decl_span = decl_start..term;
+    let new_placement = pretty::placement_inner(placement);
+
+    if let Some(ann_span) = find_annotation_span(source, decl_span.clone()) {
+        // ann_span covers `annotation(...)` including outer parens.
+        // The interior span is (ann_span.start + "annotation(".len() ..
+        // ann_span.end - 1).
+        let prefix_len = "annotation(".len();
+        let inner_start = ann_span.start + prefix_len;
+        let inner_end = ann_span.end - 1;
+        if let Some(p_span) = find_placement_span(source, inner_start..inner_end) {
+            return Ok((p_span, new_placement));
+        } else {
+            // Insert Placement fragment at the start of the annotation
+            // contents, followed by `, ` to keep the remaining entries
+            // well-formed.
+            let insert_at = inner_start;
+            return Ok((
+                insert_at..insert_at,
+                format!("{}, ", new_placement),
+            ));
+        }
+    }
+    // No annotation at all — insert one just before the `;`.
+    Ok((
+        term..term,
+        format!(" annotation({})", new_placement),
+    ))
+}
+
+/// Compute the text patch for `SetParameter`.
+///
+/// Locates the component's modifications list (the `(...)` immediately
+/// after the instance name). If absent, inserts a fresh
+/// `(param=value)`. If present and the param exists, replaces its
+/// value. If present and the param is missing, appends `, param=value`.
+fn compute_set_parameter_patch(
+    source: &str,
+    ast: &AstCache,
+    class: &str,
+    component: &str,
+    param: &str,
+    value: &str,
+) -> Result<(Range<usize>, String), DocumentError> {
+    let class_def = resolve_class(ast, class)?;
+    let comp = class_def.components.get(component).ok_or_else(|| {
+        DocumentError::ValidationFailed(format!(
+            "component `{}` not found in class `{}`",
+            component, class
+        ))
+    })?;
+    let name_end = comp.name_token.location.end as usize;
+    let term = find_statement_terminator(source, name_end).ok_or_else(|| {
+        DocumentError::ValidationFailed("component decl has no terminating `;`".into())
+    })?;
+    // Scan from just after the name token to the terminator looking
+    // for `(` before any alphanumeric token (which would indicate an
+    // annotation / binding, not modifications).
+    let bytes = source.as_bytes();
+    let mut i = name_end;
+    while i < term {
+        match bytes[i] {
+            b' ' | b'\t' | b'\r' | b'\n' => {
+                i += 1;
+            }
+            b'(' => {
+                // Found modifications list. Locate its matching `)`.
+                let mut d = 0;
+                let mut k = i;
+                let close = loop {
+                    match bytes[k] {
+                        b'(' | b'{' | b'[' => d += 1,
+                        b')' | b'}' | b']' => {
+                            d -= 1;
+                            if d == 0 {
+                                break Some(k);
+                            }
+                        }
+                        _ => {}
+                    }
+                    k += 1;
+                    if k >= term {
+                        break None;
+                    }
+                };
+                let close = close.ok_or_else(|| {
+                    DocumentError::ValidationFailed(
+                        "unterminated `(` in component modifications".into(),
+                    )
+                })?;
+                return Ok(modify_mod_list(source, (i + 1)..close, param, value));
+            }
+            _ => {
+                // No modifications list — insert one right after the name.
+                let rendered = format!("({}={})", param, value);
+                return Ok((name_end..name_end, rendered));
+            }
+        }
+    }
+    // Reached terminator without encountering a `(` — insert fresh list.
+    let rendered = format!("({}={})", param, value);
+    Ok((name_end..name_end, rendered))
+}
+
+/// Helper: emit the patch that either updates or appends `param=value`
+/// within the top-level modification list occupying `inner_span`
+/// (exclusive of the outer parens).
+fn modify_mod_list(
+    source: &str,
+    inner_span: Range<usize>,
+    param: &str,
+    value: &str,
+) -> (Range<usize>, String) {
+    let bytes = source.as_bytes();
+    // Walk the list at depth 0, splitting entries by `,`. For each
+    // entry, check if it starts (after whitespace) with `param` and is
+    // followed by `=` or `(` (modification or nested modification).
+    let start = inner_span.start;
+    let end = inner_span.end;
+    let mut entry_start = start;
+    let mut d = 0;
+    let mut i = start;
+    while i < end {
+        let c = bytes[i];
+        match c {
+            b'(' | b'{' | b'[' => d += 1,
+            b')' | b'}' | b']' => d -= 1,
+            b',' if d == 0 => {
+                if let Some(patch) = match_entry(source, entry_start..i, param, value) {
+                    return patch;
+                }
+                entry_start = i + 1;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    // Final entry.
+    if let Some(patch) = match_entry(source, entry_start..end, param, value) {
+        return patch;
+    }
+    // Not found — append.
+    let trimmed_end = {
+        let mut e = end;
+        while e > start
+            && (source.as_bytes()[e - 1] == b' '
+                || source.as_bytes()[e - 1] == b'\t'
+                || source.as_bytes()[e - 1] == b'\n'
+                || source.as_bytes()[e - 1] == b'\r')
+        {
+            e -= 1;
+        }
+        e
+    };
+    let insertion = if trimmed_end == start {
+        format!("{}={}", param, value)
+    } else {
+        format!(", {}={}", param, value)
+    };
+    (trimmed_end..trimmed_end, insertion)
+}
+
+/// If `entry` (a slice of the modifications list) names `param`, return
+/// the patch to replace its right-hand value with `value`. Otherwise
+/// return `None`.
+fn match_entry(
+    source: &str,
+    entry: Range<usize>,
+    param: &str,
+    value: &str,
+) -> Option<(Range<usize>, String)> {
+    let slice = source.get(entry.clone())?;
+    // Skip leading whitespace.
+    let pre_ws = slice.chars().take_while(|c| c.is_whitespace()).count();
+    let name_start = entry.start + pre_ws;
+    let remainder = source.get(name_start..entry.end)?;
+    if !remainder.starts_with(param) {
+        return None;
+    }
+    // Ensure the next char is an identifier boundary.
+    let after_idx = name_start + param.len();
+    let after_char = source.as_bytes().get(after_idx).copied();
+    if matches!(after_char, Some(b'=') | Some(b' ') | Some(b'\t') | Some(b'\n') | Some(b'\r')) {
+        // Find the `=` and replace everything after it (trimmed) up to
+        // entry end.
+        let eq_pos = source.get(after_idx..entry.end)?.find('=')?;
+        let value_start = after_idx + eq_pos + 1;
+        // Strip trailing whitespace from entry end for a clean replace.
+        let mut value_end = entry.end;
+        while value_end > value_start {
+            let b = source.as_bytes()[value_end - 1];
+            if b == b' ' || b == b'\t' || b == b'\n' || b == b'\r' {
+                value_end -= 1;
+            } else {
+                break;
+            }
+        }
+        let replacement = format!("{}{}", if source.as_bytes()[value_start] == b' ' { "" } else { " " }, value);
+        return Some((value_start..value_end, replacement));
+    }
+    None
 }
 
 #[cfg(test)]
