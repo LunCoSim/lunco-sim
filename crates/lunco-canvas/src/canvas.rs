@@ -65,6 +65,7 @@ pub struct Canvas {
     /// pivot when there's no live scroll event. `None` before the
     /// first mouse-move over the widget.
     last_pointer_screen: Option<Pos>,
+
 }
 
 impl Canvas {
@@ -91,13 +92,21 @@ impl Canvas {
         }
     }
 
-    /// Render + handle input. Returns all scene events produced
-    /// during this frame.
-    pub fn ui(&mut self, ui: &mut egui::Ui) -> Vec<SceneEvent> {
+    /// Render + handle input. Returns the canvas's egui `Response`
+    /// together with scene events produced this frame. The caller
+    /// can call `.context_menu(|ui| ...)` on the response to attach
+    /// a right-click menu using egui's native popup machinery.
+    pub fn ui(&mut self, ui: &mut egui::Ui) -> (egui::Response, Vec<SceneEvent>) {
         let mut events: Vec<SceneEvent> = Vec::new();
 
-        let (rect, response) =
-            ui.allocate_exact_size(ui.available_size(), egui::Sense::click_and_drag());
+        // `Sense::click_and_drag()` covers primary interactions;
+        // `| Sense::click()` adds secondary-click detection so egui
+        // routes right-click into the Response (and
+        // `Response::context_menu` works on it).
+        let (rect, response) = ui.allocate_exact_size(
+            ui.available_size(),
+            egui::Sense::click_and_drag() | egui::Sense::click(),
+        );
         let screen_rect = Rect::from_min_max(
             Pos::new(rect.min.x, rect.min.y),
             Pos::new(rect.max.x, rect.max.y),
@@ -123,87 +132,102 @@ impl Canvas {
         // InputEvent and dispatch in a deterministic order.
         let mut input_events: Vec<InputEvent> = Vec::new();
 
-        // Primary button press — comes through `drag_started` (egui
-        // fires this on ANY press, not only multi-frame drags).
-        if response.drag_started_by(PointerButton::Primary) {
-            if let Some(p) = response.interact_pointer_pos() {
-                let screen = Pos::new(p.x, p.y);
-                let world = self.viewport.screen_to_world(screen, screen_rect);
-                input_events.push(InputEvent::PointerDown {
-                    button: MouseButton::Primary,
-                    world,
-                    screen,
-                    modifiers,
-                });
-            }
-        }
-
-        // Primary move while held.
-        if response.dragged_by(PointerButton::Primary) {
-            if let Some(p) = response.interact_pointer_pos() {
-                let screen = Pos::new(p.x, p.y);
-                let world = self.viewport.screen_to_world(screen, screen_rect);
-                input_events.push(InputEvent::PointerMove {
-                    world,
-                    screen,
-                    modifiers,
-                });
-            }
-        }
-
-        // Primary release.
-        if response.drag_stopped_by(PointerButton::Primary) {
-            let p = response.interact_pointer_pos().or(response.hover_pos());
-            if let Some(p) = p {
-                let screen = Pos::new(p.x, p.y);
-                let world = self.viewport.screen_to_world(screen, screen_rect);
-                input_events.push(InputEvent::PointerUp {
-                    button: MouseButton::Primary,
-                    world,
-                    screen,
-                    modifiers,
-                });
-            }
-        }
-
-        // Middle-button OR right-button drag → pan. We read directly
-        // from `ctx.input().pointer` rather than `response.dragged_by`
-        // because the latter depends on the widget's `Sense`: with
-        // `Sense::click_and_drag()` only primary drags are reported,
-        // so middle/right panning would silently no-op. Raw input
-        // works regardless.
-        //
-        // Also gate on hovered() so we don't pan when the pointer is
-        // over a popup or another panel.
+        // Primary button press / move / release via **raw input**.
+        // `response.drag_started_by(Primary)` only fires when the
+        // press turns into a drag — plain clicks (press + release
+        // without movement) never enter any drag-* path, so the
+        // tool never sees the interaction. Reading raw
+        // `button_pressed` / `button_down` / `button_released`
+        // covers clicks and drags uniformly.
         if response.hovered() || response.contains_pointer() {
-            // Middle only — right-button is reserved for context
-            // menu (the `drag_started_by(Secondary)` path above fires
-            // ContextMenuRequested on press; panning with right would
-            // fire a menu + pan on every drag, which is confusing).
-            let (panning, pan_delta) = ui.ctx().input(|i| {
-                let middle = i.pointer.button_down(PointerButton::Middle);
-                (middle, i.pointer.delta())
+            let (primary_pressed, primary_down, primary_released, pointer) = ui.ctx().input(|i| {
+                (
+                    i.pointer.button_pressed(PointerButton::Primary),
+                    i.pointer.button_down(PointerButton::Primary),
+                    i.pointer.button_released(PointerButton::Primary),
+                    i.pointer.hover_pos(),
+                )
             });
-            if panning && pan_delta != egui::Vec2::ZERO {
+            if primary_pressed {
+                if let Some(p) = pointer {
+                    let screen = Pos::new(p.x, p.y);
+                    let world = self.viewport.screen_to_world(screen, screen_rect);
+                    input_events.push(InputEvent::PointerDown {
+                        button: MouseButton::Primary,
+                        world,
+                        screen,
+                        modifiers,
+                    });
+                }
+            }
+            // Emit a PointerMove every frame the primary button is
+            // held, so the tool's drag promotion + in-flight drag
+            // update both fire without depending on egui's
+            // `dragged_by` gate.
+            if primary_down && !primary_pressed {
+                if let Some(p) = pointer {
+                    let screen = Pos::new(p.x, p.y);
+                    let world = self.viewport.screen_to_world(screen, screen_rect);
+                    input_events.push(InputEvent::PointerMove {
+                        world,
+                        screen,
+                        modifiers,
+                    });
+                }
+            }
+            if primary_released {
+                if let Some(p) = pointer.or_else(|| {
+                    // On release frame hover_pos can be stale; fall
+                    // back to the response's own latest interaction
+                    // position if egui has it.
+                    response.interact_pointer_pos()
+                }) {
+                    let screen = Pos::new(p.x, p.y);
+                    let world = self.viewport.screen_to_world(screen, screen_rect);
+                    input_events.push(InputEvent::PointerUp {
+                        button: MouseButton::Primary,
+                        world,
+                        screen,
+                        modifiers,
+                    });
+                }
+            }
+        }
+
+        // ── Middle-drag pan (unchanged) ──
+        // Dedicated middle-button pan is kept as an alternate for
+        // users with three-button mice who prefer it.
+        if response.hovered() || response.contains_pointer() {
+            let (middle_down, delta) = ui
+                .ctx()
+                .input(|i| (i.pointer.button_down(PointerButton::Middle), i.pointer.delta()));
+            if middle_down && delta != egui::Vec2::ZERO {
                 self.viewport.pan_by_world(
-                    -pan_delta.x / self.viewport.zoom,
-                    -pan_delta.y / self.viewport.zoom,
+                    -delta.x / self.viewport.zoom,
+                    -delta.y / self.viewport.zoom,
                 );
             }
         }
 
-        // Secondary press (right-click). We don't track drag state
-        // for it — a single Down is enough for context menu.
-        if response.drag_started_by(PointerButton::Secondary) {
-            if let Some(p) = response.interact_pointer_pos() {
-                let screen = Pos::new(p.x, p.y);
-                let world = self.viewport.screen_to_world(screen, screen_rect);
-                input_events.push(InputEvent::PointerDown {
-                    button: MouseButton::Secondary,
-                    world,
-                    screen,
-                    modifiers,
-                });
+        // Right-drag → pan. Right-CLICK (no drag) is caller's job
+        // via `Response::context_menu` on the returned Response —
+        // egui's native context-menu machinery handles open/close,
+        // submenu nesting, and escape-to-dismiss. We only pan here.
+        //
+        // The `pan_delta.length_sq() > 4.0` gate means: start panning
+        // only after the pointer has moved a few pixels. If the user
+        // right-clicks without moving, delta stays near zero every
+        // frame, no pan happens, and egui's context_menu opens on
+        // release. Clean separation without state.
+        if response.hovered() || response.contains_pointer() {
+            let (secondary_down, delta) = ui
+                .ctx()
+                .input(|i| (i.pointer.button_down(PointerButton::Secondary), i.pointer.delta()));
+            if secondary_down && delta.length_sq() > 0.25 {
+                self.viewport.pan_by_world(
+                    -delta.x / self.viewport.zoom,
+                    -delta.y / self.viewport.zoom,
+                );
             }
         }
 
@@ -296,16 +320,13 @@ impl Canvas {
         // ── Rendering ─────────────────────────────────────────────
         let time = ui.ctx().input(|i| i.time);
         {
-            // Preview state from the active tool, in an Any box so
-            // `ToolPreviewLayer` can read it via `ctx.extras`.
-            let preview = self.tool.preview();
-            let extras: Box<dyn std::any::Any> =
-                Box::new(preview.unwrap_or_else(|| {
-                    crate::tool::ToolPreview::RubberBand(Rect::default())
-                }));
-            // Hack for now: ToolPreviewLayer is a no-op in B2. In
-            // B3 we'll make it read the `extras` box properly; for
-            // the moment any non-empty box works.
+            // Pass the active tool's preview (ghost edge during a
+            // port drag, rubber-band rect during band-select) via
+            // `ctx.extras` so `ToolPreviewLayer` can render it.
+            // `Option<ToolPreview>` so the layer can distinguish
+            // "no preview" from "zero-length preview".
+            let preview: Option<crate::tool::ToolPreview> = self.tool.preview();
+            let extras: Box<dyn std::any::Any> = Box::new(preview);
             for layer in &mut self.layers {
                 let mut ctx = DrawCtx {
                     ui,
@@ -328,7 +349,7 @@ impl Canvas {
             overlay.render(ui, &mut ctx);
         }
 
-        events
+        (response, events)
     }
 
     /// Built-in navigation handlers — runs on events the tool

@@ -60,6 +60,12 @@ pub enum SceneEvent {
     /// ("Open class", "Convert to parameter", etc.).
     ContextMenuRequested {
         screen_pos: Pos,
+        /// World-space position of the click, captured at request
+        /// time. Lets "Add component at cursor" entries place the
+        /// new node where the user right-clicked instead of at the
+        /// viewport centre (and correctly even after the user pans
+        /// or zooms while the menu is open).
+        world_pos: Pos,
         target: Option<ContextTarget>,
     },
     /// Primary-button double-click on a node — "drill into this".

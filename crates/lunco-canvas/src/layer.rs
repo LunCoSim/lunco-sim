@@ -241,15 +241,76 @@ impl Layer for SelectionLayer {
     }
 }
 
-/// Ghost edge during port-drag, rubber-band rect, drop-target glow.
-/// B1 ships with no state (draws nothing); the real preview state
-/// lives on `DefaultTool` when B2 lands and this layer will read it
-/// from `DrawCtx.extras`.
+/// Renders the active tool's in-flight preview — ghost edge from a
+/// port during drag-to-connect, rubber-band rect during band-select,
+/// any future drop-target glow. Reads from `DrawCtx.extras`, which
+/// the canvas populates with `Option<ToolPreview>`.
 #[derive(Default)]
 pub struct ToolPreviewLayer;
 
 impl Layer for ToolPreviewLayer {
-    fn draw(&mut self, _ctx: &mut DrawCtx, _scene: &Scene, _selection: &Selection) {}
+    fn draw(&mut self, ctx: &mut DrawCtx, _scene: &Scene, _selection: &Selection) {
+        let Some(preview_opt) = ctx.extras.downcast_ref::<Option<crate::tool::ToolPreview>>()
+        else {
+            return;
+        };
+        let Some(preview) = preview_opt else { return };
+        let painter = ctx.ui.painter();
+        let sr = ctx.screen_rect;
+        match preview {
+            crate::tool::ToolPreview::GhostEdge {
+                from_world,
+                to_world,
+                snap_target,
+            } => {
+                let a = ctx.viewport.world_to_screen(*from_world, sr);
+                let b = ctx.viewport.world_to_screen(*to_world, sr);
+                painter.line_segment(
+                    [egui::pos2(a.x, a.y), egui::pos2(b.x, b.y)],
+                    egui::Stroke::new(
+                        2.0,
+                        egui::Color32::from_rgb(140, 200, 255),
+                    ),
+                );
+                // Origin port dot.
+                painter.circle_filled(
+                    egui::pos2(a.x, a.y),
+                    4.0,
+                    egui::Color32::from_rgb(140, 200, 255),
+                );
+                // Snap-target highlight if provided.
+                if let Some(t) = snap_target {
+                    let s = ctx.viewport.world_to_screen(*t, sr);
+                    painter.circle_stroke(
+                        egui::pos2(s.x, s.y),
+                        8.0,
+                        egui::Stroke::new(
+                            2.0,
+                            egui::Color32::from_rgb(90, 220, 140),
+                        ),
+                    );
+                }
+            }
+            crate::tool::ToolPreview::RubberBand(r) => {
+                let sr_rect = ctx.viewport.world_rect_to_screen(*r, sr);
+                let rect = egui::Rect::from_min_max(
+                    egui::pos2(sr_rect.min.x, sr_rect.min.y),
+                    egui::pos2(sr_rect.max.x, sr_rect.max.y),
+                );
+                painter.rect_filled(
+                    rect,
+                    2.0,
+                    egui::Color32::from_rgba_premultiplied(120, 170, 255, 30),
+                );
+                painter.rect_stroke(
+                    rect,
+                    2.0,
+                    egui::Stroke::new(1.0, egui::Color32::from_rgb(120, 170, 255)),
+                    egui::StrokeKind::Outside,
+                );
+            }
+        }
+    }
     fn name(&self) -> &'static str {
         "tool_preview"
     }

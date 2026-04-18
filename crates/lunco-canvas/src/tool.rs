@@ -253,27 +253,15 @@ impl Tool for DefaultTool {
                 ToolOutcome::Passthrough
             }
 
+            // Right-click is handled by the caller via
+            // `Response::context_menu` on the canvas's Response. The
+            // tool ignores secondary events entirely — trying to
+            // detect right-click here was fragile and duplicated
+            // what egui already does natively.
             InputEvent::PointerDown {
                 button: MouseButton::Secondary,
-                world,
-                screen,
                 ..
-            } => {
-                let target = match ops.scene.hit_node(*world, PORT_HIT_RADIUS) {
-                    Some((id, NodeHitKind::Body)) => Some(ContextTarget::Node(id)),
-                    Some((id, NodeHitKind::Port(_))) => Some(ContextTarget::Node(id)),
-                    None => ops
-                        .scene
-                        .hit_edge(*world, 4.0)
-                        .map(ContextTarget::Edge)
-                        .or(Some(ContextTarget::Empty)),
-                };
-                ops.events.push(SceneEvent::ContextMenuRequested {
-                    screen_pos: *screen,
-                    target,
-                });
-                ToolOutcome::Consumed
-            }
+            } => ToolOutcome::Passthrough,
 
             InputEvent::Key { name, .. } => match *name {
                 "Delete" | "Backspace" => {
@@ -533,12 +521,22 @@ impl DefaultTool {
             }
 
             State::ConnectingFromPort { from, .. } => {
-                // Commit the edge iff released over a port that
-                // isn't the same one, on a different node. Kind
-                // compatibility is the caller's call.
-                if let Some((target_node, NodeHitKind::Port(target_port))) =
-                    ops.scene.hit_node(world, PORT_HIT_RADIUS)
-                {
+                // Commit the edge if the release landed on a
+                // different node. First try a direct port hit;
+                // if the release is on the body (between ports or
+                // past them slightly), snap to that node's closest
+                // port. Saves users from pixel-perfecting every
+                // drop, matching Dymola / OMEdit behaviour.
+                let target_node_and_port =
+                    match ops.scene.hit_node(world, PORT_HIT_RADIUS) {
+                        Some((nid, NodeHitKind::Port(pid))) => Some((nid, pid)),
+                        Some((nid, NodeHitKind::Body)) => {
+                            nearest_port_on_node(ops.scene, nid, world)
+                                .map(|pid| (nid, pid))
+                        }
+                        None => None,
+                    };
+                if let Some((target_node, target_port)) = target_node_and_port {
                     if target_node != from.node {
                         let to = PortRef {
                             node: target_node,
@@ -548,6 +546,10 @@ impl DefaultTool {
                             .push(SceneEvent::EdgeCreated { from, to });
                     }
                 }
+                // Note: when release lands on pure empty space,
+                // no edge is emitted. A future "dropped-wire menu"
+                // (Snarl-style) can hook this path by emitting a
+                // different SceneEvent — leave the slot open.
             }
 
             State::RubberBand {
@@ -652,6 +654,29 @@ impl DefaultTool {
         ops.events
             .push(SceneEvent::SelectionChanged(ops.selection.clone()));
     }
+}
+
+/// Find the port on `node_id` whose world-space anchor is closest
+/// to `world_pos`. Used for "drop on body" snap-to-port on edge
+/// creation. Returns `None` if the node has no ports.
+fn nearest_port_on_node(
+    scene: &Scene,
+    node_id: NodeId,
+    world_pos: Pos,
+) -> Option<crate::scene::PortId> {
+    let node = scene.node(node_id)?;
+    let mut best: Option<(f32, crate::scene::PortId)> = None;
+    for port in &node.ports {
+        let px = node.rect.min.x + port.local_offset.x;
+        let py = node.rect.min.y + port.local_offset.y;
+        let dx = world_pos.x - px;
+        let dy = world_pos.y - py;
+        let d2 = dx * dx + dy * dy;
+        if best.as_ref().map_or(true, |(bd, _)| d2 < *bd) {
+            best = Some((d2, port.id.clone()));
+        }
+    }
+    best.map(|(_, id)| id)
 }
 
 /// Axis-aligned rectangle intersection test (including touch).

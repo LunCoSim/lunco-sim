@@ -60,6 +60,14 @@ pub struct NavBarOverlay {
     pub anchor: Anchor,
     pub zoom_step: f32,
     pub fit_padding: f32,
+    /// When true, the `%` readout and the `1:1` button are
+    /// referenced to [`crate::Viewport::physical_mm_zoom`] — "100 %"
+    /// means 1 world-mm = 1 screen-mm. When false, they're
+    /// referenced to raw `zoom = 1.0`. Physical reference is the
+    /// right default for Modelica (world units are mm); raw is
+    /// right for pure node-graph editors where world units are
+    /// just "logical" and have no physical meaning.
+    pub use_physical_reference: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -78,6 +86,7 @@ impl Default for NavBarOverlay {
             // wheel is much finer (see ViewportConfig::scroll_zoom_gain).
             zoom_step: 1.25,
             fit_padding: 40.0,
+            use_physical_reference: true,
         }
     }
 }
@@ -154,8 +163,16 @@ impl Overlay for NavBarOverlay {
             ctx.viewport.set_target(ctx.viewport.center, new_zoom);
         }
 
-        // Zoom % label (not clickable in v1 — editable later).
-        let zoom_pct = (zoom * 100.0).round() as i32;
+        // Zoom % label referenced to physical mm (or raw, if the
+        // app has opted out). Dymola / Figma / Illustrator all
+        // display zoom as a ratio to a "natural" scale rather than
+        // raw world→point, which is what the eye wants to see.
+        let reference = if self.use_physical_reference {
+            crate::Viewport::physical_mm_zoom(ui.ctx())
+        } else {
+            1.0
+        };
+        let zoom_pct = (zoom / reference.max(f32::EPSILON) * 100.0).round() as i32;
         child.add_sized(
             egui::vec2(56.0, 22.0),
             egui::Label::new(
@@ -177,13 +194,19 @@ impl Overlay for NavBarOverlay {
 
         child.separator();
 
-        // Reset to 100%
+        // Reset to 100 %. With `use_physical_reference = true`,
+        // that lands at physical scale (1 world-mm = 1 screen-mm).
         if child
             .button(egui::RichText::new("1:1").size(12.0))
-            .on_hover_text("Reset zoom to 100%")
+            .on_hover_text("Reset zoom to 100 %")
             .clicked()
         {
-            ctx.viewport.set_target(ctx.viewport.center, 1.0);
+            let target = if self.use_physical_reference {
+                crate::Viewport::physical_mm_zoom(ui.ctx())
+            } else {
+                1.0
+            };
+            ctx.viewport.set_target(ctx.viewport.center, target);
         }
 
         // Fit all

@@ -44,24 +44,56 @@ use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 
 use crate::ui::state::{ModelicaDocumentRegistry, WorkbenchState};
-use crate::visual_diagram::{DiagramNodeId, VisualDiagram};
+use crate::visual_diagram::{
+    msl_categories, msl_components_in_category, DiagramNodeId, MSLComponentDef, VisualDiagram,
+};
 // `Document` is the trait that exposes `.generation()` on
 // `ModelicaDocument`; `DocumentHost::document()` returns a bare `&D`
 // so we need the trait in scope to call generation on it.
 use lunco_doc::Document;
+// Modelica op set + pretty-printer types for constructing payloads.
+use crate::document::ModelicaOp;
+use crate::pretty::{self, Placement};
 
 pub const CANVAS_DIAGRAM_PANEL_ID: PanelId = PanelId("modelica_canvas_diagram");
 
 // ─── Visuals ────────────────────────────────────────────────────────
 
-/// Minimum viable icon visual — rounded rect, label, ports on the
-/// boundary. No SVG yet; that lands once the canvas flow feels
-/// right and we're ready to retire the snarl panel.
+/// Process-wide cache of SVG icon bytes keyed by relative asset
+/// path. Loaded lazily on first request for a path; later requests
+/// return the shared buffer. Entries live forever — icon asset
+/// files don't change at runtime, and the total size is small.
+fn svg_bytes_for(asset_path: &str) -> Option<std::sync::Arc<Vec<u8>>> {
+    use std::sync::{Mutex, OnceLock};
+    static CACHE: OnceLock<Mutex<std::collections::HashMap<String, Option<std::sync::Arc<Vec<u8>>>>>> =
+        OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
+    let mut map = cache.lock().expect("svg cache poisoned");
+    if let Some(cached) = map.get(asset_path) {
+        return cached.clone();
+    }
+    // SVG assets ship inside the MSL cache dir (see snarl panel's
+    // `draw_symbol_v2` for the reference resolution). Icon paths
+    // come from `msl_index.json` and are relative to that dir.
+    let full = lunco_assets::msl_dir().join(asset_path);
+    let loaded = std::fs::read(&full).ok().map(std::sync::Arc::new);
+    map.insert(asset_path.to_string(), loaded.clone());
+    loaded
+}
+
+/// Per-component icon visual. Renders the Modelica SVG icon if the
+/// component's `icon_asset` path resolved, else a stylised
+/// rounded-rectangle fallback with the instance name. Ports render
+/// as filled dots on the icon boundary.
 #[derive(Default)]
 struct IconNodeVisual {
-    /// Type name ("Resistor", "Capacitor"…) rendered as a hint
-    /// under the instance label.
+    /// Type name ("Resistor", "Capacitor"…) shown under the instance
+    /// label when no SVG is available.
     type_label: String,
+    /// Relative asset path of the icon SVG, or empty when the
+    /// component has no icon. Looked up in the shared cache each
+    /// draw.
+    icon_asset: String,
 }
 
 impl NodeVisual for IconNodeVisual {
@@ -74,33 +106,54 @@ impl NodeVisual for IconNodeVisual {
             egui::pos2(r.max.x, r.max.y),
         );
         let painter = ctx.ui.painter();
-        let fill = egui::Color32::from_rgb(48, 56, 72);
+
+        // Try the SVG path first. If the asset loaded, paint it over
+        // a subtle card so the icon has contrast with the diagram
+        // background. If anything's missing, fall through to the
+        // rounded-rect fallback so the user still sees SOMETHING.
+        let mut drew_svg = false;
+        if !self.icon_asset.is_empty() {
+            if let Some(bytes) = svg_bytes_for(&self.icon_asset) {
+                super::svg_renderer::draw_svg_to_egui(painter, rect, &bytes);
+                drew_svg = true;
+            }
+        }
+
+        if !drew_svg {
+            // Fallback card + type label.
+            let fill = egui::Color32::from_rgb(48, 56, 72);
+            painter.rect_filled(rect, 6.0, fill);
+            if !self.type_label.is_empty() && rect.height() > 30.0 {
+                painter.text(
+                    egui::pos2(rect.center().x, rect.center().y),
+                    egui::Align2::CENTER_CENTER,
+                    &self.type_label,
+                    egui::FontId::proportional(10.0),
+                    egui::Color32::from_rgb(200, 210, 225),
+                );
+            }
+        }
+
+        // Selection outline draws ON TOP of the icon so it's always
+        // visible even over busy SVG content.
         let stroke = if selected {
             egui::Stroke::new(2.0, egui::Color32::from_rgb(120, 170, 255))
         } else {
-            egui::Stroke::new(1.5, egui::Color32::from_rgb(100, 110, 130))
+            egui::Stroke::new(1.0, egui::Color32::from_rgb(90, 100, 120))
         };
-        painter.rect_filled(rect, 6.0, fill);
         painter.rect_stroke(rect, 6.0, stroke, egui::StrokeKind::Outside);
-        // Instance name.
+
+        // Instance name above the icon.
         if !node.label.is_empty() {
             painter.text(
-                egui::pos2(rect.center().x, rect.min.y + 14.0),
-                egui::Align2::CENTER_CENTER,
+                egui::pos2(rect.center().x, rect.min.y - 4.0),
+                egui::Align2::CENTER_BOTTOM,
                 &node.label,
-                egui::FontId::proportional(12.0),
+                egui::FontId::proportional(11.0),
                 egui::Color32::from_rgb(220, 225, 235),
             );
         }
-        if !self.type_label.is_empty() && rect.height() > 30.0 {
-            painter.text(
-                egui::pos2(rect.center().x, rect.max.y - 10.0),
-                egui::Align2::CENTER_CENTER,
-                &self.type_label,
-                egui::FontId::proportional(10.0),
-                egui::Color32::from_rgb(150, 160, 175),
-            );
-        }
+
         // Ports as small filled circles.
         for port in &node.ports {
             let world = CanvasPos::new(
@@ -158,7 +211,15 @@ fn build_registry() -> VisualRegistry {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
-        IconNodeVisual { type_label }
+        let icon_asset = data
+            .get("icon_asset")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        IconNodeVisual {
+            type_label,
+            icon_asset,
+        }
     });
     reg.register_edge_kind("modelica.connection", |_: &JsonValue| StraightEdgeVisual);
     reg
@@ -167,12 +228,176 @@ fn build_registry() -> VisualRegistry {
 // ─── Projection: VisualDiagram → lunco_canvas::Scene ────────────────
 
 /// Modelica diagram coordinates are `(-100..100)` both axes with +Y
-/// up, so we flip Y when projecting to the canvas (screen convention:
-/// +Y down). Width is a fixed 80×60 world-unit box for MVP — the
-/// real icon geometry comes from the Modelica `Icon` annotation; we
-/// will read that in a follow-up.
-const ICON_W: f32 = 80.0;
-const ICON_H: f32 = 60.0;
+/// up. Width is a fixed 20×20 world-unit box — the typical
+/// Modelica icon extent (`{{-10,-10},{10,10}}`). Dymola/OMEdit
+/// render components at this size by default. Reading the actual
+/// per-component `Icon` annotation extent is a follow-up.
+const ICON_W: f32 = 20.0;
+const ICON_H: f32 = 20.0;
+
+/// Coordinate-system types + the two conversion functions between
+/// them. Named wrappers around plain `(f32, f32)` so every place
+/// the sign flip happens is explicit and typed — previously we had
+/// ad-hoc `-y` negations scattered across the projector, the op
+/// emitters, and the context-menu handler, and a missing negation
+/// or a double-negation produced the hard-to-diagnose "position is
+/// off" class of bugs.
+///
+/// Conventions:
+///
+/// - [`ModelicaPos`] — Modelica `.mo` source convention. +Y up.
+///   Ranges typically `-100..100` per axis. This is the authored
+///   coordinate that lands in `annotation(Placement(...))`.
+///
+/// - [`lunco_canvas::Pos`] — canvas world coordinate. +Y DOWN
+///   (screen convention). This is what the canvas scene / viewport
+///   consume and what hit-testing / rendering operates on.
+///
+/// The two differ only in the sign of Y. Keeping them as separate
+/// types makes mis-conversion a type error instead of a silent off-
+/// by-flip.
+pub mod coords {
+    use lunco_canvas::Pos as CanvasPos;
+
+    /// Modelica-convention 2D point (+Y up).
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    pub struct ModelicaPos {
+        pub x: f32,
+        pub y: f32,
+    }
+
+    impl ModelicaPos {
+        pub const fn new(x: f32, y: f32) -> Self {
+            Self { x, y }
+        }
+    }
+
+    /// Canvas world (+Y down) → Modelica (+Y up).
+    #[inline]
+    pub fn canvas_to_modelica(c: CanvasPos) -> ModelicaPos {
+        ModelicaPos {
+            x: c.x,
+            y: -c.y,
+        }
+    }
+
+    /// Modelica (+Y up) → canvas world (+Y down).
+    #[inline]
+    pub fn modelica_to_canvas(m: ModelicaPos) -> CanvasPos {
+        CanvasPos::new(m.x, -m.y)
+    }
+
+    /// Canvas rect-min → Modelica centre. Used when committing a
+    /// drag: the user's drag target lands as the icon's top-left in
+    /// canvas coordinates, but Modelica placements are centre-
+    /// anchored, so we shift by half the icon extent.
+    #[inline]
+    pub fn canvas_min_to_modelica_center(
+        min: CanvasPos,
+        icon_w: f32,
+        icon_h: f32,
+    ) -> ModelicaPos {
+        canvas_to_modelica(CanvasPos::new(
+            min.x + icon_w * 0.5,
+            min.y + icon_h * 0.5,
+        ))
+    }
+}
+
+use coords::{canvas_to_modelica, ModelicaPos};
+
+/// Fallback port layout when the component has no annotated port
+/// positions. Alternates left / right edges at the vertical centre
+/// for the first two ports (the common two-terminal shape), then
+/// walks up both sides for any additional ports.
+fn port_fallback_offset(index: usize, _total: usize) -> (f32, f32) {
+    let side_left = index % 2 == 0;
+    let row = index / 2; // 0 → middle, 1 → above, 2 → even higher
+    let cy = ICON_H * 0.5 - (row as f32) * (ICON_H * 0.25);
+    let cx = if side_left { 0.0 } else { ICON_W };
+    (cx, cy.clamp(0.0, ICON_H))
+}
+
+/// Regex-scan `connect(a.b, c.d);` patterns in `source` and add
+/// matching edges to `diagram`. Skips equations whose components
+/// aren't in the diagram (missing nodes stay visually missing) or
+/// that already exist as edges (keyed by unordered endpoint pair).
+///
+/// Deliberately permissive: doesn't validate port existence, doesn't
+/// care about the line-continuation form, doesn't consult
+/// annotations. "Text says A.x ↔ B.y; show a line between A and B".
+fn recover_edges_from_source(source: &str, diagram: &mut VisualDiagram) {
+    // (?m) lets `.` not cross newlines by default; we explicitly
+    // allow whitespace/newline runs via `\s*`. Capture groups:
+    //   1 = src component, 2 = src port
+    //   3 = tgt component, 4 = tgt port
+    // Port names allow `.` so we catch qualified sub-ports
+    // (`flange.phi`), though most cases are one dot deep.
+    static CONNECT_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let re = CONNECT_RE.get_or_init(|| {
+        regex::Regex::new(
+            r"connect\s*\(\s*([A-Za-z_]\w*)\s*\.\s*([A-Za-z_][\w\.]*)\s*,\s*([A-Za-z_]\w*)\s*\.\s*([A-Za-z_][\w\.]*)\s*\)",
+        )
+        .expect("connect regex compiles")
+    });
+
+    // Build (instance_name → DiagramNodeId) index once per call.
+    // Own the keys so we can freely mutate `diagram` below.
+    let index: HashMap<String, DiagramNodeId> = diagram
+        .nodes
+        .iter()
+        .map(|n| (n.instance_name.clone(), n.id))
+        .collect();
+
+    // Track existing edges as unordered pairs so we don't double-
+    // add when the AST path already caught a connection.
+    let existing: std::collections::HashSet<((String, String), (String, String))> = diagram
+        .edges
+        .iter()
+        .map(|e| {
+            let a = (
+                diagram
+                    .get_node(e.source_node)
+                    .map(|n| n.instance_name.clone())
+                    .unwrap_or_default(),
+                e.source_port.clone(),
+            );
+            let b = (
+                diagram
+                    .get_node(e.target_node)
+                    .map(|n| n.instance_name.clone())
+                    .unwrap_or_default(),
+                e.target_port.clone(),
+            );
+            // Canonicalise to min/max so (A.x, B.y) == (B.y, A.x).
+            if a <= b { (a, b) } else { (b, a) }
+        })
+        .collect();
+
+    for cap in re.captures_iter(source) {
+        let src_comp = &cap[1];
+        let src_port = cap[2].to_string();
+        let tgt_comp = &cap[3];
+        let tgt_port = cap[4].to_string();
+
+        let (Some(&src_id), Some(&tgt_id)) =
+            (index.get(src_comp), index.get(tgt_comp))
+        else {
+            continue;
+        };
+
+        let pair = {
+            let a = (src_comp.to_string(), src_port.clone());
+            let b = (tgt_comp.to_string(), tgt_port.clone());
+            if a <= b { (a, b) } else { (b, a) }
+        };
+        if existing.contains(&pair) {
+            continue;
+        }
+
+        diagram.add_edge(src_id, src_port, tgt_id, tgt_port);
+    }
+}
 
 fn project_scene(diagram: &VisualDiagram) -> (Scene, HashMap<DiagramNodeId, CanvasNodeId>) {
     let mut scene = Scene::new();
@@ -182,17 +407,28 @@ fn project_scene(diagram: &VisualDiagram) -> (Scene, HashMap<DiagramNodeId, Canv
         let cid = scene.alloc_node_id();
         id_map.insert(node.id, cid);
 
-        // Ports: map Modelica (-100..100, +Y up) to local box
-        // (0..ICON_W, 0..ICON_H, +Y down).
+        // Ports: map Modelica (-100..100, +Y up) to local icon box
+        // (0..ICON_W, 0..ICON_H, +Y down). If a port has no
+        // annotated position (both x and y at 0 — the default when
+        // the component class didn't declare one), fall back to
+        // distributing around the icon's edges: alternating left
+        // and right for the classic two-terminal electrical shape,
+        // extending up for more ports. Matches what OMEdit does
+        // when Placement annotations are missing.
+        let n_ports = node.component_def.ports.len();
         let ports: Vec<CanvasPort> = node
             .component_def
             .ports
             .iter()
-            .map(|p| {
-                // Modelica x,y are ∈ [-100, 100]; map to [0, W], [0, H].
-                let lx = ((p.x + 100.0) / 200.0) * ICON_W;
-                // Flip Y: Modelica +Y up, canvas +Y down.
-                let ly = ((100.0 - p.y) / 200.0) * ICON_H;
+            .enumerate()
+            .map(|(i, p)| {
+                let (lx, ly) = if p.x == 0.0 && p.y == 0.0 {
+                    port_fallback_offset(i, n_ports)
+                } else {
+                    let lx = ((p.x + 100.0) / 200.0) * ICON_W;
+                    let ly = ((100.0 - p.y) / 200.0) * ICON_H;
+                    (lx, ly)
+                };
                 CanvasPort {
                     id: CanvasPortId::new(p.name.clone()),
                     local_offset: CanvasPos::new(lx, ly),
@@ -201,10 +437,17 @@ fn project_scene(diagram: &VisualDiagram) -> (Scene, HashMap<DiagramNodeId, Canv
             })
             .collect();
 
-        // Modelica Y-axis flip for node origin too — so the diagram
-        // reads the same way as Dymola.
+        // `DiagramNode.position` is already stored in screen / +Y-down
+        // convention — `import_model_to_diagram` flips the Modelica
+        // annotation's +Y-up coordinate at read time (see diagram.rs
+        // around the Placement-annotation regex, which does
+        // `y = -((y1+y2)/2.0)`). We therefore use the stored Y
+        // directly here; flipping it again (as an earlier version
+        // of this function did) places components at the wrong
+        // side of the diagram and makes right-click "add component"
+        // appear to ignore zoom / offset.
         let wx = node.position.x;
-        let wy = -node.position.y; // flip Y
+        let wy = node.position.y;
 
         scene.insert_node(CanvasNode {
             id: cid,
@@ -214,7 +457,10 @@ fn project_scene(diagram: &VisualDiagram) -> (Scene, HashMap<DiagramNodeId, Canv
                 ICON_H,
             ),
             kind: "modelica.icon".into(),
-            data: serde_json::json!({ "type": node.component_def.name }),
+            data: serde_json::json!({
+                "type": node.component_def.name,
+                "icon_asset": node.component_def.icon_asset.clone().unwrap_or_default(),
+            }),
             ports,
             label: node.instance_name.clone(),
             origin: Some(node.instance_name.clone()),
@@ -270,11 +516,15 @@ pub struct CanvasDiagramState {
 }
 
 /// Snapshot of a right-click: where to anchor the popup + what it
-/// was targeted at. Held for a frame so the popup has stable
-/// coordinates even if the pointer moves.
+/// was targeted at. Close handling is done via egui's
+/// `clicked_elsewhere()` on the popup's Response — no manual timer.
 #[derive(Debug, Clone)]
 pub struct PendingContextMenu {
     pub screen_pos: egui::Pos2,
+    /// World position at click time — used when an "Add component"
+    /// entry is selected so the new component lands where the user
+    /// right-clicked, not at (0,0).
+    pub world_pos: lunco_canvas::Pos,
     pub target: ContextMenuTarget,
 }
 
@@ -288,8 +538,13 @@ pub enum ContextMenuTarget {
 impl Default for CanvasDiagramState {
     fn default() -> Self {
         let mut canvas = Canvas::new(build_registry());
-        // Ship with a NavBar overlay so users have discoverable
-        // zoom / fit controls. Miro/Figma convention.
+        // Drop the default `SelectionLayer` — IconNodeVisual draws
+        // its own selection halo at the exact same corner radius
+        // as the icon body, so a separate selection layer would
+        // show a mismatched outline. Removing it here keeps the
+        // canvas crate's default pipeline generic while the
+        // Modelica panel opts out.
+        canvas.layers.retain(|layer| layer.name() != "selection");
         canvas.overlays.push(Box::new(NavBarOverlay::default()));
         Self {
             canvas,
@@ -362,9 +617,30 @@ impl Panel for CanvasDiagramPanel {
                 .host(doc_id)
                 .map(|h| h.document().source().to_string())
                 .unwrap_or_default();
-            let diagram = crate::ui::panels::diagram::import_model_to_diagram(&source)
+            let mut diagram = crate::ui::panels::diagram::import_model_to_diagram(&source)
                 .unwrap_or_default();
+            // AST-based edge construction inside `import_model_to_diagram`
+            // drops connect equations whose port names don't resolve
+            // through its component-graph port index — common when
+            // the MSL palette entry carries synthetic / partial
+            // port names that don't exactly match the Modelica
+            // class's actual connectors. Source text is authoritative,
+            // so do a regex recovery pass: any `connect(a.b, c.d)`
+            // with both components present in the diagram becomes
+            // an edge. Gives us "text says it, diagram shows it"
+            // without touching upstream parser behaviour.
+            recover_edges_from_source(&source, &mut diagram);
+            bevy::log::info!(
+                "[CanvasDiagram] project: {} nodes, {} edges from diagram",
+                diagram.nodes.len(),
+                diagram.edges.len(),
+            );
             let (scene, _id_map) = project_scene(&diagram);
+            bevy::log::info!(
+                "[CanvasDiagram] project: {} scene nodes, {} scene edges after projection",
+                scene.node_count(),
+                scene.edge_count(),
+            );
             let mut state = world.resource_mut::<CanvasDiagramState>();
             let doc_switched = state.bound_doc != Some(doc_id);
             state.canvas.scene = scene;
@@ -372,16 +648,16 @@ impl Panel for CanvasDiagramPanel {
             state.last_seen_gen = gen;
             state.bound_doc = Some(doc_id);
             // On first bind / doc switch, frame the scene so users
-            // land with content centered instead of "why is it blank".
-            // Subsequent gen bumps (user edit) keep the camera put so
-            // their mental map isn't disturbed.
+            // land with content centered. If the scene is empty
+            // (fresh model), fall back to physical zoom so the
+            // first component the user adds lands at a legible size
+            // — world units are Modelica millimetres, `physical_mm_zoom`
+            // maps them 1 : 1 to the screen using the DPI reported
+            // by the egui context.
             if doc_switched {
+                let physical_zoom =
+                    lunco_canvas::Viewport::physical_mm_zoom(ui.ctx());
                 if let Some(world_rect) = state.canvas.scene.bounds() {
-                    // Needs a sensible screen rect — we don't have
-                    // one until render happens. Approximate with
-                    // 800×600 and let the next few frames ease if
-                    // needed; worst case user presses F to refit
-                    // once the layout settles.
                     let screen = lunco_canvas::Rect::from_min_max(
                         lunco_canvas::Pos::new(0.0, 0.0),
                         lunco_canvas::Pos::new(800.0, 600.0),
@@ -390,7 +666,17 @@ impl Panel for CanvasDiagramPanel {
                         .canvas
                         .viewport
                         .fit_values(world_rect, screen, 40.0);
+                    // Clamp the fit zoom to at least physical, so a
+                    // small scene doesn't zoom absurdly far in.
+                    let z = z.min(physical_zoom * 2.0).max(physical_zoom * 0.5);
                     state.canvas.viewport.snap_to(c, z);
+                } else {
+                    // Empty scene — land at physical mm zoom,
+                    // centred on the Modelica origin.
+                    state.canvas.viewport.snap_to(
+                        lunco_canvas::Pos::new(0.0, 0.0),
+                        physical_zoom,
+                    );
                 }
             }
         }
@@ -401,112 +687,582 @@ impl Panel for CanvasDiagramPanel {
 
 impl CanvasDiagramPanel {
     fn render_canvas(&self, ui: &mut egui::Ui, world: &mut World) {
-        // Collect events + any pending menu request in a short
-        // borrow, so the subsequent popup render can re-borrow
-        // resources it needs.
-        let menu_request = {
-            let mut state = world.resource_mut::<CanvasDiagramState>();
-            let events = state.canvas.ui(ui);
+        // Resolve editing class + doc id up front. These drive op
+        // emission; without them (no doc bound, or unparseable
+        // source) the canvas stays read-only — events still fire
+        // but translate to nothing, matching "no-op on empty doc".
+        let (doc_id, editing_class) = resolve_doc_context(world);
 
-            // Translate canvas context-menu requests into pending
-            // menus on the panel. Node/Edge ids from the canvas
-            // identify elements in the local scene; we remember
-            // them so the popup can act on the right thing.
-            let mut menu: Option<PendingContextMenu> = None;
-            for ev in &events {
-                if let lunco_canvas::SceneEvent::ContextMenuRequested {
-                    screen_pos,
-                    target,
-                } = ev
-                {
-                    let t = match target {
-                        Some(lunco_canvas::ContextTarget::Node(id)) => {
-                            ContextMenuTarget::Node(*id)
-                        }
-                        Some(lunco_canvas::ContextTarget::Edge(id)) => {
-                            ContextMenuTarget::Edge(*id)
-                        }
-                        Some(lunco_canvas::ContextTarget::Empty) | None => {
-                            ContextMenuTarget::Empty
-                        }
-                    };
-                    menu = Some(PendingContextMenu {
-                        screen_pos: egui::pos2(screen_pos.x, screen_pos.y),
-                        target: t,
-                    });
-                }
-            }
-            if let Some(m) = menu {
-                state.context_menu = Some(m);
-            }
-            state.context_menu.clone()
+        // Render the canvas and collect its events.
+        let (response, events) = {
+            let mut state = world.resource_mut::<CanvasDiagramState>();
+            state.canvas.ui(ui)
         };
 
-        // Render the context menu as an egui Area popup anchored at
-        // the click point. The caller (this panel) owns menu
-        // contents because they're domain-specific — generic canvas
-        // can't know "Delete component" vs "Delete connection".
-        if let Some(menu) = menu_request {
-            let mut close = false;
-            egui::Area::new(egui::Id::new("modelica_canvas_ctx"))
-                .fixed_pos(menu.screen_pos)
-                .order(egui::Order::Foreground)
-                .show(ui.ctx(), |ui| {
-                    egui::Frame::popup(ui.style()).show(ui, |ui| {
-                        match &menu.target {
-                            ContextMenuTarget::Node(_) => {
-                                ui.label(
-                                    egui::RichText::new("Component")
-                                        .weak()
-                                        .small(),
-                                );
-                                if ui.button("Delete").clicked() {
-                                    close = true;
-                                    // TODO(B3): emit RemoveComponent op.
-                                }
-                                if ui.button("Properties…").clicked() {
-                                    close = true;
-                                    // TODO: route to Inspector.
-                                }
-                            }
-                            ContextMenuTarget::Edge(_) => {
-                                ui.label(
-                                    egui::RichText::new("Connection")
-                                        .weak()
-                                        .small(),
-                                );
-                                if ui.button("Delete").clicked() {
-                                    close = true;
-                                    // TODO(B3): emit RemoveConnection op.
-                                }
-                            }
-                            ContextMenuTarget::Empty => {
-                                ui.label(
-                                    egui::RichText::new("Canvas")
-                                        .weak()
-                                        .small(),
-                                );
-                                if ui.button("Add component…").clicked() {
-                                    close = true;
-                                    // TODO: open component palette here.
-                                }
-                                if ui.button("Fit all (F)").clicked() {
-                                    close = true;
-                                    // TODO: call viewport.set_target(fit_values(...)).
-                                }
-                            }
-                        }
-                    });
-                });
-            // Close on any primary click outside the popup. Simple
-            // heuristic; egui's proper close-on-outside-click needs
-            // more ceremony which we don't need for B2.
-            let clicked_outside = ui.ctx().input(|i| {
-                i.pointer.any_pressed() && !i.pointer.button_down(egui::PointerButton::Primary)
-            });
-            if close || clicked_outside {
-                world.resource_mut::<CanvasDiagramState>().context_menu = None;
+        // Capture the right-click world position the frame the menu
+        // opens — before egui's `press_origin` gets overwritten by
+        // later clicks (on menu entries themselves, which would
+        // otherwise become the hit-test origin and make a click on
+        // empty space appear to have hit a node, or place a newly
+        // added component under the menu instead of under the click).
+        //
+        // The cached value lives on `CanvasDiagramState.context_menu`
+        // and is consumed when the menu closes.
+        let screen_rect = lunco_canvas::Rect::from_min_max(
+            lunco_canvas::Pos::new(response.rect.min.x, response.rect.min.y),
+            lunco_canvas::Pos::new(response.rect.max.x, response.rect.max.y),
+        );
+        // Read whether egui's popup is currently open BEFORE any of
+        // our logic runs. This is our ground truth for "is a menu
+        // showing right now" — more reliable than our own cache
+        // sync, because `context_menu` may open/close between frames
+        // without going through our code path.
+        let popup_was_open_before = ui.ctx().memory(|m| m.any_popup_open());
+
+        // Track whether this frame wants to dismiss (second-right-
+        // click to close). If so, we SKIP `response.context_menu()`
+        // entirely for this frame so egui doesn't re-open on the
+        // same secondary_clicked signal.
+        let mut suppress_menu = false;
+
+        if response.secondary_clicked() {
+            let press = ui.ctx().input(|i| i.pointer.press_origin());
+            if let Some(p) = press.or_else(|| response.interact_pointer_pos()) {
+                if popup_was_open_before {
+                    // Second right-click while the menu is up → dismiss.
+                    // We BOTH clear our cache AND ask egui to close
+                    // any popup. Skipping `context_menu` below prevents
+                    // egui from re-opening on this same frame.
+                    world.resource_mut::<CanvasDiagramState>().context_menu = None;
+                    ui.ctx().memory_mut(|m| m.close_all_popups());
+                    suppress_menu = true;
+                } else {
+                    // Fresh right-click: capture world position +
+                    // hit-test origin while `press_origin` still
+                    // reflects the right-click (before any menu-entry
+                    // click overwrites it).
+                    let state = world.resource::<CanvasDiagramState>();
+                    let world_pos = state.canvas.viewport.screen_to_world(
+                        lunco_canvas::Pos::new(p.x, p.y),
+                        screen_rect,
+                    );
+                    let hit_node = state.canvas.scene.hit_node(world_pos, 6.0);
+                    let hit_edge = state.canvas.scene.hit_edge(world_pos, 4.0);
+                    let target = match (hit_node, hit_edge) {
+                        (Some((id, _)), _) => ContextMenuTarget::Node(id),
+                        (_, Some(id)) => ContextMenuTarget::Edge(id),
+                        _ => ContextMenuTarget::Empty,
+                    };
+                    drop(state);
+                    bevy::log::info!(
+                        "[CanvasDiagram] right-click screen=({:.1},{:.1}) world=({:.1},{:.1}) target={:?}",
+                        p.x, p.y, world_pos.x, world_pos.y, target
+                    );
+                    world.resource_mut::<CanvasDiagramState>().context_menu =
+                        Some(PendingContextMenu {
+                            screen_pos: p,
+                            world_pos,
+                            target,
+                        });
+                }
             }
         }
+
+        // ── Render menu via egui's native `context_menu`. ──
+        // Content comes from the cached PendingContextMenu (above).
+        // Skipped on the dismiss-frame so egui doesn't re-open.
+        let menu_ops: Vec<ModelicaOp> = if suppress_menu {
+            Vec::new()
+        } else {
+            let mut collected: Vec<ModelicaOp> = Vec::new();
+            let cached = world
+                .resource::<CanvasDiagramState>()
+                .context_menu
+                .clone();
+            response.context_menu(|ui| {
+                let Some(menu) = cached.as_ref() else {
+                    // No cached data — shouldn't happen since
+                    // context_menu only opens after secondary_clicked,
+                    // but render a minimal placeholder just in case.
+                    ui.label("(no click target)");
+                    return;
+                };
+                match &menu.target {
+                    ContextMenuTarget::Node(id) => {
+                        render_node_menu(
+                            ui,
+                            world,
+                            *id,
+                            editing_class.as_deref(),
+                            &mut collected,
+                        );
+                    }
+                    ContextMenuTarget::Edge(id) => {
+                        render_edge_menu(
+                            ui,
+                            world,
+                            *id,
+                            editing_class.as_deref(),
+                            &mut collected,
+                        );
+                    }
+                    ContextMenuTarget::Empty => {
+                        render_empty_menu(
+                            ui,
+                            world,
+                            menu.world_pos,
+                            editing_class.as_deref(),
+                            &mut collected,
+                        );
+                    }
+                }
+            });
+            collected
+        };
+
+        // Sync our cache with egui's popup state, AFTER context_menu
+        // has had a chance to open/close this frame. If egui closed
+        // the popup (user clicked outside, pressed escape, picked
+        // an entry) and we still have a cache, drop the cache.
+        // Running this *after* keeps us from clearing the cache we
+        // just populated on a fresh right-click.
+        let popup_open_now = ui.ctx().memory(|m| m.any_popup_open());
+        if !popup_open_now
+            && world
+                .resource::<CanvasDiagramState>()
+                .context_menu
+                .is_some()
+        {
+            world.resource_mut::<CanvasDiagramState>().context_menu = None;
+        }
+
+        // Translate scene events → ModelicaOps and apply.
+        if let (Some(doc_id), Some(class)) = (doc_id, editing_class.as_ref()) {
+            let mut all_ops = build_ops_from_events(world, &events, class);
+            all_ops.extend(menu_ops);
+            if !all_ops.is_empty() {
+                apply_ops(world, doc_id, all_ops);
+            }
+        } else if !menu_ops.is_empty() {
+            bevy::log::warn!(
+                "[CanvasDiagram] menu emitted {} op(s) but no editing class — discarded",
+                menu_ops.len()
+            );
+        }
+        // `events` is consumed by `build_ops_from_events`; suppress
+        // the unused warning when `doc_id`/`class` were absent.
+        let _ = events;
+
+    }
+}
+
+// ─── Context-menu renderers ────────────────────────────────────────
+
+fn render_node_menu(
+    ui: &mut egui::Ui,
+    world: &mut World,
+    id: lunco_canvas::NodeId,
+    editing_class: Option<&str>,
+    out: &mut Vec<ModelicaOp>,
+) {
+    let (instance, type_name) = component_headers(world, id);
+    ui.label(egui::RichText::new(&instance).strong());
+    if !type_name.is_empty() {
+        ui.label(egui::RichText::new(&type_name).weak().small());
+    }
+    ui.separator();
+    if ui.button("✂ Delete").clicked() {
+        if let Some(class) = editing_class {
+            if let Some(op) = op_remove_component(world, id, class) {
+                out.push(op);
+            }
+        }
+        ui.close();
+    }
+    if ui.button("📋 Duplicate").clicked() {
+        ui.close();
+    }
+    ui.separator();
+    if ui.button("↧ Open class").clicked() {
+        ui.close();
+    }
+    if ui.button("🔧 Parameters…").clicked() {
+        ui.close();
+    }
+}
+
+fn render_edge_menu(
+    ui: &mut egui::Ui,
+    world: &mut World,
+    id: lunco_canvas::EdgeId,
+    editing_class: Option<&str>,
+    out: &mut Vec<ModelicaOp>,
+) {
+    ui.label(egui::RichText::new("Connection").strong());
+    ui.separator();
+    if ui.button("✂ Delete").clicked() {
+        if let Some(class) = editing_class {
+            if let Some(op) = op_remove_edge(world, id, class) {
+                out.push(op);
+            }
+        }
+        ui.close();
+    }
+    if ui.button("↺ Reverse direction").clicked() {
+        ui.close();
+    }
+}
+
+fn render_empty_menu(
+    ui: &mut egui::Ui,
+    world: &mut World,
+    click_world: lunco_canvas::Pos,
+    editing_class: Option<&str>,
+    out: &mut Vec<ModelicaOp>,
+) {
+    ui.label(egui::RichText::new("Add component").strong());
+    ui.separator();
+    for cat in msl_categories() {
+        let short = cat.split('/').last().unwrap_or(&cat).to_string();
+        ui.menu_button(short, |ui| {
+            for comp in msl_components_in_category(&cat) {
+                if ui
+                    .button(format!("{} {}", comp.display_name, comp.name))
+                    .clicked()
+                {
+                    if let Some(class) = editing_class {
+                        out.push(op_add_component(&comp, click_world, class));
+                    }
+                    ui.close();
+                }
+            }
+        });
+    }
+    ui.separator();
+    ui.label(egui::RichText::new("Common").weak().small());
+    for quick_name in ["Resistor", "Capacitor", "Ground", "ConstantVoltage", "Inductor"] {
+        if let Some(comp) = crate::visual_diagram::msl_component_library()
+            .iter()
+            .find(|c| c.name == quick_name)
+        {
+            if ui.button(quick_name).clicked() {
+                if let Some(class) = editing_class {
+                    out.push(op_add_component(comp, click_world, class));
+                }
+                ui.close();
+            }
+        }
+    }
+    ui.separator();
+    if ui.button("⎚ Fit all (F)").clicked() {
+        let mut state = world.resource_mut::<CanvasDiagramState>();
+        if let Some(bounds) = state.canvas.scene.bounds() {
+            let sr = lunco_canvas::Rect::from_min_max(
+                lunco_canvas::Pos::new(0.0, 0.0),
+                lunco_canvas::Pos::new(800.0, 600.0),
+            );
+            let (c, z) = state.canvas.viewport.fit_values(bounds, sr, 40.0);
+            state.canvas.viewport.set_target(c, z);
+        }
+        ui.close();
+    }
+    if ui.button("⟲ Reset zoom").clicked() {
+        let mut state = world.resource_mut::<CanvasDiagramState>();
+        let c = state.canvas.viewport.center;
+        state.canvas.viewport.set_target(c, 1.0);
+        ui.close();
+    }
+}
+
+// ─── Doc-op translation ─────────────────────────────────────────────
+
+/// Resolve `(document id, editing class name)` for the current tab.
+/// Mirrors the snarl panel's logic so both panels target the same
+/// class when `open_model` is bound.
+fn resolve_doc_context(world: &World) -> (Option<lunco_doc::DocumentId>, Option<String>) {
+    let Some(open) = world.resource::<WorkbenchState>().open_model.as_ref() else {
+        return (None, None);
+    };
+    let Some(doc_id) = open.doc else {
+        return (None, None);
+    };
+    let class = world
+        .resource::<ModelicaDocumentRegistry>()
+        .host(doc_id)
+        .and_then(|h| {
+            h.document()
+                .ast()
+                .ast()
+                .and_then(|s| s.classes.keys().next().cloned())
+        })
+        .or_else(|| open.detected_name.clone());
+    (Some(doc_id), class)
+}
+
+// Thin wrapper so existing call sites keep their shape. The real
+// conversion lives in `coords::canvas_min_to_modelica_center`.
+fn canvas_min_to_modelica_center(min: lunco_canvas::Pos) -> (f32, f32) {
+    let m = coords::canvas_min_to_modelica_center(min, ICON_W, ICON_H);
+    (m.x, m.y)
+}
+
+/// Translate canvas scene events into ModelicaOps. Needs a brief
+/// read-only borrow of the scene (to look up edge endpoints); the
+/// caller runs it inside its own borrow scope.
+fn build_ops_from_events(
+    world: &mut World,
+    events: &[lunco_canvas::SceneEvent],
+    class: &str,
+) -> Vec<ModelicaOp> {
+    use lunco_canvas::SceneEvent;
+    let state = world.resource::<CanvasDiagramState>();
+    let scene = &state.canvas.scene;
+    let mut ops: Vec<ModelicaOp> = Vec::new();
+
+    for ev in events {
+        match ev {
+            SceneEvent::NodeMoved { id, new_min, .. } => {
+                // The `origin` we set during projection carries the
+                // Modelica instance name. Skip if missing (shouldn't
+                // happen — projection always sets it).
+                let Some(node) = scene.node(*id) else { continue };
+                let Some(name) = node.origin.clone() else { continue };
+                let (mx, my) = canvas_min_to_modelica_center(*new_min);
+                ops.push(ModelicaOp::SetPlacement {
+                    class: class.to_string(),
+                    name,
+                    placement: Placement::at(mx, my),
+                });
+            }
+            SceneEvent::EdgeCreated { from, to } => {
+                // Resolve canvas port refs → Modelica (instance,
+                // port) pairs via node.origin + port.id.
+                let Some(from_node) = scene.node(from.node) else { continue };
+                let Some(to_node) = scene.node(to.node) else { continue };
+                let Some(from_instance) = from_node.origin.clone() else { continue };
+                let Some(to_instance) = to_node.origin.clone() else { continue };
+                ops.push(ModelicaOp::AddConnection {
+                    class: class.to_string(),
+                    eq: pretty::ConnectEquation {
+                        from: pretty::PortRef::new(&from_instance, from.port.as_str()),
+                        to: pretty::PortRef::new(&to_instance, to.port.as_str()),
+                        line: None,
+                    },
+                });
+            }
+            SceneEvent::EdgeDeleted { id } => {
+                if let Some(op) = op_remove_edge_inner(scene, *id, class) {
+                    ops.push(op);
+                }
+            }
+            SceneEvent::NodeDeleted { id, orphaned_edges } => {
+                // Orphan edge RemoveConnection ops must go in
+                // BEFORE the RemoveComponent so rumoca still sees
+                // the edges while resolving the connect(...) spans.
+                for eid in orphaned_edges {
+                    if let Some(op) = op_remove_edge_inner(scene, *eid, class) {
+                        ops.push(op);
+                    }
+                }
+                if let Some(op) = op_remove_node_inner(scene, *id, class) {
+                    ops.push(op);
+                }
+            }
+            _ => {}
+        }
+    }
+    ops
+}
+
+/// `(instance_name, type_label)` for a node, pulled from the scene's
+/// `label` + `data.type`. Empty strings when the node is gone.
+fn component_headers(
+    world: &World,
+    id: lunco_canvas::NodeId,
+) -> (String, String) {
+    let state = world.resource::<CanvasDiagramState>();
+    let Some(node) = state.canvas.scene.node(id) else {
+        return (String::new(), String::new());
+    };
+    let instance = node.label.clone();
+    let type_name = node
+        .data
+        .get("type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    (instance, type_name)
+}
+
+/// Build an `AddComponent` op at a world-space position. Carries
+/// the component's default parameter values and a `Placement`
+/// annotation so the new node lands at the right spot in both the
+/// source and any downstream re-projection.
+fn op_add_component(
+    comp: &MSLComponentDef,
+    at_world: lunco_canvas::Pos,
+    class: &str,
+) -> ModelicaOp {
+    // `at_world` is the click position — already the intended
+    // centre, not a rect min — so we don't add the icon offsets
+    // here. Just flip canvas → Modelica via the typed conversion.
+    let ModelicaPos { x: mx, y: my } = canvas_to_modelica(at_world);
+    // Auto-generate a unique instance name: first letter of the
+    // component's short name + a counter. VisualDiagram's own
+    // `next_instance_name` does this but requires a mutable
+    // VisualDiagram instance — for our static-ops path we just use
+    // a timestamp-ish fallback. B4: snapshot the doc to count
+    // existing instances and pick the next N.
+    let prefix = comp
+        .name
+        .chars()
+        .next()
+        .unwrap_or('X')
+        .to_ascii_uppercase();
+    let suffix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_millis() % 10_000)
+        .unwrap_or(0);
+    let instance_name = format!("{}{}", prefix, suffix);
+    ModelicaOp::AddComponent {
+        class: class.to_string(),
+        decl: pretty::ComponentDecl {
+            type_name: comp.msl_path.clone(),
+            name: instance_name,
+            modifications: comp
+                .parameters
+                .iter()
+                .filter(|p| !p.default.is_empty())
+                .map(|p| (p.name.clone(), p.default.clone()))
+                .collect(),
+            placement: Some(Placement::at(mx, my)),
+        },
+    }
+}
+
+fn op_remove_component(
+    world: &mut World,
+    id: lunco_canvas::NodeId,
+    class: &str,
+) -> Option<ModelicaOp> {
+    let state = world.resource::<CanvasDiagramState>();
+    op_remove_node_inner(&state.canvas.scene, id, class)
+}
+
+fn op_remove_edge(
+    world: &mut World,
+    id: lunco_canvas::EdgeId,
+    class: &str,
+) -> Option<ModelicaOp> {
+    let state = world.resource::<CanvasDiagramState>();
+    op_remove_edge_inner(&state.canvas.scene, id, class)
+}
+
+fn op_remove_node_inner(
+    scene: &lunco_canvas::Scene,
+    id: lunco_canvas::NodeId,
+    class: &str,
+) -> Option<ModelicaOp> {
+    let node = scene.node(id)?;
+    let name = node.origin.clone()?;
+    Some(ModelicaOp::RemoveComponent {
+        class: class.to_string(),
+        name,
+    })
+}
+
+fn op_remove_edge_inner(
+    scene: &lunco_canvas::Scene,
+    id: lunco_canvas::EdgeId,
+    class: &str,
+) -> Option<ModelicaOp> {
+    let edge = scene.edge(id)?;
+    let from_node = scene.node(edge.from.node)?;
+    let to_node = scene.node(edge.to.node)?;
+    let from_instance = from_node.origin.clone()?;
+    let to_instance = to_node.origin.clone()?;
+    Some(ModelicaOp::RemoveConnection {
+        class: class.to_string(),
+        from: pretty::PortRef::new(&from_instance, edge.from.port.as_str()),
+        to: pretty::PortRef::new(&to_instance, edge.to.port.as_str()),
+    })
+}
+
+/// Apply a batch of ops against the bound document. Ops that fail
+/// (e.g. RemoveComponent when the instance isn't actually in source
+/// — shouldn't happen, but defence in depth) are logged and
+/// skipped. After success the doc's generation bumps, which the
+/// next frame picks up via `last_seen_gen` and re-projects.
+fn apply_ops(world: &mut World, doc_id: lunco_doc::DocumentId, ops: Vec<ModelicaOp>) {
+    let n = ops.len();
+    let mut any_applied = false;
+    {
+        let Some(mut registry) = world.get_resource_mut::<ModelicaDocumentRegistry>() else {
+            bevy::log::warn!(
+                "[CanvasDiagram] tried to apply {} op(s) but registry missing",
+                n
+            );
+            return;
+        };
+        let Some(host) = registry.host_mut(doc_id) else {
+            bevy::log::warn!(
+                "[CanvasDiagram] tried to apply {} op(s) but doc {:?} not in registry",
+                n,
+                doc_id
+            );
+            return;
+        };
+        for op in ops {
+            bevy::log::info!("[CanvasDiagram] applying {:?}", op);
+            match host.apply(op) {
+                Ok(_) => any_applied = true,
+                Err(e) => bevy::log::warn!("[CanvasDiagram] op failed: {}", e),
+            }
+        }
+    }
+
+    if !any_applied {
+        return;
+    }
+
+    // Mirror the post-edit source back to `WorkbenchState.open_model`
+    // so every other panel (code editor, breadcrumb, inspector)
+    // that reads the cached source sees the update immediately —
+    // the code editor doesn't watch the registry directly; it
+    // reads the `Arc<str>` on `open_model`. Matches the snarl
+    // panel's write-back path.
+    let fresh = world
+        .get_resource::<ModelicaDocumentRegistry>()
+        .and_then(|r| r.host(doc_id))
+        .map(|h| {
+            (
+                h.document().source().to_string(),
+                <crate::document::ModelicaDocument as lunco_doc::Document>::generation(
+                    h.document(),
+                ),
+            )
+        });
+    if let Some((src, _new_gen)) = fresh {
+        if let Some(mut ws) = world.get_resource_mut::<WorkbenchState>() {
+            if let Some(open) = ws.open_model.as_mut() {
+                let mut line_starts = vec![0usize];
+                for (i, b) in src.as_bytes().iter().enumerate() {
+                    if *b == b'\n' {
+                        line_starts.push(i + 1);
+                    }
+                }
+                open.source = std::sync::Arc::from(src.as_str());
+                open.line_starts = line_starts.into();
+                open.cached_galley = None;
+            }
+        }
+        // IMPORTANT: do NOT advance `last_seen_gen` here. Letting
+        // the next-frame project check see the bumped generation
+        // triggers a fresh projection, which is how the newly-added
+        // node / edge actually shows up on the canvas. Snarl skips
+        // re-projection because its viewer mutates snarl state in
+        // lock-step with the op, but we don't — we always project
+        // from the document source, so skipping re-projection
+        // leaves the canvas scene stale.
     }
 }

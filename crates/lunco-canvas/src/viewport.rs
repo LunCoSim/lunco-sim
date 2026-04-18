@@ -93,6 +93,12 @@ impl Default for ViewportConfig {
 
 impl Default for Viewport {
     fn default() -> Self {
+        // Default zoom is 1.0 (world-unit = point). The caller
+        // typically overrides on first bind — either to physical
+        // scale via [`Viewport::physical_mm_zoom`] if world units
+        // are millimetres, or via [`Viewport::fit_values`] to frame
+        // an existing scene. We can't derive a DPI-correct zoom
+        // here because `Default` has no access to an egui context.
         let center = Pos::new(0.0, 0.0);
         Self {
             center,
@@ -101,6 +107,52 @@ impl Default for Viewport {
             target_zoom: 1.0,
             config: ViewportConfig::default(),
         }
+    }
+}
+
+// ─── Physical-scale zoom ─────────────────────────────────────────
+//
+// Strategy: pull the DPI scale from the egui context
+// (`pixels_per_point`), not from a baked-in constant. On every
+// mainstream OS the window system tells egui how many physical
+// pixels it renders per logical layout point — that's the only
+// DPI signal we can treat as ground truth. Using it keeps us
+// correct on hi-DPI displays, fractional-scaled X11/Wayland
+// sessions, and Windows DPI-aware modes without code changes.
+//
+// The only invariants this module hardcodes are SI unit ratios
+// (25.4 mm/inch) — those are definitions, not assumptions.
+
+/// Millimetres per inch. SI definition.
+pub const MM_PER_INCH: f32 = 25.4;
+
+impl Viewport {
+    /// Zoom level that renders 1 world unit as 1 mm on screen, for
+    /// the passed egui context. Use when world units mean millimetres
+    /// (Modelica's `extent` annotations do).
+    ///
+    /// Derivation: `ctx.pixels_per_point()` is the scale factor the
+    /// window system reports — physical pixels per egui point. The
+    /// renderer applies it downstream of us, so from this layer we
+    /// just convert world-mm to egui-points. Points-per-inch at a
+    /// "1x" logical screen is 96 by convention (the same one your
+    /// browser and OS use); at other scale factors the renderer
+    /// takes care of the compensation.
+    ///
+    /// Caveat: if the user's window system misreports its scale
+    /// factor (rare), physical size is off by that factor. No cross-
+    /// platform API exposes true physical DPI, so this is as good
+    /// as any general-purpose UI toolkit gets.
+    pub fn physical_mm_zoom(ctx: &bevy_egui::egui::Context) -> f32 {
+        // egui points correspond to physical pixels at 1x scaling.
+        // Multiplying pixels_per_point * 25.4 gives "physical pixels
+        // per inch" as the system sees it. Dividing by 25.4 gives
+        // points-per-mm, which is our zoom.
+        let ppp = ctx.pixels_per_point();
+        // At ppp=1 (standard 96 DPI):   96 / 25.4 ≈ 3.78
+        // At ppp=2 (HiDPI 2×):         192 / 25.4 ≈ 7.56 → divided
+        //   back by ppp in the renderer, ends up physically the same.
+        (ppp * 96.0) / MM_PER_INCH
     }
 }
 
