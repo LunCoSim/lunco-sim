@@ -27,6 +27,12 @@ pub struct EditorBufferState {
     /// (default) long lines stay on one line and the view scrolls
     /// horizontally — mirroring VS Code's default "Word Wrap: Off".
     pub word_wrap: bool,
+    /// When `true` (default), pressing Enter copies the previous
+    /// line's leading whitespace onto the new line — i.e. continues
+    /// at the same indent level. Mirrors the default behaviour of
+    /// every modern code editor (VS Code, Sublime, IntelliJ, Emacs
+    /// electric-indent). Turn off for plain-text-buffer behaviour.
+    pub auto_indent: bool,
     /// egui timestamp (in seconds, from `ctx.input(|i| i.time)`) of
     /// the last keystroke that diverged `text` from the bound
     /// document's source. `None` when the buffer is already in sync.
@@ -39,6 +45,31 @@ pub struct EditorBufferState {
     /// typing, the buffer is checkpointed into the document in one
     /// shot.
     pub pending_commit_at: Option<f64>,
+}
+
+/// Return the byte index of the newline character when `new` differs
+/// from `old` by exactly one inserted `'\n'`. Otherwise returns `None`.
+///
+/// Used by auto-indent to detect "user pressed Enter" edits without
+/// hooking egui's input pipeline. We capture the pre-edit buffer,
+/// let `TextEdit` run, and compare. Pastes, multi-char edits, and
+/// anything that isn't a single `\n` insertion skip the auto-indent
+/// pass.
+fn detect_single_newline_insertion(old: &str, new: &str) -> Option<usize> {
+    if new.len() != old.len() + 1 {
+        return None;
+    }
+    let ob = old.as_bytes();
+    let nb = new.as_bytes();
+    let mut i = 0;
+    while i < ob.len() && ob[i] == nb[i] {
+        i += 1;
+    }
+    if i < nb.len() && nb[i] == b'\n' && ob.get(i..) == Some(&nb[i + 1..]) {
+        Some(i)
+    } else {
+        None
+    }
 }
 
 /// Idle window (seconds) after the last keystroke before the editor
@@ -58,6 +89,7 @@ impl Default for EditorBufferState {
             detected_name: None,
             cached_galley: None,
             word_wrap: false,
+            auto_indent: true,
             pending_commit_at: None,
         }
     }
@@ -176,26 +208,45 @@ impl Panel for CodeEditorPanel {
                     .and_then(|m| m.doc)
             });
 
-        // ── Toolbar row: word-wrap toggle ──
+        // ── Settings menu (gear button) ──
         //
-        // Default: off. Long lines extend right and the editor body
-        // scrolls horizontally to reach them — matching VS Code's
-        // default "Word Wrap: Off". Turning it on re-layouts each
-        // line at the editor width so everything fits without
-        // scrolling.
+        // All editor preferences live inside one dropdown menu
+        // rather than being scattered as inline toolbar toggles — the
+        // panel toolbar stays tidy and this scales as we add more
+        // options (font size, indent width, tab-vs-spaces, …)
+        // without turning into a button pile.
         //
-        // Persisted on `EditorBufferState` so switching panels or
-        // rebinding a document doesn't reset the preference.
-        let word_wrap = {
-            let mut wrap = world.resource::<EditorBufferState>().word_wrap;
+        // Current options, all persisted on `EditorBufferState`:
+        //   • **Word wrap** (default off): long lines wrap at editor
+        //     width when on, horizontal-scroll when off. Matches VS
+        //     Code's default.
+        //   • **Auto indent** (default on): pressing Enter copies
+        //     the previous line's leading whitespace onto the new
+        //     line. Every modern code editor does this.
+        let (word_wrap, auto_indent) = {
+            let (mut wrap, mut indent) = {
+                let buf = world.resource::<EditorBufferState>();
+                (buf.word_wrap, buf.auto_indent)
+            };
             ui.horizontal(|ui| {
-                let label = if wrap { "↵ Word Wrap: On" } else { "→ Word Wrap: Off" };
-                if ui.selectable_label(wrap, label).clicked() {
-                    wrap = !wrap;
-                    world.resource_mut::<EditorBufferState>().word_wrap = wrap;
-                }
+                ui.menu_button("⚙ Editor Settings", |ui| {
+                    if ui
+                        .checkbox(&mut wrap, "Word wrap")
+                        .on_hover_text("Wrap long lines at the editor width instead of scrolling horizontally")
+                        .changed()
+                    {
+                        world.resource_mut::<EditorBufferState>().word_wrap = wrap;
+                    }
+                    if ui
+                        .checkbox(&mut indent, "Auto indent")
+                        .on_hover_text("Copy the previous line's indentation when pressing Enter")
+                        .changed()
+                    {
+                        world.resource_mut::<EditorBufferState>().auto_indent = indent;
+                    }
+                });
             });
-            wrap
+            (wrap, indent)
         };
 
         // ── Editor area ──
@@ -216,9 +267,17 @@ impl Panel for CodeEditorPanel {
         // for `&str` is read-only, so passing `&mut &str` to
         // `TextEdit::multiline` silently produces a non-editable
         // widget.
-        let (mut text, galley_cache) = {
+        //
+        // Snapshot `old_text` before the TextEdit runs so the
+        // auto-indent pass below can diff the pre/post buffer and
+        // detect single-char newline insertions.
+        let (mut text, galley_cache, old_text) = {
             let buf_state = world.resource::<EditorBufferState>();
-            (buf_state.text.clone(), buf_state.cached_galley.clone())
+            (
+                buf_state.text.clone(),
+                buf_state.cached_galley.clone(),
+                buf_state.text.clone(),
+            )
         };
         let is_ro = is_read_only;
         let editor_width = avail.x.max(100.0);
@@ -228,6 +287,12 @@ impl Panel for CodeEditorPanel {
         // horizontal `ScrollArea` so they can scroll rather than
         // clip. When word-wrap is on, the layouter does the right
         // thing at editor-width and no horizontal scroll is needed.
+        // Stable id so the auto-indent cursor-reposition logic below
+        // can look up and overwrite the TextEdit's state via
+        // `TextEditState::load`. Without a pinned id, egui generates
+        // a hash from the widget's location and we can't target it
+        // from outside the closure.
+        let text_edit_id = egui::Id::new("modelica_code_editor");
         let show_editor = |ui: &mut egui::Ui, text: &mut String| -> egui::Response {
             // `desired_width` defines the widget's allocated width.
             // In scroll mode we want the widget to be AS WIDE AS THE
@@ -239,6 +304,7 @@ impl Panel for CodeEditorPanel {
             ui.add_sized(
                 [inner_width, editor_height],
                 egui::TextEdit::multiline(text)
+                    .id(text_edit_id)
                     .font(egui::TextStyle::Monospace)
                     .code_editor()
                     .desired_width(inner_width)
@@ -275,6 +341,51 @@ impl Panel for CodeEditorPanel {
         if output.changed() && !is_ro {
             new_text = text.clone();
             buffer_changed = true;
+
+            // ── Auto-indent ──
+            //
+            // If this change added exactly one '\n' to the buffer
+            // (user pressed Enter) and the previous line had leading
+            // whitespace, inject that same leading whitespace after
+            // the '\n' and move the caret past it — so the user
+            // picks up editing at the same indent level as the
+            // previous line.
+            //
+            // Behaviour chosen to match every modern code editor:
+            // VS Code, Sublime, IntelliJ, Emacs electric-indent,
+            // Neovim's `autoindent` / `smartindent`.
+            if auto_indent {
+                if let Some(nl_byte) = detect_single_newline_insertion(&old_text, &new_text) {
+                    let line_start = new_text[..nl_byte]
+                        .rfind('\n')
+                        .map(|i| i + 1)
+                        .unwrap_or(0);
+                    let indent: String = new_text[line_start..nl_byte]
+                        .chars()
+                        .take_while(|c| *c == ' ' || *c == '\t')
+                        .collect();
+                    if !indent.is_empty() {
+                        let after_nl = nl_byte + 1;
+                        new_text.insert_str(after_nl, &indent);
+                        text = new_text.clone();
+                        // Move the TextEdit caret past the inserted
+                        // indent. egui caret positions are in *char*
+                        // offsets (not bytes), so convert.
+                        let new_caret_chars =
+                            new_text[..after_nl + indent.len()].chars().count();
+                        if let Some(mut state) =
+                            egui::TextEdit::load_state(ui.ctx(), text_edit_id)
+                        {
+                            state.cursor.set_char_range(Some(
+                                egui::text::CCursorRange::one(
+                                    egui::text::CCursor::new(new_caret_chars),
+                                ),
+                            ));
+                            state.store(ui.ctx(), text_edit_id);
+                        }
+                    }
+                }
+            }
         }
         // Focus-loss commit: edits flow into the Document so other
         // observers (diagram re-parse, dirty tracker) see them

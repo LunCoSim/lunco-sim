@@ -1235,10 +1235,12 @@ impl<'a> SnarlViewer<DiagramNode> for DiagramViewer<'a> {
                 for comp in &components {
                     if ui.button(format!("{} {}", comp.display_name, comp.name)).clicked() {
                         let node = DiagramNode::from_msl(comp);
-                        // Pull the auto-generated instance name from
-                        // the snarl node before insertion — we need it
-                        // for the AST op even though snarl owns the
-                        // node after `insert_node`.
+                        // Pull the auto-generated instance name before
+                        // insert_node takes ownership of the node.
+                        // If it collides with an existing component
+                        // the user will see both in the diagram and a
+                        // duplicate-name diagnostic — same behaviour as
+                        // OMEdit / Dymola. The user renames manually.
                         let instance_name = match &node {
                             DiagramNode::Component { instance_name, .. } => instance_name.clone(),
                         };
@@ -1420,6 +1422,113 @@ impl<'a> SnarlViewer<DiagramNode> for DiagramViewer<'a> {
 /// Parse Modelica source and build a `VisualDiagram` from component
 /// instantiations and `connect()` equations.
 ///
+/// Regex-based fallback scanner for component declarations.
+///
+/// Returns `(type_path, instance_name)` pairs in source order,
+/// including duplicates. Used when rumoca's AST recovery drops
+/// components (for example, on a duplicate-name semantic error) so
+/// the diagram panel can still render everything the user typed.
+///
+/// Deliberately simple — this is a best-effort enumerator, not a
+/// parser. Skips lines whose first word is a Modelica keyword,
+/// skips well-known component prefixes (`flow`, `parameter`, etc.)
+/// so they don't shadow the type reference, and matches up to the
+/// first `;`, `(`, or newline after the instance name.
+fn scan_component_declarations(source: &str) -> Vec<(String, String)> {
+    // Matches an optional run of modifier prefixes, then a dotted
+    // type path, then the instance name. Uses `\b` (word boundary,
+    // zero-width) at the instance-name end so the match doesn't
+    // consume any whitespace past the identifier — otherwise a
+    // `\s*[\(;\s]` tail will eat the indentation of the *next* line,
+    // pulling the iterator past that line's `^` anchor and silently
+    // skipping its component. `captures_iter` is non-overlapping, so
+    // any whitespace we consume here is unavailable to the next
+    // candidate match.
+    let re = regex::Regex::new(
+        r"(?m)^\s*(?:(?:flow|stream|input|output|parameter|constant|discrete|inner|outer|replaceable|final)\s+)*((?:[A-Za-z_]\w*\.)*[A-Za-z_]\w*)\s+([A-Za-z_]\w*)\b"
+    ).expect("scan regex compiles");
+    // Keywords that can appear at column 0 inside a class body and
+    // therefore look like "type name" starts under a naive regex.
+    // When the captured "type" matches one, the match is discarded.
+    const KEYWORDS: &[&str] = &[
+        "model", "block", "connector", "package", "function", "record", "class", "type",
+        "extends", "import", "equation", "algorithm", "initial", "protected", "public",
+        "annotation", "connect", "if", "for", "when", "end", "within", "and", "or", "not",
+        "true", "false", "else", "elseif", "elsewhen", "while", "loop", "break", "return",
+        "then", "external", "encapsulated", "partial", "expandable", "operator", "pure",
+        "impure", "redeclare",
+    ];
+    let mut out = Vec::new();
+    for cap in re.captures_iter(source) {
+        let ty = cap[1].to_string();
+        let inst = cap[2].to_string();
+        let first_segment = ty.split('.').next().unwrap_or(&ty);
+        if KEYWORDS.contains(&first_segment) {
+            continue;
+        }
+        out.push((ty, inst));
+    }
+    out
+}
+
+/// Build a `VisualDiagram` from scanner-extracted `(type, name)`
+/// pairs. Used only when the AST-based path returned nothing — i.e.
+/// rumoca failed to produce components for the class. Placement
+/// annotations are looked up per-instance via the existing
+/// regex-based extractor inside [`import_model_to_diagram`]; here
+/// we build a plain grid-layout fallback.
+fn build_visual_diagram_from_scan(
+    source: &str,
+    scanned: &[(String, String)],
+) -> VisualDiagram {
+    let mut diagram = VisualDiagram::default();
+    let msl_lib = msl_component_library();
+    let msl_lookup_by_path: HashMap<&str, &MSLComponentDef> = msl_lib
+        .iter()
+        .map(|c| (c.msl_path.as_str(), c))
+        .collect();
+
+    let node_spacing_x = 200.0;
+    let node_spacing_y = 150.0;
+    let cols = 3usize;
+
+    for (idx, (type_path, instance_name)) in scanned.iter().enumerate() {
+        // Only render components whose type resolves against the MSL
+        // index. Unresolved types stay in the source — the user sees
+        // them in the code editor and the parse-error badge — but
+        // aren't rendered here because we don't have port info for
+        // an unknown type.
+        let Some(def) = msl_lookup_by_path.get(type_path.as_str()).cloned() else {
+            continue;
+        };
+
+        // Placement from annotation (best-effort regex); fall back to grid.
+        let safe_name = regex::escape(instance_name);
+        let pattern = safe_name
+            + r"(?:\s*\([^)]*\))?\s*annotation\s*\(\s*Placement\s*\(\s*transformation\s*\(\s*extent\s*=\s*\{\{\s*([-\d\.]+)\s*,\s*([-\d\.]+)\s*\}\s*,\s*\{\s*([-\d\.]+)\s*,\s*([-\d\.]+)\s*\}\}";
+        let annotation_pos = regex::Regex::new(&pattern).ok().and_then(|re| {
+            re.captures(source).and_then(|cap| {
+                let x1 = cap[1].parse::<f32>().ok()?;
+                let y1 = cap[2].parse::<f32>().ok()?;
+                let x2 = cap[3].parse::<f32>().ok()?;
+                let y2 = cap[4].parse::<f32>().ok()?;
+                Some(egui::Pos2::new((x1 + x2) / 2.0, -((y1 + y2) / 2.0)))
+            })
+        });
+        let pos = annotation_pos.unwrap_or_else(|| {
+            let row = idx / cols;
+            let col = idx % cols;
+            egui::Pos2::new(col as f32 * node_spacing_x, row as f32 * node_spacing_y)
+        });
+
+        let node_id = diagram.add_node(def.clone(), pos);
+        if let Some(n) = diagram.get_node_mut(node_id) {
+            n.instance_name = instance_name.clone();
+        }
+    }
+    diagram
+}
+
 /// Returns `None` if the model has no component instantiations
 /// (e.g., equation-based models like Battery.mo, SpringMass.mo).
 fn import_model_to_diagram(source: &str) -> Option<VisualDiagram> {
@@ -1429,8 +1538,25 @@ fn import_model_to_diagram(source: &str) -> Option<VisualDiagram> {
     let builder = ModelicaComponentBuilder::from_source(source)?;
     let graph = builder.build();
 
-    // If no components found, this is an equation-based model
+    // If the AST-based graph has no components, fall back to a
+    // source-text scan before concluding the model is equation-only.
+    //
+    // Why: rumoca's error recovery drops *all* components of a class
+    // when it hits a semantic error like a duplicate name (per
+    // MLS, duplicates are a namespace violation). An OMEdit /
+    // Dymola-style editor must still render what the user wrote so
+    // they can fix the error — returning `None` here leaves them
+    // staring at a blank canvas with no clue *why*.
+    //
+    // The scanner is regex-based and deliberately simple; it catches
+    // the common `<Qualified.Type> <InstanceName>[(mods)] [;/anno];`
+    // shape but doesn't pretend to be a full Modelica parser. When the
+    // AST is healthy (the 99% case), this fallback never runs.
     if graph.node_count() == 0 {
+        let scanned = scan_component_declarations(source);
+        if !scanned.is_empty() {
+            return Some(build_visual_diagram_from_scan(source, &scanned));
+        }
         return None;
     }
 

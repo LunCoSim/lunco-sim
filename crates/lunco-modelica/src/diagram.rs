@@ -60,8 +60,23 @@ impl ModelicaComponentBuilder {
     }
 
     /// Create a new builder from raw Modelica source code.
+    ///
+    /// Uses rumoca's error-recovering `parse_to_syntax(...).best_effort()`
+    /// so partial / semantically-invalid sources still produce a
+    /// usable AST. The editor and diagram renderer should never go
+    /// blank just because the user typed a duplicate name, a missing
+    /// semicolon, or a half-finished construct — those are
+    /// diagnostics, not "the file ceased to exist" signals, and they
+    /// should match OMEdit / Dymola's "show everything, flag the
+    /// problem" behaviour.
+    ///
+    /// Returns `None` only if rumoca couldn't even construct a
+    /// recovery tree (i.e. catastrophically broken input). In
+    /// practice `parse_to_syntax` always returns *something*, so the
+    /// `None` branch is defensive.
     pub fn from_source(source: &str) -> Option<Self> {
-        let ast = rumoca_phase_parse::parse_to_ast(source, "model.mo").ok()?;
+        let syntax = rumoca_phase_parse::parse_to_syntax(source, "model.mo");
+        let ast: StoredDefinition = syntax.best_effort().clone();
         Some(Self::from_ast(ast))
     }
 
