@@ -159,10 +159,7 @@ impl Workspace for AnalyzeWorkspace {
         // still builds on apps with nothing open yet. When the first
         // real model tab opens, the placeholder stays docked next
         // to it — users can close it.
-        layout.set_center(vec![
-            PanelId("modelica_welcome"),
-            PanelId("modelica_canvas_diagram"),
-        ]);
+        layout.set_center(vec![PanelId("modelica_welcome")]);
         layout.set_active_center_tab(0);
         // Right dock gets two tabs: Inspector (params/variables) and
         // the Component Palette (MSL instantiation). Figma / Unreal

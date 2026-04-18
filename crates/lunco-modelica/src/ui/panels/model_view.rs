@@ -24,7 +24,9 @@ use lunco_doc::DocumentId;
 use lunco_workbench::{InstancePanel, Panel, PanelId, PanelSlot};
 
 use crate::ui::panels::code_editor::EditorBufferState;
-use crate::ui::panels::{code_editor::CodeEditorPanel, diagram::DiagramPanel};
+use crate::ui::panels::{
+    canvas_diagram::CanvasDiagramPanel, code_editor::CodeEditorPanel, diagram::DiagramPanel,
+};
 use crate::ui::{CompileState, CompileStates, ModelicaDocumentRegistry, WorkbenchState};
 
 /// The `PanelId` under which `ModelViewPanel` is registered as an
@@ -39,6 +41,10 @@ pub enum ModelViewMode {
     Text,
     /// Block-diagram canvas (egui-snarl).
     Diagram,
+    /// Block-diagram canvas (lunco-canvas rewrite). Parallel to
+    /// `Diagram` during the transition; retires the snarl variant
+    /// once the canvas path covers every feature we ship.
+    Canvas,
 }
 
 /// Per-tab state for a [`ModelViewPanel`] instance. One entry per
@@ -116,6 +122,7 @@ pub struct ModelViewPanel {
     /// one of these based on the tab's current view mode.
     code: CodeEditorPanel,
     diagram: DiagramPanel,
+    canvas: CanvasDiagramPanel,
 }
 
 impl Default for ModelViewPanel {
@@ -123,6 +130,7 @@ impl Default for ModelViewPanel {
         Self {
             code: CodeEditorPanel,
             diagram: DiagramPanel,
+            canvas: CanvasDiagramPanel,
         }
     }
 }
@@ -198,6 +206,7 @@ impl InstancePanel for ModelViewPanel {
         match new_view_mode {
             ModelViewMode::Text => self.code.render(ui, world),
             ModelViewMode::Diagram => self.diagram.render(ui, world),
+            ModelViewMode::Canvas => self.canvas.render(ui, world),
         }
     }
 }
@@ -417,11 +426,15 @@ fn render_unified_toolbar(
 
         let text_sel = view_mode == ModelViewMode::Text;
         let diag_sel = view_mode == ModelViewMode::Diagram;
+        let canv_sel = view_mode == ModelViewMode::Canvas;
         if ui.selectable_label(text_sel, "📝 Text").clicked() {
             new_view_mode = ModelViewMode::Text;
         }
         if ui.selectable_label(diag_sel, "🔗 Diagram").clicked() {
             new_view_mode = ModelViewMode::Diagram;
+        }
+        if ui.selectable_label(canv_sel, "🧩 Canvas").clicked() {
+            new_view_mode = ModelViewMode::Canvas;
         }
         ui.separator();
 
@@ -516,6 +529,13 @@ fn render_unified_toolbar(
                 } else {
                     crate::ui::panels::diagram::do_compile(world);
                 }
+            }
+            ModelViewMode::Canvas => {
+                // Canvas is a read-only view in B2 — compile just
+                // routes through the document source, same as Text.
+                // B3 (doc write-back) will emit real ops from drag /
+                // connect; compile can then stay the same.
+                world.commands().trigger(crate::ui::CompileModel { doc });
             }
         }
     }

@@ -262,6 +262,27 @@ pub struct CanvasDiagramState {
     /// bound. Cleared on doc switch so the next frame's render does
     /// a full rebuild.
     pub bound_doc: Option<lunco_doc::DocumentId>,
+    /// Pending context-menu request from the canvas. Populated when
+    /// the canvas emits `ContextMenuRequested`; rendered as an egui
+    /// popup on the next frame and cleared when the user clicks
+    /// outside or picks an entry.
+    pub context_menu: Option<PendingContextMenu>,
+}
+
+/// Snapshot of a right-click: where to anchor the popup + what it
+/// was targeted at. Held for a frame so the popup has stable
+/// coordinates even if the pointer moves.
+#[derive(Debug, Clone)]
+pub struct PendingContextMenu {
+    pub screen_pos: egui::Pos2,
+    pub target: ContextMenuTarget,
+}
+
+#[derive(Debug, Clone)]
+pub enum ContextMenuTarget {
+    Node(lunco_canvas::NodeId),
+    Edge(lunco_canvas::EdgeId),
+    Empty,
 }
 
 impl Default for CanvasDiagramState {
@@ -274,6 +295,7 @@ impl Default for CanvasDiagramState {
             canvas,
             last_seen_gen: 0,
             bound_doc: None,
+            context_menu: None,
         }
     }
 }
@@ -330,10 +352,18 @@ impl Panel for CanvasDiagramPanel {
         };
 
         if let Some((doc_id, gen)) = project_now {
-            let diagram = world
-                .resource::<crate::ui::panels::diagram::DiagramState>()
-                .diagram
-                .clone();
+            // Read the source directly from the document host and
+            // parse it into a VisualDiagram ourselves — do NOT rely
+            // on the snarl panel's `DiagramState.diagram` being
+            // populated, which only happens if that panel was
+            // rendered first.
+            let source = world
+                .resource::<ModelicaDocumentRegistry>()
+                .host(doc_id)
+                .map(|h| h.document().source().to_string())
+                .unwrap_or_default();
+            let diagram = crate::ui::panels::diagram::import_model_to_diagram(&source)
+                .unwrap_or_default();
             let (scene, _id_map) = project_scene(&diagram);
             let mut state = world.resource_mut::<CanvasDiagramState>();
             let doc_switched = state.bound_doc != Some(doc_id);
@@ -371,11 +401,112 @@ impl Panel for CanvasDiagramPanel {
 
 impl CanvasDiagramPanel {
     fn render_canvas(&self, ui: &mut egui::Ui, world: &mut World) {
-        let mut state = world.resource_mut::<CanvasDiagramState>();
-        let _events = state.canvas.ui(ui);
-        // B2: we don't yet translate scene events back to doc ops.
-        // That lands in B3 — the Modelica projector will map
-        // `NodeMoved` → `SetPlacement`, `EdgeCreated` → `AddConnection`,
-        // etc., going through the existing command bus.
+        // Collect events + any pending menu request in a short
+        // borrow, so the subsequent popup render can re-borrow
+        // resources it needs.
+        let menu_request = {
+            let mut state = world.resource_mut::<CanvasDiagramState>();
+            let events = state.canvas.ui(ui);
+
+            // Translate canvas context-menu requests into pending
+            // menus on the panel. Node/Edge ids from the canvas
+            // identify elements in the local scene; we remember
+            // them so the popup can act on the right thing.
+            let mut menu: Option<PendingContextMenu> = None;
+            for ev in &events {
+                if let lunco_canvas::SceneEvent::ContextMenuRequested {
+                    screen_pos,
+                    target,
+                } = ev
+                {
+                    let t = match target {
+                        Some(lunco_canvas::ContextTarget::Node(id)) => {
+                            ContextMenuTarget::Node(*id)
+                        }
+                        Some(lunco_canvas::ContextTarget::Edge(id)) => {
+                            ContextMenuTarget::Edge(*id)
+                        }
+                        Some(lunco_canvas::ContextTarget::Empty) | None => {
+                            ContextMenuTarget::Empty
+                        }
+                    };
+                    menu = Some(PendingContextMenu {
+                        screen_pos: egui::pos2(screen_pos.x, screen_pos.y),
+                        target: t,
+                    });
+                }
+            }
+            if let Some(m) = menu {
+                state.context_menu = Some(m);
+            }
+            state.context_menu.clone()
+        };
+
+        // Render the context menu as an egui Area popup anchored at
+        // the click point. The caller (this panel) owns menu
+        // contents because they're domain-specific — generic canvas
+        // can't know "Delete component" vs "Delete connection".
+        if let Some(menu) = menu_request {
+            let mut close = false;
+            egui::Area::new(egui::Id::new("modelica_canvas_ctx"))
+                .fixed_pos(menu.screen_pos)
+                .order(egui::Order::Foreground)
+                .show(ui.ctx(), |ui| {
+                    egui::Frame::popup(ui.style()).show(ui, |ui| {
+                        match &menu.target {
+                            ContextMenuTarget::Node(_) => {
+                                ui.label(
+                                    egui::RichText::new("Component")
+                                        .weak()
+                                        .small(),
+                                );
+                                if ui.button("Delete").clicked() {
+                                    close = true;
+                                    // TODO(B3): emit RemoveComponent op.
+                                }
+                                if ui.button("Properties…").clicked() {
+                                    close = true;
+                                    // TODO: route to Inspector.
+                                }
+                            }
+                            ContextMenuTarget::Edge(_) => {
+                                ui.label(
+                                    egui::RichText::new("Connection")
+                                        .weak()
+                                        .small(),
+                                );
+                                if ui.button("Delete").clicked() {
+                                    close = true;
+                                    // TODO(B3): emit RemoveConnection op.
+                                }
+                            }
+                            ContextMenuTarget::Empty => {
+                                ui.label(
+                                    egui::RichText::new("Canvas")
+                                        .weak()
+                                        .small(),
+                                );
+                                if ui.button("Add component…").clicked() {
+                                    close = true;
+                                    // TODO: open component palette here.
+                                }
+                                if ui.button("Fit all (F)").clicked() {
+                                    close = true;
+                                    // TODO: call viewport.set_target(fit_values(...)).
+                                }
+                            }
+                        }
+                    });
+                });
+            // Close on any primary click outside the popup. Simple
+            // heuristic; egui's proper close-on-outside-click needs
+            // more ceremony which we don't need for B2.
+            let clicked_outside = ui.ctx().input(|i| {
+                i.pointer.any_pressed() && !i.pointer.button_down(egui::PointerButton::Primary)
+            });
+            if close || clicked_outside {
+                world.resource_mut::<CanvasDiagramState>().context_menu = None;
+            }
+        }
     }
 }

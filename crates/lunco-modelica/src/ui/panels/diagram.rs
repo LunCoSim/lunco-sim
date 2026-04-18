@@ -1531,7 +1531,7 @@ fn build_visual_diagram_from_scan(
 
 /// Returns `None` if the model has no component instantiations
 /// (e.g., equation-based models like Battery.mo, SpringMass.mo).
-fn import_model_to_diagram(source: &str) -> Option<VisualDiagram> {
+pub fn import_model_to_diagram(source: &str) -> Option<VisualDiagram> {
     use crate::diagram::ModelicaComponentBuilder;
 
     // Try to build a component graph from the source
