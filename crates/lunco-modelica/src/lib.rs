@@ -55,6 +55,13 @@ pub mod ast_extract;
 /// for migration order.
 pub mod document;
 
+/// Subset Modelica pretty-printer — emits source snippets for *new* AST
+/// nodes (component declarations, connect equations, placement / line
+/// annotations). Used by AST-level document ops that splice new text at
+/// a span in the existing source. Not a full round-trip printer —
+/// existing nodes keep their original source text.
+pub mod pretty;
+
 /// Modelica-to-diagram graph builder — converts AST into DiagramGraph.
 pub mod diagram;
 
