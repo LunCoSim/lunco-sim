@@ -47,6 +47,8 @@ use lunco_doc::{Document, DocumentError, DocumentId, DocumentOp, DocumentOrigin}
 use rumoca_phase_parse::parse_to_ast;
 use rumoca_session::parsing::ast::StoredDefinition;
 
+use crate::pretty::{self, ComponentDecl, ConnectEquation};
+
 /// Eagerly-refreshed AST cache attached to a [`ModelicaDocument`].
 ///
 /// Every mutation replaces this with a freshly-parsed cache so readers
@@ -223,7 +225,7 @@ impl ModelicaDocument {
 /// the pretty-printer in a follow-up commit; they will be expressed as
 /// span-based [`EditText`](Self::EditText) patches internally so
 /// surrounding formatting and comments stay intact.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum ModelicaOp {
     /// Replace the entire source buffer. The inverse is another
@@ -245,6 +247,32 @@ pub enum ModelicaOp {
         /// Replacement text. May be shorter or longer than `range.len()`.
         replacement: String,
     },
+    /// Append a new component declaration to the body of `class`.
+    ///
+    /// Insertion point is chosen AST-aware: just before the
+    /// `equation`/`algorithm` keyword if the class has one, otherwise
+    /// just before `end ClassName;`. The decl is rendered via
+    /// [`crate::pretty::component_decl`] and spliced as an [`EditText`]
+    /// internally, so the inverse is a straightforward deletion
+    /// (`EditText` with empty replacement).
+    AddComponent {
+        /// Target class name (must be a top-level class today — nested
+        /// class support is a follow-up). Case-sensitive.
+        class: String,
+        /// Declaration payload. See [`pretty::ComponentDecl`].
+        decl: ComponentDecl,
+    },
+    /// Append a new `connect(...)` equation inside `class`'s equation
+    /// section. Creates an `equation` section if one does not exist.
+    ///
+    /// Rendered via [`crate::pretty::connect_equation`] and spliced as
+    /// an [`EditText`] internally; inverse is the matching deletion.
+    AddConnection {
+        /// Target class name (top-level today).
+        class: String,
+        /// Equation payload. See [`pretty::ConnectEquation`].
+        eq: ConnectEquation,
+    },
 }
 
 impl DocumentOp for ModelicaOp {}
@@ -262,6 +290,20 @@ impl Document for ModelicaDocument {
 
     fn apply(&mut self, op: Self::Op) -> Result<Self::Op, DocumentError> {
         match op {
+            ModelicaOp::AddComponent { class, decl } => {
+                let patch = compute_add_component_patch(&self.source, &self.ast, &class, &decl)?;
+                self.apply(ModelicaOp::EditText {
+                    range: patch.0,
+                    replacement: patch.1,
+                })
+            }
+            ModelicaOp::AddConnection { class, eq } => {
+                let patch = compute_add_connection_patch(&self.source, &self.ast, &class, &eq)?;
+                self.apply(ModelicaOp::EditText {
+                    range: patch.0,
+                    replacement: patch.1,
+                })
+            }
             ModelicaOp::ReplaceSource { new } => {
                 let old = std::mem::replace(&mut self.source, new);
                 self.generation = self.generation.saturating_add(1);
@@ -297,6 +339,137 @@ impl Document for ModelicaDocument {
             }
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// AST-level op helpers
+// ---------------------------------------------------------------------------
+//
+// These functions turn a high-level AST-level op request into a concrete
+// `(range, replacement)` text patch, using the cached AST's token spans
+// to locate insertion points. They never mutate the document directly —
+// apply() delegates to `EditText`, which gives us uniform undo behavior
+// and keeps all source mutation on one code path.
+//
+// Today we only support top-level classes (looked up by name in
+// `StoredDefinition::classes`). Nested classes, qualified paths, and
+// more surgical ops (SetParameter, Remove*, SetPlacement, SetLine) are
+// deliberate follow-ups.
+
+/// Resolve a top-level class by name, producing a useful error if the
+/// AST is in a parse-error state or the class isn't present.
+fn resolve_class<'a>(
+    ast: &'a AstCache,
+    class: &str,
+) -> Result<&'a rumoca_session::parsing::ast::ClassDef, DocumentError> {
+    let stored = match &ast.result {
+        Ok(s) => s.as_ref(),
+        Err(msg) => {
+            return Err(DocumentError::ValidationFailed(format!(
+                "cannot apply AST op while source has a parse error: {}",
+                msg
+            )));
+        }
+    };
+    stored.classes.get(class).ok_or_else(|| {
+        DocumentError::ValidationFailed(format!("class `{}` not found in document", class))
+    })
+}
+
+/// Return the byte offset of the start of the line containing `byte_pos`.
+/// Used to splice whole lines instead of mid-line inserts — keeps the
+/// resulting source readable and the patch ranges easy to reason about.
+fn line_start_byte(source: &str, byte_pos: usize) -> usize {
+    source[..byte_pos.min(source.len())]
+        .rfind('\n')
+        .map(|i| i + 1)
+        .unwrap_or(0)
+}
+
+/// Compute the text patch for `AddComponent`.
+///
+/// Insertion point (first match wins):
+///   1. start of the line containing `equation` / `initial equation` /
+///      `algorithm` / `initial algorithm` keyword, whichever appears first;
+///   2. start of the line containing the `end ClassName;` clause.
+///
+/// Returns the patch as `(empty_range_at_insertion_point, rendered_decl)`.
+fn compute_add_component_patch(
+    source: &str,
+    ast: &AstCache,
+    class: &str,
+    decl: &ComponentDecl,
+) -> Result<(Range<usize>, String), DocumentError> {
+    let class_def = resolve_class(ast, class)?;
+    let insertion_byte = class_section_insertion_point(class_def).ok_or_else(|| {
+        DocumentError::ValidationFailed(format!(
+            "could not locate insertion point in class `{}`",
+            class
+        ))
+    })?;
+    let line_start = line_start_byte(source, insertion_byte);
+    Ok((line_start..line_start, pretty::component_decl(decl)))
+}
+
+/// Compute the text patch for `AddConnection`.
+///
+/// If the class has an `equation` section, insert the connect equation at
+/// the start of the `end` line (appending to the section). If not, insert
+/// `equation\n<connect>\n` at the `end` line so a fresh section is created.
+fn compute_add_connection_patch(
+    source: &str,
+    ast: &AstCache,
+    class: &str,
+    eq: &ConnectEquation,
+) -> Result<(Range<usize>, String), DocumentError> {
+    let class_def = resolve_class(ast, class)?;
+
+    let end_name_byte = class_def
+        .end_name_token
+        .as_ref()
+        .map(|t| t.location.start as usize)
+        .ok_or_else(|| {
+            DocumentError::ValidationFailed(format!(
+                "class `{}` has no `end` clause location",
+                class
+            ))
+        })?;
+    let end_line_start = line_start_byte(source, end_name_byte);
+
+    let connect_line = pretty::connect_equation(eq);
+    let replacement = if class_def.equation_keyword.is_some() {
+        connect_line
+    } else {
+        format!("equation\n{}", connect_line)
+    };
+
+    Ok((end_line_start..end_line_start, replacement))
+}
+
+/// Locate the best byte position to insert a new component declaration
+/// into a class — just before the first body-section keyword, or if none
+/// exists, just before the class's `end` clause.
+fn class_section_insertion_point(
+    class_def: &rumoca_session::parsing::ast::ClassDef,
+) -> Option<usize> {
+    let keyword_positions = [
+        class_def.equation_keyword.as_ref(),
+        class_def.initial_equation_keyword.as_ref(),
+        class_def.algorithm_keyword.as_ref(),
+        class_def.initial_algorithm_keyword.as_ref(),
+    ];
+    let earliest_keyword = keyword_positions
+        .into_iter()
+        .flatten()
+        .map(|t| t.location.start as usize)
+        .min();
+    if let Some(pos) = earliest_keyword {
+        return Some(pos);
+    }
+    class_def
+        .end_name_token
+        .as_ref()
+        .map(|t| t.location.start as usize)
 }
 
 #[cfg(test)]
@@ -495,5 +668,161 @@ mod tests {
         // Unchanged on error.
         assert_eq!(host.document().source(), "model Empty end Empty;\n");
         assert_eq!(host.generation(), 0);
+    }
+
+    // ------------------------------------------------------------------
+    // AST-level ops: AddComponent / AddConnection
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn add_component_appends_before_end_when_no_equation_section() {
+        let mut host = DocumentHost::new(ModelicaDocument::new(
+            DocumentId::new(1),
+            "model M\n  Real a;\nend M;\n".to_string(),
+        ));
+        host.apply(ModelicaOp::AddComponent {
+            class: "M".into(),
+            decl: ComponentDecl {
+                type_name: "Real".into(),
+                name: "b".into(),
+                modifications: vec![],
+                placement: None,
+            },
+        })
+        .unwrap();
+        assert_eq!(
+            host.document().source(),
+            "model M\n  Real a;\n  Real b;\nend M;\n"
+        );
+        // AST cache must reflect the new component.
+        let ast = host.document().ast().ast().expect("parse ok");
+        assert!(ast.classes.get("M").unwrap().components.contains_key("b"));
+    }
+
+    #[test]
+    fn add_component_inserts_before_equation_section() {
+        let mut host = DocumentHost::new(ModelicaDocument::new(
+            DocumentId::new(1),
+            "model M\n  Real a;\nequation\n  a = 1;\nend M;\n".to_string(),
+        ));
+        host.apply(ModelicaOp::AddComponent {
+            class: "M".into(),
+            decl: ComponentDecl {
+                type_name: "Real".into(),
+                name: "b".into(),
+                modifications: vec![],
+                placement: None,
+            },
+        })
+        .unwrap();
+        assert_eq!(
+            host.document().source(),
+            "model M\n  Real a;\n  Real b;\nequation\n  a = 1;\nend M;\n"
+        );
+    }
+
+    #[test]
+    fn add_component_is_invertible() {
+        let original = "model M\n  Real a;\nend M;\n";
+        let mut host = DocumentHost::new(ModelicaDocument::new(
+            DocumentId::new(1),
+            original.to_string(),
+        ));
+        host.apply(ModelicaOp::AddComponent {
+            class: "M".into(),
+            decl: ComponentDecl {
+                type_name: "Real".into(),
+                name: "b".into(),
+                modifications: vec![],
+                placement: None,
+            },
+        })
+        .unwrap();
+        host.undo().unwrap();
+        assert_eq!(host.document().source(), original);
+    }
+
+    #[test]
+    fn add_component_errors_on_unknown_class() {
+        let mut host = DocumentHost::new(ModelicaDocument::new(
+            DocumentId::new(1),
+            "model M end M;\n".to_string(),
+        ));
+        let err = host
+            .apply(ModelicaOp::AddComponent {
+                class: "Other".into(),
+                decl: ComponentDecl {
+                    type_name: "Real".into(),
+                    name: "x".into(),
+                    modifications: vec![],
+                    placement: None,
+                },
+            })
+            .unwrap_err();
+        assert!(matches!(err, DocumentError::ValidationFailed(_)));
+        assert_eq!(host.generation(), 0);
+    }
+
+    #[test]
+    fn add_connection_appends_to_existing_equation_section() {
+        let mut host = DocumentHost::new(ModelicaDocument::new(
+            DocumentId::new(1),
+            "model M\n  Real a;\n  Real b;\nequation\n  a = 1;\nend M;\n".to_string(),
+        ));
+        host.apply(ModelicaOp::AddConnection {
+            class: "M".into(),
+            eq: ConnectEquation {
+                from: crate::pretty::PortRef::new("a", "p"),
+                to: crate::pretty::PortRef::new("b", "n"),
+                line: None,
+            },
+        })
+        .unwrap();
+        assert_eq!(
+            host.document().source(),
+            "model M\n  Real a;\n  Real b;\nequation\n  a = 1;\n  connect(a.p, b.n);\nend M;\n"
+        );
+    }
+
+    #[test]
+    fn add_connection_creates_equation_section_when_missing() {
+        let mut host = DocumentHost::new(ModelicaDocument::new(
+            DocumentId::new(1),
+            "model M\n  Real a;\n  Real b;\nend M;\n".to_string(),
+        ));
+        host.apply(ModelicaOp::AddConnection {
+            class: "M".into(),
+            eq: ConnectEquation {
+                from: crate::pretty::PortRef::new("a", "p"),
+                to: crate::pretty::PortRef::new("b", "n"),
+                line: None,
+            },
+        })
+        .unwrap();
+        assert_eq!(
+            host.document().source(),
+            "model M\n  Real a;\n  Real b;\nequation\n  connect(a.p, b.n);\nend M;\n"
+        );
+    }
+
+    #[test]
+    fn add_component_rejects_when_source_has_parse_error() {
+        let mut host = doc();
+        host.apply(ModelicaOp::ReplaceSource {
+            new: "model M Real x end M;".into(),
+        })
+        .unwrap();
+        let err = host
+            .apply(ModelicaOp::AddComponent {
+                class: "M".into(),
+                decl: ComponentDecl {
+                    type_name: "Real".into(),
+                    name: "y".into(),
+                    modifications: vec![],
+                    placement: None,
+                },
+            })
+            .unwrap_err();
+        assert!(matches!(err, DocumentError::ValidationFailed(_)));
     }
 }
