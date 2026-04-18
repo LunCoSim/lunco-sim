@@ -1443,11 +1443,73 @@ fn import_model_to_diagram(source: &str) -> Option<VisualDiagram> {
     // Convert ComponentGraph → VisualDiagram
     let mut diagram = VisualDiagram::default();
 
-    // Build a lookup from component type name → MSLComponentDef
+    // MSL lookup table — keyed by the fully-qualified Modelica path
+    // (e.g. `"Modelica.Blocks.Continuous.Integrator"`).
+    //
+    // Type resolution follows MLS §5.3: a component's `type_name` is
+    // matched against its containing class's import table and any
+    // enclosing scopes. Our pretty-printer always emits fully-qualified
+    // paths, so that route resolves directly. For short-name
+    // references we build a per-class import map from the parsed AST
+    // below.
+    //
+    // Short-name-tail heuristics (e.g. `Integrator` → first MSL entry
+    // whose path ends in `.Integrator`) are *not* applied — MSL has
+    // multiple classes sharing short names (for example,
+    // `Modelica.Blocks.Continuous.Integrator` vs.
+    // `Modelica.Blocks.Continuous.Integrator` nested variants), and
+    // matching by suffix would silently pick the wrong one. If a
+    // reference doesn't resolve via scope or path, we surface it as
+    // unresolved (skipped) rather than guess.
     let msl_lib = msl_component_library();
-    let msl_lookup: HashMap<&str, &MSLComponentDef> = msl_lib.iter()
-        .map(|c| (c.name.as_str(), c))
+    let msl_lookup_by_path: HashMap<&str, &MSLComponentDef> = msl_lib.iter()
+        .map(|c| (c.msl_path.as_str(), c))
         .collect();
+
+    // Build the active class's import map so we can resolve
+    // short-name type references the way OpenModelica's frontend
+    // does. We re-parse the source here (cheap — the cache is warm
+    // from the component-graph builder above) so we can walk
+    // `ClassDef.imports` for each top-level class.
+    //
+    // Format:  short_name → fully_qualified_path
+    // Covers `Qualified` (C → A.B.C), `Renamed` (D = A.B.C → D → A.B.C),
+    // and `Selective` (import A.B.{C,D} → C → A.B.C, D → A.B.D).
+    // `Unqualified` (A.B.*) is not expanded here because it would
+    // require a second pass against the whole MSL index; that's a
+    // separate follow-up.
+    let mut imports_by_short: HashMap<String, String> = HashMap::new();
+    if let Ok(ast) = rumoca_phase_parse::parse_to_ast(source, "diagram-import.mo") {
+        for (_class_name, class_def) in ast.classes.iter() {
+            for imp in &class_def.imports {
+                use rumoca_session::parsing::ast::Import;
+                match imp {
+                    Import::Qualified { path, .. } => {
+                        let full = path.to_string();
+                        if let Some(last) = full.rsplit('.').next() {
+                            imports_by_short.insert(last.to_string(), full.clone());
+                        }
+                    }
+                    Import::Renamed { alias, path, .. } => {
+                        imports_by_short.insert(alias.text.to_string(), path.to_string());
+                    }
+                    Import::Selective { path, names, .. } => {
+                        let base = path.to_string();
+                        for name in names {
+                            imports_by_short.insert(
+                                name.text.to_string(),
+                                format!("{}.{}", base, name.text),
+                            );
+                        }
+                    }
+                    Import::Unqualified { .. } => {
+                        // `import Pkg.*;` — expansion needs the full
+                        // package contents. Deferred.
+                    }
+                }
+            }
+        }
+    }
 
     // Place nodes in a grid layout (fallback for unannotated components)
     let node_spacing_x = 200.0;
@@ -1463,11 +1525,22 @@ fn import_model_to_diagram(source: &str) -> Option<VisualDiagram> {
         // Extract short name from qualified_name (e.g., "RC_Circuit.R1" → "R1")
         let short_name = node.qualified_name.split('.').last().unwrap_or(&node.qualified_name);
 
-        // Try to find matching MSL component definition
+        // Scope-aware type lookup:
+        //   1. `type_name` looks like a fully-qualified path → match directly.
+        //   2. `type_name` is a single segment → consult the class's
+        //      import table; if present, substitute the resolved full
+        //      path and look that up.
+        //   3. Otherwise: unresolved. Skip (same as an OM compile error
+        //      on an unknown type, but non-fatal here).
         let type_name = node.meta.get("type_name").map(|s| s.as_str()).unwrap_or("");
-        let component_def = msl_lookup.get(type_name)
-            .or_else(|| msl_lookup.get(short_name))
-            .cloned();
+        let resolved_path: Option<&str> = if type_name.contains('.') {
+            Some(type_name)
+        } else if let Some(full) = imports_by_short.get(type_name) {
+            Some(full.as_str())
+        } else {
+            None
+        };
+        let component_def = resolved_path.and_then(|p| msl_lookup_by_path.get(p).cloned());
 
         if let Some(def) = component_def {
             let mut pos = None;

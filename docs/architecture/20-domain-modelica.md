@@ -84,49 +84,191 @@ FixedUpdate:
 
 See [`22-domain-cosim.md`](22-domain-cosim.md) for the full pipeline.
 
-## 5. Document System integration (planned)
+## 5. Document System integration
 
-The current `ModelicaModel` component is an *ad-hoc* hybrid of document
-state and runtime state. Under the Document System design
-([`10-document-system.md`](10-document-system.md)), this splits:
+`ModelicaDocument` implements the Document System trait
+(see [`10-document-system.md`](10-document-system.md)) and is the
+authoritative in-memory representation of a `.mo` file.
+
+### 5.1 Canonical state: text + cached AST
+
+Source text is canonical. The AST is a **cached projection**,
+refreshed eagerly after every mutation so panels that need structural
+access (diagram, parameter inspector, placement extractor) can read
+`doc.ast()` without reparsing.
 
 ```rust
-// Tier 1: canonical document (future)
 pub struct ModelicaDocument {
-    ast: ModelicaAst,                 // via rumoca-parser
+    id: DocumentId,
+    source: String,                    // canonical
+    ast: Arc<AstCache>,                // derived, refreshed per op
     generation: u64,
+    origin: DocumentOrigin,
+    last_saved_generation: Option<u64>,
+    changes: VecDeque<(u64, ModelicaChange)>,
 }
 
-// Tier 2: runtime handle
-#[derive(Component)]
-pub struct ModelicaModel {
-    pub document_id: DocumentId,      // points at the ModelicaDocument
-    pub session_id: u64,
-    pub paused: bool,
-    pub is_stepping: bool,
-    pub parameters: HashMap<String, f64>,  // per-instance overrides
-    pub inputs: HashMap<String, f64>,
-    pub variables: HashMap<String, f64>,
-}
-
-// Tier 1: typed ops
-pub enum ModelicaOp {
-    AddComponent   { name, type_name, pos },
-    RemoveComponent{ name },
-    AddConnection  { from: (String,String), to: (String,String) },
-    RemoveConnection{ from, to },
-    SetParameter   { component, param, value },
-    RenameComponent{ old, new },
-    MoveComponent  { name, pos },
-    SetIcon        { name, icon_spec },
-    SetModelKind   { kind },
-    AddImport      { package },
+pub struct AstCache {
+    pub generation: u64,
+    pub result: Result<Arc<StoredDefinition>, String>,
 }
 ```
 
-Every editing action in the Diagram, Code Editor, or Parameter Inspector
-produces a `ModelicaOp` that applies to the `ModelicaDocument`. All views
-re-render from the same AST — diagram and code stay in sync automatically.
+Text is canonical (not AST) because:
+
+- Comments and hand-chosen formatting must round-trip losslessly.
+  A code editor that reformats the file on every parameter tweak is
+  not usable — IDE-style edits require that only *edited regions*
+  change text, not the whole file.
+- AI tooling (e.g. Claude's `Edit` / `Write`) operates on text ranges.
+  A text-canonical document is compatible with those flows out of the
+  box; an AST-canonical one would require a dedicated text adapter.
+
+The trade-off is that we need **span-aware AST ops** — see § 5.3.
+
+### 5.2 Op set
+
+`ModelicaOp` is `#[non_exhaustive]` — all variants are implemented and
+cover the full Phase α editing surface:
+
+| Op | Effect | Used by |
+|----|--------|---------|
+| `ReplaceSource { new }` | Full-buffer swap | Coarse text commits |
+| `EditText { range, replacement }` | Byte-range replacement | Granular text edits |
+| `AddComponent { class, decl }` | Insert a new component declaration | Diagram: drag from palette |
+| `RemoveComponent { class, name }` | Delete a component's full declaration | Diagram: right-click delete |
+| `AddConnection { class, eq }` | Insert a `connect(...)` equation | Diagram: wire ports |
+| `RemoveConnection { class, from, to }` | Delete a `connect(...)` equation | Diagram: disconnect wire |
+| `SetPlacement { class, name, placement }` | Set/replace the `Placement` annotation | Diagram: drag-to-move |
+| `SetParameter { class, component, param, value }` | Replace one parameter modifier | Parameter inspector |
+
+`class` accepts qualified dotted paths (`Pkg.Inner`,
+`Modelica.Blocks.Continuous.Integrator`) so ops work on nested classes
+too.
+
+### 5.3 Apply pipeline
+
+Every op funnels through a single pure function
+`op_to_patch(source, ast, op) -> (range, replacement, change)` and a
+single mutation path `apply_patch(range, replacement, change)` that:
+
+1. Validates bounds + char-boundary alignment
+2. Splices the source buffer
+3. Bumps generation, refreshes `AstCache`
+4. Pushes the structured change onto the ring buffer
+5. Returns an `EditText` inverse carrying the exact removed bytes
+
+All ops — including AST-level ops — are implemented as **span-locate +
+text patch**:
+
+- `AddComponent` → locate insertion point via `ClassDef.equation_keyword` /
+  `end_name_token` tokens, render the decl via the pretty-printer,
+  splice
+- `RemoveComponent` → use `Component.location` for the full decl span,
+  extend through the terminating `;` using a paren-aware scanner
+- `RemoveConnection` → find the matching `Equation::Connect` by port
+  pair (order-insensitive, Modelica `connect` is symmetric), scan
+  backward to the `connect` keyword, forward to `;`
+- `SetPlacement` → locate the component's annotation span, find the
+  `Placement(...)` sub-call at paren depth 0, replace in place;
+  sibling annotations (Dialog, Documentation) are preserved
+- `SetParameter` → locate the component's modifications list, parse
+  entries at depth 0, replace `name = value` or append as needed
+
+This keeps all source mutation on one code path (uniform undo,
+uniform change emission) and means every op produces a byte-level
+minimal patch — comments and formatting outside the edited span stay
+intact.
+
+### 5.4 Pretty-printer for new nodes
+
+The pretty-printer only renders **new** nodes being spliced in. It is
+deliberately *not* a full AST round-trip serialiser — existing nodes
+live in the source text, never re-emitted.
+
+```rust
+pub struct PrettyOptions {
+    pub indent: String,
+    pub continuation_indent: String,
+}
+PrettyOptions::tabs()       // "\t" / "\t\t" — workbench default
+PrettyOptions::two_space()  // "  " / "    " — library default + tests
+```
+
+The workbench installs tab indentation at startup (`ModelicaPlugin::build()`).
+Options are process-wide so every op path (diagram panel, scripts,
+tests) produces consistent output. Annotations go on their own
+continuation line so generated source stays readable:
+
+```modelica
+	Modelica.Blocks.Continuous.Integrator I1
+		annotation(Placement(transformation(extent={{-10,-10},{10,10}})));
+
+	connect(I1.y, Gain1.u)
+		annotation(Line(points={{0,0},{10,10}}));
+```
+
+### 5.5 Structured change events
+
+After every successful mutation the document pushes a
+`ModelicaChange` onto a bounded ring buffer
+(`CHANGE_HISTORY_CAPACITY = 256`). Consumers poll via
+`doc.changes_since(last_seen_generation)`:
+
+```rust
+pub enum ModelicaChange {
+    TextReplaced,               // text-level ops + undo/redo
+    ComponentAdded   { class, name },
+    ComponentRemoved { class, name },
+    ConnectionAdded  { class, from: PortRef, to: PortRef },
+    ConnectionRemoved{ class, from: PortRef, to: PortRef },
+    PlacementChanged { class, component, placement },
+    ParameterChanged { class, component, param, value },
+}
+```
+
+`changes_since` returns `None` when the consumer has fallen further
+behind than the retention window — caller must then do a full rebuild
+from the current AST. Panels (diagram, inspector) use this to patch
+their render state incrementally rather than rebuild on every frame.
+
+### 5.6 Type resolution (MLS §5.3)
+
+Modelica's type lookup follows the rules in
+[Modelica Language Spec §5.3 — Static Name Lookup](https://specification.modelica.org/maint/3.7/class-predefined-types-and-declarations.html#static-name-lookup).
+Our implementation (used by the diagram panel's AST→snarl rebuild and
+by the class resolver on AST-level ops) follows a subset of those
+rules:
+
+1. **Fully-qualified path** — a reference containing `.` (e.g.
+   `Modelica.Blocks.Continuous.Integrator`) is treated as absolute
+   and matched directly against the MSL index by path.
+2. **Simple name with import** — a reference without `.` is resolved
+   against the containing class's `import` declarations:
+   - `import A.B.C;` → `C` → `A.B.C`
+   - `import D = A.B.C;` → `D` → `A.B.C`
+   - `import A.B.{C, D};` → `C` → `A.B.C`, `D` → `A.B.D`
+3. **Unresolved** → the reference is surfaced as a skipped component
+   (non-fatal in the diagram rebuild; would be a compile error in
+   rumoca's type checker).
+
+**Deliberately not implemented (yet):**
+
+- `import A.B.*;` (unqualified) expansion — needs an MSL index walk
+  for every `A.B` child
+- Enclosing-class scope lookup (MLS §5.3.1 step 2) — flat top-level
+  package is the only source of types today
+- Short-name-tail heuristics (e.g. match `Integrator` to the first
+  MSL entry whose path ends in `.Integrator`) — rejected as unsafe;
+  multiple MSL classes share short names across branches, so a
+  suffix match picks whichever loaded first. Not what the Modelica
+  spec means by name resolution.
+
+See
+[`../../crates/lunco-modelica/src/ui/panels/diagram.rs`](../../crates/lunco-modelica/src/ui/panels/diagram.rs)
+(`import_model_to_diagram`) for the call site, and
+[`../../crates/lunco-modelica/src/document.rs`](../../crates/lunco-modelica/src/document.rs)
+(`resolve_class`) for the class-path resolver used by AST ops.
 
 ## 6. The `output` convention (rumoca workaround)
 
@@ -198,10 +340,57 @@ Today (pre-Document-System) the workflow is rougher:
 
 ## 9. The Modelica diagram editor
 
-The diagram panel (`lunco-modelica/src/ui/panels/diagram.rs`, ~1700 lines)
-is an **egui-snarl-based** visual editor for Modelica models. Key features:
+The diagram panel (`lunco-modelica/src/ui/panels/diagram.rs`) is an
+**egui-snarl-based** visual editor. Under Phase α the panel is a thin
+*view* over a `ModelicaDocument` — the document is the authoritative
+state, snarl is a rendered projection.
 
-- MSL palette on the left (drag components onto canvas)
+```
+         ModelicaDocument (source + cached AST)
+                   ▲             │
+         AST ops   │             │  changes_since(gen)
+  (drag, connect,  │             │  (TextReplaced,
+   delete, move,   │             │   ComponentAdded, …)
+   paramedit)      │             ▼
+                  DiagramPanel ◀──── sync_from_document()
+                   │
+                   ▼
+                  Snarl<DiagramNode>  (rendered, snarl owns pan/zoom/selection)
+```
+
+### 9.1 Sync flow
+
+Each frame:
+
+1. **Open-model rebind** — if `WorkbenchState.open_model.doc` changed,
+   `DiagramState::bind_document` resets the change-stream cursor so
+   the next sync does a clean rebuild.
+2. **Document → snarl sync** — if `doc.generation() != last_seen_gen`,
+   re-parse the source and rebuild snarl (synchronous — parse of a
+   typical Modelica model is sub-millisecond). No more async
+   `AsyncComputeTaskPool` / "Analyzing…" spinner.
+3. **Snarl render** — user interaction happens in snarl; it owns
+   pan/zoom/selection/drag state between frames.
+4. **User action → op emission** —
+   - Right-click Add Component → `AddComponent`
+   - Right-click Delete → `RemoveComponent`
+   - Wire draw/disconnect → detected via frame-to-frame wire-set
+     diff → `AddConnection` / `RemoveConnection`
+   - Drag-to-move → detected via frame-to-frame position diff →
+     `SetPlacement`
+5. **Apply + echo suppression** — pending ops are applied to the
+   `DocumentHost`, `last_seen_gen` is advanced past our own
+   generations so step 2 doesn't rebuild in response to edits we
+   just made.
+
+Text edits in the Code Editor flow through the same pipe: the
+editor's debounced commit (≈ 350 ms idle or focus-loss) calls
+`checkpoint_source` → `ReplaceSource`, the generation bumps past
+`last_seen_gen`, and the diagram rebuilds on its next frame.
+
+### 9.2 Visual details
+
+- MSL palette on the left (right-click menu adds components)
 - Custom component body rendering in `show_body()` — zigzag for resistor,
   parallel plates for capacitor, blue circles for electrical pins
 - Small port dots rather than labeled rectangles
@@ -266,12 +455,11 @@ a parameter value → the UI updates the hashmap but doesn't send
 the old value. Fixed in new `ModelicaInspectorPanel`; legacy panel to be
 retired.
 
-**Diagram ↔ Code disconnect**: the Diagram and Code editor don't observe
-the same source. Edits in one don't propagate to the other; opening
-`Battery.mo` from the library browser shows it in the Code editor but NOT
-the Diagram. Fixed by the Document System migration
-([`10-document-system.md`](10-document-system.md)) — both panels become
-`DocumentView<ModelicaDocument>`.
+~~**Diagram ↔ Code disconnect**~~ — **resolved in Phase α**. The
+Diagram and Code editor now share a single `ModelicaDocument`. Edits
+in either panel flow through the document and update the other on
+the next frame. Opening a file from the Library Browser populates
+both views from the same source. See § 5 and § 9 above.
 
 **Diagram edges are directional** (acausal broken): egui-snarl enforces
 `OutPin → InPin`. Modelica electrical connectors are acausal. Current
@@ -327,11 +515,26 @@ fork (unlocks acausal connectors).
 
 ## 13. See also
 
-- [`../../crates/lunco-modelica/`](../../crates/lunco-modelica/) — source
+### Source
+
+- [`../../crates/lunco-modelica/`](../../crates/lunco-modelica/) — crate root
+- [`../../crates/lunco-modelica/src/document.rs`](../../crates/lunco-modelica/src/document.rs) — `ModelicaDocument`, op set, apply pipeline, span-based patch helpers, qualified-path `resolve_class`
+- [`../../crates/lunco-modelica/src/pretty.rs`](../../crates/lunco-modelica/src/pretty.rs) — subset pretty-printer, `PrettyOptions`
+- [`../../crates/lunco-modelica/src/ui/panels/diagram.rs`](../../crates/lunco-modelica/src/ui/panels/diagram.rs) — diagram panel, sync-from-document, wire/position diffing, scope-aware type lookup
+- [`../../crates/lunco-modelica/src/ui/panels/code_editor.rs`](../../crates/lunco-modelica/src/ui/panels/code_editor.rs) — code editor, debounced commit (`EDIT_DEBOUNCE_SEC`), word-wrap toggle
+
+### Adjacent docs
+
 - [`../../crates/lunco-cosim/README.md`](../../crates/lunco-cosim/README.md) — cosim-level engineering docs
-- [`10-document-system.md`](10-document-system.md) — the data model Modelica will migrate into
+- [`10-document-system.md`](10-document-system.md) — shared Document System foundation
 - [`13-twin-and-workflow.md`](13-twin-and-workflow.md) — how Modelica files live inside a Twin
 - [`22-domain-cosim.md`](22-domain-cosim.md) — cosim pipeline ordering
 - [`23-domain-environment.md`](23-domain-environment.md) — how environment (gravity, atmosphere) flows into Modelica inputs
 - [`24-domain-sysml.md`](24-domain-sysml.md) — SysML as the structural peer; references Modelica models as realizations
 - `specs/014-modelica-simulation` — detailed spec
+
+### External references
+
+- [Modelica Language Specification §5.3 — Static Name Lookup](https://specification.modelica.org/maint/3.7/class-predefined-types-and-declarations.html#static-name-lookup) — the scope/import resolution rules our type lookup follows
+- [Modelica Language Specification §18 — Annotations](https://specification.modelica.org/maint/3.7/annotations.html) — `Placement`, `Line`, `Icon` annotation shapes our pretty-printer emits
+- [rumoca on GitHub](https://github.com/LunCoSim/rumoca) — the parser + runtime crate family

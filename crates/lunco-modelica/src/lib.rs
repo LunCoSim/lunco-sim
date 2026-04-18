@@ -153,6 +153,13 @@ impl Plugin for ModelicaPlugin {
     fn build(&self, app: &mut App) {
         build_modelica_core(app);
         app.add_plugins(ui::ModelicaUiPlugin);
+        // Install the user-facing indentation default for the
+        // pretty-printer. The library-level default is two-space so
+        // pure-Rust tests have predictable output; the workbench UI
+        // wants tabs (matches Dymola / MSL hand-authored style).
+        // Users can override at runtime via a settings panel or
+        // script by calling `pretty::set_options` again.
+        pretty::set_options(pretty::PrettyOptions::tabs());
     }
 }
 

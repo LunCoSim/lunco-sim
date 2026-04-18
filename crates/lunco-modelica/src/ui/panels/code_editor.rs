@@ -27,7 +27,26 @@ pub struct EditorBufferState {
     /// (default) long lines stay on one line and the view scrolls
     /// horizontally — mirroring VS Code's default "Word Wrap: Off".
     pub word_wrap: bool,
+    /// egui timestamp (in seconds, from `ctx.input(|i| i.time)`) of
+    /// the last keystroke that diverged `text` from the bound
+    /// document's source. `None` when the buffer is already in sync.
+    ///
+    /// Used to debounce the text→document commit so the diagram / AST
+    /// sync fires on an idle gap rather than on every keystroke —
+    /// VS Code, rust-analyzer, and every LSP client do the same
+    /// thing. Each keystroke refreshes this timestamp; once the idle
+    /// threshold (`EDIT_DEBOUNCE_SEC`) has elapsed without further
+    /// typing, the buffer is checkpointed into the document in one
+    /// shot.
+    pub pending_commit_at: Option<f64>,
 }
+
+/// Idle window (seconds) after the last keystroke before the editor
+/// commits its buffer into the document. Small enough to feel
+/// responsive in the diagram view, long enough to coalesce a burst of
+/// typing into a single `ReplaceSource` op (and therefore one undo
+/// entry, not one per character).
+pub const EDIT_DEBOUNCE_SEC: f64 = 0.35;
 
 impl Default for EditorBufferState {
     fn default() -> Self {
@@ -39,6 +58,7 @@ impl Default for EditorBufferState {
             detected_name: None,
             cached_galley: None,
             word_wrap: false,
+            pending_commit_at: None,
         }
     }
 }
@@ -266,6 +286,10 @@ impl Panel for CodeEditorPanel {
             buffer_commit = true;
         }
 
+        // Capture the current egui time BEFORE we mutate the buffer
+        // state — used to stamp the pending-commit timestamp below.
+        let now = ui.ctx().input(|i| i.time);
+
         if buffer_changed {
             let mut buf_state = world.resource_mut::<EditorBufferState>();
             buf_state.text = new_text.clone();
@@ -278,24 +302,55 @@ impl Panel for CodeEditorPanel {
             }
             buf_state.line_starts = new_starts.into();
             buf_state.detected_name = extract_model_name(&buf_state.text);
+            // Mark the buffer as dirty vs. the document. The flush
+            // block below only commits once `now - pending_commit_at
+            // >= EDIT_DEBOUNCE_SEC`, so a burst of typing resets this
+            // timestamp on every keystroke and debounces cleanly
+            // into a single checkpoint at the end.
+            buf_state.pending_commit_at = Some(now);
 
             if let Some(mut state) = world.get_resource_mut::<WorkbenchState>() {
                 if state.editor_buffer != new_text {
                     state.editor_buffer = new_text;
                 }
             }
+
+            // Egui doesn't repaint a stationary UI on its own. When
+            // the user stops typing we still want the debounce timer
+            // to fire — schedule a wake-up just past the window.
+            ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(
+                EDIT_DEBOUNCE_SEC + 0.05,
+            ));
         }
 
-        // Commit the buffer into the Document on focus-loss. No-op when
-        // there's no backing document yet (the user is typing before any
-        // compile has produced an entity) — the existing "spawn fresh
-        // entity on Compile" path still handles that case.
-        if buffer_commit && !is_read_only {
+        // Decide whether to flush the pending buffer into the
+        // document this frame. Three trigger points:
+        //
+        //   1. `buffer_commit` (focus-loss): flush immediately — the
+        //      user has clearly finished editing this session.
+        //   2. Debounce elapsed: `now - pending_commit_at >=
+        //      EDIT_DEBOUNCE_SEC`. The user has been idle long
+        //      enough; coalesce their typing into one checkpoint.
+        //   3. Nothing pending: no-op.
+        //
+        // `checkpoint_source` is idempotent when the content hasn't
+        // changed, so duplicate triggers are safe.
+        let should_flush = {
+            let buf = world.resource::<EditorBufferState>();
+            match (buffer_commit, buf.pending_commit_at) {
+                (true, _) => buf.pending_commit_at.is_some(),
+                (false, Some(t)) => now - t >= EDIT_DEBOUNCE_SEC,
+                (false, None) => false,
+            }
+        };
+
+        if should_flush && !is_read_only {
             if let Some(doc) = doc_id {
                 let committed = world.resource::<EditorBufferState>().text.clone();
                 world
                     .resource_mut::<ModelicaDocumentRegistry>()
                     .checkpoint_source(doc, committed);
+                world.resource_mut::<EditorBufferState>().pending_commit_at = None;
             }
         }
     }
