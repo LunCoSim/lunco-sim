@@ -1,52 +1,93 @@
 //! `ModelicaDocument` — the Document System representation of one `.mo` file.
 //!
-//! # Status: live source-of-truth for Modelica text
+//! # Canonicality: source text, AST cached
+//!
+//! The Document owns the **source text** as its canonical state. Text is what
+//! the user types, what lives on disk, and what preserves comments + formatting
+//! losslessly — the things both a human code editor and an AI `Edit` tool
+//! depend on.
+//!
+//! Alongside the text, the Document caches a **parsed AST**
+//! ([`AstCache`]). The cache is refreshed eagerly after every mutation so
+//! panels that need structural access (diagram, parameter inspector,
+//! placement extractor) can read `doc.ast()` without reparsing. Parse
+//! failures are observable via [`AstCache::result`] — the cache is always
+//! present, but it may hold an error.
 //!
 //! Documents are keyed by [`lunco_doc::DocumentId`] inside
 //! [`ui::ModelicaDocumentRegistry`]. Every place that spawns a
-//! `ModelicaModel` entity (CodeEditor's Compile, the Diagram panel's
-//! auto-compile, `balloon_setup`, the workbench binaries) allocates a
-//! document in the registry and writes its id into
-//! [`crate::ModelicaModel::document`]. Later Compile / UpdateParameters
-//! calls checkpoint new source onto that id. The registry's
-//! `DocumentHost<ModelicaDocument>` is the single authority for model
-//! source — entities just hold references.
+//! `ModelicaModel` entity allocates a document in the registry and writes
+//! its id into [`crate::ModelicaModel::document`].
 //!
-//! Still outside the Document System:
+//! # Op set
 //!
-//! - **`EditorBufferState.text`** — the egui TextEdit working buffer. Keeps
-//!   per-keystroke edits responsive; committed into the Document on Compile.
-//! - **`WorkbenchState.open_model.source`** — the "current file" slot used
-//!   by the library browser to feed the Code view before any compile has
-//!   produced an entity. Separate concern; a future migration will unify it.
+//! Text-level ops (comfortable for human editors and AI text tools):
 //!
-//! # Op set today
+//! - [`ModelicaOp::ReplaceSource`] — coarse full-buffer swap. Used by
+//!   CodeEditor's Compile and by any caller that produces the whole new
+//!   source (e.g. template expansion).
+//! - [`ModelicaOp::EditText`] — byte-range replacement. Used for granular
+//!   text edits that should participate in undo/redo without losing
+//!   precision.
 //!
-//! Exactly one op: [`ModelicaOp::ReplaceSource`]. Coarse on purpose — it's
-//! enough to make CodeEditor participate in Document-level undo/redo and in
-//! the cross-panel change notification story (generation counter). Finer
-//! ops (granular text Insert/Delete, AST-level `AddComponent`,
-//! `SetParameter`, `AddConnection`) come when we need them.
+//! AST-level ops (planned for Task 4) will splice text via AST-node spans
+//! so structural edits from the diagram / parameter panels land as
+//! minimal text diffs, preserving surrounding formatting and comments.
 //!
-//! The inverse of `ReplaceSource { new }` is `ReplaceSource { new: old }`,
-//! where `old` is the source text as it was before the op applied.
+//! Inverses: [`ReplaceSource`](ModelicaOp::ReplaceSource)'s inverse carries
+//! the previous full source. [`EditText`](ModelicaOp::EditText)'s inverse
+//! is another `EditText` against the *new* range with the previous slice
+//! as replacement.
 
+use std::ops::Range;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use lunco_doc::{Document, DocumentError, DocumentId, DocumentOp, DocumentOrigin};
+use rumoca_phase_parse::parse_to_ast;
+use rumoca_session::parsing::ast::StoredDefinition;
+
+/// Eagerly-refreshed AST cache attached to a [`ModelicaDocument`].
+///
+/// Every mutation replaces this with a freshly-parsed cache so readers
+/// never observe a stale AST. Cheap to clone via `Arc`.
+#[derive(Debug, Clone)]
+pub struct AstCache {
+    /// Document generation at which this cache was produced.
+    pub generation: u64,
+    /// Parse outcome. `Ok` carries the parsed AST; `Err` carries a
+    /// human-readable parser diagnostic (preserved so panels can show
+    /// syntax errors without reparsing).
+    pub result: Result<Arc<StoredDefinition>, String>,
+}
+
+impl AstCache {
+    /// Parse `source` into a fresh cache at the given generation.
+    pub fn from_source(source: &str, generation: u64) -> Self {
+        let result = match parse_to_ast(source, "model.mo") {
+            Ok(ast) => Ok(Arc::new(ast)),
+            Err(e) => Err(e.to_string()),
+        };
+        Self { generation, result }
+    }
+
+    /// Shortcut: the parsed AST, if parsing succeeded.
+    pub fn ast(&self) -> Option<&StoredDefinition> {
+        self.result.as_ref().ok().map(|a| a.as_ref())
+    }
+}
 
 /// The canonical Document representation of one Modelica source file.
 ///
 /// Owns the source text + a [`DocumentOrigin`] describing where it
 /// came from (which drives save behavior, tab title, read-only
-/// badge). The parsed AST is **not** cached on the document today —
-/// callers continue to parse on demand via
-/// `crate::ast_extract::parse_to_ast` until a concrete caller makes
-/// caching worth the complexity (invalidation on every op).
+/// badge) + a parsed-AST cache ([`AstCache`]) refreshed eagerly after
+/// every mutation.
 #[derive(Debug, Clone)]
 pub struct ModelicaDocument {
     id: DocumentId,
     source: String,
+    ast: Arc<AstCache>,
     generation: u64,
     origin: DocumentOrigin,
     /// Generation at which the document was last persisted to disk.
@@ -81,9 +122,12 @@ impl ModelicaDocument {
         } else {
             Some(0)
         };
+        let source = source.into();
+        let ast = Arc::new(AstCache::from_source(&source, 0));
         Self {
             id,
-            source: source.into(),
+            source,
+            ast,
             generation: 0,
             origin,
             last_saved_generation,
@@ -93,6 +137,13 @@ impl ModelicaDocument {
     /// The current source text.
     pub fn source(&self) -> &str {
         &self.source
+    }
+
+    /// The cached parsed AST. Always present (refreshed after every
+    /// mutation), but the inner [`AstCache::result`] may carry a parse
+    /// error rather than a successful AST.
+    pub fn ast(&self) -> &AstCache {
+        &self.ast
     }
 
     /// Byte length of the source.
@@ -167,9 +218,11 @@ impl ModelicaDocument {
 
 /// The op type for [`ModelicaDocument`].
 ///
-/// Today contains exactly one variant. Additional ops (granular
-/// Insert/Delete text ops, then AST-level ops) are planned but deferred
-/// until a live panel needs them.
+/// Text-level ops land today. AST-level ops (`SetParameter`,
+/// `AddComponent`, `AddConnection`, `SetPlacement`, …) arrive alongside
+/// the pretty-printer in a follow-up commit; they will be expressed as
+/// span-based [`EditText`](Self::EditText) patches internally so
+/// surrounding formatting and comments stay intact.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ModelicaOp {
@@ -178,6 +231,19 @@ pub enum ModelicaOp {
     ReplaceSource {
         /// The new source text to install.
         new: String,
+    },
+    /// Replace a byte range with new text. Used by granular text
+    /// editors and by AST-level ops that splice at a span.
+    ///
+    /// The inverse is another `EditText` whose `range` covers the
+    /// newly-inserted text and whose `replacement` is the text that
+    /// was removed.
+    EditText {
+        /// Byte range in the current source buffer to replace.
+        /// Must fall on `char` boundaries.
+        range: Range<usize>,
+        /// Replacement text. May be shorter or longer than `range.len()`.
+        replacement: String,
     },
 }
 
@@ -197,10 +263,37 @@ impl Document for ModelicaDocument {
     fn apply(&mut self, op: Self::Op) -> Result<Self::Op, DocumentError> {
         match op {
             ModelicaOp::ReplaceSource { new } => {
-                // Move the old source out as the inverse — no cloning.
                 let old = std::mem::replace(&mut self.source, new);
                 self.generation = self.generation.saturating_add(1);
+                self.ast = Arc::new(AstCache::from_source(&self.source, self.generation));
                 Ok(ModelicaOp::ReplaceSource { new: old })
+            }
+            ModelicaOp::EditText { range, replacement } => {
+                if range.start > range.end || range.end > self.source.len() {
+                    return Err(DocumentError::ValidationFailed(format!(
+                        "EditText range {}..{} out of bounds (len={})",
+                        range.start,
+                        range.end,
+                        self.source.len()
+                    )));
+                }
+                if !self.source.is_char_boundary(range.start)
+                    || !self.source.is_char_boundary(range.end)
+                {
+                    return Err(DocumentError::ValidationFailed(format!(
+                        "EditText range {}..{} not on char boundaries",
+                        range.start, range.end
+                    )));
+                }
+                let removed: String = self.source[range.clone()].to_string();
+                self.source.replace_range(range.clone(), &replacement);
+                self.generation = self.generation.saturating_add(1);
+                self.ast = Arc::new(AstCache::from_source(&self.source, self.generation));
+                let inverse_range = range.start..(range.start + replacement.len());
+                Ok(ModelicaOp::EditText {
+                    range: inverse_range,
+                    replacement: removed,
+                })
             }
         }
     }
@@ -307,5 +400,100 @@ mod tests {
         host.apply(ModelicaOp::ReplaceSource { new: "second".into() }).unwrap();
         assert!(!host.can_redo());
         assert_eq!(host.document().source(), "second");
+    }
+
+    #[test]
+    fn ast_cache_parses_fresh_document() {
+        let host = doc();
+        let cache = host.document().ast();
+        assert_eq!(cache.generation, 0);
+        let ast = cache.ast().expect("fresh doc should parse");
+        assert!(ast.classes.contains_key("Empty"));
+    }
+
+    #[test]
+    fn ast_cache_refreshes_after_mutation() {
+        let mut host = doc();
+        host.apply(ModelicaOp::ReplaceSource {
+            new: "model Foo end Foo;".into(),
+        })
+        .unwrap();
+        let cache = host.document().ast();
+        assert_eq!(cache.generation, 1);
+        let ast = cache.ast().expect("should parse");
+        assert!(ast.classes.contains_key("Foo"));
+        assert!(!ast.classes.contains_key("Empty"));
+    }
+
+    #[test]
+    fn ast_cache_holds_error_on_invalid_source() {
+        let mut host = doc();
+        host.apply(ModelicaOp::ReplaceSource {
+            new: "model M Real x end M;".into(), // missing semicolon → parse err
+        })
+        .unwrap();
+        assert!(host.document().ast().result.is_err());
+    }
+
+    #[test]
+    fn edit_text_replaces_range_and_is_invertible() {
+        // "model Empty end Empty;\n"
+        //  0         1
+        //  0123456789012345678901
+        let mut host = doc();
+        // Replace "Empty" at positions 6..11 with "Thing"
+        host.apply(ModelicaOp::EditText {
+            range: 6..11,
+            replacement: "Thing".into(),
+        })
+        .unwrap();
+        assert_eq!(host.document().source(), "model Thing end Empty;\n");
+        assert_eq!(host.generation(), 1);
+
+        host.undo().unwrap();
+        assert_eq!(host.document().source(), "model Empty end Empty;\n");
+    }
+
+    #[test]
+    fn edit_text_supports_insertion_and_deletion() {
+        let mut host = DocumentHost::new(ModelicaDocument::new(
+            DocumentId::new(1),
+            "abcdef".to_string(),
+        ));
+        // Insert "XYZ" at position 3 (empty range)
+        host.apply(ModelicaOp::EditText {
+            range: 3..3,
+            replacement: "XYZ".into(),
+        })
+        .unwrap();
+        assert_eq!(host.document().source(), "abcXYZdef");
+
+        // Delete "XYZ" (range 3..6, empty replacement)
+        host.apply(ModelicaOp::EditText {
+            range: 3..6,
+            replacement: String::new(),
+        })
+        .unwrap();
+        assert_eq!(host.document().source(), "abcdef");
+
+        host.undo().unwrap();
+        assert_eq!(host.document().source(), "abcXYZdef");
+        host.undo().unwrap();
+        assert_eq!(host.document().source(), "abcdef");
+    }
+
+    #[test]
+    fn edit_text_rejects_out_of_bounds_range() {
+        let mut host = doc();
+        let err = host
+            .apply(ModelicaOp::EditText {
+                range: 0..999,
+                replacement: String::new(),
+            })
+            .unwrap_err();
+        assert!(matches!(err, DocumentError::ValidationFailed(_)));
+        // Unchanged on error.
+        assert_eq!(host.document().source(), "model Empty end Empty;\n");
+        assert_eq!(host.generation(), 0);
     }
 }
