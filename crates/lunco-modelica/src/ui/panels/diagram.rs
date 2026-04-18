@@ -1532,10 +1532,25 @@ fn build_visual_diagram_from_scan(
 /// Returns `None` if the model has no component instantiations
 /// (e.g., equation-based models like Battery.mo, SpringMass.mo).
 pub fn import_model_to_diagram(source: &str) -> Option<VisualDiagram> {
-    use crate::diagram::ModelicaComponentBuilder;
+    // Delegate to the AST-taking variant after parsing once. Keeps
+    // existing callers working while letting hot paths (Canvas
+    // projection) reuse an already-parsed AST from `ModelicaDocument`.
+    let syntax = rumoca_phase_parse::parse_to_syntax(source, "model.mo");
+    let ast: rumoca_session::parsing::ast::StoredDefinition = syntax.best_effort().clone();
+    import_model_to_diagram_from_ast(&ast, source)
+}
 
-    // Try to build a component graph from the source
-    let builder = ModelicaComponentBuilder::from_source(source)?;
+/// Same as [`import_model_to_diagram`] but reuses an already-
+/// parsed AST. Saves two full rumoca passes (one in the component-
+/// builder, one in the imports-resolution path). Used by the
+/// canvas's async projection task where
+/// `ModelicaDocument::ast()` already holds the parsed tree.
+pub fn import_model_to_diagram_from_ast(
+    ast: &rumoca_session::parsing::ast::StoredDefinition,
+    source: &str,
+) -> Option<VisualDiagram> {
+    use crate::diagram::ModelicaComponentBuilder;
+    let builder = ModelicaComponentBuilder::from_ast(ast.clone());
     let graph = builder.build();
 
     // If the AST-based graph has no components, fall back to a
@@ -1605,7 +1620,11 @@ pub fn import_model_to_diagram(source: &str) -> Option<VisualDiagram> {
     // require a second pass against the whole MSL index; that's a
     // separate follow-up.
     let mut imports_by_short: HashMap<String, String> = HashMap::new();
-    if let Ok(ast) = rumoca_phase_parse::parse_to_ast(source, "diagram-import.mo") {
+    // Reuse the `ast` argument instead of re-parsing the source.
+    // The fake `if let Ok(ast) = _` wrapper used to shadow; now we
+    // just take a borrow of the already-parsed tree.
+    {
+        let ast = ast;
         for (_class_name, class_def) in ast.classes.iter() {
             for imp in &class_def.imports {
                 use rumoca_session::parsing::ast::Import;

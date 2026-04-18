@@ -311,6 +311,30 @@ impl ModelicaDocumentRegistry {
         id
     }
 
+    /// Allocate a fresh [`DocumentId`] WITHOUT building the host.
+    /// Pairs with [`Self::install_prebuilt`]: caller uses the id
+    /// to build a `ModelicaDocument` off-thread (the parse can take
+    /// seconds on large MSL package files), then installs the
+    /// fully-parsed host back in the registry on the main thread.
+    ///
+    /// Emits no `Opened` / `Changed` yet — those fire on
+    /// `install_prebuilt`. UI panels that query the registry with
+    /// an unallocated id just see a miss.
+    pub fn reserve_id(&mut self) -> DocumentId {
+        self.next_doc_id = self.next_doc_id.saturating_add(1);
+        DocumentId::new(self.next_doc_id)
+    }
+
+    /// Install a pre-built document under a previously-reserved id.
+    /// Intended for the async-load path: the heavy parse runs on a
+    /// background task, and only the cheap HashMap insert happens
+    /// on the UI thread.
+    pub fn install_prebuilt(&mut self, id: DocumentId, doc: ModelicaDocument) {
+        self.hosts.insert(id, DocumentHost::new(doc));
+        self.pending_opened.push(id);
+        self.pending_changes.push(id);
+    }
+
     /// Link `entity` to `doc`. Replaces any prior link for `entity`.
     /// The document must already exist (call [`allocate`](Self::allocate)
     /// first); linking to an unknown id is a no-op in release builds and

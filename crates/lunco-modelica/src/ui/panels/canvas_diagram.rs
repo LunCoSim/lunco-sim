@@ -588,26 +588,25 @@ fn project_scene(diagram: &VisualDiagram) -> (Scene, HashMap<DiagramNodeId, Canv
 #[derive(Resource)]
 pub struct CanvasDiagramState {
     pub canvas: Canvas,
-    /// Last doc generation we projected — used to skip the project
-    /// step when nothing has changed upstream.
     pub last_seen_gen: u64,
-    /// Which doc the scene currently reflects; `None` when no doc is
-    /// bound. Cleared on doc switch so the next frame's render does
-    /// a full rebuild.
     pub bound_doc: Option<lunco_doc::DocumentId>,
-    /// Pending context-menu request from the canvas. Populated when
-    /// the canvas emits `ContextMenuRequested`; rendered as an egui
-    /// popup on the next frame and cleared when the user clicks
-    /// outside or picks an entry.
     pub context_menu: Option<PendingContextMenu>,
-    /// In-flight projection task, if any. `import_model_to_diagram`
-    /// + regex edge recovery on a 72 KB MSL package file takes 5-10
-    /// seconds on the UI thread — blocking the frame for that long
-    /// freezes the whole workbench. We offload the work to a Bevy
-    /// `AsyncComputeTaskPool`: the panel stays interactive, a
-    /// "Projecting…" overlay shows progress, and the scene swaps
-    /// in atomically when the task completes.
     pub projection_task: Option<ProjectionTask>,
+}
+
+impl Default for CanvasDiagramState {
+    fn default() -> Self {
+        let mut canvas = Canvas::new(build_registry());
+        canvas.layers.retain(|layer| layer.name() != "selection");
+        canvas.overlays.push(Box::new(NavBarOverlay::default()));
+        Self {
+            canvas,
+            last_seen_gen: 0,
+            bound_doc: None,
+            context_menu: None,
+            projection_task: None,
+        }
+    }
 }
 
 /// Running projection task + the doc + generation that spawned it,
@@ -639,20 +638,6 @@ pub enum ContextMenuTarget {
     Empty,
 }
 
-impl Default for CanvasDiagramState {
-    fn default() -> Self {
-        let mut canvas = Canvas::new(build_registry());
-        canvas.layers.retain(|layer| layer.name() != "selection");
-        canvas.overlays.push(Box::new(NavBarOverlay::default()));
-        Self {
-            canvas,
-            last_seen_gen: 0,
-            bound_doc: None,
-            context_menu: None,
-            projection_task: None,
-        }
-    }
-}
 
 // ─── Panel ─────────────────────────────────────────────────────────
 
@@ -707,15 +692,22 @@ impl Panel for CanvasDiagramPanel {
 
         if let Some((doc_id, gen)) = project_now {
             // Spawn a background task (or reuse an in-flight one
-            // for the same doc+gen) that parses the Modelica source,
-            // runs edge-recovery, and builds a `Scene`. The UI
-            // thread stays interactive the whole time; we poll the
-            // task below and swap the scene in once it resolves.
-            let source = world
-                .resource::<ModelicaDocumentRegistry>()
-                .host(doc_id)
-                .map(|h| h.document().source().to_string())
-                .unwrap_or_default();
+            // for the same doc+gen) that runs edge-recovery and
+            // builds a `Scene` from the document's already-parsed
+            // AST — no re-parse. Hot path: clone the `Arc<StoredDefinition>`
+            // (cheap) + clone the source (byte copy) and ship both
+            // to the task. `import_model_to_diagram_from_ast` avoids
+            // the two full rumoca passes `import_model_to_diagram`
+            // used to run.
+            let (source, ast_arc) = {
+                let registry = world.resource::<ModelicaDocumentRegistry>();
+                let Some(host) = registry.host(doc_id) else {
+                    return;
+                };
+                let doc = host.document();
+                let ast = doc.ast().result.as_ref().ok().cloned();
+                (doc.source().to_string(), ast)
+            };
             let mut state = world.resource_mut::<CanvasDiagramState>();
             // Drop any in-flight projection whose input is now
             // stale (different doc, or older generation of the
@@ -733,18 +725,29 @@ impl Panel for CanvasDiagramPanel {
             if state.projection_task.is_none() {
                 let pool = bevy::tasks::AsyncComputeTaskPool::get();
                 let task = pool.spawn(async move {
-                    // Heavy path:
-                    //   1. `import_model_to_diagram` (rumoca parse
-                    //      + component-graph construction — the
-                    //      multi-second MSL package cost).
+                    // Heavy path (zero rumoca parses — we reuse
+                    // the document's AST):
+                    //   1. `import_model_to_diagram_from_ast` builds
+                    //      the component graph from the pre-parsed
+                    //      AST, no re-parse.
                     //   2. `recover_edges_from_source` — regex pass
-                    //      that backfills connect() equations whose
-                    //      ports the AST-driven path drops.
-                    //   3. `project_scene` — cheap arrangement of
-                    //      `VisualDiagram` into `lunco_canvas::Scene`.
-                    let mut diagram =
+                    //      backfilling connect equations the AST
+                    //      path drops for unresolved ports.
+                    //   3. `project_scene` — cheap.
+                    let mut diagram = if let Some(ast) = ast_arc.as_ref() {
+                        crate::ui::panels::diagram::import_model_to_diagram_from_ast(
+                            ast, &source,
+                        )
+                        .unwrap_or_default()
+                    } else {
+                        // Parse error on the doc → fall back to the
+                        // recovering top-level entry point. This only
+                        // hits when the user typed invalid Modelica;
+                        // for any well-formed doc we're on the fast
+                        // path above.
                         crate::ui::panels::diagram::import_model_to_diagram(&source)
-                            .unwrap_or_default();
+                            .unwrap_or_default()
+                    };
                     recover_edges_from_source(&source, &mut diagram);
                     let (scene, _id_map) = project_scene(&diagram);
                     scene
@@ -849,9 +852,19 @@ impl CanvasDiagramPanel {
         let (loading_label, projecting, show_empty_overlay) = {
             let state = world.resource::<CanvasDiagramState>();
             let loads = world.resource::<DrillInLoads>();
-            let label = state
-                .bound_doc
-                .and_then(|d| loads.detail(d).map(str::to_string));
+            // Use the CURRENT TAB's doc (via WorkbenchState.open_model
+            // which `sync_active_tab_to_doc` keeps in sync with the
+            // active tab), not `state.bound_doc`. With shared canvas
+            // state, `bound_doc` may lag behind when the user switches
+            // tabs — tying the loading overlay to the *active* tab's
+            // doc means the indicator only appears in the tab that's
+            // actually loading.
+            let active_doc = world
+                .resource::<WorkbenchState>()
+                .open_model
+                .as_ref()
+                .and_then(|m| m.doc);
+            let label = active_doc.and_then(|d| loads.detail(d).map(str::to_string));
             (
                 label,
                 state.projection_task.is_some(),
@@ -1513,11 +1526,12 @@ fn count_matches(source: &str, pattern: &str) -> usize {
 
 // ─── Drill-in ───────────────────────────────────────────────────────
 
-/// In-flight drill-in file reads, keyed by the placeholder document
-/// we allocated when the tab opened. A Bevy system polls these and
-/// applies `ReplaceSource` to the doc once the read finishes, so
-/// the user sees the tab appear instantly ("Loading…" overlay) and
-/// content populates when the bg read completes.
+/// In-flight drill-in loads, keyed by the document id we reserved
+/// when the tab opened. The bg task does the full heavy work —
+/// reading the file AND parsing into a `ModelicaDocument` — so the
+/// UI thread never blocks on rumoca. A Bevy system polls these and
+/// `install_prebuilt`s the parsed document into the registry when
+/// the task completes.
 #[derive(bevy::prelude::Resource, Default)]
 pub struct DrillInLoads {
     pending: std::collections::HashMap<lunco_doc::DocumentId, DrillInLoadEntry>,
@@ -1526,7 +1540,22 @@ pub struct DrillInLoads {
 pub struct DrillInLoadEntry {
     pub qualified: String,
     pub file_path: std::path::PathBuf,
-    pub task: bevy::tasks::Task<std::io::Result<String>>,
+    pub task:
+        bevy::tasks::Task<Result<crate::document::ModelicaDocument, DrillInLoadError>>,
+}
+
+/// Why a bg load failed. Kept small — these surface as log lines.
+#[derive(Debug)]
+pub enum DrillInLoadError {
+    Io(std::io::Error),
+}
+
+impl std::fmt::Display for DrillInLoadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Io(e) => write!(f, "io: {e}"),
+        }
+    }
 }
 
 impl DrillInLoads {
@@ -1538,8 +1567,8 @@ impl DrillInLoads {
     }
 }
 
-/// Bevy system: poll every in-flight drill-in load, apply the
-/// loaded source to the doc when ready.
+/// Bevy system: poll in-flight drill-in loads, install the parsed
+/// documents in the registry when ready.
 pub fn drive_drill_in_loads(
     mut loads: bevy::prelude::ResMut<DrillInLoads>,
     mut registry: bevy::prelude::ResMut<ModelicaDocumentRegistry>,
@@ -1556,22 +1585,15 @@ pub fn drive_drill_in_loads(
         let file_display = entry.file_path.display().to_string();
         loads.pending.remove(&doc_id);
         match result {
-            Ok(source) => {
-                if let Some(host) = registry.host_mut(doc_id) {
-                    match host.apply(ModelicaOp::ReplaceSource { new: source }) {
-                        Ok(_) => info!(
-                            "[CanvasDiagram] drill-in: loaded `{}` from `{}`",
-                            qualified, file_display
-                        ),
-                        Err(e) => warn!(
-                            "[CanvasDiagram] drill-in: ReplaceSource failed for `{}`: {}",
-                            qualified, e
-                        ),
-                    }
-                }
+            Ok(doc) => {
+                registry.install_prebuilt(doc_id, doc);
+                info!(
+                    "[CanvasDiagram] drill-in: installed `{}` from `{}`",
+                    qualified, file_display
+                );
             }
             Err(e) => warn!(
-                "[CanvasDiagram] drill-in: file read failed for `{}`: {}",
+                "[CanvasDiagram] drill-in: load failed for `{}`: {}",
                 qualified, e
             ),
         }
@@ -1730,23 +1752,34 @@ fn open_drill_in_tab(
     let (doc_id, needs_load) = if let Some(id) = existing_doc {
         (id, false)
     } else {
-        // Allocate with empty source — parses instantly. The real
-        // source lands later via the bg load task + ReplaceSource.
-        let origin = lunco_doc::DocumentOrigin::File {
-            path: file_path.to_path_buf(),
-            writable: false,
-        };
+        // Reserve a doc id only; the actual `ModelicaDocument`
+        // (including the rumoca parse) is built on a background
+        // thread and installed via `install_prebuilt` when ready.
+        // Queries against the id before install return `None` —
+        // panels render the "Loading resource…" overlay based on
+        // `DrillInLoads::is_loading`.
         let mut registry = world.resource_mut::<ModelicaDocumentRegistry>();
-        let id = registry.allocate_with_origin(String::new(), origin);
+        let id = registry.reserve_id();
         (id, true)
     };
 
-    // Kick off the background file read if this is a fresh doc.
-    // Existing-doc case means we already loaded it; no reload.
     if needs_load {
         let path = file_path.to_path_buf();
+        let id = doc_id;
+        let origin = lunco_doc::DocumentOrigin::File {
+            path: path.clone(),
+            writable: false,
+        };
         let pool = bevy::tasks::AsyncComputeTaskPool::get();
-        let task = pool.spawn(async move { std::fs::read_to_string(&path) });
+        let task = pool.spawn(async move {
+            // Heavy path runs off the UI thread:
+            //   1. `fs::read_to_string` — I/O.
+            //   2. `ModelicaDocument::with_origin` — rumoca parse.
+            let source = std::fs::read_to_string(&path).map_err(DrillInLoadError::Io)?;
+            Ok(crate::document::ModelicaDocument::with_origin(
+                id, source, origin,
+            ))
+        });
         let mut loads = world.resource_mut::<DrillInLoads>();
         loads.pending.insert(
             doc_id,
@@ -2006,6 +2039,26 @@ fn op_remove_edge_inner(
 fn apply_ops(world: &mut World, doc_id: lunco_doc::DocumentId, ops: Vec<ModelicaOp>) {
     let n = ops.len();
     let mut any_applied = false;
+    // Read-only guard — only block ops when the user is viewing a
+    // TRULY read-only tab (MSL / bundled library class), NOT when
+    // the doc is merely Untitled. `Document::is_read_only` in this
+    // codebase means "can't save-to-disk without Save-As", which is
+    // true for Untitled despite Untitled being fully editable. The
+    // Package Browser / drill-in sets
+    // `WorkbenchState.open_model.read_only` to `true` only for
+    // library classes, so gate on that instead.
+    let is_read_only = world
+        .get_resource::<WorkbenchState>()
+        .and_then(|s| s.open_model.as_ref())
+        .map(|m| m.read_only)
+        .unwrap_or(false);
+    if is_read_only {
+        bevy::log::info!(
+            "[CanvasDiagram] discarded {} op(s) — tab is a read-only library class",
+            n
+        );
+        return;
+    }
     {
         let Some(mut registry) = world.get_resource_mut::<ModelicaDocumentRegistry>() else {
             bevy::log::warn!(
