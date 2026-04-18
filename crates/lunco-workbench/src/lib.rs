@@ -717,6 +717,23 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
 }
 
 fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut World) {
+    // ── Opaque-mode backdrop (must run first) ───────────────────────
+    // In apps where every panel is opaque (no 3D viewport showing
+    // through), paint `PANEL_BACKDROP` on the background layer BEFORE
+    // registering any panel shapes. egui draws within a layer in the
+    // order shapes are issued, so a rect_filled issued AFTER the menu
+    // bar / dock / status bar would paint over them — exactly the
+    // "invisible menu" regression the opaque-backdrop change
+    // introduced. Running it first keeps the fill underneath.
+    let any_transparent = layout
+        .panels
+        .values()
+        .any(|p| p.transparent_background());
+    if !any_transparent {
+        let painter = ctx.layer_painter(egui::LayerId::background());
+        painter.rect_filled(ctx.screen_rect(), 0.0, PANEL_BACKDROP);
+    }
+
     // ── Menu bar ────────────────────────────────────────────────────
     egui::TopBottomPanel::top("lunco_workbench_menu_bar").show(ctx, |ui| {
         ui.horizontal(|ui| {
@@ -867,24 +884,6 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
     let has_dock_tabs = layout.dock.iter_all_tabs().next().is_some();
 
     if has_dock_tabs {
-        // Compute this BEFORE we split-borrow `panels` mutably below.
-        let any_transparent = layout
-            .panels
-            .values()
-            .any(|p| p.transparent_background());
-
-        // In opaque-panels mode (no 3D viewport), paint a solid backdrop
-        // on the lowest egui layer so that any gap in the dock — the
-        // separator handles, the hairline around leaves, the margin
-        // around the central frame — renders as PANEL_BACKDROP rather
-        // than bleeding the window's clear colour through. This is
-        // what makes the tab bar actually look contained rather than
-        // floating on a transparent strip.
-        if !any_transparent {
-            let painter = ctx.layer_painter(egui::LayerId::background());
-            painter.rect_filled(ctx.screen_rect(), 0.0, PANEL_BACKDROP);
-        }
-
         let WorkbenchLayout {
             panels,
             instance_panels,
