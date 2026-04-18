@@ -113,12 +113,14 @@ fn cleanup_removed_documents(
     registry: Option<ResMut<ModelicaDocumentRegistry>>,
     compile_states: Option<ResMut<CompileStates>>,
     canvas_state: Option<ResMut<panels::canvas_diagram::CanvasDiagramState>>,
+    class_names: Option<ResMut<panels::canvas_diagram::DrilledInClassNames>>,
     signals: Option<ResMut<lunco_viz::SignalRegistry>>,
     viz_registry: Option<ResMut<lunco_viz::VisualizationRegistry>>,
 ) {
     let Some(mut registry) = registry else { return };
     let mut compile_states = compile_states;
     let mut canvas_state = canvas_state;
+    let mut class_names = class_names;
     let mut signals = signals;
     let mut viz_registry = viz_registry;
     for entity in removed.read() {
@@ -132,6 +134,9 @@ fn cleanup_removed_documents(
             // id starts fresh. Matches how CompileStates is cleaned.
             if let Some(canvas) = canvas_state.as_mut() {
                 canvas.drop_doc(doc);
+            }
+            if let Some(names) = class_names.as_mut() {
+                names.remove(doc);
             }
         }
         // Drop every registered signal + plot binding for this entity
@@ -250,6 +255,7 @@ impl Plugin for ModelicaUiPlugin {
             .init_resource::<panels::canvas_diagram::CanvasDiagramState>()
             .init_resource::<panels::canvas_diagram::PaletteSettings>()
             .init_resource::<panels::canvas_diagram::DiagramProjectionLimits>()
+            .init_resource::<panels::canvas_diagram::DrilledInClassNames>()
             .init_resource::<panels::canvas_diagram::DrillInLoads>()
             .add_systems(Update, panels::canvas_diagram::drive_drill_in_loads)
             .register_panel(panels::palette::ComponentPalettePanel)

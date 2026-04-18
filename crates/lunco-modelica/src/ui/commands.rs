@@ -538,19 +538,43 @@ fn on_compile_model(
     // Ownership check. Read-only docs are fair game to compile —
     // the Save button is what's gated on writability, not compile.
     // Users *simulate* examples; they just can't overwrite them.
-    let source = match registry.host(doc) {
-        Some(h) => h.document().source().to_string(),
+    //
+    // Use the document's already-parsed AST for the metadata
+    // extraction. Calling the `_source` variants here re-parses
+    // via rumoca on the main thread — a 152 KB MSL package file
+    // costs ~30 s per call in debug builds, and there are four
+    // calls, so clicking Compile on an MSL example would lock the
+    // UI for minutes. Pulling from the cached AST is constant-time.
+    let (source, ast_for_extract) = match registry.host(doc) {
+        Some(h) => {
+            let doc = h.document();
+            let ast = doc.ast().result.as_ref().ok().cloned();
+            (doc.source().to_string(), ast)
+        }
         None => return,
     };
-    let Some(model_name) = extract_model_name(&source) else {
+    let Some(ast) = ast_for_extract else {
+        // Parse failure on this doc (rare — rumoca is
+        // error-recovering). Fall back to the source-based
+        // extractors, which at least try once; if they also fail,
+        // the error message below fires.
+        let msg = "Could not parse Modelica source for compile.".to_string();
+        workbench.compilation_error = Some(msg.clone());
+        console.error(format!("Compile failed: {msg}"));
+        return;
+    };
+    let Some(model_name) =
+        crate::ast_extract::extract_model_name_from_ast(&ast)
+    else {
         let msg = "Could not find a valid model declaration.".to_string();
         workbench.compilation_error = Some(msg.clone());
         console.error(format!("Compile failed: {msg}"));
         return;
     };
-    let params = extract_parameters(&source);
-    let inputs_with_defaults = extract_inputs_with_defaults(&source);
-    let runtime_inputs = extract_input_names(&source);
+    let params = crate::ast_extract::extract_parameters_from_ast(&ast);
+    let inputs_with_defaults =
+        crate::ast_extract::extract_inputs_with_defaults_from_ast(&ast);
+    let runtime_inputs = crate::ast_extract::extract_input_names_from_ast(&ast);
 
     // Find or spawn the entity linked to this document.
     let linked = registry.entities_linked_to(doc);
@@ -623,8 +647,8 @@ fn on_compile_model(
         .map(|m| m.session_id)
         .unwrap_or_else(|_| diagram_state.model_counter as u64 + 1);
 
-    compile_states.set(doc, CompileState::Compiling);
-    console.info(format!("Compiling '{model_name}'…"));
+    compile_states.mark_started(doc);
+    console.info(format!("⏵ Compile started: '{model_name}'"));
 
     if let Some(channels) = channels {
         let _ = channels.tx.send(ModelicaCommand::Compile {

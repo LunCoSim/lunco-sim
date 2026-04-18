@@ -6047,6 +6047,7 @@ dependencies = [
  "egui_plot",
  "futures-lite",
  "getrandom 0.3.4",
+ "indexmap",
  "log",
  "lunco-api",
  "lunco-assets",

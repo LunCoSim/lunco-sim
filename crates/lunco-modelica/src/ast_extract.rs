@@ -86,15 +86,24 @@ pub fn extract_descriptions(source: &str) -> HashMap<String, String> {
         None => return HashMap::new(),
     };
     let mut out: HashMap<String, String> = HashMap::new();
-    collect_descriptions_from_classes(ast.classes, &mut out);
+    collect_descriptions_from_classes(&ast.classes, &mut out);
+    out
+}
+
+/// AST-based variant — see `extract_parameters_from_ast`.
+pub fn extract_descriptions_from_ast(
+    ast: &StoredDefinition,
+) -> HashMap<String, String> {
+    let mut out: HashMap<String, String> = HashMap::new();
+    collect_descriptions_from_classes(&ast.classes, &mut out);
     out
 }
 
 fn collect_descriptions_from_classes(
-    classes: impl IntoIterator<Item = (String, ClassDef)>,
+    classes: &indexmap::IndexMap<String, ClassDef>,
     out: &mut HashMap<String, String>,
 ) {
-    for (_, class) in classes {
+    for class in classes.values() {
         for component in class.components.values() {
             if component.description.is_empty() {
                 continue;
@@ -119,7 +128,7 @@ fn collect_descriptions_from_classes(
                 out.insert(component.name.clone(), cleaned);
             }
         }
-        collect_descriptions_from_classes(class.classes, out);
+        collect_descriptions_from_classes(&class.classes, out);
     }
 }
 
@@ -161,7 +170,18 @@ pub fn extract_parameters(source: &str) -> HashMap<String, f64> {
     };
 
     let mut params = HashMap::new();
-    collect_parameters_from_classes(ast.classes, &mut params);
+    collect_parameters_from_classes(&ast.classes, &mut params);
+    params
+}
+
+/// AST-based variant — call this from any hot path that already
+/// holds a parsed `StoredDefinition`. The `_source` variants above
+/// re-parse on every call, which is catastrophic (~minutes) on
+/// 150 KB MSL package files; hot paths like `on_compile_model`
+/// MUST use these.
+pub fn extract_parameters_from_ast(ast: &StoredDefinition) -> HashMap<String, f64> {
+    let mut params = HashMap::new();
+    collect_parameters_from_classes(&ast.classes, &mut params);
     params
 }
 
@@ -181,7 +201,16 @@ pub fn extract_inputs_with_defaults(source: &str) -> HashMap<String, f64> {
     };
 
     let mut inputs = HashMap::new();
-    collect_inputs_with_defaults_from_classes(ast.classes, &mut inputs);
+    collect_inputs_with_defaults_from_classes(&ast.classes, &mut inputs);
+    inputs
+}
+
+/// AST-based variant — see `extract_parameters_from_ast`.
+pub fn extract_inputs_with_defaults_from_ast(
+    ast: &StoredDefinition,
+) -> HashMap<String, f64> {
+    let mut inputs = HashMap::new();
+    collect_inputs_with_defaults_from_classes(&ast.classes, &mut inputs);
     inputs
 }
 
@@ -200,7 +229,14 @@ pub fn extract_variable_names(source: &str) -> Vec<String> {
     };
 
     let mut names = Vec::new();
-    collect_variable_names_from_classes(ast.classes, &mut names);
+    collect_variable_names_from_classes(&ast.classes, &mut names);
+    names
+}
+
+/// AST-based variant — see `extract_parameters_from_ast`.
+pub fn extract_variable_names_from_ast(ast: &StoredDefinition) -> Vec<String> {
+    let mut names = Vec::new();
+    collect_variable_names_from_classes(&ast.classes, &mut names);
     names
 }
 
@@ -221,7 +257,14 @@ pub fn extract_input_names(source: &str) -> Vec<String> {
     };
 
     let mut inputs = Vec::new();
-    collect_input_names_from_classes(ast.classes, &mut inputs);
+    collect_input_names_from_classes(&ast.classes, &mut inputs);
+    inputs
+}
+
+/// AST-based variant — see `extract_parameters_from_ast`.
+pub fn extract_input_names_from_ast(ast: &StoredDefinition) -> Vec<String> {
+    let mut inputs = Vec::new();
+    collect_input_names_from_classes(&ast.classes, &mut inputs);
     inputs
 }
 
@@ -244,7 +287,7 @@ pub fn strip_input_defaults(source: &str) -> (String, HashMap<String, f64>) {
     };
 
     let mut defaults = HashMap::new();
-    collect_inputs_with_defaults_from_classes(ast.classes, &mut defaults);
+    collect_inputs_with_defaults_from_classes(&ast.classes, &mut defaults);
 
     // Rebuild source with input defaults stripped using regex replacement.
     // TODO: Replace with AST-based source regeneration once we have a Modelica
@@ -363,8 +406,11 @@ fn walk_class(class: &ClassDef, result: &mut ModelicaSymbols) {
     }
 }
 
-fn collect_parameters_from_classes(classes: impl IntoIterator<Item = (String, ClassDef)>, params: &mut HashMap<String, f64>) {
-    for (_, class) in classes {
+fn collect_parameters_from_classes(
+    classes: &indexmap::IndexMap<String, ClassDef>,
+    params: &mut HashMap<String, f64>,
+) {
+    for class in classes.values() {
         for component in class.components.values() {
             if matches!(component.variability, Variability::Parameter(_)) {
                 if let Some(value) = extract_numeric_binding(&component.binding) {
@@ -372,12 +418,15 @@ fn collect_parameters_from_classes(classes: impl IntoIterator<Item = (String, Cl
                 }
             }
         }
-        collect_parameters_from_classes(class.classes, params);
+        collect_parameters_from_classes(&class.classes, params);
     }
 }
 
-fn collect_inputs_with_defaults_from_classes(classes: impl IntoIterator<Item = (String, ClassDef)>, inputs: &mut HashMap<String, f64>) {
-    for (_, class) in classes {
+fn collect_inputs_with_defaults_from_classes(
+    classes: &indexmap::IndexMap<String, ClassDef>,
+    inputs: &mut HashMap<String, f64>,
+) {
+    for class in classes.values() {
         for component in class.components.values() {
             if matches!(component.causality, Causality::Input(_)) {
                 if let Some(value) = extract_numeric_binding(&component.binding) {
@@ -385,15 +434,15 @@ fn collect_inputs_with_defaults_from_classes(classes: impl IntoIterator<Item = (
                 }
             }
         }
-        collect_inputs_with_defaults_from_classes(class.classes, inputs);
+        collect_inputs_with_defaults_from_classes(&class.classes, inputs);
     }
 }
 
 fn collect_variable_names_from_classes(
-    classes: impl IntoIterator<Item = (String, ClassDef)>,
+    classes: &indexmap::IndexMap<String, ClassDef>,
     names: &mut Vec<String>,
 ) {
-    for (_, class) in classes {
+    for class in classes.values() {
         for component in class.components.values() {
             let is_parameter = matches!(component.variability, Variability::Parameter(_));
             let is_constant = matches!(component.variability, Variability::Constant(_));
@@ -402,12 +451,15 @@ fn collect_variable_names_from_classes(
                 names.push(component.name.clone());
             }
         }
-        collect_variable_names_from_classes(class.classes, names);
+        collect_variable_names_from_classes(&class.classes, names);
     }
 }
 
-fn collect_input_names_from_classes(classes: impl IntoIterator<Item = (String, ClassDef)>, inputs: &mut Vec<String>) {
-    for (_, class) in classes {
+fn collect_input_names_from_classes(
+    classes: &indexmap::IndexMap<String, ClassDef>,
+    inputs: &mut Vec<String>,
+) {
+    for class in classes.values() {
         for component in class.components.values() {
             if matches!(component.causality, Causality::Input(_)) {
                 if extract_numeric_binding(&component.binding).is_none() {
@@ -415,7 +467,7 @@ fn collect_input_names_from_classes(classes: impl IntoIterator<Item = (String, C
                 }
             }
         }
-        collect_input_names_from_classes(class.classes, inputs);
+        collect_input_names_from_classes(&class.classes, inputs);
     }
 }
 

@@ -1609,7 +1609,17 @@ pub fn import_model_to_diagram_from_ast(
     // the common `<Qualified.Type> <InstanceName>[(mods)] [;/anno];`
     // shape but doesn't pretend to be a full Modelica parser. When the
     // AST is healthy (the 99% case), this fallback never runs.
+    //
+    // **Critical**: the scanner reads the WHOLE source, so it has
+    // no notion of class scoping. We only run it when no
+    // `target_class` was specified — drill-in tabs into a specific
+    // class inside a package file MUST NOT trigger this fallback,
+    // or they end up displaying every sibling class's components
+    // jumbled together. Honor the scope the caller asked for.
     if graph.node_count() == 0 {
+        if target_class.is_some() {
+            return None;
+        }
         let scanned = scan_component_declarations(source);
         if !scanned.is_empty() {
             return Some(build_visual_diagram_from_scan(source, &scanned));

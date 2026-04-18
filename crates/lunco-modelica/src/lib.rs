@@ -1190,7 +1190,42 @@ fn handle_modelica_responses(
                     ui::CompileState::Ready
                 };
                 if let Some(cs) = compile_states.as_mut() {
-                    cs.set(model.document, new_state);
+                    let elapsed = cs.mark_finished(model.document, new_state);
+                    if let Some(dur) = elapsed {
+                        let ms = dur.as_secs_f64() * 1000.0;
+                        let human = if ms >= 1000.0 {
+                            format!("{:.2} s", ms / 1000.0)
+                        } else {
+                            format!("{:.0} ms", ms)
+                        };
+                        match new_state {
+                            ui::CompileState::Error => {
+                                warn!(
+                                    "[Modelica] Compile finished with error for `{}` in {}",
+                                    model.model_name, human
+                                );
+                                if let Some(c) = console.as_mut() {
+                                    c.error(format!(
+                                        "⏹ Compile FAILED: '{}' in {}",
+                                        model.model_name, human
+                                    ));
+                                }
+                            }
+                            ui::CompileState::Ready => {
+                                info!(
+                                    "[Modelica] Compile finished for `{}` in {}",
+                                    model.model_name, human
+                                );
+                                if let Some(c) = console.as_mut() {
+                                    c.info(format!(
+                                        "✓ Compile finished: '{}' in {}",
+                                        model.model_name, human
+                                    ));
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
                 }
             }
 

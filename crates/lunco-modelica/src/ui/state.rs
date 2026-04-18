@@ -197,6 +197,12 @@ pub enum CompileState {
 #[derive(Resource, Default)]
 pub struct CompileStates {
     by_doc: HashMap<DocumentId, CompileState>,
+    /// When each doc's currently-in-flight compile started. Cleared
+    /// on terminal transition (Ready / Error) via
+    /// [`set_and_stamp`](Self::set_and_stamp). Used to log
+    /// "compile X finished in Y ms" to Console / Diagnostics when
+    /// the worker responds.
+    compile_started: HashMap<DocumentId, std::time::Instant>,
 }
 
 impl CompileStates {
@@ -215,9 +221,31 @@ impl CompileStates {
         self.by_doc.insert(doc, state);
     }
 
+    /// Stamp the compile start time AND transition to `Compiling`.
+    /// Use instead of `set(doc, Compiling)` when dispatching a
+    /// compile — the stamp lets us measure elapsed on terminal
+    /// transition.
+    pub fn mark_started(&mut self, doc: DocumentId) {
+        self.by_doc.insert(doc, CompileState::Compiling);
+        self.compile_started.insert(doc, std::time::Instant::now());
+    }
+
+    /// Transition to a terminal state and return elapsed time since
+    /// the last `mark_started` (if any). Clears the stamp so a
+    /// future compile starts clean.
+    pub fn mark_finished(
+        &mut self,
+        doc: DocumentId,
+        state: CompileState,
+    ) -> Option<std::time::Duration> {
+        self.by_doc.insert(doc, state);
+        self.compile_started.remove(&doc).map(|t| t.elapsed())
+    }
+
     /// Drop any recorded state for `doc` (e.g. when a document is removed).
     pub fn remove(&mut self, doc: DocumentId) {
         self.by_doc.remove(&doc);
+        self.compile_started.remove(&doc);
     }
 }
 

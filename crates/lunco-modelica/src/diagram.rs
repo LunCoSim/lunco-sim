@@ -353,46 +353,64 @@ impl ModelicaComponentBuilder {
     }
 
     fn get_target_class(&self, name: &str) -> Option<&ClassDef> {
-        // Fast path: single-segment name. Try top level then one
-        // level of nested descent — preserves prior behaviour.
-        if !name.contains('.') {
-            if let Some(class) = self.ast.classes.get(name) {
-                return Some(class);
-            }
-            for (_, class) in &self.ast.classes {
-                if let Some(nested) = class.classes.get(name) {
-                    return Some(nested);
-                }
-            }
-            return None;
-        }
-
-        // Dotted path: walk nested classes segment by segment.
-        // Supports "Blocks.Examples.FilterWithRiseTime" inside
-        // `Modelica/Blocks/package.mo` → descend `Blocks → Examples
-        // → FilterWithRiseTime`. Also tolerant to a leading
-        // `within` prefix: if the full path starts with
-        // `self.ast.within`, strip it before walking. This is how
-        // drill-in tabs call us ("full qualified name"), without
-        // requiring the UI layer to know the AST's internal rooting.
-        let mut path: &str = name;
-        if let Some(within) = self.ast.within.as_ref() {
-            let within_str = within.to_string();
-            if let Some(rest) = path
-                .strip_prefix(&within_str)
-                .and_then(|s| s.strip_prefix('.'))
-            {
-                path = rest;
-            }
-        }
-        let mut segments = path.split('.');
-        let first = segments.next()?;
-        let mut current = self.ast.classes.get(first)?;
-        for seg in segments {
-            current = current.classes.get(seg)?;
-        }
-        Some(current)
+        find_class_by_qualified_name(&self.ast, name)
     }
+}
+
+/// Resolve a qualified class name against a parsed `StoredDefinition`.
+///
+/// Shared between the projection builder and the drill-in install
+/// path (which uses it to decide the default view for the
+/// newly-opened tab — if the class has zero instantiated
+/// components, landing in Canvas shows an empty diagram, so
+/// Icon is a better default).
+///
+/// # Resolution rules
+///
+/// 1. **Single-segment name** — check top-level `ast.classes`,
+///    then one level of nested descent. Preserves historic
+///    behaviour for callers like `target_class("MyClass")`.
+/// 2. **Dotted path** — walk nested classes segment-by-segment.
+///    `"Blocks.Examples.FilterWithRiseTime"` inside
+///    `Modelica/Blocks/package.mo` descends
+///    `Blocks → Examples → FilterWithRiseTime`.
+/// 3. **`within` prefix tolerance** — if the full path starts
+///    with the AST's `within` clause, strip it before walking.
+///    Lets drill-in callers pass `"Modelica.Blocks.Continuous.CriticalDamping"`
+///    without knowing the file's internal rooting.
+pub fn find_class_by_qualified_name<'a>(
+    ast: &'a StoredDefinition,
+    name: &str,
+) -> Option<&'a ClassDef> {
+    if !name.contains('.') {
+        if let Some(class) = ast.classes.get(name) {
+            return Some(class);
+        }
+        for (_, class) in &ast.classes {
+            if let Some(nested) = class.classes.get(name) {
+                return Some(nested);
+            }
+        }
+        return None;
+    }
+
+    let mut path: &str = name;
+    if let Some(within) = ast.within.as_ref() {
+        let within_str = within.to_string();
+        if let Some(rest) = path
+            .strip_prefix(&within_str)
+            .and_then(|s| s.strip_prefix('.'))
+        {
+            path = rest;
+        }
+    }
+    let mut segments = path.split('.');
+    let first = segments.next()?;
+    let mut current = ast.classes.get(first)?;
+    for seg in segments {
+        current = current.classes.get(seg)?;
+    }
+    Some(current)
 }
 
 /// Information about a connector instance in a Modelica model.

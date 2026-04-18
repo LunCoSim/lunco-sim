@@ -110,10 +110,16 @@ impl NodeVisual for IconNodeVisual {
         );
         let painter = ctx.ui.painter();
 
-        // Try the SVG path first. If the asset loaded, paint it over
-        // a subtle card so the icon has contrast with the diagram
-        // background. If anything's missing, fall through to the
-        // rounded-rect fallback so the user still sees SOMETHING.
+        // Always paint a solid card background *underneath* the SVG.
+        // Why: MSL icons are outlined shapes — the SVG pixels inside
+        // the outline are transparent by design, so without a bg the
+        // connection lines running behind an icon are visible through
+        // its body. That reads as "the diagram is a sheet of glass"
+        // rather than "icons are opaque tiles." Dymola/OMEdit both
+        // paint each icon on its own opaque card for the same reason.
+        let card_fill = egui::Color32::from_rgb(48, 56, 72);
+        painter.rect_filled(rect, 6.0, card_fill);
+
         let mut drew_svg = false;
         if !self.icon_asset.is_empty() {
             if let Some(bytes) = svg_bytes_for(&self.icon_asset) {
@@ -123,9 +129,9 @@ impl NodeVisual for IconNodeVisual {
         }
 
         if !drew_svg {
-            // Fallback card + type label.
-            let fill = egui::Color32::from_rgb(48, 56, 72);
-            painter.rect_filled(rect, 6.0, fill);
+            // SVG missing / failed to load: the card is already
+            // painted; just add a type label so the user still sees
+            // something meaningful instead of a blank box.
             if !self.type_label.is_empty() && rect.height() > 30.0 {
                 painter.text(
                     egui::pos2(rect.center().x, rect.center().y),
@@ -874,21 +880,17 @@ impl Panel for CanvasDiagramPanel {
                     std::time::Duration::from_secs(60),
                 ));
             // Target class for the projection: the fully-qualified
-            // name the drill-in tab points at, stripped of its
-            // `msl://` URI scheme. Lets the builder descend into
-            // the specific sub-class inside a package file
-            // (`Blocks/package.mo` → `Blocks.Examples.FilterWithRiseTime`)
-            // rather than trying to diagram every sibling class.
-            // None for Untitled / user-authored docs — builder
-            // picks the first non-package class as before.
+            // name the drill-in tab points at. Read from
+            // `DrilledInClassNames`, which the drill-in install
+            // populated and which persists for the tab's lifetime.
+            // Reading `open_model.model_path` doesn't work here —
+            // for installed docs it's the filesystem path, not the
+            // `msl://…` URI. `None` for Untitled / user-authored
+            // docs — builder picks the first non-package class as
+            // before.
             let target_class_snapshot: Option<String> = world
-                .get_resource::<WorkbenchState>()
-                .and_then(|s| s.open_model.as_ref())
-                .and_then(|m| {
-                    m.model_path
-                        .strip_prefix("msl://")
-                        .map(|s| s.to_string())
-                });
+                .get_resource::<DrilledInClassNames>()
+                .and_then(|m| m.get(doc_id).map(str::to_string));
             let mut state = world.resource_mut::<CanvasDiagramState>();
             let docstate = state.get_mut(Some(doc_id));
             // Drop any in-flight projection whose input is now
@@ -2081,6 +2083,34 @@ pub struct DrillInLoads {
     pending: std::collections::HashMap<lunco_doc::DocumentId, DrillInBinding>,
 }
 
+/// Persistent `DocumentId → qualified class name` map for tabs
+/// opened via drill-in. Lives for the tab's lifetime (cleared by
+/// [`cleanup_removed_documents`]), so downstream systems — canvas
+/// projection, especially — can ask "what class was this tab
+/// drilled into?" after install has already cleared the transient
+/// [`DrillInLoads`] entry.
+///
+/// Without this, projection for a drill-in tab can't scope to the
+/// specific class: the installed `ModelicaDocument.canonical_path`
+/// is the `.mo` file, which for multi-class package files doesn't
+/// tell us which of the dozen classes inside the user meant.
+#[derive(bevy::prelude::Resource, Default)]
+pub struct DrilledInClassNames {
+    pub by_doc: std::collections::HashMap<lunco_doc::DocumentId, String>,
+}
+
+impl DrilledInClassNames {
+    pub fn get(&self, doc: lunco_doc::DocumentId) -> Option<&str> {
+        self.by_doc.get(&doc).map(String::as_str)
+    }
+    pub fn set(&mut self, doc: lunco_doc::DocumentId, qualified: String) {
+        self.by_doc.insert(doc, qualified);
+    }
+    pub fn remove(&mut self, doc: lunco_doc::DocumentId) -> Option<String> {
+        self.by_doc.remove(&doc)
+    }
+}
+
 pub struct DrillInBinding {
     pub qualified: String,
     /// When the tab was opened. Used to show elapsed-seconds in the
@@ -2115,6 +2145,7 @@ pub fn drive_drill_in_loads(
     mut registry: bevy::prelude::ResMut<ModelicaDocumentRegistry>,
     cache: Option<bevy::prelude::Res<crate::class_cache::ClassCache>>,
     mut tabs: bevy::prelude::ResMut<crate::ui::panels::model_view::ModelTabs>,
+    mut class_names: bevy::prelude::ResMut<DrilledInClassNames>,
 ) {
     use bevy::prelude::*;
     let Some(cache) = cache else { return };
@@ -2144,13 +2175,37 @@ pub fn drive_drill_in_loads(
             );
             registry.install_prebuilt(doc_id, doc);
             loads.pending.remove(&doc_id);
-            // Icon-only classes (MSL's `.Icons.*` subtree) have
-            // zero connectors and no diagram to lay out — default
-            // the drilled-in tab to the Icon view so the user sees
-            // the visual symbol immediately instead of an empty
-            // canvas. They can still flip to Text or Canvas from
-            // the toolbar.
-            if crate::class_cache::is_icon_only_class(&qualified) {
+            // Persistent binding so projection can scope to this
+            // class even after `loads` is cleared. Required for
+            // multi-class package files where
+            // `ModelicaDocument.canonical_path` only tells us the
+            // `.mo` file, not which class inside the user meant.
+            class_names.set(doc_id, qualified.clone());
+            // Smart default view for the drilled-in tab. Matches
+            // OMEdit/Dymola's "all three views always visible, but
+            // land in the one the user probably wants" behaviour:
+            //
+            //   - Icon-only class (`.Icons.*` subtree) → Icon. No
+            //     connectors, no diagram content ever.
+            //   - Class with zero instantiated components (primitive
+            //     `block` like `CriticalDamping`, `partial` templates,
+            //     pure-equation `model`s) → Icon. The Diagram layer
+            //     is legitimately empty; Icon shows the visual
+            //     symbol the user expects.
+            //   - Composed model with components → Canvas (stay on
+            //     the default). Drill-in was the user asking "what's
+            //     inside?" and there's something to show.
+            //
+            // `find_class_by_qualified_name` walks the (already
+            // parsed) AST from the cache entry — no extra parsing.
+            let has_components = entry.ast.ast().and_then(|ast| {
+                crate::diagram::find_class_by_qualified_name(ast, &qualified)
+                    .map(|c| !c.components.is_empty())
+            });
+            let land_in_icon_view =
+                crate::class_cache::is_icon_only_class(&qualified)
+                    || has_components == Some(false);
+            if land_in_icon_view {
                 if let Some(tab) = tabs.get_mut(doc_id) {
                     tab.view_mode =
                         crate::ui::panels::model_view::ModelViewMode::Icon;
