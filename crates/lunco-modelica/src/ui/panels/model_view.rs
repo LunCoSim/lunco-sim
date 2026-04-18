@@ -701,18 +701,26 @@ fn render_icon_view(ui: &mut egui::Ui, world: &mut World) {
         }
     }
 
-    // Fallback placeholder — the class has no known icon.
-    ui.centered_and_justified(|ui| {
-        ui.vertical_centered(|ui| {
+    // Fallback placeholder — the class has no known icon. Same
+    // centered-card pattern the empty-diagram overlay uses, via
+    // the shared [`placeholder::render_centered_card`] helper so
+    // both views stay visually aligned and the centering doesn't
+    // drift between them as features get added.
+    crate::ui::panels::placeholder::render_centered_card(
+        ui,
+        rect,
+        egui::vec2(380.0, 170.0),
+        |ui| {
             ui.label(
                 egui::RichText::new("🎨")
-                    .size(48.0)
+                    .size(36.0)
                     .color(egui::Color32::from_rgb(120, 130, 150)),
             );
-            ui.add_space(8.0);
+            ui.add_space(6.0);
             ui.label(
                 egui::RichText::new("No icon defined for this class")
-                    .color(egui::Color32::from_rgb(180, 190, 210)),
+                    .strong()
+                    .color(egui::Color32::from_rgb(220, 225, 235)),
             );
             ui.add_space(4.0);
             ui.label(
@@ -725,8 +733,8 @@ fn render_icon_view(ui: &mut egui::Ui, world: &mut World) {
                 .size(11.0)
                 .color(egui::Color32::from_rgb(140, 155, 175)),
             );
-        });
-    });
+        },
+    );
 }
 
 /// SVG byte cache shared with the canvas panel — same lookup path

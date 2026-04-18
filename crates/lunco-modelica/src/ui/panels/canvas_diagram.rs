@@ -1733,89 +1733,72 @@ fn render_empty_diagram_overlay(
     );
     let connect_count = count_matches(source, r"\bconnect\s*\(");
 
-    let card_w = 380.0;
-    let card_h = 190.0;
-    let card_rect = egui::Rect::from_center_size(
-        canvas_rect.center(),
-        egui::vec2(card_w, card_h),
-    );
-
-    let painter = ui.painter();
-    // Card: rounded + slight drop shadow.
-    painter.rect_filled(
-        card_rect.translate(egui::vec2(0.0, 3.0)),
-        10.0,
-        egui::Color32::from_rgba_premultiplied(0, 0, 0, 100),
-    );
-    painter.rect_filled(
-        card_rect,
-        10.0,
-        egui::Color32::from_rgb(34, 38, 48),
-    );
-    painter.rect_stroke(
-        card_rect,
-        10.0,
-        egui::Stroke::new(1.0, egui::Color32::from_rgb(60, 70, 88)),
-        egui::StrokeKind::Outside,
-    );
-
-    // Content via child UI so we get widget layout for free.
-    let mut child = ui.new_child(
-        egui::UiBuilder::new()
-            .max_rect(card_rect.shrink(16.0))
-            .layout(egui::Layout::top_down(egui::Align::Min)),
-    );
-    child.label(
-        egui::RichText::new("📝 Equation-only model")
-            .strong()
-            .size(14.0)
-            .color(egui::Color32::from_rgb(220, 225, 235)),
-    );
-    child.label(
-        egui::RichText::new(&class_name)
-            .size(12.0)
-            .color(egui::Color32::from_rgb(170, 185, 210)),
-    );
-    child.add_space(6.0);
-    child.label(
-        egui::RichText::new(
-            "No instantiated components to draw. This class is defined \
-             by equations — the composition view is empty by convention.",
-        )
-        .size(11.0)
-        .color(egui::Color32::from_rgb(170, 180, 200)),
-    );
-    child.add_space(8.0);
-    child.separator();
-    child.add_space(6.0);
-
-    let row = |u: &mut egui::Ui, label: &str, n: usize| {
-        u.horizontal(|u| {
-            u.label(
-                egui::RichText::new(label)
-                    .small()
-                    .color(egui::Color32::from_rgb(150, 160, 180)),
+    crate::ui::panels::placeholder::render_centered_card(
+        ui,
+        canvas_rect,
+        egui::vec2(380.0, 220.0),
+        |child| {
+            child.label(
+                egui::RichText::new("📝 Equation-only model")
+                    .strong()
+                    .size(14.0)
+                    .color(egui::Color32::from_rgb(220, 225, 235)),
             );
-            u.with_layout(egui::Layout::right_to_left(egui::Align::Center), |u| {
-                u.monospace(egui::RichText::new(format!("{n}")).color(
-                    egui::Color32::from_rgb(200, 220, 255),
-                ));
-            });
-        });
-    };
-    row(&mut child, "Parameters", param_count);
-    row(&mut child, "Inputs", input_count);
-    row(&mut child, "Outputs", output_count);
-    row(&mut child, "Equations", equation_count);
-    if connect_count > 0 {
-        row(&mut child, "Connect equations", connect_count);
-    }
-    child.add_space(4.0);
-    child.label(
-        egui::RichText::new("→ Open the Text tab to read / edit the source.")
-            .italics()
-            .size(10.0)
-            .color(egui::Color32::from_rgb(140, 155, 175)),
+            child.label(
+                egui::RichText::new(&class_name)
+                    .size(12.0)
+                    .color(egui::Color32::from_rgb(170, 185, 210)),
+            );
+            child.add_space(6.0);
+            child.label(
+                egui::RichText::new(
+                    "No instantiated components to draw. This class is defined \
+                     by equations — the composition view is empty by convention.",
+                )
+                .size(11.0)
+                .color(egui::Color32::from_rgb(170, 180, 200)),
+            );
+            child.add_space(8.0);
+            child.separator();
+            child.add_space(6.0);
+
+            let row = |u: &mut egui::Ui, label: &str, n: usize| {
+                // Shared placeholder layout centres each emitted
+                // widget; wrap the row in a fixed-width horizontal
+                // so label/value pair stays as a single centred
+                // unit rather than each getting centred individually.
+                u.horizontal(|u| {
+                    u.label(
+                        egui::RichText::new(label)
+                            .small()
+                            .color(egui::Color32::from_rgb(150, 160, 180)),
+                    );
+                    u.with_layout(
+                        egui::Layout::right_to_left(egui::Align::Center),
+                        |u| {
+                            u.monospace(
+                                egui::RichText::new(format!("{n}"))
+                                    .color(egui::Color32::from_rgb(200, 220, 255)),
+                            );
+                        },
+                    );
+                });
+            };
+            row(child, "Parameters", param_count);
+            row(child, "Inputs", input_count);
+            row(child, "Outputs", output_count);
+            row(child, "Equations", equation_count);
+            if connect_count > 0 {
+                row(child, "Connect equations", connect_count);
+            }
+            child.add_space(4.0);
+            child.label(
+                egui::RichText::new("→ Open the Text tab to read / edit the source.")
+                    .italics()
+                    .size(10.0)
+                    .color(egui::Color32::from_rgb(140, 155, 175)),
+            );
+        },
     );
 }
 

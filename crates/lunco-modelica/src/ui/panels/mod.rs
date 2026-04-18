@@ -14,3 +14,4 @@ pub mod inspector;
 pub mod model_view;
 pub mod palette;
 pub mod welcome;
+pub mod placeholder;
