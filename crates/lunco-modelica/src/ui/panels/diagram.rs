@@ -1529,6 +1529,20 @@ fn build_visual_diagram_from_scan(
     diagram
 }
 
+/// Default cap for the "don't project absurdly huge models" guard.
+/// Catches obvious mistakes (importing a whole MSL subpackage into
+/// a diagram viewer) without getting in the way of real engineering
+/// models, which typically have a few dozen components and rarely
+/// cross a couple hundred.
+///
+/// Overridable at call time via the `max_nodes` parameter on
+/// [`import_model_to_diagram_from_ast`] or the
+/// [`DiagramProjectionLimits`] resource the Canvas projection
+/// reads. Power users editing a `Magnetic.FundamentalWave` gizmo
+/// with 500 components should bump this in Settings, not get a
+/// blank canvas.
+pub const DEFAULT_MAX_DIAGRAM_NODES: usize = 1000;
+
 /// Returns `None` if the model has no component instantiations
 /// (e.g., equation-based models like Battery.mo, SpringMass.mo).
 pub fn import_model_to_diagram(source: &str) -> Option<VisualDiagram> {
@@ -1537,7 +1551,7 @@ pub fn import_model_to_diagram(source: &str) -> Option<VisualDiagram> {
     // projection) reuse an already-parsed AST from `ModelicaDocument`.
     let syntax = rumoca_phase_parse::parse_to_syntax(source, "model.mo");
     let ast: rumoca_session::parsing::ast::StoredDefinition = syntax.best_effort().clone();
-    import_model_to_diagram_from_ast(&ast, source)
+    import_model_to_diagram_from_ast(&ast, source, DEFAULT_MAX_DIAGRAM_NODES)
 }
 
 /// Same as [`import_model_to_diagram`] but reuses an already-
@@ -1545,9 +1559,17 @@ pub fn import_model_to_diagram(source: &str) -> Option<VisualDiagram> {
 /// builder, one in the imports-resolution path). Used by the
 /// canvas's async projection task where
 /// `ModelicaDocument::ast()` already holds the parsed tree.
+///
+/// `max_nodes` is a guard against accidentally projecting a huge
+/// package (e.g. `Modelica.Units`) into a diagram — returns `None`
+/// if the parsed graph exceeds the cap. See
+/// [`DEFAULT_MAX_DIAGRAM_NODES`] for the conventional value; the
+/// canvas projection reads it from `DiagramProjectionLimits` so
+/// users editing deeply composed models can raise it in Settings.
 pub fn import_model_to_diagram_from_ast(
     ast: &rumoca_session::parsing::ast::StoredDefinition,
     source: &str,
+    max_nodes: usize,
 ) -> Option<VisualDiagram> {
     use crate::diagram::ModelicaComponentBuilder;
     let builder = ModelicaComponentBuilder::from_ast(ast.clone());
@@ -1575,9 +1597,18 @@ pub fn import_model_to_diagram_from_ast(
         return None;
     }
 
-    // Safety: prevent importing massive packages (like Units) as diagrams
-    if graph.node_count() > 100 {
-        warn!("[Diagram] Model too complex ({} nodes). Skipping diagram generation.", graph.node_count());
+    // Safety: prevent projecting absurdly huge packages (e.g.
+    // `Modelica.Units` with thousands of type declarations) as a
+    // diagram. The cap is caller-supplied so power users editing
+    // rich composed models can raise it via Settings; default is
+    // `DEFAULT_MAX_DIAGRAM_NODES`.
+    if graph.node_count() > max_nodes {
+        warn!(
+            "[Diagram] Model exceeds node cap ({} > {}). Skipping diagram generation. \
+             Raise `Settings → Diagram → Max nodes` to project anyway.",
+            graph.node_count(),
+            max_nodes,
+        );
         return None;
     }
 

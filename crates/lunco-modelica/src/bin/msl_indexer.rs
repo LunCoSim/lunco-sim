@@ -1,4 +1,9 @@
-use rumoca_phase_parse::parse_to_ast;
+// Indexer no longer calls `rumoca_phase_parse::parse_to_ast` directly.
+// Going through `rumoca_session::parsing::parse_files_parallel` routes
+// every parse through rumoca's content-hash keyed artifact cache
+// (`<workspace>/.cache/rumoca/parsed-files/`). Second indexer runs and
+// the workbench's runtime drill-ins share the same cache entries, so
+// a file parsed here is instant at runtime and vice versa.
 use rumoca_session::parsing::ast::{Causality, ClassDef, ClassType, StoredDefinition, Variability, Annotation, Modification};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -138,6 +143,32 @@ struct MSLComponentDef {
     parameters: Vec<ParamDef>,
 }
 
+/// True when the top-level class `name` is actually the package
+/// declared by the containing folder — i.e. the `package.mo` file
+/// declares `package <FolderName> … end <FolderName>` per MLS.
+///
+/// Without this check, a naïve `"{current_path}.{name}"` join for
+/// `Modelica/Blocks/package.mo` produces `Modelica.Blocks.Blocks`
+/// instead of `Modelica.Blocks`. Nested classes then compound:
+/// `Modelica.Blocks.Blocks.Examples.BooleanNetwork1`.
+///
+/// Two cases qualify:
+///  1. `name == "package"` — legacy / hand-written files that
+///     literally named the class `package`.
+///  2. `is_package_file` AND the leaf segment of `current_path`
+///     matches `name` — the MSL-typical case.
+fn is_top_level_self_ref(name: &str, current_path: &str, is_package_file: bool) -> bool {
+    if name == "package" {
+        return true;
+    }
+    if is_package_file {
+        if let Some(leaf) = current_path.rsplit('.').next() {
+            return leaf == name;
+        }
+    }
+    false
+}
+
 struct MSLIndexer {
     classes: HashMap<String, ClassDef>,
     /// Pre-extracted port placements: class_name → (port_name → (x, y)).
@@ -168,14 +199,43 @@ impl MSLIndexer {
                     self.scan_dir(&path, &new_prefix);
                 } else if path.extension().map_or(false, |ext| ext == "mo") {
                     if let Ok(source) = fs::read_to_string(&path) {
-                        let file_name = path.file_name().unwrap().to_str().unwrap();
-                        if let Ok(ast) = parse_to_ast(&source, &file_name) {
-                            // Extract Placement annotations now, while source is in scope.
-                            // Store per class so resolve_inheritance() can look them up
-                            // without re-reading files.
+                        let file_name = path
+                            .file_name()
+                            .unwrap()
+                            .to_str()
+                            .unwrap()
+                            .to_string();
+                        // `package.mo` declares `package <FolderName> …
+                        // end <FolderName>` per MLS — the class inside
+                        // IS the package, so we must collapse rather
+                        // than prefix. Track the file role so both the
+                        // placement mapping below and
+                        // `add_stored_definition` treat the class name
+                        // correctly.
+                        let is_package_file = file_name == "package.mo";
+                        // Parse through rumoca-session's cache. A
+                        // content-hash-matching entry at
+                        // `.cache/rumoca/parsed-files/` deserializes
+                        // from bincode in ~ms; a miss pays the full
+                        // rumoca parse once and writes the bincode so
+                        // the NEXT indexer run and the workbench's
+                        // first drill-in are both instant.
+                        // `parse_files_parallel` with one path is the
+                        // public entry point that exercises the cache;
+                        // rayon overhead is negligible for length-1.
+                        let ast_opt = rumoca_session::parsing::parse_files_parallel(
+                            &[path.clone()],
+                        )
+                        .ok()
+                        .and_then(|mut pairs| pairs.pop().map(|(_, ast)| ast));
+                        if let Some(ast) = ast_opt {
                             let file_placements = extract_all_placements(&source);
                             for name in ast.classes.keys() {
-                                let full = if name == "package" {
+                                let full = if is_top_level_self_ref(
+                                    name,
+                                    package_prefix,
+                                    is_package_file,
+                                ) {
                                     package_prefix.to_string()
                                 } else if package_prefix.is_empty() {
                                     name.to_string()
@@ -184,7 +244,7 @@ impl MSLIndexer {
                                 };
                                 self.placements.insert(full, file_placements.clone());
                             }
-                            self.add_stored_definition(ast, package_prefix);
+                            self.add_stored_definition(ast, package_prefix, is_package_file);
                         }
                         // source is dropped here — no long-term storage of .mo text
                     }
@@ -193,16 +253,19 @@ impl MSLIndexer {
         }
     }
 
-    fn add_stored_definition(&mut self, ast: StoredDefinition, current_path: &str) {
+    fn add_stored_definition(
+        &mut self,
+        ast: StoredDefinition,
+        current_path: &str,
+        is_package_file: bool,
+    ) {
         for (name, class) in ast.classes {
-            let full_name = if name == "package" {
+            let full_name = if is_top_level_self_ref(&name, current_path, is_package_file) {
                 current_path.to_string()
+            } else if current_path.is_empty() {
+                name.to_string()
             } else {
-                if current_path.is_empty() {
-                    name.to_string()
-                } else {
-                    format!("{}.{}", current_path, name)
-                }
+                format!("{}.{}", current_path, name)
             };
             self.add_class(class, &full_name);
         }
@@ -461,6 +524,17 @@ impl MSLIndexer {
 }
 
 fn main() {
+    // Point rumoca at the same on-disk parse cache the workbench
+    // uses (`<workspace>/.cache/rumoca`), so a run here warms the
+    // cache for the app and vice versa. Same one-liner as
+    // `ClassCachePlugin::build` — keeps all tooling cache under
+    // one roof. Honors an explicit `RUMOCA_CACHE_DIR` the user set.
+    if std::env::var_os("RUMOCA_CACHE_DIR").is_none() {
+        let target = lunco_assets::cache_dir().join("rumoca");
+        std::env::set_var("RUMOCA_CACHE_DIR", &target);
+        println!("Using rumoca parse cache at {}", target.display());
+    }
+
     let msl_path = lunco_assets::msl_dir().join("Modelica");
     if !msl_path.exists() {
         println!("MSL not found at {:?}", msl_path);

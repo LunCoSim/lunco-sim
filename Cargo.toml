@@ -33,7 +33,8 @@ members = [
     "crates/lunco-workbench",
     "crates/lunco-scripting",
     "crates/lunco-viz",
-    "crates/lunco-canvas"
+    "crates/lunco-canvas",
+    "crates/lunco-cache"
 ]
 resolver = "2"
 

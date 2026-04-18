@@ -442,6 +442,19 @@ fn render_unified_toolbar(
         .as_ref()
         .map(|m| m.read_only)
         .unwrap_or(false);
+    // Icon-only class (MSL `Modelica.*.Icons.*` subtree): no
+    // connectors, nothing to diagram. `model_path` carries the
+    // `msl://<qualified>` URI for drill-in tabs, so the
+    // path-based helper works on it directly.
+    let is_icon_only_tab = world
+        .resource::<WorkbenchState>()
+        .open_model
+        .as_ref()
+        .map(|m| {
+            crate::class_cache::is_icon_only_class(&m.model_path)
+                || m.model_path.contains("/Icons/")
+        })
+        .unwrap_or(false);
     let compilation_error = world.resource::<WorkbenchState>().compilation_error.clone();
 
     let undo_redo = world
@@ -469,13 +482,38 @@ fn render_unified_toolbar(
         let text_sel = view_mode == ModelViewMode::Text;
         let canv_sel = view_mode == ModelViewMode::Canvas;
         let icon_sel = view_mode == ModelViewMode::Icon;
+        // Icon-only read-only tabs hide the Diagram button — there
+        // are no connectors, no layout, nothing to show on a canvas.
+        // Text view stays available so users can still read the
+        // source. User-editable icon classes keep all three tabs
+        // because they might be authoring a fresh icon library.
+        let diagram_disabled = is_read_only && is_icon_only_tab;
         if ui.selectable_label(text_sel, "📝 Text").clicked() {
             new_view_mode = ModelViewMode::Text;
         }
-        if ui.selectable_label(canv_sel, "🔗 Diagram").clicked() {
-            new_view_mode = ModelViewMode::Canvas;
+        if !diagram_disabled {
+            if ui.selectable_label(canv_sel, "🔗 Diagram").clicked() {
+                new_view_mode = ModelViewMode::Canvas;
+            }
+        } else {
+            // Render a greyed label rather than omitting the slot so
+            // the toolbar doesn't reflow when switching tabs.
+            ui.add_enabled(
+                false,
+                egui::SelectableLabel::new(false, "🔗 Diagram"),
+            )
+            .on_disabled_hover_text(
+                "This class has no connectors and nothing to diagram — switch to Icon view.",
+            );
         }
         if ui.selectable_label(icon_sel, "🎨 Icon").clicked() {
+            new_view_mode = ModelViewMode::Icon;
+        }
+        // Belt-and-braces: if a user switched tabs into this one
+        // with Canvas mode already active (persisted from an
+        // earlier non-icon tab), flip it to Icon so the body below
+        // matches what the toolbar allows.
+        if diagram_disabled && new_view_mode == ModelViewMode::Canvas {
             new_view_mode = ModelViewMode::Icon;
         }
         ui.separator();

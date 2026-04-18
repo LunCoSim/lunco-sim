@@ -1,0 +1,9 @@
+[package]
+name = "lunco-cache"
+version = "0.1.0"
+edition = "2021"
+description = "Generic resource cache: dedupe concurrent loads, share parsed artifacts, evict on change. Drives Modelica ClassCache today; USD asset cache and SysML element cache later."
+
+[dependencies]
+bevy = { workspace = true }
+futures-lite = { workspace = true }

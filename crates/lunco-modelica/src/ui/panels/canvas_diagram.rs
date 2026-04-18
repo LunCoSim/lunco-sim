@@ -92,6 +92,11 @@ struct IconNodeVisual {
     /// component has no icon. Looked up in the shared cache each
     /// draw.
     icon_asset: String,
+    /// Pure-icon class (zero connectors, `.Icons.*` subpackage).
+    /// Rendered with a dashed border so users can tell at a glance
+    /// the component is decorative. Set by the projector via the
+    /// node's `data.icon_only` flag.
+    icon_only: bool,
 }
 
 impl NodeVisual for IconNodeVisual {
@@ -133,13 +138,25 @@ impl NodeVisual for IconNodeVisual {
         }
 
         // Selection outline draws ON TOP of the icon so it's always
-        // visible even over busy SVG content.
+        // visible even over busy SVG content. Icon-only classes
+        // (no connectors, visual-only) get a dashed border instead
+        // of solid — a signal that the component isn't hookable.
         let stroke = if selected {
             egui::Stroke::new(2.0, egui::Color32::from_rgb(120, 170, 255))
+        } else if self.icon_only {
+            egui::Stroke::new(1.0, egui::Color32::from_rgb(150, 130, 90))
         } else {
             egui::Stroke::new(1.0, egui::Color32::from_rgb(90, 100, 120))
         };
-        painter.rect_stroke(rect, 6.0, stroke, egui::StrokeKind::Outside);
+        if self.icon_only && !selected {
+            // Dashed border via four side-segments sampled in
+            // short dash+gap runs. Cheap (12-16 line_segment calls
+            // per node) and looks right at all zoom levels because
+            // we dash in screen pixels here.
+            paint_dashed_rect(painter, rect, 6.0, stroke);
+        } else {
+            painter.rect_stroke(rect, 6.0, stroke, egui::StrokeKind::Outside);
+        }
 
         // Instance name above the icon.
         if !node.label.is_empty() {
@@ -259,6 +276,53 @@ impl EdgeVisual for OrthogonalEdgeVisual {
     }
 }
 
+/// Paint a dashed rectangle outline. Used for icon-only classes so
+/// users see at a glance that the node is decorative (no
+/// connectors). Dashes are expressed in screen pixels because the
+/// caller has already transformed to screen-space — so the dash
+/// pattern stays the same visual size regardless of zoom. `radius`
+/// is currently unused (corners are sampled as-if straight for
+/// simplicity); revisit if the corner elision gets noticed.
+fn paint_dashed_rect(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    _radius: f32,
+    stroke: egui::Stroke,
+) {
+    let dash_len = 4.0;
+    let gap_len = 3.0;
+    let period = dash_len + gap_len;
+    // Walk each of the four edges, emitting dash-sized segments.
+    let edges = [
+        (rect.min, egui::pos2(rect.max.x, rect.min.y)), // top
+        (egui::pos2(rect.max.x, rect.min.y), rect.max), // right
+        (rect.max, egui::pos2(rect.min.x, rect.max.y)), // bottom
+        (egui::pos2(rect.min.x, rect.max.y), rect.min), // left
+    ];
+    for (a, b) in edges {
+        let dx = b.x - a.x;
+        let dy = b.y - a.y;
+        let len = (dx * dx + dy * dy).sqrt();
+        if len < f32::EPSILON {
+            continue;
+        }
+        let ux = dx / len;
+        let uy = dy / len;
+        let mut t = 0.0_f32;
+        while t < len {
+            let end = (t + dash_len).min(len);
+            painter.line_segment(
+                [
+                    egui::pos2(a.x + ux * t, a.y + uy * t),
+                    egui::pos2(a.x + ux * end, a.y + uy * end),
+                ],
+                stroke,
+            );
+            t += period;
+        }
+    }
+}
+
 /// Squared perpendicular distance from `p` to the finite segment
 /// `(a,b)`. Endpoint-clamped — clicking past the end doesn't count.
 fn segment_dist_sq(
@@ -298,9 +362,14 @@ fn build_registry() -> VisualRegistry {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
+        let icon_only = data
+            .get("icon_only")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
         IconNodeVisual {
             type_label,
             icon_asset,
+            icon_only,
         }
     });
     reg.register_edge_kind("modelica.connection", |_: &JsonValue| OrthogonalEdgeVisual);
@@ -547,6 +616,13 @@ fn project_scene(diagram: &VisualDiagram) -> (Scene, HashMap<DiagramNodeId, Canv
                 // hint shown under the label.
                 "type": node.component_def.msl_path,
                 "icon_asset": node.component_def.icon_asset.clone().unwrap_or_default(),
+                // Flag pure-icon classes so the renderer can draw
+                // them with a dashed border — users see at a
+                // glance that these are decorative and have no
+                // connectors to hook up.
+                "icon_only": crate::class_cache::is_icon_only_class(
+                    &node.component_def.msl_path,
+                ),
             }),
             ports,
             label: node.instance_name.clone(),
@@ -753,6 +829,15 @@ impl Panel for CanvasDiagramPanel {
                 let ast = doc.ast().result.as_ref().ok().cloned();
                 (doc.source().to_string(), ast)
             };
+            // Snapshot the configurable projection cap so the bg
+            // task doesn't need to reach back into the world (it
+            // can't — it runs off-thread with only owned data).
+            let max_nodes_snapshot = world
+                .get_resource::<DiagramProjectionLimits>()
+                .map(|l| l.max_nodes)
+                .unwrap_or(
+                    crate::ui::panels::diagram::DEFAULT_MAX_DIAGRAM_NODES,
+                );
             let mut state = world.resource_mut::<CanvasDiagramState>();
             let docstate = state.get_mut(Some(doc_id));
             // Drop any in-flight projection whose input is now
@@ -783,7 +868,7 @@ impl Panel for CanvasDiagramPanel {
                     //   3. `project_scene` — cheap.
                     let mut diagram = if let Some(ast) = ast_arc.as_ref() {
                         crate::ui::panels::diagram::import_model_to_diagram_from_ast(
-                            ast, &source,
+                            ast, &source, max_nodes_snapshot,
                         )
                         .unwrap_or_default()
                     } else {
@@ -918,20 +1003,22 @@ impl CanvasDiagramPanel {
         //      misrepresent what's going on.
         //   2. Projection task in flight → "Projecting…" spinner.
         //   3. Empty scene, no task → equation-only model summary.
-        let (loading_label, projecting, show_empty_overlay) = {
+        let (loading_info, projecting, show_empty_overlay) = {
             let state = world.resource::<CanvasDiagramState>();
             let loads = world.resource::<DrillInLoads>();
             let docstate = state.get(active_doc);
-            let label = active_doc.and_then(|d| loads.detail(d).map(str::to_string));
+            let info = active_doc
+                .and_then(|d| loads.progress(d))
+                .map(|(q, secs)| (q.to_string(), secs));
             (
-                label,
+                info,
                 docstate.projection_task.is_some(),
                 docstate.canvas.scene.node_count() == 0
                     && docstate.projection_task.is_none(),
             )
         };
-        if let Some(class) = loading_label {
-            render_drill_in_loading_overlay(ui, response.rect, &class);
+        if let Some((class, secs)) = loading_info {
+            render_drill_in_loading_overlay(ui, response.rect, &class, secs);
         } else if projecting {
             render_projecting_overlay(ui, response.rect);
         } else if show_empty_overlay {
@@ -1182,6 +1269,70 @@ impl MslPackageNode {
     }
 }
 
+/// User-facing toggles for the MSL add-component menu. Default
+/// values are tuned for the common case ("a user dropping a
+/// component expects a functional block, not an icon shell").
+/// Persisted as a Bevy resource; the Settings dropdown flips the
+/// `show_icon_only_classes` flag to override.
+#[derive(Resource, Debug, Clone)]
+pub struct PaletteSettings {
+    /// When `true`, pure-icon classes (matched by
+    /// [`crate::class_cache::is_icon_only_class`]) appear in the
+    /// MSL add-component submenus. Default `false` — matches
+    /// Dymola's "hide `.Icons.*`" default.
+    pub show_icon_only_classes: bool,
+}
+
+impl Default for PaletteSettings {
+    fn default() -> Self {
+        Self {
+            show_icon_only_classes: false,
+        }
+    }
+}
+
+/// Soft guards for the canvas projection. Prevent accidental
+/// attempts to diagram huge packages without getting in the way of
+/// deeply composed real models. Exposed via the Settings dropdown.
+#[derive(Resource, Debug, Clone)]
+pub struct DiagramProjectionLimits {
+    /// Maximum component count the projector will accept before
+    /// returning `None`. Default
+    /// [`crate::ui::panels::diagram::DEFAULT_MAX_DIAGRAM_NODES`]
+    /// (1000). Users building power-system or multi-body models
+    /// with hundreds of components can raise this in Settings.
+    pub max_nodes: usize,
+}
+
+impl Default for DiagramProjectionLimits {
+    fn default() -> Self {
+        Self {
+            max_nodes: crate::ui::panels::diagram::DEFAULT_MAX_DIAGRAM_NODES,
+        }
+    }
+}
+
+/// True if the subtree contains any class that would be visible
+/// with the icon-only filter ON. Used to prune empty submenus at
+/// render time so the user doesn't click into a dead-end
+/// `Mechanics > Rotational > Icons` branch.
+///
+/// Recursive but cheap — MSL is ~2400 classes across a shallow
+/// tree (depth ≤ 6). The menu builder hits this at most once per
+/// submenu when opened.
+fn package_has_visible_classes(node: &MslPackageNode) -> bool {
+    if node
+        .classes
+        .iter()
+        .any(|c| !crate::class_cache::is_icon_only_class(&c.msl_path))
+    {
+        return true;
+    }
+    node.subpackages
+        .values()
+        .any(package_has_visible_classes)
+}
+
 /// Lazily-built package tree. Walks every entry in
 /// [`crate::visual_diagram::msl_component_library`] once and
 /// inserts it under its dotted package path. Cached for the life
@@ -1226,11 +1377,19 @@ fn render_msl_package_menu(
     node: &MslPackageNode,
     click_world: lunco_canvas::Pos,
     editing_class: Option<&str>,
+    show_icons: bool,
     out: &mut Vec<ModelicaOp>,
 ) {
     for (name, child) in &node.subpackages {
+        // Skip subtrees that would be entirely empty after the
+        // icon-only filter. Cheap recursive walk; avoids showing
+        // dead-end submenus the user can click into only to find
+        // nothing.
+        if !show_icons && !package_has_visible_classes(child) {
+            continue;
+        }
         ui.menu_button(name, |ui| {
-            render_msl_package_menu(ui, child, click_world, editing_class, out);
+            render_msl_package_menu(ui, child, click_world, editing_class, show_icons, out);
         });
     }
     if !node.subpackages.is_empty() && !node.classes.is_empty() {
@@ -1241,6 +1400,12 @@ fn render_msl_package_menu(
     let mut classes = node.classes.clone();
     classes.sort_by(|a, b| a.name.cmp(&b.name));
     for comp in classes {
+        // Hide icon-only classes unless the user explicitly enabled
+        // them in Settings. Path-based detection via `is_icon_only_class`
+        // (currently `.Icons.` subpackage check).
+        if !show_icons && crate::class_cache::is_icon_only_class(&comp.msl_path) {
+            continue;
+        }
         // Display: icon character (if any) + short name. The
         // icon character gives a quick visual cue without
         // loading the SVG.
@@ -1342,11 +1507,16 @@ fn render_empty_menu(
     // Basic → Resistor). Matches how OMEdit and Dymola present
     // the library: user drills down by package instead of
     // scanning a flat list. Tree is built once, cached.
+    let show_icons = world
+        .get_resource::<PaletteSettings>()
+        .map(|s| s.show_icon_only_classes)
+        .unwrap_or(false);
     render_msl_package_menu(
         ui,
         msl_package_tree(),
         click_world,
         editing_class,
+        show_icons,
         out,
     );
     ui.separator();
@@ -1412,6 +1582,7 @@ fn render_drill_in_loading_overlay(
     ui: &mut egui::Ui,
     canvas_rect: egui::Rect,
     class_name: &str,
+    elapsed_secs: f32,
 ) {
     let card_w = 340.0;
     let card_h = 84.0;
@@ -1444,10 +1615,21 @@ fn render_drill_in_loading_overlay(
             col,
         );
     }
+    // Header line: "Loading resource… 12s" — the elapsed counter
+    // reassures the user during slow rumoca parses (large package
+    // files can take tens of seconds). Hidden in the first 0.5s to
+    // avoid flicker on fast loads.
+    let header = if elapsed_secs < 0.5 {
+        "Loading resource…".to_string()
+    } else if elapsed_secs < 10.0 {
+        format!("Loading resource… {:.1}s", elapsed_secs)
+    } else {
+        format!("Loading resource… {}s", elapsed_secs.round() as u32)
+    };
     painter.text(
         egui::pos2(card_rect.min.x + 60.0, card_rect.center().y - 8.0),
         egui::Align2::LEFT_CENTER,
-        "Loading resource…",
+        header,
         egui::FontId::proportional(13.0),
         egui::Color32::from_rgb(220, 225, 235),
     );
@@ -1648,36 +1830,31 @@ fn count_matches(source: &str, pattern: &str) -> usize {
 
 // ─── Drill-in ───────────────────────────────────────────────────────
 
-/// In-flight drill-in loads, keyed by the document id we reserved
-/// when the tab opened. The bg task does the full heavy work —
-/// reading the file AND parsing into a `ModelicaDocument` — so the
-/// UI thread never blocks on rumoca. A Bevy system polls these and
-/// `install_prebuilt`s the parsed document into the registry when
-/// the task completes.
+/// Tab-to-class binding for drill-in tabs whose document hasn't
+/// been installed in the registry yet. Keyed by the reserved
+/// DocumentId, valued by the qualified class name the tab is
+/// waiting on.
+///
+/// The heavy work (file read + rumoca parse) lives in
+/// [`crate::class_cache::ClassCache`]; this resource only tracks
+/// which tabs care about which class. When the cache resolves,
+/// [`drive_drill_in_loads`] builds a `ModelicaDocument` from the
+/// cached AST + source (no second parse) and installs it into the
+/// registry, clearing the binding.
+///
+/// The name `DrillInLoads` is preserved for minimal churn; the
+/// resource is effectively "tabs waiting on a class cache entry".
 #[derive(bevy::prelude::Resource, Default)]
 pub struct DrillInLoads {
-    pending: std::collections::HashMap<lunco_doc::DocumentId, DrillInLoadEntry>,
+    pending: std::collections::HashMap<lunco_doc::DocumentId, DrillInBinding>,
 }
 
-pub struct DrillInLoadEntry {
+pub struct DrillInBinding {
     pub qualified: String,
-    pub file_path: std::path::PathBuf,
-    pub task:
-        bevy::tasks::Task<Result<crate::document::ModelicaDocument, DrillInLoadError>>,
-}
-
-/// Why a bg load failed. Kept small — these surface as log lines.
-#[derive(Debug)]
-pub enum DrillInLoadError {
-    Io(std::io::Error),
-}
-
-impl std::fmt::Display for DrillInLoadError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Io(e) => write!(f, "io: {e}"),
-        }
-    }
+    /// When the tab was opened. Used to show elapsed-seconds in the
+    /// loading overlay so the user sees work is happening even when
+    /// rumoca takes tens of seconds on large package files.
+    pub started: std::time::Instant,
 }
 
 impl DrillInLoads {
@@ -1685,39 +1862,83 @@ impl DrillInLoads {
         self.pending.contains_key(&doc)
     }
     pub fn detail(&self, doc: lunco_doc::DocumentId) -> Option<&str> {
-        self.pending.get(&doc).map(|e| e.qualified.as_str())
+        self.pending.get(&doc).map(|b| b.qualified.as_str())
+    }
+    /// `(qualified, seconds elapsed since tab opened)` for the
+    /// loading overlay. Returns `None` if nothing is loading for
+    /// this doc.
+    pub fn progress(&self, doc: lunco_doc::DocumentId) -> Option<(&str, f32)> {
+        self.pending
+            .get(&doc)
+            .map(|b| (b.qualified.as_str(), b.started.elapsed().as_secs_f32()))
     }
 }
 
-/// Bevy system: poll in-flight drill-in loads, install the parsed
-/// documents in the registry when ready.
+/// Bevy system: for each pending drill-in binding, check whether
+/// its class has landed in [`ClassCache`]. If yes, build a
+/// `ModelicaDocument` from the cached parts (no re-parse) and
+/// install it in the registry.
 pub fn drive_drill_in_loads(
     mut loads: bevy::prelude::ResMut<DrillInLoads>,
     mut registry: bevy::prelude::ResMut<ModelicaDocumentRegistry>,
+    cache: Option<bevy::prelude::Res<crate::class_cache::ClassCache>>,
+    mut tabs: bevy::prelude::ResMut<crate::ui::panels::model_view::ModelTabs>,
 ) {
     use bevy::prelude::*;
-    let keys: Vec<lunco_doc::DocumentId> = loads.pending.keys().copied().collect();
-    for doc_id in keys {
-        let entry = loads.pending.get_mut(&doc_id).unwrap();
-        let result = futures_lite::future::block_on(
-            futures_lite::future::poll_once(&mut entry.task),
-        );
-        let Some(result) = result else { continue };
-        let qualified = entry.qualified.clone();
-        let file_display = entry.file_path.display().to_string();
-        loads.pending.remove(&doc_id);
-        match result {
-            Ok(doc) => {
-                registry.install_prebuilt(doc_id, doc);
-                info!(
-                    "[CanvasDiagram] drill-in: installed `{}` from `{}`",
-                    qualified, file_display
-                );
+    let Some(cache) = cache else { return };
+    // Snapshot pairs first so we can mutate `pending` in the loop.
+    let pending: Vec<(lunco_doc::DocumentId, String)> = loads
+        .pending
+        .iter()
+        .map(|(k, v)| (*k, v.qualified.clone()))
+        .collect();
+    for (doc_id, qualified) in pending {
+        // Still loading?
+        if cache.is_loading(&qualified) {
+            continue;
+        }
+        // Ready?
+        if let Some(entry) = cache.peek(&qualified) {
+            let origin = lunco_doc::DocumentOrigin::File {
+                path: entry.file_path.clone(),
+                writable: false,
+            };
+            // Build doc from pre-parsed cache entry — zero rumoca work.
+            let doc = crate::document::ModelicaDocument::from_parts(
+                doc_id,
+                entry.source.to_string(),
+                origin,
+                std::sync::Arc::clone(&entry.ast),
+            );
+            registry.install_prebuilt(doc_id, doc);
+            loads.pending.remove(&doc_id);
+            // Icon-only classes (MSL's `.Icons.*` subtree) have
+            // zero connectors and no diagram to lay out — default
+            // the drilled-in tab to the Icon view so the user sees
+            // the visual symbol immediately instead of an empty
+            // canvas. They can still flip to Text or Canvas from
+            // the toolbar.
+            if crate::class_cache::is_icon_only_class(&qualified) {
+                if let Some(tab) = tabs.get_mut(doc_id) {
+                    tab.view_mode =
+                        crate::ui::panels::model_view::ModelViewMode::Icon;
+                }
             }
-            Err(e) => warn!(
-                "[CanvasDiagram] drill-in: load failed for `{}`: {}",
-                qualified, e
-            ),
+            info!(
+                "[CanvasDiagram] drill-in: installed `{}` from `{}` (cache hit)",
+                qualified,
+                entry.file_path.display()
+            );
+            continue;
+        }
+        // Failed — log once and drop the binding. Tab will show
+        // the empty-diagram overlay; user can close it.
+        if let Some(msg) = cache.failure_message(&qualified) {
+            warn!(
+                "[CanvasDiagram] drill-in: class `{}` load failed: {}",
+                qualified, msg
+            );
+            loads.pending.remove(&doc_id);
         }
     }
 }
@@ -1736,7 +1957,7 @@ fn drill_into_class(world: &mut World, qualified: &str) {
         );
         return;
     }
-    let Some(file_path) = resolve_msl_class_path(qualified) else {
+    let Some(file_path) = crate::class_cache::resolve_msl_class_path(qualified) else {
         bevy::log::warn!(
             "[CanvasDiagram] drill-in: could not locate MSL file for `{}`",
             qualified
@@ -1744,93 +1965,6 @@ fn drill_into_class(world: &mut World, qualified: &str) {
         return;
     };
     open_drill_in_tab(world, qualified, &file_path);
-}
-
-/// Reverse index: qualified class name → on-disk source file.
-///
-/// Built once lazily on first drill-in, from the static MSL
-/// component library we already load at startup. For every class
-/// in the library, we walk the MLS §13.2.2 candidate paths
-/// (own-file, package.mo, flat parent, …) using `Path::exists()`
-/// checks only — never `read_to_string` at index time, so
-/// building the whole index costs a few thousand stat calls
-/// (~10 ms) and zero file reads. Subsequent drill-ins are O(1)
-/// HashMap lookups followed by exactly one file read on the hit.
-///
-/// Running this at drill-in time (rather than app startup) keeps
-/// the cold-start path fast for users who never drill in, and
-/// avoids coupling MSL indexing to Bevy startup ordering.
-fn msl_class_to_file_index() -> &'static std::collections::HashMap<String, std::path::PathBuf> {
-    use std::sync::OnceLock;
-    static INDEX: OnceLock<std::collections::HashMap<String, std::path::PathBuf>> =
-        OnceLock::new();
-    INDEX.get_or_init(build_msl_class_to_file_index)
-}
-
-fn build_msl_class_to_file_index() -> std::collections::HashMap<String, std::path::PathBuf> {
-    let start = std::time::Instant::now();
-    let lib = crate::visual_diagram::msl_component_library();
-    let mut map = std::collections::HashMap::with_capacity(lib.len());
-    for comp in lib {
-        if let Some(path) = locate_msl_file(&comp.msl_path) {
-            map.insert(comp.msl_path.clone(), path);
-        }
-    }
-    bevy::log::info!(
-        "[CanvasDiagram] MSL class index built: {} classes in {:?}",
-        map.len(),
-        start.elapsed()
-    );
-    map
-}
-
-/// Walk the MLS §13.2.2 candidate paths for `qualified`, returning
-/// the first that `Path::exists()`. Stat-only, no reads. Callers
-/// that need the source do `fs::read_to_string` on the returned
-/// path themselves.
-fn locate_msl_file(qualified: &str) -> Option<std::path::PathBuf> {
-    let msl_root = lunco_assets::msl_dir();
-    let segments: Vec<&str> = qualified.split('.').collect();
-    if segments.is_empty() {
-        return None;
-    }
-    // Candidates, most-specific first:
-    //   Modelica/A/B/C/Name.mo           (own-file class)
-    //   Modelica/A/B/C/Name/package.mo   (package-aggregated)
-    //   Modelica/A/B/C.mo                (flat parent file)
-    //   Modelica/A/B/C/package.mo
-    //   Modelica/A/B.mo
-    //   Modelica/A/B/package.mo
-    //   …
-    for i in (1..=segments.len()).rev() {
-        let mut dir = msl_root.clone();
-        for seg in &segments[..i] {
-            dir.push(seg);
-        }
-        if i == segments.len() {
-            let own = dir.with_extension("mo");
-            if own.exists() {
-                return Some(own);
-            }
-        } else {
-            let pkg = dir.join("package.mo");
-            if pkg.exists() {
-                return Some(pkg);
-            }
-            let flat = dir.with_extension("mo");
-            if flat.exists() {
-                return Some(flat);
-            }
-        }
-    }
-    None
-}
-
-/// Look the class up in the index and return its on-disk path.
-/// No file reads here — drill-in reads the file on a background
-/// task so the UI thread doesn't block on large MSL package files.
-fn resolve_msl_class_path(qualified: &str) -> Option<std::path::PathBuf> {
-    msl_class_to_file_index().get(qualified).cloned()
 }
 
 /// Open a tab for `qualified` class backed by a **placeholder
@@ -1886,29 +2020,18 @@ fn open_drill_in_tab(
     };
 
     if needs_load {
-        let path = file_path.to_path_buf();
-        let id = doc_id;
-        let origin = lunco_doc::DocumentOrigin::File {
-            path: path.clone(),
-            writable: false,
-        };
-        let pool = bevy::tasks::AsyncComputeTaskPool::get();
-        let task = pool.spawn(async move {
-            // Heavy path runs off the UI thread:
-            //   1. `fs::read_to_string` — I/O.
-            //   2. `ModelicaDocument::with_origin` — rumoca parse.
-            let source = std::fs::read_to_string(&path).map_err(DrillInLoadError::Io)?;
-            Ok(crate::document::ModelicaDocument::with_origin(
-                id, source, origin,
-            ))
-        });
+        // Kick (or piggyback on) a class cache load. If AddComponent
+        // preloaded this class earlier, the entry is already cached
+        // and the tab installs on the very next `drive` tick — no
+        // file read, no parse. Concurrent tabs opening the same
+        // class dedupe onto one load automatically.
+        crate::class_cache::request_class(world, qualified);
         let mut loads = world.resource_mut::<DrillInLoads>();
         loads.pending.insert(
             doc_id,
-            DrillInLoadEntry {
+            DrillInBinding {
                 qualified: qualified.to_string(),
-                file_path: file_path.to_path_buf(),
-                task,
+                started: std::time::Instant::now(),
             },
         );
     }
@@ -2185,6 +2308,19 @@ fn apply_ops(world: &mut World, doc_id: lunco_doc::DocumentId, ops: Vec<Modelica
         );
         return;
     }
+
+    // Preload any class the user just referenced. Fire-and-forget —
+    // the two-tier cache (FileCache + ClassCache) dedupes by file,
+    // so adding ten Resistors triggers at most one parse of the
+    // Resistor.mo file across this session.
+    for op in &ops {
+        if let ModelicaOp::AddComponent { decl, .. } = op {
+            if decl.type_name.starts_with("Modelica.") {
+                crate::class_cache::request_class(world, &decl.type_name);
+            }
+        }
+    }
+
     {
         let Some(mut registry) = world.get_resource_mut::<ModelicaDocumentRegistry>() else {
             bevy::log::warn!(

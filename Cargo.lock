@@ -5835,6 +5835,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "lunco-cache"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "futures-lite",
+]
+
+[[package]]
 name = "lunco-canvas"
 version = "0.1.0"
 dependencies = [
@@ -6042,6 +6050,7 @@ dependencies = [
  "log",
  "lunco-api",
  "lunco-assets",
+ "lunco-cache",
  "lunco-canvas",
  "lunco-core",
  "lunco-doc",

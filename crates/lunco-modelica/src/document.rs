@@ -217,13 +217,30 @@ impl ModelicaDocument {
         source: impl Into<String>,
         origin: DocumentOrigin,
     ) -> Self {
+        let source = source.into();
+        let ast = Arc::new(AstCache::from_source(&source, 0));
+        Self::from_parts(id, source, origin, ast)
+    }
+
+    /// Build a document from pre-computed parts. Skips the rumoca
+    /// parse — callers must supply an [`AstCache`] whose `generation`
+    /// field is `0`. Used by the class cache to avoid re-parsing a
+    /// class every time a tab binds to it.
+    pub fn from_parts(
+        id: DocumentId,
+        source: String,
+        origin: DocumentOrigin,
+        ast: Arc<AstCache>,
+    ) -> Self {
+        debug_assert_eq!(
+            ast.generation, 0,
+            "from_parts expects a freshly-parsed AstCache"
+        );
         let last_saved_generation = if origin.is_untitled() {
             None
         } else {
             Some(0)
         };
-        let source = source.into();
-        let ast = Arc::new(AstCache::from_source(&source, 0));
         Self {
             id,
             source,

@@ -205,6 +205,12 @@ impl Plugin for ModelicaUiPlugin {
         // adding the plugin multiple times is a no-op on `init_resource`.
         app.add_plugins(lunco_doc_bevy::TwinJournalPlugin);
 
+        // Shared Modelica class cache — drill-in, preload, and
+        // (later) compile dep-walk all funnel through this one
+        // Arc-shared store so every .mo file is read once and
+        // parsed once per session.
+        app.add_plugins(crate::class_cache::ClassCachePlugin);
+
         // Intent layer: key chords → EditorIntent. Domain resolvers
         // (installed by ModelicaCommandsPlugin below) translate intents
         // into concrete commands for the docs they own.
@@ -242,6 +248,8 @@ impl Plugin for ModelicaUiPlugin {
             .register_panel(panels::inspector::InspectorPanel)
             .register_panel(panels::canvas_diagram::CanvasDiagramPanel)
             .init_resource::<panels::canvas_diagram::CanvasDiagramState>()
+            .init_resource::<panels::canvas_diagram::PaletteSettings>()
+            .init_resource::<panels::canvas_diagram::DiagramProjectionLimits>()
             .init_resource::<panels::canvas_diagram::DrillInLoads>()
             .add_systems(Update, panels::canvas_diagram::drive_drill_in_loads)
             .register_panel(panels::palette::ComponentPalettePanel)
@@ -270,5 +278,38 @@ fn register_settings_menu(world: &mut World) {
             .on_hover_text("Wrap long lines at editor width");
         ui.checkbox(&mut buf.auto_indent, "Auto indent")
             .on_hover_text("Copy previous line's indent on Enter");
+        drop(buf);
+        ui.separator();
+        ui.label(egui::RichText::new("Component Palette").weak().small());
+        let mut palette =
+            world.resource_mut::<panels::canvas_diagram::PaletteSettings>();
+        ui.checkbox(
+            &mut palette.show_icon_only_classes,
+            "Show icon-only classes",
+        )
+        .on_hover_text(
+            "Include decorative classes from `Modelica.*.Icons.*` \
+             subpackages in the add-component menu. Off by default \
+             because they have no connectors and typically aren't \
+             what a user wants to drop on a diagram.",
+        );
+        drop(palette);
+        ui.separator();
+        ui.label(egui::RichText::new("Diagram").weak().small());
+        let mut limits =
+            world.resource_mut::<panels::canvas_diagram::DiagramProjectionLimits>();
+        ui.horizontal(|ui| {
+            ui.label("Max nodes");
+            ui.add(
+                egui::DragValue::new(&mut limits.max_nodes)
+                    .range(10..=100_000)
+                    .speed(10.0),
+            )
+            .on_hover_text(
+                "Upper bound on component count before the projector \
+                 bails out with a warning. Raise for large models; \
+                 lower if projections feel slow on modest hardware.",
+            );
+        });
     });
 }

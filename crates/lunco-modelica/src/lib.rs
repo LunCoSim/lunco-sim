@@ -55,6 +55,13 @@ pub mod ast_extract;
 /// for migration order.
 pub mod document;
 
+/// Shared parse + I/O cache for Modelica classes, built on
+/// [`lunco_cache`]. Drill-in, AddComponent preload, and (later)
+/// compile dep-walk all funnel through here so every class file is
+/// read once, parsed once, and shared as `Arc<AstCache>` across tabs
+/// and compile jobs.
+pub mod class_cache;
+
 /// Subset Modelica pretty-printer — emits source snippets for *new* AST
 /// nodes (component declarations, connect equations, placement / line
 /// annotations). Used by AST-level document ops that splice new text at
