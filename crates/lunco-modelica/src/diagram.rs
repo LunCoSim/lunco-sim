@@ -43,15 +43,25 @@ pub enum DiagramType {
 
 /// Builder that converts a Modelica AST into a [`ComponentGraph`].
 pub struct ModelicaComponentBuilder {
-    ast: StoredDefinition,
+    /// Shared reference to the parsed AST. Using `Arc` here instead
+    /// of an owned `StoredDefinition` is load-bearing: MSL package
+    /// files like `Modelica/Blocks/package.mo` parse into trees
+    /// tens of megabytes deep, and a naïve `.clone()` of the
+    /// whole tree on every projection is enough to push the OS
+    /// into swap and freeze the whole device. Cloning the `Arc` is
+    /// a single pointer bump regardless of tree size.
+    ast: std::sync::Arc<StoredDefinition>,
     diagram_type: DiagramType,
     /// If set, only build the diagram for this specific class name.
     target_class: Option<String>,
 }
 
 impl ModelicaComponentBuilder {
-    /// Create a new builder from a parsed AST.
-    pub fn from_ast(ast: StoredDefinition) -> Self {
+    /// Create a new builder from a shared parsed AST. The `Arc`
+    /// contract lets callers reuse the same AST across many
+    /// builders without any deep clone; see the `ast` field
+    /// comment for why this matters.
+    pub fn from_ast(ast: std::sync::Arc<StoredDefinition>) -> Self {
         Self {
             ast,
             diagram_type: DiagramType::BlockDiagram,
@@ -77,7 +87,7 @@ impl ModelicaComponentBuilder {
     pub fn from_source(source: &str) -> Option<Self> {
         let syntax = rumoca_phase_parse::parse_to_syntax(source, "model.mo");
         let ast: StoredDefinition = syntax.best_effort().clone();
-        Some(Self::from_ast(ast))
+        Some(Self::from_ast(std::sync::Arc::new(ast)))
     }
 
     /// Set the diagram type to generate.
@@ -343,17 +353,45 @@ impl ModelicaComponentBuilder {
     }
 
     fn get_target_class(&self, name: &str) -> Option<&ClassDef> {
-        // Direct lookup
-        if let Some(class) = self.ast.classes.get(name) {
-            return Some(class);
+        // Fast path: single-segment name. Try top level then one
+        // level of nested descent — preserves prior behaviour.
+        if !name.contains('.') {
+            if let Some(class) = self.ast.classes.get(name) {
+                return Some(class);
+            }
+            for (_, class) in &self.ast.classes {
+                if let Some(nested) = class.classes.get(name) {
+                    return Some(nested);
+                }
+            }
+            return None;
         }
-        // Nested lookup
-        for (_, class) in &self.ast.classes {
-            if let Some(nested) = class.classes.get(name) {
-                return Some(nested);
+
+        // Dotted path: walk nested classes segment by segment.
+        // Supports "Blocks.Examples.FilterWithRiseTime" inside
+        // `Modelica/Blocks/package.mo` → descend `Blocks → Examples
+        // → FilterWithRiseTime`. Also tolerant to a leading
+        // `within` prefix: if the full path starts with
+        // `self.ast.within`, strip it before walking. This is how
+        // drill-in tabs call us ("full qualified name"), without
+        // requiring the UI layer to know the AST's internal rooting.
+        let mut path: &str = name;
+        if let Some(within) = self.ast.within.as_ref() {
+            let within_str = within.to_string();
+            if let Some(rest) = path
+                .strip_prefix(&within_str)
+                .and_then(|s| s.strip_prefix('.'))
+            {
+                path = rest;
             }
         }
-        None
+        let mut segments = path.split('.');
+        let first = segments.next()?;
+        let mut current = self.ast.classes.get(first)?;
+        for seg in segments {
+            current = current.classes.get(seg)?;
+        }
+        Some(current)
     }
 }
 

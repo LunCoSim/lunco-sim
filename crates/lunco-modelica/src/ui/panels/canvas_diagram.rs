@@ -725,6 +725,13 @@ impl CanvasDiagramState {
     pub fn drop_doc(&mut self, doc: lunco_doc::DocumentId) {
         self.per_doc.remove(&doc);
     }
+
+    /// Has this doc ever been projected? `false` until
+    /// `get_mut(Some(doc))` inserts — the trigger the render loop
+    /// uses to force an initial projection.
+    pub fn has_entry(&self, doc: lunco_doc::DocumentId) -> bool {
+        self.per_doc.contains_key(&doc)
+    }
 }
 
 /// Running projection task + the generation that spawned it, so the
@@ -802,13 +809,20 @@ impl Panel for CanvasDiagramPanel {
                 .host(doc_id)
                 .map(|h| h.document().generation())
                 .unwrap_or(0);
-            let docstate = world.resource::<CanvasDiagramState>().get(Some(doc_id));
-            // Fresh entry has last_seen_gen == 0; any real edit
-            // bumps the doc's generation, so gen_advanced alone
-            // triggers both initial projection and subsequent
-            // re-projects. No separate "doc switched" bit needed.
+            let state = world.resource::<CanvasDiagramState>();
+            // Two triggers for projection:
+            //   1. **First render of this tab** — `has_entry` is
+            //      false. MSL library docs land with generation 0
+            //      and our fresh state cursor also starts at 0, so a
+            //      gen-only check would never fire and the drilled-
+            //      in canvas would stay blank forever. Insert-on-
+            //      first-render is the right fix.
+            //   2. **Doc mutated** — generation bumped past
+            //      `last_seen_gen`. Standard edit-reproject path.
+            let docstate = state.get(Some(doc_id));
+            let first_render = !state.has_entry(doc_id);
             let gen_advanced = gen != docstate.last_seen_gen;
-            gen_advanced.then_some((doc_id, gen))
+            (first_render || gen_advanced).then_some((doc_id, gen))
         };
 
         if let Some((doc_id, gen)) = project_now {
@@ -838,6 +852,22 @@ impl Panel for CanvasDiagramPanel {
                 .unwrap_or(
                     crate::ui::panels::diagram::DEFAULT_MAX_DIAGRAM_NODES,
                 );
+            // Target class for the projection: the fully-qualified
+            // name the drill-in tab points at, stripped of its
+            // `msl://` URI scheme. Lets the builder descend into
+            // the specific sub-class inside a package file
+            // (`Blocks/package.mo` → `Blocks.Examples.FilterWithRiseTime`)
+            // rather than trying to diagram every sibling class.
+            // None for Untitled / user-authored docs — builder
+            // picks the first non-package class as before.
+            let target_class_snapshot: Option<String> = world
+                .get_resource::<WorkbenchState>()
+                .and_then(|s| s.open_model.as_ref())
+                .and_then(|m| {
+                    m.model_path
+                        .strip_prefix("msl://")
+                        .map(|s| s.to_string())
+                });
             let mut state = world.resource_mut::<CanvasDiagramState>();
             let docstate = state.get_mut(Some(doc_id));
             // Drop any in-flight projection whose input is now
@@ -855,39 +885,71 @@ impl Panel for CanvasDiagramPanel {
                 docstate.projection_task = None;
             }
             if docstate.projection_task.is_none() {
-                let pool = bevy::tasks::AsyncComputeTaskPool::get();
-                let task = pool.spawn(async move {
-                    // Heavy path (zero rumoca parses — we reuse
-                    // the document's AST):
-                    //   1. `import_model_to_diagram_from_ast` builds
-                    //      the component graph from the pre-parsed
-                    //      AST, no re-parse.
-                    //   2. `recover_edges_from_source` — regex pass
-                    //      backfilling connect equations the AST
-                    //      path drops for unresolved ports.
-                    //   3. `project_scene` — cheap.
-                    let mut diagram = if let Some(ast) = ast_arc.as_ref() {
-                        crate::ui::panels::diagram::import_model_to_diagram_from_ast(
-                            ast, &source, max_nodes_snapshot,
-                        )
-                        .unwrap_or_default()
-                    } else {
-                        // Parse error on the doc → fall back to the
-                        // recovering top-level entry point. This only
-                        // hits when the user typed invalid Modelica;
-                        // for any well-formed doc we're on the fast
-                        // path above.
-                        crate::ui::panels::diagram::import_model_to_diagram(&source)
+                // Hard ceiling: the projection path is now
+                // `Arc<StoredDefinition>`-based (no deep clone), so
+                // MB-scale ASTs are no longer an OOM risk. The cap
+                // below is a never-freeze guarantee against pathological
+                // inputs (gigabyte sources, etc.) — not a routine
+                // throttle. Tune only if users actually hit it. The
+                // per-class graph cap (`DiagramProjectionLimits::max_nodes`,
+                // user-configurable) catches the "this file parsed
+                // fine but has too many components to show usefully"
+                // case.
+                const PROJECTION_SOURCE_HARD_CEILING: usize = 10_000_000; // 10 MB
+                let source_len = source.len();
+                let skip_projection = source_len > PROJECTION_SOURCE_HARD_CEILING;
+                if skip_projection {
+                    bevy::log::warn!(
+                        "[CanvasDiagram] refusing to project: source {} bytes \
+                         exceeds the {} hard ceiling. Use Text view.",
+                        source_len,
+                        PROJECTION_SOURCE_HARD_CEILING,
+                    );
+                    // Mark as "seen at this gen" so the render loop
+                    // doesn't keep retrying every frame.
+                    docstate.last_seen_gen = gen;
+                } else {
+                    let pool = bevy::tasks::AsyncComputeTaskPool::get();
+                    let task = pool.spawn(async move {
+                        // Heavy path (zero rumoca parses — we reuse
+                        // the document's AST):
+                        //   1. `import_model_to_diagram_from_ast` builds
+                        //      the component graph from the pre-parsed
+                        //      AST, no re-parse. `Arc<StoredDefinition>`
+                        //      on the wire — a pointer bump, not a tree
+                        //      clone. Critical: MSL package ASTs are
+                        //      tens of MB; deep-cloning them froze the
+                        //      whole device.
+                        //   2. `recover_edges_from_source` — regex pass
+                        //      backfilling connect equations the AST
+                        //      path drops for unresolved ports.
+                        //   3. `project_scene` — cheap.
+                        let mut diagram = if let Some(ast) = ast_arc {
+                            crate::ui::panels::diagram::import_model_to_diagram_from_ast(
+                                ast,
+                                &source,
+                                max_nodes_snapshot,
+                                target_class_snapshot.as_deref(),
+                            )
                             .unwrap_or_default()
-                    };
-                    recover_edges_from_source(&source, &mut diagram);
-                    let (scene, _id_map) = project_scene(&diagram);
-                    scene
-                });
-                docstate.projection_task = Some(ProjectionTask {
-                    gen_at_spawn: gen,
-                    task,
-                });
+                        } else {
+                            // Parse error on the doc → fall back to the
+                            // recovering top-level entry point. This only
+                            // hits when the user typed invalid Modelica;
+                            // for any well-formed doc we're on the fast
+                            // path above.
+                            crate::ui::panels::diagram::import_model_to_diagram(&source)
+                                .unwrap_or_default()
+                        };
+                        recover_edges_from_source(&source, &mut diagram);
+                        let (scene, _id_map) = project_scene(&diagram);
+                        scene
+                    });
+                    docstate.projection_task = Some(ProjectionTask {
+                        gen_at_spawn: gen,
+                        task,
+                    });
+                }
             }
             // DO NOT update last_seen_gen here — only after the
             // task completes and the scene is actually swapped in.
@@ -1003,23 +1065,30 @@ impl CanvasDiagramPanel {
         //      misrepresent what's going on.
         //   2. Projection task in flight → "Projecting…" spinner.
         //   3. Empty scene, no task → equation-only model summary.
-        let (loading_info, projecting, show_empty_overlay) = {
+        let (loading_info, projecting, show_empty_overlay, scene_has_content) = {
             let state = world.resource::<CanvasDiagramState>();
             let loads = world.resource::<DrillInLoads>();
             let docstate = state.get(active_doc);
             let info = active_doc
                 .and_then(|d| loads.progress(d))
                 .map(|(q, secs)| (q.to_string(), secs));
+            let has_content = docstate.canvas.scene.node_count() > 0;
             (
                 info,
                 docstate.projection_task.is_some(),
-                docstate.canvas.scene.node_count() == 0
-                    && docstate.projection_task.is_none(),
+                !has_content && docstate.projection_task.is_none(),
+                has_content,
             )
         };
+        // Loading overlay: only on tabs that are genuinely waiting
+        // on a drill-in parse (and the scene hasn't been populated
+        // yet). Once the scene has content, any brief re-projection
+        // from an edit swaps atomically without flashing.
         if let Some((class, secs)) = loading_info {
-            render_drill_in_loading_overlay(ui, response.rect, &class, secs);
-        } else if projecting {
+            if !scene_has_content {
+                render_drill_in_loading_overlay(ui, response.rect, &class, secs);
+            }
+        } else if projecting && !scene_has_content {
             render_projecting_overlay(ui, response.rect);
         } else if show_empty_overlay {
             render_empty_diagram_overlay(ui, response.rect, world);

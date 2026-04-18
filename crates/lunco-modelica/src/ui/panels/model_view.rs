@@ -252,15 +252,27 @@ fn resolve_tab_title(world: &World, doc: DocumentId) -> (String, bool, bool) {
 /// the active one). Mutates `selected_entity` to one of the entities
 /// linked to `doc`, if any — that's what the Telemetry / Inspector
 /// / Graphs side panels filter by.
-fn sync_active_tab_to_doc(world: &mut World, doc: DocumentId) {
-    // Already active? Nothing to do.
-    let already_active = world
-        .resource::<WorkbenchState>()
-        .open_model
-        .as_ref()
-        .and_then(|m| m.doc)
-        == Some(doc);
-    if already_active {
+pub(crate) fn sync_active_tab_to_doc(world: &mut World, doc: DocumentId) {
+    // Already active AND the cached snapshot is from the real doc
+    // (not a placeholder that filled in while a drill-in load was
+    // still in flight). The check on non-empty source distinguishes:
+    //   - Real snapshot: source is the file contents → nothing to do.
+    //   - Placeholder: source is "" because host was still missing
+    //     when we last synced → refresh now that the registry has
+    //     the real document.
+    //
+    // Without the second condition, drill-in tabs could get stuck
+    // showing an empty Text view forever: sync runs with a placeholder,
+    // `already_active` fires, we short-circuit, and the real
+    // source never lands until the user manually switches tabs.
+    let (already_active, source_is_placeholder) = {
+        let ws = world.resource::<WorkbenchState>();
+        match ws.open_model.as_ref() {
+            Some(open) => (open.doc == Some(doc), open.source.is_empty()),
+            None => (false, false),
+        }
+    };
+    if already_active && !source_is_placeholder {
         // Still refresh selected_entity in case an entity linked to
         // this doc was spawned since the last switch.
         refresh_selected_entity_for(world, doc);
@@ -482,38 +494,20 @@ fn render_unified_toolbar(
         let text_sel = view_mode == ModelViewMode::Text;
         let canv_sel = view_mode == ModelViewMode::Canvas;
         let icon_sel = view_mode == ModelViewMode::Icon;
-        // Icon-only read-only tabs hide the Diagram button — there
-        // are no connectors, no layout, nothing to show on a canvas.
-        // Text view stays available so users can still read the
-        // source. User-editable icon classes keep all three tabs
-        // because they might be authoring a fresh icon library.
-        let diagram_disabled = is_read_only && is_icon_only_tab;
+        // All three views are always available — OMEdit/Dymola
+        // pattern. A partial or icon-only class has a legitimately
+        // empty Diagram layer, and users should be able to view it.
+        // The smart "land in the right view by default" happens at
+        // install time (see `drive_drill_in_loads`), not by hiding
+        // buttons.
+        let _ = (is_read_only, is_icon_only_tab);
         if ui.selectable_label(text_sel, "📝 Text").clicked() {
             new_view_mode = ModelViewMode::Text;
         }
-        if !diagram_disabled {
-            if ui.selectable_label(canv_sel, "🔗 Diagram").clicked() {
-                new_view_mode = ModelViewMode::Canvas;
-            }
-        } else {
-            // Render a greyed label rather than omitting the slot so
-            // the toolbar doesn't reflow when switching tabs.
-            ui.add_enabled(
-                false,
-                egui::SelectableLabel::new(false, "🔗 Diagram"),
-            )
-            .on_disabled_hover_text(
-                "This class has no connectors and nothing to diagram — switch to Icon view.",
-            );
+        if ui.selectable_label(canv_sel, "🔗 Diagram").clicked() {
+            new_view_mode = ModelViewMode::Canvas;
         }
         if ui.selectable_label(icon_sel, "🎨 Icon").clicked() {
-            new_view_mode = ModelViewMode::Icon;
-        }
-        // Belt-and-braces: if a user switched tabs into this one
-        // with Canvas mode already active (persisted from an
-        // earlier non-icon tab), flip it to Icon so the body below
-        // matches what the toolbar allows.
-        if diagram_disabled && new_view_mode == ModelViewMode::Canvas {
             new_view_mode = ModelViewMode::Icon;
         }
         ui.separator();

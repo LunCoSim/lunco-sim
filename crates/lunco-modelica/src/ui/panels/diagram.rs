@@ -1551,7 +1551,12 @@ pub fn import_model_to_diagram(source: &str) -> Option<VisualDiagram> {
     // projection) reuse an already-parsed AST from `ModelicaDocument`.
     let syntax = rumoca_phase_parse::parse_to_syntax(source, "model.mo");
     let ast: rumoca_session::parsing::ast::StoredDefinition = syntax.best_effort().clone();
-    import_model_to_diagram_from_ast(&ast, source, DEFAULT_MAX_DIAGRAM_NODES)
+    import_model_to_diagram_from_ast(
+        std::sync::Arc::new(ast),
+        source,
+        DEFAULT_MAX_DIAGRAM_NODES,
+        None,
+    )
 }
 
 /// Same as [`import_model_to_diagram`] but reuses an already-
@@ -1567,12 +1572,27 @@ pub fn import_model_to_diagram(source: &str) -> Option<VisualDiagram> {
 /// canvas projection reads it from `DiagramProjectionLimits` so
 /// users editing deeply composed models can raise it in Settings.
 pub fn import_model_to_diagram_from_ast(
-    ast: &rumoca_session::parsing::ast::StoredDefinition,
+    ast: std::sync::Arc<rumoca_session::parsing::ast::StoredDefinition>,
     source: &str,
     max_nodes: usize,
+    target_class: Option<&str>,
 ) -> Option<VisualDiagram> {
     use crate::diagram::ModelicaComponentBuilder;
-    let builder = ModelicaComponentBuilder::from_ast(ast.clone());
+    // `Arc::clone` here is a pointer bump, NOT a tree clone.
+    // MSL package ASTs are megabytes; a naïve clone would push the
+    // process into swap on drill-in into anything under
+    // `Modelica/Blocks/package.mo` etc.
+    //
+    // `target_class` scopes the builder to a specific class inside
+    // the AST — critical for drill-in tabs backed by multi-class
+    // package files. Without it, the builder would walk every
+    // sibling class (dozens in `Blocks/package.mo`) and render a
+    // Frankenstein diagram. With it, we get only the drilled-in
+    // class's components and connect equations.
+    let mut builder = ModelicaComponentBuilder::from_ast(std::sync::Arc::clone(&ast));
+    if let Some(target) = target_class {
+        builder = builder.target_class(target);
+    }
     let graph = builder.build();
 
     // If the AST-based graph has no components, fall back to a
