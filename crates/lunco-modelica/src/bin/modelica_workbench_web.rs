@@ -44,8 +44,12 @@ pub fn run() {
 
     // Load the first bundled model (Battery.mo) as the default.
     // Models are embedded at compile time via include_str! — no filesystem access.
-    let default_model = BUNDLED_MODELS.first().unwrap_or(&("", ""));
-    let (default_filename, default_source) = default_model;
+    // Bevy requires some default; RocketEngine is first in the list.
+    let default_model = BUNDLED_MODELS
+        .first()
+        .expect("at least one bundled model");
+    let default_filename = default_model.filename;
+    let default_source = default_model.source;
 
     App::new()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
@@ -89,6 +93,9 @@ fn setup_web_workbench(
     channels: Res<lunco_modelica::ModelicaChannels>,
     mut workbench_state: ResMut<lunco_modelica::ui::WorkbenchState>,
     mut doc_registry: ResMut<lunco_modelica::ui::ModelicaDocumentRegistry>,
+    mut compile_states: ResMut<lunco_modelica::ui::CompileStates>,
+    mut model_tabs: ResMut<lunco_modelica::ui::panels::model_view::ModelTabs>,
+    mut layout: ResMut<lunco_workbench::WorkbenchLayout>,
     model_info: Res<BundledModelInfo>,
 ) {
     commands.spawn(Camera2d);
@@ -101,6 +108,14 @@ fn setup_web_workbench(
 
     workbench_state.editor_buffer = source.clone();
 
+    // Allocate the Document up-front so the entity is spawned with a
+    // valid `document` id pointing at its source. Record the bundled-asset
+    // origin for read-only classification.
+    let doc_id = doc_registry.allocate_with_origin(
+        source.clone(),
+        lunco_doc::DocumentOrigin::readonly_file(model_path.clone()),
+    );
+
     let entity = commands.spawn((
         WebWorkbench,
         Name::new("Modelica_Sandbox"),
@@ -110,16 +125,25 @@ fn setup_web_workbench(
             parameters: initial_params,
             inputs: initial_inputs,
             paused: true, // Start paused; compile result will unpause
+            document: doc_id,
             ..default()
         },
     )).id();
 
-    // Register the source with the Document registry — the single source
-    // of truth for this entity's Modelica text.
-    doc_registry.checkpoint_source(entity, source.clone());
+    doc_registry.link(entity, doc_id);
+    compile_states.set(doc_id, lunco_modelica::ui::CompileState::Compiling);
 
-    // Select this entity so handle_modelica_responses populates plotted_variables
-    // on the initial compile result (is_new_model branch).
+    // Open the model tab so the user lands on the actual model view
+    // instead of the Welcome placeholder.
+    model_tabs.ensure(doc_id);
+    layout.open_instance(
+        lunco_modelica::ui::panels::model_view::MODEL_VIEW_KIND,
+        doc_id.raw(),
+    );
+
+    // Select this entity so panels default to viewing it. Observable
+    // auto-binding into the default plot happens inside
+    // `handle_modelica_responses` on the `is_new_model` branch.
     workbench_state.selected_entity = Some(entity);
 
     // Kick off initial compilation of the bundled model.

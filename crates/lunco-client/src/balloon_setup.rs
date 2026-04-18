@@ -7,10 +7,11 @@
 use bevy::prelude::*;
 use lunco_assets::assets_dir;
 use lunco_cosim::{SimComponent, SimStatus, SimConnection};
+use lunco_doc::DocumentOrigin;
 use lunco_modelica::{
     ModelicaChannels, ModelicaCommand, ModelicaModel,
     extract_model_name, extract_parameters, extract_inputs_with_defaults,
-    ui::ModelicaDocumentRegistry,
+    ui::{CompileState, CompileStates, ModelicaDocumentRegistry},
 };
 use lunco_sandbox_edit::catalog::BalloonModelMarker;
 
@@ -20,6 +21,7 @@ pub fn compile_balloon_model(
     q_new: Query<(Entity, &Name), Added<BalloonModelMarker>>,
     channels: Res<ModelicaChannels>,
     mut doc_registry: ResMut<ModelicaDocumentRegistry>,
+    mut compile_states: ResMut<CompileStates>,
 ) {
     for (entity, name) in &q_new {
         let model_path = assets_dir().join("models/balloon.mo");
@@ -35,6 +37,15 @@ pub fn compile_balloon_model(
         let params = extract_parameters(&source);
         let inputs = extract_inputs_with_defaults(&source);
 
+        // Allocate the Document first — it's the single source of truth
+        // for this model's text, and the entity should carry a valid id
+        // from the moment it gets `ModelicaModel`.
+        let doc_id = doc_registry.open_for_with_origin(
+            entity,
+            source.clone(),
+            DocumentOrigin::readonly_file(model_path.clone()),
+        );
+
         // Create ModelicaModel BEFORE compiling — handle_modelica_responses
         // only processes results for entities that already have one.
         commands.entity(entity).insert(ModelicaModel {
@@ -47,12 +58,10 @@ pub fn compile_balloon_model(
             last_step_time: 0.0,
             session_id: 0,
             paused: false,
+            document: doc_id,
             is_stepping: false,
         });
-
-        // Register the Modelica source with the Document registry —
-        // it's now the single source of truth for this entity's source.
-        doc_registry.checkpoint_source(entity, source.clone());
+        compile_states.set(doc_id, CompileState::Compiling);
 
         let _ = channels.tx.send(ModelicaCommand::Compile {
             entity,

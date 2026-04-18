@@ -147,6 +147,7 @@ impl DiagramState {
         let node_id = self.diagram.add_node(def.clone(), pos);
         let ports: Vec<String> = def.ports.iter().map(|p| p.name.clone()).collect();
         let connector_types: Vec<String> = def.ports.iter().map(|p| p.connector_type.clone()).collect();
+        let port_positions: Vec<(f32, f32)> = def.ports.iter().map(|p| (p.x, p.y)).collect();
 
         let snarl_node = DiagramNode::Component {
             id: node_id,
@@ -157,6 +158,7 @@ impl DiagramState {
             icon_asset: def.icon_asset.clone(),
             ports,
             connector_types,
+            port_positions,
         };
 
         self.snarl.insert_node(pos, snarl_node);
@@ -201,6 +203,10 @@ pub enum DiagramNode {
         icon_asset: Option<String>,
         ports: Vec<String>,
         connector_types: Vec<String>,
+        /// Port positions in Modelica diagram coordinates (-100..100).
+        /// Parallel to `ports` and `connector_types`.
+        #[serde(default)]
+        port_positions: Vec<(f32, f32)>,
     },
 }
 
@@ -208,6 +214,7 @@ impl DiagramNode {
     fn from_msl(comp: &MSLComponentDef) -> Self {
         let ports: Vec<String> = comp.ports.iter().map(|p| p.name.clone()).collect();
         let connector_types: Vec<String> = comp.ports.iter().map(|p| p.connector_type.clone()).collect();
+        let port_positions: Vec<(f32, f32)> = comp.ports.iter().map(|p| (p.x, p.y)).collect();
         DiagramNode::Component {
             id: DiagramNodeId::new(),
             instance_name: format!("New{}", comp.name),
@@ -217,6 +224,7 @@ impl DiagramNode {
             icon_asset: comp.icon_asset.clone(),
             ports,
             connector_types,
+            port_positions,
         }
     }
 
@@ -948,7 +956,10 @@ impl<'a> SnarlViewer<DiagramNode> for DiagramViewer<'a> {
     ) {
         let node = &snarl[node_id];
         let instance_name = node.title();
-        let DiagramNode::Component { id, .. } = node;
+        let DiagramNode::Component { id, port_positions, ports: port_names, connector_types: conn_types, .. } = node;
+        let port_positions = port_positions.clone();
+        let port_names = port_names.clone();
+        let conn_types = conn_types.clone();
         
         let body_height = self.theme.body_min_size.y;
         let symbol_size = self.theme.body_min_size.x;
@@ -971,7 +982,41 @@ impl<'a> SnarlViewer<DiagramNode> for DiagramViewer<'a> {
             painter.rect_stroke(rect.expand(2.0), 0.0, egui::Stroke::new(2.0, egui::Color32::LIGHT_BLUE), egui::StrokeKind::Middle);
         }
 
-        // 5. Draw instance label centered below the box
+        // 5. Draw port dots at their Modelica diagram positions.
+        // Modelica coords are -100..100; map onto the body rect.
+        // Ports sitting exactly on the boundary (|x|=100 or |y|=100) are drawn
+        // as small filled circles with a label so the user knows where to wire.
+        for (i, (mx, my)) in port_positions.iter().enumerate() {
+            if *mx == 0.0 && *my == 0.0 { continue; } // unknown position, skip
+            let px = rect.left() + (mx + 100.0) / 200.0 * rect.width();
+            let py = rect.top()  + (100.0 - my) / 200.0 * rect.height();
+            let pos = egui::pos2(px, py);
+            let ct = conn_types.get(i).map(|s| s.as_str()).unwrap_or("Pin");
+            let color = connector_color(ct, self.theme);
+            painter.circle_filled(pos, self.theme.port_dot_radius + 1.0, egui::Color32::from_black_alpha(180));
+            painter.circle_filled(pos, self.theme.port_dot_radius, color);
+            // Port name label — tiny, offset away from boundary
+            let label = port_names.get(i).map(|s| s.as_str()).unwrap_or("");
+            let offset = egui::vec2(
+                if *mx < 0.0 { 8.0 } else if *mx > 0.0 { -8.0 } else { 0.0 },
+                if *my > 0.0 { 8.0 } else if *my < 0.0 { -8.0 } else { 0.0 },
+            );
+            let align = match (*mx as i32, *my as i32) {
+                (x, _) if x < 0 => egui::Align2::LEFT_CENTER,
+                (x, _) if x > 0 => egui::Align2::RIGHT_CENTER,
+                (_, y) if y > 0 => egui::Align2::CENTER_TOP,
+                _                => egui::Align2::CENTER_BOTTOM,
+            };
+            painter.text(
+                pos + offset,
+                align,
+                label,
+                egui::FontId::proportional(9.0),
+                color,
+            );
+        }
+
+        // 6. Draw instance label centered below the box
         painter.text(
             egui::pos2(rect.center().x, rect.bottom() + 8.0),
             egui::Align2::CENTER_TOP,
@@ -1367,6 +1412,7 @@ fn build_snarl(diagram: &VisualDiagram) -> Snarl<DiagramNode> {
     for node in &diagram.nodes {
         let ports: Vec<String> = node.component_def.ports.iter().map(|p| p.name.clone()).collect();
         let connector_types: Vec<String> = node.component_def.ports.iter().map(|p| p.connector_type.clone()).collect();
+        let port_positions: Vec<(f32, f32)> = node.component_def.ports.iter().map(|p| (p.x, p.y)).collect();
         let snarl_node = DiagramNode::Component {
             id: node.id,
             instance_name: node.instance_name.clone(),
@@ -1376,6 +1422,7 @@ fn build_snarl(diagram: &VisualDiagram) -> Snarl<DiagramNode> {
             icon_asset: node.component_def.icon_asset.clone(),
             ports,
             connector_types,
+            port_positions,
         };
         let pos = egui::Pos2::new(node.position.x, node.position.y);
         let sid = snarl.insert_node(pos, snarl_node);
@@ -1478,21 +1525,32 @@ impl Panel for DiagramPanel {
         }
 
         // ── Check if open_model changed → trigger import task ──
+        //
+        // When the Package Browser opens a new model, it sets
+        // `diagram_dirty = true`. We spawn the parse task *and* clear the
+        // current visual state so the user sees either the reparsed
+        // diagram or an empty canvas — never a stale carry-over from a
+        // previously-open file or a user-built diagram that no longer
+        // belongs to the active source.
         {
             let dirty = world.get_resource::<WorkbenchState>()
                 .map(|s| s.diagram_dirty)
                 .unwrap_or(false);
             if dirty {
-                if let Some(state) = world.get_resource::<WorkbenchState>() {
-                    if let Some(ref model) = state.open_model {
-                        let source = model.source.clone();
-                        let pool = bevy::tasks::AsyncComputeTaskPool::get();
-                        let task = pool.spawn(async move {
-                            import_model_to_diagram(&source)
-                        });
-                        if let Some(mut ds) = world.get_resource_mut::<DiagramState>() {
-                            ds.parse_task = Some(task);
-                        }
+                let source = world.get_resource::<WorkbenchState>()
+                    .and_then(|s| s.open_model.as_ref().map(|m| m.source.clone()));
+                if let Some(mut ds) = world.get_resource_mut::<DiagramState>() {
+                    ds.diagram = VisualDiagram::default();
+                    ds.snarl = egui_snarl::Snarl::default();
+                    ds.compile_status = None;
+                }
+                if let Some(source) = source {
+                    let pool = bevy::tasks::AsyncComputeTaskPool::get();
+                    let task = pool.spawn(async move {
+                        import_model_to_diagram(&source)
+                    });
+                    if let Some(mut ds) = world.get_resource_mut::<DiagramState>() {
+                        ds.parse_task = Some(task);
                     }
                 }
                 if let Some(mut state) = world.get_resource_mut::<WorkbenchState>() {
@@ -1502,14 +1560,16 @@ impl Panel for DiagramPanel {
         }
 
         // ── Poll import task ──
+        //
+        // Treat a `None` result as "no diagram representable from this
+        // source" — keep the cleared canvas so the view honestly reflects
+        // the active model rather than silently falling back to old state.
         let mut is_parsing = false;
         if let Some(mut ds) = world.get_resource_mut::<DiagramState>() {
             if let Some(mut task) = ds.parse_task.take() {
                 if let Some(diagram_opt) = futures_lite::future::block_on(futures_lite::future::poll_once(&mut task)) {
-                    if let Some(diagram) = diagram_opt {
-                        ds.diagram = diagram;
-                        ds.rebuild_snarl();
-                    }
+                    ds.diagram = diagram_opt.unwrap_or_default();
+                    ds.rebuild_snarl();
                 } else {
                     ds.parse_task = Some(task);
                     is_parsing = true;
@@ -1527,97 +1587,35 @@ impl Panel for DiagramPanel {
             return;
         }
 
-        // ── Breadcrumb bar ──
-        let (has_model, display_name, is_read_only, has_back) = {
-            let state = world.get_resource::<WorkbenchState>();
-            state.map(|s| {
-                s.open_model.as_ref().map(|m| {
-                    (true, m.display_name.clone(), m.read_only, !s.navigation_stack.is_empty())
-                }).unwrap_or((false, String::new(), false, false))
-            }).unwrap_or((false, String::new(), false, false))
-        };
-
-        if has_model {
-            ui.horizontal(|ui| {
-                // Read-only badge
-                if is_read_only {
-                    ui.colored_label(egui::Color32::from_rgb(200, 150, 50), "👁 Read-only");
-                } else {
-                    ui.colored_label(egui::Color32::GREEN, "✏️ Editing");
-                }
-                ui.label(format!("• {}", display_name));
-
-                // Back button
-                if has_back {
-                    if ui.small_button("← Back").clicked() {
-                        if let Some(mut state) = world.get_resource_mut::<WorkbenchState>() {
-                            if let Some(prev_path) = state.navigation_stack.pop() {
-                                state.open_model = None;
-                                state.diagram_dirty = true;
-                                let _ = prev_path;
-                            }
-                        }
-                    }
-                }
-            });
-            ui.separator();
+        // ── Equation-only empty state ──
+        //
+        // Models like RocketEngine / Battery are pure equations, with
+        // no component instantiations or `connect` statements. There
+        // is nothing to draw — `import_model_to_diagram` returned
+        // `None`, so `ds.diagram.nodes` is empty. Rather than render a
+        // silent blank canvas, show the user *why* nothing is there
+        // and preview the model's shape (parameters, inputs,
+        // observables) so the Diagram view still communicates
+        // something.
+        //
+        // Users with components that *should* show up see the canvas
+        // as normal; this branch only triggers when there's genuinely
+        // nothing visual.
+        let is_diagram_empty = world
+            .get_resource::<DiagramState>()
+            .map(|ds| ds.diagram.nodes.is_empty())
+            .unwrap_or(true);
+        if is_diagram_empty {
+            render_equation_only_empty_state(ui, world);
+            return;
         }
 
-        // ── Toolbar ──
-        ui.horizontal(|ui| {
-            // Mode toggle
-            {
-                let schematic = world.get_resource::<DiagramState>()
-                    .map(|ds| ds.schematic_mode)
-                    .unwrap_or(true);
-                let label = if schematic { "🖼 Schematic" } else { "📊 NodeGraph" };
-                if ui.selectable_label(schematic, label).clicked() {
-                    if let Some(mut ds) = world.get_resource_mut::<DiagramState>() {
-                        ds.schematic_mode = !ds.schematic_mode;
-                    }
-                }
-            }
-            // Bundle Examples
-            if ui.button("📁 Load RC Example").clicked() {
-                auto_place_rc_circuit(world);
-            }
-            ui.separator();
-
-            // Compile & Run
-            if ui.button("🚀 COMPILE & RUN").clicked() {
-                // handled below
-                ui.memory_mut(|m| m.data.insert_temp(egui::Id::new("diagram_compile"), true));
-            }
-            ui.separator();
-
-            // Stats
-            {
-                let s = world.get_resource::<DiagramState>();
-                if let Some(st) = s {
-                    ui.label(
-                        egui::RichText::new(format!("{} components · {} wires", st.diagram.nodes.len(), st.diagram.edges.len()))
-                            .size(10.0)
-                            .color(egui::Color32::from_rgb(160, 160, 170)),
-                    );
-                    if let Some(status) = &st.compile_status {
-                        ui.separator();
-                        let color = if st.compile_ok { egui::Color32::GREEN } else { egui::Color32::LIGHT_RED };
-                        ui.colored_label(color, status);
-                    }
-                }
-            }
-            ui.separator();
-
-            // Clear
-            if ui.small_button("🗑 Clear").clicked() {
-                if let Some(mut s) = world.get_resource_mut::<DiagramState>() {
-                    s.diagram = VisualDiagram::default();
-                    s.snarl = Snarl::default();
-                    s.compile_status = None;
-                }
-            }
-        });
-        ui.separator();
+        // Body only. Identity (model name, read-only state), compile
+        // button and view-mode switching all live on the ModelView panel's
+        // unified toolbar. The Schematic/NodeGraph toggle and diagram-
+        // specific stats will migrate up as a contextual sub-toolbar in a
+        // follow-up; for now schematic mode stays at its persisted value
+        // and users can flip it via code / script / future menu entry.
 
 
         // ── Canvas (egui-snarl) ──
@@ -1678,20 +1676,18 @@ impl Panel for DiagramPanel {
             sync_connections(snarl, diagram);
         }
 
-        // ── Compile (deferred check) ──
-        let compile_clicked = ui.memory(|m| {
-            m.data.get_temp::<bool>(egui::Id::new("diagram_compile")).unwrap_or(false)
-        });
-        if compile_clicked {
-            ui.memory_mut(|m| m.data.insert_temp(egui::Id::new("diagram_compile"), false));
-            do_compile(world);
-        }
+        // The Compile button lives on the ModelViewPanel unified toolbar
+        // now; in Diagram mode it calls `do_compile` below directly.
     }
 }
 
-/// Execute the compile-and-run workflow: generate source → write temp file
-/// → spawn entity → send compile command.
-fn do_compile(world: &mut World) {
+/// Execute the diagram-to-compile workflow: generate Modelica source from
+/// the current [`DiagramState`] → write temp file → spawn or update a
+/// `ModelicaModel` entity → send [`ModelicaCommand::Compile`] to the
+/// worker. Public so [`crate::ui::panels::model_view::ModelViewPanel`]
+/// can dispatch it from the unified toolbar when the user is in
+/// Diagram mode.
+pub fn do_compile(world: &mut World) {
     // Extract data first
     let (model_counter, source, temp_path) = {
         let Some(s) = world.get_resource::<DiagramState>() else { return };
@@ -1713,6 +1709,12 @@ fn do_compile(world: &mut World) {
         return;
     }
 
+    // Allocate a Document up-front so the new entity is spawned with a
+    // valid `document` id pointing at the source we're about to compile.
+    let doc_id = world
+        .resource_mut::<crate::ui::ModelicaDocumentRegistry>()
+        .allocate(source.clone());
+
     // Spawn entity
     let session_id = model_counter as u64;
     let model_name = format!("VisualModel{}", model_counter);
@@ -1728,16 +1730,21 @@ fn do_compile(world: &mut World) {
             parameters: HashMap::new(),
             inputs: HashMap::new(),
             variables: HashMap::new(),
+            descriptions: HashMap::new(),
+            document: doc_id,
             is_stepping: true,
         },
     )).id();
 
-    // Checkpoint the source into the Document registry before sending
-    // the Compile command — registry is the canonical source.
-    {
-        let mut registry = world.resource_mut::<crate::ui::ModelicaDocumentRegistry>();
-        registry.checkpoint_source(entity, source.clone());
-    }
+    world
+        .resource_mut::<crate::ui::ModelicaDocumentRegistry>()
+        .link(entity, doc_id);
+
+    // Mark the document as compiling — UI (status chips, disabled button)
+    // reads this to reflect in-flight state.
+    world
+        .resource_mut::<crate::ui::CompileStates>()
+        .set(doc_id, crate::ui::CompileState::Compiling);
 
     // Send command
     if let Some(channels) = world.get_resource::<ModelicaChannels>() {
@@ -1754,50 +1761,376 @@ fn do_compile(world: &mut World) {
     }
 }
 
-/// Auto-place a classic RC circuit (Voltage -> Resistor -> Capacitor -> Ground).
-fn auto_place_rc_circuit(world: &mut World) {
-    let lib = msl_component_library();
-    
-    // Define layout
-    let components = [
-        ("Modelica.Electrical.Analog.Sources.ConstantVoltage", egui::pos2(-200.0, 0.0)),
-        ("Modelica.Electrical.Analog.Basic.Resistor", egui::pos2(0.0, -100.0)),
-        ("Modelica.Electrical.Analog.Basic.Capacitor", egui::pos2(200.0, 0.0)),
-        ("Modelica.Electrical.Analog.Basic.Ground", egui::pos2(0.0, 100.0)),
-    ];
+/// Cached per-document signature used by the equation-only empty
+/// state. Populated lazily the first time we render this view for a
+/// (doc, generation) pair; invalidated when the generation bumps.
+///
+/// Shipped because the naive version re-ran `extract_parameters` +
+/// `extract_inputs_with_defaults` + `extract_input_names` every
+/// frame, regex-scanning the full source at 60 fps. On anything but
+/// a trivial model that crushed rendering — caching drops it to one
+/// scan per edit.
+#[derive(Resource, Default)]
+pub struct ModelSignatureCache {
+    by_doc: std::collections::HashMap<lunco_doc::DocumentId, CachedSignature>,
+}
 
-    for (msl_path, pos) in components {
-        if let Some(def) = lib.iter().find(|c| c.msl_path == msl_path) {
-             if let Some(mut state) = world.get_resource_mut::<DiagramState>() {
-                 state.add_component(def.clone(), pos);
-             }
+struct CachedSignature {
+    generation: u64,
+    sig: ModelSignature,
+}
+
+/// Structural summary of a Modelica model — what its parameters,
+/// inputs, and observable variables are. Rendered as an icon-style
+/// block when the model has no visual components to draw.
+pub struct ModelSignature {
+    pub params: Vec<(String, f64)>,
+    pub inputs: Vec<(String, Option<f64>)>,
+    pub observables: Vec<String>,
+}
+
+impl ModelSignatureCache {
+    /// Return the cached signature for `doc`, recomputing if the
+    /// document's generation changed since the last query.
+    pub fn get_or_compute(
+        &mut self,
+        doc: lunco_doc::DocumentId,
+        generation: u64,
+        source: &str,
+    ) -> &ModelSignature {
+        let needs_rebuild = self
+            .by_doc
+            .get(&doc)
+            .map(|c| c.generation != generation)
+            .unwrap_or(true);
+        if needs_rebuild {
+            let sig = compute_signature(source);
+            self.by_doc.insert(doc, CachedSignature { generation, sig });
+        }
+        &self.by_doc.get(&doc).unwrap().sig
+    }
+}
+
+fn compute_signature(source: &str) -> ModelSignature {
+    let params_map = crate::ast_extract::extract_parameters(source);
+    let mut params: Vec<(String, f64)> =
+        params_map.into_iter().collect();
+    params.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let inputs_with_defaults = crate::ast_extract::extract_inputs_with_defaults(source);
+    let runtime_inputs = crate::ast_extract::extract_input_names(source);
+    let mut inputs: Vec<(String, Option<f64>)> = inputs_with_defaults
+        .iter()
+        .map(|(k, v)| (k.clone(), Some(*v)))
+        .chain(
+            runtime_inputs
+                .iter()
+                .filter(|n| !inputs_with_defaults.contains_key(*n))
+                .map(|n| (n.clone(), None)),
+        )
+        .collect();
+    inputs.sort_by(|a, b| a.0.cmp(&b.0));
+
+    // Observables: `Real X`, `Integer X`, `Boolean X` declarations
+    // that aren't parameters or inputs. Quick line-based scan — not
+    // AST-accurate, but good enough for a tab-header preview.
+    let mut observables: Vec<String> = Vec::new();
+    let param_keys: std::collections::HashSet<_> =
+        params.iter().map(|(k, _)| k.clone()).collect();
+    let input_keys: std::collections::HashSet<_> =
+        inputs.iter().map(|(k, _)| k.clone()).collect();
+    for line in source.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("parameter") || trimmed.starts_with("input") {
+            continue;
+        }
+        for kw in ["Real ", "Integer ", "Boolean "] {
+            if let Some(rest) = trimmed.strip_prefix(kw) {
+                let name: String = rest
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_')
+                    .collect();
+                if !name.is_empty()
+                    && !param_keys.contains(&name)
+                    && !input_keys.contains(&name)
+                    && !observables.contains(&name)
+                {
+                    observables.push(name);
+                }
+                break;
+            }
         }
     }
 
-    // Auto-connect
-    if let Some(mut ds) = world.get_resource_mut::<DiagramState>() {
-        // CVoltage.p -> Resistor.p
-        // Resistor.n -> Capacitor.p
-        // Capacitor.n -> Ground.p
-        // Ground.p -> CVoltage.n
-        
-         let nodes = ds.diagram.nodes.clone();
-         if nodes.len() >= 4 {
-             let v = nodes.iter().find(|n| n.component_def.name == "ConstantVoltage").map(|n| n.id);
-             let r = nodes.iter().find(|n| n.component_def.name == "Resistor").map(|n| n.id);
-             let c = nodes.iter().find(|n| n.component_def.name == "Capacitor").map(|n| n.id);
-             let g = nodes.iter().find(|n| n.component_def.name == "Ground").map(|n| n.id);
-
-             if let (Some(vid), Some(rid), Some(cid), Some(gid)) = (v, r, c, g) {
-                 ds.diagram.add_edge(vid, "p".to_string(), rid, "p".to_string());
-                 ds.diagram.add_edge(rid, "n".to_string(), cid, "p".to_string());
-                 ds.diagram.add_edge(cid, "n".to_string(), gid, "p".to_string());
-                 ds.diagram.add_edge(gid, "p".to_string(), vid, "n".to_string());
-                 
-                 // Rebuild snarl to show connections
-                 ds.rebuild_snarl();
-             }
-         }
+    ModelSignature {
+        params,
+        inputs,
+        observables,
     }
 }
- 
+
+/// Shown when the active model has no visual components — i.e.
+/// equation-based (RocketEngine, Battery, BouncyBall, SpringMass).
+/// Renders the model as an **icon-style block** (Modelica `Icon`
+/// convention): rounded rect with title, input port dots on the left,
+/// observable port dots on the right. Matches how the model would
+/// look if dropped into another diagram as a component.
+fn render_equation_only_empty_state(ui: &mut egui::Ui, world: &mut World) {
+    let (model_name, doc_id, generation, source) = {
+        let state = world.resource::<WorkbenchState>();
+        let Some(open) = state.open_model.as_ref() else {
+            ui.vertical_centered(|ui| {
+                ui.add_space(80.0);
+                ui.heading("🔗 No model open");
+                ui.label(
+                    egui::RichText::new(
+                        "Pick a model from the sidebar or the Welcome tab.",
+                    )
+                    .size(12.0)
+                    .color(egui::Color32::GRAY),
+                );
+            });
+            return;
+        };
+        let doc = open.doc;
+        let Some(doc) = doc else {
+            // Open but no DocumentId yet (rare transient) — don't
+            // bother with signature; show minimal state.
+            ui.vertical_centered(|ui| {
+                ui.add_space(80.0);
+                ui.heading(format!("🔗 {}", open.display_name));
+                ui.label(
+                    egui::RichText::new("Preparing…")
+                        .size(11.0)
+                        .color(egui::Color32::GRAY),
+                );
+            });
+            return;
+        };
+        let generation = world
+            .get_resource::<crate::ui::state::ModelicaDocumentRegistry>()
+            .and_then(|r| r.host(doc))
+            .map(|h| h.generation())
+            .unwrap_or(0);
+        (
+            open.display_name.clone(),
+            doc,
+            generation,
+            open.source.to_string(),
+        )
+    };
+
+    // Ensure the cache resource exists (panels run with &mut World
+    // and can introduce resources lazily).
+    if world.get_resource::<ModelSignatureCache>().is_none() {
+        world.insert_resource(ModelSignatureCache::default());
+    }
+
+    // Clone-out the signature so we can release the cache borrow
+    // before drawing (drawing doesn't need the cache, and we'd
+    // rather not hold a ResMut across the full painter pass).
+    let (params, inputs, observables) = {
+        let mut cache = world.resource_mut::<ModelSignatureCache>();
+        let sig = cache.get_or_compute(doc_id, generation, &source);
+        (
+            sig.params.clone(),
+            sig.inputs.clone(),
+            sig.observables.clone(),
+        )
+    };
+
+    // Pull per-variable description strings from the compiled model, if
+    // any entity is linked to this document. Populated by the worker
+    // on compile-type results (see `handle_modelica_responses`). Empty
+    // when the user hasn't compiled yet — tooltips just no-op.
+    let descriptions: std::collections::HashMap<String, String> = world
+        .resource::<crate::ui::state::ModelicaDocumentRegistry>()
+        .entities_linked_to(doc_id)
+        .into_iter()
+        .find_map(|e| {
+            world
+                .get::<crate::ModelicaModel>(e)
+                .map(|m| m.descriptions.clone())
+        })
+        .unwrap_or_default();
+
+    draw_model_icon_block(ui, &model_name, &params, &inputs, &observables, &descriptions);
+}
+
+/// Paint a Modelica "Icon"-style block centered in the current
+/// panel. Rounded rect, title bar at top, input ports on the left,
+/// observable ports on the right, parameters listed inside.
+///
+/// No interaction — the block is read-only visualization. Future:
+/// draggable onto another diagram, rename via double-click, etc.
+fn draw_model_icon_block(
+    ui: &mut egui::Ui,
+    name: &str,
+    params: &[(String, f64)],
+    inputs: &[(String, Option<f64>)],
+    observables: &[String],
+    descriptions: &std::collections::HashMap<String, String>,
+) {
+    let avail = ui.available_rect_before_wrap();
+    let port_rows = inputs.len().max(observables.len()) as f32;
+    let param_rows = params.len() as f32;
+
+    // Block size scales to content, centered in the view.
+    let block_w = 420.0_f32.min(avail.width() - 40.0).max(260.0);
+    let title_h = 36.0;
+    let port_h = 20.0;
+    let param_padding = if param_rows > 0.0 { 10.0 } else { 0.0 };
+    let content_h = (port_h * port_rows.max(1.0))
+        + (16.0 * param_rows)
+        + param_padding;
+    let block_h = (title_h + content_h + 24.0).max(180.0);
+
+    let center = avail.center();
+    let block_rect = egui::Rect::from_center_size(
+        egui::pos2(center.x, (avail.top() + 60.0 + block_h / 2.0).min(center.y)),
+        egui::vec2(block_w, block_h),
+    );
+
+    let painter = ui.painter();
+
+    // Body + title bar.
+    let bg = egui::Color32::from_rgb(38, 42, 52);
+    let border = egui::Color32::from_rgb(120, 140, 180);
+    let title_bg = egui::Color32::from_rgb(60, 70, 92);
+    painter.rect_filled(block_rect, 10.0, bg);
+    painter.rect_stroke(
+        block_rect,
+        10.0,
+        egui::Stroke::new(1.5, border),
+        egui::StrokeKind::Outside,
+    );
+    let title_rect =
+        egui::Rect::from_min_size(block_rect.min, egui::vec2(block_rect.width(), title_h));
+    painter.rect_filled(
+        title_rect,
+        egui::CornerRadius {
+            nw: 10,
+            ne: 10,
+            sw: 0,
+            se: 0,
+        },
+        title_bg,
+    );
+    painter.text(
+        title_rect.center(),
+        egui::Align2::CENTER_CENTER,
+        name,
+        egui::FontId::proportional(14.5),
+        egui::Color32::WHITE,
+    );
+
+    // Port colors (match Palette category conventions roughly).
+    let input_color = egui::Color32::from_rgb(230, 190, 100); // amber
+    let output_color = egui::Color32::from_rgb(120, 200, 120); // green
+    let label_color = egui::Color32::from_rgb(220, 220, 220);
+    let muted = egui::Color32::from_rgb(160, 160, 170);
+
+    // Inputs on the left edge.
+    //
+    // Each port gets both a painter-drawn visual (dot + label) and an
+    // interactive rect covering the dot plus the label's full extent,
+    // so hovering shows the variable's Modelica description string as
+    // a tooltip. Painter draws don't produce egui Responses on their
+    // own; allocating an invisible rect is the standard workaround.
+    let content_top = title_rect.bottom() + 14.0;
+    let hover_rects: Vec<(egui::Rect, String)> = {
+        let mut rects = Vec::new();
+        for (i, (name, _default)) in inputs.iter().enumerate() {
+            let y = content_top + i as f32 * port_h + port_h * 0.5;
+            let pos = egui::pos2(block_rect.left(), y);
+            painter.circle_filled(pos, 4.5, input_color);
+            painter.text(
+                pos + egui::vec2(8.0, 0.0),
+                egui::Align2::LEFT_CENTER,
+                name,
+                egui::FontId::monospace(11.0),
+                label_color,
+            );
+            // Rect covers ~140px of label + the dot.
+            let r = egui::Rect::from_min_max(
+                egui::pos2(pos.x - 6.0, y - 8.0),
+                egui::pos2(pos.x + 150.0, y + 8.0),
+            );
+            rects.push((r, name.clone()));
+        }
+        for (i, name) in observables.iter().enumerate() {
+            let y = content_top + i as f32 * port_h + port_h * 0.5;
+            let pos = egui::pos2(block_rect.right(), y);
+            painter.circle_filled(pos, 4.5, output_color);
+            painter.text(
+                pos + egui::vec2(-8.0, 0.0),
+                egui::Align2::RIGHT_CENTER,
+                name,
+                egui::FontId::monospace(11.0),
+                label_color,
+            );
+            let r = egui::Rect::from_min_max(
+                egui::pos2(pos.x - 150.0, y - 8.0),
+                egui::pos2(pos.x + 6.0, y + 8.0),
+            );
+            rects.push((r, name.clone()));
+        }
+        rects
+    };
+
+    // Parameters listed in the middle below ports, centered.
+    let mut param_hover_rects: Vec<(egui::Rect, String)> = Vec::new();
+    if !params.is_empty() {
+        let params_top = content_top + port_h * port_rows.max(1.0) + 8.0;
+        painter.text(
+            egui::pos2(block_rect.center().x, params_top),
+            egui::Align2::CENTER_TOP,
+            format!("parameters ({})", params.len()),
+            egui::FontId::proportional(10.0),
+            muted,
+        );
+        for (i, (k, v)) in params.iter().enumerate() {
+            let y = params_top + 14.0 + i as f32 * 14.0;
+            painter.text(
+                egui::pos2(block_rect.center().x, y),
+                egui::Align2::CENTER_TOP,
+                format!("{} = {}", k, v),
+                egui::FontId::monospace(10.5),
+                label_color,
+            );
+            let r = egui::Rect::from_min_max(
+                egui::pos2(block_rect.center().x - 150.0, y),
+                egui::pos2(block_rect.center().x + 150.0, y + 14.0),
+            );
+            param_hover_rects.push((r, k.clone()));
+        }
+    }
+
+    // Claim the block area so egui knows we drew something (prevents
+    // the panel from collapsing to zero height).
+    ui.allocate_rect(block_rect, egui::Sense::hover());
+
+    // Stamp each port/param hover rect on top. We use `interact_at`
+    // (not `allocate_rect`) so the rects overlap the block without
+    // disturbing layout. When the description is absent the hover
+    // still fires; `.on_hover_text` is a no-op with empty text.
+    for (rect, var) in hover_rects.into_iter().chain(param_hover_rects.into_iter()) {
+        let id = ui.id().with(("icon_block_hover", &var));
+        let resp = ui.interact(rect, id, egui::Sense::hover());
+        if let Some(desc) = descriptions.get(&var) {
+            resp.on_hover_text(desc);
+        }
+    }
+
+    // Below the block, a short explainer — the user can still read
+    // this line if they're new to why the canvas is "empty".
+    let below_y = block_rect.bottom() + 16.0;
+    ui.painter().text(
+        egui::pos2(center.x, below_y),
+        egui::Align2::CENTER_TOP,
+        "Equation-only model — switch to 📝 Text to read or 🚀 Compile (F5) to simulate.",
+        egui::FontId::proportional(11.0),
+        muted,
+    );
+}
+

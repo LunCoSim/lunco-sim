@@ -48,10 +48,13 @@ fn code_panel_content(ui: &mut egui::Ui, world: &mut World) {
         return;
     };
 
-    // Try Modelica first — it's per-entity in the registry.
+    // Try Modelica first — resolve entity → DocumentId → source.
     let modelica = world
         .get_resource::<ModelicaDocumentRegistry>()
-        .and_then(|r| r.host(entity).map(|h| h.document().source().to_string()));
+        .and_then(|r| {
+            let doc = r.document_of(entity)?;
+            r.host(doc).map(|h| h.document().source().to_string())
+        });
 
     if let Some(source) = modelica {
         ui.label(egui::RichText::new("Modelica").small().weak());

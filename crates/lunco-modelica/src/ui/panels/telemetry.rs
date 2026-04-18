@@ -5,7 +5,8 @@ use bevy_egui::egui;
 use lunco_workbench::{Panel, PanelId, PanelSlot};
 use std::collections::HashMap;
 
-use crate::ui::{ModelicaDocumentRegistry, WorkbenchState};
+use crate::ui::{CompileState, CompileStates, ModelicaDocumentRegistry, WorkbenchState};
+use crate::ui::viz::{is_signal_plotted, set_signal_plotted};
 use crate::{ModelicaModel, ModelicaChannels, ModelicaCommand};
 
 /// Telemetry panel — model parameters, inputs, and variable plotting toggles.
@@ -56,10 +57,11 @@ impl Panel for TelemetryPanel {
         }
 
         // Read model snapshot for display
-        let (model_name, is_paused, current_time, parameters, inputs) = {
+        let (model_name, is_paused, current_time, parameters, inputs, descriptions) = {
             if let Some(model) = world.get::<ModelicaModel>(entity) {
                 (model.model_name.clone(), model.paused, model.current_time,
-                 model.parameters.clone(), model.inputs.clone())
+                 model.parameters.clone(), model.inputs.clone(),
+                 model.descriptions.clone())
             } else {
                 ui.label("Model not found.");
                 return;
@@ -101,9 +103,9 @@ impl Panel for TelemetryPanel {
                 if let (Some(sid), Some(channels)) = (sid, world.get_resource::<ModelicaChannels>()) {
                     let _ = channels.tx.send(ModelicaCommand::Reset { entity, session_id: sid });
                 }
-                if let Some(mut s) = world.get_resource_mut::<WorkbenchState>() {
-                    s.history.remove(&entity);
-                }
+                // The worker's Reset handler pushes a fresh set of
+                // samples into `SignalRegistry`; clearing per-signal
+                // history is handled there.
             }
         });
         ui.separator();
@@ -117,7 +119,19 @@ impl Panel for TelemetryPanel {
                 for key in &param_keys {
                     let val = parameters.get(key).copied().unwrap_or(0.0);
                     ui.horizontal(|ui| {
-                        ui.label(format!("{key:16}:"));
+                        // Hover the name label for the Modelica
+                        // description string (MLS §A.2.5), if any.
+                        //
+                        // `ui.label()` makes a non-interactive widget;
+                        // `on_hover_text` silently no-ops there. Go
+                        // through `Label::new(...).sense(Sense::hover())`
+                        // so the response is actually hoverable.
+                        let label = egui::Label::new(format!("{key:16}:"))
+                            .sense(egui::Sense::hover());
+                        let resp = ui.add(label);
+                        if let Some(desc) = descriptions.get(key) {
+                            resp.on_hover_text(desc);
+                        }
                         let mut v = val;
                         if ui.add(egui::DragValue::new(&mut v).speed(0.01).fixed_decimals(2)).changed() {
                             let mut trigger_update = false;
@@ -125,15 +139,17 @@ impl Panel for TelemetryPanel {
                             let mut session_id = 0;
                             let mut new_params = HashMap::new();
 
-                            // Read canonical source from the Document registry.
-                            // The registry is populated on every Compile and
-                            // every UpdateParameters — if it's empty, the
-                            // entity hasn't been through either yet and there's
-                            // nothing coherent to substitute params into.
-                            let source = world
-                                .resource::<ModelicaDocumentRegistry>()
-                                .host(entity)
-                                .map(|h| h.document().source().to_string());
+                            // Resolve entity → DocumentId → source via the
+                            // registry. If either lookup misses, the entity
+                            // hasn't been through Compile/UpdateParameters yet
+                            // and there's nothing coherent to substitute into.
+                            let (doc_id, source) = {
+                                let registry = world.resource::<ModelicaDocumentRegistry>();
+                                let doc = registry.document_of(entity);
+                                let src = doc.and_then(|d| registry.host(d))
+                                    .map(|h| h.document().source().to_string());
+                                (doc, src)
+                            };
 
                             if let Ok(mut m) = world.query::<&mut ModelicaModel>().get_mut(world, entity) {
                                 if let Some(p) = m.parameters.get_mut(key) {
@@ -148,7 +164,7 @@ impl Panel for TelemetryPanel {
                             }
 
                             if trigger_update {
-                                if let Some(source) = source {
+                                if let (Some(doc), Some(source)) = (doc_id, source) {
                                     let new_source = crate::ast_extract::substitute_params_in_source(&source, &new_params);
                                     // Checkpoint the parameter-substituted
                                     // source into the Document BEFORE sending
@@ -157,7 +173,13 @@ impl Panel for TelemetryPanel {
                                     // worker result never arrives.
                                     world
                                         .resource_mut::<ModelicaDocumentRegistry>()
-                                        .checkpoint_source(entity, new_source.clone());
+                                        .checkpoint_source(doc, new_source.clone());
+                                    // UpdateParameters recompiles on the
+                                    // worker side, so mark the document as
+                                    // compiling until the result lands.
+                                    world
+                                        .resource_mut::<CompileStates>()
+                                        .set(doc, CompileState::Compiling);
                                     if let Some(channels) = world.get_resource::<ModelicaChannels>() {
                                         let _ = channels.tx.send(ModelicaCommand::UpdateParameters {
                                             entity,
@@ -184,7 +206,12 @@ impl Panel for TelemetryPanel {
                 for key in input_keys {
                     let val = inputs.get(&key).copied().unwrap_or(0.0);
                     ui.horizontal(|ui| {
-                        ui.label(format!("{key:16}:"));
+                        let label = egui::Label::new(format!("{key:16}:"))
+                            .sense(egui::Sense::hover());
+                        let resp = ui.add(label);
+                        if let Some(desc) = descriptions.get(&key) {
+                            resp.on_hover_text(desc);
+                        }
                         let mut v = val;
                         ui.add(egui::DragValue::new(&mut v).speed(0.1).fixed_decimals(2));
                         if (v - val).abs() > 1e-10 {
@@ -198,21 +225,32 @@ impl Panel for TelemetryPanel {
             ui.separator();
         }
 
-        // Variables (Toggle to Plot)
+        // Variables (Toggle to Plot).
+        //
+        // Checkboxes read / write the default Modelica plot's
+        // `VisualizationConfig.inputs` directly — no shadow state,
+        // no per-frame sync. Toggling here instantly shows/hides the
+        // variable in the Graphs panel since both read the same
+        // config.
         ui.label("Variables (Toggle to Plot):");
         egui::ScrollArea::vertical().id_salt("telemetry_scroll").show(ui, |ui| {
-            // Read current plotted variables and model variables
-            let (plotted, model_vars, model_inputs) = {
-                let state = world.resource::<WorkbenchState>();
-                let p = state.plotted_variables.clone();
-                let (vars, inps) = if let Some(m) = world.get::<ModelicaModel>(entity) {
-                    (m.variables.keys().cloned().collect::<Vec<_>>(),
-                     m.inputs.keys().cloned().collect::<Vec<_>>())
-                } else {
-                    (Vec::new(), Vec::new())
-                };
-                (p, vars, inps)
+            let (model_vars, model_inputs) = if let Some(m) = world.get::<ModelicaModel>(entity) {
+                (m.variables.keys().cloned().collect::<Vec<_>>(),
+                 m.inputs.keys().cloned().collect::<Vec<_>>())
+            } else {
+                (Vec::new(), Vec::new())
             };
+
+            // Read plotted-set from the viz registry. Clone once so
+            // we don't reborrow the resource inside the loop.
+            let plotted: std::collections::HashSet<String> = world
+                .get_resource::<lunco_viz::VisualizationRegistry>()
+                .and_then(|r| r.get(crate::ui::viz::DEFAULT_MODELICA_GRAPH))
+                .map(|cfg| cfg.inputs.iter()
+                    .filter(|b| b.source.entity == entity)
+                    .map(|b| b.source.path.clone())
+                    .collect())
+                .unwrap_or_default();
 
             let mut all_names: Vec<_> = model_vars;
             all_names.extend(model_inputs);
@@ -223,27 +261,29 @@ impl Panel for TelemetryPanel {
                 let mut is_plotted = plotted.contains(&name);
                 ui.horizontal(|ui| {
                     if ui.checkbox(&mut is_plotted, "").changed() {
-                        if let Some(mut s) = world.get_resource_mut::<WorkbenchState>() {
-                            if is_plotted {
-                                s.plotted_variables.insert(name.clone());
-                            } else {
-                                s.plotted_variables.remove(&name);
-                            }
+                        if let Some(mut reg) =
+                            world.get_resource_mut::<lunco_viz::VisualizationRegistry>()
+                        {
+                            set_signal_plotted(
+                                &mut reg,
+                                lunco_viz::SignalRef::new(entity, name.clone()),
+                                is_plotted,
+                            );
                         }
                     }
-                    ui.label(&name);
+                    let label = egui::Label::new(&name).sense(egui::Sense::hover());
+                    let resp = ui.add(label);
+                    if let Some(desc) = descriptions.get(&name) {
+                        resp.on_hover_text(desc);
+                    }
                 });
+                let _ = is_signal_plotted; // re-export available for future UIs
             }
         });
 
-        ui.separator();
-        ui.horizontal(|ui| {
-            ui.add_space(ui.available_width() - 80.0);
-            if ui.button("🔍 Auto-Fit").clicked() {
-                if let Some(mut st) = world.get_resource_mut::<WorkbenchState>() {
-                    st.plot_auto_fit = true;
-                }
-            }
-        });
+        // Auto-Fit button was here but moved to the Graphs panel's own
+        // toolbar — users couldn't find it buried at the bottom of
+        // Telemetry. Telemetry now does parameters / inputs / variable
+        // toggles only; graph-axis controls live on the graph itself.
     }
 }

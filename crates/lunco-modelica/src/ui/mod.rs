@@ -63,18 +63,77 @@ use lunco_workbench::{Workspace, WorkspaceId, WorkbenchAppExt, WorkbenchLayout, 
 pub mod state;
 pub use state::*;
 
-mod panels;
+pub mod commands;
+pub use commands::{CompileModel, CreateNewScratchModel, ModelicaCommandsPlugin};
+
+pub mod panels;
+pub mod viz;
 
 use crate::ModelicaModel;
 
-/// Drop `ModelicaDocumentRegistry` entries whose entity was despawned.
+/// Fan queued document lifecycle notifications out as observer triggers.
+///
+/// The registry accumulates ids on every mutation (allocate → Opened +
+/// Changed, `checkpoint_source` with new text → Changed, explicit
+/// `mark_changed` after `host_mut` undo/redo → Changed, `remove_document`
+/// → Closed). This system drains all three queues once per frame and
+/// emits the matching generic events from [`lunco_doc_bevy`] so any
+/// observer (panel re-render, diagram re-parse, plot variable-list
+/// refresh, Twin journal, …) reacts without polling generation
+/// counters.
+///
+/// Fire order per frame: Opened, Changed, Closed. Opened-before-Changed
+/// means subscribers that key on "track docs I've seen Opened for" can
+/// safely skip Changed events for unknown ids.
+fn drain_document_changes(
+    mut registry: ResMut<ModelicaDocumentRegistry>,
+    mut commands: Commands,
+) {
+    for doc in registry.drain_pending_opened() {
+        commands.trigger(lunco_doc_bevy::DocumentOpened::local(doc));
+    }
+    for doc in registry.drain_pending_changes() {
+        commands.trigger(lunco_doc_bevy::DocumentChanged::local(doc));
+    }
+    for doc in registry.drain_pending_closed() {
+        commands.trigger(lunco_doc_bevy::DocumentClosed::local(doc));
+    }
+}
+
+/// Drop the document linked to a despawned `ModelicaModel` entity, and
+/// any compile-state bookkeeping attached to that document.
+///
+/// Behavior preserved from the entity-keyed era: when an entity is
+/// despawned, its backing [`ModelicaDocument`](crate::document::ModelicaDocument)
+/// is also removed. The long-term design lets documents outlive entities
+/// (edit-without-running, cosim re-spawn), so this will become opt-in
+/// once the tab/view layer can explicitly unload a document.
 fn cleanup_removed_documents(
     mut removed: RemovedComponents<ModelicaModel>,
     registry: Option<ResMut<ModelicaDocumentRegistry>>,
+    compile_states: Option<ResMut<CompileStates>>,
+    signals: Option<ResMut<lunco_viz::SignalRegistry>>,
+    viz_registry: Option<ResMut<lunco_viz::VisualizationRegistry>>,
 ) {
     let Some(mut registry) = registry else { return };
+    let mut compile_states = compile_states;
+    let mut signals = signals;
+    let mut viz_registry = viz_registry;
     for entity in removed.read() {
-        registry.remove(entity);
+        if let Some(doc) = registry.unlink_entity(entity) {
+            registry.remove_document(doc);
+            if let Some(states) = compile_states.as_mut() {
+                states.remove(doc);
+            }
+        }
+        // Drop every registered signal + plot binding for this entity
+        // so stale plots don't keep reading the last values forever.
+        if let Some(sigs) = signals.as_mut() {
+            sigs.drop_entity(entity);
+        }
+        if let Some(reg) = viz_registry.as_mut() {
+            crate::ui::viz::drop_entity_bindings(reg, entity);
+        }
     }
 }
 
@@ -90,13 +149,36 @@ impl Workspace for AnalyzeWorkspace {
     fn apply(&self, layout: &mut WorkbenchLayout) {
         layout.set_activity_bar(false);
         layout.set_side_browser(Some(PanelId("modelica_package_browser")));
-        layout.set_center(vec![
-            PanelId("modelica_code_preview"),
-            PanelId("modelica_diagram_preview"),
-        ]);
+        // Center is seeded with no singleton tab — model views are
+        // multi-instance tabs opened dynamically by the Package Browser
+        // (one tab per open document). An app that boots with a
+        // default model can pre-open a tab after setup via
+        // `WorkbenchLayout::open_instance(MODEL_VIEW_KIND, doc.raw())`.
+        //
+        // Keep a placeholder center tab so the dock's cross layout
+        // still builds on apps with nothing open yet. When the first
+        // real model tab opens, the placeholder stays docked next
+        // to it — users can close it.
+        layout.set_center(vec![PanelId("modelica_welcome")]);
         layout.set_active_center_tab(0);
-        layout.set_right_inspector(Some(PanelId("modelica_inspector")));
-        layout.set_bottom(Some(PanelId("modelica_console")));
+        // Right dock gets two tabs: Inspector (params/variables) and
+        // the Component Palette (MSL instantiation). Figma / Unreal
+        // pattern — asset browser on the right, always visible while
+        // the user is working in the center canvas.
+        layout.set_right_inspector_tabs(vec![
+            PanelId("modelica_inspector"),
+            PanelId("modelica_component_palette"),
+        ]);
+        // Bottom dock: Graphs first so it's the default active tab —
+        // the simulation plot is what a user running a model wants
+        // to see on landing, not the log stream. Console stays one
+        // click away for compile / save / error output (VS Code's
+        // Terminal/Output/Problems pattern, just with a different
+        // default active tab).
+        layout.set_bottom_tabs(vec![
+            PanelId("modelica_graphs"),
+            PanelId("modelica_console"),
+        ]);
     }
 }
 
@@ -109,20 +191,46 @@ pub struct ModelicaUiPlugin;
 
 impl Plugin for ModelicaUiPlugin {
     fn build(&self, app: &mut App) {
+        // Twin-level change journal subscribes to the generic document
+        // lifecycle events this plugin fires. One journal per App —
+        // adding the plugin multiple times is a no-op on `init_resource`.
+        app.add_plugins(lunco_doc_bevy::TwinJournalPlugin);
+
+        // Intent layer: key chords → EditorIntent. Domain resolvers
+        // (installed by ModelicaCommandsPlugin below) translate intents
+        // into concrete commands for the docs they own.
+        app.add_plugins(lunco_doc_bevy::EditorIntentPlugin);
+
+        // Command bus for Modelica documents — Undo / Redo / Save /
+        // Close (generic) + Compile (domain-specific) — plus the
+        // EditorIntent resolver. UI buttons, keyboard shortcuts,
+        // scripts, and the remote API all funnel through these.
+        app.add_plugins(ModelicaCommandsPlugin);
+
         app.init_resource::<WorkbenchState>()
             .init_resource::<ModelicaDocumentRegistry>()
+            .init_resource::<CompileStates>()
+            .init_resource::<panels::model_view::ModelTabs>()
             .init_resource::<panels::diagram::DiagramState>()
             .init_resource::<panels::diagram::DiagramTheme>()
             .init_resource::<panels::code_editor::EditorBufferState>()
+            .init_resource::<panels::palette::PaletteState>()
+            .init_resource::<panels::diagram::ModelSignatureCache>()
+            .init_resource::<panels::console::ConsoleLog>()
             .insert_resource(panels::package_browser::PackageTreeCache::new())
             .add_systems(Update, panels::package_browser::handle_package_loading_tasks)
             .add_systems(Update, cleanup_removed_documents)
+            .add_systems(Update, drain_document_changes)
             .register_panel(panels::package_browser::PackageBrowserPanel)
-            .register_panel(panels::code_editor::CodeEditorPanel)
+            .register_panel(panels::welcome::WelcomePanel)
             .register_panel(panels::telemetry::TelemetryPanel)
             .register_panel(panels::graphs::GraphsPanel)
-            .register_panel(panels::diagram::DiagramPanel)
+            .register_panel(panels::console::ConsolePanel)
             .register_panel(panels::inspector::InspectorPanel)
+            .register_panel(panels::palette::ComponentPalettePanel)
+            // Multi-instance: one tab per open document. Instances are
+            // opened at runtime by the Package Browser.
+            .register_instance_panel(panels::model_view::ModelViewPanel::default())
             .register_workspace(AnalyzeWorkspace);
     }
 }

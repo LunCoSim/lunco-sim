@@ -264,20 +264,26 @@ fn modelica_parameters_section(
         m.is_stepping = true;
     }
 
-    // Canonical source comes from the Document registry.
-    let source = world
-        .resource::<ModelicaDocumentRegistry>()
-        .host(entity)
-        .map(|h| h.document().source().to_string());
-    let Some(source) = source else { return };
+    // Canonical source comes from the Document registry. Resolve the
+    // entity's DocumentId first — the registry now keys all lookups by
+    // document id, and the entity map is a secondary reverse index.
+    let (doc_id, source) = {
+        let registry = world.resource::<ModelicaDocumentRegistry>();
+        let doc = registry.document_of(entity);
+        let src = doc
+            .and_then(|d| registry.host(d))
+            .map(|h| h.document().source().to_string());
+        (doc, src)
+    };
+    let (Some(doc_id), Some(source)) = (doc_id, source) else { return };
 
     let new_source = lunco_modelica::ast_extract::substitute_params_in_source(&source, &new_params);
 
-    // Checkpoint the new source into the Document registry so CodePanel
-    // and other readers see the updated values next frame.
+    // Checkpoint the new source into the Document so CodePanel and
+    // other readers see the updated values next frame.
     world
         .resource_mut::<ModelicaDocumentRegistry>()
-        .checkpoint_source(entity, new_source.clone());
+        .checkpoint_source(doc_id, new_source.clone());
 
     if let Some(channels) = world.get_resource::<ModelicaChannels>() {
         let _ = channels.tx.send(ModelicaCommand::UpdateParameters {

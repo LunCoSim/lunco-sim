@@ -75,6 +75,14 @@ pub struct PortDef {
     pub msl_path: String,
     /// Whether this port is a flow connector.
     pub is_flow: bool,
+    /// Port position in Modelica diagram coordinates (-100..100).
+    /// Extracted from the `annotation(Placement(...))` on the connector declaration.
+    /// x < 0 = left side, x > 0 = right side, y > 0 = top, y < 0 = bottom.
+    /// (0, 0) means the position is unknown (no annotation + no causality hint).
+    #[serde(default)]
+    pub x: f32,
+    #[serde(default)]
+    pub y: f32,
 }
 
 /// A parameter definition for an MSL component.

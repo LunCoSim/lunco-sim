@@ -2,12 +2,7 @@
 
 use bevy::prelude::*;
 use bevy_egui::EguiPlugin;
-use lunco_assets::assets_dir;
-use lunco_modelica::{
-    ModelicaPlugin,
-    ModelicaModel,
-    ui::{ModelicaDocumentRegistry, WorkbenchState},
-};
+use lunco_modelica::ModelicaPlugin;
 
 fn main() {
     let mut app = App::new();
@@ -20,6 +15,11 @@ fn main() {
         }))
         .add_plugins(EguiPlugin::default())
         .add_plugins(lunco_workbench::WorkbenchPlugin)
+        // LuncoVizPlugin must come before any plugin that publishes
+        // signals (ModelicaPlugin below) so the `SignalRegistry`
+        // resource is present when the worker starts mirroring
+        // samples into it.
+        .add_plugins(lunco_viz::LuncoVizPlugin)
         .add_plugins(ModelicaPlugin)
         .add_systems(Startup, setup_sandbox);
 
@@ -29,49 +29,10 @@ fn main() {
     app.run();
 }
 
-#[derive(Component)]
-struct ModelicaSandbox;
-
-fn setup_sandbox(
-    mut commands: Commands,
-    channels: Res<lunco_modelica::ModelicaChannels>,
-    mut workbench_state: ResMut<WorkbenchState>,
-    mut doc_registry: ResMut<ModelicaDocumentRegistry>,
-) {
+fn setup_sandbox(mut commands: Commands) {
+    // Start empty: the user lands on the Welcome tab, opens whatever
+    // they need via Package Browser / Twin / Ctrl+N. Auto-loading
+    // Battery was a debug convenience that confused new users —
+    // `cargo run` would show a random model with no explanation.
     commands.spawn(Camera2d);
-
-    let model_path = assets_dir().join("models/Battery.mo");
-    let source = std::fs::read_to_string(&model_path).unwrap_or_default();
-    let model_name = lunco_modelica::extract_model_name(&source).unwrap_or_else(|| "Battery".to_string());
-    let initial_params = lunco_modelica::extract_parameters(&source);
-    let initial_inputs = lunco_modelica::extract_inputs_with_defaults(&source);
-
-    // Initialize UI state with the default model's source
-    workbench_state.editor_buffer = source.clone();
-    workbench_state.loaded_file_path = Some(model_path.clone());
-
-    // Spawn a generic sandbox entity.
-    let entity = commands.spawn((
-        ModelicaSandbox,
-        Name::new("Modelica_Sandbox"),
-        ModelicaModel {
-            model_path,
-            model_name: model_name.clone(),
-            parameters: initial_params,
-            inputs: initial_inputs,
-            ..default()
-        },
-    )).id();
-
-    // Register the source with the Document registry — this is the
-    // single source of truth for the entity's Modelica text.
-    doc_registry.checkpoint_source(entity, source.clone());
-
-    // Trigger initial compilation
-    let _ = channels.tx.send(lunco_modelica::ModelicaCommand::Compile {
-        entity,
-        session_id: 0,
-        model_name,
-        source,
-    });
 }

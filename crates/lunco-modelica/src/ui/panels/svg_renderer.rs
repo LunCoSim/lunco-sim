@@ -1,5 +1,35 @@
+use std::sync::OnceLock;
+
 use bevy_egui::egui;
-use usvg::{Node, Tree, Options, Transform};
+use usvg::{Node, Options, Transform, Tree};
+
+/// Shared [`usvg::Options`] built once per process.
+///
+/// usvg's default `Options` has an empty font database, so any SVG
+/// that uses `<text>` with `font-family: sans-serif` (every MSL
+/// component icon) logs a warning per parse: `WARN usvg::text: No
+/// match for 'sans-serif' font-family.`
+///
+/// Fix: populate the font DB once with system fonts and set a
+/// concrete fallback for the three generic families usvg consults.
+/// `load_system_fonts()` is slow on first call (tens-of-ms to a few
+/// hundred, depending on OS) so we cache the whole `Options`.
+fn svg_options() -> &'static Options<'static> {
+    static OPTIONS: OnceLock<Options<'static>> = OnceLock::new();
+    OPTIONS.get_or_init(|| {
+        let mut opt = Options::default();
+        let db = opt.fontdb_mut();
+        db.load_system_fonts();
+        // Pick a sensible default for each generic family. The exact
+        // name only has to exist in the DB after `load_system_fonts`
+        // — usvg falls back to any matching family if the named one
+        // is missing, so these are best-effort hints.
+        db.set_sans_serif_family("DejaVu Sans");
+        db.set_serif_family("DejaVu Serif");
+        db.set_monospace_family("DejaVu Sans Mono");
+        opt
+    })
+}
 
 /// Translates a usvg::Tree into a list of egui::Shape primitives, scaled to fit in `rect`.
 pub fn draw_svg_to_egui(
@@ -7,8 +37,7 @@ pub fn draw_svg_to_egui(
     rect: egui::Rect,
     svg_data: &[u8],
 ) {
-    let opt = Options::default();
-    let tree = match Tree::from_data(svg_data, &opt) {
+    let tree = match Tree::from_data(svg_data, svg_options()) {
         Ok(t) => t,
         Err(_) => return,
     };

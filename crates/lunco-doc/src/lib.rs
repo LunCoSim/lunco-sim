@@ -56,6 +56,83 @@
 #![warn(missing_docs)]
 
 use std::fmt;
+use std::path::{Path, PathBuf};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SymbolPath — opaque cross-document reference
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// A domain-agnostic path into a [`Document`].
+///
+/// Examples — each format interprets the string in its own syntax:
+///
+/// - Modelica: `"Rocket.engine.thrust"` (dotted qualified name)
+/// - USD: `"/World/Rocket.xformOp:translate"` (prim path + attribute)
+/// - SysML v2: `"Rocket::engine::thrust"` (double-colon qualified name)
+///
+/// `lunco-doc` treats the string as opaque. Resolution is the owning
+/// Document's job via the [`Resolver`] trait. This type exists so that
+/// **binding documents** (cross-format links) can store
+/// `(DocumentId, SymbolPath)` pairs without depending on domain crates.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct SymbolPath(String);
+
+impl SymbolPath {
+    /// Wrap a string as a symbol path. No validation — format-specific.
+    pub fn new(path: impl Into<String>) -> Self {
+        Self(path.into())
+    }
+
+    /// The raw path string.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// True when the path is the empty string.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl fmt::Display for SymbolPath {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl From<String> for SymbolPath {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
+
+impl From<&str> for SymbolPath {
+    fn from(s: &str) -> Self {
+        Self(s.to_string())
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Resolver — symbol lookup within a document
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Resolves a [`SymbolPath`] to a domain-specific handle inside one document.
+///
+/// Implemented by each Document type using its own AST / scene graph / model.
+/// Binding documents call this to validate that both ends of a cross-document
+/// link still exist after edits.
+///
+/// `Target` is domain-defined (e.g. an AST node handle, a USD prim path,
+/// a SysML element id). Callers that only need to know whether the symbol
+/// resolves can ignore the value.
+pub trait Resolver {
+    /// The domain-specific handle returned by a successful resolution.
+    type Target;
+
+    /// Look up `path` inside this document. Returns `None` when the symbol
+    /// does not exist.
+    fn resolve(&self, path: &SymbolPath) -> Option<Self::Target>;
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // DocumentId
@@ -67,7 +144,7 @@ use std::fmt;
 /// an incrementing counter, a hash of a file path, a Bevy entity bits, etc.
 /// `lunco-doc` treats ids as opaque and only requires them to be unique within
 /// the app's Document population.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct DocumentId(u64);
 
 impl DocumentId {
@@ -80,11 +157,109 @@ impl DocumentId {
     pub const fn raw(self) -> u64 {
         self.0
     }
+
+    /// True when this id is the default / unassigned sentinel (`0`).
+    pub const fn is_unassigned(self) -> bool {
+        self.0 == 0
+    }
 }
 
 impl fmt::Display for DocumentId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "DocumentId({})", self.0)
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DocumentOrigin — where a document came from + whether it can be saved
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Where a document originated, which drives save behavior +
+/// UI affordances (tab title, read-only badge, Save button).
+///
+/// Deliberately minimal: two variants. Fancier classifications
+/// (MSL / bundled / third-party library / user project) are a
+/// *Package Browser* concern — at the document level, all that
+/// matters is "does it have a path we can write to?".
+///
+/// Architectural seed: when documents can come from a remote Nucleus
+/// server or a URL-addressed library, a `Remote { url }` variant slots
+/// in here without touching Document trait surface.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DocumentOrigin {
+    /// Never written to disk; `name` is the in-session display id
+    /// (e.g. `"Untitled1"`). Saving requires Save-As to bind a path.
+    Untitled {
+        /// Human-readable identifier (shown on the tab until saved).
+        name: String,
+    },
+    /// Backed by a filesystem path. `writable` gates the Save button
+    /// so library / bundled assets stay read-only even though they
+    /// have a concrete path.
+    File {
+        /// Canonical filesystem path (absolute preferred).
+        path: PathBuf,
+        /// Whether writes are permitted. `false` for library /
+        /// bundled-example files.
+        writable: bool,
+    },
+}
+
+impl DocumentOrigin {
+    /// Shorthand: a user-writable filesystem document.
+    pub fn writable_file(path: impl Into<PathBuf>) -> Self {
+        Self::File {
+            path: path.into(),
+            writable: true,
+        }
+    }
+
+    /// Shorthand: a read-only filesystem document (library entry,
+    /// bundled example).
+    pub fn readonly_file(path: impl Into<PathBuf>) -> Self {
+        Self::File {
+            path: path.into(),
+            writable: false,
+        }
+    }
+
+    /// Shorthand: an in-memory untitled scratch document.
+    pub fn untitled(name: impl Into<String>) -> Self {
+        Self::Untitled { name: name.into() }
+    }
+
+    /// Filesystem path, if any. `None` for [`Untitled`](Self::Untitled).
+    pub fn canonical_path(&self) -> Option<&Path> {
+        match self {
+            Self::File { path, .. } => Some(path.as_path()),
+            Self::Untitled { .. } => None,
+        }
+    }
+
+    /// Whether Save may write to this origin. `false` for read-only
+    /// library entries and for untitled docs without a bound path
+    /// (Save-As is required for the latter).
+    pub fn is_writable(&self) -> bool {
+        matches!(self, Self::File { writable: true, .. })
+    }
+
+    /// Whether this document has never been written to disk in this
+    /// session (Save-As is required before Save can work).
+    pub fn is_untitled(&self) -> bool {
+        matches!(self, Self::Untitled { .. })
+    }
+
+    /// Best-effort display name — the tab title before any
+    /// domain-specific overrides. File stem for `File`, the stashed
+    /// `name` for `Untitled`.
+    pub fn display_name(&self) -> String {
+        match self {
+            Self::Untitled { name } => name.clone(),
+            Self::File { path, .. } => path
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| path.display().to_string()),
+        }
     }
 }
 
@@ -190,6 +365,20 @@ impl<D: Document> DocumentHost<D> {
     /// Access the wrapped document immutably. Views read through here.
     pub fn document(&self) -> &D {
         &self.document
+    }
+
+    /// Direct mutable access to the wrapped document, **bypassing** the
+    /// op / undo machinery.
+    ///
+    /// Only the minimum is exposed because direct mutations defeat the
+    /// point of the Document System — use [`apply`](Self::apply) for
+    /// anything that should be undoable. The legitimate callers are
+    /// bookkeeping fields that aren't part of the document's
+    /// user-visible state: cached layout, "last saved at generation N"
+    /// markers, telemetry counters. The caller is responsible for not
+    /// touching fields that should flow through ops.
+    pub fn document_mut(&mut self) -> &mut D {
+        &mut self.document
     }
 
     /// The document's current generation. See [`Document::generation`].

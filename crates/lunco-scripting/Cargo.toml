@@ -7,7 +7,12 @@ edition = "2021"
 bevy = { workspace = true }
 lunco-core = { path = "../lunco-core" }
 lunco-doc = { path = "../lunco-doc" }
-lunco-api = { path = "../lunco-api" }
+# `handle_script_request` observes `lunco_api::ScriptRequestEvent` so the
+# remote-scripting path can fire scripts through the API layer. Default
+# features (`transport-http`) are disabled here — scripting only needs
+# the event type, not the HTTP server, so we avoid pulling axum/tokio
+# into every scripting consumer.
+lunco-api = { path = "../lunco-api", default-features = false }
 pyo3 = { version = "0.23", optional = true }
 mlua = { version = "0.10", features = ["lua54", "vendored"] }
 libloading = { version = "0.8", optional = true }

@@ -3,16 +3,10 @@
 use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_workbench::{Panel, PanelId, PanelSlot};
-use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::ast_extract::{extract_model_name, hash_content};
 use crate::ui::{ModelicaDocumentRegistry, WorkbenchState};
-use crate::ui::panels::diagram::DiagramState;
-use crate::{ModelicaModel, ModelicaChannels, ModelicaCommand};
-use crate::ast_extract::{
-    extract_model_name, extract_parameters, extract_inputs_with_defaults,
-    extract_input_names, hash_content,
-};
 
 /// Tracks which model the editor buffer belongs to, to detect model switches.
 #[derive(Resource)]
@@ -118,269 +112,88 @@ impl Panel for CodeEditorPanel {
             return;
         }
 
-        let display_name = display_name.unwrap();
+        // Panel body only — the toolbar (view switch, compile, undo/redo,
+        // status chip) is rendered by [`ModelViewPanel`], which also owns
+        // the action handlers (see `dispatch_compile_from_buffer` /
+        // `apply_document_undo` / `apply_document_redo` below).
+        let _ = (display_name, compilation_error);
 
-        // ── Document summary for the selected entity (if any) ──
-        // Pulled out of the Registry up-front so the top-bar closure can
-        // read it without re-borrowing World.
-        let doc_summary = selected_entity.and_then(|e| {
-            world.resource::<ModelicaDocumentRegistry>().host(e).map(|h| {
-                (h.generation(), h.can_undo(), h.can_redo(), h.undo_depth(), h.redo_depth())
-            })
-        });
-
-        // ── Top bar ──
-        let mut compile_clicked = false;
-        let mut clear_error = false;
-        let mut undo_clicked = false;
-        let mut redo_clicked = false;
-
-        ui.horizontal(|ui| {
-            let buf_state = world.resource::<EditorBufferState>();
-            ui.label(format!("{} ({})",
-                display_name,
-                buf_state.detected_name.as_deref().unwrap_or("...")));
-
-            if is_read_only {
-                ui.colored_label(egui::Color32::from_rgb(200, 150, 50), "👁 Read-only");
-            }
-
-            ui.separator();
-
-            if let Some(ref err) = compilation_error {
-                ui.colored_label(egui::Color32::LIGHT_RED, "⚠️ Error");
-                ui.label(err);
-                if ui.button("Clear").clicked() {
-                    clear_error = true;
-                }
-            } else {
-                ui.colored_label(egui::Color32::GREEN, "Ready");
-            }
-
-            // Document status + Undo/Redo for the selected entity's source.
-            if let Some((gen, can_undo, can_redo, undo_n, redo_n)) = doc_summary {
-                ui.separator();
-                if ui.add_enabled(can_undo, egui::Button::new("↶")).on_hover_text("Undo last compile").clicked() {
-                    undo_clicked = true;
-                }
-                if ui.add_enabled(can_redo, egui::Button::new("↷")).on_hover_text("Redo").clicked() {
-                    redo_clicked = true;
-                }
-                ui.label(
-                    egui::RichText::new(format!("gen {} · ↶{} ↷{}", gen, undo_n, redo_n))
-                        .size(10.0)
-                        .color(egui::Color32::GRAY),
-                );
-            }
-
-            if !is_read_only && ui.button("🚀 COMPILE & RUN").clicked() {
-                compile_clicked = true;
-            }
-        });
-        ui.separator();
-
-        if clear_error {
-            if let Some(mut s) = world.get_resource_mut::<WorkbenchState>() {
-                s.compilation_error = None;
-            }
-        }
-
-        // ── Handle undo / redo clicks on the Document for selected_entity ──
-        if (undo_clicked || redo_clicked) && !is_read_only {
-            if let Some(entity) = selected_entity {
-                let new_source = {
-                    let mut registry = world.resource_mut::<ModelicaDocumentRegistry>();
-                    registry.host_mut(entity).and_then(|host| {
-                        let changed = if undo_clicked {
-                            host.undo().ok().unwrap_or(false)
-                        } else {
-                            host.redo().ok().unwrap_or(false)
-                        };
-                        changed.then(|| host.document().source().to_string())
-                    })
-                };
-
-                if let Some(source) = new_source {
-                    // Sync the reverted/advanced source into the editor
-                    // buffer. User re-compiles to re-run the simulation
-                    // against this source — consistent with "undo in editor
-                    // rewinds the buffer, next compile commits it".
-                    let mut new_starts = vec![0];
-                    for (i, b) in source.as_bytes().iter().enumerate() {
-                        if *b == b'\n' {
-                            new_starts.push(i + 1);
-                        }
-                    }
-                    let detected = extract_model_name(&source);
-                    let hash = hash_content(&source);
-
-                    {
-                        let mut buf_state = world.resource_mut::<EditorBufferState>();
-                        buf_state.text = source.clone();
-                        buf_state.line_starts = new_starts.into();
-                        buf_state.detected_name = detected;
-                        buf_state.source_hash = hash;
-                    }
-
-                    // Also mirror into WorkbenchState.editor_buffer so any
-                    // other consumer using that field sees the change.
-                    if let Some(mut s) = world.get_resource_mut::<WorkbenchState>() {
-                        s.editor_buffer = source;
-                    }
-                }
-            }
-        }
-
-        if compile_clicked {
-            let buf_state = world.resource::<EditorBufferState>();
-            if let Some(model_name) = buf_state.detected_name.clone() {
-                let source = buf_state.text.clone();
-                let params = extract_parameters(&source);
-                let inputs_with_defaults = extract_inputs_with_defaults(&source);
-                let runtime_inputs = extract_input_names(&source);
-
-                let mut session_id = 0;
-                let mut should_compile = false;
-
-                if let Some(entity) = selected_entity {
-                    if let Ok(mut model) = world.query::<&mut ModelicaModel>().get_mut(world, entity) {
-                        let old_inputs = std::mem::take(&mut model.inputs);
-                        model.session_id += 1;
-                        model.is_stepping = true;
-                        model.model_name = model_name.clone();
-                        model.parameters = params;
-                        model.inputs.clear();
-                        for (name, val) in &inputs_with_defaults {
-                            let existing = old_inputs.get(name).copied();
-                            model.inputs.entry(name.clone()).or_insert_with(|| existing.unwrap_or(*val));
-                        }
-                        for name in &runtime_inputs {
-                            let existing = old_inputs.get(name).copied();
-                            model.inputs.entry(name.clone()).or_insert_with(|| existing.unwrap_or(0.0));
-                        }
-                        model.variables.clear();
-                        model.paused = false;
-                        model.current_time = 0.0;
-                        model.last_step_time = 0.0;
-                        session_id = model.session_id;
-                        should_compile = true;
-                    }
-                } else {
-                    let ds = world.resource::<DiagramState>();
-                    session_id = ds.model_counter as u64 + 1;
-                    let entity = world.spawn((
-                        Name::new(model_name.clone()),
-                        ModelicaModel {
-                            model_path: "".into(),
-                            model_name: model_name.clone(),
-                            current_time: 0.0,
-                            last_step_time: 0.0,
-                            session_id,
-                            paused: false,
-                            parameters: params,
-                            inputs: runtime_inputs.into_iter().map(|n| (n, 0.0)).collect(),
-                            variables: HashMap::new(),
-                            is_stepping: true,
-                        },
-                    )).id();
-
-                    if let Some(mut s) = world.get_resource_mut::<WorkbenchState>() {
-                        s.selected_entity = Some(entity);
-                    }
-                    should_compile = true;
-                }
-
-                if should_compile {
-                    let target = world.get_resource::<WorkbenchState>()
-                        .and_then(|s| s.selected_entity).unwrap_or(Entity::PLACEHOLDER);
-
-                    // Checkpoint the just-compiled source into the Document
-                    // registry before sending the Compile command — the
-                    // registry is the single source of truth for this
-                    // entity's Modelica source.
-                    if target != Entity::PLACEHOLDER {
-                        let mut registry = world.resource_mut::<ModelicaDocumentRegistry>();
-                        registry.checkpoint_source(target, source.clone());
-                    }
-
-                    if let Some(channels) = world.get_resource::<ModelicaChannels>() {
-                        let _ = channels.tx.send(ModelicaCommand::Compile {
-                            entity: target,
-                            session_id,
-                            model_name: model_name.clone(),
-                            source,
-                        });
-                    }
-                }
-            } else {
-                if let Some(mut s) = world.get_resource_mut::<WorkbenchState>() {
-                    s.compilation_error = Some("Could not find a valid model declaration.".to_string());
-                }
-            }
-        }
+        // Resolve the DocumentId for the currently-shown model so the
+        // focus-loss commit below writes into it. Prefer the registry's
+        // entity→doc link (what a compile set up), falling back to
+        // `open_model.doc` so edits on an uncompiled in-memory model
+        // still land in its pre-allocated Document.
+        let doc_id = selected_entity
+            .and_then(|e| world.resource::<ModelicaDocumentRegistry>().document_of(e))
+            .or_else(|| {
+                world
+                    .resource::<WorkbenchState>()
+                    .open_model
+                    .as_ref()
+                    .and_then(|m| m.doc)
+            });
 
         // ── Editor area ──
+        //
+        // Single full-bleed TextEdit. I originally shipped a
+        // line-number gutter next to this, but the gutter's nested
+        // ScrollArea took unconstrained horizontal width and shoved
+        // the editor to the right. Dropped the gutter until it can be
+        // done properly (layouter-prefix or synchronized-scroll).
+        // Full-width editor beats a half-broken gutter.
         let mut buffer_changed = false;
+        let mut buffer_commit = false;
         let mut new_text = String::new();
 
-        let available_height = ui.available_height();
+        let avail = ui.available_size();
 
-        egui::ScrollArea::both()
-            .auto_shrink([false; 2])
-            .min_scrolled_height(available_height)
-            .show(ui, |ui| {
-                // Fetch data needed for the closure first
-                let (text_str, line_starts_len, galley_cache) = {
-                    let buf_state = world.resource::<EditorBufferState>();
-                    (buf_state.text.clone(), buf_state.line_starts.len(), buf_state.cached_galley.clone())
-                };
-                let mut text = text_str.as_str();
-                let is_ro = is_read_only;
+        // `text` must be a `&mut String` — egui's `TextBuffer` impl
+        // for `&str` is read-only, so passing `&mut &str` to
+        // `TextEdit::multiline` silently produces a non-editable
+        // widget.
+        let (mut text, galley_cache) = {
+            let buf_state = world.resource::<EditorBufferState>();
+            (buf_state.text.clone(), buf_state.cached_galley.clone())
+        };
+        let is_ro = is_read_only;
+        let editor_width = avail.x.max(100.0);
+        let editor_height = avail.y.max(200.0);
 
-                ui.horizontal_top(|ui| {
-                    ui.spacing_mut().item_spacing.x = 0.0;
-
-                    // Gutter
-                    let font_id = egui::TextStyle::Monospace.resolve(ui.style());
-                    let row_height = ui.spacing().interact_size.y.max(font_id.size);
-
-                    ui.vertical(|ui| {
-                        ui.set_width(35.0);
-                        for i in 1..=line_starts_len {
-                            ui.add_sized([30.0, row_height], egui::Label::new(
-                                egui::RichText::new(format!("{:>3}", i))
-                                    .size(10.0)
-                                    .color(egui::Color32::DARK_GRAY)
-                            ).selectable(false));
+        let output = ui.add_sized(
+            [editor_width, editor_height],
+            egui::TextEdit::multiline(&mut text)
+                .font(egui::TextStyle::Monospace)
+                .code_editor()
+                .desired_width(editor_width)
+                .desired_rows(((editor_height / 16.0) as usize).max(10))
+                .lock_focus(true)
+                .interactive(true)
+                .layouter(&mut |ui, string, _wrap_width| {
+                    if is_ro {
+                        if let Some(galley) = &galley_cache {
+                            return galley.clone();
                         }
-                    });
-
-                    // TextEdit
-                    let output = ui.add(egui::TextEdit::multiline(&mut text)
-                        .font(egui::TextStyle::Monospace)
-                        .code_editor()
-                        .desired_width(f32::INFINITY)
-                        .desired_rows(1)
-                        .lock_focus(true)
-                        .interactive(true) // Always interactive for selection
-                        .layouter(&mut |ui, string, _wrap_width| {
-                            if is_ro {
-                                if let Some(galley) = &galley_cache {
-                                    return galley.clone();
-                                }
-                            }
-                            let mut layout_job = modelica_layouter(&ui.style(), string.as_str());
-                            layout_job.wrap.max_width = f32::INFINITY;
-                            ui.painter().layout_job(layout_job)
-                        })
-                    );
-
-                    if output.changed() && !is_ro {
-                        new_text = text.to_string();
-                        buffer_changed = true;
                     }
-                });
-            });
+                    let mut layout_job =
+                        modelica_layouter(ui.style(), string.as_str());
+                    layout_job.wrap.max_width = f32::INFINITY;
+                    ui.painter().layout_job(layout_job)
+                }),
+        );
+
+        if output.changed() && !is_ro {
+            new_text = text.clone();
+            buffer_changed = true;
+        }
+        // Focus-loss commit: edits flow into the Document so other
+        // observers (diagram re-parse, dirty tracker) see them
+        // without requiring Compile.
+        if output.lost_focus() && !is_ro {
+            if new_text.is_empty() {
+                new_text = text.clone();
+            }
+            buffer_commit = true;
+        }
 
         if buffer_changed {
             let mut buf_state = world.resource_mut::<EditorBufferState>();
@@ -401,6 +214,77 @@ impl Panel for CodeEditorPanel {
                 }
             }
         }
+
+        // Commit the buffer into the Document on focus-loss. No-op when
+        // there's no backing document yet (the user is typing before any
+        // compile has produced an entity) — the existing "spawn fresh
+        // entity on Compile" path still handles that case.
+        if buffer_commit && !is_read_only {
+            if let Some(doc) = doc_id {
+                let committed = world.resource::<EditorBufferState>().text.clone();
+                world
+                    .resource_mut::<ModelicaDocumentRegistry>()
+                    .checkpoint_source(doc, committed);
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Previously this module exported `dispatch_compile_from_buffer`,
+// `apply_document_undo`, and `apply_document_redo` — ad-hoc helpers the
+// ModelViewPanel toolbar called directly. All of that logic now lives in
+// command observers in `crate::ui::commands` (`on_compile_model`,
+// `on_undo_document`, `on_redo_document`). Buttons fire the corresponding
+// `#[Command]` events instead of calling helpers, so keyboard shortcuts,
+// scripting, and the remote API share one write path. This comment is
+// the only thing left of them — the observers *are* the documentation.
+
+// Modelica keyword categories — each gets its own colour so declaration
+// intent (`parameter`, `input`, …) reads at a glance against structural
+// keywords (`model`, `equation`, …) and control flow (`if`, `when`, …).
+// Lists are kept small on purpose: MLS §A.1 defines the full reserved-word
+// set, but the editor only needs to highlight the ones users actually
+// type and read.
+const MODIFIER_KEYWORDS: &[&str] = &[
+    "parameter", "input", "output", "constant", "discrete",
+    "flow", "stream", "final", "inner", "outer",
+    "replaceable", "redeclare", "each", "partial",
+];
+const STRUCTURAL_KEYWORDS: &[&str] = &[
+    "model", "block", "connector", "function", "package", "record", "type",
+    "class", "operator", "equation", "algorithm", "initial", "annotation",
+    "end", "extends", "within", "import", "public", "protected",
+];
+const CONTROL_KEYWORDS: &[&str] = &[
+    "if", "then", "else", "elseif", "for", "in", "loop",
+    "while", "when", "elsewhen", "break", "return",
+];
+const OPERATOR_KEYWORDS: &[&str] = &[
+    "and", "or", "not", "der", "connect", "time", "true", "false",
+];
+const BUILTIN_TYPES: &[&str] = &[
+    "Real", "Integer", "Boolean", "String", "enum",
+];
+
+fn keyword_color(word: &str) -> Option<egui::Color32> {
+    if MODIFIER_KEYWORDS.contains(&word) {
+        // Amber — declaration modifiers (parameter, input, output, …).
+        Some(egui::Color32::from_rgb(240, 180, 80))
+    } else if STRUCTURAL_KEYWORDS.contains(&word) {
+        // Coral — class / section structure (model, equation, end, …).
+        Some(egui::Color32::from_rgb(255, 120, 120))
+    } else if CONTROL_KEYWORDS.contains(&word) {
+        // Violet — control flow (if/then/else, for, when, …).
+        Some(egui::Color32::from_rgb(200, 150, 230))
+    } else if OPERATOR_KEYWORDS.contains(&word) {
+        // Teal — builtin operators / named ops (and, or, not, der, …).
+        Some(egui::Color32::from_rgb(120, 200, 200))
+    } else if BUILTIN_TYPES.contains(&word) {
+        // Cyan — primitive types (Real, Integer, Boolean, String).
+        Some(egui::Color32::from_rgb(120, 200, 255))
+    } else {
+        None
     }
 }
 
@@ -408,87 +292,89 @@ pub fn modelica_layouter(style: &egui::Style, src: &str) -> egui::text::LayoutJo
     let mut job = egui::text::LayoutJob::default();
     let font_id = egui::TextStyle::Monospace.resolve(style);
 
-    // Expanded Modelica keywords
-    let keywords = [
-        "model", "end", "parameter", "Real", "Integer", "Boolean", "String",
-        "equation", "algorithm", "if", "then", "else", "elseif", "for", "loop",
-        "connect", "connector", "input", "output", "partial", "extends",
-        "package", "type", "within", "final", "inner", "outer", "der",
-        "function", "class", "record", "block", "constant", "discrete",
-        "while", "when", "initial", "protected", "public", "import", "flow", "stream",
-    ];
+    let comment_color = egui::Color32::from_rgb(110, 150, 110);
+    let string_color = egui::Color32::from_rgb(200, 220, 140);
+    let number_color = egui::Color32::from_rgb(150, 200, 255);
+    let op_color = egui::Color32::from_rgb(230, 200, 120);
+    let upper_ident_color = egui::Color32::from_rgb(150, 200, 255);
+    let ident_color = egui::Color32::from_rgb(230, 230, 230);
+    let default_color = egui::Color32::from_rgb(180, 180, 180);
+
+    let mut push = |job: &mut egui::text::LayoutJob, text: &str, color: egui::Color32| {
+        job.append(text, 0.0, egui::TextFormat {
+            font_id: font_id.clone(),
+            color,
+            ..Default::default()
+        });
+    };
 
     let mut current_idx = 0;
     while current_idx < src.len() {
         let remaining = &src[current_idx..];
-        
-        // Single line comments
+
+        // Single-line comment.
         if remaining.starts_with("//") {
             let line_end = remaining.find('\n').unwrap_or(remaining.len());
-            job.append(&remaining[..line_end], 0.0, egui::TextFormat {
-                font_id: font_id.clone(),
-                color: egui::Color32::from_rgb(100, 150, 100),
-                ..Default::default()
-            });
+            push(&mut job, &remaining[..line_end], comment_color);
             current_idx += line_end;
             continue;
         }
 
-        // Multi-line comment (basic handling for single line segments in virtualized view)
+        // Multi-line comment (spans may extend beyond the current
+        // chunk; fall back to end-of-buffer if no closing `*/`).
         if remaining.starts_with("/*") {
             let end_idx = remaining.find("*/").map(|i| i + 2).unwrap_or(remaining.len());
-            job.append(&remaining[..end_idx], 0.0, egui::TextFormat {
-                font_id: font_id.clone(),
-                color: egui::Color32::from_rgb(100, 150, 100),
-                ..Default::default()
-            });
+            push(&mut job, &remaining[..end_idx], comment_color);
             current_idx += end_idx;
             continue;
         }
 
-        let mut chars = remaining.chars();
-        let first_char = match chars.next() {
+        // Modelica description strings + general string literals. We
+        // accept a simple `"…"` (no escape tracking yet); this is good
+        // enough for the `"description"` idiom that follows most
+        // declarations. Strings that reach end-of-buffer are coloured
+        // anyway so an unterminated literal in mid-edit looks sane.
+        if remaining.starts_with('"') {
+            let after_quote = &remaining[1..];
+            let close_rel = after_quote.find('"').map(|i| i + 2).unwrap_or(remaining.len());
+            push(&mut job, &remaining[..close_rel], string_color);
+            current_idx += close_rel;
+            continue;
+        }
+
+        let first_char = match remaining.chars().next() {
             Some(c) => c,
             None => break,
         };
-        
-        if first_char.is_alphabetic() || first_char == '_' {
-            let word_end = remaining.find(|c: char| !c.is_alphanumeric() && c != '_').unwrap_or(remaining.len());
-            let word = &remaining[..word_end];
-            
-            let color = if keywords.contains(&word) {
-                egui::Color32::from_rgb(255, 120, 120) // Keywords
-            } else if word.chars().next().unwrap().is_uppercase() {
-                egui::Color32::from_rgb(120, 180, 255) // Types/Classes
-            } else {
-                egui::Color32::from_rgb(230, 230, 230) // Names
-            };
 
-            job.append(word, 0.0, egui::TextFormat {
-                font_id: font_id.clone(),
-                color,
-                ..Default::default()
+        if first_char.is_alphabetic() || first_char == '_' {
+            let word_end = remaining
+                .find(|c: char| !c.is_alphanumeric() && c != '_')
+                .unwrap_or(remaining.len());
+            let word = &remaining[..word_end];
+
+            let color = keyword_color(word).unwrap_or_else(|| {
+                if word.chars().next().map_or(false, |c| c.is_uppercase()) {
+                    upper_ident_color
+                } else {
+                    ident_color
+                }
             });
+            push(&mut job, word, color);
             current_idx += word_end;
         } else if first_char.is_numeric() {
-            let num_end = remaining.find(|c: char| !c.is_numeric() && c != '.' && c != 'e' && c != 'E').unwrap_or(remaining.len());
-            job.append(&remaining[..num_end], 0.0, egui::TextFormat {
-                font_id: font_id.clone(),
-                color: egui::Color32::from_rgb(150, 200, 255), // Numbers
-                ..Default::default()
-            });
+            let num_end = remaining
+                .find(|c: char| !c.is_numeric() && c != '.' && c != 'e' && c != 'E')
+                .unwrap_or(remaining.len());
+            push(&mut job, &remaining[..num_end], number_color);
             current_idx += num_end;
         } else {
-            let color = if "+-*/=^<>(){}[],;".contains(first_char) {
-                egui::Color32::from_rgb(255, 200, 100) // Operators
+            let color = if "+-*/=^<>(){}[],;:".contains(first_char) {
+                op_color
             } else {
-                egui::Color32::from_rgb(180, 180, 180) // Whitespace/Other
+                default_color
             };
-            job.append(&remaining[..first_char.len_utf8()], 0.0, egui::TextFormat {
-                font_id: font_id.clone(),
-                color,
-                ..Default::default()
-            });
+            push(&mut job, &remaining[..first_char.len_utf8()], color);
             current_idx += first_char.len_utf8();
         }
     }
