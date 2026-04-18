@@ -155,6 +155,14 @@ pub struct WorkbenchLayout {
 
     pub(crate) status: Option<StatusContent>,
 
+    /// App-wide Settings menu contributions. Domain plugins push a
+    /// closure via [`WorkbenchLayout::register_settings`] at Startup;
+    /// the closure is invoked each time the user opens the Settings
+    /// drop-down. Keeps editor prefs / theme toggles / etc. in one
+    /// discoverable place instead of scattered gear buttons.
+    pub(crate) settings_menu:
+        Vec<Box<dyn Fn(&mut bevy_egui::egui::Ui, &mut World) + Send + Sync>>,
+
     /// The live dock tree — what egui_dock actually renders. Stores
     /// [`TabId`]s so both singleton panels and multi-instance tabs
     /// coexist in the same tree.
@@ -206,6 +214,7 @@ impl Default for WorkbenchLayout {
             right_inspector: Vec::new(),
             bottom: Vec::new(),
             status: None,
+            settings_menu: Vec::new(),
             dock: DockState::new(Vec::new()),
         }
     }
@@ -337,6 +346,19 @@ impl WorkbenchLayout {
     /// Register a workspace and store it in the switcher. If this is the
     /// first workspace added, it also becomes active and its `apply`
     /// runs immediately to seed the initial layout.
+    /// Register a closure that contributes rows to the app-wide
+    /// Settings drop-down in the menu bar. Called once per open of the
+    /// menu; the closure may read/write Bevy resources via `world`.
+    ///
+    /// Intended for domain plugins to expose editor / theme / pane
+    /// preferences without each plugin inventing its own gear button.
+    pub fn register_settings<F>(&mut self, callback: F)
+    where
+        F: Fn(&mut bevy_egui::egui::Ui, &mut World) + Send + Sync + 'static,
+    {
+        self.settings_menu.push(Box::new(callback));
+    }
+
     pub fn register_workspace<W: Workspace + 'static>(&mut self, workspace: W) {
         let id = workspace.id();
         let first = self.workspaces.is_empty();
@@ -817,6 +839,27 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
                         ui.close();
                     }
                 }
+            });
+            ui.menu_button("Settings", |ui| {
+                // Take the callbacks out so we can pass &mut World into
+                // them while the layout is still extracted. Restored
+                // at the end of the block.
+                let callbacks = std::mem::take(&mut layout.settings_menu);
+                if callbacks.is_empty() {
+                    ui.label(
+                        egui::RichText::new("(no settings registered)")
+                            .weak()
+                            .italics(),
+                    );
+                } else {
+                    for (i, cb) in callbacks.iter().enumerate() {
+                        if i > 0 {
+                            ui.separator();
+                        }
+                        cb(ui, world);
+                    }
+                }
+                layout.settings_menu = callbacks;
             });
             ui.menu_button("Help", |ui| {
                 ui.label("LunCoSim workbench v0.2 (egui_dock)");

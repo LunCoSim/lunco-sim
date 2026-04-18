@@ -177,6 +177,7 @@ impl Workspace for AnalyzeWorkspace {
         // default active tab).
         layout.set_bottom_tabs(vec![
             PanelId("modelica_graphs"),
+            PanelId("modelica_diagnostics"),
             PanelId("modelica_console"),
         ]);
     }
@@ -217,15 +218,19 @@ impl Plugin for ModelicaUiPlugin {
             .init_resource::<panels::palette::PaletteState>()
             .init_resource::<panels::diagram::ModelSignatureCache>()
             .init_resource::<panels::console::ConsoleLog>()
+            .init_resource::<panels::diagnostics::DiagnosticsLog>()
             .insert_resource(panels::package_browser::PackageTreeCache::new())
             .add_systems(Update, panels::package_browser::handle_package_loading_tasks)
             .add_systems(Update, cleanup_removed_documents)
             .add_systems(Update, drain_document_changes)
+            .add_systems(Update, panels::diagnostics::refresh_diagnostics)
+            .add_systems(Startup, register_settings_menu)
             .register_panel(panels::package_browser::PackageBrowserPanel)
             .register_panel(panels::welcome::WelcomePanel)
             .register_panel(panels::telemetry::TelemetryPanel)
             .register_panel(panels::graphs::GraphsPanel)
             .register_panel(panels::console::ConsolePanel)
+            .register_panel(panels::diagnostics::DiagnosticsPanel)
             .register_panel(panels::inspector::InspectorPanel)
             .register_panel(panels::palette::ComponentPalettePanel)
             // Multi-instance: one tab per open document. Instances are
@@ -233,4 +238,25 @@ impl Plugin for ModelicaUiPlugin {
             .register_instance_panel(panels::model_view::ModelViewPanel::default())
             .register_workspace(AnalyzeWorkspace);
     }
+}
+
+/// Push Modelica editor preferences onto the application-wide
+/// Settings menu. Lives in the workbench Settings dropdown rather
+/// than a per-panel gear button — keeps editor toolbar tidy and
+/// all prefs discoverable in one place.
+fn register_settings_menu(world: &mut World) {
+    use bevy_egui::egui;
+    let Some(mut layout) = world
+        .get_resource_mut::<lunco_workbench::WorkbenchLayout>()
+    else {
+        return;
+    };
+    layout.register_settings(|ui, world| {
+        ui.label(egui::RichText::new("Code Editor").weak().small());
+        let mut buf = world.resource_mut::<panels::code_editor::EditorBufferState>();
+        ui.checkbox(&mut buf.word_wrap, "Word wrap")
+            .on_hover_text("Wrap long lines at editor width");
+        ui.checkbox(&mut buf.auto_indent, "Auto indent")
+            .on_hover_text("Copy previous line's indent on Enter");
+    });
 }

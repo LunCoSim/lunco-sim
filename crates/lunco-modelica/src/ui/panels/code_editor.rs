@@ -223,30 +223,12 @@ impl Panel for CodeEditorPanel {
         //   • **Auto indent** (default on): pressing Enter copies
         //     the previous line's leading whitespace onto the new
         //     line. Every modern code editor does this.
+        // Editor prefs (word wrap, auto indent) live in the app-wide
+        // Settings menu — see `register_settings_menu` in `ui/mod.rs`.
+        // Here we just read the current values.
         let (word_wrap, auto_indent) = {
-            let (mut wrap, mut indent) = {
-                let buf = world.resource::<EditorBufferState>();
-                (buf.word_wrap, buf.auto_indent)
-            };
-            ui.horizontal(|ui| {
-                ui.menu_button("⚙ Editor Settings", |ui| {
-                    if ui
-                        .checkbox(&mut wrap, "Word wrap")
-                        .on_hover_text("Wrap long lines at the editor width instead of scrolling horizontally")
-                        .changed()
-                    {
-                        world.resource_mut::<EditorBufferState>().word_wrap = wrap;
-                    }
-                    if ui
-                        .checkbox(&mut indent, "Auto indent")
-                        .on_hover_text("Copy the previous line's indentation when pressing Enter")
-                        .changed()
-                    {
-                        world.resource_mut::<EditorBufferState>().auto_indent = indent;
-                    }
-                });
-            });
-            (wrap, indent)
+            let buf = world.resource::<EditorBufferState>();
+            (buf.word_wrap, buf.auto_indent)
         };
 
         // ── Editor area ──

@@ -7,6 +7,8 @@ pub mod graphs;
 pub mod diagram;
 pub mod svg_renderer;
 pub mod console;
+pub mod diagnostics;
+pub mod log;
 pub mod inspector;
 pub mod model_view;
 pub mod palette;
