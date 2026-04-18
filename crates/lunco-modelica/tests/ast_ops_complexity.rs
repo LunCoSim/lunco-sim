@@ -6,7 +6,7 @@
 //! MSL-shaped circuits.
 
 use lunco_doc::{DocumentHost, DocumentId};
-use lunco_modelica::document::{ModelicaDocument, ModelicaOp};
+use lunco_modelica::document::{ModelicaChange, ModelicaDocument, ModelicaOp};
 use lunco_modelica::pretty::{ComponentDecl, ConnectEquation, Line, Placement, PortRef};
 
 fn doc(source: &str) -> DocumentHost<ModelicaDocument> {
@@ -188,20 +188,11 @@ end Circuit;
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// 4. Nested class — the known gap
+// 4. Nested classes — qualified-path resolution
 // ─────────────────────────────────────────────────────────────────────
-//
-// Our ops only resolve top-level classes today (see
-// `resolve_class` in document.rs). A model nested inside a package
-// can't be targeted by class name because `StoredDefinition.classes`
-// holds only top-level entries.
-//
-// This test *expects* the op to fail — it documents the gap so
-// Phase α can decide whether to expand class resolution (qualified
-// paths like "Pkg.Inner") before wiring the diagram panel.
 
 #[test]
-fn nested_class_lookup_is_not_yet_supported() {
+fn nested_class_resolved_by_qualified_path() {
     let source = "\
 package Pkg
   model Inner
@@ -211,19 +202,44 @@ end Pkg;
 ";
     let mut host = doc(source);
 
-    let err = host.apply(ModelicaOp::AddComponent {
-        class: "Inner".into(),  // nested under Pkg — not top-level
+    host.apply(ModelicaOp::AddComponent {
+        class: "Pkg.Inner".into(),
         decl: ComponentDecl {
             type_name: "Real".into(),
             name: "b".into(),
             modifications: vec![],
             placement: None,
         },
-    });
-    assert!(err.is_err(), "nested-class resolution is not yet implemented");
+    })
+    .expect("qualified nested-class path must resolve");
 
-    let err2 = host.apply(ModelicaOp::AddComponent {
-        class: "Pkg.Inner".into(),  // qualified path — also not supported today
+    let final_source = host.document().source();
+    assert!(reparse_ok(final_source), "must reparse");
+    let ast = host.document().ast().ast().unwrap();
+    let inner = ast
+        .classes
+        .get("Pkg")
+        .and_then(|p| p.classes.get("Inner"))
+        .unwrap();
+    assert_eq!(inner.components.len(), 2);
+    assert!(inner.components.contains_key("b"));
+}
+
+#[test]
+fn bare_name_does_not_match_nested_class() {
+    // `Inner` is not a top-level class — using the bare name without
+    // the `Pkg.` prefix must still fail (there is no shadowing /
+    // implicit scope lookup in our op resolver).
+    let source = "\
+package Pkg
+  model Inner
+    Real a;
+  end Inner;
+end Pkg;
+";
+    let mut host = doc(source);
+    let err = host.apply(ModelicaOp::AddComponent {
+        class: "Inner".into(),
         decl: ComponentDecl {
             type_name: "Real".into(),
             name: "b".into(),
@@ -231,7 +247,96 @@ end Pkg;
             placement: None,
         },
     });
-    assert!(err2.is_err(), "qualified-path resolution is not yet implemented");
+    assert!(err.is_err());
+}
+
+#[test]
+fn deeply_nested_qualified_path_resolves() {
+    let source = "\
+package A
+  package B
+    model C
+      Real x;
+    end C;
+  end B;
+end A;
+";
+    let mut host = doc(source);
+    host.apply(ModelicaOp::AddComponent {
+        class: "A.B.C".into(),
+        decl: ComponentDecl {
+            type_name: "Real".into(),
+            name: "y".into(),
+            modifications: vec![],
+            placement: None,
+        },
+    })
+    .unwrap();
+    let ast = host.document().ast().ast().unwrap();
+    let c = ast
+        .classes
+        .get("A")
+        .and_then(|a| a.classes.get("B"))
+        .and_then(|b| b.classes.get("C"))
+        .unwrap();
+    assert!(c.components.contains_key("x"));
+    assert!(c.components.contains_key("y"));
+}
+
+#[test]
+fn qualified_path_with_missing_intermediate_segment_errors() {
+    let source = "\
+package A
+  model X
+    Real a;
+  end X;
+end A;
+";
+    let mut host = doc(source);
+    let err = host
+        .apply(ModelicaOp::AddComponent {
+            class: "A.MissingMid.X".into(),
+            decl: ComponentDecl {
+                type_name: "Real".into(),
+                name: "b".into(),
+                modifications: vec![],
+                placement: None,
+            },
+        })
+        .unwrap_err();
+    // Error message should name the specific missing segment.
+    let msg = format!("{:?}", err);
+    assert!(
+        msg.contains("MissingMid") || msg.contains("A.MissingMid"),
+        "error message mentions missing segment: {}",
+        msg
+    );
+}
+
+#[test]
+fn nested_class_connect_equation_lands_in_right_class() {
+    let source = "\
+package Pkg
+  model Circuit
+    Real a;
+    Real b;
+  end Circuit;
+end Pkg;
+";
+    let mut host = doc(source);
+    host.apply(ModelicaOp::AddConnection {
+        class: "Pkg.Circuit".into(),
+        eq: ConnectEquation {
+            from: PortRef::new("a", "p"),
+            to: PortRef::new("b", "n"),
+            line: None,
+        },
+    })
+    .unwrap();
+
+    let ast = host.document().ast().ast().unwrap();
+    let circuit = ast.classes.get("Pkg").unwrap().classes.get("Circuit").unwrap();
+    assert_eq!(circuit.equations.len(), 1);
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -455,6 +560,234 @@ fn set_parameter_is_invertible() {
     }).unwrap();
     host.undo().unwrap();
     assert_eq!(host.document().source(), src);
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// 8. Structured change events — consumers patch incrementally
+// ─────────────────────────────────────────────────────────────────────
+
+fn collect_changes(host: &DocumentHost<ModelicaDocument>, since: u64) -> Vec<(u64, ModelicaChange)> {
+    host.document()
+        .changes_since(since)
+        .expect("not too far behind")
+        .map(|(g, c)| (*g, c.clone()))
+        .collect()
+}
+
+#[test]
+fn add_component_emits_component_added_change() {
+    let mut host = doc("model M\nend M;\n");
+    host.apply(ModelicaOp::AddComponent {
+        class: "M".into(),
+        decl: ComponentDecl {
+            type_name: "Real".into(),
+            name: "x".into(),
+            modifications: vec![],
+            placement: None,
+        },
+    }).unwrap();
+
+    let changes = collect_changes(&host, 0);
+    assert_eq!(changes.len(), 1);
+    assert_eq!(changes[0].0, 1);
+    assert_eq!(changes[0].1, ModelicaChange::ComponentAdded {
+        class: "M".into(),
+        name: "x".into(),
+    });
+}
+
+#[test]
+fn add_connection_emits_connection_added_change() {
+    let mut host = doc("model M\n  Real a;\n  Real b;\nend M;\n");
+    host.apply(ModelicaOp::AddConnection {
+        class: "M".into(),
+        eq: ConnectEquation {
+            from: PortRef::new("a", "p"),
+            to: PortRef::new("b", "n"),
+            line: None,
+        },
+    }).unwrap();
+    let changes = collect_changes(&host, 0);
+    assert_eq!(changes.len(), 1);
+    match &changes[0].1 {
+        ModelicaChange::ConnectionAdded { class, from, to } => {
+            assert_eq!(class, "M");
+            assert_eq!(from, &PortRef::new("a", "p"));
+            assert_eq!(to, &PortRef::new("b", "n"));
+        }
+        other => panic!("expected ConnectionAdded, got {:?}", other),
+    }
+}
+
+#[test]
+fn remove_component_emits_component_removed_change() {
+    let mut host = doc("model M\n  Real a;\nend M;\n");
+    host.apply(ModelicaOp::RemoveComponent {
+        class: "M".into(),
+        name: "a".into(),
+    }).unwrap();
+    let changes = collect_changes(&host, 0);
+    assert_eq!(changes.len(), 1);
+    assert_eq!(changes[0].1, ModelicaChange::ComponentRemoved {
+        class: "M".into(),
+        name: "a".into(),
+    });
+}
+
+#[test]
+fn set_parameter_emits_parameter_changed() {
+    let mut host = doc("model M\n  Resistor R1(R=100);\nend M;\n");
+    host.apply(ModelicaOp::SetParameter {
+        class: "M".into(),
+        component: "R1".into(),
+        param: "R".into(),
+        value: "42".into(),
+    }).unwrap();
+    let changes = collect_changes(&host, 0);
+    assert_eq!(changes[0].1, ModelicaChange::ParameterChanged {
+        class: "M".into(),
+        component: "R1".into(),
+        param: "R".into(),
+        value: "42".into(),
+    });
+}
+
+#[test]
+fn set_placement_emits_placement_changed() {
+    let mut host = doc("model M\n  Resistor R1;\nend M;\n");
+    host.apply(ModelicaOp::SetPlacement {
+        class: "M".into(),
+        name: "R1".into(),
+        placement: Placement::at(10.0, -5.0),
+    }).unwrap();
+    let changes = collect_changes(&host, 0);
+    assert_eq!(changes[0].1, ModelicaChange::PlacementChanged {
+        class: "M".into(),
+        component: "R1".into(),
+        placement: Placement::at(10.0, -5.0),
+    });
+}
+
+#[test]
+fn edit_text_emits_text_replaced() {
+    let mut host = doc("model M\nend M;\n");
+    host.apply(ModelicaOp::EditText {
+        range: 0..5,
+        replacement: "class".into(),
+    }).unwrap();
+    let changes = collect_changes(&host, 0);
+    assert_eq!(changes[0].1, ModelicaChange::TextReplaced);
+}
+
+#[test]
+fn undo_emits_text_replaced() {
+    // Undo reapplies the inverse EditText, which is text-level.
+    // Consumers handling TextReplaced → rebuild is the contract.
+    let mut host = doc("model M\nend M;\n");
+    host.apply(ModelicaOp::AddComponent {
+        class: "M".into(),
+        decl: ComponentDecl {
+            type_name: "Real".into(),
+            name: "x".into(),
+            modifications: vec![],
+            placement: None,
+        },
+    }).unwrap();
+    // Snapshot the generation after the forward op.
+    let after_forward = host.generation();
+    host.undo().unwrap();
+    // Undo pushed a new change AFTER the forward one.
+    let changes = collect_changes(&host, after_forward);
+    assert_eq!(changes.len(), 1);
+    assert_eq!(changes[0].1, ModelicaChange::TextReplaced);
+}
+
+#[test]
+fn consumer_polls_only_new_changes() {
+    // Simulate a panel that already saw generations 1 and 2, asks for
+    // changes since generation 2, expects only generations >= 3.
+    let mut host = doc("model M\nend M;\n");
+    for name in ["a", "b", "c", "d"] {
+        host.apply(ModelicaOp::AddComponent {
+            class: "M".into(),
+            decl: ComponentDecl {
+                type_name: "Real".into(),
+                name: name.into(),
+                modifications: vec![],
+                placement: None,
+            },
+        }).unwrap();
+    }
+    let seen_tail: Vec<u64> = host.document()
+        .changes_since(2)
+        .unwrap()
+        .map(|(g, _)| *g)
+        .collect();
+    assert_eq!(seen_tail, vec![3, 4]);
+}
+
+#[test]
+fn too_far_behind_returns_none() {
+    let mut host = doc("model M\nend M;\n");
+    // Push more than CHANGE_HISTORY_CAPACITY changes.
+    let cap = lunco_modelica::document::CHANGE_HISTORY_CAPACITY;
+    for i in 0..(cap + 10) {
+        host.apply(ModelicaOp::AddComponent {
+            class: "M".into(),
+            decl: ComponentDecl {
+                type_name: "Real".into(),
+                name: format!("v{}", i),
+                modifications: vec![],
+                placement: None,
+            },
+        }).unwrap();
+    }
+    // Asking for changes since generation 0 — too far behind.
+    assert!(host.document().changes_since(0).is_none(),
+        "consumer that lagged beyond retention must get None");
+    // Asking for a recent generation — still serviceable.
+    let recent = host.generation() - 2;
+    assert!(host.document().changes_since(recent).is_some());
+}
+
+#[test]
+fn mixed_op_sequence_emits_changes_in_order() {
+    let mut host = doc("model M\nend M;\n");
+    host.apply(ModelicaOp::AddComponent {
+        class: "M".into(),
+        decl: ComponentDecl {
+            type_name: "Resistor".into(),
+            name: "R1".into(),
+            modifications: vec![("R".into(), "100".into())],
+            placement: None,
+        },
+    }).unwrap();
+    host.apply(ModelicaOp::SetPlacement {
+        class: "M".into(),
+        name: "R1".into(),
+        placement: Placement::at(0.0, 0.0),
+    }).unwrap();
+    host.apply(ModelicaOp::SetParameter {
+        class: "M".into(),
+        component: "R1".into(),
+        param: "R".into(),
+        value: "50".into(),
+    }).unwrap();
+    host.apply(ModelicaOp::RemoveComponent {
+        class: "M".into(),
+        name: "R1".into(),
+    }).unwrap();
+
+    let changes = collect_changes(&host, 0);
+    assert_eq!(changes.len(), 4);
+    assert!(matches!(changes[0].1, ModelicaChange::ComponentAdded { .. }));
+    assert!(matches!(changes[1].1, ModelicaChange::PlacementChanged { .. }));
+    assert!(matches!(changes[2].1, ModelicaChange::ParameterChanged { .. }));
+    assert!(matches!(changes[3].1, ModelicaChange::ComponentRemoved { .. }));
+    // Generations are consecutive.
+    for i in 1..changes.len() {
+        assert_eq!(changes[i].0, changes[i - 1].0 + 1);
+    }
 }
 
 #[test]

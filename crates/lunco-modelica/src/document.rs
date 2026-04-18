@@ -39,6 +39,7 @@
 //! is another `EditText` against the *new* range with the previous slice
 //! as replacement.
 
+use std::collections::VecDeque;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -47,7 +48,99 @@ use lunco_doc::{Document, DocumentError, DocumentId, DocumentOp, DocumentOrigin}
 use rumoca_phase_parse::parse_to_ast;
 use rumoca_session::parsing::ast::StoredDefinition;
 
-use crate::pretty::{self, ComponentDecl, ConnectEquation};
+use crate::pretty::{self, ComponentDecl, ConnectEquation, Placement, PortRef};
+
+/// How many structured changes the document retains for consumer
+/// polling. Consumers (panels, worker threads) track the last
+/// generation they observed and pull the tail of this buffer.
+/// When a consumer falls further behind than this window, they must
+/// do a full rebuild from the current AST.
+///
+/// 256 is enough for typical interactive sessions (hundreds of
+/// drag+drop + parameter edits between panel refreshes). Tuned up
+/// when profiling shows panel consumers lagging.
+pub const CHANGE_HISTORY_CAPACITY: usize = 256;
+
+// ---------------------------------------------------------------------------
+// ModelicaChange — structured change events for incremental patching
+// ---------------------------------------------------------------------------
+
+/// A structural change to a [`ModelicaDocument`].
+///
+/// Emitted on every successful mutation and retained in a bounded ring
+/// buffer so panels can patch their render state incrementally rather
+/// than rebuilding from the AST on every frame / every edit.
+///
+/// Text-level ops ([`ModelicaOp::EditText`], [`ModelicaOp::ReplaceSource`])
+/// emit [`Self::TextReplaced`] because they can't be losslessly
+/// projected onto structural changes; consumers handle that variant by
+/// doing a full rebuild. All AST-level ops emit their specific variant,
+/// giving consumers enough info to patch node lists / edge lists /
+/// placement maps without parsing anything themselves.
+///
+/// Undo and redo propagate as `TextReplaced` — structural changes are
+/// only emitted on *original* forward application of a structural op.
+/// Panels that want structural undo/redo can diff the AST themselves
+/// when they see `TextReplaced`, or rebuild.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum ModelicaChange {
+    /// Text-level change or undo/redo. Consumers must rebuild state
+    /// that tracks structural entities (components, connections).
+    TextReplaced,
+    /// A component was added to `class`.
+    ComponentAdded {
+        /// Qualified class name (supports dotted nested paths).
+        class: String,
+        /// Instance name of the new component.
+        name: String,
+    },
+    /// A component was removed from `class`.
+    ComponentRemoved {
+        /// Qualified class name.
+        class: String,
+        /// Instance name that was removed.
+        name: String,
+    },
+    /// A connect equation was added to `class`'s equation section.
+    ConnectionAdded {
+        /// Qualified class name.
+        class: String,
+        /// Source port.
+        from: PortRef,
+        /// Target port.
+        to: PortRef,
+    },
+    /// A connect equation was removed from `class`'s equation section.
+    ConnectionRemoved {
+        /// Qualified class name.
+        class: String,
+        /// Source port.
+        from: PortRef,
+        /// Target port.
+        to: PortRef,
+    },
+    /// A component's `Placement` annotation was set or replaced.
+    PlacementChanged {
+        /// Qualified class name.
+        class: String,
+        /// Component instance name.
+        component: String,
+        /// The placement now in effect.
+        placement: Placement,
+    },
+    /// A component's parameter modification was set or replaced.
+    ParameterChanged {
+        /// Qualified class name.
+        class: String,
+        /// Component instance name.
+        component: String,
+        /// Parameter name.
+        param: String,
+        /// Replacement value expression (emitted verbatim).
+        value: String,
+    },
+}
 
 /// Eagerly-refreshed AST cache attached to a [`ModelicaDocument`].
 ///
@@ -96,6 +189,11 @@ pub struct ModelicaDocument {
     /// `None` means never saved (freshly created in-memory); `Some(g)`
     /// means last saved at generation `g`. See [`is_dirty`](Self::is_dirty).
     last_saved_generation: Option<u64>,
+    /// Ring buffer of `(generation_after_change, change)`. The oldest
+    /// entry is dropped when `CHANGE_HISTORY_CAPACITY` is exceeded.
+    /// Consumers track their last-observed generation and pull the
+    /// suffix via [`changes_since`](Self::changes_since).
+    changes: VecDeque<(u64, ModelicaChange)>,
 }
 
 impl ModelicaDocument {
@@ -133,6 +231,7 @@ impl ModelicaDocument {
             generation: 0,
             origin,
             last_saved_generation,
+            changes: VecDeque::with_capacity(CHANGE_HISTORY_CAPACITY),
         }
     }
 
@@ -146,6 +245,52 @@ impl ModelicaDocument {
     /// error rather than a successful AST.
     pub fn ast(&self) -> &AstCache {
         &self.ast
+    }
+
+    /// Iterate over structured changes applied since `last_seen`.
+    ///
+    /// Returns an iterator over `(generation, change)` pairs where
+    /// `generation` is the document generation *after* the change
+    /// landed. Consumers track their last-observed generation and
+    /// advance it to the final yielded value after processing.
+    ///
+    /// Returns [`None`] when the consumer has fallen further behind
+    /// than the retention window ([`CHANGE_HISTORY_CAPACITY`]) —
+    /// callers must then do a full rebuild from the current AST.
+    /// Consumers that have never polled can pass `0` to receive every
+    /// retained change.
+    pub fn changes_since(
+        &self,
+        last_seen: u64,
+    ) -> Option<impl Iterator<Item = &(u64, ModelicaChange)>> {
+        if let Some((earliest, _)) = self.changes.front() {
+            // If the earliest retained change is newer than
+            // `last_seen + 1`, we've lost entries the caller would have
+            // needed. Bail and let them rebuild.
+            if *earliest > last_seen + 1 {
+                return None;
+            }
+        }
+        Some(self.changes.iter().filter(move |(g, _)| *g > last_seen))
+    }
+
+    /// Generation of the oldest retained change, or the current
+    /// generation when the history is empty. Useful for consumers
+    /// deciding whether their last-seen value is still serviceable.
+    pub fn earliest_retained_generation(&self) -> u64 {
+        self.changes
+            .front()
+            .map(|(g, _)| *g)
+            .unwrap_or(self.generation)
+    }
+
+    /// Push a change onto the ring buffer, dropping the oldest entry
+    /// when the capacity is exceeded.
+    fn push_change(&mut self, change: ModelicaChange) {
+        if self.changes.len() >= CHANGE_HISTORY_CAPACITY {
+            self.changes.pop_front();
+        }
+        self.changes.push_back((self.generation, change));
     }
 
     /// Byte length of the source.
@@ -256,8 +401,9 @@ pub enum ModelicaOp {
     /// internally, so the inverse is a straightforward deletion
     /// (`EditText` with empty replacement).
     AddComponent {
-        /// Target class name (must be a top-level class today — nested
-        /// class support is a follow-up). Case-sensitive.
+        /// Target class name. Either a single-segment top-level name
+        /// (`"Circuit"`) or a dotted qualified path for nested classes
+        /// (`"Pkg.Inner"`, `"A.B.C"`). Case-sensitive.
         class: String,
         /// Declaration payload. See [`pretty::ComponentDecl`].
         decl: ComponentDecl,
@@ -268,7 +414,8 @@ pub enum ModelicaOp {
     /// Rendered via [`crate::pretty::connect_equation`] and spliced as
     /// an [`EditText`] internally; inverse is the matching deletion.
     AddConnection {
-        /// Target class name (top-level today).
+        /// Target class name. Accepts dotted qualified paths for
+        /// nested classes (e.g. `"Pkg.Inner"`).
         class: String,
         /// Equation payload. See [`pretty::ConnectEquation`].
         eq: ConnectEquation,
@@ -281,7 +428,8 @@ pub enum ModelicaOp {
     /// text verbatim — including any comments / annotations that were
     /// attached to the declaration.
     RemoveComponent {
-        /// Target class name (top-level today).
+        /// Target class name. Accepts dotted qualified paths for
+        /// nested classes (e.g. `"Pkg.Inner"`).
         class: String,
         /// Instance name to remove.
         name: String,
@@ -349,82 +497,119 @@ impl Document for ModelicaDocument {
     }
 
     fn apply(&mut self, op: Self::Op) -> Result<Self::Op, DocumentError> {
-        match op {
-            ModelicaOp::AddComponent { class, decl } => {
-                let patch = compute_add_component_patch(&self.source, &self.ast, &class, &decl)?;
-                self.apply(ModelicaOp::EditText {
-                    range: patch.0,
-                    replacement: patch.1,
-                })
-            }
-            ModelicaOp::AddConnection { class, eq } => {
-                let patch = compute_add_connection_patch(&self.source, &self.ast, &class, &eq)?;
-                self.apply(ModelicaOp::EditText {
-                    range: patch.0,
-                    replacement: patch.1,
-                })
-            }
-            ModelicaOp::RemoveComponent { class, name } => {
-                let patch = compute_remove_component_patch(&self.source, &self.ast, &class, &name)?;
-                self.apply(ModelicaOp::EditText {
-                    range: patch.0,
-                    replacement: patch.1,
-                })
-            }
-            ModelicaOp::RemoveConnection { class, from, to } => {
-                let patch = compute_remove_connection_patch(&self.source, &self.ast, &class, &from, &to)?;
-                self.apply(ModelicaOp::EditText {
-                    range: patch.0,
-                    replacement: patch.1,
-                })
-            }
-            ModelicaOp::SetPlacement { class, name, placement } => {
-                let patch = compute_set_placement_patch(&self.source, &self.ast, &class, &name, &placement)?;
-                self.apply(ModelicaOp::EditText {
-                    range: patch.0,
-                    replacement: patch.1,
-                })
-            }
-            ModelicaOp::SetParameter { class, component, param, value } => {
-                let patch = compute_set_parameter_patch(&self.source, &self.ast, &class, &component, &param, &value)?;
-                self.apply(ModelicaOp::EditText {
-                    range: patch.0,
-                    replacement: patch.1,
-                })
-            }
-            ModelicaOp::ReplaceSource { new } => {
-                let old = std::mem::replace(&mut self.source, new);
-                self.generation = self.generation.saturating_add(1);
-                self.ast = Arc::new(AstCache::from_source(&self.source, self.generation));
-                Ok(ModelicaOp::ReplaceSource { new: old })
-            }
-            ModelicaOp::EditText { range, replacement } => {
-                if range.start > range.end || range.end > self.source.len() {
-                    return Err(DocumentError::ValidationFailed(format!(
-                        "EditText range {}..{} out of bounds (len={})",
-                        range.start,
-                        range.end,
-                        self.source.len()
-                    )));
-                }
-                if !self.source.is_char_boundary(range.start)
-                    || !self.source.is_char_boundary(range.end)
-                {
-                    return Err(DocumentError::ValidationFailed(format!(
-                        "EditText range {}..{} not on char boundaries",
-                        range.start, range.end
-                    )));
-                }
-                let removed: String = self.source[range.clone()].to_string();
-                self.source.replace_range(range.clone(), &replacement);
-                self.generation = self.generation.saturating_add(1);
-                self.ast = Arc::new(AstCache::from_source(&self.source, self.generation));
-                let inverse_range = range.start..(range.start + replacement.len());
-                Ok(ModelicaOp::EditText {
-                    range: inverse_range,
-                    replacement: removed,
-                })
-            }
+        // Translate any op to a (range, replacement, change) triple.
+        // `ReplaceSource` is expressed as replacing the full buffer —
+        // no special-casing needed below. Every op follows the same
+        // mutate / bump-generation / refresh-cache / emit-change path.
+        let (range, replacement, change) = op_to_patch(&self.source, &self.ast, op)?;
+        self.apply_patch(range, replacement, change)
+    }
+}
+
+impl ModelicaDocument {
+    /// Core mutation path. All ops funnel through here so the document
+    /// has a single source-of-truth for generation bumps, AST refresh,
+    /// and change emission.
+    ///
+    /// Returns an [`ModelicaOp::EditText`] inverse carrying the exact
+    /// removed bytes — uniform undo for every op kind.
+    fn apply_patch(
+        &mut self,
+        range: Range<usize>,
+        replacement: String,
+        change: ModelicaChange,
+    ) -> Result<ModelicaOp, DocumentError> {
+        if range.start > range.end || range.end > self.source.len() {
+            return Err(DocumentError::ValidationFailed(format!(
+                "text range {}..{} out of bounds (len={})",
+                range.start,
+                range.end,
+                self.source.len()
+            )));
+        }
+        if !self.source.is_char_boundary(range.start)
+            || !self.source.is_char_boundary(range.end)
+        {
+            return Err(DocumentError::ValidationFailed(format!(
+                "text range {}..{} not on char boundaries",
+                range.start, range.end
+            )));
+        }
+        let removed: String = self.source[range.clone()].to_string();
+        self.source.replace_range(range.clone(), &replacement);
+        self.generation = self.generation.saturating_add(1);
+        self.ast = Arc::new(AstCache::from_source(&self.source, self.generation));
+        self.push_change(change);
+        let inverse_range = range.start..(range.start + replacement.len());
+        Ok(ModelicaOp::EditText {
+            range: inverse_range,
+            replacement: removed,
+        })
+    }
+}
+
+/// Translate a high-level [`ModelicaOp`] into the concrete text patch
+/// and the structured change it represents. Pure function — no
+/// document state mutated.
+fn op_to_patch(
+    source: &str,
+    ast: &AstCache,
+    op: ModelicaOp,
+) -> Result<(Range<usize>, String, ModelicaChange), DocumentError> {
+    match op {
+        ModelicaOp::ReplaceSource { new } => Ok((
+            0..source.len(),
+            new,
+            ModelicaChange::TextReplaced,
+        )),
+        ModelicaOp::EditText { range, replacement } => {
+            Ok((range, replacement, ModelicaChange::TextReplaced))
+        }
+        ModelicaOp::AddComponent { class, decl } => {
+            let (r, rp) = compute_add_component_patch(source, ast, &class, &decl)?;
+            let change = ModelicaChange::ComponentAdded {
+                class,
+                name: decl.name,
+            };
+            Ok((r, rp, change))
+        }
+        ModelicaOp::AddConnection { class, eq } => {
+            let (r, rp) = compute_add_connection_patch(source, ast, &class, &eq)?;
+            let change = ModelicaChange::ConnectionAdded {
+                class,
+                from: eq.from,
+                to: eq.to,
+            };
+            Ok((r, rp, change))
+        }
+        ModelicaOp::RemoveComponent { class, name } => {
+            let (r, rp) = compute_remove_component_patch(source, ast, &class, &name)?;
+            let change = ModelicaChange::ComponentRemoved { class, name };
+            Ok((r, rp, change))
+        }
+        ModelicaOp::RemoveConnection { class, from, to } => {
+            let (r, rp) = compute_remove_connection_patch(source, ast, &class, &from, &to)?;
+            let change = ModelicaChange::ConnectionRemoved { class, from, to };
+            Ok((r, rp, change))
+        }
+        ModelicaOp::SetPlacement { class, name, placement } => {
+            let (r, rp) = compute_set_placement_patch(source, ast, &class, &name, &placement)?;
+            let change = ModelicaChange::PlacementChanged {
+                class,
+                component: name,
+                placement,
+            };
+            Ok((r, rp, change))
+        }
+        ModelicaOp::SetParameter { class, component, param, value } => {
+            let (r, rp) = compute_set_parameter_patch(source, ast, &class, &component, &param, &value)?;
+            let change = ModelicaChange::ParameterChanged {
+                class,
+                component,
+                param,
+                value,
+            };
+            Ok((r, rp, change))
         }
     }
 }
@@ -439,13 +624,21 @@ impl Document for ModelicaDocument {
 // apply() delegates to `EditText`, which gives us uniform undo behavior
 // and keeps all source mutation on one code path.
 //
-// Today we only support top-level classes (looked up by name in
-// `StoredDefinition::classes`). Nested classes, qualified paths, and
-// more surgical ops (SetParameter, Remove*, SetPlacement, SetLine) are
-// deliberate follow-ups.
+// Class resolution accepts qualified dotted paths (e.g. `Pkg.Inner` or
+// `Modelica.Electrical.Analog.Basic.Resistor`) and walks the nested
+// `ClassDef.classes` index one segment at a time.
 
-/// Resolve a top-level class by name, producing a useful error if the
-/// AST is in a parse-error state or the class isn't present.
+/// Resolve a class by qualified name. Accepts:
+///
+/// - Single-segment names for top-level classes: `"Circuit"`.
+/// - Dotted qualified names that drill into nested classes:
+///   `"Pkg.Inner"`, `"Modelica.Electrical.Analog.Basic.Resistor"`.
+///
+/// Each segment must match a class in the previous segment's
+/// `classes` index (top-level for the first segment). Returns a
+/// [`DocumentError::ValidationFailed`] with the first missing segment
+/// named when resolution fails, and an error when the AST is currently
+/// a parse failure.
 fn resolve_class<'a>(
     ast: &'a AstCache,
     class: &str,
@@ -459,9 +652,31 @@ fn resolve_class<'a>(
             )));
         }
     };
-    stored.classes.get(class).ok_or_else(|| {
-        DocumentError::ValidationFailed(format!("class `{}` not found in document", class))
-    })
+    if class.is_empty() {
+        return Err(DocumentError::ValidationFailed(
+            "class path is empty".into(),
+        ));
+    }
+    let mut segments = class.split('.');
+    let first = segments.next().expect("split always yields at least one item");
+    let mut current = stored.classes.get(first).ok_or_else(|| {
+        DocumentError::ValidationFailed(format!(
+            "class `{}` not found in document",
+            first,
+        ))
+    })?;
+    let mut walked = first.to_string();
+    for segment in segments {
+        walked.push('.');
+        walked.push_str(segment);
+        current = current.classes.get(segment).ok_or_else(|| {
+            DocumentError::ValidationFailed(format!(
+                "class `{}` not found (resolving `{}`)",
+                walked, class,
+            ))
+        })?;
+    }
+    Ok(current)
 }
 
 /// Return the byte offset of the start of the line containing `byte_pos`.
