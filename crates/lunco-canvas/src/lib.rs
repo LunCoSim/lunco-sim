@@ -62,7 +62,7 @@ pub use event::{ContextTarget, InputEvent, Modifiers, MouseButton, SceneEvent};
 pub use layer::{
     EdgesLayer, GridLayer, Layer, NodesLayer, SelectionLayer, ToolPreviewLayer,
 };
-pub use overlay::{Overlay, OverlayCtx};
+pub use overlay::{Anchor, NavBarOverlay, Overlay, OverlayCtx};
 pub use scene::{Edge, EdgeId, Node, NodeId, Port, PortId, PortRef, Pos, Rect, Scene};
 pub use selection::{SelectItem, Selection};
 pub use tool::{CanvasOps, DefaultTool, Tool, ToolOutcome};

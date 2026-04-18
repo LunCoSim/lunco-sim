@@ -45,6 +45,35 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 
+/// Hit-test kind returned by [`Scene::hit_node`]. Mirrors
+/// [`crate::visual::NodeHit`] but is defined here so the scene
+/// module doesn't pull in the visual module just for one enum.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NodeHitKind {
+    Body,
+    Port(PortId),
+}
+
+/// Squared perpendicular distance from `p` to the finite segment
+/// `(a,b)`. Endpoint-clamped. Mirror of the one in `visual.rs`; kept
+/// private to scene so the two modules stay independent.
+fn perpendicular_dist_sq(p: Pos, a: Pos, b: Pos) -> f32 {
+    let ax = b.x - a.x;
+    let ay = b.y - a.y;
+    let len_sq = ax * ax + ay * ay;
+    if len_sq < f32::EPSILON {
+        let dx = p.x - a.x;
+        let dy = p.y - a.y;
+        return dx * dx + dy * dy;
+    }
+    let t = (((p.x - a.x) * ax + (p.y - a.y) * ay) / len_sq).clamp(0.0, 1.0);
+    let foot_x = a.x + t * ax;
+    let foot_y = a.y + t * ay;
+    let dx = p.x - foot_x;
+    let dy = p.y - foot_y;
+    dx * dx + dy * dy
+}
+
 /// Stable identifier for a [`Node`] within a single [`Scene`].
 ///
 /// Allocated monotonically by the owning `Scene`; never reused even
@@ -344,6 +373,80 @@ impl Scene {
         let mut iter = self.nodes.values().map(|n| n.rect);
         let first = iter.next()?;
         Some(iter.fold(first, Rect::union))
+    }
+
+    /// Data-driven hit test — returns which node (and which part of
+    /// it) the world-space point lies over, walking in *reverse*
+    /// insertion order so later-added nodes win when overlapping
+    /// (the Figma / OS "top window" convention).
+    ///
+    /// Ports are tested as circles of `port_radius` world-units around
+    /// their `local_offset`; bodies are `Rect::contains`. This matches
+    /// the default [`crate::visual::NodeVisual::hit`] impl, so it's
+    /// correct for any visual that hasn't overridden `hit`. Custom
+    /// visuals with non-rectangular bodies will want to pre-filter
+    /// here then refine via the visual trait — that plumbing lands
+    /// when a real case needs it.
+    pub fn hit_node(
+        &self,
+        world_pos: Pos,
+        port_radius: f32,
+    ) -> Option<(NodeId, NodeHitKind)> {
+        let radius_sq = port_radius * port_radius;
+        for (id, node) in self.nodes.iter().rev() {
+            for port in &node.ports {
+                let px = node.rect.min.x + port.local_offset.x;
+                let py = node.rect.min.y + port.local_offset.y;
+                let dx = world_pos.x - px;
+                let dy = world_pos.y - py;
+                if dx * dx + dy * dy <= radius_sq {
+                    return Some((*id, NodeHitKind::Port(port.id.clone())));
+                }
+            }
+            if node.rect.contains(world_pos) {
+                return Some((*id, NodeHitKind::Body));
+            }
+        }
+        None
+    }
+
+    /// Data-driven edge hit test — returns the first edge within
+    /// `threshold` world-units of `world_pos`, walking in reverse
+    /// insertion order.
+    ///
+    /// Treats the edge as a straight segment between its endpoints;
+    /// that's an approximation for bezier/orthogonal routed edges,
+    /// but acceptable for click-target discrimination. A richer
+    /// variant (bezier curve distance, orthogonal path walk) can be
+    /// added when edge shapes diverge enough to matter.
+    pub fn hit_edge(&self, world_pos: Pos, threshold: f32) -> Option<EdgeId> {
+        let thr_sq = threshold * threshold;
+        for (id, edge) in self.edges.iter().rev() {
+            let Some(from_node) = self.nodes.get(&edge.from.node) else { continue };
+            let Some(to_node) = self.nodes.get(&edge.to.node) else { continue };
+            let Some(from_port) = from_node
+                .ports
+                .iter()
+                .find(|p| p.id == edge.from.port)
+            else {
+                continue;
+            };
+            let Some(to_port) = to_node.ports.iter().find(|p| p.id == edge.to.port) else {
+                continue;
+            };
+            let a = Pos::new(
+                from_node.rect.min.x + from_port.local_offset.x,
+                from_node.rect.min.y + from_port.local_offset.y,
+            );
+            let b = Pos::new(
+                to_node.rect.min.x + to_port.local_offset.x,
+                to_node.rect.min.y + to_port.local_offset.y,
+            );
+            if perpendicular_dist_sq(world_pos, a, b) <= thr_sq {
+                return Some(*id);
+            }
+        }
+        None
     }
 
     /// Set of edge ids that touch any node in `ids`. Used by "delete

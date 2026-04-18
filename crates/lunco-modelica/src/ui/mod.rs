@@ -159,7 +159,10 @@ impl Workspace for AnalyzeWorkspace {
         // still builds on apps with nothing open yet. When the first
         // real model tab opens, the placeholder stays docked next
         // to it — users can close it.
-        layout.set_center(vec![PanelId("modelica_welcome")]);
+        layout.set_center(vec![
+            PanelId("modelica_welcome"),
+            PanelId("modelica_canvas_diagram"),
+        ]);
         layout.set_active_center_tab(0);
         // Right dock gets two tabs: Inspector (params/variables) and
         // the Component Palette (MSL instantiation). Figma / Unreal
@@ -232,6 +235,8 @@ impl Plugin for ModelicaUiPlugin {
             .register_panel(panels::console::ConsolePanel)
             .register_panel(panels::diagnostics::DiagnosticsPanel)
             .register_panel(panels::inspector::InspectorPanel)
+            .register_panel(panels::canvas_diagram::CanvasDiagramPanel)
+            .init_resource::<panels::canvas_diagram::CanvasDiagramState>()
             .register_panel(panels::palette::ComponentPalettePanel)
             // Multi-instance: one tab per open document. Instances are
             // opened at runtime by the Package Browser.

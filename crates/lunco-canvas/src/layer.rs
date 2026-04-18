@@ -67,21 +67,38 @@ impl Layer for GridLayer {
         if !self.enabled {
             return;
         }
-        // Grid dots only while reasonably zoomed — below ~0.3 zoom
-        // the dots become aliased noise. Skip silently.
-        if ctx.viewport.zoom < 0.3 {
-            return;
-        }
         let painter = ctx.ui.painter();
         let sr = ctx.screen_rect;
-        // Find the world-space rect that corresponds to the screen.
+        let zoom = ctx.viewport.zoom.max(f32::EPSILON);
+
+        // Adaptive grid: double or halve the base spacing until each
+        // dot lands 8-64 screen pixels from its neighbour. Keeps the
+        // grid visually consistent from deep zoom-in to zoom-out
+        // without ever disappearing or turning into moire.
+        let base = self.spacing_world.max(1.0);
+        let mut step = base;
+        // Too dense (<8 px) — double the world spacing so we draw
+        // fewer, further-apart dots.
+        while step * zoom < 8.0 {
+            step *= 2.0;
+            if step > base * 1024.0 {
+                break; // safety bail — astronomical zoom-out
+            }
+        }
+        // Too sparse (>64 px) — halve it.
+        while step * zoom > 64.0 {
+            step *= 0.5;
+            if step < base / 1024.0 {
+                break;
+            }
+        }
+
         let min_w = ctx
             .viewport
             .screen_to_world(crate::scene::Pos::new(sr.min.x, sr.min.y), sr);
         let max_w = ctx
             .viewport
             .screen_to_world(crate::scene::Pos::new(sr.max.x, sr.max.y), sr);
-        let step = self.spacing_world.max(1.0);
         let start_x = (min_w.x / step).floor() * step;
         let start_y = (min_w.y / step).floor() * step;
         let r = 1.2_f32;

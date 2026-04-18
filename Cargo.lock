@@ -6042,6 +6042,7 @@ dependencies = [
  "log",
  "lunco-api",
  "lunco-assets",
+ "lunco-canvas",
  "lunco-core",
  "lunco-doc",
  "lunco-doc-bevy",

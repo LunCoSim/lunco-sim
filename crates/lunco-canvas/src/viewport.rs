@@ -79,7 +79,11 @@ pub struct ViewportConfig {
 impl Default for ViewportConfig {
     fn default() -> Self {
         Self {
-            zoom_min: 0.1,
+            // 0.25 keeps a ~200-unit scene at least ~50 pixels across
+            // — any further out and the content becomes a dot in the
+            // middle of an expanse of grid and users lose it. Apps
+            // with larger world extents (colony view) override.
+            zoom_min: 0.25,
             zoom_max: 8.0,
             ease: 0.25,
             scroll_zoom_gain: 0.0015,
