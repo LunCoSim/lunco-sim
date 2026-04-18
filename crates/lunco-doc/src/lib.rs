@@ -59,6 +59,82 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 // ─────────────────────────────────────────────────────────────────────────────
+// SymbolPath — opaque cross-document reference
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// A domain-agnostic path into a [`Document`].
+///
+/// Examples — each format interprets the string in its own syntax:
+///
+/// - Modelica: `"Rocket.engine.thrust"` (dotted qualified name)
+/// - USD: `"/World/Rocket.xformOp:translate"` (prim path + attribute)
+/// - SysML v2: `"Rocket::engine::thrust"` (double-colon qualified name)
+///
+/// `lunco-doc` treats the string as opaque. Resolution is the owning
+/// Document's job via the [`Resolver`] trait. This type exists so that
+/// **binding documents** (cross-format links) can store
+/// `(DocumentId, SymbolPath)` pairs without depending on domain crates.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct SymbolPath(String);
+
+impl SymbolPath {
+    /// Wrap a string as a symbol path. No validation — format-specific.
+    pub fn new(path: impl Into<String>) -> Self {
+        Self(path.into())
+    }
+
+    /// The raw path string.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// True when the path is the empty string.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl fmt::Display for SymbolPath {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl From<String> for SymbolPath {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
+
+impl From<&str> for SymbolPath {
+    fn from(s: &str) -> Self {
+        Self(s.to_string())
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Resolver — symbol lookup within a document
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Resolves a [`SymbolPath`] to a domain-specific handle inside one document.
+///
+/// Implemented by each Document type using its own AST / scene graph / model.
+/// Binding documents call this to validate that both ends of a cross-document
+/// link still exist after edits.
+///
+/// `Target` is domain-defined (e.g. an AST node handle, a USD prim path,
+/// a SysML element id). Callers that only need to know whether the symbol
+/// resolves can ignore the value.
+pub trait Resolver {
+    /// The domain-specific handle returned by a successful resolution.
+    type Target;
+
+    /// Look up `path` inside this document. Returns `None` when the symbol
+    /// does not exist.
+    fn resolve(&self, path: &SymbolPath) -> Option<Self::Target>;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // DocumentId
 // ─────────────────────────────────────────────────────────────────────────────
 

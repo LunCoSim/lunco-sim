@@ -5,12 +5,116 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 
+// ---------------------------------------------------------------------------
+// Fallback strategy for ports without a Placement annotation
+// ---------------------------------------------------------------------------
+
+/// How to assign a diagram position to a connector that carries no
+/// `annotation(Placement(...))` declaration.
+///
+/// # Why this exists
+/// The Modelica Language Specification (§18.6) defines the *format* of the
+/// Placement annotation but **does not specify any default layout** when it is
+/// absent. Quote: "The Placement annotation ... is used to define the placement
+/// of the component in the diagram layer."  No default is stated — tools are free
+/// to do whatever they want.
+///
+/// In practice, every MSL connector declares an explicit Placement, so this
+/// fallback only fires for:
+///   - User-defined components that have no graphical layer at all
+///   - Third-party libraries with incomplete annotations
+///   - Components whose Placement the rumoca parser cannot yet extract
+///
+/// # Rationale for `SideByCausality` as the active default
+/// Scanning the MSL reveals an informal but consistent convention:
+///   - causal `input`  connectors sit at (-100..110, ~0)  → left side
+///   - causal `output` connectors sit at (+100..110, ~0)  → right side
+///   - acausal connectors in `extends OnePort` / `TwoPort` follow the same
+///     left/right pattern: `p` left, `n` right
+/// This is **not a standard** — it is an observed pattern that produces
+/// sensible schematics for the vast majority of library components.
+///
+/// Change `PLACEMENT_FALLBACK` below to switch strategy without touching logic.
+#[derive(Clone, Copy)]
+enum PortPlacementFallback {
+    /// inputs → left (-100, 0), outputs → right (+100, 0),
+    /// acausal connectors alternate left/right/top/bottom by insertion order.
+    /// Mirrors informal MSL convention. **Not a Modelica standard.**
+    SideByCausality,
+    /// Every un-annotated port gets center (0, 0).
+    /// Use this when you want missing annotations to be visually obvious
+    /// (ports pile up in the middle, easy to spot).
+    AllCenter,
+    /// All un-annotated ports stacked on the left side, evenly spaced.
+    AllLeft,
+}
+
+/// Active fallback strategy — the only line you need to edit to change behaviour.
+const PLACEMENT_FALLBACK: PortPlacementFallback = PortPlacementFallback::SideByCausality;
+
+fn fallback_port_position(causality: &Causality, port_index: usize) -> (f32, f32) {
+    match PLACEMENT_FALLBACK {
+        PortPlacementFallback::SideByCausality => match causality {
+            Causality::Input(_)  => (-100.0, 0.0),
+            Causality::Output(_) => (100.0, 0.0),
+            _ => match port_index % 4 {
+                0 => (-100.0, 0.0),
+                1 => (100.0, 0.0),
+                2 => (0.0, 100.0),
+                _ => (0.0, -100.0),
+            },
+        },
+        PortPlacementFallback::AllCenter => (0.0, 0.0),
+        PortPlacementFallback::AllLeft => {
+            let y = 50.0 - port_index as f32 * 20.0;
+            (-100.0, y)
+        }
+    }
+}
+
+/// Scan raw Modelica source text and extract every connector Placement extent.
+///
+/// Matches declarations of the form:
+/// ```modelica
+/// TypeName portName annotation(Placement(transformation(extent={{x1,y1},{x2,y2}}...
+/// ```
+/// Returns `port_name → center (x, y)` in Modelica diagram coords (-100..100).
+/// First occurrence wins (file-level, not class-scoped — good enough for MSL
+/// where port names are unique per file in practice).
+fn extract_all_placements(source: &str) -> HashMap<String, (f32, f32)> {
+    let mut map = HashMap::new();
+    let re = regex::Regex::new(
+        r"(?s)\b(\w+)\b[^;]{0,300}?annotation\s*\(\s*Placement\s*\(\s*transformation\s*\([^)]*?extent\s*=\s*\{\{([^}]+)\},\{([^}]+)\}"
+    ).expect("valid regex");
+
+    let parse_pair = |s: &str| -> Option<(f32, f32)> {
+        let v: Vec<f32> = s.split(',').filter_map(|t| t.trim().parse().ok()).collect();
+        if v.len() >= 2 { Some((v[0], v[1])) } else { None }
+    };
+
+    for caps in re.captures_iter(source) {
+        let name = caps[1].to_string();
+        if let (Some((x1, y1)), Some((x2, y2))) = (
+            parse_pair(&caps[2]),
+            parse_pair(&caps[3]),
+        ) {
+            map.entry(name).or_insert(((x1 + x2) / 2.0, (y1 + y2) / 2.0));
+        }
+    }
+    map
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct PortDef {
     name: String,
     connector_type: String,
     msl_path: String,
     is_flow: bool,
+    /// Port position in Modelica diagram coordinates (-100..100).
+    /// x < 0 = left side, x > 0 = right side, y > 0 = top, y < 0 = bottom.
+    /// (0, 0) means no annotation was found and position is unknown.
+    x: f32,
+    y: f32,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -36,12 +140,17 @@ struct MSLComponentDef {
 
 struct MSLIndexer {
     classes: HashMap<String, ClassDef>,
+    /// Pre-extracted port placements: class_name → (port_name → (x, y)).
+    /// Populated in `scan_dir` while the source text is already in memory,
+    /// so we never need to re-read .mo files or store them long-term.
+    placements: HashMap<String, HashMap<String, (f32, f32)>>,
 }
 
 impl MSLIndexer {
     fn new() -> Self {
         Self {
             classes: HashMap::new(),
+            placements: HashMap::new(),
         }
     }
 
@@ -61,8 +170,23 @@ impl MSLIndexer {
                     if let Ok(source) = fs::read_to_string(&path) {
                         let file_name = path.file_name().unwrap().to_str().unwrap();
                         if let Ok(ast) = parse_to_ast(&source, &file_name) {
+                            // Extract Placement annotations now, while source is in scope.
+                            // Store per class so resolve_inheritance() can look them up
+                            // without re-reading files.
+                            let file_placements = extract_all_placements(&source);
+                            for name in ast.classes.keys() {
+                                let full = if name == "package" {
+                                    package_prefix.to_string()
+                                } else if package_prefix.is_empty() {
+                                    name.to_string()
+                                } else {
+                                    format!("{}.{}", package_prefix, name)
+                                };
+                                self.placements.insert(full, file_placements.clone());
+                            }
                             self.add_stored_definition(ast, package_prefix);
                         }
+                        // source is dropped here — no long-term storage of .mo text
                     }
                 }
             }
@@ -163,11 +287,19 @@ impl MSLIndexer {
 
                 if is_port || has_causality {
                     if !ports.iter().any(|p| p.name == comp.name) {
+                        let (x, y) = self.placements
+                            .get(class_name)
+                            .and_then(|m| m.get(&comp.name))
+                            .copied()
+                            .unwrap_or_else(|| fallback_port_position(&comp.causality, ports.len()));
+
                         ports.push(PortDef {
                             name: comp.name.clone(),
                             connector_type: type_str.clone(),
                             msl_path: type_str,
                             is_flow: is_port,
+                            x,
+                            y,
                         });
                     }
                 }

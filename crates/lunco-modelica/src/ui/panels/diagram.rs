@@ -147,6 +147,7 @@ impl DiagramState {
         let node_id = self.diagram.add_node(def.clone(), pos);
         let ports: Vec<String> = def.ports.iter().map(|p| p.name.clone()).collect();
         let connector_types: Vec<String> = def.ports.iter().map(|p| p.connector_type.clone()).collect();
+        let port_positions: Vec<(f32, f32)> = def.ports.iter().map(|p| (p.x, p.y)).collect();
 
         let snarl_node = DiagramNode::Component {
             id: node_id,
@@ -157,6 +158,7 @@ impl DiagramState {
             icon_asset: def.icon_asset.clone(),
             ports,
             connector_types,
+            port_positions,
         };
 
         self.snarl.insert_node(pos, snarl_node);
@@ -201,6 +203,10 @@ pub enum DiagramNode {
         icon_asset: Option<String>,
         ports: Vec<String>,
         connector_types: Vec<String>,
+        /// Port positions in Modelica diagram coordinates (-100..100).
+        /// Parallel to `ports` and `connector_types`.
+        #[serde(default)]
+        port_positions: Vec<(f32, f32)>,
     },
 }
 
@@ -208,6 +214,7 @@ impl DiagramNode {
     fn from_msl(comp: &MSLComponentDef) -> Self {
         let ports: Vec<String> = comp.ports.iter().map(|p| p.name.clone()).collect();
         let connector_types: Vec<String> = comp.ports.iter().map(|p| p.connector_type.clone()).collect();
+        let port_positions: Vec<(f32, f32)> = comp.ports.iter().map(|p| (p.x, p.y)).collect();
         DiagramNode::Component {
             id: DiagramNodeId::new(),
             instance_name: format!("New{}", comp.name),
@@ -217,6 +224,7 @@ impl DiagramNode {
             icon_asset: comp.icon_asset.clone(),
             ports,
             connector_types,
+            port_positions,
         }
     }
 
@@ -948,7 +956,10 @@ impl<'a> SnarlViewer<DiagramNode> for DiagramViewer<'a> {
     ) {
         let node = &snarl[node_id];
         let instance_name = node.title();
-        let DiagramNode::Component { id, .. } = node;
+        let DiagramNode::Component { id, port_positions, ports: port_names, connector_types: conn_types, .. } = node;
+        let port_positions = port_positions.clone();
+        let port_names = port_names.clone();
+        let conn_types = conn_types.clone();
         
         let body_height = self.theme.body_min_size.y;
         let symbol_size = self.theme.body_min_size.x;
@@ -971,7 +982,41 @@ impl<'a> SnarlViewer<DiagramNode> for DiagramViewer<'a> {
             painter.rect_stroke(rect.expand(2.0), 0.0, egui::Stroke::new(2.0, egui::Color32::LIGHT_BLUE), egui::StrokeKind::Middle);
         }
 
-        // 5. Draw instance label centered below the box
+        // 5. Draw port dots at their Modelica diagram positions.
+        // Modelica coords are -100..100; map onto the body rect.
+        // Ports sitting exactly on the boundary (|x|=100 or |y|=100) are drawn
+        // as small filled circles with a label so the user knows where to wire.
+        for (i, (mx, my)) in port_positions.iter().enumerate() {
+            if *mx == 0.0 && *my == 0.0 { continue; } // unknown position, skip
+            let px = rect.left() + (mx + 100.0) / 200.0 * rect.width();
+            let py = rect.top()  + (100.0 - my) / 200.0 * rect.height();
+            let pos = egui::pos2(px, py);
+            let ct = conn_types.get(i).map(|s| s.as_str()).unwrap_or("Pin");
+            let color = connector_color(ct, self.theme);
+            painter.circle_filled(pos, self.theme.port_dot_radius + 1.0, egui::Color32::from_black_alpha(180));
+            painter.circle_filled(pos, self.theme.port_dot_radius, color);
+            // Port name label — tiny, offset away from boundary
+            let label = port_names.get(i).map(|s| s.as_str()).unwrap_or("");
+            let offset = egui::vec2(
+                if *mx < 0.0 { 8.0 } else if *mx > 0.0 { -8.0 } else { 0.0 },
+                if *my > 0.0 { 8.0 } else if *my < 0.0 { -8.0 } else { 0.0 },
+            );
+            let align = match (*mx as i32, *my as i32) {
+                (x, _) if x < 0 => egui::Align2::LEFT_CENTER,
+                (x, _) if x > 0 => egui::Align2::RIGHT_CENTER,
+                (_, y) if y > 0 => egui::Align2::CENTER_TOP,
+                _                => egui::Align2::CENTER_BOTTOM,
+            };
+            painter.text(
+                pos + offset,
+                align,
+                label,
+                egui::FontId::proportional(9.0),
+                color,
+            );
+        }
+
+        // 6. Draw instance label centered below the box
         painter.text(
             egui::pos2(rect.center().x, rect.bottom() + 8.0),
             egui::Align2::CENTER_TOP,
@@ -1367,6 +1412,7 @@ fn build_snarl(diagram: &VisualDiagram) -> Snarl<DiagramNode> {
     for node in &diagram.nodes {
         let ports: Vec<String> = node.component_def.ports.iter().map(|p| p.name.clone()).collect();
         let connector_types: Vec<String> = node.component_def.ports.iter().map(|p| p.connector_type.clone()).collect();
+        let port_positions: Vec<(f32, f32)> = node.component_def.ports.iter().map(|p| (p.x, p.y)).collect();
         let snarl_node = DiagramNode::Component {
             id: node.id,
             instance_name: node.instance_name.clone(),
@@ -1376,6 +1422,7 @@ fn build_snarl(diagram: &VisualDiagram) -> Snarl<DiagramNode> {
             icon_asset: node.component_def.icon_asset.clone(),
             ports,
             connector_types,
+            port_positions,
         };
         let pos = egui::Pos2::new(node.position.x, node.position.y);
         let sid = snarl.insert_node(pos, snarl_node);
