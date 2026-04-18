@@ -178,12 +178,17 @@ impl NodeVisual for IconNodeVisual {
     }
 }
 
-/// Straight-line edge visual. Upgrade path: a Bezier or orthogonal-
-/// routed variant is another impl of `EdgeVisual` — register under a
-/// different kind id.
-struct StraightEdgeVisual;
+/// Dymola / OMEdit-style orthogonal edge: one horizontal-vertical-
+/// horizontal Z-route with the bend at the x-midpoint. Collapses to
+/// a straight segment when the endpoints are (near-)collinear on
+/// either axis, avoiding degenerate zero-length jogs.
+///
+/// A richer routing pass (obstacle-avoidance, port-direction-aware
+/// stubs, multiple-bend auto-layout) is a next step; this is the
+/// pattern users already recognise.
+struct OrthogonalEdgeVisual;
 
-impl EdgeVisual for StraightEdgeVisual {
+impl EdgeVisual for OrthogonalEdgeVisual {
     fn draw(
         &self,
         ctx: &mut DrawCtx,
@@ -194,13 +199,89 @@ impl EdgeVisual for StraightEdgeVisual {
         let col = if selected {
             egui::Color32::from_rgb(140, 190, 255)
         } else {
-            egui::Color32::from_rgb(180, 190, 210)
+            egui::Color32::from_rgb(60, 120, 200)
         };
-        ctx.ui.painter().line_segment(
-            [egui::pos2(from.x, from.y), egui::pos2(to.x, to.y)],
-            egui::Stroke::new(if selected { 2.0 } else { 1.5 }, col),
-        );
+        let width = if selected { 2.0 } else { 1.4 };
+        let stroke = egui::Stroke::new(width, col);
+        let painter = ctx.ui.painter();
+
+        let dx = to.x - from.x;
+        let dy = to.y - from.y;
+        // Near-collinear: straight segment. Threshold in screen
+        // pixels keeps it stable at all zoom levels (the caller
+        // already transformed to screen-space).
+        let thr = 1.0;
+        if dx.abs() < thr || dy.abs() < thr {
+            painter.line_segment(
+                [egui::pos2(from.x, from.y), egui::pos2(to.x, to.y)],
+                stroke,
+            );
+            return;
+        }
+
+        // Z-route with the bend at the x midpoint. Produces the
+        // classic Modelica "two right-angle bends" shape:
+        //
+        //   A─────┐
+        //         │
+        //         └─────B
+        let midx = from.x + dx * 0.5;
+        let p0 = egui::pos2(from.x, from.y);
+        let p1 = egui::pos2(midx, from.y);
+        let p2 = egui::pos2(midx, to.y);
+        let p3 = egui::pos2(to.x, to.y);
+        painter.line_segment([p0, p1], stroke);
+        painter.line_segment([p1, p2], stroke);
+        painter.line_segment([p2, p3], stroke);
     }
+
+    /// Hit-test each of the three segments individually so clicks
+    /// near the bend register, not just clicks near the phantom
+    /// straight line between endpoints.
+    fn hit(
+        &self,
+        world_pos: lunco_canvas::Pos,
+        from_world: lunco_canvas::Pos,
+        to_world: lunco_canvas::Pos,
+    ) -> bool {
+        let threshold_sq = 16.0_f32;
+        let dx = to_world.x - from_world.x;
+        let dy = to_world.y - from_world.y;
+        if dx.abs() < 1.0 || dy.abs() < 1.0 {
+            return segment_dist_sq(world_pos, from_world, to_world) <= threshold_sq;
+        }
+        let midx = from_world.x + dx * 0.5;
+        let p0 = from_world;
+        let p1 = lunco_canvas::Pos::new(midx, from_world.y);
+        let p2 = lunco_canvas::Pos::new(midx, to_world.y);
+        let p3 = to_world;
+        segment_dist_sq(world_pos, p0, p1) <= threshold_sq
+            || segment_dist_sq(world_pos, p1, p2) <= threshold_sq
+            || segment_dist_sq(world_pos, p2, p3) <= threshold_sq
+    }
+}
+
+/// Squared perpendicular distance from `p` to the finite segment
+/// `(a,b)`. Endpoint-clamped — clicking past the end doesn't count.
+fn segment_dist_sq(
+    p: lunco_canvas::Pos,
+    a: lunco_canvas::Pos,
+    b: lunco_canvas::Pos,
+) -> f32 {
+    let ax = b.x - a.x;
+    let ay = b.y - a.y;
+    let len_sq = ax * ax + ay * ay;
+    if len_sq < f32::EPSILON {
+        let dx = p.x - a.x;
+        let dy = p.y - a.y;
+        return dx * dx + dy * dy;
+    }
+    let t = (((p.x - a.x) * ax + (p.y - a.y) * ay) / len_sq).clamp(0.0, 1.0);
+    let foot_x = a.x + t * ax;
+    let foot_y = a.y + t * ay;
+    let dx = p.x - foot_x;
+    let dy = p.y - foot_y;
+    dx * dx + dy * dy
 }
 
 fn build_registry() -> VisualRegistry {
@@ -221,7 +302,7 @@ fn build_registry() -> VisualRegistry {
             icon_asset,
         }
     });
-    reg.register_edge_kind("modelica.connection", |_: &JsonValue| StraightEdgeVisual);
+    reg.register_edge_kind("modelica.connection", |_: &JsonValue| OrthogonalEdgeVisual);
     reg
 }
 
@@ -699,6 +780,20 @@ impl CanvasDiagramPanel {
             state.canvas.ui(ui)
         };
 
+        // Empty-diagram overlay: when the class has no components
+        // (equation-only models like Battery, SpringMass,
+        // RocketEngine), show a summary card instead of an
+        // uninformative empty grid. OMEdit's diagram view is empty
+        // for these too, but we can do better by giving users a
+        // direct cue about what's in the model and where to find it.
+        let show_empty_overlay = {
+            let state = world.resource::<CanvasDiagramState>();
+            state.canvas.scene.node_count() == 0
+        };
+        if show_empty_overlay {
+            render_empty_diagram_overlay(ui, response.rect, world);
+        }
+
         // Capture the right-click world position the frame the menu
         // opens — before egui's `press_origin` gets overwritten by
         // later clicks (on menu entries themselves, which would
@@ -834,6 +929,26 @@ impl CanvasDiagramPanel {
                 .is_some()
         {
             world.resource_mut::<CanvasDiagramState>().context_menu = None;
+        }
+
+        // Double-click on a node → "drill in". Open the class that
+        // the component instantiates as a new model view tab,
+        // alongside the current one. Matches Dymola / OMEdit's
+        // "go into this component" gesture.
+        for ev in &events {
+            if let lunco_canvas::SceneEvent::NodeDoubleClicked { id } = ev {
+                let type_name = {
+                    let state = world.resource::<CanvasDiagramState>();
+                    state
+                        .canvas
+                        .scene
+                        .node(*id)
+                        .and_then(|n| n.data.get("type").and_then(|v| v.as_str()).map(str::to_string))
+                };
+                if let Some(qualified) = type_name {
+                    drill_into_class(world, &qualified);
+                }
+            }
         }
 
         // Translate scene events → ModelicaOps and apply.
@@ -972,6 +1087,309 @@ fn render_empty_menu(
         state.canvas.viewport.set_target(c, 1.0);
         ui.close();
     }
+}
+
+// ─── Empty-diagram summary ──────────────────────────────────────────
+
+/// When the canvas scene has no nodes (i.e. the class has no
+/// component instantiations — common for equation-only models like
+/// RocketEngine), paint a card in the centre of the canvas with a
+/// summary of what the class *does* contain: parameters, inputs,
+/// variables, equations. Tells the user the model is real and
+/// points them at the Text tab, instead of leaving them staring
+/// at a blank grid.
+///
+/// Summary numbers come from regex scans of the document source —
+/// cheap, and the cost is only paid on frames where the scene is
+/// empty (rare once a user opens a composite model).
+fn render_empty_diagram_overlay(
+    ui: &mut egui::Ui,
+    canvas_rect: egui::Rect,
+    world: &mut World,
+) {
+    let Some(open) = world.resource::<WorkbenchState>().open_model.as_ref() else {
+        return;
+    };
+    let source = open.source.as_ref();
+    let class_name = open.detected_name.clone().unwrap_or_else(|| "(unnamed)".into());
+
+    let param_count = count_matches(source, r"(?m)^\s*parameter\s+");
+    let input_count = count_matches(source, r"(?m)^\s*input\s+");
+    let output_count = count_matches(source, r"(?m)^\s*output\s+");
+    let equation_count = count_matches(
+        source,
+        r"(?m)^\s*(?:der\s*\(|[A-Za-z_]\w*\s*=\s*[^=])",
+    );
+    let connect_count = count_matches(source, r"\bconnect\s*\(");
+
+    let card_w = 380.0;
+    let card_h = 190.0;
+    let card_rect = egui::Rect::from_center_size(
+        canvas_rect.center(),
+        egui::vec2(card_w, card_h),
+    );
+
+    let painter = ui.painter();
+    // Card: rounded + slight drop shadow.
+    painter.rect_filled(
+        card_rect.translate(egui::vec2(0.0, 3.0)),
+        10.0,
+        egui::Color32::from_rgba_premultiplied(0, 0, 0, 100),
+    );
+    painter.rect_filled(
+        card_rect,
+        10.0,
+        egui::Color32::from_rgb(34, 38, 48),
+    );
+    painter.rect_stroke(
+        card_rect,
+        10.0,
+        egui::Stroke::new(1.0, egui::Color32::from_rgb(60, 70, 88)),
+        egui::StrokeKind::Outside,
+    );
+
+    // Content via child UI so we get widget layout for free.
+    let mut child = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(card_rect.shrink(16.0))
+            .layout(egui::Layout::top_down(egui::Align::Min)),
+    );
+    child.label(
+        egui::RichText::new("📝 Equation-only model")
+            .strong()
+            .size(14.0)
+            .color(egui::Color32::from_rgb(220, 225, 235)),
+    );
+    child.label(
+        egui::RichText::new(&class_name)
+            .size(12.0)
+            .color(egui::Color32::from_rgb(170, 185, 210)),
+    );
+    child.add_space(6.0);
+    child.label(
+        egui::RichText::new(
+            "No instantiated components to draw. This class is defined \
+             by equations — the composition view is empty by convention.",
+        )
+        .size(11.0)
+        .color(egui::Color32::from_rgb(170, 180, 200)),
+    );
+    child.add_space(8.0);
+    child.separator();
+    child.add_space(6.0);
+
+    let row = |u: &mut egui::Ui, label: &str, n: usize| {
+        u.horizontal(|u| {
+            u.label(
+                egui::RichText::new(label)
+                    .small()
+                    .color(egui::Color32::from_rgb(150, 160, 180)),
+            );
+            u.with_layout(egui::Layout::right_to_left(egui::Align::Center), |u| {
+                u.monospace(egui::RichText::new(format!("{n}")).color(
+                    egui::Color32::from_rgb(200, 220, 255),
+                ));
+            });
+        });
+    };
+    row(&mut child, "Parameters", param_count);
+    row(&mut child, "Inputs", input_count);
+    row(&mut child, "Outputs", output_count);
+    row(&mut child, "Equations", equation_count);
+    if connect_count > 0 {
+        row(&mut child, "Connect equations", connect_count);
+    }
+    child.add_space(4.0);
+    child.label(
+        egui::RichText::new("→ Open the Text tab to read / edit the source.")
+            .italics()
+            .size(10.0)
+            .color(egui::Color32::from_rgb(140, 155, 175)),
+    );
+}
+
+/// Count regex matches in `source`. Each regex is compiled once
+/// per call — cheap because this runs only on empty-scene frames.
+fn count_matches(source: &str, pattern: &str) -> usize {
+    regex::Regex::new(pattern)
+        .ok()
+        .map(|re| re.find_iter(source).count())
+        .unwrap_or(0)
+}
+
+// ─── Drill-in ───────────────────────────────────────────────────────
+
+/// Open the Modelica class with `qualified` name in a new model-view
+/// tab alongside the current one. Mirrors Dymola / OMEdit's
+/// "double-click to go into component" behaviour.
+///
+/// Resolution strategy (best-effort; MSL files are organised as
+/// packages so a class might live inside any parent-level `.mo`):
+///
+/// 1. Try the per-class file `Modelica/…/{Short}.mo`.
+/// 2. Walk parents — try `Modelica/…/Parent.mo` and check whether
+///    `model Short` / `class Short` / `block Short` is declared
+///    inside. Returns the matching file's full source (the whole
+///    package file — the user may navigate among sibling classes).
+///
+/// If nothing resolves, logs a warning and no tab is opened. A
+/// richer "Could not find class" toast is a follow-up.
+fn drill_into_class(world: &mut World, qualified: &str) {
+    // Only MSL classes supported in this first cut. User-defined
+    // classes live in their own `.mo` files which the user has
+    // presumably opened separately via the Package Browser.
+    if !qualified.starts_with("Modelica.") {
+        bevy::log::info!(
+            "[CanvasDiagram] drill-in skipped — `{}` is not an MSL class (user classes TBD)",
+            qualified
+        );
+        return;
+    }
+    let Some((source, file_path)) = resolve_msl_class_source(qualified) else {
+        bevy::log::warn!(
+            "[CanvasDiagram] drill-in: could not find MSL file containing `{}`",
+            qualified
+        );
+        return;
+    };
+    open_readonly_tab(world, qualified, &source, &file_path);
+}
+
+/// Resolve a fully-qualified MSL class name to its source file via
+/// the Modelica Specification's package layout rules — NOT by
+/// guessing with regex across sibling files.
+///
+/// MSL (and every conforming Modelica library) uses one of two
+/// on-disk layouts per class, per MLS §13.3:
+///
+/// 1. **Own-file class** — `A/B/C/Name.mo` containing `model Name
+///    ... end Name;` at file scope. The common case for MSL leaf
+///    classes.
+/// 2. **Package-aggregated class** — `A/B/C/Name/package.mo`
+///    declaring a `within A.B.C;` followed by `package Name
+///    ... end Name;`. Used when the class itself hosts child
+///    packages (e.g. `Modelica.Electrical.Analog`).
+///
+/// Given `A.B.C.Name`, this function tries those two paths in
+/// order and returns the first that exists. No regex — the layout
+/// is deterministic.
+///
+/// Returns `None` if neither path exists, which means either the
+/// library snapshot is incomplete or the class lives outside the
+/// MSL snapshot (future: also try user-project libraries). A
+/// proper resolver would consult `MODELICAPATH` + any loaded
+/// `package.mo`'s `within` declarations, but for MSL-only drill-in
+/// the two-case layout check is sufficient and exact.
+fn resolve_msl_class_source(qualified: &str) -> Option<(String, std::path::PathBuf)> {
+    let msl_root = lunco_assets::msl_dir();
+    let segments: Vec<&str> = qualified.split('.').collect();
+
+    // Build the directory `A/B/C/Name/`, then try:
+    //   A/B/C/Name.mo            (own-file class)
+    //   A/B/C/Name/package.mo    (package-aggregated class)
+    let mut base = msl_root.clone();
+    for seg in &segments {
+        base.push(seg);
+    }
+
+    let own_file = base.with_extension("mo");
+    if let Ok(source) = std::fs::read_to_string(&own_file) {
+        return Some((source, own_file));
+    }
+
+    let package_file = base.join("package.mo");
+    if let Ok(source) = std::fs::read_to_string(&package_file) {
+        return Some((source, package_file));
+    }
+
+    None
+}
+
+/// Allocate a read-only document for `qualified` class and open a
+/// model-view tab. If a tab for the same document is already open,
+/// the workbench focuses it instead of duplicating.
+fn open_readonly_tab(
+    world: &mut World,
+    qualified: &str,
+    source: &str,
+    file_path: &std::path::Path,
+) {
+    // Skip if we already have an open tab on this exact path.
+    let model_path_id = format!("msl://{qualified}");
+    let existing_doc = world
+        .resource::<WorkbenchState>()
+        .open_model
+        .as_ref()
+        .filter(|m| m.model_path == model_path_id)
+        .and_then(|m| m.doc);
+    if let Some(doc_id) = existing_doc {
+        // Already open — just focus.
+        if let Some(mut layout) = world
+            .get_resource_mut::<lunco_workbench::WorkbenchLayout>()
+        {
+            layout.open_instance(
+                crate::ui::panels::model_view::MODEL_VIEW_KIND,
+                doc_id.raw(),
+            );
+        }
+        return;
+    }
+
+    let origin = lunco_doc::DocumentOrigin::File {
+        path: file_path.to_path_buf(),
+        writable: false,
+    };
+    let doc_id = {
+        let mut registry = world.resource_mut::<ModelicaDocumentRegistry>();
+        registry.allocate_with_origin(source.to_string(), origin)
+    };
+
+    // Update WorkbenchState.open_model so text/canvas panels bind
+    // to the new doc. Same pattern the Package Browser uses.
+    let source_arc: std::sync::Arc<str> = source.into();
+    let mut line_starts = vec![0usize];
+    for (i, b) in source.as_bytes().iter().enumerate() {
+        if *b == b'\n' {
+            line_starts.push(i + 1);
+        }
+    }
+    {
+        let short = qualified.rsplit('.').next().unwrap_or(qualified).to_string();
+        let mut ws = world.resource_mut::<WorkbenchState>();
+        ws.open_model = Some(crate::ui::OpenModel {
+            model_path: model_path_id.clone(),
+            display_name: short.clone(),
+            source: source_arc,
+            line_starts: line_starts.into(),
+            detected_name: Some(short),
+            cached_galley: None,
+            read_only: true,
+            library: crate::ui::state::ModelLibrary::MSL,
+            doc: Some(doc_id),
+        });
+        ws.diagram_dirty = true;
+    }
+
+    // Open a new model-view tab.
+    {
+        let mut model_tabs =
+            world.resource_mut::<crate::ui::panels::model_view::ModelTabs>();
+        model_tabs.ensure(doc_id);
+    }
+    if let Some(mut layout) =
+        world.get_resource_mut::<lunco_workbench::WorkbenchLayout>()
+    {
+        layout.open_instance(
+            crate::ui::panels::model_view::MODEL_VIEW_KIND,
+            doc_id.raw(),
+        );
+    }
+
+    bevy::log::info!(
+        "[CanvasDiagram] drill-in: opened `{}` from `{}`",
+        qualified,
+        file_path.display()
+    );
 }
 
 // ─── Doc-op translation ─────────────────────────────────────────────

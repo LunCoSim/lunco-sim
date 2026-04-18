@@ -45,6 +45,10 @@ pub enum ModelViewMode {
     /// `Diagram` during the transition; retires the snarl variant
     /// once the canvas path covers every feature we ship.
     Canvas,
+    /// The class's own `Icon` annotation rendering — what the
+    /// component looks like when instantiated in a parent diagram.
+    /// OMEdit/Dymola have Icon + Diagram as sibling views.
+    Icon,
 }
 
 /// Per-tab state for a [`ModelViewPanel`] instance. One entry per
@@ -207,6 +211,7 @@ impl InstancePanel for ModelViewPanel {
             ModelViewMode::Text => self.code.render(ui, world),
             ModelViewMode::Diagram => self.diagram.render(ui, world),
             ModelViewMode::Canvas => self.canvas.render(ui, world),
+            ModelViewMode::Icon => render_icon_view(ui, world),
         }
     }
 }
@@ -436,6 +441,10 @@ fn render_unified_toolbar(
         if ui.selectable_label(canv_sel, "🧩 Canvas").clicked() {
             new_view_mode = ModelViewMode::Canvas;
         }
+        let icon_sel = view_mode == ModelViewMode::Icon;
+        if ui.selectable_label(icon_sel, "🎨 Icon").clicked() {
+            new_view_mode = ModelViewMode::Icon;
+        }
         ui.separator();
 
         if let Some(ref err) = compilation_error {
@@ -537,7 +546,154 @@ fn render_unified_toolbar(
                 // connect; compile can then stay the same.
                 world.commands().trigger(crate::ui::CompileModel { doc });
             }
+            ModelViewMode::Icon => {
+                // Icon is a pure display view — compile-from-icon
+                // doesn't mean anything, route through the document
+                // source the same as Text does.
+                world.commands().trigger(crate::ui::CompileModel { doc });
+            }
         }
     }
     new_view_mode
+}
+
+/// Render the class's icon. Priority order:
+///
+/// 1. MSL-registered class: look up its `icon_asset` in
+///    `msl_component_library` by qualified name (from
+///    `open_model.model_path` when it's an `msl://…` id, or from
+///    `detected_name` for plain-short-name matches) and render the
+///    SVG if present.
+/// 2. Class with an inline `Icon` annotation: TBD — needs an Icon-
+///    primitives renderer. Currently shows the placeholder.
+/// 3. Everything else: a friendly "no icon defined" placeholder so
+///    the tab doesn't appear broken.
+///
+/// Always centred in the available rect, aspect-preserving.
+fn render_icon_view(ui: &mut egui::Ui, world: &mut World) {
+    let (qualified, _source) = {
+        let ws = world.resource::<WorkbenchState>();
+        let Some(open) = ws.open_model.as_ref() else {
+            ui.centered_and_justified(|ui| {
+                ui.label(
+                    egui::RichText::new("No model open").weak(),
+                );
+            });
+            return;
+        };
+        // Prefer the msl://Full.Qualified.Name path if we have one
+        // (drill-in sets this); otherwise fall back to detected
+        // short name, which matches MSL entries by suffix.
+        let from_path = open
+            .model_path
+            .strip_prefix("msl://")
+            .map(|s| s.to_string());
+        let short = open.detected_name.clone().unwrap_or_default();
+        (
+            from_path.unwrap_or_else(|| short.clone()),
+            open.source.clone(),
+        )
+    };
+
+    // Look up MSL entry. Qualified match first (exact), then any
+    // entry whose msl_path ends in `.<short>` for best-effort
+    // resolution of local models that reference an MSL class.
+    let icon_asset = {
+        let lib = crate::visual_diagram::msl_component_library();
+        lib.iter()
+            .find(|c| c.msl_path == qualified)
+            .or_else(|| {
+                // Try short-name tail match.
+                let short = qualified.rsplit('.').next().unwrap_or(&qualified);
+                lib.iter()
+                    .find(|c| c.msl_path.rsplit('.').next() == Some(short))
+            })
+            .and_then(|c| c.icon_asset.clone())
+    };
+
+    let painter = ui.painter();
+    let rect = ui.available_rect_before_wrap();
+
+    // Diagram frame (Dymola's square coordinate box).
+    painter.rect_stroke(
+        rect.shrink(12.0),
+        4.0,
+        egui::Stroke::new(
+            1.0,
+            egui::Color32::from_rgba_premultiplied(90, 100, 120, 120),
+        ),
+        egui::StrokeKind::Outside,
+    );
+
+    if let Some(path) = icon_asset {
+        if let Some(bytes) = svg_bytes_for_icon(&path) {
+            // Render into a centred square that's at most ~60 % of
+            // the smaller rect dimension — leaves breathing room
+            // and matches Dymola's Icon tab sizing.
+            let side = (rect.width().min(rect.height()) * 0.6).max(100.0);
+            let icon_rect = egui::Rect::from_center_size(
+                rect.center(),
+                egui::vec2(side, side),
+            );
+            crate::ui::panels::svg_renderer::draw_svg_to_egui(
+                painter, icon_rect, &bytes,
+            );
+            // Class name under the icon.
+            painter.text(
+                egui::pos2(icon_rect.center().x, icon_rect.max.y + 16.0),
+                egui::Align2::CENTER_TOP,
+                &qualified,
+                egui::FontId::proportional(13.0),
+                egui::Color32::from_rgb(200, 210, 225),
+            );
+            return;
+        }
+    }
+
+    // Fallback placeholder — the class has no known icon.
+    ui.centered_and_justified(|ui| {
+        ui.vertical_centered(|ui| {
+            ui.label(
+                egui::RichText::new("🎨")
+                    .size(48.0)
+                    .color(egui::Color32::from_rgb(120, 130, 150)),
+            );
+            ui.add_space(8.0);
+            ui.label(
+                egui::RichText::new("No icon defined for this class")
+                    .color(egui::Color32::from_rgb(180, 190, 210)),
+            );
+            ui.add_space(4.0);
+            ui.label(
+                egui::RichText::new(
+                    "Add an `annotation(Icon(graphics={…}))` clause \
+                     in the Text tab, or instantiate this class in a \
+                     parent diagram.",
+                )
+                .italics()
+                .size(11.0)
+                .color(egui::Color32::from_rgb(140, 155, 175)),
+            );
+        });
+    });
+}
+
+/// SVG byte cache shared with the canvas panel — same lookup path
+/// as `canvas_diagram::svg_bytes_for`. Duplicated here rather than
+/// exposed as `pub` because the panel module graph is a flat
+/// `src/ui/panels/` listing and I'd prefer not to expose a cache
+/// function just for this.
+fn svg_bytes_for_icon(asset_path: &str) -> Option<std::sync::Arc<Vec<u8>>> {
+    use std::sync::{Mutex, OnceLock};
+    static CACHE: OnceLock<Mutex<HashMap<String, Option<std::sync::Arc<Vec<u8>>>>>> =
+        OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut map = cache.lock().expect("svg icon cache poisoned");
+    if let Some(cached) = map.get(asset_path) {
+        return cached.clone();
+    }
+    let full = lunco_assets::msl_dir().join(asset_path);
+    let loaded = std::fs::read(&full).ok().map(std::sync::Arc::new);
+    map.insert(asset_path.to_string(), loaded.clone());
+    loaded
 }

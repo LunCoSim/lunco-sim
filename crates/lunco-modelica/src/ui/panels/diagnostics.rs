@@ -93,41 +93,102 @@ impl Panel for DiagnosticsPanel {
     }
 }
 
-/// Bevy system: refresh [`DiagnosticsLog`] from the bound document's
-/// `AstCache.errors` on every frame.
+/// What changed between refreshes. Stored as `Local<DiagnosticsCursor>`
+/// so we skip work on frames where neither the bound document, its
+/// AST generation, nor the compile-error string moved.
+#[derive(Default)]
+pub struct DiagnosticsCursor {
+    bound_doc: Option<lunco_doc::DocumentId>,
+    last_ast_gen: u64,
+    /// Hash of `compilation_error` — cheaper to compare than the
+    /// string itself and avoids keeping a clone around.
+    last_error_hash: u64,
+}
+
+fn hash_str(s: Option<&str>) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    s.hash(&mut h);
+    h.finish()
+}
+
+/// Bevy system: refresh [`DiagnosticsLog`] only when the set of
+/// diagnostics *could* have changed.
 ///
-/// Cheap — just reads the already-populated error list, doesn't
-/// reparse. Runs every frame unconditionally for simplicity; the
-/// log's `replace` is O(n) in the (tiny) number of current errors.
-/// If this ever shows up on a profile, gate on document-generation
-/// change — until then, the simplicity wins.
+/// Change detection: compare (bound doc id, AST generation, hash of
+/// compile-error string) to the previous tick's values. If all three
+/// match, return immediately — no allocations, no `replace` call.
+/// This avoids the "recompute + replace per frame" pattern that was
+/// the initial implementation and kept the log's internal VecDeque
+/// churning even when nothing was changing.
 pub fn refresh_diagnostics(
     workbench: Res<WorkbenchState>,
     registry: Res<ModelicaDocumentRegistry>,
     mut diagnostics: ResMut<DiagnosticsLog>,
+    mut cursor: bevy::prelude::Local<DiagnosticsCursor>,
 ) {
     let doc_id = workbench.open_model.as_ref().and_then(|m| m.doc);
+
+    // No doc bound → clear once and stop.
     let Some(doc_id) = doc_id else {
-        if !diagnostics.entries.is_empty() {
-            diagnostics.clear();
-        }
-        return;
-    };
-    let Some(host) = registry.host(doc_id) else {
-        if !diagnostics.entries.is_empty() {
+        if cursor.bound_doc.is_some() {
+            cursor.bound_doc = None;
+            cursor.last_ast_gen = 0;
+            cursor.last_error_hash = hash_str(None);
             diagnostics.clear();
         }
         return;
     };
 
-    let cache = host.document().ast();
-    let entries: Vec<LogEntry> = match &cache.result {
-        Ok(_) => Vec::new(),
-        Err(msg) => vec![LogEntry {
+    let Some(host) = registry.host(doc_id) else {
+        if cursor.bound_doc.is_some() {
+            cursor.bound_doc = None;
+            cursor.last_ast_gen = 0;
+            cursor.last_error_hash = hash_str(None);
+            diagnostics.clear();
+        }
+        return;
+    };
+
+    let ast_gen = host.document().ast().generation;
+    let err_hash = hash_str(workbench.compilation_error.as_deref());
+
+    // Fast-path: nothing that could affect diagnostics changed.
+    if cursor.bound_doc == Some(doc_id)
+        && cursor.last_ast_gen == ast_gen
+        && cursor.last_error_hash == err_hash
+    {
+        return;
+    }
+
+    // Something moved — rebuild the entry list.
+    cursor.bound_doc = Some(doc_id);
+    cursor.last_ast_gen = ast_gen;
+    cursor.last_error_hash = err_hash;
+
+    let mut entries: Vec<LogEntry> = Vec::new();
+
+    // 1. AST parse errors — caught by rumoca's recovering parser.
+    if let Err(msg) = &host.document().ast().result {
+        entries.push(LogEntry {
             at: std::time::Instant::now(),
             level: LogLevel::Error,
             text: msg.clone(),
-        }],
-    };
+        });
+    }
+
+    // 2. Compile / run errors — the simulator worker writes these
+    // into `WorkbenchState.compilation_error` whenever a compile
+    // or simulation step fails. Without mirroring them here the
+    // Diagnostics panel stayed empty even when a red "Error" chip
+    // was visible in the toolbar.
+    if let Some(msg) = workbench.compilation_error.as_ref() {
+        entries.push(LogEntry {
+            at: std::time::Instant::now(),
+            level: LogLevel::Error,
+            text: msg.clone(),
+        });
+    }
+
     diagnostics.replace(entries);
 }
