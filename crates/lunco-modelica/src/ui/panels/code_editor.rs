@@ -23,6 +23,10 @@ pub struct EditorBufferState {
     pub detected_name: Option<String>,
     /// Pre-computed text layout for high-performance rendering.
     pub cached_galley: Option<Arc<egui::Galley>>,
+    /// When `true` long lines wrap at the editor width; when `false`
+    /// (default) long lines stay on one line and the view scrolls
+    /// horizontally — mirroring VS Code's default "Word Wrap: Off".
+    pub word_wrap: bool,
 }
 
 impl Default for EditorBufferState {
@@ -34,6 +38,7 @@ impl Default for EditorBufferState {
             line_starts: vec![0].into(),
             detected_name: None,
             cached_galley: None,
+            word_wrap: false,
         }
     }
 }
@@ -151,6 +156,28 @@ impl Panel for CodeEditorPanel {
                     .and_then(|m| m.doc)
             });
 
+        // ── Toolbar row: word-wrap toggle ──
+        //
+        // Default: off. Long lines extend right and the editor body
+        // scrolls horizontally to reach them — matching VS Code's
+        // default "Word Wrap: Off". Turning it on re-layouts each
+        // line at the editor width so everything fits without
+        // scrolling.
+        //
+        // Persisted on `EditorBufferState` so switching panels or
+        // rebinding a document doesn't reset the preference.
+        let word_wrap = {
+            let mut wrap = world.resource::<EditorBufferState>().word_wrap;
+            ui.horizontal(|ui| {
+                let label = if wrap { "↵ Word Wrap: On" } else { "→ Word Wrap: Off" };
+                if ui.selectable_label(wrap, label).clicked() {
+                    wrap = !wrap;
+                    world.resource_mut::<EditorBufferState>().word_wrap = wrap;
+                }
+            });
+            wrap
+        };
+
         // ── Editor area ──
         //
         // Single full-bleed TextEdit. I originally shipped a
@@ -177,27 +204,53 @@ impl Panel for CodeEditorPanel {
         let editor_width = avail.x.max(100.0);
         let editor_height = avail.y.max(200.0);
 
-        let output = ui.add_sized(
-            [editor_width, editor_height],
-            egui::TextEdit::multiline(&mut text)
-                .font(egui::TextStyle::Monospace)
-                .code_editor()
-                .desired_width(editor_width)
-                .desired_rows(((editor_height / 16.0) as usize).max(10))
-                .lock_focus(true)
-                .interactive(true)
-                .layouter(&mut |ui, string, _wrap_width| {
-                    if is_ro {
-                        if let Some(galley) = &galley_cache {
-                            return galley.clone();
+        // When word-wrap is off, long lines must live inside a
+        // horizontal `ScrollArea` so they can scroll rather than
+        // clip. When word-wrap is on, the layouter does the right
+        // thing at editor-width and no horizontal scroll is needed.
+        let show_editor = |ui: &mut egui::Ui, text: &mut String| -> egui::Response {
+            // `desired_width` defines the widget's allocated width.
+            // In scroll mode we want the widget to be AS WIDE AS THE
+            // LONGEST LINE so the outer ScrollArea can scroll to it;
+            // `f32::INFINITY` would be rejected, so we pass a large
+            // finite number and let the layouter determine the
+            // galley's actual width.
+            let inner_width = if word_wrap { editor_width } else { editor_width.max(2000.0) };
+            ui.add_sized(
+                [inner_width, editor_height],
+                egui::TextEdit::multiline(text)
+                    .font(egui::TextStyle::Monospace)
+                    .code_editor()
+                    .desired_width(inner_width)
+                    .desired_rows(((editor_height / 16.0) as usize).max(10))
+                    .lock_focus(true)
+                    .interactive(true)
+                    .layouter(&mut |ui, string, _wrap_width| {
+                        if is_ro {
+                            if let Some(galley) = &galley_cache {
+                                return galley.clone();
+                            }
                         }
-                    }
-                    let mut layout_job =
-                        modelica_layouter(ui.style(), string.as_str());
-                    layout_job.wrap.max_width = f32::INFINITY;
-                    ui.painter().layout_job(layout_job)
-                }),
-        );
+                        let mut layout_job =
+                            modelica_layouter(ui.style(), string.as_str());
+                        layout_job.wrap.max_width = if word_wrap {
+                            editor_width
+                        } else {
+                            f32::INFINITY
+                        };
+                        ui.painter().layout_job(layout_job)
+                    }),
+            )
+        };
+
+        let output = if word_wrap {
+            show_editor(ui, &mut text)
+        } else {
+            egui::ScrollArea::horizontal()
+                .auto_shrink([false, false])
+                .show(ui, |ui| show_editor(ui, &mut text))
+                .inner
+        };
 
         if output.changed() && !is_ro {
             new_text = text.clone();

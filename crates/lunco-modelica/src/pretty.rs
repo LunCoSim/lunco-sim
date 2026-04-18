@@ -187,10 +187,16 @@ pub fn line_inner(line: &Line) -> String {
 // Component declaration
 // ---------------------------------------------------------------------------
 
-/// Emit a component declaration line (trailing newline included).
+/// Emit a component declaration (trailing newline included).
 ///
-/// Output is indented with two spaces. Callers splicing into sources
-/// that use a different indent width are free to reindent.
+/// Output is indented with two spaces. When the declaration has an
+/// `annotation(Placement(...))`, the annotation is placed on its own
+/// continuation line indented four spaces — matching the style that
+/// hand-written MSL / Dymola-exported Modelica uses, and keeping
+/// individual source lines short enough to fit in a reasonable editor
+/// viewport. Modelica treats whitespace (including newlines) as
+/// insignificant between tokens, so the statement is still a single
+/// declaration.
 pub fn component_decl(decl: &ComponentDecl) -> String {
     let mut s = String::new();
     s.push_str("  ");
@@ -209,7 +215,7 @@ pub fn component_decl(decl: &ComponentDecl) -> String {
         s.push(')');
     }
     if let Some(p) = &decl.placement {
-        s.push_str(" annotation(");
+        s.push_str("\n    annotation(");
         s.push_str(&placement_inner(p));
         s.push(')');
     }
@@ -221,7 +227,11 @@ pub fn component_decl(decl: &ComponentDecl) -> String {
 // Connect equation
 // ---------------------------------------------------------------------------
 
-/// Emit a `connect(...)` equation line (trailing newline included).
+/// Emit a `connect(...)` equation (trailing newline included).
+///
+/// As with component declarations, a trailing `annotation(Line(...))`
+/// goes on its own continuation line so the main connect statement
+/// stays short and readable.
 pub fn connect_equation(eq: &ConnectEquation) -> String {
     let mut s = String::new();
     let _ = write!(
@@ -230,7 +240,7 @@ pub fn connect_equation(eq: &ConnectEquation) -> String {
         eq.from.component, eq.from.port, eq.to.component, eq.to.port,
     );
     if let Some(line) = &eq.line {
-        s.push_str(" annotation(");
+        s.push_str("\n    annotation(");
         s.push_str(&line_inner(line));
         s.push(')');
     }
@@ -324,7 +334,7 @@ mod tests {
     }
 
     #[test]
-    fn component_decl_with_placement() {
+    fn component_decl_with_placement_uses_continuation_line() {
         let d = ComponentDecl {
             type_name: "Resistor".into(),
             name: "R1".into(),
@@ -333,7 +343,7 @@ mod tests {
         };
         assert_eq!(
             component_decl(&d),
-            "  Resistor R1(R=100) annotation(Placement(transformation(extent={{-10,-10},{10,10}})));\n"
+            "  Resistor R1(R=100)\n    annotation(Placement(transformation(extent={{-10,-10},{10,10}})));\n"
         );
     }
 
@@ -348,7 +358,7 @@ mod tests {
     }
 
     #[test]
-    fn connect_equation_with_line() {
+    fn connect_equation_with_line_uses_continuation_line() {
         let eq = ConnectEquation {
             from: PortRef::new("R1", "p"),
             to: PortRef::new("C1", "n"),
@@ -358,7 +368,7 @@ mod tests {
         };
         assert_eq!(
             connect_equation(&eq),
-            "  connect(R1.p, C1.n) annotation(Line(points={{0,0},{10,10},{20,10}}));\n"
+            "  connect(R1.p, C1.n)\n    annotation(Line(points={{0,0},{10,10},{20,10}}));\n"
         );
     }
 
