@@ -31,15 +31,44 @@ fn svg_options() -> &'static Options<'static> {
     })
 }
 
+/// Parsed-SVG cache keyed by the input bytes pointer (plus length as
+/// a collision guard). Callers load SVG bytes through an `Arc<Vec<u8>>`
+/// cache elsewhere, so the pointer is stable across frames for the
+/// same asset. Caching the parsed [`Tree`] here means we no longer
+/// re-run usvg's XML+path parser per icon per frame (7 nodes at 60 Hz
+/// = 420 parses/sec — large MSL icons stacked enough of those that
+/// the UI thread fell behind and the app appeared frozen).
+///
+/// Entries live forever: the icon set is fixed at build time, and
+/// the parsed trees are tens of KB each at most.
+fn parsed_tree(svg_data: &[u8]) -> Option<std::sync::Arc<Tree>> {
+    use std::sync::{Mutex, OnceLock};
+    static CACHE: OnceLock<Mutex<std::collections::HashMap<(usize, usize), Option<std::sync::Arc<Tree>>>>> =
+        OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
+    let key = (svg_data.as_ptr() as usize, svg_data.len());
+    if let Ok(map) = cache.lock() {
+        if let Some(cached) = map.get(&key) {
+            return cached.clone();
+        }
+    }
+    let parsed = Tree::from_data(svg_data, svg_options())
+        .ok()
+        .map(std::sync::Arc::new);
+    if let Ok(mut map) = cache.lock() {
+        map.insert(key, parsed.clone());
+    }
+    parsed
+}
+
 /// Translates a usvg::Tree into a list of egui::Shape primitives, scaled to fit in `rect`.
 pub fn draw_svg_to_egui(
     painter: &egui::Painter,
     rect: egui::Rect,
     svg_data: &[u8],
 ) {
-    let tree = match Tree::from_data(svg_data, svg_options()) {
-        Ok(t) => t,
-        Err(_) => return,
+    let Some(tree) = parsed_tree(svg_data) else {
+        return;
     };
 
     let size = tree.size();

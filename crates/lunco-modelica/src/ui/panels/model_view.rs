@@ -370,22 +370,46 @@ pub(crate) fn sync_active_tab_to_doc(world: &mut World, doc: DocumentId) {
     // display name; the source stays empty until the real document
     // is installed.
     let snapshot = snapshot.or_else(|| {
-        let loads = world
-            .get_resource::<crate::ui::panels::canvas_diagram::DrillInLoads>()?;
-        let qualified = loads.detail(doc)?.to_string();
-        let short = qualified
-            .rsplit('.')
-            .next()
-            .map(str::to_string)
-            .unwrap_or_else(|| qualified.clone());
-        Some((
-            format!("msl://{qualified}"),
-            short.clone(),
-            String::new(),
-            true,
-            crate::ui::state::ModelLibrary::Bundled,
-            Some(short),
-        ))
+        // Drill-in tab still loading? Use the qualified name as
+        // the placeholder identity.
+        if let Some(loads) = world
+            .get_resource::<crate::ui::panels::canvas_diagram::DrillInLoads>()
+        {
+            if let Some(qualified) = loads.detail(doc) {
+                let qualified = qualified.to_string();
+                let short = qualified
+                    .rsplit('.')
+                    .next()
+                    .map(str::to_string)
+                    .unwrap_or_else(|| qualified.clone());
+                return Some((
+                    format!("msl://{qualified}"),
+                    short.clone(),
+                    String::new(),
+                    true,
+                    crate::ui::state::ModelLibrary::Bundled,
+                    Some(short),
+                ));
+            }
+        }
+        // Duplicate-to-workspace tab still building? Use the target
+        // display name; the copy is editable (not read-only).
+        if let Some(dup) = world
+            .get_resource::<crate::ui::panels::canvas_diagram::DuplicateLoads>()
+        {
+            if let Some(display) = dup.detail(doc) {
+                let display = display.to_string();
+                return Some((
+                    format!("mem://{display}"),
+                    display.clone(),
+                    String::new(),
+                    false,
+                    crate::ui::state::ModelLibrary::InMemory,
+                    Some(display),
+                ));
+            }
+        }
+        None
     });
     let Some((path_str, display_name, source, read_only, library, detected_name)) =
         snapshot

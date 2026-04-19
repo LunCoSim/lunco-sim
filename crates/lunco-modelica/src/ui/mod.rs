@@ -257,7 +257,9 @@ impl Plugin for ModelicaUiPlugin {
             .init_resource::<panels::canvas_diagram::DiagramProjectionLimits>()
             .init_resource::<panels::canvas_diagram::DrilledInClassNames>()
             .init_resource::<panels::canvas_diagram::DrillInLoads>()
+            .init_resource::<panels::canvas_diagram::DuplicateLoads>()
             .add_systems(Update, panels::canvas_diagram::drive_drill_in_loads)
+            .add_systems(Update, panels::canvas_diagram::drive_duplicate_loads)
             .register_panel(panels::palette::ComponentPalettePanel)
             // Multi-instance: one tab per open document. Instances are
             // opened at runtime by the Package Browser.

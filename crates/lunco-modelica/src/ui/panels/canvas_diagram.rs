@@ -1170,10 +1170,17 @@ impl CanvasDiagramPanel {
         let (loading_info, projecting, show_empty_overlay, scene_has_content) = {
             let state = world.resource::<CanvasDiagramState>();
             let loads = world.resource::<DrillInLoads>();
+            let dup_loads = world.resource::<DuplicateLoads>();
             let docstate = state.get(active_doc);
-            let info = active_doc
-                .and_then(|d| loads.progress(d))
-                .map(|(q, secs)| (q.to_string(), secs));
+            // Unify drill-in + duplicate into a single loading
+            // overlay — both are "document is being built off-thread,
+            // canvas will populate when the bg task lands."
+            let info = active_doc.and_then(|d| {
+                loads
+                    .progress(d)
+                    .or_else(|| dup_loads.progress(d))
+                    .map(|(q, secs)| (q.to_string(), secs))
+            });
             let has_content = docstate.canvas.scene.node_count() > 0;
             (
                 info,
@@ -2125,6 +2132,53 @@ pub struct DrillInBinding {
     pub started: std::time::Instant,
 }
 
+/// Tab-to-task binding for duplicate-to-workspace operations whose
+/// bg parse hasn't finished yet. The parse goes off the UI thread
+/// because a naïve `allocate_with_origin` on a multi-KB source
+/// re-runs rumoca synchronously — locked the workbench for seconds
+/// in debug builds, which users (correctly) called a bug:
+/// *"no operations like that must be in UI thread"*.
+///
+/// Same shape as [`DrillInLoads`]: the bg task returns a fully-built
+/// [`ModelicaDocument`], the driver system installs it into the
+/// registry via `install_prebuilt`. Cleared on install and on
+/// document removal.
+#[derive(bevy::prelude::Resource, Default)]
+pub struct DuplicateLoads {
+    pending: std::collections::HashMap<
+        lunco_doc::DocumentId,
+        DuplicateBinding,
+    >,
+}
+
+pub struct DuplicateBinding {
+    pub display_name: String,
+    pub origin_short: String,
+    pub started: std::time::Instant,
+    pub task: bevy::tasks::Task<crate::document::ModelicaDocument>,
+}
+
+impl DuplicateLoads {
+    pub fn is_loading(&self, doc: lunco_doc::DocumentId) -> bool {
+        self.pending.contains_key(&doc)
+    }
+    pub fn detail(&self, doc: lunco_doc::DocumentId) -> Option<&str> {
+        self.pending.get(&doc).map(|b| b.display_name.as_str())
+    }
+    pub fn progress(&self, doc: lunco_doc::DocumentId) -> Option<(&str, f32)> {
+        self.pending
+            .get(&doc)
+            .map(|b| (b.display_name.as_str(), b.started.elapsed().as_secs_f32()))
+    }
+    pub fn insert(
+        &mut self,
+        doc: lunco_doc::DocumentId,
+        binding: DuplicateBinding,
+    ) {
+        self.pending.insert(doc, binding);
+    }
+}
+
 impl DrillInLoads {
     pub fn is_loading(&self, doc: lunco_doc::DocumentId) -> bool {
         self.pending.contains_key(&doc)
@@ -2146,6 +2200,36 @@ impl DrillInLoads {
 /// its class has landed in [`ClassCache`]. If yes, build a
 /// `ModelicaDocument` from the cached parts (no re-parse) and
 /// install it in the registry.
+/// Bevy system: poll pending duplicate bg tasks; `install_prebuilt`
+/// the fully-built document into the registry when ready. Same
+/// shape as [`drive_drill_in_loads`] but for the `Duplicate to
+/// Workspace` flow.
+pub fn drive_duplicate_loads(
+    mut loads: bevy::prelude::ResMut<DuplicateLoads>,
+    mut registry: bevy::prelude::ResMut<ModelicaDocumentRegistry>,
+) {
+    use bevy::prelude::*;
+    let doc_ids: Vec<lunco_doc::DocumentId> = loads.pending.keys().copied().collect();
+    for doc_id in doc_ids {
+        let Some(binding) = loads.pending.get_mut(&doc_id) else {
+            continue;
+        };
+        let Some(doc) = futures_lite::future::block_on(
+            futures_lite::future::poll_once(&mut binding.task),
+        ) else {
+            continue;
+        };
+        let dup_display_name = binding.display_name.clone();
+        let origin_short = binding.origin_short.clone();
+        loads.pending.remove(&doc_id);
+        registry.install_prebuilt(doc_id, doc);
+        info!(
+            "[CanvasDiagram] duplicate: installed `{}` (from `{}`)",
+            dup_display_name, origin_short,
+        );
+    }
+}
+
 pub fn drive_drill_in_loads(
     mut loads: bevy::prelude::ResMut<DrillInLoads>,
     mut registry: bevy::prelude::ResMut<ModelicaDocumentRegistry>,
