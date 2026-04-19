@@ -1148,10 +1148,16 @@ impl CanvasDiagramPanel {
             .map(|m| m.read_only)
             .unwrap_or(false);
 
-        // Render the canvas and collect its events.
+        // Render the canvas and collect its events. Flip the
+        // canvas's `read_only` flag so the tool layer refuses to
+        // enter drag/connect/delete states — pan + zoom + selection
+        // still work. Authored scene mutations are blocked at the
+        // input source, not corrected after the fact.
         let (response, events) = {
             let mut state = world.resource_mut::<CanvasDiagramState>();
-            state.get_mut(active_doc).canvas.ui(ui)
+            let docstate = state.get_mut(active_doc);
+            docstate.canvas.read_only = tab_read_only;
+            docstate.canvas.ui(ui)
         };
 
         // Overlay state machine, in priority order:

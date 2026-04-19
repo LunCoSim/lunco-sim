@@ -51,6 +51,26 @@ use crate::{ModelicaChannels, ModelicaCommand, ModelicaModel};
 #[derive(Event, Clone, Debug)]
 pub struct CreateNewScratchModel;
 
+/// Request to duplicate a read-only (library) model into a new
+/// editable Untitled document.
+///
+/// The "play with examples" workflow: user drills into
+/// `Modelica.Blocks.Examples.PID_Controller`, looks at the diagram,
+/// wants to tweak a parameter. Because the MSL class is read-only,
+/// we need a second, editable model. This command creates one —
+/// same source, stripped of the `within` clause so the copy doesn't
+/// claim to live inside `Modelica.*`, opens a fresh tab, leaves the
+/// original MSL tab untouched.
+///
+/// For classes backed by package-aggregated files (e.g.
+/// `Blocks/package.mo`), only the target class's source is
+/// extracted — otherwise users would get a 150 KB copy of the
+/// whole Blocks package as their "Untitled" starting point.
+#[derive(Event, Clone, Debug)]
+pub struct DuplicateModelFromReadOnly {
+    pub source_doc: DocumentId,
+}
+
 /// Request to compile a Modelica document and run the resulting
 /// simulation.
 ///
@@ -91,6 +111,7 @@ impl Plugin for ModelicaCommandsPlugin {
             .add_observer(on_document_closed_cleanup)
             .add_observer(on_compile_model)
             .add_observer(on_create_new_scratch_model)
+            .add_observer(on_duplicate_model_from_read_only)
             .add_observer(resolve_editor_intent)
             .add_observer(resolve_new_document_intent)
             .add_systems(
@@ -722,4 +743,187 @@ fn on_create_new_scratch_model(
         kind: crate::ui::panels::model_view::MODEL_VIEW_KIND,
         instance: doc_id.raw(),
     });
+}
+
+fn on_duplicate_model_from_read_only(
+    trigger: On<DuplicateModelFromReadOnly>,
+    mut registry: ResMut<ModelicaDocumentRegistry>,
+    mut cache: ResMut<crate::ui::panels::package_browser::PackageTreeCache>,
+    mut model_tabs: ResMut<crate::ui::panels::model_view::ModelTabs>,
+    mut workbench: ResMut<WorkbenchState>,
+    class_names: Option<Res<crate::ui::panels::canvas_diagram::DrilledInClassNames>>,
+    mut console: ResMut<crate::ui::panels::console::ConsoleLog>,
+    mut commands: Commands,
+) {
+    let source_doc = trigger.event().source_doc;
+
+    // Look up the source class: the drilled-in qualified name (if
+    // any — otherwise we just copy the whole source as-is and fall
+    // back to display_name for the copy's title).
+    let (source_full, origin_class_short) = {
+        let Some(host) = registry.host(source_doc) else {
+            console.error("Duplicate failed: source doc not found in registry");
+            return;
+        };
+        let doc = host.document();
+        let short = class_names
+            .as_ref()
+            .and_then(|m| m.get(source_doc))
+            .and_then(|q| q.rsplit('.').next().map(String::from))
+            .unwrap_or_else(|| doc.origin().display_name());
+        (doc.source().to_string(), short)
+    };
+
+    // Extract just the target class's source from the (possibly
+    // multi-class package) file. For own-file classes this is a
+    // no-op — the whole source IS the class. For
+    // `Blocks/package.mo` + `PID_Controller` we scan for the
+    // opening keyword and the balanced `end <ClassName>;`.
+    let class_src = extract_class_source(&source_full, &origin_class_short)
+        .unwrap_or_else(|| source_full.clone());
+
+    // Pick a new Untitled name. Try `<ClassName>Copy` first; fall
+    // back to `<ClassName>Copy<N>` on collision, then plain
+    // `Untitled<N>`. Matches VSCode / Dymola "make a distinct but
+    // obvious new name" pattern.
+    let taken: std::collections::HashSet<String> = cache
+        .in_memory_models
+        .iter()
+        .map(|e| e.display_name.clone())
+        .collect();
+    let base_name = format!("{origin_class_short}Copy");
+    let mut name = base_name.clone();
+    let mut n: u32 = 2;
+    while taken.contains(&name) {
+        name = format!("{base_name}{n}");
+        n += 1;
+    }
+
+    // Rewrite the source: rename the class (so `model X ... end X;`
+    // becomes `model <NewName> ... end <NewName>;`) and drop any
+    // `within` clause — the copy is standalone. We do the rename
+    // conservatively via regex on the opening keyword + trailing
+    // `end` identifier; it works for single-class sources. If the
+    // rewrite fails (unusual shape), fall through with the
+    // original class name — user still gets a working editable doc.
+    let copy_src = rewrite_duplicated_source(&class_src, &origin_class_short, &name);
+
+    let mem_id = format!("mem://{name}");
+    let doc_id = registry.allocate_with_origin(
+        copy_src.clone(),
+        lunco_doc::DocumentOrigin::untitled(name.clone()),
+    );
+
+    cache.in_memory_models.retain(|e| e.id != mem_id);
+    cache
+        .in_memory_models
+        .push(crate::ui::panels::package_browser::InMemoryEntry {
+            display_name: name.clone(),
+            id: mem_id.clone(),
+            doc: doc_id,
+        });
+
+    let mut line_starts: Vec<usize> = vec![0];
+    for (i, b) in copy_src.as_bytes().iter().enumerate() {
+        if *b == b'\n' {
+            line_starts.push(i + 1);
+        }
+    }
+    let source_arc: std::sync::Arc<str> = copy_src.clone().into();
+    workbench.open_model = Some(crate::ui::OpenModel {
+        model_path: mem_id,
+        display_name: name.clone(),
+        source: source_arc.clone(),
+        line_starts: line_starts.into(),
+        detected_name: Some(name.clone()),
+        cached_galley: None,
+        read_only: false,
+        library: crate::ui::state::ModelLibrary::InMemory,
+        doc: Some(doc_id),
+    });
+    workbench.editor_buffer = source_arc.to_string();
+    workbench.diagram_dirty = true;
+
+    model_tabs.ensure(doc_id);
+    commands.trigger(lunco_workbench::OpenTab {
+        kind: crate::ui::panels::model_view::MODEL_VIEW_KIND,
+        instance: doc_id.raw(),
+    });
+    console.info(format!(
+        "📄 Duplicated `{origin_class_short}` → editable model `{name}`"
+    ));
+}
+
+/// Pull the source text for a named class out of a (possibly
+/// multi-class) `.mo` file. Scans for `^\s*(model|block|class|
+/// connector|function|record|package|type)\s+<Name>\b` as the
+/// opener and `^\s*end\s+<Name>\s*;` as the matching closer.
+///
+/// Works for the common MSL shapes (own-file class; single target
+/// class inside a package file with no shadowing nested class of
+/// the same name). Returns `None` if the opener or closer can't be
+/// found — caller should fall back to copying the whole source.
+fn extract_class_source(source: &str, class_name: &str) -> Option<String> {
+    let safe = regex::escape(class_name);
+    let opener = regex::Regex::new(&format!(
+        r"(?m)^\s*(?:partial\s+)?(?:encapsulated\s+)?\
+          (?:model|block|class|connector|function|record|package|type)\s+{safe}\b",
+        safe = safe,
+    ))
+    .ok()?;
+    let closer = regex::Regex::new(&format!(
+        r"(?m)^\s*end\s+{safe}\s*;",
+        safe = safe,
+    ))
+    .ok()?;
+    let start = opener.find(source)?.start();
+    // Find the last `end <ClassName>;` at or after `start`. Multi-
+    // class files can have identically-named nested classes, but
+    // in MSL practice `end <Name>;` pairs cleanly with the outer
+    // opener we just found.
+    let rel_end = closer.find(&source[start..])?.end();
+    let end = start + rel_end;
+    Some(source[start..end].to_string())
+}
+
+/// Rename the class and strip any `within` clause so the copy is a
+/// standalone Untitled model. Conservative: if anything doesn't
+/// match exactly once, returns the input unmodified — a user-
+/// visible but working "not quite renamed" copy beats a mangled
+/// source.
+fn rewrite_duplicated_source(
+    src: &str,
+    old_name: &str,
+    new_name: &str,
+) -> String {
+    let safe_old = regex::escape(old_name);
+    let header_re = regex::Regex::new(&format!(
+        r"(?m)^(\s*(?:partial\s+)?(?:encapsulated\s+)?\
+          (?:model|block|class|connector|function|record|package|type)\s+){safe}\b",
+        safe = safe_old,
+    ))
+    .ok();
+    let footer_re = regex::Regex::new(&format!(
+        r"(?m)^(\s*end\s+){safe}(\s*;)",
+        safe = safe_old,
+    ))
+    .ok();
+    let within_re = regex::Regex::new(r"(?m)^\s*within\s*[A-Za-z_][\w\.]*\s*;\s*\n?").ok();
+
+    let mut out: std::borrow::Cow<'_, str> = src.into();
+    if let Some(re) = within_re {
+        out = re.replace(&out, "").into_owned().into();
+    }
+    if let (Some(hr), Some(fr)) = (header_re, footer_re) {
+        if hr.find(&out).is_some() && fr.find(&out).is_some() {
+            let stepped = hr.replace(&out, |caps: &regex::Captures| {
+                format!("{}{new_name}", &caps[1])
+            });
+            let stepped = fr.replace(&stepped, |caps: &regex::Captures| {
+                format!("{}{new_name}{}", &caps[1], &caps[2])
+            });
+            out = stepped.into_owned().into();
+        }
+    }
+    out.into_owned()
 }

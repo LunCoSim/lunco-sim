@@ -66,6 +66,12 @@ pub struct Canvas {
     /// first mouse-move over the widget.
     last_pointer_screen: Option<Pos>,
 
+    /// When `true`, the active tool must not mutate the scene —
+    /// no drag-to-move, no drag-to-connect, no Delete. Pan / zoom /
+    /// selection still work. Set per-frame by the embedding app
+    /// (e.g. `canvas_diagram.rs` flips it based on
+    /// `WorkbenchState.open_model.read_only`).
+    pub read_only: bool,
 }
 
 impl Canvas {
@@ -89,6 +95,7 @@ impl Canvas {
             overlays: Vec::new(),
             registry,
             last_pointer_screen: None,
+            read_only: false,
         }
     }
 
@@ -291,6 +298,7 @@ impl Canvas {
                     selection: &mut self.selection,
                     viewport: &mut self.viewport,
                     events: &mut events,
+                    read_only: self.read_only,
                 };
                 self.tool.handle(ev, &mut ops)
             };
@@ -308,6 +316,7 @@ impl Canvas {
                 selection: &mut self.selection,
                 viewport: &mut self.viewport,
                 events: &mut events,
+                read_only: self.read_only,
             };
             self.tool.tick(&mut ops, dt);
         }

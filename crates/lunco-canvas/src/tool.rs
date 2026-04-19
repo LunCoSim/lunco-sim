@@ -66,6 +66,12 @@ pub struct CanvasOps<'a> {
     pub selection: &'a mut Selection,
     pub viewport: &'a mut Viewport,
     pub events: &'a mut Vec<SceneEvent>,
+    /// When `true`, tools must not mutate `scene` — no drag-to-move,
+    /// no drag-to-connect, no delete-on-key. Pan/zoom/selection
+    /// stay fine (those mutate `viewport` / `selection`, not the
+    /// authored scene). Surfaced as a [`Canvas::read_only`] field
+    /// that the embedding app flips per tab (e.g. MSL library tabs).
+    pub read_only: bool,
 }
 
 /// Hit-test radius for ports, in world units. Chosen so clicking
@@ -265,6 +271,12 @@ impl Tool for DefaultTool {
 
             InputEvent::Key { name, .. } => match *name {
                 "Delete" | "Backspace" => {
+                    if ops.read_only {
+                        // Block deletion on read-only canvases.
+                        // Returning Consumed swallows the key so it
+                        // doesn't trigger a fallback handler.
+                        return ToolOutcome::Consumed;
+                    }
                     self.delete_selection(ops);
                     ToolOutcome::Consumed
                 }
@@ -396,11 +408,22 @@ impl DefaultTool {
                     // replace the selection with just it before
                     // starting the drag — dragging an unselected
                     // node in Figma/Dymola implicitly selects it.
+                    // (Selection is allowed in read-only mode — only
+                    // scene mutations are blocked.)
                     if !ops.selection.contains(SelectItem::Node(id)) {
                         ops.selection.set(SelectItem::Node(id));
                         ops.events.push(SceneEvent::SelectionChanged(
                             ops.selection.clone(),
                         ));
+                    }
+                    // Read-only tab: refuse to enter the drag state.
+                    // The user can still click to select, but any
+                    // drag motion falls back to rubber-band selection
+                    // below. Prevents authored scene mutation at the
+                    // source, not via after-the-fact snap-back.
+                    if ops.read_only {
+                        self.state = State::Idle;
+                        return;
                     }
                     // Snapshot current rects for every selected
                     // node. We apply translation from origin_world
@@ -418,6 +441,11 @@ impl DefaultTool {
                     };
                 }
                 PressTarget::Port(from, from_world) => {
+                    // Read-only tab: no new connections allowed.
+                    if ops.read_only {
+                        self.state = State::Idle;
+                        return;
+                    }
                     self.state = State::ConnectingFromPort {
                         from,
                         from_world,
@@ -780,6 +808,7 @@ mod tests {
                 selection,
                 viewport,
                 events,
+                read_only: false,
             };
             tool.handle(ev, &mut ops);
         }

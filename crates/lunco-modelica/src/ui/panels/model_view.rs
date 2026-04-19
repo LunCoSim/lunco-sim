@@ -209,6 +209,31 @@ impl InstancePanel for ModelViewPanel {
         // (both of which still read `open_model` / `EditorBufferState`
         // / `DiagramState`, which `sync_active_tab_to_doc` just
         // pointed at this tab's document).
+        // Diagnostic: log on first render per tab (view switches
+        // don't re-log — one-shot per tab open) so we can see which
+        // body path the freeze is hitting. Throw-away; promoted to
+        // a Diagnostics event if this turns out to be the culprit.
+        {
+            use std::sync::{Mutex, OnceLock};
+            static SEEN: OnceLock<Mutex<std::collections::HashSet<(u64, u8)>>> =
+                OnceLock::new();
+            let seen = SEEN.get_or_init(|| Mutex::new(Default::default()));
+            let tag = match new_view_mode {
+                ModelViewMode::Text => 0u8,
+                ModelViewMode::Canvas => 1,
+                ModelViewMode::Icon => 2,
+            };
+            if let Ok(mut s) = seen.lock() {
+                if s.insert((doc.raw(), tag)) {
+                    bevy::log::info!(
+                        "[ModelView] rendering tab doc={:?} mode={:?}",
+                        doc,
+                        new_view_mode,
+                    );
+                }
+            }
+        }
+
         match new_view_mode {
             ModelViewMode::Text => self.code.render(ui, world),
             ModelViewMode::Canvas => self.canvas.render(ui, world),
@@ -490,6 +515,7 @@ fn render_unified_toolbar(
     let mut undo_clicked = false;
     let mut redo_clicked = false;
     let mut dismiss_error = false;
+    let mut duplicate_clicked = false;
     let mut new_view_mode = view_mode;
 
     ui.horizontal(|ui| {
@@ -564,12 +590,28 @@ fn render_unified_toolbar(
         // read-only Example is a valid (and common) workflow. Save
         // stays gated on writable; Compile only waits for an
         // in-flight compile to settle.
-        let _ = is_read_only;
         let compile_enabled = !matches!(compile_state, CompileState::Compiling);
         compile_clicked = ui
             .add_enabled(compile_enabled, egui::Button::new("🚀 Compile"))
             .on_hover_text("Compile the current model and run it (F5)")
             .clicked();
+
+        // Duplicate-to-workspace: only offered on read-only tabs.
+        // Users browsing an MSL Example who want to tweak parameters
+        // hit this to get an editable copy in a new tab; the library
+        // original stays untouched. Mirrors Dymola's "make your own
+        // copy" workflow for example models.
+        if is_read_only {
+            ui.separator();
+            duplicate_clicked = ui
+                .button("📄 Duplicate to Workspace")
+                .on_hover_text(
+                    "Copy this library class into a new editable Untitled \
+                     model so you can tweak parameters / connections \
+                     without modifying the MSL source.",
+                )
+                .clicked();
+        }
     });
 
     // Apply side effects after the closure.
@@ -583,6 +625,13 @@ fn render_unified_toolbar(
     }
     if redo_clicked {
         world.commands().trigger(lunco_doc_bevy::RedoDocument { doc });
+    }
+    if duplicate_clicked {
+        world
+            .commands()
+            .trigger(crate::ui::commands::DuplicateModelFromReadOnly {
+                source_doc: doc,
+            });
     }
     if compile_clicked {
         match new_view_mode {
