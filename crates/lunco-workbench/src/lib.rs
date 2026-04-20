@@ -781,6 +781,7 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
 
     // ── Menu bar ────────────────────────────────────────────────────
     egui::TopBottomPanel::top("lunco_workbench_menu_bar").show(ctx, |ui| {
+        ui.style_mut().visuals = theme.to_visuals();
         ui.horizontal(|ui| {
             ui.menu_button("File", |ui| {
                 ui.label("(File menu — todo)");
@@ -928,6 +929,7 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
 
     // ── Status bar ──────────────────────────────────────────────────
     egui::TopBottomPanel::bottom("lunco_workbench_status_bar").show(ctx, |ui| {
+        ui.style_mut().visuals = theme.to_visuals();
         ui.horizontal(|ui| match layout.status.as_ref() {
             Some(StatusContent::Text(s)) => {
                 ui.label(egui::RichText::new(s).small());
@@ -944,6 +946,7 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
             .resizable(false)
             .exact_width(40.0)
             .show(ctx, |ui| {
+                ui.style_mut().visuals = theme.to_visuals();
                 ui.vertical_centered(|ui| {
                     ui.add_space(4.0);
                     for icon in ["📁", "🧩", "📦", "🔎", "⚙"] {
@@ -1021,21 +1024,30 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
                 .resizable(true)
                 .default_width(side_default)
                 .min_width(120.0)
-                .show(ctx, |ui| render_panel_solo(ui, &id, layout, world));
+                .show(ctx, |ui| {
+                    ui.style_mut().visuals = theme.to_visuals();
+                    render_panel_solo(ui, &id, layout, world);
+                });
         }
         if let Some(id) = layout.right_inspector.first().copied() {
             egui::SidePanel::right("lunco_workbench_side_panel_right")
                 .resizable(true)
                 .default_width(side_default)
                 .min_width(140.0)
-                .show(ctx, |ui| render_panel_solo(ui, &id, layout, world));
+                .show(ctx, |ui| {
+                    ui.style_mut().visuals = theme.to_visuals();
+                    render_panel_solo(ui, &id, layout, world);
+                });
         }
         if let Some(id) = layout.bottom.first().copied() {
             egui::TopBottomPanel::bottom("lunco_workbench_bottom_panel")
                 .resizable(true)
                 .default_height(bottom_default)
                 .min_height(60.0)
-                .show(ctx, |ui| render_panel_solo(ui, &id, layout, world));
+                .show(ctx, |ui| {
+                    ui.style_mut().visuals = theme.to_visuals();
+                    render_panel_solo(ui, &id, layout, world);
+                });
         }
         // Central area: do NOT call CentralPanel — egui's bottom/side
         // panels reserve their space and the remaining region stays
