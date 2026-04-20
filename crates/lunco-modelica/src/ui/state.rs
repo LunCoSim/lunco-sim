@@ -508,6 +508,14 @@ impl ModelicaDocumentRegistry {
     pub fn is_empty(&self) -> bool {
         self.hosts.is_empty()
     }
+
+    /// Iterate `(DocumentId, &DocumentHost)` for every loaded document.
+    /// Iteration order is not stable — callers that need a stable
+    /// presentation order (e.g. the Twin Browser's Modelica section)
+    /// must sort the results themselves.
+    pub fn iter(&self) -> impl Iterator<Item = (DocumentId, &DocumentHost<ModelicaDocument>)> {
+        self.hosts.iter().map(|(id, host)| (*id, host))
+    }
 }
 
 impl Default for WorkbenchState {

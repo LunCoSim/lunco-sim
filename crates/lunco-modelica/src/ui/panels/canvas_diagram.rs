@@ -79,10 +79,16 @@ fn svg_bytes_for(asset_path: &str) -> Option<std::sync::Arc<Vec<u8>>> {
     loaded
 }
 
-/// Per-component icon visual. Renders the Modelica SVG icon if the
-/// component's `icon_asset` path resolved, else a stylised
-/// rounded-rectangle fallback with the instance name. Ports render
-/// as filled dots on the icon boundary.
+/// Per-component icon visual. Renders, in priority order:
+///
+/// 1. The class's decoded `Icon(graphics={...})` annotation, if the
+///    projector extracted one (user-defined classes from the open
+///    document). Painted via [`crate::icon_paint::paint_graphics`].
+/// 2. The pre-rasterised SVG icon if `icon_asset` resolved (MSL
+///    components that ship with the palette).
+/// 3. A stylised rounded-rectangle fallback with the type label.
+///
+/// Ports render as filled dots on the icon boundary in all cases.
 #[derive(Default)]
 struct IconNodeVisual {
     /// Type name ("Resistor", "Capacitor"…) shown under the instance
@@ -97,6 +103,11 @@ struct IconNodeVisual {
     /// the component is decorative. Set by the projector via the
     /// node's `data.icon_only` flag.
     icon_only: bool,
+    /// Decoded graphics from the class's `Icon` annotation. When
+    /// present, takes precedence over the SVG icon path so user
+    /// classes show their authored graphics instead of falling back
+    /// to a generic placeholder.
+    icon_graphics: Option<crate::annotations::Icon>,
 }
 
 impl NodeVisual for IconNodeVisual {
@@ -120,8 +131,21 @@ impl NodeVisual for IconNodeVisual {
         let card_fill = egui::Color32::from_rgb(48, 56, 72);
         painter.rect_filled(rect, 6.0, card_fill);
 
+        // Priority 1: authored graphics from the class's `Icon`
+        // annotation. Beats the SVG path so user-defined classes show
+        // their own primitives even when no pre-rasterised icon
+        // exists for them.
         let mut drew_svg = false;
-        if !self.icon_asset.is_empty() {
+        if let Some(icon) = &self.icon_graphics {
+            crate::icon_paint::paint_graphics(
+                painter,
+                rect,
+                icon.coordinate_system,
+                &icon.graphics,
+            );
+            drew_svg = true;
+        }
+        if !drew_svg && !self.icon_asset.is_empty() {
             if let Some(bytes) = svg_bytes_for(&self.icon_asset) {
                 super::svg_renderer::draw_svg_to_egui(painter, rect, &bytes);
                 drew_svg = true;
@@ -372,10 +396,22 @@ fn build_registry() -> VisualRegistry {
             .get("icon_only")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
+        // `icon_graphics` is the decoded Icon annotation. Missing /
+        // null on MSL components — they keep using the SVG path.
+        let icon_graphics = data
+            .get("icon_graphics")
+            .and_then(|v| {
+                if v.is_null() {
+                    None
+                } else {
+                    serde_json::from_value::<crate::annotations::Icon>(v.clone()).ok()
+                }
+            });
         IconNodeVisual {
             type_label,
             icon_asset,
             icon_only,
+            icon_graphics,
         }
     });
     reg.register_edge_kind("modelica.connection", |_: &JsonValue| OrthogonalEdgeVisual);
@@ -629,6 +665,13 @@ fn project_scene(diagram: &VisualDiagram) -> (Scene, HashMap<DiagramNodeId, Canv
                 "icon_only": crate::class_cache::is_icon_only_class(
                     &node.component_def.msl_path,
                 ),
+                // Decoded `Icon(graphics={...})` annotation for the
+                // class, if the projector extracted one. Takes
+                // precedence over the SVG fallback in
+                // `IconNodeVisual::draw`. Omitted when `None` so the
+                // common (MSL) path produces the same JSON it always
+                // has.
+                "icon_graphics": node.component_def.icon_graphics,
             }),
             ports,
             label: node.instance_name.clone(),
@@ -673,6 +716,13 @@ fn project_scene(diagram: &VisualDiagram) -> (Scene, HashMap<DiagramNodeId, Canv
 pub struct CanvasDocState {
     pub canvas: Canvas,
     pub last_seen_gen: u64,
+    /// Snapshot of the drill-in target that produced the *currently
+    /// rendered* scene. The render trigger compares this against the
+    /// live `DrilledInClassNames[doc_id]`; a difference re-projects.
+    /// Without this, clicking a class in the Twin Browser updated the
+    /// drill-in resource but the canvas kept showing the previous
+    /// target's cached scene — the visible "click did nothing" bug.
+    pub last_seen_target: Option<String>,
     pub context_menu: Option<PendingContextMenu>,
     pub projection_task: Option<ProjectionTask>,
 }
@@ -685,6 +735,7 @@ impl Default for CanvasDocState {
         Self {
             canvas,
             last_seen_gen: 0,
+            last_seen_target: None,
             context_menu: None,
             projection_task: None,
         }
@@ -763,6 +814,10 @@ impl CanvasDiagramState {
 ///   live via `spawned_at.elapsed() > deadline`.
 pub struct ProjectionTask {
     pub gen_at_spawn: u64,
+    /// Drill-in target the projection was spawned for. Compared
+    /// against `CanvasDocState::last_seen_target` on completion so
+    /// the UI knows which target produced the rendered scene.
+    pub target_at_spawn: Option<String>,
     pub spawned_at: std::time::Instant,
     pub deadline: std::time::Duration,
     pub cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -848,7 +903,13 @@ impl Panel for CanvasDiagramPanel {
             let docstate = state.get(Some(doc_id));
             let first_render = !state.has_entry(doc_id);
             let gen_advanced = gen != docstate.last_seen_gen;
-            (first_render || gen_advanced).then_some((doc_id, gen))
+            // Drill-in target changed (e.g. user clicked a different
+            // class in the Twin Browser for an already-open tab).
+            let live_target = world
+                .get_resource::<DrilledInClassNames>()
+                .and_then(|m| m.get(doc_id).map(str::to_string));
+            let target_changed = live_target != docstate.last_seen_target;
+            (first_render || gen_advanced || target_changed).then_some((doc_id, gen))
         };
 
         if let Some((doc_id, gen)) = project_now {
@@ -997,6 +1058,7 @@ impl Panel for CanvasDiagramPanel {
                     });
                     docstate.projection_task = Some(ProjectionTask {
                         gen_at_spawn: gen,
+                        target_at_spawn: target_class_snapshot.clone(),
                         spawned_at,
                         deadline,
                         cancel,
@@ -1074,9 +1136,9 @@ impl Panel for CanvasDiagramPanel {
                     futures_lite::future::block_on(
                         futures_lite::future::poll_once(&mut t.task),
                     )
-                    .map(|scene| (t.gen_at_spawn, scene))
+                    .map(|scene| (t.gen_at_spawn, t.target_at_spawn.clone(), scene))
                 });
-            if let Some((gen, scene)) = done_task {
+            if let Some((gen, target, scene)) = done_task {
                 docstate.projection_task = None;
                 bevy::log::info!(
                     "[CanvasDiagram] project done: {} nodes, {} edges (initial={})",
@@ -1087,6 +1149,7 @@ impl Panel for CanvasDiagramPanel {
                 docstate.canvas.scene = scene;
                 docstate.canvas.selection.clear();
                 docstate.last_seen_gen = gen;
+                docstate.last_seen_target = target;
                 if is_initial_projection {
                     let physical_zoom =
                         lunco_canvas::Viewport::physical_mm_zoom(ui.ctx());

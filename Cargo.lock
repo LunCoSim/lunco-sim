@@ -6056,6 +6056,7 @@ dependencies = [
  "lunco-core",
  "lunco-doc",
  "lunco-doc-bevy",
+ "lunco-twin",
  "lunco-viz",
  "lunco-workbench",
  "regex",
@@ -6293,6 +6294,7 @@ dependencies = [
  "bevy_egui",
  "egui_dock",
  "lunco-doc",
+ "lunco-twin",
 ]
 
 [[package]]

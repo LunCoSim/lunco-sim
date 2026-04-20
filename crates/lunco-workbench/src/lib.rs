@@ -52,7 +52,13 @@ mod panel;
 mod viewport;
 mod workspace;
 
+pub mod twin_browser;
+
 pub use panel::{InstancePanel, Panel, PanelId, PanelSlot, TabId};
+pub use twin_browser::{
+    BrowserAction, BrowserActions, BrowserCtx, BrowserSection, BrowserSectionRegistry,
+    FilesSection, OpenTwin, TwinBrowserPanel, TWIN_BROWSER_PANEL_ID,
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Tab-management commands
@@ -118,9 +124,24 @@ impl Plugin for WorkbenchPlugin {
         }
         app.init_resource::<WorkbenchLayout>()
             .init_resource::<PendingTabCloses>()
+            // Twin Browser plumbing — resources are always present so
+            // the panel renders an empty state cleanly when no Twin is
+            // open and no domain sections have registered yet.
+            .init_resource::<OpenTwin>()
+            .init_resource::<BrowserSectionRegistry>()
+            .init_resource::<BrowserActions>()
             .add_observer(on_open_tab)
             .add_observer(on_close_tab)
             .add_systems(EguiPrimaryContextPass, render_workbench);
+
+        // Built-in Files section ships with the workbench so apps get
+        // a usable browser even before any domain plugin registers.
+        // Registered after init_resource so the registry definitely
+        // exists. Domain crates push their sections (Modelica, USD, …)
+        // from their own plugin's build, which runs after ours.
+        app.world_mut()
+            .resource_mut::<BrowserSectionRegistry>()
+            .register(FilesSection);
     }
 }
 

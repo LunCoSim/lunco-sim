@@ -69,6 +69,15 @@ pub use commands::{CompileModel, CreateNewScratchModel, ModelicaCommandsPlugin};
 pub mod panels;
 pub mod viz;
 
+/// Modelica section of the Twin Browser — class-tree contributed by
+/// this crate to `lunco-workbench`'s `BrowserSectionRegistry`.
+pub mod browser_section;
+
+/// Drains the workbench's `BrowserActions` outbox and routes
+/// section-emitted intents (open file, open Modelica class) into the
+/// existing document-load and drill-in pipelines.
+pub mod browser_dispatch;
+
 use crate::ModelicaModel;
 
 /// Fan queued document lifecycle notifications out as observer triggers.
@@ -161,7 +170,19 @@ impl Workspace for AnalyzeWorkspace {
     fn title(&self) -> String { "📊 Analyze".into() }
     fn apply(&self, layout: &mut WorkbenchLayout) {
         layout.set_activity_bar(false);
-        layout.set_side_browser(Some(PanelId("modelica_package_browser")));
+        // Side dock holds two browser tabs:
+        //   1. The legacy `PackageBrowserPanel` (MSL palette + bundled
+        //      examples + open files), kept until the Twin Browser
+        //      reaches feature parity.
+        //   2. The new `TwinBrowserPanel`, which surfaces the open
+        //      Twin's contents through pluggable per-domain sections
+        //      (Files, Modelica classes today; USD, SysML later).
+        // Both visible from launch — users can drag-detach or close
+        // either; the menu's Panels list re-docks on demand.
+        layout.set_side_browser_tabs(vec![
+            PanelId("modelica_package_browser"),
+            lunco_workbench::TWIN_BROWSER_PANEL_ID,
+        ]);
         // Center is seeded with no singleton tab — model views are
         // multi-instance tabs opened dynamically by the Package Browser
         // (one tab per open document). An app that boots with a
@@ -239,12 +260,15 @@ impl Plugin for ModelicaUiPlugin {
             .init_resource::<panels::console::ConsoleLog>()
             .init_resource::<panels::diagnostics::DiagnosticsLog>()
             .insert_resource(panels::package_browser::PackageTreeCache::new())
+            .init_resource::<browser_dispatch::PendingDrillIns>()
+            .add_systems(Update, browser_dispatch::drain_browser_actions)
             .add_systems(Update, panels::package_browser::handle_package_loading_tasks)
             .add_systems(Update, cleanup_removed_documents)
             .add_systems(Update, drain_document_changes)
             .add_systems(Update, panels::diagnostics::refresh_diagnostics)
             .add_systems(Startup, register_settings_menu)
             .register_panel(panels::package_browser::PackageBrowserPanel)
+            .register_panel(lunco_workbench::TwinBrowserPanel)
             .register_panel(panels::welcome::WelcomePanel)
             .register_panel(panels::telemetry::TelemetryPanel)
             .register_panel(panels::graphs::GraphsPanel)
@@ -265,6 +289,14 @@ impl Plugin for ModelicaUiPlugin {
             // opened at runtime by the Package Browser.
             .register_instance_panel(panels::model_view::ModelViewPanel::default())
             .register_workspace(AnalyzeWorkspace);
+
+        // Contribute the Modelica section to the Twin Browser's
+        // section registry. The workbench's WorkbenchPlugin already
+        // installed the registry resource and the built-in Files
+        // section; we just append.
+        app.world_mut()
+            .resource_mut::<lunco_workbench::BrowserSectionRegistry>()
+            .register(browser_section::ModelicaSection::default());
     }
 }
 

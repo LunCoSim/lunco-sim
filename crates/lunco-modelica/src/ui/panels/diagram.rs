@@ -1685,7 +1685,7 @@ pub fn import_model_to_diagram_from_ast(
     // The fake `if let Ok(ast) = _` wrapper used to shadow; now we
     // just take a borrow of the already-parsed tree.
     {
-        let ast = ast;
+        let ast = &ast;
         for (_class_name, class_def) in ast.classes.iter() {
             for imp in &class_def.imports {
                 use rumoca_session::parsing::ast::Import;
@@ -1714,6 +1714,33 @@ pub fn import_model_to_diagram_from_ast(
                     }
                 }
             }
+        }
+    }
+
+    // Local same-file class lookup, keyed by short name.
+    //
+    // Modelica scope rules (MLS §5.3) make sibling classes inside a
+    // package directly visible to one another without an `import`. The
+    // MSL palette only knows about MSL paths, so user classes defined
+    // alongside the model (e.g. `Engine`/`Tank` inside an
+    // `AnnotatedRocketStage` package) would otherwise resolve as
+    // unknown and disappear from the diagram. We synthesise a
+    // [`MSLComponentDef`] for each top-level class and one nesting
+    // level deeper, carrying the extracted `Icon` annotation so the
+    // canvas can render the user's own graphics.
+    //
+    // Ports are intentionally empty here — connector extraction for
+    // user classes is a follow-up; the icon-rendering slice doesn't
+    // need them.
+    let mut local_classes_by_short: HashMap<String, MSLComponentDef> = HashMap::new();
+    for (top_name, top_class) in ast.classes.iter() {
+        register_local_class(&mut local_classes_by_short, top_name.as_str(), top_class);
+        for (nested_name, nested_class) in top_class.classes.iter() {
+            register_local_class(
+                &mut local_classes_by_short,
+                nested_name.as_str(),
+                nested_class,
+            );
         }
     }
 
@@ -1746,7 +1773,9 @@ pub fn import_model_to_diagram_from_ast(
         } else {
             None
         };
-        let component_def = resolved_path.and_then(|p| msl_lookup_by_path.get(p).cloned());
+        let component_def: Option<MSLComponentDef> = resolved_path
+            .and_then(|p| msl_lookup_by_path.get(p).map(|d| (*d).clone()))
+            .or_else(|| local_classes_by_short.get(type_name).cloned());
 
         if let Some(def) = component_def {
             let mut pos = None;
@@ -1815,6 +1844,40 @@ pub fn import_model_to_diagram_from_ast(
     } else {
         Some(diagram)
     }
+}
+
+/// Add a synthesised palette entry for a class found in the open
+/// document. Used for short-name resolution of sibling classes that
+/// the MSL palette doesn't know about. Skips classes that don't carry
+/// any of the data we'd render — i.e. no decoded `Icon` annotation.
+fn register_local_class(
+    out: &mut HashMap<String, MSLComponentDef>,
+    short_name: &str,
+    class_def: &rumoca_session::parsing::ast::ClassDef,
+) {
+    use crate::annotations::extract_icon;
+    if out.contains_key(short_name) {
+        return;
+    }
+    let icon = extract_icon(&class_def.annotation);
+    if icon.is_none() {
+        return;
+    }
+    out.insert(
+        short_name.to_string(),
+        MSLComponentDef {
+            name: short_name.to_string(),
+            msl_path: short_name.to_string(),
+            category: "Local".to_string(),
+            display_name: short_name.to_string(),
+            description: None,
+            icon_text: None,
+            icon_asset: None,
+            ports: Vec::new(),
+            parameters: Vec::new(),
+            icon_graphics: icon,
+        },
+    );
 }
 
 // ---------------------------------------------------------------------------

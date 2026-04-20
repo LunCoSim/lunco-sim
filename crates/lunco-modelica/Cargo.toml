@@ -26,6 +26,7 @@ lunco-doc-bevy = { path = "../lunco-doc-bevy" }
 lunco-workbench = { path = "../lunco-workbench" }
 lunco-viz = { path = "../lunco-viz" }
 lunco-canvas = { path = "../lunco-canvas" }
+lunco-twin = { path = "../lunco-twin" }
 lunco-cache = { path = "../lunco-cache" }
 egui-snarl = "0.9"
 egui_plot = "0.34.1"

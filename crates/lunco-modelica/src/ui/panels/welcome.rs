@@ -337,14 +337,41 @@ impl Panel for WelcomePanel {
             {
                 use bevy::tasks::AsyncComputeTaskPool;
                 let pool = AsyncComputeTaskPool::get();
-                let task = pool.spawn(async move {
-                    crate::ui::panels::package_browser::scan_twin_folder(folder)
+                let task = pool.spawn({
+                    let folder = folder.clone();
+                    async move {
+                        crate::ui::panels::package_browser::scan_twin_folder(folder)
+                    }
                 });
-                let mut cache = world.resource_mut::<
-                    crate::ui::panels::package_browser::PackageTreeCache,
-                >();
-                cache.twin = None;
-                cache.twin_scan_task = Some(task);
+                {
+                    let mut cache = world.resource_mut::<
+                        crate::ui::panels::package_browser::PackageTreeCache,
+                    >();
+                    cache.twin = None;
+                    cache.twin_scan_task = Some(task);
+                }
+                // Also feed the new Twin Browser. `TwinMode::open` is
+                // synchronous but only walks the file tree (no parse),
+                // so it's cheap even on large folders. Anything that
+                // produces a valid Folder/Twin gets stashed; failures
+                // (deleted between picker and now, etc.) leave the
+                // browser empty rather than crashing.
+                match lunco_twin::TwinMode::open(&folder) {
+                    Ok(lunco_twin::TwinMode::Folder(twin))
+                    | Ok(lunco_twin::TwinMode::Twin(twin)) => {
+                        world
+                            .resource_mut::<lunco_workbench::OpenTwin>()
+                            .0 = Some(twin);
+                    }
+                    Ok(lunco_twin::TwinMode::Orphan(_)) => {
+                        // User picked a file via the folder dialog
+                        // (shouldn't happen with `pick_folder`, but be
+                        // defensive). Don't replace OpenTwin.
+                    }
+                    Err(e) => {
+                        log::warn!("OpenTwin: failed to index {:?}: {}", folder, e);
+                    }
+                }
             }
         }
         if let Some(filename) = open_example {

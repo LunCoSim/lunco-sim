@@ -119,6 +119,15 @@ pub struct MSLComponentDef {
     pub ports: Vec<PortDef>,
     /// Parameters that can be configured.
     pub parameters: Vec<ParamDef>,
+    /// Decoded `Icon(graphics={...})` annotation for the class. When
+    /// `Some`, the canvas renders these primitives via
+    /// [`crate::icon_paint::paint_graphics`] instead of falling back to
+    /// the SVG icon path. Populated by the diagram projector for
+    /// user-defined classes parsed from the open document; MSL
+    /// palette entries leave it `None` and continue to use their
+    /// pre-rasterised SVG icons.
+    #[serde(default)]
+    pub icon_graphics: Option<crate::annotations::Icon>,
 }
 
 /// A node instance placed on the visual canvas.
