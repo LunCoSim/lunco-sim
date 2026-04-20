@@ -122,24 +122,18 @@ impl Overlay for NavBarOverlay {
         };
         let bar_rect = egui::Rect::from_min_max(min, max);
 
-        // Painter background: rounded rect with subtle shadow. No
-        // real drop-shadow API in egui so we fake with a darker
-        // rect offset by 2 px. Good enough for the first pass.
+        let layer_theme = crate::theme::current(ui.ctx());
         let painter = ui.painter();
         painter.rect_filled(
             bar_rect.translate(egui::vec2(0.0, 2.0)),
             8.0,
-            egui::Color32::from_rgba_premultiplied(0, 0, 0, 80),
+            layer_theme.overlay_shadow,
         );
-        painter.rect_filled(
-            bar_rect,
-            8.0,
-            egui::Color32::from_rgb(34, 38, 48),
-        );
+        painter.rect_filled(bar_rect, 8.0, layer_theme.overlay_fill);
         painter.rect_stroke(
             bar_rect,
             8.0,
-            egui::Stroke::new(1.0, egui::Color32::from_rgb(60, 65, 78)),
+            egui::Stroke::new(1.0, layer_theme.overlay_stroke),
             egui::StrokeKind::Outside,
         );
 
@@ -178,7 +172,7 @@ impl Overlay for NavBarOverlay {
             egui::Label::new(
                 egui::RichText::new(format!("{}%", zoom_pct))
                     .monospace()
-                    .color(egui::Color32::from_rgb(200, 210, 225)),
+                    .color(layer_theme.overlay_text),
             ),
         );
 

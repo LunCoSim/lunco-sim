@@ -67,6 +67,8 @@ impl Layer for GridLayer {
         if !self.enabled {
             return;
         }
+        let theme = crate::theme::current(ctx.ui.ctx());
+        let grid_color = theme.grid;
         let painter = ctx.ui.painter();
         let sr = ctx.screen_rect;
         let zoom = ctx.viewport.zoom.max(f32::EPSILON);
@@ -102,7 +104,7 @@ impl Layer for GridLayer {
         let start_x = (min_w.x / step).floor() * step;
         let start_y = (min_w.y / step).floor() * step;
         let r = 1.2_f32;
-        let col = self.color;
+        let col = grid_color;
         let mut y = start_y;
         while y <= max_w.y {
             let mut x = start_x;
@@ -216,8 +218,9 @@ impl Layer for SelectionLayer {
             return;
         }
         let sr = ctx.screen_rect;
+        let theme = crate::theme::current(ctx.ui.ctx());
         let painter = ctx.ui.painter();
-        let outline = egui::Color32::from_rgb(120, 170, 255);
+        let outline = theme.selection_outline;
         for item in selection.iter() {
             if let crate::selection::SelectItem::Node(nid) = *item {
                 if let Some(node) = scene.node(nid) {
@@ -255,6 +258,7 @@ impl Layer for ToolPreviewLayer {
             return;
         };
         let Some(preview) = preview_opt else { return };
+        let theme = crate::theme::current(ctx.ui.ctx());
         let painter = ctx.ui.painter();
         let sr = ctx.screen_rect;
         match preview {
@@ -267,27 +271,19 @@ impl Layer for ToolPreviewLayer {
                 let b = ctx.viewport.world_to_screen(*to_world, sr);
                 painter.line_segment(
                     [egui::pos2(a.x, a.y), egui::pos2(b.x, b.y)],
-                    egui::Stroke::new(
-                        2.0,
-                        egui::Color32::from_rgb(140, 200, 255),
-                    ),
+                    egui::Stroke::new(2.0, theme.ghost_edge),
                 );
-                // Origin port dot.
                 painter.circle_filled(
                     egui::pos2(a.x, a.y),
                     4.0,
-                    egui::Color32::from_rgb(140, 200, 255),
+                    theme.ghost_edge,
                 );
-                // Snap-target highlight if provided.
                 if let Some(t) = snap_target {
                     let s = ctx.viewport.world_to_screen(*t, sr);
                     painter.circle_stroke(
                         egui::pos2(s.x, s.y),
                         8.0,
-                        egui::Stroke::new(
-                            2.0,
-                            egui::Color32::from_rgb(90, 220, 140),
-                        ),
+                        egui::Stroke::new(2.0, theme.snap_target),
                     );
                 }
             }
@@ -297,15 +293,11 @@ impl Layer for ToolPreviewLayer {
                     egui::pos2(sr_rect.min.x, sr_rect.min.y),
                     egui::pos2(sr_rect.max.x, sr_rect.max.y),
                 );
-                painter.rect_filled(
-                    rect,
-                    2.0,
-                    egui::Color32::from_rgba_premultiplied(120, 170, 255, 30),
-                );
+                painter.rect_filled(rect, 2.0, theme.rubber_band_fill);
                 painter.rect_stroke(
                     rect,
                     2.0,
-                    egui::Stroke::new(1.0, egui::Color32::from_rgb(120, 170, 255)),
+                    egui::Stroke::new(1.0, theme.rubber_band_stroke),
                     egui::StrokeKind::Outside,
                 );
             }

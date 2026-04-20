@@ -113,6 +113,31 @@ impl Panel for WelcomePanel {
         let mut open_example: Option<&'static str> = None;
         let mut open_msl_example: Option<&'static str> = None;
 
+        // Snapshot the theme once per frame so every example button
+        // pulls its colours from the same source. Cloning `Theme` is
+        // cheap (few hundred bytes).
+        let theme = world
+            .get_resource::<lunco_theme::Theme>()
+            .cloned()
+            .unwrap_or_else(lunco_theme::Theme::dark);
+        // Semantic tokens used repeatedly below. Surface pair for
+        // "card on panel" reads cleanly in both dark and light modes;
+        // `accent` for the interactive-card title tint; `text_subdued`
+        // replaces the generic `Color32::GRAY` that was almost
+        // invisible on Latte.
+        //
+        // Bundled and MSL example rows share the same accent — the
+        // distinction is the *heading* above each group, not a
+        // per-row colour. If a future design needs two accents the
+        // right move is to add `accent_secondary` to
+        // `DesignTokens`, not to pick a palette entry here.
+        let button_fill = theme.colors.surface0;
+        let button_stroke = theme.colors.surface2;
+        let msl_button_fill = theme.colors.surface1;
+        let msl_button_stroke = theme.colors.overlay0;
+        let title_tint = theme.tokens.accent;
+        let muted = theme.tokens.text_subdued;
+
         egui::ScrollArea::vertical().show(ui, |ui| {
             ui.add_space(40.0);
 
@@ -127,7 +152,7 @@ impl Panel for WelcomePanel {
                         "Build physics models, simulate them, see the numbers.",
                     )
                     .size(13.0)
-                    .color(egui::Color32::GRAY),
+                    .color(muted),
                 );
             });
 
@@ -188,7 +213,7 @@ impl Panel for WelcomePanel {
                          read the source, copy what you need.",
                     )
                     .size(10.5)
-                    .color(egui::Color32::GRAY),
+                    .color(muted),
                 );
                 ui.add_space(10.0);
 
@@ -204,11 +229,8 @@ impl Panel for WelcomePanel {
                         .add_sized(
                             [560.0, 48.0],
                             egui::Button::new("")
-                                .fill(egui::Color32::from_rgb(35, 35, 42))
-                                .stroke(egui::Stroke::new(
-                                    1.0,
-                                    egui::Color32::from_rgb(70, 70, 85),
-                                )),
+                                .fill(button_fill)
+                                .stroke(egui::Stroke::new(1.0, button_stroke)),
                         )
                         .on_hover_text(format!("Open {} as a read-only tab", display));
                     let rect = resp.rect;
@@ -224,14 +246,14 @@ impl Panel for WelcomePanel {
                         egui::Align2::LEFT_TOP,
                         format!("📄  {}", display),
                         egui::FontId::proportional(13.5),
-                        egui::Color32::from_rgb(220, 220, 160),
+                        title_tint,
                     );
                     painter.text(
                         tagline_pos,
                         egui::Align2::LEFT_TOP,
                         model.tagline,
                         egui::FontId::proportional(10.5),
-                        egui::Color32::GRAY,
+                        muted,
                     );
 
                     if resp.clicked() {
@@ -261,7 +283,7 @@ impl Panel for WelcomePanel {
                          the MSL original stays untouched.",
                     )
                     .size(10.5)
-                    .color(egui::Color32::GRAY),
+                    .color(muted),
                 );
                 ui.add_space(10.0);
 
@@ -270,11 +292,8 @@ impl Panel for WelcomePanel {
                         .add_sized(
                             [560.0, 48.0],
                             egui::Button::new("")
-                                .fill(egui::Color32::from_rgb(30, 38, 50))
-                                .stroke(egui::Stroke::new(
-                                    1.0,
-                                    egui::Color32::from_rgb(70, 90, 115),
-                                )),
+                                .fill(msl_button_fill)
+                                .stroke(egui::Stroke::new(1.0, msl_button_stroke)),
                         )
                         .on_hover_text(format!(
                             "Open editable copy of {}",
@@ -289,14 +308,14 @@ impl Panel for WelcomePanel {
                         egui::Align2::LEFT_TOP,
                         format!("🧩  {}", ex.short),
                         egui::FontId::proportional(13.5),
-                        egui::Color32::from_rgb(170, 200, 235),
+                        title_tint,
                     );
                     painter.text(
                         tagline_pos,
                         egui::Align2::LEFT_TOP,
                         ex.tagline,
                         egui::FontId::proportional(10.5),
-                        egui::Color32::GRAY,
+                        muted,
                     );
                     if resp.clicked() {
                         open_msl_example = Some(ex.qualified);

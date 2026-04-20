@@ -44,6 +44,7 @@ use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 
 use crate::ui::state::{ModelicaDocumentRegistry, WorkbenchState};
+use crate::ui::theme::ModelicaThemeExt;
 use crate::visual_diagram::{DiagramNodeId, MSLComponentDef, VisualDiagram};
 // `Document` is the trait that exposes `.generation()` on
 // `ModelicaDocument`; `DocumentHost::document()` returns a bare `&D`
@@ -77,6 +78,108 @@ fn svg_bytes_for(asset_path: &str) -> Option<std::sync::Arc<Vec<u8>>> {
     let loaded = std::fs::read(&full).ok().map(std::sync::Arc::new);
     map.insert(asset_path.to_string(), loaded.clone());
     loaded
+}
+
+/// Theme-derived colour snapshot consumed by every layer inside the
+/// canvas this frame. Stashed in the egui context's data cache (by
+/// type) at the entry of [`CanvasDiagramPanel::render`] so the
+/// [`NodeVisual`] / [`EdgeVisual`] trait objects — which have no
+/// `World` access — can still pick theme-aware colours on draw.
+///
+/// Recomputed each frame; cloning is a handful of `Color32` copies.
+#[derive(Clone, Debug)]
+pub struct CanvasThemeSnapshot {
+    pub card_fill: egui::Color32,
+    pub node_label: egui::Color32,
+    pub type_label: egui::Color32,
+    pub port_fill: egui::Color32,
+    pub port_stroke: egui::Color32,
+    pub select_stroke: egui::Color32,
+    pub inactive_stroke: egui::Color32,
+    pub icon_only_stroke: egui::Color32,
+}
+
+impl CanvasThemeSnapshot {
+    pub fn from_theme(theme: &lunco_theme::Theme) -> Self {
+        let c = &theme.colors;
+        let t = &theme.tokens;
+        Self {
+            // Card: one tone above panel_fill so icons read as raised
+            // tiles. `surface0` in dark mode → slightly-lifted dark
+            // grey; in Latte → slightly-lifted off-white. Same
+            // intent in both.
+            card_fill: c.surface0,
+            node_label: t.text,
+            type_label: t.text_subdued,
+            port_fill: c.overlay1,
+            port_stroke: c.surface2,
+            // Selection follows `tokens.accent` so the active-icon
+            // ring matches the rest of the app's accent chrome.
+            select_stroke: t.accent,
+            // Idle border: muted edge, same intent as the faint
+            // outline around any inactive widget.
+            inactive_stroke: c.overlay0,
+            // Icon-only ring uses `warning` — signals "this is
+            // decorative, doesn't carry connectors" via the same
+            // colour the app uses for other cautionary chrome.
+            icon_only_stroke: t.warning,
+        }
+    }
+}
+
+/// Fetch the theme snapshot stored for this frame by the canvas
+/// render entry. `None` when the canvas is rendered outside our
+/// panel (tests / demos); caller falls back to a default snapshot
+/// derived from `Theme::dark()`.
+fn canvas_theme_from_ctx(ctx: &egui::Context) -> CanvasThemeSnapshot {
+    let id = egui::Id::new("lunco.modelica.canvas_theme_snapshot");
+    ctx.data(|d| d.get_temp::<CanvasThemeSnapshot>(id))
+        .unwrap_or_else(|| {
+            CanvasThemeSnapshot::from_theme(&lunco_theme::Theme::dark())
+        })
+}
+
+/// Build the generic `lunco_canvas` layer theme (grid, selection halo,
+/// tool preview, zoom-bar overlay) from the active LunCoSim theme.
+/// Pushed to the canvas each frame so its built-in layers render in
+/// palette-matched colours instead of their hardcoded dark defaults.
+fn layer_theme_from(theme: &lunco_theme::Theme) -> lunco_canvas::CanvasLayerTheme {
+    let c = &theme.colors;
+    let t = &theme.tokens;
+    // Grid: dim overlay dot. Using overlay0 at low alpha reads on
+    // both Mocha (dark) and Latte (light) without competing with
+    // diagram content.
+    let grid = {
+        let g = c.overlay0;
+        egui::Color32::from_rgba_unmultiplied(g.r(), g.g(), g.b(), 60)
+    };
+    let rubber_fill = {
+        let a = t.accent;
+        egui::Color32::from_rgba_unmultiplied(a.r(), a.g(), a.b(), 40)
+    };
+    let shadow = {
+        let b = c.base;
+        egui::Color32::from_rgba_unmultiplied(b.r(), b.g(), b.b(), 110)
+    };
+    lunco_canvas::CanvasLayerTheme {
+        grid,
+        selection_outline: t.accent,
+        ghost_edge: t.accent,
+        snap_target: t.success,
+        rubber_band_fill: rubber_fill,
+        rubber_band_stroke: t.accent,
+        overlay_fill: c.surface0,
+        overlay_stroke: c.surface2,
+        overlay_shadow: shadow,
+        overlay_text: t.text,
+    }
+}
+
+/// Store a theme snapshot in the egui data cache under a well-known
+/// id. Counterpart to [`canvas_theme_from_ctx`].
+fn store_canvas_theme(ctx: &egui::Context, snap: CanvasThemeSnapshot) {
+    let id = egui::Id::new("lunco.modelica.canvas_theme_snapshot");
+    ctx.data_mut(|d| d.insert_temp(id, snap));
 }
 
 /// Per-component icon visual. Renders, in priority order:
@@ -130,6 +233,7 @@ impl NodeVisual for IconNodeVisual {
             egui::pos2(r.max.x, r.max.y),
         );
         let painter = ctx.ui.painter();
+        let theme_snap = canvas_theme_from_ctx(ctx.ui.ctx());
 
         // Always paint a solid card background *underneath* the SVG.
         // Why: MSL icons are outlined shapes — the SVG pixels inside
@@ -138,8 +242,7 @@ impl NodeVisual for IconNodeVisual {
         // its body. That reads as "the diagram is a sheet of glass"
         // rather than "icons are opaque tiles." Dymola/OMEdit both
         // paint each icon on its own opaque card for the same reason.
-        let card_fill = egui::Color32::from_rgb(48, 56, 72);
-        painter.rect_filled(rect, 6.0, card_fill);
+        painter.rect_filled(rect, 6.0, theme_snap.card_fill);
 
         // Priority 1: authored graphics from the class's `Icon`
         // annotation. Beats the SVG path so user-defined classes show
@@ -190,7 +293,7 @@ impl NodeVisual for IconNodeVisual {
                     egui::Align2::CENTER_CENTER,
                     &self.type_label,
                     egui::FontId::proportional(10.0),
-                    egui::Color32::from_rgb(200, 210, 225),
+                    theme_snap.type_label,
                 );
             }
         }
@@ -200,11 +303,11 @@ impl NodeVisual for IconNodeVisual {
         // (no connectors, visual-only) get a dashed border instead
         // of solid — a signal that the component isn't hookable.
         let stroke = if selected {
-            egui::Stroke::new(2.0, egui::Color32::from_rgb(120, 170, 255))
+            egui::Stroke::new(2.0, theme_snap.select_stroke)
         } else if self.icon_only {
-            egui::Stroke::new(1.0, egui::Color32::from_rgb(150, 130, 90))
+            egui::Stroke::new(1.0, theme_snap.icon_only_stroke)
         } else {
-            egui::Stroke::new(1.0, egui::Color32::from_rgb(90, 100, 120))
+            egui::Stroke::new(1.0, theme_snap.inactive_stroke)
         };
         if self.icon_only && !selected {
             // Dashed border via four side-segments sampled in
@@ -223,7 +326,7 @@ impl NodeVisual for IconNodeVisual {
                 egui::Align2::CENTER_BOTTOM,
                 &node.label,
                 egui::FontId::proportional(11.0),
-                egui::Color32::from_rgb(220, 225, 235),
+                theme_snap.node_label,
             );
         }
 
@@ -237,12 +340,12 @@ impl NodeVisual for IconNodeVisual {
             painter.circle_filled(
                 egui::pos2(p.x, p.y),
                 4.0,
-                egui::Color32::from_rgb(200, 210, 230),
+                theme_snap.port_fill,
             );
             painter.circle_stroke(
                 egui::pos2(p.x, p.y),
                 4.0,
-                egui::Stroke::new(1.0, egui::Color32::from_rgb(40, 50, 70)),
+                egui::Stroke::new(1.0, theme_snap.port_stroke),
             );
         }
     }
@@ -1719,6 +1822,25 @@ impl CanvasDiagramPanel {
             .filter(|s| s.enabled)
             .map(|s| lunco_canvas::SnapSettings { step: s.step });
 
+        // Theme snapshot: computed once per render and stashed in the
+        // egui context so the NodeVisual / EdgeVisual trait objects
+        // inside `canvas.ui` (which have no `World` access) can still
+        // pick theme-aware colours on draw.
+        {
+            let theme = world
+                .get_resource::<lunco_theme::Theme>()
+                .cloned()
+                .unwrap_or_else(lunco_theme::Theme::dark);
+            store_canvas_theme(
+                ui.ctx(),
+                CanvasThemeSnapshot::from_theme(&theme),
+            );
+            lunco_canvas::theme::store(
+                ui.ctx(),
+                layer_theme_from(&theme),
+            );
+        }
+
         let (response, events) = {
             let mut state = world.resource_mut::<CanvasDiagramState>();
             let docstate = state.get_mut(active_doc);
@@ -1760,12 +1882,16 @@ impl CanvasDiagramPanel {
         // on a drill-in parse (and the scene hasn't been populated
         // yet). Once the scene has content, any brief re-projection
         // from an edit swaps atomically without flashing.
+        let theme_snapshot_for_overlay = world
+            .get_resource::<lunco_theme::Theme>()
+            .cloned()
+            .unwrap_or_else(lunco_theme::Theme::dark);
         if let Some((class, secs)) = loading_info {
             if !scene_has_content {
-                render_drill_in_loading_overlay(ui, response.rect, &class, secs);
+                render_drill_in_loading_overlay(ui, response.rect, &class, secs, &theme_snapshot_for_overlay);
             }
         } else if projecting && !scene_has_content {
-            render_projecting_overlay(ui, response.rect);
+            render_projecting_overlay(ui, response.rect, &theme_snapshot_for_overlay);
         } else if show_empty_overlay {
             render_empty_diagram_overlay(ui, response.rect, world);
         }
@@ -2339,6 +2465,7 @@ fn render_drill_in_loading_overlay(
     canvas_rect: egui::Rect,
     class_name: &str,
     elapsed_secs: f32,
+    theme: &lunco_theme::Theme,
 ) {
     let card_w = 340.0;
     let card_h = 84.0;
@@ -2347,24 +2474,29 @@ fn render_drill_in_loading_overlay(
         egui::vec2(card_w, card_h),
     );
     let painter = ui.painter();
+    let shadow = {
+        let b = theme.colors.base;
+        egui::Color32::from_rgba_unmultiplied(b.r(), b.g(), b.b(), 100)
+    };
     painter.rect_filled(
         card_rect.translate(egui::vec2(0.0, 3.0)),
         8.0,
-        egui::Color32::from_rgba_premultiplied(0, 0, 0, 100),
+        shadow,
     );
-    painter.rect_filled(card_rect, 8.0, egui::Color32::from_rgb(34, 38, 48));
+    painter.rect_filled(card_rect, 8.0, theme.colors.surface0);
     painter.rect_stroke(
         card_rect,
         8.0,
-        egui::Stroke::new(1.0, egui::Color32::from_rgb(60, 70, 88)),
+        egui::Stroke::new(1.0, theme.colors.surface2),
         egui::StrokeKind::Outside,
     );
     let t = ui.ctx().input(|i| i.time) as f32;
     let spinner_center = egui::pos2(card_rect.min.x + 28.0, card_rect.center().y);
+    let accent = theme.tokens.accent;
     for i in 0..3 {
         let phase = (t * 2.5 - i as f32 * 0.4).rem_euclid(std::f32::consts::TAU);
         let alpha = ((phase.sin() * 0.5 + 0.5) * 255.0) as u8;
-        let col = egui::Color32::from_rgba_unmultiplied(140, 200, 255, alpha);
+        let col = egui::Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), alpha);
         painter.circle_filled(
             spinner_center + egui::vec2(i as f32 * 9.0 - 9.0, 0.0),
             3.5,
@@ -2387,7 +2519,7 @@ fn render_drill_in_loading_overlay(
         egui::Align2::LEFT_CENTER,
         header,
         egui::FontId::proportional(13.0),
-        egui::Color32::from_rgb(220, 225, 235),
+        theme.tokens.text,
     );
     // Trim long qualified names with ellipsis on the left so the
     // short class name stays visible.
@@ -2401,7 +2533,7 @@ fn render_drill_in_loading_overlay(
         egui::Align2::LEFT_CENTER,
         display,
         egui::FontId::monospace(11.0),
-        egui::Color32::from_rgb(180, 200, 225),
+        theme.tokens.text_subdued,
     );
     // Animating — request repaint so the spinner moves smoothly.
     ui.ctx().request_repaint();
@@ -2412,7 +2544,7 @@ fn render_drill_in_loading_overlay(
 /// Small "Projecting…" card centred on the canvas while an
 /// `AsyncComputeTaskPool` projection task is in flight. Includes
 /// a rotating dot so users can see the UI is responsive.
-fn render_projecting_overlay(ui: &mut egui::Ui, canvas_rect: egui::Rect) {
+fn render_projecting_overlay(ui: &mut egui::Ui, canvas_rect: egui::Rect, theme: &lunco_theme::Theme) {
     let card_w = 260.0;
     let card_h = 72.0;
     let card_rect = egui::Rect::from_center_size(
@@ -2420,16 +2552,20 @@ fn render_projecting_overlay(ui: &mut egui::Ui, canvas_rect: egui::Rect) {
         egui::vec2(card_w, card_h),
     );
     let painter = ui.painter();
+    let shadow = {
+        let b = theme.colors.base;
+        egui::Color32::from_rgba_unmultiplied(b.r(), b.g(), b.b(), 90)
+    };
     painter.rect_filled(
         card_rect.translate(egui::vec2(0.0, 3.0)),
         8.0,
-        egui::Color32::from_rgba_premultiplied(0, 0, 0, 90),
+        shadow,
     );
-    painter.rect_filled(card_rect, 8.0, egui::Color32::from_rgb(34, 38, 48));
+    painter.rect_filled(card_rect, 8.0, theme.colors.surface0);
     painter.rect_stroke(
         card_rect,
         8.0,
-        egui::Stroke::new(1.0, egui::Color32::from_rgb(60, 70, 88)),
+        egui::Stroke::new(1.0, theme.colors.surface2),
         egui::StrokeKind::Outside,
     );
 
@@ -2437,10 +2573,11 @@ fn render_projecting_overlay(ui: &mut egui::Ui, canvas_rect: egui::Rect) {
     // `ctx.input(|i| i.time)`. Frame-rate independent.
     let t = ui.ctx().input(|i| i.time) as f32;
     let spinner_center = egui::pos2(card_rect.min.x + 28.0, card_rect.center().y);
+    let accent = theme.tokens.accent;
     for i in 0..3 {
         let phase = (t * 2.5 - i as f32 * 0.4).rem_euclid(std::f32::consts::TAU);
         let alpha = ((phase.sin() * 0.5 + 0.5) * 255.0) as u8;
-        let col = egui::Color32::from_rgba_unmultiplied(140, 200, 255, alpha);
+        let col = egui::Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), alpha);
         painter.circle_filled(
             spinner_center + egui::vec2(i as f32 * 9.0 - 9.0, 0.0),
             3.0,
@@ -2452,7 +2589,7 @@ fn render_projecting_overlay(ui: &mut egui::Ui, canvas_rect: egui::Rect) {
         egui::Align2::LEFT_CENTER,
         "Loading resource…",
         egui::FontId::proportional(13.0),
-        egui::Color32::from_rgb(220, 225, 235),
+        theme.tokens.text,
     );
 }
 
@@ -2483,6 +2620,10 @@ fn render_empty_diagram_overlay(
     let Some(open) = world.resource::<WorkbenchState>().open_model.clone() else {
         return;
     };
+    let theme = world
+        .get_resource::<lunco_theme::Theme>()
+        .cloned()
+        .unwrap_or_else(lunco_theme::Theme::dark);
     let source = open.source.clone();
     let class_name = open
         .detected_name
@@ -2502,6 +2643,7 @@ fn render_empty_diagram_overlay(
         ui,
         canvas_rect,
         egui::vec2(440.0, 360.0),
+        &theme,
         |child| {
             // ── Hero strip ────────────────────────────────────────
             // Either the authored icon or a stylised type badge.
@@ -2519,6 +2661,7 @@ fn render_empty_diagram_overlay(
                     child.painter(),
                     hero_rect,
                     class_type.unwrap_or("model"),
+                    &theme,
                 );
             }
             child.add_space(8.0);
@@ -2528,14 +2671,14 @@ fn render_empty_diagram_overlay(
                 egui::RichText::new(&class_name)
                     .strong()
                     .size(15.0)
-                    .color(egui::Color32::from_rgb(225, 230, 240)),
+                    .color(theme.text_heading()),
             );
             if let Some(t) = class_type {
                 child.label(
                     egui::RichText::new(t)
                         .size(10.5)
                         .italics()
-                        .color(egui::Color32::from_rgb(150, 165, 190)),
+                        .color(theme.text_muted()),
                 );
             }
             if let Some(desc) = &description {
@@ -2543,7 +2686,7 @@ fn render_empty_diagram_overlay(
                 child.label(
                     egui::RichText::new(desc)
                         .size(11.0)
-                        .color(egui::Color32::from_rgb(190, 200, 220)),
+                        .color(theme.tokens.text),
                 );
             }
             child.add_space(8.0);
@@ -2551,9 +2694,9 @@ fn render_empty_diagram_overlay(
             child.add_space(6.0);
 
             // ── Named symbol bands ───────────────────────────────
-            paint_symbol_band(child, "Parameters", &param_names, counts.params);
-            paint_symbol_band(child, "Inputs", &input_names, counts.inputs);
-            paint_symbol_band(child, "Outputs", &output_names, counts.outputs);
+            paint_symbol_band(child, "Parameters", &param_names, counts.params, &theme);
+            paint_symbol_band(child, "Inputs", &input_names, counts.inputs, &theme);
+            paint_symbol_band(child, "Outputs", &output_names, counts.outputs, &theme);
 
             child.add_space(6.0);
             child.label(
@@ -2562,14 +2705,14 @@ fn render_empty_diagram_overlay(
                     counts.equations, counts.connects,
                 ))
                 .small()
-                .color(egui::Color32::from_rgb(140, 155, 175)),
+                .color(theme.text_muted()),
             );
             child.add_space(4.0);
             child.label(
                 egui::RichText::new("→ Switch to the Text tab to read / edit the source.")
                     .italics()
                     .size(10.0)
-                    .color(egui::Color32::from_rgb(130, 145, 165)),
+                    .color(theme.text_muted()),
             );
         },
     );
@@ -2717,7 +2860,13 @@ fn locate_class<'a>(
 
 /// Render a row showing a symbol band (e.g. "Parameters: tau, J, c
 /// + 3 more"). When the names list is empty, falls through to "—".
-fn paint_symbol_band(ui: &mut egui::Ui, label: &str, names: &[String], total: usize) {
+fn paint_symbol_band(
+    ui: &mut egui::Ui,
+    label: &str,
+    names: &[String],
+    total: usize,
+    theme: &lunco_theme::Theme,
+) {
     if total == 0 && names.is_empty() {
         return;
     }
@@ -2725,7 +2874,7 @@ fn paint_symbol_band(ui: &mut egui::Ui, label: &str, names: &[String], total: us
         ui.label(
             egui::RichText::new(format!("{label}:"))
                 .small()
-                .color(egui::Color32::from_rgb(150, 160, 180)),
+                .color(theme.text_muted()),
         );
         let shown = names.iter().take(6).cloned().collect::<Vec<_>>().join(", ");
         let suffix = if total > shown.len() && total > names.len().min(6) && names.len() > 6 {
@@ -2741,7 +2890,7 @@ fn paint_symbol_band(ui: &mut egui::Ui, label: &str, names: &[String], total: us
         ui.monospace(
             egui::RichText::new(display)
                 .small()
-                .color(egui::Color32::from_rgb(200, 220, 255)),
+                .color(theme.tokens.accent),
         );
     });
 }
@@ -2751,19 +2900,24 @@ fn paint_symbol_band(ui: &mut egui::Ui, label: &str, names: &[String], total: us
 /// letter — matches the [`crate::ui::browser_section`] type-badge
 /// palette so the canvas hero and the browser row read as the same
 /// "this is a model" affordance.
-fn paint_class_type_badge(painter: &egui::Painter, rect: egui::Rect, type_name: &str) {
-    use egui::Color32 as C;
-    let (letter, bg) = match type_name {
-        "model" => ("M", C::from_rgb(80, 130, 200)),
-        "block" => ("B", C::from_rgb(100, 160, 110)),
-        "class" => ("C", C::from_rgb(120, 130, 160)),
-        "connector" => ("X", C::from_rgb(220, 160, 80)),
-        "record" => ("R", C::from_rgb(170, 120, 180)),
-        "type" => ("T", C::from_rgb(150, 150, 150)),
-        "package" => ("P", C::from_rgb(190, 110, 110)),
-        "function" => ("F", C::from_rgb(110, 170, 200)),
-        _ => ("?", C::from_rgb(120, 120, 120)),
+fn paint_class_type_badge(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    type_name: &str,
+    theme: &lunco_theme::Theme,
+) {
+    let letter = match type_name {
+        "model" => "M",
+        "block" => "B",
+        "class" => "C",
+        "connector" => "X",
+        "record" => "R",
+        "type" => "T",
+        "package" => "P",
+        "function" => "F",
+        _ => "?",
     };
+    let bg = theme.class_badge_bg_by_keyword(type_name);
     let pill_w = rect.width().min(rect.height() * 1.4);
     let pill_h = rect.height().min(120.0);
     let pill = egui::Rect::from_center_size(rect.center(), egui::vec2(pill_w, pill_h));
@@ -2773,7 +2927,7 @@ fn paint_class_type_badge(painter: &egui::Painter, rect: egui::Rect, type_name: 
         egui::Align2::CENTER_CENTER,
         letter,
         egui::FontId::proportional(pill_h * 0.55),
-        C::WHITE,
+        theme.class_badge_fg(),
     );
 }
 

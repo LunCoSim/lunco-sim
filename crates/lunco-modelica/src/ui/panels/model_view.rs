@@ -983,6 +983,10 @@ fn extract_documentation(
 }
 
 fn render_icon_view(ui: &mut egui::Ui, world: &mut World) {
+    let theme = world
+        .get_resource::<lunco_theme::Theme>()
+        .cloned()
+        .unwrap_or_else(lunco_theme::Theme::dark);
     let (qualified, _source) = {
         let ws = world.resource::<WorkbenchState>();
         let Some(open) = ws.open_model.as_ref() else {
@@ -1026,13 +1030,18 @@ fn render_icon_view(ui: &mut egui::Ui, world: &mut World) {
     let painter = ui.painter();
     let rect = ui.available_rect_before_wrap();
 
-    // Diagram frame (Dymola's square coordinate box).
+    let frame_stroke_src = theme.colors.overlay1;
     painter.rect_stroke(
         rect.shrink(12.0),
         4.0,
         egui::Stroke::new(
             1.0,
-            egui::Color32::from_rgba_premultiplied(90, 100, 120, 120),
+            egui::Color32::from_rgba_unmultiplied(
+                frame_stroke_src.r(),
+                frame_stroke_src.g(),
+                frame_stroke_src.b(),
+                120,
+            ),
         ),
         egui::StrokeKind::Outside,
     );
@@ -1056,32 +1065,31 @@ fn render_icon_view(ui: &mut egui::Ui, world: &mut World) {
                 egui::Align2::CENTER_TOP,
                 &qualified,
                 egui::FontId::proportional(13.0),
-                egui::Color32::from_rgb(200, 210, 225),
+                theme.tokens.text,
             );
             return;
         }
     }
 
     // Fallback placeholder — the class has no known icon. Same
-    // centered-card pattern the empty-diagram overlay uses, via
-    // the shared [`placeholder::render_centered_card`] helper so
-    // both views stay visually aligned and the centering doesn't
-    // drift between them as features get added.
+    // centered-card pattern the empty-diagram overlay uses.
+    use crate::ui::theme::ModelicaThemeExt;
     crate::ui::panels::placeholder::render_centered_card(
         ui,
         rect,
         egui::vec2(380.0, 170.0),
+        &theme,
         |ui| {
             ui.label(
                 egui::RichText::new("🎨")
                     .size(36.0)
-                    .color(egui::Color32::from_rgb(120, 130, 150)),
+                    .color(theme.text_muted()),
             );
             ui.add_space(6.0);
             ui.label(
                 egui::RichText::new("No icon defined for this class")
                     .strong()
-                    .color(egui::Color32::from_rgb(220, 225, 235)),
+                    .color(theme.text_heading()),
             );
             ui.add_space(4.0);
             ui.label(
@@ -1092,7 +1100,7 @@ fn render_icon_view(ui: &mut egui::Ui, world: &mut World) {
                 )
                 .italics()
                 .size(11.0)
-                .color(egui::Color32::from_rgb(140, 155, 175)),
+                .color(theme.text_muted()),
             );
         },
     );
