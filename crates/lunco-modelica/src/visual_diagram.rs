@@ -142,6 +142,12 @@ pub struct DiagramNode {
     pub parameter_values: HashMap<String, String>,
     /// Canvas position.
     pub position: Pos2,
+    /// Optional explicit size in Modelica diagram coordinates (+Y up,
+    /// width × height). Populated from `Placement(transformation(extent))`
+    /// when the source carries one. `None` means the projector falls
+    /// back to the default 20×20 box.
+    #[serde(default)]
+    pub extent_size: Option<Pos2>,
     /// Whether the node is selected.
     pub selected: bool,
 }
@@ -193,6 +199,7 @@ impl VisualDiagram {
             component_def: def,
             parameter_values,
             position,
+            extent_size: None,
             selected: false,
         });
         id

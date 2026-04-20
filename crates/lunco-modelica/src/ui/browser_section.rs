@@ -33,7 +33,8 @@ use rumoca_phase_parse::parse_to_ast;
 use rumoca_session::parsing::ast::ClassDef;
 use rumoca_session::parsing::ClassType;
 
-use crate::ui::state::ModelicaDocumentRegistry;
+use crate::ui::panels::canvas_diagram::DrilledInClassNames;
+use crate::ui::state::{ModelicaDocumentRegistry, WorkbenchState};
 
 /// One Modelica class entry rendered in the tree.
 #[derive(Debug, Clone)]
@@ -138,6 +139,23 @@ impl BrowserSection for ModelicaSection {
             return;
         }
 
+        // What's currently in the foreground tab? Used to render that
+        // (doc, class) pair as selected so users see "I'm editing
+        // this." Active doc comes from `WorkbenchState.open_model`,
+        // active class from `DrilledInClassNames` keyed by that doc.
+        // When no class is drilled in we still highlight every
+        // top-level row of the active doc — answers "which doc am I
+        // looking at" even before any drill-in.
+        let active_doc: Option<DocumentId> = ctx
+            .world
+            .get_resource::<WorkbenchState>()
+            .and_then(|s| s.open_model.as_ref().and_then(|m| m.doc));
+        let active_qualified: Option<String> = active_doc.and_then(|d| {
+            ctx.world
+                .get_resource::<DrilledInClassNames>()
+                .and_then(|m| m.get(d).map(str::to_string))
+        });
+
         // Render only the Modelica hierarchy — the document/file is
         // not a Modelica concept and showing it as a parent row
         // duplicates the package name in the common single-class
@@ -167,7 +185,14 @@ impl BrowserSection for ModelicaSection {
                         continue;
                     }
                     for class in &entry.classes {
-                        render_class_row(ui, class, *doc_id, ctx);
+                        render_class_row(
+                            ui,
+                            class,
+                            *doc_id,
+                            active_doc,
+                            active_qualified.as_deref(),
+                            ctx,
+                        );
                     }
                 }
             });
@@ -251,18 +276,34 @@ fn collect_classes(
 /// Paint one class row. Recurses into children when the row is
 /// expanded. Click → [`BrowserAction::OpenLoadedClass`] keyed by the
 /// owning document's id.
+///
+/// `active_doc`/`active_qualified` describe what the foreground tab
+/// is currently editing; the matching row paints "selected" so users
+/// see at a glance which class they're on.
 fn render_class_row(
     ui: &mut egui::Ui,
     class: &ClassEntry,
     doc_id: DocumentId,
+    active_doc: Option<DocumentId>,
+    active_qualified: Option<&str>,
     ctx: &mut BrowserCtx<'_>,
 ) {
     let badge = type_badge(&class.kind);
+    let is_active = Some(doc_id) == active_doc
+        && active_qualified == Some(class.qualified_path.as_str());
 
     if class.children.is_empty() {
         ui.horizontal(|ui| {
             paint_badge(ui, badge);
-            let resp = ui.selectable_label(false, &class.short_name);
+            // `selectable_label`'s `selected` flag drives egui's own
+            // highlight chrome — same look as the active tab in the
+            // dock, so the visual language is consistent.
+            let label = if is_active {
+                egui::RichText::new(&class.short_name).strong()
+            } else {
+                egui::RichText::new(&class.short_name)
+            };
+            let resp = ui.selectable_label(is_active, label);
             if resp.clicked() {
                 ctx.actions.push(BrowserAction::OpenLoadedClass {
                     doc_id: doc_id.raw(),
@@ -275,13 +316,24 @@ fn render_class_row(
             resp.on_hover_text(&class.qualified_path);
         });
     } else {
-        let header_text = format!("{} {}", badge.letter, class.short_name);
+        let mut header_text =
+            egui::RichText::new(format!("{} {}", badge.letter, class.short_name));
+        if is_active {
+            header_text = header_text.strong();
+        }
         let header = egui::CollapsingHeader::new(header_text)
             .id_salt(("modelica_class", &class.qualified_path))
             .default_open(true);
         let resp = header.show(ui, |ui| {
             for child in &class.children {
-                render_class_row(ui, child, doc_id, ctx);
+                render_class_row(
+                    ui,
+                    child,
+                    doc_id,
+                    active_doc,
+                    active_qualified,
+                    ctx,
+                );
             }
         });
         if resp.header_response.clicked() {

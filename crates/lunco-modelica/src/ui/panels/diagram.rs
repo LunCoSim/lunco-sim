@@ -1744,6 +1744,48 @@ pub fn import_model_to_diagram_from_ast(
         }
     }
 
+    // Index every component in the projection scope by short name so
+    // the layout loop can walk rumoca's typed `annotation: Vec<Expression>`
+    // for each instance instead of pattern-matching source text.
+    // Scope is the target_class when set (drill-in tab), else every
+    // class in the file — same scope the source-text regex used to
+    // operate on.
+    let comp_by_short: HashMap<&str, &rumoca_session::parsing::ast::Component> = {
+        let mut map: HashMap<&str, &rumoca_session::parsing::ast::Component> =
+            HashMap::new();
+        if let Some(target) = target_class {
+            // Scope to the named class — search top-level and
+            // nested. First exact-name match wins (Modelica scope
+            // rules guarantee uniqueness inside a class).
+            'find: for (top_name, top) in ast.classes.iter() {
+                if top_name.as_str() == target {
+                    for (cname, comp) in top.components.iter() {
+                        map.insert(cname.as_str(), comp);
+                    }
+                    break 'find;
+                }
+                if let Some(nested) = top.classes.get(target) {
+                    for (cname, comp) in nested.components.iter() {
+                        map.insert(cname.as_str(), comp);
+                    }
+                    break 'find;
+                }
+            }
+        } else {
+            for (_n, top) in ast.classes.iter() {
+                for (cname, comp) in top.components.iter() {
+                    map.insert(cname.as_str(), comp);
+                }
+                for (_nn, nested) in top.classes.iter() {
+                    for (cname, comp) in nested.components.iter() {
+                        map.insert(cname.as_str(), comp);
+                    }
+                }
+            }
+        }
+        map
+    };
+
     // Place nodes in a grid layout (fallback for unannotated components)
     let node_spacing_x = 200.0;
     let node_spacing_y = 150.0;
@@ -1779,22 +1821,29 @@ pub fn import_model_to_diagram_from_ast(
 
         if let Some(def) = component_def {
             let mut pos = None;
-            
-            // Try to find annotation coordinate for this instance
-            let safe_name = regex::escape(short_name);
-            let pattern = safe_name + r"(?:\s*\([^)]*\))?\s+annotation\s*\(\s*Placement\s*\(\s*transformation\s*\(\s*extent\s*=\s*\{\{\s*([-\d\.]+)\s*,\s*([-\d\.]+)\s*\}\s*,\s*\{\s*([-\d\.]+)\s*,\s*([-\d\.]+)\s*\}\}\s*\)\s*\)\s*\)";
-            if let Ok(re) = regex::Regex::new(&pattern) {
-                if let Some(cap) = re.captures(source) {
-                    if let (Ok(x1), Ok(y1), Ok(x2), Ok(y2)) = (
-                        cap[1].parse::<f32>(),
-                        cap[2].parse::<f32>(),
-                        cap[3].parse::<f32>(),
-                        cap[4].parse::<f32>(),
-                    ) {
-                        let x = (x1 + x2) / 2.0;
-                        let y = -((y1 + y2) / 2.0); // Modelica is +UP, Snarl is +DOWN
-                        pos = Some(egui::Pos2::new(x, y));
-                    }
+            let mut size = None;
+
+            // Read placement from rumoca's typed annotation tree
+            // instead of pattern-matching source text. Robust against
+            // whitespace, comments, multi-line layouts, and (when we
+            // add it) origin/rotation. Falls through to the grid
+            // fallback below when no Placement is authored.
+            if let Some(comp) = comp_by_short.get(short_name) {
+                if let Some(placement) =
+                    crate::annotations::extract_placement(&comp.annotation)
+                {
+                    let extent = placement.transformation.extent;
+                    let x = ((extent.p1.x + extent.p2.x) * 0.5) as f32;
+                    let y = -(((extent.p1.y + extent.p2.y) * 0.5) as f32); // +Y up → +Y down
+                    // Add the transformation's origin offset (also
+                    // Modelica +Y up, hence the same flip).
+                    let ox = placement.transformation.origin.x as f32;
+                    let oy = placement.transformation.origin.y as f32;
+                    pos = Some(egui::Pos2::new(x + ox, y - oy));
+                    size = Some(egui::Pos2::new(
+                        (extent.p2.x - extent.p1.x).abs() as f32,
+                        (extent.p2.y - extent.p1.y).abs() as f32,
+                    ));
                 }
             }
 
@@ -1808,9 +1857,9 @@ pub fn import_model_to_diagram_from_ast(
 
             let node_id = diagram.add_node(def.clone(), pos);
 
-            // Override the auto-generated instance name with the one from the source
             if let Some(diagram_node) = diagram.get_node_mut(node_id) {
                 diagram_node.instance_name = short_name.to_string();
+                diagram_node.extent_size = size;
             }
         }
     }

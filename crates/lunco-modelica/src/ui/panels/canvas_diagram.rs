@@ -502,13 +502,27 @@ use coords::{canvas_to_modelica, ModelicaPos};
 /// Fallback port layout when the component has no annotated port
 /// positions. Alternates left / right edges at the vertical centre
 /// for the first two ports (the common two-terminal shape), then
-/// walks up both sides for any additional ports.
-fn port_fallback_offset(index: usize, _total: usize) -> (f32, f32) {
+/// walks up both sides for any additional ports. Uses default icon
+/// dimensions; for sized icons see [`port_fallback_offset_for_size`].
+fn port_fallback_offset(index: usize, total: usize) -> (f32, f32) {
+    port_fallback_offset_for_size(index, total, ICON_W, ICON_H)
+}
+
+/// Same fallback layout as [`port_fallback_offset`] but parameterised
+/// by the icon's actual width/height — needed once Placement-driven
+/// node sizing makes per-instance dimensions vary instead of always
+/// being 20×20.
+fn port_fallback_offset_for_size(
+    index: usize,
+    _total: usize,
+    icon_w: f32,
+    icon_h: f32,
+) -> (f32, f32) {
     let side_left = index % 2 == 0;
     let row = index / 2; // 0 → middle, 1 → above, 2 → even higher
-    let cy = ICON_H * 0.5 - (row as f32) * (ICON_H * 0.25);
-    let cx = if side_left { 0.0 } else { ICON_W };
-    (cx, cy.clamp(0.0, ICON_H))
+    let cy = icon_h * 0.5 - (row as f32) * (icon_h * 0.25);
+    let cx = if side_left { 0.0 } else { icon_w };
+    (cx, cy.clamp(0.0, icon_h))
 }
 
 /// Regex-scan `connect(a.b, c.d);` patterns in `source` and add
@@ -608,6 +622,15 @@ fn project_scene(diagram: &VisualDiagram) -> (Scene, HashMap<DiagramNodeId, Canv
         // and right for the classic two-terminal electrical shape,
         // extending up for more ports. Matches what OMEdit does
         // when Placement annotations are missing.
+        // Compute the per-instance icon box up front so port offsets
+        // map onto the actual rect, not the default-size constants.
+        // Authored Placement → that size; unannotated palette adds →
+        // the standard 20×20 fallback.
+        let (icon_w_local, icon_h_local) = match node.extent_size {
+            Some(e) => (e.x.abs().max(4.0), e.y.abs().max(4.0)),
+            None => (ICON_W, ICON_H),
+        };
+
         let n_ports = node.component_def.ports.len();
         let ports: Vec<CanvasPort> = node
             .component_def
@@ -616,10 +639,10 @@ fn project_scene(diagram: &VisualDiagram) -> (Scene, HashMap<DiagramNodeId, Canv
             .enumerate()
             .map(|(i, p)| {
                 let (lx, ly) = if p.x == 0.0 && p.y == 0.0 {
-                    port_fallback_offset(i, n_ports)
+                    port_fallback_offset_for_size(i, n_ports, icon_w_local, icon_h_local)
                 } else {
-                    let lx = ((p.x + 100.0) / 200.0) * ICON_W;
-                    let ly = ((100.0 - p.y) / 200.0) * ICON_H;
+                    let lx = ((p.x + 100.0) / 200.0) * icon_w_local;
+                    let ly = ((100.0 - p.y) / 200.0) * icon_h_local;
                     (lx, ly)
                 };
                 CanvasPort {
@@ -645,9 +668,9 @@ fn project_scene(diagram: &VisualDiagram) -> (Scene, HashMap<DiagramNodeId, Canv
         scene.insert_node(CanvasNode {
             id: cid,
             rect: CanvasRect::from_min_size(
-                CanvasPos::new(wx - ICON_W * 0.5, wy - ICON_H * 0.5),
-                ICON_W,
-                ICON_H,
+                CanvasPos::new(wx - icon_w_local * 0.5, wy - icon_h_local * 0.5),
+                icon_w_local,
+                icon_h_local,
             ),
             kind: "modelica.icon".into(),
             data: serde_json::json!({

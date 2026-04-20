@@ -170,19 +170,14 @@ impl Workspace for AnalyzeWorkspace {
     fn title(&self) -> String { "📊 Analyze".into() }
     fn apply(&self, layout: &mut WorkbenchLayout) {
         layout.set_activity_bar(false);
-        // Side dock holds two browser tabs:
-        //   1. The legacy `PackageBrowserPanel` (MSL palette + bundled
-        //      examples + open files), kept until the Twin Browser
-        //      reaches feature parity.
-        //   2. The new `TwinBrowserPanel`, which surfaces the open
-        //      Twin's contents through pluggable per-domain sections
-        //      (Files, Modelica classes today; USD, SysML later).
-        // Both visible from launch — users can drag-detach or close
-        // either; the menu's Panels list re-docks on demand.
-        layout.set_side_browser_tabs(vec![
-            PanelId("modelica_package_browser"),
-            lunco_workbench::TWIN_BROWSER_PANEL_ID,
-        ]);
+        // Side dock = Twin Browser only. The legacy
+        // `PackageBrowserPanel` stays registered (View → Panels can
+        // re-dock it) but is not docked by default — its remaining
+        // unique features (MSL palette, drag-to-instantiate) will
+        // migrate into the Twin Browser as a future `MslSection`.
+        // Side-by-side dock would just present users with two
+        // browsers solving the same job.
+        layout.set_side_browser(Some(lunco_workbench::TWIN_BROWSER_PANEL_ID));
         // Center is seeded with no singleton tab — model views are
         // multi-instance tabs opened dynamically by the Package Browser
         // (one tab per open document). An app that boots with a
