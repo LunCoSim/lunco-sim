@@ -145,10 +145,12 @@ pub struct ModelicaCommandsPlugin;
 impl Plugin for ModelicaCommandsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<CloseDialogState>()
+            .init_resource::<PendingCloseAfterSave>()
             .add_observer(on_undo_document)
             .add_observer(on_redo_document)
             .add_observer(on_save_document)
             .add_observer(on_save_as_document)
+            .add_observer(finish_close_after_save)
             .add_observer(on_close_document)
             .add_observer(on_document_closed_cleanup)
             .add_observer(on_compile_model)
@@ -192,6 +194,42 @@ pub struct CloseDialogState {
 /// Drain `PendingTabCloses` from `lunco_workbench`. Clean docs close
 /// immediately; dirty docs get queued for the user-confirmation modal.
 ///
+/// Documents for which the user chose **Save** in the close
+/// confirmation dialog. Once each doc fires its `DocumentSaved`, the
+/// close completes; if the save is cancelled (Save-As picker dismissed
+/// for an Untitled) the doc stays in place and the tab keeps living,
+/// matching VS Code's behaviour.
+#[derive(Resource, Default)]
+pub struct PendingCloseAfterSave {
+    docs: std::collections::HashSet<DocumentId>,
+}
+
+impl PendingCloseAfterSave {
+    fn queue(&mut self, doc: DocumentId) {
+        self.docs.insert(doc);
+    }
+    fn take(&mut self, doc: DocumentId) -> bool {
+        self.docs.remove(&doc)
+    }
+}
+
+/// Observer: after a `DocumentSaved`, finish any close that was
+/// waiting on this save. Fires `CloseTab` + `CloseDocument` in order.
+fn finish_close_after_save(
+    trigger: On<lunco_doc_bevy::DocumentSaved>,
+    mut pending: ResMut<PendingCloseAfterSave>,
+    mut commands: Commands,
+) {
+    let doc = trigger.event().doc;
+    if pending.take(doc) {
+        commands.trigger(lunco_workbench::CloseTab {
+            kind: crate::ui::panels::model_view::MODEL_VIEW_KIND,
+            instance: doc.raw(),
+        });
+        commands.trigger(CloseDocument { doc });
+    }
+}
+
 /// Runs on `Update`, so it picks up both the tab × button (queued by
 /// the workbench's `on_close`) and Ctrl+W (pushed by the
 /// EditorIntent::Close resolver below).
@@ -233,6 +271,7 @@ fn render_close_dialogs(
     mut egui_ctx: bevy_egui::EguiContexts,
     registry: Res<ModelicaDocumentRegistry>,
     mut dialogs: ResMut<CloseDialogState>,
+    mut pending_save_close: ResMut<PendingCloseAfterSave>,
     mut commands: Commands,
 ) {
     let Ok(ctx) = egui_ctx.ctx_mut() else {
@@ -250,7 +289,11 @@ fn render_close_dialogs(
         let document = host.document();
         let display_name = document.origin().display_name();
         let is_untitled = document.origin().is_untitled();
-        let can_save_directly = !is_untitled && !document.is_read_only();
+        let is_read_only = document.is_read_only();
+        // Read-only library classes can't be saved at all; the user's
+        // only honest options are Don't Save or Cancel. Untitled docs
+        // route their Save through Save-As → the picker.
+        let can_save = !is_read_only;
 
         enum DialogAction {
             None,
@@ -279,16 +322,24 @@ fn render_close_dialogs(
                 if is_untitled {
                     ui.add_space(4.0);
                     ui.colored_label(
+                        egui::Color32::from_rgb(180, 180, 200),
+                        "This model has never been saved — picking Save \
+                         will open a Save-As dialog to bind it to a file.",
+                    );
+                }
+                if is_read_only {
+                    ui.add_space(4.0);
+                    ui.colored_label(
                         egui::Color32::from_rgb(200, 150, 50),
-                        "This is an Untitled model. Save-As is not \
-                         implemented yet, so the only options are Don't \
-                         Save or Cancel.",
+                        "This is a read-only library class; Save is \
+                         unavailable. Use Duplicate to Workspace if you \
+                         want to keep your edits.",
                     );
                 }
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     let save_btn = ui.add_enabled(
-                        can_save_directly,
+                        can_save,
                         egui::Button::new(egui::RichText::new("Save").strong()),
                     );
                     if save_btn.clicked() {
@@ -312,14 +363,13 @@ fn render_close_dialogs(
                 survivors.push(doc);
             }
             DialogAction::Save => {
-                // Save, then close. Observers fire in order on the
-                // next command-flush; save runs before close.
+                // Queue the close to run *after* the save completes —
+                // for Untitled docs the save opens a picker that the
+                // user may cancel, in which case the close must NOT
+                // proceed. `finish_close_after_save` observer fires
+                // CloseTab+CloseDocument when DocumentSaved lands.
+                pending_save_close.queue(doc);
                 commands.trigger(SaveDocument { doc });
-                commands.trigger(lunco_workbench::CloseTab {
-                    kind: crate::ui::panels::model_view::MODEL_VIEW_KIND,
-                    instance: doc.raw(),
-                });
-                commands.trigger(CloseDocument { doc });
             }
             DialogAction::DontSave => {
                 commands.trigger(lunco_workbench::CloseTab {
