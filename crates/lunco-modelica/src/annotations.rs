@@ -382,10 +382,95 @@ pub fn extract_icon(annotations: &[Expression]) -> Option<Icon> {
 /// 4. `Modelica.Clocked.ClockSignals.PartialLogicalClock`
 /// 5. `Modelica.Clocked.PartialLogicalClock`
 /// 6. `Modelica.PartialLogicalClock`
-fn build_extends_candidates(class_name: &str, base_name: &str) -> Vec<String> {
+fn build_extends_candidates(
+    class_name: &str,
+    base_name: &str,
+    imports: &[rumoca_session::parsing::ast::Import],
+) -> Vec<String> {
     let mut out = Vec::new();
     // 1. As-given.
     out.push(base_name.to_string());
+
+    // 2. Import-alias expansion (MLS §13.2.1). Takes precedence over
+    //    scope-chain because imports are explicit user intent. The
+    //    head-segment of `base_name` is what imports bind against;
+    //    the remaining tail is appended to the import's resolved
+    //    target path.
+    //
+    //    Examples (head="SI", tail="Voltage" from `extends SI.Voltage`):
+    //     - `import SI = Modelica.Units.SI;`     → Modelica.Units.SI.Voltage
+    //     - `import Modelica.Units.SI;`          → Modelica.Units.SI.Voltage (qualified uses last segment)
+    //     - `import Modelica.Units.SI.*;`        → Modelica.Units.SI.SI.Voltage — wrong; for `.*`, only bare (head-only) names match
+    //     - `import Modelica.Units.SI.{Voltage};`→ Modelica.Units.SI.Voltage (if head="Voltage")
+    let (head, tail) = match base_name.split_once('.') {
+        Some((h, t)) => (h, Some(t)),
+        None => (base_name, None),
+    };
+    for imp in imports {
+        use rumoca_session::parsing::ast::Import;
+        let import_path_name = |path: &rumoca_session::parsing::ast::Name| -> String {
+            path.name
+                .iter()
+                .map(|t| t.text.as_ref())
+                .collect::<Vec<_>>()
+                .join(".")
+        };
+        match imp {
+            Import::Renamed { alias, path, .. } => {
+                if alias.text.as_ref() == head {
+                    let resolved = import_path_name(path);
+                    let full = match tail {
+                        Some(t) => format!("{resolved}.{t}"),
+                        None => resolved,
+                    };
+                    if full != base_name {
+                        out.push(full);
+                    }
+                }
+            }
+            Import::Qualified { path, .. } => {
+                let last = path
+                    .name
+                    .last()
+                    .map(|t| t.text.as_ref())
+                    .unwrap_or("");
+                if last == head {
+                    let resolved = import_path_name(path);
+                    let full = match tail {
+                        Some(t) => format!("{resolved}.{t}"),
+                        None => resolved,
+                    };
+                    if full != base_name {
+                        out.push(full);
+                    }
+                }
+            }
+            Import::Unqualified { path, .. } => {
+                // `import A.B.*;` brings every name in `A.B` into the
+                // local scope as a bare identifier. Only matches when
+                // `base_name` has no dots (tail is None).
+                if tail.is_none() {
+                    let resolved = import_path_name(path);
+                    let full = format!("{resolved}.{head}");
+                    if full != base_name {
+                        out.push(full);
+                    }
+                }
+            }
+            Import::Selective { path, names, .. } => {
+                if names.iter().any(|n| n.text.as_ref() == head) {
+                    let resolved = import_path_name(path);
+                    let full = match tail {
+                        Some(t) => format!("{resolved}.{head}.{t}"),
+                        None => format!("{resolved}.{head}"),
+                    };
+                    if full != base_name {
+                        out.push(full);
+                    }
+                }
+            }
+        }
+    }
 
     // Parent packages of the class doing the extending, innermost
     // first. For `A.B.C.D.E` we want prefixes `A.B.C.D`, `A.B.C`,
@@ -483,7 +568,7 @@ where
         // partially qualified) get the same treatment — we also try
         // the name as-written first so e.g. `Modelica.Icons.Partial`
         // is used verbatim before any scope-chain rewriting.
-        let candidates = build_extends_candidates(class_name, &base_name);
+        let candidates = build_extends_candidates(class_name, &base_name, &class.imports);
         let mut hit: Option<(String, std::sync::Arc<rumoca_session::parsing::ast::ClassDef>)> = None;
         for candidate in candidates {
             if let Some(base_class) = resolver(&candidate) {
@@ -1180,6 +1265,34 @@ end B;
         let mut visited = HashSet::new();
         // Must terminate.
         let _ = extract_icon_inherited("A", class_a, &mut resolver, &mut visited);
+    }
+
+    #[test]
+    fn extends_import_alias_resolves() {
+        // `extends SI.Voltage;` with `import SI = Modelica.Units.SI;`
+        // must expand to `Modelica.Units.SI.Voltage` as a candidate
+        // before scope-chain fallbacks.
+        let src = r#"
+model User
+  import SI = Modelica.Units.SI;
+  extends SI.Voltage;
+end User;
+"#;
+        let ast = parse_source(src);
+        let user = ast.classes.get("User").expect("User class");
+        let ext = &user.extends[0];
+        let base_name: String = ext
+            .base_name
+            .name
+            .iter()
+            .map(|t| t.text.as_ref())
+            .collect::<Vec<_>>()
+            .join(".");
+        let cands = build_extends_candidates("User", &base_name, &user.imports);
+        assert!(
+            cands.iter().any(|c| c == "Modelica.Units.SI.Voltage"),
+            "expected import-alias expansion, got {cands:?}"
+        );
     }
 
     #[test]
