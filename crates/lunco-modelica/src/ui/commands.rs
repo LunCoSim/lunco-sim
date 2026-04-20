@@ -233,11 +233,13 @@ impl Plugin for ModelicaCommandsPlugin {
             .register_type::<SetZoom>()
             .register_type::<FitCanvas>()
             .register_type::<OpenExample>()
+            .register_type::<OpenClass>()
             .add_observer(on_focus_document_by_name)
             .add_observer(on_set_view_mode)
             .add_observer(on_set_zoom)
             .add_observer(on_fit_canvas)
             .add_observer(on_open_example)
+            .add_observer(on_open_class)
             .add_observer(resolve_editor_intent)
             .add_observer(resolve_new_document_intent)
             .add_systems(
@@ -1669,4 +1671,22 @@ fn on_open_example(
     // event directly; this observer just re-fires.
     let qualified = trigger.event().qualified.clone();
     commands.trigger(OpenExampleInWorkspace { qualified });
+}
+
+/// Open a class in a **read-only** tab — the same path the canvas's
+/// double-click-to-drill-in gesture uses. Unlike [`OpenExample`] (which
+/// duplicates into an editable Untitled doc), this opens the class
+/// directly as an `msl://` tab for exploration. Reuses an existing
+/// tab if the same class is already open.
+#[derive(Event, Reflect, Clone, Debug, Default)]
+#[reflect(Event, Default)]
+pub struct OpenClass {
+    pub qualified: String,
+}
+
+fn on_open_class(trigger: On<OpenClass>, mut commands: Commands) {
+    let qualified = trigger.event().qualified.clone();
+    commands.queue(move |world: &mut World| {
+        crate::ui::panels::canvas_diagram::drill_into_class(world, &qualified);
+    });
 }

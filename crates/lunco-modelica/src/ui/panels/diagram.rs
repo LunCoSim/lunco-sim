@@ -1486,8 +1486,15 @@ fn scan_component_declarations(source: &str) -> Vec<(String, String)> {
     // skipping its component. `captures_iter` is non-overlapping, so
     // any whitespace we consume here is unavailable to the next
     // candidate match.
+    // `redeclare` is a legal prefix on component decls: it appears on
+    // the overriding-form `redeclare <Class> inst;` (inside a modifier
+    // block or as a top-level decl inside a class extending a
+    // replaceable base). Swallow it so the regex moves on to the
+    // actual `<Class>` that follows — otherwise the first segment
+    // becomes "redeclare", gets shunted into the KEYWORDS reject
+    // list, and the component disappears from the diagram.
     let re = regex::Regex::new(
-        r"(?m)^\s*(?:(?:flow|stream|input|output|parameter|constant|discrete|inner|outer|replaceable|final)\s+)*((?:[A-Za-z_]\w*\.)*[A-Za-z_]\w*)\s+([A-Za-z_]\w*)\b"
+        r"(?m)^\s*(?:(?:redeclare|flow|stream|input|output|parameter|constant|discrete|inner|outer|replaceable|final)\s+)*((?:[A-Za-z_]\w*\.)*[A-Za-z_]\w*)\s+([A-Za-z_]\w*)\b"
     ).expect("scan regex compiles");
     // Keywords that can appear at column 0 inside a class body and
     // therefore look like "type name" starts under a naive regex.
@@ -2048,6 +2055,9 @@ fn register_local_class(
     if icon.is_none() {
         return;
     }
+    use rumoca_session::parsing::ast::ClassType;
+    let is_expandable_connector = matches!(class_def.class_type, ClassType::Connector)
+        && class_def.expandable;
     out.insert(
         short_name.to_string(),
         MSLComponentDef {
@@ -2061,6 +2071,7 @@ fn register_local_class(
             ports: Vec::new(),
             parameters: Vec::new(),
             icon_graphics: icon,
+            is_expandable_connector,
         },
     );
 }
@@ -3133,5 +3144,93 @@ fn draw_model_icon_block(
         egui::FontId::proportional(11.0),
         muted,
     );
+}
+
+#[cfg(test)]
+mod scan_tests {
+    use super::scan_component_declarations;
+
+    #[test]
+    fn redeclare_prefix_swallowed_on_component_decl() {
+        // `redeclare Class inst;` should yield ("Class", "inst"),
+        // not drop the decl because "redeclare" got shunted into the
+        // keyword reject list.
+        let src = r#"
+model M
+  redeclare Modelica.Blocks.Sources.Step src;
+end M;
+"#;
+        let scanned = scan_component_declarations(src);
+        assert_eq!(
+            scanned,
+            vec![("Modelica.Blocks.Sources.Step".to_string(), "src".to_string())]
+        );
+    }
+
+    #[test]
+    fn replaceable_prefix_still_works() {
+        let src = r#"
+model M
+  replaceable Modelica.Blocks.Sources.Sine gen;
+end M;
+"#;
+        let scanned = scan_component_declarations(src);
+        assert_eq!(
+            scanned,
+            vec![("Modelica.Blocks.Sources.Sine".to_string(), "gen".to_string())]
+        );
+    }
+
+    use super::*;
+
+    fn parse_src(src: &str) -> rumoca_session::parsing::ast::StoredDefinition {
+        rumoca_phase_parse::parse_to_syntax(src, "test.mo")
+            .best_effort()
+            .clone()
+    }
+
+    #[test]
+    fn expandable_connector_flag_set_on_local_class_def() {
+        let src = r#"
+expandable connector Bus
+  annotation(Icon(graphics={Rectangle(extent={{-10,-10},{10,10}})}));
+end Bus;
+"#;
+        let ast = parse_src(src);
+        let class = ast.classes.get("Bus").expect("Bus class");
+        let mut out = std::collections::HashMap::new();
+        register_local_class(&mut out, "Bus", class, &ast);
+        let def = out.get("Bus").expect("Bus registered");
+        assert!(def.is_expandable_connector, "expected expandable connector flag");
+    }
+
+    #[test]
+    fn regular_connector_not_flagged_as_expandable() {
+        let src = r#"
+connector Flange
+  annotation(Icon(graphics={Rectangle(extent={{-10,-10},{10,10}})}));
+end Flange;
+"#;
+        let ast = parse_src(src);
+        let class = ast.classes.get("Flange").expect("Flange class");
+        let mut out = std::collections::HashMap::new();
+        register_local_class(&mut out, "Flange", class, &ast);
+        let def = out.get("Flange").expect("Flange registered");
+        assert!(!def.is_expandable_connector);
+    }
+
+    #[test]
+    fn redeclare_replaceable_together() {
+        let src = r#"
+model M
+  redeclare replaceable Modelica.Blocks.Sources.Ramp gen;
+end M;
+"#;
+        let scanned = scan_component_declarations(src);
+        assert_eq!(
+            scanned,
+            vec![("Modelica.Blocks.Sources.Ramp".to_string(), "gen".to_string())]
+        );
+    }
 }
 

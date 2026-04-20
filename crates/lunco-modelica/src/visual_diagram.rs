@@ -128,6 +128,12 @@ pub struct MSLComponentDef {
     /// pre-rasterised SVG icons.
     #[serde(default)]
     pub icon_graphics: Option<crate::annotations::Icon>,
+    /// `expandable connector` class type (MLS §9.1.3). Rendered with
+    /// a dashed border on the canvas so users can distinguish them
+    /// from regular connectors — they auto-collect variables across
+    /// connected instances and have very different semantics.
+    #[serde(default)]
+    pub is_expandable_connector: bool,
 }
 
 /// A node instance placed on the visual canvas.

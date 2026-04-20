@@ -209,6 +209,12 @@ struct IconNodeVisual {
     /// the component is decorative. Set by the projector via the
     /// node's `data.icon_only` flag.
     icon_only: bool,
+    /// `expandable connector` class (MLS §9.1.3). Rendered with a
+    /// dashed border in an accent colour so users can distinguish
+    /// them from regular connectors — expandable connectors collect
+    /// variables across connections dynamically and have different
+    /// semantics.
+    expandable_connector: bool,
     /// Decoded graphics from the class's `Icon` annotation. When
     /// present, takes precedence over the SVG icon path so user
     /// classes show their authored graphics instead of falling back
@@ -322,10 +328,15 @@ impl NodeVisual for IconNodeVisual {
             egui::Stroke::new(2.0, theme_snap.select_stroke)
         } else if self.icon_only {
             egui::Stroke::new(1.0, theme_snap.icon_only_stroke)
+        } else if self.expandable_connector {
+            // Accent colour (same family as the select stroke) so the
+            // dashed border is visually distinct from icon-only.
+            egui::Stroke::new(1.5, theme_snap.select_stroke)
         } else {
             egui::Stroke::new(1.0, theme_snap.inactive_stroke)
         };
-        if self.icon_only && !selected {
+        let wants_dashed = (self.icon_only || self.expandable_connector) && !selected;
+        if wants_dashed {
             // Dashed border via four side-segments sampled in
             // short dash+gap runs. Cheap (12-16 line_segment calls
             // per node) and looks right at all zoom levels because
@@ -756,6 +767,10 @@ fn build_registry() -> VisualRegistry {
             .get("icon_only")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
+        let expandable_connector = data
+            .get("expandable_connector")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
         // `icon_graphics` is the decoded Icon annotation. Missing /
         // null on MSL components — they keep using the SVG path.
         let icon_graphics = data
@@ -790,6 +805,7 @@ fn build_registry() -> VisualRegistry {
             class_name: type_label,
             icon_asset,
             icon_only,
+            expandable_connector,
             icon_graphics,
             rotation_deg,
             mirror_x,
@@ -1097,6 +1113,12 @@ fn project_scene(diagram: &VisualDiagram) -> (Scene, HashMap<DiagramNodeId, Canv
                 "icon_only": crate::class_cache::is_icon_only_class(
                     &node.component_def.msl_path,
                 ),
+                // `expandable connector` (MLS §9.1.3) — rendered with
+                // a dashed accent border. Set by the projector from
+                // the class-def's `expandable` flag via
+                // `register_local_class`; MSL palette entries carry
+                // the flag through the MSLComponentDef.
+                "expandable_connector": node.component_def.is_expandable_connector,
                 // Decoded `Icon(graphics={...})` annotation for the
                 // class, if the projector extracted one. Takes
                 // precedence over the SVG fallback in
@@ -3333,17 +3355,15 @@ pub fn drive_drill_in_loads(
 /// and the source is applied via `ReplaceSource` when the read
 /// completes. This matches what users expect: the tab opens, a
 /// spinner says "loading", content lands when it's ready.
-fn drill_into_class(world: &mut World, qualified: &str) {
-    if !qualified.starts_with("Modelica.") {
-        bevy::log::info!(
-            "[CanvasDiagram] drill-in skipped — `{}` is not an MSL class (user classes TBD)",
-            qualified
-        );
-        return;
-    }
-    let Some(file_path) = crate::class_cache::resolve_msl_class_path(qualified) else {
+pub fn drill_into_class(world: &mut World, qualified: &str) {
+    // Try the palette-built index first (covers curated MSL classes),
+    // then fall through to the filesystem walker so any class under
+    // `<msl>/**` resolves — not just the ones in the palette.
+    let file_path = crate::class_cache::resolve_msl_class_path(qualified)
+        .or_else(|| crate::class_cache::locate_msl_file(qualified));
+    let Some(file_path) = file_path else {
         bevy::log::warn!(
-            "[CanvasDiagram] drill-in: could not locate MSL file for `{}`",
+            "[CanvasDiagram] drill-in: could not locate a file for `{}` (user classes TBD — only MSL-backed drill-in for now)",
             qualified
         );
         return;
