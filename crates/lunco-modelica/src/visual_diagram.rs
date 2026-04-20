@@ -140,36 +140,40 @@ pub struct DiagramNode {
     pub component_def: MSLComponentDef,
     /// Parameter values (name → value).
     pub parameter_values: HashMap<String, String>,
-    /// Canvas position.
+    /// Canvas-world centre of the icon — kept as the authoritative
+    /// drag target. The full icon-local → canvas-world transform is
+    /// in [`icon_transform`](Self::icon_transform); this field
+    /// duplicates the translation part for drag handlers that don't
+    /// want to do matrix math. Use [`set_position`](Self::set_position)
+    /// to keep both consistent.
     pub position: Pos2,
-    /// Optional explicit size in Modelica diagram coordinates (+Y up,
-    /// width × height). Populated from `Placement(transformation(extent))`
-    /// when the source carries one. `None` means the projector falls
-    /// back to the default 20×20 box.
+    /// Single affine transform from this node's icon-local Modelica
+    /// coords (-100..100, +Y up) to canvas world coords (+Y down).
+    /// Encodes mirror, rotation, scale, and translation in one
+    /// matrix — every per-feature field this used to host
+    /// (`extent_size`/`rotation_degrees`/`mirror_x`/`mirror_y`) is
+    /// folded into this one struct. The canvas projector uses it for
+    /// port positioning, edge-stub directions, the icon's bounding
+    /// rect, and (eventually) the icon body itself.
     #[serde(default)]
-    pub extent_size: Option<Pos2>,
-    /// `Placement(transformation(rotation=...))`, in degrees CCW per
-    /// MLS Annex D. Used by the canvas projector to rotate port
-    /// offsets so wires enter/exit the icon at the orientation the
-    /// model author intended (a `RealInput` originally at the icon's
-    /// left lands on the bottom edge of an instance placed at
-    /// `rotation=270`). 0 when the source carries no rotation.
-    #[serde(default)]
-    pub rotation_degrees: f32,
-    /// Whether the placement reverses the X axis — i.e. the source
-    /// wrote `extent={{x_high, …}, {x_low, …}}`. Per MLS Annex D
-    /// this means the icon (and therefore its ports) mirror along
-    /// the X axis. Without honoring this, MSL components like
-    /// `SpeedSensor` (placed with `extent={{22, …}, {2, …}}`)
-    /// rendered with their `flange` on the wrong side and the
-    /// connecting wire crossed the body.
-    #[serde(default)]
-    pub mirror_x: bool,
-    /// Same as [`mirror_x`](Self::mirror_x) but for the Y axis.
-    #[serde(default)]
-    pub mirror_y: bool,
+    pub icon_transform: crate::icon_transform::IconTransform,
     /// Whether the node is selected.
     pub selected: bool,
+}
+
+impl DiagramNode {
+    /// Update the node's canvas centre, keeping the cached
+    /// [`position`](Self::position) field and the translation half of
+    /// [`icon_transform`](Self::icon_transform) in lock-step. Drag
+    /// handlers should call this rather than mutating either field
+    /// directly.
+    pub fn set_position(&mut self, pos: Pos2) {
+        let dx = pos.x - self.position.x;
+        let dy = pos.y - self.position.y;
+        self.position = pos;
+        self.icon_transform.m[2] += dx;
+        self.icon_transform.m[5] += dy;
+    }
 }
 
 /// A connection between two component ports.
@@ -213,16 +217,27 @@ impl VisualDiagram {
         for param in &def.parameters {
             parameter_values.insert(param.name.clone(), param.default.clone());
         }
+        // Default IconTransform = identity scaled to the standard
+        // 20×20 fallback box, translated to `position`. Importer paths
+        // that have a real Placement override this immediately.
+        let mut icon_transform = crate::icon_transform::IconTransform::from_placement(
+            (position.x, -position.y),  // Modelica +Y up, position is screen-Y
+            (20.0, 20.0),
+            false, false,
+            0.0,
+            (0.0, 0.0),
+        );
+        // The from_placement bakes in the Y flip — recover it cleanly
+        // by also flipping `position.y` above.
+        let _ = &mut icon_transform; // silence unused-mut lint when const
+
         self.nodes.push(DiagramNode {
             id,
             instance_name,
             component_def: def,
             parameter_values,
             position,
-            extent_size: None,
-            rotation_degrees: 0.0,
-            mirror_x: false,
-            mirror_y: false,
+            icon_transform,
             selected: false,
         });
         id

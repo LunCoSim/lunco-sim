@@ -35,7 +35,31 @@ pub fn paint_graphics(
     coord_system: CoordinateSystem,
     graphics: &[GraphicItem],
 ) {
-    let xform = coord_xform(coord_system.extent, screen_rect);
+    paint_graphics_with_orientation(
+        painter,
+        screen_rect,
+        coord_system,
+        IconOrientation::default(),
+        graphics,
+    );
+}
+
+/// Same as [`paint_graphics`] but applies an instance-level
+/// orientation (rotation + axis mirroring) to every primitive before
+/// the screen-rect mapping. Used by the canvas projector to honour the
+/// `Placement(transformation(rotation, extent={{x_high,…},…}))` of the
+/// instance the icon was placed by — without this, rotated/mirrored
+/// MSL components rendered axis-aligned even though their *ports*
+/// were already on the correct edges (the visible "the body and the
+/// ports disagree" bug).
+pub fn paint_graphics_with_orientation(
+    painter: &egui::Painter,
+    screen_rect: egui::Rect,
+    coord_system: CoordinateSystem,
+    orientation: IconOrientation,
+    graphics: &[GraphicItem],
+) {
+    let xform = coord_xform_oriented(coord_system.extent, screen_rect, orientation);
     for item in graphics {
         match item {
             GraphicItem::Rectangle(r) => paint_rectangle(painter, &xform, r),
@@ -44,6 +68,16 @@ pub fn paint_graphics(
             GraphicItem::Text(t) => paint_text(painter, &xform, t),
         }
     }
+}
+
+/// Per-instance orientation applied uniformly to every primitive.
+/// Mirroring happens in the icon's local Modelica frame *before*
+/// rotation, matching MLS Annex D.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct IconOrientation {
+    pub rotation_deg: f32,
+    pub mirror_x: bool,
+    pub mirror_y: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -55,6 +89,8 @@ pub fn paint_graphics(
 ///
 /// Aspect ratio is preserved; the icon is centred in `screen_rect` and
 /// the smaller of the two axis scales is used so nothing gets cropped.
+/// When the icon was placed with rotation/mirror, those folds in too
+/// via [`coord_xform_oriented`].
 #[derive(Debug, Clone, Copy)]
 pub struct CoordXform {
     /// Uniform world-units → pixels scale.
@@ -63,9 +99,24 @@ pub struct CoordXform {
     pub offset: egui::Vec2,
     /// Centre of the source extent in Modelica units.
     pub src_center: egui::Vec2,
+    /// Per-instance rotation, in degrees CCW (Modelica +Y-up frame).
+    /// 0 for the simple [`coord_xform`] path.
+    pub rotation_deg: f32,
+    /// Per-instance mirror flags, applied in the Modelica frame
+    /// before rotation (and before the screen Y flip).
+    pub mirror_x: bool,
+    pub mirror_y: bool,
 }
 
 pub fn coord_xform(src: Extent, dst: egui::Rect) -> CoordXform {
+    coord_xform_oriented(src, dst, IconOrientation::default())
+}
+
+pub fn coord_xform_oriented(
+    src: Extent,
+    dst: egui::Rect,
+    orientation: IconOrientation,
+) -> CoordXform {
     let src_w = (src.p2.x - src.p1.x).abs() as f32;
     let src_h = (src.p2.y - src.p1.y).abs() as f32;
     let scale = if src_w > 0.0 && src_h > 0.0 {
@@ -79,14 +130,32 @@ pub fn coord_xform(src: Extent, dst: egui::Rect) -> CoordXform {
         scale,
         offset: dst.center().to_vec2(),
         src_center: egui::vec2(src_cx, src_cy),
+        rotation_deg: orientation.rotation_deg,
+        mirror_x: orientation.mirror_x,
+        mirror_y: orientation.mirror_y,
     }
 }
 
 impl CoordXform {
     /// Map a Modelica point (+Y up) to an egui screen position (+Y down).
+    /// Honours the orientation (mirror + rotate around the icon centre)
+    /// stashed by [`coord_xform_oriented`].
     pub fn to_screen(&self, p: Point) -> egui::Pos2 {
-        let dx = p.x as f32 - self.src_center.x;
-        let dy = p.y as f32 - self.src_center.y;
+        // 1. Translate to icon-centre-relative Modelica coords.
+        let mut dx = p.x as f32 - self.src_center.x;
+        let mut dy = p.y as f32 - self.src_center.y;
+        // 2. Mirror in the Modelica frame (before rotation, MLS Annex D).
+        if self.mirror_x { dx = -dx; }
+        if self.mirror_y { dy = -dy; }
+        // 3. Rotate CCW in Modelica's +Y-up frame.
+        if self.rotation_deg != 0.0 {
+            let theta = self.rotation_deg.to_radians();
+            let (s, c) = theta.sin_cos();
+            let nx = c * dx - s * dy;
+            let ny = s * dx + c * dy;
+            dx = nx;
+            dy = ny;
+        }
         egui::pos2(
             self.offset.x + dx * self.scale,
             // Y flip: Modelica +Y up → screen +Y down
@@ -96,17 +165,14 @@ impl CoordXform {
 
     /// Apply a graphic primitive's local origin + rotation, then
     /// project to screen. `origin` is in Modelica coords, `rotation`
-    /// is degrees CCW (matches MLS Annex D).
+    /// is degrees CCW (matches MLS Annex D). Per-instance orientation
+    /// (rotation + mirror) gets applied by [`to_screen`] downstream.
     pub fn to_screen_rotated(
         &self,
         p: Point,
         origin: Point,
         rotation_deg: f64,
     ) -> egui::Pos2 {
-        // Rotate around (0,0) in local space, then translate by origin,
-        // then project to screen. CCW in Modelica's +Y-up frame becomes
-        // CW once Y flips on screen — so we negate the angle in the
-        // screen-space rotation and the visual matches the source.
         let theta = (rotation_deg as f32).to_radians();
         let (s, c) = theta.sin_cos();
         let lx = p.x as f32;

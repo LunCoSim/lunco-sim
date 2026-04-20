@@ -1828,10 +1828,10 @@ pub fn import_model_to_diagram_from_ast(
 
         if let Some(def) = component_def {
             let mut pos = None;
-            let mut size = None;
-            let mut rotation_degrees: f32 = 0.0;
-            let mut mirror_x = false;
-            let mut mirror_y = false;
+            // Build the full icon-local → canvas affine in one place.
+            // Falls back to a default transform centred on the grid
+            // position below when no Placement is authored.
+            let mut icon_transform: Option<crate::icon_transform::IconTransform> = None;
 
             // Read placement from rumoca's typed annotation tree
             // instead of pattern-matching source text. Robust against
@@ -1843,23 +1843,30 @@ pub fn import_model_to_diagram_from_ast(
                     crate::annotations::extract_placement(&comp.annotation)
                 {
                     let extent = placement.transformation.extent;
-                    let x = ((extent.p1.x + extent.p2.x) * 0.5) as f32;
-                    let y = -(((extent.p1.y + extent.p2.y) * 0.5) as f32); // +Y up → +Y down
-                    // Add the transformation's origin offset (also
-                    // Modelica +Y up, hence the same flip).
+                    let cx = ((extent.p1.x + extent.p2.x) * 0.5) as f32;
+                    let cy = ((extent.p1.y + extent.p2.y) * 0.5) as f32;
                     let ox = placement.transformation.origin.x as f32;
                     let oy = placement.transformation.origin.y as f32;
-                    pos = Some(egui::Pos2::new(x + ox, y - oy));
-                    size = Some(egui::Pos2::new(
+                    let mirror_x = extent.p2.x < extent.p1.x;
+                    let mirror_y = extent.p2.y < extent.p1.y;
+                    let size = (
                         (extent.p2.x - extent.p1.x).abs() as f32,
                         (extent.p2.y - extent.p1.y).abs() as f32,
-                    ));
-                    rotation_degrees = placement.transformation.rotation as f32;
-                    // Reversed extent corners encode an axis flip per
-                    // MLS Annex D — `extent={{x_high,…},{x_low,…}}`
-                    // means the icon mirrors along that axis.
-                    mirror_x = extent.p2.x < extent.p1.x;
-                    mirror_y = extent.p2.y < extent.p1.y;
+                    );
+                    let rotation_deg = placement.transformation.rotation as f32;
+                    let xform = crate::icon_transform::IconTransform::from_placement(
+                        (cx, cy),
+                        size,
+                        mirror_x,
+                        mirror_y,
+                        rotation_deg,
+                        (ox, oy),
+                    );
+                    // Cached centre matches where the icon-local
+                    // origin lands in canvas world coords.
+                    let (px, py) = xform.apply(0.0, 0.0);
+                    pos = Some(egui::Pos2::new(px, py));
+                    icon_transform = Some(xform);
                 }
             }
 
@@ -1879,10 +1886,9 @@ pub fn import_model_to_diagram_from_ast(
 
             if let Some(diagram_node) = diagram.get_node_mut(node_id) {
                 diagram_node.instance_name = short_name.to_string();
-                diagram_node.extent_size = size;
-                diagram_node.rotation_degrees = rotation_degrees;
-                diagram_node.mirror_x = mirror_x;
-                diagram_node.mirror_y = mirror_y;
+                if let Some(xf) = icon_transform {
+                    diagram_node.icon_transform = xf;
+                }
             }
         }
     }
