@@ -1996,17 +1996,18 @@ fn register_local_class(
     if out.contains_key(short_name) {
         return;
     }
-    // Walk this class's extends chain, merging any parent Icon
-    // annotations we find in the same file. Cross-file extends
-    // (e.g. MSL `Icons.RelativeSensor`) isn't followed here — those
-    // go through the MSL indexer's pipeline.
+    // Resolve `extends` targets by searching the local AST first,
+    // then falling through to the MSL class cache. This is what
+    // makes `SpeedSensor extends Modelica.Mechanics.Rotational.Icons
+    // .RelativeSensor` pull in the parent icon's rectangle + text
+    // primitives, even though `RelativeSensor` lives in a separate
+    // MSL file outside this document.
     let mut resolver =
         |name: &str| -> Option<Arc<rumoca_session::parsing::ast::ClassDef>> {
             let leaf = name.rsplit('.').next().unwrap_or(name);
-            // Look for the class at the top level first, then one
-            // level deep (the same scope `register_local_class` is
-            // called at). Matches the walk above.
-            ast.classes
+            // Local AST first.
+            if let Some(c) = ast
+                .classes
                 .get(name)
                 .or_else(|| ast.classes.get(leaf))
                 .or_else(|| {
@@ -2015,10 +2016,35 @@ fn register_local_class(
                         .flat_map(|c| c.classes.values())
                         .find(|c| c.name.text.as_ref() == leaf)
                 })
-                .map(|c| Arc::new(c.clone()))
+            {
+                return Some(Arc::new(c.clone()));
+            }
+            // Cross-file: synchronously resolve via the MSL class
+            // cache. Memoised — only the first call per qualified
+            // name does I/O.
+            crate::class_cache::peek_or_load_msl_class(name)
         };
     let mut visited = std::collections::HashSet::new();
-    let icon = extract_icon_inherited(short_name, class_def, &mut resolver, &mut visited);
+    // Build the qualified name from the document's `within` so
+    // scope-chain resolution can walk enclosing packages for bare
+    // `extends Foo` references.
+    let class_context = match ast.within.as_ref() {
+        Some(within) => {
+            let pkg = within
+                .name
+                .iter()
+                .map(|t| t.text.as_ref())
+                .collect::<Vec<_>>()
+                .join(".");
+            if pkg.is_empty() {
+                short_name.to_string()
+            } else {
+                format!("{pkg}.{short_name}")
+            }
+        }
+        None => short_name.to_string(),
+    };
+    let icon = extract_icon_inherited(&class_context, class_def, &mut resolver, &mut visited);
     if icon.is_none() {
         return;
     }

@@ -362,6 +362,54 @@ pub fn extract_icon(annotations: &[Expression]) -> Option<Icon> {
     })
 }
 
+/// Build the ordered list of qualified-name candidates to try when
+/// resolving an `extends` clause written in the source of `class_name`.
+///
+/// Implements a simplified version of MLS § 5 lookup: the bare name
+/// is rewritten against every enclosing package from innermost to
+/// outermost, then the bare name itself is the last fallback. Dotted
+/// names are treated similarly — we try them verbatim first (their
+/// prefix might already be a full qualified path), then apply the
+/// scope chain using just the tail segment.
+///
+/// Example — `class_name =
+/// "Modelica.Clocked.ClockSignals.Clocks.Logical.ConjunctiveClock"`,
+/// `base_name = "PartialLogicalClock"` yields:
+///
+/// 1. `PartialLogicalClock` (as given)
+/// 2. `Modelica.Clocked.ClockSignals.Clocks.Logical.PartialLogicalClock`
+/// 3. `Modelica.Clocked.ClockSignals.Clocks.PartialLogicalClock`
+/// 4. `Modelica.Clocked.ClockSignals.PartialLogicalClock`
+/// 5. `Modelica.Clocked.PartialLogicalClock`
+/// 6. `Modelica.PartialLogicalClock`
+fn build_extends_candidates(class_name: &str, base_name: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    // 1. As-given.
+    out.push(base_name.to_string());
+
+    // Parent packages of the class doing the extending, innermost
+    // first. For `A.B.C.D.E` we want prefixes `A.B.C.D`, `A.B.C`,
+    // `A.B`, `A`.
+    let class_parts: Vec<&str> = class_name.split('.').collect();
+    if class_parts.len() > 1 {
+        // MLS §5.3.1: look up the *first* identifier of a dotted name
+        // against each enclosing scope, then descend. For
+        // `Interfaces.PartialClock` from inside
+        // `Modelica.Clocked.ClockSignals.Clocks.Logical.X`, that
+        // means trying `<pkg>.Interfaces.PartialClock` at every
+        // enclosing package — preserving the full dotted tail, not
+        // stripping to just the leaf.
+        for stop in (1..class_parts.len()).rev() {
+            let pkg = class_parts[..stop].join(".");
+            let candidate = format!("{pkg}.{base_name}");
+            if candidate != base_name {
+                out.push(candidate);
+            }
+        }
+    }
+    out
+}
+
 /// Extract the `Icon(...)` annotation **merged with inherited graphics
 /// from every `extends` base class**, per MLS Annex D.
 ///
@@ -417,9 +465,35 @@ where
             .map(|t| t.text.as_ref())
             .collect::<Vec<&str>>()
             .join(".");
-        let Some(base_class) = resolver(&base_name) else { continue };
+
+        // Scope-chain lookup (MLS § 5): a bare `extends
+        // PartialLogicalClock` is resolved against the enclosing
+        // packages of the class doing the extending. Given
+        // `Modelica.Clocked.ClockSignals.Clocks.Logical.ConjunctiveClock`
+        // extending `PartialLogicalClock`, try:
+        //
+        //   1. Modelica.Clocked.ClockSignals.Clocks.Logical.PartialLogicalClock
+        //   2. Modelica.Clocked.ClockSignals.Clocks.PartialLogicalClock
+        //   3. Modelica.Clocked.ClockSignals.PartialLogicalClock
+        //   …
+        //   N. Modelica.PartialLogicalClock
+        //   N+1. PartialLogicalClock (as given)
+        //
+        // First hit wins. Dotted `base_name`s (already qualified or
+        // partially qualified) get the same treatment — we also try
+        // the name as-written first so e.g. `Modelica.Icons.Partial`
+        // is used verbatim before any scope-chain rewriting.
+        let candidates = build_extends_candidates(class_name, &base_name);
+        let mut hit: Option<(String, std::sync::Arc<rumoca_session::parsing::ast::ClassDef>)> = None;
+        for candidate in candidates {
+            if let Some(base_class) = resolver(&candidate) {
+                hit = Some((candidate, base_class));
+                break;
+            }
+        }
+        let Some((resolved_name, base_class)) = hit else { continue };
         if let Some(base_icon) = extract_icon_inherited(
-            &base_name,
+            &resolved_name,
             base_class.as_ref(),
             resolver,
             visited,

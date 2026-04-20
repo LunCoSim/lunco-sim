@@ -1260,7 +1260,23 @@ fn on_open_example_in_workspace(
         //     Modelica.Units.SI;`) so scope-dependent references
         //     resolve once the class is standalone.
         let imports = collect_parent_imports(&path);
-        let copy_src = inject_class_imports(&renamed, &imports);
+        let renamed = inject_class_imports(&renamed, &imports);
+        // 4c. Re-attach a `within <origin package>;` clause so the
+        //     copy's enclosing-package context is preserved for
+        //     scope-chain resolution of bare `extends` refs. The
+        //     origin package is `qualified` minus its leaf; falling
+        //     back to an empty (unqualified) `within` if the class
+        //     was top-level.
+        let origin_pkg: String = {
+            let mut parts: Vec<&str> = qualified_for_task.split('.').collect();
+            parts.pop();
+            parts.join(".")
+        };
+        let copy_src = if origin_pkg.is_empty() {
+            renamed
+        } else {
+            format!("within {origin_pkg};\n{renamed}")
+        };
         // 5. Build doc (runs rumoca parse on the bg thread).
         crate::document::ModelicaDocument::with_origin(
             doc_id,

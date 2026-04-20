@@ -626,6 +626,123 @@ pub fn is_icon_only_class(qualified: &str) -> bool {
 }
 
 // ═══════════════════════════════════════════════════════════════════
+// Sync MSL class loader — for callers that need a class *right now*
+// ═══════════════════════════════════════════════════════════════════
+
+/// Synchronously resolve an MSL class by qualified name and return
+/// its [`ClassDef`]. Lazily reads + parses the containing `.mo` file
+/// and memoises the result by qualified name.
+///
+/// # Why sync (vs. the main `ClassCache.request` async flow)
+///
+/// The async [`ClassCache`] is the right tier for foreground UI
+/// loads — user clicks Drill-in, a background task parses, the
+/// canvas re-projects next frame. But *icon extraction* runs inside
+/// the projector pipeline where we need the parent-class AST NOW to
+/// resolve `extends`-graphics inheritance. Deferring by a frame
+/// means rendering every MSL sensor / partial without its inherited
+/// body on first open, then popping in — bad UX.
+///
+/// This helper does the blocking I/O + parse once per qualified name
+/// and caches the `Arc<ClassDef>` for instant subsequent calls. MSL
+/// files are small (most ≤ a few KB; the package-aggregate files are
+/// at worst a few hundred KB) so a one-shot read is acceptable. Any
+/// resolution failure is memoised as `None` so repeated hits don't
+/// re-hammer the filesystem.
+///
+/// Used by the icon-inheritance resolver so `SpeedSensor extends
+/// Modelica.Mechanics.Rotational.Icons.RelativeSensor` pulls in the
+/// parent's rectangle/text primitives the first time it renders.
+pub fn peek_or_load_msl_class(
+    qualified: &str,
+) -> Option<Arc<rumoca_session::parsing::ast::ClassDef>> {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+
+    // Per-qualified-name cache. `None` is remembered too — missing
+    // classes don't retry on every icon render.
+    static CACHE: OnceLock<
+        Mutex<HashMap<String, Option<Arc<rumoca_session::parsing::ast::ClassDef>>>>,
+    > = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+
+    if let Ok(map) = cache.lock() {
+        if let Some(slot) = map.get(qualified) {
+            return slot.clone();
+        }
+    }
+
+    let resolved = load_msl_class_uncached(qualified);
+    if let Ok(mut map) = cache.lock() {
+        map.insert(qualified.to_string(), resolved.clone());
+    }
+    resolved
+}
+
+fn load_msl_class_uncached(
+    qualified: &str,
+) -> Option<Arc<rumoca_session::parsing::ast::ClassDef>> {
+    // Palette index first; fall through to filesystem walk so classes
+    // nested inside `.mo` files (e.g. a partial base not surfaced in
+    // the palette) still resolve.
+    let path = resolve_msl_class_path(qualified)
+        .or_else(|| locate_msl_file(qualified))?;
+    let source = std::fs::read_to_string(&path).ok()?;
+    let syntax = rumoca_phase_parse::parse_to_syntax(
+        &source,
+        &path.to_string_lossy(),
+    );
+    let stored = syntax.best_effort().clone();
+
+    find_class_in_stored_def(&stored, qualified)
+        .map(|c| Arc::new(c.clone()))
+}
+
+/// Walk a parsed `StoredDefinition` down the qualified dotted path
+/// to locate a specific class. Handles the common MSL-file shape:
+/// a top-level `package.mo` containing nested classes N layers deep,
+/// and flat `.mo` files where the leaf class sits at the top level.
+fn find_class_in_stored_def<'a>(
+    ast: &'a rumoca_session::parsing::ast::StoredDefinition,
+    qualified: &str,
+) -> Option<&'a rumoca_session::parsing::ast::ClassDef> {
+    let parts: Vec<&str> = qualified.split('.').collect();
+
+    // Strategy: walk every top-level class and treat its name as a
+    // prefix; if the qualified path starts with it, recurse into
+    // its nested classes. When the last segment matches the current
+    // level, return. Tries flat (leaf-at-top-level) too.
+    for (top_name, top_class) in ast.classes.iter() {
+        // Flat: the top-level class name IS the qualified tail.
+        let tail = parts.last().copied().unwrap_or("");
+        if top_name.as_str() == qualified || top_name.as_str() == tail {
+            return Some(top_class);
+        }
+        // Prefix: top-level name matches a middle segment of the
+        // qualified path, walk nested classes for the rest.
+        if let Some(pos) = parts.iter().position(|p| *p == top_name.as_str()) {
+            let remaining = &parts[pos + 1..];
+            if let Some(c) = walk_nested_classes(top_class, remaining) {
+                return Some(c);
+            }
+        }
+    }
+    None
+}
+
+fn walk_nested_classes<'a>(
+    class: &'a rumoca_session::parsing::ast::ClassDef,
+    path: &[&str],
+) -> Option<&'a rumoca_session::parsing::ast::ClassDef> {
+    if path.is_empty() {
+        return Some(class);
+    }
+    let (head, rest) = (path[0], &path[1..]);
+    let child = class.classes.get(head)?;
+    walk_nested_classes(child, rest)
+}
+
+// ═══════════════════════════════════════════════════════════════════
 // Plugin
 // ═══════════════════════════════════════════════════════════════════
 

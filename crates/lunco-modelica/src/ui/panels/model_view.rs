@@ -1121,7 +1121,8 @@ fn render_icon_view(ui: &mut egui::Ui, world: &mut World) {
             use std::sync::Arc;
             let mut resolver = |lookup: &str| -> Option<Arc<rumoca_session::parsing::ast::ClassDef>> {
                 let leaf = lookup.rsplit('.').next().unwrap_or(lookup);
-                ast.classes
+                if let Some(c) = ast
+                    .classes
                     .get(lookup)
                     .or_else(|| ast.classes.get(leaf))
                     .or_else(|| {
@@ -1130,11 +1131,36 @@ fn render_icon_view(ui: &mut egui::Ui, world: &mut World) {
                             .flat_map(|c| c.classes.values())
                             .find(|c| c.name.text.as_ref() == leaf)
                     })
-                    .map(|c| Arc::new(c.clone()))
+                {
+                    return Some(Arc::new(c.clone()));
+                }
+                // Cross-file: MSL class cache — enables extends
+                // inheritance from `Modelica.*.Icons.*` partials.
+                crate::class_cache::peek_or_load_msl_class(lookup)
             };
             let mut visited = std::collections::HashSet::new();
+            // Pass the qualified name so `extract_icon_inherited`'s
+            // scope-chain can walk enclosing packages when resolving
+            // bare `extends Foo`. `name` alone is just the short key.
+            let class_context = if qualified.contains('.') {
+                qualified.clone()
+            } else if let Some(within) = ast.within.as_ref() {
+                let pkg = within
+                    .name
+                    .iter()
+                    .map(|t| t.text.as_ref())
+                    .collect::<Vec<_>>()
+                    .join(".");
+                if pkg.is_empty() {
+                    name.to_string()
+                } else {
+                    format!("{pkg}.{name}")
+                }
+            } else {
+                name.to_string()
+            };
             crate::annotations::extract_icon_inherited(
-                name,
+                &class_context,
                 class,
                 &mut resolver,
                 &mut visited,
