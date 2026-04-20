@@ -113,6 +113,54 @@ impl Default for DiagramTheme {
 }
 
 // ---------------------------------------------------------------------------
+// Auto-layout settings
+// ---------------------------------------------------------------------------
+
+/// Grid-layout parameters used when an imported model has no authored
+/// `annotation(Placement(...))` on its components. Tunable per the
+/// Article-X mandate — no magic numbers buried inside the import path.
+///
+/// Two independent grids because the two importers have different
+/// failure modes: the AST importer runs on valid-enough source with
+/// known icon extents (tighter grid reads well), while the regex
+/// scan is a last-resort recovery from broken source and leaves
+/// extra breathing room so overlapping labels stay legible.
+#[derive(Resource, Clone, Debug)]
+pub struct DiagramAutoLayoutSettings {
+    /// Horizontal spacing (world units) between adjacent columns in
+    /// the AST importer's fallback grid.
+    pub ast_spacing_x: f32,
+    /// Vertical spacing (world units) between adjacent rows in the
+    /// AST importer's fallback grid.
+    pub ast_spacing_y: f32,
+    /// Column count for the AST importer's fallback grid. Nodes wrap
+    /// to a new row once this is reached.
+    pub ast_cols: usize,
+    /// Half-column stagger applied to odd rows (0.0 disables). Keeps
+    /// ports on the shared horizontal band from wiring through the
+    /// icon body of the row above.
+    pub ast_row_stagger: f32,
+    /// Regex-scan fallback grid (broken-source recovery).
+    pub scan_spacing_x: f32,
+    pub scan_spacing_y: f32,
+    pub scan_cols: usize,
+}
+
+impl Default for DiagramAutoLayoutSettings {
+    fn default() -> Self {
+        Self {
+            ast_spacing_x: 140.0,
+            ast_spacing_y: 110.0,
+            ast_cols: 4,
+            ast_row_stagger: 0.5,
+            scan_spacing_x: 200.0,
+            scan_spacing_y: 150.0,
+            scan_cols: 3,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Diagram State
 // ---------------------------------------------------------------------------
 
@@ -1480,6 +1528,7 @@ fn scan_component_declarations(source: &str) -> Vec<(String, String)> {
 fn build_visual_diagram_from_scan(
     source: &str,
     scanned: &[(String, String)],
+    layout: &DiagramAutoLayoutSettings,
 ) -> VisualDiagram {
     let mut diagram = VisualDiagram::default();
     let msl_lib = msl_component_library();
@@ -1488,9 +1537,9 @@ fn build_visual_diagram_from_scan(
         .map(|c| (c.msl_path.as_str(), c))
         .collect();
 
-    let node_spacing_x = 200.0;
-    let node_spacing_y = 150.0;
-    let cols = 3usize;
+    let node_spacing_x = layout.scan_spacing_x;
+    let node_spacing_y = layout.scan_spacing_y;
+    let cols = layout.scan_cols.max(1);
 
     for (idx, (type_path, instance_name)) in scanned.iter().enumerate() {
         // Only render components whose type resolves against the MSL
@@ -1556,6 +1605,7 @@ pub fn import_model_to_diagram(source: &str) -> Option<VisualDiagram> {
         source,
         DEFAULT_MAX_DIAGRAM_NODES,
         None,
+        &DiagramAutoLayoutSettings::default(),
     )
 }
 
@@ -1576,6 +1626,7 @@ pub fn import_model_to_diagram_from_ast(
     source: &str,
     max_nodes: usize,
     target_class: Option<&str>,
+    layout: &DiagramAutoLayoutSettings,
 ) -> Option<VisualDiagram> {
     use crate::diagram::ModelicaComponentBuilder;
     // `Arc::clone` here is a pointer bump, NOT a tree clone.
@@ -1622,7 +1673,7 @@ pub fn import_model_to_diagram_from_ast(
         }
         let scanned = scan_component_declarations(source);
         if !scanned.is_empty() {
-            return Some(build_visual_diagram_from_scan(source, &scanned));
+            return Some(build_visual_diagram_from_scan(source, &scanned, layout));
         }
         return None;
     }
@@ -1793,11 +1844,11 @@ pub fn import_model_to_diagram_from_ast(
     // shared horizontal band don't end up wired through the body of
     // the row above. Matches the breathing room Dymola/OMEdit's
     // default layout uses for un-annotated example models.
-    let node_spacing_x = 320.0;
-    let node_spacing_y = 220.0;
-    let cols = 4;
+    let node_spacing_x = layout.ast_spacing_x;
+    let node_spacing_y = layout.ast_spacing_y;
+    let cols = layout.ast_cols.max(1);
     let mut placement_idx = 0;
-    let row_offset_x = node_spacing_x * 0.5;
+    let row_offset_x = node_spacing_x * layout.ast_row_stagger;
 
     for node in graph.nodes.iter() {
         if node.qualified_name.is_empty() {
@@ -2115,6 +2166,9 @@ impl Panel for DiagramPanel {
         }
         if world.get_resource::<DiagramTheme>().is_none() {
             world.insert_resource(DiagramTheme::default());
+        }
+        if world.get_resource::<DiagramAutoLayoutSettings>().is_none() {
+            world.insert_resource(DiagramAutoLayoutSettings::default());
         }
 
         // ── Phase α: track the active document ──

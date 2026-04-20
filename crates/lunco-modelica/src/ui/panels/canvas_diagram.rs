@@ -1517,6 +1517,13 @@ impl Panel for CanvasDiagramPanel {
             let target_class_snapshot: Option<String> = world
                 .get_resource::<DrilledInClassNames>()
                 .and_then(|m| m.get(doc_id).map(str::to_string));
+            // Snapshot the auto-layout grid so the bg task can fall
+            // back to configurable spacing for components without a
+            // `Placement` annotation.
+            let layout_snapshot = world
+                .get_resource::<crate::ui::panels::diagram::DiagramAutoLayoutSettings>()
+                .cloned()
+                .unwrap_or_default();
             let mut state = world.resource_mut::<CanvasDiagramState>();
             let docstate = state.get_mut(Some(doc_id));
             // If the user just changed drill-in target (clicked a
@@ -1619,6 +1626,7 @@ impl Panel for CanvasDiagramPanel {
                                 &source,
                                 max_nodes_snapshot,
                                 target_for_log.as_deref(),
+                                &layout_snapshot,
                             )
                             .unwrap_or_default()
                         } else {
