@@ -50,6 +50,7 @@ use std::collections::HashMap;
 
 mod panel;
 mod perspective;
+mod session;
 mod viewport;
 
 pub mod twin_browser;
@@ -99,6 +100,10 @@ fn on_close_tab(trigger: On<CloseTab>, mut layout: ResMut<WorkbenchLayout>) {
     layout.close_instance(ev.kind, ev.instance);
 }
 pub use perspective::{Perspective, PerspectiveId};
+pub use session::{
+    DocumentClosed, DocumentOpened, RegisterDocument, TwinAdded, TwinClosed,
+    UnregisterDocument, WorkspacePlugin, WorkspaceResource,
+};
 pub use viewport::{ViewportPanel, WorkbenchViewportCamera, VIEWPORT_PANEL_ID};
 
 /// Get the backdrop colour from the active theme.
@@ -121,6 +126,13 @@ impl Plugin for WorkbenchPlugin {
         }
         if !app.is_plugin_added::<lunco_theme::ThemePlugin>() {
             app.add_plugins(lunco_theme::ThemePlugin);
+        }
+        // Workspace (editor session) resource + event observers. Lives
+        // in a sub-plugin so headless tests / API-only servers that
+        // don't want the full dock shell can still get the Workspace
+        // wiring by adding just `WorkspacePlugin`.
+        if !app.is_plugin_added::<session::WorkspacePlugin>() {
+            app.add_plugins(session::WorkspacePlugin);
         }
         app.init_resource::<WorkbenchLayout>()
             .init_resource::<PendingTabCloses>()
