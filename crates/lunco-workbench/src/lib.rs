@@ -106,26 +106,7 @@ fn get_panel_backdrop(theme: &lunco_theme::Theme) -> egui::Color32 {
     theme.colors.mantle
 }
 
-/// Push `theme.to_visuals()` to egui when the theme changes. Runs in
-/// `EguiPrimaryContextPass` so the context exists; gated on
-/// `Res::is_changed()` so it's a one-shot per theme mutation — the
-/// system itself is scheduled every frame but the body is a cheap
-/// early-return on the typical path.
-///
-/// First-frame behaviour: `init_resource::<Theme>` sets the added
-/// flag, so `is_changed()` is `true` on the first pass and the
-/// default dark/light visuals land immediately.
-fn sync_theme_visuals(
-    mut contexts: EguiContexts,
-    theme: Res<lunco_theme::Theme>,
-) {
-    if !theme.is_changed() {
-        return;
-    }
-    if let Ok(ctx) = contexts.ctx_mut() {
-        ctx.set_visuals(theme.to_visuals());
-    }
-}
+
 
 /// Plugin that installs the workbench shell into a Bevy app.
 ///
@@ -151,16 +132,6 @@ impl Plugin for WorkbenchPlugin {
             .init_resource::<BrowserActions>()
             .add_observer(on_open_tab)
             .add_observer(on_close_tab)
-            // Push `theme.to_visuals()` onto the egui context whenever
-            // the Theme resource changes (which includes the first
-            // frame after `init_resource`). Previously this lived in
-            // `LuncoUiPlugin`, but workbench hosts that don't pull in
-            // lunco-ui (e.g. `modelica_workbench`) ended up with
-            // panels painted by egui's built-in dark defaults even
-            // when the user toggled to Latte. Installing the sync
-            // here means every app that uses `WorkbenchPlugin` gets
-            // theme-driven visuals for free.
-            .add_systems(EguiPrimaryContextPass, sync_theme_visuals)
             .add_systems(EguiPrimaryContextPass, render_workbench);
 
         // Built-in Files section ships with the workbench so apps get

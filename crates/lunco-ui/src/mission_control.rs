@@ -19,9 +19,7 @@ impl Panel for MissionControl {
 
     fn render(&mut self, ui: &mut egui::Ui, world: &mut World) {
         let theme = world.resource::<lunco_theme::Theme>();
-        ui.style_mut().visuals.widgets.inactive.weak_bg_fill = theme.colors.surface0;
-        ui.style_mut().visuals.widgets.inactive.bg_fill = theme.colors.surface0;
-        ui.style_mut().visuals.window_fill = theme.colors.mantle;
+        ui.style_mut().visuals = theme.to_visuals();
 
         let avatar_ent = {
             let mut q = world.query_filtered::<Entity, With<Avatar>>();
