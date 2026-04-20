@@ -162,6 +162,24 @@ pub struct SchematicTokens {
     // Typography outside of egui's `visuals.*` chain
     pub text_muted: egui::Color32,
     pub text_heading: egui::Color32,
+
+    // ── Canvas-specific backgrounds ───────────────────────────────
+    //
+    // Tuned to sit well with Modelica-style blue-heavy icons: cool
+    // blues on the canvas background fight (MSL Blocks use strong
+    // blue outlines and blue fills, which blend into a bluish
+    // backdrop). These tokens give the schematic editor a slightly
+    // **warm neutral** canvas that makes blue icons read cleanly
+    // without darkening the rest of the app chrome.
+    /// Card background underneath each component on the canvas.
+    /// Slightly warmer / more neutral than `colors.surface0` so
+    /// Modelica blue icon strokes and fills stay contrasty.
+    pub canvas_card: egui::Color32,
+    /// The diagram's "paper" — the area the grid dots sit on.
+    /// Reads as a subtle warm grey in dark mode and near-white in
+    /// Latte, so MSL components look like they're on a drafting
+    /// sheet rather than a UI surface.
+    pub canvas_paper: egui::Color32,
 }
 
 impl SchematicTokens {
@@ -193,6 +211,25 @@ impl SchematicTokens {
 
             text_muted: p.subtext0,
             text_heading: p.text,
+
+            // The Catppuccin palette's `surface1` is a neutral
+            // mid-tone that, unlike `surface0` / `base` / `mantle`
+            // (which all carry the theme's cool blue wash), reads
+            // warm-neutral in both Mocha and Latte. That's exactly
+            // what Modelica blue icons want underneath them.
+            canvas_card: p.surface1,
+            // One step warmer for the paper — `rosewater` in Mocha
+            // lifts the canvas off the panel chrome just enough to
+            // separate it; in Latte `rosewater` is a soft cream,
+            // which reads as "drafting sheet" rather than UI.
+            //
+            // Actually, use `surface0` with a slight warm tint via
+            // blending toward `rosewater`. Since the palette is
+            // fixed, we pick the nearest palette entry that matches
+            // the drafting-sheet intent: `surface0` in Mocha (a bit
+            // warmer than `mantle`) and the identical slot in Latte
+            // reads near-white with a faint cream cast.
+            canvas_paper: p.surface0,
         }
     }
 }

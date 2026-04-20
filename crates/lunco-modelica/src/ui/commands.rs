@@ -131,6 +131,70 @@ pub struct AutoArrangeDiagram {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// API navigation commands — reflect-registered so scripts / tests /
+// remote agents can drive the UI over HTTP without a mouse. Each is a
+// fire-and-forget event with a tiny observer; all follow the same
+// convention as `AutoArrangeDiagram` (doc=0 means "the active tab").
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Focus (open + bring to front) the tab whose title contains the
+/// given substring. Case-sensitive; first match wins.
+///
+/// Useful from the API because the raw `DocumentId` is server-minted
+/// and not discoverable from outside; the tab title is. A future
+/// `ListDocuments` query will return the ids directly for exact
+/// targeting.
+#[derive(Event, Reflect, Clone, Debug, Default)]
+#[reflect(Event, Default)]
+pub struct FocusDocumentByName {
+    pub pattern: String,
+}
+
+/// Switch the active tab's view mode. `mode` is one of
+/// `"text"`, `"diagram"`, `"icon"`, `"docs"` (case-insensitive).
+/// Unknown modes are ignored.
+#[derive(Event, Reflect, Clone, Debug, Default)]
+#[reflect(Event, Default)]
+pub struct SetViewMode {
+    /// Doc id, or `0` for the active tab.
+    pub doc: u64,
+    /// `"text"` | `"diagram"` | `"icon"` | `"docs"`.
+    pub mode: String,
+}
+
+/// Set the canvas zoom level for a specific diagram. `1.0` = 100 %.
+/// `0.0` = fit-all (same as [`FitCanvas`]).
+#[derive(Event, Reflect, Clone, Debug, Default)]
+#[reflect(Event, Default)]
+pub struct SetZoom {
+    /// Doc id, or `0` for the active tab.
+    pub doc: u64,
+    /// Absolute zoom. Clamped to the canvas's configured min/max.
+    pub zoom: f32,
+}
+
+/// Frame the scene so the whole diagram fits in the viewport.
+/// Equivalent to the `F` keyboard shortcut.
+#[derive(Event, Reflect, Clone, Debug, Default)]
+#[reflect(Event, Default)]
+pub struct FitCanvas {
+    /// Doc id, or `0` for the active tab.
+    pub doc: u64,
+}
+
+/// Open (or focus, if already open) an MSL class as a fresh editable
+/// copy. `qualified` is the full dot-path,
+/// e.g. `"Modelica.Electrical.Analog.Examples.ChuaCircuit"`.
+/// Reflect-registered shim over the existing `OpenExampleInWorkspace`
+/// event so scripts can open examples without knowing the internal
+/// event name.
+#[derive(Event, Reflect, Clone, Debug, Default)]
+#[reflect(Event, Default)]
+pub struct OpenExample {
+    pub qualified: String,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Observers
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -161,6 +225,19 @@ impl Plugin for ModelicaCommandsPlugin {
             // fire it via `ExecuteCommand { command: "AutoArrangeDiagram" }`.
             .register_type::<AutoArrangeDiagram>()
             .add_observer(crate::ui::panels::canvas_diagram::on_auto_arrange_diagram)
+            // Navigation commands — same reflect-registered pattern so
+            // the HTTP API can drive the UI (focus a tab, switch view
+            // mode, zoom / fit, drill into an MSL example).
+            .register_type::<FocusDocumentByName>()
+            .register_type::<SetViewMode>()
+            .register_type::<SetZoom>()
+            .register_type::<FitCanvas>()
+            .register_type::<OpenExample>()
+            .add_observer(on_focus_document_by_name)
+            .add_observer(on_set_view_mode)
+            .add_observer(on_set_zoom)
+            .add_observer(on_fit_canvas)
+            .add_observer(on_open_example)
             .add_observer(resolve_editor_intent)
             .add_observer(resolve_new_document_intent)
             .add_systems(
@@ -1422,4 +1499,158 @@ fn rewrite_duplicated_source(
         }
     }
     out.into_owned()
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// API navigation observers
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Each is a tiny, predictable translator from a reflect-registered
+// event to the domain-specific action. `doc=0` means "active tab"
+// across all of them (see also `AutoArrangeDiagram`). Observers can't
+// take `&mut World` in Bevy 0.18, so the ones that need it defer via
+// `commands.queue(|world| ...)` — same trick Auto-Arrange uses.
+
+fn resolve_active_doc(world: &World) -> Option<DocumentId> {
+    world
+        .get_resource::<lunco_workbench::WorkspaceResource>()
+        .and_then(|ws| ws.active_document)
+}
+
+fn on_focus_document_by_name(
+    trigger: On<FocusDocumentByName>,
+    mut commands: Commands,
+) {
+    let pattern = trigger.event().pattern.clone();
+    if pattern.is_empty() {
+        return;
+    }
+    commands.queue(move |world: &mut World| {
+        // Case-insensitive substring match across the session's open
+        // documents. First match wins.
+        let hit = {
+            let ws = world.resource::<lunco_workbench::WorkspaceResource>();
+            let needle = pattern.to_lowercase();
+            ws.documents()
+                .iter()
+                .find(|d| d.title.to_lowercase().contains(&needle))
+                .map(|d| d.id)
+        };
+        let Some(doc) = hit else {
+            bevy::log::info!(
+                "[FocusDocumentByName] no tab matches '{}'",
+                pattern
+            );
+            return;
+        };
+        world.commands().trigger(lunco_workbench::OpenTab {
+            kind: crate::ui::panels::model_view::MODEL_VIEW_KIND,
+            instance: doc.raw(),
+        });
+    });
+}
+
+fn on_set_view_mode(trigger: On<SetViewMode>, mut commands: Commands) {
+    let raw = trigger.event().doc;
+    let mode_str = trigger.event().mode.clone();
+    commands.queue(move |world: &mut World| {
+        let Some(doc) = (if raw == 0 {
+            resolve_active_doc(world)
+        } else {
+            Some(DocumentId::new(raw))
+        }) else {
+            return;
+        };
+        use crate::ui::panels::model_view::{ModelTabs, ModelViewMode};
+        let new_mode = match mode_str.to_lowercase().as_str() {
+            "text" | "source" => ModelViewMode::Text,
+            "diagram" | "canvas" => ModelViewMode::Canvas,
+            "icon" => ModelViewMode::Icon,
+            "docs" | "documentation" => ModelViewMode::Docs,
+            other => {
+                bevy::log::warn!(
+                    "[SetViewMode] unknown mode '{other}' — expected text|diagram|icon|docs"
+                );
+                return;
+            }
+        };
+        if let Some(mut tabs) = world.get_resource_mut::<ModelTabs>() {
+            if let Some(state) = tabs.get_mut(doc) {
+                state.view_mode = new_mode;
+            }
+        }
+    });
+}
+
+/// Approximate screen rect used by the API-side fit command. The
+/// real canvas rect is only known at render time; picking 800×600
+/// here matches the Fit-All menu button and produces a reasonable
+/// zoom for API-driven workflows where the window size varies.
+fn approx_screen_rect() -> lunco_canvas::Rect {
+    lunco_canvas::Rect::from_min_max(
+        lunco_canvas::Pos::new(0.0, 0.0),
+        lunco_canvas::Pos::new(800.0, 600.0),
+    )
+}
+
+fn on_set_zoom(trigger: On<SetZoom>, mut commands: Commands) {
+    let raw = trigger.event().doc;
+    let zoom = trigger.event().zoom;
+    commands.queue(move |world: &mut World| {
+        let doc = if raw == 0 {
+            resolve_active_doc(world)
+        } else {
+            Some(DocumentId::new(raw))
+        };
+        use crate::ui::panels::canvas_diagram::CanvasDiagramState;
+        let Some(mut state) = world.get_resource_mut::<CanvasDiagramState>() else {
+            return;
+        };
+        let docstate = state.get_mut(doc);
+        if zoom <= 0.0 {
+            // zoom = 0 → fit-all. Keeps the API callable by scripts
+            // that don't want to distinguish Fit from SetZoom.
+            if let Some(bounds) = docstate.canvas.scene.bounds() {
+                let sr = approx_screen_rect();
+                let (c, z) = docstate.canvas.viewport.fit_values(bounds, sr, 40.0);
+                docstate.canvas.viewport.set_target(c, z);
+            }
+        } else {
+            let vp = &mut docstate.canvas.viewport;
+            let c = vp.center;
+            vp.set_target(c, zoom);
+        }
+    });
+}
+
+fn on_fit_canvas(trigger: On<FitCanvas>, mut commands: Commands) {
+    let raw = trigger.event().doc;
+    commands.queue(move |world: &mut World| {
+        let doc = if raw == 0 {
+            resolve_active_doc(world)
+        } else {
+            Some(DocumentId::new(raw))
+        };
+        use crate::ui::panels::canvas_diagram::CanvasDiagramState;
+        let Some(mut state) = world.get_resource_mut::<CanvasDiagramState>() else {
+            return;
+        };
+        let docstate = state.get_mut(doc);
+        if let Some(bounds) = docstate.canvas.scene.bounds() {
+            let sr = approx_screen_rect();
+            let (c, z) = docstate.canvas.viewport.fit_values(bounds, sr, 40.0);
+            docstate.canvas.viewport.set_target(c, z);
+        }
+    });
+}
+
+fn on_open_example(
+    trigger: On<OpenExample>,
+    mut commands: Commands,
+) {
+    // Shim over `OpenExampleInWorkspace` with a simpler name for the
+    // public API surface. Internal callers can keep using the old
+    // event directly; this observer just re-fires.
+    let qualified = trigger.event().qualified.clone();
+    commands.trigger(OpenExampleInWorkspace { qualified });
 }

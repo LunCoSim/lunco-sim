@@ -1098,6 +1098,68 @@ fn render_icon_view(ui: &mut egui::Ui, world: &mut World) {
         egui::StrokeKind::Outside,
     );
 
+    // Priority 1: authored `Icon(graphics={...})` from the class's
+    // own AST. This is what user-defined classes with inline
+    // annotations (or any MSL class whose rasterised SVG isn't in
+    // the asset bundle) rely on.
+    let authored_icon = {
+        let registry = world.resource::<ModelicaDocumentRegistry>();
+        world
+            .get_resource::<lunco_workbench::WorkspaceResource>()
+            .and_then(|ws| ws.active_document)
+            .and_then(|doc| registry.host(doc))
+            .and_then(|host| host.document().ast().result.as_ref().ok().cloned())
+            .and_then(|ast| {
+                // Find the target class inside the doc by short name.
+                let short = qualified.rsplit('.').next().unwrap_or(&qualified);
+                let class = ast
+                    .classes
+                    .iter()
+                    .find_map(|(name, c)| {
+                        (name.as_str() == short || name.as_str() == qualified.as_str())
+                            .then_some(c)
+                    })?;
+                crate::annotations::extract_icon(&class.annotation)
+            })
+    };
+
+    if let Some(icon) = authored_icon {
+        let side = (rect.width().min(rect.height()) * 0.6).max(100.0);
+        let icon_rect = egui::Rect::from_center_size(
+            rect.center(),
+            egui::vec2(side, side),
+        );
+        let short_name = qualified
+            .rsplit('.')
+            .next()
+            .unwrap_or(&qualified)
+            .to_string();
+        let sub = crate::icon_paint::TextSubstitution {
+            // On the Icon tab there's no specific instance — show the
+            // class name for `%name`. `%class` is unambiguously the
+            // class itself. Matches what Dymola puts in the Icon view.
+            name: Some(short_name.as_str()),
+            class_name: Some(short_name.as_str()),
+        };
+        crate::icon_paint::paint_graphics_full(
+            painter,
+            icon_rect,
+            icon.coordinate_system,
+            crate::icon_paint::IconOrientation::default(),
+            Some(&sub),
+            &icon.graphics,
+        );
+        painter.text(
+            egui::pos2(icon_rect.center().x, icon_rect.max.y + 16.0),
+            egui::Align2::CENTER_TOP,
+            &qualified,
+            egui::FontId::proportional(13.0),
+            theme.tokens.text,
+        );
+        return;
+    }
+
+    // Priority 2: pre-rasterised SVG from the MSL asset bundle.
     if let Some(path) = icon_asset {
         if let Some(bytes) = svg_bytes_for_icon(&path) {
             // Render into a centred square that's at most ~60 % of
