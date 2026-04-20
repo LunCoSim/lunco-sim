@@ -21,15 +21,28 @@ As per Article X of the Project Constitution, **hardcoded magic numbers are forb
 ### 3.1 Theme binding (`lunco-theme`)
 
 All UI colors, spacing, and rounding come from the `Theme` resource in
-`lunco-theme` (see `crates/lunco-theme/README.md` for the full API):
+`lunco-theme` (see `crates/lunco-theme/README.md` + the `lunco-theme`
+skill for the full API and decision rules):
 
-- **No `Color32::from_rgb` / hex literals outside `lunco-theme`.** Add
-  a semantic token or register a per-domain override
-  (`theme.register_override` / `theme.get_token`) instead.
-- **Prefer `theme.tokens.*`** (`accent`, `success`, `warning`, `error`,
-  `text`, …) over raw `theme.colors.*` swatches.
+- **No `Color32::from_rgb` / hex literals outside `lunco-theme`.**
+- **Four tiers, pick the highest that fits:**
+  1. `theme.tokens.*` (`DesignTokens`) — generic semantic colours for
+     any UI (`accent`, `success`, `warning`, `error`, `text`, …).
+  2. `theme.schematic.*` (`SchematicTokens`) — schematic-editor
+     colours for any block-diagram domain (wire colours by domain,
+     class-kind badges, diagram text).
+  3. **Domain extension trait on `Theme`** (e.g. `ModelicaThemeExt`
+     in `lunco-modelica/src/ui/theme.rs`) — maps domain type names
+     (`"Pin"`, `ClassType::Model`) to tier-2 fields. **No palette
+     picks in the trait body**; if the intent isn't in tier 2 yet,
+     add it there first.
+  4. `theme.register_override(...)` + `theme.get_token(...)` — only
+     for user-pinned values that must *not* track the palette.
+- **Palette reads (`theme.colors.*`) are only legitimate inside
+  `from_palette` builders.** Never in a panel, overlay, or domain
+  trait default.
 - Read via `Res<lunco_theme::Theme>`; in `&mut World` widgets, clone
-  the fields you need out of `World` before touching `ui`.
+  the whole `Theme` out of `World` before touching `ui`.
 - Don't call `ctx.set_visuals` — `lunco-ui`'s `sync_theme_system`
   handles it. Dark/light flips via `theme.toggle_mode()`.
 - `lunco-workbench` auto-adds `ThemePlugin`; add it explicitly in

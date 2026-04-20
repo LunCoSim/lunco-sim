@@ -139,6 +139,17 @@ impl BrowserSection for ModelicaSection {
             return;
         }
 
+        // Snapshot the theme once so every row in this frame reads
+        // the same semantic colours (dark/light toggles propagate on
+        // the next render). Cloning `Theme` is cheap — colours,
+        // tokens, spacing, rounding, plus a small overrides
+        // HashMap — well under a millisecond.
+        let theme = ctx
+            .world
+            .get_resource::<lunco_theme::Theme>()
+            .cloned()
+            .unwrap_or_else(lunco_theme::Theme::dark);
+
         // What's currently in the foreground tab? Used to render that
         // (doc, class) pair as selected so users see "I'm editing
         // this." Active doc comes from `WorkbenchState.open_model`,
@@ -191,6 +202,7 @@ impl BrowserSection for ModelicaSection {
                             *doc_id,
                             active_doc,
                             active_qualified.as_deref(),
+                            &theme,
                             ctx,
                         );
                     }
@@ -286,15 +298,17 @@ fn render_class_row(
     doc_id: DocumentId,
     active_doc: Option<DocumentId>,
     active_qualified: Option<&str>,
+    theme: &lunco_theme::Theme,
     ctx: &mut BrowserCtx<'_>,
 ) {
-    let badge = type_badge(&class.kind);
+    use crate::ui::theme::ModelicaThemeExt;
+    let badge = type_badge(&class.kind, theme);
     let is_active = Some(doc_id) == active_doc
         && active_qualified == Some(class.qualified_path.as_str());
 
     if class.children.is_empty() {
         ui.horizontal(|ui| {
-            paint_badge(ui, badge);
+            paint_badge(ui, badge, theme);
             // `selectable_label`'s `selected` flag drives egui's own
             // highlight chrome — same look as the active tab in the
             // dock, so the visual language is consistent.
@@ -311,17 +325,13 @@ fn render_class_row(
                 });
             }
             // Description + qualified path move to the hover tooltip.
-            // Rendering description inline eats horizontal space,
-            // duplicates context already implied by the class name,
-            // and wraps awkwardly in a narrow side panel. Hover
-            // keeps the tree dense; users who want the blurb get it
-            // on demand.
+            let muted = theme.text_muted();
             resp.on_hover_ui(|ui| {
                 ui.strong(&class.short_name);
                 ui.label(
                     egui::RichText::new(&class.qualified_path)
                         .small()
-                        .color(egui::Color32::from_rgb(150, 170, 200)),
+                        .color(muted),
                 );
                 if let Some(desc) = &class.description {
                     ui.separator();
@@ -346,6 +356,7 @@ fn render_class_row(
                     doc_id,
                     active_doc,
                     active_qualified,
+                    theme,
                     ctx,
                 );
             }
@@ -353,12 +364,13 @@ fn render_class_row(
         let desc = class.description.clone();
         let qualified = class.qualified_path.clone();
         let short = class.short_name.clone();
+        let muted = theme.text_muted();
         resp.header_response.clone().on_hover_ui(move |ui| {
             ui.strong(&short);
             ui.label(
                 egui::RichText::new(&qualified)
                     .small()
-                    .color(egui::Color32::from_rgb(150, 170, 200)),
+                    .color(muted),
             );
             if let Some(desc) = &desc {
                 ui.separator();
@@ -380,56 +392,34 @@ struct Badge {
     bg: egui::Color32,
 }
 
-fn type_badge(kind: &ClassType) -> Badge {
-    use egui::Color32 as C;
-    match kind {
-        ClassType::Model => Badge {
-            letter: "M",
-            bg: C::from_rgb(80, 130, 200),
-        },
-        ClassType::Block => Badge {
-            letter: "B",
-            bg: C::from_rgb(100, 160, 110),
-        },
-        ClassType::Class => Badge {
-            letter: "C",
-            bg: C::from_rgb(120, 130, 160),
-        },
-        ClassType::Connector => Badge {
-            letter: "X",
-            bg: C::from_rgb(220, 160, 80),
-        },
-        ClassType::Record => Badge {
-            letter: "R",
-            bg: C::from_rgb(170, 120, 180),
-        },
-        ClassType::Type => Badge {
-            letter: "T",
-            bg: C::from_rgb(150, 150, 150),
-        },
-        ClassType::Package => Badge {
-            letter: "P",
-            bg: C::from_rgb(190, 110, 110),
-        },
-        ClassType::Function => Badge {
-            letter: "F",
-            bg: C::from_rgb(110, 170, 200),
-        },
-        ClassType::Operator => Badge {
-            letter: "O",
-            bg: C::from_rgb(160, 160, 110),
-        },
+fn type_badge(kind: &ClassType, theme: &lunco_theme::Theme) -> Badge {
+    use crate::ui::theme::ModelicaThemeExt;
+    let letter = match kind {
+        ClassType::Model => "M",
+        ClassType::Block => "B",
+        ClassType::Class => "C",
+        ClassType::Connector => "X",
+        ClassType::Record => "R",
+        ClassType::Type => "T",
+        ClassType::Package => "P",
+        ClassType::Function => "F",
+        ClassType::Operator => "O",
+    };
+    Badge {
+        letter,
+        bg: theme.class_badge_bg(kind),
     }
 }
 
-fn paint_badge(ui: &mut egui::Ui, badge: Badge) {
+fn paint_badge(ui: &mut egui::Ui, badge: Badge, theme: &lunco_theme::Theme) {
+    use crate::ui::theme::ModelicaThemeExt;
     ui.add(
         egui::Label::new(
             egui::RichText::new(badge.letter)
                 .monospace()
                 .small()
                 .background_color(badge.bg)
-                .color(egui::Color32::WHITE),
+                .color(theme.class_badge_fg()),
         )
         .selectable(false),
     );

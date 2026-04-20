@@ -126,6 +126,77 @@ impl DesignTokens {
     }
 }
 
+/// Semantic colours for any typed-block-diagram editor — wires by
+/// connector domain (electrical, mechanical, signal, …) and class /
+/// component badges by kind (model, block, package, …).
+///
+/// Theme authors customise these through light/dark overrides. Domain
+/// crates (Modelica, SysML, electrical CAD) read them as plain
+/// fields — no string lookups, no per-call defaults — so the palette
+/// → intent mapping lives in **one** place: [`Self::from_palette`].
+#[derive(Clone, Debug)]
+pub struct SchematicTokens {
+    // Wire colours
+    pub wire_electrical: egui::Color32,
+    pub wire_mechanical: egui::Color32,
+    pub wire_thermal: egui::Color32,
+    pub wire_fluid: egui::Color32,
+    pub wire_signal: egui::Color32,
+    pub wire_boolean: egui::Color32,
+    pub wire_integer: egui::Color32,
+    pub wire_multibody: egui::Color32,
+    pub wire_unknown: egui::Color32,
+
+    // Class/component-kind badge backgrounds
+    pub class_model_badge: egui::Color32,
+    pub class_block_badge: egui::Color32,
+    pub class_class_badge: egui::Color32,
+    pub class_connector_badge: egui::Color32,
+    pub class_record_badge: egui::Color32,
+    pub class_type_badge: egui::Color32,
+    pub class_package_badge: egui::Color32,
+    pub class_function_badge: egui::Color32,
+    pub class_operator_badge: egui::Color32,
+    pub class_badge_fg: egui::Color32,
+
+    // Typography outside of egui's `visuals.*` chain
+    pub text_muted: egui::Color32,
+    pub text_heading: egui::Color32,
+}
+
+impl SchematicTokens {
+    /// Build the semantic schematic-editor colours from a raw
+    /// palette. This is the *only* site that maps palette entries
+    /// to intent — all consumer code reads the resulting fields.
+    pub fn from_palette(p: &ColorPalette) -> Self {
+        Self {
+            wire_electrical: p.blue,
+            wire_mechanical: p.maroon,
+            wire_thermal: p.peach,
+            wire_fluid: p.teal,
+            wire_signal: p.mauve,
+            wire_boolean: p.red,
+            wire_integer: p.green,
+            wire_multibody: p.lavender,
+            wire_unknown: p.overlay1,
+
+            class_model_badge: p.blue,
+            class_block_badge: p.green,
+            class_class_badge: p.overlay1,
+            class_connector_badge: p.peach,
+            class_record_badge: p.mauve,
+            class_type_badge: p.overlay0,
+            class_package_badge: p.red,
+            class_function_badge: p.sapphire,
+            class_operator_badge: p.yellow,
+            class_badge_fg: p.base,
+
+            text_muted: p.subtext0,
+            text_heading: p.text,
+        }
+    }
+}
+
 /// Core design tokens — colors, spacing, and rounding.
 #[derive(Resource, Clone, Debug)]
 pub struct Theme {
@@ -134,6 +205,10 @@ pub struct Theme {
     pub colors: ColorPalette,
     /// The functional design tokens (Semantic).
     pub tokens: DesignTokens,
+    /// Schematic-editor tokens (wire colours, class-kind badges,
+    /// typography). Shared by every block-diagram-style editor in
+    /// the workspace.
+    pub schematic: SchematicTokens,
     pub spacing: SpacingScale,
     pub rounding: RoundingScale,
     /// Generic registry for domain-specific theme overrides.
@@ -184,10 +259,12 @@ impl Theme {
     pub fn dark() -> Self {
         let colors = ColorPalette::from_catppuccin(catppuccin_egui::MOCHA);
         let tokens = DesignTokens::from_palette(&colors);
+        let schematic = SchematicTokens::from_palette(&colors);
         Self {
             mode: ThemeMode::Dark,
             colors,
             tokens,
+            schematic,
             spacing: SpacingScale::default(),
             rounding: RoundingScale::default(),
             overrides: HashMap::new(),
@@ -197,10 +274,12 @@ impl Theme {
     pub fn light() -> Self {
         let colors = ColorPalette::from_catppuccin(catppuccin_egui::LATTE);
         let tokens = DesignTokens::from_palette(&colors);
+        let schematic = SchematicTokens::from_palette(&colors);
         Self {
             mode: ThemeMode::Light,
             colors,
             tokens,
+            schematic,
             spacing: SpacingScale::default(),
             rounding: RoundingScale::default(),
             overrides: HashMap::new(),
