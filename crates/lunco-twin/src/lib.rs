@@ -68,11 +68,14 @@ mod manifest;
 
 pub use error::TwinError;
 pub use file_kind::{DocumentKind, FileEntry, FileKind};
-pub use manifest::{TwinManifest, MANIFEST_FILENAME};
+pub use manifest::{TwinChildRef, TwinManifest, MANIFEST_FILENAME};
 
-// Re-export lunco-doc so downstream crates don't need to depend on it
-// separately just to use the types Twin hands back in the future.
+// Re-export lunco-doc and lunco-storage so downstream crates don't need
+// to depend on them separately just to use the types Twin hands back.
 pub use lunco_doc;
+pub use lunco_storage;
+
+use lunco_storage::StorageHandle;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TwinMode — what did the user open?
@@ -120,17 +123,75 @@ impl TwinMode {
         }
 
         let manifest_path = path.join(MANIFEST_FILENAME);
-        let twin = Twin::index(path.to_path_buf())?;
+        let mut twin = Twin::index(path.to_path_buf())?;
 
         if manifest_path.is_file() {
             let manifest = TwinManifest::read(&manifest_path)?;
-            Ok(TwinMode::Twin(Twin {
-                manifest: Some(manifest),
-                ..twin
-            }))
+
+            // Recursively open children with local paths. External URL
+            // children are left for the future remote-twin pipeline;
+            // they stay on the manifest but don't produce a loaded
+            // sub-Twin today.
+            let mut children = Vec::new();
+            for child_ref in &manifest.children {
+                let Some(rel) = &child_ref.path else { continue };
+                let child_root = twin.root.join(rel);
+                // Skip silently if the child folder is missing — a Twin
+                // opening with a broken reference should still load the
+                // parent cleanly, and the UI can surface a warning. An
+                // error here would cascade and prevent any editing.
+                if !child_root.is_dir() {
+                    continue;
+                }
+                // Recurse via TwinMode::open so the child's own
+                // manifest + children are discovered. Guard against
+                // cycles by comparing canonical paths against
+                // ancestors visited on this open.
+                if matches_ancestor(&twin.root, &child_root) {
+                    continue;
+                }
+                match TwinMode::open(&child_root)? {
+                    TwinMode::Twin(t) | TwinMode::Folder(t) => children.push(t),
+                    TwinMode::Orphan(_) => {}
+                }
+            }
+
+            twin.manifest = Some(manifest);
+            twin.children = children;
+            Ok(TwinMode::Twin(twin))
         } else {
             Ok(TwinMode::Folder(twin))
         }
+    }
+}
+
+/// Cycle guard: returns `true` when `candidate` canonicalises to the
+/// same path as `ancestor`. Cheaper than walking the entire ancestry
+/// because `TwinMode::open` always recurses from the parent downward,
+/// so a direct-parent check catches the common broken case (manifest
+/// that lists its own folder as a child).
+fn matches_ancestor(ancestor: &Path, candidate: &Path) -> bool {
+    match (ancestor.canonicalize(), candidate.canonicalize()) {
+        (Ok(a), Ok(c)) => a == c,
+        _ => false,
+    }
+}
+
+/// Depth-first iterator over a Twin and its sub-Twins.
+struct TwinWalkIter<'a> {
+    stack: Vec<&'a Twin>,
+}
+
+impl<'a> Iterator for TwinWalkIter<'a> {
+    type Item = &'a Twin;
+    fn next(&mut self) -> Option<&'a Twin> {
+        let t = self.stack.pop()?;
+        // Push children reversed so the iteration order is stable
+        // left-to-right in declaration order.
+        for c in t.children.iter().rev() {
+            self.stack.push(c);
+        }
+        Some(t)
     }
 }
 
@@ -145,6 +206,13 @@ impl TwinMode {
 ///
 /// All paths in [`files`](Self::files) are **relative to [`root`](Self::root)**
 /// so the index survives the folder being moved.
+///
+/// # Recursion
+///
+/// If the manifest lists `[[twin.children]]` entries with local `path`s,
+/// those child folders are eagerly opened as sub-Twins and stored in
+/// [`children`](Self::children). External URL children are listed in
+/// the manifest but not followed today.
 #[derive(Debug)]
 pub struct Twin {
     /// Absolute path to the folder on disk.
@@ -155,6 +223,9 @@ pub struct Twin {
     ///
     /// Excludes `twin.toml` itself and the hidden `.lunco/` directory.
     files: Vec<FileEntry>,
+    /// Sub-Twins loaded from `[[twin.children]]` with local `path`.
+    /// Empty for plain folders and for twins with no children.
+    children: Vec<Twin>,
 }
 
 impl Twin {
@@ -209,12 +280,67 @@ impl Twin {
             root,
             manifest: None,
             files,
+            children: Vec::new(),
         })
     }
 
     /// All files discovered inside the Twin, classified.
     pub fn files(&self) -> &[FileEntry] {
         &self.files
+    }
+
+    /// Sub-Twins loaded from the manifest's `[[twin.children]]` with a
+    /// local `path`. Read-only accessor so callers can't skip the
+    /// open/load invariant. External-URL children are on the manifest
+    /// but not here (not yet followed).
+    pub fn children(&self) -> &[Twin] {
+        &self.children
+    }
+
+    /// Storage handle pointing at this Twin's root folder. Convenience
+    /// for callers that work in `lunco-storage` terms (e.g. the
+    /// Workspace layer) rather than raw `PathBuf`.
+    pub fn root_handle(&self) -> StorageHandle {
+        StorageHandle::File(self.root.clone())
+    }
+
+    /// Whether `handle` refers to a file inside this Twin's folder
+    /// **or any of its sub-Twins**. This is the core predicate
+    /// Workspace uses to decide which Twin owns an open Document —
+    /// without materialising a document list on the Twin side.
+    ///
+    /// Only meaningful for [`StorageHandle::File`] today. Other
+    /// backends always return `false`.
+    pub fn owns(&self, handle: &StorageHandle) -> bool {
+        handle.is_under(&self.root_handle())
+            || self.children.iter().any(|c| c.owns(handle))
+    }
+
+    /// Recursively walk every Twin in this tree (self first, then
+    /// children depth-first). Useful for "save all", "find Twin owning
+    /// this path", and similar workspace-level operations.
+    pub fn walk(&self) -> impl Iterator<Item = &Twin> {
+        TwinWalkIter {
+            stack: vec![self],
+        }
+    }
+
+    /// Locate the deepest Twin in this subtree whose folder contains
+    /// `handle`. Returns `None` if no Twin in the tree owns it.
+    pub fn find_owning(&self, handle: &StorageHandle) -> Option<&Twin> {
+        // Depth-first so a sub-Twin wins over its parent when both
+        // technically contain the file (matches the "enclosing twin"
+        // rule — nearest twin.toml wins).
+        for child in &self.children {
+            if let Some(t) = child.find_owning(handle) {
+                return Some(t);
+            }
+        }
+        if handle.is_under(&self.root_handle()) {
+            Some(self)
+        } else {
+            None
+        }
     }
 
     /// Iterate only files classified as [`Document`](FileKind::Document).
@@ -360,7 +486,8 @@ version = "0.1.0"
             name: "promoted".into(),
             description: None,
             version: "0.1.0".into(),
-            default_workspace: None,
+            default_perspective: None,
+            children: vec![],
         };
         twin.promote_to_twin(manifest).unwrap();
         assert!(twin.has_manifest());
@@ -402,6 +529,171 @@ version = "0.1.0"
     fn missing_path_errors() {
         let err = TwinMode::open(Path::new("/definitely/does/not/exist/12345"));
         assert!(err.is_err());
+    }
+
+    fn write_manifest(path: &Path, toml_body: &str) {
+        write(path, toml_body);
+    }
+
+    #[test]
+    fn recursive_twin_loads_local_children() {
+        // Layout:
+        //   root/twin.toml  (children: rover/, lander/)
+        //   root/rover/twin.toml
+        //   root/rover/Rover.mo
+        //   root/lander/Lander.mo   (no twin.toml — child still loads as Folder)
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        write_manifest(
+            &root.join("twin.toml"),
+            r#"
+name = "mission"
+version = "0.1.0"
+
+[[children]]
+name = "rover"
+path = "rover"
+
+[[children]]
+name = "lander"
+path = "lander"
+"#,
+        );
+        write_manifest(
+            &root.join("rover/twin.toml"),
+            r#"
+name = "rover"
+version = "0.1.0"
+"#,
+        );
+        write(&root.join("rover/Rover.mo"), "model Rover end Rover;");
+        write(&root.join("lander/Lander.mo"), "model Lander end Lander;");
+
+        let TwinMode::Twin(t) = TwinMode::open(root).unwrap() else {
+            panic!("expected Twin mode");
+        };
+        assert_eq!(t.children().len(), 2);
+        assert_eq!(t.children()[0].manifest.as_ref().unwrap().name, "rover");
+        // Second child had no manifest — loaded as Folder-variant twin.
+        assert!(t.children()[1].manifest.is_none());
+    }
+
+    #[test]
+    fn missing_child_folder_is_tolerated() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_manifest(
+            &tmp.path().join("twin.toml"),
+            r#"
+name = "broken"
+version = "0.1.0"
+
+[[children]]
+name = "ghost"
+path = "does_not_exist"
+"#,
+        );
+        let TwinMode::Twin(t) = TwinMode::open(tmp.path()).unwrap() else {
+            panic!("expected Twin mode");
+        };
+        assert_eq!(t.children().len(), 0);
+        // Manifest entry is still visible to the UI so it can surface
+        // a "missing child" warning.
+        assert_eq!(t.manifest.unwrap().children.len(), 1);
+    }
+
+    #[test]
+    fn owns_predicate_respects_hierarchy() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        write_manifest(
+            &root.join("twin.toml"),
+            r#"
+name = "parent"
+version = "0.1.0"
+
+[[children]]
+name = "sub"
+path = "sub"
+"#,
+        );
+        write_manifest(
+            &root.join("sub/twin.toml"),
+            r#"
+name = "sub"
+version = "0.1.0"
+"#,
+        );
+        write(&root.join("top.mo"), "model Top end Top;");
+        write(&root.join("sub/inner.mo"), "model Inner end Inner;");
+
+        let TwinMode::Twin(parent) = TwinMode::open(root).unwrap() else {
+            panic!();
+        };
+
+        let top_handle = lunco_storage::StorageHandle::File(root.join("top.mo"));
+        let inner_handle =
+            lunco_storage::StorageHandle::File(root.join("sub/inner.mo"));
+        let outside =
+            lunco_storage::StorageHandle::File(tmp.path().parent().unwrap().join("elsewhere.mo"));
+
+        assert!(parent.owns(&top_handle));
+        assert!(parent.owns(&inner_handle));
+        assert!(!parent.owns(&outside));
+
+        // find_owning picks the deepest match: `sub` for the inner file.
+        assert_eq!(
+            parent.find_owning(&inner_handle).unwrap().root,
+            root.join("sub").canonicalize().unwrap_or(root.join("sub"))
+        );
+        assert_eq!(
+            parent.find_owning(&top_handle).unwrap().root,
+            parent.root
+        );
+        assert!(parent.find_owning(&outside).is_none());
+    }
+
+    #[test]
+    fn walk_visits_every_twin_in_tree() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        write_manifest(
+            &root.join("twin.toml"),
+            r#"
+name = "a"
+version = "0.1.0"
+
+[[children]]
+name = "b"
+path = "b"
+
+[[children]]
+name = "c"
+path = "c"
+"#,
+        );
+        write_manifest(
+            &root.join("b/twin.toml"),
+            r#"
+name = "b"
+version = "0.1.0"
+"#,
+        );
+        write_manifest(
+            &root.join("c/twin.toml"),
+            r#"
+name = "c"
+version = "0.1.0"
+"#,
+        );
+
+        let TwinMode::Twin(t) = TwinMode::open(root).unwrap() else {
+            panic!();
+        };
+        let names: Vec<String> = t
+            .walk()
+            .map(|t| t.manifest.as_ref().unwrap().name.clone())
+            .collect();
+        assert_eq!(names, vec!["a", "b", "c"]);
     }
 }
 

@@ -1,7 +1,7 @@
 //! `twin.toml` — the Twin manifest.
 
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::error::TwinError;
 
@@ -12,6 +12,15 @@ pub const MANIFEST_FILENAME: &str = "twin.toml";
 ///
 /// Kept deliberately small. Fields are added as concrete UI flows need
 /// them — speculative fields rot faster than they help.
+///
+/// # Recursion
+///
+/// A Twin may nest other Twins via the `children` list. Each child is
+/// either a **local** folder path relative to the parent (loaded
+/// eagerly when the parent opens) or an **external** reference by URL
+/// (not yet followed; reserved for remote-twin support). This mirrors
+/// Cargo's `[workspace.members]` — a twin.toml describes one Twin and
+/// optionally the Twins it composes.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct TwinManifest {
@@ -26,11 +35,36 @@ pub struct TwinManifest {
     /// future breaking changes to the manifest format.
     pub version: String,
 
-    /// Which workbench workspace to open by default (e.g. `"build"`,
-    /// `"simulate"`, `"analyze"`). Workspaces are defined by the app;
-    /// Twin stores only the identifier.
+    /// Which **Perspective** (layout preset — `"build"`, `"simulate"`,
+    /// `"analyze"`) to activate when this Twin opens. Perspectives are
+    /// defined by the app; the manifest stores only the identifier.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default_workspace: Option<String>,
+    pub default_perspective: Option<String>,
+
+    /// Sub-Twins composed into this Twin. Empty for leaf twins.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub children: Vec<TwinChildRef>,
+}
+
+/// Reference to a sub-Twin. Local for now; remote URLs reserved for
+/// future "point this child at an IPFS/HTTPS twin bundle" support.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct TwinChildRef {
+    /// Logical name for the child. Displayed in the Twin Browser as the
+    /// node label; does not need to match the folder name on disk but
+    /// conventionally does.
+    pub name: String,
+
+    /// Folder path relative to the parent Twin's root. Mutually
+    /// exclusive with [`url`](Self::url).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<PathBuf>,
+
+    /// Remote reference (`https://…`, `ipfs://…`). Not yet followed at
+    /// open time — reserved for the remote-twin milestone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
 }
 
 impl TwinManifest {
@@ -63,7 +97,8 @@ mod tests {
             name: "demo".into(),
             description: None,
             version: "0.1.0".into(),
-            default_workspace: None,
+            default_perspective: None,
+            children: vec![],
         };
         let text = toml::to_string_pretty(&manifest).unwrap();
         let parsed: TwinManifest = toml::from_str(&text).unwrap();
@@ -76,7 +111,19 @@ mod tests {
             name: "lunar_base".into(),
             description: Some("a research outpost".into()),
             version: "0.1.0".into(),
-            default_workspace: Some("simulate".into()),
+            default_perspective: Some("simulate".into()),
+            children: vec![
+                TwinChildRef {
+                    name: "rover".into(),
+                    path: Some("rover/".into()),
+                    url: None,
+                },
+                TwinChildRef {
+                    name: "shared_sensors".into(),
+                    path: None,
+                    url: Some("https://twins.lunco.space/sensors".into()),
+                },
+            ],
         };
         let text = toml::to_string_pretty(&manifest).unwrap();
         let parsed: TwinManifest = toml::from_str(&text).unwrap();
@@ -102,11 +149,13 @@ version = "0.1.0"
 "#;
         let parsed: TwinManifest = toml::from_str(text).unwrap();
         assert_eq!(parsed.description, None);
-        assert_eq!(parsed.default_workspace, None);
+        assert_eq!(parsed.default_perspective, None);
+        assert!(parsed.children.is_empty());
 
         // Re-serializing should not add the optional keys with null/empty values.
         let out = toml::to_string_pretty(&parsed).unwrap();
         assert!(!out.contains("description"));
-        assert!(!out.contains("default_workspace"));
+        assert!(!out.contains("default_perspective"));
+        assert!(!out.contains("children"));
     }
 }

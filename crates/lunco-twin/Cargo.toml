@@ -6,6 +6,7 @@ description = "Twin — LunCoSim's top-level persistent artifact. Folder + twin.
 
 [dependencies]
 lunco-doc = { path = "../lunco-doc" }
+lunco-storage = { path = "../lunco-storage" }
 serde = { version = "1.0", features = ["derive"] }
 toml = "0.8"
 walkdir = "2.5"
