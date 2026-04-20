@@ -18,13 +18,16 @@
 //! `Expression::NamedArgument { name, value }`. The helpers below normalize
 //! both forms so call sites do not have to.
 //!
-//! ## Scope of slice 1
+//! ## Scope
 //!
 //! - Reads the class's *own* annotation only (no `extends` graphics merge).
 //! - Color resolution is literal `{r,g,b}` only; named/`DynamicSelect`
 //!   colors fall through to `None`.
-//! - `Ellipse` and `Bitmap` are not yet emitted; they will be added in a
-//!   later slice once the rendering path is in place.
+//! - Full MLS Annex D primitive set: `Rectangle`, `Line`, `Polygon`,
+//!   `Text`, `Ellipse`, `Bitmap`. `Line` now carries `arrow[0..1]` and
+//!   `arrowSize`. `Ellipse` arcs (startAngle/endAngle/closure) are
+//!   parsed; renderer currently fills a full ellipse and ignores arc
+//!   bounds (follow-up slice).
 
 use rumoca_session::parsing::ast::{Expression, OpUnary, TerminalType};
 use serde::{Deserialize, Serialize};
@@ -188,6 +191,56 @@ pub enum GraphicItem {
     Line(Line),
     Polygon(Polygon),
     Text(Text),
+    Ellipse(Ellipse),
+    Bitmap(Bitmap),
+}
+
+/// MLS Annex D `Arrow` enum — line endcap style. Default `None`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum Arrow {
+    #[default]
+    None,
+    Open,
+    Filled,
+    Half,
+}
+
+impl Arrow {
+    fn from_ident(s: &str) -> Option<Self> {
+        // Accept both bare leaf ("Filled") and dotted form
+        // ("Arrow.Filled") — Modelica source can use either depending
+        // on whether the enum is used inside its declaring type.
+        let leaf = s.rsplit('.').next().unwrap_or(s);
+        match leaf {
+            "None" => Some(Self::None),
+            "Open" => Some(Self::Open),
+            "Filled" => Some(Self::Filled),
+            "Half" => Some(Self::Half),
+            _ => None,
+        }
+    }
+}
+
+/// MLS Annex D `EllipseClosure` enum — how a partial ellipse arc is
+/// closed. Default `Chord`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum EllipseClosure {
+    None,
+    #[default]
+    Chord,
+    Radial,
+}
+
+impl EllipseClosure {
+    fn from_ident(s: &str) -> Option<Self> {
+        let leaf = s.rsplit('.').next().unwrap_or(s);
+        match leaf {
+            "None" => Some(Self::None),
+            "Chord" => Some(Self::Chord),
+            "Radial" => Some(Self::Radial),
+            _ => None,
+        }
+    }
 }
 
 /// Properties common to filled shapes (rectangles, polygons).
@@ -217,6 +270,18 @@ pub struct Line {
     pub thickness: f64,
     pub origin: Point,
     pub rotation: f64,
+    /// Arrow style at the line's start (`arrow[0]`) and end
+    /// (`arrow[1]`). Defaults `(None, None)`.
+    pub arrow: [Arrow; 2],
+    /// Arrow-head length in diagram units. Default 3.0 per MLS.
+    pub arrow_size: f64,
+    /// Smooth line interpolation flag (`smooth=Smooth.Bezier`). When
+    /// true, the renderer may draw a cubic-Bezier through the points
+    /// instead of straight segments. Currently parsed only — the
+    /// renderer falls back to polyline; smooth rendering is a
+    /// follow-up. Kept in the AST so Save-As round-trips don't lose
+    /// the attribute.
+    pub smooth_bezier: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -233,6 +298,43 @@ pub struct Text {
     pub text_string: String,
     pub font_size: f64, // 0 = auto-fit
     pub text_color: Option<Color>,
+    pub origin: Point,
+    pub rotation: f64,
+}
+
+/// MLS Annex D `Ellipse` primitive — a filled-shape ellipse fitted to
+/// `extent`. `start_angle` / `end_angle` define an arc; `closure`
+/// selects how a partial arc is closed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Ellipse {
+    pub shape: FilledShape,
+    pub extent: Extent,
+    pub origin: Point,
+    pub rotation: f64,
+    /// Arc start angle (degrees, CCW). Default 0.
+    pub start_angle: f64,
+    /// Arc end angle (degrees, CCW). Default 360 (full ellipse).
+    pub end_angle: f64,
+    /// How a partial arc is closed.
+    pub closure: EllipseClosure,
+}
+
+/// MLS Annex D `Bitmap` primitive — an embedded raster image.
+///
+/// Exactly one of `filename` (modelica:// or file path URI) and
+/// `image_source` (base64-encoded raw bytes) is typically set; MLS
+/// allows both but filename takes precedence.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Bitmap {
+    pub extent: Extent,
+    /// Resource URI (`modelica://Package.Name/path/to/img.png`) or raw
+    /// filesystem path. The renderer resolves `modelica://` to the
+    /// package's on-disk directory via `lunco_assets::msl_dir`.
+    pub filename: Option<String>,
+    /// Base64-encoded raw image bytes. When present and `filename` is
+    /// absent, used as the image source. Supported formats: whatever
+    /// the `image` crate decodes.
+    pub image_source: Option<String>,
     pub origin: Point,
     pub rotation: f64,
 }
@@ -311,7 +413,8 @@ fn extract_graphic_item(expr: &Expression) -> Option<GraphicItem> {
         "Line" => Some(GraphicItem::Line(extract_line(args)?)),
         "Polygon" => Some(GraphicItem::Polygon(extract_polygon(args)?)),
         "Text" => Some(GraphicItem::Text(extract_text(args)?)),
-        // Ellipse/Bitmap intentionally skipped in slice 1.
+        "Ellipse" => Some(GraphicItem::Ellipse(extract_ellipse(args)?)),
+        "Bitmap" => Some(GraphicItem::Bitmap(extract_bitmap(args)?)),
         _ => None,
     }
 }
@@ -335,6 +438,24 @@ fn extract_rectangle(args: &[Expression]) -> Option<Rectangle> {
 
 fn extract_line(args: &[Expression]) -> Option<Line> {
     let points = named_arg(args, "points").and_then(extract_point_array)?;
+    // `arrow` is an `Arrow[2]` literal: `arrow={Arrow.None, Arrow.Filled}`.
+    // Each element parses as a qualified enum ident; missing slots keep
+    // the default `Arrow::None`.
+    let arrow = {
+        let mut out = [Arrow::None, Arrow::None];
+        if let Some(arr) = named_arg(args, "arrow") {
+            if let Some(elems) = array_elements(arr) {
+                for (i, e) in elems.iter().take(2).enumerate() {
+                    if let Some(id) = extract_enum_ident(e) {
+                        if let Some(a) = Arrow::from_ident(&id) {
+                            out[i] = a;
+                        }
+                    }
+                }
+            }
+        }
+        out
+    };
     Some(Line {
         points,
         color: named_arg(args, "color").and_then(extract_color),
@@ -345,6 +466,53 @@ fn extract_line(args: &[Expression]) -> Option<Line> {
         thickness: named_arg(args, "thickness")
             .and_then(extract_number)
             .unwrap_or(0.25),
+        origin: named_arg(args, "origin")
+            .and_then(extract_point)
+            .unwrap_or(Point { x: 0.0, y: 0.0 }),
+        rotation: named_arg(args, "rotation")
+            .and_then(extract_number)
+            .unwrap_or(0.0),
+        arrow,
+        arrow_size: named_arg(args, "arrowSize")
+            .and_then(extract_number)
+            .unwrap_or(3.0),
+        smooth_bezier: named_arg(args, "smooth")
+            .and_then(extract_enum_ident)
+            .map(|s| s.rsplit('.').next().unwrap_or(&s) == "Bezier")
+            .unwrap_or(false),
+    })
+}
+
+fn extract_ellipse(args: &[Expression]) -> Option<Ellipse> {
+    let extent = named_arg(args, "extent").and_then(extract_extent)?;
+    Some(Ellipse {
+        shape: extract_filled_shape(args),
+        extent,
+        origin: named_arg(args, "origin")
+            .and_then(extract_point)
+            .unwrap_or(Point { x: 0.0, y: 0.0 }),
+        rotation: named_arg(args, "rotation")
+            .and_then(extract_number)
+            .unwrap_or(0.0),
+        start_angle: named_arg(args, "startAngle")
+            .and_then(extract_number)
+            .unwrap_or(0.0),
+        end_angle: named_arg(args, "endAngle")
+            .and_then(extract_number)
+            .unwrap_or(360.0),
+        closure: named_arg(args, "closure")
+            .and_then(extract_enum_ident)
+            .and_then(|s| EllipseClosure::from_ident(&s))
+            .unwrap_or_default(),
+    })
+}
+
+fn extract_bitmap(args: &[Expression]) -> Option<Bitmap> {
+    let extent = named_arg(args, "extent").and_then(extract_extent)?;
+    Some(Bitmap {
+        extent,
+        filename: named_arg(args, "fileName").and_then(extract_string),
+        image_source: named_arg(args, "imageSource").and_then(extract_string),
         origin: named_arg(args, "origin")
             .and_then(extract_point)
             .unwrap_or(Point { x: 0.0, y: 0.0 }),
@@ -707,19 +875,96 @@ end M;
 
     #[test]
     fn unknown_graphic_kinds_are_skipped() {
-        // Ellipse and Bitmap are not yet implemented — they should be
-        // silently dropped, not cause the Icon to fail parsing.
+        // Full MLS Annex D primitive set is now recognised: `Ellipse`
+        // and `Bitmap` along with Rectangle/Line/Polygon/Text. Only
+        // genuinely unknown primitive names (e.g. a typo like
+        // `Rectangl` or a custom `MyShape`) are dropped — the Icon
+        // keeps parsing, just without those entries.
         let src = r#"
 model M
   annotation(Icon(graphics={
     Ellipse(extent={{-10,-10},{10,10}}),
     Rectangle(extent={{-5,-5},{5,5}}),
-    Bitmap(extent={{-20,-20},{20,20}}, fileName="x.png")
+    Bitmap(extent={{-20,-20},{20,20}}, fileName="x.png"),
+    MyShape(extent={{-30,-30},{30,30}})
   }));
 end M;
 "#;
         let icon = extract_icon(&class_annotations(src)).expect("icon");
-        assert_eq!(icon.graphics.len(), 1);
-        assert!(matches!(icon.graphics[0], GraphicItem::Rectangle(_)));
+        assert_eq!(icon.graphics.len(), 3, "MyShape should be dropped");
+        assert!(matches!(icon.graphics[0], GraphicItem::Ellipse(_)));
+        assert!(matches!(icon.graphics[1], GraphicItem::Rectangle(_)));
+        assert!(matches!(icon.graphics[2], GraphicItem::Bitmap(_)));
+    }
+
+    #[test]
+    fn parses_line_arrow_and_smooth() {
+        let src = r#"
+model M
+  annotation(Icon(graphics={
+    Line(
+      points={{-10,0},{10,0}},
+      arrow={Arrow.None, Arrow.Filled},
+      arrowSize=5,
+      smooth=Smooth.Bezier
+    )
+  }));
+end M;
+"#;
+        let icon = extract_icon(&class_annotations(src)).expect("icon");
+        let GraphicItem::Line(l) = &icon.graphics[0] else {
+            panic!("expected Line");
+        };
+        assert_eq!(l.arrow[0], Arrow::None);
+        assert_eq!(l.arrow[1], Arrow::Filled);
+        assert_eq!(l.arrow_size, 5.0);
+        assert!(l.smooth_bezier);
+    }
+
+    #[test]
+    fn parses_ellipse_with_arc_bounds() {
+        let src = r#"
+model M
+  annotation(Icon(graphics={
+    Ellipse(
+      extent={{-10,-10},{10,10}},
+      startAngle=0,
+      endAngle=180,
+      closure=EllipseClosure.Chord
+    )
+  }));
+end M;
+"#;
+        let icon = extract_icon(&class_annotations(src)).expect("icon");
+        let GraphicItem::Ellipse(e) = &icon.graphics[0] else {
+            panic!("expected Ellipse");
+        };
+        assert_eq!(e.start_angle, 0.0);
+        assert_eq!(e.end_angle, 180.0);
+        assert_eq!(e.closure, EllipseClosure::Chord);
+    }
+
+    #[test]
+    fn parses_bitmap_with_filename_and_image_source() {
+        let src = r#"
+model M
+  annotation(Icon(graphics={
+    Bitmap(
+      extent={{-20,-20},{20,20}},
+      fileName="modelica://Modelica.Blocks.Images/icon.png",
+      imageSource="iVBORw0KG=="
+    )
+  }));
+end M;
+"#;
+        let icon = extract_icon(&class_annotations(src)).expect("icon");
+        let GraphicItem::Bitmap(b) = &icon.graphics[0] else {
+            panic!("expected Bitmap");
+        };
+        assert_eq!(
+            b.filename.as_deref(),
+            Some("modelica://Modelica.Blocks.Images/icon.png")
+        );
+        assert_eq!(b.image_source.as_deref(), Some("iVBORw0KG=="));
     }
 }

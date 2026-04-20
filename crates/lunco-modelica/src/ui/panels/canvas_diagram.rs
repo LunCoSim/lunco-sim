@@ -221,6 +221,14 @@ struct IconNodeVisual {
     /// (MLS Annex D).
     mirror_x: bool,
     mirror_y: bool,
+    /// Instance name this component is drawn for — "R1", "C1", …
+    /// Drives the `%name` substitution in authored `Text` primitives
+    /// (Modelica's convention for showing the instance label on the
+    /// icon body). Empty when the projector didn't provide one.
+    instance_name: String,
+    /// Class name (leaf — e.g. "Resistor"). Drives `%class`
+    /// substitution in authored `Text` primitives.
+    class_name: String,
 }
 
 impl NodeVisual for IconNodeVisual {
@@ -257,11 +265,16 @@ impl NodeVisual for IconNodeVisual {
         };
         let mut drew_svg = false;
         if let Some(icon) = &self.icon_graphics {
-            crate::icon_paint::paint_graphics_with_orientation(
+            let sub = crate::icon_paint::TextSubstitution {
+                name: (!self.instance_name.is_empty()).then_some(self.instance_name.as_str()),
+                class_name: (!self.class_name.is_empty()).then_some(self.class_name.as_str()),
+            };
+            crate::icon_paint::paint_graphics_full(
                 painter,
                 rect,
                 icon.coordinate_system,
                 orientation,
+                Some(&sub),
                 &icon.graphics,
             );
             drew_svg = true;
@@ -764,14 +777,21 @@ fn build_registry() -> VisualRegistry {
             .get("icon_mirror_y")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
+        let instance_name = data
+            .get("instance_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
         IconNodeVisual {
-            type_label,
+            type_label: type_label.clone(),
+            class_name: type_label,
             icon_asset,
             icon_only,
             icon_graphics,
             rotation_deg,
             mirror_x,
             mirror_y,
+            instance_name,
         }
     });
     reg.register_edge_kind("modelica.connection", |data: &JsonValue| {
@@ -1092,6 +1112,11 @@ fn project_scene(diagram: &VisualDiagram) -> (Scene, HashMap<DiagramNodeId, Canv
                 "icon_rotation_deg": node.icon_transform.rotation_deg,
                 "icon_mirror_x": node.icon_transform.mirror_x,
                 "icon_mirror_y": node.icon_transform.mirror_y,
+                // Carried through so the icon renderer can substitute
+                // `%name` in authored `Text(textString="%name")`
+                // primitives — the reason every MSL component shows
+                // "R1" / "C1" on its body instead of the class name.
+                "instance_name": node.instance_name,
             }),
             ports,
             label: node.instance_name.clone(),

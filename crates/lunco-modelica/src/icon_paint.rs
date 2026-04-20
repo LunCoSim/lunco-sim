@@ -21,8 +21,8 @@
 use bevy_egui::egui;
 
 use crate::annotations::{
-    Color, CoordinateSystem, Extent, FillPattern, GraphicItem, LinePattern, Line, Point,
-    Polygon, Rectangle, Text,
+    Arrow, Bitmap, Color, CoordinateSystem, Ellipse, Extent, FillPattern, GraphicItem,
+    Line, LinePattern, Point, Polygon, Rectangle, Text,
 };
 
 /// Paint the full graphics list into `screen_rect`.
@@ -59,14 +59,72 @@ pub fn paint_graphics_with_orientation(
     orientation: IconOrientation,
     graphics: &[GraphicItem],
 ) {
+    paint_graphics_full(
+        painter,
+        screen_rect,
+        coord_system,
+        orientation,
+        None,
+        graphics,
+    );
+}
+
+/// Full-surface entry point: orientation + `%name`/`%class` text
+/// substitution.
+///
+/// Callers that know the instance name (canvas projector — the
+/// component's `origin` carries it) pass a [`TextSubstitution`] so
+/// Modelica `Text(textString="%name")` primitives resolve to the
+/// actual instance label instead of printing the literal `%name`.
+pub fn paint_graphics_full(
+    painter: &egui::Painter,
+    screen_rect: egui::Rect,
+    coord_system: CoordinateSystem,
+    orientation: IconOrientation,
+    substitution: Option<&TextSubstitution<'_>>,
+    graphics: &[GraphicItem],
+) {
     let xform = coord_xform_oriented(coord_system.extent, screen_rect, orientation);
     for item in graphics {
         match item {
             GraphicItem::Rectangle(r) => paint_rectangle(painter, &xform, r),
             GraphicItem::Line(l) => paint_line(painter, &xform, l),
             GraphicItem::Polygon(p) => paint_polygon(painter, &xform, p),
-            GraphicItem::Text(t) => paint_text(painter, &xform, t),
+            GraphicItem::Text(t) => paint_text(painter, &xform, t, substitution),
+            GraphicItem::Ellipse(e) => paint_ellipse(painter, &xform, e),
+            GraphicItem::Bitmap(b) => paint_bitmap(painter, &xform, b),
         }
+    }
+}
+
+/// Substitutions the renderer applies to `Text.text_string` before
+/// drawing.
+///
+/// Modelica uses `%name`, `%class`, `%<par>` in icon text to print
+/// runtime identity / class name / parameter values. We handle the
+/// first two; `%<par>` needs live parameter values and is a follow-up
+/// once the parameter-editor wiring is in (those values flow through
+/// the same bus the Inspector will listen to).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TextSubstitution<'a> {
+    /// Instance name to substitute for `%name` (e.g. `"R1"`).
+    pub name: Option<&'a str>,
+    /// Class name to substitute for `%class` (e.g. `"Resistor"`).
+    pub class_name: Option<&'a str>,
+}
+
+impl<'a> TextSubstitution<'a> {
+    /// Apply the substitutions to `s`, returning an owned `String` when
+    /// any replacement happened and a borrowed-equivalent otherwise.
+    fn apply(&self, s: &str) -> String {
+        let mut out = s.to_string();
+        if let Some(n) = self.name {
+            out = out.replace("%name", n);
+        }
+        if let Some(c) = self.class_name {
+            out = out.replace("%class", c);
+        }
+        out
     }
 }
 
@@ -288,7 +346,7 @@ fn paint_line(painter: &egui::Painter, xf: &CoordXform, l: &Line) {
     }
     if matches!(l.pattern, LinePattern::Solid) {
         // Solid → one continuous Path so corners join cleanly.
-        painter.add(egui::Shape::line(pts, stroke));
+        painter.add(egui::Shape::line(pts.clone(), stroke));
     } else {
         // Dashed/dotted: emit per-segment dashed runs. Cheap and
         // matches the canvas's existing dashed-rect style.
@@ -297,10 +355,98 @@ fn paint_line(painter: &egui::Painter, xf: &CoordXform, l: &Line) {
             paint_dashed_segment(painter, win[0], win[1], stroke, dash, gap);
         }
     }
+
+    // Arrow heads at start (pointing *backwards* along the first
+    // segment) and end (forwards along the last segment). Signal
+    // wires in MSL use this to indicate flow direction.
+    let head_px = ((l.arrow_size as f32) * xf.scale).max(4.0);
+    let color = color_or_default(l.color, egui::Color32::BLACK);
+    if !matches!(l.arrow[0], Arrow::None) && pts.len() >= 2 {
+        paint_arrow_head(painter, pts[1], pts[0], l.arrow[0], head_px, stroke.width, color);
+    }
+    if !matches!(l.arrow[1], Arrow::None) && pts.len() >= 2 {
+        let n = pts.len();
+        paint_arrow_head(
+            painter,
+            pts[n - 2],
+            pts[n - 1],
+            l.arrow[1],
+            head_px,
+            stroke.width,
+            color,
+        );
+    }
 }
 
-fn paint_text(painter: &egui::Painter, xf: &CoordXform, t: &Text) {
+/// Paint an arrow head at `tip` pointing away from `from`. Style
+/// controls fill / open / half-wing shape; `head_px` is the overall
+/// length of the head along the line.
+fn paint_arrow_head(
+    painter: &egui::Painter,
+    from: egui::Pos2,
+    tip: egui::Pos2,
+    style: Arrow,
+    head_px: f32,
+    stroke_w: f32,
+    color: egui::Color32,
+) {
+    let dx = tip.x - from.x;
+    let dy = tip.y - from.y;
+    let len = (dx * dx + dy * dy).sqrt();
+    if len < f32::EPSILON {
+        return;
+    }
+    // Unit vector along the line (from → tip) and its perpendicular.
+    let ux = dx / len;
+    let uy = dy / len;
+    let px = -uy;
+    let py = ux;
+    // Head half-width: arrows read best at ~½ the head length.
+    let hw = head_px * 0.5;
+    // Base of the triangle (behind the tip).
+    let bx = tip.x - ux * head_px;
+    let by = tip.y - uy * head_px;
+    let left = egui::pos2(bx + px * hw, by + py * hw);
+    let right = egui::pos2(bx - px * hw, by - py * hw);
+    let stroke = egui::Stroke::new(stroke_w.max(1.0), color);
+    match style {
+        Arrow::None => {}
+        Arrow::Filled => {
+            painter.add(egui::Shape::convex_polygon(
+                vec![tip, left, right],
+                color,
+                stroke,
+            ));
+        }
+        Arrow::Open => {
+            painter.line_segment([tip, left], stroke);
+            painter.line_segment([tip, right], stroke);
+        }
+        Arrow::Half => {
+            // Single wing on the "left" side (CCW perpendicular) —
+            // the MLS-standard asymmetric arrow.
+            painter.line_segment([tip, left], stroke);
+        }
+    }
+}
+
+fn paint_text(
+    painter: &egui::Painter,
+    xf: &CoordXform,
+    t: &Text,
+    substitution: Option<&TextSubstitution<'_>>,
+) {
     if t.text_string.is_empty() {
+        return;
+    }
+    // Substitute `%name` / `%class` before rendering. Most MSL icons
+    // set `textString="%name"` so this is where "Resistor" becomes
+    // "R1" across the entire diagram.
+    let rendered: String = match substitution {
+        Some(sub) => sub.apply(&t.text_string),
+        None => t.text_string.clone(),
+    };
+    if rendered.is_empty() {
         return;
     }
     let p1 = xf.to_screen_rotated(t.extent.p1, t.origin, t.rotation);
@@ -318,10 +464,186 @@ fn paint_text(painter: &egui::Painter, xf: &CoordXform, t: &Text) {
     painter.text(
         rect.center(),
         egui::Align2::CENTER_CENTER,
-        &t.text_string,
+        &rendered,
         egui::FontId::proportional(font_size_px),
         color,
     );
+}
+
+/// Paint an Ellipse fitted to `e.extent`. Arc bounds (`start_angle`,
+/// `end_angle`, `closure`) are parsed but currently ignored — the
+/// renderer draws the full ellipse. Arcs are a follow-up.
+///
+/// The ellipse is built as a 64-vertex polygon in icon-local space so
+/// it inherits both the primitive's rotation and the instance-level
+/// orientation (mirror + rotate) through `to_screen_rotated`. A native
+/// `circle_filled` call would skip rotation.
+fn paint_ellipse(painter: &egui::Painter, xf: &CoordXform, e: &Ellipse) {
+    const SEGMENTS: usize = 64;
+    let Extent { p1, p2 } = e.extent;
+    let cx = (p1.x + p2.x) * 0.5;
+    let cy = (p1.y + p2.y) * 0.5;
+    let rx = (p2.x - p1.x).abs() * 0.5;
+    let ry = (p2.y - p1.y).abs() * 0.5;
+    if rx <= 0.0 || ry <= 0.0 {
+        return;
+    }
+    let pts: Vec<egui::Pos2> = (0..SEGMENTS)
+        .map(|i| {
+            let theta = (i as f64) * (std::f64::consts::TAU / SEGMENTS as f64);
+            let x = cx + rx * theta.cos();
+            let y = cy + ry * theta.sin();
+            xf.to_screen_rotated(Point { x, y }, e.origin, e.rotation)
+        })
+        .collect();
+    let fill = if matches!(e.shape.fill_pattern, FillPattern::Solid) {
+        color_or_default(e.shape.fill_color, egui::Color32::TRANSPARENT)
+    } else {
+        egui::Color32::TRANSPARENT
+    };
+    let stroke = stroke_for(
+        e.shape.line_color,
+        e.shape.line_pattern,
+        e.shape.line_thickness,
+        xf.scale,
+    );
+    // Fill via a 64-vertex "convex" polygon — true for axis-aligned
+    // ellipses and for any ellipse under rigid rotation, which covers
+    // every MSL / user case. Stroke is closed-path so the ring is
+    // visible even when the primitive is unfilled.
+    painter.add(egui::Shape::convex_polygon(
+        pts.clone(),
+        fill,
+        egui::Stroke::NONE,
+    ));
+    if stroke.width > 0.0 {
+        let mut ring = pts;
+        if let Some(first) = ring.first().copied() {
+            ring.push(first);
+        }
+        painter.add(egui::Shape::line(ring, stroke));
+    }
+}
+
+/// Paint a Bitmap primitive.
+///
+/// Supports `filename="modelica://Package.Name/path/img.png"` (resolved
+/// via `lunco_assets::msl_dir`) and `filename="modelica://Package.Name/file.png"`
+/// (same). Base64 `imageSource` is not yet wired — decoding inline
+/// buffers every frame is the wrong shape; when we need it, the
+/// base64 will be decoded once and cached by hash.
+///
+/// If the image fails to load (missing asset, decode error), the
+/// Bitmap renders as a labelled placeholder so users see a visible
+/// marker where the image should be — easier to debug than a silent
+/// blank.
+fn paint_bitmap(painter: &egui::Painter, xf: &CoordXform, b: &Bitmap) {
+    let p1 = xf.to_screen_rotated(b.extent.p1, b.origin, b.rotation);
+    let p2 = xf.to_screen_rotated(b.extent.p2, b.origin, b.rotation);
+    let rect = egui::Rect::from_two_pos(p1, p2);
+
+    if let Some(name) = b.filename.as_ref() {
+        if let Some(tex) = texture_for_bitmap(painter.ctx(), name) {
+            let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
+            painter.image(tex.id(), rect, uv, egui::Color32::WHITE);
+            return;
+        }
+    }
+
+    // Placeholder when no filename / image_source we can load.
+    let fill = egui::Color32::from_rgba_unmultiplied(200, 200, 210, 40);
+    let stroke = egui::Stroke::new(
+        1.0,
+        egui::Color32::from_rgba_unmultiplied(120, 120, 140, 160),
+    );
+    painter.rect_filled(rect, 2.0, fill);
+    painter.rect_stroke(rect, 2.0, stroke, egui::StrokeKind::Inside);
+    let label = b
+        .filename
+        .as_deref()
+        .map(|s| {
+            s.rsplit('/')
+                .next()
+                .unwrap_or(s)
+                .to_string()
+        })
+        .unwrap_or_else(|| "[image]".to_string());
+    let font_size = (rect.height().abs() * 0.3).clamp(8.0, 14.0);
+    painter.text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        &label,
+        egui::FontId::monospace(font_size),
+        egui::Color32::from_gray(100),
+    );
+}
+
+/// Texture cache for Bitmap primitives. Keyed by the raw filename
+/// string so `modelica://Pkg/icon.png` and a plain `icon.png` hit
+/// different slots (they resolve differently).
+fn texture_for_bitmap(
+    ctx: &egui::Context,
+    filename: &str,
+) -> Option<egui::TextureHandle> {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    // The cache stores `Option<TextureHandle>` so a failed load is
+    // remembered and not retried every frame (failure is usually a
+    // missing asset, not a transient error).
+    static CACHE: OnceLock<Mutex<HashMap<String, Option<egui::TextureHandle>>>> =
+        OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(map) = cache.lock() {
+        if let Some(slot) = map.get(filename) {
+            return slot.clone();
+        }
+    }
+
+    let bytes = load_bitmap_bytes(filename)?;
+    let img = match image::load_from_memory(&bytes) {
+        Ok(i) => i.to_rgba8(),
+        Err(_) => {
+            if let Ok(mut map) = cache.lock() {
+                map.insert(filename.to_string(), None);
+            }
+            return None;
+        }
+    };
+    let size = [img.width() as usize, img.height() as usize];
+    let pixels: Vec<egui::Color32> = img
+        .pixels()
+        .map(|p| egui::Color32::from_rgba_premultiplied(p[0], p[1], p[2], p[3]))
+        .collect();
+    let color_img = egui::ColorImage {
+        size,
+        pixels,
+        source_size: egui::vec2(size[0] as f32, size[1] as f32),
+    };
+    let handle = ctx.load_texture(
+        format!("modelica-bitmap:{filename}"),
+        color_img,
+        egui::TextureOptions::LINEAR,
+    );
+    if let Ok(mut map) = cache.lock() {
+        map.insert(filename.to_string(), Some(handle.clone()));
+    }
+    Some(handle)
+}
+
+/// Resolve a Modelica `fileName` value to raw bytes on disk.
+///
+/// - `modelica://Pkg/path/img.png` → `<msl_root>/Pkg/path/img.png`
+///   (walking the package-as-directory convention).
+/// - Plain relative path → tried under the MSL root as-is (best
+///   effort).
+fn load_bitmap_bytes(filename: &str) -> Option<Vec<u8>> {
+    let rel = match filename.strip_prefix("modelica://") {
+        Some(tail) => tail.to_string(),
+        None => filename.to_string(),
+    };
+    let msl_root = lunco_assets::msl_dir();
+    let candidate = msl_root.join(&rel);
+    std::fs::read(&candidate).ok()
 }
 
 // ---------------------------------------------------------------------------
