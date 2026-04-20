@@ -111,6 +111,59 @@ fn drain_document_changes(
     }
 }
 
+/// Shadow-sync observer: Modelica doc opened → register entry in the
+/// Workspace session.
+///
+/// Runs alongside (not instead of) the existing open paths during the
+/// 5b.1 migration. Once step 5c retires the legacy `ModelicaDocumentRegistry`
+/// / `ModelTabs` / `WorkbenchState.open_model` triad, this observer
+/// becomes the sole population point for the Workspace's document list.
+fn sync_workspace_on_doc_opened(
+    trigger: On<lunco_doc_bevy::DocumentOpened>,
+    registry: Res<ModelicaDocumentRegistry>,
+    mut ws: ResMut<lunco_workbench::WorkspaceResource>,
+) {
+    let id = trigger.event().doc;
+    // Dedupe — `DocumentOpened` can fire multiple times per id during
+    // the race between allocate/install_prebuilt and later reconcile
+    // passes. Treat a second Opened as a no-op so the Workspace
+    // document list stays a set, not a multiset.
+    if ws.document(id).is_some() {
+        return;
+    }
+    let Some(host) = registry.host(id) else {
+        return;
+    };
+    let doc = host.document();
+    let origin = doc.origin().clone();
+    let title = match &origin {
+        lunco_doc::DocumentOrigin::Untitled { name } => name.clone(),
+        lunco_doc::DocumentOrigin::File { path, .. } => path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("(file)")
+            .to_string(),
+    };
+    ws.add_document(lunco_workspace::DocumentEntry {
+        id,
+        kind: lunco_workspace::DocumentKind::Modelica,
+        origin,
+        // Default to `None`; when the UI supports "New Model from
+        // active Twin" the caller will set this explicitly before the
+        // add_document fires.
+        context_twin: None,
+        title,
+    });
+}
+
+/// Shadow-sync observer: Modelica doc closed → drop entry from Workspace.
+fn sync_workspace_on_doc_closed(
+    trigger: On<lunco_doc_bevy::DocumentClosed>,
+    mut ws: ResMut<lunco_workbench::WorkspaceResource>,
+) {
+    ws.close_document(trigger.event().doc);
+}
+
 /// Drop the document linked to a despawned `ModelicaModel` entity, and
 /// any compile-state bookkeeping attached to that document.
 ///
@@ -262,6 +315,11 @@ impl Plugin for ModelicaUiPlugin {
             .add_systems(Update, panels::package_browser::handle_package_loading_tasks)
             .add_systems(Update, cleanup_removed_documents)
             .add_systems(Update, drain_document_changes)
+            // Workspace shadow-sync: keep `WorkspaceResource` populated
+            // from the existing document-registry lifecycle so the new
+            // session surface is ready for step 5b.2 readers.
+            .add_observer(sync_workspace_on_doc_opened)
+            .add_observer(sync_workspace_on_doc_closed)
             .add_systems(Update, panels::diagnostics::refresh_diagnostics)
             .add_systems(Startup, register_settings_menu)
             // Image-loader install is a first-frame one-shot — runs

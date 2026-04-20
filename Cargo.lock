@@ -6303,6 +6303,7 @@ dependencies = [
  "lunco-twin",
  "lunco-viz",
  "lunco-workbench",
+ "lunco-workspace",
  "regex",
  "rfd",
  "rumoca-phase-parse",
