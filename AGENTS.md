@@ -16,7 +16,24 @@ As per Article X of the Project Constitution, **hardcoded magic numbers are forb
 
 *   **Visuals**: Colors, line widths, fade ranges, and subdivisions must be stored in Bevy `Resources` (for global settings) or `Components` (for entity-specific settings).
 *   **Physics**: Gravity constants, SOI thresholds, and orbital sampling rates must be exposed as configurable parameters.
-*   **UI**: Padding, margins, and transition speeds should be defined in a theme resource.
+*   **UI**: Padding, margins, transition speeds, and every color must come from the `lunco-theme` crate — never hard-coded in a panel.
+
+### 3.1 Theme binding (`lunco-theme`)
+
+All UI colors, spacing, and rounding come from the `Theme` resource in
+`lunco-theme` (see `crates/lunco-theme/README.md` for the full API):
+
+- **No `Color32::from_rgb` / hex literals outside `lunco-theme`.** Add
+  a semantic token or register a per-domain override
+  (`theme.register_override` / `theme.get_token`) instead.
+- **Prefer `theme.tokens.*`** (`accent`, `success`, `warning`, `error`,
+  `text`, …) over raw `theme.colors.*` swatches.
+- Read via `Res<lunco_theme::Theme>`; in `&mut World` widgets, clone
+  the fields you need out of `World` before touching `ui`.
+- Don't call `ctx.set_visuals` — `lunco-ui`'s `sync_theme_system`
+  handles it. Dark/light flips via `theme.toggle_mode()`.
+- `lunco-workbench` auto-adds `ThemePlugin`; add it explicitly in
+  headless UI tests.
 
 ## 4. Key Constraints
 - **Hotswappable Plugins**: Everything must be a plugin.
