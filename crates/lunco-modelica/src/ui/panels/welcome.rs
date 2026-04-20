@@ -378,19 +378,9 @@ impl Panel for WelcomePanel {
                 match lunco_twin::TwinMode::open(&folder) {
                     Ok(lunco_twin::TwinMode::Folder(twin))
                     | Ok(lunco_twin::TwinMode::Twin(twin)) => {
-                        // Shadow-sync into the new Workspace resource.
-                        // Clone rather than move so legacy `OpenTwin`
-                        // readers keep working during the migration;
-                        // once 5b.2 lands and the Twin Browser reads
-                        // solely from Workspace, `OpenTwin` retires and
-                        // this clone goes away.
-                        let twin_for_ws = twin.clone();
-                        world
-                            .resource_mut::<lunco_workbench::OpenTwin>()
-                            .0 = Some(twin);
                         let twin_id = world
                             .resource_mut::<lunco_workbench::WorkspaceResource>()
-                            .add_twin(twin_for_ws);
+                            .add_twin(twin);
                         world
                             .commands()
                             .trigger(lunco_workbench::TwinAdded { twin: twin_id });
@@ -398,10 +388,10 @@ impl Panel for WelcomePanel {
                     Ok(lunco_twin::TwinMode::Orphan(_)) => {
                         // User picked a file via the folder dialog
                         // (shouldn't happen with `pick_folder`, but be
-                        // defensive). Don't replace OpenTwin.
+                        // defensive). Nothing to register.
                     }
                     Err(e) => {
-                        log::warn!("OpenTwin: failed to index {:?}: {}", folder, e);
+                        log::warn!("open folder: failed to index {:?}: {}", folder, e);
                     }
                 }
             }

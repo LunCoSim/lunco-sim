@@ -65,21 +65,22 @@ pub fn drain_browser_actions(world: &mut World) {
         return;
     }
 
-    // Resolve `relative_path` → absolute path string against the
-    // currently-open Twin's root. Captured once so we don't fight the
-    // borrow checker re-borrowing `OpenTwin` per action.
-    let twin_root = world
-        .resource::<lunco_workbench::OpenTwin>()
-        .0
-        .as_ref()
-        .map(|t| t.root.clone());
+    // Resolve `relative_path` → absolute path against the currently-
+    // active Twin's root. Captured once so we don't fight the borrow
+    // checker re-borrowing `WorkspaceResource` per action.
+    let twin_root = {
+        let ws = world.resource::<lunco_workbench::WorkspaceResource>();
+        ws.active_twin
+            .and_then(|id| ws.twin(id))
+            .map(|t| t.root.clone())
+    };
 
     for action in actions {
         match action {
             BrowserAction::OpenFile { relative_path } => {
                 let Some(root) = twin_root.as_ref() else {
                     log::warn!(
-                        "BrowserAction::OpenFile fired with no OpenTwin: {:?}",
+                        "BrowserAction::OpenFile fired with no active Twin: {:?}",
                         relative_path
                     );
                     continue;
@@ -104,7 +105,7 @@ pub fn drain_browser_actions(world: &mut World) {
             } => {
                 let Some(root) = twin_root.as_ref() else {
                     log::warn!(
-                        "BrowserAction::OpenModelicaClass fired with no OpenTwin: {:?}",
+                        "BrowserAction::OpenModelicaClass fired with no active Twin: {:?}",
                         relative_path
                     );
                     continue;

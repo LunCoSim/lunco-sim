@@ -58,7 +58,7 @@ pub mod twin_browser;
 pub use panel::{InstancePanel, Panel, PanelId, PanelSlot, TabId};
 pub use twin_browser::{
     BrowserAction, BrowserActions, BrowserCtx, BrowserSection, BrowserSectionRegistry,
-    FilesSection, OpenTwin, TwinBrowserPanel, TWIN_BROWSER_PANEL_ID,
+    FilesSection, TwinBrowserPanel, TWIN_BROWSER_PANEL_ID,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -138,8 +138,9 @@ impl Plugin for WorkbenchPlugin {
             .init_resource::<PendingTabCloses>()
             // Twin Browser plumbing — resources are always present so
             // the panel renders an empty state cleanly when no Twin is
-            // open and no domain sections have registered yet.
-            .init_resource::<OpenTwin>()
+            // open and no domain sections have registered yet. The
+            // active Twin is tracked on `WorkspaceResource` (installed
+            // by `WorkspacePlugin` above), not a panel-local resource.
             .init_resource::<BrowserSectionRegistry>()
             .init_resource::<BrowserActions>()
             .add_observer(on_open_tab)

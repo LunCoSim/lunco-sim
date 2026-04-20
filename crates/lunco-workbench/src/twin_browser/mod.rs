@@ -52,17 +52,12 @@ pub use files_section::FilesSection;
 pub const TWIN_BROWSER_PANEL_ID: PanelId = PanelId("lunco.workbench.twin_browser");
 
 // ─────────────────────────────────────────────────────────────────────
-// Resources: open Twin + section registry + action outbox
+// Resources: section registry + action outbox
 // ─────────────────────────────────────────────────────────────────────
-
-/// The currently-open Twin (or folder, treated identically by the
-/// browser). `None` means the user hasn't opened anything yet — the
-/// browser shows an empty state and a brief explanation.
-///
-/// Populated by host apps once they implement the open-Twin flow. The
-/// workbench shell itself never sets this — it only reads it.
-#[derive(Resource, Default)]
-pub struct OpenTwin(pub Option<lunco_twin::Twin>);
+//
+// The currently-open Twins live in `WorkspaceResource`
+// (`lunco-workspace`). This panel reads the active Twin from there
+// each render; there is no panel-local "open twin" resource anymore.
 
 /// Registry of [`BrowserSection`] impls contributed by domain plugins.
 ///
@@ -168,11 +163,14 @@ impl BrowserActions {
 /// `world` is mutable for the duration of one section's render so
 /// sections can run light queries without separate system plumbing.
 /// They MUST NOT remove or replace `BrowserSectionRegistry`,
-/// `BrowserActions`, or `OpenTwin` — those are extracted by the
-/// panel for the duration of the render and inserting them here
+/// `BrowserActions`, or `WorkspaceResource` — those are extracted by
+/// the panel for the duration of the render and inserting them here
 /// would break the take-and-restore protocol.
 pub struct BrowserCtx<'a> {
-    /// The currently-open Twin, or `None` if nothing opened yet.
+    /// The currently-active Twin, or `None` if no Twin is open. Today
+    /// the browser is single-twin oriented; multi-twin rendering
+    /// (per-Twin collapsing groups) is a follow-up once the Workspace
+    /// habit of holding several is actually exercised by the UI.
     pub twin: Option<&'a lunco_twin::Twin>,
     /// Outbox the section pushes user actions into.
     pub actions: &'a mut BrowserActions,
@@ -227,9 +225,9 @@ impl Panel for TwinBrowserPanel {
     }
 
     fn render(&mut self, ui: &mut egui::Ui, world: &mut World) {
-        // Take registry + actions out of the world so we can hand
-        // mutable borrows to each section without conflicting with
-        // OpenTwin's read borrow.
+        // Take registry + actions + WorkspaceResource out of the world
+        // so sections can borrow `world` mutably during render without
+        // conflicting with the active-Twin read. Restored after.
         let Some(mut registry) = world.remove_resource::<BrowserSectionRegistry>() else {
             ui.colored_label(
                 egui::Color32::LIGHT_RED,
@@ -240,11 +238,7 @@ impl Panel for TwinBrowserPanel {
         let mut actions = world
             .remove_resource::<BrowserActions>()
             .unwrap_or_default();
-
-        // OpenTwin needs to be removed from the world too, otherwise
-        // the section can't borrow `world` mutably (the read borrow
-        // would conflict). After render we put it back unchanged.
-        let open_twin = world.remove_resource::<OpenTwin>();
+        let workspace = world.remove_resource::<crate::WorkspaceResource>();
 
         if registry.sections.is_empty() {
             ui.label(
@@ -258,7 +252,9 @@ impl Panel for TwinBrowserPanel {
                     .id_salt(("twin_browser_section", section.id()))
                     .default_open(section.default_open());
                 header.show(ui, |ui| {
-                    let twin_ref = open_twin.as_ref().and_then(|o| o.0.as_ref());
+                    let twin_ref = workspace
+                        .as_ref()
+                        .and_then(|ws| ws.active_twin.and_then(|id| ws.twin(id)));
                     let mut ctx = BrowserCtx {
                         twin: twin_ref,
                         actions: &mut actions,
@@ -269,8 +265,8 @@ impl Panel for TwinBrowserPanel {
             }
         }
 
-        if let Some(t) = open_twin {
-            world.insert_resource(t);
+        if let Some(w) = workspace {
+            world.insert_resource(w);
         }
         world.insert_resource(actions);
         world.insert_resource(registry);

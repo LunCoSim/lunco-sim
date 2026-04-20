@@ -213,13 +213,7 @@ impl<'a> Iterator for TwinWalkIter<'a> {
 /// those child folders are eagerly opened as sub-Twins and stored in
 /// [`children`](Self::children). External URL children are listed in
 /// the manifest but not followed today.
-///
-/// `Clone` is implemented via a recursive copy of the manifest + file
-/// index + sub-Twins. Trees are typically small (one digit twins, tens
-/// of files each) so the cost is negligible; the clone is needed so a
-/// Twin can be held simultaneously in the legacy `OpenTwin` resource
-/// and the new `WorkspaceResource` during the migration period.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Twin {
     /// Absolute path to the folder on disk.
     pub root: PathBuf,
