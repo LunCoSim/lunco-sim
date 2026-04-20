@@ -23,6 +23,68 @@ use crate::ui::state::ModelLibrary;
 /// Panel id.
 pub const WELCOME_PANEL_ID: PanelId = PanelId("modelica_welcome");
 
+/// Curated MSL example classes offered on the welcome page.
+///
+/// Chosen across domains (control, electrical, mechanical, fluid,
+/// thermal, multi-body) so a new user can pick the one that matches
+/// their discipline. Each entry's `qualified` is the fully-scoped
+/// MSL name the duplicate pipeline needs; `tagline` is a single
+/// sentence explaining what the model demonstrates.
+///
+/// Clicking an entry dispatches
+/// [`crate::ui::commands::OpenExampleInWorkspace`], which does the
+/// full async build (resolve MSL path → read → extract the target
+/// class → rename + strip `within` → parse on bg thread → open in
+/// Canvas view). The MSL original is never modified.
+struct MslExample {
+    qualified: &'static str,
+    short: &'static str,
+    tagline: &'static str,
+}
+
+const MSL_EXAMPLES: &[MslExample] = &[
+    MslExample {
+        qualified: "Modelica.Blocks.Examples.PID_Controller",
+        short: "PID_Controller",
+        tagline: "Control: PID feedback loop tracking a setpoint — classic blocks wiring.",
+    },
+    MslExample {
+        qualified: "Modelica.Blocks.Examples.FilterWithRiseTime",
+        short: "FilterWithRiseTime",
+        tagline: "Control: continuous filter with rise-time spec — step response.",
+    },
+    MslExample {
+        qualified: "Modelica.Electrical.Analog.Examples.CauerLowPassAnalog",
+        short: "CauerLowPassAnalog",
+        tagline: "Electrical: 5th-order Cauer low-pass with R/L/C network.",
+    },
+    MslExample {
+        qualified: "Modelica.Electrical.Analog.Examples.Rectifier",
+        short: "Rectifier",
+        tagline: "Electrical: full-wave rectifier driving an RC load.",
+    },
+    MslExample {
+        qualified: "Modelica.Mechanics.Rotational.Examples.First",
+        short: "Rotational.First",
+        tagline: "Mechanics: torque, inertia, spring-damper — the rotational starter.",
+    },
+    MslExample {
+        qualified: "Modelica.Mechanics.MultiBody.Examples.Elementary.DoublePendulum",
+        short: "DoublePendulum",
+        tagline: "MultiBody: chaotic 2-link pendulum — 3D visualisation + simulation.",
+    },
+    MslExample {
+        qualified: "Modelica.Thermal.HeatTransfer.Examples.TwoMasses",
+        short: "TwoMasses",
+        tagline: "Thermal: two masses exchanging heat through a conductor.",
+    },
+    MslExample {
+        qualified: "Modelica.Fluid.Examples.BranchingDynamicPipes",
+        short: "BranchingDynamicPipes",
+        tagline: "Fluid: branching pipe network with dynamic momentum balance.",
+    },
+];
+
 /// The welcome placeholder panel. Zero-sized.
 pub struct WelcomePanel;
 
@@ -49,6 +111,7 @@ impl Panel for WelcomePanel {
         let mut create_new = false;
         let mut open_folder = false;
         let mut open_example: Option<&'static str> = None;
+        let mut open_msl_example: Option<&'static str> = None;
 
         egui::ScrollArea::vertical().show(ui, |ui| {
             ui.add_space(40.0);
@@ -180,6 +243,70 @@ impl Panel for WelcomePanel {
 
             ui.add_space(40.0);
 
+            // ── MSL Examples ────────────────────────────────
+            // Curated examples from the Modelica Standard Library.
+            // Clicking any of them creates a fresh editable copy
+            // (the MSL originals stay read-only) and drops the
+            // user on the Canvas view so they can see the diagram
+            // first. Contrast with the bundled examples above,
+            // which are small standalone files shipped in-repo.
+            ui.vertical_centered(|ui| {
+                ui.set_max_width(560.0);
+                ui.heading(egui::RichText::new("MSL Examples").size(16.0));
+                ui.add_space(4.0);
+                ui.label(
+                    egui::RichText::new(
+                        "Pick an example from the Modelica Standard Library. \
+                         One click → editable copy opens in the diagram view, \
+                         the MSL original stays untouched.",
+                    )
+                    .size(10.5)
+                    .color(egui::Color32::GRAY),
+                );
+                ui.add_space(10.0);
+
+                for ex in MSL_EXAMPLES {
+                    let resp = ui
+                        .add_sized(
+                            [560.0, 48.0],
+                            egui::Button::new("")
+                                .fill(egui::Color32::from_rgb(30, 38, 50))
+                                .stroke(egui::Stroke::new(
+                                    1.0,
+                                    egui::Color32::from_rgb(70, 90, 115),
+                                )),
+                        )
+                        .on_hover_text(format!(
+                            "Open editable copy of {}",
+                            ex.qualified
+                        ));
+                    let rect = resp.rect;
+                    let painter = ui.painter_at(rect);
+                    let title_pos = rect.min + egui::vec2(16.0, 8.0);
+                    let tagline_pos = rect.min + egui::vec2(16.0, 28.0);
+                    painter.text(
+                        title_pos,
+                        egui::Align2::LEFT_TOP,
+                        format!("🧩  {}", ex.short),
+                        egui::FontId::proportional(13.5),
+                        egui::Color32::from_rgb(170, 200, 235),
+                    );
+                    painter.text(
+                        tagline_pos,
+                        egui::Align2::LEFT_TOP,
+                        ex.tagline,
+                        egui::FontId::proportional(10.5),
+                        egui::Color32::GRAY,
+                    );
+                    if resp.clicked() {
+                        open_msl_example = Some(ex.qualified);
+                    }
+                    ui.add_space(4.0);
+                }
+            });
+
+            ui.add_space(40.0);
+
             // ── Keyboard shortcuts footer ──────────────────
             ui.vertical_centered(|ui| {
                 ui.label(
@@ -229,6 +356,13 @@ impl Panel for WelcomePanel {
                 name,
                 ModelLibrary::Bundled,
             );
+        }
+        if let Some(qualified) = open_msl_example {
+            world
+                .commands()
+                .trigger(crate::ui::commands::OpenExampleInWorkspace {
+                    qualified: qualified.to_string(),
+                });
         }
     }
 }

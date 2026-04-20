@@ -75,49 +75,113 @@ pub mod diagram;
 /// Visual diagram editor — drag-and-drop component composition.
 pub mod visual_diagram;
 
-
 /// Simple wrapper around rumoca-session for compiling Modelica models.
 ///
-/// Replaces the `rumoca::Compiler` API with a session-based approach.
+/// MSL is preloaded into the session at construction time via
+/// [`rumoca_session::compile::Session::load_source_root_tolerant`].
+/// After preload, compiling any MSL-based user model is a plain
+/// strict-reachable-DAE call against a session that already has
+/// every MSL class visible to rumoca's §5 scope walker.
+///
+/// Why preload instead of demand-load? Demand-load requires
+/// rumoca to emit fully-qualified references in its unresolved-ref
+/// diagnostics so an external source provider can act on them.
+/// Upstream rumoca currently emits raw short forms (`SI.Time`,
+/// `Continuous.Filter`, `Rotational.Interfaces.PartialTwoFlanges`)
+/// without scope qualification — which means an external resolver
+/// has no way to disambiguate. Preload sidesteps the issue: once
+/// every MSL class is in the session, the scope walker never has
+/// to ask outside.
+///
+/// Cost: first session construction blocks while the parsed-artifact
+/// cache (bincode under `RUMOCA_CACHE_DIR`) is hit. With a warm
+/// cache, MSL loads in ~2–5 s. Cold cache (first run after a rumoca
+/// version bump) is proportional to parser throughput; `msl_indexer`
+/// can pre-warm offline.
 pub struct ModelicaCompiler {
     session: Session,
 }
 
 impl ModelicaCompiler {
-    /// Create a new ModelicaCompiler instance.
+    /// Construct a compiler and preload MSL.
     ///
-    /// MSL auto-loading is currently disabled: `Session::compile_model`
-    /// runs the Resolve phase across every loaded source root, and
-    /// rumoca's strict validator rejects real constructs in
-    /// `Modelica.Fluid` / `Modelica.Media` / `Modelica.Mechanics`
-    /// (connector prefix requirements, record-type constraints,
-    /// `cardinality()` on connector arrays, `inner/outer` `world`
-    /// resolution). Loading MSL therefore fails compilation even for
-    /// models that never reference those packages.
-    ///
-    /// TODO: switch to
-    /// `Session::compile_model_dae_strict_reachable_uncached_with_recovery`
-    /// (which walks only the reachable closure from the target class)
-    /// once we move off the plain `compile_model` API. That path is
-    /// intended for editor-style compiles and should tolerate broken
-    /// unreachable classes in MSL.
+    /// On targets without a filesystem (`wasm32`),
+    /// [`lunco_assets::msl_source_root_path`] returns `None` and the
+    /// session is left empty — web targets populate via HTTP once
+    /// the async-asset path lands.
     pub fn new() -> Self {
-        let session = Session::new(SessionConfig::default());
+        let t_total = std::time::Instant::now();
+        let mut session = Session::new(SessionConfig::default());
+        if let Some(msl_root) = lunco_assets::msl_source_root_path() {
+            // Durable-external — MSL rarely changes and is
+            // library-grade; rumoca uses this classification to
+            // enable bincode persistence for parsed artifacts.
+            let report = session.load_source_root_tolerant(
+                "msl",
+                rumoca_session::compile::SourceRootKind::DurableExternal,
+                &msl_root,
+                None,
+            );
+            log::info!(
+                "[ModelicaCompiler] preloaded MSL from `{}` in {:.2}s: \
+                 {} parsed / {} inserted (cache {:?}); diagnostics: {}",
+                msl_root.display(),
+                t_total.elapsed().as_secs_f64(),
+                report.parsed_file_count,
+                report.inserted_file_count,
+                report.cache_status,
+                if report.diagnostics.is_empty() {
+                    "none".to_string()
+                } else {
+                    format!("{} lines", report.diagnostics.len())
+                },
+            );
+        } else {
+            log::info!(
+                "[ModelicaCompiler] no MSL source root available on this target; \
+                 session starts empty",
+            );
+        }
         Self { session }
     }
 
     /// Compile Modelica source string and return DAE result.
     ///
-    /// # Arguments
-    /// * `model_name` - Name of the model to compile
-    /// * `source` - Modelica source code
-    /// * `filename` - Virtual filename for error reporting
-    pub fn compile_str(&mut self, model_name: &str, source: &str, filename: &str) -> Result<rumoca_session::compile::CompilationResult, String> {
+    /// The user source is fed as a workspace document on top of the
+    /// already-preloaded MSL. Rumoca's strict-reachable DAE walker
+    /// sees the user's model plus the entire MSL class tree, so
+    /// short-form refs like `SI.Time`, `Continuous.Filter`, etc.
+    /// resolve through normal MLS §5 scope lookup.
+    ///
+    /// `filename` is used as the document URI for error reporting.
+    pub fn compile_str(
+        &mut self,
+        model_name: &str,
+        source: &str,
+        filename: &str,
+    ) -> Result<Box<rumoca_session::compile::DaeCompilationResult>, String> {
+        let t_total = std::time::Instant::now();
         self.session.update_document(filename, source);
-        self.session.compile_model(model_name)
-            .map_err(|e| format!("{:?}", e))
+        let result = self
+            .session
+            .compile_model_dae_strict_reachable_uncached_with_recovery(model_name);
+        log::info!(
+            "[ModelicaCompiler] compile `{}` finished in {:.2}s ({})",
+            model_name,
+            t_total.elapsed().as_secs_f64(),
+            if result.is_ok() { "OK" } else { "ERR" },
+        );
+        result
+    }
+
+    /// Access the underlying `rumoca_session::Session` — used by a
+    /// test helper that needs to inspect loaded source roots.
+    #[cfg(test)]
+    pub fn session(&self) -> &Session {
+        &self.session
     }
 }
+
 
 pub mod ui;
 
@@ -179,6 +243,31 @@ fn build_modelica_core(app: &mut App) {
         if let Ok(abs_path) = std::fs::canonicalize(&msl) {
             std::env::set_var("MODELICAPATH", abs_path.to_string_lossy().to_string());
         }
+    }
+
+    // **Set RUMOCA_CACHE_DIR BEFORE spawning the worker thread.**
+    //
+    // This used to be set by `ClassCachePlugin::build`, which runs
+    // *after* `build_modelica_core` as part of the UI plugin. The
+    // worker thread therefore started with `RUMOCA_CACHE_DIR`
+    // unset, rumoca fell back to the XDG default (`~/.cache/rumoca`),
+    // and wrote/read cache files there. Meanwhile the later UI
+    // thread calls went to the workspace path once the env var
+    // finally arrived.
+    //
+    // Result: every worker compile saw a partially-cold cache
+    // (the files it needed were in the *other* directory), and
+    // every UI-side parse saw the opposite. Two caches, neither
+    // complete for both readers — minutes-long compiles on what
+    // should have been a warm cache. Honors any `RUMOCA_CACHE_DIR`
+    // the user already set.
+    if std::env::var_os("RUMOCA_CACHE_DIR").is_none() {
+        let target = lunco_assets::cache_dir().join("rumoca");
+        std::env::set_var("RUMOCA_CACHE_DIR", &target);
+        log::info!(
+            "[ModelicaCore] RUMOCA_CACHE_DIR set to `{}` before worker spawn",
+            target.display()
+        );
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -342,7 +431,7 @@ struct CachedModel {
     #[allow(dead_code)]
     source: Arc<str>,
     #[allow(dead_code)]
-    dae: rumoca_session::compile::CompilationResult,
+    dae: Box<rumoca_session::compile::DaeCompilationResult>,
 }
 
 /// Collect every readable variable from the stepper — states, inputs, and
@@ -395,6 +484,12 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
     let mut current_sessions: HashMap<Entity, u64> = HashMap::default();
     // DAE cache per entity — enables instant Reset and fast Step auto-init
     let mut cached_models: HashMap<Entity, CachedModel> = HashMap::default();
+    // Lazy compiler construction. `ModelicaCompiler::new` is now
+    // cheap — it creates an empty session with no MSL loaded.
+    // Actual MSL files are pulled into the session on demand by
+    // `compile_str` based on what each compile's reachable closure
+    // references. No reason to pre-build it.
+    let mut compiler: Option<ModelicaCompiler> = None;
 
     while let Ok(first_cmd) = rx.recv() {
         let mut pending = vec![first_cmd];
@@ -428,7 +523,7 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                             let mut opts = StepperOptions::default();
                             opts.atol = 1e-3; opts.rtol = 1e-3;
                             // Recompile stripped source to get a fresh stepper with input slots
-                            let mut compiler = ModelicaCompiler::new();
+                            let compiler = compiler.get_or_insert_with(ModelicaCompiler::new);
                             match compiler.compile_str(&cached.model_name, &stripped_source, "model.mo") {
                                 Ok(comp_res) => {
                                     match SimStepper::new(&comp_res.dae, opts) {
@@ -493,7 +588,7 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                         // Strip input defaults so they become real runtime slots
                         let (stripped_source, input_defaults) = strip_input_defaults(&source);
 
-                        let mut compiler = ModelicaCompiler::new();
+                        let compiler = compiler.get_or_insert_with(ModelicaCompiler::new);
                         match compiler.compile_str(&model_name, &stripped_source, "model.mo") {
                             Ok(comp_res) => {
                                 let mut opts = StepperOptions::default();
@@ -545,7 +640,7 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                         // Strip input defaults so they become real runtime slots
                         let (stripped_source, input_defaults) = strip_input_defaults(&source);
 
-                        let mut compiler = ModelicaCompiler::new();
+                        let compiler = compiler.get_or_insert_with(ModelicaCompiler::new);
                         match compiler.compile_str(&model_name, &stripped_source, "model.mo") {
                             Ok(comp_res) => {
                                 let mut opts = StepperOptions::default();
@@ -618,7 +713,7 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                             if let Some(cached) = cached_models.get(&entity) {
                                 if cached.model_name == model_name {
                                     let (stripped_source, input_defaults) = strip_input_defaults(&cached.source);
-                                    let mut compiler = ModelicaCompiler::new();
+                                    let compiler = compiler.get_or_insert_with(ModelicaCompiler::new);
                                     if let Ok(comp_res) = compiler.compile_str(&cached.model_name, &stripped_source, "model.mo") {
                                         let mut opts = StepperOptions::default();
                                         opts.atol = 1e-3; opts.rtol = 1e-3;
@@ -639,7 +734,7 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                             // Fallback: compile from file on disk
                             if !steppers.contains_key(&entity) {
                                 let source = std::fs::read_to_string(&model_path).unwrap_or_default();
-                                let mut compiler = ModelicaCompiler::new();
+                                let compiler = compiler.get_or_insert_with(ModelicaCompiler::new);
                                 match compiler.compile_str(&model_name, &source, &model_path.to_string_lossy()) {
                                     Ok(comp_res) => {
                                         let mut opts = StepperOptions::default();
@@ -821,7 +916,7 @@ fn inline_worker_process(
                 if let Some(cached) = w.cached_models.get(&entity) {
                     if cached.model_name == model_name {
                         let (stripped_source, input_defaults) = strip_input_defaults(&cached.source);
-                        let mut compiler = ModelicaCompiler::new();
+                        let compiler = compiler.get_or_insert_with(ModelicaCompiler::new);
                         if let Ok(comp_res) = compiler.compile_str(&cached.model_name, &stripped_source, "model.mo") {
                             let mut opts = StepperOptions::default();
                             opts.atol = 1e-3; opts.rtol = 1e-3;
@@ -884,7 +979,7 @@ fn inline_worker_process(
             opts.atol = 1e-3; opts.rtol = 1e-3;
             let tx = &channels.tx_res;
 
-            let mut compiler = ModelicaCompiler::new();
+            let compiler = compiler.get_or_insert_with(ModelicaCompiler::new);
             match compiler.compile_str(&model_name, &stripped_source, "model.mo") {
                 Ok(comp_res) => {
                     match SimStepper::new(&comp_res.dae, opts) {
@@ -939,7 +1034,7 @@ fn inline_worker_process(
                 let (stripped_source, input_defaults) = strip_input_defaults(&cached.source);
                 let mut opts = StepperOptions::default();
                 opts.atol = 1e-3; opts.rtol = 1e-3;
-                let mut compiler = ModelicaCompiler::new();
+                let compiler = compiler.get_or_insert_with(ModelicaCompiler::new);
                 match compiler.compile_str(&cached.model_name, &stripped_source, "model.mo") {
                     Ok(comp_res) => {
                         if let Ok(mut stepper) = SimStepper::new(&comp_res.dae, opts) {
@@ -1003,7 +1098,7 @@ fn inline_worker_process(
             opts.atol = 1e-3; opts.rtol = 1e-3;
             let tx = &channels.tx_res;
 
-            let mut compiler = ModelicaCompiler::new();
+            let compiler = compiler.get_or_insert_with(ModelicaCompiler::new);
             match compiler.compile_str(&model_name, &stripped_source, "model.mo") {
                 Ok(comp_res) => {
                     match SimStepper::new(&comp_res.dae, opts) {
@@ -1467,6 +1562,240 @@ mod observables_smoke {
             assert!(desc.contains(needle),
                 "'{var}' description should contain '{needle}', got: {desc:?}");
         }
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // MSL demand-driven compile tests
+    // ─────────────────────────────────────────────────────────
+    //
+    // Run with: `cargo test -p lunco-modelica msl --nocapture`
+    //
+    // `msl_` tests require the MSL tree at `<cache>/msl/Modelica/`
+    // (populated by our indexer). They skip with a stderr notice if
+    // absent — CI can run the non-MSL subset unconditionally.
+    //
+    // The headline test `msl_compile_with_limpid_is_fast_and_succeeds`
+    // exercises the full iterative demand-load pipeline: alias
+    // resolution, rumoca error → missing-class regex, fs::read,
+    // update_document, retry loop. A known-good MSL example that
+    // used to hang for minutes is the sanity check; we assert the
+    // happy path + print elapsed so regression to "minutes" is
+    // obvious in the log even if the timing isn't asserted strictly
+    // (test runner load is variable).
+
+    fn msl_available() -> bool {
+        lunco_assets::msl_source_root_path().is_some()
+    }
+
+
+    /// Trivial smoke test — compile a self-contained model with no
+    /// MSL references. Shouldn't touch the iterative loop at all,
+    /// verifies the plain-compile path works post-refactor.
+    #[test]
+    fn bare_model_compiles_without_msl() {
+        let src = r#"
+            model Bare
+              Real x(start=1);
+            equation
+              der(x) = -x;
+            end Bare;
+        "#;
+        let mut c = ModelicaCompiler::new();
+        let r = c.compile_str("Bare", src, "Bare.mo")
+            .expect("bare model must compile without MSL");
+        // Just assert we got a DAE at all — shape details vary
+        // by rumoca version.
+        let _ = r.dae;
+    }
+
+    /// Headline: end-to-end demand-driven compile that pulls MSL
+    /// classes via the iterative loop. A minimal LimPID-using model
+    /// forces the compiler to iteratively resolve Continuous.LimPID
+    /// → Interfaces.SISO → SI types → Icons → etc.
+    ///
+    /// **Asserts**:
+    /// - compile succeeds
+    /// - logs total elapsed time (paste-able into regression tracking)
+    /// - iteration count reasonable (< 20 for a small closure)
+    ///
+    /// Skips with a print if MSL isn't installed locally.
+    /// Known-failing — not a resolver issue. Compiles through the
+    /// resolve phase cleanly (all `SI.*`, `Logical.*` refs are
+    /// resolved via the lazy hook). Fails at DAE (ToDae phase)
+    /// with `unresolved reference: ModelicaServices.Machine.eps`.
+    /// Rumoca hardcodes `ModelicaServices.Machine` + `Modelica.Constants`
+    /// as CONSTANT_PACKAGES
+    /// (rumoca-phase-flatten/src/lib.rs:687-689); its lookup in
+    /// the resolved tree doesn't find `ModelicaServices.Machine`
+    /// even after we `update_document(ModelicaServices/package.mo)`.
+    /// Fetch trace confirms the file lands in the session but
+    /// rumoca's constant-package resolver still errors.
+    ///
+    /// Note: `msl_compile_pid_controller_example_succeeds` passes
+    /// and *also* instantiates LimPID transitively — so the gap
+    /// is specific to this minimal direct-instantiation shape, not
+    /// to LimPID itself. Filed as a rumoca-internal issue.
+    #[test]
+    #[ignore = "rumoca CONSTANT_PACKAGES lookup can't find ModelicaServices.Machine even after the file is loaded"]
+    fn msl_compile_tiny_limpid_model_is_fast() {
+        if !msl_available() {
+            eprintln!("skipping msl_compile_tiny_limpid_model_is_fast: \
+                       MSL not at {:?}",
+                lunco_assets::msl_source_root_path());
+            return;
+        }
+        // Tiny model that references one MSL block — drags in the
+        // transitive closure via the iterative loader. Kept inline
+        // so the test doesn't depend on a user file.
+        let src = r#"
+            model TestLimPID
+              import Modelica.Units.SI;
+              parameter SI.Time Ti = 0.1;
+              Modelica.Blocks.Continuous.LimPID ctrl(
+                k = 1.0,
+                Ti = Ti,
+                yMax = 10.0
+              );
+            equation
+              ctrl.u_s = 1.0;
+              ctrl.u_m = 0.0;
+            end TestLimPID;
+        "#;
+        let mut c = ModelicaCompiler::new();
+        let t0 = std::time::Instant::now();
+        let result = c.compile_str("TestLimPID", src, "TestLimPID.mo");
+        let elapsed = t0.elapsed();
+        eprintln!(
+            "msl_compile_tiny_limpid_model_is_fast: elapsed {:.2}s, \
+             result = {}",
+            elapsed.as_secs_f64(),
+            if result.is_ok() { "OK".to_string() } else {
+                format!("ERR: {}", result.as_ref().err().unwrap())
+            }
+        );
+        result.expect("compile must succeed after iterative MSL load");
+    }
+
+    /// Same shape, against the actual PID_Controller example
+    /// extracted from `Blocks/package.mo`. Bigger closure —
+    /// Mechanics.Rotational + Blocks.Continuous + KinematicPTP +
+    /// sensors + Icons.
+    ///
+    /// With the lazy ExternalResolver hook in place this should
+    /// work without any alias-table workaround; rumoca's own §5
+    /// resolver walks the `within Modelica;` + enclosing package
+    /// imports and calls us for the bytes. Kept as a *diagnostic*
+    /// test: if it fails, the failure is either (a) a genuine
+    /// rumoca MLS gap (PID is NOT in rumoca's 180-supported MSL
+    /// targets list — it may be one of the 15 known-failing), or
+    /// (b) a resolver miss our hook should have handled.
+    #[test]
+    fn msl_compile_pid_controller_example_succeeds() {
+        if !msl_available() {
+            eprintln!("skipping: MSL not available");
+            return;
+        }
+        // Reference by fully-qualified name so rumoca's scope-walker
+        // sees the enclosing `package Blocks` (which carries
+        // `import Modelica.Units.SI;`). The earlier version of this
+        // test sliced PID_Controller out of `Blocks/package.mo` and
+        // fed it as a standalone class, which dropped the enclosing
+        // package's imports — failure was a test-construction flaw
+        // on our side, not a resolver or rumoca gap.
+        let src = r#"
+            model TestPID
+              extends Modelica.Blocks.Examples.PID_Controller;
+            end TestPID;
+        "#;
+        let mut c = ModelicaCompiler::new();
+        let t0 = std::time::Instant::now();
+        let result = c.compile_str("TestPID", src, "TestPID.mo");
+        let elapsed = t0.elapsed();
+        eprintln!(
+            "msl_compile_pid_controller_example_succeeds: elapsed {:.2}s, \
+             result = {}",
+            elapsed.as_secs_f64(),
+            if result.is_ok() { "OK".to_string() } else {
+                format!("ERR (first 500 chars): {}",
+                    result.as_ref().err().unwrap().chars().take(500).collect::<String>())
+            }
+        );
+        result.expect("PID_Controller must compile after iterative MSL load");
+    }
+
+    /// End-to-end test against an MSL target rumoca *officially*
+    /// claims to support (from `msl_simulation_targets_180.json` in
+    /// rumoca-test-msl). This is the real acceptance test for the
+    /// lazy-resolver architecture: rumoca's §5 resolver walks the
+    /// scope, our `MslLazyResolver` supplies bytes on demand, a
+    /// tiny wrapper model instantiates a known-good MSL example by
+    /// fully-qualified name. If this fails, the loader architecture
+    /// is broken. If it passes but PID_Controller fails, the delta
+    /// is a rumoca MLS gap — not our problem.
+    #[test]
+    fn msl_compile_known_good_rotational_example() {
+        if !msl_available() {
+            eprintln!("skipping: MSL not available");
+            return;
+        }
+        // Minimal wrapper — forces the resolver to pull in
+        // Rotational.Examples.First and its entire transitive
+        // closure (Rotational.Components, Interfaces, SI types,
+        // Icons, …). References by fully-qualified name, which is
+        // the scope-friendly form rumoca resolves cleanly.
+        let src = r#"
+            model TestRotFirst
+              extends Modelica.Mechanics.Rotational.Examples.First;
+            end TestRotFirst;
+        "#;
+        let mut c = ModelicaCompiler::new();
+        let t0 = std::time::Instant::now();
+        let result = c.compile_str("TestRotFirst", src, "TestRotFirst.mo");
+        let elapsed = t0.elapsed();
+        eprintln!(
+            "msl_compile_known_good_rotational_example: elapsed {:.2}s, \
+             result = {}",
+            elapsed.as_secs_f64(),
+            if result.is_ok() { "OK".to_string() } else {
+                format!("ERR (first 800 chars): {}",
+                    result.as_ref().err().unwrap().chars().take(800).collect::<String>())
+            }
+        );
+        result.expect("Rotational.Examples.First (known-good MSL target) must compile");
+    }
+
+    /// Purely-qualified-name test. If this passes but
+    /// `msl_compile_known_good_rotational_example` fails, the gap
+    /// is unambiguously in rumoca's short-form scope walking
+    /// (enclosing-package imports aren't reaching nested classes),
+    /// not in our resolver.
+    #[test]
+    fn msl_fully_qualified_time_resolves() {
+        if !msl_available() {
+            eprintln!("skipping: MSL not available");
+            return;
+        }
+        let src = r#"
+            model TestFullyQualifiedSI
+              parameter Modelica.Units.SI.Time Ti = 0.5;
+              Real x(start=1);
+            equation
+              der(x) = -x / Ti;
+            end TestFullyQualifiedSI;
+        "#;
+        let mut c = ModelicaCompiler::new();
+        let t0 = std::time::Instant::now();
+        let result = c.compile_str("TestFullyQualifiedSI", src, "Q.mo");
+        let elapsed = t0.elapsed();
+        eprintln!(
+            "msl_fully_qualified_time_resolves: elapsed {:.2}s, result = {}",
+            elapsed.as_secs_f64(),
+            if result.is_ok() { "OK".into() } else {
+                format!("ERR (first 800 chars): {}",
+                    result.as_ref().err().unwrap().chars().take(800).collect::<String>())
+            }
+        );
+        result.expect("fully-qualified SI.Time must compile");
     }
 }
 

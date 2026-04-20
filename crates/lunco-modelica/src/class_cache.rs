@@ -414,7 +414,7 @@ fn build_msl_class_to_file_index(
     map
 }
 
-fn locate_msl_file(qualified: &str) -> Option<std::path::PathBuf> {
+pub fn locate_msl_file(qualified: &str) -> Option<std::path::PathBuf> {
     let msl_root = lunco_assets::msl_dir();
     let segments: Vec<&str> = qualified.split('.').collect();
     if segments.is_empty() {
@@ -425,20 +425,17 @@ fn locate_msl_file(qualified: &str) -> Option<std::path::PathBuf> {
         for seg in &segments[..i] {
             dir.push(seg);
         }
-        if i == segments.len() {
-            let own = dir.with_extension("mo");
-            if own.exists() {
-                return Some(own);
-            }
-        } else {
-            let pkg = dir.join("package.mo");
-            if pkg.exists() {
-                return Some(pkg);
-            }
-            let flat = dir.with_extension("mo");
-            if flat.exists() {
-                return Some(flat);
-            }
+        // At any depth: prefer a directory holding `package.mo`
+        // over a flat `.mo`, so `Modelica.Blocks` resolves to
+        // `Modelica/Blocks/package.mo` (the package) rather than
+        // falling up to `Modelica/package.mo` (the grandparent).
+        let pkg = dir.join("package.mo");
+        if pkg.exists() {
+            return Some(pkg);
+        }
+        let flat = dir.with_extension("mo");
+        if flat.exists() {
+            return Some(flat);
         }
     }
     None
@@ -446,6 +443,159 @@ fn locate_msl_file(qualified: &str) -> Option<std::path::PathBuf> {
 
 pub fn resolve_msl_class_path(qualified: &str) -> Option<std::path::PathBuf> {
     msl_class_to_file_index().get(qualified).cloned()
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Filesystem-derived MSL resolver
+// ═══════════════════════════════════════════════════════════════════
+//
+// The hardcoded `("Rotational", "Modelica.Mechanics.Rotational")`
+// style alias table gets stale the moment MSL reorganizes. Walk the
+// filesystem once and build the head-index from what's actually there:
+//
+//   by_head["Rotational"] = ["Modelica.Mechanics.Rotational"]
+//   by_head["Blocks"]     = ["Modelica.Blocks", "Modelica.ComplexBlocks"]
+//
+// When a short-form ref `Rotational.Interfaces.Flange_a` comes in
+// and `locate_msl_file` can't find `Rotational/` at MSL root, we
+// look `Rotational` up in `by_head`, prefix-rewrite, retry.
+//
+// Each entry here is a *package container* — a directory with
+// `package.mo` or a flat `.mo` file immediately under some parent.
+// Classes nested *inside* `.mo` files (e.g. `Modelica.Units.SI`
+// lives inside `Modelica/Units.mo`) don't appear as filesystem
+// entries; those still need either explicit user imports or a
+// loaded-file import-scope scan.
+
+#[derive(Debug, Default)]
+pub struct MslFsIndex {
+    /// Last-segment → full qualified names. `"Rotational"` may map
+    /// to multiple fully-qualified packages; resolver tries each.
+    pub by_head: std::collections::HashMap<String, Vec<String>>,
+    /// Full qualified name → on-disk file.
+    pub qualified_to_path: std::collections::HashMap<String, std::path::PathBuf>,
+}
+
+pub fn msl_fs_index() -> &'static MslFsIndex {
+    use std::sync::OnceLock;
+    static INDEX: OnceLock<MslFsIndex> = OnceLock::new();
+    INDEX.get_or_init(build_msl_fs_index)
+}
+
+fn build_msl_fs_index() -> MslFsIndex {
+    let start = std::time::Instant::now();
+    let Some(root) = lunco_assets::msl_source_root_path() else {
+        return MslFsIndex::default();
+    };
+    let mut index = MslFsIndex::default();
+    walk_msl_fs(&root, &root, &[], &mut index);
+    info!(
+        "[ClassCache] MSL fs index built: {} qualified paths, {} distinct heads in {:?}",
+        index.qualified_to_path.len(),
+        index.by_head.len(),
+        start.elapsed()
+    );
+    index
+}
+
+fn walk_msl_fs(
+    root: &std::path::Path,
+    dir: &std::path::Path,
+    prefix: &[String],
+    index: &mut MslFsIndex,
+) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    // Record the package itself if dir has a package.mo (and it's
+    // not the MSL root).
+    if !prefix.is_empty() && dir.join("package.mo").exists() {
+        let qualified = prefix.join(".");
+        index
+            .qualified_to_path
+            .insert(qualified.clone(), dir.join("package.mo"));
+        if let Some(head) = prefix.last() {
+            index
+                .by_head
+                .entry(head.clone())
+                .or_default()
+                .push(qualified);
+        }
+    }
+    for entry in entries.flatten() {
+        let file_type = match entry.file_type() {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        let path = entry.path();
+        let file_name = entry.file_name();
+        let name_str = match file_name.to_str() {
+            Some(s) => s,
+            None => continue,
+        };
+        if file_type.is_dir() {
+            // Skip MSL's Resources / test dirs.
+            if matches!(name_str, "Resources" | "Images" | "test") {
+                continue;
+            }
+            let mut next = prefix.to_vec();
+            next.push(name_str.to_string());
+            walk_msl_fs(root, &path, &next, index);
+        } else if file_type.is_file()
+            && name_str.ends_with(".mo")
+            && name_str != "package.mo"
+        {
+            let stem = name_str.trim_end_matches(".mo").to_string();
+            let mut full = prefix.to_vec();
+            full.push(stem.clone());
+            let qualified = full.join(".");
+            index.qualified_to_path.insert(qualified.clone(), path);
+            index
+                .by_head
+                .entry(stem)
+                .or_default()
+                .push(qualified);
+        }
+    }
+    let _ = root;
+}
+
+/// Try to resolve a short-form dotted ref by prefix-rewriting its
+/// head against the filesystem head index. Returns the rewritten
+/// full qualified name (e.g. `Rotational.Interfaces.Flange_a` →
+/// `Modelica.Mechanics.Rotational.Interfaces.Flange_a`) if exactly
+/// one head match exists that also resolves to an actual file when
+/// combined with the remaining segments. `None` if ambiguous, no
+/// head match, or already starts with a qualified path that resolves.
+pub fn resolve_msl_head_prefix(qualified: &str) -> Option<String> {
+    // Direct hit first — head is already at MSL root.
+    if locate_msl_file(qualified).is_some() {
+        return Some(qualified.to_string());
+    }
+    let (head, rest) = qualified.split_once('.').unwrap_or((qualified, ""));
+    let index = msl_fs_index();
+    let candidates = index.by_head.get(head)?;
+    // Refuse to guess when the head is ambiguous. `Logical` appears
+    // in `Modelica.Blocks.Logical`, `Modelica.Clocked...Logical`,
+    // etc. — picking the first match is wrong for 90% of callers.
+    // Only rewrite when the filesystem gives us a unique answer.
+    // For the right ambiguous case, rumoca's §5 scope walk should
+    // find the actual target via imports in enclosing packages
+    // (which the caller has ensured are loaded).
+    if candidates.len() > 1 {
+        return None;
+    }
+    for full_head in candidates {
+        let candidate = if rest.is_empty() {
+            full_head.clone()
+        } else {
+            format!("{full_head}.{rest}")
+        };
+        if locate_msl_file(&candidate).is_some() {
+            return Some(candidate);
+        }
+    }
+    None
 }
 
 /// Heuristic: "is this class a pure icon / visual symbol, not a

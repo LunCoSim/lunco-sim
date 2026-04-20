@@ -145,6 +145,53 @@ pub fn msl_dir() -> PathBuf {
     cache_subdir("msl")
 }
 
+/// Returns the on-disk filesystem path that should be registered
+/// as a rumoca source root for Modelica Standard Library access,
+/// **if and only if it's materialised as real files on this target**.
+///
+/// Narrower than [`msl_dir`] — that returns the cache subdir even
+/// when empty. This returns `None` when the MSL tree isn't
+/// present (first run before index build, or `wasm32` where MSL
+/// is served via HTTP fetch rather than the filesystem).
+///
+/// # What's at this path
+///
+/// This is `<cache>/msl/` itself — **not** `<cache>/msl/Modelica/`.
+/// The difference matters because MSL ships several top-level
+/// entities as siblings of the `Modelica/` directory:
+///
+/// - `Modelica/` — the core library (≈ 2400 classes).
+/// - `Complex.mo` — the top-level `operator record Complex` used by
+///   `ComplexBlocks`, `ComplexMath`, `Magnetic.FundamentalWave`, etc.
+///   User models that reference `Complex` (or transitively via MSL
+///   types) will fail to resolve unless this file is in scope.
+/// - `ModelicaServices/` — vendor-specific animation / file-IO /
+///   event-logger services MSL calls into.
+/// - `ObsoleteModelica4.mo` — deprecated classes retained for
+///   backward compatibility.
+///
+/// Pointing rumoca at `<cache>/msl/` picks up all of the above at
+/// the correct namespace rooting.
+///
+/// This is the single chokepoint that integrations like rumoca's
+/// compile session use to register MSL as a source root. When we
+/// move to the async `AssetSource` abstraction for full web
+/// support, this function will return `None` on `wasm32` and the
+/// compile path will instead populate rumoca's source set by
+/// streaming bytes through the asset source. Native unchanged.
+pub fn msl_source_root_path() -> Option<PathBuf> {
+    let root = msl_dir();
+    // Use the presence of `Modelica/` as the marker that the tree
+    // is materialised. `Complex.mo` alone isn't a strong enough
+    // signal — it's a small top-level file and might predate a
+    // botched Modelica tree delete.
+    if root.join("Modelica").exists() {
+        Some(root)
+    } else {
+        None
+    }
+}
+
 // ============================================================================
 // Assets Directory (development source)
 // ============================================================================

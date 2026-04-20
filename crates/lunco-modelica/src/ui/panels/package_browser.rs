@@ -477,7 +477,23 @@ impl Panel for PackageBrowserPanel {
         {
             let mut tree_cache = world.resource_mut::<PackageTreeCache>();
 
-            egui::ScrollArea::vertical().show(ui, |ui| {
+            // `auto_shrink([false; 2])` tells egui to fill the full
+            // panel rect regardless of content size — without it the
+            // scroll viewport can end up shorter than the panel
+            // height, cutting off the last items and giving users no
+            // way to scroll to them (the symptom you hit with long
+            // package trees).
+            egui::ScrollArea::vertical()
+                .auto_shrink([false; 2])
+                .show(ui, |ui| {
+                // Clamp every descendant label to the panel width
+                // and truncate with ellipsis if it doesn't fit.
+                // Without this, long names (deep MSL paths, rename
+                // buffers, workspace paths) spill past the panel
+                // edge and the leading characters end up hidden
+                // behind neighbouring UI.
+                ui.set_max_width(ui.available_width());
+                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
                 let cache = &mut *tree_cache;
 
                 // ── WORKSPACE ──

@@ -134,6 +134,13 @@ impl Panel for CodeEditorPanel {
             return;
         }
 
+        // True when the user switched to a different model this frame.
+        // Used below to snap the horizontal scroll back to column 0 so
+        // the left edge of the new file is always visible — otherwise
+        // egui's ScrollArea retains the previous file's scroll offset
+        // (driven by cursor position) and the new file opens with its
+        // first few columns hidden behind the left panel boundary.
+        let mut model_switched = false;
         if let Some(ref path) = model_path {
             // Resync from `open_model.source` when either
             //   (a) the model itself changed (`model_path` diverged), or
@@ -148,15 +155,17 @@ impl Panel for CodeEditorPanel {
             // diagram edit, the resync clobbers them. That's a known
             // transitional gap until the code editor writes every
             // keystroke through the Document (its own `EditText` op).
-            let needs_sync = {
+            let (needs_sync, path_changed) = {
                 let buf_state = world.resource::<EditorBufferState>();
                 let external_hash = world.resource::<WorkbenchState>()
                     .open_model
                     .as_ref()
                     .map(|m| hash_content(&m.source))
                     .unwrap_or(0);
-                buf_state.model_path != *path || buf_state.source_hash != external_hash
+                let path_changed = buf_state.model_path != *path;
+                (path_changed || buf_state.source_hash != external_hash, path_changed)
             };
+            model_switched = path_changed;
 
             if needs_sync {
                 let (source, line_starts, detected_name, galley) = {
@@ -275,14 +284,25 @@ impl Panel for CodeEditorPanel {
         // a hash from the widget's location and we can't target it
         // from outside the closure.
         let text_edit_id = egui::Id::new("modelica_code_editor");
+        // When word-wrap is off we need the TextEdit widget's rect to
+        // be AT LEAST as wide as the longest line — otherwise egui's
+        // TextEdit auto-scrolls horizontally *inside its own rect* to
+        // follow the cursor, hiding the leftmost columns. Estimate
+        // width from the longest line's char count × monospace glyph
+        // width (cheap and good enough; overshooting is harmless, the
+        // outer ScrollArea just gains a bit of empty runway).
+        let content_width = if word_wrap {
+            editor_width
+        } else {
+            // Approx monospace glyph width at the default 14px editor
+            // font; overshooting is harmless, we just get a bit of
+            // empty runway at the right edge of the scroll area.
+            let glyph_w = 8.0_f32;
+            let max_chars = text.lines().map(|l| l.chars().count()).max().unwrap_or(0);
+            ((max_chars as f32) * glyph_w + 32.0).max(editor_width)
+        };
         let show_editor = |ui: &mut egui::Ui, text: &mut String| -> egui::Response {
-            // `desired_width` defines the widget's allocated width.
-            // In scroll mode we want the widget to be AS WIDE AS THE
-            // LONGEST LINE so the outer ScrollArea can scroll to it;
-            // `f32::INFINITY` would be rejected, so we pass a large
-            // finite number and let the layouter determine the
-            // galley's actual width.
-            let inner_width = if word_wrap { editor_width } else { editor_width.max(2000.0) };
+            let inner_width = content_width;
             ui.add_sized(
                 [inner_width, editor_height],
                 egui::TextEdit::multiline(text)
@@ -311,14 +331,31 @@ impl Panel for CodeEditorPanel {
             )
         };
 
-        let output = if word_wrap {
-            show_editor(ui, &mut text)
-        } else {
-            egui::ScrollArea::horizontal()
-                .auto_shrink([false, false])
-                .show(ui, |ui| show_editor(ui, &mut text))
-                .inner
-        };
+        // Inner margin so the first column of code isn't flush
+        // against the panel's left edge. Without it the glyphs of
+        // the leftmost column sit under the adjacent panel's
+        // boundary (package browser on the left), hiding the first
+        // few characters of every line.
+        let output = egui::Frame::default()
+            .inner_margin(egui::Margin {
+                left: 8,
+                right: 0,
+                top: 0,
+                bottom: 0,
+            })
+            .show(ui, |ui| {
+                if word_wrap {
+                    show_editor(ui, &mut text)
+                } else {
+                    let mut area = egui::ScrollArea::horizontal()
+                        .auto_shrink([false, false]);
+                    if model_switched {
+                        area = area.horizontal_scroll_offset(0.0);
+                    }
+                    area.show(ui, |ui| show_editor(ui, &mut text)).inner
+                }
+            })
+            .inner;
 
         if output.changed() && !is_ro {
             new_text = text.clone();

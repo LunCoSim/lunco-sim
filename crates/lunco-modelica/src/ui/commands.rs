@@ -71,6 +71,25 @@ pub struct DuplicateModelFromReadOnly {
     pub source_doc: DocumentId,
 }
 
+/// Open an MSL example as a fresh editable copy in the workspace
+/// without the user needing to first drill into it.
+///
+/// The Welcome page's examples strip dispatches this on click.
+/// Same effect as `DuplicateModelFromReadOnly` but sourced from a
+/// qualified MSL class name rather than an already-open read-only
+/// doc — the observer resolves the file path via the MSL class
+/// index and runs the whole extract + rewrite + parse pipeline on
+/// a background task so the UI stays responsive even for
+/// multi-hundred-KB package files.
+///
+/// The duplicated copy lands in Canvas view by default (examples
+/// are composed models — users want to see the diagram, not the
+/// source).
+#[derive(Event, Clone, Debug)]
+pub struct OpenExampleInWorkspace {
+    pub qualified: String,
+}
+
 /// Request to compile a Modelica document and run the resulting
 /// simulation.
 ///
@@ -112,6 +131,7 @@ impl Plugin for ModelicaCommandsPlugin {
             .add_observer(on_compile_model)
             .add_observer(on_create_new_scratch_model)
             .add_observer(on_duplicate_model_from_read_only)
+            .add_observer(on_open_example_in_workspace)
             .add_observer(resolve_editor_intent)
             .add_observer(resolve_new_document_intent)
             .add_systems(
@@ -765,18 +785,21 @@ fn on_duplicate_model_from_read_only(
     // parse in `ModelicaDocument::with_origin` — goes to a bg task
     // below. Per the architectural rule: no O(source_bytes) work
     // on the UI thread.
-    let (source_full, origin_class_short) = {
+    let (source_full, origin_class_short, origin_fqn) = {
         let Some(host) = registry.host(source_doc) else {
             console.error("Duplicate failed: source doc not found in registry");
             return;
         };
         let doc = host.document();
-        let short = class_names
+        let fqn = class_names
             .as_ref()
             .and_then(|m| m.get(source_doc))
+            .map(String::from);
+        let short = fqn
+            .as_ref()
             .and_then(|q| q.rsplit('.').next().map(String::from))
             .unwrap_or_else(|| doc.origin().display_name());
-        (doc.source().to_string(), short)
+        (doc.source().to_string(), short, fqn)
     };
 
     // Pick a new Untitled name. Try `<ClassName>Copy` first; fall
@@ -814,6 +837,12 @@ fn on_duplicate_model_from_read_only(
             doc: doc_id,
         });
     model_tabs.ensure(doc_id);
+    // Duplicated copies land in Canvas view — the whole point of
+    // "make a playable copy of an MSL example" is to see the
+    // diagram. Text view for editing is one toolbar click away.
+    if let Some(tab) = model_tabs.get_mut(doc_id) {
+        tab.view_mode = crate::ui::panels::model_view::ModelViewMode::Canvas;
+    }
     commands.trigger(lunco_workbench::OpenTab {
         kind: crate::ui::panels::model_view::MODEL_VIEW_KIND,
         instance: doc_id.raw(),
@@ -823,6 +852,7 @@ fn on_duplicate_model_from_read_only(
     // only; no world access from the task.
     let origin_short_for_task = origin_class_short.clone();
     let name_for_task = name.clone();
+    let origin_fqn_for_task = origin_fqn.clone();
     let task = bevy::tasks::AsyncComputeTaskPool::get().spawn(async move {
         // 1. Extract just the target class's source from a
         //    multi-class package file (falls through to the full
@@ -831,11 +861,20 @@ fn on_duplicate_model_from_read_only(
             .unwrap_or(source_full);
         // 2. Rewrite: rename the class + strip `within` so the
         //    copy is standalone.
-        let copy_src = rewrite_duplicated_source(
+        let renamed = rewrite_duplicated_source(
             &class_src,
             &origin_short_for_task,
             &name_for_task,
         );
+        // 2b. Inject parent-package imports so scope-dependent refs
+        //     like `SI.Angle` still resolve after extraction. No-op
+        //     for non-MSL sources (FQN unknown → no path → empty).
+        let imports = origin_fqn_for_task
+            .as_deref()
+            .and_then(crate::class_cache::resolve_msl_class_path)
+            .map(|p| collect_parent_imports(&p))
+            .unwrap_or_default();
+        let copy_src = inject_class_imports(&renamed, &imports);
         // 3. Build the document. `with_origin` runs rumoca to
         //    populate the AST cache — bg thread, so the UI stays
         //    responsive even on multi-KB sources.
@@ -857,6 +896,119 @@ fn on_duplicate_model_from_read_only(
     );
     console.info(format!(
         "📄 Duplicating `{origin_class_short}` → `{name}` (building…)"
+    ));
+}
+
+fn on_open_example_in_workspace(
+    trigger: On<OpenExampleInWorkspace>,
+    mut cache: ResMut<crate::ui::panels::package_browser::PackageTreeCache>,
+    mut model_tabs: ResMut<crate::ui::panels::model_view::ModelTabs>,
+    mut registry: ResMut<ModelicaDocumentRegistry>,
+    mut duplicate_loads: ResMut<
+        crate::ui::panels::canvas_diagram::DuplicateLoads,
+    >,
+    mut console: ResMut<crate::ui::panels::console::ConsoleLog>,
+    mut commands: Commands,
+) {
+    let qualified = trigger.event().qualified.clone();
+    let origin_short = qualified
+        .rsplit('.')
+        .next()
+        .map(str::to_string)
+        .unwrap_or_else(|| qualified.clone());
+
+    // Pick a new Untitled name, same collision strategy as the
+    // sibling `on_duplicate_model_from_read_only`.
+    let taken: std::collections::HashSet<String> = cache
+        .in_memory_models
+        .iter()
+        .map(|e| e.display_name.clone())
+        .collect();
+    let base_name = format!("{origin_short}Copy");
+    let mut name = base_name.clone();
+    let mut n: u32 = 2;
+    while taken.contains(&name) {
+        name = format!("{base_name}{n}");
+        n += 1;
+    }
+
+    // Reserve id + open the tab now so the user sees immediate
+    // feedback; the canvas will show "Loading resource…" until
+    // the bg build lands via `drive_duplicate_loads`.
+    let doc_id = registry.reserve_id();
+    let mem_id = format!("mem://{name}");
+    cache.in_memory_models.retain(|e| e.id != mem_id);
+    cache
+        .in_memory_models
+        .push(crate::ui::panels::package_browser::InMemoryEntry {
+            display_name: name.clone(),
+            id: mem_id,
+            doc: doc_id,
+        });
+    // Examples are composed models — land in Canvas view so users
+    // see the diagram on open, not the raw source.
+    model_tabs.ensure(doc_id);
+    if let Some(tab) = model_tabs.get_mut(doc_id) {
+        tab.view_mode = crate::ui::panels::model_view::ModelViewMode::Canvas;
+    }
+    commands.trigger(lunco_workbench::OpenTab {
+        kind: crate::ui::panels::model_view::MODEL_VIEW_KIND,
+        instance: doc_id.raw(),
+    });
+
+    // Bg task: resolve path → read file → extract target class →
+    // rewrite → build `ModelicaDocument`. All off UI thread.
+    let qualified_for_task = qualified.clone();
+    let origin_short_for_task = origin_short.clone();
+    let name_for_task = name.clone();
+    let task = bevy::tasks::AsyncComputeTaskPool::get().spawn(async move {
+        // 1. Resolve MSL file path (static HashMap probe). If the
+        //    class isn't indexed, build an empty doc so the user
+        //    still gets a tab with a clear error marker.
+        let Some(path) = crate::class_cache::resolve_msl_class_path(&qualified_for_task) else {
+            return crate::document::ModelicaDocument::with_origin(
+                doc_id,
+                format!("// Could not locate MSL file for {qualified_for_task}\n"),
+                lunco_doc::DocumentOrigin::untitled(name_for_task),
+            );
+        };
+        // 2. Read file. I/O — fine off-thread.
+        let source_full = std::fs::read_to_string(&path).unwrap_or_default();
+        // 3. Extract just the target class (same helpers used by
+        //    `DuplicateModelFromReadOnly`).
+        let class_src = extract_class_source(&source_full, &origin_short_for_task)
+            .unwrap_or(source_full);
+        // 4. Rewrite: rename + strip `within` so the copy is
+        //    standalone.
+        let renamed = rewrite_duplicated_source(
+            &class_src,
+            &origin_short_for_task,
+            &name_for_task,
+        );
+        // 4b. Inject parent-package imports (e.g. `import
+        //     Modelica.Units.SI;`) so scope-dependent references
+        //     resolve once the class is standalone.
+        let imports = collect_parent_imports(&path);
+        let copy_src = inject_class_imports(&renamed, &imports);
+        // 5. Build doc (runs rumoca parse on the bg thread).
+        crate::document::ModelicaDocument::with_origin(
+            doc_id,
+            copy_src,
+            lunco_doc::DocumentOrigin::untitled(name_for_task),
+        )
+    });
+
+    duplicate_loads.insert(
+        doc_id,
+        crate::ui::panels::canvas_diagram::DuplicateBinding {
+            display_name: name.clone(),
+            origin_short: origin_short.clone(),
+            started: std::time::Instant::now(),
+            task,
+        },
+    );
+    console.info(format!(
+        "📄 Opening example `{qualified}` → editable `{name}` (building…)"
     ));
 }
 
@@ -892,6 +1044,148 @@ fn extract_class_source(source: &str, class_name: &str) -> Option<String> {
     let rel_end = closer.find(&source[start..])?.end();
     let end = start + rel_end;
     Some(source[start..end].to_string())
+}
+
+/// Walk from a class file's directory up through the filesystem,
+/// collecting `import` statements from every `package.mo` on the
+/// way. These are the imports that were in scope for the class at
+/// its original location — once the class is extracted into a
+/// standalone workspace file, it loses that scope, so the imports
+/// must be injected into the class body itself (Modelica allows
+/// class-local imports).
+///
+/// Stops walking as soon as a directory has no `package.mo` — that
+/// marks the boundary of the enclosing package hierarchy. Returns
+/// imports in outer-to-inner order, deduplicated while preserving
+/// first-seen position.
+///
+/// Covers the SI/unit shortcuts that break duplication of MSL
+/// examples: e.g. `Modelica/Blocks/package.mo` declares
+/// `import Modelica.Units.SI;` which is why `SI.Angle` resolves
+/// inside `Modelica.Blocks.Examples.PID_Controller` but not in a
+/// naïvely extracted copy.
+fn collect_parent_imports(class_file: &std::path::Path) -> Vec<String> {
+    let mut chain: Vec<String> = Vec::new();
+    let mut dir = class_file.parent();
+    while let Some(d) = dir {
+        let pkg = d.join("package.mo");
+        if !pkg.exists() {
+            break;
+        }
+        if let Ok(src) = std::fs::read_to_string(&pkg) {
+            // Only scan the **package preamble** — the region
+            // between the enclosing `package Foo` header and the
+            // first nested class declaration. MSL package.mo files
+            // routinely inline whole example models, whose own
+            // local `import` statements must NOT be promoted into
+            // the duplicated class (seen in the wild:
+            // `Blocks/Examples/package.mo` contains multiple
+            // nested examples each doing `import distribution =
+            // Modelica.Math.Distributions.X.density;` — lifting
+            // two of those into one class yields a duplicate-alias
+            // parse error).
+            let class_opener = regex::Regex::new(
+                r"^\s*(?:partial\s+)?(?:encapsulated\s+)?(?:model|block|class|connector|function|record|package|type)\s+",
+            );
+            let mut entered_package = false;
+            let mut level: Vec<String> = Vec::new();
+            for line in src.lines() {
+                let is_opener = class_opener
+                    .as_ref()
+                    .map(|re| re.is_match(line))
+                    .unwrap_or(false);
+                if is_opener {
+                    if entered_package {
+                        break;
+                    }
+                    entered_package = true;
+                    continue;
+                }
+                if entered_package {
+                    let t = line.trim();
+                    if t.starts_with("import ") && t.ends_with(';') {
+                        level.push(t.to_string());
+                    }
+                }
+            }
+            // Level is the outer-relative-to-previous step. Prepend
+            // so the final chain is outer-first, inner-last.
+            let mut merged = level;
+            merged.extend(chain.drain(..));
+            chain = merged;
+        }
+        dir = d.parent();
+    }
+    let mut seen = std::collections::HashSet::new();
+    chain.retain(|s| seen.insert(s.clone()));
+    chain
+}
+
+/// Insert a block of `import` statements right after the class
+/// header line. Used after `rewrite_duplicated_source` so the
+/// header has already been renamed. Returns the input unmodified
+/// when the list is empty or the header can't be located — a copy
+/// that still needs an import fix is strictly better than a copy
+/// with a broken header.
+fn inject_class_imports(src: &str, imports: &[String]) -> String {
+    if imports.is_empty() {
+        return src.to_string();
+    }
+    // Match the first class header line (including any trailing
+    // description string) and capture through to its newline. Same
+    // header shapes as `extract_class_source` / `rewrite_*`.
+    let header_re = regex::Regex::new(
+        r"(?m)^(\s*(?:partial\s+)?(?:encapsulated\s+)?(?:model|block|class|connector|function|record|package|type)\s+[A-Za-z_]\w*[^\n]*)\n",
+    )
+    .ok();
+    let Some(re) = header_re else {
+        return src.to_string();
+    };
+    let Some(m) = re.find(src) else {
+        return src.to_string();
+    };
+    let mut insert_at = m.end();
+    // Per MLS the class name may be followed by a description string
+    // (optionally split across lines, or even broken over multiple
+    // adjacent quoted strings). Imports must land *after* it — the
+    // grammar forbids anything between the class name and its
+    // description. Advance past whitespace and any leading quoted
+    // string(s) before injecting.
+    let bytes = src.as_bytes();
+    let skip_ws = |mut i: usize| {
+        while i < bytes.len() && (bytes[i].is_ascii_whitespace()) {
+            i += 1;
+        }
+        i
+    };
+    let mut scan = skip_ws(insert_at);
+    while scan < bytes.len() && bytes[scan] == b'"' {
+        let mut j = scan + 1;
+        while j < bytes.len() {
+            match bytes[j] {
+                b'\\' if j + 1 < bytes.len() => j += 2,
+                b'"' => { j += 1; break; }
+                _ => j += 1,
+            }
+        }
+        insert_at = j;
+        scan = skip_ws(j);
+    }
+    // Inject on its own new line so the imports don't glue to the
+    // description's trailing `"`.
+    let needs_leading_newline = insert_at > 0 && bytes[insert_at - 1] != b'\n';
+    let block: String = imports
+        .iter()
+        .map(|i| format!("  {i}\n"))
+        .collect();
+    let mut out = String::with_capacity(src.len() + block.len() + 1);
+    out.push_str(&src[..insert_at]);
+    if needs_leading_newline {
+        out.push('\n');
+    }
+    out.push_str(&block);
+    out.push_str(&src[insert_at..]);
+    out
 }
 
 /// Rename the class and strip any `within` clause so the copy is a
