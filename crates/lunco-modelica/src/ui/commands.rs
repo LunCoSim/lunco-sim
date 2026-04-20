@@ -217,9 +217,10 @@ impl PendingCloseAfterSave {
 /// waiting on this save. Fires `CloseTab` + `CloseDocument` in order.
 fn finish_close_after_save(
     trigger: On<lunco_doc_bevy::DocumentSaved>,
-    mut pending: ResMut<PendingCloseAfterSave>,
+    pending: Option<ResMut<PendingCloseAfterSave>>,
     mut commands: Commands,
 ) {
+    let Some(mut pending) = pending else { return };
     let doc = trigger.event().doc;
     if pending.take(doc) {
         commands.trigger(lunco_workbench::CloseTab {
@@ -271,7 +272,13 @@ fn render_close_dialogs(
     mut egui_ctx: bevy_egui::EguiContexts,
     registry: Res<ModelicaDocumentRegistry>,
     mut dialogs: ResMut<CloseDialogState>,
-    mut pending_save_close: ResMut<PendingCloseAfterSave>,
+    // `Option<ResMut>` rather than `ResMut` — the system is registered
+    // in one of the `EguiPrimaryContextPass` passes which, in Bevy
+    // 0.18, can be polled before plugin-level `init_resource`s have
+    // taken effect on a world that was externally-constructed (e.g.
+    // the minimal-app CI path). Missing resource is a no-op; normal
+    // runs always populate it from `ModelicaCommandsPlugin::build`.
+    mut pending_save_close: Option<ResMut<PendingCloseAfterSave>>,
     mut commands: Commands,
 ) {
     let Ok(ctx) = egui_ctx.ctx_mut() else {
@@ -368,7 +375,9 @@ fn render_close_dialogs(
                 // user may cancel, in which case the close must NOT
                 // proceed. `finish_close_after_save` observer fires
                 // CloseTab+CloseDocument when DocumentSaved lands.
-                pending_save_close.queue(doc);
+                if let Some(q) = pending_save_close.as_mut() {
+                    q.queue(doc);
+                }
                 commands.trigger(SaveDocument { doc });
             }
             DialogAction::DontSave => {
