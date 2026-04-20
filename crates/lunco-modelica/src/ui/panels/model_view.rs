@@ -1104,23 +1104,42 @@ fn render_icon_view(ui: &mut egui::Ui, world: &mut World) {
     // the asset bundle) rely on.
     let authored_icon = {
         let registry = world.resource::<ModelicaDocumentRegistry>();
-        world
+        let ast = world
             .get_resource::<lunco_workbench::WorkspaceResource>()
             .and_then(|ws| ws.active_document)
             .and_then(|doc| registry.host(doc))
-            .and_then(|host| host.document().ast().result.as_ref().ok().cloned())
-            .and_then(|ast| {
-                // Find the target class inside the doc by short name.
-                let short = qualified.rsplit('.').next().unwrap_or(&qualified);
-                let class = ast
-                    .classes
-                    .iter()
-                    .find_map(|(name, c)| {
-                        (name.as_str() == short || name.as_str() == qualified.as_str())
-                            .then_some(c)
-                    })?;
-                crate::annotations::extract_icon(&class.annotation)
-            })
+            .and_then(|host| host.document().ast().result.as_ref().ok().cloned());
+        ast.and_then(|ast| {
+            // Find the target class by short name or exact qualified.
+            let short = qualified.rsplit('.').next().unwrap_or(&qualified);
+            let (name, class) = ast.classes.iter().find(|(n, _)| {
+                n.as_str() == short || n.as_str() == qualified.as_str()
+            })?;
+            // Use the inheritance-merged extractor so classes with
+            // authored icons that extend a partial base (or sibling
+            // Icon mixin) render the inherited layer too.
+            use std::sync::Arc;
+            let mut resolver = |lookup: &str| -> Option<Arc<rumoca_session::parsing::ast::ClassDef>> {
+                let leaf = lookup.rsplit('.').next().unwrap_or(lookup);
+                ast.classes
+                    .get(lookup)
+                    .or_else(|| ast.classes.get(leaf))
+                    .or_else(|| {
+                        ast.classes
+                            .values()
+                            .flat_map(|c| c.classes.values())
+                            .find(|c| c.name.text.as_ref() == leaf)
+                    })
+                    .map(|c| Arc::new(c.clone()))
+            };
+            let mut visited = std::collections::HashSet::new();
+            crate::annotations::extract_icon_inherited(
+                name,
+                class,
+                &mut resolver,
+                &mut visited,
+            )
+        })
     };
 
     if let Some(icon) = authored_icon {

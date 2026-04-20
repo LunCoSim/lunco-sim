@@ -103,16 +103,19 @@ impl CanvasThemeSnapshot {
     pub fn from_theme(theme: &lunco_theme::Theme) -> Self {
         let c = &theme.colors;
         let t = &theme.tokens;
+        let s = &theme.schematic;
         Self {
-            // Card: one tone above panel_fill so icons read as raised
-            // tiles. `surface0` in dark mode → slightly-lifted dark
-            // grey; in Latte → slightly-lifted off-white. Same
-            // intent in both.
-            card_fill: c.surface0,
+            // Card background tuned to contrast cleanly with the
+            // blue-heavy MSL icon palette (Modelica Blocks / many
+            // Electrical components use strong blues). Delegates to
+            // the theme's dedicated `canvas_card` schematic token —
+            // see `lunco_theme::SchematicTokens::canvas_card`.
+            card_fill: s.canvas_card,
             node_label: t.text,
             type_label: t.text_subdued,
             port_fill: c.overlay1,
             port_stroke: c.surface2,
+            // (c still referenced below for ports/selection; keep)
             // Selection follows `tokens.accent` so the active-icon
             // ring matches the rest of the app's accent chrome.
             select_stroke: t.accent,

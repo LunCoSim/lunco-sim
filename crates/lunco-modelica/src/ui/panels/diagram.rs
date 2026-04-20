@@ -1779,12 +1779,18 @@ pub fn import_model_to_diagram_from_ast(
     // need them.
     let mut local_classes_by_short: HashMap<String, MSLComponentDef> = HashMap::new();
     for (top_name, top_class) in ast.classes.iter() {
-        register_local_class(&mut local_classes_by_short, top_name.as_str(), top_class);
+        register_local_class(
+            &mut local_classes_by_short,
+            top_name.as_str(),
+            top_class,
+            &ast,
+        );
         for (nested_name, nested_class) in top_class.classes.iter() {
             register_local_class(
                 &mut local_classes_by_short,
                 nested_name.as_str(),
                 nested_class,
+                &ast,
             );
         }
     }
@@ -1983,12 +1989,36 @@ fn register_local_class(
     out: &mut HashMap<String, MSLComponentDef>,
     short_name: &str,
     class_def: &rumoca_session::parsing::ast::ClassDef,
+    ast: &rumoca_session::parsing::ast::StoredDefinition,
 ) {
-    use crate::annotations::extract_icon;
+    use crate::annotations::extract_icon_inherited;
+    use std::sync::Arc;
     if out.contains_key(short_name) {
         return;
     }
-    let icon = extract_icon(&class_def.annotation);
+    // Walk this class's extends chain, merging any parent Icon
+    // annotations we find in the same file. Cross-file extends
+    // (e.g. MSL `Icons.RelativeSensor`) isn't followed here — those
+    // go through the MSL indexer's pipeline.
+    let mut resolver =
+        |name: &str| -> Option<Arc<rumoca_session::parsing::ast::ClassDef>> {
+            let leaf = name.rsplit('.').next().unwrap_or(name);
+            // Look for the class at the top level first, then one
+            // level deep (the same scope `register_local_class` is
+            // called at). Matches the walk above.
+            ast.classes
+                .get(name)
+                .or_else(|| ast.classes.get(leaf))
+                .or_else(|| {
+                    ast.classes
+                        .values()
+                        .flat_map(|c| c.classes.values())
+                        .find(|c| c.name.text.as_ref() == leaf)
+                })
+                .map(|c| Arc::new(c.clone()))
+        };
+    let mut visited = std::collections::HashSet::new();
+    let icon = extract_icon_inherited(short_name, class_def, &mut resolver, &mut visited);
     if icon.is_none() {
         return;
     }

@@ -362,6 +362,93 @@ pub fn extract_icon(annotations: &[Expression]) -> Option<Icon> {
     })
 }
 
+/// Extract the `Icon(...)` annotation **merged with inherited graphics
+/// from every `extends` base class**, per MLS Annex D.
+///
+/// Inheritance rules:
+/// - Base classes' graphics render **first** (underneath the derived
+///   class's graphics). The derived class's `Text(textString="%name")`
+///   therefore overlays the inherited icon body — which is exactly
+///   the layering MSL relies on for sensors, blocks, etc.
+/// - The derived class's `coordinateSystem` wins when set; otherwise
+///   it falls through to the deepest inherited one, else the default.
+///
+/// `resolver` is how the caller looks up an `extends` target by its
+/// name string. The caller chooses whether that name is (a) bare as
+/// written in source, (b) pre-qualified into a canonical dotted path,
+/// or (c) resolved via a combined local-AST + class-cache walker.
+/// Return `None` from the resolver for any class the caller can't
+/// locate — the extractor silently skips that branch (partial merge
+/// is better than no merge).
+///
+/// `visited` guards against cycles. The caller may pass an empty set;
+/// the extractor will populate it. Reusable across sibling calls if
+/// you want to detect cross-class cycles at workspace scope.
+///
+/// Returns `None` only if the class has no authored Icon AND no
+/// inherited Icon. A class with an authored Icon but no base
+/// classes still gets an `Icon { graphics: [...] }` exactly as
+/// [`extract_icon`] would produce.
+pub fn extract_icon_inherited<F>(
+    class_name: &str,
+    class: &rumoca_session::parsing::ast::ClassDef,
+    resolver: &mut F,
+    visited: &mut std::collections::HashSet<String>,
+) -> Option<Icon>
+where
+    F: FnMut(&str)
+        -> Option<std::sync::Arc<rumoca_session::parsing::ast::ClassDef>>,
+{
+    if !visited.insert(class_name.to_string()) {
+        return None; // cycle
+    }
+
+    // Accumulate base-class graphics (front of the draw list) and pick
+    // the deepest coordinate system along the way. We iterate extends
+    // in source order so the final draw order matches "first-extended
+    // base, then next base, then this class's own primitives".
+    let mut merged_graphics: Vec<GraphicItem> = Vec::new();
+    let mut inherited_cs: Option<CoordinateSystem> = None;
+    for ext in &class.extends {
+        let base_name: String = ext
+            .base_name
+            .name
+            .iter()
+            .map(|t| t.text.as_ref())
+            .collect::<Vec<&str>>()
+            .join(".");
+        let Some(base_class) = resolver(&base_name) else { continue };
+        if let Some(base_icon) = extract_icon_inherited(
+            &base_name,
+            base_class.as_ref(),
+            resolver,
+            visited,
+        ) {
+            merged_graphics.extend(base_icon.graphics);
+            inherited_cs = Some(base_icon.coordinate_system);
+        }
+    }
+
+    // Append this class's own graphics on top.
+    let local = extract_icon(&class.annotation);
+    let local_cs = local.as_ref().map(|i| i.coordinate_system);
+    if let Some(icon) = local {
+        merged_graphics.extend(icon.graphics);
+    }
+
+    // Class has no authored Icon AND none inherited → None.
+    if merged_graphics.is_empty() && local_cs.is_none() && inherited_cs.is_none() {
+        return None;
+    }
+
+    Some(Icon {
+        coordinate_system: local_cs
+            .or(inherited_cs)
+            .unwrap_or_default(),
+        graphics: merged_graphics,
+    })
+}
+
 /// Extract the `Diagram(...)` annotation from a class's annotation list.
 pub fn extract_diagram(annotations: &[Expression]) -> Option<Diagram> {
     let diagram_call = find_call(annotations, "Diagram")?;
@@ -754,6 +841,12 @@ mod tests {
         comp.annotation.clone()
     }
 
+    /// Parse a Modelica source and return the full AST. Used by the
+    /// extends-inheritance tests that need to resolve parent classes.
+    fn parse_source(source: &str) -> rumoca_session::parsing::ast::StoredDefinition {
+        parse_to_ast(source, "test.mo").expect("parse")
+    }
+
     #[test]
     fn placement_simple_extent() {
         let src = r#"
@@ -942,6 +1035,77 @@ end M;
         assert_eq!(e.start_angle, 0.0);
         assert_eq!(e.end_angle, 180.0);
         assert_eq!(e.closure, EllipseClosure::Chord);
+    }
+
+    #[test]
+    fn extends_icon_inheritance_merges_graphics() {
+        // Simulate: PartialSensor authors a Rectangle + Text("%name"),
+        // SpeedSensor extends PartialSensor and adds a Line. The merged
+        // Icon should contain all three primitives, base first.
+        let src = r#"
+partial model PartialSensor
+  annotation(Icon(graphics={
+    Rectangle(extent={{-100,-100},{100,100}}),
+    Text(extent={{-100,110},{100,80}}, textString="%name")
+  }));
+end PartialSensor;
+
+model SpeedSensor
+  extends PartialSensor;
+  annotation(Icon(graphics={
+    Line(points={{-70,0},{70,0}})
+  }));
+end SpeedSensor;
+"#;
+        let ast = parse_source(src);
+        let child = ast.classes.get("SpeedSensor").expect("SpeedSensor class");
+
+        // Resolver: clone the class into an Arc so the callback
+        // lifetime doesn't fight the AST borrow.
+        use std::collections::HashSet;
+        use std::sync::Arc;
+        let mut resolver = |name: &str| -> Option<Arc<rumoca_session::parsing::ast::ClassDef>> {
+            ast.classes
+                .get(name)
+                .or_else(|| ast.classes.get(name.rsplit('.').next().unwrap_or(name)))
+                .map(|c| Arc::new(c.clone()))
+        };
+        let mut visited = HashSet::new();
+        let icon = extract_icon_inherited("SpeedSensor", child, &mut resolver, &mut visited)
+            .expect("merged icon");
+
+        assert_eq!(icon.graphics.len(), 3, "expected 2 inherited + 1 local");
+        assert!(matches!(icon.graphics[0], GraphicItem::Rectangle(_)));
+        assert!(matches!(icon.graphics[1], GraphicItem::Text(_)));
+        assert!(matches!(icon.graphics[2], GraphicItem::Line(_)));
+    }
+
+    #[test]
+    fn extends_icon_inheritance_detects_cycles() {
+        // A → B → A. Extractor must not infinite-loop. Both classes
+        // would need Icon annotations for this to be a real MSL case,
+        // but the cycle check must fire regardless.
+        let src = r#"
+partial model A
+  extends B;
+  annotation(Icon(graphics={Rectangle(extent={{-10,-10},{10,10}})}));
+end A;
+
+partial model B
+  extends A;
+  annotation(Icon(graphics={Line(points={{-5,0},{5,0}})}));
+end B;
+"#;
+        let ast = parse_source(src);
+        let class_a = ast.classes.get("A").expect("A class");
+        use std::collections::HashSet;
+        use std::sync::Arc;
+        let mut resolver = |name: &str| -> Option<Arc<rumoca_session::parsing::ast::ClassDef>> {
+            ast.classes.get(name).map(|c| Arc::new(c.clone()))
+        };
+        let mut visited = HashSet::new();
+        // Must terminate.
+        let _ = extract_icon_inherited("A", class_a, &mut resolver, &mut visited);
     }
 
     #[test]
