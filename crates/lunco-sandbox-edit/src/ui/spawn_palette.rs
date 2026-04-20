@@ -20,18 +20,26 @@ impl Panel for SpawnPalette {
     fn transparent_background(&self) -> bool { true }
 
     fn render(&mut self, ui: &mut egui::Ui, world: &mut World) {
-        // Uses the workbench's shared `PANEL_BACKDROP` colour so the
-        // panel body matches the colour of its tab header (set
-        // globally via the workbench's tab-style override).
+        let (mantle, tokens) = {
+            let theme = world.resource::<lunco_theme::Theme>();
+            (theme.colors.mantle, theme.tokens.clone())
+        };
+        // Uses the workbench's shared mantle colour so the
+        // panel body matches the colour of its tab header.
         egui::Frame::new()
-            .fill(lunco_workbench::PANEL_BACKDROP)
+            .fill(mantle)
             .inner_margin(8.0)
             .corner_radius(4)
-            .show(ui, |ui| { spawn_palette_content(self, ui, world); });
+            .show(ui, |ui| { spawn_palette_content(self, ui, world, &tokens); });
     }
 }
 
-fn spawn_palette_content(_panel: &mut SpawnPalette, ui: &mut egui::Ui, world: &mut World) {
+fn spawn_palette_content(
+    _panel: &mut SpawnPalette, 
+    ui: &mut egui::Ui, 
+    world: &mut World,
+    tokens: &lunco_theme::DesignTokens,
+) {
         ui.heading("Spawn");
 
         // Read current state
@@ -48,7 +56,7 @@ fn spawn_palette_content(_panel: &mut SpawnPalette, ui: &mut egui::Ui, world: &m
             if let Some(id) = &selecting_id {
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new(format!("Placing: {id}"))
-                        .color(egui::Color32::GREEN));
+                        .color(tokens.success));
                     if ui.button("Cancel").clicked() {
                         if let Some(mut state) = world.get_resource_mut::<SpawnState>() {
                             *state = SpawnState::Idle;
@@ -86,7 +94,7 @@ fn spawn_palette_content(_panel: &mut SpawnPalette, ui: &mut egui::Ui, world: &m
 
                     let btn = egui::Button::new(&btn_text);
                     let btn = if selected {
-                        btn.fill(egui::Color32::DARK_GREEN)
+                        btn.fill(tokens.success_subdued)
                     } else {
                         btn
                     };

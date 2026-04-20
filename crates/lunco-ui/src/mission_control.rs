@@ -18,8 +18,10 @@ impl Panel for MissionControl {
     fn default_slot(&self) -> PanelSlot { PanelSlot::RightInspector }
 
     fn render(&mut self, ui: &mut egui::Ui, world: &mut World) {
-        ui.style_mut().visuals.widgets.inactive.weak_bg_fill = egui::Color32::from_rgba_unmultiplied(30, 30, 35, 230);
-        ui.style_mut().visuals.widgets.inactive.bg_fill = egui::Color32::from_rgba_unmultiplied(30, 30, 35, 230);
+        let theme = world.resource::<lunco_theme::Theme>();
+        ui.style_mut().visuals.widgets.inactive.weak_bg_fill = theme.colors.surface0;
+        ui.style_mut().visuals.widgets.inactive.bg_fill = theme.colors.surface0;
+        ui.style_mut().visuals.window_fill = theme.colors.mantle;
 
         let avatar_ent = {
             let mut q = world.query_filtered::<Entity, With<Avatar>>();

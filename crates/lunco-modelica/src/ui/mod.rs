@@ -68,6 +68,7 @@ pub use commands::{CompileModel, CreateNewScratchModel, ModelicaCommandsPlugin};
 
 pub mod panels;
 pub mod viz;
+pub mod theme;
 
 use crate::ModelicaModel;
 

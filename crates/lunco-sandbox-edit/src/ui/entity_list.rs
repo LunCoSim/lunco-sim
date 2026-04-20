@@ -19,15 +19,19 @@ impl Panel for EntityList {
     fn transparent_background(&self) -> bool { true }
 
     fn render(&mut self, ui: &mut egui::Ui, world: &mut World) {
+        let (mantle, tokens) = {
+            let theme = world.resource::<lunco_theme::Theme>();
+            (theme.colors.mantle, theme.tokens.clone())
+        };
         egui::Frame::new()
-            .fill(lunco_workbench::PANEL_BACKDROP)
+            .fill(mantle)
             .inner_margin(8.0)
             .corner_radius(4)
-            .show(ui, |ui| entity_list_content(self, ui, world));
+            .show(ui, |ui| entity_list_content(self, ui, world, &tokens));
     }
 }
 
-fn entity_list_content(_panel: &mut EntityList, ui: &mut egui::Ui, world: &mut World) {
+fn entity_list_content(_panel: &mut EntityList, ui: &mut egui::Ui, world: &mut World, tokens: &lunco_theme::DesignTokens) {
 
         ui.label("Click to select an entity. Use gizmos to move it.");
         ui.separator();
@@ -51,7 +55,7 @@ fn entity_list_content(_panel: &mut EntityList, ui: &mut egui::Ui, world: &mut W
                 let is_selected = currently_selected == Some(*entity);
                 let button = egui::Button::new(name);
                 let button = if is_selected {
-                    button.fill(egui::Color32::DARK_GREEN)
+                    button.fill(tokens.success_subdued)
                 } else {
                     button
                 };

@@ -55,6 +55,23 @@ pub struct Label3D {
     pub lod: Option<WorldLod>,
 }
 
+impl Label3D {
+    pub fn new(text: impl Into<String>, theme: &lunco_theme::Theme) -> Self {
+        Self {
+            text: text.into(),
+            offset: DVec3::ZERO,
+            font_size: 16.0,
+            color: Color::srgb_u8(
+                theme.colors.text.r(),
+                theme.colors.text.g(),
+                theme.colors.text.b(),
+            ),
+            billboard: true,
+            lod: None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

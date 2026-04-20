@@ -12,12 +12,12 @@
 
 use bevy::prelude::*;
 use bevy_egui::egui;
-use lunco_doc::{Document, DocumentId};
+use lunco_doc::DocumentId;
 use lunco_modelica::ui::ModelicaDocumentRegistry;
 use lunco_sandbox_edit::SelectedEntity;
 use lunco_scripting::ScriptRegistry;
 use lunco_scripting::doc::ScriptedModel;
-use lunco_workbench::{Panel, PanelId, PanelSlot, PANEL_BACKDROP};
+use lunco_workbench::{Panel, PanelId, PanelSlot};
 
 pub struct CodePanel;
 
@@ -28,8 +28,9 @@ impl Panel for CodePanel {
     fn transparent_background(&self) -> bool { true }
 
     fn render(&mut self, ui: &mut egui::Ui, world: &mut World) {
+        let mantle = world.resource::<lunco_theme::Theme>().colors.mantle;
         egui::Frame::new()
-            .fill(PANEL_BACKDROP)
+            .fill(mantle)
             .inner_margin(8.0)
             .corner_radius(4)
             .show(ui, |ui| code_panel_content(ui, world));

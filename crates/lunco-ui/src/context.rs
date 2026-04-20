@@ -46,6 +46,16 @@ impl<'w, 's> UiContext<'w, 's> {
         &mut self.commands
     }
 
+    /// Access the global UI theme.
+    pub fn theme(&self) -> &lunco_theme::Theme {
+        self.world.resource::<lunco_theme::Theme>()
+    }
+
+    /// Access the global UI theme mutably (e.g. to toggle Dark/Light mode).
+    pub fn theme_mut(&mut self) -> Mut<'_, lunco_theme::Theme> {
+        self.world.resource_mut::<lunco_theme::Theme>()
+    }
+
     /// Render a nested widget using the WidgetSystem pattern.
     /// This provides composability — panels can contain other widgets.
     pub fn render<W: WidgetSystem + 'static>(

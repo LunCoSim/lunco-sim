@@ -38,6 +38,10 @@ pub use components::*;
 pub mod context;
 pub use context::*;
 
+pub mod theme {
+    pub use lunco_theme::*;
+}
+
 pub mod helpers;
 pub use helpers::*;
 
@@ -61,6 +65,7 @@ pub mod prelude {
     pub use crate::UiSelection;
     pub use crate::WorldPanel;
     pub use crate::Label3D;
+    pub use lunco_theme::{Theme, ThemeMode, ThemePlugin};
     pub use crate::diagrams::{
         time_series_plot, ChartSeries,
         Snarl, SnarlViewer, NodeId, InPin, InPinId, OutPin, OutPinId,
@@ -75,6 +80,16 @@ pub struct LuncoUiPlugin;
 impl Plugin for LuncoUiPlugin {
     fn build(&self, app: &mut App) {
         // LunCoSim-specific resources (no overlap with lunco-workbench)
-        app.init_resource::<UiSelection>();
+        app.init_resource::<UiSelection>()
+            .add_systems(Update, sync_theme_system);
+    }
+}
+
+fn sync_theme_system(mut contexts: bevy_egui::EguiContexts, theme: Res<lunco_theme::Theme>) {
+    if theme.is_changed() {
+        let visuals = theme.to_visuals();
+        if let Ok(ctx) = contexts.ctx_mut() {
+            ctx.set_visuals(visuals);
+        }
     }
 }

@@ -34,7 +34,8 @@ members = [
     "crates/lunco-scripting",
     "crates/lunco-viz",
     "crates/lunco-canvas",
-    "crates/lunco-cache"
+    "crates/lunco-cache",
+    "crates/lunco-theme"
 ]
 resolver = "2"
 
@@ -72,3 +73,8 @@ lunco-api = { path = "crates/lunco-api" }
 lunco-terrain = { path = "crates/lunco-terrain" }
 lunco-cosim = { path = "crates/lunco-cosim" }
 lunco-environment = { path = "crates/lunco-environment" }
+lunco-theme = { path = "crates/lunco-theme" }
+
+egui_colors = "0.4.0"
+catppuccin-egui = "5.2.0"
+egui-phosphor = "0.7.1"

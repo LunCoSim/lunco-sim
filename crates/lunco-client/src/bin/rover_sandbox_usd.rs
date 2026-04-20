@@ -13,6 +13,7 @@ use leafwing_input_manager::prelude::*;
 
 use lunco_mobility::LunCoMobilityPlugin;
 use lunco_usd::{UsdPlugins, UsdPrimPath};
+use lunco_terrain::TerrainPlugin;
 use lunco_sandbox_edit::SandboxEditPlugin;
 use lunco_controller::LunCoControllerPlugin;
 use lunco_avatar::{LunCoAvatarPlugin, IntentAnalogState, FreeFlightCamera, AdaptiveNearPlane};
@@ -69,6 +70,7 @@ fn main() {
         .add_plugins(lunco_core::LunCoCorePlugin)
         .add_plugins(GravityPlugin)
         .add_plugins(EnvironmentPlugin)
+        .add_plugins(TerrainPlugin)
         .add_plugins(LunCoMobilityPlugin)
         .add_plugins(UsdPlugins)
         .add_plugins(SandboxEditPlugin)

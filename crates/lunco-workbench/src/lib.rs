@@ -95,15 +95,10 @@ fn on_close_tab(trigger: On<CloseTab>, mut layout: ResMut<WorkbenchLayout>) {
 pub use viewport::{ViewportPanel, WorkbenchViewportCamera, VIEWPORT_PANEL_ID};
 pub use workspace::{Workspace, WorkspaceId};
 
-/// Shared backdrop colour for panel bodies, tab headers, and the tab
-/// bar — fully opaque so "all opaque" apps (e.g. `modelica_workbench`)
-/// get a solid continuous tile. Translucent-panel apps (e.g. the
-/// rover sandbox) still get see-through behaviour: they set
-/// `Panel::transparent_background = true`, which causes `egui_dock`
-/// to skip the body fill AND the workbench renderer keeps the tab
-/// bar transparent, so 3D shows through.
-pub const PANEL_BACKDROP: bevy_egui::egui::Color32 =
-    bevy_egui::egui::Color32::from_rgb(24, 24, 28);
+/// Get the backdrop colour from the active theme.
+fn get_panel_backdrop(theme: &lunco_theme::Theme) -> egui::Color32 {
+    theme.colors.mantle
+}
 
 /// Plugin that installs the workbench shell into a Bevy app.
 ///
@@ -115,6 +110,9 @@ impl Plugin for WorkbenchPlugin {
     fn build(&self, app: &mut App) {
         if !app.is_plugin_added::<bevy_egui::EguiPlugin>() {
             app.add_plugins(bevy_egui::EguiPlugin::default());
+        }
+        if !app.is_plugin_added::<lunco_theme::ThemePlugin>() {
+            app.add_plugins(lunco_theme::ThemePlugin);
         }
         app.init_resource::<WorkbenchLayout>()
             .init_resource::<PendingTabCloses>()
@@ -560,7 +558,9 @@ fn render_workbench(world: &mut World) {
         return;
     };
 
-    render_layout(&ctx, &mut layout, world);
+    let theme = world.resource::<lunco_theme::Theme>().clone();
+
+    render_layout(&ctx, &mut layout, world, &theme);
 
     world.insert_resource(layout);
 }
@@ -738,10 +738,10 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
     }
 }
 
-fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut World) {
+fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut World, theme: &lunco_theme::Theme) {
     // ── Opaque-mode backdrop (must run first) ───────────────────────
     // In apps where every panel is opaque (no 3D viewport showing
-    // through), paint `PANEL_BACKDROP` on the background layer BEFORE
+    // through), paint `get_panel_backdrop(theme)` on the background layer BEFORE
     // registering any panel shapes. egui draws within a layer in the
     // order shapes are issued, so a rect_filled issued AFTER the menu
     // bar / dock / status bar would paint over them — exactly the
@@ -753,7 +753,7 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
         .any(|p| p.transparent_background());
     if !any_transparent {
         let painter = ctx.layer_painter(egui::LayerId::background());
-        painter.rect_filled(ctx.screen_rect(), 0.0, PANEL_BACKDROP);
+        painter.rect_filled(ctx.screen_rect(), 0.0, get_panel_backdrop(theme));
     }
 
     // ── Menu bar ────────────────────────────────────────────────────
@@ -841,6 +841,20 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
                 }
             });
             ui.menu_button("Settings", |ui| {
+                ui.label(egui::RichText::new("Theme").weak().small());
+                let mut theme = world.resource_mut::<lunco_theme::Theme>();
+                let mode = theme.mode;
+                
+                let label = match mode {
+                    lunco_theme::ThemeMode::Dark => "🌙 Dark",
+                    lunco_theme::ThemeMode::Light => "☀ Light",
+                };
+
+                if ui.button(label).clicked() {
+                    theme.toggle_mode();
+                }
+                ui.separator();
+
                 // Take the callbacks out so we can pass &mut World into
                 // them while the layout is still extracted. Restored
                 // at the end of the block.
@@ -958,13 +972,13 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
         // into `transparent_background = true` (e.g. the rover's
         // side panels) cause `clear_background` to return false and
         // this fill is skipped for them — 3D still shows through.
-        style.tab.tab_body.bg_fill = PANEL_BACKDROP;
+        style.tab.tab_body.bg_fill = get_panel_backdrop(theme);
         // Always opaque, in every app. Transparency on the bar made
         // the Modelica workbench look broken, and the rover sandbox's
         // centre is a transparent `ViewportPanel` anyway — a dark
         // strip above its invisible header just looks like the top
         // edge of the viewport tile, which is fine.
-        style.tab_bar.bg_fill = PANEL_BACKDROP;
+        style.tab_bar.bg_fill = get_panel_backdrop(theme);
         // Drop the hairline under the active tab name too — same
         // visual-noise reason as the tab body stroke.
         style.tab_bar.hline_color = egui::Color32::TRANSPARENT;

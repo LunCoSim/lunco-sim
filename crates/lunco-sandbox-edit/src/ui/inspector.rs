@@ -20,8 +20,9 @@ impl Panel for Inspector {
     fn transparent_background(&self) -> bool { true }
 
     fn render(&mut self, ui: &mut egui::Ui, world: &mut World) {
+        let theme = world.resource::<lunco_theme::Theme>();
         egui::Frame::new()
-            .fill(lunco_workbench::PANEL_BACKDROP)
+            .fill(theme.colors.mantle)
             .inner_margin(8.0)
             .corner_radius(4)
             .show(ui, |ui| inspector_content(self, ui, world));

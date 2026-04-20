@@ -21,6 +21,7 @@ bevy.workspace = true
 bevy_egui.workspace = true
 lunco-assets = { workspace = true }
 lunco-core = { path = "../lunco-core" }
+lunco-theme = { path = "../lunco-theme" }
 lunco-doc = { path = "../lunco-doc" }
 lunco-doc-bevy = { path = "../lunco-doc-bevy" }
 lunco-workbench = { path = "../lunco-workbench" }

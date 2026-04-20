@@ -29,6 +29,7 @@ impl Default for OverlayState {
 /// Renders all overlay panels on top of the 3D scene.
 pub fn render_overlay_panels(
     mut contexts: EguiContexts,
+    theme: Res<lunco_theme::Theme>,
     mut spawn_state: ResMut<SpawnState>,
     mut selected: ResMut<SelectedEntity>,
     mut undo_stack: ResMut<UndoStack>,
@@ -52,9 +53,6 @@ pub fn render_overlay_panels(
         overlay.entities_open = !any_open;
     }
 
-    let bg = egui::Color32::from_rgba_unmultiplied(25, 25, 30, 230);
-    let text = egui::Color32::from_rgb(230, 230, 240);
-
     let panel_size = [280.0, 500.0];
 
     // ── Spawn Palette ──
@@ -63,7 +61,7 @@ pub fn render_overlay_panels(
         .default_size(panel_size)
         .resizable(true)
         .show(ctx, |ui| {
-            apply_theme(ui, bg, text);
+            apply_theme(ui, &theme);
 
             let is_selecting = matches!(&*spawn_state, SpawnState::Selecting { .. });
             ui.heading("Spawn");
@@ -75,7 +73,7 @@ pub fn render_overlay_panels(
                 if let Some(ref id) = entry_id {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new(format!("Placing: {id}"))
-                            .color(egui::Color32::GREEN));
+                            .color(theme.colors.green));
                         if ui.button("Cancel").clicked() {
                             *spawn_state = SpawnState::Idle;
                         }
@@ -101,7 +99,7 @@ pub fn render_overlay_panels(
 
                         let btn = egui::Button::new(&btn_text);
                         let btn = if is_sel {
-                            btn.fill(egui::Color32::DARK_GREEN)
+                            btn.fill(theme.tokens.success_subdued)
                         } else {
                             btn
                         };
@@ -139,8 +137,9 @@ pub fn render_overlay_panels(
         .default_size(panel_size)
         .resizable(true)
         .show(ctx, |ui| {
-            apply_theme(ui, bg, text);
+            apply_theme(ui, &theme);
             ui.heading("Inspector");
+
 
             let Some(entity) = selected.entity else {
                 ui.label("No entity selected.");
@@ -221,7 +220,7 @@ pub fn render_overlay_panels(
         .default_size(panel_size)
         .resizable(true)
         .show(ctx, |ui| {
-            apply_theme(ui, bg, text);
+            apply_theme(ui, &theme);
             ui.label("Click to select an entity.");
             ui.separator();
 
@@ -235,10 +234,11 @@ pub fn render_overlay_panels(
                     let is_selected = selected.entity == Some(*entity);
                     let button = egui::Button::new(name);
                     let button = if is_selected {
-                        button.fill(egui::Color32::DARK_GREEN)
+                        button.fill(theme.tokens.success_subdued)
                     } else {
                         button
                     };
+
 
                     if ui.add(button).clicked() {
                         selected.entity = Some(*entity);
@@ -248,12 +248,15 @@ pub fn render_overlay_panels(
         });
 }
 
-fn apply_theme(ui: &mut egui::Ui, bg: egui::Color32, text: egui::Color32) {
+fn apply_theme(ui: &mut egui::Ui, theme: &lunco_theme::Theme) {
+    let t = &theme.tokens;
     let mut style = ui.style_mut().clone();
+    let bg = theme.colors.mantle.linear_multiply(0.9);
     style.visuals.panel_fill = bg;
     style.visuals.window_fill = bg;
-    style.visuals.extreme_bg_color = bg;
-    style.visuals.widgets.inactive.weak_bg_fill = egui::Color32::from_rgba_unmultiplied(40, 40, 50, 200);
-    style.visuals.widgets.inactive.bg_fill = egui::Color32::from_rgba_unmultiplied(40, 40, 50, 200);
-    style.visuals.override_text_color = Some(text);
+    style.visuals.extreme_bg_color = theme.colors.crust;
+    style.visuals.widgets.inactive.weak_bg_fill = theme.colors.surface0.linear_multiply(0.8);
+    style.visuals.widgets.inactive.bg_fill = theme.colors.surface0.linear_multiply(0.8);
+    style.visuals.override_text_color = Some(t.text);
+    *ui.style_mut() = style;
 }
