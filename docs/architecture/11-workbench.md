@@ -1,8 +1,16 @@
 # 11 — Workbench (UI/UX Architecture)
 
-> How LunCoSim's user interface is organized: the workbench shell, workspaces,
-> panels, viewport, command palette, detachable windows. Establishes the
-> framework on top of which all domain-specific UI lives.
+> How LunCoSim's user interface is organized: the workbench shell,
+> perspectives, panels, viewport, command palette, detachable windows.
+> Establishes the framework on top of which all domain-specific UI
+> lives.
+>
+> **Terminology note.** Later sections of this doc (§4 onward) use
+> "workspace" in its original Blender/CATIA sense — a layout preset.
+> Since then LunCoSim has renamed that concept to **Perspective** and
+> uses "Workspace" for the broader editor-session concept (VS Code
+> sense). Read those sections with the translation in mind; the
+> terminology table in §1 is canonical.
 >
 > Status: design. Implementation lives in the planned `lunco-workbench` crate,
 > which replaces the current `bevy_workbench` dependency incrementally.
@@ -10,20 +18,29 @@
 ## 1. What "workbench" means here
 
 A **workbench** is the application shell of a LunCoSim app — the chrome around
-the 3D world. It owns the root window layout, the workspace switcher, the
+the 3D world. It owns the root window layout, the perspective switcher, the
 panel registry, the command palette, keybinds, and detachable window support.
 
 Terminology mapping:
 
 | Concept | Our term | Analogs |
 |---------|----------|---------|
-| App shell (layout engine) | **Workbench** (`lunco-workbench`) | CATIA app, VS Code workbench, Qt QMainWindow |
-| Task-specific UI configuration | **Workspace** | CATIA workbenches (Part Design, Assembly); Blender workspaces |
+| App shell (layout engine) | **Workbench** (`lunco-workbench`) | Eclipse Workbench, VS Code workbench, Qt QMainWindow |
+| Editor session (open Twins, active tab, recents) | **Workspace** (`lunco-workspace`) | VS Code Workspace, JetBrains Project |
+| Task-specific UI configuration (layout preset) | **Perspective** (`lunco-workbench` trait) | Eclipse Perspective; Blender "workspaces" (same idea, different word) |
 | A dockable UI element | **Panel** | VS Code sidebar view, Blender editor area |
 | The 3D world | **Viewport** (structural, not a panel) | CAD 3D view |
 | Primary navigation category | **Activity** | VS Code activity bar |
+| A simulation unit on disk | **Twin** (`lunco-twin`) | A folder with `twin.toml` — recursive |
 
-All defined in [`01-ontology.md`](01-ontology.md) § 4d.
+All defined in [`01-ontology.md`](01-ontology.md) § 4d–§4f.
+
+> **Naming note.** Earlier drafts of this doc used "Workspace" for the
+> layout-preset concept (CATIA/Blender naming). That collides with the
+> VS Code sense of Workspace we needed for the editor-session type, so
+> the trait was renamed to **Perspective** (Eclipse naming). Historical
+> code or docs that say "Workspace trait" or `BuildWorkspace` refer to
+> the Perspective concept.
 
 ## 2. Why we're building this
 

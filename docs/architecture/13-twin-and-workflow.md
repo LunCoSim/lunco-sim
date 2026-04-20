@@ -51,6 +51,38 @@ saving, versioning, sharing, and opening**.
 The word *Twin* reflects the "digital twin" ethos in `principles.md`: a
 Twin is the best LunCoSim can reconstruct of a real (or designed) system.
 
+### Twins compose — recursively
+
+A Twin may embed other Twins via `[[children]]` in `twin.toml`.
+Subsystems that are themselves complete digital twins (an Engine, a
+Comm stack, a Science Payload) nest naturally under their parent
+(Rover). This mirrors Cargo's workspace-with-packages model and SysML
+v2's `part` decomposition:
+
+```toml
+# rover-twin/twin.toml
+name = "Rover"
+
+[[children]]
+name = "engine"
+path = "engine"                         # → rover-twin/engine/twin.toml
+
+[[children]]
+name = "shared-sensors"
+url = "https://twins.lunco.space/sensors"   # remote ref (future)
+```
+
+Opening a Twin eagerly loads every local child. Remote URL children
+are listed on the manifest but not followed today — reserved for the
+remote-twin milestone. Cycles are guarded; missing child folders
+tolerated with a warning.
+
+A Workspace (the editor-session layer — see
+[`01-ontology.md`](01-ontology.md) § 4e) can have multiple unrelated
+root Twins open at once, each with its own recursive tree. That's how
+users compose views across projects that live in different folders on
+disk.
+
 ## 1a. Three modes: File, Folder, Twin
 
 LunCoSim mirrors VS Code's tri-modal model. Users opt into progressively

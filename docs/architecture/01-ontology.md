@@ -197,11 +197,22 @@ Runtime plumbing that owns a Document, routes ops from views, records undo histo
 
 The UI application scaffold. See [`11-workbench.md`](11-workbench.md).
 
-### Panel
-A dockable UI element in the workbench. A Panel typically implements `DocumentView<D>` for some Document type, or is a non-document tool (Scene Tree, Spawn Palette, Console).
+Three terms, three layers. Different tools overload "workspace" to mean
+different things — LunCoSim splits them into three explicit concepts to
+avoid the collision:
 
-### Workspace
-A named task-specific UI configuration. Each Workspace has its own default panel layout, toolbar set, and optionally a camera/view state. Standard LunCoSim Workspaces: **Build** (edit scenes and subsystems), **Simulate** (minimal chrome, maximize viewport), **Analyze** (Modelica/system model deep dive), **Plan** (mission timeline), **Observe** (presentation/cinema mode). Analogous to CATIA's workbenches or Blender's workspaces.
+| Concept | Our term | Where |
+|---|---|---|
+| Editor shell + dock engine + panel registry | **Workbench** | `lunco-workbench` |
+| Editor session: open Twins + documents + recents | **Workspace** | `lunco-workspace` (wrapped as `WorkspaceResource` in `lunco-workbench`) |
+| Task-specific UI chrome preset | **Perspective** | `lunco-workbench` (trait) |
+| A simulation unit on disk | **Twin** | `lunco-twin` |
+
+### Panel
+A dockable UI element in the workbench. A Panel typically implements `DocumentView<D>` for some Document type, or is a non-document tool (Scene Tree, Spawn Palette, Console, Twin Browser).
+
+### Perspective
+A named task-specific UI configuration. Each Perspective has its own default panel layout, toolbar set, and optionally a camera/view state. Standard LunCoSim Perspectives: **Build** (edit scenes and subsystems), **Simulate** (minimal chrome, maximize viewport), **Analyze** (Modelica/system model deep dive), **Plan** (mission timeline), **Observe** (presentation/cinema mode). Analogous to Eclipse Perspectives (same word) or Blender "Workspaces" (different word, same idea). *Renamed from the earlier `Workspace` trait when the bigger-scope **Workspace** concept landed — see §4e.*
 
 ### Activity
 A primary navigation category displayed in a vertical strip at the far left (VS Code activity bar pattern). Examples: Scene, Subsystems, Assets, Console, Search. Selecting an Activity opens its browser in a slide-in panel.
@@ -211,6 +222,88 @@ The 3D world view — NOT a panel, NOT a tile. Structurally persistent as the ce
 
 ### Command Palette
 Keyboard-invoked (Ctrl+P / Cmd+P) universal search for actions, entities, parameters, and commands. Integrates with the `CommandRegistry` of each Space System for AI-discoverable actions.
+
+---
+
+## 4e. Session Concepts (`lunco-workspace`)
+
+The **Workspace** is LunCoSim's editor-session type — what's open
+*right now in this window*. It's the VS Code–Workspace analog:
+multiple Twins from potentially different disk locations, every open
+Document, the active Twin / Document / Perspective, recents, and
+(future) hot-exit buffers.
+
+Ships in a separate crate so headless CI, API-only servers, and
+scripting can hold a Workspace without pulling in bevy or egui.
+
+### Workspace
+Root session type. Holds `twins: Vec<Twin>`, `documents:
+Vec<DocumentEntry>`, `active_twin`, `active_document`,
+`active_perspective`, `recents`.
+
+**Twin is a view, not a container.** Documents always live in the
+Workspace. A Twin doesn't own a list; it answers "does this document
+belong to me?" by checking whether the doc's storage handle lies under
+its folder or is context-pinned to it. This keeps Untitled scratch
+docs, loose files, and Twin-owned files on one uniform surface.
+
+### TwinId (`u64`)
+Stable identifier the Workspace assigns on registration. `0` is the
+"unassigned" sentinel; actual ids start at 1. Used over raw paths so
+renaming a folder mid-session doesn't invalidate references.
+
+### DocumentEntry
+Workspace-level metadata for one open Document: `{ id, kind, origin,
+context_twin, title }`. Does NOT hold the parsed source + ops + undo
+stack — those live in domain registries (e.g.
+`ModelicaDocumentRegistry`).
+
+### Twin-Document association rule
+The **deepest** registered Twin whose folder contains the document's
+path wins (sub-Twins outrank their parent — the "nearest `twin.toml`"
+rule, matching Cargo). For Untitled docs, the explicit `context_twin`
+pin applies instead. Docs matching neither are **loose** — shown under
+a "Loose" group in the Twin Browser.
+
+### Recents
+Bounded lists (10 Twin folders, 20 loose files), most-recent-first,
+dedupe-on-push. Surfaced by the Welcome page.
+
+### Not yet
+- `.lunco-workspace` on-disk manifest.
+- Hot-exit (serialising unsaved buffers across restarts).
+- Named / shared Workspaces.
+
+---
+
+## 4f. Storage Concepts (`lunco-storage`)
+
+I/O abstraction that sits under every crate that reads or writes a
+Document. Keeps higher layers (`lunco-doc`, `lunco-twin`,
+`lunco-workspace`) free of filesystem assumptions so the same
+save/load flow compiles for native, browser, and remote-twin backends.
+
+### Storage (trait)
+Synchronous `read`, `write`, `exists`, `is_writable`, `pick_open`,
+`pick_save`, `pick_folder`. Picker methods are sync (rfd on native);
+the wasm backend will switch to async when it lands.
+
+### StorageHandle
+Opaque address into a backend: `File(PathBuf)` or `Memory(String)`
+today; `Fsa(token)`, `Idb { db, key }`, `Opfs(String)`, `Http(url)`
+are declared behind feature flags so downstream matches stay
+exhaustive when those backends arrive.
+
+### FileStorage
+Native backend. `std::fs` for I/O, `rfd::FileDialog` for pickers,
+in-process `Memory` map for tests.
+
+### Where it fits
+`Twin::root_handle()` returns a `StorageHandle`. `Twin::owns(&handle)`
+is the Workspace's document-routing predicate. `ModelicaDocument`
+save-to-disk (Ctrl+S and Ctrl+Shift+S) writes through
+`FileStorage::write`. Future browser + remote backends plug in by
+implementing the trait — no consumer-side rewrite.
 
 ---
 
