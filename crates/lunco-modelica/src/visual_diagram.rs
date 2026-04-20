@@ -148,6 +148,26 @@ pub struct DiagramNode {
     /// back to the default 20×20 box.
     #[serde(default)]
     pub extent_size: Option<Pos2>,
+    /// `Placement(transformation(rotation=...))`, in degrees CCW per
+    /// MLS Annex D. Used by the canvas projector to rotate port
+    /// offsets so wires enter/exit the icon at the orientation the
+    /// model author intended (a `RealInput` originally at the icon's
+    /// left lands on the bottom edge of an instance placed at
+    /// `rotation=270`). 0 when the source carries no rotation.
+    #[serde(default)]
+    pub rotation_degrees: f32,
+    /// Whether the placement reverses the X axis — i.e. the source
+    /// wrote `extent={{x_high, …}, {x_low, …}}`. Per MLS Annex D
+    /// this means the icon (and therefore its ports) mirror along
+    /// the X axis. Without honoring this, MSL components like
+    /// `SpeedSensor` (placed with `extent={{22, …}, {2, …}}`)
+    /// rendered with their `flange` on the wrong side and the
+    /// connecting wire crossed the body.
+    #[serde(default)]
+    pub mirror_x: bool,
+    /// Same as [`mirror_x`](Self::mirror_x) but for the Y axis.
+    #[serde(default)]
+    pub mirror_y: bool,
     /// Whether the node is selected.
     pub selected: bool,
 }
@@ -200,6 +220,9 @@ impl VisualDiagram {
             parameter_values,
             position,
             extent_size: None,
+            rotation_degrees: 0.0,
+            mirror_x: false,
+            mirror_y: false,
             selected: false,
         });
         id

@@ -187,6 +187,17 @@ fn execute_request(
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
 
+                // Spawn Bevy's screenshot capture entity directly here
+                // instead of relying on a domain-side observer. Earlier
+                // the executor only triggered `ApiCommandEvent` and
+                // hoped a `CaptureScreenshot` observer downstream would
+                // call `Screenshot::primary_window()`. That observer
+                // only ships in `lunco-avatar`; binaries that don't pull
+                // it in (modelica_workbench, hello_workbench) silently
+                // never produced a screenshot — curl would just hang.
+                // Doing the spawn here keeps the screenshot path
+                // self-contained in lunco-api.
+                use bevy::render::view::screenshot::Screenshot;
                 if save_to_file {
                     let path = format!("screenshot_{}.png",
                         std::time::SystemTime::now()
@@ -197,10 +208,7 @@ fn execute_request(
                         correlation_id: None,   // response already sent
                         save_path: Some(path.clone()),
                     });
-                    commands.trigger(ApiCommandEvent {
-                        command: command.clone(),
-                        params: serde_json::json!({}),
-                    });
+                    commands.spawn(Screenshot::primary_window());
                     return Some(ApiResponse::ok(serde_json::json!({ "path": path })));
                 } else {
                     // Raw-PNG mode: defer response until ScreenshotCaptured fires.
@@ -208,10 +216,7 @@ fn execute_request(
                         correlation_id: Some(correlation_id),
                         save_path: None,
                     });
-                    commands.trigger(ApiCommandEvent {
-                        command: command.clone(),
-                        params: serde_json::json!({}),
-                    });
+                    commands.spawn(Screenshot::primary_window());
                     return None; // response deferred
                 }
             }

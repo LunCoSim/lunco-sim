@@ -231,7 +231,201 @@ impl NodeVisual for IconNodeVisual {
 /// A richer routing pass (obstacle-avoidance, port-direction-aware
 /// stubs, multiple-bend auto-layout) is a next step; this is the
 /// pattern users already recognise.
-struct OrthogonalEdgeVisual;
+/// Which edge of the icon a port sits on. Determines which axis the
+/// wire's first segment ("stub") runs along — Dymola/OMEdit wire
+/// pretty-routing convention. Modelica port placement is in (-100..100)
+/// per axis; we classify by which extreme the port sits closest to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PortDir {
+    Left,
+    Right,
+    Up,
+    Down,
+    /// Port sits in the interior of the icon (or no info). Routing
+    /// degrades to plain Z-bend.
+    None,
+}
+
+impl PortDir {
+    fn as_str(self) -> &'static str {
+        match self {
+            PortDir::Left => "left",
+            PortDir::Right => "right",
+            PortDir::Up => "up",
+            PortDir::Down => "down",
+            PortDir::None => "",
+        }
+    }
+    fn from_str(s: &str) -> PortDir {
+        match s {
+            "left" => PortDir::Left,
+            "right" => PortDir::Right,
+            "up" => PortDir::Up,
+            "down" => PortDir::Down,
+            _ => PortDir::None,
+        }
+    }
+    /// Unit vector pointing *outward* from the icon at this edge,
+    /// in screen coordinates (+Y down). Used to extend the wire
+    /// stub away from the icon body.
+    fn outward(self) -> (f32, f32) {
+        match self {
+            PortDir::Left => (-1.0, 0.0),
+            PortDir::Right => (1.0, 0.0),
+            PortDir::Up => (0.0, -1.0),
+            PortDir::Down => (0.0, 1.0),
+            PortDir::None => (0.0, 0.0),
+        }
+    }
+}
+
+/// Rotate a Modelica connector point `(x, y)` (in -100..100 coords,
+/// +Y up) about the icon centre `(0, 0)` by `degrees` CCW. Used when
+/// projecting ports of an instance whose `Placement` carries a
+/// rotation — the port's *icon-local* coordinates are the same, but
+/// where it appears in the *parent diagram* depends on the rotation
+/// of the icon itself.
+fn rotate_modelica_point(x: f32, y: f32, degrees: f32) -> (f32, f32) {
+    if degrees == 0.0 {
+        return (x, y);
+    }
+    let theta = degrees.to_radians();
+    let (s, c) = theta.sin_cos();
+    (c * x - s * y, s * x + c * y)
+}
+
+/// Mirror an icon-local screen point about the icon centre on the
+/// requested axes. X-mirror flips left↔right; Y-mirror flips top↔bottom.
+/// Used in tandem with [`rotate_local_point`] to honour reversed
+/// `extent` corners on the parent diagram's Placement.
+fn mirror_local_point(
+    lx: f32,
+    ly: f32,
+    icon_w: f32,
+    icon_h: f32,
+    mirror_x: bool,
+    mirror_y: bool,
+) -> (f32, f32) {
+    let nx = if mirror_x { icon_w - lx } else { lx };
+    let ny = if mirror_y { icon_h - ly } else { ly };
+    (nx, ny)
+}
+
+/// Rotate an icon-local screen point `(lx, ly)` about the centre of
+/// an `(icon_w, icon_h)` rect by `degrees` CCW in Modelica's frame
+/// (+Y up). Maps through screen-Y flip at both ends so the result
+/// remains in icon-local screen coords. Used for ports that fell
+/// back to canvas-side default offsets (no Placement on the
+/// connector itself).
+fn rotate_local_point(
+    lx: f32,
+    ly: f32,
+    icon_w: f32,
+    icon_h: f32,
+    degrees: f32,
+) -> (f32, f32) {
+    if degrees == 0.0 {
+        return (lx, ly);
+    }
+    // Centre-relative, with screen Y flipped to match Modelica +Y up.
+    let cx = icon_w * 0.5;
+    let cy = icon_h * 0.5;
+    let mx = lx - cx;
+    let my = cy - ly; // screen → Modelica
+    let theta = degrees.to_radians();
+    let (s, c) = theta.sin_cos();
+    let rx = c * mx - s * my;
+    let ry = s * mx + c * my;
+    // Modelica → screen
+    (rx + cx, cy - ry)
+}
+
+/// Classify a port's `(x, y)` in Modelica connector coords (-100..100)
+/// into the edge it sits on. Diagonal ports (e.g. corner pins) snap to
+/// whichever axis is more extreme.
+fn port_edge_dir(x: f32, y: f32) -> PortDir {
+    // 60% of the half-extent counts as "on the edge" — covers the
+    // common cases where ports are placed at exactly ±100 on one
+    // axis and any value on the other.
+    let threshold = 60.0;
+    let ax = x.abs();
+    let ay = y.abs();
+    if ax < threshold && ay < threshold {
+        return PortDir::None;
+    }
+    if ax >= ay {
+        if x >= 0.0 { PortDir::Right } else { PortDir::Left }
+    } else if y >= 0.0 {
+        // Modelica is +Y up; +Y → top edge of icon.
+        PortDir::Up
+    } else {
+        PortDir::Down
+    }
+}
+
+/// Map a Modelica connector type's leaf name to a wire colour.
+/// Colour choices follow Dymola/OMEdit conventions so users coming
+/// from those tools get instant domain recognition. Unknown types
+/// fall back to a neutral grey-blue.
+fn wire_color_for(connector_type: &str) -> egui::Color32 {
+    let leaf = connector_type
+        .rsplit('.')
+        .next()
+        .unwrap_or(connector_type);
+    use egui::Color32 as C;
+    match leaf {
+        // Electrical: blue family (Pin, PositivePin, NegativePin, Plug)
+        "Pin" | "PositivePin" | "NegativePin" | "Plug" | "PositivePlug"
+        | "NegativePlug" => C::from_rgb(60, 120, 200),
+        // Translational + rotational mechanics: brown
+        "Flange_a" | "Flange_b" | "Flange" | "Support" => {
+            C::from_rgb(140, 90, 50)
+        }
+        // Heat transfer: orange/red
+        "HeatPort_a" | "HeatPort_b" | "HeatPort" => C::from_rgb(210, 110, 50),
+        // Fluid: green/blue
+        "FluidPort" | "FluidPort_a" | "FluidPort_b" => C::from_rgb(70, 160, 180),
+        // Real signals: magenta
+        "RealInput" | "RealOutput" => C::from_rgb(180, 70, 170),
+        // Boolean signals: red
+        "BooleanInput" | "BooleanOutput" => C::from_rgb(200, 60, 60),
+        // Integer signals: green
+        "IntegerInput" | "IntegerOutput" => C::from_rgb(70, 160, 80),
+        // Frame_a/Frame_b (multibody): purple
+        "Frame" | "Frame_a" | "Frame_b" => C::from_rgb(120, 80, 180),
+        // Default — neutral grey-blue, distinguishable from selection
+        _ => C::from_rgb(110, 130, 150),
+    }
+}
+
+/// Per-edge wire visual. Carries the wire colour + the port-direction
+/// hints baked in by the projector so each edge knows which axis to
+/// extend before bending. Two stubs (one out of each port) followed
+/// by a Z-bend gives the "wire grows out of the connector" look that
+/// matches Dymola/OMEdit and reads much cleaner than the previous
+/// always-x-midpoint Z.
+struct OrthogonalEdgeVisual {
+    color: egui::Color32,
+    from_dir: PortDir,
+    to_dir: PortDir,
+}
+
+impl Default for OrthogonalEdgeVisual {
+    fn default() -> Self {
+        Self {
+            color: wire_color_for(""),
+            from_dir: PortDir::None,
+            to_dir: PortDir::None,
+        }
+    }
+}
+
+/// Stub length in screen pixels — long enough to clear the port dot
+/// (which is itself ~4 px) and read clearly as "the wire exits the
+/// port" at typical zoom levels, while still leaving room for the
+/// Z-bend body. Earlier values around 10 px disappeared on default
+/// auto-fit zoom; 18 stays readable across normal zoom range.
+const STUB_PX: f32 = 18.0;
 
 impl EdgeVisual for OrthogonalEdgeVisual {
     fn draw(
@@ -242,47 +436,84 @@ impl EdgeVisual for OrthogonalEdgeVisual {
         selected: bool,
     ) {
         let col = if selected {
-            egui::Color32::from_rgb(140, 190, 255)
+            // Selection: brighten the per-type colour rather than
+            // collapsing every wire to one universal "selected" blue.
+            // Keeps the connector type recognisable through selection
+            // chrome.
+            brighten(self.color)
         } else {
-            egui::Color32::from_rgb(60, 120, 200)
+            self.color
         };
-        let width = if selected { 2.0 } else { 1.4 };
+        let width = if selected { 2.2 } else { 1.5 };
         let stroke = egui::Stroke::new(width, col);
         let painter = ctx.ui.painter();
 
-        let dx = to.x - from.x;
-        let dy = to.y - from.y;
-        // Near-collinear: straight segment. Threshold in screen
-        // pixels keeps it stable at all zoom levels (the caller
-        // already transformed to screen-space).
+        // Compute stub endpoints. Stub = step away from the port in
+        // its outward direction. None-direction ports skip the stub.
+        let from_stub = step(from, self.from_dir, STUB_PX);
+        let to_stub = step(to, self.to_dir, STUB_PX);
+
+        let dx = to_stub.x - from_stub.x;
+        let dy = to_stub.y - from_stub.y;
         let thr = 1.0;
+
+        // Always draw the stubs first (no-ops when length is zero).
+        if self.from_dir != PortDir::None {
+            painter.line_segment(
+                [egui::pos2(from.x, from.y), egui::pos2(from_stub.x, from_stub.y)],
+                stroke,
+            );
+        }
+        if self.to_dir != PortDir::None {
+            painter.line_segment(
+                [egui::pos2(to_stub.x, to_stub.y), egui::pos2(to.x, to.y)],
+                stroke,
+            );
+        }
+
+        let p_from = if self.from_dir == PortDir::None { from } else { from_stub };
+        let p_to = if self.to_dir == PortDir::None { to } else { to_stub };
+
+        // Connect the two stub-ends with a Z-bend. Choose the bend
+        // axis based on the source direction — horizontal-exit ports
+        // route through a horizontal-then-vertical Z, vertical-exit
+        // ports the opposite. Dymola/OMEdit do the same; the result
+        // is the wire never doubles back across the icon body.
         if dx.abs() < thr || dy.abs() < thr {
             painter.line_segment(
-                [egui::pos2(from.x, from.y), egui::pos2(to.x, to.y)],
+                [egui::pos2(p_from.x, p_from.y), egui::pos2(p_to.x, p_to.y)],
                 stroke,
             );
             return;
         }
-
-        // Z-route with the bend at the x midpoint. Produces the
-        // classic Modelica "two right-angle bends" shape:
-        //
-        //   A─────┐
-        //         │
-        //         └─────B
-        let midx = from.x + dx * 0.5;
-        let p0 = egui::pos2(from.x, from.y);
-        let p1 = egui::pos2(midx, from.y);
-        let p2 = egui::pos2(midx, to.y);
-        let p3 = egui::pos2(to.x, to.y);
-        painter.line_segment([p0, p1], stroke);
-        painter.line_segment([p1, p2], stroke);
-        painter.line_segment([p2, p3], stroke);
+        let horizontal_first = matches!(
+            self.from_dir,
+            PortDir::Left | PortDir::Right | PortDir::None
+        );
+        let mid = if horizontal_first {
+            // H → V → H: bend at midpoint between source's horizontal
+            // exit and target's column.
+            let midx = p_from.x + dx * 0.5;
+            (
+                egui::pos2(midx, p_from.y),
+                egui::pos2(midx, p_to.y),
+            )
+        } else {
+            // V → H → V
+            let midy = p_from.y + dy * 0.5;
+            (
+                egui::pos2(p_from.x, midy),
+                egui::pos2(p_to.x, midy),
+            )
+        };
+        painter.line_segment([egui::pos2(p_from.x, p_from.y), mid.0], stroke);
+        painter.line_segment([mid.0, mid.1], stroke);
+        painter.line_segment([mid.1, egui::pos2(p_to.x, p_to.y)], stroke);
     }
 
-    /// Hit-test each of the three segments individually so clicks
-    /// near the bend register, not just clicks near the phantom
-    /// straight line between endpoints.
+    /// Hit-test the simplified path. Cheap enough to do at full
+    /// fidelity on every click; refining for stubs would add cost
+    /// but no detectability benefit (stubs are 10px each).
     fn hit(
         &self,
         world_pos: lunco_canvas::Pos,
@@ -304,6 +535,20 @@ impl EdgeVisual for OrthogonalEdgeVisual {
             || segment_dist_sq(world_pos, p1, p2) <= threshold_sq
             || segment_dist_sq(world_pos, p2, p3) <= threshold_sq
     }
+}
+
+/// Translate `p` by `len` pixels in `dir`'s outward direction.
+fn step(p: CanvasPos, dir: PortDir, len: f32) -> CanvasPos {
+    let (ux, uy) = dir.outward();
+    CanvasPos::new(p.x + ux * len, p.y + uy * len)
+}
+
+/// Selection-state brightener — shifts each channel ~30% toward white
+/// while preserving hue. Used so wires keep their domain colour even
+/// while highlighted.
+fn brighten(c: egui::Color32) -> egui::Color32 {
+    let lift = |v: u8| (v as u16 + 80).min(255) as u8;
+    egui::Color32::from_rgb(lift(c.r()), lift(c.g()), lift(c.b()))
 }
 
 /// Paint a dashed rectangle outline. Used for icon-only classes so
@@ -414,7 +659,23 @@ fn build_registry() -> VisualRegistry {
             icon_graphics,
         }
     });
-    reg.register_edge_kind("modelica.connection", |_: &JsonValue| OrthogonalEdgeVisual);
+    reg.register_edge_kind("modelica.connection", |data: &JsonValue| {
+        let connector_type = data
+            .get("connector_type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let from_dir = PortDir::from_str(
+            data.get("from_dir").and_then(|v| v.as_str()).unwrap_or(""),
+        );
+        let to_dir = PortDir::from_str(
+            data.get("to_dir").and_then(|v| v.as_str()).unwrap_or(""),
+        );
+        OrthogonalEdgeVisual {
+            color: wire_color_for(connector_type),
+            from_dir,
+            to_dir,
+        }
+    });
     reg
 }
 
@@ -631,6 +892,10 @@ fn project_scene(diagram: &VisualDiagram) -> (Scene, HashMap<DiagramNodeId, Canv
             None => (ICON_W, ICON_H),
         };
 
+        let rotation_deg = node.rotation_degrees;
+        let mirror_x = node.mirror_x;
+        let mirror_y = node.mirror_y;
+
         let n_ports = node.component_def.ports.len();
         let ports: Vec<CanvasPort> = node
             .component_def
@@ -638,16 +903,35 @@ fn project_scene(diagram: &VisualDiagram) -> (Scene, HashMap<DiagramNodeId, Canv
             .iter()
             .enumerate()
             .map(|(i, p)| {
-                let (lx, ly) = if p.x == 0.0 && p.y == 0.0 {
-                    port_fallback_offset_for_size(i, n_ports, icon_w_local, icon_h_local)
+                // Apply mirror first (in icon-local Modelica coords),
+                // then rotate, then map to the icon's screen rect.
+                // Order matters per MLS Annex D — mirror is part of
+                // the local→parent transformation, rotation acts on
+                // the already-mirrored shape.
+                let (rx, ry) = if p.x == 0.0 && p.y == 0.0 {
+                    let (fx, fy) = port_fallback_offset_for_size(
+                        i,
+                        n_ports,
+                        icon_w_local,
+                        icon_h_local,
+                    );
+                    // Fallback returns icon-local screen coords. Apply
+                    // the same mirror & rotate around the icon centre.
+                    let (mfx, mfy) = mirror_local_point(
+                        fx, fy, icon_w_local, icon_h_local, mirror_x, mirror_y,
+                    );
+                    rotate_local_point(mfx, mfy, icon_w_local, icon_h_local, rotation_deg)
                 } else {
-                    let lx = ((p.x + 100.0) / 200.0) * icon_w_local;
-                    let ly = ((100.0 - p.y) / 200.0) * icon_h_local;
+                    let mpx = if mirror_x { -p.x } else { p.x };
+                    let mpy = if mirror_y { -p.y } else { p.y };
+                    let (mrx, mry) = rotate_modelica_point(mpx, mpy, rotation_deg);
+                    let lx = ((mrx + 100.0) / 200.0) * icon_w_local;
+                    let ly = ((100.0 - mry) / 200.0) * icon_h_local;
                     (lx, ly)
                 };
                 CanvasPort {
                     id: CanvasPortId::new(p.name.clone()),
-                    local_offset: CanvasPos::new(lx, ly),
+                    local_offset: CanvasPos::new(rx, ry),
                     kind: p.connector_type.clone().into(),
                 }
             })
@@ -709,6 +993,67 @@ fn project_scene(diagram: &VisualDiagram) -> (Scene, HashMap<DiagramNodeId, Canv
         let Some(tgt_cid) = id_map.get(&edge.target_node) else {
             continue;
         };
+
+        // Look up the source / target port definitions so we can
+        // bake connector type + edge-side direction into the edge's
+        // data. The visual reads both for colour selection and
+        // port-direction stubs without needing world access.
+        let src_node = diagram.nodes.iter().find(|n| n.id == edge.source_node);
+        let tgt_node = diagram.nodes.iter().find(|n| n.id == edge.target_node);
+        // Port lookup falls back to the head segment so qualified
+        // sub-port references like `flange.phi` (from
+        // `recover_edges_from_source`) still resolve to the
+        // outer `flange` PortDef. Without this, every recovered
+        // edge with a sub-port lost its colour + stub direction
+        // because the find() returned None.
+        let find_port = |defs: &[crate::visual_diagram::PortDef], name: &str|
+            -> Option<crate::visual_diagram::PortDef>
+        {
+            if let Some(p) = defs.iter().find(|p| p.name == name) {
+                return Some(p.clone());
+            }
+            let head = name.split('.').next().unwrap_or(name);
+            defs.iter().find(|p| p.name == head).cloned()
+        };
+        let src_port_def =
+            src_node.and_then(|n| find_port(&n.component_def.ports, &edge.source_port));
+        let tgt_port_def =
+            tgt_node.and_then(|n| find_port(&n.component_def.ports, &edge.target_port));
+        let connector_type = src_port_def
+            .as_ref()
+            .map(|p| p.connector_type.clone())
+            .unwrap_or_default();
+        // Apply the owning instance's mirror + rotation so the stub
+        // direction matches where the port actually appears on screen
+        // — without this, a Pin originally on the left still emits a
+        // leftward stub even after the instance was placed with
+        // rotation=270 (dot moved to bottom) or extent reversal (dot
+        // moved to right side).
+        let src_rot = src_node.map(|n| n.rotation_degrees).unwrap_or(0.0);
+        let tgt_rot = tgt_node.map(|n| n.rotation_degrees).unwrap_or(0.0);
+        let src_mx = src_node.map(|n| n.mirror_x).unwrap_or(false);
+        let src_my = src_node.map(|n| n.mirror_y).unwrap_or(false);
+        let tgt_mx = tgt_node.map(|n| n.mirror_x).unwrap_or(false);
+        let tgt_my = tgt_node.map(|n| n.mirror_y).unwrap_or(false);
+        let from_dir = src_port_def
+            .as_ref()
+            .map(|p| {
+                let mx = if src_mx { -p.x } else { p.x };
+                let my = if src_my { -p.y } else { p.y };
+                let (rx, ry) = rotate_modelica_point(mx, my, src_rot);
+                port_edge_dir(rx, ry)
+            })
+            .unwrap_or(PortDir::None);
+        let to_dir = tgt_port_def
+            .as_ref()
+            .map(|p| {
+                let mx = if tgt_mx { -p.x } else { p.x };
+                let my = if tgt_my { -p.y } else { p.y };
+                let (rx, ry) = rotate_modelica_point(mx, my, tgt_rot);
+                port_edge_dir(rx, ry)
+            })
+            .unwrap_or(PortDir::None);
+
         let eid = scene.alloc_edge_id();
         scene.insert_edge(CanvasEdge {
             id: eid,
@@ -721,7 +1066,11 @@ fn project_scene(diagram: &VisualDiagram) -> (Scene, HashMap<DiagramNodeId, Canv
                 port: CanvasPortId::new(edge.target_port.clone()),
             },
             kind: "modelica.connection".into(),
-            data: JsonValue::Null,
+            data: serde_json::json!({
+                "connector_type": connector_type,
+                "from_dir": from_dir.as_str(),
+                "to_dir": to_dir.as_str(),
+            }),
             origin: None,
         });
     }
@@ -977,6 +1326,20 @@ impl Panel for CanvasDiagramPanel {
                 .and_then(|m| m.get(doc_id).map(str::to_string));
             let mut state = world.resource_mut::<CanvasDiagramState>();
             let docstate = state.get_mut(Some(doc_id));
+            // If the user just changed drill-in target (clicked a
+            // different class in the Twin Browser), the new scene's
+            // bounds usually have nothing to do with the old one —
+            // so we want auto-fit to engage exactly as it does on a
+            // fresh tab open. Resetting `last_seen_gen` to 0 makes
+            // the completion path treat this projection as
+            // "initial" and refit the viewport, instead of leaving
+            // the camera at the stale zoom that made the new icons
+            // look "way too far apart" (icons rendered at near 1:1
+            // because the previous package-level scene auto-fit
+            // happened at a different scale).
+            if docstate.last_seen_target != target_class_snapshot {
+                docstate.last_seen_gen = 0;
+            }
             // Drop any in-flight projection whose input is now
             // stale (older generation of this doc). We can't cancel
             // a `Task` cleanly in Bevy's API, but dropping the

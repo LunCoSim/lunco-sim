@@ -1786,11 +1786,18 @@ pub fn import_model_to_diagram_from_ast(
         map
     };
 
-    // Place nodes in a grid layout (fallback for unannotated components)
-    let node_spacing_x = 200.0;
-    let node_spacing_y = 150.0;
-    let cols = 3;
+    // Place nodes in a sparse grid as fallback for components without
+    // a `Placement` annotation. Wide enough that orthogonal wires
+    // get room to bend without colliding with neighbours; alternating
+    // half-row offsets stagger neighbouring rows so ports on the
+    // shared horizontal band don't end up wired through the body of
+    // the row above. Matches the breathing room Dymola/OMEdit's
+    // default layout uses for un-annotated example models.
+    let node_spacing_x = 320.0;
+    let node_spacing_y = 220.0;
+    let cols = 4;
     let mut placement_idx = 0;
+    let row_offset_x = node_spacing_x * 0.5;
 
     for node in graph.nodes.iter() {
         if node.qualified_name.is_empty() {
@@ -1822,11 +1829,14 @@ pub fn import_model_to_diagram_from_ast(
         if let Some(def) = component_def {
             let mut pos = None;
             let mut size = None;
+            let mut rotation_degrees: f32 = 0.0;
+            let mut mirror_x = false;
+            let mut mirror_y = false;
 
             // Read placement from rumoca's typed annotation tree
             // instead of pattern-matching source text. Robust against
-            // whitespace, comments, multi-line layouts, and (when we
-            // add it) origin/rotation. Falls through to the grid
+            // whitespace, comments, multi-line layouts, and handles
+            // origin/rotation correctly. Falls through to the grid
             // fallback below when no Placement is authored.
             if let Some(comp) = comp_by_short.get(short_name) {
                 if let Some(placement) =
@@ -1844,6 +1854,12 @@ pub fn import_model_to_diagram_from_ast(
                         (extent.p2.x - extent.p1.x).abs() as f32,
                         (extent.p2.y - extent.p1.y).abs() as f32,
                     ));
+                    rotation_degrees = placement.transformation.rotation as f32;
+                    // Reversed extent corners encode an axis flip per
+                    // MLS Annex D — `extent={{x_high,…},{x_low,…}}`
+                    // means the icon mirrors along that axis.
+                    mirror_x = extent.p2.x < extent.p1.x;
+                    mirror_y = extent.p2.y < extent.p1.y;
                 }
             }
 
@@ -1852,7 +1868,11 @@ pub fn import_model_to_diagram_from_ast(
                 let row = placement_idx / cols;
                 let col = placement_idx % cols;
                 placement_idx += 1;
-                egui::Pos2::new(col as f32 * node_spacing_x, row as f32 * node_spacing_y)
+                let row_shift = if row % 2 == 1 { row_offset_x } else { 0.0 };
+                egui::Pos2::new(
+                    col as f32 * node_spacing_x + row_shift,
+                    row as f32 * node_spacing_y,
+                )
             });
 
             let node_id = diagram.add_node(def.clone(), pos);
@@ -1860,6 +1880,9 @@ pub fn import_model_to_diagram_from_ast(
             if let Some(diagram_node) = diagram.get_node_mut(node_id) {
                 diagram_node.instance_name = short_name.to_string();
                 diagram_node.extent_size = size;
+                diagram_node.rotation_degrees = rotation_degrees;
+                diagram_node.mirror_x = mirror_x;
+                diagram_node.mirror_y = mirror_y;
             }
         }
     }

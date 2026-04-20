@@ -4,6 +4,14 @@ version = "0.1.0"
 edition = "2021"
 description = "Native Modelica simulation integration for LunCoSim using Rumoca"
 
+[features]
+# `lunco-api` is on by default so `cargo run --bin modelica_workbench --
+# --api` Just Works for screenshot-driven debugging. Building without it
+# (`cargo build --no-default-features`) drops the axum/tokio web stack,
+# which matters for the wasm32 binary.
+default = ["lunco-api"]
+lunco-api = ["dep:lunco-api"]
+
 [[bin]]
 name = "modelica_workbench"
 path = "src/bin/modelica_workbench.rs"
