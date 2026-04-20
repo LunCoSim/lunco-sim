@@ -12,7 +12,7 @@
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiPlugin};
 use lunco_workbench::{
-    Panel, PanelId, PanelSlot, Workspace, WorkspaceId, WorkbenchAppExt, WorkbenchLayout,
+    Panel, PanelId, PanelSlot, Perspective, PerspectiveId, WorkbenchAppExt, WorkbenchLayout,
     WorkbenchPlugin,
 };
 
@@ -34,8 +34,8 @@ fn main() {
         .register_panel(ConsolePanel)
         // Workspaces: two presets demonstrate the switcher.
         // The first registered ("Build") also activates immediately.
-        .register_workspace(BuildWorkspace)
-        .register_workspace(SimulateWorkspace)
+        .register_perspective(BuildPerspective)
+        .register_perspective(SimulatePerspective)
         .add_systems(Startup, set_initial_status)
         .run();
 }
@@ -44,11 +44,11 @@ fn set_initial_status(mut layout: ResMut<WorkbenchLayout>) {
     layout.set_status("hello_workbench · demo · v0.1");
 }
 
-// ─── Workspace presets ──────────────────────────────────────────────────
+// ─── Perspective presets ──────────────────────────────────────────────────
 
-struct BuildWorkspace;
-impl Workspace for BuildWorkspace {
-    fn id(&self) -> WorkspaceId { WorkspaceId("build") }
+struct BuildPerspective;
+impl Perspective for BuildPerspective {
+    fn id(&self) -> PerspectiveId { PerspectiveId("build") }
     fn title(&self) -> String { "🏗 Build".into() }
     fn apply(&self, layout: &mut WorkbenchLayout) {
         layout.set_activity_bar(true);
@@ -58,9 +58,9 @@ impl Workspace for BuildWorkspace {
     }
 }
 
-struct SimulateWorkspace;
-impl Workspace for SimulateWorkspace {
-    fn id(&self) -> WorkspaceId { WorkspaceId("simulate") }
+struct SimulatePerspective;
+impl Perspective for SimulatePerspective {
+    fn id(&self) -> PerspectiveId { PerspectiveId("simulate") }
     fn title(&self) -> String { "🎮 Simulate".into() }
     fn apply(&self, layout: &mut WorkbenchLayout) {
         // Simulate mode: minimise chrome, keep the inspector for live values.

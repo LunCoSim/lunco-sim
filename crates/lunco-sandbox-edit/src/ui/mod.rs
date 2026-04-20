@@ -6,7 +6,7 @@
 
 use bevy::prelude::*;
 use lunco_workbench::{
-    PanelId, ViewportPanel, Workspace, WorkspaceId, WorkbenchAppExt, WorkbenchLayout,
+    PanelId, ViewportPanel, Perspective, PerspectiveId, WorkbenchAppExt, WorkbenchLayout,
     VIEWPORT_PANEL_ID,
 };
 
@@ -33,8 +33,8 @@ impl Plugin for SandboxEditUiPlugin {
             .register_panel(ViewportPanel)
             // Order matters for auto-activation — View first so it's
             // the default when the rover binary boots.
-            .register_workspace(ViewWorkspace)
-            .register_workspace(BuildWorkspace);
+            .register_perspective(ViewPerspective)
+            .register_perspective(BuildPerspective);
     }
 }
 
@@ -46,10 +46,10 @@ impl Plugin for SandboxEditUiPlugin {
 /// any egui surface in the central area (even a transparent
 /// `ViewportPanel` tab) marks the rect as egui-interactive and
 /// blocks Bevy input.
-pub struct ViewWorkspace;
+pub struct ViewPerspective;
 
-impl Workspace for ViewWorkspace {
-    fn id(&self) -> WorkspaceId { WorkspaceId("rover_view") }
+impl Perspective for ViewPerspective {
+    fn id(&self) -> PerspectiveId { PerspectiveId("rover_view") }
     fn title(&self) -> String { "🎬 View".into() }
     fn apply(&self, layout: &mut WorkbenchLayout) {
         layout.set_activity_bar(false);
@@ -66,10 +66,10 @@ impl Workspace for ViewWorkspace {
 /// Entities + Inspector tab together on the right because the entity
 /// list is rarely the main view (you mostly click in the 3D scene to
 /// select). Bottom dock is empty — fewer rows of chrome.
-pub struct BuildWorkspace;
+pub struct BuildPerspective;
 
-impl Workspace for BuildWorkspace {
-    fn id(&self) -> WorkspaceId { WorkspaceId("rover_build") }
+impl Perspective for BuildPerspective {
+    fn id(&self) -> PerspectiveId { PerspectiveId("rover_build") }
     fn title(&self) -> String { "🏗 Build".into() }
     fn apply(&self, layout: &mut WorkbenchLayout) {
         layout.set_activity_bar(false);

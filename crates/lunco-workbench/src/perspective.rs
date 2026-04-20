@@ -1,17 +1,24 @@
-//! Workspaces — named layout presets the user switches between.
+//! Perspectives — named layout presets the user switches between.
 //!
-//! See `docs/architecture/11-workbench.md` § 4 for the design. v0.2 ships
-//! the mechanism (trait + registry + switcher UI); the standard set of
-//! workspaces (Build / Simulate / Analyze / Plan / Observe) is composed
-//! by the host app as it registers panels, not hardcoded here.
+//! A **Perspective** is a task-oriented chrome switch ("Build", "Simulate",
+//! "Analyze", "Plan", "Observe") that rearranges the editor's dock so the
+//! right panels are in the right slots for the current activity. The term
+//! follows Eclipse / NetBeans; Blender uses the same idea under the name
+//! "Workspace" but LunCoSim reserves that word for the editor session
+//! (`lunco-workspace` crate).
+//!
+//! See `docs/architecture/11-workbench.md` § 4 for the original design.
+//! v0.2 ships the mechanism (trait + registry + switcher UI); the standard
+//! set of Perspectives is composed by the host app as it registers panels,
+//! not hardcoded here.
 
 use crate::{PanelId, WorkbenchLayout};
 
-/// Stable identifier for a workspace.
+/// Stable identifier for a Perspective.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct WorkspaceId(pub &'static str);
+pub struct PerspectiveId(pub &'static str);
 
-impl WorkspaceId {
+impl PerspectiveId {
     /// The raw string form.
     pub const fn as_str(self) -> &'static str {
         self.0
@@ -21,18 +28,18 @@ impl WorkspaceId {
 /// A named slot-assignment preset.
 ///
 /// Panels are registered once and exist for the life of the app. A
-/// workspace decides **which panels occupy which slots** for this UX
+/// Perspective decides **which panels occupy which slots** for this UX
 /// mode and triggers a rebuild of the underlying `egui_dock` tree.
-/// Switching workspaces is non-destructive — no panel is torn down,
+/// Switching Perspectives is non-destructive — no panel is torn down,
 /// only the dock layout changes.
-pub trait Workspace: Send + Sync + 'static {
+pub trait Perspective: Send + Sync + 'static {
     /// Stable ID used as a registry key and in the tab label.
-    fn id(&self) -> WorkspaceId;
+    fn id(&self) -> PerspectiveId;
 
-    /// Human-readable title for the workspace tab.
+    /// Human-readable title for the Perspective tab.
     fn title(&self) -> String;
 
-    /// Apply this workspace's slot assignments to the layout.
+    /// Apply this Perspective's slot assignments to the layout.
     ///
     /// Implementations call the slot setters on `layout`; each setter
     /// updates the slot intent and triggers a dock rebuild.
@@ -40,7 +47,7 @@ pub trait Workspace: Send + Sync + 'static {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Slot-assignment helpers callable from `Workspace::apply`.
+// Slot-assignment helpers callable from `Perspective::apply`.
 // ─────────────────────────────────────────────────────────────────────
 
 impl WorkbenchLayout {

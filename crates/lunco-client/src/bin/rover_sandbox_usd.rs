@@ -96,12 +96,12 @@ fn main() {
         })
         .init_resource::<SandboxSettings>()
         .add_systems(Startup, setup_sandbox)
-        // ModelicaPlugin's AnalyzeWorkspace is registered before SandboxEditUiPlugin's
+        // ModelicaPlugin's AnalyzePerspective is registered before SandboxEditUiPlugin's
         // workspaces, so without this nudge we'd boot into the Modelica layout.
         // Activate the 3D-only View workspace by default — full-screen scene,
         // no panels. User can switch to Build via the workspace tabs.
         .add_systems(Startup, |mut layout: ResMut<lunco_workbench::WorkbenchLayout>| {
-            layout.activate_workspace(lunco_workbench::WorkspaceId("rover_view"));
+            layout.activate_perspective(lunco_workbench::PerspectiveId("rover_view"));
         })
         .add_systems(Update, apply_sandbox_settings)
         // One-shot setup systems stay in Update (fire only on Added<BalloonModelMarker>)

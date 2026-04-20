@@ -58,7 +58,7 @@
 //! - **Graphs** (bottom dock) — time-series plots of simulation variables
 
 use bevy::prelude::*;
-use lunco_workbench::{Workspace, WorkspaceId, WorkbenchAppExt, WorkbenchLayout, PanelId};
+use lunco_workbench::{Perspective, PerspectiveId, WorkbenchAppExt, WorkbenchLayout, PanelId};
 
 pub mod state;
 pub use state::*;
@@ -165,10 +165,10 @@ fn cleanup_removed_documents(
 ///
 /// Mirrors the "Analyze — Modelica deep dive" slot map from the workbench
 /// design doc ([`docs/architecture/11-workbench.md`] § 4).
-pub struct AnalyzeWorkspace;
+pub struct AnalyzePerspective;
 
-impl Workspace for AnalyzeWorkspace {
-    fn id(&self) -> WorkspaceId { WorkspaceId("modelica_analyze") }
+impl Perspective for AnalyzePerspective {
+    fn id(&self) -> PerspectiveId { PerspectiveId("modelica_analyze") }
     fn title(&self) -> String { "📊 Analyze".into() }
     fn apply(&self, layout: &mut WorkbenchLayout) {
         layout.set_activity_bar(false);
@@ -301,7 +301,7 @@ impl Plugin for ModelicaUiPlugin {
             // Multi-instance: one tab per open document. Instances are
             // opened at runtime by the Package Browser.
             .register_instance_panel(panels::model_view::ModelViewPanel::default())
-            .register_workspace(AnalyzeWorkspace);
+            .register_perspective(AnalyzePerspective);
 
         // Contribute the Modelica section to the Twin Browser's
         // section registry. The workbench's WorkbenchPlugin already

@@ -7,7 +7,7 @@
 //! ┌─────────────────────────────────────────────────────────────┐
 //! │ menu bar                                                    │
 //! ├─────────────────────────────────────────────────────────────┤
-//! │ workspace tabs                                              │
+//! │ perspective tabs                                            │
 //! ├───┬─────────────────────────────────────────────────────────┤
 //! │ A │                                                         │
 //! │ c │      egui_dock tree                                     │
@@ -28,7 +28,7 @@
 //! - [`Panel`] trait: minimal render contract (`id`, `title`,
 //!   `default_slot`, `render(&mut Ui, &mut World)`)
 //! - [`WorkbenchLayout`] resource wrapping `egui_dock::DockState`
-//! - Workspace presets (slot-assignment DSL) — see [`Workspace`]
+//! - Perspective presets (slot-assignment DSL) — see [`Perspective`]
 //! - Auto-add of `bevy_egui::EguiPlugin` if the host hasn't
 //!
 //! ## What's deferred
@@ -49,8 +49,8 @@ use egui_dock::{
 use std::collections::HashMap;
 
 mod panel;
+mod perspective;
 mod viewport;
-mod workspace;
 
 pub mod twin_browser;
 
@@ -98,8 +98,8 @@ fn on_close_tab(trigger: On<CloseTab>, mut layout: ResMut<WorkbenchLayout>) {
     let ev = *trigger.event();
     layout.close_instance(ev.kind, ev.instance);
 }
+pub use perspective::{Perspective, PerspectiveId};
 pub use viewport::{ViewportPanel, WorkbenchViewportCamera, VIEWPORT_PANEL_ID};
-pub use workspace::{Workspace, WorkspaceId};
 
 /// Get the backdrop colour from the active theme.
 fn get_panel_backdrop(theme: &lunco_theme::Theme) -> egui::Color32 {
@@ -149,7 +149,7 @@ impl Plugin for WorkbenchPlugin {
 ///
 /// Holds an `egui_dock::DockState<PanelId>` plus a registry of `Panel`
 /// trait objects keyed by `PanelId`. The tree is mutated directly by
-/// the user via egui_dock's drag-and-drop UI; workspaces seed it via
+/// the user via egui_dock's drag-and-drop UI; perspectives seed it via
 /// the slot-setter DSL ([`set_side_browser`](Self::set_side_browser),
 /// [`set_center`](Self::set_center), [`set_right_inspector`](Self::set_right_inspector),
 /// [`set_bottom`](Self::set_bottom)).
@@ -160,13 +160,13 @@ pub struct WorkbenchLayout {
     /// [`InstancePanel::kind`]). Instances share the same renderer;
     /// each tab picks its behaviour via `TabId::Instance { kind, … }`.
     pub(crate) instance_panels: HashMap<PanelId, Box<dyn InstancePanel>>,
-    pub(crate) workspaces: Vec<Box<dyn Workspace>>,
-    pub(crate) active_workspace: Option<WorkspaceId>,
+    pub(crate) perspectives: Vec<Box<dyn Perspective>>,
+    pub(crate) active_perspective: Option<PerspectiveId>,
     pub(crate) activity_bar: bool,
 
-    // Slot intent — kept so workspaces can rebuild the dock when activated.
+    // Slot intent — kept so perspectives can rebuild the dock when activated.
     // User drags after that mutate `dock` directly; intent goes stale until
-    // the next workspace activation. Each side slot is a Vec so multiple
+    // the next perspective activation. Each side slot is a Vec so multiple
     // panels can be tabbed in the same dock region.
     pub(crate) side_browser: Vec<PanelId>,
     pub(crate) center: Vec<PanelId>,
@@ -226,8 +226,8 @@ impl Default for WorkbenchLayout {
         Self {
             panels: HashMap::new(),
             instance_panels: HashMap::new(),
-            workspaces: Vec::new(),
-            active_workspace: None,
+            perspectives: Vec::new(),
+            active_perspective: None,
             activity_bar: false,
             side_browser: Vec::new(),
             center: Vec::new(),
@@ -364,8 +364,8 @@ impl WorkbenchLayout {
         self.status = Some(StatusContent::Text(text.into()));
     }
 
-    /// Register a workspace and store it in the switcher. If this is the
-    /// first workspace added, it also becomes active and its `apply`
+    /// Register a perspective and store it in the switcher. If this is the
+    /// first perspective added, it also becomes active and its `apply`
     /// runs immediately to seed the initial layout.
     /// Register a closure that contributes rows to the app-wide
     /// Settings drop-down in the menu bar. Called once per open of the
@@ -380,34 +380,34 @@ impl WorkbenchLayout {
         self.settings_menu.push(Box::new(callback));
     }
 
-    pub fn register_workspace<W: Workspace + 'static>(&mut self, workspace: W) {
-        let id = workspace.id();
-        let first = self.workspaces.is_empty();
-        self.workspaces.push(Box::new(workspace));
+    pub fn register_perspective<W: Perspective + 'static>(&mut self, perspective: W) {
+        let id = perspective.id();
+        let first = self.perspectives.is_empty();
+        self.perspectives.push(Box::new(perspective));
         if first {
-            self.activate_workspace(id);
+            self.activate_perspective(id);
         }
     }
 
-    /// Switch to the named workspace, re-applying its slot preset.
+    /// Switch to the named perspective, re-applying its slot preset.
     /// No-op if the id isn't registered.
-    pub fn activate_workspace(&mut self, id: WorkspaceId) {
-        let workspaces = std::mem::take(&mut self.workspaces);
-        if let Some(ws) = workspaces.iter().find(|w| w.id() == id) {
+    pub fn activate_perspective(&mut self, id: PerspectiveId) {
+        let perspectives = std::mem::take(&mut self.perspectives);
+        if let Some(ws) = perspectives.iter().find(|w| w.id() == id) {
             ws.apply(self);
-            self.active_workspace = Some(id);
+            self.active_perspective = Some(id);
         }
-        self.workspaces = workspaces;
+        self.perspectives = perspectives;
     }
 
-    /// Which workspace is currently active, if any.
-    pub fn active_workspace(&self) -> Option<WorkspaceId> {
-        self.active_workspace
+    /// Which perspective is currently active, if any.
+    pub fn active_perspective(&self) -> Option<PerspectiveId> {
+        self.active_perspective
     }
 
     /// Rebuild the dock tree from the current slot intent.
     ///
-    /// Called by every slot setter and by [`activate_workspace`]. After
+    /// Called by every slot setter and by [`activate_perspective`]. After
     /// rebuild, user drags persist until the next call.
     ///
     /// **Two-mode rendering** — the dock is only used when there are
@@ -436,14 +436,14 @@ impl WorkbenchLayout {
     /// small share (20% side, 22% right, 30% bottom).
     pub(crate) fn rebuild_dock(&mut self) {
         // Filter slot intent down to panels actually registered in this
-        // app, so workspace presets can optimistically list panels that
+        // app, so perspective presets can optimistically list panels that
         // may only exist in some binaries (e.g. a rover-only Code tab
-        // referenced from the shared `BuildWorkspace`).
+        // referenced from the shared `BuildPerspective`).
         //
-        // Workspace slot-setters still use `PanelId` — slot presets
+        // Perspective slot-setters still use `PanelId` — slot presets
         // describe singleton-panel layouts. Instance-panel tabs are
         // opened dynamically at runtime (e.g. Package Browser opens a
-        // model tab) and don't come from the workspace preset.
+        // model tab) and don't come from the perspective preset.
         let known = |ids: &[PanelId]| -> Vec<TabId> {
             ids.iter()
                 .copied()
@@ -517,7 +517,7 @@ pub enum StatusContent {
     Text(String),
 }
 
-/// Extension trait on [`App`] for ergonomic panel + workspace registration.
+/// Extension trait on [`App`] for ergonomic panel + perspective registration.
 pub trait WorkbenchAppExt {
     /// Register a panel with the default workbench layout.
     fn register_panel<P: Panel + 'static>(&mut self, panel: P) -> &mut Self;
@@ -527,9 +527,9 @@ pub trait WorkbenchAppExt {
     /// [`WorkbenchLayout::open_instance`].
     fn register_instance_panel<P: InstancePanel + 'static>(&mut self, panel: P) -> &mut Self;
 
-    /// Register a workspace. The first workspace registered becomes
+    /// Register a perspective. The first perspective registered becomes
     /// active and its `apply` seeds the initial slot assignments.
-    fn register_workspace<W: Workspace + 'static>(&mut self, workspace: W) -> &mut Self;
+    fn register_perspective<W: Perspective + 'static>(&mut self, perspective: W) -> &mut Self;
 }
 
 impl WorkbenchAppExt for App {
@@ -551,13 +551,13 @@ impl WorkbenchAppExt for App {
         self
     }
 
-    fn register_workspace<W: Workspace + 'static>(&mut self, workspace: W) -> &mut Self {
+    fn register_perspective<W: Perspective + 'static>(&mut self, perspective: W) -> &mut Self {
         if !self.world().contains_resource::<WorkbenchLayout>() {
             self.init_resource::<WorkbenchLayout>();
         }
         self.world_mut()
             .resource_mut::<WorkbenchLayout>()
-            .register_workspace(workspace);
+            .register_perspective(perspective);
         self
     }
 }
@@ -604,7 +604,7 @@ fn first_leaf(
 
 /// First leaf containing any tab for which `pred` returns `true`.
 /// Used by [`WorkbenchLayout::open_instance`] to find the center
-/// tabset after workspace splits have moved it around.
+/// tabset after perspective splits have moved it around.
 fn find_leaf_matching<F>(
     surface: &mut egui_dock::Tree<TabId>,
     pred: F,
@@ -902,12 +902,12 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
             ui.menu_button("Help", |ui| {
                 ui.label("LunCoSim workbench v0.2 (egui_dock)");
             });
-            // Workspace tabs live in the menu bar (right-aligned).
+            // Perspective tabs live in the menu bar (right-aligned).
             // No separate transport bar — saves a row of vertical space.
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let active = layout.active_workspace;
-                let tabs: Vec<(WorkspaceId, String, bool)> = layout
-                    .workspaces
+                let active = layout.active_perspective;
+                let tabs: Vec<(PerspectiveId, String, bool)> = layout
+                    .perspectives
                     .iter()
                     .map(|w| {
                         let id = w.id();
@@ -920,7 +920,7 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
                 for (id, title, is_active) in tabs {
                     let button = egui::Button::new(title.as_str()).selected(is_active);
                     if ui.add(button).clicked() && !is_active {
-                        layout.activate_workspace(id);
+                        layout.activate_perspective(id);
                     }
                 }
             });
@@ -1082,14 +1082,14 @@ fn render_panel_solo(
 mod tests {
     use super::*;
 
-    struct TestWorkspace {
-        id: WorkspaceId,
+    struct TestPerspective {
+        id: PerspectiveId,
         title: &'static str,
         marker: PanelId,
     }
 
-    impl Workspace for TestWorkspace {
-        fn id(&self) -> WorkspaceId { self.id }
+    impl Perspective for TestPerspective {
+        fn id(&self) -> PerspectiveId { self.id }
         fn title(&self) -> String { self.title.to_string() }
         fn apply(&self, layout: &mut WorkbenchLayout) {
             layout.set_side_browser(Some(self.marker));
@@ -1100,68 +1100,68 @@ mod tests {
     }
 
     #[test]
-    fn first_registered_workspace_auto_activates() {
+    fn first_registered_perspective_auto_activates() {
         let mut layout = WorkbenchLayout::default();
-        assert!(layout.active_workspace().is_none());
+        assert!(layout.active_perspective().is_none());
 
-        layout.register_workspace(TestWorkspace {
-            id: WorkspaceId("a"),
+        layout.register_perspective(TestPerspective {
+            id: PerspectiveId("a"),
             title: "A",
             marker: PanelId("panel_a"),
         });
 
-        assert_eq!(layout.active_workspace(), Some(WorkspaceId("a")));
+        assert_eq!(layout.active_perspective(), Some(PerspectiveId("a")));
         assert_eq!(layout.side_browser, vec![PanelId("panel_a")]);
     }
 
     #[test]
-    fn second_workspace_does_not_override_active() {
+    fn second_perspective_does_not_override_active() {
         let mut layout = WorkbenchLayout::default();
-        layout.register_workspace(TestWorkspace {
-            id: WorkspaceId("a"),
+        layout.register_perspective(TestPerspective {
+            id: PerspectiveId("a"),
             title: "A",
             marker: PanelId("panel_a"),
         });
-        layout.register_workspace(TestWorkspace {
-            id: WorkspaceId("b"),
+        layout.register_perspective(TestPerspective {
+            id: PerspectiveId("b"),
             title: "B",
             marker: PanelId("panel_b"),
         });
 
-        assert_eq!(layout.active_workspace(), Some(WorkspaceId("a")));
+        assert_eq!(layout.active_perspective(), Some(PerspectiveId("a")));
         assert_eq!(layout.side_browser, vec![PanelId("panel_a")]);
     }
 
     #[test]
-    fn activate_workspace_applies_preset() {
+    fn activate_perspective_applies_preset() {
         let mut layout = WorkbenchLayout::default();
-        layout.register_workspace(TestWorkspace {
-            id: WorkspaceId("a"),
+        layout.register_perspective(TestPerspective {
+            id: PerspectiveId("a"),
             title: "A",
             marker: PanelId("panel_a"),
         });
-        layout.register_workspace(TestWorkspace {
-            id: WorkspaceId("b"),
+        layout.register_perspective(TestPerspective {
+            id: PerspectiveId("b"),
             title: "B",
             marker: PanelId("panel_b"),
         });
 
-        layout.activate_workspace(WorkspaceId("b"));
-        assert_eq!(layout.active_workspace(), Some(WorkspaceId("b")));
+        layout.activate_perspective(PerspectiveId("b"));
+        assert_eq!(layout.active_perspective(), Some(PerspectiveId("b")));
         assert_eq!(layout.side_browser, vec![PanelId("panel_b")]);
     }
 
     #[test]
-    fn activate_unknown_workspace_is_noop() {
+    fn activate_unknown_perspective_is_noop() {
         let mut layout = WorkbenchLayout::default();
-        layout.register_workspace(TestWorkspace {
-            id: WorkspaceId("a"),
+        layout.register_perspective(TestPerspective {
+            id: PerspectiveId("a"),
             title: "A",
             marker: PanelId("panel_a"),
         });
 
-        layout.activate_workspace(WorkspaceId("ghost"));
-        assert_eq!(layout.active_workspace(), Some(WorkspaceId("a")));
+        layout.activate_perspective(PerspectiveId("ghost"));
+        assert_eq!(layout.active_perspective(), Some(PerspectiveId("a")));
         assert_eq!(layout.side_browser, vec![PanelId("panel_a")]);
     }
 
