@@ -8,7 +8,7 @@
 name = "Earth Blue Marble (NASA Next Generation)"
 url = "https://eoimages.gsfc.nasa.gov/images/imagerecords/73000/73909/world.topo.bathy.200412.3x5400x2700.jpg"
 dest = "textures/earth_source.jpg"
-# sha256 = ""  # fill after first download
+sha256 = "a9f0088972dee0254610af851c4d6838ca3f2cf79176987e0a5713e2c15ec042"
 
 [earth.process]
 target_resolution = [4096, 2048]
@@ -18,7 +18,7 @@ output = "textures/earth.png"
 name = "Moon Color Map (NASA CGI Moon Kit)"
 url = "https://svs.gsfc.nasa.gov/vis/a000000/a004700/a004720/lroc_color_16bit_srgb_4k.tif"
 dest = "textures/moon_source.tif"
-# sha256 = ""  # fill after first download
+sha256 = "9731fa8af425b6c2f88f277ecca82bf8c603f3743894f64ed7b25c5bfefa22ff"
 
 [moon.process]
 target_resolution = [4096, 2048]

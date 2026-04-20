@@ -18,6 +18,7 @@ ureq = { version = "2.9", features = ["tls"] }
 sha2 = "0.10"
 chrono = "0.4"
 flate2 = "1.0"
+bzip2 = "0.4"
 tar = "0.4"
 resvg = { workspace = true }
 tiny-skia = { workspace = true }

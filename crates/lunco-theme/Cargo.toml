@@ -9,4 +9,5 @@ bevy = { workspace = true }
 bevy_egui = { workspace = true }
 egui_colors = { workspace = true }
 catppuccin-egui = { workspace = true }
+lunco-assets = { workspace = true }
 serde = { version = "1.0", features = ["derive"] }

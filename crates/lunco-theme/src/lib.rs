@@ -392,11 +392,56 @@ impl Theme {
     }
 }
 
+pub mod fonts;
+
 /// Plugin to register theme resources.
+///
+/// Also installs fallback fonts (Noto Sans + Noto Sans Symbols 2)
+/// on the egui context once the context is live — Modelica icons
+/// use math / Greek / arrow glyphs that egui's default font
+/// doesn't cover, so we append Noto as a fallback in the
+/// `Proportional` / `Monospace` font families.
 pub struct ThemePlugin;
 
 impl Plugin for ThemePlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Theme>();
+        app.init_resource::<Theme>()
+            .init_resource::<fonts::FontsInstalled>()
+            .add_systems(
+                bevy_egui::EguiPrimaryContextPass,
+                install_fallback_fonts_once,
+            );
     }
+}
+
+/// Install Noto fallback fonts the first time the egui context is
+/// available, then mark the resource as installed so subsequent
+/// frames short-circuit. Lives here (not in an `on_startup` system)
+/// because the egui context is created on the first render pass —
+/// calling `set_fonts` earlier would be a no-op.
+///
+/// Calling `set_fonts` from inside `EguiPrimaryContextPass` (i.e.
+/// between `ctx.begin_pass` and `ctx.end_pass`) is harmless — egui
+/// queues the FontDefinitions change and applies it on the next
+/// frame's atlas build. By the time the Icon view renders the
+/// `∧` glyph two frames after startup, the fallback is active.
+fn install_fallback_fonts_once(
+    mut contexts: bevy_egui::EguiContexts,
+    mut done: ResMut<fonts::FontsInstalled>,
+) {
+    if done.0 {
+        return;
+    }
+    let Ok(ctx) = contexts.ctx_mut() else {
+        bevy::log::warn!(
+            "[lunco-theme] install_fallback_fonts_once: egui ctx not yet \
+             available; retrying next frame"
+        );
+        return;
+    };
+    bevy::log::info!(
+        "[lunco-theme] installing Noto fallback fonts (Greek/math/arrow coverage)…"
+    );
+    fonts::install_fallback_fonts(ctx);
+    done.0 = true;
 }

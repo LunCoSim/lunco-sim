@@ -39,9 +39,26 @@ pub struct AssetEntry {
     pub url: String,
     /// Destination path relative to the shared cache root.
     ///
-    /// For tarballs: extracted here.
-    /// For single files: written directly.
+    /// For tarballs without `extract`: the archive is extracted into
+    /// this directory.
+    ///
+    /// For tarballs WITH `extract`: only the named file inside the
+    /// archive is copied to this path (`dest` becomes the final
+    /// output file, not a directory).
+    ///
+    /// For single-file downloads: the bytes are written directly here.
     pub dest: String,
+    /// Optional archive-internal path of the file to pull out of a
+    /// tarball, relative to the tarball root after the usual
+    /// "first-directory" prefix is stripped. When set, only this one
+    /// file is copied to `dest` and the rest of the archive is
+    /// discarded — handy for fonts / shader collections where the
+    /// upstream ships many files but we only need one.
+    ///
+    /// Example: `extract = "ttf/DejaVuSans.ttf"` picks only
+    /// `DejaVuSans.ttf` out of a full dejavu-fonts release tarball.
+    #[serde(default)]
+    pub extract: Option<String>,
     /// Expected SHA-256 hex digest. Empty string means "compute and suggest".
     pub sha256: Option<String>,
     /// Optional post-processing step (resize, convert).
@@ -84,7 +101,9 @@ impl AssetManifest {
 pub fn download_asset(entry: &AssetEntry, key: &str) -> Result<(), DownloadError> {
     let dest = cache_dir().join(&entry.dest);
 
-    // Check if already installed with correct version
+    // Cache-hit check #1 — versioned install (used by libraries like
+    // the MSL tarball where `version = "4.1.0"` pins an upstream
+    // release). Matches on `.version` marker sibling.
     if dest.exists() {
         if let Some(ref ver) = entry.version {
             let version_file = dest.parent().unwrap_or(&dest).join(".version");
@@ -93,6 +112,34 @@ pub fn download_asset(entry: &AssetEntry, key: &str) -> Result<(), DownloadError
                 if installed_ver.trim() == ver.trim() {
                     println!("  ✓ {} v{} already installed at {}", key, ver, dest.display());
                     return Ok(());
+                }
+            }
+        }
+    }
+
+    // Cache-hit check #2 — sha256 match. When the manifest pins a
+    // content hash, trust the existing file if its hash matches. This
+    // is what prevents the NASA textures (no `version`, just a
+    // `sha256`) from re-downloading tens of megabytes on every run
+    // after they've been pinned. Only runs for single-file entries:
+    // computing the hash of a `copy_dir_all`-style directory tree
+    // would be surprisingly subtle (order sensitivity, hidden files)
+    // and isn't worth the complexity here — tarball entries still
+    // need the `version` path for cache-hit.
+    if dest.is_file() {
+        if let Some(ref expected) = entry.sha256 {
+            if !expected.is_empty() {
+                use sha2::{Digest, Sha256};
+                if let Ok(bytes) = std::fs::read(&dest) {
+                    let hash = format!("{:x}", Sha256::digest(&bytes));
+                    if hash == *expected {
+                        println!(
+                            "  ✓ {} already installed at {} (sha256 match)",
+                            key,
+                            dest.display()
+                        );
+                        return Ok(());
+                    }
                 }
             }
         }
@@ -118,8 +165,14 @@ pub fn download_asset(entry: &AssetEntry, key: &str) -> Result<(), DownloadError
         }
     }
 
-    // Determine if tarball
-    let is_tar = entry.url.ends_with(".tar.gz") || entry.url.ends_with(".tgz");
+    // Tarball detection — `.tar.gz` / `.tgz` (gzip) and `.tar.bz2` /
+    // `.tbz2` / `.tbz` (bzip2) both handled. Added bz2 so the
+    // upstream DejaVu release on SourceForge can be pulled directly.
+    let is_tar_gz = entry.url.ends_with(".tar.gz") || entry.url.ends_with(".tgz");
+    let is_tar_bz2 = entry.url.ends_with(".tar.bz2")
+        || entry.url.ends_with(".tbz2")
+        || entry.url.ends_with(".tbz");
+    let is_tar = is_tar_gz || is_tar_bz2;
 
     if is_tar {
         let temp_dir = std::env::temp_dir().join(format!("lunco_{}", key));
@@ -127,14 +180,22 @@ pub fn download_asset(entry: &AssetEntry, key: &str) -> Result<(), DownloadError
         std::fs::create_dir_all(&temp_dir)
             .map_err(|e| DownloadError::WriteFailed(temp_dir.clone(), e.to_string()))?;
 
-        let tar_gz_path = temp_dir.join("asset.tar.gz");
-        std::fs::write(&tar_gz_path, &bytes)
-            .map_err(|e| DownloadError::WriteFailed(tar_gz_path.clone(), e.to_string()))?;
+        let ext = if is_tar_gz { "tar.gz" } else { "tar.bz2" };
+        let tar_path = temp_dir.join(format!("asset.{ext}"));
+        std::fs::write(&tar_path, &bytes)
+            .map_err(|e| DownloadError::WriteFailed(tar_path.clone(), e.to_string()))?;
 
-        let tar_gz = std::fs::File::open(&tar_gz_path)
+        let file = std::fs::File::open(&tar_path)
             .map_err(|e| DownloadError::ReadFailed(e.to_string()))?;
-        let tar = flate2::read::GzDecoder::new(tar_gz);
-        let mut archive = tar::Archive::new(tar);
+        // Dispatch to the right decompressor. Both flate2::GzDecoder
+        // and bzip2::read::BzDecoder implement `Read`, so the tar
+        // unpacker receives a `Box<dyn Read>` either way.
+        let reader: Box<dyn std::io::Read> = if is_tar_gz {
+            Box::new(flate2::read::GzDecoder::new(file))
+        } else {
+            Box::new(bzip2::read::BzDecoder::new(file))
+        };
+        let mut archive = tar::Archive::new(reader);
         archive.unpack(&temp_dir)
             .map_err(|e| DownloadError::ExtractFailed(e.to_string()))?;
 
@@ -150,15 +211,38 @@ pub fn download_asset(entry: &AssetEntry, key: &str) -> Result<(), DownloadError
         }
 
         let source_dir = &entries[0].path();
-        if dest.exists() {
-            std::fs::remove_dir_all(&dest)
+
+        if let Some(inner) = entry.extract.as_ref() {
+            // Single-file extraction mode: pick just the named file
+            // from inside the archive, write it to `dest`, discard
+            // the rest. `dest` is interpreted as a file path.
+            let src_file = source_dir.join(inner);
+            if !src_file.is_file() {
+                return Err(DownloadError::ExtractFailed(format!(
+                    "archive does not contain `{}` (looked in {})",
+                    inner,
+                    source_dir.display()
+                )));
+            }
+            if let Some(parent) = dest.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| {
+                    DownloadError::WriteFailed(parent.to_path_buf(), e.to_string())
+                })?;
+            }
+            std::fs::copy(&src_file, &dest)
+                .map_err(|e| DownloadError::WriteFailed(dest.clone(), e.to_string()))?;
+        } else {
+            // Whole-archive mode: copy the extracted tree to `dest`.
+            if dest.exists() {
+                std::fs::remove_dir_all(&dest)
+                    .map_err(|e| DownloadError::WriteFailed(dest.clone(), e.to_string()))?;
+            }
+            std::fs::create_dir_all(dest.parent().unwrap_or(&dest))
+                .map_err(|e| DownloadError::WriteFailed(dest.clone(), e.to_string()))?;
+
+            copy_dir_all(source_dir, &dest)
                 .map_err(|e| DownloadError::WriteFailed(dest.clone(), e.to_string()))?;
         }
-        std::fs::create_dir_all(dest.parent().unwrap_or(&dest))
-            .map_err(|e| DownloadError::WriteFailed(dest.clone(), e.to_string()))?;
-
-        copy_dir_all(source_dir, &dest)
-            .map_err(|e| DownloadError::WriteFailed(dest.clone(), e.to_string()))?;
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     } else {
@@ -203,6 +287,55 @@ pub fn download_all_for_crate(crate_dir: &Path) -> Result<(), DownloadError> {
     }
 
     Ok(())
+}
+
+/// Downloads a single asset by key, searching every crate's
+/// `Assets.toml` across the workspace. Returns the first match.
+///
+/// Use case: `cargo run -p lunco-assets -- download -a dejavu_sans`
+/// — pulls only the DejaVu font without refetching 20+ MB of NASA
+/// textures from an unrelated crate.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn download_one_workspace(
+    workspace_root: &Path,
+    asset_key: &str,
+) -> Result<(), DownloadError> {
+    let cargo_toml = workspace_root.join("Cargo.toml");
+    let content = std::fs::read_to_string(&cargo_toml)
+        .map_err(|e| DownloadError::ManifestFailed(e.to_string()))?;
+    let workspace: toml::Value = toml::from_str(&content)
+        .map_err(|e| DownloadError::ManifestFailed(e.to_string()))?;
+
+    let members = workspace["workspace"]["members"]
+        .as_array()
+        .ok_or_else(|| {
+            DownloadError::ManifestFailed("No workspace.members in Cargo.toml".into())
+        })?;
+
+    for member in members {
+        let Some(path) = member.as_str() else { continue };
+        let crate_dir = workspace_root.join(path);
+        let manifest_path = crate_dir.join("Assets.toml");
+        if !manifest_path.exists() {
+            continue;
+        }
+        let manifest = match AssetManifest::from_crate_dir(&crate_dir) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        if let Some(entry) = manifest.assets.get(asset_key) {
+            println!(
+                "Downloading `{}` from {}...",
+                asset_key,
+                crate_dir.file_name().unwrap_or_default().to_string_lossy()
+            );
+            return download_asset(entry, asset_key);
+        }
+    }
+
+    Err(DownloadError::ManifestFailed(format!(
+        "asset `{asset_key}` not found in any Assets.toml across the workspace"
+    )))
 }
 
 /// Downloads all assets from every crate in the workspace.

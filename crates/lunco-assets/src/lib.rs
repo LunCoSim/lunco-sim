@@ -208,6 +208,30 @@ pub fn assets_dir() -> PathBuf {
     PathBuf::from("assets")
 }
 
+/// Cache `fonts/` directory — where `lunco-assets -- download`
+/// materialises font files declared in per-crate `Assets.toml`. Lives
+/// under [`cache_dir`] because these are downloaded artifacts, not
+/// authored source. Shared across all worktrees (same as textures,
+/// ephemeris) — one `cargo run -p lunco-assets -- download` populates
+/// every git worktree at once.
+pub fn fonts_dir() -> PathBuf {
+    cache_subdir("fonts")
+}
+
+/// Full path to the **DejaVu Sans** TTF — the workspace's
+/// proportional-text fallback. Picked over Noto because Noto's base
+/// Sans and Symbols 2 *together* still leave gaps in the
+/// Mathematical Operators block (U+2200-22FF), while DejaVu Sans
+/// covers arrows + math operators + misc technical (U+2190-2311)
+/// contiguously in one file. Matches the Godot/Blender choice.
+///
+/// Resolves to `<cache_dir>/fonts/DejaVuSans.ttf`. Populated by
+/// `cargo run -p lunco-assets -- download` via the
+/// `crates/lunco-theme/Assets.toml` entry.
+pub fn dejavu_sans_path() -> PathBuf {
+    fonts_dir().join("DejaVuSans.ttf")
+}
+
 /// Constructs a `cached_textures://` asset path from a filename.
 ///
 /// This is the canonical way to reference textures that live in the cache

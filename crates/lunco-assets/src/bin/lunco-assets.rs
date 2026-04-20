@@ -24,6 +24,11 @@ fn main() {
     let mut crate_name: Option<&str> = None;
     let mut workspace_root: Option<&str> = None;
     let mut action: Option<&str> = None;
+    // `-a NAME` / `--asset NAME` — download only one asset by its key
+    // (the header in Assets.toml: `[dejavu_sans]` → key "dejavu_sans"),
+    // searching every crate's manifest. Saves re-downloading the full
+    // workspace asset set just to refresh a single font / texture.
+    let mut asset_key: Option<&str> = None;
 
     let mut i = 0;
     while i < args.len() {
@@ -32,6 +37,10 @@ fn main() {
             "-p" | "--package" => {
                 i += 1;
                 crate_name = args.get(i).map(|s| s.as_str());
+            }
+            "-a" | "--asset" => {
+                i += 1;
+                asset_key = args.get(i).map(|s| s.as_str());
             }
             "--workspace-root" => {
                 i += 1;
@@ -61,7 +70,13 @@ fn main() {
 
     let result = match action {
         "download" => {
-            if let Some(name) = crate_name {
+            if let Some(key) = asset_key {
+                // `-a` targets a single asset anywhere in the
+                // workspace. Takes precedence over `-p` (a single
+                // asset is more specific than a single crate).
+                download::download_one_workspace(&ws_root, key)
+                    .map_err(|e| e.to_string())
+            } else if let Some(name) = crate_name {
                 let crate_dir = ws_root.join(format!("crates/{}", name));
                 download::download_all_for_crate(&crate_dir)
                     .map_err(|e| e.to_string())
@@ -206,15 +221,17 @@ fn print_usage() {
     println!("LunCoSim Asset Manager");
     println!();
     println!("Usage:");
-    println!("  cargo run -p lunco-assets -- download          Download all workspace assets");
-    println!("  cargo run -p lunco-assets -- download -p NAME  Download for a specific crate");
-    println!("  cargo run -p lunco-assets -- process           Process all downloaded assets");
-    println!("  cargo run -p lunco-assets -- process -p NAME   Process assets for a crate");
-    println!("  cargo run -p lunco-assets -- list              List all workspace assets");
-    println!("  cargo run -p lunco-assets -- list -p NAME      List assets for a crate");
+    println!("  cargo run -p lunco-assets -- download              Download all workspace assets");
+    println!("  cargo run -p lunco-assets -- download -p NAME      Download for a specific crate");
+    println!("  cargo run -p lunco-assets -- download -a KEY       Download a single asset by key");
+    println!("  cargo run -p lunco-assets -- process               Process all downloaded assets");
+    println!("  cargo run -p lunco-assets -- process -p NAME       Process assets for a crate");
+    println!("  cargo run -p lunco-assets -- list                  List all workspace assets");
+    println!("  cargo run -p lunco-assets -- list -p NAME          List assets for a crate");
     println!();
     println!("Examples:");
     println!("  cargo run -p lunco-assets -- download -p lunco-modelica");
+    println!("  cargo run -p lunco-assets -- download -a dejavu_sans");
     println!("  cargo run -p lunco-assets -- process -p lunco-celestial");
     println!("  cargo run -p lunco-assets -- list");
 }

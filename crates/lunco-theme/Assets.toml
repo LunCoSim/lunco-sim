@@ -1,0 +1,27 @@
+# lunco-theme Assets
+#
+# External fonts required by the theme / icon-paint pipeline so MSL
+# icons render math / Greek / arrow / logic-operator glyphs without
+# tofu boxes. See `src/fonts.rs` for why DejaVu Sans in particular —
+# the Noto Sans + Noto Sans Symbols 2 pair originally considered both
+# leave holes in the Mathematical Operators block (U+2200-22FF),
+# which Modelica Blocks.MathBoolean's `∧` and `∨` sit inside.
+#
+# Usage: cargo run -p lunco-assets -- download
+
+[dejavu_sans]
+name = "DejaVu Sans Regular"
+version = "2.37"
+# DejaVu's canonical release archive is hosted on SourceForge (where
+# the project has shipped since 2003). Version 2.37 is the last
+# stable release (2016); the TTF bytes haven't changed since. The
+# `downloads.sourceforge.net` prefix is SF's direct-mirror endpoint
+# (`.tar.bz2` bytes served directly — no interstitial HTML page,
+# unlike the `/download` redirect on the browser-facing URL).
+url = "https://downloads.sourceforge.net/project/dejavu/dejavu/2.37/dejavu-fonts-ttf-2.37.tar.bz2"
+# Single-file extraction — we only need `DejaVuSans.ttf` out of the
+# 20+ files in the release tarball (ttf/ otf/ stylistic variants,
+# docs, lint tooling). See `AssetEntry::extract` docs.
+extract = "ttf/DejaVuSans.ttf"
+dest = "fonts/DejaVuSans.ttf"
+sha256 = "fa9ca4d13871dd122f61258a80d01751d603b4d3ee14095d65453b4e846e17d7"
