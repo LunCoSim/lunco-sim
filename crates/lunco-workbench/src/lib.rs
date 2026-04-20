@@ -155,6 +155,14 @@ pub struct WorkbenchLayout {
 
     pub(crate) status: Option<StatusContent>,
 
+    /// App-wide Settings menu contributions. Domain plugins push a
+    /// closure via [`WorkbenchLayout::register_settings`] at Startup;
+    /// the closure is invoked each time the user opens the Settings
+    /// drop-down. Keeps editor prefs / theme toggles / etc. in one
+    /// discoverable place instead of scattered gear buttons.
+    pub(crate) settings_menu:
+        Vec<Box<dyn Fn(&mut bevy_egui::egui::Ui, &mut World) + Send + Sync>>,
+
     /// The live dock tree — what egui_dock actually renders. Stores
     /// [`TabId`]s so both singleton panels and multi-instance tabs
     /// coexist in the same tree.
@@ -206,6 +214,7 @@ impl Default for WorkbenchLayout {
             right_inspector: Vec::new(),
             bottom: Vec::new(),
             status: None,
+            settings_menu: Vec::new(),
             dock: DockState::new(Vec::new()),
         }
     }
@@ -337,6 +346,19 @@ impl WorkbenchLayout {
     /// Register a workspace and store it in the switcher. If this is the
     /// first workspace added, it also becomes active and its `apply`
     /// runs immediately to seed the initial layout.
+    /// Register a closure that contributes rows to the app-wide
+    /// Settings drop-down in the menu bar. Called once per open of the
+    /// menu; the closure may read/write Bevy resources via `world`.
+    ///
+    /// Intended for domain plugins to expose editor / theme / pane
+    /// preferences without each plugin inventing its own gear button.
+    pub fn register_settings<F>(&mut self, callback: F)
+    where
+        F: Fn(&mut bevy_egui::egui::Ui, &mut World) + Send + Sync + 'static,
+    {
+        self.settings_menu.push(Box::new(callback));
+    }
+
     pub fn register_workspace<W: Workspace + 'static>(&mut self, workspace: W) {
         let id = workspace.id();
         let first = self.workspaces.is_empty();
@@ -717,6 +739,23 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
 }
 
 fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut World) {
+    // ── Opaque-mode backdrop (must run first) ───────────────────────
+    // In apps where every panel is opaque (no 3D viewport showing
+    // through), paint `PANEL_BACKDROP` on the background layer BEFORE
+    // registering any panel shapes. egui draws within a layer in the
+    // order shapes are issued, so a rect_filled issued AFTER the menu
+    // bar / dock / status bar would paint over them — exactly the
+    // "invisible menu" regression the opaque-backdrop change
+    // introduced. Running it first keeps the fill underneath.
+    let any_transparent = layout
+        .panels
+        .values()
+        .any(|p| p.transparent_background());
+    if !any_transparent {
+        let painter = ctx.layer_painter(egui::LayerId::background());
+        painter.rect_filled(ctx.screen_rect(), 0.0, PANEL_BACKDROP);
+    }
+
     // ── Menu bar ────────────────────────────────────────────────────
     egui::TopBottomPanel::top("lunco_workbench_menu_bar").show(ctx, |ui| {
         ui.horizontal(|ui| {
@@ -801,6 +840,27 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
                     }
                 }
             });
+            ui.menu_button("Settings", |ui| {
+                // Take the callbacks out so we can pass &mut World into
+                // them while the layout is still extracted. Restored
+                // at the end of the block.
+                let callbacks = std::mem::take(&mut layout.settings_menu);
+                if callbacks.is_empty() {
+                    ui.label(
+                        egui::RichText::new("(no settings registered)")
+                            .weak()
+                            .italics(),
+                    );
+                } else {
+                    for (i, cb) in callbacks.iter().enumerate() {
+                        if i > 0 {
+                            ui.separator();
+                        }
+                        cb(ui, world);
+                    }
+                }
+                layout.settings_menu = callbacks;
+            });
             ui.menu_button("Help", |ui| {
                 ui.label("LunCoSim workbench v0.2 (egui_dock)");
             });
@@ -867,24 +927,6 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
     let has_dock_tabs = layout.dock.iter_all_tabs().next().is_some();
 
     if has_dock_tabs {
-        // Compute this BEFORE we split-borrow `panels` mutably below.
-        let any_transparent = layout
-            .panels
-            .values()
-            .any(|p| p.transparent_background());
-
-        // In opaque-panels mode (no 3D viewport), paint a solid backdrop
-        // on the lowest egui layer so that any gap in the dock — the
-        // separator handles, the hairline around leaves, the margin
-        // around the central frame — renders as PANEL_BACKDROP rather
-        // than bleeding the window's clear colour through. This is
-        // what makes the tab bar actually look contained rather than
-        // floating on a transparent strip.
-        if !any_transparent {
-            let painter = ctx.layer_painter(egui::LayerId::background());
-            painter.rect_filled(ctx.screen_rect(), 0.0, PANEL_BACKDROP);
-        }
-
         let WorkbenchLayout {
             panels,
             instance_panels,

@@ -54,6 +54,7 @@ pub fn compile_balloon_model(
             parameters: params,
             inputs: inputs.into_iter().collect(),
             variables: Default::default(),
+            descriptions: Default::default(),
             current_time: 0.0,
             last_step_time: 0.0,
             session_id: 0,

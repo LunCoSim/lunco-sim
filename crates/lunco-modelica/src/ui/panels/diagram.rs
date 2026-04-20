@@ -38,6 +38,7 @@ use crate::visual_diagram::{
 };
 use crate::ui::WorkbenchState;
 use crate::{ModelicaModel, ModelicaChannels, ModelicaCommand};
+use lunco_doc::DocumentId;
 
 // ---------------------------------------------------------------------------
 // Design Tokens — all visual constants live here (Tunability Mandate).
@@ -116,9 +117,38 @@ impl Default for DiagramTheme {
 // ---------------------------------------------------------------------------
 
 /// Resource holding the visual diagram being built on the canvas.
+///
+/// # Phase α migration
+///
+/// The panel is transitioning from "the `VisualDiagram` + `snarl` fields
+/// are the authoring truth, source is regenerated on compile" to "the
+/// active `ModelicaDocument` is the authoring truth, snarl is a rendered
+/// projection of the document's AST". During the transition both
+/// authoring paths coexist:
+///
+/// - User actions (drag from palette, wire ports, drag-to-move) emit
+///   AST-level ops to [`DiagramState::document`]. The
+///   [`DiagramState::last_seen_gen`] cursor tracks which of the
+///   document's structured changes have already been applied to
+///   `snarl`.
+/// - The legacy [`DiagramState::diagram`] and `generate_modelica_source`
+///   path still runs on compile so existing behaviour is preserved until
+///   the ops-driven compile lands. Both will be retired once snarl
+///   renders directly from the document AST.
 #[derive(Resource)]
 pub struct DiagramState {
-    /// The visual model being built.
+    /// The active Modelica document the diagram is editing. Resolved
+    /// from `WorkbenchState.open_model.doc` when a document is open,
+    /// lazily allocated otherwise (see
+    /// [`DiagramState::ensure_document`]).
+    pub document: Option<DocumentId>,
+    /// Last document generation the snarl render cache has consumed
+    /// from [`ModelicaDocument::changes_since`]. Drives incremental
+    /// snarl patching — see Phase α design.
+    pub last_seen_gen: u64,
+    /// The visual model being built (legacy authoring store —
+    /// scheduled for removal once all ops route through
+    /// [`DiagramState::document`]).
     pub diagram: VisualDiagram,
     /// The egui-snarl state for the canvas.
     pub snarl: Snarl<DiagramNode>,
@@ -139,6 +169,21 @@ pub struct DiagramState {
     pub last_click_pos: egui::Pos2,
     /// The currently selected node for inspection.
     pub selected_node: Option<DiagramNodeId>,
+    /// Snapshot of the wire set at the end of the previous frame.
+    /// Each entry is an unordered pair of `(component, port)` tuples.
+    /// Used to detect newly-drawn / newly-removed wires in snarl
+    /// between frames, so the corresponding `AddConnection` /
+    /// `RemoveConnection` ops can be emitted to the document.
+    pub last_wires: std::collections::HashSet<((String, String), (String, String))>,
+    /// Snapshot of node positions (keyed by Modelica instance name)
+    /// at the end of the previous frame. Values are in Modelica
+    /// diagram coordinates (+Y up). Used to detect drag-to-move
+    /// between frames so `SetPlacement` ops can be emitted.
+    ///
+    /// `None` marks the post-bind initial state where no positions
+    /// have been recorded yet — the next frame's positions become
+    /// the baseline and don't emit any ops.
+    pub last_positions: Option<std::collections::HashMap<String, (f32, f32)>>,
 }
 
 impl DiagramState {
@@ -168,11 +213,38 @@ impl DiagramState {
     pub fn rebuild_snarl(&mut self) {
         self.snarl = build_snarl(&self.diagram);
     }
+
+    /// Bind this diagram panel to a particular Modelica document,
+    /// resetting the change-stream cursor so the next sync does a
+    /// clean rebuild of the snarl from the document's current AST.
+    ///
+    /// Called when the user switches `open_model` or on first access
+    /// to a freshly-allocated document.
+    pub fn bind_document(&mut self, doc: DocumentId) {
+        if self.document != Some(doc) {
+            self.document = Some(doc);
+            self.last_seen_gen = 0;
+            self.last_wires.clear();
+            self.last_positions = None;
+        }
+    }
+
+    /// Detach from any currently-bound document. Used when the user
+    /// closes the active model. Leaves snarl / diagram state intact so
+    /// the canvas doesn't visibly flash empty during transitions.
+    pub fn unbind_document(&mut self) {
+        self.document = None;
+        self.last_seen_gen = 0;
+        self.last_wires.clear();
+        self.last_positions = None;
+    }
 }
 
 impl Default for DiagramState {
     fn default() -> Self {
         Self {
+            document: None,
+            last_seen_gen: 0,
             diagram: VisualDiagram::default(),
             snarl: Snarl::default(),
             compile_status: None,
@@ -183,6 +255,8 @@ impl Default for DiagramState {
             schematic_mode: true,
             last_click_pos: egui::Pos2::ZERO,
             selected_node: None,
+            last_wires: std::collections::HashSet::new(),
+            last_positions: None,
         }
     }
 }
@@ -880,6 +954,25 @@ pub struct DiagramViewer<'a> {
     selected_node: &'a mut Option<DiagramNodeId>,
     /// Reference to egui context for input checking.
     ctx: egui::Context,
+    /// Name of the class the diagram is currently editing (usually the
+    /// primary class of the open model — e.g. `"Circuit"` for a file
+    /// containing `model Circuit ... end Circuit;`). None when no model
+    /// is open; ops are silently skipped in that case.
+    editing_class: Option<String>,
+    /// AST-level ops emitted inside `SnarlViewer` callbacks. The outer
+    /// render loop drains this and applies each op to the bound
+    /// document's `DocumentHost` (see Phase α Step 2). Inside viewer
+    /// callbacks we only have access to `&mut Snarl<..>`; anything
+    /// requiring the world or the DocumentRegistry has to go through
+    /// this queue.
+    pending_ops: Vec<crate::document::ModelicaOp>,
+}
+
+impl<'a> DiagramViewer<'a> {
+    /// Push an AST op for the outer loop to apply.
+    fn emit_op(&mut self, op: crate::document::ModelicaOp) {
+        self.pending_ops.push(op);
+    }
 }
 
 impl<'a> SnarlViewer<DiagramNode> for DiagramViewer<'a> {
@@ -1142,9 +1235,40 @@ impl<'a> SnarlViewer<DiagramNode> for DiagramViewer<'a> {
                 for comp in &components {
                     if ui.button(format!("{} {}", comp.display_name, comp.name)).clicked() {
                         let node = DiagramNode::from_msl(comp);
-                        // Place node at click.
-                        println!("Inserting node at graph pos: {:?}", pos);
+                        // Pull the auto-generated instance name before
+                        // insert_node takes ownership of the node.
+                        // If it collides with an existing component
+                        // the user will see both in the diagram and a
+                        // duplicate-name diagnostic — same behaviour as
+                        // OMEdit / Dymola. The user renames manually.
+                        let instance_name = match &node {
+                            DiagramNode::Component { instance_name, .. } => instance_name.clone(),
+                        };
                         snarl.insert_node(pos, node);
+                        // Phase α: emit AST op alongside the snarl
+                        // mutation. Maps canvas-space `pos` into
+                        // Modelica diagram coordinates (+Y up; snarl
+                        // uses +Y down so we flip y).
+                        match self.editing_class.clone() {
+                            Some(class) => self.emit_op(crate::document::ModelicaOp::AddComponent {
+                                class,
+                                decl: crate::pretty::ComponentDecl {
+                                    type_name: comp.msl_path.clone(),
+                                    name: instance_name.clone(),
+                                    modifications: comp
+                                        .parameters
+                                        .iter()
+                                        .filter(|p| !p.default.is_empty())
+                                        .map(|p| (p.name.clone(), p.default.clone()))
+                                        .collect(),
+                                    placement: Some(crate::pretty::Placement::at(pos.x, -pos.y)),
+                                },
+                            }),
+                            None => warn!(
+                                "[Diagram] add `{}` did not emit an AST op — no editing class resolvable",
+                                instance_name,
+                            ),
+                        }
                         ui.close();
                     }
                 }
@@ -1175,6 +1299,21 @@ impl<'a> SnarlViewer<DiagramNode> for DiagramViewer<'a> {
         ui.separator();
 
         if ui.button("🗑 Delete").clicked() {
+            // Phase α: emit RemoveComponent to the document before
+            // tearing the snarl node. The class context is the
+            // primary class of the open model.
+            let DiagramNode::Component { instance_name, .. } = &snarl[node_id];
+            let instance_name = instance_name.clone();
+            match self.editing_class.clone() {
+                Some(class) => self.emit_op(crate::document::ModelicaOp::RemoveComponent {
+                    class,
+                    name: instance_name,
+                }),
+                None => warn!(
+                    "[Diagram] delete `{}` did not emit an AST op — no editing class resolvable",
+                    instance_name,
+                ),
+            }
             snarl.remove_node(node_id);
             ui.close();
         }
@@ -1283,34 +1422,300 @@ impl<'a> SnarlViewer<DiagramNode> for DiagramViewer<'a> {
 /// Parse Modelica source and build a `VisualDiagram` from component
 /// instantiations and `connect()` equations.
 ///
+/// Regex-based fallback scanner for component declarations.
+///
+/// Returns `(type_path, instance_name)` pairs in source order,
+/// including duplicates. Used when rumoca's AST recovery drops
+/// components (for example, on a duplicate-name semantic error) so
+/// the diagram panel can still render everything the user typed.
+///
+/// Deliberately simple — this is a best-effort enumerator, not a
+/// parser. Skips lines whose first word is a Modelica keyword,
+/// skips well-known component prefixes (`flow`, `parameter`, etc.)
+/// so they don't shadow the type reference, and matches up to the
+/// first `;`, `(`, or newline after the instance name.
+fn scan_component_declarations(source: &str) -> Vec<(String, String)> {
+    // Matches an optional run of modifier prefixes, then a dotted
+    // type path, then the instance name. Uses `\b` (word boundary,
+    // zero-width) at the instance-name end so the match doesn't
+    // consume any whitespace past the identifier — otherwise a
+    // `\s*[\(;\s]` tail will eat the indentation of the *next* line,
+    // pulling the iterator past that line's `^` anchor and silently
+    // skipping its component. `captures_iter` is non-overlapping, so
+    // any whitespace we consume here is unavailable to the next
+    // candidate match.
+    let re = regex::Regex::new(
+        r"(?m)^\s*(?:(?:flow|stream|input|output|parameter|constant|discrete|inner|outer|replaceable|final)\s+)*((?:[A-Za-z_]\w*\.)*[A-Za-z_]\w*)\s+([A-Za-z_]\w*)\b"
+    ).expect("scan regex compiles");
+    // Keywords that can appear at column 0 inside a class body and
+    // therefore look like "type name" starts under a naive regex.
+    // When the captured "type" matches one, the match is discarded.
+    const KEYWORDS: &[&str] = &[
+        "model", "block", "connector", "package", "function", "record", "class", "type",
+        "extends", "import", "equation", "algorithm", "initial", "protected", "public",
+        "annotation", "connect", "if", "for", "when", "end", "within", "and", "or", "not",
+        "true", "false", "else", "elseif", "elsewhen", "while", "loop", "break", "return",
+        "then", "external", "encapsulated", "partial", "expandable", "operator", "pure",
+        "impure", "redeclare",
+    ];
+    let mut out = Vec::new();
+    for cap in re.captures_iter(source) {
+        let ty = cap[1].to_string();
+        let inst = cap[2].to_string();
+        let first_segment = ty.split('.').next().unwrap_or(&ty);
+        if KEYWORDS.contains(&first_segment) {
+            continue;
+        }
+        out.push((ty, inst));
+    }
+    out
+}
+
+/// Build a `VisualDiagram` from scanner-extracted `(type, name)`
+/// pairs. Used only when the AST-based path returned nothing — i.e.
+/// rumoca failed to produce components for the class. Placement
+/// annotations are looked up per-instance via the existing
+/// regex-based extractor inside [`import_model_to_diagram`]; here
+/// we build a plain grid-layout fallback.
+fn build_visual_diagram_from_scan(
+    source: &str,
+    scanned: &[(String, String)],
+) -> VisualDiagram {
+    let mut diagram = VisualDiagram::default();
+    let msl_lib = msl_component_library();
+    let msl_lookup_by_path: HashMap<&str, &MSLComponentDef> = msl_lib
+        .iter()
+        .map(|c| (c.msl_path.as_str(), c))
+        .collect();
+
+    let node_spacing_x = 200.0;
+    let node_spacing_y = 150.0;
+    let cols = 3usize;
+
+    for (idx, (type_path, instance_name)) in scanned.iter().enumerate() {
+        // Only render components whose type resolves against the MSL
+        // index. Unresolved types stay in the source — the user sees
+        // them in the code editor and the parse-error badge — but
+        // aren't rendered here because we don't have port info for
+        // an unknown type.
+        let Some(def) = msl_lookup_by_path.get(type_path.as_str()).cloned() else {
+            continue;
+        };
+
+        // Placement from annotation (best-effort regex); fall back to grid.
+        let safe_name = regex::escape(instance_name);
+        let pattern = safe_name
+            + r"(?:\s*\([^)]*\))?\s*annotation\s*\(\s*Placement\s*\(\s*transformation\s*\(\s*extent\s*=\s*\{\{\s*([-\d\.]+)\s*,\s*([-\d\.]+)\s*\}\s*,\s*\{\s*([-\d\.]+)\s*,\s*([-\d\.]+)\s*\}\}";
+        let annotation_pos = regex::Regex::new(&pattern).ok().and_then(|re| {
+            re.captures(source).and_then(|cap| {
+                let x1 = cap[1].parse::<f32>().ok()?;
+                let y1 = cap[2].parse::<f32>().ok()?;
+                let x2 = cap[3].parse::<f32>().ok()?;
+                let y2 = cap[4].parse::<f32>().ok()?;
+                Some(egui::Pos2::new((x1 + x2) / 2.0, -((y1 + y2) / 2.0)))
+            })
+        });
+        let pos = annotation_pos.unwrap_or_else(|| {
+            let row = idx / cols;
+            let col = idx % cols;
+            egui::Pos2::new(col as f32 * node_spacing_x, row as f32 * node_spacing_y)
+        });
+
+        let node_id = diagram.add_node(def.clone(), pos);
+        if let Some(n) = diagram.get_node_mut(node_id) {
+            n.instance_name = instance_name.clone();
+        }
+    }
+    diagram
+}
+
+/// Default cap for the "don't project absurdly huge models" guard.
+/// Catches obvious mistakes (importing a whole MSL subpackage into
+/// a diagram viewer) without getting in the way of real engineering
+/// models, which typically have a few dozen components and rarely
+/// cross a couple hundred.
+///
+/// Overridable at call time via the `max_nodes` parameter on
+/// [`import_model_to_diagram_from_ast`] or the
+/// [`DiagramProjectionLimits`] resource the Canvas projection
+/// reads. Power users editing a `Magnetic.FundamentalWave` gizmo
+/// with 500 components should bump this in Settings, not get a
+/// blank canvas.
+pub const DEFAULT_MAX_DIAGRAM_NODES: usize = 1000;
+
 /// Returns `None` if the model has no component instantiations
 /// (e.g., equation-based models like Battery.mo, SpringMass.mo).
-fn import_model_to_diagram(source: &str) -> Option<VisualDiagram> {
-    use crate::diagram::ModelicaComponentBuilder;
+pub fn import_model_to_diagram(source: &str) -> Option<VisualDiagram> {
+    // Delegate to the AST-taking variant after parsing once. Keeps
+    // existing callers working while letting hot paths (Canvas
+    // projection) reuse an already-parsed AST from `ModelicaDocument`.
+    let syntax = rumoca_phase_parse::parse_to_syntax(source, "model.mo");
+    let ast: rumoca_session::parsing::ast::StoredDefinition = syntax.best_effort().clone();
+    import_model_to_diagram_from_ast(
+        std::sync::Arc::new(ast),
+        source,
+        DEFAULT_MAX_DIAGRAM_NODES,
+        None,
+    )
+}
 
-    // Try to build a component graph from the source
-    let builder = ModelicaComponentBuilder::from_source(source)?;
+/// Same as [`import_model_to_diagram`] but reuses an already-
+/// parsed AST. Saves two full rumoca passes (one in the component-
+/// builder, one in the imports-resolution path). Used by the
+/// canvas's async projection task where
+/// `ModelicaDocument::ast()` already holds the parsed tree.
+///
+/// `max_nodes` is a guard against accidentally projecting a huge
+/// package (e.g. `Modelica.Units`) into a diagram — returns `None`
+/// if the parsed graph exceeds the cap. See
+/// [`DEFAULT_MAX_DIAGRAM_NODES`] for the conventional value; the
+/// canvas projection reads it from `DiagramProjectionLimits` so
+/// users editing deeply composed models can raise it in Settings.
+pub fn import_model_to_diagram_from_ast(
+    ast: std::sync::Arc<rumoca_session::parsing::ast::StoredDefinition>,
+    source: &str,
+    max_nodes: usize,
+    target_class: Option<&str>,
+) -> Option<VisualDiagram> {
+    use crate::diagram::ModelicaComponentBuilder;
+    // `Arc::clone` here is a pointer bump, NOT a tree clone.
+    // MSL package ASTs are megabytes; a naïve clone would push the
+    // process into swap on drill-in into anything under
+    // `Modelica/Blocks/package.mo` etc.
+    //
+    // `target_class` scopes the builder to a specific class inside
+    // the AST — critical for drill-in tabs backed by multi-class
+    // package files. Without it, the builder would walk every
+    // sibling class (dozens in `Blocks/package.mo`) and render a
+    // Frankenstein diagram. With it, we get only the drilled-in
+    // class's components and connect equations.
+    let mut builder = ModelicaComponentBuilder::from_ast(std::sync::Arc::clone(&ast));
+    if let Some(target) = target_class {
+        builder = builder.target_class(target);
+    }
     let graph = builder.build();
 
-    // If no components found, this is an equation-based model
+    // If the AST-based graph has no components, fall back to a
+    // source-text scan before concluding the model is equation-only.
+    //
+    // Why: rumoca's error recovery drops *all* components of a class
+    // when it hits a semantic error like a duplicate name (per
+    // MLS, duplicates are a namespace violation). An OMEdit /
+    // Dymola-style editor must still render what the user wrote so
+    // they can fix the error — returning `None` here leaves them
+    // staring at a blank canvas with no clue *why*.
+    //
+    // The scanner is regex-based and deliberately simple; it catches
+    // the common `<Qualified.Type> <InstanceName>[(mods)] [;/anno];`
+    // shape but doesn't pretend to be a full Modelica parser. When the
+    // AST is healthy (the 99% case), this fallback never runs.
+    //
+    // **Critical**: the scanner reads the WHOLE source, so it has
+    // no notion of class scoping. We only run it when no
+    // `target_class` was specified — drill-in tabs into a specific
+    // class inside a package file MUST NOT trigger this fallback,
+    // or they end up displaying every sibling class's components
+    // jumbled together. Honor the scope the caller asked for.
     if graph.node_count() == 0 {
+        if target_class.is_some() {
+            return None;
+        }
+        let scanned = scan_component_declarations(source);
+        if !scanned.is_empty() {
+            return Some(build_visual_diagram_from_scan(source, &scanned));
+        }
         return None;
     }
 
-    // Safety: prevent importing massive packages (like Units) as diagrams
-    if graph.node_count() > 100 {
-        warn!("[Diagram] Model too complex ({} nodes). Skipping diagram generation.", graph.node_count());
+    // Safety: prevent projecting absurdly huge packages (e.g.
+    // `Modelica.Units` with thousands of type declarations) as a
+    // diagram. The cap is caller-supplied so power users editing
+    // rich composed models can raise it via Settings; default is
+    // `DEFAULT_MAX_DIAGRAM_NODES`.
+    if graph.node_count() > max_nodes {
+        warn!(
+            "[Diagram] Model exceeds node cap ({} > {}). Skipping diagram generation. \
+             Raise `Settings → Diagram → Max nodes` to project anyway.",
+            graph.node_count(),
+            max_nodes,
+        );
         return None;
     }
 
     // Convert ComponentGraph → VisualDiagram
     let mut diagram = VisualDiagram::default();
 
-    // Build a lookup from component type name → MSLComponentDef
+    // MSL lookup table — keyed by the fully-qualified Modelica path
+    // (e.g. `"Modelica.Blocks.Continuous.Integrator"`).
+    //
+    // Type resolution follows MLS §5.3: a component's `type_name` is
+    // matched against its containing class's import table and any
+    // enclosing scopes. Our pretty-printer always emits fully-qualified
+    // paths, so that route resolves directly. For short-name
+    // references we build a per-class import map from the parsed AST
+    // below.
+    //
+    // Short-name-tail heuristics (e.g. `Integrator` → first MSL entry
+    // whose path ends in `.Integrator`) are *not* applied — MSL has
+    // multiple classes sharing short names (for example,
+    // `Modelica.Blocks.Continuous.Integrator` vs.
+    // `Modelica.Blocks.Continuous.Integrator` nested variants), and
+    // matching by suffix would silently pick the wrong one. If a
+    // reference doesn't resolve via scope or path, we surface it as
+    // unresolved (skipped) rather than guess.
     let msl_lib = msl_component_library();
-    let msl_lookup: HashMap<&str, &MSLComponentDef> = msl_lib.iter()
-        .map(|c| (c.name.as_str(), c))
+    let msl_lookup_by_path: HashMap<&str, &MSLComponentDef> = msl_lib.iter()
+        .map(|c| (c.msl_path.as_str(), c))
         .collect();
+
+    // Build the active class's import map so we can resolve
+    // short-name type references the way OpenModelica's frontend
+    // does. We re-parse the source here (cheap — the cache is warm
+    // from the component-graph builder above) so we can walk
+    // `ClassDef.imports` for each top-level class.
+    //
+    // Format:  short_name → fully_qualified_path
+    // Covers `Qualified` (C → A.B.C), `Renamed` (D = A.B.C → D → A.B.C),
+    // and `Selective` (import A.B.{C,D} → C → A.B.C, D → A.B.D).
+    // `Unqualified` (A.B.*) is not expanded here because it would
+    // require a second pass against the whole MSL index; that's a
+    // separate follow-up.
+    let mut imports_by_short: HashMap<String, String> = HashMap::new();
+    // Reuse the `ast` argument instead of re-parsing the source.
+    // The fake `if let Ok(ast) = _` wrapper used to shadow; now we
+    // just take a borrow of the already-parsed tree.
+    {
+        let ast = ast;
+        for (_class_name, class_def) in ast.classes.iter() {
+            for imp in &class_def.imports {
+                use rumoca_session::parsing::ast::Import;
+                match imp {
+                    Import::Qualified { path, .. } => {
+                        let full = path.to_string();
+                        if let Some(last) = full.rsplit('.').next() {
+                            imports_by_short.insert(last.to_string(), full.clone());
+                        }
+                    }
+                    Import::Renamed { alias, path, .. } => {
+                        imports_by_short.insert(alias.text.to_string(), path.to_string());
+                    }
+                    Import::Selective { path, names, .. } => {
+                        let base = path.to_string();
+                        for name in names {
+                            imports_by_short.insert(
+                                name.text.to_string(),
+                                format!("{}.{}", base, name.text),
+                            );
+                        }
+                    }
+                    Import::Unqualified { .. } => {
+                        // `import Pkg.*;` — expansion needs the full
+                        // package contents. Deferred.
+                    }
+                }
+            }
+        }
+    }
 
     // Place nodes in a grid layout (fallback for unannotated components)
     let node_spacing_x = 200.0;
@@ -1326,11 +1731,22 @@ fn import_model_to_diagram(source: &str) -> Option<VisualDiagram> {
         // Extract short name from qualified_name (e.g., "RC_Circuit.R1" → "R1")
         let short_name = node.qualified_name.split('.').last().unwrap_or(&node.qualified_name);
 
-        // Try to find matching MSL component definition
+        // Scope-aware type lookup:
+        //   1. `type_name` looks like a fully-qualified path → match directly.
+        //   2. `type_name` is a single segment → consult the class's
+        //      import table; if present, substitute the resolved full
+        //      path and look that up.
+        //   3. Otherwise: unresolved. Skip (same as an OM compile error
+        //      on an unknown type, but non-fatal here).
         let type_name = node.meta.get("type_name").map(|s| s.as_str()).unwrap_or("");
-        let component_def = msl_lookup.get(type_name)
-            .or_else(|| msl_lookup.get(short_name))
-            .cloned();
+        let resolved_path: Option<&str> = if type_name.contains('.') {
+            Some(type_name)
+        } else if let Some(full) = imports_by_short.get(type_name) {
+            Some(full.as_str())
+        } else {
+            None
+        };
+        let component_def = resolved_path.and_then(|p| msl_lookup_by_path.get(p).cloned());
 
         if let Some(def) = component_def {
             let mut pos = None;
@@ -1504,6 +1920,42 @@ fn sync_connections(snarl: &Snarl<DiagramNode>, diagram: &mut VisualDiagram) {
     }
 }
 
+/// Read all wires from snarl as a set of unordered `(component, port)`
+/// pairs. Canonicalised so `(A.p, B.n)` and `(B.n, A.p)` hash to the
+/// same entry — Modelica `connect(...)` is symmetric, so swapping
+/// endpoints shouldn't count as a different connection.
+///
+/// Used by the wire-diff logic in the panel render loop to detect
+/// newly-drawn / newly-removed wires between frames.
+fn read_wire_set(
+    snarl: &Snarl<DiagramNode>,
+) -> std::collections::HashSet<((String, String), (String, String))> {
+    let mut out = std::collections::HashSet::new();
+    for (out_pin, in_pin) in snarl.wires() {
+        let DiagramNode::Component { instance_name: src_name, ports: src_ports, .. } =
+            &snarl[out_pin.node];
+        let DiagramNode::Component { instance_name: tgt_name, ports: tgt_ports, .. } =
+            &snarl[in_pin.node];
+        let src_port = match src_ports.get(out_pin.output) {
+            Some(p) => p.clone(),
+            None => continue,
+        };
+        let tgt_port = match tgt_ports.get(in_pin.input) {
+            Some(p) => p.clone(),
+            None => continue,
+        };
+        let a = (src_name.clone(), src_port);
+        let b = (tgt_name.clone(), tgt_port);
+        // Canonicalise: smaller endpoint first.
+        if a <= b {
+            out.insert((a, b));
+        } else {
+            out.insert((b, a));
+        }
+    }
+    out
+}
+
 // ---------------------------------------------------------------------------
 // Diagram Panel
 // ---------------------------------------------------------------------------
@@ -1524,91 +1976,160 @@ impl Panel for DiagramPanel {
             world.insert_resource(DiagramTheme::default());
         }
 
-        // ── Check if open_model changed → trigger import task ──
+        // ── Phase α: track the active document ──
         //
-        // When the Package Browser opens a new model, it sets
-        // `diagram_dirty = true`. We spawn the parse task *and* clear the
-        // current visual state so the user sees either the reparsed
-        // diagram or an empty canvas — never a stale carry-over from a
-        // previously-open file or a user-built diagram that no longer
-        // belongs to the active source.
+        // The diagram is always editing *some* document. Whenever the
+        // open_model changes we rebind so the change-stream cursor
+        // resets and the next sync consumes the document's AST from
+        // scratch. Legacy import path still runs below during the
+        // transition; future work folds the import into a single
+        // document-driven rebuild triggered by `changes_since(0)`
+        // returning `None` (the fresh-bind sentinel).
         {
-            let dirty = world.get_resource::<WorkbenchState>()
-                .map(|s| s.diagram_dirty)
-                .unwrap_or(false);
-            if dirty {
-                let source = world.get_resource::<WorkbenchState>()
-                    .and_then(|s| s.open_model.as_ref().map(|m| m.source.clone()));
-                if let Some(mut ds) = world.get_resource_mut::<DiagramState>() {
-                    ds.diagram = VisualDiagram::default();
-                    ds.snarl = egui_snarl::Snarl::default();
+            let open_doc = world.get_resource::<WorkbenchState>()
+                .and_then(|s| s.open_model.as_ref().and_then(|m| m.doc));
+            if let Some(mut ds) = world.get_resource_mut::<DiagramState>() {
+                match open_doc {
+                    Some(id) => ds.bind_document(id),
+                    None => ds.unbind_document(),
+                }
+            }
+        }
+
+        // ── Phase α Step 3: document-driven snarl sync ──
+        //
+        // Whenever the bound document's generation has advanced past
+        // `last_seen_gen` — either because another panel (code
+        // editor) committed a ReplaceSource / EditText, because a
+        // fresh document just bound, or because the retention window
+        // dropped entries we'd have needed — we rebuild snarl from
+        // the document's current source.
+        //
+        // Our own ops emitted in the previous frame also bump the
+        // generation; to avoid a rebuild ping-pong we explicitly
+        // advance `last_seen_gen` after applying ops at the bottom of
+        // this render function (see `advance_cursor_after_apply`).
+        //
+        // The rebuild is synchronous — re-parsing a small Modelica
+        // file takes well under a frame budget. The old
+        // `AsyncComputeTaskPool`-driven background parse is gone
+        // (and with it the "Analyzing model structure..." spinner
+        // that flashed on every edit).
+        {
+            let sync_needed = {
+                let gen = world
+                    .get_resource::<crate::ui::ModelicaDocumentRegistry>()
+                    .and_then(|r| {
+                        world
+                            .get_resource::<DiagramState>()
+                            .and_then(|ds| ds.document)
+                            .and_then(|doc| r.host(doc))
+                            .map(|h| h.generation())
+                    });
+                let last = world
+                    .get_resource::<DiagramState>()
+                    .map(|ds| ds.last_seen_gen)
+                    .unwrap_or(0);
+                gen.map(|g| g != last).unwrap_or(false)
+            };
+
+            if sync_needed {
+                let source = world
+                    .get_resource::<DiagramState>()
+                    .and_then(|ds| ds.document)
+                    .and_then(|doc| {
+                        world
+                            .get_resource::<crate::ui::ModelicaDocumentRegistry>()
+                            .and_then(|r| r.host(doc))
+                            .map(|h| h.document().source().to_string())
+                    });
+                let new_gen = world
+                    .get_resource::<DiagramState>()
+                    .and_then(|ds| ds.document)
+                    .and_then(|doc| {
+                        world
+                            .get_resource::<crate::ui::ModelicaDocumentRegistry>()
+                            .and_then(|r| r.host(doc))
+                            .map(|h| h.generation())
+                    })
+                    .unwrap_or(0);
+                if let (Some(src), Some(mut ds)) =
+                    (source, world.get_resource_mut::<DiagramState>())
+                {
+                    // Synchronous rebuild. `import_model_to_diagram`
+                    // parses + walks the AST + emits a VisualDiagram;
+                    // we then rebuild snarl from it via the existing
+                    // `build_snarl` helper (invoked inside
+                    // `rebuild_snarl`).
+                    ds.diagram = import_model_to_diagram(&src).unwrap_or_default();
+                    ds.rebuild_snarl();
+                    // Diff caches are now stale — they referenced
+                    // snarl node state from before the rebuild. Clear
+                    // so the next frame establishes a fresh baseline
+                    // instead of firing spurious Add/Remove/SetPlacement
+                    // ops.
+                    ds.last_wires = read_wire_set(&ds.snarl);
+                    ds.last_positions = None;
+                    ds.last_seen_gen = new_gen;
                     ds.compile_status = None;
                 }
-                if let Some(source) = source {
-                    let pool = bevy::tasks::AsyncComputeTaskPool::get();
-                    let task = pool.spawn(async move {
-                        import_model_to_diagram(&source)
-                    });
-                    if let Some(mut ds) = world.get_resource_mut::<DiagramState>() {
-                        ds.parse_task = Some(task);
-                    }
-                }
+                // Legacy: the package browser still flips
+                // `diagram_dirty` on model switch; clear it so the
+                // flag doesn't linger after our sync has already
+                // handled the change.
                 if let Some(mut state) = world.get_resource_mut::<WorkbenchState>() {
                     state.diagram_dirty = false;
                 }
             }
         }
 
-        // ── Poll import task ──
+        // ── Empty-diagram policy ──
         //
-        // Treat a `None` result as "no diagram representable from this
-        // source" — keep the cleared canvas so the view honestly reflects
-        // the active model rather than silently falling back to old state.
-        let mut is_parsing = false;
-        if let Some(mut ds) = world.get_resource_mut::<DiagramState>() {
-            if let Some(mut task) = ds.parse_task.take() {
-                if let Some(diagram_opt) = futures_lite::future::block_on(futures_lite::future::poll_once(&mut task)) {
-                    ds.diagram = diagram_opt.unwrap_or_default();
-                    ds.rebuild_snarl();
-                } else {
-                    ds.parse_task = Some(task);
-                    is_parsing = true;
-                }
-            }
-        }
-
-        if is_parsing {
-            ui.vertical_centered(|ui| {
-                ui.add_space(100.0);
-                ui.spinner();
-                ui.heading("Analyzing model structure...");
-                ui.label(egui::RichText::new("Parsing Modelica AST for diagram visualization").size(10.0).color(egui::Color32::GRAY));
-            });
-            return;
-        }
-
-        // ── Equation-only empty state ──
+        // A class with no components can mean two very different
+        // things. We route by writability, not by emptiness:
         //
-        // Models like RocketEngine / Battery are pure equations, with
-        // no component instantiations or `connect` statements. There
-        // is nothing to draw — `import_model_to_diagram` returned
-        // `None`, so `ds.diagram.nodes` is empty. Rather than render a
-        // silent blank canvas, show the user *why* nothing is there
-        // and preview the model's shape (parameters, inputs,
-        // observables) so the Diagram view still communicates
-        // something.
+        // - **Read-only** (MSL library entries, bundled examples that
+        //   happen to be equation-based like RocketEngine / Battery /
+        //   BouncyBall): the user can't edit them anyway, so render
+        //   the class as a **single Icon-style block** — a preview of
+        //   how this model would look if dropped into a parent
+        //   diagram. That's [`render_equation_only_empty_state`].
         //
-        // Users with components that *should* show up see the canvas
-        // as normal; this branch only triggers when there's genuinely
-        // nothing visual.
+        // - **Writable** (a freshly-created file, a user model with
+        //   no components yet): render the **empty editable canvas**
+        //   so the user can immediately drag components from the
+        //   palette / right-click to add. Showing a single Icon block
+        //   here is a dead-end — it collapses the diagram into a
+        //   non-interactive preview of an empty class, which is
+        //   exactly backwards for authoring.
+        //
+        // The right mental model is: the diagram is always "the
+        // inside of this class." Only when the class is a black box
+        // we can't edit does it make sense to show it from the
+        // outside.
         let is_diagram_empty = world
             .get_resource::<DiagramState>()
             .map(|ds| ds.diagram.nodes.is_empty())
             .unwrap_or(true);
-        if is_diagram_empty {
+        let is_read_only = world
+            .get_resource::<WorkbenchState>()
+            .and_then(|s| s.open_model.as_ref())
+            .map(|m| m.read_only)
+            .unwrap_or(false);
+        if is_diagram_empty && is_read_only {
             render_equation_only_empty_state(ui, world);
             return;
         }
+
+        // Read-only models render the same snarl canvas but wrapped
+        // in a disabled UI scope: the user can pan/zoom/select to
+        // inspect structure, but drag, drops, right-click menus, and
+        // parameter edits are all blocked. This is stricter than
+        // "mutations silently fail" — inputs don't register at all.
+        //
+        // The visual grayed-out state from `add_enabled_ui(false)` is
+        // itself the signal: read-only mode is visible on the canvas,
+        // not only in a toolbar badge.
 
         // Body only. Identity (model name, read-only state), compile
         // button and view-mode switching all live on the ModelView panel's
@@ -1648,6 +2169,38 @@ impl Panel for DiagramPanel {
         let available_size = ui.available_size().max(egui::vec2(100.0, 500.0));
         let (rect, _) = ui.allocate_exact_size(available_size, egui::Sense::hover());
 
+        // Pull the editing-class name so AST-level ops know where to
+        // target. Prefer the live document AST (authoritative — reflects
+        // renames and content changes immediately), fall back to the
+        // open_model's memoized display name, and finally to the first
+        // top-level class in the parsed AST.
+        //
+        // Without a class name the diagram panel still mutates snarl
+        // but silently drops AST-op emission — the whole Phase α loop
+        // collapses. So we bend over backwards to produce *some* name.
+        let mut pending_ops: Vec<crate::document::ModelicaOp> = Vec::new();
+        let bound_doc = world
+            .get_resource::<DiagramState>()
+            .and_then(|ds| ds.document);
+        let editing_class: Option<String> = bound_doc
+            .and_then(|id| {
+                world
+                    .get_resource::<crate::ui::ModelicaDocumentRegistry>()
+                    .and_then(|r| r.host(id))
+                    .and_then(|h| {
+                        h.document()
+                            .ast()
+                            .ast()
+                            .and_then(|s| s.classes.keys().next().cloned())
+                    })
+            })
+            .or_else(|| {
+                world
+                    .get_resource::<WorkbenchState>()
+                    .and_then(|s| s.open_model.as_ref())
+                    .and_then(|m| m.detected_name.clone())
+            });
+
         if let Some(mut ds) = world.get_resource_mut::<DiagramState>() {
             let mut selected_node = ds.selected_node;
             let mut viewer = DiagramViewer {
@@ -1658,22 +2211,181 @@ impl Panel for DiagramPanel {
                 last_click_pos: ds.last_click_pos,
                 selected_node: &mut selected_node,
                 ctx: ui.ctx().clone(),
+                editing_class: editing_class.clone(),
+                pending_ops: Vec::new(),
             };
 
             // Render snarl inside the allocated rect using a stable child UI
-            // The rect.min must match the panel's start point for correct coordinate mapping
+            // The rect.min must match the panel's start point for correct coordinate mapping.
+            // We only wrap in a `disable()` scope when the model is
+            // read-only; on writable docs we call snarl directly so
+            // no extra UI layer can intercept / throttle input.
             ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |child_ui| {
                 child_ui.set_clip_rect(rect);
-                ds.snarl.show(&mut viewer, &snarl_style, "diagram", child_ui);
+                if is_read_only {
+                    child_ui.add_enabled_ui(false, |child_ui| {
+                        ds.snarl.show(&mut viewer, &snarl_style, "diagram", child_ui);
+                    });
+                } else {
+                    ds.snarl.show(&mut viewer, &snarl_style, "diagram", child_ui);
+                }
             });
 
             // Save back the click position and selection if they were updated
             ds.last_click_pos = viewer.last_click_pos;
+            pending_ops = viewer.pending_ops;
             ds.selected_node = selected_node;
+
+            // Phase α: position diff — emit `SetPlacement` for any
+            // component whose snarl position changed between frames.
+            // Snarl's graph space is +Y down; Modelica's diagram space
+            // is +Y up, so we flip y on the way out.
+            //
+            // On the first frame after bind (`last_positions = None`)
+            // we only record the baseline and emit nothing, so the
+            // initial render after an import doesn't replay SetPlacement
+            // for every component (which would thrash annotations
+            // that round-trip from source in a slightly different
+            // coordinate convention).
+            {
+                let mut now_positions: std::collections::HashMap<String, (f32, f32)> =
+                    std::collections::HashMap::new();
+                for (_id, pos, node) in ds.snarl.nodes_pos_ids() {
+                    let DiagramNode::Component { instance_name, .. } = node;
+                    now_positions.insert(instance_name.clone(), (pos.x, -pos.y));
+                }
+                match &ds.last_positions {
+                    Some(prev) => {
+                        if let Some(class) = editing_class.as_ref() {
+                            for (name, (x, y)) in &now_positions {
+                                let moved = match prev.get(name) {
+                                    Some((px, py)) => (*px - x).abs() > 0.5 || (*py - y).abs() > 0.5,
+                                    None => false, // newly added — AddComponent already carried its placement
+                                };
+                                if moved {
+                                    pending_ops.push(crate::document::ModelicaOp::SetPlacement {
+                                        class: class.clone(),
+                                        name: name.clone(),
+                                        placement: crate::pretty::Placement::at(*x, *y),
+                                    });
+                                }
+                            }
+                        }
+                    }
+                    None => {}
+                }
+                ds.last_positions = Some(now_positions);
+            }
+
+            // Phase α: wire diff — snarl is the authoring truth, the
+            // document catches up.
+            //
+            // Read the current wire set from snarl, canonicalise each
+            // wire as an *unordered* pair so the order of endpoints
+            // doesn't flip between `AddConnection` calls, and compare
+            // to `last_wires` from the previous frame:
+            //
+            //   - wires in `now` but not `last`  →  user drew a wire
+            //   - wires in `last` but not `now`  →  user disconnected
+            //
+            // We emit `AddConnection` / `RemoveConnection` per diff
+            // entry; the editing-class is resolved once and re-used.
+            let now_wires = read_wire_set(&ds.snarl);
+            if now_wires != ds.last_wires {
+                if let Some(class) = editing_class.as_ref() {
+                    for pair in now_wires.difference(&ds.last_wires) {
+                        pending_ops.push(crate::document::ModelicaOp::AddConnection {
+                            class: class.clone(),
+                            eq: crate::pretty::ConnectEquation {
+                                from: crate::pretty::PortRef::new(&pair.0.0, &pair.0.1),
+                                to: crate::pretty::PortRef::new(&pair.1.0, &pair.1.1),
+                                line: None,
+                            },
+                        });
+                    }
+                    for pair in ds.last_wires.difference(&now_wires) {
+                        pending_ops.push(crate::document::ModelicaOp::RemoveConnection {
+                            class: class.clone(),
+                            from: crate::pretty::PortRef::new(&pair.0.0, &pair.0.1),
+                            to: crate::pretty::PortRef::new(&pair.1.0, &pair.1.1),
+                        });
+                    }
+                }
+                ds.last_wires = now_wires;
+            }
 
             // Sync
             let DiagramState { snarl, diagram, .. } = &mut *ds;
             sync_connections(snarl, diagram);
+        }
+
+        // Drain AST ops emitted by the viewer and apply them to the
+        // bound document. Read-only models silently skip (the enabled
+        // guard above prevents emission in the first place, but the
+        // check here catches any stray ops from non-UI paths).
+        //
+        // After any successful ops land, mirror the document's new
+        // source back to `WorkbenchState.open_model.source` so other
+        // panels that read that cached string (code editor, library
+        // breadcrumb, etc.) immediately see the change. This is a
+        // transitional bridge — once the code editor reads the
+        // document directly, the write-back goes away.
+        if !pending_ops.is_empty() && !is_read_only {
+            if let Some(doc_id) = bound_doc {
+                let mut any_applied = false;
+                if let Some(mut registry) =
+                    world.get_resource_mut::<crate::ui::ModelicaDocumentRegistry>()
+                {
+                    if let Some(host) = registry.host_mut(doc_id) {
+                        for op in pending_ops {
+                            match host.apply(op) {
+                                Ok(_) => any_applied = true,
+                                Err(e) => warn!("[Diagram] AST op failed: {}", e),
+                            }
+                        }
+                    }
+                }
+                if any_applied {
+                    // Mirror the fresh source back to the cached
+                    // `open_model.source` so the code editor and any
+                    // other panel reading that field sees the update.
+                    let fresh = world
+                        .get_resource::<crate::ui::ModelicaDocumentRegistry>()
+                        .and_then(|r| r.host(doc_id))
+                        .map(|h| (h.document().source().to_string(), h.generation()));
+                    if let Some((src, new_gen)) = fresh {
+                        if let Some(mut ws) = world.get_resource_mut::<WorkbenchState>() {
+                            if let Some(open) = ws.open_model.as_mut() {
+                                // Recompute line starts alongside the
+                                // source update — the code editor
+                                // reads these for layout/navigation.
+                                let mut line_starts = vec![0usize];
+                                for (i, b) in src.as_bytes().iter().enumerate() {
+                                    if *b == b'\n' {
+                                        line_starts.push(i + 1);
+                                    }
+                                }
+                                open.source = std::sync::Arc::from(src.as_str());
+                                open.line_starts = line_starts.into();
+                                open.cached_galley = None;
+                            }
+                        }
+                        // Advance the sync cursor past our own ops so
+                        // the next frame's Step-3 sync doesn't
+                        // rebuild snarl in response to changes we
+                        // just produced. The viewer already applied
+                        // them to snarl directly.
+                        if let Some(mut ds) = world.get_resource_mut::<DiagramState>() {
+                            ds.last_seen_gen = new_gen;
+                            // `last_wires` / `last_positions` were
+                            // updated from snarl state earlier in
+                            // this same frame, so they already
+                            // reflect the post-edit snarl. No reset
+                            // needed here.
+                        }
+                    }
+                }
+            }
         }
 
         // The Compile button lives on the ModelViewPanel unified toolbar
@@ -1681,26 +2393,59 @@ impl Panel for DiagramPanel {
     }
 }
 
-/// Execute the diagram-to-compile workflow: generate Modelica source from
-/// the current [`DiagramState`] → write temp file → spawn or update a
-/// `ModelicaModel` entity → send [`ModelicaCommand::Compile`] to the
-/// worker. Public so [`crate::ui::panels::model_view::ModelViewPanel`]
-/// can dispatch it from the unified toolbar when the user is in
-/// Diagram mode.
+/// Execute the diagram-to-compile workflow for the *bound* document:
+/// read its current source → write temp file → spawn or reuse a
+/// `ModelicaModel` entity linked to that document → send
+/// [`ModelicaCommand::Compile`] to the worker.
+///
+/// Public so [`crate::ui::panels::model_view::ModelViewPanel`] can
+/// dispatch it from the unified toolbar when the user is in Diagram
+/// mode.
+///
+/// Phase α retires the old regenerate-from-VisualDiagram path that
+/// synthesised a fresh `VisualModel{n}.mo` on every compile. Every
+/// compile now targets the document the diagram is editing (stored on
+/// `DiagramState.document`) and uses its authoritative source —
+/// including whatever the code editor has typed and whatever the
+/// diagram's AST ops have spliced in.
 pub fn do_compile(world: &mut World) {
-    // Extract data first
-    let (model_counter, source, temp_path) = {
-        let Some(s) = world.get_resource::<DiagramState>() else { return };
-        let mc = s.model_counter + 1;
-        let model_name = format!("VisualModel{}", mc);
-        let source = generate_modelica_source(&s.diagram, &model_name);
-        let temp_dir = std::env::temp_dir().join("luncosim");
-        let _ = std::fs::create_dir_all(&temp_dir);
-        let temp_path = temp_dir.join(format!("{}.mo", model_name));
-        (mc, source, temp_path)
+    // 1. Resolve the bound document + its current source + class name.
+    let Some(doc_id) = world
+        .get_resource::<DiagramState>()
+        .and_then(|s| s.document)
+    else {
+        if let Some(mut s) = world.get_resource_mut::<DiagramState>() {
+            s.compile_status = Some("No document bound to diagram".into());
+            s.compile_ok = false;
+        }
+        return;
     };
 
-    // Write file
+    let (source, model_name) = {
+        let Some(registry) = world.get_resource::<crate::ui::ModelicaDocumentRegistry>() else {
+            return;
+        };
+        let Some(host) = registry.host(doc_id) else {
+            if let Some(mut s) = world.get_resource_mut::<DiagramState>() {
+                s.compile_status = Some("Bound document missing from registry".into());
+                s.compile_ok = false;
+            }
+            return;
+        };
+        let doc = host.document();
+        let source = doc.source().to_string();
+        let name = doc
+            .ast()
+            .ast()
+            .and_then(|s| s.classes.keys().next().cloned())
+            .unwrap_or_else(|| "Model".into());
+        (source, name)
+    };
+
+    // 2. Write the source to a temp file for the compiler worker.
+    let temp_dir = std::env::temp_dir().join("luncosim");
+    let _ = std::fs::create_dir_all(&temp_dir);
+    let temp_path = temp_dir.join(format!("{}.mo", model_name));
     if let Err(e) = std::fs::write(&temp_path, &source) {
         if let Some(mut s) = world.get_resource_mut::<DiagramState>() {
             s.compile_status = Some(format!("Write error: {}", e));
@@ -1709,44 +2454,45 @@ pub fn do_compile(world: &mut World) {
         return;
     }
 
-    // Allocate a Document up-front so the new entity is spawned with a
-    // valid `document` id pointing at the source we're about to compile.
-    let doc_id = world
-        .resource_mut::<crate::ui::ModelicaDocumentRegistry>()
-        .allocate(source.clone());
+    // 3. Bump the session counter (used as a fence for stale results).
+    let session_id = {
+        let mut s = world.resource_mut::<DiagramState>();
+        s.model_counter = s.model_counter.saturating_add(1);
+        s.model_counter as u64
+    };
 
-    // Spawn entity
-    let session_id = model_counter as u64;
-    let model_name = format!("VisualModel{}", model_counter);
-    let entity = world.spawn((
-        Name::new(model_name.clone()),
-        ModelicaModel {
-            model_path: temp_path,
-            model_name: model_name.clone(),
-            current_time: 0.0,
-            last_step_time: 0.0,
-            session_id,
-            paused: false,
-            parameters: HashMap::new(),
-            inputs: HashMap::new(),
-            variables: HashMap::new(),
-            descriptions: HashMap::new(),
-            document: doc_id,
-            is_stepping: true,
-        },
-    )).id();
+    // 4. Spawn the entity and link it to the existing document.
+    let entity = world
+        .spawn((
+            Name::new(model_name.clone()),
+            ModelicaModel {
+                model_path: temp_path,
+                model_name: model_name.clone(),
+                current_time: 0.0,
+                last_step_time: 0.0,
+                session_id,
+                paused: false,
+                parameters: HashMap::new(),
+                inputs: HashMap::new(),
+                variables: HashMap::new(),
+                descriptions: HashMap::new(),
+                document: doc_id,
+                is_stepping: true,
+            },
+        ))
+        .id();
 
     world
         .resource_mut::<crate::ui::ModelicaDocumentRegistry>()
         .link(entity, doc_id);
 
-    // Mark the document as compiling — UI (status chips, disabled button)
-    // reads this to reflect in-flight state.
+    // 5. Mark the document as compiling so UI chips / disabled states
+    //    reflect in-flight work.
     world
         .resource_mut::<crate::ui::CompileStates>()
         .set(doc_id, crate::ui::CompileState::Compiling);
 
-    // Send command
+    // 6. Dispatch to the worker.
     if let Some(channels) = world.get_resource::<ModelicaChannels>() {
         let _ = channels.tx.send(ModelicaCommand::Compile {
             entity,
@@ -1756,7 +2502,6 @@ pub fn do_compile(world: &mut World) {
         });
     }
     if let Some(mut s) = world.get_resource_mut::<DiagramState>() {
-        s.model_counter = model_counter;
         s.compile_status = Some("Compiling…".into());
     }
 }

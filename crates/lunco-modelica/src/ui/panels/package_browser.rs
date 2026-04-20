@@ -477,7 +477,23 @@ impl Panel for PackageBrowserPanel {
         {
             let mut tree_cache = world.resource_mut::<PackageTreeCache>();
 
-            egui::ScrollArea::vertical().show(ui, |ui| {
+            // `auto_shrink([false; 2])` tells egui to fill the full
+            // panel rect regardless of content size — without it the
+            // scroll viewport can end up shorter than the panel
+            // height, cutting off the last items and giving users no
+            // way to scroll to them (the symptom you hit with long
+            // package trees).
+            egui::ScrollArea::vertical()
+                .auto_shrink([false; 2])
+                .show(ui, |ui| {
+                // Clamp every descendant label to the panel width
+                // and truncate with ellipsis if it doesn't fit.
+                // Without this, long names (deep MSL paths, rename
+                // buffers, workspace paths) spill past the panel
+                // edge and the leading characters end up hidden
+                // behind neighbouring UI.
+                ui.set_max_width(ui.available_width());
+                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
                 let cache = &mut *tree_cache;
 
                 // ── WORKSPACE ──
@@ -898,24 +914,16 @@ fn commit_current_model_edits(world: &mut World) {
         return;
     }
 
-    // Visual diagram → source. If the user has placed components this
-    // takes precedence over the text buffer; in the current UX only one
-    // of the two is edited at a time.
-    let diagram_source = world
-        .get_resource::<crate::ui::panels::diagram::DiagramState>()
-        .filter(|ds| !ds.diagram.nodes.is_empty())
-        .map(|ds| crate::visual_diagram::generate_modelica_source(&ds.diagram, &model_name));
-
-    if let Some(src) = diagram_source {
-        world
-            .resource_mut::<ModelicaDocumentRegistry>()
-            .checkpoint_source(doc_id, src);
-        return;
-    }
-
-    // Fallback: commit the text buffer. If the user was in Text mode,
-    // their latest keystrokes may not have triggered `lost_focus()`
-    // before the click on the Package Browser.
+    // In Phase α, the diagram panel emits AST ops directly to the
+    // document on every edit — the document is already the source of
+    // truth for anything the user did in the diagram. No
+    // regenerate-from-VisualDiagram checkpoint is needed (or correct —
+    // the old path would overwrite hand-typed comments and
+    // unrepresented annotations). We just commit the text-buffer
+    // residue here: the code editor's focus-loss commit is normally
+    // enough, but the user may switch panels before the widget has
+    // fired `lost_focus()`, so we force a checkpoint on model switch.
+    let _ = model_name; // kept above for future per-class targeting
     let buffer = world
         .get_resource::<crate::ui::panels::code_editor::EditorBufferState>()
         .map(|b| b.text.clone());

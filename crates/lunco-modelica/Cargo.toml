@@ -25,6 +25,8 @@ lunco-doc = { path = "../lunco-doc" }
 lunco-doc-bevy = { path = "../lunco-doc-bevy" }
 lunco-workbench = { path = "../lunco-workbench" }
 lunco-viz = { path = "../lunco-viz" }
+lunco-canvas = { path = "../lunco-canvas" }
+lunco-cache = { path = "../lunco-cache" }
 egui-snarl = "0.9"
 egui_plot = "0.34.1"
 usvg = { version = "0.45", default-features = false }
@@ -42,6 +44,10 @@ anyhow = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 regex = "1.10"
+# rumoca's AST uses `indexmap::IndexMap` for class collections; we
+# reference the type directly in `ast_extract` helpers so our
+# hot-path extractors can walk the cached AST without any clone.
+indexmap = "2.6"
 futures-lite = "2.3"
 crossbeam-channel = "0.5"
 lunco-api = { path = "../lunco-api", optional = true }

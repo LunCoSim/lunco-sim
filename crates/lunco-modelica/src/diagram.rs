@@ -43,15 +43,25 @@ pub enum DiagramType {
 
 /// Builder that converts a Modelica AST into a [`ComponentGraph`].
 pub struct ModelicaComponentBuilder {
-    ast: StoredDefinition,
+    /// Shared reference to the parsed AST. Using `Arc` here instead
+    /// of an owned `StoredDefinition` is load-bearing: MSL package
+    /// files like `Modelica/Blocks/package.mo` parse into trees
+    /// tens of megabytes deep, and a naïve `.clone()` of the
+    /// whole tree on every projection is enough to push the OS
+    /// into swap and freeze the whole device. Cloning the `Arc` is
+    /// a single pointer bump regardless of tree size.
+    ast: std::sync::Arc<StoredDefinition>,
     diagram_type: DiagramType,
     /// If set, only build the diagram for this specific class name.
     target_class: Option<String>,
 }
 
 impl ModelicaComponentBuilder {
-    /// Create a new builder from a parsed AST.
-    pub fn from_ast(ast: StoredDefinition) -> Self {
+    /// Create a new builder from a shared parsed AST. The `Arc`
+    /// contract lets callers reuse the same AST across many
+    /// builders without any deep clone; see the `ast` field
+    /// comment for why this matters.
+    pub fn from_ast(ast: std::sync::Arc<StoredDefinition>) -> Self {
         Self {
             ast,
             diagram_type: DiagramType::BlockDiagram,
@@ -60,9 +70,24 @@ impl ModelicaComponentBuilder {
     }
 
     /// Create a new builder from raw Modelica source code.
+    ///
+    /// Uses rumoca's error-recovering `parse_to_syntax(...).best_effort()`
+    /// so partial / semantically-invalid sources still produce a
+    /// usable AST. The editor and diagram renderer should never go
+    /// blank just because the user typed a duplicate name, a missing
+    /// semicolon, or a half-finished construct — those are
+    /// diagnostics, not "the file ceased to exist" signals, and they
+    /// should match OMEdit / Dymola's "show everything, flag the
+    /// problem" behaviour.
+    ///
+    /// Returns `None` only if rumoca couldn't even construct a
+    /// recovery tree (i.e. catastrophically broken input). In
+    /// practice `parse_to_syntax` always returns *something*, so the
+    /// `None` branch is defensive.
     pub fn from_source(source: &str) -> Option<Self> {
-        let ast = rumoca_phase_parse::parse_to_ast(source, "model.mo").ok()?;
-        Some(Self::from_ast(ast))
+        let syntax = rumoca_phase_parse::parse_to_syntax(source, "model.mo");
+        let ast: StoredDefinition = syntax.best_effort().clone();
+        Some(Self::from_ast(std::sync::Arc::new(ast)))
     }
 
     /// Set the diagram type to generate.
@@ -328,18 +353,64 @@ impl ModelicaComponentBuilder {
     }
 
     fn get_target_class(&self, name: &str) -> Option<&ClassDef> {
-        // Direct lookup
-        if let Some(class) = self.ast.classes.get(name) {
+        find_class_by_qualified_name(&self.ast, name)
+    }
+}
+
+/// Resolve a qualified class name against a parsed `StoredDefinition`.
+///
+/// Shared between the projection builder and the drill-in install
+/// path (which uses it to decide the default view for the
+/// newly-opened tab — if the class has zero instantiated
+/// components, landing in Canvas shows an empty diagram, so
+/// Icon is a better default).
+///
+/// # Resolution rules
+///
+/// 1. **Single-segment name** — check top-level `ast.classes`,
+///    then one level of nested descent. Preserves historic
+///    behaviour for callers like `target_class("MyClass")`.
+/// 2. **Dotted path** — walk nested classes segment-by-segment.
+///    `"Blocks.Examples.FilterWithRiseTime"` inside
+///    `Modelica/Blocks/package.mo` descends
+///    `Blocks → Examples → FilterWithRiseTime`.
+/// 3. **`within` prefix tolerance** — if the full path starts
+///    with the AST's `within` clause, strip it before walking.
+///    Lets drill-in callers pass `"Modelica.Blocks.Continuous.CriticalDamping"`
+///    without knowing the file's internal rooting.
+pub fn find_class_by_qualified_name<'a>(
+    ast: &'a StoredDefinition,
+    name: &str,
+) -> Option<&'a ClassDef> {
+    if !name.contains('.') {
+        if let Some(class) = ast.classes.get(name) {
             return Some(class);
         }
-        // Nested lookup
-        for (_, class) in &self.ast.classes {
+        for (_, class) in &ast.classes {
             if let Some(nested) = class.classes.get(name) {
                 return Some(nested);
             }
         }
-        None
+        return None;
     }
+
+    let mut path: &str = name;
+    if let Some(within) = ast.within.as_ref() {
+        let within_str = within.to_string();
+        if let Some(rest) = path
+            .strip_prefix(&within_str)
+            .and_then(|s| s.strip_prefix('.'))
+        {
+            path = rest;
+        }
+    }
+    let mut segments = path.split('.');
+    let first = segments.next()?;
+    let mut current = ast.classes.get(first)?;
+    for seg in segments {
+        current = current.classes.get(seg)?;
+    }
+    Some(current)
 }
 
 /// Information about a connector instance in a Modelica model.

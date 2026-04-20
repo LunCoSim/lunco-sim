@@ -112,11 +112,15 @@ fn cleanup_removed_documents(
     mut removed: RemovedComponents<ModelicaModel>,
     registry: Option<ResMut<ModelicaDocumentRegistry>>,
     compile_states: Option<ResMut<CompileStates>>,
+    canvas_state: Option<ResMut<panels::canvas_diagram::CanvasDiagramState>>,
+    class_names: Option<ResMut<panels::canvas_diagram::DrilledInClassNames>>,
     signals: Option<ResMut<lunco_viz::SignalRegistry>>,
     viz_registry: Option<ResMut<lunco_viz::VisualizationRegistry>>,
 ) {
     let Some(mut registry) = registry else { return };
     let mut compile_states = compile_states;
+    let mut canvas_state = canvas_state;
+    let mut class_names = class_names;
     let mut signals = signals;
     let mut viz_registry = viz_registry;
     for entity in removed.read() {
@@ -124,6 +128,15 @@ fn cleanup_removed_documents(
             registry.remove_document(doc);
             if let Some(states) = compile_states.as_mut() {
                 states.remove(doc);
+            }
+            // Drop the per-doc canvas entry (viewport, selection,
+            // in-flight projection task) so a later tab reusing the
+            // id starts fresh. Matches how CompileStates is cleaned.
+            if let Some(canvas) = canvas_state.as_mut() {
+                canvas.drop_doc(doc);
+            }
+            if let Some(names) = class_names.as_mut() {
+                names.remove(doc);
             }
         }
         // Drop every registered signal + plot binding for this entity
@@ -177,6 +190,7 @@ impl Workspace for AnalyzeWorkspace {
         // default active tab).
         layout.set_bottom_tabs(vec![
             PanelId("modelica_graphs"),
+            PanelId("modelica_diagnostics"),
             PanelId("modelica_console"),
         ]);
     }
@@ -195,6 +209,12 @@ impl Plugin for ModelicaUiPlugin {
         // lifecycle events this plugin fires. One journal per App —
         // adding the plugin multiple times is a no-op on `init_resource`.
         app.add_plugins(lunco_doc_bevy::TwinJournalPlugin);
+
+        // Shared Modelica class cache — drill-in, preload, and
+        // (later) compile dep-walk all funnel through this one
+        // Arc-shared store so every .mo file is read once and
+        // parsed once per session.
+        app.add_plugins(crate::class_cache::ClassCachePlugin);
 
         // Intent layer: key chords → EditorIntent. Domain resolvers
         // (installed by ModelicaCommandsPlugin below) translate intents
@@ -217,20 +237,108 @@ impl Plugin for ModelicaUiPlugin {
             .init_resource::<panels::palette::PaletteState>()
             .init_resource::<panels::diagram::ModelSignatureCache>()
             .init_resource::<panels::console::ConsoleLog>()
+            .init_resource::<panels::diagnostics::DiagnosticsLog>()
             .insert_resource(panels::package_browser::PackageTreeCache::new())
             .add_systems(Update, panels::package_browser::handle_package_loading_tasks)
             .add_systems(Update, cleanup_removed_documents)
             .add_systems(Update, drain_document_changes)
+            .add_systems(Update, panels::diagnostics::refresh_diagnostics)
+            .add_systems(Startup, register_settings_menu)
             .register_panel(panels::package_browser::PackageBrowserPanel)
             .register_panel(panels::welcome::WelcomePanel)
             .register_panel(panels::telemetry::TelemetryPanel)
             .register_panel(panels::graphs::GraphsPanel)
             .register_panel(panels::console::ConsolePanel)
+            .register_panel(panels::diagnostics::DiagnosticsPanel)
             .register_panel(panels::inspector::InspectorPanel)
+            .register_panel(panels::canvas_diagram::CanvasDiagramPanel)
+            .init_resource::<panels::canvas_diagram::CanvasDiagramState>()
+            .init_resource::<panels::canvas_diagram::PaletteSettings>()
+            .init_resource::<panels::canvas_diagram::DiagramProjectionLimits>()
+            .init_resource::<panels::canvas_diagram::DrilledInClassNames>()
+            .init_resource::<panels::canvas_diagram::DrillInLoads>()
+            .init_resource::<panels::canvas_diagram::DuplicateLoads>()
+            .add_systems(Update, panels::canvas_diagram::drive_drill_in_loads)
+            .add_systems(Update, panels::canvas_diagram::drive_duplicate_loads)
             .register_panel(panels::palette::ComponentPalettePanel)
             // Multi-instance: one tab per open document. Instances are
             // opened at runtime by the Package Browser.
             .register_instance_panel(panels::model_view::ModelViewPanel::default())
             .register_workspace(AnalyzeWorkspace);
     }
+}
+
+/// Push Modelica editor preferences onto the application-wide
+/// Settings menu. Lives in the workbench Settings dropdown rather
+/// than a per-panel gear button — keeps editor toolbar tidy and
+/// all prefs discoverable in one place.
+fn register_settings_menu(world: &mut World) {
+    use bevy_egui::egui;
+    let Some(mut layout) = world
+        .get_resource_mut::<lunco_workbench::WorkbenchLayout>()
+    else {
+        return;
+    };
+    layout.register_settings(|ui, world| {
+        ui.label(egui::RichText::new("Code Editor").weak().small());
+        let mut buf = world.resource_mut::<panels::code_editor::EditorBufferState>();
+        ui.checkbox(&mut buf.word_wrap, "Word wrap")
+            .on_hover_text("Wrap long lines at editor width");
+        ui.checkbox(&mut buf.auto_indent, "Auto indent")
+            .on_hover_text("Copy previous line's indent on Enter");
+        drop(buf);
+        ui.separator();
+        ui.label(egui::RichText::new("Component Palette").weak().small());
+        let mut palette =
+            world.resource_mut::<panels::canvas_diagram::PaletteSettings>();
+        ui.checkbox(
+            &mut palette.show_icon_only_classes,
+            "Show icon-only classes",
+        )
+        .on_hover_text(
+            "Include decorative classes from `Modelica.*.Icons.*` \
+             subpackages in the add-component menu. Off by default \
+             because they have no connectors and typically aren't \
+             what a user wants to drop on a diagram.",
+        );
+        drop(palette);
+        ui.separator();
+        ui.label(egui::RichText::new("Diagram").weak().small());
+        let mut limits =
+            world.resource_mut::<panels::canvas_diagram::DiagramProjectionLimits>();
+        ui.horizontal(|ui| {
+            ui.label("Max nodes");
+            ui.add(
+                egui::DragValue::new(&mut limits.max_nodes)
+                    .range(10..=100_000)
+                    .speed(10.0),
+            )
+            .on_hover_text(
+                "Upper bound on component count before the projector \
+                 bails out with a warning. Raise for large models; \
+                 lower if projections feel slow on modest hardware.",
+            );
+        });
+        ui.horizontal(|ui| {
+            ui.label("Timeout (s)");
+            let mut secs = limits.max_duration.as_secs();
+            if ui
+                .add(
+                    egui::DragValue::new(&mut secs)
+                        .range(1_u64..=3600)
+                        .speed(1.0),
+                )
+                .on_hover_text(
+                    "Wall-clock deadline for a single projection. \
+                     If the background parse + build takes longer, \
+                     the task is cancelled and the canvas stays empty \
+                     with a log warning. Default 60 s — only huge or \
+                     pathological models get close.",
+                )
+                .changed()
+            {
+                limits.max_duration = std::time::Duration::from_secs(secs);
+            }
+        });
+    });
 }

@@ -7,49 +7,75 @@ Modelica simulation integration for LunCoSim using Rumoca.
 - **Modelica compilation** — parses and compiles `.mo` files via `rumoca-session`
 - **Simulation execution** — runs Modelica models as `SimStepper` instances
 - **Workbench UI** — code editor, component diagrams, parameter tuning, time-series plots
-- **AST-based extraction** — full Modelica AST parsing (no regex) for symbols, components, connections
+- **AST-based editing** — a `ModelicaDocument` whose source is canonical and whose AST is cached + refreshed per op; every editing action (diagram, code editor, parameter inspector) funnels through a typed `ModelicaOp` and a single span-based apply pipeline
 
-## Architecture
+> Full architecture (document model, op set, apply pipeline, name
+> resolution, diagram ↔ code sync) lives in
+> [**`docs/architecture/20-domain-modelica.md`**](../../docs/architecture/20-domain-modelica.md).
 
-### Entity Viewer Pattern
+## Architecture at a glance
 
-All UI panels watch a `ModelicaModel` entity and render its data. They don't know if they're in a standalone workbench, a 3D overlay, or a mission dashboard.
+### Document as source of truth
+
+`ModelicaDocument` owns:
+
+- **`source: String`** — canonical text (lossless round-trip of comments + formatting)
+- **`ast: Arc<AstCache>`** — parsed AST, refreshed eagerly after every mutation
+- **`changes: VecDeque<(u64, ModelicaChange)>`** — structured change ring buffer for consumer polling
+
+Op set: `ReplaceSource`, `EditText`, `AddComponent`,
+`RemoveComponent`, `AddConnection`, `RemoveConnection`,
+`SetPlacement`, `SetParameter`. Every variant — even the structural
+ones — is applied as a span-located text patch, so comments and
+formatting outside the edited range stay intact.
+
+See [`src/document.rs`](src/document.rs) for the full op surface and
+[`src/pretty.rs`](src/pretty.rs) for the subset pretty-printer used
+when emitting new nodes.
+
+### Entity viewer pattern
+
+All UI panels watch a `ModelicaModel` entity (which points at a
+document via `DocumentId`) and render from the shared document:
 
 ```
-                    ModelicaModel entity
-                    (attached to 3D objects
-                     or standalone workbench)
-                              │
-           ┌──────────────────┼──────────────────┐
-           ▼                  ▼                  ▼
-     DiagramPanel      CodeEditorPanel    TelemetryPanel
-     (egui-snarl)      (text editor)      (params/inputs)
+              ModelicaDocument  ◀─── AST ops from any panel
+                   │                 (diagram, inspector, code edit)
+       ┌───────────┼──────────────┐
+       ▼           ▼              ▼
+  DiagramPanel  CodeEditor    InspectorPanel
+  (snarl as     (text editor  (params, inputs,
+   view over     with debounced  live variables)
+   document)     commit → doc)
 ```
 
-`WorkbenchState.selected_entity` is the **selection bridge** — any context (library browser, 3D viewport click, colony tree) can set it to open the Modelica editor for any entity.
+`WorkbenchState.selected_entity` is the selection bridge — any
+context (library browser, 3D viewport click, colony tree) can set
+it to open the Modelica editor for any entity.
 
-### Diagram System
+### Diagram panel
 
-```
-rumoca-phase-parse (AST)
-        │
-        ▼
-ast_extract.rs (symbol extraction — no regex)
-        │
-        ▼
-ModelicaComponentBuilder (AST → ComponentGraph)
-        │
-        ▼
-ComponentGraph (canonical graph data in lunco-core)
-        │
-        ▼
-Snarl<ModelicaNode> (egui-snarl rendering in DiagramPanel)
-```
+The diagram panel is an **egui-snarl view over the document**:
 
-**Diagram types:**
-- **Block Diagram** — components as nodes, `connect()` as edges
-- **Connection Diagram** — connector instances expanded as separate nodes
-- **Package Hierarchy** — packages as subsystem nodes with containment edges
+- On every frame, if `doc.generation()` advanced past `last_seen_gen`,
+  rebuild snarl from the cached AST (synchronous — sub-millisecond).
+- User actions (drag from palette, draw wire, drag to move, right-click
+  delete) emit AST ops. The outer render loop drains them and applies
+  to the document.
+- Type references in rebuilt source are resolved via MLS §5.3 rules —
+  fully-qualified path or import-based scope lookup — see
+  [architecture § 5.6](../../docs/architecture/20-domain-modelica.md#56-type-resolution-mls-53).
+
+### Code editor
+
+Text-backed editor with IDE-standard **debounced commit**:
+
+- Per-keystroke → local buffer only
+- ~350 ms idle (or focus-loss) → `ReplaceSource` to the document
+- Diagram panel sees the generation bump on its next frame → rebuild
+
+Word-wrap is toggleable at the top of the panel (default off — long
+lines scroll horizontally, matching VS Code's default).
 
 ### Panel Layout
 
@@ -80,5 +106,9 @@ Users can drag, split, tab, and float panels freely. Layout persists via `bevy_w
 
 ## See Also
 
+- [**Modelica Domain Architecture**](../../docs/architecture/20-domain-modelica.md) — full design doc: document model, op set, pretty-printer, name resolution (MLS §5.3), diagram ↔ code sync
+- [Document System Foundation](../../docs/architecture/10-document-system.md) — shared `Document` / `DocumentOp` / `DocumentHost` trait layer
 - [Workspace UI/UX Research](../../docs/research-ui-ux-architecture.md) — architecture decisions
 - [Plan: Switch to Parser](../../docs/plan-switch-to-parser.md) — regex → AST migration
+- [Modelica Language Specification §5.3](https://specification.modelica.org/maint/3.7/class-predefined-types-and-declarations.html#static-name-lookup) — the static name lookup rules our type resolver follows
+- [Modelica Language Specification §18](https://specification.modelica.org/maint/3.7/annotations.html) — `Placement`, `Line`, `Icon` annotation shapes

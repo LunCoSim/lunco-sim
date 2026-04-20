@@ -24,7 +24,9 @@ use lunco_doc::DocumentId;
 use lunco_workbench::{InstancePanel, Panel, PanelId, PanelSlot};
 
 use crate::ui::panels::code_editor::EditorBufferState;
-use crate::ui::panels::{code_editor::CodeEditorPanel, diagram::DiagramPanel};
+use crate::ui::panels::{
+    canvas_diagram::CanvasDiagramPanel, code_editor::CodeEditorPanel,
+};
 use crate::ui::{CompileState, CompileStates, ModelicaDocumentRegistry, WorkbenchState};
 
 /// The `PanelId` under which `ModelViewPanel` is registered as an
@@ -37,8 +39,13 @@ pub enum ModelViewMode {
     /// Raw Modelica source (egui TextEdit).
     #[default]
     Text,
-    /// Block-diagram canvas (egui-snarl).
-    Diagram,
+    /// Block-diagram canvas (lunco-canvas). Replaced the old
+    /// egui-snarl-based variant.
+    Canvas,
+    /// The class's own `Icon` annotation rendering — what the
+    /// component looks like when instantiated in a parent diagram.
+    /// OMEdit/Dymola have Icon + Diagram as sibling views.
+    Icon,
 }
 
 /// Per-tab state for a [`ModelViewPanel`] instance. One entry per
@@ -96,6 +103,13 @@ impl ModelTabs {
         self.tabs.get(&doc)
     }
 
+    /// Iterate the document ids of every currently-open tab.
+    /// Used by drill-in to avoid re-allocating a document when the
+    /// same class is already open in a tab.
+    pub fn iter_docs(&self) -> impl Iterator<Item = DocumentId> + '_ {
+        self.tabs.keys().copied()
+    }
+
     /// Mutable lookup.
     pub fn get_mut(&mut self, doc: DocumentId) -> Option<&mut ModelTabState> {
         self.tabs.get_mut(&doc)
@@ -115,14 +129,14 @@ pub struct ModelViewPanel {
     /// rendered by [`render_unified_toolbar`] before dispatching to
     /// one of these based on the tab's current view mode.
     code: CodeEditorPanel,
-    diagram: DiagramPanel,
+    canvas: CanvasDiagramPanel,
 }
 
 impl Default for ModelViewPanel {
     fn default() -> Self {
         Self {
             code: CodeEditorPanel,
-            diagram: DiagramPanel,
+            canvas: CanvasDiagramPanel,
         }
     }
 }
@@ -195,9 +209,35 @@ impl InstancePanel for ModelViewPanel {
         // (both of which still read `open_model` / `EditorBufferState`
         // / `DiagramState`, which `sync_active_tab_to_doc` just
         // pointed at this tab's document).
+        // Diagnostic: log on first render per tab (view switches
+        // don't re-log — one-shot per tab open) so we can see which
+        // body path the freeze is hitting. Throw-away; promoted to
+        // a Diagnostics event if this turns out to be the culprit.
+        {
+            use std::sync::{Mutex, OnceLock};
+            static SEEN: OnceLock<Mutex<std::collections::HashSet<(u64, u8)>>> =
+                OnceLock::new();
+            let seen = SEEN.get_or_init(|| Mutex::new(Default::default()));
+            let tag = match new_view_mode {
+                ModelViewMode::Text => 0u8,
+                ModelViewMode::Canvas => 1,
+                ModelViewMode::Icon => 2,
+            };
+            if let Ok(mut s) = seen.lock() {
+                if s.insert((doc.raw(), tag)) {
+                    bevy::log::info!(
+                        "[ModelView] rendering tab doc={:?} mode={:?}",
+                        doc,
+                        new_view_mode,
+                    );
+                }
+            }
+        }
+
         match new_view_mode {
             ModelViewMode::Text => self.code.render(ui, world),
-            ModelViewMode::Diagram => self.diagram.render(ui, world),
+            ModelViewMode::Canvas => self.canvas.render(ui, world),
+            ModelViewMode::Icon => render_icon_view(ui, world),
         }
     }
 }
@@ -237,15 +277,27 @@ fn resolve_tab_title(world: &World, doc: DocumentId) -> (String, bool, bool) {
 /// the active one). Mutates `selected_entity` to one of the entities
 /// linked to `doc`, if any — that's what the Telemetry / Inspector
 /// / Graphs side panels filter by.
-fn sync_active_tab_to_doc(world: &mut World, doc: DocumentId) {
-    // Already active? Nothing to do.
-    let already_active = world
-        .resource::<WorkbenchState>()
-        .open_model
-        .as_ref()
-        .and_then(|m| m.doc)
-        == Some(doc);
-    if already_active {
+pub(crate) fn sync_active_tab_to_doc(world: &mut World, doc: DocumentId) {
+    // Already active AND the cached snapshot is from the real doc
+    // (not a placeholder that filled in while a drill-in load was
+    // still in flight). The check on non-empty source distinguishes:
+    //   - Real snapshot: source is the file contents → nothing to do.
+    //   - Placeholder: source is "" because host was still missing
+    //     when we last synced → refresh now that the registry has
+    //     the real document.
+    //
+    // Without the second condition, drill-in tabs could get stuck
+    // showing an empty Text view forever: sync runs with a placeholder,
+    // `already_active` fires, we short-circuit, and the real
+    // source never lands until the user manually switches tabs.
+    let (already_active, source_is_placeholder) = {
+        let ws = world.resource::<WorkbenchState>();
+        match ws.open_model.as_ref() {
+            Some(open) => (open.doc == Some(doc), open.source.is_empty()),
+            None => (false, false),
+        }
+    };
+    if already_active && !source_is_placeholder {
         // Still refresh selected_entity in case an entity linked to
         // this doc was spawned since the last switch.
         refresh_selected_entity_for(world, doc);
@@ -253,7 +305,11 @@ fn sync_active_tab_to_doc(world: &mut World, doc: DocumentId) {
     }
 
     // Gather read-side data up front so we don't hold two borrows
-    // at once.
+    // at once. `detected_name` comes from the doc's cached AST —
+    // MUST NOT re-parse here. Previously this called
+    // `ast_extract::extract_model_name(source)` which kicked off an
+    // uncached rumoca parse on the main thread; on a 184 KB
+    // drill-in source that froze the UI for ~200 s in debug builds.
     let snapshot = {
         let registry = world.resource::<ModelicaDocumentRegistry>();
         registry.host(doc).map(|h| {
@@ -279,17 +335,85 @@ fn sync_active_tab_to_doc(world: &mut World, doc: DocumentId) {
                     crate::ui::state::ModelLibrary::Bundled
                 }
             };
+            // `document.is_read_only()` means "can't Save without
+            // Save-As" — true for Untitled docs despite Untitled
+            // being fully editable. For UI purposes (right-click
+            // menu, apply_ops gate) "read-only" means "library
+            // class the user isn't allowed to mutate", so tie it
+            // to the library classification instead: only Bundled
+            // (MSL, drill-in target) is read-only; Untitled and
+            // User files are both editable.
+            let read_only =
+                matches!(library, crate::ui::state::ModelLibrary::Bundled);
+            let detected_name = document
+                .ast()
+                .ast()
+                .and_then(crate::ast_extract::extract_model_name_from_ast);
             (
                 path_str,
                 display_name,
                 document.source().to_string(),
-                document.is_read_only(),
+                read_only,
                 library,
+                detected_name,
             )
         })
     };
 
-    let Some((path_str, display_name, source, read_only, library)) = snapshot else {
+    // Fallback: the doc is a placeholder reserved by drill-in and
+    // its bg load hasn't finished yet (so `registry.host(doc)` is
+    // still None). We still need to flip `open_model.doc` to this
+    // tab's id — otherwise every per-doc lookup downstream (canvas
+    // state, loading overlay, read-only gate) keeps routing to the
+    // PREVIOUS tab's doc and the new tab visually mirrors it until
+    // the parse completes. Use the DrillInLoads entry for a
+    // display name; the source stays empty until the real document
+    // is installed.
+    let snapshot = snapshot.or_else(|| {
+        // Drill-in tab still loading? Use the qualified name as
+        // the placeholder identity.
+        if let Some(loads) = world
+            .get_resource::<crate::ui::panels::canvas_diagram::DrillInLoads>()
+        {
+            if let Some(qualified) = loads.detail(doc) {
+                let qualified = qualified.to_string();
+                let short = qualified
+                    .rsplit('.')
+                    .next()
+                    .map(str::to_string)
+                    .unwrap_or_else(|| qualified.clone());
+                return Some((
+                    format!("msl://{qualified}"),
+                    short.clone(),
+                    String::new(),
+                    true,
+                    crate::ui::state::ModelLibrary::Bundled,
+                    Some(short),
+                ));
+            }
+        }
+        // Duplicate-to-workspace tab still building? Use the target
+        // display name; the copy is editable (not read-only).
+        if let Some(dup) = world
+            .get_resource::<crate::ui::panels::canvas_diagram::DuplicateLoads>()
+        {
+            if let Some(display) = dup.detail(doc) {
+                let display = display.to_string();
+                return Some((
+                    format!("mem://{display}"),
+                    display.clone(),
+                    String::new(),
+                    false,
+                    crate::ui::state::ModelLibrary::InMemory,
+                    Some(display),
+                ));
+            }
+        }
+        None
+    });
+    let Some((path_str, display_name, source, read_only, library, detected_name)) =
+        snapshot
+    else {
         return;
     };
 
@@ -300,7 +424,6 @@ fn sync_active_tab_to_doc(world: &mut World, doc: DocumentId) {
             line_starts.push(i + 1);
         }
     }
-    let detected_name = crate::ast_extract::extract_model_name(&source);
 
     // Update WorkbenchState.
     {
@@ -391,6 +514,19 @@ fn render_unified_toolbar(
         .as_ref()
         .map(|m| m.read_only)
         .unwrap_or(false);
+    // Icon-only class (MSL `Modelica.*.Icons.*` subtree): no
+    // connectors, nothing to diagram. `model_path` carries the
+    // `msl://<qualified>` URI for drill-in tabs, so the
+    // path-based helper works on it directly.
+    let is_icon_only_tab = world
+        .resource::<WorkbenchState>()
+        .open_model
+        .as_ref()
+        .map(|m| {
+            crate::class_cache::is_icon_only_class(&m.model_path)
+                || m.model_path.contains("/Icons/")
+        })
+        .unwrap_or(false);
     let compilation_error = world.resource::<WorkbenchState>().compilation_error.clone();
 
     let undo_redo = world
@@ -403,6 +539,7 @@ fn render_unified_toolbar(
     let mut undo_clicked = false;
     let mut redo_clicked = false;
     let mut dismiss_error = false;
+    let mut duplicate_clicked = false;
     let mut new_view_mode = view_mode;
 
     ui.horizontal(|ui| {
@@ -416,12 +553,23 @@ fn render_unified_toolbar(
         }
 
         let text_sel = view_mode == ModelViewMode::Text;
-        let diag_sel = view_mode == ModelViewMode::Diagram;
+        let canv_sel = view_mode == ModelViewMode::Canvas;
+        let icon_sel = view_mode == ModelViewMode::Icon;
+        // All three views are always available — OMEdit/Dymola
+        // pattern. A partial or icon-only class has a legitimately
+        // empty Diagram layer, and users should be able to view it.
+        // The smart "land in the right view by default" happens at
+        // install time (see `drive_drill_in_loads`), not by hiding
+        // buttons.
+        let _ = (is_read_only, is_icon_only_tab);
         if ui.selectable_label(text_sel, "📝 Text").clicked() {
             new_view_mode = ModelViewMode::Text;
         }
-        if ui.selectable_label(diag_sel, "🔗 Diagram").clicked() {
-            new_view_mode = ModelViewMode::Diagram;
+        if ui.selectable_label(canv_sel, "🔗 Diagram").clicked() {
+            new_view_mode = ModelViewMode::Canvas;
+        }
+        if ui.selectable_label(icon_sel, "🎨 Icon").clicked() {
+            new_view_mode = ModelViewMode::Icon;
         }
         ui.separator();
 
@@ -466,12 +614,28 @@ fn render_unified_toolbar(
         // read-only Example is a valid (and common) workflow. Save
         // stays gated on writable; Compile only waits for an
         // in-flight compile to settle.
-        let _ = is_read_only;
         let compile_enabled = !matches!(compile_state, CompileState::Compiling);
         compile_clicked = ui
             .add_enabled(compile_enabled, egui::Button::new("🚀 Compile"))
             .on_hover_text("Compile the current model and run it (F5)")
             .clicked();
+
+        // Duplicate-to-workspace: only offered on read-only tabs.
+        // Users browsing an MSL Example who want to tweak parameters
+        // hit this to get an editable copy in a new tab; the library
+        // original stays untouched. Mirrors Dymola's "make your own
+        // copy" workflow for example models.
+        if is_read_only {
+            ui.separator();
+            duplicate_clicked = ui
+                .button("📄 Duplicate to Workspace")
+                .on_hover_text(
+                    "Copy this library class into a new editable Untitled \
+                     model so you can tweak parameters / connections \
+                     without modifying the MSL source.",
+                )
+                .clicked();
+        }
     });
 
     // Apply side effects after the closure.
@@ -486,6 +650,13 @@ fn render_unified_toolbar(
     if redo_clicked {
         world.commands().trigger(lunco_doc_bevy::RedoDocument { doc });
     }
+    if duplicate_clicked {
+        world
+            .commands()
+            .trigger(crate::ui::commands::DuplicateModelFromReadOnly {
+                source_doc: doc,
+            });
+    }
     if compile_clicked {
         match new_view_mode {
             ModelViewMode::Text => {
@@ -497,27 +668,169 @@ fn render_unified_toolbar(
                 }
                 world.commands().trigger(crate::ui::CompileModel { doc });
             }
-            ModelViewMode::Diagram => {
-                // Diagram-mode compile regenerates source from the
-                // visual-node graph. That only makes sense when the
-                // user actually composed something visually — for an
-                // equation-only model (e.g. RocketEngine) the graph
-                // is empty and the generated source is a bare
-                // `model X end X;`, which trips EmptySystem in the
-                // solver. Fall back to compiling the document source
-                // in that case so Compile always "does the obvious
-                // thing" regardless of view.
-                let diagram_is_empty = world
-                    .get_resource::<crate::ui::panels::diagram::DiagramState>()
-                    .map(|s| s.diagram.nodes.is_empty())
-                    .unwrap_or(true);
-                if diagram_is_empty {
-                    world.commands().trigger(crate::ui::CompileModel { doc });
-                } else {
-                    crate::ui::panels::diagram::do_compile(world);
-                }
+            ModelViewMode::Canvas => {
+                // Canvas is a read-only view in B2 — compile just
+                // routes through the document source, same as Text.
+                // B3 (doc write-back) will emit real ops from drag /
+                // connect; compile can then stay the same.
+                world.commands().trigger(crate::ui::CompileModel { doc });
+            }
+            ModelViewMode::Icon => {
+                // Icon is a pure display view — compile-from-icon
+                // doesn't mean anything, route through the document
+                // source the same as Text does.
+                world.commands().trigger(crate::ui::CompileModel { doc });
             }
         }
     }
     new_view_mode
+}
+
+/// Render the class's icon. Priority order:
+///
+/// 1. MSL-registered class: look up its `icon_asset` in
+///    `msl_component_library` by qualified name (from
+///    `open_model.model_path` when it's an `msl://…` id, or from
+///    `detected_name` for plain-short-name matches) and render the
+///    SVG if present.
+/// 2. Class with an inline `Icon` annotation: TBD — needs an Icon-
+///    primitives renderer. Currently shows the placeholder.
+/// 3. Everything else: a friendly "no icon defined" placeholder so
+///    the tab doesn't appear broken.
+///
+/// Always centred in the available rect, aspect-preserving.
+fn render_icon_view(ui: &mut egui::Ui, world: &mut World) {
+    let (qualified, _source) = {
+        let ws = world.resource::<WorkbenchState>();
+        let Some(open) = ws.open_model.as_ref() else {
+            ui.centered_and_justified(|ui| {
+                ui.label(
+                    egui::RichText::new("No model open").weak(),
+                );
+            });
+            return;
+        };
+        // Prefer the msl://Full.Qualified.Name path if we have one
+        // (drill-in sets this); otherwise fall back to detected
+        // short name, which matches MSL entries by suffix.
+        let from_path = open
+            .model_path
+            .strip_prefix("msl://")
+            .map(|s| s.to_string());
+        let short = open.detected_name.clone().unwrap_or_default();
+        (
+            from_path.unwrap_or_else(|| short.clone()),
+            open.source.clone(),
+        )
+    };
+
+    // Look up MSL entry. Qualified match first (exact), then any
+    // entry whose msl_path ends in `.<short>` for best-effort
+    // resolution of local models that reference an MSL class.
+    let icon_asset = {
+        let lib = crate::visual_diagram::msl_component_library();
+        lib.iter()
+            .find(|c| c.msl_path == qualified)
+            .or_else(|| {
+                // Try short-name tail match.
+                let short = qualified.rsplit('.').next().unwrap_or(&qualified);
+                lib.iter()
+                    .find(|c| c.msl_path.rsplit('.').next() == Some(short))
+            })
+            .and_then(|c| c.icon_asset.clone())
+    };
+
+    let painter = ui.painter();
+    let rect = ui.available_rect_before_wrap();
+
+    // Diagram frame (Dymola's square coordinate box).
+    painter.rect_stroke(
+        rect.shrink(12.0),
+        4.0,
+        egui::Stroke::new(
+            1.0,
+            egui::Color32::from_rgba_premultiplied(90, 100, 120, 120),
+        ),
+        egui::StrokeKind::Outside,
+    );
+
+    if let Some(path) = icon_asset {
+        if let Some(bytes) = svg_bytes_for_icon(&path) {
+            // Render into a centred square that's at most ~60 % of
+            // the smaller rect dimension — leaves breathing room
+            // and matches Dymola's Icon tab sizing.
+            let side = (rect.width().min(rect.height()) * 0.6).max(100.0);
+            let icon_rect = egui::Rect::from_center_size(
+                rect.center(),
+                egui::vec2(side, side),
+            );
+            crate::ui::panels::svg_renderer::draw_svg_to_egui(
+                painter, icon_rect, &bytes,
+            );
+            // Class name under the icon.
+            painter.text(
+                egui::pos2(icon_rect.center().x, icon_rect.max.y + 16.0),
+                egui::Align2::CENTER_TOP,
+                &qualified,
+                egui::FontId::proportional(13.0),
+                egui::Color32::from_rgb(200, 210, 225),
+            );
+            return;
+        }
+    }
+
+    // Fallback placeholder — the class has no known icon. Same
+    // centered-card pattern the empty-diagram overlay uses, via
+    // the shared [`placeholder::render_centered_card`] helper so
+    // both views stay visually aligned and the centering doesn't
+    // drift between them as features get added.
+    crate::ui::panels::placeholder::render_centered_card(
+        ui,
+        rect,
+        egui::vec2(380.0, 170.0),
+        |ui| {
+            ui.label(
+                egui::RichText::new("🎨")
+                    .size(36.0)
+                    .color(egui::Color32::from_rgb(120, 130, 150)),
+            );
+            ui.add_space(6.0);
+            ui.label(
+                egui::RichText::new("No icon defined for this class")
+                    .strong()
+                    .color(egui::Color32::from_rgb(220, 225, 235)),
+            );
+            ui.add_space(4.0);
+            ui.label(
+                egui::RichText::new(
+                    "Add an `annotation(Icon(graphics={…}))` clause \
+                     in the Text tab, or instantiate this class in a \
+                     parent diagram.",
+                )
+                .italics()
+                .size(11.0)
+                .color(egui::Color32::from_rgb(140, 155, 175)),
+            );
+        },
+    );
+}
+
+/// SVG byte cache shared with the canvas panel — same lookup path
+/// as `canvas_diagram::svg_bytes_for`. Duplicated here rather than
+/// exposed as `pub` because the panel module graph is a flat
+/// `src/ui/panels/` listing and I'd prefer not to expose a cache
+/// function just for this.
+fn svg_bytes_for_icon(asset_path: &str) -> Option<std::sync::Arc<Vec<u8>>> {
+    use std::sync::{Mutex, OnceLock};
+    static CACHE: OnceLock<Mutex<HashMap<String, Option<std::sync::Arc<Vec<u8>>>>>> =
+        OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut map = cache.lock().expect("svg icon cache poisoned");
+    if let Some(cached) = map.get(asset_path) {
+        return cached.clone();
+    }
+    let full = lunco_assets::msl_dir().join(asset_path);
+    let loaded = std::fs::read(&full).ok().map(std::sync::Arc::new);
+    map.insert(asset_path.to_string(), loaded.clone());
+    loaded
 }

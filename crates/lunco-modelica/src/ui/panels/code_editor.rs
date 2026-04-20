@@ -23,7 +23,61 @@ pub struct EditorBufferState {
     pub detected_name: Option<String>,
     /// Pre-computed text layout for high-performance rendering.
     pub cached_galley: Option<Arc<egui::Galley>>,
+    /// When `true` long lines wrap at the editor width; when `false`
+    /// (default) long lines stay on one line and the view scrolls
+    /// horizontally — mirroring VS Code's default "Word Wrap: Off".
+    pub word_wrap: bool,
+    /// When `true` (default), pressing Enter copies the previous
+    /// line's leading whitespace onto the new line — i.e. continues
+    /// at the same indent level. Mirrors the default behaviour of
+    /// every modern code editor (VS Code, Sublime, IntelliJ, Emacs
+    /// electric-indent). Turn off for plain-text-buffer behaviour.
+    pub auto_indent: bool,
+    /// egui timestamp (in seconds, from `ctx.input(|i| i.time)`) of
+    /// the last keystroke that diverged `text` from the bound
+    /// document's source. `None` when the buffer is already in sync.
+    ///
+    /// Used to debounce the text→document commit so the diagram / AST
+    /// sync fires on an idle gap rather than on every keystroke —
+    /// VS Code, rust-analyzer, and every LSP client do the same
+    /// thing. Each keystroke refreshes this timestamp; once the idle
+    /// threshold (`EDIT_DEBOUNCE_SEC`) has elapsed without further
+    /// typing, the buffer is checkpointed into the document in one
+    /// shot.
+    pub pending_commit_at: Option<f64>,
 }
+
+/// Return the byte index of the newline character when `new` differs
+/// from `old` by exactly one inserted `'\n'`. Otherwise returns `None`.
+///
+/// Used by auto-indent to detect "user pressed Enter" edits without
+/// hooking egui's input pipeline. We capture the pre-edit buffer,
+/// let `TextEdit` run, and compare. Pastes, multi-char edits, and
+/// anything that isn't a single `\n` insertion skip the auto-indent
+/// pass.
+fn detect_single_newline_insertion(old: &str, new: &str) -> Option<usize> {
+    if new.len() != old.len() + 1 {
+        return None;
+    }
+    let ob = old.as_bytes();
+    let nb = new.as_bytes();
+    let mut i = 0;
+    while i < ob.len() && ob[i] == nb[i] {
+        i += 1;
+    }
+    if i < nb.len() && nb[i] == b'\n' && ob.get(i..) == Some(&nb[i + 1..]) {
+        Some(i)
+    } else {
+        None
+    }
+}
+
+/// Idle window (seconds) after the last keystroke before the editor
+/// commits its buffer into the document. Small enough to feel
+/// responsive in the diagram view, long enough to coalesce a burst of
+/// typing into a single `ReplaceSource` op (and therefore one undo
+/// entry, not one per character).
+pub const EDIT_DEBOUNCE_SEC: f64 = 0.35;
 
 impl Default for EditorBufferState {
     fn default() -> Self {
@@ -34,6 +88,9 @@ impl Default for EditorBufferState {
             line_starts: vec![0].into(),
             detected_name: None,
             cached_galley: None,
+            word_wrap: false,
+            auto_indent: true,
+            pending_commit_at: None,
         }
     }
 }
@@ -77,11 +134,38 @@ impl Panel for CodeEditorPanel {
             return;
         }
 
+        // True when the user switched to a different model this frame.
+        // Used below to snap the horizontal scroll back to column 0 so
+        // the left edge of the new file is always visible — otherwise
+        // egui's ScrollArea retains the previous file's scroll offset
+        // (driven by cursor position) and the new file opens with its
+        // first few columns hidden behind the left panel boundary.
+        let mut model_switched = false;
         if let Some(ref path) = model_path {
-            let needs_sync = {
+            // Resync from `open_model.source` when either
+            //   (a) the model itself changed (`model_path` diverged), or
+            //   (b) some other panel mutated `open_model.source` —
+            //       currently the diagram panel after applying AST
+            //       ops — and the content hash now differs from what
+            //       this buffer last synced.
+            //
+            // Case (b) is what propagates diagram edits (add / delete
+            // component) into the code view. Gap: if the user has
+            // un-committed text edits in this buffer AND triggers a
+            // diagram edit, the resync clobbers them. That's a known
+            // transitional gap until the code editor writes every
+            // keystroke through the Document (its own `EditText` op).
+            let (needs_sync, path_changed) = {
                 let buf_state = world.resource::<EditorBufferState>();
-                buf_state.model_path != *path
+                let external_hash = world.resource::<WorkbenchState>()
+                    .open_model
+                    .as_ref()
+                    .map(|m| hash_content(&m.source))
+                    .unwrap_or(0);
+                let path_changed = buf_state.model_path != *path;
+                (path_changed || buf_state.source_hash != external_hash, path_changed)
             };
+            model_switched = path_changed;
 
             if needs_sync {
                 let (source, line_starts, detected_name, galley) = {
@@ -89,7 +173,7 @@ impl Panel for CodeEditorPanel {
                     let m = state.open_model.as_ref().unwrap();
                     (m.source.to_string(), m.line_starts.clone(), m.detected_name.clone(), m.cached_galley.clone())
                 };
-                
+
                 let mut buf_state = world.resource_mut::<EditorBufferState>();
                 buf_state.text = source;
                 buf_state.line_starts = line_starts;
@@ -133,6 +217,29 @@ impl Panel for CodeEditorPanel {
                     .and_then(|m| m.doc)
             });
 
+        // ── Settings menu (gear button) ──
+        //
+        // All editor preferences live inside one dropdown menu
+        // rather than being scattered as inline toolbar toggles — the
+        // panel toolbar stays tidy and this scales as we add more
+        // options (font size, indent width, tab-vs-spaces, …)
+        // without turning into a button pile.
+        //
+        // Current options, all persisted on `EditorBufferState`:
+        //   • **Word wrap** (default off): long lines wrap at editor
+        //     width when on, horizontal-scroll when off. Matches VS
+        //     Code's default.
+        //   • **Auto indent** (default on): pressing Enter copies
+        //     the previous line's leading whitespace onto the new
+        //     line. Every modern code editor does this.
+        // Editor prefs (word wrap, auto indent) live in the app-wide
+        // Settings menu — see `register_settings_menu` in `ui/mod.rs`.
+        // Here we just read the current values.
+        let (word_wrap, auto_indent) = {
+            let buf = world.resource::<EditorBufferState>();
+            (buf.word_wrap, buf.auto_indent)
+        };
+
         // ── Editor area ──
         //
         // Single full-bleed TextEdit. I originally shipped a
@@ -151,39 +258,153 @@ impl Panel for CodeEditorPanel {
         // for `&str` is read-only, so passing `&mut &str` to
         // `TextEdit::multiline` silently produces a non-editable
         // widget.
-        let (mut text, galley_cache) = {
+        //
+        // Snapshot `old_text` before the TextEdit runs so the
+        // auto-indent pass below can diff the pre/post buffer and
+        // detect single-char newline insertions.
+        let (mut text, galley_cache, old_text) = {
             let buf_state = world.resource::<EditorBufferState>();
-            (buf_state.text.clone(), buf_state.cached_galley.clone())
+            (
+                buf_state.text.clone(),
+                buf_state.cached_galley.clone(),
+                buf_state.text.clone(),
+            )
         };
         let is_ro = is_read_only;
         let editor_width = avail.x.max(100.0);
         let editor_height = avail.y.max(200.0);
 
-        let output = ui.add_sized(
-            [editor_width, editor_height],
-            egui::TextEdit::multiline(&mut text)
-                .font(egui::TextStyle::Monospace)
-                .code_editor()
-                .desired_width(editor_width)
-                .desired_rows(((editor_height / 16.0) as usize).max(10))
-                .lock_focus(true)
-                .interactive(true)
-                .layouter(&mut |ui, string, _wrap_width| {
-                    if is_ro {
-                        if let Some(galley) = &galley_cache {
-                            return galley.clone();
+        // When word-wrap is off, long lines must live inside a
+        // horizontal `ScrollArea` so they can scroll rather than
+        // clip. When word-wrap is on, the layouter does the right
+        // thing at editor-width and no horizontal scroll is needed.
+        // Stable id so the auto-indent cursor-reposition logic below
+        // can look up and overwrite the TextEdit's state via
+        // `TextEditState::load`. Without a pinned id, egui generates
+        // a hash from the widget's location and we can't target it
+        // from outside the closure.
+        let text_edit_id = egui::Id::new("modelica_code_editor");
+        // When word-wrap is off we need the TextEdit widget's rect to
+        // be AT LEAST as wide as the longest line — otherwise egui's
+        // TextEdit auto-scrolls horizontally *inside its own rect* to
+        // follow the cursor, hiding the leftmost columns. Estimate
+        // width from the longest line's char count × monospace glyph
+        // width (cheap and good enough; overshooting is harmless, the
+        // outer ScrollArea just gains a bit of empty runway).
+        let content_width = if word_wrap {
+            editor_width
+        } else {
+            // Approx monospace glyph width at the default 14px editor
+            // font; overshooting is harmless, we just get a bit of
+            // empty runway at the right edge of the scroll area.
+            let glyph_w = 8.0_f32;
+            let max_chars = text.lines().map(|l| l.chars().count()).max().unwrap_or(0);
+            ((max_chars as f32) * glyph_w + 32.0).max(editor_width)
+        };
+        let show_editor = |ui: &mut egui::Ui, text: &mut String| -> egui::Response {
+            let inner_width = content_width;
+            ui.add_sized(
+                [inner_width, editor_height],
+                egui::TextEdit::multiline(text)
+                    .id(text_edit_id)
+                    .font(egui::TextStyle::Monospace)
+                    .code_editor()
+                    .desired_width(inner_width)
+                    .desired_rows(((editor_height / 16.0) as usize).max(10))
+                    .lock_focus(true)
+                    .interactive(true)
+                    .layouter(&mut |ui, string, _wrap_width| {
+                        if is_ro {
+                            if let Some(galley) = &galley_cache {
+                                return galley.clone();
+                            }
                         }
+                        let mut layout_job =
+                            modelica_layouter(ui.style(), string.as_str());
+                        layout_job.wrap.max_width = if word_wrap {
+                            editor_width
+                        } else {
+                            f32::INFINITY
+                        };
+                        ui.painter().layout_job(layout_job)
+                    }),
+            )
+        };
+
+        // Inner margin so the first column of code isn't flush
+        // against the panel's left edge. Without it the glyphs of
+        // the leftmost column sit under the adjacent panel's
+        // boundary (package browser on the left), hiding the first
+        // few characters of every line.
+        let output = egui::Frame::default()
+            .inner_margin(egui::Margin {
+                left: 8,
+                right: 0,
+                top: 0,
+                bottom: 0,
+            })
+            .show(ui, |ui| {
+                if word_wrap {
+                    show_editor(ui, &mut text)
+                } else {
+                    let mut area = egui::ScrollArea::horizontal()
+                        .auto_shrink([false, false]);
+                    if model_switched {
+                        area = area.horizontal_scroll_offset(0.0);
                     }
-                    let mut layout_job =
-                        modelica_layouter(ui.style(), string.as_str());
-                    layout_job.wrap.max_width = f32::INFINITY;
-                    ui.painter().layout_job(layout_job)
-                }),
-        );
+                    area.show(ui, |ui| show_editor(ui, &mut text)).inner
+                }
+            })
+            .inner;
 
         if output.changed() && !is_ro {
             new_text = text.clone();
             buffer_changed = true;
+
+            // ── Auto-indent ──
+            //
+            // If this change added exactly one '\n' to the buffer
+            // (user pressed Enter) and the previous line had leading
+            // whitespace, inject that same leading whitespace after
+            // the '\n' and move the caret past it — so the user
+            // picks up editing at the same indent level as the
+            // previous line.
+            //
+            // Behaviour chosen to match every modern code editor:
+            // VS Code, Sublime, IntelliJ, Emacs electric-indent,
+            // Neovim's `autoindent` / `smartindent`.
+            if auto_indent {
+                if let Some(nl_byte) = detect_single_newline_insertion(&old_text, &new_text) {
+                    let line_start = new_text[..nl_byte]
+                        .rfind('\n')
+                        .map(|i| i + 1)
+                        .unwrap_or(0);
+                    let indent: String = new_text[line_start..nl_byte]
+                        .chars()
+                        .take_while(|c| *c == ' ' || *c == '\t')
+                        .collect();
+                    if !indent.is_empty() {
+                        let after_nl = nl_byte + 1;
+                        new_text.insert_str(after_nl, &indent);
+                        text = new_text.clone();
+                        // Move the TextEdit caret past the inserted
+                        // indent. egui caret positions are in *char*
+                        // offsets (not bytes), so convert.
+                        let new_caret_chars =
+                            new_text[..after_nl + indent.len()].chars().count();
+                        if let Some(mut state) =
+                            egui::TextEdit::load_state(ui.ctx(), text_edit_id)
+                        {
+                            state.cursor.set_char_range(Some(
+                                egui::text::CCursorRange::one(
+                                    egui::text::CCursor::new(new_caret_chars),
+                                ),
+                            ));
+                            state.store(ui.ctx(), text_edit_id);
+                        }
+                    }
+                }
+            }
         }
         // Focus-loss commit: edits flow into the Document so other
         // observers (diagram re-parse, dirty tracker) see them
@@ -194,6 +415,10 @@ impl Panel for CodeEditorPanel {
             }
             buffer_commit = true;
         }
+
+        // Capture the current egui time BEFORE we mutate the buffer
+        // state — used to stamp the pending-commit timestamp below.
+        let now = ui.ctx().input(|i| i.time);
 
         if buffer_changed {
             let mut buf_state = world.resource_mut::<EditorBufferState>();
@@ -207,24 +432,55 @@ impl Panel for CodeEditorPanel {
             }
             buf_state.line_starts = new_starts.into();
             buf_state.detected_name = extract_model_name(&buf_state.text);
+            // Mark the buffer as dirty vs. the document. The flush
+            // block below only commits once `now - pending_commit_at
+            // >= EDIT_DEBOUNCE_SEC`, so a burst of typing resets this
+            // timestamp on every keystroke and debounces cleanly
+            // into a single checkpoint at the end.
+            buf_state.pending_commit_at = Some(now);
 
             if let Some(mut state) = world.get_resource_mut::<WorkbenchState>() {
                 if state.editor_buffer != new_text {
                     state.editor_buffer = new_text;
                 }
             }
+
+            // Egui doesn't repaint a stationary UI on its own. When
+            // the user stops typing we still want the debounce timer
+            // to fire — schedule a wake-up just past the window.
+            ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(
+                EDIT_DEBOUNCE_SEC + 0.05,
+            ));
         }
 
-        // Commit the buffer into the Document on focus-loss. No-op when
-        // there's no backing document yet (the user is typing before any
-        // compile has produced an entity) — the existing "spawn fresh
-        // entity on Compile" path still handles that case.
-        if buffer_commit && !is_read_only {
+        // Decide whether to flush the pending buffer into the
+        // document this frame. Three trigger points:
+        //
+        //   1. `buffer_commit` (focus-loss): flush immediately — the
+        //      user has clearly finished editing this session.
+        //   2. Debounce elapsed: `now - pending_commit_at >=
+        //      EDIT_DEBOUNCE_SEC`. The user has been idle long
+        //      enough; coalesce their typing into one checkpoint.
+        //   3. Nothing pending: no-op.
+        //
+        // `checkpoint_source` is idempotent when the content hasn't
+        // changed, so duplicate triggers are safe.
+        let should_flush = {
+            let buf = world.resource::<EditorBufferState>();
+            match (buffer_commit, buf.pending_commit_at) {
+                (true, _) => buf.pending_commit_at.is_some(),
+                (false, Some(t)) => now - t >= EDIT_DEBOUNCE_SEC,
+                (false, None) => false,
+            }
+        };
+
+        if should_flush && !is_read_only {
             if let Some(doc) = doc_id {
                 let committed = world.resource::<EditorBufferState>().text.clone();
                 world
                     .resource_mut::<ModelicaDocumentRegistry>()
                     .checkpoint_source(doc, committed);
+                world.resource_mut::<EditorBufferState>().pending_commit_at = None;
             }
         }
     }

@@ -26,6 +26,79 @@
 //! responsible for translating UI coordinates into Modelica coordinates.
 
 use std::fmt::Write as _;
+use std::sync::RwLock;
+
+// ---------------------------------------------------------------------------
+// Formatting options
+// ---------------------------------------------------------------------------
+
+/// Indentation preferences applied by the pretty-printer.
+///
+/// The library default is two-space / four-space so pure-Rust tests
+/// have predictable output. Application code (the workbench binary)
+/// is free to install a different policy at startup via
+/// [`set_options`] — for instance, tab-indented output that matches
+/// how Dymola and hand-authored MSL packages ship.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrettyOptions {
+    /// Indent used on the first line of a component declaration or
+    /// connect equation.
+    pub indent: String,
+    /// Indent used on the `annotation(...)` continuation line.
+    pub continuation_indent: String,
+}
+
+impl PrettyOptions {
+    /// Preset: tab indentation (`"\t"` / `"\t\t"`) — the convention
+    /// in most hand-authored MSL packages and what the workbench
+    /// installs as the user-facing default.
+    pub fn tabs() -> Self {
+        Self {
+            indent: "\t".into(),
+            continuation_indent: "\t\t".into(),
+        }
+    }
+
+    /// Preset: two-space / four-space. Library default; also the
+    /// preset tests assume for stable output.
+    pub fn two_space() -> Self {
+        Self {
+            indent: "  ".into(),
+            continuation_indent: "    ".into(),
+        }
+    }
+}
+
+impl Default for PrettyOptions {
+    fn default() -> Self {
+        Self::two_space()
+    }
+}
+
+static OPTIONS: RwLock<Option<PrettyOptions>> = RwLock::new(None);
+
+/// Current formatting options. Falls back to
+/// [`PrettyOptions::default`] (tabs / double-tabs) when nothing has
+/// been installed yet.
+///
+/// Designed as a process-wide setting so every op path (ops from the
+/// diagram panel, ops from scripts, ops from tests) produces
+/// consistent output without having to thread an options parameter
+/// through every call.
+pub fn options() -> PrettyOptions {
+    OPTIONS
+        .read()
+        .ok()
+        .and_then(|guard| guard.clone())
+        .unwrap_or_default()
+}
+
+/// Install new formatting options. Subsequent pretty-prints use these
+/// values. Panics if the lock is poisoned.
+pub fn set_options(opts: PrettyOptions) {
+    let mut guard = OPTIONS.write().expect("pretty options lock poisoned");
+    *guard = Some(opts);
+}
 
 // ---------------------------------------------------------------------------
 // Input types
@@ -187,13 +260,18 @@ pub fn line_inner(line: &Line) -> String {
 // Component declaration
 // ---------------------------------------------------------------------------
 
-/// Emit a component declaration line (trailing newline included).
+/// Emit a component declaration (trailing newline included).
 ///
-/// Output is indented with two spaces. Callers splicing into sources
-/// that use a different indent width are free to reindent.
+/// Uses the indent strings from the current [`options()`]. When the
+/// declaration has an `annotation(Placement(...))`, the annotation is
+/// placed on its own continuation line so individual source lines
+/// stay short enough to fit in a reasonable editor viewport. Modelica
+/// treats whitespace (including newlines) as insignificant between
+/// tokens, so the statement is still a single declaration.
 pub fn component_decl(decl: &ComponentDecl) -> String {
+    let opts = options();
     let mut s = String::new();
-    s.push_str("  ");
+    s.push_str(&opts.indent);
     s.push_str(&decl.type_name);
     s.push(' ');
     s.push_str(&decl.name);
@@ -209,7 +287,9 @@ pub fn component_decl(decl: &ComponentDecl) -> String {
         s.push(')');
     }
     if let Some(p) = &decl.placement {
-        s.push_str(" annotation(");
+        s.push('\n');
+        s.push_str(&opts.continuation_indent);
+        s.push_str("annotation(");
         s.push_str(&placement_inner(p));
         s.push(')');
     }
@@ -221,16 +301,24 @@ pub fn component_decl(decl: &ComponentDecl) -> String {
 // Connect equation
 // ---------------------------------------------------------------------------
 
-/// Emit a `connect(...)` equation line (trailing newline included).
+/// Emit a `connect(...)` equation (trailing newline included).
+///
+/// As with component declarations, a trailing `annotation(Line(...))`
+/// goes on its own continuation line so the main connect statement
+/// stays short and readable. Indentation follows [`options()`].
 pub fn connect_equation(eq: &ConnectEquation) -> String {
+    let opts = options();
     let mut s = String::new();
+    s.push_str(&opts.indent);
     let _ = write!(
         s,
-        "  connect({}.{}, {}.{})",
+        "connect({}.{}, {}.{})",
         eq.from.component, eq.from.port, eq.to.component, eq.to.port,
     );
     if let Some(line) = &eq.line {
-        s.push_str(" annotation(");
+        s.push('\n');
+        s.push_str(&opts.continuation_indent);
+        s.push_str("annotation(");
         s.push_str(&line_inner(line));
         s.push(')');
     }
@@ -315,8 +403,6 @@ mod tests {
             ],
             placement: None,
         };
-        // Second entry is pathological but shouldn't panic — the printer is
-        // intentionally dumb: values emit verbatim.
         assert_eq!(
             component_decl(&d),
             "  Capacitor C1(C=0.001, v(start=0)=0);\n"
@@ -324,7 +410,7 @@ mod tests {
     }
 
     #[test]
-    fn component_decl_with_placement() {
+    fn component_decl_with_placement_uses_continuation_line() {
         let d = ComponentDecl {
             type_name: "Resistor".into(),
             name: "R1".into(),
@@ -333,7 +419,7 @@ mod tests {
         };
         assert_eq!(
             component_decl(&d),
-            "  Resistor R1(R=100) annotation(Placement(transformation(extent={{-10,-10},{10,10}})));\n"
+            "  Resistor R1(R=100)\n    annotation(Placement(transformation(extent={{-10,-10},{10,10}})));\n"
         );
     }
 
@@ -348,7 +434,7 @@ mod tests {
     }
 
     #[test]
-    fn connect_equation_with_line() {
+    fn connect_equation_with_line_uses_continuation_line() {
         let eq = ConnectEquation {
             from: PortRef::new("R1", "p"),
             to: PortRef::new("C1", "n"),
@@ -358,7 +444,28 @@ mod tests {
         };
         assert_eq!(
             connect_equation(&eq),
-            "  connect(R1.p, C1.n) annotation(Line(points={{0,0},{10,10},{20,10}}));\n"
+            "  connect(R1.p, C1.n)\n    annotation(Line(points={{0,0},{10,10},{20,10}}));\n"
+        );
+    }
+
+    #[test]
+    fn tabs_preset_produces_tab_indented_output() {
+        // Use a scope-local options install so we don't pollute other
+        // tests (RwLock serialises, but two tests expecting different
+        // global state can still race). We restore the default on
+        // exit.
+        set_options(PrettyOptions::tabs());
+        let d = ComponentDecl {
+            type_name: "Real".into(),
+            name: "x".into(),
+            modifications: vec![],
+            placement: Some(Placement::at(0.0, 0.0)),
+        };
+        let out = component_decl(&d);
+        set_options(PrettyOptions::default());
+        assert_eq!(
+            out,
+            "\tReal x\n\t\tannotation(Placement(transformation(extent={{-10,-10},{10,10}})));\n"
         );
     }
 

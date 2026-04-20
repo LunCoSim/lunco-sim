@@ -5835,6 +5835,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "lunco-cache"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "futures-lite",
+]
+
+[[package]]
+name = "lunco-canvas"
+version = "0.1.0"
+dependencies = [
+ "bevy_egui",
+ "indexmap",
+ "serde",
+ "serde_json",
+ "smol_str",
+]
+
+[[package]]
 name = "lunco-celestial"
 version = "0.6.0-dev"
 dependencies = [
@@ -6028,9 +6047,12 @@ dependencies = [
  "egui_plot",
  "futures-lite",
  "getrandom 0.3.4",
+ "indexmap",
  "log",
  "lunco-api",
  "lunco-assets",
+ "lunco-cache",
+ "lunco-canvas",
  "lunco-core",
  "lunco-doc",
  "lunco-doc-bevy",
