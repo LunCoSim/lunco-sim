@@ -1,0 +1,16 @@
+[package]
+name = "lunco-workspace"
+version = "0.1.0"
+edition = "2021"
+description = "LunCoSim's editor session (VS Code Workspace analog). Tracks open Twins + loose documents, the active Twin / Document / Perspective, and a recents list. Headless, UI-free, ECS-free — a Bevy `Resource` wrapper can be added in a consumer crate."
+
+[dependencies]
+lunco-doc     = { path = "../lunco-doc" }
+lunco-twin    = { path = "../lunco-twin" }
+lunco-storage = { path = "../lunco-storage" }
+serde         = { version = "1.0", features = ["derive"] }
+toml          = "0.8"
+thiserror     = "1.0"
+
+[dev-dependencies]
+tempfile = "3.10"

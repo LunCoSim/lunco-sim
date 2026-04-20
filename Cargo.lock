@@ -6566,6 +6566,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "lunco-workspace"
+version = "0.1.0"
+dependencies = [
+ "lunco-doc",
+ "lunco-storage",
+ "lunco-twin",
+ "serde",
+ "tempfile",
+ "thiserror 1.0.69",
+ "toml",
+]
+
+[[package]]
 name = "lz4_flex"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
