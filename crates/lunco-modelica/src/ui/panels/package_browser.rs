@@ -360,6 +360,7 @@ pub fn handle_package_loading_tasks(
     mut egui_ctx: bevy_egui::EguiContexts,
     mut pending_drill_ins: ResMut<crate::ui::browser_dispatch::PendingDrillIns>,
     mut drilled_in: ResMut<crate::ui::panels::canvas_diagram::DrilledInClassNames>,
+    mut workspace: ResMut<lunco_workbench::WorkspaceResource>,
 ) {
     let mut finished_results = Vec::new();
 
@@ -441,6 +442,8 @@ pub fn handle_package_loading_tasks(
         });
         workbench.diagram_dirty = true;
         workbench.is_loading = false;
+        // Sync active document into the Workspace session.
+        workspace.active_document = Some(doc_id);
 
         // Open (or focus) the multi-instance tab for this document.
         model_tabs.ensure(doc_id);
@@ -1226,6 +1229,17 @@ pub(crate) fn open_model(world: &mut World, id: String, name: String, library: M
             state.editor_buffer = source_arc.to_string();
             state.diagram_dirty = true;
             state.is_loading = false;
+        }
+        // Sync into the Workspace session. Only when we actually have
+        // a doc id — a missing id here means we didn't allocate (first
+        // open of a "mem://" model that was never created), and the
+        // Workspace can't track what it doesn't have.
+        if let Some(doc_id) = doc_id {
+            if let Some(mut ws) =
+                world.get_resource_mut::<lunco_workbench::WorkspaceResource>()
+            {
+                ws.active_document = Some(doc_id);
+            }
         }
 
         // Open (or focus) the tab for this in-memory model.

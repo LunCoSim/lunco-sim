@@ -456,6 +456,15 @@ pub(crate) fn sync_active_tab_to_doc(world: &mut World, doc: DocumentId) {
         state.diagram_dirty = true;
     }
 
+    // Mirror active-document into the Workspace session. Workspace is
+    // the single source of truth for "which doc has focus"; open_model
+    // stays as a UI-side cache of derived fields (source Arc, line
+    // starts, galley) that aren't worth putting into the session type.
+    {
+        let mut ws = world.resource_mut::<lunco_workbench::WorkspaceResource>();
+        ws.active_document = Some(doc);
+    }
+
     // Update the editor buffer state (used by the code-editor body).
     let model_path = world
         .get_resource::<WorkbenchState>()

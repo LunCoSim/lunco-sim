@@ -342,6 +342,7 @@ fn on_document_closed_cleanup(
     mut cache: ResMut<crate::ui::panels::package_browser::PackageTreeCache>,
     mut compile_states: ResMut<CompileStates>,
     mut workbench: ResMut<WorkbenchState>,
+    mut workspace: ResMut<lunco_workbench::WorkspaceResource>,
 ) {
     let doc = trigger.event().doc;
     model_tabs.close(doc);
@@ -353,6 +354,13 @@ fn on_document_closed_cleanup(
         workbench.open_model = None;
         workbench.editor_buffer.clear();
         workbench.compilation_error = None;
+    }
+    // Mirror into Workspace session. The `sync_workspace_on_doc_closed`
+    // observer also fires, but only drops the DocumentEntry — clearing
+    // `active_document` is a separate concern that belongs with the
+    // "what tab has focus" bookkeeping.
+    if workspace.active_document == Some(doc) {
+        workspace.active_document = None;
     }
 }
 
@@ -734,6 +742,7 @@ fn on_create_new_scratch_model(
     mut cache: ResMut<crate::ui::panels::package_browser::PackageTreeCache>,
     mut model_tabs: ResMut<crate::ui::panels::model_view::ModelTabs>,
     mut workbench: ResMut<WorkbenchState>,
+    mut workspace: ResMut<lunco_workbench::WorkspaceResource>,
     mut commands: Commands,
 ) {
     // Find the lowest `Untitled<N>` not already taken — matches VS
@@ -782,6 +791,11 @@ fn on_create_new_scratch_model(
     });
     workbench.editor_buffer = source_arc.to_string();
     workbench.diagram_dirty = true;
+
+    // Sync into the Workspace session. The sync observer adds the
+    // DocumentEntry on its own; what we need here is the
+    // "active-document" pointer.
+    workspace.active_document = Some(doc_id);
 
     model_tabs.ensure(doc_id);
     commands.trigger(lunco_workbench::OpenTab {
