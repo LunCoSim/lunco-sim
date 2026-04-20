@@ -6394,6 +6394,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "lunco-storage"
+version = "0.1.0"
+dependencies = [
+ "rfd",
+ "serde",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "lunco-telemetry"
 version = "0.6.0-dev"
 dependencies = [

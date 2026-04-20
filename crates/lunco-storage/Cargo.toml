@@ -1,0 +1,23 @@
+[package]
+name = "lunco-storage"
+version = "0.1.0"
+edition = "2021"
+description = "I/O abstraction for LunCoSim — Storage trait + backends (FileStorage today; IndexedDB/OPFS/HTTP tomorrow). Keeps the document and workspace layers free of filesystem assumptions so the same save/load flow works on native, web, and remote twins."
+
+[dependencies]
+# `rfd` = native/web file-dialog crate. Used only on native; the wasm
+# backend will provide its own pickers via File System Access / OPFS.
+rfd = "0.15"
+thiserror = "1"
+serde = { version = "1", features = ["derive"] }
+
+[features]
+# Empty stubs that unlock the corresponding `StorageHandle` variants.
+# Off by default — turning one on keeps match arms in downstream crates
+# exhaustive against the upcoming backend without forcing a rebuild
+# across the whole workspace when the backend itself lands.
+default = []
+fsa_stub = []
+idb_stub = []
+opfs_stub = []
+http_stub = []
