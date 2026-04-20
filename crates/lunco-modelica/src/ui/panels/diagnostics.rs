@@ -123,11 +123,12 @@ fn hash_str(s: Option<&str>) -> u64 {
 /// churning even when nothing was changing.
 pub fn refresh_diagnostics(
     workbench: Res<WorkbenchState>,
+    workspace: Res<lunco_workbench::WorkspaceResource>,
     registry: Res<ModelicaDocumentRegistry>,
     mut diagnostics: ResMut<DiagnosticsLog>,
     mut cursor: bevy::prelude::Local<DiagnosticsCursor>,
 ) {
-    let doc_id = workbench.open_model.as_ref().and_then(|m| m.doc);
+    let doc_id = workspace.active_document;
 
     // No doc bound → clear once and stop.
     let Some(doc_id) = doc_id else {

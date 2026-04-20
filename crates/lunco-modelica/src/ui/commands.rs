@@ -348,19 +348,15 @@ fn on_document_closed_cleanup(
     model_tabs.close(doc);
     cache.in_memory_models.retain(|e| e.doc != doc);
     compile_states.remove(doc);
-    // If the closed doc was the active open_model, clear the slot so
-    // the welcome panel / another tab's sync can take over.
-    if workbench.open_model.as_ref().and_then(|m| m.doc) == Some(doc) {
+    // If the closed doc was active, clear the slot so the welcome
+    // panel / another tab's sync can take over. Drive the check off
+    // `workspace.active_document` (the source of truth) and reset
+    // both the Workspace pointer and the UI cache in lockstep.
+    if workspace.active_document == Some(doc) {
+        workspace.active_document = None;
         workbench.open_model = None;
         workbench.editor_buffer.clear();
         workbench.compilation_error = None;
-    }
-    // Mirror into Workspace session. The `sync_workspace_on_doc_closed`
-    // observer also fires, but only drops the DocumentEntry — clearing
-    // `active_document` is a separate concern that belongs with the
-    // "what tab has focus" bookkeeping.
-    if workspace.active_document == Some(doc) {
-        workspace.active_document = None;
     }
 }
 
@@ -383,12 +379,12 @@ fn on_document_closed_cleanup(
 /// never touch this function; they edit their `Keybindings`.
 fn resolve_editor_intent(
     trigger: On<EditorIntent>,
-    workbench: Res<WorkbenchState>,
+    workspace: Res<lunco_workbench::WorkspaceResource>,
     registry: Res<ModelicaDocumentRegistry>,
     mut pending_closes: ResMut<lunco_workbench::PendingTabCloses>,
     mut commands: Commands,
 ) {
-    let Some(doc) = workbench.open_model.as_ref().and_then(|m| m.doc) else {
+    let Some(doc) = workspace.active_document else {
         return;
     };
     // Ownership check — is this doc in the Modelica registry?
@@ -787,7 +783,6 @@ fn on_create_new_scratch_model(
         cached_galley: None,
         read_only: false,
         library: crate::ui::state::ModelLibrary::InMemory,
-        doc: Some(doc_id),
     });
     workbench.editor_buffer = source_arc.to_string();
     workbench.diagram_dirty = true;

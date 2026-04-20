@@ -265,10 +265,15 @@ fn resolve_tab_title(world: &World, doc: DocumentId) -> (String, bool, bool) {
         );
     }
 
-    // Fall back to any live `open_model.display_name` if it matches.
-    if let Some(state) = world.get_resource::<WorkbenchState>() {
-        if let Some(open) = state.open_model.as_ref() {
-            if open.doc == Some(doc) {
+    // Fall back to any live `open_model.display_name` when it's the
+    // current active tab. Active-doc identity is the Workspace's
+    // concern; `open_model` is only a display cache of the same.
+    let active_doc = world
+        .get_resource::<lunco_workbench::WorkspaceResource>()
+        .and_then(|ws| ws.active_document);
+    if active_doc == Some(doc) {
+        if let Some(state) = world.get_resource::<WorkbenchState>() {
+            if let Some(open) = state.open_model.as_ref() {
                 return (open.display_name.clone(), false, open.read_only);
             }
         }
@@ -298,10 +303,14 @@ pub(crate) fn sync_active_tab_to_doc(world: &mut World, doc: DocumentId) {
     // showing an empty Text view forever: sync runs with a placeholder,
     // `already_active` fires, we short-circuit, and the real
     // source never lands until the user manually switches tabs.
+    let active_matches = world
+        .get_resource::<lunco_workbench::WorkspaceResource>()
+        .and_then(|ws| ws.active_document)
+        == Some(doc);
     let (already_active, source_is_placeholder) = {
         let ws = world.resource::<WorkbenchState>();
         match ws.open_model.as_ref() {
-            Some(open) => (open.doc == Some(doc), open.source.is_empty()),
+            Some(open) => (active_matches, open.source.is_empty()),
             None => (false, false),
         }
     };
@@ -450,7 +459,6 @@ pub(crate) fn sync_active_tab_to_doc(world: &mut World, doc: DocumentId) {
             cached_galley: None,
             read_only,
             library,
-            doc: Some(doc),
         });
         state.editor_buffer = source_arc.to_string();
         state.diagram_dirty = true;
@@ -773,16 +781,15 @@ fn render_unified_toolbar(
 /// to a Markdown-converted render is a follow-up.
 fn render_docs_view(ui: &mut egui::Ui, world: &mut World) {
     use crate::ui::state::WorkbenchState;
-    let doc_id = {
-        let ws = world.resource::<WorkbenchState>();
-        let Some(open) = ws.open_model.as_ref() else {
-            ui.centered_and_justified(|ui| {
-                ui.label(egui::RichText::new("No model open").weak());
-            });
-            return;
-        };
-        open.doc
-    };
+    let doc_id = world
+        .get_resource::<lunco_workbench::WorkspaceResource>()
+        .and_then(|ws| ws.active_document);
+    if doc_id.is_none() {
+        ui.centered_and_justified(|ui| {
+            ui.label(egui::RichText::new("No model open").weak());
+        });
+        return;
+    }
 
     // Resolve the class: drill-in target (qualified), or first non-
     // package class in the AST as fallback. Same picker the canvas's

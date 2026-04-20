@@ -1436,8 +1436,13 @@ impl Panel for CanvasDiagramPanel {
         // `last_seen_gen == 0` so the first render after tab open
         // always re-projects.
         let project_now = {
-            let Some(open) = world.resource::<WorkbenchState>().open_model.clone() else {
-                // No model open — reset fallback canvas and bail.
+            // Active doc from the Workspace session (source of truth);
+            // `WorkbenchState.open_model` is still read below for
+            // display-cache fields, but no longer for identity.
+            let Some(doc_id) = world
+                .resource::<lunco_workbench::WorkspaceResource>()
+                .active_document
+            else {
                 world
                     .resource_mut::<CanvasDiagramState>()
                     .get_mut(None)
@@ -1446,10 +1451,10 @@ impl Panel for CanvasDiagramPanel {
                 self.render_canvas(ui, world);
                 return;
             };
-            let Some(doc_id) = open.doc else {
+            if world.resource::<WorkbenchState>().open_model.is_none() {
                 self.render_canvas(ui, world);
                 return;
-            };
+            }
             let gen = world
                 .resource::<ModelicaDocumentRegistry>()
                 .host(doc_id)
@@ -1683,10 +1688,8 @@ impl Panel for CanvasDiagramPanel {
         // scene with a sensible initial zoom.
         {
             let active_doc = world
-                .resource::<WorkbenchState>()
-                .open_model
-                .as_ref()
-                .and_then(|m| m.doc);
+                .resource::<lunco_workbench::WorkspaceResource>()
+                .active_document;
             // Pre-fetch current gen from the registry before we
             // take the mutable borrow of CanvasDiagramState, so we
             // can use it inside the deadline-guard block below
@@ -2450,15 +2453,13 @@ fn render_empty_menu(
 }
 
 /// Shorthand used by free helpers that don't already have the
-/// active doc threaded through: resolve it from `WorkbenchState`.
+/// active doc threaded through: resolve it from the Workspace session.
 /// Kept inline so callers outside the main render flow don't grow a
 /// parameter just to pass a one-line lookup.
 fn active_doc_from_world(world: &World) -> Option<lunco_doc::DocumentId> {
     world
-        .resource::<WorkbenchState>()
-        .open_model
-        .as_ref()
-        .and_then(|m| m.doc)
+        .resource::<lunco_workbench::WorkspaceResource>()
+        .active_document
 }
 
 // ─── Drill-in loading overlay ──────────────────────────────────────
@@ -2644,8 +2645,9 @@ fn render_empty_diagram_overlay(
     // can show real symbol names + (when authored) the class's own
     // `Icon` graphics. This is the same AST the canvas projector
     // already holds, so we don't pay a re-parse.
+    let active_doc = active_doc_from_world(world);
     let (icon, class_type, description, param_names, input_names, output_names) =
-        empty_overlay_class_info(world, open.doc, &class_name);
+        empty_overlay_class_info(world, active_doc, &class_name);
 
     crate::ui::panels::placeholder::render_centered_card(
         ui,
@@ -3422,12 +3424,17 @@ fn open_drill_in_tab(
 /// Mirrors the snarl panel's logic so both panels target the same
 /// class when `open_model` is bound.
 fn resolve_doc_context(world: &World) -> (Option<lunco_doc::DocumentId>, Option<String>) {
-    let Some(open) = world.resource::<WorkbenchState>().open_model.as_ref() else {
+    // Active doc from the Workspace session; `open_model.detected_name`
+    // is read as a display-cache fallback when the registry AST hasn't
+    // caught up yet. Both paths are optional — the caller tolerates
+    // `(None, None)` by deferring.
+    let Some(doc_id) = world
+        .resource::<lunco_workbench::WorkspaceResource>()
+        .active_document
+    else {
         return (None, None);
     };
-    let Some(doc_id) = open.doc else {
-        return (None, None);
-    };
+    let open = world.resource::<WorkbenchState>().open_model.as_ref();
     let class = world
         .resource::<ModelicaDocumentRegistry>()
         .host(doc_id)
@@ -3437,7 +3444,7 @@ fn resolve_doc_context(world: &World) -> (Option<lunco_doc::DocumentId>, Option<
                 .ast()
                 .and_then(|s| s.classes.keys().next().cloned())
         })
-        .or_else(|| open.detected_name.clone());
+        .or_else(|| open.and_then(|o| o.detected_name.clone()));
     (Some(doc_id), class)
 }
 

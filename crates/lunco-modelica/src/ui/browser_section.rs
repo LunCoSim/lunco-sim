@@ -34,7 +34,7 @@ use rumoca_session::parsing::ast::ClassDef;
 use rumoca_session::parsing::ClassType;
 
 use crate::ui::panels::canvas_diagram::DrilledInClassNames;
-use crate::ui::state::{ModelicaDocumentRegistry, WorkbenchState};
+use crate::ui::state::ModelicaDocumentRegistry;
 
 /// One Modelica class entry rendered in the tree.
 #[derive(Debug, Clone)]
@@ -152,15 +152,15 @@ impl BrowserSection for ModelicaSection {
 
         // What's currently in the foreground tab? Used to render that
         // (doc, class) pair as selected so users see "I'm editing
-        // this." Active doc comes from `WorkbenchState.open_model`,
+        // this." Active doc comes from the Workspace session;
         // active class from `DrilledInClassNames` keyed by that doc.
         // When no class is drilled in we still highlight every
         // top-level row of the active doc — answers "which doc am I
         // looking at" even before any drill-in.
         let active_doc: Option<DocumentId> = ctx
             .world
-            .get_resource::<WorkbenchState>()
-            .and_then(|s| s.open_model.as_ref().and_then(|m| m.doc));
+            .get_resource::<lunco_workbench::WorkspaceResource>()
+            .and_then(|ws| ws.active_document);
         let active_qualified: Option<String> = active_doc.and_then(|d| {
             ctx.world
                 .get_resource::<DrilledInClassNames>()

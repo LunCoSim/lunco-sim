@@ -211,10 +211,8 @@ impl Panel for CodeEditorPanel {
             .and_then(|e| world.resource::<ModelicaDocumentRegistry>().document_of(e))
             .or_else(|| {
                 world
-                    .resource::<WorkbenchState>()
-                    .open_model
-                    .as_ref()
-                    .and_then(|m| m.doc)
+                    .get_resource::<lunco_workbench::WorkspaceResource>()
+                    .and_then(|ws| ws.active_document)
             });
 
         // ── Settings menu (gear button) ──

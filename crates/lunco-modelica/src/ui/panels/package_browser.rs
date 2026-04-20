@@ -438,7 +438,6 @@ pub fn handle_package_loading_tasks(
             read_only: result.library != ModelLibrary::InMemory
                 && result.library != ModelLibrary::User,
             library: result.library,
-            doc: Some(doc_id),
         });
         workbench.diagram_dirty = true;
         workbench.is_loading = false;
@@ -917,13 +916,26 @@ fn render_node(
 /// or both buffers are empty.
 fn commit_current_model_edits(world: &mut World) {
     // Snapshot everything we need up-front so we don't fight the borrow
-    // checker when mutating the registry below.
-    let (doc_id, is_read_only, model_name) = {
+    // checker when mutating the registry below. Active doc comes from
+    // the Workspace session; the display-side snapshot (`read_only`,
+    // `detected_name`) still lives on the `open_model` UI cache.
+    let doc_id = match world
+        .get_resource::<lunco_workbench::WorkspaceResource>()
+        .and_then(|ws| ws.active_document)
+    {
+        Some(id) => id,
+        None => return,
+    };
+    let (is_read_only, model_name) = {
         let state = world.resource::<WorkbenchState>();
         let Some(m) = state.open_model.as_ref() else { return };
-        (m.doc, m.read_only, m.detected_name.clone().unwrap_or_else(|| m.display_name.clone()))
+        (
+            m.read_only,
+            m.detected_name
+                .clone()
+                .unwrap_or_else(|| m.display_name.clone()),
+        )
     };
-    let Some(doc_id) = doc_id else { return };
     if is_read_only {
         return;
     }
@@ -1224,7 +1236,6 @@ pub(crate) fn open_model(world: &mut World, id: String, name: String, library: M
                 cached_galley: None,
                 read_only: false,
                 library,
-                doc: doc_id,
             });
             state.editor_buffer = source_arc.to_string();
             state.diagram_dirty = true;

@@ -53,11 +53,6 @@ pub struct OpenModel {
     pub read_only: bool,
     /// Which library this model came from.
     pub library: ModelLibrary,
-    /// The Document this model is a view of, if one is already allocated
-    /// in [`ModelicaDocumentRegistry`]. In-memory models allocate
-    /// up-front (so the user's work survives switching files); on-disk
-    /// models allocate lazily on the first compile.
-    pub doc: Option<DocumentId>,
 }
 
 /// Which library a model belongs to.

@@ -2181,8 +2181,9 @@ impl Panel for DiagramPanel {
         // document-driven rebuild triggered by `changes_since(0)`
         // returning `None` (the fresh-bind sentinel).
         {
-            let open_doc = world.get_resource::<WorkbenchState>()
-                .and_then(|s| s.open_model.as_ref().and_then(|m| m.doc));
+            let open_doc = world
+                .get_resource::<lunco_workbench::WorkspaceResource>()
+                .and_then(|ws| ws.active_document);
             if let Some(mut ds) = world.get_resource_mut::<DiagramState>() {
                 match open_doc {
                     Some(id) => ds.bind_document(id),
@@ -2816,6 +2817,11 @@ fn compute_signature(source: &str) -> ModelSignature {
 /// observable port dots on the right. Matches how the model would
 /// look if dropped into another diagram as a component.
 fn render_equation_only_empty_state(ui: &mut egui::Ui, world: &mut World) {
+    // Read active doc id from the Workspace session (source of truth)
+    // before borrowing WorkbenchState for the display cache.
+    let active_doc = world
+        .get_resource::<lunco_workbench::WorkspaceResource>()
+        .and_then(|ws| ws.active_document);
     let (model_name, doc_id, generation, source) = {
         let state = world.resource::<WorkbenchState>();
         let Some(open) = state.open_model.as_ref() else {
@@ -2832,8 +2838,7 @@ fn render_equation_only_empty_state(ui: &mut egui::Ui, world: &mut World) {
             });
             return;
         };
-        let doc = open.doc;
-        let Some(doc) = doc else {
+        let Some(doc) = active_doc else {
             // Open but no DocumentId yet (rare transient) — don't
             // bother with signature; show minimal state.
             ui.vertical_centered(|ui| {
