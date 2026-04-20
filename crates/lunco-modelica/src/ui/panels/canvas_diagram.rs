@@ -79,10 +79,16 @@ fn svg_bytes_for(asset_path: &str) -> Option<std::sync::Arc<Vec<u8>>> {
     loaded
 }
 
-/// Per-component icon visual. Renders the Modelica SVG icon if the
-/// component's `icon_asset` path resolved, else a stylised
-/// rounded-rectangle fallback with the instance name. Ports render
-/// as filled dots on the icon boundary.
+/// Per-component icon visual. Renders, in priority order:
+///
+/// 1. The class's decoded `Icon(graphics={...})` annotation, if the
+///    projector extracted one (user-defined classes from the open
+///    document). Painted via [`crate::icon_paint::paint_graphics`].
+/// 2. The pre-rasterised SVG icon if `icon_asset` resolved (MSL
+///    components that ship with the palette).
+/// 3. A stylised rounded-rectangle fallback with the type label.
+///
+/// Ports render as filled dots on the icon boundary in all cases.
 #[derive(Default)]
 struct IconNodeVisual {
     /// Type name ("Resistor", "Capacitor"…) shown under the instance
@@ -97,6 +103,21 @@ struct IconNodeVisual {
     /// the component is decorative. Set by the projector via the
     /// node's `data.icon_only` flag.
     icon_only: bool,
+    /// Decoded graphics from the class's `Icon` annotation. When
+    /// present, takes precedence over the SVG icon path so user
+    /// classes show their authored graphics instead of falling back
+    /// to a generic placeholder.
+    icon_graphics: Option<crate::annotations::Icon>,
+    /// Per-instance rotation (degrees CCW, Modelica frame) applied to
+    /// the icon body itself — rotates both the SVG raster and the
+    /// `paint_graphics` primitives uniformly. Without this, mirror /
+    /// rotated MSL placements showed correct port positions but a
+    /// wrong-looking body.
+    rotation_deg: f32,
+    /// Mirror flags applied to the icon body, before rotation
+    /// (MLS Annex D).
+    mirror_x: bool,
+    mirror_y: bool,
 }
 
 impl NodeVisual for IconNodeVisual {
@@ -120,10 +141,41 @@ impl NodeVisual for IconNodeVisual {
         let card_fill = egui::Color32::from_rgb(48, 56, 72);
         painter.rect_filled(rect, 6.0, card_fill);
 
+        // Priority 1: authored graphics from the class's `Icon`
+        // annotation. Beats the SVG path so user-defined classes show
+        // their own primitives even when no pre-rasterised icon
+        // exists for them. Per-instance orientation rotates+mirrors
+        // every primitive at the rect level so placement-rotation
+        // shows visually, not just on the port positions.
+        let orientation = crate::icon_paint::IconOrientation {
+            rotation_deg: self.rotation_deg,
+            mirror_x: self.mirror_x,
+            mirror_y: self.mirror_y,
+        };
         let mut drew_svg = false;
-        if !self.icon_asset.is_empty() {
+        if let Some(icon) = &self.icon_graphics {
+            crate::icon_paint::paint_graphics_with_orientation(
+                painter,
+                rect,
+                icon.coordinate_system,
+                orientation,
+                &icon.graphics,
+            );
+            drew_svg = true;
+        }
+        if !drew_svg && !self.icon_asset.is_empty() {
             if let Some(bytes) = svg_bytes_for(&self.icon_asset) {
-                super::svg_renderer::draw_svg_to_egui(painter, rect, &bytes);
+                let svg_orient = super::svg_renderer::SvgOrientation {
+                    rotation_deg: self.rotation_deg,
+                    mirror_x: self.mirror_x,
+                    mirror_y: self.mirror_y,
+                };
+                super::svg_renderer::draw_svg_to_egui_oriented(
+                    painter,
+                    rect,
+                    &bytes,
+                    svg_orient,
+                );
                 drew_svg = true;
             }
         }
@@ -207,7 +259,148 @@ impl NodeVisual for IconNodeVisual {
 /// A richer routing pass (obstacle-avoidance, port-direction-aware
 /// stubs, multiple-bend auto-layout) is a next step; this is the
 /// pattern users already recognise.
-struct OrthogonalEdgeVisual;
+/// Which edge of the icon a port sits on. Determines which axis the
+/// wire's first segment ("stub") runs along — Dymola/OMEdit wire
+/// pretty-routing convention. Modelica port placement is in (-100..100)
+/// per axis; we classify by which extreme the port sits closest to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PortDir {
+    Left,
+    Right,
+    Up,
+    Down,
+    /// Port sits in the interior of the icon (or no info). Routing
+    /// degrades to plain Z-bend.
+    None,
+}
+
+impl PortDir {
+    fn as_str(self) -> &'static str {
+        match self {
+            PortDir::Left => "left",
+            PortDir::Right => "right",
+            PortDir::Up => "up",
+            PortDir::Down => "down",
+            PortDir::None => "",
+        }
+    }
+    fn from_str(s: &str) -> PortDir {
+        match s {
+            "left" => PortDir::Left,
+            "right" => PortDir::Right,
+            "up" => PortDir::Up,
+            "down" => PortDir::Down,
+            _ => PortDir::None,
+        }
+    }
+    /// Unit vector pointing *outward* from the icon at this edge,
+    /// in screen coordinates (+Y down). Used to extend the wire
+    /// stub away from the icon body.
+    fn outward(self) -> (f32, f32) {
+        match self {
+            PortDir::Left => (-1.0, 0.0),
+            PortDir::Right => (1.0, 0.0),
+            PortDir::Up => (0.0, -1.0),
+            PortDir::Down => (0.0, 1.0),
+            PortDir::None => (0.0, 0.0),
+        }
+    }
+}
+
+// `rotate_modelica_point` / `rotate_local_point` / `mirror_local_point`
+// retired — replaced by [`crate::icon_transform::IconTransform`], which
+// folds mirror + rotate + scale + Y-flip into a single matrix that the
+// projector applies via `apply` / `apply_dir`. See
+// `crates/lunco-modelica/src/icon_transform.rs`.
+
+/// Classify a 2D direction into one of the four cardinal icon edges,
+/// in **screen frame** (+X right, +Y down — same convention as
+/// [`PortDir::outward`]). Used to decide which way a wire stub
+/// should extend out of a port.
+///
+/// The threshold makes any direction whose components are both close
+/// to zero collapse to [`PortDir::None`] — Z-bend routing falls
+/// through to the original midpoint logic in that case.
+fn port_edge_dir(x: f32, y: f32) -> PortDir {
+    let threshold = 0.4;
+    let ax = x.abs();
+    let ay = y.abs();
+    if ax < threshold && ay < threshold {
+        return PortDir::None;
+    }
+    if ax >= ay {
+        if x >= 0.0 { PortDir::Right } else { PortDir::Left }
+    } else if y >= 0.0 {
+        // +Y down in screen → bottom edge of icon.
+        PortDir::Down
+    } else {
+        PortDir::Up
+    }
+}
+
+/// Map a Modelica connector type's leaf name to a wire colour.
+/// Colour choices follow Dymola/OMEdit conventions so users coming
+/// from those tools get instant domain recognition. Unknown types
+/// fall back to a neutral grey-blue.
+fn wire_color_for(connector_type: &str) -> egui::Color32 {
+    let leaf = connector_type
+        .rsplit('.')
+        .next()
+        .unwrap_or(connector_type);
+    use egui::Color32 as C;
+    match leaf {
+        // Electrical: blue family (Pin, PositivePin, NegativePin, Plug)
+        "Pin" | "PositivePin" | "NegativePin" | "Plug" | "PositivePlug"
+        | "NegativePlug" => C::from_rgb(60, 120, 200),
+        // Translational + rotational mechanics: brown
+        "Flange_a" | "Flange_b" | "Flange" | "Support" => {
+            C::from_rgb(140, 90, 50)
+        }
+        // Heat transfer: orange/red
+        "HeatPort_a" | "HeatPort_b" | "HeatPort" => C::from_rgb(210, 110, 50),
+        // Fluid: green/blue
+        "FluidPort" | "FluidPort_a" | "FluidPort_b" => C::from_rgb(70, 160, 180),
+        // Real signals: magenta
+        "RealInput" | "RealOutput" => C::from_rgb(180, 70, 170),
+        // Boolean signals: red
+        "BooleanInput" | "BooleanOutput" => C::from_rgb(200, 60, 60),
+        // Integer signals: green
+        "IntegerInput" | "IntegerOutput" => C::from_rgb(70, 160, 80),
+        // Frame_a/Frame_b (multibody): purple
+        "Frame" | "Frame_a" | "Frame_b" => C::from_rgb(120, 80, 180),
+        // Default — neutral grey-blue, distinguishable from selection
+        _ => C::from_rgb(110, 130, 150),
+    }
+}
+
+/// Per-edge wire visual. Carries the wire colour + the port-direction
+/// hints baked in by the projector so each edge knows which axis to
+/// extend before bending. Two stubs (one out of each port) followed
+/// by a Z-bend gives the "wire grows out of the connector" look that
+/// matches Dymola/OMEdit and reads much cleaner than the previous
+/// always-x-midpoint Z.
+struct OrthogonalEdgeVisual {
+    color: egui::Color32,
+    from_dir: PortDir,
+    to_dir: PortDir,
+}
+
+impl Default for OrthogonalEdgeVisual {
+    fn default() -> Self {
+        Self {
+            color: wire_color_for(""),
+            from_dir: PortDir::None,
+            to_dir: PortDir::None,
+        }
+    }
+}
+
+/// Stub length in screen pixels — long enough to clear the port dot
+/// (which is itself ~4 px) and read clearly as "the wire exits the
+/// port" at typical zoom levels, while still leaving room for the
+/// Z-bend body. Earlier values around 10 px disappeared on default
+/// auto-fit zoom; 18 stays readable across normal zoom range.
+const STUB_PX: f32 = 18.0;
 
 impl EdgeVisual for OrthogonalEdgeVisual {
     fn draw(
@@ -218,47 +411,105 @@ impl EdgeVisual for OrthogonalEdgeVisual {
         selected: bool,
     ) {
         let col = if selected {
-            egui::Color32::from_rgb(140, 190, 255)
+            // Selection: brighten the per-type colour rather than
+            // collapsing every wire to one universal "selected" blue.
+            // Keeps the connector type recognisable through selection
+            // chrome.
+            brighten(self.color)
         } else {
-            egui::Color32::from_rgb(60, 120, 200)
+            self.color
         };
-        let width = if selected { 2.0 } else { 1.4 };
+        let width = if selected { 2.2 } else { 1.5 };
         let stroke = egui::Stroke::new(width, col);
         let painter = ctx.ui.painter();
 
-        let dx = to.x - from.x;
-        let dy = to.y - from.y;
-        // Near-collinear: straight segment. Threshold in screen
-        // pixels keeps it stable at all zoom levels (the caller
-        // already transformed to screen-space).
+        // Whether each side's stub actually helps reach the target.
+        // A stub helps iff its outward unit vector projects positively
+        // onto the from→to vector — i.e. stepping outward from the
+        // port moves us *closer* to the other end. When the dot
+        // product is zero (port faces perpendicular to the
+        // connection) or negative (port faces away from the target),
+        // emitting the stub creates a visible U-shape that doubles
+        // back across the icon. The previous version always drew
+        // both stubs and produced exactly that bug for collinear
+        // same-direction ports (e.g. an inertia's `flange_b` on the
+        // right wired to a sensor's `flange` whose icon was X-mirrored
+        // to also expose its flange on the right at the same x).
+        let dx_full = to.x - from.x;
+        let dy_full = to.y - from.y;
+        let (uxf, uyf) = self.from_dir.outward();
+        let (uxt, uyt) = self.to_dir.outward();
+        let from_helps = self.from_dir != PortDir::None
+            && uxf * dx_full + uyf * dy_full > 0.0;
+        let to_helps = self.to_dir != PortDir::None
+            && uxt * (-dx_full) + uyt * (-dy_full) > 0.0;
+
+        let from_stub = if from_helps {
+            step(from, self.from_dir, STUB_PX)
+        } else {
+            from
+        };
+        let to_stub = if to_helps {
+            step(to, self.to_dir, STUB_PX)
+        } else {
+            to
+        };
+
+        if from_helps {
+            painter.line_segment(
+                [egui::pos2(from.x, from.y), egui::pos2(from_stub.x, from_stub.y)],
+                stroke,
+            );
+        }
+        if to_helps {
+            painter.line_segment(
+                [egui::pos2(to_stub.x, to_stub.y), egui::pos2(to.x, to.y)],
+                stroke,
+            );
+        }
+
+        let p_from = from_stub;
+        let p_to = to_stub;
+        let dx = p_to.x - p_from.x;
+        let dy = p_to.y - p_from.y;
         let thr = 1.0;
+
+        // Collinear (or trivially close on one axis) → straight
+        // segment between stub-ends. No Z-bend, no doubling back.
         if dx.abs() < thr || dy.abs() < thr {
             painter.line_segment(
-                [egui::pos2(from.x, from.y), egui::pos2(to.x, to.y)],
+                [egui::pos2(p_from.x, p_from.y), egui::pos2(p_to.x, p_to.y)],
                 stroke,
             );
             return;
         }
 
-        // Z-route with the bend at the x midpoint. Produces the
-        // classic Modelica "two right-angle bends" shape:
-        //
-        //   A─────┐
-        //         │
-        //         └─────B
-        let midx = from.x + dx * 0.5;
-        let p0 = egui::pos2(from.x, from.y);
-        let p1 = egui::pos2(midx, from.y);
-        let p2 = egui::pos2(midx, to.y);
-        let p3 = egui::pos2(to.x, to.y);
-        painter.line_segment([p0, p1], stroke);
-        painter.line_segment([p1, p2], stroke);
-        painter.line_segment([p2, p3], stroke);
+        // Z-bend axis selection — horizontal-exit ports route through
+        // an H→V→H Z, vertical-exit ports the opposite. When the
+        // source stub was skipped (port faces away or perpendicular),
+        // fall back to the target's direction; if both are vertical-
+        // bias / both horizontal-bias, this picks the right pivot.
+        let prefer_horizontal_first = match (self.from_dir, self.to_dir) {
+            (PortDir::Left | PortDir::Right, _) => true,
+            (PortDir::None, PortDir::Left | PortDir::Right) => false,
+            (PortDir::Up | PortDir::Down, _) => false,
+            _ => true,
+        };
+        let mid = if prefer_horizontal_first {
+            let midx = p_from.x + dx * 0.5;
+            (egui::pos2(midx, p_from.y), egui::pos2(midx, p_to.y))
+        } else {
+            let midy = p_from.y + dy * 0.5;
+            (egui::pos2(p_from.x, midy), egui::pos2(p_to.x, midy))
+        };
+        painter.line_segment([egui::pos2(p_from.x, p_from.y), mid.0], stroke);
+        painter.line_segment([mid.0, mid.1], stroke);
+        painter.line_segment([mid.1, egui::pos2(p_to.x, p_to.y)], stroke);
     }
 
-    /// Hit-test each of the three segments individually so clicks
-    /// near the bend register, not just clicks near the phantom
-    /// straight line between endpoints.
+    /// Hit-test the simplified path. Cheap enough to do at full
+    /// fidelity on every click; refining for stubs would add cost
+    /// but no detectability benefit (stubs are 10px each).
     fn hit(
         &self,
         world_pos: lunco_canvas::Pos,
@@ -280,6 +531,20 @@ impl EdgeVisual for OrthogonalEdgeVisual {
             || segment_dist_sq(world_pos, p1, p2) <= threshold_sq
             || segment_dist_sq(world_pos, p2, p3) <= threshold_sq
     }
+}
+
+/// Translate `p` by `len` pixels in `dir`'s outward direction.
+fn step(p: CanvasPos, dir: PortDir, len: f32) -> CanvasPos {
+    let (ux, uy) = dir.outward();
+    CanvasPos::new(p.x + ux * len, p.y + uy * len)
+}
+
+/// Selection-state brightener — shifts each channel ~30% toward white
+/// while preserving hue. Used so wires keep their domain colour even
+/// while highlighted.
+fn brighten(c: egui::Color32) -> egui::Color32 {
+    let lift = |v: u8| (v as u16 + 80).min(255) as u8;
+    egui::Color32::from_rgb(lift(c.r()), lift(c.g()), lift(c.b()))
 }
 
 /// Paint a dashed rectangle outline. Used for icon-only classes so
@@ -372,13 +637,57 @@ fn build_registry() -> VisualRegistry {
             .get("icon_only")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
+        // `icon_graphics` is the decoded Icon annotation. Missing /
+        // null on MSL components — they keep using the SVG path.
+        let icon_graphics = data
+            .get("icon_graphics")
+            .and_then(|v| {
+                if v.is_null() {
+                    None
+                } else {
+                    serde_json::from_value::<crate::annotations::Icon>(v.clone()).ok()
+                }
+            });
+        let rotation_deg = data
+            .get("icon_rotation_deg")
+            .and_then(|v| v.as_f64())
+            .map(|v| v as f32)
+            .unwrap_or(0.0);
+        let mirror_x = data
+            .get("icon_mirror_x")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let mirror_y = data
+            .get("icon_mirror_y")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
         IconNodeVisual {
             type_label,
             icon_asset,
             icon_only,
+            icon_graphics,
+            rotation_deg,
+            mirror_x,
+            mirror_y,
         }
     });
-    reg.register_edge_kind("modelica.connection", |_: &JsonValue| OrthogonalEdgeVisual);
+    reg.register_edge_kind("modelica.connection", |data: &JsonValue| {
+        let connector_type = data
+            .get("connector_type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let from_dir = PortDir::from_str(
+            data.get("from_dir").and_then(|v| v.as_str()).unwrap_or(""),
+        );
+        let to_dir = PortDir::from_str(
+            data.get("to_dir").and_then(|v| v.as_str()).unwrap_or(""),
+        );
+        OrthogonalEdgeVisual {
+            color: wire_color_for(connector_type),
+            from_dir,
+            to_dir,
+        }
+    });
     reg
 }
 
@@ -466,13 +775,27 @@ use coords::{canvas_to_modelica, ModelicaPos};
 /// Fallback port layout when the component has no annotated port
 /// positions. Alternates left / right edges at the vertical centre
 /// for the first two ports (the common two-terminal shape), then
-/// walks up both sides for any additional ports.
-fn port_fallback_offset(index: usize, _total: usize) -> (f32, f32) {
+/// walks up both sides for any additional ports. Uses default icon
+/// dimensions; for sized icons see [`port_fallback_offset_for_size`].
+fn port_fallback_offset(index: usize, total: usize) -> (f32, f32) {
+    port_fallback_offset_for_size(index, total, ICON_W, ICON_H)
+}
+
+/// Same fallback layout as [`port_fallback_offset`] but parameterised
+/// by the icon's actual width/height — needed once Placement-driven
+/// node sizing makes per-instance dimensions vary instead of always
+/// being 20×20.
+fn port_fallback_offset_for_size(
+    index: usize,
+    _total: usize,
+    icon_w: f32,
+    icon_h: f32,
+) -> (f32, f32) {
     let side_left = index % 2 == 0;
     let row = index / 2; // 0 → middle, 1 → above, 2 → even higher
-    let cy = ICON_H * 0.5 - (row as f32) * (ICON_H * 0.25);
-    let cx = if side_left { 0.0 } else { ICON_W };
-    (cx, cy.clamp(0.0, ICON_H))
+    let cy = icon_h * 0.5 - (row as f32) * (icon_h * 0.25);
+    let cx = if side_left { 0.0 } else { icon_w };
+    (cx, cy.clamp(0.0, icon_h))
 }
 
 /// Regex-scan `connect(a.b, c.d);` patterns in `source` and add
@@ -572,6 +895,21 @@ fn project_scene(diagram: &VisualDiagram) -> (Scene, HashMap<DiagramNodeId, Canv
         // and right for the classic two-terminal electrical shape,
         // extending up for more ports. Matches what OMEdit does
         // when Placement annotations are missing.
+        // The single source of truth for this node's icon-local →
+        // canvas-world transform. Built once by the importer from the
+        // Placement, applied uniformly here for the rect, ports, and
+        // (eventually) the icon body.
+        let xform = node.icon_transform;
+
+        // Bounding rect = AABB of the icon's local extent
+        // ({{-100,-100},{100,100}} per MLS default) under the
+        // transform. Honours rotation naturally (a 45°-rotated icon
+        // gets a larger axis-aligned rect than its unrotated form).
+        let ((min_wx, min_wy), (max_wx, max_wy)) =
+            xform.local_aabb(-100.0, -100.0, 100.0, 100.0);
+        let icon_w_local = (max_wx - min_wx).max(4.0);
+        let icon_h_local = (max_wy - min_wy).max(4.0);
+
         let n_ports = node.component_def.ports.len();
         let ports: Vec<CanvasPort> = node
             .component_def
@@ -579,13 +917,29 @@ fn project_scene(diagram: &VisualDiagram) -> (Scene, HashMap<DiagramNodeId, Canv
             .iter()
             .enumerate()
             .map(|(i, p)| {
-                let (lx, ly) = if p.x == 0.0 && p.y == 0.0 {
-                    port_fallback_offset(i, n_ports)
+                // Port positions in icon-local Modelica coords go
+                // through the same transform — no per-feature
+                // mirror/rotate branches, just one matrix multiply.
+                // The result is in canvas world; we convert to
+                // icon-local *screen* coords (relative to the rect's
+                // top-left) since `CanvasPort.local_offset` is icon-
+                // local, not world.
+                let (wx, wy) = if p.x == 0.0 && p.y == 0.0 {
+                    // Fallback layout: distribute around the rect.
+                    // Already in icon-local screen coords — convert
+                    // to world by adding the rect's top-left.
+                    let (fx, fy) = port_fallback_offset_for_size(
+                        i,
+                        n_ports,
+                        icon_w_local,
+                        icon_h_local,
+                    );
+                    (min_wx + fx, min_wy + fy)
                 } else {
-                    let lx = ((p.x + 100.0) / 200.0) * ICON_W;
-                    let ly = ((100.0 - p.y) / 200.0) * ICON_H;
-                    (lx, ly)
+                    xform.apply(p.x, p.y)
                 };
+                let lx = wx - min_wx;
+                let ly = wy - min_wy;
                 CanvasPort {
                     id: CanvasPortId::new(p.name.clone()),
                     local_offset: CanvasPos::new(lx, ly),
@@ -594,24 +948,12 @@ fn project_scene(diagram: &VisualDiagram) -> (Scene, HashMap<DiagramNodeId, Canv
             })
             .collect();
 
-        // `DiagramNode.position` is already stored in screen / +Y-down
-        // convention — `import_model_to_diagram` flips the Modelica
-        // annotation's +Y-up coordinate at read time (see diagram.rs
-        // around the Placement-annotation regex, which does
-        // `y = -((y1+y2)/2.0)`). We therefore use the stored Y
-        // directly here; flipping it again (as an earlier version
-        // of this function did) places components at the wrong
-        // side of the diagram and makes right-click "add component"
-        // appear to ignore zoom / offset.
-        let wx = node.position.x;
-        let wy = node.position.y;
-
         scene.insert_node(CanvasNode {
             id: cid,
             rect: CanvasRect::from_min_size(
-                CanvasPos::new(wx - ICON_W * 0.5, wy - ICON_H * 0.5),
-                ICON_W,
-                ICON_H,
+                CanvasPos::new(min_wx, min_wy),
+                icon_w_local,
+                icon_h_local,
             ),
             kind: "modelica.icon".into(),
             data: serde_json::json!({
@@ -629,6 +971,24 @@ fn project_scene(diagram: &VisualDiagram) -> (Scene, HashMap<DiagramNodeId, Canv
                 "icon_only": crate::class_cache::is_icon_only_class(
                     &node.component_def.msl_path,
                 ),
+                // Decoded `Icon(graphics={...})` annotation for the
+                // class, if the projector extracted one. Takes
+                // precedence over the SVG fallback in
+                // `IconNodeVisual::draw`. Omitted when `None` so the
+                // common (MSL) path produces the same JSON it always
+                // has.
+                "icon_graphics": node.component_def.icon_graphics,
+                // Orientation parameters (rotation + mirror) preserved
+                // alongside the node's `IconTransform` matrix. The
+                // visual reads these to rotate/mirror the icon body
+                // itself, complementing the port positions handled
+                // above. Only the named primitives travel — the matrix
+                // is rebuilt from `extent` + `position` when needed
+                // (translation/scale are already baked into the
+                // canvas rect).
+                "icon_rotation_deg": node.icon_transform.rotation_deg,
+                "icon_mirror_x": node.icon_transform.mirror_x,
+                "icon_mirror_y": node.icon_transform.mirror_y,
             }),
             ports,
             label: node.instance_name.clone(),
@@ -643,6 +1003,56 @@ fn project_scene(diagram: &VisualDiagram) -> (Scene, HashMap<DiagramNodeId, Canv
         let Some(tgt_cid) = id_map.get(&edge.target_node) else {
             continue;
         };
+
+        // Look up the source / target port definitions so we can
+        // bake connector type + edge-side direction into the edge's
+        // data. The visual reads both for colour selection and
+        // port-direction stubs without needing world access.
+        let src_node = diagram.nodes.iter().find(|n| n.id == edge.source_node);
+        let tgt_node = diagram.nodes.iter().find(|n| n.id == edge.target_node);
+        // Port lookup falls back to the head segment so qualified
+        // sub-port references like `flange.phi` (from
+        // `recover_edges_from_source`) still resolve to the
+        // outer `flange` PortDef. Without this, every recovered
+        // edge with a sub-port lost its colour + stub direction
+        // because the find() returned None.
+        let find_port = |defs: &[crate::visual_diagram::PortDef], name: &str|
+            -> Option<crate::visual_diagram::PortDef>
+        {
+            if let Some(p) = defs.iter().find(|p| p.name == name) {
+                return Some(p.clone());
+            }
+            let head = name.split('.').next().unwrap_or(name);
+            defs.iter().find(|p| p.name == head).cloned()
+        };
+        let src_port_def =
+            src_node.and_then(|n| find_port(&n.component_def.ports, &edge.source_port));
+        let tgt_port_def =
+            tgt_node.and_then(|n| find_port(&n.component_def.ports, &edge.target_port));
+        let connector_type = src_port_def
+            .as_ref()
+            .map(|p| p.connector_type.clone())
+            .unwrap_or_default();
+        // Stub direction = which edge the port sits on in *screen*
+        // space. Apply the owning instance's transform's linear part
+        // (no translation — directions don't have a position). One
+        // matrix multiply per port replaces the previous four
+        // per-feature branches (mirror_x, mirror_y, rotate_x, …).
+        let from_dir = match (src_node, src_port_def.as_ref()) {
+            (Some(n), Some(p)) => {
+                let (dx, dy) = n.icon_transform.apply_dir(p.x, p.y);
+                port_edge_dir(dx, dy)
+            }
+            _ => PortDir::None,
+        };
+        let to_dir = match (tgt_node, tgt_port_def.as_ref()) {
+            (Some(n), Some(p)) => {
+                let (dx, dy) = n.icon_transform.apply_dir(p.x, p.y);
+                port_edge_dir(dx, dy)
+            }
+            _ => PortDir::None,
+        };
+
         let eid = scene.alloc_edge_id();
         scene.insert_edge(CanvasEdge {
             id: eid,
@@ -655,7 +1065,11 @@ fn project_scene(diagram: &VisualDiagram) -> (Scene, HashMap<DiagramNodeId, Canv
                 port: CanvasPortId::new(edge.target_port.clone()),
             },
             kind: "modelica.connection".into(),
-            data: JsonValue::Null,
+            data: serde_json::json!({
+                "connector_type": connector_type,
+                "from_dir": from_dir.as_str(),
+                "to_dir": to_dir.as_str(),
+            }),
             origin: None,
         });
     }
@@ -670,11 +1084,37 @@ fn project_scene(diagram: &VisualDiagram) -> (Scene, HashMap<DiagramNodeId, Canv
 /// the transform + selection + in-flight projection task for that
 /// specific document so switching tabs doesn't leak viewport,
 /// selection, or a stale projection into a neighbour.
+/// Shared handle to the target class's `Diagram(graphics={...})`
+/// annotation — painted as canvas background by
+/// [`DiagramDecorationLayer`]. Projector updates it each time the
+/// drilled-in class changes.
+pub type BackgroundDiagramHandle = std::sync::Arc<
+    std::sync::RwLock<
+        Option<(
+            crate::annotations::CoordinateSystem,
+            Vec<crate::annotations::GraphicItem>,
+        )>,
+    >,
+>;
+
 pub struct CanvasDocState {
     pub canvas: Canvas,
     pub last_seen_gen: u64,
+    /// Snapshot of the drill-in target that produced the *currently
+    /// rendered* scene. The render trigger compares this against the
+    /// live `DrilledInClassNames[doc_id]`; a difference re-projects.
+    /// Without this, clicking a class in the Twin Browser updated the
+    /// drill-in resource but the canvas kept showing the previous
+    /// target's cached scene — the visible "click did nothing" bug.
+    pub last_seen_target: Option<String>,
     pub context_menu: Option<PendingContextMenu>,
     pub projection_task: Option<ProjectionTask>,
+    /// Background decoration — the target class's own
+    /// `Diagram(graphics={...})` annotation. Painted by the
+    /// decoration layer registered on `canvas`. Shared via `Arc` so
+    /// the projection code can update the layer's data without
+    /// reaching into `canvas.layers`.
+    pub background_diagram: BackgroundDiagramHandle,
 }
 
 impl Default for CanvasDocState {
@@ -682,12 +1122,85 @@ impl Default for CanvasDocState {
         let mut canvas = Canvas::new(build_registry());
         canvas.layers.retain(|layer| layer.name() != "selection");
         canvas.overlays.push(Box::new(NavBarOverlay::default()));
+        // Diagram decoration layer sits right after the grid so it
+        // paints behind nodes and edges. The decoration data is
+        // shared via `Arc<RwLock>` with `CanvasDocState` so the
+        // projector can swap in a new class's graphics without
+        // walking the layer list.
+        let background_diagram: BackgroundDiagramHandle =
+            std::sync::Arc::new(std::sync::RwLock::new(None));
+        let decoration_idx = canvas
+            .layers
+            .iter()
+            .position(|l| l.name() != "grid")
+            .unwrap_or(canvas.layers.len());
+        canvas.layers.insert(
+            decoration_idx,
+            Box::new(DiagramDecorationLayer {
+                data: background_diagram.clone(),
+            }),
+        );
         Self {
             canvas,
             last_seen_gen: 0,
+            last_seen_target: None,
             context_menu: None,
             projection_task: None,
+            background_diagram,
         }
+    }
+}
+
+/// Paints the target class's `Diagram(graphics={...})` annotation as
+/// canvas background — the red labelled rectangles, text callouts,
+/// and accent lines MSL example diagrams carry for reader orientation
+/// (the PID example's "reference speed generation" / "PI controller"
+/// / "plant" regions are the canonical case). Holds an
+/// `Arc<RwLock<…>>` handle so the projector can push a new class's
+/// graphics in without reaching into the canvas's layer list.
+struct DiagramDecorationLayer {
+    data: BackgroundDiagramHandle,
+}
+
+impl lunco_canvas::Layer for DiagramDecorationLayer {
+    fn name(&self) -> &'static str {
+        "modelica.diagram_decoration"
+    }
+    fn draw(
+        &mut self,
+        ctx: &mut lunco_canvas::visual::DrawCtx,
+        _scene: &lunco_canvas::Scene,
+        _selection: &lunco_canvas::Selection,
+    ) {
+        let Ok(guard) = self.data.read() else { return };
+        let Some((coord_system, graphics)) = guard.as_ref() else {
+            return;
+        };
+        // Map the coordinate system's extent (Modelica +Y up) to the
+        // canvas world rect (+Y down) by flipping Y. Our node
+        // placements already live in this flipped space, so the
+        // decoration lines up with the nodes natively.
+        let ext = coord_system.extent;
+        let world_min_x = (ext.p1.x.min(ext.p2.x)) as f32;
+        let world_max_x = (ext.p1.x.max(ext.p2.x)) as f32;
+        let world_min_y = -(ext.p1.y.max(ext.p2.y) as f32);
+        let world_max_y = -(ext.p1.y.min(ext.p2.y) as f32);
+        let world_rect = lunco_canvas::Rect::from_min_max(
+            lunco_canvas::Pos::new(world_min_x, world_min_y),
+            lunco_canvas::Pos::new(world_max_x, world_max_y),
+        );
+        let screen_rect_canvas =
+            ctx.viewport.world_rect_to_screen(world_rect, ctx.screen_rect);
+        let screen_rect = bevy_egui::egui::Rect::from_min_max(
+            bevy_egui::egui::pos2(screen_rect_canvas.min.x, screen_rect_canvas.min.y),
+            bevy_egui::egui::pos2(screen_rect_canvas.max.x, screen_rect_canvas.max.y),
+        );
+        crate::icon_paint::paint_graphics(
+            ctx.ui.painter(),
+            screen_rect,
+            *coord_system,
+            graphics,
+        );
     }
 }
 
@@ -763,6 +1276,10 @@ impl CanvasDiagramState {
 ///   live via `spawned_at.elapsed() > deadline`.
 pub struct ProjectionTask {
     pub gen_at_spawn: u64,
+    /// Drill-in target the projection was spawned for. Compared
+    /// against `CanvasDocState::last_seen_target` on completion so
+    /// the UI knows which target produced the rendered scene.
+    pub target_at_spawn: Option<String>,
     pub spawned_at: std::time::Instant,
     pub deadline: std::time::Duration,
     pub cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -848,7 +1365,13 @@ impl Panel for CanvasDiagramPanel {
             let docstate = state.get(Some(doc_id));
             let first_render = !state.has_entry(doc_id);
             let gen_advanced = gen != docstate.last_seen_gen;
-            (first_render || gen_advanced).then_some((doc_id, gen))
+            // Drill-in target changed (e.g. user clicked a different
+            // class in the Twin Browser for an already-open tab).
+            let live_target = world
+                .get_resource::<DrilledInClassNames>()
+                .and_then(|m| m.get(doc_id).map(str::to_string));
+            let target_changed = live_target != docstate.last_seen_target;
+            (first_render || gen_advanced || target_changed).then_some((doc_id, gen))
         };
 
         if let Some((doc_id, gen)) = project_now {
@@ -893,6 +1416,37 @@ impl Panel for CanvasDiagramPanel {
                 .and_then(|m| m.get(doc_id).map(str::to_string));
             let mut state = world.resource_mut::<CanvasDiagramState>();
             let docstate = state.get_mut(Some(doc_id));
+            // If the user just changed drill-in target (clicked a
+            // different class in the Twin Browser), the new scene's
+            // bounds usually have nothing to do with the old one —
+            // so we want auto-fit to engage exactly as it does on a
+            // fresh tab open. Resetting `last_seen_gen` to 0 makes
+            // the completion path treat this projection as
+            // "initial" and refit the viewport, instead of leaving
+            // the camera at the stale zoom that made the new icons
+            // look "way too far apart" (icons rendered at near 1:1
+            // because the previous package-level scene auto-fit
+            // happened at a different scale).
+            if docstate.last_seen_target != target_class_snapshot {
+                docstate.last_seen_gen = 0;
+            }
+            // Refresh the Diagram-annotation background decoration
+            // for the target class. Cheap AST walk (no re-parse —
+            // `ast_arc` is the already-parsed tree the task below
+            // consumes). Runs on main thread; `paint_graphics` is
+            // idle until the layer's next draw.
+            let bg_handle = docstate.background_diagram.clone();
+            if let Some(ast) = ast_arc.as_ref() {
+                let diag = diagram_annotation_for_target(
+                    ast.as_ref(),
+                    target_class_snapshot.as_deref(),
+                );
+                if let Ok(mut guard) = bg_handle.write() {
+                    *guard = diag.map(|d| (d.coordinate_system, d.graphics));
+                }
+            } else if let Ok(mut guard) = bg_handle.write() {
+                *guard = None;
+            }
             // Drop any in-flight projection whose input is now
             // stale (older generation of this doc). We can't cancel
             // a `Task` cleanly in Bevy's API, but dropping the
@@ -997,6 +1551,7 @@ impl Panel for CanvasDiagramPanel {
                     });
                     docstate.projection_task = Some(ProjectionTask {
                         gen_at_spawn: gen,
+                        target_at_spawn: target_class_snapshot.clone(),
                         spawned_at,
                         deadline,
                         cancel,
@@ -1074,9 +1629,9 @@ impl Panel for CanvasDiagramPanel {
                     futures_lite::future::block_on(
                         futures_lite::future::poll_once(&mut t.task),
                     )
-                    .map(|scene| (t.gen_at_spawn, scene))
+                    .map(|scene| (t.gen_at_spawn, t.target_at_spawn.clone(), scene))
                 });
-            if let Some((gen, scene)) = done_task {
+            if let Some((gen, target, scene)) = done_task {
                 docstate.projection_task = None;
                 bevy::log::info!(
                     "[CanvasDiagram] project done: {} nodes, {} edges (initial={})",
@@ -1087,6 +1642,7 @@ impl Panel for CanvasDiagramPanel {
                 docstate.canvas.scene = scene;
                 docstate.canvas.selection.clear();
                 docstate.last_seen_gen = gen;
+                docstate.last_seen_target = target;
                 if is_initial_projection {
                     let physical_zoom =
                         lunco_canvas::Viewport::physical_mm_zoom(ui.ctx());
@@ -1153,10 +1709,21 @@ impl CanvasDiagramPanel {
         // enter drag/connect/delete states — pan + zoom + selection
         // still work. Authored scene mutations are blocked at the
         // input source, not corrected after the fact.
+        // Snap settings come from a long-lived resource that the
+        // Settings menu toggles. Read it here each frame and push
+        // onto the canvas so the tool sees an up-to-date value
+        // during the next drag update. Off by default — users turn
+        // it on when they want drag alignment.
+        let snap_settings: Option<lunco_canvas::SnapSettings> = world
+            .get_resource::<CanvasSnapSettings>()
+            .filter(|s| s.enabled)
+            .map(|s| lunco_canvas::SnapSettings { step: s.step });
+
         let (response, events) = {
             let mut state = world.resource_mut::<CanvasDiagramState>();
             let docstate = state.get_mut(active_doc);
             docstate.canvas.read_only = tab_read_only;
+            docstate.canvas.snap = snap_settings;
             docstate.canvas.ui(ui)
         };
 
@@ -1891,105 +2458,322 @@ fn render_projecting_overlay(ui: &mut egui::Ui, canvas_rect: egui::Rect) {
 
 // ─── Empty-diagram summary ──────────────────────────────────────────
 
-/// When the canvas scene has no nodes (i.e. the class has no
-/// component instantiations — common for equation-only models like
-/// RocketEngine), paint a card in the centre of the canvas with a
-/// summary of what the class *does* contain: parameters, inputs,
-/// variables, equations. Tells the user the model is real and
-/// points them at the Text tab, instead of leaving them staring
-/// at a blank grid.
+/// When the canvas scene has no nodes — common for equation-only
+/// leaf models (Battery, RocketEngine, BouncyBall, SpringMass) and
+/// MSL building blocks (Integrator, Resistor, Inertia) — paint a
+/// "data sheet" card in the centre of the canvas. Treats the class
+/// as a first-class display object instead of leaving the user
+/// staring at the blank grid.
 ///
-/// Summary numbers come from regex scans of the document source —
-/// cheap, and the cost is only paid on frames where the scene is
-/// empty (rare once a user opens a composite model).
+/// Card layout:
+/// 1. **Hero strip** — the class's authored `Icon(graphics={...})`
+///    annotation rendered via [`crate::icon_paint::paint_graphics`].
+///    For classes without one, a stylised type-badge (M / B / C / …).
+/// 2. **Heading** — class name + type label.
+/// 3. **Symbol bands** — named parameters / inputs / outputs (top 6
+///    each). Names beat counts: "tau, J, c" tells the user what the
+///    model is for; "3 parameters" doesn't.
+/// 4. **Footer counts** — equations + connect equations as a one-
+///    line summary, plus a hint that points at the Text tab.
 fn render_empty_diagram_overlay(
     ui: &mut egui::Ui,
     canvas_rect: egui::Rect,
     world: &mut World,
 ) {
-    let Some(open) = world.resource::<WorkbenchState>().open_model.as_ref() else {
+    let Some(open) = world.resource::<WorkbenchState>().open_model.clone() else {
         return;
     };
-    let source = open.source.as_ref();
-    let class_name = open.detected_name.clone().unwrap_or_else(|| "(unnamed)".into());
+    let source = open.source.clone();
+    let class_name = open
+        .detected_name
+        .clone()
+        .unwrap_or_else(|| "(unnamed)".into());
 
-    // Cheap cached fetch — rescans source only when source identity
-    // changes (len + 4KB-prefix hash). Previously recompiled 5
-    // regexes per frame on the 184KB source, saturating the UI
-    // thread on drill-in tabs.
-    let counts = empty_overlay_counts_cached(source);
-    let param_count = counts.params;
-    let input_count = counts.inputs;
-    let output_count = counts.outputs;
-    let equation_count = counts.equations;
-    let connect_count = counts.connects;
+    let counts = empty_overlay_counts_cached(source.as_ref());
+
+    // Pull the live class info out of the document registry so we
+    // can show real symbol names + (when authored) the class's own
+    // `Icon` graphics. This is the same AST the canvas projector
+    // already holds, so we don't pay a re-parse.
+    let (icon, class_type, description, param_names, input_names, output_names) =
+        empty_overlay_class_info(world, open.doc, &class_name);
 
     crate::ui::panels::placeholder::render_centered_card(
         ui,
         canvas_rect,
-        egui::vec2(380.0, 220.0),
+        egui::vec2(440.0, 360.0),
         |child| {
-            child.label(
-                egui::RichText::new("📝 Equation-only model")
-                    .strong()
-                    .size(14.0)
-                    .color(egui::Color32::from_rgb(220, 225, 235)),
-            );
+            // ── Hero strip ────────────────────────────────────────
+            // Either the authored icon or a stylised type badge.
+            let hero_size = egui::vec2(120.0, 80.0);
+            let (_, hero_rect) = child.allocate_space(hero_size);
+            if let Some(icon) = &icon {
+                crate::icon_paint::paint_graphics(
+                    child.painter(),
+                    hero_rect,
+                    icon.coordinate_system,
+                    &icon.graphics,
+                );
+            } else {
+                paint_class_type_badge(
+                    child.painter(),
+                    hero_rect,
+                    class_type.unwrap_or("model"),
+                );
+            }
+            child.add_space(8.0);
+
+            // ── Class name + type label ───────────────────────────
             child.label(
                 egui::RichText::new(&class_name)
-                    .size(12.0)
-                    .color(egui::Color32::from_rgb(170, 185, 210)),
+                    .strong()
+                    .size(15.0)
+                    .color(egui::Color32::from_rgb(225, 230, 240)),
             );
-            child.add_space(6.0);
-            child.label(
-                egui::RichText::new(
-                    "No instantiated components to draw. This class is defined \
-                     by equations — the composition view is empty by convention.",
-                )
-                .size(11.0)
-                .color(egui::Color32::from_rgb(170, 180, 200)),
-            );
+            if let Some(t) = class_type {
+                child.label(
+                    egui::RichText::new(t)
+                        .size(10.5)
+                        .italics()
+                        .color(egui::Color32::from_rgb(150, 165, 190)),
+                );
+            }
+            if let Some(desc) = &description {
+                child.add_space(4.0);
+                child.label(
+                    egui::RichText::new(desc)
+                        .size(11.0)
+                        .color(egui::Color32::from_rgb(190, 200, 220)),
+                );
+            }
             child.add_space(8.0);
             child.separator();
             child.add_space(6.0);
 
-            let row = |u: &mut egui::Ui, label: &str, n: usize| {
-                // Shared placeholder layout centres each emitted
-                // widget; wrap the row in a fixed-width horizontal
-                // so label/value pair stays as a single centred
-                // unit rather than each getting centred individually.
-                u.horizontal(|u| {
-                    u.label(
-                        egui::RichText::new(label)
-                            .small()
-                            .color(egui::Color32::from_rgb(150, 160, 180)),
-                    );
-                    u.with_layout(
-                        egui::Layout::right_to_left(egui::Align::Center),
-                        |u| {
-                            u.monospace(
-                                egui::RichText::new(format!("{n}"))
-                                    .color(egui::Color32::from_rgb(200, 220, 255)),
-                            );
-                        },
-                    );
-                });
-            };
-            row(child, "Parameters", param_count);
-            row(child, "Inputs", input_count);
-            row(child, "Outputs", output_count);
-            row(child, "Equations", equation_count);
-            if connect_count > 0 {
-                row(child, "Connect equations", connect_count);
-            }
+            // ── Named symbol bands ───────────────────────────────
+            paint_symbol_band(child, "Parameters", &param_names, counts.params);
+            paint_symbol_band(child, "Inputs", &input_names, counts.inputs);
+            paint_symbol_band(child, "Outputs", &output_names, counts.outputs);
+
+            child.add_space(6.0);
+            child.label(
+                egui::RichText::new(format!(
+                    "{} equations · {} connect equations",
+                    counts.equations, counts.connects,
+                ))
+                .small()
+                .color(egui::Color32::from_rgb(140, 155, 175)),
+            );
             child.add_space(4.0);
             child.label(
-                egui::RichText::new("→ Open the Text tab to read / edit the source.")
+                egui::RichText::new("→ Switch to the Text tab to read / edit the source.")
                     .italics()
                     .size(10.0)
-                    .color(egui::Color32::from_rgb(140, 155, 175)),
+                    .color(egui::Color32::from_rgb(130, 145, 165)),
             );
         },
+    );
+}
+
+/// Pull human-friendly info about the active class: authored Icon,
+/// type keyword (`model`/`block`/…), description string, and the top
+/// few parameter / input / output names. Falls back to `None`/empty
+/// vectors silently when the registry doesn't have the doc.
+fn empty_overlay_class_info(
+    world: &mut World,
+    doc_id: Option<lunco_doc::DocumentId>,
+    class_name: &str,
+) -> (
+    Option<crate::annotations::Icon>,
+    Option<&'static str>,
+    Option<String>,
+    Vec<String>,
+    Vec<String>,
+    Vec<String>,
+) {
+    let Some(doc) = doc_id else {
+        return (None, None, None, vec![], vec![], vec![]);
+    };
+    let registry = world.resource::<ModelicaDocumentRegistry>();
+    let Some(host) = registry.host(doc) else {
+        return (None, None, None, vec![], vec![], vec![]);
+    };
+    let document = host.document();
+    let ast_arc = match document.ast().result.as_ref() {
+        Ok(a) => a.clone(),
+        Err(_) => return (None, None, None, vec![], vec![], vec![]),
+    };
+
+    // Locate the class. Prefer an exact name match; fall back to the
+    // first non-package class (matches `extract_model_name`).
+    let class_def = locate_class(&ast_arc, class_name);
+    let Some(class) = class_def else {
+        return (None, None, None, vec![], vec![], vec![]);
+    };
+
+    use rumoca_session::parsing::ast::Causality;
+    use rumoca_session::parsing::ClassType;
+
+    let icon = crate::annotations::extract_icon(&class.annotation);
+    let class_type = match class.class_type {
+        ClassType::Model => Some("model"),
+        ClassType::Block => Some("block"),
+        ClassType::Class => Some("class"),
+        ClassType::Connector => Some("connector"),
+        ClassType::Record => Some("record"),
+        ClassType::Type => Some("type"),
+        ClassType::Package => Some("package"),
+        ClassType::Function => Some("function"),
+        ClassType::Operator => Some("operator"),
+    };
+    let description: Option<String> = class
+        .description
+        .iter()
+        .next()
+        .map(|t| t.text.as_ref().trim_matches('"').to_string())
+        .filter(|s| !s.is_empty());
+
+    let mut params = Vec::new();
+    let mut inputs = Vec::new();
+    let mut outputs = Vec::new();
+    for (name, comp) in class.components.iter() {
+        use rumoca_session::parsing::ast::Variability;
+        if matches!(comp.variability, Variability::Parameter(_)) {
+            params.push(name.clone());
+        }
+        match comp.causality {
+            Causality::Input(_) => inputs.push(name.clone()),
+            Causality::Output(_) => outputs.push(name.clone()),
+            _ => {}
+        }
+    }
+
+    (icon, class_type, description, params, inputs, outputs)
+}
+
+/// Extract the `Diagram(graphics={...})` annotation for the target
+/// class — full-qualified drill-in target, or the first non-package
+/// class when no drill-in is active. Used by the background
+/// decoration layer to paint MSL-style diagram callouts (labelled
+/// regions, accent text) behind the nodes.
+fn diagram_annotation_for_target(
+    ast: &rumoca_session::parsing::ast::StoredDefinition,
+    target: Option<&str>,
+) -> Option<crate::annotations::Diagram> {
+    // Resolve the target class by qualified path walk (supports the
+    // MSL `Modelica.Blocks.Examples.PID_Controller` style). For `None`
+    // targets fall back to the first non-package class, matching the
+    // workbench's default active-class picker.
+    let class = if let Some(qualified) = target {
+        walk_qualified(ast, qualified)
+    } else {
+        use rumoca_session::parsing::ClassType;
+        ast.classes
+            .iter()
+            .find(|(_, c)| !matches!(c.class_type, ClassType::Package))
+            .map(|(_, c)| c)
+    };
+    class.and_then(|c| crate::annotations::extract_diagram(&c.annotation))
+}
+
+/// Walk a dotted qualified class path through `ast.classes` into
+/// nested `class.classes`. Returns the deepest matching class, if any.
+fn walk_qualified<'a>(
+    ast: &'a rumoca_session::parsing::ast::StoredDefinition,
+    qualified: &str,
+) -> Option<&'a rumoca_session::parsing::ast::ClassDef> {
+    let mut segments = qualified.split('.');
+    let first = segments.next()?;
+    let mut current = ast.classes.iter().find(|(n, _)| n.as_str() == first).map(|(_, c)| c)?;
+    for seg in segments {
+        current = current.classes.get(seg)?;
+    }
+    Some(current)
+}
+
+/// Find a class by short name in the AST — top-level first, then one
+/// level of nested classes (the same scope `register_local_class`
+/// uses for the Twin Browser).
+fn locate_class<'a>(
+    ast: &'a rumoca_session::parsing::ast::StoredDefinition,
+    name: &str,
+) -> Option<&'a rumoca_session::parsing::ast::ClassDef> {
+    if let Some((_, c)) = ast.classes.iter().find(|(n, _)| n.as_str() == name) {
+        return Some(c);
+    }
+    for (_, top) in ast.classes.iter() {
+        if let Some(c) = top.classes.get(name) {
+            return Some(c);
+        }
+    }
+    // Final fallback: first non-package class (matches the workbench's
+    // "active class on first open" picker).
+    use rumoca_session::parsing::ClassType;
+    ast.classes
+        .iter()
+        .find(|(_, c)| !matches!(c.class_type, ClassType::Package))
+        .map(|(_, c)| c)
+}
+
+/// Render a row showing a symbol band (e.g. "Parameters: tau, J, c
+/// + 3 more"). When the names list is empty, falls through to "—".
+fn paint_symbol_band(ui: &mut egui::Ui, label: &str, names: &[String], total: usize) {
+    if total == 0 && names.is_empty() {
+        return;
+    }
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new(format!("{label}:"))
+                .small()
+                .color(egui::Color32::from_rgb(150, 160, 180)),
+        );
+        let shown = names.iter().take(6).cloned().collect::<Vec<_>>().join(", ");
+        let suffix = if total > shown.len() && total > names.len().min(6) && names.len() > 6 {
+            format!(" + {} more", total - 6)
+        } else {
+            String::new()
+        };
+        let display = if shown.is_empty() {
+            format!("({total})")
+        } else {
+            format!("{shown}{suffix}")
+        };
+        ui.monospace(
+            egui::RichText::new(display)
+                .small()
+                .color(egui::Color32::from_rgb(200, 220, 255)),
+        );
+    });
+}
+
+/// Stylised type badge used as the hero when a class has no authored
+/// `Icon` annotation. A centred coloured pill with a single uppercase
+/// letter — matches the [`crate::ui::browser_section`] type-badge
+/// palette so the canvas hero and the browser row read as the same
+/// "this is a model" affordance.
+fn paint_class_type_badge(painter: &egui::Painter, rect: egui::Rect, type_name: &str) {
+    use egui::Color32 as C;
+    let (letter, bg) = match type_name {
+        "model" => ("M", C::from_rgb(80, 130, 200)),
+        "block" => ("B", C::from_rgb(100, 160, 110)),
+        "class" => ("C", C::from_rgb(120, 130, 160)),
+        "connector" => ("X", C::from_rgb(220, 160, 80)),
+        "record" => ("R", C::from_rgb(170, 120, 180)),
+        "type" => ("T", C::from_rgb(150, 150, 150)),
+        "package" => ("P", C::from_rgb(190, 110, 110)),
+        "function" => ("F", C::from_rgb(110, 170, 200)),
+        _ => ("?", C::from_rgb(120, 120, 120)),
+    };
+    let pill_w = rect.width().min(rect.height() * 1.4);
+    let pill_h = rect.height().min(120.0);
+    let pill = egui::Rect::from_center_size(rect.center(), egui::vec2(pill_w, pill_h));
+    painter.rect_filled(pill, 16.0, bg);
+    painter.text(
+        pill.center(),
+        egui::Align2::CENTER_CENTER,
+        letter,
+        egui::FontId::proportional(pill_h * 0.55),
+        C::WHITE,
     );
 }
 
@@ -2094,6 +2878,37 @@ fn empty_overlay_counts_cached(source: &str) -> EmptyOverlayCounts {
 #[derive(bevy::prelude::Resource, Default)]
 pub struct DrillInLoads {
     pending: std::collections::HashMap<lunco_doc::DocumentId, DrillInBinding>,
+}
+
+/// User-facing canvas snap settings, read each frame by the canvas
+/// render path and pushed onto [`lunco_canvas::Canvas::snap`]. Off by
+/// default; the Settings menu flips `enabled` and picks the step.
+///
+/// Step is in Modelica world units (not screen pixels) so the visible
+/// grid spacing stays constant across zooms. Typical choices for the
+/// standard `{{-100,-100},{100,100}}` diagram coord system:
+///   * `2` — fine (matches common MSL placement granularity)
+///   * `5` — medium
+///   * `10` — coarse (matches typical integer placements in MSL)
+#[derive(bevy::prelude::Resource)]
+pub struct CanvasSnapSettings {
+    pub enabled: bool,
+    pub step: f32,
+}
+
+impl Default for CanvasSnapSettings {
+    fn default() -> Self {
+        // On by default. Step = 5 Modelica units — the OMEdit
+        // default and the value most MSL example placements are
+        // authored to (common placement extents are multiples of 5
+        // or 10). Fine enough to reach typical target positions,
+        // coarse enough that every drag produces a visibly
+        // different "tick" as the icon crosses grid lines.
+        Self {
+            enabled: true,
+            step: 5.0,
+        }
+    }
 }
 
 /// Persistent `DocumentId → qualified class name` map for tabs

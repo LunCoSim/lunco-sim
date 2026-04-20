@@ -1685,7 +1685,7 @@ pub fn import_model_to_diagram_from_ast(
     // The fake `if let Ok(ast) = _` wrapper used to shadow; now we
     // just take a borrow of the already-parsed tree.
     {
-        let ast = ast;
+        let ast = &ast;
         for (_class_name, class_def) in ast.classes.iter() {
             for imp in &class_def.imports {
                 use rumoca_session::parsing::ast::Import;
@@ -1717,11 +1717,87 @@ pub fn import_model_to_diagram_from_ast(
         }
     }
 
-    // Place nodes in a grid layout (fallback for unannotated components)
-    let node_spacing_x = 200.0;
-    let node_spacing_y = 150.0;
-    let cols = 3;
+    // Local same-file class lookup, keyed by short name.
+    //
+    // Modelica scope rules (MLS §5.3) make sibling classes inside a
+    // package directly visible to one another without an `import`. The
+    // MSL palette only knows about MSL paths, so user classes defined
+    // alongside the model (e.g. `Engine`/`Tank` inside an
+    // `AnnotatedRocketStage` package) would otherwise resolve as
+    // unknown and disappear from the diagram. We synthesise a
+    // [`MSLComponentDef`] for each top-level class and one nesting
+    // level deeper, carrying the extracted `Icon` annotation so the
+    // canvas can render the user's own graphics.
+    //
+    // Ports are intentionally empty here — connector extraction for
+    // user classes is a follow-up; the icon-rendering slice doesn't
+    // need them.
+    let mut local_classes_by_short: HashMap<String, MSLComponentDef> = HashMap::new();
+    for (top_name, top_class) in ast.classes.iter() {
+        register_local_class(&mut local_classes_by_short, top_name.as_str(), top_class);
+        for (nested_name, nested_class) in top_class.classes.iter() {
+            register_local_class(
+                &mut local_classes_by_short,
+                nested_name.as_str(),
+                nested_class,
+            );
+        }
+    }
+
+    // Index every component in the projection scope by short name so
+    // the layout loop can walk rumoca's typed `annotation: Vec<Expression>`
+    // for each instance instead of pattern-matching source text.
+    // Scope is the target_class when set (drill-in tab), else every
+    // class in the file — same scope the source-text regex used to
+    // operate on.
+    let comp_by_short: HashMap<&str, &rumoca_session::parsing::ast::Component> = {
+        let mut map: HashMap<&str, &rumoca_session::parsing::ast::Component> =
+            HashMap::new();
+        if let Some(target) = target_class {
+            // Scope to the named class — search top-level and
+            // nested. First exact-name match wins (Modelica scope
+            // rules guarantee uniqueness inside a class).
+            'find: for (top_name, top) in ast.classes.iter() {
+                if top_name.as_str() == target {
+                    for (cname, comp) in top.components.iter() {
+                        map.insert(cname.as_str(), comp);
+                    }
+                    break 'find;
+                }
+                if let Some(nested) = top.classes.get(target) {
+                    for (cname, comp) in nested.components.iter() {
+                        map.insert(cname.as_str(), comp);
+                    }
+                    break 'find;
+                }
+            }
+        } else {
+            for (_n, top) in ast.classes.iter() {
+                for (cname, comp) in top.components.iter() {
+                    map.insert(cname.as_str(), comp);
+                }
+                for (_nn, nested) in top.classes.iter() {
+                    for (cname, comp) in nested.components.iter() {
+                        map.insert(cname.as_str(), comp);
+                    }
+                }
+            }
+        }
+        map
+    };
+
+    // Place nodes in a sparse grid as fallback for components without
+    // a `Placement` annotation. Wide enough that orthogonal wires
+    // get room to bend without colliding with neighbours; alternating
+    // half-row offsets stagger neighbouring rows so ports on the
+    // shared horizontal band don't end up wired through the body of
+    // the row above. Matches the breathing room Dymola/OMEdit's
+    // default layout uses for un-annotated example models.
+    let node_spacing_x = 320.0;
+    let node_spacing_y = 220.0;
+    let cols = 4;
     let mut placement_idx = 0;
+    let row_offset_x = node_spacing_x * 0.5;
 
     for node in graph.nodes.iter() {
         if node.qualified_name.is_empty() {
@@ -1746,26 +1822,51 @@ pub fn import_model_to_diagram_from_ast(
         } else {
             None
         };
-        let component_def = resolved_path.and_then(|p| msl_lookup_by_path.get(p).cloned());
+        let component_def: Option<MSLComponentDef> = resolved_path
+            .and_then(|p| msl_lookup_by_path.get(p).map(|d| (*d).clone()))
+            .or_else(|| local_classes_by_short.get(type_name).cloned());
 
         if let Some(def) = component_def {
             let mut pos = None;
-            
-            // Try to find annotation coordinate for this instance
-            let safe_name = regex::escape(short_name);
-            let pattern = safe_name + r"(?:\s*\([^)]*\))?\s+annotation\s*\(\s*Placement\s*\(\s*transformation\s*\(\s*extent\s*=\s*\{\{\s*([-\d\.]+)\s*,\s*([-\d\.]+)\s*\}\s*,\s*\{\s*([-\d\.]+)\s*,\s*([-\d\.]+)\s*\}\}\s*\)\s*\)\s*\)";
-            if let Ok(re) = regex::Regex::new(&pattern) {
-                if let Some(cap) = re.captures(source) {
-                    if let (Ok(x1), Ok(y1), Ok(x2), Ok(y2)) = (
-                        cap[1].parse::<f32>(),
-                        cap[2].parse::<f32>(),
-                        cap[3].parse::<f32>(),
-                        cap[4].parse::<f32>(),
-                    ) {
-                        let x = (x1 + x2) / 2.0;
-                        let y = -((y1 + y2) / 2.0); // Modelica is +UP, Snarl is +DOWN
-                        pos = Some(egui::Pos2::new(x, y));
-                    }
+            // Build the full icon-local → canvas affine in one place.
+            // Falls back to a default transform centred on the grid
+            // position below when no Placement is authored.
+            let mut icon_transform: Option<crate::icon_transform::IconTransform> = None;
+
+            // Read placement from rumoca's typed annotation tree
+            // instead of pattern-matching source text. Robust against
+            // whitespace, comments, multi-line layouts, and handles
+            // origin/rotation correctly. Falls through to the grid
+            // fallback below when no Placement is authored.
+            if let Some(comp) = comp_by_short.get(short_name) {
+                if let Some(placement) =
+                    crate::annotations::extract_placement(&comp.annotation)
+                {
+                    let extent = placement.transformation.extent;
+                    let cx = ((extent.p1.x + extent.p2.x) * 0.5) as f32;
+                    let cy = ((extent.p1.y + extent.p2.y) * 0.5) as f32;
+                    let ox = placement.transformation.origin.x as f32;
+                    let oy = placement.transformation.origin.y as f32;
+                    let mirror_x = extent.p2.x < extent.p1.x;
+                    let mirror_y = extent.p2.y < extent.p1.y;
+                    let size = (
+                        (extent.p2.x - extent.p1.x).abs() as f32,
+                        (extent.p2.y - extent.p1.y).abs() as f32,
+                    );
+                    let rotation_deg = placement.transformation.rotation as f32;
+                    let xform = crate::icon_transform::IconTransform::from_placement(
+                        (cx, cy),
+                        size,
+                        mirror_x,
+                        mirror_y,
+                        rotation_deg,
+                        (ox, oy),
+                    );
+                    // Cached centre matches where the icon-local
+                    // origin lands in canvas world coords.
+                    let (px, py) = xform.apply(0.0, 0.0);
+                    pos = Some(egui::Pos2::new(px, py));
+                    icon_transform = Some(xform);
                 }
             }
 
@@ -1774,14 +1875,20 @@ pub fn import_model_to_diagram_from_ast(
                 let row = placement_idx / cols;
                 let col = placement_idx % cols;
                 placement_idx += 1;
-                egui::Pos2::new(col as f32 * node_spacing_x, row as f32 * node_spacing_y)
+                let row_shift = if row % 2 == 1 { row_offset_x } else { 0.0 };
+                egui::Pos2::new(
+                    col as f32 * node_spacing_x + row_shift,
+                    row as f32 * node_spacing_y,
+                )
             });
 
             let node_id = diagram.add_node(def.clone(), pos);
 
-            // Override the auto-generated instance name with the one from the source
             if let Some(diagram_node) = diagram.get_node_mut(node_id) {
                 diagram_node.instance_name = short_name.to_string();
+                if let Some(xf) = icon_transform {
+                    diagram_node.icon_transform = xf;
+                }
             }
         }
     }
@@ -1815,6 +1922,40 @@ pub fn import_model_to_diagram_from_ast(
     } else {
         Some(diagram)
     }
+}
+
+/// Add a synthesised palette entry for a class found in the open
+/// document. Used for short-name resolution of sibling classes that
+/// the MSL palette doesn't know about. Skips classes that don't carry
+/// any of the data we'd render — i.e. no decoded `Icon` annotation.
+fn register_local_class(
+    out: &mut HashMap<String, MSLComponentDef>,
+    short_name: &str,
+    class_def: &rumoca_session::parsing::ast::ClassDef,
+) {
+    use crate::annotations::extract_icon;
+    if out.contains_key(short_name) {
+        return;
+    }
+    let icon = extract_icon(&class_def.annotation);
+    if icon.is_none() {
+        return;
+    }
+    out.insert(
+        short_name.to_string(),
+        MSLComponentDef {
+            name: short_name.to_string(),
+            msl_path: short_name.to_string(),
+            category: "Local".to_string(),
+            display_name: short_name.to_string(),
+            description: None,
+            icon_text: None,
+            icon_asset: None,
+            ports: Vec::new(),
+            parameters: Vec::new(),
+            icon_graphics: icon,
+        },
+    );
 }
 
 // ---------------------------------------------------------------------------

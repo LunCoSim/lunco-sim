@@ -67,6 +67,41 @@ pub fn draw_svg_to_egui(
     rect: egui::Rect,
     svg_data: &[u8],
 ) {
+    draw_svg_to_egui_oriented(
+        painter,
+        rect,
+        svg_data,
+        SvgOrientation::default(),
+    );
+}
+
+/// Per-instance orientation parameters for the SVG renderer. Same
+/// shape as [`crate::icon_paint::IconOrientation`] but kept separate
+/// to avoid circular crate-internal coupling between the SVG path
+/// (icons that ship as pre-rasterised assets) and the typed
+/// `paint_graphics` path (icons authored in source). The two paths
+/// converge at the canvas projector, which constructs both from the
+/// same `IconTransform` field on the node.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SvgOrientation {
+    pub rotation_deg: f32,
+    pub mirror_x: bool,
+    pub mirror_y: bool,
+}
+
+/// Same as [`draw_svg_to_egui`] but applies an instance-level rotation
+/// + mirror around the rect's centre. Used by the canvas projector to
+/// honour `Placement(transformation(rotation, extent={{x_high,…},…}))`
+/// for MSL components — without this, an MSL Sensor whose Placement
+/// reverses its X extent (so the flange port appears on the right
+/// edge) still rendered its body axis-aligned, contradicting where
+/// the wire actually entered.
+pub fn draw_svg_to_egui_oriented(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    svg_data: &[u8],
+    orientation: SvgOrientation,
+) {
     let Some(tree) = parsed_tree(svg_data) else {
         return;
     };
@@ -80,7 +115,40 @@ pub fn draw_svg_to_egui(
     let dx = rect.left() + (rect.width() - size.width() as f32 * scale) / 2.0;
     let dy = rect.top() + (rect.height() - size.height() as f32 * scale) / 2.0;
 
-    render_node(painter, tree.root(), Transform::from_row(scale, 0.0, 0.0, scale, dx, dy));
+    // Build the orientation transform around the rect's centre, in
+    // screen coordinates. Compose right-to-left:
+    //   T(centre) · Rotation · MirrorY (Modelica→screen) · MirrorReq
+    //              · MirrorY · T(-centre)
+    // Simplified — we just apply mirror flags as ±1 scales and rotate,
+    // both in screen space (Y already flipped by the SVG's natural
+    // top-left origin, so mirror_y on screen == mirror_y in Modelica).
+    let cx = rect.center().x;
+    let cy = rect.center().y;
+    let (sx, sy) = (
+        if orientation.mirror_x { -1.0 } else { 1.0 },
+        if orientation.mirror_y { -1.0 } else { 1.0 },
+    );
+    // Modelica rotation is CCW in +Y-up frame → on +Y-down screen it
+    // becomes CW. Negate the angle so the visual matches the source.
+    let theta = -orientation.rotation_deg.to_radians();
+    let (sn, cs) = theta.sin_cos();
+    // Linear part: rotation · scale.
+    let a = cs * sx;
+    let b = sn * sx;
+    let c = -sn * sy;
+    let d = cs * sy;
+    // Translation part: T(centre) - linear · centre.
+    let tx = cx - (a * cx + c * cy);
+    let ty = cy - (b * cx + d * cy);
+    let orient_xform = Transform::from_row(a, b, c, d, tx, ty);
+
+    let scale_xform = Transform::from_row(scale, 0.0, 0.0, scale, dx, dy);
+    // Apply orientation AFTER the scale-and-place: scale_xform maps
+    // SVG-natural coords to screen; orient_xform then rotates the
+    // screen output around the rect centre.
+    let combined = orient_xform.pre_concat(scale_xform);
+
+    render_node(painter, tree.root(), combined);
 }
 
 fn render_node(painter: &egui::Painter, node: &usvg::Group, transform: Transform) {

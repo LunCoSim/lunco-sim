@@ -358,6 +358,8 @@ pub fn handle_package_loading_tasks(
     mut model_tabs: ResMut<crate::ui::panels::model_view::ModelTabs>,
     mut layout: ResMut<lunco_workbench::WorkbenchLayout>,
     mut egui_ctx: bevy_egui::EguiContexts,
+    mut pending_drill_ins: ResMut<crate::ui::browser_dispatch::PendingDrillIns>,
+    mut drilled_in: ResMut<crate::ui::panels::canvas_diagram::DrilledInClassNames>,
 ) {
     let mut finished_results = Vec::new();
 
@@ -415,6 +417,15 @@ pub fn handle_package_loading_tasks(
             result.source.to_string(),
             origin,
         );
+
+        // If the Twin Browser dispatcher queued a drill-in for this
+        // file, apply it now. The canvas projector reads
+        // `DrilledInClassNames` on its next tick and lands on the
+        // requested class — saves a second click.
+        let queued_qualified = pending_drill_ins.take(&result.id);
+        if let Some(qualified) = queued_qualified {
+            drilled_in.set(doc_id, qualified);
+        }
 
         workbench.open_model = Some(OpenModel {
             model_path: result.id,

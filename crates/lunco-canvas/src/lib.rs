@@ -57,7 +57,7 @@ pub mod tool;
 pub mod viewport;
 pub mod visual;
 
-pub use canvas::Canvas;
+pub use canvas::{Canvas, SnapSettings};
 pub use event::{ContextTarget, InputEvent, Modifiers, MouseButton, SceneEvent};
 pub use layer::{
     EdgesLayer, GridLayer, Layer, NodesLayer, SelectionLayer, ToolPreviewLayer,

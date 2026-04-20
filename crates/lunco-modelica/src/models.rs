@@ -48,6 +48,12 @@ pub const BOUNCY_BALL: &str = include_str!("../../../assets/models/BouncyBall.mo
 /// SpringMass — classic mass / spring / damper second-order system.
 pub const SPRING_MASS: &str = include_str!("../../../assets/models/SpringMass.mo");
 
+/// AnnotatedRocketStage — visual fixture for the graphical-annotation
+/// pipeline (Icon/Diagram graphics + Placement). Engine, Tank, Gimbal
+/// leaves with rich icons, placed on a composite RocketStage diagram.
+pub const ANNOTATED_ROCKET_STAGE: &str =
+    include_str!("../../../assets/models/AnnotatedRocketStage.mo");
+
 /// All bundled example models, in Welcome-tab display order.
 /// Order matters: the first entry is the one the web binary auto-opens.
 pub const BUNDLED_MODELS: &[BundledModel] = &[
@@ -55,6 +61,11 @@ pub const BUNDLED_MODELS: &[BundledModel] = &[
         filename: "CascadedRCFilter.mo",
         source: CASCADED_RC_FILTER,
         tagline: "Two-stage RC low-pass filter — 6 MSL blocks, renders as a schematic",
+    },
+    BundledModel {
+        filename: "AnnotatedRocketStage.mo",
+        source: ANNOTATED_ROCKET_STAGE,
+        tagline: "Annotation visual fixture — Engine, Tank, Gimbal icons on a stage diagram",
     },
     BundledModel {
         filename: "RocketEngine.mo",

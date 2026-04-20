@@ -46,6 +46,12 @@ pub enum ModelViewMode {
     /// component looks like when instantiated in a parent diagram.
     /// OMEdit/Dymola have Icon + Diagram as sibling views.
     Icon,
+    /// The class's `Documentation(info="…", revisions="…")`
+    /// annotation rendered as text. HTML is shown as-is (no
+    /// Markdown conversion yet) — reads like rendered plain text
+    /// with tags visible, which is honest about what's in source
+    /// and avoids guessing at formatting.
+    Docs,
 }
 
 /// Per-tab state for a [`ModelViewPanel`] instance. One entry per
@@ -222,6 +228,7 @@ impl InstancePanel for ModelViewPanel {
                 ModelViewMode::Text => 0u8,
                 ModelViewMode::Canvas => 1,
                 ModelViewMode::Icon => 2,
+                ModelViewMode::Docs => 3,
             };
             if let Ok(mut s) = seen.lock() {
                 if s.insert((doc.raw(), tag)) {
@@ -238,6 +245,7 @@ impl InstancePanel for ModelViewPanel {
             ModelViewMode::Text => self.code.render(ui, world),
             ModelViewMode::Canvas => self.canvas.render(ui, world),
             ModelViewMode::Icon => render_icon_view(ui, world),
+            ModelViewMode::Docs => render_docs_view(ui, world),
         }
     }
 }
@@ -555,7 +563,8 @@ fn render_unified_toolbar(
         let text_sel = view_mode == ModelViewMode::Text;
         let canv_sel = view_mode == ModelViewMode::Canvas;
         let icon_sel = view_mode == ModelViewMode::Icon;
-        // All three views are always available — OMEdit/Dymola
+        let docs_sel = view_mode == ModelViewMode::Docs;
+        // All four views are always available — OMEdit/Dymola
         // pattern. A partial or icon-only class has a legitimately
         // empty Diagram layer, and users should be able to view it.
         // The smart "land in the right view by default" happens at
@@ -570,6 +579,9 @@ fn render_unified_toolbar(
         }
         if ui.selectable_label(icon_sel, "🎨 Icon").clicked() {
             new_view_mode = ModelViewMode::Icon;
+        }
+        if ui.selectable_label(docs_sel, "📖 Docs").clicked() {
+            new_view_mode = ModelViewMode::Docs;
         }
         ui.separator();
 
@@ -681,6 +693,11 @@ fn render_unified_toolbar(
                 // source the same as Text does.
                 world.commands().trigger(crate::ui::CompileModel { doc });
             }
+            ModelViewMode::Docs => {
+                // Docs is pure display — compile routes through the
+                // document source like Text.
+                world.commands().trigger(crate::ui::CompileModel { doc });
+            }
         }
     }
     new_view_mode
@@ -699,6 +716,272 @@ fn render_unified_toolbar(
 ///    the tab doesn't appear broken.
 ///
 /// Always centred in the available rect, aspect-preserving.
+/// Render the active class's `Documentation(info="…", revisions="…")`
+/// annotation. HTML is shown raw — no Markdown conversion, no tag
+/// stripping. Most Modelica docs are short prose with light HTML
+/// (paragraphs, the occasional `<strong>` or `<code>`); the tags
+/// read fine inline for a workbench built for engineers. Upgrading
+/// to a Markdown-converted render is a follow-up.
+fn render_docs_view(ui: &mut egui::Ui, world: &mut World) {
+    use crate::ui::state::WorkbenchState;
+    let doc_id = {
+        let ws = world.resource::<WorkbenchState>();
+        let Some(open) = ws.open_model.as_ref() else {
+            ui.centered_and_justified(|ui| {
+                ui.label(egui::RichText::new("No model open").weak());
+            });
+            return;
+        };
+        open.doc
+    };
+
+    // Resolve the class: drill-in target (qualified), or first non-
+    // package class in the AST as fallback. Same picker the canvas's
+    // target resolver uses.
+    let (class_name, info, revisions): (
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    ) = match doc_id {
+        None => (None, None, None),
+        Some(doc) => {
+            let drilled = world
+                .get_resource::<crate::ui::panels::canvas_diagram::DrilledInClassNames>()
+                .and_then(|m| m.get(doc).map(str::to_string));
+            let ast = world
+                .resource::<crate::ui::state::ModelicaDocumentRegistry>()
+                .host(doc)
+                .and_then(|h| h.document().ast().result.as_ref().ok().cloned());
+            match ast {
+                Some(ast) => {
+                    let class = if let Some(q) = drilled.as_deref() {
+                        walk_qualified_class(ast.as_ref(), q)
+                    } else {
+                        use rumoca_session::parsing::ClassType;
+                        ast.classes
+                            .iter()
+                            .find(|(_, c)| !matches!(c.class_type, ClassType::Package))
+                            .map(|(n, c)| (n.clone(), c))
+                    };
+                    class
+                        .map(|(name, class)| {
+                            let (info, revs) =
+                                extract_documentation(&class.annotation);
+                            (Some(name), info, revs)
+                        })
+                        .unwrap_or((None, None, None))
+                }
+                None => (None, None, None),
+            }
+        }
+    };
+
+    // Typography: constrain reading width and centre in the panel.
+    // Modelica docs open in whatever width the panel is — often
+    // 1000+ px, which drops text line-length to 140+ characters. The
+    // eye can't scan that; standard book / web typography caps at
+    // ~65–75 characters (≈ 720 px at 13 px body), matching MDN, Rust
+    // docs, and Obsidian's reading view.
+    const READING_WIDTH: f32 = 760.0;
+    const SIDE_MARGIN: f32 = 24.0;
+
+    egui::ScrollArea::vertical()
+        .auto_shrink([false; 2])
+        .show(ui, |ui| {
+            let avail = ui.available_width();
+            let target_width = READING_WIDTH.min(avail - SIDE_MARGIN * 2.0);
+            let inset = ((avail - target_width) * 0.5).max(SIDE_MARGIN);
+
+            egui::Frame::NONE
+                .inner_margin(egui::Margin::symmetric(inset as i8, 16))
+                .show(ui, |ui| {
+                    ui.set_max_width(target_width);
+
+                    if let Some(name) = &class_name {
+                        ui.label(
+                            egui::RichText::new(name)
+                                .size(22.0)
+                                .strong()
+                                .color(egui::Color32::from_rgb(230, 235, 245)),
+                        );
+                        ui.add_space(12.0);
+                    }
+                    match info.as_deref().filter(|s| !s.trim().is_empty()) {
+                        Some(html) => {
+                            render_html_as_markdown(ui, target_width, html);
+                        }
+                        None => {
+                            ui.label(
+                                egui::RichText::new("(no documentation)")
+                                    .italics()
+                                    .weak(),
+                            );
+                        }
+                    }
+                    if let Some(revs) =
+                        revisions.as_deref().filter(|s| !s.trim().is_empty())
+                    {
+                        ui.add_space(24.0);
+                        ui.separator();
+                        ui.add_space(8.0);
+                        ui.label(
+                            egui::RichText::new("Revisions")
+                                .strong()
+                                .size(15.0)
+                                .color(egui::Color32::from_rgb(200, 210, 225)),
+                        );
+                        ui.add_space(6.0);
+                        render_html_as_markdown(ui, target_width, revs);
+                    }
+                });
+        });
+}
+
+/// Convert a Modelica-documentation HTML blob into Markdown with
+/// [`htmd`] and render it via [`egui_commonmark::CommonMarkViewer`].
+///
+/// `target_width` is the reading-width cap applied to images so a
+/// full-res MSL plot (often 1200+ px) doesn't blow past the column
+/// and force the reader to scroll sideways. Keeping the Markdown
+/// render cache static means repeated frames don't re-tokenise the
+/// same text.
+fn render_html_as_markdown(ui: &mut egui::Ui, target_width: f32, html: &str) {
+    use std::sync::Mutex;
+    static CACHE: std::sync::OnceLock<
+        Mutex<egui_commonmark::CommonMarkCache>,
+    > = std::sync::OnceLock::new();
+    let cache = CACHE
+        .get_or_init(|| Mutex::new(egui_commonmark::CommonMarkCache::default()));
+    // `htmd::convert` is pure CPU, sub-millisecond on typical MSL
+    // docs. Caching the Markdown conversion would shave frames in
+    // pathological cases; skipping for simplicity — CommonMarkCache
+    // covers the render-side reuse.
+    let md = htmd::convert(html).unwrap_or_else(|_| html.to_string());
+    if let Ok(mut c) = cache.lock() {
+        egui_commonmark::CommonMarkViewer::new()
+            .max_image_width(Some(target_width as usize))
+            .show(ui, &mut c, &md);
+    }
+}
+
+/// Walk a dotted qualified-name path into nested classes and return
+/// `(short_name, class)` for the final segment. Mirrors the canvas
+/// resolver but keeps the short name for the heading.
+fn walk_qualified_class<'a>(
+    ast: &'a rumoca_session::parsing::ast::StoredDefinition,
+    qualified: &str,
+) -> Option<(String, &'a rumoca_session::parsing::ast::ClassDef)> {
+    let mut segments = qualified.split('.');
+    let first = segments.next()?;
+    let (first_name, first_class) = ast
+        .classes
+        .iter()
+        .find(|(n, _)| n.as_str() == first)
+        .map(|(n, c)| (n.clone(), c))?;
+    let mut current_name = first_name;
+    let mut current_class = first_class;
+    for seg in segments {
+        let next = current_class.classes.get_key_value(seg)?;
+        current_name = next.0.clone();
+        current_class = next.1;
+    }
+    Some((current_name, current_class))
+}
+
+/// Un-escape a Modelica string literal's body per MLS §2.4.6. The
+/// subset we handle covers what Documentation HTML actually uses:
+///   `\"`  → `"`    (attribute quotes)
+///   `\\`  → `\`    (literal backslash)
+///   `\n`  → LF     (line break)
+///   `\t`  → tab
+///   `\r`  → CR
+/// Unknown `\x` sequences fall through as two chars so we don't
+/// accidentally destroy source that htmd or commonmark might still
+/// handle gracefully.
+fn unescape_modelica_string(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            if let Some(n) = chars.next() {
+                match n {
+                    '"' => out.push('"'),
+                    '\\' => out.push('\\'),
+                    'n' => out.push('\n'),
+                    't' => out.push('\t'),
+                    'r' => out.push('\r'),
+                    '\'' => out.push('\''),
+                    other => {
+                        out.push('\\');
+                        out.push(other);
+                    }
+                }
+            } else {
+                out.push('\\');
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Extract `Documentation(info="…", revisions="…")` — both are HTML
+/// string payloads. Returns `(info, revisions)`.
+fn extract_documentation(
+    annotations: &[rumoca_session::parsing::ast::Expression],
+) -> (Option<String>, Option<String>) {
+    use rumoca_session::parsing::ast::{Expression, TerminalType};
+    // Find the Documentation(...) call.
+    let call = annotations.iter().find(|e| match e {
+        Expression::FunctionCall { comp, .. } | Expression::ClassModification { target: comp, .. } => {
+            comp.parts
+                .first()
+                .map(|p| p.ident.text.as_ref() == "Documentation")
+                .unwrap_or(false)
+        }
+        _ => false,
+    });
+    let Some(call) = call else { return (None, None) };
+    let args: &[Expression] = match call {
+        Expression::FunctionCall { args, .. } => args.as_slice(),
+        Expression::ClassModification { modifications, .. } => modifications.as_slice(),
+        _ => return (None, None),
+    };
+    let str_arg = |name: &str| -> Option<String> {
+        for a in args {
+            let (arg_name, value) = match a {
+                Expression::NamedArgument { name, value } => {
+                    (name.text.as_ref(), value.as_ref())
+                }
+                Expression::Modification { target, value } => (
+                    target.parts.first().map(|p| p.ident.text.as_ref()).unwrap_or(""),
+                    value.as_ref(),
+                ),
+                _ => continue,
+            };
+            if arg_name != name {
+                continue;
+            }
+            if let Expression::Terminal { terminal_type: TerminalType::String, token } = value {
+                // Rumoca keeps the raw source slice on the token, which
+                // still includes the surrounding `"…"` *and* the
+                // Modelica-spec escape sequences (`\"` for a literal
+                // quote, `\\` for a backslash, `\n` for a newline). For
+                // Documentation HTML the `\"` attribute-quotes are the
+                // loudest — un-escaping turns `<img src=\"…\"/>` back
+                // into the literal `<img src="…"/>` so htmd + the
+                // renderer see proper HTML.
+                let raw = token.text.as_ref();
+                let inner = raw.trim_start_matches('"').trim_end_matches('"');
+                return Some(unescape_modelica_string(inner));
+            }
+        }
+        None
+    };
+    (str_arg("info"), str_arg("revisions"))
+}
+
 fn render_icon_view(ui: &mut egui::Ui, world: &mut World) {
     let (qualified, _source) = {
         let ws = world.resource::<WorkbenchState>();

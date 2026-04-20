@@ -72,6 +72,25 @@ pub mod pretty;
 /// Modelica-to-diagram graph builder — converts AST into DiagramGraph.
 pub mod diagram;
 
+/// Typed extractors for graphical annotations (Placement, Icon, Diagram,
+/// and the common `graphics={...}` primitives). Walks the raw
+/// `Vec<Expression>` that rumoca preserves on each class/component and
+/// produces structs ready for the canvas renderer.
+pub mod annotations;
+
+/// egui painter for the typed graphics produced by [`annotations`].
+/// Renders `Rectangle`, `Line`, `Polygon`, and `Text` directly into a
+/// destination screen rect, mapping Modelica diagram coordinates
+/// (+Y up) to egui screen coordinates (+Y down).
+pub mod icon_paint;
+
+/// Single 2×3 affine transform per node from Modelica icon-local
+/// coords to canvas world coords. Replaces the scattered
+/// position/extent_size/rotation/mirror fields with one matrix that
+/// every consumer (port placement, edge stub direction, icon body
+/// painting, AABB) shares.
+pub mod icon_transform;
+
 /// Visual diagram editor — drag-and-drop component composition.
 pub mod visual_diagram;
 

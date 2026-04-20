@@ -10,6 +10,7 @@ bevy_egui = { workspace = true }
 lunco-theme = { path = "../lunco-theme" }
 egui_dock = "0.18"
 lunco-doc = { path = "../lunco-doc" }
+lunco-twin = { path = "../lunco-twin" }
 
 [dev-dependencies]
 # For the hello_workbench example. The full DefaultPlugins pull in a winit

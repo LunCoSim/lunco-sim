@@ -119,6 +119,15 @@ pub struct MSLComponentDef {
     pub ports: Vec<PortDef>,
     /// Parameters that can be configured.
     pub parameters: Vec<ParamDef>,
+    /// Decoded `Icon(graphics={...})` annotation for the class. When
+    /// `Some`, the canvas renders these primitives via
+    /// [`crate::icon_paint::paint_graphics`] instead of falling back to
+    /// the SVG icon path. Populated by the diagram projector for
+    /// user-defined classes parsed from the open document; MSL
+    /// palette entries leave it `None` and continue to use their
+    /// pre-rasterised SVG icons.
+    #[serde(default)]
+    pub icon_graphics: Option<crate::annotations::Icon>,
 }
 
 /// A node instance placed on the visual canvas.
@@ -131,10 +140,40 @@ pub struct DiagramNode {
     pub component_def: MSLComponentDef,
     /// Parameter values (name → value).
     pub parameter_values: HashMap<String, String>,
-    /// Canvas position.
+    /// Canvas-world centre of the icon — kept as the authoritative
+    /// drag target. The full icon-local → canvas-world transform is
+    /// in [`icon_transform`](Self::icon_transform); this field
+    /// duplicates the translation part for drag handlers that don't
+    /// want to do matrix math. Use [`set_position`](Self::set_position)
+    /// to keep both consistent.
     pub position: Pos2,
+    /// Single affine transform from this node's icon-local Modelica
+    /// coords (-100..100, +Y up) to canvas world coords (+Y down).
+    /// Encodes mirror, rotation, scale, and translation in one
+    /// matrix — every per-feature field this used to host
+    /// (`extent_size`/`rotation_degrees`/`mirror_x`/`mirror_y`) is
+    /// folded into this one struct. The canvas projector uses it for
+    /// port positioning, edge-stub directions, the icon's bounding
+    /// rect, and (eventually) the icon body itself.
+    #[serde(default)]
+    pub icon_transform: crate::icon_transform::IconTransform,
     /// Whether the node is selected.
     pub selected: bool,
+}
+
+impl DiagramNode {
+    /// Update the node's canvas centre, keeping the cached
+    /// [`position`](Self::position) field and the translation half of
+    /// [`icon_transform`](Self::icon_transform) in lock-step. Drag
+    /// handlers should call this rather than mutating either field
+    /// directly.
+    pub fn set_position(&mut self, pos: Pos2) {
+        let dx = pos.x - self.position.x;
+        let dy = pos.y - self.position.y;
+        self.position = pos;
+        self.icon_transform.m[2] += dx;
+        self.icon_transform.m[5] += dy;
+    }
 }
 
 /// A connection between two component ports.
@@ -178,12 +217,27 @@ impl VisualDiagram {
         for param in &def.parameters {
             parameter_values.insert(param.name.clone(), param.default.clone());
         }
+        // Default IconTransform = identity scaled to the standard
+        // 20×20 fallback box, translated to `position`. Importer paths
+        // that have a real Placement override this immediately.
+        let mut icon_transform = crate::icon_transform::IconTransform::from_placement(
+            (position.x, -position.y),  // Modelica +Y up, position is screen-Y
+            (20.0, 20.0),
+            false, false,
+            0.0,
+            (0.0, 0.0),
+        );
+        // The from_placement bakes in the Y flip — recover it cleanly
+        // by also flipping `position.y` above.
+        let _ = &mut icon_transform; // silence unused-mut lint when const
+
         self.nodes.push(DiagramNode {
             id,
             instance_name,
             component_def: def,
             parameter_values,
             position,
+            icon_transform,
             selected: false,
         });
         id

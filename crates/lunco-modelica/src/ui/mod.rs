@@ -66,9 +66,19 @@ pub use state::*;
 pub mod commands;
 pub use commands::{CompileModel, CreateNewScratchModel, ModelicaCommandsPlugin};
 
+pub mod image_loader;
 pub mod panels;
 pub mod viz;
 pub mod theme;
+
+/// Modelica section of the Twin Browser — class-tree contributed by
+/// this crate to `lunco-workbench`'s `BrowserSectionRegistry`.
+pub mod browser_section;
+
+/// Drains the workbench's `BrowserActions` outbox and routes
+/// section-emitted intents (open file, open Modelica class) into the
+/// existing document-load and drill-in pipelines.
+pub mod browser_dispatch;
 
 use crate::ModelicaModel;
 
@@ -162,7 +172,14 @@ impl Workspace for AnalyzeWorkspace {
     fn title(&self) -> String { "📊 Analyze".into() }
     fn apply(&self, layout: &mut WorkbenchLayout) {
         layout.set_activity_bar(false);
-        layout.set_side_browser(Some(PanelId("modelica_package_browser")));
+        // Side dock = Twin Browser only. The legacy
+        // `PackageBrowserPanel` stays registered (View → Panels can
+        // re-dock it) but is not docked by default — its remaining
+        // unique features (MSL palette, drag-to-instantiate) will
+        // migrate into the Twin Browser as a future `MslSection`.
+        // Side-by-side dock would just present users with two
+        // browsers solving the same job.
+        layout.set_side_browser(Some(lunco_workbench::TWIN_BROWSER_PANEL_ID));
         // Center is seeded with no singleton tab — model views are
         // multi-instance tabs opened dynamically by the Package Browser
         // (one tab per open document). An app that boots with a
@@ -240,12 +257,30 @@ impl Plugin for ModelicaUiPlugin {
             .init_resource::<panels::console::ConsoleLog>()
             .init_resource::<panels::diagnostics::DiagnosticsLog>()
             .insert_resource(panels::package_browser::PackageTreeCache::new())
+            .init_resource::<browser_dispatch::PendingDrillIns>()
+            .add_systems(Update, browser_dispatch::drain_browser_actions)
             .add_systems(Update, panels::package_browser::handle_package_loading_tasks)
             .add_systems(Update, cleanup_removed_documents)
             .add_systems(Update, drain_document_changes)
             .add_systems(Update, panels::diagnostics::refresh_diagnostics)
             .add_systems(Startup, register_settings_menu)
+            // Image-loader install is a first-frame one-shot — runs
+            // in the egui primary-context pass until the context is
+            // ready and the loaders land, then the marker resource
+            // `ImageLoadersInstalled` short-circuits the run_if and
+            // Bevy stops calling us entirely.
+            .add_systems(
+                bevy_egui::EguiPrimaryContextPass,
+                install_image_loaders_once.run_if(
+                    bevy::ecs::schedule::common_conditions::not(
+                        bevy::ecs::schedule::common_conditions::resource_exists::<
+                            ImageLoadersInstalled,
+                        >,
+                    ),
+                ),
+            )
             .register_panel(panels::package_browser::PackageBrowserPanel)
+            .register_panel(lunco_workbench::TwinBrowserPanel)
             .register_panel(panels::welcome::WelcomePanel)
             .register_panel(panels::telemetry::TelemetryPanel)
             .register_panel(panels::graphs::GraphsPanel)
@@ -258,6 +293,7 @@ impl Plugin for ModelicaUiPlugin {
             .init_resource::<panels::canvas_diagram::DiagramProjectionLimits>()
             .init_resource::<panels::canvas_diagram::DrilledInClassNames>()
             .init_resource::<panels::canvas_diagram::DrillInLoads>()
+            .init_resource::<panels::canvas_diagram::CanvasSnapSettings>()
             .init_resource::<panels::canvas_diagram::DuplicateLoads>()
             .add_systems(Update, panels::canvas_diagram::drive_drill_in_loads)
             .add_systems(Update, panels::canvas_diagram::drive_duplicate_loads)
@@ -266,6 +302,14 @@ impl Plugin for ModelicaUiPlugin {
             // opened at runtime by the Package Browser.
             .register_instance_panel(panels::model_view::ModelViewPanel::default())
             .register_workspace(AnalyzeWorkspace);
+
+        // Contribute the Modelica section to the Twin Browser's
+        // section registry. The workbench's WorkbenchPlugin already
+        // installed the registry resource and the built-in Files
+        // section; we just append.
+        app.world_mut()
+            .resource_mut::<lunco_workbench::BrowserSectionRegistry>()
+            .register(browser_section::ModelicaSection::default());
     }
 }
 
@@ -341,5 +385,73 @@ fn register_settings_menu(world: &mut World) {
                 limits.max_duration = std::time::Duration::from_secs(secs);
             }
         });
+        drop(limits);
+        ui.add_space(4.0);
+        // ── Drag snap ────────────────────────────────────────────
+        // Off by default — a lot of Modelica source uses
+        // hand-placed non-grid positions and the user shouldn't
+        // have their authored placements auto-rounded unless they
+        // opted in. When on, drags quantise *live* (visible during
+        // the drag itself) to multiples of `step` Modelica units.
+        let mut snap =
+            world.resource_mut::<panels::canvas_diagram::CanvasSnapSettings>();
+        ui.checkbox(&mut snap.enabled, "Snap to grid on drag").on_hover_text(
+            "When on, dragging an icon quantises its position to a \
+             grid. Applies live during the drag and at commit. Off \
+             by default.",
+        );
+        ui.horizontal(|ui| {
+            ui.label("Grid step");
+            ui.add_enabled(
+                snap.enabled,
+                egui::DragValue::new(&mut snap.step)
+                    .range(0.5..=50.0)
+                    .speed(0.5)
+                    .suffix(" units"),
+            )
+            .on_hover_text(
+                "Snap granularity in Modelica diagram-coordinate \
+                 units (the 200-unit standard system). Common: 2 \
+                 (fine), 5 (medium), 10 (coarse).",
+            );
+        });
+        drop(snap);
     });
+}
+
+/// Marker resource — inserted by
+/// [`install_image_loaders_once`] once the egui context is ready and
+/// the loaders are wired. The system's `run_if(not(resource_exists))`
+/// condition means Bevy stops scheduling the system after this
+/// resource appears, so we pay exactly one successful install plus
+/// however many frames we had to wait for the context to come up
+/// (typically one or two).
+#[derive(bevy::prelude::Resource)]
+struct ImageLoadersInstalled;
+
+/// First-frame egui image-loader registration. Gated by a `run_if`
+/// so Bevy stops scheduling it after the first successful install —
+/// no per-frame cost at all, not even a function-call return.
+fn install_image_loaders_once(
+    mut commands: bevy::prelude::Commands,
+    mut contexts: bevy_egui::EguiContexts,
+) {
+    let Ok(ctx) = contexts.ctx_mut() else {
+        // Context not ready yet — the run_if keeps scheduling us so
+        // we get another shot next frame.
+        return;
+    };
+    // Built-in loaders for file://, http(s)://, raw paths, bytes://,
+    // etc. Covers everything the Modelica Documentation HTML can
+    // reference through normal URIs.
+    egui_extras::install_image_loaders(ctx);
+    // Custom loader for `modelica://Package/Resources/…` URIs used
+    // throughout MSL Documentation blocks.
+    ctx.add_bytes_loader(std::sync::Arc::new(
+        image_loader::ModelicaImageLoader::new(),
+    ));
+    bevy::log::info!(
+        "[ModelicaImageLoader] installed egui_extras loaders + modelica:// loader"
+    );
+    commands.insert_resource(ImageLoadersInstalled);
 }

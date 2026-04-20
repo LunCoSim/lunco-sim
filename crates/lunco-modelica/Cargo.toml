@@ -4,6 +4,14 @@ version = "0.1.0"
 edition = "2021"
 description = "Native Modelica simulation integration for LunCoSim using Rumoca"
 
+[features]
+# `lunco-api` is on by default so `cargo run --bin modelica_workbench --
+# --api` Just Works for screenshot-driven debugging. Building without it
+# (`cargo build --no-default-features`) drops the axum/tokio web stack,
+# which matters for the wasm32 binary.
+default = ["lunco-api"]
+lunco-api = ["dep:lunco-api"]
+
 [[bin]]
 name = "modelica_workbench"
 path = "src/bin/modelica_workbench.rs"
@@ -27,9 +35,27 @@ lunco-doc-bevy = { path = "../lunco-doc-bevy" }
 lunco-workbench = { path = "../lunco-workbench" }
 lunco-viz = { path = "../lunco-viz" }
 lunco-canvas = { path = "../lunco-canvas" }
+lunco-twin = { path = "../lunco-twin" }
 lunco-cache = { path = "../lunco-cache" }
 egui-snarl = "0.9"
 egui_plot = "0.34.1"
+# Docs view (ModelViewMode::Docs): HTML → Markdown → egui render.
+# `egui_commonmark` pulls the right `egui` version transitively to
+# match bevy_egui 0.39 (→ egui 0.33). Syntax highlighting is enabled
+# so `<pre><code>` blocks in Modelica docs render with colour.
+egui_commonmark = { version = "0.22", features = ["better_syntax_highlighting"] }
+# `all_loaders` wires up every shipped image source (file://, http://,
+# bytes://, raw paths) so images in Documentation HTML render. We add
+# a custom `modelica://` loader on top to resolve MSL-internal URIs
+# against the on-disk MSL tree.
+egui_extras = { version = "0.33", features = ["all_loaders"] }
+# Pure-Rust HTML → Markdown converter. Used once per Documentation
+# annotation to normalise into the shape commonmark expects.
+htmd = "0.5"
+# Raster decoders used by egui_extras' `all_loaders`. Only the formats
+# actually present in MSL Resources/Images are enabled to keep the
+# compile surface small.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 usvg = { version = "0.45", default-features = false }
 # LunCoSim/rumoca fork, `main` branch.
 # Tracks upstream rumoca. `main` already carries:

@@ -77,19 +77,28 @@ fn fallback_port_position(causality: &Causality, port_index: usize) -> (f32, f32
     }
 }
 
-/// Scan raw Modelica source text and extract every connector Placement extent.
+/// Scan raw Modelica source text and extract every connector Placement
+/// centre in parent-diagram coords.
 ///
 /// Matches declarations of the form:
 /// ```modelica
-/// TypeName portName annotation(Placement(transformation(extent={{x1,y1},{x2,y2}}...
+/// TypeName portName annotation(Placement(transformation(extent={{x1,y1},{x2,y2}}, origin={ox,oy}...
 /// ```
-/// Returns `port_name → center (x, y)` in Modelica diagram coords (-100..100).
-/// First occurrence wins (file-level, not class-scoped — good enough for MSL
-/// where port names are unique per file in practice).
+///
+/// Returns `port_name → center (x, y)` in Modelica diagram coords
+/// (-100..100). Honors `origin={ox,oy}` when present — without it, MSL
+/// connectors authored as `extent={{-20,-20},{20,20}}, origin={60,-120}`
+/// (a bottom-edge port like `Integrator.reset`) collapsed to (0, 0)
+/// and rendered at the icon centre instead of the bottom edge.
+///
+/// First occurrence wins (file-level, not class-scoped — good enough
+/// for MSL where port names are unique per file in practice).
 fn extract_all_placements(source: &str) -> HashMap<String, (f32, f32)> {
     let mut map = HashMap::new();
+    // Capture: 1=name, 2=extent_p1, 3=extent_p2, 4=optional origin pair.
+    // The origin half is `(?:...)?` so unannotated extents still parse.
     let re = regex::Regex::new(
-        r"(?s)\b(\w+)\b[^;]{0,300}?annotation\s*\(\s*Placement\s*\(\s*transformation\s*\([^)]*?extent\s*=\s*\{\{([^}]+)\},\{([^}]+)\}"
+        r"(?s)\b(\w+)\b[^;]{0,300}?annotation\s*\(\s*Placement\s*\(\s*transformation\s*\([^)]*?extent\s*=\s*\{\{([^}]+)\},\{([^}]+)\}\}(?:[^)]*?\borigin\s*=\s*\{([^}]+)\})?"
     ).expect("valid regex");
 
     let parse_pair = |s: &str| -> Option<(f32, f32)> {
@@ -103,7 +112,17 @@ fn extract_all_placements(source: &str) -> HashMap<String, (f32, f32)> {
             parse_pair(&caps[2]),
             parse_pair(&caps[3]),
         ) {
-            map.entry(name).or_insert(((x1 + x2) / 2.0, (y1 + y2) / 2.0));
+            // Default origin is (0, 0) per MLS Annex D when not
+            // specified. When given, its components add to the
+            // extent's centre to yield the connector's true position
+            // in the parent diagram's coordinate system.
+            let (ox, oy) = caps
+                .get(4)
+                .and_then(|m| parse_pair(m.as_str()))
+                .unwrap_or((0.0, 0.0));
+            let cx = (x1 + x2) / 2.0 + ox;
+            let cy = (y1 + y2) / 2.0 + oy;
+            map.entry(name).or_insert((cx, cy));
         }
     }
     map
@@ -349,6 +368,55 @@ impl MSLIndexer {
                                     matches!(comp.causality, Causality::Output(_));
 
                 if is_port || has_causality {
+                    // Skip conditional connectors (e.g. `BooleanInput
+                    // reset if use_reset` on Continuous.Integrator).
+                    // They're declared in the type's interface but
+                    // *not instantiated* unless the condition is true.
+                    // Including them in the index made every Integrator
+                    // instance render extra port dots for ports that
+                    // aren't actually present in this instance.
+                    //
+                    // We're conservative — `condition.is_some()` is
+                    // enough; we don't try to evaluate the condition.
+                    // Worst case: a connector that's always-on via
+                    // `if true` gets dropped, which is fine for the
+                    // index (the user can still wire it; the dot just
+                    // won't pre-render).
+                    //
+                    // TODO: per-instance conditional resolution.
+                    // -----------------------------------------------
+                    // The current uniform skip is correct for the
+                    // common "default-off MSL conditional" case but
+                    // creates a UX gap when a user *enables* the
+                    // conditional on a specific instance (e.g.
+                    // `Integrator integrator(use_reset=true)`):
+                    // simulation works, but the canvas never renders
+                    // the `reset` dot, so the user can't drag a wire
+                    // to it in the diagram editor.
+                    //
+                    // The fix is a 3-step upgrade:
+                    //   1. Index the conditional ports too — add
+                    //      `PortDef.conditional: Option<String>`
+                    //      storing the condition expression source
+                    //      (e.g. `"use_reset"`).
+                    //   2. In the canvas projector, for each
+                    //      conditional port consult the *instance's*
+                    //      modifications (Integrator(use_reset=true))
+                    //      with the class's parameter default as
+                    //      fallback. Decide render-vs-skip per
+                    //      instance.
+                    //   3. Render conditionally-on ports in a slightly
+                    //      different style (dashed outline) so users
+                    //      see "this port only exists because the
+                    //      parameter is on."
+                    //
+                    // Most MSL conditions are plain boolean parameter
+                    // refs (`use_reset`, `useSupport`, `useHeatPort`),
+                    // so a 90%-coverage implementation is small.
+                    if comp.condition.is_some() {
+                        continue;
+                    }
+
                     if !ports.iter().any(|p| p.name == comp.name) {
                         let (x, y) = self.placements
                             .get(class_name)
