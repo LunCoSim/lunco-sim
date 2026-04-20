@@ -446,10 +446,6 @@ pub(crate) fn sync_active_tab_to_doc(world: &mut World, doc: DocumentId) {
     {
         let source_arc: std::sync::Arc<str> = source.clone().into();
         let mut state = world.resource_mut::<WorkbenchState>();
-        let prev_path = state.open_model.as_ref().map(|m| m.model_path.clone());
-        if let Some(p) = prev_path {
-            state.navigation_stack.push(p);
-        }
         state.open_model = Some(crate::ui::OpenModel {
             model_path: path_str,
             display_name,

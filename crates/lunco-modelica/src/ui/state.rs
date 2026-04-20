@@ -19,8 +19,6 @@
 
 use bevy::prelude::*;
 use std::collections::HashMap;
-use std::path::PathBuf;
-use lunco_assets::assets_dir;
 use lunco_doc::{DocumentHost, DocumentId, DocumentOrigin};
 #[cfg(target_arch = "wasm32")]
 use std::sync::atomic::{AtomicPtr, Ordering};
@@ -98,44 +96,41 @@ pub fn update_file_load_result(mut state: ResMut<WorkbenchState>) {
 
 /// Shared state for the Modelica workbench UI.
 ///
-/// This is the **selection bridge** — `selected_entity` connects any
-/// triggering context (library, 3D click, tree) to the editor panels.
+/// # What lives here (post–Workspace migration)
+///
+/// This resource is now a **UI cache** on top of the authoritative
+/// session state in [`lunco_workbench::WorkspaceResource`]:
+///
+/// - **Identity of the active document** lives on the Workspace
+///   (`active_document: Option<DocumentId>`). This struct only carries
+///   the derived render-side snapshot (`open_model`) so per-frame
+///   painting doesn't chase it through the registry.
+/// - **Selection bridge** — `selected_entity` still funnels library /
+///   3D-viewport / colony-tree clicks into the editor panels.
+/// - **Transient UI flags** — compile error, "is loading" spinner,
+///   diagram-rebuild marker.
+///
+/// Plot-related fields (`history`, `plotted_variables`, `max_history`,
+/// `plot_auto_fit`) used to live here and moved to `lunco-viz`
+/// (`SignalRegistry`, `VisualizationConfig.inputs`, `VizFitRequests`)
+/// when the Graphs panel migrated.
 #[derive(Resource)]
 pub struct WorkbenchState {
-    /// Current directory path for the library browser.
-    pub current_path: PathBuf,
-    /// Current Modelica source code in the editor.
+    /// Current Modelica source code in the editor. Mirror of the
+    /// active document's source, kept here because egui's `TextEdit`
+    /// owns a `&mut String` and the registry hands out `Arc<str>`.
     pub editor_buffer: String,
-    /// Path of the file that produced the current editor buffer.
-    /// Used to highlight the active file in the library browser.
-    pub loaded_file_path: Option<PathBuf>,
     /// **Selection bridge**: which `ModelicaModel` entity panels are viewing.
     /// Set by any context (library, 3D viewport, colony tree).
     pub selected_entity: Option<Entity>,
     /// Last compilation error message, if any.
     pub compilation_error: Option<String>,
-
-    // Plot-related fields (`history`, `plotted_variables`,
-    // `max_history`, `plot_auto_fit`) used to live here. They were
-    // removed when the Graphs panel migrated to `lunco-viz`:
-    //
-    // * Time-series data lives in `lunco_viz::SignalRegistry`,
-    //   populated by the Modelica worker each step.
-    // * "Which variables to plot" lives in
-    //   `lunco_viz::VisualizationConfig.inputs` for the default
-    //   plot — Telemetry checkboxes write directly there.
-    // * Auto-fit is a transient request via
-    //   `lunco_viz::VizFitRequests`, drained by the viz kind on its
-    //   next render.
-
-    // ── Dymola-style navigation ──
-
-    /// Which model is currently open in the editor area.
-    /// Set when user clicks a file in the package browser.
+    /// Render-side snapshot of the active document — display name,
+    /// source, line starts, read-only flag, cached galley. The
+    /// *identity* of the active doc is
+    /// [`lunco_workbench::WorkspaceResource::active_document`]; this is
+    /// just what the renderer needs without a per-frame registry hit.
     pub open_model: Option<OpenModel>,
-    /// Navigation stack for back-button support.
-    /// Each entry is a model_path that was previously open.
-    pub navigation_stack: Vec<String>,
     /// Flag to signal the diagram panel should rebuild from open_model source.
     pub diagram_dirty: bool,
     /// Whether a model is currently being loaded in the background.
@@ -516,13 +511,10 @@ impl ModelicaDocumentRegistry {
 impl Default for WorkbenchState {
     fn default() -> Self {
         Self {
-            current_path: assets_dir().join("models"),
             editor_buffer: String::new(),
-            loaded_file_path: None,
             selected_entity: None,
             compilation_error: None,
             open_model: None,
-            navigation_stack: Vec::new(),
             diagram_dirty: false,
             is_loading: false,
         }

@@ -1181,10 +1181,6 @@ pub(crate) fn open_model(world: &mut World, id: String, name: String, library: M
     commit_current_model_edits(world);
 
     if let Some(mut state) = world.get_resource_mut::<WorkbenchState>() {
-        let prev_path = state.open_model.as_ref().map(|m| m.model_path.clone());
-        if let Some(p) = prev_path {
-            state.navigation_stack.push(p);
-        }
         state.is_loading = true;
     }
 
