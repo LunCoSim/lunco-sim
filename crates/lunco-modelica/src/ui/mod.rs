@@ -66,6 +66,7 @@ pub use state::*;
 pub mod commands;
 pub use commands::{CompileModel, CreateNewScratchModel, ModelicaCommandsPlugin};
 
+pub mod image_loader;
 pub mod panels;
 pub mod viz;
 
@@ -262,6 +263,21 @@ impl Plugin for ModelicaUiPlugin {
             .add_systems(Update, drain_document_changes)
             .add_systems(Update, panels::diagnostics::refresh_diagnostics)
             .add_systems(Startup, register_settings_menu)
+            // Image-loader install is a first-frame one-shot — runs
+            // in the egui primary-context pass until the context is
+            // ready and the loaders land, then the marker resource
+            // `ImageLoadersInstalled` short-circuits the run_if and
+            // Bevy stops calling us entirely.
+            .add_systems(
+                bevy_egui::EguiPrimaryContextPass,
+                install_image_loaders_once.run_if(
+                    bevy::ecs::schedule::common_conditions::not(
+                        bevy::ecs::schedule::common_conditions::resource_exists::<
+                            ImageLoadersInstalled,
+                        >,
+                    ),
+                ),
+            )
             .register_panel(panels::package_browser::PackageBrowserPanel)
             .register_panel(lunco_workbench::TwinBrowserPanel)
             .register_panel(panels::welcome::WelcomePanel)
@@ -400,4 +416,41 @@ fn register_settings_menu(world: &mut World) {
         });
         drop(snap);
     });
+}
+
+/// Marker resource — inserted by
+/// [`install_image_loaders_once`] once the egui context is ready and
+/// the loaders are wired. The system's `run_if(not(resource_exists))`
+/// condition means Bevy stops scheduling the system after this
+/// resource appears, so we pay exactly one successful install plus
+/// however many frames we had to wait for the context to come up
+/// (typically one or two).
+#[derive(bevy::prelude::Resource)]
+struct ImageLoadersInstalled;
+
+/// First-frame egui image-loader registration. Gated by a `run_if`
+/// so Bevy stops scheduling it after the first successful install —
+/// no per-frame cost at all, not even a function-call return.
+fn install_image_loaders_once(
+    mut commands: bevy::prelude::Commands,
+    mut contexts: bevy_egui::EguiContexts,
+) {
+    let Ok(ctx) = contexts.ctx_mut() else {
+        // Context not ready yet — the run_if keeps scheduling us so
+        // we get another shot next frame.
+        return;
+    };
+    // Built-in loaders for file://, http(s)://, raw paths, bytes://,
+    // etc. Covers everything the Modelica Documentation HTML can
+    // reference through normal URIs.
+    egui_extras::install_image_loaders(ctx);
+    // Custom loader for `modelica://Package/Resources/…` URIs used
+    // throughout MSL Documentation blocks.
+    ctx.add_bytes_loader(std::sync::Arc::new(
+        image_loader::ModelicaImageLoader::new(),
+    ));
+    bevy::log::info!(
+        "[ModelicaImageLoader] installed egui_extras loaders + modelica:// loader"
+    );
+    commands.insert_resource(ImageLoadersInstalled);
 }

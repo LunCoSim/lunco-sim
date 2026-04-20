@@ -776,42 +776,92 @@ fn render_docs_view(ui: &mut egui::Ui, world: &mut World) {
         }
     };
 
+    // Typography: constrain reading width and centre in the panel.
+    // Modelica docs open in whatever width the panel is — often
+    // 1000+ px, which drops text line-length to 140+ characters. The
+    // eye can't scan that; standard book / web typography caps at
+    // ~65–75 characters (≈ 720 px at 13 px body), matching MDN, Rust
+    // docs, and Obsidian's reading view.
+    const READING_WIDTH: f32 = 760.0;
+    const SIDE_MARGIN: f32 = 24.0;
+
     egui::ScrollArea::vertical()
         .auto_shrink([false; 2])
         .show(ui, |ui| {
-            ui.add_space(8.0);
-            if let Some(name) = &class_name {
-                ui.heading(name);
-                ui.add_space(6.0);
-            }
-            match &info {
-                Some(html) if !html.is_empty() => {
-                    // Raw HTML shown as wrapped monospace text. No
-                    // rendering of `<strong>` / `<a>` yet; the user
-                    // asked for the plain representation, and it
-                    // keeps the view faithful to what's in source.
-                    ui.label(
-                        egui::RichText::new(html.trim()).monospace().size(12.0),
-                    );
-                }
-                _ => {
-                    ui.label(
-                        egui::RichText::new("(no documentation)")
-                            .italics()
-                            .weak(),
-                    );
-                }
-            }
-            if let Some(revs) = revisions.as_deref().filter(|s| !s.is_empty()) {
-                ui.add_space(16.0);
-                ui.separator();
-                ui.label(egui::RichText::new("Revisions").strong().size(13.0));
-                ui.add_space(4.0);
-                ui.label(
-                    egui::RichText::new(revs.trim()).monospace().size(12.0),
-                );
-            }
+            let avail = ui.available_width();
+            let target_width = READING_WIDTH.min(avail - SIDE_MARGIN * 2.0);
+            let inset = ((avail - target_width) * 0.5).max(SIDE_MARGIN);
+
+            egui::Frame::NONE
+                .inner_margin(egui::Margin::symmetric(inset as i8, 16))
+                .show(ui, |ui| {
+                    ui.set_max_width(target_width);
+
+                    if let Some(name) = &class_name {
+                        ui.label(
+                            egui::RichText::new(name)
+                                .size(22.0)
+                                .strong()
+                                .color(egui::Color32::from_rgb(230, 235, 245)),
+                        );
+                        ui.add_space(12.0);
+                    }
+                    match info.as_deref().filter(|s| !s.trim().is_empty()) {
+                        Some(html) => {
+                            render_html_as_markdown(ui, target_width, html);
+                        }
+                        None => {
+                            ui.label(
+                                egui::RichText::new("(no documentation)")
+                                    .italics()
+                                    .weak(),
+                            );
+                        }
+                    }
+                    if let Some(revs) =
+                        revisions.as_deref().filter(|s| !s.trim().is_empty())
+                    {
+                        ui.add_space(24.0);
+                        ui.separator();
+                        ui.add_space(8.0);
+                        ui.label(
+                            egui::RichText::new("Revisions")
+                                .strong()
+                                .size(15.0)
+                                .color(egui::Color32::from_rgb(200, 210, 225)),
+                        );
+                        ui.add_space(6.0);
+                        render_html_as_markdown(ui, target_width, revs);
+                    }
+                });
         });
+}
+
+/// Convert a Modelica-documentation HTML blob into Markdown with
+/// [`htmd`] and render it via [`egui_commonmark::CommonMarkViewer`].
+///
+/// `target_width` is the reading-width cap applied to images so a
+/// full-res MSL plot (often 1200+ px) doesn't blow past the column
+/// and force the reader to scroll sideways. Keeping the Markdown
+/// render cache static means repeated frames don't re-tokenise the
+/// same text.
+fn render_html_as_markdown(ui: &mut egui::Ui, target_width: f32, html: &str) {
+    use std::sync::Mutex;
+    static CACHE: std::sync::OnceLock<
+        Mutex<egui_commonmark::CommonMarkCache>,
+    > = std::sync::OnceLock::new();
+    let cache = CACHE
+        .get_or_init(|| Mutex::new(egui_commonmark::CommonMarkCache::default()));
+    // `htmd::convert` is pure CPU, sub-millisecond on typical MSL
+    // docs. Caching the Markdown conversion would shave frames in
+    // pathological cases; skipping for simplicity — CommonMarkCache
+    // covers the render-side reuse.
+    let md = htmd::convert(html).unwrap_or_else(|_| html.to_string());
+    if let Ok(mut c) = cache.lock() {
+        egui_commonmark::CommonMarkViewer::new()
+            .max_image_width(Some(target_width as usize))
+            .show(ui, &mut c, &md);
+    }
 }
 
 /// Walk a dotted qualified-name path into nested classes and return
@@ -836,6 +886,44 @@ fn walk_qualified_class<'a>(
         current_class = next.1;
     }
     Some((current_name, current_class))
+}
+
+/// Un-escape a Modelica string literal's body per MLS §2.4.6. The
+/// subset we handle covers what Documentation HTML actually uses:
+///   `\"`  → `"`    (attribute quotes)
+///   `\\`  → `\`    (literal backslash)
+///   `\n`  → LF     (line break)
+///   `\t`  → tab
+///   `\r`  → CR
+/// Unknown `\x` sequences fall through as two chars so we don't
+/// accidentally destroy source that htmd or commonmark might still
+/// handle gracefully.
+fn unescape_modelica_string(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            if let Some(n) = chars.next() {
+                match n {
+                    '"' => out.push('"'),
+                    '\\' => out.push('\\'),
+                    'n' => out.push('\n'),
+                    't' => out.push('\t'),
+                    'r' => out.push('\r'),
+                    '\'' => out.push('\''),
+                    other => {
+                        out.push('\\');
+                        out.push(other);
+                    }
+                }
+            } else {
+                out.push('\\');
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 /// Extract `Documentation(info="…", revisions="…")` — both are HTML
@@ -876,10 +964,17 @@ fn extract_documentation(
                 continue;
             }
             if let Expression::Terminal { terminal_type: TerminalType::String, token } = value {
-                // Strip the surrounding quotes rumoca kept on the token.
-                let s = token.text.as_ref();
-                let trimmed = s.trim_start_matches('"').trim_end_matches('"');
-                return Some(trimmed.to_string());
+                // Rumoca keeps the raw source slice on the token, which
+                // still includes the surrounding `"…"` *and* the
+                // Modelica-spec escape sequences (`\"` for a literal
+                // quote, `\\` for a backslash, `\n` for a newline). For
+                // Documentation HTML the `\"` attribute-quotes are the
+                // loudest — un-escaping turns `<img src=\"…\"/>` back
+                // into the literal `<img src="…"/>` so htmd + the
+                // renderer see proper HTML.
+                let raw = token.text.as_ref();
+                let inner = raw.trim_start_matches('"').trim_end_matches('"');
+                return Some(unescape_modelica_string(inner));
             }
         }
         None
