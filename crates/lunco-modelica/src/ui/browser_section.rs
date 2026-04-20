@@ -310,10 +310,24 @@ fn render_class_row(
                     qualified_path: class.qualified_path.clone(),
                 });
             }
-            if let Some(desc) = &class.description {
-                ui.label(egui::RichText::new(desc).weak().small());
-            }
-            resp.on_hover_text(&class.qualified_path);
+            // Description + qualified path move to the hover tooltip.
+            // Rendering description inline eats horizontal space,
+            // duplicates context already implied by the class name,
+            // and wraps awkwardly in a narrow side panel. Hover
+            // keeps the tree dense; users who want the blurb get it
+            // on demand.
+            resp.on_hover_ui(|ui| {
+                ui.strong(&class.short_name);
+                ui.label(
+                    egui::RichText::new(&class.qualified_path)
+                        .small()
+                        .color(egui::Color32::from_rgb(150, 170, 200)),
+                );
+                if let Some(desc) = &class.description {
+                    ui.separator();
+                    ui.label(egui::RichText::new(desc).small());
+                }
+            });
         });
     } else {
         let mut header_text =
@@ -334,6 +348,21 @@ fn render_class_row(
                     active_qualified,
                     ctx,
                 );
+            }
+        });
+        let desc = class.description.clone();
+        let qualified = class.qualified_path.clone();
+        let short = class.short_name.clone();
+        resp.header_response.clone().on_hover_ui(move |ui| {
+            ui.strong(&short);
+            ui.label(
+                egui::RichText::new(&qualified)
+                    .small()
+                    .color(egui::Color32::from_rgb(150, 170, 200)),
+            );
+            if let Some(desc) = &desc {
+                ui.separator();
+                ui.label(egui::RichText::new(desc).small());
             }
         });
         if resp.header_response.clicked() {

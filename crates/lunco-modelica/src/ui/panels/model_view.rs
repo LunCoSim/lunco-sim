@@ -46,6 +46,12 @@ pub enum ModelViewMode {
     /// component looks like when instantiated in a parent diagram.
     /// OMEdit/Dymola have Icon + Diagram as sibling views.
     Icon,
+    /// The class's `Documentation(info="…", revisions="…")`
+    /// annotation rendered as text. HTML is shown as-is (no
+    /// Markdown conversion yet) — reads like rendered plain text
+    /// with tags visible, which is honest about what's in source
+    /// and avoids guessing at formatting.
+    Docs,
 }
 
 /// Per-tab state for a [`ModelViewPanel`] instance. One entry per
@@ -222,6 +228,7 @@ impl InstancePanel for ModelViewPanel {
                 ModelViewMode::Text => 0u8,
                 ModelViewMode::Canvas => 1,
                 ModelViewMode::Icon => 2,
+                ModelViewMode::Docs => 3,
             };
             if let Ok(mut s) = seen.lock() {
                 if s.insert((doc.raw(), tag)) {
@@ -238,6 +245,7 @@ impl InstancePanel for ModelViewPanel {
             ModelViewMode::Text => self.code.render(ui, world),
             ModelViewMode::Canvas => self.canvas.render(ui, world),
             ModelViewMode::Icon => render_icon_view(ui, world),
+            ModelViewMode::Docs => render_docs_view(ui, world),
         }
     }
 }
@@ -555,7 +563,8 @@ fn render_unified_toolbar(
         let text_sel = view_mode == ModelViewMode::Text;
         let canv_sel = view_mode == ModelViewMode::Canvas;
         let icon_sel = view_mode == ModelViewMode::Icon;
-        // All three views are always available — OMEdit/Dymola
+        let docs_sel = view_mode == ModelViewMode::Docs;
+        // All four views are always available — OMEdit/Dymola
         // pattern. A partial or icon-only class has a legitimately
         // empty Diagram layer, and users should be able to view it.
         // The smart "land in the right view by default" happens at
@@ -570,6 +579,9 @@ fn render_unified_toolbar(
         }
         if ui.selectable_label(icon_sel, "🎨 Icon").clicked() {
             new_view_mode = ModelViewMode::Icon;
+        }
+        if ui.selectable_label(docs_sel, "📖 Docs").clicked() {
+            new_view_mode = ModelViewMode::Docs;
         }
         ui.separator();
 
@@ -681,6 +693,11 @@ fn render_unified_toolbar(
                 // source the same as Text does.
                 world.commands().trigger(crate::ui::CompileModel { doc });
             }
+            ModelViewMode::Docs => {
+                // Docs is pure display — compile routes through the
+                // document source like Text.
+                world.commands().trigger(crate::ui::CompileModel { doc });
+            }
         }
     }
     new_view_mode
@@ -699,6 +716,177 @@ fn render_unified_toolbar(
 ///    the tab doesn't appear broken.
 ///
 /// Always centred in the available rect, aspect-preserving.
+/// Render the active class's `Documentation(info="…", revisions="…")`
+/// annotation. HTML is shown raw — no Markdown conversion, no tag
+/// stripping. Most Modelica docs are short prose with light HTML
+/// (paragraphs, the occasional `<strong>` or `<code>`); the tags
+/// read fine inline for a workbench built for engineers. Upgrading
+/// to a Markdown-converted render is a follow-up.
+fn render_docs_view(ui: &mut egui::Ui, world: &mut World) {
+    use crate::ui::state::WorkbenchState;
+    let doc_id = {
+        let ws = world.resource::<WorkbenchState>();
+        let Some(open) = ws.open_model.as_ref() else {
+            ui.centered_and_justified(|ui| {
+                ui.label(egui::RichText::new("No model open").weak());
+            });
+            return;
+        };
+        open.doc
+    };
+
+    // Resolve the class: drill-in target (qualified), or first non-
+    // package class in the AST as fallback. Same picker the canvas's
+    // target resolver uses.
+    let (class_name, info, revisions): (
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    ) = match doc_id {
+        None => (None, None, None),
+        Some(doc) => {
+            let drilled = world
+                .get_resource::<crate::ui::panels::canvas_diagram::DrilledInClassNames>()
+                .and_then(|m| m.get(doc).map(str::to_string));
+            let ast = world
+                .resource::<crate::ui::state::ModelicaDocumentRegistry>()
+                .host(doc)
+                .and_then(|h| h.document().ast().result.as_ref().ok().cloned());
+            match ast {
+                Some(ast) => {
+                    let class = if let Some(q) = drilled.as_deref() {
+                        walk_qualified_class(ast.as_ref(), q)
+                    } else {
+                        use rumoca_session::parsing::ClassType;
+                        ast.classes
+                            .iter()
+                            .find(|(_, c)| !matches!(c.class_type, ClassType::Package))
+                            .map(|(n, c)| (n.clone(), c))
+                    };
+                    class
+                        .map(|(name, class)| {
+                            let (info, revs) =
+                                extract_documentation(&class.annotation);
+                            (Some(name), info, revs)
+                        })
+                        .unwrap_or((None, None, None))
+                }
+                None => (None, None, None),
+            }
+        }
+    };
+
+    egui::ScrollArea::vertical()
+        .auto_shrink([false; 2])
+        .show(ui, |ui| {
+            ui.add_space(8.0);
+            if let Some(name) = &class_name {
+                ui.heading(name);
+                ui.add_space(6.0);
+            }
+            match &info {
+                Some(html) if !html.is_empty() => {
+                    // Raw HTML shown as wrapped monospace text. No
+                    // rendering of `<strong>` / `<a>` yet; the user
+                    // asked for the plain representation, and it
+                    // keeps the view faithful to what's in source.
+                    ui.label(
+                        egui::RichText::new(html.trim()).monospace().size(12.0),
+                    );
+                }
+                _ => {
+                    ui.label(
+                        egui::RichText::new("(no documentation)")
+                            .italics()
+                            .weak(),
+                    );
+                }
+            }
+            if let Some(revs) = revisions.as_deref().filter(|s| !s.is_empty()) {
+                ui.add_space(16.0);
+                ui.separator();
+                ui.label(egui::RichText::new("Revisions").strong().size(13.0));
+                ui.add_space(4.0);
+                ui.label(
+                    egui::RichText::new(revs.trim()).monospace().size(12.0),
+                );
+            }
+        });
+}
+
+/// Walk a dotted qualified-name path into nested classes and return
+/// `(short_name, class)` for the final segment. Mirrors the canvas
+/// resolver but keeps the short name for the heading.
+fn walk_qualified_class<'a>(
+    ast: &'a rumoca_session::parsing::ast::StoredDefinition,
+    qualified: &str,
+) -> Option<(String, &'a rumoca_session::parsing::ast::ClassDef)> {
+    let mut segments = qualified.split('.');
+    let first = segments.next()?;
+    let (first_name, first_class) = ast
+        .classes
+        .iter()
+        .find(|(n, _)| n.as_str() == first)
+        .map(|(n, c)| (n.clone(), c))?;
+    let mut current_name = first_name;
+    let mut current_class = first_class;
+    for seg in segments {
+        let next = current_class.classes.get_key_value(seg)?;
+        current_name = next.0.clone();
+        current_class = next.1;
+    }
+    Some((current_name, current_class))
+}
+
+/// Extract `Documentation(info="…", revisions="…")` — both are HTML
+/// string payloads. Returns `(info, revisions)`.
+fn extract_documentation(
+    annotations: &[rumoca_session::parsing::ast::Expression],
+) -> (Option<String>, Option<String>) {
+    use rumoca_session::parsing::ast::{Expression, TerminalType};
+    // Find the Documentation(...) call.
+    let call = annotations.iter().find(|e| match e {
+        Expression::FunctionCall { comp, .. } | Expression::ClassModification { target: comp, .. } => {
+            comp.parts
+                .first()
+                .map(|p| p.ident.text.as_ref() == "Documentation")
+                .unwrap_or(false)
+        }
+        _ => false,
+    });
+    let Some(call) = call else { return (None, None) };
+    let args: &[Expression] = match call {
+        Expression::FunctionCall { args, .. } => args.as_slice(),
+        Expression::ClassModification { modifications, .. } => modifications.as_slice(),
+        _ => return (None, None),
+    };
+    let str_arg = |name: &str| -> Option<String> {
+        for a in args {
+            let (arg_name, value) = match a {
+                Expression::NamedArgument { name, value } => {
+                    (name.text.as_ref(), value.as_ref())
+                }
+                Expression::Modification { target, value } => (
+                    target.parts.first().map(|p| p.ident.text.as_ref()).unwrap_or(""),
+                    value.as_ref(),
+                ),
+                _ => continue,
+            };
+            if arg_name != name {
+                continue;
+            }
+            if let Expression::Terminal { terminal_type: TerminalType::String, token } = value {
+                // Strip the surrounding quotes rumoca kept on the token.
+                let s = token.text.as_ref();
+                let trimmed = s.trim_start_matches('"').trim_end_matches('"');
+                return Some(trimmed.to_string());
+            }
+        }
+        None
+    };
+    (str_arg("info"), str_arg("revisions"))
+}
+
 fn render_icon_view(ui: &mut egui::Ui, world: &mut World) {
     let (qualified, _source) = {
         let ws = world.resource::<WorkbenchState>();

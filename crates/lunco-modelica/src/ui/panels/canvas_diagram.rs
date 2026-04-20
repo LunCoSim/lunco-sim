@@ -1084,6 +1084,19 @@ fn project_scene(diagram: &VisualDiagram) -> (Scene, HashMap<DiagramNodeId, Canv
 /// the transform + selection + in-flight projection task for that
 /// specific document so switching tabs doesn't leak viewport,
 /// selection, or a stale projection into a neighbour.
+/// Shared handle to the target class's `Diagram(graphics={...})`
+/// annotation — painted as canvas background by
+/// [`DiagramDecorationLayer`]. Projector updates it each time the
+/// drilled-in class changes.
+pub type BackgroundDiagramHandle = std::sync::Arc<
+    std::sync::RwLock<
+        Option<(
+            crate::annotations::CoordinateSystem,
+            Vec<crate::annotations::GraphicItem>,
+        )>,
+    >,
+>;
+
 pub struct CanvasDocState {
     pub canvas: Canvas,
     pub last_seen_gen: u64,
@@ -1096,6 +1109,12 @@ pub struct CanvasDocState {
     pub last_seen_target: Option<String>,
     pub context_menu: Option<PendingContextMenu>,
     pub projection_task: Option<ProjectionTask>,
+    /// Background decoration — the target class's own
+    /// `Diagram(graphics={...})` annotation. Painted by the
+    /// decoration layer registered on `canvas`. Shared via `Arc` so
+    /// the projection code can update the layer's data without
+    /// reaching into `canvas.layers`.
+    pub background_diagram: BackgroundDiagramHandle,
 }
 
 impl Default for CanvasDocState {
@@ -1103,13 +1122,85 @@ impl Default for CanvasDocState {
         let mut canvas = Canvas::new(build_registry());
         canvas.layers.retain(|layer| layer.name() != "selection");
         canvas.overlays.push(Box::new(NavBarOverlay::default()));
+        // Diagram decoration layer sits right after the grid so it
+        // paints behind nodes and edges. The decoration data is
+        // shared via `Arc<RwLock>` with `CanvasDocState` so the
+        // projector can swap in a new class's graphics without
+        // walking the layer list.
+        let background_diagram: BackgroundDiagramHandle =
+            std::sync::Arc::new(std::sync::RwLock::new(None));
+        let decoration_idx = canvas
+            .layers
+            .iter()
+            .position(|l| l.name() != "grid")
+            .unwrap_or(canvas.layers.len());
+        canvas.layers.insert(
+            decoration_idx,
+            Box::new(DiagramDecorationLayer {
+                data: background_diagram.clone(),
+            }),
+        );
         Self {
             canvas,
             last_seen_gen: 0,
             last_seen_target: None,
             context_menu: None,
             projection_task: None,
+            background_diagram,
         }
+    }
+}
+
+/// Paints the target class's `Diagram(graphics={...})` annotation as
+/// canvas background — the red labelled rectangles, text callouts,
+/// and accent lines MSL example diagrams carry for reader orientation
+/// (the PID example's "reference speed generation" / "PI controller"
+/// / "plant" regions are the canonical case). Holds an
+/// `Arc<RwLock<…>>` handle so the projector can push a new class's
+/// graphics in without reaching into the canvas's layer list.
+struct DiagramDecorationLayer {
+    data: BackgroundDiagramHandle,
+}
+
+impl lunco_canvas::Layer for DiagramDecorationLayer {
+    fn name(&self) -> &'static str {
+        "modelica.diagram_decoration"
+    }
+    fn draw(
+        &mut self,
+        ctx: &mut lunco_canvas::visual::DrawCtx,
+        _scene: &lunco_canvas::Scene,
+        _selection: &lunco_canvas::Selection,
+    ) {
+        let Ok(guard) = self.data.read() else { return };
+        let Some((coord_system, graphics)) = guard.as_ref() else {
+            return;
+        };
+        // Map the coordinate system's extent (Modelica +Y up) to the
+        // canvas world rect (+Y down) by flipping Y. Our node
+        // placements already live in this flipped space, so the
+        // decoration lines up with the nodes natively.
+        let ext = coord_system.extent;
+        let world_min_x = (ext.p1.x.min(ext.p2.x)) as f32;
+        let world_max_x = (ext.p1.x.max(ext.p2.x)) as f32;
+        let world_min_y = -(ext.p1.y.max(ext.p2.y) as f32);
+        let world_max_y = -(ext.p1.y.min(ext.p2.y) as f32);
+        let world_rect = lunco_canvas::Rect::from_min_max(
+            lunco_canvas::Pos::new(world_min_x, world_min_y),
+            lunco_canvas::Pos::new(world_max_x, world_max_y),
+        );
+        let screen_rect_canvas =
+            ctx.viewport.world_rect_to_screen(world_rect, ctx.screen_rect);
+        let screen_rect = bevy_egui::egui::Rect::from_min_max(
+            bevy_egui::egui::pos2(screen_rect_canvas.min.x, screen_rect_canvas.min.y),
+            bevy_egui::egui::pos2(screen_rect_canvas.max.x, screen_rect_canvas.max.y),
+        );
+        crate::icon_paint::paint_graphics(
+            ctx.ui.painter(),
+            screen_rect,
+            *coord_system,
+            graphics,
+        );
     }
 }
 
@@ -1338,6 +1429,23 @@ impl Panel for CanvasDiagramPanel {
             // happened at a different scale).
             if docstate.last_seen_target != target_class_snapshot {
                 docstate.last_seen_gen = 0;
+            }
+            // Refresh the Diagram-annotation background decoration
+            // for the target class. Cheap AST walk (no re-parse —
+            // `ast_arc` is the already-parsed tree the task below
+            // consumes). Runs on main thread; `paint_graphics` is
+            // idle until the layer's next draw.
+            let bg_handle = docstate.background_diagram.clone();
+            if let Some(ast) = ast_arc.as_ref() {
+                let diag = diagram_annotation_for_target(
+                    ast.as_ref(),
+                    target_class_snapshot.as_deref(),
+                );
+                if let Ok(mut guard) = bg_handle.write() {
+                    *guard = diag.map(|d| (d.coordinate_system, d.graphics));
+                }
+            } else if let Ok(mut guard) = bg_handle.write() {
+                *guard = None;
             }
             // Drop any in-flight projection whose input is now
             // stale (older generation of this doc). We can't cancel
@@ -2541,6 +2649,46 @@ fn empty_overlay_class_info(
     }
 
     (icon, class_type, description, params, inputs, outputs)
+}
+
+/// Extract the `Diagram(graphics={...})` annotation for the target
+/// class — full-qualified drill-in target, or the first non-package
+/// class when no drill-in is active. Used by the background
+/// decoration layer to paint MSL-style diagram callouts (labelled
+/// regions, accent text) behind the nodes.
+fn diagram_annotation_for_target(
+    ast: &rumoca_session::parsing::ast::StoredDefinition,
+    target: Option<&str>,
+) -> Option<crate::annotations::Diagram> {
+    // Resolve the target class by qualified path walk (supports the
+    // MSL `Modelica.Blocks.Examples.PID_Controller` style). For `None`
+    // targets fall back to the first non-package class, matching the
+    // workbench's default active-class picker.
+    let class = if let Some(qualified) = target {
+        walk_qualified(ast, qualified)
+    } else {
+        use rumoca_session::parsing::ClassType;
+        ast.classes
+            .iter()
+            .find(|(_, c)| !matches!(c.class_type, ClassType::Package))
+            .map(|(_, c)| c)
+    };
+    class.and_then(|c| crate::annotations::extract_diagram(&c.annotation))
+}
+
+/// Walk a dotted qualified class path through `ast.classes` into
+/// nested `class.classes`. Returns the deepest matching class, if any.
+fn walk_qualified<'a>(
+    ast: &'a rumoca_session::parsing::ast::StoredDefinition,
+    qualified: &str,
+) -> Option<&'a rumoca_session::parsing::ast::ClassDef> {
+    let mut segments = qualified.split('.');
+    let first = segments.next()?;
+    let mut current = ast.classes.iter().find(|(n, _)| n.as_str() == first).map(|(_, c)| c)?;
+    for seg in segments {
+        current = current.classes.get(seg)?;
+    }
+    Some(current)
 }
 
 /// Find a class by short name in the AST — top-level first, then one
