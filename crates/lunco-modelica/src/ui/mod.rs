@@ -164,6 +164,36 @@ fn sync_workspace_on_doc_closed(
     ws.close_document(trigger.event().doc);
 }
 
+/// Shadow-sync observer: a save (regular or Save-As) can change a
+/// document's origin (Untitled → File on Save-As). Re-read the
+/// document and update the Workspace entry's `origin` + `title`.
+///
+/// `DocumentSaved` fires for every save, not only Save-As; the update
+/// is idempotent for regular Save (origin unchanged, title unchanged)
+/// so no gate is needed.
+fn sync_workspace_on_doc_saved(
+    trigger: On<lunco_doc_bevy::DocumentSaved>,
+    registry: Res<ModelicaDocumentRegistry>,
+    mut ws: ResMut<lunco_workbench::WorkspaceResource>,
+) {
+    let id = trigger.event().doc;
+    let Some(host) = registry.host(id) else { return };
+    let doc = host.document();
+    let new_origin = doc.origin().clone();
+    let new_title = match &new_origin {
+        lunco_doc::DocumentOrigin::Untitled { name } => name.clone(),
+        lunco_doc::DocumentOrigin::File { path, .. } => path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("(file)")
+            .to_string(),
+    };
+    if let Some(entry) = ws.document_mut(id) {
+        entry.origin = new_origin;
+        entry.title = new_title;
+    }
+}
+
 /// Drop the document linked to a despawned `ModelicaModel` entity, and
 /// any compile-state bookkeeping attached to that document.
 ///
@@ -320,6 +350,7 @@ impl Plugin for ModelicaUiPlugin {
             // session surface is ready for step 5b.2 readers.
             .add_observer(sync_workspace_on_doc_opened)
             .add_observer(sync_workspace_on_doc_closed)
+            .add_observer(sync_workspace_on_doc_saved)
             .add_systems(Update, panels::diagnostics::refresh_diagnostics)
             .add_systems(Startup, register_settings_menu)
             // Image-loader install is a first-frame one-shot — runs

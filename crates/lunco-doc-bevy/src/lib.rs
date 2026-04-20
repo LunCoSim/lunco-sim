@@ -240,6 +240,25 @@ pub struct SaveDocument {
     pub doc: DocumentId,
 }
 
+/// Request the owning domain persist the document **to a user-picked
+/// new location**. Fires a file-picker, writes the current source to
+/// the chosen path, rebinds the document's [`DocumentOrigin`] to the
+/// new writable `File` variant, updates `last_saved_generation`, and
+/// fires [`DocumentSaved`] on success.
+///
+/// Differs from [`SaveDocument`] in two ways:
+/// 1. Always opens the picker, even when the document already has a
+///    canonical path — Save-As intentionally overrides the bound path.
+/// 2. Handles [`DocumentOrigin::Untitled`] — the picker's chosen path
+///    promotes the doc to a writable File origin.
+///
+/// Cancelling the picker is a no-op (no error toast, no save event).
+#[derive(Event, Clone, Debug)]
+pub struct SaveAsDocument {
+    /// The document to persist.
+    pub doc: DocumentId,
+}
+
 /// Request to remove the document from its registry (and any linked
 /// runtime state — entities, caches).
 ///

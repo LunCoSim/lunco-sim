@@ -37,6 +37,7 @@ lunco-viz = { path = "../lunco-viz" }
 lunco-canvas = { path = "../lunco-canvas" }
 lunco-twin = { path = "../lunco-twin" }
 lunco-workspace = { path = "../lunco-workspace" }
+lunco-storage = { path = "../lunco-storage" }
 lunco-cache = { path = "../lunco-cache" }
 egui-snarl = "0.9"
 egui_plot = "0.34.1"
