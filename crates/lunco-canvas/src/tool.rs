@@ -72,6 +72,12 @@ pub struct CanvasOps<'a> {
     /// authored scene). Surfaced as a [`Canvas::read_only`] field
     /// that the embedding app flips per tab (e.g. MSL library tabs).
     pub read_only: bool,
+    /// Optional drag-to-grid snap. When `Some`, the default tool
+    /// quantises in-flight drag translations to multiples of `step`
+    /// world units — user sees icons click into alignment *during*
+    /// the drag, not just at commit. Plumbed down from
+    /// [`crate::Canvas::snap`].
+    pub snap: Option<crate::canvas::SnapSettings>,
 }
 
 /// Hit-test radius for ports, in world units. Chosen so clicking
@@ -470,8 +476,36 @@ impl DefaultTool {
                 origin_world,
                 original_rects,
             } => {
-                let dx = world.x - origin_world.x;
-                let dy = world.y - origin_world.y;
+                let mut dx = world.x - origin_world.x;
+                let mut dy = world.y - origin_world.y;
+                // Snap the *final position* of the drag anchor to the
+                // grid, then derive a shared translation everyone
+                // else inherits. Anchor = the node whose original
+                // rect contains `origin_world` (the icon the user
+                // clicked on); falls back to the first rect. Snapping
+                // the translation instead of the final position was
+                // wrong: node-at-(33.7,21.3) + snapped-dx-of-10 still
+                // lands at (43.7,21.3), off-grid. Snapping the
+                // anchor's final min makes the grabbed icon land
+                // on a grid intersection; other multi-selected nodes
+                // move by the same delta so their relative layout is
+                // preserved.
+                if let Some(snap) = ops.snap {
+                    if snap.step > 0.0 {
+                        let anchor = original_rects
+                            .iter()
+                            .find(|(_, r)| r.contains(*origin_world))
+                            .or_else(|| original_rects.iter().next())
+                            .map(|(_, r)| *r);
+                        if let Some(anchor) = anchor {
+                            let q = |v: f32| (v / snap.step).round() * snap.step;
+                            let target_min_x = anchor.min.x + dx;
+                            let target_min_y = anchor.min.y + dy;
+                            dx = q(target_min_x) - anchor.min.x;
+                            dy = q(target_min_y) - anchor.min.y;
+                        }
+                    }
+                }
                 for (nid, original) in original_rects.iter() {
                     if let Some(n) = ops.scene.node_mut(*nid) {
                         n.rect = original.translated(dx, dy);
@@ -809,6 +843,7 @@ mod tests {
                 viewport,
                 events,
                 read_only: false,
+                snap: None,
             };
             tool.handle(ev, &mut ops);
         }

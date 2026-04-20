@@ -72,6 +72,25 @@ pub struct Canvas {
     /// (e.g. `canvas_diagram.rs` flips it based on
     /// `WorkbenchState.open_model.read_only`).
     pub read_only: bool,
+
+    /// Optional drag-to-grid snap. When `Some`, the default tool
+    /// quantises every in-flight drag translation to multiples of
+    /// `step` world units. Applied *live* so the user visually sees
+    /// the icon click into alignment as they drag — not just at
+    /// commit. Set per-frame by the embedding app (typically wired
+    /// to a Settings toggle).
+    pub snap: Option<SnapSettings>,
+}
+
+/// Grid-snap configuration for drag operations. Expressed in the
+/// canvas's world units (not screen pixels) so the visible grid step
+/// stays the same Modelica-coord-system grid regardless of zoom.
+#[derive(Debug, Clone, Copy)]
+pub struct SnapSettings {
+    /// Grid step in world units. Common choices in Modelica tools:
+    /// 2 (fine), 5 (default), 10 (coarse) of the 200-unit standard
+    /// diagram coordinate system.
+    pub step: f32,
 }
 
 impl Canvas {
@@ -96,6 +115,7 @@ impl Canvas {
             registry,
             last_pointer_screen: None,
             read_only: false,
+            snap: None,
         }
     }
 
@@ -299,6 +319,7 @@ impl Canvas {
                     viewport: &mut self.viewport,
                     events: &mut events,
                     read_only: self.read_only,
+                    snap: self.snap,
                 };
                 self.tool.handle(ev, &mut ops)
             };
@@ -317,6 +338,7 @@ impl Canvas {
                 viewport: &mut self.viewport,
                 events: &mut events,
                 read_only: self.read_only,
+                snap: self.snap,
             };
             self.tool.tick(&mut ops, dt);
         }

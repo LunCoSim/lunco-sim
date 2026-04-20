@@ -1601,10 +1601,21 @@ impl CanvasDiagramPanel {
         // enter drag/connect/delete states — pan + zoom + selection
         // still work. Authored scene mutations are blocked at the
         // input source, not corrected after the fact.
+        // Snap settings come from a long-lived resource that the
+        // Settings menu toggles. Read it here each frame and push
+        // onto the canvas so the tool sees an up-to-date value
+        // during the next drag update. Off by default — users turn
+        // it on when they want drag alignment.
+        let snap_settings: Option<lunco_canvas::SnapSettings> = world
+            .get_resource::<CanvasSnapSettings>()
+            .filter(|s| s.enabled)
+            .map(|s| lunco_canvas::SnapSettings { step: s.step });
+
         let (response, events) = {
             let mut state = world.resource_mut::<CanvasDiagramState>();
             let docstate = state.get_mut(active_doc);
             docstate.canvas.read_only = tab_read_only;
+            docstate.canvas.snap = snap_settings;
             docstate.canvas.ui(ui)
         };
 
@@ -2339,105 +2350,282 @@ fn render_projecting_overlay(ui: &mut egui::Ui, canvas_rect: egui::Rect) {
 
 // ─── Empty-diagram summary ──────────────────────────────────────────
 
-/// When the canvas scene has no nodes (i.e. the class has no
-/// component instantiations — common for equation-only models like
-/// RocketEngine), paint a card in the centre of the canvas with a
-/// summary of what the class *does* contain: parameters, inputs,
-/// variables, equations. Tells the user the model is real and
-/// points them at the Text tab, instead of leaving them staring
-/// at a blank grid.
+/// When the canvas scene has no nodes — common for equation-only
+/// leaf models (Battery, RocketEngine, BouncyBall, SpringMass) and
+/// MSL building blocks (Integrator, Resistor, Inertia) — paint a
+/// "data sheet" card in the centre of the canvas. Treats the class
+/// as a first-class display object instead of leaving the user
+/// staring at the blank grid.
 ///
-/// Summary numbers come from regex scans of the document source —
-/// cheap, and the cost is only paid on frames where the scene is
-/// empty (rare once a user opens a composite model).
+/// Card layout:
+/// 1. **Hero strip** — the class's authored `Icon(graphics={...})`
+///    annotation rendered via [`crate::icon_paint::paint_graphics`].
+///    For classes without one, a stylised type-badge (M / B / C / …).
+/// 2. **Heading** — class name + type label.
+/// 3. **Symbol bands** — named parameters / inputs / outputs (top 6
+///    each). Names beat counts: "tau, J, c" tells the user what the
+///    model is for; "3 parameters" doesn't.
+/// 4. **Footer counts** — equations + connect equations as a one-
+///    line summary, plus a hint that points at the Text tab.
 fn render_empty_diagram_overlay(
     ui: &mut egui::Ui,
     canvas_rect: egui::Rect,
     world: &mut World,
 ) {
-    let Some(open) = world.resource::<WorkbenchState>().open_model.as_ref() else {
+    let Some(open) = world.resource::<WorkbenchState>().open_model.clone() else {
         return;
     };
-    let source = open.source.as_ref();
-    let class_name = open.detected_name.clone().unwrap_or_else(|| "(unnamed)".into());
+    let source = open.source.clone();
+    let class_name = open
+        .detected_name
+        .clone()
+        .unwrap_or_else(|| "(unnamed)".into());
 
-    // Cheap cached fetch — rescans source only when source identity
-    // changes (len + 4KB-prefix hash). Previously recompiled 5
-    // regexes per frame on the 184KB source, saturating the UI
-    // thread on drill-in tabs.
-    let counts = empty_overlay_counts_cached(source);
-    let param_count = counts.params;
-    let input_count = counts.inputs;
-    let output_count = counts.outputs;
-    let equation_count = counts.equations;
-    let connect_count = counts.connects;
+    let counts = empty_overlay_counts_cached(source.as_ref());
+
+    // Pull the live class info out of the document registry so we
+    // can show real symbol names + (when authored) the class's own
+    // `Icon` graphics. This is the same AST the canvas projector
+    // already holds, so we don't pay a re-parse.
+    let (icon, class_type, description, param_names, input_names, output_names) =
+        empty_overlay_class_info(world, open.doc, &class_name);
 
     crate::ui::panels::placeholder::render_centered_card(
         ui,
         canvas_rect,
-        egui::vec2(380.0, 220.0),
+        egui::vec2(440.0, 360.0),
         |child| {
-            child.label(
-                egui::RichText::new("📝 Equation-only model")
-                    .strong()
-                    .size(14.0)
-                    .color(egui::Color32::from_rgb(220, 225, 235)),
-            );
+            // ── Hero strip ────────────────────────────────────────
+            // Either the authored icon or a stylised type badge.
+            let hero_size = egui::vec2(120.0, 80.0);
+            let (_, hero_rect) = child.allocate_space(hero_size);
+            if let Some(icon) = &icon {
+                crate::icon_paint::paint_graphics(
+                    child.painter(),
+                    hero_rect,
+                    icon.coordinate_system,
+                    &icon.graphics,
+                );
+            } else {
+                paint_class_type_badge(
+                    child.painter(),
+                    hero_rect,
+                    class_type.unwrap_or("model"),
+                );
+            }
+            child.add_space(8.0);
+
+            // ── Class name + type label ───────────────────────────
             child.label(
                 egui::RichText::new(&class_name)
-                    .size(12.0)
-                    .color(egui::Color32::from_rgb(170, 185, 210)),
+                    .strong()
+                    .size(15.0)
+                    .color(egui::Color32::from_rgb(225, 230, 240)),
             );
-            child.add_space(6.0);
-            child.label(
-                egui::RichText::new(
-                    "No instantiated components to draw. This class is defined \
-                     by equations — the composition view is empty by convention.",
-                )
-                .size(11.0)
-                .color(egui::Color32::from_rgb(170, 180, 200)),
-            );
+            if let Some(t) = class_type {
+                child.label(
+                    egui::RichText::new(t)
+                        .size(10.5)
+                        .italics()
+                        .color(egui::Color32::from_rgb(150, 165, 190)),
+                );
+            }
+            if let Some(desc) = &description {
+                child.add_space(4.0);
+                child.label(
+                    egui::RichText::new(desc)
+                        .size(11.0)
+                        .color(egui::Color32::from_rgb(190, 200, 220)),
+                );
+            }
             child.add_space(8.0);
             child.separator();
             child.add_space(6.0);
 
-            let row = |u: &mut egui::Ui, label: &str, n: usize| {
-                // Shared placeholder layout centres each emitted
-                // widget; wrap the row in a fixed-width horizontal
-                // so label/value pair stays as a single centred
-                // unit rather than each getting centred individually.
-                u.horizontal(|u| {
-                    u.label(
-                        egui::RichText::new(label)
-                            .small()
-                            .color(egui::Color32::from_rgb(150, 160, 180)),
-                    );
-                    u.with_layout(
-                        egui::Layout::right_to_left(egui::Align::Center),
-                        |u| {
-                            u.monospace(
-                                egui::RichText::new(format!("{n}"))
-                                    .color(egui::Color32::from_rgb(200, 220, 255)),
-                            );
-                        },
-                    );
-                });
-            };
-            row(child, "Parameters", param_count);
-            row(child, "Inputs", input_count);
-            row(child, "Outputs", output_count);
-            row(child, "Equations", equation_count);
-            if connect_count > 0 {
-                row(child, "Connect equations", connect_count);
-            }
+            // ── Named symbol bands ───────────────────────────────
+            paint_symbol_band(child, "Parameters", &param_names, counts.params);
+            paint_symbol_band(child, "Inputs", &input_names, counts.inputs);
+            paint_symbol_band(child, "Outputs", &output_names, counts.outputs);
+
+            child.add_space(6.0);
+            child.label(
+                egui::RichText::new(format!(
+                    "{} equations · {} connect equations",
+                    counts.equations, counts.connects,
+                ))
+                .small()
+                .color(egui::Color32::from_rgb(140, 155, 175)),
+            );
             child.add_space(4.0);
             child.label(
-                egui::RichText::new("→ Open the Text tab to read / edit the source.")
+                egui::RichText::new("→ Switch to the Text tab to read / edit the source.")
                     .italics()
                     .size(10.0)
-                    .color(egui::Color32::from_rgb(140, 155, 175)),
+                    .color(egui::Color32::from_rgb(130, 145, 165)),
             );
         },
+    );
+}
+
+/// Pull human-friendly info about the active class: authored Icon,
+/// type keyword (`model`/`block`/…), description string, and the top
+/// few parameter / input / output names. Falls back to `None`/empty
+/// vectors silently when the registry doesn't have the doc.
+fn empty_overlay_class_info(
+    world: &mut World,
+    doc_id: Option<lunco_doc::DocumentId>,
+    class_name: &str,
+) -> (
+    Option<crate::annotations::Icon>,
+    Option<&'static str>,
+    Option<String>,
+    Vec<String>,
+    Vec<String>,
+    Vec<String>,
+) {
+    let Some(doc) = doc_id else {
+        return (None, None, None, vec![], vec![], vec![]);
+    };
+    let registry = world.resource::<ModelicaDocumentRegistry>();
+    let Some(host) = registry.host(doc) else {
+        return (None, None, None, vec![], vec![], vec![]);
+    };
+    let document = host.document();
+    let ast_arc = match document.ast().result.as_ref() {
+        Ok(a) => a.clone(),
+        Err(_) => return (None, None, None, vec![], vec![], vec![]),
+    };
+
+    // Locate the class. Prefer an exact name match; fall back to the
+    // first non-package class (matches `extract_model_name`).
+    let class_def = locate_class(&ast_arc, class_name);
+    let Some(class) = class_def else {
+        return (None, None, None, vec![], vec![], vec![]);
+    };
+
+    use rumoca_session::parsing::ast::Causality;
+    use rumoca_session::parsing::ClassType;
+
+    let icon = crate::annotations::extract_icon(&class.annotation);
+    let class_type = match class.class_type {
+        ClassType::Model => Some("model"),
+        ClassType::Block => Some("block"),
+        ClassType::Class => Some("class"),
+        ClassType::Connector => Some("connector"),
+        ClassType::Record => Some("record"),
+        ClassType::Type => Some("type"),
+        ClassType::Package => Some("package"),
+        ClassType::Function => Some("function"),
+        ClassType::Operator => Some("operator"),
+    };
+    let description: Option<String> = class
+        .description
+        .iter()
+        .next()
+        .map(|t| t.text.as_ref().trim_matches('"').to_string())
+        .filter(|s| !s.is_empty());
+
+    let mut params = Vec::new();
+    let mut inputs = Vec::new();
+    let mut outputs = Vec::new();
+    for (name, comp) in class.components.iter() {
+        use rumoca_session::parsing::ast::Variability;
+        if matches!(comp.variability, Variability::Parameter(_)) {
+            params.push(name.clone());
+        }
+        match comp.causality {
+            Causality::Input(_) => inputs.push(name.clone()),
+            Causality::Output(_) => outputs.push(name.clone()),
+            _ => {}
+        }
+    }
+
+    (icon, class_type, description, params, inputs, outputs)
+}
+
+/// Find a class by short name in the AST — top-level first, then one
+/// level of nested classes (the same scope `register_local_class`
+/// uses for the Twin Browser).
+fn locate_class<'a>(
+    ast: &'a rumoca_session::parsing::ast::StoredDefinition,
+    name: &str,
+) -> Option<&'a rumoca_session::parsing::ast::ClassDef> {
+    if let Some((_, c)) = ast.classes.iter().find(|(n, _)| n.as_str() == name) {
+        return Some(c);
+    }
+    for (_, top) in ast.classes.iter() {
+        if let Some(c) = top.classes.get(name) {
+            return Some(c);
+        }
+    }
+    // Final fallback: first non-package class (matches the workbench's
+    // "active class on first open" picker).
+    use rumoca_session::parsing::ClassType;
+    ast.classes
+        .iter()
+        .find(|(_, c)| !matches!(c.class_type, ClassType::Package))
+        .map(|(_, c)| c)
+}
+
+/// Render a row showing a symbol band (e.g. "Parameters: tau, J, c
+/// + 3 more"). When the names list is empty, falls through to "—".
+fn paint_symbol_band(ui: &mut egui::Ui, label: &str, names: &[String], total: usize) {
+    if total == 0 && names.is_empty() {
+        return;
+    }
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new(format!("{label}:"))
+                .small()
+                .color(egui::Color32::from_rgb(150, 160, 180)),
+        );
+        let shown = names.iter().take(6).cloned().collect::<Vec<_>>().join(", ");
+        let suffix = if total > shown.len() && total > names.len().min(6) && names.len() > 6 {
+            format!(" + {} more", total - 6)
+        } else {
+            String::new()
+        };
+        let display = if shown.is_empty() {
+            format!("({total})")
+        } else {
+            format!("{shown}{suffix}")
+        };
+        ui.monospace(
+            egui::RichText::new(display)
+                .small()
+                .color(egui::Color32::from_rgb(200, 220, 255)),
+        );
+    });
+}
+
+/// Stylised type badge used as the hero when a class has no authored
+/// `Icon` annotation. A centred coloured pill with a single uppercase
+/// letter — matches the [`crate::ui::browser_section`] type-badge
+/// palette so the canvas hero and the browser row read as the same
+/// "this is a model" affordance.
+fn paint_class_type_badge(painter: &egui::Painter, rect: egui::Rect, type_name: &str) {
+    use egui::Color32 as C;
+    let (letter, bg) = match type_name {
+        "model" => ("M", C::from_rgb(80, 130, 200)),
+        "block" => ("B", C::from_rgb(100, 160, 110)),
+        "class" => ("C", C::from_rgb(120, 130, 160)),
+        "connector" => ("X", C::from_rgb(220, 160, 80)),
+        "record" => ("R", C::from_rgb(170, 120, 180)),
+        "type" => ("T", C::from_rgb(150, 150, 150)),
+        "package" => ("P", C::from_rgb(190, 110, 110)),
+        "function" => ("F", C::from_rgb(110, 170, 200)),
+        _ => ("?", C::from_rgb(120, 120, 120)),
+    };
+    let pill_w = rect.width().min(rect.height() * 1.4);
+    let pill_h = rect.height().min(120.0);
+    let pill = egui::Rect::from_center_size(rect.center(), egui::vec2(pill_w, pill_h));
+    painter.rect_filled(pill, 16.0, bg);
+    painter.text(
+        pill.center(),
+        egui::Align2::CENTER_CENTER,
+        letter,
+        egui::FontId::proportional(pill_h * 0.55),
+        C::WHITE,
     );
 }
 
@@ -2542,6 +2730,37 @@ fn empty_overlay_counts_cached(source: &str) -> EmptyOverlayCounts {
 #[derive(bevy::prelude::Resource, Default)]
 pub struct DrillInLoads {
     pending: std::collections::HashMap<lunco_doc::DocumentId, DrillInBinding>,
+}
+
+/// User-facing canvas snap settings, read each frame by the canvas
+/// render path and pushed onto [`lunco_canvas::Canvas::snap`]. Off by
+/// default; the Settings menu flips `enabled` and picks the step.
+///
+/// Step is in Modelica world units (not screen pixels) so the visible
+/// grid spacing stays constant across zooms. Typical choices for the
+/// standard `{{-100,-100},{100,100}}` diagram coord system:
+///   * `2` — fine (matches common MSL placement granularity)
+///   * `5` — medium
+///   * `10` — coarse (matches typical integer placements in MSL)
+#[derive(bevy::prelude::Resource)]
+pub struct CanvasSnapSettings {
+    pub enabled: bool,
+    pub step: f32,
+}
+
+impl Default for CanvasSnapSettings {
+    fn default() -> Self {
+        // On by default. Step = 5 Modelica units — the OMEdit
+        // default and the value most MSL example placements are
+        // authored to (common placement extents are multiples of 5
+        // or 10). Fine enough to reach typical target positions,
+        // coarse enough that every drag produces a visibly
+        // different "tick" as the icon crosses grid lines.
+        Self {
+            enabled: true,
+            step: 5.0,
+        }
+    }
 }
 
 /// Persistent `DocumentId → qualified class name` map for tabs

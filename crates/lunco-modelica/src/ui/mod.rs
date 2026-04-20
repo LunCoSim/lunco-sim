@@ -276,6 +276,7 @@ impl Plugin for ModelicaUiPlugin {
             .init_resource::<panels::canvas_diagram::DiagramProjectionLimits>()
             .init_resource::<panels::canvas_diagram::DrilledInClassNames>()
             .init_resource::<panels::canvas_diagram::DrillInLoads>()
+            .init_resource::<panels::canvas_diagram::CanvasSnapSettings>()
             .init_resource::<panels::canvas_diagram::DuplicateLoads>()
             .add_systems(Update, panels::canvas_diagram::drive_drill_in_loads)
             .add_systems(Update, panels::canvas_diagram::drive_duplicate_loads)
@@ -367,5 +368,36 @@ fn register_settings_menu(world: &mut World) {
                 limits.max_duration = std::time::Duration::from_secs(secs);
             }
         });
+        drop(limits);
+        ui.add_space(4.0);
+        // ── Drag snap ────────────────────────────────────────────
+        // Off by default — a lot of Modelica source uses
+        // hand-placed non-grid positions and the user shouldn't
+        // have their authored placements auto-rounded unless they
+        // opted in. When on, drags quantise *live* (visible during
+        // the drag itself) to multiples of `step` Modelica units.
+        let mut snap =
+            world.resource_mut::<panels::canvas_diagram::CanvasSnapSettings>();
+        ui.checkbox(&mut snap.enabled, "Snap to grid on drag").on_hover_text(
+            "When on, dragging an icon quantises its position to a \
+             grid. Applies live during the drag and at commit. Off \
+             by default.",
+        );
+        ui.horizontal(|ui| {
+            ui.label("Grid step");
+            ui.add_enabled(
+                snap.enabled,
+                egui::DragValue::new(&mut snap.step)
+                    .range(0.5..=50.0)
+                    .speed(0.5)
+                    .suffix(" units"),
+            )
+            .on_hover_text(
+                "Snap granularity in Modelica diagram-coordinate \
+                 units (the 200-unit standard system). Common: 2 \
+                 (fine), 5 (medium), 10 (coarse).",
+            );
+        });
+        drop(snap);
     });
 }
