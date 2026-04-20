@@ -113,6 +113,48 @@ impl Default for DiagramTheme {
 }
 
 // ---------------------------------------------------------------------------
+// Auto-layout settings
+// ---------------------------------------------------------------------------
+
+/// Grid-layout parameters used when an imported model has no authored
+/// `annotation(Placement(...))` on its components. Tunable per the
+/// Article-X mandate — no magic numbers buried inside the import path.
+///
+/// Two independent grids because the two importers have different
+/// failure modes: the AST importer runs on valid-enough source with
+/// known icon extents (tighter grid reads well), while the regex
+/// scan is a last-resort recovery from broken source and leaves
+/// extra breathing room so overlapping labels stay legible.
+#[derive(Resource, Clone, Debug)]
+pub struct DiagramAutoLayoutSettings {
+    /// Grid spacing (world units) between columns for components
+    /// without a `Placement` annotation. Slot is keyed by the node's
+    /// index in the class's component list — stable under sibling
+    /// annotation changes, so dragging one component doesn't shift
+    /// the others.
+    pub spacing_x: f32,
+    /// Grid spacing between rows.
+    pub spacing_y: f32,
+    /// Column count; nodes wrap to a new row once reached.
+    pub cols: usize,
+    /// Fraction of `spacing_x` to offset odd rows by — stagger keeps
+    /// ports on the shared horizontal band from wiring through the
+    /// icon body of the row above.
+    pub row_stagger: f32,
+}
+
+impl Default for DiagramAutoLayoutSettings {
+    fn default() -> Self {
+        Self {
+            spacing_x: 140.0,
+            spacing_y: 110.0,
+            cols: 4,
+            row_stagger: 0.5,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Diagram State
 // ---------------------------------------------------------------------------
 
@@ -1480,6 +1522,7 @@ fn scan_component_declarations(source: &str) -> Vec<(String, String)> {
 fn build_visual_diagram_from_scan(
     source: &str,
     scanned: &[(String, String)],
+    layout: &DiagramAutoLayoutSettings,
 ) -> VisualDiagram {
     let mut diagram = VisualDiagram::default();
     let msl_lib = msl_component_library();
@@ -1487,10 +1530,6 @@ fn build_visual_diagram_from_scan(
         .iter()
         .map(|c| (c.msl_path.as_str(), c))
         .collect();
-
-    let node_spacing_x = 200.0;
-    let node_spacing_y = 150.0;
-    let cols = 3usize;
 
     for (idx, (type_path, instance_name)) in scanned.iter().enumerate() {
         // Only render components whose type resolves against the MSL
@@ -1516,9 +1555,13 @@ fn build_visual_diagram_from_scan(
             })
         });
         let pos = annotation_pos.unwrap_or_else(|| {
+            let cols = layout.cols.max(1);
             let row = idx / cols;
             let col = idx % cols;
-            egui::Pos2::new(col as f32 * node_spacing_x, row as f32 * node_spacing_y)
+            egui::Pos2::new(
+                col as f32 * layout.spacing_x,
+                row as f32 * layout.spacing_y,
+            )
         });
 
         let node_id = diagram.add_node(def.clone(), pos);
@@ -1556,6 +1599,7 @@ pub fn import_model_to_diagram(source: &str) -> Option<VisualDiagram> {
         source,
         DEFAULT_MAX_DIAGRAM_NODES,
         None,
+        &DiagramAutoLayoutSettings::default(),
     )
 }
 
@@ -1576,6 +1620,7 @@ pub fn import_model_to_diagram_from_ast(
     source: &str,
     max_nodes: usize,
     target_class: Option<&str>,
+    layout: &DiagramAutoLayoutSettings,
 ) -> Option<VisualDiagram> {
     use crate::diagram::ModelicaComponentBuilder;
     // `Arc::clone` here is a pointer bump, NOT a tree clone.
@@ -1622,7 +1667,7 @@ pub fn import_model_to_diagram_from_ast(
         }
         let scanned = scan_component_declarations(source);
         if !scanned.is_empty() {
-            return Some(build_visual_diagram_from_scan(source, &scanned));
+            return Some(build_visual_diagram_from_scan(source, &scanned, layout));
         }
         return None;
     }
@@ -1793,13 +1838,11 @@ pub fn import_model_to_diagram_from_ast(
     // shared horizontal band don't end up wired through the body of
     // the row above. Matches the breathing room Dymola/OMEdit's
     // default layout uses for un-annotated example models.
-    let node_spacing_x = 320.0;
-    let node_spacing_y = 220.0;
-    let cols = 4;
-    let mut placement_idx = 0;
-    let row_offset_x = node_spacing_x * 0.5;
-
-    for node in graph.nodes.iter() {
+    // Stable per-component slot: each graph node's position in the
+    // list defines its fallback offset, regardless of whether siblings
+    // have a `Placement` annotation. Without this, annotating one
+    // component shifts every un-annotated sibling.
+    for (node_idx, node) in graph.nodes.iter().enumerate() {
         if node.qualified_name.is_empty() {
             continue;
         }
@@ -1870,15 +1913,23 @@ pub fn import_model_to_diagram_from_ast(
                 }
             }
 
-            // Fallback to grid pos if no annotation
+            // Fallback when no `Placement` annotation: deterministic
+            // grid keyed by the node's AST index. Index-stable — an
+            // annotated sibling never shifts un-annotated ones —
+            // while staying visually usable without the user having
+            // to click Auto-Arrange first.
             let pos = pos.unwrap_or_else(|| {
-                let row = placement_idx / cols;
-                let col = placement_idx % cols;
-                placement_idx += 1;
-                let row_shift = if row % 2 == 1 { row_offset_x } else { 0.0 };
+                let cols = layout.cols.max(1);
+                let row = node_idx / cols;
+                let col = node_idx % cols;
+                let row_shift = if row % 2 == 1 {
+                    layout.spacing_x * layout.row_stagger
+                } else {
+                    0.0
+                };
                 egui::Pos2::new(
-                    col as f32 * node_spacing_x + row_shift,
-                    row as f32 * node_spacing_y,
+                    col as f32 * layout.spacing_x + row_shift,
+                    row as f32 * layout.spacing_y,
                 )
             });
 
@@ -2115,6 +2166,9 @@ impl Panel for DiagramPanel {
         }
         if world.get_resource::<DiagramTheme>().is_none() {
             world.insert_resource(DiagramTheme::default());
+        }
+        if world.get_resource::<DiagramAutoLayoutSettings>().is_none() {
+            world.insert_resource(DiagramAutoLayoutSettings::default());
         }
 
         // ── Phase α: track the active document ──

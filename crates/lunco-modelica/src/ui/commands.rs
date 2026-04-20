@@ -108,6 +108,27 @@ pub struct CompileModel {
     pub doc: DocumentId,
 }
 
+/// Run the Auto-Arrange layout: assign each component of the active
+/// class a deterministic grid position and persist it via a batch of
+/// `SetPlacement` ops (undo-able as one group). Matches Dymola's
+/// **Edit → Auto Arrange** command. The passive open-time fallback
+/// stacks components at origin so nothing jumps around; users invoke
+/// this to lay out an imported model cleanly in one click.
+///
+/// Exposed to the LunCo API: `POST /api/commands` with
+/// `{"command": "AutoArrangeDiagram", "params": {"doc": 0}}` where
+/// `doc = 0` targets the currently-active tab. Kept as a raw `u64`
+/// (not `DocumentId`) so the generic `lunco-doc` crate stays free of
+/// the bevy-reflect dependency required to cross the API boundary.
+#[derive(Event, Reflect, Clone, Debug, Default)]
+#[reflect(Event, Default)]
+pub struct AutoArrangeDiagram {
+    /// Raw `DocumentId::raw()` value, or `0` for "the currently-active
+    /// Model tab" (useful from API / tests / scripts that don't track
+    /// document ids).
+    pub doc: u64,
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Observers
 // ─────────────────────────────────────────────────────────────────────────────
@@ -132,6 +153,10 @@ impl Plugin for ModelicaCommandsPlugin {
             .add_observer(on_create_new_scratch_model)
             .add_observer(on_duplicate_model_from_read_only)
             .add_observer(on_open_example_in_workspace)
+            // Auto-Arrange: reflect-registered so the LunCo API can
+            // fire it via `ExecuteCommand { command: "AutoArrangeDiagram" }`.
+            .register_type::<AutoArrangeDiagram>()
+            .add_observer(crate::ui::panels::canvas_diagram::on_auto_arrange_diagram)
             .add_observer(resolve_editor_intent)
             .add_observer(resolve_new_document_intent)
             .add_systems(
