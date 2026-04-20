@@ -3745,3 +3745,120 @@ fn apply_ops(world: &mut World, doc_id: lunco_doc::DocumentId, ops: Vec<Modelica
         // leaves the canvas scene stale.
     }
 }
+
+/// Observer for [`crate::ui::commands::AutoArrangeDiagram`].
+///
+/// Assigns every component of the active class a grid position from
+/// the current [`crate::ui::panels::diagram::DiagramAutoLayoutSettings`]
+/// `arrange_*` parameters and emits a batch of `SetPlacement` ops.
+///
+/// Iterates the canvas scene (not the AST) so the order matches what
+/// the user sees. Each op is separately undo-able via Ctrl+Z.
+pub fn on_auto_arrange_diagram(
+    trigger: On<crate::ui::commands::AutoArrangeDiagram>,
+    mut commands: Commands,
+) {
+    let raw = trigger.event().doc;
+    // Observers can't take `&mut World` in Bevy 0.18. Defer the real
+    // work to an exclusive command — same mutations, just queued to
+    // run at the next command-flush boundary.
+    commands.queue(move |world: &mut World| {
+        // `doc = 0` = API / script default = "the tab the user is
+        // looking at right now". Resolve from `WorkbenchState.open_model`
+        // so the LunCo API can fire the command without tracking ids.
+        let doc_id = if raw == 0 {
+            match active_doc_from_world(world) {
+                Some(d) => d,
+                None => {
+                    bevy::log::warn!(
+                        "[CanvasDiagram] Auto-Arrange: no active doc"
+                    );
+                    return;
+                }
+            }
+        } else {
+            lunco_doc::DocumentId::new(raw)
+        };
+        auto_arrange_now(world, doc_id);
+    });
+}
+
+fn auto_arrange_now(world: &mut World, doc_id: lunco_doc::DocumentId) {
+    let Some(class) = active_class_for_doc(world, doc_id) else {
+        return;
+    };
+    let layout = world
+        .get_resource::<crate::ui::panels::diagram::DiagramAutoLayoutSettings>()
+        .cloned()
+        .unwrap_or_default();
+    let mut names: Vec<String> = {
+        let Some(state) = world.get_resource::<CanvasDiagramState>() else {
+            return;
+        };
+        let docstate = state.get(Some(doc_id));
+        docstate
+            .canvas
+            .scene
+            .nodes()
+            .filter_map(|(_, n)| n.origin.clone())
+            .collect()
+    };
+    names.dedup();
+    if names.is_empty() {
+        return;
+    }
+
+    let cols = layout.cols.max(1);
+    let dx = layout.spacing_x;
+    let dy = layout.spacing_y;
+    let stagger = dx * layout.row_stagger;
+    let positions: Vec<(String, f32, f32)> = names
+        .into_iter()
+        .enumerate()
+        .map(|(idx, name)| {
+            let row = idx / cols;
+            let col = idx % cols;
+            let row_shift = if row % 2 == 1 { stagger } else { 0.0 };
+            // Canvas world coords (+Y down). Convert to Modelica
+            // centre (+Y up) via the shared helper so the ops emit
+            // the same coord frame a drag would.
+            let wx = col as f32 * dx + row_shift;
+            let wy = row as f32 * dy;
+            let (mx, my) =
+                canvas_min_to_modelica_center(lunco_canvas::Pos::new(wx, wy));
+            (name, mx, my)
+        })
+        .collect();
+
+    let ops: Vec<ModelicaOp> = positions
+        .into_iter()
+        .map(|(name, mx, my)| ModelicaOp::SetPlacement {
+            class: class.clone(),
+            name,
+            placement: Placement::at(mx, my),
+        })
+        .collect();
+    if ops.is_empty() {
+        return;
+    }
+    bevy::log::info!(
+        "[CanvasDiagram] Auto-Arrange: emitting {} SetPlacement ops",
+        ops.len()
+    );
+    apply_ops(world, doc_id, ops);
+}
+
+/// Resolve the active class name for an Auto-Arrange target. Prefers
+/// the drilled-in class name (for MSL drill-in tabs); falls back to
+/// the open document's detected model name.
+fn active_class_for_doc(world: &mut World, doc_id: lunco_doc::DocumentId) -> Option<String> {
+    if let Some(m) = world.get_resource::<DrilledInClassNames>() {
+        if let Some(c) = m.get(doc_id) {
+            return Some(c.to_string());
+        }
+    }
+    world
+        .get_resource::<WorkbenchState>()
+        .and_then(|ws| ws.open_model.as_ref())
+        .and_then(|o| o.detected_name.clone())
+}

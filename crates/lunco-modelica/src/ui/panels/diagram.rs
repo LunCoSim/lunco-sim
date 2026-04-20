@@ -127,35 +127,29 @@ impl Default for DiagramTheme {
 /// extra breathing room so overlapping labels stay legible.
 #[derive(Resource, Clone, Debug)]
 pub struct DiagramAutoLayoutSettings {
-    /// Horizontal spacing (world units) between adjacent columns in
-    /// the AST importer's fallback grid.
-    pub ast_spacing_x: f32,
-    /// Vertical spacing (world units) between adjacent rows in the
-    /// AST importer's fallback grid.
-    pub ast_spacing_y: f32,
-    /// Column count for the AST importer's fallback grid. Nodes wrap
-    /// to a new row once this is reached.
-    pub ast_cols: usize,
-    /// Half-column stagger applied to odd rows (0.0 disables). Keeps
+    /// Grid spacing (world units) between columns for components
+    /// without a `Placement` annotation. Slot is keyed by the node's
+    /// index in the class's component list — stable under sibling
+    /// annotation changes, so dragging one component doesn't shift
+    /// the others.
+    pub spacing_x: f32,
+    /// Grid spacing between rows.
+    pub spacing_y: f32,
+    /// Column count; nodes wrap to a new row once reached.
+    pub cols: usize,
+    /// Fraction of `spacing_x` to offset odd rows by — stagger keeps
     /// ports on the shared horizontal band from wiring through the
     /// icon body of the row above.
-    pub ast_row_stagger: f32,
-    /// Regex-scan fallback grid (broken-source recovery).
-    pub scan_spacing_x: f32,
-    pub scan_spacing_y: f32,
-    pub scan_cols: usize,
+    pub row_stagger: f32,
 }
 
 impl Default for DiagramAutoLayoutSettings {
     fn default() -> Self {
         Self {
-            ast_spacing_x: 140.0,
-            ast_spacing_y: 110.0,
-            ast_cols: 4,
-            ast_row_stagger: 0.5,
-            scan_spacing_x: 200.0,
-            scan_spacing_y: 150.0,
-            scan_cols: 3,
+            spacing_x: 140.0,
+            spacing_y: 110.0,
+            cols: 4,
+            row_stagger: 0.5,
         }
     }
 }
@@ -1537,10 +1531,6 @@ fn build_visual_diagram_from_scan(
         .map(|c| (c.msl_path.as_str(), c))
         .collect();
 
-    let node_spacing_x = layout.scan_spacing_x;
-    let node_spacing_y = layout.scan_spacing_y;
-    let cols = layout.scan_cols.max(1);
-
     for (idx, (type_path, instance_name)) in scanned.iter().enumerate() {
         // Only render components whose type resolves against the MSL
         // index. Unresolved types stay in the source — the user sees
@@ -1565,9 +1555,13 @@ fn build_visual_diagram_from_scan(
             })
         });
         let pos = annotation_pos.unwrap_or_else(|| {
+            let cols = layout.cols.max(1);
             let row = idx / cols;
             let col = idx % cols;
-            egui::Pos2::new(col as f32 * node_spacing_x, row as f32 * node_spacing_y)
+            egui::Pos2::new(
+                col as f32 * layout.spacing_x,
+                row as f32 * layout.spacing_y,
+            )
         });
 
         let node_id = diagram.add_node(def.clone(), pos);
@@ -1844,13 +1838,11 @@ pub fn import_model_to_diagram_from_ast(
     // shared horizontal band don't end up wired through the body of
     // the row above. Matches the breathing room Dymola/OMEdit's
     // default layout uses for un-annotated example models.
-    let node_spacing_x = layout.ast_spacing_x;
-    let node_spacing_y = layout.ast_spacing_y;
-    let cols = layout.ast_cols.max(1);
-    let mut placement_idx = 0;
-    let row_offset_x = node_spacing_x * layout.ast_row_stagger;
-
-    for node in graph.nodes.iter() {
+    // Stable per-component slot: each graph node's position in the
+    // list defines its fallback offset, regardless of whether siblings
+    // have a `Placement` annotation. Without this, annotating one
+    // component shifts every un-annotated sibling.
+    for (node_idx, node) in graph.nodes.iter().enumerate() {
         if node.qualified_name.is_empty() {
             continue;
         }
@@ -1921,15 +1913,23 @@ pub fn import_model_to_diagram_from_ast(
                 }
             }
 
-            // Fallback to grid pos if no annotation
+            // Fallback when no `Placement` annotation: deterministic
+            // grid keyed by the node's AST index. Index-stable — an
+            // annotated sibling never shifts un-annotated ones —
+            // while staying visually usable without the user having
+            // to click Auto-Arrange first.
             let pos = pos.unwrap_or_else(|| {
-                let row = placement_idx / cols;
-                let col = placement_idx % cols;
-                placement_idx += 1;
-                let row_shift = if row % 2 == 1 { row_offset_x } else { 0.0 };
+                let cols = layout.cols.max(1);
+                let row = node_idx / cols;
+                let col = node_idx % cols;
+                let row_shift = if row % 2 == 1 {
+                    layout.spacing_x * layout.row_stagger
+                } else {
+                    0.0
+                };
                 egui::Pos2::new(
-                    col as f32 * node_spacing_x + row_shift,
-                    row as f32 * node_spacing_y,
+                    col as f32 * layout.spacing_x + row_shift,
+                    row as f32 * layout.spacing_y,
                 )
             });
 

@@ -548,6 +548,7 @@ fn render_unified_toolbar(
     let mut redo_clicked = false;
     let mut dismiss_error = false;
     let mut duplicate_clicked = false;
+    let mut auto_arrange_clicked = false;
     let mut new_view_mode = view_mode;
 
     ui.horizontal(|ui| {
@@ -632,6 +633,38 @@ fn render_unified_toolbar(
             .on_hover_text("Compile the current model and run it (F5)")
             .clicked();
 
+        // Auto-Arrange: batch SetPlacement on every component in the
+        // active class to a clean grid. Only useful on the Diagram
+        // view and only on editable docs. Dymola's "Edit → Auto
+        // Arrange" in one button.
+        if view_mode == ModelViewMode::Canvas && !is_read_only {
+            ui.separator();
+            auto_arrange_clicked = ui
+                .button("🧹 Auto-Arrange")
+                .on_hover_text(
+                    "Lay out all components in a grid and write the \
+                     positions back into the source as Placement \
+                     annotations. Undo-able.",
+                )
+                .clicked();
+        }
+
+        // Auto-Arrange: batch SetPlacement on every component in the
+        // active class to a clean grid. Only useful on the Diagram
+        // view and only on editable docs. Dymola's "Edit → Auto
+        // Arrange" in one button.
+        if view_mode == ModelViewMode::Canvas && !is_read_only {
+            ui.separator();
+            auto_arrange_clicked = ui
+                .button("🧹 Auto-Arrange")
+                .on_hover_text(
+                    "Lay out all components in a grid and write the \
+                     positions back into the source as Placement \
+                     annotations. Undo-able.",
+                )
+                .clicked();
+        }
+
         // Duplicate-to-workspace: only offered on read-only tabs.
         // Users browsing an MSL Example who want to tweak parameters
         // hit this to get an editable copy in a new tab; the library
@@ -667,6 +700,13 @@ fn render_unified_toolbar(
             .commands()
             .trigger(crate::ui::commands::DuplicateModelFromReadOnly {
                 source_doc: doc,
+            });
+    }
+    if auto_arrange_clicked {
+        world
+            .commands()
+            .trigger(crate::ui::commands::AutoArrangeDiagram {
+                doc: doc.raw(),
             });
     }
     if compile_clicked {
