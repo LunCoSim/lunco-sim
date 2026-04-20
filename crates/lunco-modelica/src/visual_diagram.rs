@@ -190,6 +190,13 @@ pub struct DiagramEdge {
     pub source_port: String,
     pub target_node: DiagramNodeId,
     pub target_port: String,
+    /// Authored polyline waypoints in Modelica coords (+Y up, the
+    /// same frame `connect(...) annotation(Line(points={{x,y},...}))`
+    /// uses). `None` or empty → renderer falls back to the orthogonal
+    /// Z auto-router. Endpoints are the port stubs; waypoints sit
+    /// between them in source order.
+    #[serde(default)]
+    pub waypoints: Vec<(f32, f32)>,
 }
 
 /// The complete visual diagram.
@@ -277,6 +284,7 @@ impl VisualDiagram {
                 source_port,
                 target_node,
                 target_port,
+                waypoints: Vec::new(),
             });
         }
     }

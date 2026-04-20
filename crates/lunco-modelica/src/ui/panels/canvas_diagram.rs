@@ -513,6 +513,11 @@ struct OrthogonalEdgeVisual {
     color: egui::Color32,
     from_dir: PortDir,
     to_dir: PortDir,
+    /// Authored / stored waypoints in **canvas world** coords
+    /// (Modelica +Y is flipped to canvas +Y at projector time).
+    /// When non-empty, the renderer emits a polyline through the
+    /// waypoints instead of the auto Z-bend.
+    waypoints_world: Vec<CanvasPos>,
 }
 
 impl Default for OrthogonalEdgeVisual {
@@ -521,6 +526,7 @@ impl Default for OrthogonalEdgeVisual {
             color: wire_color_for(""),
             from_dir: PortDir::None,
             to_dir: PortDir::None,
+            waypoints_world: Vec::new(),
         }
     }
 }
@@ -552,6 +558,33 @@ impl EdgeVisual for OrthogonalEdgeVisual {
         let width = if selected { 2.2 } else { 1.5 };
         let stroke = egui::Stroke::new(width, col);
         let painter = ctx.ui.painter();
+
+        // Authored polyline: if the edge carries waypoints (from a
+        // `connect(...) annotation(Line(points={{x,y},...}))` clause
+        // or a user edit), emit a stub-from-port → waypoints → stub-
+        // into-port polyline and skip the auto-Z router entirely.
+        if !self.waypoints_world.is_empty() {
+            let from_screen = egui::pos2(from.x, from.y);
+            let to_screen = egui::pos2(to.x, to.y);
+            let way_screen: Vec<egui::Pos2> = self
+                .waypoints_world
+                .iter()
+                .map(|p| {
+                    let s = ctx
+                        .viewport
+                        .world_to_screen(*p, ctx.screen_rect);
+                    egui::pos2(s.x, s.y)
+                })
+                .collect();
+            let mut pts = Vec::with_capacity(way_screen.len() + 2);
+            pts.push(from_screen);
+            pts.extend(way_screen.iter().copied());
+            pts.push(to_screen);
+            for w in pts.windows(2) {
+                painter.line_segment([w[0], w[1]], stroke);
+            }
+            return;
+        }
 
         // Whether each side's stub actually helps reach the target.
         // A stub helps iff its outward unit vector projects positively
@@ -824,10 +857,29 @@ fn build_registry() -> VisualRegistry {
         let to_dir = PortDir::from_str(
             data.get("to_dir").and_then(|v| v.as_str()).unwrap_or(""),
         );
+        // Waypoints come in as Modelica coords (+Y up). Flip Y here
+        // so the renderer can walk them in the same world frame as
+        // the port positions (nodes already live in the flipped
+        // space, see the IconTransform comment).
+        let waypoints_world: Vec<CanvasPos> = data
+            .get("waypoints")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|pt| {
+                        let pt = pt.as_array()?;
+                        let x = pt.first()?.as_f64()? as f32;
+                        let y = pt.get(1)?.as_f64()? as f32;
+                        Some(CanvasPos::new(x, -y))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         OrthogonalEdgeVisual {
             color: wire_color_for(connector_type),
             from_dir,
             to_dir,
+            waypoints_world,
         }
     });
     reg
@@ -1222,6 +1274,10 @@ fn project_scene(diagram: &VisualDiagram) -> (Scene, HashMap<DiagramNodeId, Canv
                 "connector_type": connector_type,
                 "from_dir": from_dir.as_str(),
                 "to_dir": to_dir.as_str(),
+                // Authored polyline in Modelica coords (+Y up); Y is
+                // flipped to canvas world coords at render time.
+                // Empty array when the edge uses auto-routing only.
+                "waypoints": edge.waypoints,
             }),
             origin: None,
         });

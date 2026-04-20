@@ -258,11 +258,28 @@ fn resolve_tab_title(world: &World, doc: DocumentId) -> (String, bool, bool) {
         .and_then(|r| r.host(doc))
     {
         let document = host.document();
-        return (
-            document.origin().display_name(),
-            document.is_dirty(),
-            document.is_read_only(),
-        );
+        // Drilled-in tabs (from OpenClass / the canvas's double-click
+        // gesture) back onto a raw `.mo` file — often a package
+        // aggregate like `Continuous.mo` that holds Der/PID/FirstOrder
+        // side by side. The file's display name ("Continuous") then
+        // hides *which* class the user drilled into. Prefer the
+        // drilled-in class's short name when present.
+        let base = if let Some(class_names) = world
+            .get_resource::<crate::ui::panels::canvas_diagram::DrilledInClassNames>()
+        {
+            class_names
+                .get(doc)
+                .and_then(|qualified| {
+                    qualified
+                        .rsplit('.')
+                        .next()
+                        .map(str::to_string)
+                })
+                .unwrap_or_else(|| document.origin().display_name())
+        } else {
+            document.origin().display_name()
+        };
+        return (base, document.is_dirty(), document.is_read_only());
     }
 
     // Fall back to any live `open_model.display_name` when it's the

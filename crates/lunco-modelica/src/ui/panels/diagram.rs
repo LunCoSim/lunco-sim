@@ -1520,6 +1520,81 @@ fn scan_component_declarations(source: &str) -> Vec<(String, String)> {
     out
 }
 
+/// Regex-extract authored `connect(...) annotation(Line(points=...))`
+/// waypoints from a class source. Returns a lookup keyed by the
+/// canonicalised edge endpoints `((a_inst, a_port), (b_inst, b_port))`
+/// — unordered so `connect(a.p, b.q)` and `connect(b.q, a.p)` hash
+/// to the same key.
+///
+/// Rumoca's `Equation::Connect` has no annotation field (see
+/// rumoca-ir-ast), so the only place the authored route survives
+/// is in the raw source. We accept this as a pragmatic fallback:
+/// MSL examples nearly all author routes this way, and users who
+/// later drag to rearrange pay the edit cost at source-write time.
+pub(crate) fn scan_connect_annotations(
+    source: &str,
+) -> std::collections::HashMap<
+    ((String, String), (String, String)),
+    Vec<(f32, f32)>,
+> {
+    // `connect( a.p , b.q )   annotation( … Line(points={{x,y},…}) … ) ;`
+    // The outer `.*?` after `annotation(` is non-greedy, and the
+    // inner `points=\{…\}` uses a balanced-ish approach: match
+    // everything up to the outermost `}}` after `points={{`. That
+    // handles Line(points={{x1,y1},{x2,y2}}) and longer runs, as
+    // long as no other `}}` is nested inside a points literal —
+    // which it isn't per MLS grammar for `Real[2]` points.
+    // The last capture grabs the `{{…}}` point list verbatim
+    // (including both outer braces). `pt_re` below walks it with a
+    // simple `\{x,y\}` pattern — handling the outer braces inside
+    // the outer regex proved fragile (the prior version's lazy
+    // `.*?\}\s*\}` clipped the final point's closing brace and
+    // silently dropped the last point).
+    let re = regex::Regex::new(
+        r#"(?s)connect\s*\(\s*([A-Za-z_]\w*)\s*\.\s*([A-Za-z_]\w*(?:\s*\[[^\]]*\])?)\s*,\s*([A-Za-z_]\w*)\s*\.\s*([A-Za-z_]\w*(?:\s*\[[^\]]*\])?)\s*\)\s*annotation\s*\(.*?Line\s*\(\s*points\s*=\s*(\{\{.*?\}\s*\})"#
+    ).expect("connect annotation regex compiles");
+    let pt_re = regex::Regex::new(
+        r"\{\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\}",
+    )
+    .expect("point regex compiles");
+    let mut out = std::collections::HashMap::new();
+    for cap in re.captures_iter(source) {
+        let a_inst = cap[1].to_string();
+        let a_port = cap[2].split_whitespace().collect::<String>();
+        let b_inst = cap[3].to_string();
+        let b_port = cap[4].split_whitespace().collect::<String>();
+        let pts_src = &cap[5];
+        let mut pts = Vec::new();
+        for p in pt_re.captures_iter(pts_src) {
+            let x: f32 = p[1].parse().unwrap_or(0.0);
+            let y: f32 = p[2].parse().unwrap_or(0.0);
+            pts.push((x, y));
+        }
+        if pts.len() < 2 {
+            continue;
+        }
+        // Drop the two endpoints — they're redundant with the port
+        // positions the renderer already knows. Only the interior
+        // waypoints affect the path.
+        let interior: Vec<(f32, f32)> = pts[1..pts.len().saturating_sub(1)].to_vec();
+        let key = canonical_edge_key(&a_inst, &a_port, &b_inst, &b_port);
+        out.entry(key).or_insert(interior);
+    }
+    out
+}
+
+fn canonical_edge_key(
+    a_inst: &str,
+    a_port: &str,
+    b_inst: &str,
+    b_port: &str,
+) -> ((String, String), (String, String)) {
+    // Sort the pair so the two orderings hash to the same key.
+    let a = (a_inst.to_string(), a_port.to_string());
+    let b = (b_inst.to_string(), b_port.to_string());
+    if a <= b { (a, b) } else { (b, a) }
+}
+
 /// Build a `VisualDiagram` from scanner-extracted `(type, name)`
 /// pairs. Used only when the AST-based path returned nothing — i.e.
 /// rumoca failed to produce components for the class. Placement
@@ -1646,6 +1721,10 @@ pub fn import_model_to_diagram_from_ast(
         builder = builder.target_class(target);
     }
     let graph = builder.build();
+    // Authored connection-route waypoints (from `connect(...) annotation(Line(
+    // points=...))`) are lost by the AST path, so we regex them out of the
+    // raw source and use the (instance,port)-pair lookup below.
+    let waypoint_map = scan_connect_annotations(source);
 
     // If the AST-based graph has no components, fall back to a
     // source-text scan before concluding the model is equation-only.
@@ -1977,7 +2056,14 @@ pub fn import_model_to_diagram_from_ast(
             // Port names from graph node ports
             let src_port = src_node.ports.get(edge.source_port).map(|p| p.name.clone()).unwrap_or_default();
             let tgt_port = tgt_node.ports.get(edge.target_port).map(|p| p.name.clone()).unwrap_or_default();
-            diagram.add_edge(src_id, src_port, tgt_id, tgt_port);
+            diagram.add_edge(src_id, src_port.clone(), tgt_id, tgt_port.clone());
+            // Attach authored waypoints if the source had them.
+            let key = canonical_edge_key(src_short, &src_port, tgt_short, &tgt_port);
+            if let Some(waypoints) = waypoint_map.get(&key) {
+                if let Some(last) = diagram.edges.last_mut() {
+                    last.waypoints = waypoints.clone();
+                }
+            }
         }
     }
 
@@ -3187,6 +3273,58 @@ end M;
         rumoca_phase_parse::parse_to_syntax(src, "test.mo")
             .best_effort()
             .clone()
+    }
+
+    #[test]
+    fn scan_connect_annotations_extracts_interior_waypoints() {
+        let src = r#"
+model M
+  A a;
+  B b;
+equation
+  connect(a.p, b.n) annotation(Line(points={{-10,0},{0,10},{10,0}}));
+end M;
+"#;
+        let map = super::scan_connect_annotations(src);
+        // One edge, interior-waypoint-only (drop first/last).
+        assert_eq!(map.len(), 1);
+        let key = super::canonical_edge_key("a", "p", "b", "n");
+        let pts = map.get(&key).expect("waypoints present");
+        assert_eq!(pts, &vec![(0.0, 10.0)]);
+    }
+
+    #[test]
+    fn scan_connect_annotations_canonicalises_endpoint_order() {
+        let src = r#"
+model M
+  A x;
+  B y;
+equation
+  connect(y.q, x.p) annotation(Line(points={{0,0},{5,5},{10,0}}));
+end M;
+"#;
+        let map = super::scan_connect_annotations(src);
+        // Source wrote (y.q, x.p); the key still matches (x.p, y.q)
+        // because canonical_edge_key sorts.
+        let forward = super::canonical_edge_key("x", "p", "y", "q");
+        let reverse = super::canonical_edge_key("y", "q", "x", "p");
+        assert_eq!(forward, reverse);
+        assert!(map.contains_key(&forward));
+    }
+
+    #[test]
+    fn scan_connect_annotations_skips_edges_without_points() {
+        let src = r#"
+model M
+  A a;
+  B b;
+equation
+  connect(a.p, b.n);
+  connect(a.p2, b.n2) annotation(Line(color={0,0,255}));
+end M;
+"#;
+        let map = super::scan_connect_annotations(src);
+        assert!(map.is_empty(), "no Line.points ⇒ no entry");
     }
 
     #[test]
