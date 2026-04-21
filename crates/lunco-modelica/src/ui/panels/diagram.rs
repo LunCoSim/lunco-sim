@@ -2331,6 +2331,11 @@ fn register_local_class(
             parameters: Vec::new(),
             icon_graphics: icon,
             is_expandable_connector,
+            short_description: None,
+            documentation_info: None,
+            is_example: false,
+            domain: String::new(),
+            class_kind: String::new(),
         },
     );
 }

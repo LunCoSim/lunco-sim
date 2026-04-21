@@ -134,6 +134,30 @@ pub struct MSLComponentDef {
     /// connected instances and have very different semantics.
     #[serde(default)]
     pub is_expandable_connector: bool,
+    /// Quoted string written after the Modelica class name, cleaned
+    /// of surrounding `"…"`. Populated by `msl_indexer`. New code
+    /// should prefer this over the `description` field (which stores
+    /// a Debug-formatted token list for legacy reasons).
+    #[serde(default)]
+    pub short_description: Option<String>,
+    /// First plain-text paragraph of `annotation(Documentation(info=…))`,
+    /// HTML-stripped. Used by the Welcome / MSL Library browser for
+    /// richer card copy. `None` when the class has no Documentation.
+    #[serde(default)]
+    pub documentation_info: Option<String>,
+    /// True when `msl_path` contains `.Examples.` — cheap flag for
+    /// the example browser to filter on without re-scanning the path.
+    #[serde(default)]
+    pub is_example: bool,
+    /// Second-level MSL package name for navigation grouping —
+    /// `Modelica.Electrical.Analog.Examples.*` → `"Electrical"`.
+    /// Empty for non-MSL classes.
+    #[serde(default)]
+    pub domain: String,
+    /// Lower-case Modelica class keyword: `"model"`, `"block"`,
+    /// `"connector"`, `"record"`, …
+    #[serde(default)]
+    pub class_kind: String,
 }
 
 /// A node instance placed on the visual canvas.

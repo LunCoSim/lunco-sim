@@ -4,7 +4,7 @@
 // (`<workspace>/.cache/rumoca/parsed-files/`). Second indexer runs and
 // the workbench's runtime drill-ins share the same cache entries, so
 // a file parsed here is instant at runtime and vice versa.
-use rumoca_session::parsing::ast::{Causality, ClassDef, ClassType, StoredDefinition, Variability, Annotation, Modification};
+use rumoca_session::parsing::ast::{Causality, ClassDef, ClassType, StoredDefinition, Token, Variability, Annotation, Modification};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -156,6 +156,34 @@ struct MSLComponentDef {
     category: String,
     display_name: String,
     description: Option<String>,
+    /// Short `"…"` string written after the class name in Modelica
+    /// source, cleaned of quotes. Distinct from `description` (which
+    /// historically stored the `{:?}` Debug form for compatibility);
+    /// UI code should prefer this field.
+    #[serde(default)]
+    short_description: Option<String>,
+    /// First plain-text paragraph of
+    /// `annotation(Documentation(info="…"))`, HTML-stripped. `None`
+    /// when the class has no Documentation annotation (rare for
+    /// `Examples.*` classes). The Welcome / MSL Library browser
+    /// uses this for richer card copy.
+    #[serde(default)]
+    documentation_info: Option<String>,
+    /// True when `msl_path` contains `.Examples.` — MSL convention
+    /// for runnable learning material. Cheap flag so the browser
+    /// doesn't have to re-check the path everywhere.
+    #[serde(default)]
+    is_example: bool,
+    /// Second-level MSL package name for navigation grouping —
+    /// `Modelica.Electrical.Analog.Examples.*` → `"Electrical"`.
+    /// Empty for non-MSL classes. Drives the domain-chip filter.
+    #[serde(default)]
+    domain: String,
+    /// Kind of class: "model", "block", "connector", "record", "type",
+    /// "package", "function", "class", "operator". Lower-case to
+    /// match Modelica source keywords.
+    #[serde(default)]
+    class_kind: String,
     icon_text: Option<String>,
     icon_asset: Option<String>,
     ports: Vec<PortDef>,
@@ -194,6 +222,215 @@ struct MSLIndexer {
     /// Populated in `scan_dir` while the source text is already in memory,
     /// so we never need to re-read .mo files or store them long-term.
     placements: HashMap<String, HashMap<String, (f32, f32)>>,
+    /// Per-class first-paragraph plain-text from
+    /// `annotation(Documentation(info="…"))`. Keyed by the simple
+    /// class name (not fully-qualified) — good enough at MSL scale
+    /// because `Examples.*` class names are unique within a file
+    /// and the browser looks it up from the `short_name`. Populated
+    /// by `extract_documentation_infos` during `scan_dir` while the
+    /// `.mo` source is still in memory.
+    doc_infos: HashMap<String, String>,
+}
+
+/// Scan a Modelica source buffer and map each class's simple name to
+/// the **plain-text first paragraph** of its
+/// `annotation(Documentation(info="…"))`, if any.
+///
+/// Strategy: stack-match `model|block|…|function NAME` openers against
+/// `end NAME;` tokens to build class byte-ranges, then for every
+/// `Documentation(info="…")` pick the **innermost** enclosing range.
+/// This handles nested classes (MSL's `protected model Internal …`
+/// inside a larger example) correctly.
+///
+/// After matching, strip HTML tags and common entities, collapse
+/// whitespace, and keep only the first paragraph (`</p>` boundary,
+/// falling back to a double-newline). Dropping the rest means the
+/// index stays small (~200 examples × < 200 chars each).
+fn extract_documentation_infos(source: &str) -> HashMap<String, String> {
+    // Openers we care about. `operator` covers `operator record` /
+    // `operator function` (MLS §14.4) and `type` covers typedefs that
+    // occasionally carry their own Documentation block.
+    let opener_re = regex::Regex::new(
+        r"(?m)\b(?:partial\s+)?(?:model|block|class|connector|record|package|function|type|operator)\s+(\w+)\b",
+    )
+    .expect("opener regex");
+    let end_re = regex::Regex::new(r"(?m)\bend\s+(\w+)\s*;").expect("end regex");
+    // Greedy-aware info capture. Modelica strings can contain escaped
+    // quotes (`\"`); the `(?:[^"\\]|\\.)*` alternation handles that.
+    let doc_re = regex::Regex::new(
+        r#"(?s)Documentation\s*\(\s*info\s*=\s*"((?:[^"\\]|\\.)*)""#,
+    )
+    .expect("doc regex");
+
+    #[derive(Debug)]
+    enum Ev {
+        Open(String, usize),
+        End(String, usize),
+    }
+    let mut events: Vec<Ev> = Vec::new();
+    for m in opener_re.captures_iter(source) {
+        events.push(Ev::Open(
+            m.get(1).unwrap().as_str().to_string(),
+            m.get(0).unwrap().start(),
+        ));
+    }
+    for m in end_re.captures_iter(source) {
+        events.push(Ev::End(
+            m.get(1).unwrap().as_str().to_string(),
+            m.get(0).unwrap().start(),
+        ));
+    }
+    events.sort_by_key(|e| match e {
+        Ev::Open(_, p) | Ev::End(_, p) => *p,
+    });
+
+    struct Range {
+        name: String,
+        start: usize,
+        end: usize,
+    }
+    let mut ranges: Vec<Range> = Vec::new();
+    let mut stack: Vec<(String, usize)> = Vec::new();
+    for e in events {
+        match e {
+            Ev::Open(n, p) => stack.push((n, p)),
+            Ev::End(n, p) => {
+                // Match against the nearest open with the same name —
+                // tolerant of MLS-legal re-openings of identically-named
+                // nested classes inside sibling branches.
+                if let Some(idx) = stack.iter().rposition(|(sn, _)| sn == &n) {
+                    let (name, start) = stack.remove(idx);
+                    ranges.push(Range { name, start, end: p });
+                }
+            }
+        }
+    }
+
+    let mut out: HashMap<String, String> = HashMap::new();
+    for caps in doc_re.captures_iter(source) {
+        let pos = caps.get(0).unwrap().start();
+        let raw = caps.get(1).unwrap().as_str();
+        // Innermost range containing the Documentation opener.
+        let inner = ranges
+            .iter()
+            .filter(|r| r.start <= pos && pos <= r.end)
+            .min_by_key(|r| r.end.saturating_sub(r.start));
+        if let Some(r) = inner {
+            // Keep the FIRST Documentation per class — MSL sometimes
+            // nests `Documentation` inside per-component annotations
+            // (rare) and we want the class-level one, which comes
+            // first in source order within the class body.
+            out.entry(r.name.clone())
+                .or_insert_with(|| clean_info_text(raw));
+        }
+    }
+    out
+}
+
+/// Turn a raw Modelica `info="…"` string into UI-ready plain text.
+/// Unescapes Modelica string escapes, strips HTML tags and common
+/// entities, collapses whitespace, and keeps only the first
+/// paragraph (so a multi-screen MSL doc fits in a card tagline).
+fn clean_info_text(raw: &str) -> String {
+    // Modelica string escapes we actually see in MSL.
+    let mut s = String::with_capacity(raw.len());
+    let mut chars = raw.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.next() {
+                Some('n') => s.push('\n'),
+                Some('t') => s.push('\t'),
+                Some('"') => s.push('"'),
+                Some('\\') => s.push('\\'),
+                Some(other) => {
+                    s.push('\\');
+                    s.push(other);
+                }
+                None => s.push('\\'),
+            }
+        } else {
+            s.push(c);
+        }
+    }
+
+    // First-paragraph boundary: `</p>` is the MSL convention; fall
+    // back to a blank line so prose-only info strings still split.
+    let lower = s.to_ascii_lowercase();
+    if let Some(idx) = lower.find("</p>") {
+        s.truncate(idx);
+    } else if let Some(idx) = s.find("\n\n") {
+        s.truncate(idx);
+    }
+
+    // Strip tags + entities. Regex cost here is tiny (called once
+    // per class at index time, never at runtime).
+    let tag_re = regex::Regex::new(r"<[^>]*>").expect("tag regex");
+    let no_tags = tag_re.replace_all(&s, " ");
+    let decoded = no_tags
+        .replace("&nbsp;", " ")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'");
+    let ws_re = regex::Regex::new(r"\s+").expect("ws regex");
+    ws_re.replace_all(&decoded, " ").trim().to_string()
+}
+
+/// Top-level MSL domain for grouping (`Modelica.Electrical.Analog.*`
+/// → `Electrical`). Returns empty string for classes outside the
+/// `Modelica.*` tree, which keeps third-party libraries from
+/// polluting the browser chips.
+fn msl_domain(full_name: &str) -> String {
+    let mut parts = full_name.split('.');
+    if parts.next() == Some("Modelica") {
+        parts.next().unwrap_or("").to_string()
+    } else {
+        String::new()
+    }
+}
+
+fn class_kind_str(kind: &ClassType) -> &'static str {
+    match kind {
+        ClassType::Model => "model",
+        ClassType::Class => "class",
+        ClassType::Block => "block",
+        ClassType::Connector => "connector",
+        ClassType::Record => "record",
+        ClassType::Type => "type",
+        ClassType::Package => "package",
+        ClassType::Function => "function",
+        ClassType::Operator => "operator",
+    }
+}
+
+/// Join a class's `description: Vec<Token>` tokens into a single
+/// string and strip the surrounding `"…"` quotes. Modelica parses
+/// the description as a sequence of concatenated string literals so
+/// authors can split long descriptions across lines with `+`; we
+/// just join and clean up.
+fn clean_short_description(tokens: &[Token]) -> Option<String> {
+    if tokens.is_empty() {
+        return None;
+    }
+    let mut s = String::new();
+    for tok in tokens {
+        let t = tok.text.trim();
+        let t = t.strip_prefix('"').unwrap_or(t);
+        let t = t.strip_suffix('"').unwrap_or(t);
+        if !t.is_empty() {
+            if !s.is_empty() {
+                s.push(' ');
+            }
+            s.push_str(t);
+        }
+    }
+    let s = s.trim().to_string();
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
 }
 
 impl MSLIndexer {
@@ -201,6 +438,7 @@ impl MSLIndexer {
         Self {
             classes: HashMap::new(),
             placements: HashMap::new(),
+            doc_infos: HashMap::new(),
         }
     }
 
@@ -249,6 +487,19 @@ impl MSLIndexer {
                         .and_then(|mut pairs| pairs.pop().map(|(_, ast)| ast));
                         if let Some(ast) = ast_opt {
                             let file_placements = extract_all_placements(&source);
+                            // Extract Documentation info text while the
+                            // `.mo` source is still in memory. Merged
+                            // into the indexer-wide map keyed by simple
+                            // class name. `extend` is safe: MSL file
+                            // scopes rarely collide at simple-name
+                            // level (each Examples file owns its
+                            // class name), and when they do, the
+                            // first writer wins, which matches the
+                            // "top-level class is authoritative"
+                            // convention.
+                            for (k, v) in extract_documentation_infos(&source) {
+                                self.doc_infos.entry(k).or_insert(v);
+                            }
                             for name in ast.classes.keys() {
                                 let full = if is_top_level_self_ref(
                                     name,
@@ -577,12 +828,27 @@ impl MSLIndexer {
                     icon_text = Some(caps.get(1).unwrap().as_str().to_string());
                 }
 
+                let short_description = clean_short_description(&class.description);
+                let documentation_info = self.doc_infos.get(&short_name).cloned();
+                let is_example = full_name.contains(".Examples.");
+                let domain = msl_domain(full_name);
+                let class_kind = class_kind_str(&class.class_type).to_string();
+
                 all_comps.push(MSLComponentDef {
                     name: short_name.clone(),
                     msl_path: full_name.clone(),
                     category,
                     display_name: format!("📦 {}", short_name),
+                    // Legacy Debug-formatted field. Kept for any caller
+                    // still reading `description`; new code should use
+                    // `short_description` which carries the cleaned
+                    // string.
                     description: Some(format!("{:?}", class.description)),
+                    short_description,
+                    documentation_info,
+                    is_example,
+                    domain,
+                    class_kind,
                     icon_text,
                     icon_asset,
                     ports,
