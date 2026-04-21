@@ -1147,7 +1147,28 @@ fn on_duplicate_model_from_read_only(
             .and_then(crate::class_cache::resolve_msl_class_path)
             .map(|p| collect_parent_imports(&p))
             .unwrap_or_default();
-        let copy_src = inject_class_imports(&renamed, &imports);
+        let renamed = inject_class_imports(&renamed, &imports);
+        // 2c. Re-attach a `within <origin package>;` so within-
+        //     relative type references in the copy (e.g. PID's
+        //     `Blocks.Math.Gain` which is short for
+        //     `Modelica.Blocks.Math.Gain`) keep resolving via the
+        //     projector's scope-chain fallback. The copy's class name
+        //     is new (PIDCopy), so this doesn't collide with the
+        //     original. No-op when the origin FQN is unknown
+        //     (non-MSL source).
+        let copy_src = match origin_fqn_for_task.as_deref() {
+            Some(fqn) => {
+                let mut parts: Vec<&str> = fqn.split('.').collect();
+                parts.pop();
+                let origin_pkg = parts.join(".");
+                if origin_pkg.is_empty() {
+                    renamed
+                } else {
+                    format!("within {origin_pkg};\n{renamed}")
+                }
+            }
+            None => renamed,
+        };
         // 3. Build the document. `with_origin` runs rumoca to
         //    populate the AST cache — bg thread, so the UI stays
         //    responsive even on multi-KB sources.

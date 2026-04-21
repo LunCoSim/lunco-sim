@@ -679,6 +679,38 @@ pub fn peek_or_load_msl_class(
     resolved
 }
 
+/// File-level parse cache for `peek_or_load_msl_class`. Without this,
+/// drilling into a single class triggers a chain of MSL file loads
+/// (one per `extends` target), and a package-aggregated source file
+/// like `Continuous.mo` (184 KB, 20+ classes) gets re-parsed once per
+/// qualified-name request — pushing icon-extends inheritance from
+/// ~ms to seconds per drill-in. Keying by absolute path ensures
+/// every class inside the same file shares one parse.
+fn parse_msl_file_cached(
+    path: &std::path::Path,
+) -> Option<Arc<rumoca_session::parsing::ast::StoredDefinition>> {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    static CACHE: OnceLock<
+        Mutex<HashMap<std::path::PathBuf, Option<Arc<rumoca_session::parsing::ast::StoredDefinition>>>>,
+    > = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(map) = cache.lock() {
+        if let Some(slot) = map.get(path) {
+            return slot.clone();
+        }
+    }
+    let parsed = (|| {
+        let source = std::fs::read_to_string(path).ok()?;
+        let syntax = rumoca_phase_parse::parse_to_syntax(&source, &path.to_string_lossy());
+        Some(Arc::new(syntax.best_effort().clone()))
+    })();
+    if let Ok(mut map) = cache.lock() {
+        map.insert(path.to_path_buf(), parsed.clone());
+    }
+    parsed
+}
+
 fn load_msl_class_uncached(
     qualified: &str,
 ) -> Option<Arc<rumoca_session::parsing::ast::ClassDef>> {
@@ -687,13 +719,7 @@ fn load_msl_class_uncached(
     // the palette) still resolve.
     let path = resolve_msl_class_path(qualified)
         .or_else(|| locate_msl_file(qualified))?;
-    let source = std::fs::read_to_string(&path).ok()?;
-    let syntax = rumoca_phase_parse::parse_to_syntax(
-        &source,
-        &path.to_string_lossy(),
-    );
-    let stored = syntax.best_effort().clone();
-
+    let stored = parse_msl_file_cached(&path)?;
     find_class_in_stored_def(&stored, qualified)
         .map(|c| Arc::new(c.clone()))
 }

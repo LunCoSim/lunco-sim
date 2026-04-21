@@ -1544,14 +1544,24 @@ pub(crate) fn scan_connect_annotations(
     // handles Line(points={{x1,y1},{x2,y2}}) and longer runs, as
     // long as no other `}}` is nested inside a points literal —
     // which it isn't per MLS grammar for `Real[2]` points.
-    // The last capture grabs the `{{…}}` point list verbatim
+    // Bounds to `[^;]*?` where the previous version used `.*?`.
+    // Two reasons:
+    //   1. Each `connect(...);` equation is `;`-terminated, so the
+    //      regex must not cross equation boundaries — crossing into
+    //      the next `connect` would mis-attribute waypoints.
+    //   2. The prior `(?s).*?` was catastrophically backtracking on
+    //      the 184KB `Continuous.mo` (importing took 128s) because
+    //      `.` was matching newlines and the lazy quantifier had to
+    //      walk the entire file for each failed-to-match connect.
+    //      `[^;]` hard-caps backtracking to one equation's worth.
+    //
+    // The final capture grabs the `{{…}}` point list verbatim
     // (including both outer braces). `pt_re` below walks it with a
     // simple `\{x,y\}` pattern — handling the outer braces inside
-    // the outer regex proved fragile (the prior version's lazy
-    // `.*?\}\s*\}` clipped the final point's closing brace and
-    // silently dropped the last point).
+    // the outer regex proved fragile (the earlier `.*?\}\s*\}`
+    // clipped the final point's closing brace).
     let re = regex::Regex::new(
-        r#"(?s)connect\s*\(\s*([A-Za-z_]\w*)\s*\.\s*([A-Za-z_]\w*(?:\s*\[[^\]]*\])?)\s*,\s*([A-Za-z_]\w*)\s*\.\s*([A-Za-z_]\w*(?:\s*\[[^\]]*\])?)\s*\)\s*annotation\s*\(.*?Line\s*\(\s*points\s*=\s*(\{\{.*?\}\s*\})"#
+        r#"connect\s*\(\s*([A-Za-z_]\w*)\s*\.\s*([A-Za-z_]\w*(?:\s*\[[^\]]*\])?)\s*,\s*([A-Za-z_]\w*)\s*\.\s*([A-Za-z_]\w*(?:\s*\[[^\]]*\])?)\s*\)\s*annotation\s*\([^;]*?Line\s*\(\s*points\s*=\s*(\{\{[^;]*?\}\s*\})"#
     ).expect("connect annotation regex compiles");
     let pt_re = regex::Regex::new(
         r"\{\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\}",
@@ -1864,20 +1874,75 @@ pub fn import_model_to_diagram_from_ast(
     // user classes is a follow-up; the icon-rendering slice doesn't
     // need them.
     let mut local_classes_by_short: HashMap<String, MSLComponentDef> = HashMap::new();
-    for (top_name, top_class) in ast.classes.iter() {
-        register_local_class(
-            &mut local_classes_by_short,
-            top_name.as_str(),
-            top_class,
-            &ast,
-        );
-        for (nested_name, nested_class) in top_class.classes.iter() {
-            register_local_class(
-                &mut local_classes_by_short,
-                nested_name.as_str(),
-                nested_class,
-                &ast,
-            );
+    // Scope the local-class registration based on what we're projecting:
+    //
+    //  - **Drill-in into an MSL class** (`target_class = "Modelica.…"`):
+    //    skip entirely. MSL classes use fully-qualified component
+    //    types, so short-name resolution adds nothing — and walking
+    //    `extract_icon_inherited` on the target spawns a chain of
+    //    rumoca parses (e.g. PID → Interfaces.SISO triggers
+    //    `Interfaces.mo` parse, ~30s on first hit) that block the
+    //    projector with no user-visible benefit.
+    //
+    //  - **Drill-in into a user class** (`target_class = "MyClass"`,
+    //    no MSL prefix): scope to just the target + its nested
+    //    classes — the original full sweep would walk every sibling
+    //    in the file, which on a package-aggregated source like
+    //    `Continuous.mo` (20+ blocks) takes ~60 s.
+    //
+    //  - **No target** (the whole document is the scene): full
+    //    sweep, since user authoring can reference any sibling class
+    //    by short name.
+    let is_msl_drill_in =
+        target_class.map(|t| t.starts_with("Modelica.")).unwrap_or(false);
+    if is_msl_drill_in {
+        // No-op: MSL classes are self-sufficient on qualified paths.
+    } else if let Some(target) = target_class {
+        if let Some(target_class_def) = crate::diagram::find_class_by_qualified_name(&ast, target) {
+            // The target itself is the projected class — no one instantiates
+            // it *in this scene*, so registering it pays `extract_icon_inherited`
+            // (with its full cross-file `extends` walk) for no downstream
+            // consumer. Only register its nested helper classes, which
+            // the target's components might type-reference.
+            for (nested_name, nested_class) in target_class_def.classes.iter() {
+                register_local_class(
+                    &mut local_classes_by_short,
+                    nested_name.as_str(),
+                    nested_class,
+                    &ast,
+                );
+            }
+        }
+    } else {
+        // Whole-document projection: register every class so sibling
+        // user models see each other via short names. When there's a
+        // single top-level class (the common Untitled-doc shape,
+        // including Duplicate-to-Workspace copies of MSL examples),
+        // that class IS the projection target — skip registering it
+        // to dodge the 30 s+ cross-file `extends` walk that serves
+        // no consumer here.
+        let implicit_target: Option<&str> = if ast.classes.len() == 1 {
+            ast.classes.keys().next().map(|s| s.as_str())
+        } else {
+            None
+        };
+        for (top_name, top_class) in ast.classes.iter() {
+            if Some(top_name.as_str()) != implicit_target {
+                register_local_class(
+                    &mut local_classes_by_short,
+                    top_name.as_str(),
+                    top_class,
+                    &ast,
+                );
+            }
+            for (nested_name, nested_class) in top_class.classes.iter() {
+                register_local_class(
+                    &mut local_classes_by_short,
+                    nested_name.as_str(),
+                    nested_class,
+                    &ast,
+                );
+            }
         }
     }
 
@@ -1891,21 +1956,18 @@ pub fn import_model_to_diagram_from_ast(
         let mut map: HashMap<&str, &rumoca_session::parsing::ast::Component> =
             HashMap::new();
         if let Some(target) = target_class {
-            // Scope to the named class — search top-level and
-            // nested. First exact-name match wins (Modelica scope
-            // rules guarantee uniqueness inside a class).
-            'find: for (top_name, top) in ast.classes.iter() {
-                if top_name.as_str() == target {
-                    for (cname, comp) in top.components.iter() {
-                        map.insert(cname.as_str(), comp);
-                    }
-                    break 'find;
-                }
-                if let Some(nested) = top.classes.get(target) {
-                    for (cname, comp) in nested.components.iter() {
-                        map.insert(cname.as_str(), comp);
-                    }
-                    break 'find;
+            // Scope to the named class. Use the qualified-name walker
+            // so dotted MSL targets (e.g.
+            // `Modelica.Blocks.Continuous.PID`) descend through the
+            // file's `within` clause and any package layers — the
+            // earlier direct-name match handled only single-segment
+            // names and silently missed every drill-in into a
+            // package-aggregated source.
+            if let Some(target_class_def) =
+                crate::diagram::find_class_by_qualified_name(&ast, target)
+            {
+                for (cname, comp) in target_class_def.components.iter() {
+                    map.insert(cname.as_str(), comp);
                 }
             }
         } else {
@@ -1950,16 +2012,45 @@ pub fn import_model_to_diagram_from_ast(
         //   3. Otherwise: unresolved. Skip (same as an OM compile error
         //      on an unknown type, but non-fatal here).
         let type_name = node.meta.get("type_name").map(|s| s.as_str()).unwrap_or("");
-        let resolved_path: Option<&str> = if type_name.contains('.') {
-            Some(type_name)
+        let resolved_path: Option<String> = if type_name.contains('.') {
+            Some(type_name.to_string())
         } else if let Some(full) = imports_by_short.get(type_name) {
-            Some(full.as_str())
+            Some(full.clone())
         } else {
             None
         };
-        let component_def: Option<MSLComponentDef> = resolved_path
+        let mut component_def: Option<MSLComponentDef> = resolved_path
+            .as_deref()
             .and_then(|p| msl_lookup_by_path.get(p).map(|d| (*d).clone()))
             .or_else(|| local_classes_by_short.get(type_name).cloned());
+        // Scope-chain fallback (MLS §5.3): when the type couldn't be
+        // resolved as-given, try prepending each enclosing package
+        // of the file's `within` clause + each segment of the
+        // drill-in target. Handles the common MSL pattern where a
+        // package-aggregated source uses within-relative type
+        // references (e.g. inside `Modelica/Blocks/Continuous.mo`,
+        // PID's components reference `Blocks.Math.Gain` rather than
+        // `Modelica.Blocks.Math.Gain`).
+        if component_def.is_none() && !type_name.is_empty() {
+            let mut candidates: Vec<String> = Vec::new();
+            if let Some(within) = ast.within.as_ref() {
+                let mut parts: Vec<String> = within
+                    .name
+                    .iter()
+                    .map(|t| t.text.to_string())
+                    .collect();
+                while !parts.is_empty() {
+                    candidates.push(format!("{}.{}", parts.join("."), type_name));
+                    parts.pop();
+                }
+            }
+            for cand in &candidates {
+                if let Some(def) = msl_lookup_by_path.get(cand.as_str()) {
+                    component_def = Some((*def).clone());
+                    break;
+                }
+            }
+        }
 
         if let Some(def) = component_def {
             let mut pos = None;
