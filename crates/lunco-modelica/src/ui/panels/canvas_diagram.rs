@@ -1905,6 +1905,39 @@ impl Panel for CanvasDiagramPanel {
                         _ => None,
                     })
                     .collect();
+                // Build an old-id → new-id map keyed by node origin
+                // (Modelica instance name) so we can remap any in-
+                // flight tool gesture (press / drag / connect)
+                // across the wholesale scene swap. The pre-existing
+                // symptom users saw was "first click+drag does
+                // nothing, second one works": the press registered
+                // against a NodeId from the old scene, the move
+                // handler couldn't promote to a drag because
+                // `scene.node(id)` returned None for the stale id.
+                // Remapping by origin preserves the gesture across
+                // re-projection so the first attempt completes.
+                let old_origin_to_id: std::collections::HashMap<String, lunco_canvas::NodeId> =
+                    docstate
+                        .canvas
+                        .scene
+                        .nodes()
+                        .filter_map(|(id, n)| n.origin.clone().map(|o| (o, *id)))
+                        .collect();
+                let new_origin_to_id: std::collections::HashMap<String, lunco_canvas::NodeId> =
+                    scene
+                        .nodes()
+                        .filter_map(|(id, n)| n.origin.clone().map(|o| (o, *id)))
+                        .collect();
+                let id_remap: std::collections::HashMap<lunco_canvas::NodeId, lunco_canvas::NodeId> =
+                    old_origin_to_id
+                        .iter()
+                        .filter_map(|(origin, old_id)| {
+                            new_origin_to_id.get(origin).map(|new_id| (*old_id, *new_id))
+                        })
+                        .collect();
+                docstate.canvas.tool.remap_node_ids(&|old: lunco_canvas::NodeId| {
+                    id_remap.get(&old).copied()
+                });
                 docstate.canvas.scene = scene;
                 docstate.canvas.selection.clear();
                 if !preserved_origins.is_empty() {

@@ -110,6 +110,23 @@ pub trait Tool: Send + Sync {
     fn preview(&self) -> Option<ToolPreview> {
         None
     }
+
+    /// Drop any in-flight gesture state (pressed-but-not-yet-dragging,
+    /// in-flight node drag, in-flight edge connect, rubber-band).
+    /// Called when the scene is wholesale-replaced under the tool's
+    /// feet (e.g. after a re-projection completes), since the tool
+    /// state holds `NodeId`s that no longer exist in the new scene.
+    /// Default: noop — stateless tools are unaffected.
+    fn cancel_in_flight(&mut self) {}
+
+    /// Remap any stable references the tool is holding (typically
+    /// `NodeId`s captured at press / drag-start time) when the scene
+    /// is replaced. `find_new_id` is called for each old id; if it
+    /// returns `Some(new_id)` the tool should rewrite its internal
+    /// state to use it, otherwise drop that reference. Used by the
+    /// host to preserve in-flight drags across re-projections.
+    /// Default: noop.
+    fn remap_node_ids(&mut self, _find_new_id: &dyn Fn(crate::scene::NodeId) -> Option<crate::scene::NodeId>) {}
 }
 
 /// What the tool wants drawn as a preview on top of the scene.
@@ -215,6 +232,55 @@ impl Default for DefaultTool {
 }
 
 impl Tool for DefaultTool {
+    fn cancel_in_flight(&mut self) {
+        self.state = State::Idle;
+    }
+
+    fn remap_node_ids(&mut self, find_new_id: &dyn Fn(crate::scene::NodeId) -> Option<crate::scene::NodeId>) {
+        match &mut self.state {
+            State::PrimaryPressed { landed_on, .. } => {
+                match landed_on {
+                    PressTarget::NodeBody(id) => {
+                        if let Some(new_id) = find_new_id(*id) {
+                            *id = new_id;
+                        } else {
+                            // Lost the node — fall back to "click on
+                            // empty space". Drag will become a
+                            // rubber-band, which is a less surprising
+                            // failure than a no-op.
+                            *landed_on = PressTarget::Empty;
+                        }
+                    }
+                    PressTarget::Port(port_ref, _) => {
+                        if let Some(new_id) = find_new_id(port_ref.node) {
+                            port_ref.node = new_id;
+                        } else {
+                            *landed_on = PressTarget::Empty;
+                        }
+                    }
+                    PressTarget::Empty => {}
+                }
+            }
+            State::DraggingNodes { original_rects, .. } => {
+                let remapped: HashMap<_, _> = std::mem::take(original_rects)
+                    .into_iter()
+                    .filter_map(|(old_id, rect)| {
+                        find_new_id(old_id).map(|new_id| (new_id, rect))
+                    })
+                    .collect();
+                *original_rects = remapped;
+            }
+            State::ConnectingFromPort { from, .. } => {
+                if let Some(new_id) = find_new_id(from.node) {
+                    from.node = new_id;
+                } else {
+                    self.state = State::Idle;
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn handle(&mut self, event: &InputEvent, ops: &mut CanvasOps) -> ToolOutcome {
         match event {
             InputEvent::PointerDown {
