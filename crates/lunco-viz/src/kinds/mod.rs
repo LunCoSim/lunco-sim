@@ -5,3 +5,4 @@
 //! [`AppVizExt::register_visualization`](crate::registry::AppVizExt).
 
 pub mod line_plot;
+pub mod canvas_plot_node;

@@ -248,6 +248,7 @@ impl Plugin for ModelicaCommandsPlugin {
             .register_type::<SaveActiveDocumentAs>()
             .register_type::<NewPlotPanel>()
             .register_type::<AddSignalToPlot>()
+            .register_type::<AddCanvasPlot>()
             .add_observer(on_focus_document_by_name)
             .add_observer(on_set_view_mode)
             .add_observer(on_set_zoom)
@@ -268,6 +269,7 @@ impl Plugin for ModelicaCommandsPlugin {
             .add_observer(on_save_active_document_as)
             .add_observer(on_new_plot_panel)
             .add_observer(on_add_signal_to_plot)
+            .add_observer(on_add_canvas_plot)
             .add_observer(resolve_editor_intent)
             .add_observer(resolve_new_document_intent)
             .add_systems(
@@ -355,6 +357,21 @@ fn drain_pending_tab_closes(
         let lunco_workbench::TabId::Instance { kind, instance } = tab else {
             continue; // Singleton — not our concern.
         };
+        // VizPanel (multi-instance plot) tabs close immediately —
+        // they have no dirty state to confirm. Without this branch the
+        // × button on a "Plot #N" tab queued the close and the tab
+        // never went away.
+        if kind == lunco_viz::VIZ_PANEL_KIND {
+            commands.trigger(lunco_workbench::CloseTab { kind, instance });
+            commands.queue(move |world: &mut World| {
+                if let Some(mut reg) =
+                    world.get_resource_mut::<lunco_viz::VisualizationRegistry>()
+                {
+                    reg.remove(lunco_viz::viz::VizId(instance));
+                }
+            });
+            continue;
+        }
         if kind != crate::ui::panels::model_view::MODEL_VIEW_KIND {
             continue; // Another domain's tab.
         }
@@ -885,6 +902,7 @@ fn on_compile_model(
     diagram_state: Res<DiagramState>,
     channels: Option<Res<ModelicaChannels>>,
     mut q_models: Query<&mut ModelicaModel>,
+    drilled_in_classes: Option<Res<crate::ui::panels::canvas_diagram::DrilledInClassNames>>,
 ) {
     let doc = trigger.event().doc;
 
@@ -916,9 +934,19 @@ fn on_compile_model(
         console.error(format!("Compile failed: {msg}"));
         return;
     };
-    let Some(model_name) =
+    // Prefer the drilled-in class on this doc — the user is looking
+    // at a leaf model (e.g. `AnnotatedRocketStageCopy.RocketStage`)
+    // and pressing Compile must compile *that*, not the enclosing
+    // package. Without this the compile picks the first non-package
+    // class (often the package wrapper) and the simulator returns
+    // `EmptySystem`.
+    let drilled_in_class: Option<String> = drilled_in_classes
+        .as_ref()
+        .and_then(|d| d.get(doc).map(str::to_string));
+    let model_name = drilled_in_class.or_else(|| {
         crate::ast_extract::extract_model_name_from_ast(&ast)
-    else {
+    });
+    let Some(model_name) = model_name else {
         let msg = "Could not find a valid model declaration.".to_string();
         workbench.compilation_error = Some(msg.clone());
         console.error(format!("Compile failed: {msg}"));
@@ -2073,6 +2101,75 @@ fn on_save_active_document_as(
             source.len(),
         );
         world.commands().trigger(DocumentSaved::local(doc));
+    });
+}
+
+/// Drop a Simulink-style "Scope" plot onto the active canvas at
+/// world-space position `(x, y)` with the given size, bound to a
+/// scalar signal. Pure UI overlay — does not emit Modelica source.
+/// Uses the active document's coordinate frame (same as
+/// `MoveComponent`: -100..100 typical, +Y down).
+#[derive(Event, Reflect, Clone, Debug, Default)]
+#[reflect(Event, Default)]
+pub struct AddCanvasPlot {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    /// Signal path the plot will display
+    /// (resolved against the active `ModelicaModel` entity).
+    pub signal: String,
+}
+
+fn on_add_canvas_plot(trigger: On<AddCanvasPlot>, mut commands: Commands) {
+    let ev = trigger.event().clone();
+    commands.queue(move |world: &mut World| {
+        let Some(doc) = resolve_active_doc(world) else {
+            bevy::log::warn!("[AddCanvasPlot] no active document");
+            return;
+        };
+        let w = if ev.width > 0.0 { ev.width } else { 60.0 };
+        let h = if ev.height > 0.0 { ev.height } else { 40.0 };
+        // Bind to the active simulator entity — same lookup
+        // NewPlotPanel uses. Stored as the entity's bit-pattern so
+        // the JSON payload is platform-stable.
+        let model_entity = world
+            .query::<(bevy::prelude::Entity, &crate::ModelicaModel)>()
+            .iter(world)
+            .next()
+            .map(|(e, _)| e)
+            .unwrap_or(bevy::prelude::Entity::PLACEHOLDER);
+        // Scene-node addition: the canvas treats this exactly like a
+        // component node (selection, drag, undo all inherit). The
+        // visual is reconstructed from `data` via the registered
+        // `lunco.viz.plot` factory.
+        let payload = lunco_viz::kinds::canvas_plot_node::PlotNodeData {
+            entity: model_entity.to_bits(),
+            signal_path: ev.signal.clone(),
+            title: String::new(),
+        };
+        let data = serde_json::to_value(&payload).unwrap_or_default();
+        let mut state =
+            world.resource_mut::<crate::ui::panels::canvas_diagram::CanvasDiagramState>();
+        let docstate = state.get_mut(Some(doc));
+        let scene = &mut docstate.canvas.scene;
+        let id = scene.alloc_node_id();
+        scene.insert_node(lunco_canvas::scene::Node {
+            id,
+            rect: lunco_canvas::Rect::from_min_max(
+                lunco_canvas::Pos::new(ev.x, ev.y),
+                lunco_canvas::Pos::new(ev.x + w, ev.y + h),
+            ),
+            kind: lunco_viz::kinds::canvas_plot_node::PLOT_NODE_KIND.into(),
+            data,
+            ports: Vec::new(),
+            label: String::new(),
+            origin: None,
+        });
+        bevy::log::info!(
+            "[AddCanvasPlot] doc={} signal={} at ({},{}) {}x{} (node id={})",
+            doc.raw(), ev.signal, ev.x, ev.y, w, h, id.0,
+        );
     });
 }
 

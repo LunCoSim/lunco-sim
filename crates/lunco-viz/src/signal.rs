@@ -198,6 +198,14 @@ impl SignalRegistry {
         self.scalar_history.get(sig)
     }
 
+    /// Iterate every (`SignalRef`, `ScalarHistory`) pair the registry
+    /// holds. Used by per-frame snapshot builders that need to copy
+    /// data into a `&dyn Any` carrier (e.g. canvas plot nodes whose
+    /// `NodeVisual::draw` has no `World` access).
+    pub fn iter_scalar(&self) -> impl Iterator<Item = (&SignalRef, &ScalarHistory)> {
+        self.scalar_history.iter()
+    }
+
     pub fn signal_type(&self, sig: &SignalRef) -> Option<SignalType> {
         self.types.get(sig).copied()
     }

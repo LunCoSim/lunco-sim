@@ -6574,6 +6574,7 @@ dependencies = [
  "bevy",
  "bevy_egui",
  "egui_plot",
+ "lunco-canvas",
  "lunco-workbench",
  "serde",
  "serde_json",

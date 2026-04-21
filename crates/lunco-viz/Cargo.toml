@@ -9,5 +9,11 @@ bevy = { workspace = true }
 bevy_egui = { workspace = true }
 egui_plot = "0.34.1"
 lunco-workbench = { path = "../lunco-workbench" }
+# Used by `kinds::canvas_plot_node` to implement
+# `lunco_canvas::NodeVisual` so plots can live as first-class nodes
+# inside any `lunco_canvas::Scene` (Simulink-style scope blocks,
+# future dashboard widgets, etc.). Domain crates (lunco-modelica
+# today) register the kind with the canvas's `VisualRegistry`.
+lunco-canvas = { path = "../lunco-canvas" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
