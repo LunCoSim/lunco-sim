@@ -249,6 +249,7 @@ impl Plugin for ModelicaCommandsPlugin {
             .register_type::<NewPlotPanel>()
             .register_type::<AddSignalToPlot>()
             .register_type::<AddCanvasPlot>()
+            .register_type::<DuplicateActiveDoc>()
             .add_observer(on_focus_document_by_name)
             .add_observer(on_set_view_mode)
             .add_observer(on_set_zoom)
@@ -270,6 +271,7 @@ impl Plugin for ModelicaCommandsPlugin {
             .add_observer(on_new_plot_panel)
             .add_observer(on_add_signal_to_plot)
             .add_observer(on_add_canvas_plot)
+            .add_observer(on_duplicate_active_doc)
             .add_observer(resolve_editor_intent)
             .add_observer(resolve_new_document_intent)
             .add_systems(
@@ -2101,6 +2103,31 @@ fn on_save_active_document_as(
             source.len(),
         );
         world.commands().trigger(DocumentSaved::local(doc));
+    });
+}
+
+/// API shim: duplicate the active read-only document into a fresh
+/// editable workspace tab. Fires the existing
+/// `DuplicateModelFromReadOnly` event with `doc=0` ⇒ active.
+#[derive(Event, Reflect, Clone, Debug, Default)]
+#[reflect(Event, Default)]
+pub struct DuplicateActiveDoc {
+    pub doc: u64,
+}
+
+fn on_duplicate_active_doc(trigger: On<DuplicateActiveDoc>, mut commands: Commands) {
+    let raw = trigger.event().doc;
+    commands.queue(move |world: &mut World| {
+        let doc = if raw == 0 {
+            resolve_active_doc(world)
+        } else {
+            Some(DocumentId::new(raw))
+        };
+        let Some(doc) = doc else {
+            bevy::log::warn!("[DuplicateActiveDoc] no active document");
+            return;
+        };
+        world.commands().trigger(DuplicateModelFromReadOnly { source_doc: doc });
     });
 }
 

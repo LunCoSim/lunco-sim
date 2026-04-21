@@ -376,73 +376,136 @@ impl NodeVisual for IconNodeVisual {
             );
         }
 
-        // Hover tooltip — class, instance, and any matching values
-        // from the per-frame node-state snapshot. `interact` claims a
-        // hover-only sense without affecting layout, so the canvas
-        // pan/zoom drag still works through the icon body.
-        let hover_id = egui::Id::new(("modelica_icon_hover", node.id.0));
-        let resp = ctx.ui.interact(rect, hover_id, egui::Sense::hover());
-        if resp.hovered() && !self.instance_name.is_empty() {
-            let class_for_hover = self.class_name.clone();
-            let instance_for_hover = self.instance_name.clone();
-            resp.on_hover_ui(|ui| {
-                ui.label(
-                    egui::RichText::new(&instance_for_hover)
-                        .strong()
-                        .size(14.0),
+        // Hover tooltip. The canvas claims the whole widget rect
+        // with `Sense::click_and_drag()` so `ui.interact(.., Sense::hover())`
+        // and even `show_tooltip_at_pointer` get suppressed at the
+        // visual's layer. Paint the tooltip card directly with the
+        // foreground painter — bypasses egui's interaction layering
+        // entirely.
+        let cursor = ctx.ui.ctx().pointer_hover_pos();
+        let is_hovered = cursor
+            .map(|c| rect.contains(c))
+            .unwrap_or(false);
+        if is_hovered && !self.instance_name.is_empty() {
+            let cursor = cursor.unwrap();
+            let snap =
+                lunco_viz::kinds::canvas_plot_node::fetch_node_state(
+                    ctx.ui.ctx(),
                 );
-                ui.label(
-                    egui::RichText::new(&class_for_hover)
-                        .small()
-                        .weak(),
-                );
-                let snap =
-                    lunco_viz::kinds::canvas_plot_node::fetch_node_state(
-                        ui.ctx(),
-                    );
-                let prefix = format!("{instance_for_hover}.");
-                let mut rows: Vec<(&String, &f64)> = snap
-                    .values
-                    .iter()
-                    .filter(|(k, _)| k.starts_with(&prefix))
-                    .collect();
-                rows.sort_by(|a, b| a.0.cmp(b.0));
-                if rows.is_empty() {
-                    ui.label(
-                        egui::RichText::new("(no values yet — run a sim)")
-                            .small()
-                            .weak()
-                            .italics(),
-                    );
-                    return;
-                }
-                ui.separator();
-                // Long lists scroll; tight grid with name + value
-                // for legible columns even with many entries.
-                egui::ScrollArea::vertical().max_height(280.0).show(ui, |ui| {
-                    egui::Grid::new(("modelica_hover_values", &instance_for_hover))
-                        .num_columns(2)
-                        .spacing([12.0, 2.0])
-                        .show(ui, |ui| {
-                            for (k, v) in rows {
-                                let short =
-                                    k.strip_prefix(&prefix).unwrap_or(k);
-                                ui.label(
-                                    egui::RichText::new(short).monospace(),
-                                );
-                                ui.label(
-                                    egui::RichText::new(format!("{v:.4}"))
-                                        .monospace(),
-                                );
-                                ui.end_row();
-                            }
-                        });
-                });
-            });
+            let prefix = format!("{}.", self.instance_name);
+            let mut rows: Vec<(&String, &f64)> = snap
+                .values
+                .iter()
+                .filter(|(k, _)| k.starts_with(&prefix))
+                .collect();
+            rows.sort_by(|a, b| a.0.cmp(b.0));
+            paint_hover_card(
+                ctx.ui,
+                cursor,
+                &self.instance_name,
+                &self.class_name,
+                &rows,
+            );
         }
     }
     fn debug_name(&self) -> &str {
         "modelica.icon"
+    }
+}
+
+/// Direct-paint hover card (foreground layer). Used because the
+/// canvas's `Sense::click_and_drag()` swallows ordinary tooltip
+/// hooks at the visual layer.
+fn paint_hover_card(
+    ui: &mut egui::Ui,
+    cursor: egui::Pos2,
+    instance: &str,
+    class_name: &str,
+    rows: &[(&String, &f64)],
+) {
+    let theme = lunco_canvas::theme::current(ui.ctx());
+    let layer_id = egui::LayerId::new(
+        egui::Order::Tooltip,
+        egui::Id::new(("modelica_icon_hover_card", instance)),
+    );
+    let painter = ui.ctx().layer_painter(layer_id);
+
+    // Build text lines first so we can size the card accordingly.
+    let mut lines: Vec<(String, bool)> = Vec::with_capacity(rows.len() + 4);
+    lines.push((instance.to_string(), true));
+    if !class_name.is_empty() {
+        lines.push((class_name.to_string(), false));
+    }
+    if rows.is_empty() {
+        lines.push(("(no values yet — run a sim)".to_string(), false));
+    } else {
+        for (k, v) in rows {
+            let short = k.strip_prefix(&format!("{instance}.")).unwrap_or(k);
+            lines.push((format!("{short:<10}  {v:>10.4}"), false));
+        }
+    }
+
+    let line_h = 14.0_f32;
+    let pad = 6.0_f32;
+    // Estimate width: 7 px per char (monospace). egui doesn't expose
+    // `Painter::text_size` cheaply; this is plenty for the typical
+    // path widths we render.
+    let text_w = lines
+        .iter()
+        .map(|(s, _)| s.chars().count() as f32 * 7.0)
+        .fold(0.0_f32, f32::max);
+    let card_w = (text_w + pad * 2.0).clamp(120.0, 360.0);
+    let card_h = lines.len() as f32 * line_h + pad * 2.0;
+
+    // Anchor card to the right of the cursor with a small offset;
+    // flip to the left if we'd run off the screen edge.
+    let screen = ui.ctx().screen_rect();
+    let mut origin =
+        egui::pos2(cursor.x + 14.0, cursor.y + 14.0);
+    if origin.x + card_w > screen.max.x {
+        origin.x = cursor.x - card_w - 14.0;
+    }
+    if origin.y + card_h > screen.max.y {
+        origin.y = cursor.y - card_h - 14.0;
+    }
+    let card_rect = egui::Rect::from_min_size(
+        origin,
+        egui::vec2(card_w, card_h),
+    );
+    // Drop shadow so the card pops over the diagram.
+    painter.rect_filled(
+        card_rect.translate(egui::vec2(0.0, 2.0)),
+        6.0,
+        theme.overlay_shadow,
+    );
+    painter.rect_filled(card_rect, 6.0, theme.overlay_fill);
+    painter.rect_stroke(
+        card_rect,
+        6.0,
+        egui::Stroke::new(1.0, theme.overlay_stroke),
+        egui::StrokeKind::Outside,
+    );
+
+    let mut y = origin.y + pad;
+    for (line, is_title) in &lines {
+        let font = if *is_title {
+            egui::FontId::proportional(13.0)
+        } else {
+            egui::FontId::monospace(11.0)
+        };
+        let color = if *is_title {
+            theme.overlay_text
+        } else {
+            theme.overlay_text.gamma_multiply(0.85)
+        };
+        painter.text(
+            egui::pos2(origin.x + pad, y),
+            egui::Align2::LEFT_TOP,
+            line,
+            font,
+            color,
+        );
+        y += line_h;
     }
 }
 
@@ -3162,6 +3225,11 @@ fn render_empty_menu(
         })
         .unwrap_or_default();
     ui.menu_button("📊 Add Plot here", |ui| {
+        // Tight bounds: enough for short signal names without
+        // forcing a wide popup; long names truncate with ellipsis
+        // (egui handles via the label widget).
+        ui.set_min_width(160.0);
+        ui.set_max_width(280.0);
         if sigs.is_empty() {
             ui.label(
                 egui::RichText::new("(no signals yet — run a simulation)")

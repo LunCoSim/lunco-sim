@@ -156,6 +156,21 @@ impl NodeVisual for PlotNodeVisual {
             .painter()
             .rect_stroke(egui_rect, 6.0, stroke, egui::StrokeKind::Outside);
 
+        // Bottom-right resize grip: two short diagonals so the user
+        // can find the drag handle. Sized in screen pixels so the
+        // grip stays usable at any zoom level.
+        let grip = egui::pos2(egui_rect.max.x - 2.0, egui_rect.max.y - 2.0);
+        let grip_color = theme.overlay_stroke;
+        for off in [4.0_f32, 8.0_f32] {
+            ctx.ui.painter().line_segment(
+                [
+                    egui::pos2(grip.x - off, grip.y),
+                    egui::pos2(grip.x, grip.y - off),
+                ],
+                egui::Stroke::new(1.0, grip_color),
+            );
+        }
+
         let title = if self.data.title.is_empty() {
             &self.data.signal_path
         } else {
