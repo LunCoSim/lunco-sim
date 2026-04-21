@@ -236,6 +236,8 @@ impl Plugin for ModelicaCommandsPlugin {
             .register_type::<OpenClass>()
             .register_type::<MoveComponent>()
             .register_type::<PanCanvas>()
+            .register_type::<Undo>()
+            .register_type::<Redo>()
             .add_observer(on_focus_document_by_name)
             .add_observer(on_set_view_mode)
             .add_observer(on_set_zoom)
@@ -244,6 +246,8 @@ impl Plugin for ModelicaCommandsPlugin {
             .add_observer(on_open_class)
             .add_observer(on_move_component)
             .add_observer(on_pan_canvas)
+            .add_observer(on_undo)
+            .add_observer(on_redo)
             .add_observer(resolve_editor_intent)
             .add_observer(resolve_new_document_intent)
             .add_systems(
@@ -578,8 +582,9 @@ fn on_undo_document(
     mut editor: ResMut<EditorBufferState>,
     mut workbench: ResMut<WorkbenchState>,
 ) {
+    let doc = trigger.event().doc;
     apply_undo_or_redo(
-        trigger.event().doc,
+        doc,
         /*is_undo=*/ true,
         &mut registry,
         &mut editor,
@@ -615,12 +620,23 @@ fn apply_undo_or_redo(
     editor: &mut EditorBufferState,
     workbench: &mut WorkbenchState,
 ) {
-    // Ownership + writability check.
-    let is_read_only = match registry.host(doc) {
-        Some(h) => h.document().is_read_only(),
-        None => return,
-    };
-    if is_read_only {
+    // Ownership check only — `Document::is_read_only()` here means
+    // "can't save without Save-As", which is true for every Untitled
+    // doc (Duplicate-to-Workspace copies, freshly-typed scratch
+    // models). Those are fully editable; the predicate's name is
+    // misleading. The canvas's apply_ops gates on
+    // `WorkbenchState.open_model.read_only` (true only for
+    // bundled / library tabs); we mirror that here so undo/redo
+    // works on Untitled docs.
+    if registry.host(doc).is_none() {
+        return;
+    }
+    let workbench_read_only = workbench
+        .open_model
+        .as_ref()
+        .map(|m| m.read_only)
+        .unwrap_or(false);
+    if workbench_read_only {
         return;
     }
 
@@ -1733,6 +1749,52 @@ pub struct MoveComponent {
     /// way mouse-drag does.
     pub width: f32,
     pub height: f32,
+}
+
+/// Undo the most recent edit on the active document. Reflect-
+/// registered so automation can drive the same undo path the
+/// Ctrl+Z keybinding / toolbar arrow uses. `doc=0` ⇒ active tab.
+#[derive(Event, Reflect, Clone, Debug, Default)]
+#[reflect(Event, Default)]
+pub struct Undo {
+    pub doc: u64,
+}
+
+/// Redo the most recently undone edit. Mirror of [`Undo`].
+#[derive(Event, Reflect, Clone, Debug, Default)]
+#[reflect(Event, Default)]
+pub struct Redo {
+    pub doc: u64,
+}
+
+fn on_undo(trigger: On<Undo>, mut commands: Commands) {
+    let raw = trigger.event().doc;
+    commands.queue(move |world: &mut World| {
+        let Some(doc) = (if raw == 0 {
+            resolve_active_doc(world)
+        } else {
+            Some(DocumentId::new(raw))
+        }) else {
+            bevy::log::warn!("[Undo] no active document");
+            return;
+        };
+        world.commands().trigger(UndoDocument { doc });
+    });
+}
+
+fn on_redo(trigger: On<Redo>, mut commands: Commands) {
+    let raw = trigger.event().doc;
+    commands.queue(move |world: &mut World| {
+        let Some(doc) = (if raw == 0 {
+            resolve_active_doc(world)
+        } else {
+            Some(DocumentId::new(raw))
+        }) else {
+            bevy::log::warn!("[Redo] no active document");
+            return;
+        };
+        world.commands().trigger(RedoDocument { doc });
+    });
 }
 
 /// Pan the canvas viewport to centre on `(x, y)` in canvas world
