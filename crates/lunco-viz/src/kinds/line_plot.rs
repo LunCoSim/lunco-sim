@@ -98,7 +98,18 @@ impl Visualization for LinePlot {
                 let pts: Vec<[f64; 2]> =
                     hist.iter().map(|s| [s.time, s.value]).collect();
                 let label = b.label.clone().unwrap_or_else(|| b.source.path.clone());
-                let color = b.color.unwrap_or_else(|| PALETTE[i % PALETTE.len()]);
+                // Universal palette: same signal path → same colour
+                // everywhere. Per-binding `color` override still wins.
+                // The local `PALETTE` round-robin is the legacy
+                // fallback when the signal path is empty (rare).
+                let _ = i;
+                let color = b.color.unwrap_or_else(|| {
+                    if b.source.path.is_empty() {
+                        PALETTE[0]
+                    } else {
+                        crate::signal::color_for_signal(&b.source.path)
+                    }
+                });
                 Some(Line::new(label, PlotPoints::new(pts)).color(color))
             })
             .collect();

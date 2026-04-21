@@ -375,9 +375,123 @@ impl NodeVisual for IconNodeVisual {
                 egui::Stroke::new(1.0, theme_snap.port_stroke),
             );
         }
+
+        // Hover tooltip — class, instance, and any matching values
+        // from the per-frame node-state snapshot. `interact` claims a
+        // hover-only sense without affecting layout, so the canvas
+        // pan/zoom drag still works through the icon body.
+        let hover_id = egui::Id::new(("modelica_icon_hover", node.id.0));
+        let resp = ctx.ui.interact(rect, hover_id, egui::Sense::hover());
+        if resp.hovered() && !self.instance_name.is_empty() {
+            let class_for_hover = self.class_name.clone();
+            let instance_for_hover = self.instance_name.clone();
+            resp.on_hover_ui(|ui| {
+                ui.label(
+                    egui::RichText::new(&instance_for_hover)
+                        .strong()
+                        .size(14.0),
+                );
+                ui.label(
+                    egui::RichText::new(&class_for_hover)
+                        .small()
+                        .weak(),
+                );
+                let snap =
+                    lunco_viz::kinds::canvas_plot_node::fetch_node_state(
+                        ui.ctx(),
+                    );
+                let prefix = format!("{instance_for_hover}.");
+                let mut rows: Vec<(&String, &f64)> = snap
+                    .values
+                    .iter()
+                    .filter(|(k, _)| k.starts_with(&prefix))
+                    .collect();
+                rows.sort_by(|a, b| a.0.cmp(b.0));
+                if rows.is_empty() {
+                    ui.label(
+                        egui::RichText::new("(no values yet — run a sim)")
+                            .small()
+                            .weak()
+                            .italics(),
+                    );
+                    return;
+                }
+                ui.separator();
+                // Long lists scroll; tight grid with name + value
+                // for legible columns even with many entries.
+                egui::ScrollArea::vertical().max_height(280.0).show(ui, |ui| {
+                    egui::Grid::new(("modelica_hover_values", &instance_for_hover))
+                        .num_columns(2)
+                        .spacing([12.0, 2.0])
+                        .show(ui, |ui| {
+                            for (k, v) in rows {
+                                let short =
+                                    k.strip_prefix(&prefix).unwrap_or(k);
+                                ui.label(
+                                    egui::RichText::new(short).monospace(),
+                                );
+                                ui.label(
+                                    egui::RichText::new(format!("{v:.4}"))
+                                        .monospace(),
+                                );
+                                ui.end_row();
+                            }
+                        });
+                });
+            });
+        }
     }
     fn debug_name(&self) -> &str {
         "modelica.icon"
+    }
+}
+
+/// Paint a chain of small bright dots along a polyline that march
+/// from the first to the last vertex at constant screen-pixel speed.
+/// Phase keyed off wall-clock `time` so all wires stay in sync.
+/// Used as the "this connection is alive" overlay during simulation
+/// — Simulink/SPICE-style, no per-edge flow data needed yet.
+fn paint_flow_dots(
+    painter: &egui::Painter,
+    polyline: &[egui::Pos2],
+    base_color: egui::Color32,
+    time: f64,
+) {
+    if polyline.len() < 2 {
+        return;
+    }
+    let mut total_len = 0.0_f32;
+    for w in polyline.windows(2) {
+        total_len += (w[1] - w[0]).length();
+    }
+    if total_len < 1.0 {
+        return;
+    }
+    // Spacing + speed in screen pixels. Tunable.
+    const SPACING_PX: f32 = 28.0;
+    const SPEED_PX_S: f32 = 36.0;
+    let phase = ((time as f32) * SPEED_PX_S).rem_euclid(SPACING_PX);
+    let dot_color = egui::Color32::from_rgba_unmultiplied(
+        base_color.r(),
+        base_color.g(),
+        base_color.b(),
+        220,
+    );
+    let mut s = phase;
+    while s < total_len {
+        // Walk the polyline to find the segment containing arc-length s.
+        let mut acc = 0.0_f32;
+        for w in polyline.windows(2) {
+            let seg_len = (w[1] - w[0]).length();
+            if s <= acc + seg_len {
+                let t = ((s - acc) / seg_len).clamp(0.0, 1.0);
+                let p = w[0] + (w[1] - w[0]) * t;
+                painter.circle_filled(p, 2.2, dot_color);
+                break;
+            }
+            acc += seg_len;
+        }
+        s += SPACING_PX;
     }
 }
 
@@ -693,6 +807,25 @@ impl EdgeVisual for OrthogonalEdgeVisual {
         painter.line_segment([egui::pos2(p_from.x, p_from.y), mid.0], stroke);
         painter.line_segment([mid.0, mid.1], stroke);
         painter.line_segment([mid.1, egui::pos2(p_to.x, p_to.y)], stroke);
+
+        // Live-flow animation: small dots moving along the polyline
+        // at constant speed. Skips when no signal data is present
+        // (sim never ran / paused) so a static diagram doesn't pulse
+        // for no reason. Real per-edge flow magnitude/direction is a
+        // follow-up — for now this just signals "this connection is
+        // live."
+        let snap = lunco_viz::kinds::canvas_plot_node::fetch_signal_snapshot(
+            ctx.ui.ctx(),
+        );
+        if !snap.samples.is_empty() {
+            let polyline = [
+                egui::pos2(p_from.x, p_from.y),
+                mid.0,
+                mid.1,
+                egui::pos2(p_to.x, p_to.y),
+            ];
+            paint_flow_dots(painter, &polyline, col, ctx.time);
+        }
     }
 
     /// Hit-test the simplified path. Cheap enough to do at full
@@ -2388,6 +2521,33 @@ impl CanvasDiagramPanel {
             lunco_viz::kinds::canvas_plot_node::stash_signal_snapshot(
                 ui.ctx(),
                 snapshot,
+            );
+        }
+
+        // Stash a flat per-instance value snapshot so node visuals
+        // (icon hover tooltips, future inline value badges, etc.)
+        // can read parameters / inputs / live variables without
+        // touching the World. Combines all three buckets keyed by
+        // dotted instance path (`R1.R`, `P.y`, …); visuals filter by
+        // the prefix that matches their instance name.
+        {
+            let mut state =
+                lunco_viz::kinds::canvas_plot_node::NodeStateSnapshot::default();
+            let mut q = world.query::<&crate::ModelicaModel>();
+            for model in q.iter(world) {
+                for (k, v) in &model.parameters {
+                    state.values.insert(k.clone(), *v);
+                }
+                for (k, v) in &model.inputs {
+                    state.values.insert(k.clone(), *v);
+                }
+                for (k, v) in &model.variables {
+                    state.values.insert(k.clone(), *v);
+                }
+            }
+            lunco_viz::kinds::canvas_plot_node::stash_node_state(
+                ui.ctx(),
+                state,
             );
         }
 

@@ -88,6 +88,33 @@ fn snapshot_id() -> egui::Id {
     egui::Id::new("lunco_viz_signal_snapshot")
 }
 
+/// Per-frame snapshot of every component-instance scalar value
+/// (parameter / input / variable). Indexed by instance path
+/// (e.g. `"R1.R"`, `"P.y"`). Stashed by the host alongside
+/// [`SignalSnapshot`] so any node visual can show hover tooltips
+/// or inline value badges without `World` access.
+#[derive(Debug, Default, Clone)]
+pub struct NodeStateSnapshot {
+    /// `"<instance>.<var>" -> value`. Includes parameters, inputs,
+    /// and live simulator variables — visuals filter by prefix
+    /// (e.g. an icon for instance `R1` shows entries starting with
+    /// `"R1."`).
+    pub values: std::collections::HashMap<String, f64>,
+}
+
+pub fn stash_node_state(ctx: &egui::Context, snapshot: NodeStateSnapshot) {
+    ctx.data_mut(|d| d.insert_temp(node_state_id(), Arc::new(snapshot)));
+}
+
+pub fn fetch_node_state(ctx: &egui::Context) -> Arc<NodeStateSnapshot> {
+    ctx.data(|d| d.get_temp::<Arc<NodeStateSnapshot>>(node_state_id()))
+        .unwrap_or_default()
+}
+
+fn node_state_id() -> egui::Id {
+    egui::Id::new("lunco_viz_node_state_snapshot")
+}
+
 /// `NodeVisual` impl reconstructed by the registry from
 /// `PlotNodeData`. Holds the binding only; samples come from the
 /// per-frame snapshot.
@@ -139,16 +166,60 @@ impl NodeVisual for PlotNodeVisual {
         let key = (entity, self.data.signal_path.clone());
         let points = snapshot.samples.get(&key).cloned().unwrap_or_default();
 
+        // Adaptive density: when zoomed out the card is tiny and a
+        // text label / axes would be larger than the chart itself.
+        // Hide labels under 80×60 px, hide everything but the line
+        // under 40×30 px. Symmetric with how vector design tools
+        // handle thumbnail nodes.
+        let card_w = egui_rect.width();
+        let card_h = egui_rect.height();
+        let show_label = card_w >= 80.0 && card_h >= 60.0;
+        if card_w < 40.0 || card_h < 30.0 {
+            // Tiny — just paint a sparkline directly into the rect,
+            // no child UI.
+            if !points.is_empty() {
+                let color = crate::signal::color_for_signal(&self.data.signal_path);
+                let (mut tmin, mut tmax, mut vmin, mut vmax) =
+                    (f64::INFINITY, f64::NEG_INFINITY, f64::INFINITY, f64::NEG_INFINITY);
+                for p in &points {
+                    tmin = tmin.min(p[0]);
+                    tmax = tmax.max(p[0]);
+                    vmin = vmin.min(p[1]);
+                    vmax = vmax.max(p[1]);
+                }
+                let dt = (tmax - tmin).max(f64::EPSILON);
+                let dv = (vmax - vmin).max(f64::EPSILON);
+                let pts: Vec<egui::Pos2> = points
+                    .iter()
+                    .map(|p| {
+                        egui::pos2(
+                            egui_rect.min.x
+                                + ((p[0] - tmin) / dt) as f32 * card_w,
+                            egui_rect.max.y
+                                - ((p[1] - vmin) / dv) as f32 * card_h,
+                        )
+                    })
+                    .collect();
+                ctx.ui
+                    .painter()
+                    .add(egui::Shape::line(pts, egui::Stroke::new(1.5, color)));
+            }
+            return;
+        }
+
         let mut child = ctx.ui.new_child(
             egui::UiBuilder::new()
                 .max_rect(egui_rect.shrink(4.0))
                 .layout(egui::Layout::top_down(egui::Align::Min)),
         );
-        child.label(
-            egui::RichText::new(title)
-                .small()
-                .color(theme.overlay_text),
-        );
+        if show_label {
+            child.label(
+                egui::RichText::new(title)
+                    .small()
+                    .color(theme.overlay_text),
+            );
+        }
+        let color = crate::signal::color_for_signal(&self.data.signal_path);
         Plot::new(("plot_node", node.id.0))
             .show_axes([false, false])
             .show_grid(false)
@@ -157,7 +228,9 @@ impl NodeVisual for PlotNodeVisual {
             .allow_scroll(false)
             .show(&mut child, |plot_ui| {
                 if !points.is_empty() {
-                    plot_ui.line(Line::new("", PlotPoints::from(points)));
+                    plot_ui.line(
+                        Line::new("", PlotPoints::from(points)).color(color),
+                    );
                 }
             });
     }

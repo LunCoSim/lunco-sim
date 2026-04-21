@@ -236,3 +236,36 @@ impl SignalRegistry {
         }
     }
 }
+
+/// Deterministic colour for a signal path, shared across every plot
+/// surface (panel `Graphs`, `VizPanel`, in-canvas `PlotNodeVisual`,
+/// future inspector). Same `path` ⇒ same colour everywhere; stable
+/// across sessions so a saved layout reopens with consistent legend
+/// colours.
+///
+/// 12-entry Tab10/D3-derived palette via FNV-1a hash. Tweak only by
+/// **appending** — keep existing indices stable so saved layouts
+/// don't change colour after a palette edit.
+pub fn color_for_signal(path: &str) -> bevy_egui::egui::Color32 {
+    use bevy_egui::egui::Color32;
+    const PALETTE: &[Color32] = &[
+        Color32::from_rgb(0x1f, 0x77, 0xb4),
+        Color32::from_rgb(0xff, 0x7f, 0x0e),
+        Color32::from_rgb(0x2c, 0xa0, 0x2c),
+        Color32::from_rgb(0xd6, 0x27, 0x28),
+        Color32::from_rgb(0x94, 0x67, 0xbd),
+        Color32::from_rgb(0x8c, 0x56, 0x4b),
+        Color32::from_rgb(0xe3, 0x77, 0xc2),
+        Color32::from_rgb(0x7f, 0x7f, 0x7f),
+        Color32::from_rgb(0xbc, 0xbd, 0x22),
+        Color32::from_rgb(0x17, 0xbe, 0xcf),
+        Color32::from_rgb(0xae, 0xc7, 0xe8),
+        Color32::from_rgb(0xff, 0xbb, 0x78),
+    ];
+    let mut h: u32 = 0x811c_9dc5;
+    for b in path.as_bytes() {
+        h ^= *b as u32;
+        h = h.wrapping_mul(0x0100_0193);
+    }
+    PALETTE[(h as usize) % PALETTE.len()]
+}
