@@ -191,9 +191,18 @@ impl Canvas {
             // held, so the tool's drag promotion + in-flight drag
             // update both fire without depending on egui's
             // `dragged_by` gate.
+            //
+            // Clamp the cursor to the canvas widget rect — egui's
+            // `hover_pos` keeps reporting positions even after the
+            // cursor leaves the canvas widget. Without the clamp a
+            // rubber-band / node-drag started inside the canvas
+            // grows unboundedly into neighbouring panels when the
+            // user drifts the cursor outside.
             if primary_down && !primary_pressed {
                 if let Some(p) = pointer {
-                    let screen = Pos::new(p.x, p.y);
+                    let cx = p.x.clamp(rect.min.x, rect.max.x);
+                    let cy = p.y.clamp(rect.min.y, rect.max.y);
+                    let screen = Pos::new(cx, cy);
                     let world = self.viewport.screen_to_world(screen, screen_rect);
                     input_events.push(InputEvent::PointerMove {
                         world,
@@ -202,22 +211,64 @@ impl Canvas {
                     });
                 }
             }
-            if primary_released {
-                if let Some(p) = pointer.or_else(|| {
-                    // On release frame hover_pos can be stale; fall
-                    // back to the response's own latest interaction
-                    // position if egui has it.
-                    response.interact_pointer_pos()
-                }) {
-                    let screen = Pos::new(p.x, p.y);
-                    let world = self.viewport.screen_to_world(screen, screen_rect);
-                    input_events.push(InputEvent::PointerUp {
-                        button: MouseButton::Primary,
-                        world,
-                        screen,
-                        modifiers,
+            // Stale-drag rescue.
+            //
+            // The native equivalent of the web's `setPointerCapture`
+            // (which routes events to the originating element even
+            // when the cursor leaves) is OS-level mouse grab —
+            // winit/Bevy/egui don't expose a stable cross-platform
+            // hook for it (see winit#133, #2192, egui#3157, bevy_egui#61
+            // — Windows in particular drops release events when the
+            // cursor crosses the window edge mid-drag).
+            //
+            // Workable native fix is signal-fusion:
+            //   1. Real release (`primary_released`) — happy path.
+            //   2. Window lost focus while a gesture is in flight.
+            //      egui exposes this via `input.focused`. When the
+            //      user alt-tabs or clicks another window mid-drag,
+            //      we'll never see the up-event for the original
+            //      press, so the gesture must be cancelled.
+            //   3. egui's `pointer.button_down` is false but the
+            //      tool is still in a non-Idle state — covers
+            //      release events that arrived but were dropped by
+            //      whatever stack between the OS and us.
+            let focus_lost_with_drag =
+                !ui.ctx().input(|i| i.focused) && self.tool.is_active();
+            let stale_button_state = !primary_down
+                && !primary_pressed
+                && self.tool.is_active();
+            let synthesise_release = focus_lost_with_drag || stale_button_state;
+            if primary_released || synthesise_release {
+                // ALWAYS commit the release. Earlier we required a
+                // valid pointer position (hover or interact) to
+                // synthesise the up event — but when the user moves
+                // the cursor outside the canvas widget AND THEN
+                // releases the button, both `hover_pos` and
+                // `interact_pointer_pos` can be `None`, so the
+                // in-flight rubber-band / drag never finalised. The
+                // selection then "stuck" until the user clicked
+                // back inside the canvas. Falling back to the
+                // canvas centre means the tool always sees a
+                // PointerUp and can transition out of `Dragging*`
+                // / `RubberBand` cleanly.
+                let p = pointer
+                    .or_else(|| response.interact_pointer_pos())
+                    .unwrap_or_else(|| {
+                        egui::pos2(
+                            (rect.min.x + rect.max.x) * 0.5,
+                            (rect.min.y + rect.max.y) * 0.5,
+                        )
                     });
-                }
+                let cx = p.x.clamp(rect.min.x, rect.max.x);
+                let cy = p.y.clamp(rect.min.y, rect.max.y);
+                let screen = Pos::new(cx, cy);
+                let world = self.viewport.screen_to_world(screen, screen_rect);
+                input_events.push(InputEvent::PointerUp {
+                    button: MouseButton::Primary,
+                    world,
+                    screen,
+                    modifiers,
+                });
             }
         }
 

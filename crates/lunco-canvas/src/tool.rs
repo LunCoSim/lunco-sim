@@ -119,6 +119,17 @@ pub trait Tool: Send + Sync {
     /// Default: noop — stateless tools are unaffected.
     fn cancel_in_flight(&mut self) {}
 
+    /// Whether any non-idle gesture is in flight — drag, resize,
+    /// rubber-band, port-connect. Canvas uses this for stale-drag
+    /// rescue: if egui reports the mouse button as NOT held but the
+    /// tool is still mid-gesture (release fired outside the OS
+    /// window, focus loss, missed event), synthesise a release so
+    /// the gesture finalises and selection chrome can clear.
+    /// Default: false (idle), suitable for stateless tools.
+    fn is_active(&self) -> bool {
+        false
+    }
+
     /// Remap any stable references the tool is holding (typically
     /// `NodeId`s captured at press / drag-start time) when the scene
     /// is replaced. `find_new_id` is called for each old id; if it
@@ -247,6 +258,10 @@ impl Default for DefaultTool {
 impl Tool for DefaultTool {
     fn cancel_in_flight(&mut self) {
         self.state = State::Idle;
+    }
+
+    fn is_active(&self) -> bool {
+        !matches!(self.state, State::Idle)
     }
 
     fn remap_node_ids(&mut self, find_new_id: &dyn Fn(crate::scene::NodeId) -> Option<crate::scene::NodeId>) {

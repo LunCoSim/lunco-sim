@@ -139,7 +139,29 @@ impl NodeVisual for PlotNodeVisual {
             egui::pos2(screen_rect.min.x, screen_rect.min.y),
             egui::pos2(screen_rect.max.x, screen_rect.max.y),
         );
+        // The plot fills exactly its `node.rect` (transformed to
+        // screen). No artificial MIN clamp — the resize handle hits
+        // the actual rect.max corner, so any visual MIN would
+        // decouple the grip from where it appears. Users zoom in
+        // when they need the plot bigger.
+        // Cull only when fully outside the canvas widget. Sub-pixel
+        // rects DO still paint — `egui` rounds them to 1px which
+        // keeps the plot visible as a marker dot at extreme zoom-out
+        // (rather than vanishing entirely as before).
         if !ctx.ui.max_rect().intersects(egui_rect) {
+            return;
+        }
+        if egui_rect.width() < 1.0 || egui_rect.height() < 1.0 {
+            // Degenerate (zero-area) rect — paint a 1×1 marker
+            // anchored at the world centre so the user can still
+            // see the plot exists and zoom in to operate on it.
+            let centre = egui_rect.center();
+            let marker = egui::Rect::from_center_size(
+                centre,
+                egui::vec2(2.0, 2.0),
+            );
+            let theme = lunco_canvas::theme::current(ctx.ui.ctx());
+            ctx.ui.painter().rect_filled(marker, 1.0, theme.overlay_stroke);
             return;
         }
 
@@ -149,12 +171,19 @@ impl NodeVisual for PlotNodeVisual {
         } else {
             egui::Stroke::new(1.0, theme.overlay_stroke)
         };
+        // Plot card uses a near-black fill so it always pops
+        // against the dark-grey canvas background — small +12 RGB
+        // bump from `overlay_fill` was visually invisible at small
+        // sizes (canvas bg is around the same brightness).
+        let card_fill = egui::Color32::from_rgb(8, 12, 18);
+        ctx.ui.painter().rect_filled(egui_rect, 6.0, card_fill);
+        // `Inside` so the stroke stays *within* the node's rect —
+        // `Outside` would visually extend the plot 1-2 px past
+        // node.rect on every side, decoupling the apparent size
+        // from the resize handle's hit position.
         ctx.ui
             .painter()
-            .rect_filled(egui_rect, 6.0, theme.overlay_fill);
-        ctx.ui
-            .painter()
-            .rect_stroke(egui_rect, 6.0, stroke, egui::StrokeKind::Outside);
+            .rect_stroke(egui_rect, 6.0, stroke, egui::StrokeKind::Inside);
 
         // Bottom-right resize grip: two short diagonals so the user
         // can find the drag handle. Sized in screen pixels so the
@@ -222,20 +251,61 @@ impl NodeVisual for PlotNodeVisual {
             return;
         }
 
+        let inner_rect = egui_rect.shrink(4.0);
         let mut child = ctx.ui.new_child(
             egui::UiBuilder::new()
-                .max_rect(egui_rect.shrink(4.0))
+                .max_rect(inner_rect)
                 .layout(egui::Layout::top_down(egui::Align::Min)),
         );
-        if show_label {
-            child.label(
-                egui::RichText::new(title)
-                    .small()
-                    .color(theme.overlay_text),
+        // Hard-clip the child UI so anything inside (label text,
+        // egui_plot legend / axes) never paints past the node's
+        // rect. egui_plot otherwise prefers its `min_size` (~96 px)
+        // and overflows when the node is smaller than that.
+        child.set_clip_rect(inner_rect);
+        let label_h = if show_label {
+            // Title row with hover hint — shows the full
+            // signal-binding path (which may be truncated in the
+            // visible label) plus a hint sentence so users can
+            // identify what they're looking at without opening
+            // the inspector. egui's `Label::sense(hover)` lets us
+            // attach a tooltip without affecting layout.
+            let label_resp = child.add(
+                egui::Label::new(
+                    egui::RichText::new(title)
+                        .small()
+                        .color(theme.overlay_text),
+                )
+                .sense(egui::Sense::hover()),
             );
-        }
+            if label_resp.hovered() {
+                label_resp.on_hover_ui(|ui| {
+                    ui.label(
+                        egui::RichText::new(&self.data.signal_path)
+                            .strong()
+                            .monospace(),
+                    );
+                    ui.label(
+                        egui::RichText::new(
+                            "in-canvas plot — bound to a single \
+                             scalar signal; drag corner to resize",
+                        )
+                        .small()
+                        .weak(),
+                    );
+                });
+            }
+            14.0_f32
+        } else {
+            0.0
+        };
         let color = crate::signal::color_for_signal(&self.data.signal_path);
+        // Explicit width/height so the plot fills exactly the
+        // remaining child area — no growth past the card.
+        let plot_w = inner_rect.width().max(1.0);
+        let plot_h = (inner_rect.height() - label_h).max(1.0);
         Plot::new(("plot_node", node.id.0))
+            .width(plot_w)
+            .height(plot_h)
             .show_axes([false, false])
             .show_grid(false)
             .allow_drag(false)

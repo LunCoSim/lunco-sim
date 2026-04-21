@@ -22,6 +22,31 @@ The modelica_workbench exposes a reflect-registered Event API on
 drill-ins, simulations, file ops — should be driven from this API
 rather than asking the user to click.
 
+## ⚠️ NEVER kill the user's running workbench
+
+**Default rule: if a workbench is already running on port 3000,
+DO NOT send `Exit` and DO NOT start a new one.** Take the screenshot
+/ run the API command against the existing instance.
+
+Why: the user's session holds their state — open tabs, the menu
+they have open right now, an in-progress drag, the canvas zoom they
+set up. Killing it destroys that state and renders the screenshot
+useless. Many things (open context menus, hover tooltips, drag
+previews) **cannot be reproduced via API** because they only exist
+during user interaction.
+
+When you need to restart:
+- The user explicitly says "restart" / "start fresh" / "kill it".
+- The running binary is verifiably stale (you just rebuilt and the
+  user wants to see the new behaviour). Even then: **ask first**.
+- The port is bound by a zombie that's not responding to API calls.
+  Try a quick `FitCanvas` ping; if it answers, that's the user's
+  session — leave it alone.
+
+If you need state inside the workbench that isn't there (a drilled-
+in tab, a loaded file, a plot), drive the API to add it. NEVER
+restart to "start clean."
+
 ## Lifecycle (start → drive → stop)
 
 ```bash

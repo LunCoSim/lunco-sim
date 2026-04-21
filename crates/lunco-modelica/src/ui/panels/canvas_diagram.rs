@@ -383,9 +383,19 @@ impl NodeVisual for IconNodeVisual {
         // foreground painter — bypasses egui's interaction layering
         // entirely.
         let cursor = ctx.ui.ctx().pointer_hover_pos();
+        // Suppress the tooltip when the cursor isn't actually over
+        // the canvas (e.g. floated past the widget edge while still
+        // hovering the icon's *world rect*). Without this the card
+        // can sit on top of the side panels because it paints in
+        // an unclipped layer.
+        let canvas_widget_rect = ctx.ui.max_rect();
+        let in_canvas = cursor
+            .map(|c| canvas_widget_rect.contains(c))
+            .unwrap_or(false);
         let is_hovered = cursor
             .map(|c| rect.contains(c))
-            .unwrap_or(false);
+            .unwrap_or(false)
+            && in_canvas;
         if is_hovered && !self.instance_name.is_empty() {
             let cursor = cursor.unwrap();
             let snap =
@@ -429,6 +439,12 @@ fn paint_hover_card(
         egui::Id::new(("modelica_icon_hover_card", instance)),
     );
     let painter = ui.ctx().layer_painter(layer_id);
+    // Clip to the canvas widget rect so the card never paints over
+    // the side panels (the user would otherwise see a tooltip
+    // ghost overlapping the Twin Browser when hovering an icon
+    // near the canvas's left edge).
+    let canvas_clip = ui.max_rect();
+    let painter = painter.with_clip_rect(canvas_clip);
 
     // Build text lines first so we can size the card accordingly.
     let mut lines: Vec<(String, bool)> = Vec::with_capacity(rows.len() + 4);
@@ -3225,11 +3241,14 @@ fn render_empty_menu(
         })
         .unwrap_or_default();
     ui.menu_button("📊 Add Plot here", |ui| {
-        // Tight bounds: enough for short signal names without
-        // forcing a wide popup; long names truncate with ellipsis
-        // (egui handles via the label widget).
-        ui.set_min_width(160.0);
-        ui.set_max_width(280.0);
+        // Adaptive height — egui menu popups default to a tight
+        // size that fits ~3 rows. Force the inner Ui to claim the
+        // full row count up to a screen-fraction cap so the
+        // ScrollArea actually has room to render all entries.
+        const ROW_PX: f32 = 18.0;
+        let max_h = (ui.ctx().screen_rect().height() * 0.7).max(180.0);
+        let wanted = ((sigs.len() + 2) as f32 * ROW_PX).min(max_h);
+        ui.set_min_height(wanted);
         if sigs.is_empty() {
             ui.label(
                 egui::RichText::new("(no signals yet — run a simulation)")
@@ -3238,10 +3257,15 @@ fn render_empty_menu(
             );
             return;
         }
-        // Long signal lists: allow scroll. Capped at ~400 px so the
-        // popup doesn't grow off-screen on dense models.
+        // ScrollArea caps the height at 80 % of the screen so the
+        // popup never spills past the window. `auto_shrink: true`
+        // for height — the popup itself only grows as tall as it
+        // needs. `false` for width so long names don't trigger a
+        // horizontal scrollbar.
+        let max_h = ui.ctx().screen_rect().height() * 0.8;
         egui::ScrollArea::vertical()
-            .max_height(400.0)
+            .max_height(max_h)
+            .auto_shrink([false, true])
             .show(ui, |ui| {
                 for (entity, path) in &sigs {
                     if ui.button(path).clicked() {
