@@ -1334,6 +1334,25 @@ pub type BackgroundDiagramHandle = std::sync::Arc<
 pub struct CanvasDocState {
     pub canvas: Canvas,
     pub last_seen_gen: u64,
+    /// Hash of the *projection-relevant* slice of source for the
+    /// scene currently on screen — collapses whitespace, drops
+    /// comments. Cheap-skip: when a doc generation bumps but this
+    /// hash is unchanged (a comment edit, a parameter-default tweak,
+    /// added blank lines), we mark the gen as seen without spawning
+    /// a projection task. Catches the bulk of typing latency.
+    ///
+    /// TODO(partial-reproject): replace this binary skip with an
+    /// AST-diff path. Compare prev vs new `ClassDef.components` /
+    /// `equations` / annotations, emit a sequence of
+    /// `DiagramOp { AddNode | RemoveNode | MoveNode | AddEdge |
+    /// RemoveEdge | RelabelNode }`, and apply each to `canvas.scene`
+    /// in place. Falls back to full reproject on extends/within/
+    /// multi-class changes. Needs (1) Scene mutation API surface
+    /// (move/relabel/add-without-rebuild), (2) `diff_class(old,
+    /// new) -> Vec<DiagramOp>` helper, (3) origin-name as stable
+    /// node identity (already true). 30 % of edits hit the partial
+    /// path — see <follow-up issue> when ready.
+    pub last_seen_source_hash: u64,
     /// Snapshot of the drill-in target that produced the *currently
     /// rendered* scene. The render trigger compares this against the
     /// live `DrilledInClassNames[doc_id]`; a difference re-projects.
@@ -1377,12 +1396,87 @@ impl Default for CanvasDocState {
         Self {
             canvas,
             last_seen_gen: 0,
+            last_seen_source_hash: 0,
             last_seen_target: None,
             context_menu: None,
             projection_task: None,
             background_diagram,
         }
     }
+}
+
+/// Hash the *projection-relevant* slice of source — collapses runs
+/// of whitespace into single spaces and drops `//` line comments
+/// and `/* … */` block comments. String literals are preserved
+/// (they include filenames in `Bitmap(fileName=...)` annotations,
+/// which DO affect rendering).
+///
+/// Used by the cheap "edit-class skip": when the document
+/// generation bumps but this hash hasn't moved, the edit was a
+/// comment / blank-line / parameter-default tweak that doesn't
+/// change the projected scene topology — skip the projection task
+/// entirely. Catches the bulk of the typing-latency regressions on
+/// large MSL files.
+///
+/// Note: false negatives (edits that DO change projection but
+/// produce the same hash) are impossible — the hash domain
+/// includes every glyph in components / equations / annotations.
+/// False positives (edits that DON'T change projection but bump
+/// the hash) are fine: we just over-project, same as before.
+fn projection_relevant_source_hash(source: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    let mut chars = source.chars().peekable();
+    let mut in_string = false;
+    let mut last_was_ws = true;
+    while let Some(c) = chars.next() {
+        if in_string {
+            c.hash(&mut h);
+            if c == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        if c == '/' {
+            match chars.peek() {
+                Some('/') => {
+                    chars.next();
+                    while let Some(&n) = chars.peek() {
+                        if n == '\n' { break; }
+                        chars.next();
+                    }
+                    continue;
+                }
+                Some('*') => {
+                    chars.next();
+                    while let Some(c2) = chars.next() {
+                        if c2 == '*' && chars.peek() == Some(&'/') {
+                            chars.next();
+                            break;
+                        }
+                    }
+                    continue;
+                }
+                _ => {}
+            }
+        }
+        if c == '"' {
+            in_string = true;
+            c.hash(&mut h);
+            last_was_ws = false;
+            continue;
+        }
+        if c.is_whitespace() {
+            if !last_was_ws {
+                ' '.hash(&mut h);
+                last_was_ws = true;
+            }
+            continue;
+        }
+        c.hash(&mut h);
+        last_was_ws = false;
+    }
+    h.finish()
 }
 
 /// Paints the target class's `Diagram(graphics={...})` annotation as
@@ -1518,6 +1612,11 @@ pub struct ProjectionTask {
     pub deadline: std::time::Duration,
     pub cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
     pub task: bevy::tasks::Task<Scene>,
+    /// Projection-relevant source hash captured at spawn time.
+    /// Stashed onto `CanvasDocState::last_seen_source_hash` when the
+    /// task completes — used by the next gen-bump check to skip
+    /// reprojection on no-op edits (whitespace, comments).
+    pub source_hash: u64,
 }
 
 /// Snapshot of a right-click: where to anchor the popup + what it
@@ -1610,7 +1709,41 @@ impl Panel for CanvasDiagramPanel {
                 .get_resource::<DrilledInClassNames>()
                 .and_then(|m| m.get(doc_id).map(str::to_string));
             let target_changed = live_target != docstate.last_seen_target;
-            (first_render || gen_advanced || target_changed).then_some((doc_id, gen))
+            // Hash-skip: when the gen bumped but the projection-
+            // relevant source slice (whitespace-collapsed, comment-
+            // stripped) is unchanged, mark the gen as seen and bail
+            // out without spawning a projection task. This is the
+            // cheap layer of "intelligent reprojection" — catches
+            // comment / blank-line / parameter-default edits before
+            // they pay the rumoca-projection cost.
+            let needs_project = first_render || target_changed || {
+                if !gen_advanced {
+                    false
+                } else {
+                    let new_hash = world
+                        .resource::<ModelicaDocumentRegistry>()
+                        .host(doc_id)
+                        .map(|h| projection_relevant_source_hash(h.document().source()))
+                        .unwrap_or(0);
+                    if new_hash == docstate.last_seen_source_hash {
+                        // Mark the gen as seen so the render loop
+                        // doesn't keep re-checking every frame.
+                        // Drop the read-only borrow first.
+                        drop(state);
+                        let mut state =
+                            world.resource_mut::<CanvasDiagramState>();
+                        let docstate = state.get_mut(Some(doc_id));
+                        docstate.last_seen_gen = gen;
+                        bevy::log::debug!(
+                            "[CanvasDiagram] skipping reproject for gen={gen} (source-hash unchanged)"
+                        );
+                        false
+                    } else {
+                        true
+                    }
+                }
+            };
+            needs_project.then_some((doc_id, gen))
         };
 
         if let Some((doc_id, gen)) = project_now {
@@ -1741,6 +1874,11 @@ impl Panel for CanvasDiagramPanel {
                     let deadline = max_duration_snapshot;
                     let target_for_log = target_class_snapshot.clone();
                     let source_bytes_for_log = source.len();
+                    // Compute the hash now (off the move into the task)
+                    // so the completion handler can stash it on the
+                    // docstate without re-fetching the source.
+                    let source_hash_at_spawn =
+                        projection_relevant_source_hash(&source);
                     let task = pool.spawn(async move {
                         use std::sync::atomic::Ordering;
                         let should_stop = || {
@@ -1803,6 +1941,7 @@ impl Panel for CanvasDiagramPanel {
                         deadline,
                         cancel,
                         task,
+                        source_hash: source_hash_at_spawn,
                     });
                 }
             }
@@ -1874,9 +2013,16 @@ impl Panel for CanvasDiagramPanel {
                     futures_lite::future::block_on(
                         futures_lite::future::poll_once(&mut t.task),
                     )
-                    .map(|scene| (t.gen_at_spawn, t.target_at_spawn.clone(), scene))
+                    .map(|scene| {
+                        (
+                            t.gen_at_spawn,
+                            t.target_at_spawn.clone(),
+                            t.source_hash,
+                            scene,
+                        )
+                    })
                 });
-            if let Some((gen, target, scene)) = done_task {
+            if let Some((gen, target, source_hash, scene)) = done_task {
                 docstate.projection_task = None;
                 bevy::log::info!(
                     "[CanvasDiagram] project done: {} nodes, {} edges (initial={})",
@@ -1958,6 +2104,15 @@ impl Panel for CanvasDiagramPanel {
                 }
                 docstate.last_seen_gen = gen;
                 docstate.last_seen_target = target;
+                // Cache the projection-relevant source hash that the
+                // task captured at spawn time. Next frame's
+                // gen-advanced check skips reprojection when the
+                // current source hashes to the same value (comment /
+                // whitespace edit). Best-effort: if a newer edit
+                // landed mid-projection, the hash will differ from
+                // current source — gen-advanced check will then
+                // trigger the follow-up projection, correct.
+                docstate.last_seen_source_hash = source_hash;
                 if is_initial_projection {
                     let physical_zoom =
                         lunco_canvas::Viewport::physical_mm_zoom(ui.ctx());

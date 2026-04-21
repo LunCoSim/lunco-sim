@@ -122,8 +122,26 @@ impl ModelicaComponentBuilder {
         if let Some(class) = self.get_target_class(&target) {
             let mut name_to_id: HashMap<String, NodeId> = HashMap::new();
 
+            // Direct components first; then merge components inherited via
+            // `extends` so wires connecting to parent-class connectors
+            // (e.g. PID's u/y from `extends Modelica.Blocks.Interfaces.SISO`)
+            // actually find a node to land on. Direct declarations win
+            // on name collision (MLS §7 inheritance precedence).
+            let mut merged: Vec<(String, Component)> = class
+                .components
+                .iter()
+                .map(|(n, c)| (n.clone(), c.clone()))
+                .collect();
+            let direct_names: std::collections::HashSet<String> =
+                merged.iter().map(|(n, _)| n.clone()).collect();
+            for (name, comp) in collect_inherited_components(class, Some(&target), &self.ast, 0) {
+                if !direct_names.contains(&name) {
+                    merged.push((name, comp));
+                }
+            }
+
             // Add components as nodes
-            for (comp_name, comp) in &class.components {
+            for (comp_name, comp) in &merged {
                 let ports = extract_component_ports(comp);
                 let qualified = format!("{}.{}", target, comp_name);
                 let node_id = graph.add_node_named(
@@ -200,8 +218,23 @@ impl ModelicaComponentBuilder {
             // Track connector instances: "comp.port" → info
             let mut connector_registry: HashMap<String, ConnectorInfo> = HashMap::new();
 
+            // Same merge as block diagram — see `build_block_diagram` for
+            // the inheritance rationale.
+            let mut merged: Vec<(String, Component)> = class
+                .components
+                .iter()
+                .map(|(n, c)| (n.clone(), c.clone()))
+                .collect();
+            let direct_names: std::collections::HashSet<String> =
+                merged.iter().map(|(n, _)| n.clone()).collect();
+            for (name, comp) in collect_inherited_components(class, Some(&target), &self.ast, 0) {
+                if !direct_names.contains(&name) {
+                    merged.push((name, comp));
+                }
+            }
+
             // First pass: identify all connector ports on components
-            for (comp_name, comp) in &class.components {
+            for (comp_name, comp) in &merged {
                 let conn_ports = get_connector_port_names(comp);
                 for conn_name in &conn_ports {
                     let key = format!("{}.{}", comp_name, conn_name);
@@ -215,7 +248,7 @@ impl ModelicaComponentBuilder {
             }
 
             // Add component nodes (only those with connector ports)
-            for (comp_name, comp) in &class.components {
+            for (comp_name, comp) in &merged {
                 let conn_ports = get_connector_port_names(comp);
                 let ports: Vec<ComponentPort> = conn_ports
                     .iter()
@@ -431,6 +464,106 @@ pub fn find_class_by_qualified_name<'a>(
         current = current.classes.get(seg)?;
     }
     Some(current)
+}
+
+/// Walk a class's `extends` chain and collect all components inherited
+/// from base classes. Direct (non-inherited) components are *not*
+/// returned — the caller is responsible for merging.
+///
+/// `class_qualified_path` is the dotted qualified name of `class`
+/// (e.g. `"Modelica.Blocks.Continuous.PID"`). It's used to resolve
+/// short-form `extends` references the way MLS §5.3 prescribes:
+/// walk enclosing scopes outward until a match is found. PID's
+/// `extends Interfaces.SISO` resolves to
+/// `Modelica.Blocks.Interfaces.SISO`, not the literal `Interfaces.SISO`.
+/// Pass `None` when no such context exists (e.g. an MSL base whose
+/// own qualified path we don't carry through).
+///
+/// Resolution order for each `extends` target:
+///   1. Local lookup inside the same `StoredDefinition`.
+///   2. MSL filesystem index via [`crate::class_cache::peek_or_load_msl_class`].
+///   3. Both retried with each enclosing-scope prefix of
+///      `class_qualified_path`.
+///
+/// Honors `break_names` (MLS §7.4 selective model extension).
+/// Depth is capped to defend against pathological cycles.
+pub(crate) fn collect_inherited_components(
+    class: &ClassDef,
+    class_qualified_path: Option<&str>,
+    ast: &StoredDefinition,
+    depth: u32,
+) -> Vec<(String, Component)> {
+    const MAX_DEPTH: u32 = 8;
+    let mut out: Vec<(String, Component)> = Vec::new();
+    if depth >= MAX_DEPTH {
+        return out;
+    }
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for ext in &class.extends {
+        let raw = ext.base_name.to_string();
+        if raw.is_empty() {
+            continue;
+        }
+        let breaks: std::collections::HashSet<&str> =
+            ext.break_names.iter().map(|s| s.as_str()).collect();
+
+        let candidates = scope_chain_candidates(&raw, class_qualified_path);
+
+        let mut resolved: Option<(ClassDef, String)> = None;
+        for cand in &candidates {
+            if let Some(base) = find_class_by_qualified_name(ast, cand) {
+                resolved = Some((base.clone(), cand.clone()));
+                break;
+            }
+            if let Some(base_arc) = crate::class_cache::peek_or_load_msl_class(cand) {
+                resolved = Some(((*base_arc).clone(), cand.clone()));
+                break;
+            }
+        }
+
+        let Some((base, base_qpath)) = resolved else { continue };
+
+        for (name, comp) in &base.components {
+            if breaks.contains(name.as_str()) || seen.contains(name) {
+                continue;
+            }
+            seen.insert(name.clone());
+            out.push((name.clone(), comp.clone()));
+        }
+        let shim = StoredDefinition::default();
+        for (name, comp) in
+            collect_inherited_components(&base, Some(&base_qpath), &shim, depth + 1)
+        {
+            if breaks.contains(name.as_str()) || seen.contains(&name) {
+                continue;
+            }
+            seen.insert(name.clone());
+            out.push((name, comp));
+        }
+    }
+    out
+}
+
+/// Generate candidate fully-qualified names for resolving a short-form
+/// reference, walking outward from the most-specific enclosing scope
+/// (per MLS §5.3 lookup). For raw `"Interfaces.SISO"` referenced from
+/// `"Modelica.Blocks.Continuous.PID"`, yields:
+///   1. `"Modelica.Blocks.Continuous.Interfaces.SISO"` (sibling scope)
+///   2. `"Modelica.Blocks.Interfaces.SISO"` (parent scope) ← matches
+///   3. `"Modelica.Interfaces.SISO"`
+///   4. `"Interfaces.SISO"` (root)
+fn scope_chain_candidates(raw: &str, ctx: Option<&str>) -> Vec<String> {
+    let mut out = Vec::new();
+    if let Some(ctx) = ctx {
+        let parts: Vec<&str> = ctx.split('.').collect();
+        // Drop the leaf class itself, then walk up its parents.
+        for i in (0..parts.len().saturating_sub(1)).rev() {
+            let prefix = parts[..=i].join(".");
+            out.push(format!("{}.{}", prefix, raw));
+        }
+    }
+    out.push(raw.to_string());
+    out
 }
 
 /// Information about a connector instance in a Modelica model.
@@ -727,6 +860,78 @@ end MyLib;
         let (node, port) = parse_connect_reference(&r);
         assert_eq!(node, "A.B");
         assert_eq!(port, "p");
+    }
+
+    #[test]
+    fn test_block_diagram_includes_inherited_connectors() {
+        // PID-style: derived class extends a base that owns u/y.
+        // Without extends-walking, wires to `u`/`y` silently drop.
+        let source = r#"
+partial model SISO
+  RealInput u;
+  RealOutput y;
+end SISO;
+
+model PID
+  extends SISO;
+  Gain k;
+equation
+  connect(u, k.u);
+  connect(k.y, y);
+end PID;
+
+connector RealInput
+  input Real signal;
+end RealInput;
+
+connector RealOutput
+  output Real signal;
+end RealOutput;
+
+block Gain
+  RealInput u;
+  RealOutput y;
+end Gain;
+"#;
+        let builder = ModelicaComponentBuilder::from_source(source).unwrap();
+        let graph = builder
+            .diagram_type(DiagramType::BlockDiagram)
+            .target_class("PID")
+            .build();
+
+        // Core regression: inherited connectors must show up as nodes
+        // so wires targeting them have something to land on. Edge
+        // count is not asserted — port-name matching for `connect(u, k.u)`
+        // depends on per-type port introspection (see
+        // `extract_component_ports` / `get_connector_port_names`),
+        // which is a separate gap.
+        assert!(graph.find_node("PID.u").is_some(), "u (inherited from SISO) must be a node");
+        assert!(graph.find_node("PID.y").is_some(), "y (inherited from SISO) must be a node");
+        assert!(graph.find_node("PID.k").is_some(), "k (direct) must be a node");
+    }
+
+    /// End-to-end check: load the real `Modelica.Blocks.Continuous.PID`
+    /// from the MSL filesystem cache and confirm `extends`-walking
+    /// surfaces the inherited `u`/`y` connectors. Gated on the cache
+    /// being materialised so CI without MSL doesn't fail.
+    #[test]
+    fn test_real_msl_pid_has_inherited_u_y() {
+        let Some(pid) = crate::class_cache::peek_or_load_msl_class(
+            "Modelica.Blocks.Continuous.PID",
+        ) else {
+            eprintln!("MSL cache not materialised — skipping");
+            return;
+        };
+        let ast = StoredDefinition::default();
+        let inherited = collect_inherited_components(
+            &pid,
+            Some("Modelica.Blocks.Continuous.PID"),
+            &ast,
+            0,
+        );
+        let names: Vec<&str> = inherited.iter().map(|(n, _)| n.as_str()).collect();
+        assert!(names.contains(&"u"), "PID must inherit u from SISO; got {:?}", names);
+        assert!(names.contains(&"y"), "PID must inherit y from SISO; got {:?}", names);
     }
 
     #[test]

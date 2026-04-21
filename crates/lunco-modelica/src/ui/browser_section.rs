@@ -29,7 +29,7 @@ use std::path::PathBuf;
 use bevy_egui::egui;
 use lunco_doc::DocumentId;
 use lunco_workbench::{BrowserAction, BrowserCtx, BrowserSection};
-use rumoca_phase_parse::parse_to_ast;
+use rumoca_phase_parse::parse_to_syntax;
 use rumoca_session::parsing::ast::ClassDef;
 use rumoca_session::parsing::ClassType;
 
@@ -56,6 +56,11 @@ struct ClassEntry {
 struct DocCache {
     source_hash: u64,
     classes: Vec<ClassEntry>,
+    /// Whether the last parse reported errors. When `classes` is
+    /// non-empty despite this being true, rumoca's recovery salvaged
+    /// part of the file; we still show those classes so a broken
+    /// sibling never makes working classes vanish from the browser.
+    has_parse_errors: bool,
 }
 
 /// The Modelica Twin-Browser section.
@@ -184,14 +189,27 @@ impl BrowserSection for ModelicaSection {
                         continue;
                     };
                     if entry.classes.is_empty() {
+                        // Distinguish empty-draft from broken-file. A
+                        // blank "(no classes yet)" row on a file the
+                        // user just broke looks identical to a healthy
+                        // empty draft — the user thinks their classes
+                        // were deleted. Label the error case explicitly.
+                        let (text, color) = if entry.has_parse_errors {
+                            (
+                                format!("{}  ⚠ parse error", display_name),
+                                egui::Color32::from_rgb(220, 160, 60),
+                            )
+                        } else {
+                            (
+                                format!("{}  (no classes yet)", display_name),
+                                ui.visuals().weak_text_color(),
+                            )
+                        };
                         ui.label(
-                            egui::RichText::new(format!(
-                                "{}  (no classes yet)",
-                                display_name
-                            ))
-                            .weak()
-                            .small()
-                            .italics(),
+                            egui::RichText::new(text)
+                                .color(color)
+                                .small()
+                                .italics(),
                         );
                         continue;
                     }
@@ -219,11 +237,13 @@ impl ModelicaSection {
         if self.cache.get(&doc_id).map(|c| c.source_hash) == Some(hash) {
             return;
         }
+        let (classes, has_parse_errors) = parse_classes(source);
         self.cache.insert(
             doc_id,
             DocCache {
                 source_hash: hash,
-                classes: parse_classes(source),
+                classes,
+                has_parse_errors,
             },
         );
     }
@@ -244,11 +264,16 @@ fn hash_source(s: &str) -> u64 {
 /// Parse a `.mo` source into a tree of [`ClassEntry`] keyed by
 /// qualified path. Recursive — packages with nested classes produce
 /// nested children.
-fn parse_classes(source: &str) -> Vec<ClassEntry> {
-    let Ok(ast) = parse_to_ast(source, "twin.mo") else {
-        return Vec::new();
-    };
-    collect_classes(&ast.classes, "")
+///
+/// Uses rumoca's error-recovering `parse_to_syntax` so that a syntax
+/// error in one class doesn't wipe every class out of the browser.
+/// Returns the best-effort class tree plus whether the parse reported
+/// errors, so the caller can distinguish "empty draft" from "broken
+/// file" in the UI.
+fn parse_classes(source: &str) -> (Vec<ClassEntry>, bool) {
+    let syntax = parse_to_syntax(source, "twin.mo");
+    let ast = syntax.best_effort();
+    (collect_classes(&ast.classes, ""), syntax.has_errors())
 }
 
 /// Walk an `IndexMap<String, ClassDef>` building [`ClassEntry`]
@@ -439,7 +464,8 @@ mod tests {
 model A end A;
 model B "with description" end B;
 "#;
-        let cs = parse_classes(src);
+        let (cs, errors) = parse_classes(src);
+        assert!(!errors);
         assert_eq!(cs.len(), 2);
         assert_eq!(cs[0].short_name, "A");
         assert_eq!(cs[0].qualified_path, "A");
@@ -455,7 +481,8 @@ package P
   model Other "x" end Other;
 end P;
 "#;
-        let cs = parse_classes(src);
+        let (cs, errors) = parse_classes(src);
+        assert!(!errors);
         assert_eq!(cs.len(), 1);
         assert_eq!(cs[0].short_name, "P");
         assert!(matches!(cs[0].kind, ClassType::Package));
@@ -466,7 +493,41 @@ end P;
 
     #[test]
     fn empty_source_returns_empty() {
-        assert!(parse_classes("").is_empty());
+        let (cs, errors) = parse_classes("");
+        assert!(cs.is_empty());
+        assert!(!errors);
+    }
+
+    #[test]
+    fn broken_sibling_class_does_not_wipe_the_others() {
+        // Primary regression guard for the "classes disappear from
+        // browser when file invalid" bug: a syntax error in the last
+        // class must not remove the preceding healthy ones from the
+        // tree. Uses rumoca's error recovery via `parse_to_syntax`.
+        let src = r#"
+model Good1 end Good1;
+model Good2 end Good2;
+model Broken
+    Real x =   // missing RHS, broken on purpose
+end Broken;
+"#;
+        let (cs, errors) = parse_classes(src);
+        assert!(errors, "parse should report errors on the broken class");
+        let names: Vec<&str> = cs.iter().map(|c| c.short_name.as_str()).collect();
+        assert!(
+            names.contains(&"Good1") && names.contains(&"Good2"),
+            "healthy sibling classes must survive recovery, got {names:?}"
+        );
+    }
+
+    #[test]
+    fn totally_broken_file_signals_error_even_when_empty() {
+        // Second half of the bug fix: when recovery yields zero
+        // classes we must still tell the UI it was a parse error so
+        // the browser can distinguish "empty draft" from "broken
+        // file" in its empty-state label.
+        let (_cs, errors) = parse_classes("model ");
+        assert!(errors);
     }
 
     #[test]
@@ -479,7 +540,7 @@ record R end R;
 package P end P;
 function F end F;
 "#;
-        let cs = parse_classes(src);
+        let (cs, _errors) = parse_classes(src);
         let kinds: Vec<&ClassType> = cs.iter().map(|c| &c.kind).collect();
         // Don't `use ClassType::*` — `Function` collides with
         // `bevy::reflect::Function` re-exported through other paths.
@@ -499,7 +560,7 @@ function F end F;
     #[test]
     fn fixture_file_parses() {
         let src = include_str!("../../../../assets/models/AnnotatedRocketStage.mo");
-        let cs = parse_classes(src);
+        let (cs, _errors) = parse_classes(src);
         // Top level: one package.
         assert_eq!(cs.len(), 1);
         assert_eq!(cs[0].short_name, "AnnotatedRocketStage");

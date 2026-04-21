@@ -530,6 +530,16 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
 
         for cmd in to_process {
             let tx_inner = tx.clone();
+            // Instrumentation for the "sometimes stuck" class of bugs:
+            // when the worker hangs (usually inside a pathological
+            // rumoca compile on a malformed model), the main-thread
+            // UI sees no progress and no log breadcrumb. These bracket
+            // logs let us see exactly which command + model was
+            // in-flight and how long it actually took, so a stall is
+            // visible in `RUST_LOG=info` output instead of silent.
+            let cmd_label = command_label(&cmd);
+            let cmd_started = std::time::Instant::now();
+            log::info!("[worker] begin: {}", cmd_label);
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 match cmd {
                     ModelicaCommand::Reset { entity, session_id } => {
@@ -822,6 +832,21 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                 }
             }));
 
+            let elapsed = cmd_started.elapsed();
+            // Flag anything slow enough that a user would perceive it
+            // as "stuck" at WARN so it shows up even without verbose
+            // logging. The 2s threshold is well above a typical MSL
+            // compile (<500ms) but below "waited through it" (>5s).
+            if elapsed > std::time::Duration::from_secs(2) {
+                log::warn!(
+                    "[worker] end: {} took {:?} (slow — possible stall)",
+                    cmd_label,
+                    elapsed
+                );
+            } else {
+                log::info!("[worker] end: {} took {:?}", cmd_label, elapsed);
+            }
+
             if let Err(_) = result {
                 let _ = tx.send(ModelicaResult {
                     entity: Entity::PLACEHOLDER,
@@ -833,6 +858,25 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                 });
             }
         }
+    }
+}
+
+/// One-line identifier for a `ModelicaCommand`, used in worker
+/// instrumentation logs. Includes the model name where available so
+/// a stall can be pinned to a specific source.
+fn command_label(cmd: &ModelicaCommand) -> String {
+    match cmd {
+        ModelicaCommand::Step { model_name, entity, .. } => {
+            format!("Step model={model_name} entity={entity:?}")
+        }
+        ModelicaCommand::Compile { model_name, entity, .. } => {
+            format!("Compile model={model_name} entity={entity:?}")
+        }
+        ModelicaCommand::UpdateParameters { model_name, entity, .. } => {
+            format!("UpdateParameters model={model_name} entity={entity:?}")
+        }
+        ModelicaCommand::Reset { entity, .. } => format!("Reset entity={entity:?}"),
+        ModelicaCommand::Despawn { entity } => format!("Despawn entity={entity:?}"),
     }
 }
 
