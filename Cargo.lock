@@ -6331,6 +6331,8 @@ dependencies = [
  "rumoca-phase-parse",
  "rumoca-session",
  "rumoca-sim",
+ "rumoca-tool-fmt",
+ "rumoca-tool-lint",
  "serde",
  "serde_json",
  "usvg",
@@ -9294,6 +9296,28 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "rumoca-tool-fmt"
+version = "0.8.12"
+source = "git+https://github.com/LunCoSim/rumoca?branch=main#ad86b2c5a6f3ea468407c8a5d49228b980ab3cdc"
+dependencies = [
+ "rumoca-session",
+ "serde",
+ "thiserror 2.0.18",
+ "toml",
+]
+
+[[package]]
+name = "rumoca-tool-lint"
+version = "0.8.12"
+source = "git+https://github.com/LunCoSim/rumoca?branch=main#ad86b2c5a6f3ea468407c8a5d49228b980ab3cdc"
+dependencies = [
+ "rumoca-session",
+ "serde",
+ "thiserror 2.0.18",
+ "toml",
 ]
 
 [[package]]

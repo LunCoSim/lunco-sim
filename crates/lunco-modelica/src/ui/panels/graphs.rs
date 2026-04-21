@@ -96,8 +96,19 @@ impl Panel for GraphsPanel {
             }
 
             // Right-aligned controls — reserve just enough width for
-            // the icon and push everything else left.
+            // the icons and push everything else left.
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let new_plot = ui
+                    .small_button("➕")
+                    .on_hover_text(
+                        "New plot panel (➕) — opens a fresh tab so you can plot \
+                         a different signal set side-by-side with this one",
+                    );
+                if new_plot.clicked() {
+                    world
+                        .commands()
+                        .trigger(crate::ui::commands::NewPlotPanel::default());
+                }
                 let fit = ui
                     .small_button("📐")
                     .on_hover_text("Auto-fit (📐) — rescale axes to current data");

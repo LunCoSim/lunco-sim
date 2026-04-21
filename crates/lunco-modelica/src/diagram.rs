@@ -142,7 +142,12 @@ impl ModelicaComponentBuilder {
 
             // Add components as nodes
             for (comp_name, comp) in &merged {
-                let ports = extract_component_ports(comp);
+                let ports = ports_for_component(
+                    comp,
+                    &target,
+                    &self.ast,
+                    &crate::class_cache::peek_msl_class_cached,
+                );
                 let qualified = format!("{}.{}", target, comp_name);
                 let node_id = graph.add_node_named(
                     NodeKind::Component,
@@ -395,14 +400,37 @@ impl ModelicaComponentBuilder {
         if let Some(name) = &self.target_class {
             return name.clone();
         }
-        // Find first non-package class
+        // Find first non-package class. Prepend the file's `within`
+        // clause so the returned target is fully-qualified — extends
+        // resolution walks the scope chain off this name, and a bare
+        // short name (e.g. `"PIDCopy"`) leaves `extends Interfaces.SISO`
+        // with no parent to walk up to. With `within`-prefixing,
+        // `Modelica.Blocks.Continuous.PIDCopy` lets the chain reach
+        // `Modelica.Blocks.Interfaces.SISO`.
+        let within_prefix: String = self
+            .ast
+            .within
+            .as_ref()
+            .map(|w| w.to_string())
+            .unwrap_or_default();
+        let qualify = |short: &str| -> String {
+            if within_prefix.is_empty() {
+                short.to_string()
+            } else {
+                format!("{within_prefix}.{short}")
+            }
+        };
         for (name, class) in &self.ast.classes {
             if class.class_type != ClassType::Package {
-                return name.clone();
+                return qualify(name);
             }
         }
-        // Fallback to first class
-        self.ast.classes.keys().next().cloned().unwrap_or_default()
+        self.ast
+            .classes
+            .keys()
+            .next()
+            .map(|n| qualify(n))
+            .unwrap_or_default()
     }
 
     fn get_target_class(&self, name: &str) -> Option<&ClassDef> {
@@ -568,7 +596,23 @@ pub(crate) fn collect_inherited_components_with(
                 continue;
             }
             seen.insert(name.clone());
-            out.push((name.clone(), comp.clone()));
+            // Inherited component types (e.g. SISO declares
+            // `RealInput u`) are resolved in the *base*'s scope, not
+            // the deriving class's. Without rewriting, the conversion
+            // at `panels/diagram.rs:2034` looks up "RealInput" in
+            // PID's scope (which doesn't import it) and the node gets
+            // dropped. Pre-resolve to a fully-qualified path here so
+            // the palette lookup succeeds.
+            let mut comp = comp.clone();
+            let resolved = resolve_type_in_scope(
+                &comp.type_name.to_string(),
+                &base_qpath,
+                msl_resolve,
+            );
+            if let Some(q) = resolved {
+                comp.type_name = rumoca_session::parsing::ast::Name::from_string(&q);
+            }
+            out.push((name.clone(), comp));
         }
         let shim = StoredDefinition::default();
         for (name, comp) in collect_inherited_components_with(
@@ -586,6 +630,151 @@ pub(crate) fn collect_inherited_components_with(
         }
     }
     out
+}
+
+/// Discover the connector ports of `comp` by looking up its type
+/// class. Walks the type's own components + its `extends` chain;
+/// any component whose type is itself a `connector` (or whose
+/// `causality` is Input/Output) is exposed as a port on the
+/// returned list.
+///
+/// Falls back to [`extract_component_ports`]'s causality heuristic
+/// when the type can't be resolved (cache cold or non-MSL local
+/// class) — keeps the projection robust on first drill-in before
+/// the pre-warm has populated the cache.
+fn ports_for_component(
+    comp: &Component,
+    owner_qualified_path: &str,
+    ast: &StoredDefinition,
+    msl_resolve: &dyn Fn(&str) -> Option<std::sync::Arc<ClassDef>>,
+) -> Vec<ComponentPort> {
+    let type_ref = comp.type_name.to_string();
+    if type_ref.is_empty() {
+        return extract_component_ports(comp);
+    }
+
+    let candidates = scope_chain_candidates(&type_ref, Some(owner_qualified_path));
+    let mut found_local: Option<&ClassDef> = None;
+    let mut found_msl: Option<std::sync::Arc<ClassDef>> = None;
+    let mut hit_qpath: Option<String> = None;
+    for cand in &candidates {
+        if let Some(c) = find_class_by_qualified_name(ast, cand) {
+            found_local = Some(c);
+            hit_qpath = Some(cand.clone());
+            break;
+        }
+        if let Some(arc) = msl_resolve(cand) {
+            found_msl = Some(arc);
+            hit_qpath = Some(cand.clone());
+            break;
+        }
+    }
+    let (type_class, type_qpath): (&ClassDef, &str) = match (&found_local, &found_msl) {
+        (Some(c), _) => (*c, hit_qpath.as_deref().unwrap_or("")),
+        (None, Some(arc)) => (&**arc, hit_qpath.as_deref().unwrap_or("")),
+        (None, None) => return extract_component_ports(comp),
+    };
+
+    // If the type itself is a connector class, the component is a
+    // single connector instance — expose one port named after the
+    // component's own name. Empty for the projection's empty-port
+    // fallback to handle (resolved to index 0).
+    use rumoca_session::parsing::ClassType;
+    if matches!(type_class.class_type, ClassType::Connector) {
+        return vec![ComponentPort::output(&comp.name).with_type(&type_ref)];
+    }
+
+    // Otherwise: walk the type class's components (direct + inherited)
+    // and emit a port for each connector-typed sub-component. This
+    // is what surfaces `u`/`y` on a `Gain` instance (Gain extends
+    // SISO; SISO has `RealInput u`, `RealOutput y`).
+    let mut sub_components: Vec<(String, Component)> = type_class
+        .components
+        .iter()
+        .map(|(n, c)| (n.clone(), c.clone()))
+        .collect();
+    let direct_names: std::collections::HashSet<String> =
+        sub_components.iter().map(|(n, _)| n.clone()).collect();
+    for (name, sub) in
+        collect_inherited_components_with(type_class, Some(type_qpath), ast, 0, msl_resolve)
+    {
+        if !direct_names.contains(&name) {
+            sub_components.push((name, sub));
+        }
+    }
+
+    let mut ports = Vec::new();
+    for (sub_name, sub) in &sub_components {
+        let sub_type = sub.type_name.to_string();
+        // Causality wins when present (input/output declarations are
+        // unambiguously ports). Otherwise consult the type's class.
+        use rumoca_session::parsing::ast::Causality;
+        let is_port = match sub.causality {
+            Causality::Input(_) | Causality::Output(_) => true,
+            Causality::Empty => is_connector_type(&sub_type, type_qpath, ast, msl_resolve),
+        };
+        if !is_port {
+            continue;
+        }
+        let mut port = ComponentPort::output(sub_name);
+        if !sub_type.is_empty() {
+            port = port.with_type(&sub_type);
+        }
+        ports.push(port);
+    }
+
+    if ports.is_empty() {
+        // No connectors discovered (e.g. a Real-typed signal class
+        // with only flow variables) — keep the heuristic path so
+        // bare wires still attach somewhere.
+        return extract_component_ports(comp);
+    }
+    ports
+}
+
+/// True when `type_ref` resolves to a `connector` class via the
+/// scope chain anchored at `owner_qualified_path`.
+fn is_connector_type(
+    type_ref: &str,
+    owner_qualified_path: &str,
+    ast: &StoredDefinition,
+    msl_resolve: &dyn Fn(&str) -> Option<std::sync::Arc<ClassDef>>,
+) -> bool {
+    use rumoca_session::parsing::ClassType;
+    if type_ref.is_empty() {
+        return false;
+    }
+    let candidates = scope_chain_candidates(type_ref, Some(owner_qualified_path));
+    for cand in &candidates {
+        if let Some(c) = find_class_by_qualified_name(ast, cand) {
+            return matches!(c.class_type, ClassType::Connector);
+        }
+        if let Some(arc) = msl_resolve(cand) {
+            return matches!(arc.class_type, ClassType::Connector);
+        }
+    }
+    false
+}
+
+/// Resolve a short-form type reference to a fully-qualified path
+/// using a class's scope chain. Returns `None` if no candidate
+/// resolves via the supplied MSL resolver. Already-qualified names
+/// (containing a `.`) are returned unchanged.
+fn resolve_type_in_scope(
+    type_ref: &str,
+    class_qualified_path: &str,
+    msl_resolve: &dyn Fn(&str) -> Option<std::sync::Arc<ClassDef>>,
+) -> Option<String> {
+    if type_ref.contains('.') {
+        return Some(type_ref.to_string());
+    }
+    let candidates = scope_chain_candidates(type_ref, Some(class_qualified_path));
+    for cand in &candidates {
+        if msl_resolve(cand).is_some() {
+            return Some(cand.clone());
+        }
+    }
+    None
 }
 
 /// Generate candidate fully-qualified names for resolving a short-form

@@ -240,6 +240,14 @@ impl Plugin for ModelicaCommandsPlugin {
             .register_type::<Redo>()
             .register_type::<Exit>()
             .register_type::<GetFile>()
+            .register_type::<FormatDocument>()
+            .register_type::<OpenFile>()
+            .register_type::<InspectActiveDoc>()
+            .register_type::<CompileActiveModel>()
+            .register_type::<SaveActiveDocument>()
+            .register_type::<SaveActiveDocumentAs>()
+            .register_type::<NewPlotPanel>()
+            .register_type::<AddSignalToPlot>()
             .add_observer(on_focus_document_by_name)
             .add_observer(on_set_view_mode)
             .add_observer(on_set_zoom)
@@ -252,11 +260,23 @@ impl Plugin for ModelicaCommandsPlugin {
             .add_observer(on_redo)
             .add_observer(on_exit)
             .add_observer(on_get_file)
+            .add_observer(on_format_document)
+            .add_observer(on_open_file)
+            .add_observer(on_inspect_active_doc)
+            .add_observer(on_compile_active_model)
+            .add_observer(on_save_active_document)
+            .add_observer(on_save_active_document_as)
+            .add_observer(on_new_plot_panel)
+            .add_observer(on_add_signal_to_plot)
             .add_observer(resolve_editor_intent)
             .add_observer(resolve_new_document_intent)
             .add_systems(
                 bevy::prelude::Update,
-                drain_pending_tab_closes,
+                (
+                    drain_pending_tab_closes,
+                    update_status_bar,
+                    publish_unsaved_modelica_docs,
+                ),
             )
             .add_systems(
                 bevy_egui::EguiPrimaryContextPass,
@@ -1698,12 +1718,12 @@ fn on_fit_canvas(trigger: On<FitCanvas>, mut commands: Commands) {
         let Some(mut state) = world.get_resource_mut::<CanvasDiagramState>() else {
             return;
         };
-        let docstate = state.get_mut(doc);
-        if let Some(bounds) = docstate.canvas.scene.bounds() {
-            let sr = approx_screen_rect();
-            let (c, z) = docstate.canvas.viewport.fit_values(bounds, sr, 40.0);
-            docstate.canvas.viewport.set_target(c, z);
-        }
+        // Defer to next render so Fit uses the canvas widget's
+        // actual rect, not a hardcoded approximation. Without this
+        // the observer-side fit picks zoom for an 800×600 viewport
+        // even when the real one is 1700×800, leaving content
+        // clipped at the top under the toolbar.
+        state.get_mut(doc).pending_fit = true;
     });
 }
 
@@ -1820,6 +1840,503 @@ pub struct PanCanvas {
 #[derive(Event, Reflect, Clone, Debug, Default)]
 #[reflect(Event, Default)]
 pub struct Exit {}
+
+/// Run rumoca-tool-fmt on the active document and replace its
+/// source with the formatted text. Single undo step. No-op on
+/// read-only tabs or when formatting fails (parse errors etc.).
+#[derive(Event, Reflect, Clone, Debug, Default)]
+#[reflect(Event, Default)]
+pub struct FormatDocument {
+    /// 0 ⇒ active document.
+    pub doc: u64,
+}
+
+fn on_format_document(trigger: On<FormatDocument>, mut commands: Commands) {
+    let raw = trigger.event().doc;
+    commands.queue(move |world: &mut World| {
+        use crate::document::ModelicaOp;
+        let doc = if raw == 0 {
+            resolve_active_doc(world)
+        } else {
+            Some(DocumentId::new(raw))
+        };
+        let Some(doc) = doc else {
+            bevy::log::warn!("[FormatDocument] no active document");
+            return;
+        };
+        let workbench_read_only = world
+            .get_resource::<crate::ui::WorkbenchState>()
+            .and_then(|s| s.open_model.as_ref().map(|m| m.read_only))
+            .unwrap_or(false);
+        if workbench_read_only {
+            bevy::log::info!("[FormatDocument] tab is read-only — skipping");
+            return;
+        }
+        let Some(registry) = world.get_resource::<crate::ui::state::ModelicaDocumentRegistry>()
+        else {
+            return;
+        };
+        let Some(host) = registry.host(doc) else { return };
+        let original = host.document().source().to_string();
+        let opts = rumoca_tool_fmt::FormatOptions::default();
+        let formatted = match rumoca_tool_fmt::format_with_source_name(
+            &original, &opts, "<editor>",
+        ) {
+            Ok(s) => s,
+            Err(e) => {
+                bevy::log::warn!("[FormatDocument] format failed: {}", e);
+                return;
+            }
+        };
+        if formatted == original {
+            return;
+        }
+        // Route through the document op pipeline so undo/redo +
+        // canvas reprojection both work the same way as a manual
+        // edit.
+        let mut registry = world.resource_mut::<crate::ui::state::ModelicaDocumentRegistry>();
+        if let Some(host) = registry.host_mut(doc) {
+            let _ = host.apply(ModelicaOp::ReplaceSource { new: formatted });
+        }
+    });
+}
+
+/// Publish every Untitled (in-memory, not yet saved) Modelica
+/// document into the cross-domain `UnsavedDocs` resource the Files
+/// browser section reads.
+///
+/// **Change-driven, not per-frame.** Bevy's `Res::is_changed()` flips
+/// only on the tick when something mutated the registry (allocate,
+/// install_prebuilt, remove_document, set_origin, …). When neither
+/// the registry nor the cross-domain resource has ticked since our
+/// last write, bail without recomputing — saves walking the doc
+/// list every frame for a UI surface that changes a few times per
+/// session.
+fn publish_unsaved_modelica_docs(
+    registry: Res<crate::ui::state::ModelicaDocumentRegistry>,
+    unsaved: Option<ResMut<lunco_workbench::UnsavedDocs>>,
+) {
+    let Some(mut unsaved) = unsaved else { return };
+    if !registry.is_changed() && !unsaved.is_added() {
+        return;
+    }
+    unsaved.entries = registry
+        .iter()
+        // Workspace = user content. Read-only library docs (MSL
+        // classes the user clicked into) aren't part of the
+        // workspace — same filter the Modelica section uses.
+        .filter(|(_, host)| {
+            let o = host.document().origin();
+            o.is_writable() || o.is_untitled()
+        })
+        .map(|(_, host)| {
+            let origin = host.document().origin();
+            lunco_workbench::UnsavedDocEntry {
+                display_name: origin.display_name(),
+                kind: "Modelica".into(),
+                is_unsaved: origin.is_untitled(),
+            }
+        })
+        .collect();
+}
+
+/// Surface the active document's compile state + workspace activity
+/// in the workbench status bar so users can tell at a glance what's
+/// running. Reads-only — runs every frame, writes via
+/// `WorkbenchLayout::set_status`.
+///
+/// Status priority (first-match wins):
+///   1. Compile in flight on active doc → "Compiling <model>…".
+///   2. Compile error on active doc → "Compile error".
+///   3. Compile ready on active doc → "Compiled <model>".
+///   4. No active doc → "ready".
+fn update_status_bar(
+    workbench: Res<crate::ui::WorkbenchState>,
+    workspace: Option<Res<lunco_workbench::WorkspaceResource>>,
+    compile_states: Res<crate::ui::CompileStates>,
+    layout: Option<ResMut<lunco_workbench::WorkbenchLayout>>,
+) {
+    let Some(mut layout) = layout else { return };
+    // Re-render only when something a status reader cares about
+    // ticked: the active document changed, the compile state
+    // transitioned, the open model swapped. Cheap idle path —
+    // most frames have no change.
+    let any_change = workbench.is_changed()
+        || compile_states.is_changed()
+        || workspace.as_ref().map(|w| w.is_changed()).unwrap_or(false);
+    if !any_change && !layout.is_added() {
+        return;
+    }
+    let active_doc = workspace.as_ref().and_then(|w| w.active_document);
+    let model_name = workbench
+        .open_model
+        .as_ref()
+        .and_then(|m| m.detected_name.clone())
+        .or_else(|| {
+            workbench
+                .open_model
+                .as_ref()
+                .map(|m| m.model_path.clone())
+        })
+        .unwrap_or_else(|| "(untitled)".to_string());
+
+    let text = match active_doc {
+        None => "ready".to_string(),
+        Some(doc) => match compile_states.state_of(doc) {
+            crate::ui::CompileState::Compiling => format!("⏳ Compiling {model_name}…"),
+            crate::ui::CompileState::Error => format!("⚠ Compile error in {model_name}"),
+            crate::ui::CompileState::Ready => format!("✓ Compiled {model_name}"),
+            crate::ui::CompileState::Idle => format!("● {model_name}"),
+        },
+    };
+    layout.set_status(text);
+}
+
+/// API-accessible Save / SaveAs.
+///
+/// `SaveActiveDocument` writes through the existing `SaveDocument`
+/// pipeline (no path picker — fails if the doc is Untitled). Use
+/// `SaveActiveDocumentAs` to bind a path explicitly without the
+/// modal picker; this is the form scripts and tests should use.
+#[derive(Event, Reflect, Clone, Debug, Default)]
+#[reflect(Event, Default)]
+pub struct SaveActiveDocument {
+    /// 0 ⇒ active document.
+    pub doc: u64,
+}
+
+#[derive(Event, Reflect, Clone, Debug, Default)]
+#[reflect(Event, Default)]
+pub struct SaveActiveDocumentAs {
+    /// 0 ⇒ active document.
+    pub doc: u64,
+    /// Target filesystem path. Bypasses the native picker so
+    /// automation can save without GUI interaction.
+    pub path: String,
+}
+
+fn on_save_active_document(trigger: On<SaveActiveDocument>, mut commands: Commands) {
+    let raw = trigger.event().doc;
+    commands.queue(move |world: &mut World| {
+        let doc = if raw == 0 {
+            resolve_active_doc(world)
+        } else {
+            Some(DocumentId::new(raw))
+        };
+        let Some(doc) = doc else {
+            bevy::log::warn!("[SaveActiveDocument] no active document");
+            return;
+        };
+        world.commands().trigger(SaveDocument { doc });
+    });
+}
+
+fn on_save_active_document_as(
+    trigger: On<SaveActiveDocumentAs>,
+    mut commands: Commands,
+) {
+    let ev = trigger.event().clone();
+    commands.queue(move |world: &mut World| {
+        let doc = if ev.doc == 0 {
+            resolve_active_doc(world)
+        } else {
+            Some(DocumentId::new(ev.doc))
+        };
+        let Some(doc) = doc else {
+            bevy::log::warn!("[SaveActiveDocumentAs] no active document");
+            return;
+        };
+        let path = std::path::PathBuf::from(&ev.path);
+        // Snapshot source, then write through lunco-storage and
+        // rebind the doc origin to the new path — same effect as the
+        // SaveAs picker path, minus the modal.
+        let source = {
+            let registry = world.resource::<crate::ui::state::ModelicaDocumentRegistry>();
+            let Some(host) = registry.host(doc) else { return };
+            host.document().source().to_string()
+        };
+        if let Err(e) = std::fs::write(&path, source.as_bytes()) {
+            bevy::log::warn!("[SaveActiveDocumentAs] write failed {}: {}", path.display(), e);
+            return;
+        }
+        let mut registry = world.resource_mut::<crate::ui::state::ModelicaDocumentRegistry>();
+        if let Some(host) = registry.host_mut(doc) {
+            host.document_mut().set_origin(lunco_doc::DocumentOrigin::File {
+                path: path.clone(),
+                writable: true,
+            });
+        }
+        registry.mark_document_saved(doc);
+        bevy::log::info!(
+            "[SaveActiveDocumentAs] saved {} ({} bytes)",
+            path.display(),
+            source.len(),
+        );
+        world.commands().trigger(DocumentSaved::local(doc));
+    });
+}
+
+/// Open a new time-series plot panel (`VizPanel`) in the bottom dock.
+/// Each call allocates a fresh `VizId` and inserts a `LinePlot`-kind
+/// `VisualizationConfig`. The initial `signals` list (Modelica
+/// dotted variable paths) is bound on creation; more can be added
+/// later via [`AddSignalToPlot`].
+#[derive(Event, Reflect, Clone, Debug, Default)]
+#[reflect(Event, Default)]
+pub struct NewPlotPanel {
+    /// Tab title. Empty ⇒ auto-named "Plot #N".
+    pub title: String,
+    /// Initial signals to plot. Each is a fully-qualified scalar
+    /// variable path (e.g. `"P.y"`).
+    pub signals: Vec<String>,
+}
+
+fn on_new_plot_panel(trigger: On<NewPlotPanel>, mut commands: Commands) {
+    let ev = trigger.event().clone();
+    commands.queue(move |world: &mut World| {
+        use lunco_viz::{
+            kinds::line_plot::LINE_PLOT_KIND, view::ViewTarget, viz::SignalBinding,
+            viz::VisualizationConfig, viz::VizId, SignalRef, VisualizationRegistry,
+        };
+        let id = VizId::next();
+        let title = if ev.title.is_empty() {
+            format!("Plot #{}", id.0)
+        } else {
+            ev.title.clone()
+        };
+        // Bind signals to the first ModelicaModel entity — same
+        // entity Telemetry's checkbox uses. SignalRegistry is keyed
+        // by (entity, path) so a signal bound to the wrong entity
+        // never plots. If no model is loaded, drop binding to
+        // PLACEHOLDER so the plot still opens (empty until the
+        // user simulates and re-plots).
+        let model_entity = world
+            .query::<(bevy::prelude::Entity, &crate::ModelicaModel)>()
+            .iter(world)
+            .next()
+            .map(|(e, _)| e);
+        let inputs: Vec<SignalBinding> = ev
+            .signals
+            .iter()
+            .map(|s| {
+                let entity = model_entity.unwrap_or(bevy::prelude::Entity::PLACEHOLDER);
+                SignalBinding {
+                    source: SignalRef::new(entity, s.clone()),
+                    role: "y".into(),
+                    label: None,
+                    color: None,
+                    visible: true,
+                }
+            })
+            .collect();
+        let mut registry = world.resource_mut::<VisualizationRegistry>();
+        registry.insert(VisualizationConfig {
+            id,
+            title: title.clone(),
+            kind: LINE_PLOT_KIND.clone(),
+            view: ViewTarget::Panel2D,
+            inputs,
+            style: serde_json::Value::Null,
+        });
+        world.commands().trigger(lunco_workbench::OpenTab {
+            kind: lunco_viz::VIZ_PANEL_KIND,
+            instance: id.0,
+        });
+        bevy::log::info!("[NewPlotPanel] opened `{}` (id={})", title, id.0);
+    });
+}
+
+/// Add one signal to an existing plot panel. `plot=0` ⇒ the
+/// singleton default Modelica graph.
+#[derive(Event, Reflect, Clone, Debug, Default)]
+#[reflect(Event, Default)]
+pub struct AddSignalToPlot {
+    pub plot: u64,
+    pub signal: String,
+}
+
+fn on_add_signal_to_plot(trigger: On<AddSignalToPlot>, mut commands: Commands) {
+    let ev = trigger.event().clone();
+    commands.queue(move |world: &mut World| {
+        use lunco_viz::{viz::SignalBinding, viz::VizId, SignalRef, VisualizationRegistry};
+        let id = if ev.plot == 0 {
+            crate::ui::viz::DEFAULT_MODELICA_GRAPH
+        } else {
+            VizId(ev.plot)
+        };
+        let model_entity = world
+            .query::<(bevy::prelude::Entity, &crate::ModelicaModel)>()
+            .iter(world)
+            .next()
+            .map(|(e, _)| e)
+            .unwrap_or(bevy::prelude::Entity::PLACEHOLDER);
+        let mut registry = world.resource_mut::<VisualizationRegistry>();
+        let Some(cfg) = registry.get_mut(id) else {
+            bevy::log::warn!("[AddSignalToPlot] no plot with id={}", ev.plot);
+            return;
+        };
+        let signal_ref = SignalRef::new(model_entity, ev.signal.clone());
+        if cfg.inputs.iter().any(|b| b.source == signal_ref) {
+            return;
+        }
+        cfg.inputs.push(SignalBinding {
+            source: signal_ref,
+            role: "y".into(),
+            label: None,
+            color: None,
+            visible: true,
+        });
+    });
+}
+
+/// API shim for `CompileModel`: same effect (rumoca compile + DAE
+/// + simulator setup) but takes `doc: u64` (0 = active) so it can
+/// be triggered from the reflect-registered API. Inner `CompileModel`
+/// stays as a typed Bevy event for in-process callers; this exposes
+/// it to curl / scripts. Type-check / parse / DAE errors land in
+/// `WorkbenchState.compilation_error` which the Diagnostics panel
+/// already surfaces.
+#[derive(Event, Reflect, Clone, Debug, Default)]
+#[reflect(Event, Default)]
+pub struct CompileActiveModel {
+    /// 0 ⇒ active document.
+    pub doc: u64,
+}
+
+fn on_compile_active_model(trigger: On<CompileActiveModel>, mut commands: Commands) {
+    let raw = trigger.event().doc;
+    commands.queue(move |world: &mut World| {
+        let doc = if raw == 0 {
+            resolve_active_doc(world)
+        } else {
+            Some(DocumentId::new(raw))
+        };
+        let Some(doc) = doc else {
+            bevy::log::warn!("[CompileActiveModel] no active document");
+            return;
+        };
+        world.commands().trigger(CompileModel { doc });
+    });
+}
+
+/// Inspect the active document's parsed AST and log the results
+/// (top-level class names, parse error if any). API automation
+/// uses this to diagnose why a drill-in or projection produced
+/// zero nodes — if the AST is empty, the file failed strict parse.
+#[derive(Event, Reflect, Clone, Debug, Default)]
+#[reflect(Event, Default)]
+pub struct InspectActiveDoc {}
+
+fn on_inspect_active_doc(_trigger: On<InspectActiveDoc>, mut commands: Commands) {
+    commands.queue(|world: &mut World| {
+        let doc = resolve_active_doc(world);
+        let Some(doc) = doc else {
+            bevy::log::warn!("[InspectActiveDoc] no active document");
+            return;
+        };
+        let registry = world.resource::<crate::ui::state::ModelicaDocumentRegistry>();
+        let Some(host) = registry.host(doc) else {
+            bevy::log::warn!("[InspectActiveDoc] doc {} not in registry", doc.raw());
+            return;
+        };
+        let document = host.document();
+        let cache = document.ast();
+        let origin = document.origin();
+        bevy::log::info!(
+            "[InspectActiveDoc] doc={} origin={:?} source_len={} gen={}",
+            doc.raw(),
+            origin.display_name(),
+            document.source().len(),
+            cache.generation,
+        );
+        match cache.result.as_ref() {
+            Ok(ast) => {
+                bevy::log::info!(
+                    "[InspectActiveDoc]   parse OK; within={:?}",
+                    ast.within.as_ref().map(|w| w.to_string()),
+                );
+                fn dump(
+                    name: &str,
+                    class: &rumoca_session::parsing::ast::ClassDef,
+                    depth: usize,
+                ) {
+                    let indent = "  ".repeat(depth + 1);
+                    let comps: Vec<String> = class
+                        .components
+                        .iter()
+                        .map(|(n, c)| format!("{}: {}", n, c.type_name))
+                        .collect();
+                    bevy::log::info!(
+                        "[InspectActiveDoc]{}{} ({:?}) extends={} components=[{}]",
+                        indent,
+                        name,
+                        class.class_type,
+                        class.extends.len(),
+                        comps.join(", "),
+                    );
+                    for (cn, child) in &class.classes {
+                        dump(cn, child, depth + 1);
+                    }
+                }
+                for (n, c) in &ast.classes {
+                    dump(n, c, 0);
+                }
+            }
+            Err(e) => {
+                bevy::log::warn!("[InspectActiveDoc]   parse ERR: {}", e);
+            }
+        }
+    });
+}
+
+/// Open an arbitrary `.mo` file from disk into a new workspace
+/// tab as an Untitled document seeded from the file's contents.
+/// Used by API automation to load bundled examples or external
+/// files without a Twin folder being open.
+#[derive(Event, Reflect, Clone, Debug, Default)]
+#[reflect(Event, Default)]
+pub struct OpenFile {
+    pub path: String,
+}
+
+fn on_open_file(trigger: On<OpenFile>, mut commands: Commands) {
+    let path = trigger.event().path.clone();
+    commands.queue(move |world: &mut World| {
+        let source = match std::fs::read_to_string(&path) {
+            Ok(s) => s,
+            Err(e) => {
+                bevy::log::warn!("[OpenFile] {} read failed: {}", path, e);
+                return;
+            }
+        };
+        let path_buf = std::path::PathBuf::from(&path);
+        let stem = path_buf
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("Opened")
+            .to_string();
+        let mut registry =
+            world.resource_mut::<crate::ui::state::ModelicaDocumentRegistry>();
+        let doc_id = registry.allocate_with_origin(
+            source.clone(),
+            lunco_doc::DocumentOrigin::File {
+                path: path_buf,
+                writable: true,
+            },
+        );
+        // Land in Canvas view so the user sees the diagram.
+        let mut tabs = world.resource_mut::<crate::ui::panels::model_view::ModelTabs>();
+        tabs.ensure(doc_id);
+        if let Some(tab) = tabs.get_mut(doc_id) {
+            tab.view_mode = crate::ui::panels::model_view::ModelViewMode::Canvas;
+        }
+        world.commands().trigger(lunco_workbench::OpenTab {
+            kind: crate::ui::panels::model_view::MODEL_VIEW_KIND,
+            instance: doc_id.raw(),
+        });
+        bevy::log::info!("[OpenFile] opened `{}` as `{}`", path, stem);
+    });
+}
 
 /// Read a file from the filesystem and log its contents to the
 /// console at INFO level. Useful for automation that wants to

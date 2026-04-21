@@ -153,6 +153,9 @@ pub fn refresh_diagnostics(
 
     let ast_gen = host.document().ast().generation;
     let err_hash = hash_str(workbench.compilation_error.as_deref());
+    // Lint depends on source content. AST gen ticks on every source
+    // mutation, so combining (ast_gen, err_hash) is enough — no extra
+    // source hash needed.
 
     // Fast-path: nothing that could affect diagnostics changed.
     if cursor.bound_doc == Some(doc_id)
@@ -189,6 +192,32 @@ pub fn refresh_diagnostics(
             level: LogLevel::Error,
             text: msg.clone(),
         });
+    }
+
+    // 3. Lint findings — `rumoca-tool-lint` runs on the source and
+    // returns warnings/style issues with line+column. Cheap (rumoca
+    // re-uses its parse cache), so running on every change-tick is
+    // fine. Surfaces as Warning-level rows; if a future linter rule
+    // is upgraded to Error, mirror its level here.
+    let source = host.document().source();
+    if !source.is_empty() {
+        let opts = rumoca_tool_lint::LintOptions::default();
+        let display_name = host.document().origin().display_name();
+        for msg in rumoca_tool_lint::lint(source, &display_name, &opts) {
+            let level = match msg.level {
+                rumoca_tool_lint::LintLevel::Error => LogLevel::Error,
+                rumoca_tool_lint::LintLevel::Warning => LogLevel::Warn,
+                _ => LogLevel::Info,
+            };
+            entries.push(LogEntry {
+                at: std::time::Instant::now(),
+                level,
+                text: format!(
+                    "{}:{}:{}  [{}] {}",
+                    msg.file, msg.line, msg.column, msg.rule, msg.message
+                ),
+            });
+        }
     }
 
     diagnostics.replace(entries);

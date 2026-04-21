@@ -69,6 +69,14 @@ usvg = { version = "0.45", default-features = false }
 rumoca-sim = { git = "https://github.com/LunCoSim/rumoca", branch = "main" }
 rumoca-session = { git = "https://github.com/LunCoSim/rumoca", branch = "main" }
 rumoca-phase-parse = { git = "https://github.com/LunCoSim/rumoca", branch = "main" }
+# Modelica formatter — surfaced as a "Format" toolbar button +
+# Ctrl+Shift+F binding. Rewrites the active editor buffer with
+# the canonical layout rumoca-tool-fmt produces.
+rumoca-tool-fmt = { git = "https://github.com/LunCoSim/rumoca", branch = "main" }
+# Modelica linter — surfaced into the Diagnostics panel alongside
+# parse errors. Wraps `rumoca_tool_lint::lint(source, name, opts)`
+# which returns a `Vec<LintMessage>` we map to `LogEntry`s.
+rumoca-tool-lint = { git = "https://github.com/LunCoSim/rumoca", branch = "main" }
 anyhow = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

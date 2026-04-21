@@ -59,6 +59,34 @@ pub const TWIN_BROWSER_PANEL_ID: PanelId = PanelId("lunco.workbench.twin_browser
 // (`lunco-workspace`). This panel reads the active Twin from there
 // each render; there is no panel-local "open twin" resource anymore.
 
+/// One open workspace document — saved-to-disk OR untitled
+/// in-memory. Surfaced in the Files section so the workspace
+/// view stays stable across Save (a Save shouldn't make the
+/// document vanish from the list). Populated by domain plugins
+/// (e.g. lunco-modelica scans its document registry).
+#[derive(Debug, Clone)]
+pub struct UnsavedDocEntry {
+    /// Display name (file stem for saved docs, "Untitled-3.mo"
+    /// for unsaved drafts).
+    pub display_name: String,
+    /// Domain hint shown as a small badge ("Modelica", "USD"…).
+    pub kind: String,
+    /// True when the doc has never been written to disk in this
+    /// session — drives the dirty-dot prefix in the Files
+    /// section. False once the doc has a writable file path
+    /// bound (post-Save / opened from disk).
+    pub is_unsaved: bool,
+}
+
+/// Cross-domain list of workspace documents (saved + unsaved).
+/// Domain plugins **overwrite** this resource when their registry
+/// changes; the Files section reads it to render the workspace
+/// list with per-row dirty markers.
+#[derive(Resource, Default, Debug, Clone)]
+pub struct UnsavedDocs {
+    pub entries: Vec<UnsavedDocEntry>,
+}
+
 /// Registry of [`BrowserSection`] impls contributed by domain plugins.
 ///
 /// Sections render in registration order. The built-in

@@ -35,22 +35,67 @@ impl BrowserSection for FilesSection {
     }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut BrowserCtx) {
-        let Some(twin) = ctx.twin else {
+        // Render workspace documents (saved + unsaved) so the list
+        // stays stable across Save — a Save shouldn't make a doc
+        // disappear from the user's view of "what am I working on."
+        // Unsaved drafts get a `●` orange dirty-dot + italic name;
+        // saved docs render as plain rows with the same kind badge.
+        let docs: Vec<super::UnsavedDocEntry> = ctx
+            .world
+            .get_resource::<super::UnsavedDocs>()
+            .map(|r| r.entries.clone())
+            .unwrap_or_default();
+        if !docs.is_empty() {
             ui.label(
-                egui::RichText::new("Open a Twin or folder to browse files.")
+                egui::RichText::new("Workspace")
+                    .small()
                     .weak()
-                    .italics(),
+                    .strong(),
             );
+            for entry in &docs {
+                ui.horizontal(|ui| {
+                    if entry.is_unsaved {
+                        ui.label(
+                            egui::RichText::new("●")
+                                .color(egui::Color32::from_rgb(220, 160, 60)),
+                        );
+                        ui.label(
+                            egui::RichText::new(&entry.display_name).italics(),
+                        );
+                    } else {
+                        ui.label(egui::RichText::new("  "));
+                        ui.label(egui::RichText::new(&entry.display_name));
+                    }
+                    ui.label(
+                        egui::RichText::new(format!("({})", entry.kind))
+                            .small()
+                            .weak(),
+                    );
+                });
+            }
+            ui.separator();
+        }
+
+        let Some(twin) = ctx.twin else {
+            if docs.is_empty() {
+                ui.label(
+                    egui::RichText::new("Open a Twin or folder to browse files.")
+                        .weak()
+                        .italics(),
+                );
+            }
             return;
         };
 
         let files = twin.files();
         if files.is_empty() {
-            ui.label(
-                egui::RichText::new("(no files found in this Twin)")
-                    .weak()
-                    .italics(),
-            );
+            if docs.is_empty() {
+                ui.label(
+                    egui::RichText::new("(no files found in this Twin)")
+                        .weak()
+                        .italics(),
+                );
+            }
             return;
         }
 
