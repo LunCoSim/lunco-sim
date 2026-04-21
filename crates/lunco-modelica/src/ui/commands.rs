@@ -235,6 +235,7 @@ impl Plugin for ModelicaCommandsPlugin {
             .register_type::<OpenExample>()
             .register_type::<OpenClass>()
             .register_type::<MoveComponent>()
+            .register_type::<PanCanvas>()
             .add_observer(on_focus_document_by_name)
             .add_observer(on_set_view_mode)
             .add_observer(on_set_zoom)
@@ -242,6 +243,7 @@ impl Plugin for ModelicaCommandsPlugin {
             .add_observer(on_open_example)
             .add_observer(on_open_class)
             .add_observer(on_move_component)
+            .add_observer(on_pan_canvas)
             .add_observer(resolve_editor_intent)
             .add_observer(resolve_new_document_intent)
             .add_systems(
@@ -1731,6 +1733,37 @@ pub struct MoveComponent {
     /// way mouse-drag does.
     pub width: f32,
     pub height: f32,
+}
+
+/// Pan the canvas viewport to centre on `(x, y)` in canvas world
+/// coords (+Y down — same frame the projector emits node positions
+/// in). Use it from API tests / automation to position the
+/// viewport before screenshotting.
+#[derive(Event, Reflect, Clone, Debug, Default)]
+#[reflect(Event, Default)]
+pub struct PanCanvas {
+    /// 0 ⇒ active document.
+    pub doc: u64,
+    pub x: f32,
+    pub y: f32,
+}
+
+fn on_pan_canvas(trigger: On<PanCanvas>, mut commands: Commands) {
+    let ev = trigger.event().clone();
+    commands.queue(move |world: &mut World| {
+        let doc = if ev.doc == 0 {
+            resolve_active_doc(world)
+        } else {
+            Some(DocumentId::new(ev.doc))
+        };
+        use crate::ui::panels::canvas_diagram::CanvasDiagramState;
+        let Some(mut state) = world.get_resource_mut::<CanvasDiagramState>() else {
+            return;
+        };
+        let docstate = state.get_mut(doc);
+        let z = docstate.canvas.viewport.zoom;
+        docstate.canvas.viewport.set_target(lunco_canvas::Pos::new(ev.x, ev.y), z);
+    });
 }
 
 fn on_move_component(trigger: On<MoveComponent>, mut commands: Commands) {

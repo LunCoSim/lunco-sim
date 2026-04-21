@@ -717,8 +717,13 @@ fn render_unified_toolbar(
         // Arrange" in one button.
         if view_mode == ModelViewMode::Canvas && !is_read_only {
             ui.separator();
+            // ▦ (U+25A6) instead of 🧹 — the broom emoji is in the
+            // SMP and renders as tofu without a colour-emoji font;
+            // the geometric "square with grid" sits in the basic
+            // multilingual plane and reads visually as "lay out on a
+            // grid" — which is what Auto-Arrange does.
             auto_arrange_clicked = ui
-                .button(if compact { "🧹" } else { "🧹 Auto-Arrange" })
+                .button(if compact { "▦" } else { "▦ Auto-Arrange" })
                 .on_hover_text(
                     "Lay out all components in a grid and write the \
                      positions back into the source as Placement \

@@ -350,6 +350,15 @@ impl Canvas {
 
         // ── Rendering ─────────────────────────────────────────────
         let time = ui.ctx().input(|i| i.time);
+        // Restrict painting to the canvas's allocated rect for the
+        // remainder of this `ui` scope. Without this, layers and
+        // overlays paint via `ctx.ui.painter()` whose clip is the
+        // parent ui's max_rect — so nodes near the top of the
+        // canvas's coordinate space spill out and visually overlap
+        // sibling widgets above (e.g. the model-view toolbar). The
+        // clip is intersected with the existing one, so no
+        // unintended side effects in tightly-laid-out hosts.
+        ui.set_clip_rect(rect);
         {
             // Pass the active tool's preview (ghost edge during a
             // port drag, rubber-band rect during band-select) via

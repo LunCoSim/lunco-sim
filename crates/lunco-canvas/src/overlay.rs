@@ -123,7 +123,18 @@ impl Overlay for NavBarOverlay {
         let bar_rect = egui::Rect::from_min_max(min, max);
 
         let layer_theme = crate::theme::current(ui.ctx());
-        let painter = ui.painter();
+        // Promote the nav bar to a foreground layer so it always
+        // paints on top of canvas content. The previous
+        // `ui.painter()` shared the same layer as the nodes/edges,
+        // so an icon dragged under the bar's screen rect would
+        // visually cover it. Using a dedicated foreground layer
+        // (above the canvas's own layer) keeps the bar always
+        // accessible regardless of node positions.
+        let fg_layer = egui::LayerId::new(
+            egui::Order::Foreground,
+            ui.id().with("canvas_nav_bar"),
+        );
+        let painter = ui.ctx().layer_painter(fg_layer);
         painter.rect_filled(
             bar_rect.translate(egui::vec2(0.0, 2.0)),
             8.0,
@@ -137,11 +148,14 @@ impl Overlay for NavBarOverlay {
             egui::StrokeKind::Outside,
         );
 
-        // Put a child UI inside the bar for button widgets.
+        // Put a child UI inside the bar for button widgets, on the
+        // same foreground layer so widget chrome (button hover bg,
+        // text) also paints above canvas content.
         let mut child = ui.new_child(
             egui::UiBuilder::new()
                 .max_rect(bar_rect.shrink(6.0))
-                .layout(egui::Layout::left_to_right(egui::Align::Center)),
+                .layout(egui::Layout::left_to_right(egui::Align::Center))
+                .layer_id(fg_layer),
         );
         child.spacing_mut().item_spacing = egui::vec2(6.0, 0.0);
 
