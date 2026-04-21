@@ -332,15 +332,49 @@ impl WorkbenchLayout {
         // split_right / split_below, the tree's first leaf in walk
         // order is the left side panel, and new tabs landed inside
         // the Package Browser instead of the center.
+        // Resolve the kind's preferred slot. New instance tabs should
+        // land in the same dock area as their kind's defaults — e.g.
+        // a `VizPanel` (Bottom) opened next to the singleton `Graphs`
+        // tab, NOT in the Center alongside the model view.
+        let preferred_slot = self
+            .instance_panels
+            .get(&kind)
+            .map(|p| p.default_slot());
+        // Build the set of singleton PanelIds occupying each slot so
+        // we can find a leaf hosting any of them.
+        let slot_ids: std::collections::HashSet<PanelId> = match preferred_slot {
+            Some(PanelSlot::Center) => self.center.iter().copied().collect(),
+            Some(PanelSlot::Bottom) => self.bottom.iter().copied().collect(),
+            Some(PanelSlot::SideBrowser) => self.side_browser.iter().copied().collect(),
+            Some(PanelSlot::RightInspector) => self.right_inspector.iter().copied().collect(),
+            _ => std::collections::HashSet::new(),
+        };
         let center_ids: std::collections::HashSet<PanelId> =
             self.center.iter().copied().collect();
         let target_leaf = {
             let main = self.dock.main_surface_mut();
-            find_leaf_matching(main, |t| match *t {
-                TabId::Singleton(id) => center_ids.contains(&id),
-                TabId::Instance { kind: k, .. } => k == kind,
-            })
-            .or_else(|| first_leaf(main))
+            // Priority 1: leaf already hosting another instance of
+            // this kind — keeps families together.
+            find_leaf_matching(main, |t| matches!(*t, TabId::Instance { kind: k, .. } if k == kind))
+                // Priority 2: leaf hosting any singleton in the
+                // kind's preferred slot.
+                .or_else(|| {
+                    find_leaf_matching(main, |t| match *t {
+                        TabId::Singleton(id) => slot_ids.contains(&id),
+                        _ => false,
+                    })
+                })
+                // Priority 3: leaf hosting any Center singleton (the
+                // historical fallback, kept so kinds with no
+                // preferred slot still land somewhere visible).
+                .or_else(|| {
+                    find_leaf_matching(main, |t| match *t {
+                        TabId::Singleton(id) => center_ids.contains(&id),
+                        _ => false,
+                    })
+                })
+                // Priority 4: any leaf at all.
+                .or_else(|| first_leaf(main))
         };
 
         if let Some(leaf) = target_leaf {
