@@ -1,9 +1,8 @@
 {
   "name": "@lunco/mcp-server",
-  "version": "0.1.0",
-  "description": "MCP server exposing LunCoSim HTTP API commands as MCP tools",
+  "version": "0.2.0",
+  "description": "MCP server for LunCoSim - exposes simulation commands as MCP tools",
   "type": "module",
-  "main": "src/index.js",
   "bin": {
     "lunco-mcp": "./src/index.js"
   },
@@ -11,10 +10,13 @@
     "start": "node src/index.js",
     "dev": "node --watch src/index.js"
   },
-  "keywords": ["mcp", "lunco", "simulation"],
+  "keywords": ["mcp", "lunco", "simulation", "modelica"],
   "author": "",
   "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }

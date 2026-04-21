@@ -9,12 +9,6 @@ use crate::{
     schema::{ApiRequest, ApiResponse},
 };
 
-#[derive(Debug, Deserialize)]
-pub struct CommandRequest {
-    pub command: String,
-    pub params: Option<serde_json::Value>,
-}
-
 #[derive(Debug, Serialize)]
 pub struct ApiResponseEnvelope {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -25,15 +19,79 @@ pub struct ApiResponseEnvelope {
     pub error: Option<String>,
 }
 
-pub async fn execute_command(
-    State(bridge): State<HttpBridge>,
-    Json(req): Json<CommandRequest>,
-) -> impl IntoResponse {
-    let api_req = ApiRequest::ExecuteCommand {
-        command: req.command.clone(),
-        params: req.params.clone().unwrap_or_else(|| serde_json::json!({})),
-    };
+/// Legacy request format:
+/// {"command": "...", "params": {...}}
+#[derive(Debug, Deserialize)]
+pub struct LegacyCommandRequest {
+    pub command: String,
+    pub params: Option<serde_json::Value>,
+}
 
+impl From<LegacyCommandRequest> for ApiRequest {
+    fn from(req: LegacyCommandRequest) -> Self {
+        ApiRequest::ExecuteCommand { command: req.command, params: req.params.unwrap_or_default() }
+    }
+}
+
+/// Unified input that handles both tagged and legacy formats.
+#[derive(Debug, Deserialize)]
+pub struct ApiRequestUnified {
+    #[serde(rename = "type", default)]
+    pub type_field: Option<String>,
+    pub command: Option<String>,
+    pub params: Option<serde_json::Value>,
+    pub id: Option<String>,
+    pub language: Option<String>,
+    pub code: Option<String>,
+    pub filter: Option<serde_json::Value>,
+}
+
+impl From<ApiRequestUnified> for ApiRequest {
+    fn from(env: ApiRequestUnified) -> Self {
+        match env.type_field.as_deref() {
+            Some("ExecuteCommand") => ApiRequest::ExecuteCommand {
+                command: env.command.unwrap_or_default(),
+                params: env.params.unwrap_or_default(),
+            },
+            Some("DiscoverSchema") => ApiRequest::DiscoverSchema,
+            Some("ListEntities") => ApiRequest::ListEntities,
+            Some("QueryEntity") => ApiRequest::QueryEntity {
+                id: env.id.unwrap_or_default().parse().unwrap_or_default(),
+            },
+            Some("ExecuteScript") => ApiRequest::ExecuteScript {
+                language: env.language.unwrap_or_default(),
+                code: env.code.unwrap_or_default(),
+            },
+            Some("SubscribeTelemetry") => ApiRequest::SubscribeTelemetry {
+                filter: env.filter.and_then(|v| serde_json::from_value(v).ok()),
+            },
+            None if env.command.is_some() => {
+                // Legacy format: {"command": "...", "params": {...}}
+                ApiRequest::ExecuteCommand {
+                    command: env.command.unwrap_or_default(),
+                    params: env.params.unwrap_or_default(),
+                }
+            }
+            _ => ApiRequest::ExecuteCommand {
+                command: env.type_field.unwrap_or_default(),
+                params: serde_json::json!({}),
+            },
+        }
+    }
+}
+
+pub async fn handle_api_commands(
+    State(bridge): State<HttpBridge>,
+    Json(req): Json<ApiRequestUnified>,
+) -> impl IntoResponse {
+    let api_req: ApiRequest = req.into();
+    execute_api_request(bridge, api_req).await
+}
+
+pub async fn execute_api_request(
+    bridge: HttpBridge,
+    api_req: ApiRequest,
+) -> impl IntoResponse {
     let response = match bridge.execute(api_req).await {
         Ok(resp) => resp,
         Err(_) => ApiResponse::Error { code: 500, message: "Failed to process request".to_string() },

@@ -42,7 +42,7 @@ pub fn spawn_server(config: HttpServerConfig, bridge: HttpBridge) {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
             let app = axum::Router::new()
-                .route("/api/commands", axum::routing::post(http::execute_command))
+                .route("/api/commands", axum::routing::post(http::handle_api_commands))
                 .with_state(bridge);
             
             let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{}", port)).await.unwrap();

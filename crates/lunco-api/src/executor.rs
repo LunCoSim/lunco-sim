@@ -9,11 +9,12 @@
 //! - `On<ApiCommandEvent>` for API triggers (downcast the command)
 
 use bevy::prelude::*;
-use bevy::reflect::{TypeRegistry, NamedField};
+use bevy::reflect::TypeRegistry;
 use std::io::Cursor;
 use crate::{
     registry::ApiEntityRegistry,
-    schema::{ApiErrorCode, ApiRequest, ApiResponse, ApiSchema, CommandSchema, FieldSchema},
+    schema::{ApiErrorCode, ApiRequest, ApiResponse, ApiSchema},
+    discovery::discover_commands,
 };
 
 /// Events that transport adapters send to request API operations.
@@ -282,27 +283,6 @@ fn execute_request(
             Some(ApiResponse::ok(serde_json::json!({ "message": "Subscription created" })))
         }
     }
-}
-
-/// Discover all typed commands from the type registry.
-fn discover_commands(type_registry: &TypeRegistry) -> Vec<CommandSchema> {
-    type_registry.iter()
-        .filter_map(|reg| {
-            let info = reg.type_info();
-            if !matches!(info, bevy::reflect::TypeInfo::Struct(_)) { return None; }
-            let struct_info = match info {
-                bevy::reflect::TypeInfo::Struct(s) => s,
-                _ => return None,
-            };
-            let short_name = info.type_path_table().short_path().to_string();
-            if short_name.starts_with("Api") || short_name.starts_with("Telemetry") { return None; }
-            let fields: Vec<FieldSchema> = struct_info.iter().map(|f: &NamedField| FieldSchema {
-                name: f.name().to_string(),
-                type_name: f.type_path().to_string(),
-            }).collect();
-            Some(CommandSchema { name: short_name, fields })
-        })
-        .collect()
 }
 
 use bevy::render::view::screenshot::ScreenshotCaptured;

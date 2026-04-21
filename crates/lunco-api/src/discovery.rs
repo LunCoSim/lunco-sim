@@ -1,31 +1,22 @@
 //! Schema discovery — tells API clients what commands exist.
 
 use bevy::prelude::*;
-use bevy::reflect::TypeInfo;
+use bevy::reflect::{TypeInfo, TypeRegistry};
 use crate::schema::{ApiSchema, CommandSchema, FieldSchema};
 
-/// Builds the API schema by introspecting the ECS world.
-pub fn discover_schema(world: &World) -> ApiSchema {
-    let commands = discover_commands(world);
-    ApiSchema { commands }
-}
-
-fn discover_commands(world: &World) -> Vec<CommandSchema> {
-    let type_registry = world.resource::<AppTypeRegistry>();
-    let registry_read = type_registry.read();
-
-    registry_read.iter()
+/// Discover LunCo commands from the type registry.
+/// Filters to only types from `lunco_*` crates that have `ReflectEvent`.
+pub(crate) fn discover_commands(type_registry: &TypeRegistry) -> Vec<CommandSchema> {
+    type_registry.iter()
         .filter_map(|reg| {
             let info = reg.type_info();
             if !matches!(info, TypeInfo::Struct(_)) { return None; }
-            let struct_info = match info {
-                TypeInfo::Struct(s) => s,
-                _ => return None,
-            };
+            let Some(_) = reg.data::<bevy::ecs::reflect::ReflectEvent>() else { return None; };
+            let struct_info = match info { TypeInfo::Struct(s) => s, _ => return None };
             let short_name = info.type_path_table().short_path().to_string();
-            if short_name.starts_with("Api") || short_name.starts_with("Telemetry") {
-                return None;
-            }
+            if short_name.starts_with("Api") || short_name.starts_with("Telemetry") { return None; }
+            let full_path = info.type_path_table().path();
+            if !full_path.contains("lunco_") { return None; }
             let fields: Vec<FieldSchema> = struct_info.iter().map(|f: &bevy::reflect::NamedField| FieldSchema {
                 name: f.name().to_string(),
                 type_name: f.type_path().to_string(),
@@ -33,6 +24,14 @@ fn discover_commands(world: &World) -> Vec<CommandSchema> {
             Some(CommandSchema { name: short_name, fields })
         })
         .collect()
+}
+
+/// Builds the API schema by introspecting the ECS world.
+pub fn discover_schema(world: &World) -> ApiSchema {
+    let type_registry = world.resource::<AppTypeRegistry>();
+    let registry_read = type_registry.read();
+    let commands = discover_commands(&registry_read);
+    ApiSchema { commands }
 }
 
 /// Plugin that registers schema discovery (no runtime systems needed).

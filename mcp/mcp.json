@@ -1,0 +1,11 @@
+{
+  "name": "lunco",
+  "version": "0.2.0",
+  "description": "LunCoSim simulation control",
+  "command": "npx",
+  "args": ["@lunco/mcp-server"],
+  "env": {
+    "LUNCO_API_HOST": "localhost",
+    "LUNCO_API_PORT": "3000"
+  }
+}
