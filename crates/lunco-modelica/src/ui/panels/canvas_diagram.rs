@@ -3241,10 +3241,16 @@ fn render_empty_menu(
         })
         .unwrap_or_default();
     ui.menu_button("📊 Add Plot here", |ui| {
-        // Adaptive height — egui menu popups default to a tight
-        // size that fits ~3 rows. Force the inner Ui to claim the
-        // full row count up to a screen-fraction cap so the
-        // ScrollArea actually has room to render all entries.
+        // TODO(menu-height): the height is "so-so" — sometimes
+        // collapses to 3 rows. Match how the Modelica
+        // "Add component" cascade works (see
+        // `render_msl_package_menu` ~3065): plain
+        // `ui.menu_button(..., |ui| ...)` recursively, no explicit
+        // `set_min_*`/`set_max_*`. Egui auto-sizes from content
+        // there and it Just Works. The current adaptive
+        // computation below is a workaround — the real fix is to
+        // mirror that simpler structure (probably means dropping
+        // the ScrollArea wrapper too).
         const ROW_PX: f32 = 18.0;
         let max_h = (ui.ctx().screen_rect().height() * 0.7).max(180.0);
         let wanted = ((sigs.len() + 2) as f32 * ROW_PX).min(max_h);

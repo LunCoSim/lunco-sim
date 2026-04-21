@@ -211,6 +211,20 @@ impl Canvas {
                     });
                 }
             }
+            // TODO(selection-stuck): rubber-band / drag selection
+            // can still visually stick when the user releases the
+            // mouse outside the OS window — the rescue below
+            // catches the common cases (real release, focus loss,
+            // stale button-state) but Windows specifically (per
+            // winit#2192) sometimes doesn't deliver the up-event
+            // *or* the focus-lost event when the cursor crosses
+            // the edge mid-drag, so the gesture stays in flight
+            // until the user clicks back inside. Real fix likely
+            // needs OS-level mouse grab (winit doesn't expose it
+            // portably yet — see winit#133, egui#3157,
+            // bevy_egui#61) or a Bevy-side `MouseButtonInput`
+            // listener that bypasses egui entirely.
+            //
             // Stale-drag rescue.
             //
             // The native equivalent of the web's `setPointerCapture`

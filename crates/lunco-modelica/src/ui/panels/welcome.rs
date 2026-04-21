@@ -306,7 +306,7 @@ impl Panel for WelcomePanel {
                     painter.text(
                         title_pos,
                         egui::Align2::LEFT_TOP,
-                        format!("🧩  {}", ex.short),
+                        format!("📦  {}", ex.short),
                         egui::FontId::proportional(13.5),
                         title_tint,
                     );
