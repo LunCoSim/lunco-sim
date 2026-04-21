@@ -493,6 +493,26 @@ pub(crate) fn collect_inherited_components(
     ast: &StoredDefinition,
     depth: u32,
 ) -> Vec<(String, Component)> {
+    collect_inherited_components_with(
+        class,
+        class_qualified_path,
+        ast,
+        depth,
+        &crate::class_cache::peek_msl_class_cached,
+    )
+}
+
+/// Same as [`collect_inherited_components`] but takes a custom MSL
+/// resolver. Tests pass [`crate::class_cache::peek_or_load_msl_class`]
+/// to load synchronously from a non-worker thread; the projection
+/// task uses the default cache-only resolver.
+pub(crate) fn collect_inherited_components_with(
+    class: &ClassDef,
+    class_qualified_path: Option<&str>,
+    ast: &StoredDefinition,
+    depth: u32,
+    msl_resolve: &dyn Fn(&str) -> Option<std::sync::Arc<ClassDef>>,
+) -> Vec<(String, Component)> {
     const MAX_DEPTH: u32 = 8;
     let mut out: Vec<(String, Component)> = Vec::new();
     if depth >= MAX_DEPTH {
@@ -509,19 +529,39 @@ pub(crate) fn collect_inherited_components(
 
         let candidates = scope_chain_candidates(&raw, class_qualified_path);
 
-        let mut resolved: Option<(ClassDef, String)> = None;
+        // Resolution attempts:
+        //   1. Local AST lookup (same file / same package).
+        //   2. *Already-cached* MSL class from `peek_msl_class_cached` —
+        //      MUST be cache-only, never trigger a fresh parse here.
+        //
+        // Why no fresh MSL parse: this function is called inside the
+        // projection task running on Bevy's AsyncComputeTaskPool. The
+        // pool is small (≈ N/4 threads); a synchronous rumoca parse of
+        // a large MSL file (e.g. `Continuous.mo`, 184 KB) from inside a
+        // worker that's *already* serving a parent rumoca parse stalls
+        // for the full 60 s projection deadline. Pre-warming
+        // cross-file MSL inheritance belongs in a separate background
+        // task that runs at drill-in time and feeds the cache.
+        let mut found_local: Option<(&ClassDef, String)> = None;
+        let mut found_msl: Option<(std::sync::Arc<ClassDef>, String)> = None;
         for cand in &candidates {
             if let Some(base) = find_class_by_qualified_name(ast, cand) {
-                resolved = Some((base.clone(), cand.clone()));
+                found_local = Some((base, cand.clone()));
                 break;
             }
-            if let Some(base_arc) = crate::class_cache::peek_or_load_msl_class(cand) {
-                resolved = Some(((*base_arc).clone(), cand.clone()));
+            if let Some(base_arc) = msl_resolve(cand) {
+                found_msl = Some((base_arc, cand.clone()));
                 break;
             }
         }
 
-        let Some((base, base_qpath)) = resolved else { continue };
+        let (base, base_qpath): (&ClassDef, String) = if let Some((b, q)) = found_local {
+            (b, q)
+        } else if let Some((ref arc, ref q)) = found_msl {
+            (&**arc, q.clone())
+        } else {
+            continue;
+        };
 
         for (name, comp) in &base.components {
             if breaks.contains(name.as_str()) || seen.contains(name) {
@@ -531,9 +571,13 @@ pub(crate) fn collect_inherited_components(
             out.push((name.clone(), comp.clone()));
         }
         let shim = StoredDefinition::default();
-        for (name, comp) in
-            collect_inherited_components(&base, Some(&base_qpath), &shim, depth + 1)
-        {
+        for (name, comp) in collect_inherited_components_with(
+            base,
+            Some(&base_qpath),
+            &shim,
+            depth + 1,
+            msl_resolve,
+        ) {
             if breaks.contains(name.as_str()) || seen.contains(&name) {
                 continue;
             }
@@ -923,11 +967,12 @@ end Gain;
             return;
         };
         let ast = StoredDefinition::default();
-        let inherited = collect_inherited_components(
+        let inherited = collect_inherited_components_with(
             &pid,
             Some("Modelica.Blocks.Continuous.PID"),
             &ast,
             0,
+            &crate::class_cache::peek_or_load_msl_class,
         );
         let names: Vec<&str> = inherited.iter().map(|(n, _)| n.as_str()).collect();
         assert!(names.contains(&"u"), "PID must inherit u from SISO; got {:?}", names);

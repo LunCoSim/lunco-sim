@@ -238,6 +238,8 @@ impl Plugin for ModelicaCommandsPlugin {
             .register_type::<PanCanvas>()
             .register_type::<Undo>()
             .register_type::<Redo>()
+            .register_type::<Exit>()
+            .register_type::<GetFile>()
             .add_observer(on_focus_document_by_name)
             .add_observer(on_set_view_mode)
             .add_observer(on_set_zoom)
@@ -248,6 +250,8 @@ impl Plugin for ModelicaCommandsPlugin {
             .add_observer(on_pan_canvas)
             .add_observer(on_undo)
             .add_observer(on_redo)
+            .add_observer(on_exit)
+            .add_observer(on_get_file)
             .add_observer(resolve_editor_intent)
             .add_observer(resolve_new_document_intent)
             .add_systems(
@@ -1808,6 +1812,52 @@ pub struct PanCanvas {
     pub doc: u64,
     pub x: f32,
     pub y: f32,
+}
+
+/// Gracefully shut down the application. Exposed so automation can
+/// stop the workbench without the operator having to confirm a kill
+/// signal each time.
+#[derive(Event, Reflect, Clone, Debug, Default)]
+#[reflect(Event, Default)]
+pub struct Exit {}
+
+/// Read a file from the filesystem and log its contents to the
+/// console at INFO level. Useful for automation that wants to
+/// fetch a file's content via the API without spawning a separate
+/// shell. Resolves `path` relative to the workbench's current
+/// working directory.
+#[derive(Event, Reflect, Clone, Debug, Default)]
+#[reflect(Event, Default)]
+pub struct GetFile {
+    pub path: String,
+}
+
+fn on_get_file(trigger: On<GetFile>) {
+    let path = trigger.event().path.clone();
+    match std::fs::read_to_string(&path) {
+        Ok(content) => {
+            bevy::log::info!(
+                "[GetFile] {} ({} bytes) -- BEGIN --\n{}\n-- END --",
+                path,
+                content.len(),
+                content,
+            );
+        }
+        Err(e) => {
+            bevy::log::warn!("[GetFile] {} read failed: {}", path, e);
+        }
+    }
+}
+
+fn on_exit(_trigger: On<Exit>, mut commands: Commands) {
+    bevy::log::info!("[Exit] AppExit triggered via API");
+    commands.queue(|world: &mut World| {
+        if let Some(mut messages) =
+            world.get_resource_mut::<bevy::ecs::message::Messages<bevy::app::AppExit>>()
+        {
+            messages.write(bevy::app::AppExit::Success);
+        }
+    });
 }
 
 fn on_pan_canvas(trigger: On<PanCanvas>, mut commands: Commands) {

@@ -653,30 +653,107 @@ pub fn is_icon_only_class(qualified: &str) -> bool {
 /// Used by the icon-inheritance resolver so `SpeedSensor extends
 /// Modelica.Mechanics.Rotational.Icons.RelativeSensor` pulls in the
 /// parent's rectangle/text primitives the first time it renders.
-pub fn peek_or_load_msl_class(
-    qualified: &str,
-) -> Option<Arc<rumoca_session::parsing::ast::ClassDef>> {
+/// Shared cache for MSL class lookups. Used by both
+/// [`peek_or_load_msl_class`] (loads on miss) and
+/// [`peek_msl_class_cached`] (returns None on miss).
+fn msl_class_cache() -> &'static std::sync::Mutex<
+    std::collections::HashMap<String, Option<Arc<rumoca_session::parsing::ast::ClassDef>>>,
+> {
     use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};
-
-    // Per-qualified-name cache. `None` is remembered too — missing
-    // classes don't retry on every icon render.
     static CACHE: OnceLock<
         Mutex<HashMap<String, Option<Arc<rumoca_session::parsing::ast::ClassDef>>>>,
     > = OnceLock::new();
-    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+pub fn peek_or_load_msl_class(
+    qualified: &str,
+) -> Option<Arc<rumoca_session::parsing::ast::ClassDef>> {
+    let cache = msl_class_cache();
 
     if let Ok(map) = cache.lock() {
         if let Some(slot) = map.get(qualified) {
             return slot.clone();
         }
     }
-
     let resolved = load_msl_class_uncached(qualified);
     if let Ok(mut map) = cache.lock() {
         map.insert(qualified.to_string(), resolved.clone());
     }
     resolved
+}
+
+/// Non-blocking variant of [`peek_or_load_msl_class`] — returns the
+/// cached `Arc<ClassDef>` if present (positive or negative), and
+/// `None` *without triggering a load* on a cache miss.
+///
+/// Use this from hot paths that must not block on rumoca parse —
+/// notably the projection task running on Bevy's AsyncComputeTaskPool,
+/// where a sync MSL parse from inside a worker that's already serving
+/// a parent rumoca parse stalls for the projection deadline.
+pub fn peek_msl_class_cached(
+    qualified: &str,
+) -> Option<Arc<rumoca_session::parsing::ast::ClassDef>> {
+    let map = msl_class_cache().lock().ok()?;
+    map.get(qualified).and_then(|slot| slot.clone())
+}
+
+/// Monotonic counter bumped whenever an MSL pre-warm completes.
+/// Read from the canvas projection trigger so a tab that already
+/// rendered with a cold cache (no inherited components) gets one
+/// forced re-projection once the chain is loaded.
+pub fn msl_prewarm_generation() -> u64 {
+    PREWARM_GEN.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+static PREWARM_GEN: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+/// Recursively load and cache the `extends` chain rooted at `bases`,
+/// resolved relative to `class_qualified_path` per MLS §5.3 scope
+/// chain. Intended to be called from a fresh `std::thread` after a
+/// drill-in installs a class — the projection task can then read
+/// inherited components from the cache without stalling.
+///
+/// Synchronous + blocking (does the rumoca parses inline). Caps depth
+/// to 8 to bound work on pathological inheritance.
+pub fn prewarm_extends_chain(class_qualified_path: &str, bases: &[String]) {
+    prewarm_extends_chain_inner(class_qualified_path, bases, 0);
+    PREWARM_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn prewarm_extends_chain_inner(class_qualified_path: &str, bases: &[String], depth: u32) {
+    const MAX_DEPTH: u32 = 8;
+    if depth >= MAX_DEPTH {
+        return;
+    }
+    for raw in bases {
+        if raw.is_empty() {
+            continue;
+        }
+        // Same scope-chain candidate generation as the diagram
+        // builder. Try each; first that resolves wins.
+        let parts: Vec<&str> = class_qualified_path.split('.').collect();
+        let mut candidates: Vec<String> = Vec::new();
+        for i in (0..parts.len().saturating_sub(1)).rev() {
+            let prefix = parts[..=i].join(".");
+            candidates.push(format!("{}.{}", prefix, raw));
+        }
+        candidates.push(raw.clone());
+        for cand in &candidates {
+            if let Some(base) = peek_or_load_msl_class(cand) {
+                let next_bases: Vec<String> = base
+                    .extends
+                    .iter()
+                    .map(|e| e.base_name.to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                prewarm_extends_chain_inner(cand, &next_bases, depth + 1);
+                break;
+            }
+        }
+    }
 }
 
 /// File-level parse cache for `peek_or_load_msl_class`. Without this,
@@ -700,10 +777,18 @@ fn parse_msl_file_cached(
             return slot.clone();
         }
     }
+    // Use rumoca-session's cached parallel parse instead of the
+    // lower-level `parse_to_syntax`. The session-cache hits the
+    // already-parsed file (FileCache populates it on drill-in), so
+    // this is a hashmap lookup in practice. Calling `parse_to_syntax`
+    // directly here can stall for tens of seconds on a 180 KB MSL
+    // file inside a worker thread, presumably due to parol's
+    // recovery loop or shared-state contention.
     let parsed = (|| {
-        let source = std::fs::read_to_string(path).ok()?;
-        let syntax = rumoca_phase_parse::parse_to_syntax(&source, &path.to_string_lossy());
-        Some(Arc::new(syntax.best_effort().clone()))
+        let pairs = rumoca_session::parsing::parse_files_parallel(&[path.to_path_buf()])
+            .ok()?;
+        let (_, stored) = pairs.into_iter().next()?;
+        Some(Arc::new(stored))
     })();
     if let Ok(mut map) = cache.lock() {
         map.insert(path.to_path_buf(), parsed.clone());
@@ -714,9 +799,6 @@ fn parse_msl_file_cached(
 fn load_msl_class_uncached(
     qualified: &str,
 ) -> Option<Arc<rumoca_session::parsing::ast::ClassDef>> {
-    // Palette index first; fall through to filesystem walk so classes
-    // nested inside `.mo` files (e.g. a partial base not surfaced in
-    // the palette) still resolve.
     let path = resolve_msl_class_path(qualified)
         .or_else(|| locate_msl_file(qualified))?;
     let stored = parse_msl_file_cached(&path)?;
