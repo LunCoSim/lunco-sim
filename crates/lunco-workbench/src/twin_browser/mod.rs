@@ -59,6 +59,28 @@ pub const TWIN_BROWSER_PANEL_ID: PanelId = PanelId("lunco.workbench.twin_browser
 // (`lunco-workspace`). This panel reads the active Twin from there
 // each render; there is no panel-local "open twin" resource anymore.
 
+/// One in-memory document that hasn't been saved to disk yet.
+/// Surfaced at the top of the Files section with a dirty-dot
+/// marker so users can see "I have N unsaved things." Populated
+/// each frame by domain plugins (e.g. lunco-modelica scans its
+/// document registry for Untitled origins).
+#[derive(Debug, Clone)]
+pub struct UnsavedDocEntry {
+    /// Display name (e.g. "PIDCopy" or "Untitled-3.mo").
+    pub display_name: String,
+    /// Domain hint shown as a small badge ("Modelica", "USD"…).
+    pub kind: String,
+}
+
+/// Cross-domain list of unsaved documents. Domain plugins
+/// **overwrite** this resource each frame with their current
+/// untitled docs; the Files section reads it to render the
+/// "(unsaved)" group.
+#[derive(Resource, Default, Debug, Clone)]
+pub struct UnsavedDocs {
+    pub entries: Vec<UnsavedDocEntry>,
+}
+
 /// Registry of [`BrowserSection`] impls contributed by domain plugins.
 ///
 /// Sections render in registration order. The built-in

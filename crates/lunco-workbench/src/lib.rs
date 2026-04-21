@@ -58,7 +58,7 @@ pub mod twin_browser;
 pub use panel::{InstancePanel, Panel, PanelId, PanelSlot, TabId};
 pub use twin_browser::{
     BrowserAction, BrowserActions, BrowserCtx, BrowserSection, BrowserSectionRegistry,
-    FilesSection, TwinBrowserPanel, TWIN_BROWSER_PANEL_ID,
+    FilesSection, TwinBrowserPanel, UnsavedDocEntry, UnsavedDocs, TWIN_BROWSER_PANEL_ID,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -143,6 +143,7 @@ impl Plugin for WorkbenchPlugin {
             // by `WorkspacePlugin` above), not a panel-local resource.
             .init_resource::<BrowserSectionRegistry>()
             .init_resource::<BrowserActions>()
+            .init_resource::<UnsavedDocs>()
             .add_observer(on_open_tab)
             .add_observer(on_close_tab)
             .add_systems(EguiPrimaryContextPass, render_workbench);

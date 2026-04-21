@@ -258,7 +258,11 @@ impl Plugin for ModelicaCommandsPlugin {
             .add_observer(resolve_new_document_intent)
             .add_systems(
                 bevy::prelude::Update,
-                drain_pending_tab_closes,
+                (
+                    drain_pending_tab_closes,
+                    update_status_bar,
+                    publish_unsaved_modelica_docs,
+                ),
             )
             .add_systems(
                 bevy_egui::EguiPrimaryContextPass,
@@ -1881,6 +1885,87 @@ fn on_format_document(trigger: On<FormatDocument>, mut commands: Commands) {
             let _ = host.apply(ModelicaOp::ReplaceSource { new: formatted });
         }
     });
+}
+
+/// Publish every Untitled (in-memory, not yet saved) Modelica
+/// document into the cross-domain `UnsavedDocs` resource the Files
+/// browser section reads.
+///
+/// **Change-driven, not per-frame.** Bevy's `Res::is_changed()` flips
+/// only on the tick when something mutated the registry (allocate,
+/// install_prebuilt, remove_document, set_origin, …). When neither
+/// the registry nor the cross-domain resource has ticked since our
+/// last write, bail without recomputing — saves walking the doc
+/// list every frame for a UI surface that changes a few times per
+/// session.
+fn publish_unsaved_modelica_docs(
+    registry: Res<crate::ui::state::ModelicaDocumentRegistry>,
+    unsaved: Option<ResMut<lunco_workbench::UnsavedDocs>>,
+) {
+    let Some(mut unsaved) = unsaved else { return };
+    if !registry.is_changed() && !unsaved.is_added() {
+        return;
+    }
+    unsaved.entries = registry
+        .iter()
+        .filter(|(_, host)| host.document().origin().is_untitled())
+        .map(|(_, host)| lunco_workbench::UnsavedDocEntry {
+            display_name: host.document().origin().display_name(),
+            kind: "Modelica".into(),
+        })
+        .collect();
+}
+
+/// Surface the active document's compile state + workspace activity
+/// in the workbench status bar so users can tell at a glance what's
+/// running. Reads-only — runs every frame, writes via
+/// `WorkbenchLayout::set_status`.
+///
+/// Status priority (first-match wins):
+///   1. Compile in flight on active doc → "Compiling <model>…".
+///   2. Compile error on active doc → "Compile error".
+///   3. Compile ready on active doc → "Compiled <model>".
+///   4. No active doc → "ready".
+fn update_status_bar(
+    workbench: Res<crate::ui::WorkbenchState>,
+    workspace: Option<Res<lunco_workbench::WorkspaceResource>>,
+    compile_states: Res<crate::ui::CompileStates>,
+    layout: Option<ResMut<lunco_workbench::WorkbenchLayout>>,
+) {
+    let Some(mut layout) = layout else { return };
+    // Re-render only when something a status reader cares about
+    // ticked: the active document changed, the compile state
+    // transitioned, the open model swapped. Cheap idle path —
+    // most frames have no change.
+    let any_change = workbench.is_changed()
+        || compile_states.is_changed()
+        || workspace.as_ref().map(|w| w.is_changed()).unwrap_or(false);
+    if !any_change && !layout.is_added() {
+        return;
+    }
+    let active_doc = workspace.as_ref().and_then(|w| w.active_document);
+    let model_name = workbench
+        .open_model
+        .as_ref()
+        .and_then(|m| m.detected_name.clone())
+        .or_else(|| {
+            workbench
+                .open_model
+                .as_ref()
+                .map(|m| m.model_path.clone())
+        })
+        .unwrap_or_else(|| "(untitled)".to_string());
+
+    let text = match active_doc {
+        None => "ready".to_string(),
+        Some(doc) => match compile_states.state_of(doc) {
+            crate::ui::CompileState::Compiling => format!("⏳ Compiling {model_name}…"),
+            crate::ui::CompileState::Error => format!("⚠ Compile error in {model_name}"),
+            crate::ui::CompileState::Ready => format!("✓ Compiled {model_name}"),
+            crate::ui::CompileState::Idle => format!("● {model_name}"),
+        },
+    };
+    layout.set_status(text);
 }
 
 /// Read a file from the filesystem and log its contents to the
