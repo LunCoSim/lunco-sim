@@ -243,6 +243,9 @@ impl Plugin for ModelicaCommandsPlugin {
             .register_type::<FormatDocument>()
             .register_type::<OpenFile>()
             .register_type::<InspectActiveDoc>()
+            .register_type::<CompileActiveModel>()
+            .register_type::<SaveActiveDocument>()
+            .register_type::<SaveActiveDocumentAs>()
             .add_observer(on_focus_document_by_name)
             .add_observer(on_set_view_mode)
             .add_observer(on_set_zoom)
@@ -258,6 +261,9 @@ impl Plugin for ModelicaCommandsPlugin {
             .add_observer(on_format_document)
             .add_observer(on_open_file)
             .add_observer(on_inspect_active_doc)
+            .add_observer(on_compile_active_model)
+            .add_observer(on_save_active_document)
+            .add_observer(on_save_active_document_as)
             .add_observer(resolve_editor_intent)
             .add_observer(resolve_new_document_intent)
             .add_systems(
@@ -1980,6 +1986,120 @@ fn update_status_bar(
         },
     };
     layout.set_status(text);
+}
+
+/// API-accessible Save / SaveAs.
+///
+/// `SaveActiveDocument` writes through the existing `SaveDocument`
+/// pipeline (no path picker — fails if the doc is Untitled). Use
+/// `SaveActiveDocumentAs` to bind a path explicitly without the
+/// modal picker; this is the form scripts and tests should use.
+#[derive(Event, Reflect, Clone, Debug, Default)]
+#[reflect(Event, Default)]
+pub struct SaveActiveDocument {
+    /// 0 ⇒ active document.
+    pub doc: u64,
+}
+
+#[derive(Event, Reflect, Clone, Debug, Default)]
+#[reflect(Event, Default)]
+pub struct SaveActiveDocumentAs {
+    /// 0 ⇒ active document.
+    pub doc: u64,
+    /// Target filesystem path. Bypasses the native picker so
+    /// automation can save without GUI interaction.
+    pub path: String,
+}
+
+fn on_save_active_document(trigger: On<SaveActiveDocument>, mut commands: Commands) {
+    let raw = trigger.event().doc;
+    commands.queue(move |world: &mut World| {
+        let doc = if raw == 0 {
+            resolve_active_doc(world)
+        } else {
+            Some(DocumentId::new(raw))
+        };
+        let Some(doc) = doc else {
+            bevy::log::warn!("[SaveActiveDocument] no active document");
+            return;
+        };
+        world.commands().trigger(SaveDocument { doc });
+    });
+}
+
+fn on_save_active_document_as(
+    trigger: On<SaveActiveDocumentAs>,
+    mut commands: Commands,
+) {
+    let ev = trigger.event().clone();
+    commands.queue(move |world: &mut World| {
+        let doc = if ev.doc == 0 {
+            resolve_active_doc(world)
+        } else {
+            Some(DocumentId::new(ev.doc))
+        };
+        let Some(doc) = doc else {
+            bevy::log::warn!("[SaveActiveDocumentAs] no active document");
+            return;
+        };
+        let path = std::path::PathBuf::from(&ev.path);
+        // Snapshot source, then write through lunco-storage and
+        // rebind the doc origin to the new path — same effect as the
+        // SaveAs picker path, minus the modal.
+        let source = {
+            let registry = world.resource::<crate::ui::state::ModelicaDocumentRegistry>();
+            let Some(host) = registry.host(doc) else { return };
+            host.document().source().to_string()
+        };
+        if let Err(e) = std::fs::write(&path, source.as_bytes()) {
+            bevy::log::warn!("[SaveActiveDocumentAs] write failed {}: {}", path.display(), e);
+            return;
+        }
+        let mut registry = world.resource_mut::<crate::ui::state::ModelicaDocumentRegistry>();
+        if let Some(host) = registry.host_mut(doc) {
+            host.document_mut().set_origin(lunco_doc::DocumentOrigin::File {
+                path: path.clone(),
+                writable: true,
+            });
+        }
+        registry.mark_document_saved(doc);
+        bevy::log::info!(
+            "[SaveActiveDocumentAs] saved {} ({} bytes)",
+            path.display(),
+            source.len(),
+        );
+        world.commands().trigger(DocumentSaved::local(doc));
+    });
+}
+
+/// API shim for `CompileModel`: same effect (rumoca compile + DAE
+/// + simulator setup) but takes `doc: u64` (0 = active) so it can
+/// be triggered from the reflect-registered API. Inner `CompileModel`
+/// stays as a typed Bevy event for in-process callers; this exposes
+/// it to curl / scripts. Type-check / parse / DAE errors land in
+/// `WorkbenchState.compilation_error` which the Diagnostics panel
+/// already surfaces.
+#[derive(Event, Reflect, Clone, Debug, Default)]
+#[reflect(Event, Default)]
+pub struct CompileActiveModel {
+    /// 0 ⇒ active document.
+    pub doc: u64,
+}
+
+fn on_compile_active_model(trigger: On<CompileActiveModel>, mut commands: Commands) {
+    let raw = trigger.event().doc;
+    commands.queue(move |world: &mut World| {
+        let doc = if raw == 0 {
+            resolve_active_doc(world)
+        } else {
+            Some(DocumentId::new(raw))
+        };
+        let Some(doc) = doc else {
+            bevy::log::warn!("[CompileActiveModel] no active document");
+            return;
+        };
+        world.commands().trigger(CompileModel { doc });
+    });
 }
 
 /// Inspect the active document's parsed AST and log the results
