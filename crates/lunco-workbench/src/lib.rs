@@ -1027,10 +1027,10 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
         // 3D-app mode — explicit side panels, transparent centre.
         // Defaults are percentages of the current window so the layout
         // looks right whether the user runs in 1280×720 or 4K. Targets
-        // mirror the centre-driven 15/70/15 split: side panels 15% of
-        // window width each; bottom dock 20% of window height.
+        // mirror a 10/80/10 split: side panels 10% of window width each;
+        // bottom dock 20% of window height.
         let screen = ctx.content_rect();
-        let side_default = (screen.width() * 0.15).max(140.0);
+        let side_default = (screen.width() * 0.10).max(140.0);
         let bottom_default = (screen.height() * 0.20).max(120.0);
 
         if let Some(id) = layout.side_browser.first().copied() {
@@ -1038,6 +1038,7 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
                 .resizable(true)
                 .default_width(side_default)
                 .min_width(120.0)
+                .max_width(screen.width() * 0.3)
                 .show(ctx, |ui| {
                     ui.style_mut().visuals = theme.to_visuals();
                     render_panel_solo(ui, &id, layout, world);
@@ -1048,6 +1049,7 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
                 .resizable(true)
                 .default_width(side_default)
                 .min_width(140.0)
+                .max_width(screen.width() * 0.3)
                 .show(ctx, |ui| {
                     ui.style_mut().visuals = theme.to_visuals();
                     render_panel_solo(ui, &id, layout, world);

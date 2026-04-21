@@ -16,10 +16,24 @@ impl Panel for MissionControl {
     fn id(&self) -> PanelId { PanelId("mission_control") }
     fn title(&self) -> String { "Mission Control".into() }
     fn default_slot(&self) -> PanelSlot { PanelSlot::RightInspector }
+    fn transparent_background(&self) -> bool { true }
 
     fn render(&mut self, ui: &mut egui::Ui, world: &mut World) {
-        let theme = world.resource::<lunco_theme::Theme>();
+        let theme = world.resource::<lunco_theme::Theme>().clone();
         ui.style_mut().visuals = theme.to_visuals();
+
+        egui::Frame::new()
+            .fill(theme.colors.mantle)
+            .inner_margin(8.0)
+            .corner_radius(4)
+            .show(ui, |ui| {
+                self.render_content(ui, world);
+            });
+    }
+}
+
+impl MissionControl {
+    fn render_content(&mut self, ui: &mut egui::Ui, world: &mut World) {
 
         let avatar_ent = {
             let mut q = world.query_filtered::<Entity, With<Avatar>>();
@@ -38,14 +52,20 @@ impl Panel for MissionControl {
                     clock.paused = !clock.paused;
                 }
             });
-            ui.horizontal_wrapped(|ui| {
-                let multipliers = [1.0, 10.0, 100.0, 1000.0, 10000.0, 100000.0, 1000000.0];
-                for &m in multipliers.iter() {
-                    if ui.selectable_label(clock.speed_multiplier == m, format!("{}x", m)).clicked() {
-                        clock.speed_multiplier = m;
+            egui::Grid::new("time_multipliers")
+                .num_columns(4)
+                .spacing([4.0, 4.0])
+                .show(ui, |ui| {
+                    let multipliers = [1.0, 10.0, 100.0, 1000.0, 10000.0, 100000.0, 1000000.0];
+                    for (i, &m) in multipliers.iter().enumerate() {
+                        if ui.selectable_label(clock.speed_multiplier == m, format!("{}x", m)).clicked() {
+                            clock.speed_multiplier = m;
+                        }
+                        if (i + 1) % 4 == 0 {
+                            ui.end_row();
+                        }
                     }
-                }
-            });
+                });
         }
         ui.separator();
 
