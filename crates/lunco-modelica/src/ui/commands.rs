@@ -240,6 +240,7 @@ impl Plugin for ModelicaCommandsPlugin {
             .register_type::<Redo>()
             .register_type::<Exit>()
             .register_type::<GetFile>()
+            .register_type::<FormatDocument>()
             .add_observer(on_focus_document_by_name)
             .add_observer(on_set_view_mode)
             .add_observer(on_set_zoom)
@@ -252,6 +253,7 @@ impl Plugin for ModelicaCommandsPlugin {
             .add_observer(on_redo)
             .add_observer(on_exit)
             .add_observer(on_get_file)
+            .add_observer(on_format_document)
             .add_observer(resolve_editor_intent)
             .add_observer(resolve_new_document_intent)
             .add_systems(
@@ -1820,6 +1822,66 @@ pub struct PanCanvas {
 #[derive(Event, Reflect, Clone, Debug, Default)]
 #[reflect(Event, Default)]
 pub struct Exit {}
+
+/// Run rumoca-tool-fmt on the active document and replace its
+/// source with the formatted text. Single undo step. No-op on
+/// read-only tabs or when formatting fails (parse errors etc.).
+#[derive(Event, Reflect, Clone, Debug, Default)]
+#[reflect(Event, Default)]
+pub struct FormatDocument {
+    /// 0 ⇒ active document.
+    pub doc: u64,
+}
+
+fn on_format_document(trigger: On<FormatDocument>, mut commands: Commands) {
+    let raw = trigger.event().doc;
+    commands.queue(move |world: &mut World| {
+        use crate::document::ModelicaOp;
+        let doc = if raw == 0 {
+            resolve_active_doc(world)
+        } else {
+            Some(DocumentId::new(raw))
+        };
+        let Some(doc) = doc else {
+            bevy::log::warn!("[FormatDocument] no active document");
+            return;
+        };
+        let workbench_read_only = world
+            .get_resource::<crate::ui::WorkbenchState>()
+            .and_then(|s| s.open_model.as_ref().map(|m| m.read_only))
+            .unwrap_or(false);
+        if workbench_read_only {
+            bevy::log::info!("[FormatDocument] tab is read-only — skipping");
+            return;
+        }
+        let Some(registry) = world.get_resource::<crate::ui::state::ModelicaDocumentRegistry>()
+        else {
+            return;
+        };
+        let Some(host) = registry.host(doc) else { return };
+        let original = host.document().source().to_string();
+        let opts = rumoca_tool_fmt::FormatOptions::default();
+        let formatted = match rumoca_tool_fmt::format_with_source_name(
+            &original, &opts, "<editor>",
+        ) {
+            Ok(s) => s,
+            Err(e) => {
+                bevy::log::warn!("[FormatDocument] format failed: {}", e);
+                return;
+            }
+        };
+        if formatted == original {
+            return;
+        }
+        // Route through the document op pipeline so undo/redo +
+        // canvas reprojection both work the same way as a manual
+        // edit.
+        let mut registry = world.resource_mut::<crate::ui::state::ModelicaDocumentRegistry>();
+        if let Some(host) = registry.host_mut(doc) {
+            let _ = host.apply(ModelicaOp::ReplaceSource { new: formatted });
+        }
+    });
+}
 
 /// Read a file from the filesystem and log its contents to the
 /// console at INFO level. Useful for automation that wants to
