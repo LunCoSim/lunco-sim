@@ -241,6 +241,8 @@ impl Plugin for ModelicaCommandsPlugin {
             .register_type::<Exit>()
             .register_type::<GetFile>()
             .register_type::<FormatDocument>()
+            .register_type::<OpenFile>()
+            .register_type::<InspectActiveDoc>()
             .add_observer(on_focus_document_by_name)
             .add_observer(on_set_view_mode)
             .add_observer(on_set_zoom)
@@ -254,6 +256,8 @@ impl Plugin for ModelicaCommandsPlugin {
             .add_observer(on_exit)
             .add_observer(on_get_file)
             .add_observer(on_format_document)
+            .add_observer(on_open_file)
+            .add_observer(on_inspect_active_doc)
             .add_observer(resolve_editor_intent)
             .add_observer(resolve_new_document_intent)
             .add_systems(
@@ -1908,10 +1912,20 @@ fn publish_unsaved_modelica_docs(
     }
     unsaved.entries = registry
         .iter()
-        .filter(|(_, host)| host.document().origin().is_untitled())
-        .map(|(_, host)| lunco_workbench::UnsavedDocEntry {
-            display_name: host.document().origin().display_name(),
-            kind: "Modelica".into(),
+        // Workspace = user content. Read-only library docs (MSL
+        // classes the user clicked into) aren't part of the
+        // workspace — same filter the Modelica section uses.
+        .filter(|(_, host)| {
+            let o = host.document().origin();
+            o.is_writable() || o.is_untitled()
+        })
+        .map(|(_, host)| {
+            let origin = host.document().origin();
+            lunco_workbench::UnsavedDocEntry {
+                display_name: origin.display_name(),
+                kind: "Modelica".into(),
+                is_unsaved: origin.is_untitled(),
+            }
         })
         .collect();
 }
@@ -1966,6 +1980,125 @@ fn update_status_bar(
         },
     };
     layout.set_status(text);
+}
+
+/// Inspect the active document's parsed AST and log the results
+/// (top-level class names, parse error if any). API automation
+/// uses this to diagnose why a drill-in or projection produced
+/// zero nodes — if the AST is empty, the file failed strict parse.
+#[derive(Event, Reflect, Clone, Debug, Default)]
+#[reflect(Event, Default)]
+pub struct InspectActiveDoc {}
+
+fn on_inspect_active_doc(_trigger: On<InspectActiveDoc>, mut commands: Commands) {
+    commands.queue(|world: &mut World| {
+        let doc = resolve_active_doc(world);
+        let Some(doc) = doc else {
+            bevy::log::warn!("[InspectActiveDoc] no active document");
+            return;
+        };
+        let registry = world.resource::<crate::ui::state::ModelicaDocumentRegistry>();
+        let Some(host) = registry.host(doc) else {
+            bevy::log::warn!("[InspectActiveDoc] doc {} not in registry", doc.raw());
+            return;
+        };
+        let document = host.document();
+        let cache = document.ast();
+        let origin = document.origin();
+        bevy::log::info!(
+            "[InspectActiveDoc] doc={} origin={:?} source_len={} gen={}",
+            doc.raw(),
+            origin.display_name(),
+            document.source().len(),
+            cache.generation,
+        );
+        match cache.result.as_ref() {
+            Ok(ast) => {
+                bevy::log::info!(
+                    "[InspectActiveDoc]   parse OK; within={:?}",
+                    ast.within.as_ref().map(|w| w.to_string()),
+                );
+                fn dump(
+                    name: &str,
+                    class: &rumoca_session::parsing::ast::ClassDef,
+                    depth: usize,
+                ) {
+                    let indent = "  ".repeat(depth + 1);
+                    let comps: Vec<String> = class
+                        .components
+                        .iter()
+                        .map(|(n, c)| format!("{}: {}", n, c.type_name))
+                        .collect();
+                    bevy::log::info!(
+                        "[InspectActiveDoc]{}{} ({:?}) extends={} components=[{}]",
+                        indent,
+                        name,
+                        class.class_type,
+                        class.extends.len(),
+                        comps.join(", "),
+                    );
+                    for (cn, child) in &class.classes {
+                        dump(cn, child, depth + 1);
+                    }
+                }
+                for (n, c) in &ast.classes {
+                    dump(n, c, 0);
+                }
+            }
+            Err(e) => {
+                bevy::log::warn!("[InspectActiveDoc]   parse ERR: {}", e);
+            }
+        }
+    });
+}
+
+/// Open an arbitrary `.mo` file from disk into a new workspace
+/// tab as an Untitled document seeded from the file's contents.
+/// Used by API automation to load bundled examples or external
+/// files without a Twin folder being open.
+#[derive(Event, Reflect, Clone, Debug, Default)]
+#[reflect(Event, Default)]
+pub struct OpenFile {
+    pub path: String,
+}
+
+fn on_open_file(trigger: On<OpenFile>, mut commands: Commands) {
+    let path = trigger.event().path.clone();
+    commands.queue(move |world: &mut World| {
+        let source = match std::fs::read_to_string(&path) {
+            Ok(s) => s,
+            Err(e) => {
+                bevy::log::warn!("[OpenFile] {} read failed: {}", path, e);
+                return;
+            }
+        };
+        let path_buf = std::path::PathBuf::from(&path);
+        let stem = path_buf
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("Opened")
+            .to_string();
+        let mut registry =
+            world.resource_mut::<crate::ui::state::ModelicaDocumentRegistry>();
+        let doc_id = registry.allocate_with_origin(
+            source.clone(),
+            lunco_doc::DocumentOrigin::File {
+                path: path_buf,
+                writable: true,
+            },
+        );
+        // Land in Canvas view so the user sees the diagram.
+        let mut tabs = world.resource_mut::<crate::ui::panels::model_view::ModelTabs>();
+        tabs.ensure(doc_id);
+        if let Some(tab) = tabs.get_mut(doc_id) {
+            tab.view_mode = crate::ui::panels::model_view::ModelViewMode::Canvas;
+        }
+        world.commands().trigger(lunco_workbench::OpenTab {
+            kind: crate::ui::panels::model_view::MODEL_VIEW_KIND,
+            instance: doc_id.raw(),
+        });
+        bevy::log::info!("[OpenFile] opened `{}` as `{}`", path, stem);
+    });
 }
 
 /// Read a file from the filesystem and log its contents to the

@@ -3731,19 +3731,58 @@ pub fn drive_drill_in_loads(
 /// completes. This matches what users expect: the tab opens, a
 /// spinner says "loading", content lands when it's ready.
 pub fn drill_into_class(world: &mut World, qualified: &str) {
-    // Try the palette-built index first (covers curated MSL classes),
-    // then fall through to the filesystem walker so any class under
-    // `<msl>/**` resolves — not just the ones in the palette.
+    // Try MSL paths first (resolves Modelica.* and any other MSL-rooted
+    // qualified path). Fallback: scan the open document registry for a
+    // doc whose AST contains the requested class — handles non-MSL
+    // user-opened files (e.g. `assets/models/AnnotatedRocketStage.mo`)
+    // where the qualified name lives only in a workspace document.
     let file_path = crate::class_cache::resolve_msl_class_path(qualified)
         .or_else(|| crate::class_cache::locate_msl_file(qualified));
-    let Some(file_path) = file_path else {
-        bevy::log::warn!(
-            "[CanvasDiagram] drill-in: could not locate a file for `{}` (user classes TBD — only MSL-backed drill-in for now)",
-            qualified
+    if let Some(file_path) = file_path {
+        open_drill_in_tab(world, qualified, &file_path);
+        return;
+    }
+    // Open-document fallback: find a host whose parsed AST resolves the
+    // qualified path. Reuse its tab + just set the drill-in class.
+    let target_doc: Option<lunco_doc::DocumentId> = {
+        let registry = world.resource::<ModelicaDocumentRegistry>();
+        registry.iter().find_map(|(doc_id, host)| {
+            host.document().ast().ast().and_then(|ast| {
+                crate::diagram::find_class_by_qualified_name(ast, qualified)
+                    .map(|_| doc_id)
+            })
+        })
+    };
+    if let Some(doc_id) = target_doc {
+        // Switch focus to this doc's tab and record the drilled-in
+        // class so the canvas projection scopes itself.
+        if let Some(mut tabs) =
+            world.get_resource_mut::<crate::ui::panels::model_view::ModelTabs>()
+        {
+            if let Some(tab) = tabs.get_mut(doc_id) {
+                tab.view_mode = crate::ui::panels::model_view::ModelViewMode::Canvas;
+            }
+        }
+        if let Some(mut names) =
+            world.get_resource_mut::<DrilledInClassNames>()
+        {
+            names.set(doc_id, qualified.to_string());
+        }
+        if let Some(mut workspace) =
+            world.get_resource_mut::<lunco_workbench::WorkspaceResource>()
+        {
+            workspace.active_document = Some(doc_id);
+        }
+        bevy::log::info!(
+            "[CanvasDiagram] drill-in: focused open doc for `{}`",
+            qualified,
         );
         return;
-    };
-    open_drill_in_tab(world, qualified, &file_path);
+    }
+    bevy::log::warn!(
+        "[CanvasDiagram] drill-in: could not locate `{}` (no MSL match, no open doc with that class)",
+        qualified
+    );
 }
 
 /// Open a tab for `qualified` class backed by a **placeholder

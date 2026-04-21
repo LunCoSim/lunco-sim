@@ -35,28 +35,37 @@ impl BrowserSection for FilesSection {
     }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut BrowserCtx) {
-        // Render unsaved (in-memory) documents first so users can see
-        // duplicates / drafts that haven't been written to disk yet.
-        // Marked with a leading `●` dirty-dot + italic name + a small
-        // "unsaved" badge — same visual language as a dirty tab.
-        let unsaved: Vec<super::UnsavedDocEntry> = ctx
+        // Render workspace documents (saved + unsaved) so the list
+        // stays stable across Save — a Save shouldn't make a doc
+        // disappear from the user's view of "what am I working on."
+        // Unsaved drafts get a `●` orange dirty-dot + italic name;
+        // saved docs render as plain rows with the same kind badge.
+        let docs: Vec<super::UnsavedDocEntry> = ctx
             .world
             .get_resource::<super::UnsavedDocs>()
             .map(|r| r.entries.clone())
             .unwrap_or_default();
-        if !unsaved.is_empty() {
+        if !docs.is_empty() {
             ui.label(
-                egui::RichText::new("Unsaved")
+                egui::RichText::new("Workspace")
                     .small()
                     .weak()
                     .strong(),
             );
-            for entry in &unsaved {
+            for entry in &docs {
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("●").color(egui::Color32::from_rgb(220, 160, 60)));
-                    ui.label(
-                        egui::RichText::new(&entry.display_name).italics(),
-                    );
+                    if entry.is_unsaved {
+                        ui.label(
+                            egui::RichText::new("●")
+                                .color(egui::Color32::from_rgb(220, 160, 60)),
+                        );
+                        ui.label(
+                            egui::RichText::new(&entry.display_name).italics(),
+                        );
+                    } else {
+                        ui.label(egui::RichText::new("  "));
+                        ui.label(egui::RichText::new(&entry.display_name));
+                    }
                     ui.label(
                         egui::RichText::new(format!("({})", entry.kind))
                             .small()
@@ -68,7 +77,7 @@ impl BrowserSection for FilesSection {
         }
 
         let Some(twin) = ctx.twin else {
-            if unsaved.is_empty() {
+            if docs.is_empty() {
                 ui.label(
                     egui::RichText::new("Open a Twin or folder to browse files.")
                         .weak()
@@ -80,7 +89,7 @@ impl BrowserSection for FilesSection {
 
         let files = twin.files();
         if files.is_empty() {
-            if unsaved.is_empty() {
+            if docs.is_empty() {
                 ui.label(
                     egui::RichText::new("(no files found in this Twin)")
                         .weak()
