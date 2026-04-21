@@ -1,14 +1,20 @@
 //! Welcome tab — the app's landing page.
 //!
 //! Shown in the center dock at startup and any time the user has no
-//! model tabs open. Two roles:
+//! model tabs open. Three roles:
 //!
 //! 1. **Getting started** — the discoverable paths into the app
 //!    (New Model, Open Folder).
-//! 2. **Learn by example** — the bundled examples used to live in
-//!    the sidebar, which confused "my work" with "sample material".
-//!    They live here instead, with one-line taglines explaining
-//!    what each teaches.
+//! 2. **Try an example** — curated bundled + MSL examples. Every
+//!    example opens as a **read-only tab** (you can simulate, read
+//!    the source, drill in) and the first time you try to edit it,
+//!    the Diagnostics panel explains how to duplicate into an
+//!    editable workspace copy. Same mental model for all examples:
+//!    look first, copy to edit. See `canvas_diagram.rs` read-only
+//!    guard for the edit-attempt message.
+//! 3. **Browse MSL** — domain links to the full Modelica Standard
+//!    Library (follow-up task #83; for now the curated list below
+//!    is the entry point).
 //!
 //! The panel is non-closable so the dock layout always has a center
 //! anchor — even with no tabs open, the user has somewhere to land.
@@ -278,9 +284,9 @@ impl Panel for WelcomePanel {
                 ui.add_space(4.0);
                 ui.label(
                     egui::RichText::new(
-                        "Pick an example from the Modelica Standard Library. \
-                         One click → editable copy opens in the diagram view, \
-                         the MSL original stays untouched.",
+                        "Curated picks from the Modelica Standard Library. \
+                         Same rule as above — read-only on click, \
+                         duplicate to edit.",
                     )
                     .size(10.5)
                     .color(muted),
@@ -296,7 +302,7 @@ impl Panel for WelcomePanel {
                                 .stroke(egui::Stroke::new(1.0, msl_button_stroke)),
                         )
                         .on_hover_text(format!(
-                            "Open editable copy of {}",
+                            "Open {} as a read-only tab — duplicate to edit",
                             ex.qualified
                         ));
                     let rect = resp.rect;
@@ -407,9 +413,15 @@ impl Panel for WelcomePanel {
             );
         }
         if let Some(qualified) = open_msl_example {
+            // Read-only-first policy (see module docs): MSL examples
+            // open as read-only tabs via `OpenClass`, matching the
+            // bundled section and the canvas drill-in gesture. The
+            // edit-attempt handler in `canvas_diagram::apply_ops`
+            // surfaces the "duplicate to edit" explanation when the
+            // user first tries to modify anything.
             world
                 .commands()
-                .trigger(crate::ui::commands::OpenExampleInWorkspace {
+                .trigger(crate::ui::commands::OpenClass {
                     qualified: qualified.to_string(),
                 });
         }

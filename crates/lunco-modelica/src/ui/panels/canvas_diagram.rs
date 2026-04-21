@@ -4672,6 +4672,21 @@ fn apply_ops(world: &mut World, doc_id: lunco_doc::DocumentId, ops: Vec<Modelica
             "[CanvasDiagram] discarded {} op(s) — tab is a read-only library class",
             n
         );
+        // User-facing explanation. The tab title already shows a 👁
+        // read-only chip, but silent drops still confuse people on
+        // first edit attempt — surface the "why nothing happened" in
+        // the Diagnostics banner so it's unmissable. The duplicate
+        // action clears this on its own (Duplicate → new Untitled →
+        // read_only=false → future ops write through cleanly).
+        if let Some(mut ws) = world.get_resource_mut::<WorkbenchState>() {
+            ws.compilation_error = Some(
+                "This is a read-only library model. \
+                 Use File → Duplicate to Workspace \
+                 (or the Duplicate button in the tab header) \
+                 to create an editable copy of it, then try again."
+                    .to_string(),
+            );
+        }
         return;
     }
 
