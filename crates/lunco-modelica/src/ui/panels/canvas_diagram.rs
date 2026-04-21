@@ -4023,7 +4023,11 @@ fn auto_arrange_now(world: &mut World, doc_id: lunco_doc::DocumentId) {
         .get_resource::<crate::ui::panels::diagram::DiagramAutoLayoutSettings>()
         .cloned()
         .unwrap_or_default();
-    let mut names: Vec<String> = {
+    // Capture each node's `origin` (Modelica instance name) AND
+    // its existing rect size so Auto-Arrange can preserve per-node
+    // extents — the prior `Placement::at` form squashed every icon
+    // back to the default 20×20, undoing the user's authored sizes.
+    let mut named_with_size: Vec<(String, f32, f32)> = {
         let Some(state) = world.get_resource::<CanvasDiagramState>() else {
             return;
         };
@@ -4032,11 +4036,18 @@ fn auto_arrange_now(world: &mut World, doc_id: lunco_doc::DocumentId) {
             .canvas
             .scene
             .nodes()
-            .filter_map(|(_, n)| n.origin.clone())
+            .filter_map(|(_, n)| {
+                let origin = n.origin.clone()?;
+                Some((origin, n.rect.width().max(1.0), n.rect.height().max(1.0)))
+            })
             .collect()
     };
-    names.dedup();
-    if names.is_empty() {
+    // Stable sort + dedup by name: the original `dedup()` only
+    // removed adjacent duplicates, which the unsorted scene order
+    // didn't guarantee.
+    named_with_size.sort_by(|a, b| a.0.cmp(&b.0));
+    named_with_size.dedup_by(|a, b| a.0 == b.0);
+    if named_with_size.is_empty() {
         return;
     }
 
@@ -4044,10 +4055,10 @@ fn auto_arrange_now(world: &mut World, doc_id: lunco_doc::DocumentId) {
     let dx = layout.spacing_x;
     let dy = layout.spacing_y;
     let stagger = dx * layout.row_stagger;
-    let positions: Vec<(String, f32, f32)> = names
+    let ops: Vec<ModelicaOp> = named_with_size
         .into_iter()
         .enumerate()
-        .map(|(idx, name)| {
+        .map(|(idx, (name, w, h))| {
             let row = idx / cols;
             let col = idx % cols;
             let row_shift = if row % 2 == 1 { stagger } else { 0.0 };
@@ -4056,18 +4067,21 @@ fn auto_arrange_now(world: &mut World, doc_id: lunco_doc::DocumentId) {
             // the same coord frame a drag would.
             let wx = col as f32 * dx + row_shift;
             let wy = row as f32 * dy;
-            let (mx, my) =
-                canvas_min_to_modelica_center(lunco_canvas::Pos::new(wx, wy));
-            (name, mx, my)
-        })
-        .collect();
-
-    let ops: Vec<ModelicaOp> = positions
-        .into_iter()
-        .map(|(name, mx, my)| ModelicaOp::SetPlacement {
-            class: class.clone(),
-            name,
-            placement: Placement::at(mx, my),
+            let m = coords::canvas_min_to_modelica_center(
+                lunco_canvas::Pos::new(wx, wy),
+                w,
+                h,
+            );
+            ModelicaOp::SetPlacement {
+                class: class.clone(),
+                name,
+                placement: Placement {
+                    x: m.x,
+                    y: m.y,
+                    width: w,
+                    height: h,
+                },
+            }
         })
         .collect();
     if ops.is_empty() {

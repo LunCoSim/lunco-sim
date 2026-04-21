@@ -145,9 +145,15 @@ pub struct DiagramAutoLayoutSettings {
 
 impl Default for DiagramAutoLayoutSettings {
     fn default() -> Self {
+        // Tightened from 140×110 → 60×60. Modelica icons are
+        // typically 20–40 units wide; the prior spacing left
+        // 100–120-unit gaps between icons, producing diagrams that
+        // looked scattered across mostly-empty canvas. 60 puts the
+        // gap at ≈ 1× the icon width, matching what OMEdit/Dymola's
+        // Auto-Arrange produces.
         Self {
-            spacing_x: 140.0,
-            spacing_y: 110.0,
+            spacing_x: 60.0,
+            spacing_y: 60.0,
             cols: 4,
             row_stagger: 0.5,
         }
