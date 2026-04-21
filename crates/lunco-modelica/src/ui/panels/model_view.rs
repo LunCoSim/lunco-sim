@@ -581,13 +581,24 @@ fn render_unified_toolbar(
     let mut auto_arrange_clicked = false;
     let mut new_view_mode = view_mode;
 
+    // Always show emoji-only labels in the toolbar. The prior
+    // text-bearing form clipped to "Ico"/"dle"/"mpile" once the tab
+    // narrowed, and `available_width` proved unreliable as a
+    // threshold (the dock layout's reported width didn't match the
+    // visual clipping point). Tooltips spell out each button's
+    // meaning so nothing is lost.
+    let compact = true;
     ui.horizontal(|ui| {
         // Identity is on the tab title now (dirty dot there too);
         // the toolbar shows just the view switcher + status + actions
         // so the header stays tight like VS Code.
         let _ = display_name;
         if is_read_only {
-            ui.colored_label(egui::Color32::from_rgb(200, 150, 50), "👁 read-only");
+            ui.colored_label(
+                egui::Color32::from_rgb(200, 150, 50),
+                if compact { "👁" } else { "👁 read-only" },
+            )
+            .on_hover_text("Read-only — Duplicate to Workspace to edit");
             ui.separator();
         }
 
@@ -602,23 +613,41 @@ fn render_unified_toolbar(
         // install time (see `drive_drill_in_loads`), not by hiding
         // buttons.
         let _ = (is_read_only, is_icon_only_tab);
-        if ui.selectable_label(text_sel, "📝 Text").clicked() {
+        // Emoji-only tabs to keep the toolbar compact at every dock
+        // width. Tooltips spell out the meaning.
+        if ui
+            .selectable_label(text_sel, "📝")
+            .on_hover_text("Text view (source)")
+            .clicked()
+        {
             new_view_mode = ModelViewMode::Text;
         }
-        if ui.selectable_label(canv_sel, "🔗 Diagram").clicked() {
+        if ui
+            .selectable_label(canv_sel, "🔗")
+            .on_hover_text("Diagram view (canvas)")
+            .clicked()
+        {
             new_view_mode = ModelViewMode::Canvas;
         }
-        if ui.selectable_label(icon_sel, "🎨 Icon").clicked() {
+        if ui
+            .selectable_label(icon_sel, "🎨")
+            .on_hover_text("Icon view (class symbol)")
+            .clicked()
+        {
             new_view_mode = ModelViewMode::Icon;
         }
-        if ui.selectable_label(docs_sel, "📖 Docs").clicked() {
+        if ui
+            .selectable_label(docs_sel, "📖")
+            .on_hover_text("Documentation view")
+            .clicked()
+        {
             new_view_mode = ModelViewMode::Docs;
         }
         ui.separator();
 
         if let Some(ref err) = compilation_error {
             let chip = ui
-                .colored_label(egui::Color32::LIGHT_RED, "⚠ Error")
+                .colored_label(egui::Color32::LIGHT_RED, if compact { "⚠" } else { "⚠ Error" })
                 .on_hover_text(err);
             if chip.clicked() {
                 dismiss_error = true;
@@ -626,16 +655,32 @@ fn render_unified_toolbar(
         } else {
             match compile_state {
                 CompileState::Compiling => {
-                    ui.colored_label(egui::Color32::from_rgb(220, 200, 80), "⏳ Compiling…");
+                    ui.colored_label(
+                        egui::Color32::from_rgb(220, 200, 80),
+                        if compact { "⏳" } else { "⏳ Compiling…" },
+                    )
+                    .on_hover_text("Compiling…");
                 }
                 CompileState::Ready => {
-                    ui.colored_label(egui::Color32::GREEN, "✓ Ready");
+                    ui.colored_label(
+                        egui::Color32::GREEN,
+                        if compact { "✓" } else { "✓ Ready" },
+                    )
+                    .on_hover_text("Ready");
                 }
                 CompileState::Error => {
-                    ui.colored_label(egui::Color32::LIGHT_RED, "⚠ Error");
+                    ui.colored_label(
+                        egui::Color32::LIGHT_RED,
+                        if compact { "⚠" } else { "⚠ Error" },
+                    )
+                    .on_hover_text("Compile error");
                 }
                 CompileState::Idle => {
-                    ui.colored_label(egui::Color32::GRAY, "◌ Idle");
+                    ui.colored_label(
+                        egui::Color32::GRAY,
+                        if compact { "◌" } else { "◌ Idle" },
+                    )
+                    .on_hover_text("Idle");
                 }
             }
         }
@@ -659,7 +704,10 @@ fn render_unified_toolbar(
         // in-flight compile to settle.
         let compile_enabled = !matches!(compile_state, CompileState::Compiling);
         compile_clicked = ui
-            .add_enabled(compile_enabled, egui::Button::new("🚀 Compile"))
+            .add_enabled(
+                compile_enabled,
+                egui::Button::new(if compact { "🚀" } else { "🚀 Compile" }),
+            )
             .on_hover_text("Compile the current model and run it (F5)")
             .clicked();
 
@@ -670,23 +718,7 @@ fn render_unified_toolbar(
         if view_mode == ModelViewMode::Canvas && !is_read_only {
             ui.separator();
             auto_arrange_clicked = ui
-                .button("🧹 Auto-Arrange")
-                .on_hover_text(
-                    "Lay out all components in a grid and write the \
-                     positions back into the source as Placement \
-                     annotations. Undo-able.",
-                )
-                .clicked();
-        }
-
-        // Auto-Arrange: batch SetPlacement on every component in the
-        // active class to a clean grid. Only useful on the Diagram
-        // view and only on editable docs. Dymola's "Edit → Auto
-        // Arrange" in one button.
-        if view_mode == ModelViewMode::Canvas && !is_read_only {
-            ui.separator();
-            auto_arrange_clicked = ui
-                .button("🧹 Auto-Arrange")
+                .button(if compact { "🧹" } else { "🧹 Auto-Arrange" })
                 .on_hover_text(
                     "Lay out all components in a grid and write the \
                      positions back into the source as Placement \
@@ -703,7 +735,7 @@ fn render_unified_toolbar(
         if is_read_only {
             ui.separator();
             duplicate_clicked = ui
-                .button("📄 Duplicate to Workspace")
+                .button(if compact { "📄" } else { "📄 Duplicate to Workspace" })
                 .on_hover_text(
                     "Copy this library class into a new editable Untitled \
                      model so you can tweak parameters / connections \

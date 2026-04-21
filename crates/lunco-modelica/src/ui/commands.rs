@@ -234,12 +234,14 @@ impl Plugin for ModelicaCommandsPlugin {
             .register_type::<FitCanvas>()
             .register_type::<OpenExample>()
             .register_type::<OpenClass>()
+            .register_type::<MoveComponent>()
             .add_observer(on_focus_document_by_name)
             .add_observer(on_set_view_mode)
             .add_observer(on_set_zoom)
             .add_observer(on_fit_canvas)
             .add_observer(on_open_example)
             .add_observer(on_open_class)
+            .add_observer(on_move_component)
             .add_observer(resolve_editor_intent)
             .add_observer(resolve_new_document_intent)
             .add_systems(
@@ -1709,5 +1711,91 @@ fn on_open_class(trigger: On<OpenClass>, mut commands: Commands) {
     let qualified = trigger.event().qualified.clone();
     commands.queue(move |world: &mut World| {
         crate::ui::panels::canvas_diagram::drill_into_class(world, &qualified);
+    });
+}
+
+/// Move a component instance to a new `(x, y)` position in Modelica
+/// diagram coordinates (-100..100, +Y up). Same code path the mouse
+/// drag uses — emits a `SetPlacement` op so undo/redo + source
+/// rewrite work uniformly. `class` empty ⇒ active editing class on
+/// the active tab.
+#[derive(Event, Reflect, Clone, Debug, Default)]
+#[reflect(Event, Default)]
+pub struct MoveComponent {
+    pub class: String,
+    pub name: String,
+    pub x: f32,
+    pub y: f32,
+    /// Optional explicit extent. Empty (0.0, 0.0) means "preserve
+    /// the existing extent" — reads it from the live scene the same
+    /// way mouse-drag does.
+    pub width: f32,
+    pub height: f32,
+}
+
+fn on_move_component(trigger: On<MoveComponent>, mut commands: Commands) {
+    let ev = trigger.event().clone();
+    commands.queue(move |world: &mut World| {
+        use crate::document::ModelicaOp;
+        use crate::pretty::Placement;
+        let active_doc = world
+            .get_resource::<lunco_workbench::WorkspaceResource>()
+            .and_then(|ws| ws.active_document);
+        let Some(doc_id) = active_doc else {
+            bevy::log::warn!("[MoveComponent] no active document");
+            return;
+        };
+        let class = if ev.class.is_empty() {
+            // Mirror canvas_diagram::resolve_doc_context: read the
+            // active editing class from the Workbench's open_model
+            // detected name if we don't have one explicitly.
+            world
+                .get_resource::<crate::ui::panels::canvas_diagram::DrilledInClassNames>()
+                .and_then(|m| m.get(doc_id).map(str::to_string))
+                .or_else(|| {
+                    world.get_resource::<crate::ui::WorkbenchState>()
+                        .and_then(|s| s.open_model.as_ref().map(|m| m.detected_name.clone()))
+                        .flatten()
+                })
+                .unwrap_or_default()
+        } else {
+            ev.class.clone()
+        };
+        if class.is_empty() {
+            bevy::log::warn!("[MoveComponent] could not resolve target class for doc");
+            return;
+        }
+        // Use specified extent if provided, otherwise preserve the
+        // node's current rect from the canvas scene (same logic as
+        // the mouse-drag path).
+        let (width, height) = if ev.width > 0.0 && ev.height > 0.0 {
+            (ev.width, ev.height)
+        } else {
+            use crate::ui::panels::canvas_diagram::CanvasDiagramState;
+            world
+                .get_resource::<CanvasDiagramState>()
+                .and_then(|state| {
+                    let docstate = state.get(Some(doc_id));
+                    docstate.canvas.scene.nodes().find_map(|(_id, n)| {
+                        if n.origin.as_deref() == Some(ev.name.as_str()) {
+                            Some((n.rect.width().max(1.0), n.rect.height().max(1.0)))
+                        } else {
+                            None
+                        }
+                    })
+                })
+                .unwrap_or((20.0, 20.0))
+        };
+        let op = ModelicaOp::SetPlacement {
+            class: class.clone(),
+            name: ev.name.clone(),
+            placement: Placement {
+                x: ev.x,
+                y: ev.y,
+                width,
+                height,
+            },
+        };
+        crate::ui::panels::canvas_diagram::apply_ops_public(world, doc_id, vec![op]);
     });
 }

@@ -1526,11 +1526,32 @@ fn scan_component_declarations(source: &str) -> Vec<(String, String)> {
 /// — unordered so `connect(a.p, b.q)` and `connect(b.q, a.p)` hash
 /// to the same key.
 ///
-/// Rumoca's `Equation::Connect` has no annotation field (see
-/// rumoca-ir-ast), so the only place the authored route survives
-/// is in the raw source. We accept this as a pragmatic fallback:
-/// MSL examples nearly all author routes this way, and users who
-/// later drag to rearrange pay the edit cost at source-write time.
+/// TODO(rumoca-annotation-pr): replace this entire function with an
+/// AST walk once
+/// [`feat/equation-connect-annotation`](https://github.com/LunCoSim/rumoca/tree/feat/equation-connect-annotation)
+/// (local rumoca branch, commit 445d177) lands upstream and the
+/// modelica crate's Cargo.toml picks up a rumoca revision that
+/// carries `Equation::Connect.annotation: Option<Annotation>`.
+///
+/// The replacement is roughly:
+/// ```ignore
+/// for eq in &class.equations {
+///     let Equation::Connect { lhs, rhs, annotation } = eq else { continue };
+///     let Some(ann) = annotation else { continue };
+///     // Walk `ann.modifications` for the `Line` call, pull
+///     // `points` out of its argument tree, push into `out`.
+/// }
+/// ```
+/// — no regex, no whole-source re-scanning, no escaping pitfalls,
+/// and it picks up every equation-level annotation rumoca parses
+/// (including authored `color`, `thickness`, etc. for free).
+///
+/// Rumoca's `Equation::Connect` has no annotation field today (see
+/// rumoca-ir-ast::Equation), so the only place the authored route
+/// survives is in the raw source. We accept this as a pragmatic
+/// interim: MSL examples nearly all author routes this way, and
+/// users who later drag to rearrange pay the edit cost at
+/// source-write time.
 pub(crate) fn scan_connect_annotations(
     source: &str,
 ) -> std::collections::HashMap<
@@ -1560,8 +1581,16 @@ pub(crate) fn scan_connect_annotations(
     // simple `\{x,y\}` pattern — handling the outer braces inside
     // the outer regex proved fragile (the earlier `.*?\}\s*\}`
     // clipped the final point's closing brace).
+    // A connect endpoint is either `inst.port` (sub-component's
+    // connector) or a bare `port` (connector at the enclosing
+    // class's level, e.g. `connect(u, P.u)` where `u` is the model's
+    // own input connector). Express both shapes with a single
+    // alternation. The captured groups are always `(inst, port)` —
+    // for bare-connector endpoints `inst` is empty and `port` holds
+    // the identifier; `canonical_edge_key` below treats `("", id)`
+    // as the lookup key, matching the way edges are built.
     let re = regex::Regex::new(
-        r#"connect\s*\(\s*([A-Za-z_]\w*)\s*\.\s*([A-Za-z_]\w*(?:\s*\[[^\]]*\])?)\s*,\s*([A-Za-z_]\w*)\s*\.\s*([A-Za-z_]\w*(?:\s*\[[^\]]*\])?)\s*\)\s*annotation\s*\([^;]*?Line\s*\(\s*points\s*=\s*(\{\{[^;]*?\}\s*\})"#
+        r#"connect\s*\(\s*(?:([A-Za-z_]\w*)\s*\.\s*)?([A-Za-z_]\w*(?:\s*\[[^\]]*\])?)\s*,\s*(?:([A-Za-z_]\w*)\s*\.\s*)?([A-Za-z_]\w*(?:\s*\[[^\]]*\])?)\s*\)\s*annotation\s*\([^;]*?Line\s*\(\s*points\s*=\s*(\{\{[^;]*?\}\s*\})"#
     ).expect("connect annotation regex compiles");
     let pt_re = regex::Regex::new(
         r"\{\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\}",
@@ -1569,9 +1598,9 @@ pub(crate) fn scan_connect_annotations(
     .expect("point regex compiles");
     let mut out = std::collections::HashMap::new();
     for cap in re.captures_iter(source) {
-        let a_inst = cap[1].to_string();
+        let a_inst = cap.get(1).map(|m| m.as_str().to_string()).unwrap_or_default();
         let a_port = cap[2].split_whitespace().collect::<String>();
-        let b_inst = cap[3].to_string();
+        let b_inst = cap.get(3).map(|m| m.as_str().to_string()).unwrap_or_default();
         let b_port = cap[4].split_whitespace().collect::<String>();
         let pts_src = &cap[5];
         let mut pts = Vec::new();
@@ -3401,6 +3430,28 @@ end M;
         let reverse = super::canonical_edge_key("y", "q", "x", "p");
         assert_eq!(forward, reverse);
         assert!(map.contains_key(&forward));
+    }
+
+    #[test]
+    fn scan_connect_annotations_handles_bare_connector_endpoint() {
+        // `connect(u, P.u)` — `u` is the enclosing class's connector
+        // (no `inst.port` form). The waypoint scan must capture it
+        // with `inst=""`, otherwise MSL wires from class-level
+        // connectors into sub-components silently lose their authored
+        // routes. This is the PID case (`connect(u, P.u) annotation
+        // (Line(points={…}))`).
+        let src = r#"
+model M
+  Real u;
+  P p;
+equation
+  connect(u, p.u) annotation(Line(points={{-120,0},{-80,0},{-80,80},{-64,80}}));
+end M;
+"#;
+        let map = super::scan_connect_annotations(src);
+        assert_eq!(map.len(), 1);
+        let key = super::canonical_edge_key("", "u", "p", "u");
+        assert!(map.contains_key(&key), "bare-connector key missing: {:?}", map.keys().collect::<Vec<_>>());
     }
 
     #[test]

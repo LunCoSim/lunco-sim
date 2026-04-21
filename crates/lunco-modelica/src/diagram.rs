@@ -152,9 +152,29 @@ impl ModelicaComponentBuilder {
                         let src_node_ref = graph.get_node(src_id).unwrap();
                         let tgt_node_ref = graph.get_node(tgt_id).unwrap();
 
+                        // `connect(u, P.u)` where `u` is the enclosing
+                        // class's own connector: parse_connect_reference
+                        // returns ("u", "") for that side because the
+                        // bare identifier is the entire reference. Our
+                        // graph node for `u` has its single port (named
+                        // "u" / "p" / whatever causality dictated) at
+                        // index 0; treat the empty port-name as port 0
+                        // so the wire actually gets built. Without
+                        // this, every MSL connect from a model-level
+                        // connector silently drops out of the diagram.
+                        let resolve_port = |
+                            n: &lunco_core::diagram::ComponentNode,
+                            port: &str,
+                        | -> Option<usize> {
+                            if port.is_empty() && !n.ports.is_empty() {
+                                Some(0)
+                            } else {
+                                n.port_index(port).map(|p| p as usize)
+                            }
+                        };
                         if let (Some(sp), Some(tp)) = (
-                            src_node_ref.port_index(&src_port),
-                            tgt_node_ref.port_index(&tgt_port),
+                            resolve_port(src_node_ref, &src_port),
+                            resolve_port(tgt_node_ref, &tgt_port),
                         ) {
                             graph.connect(src_id, sp, tgt_id, tp, EdgeKind::Connect);
                         }

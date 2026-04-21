@@ -563,6 +563,16 @@ impl EdgeVisual for OrthogonalEdgeVisual {
         // `connect(...) annotation(Line(points={{x,y},...}))` clause
         // or a user edit), emit a stub-from-port → waypoints → stub-
         // into-port polyline and skip the auto-Z router entirely.
+        //
+        // Optimistic fallback during drag: the waypoints are baked in
+        // canvas-world coords at projection time. If the user is mid-
+        // drag of one of the connected nodes, the port has moved but
+        // the waypoints haven't, so the strict polyline form draws
+        // an obvious zigzag back to the stale anchor. Detect that
+        // (port noticeably far from the nearest authored endpoint)
+        // and fall through to auto-Z so the wire visually tracks the
+        // dragged node — when re-projection lands the waypoints come
+        // back into alignment.
         if !self.waypoints_world.is_empty() {
             let from_screen = egui::pos2(from.x, from.y);
             let to_screen = egui::pos2(to.x, to.y);
@@ -576,14 +586,29 @@ impl EdgeVisual for OrthogonalEdgeVisual {
                     egui::pos2(s.x, s.y)
                 })
                 .collect();
-            let mut pts = Vec::with_capacity(way_screen.len() + 2);
-            pts.push(from_screen);
-            pts.extend(way_screen.iter().copied());
-            pts.push(to_screen);
-            for w in pts.windows(2) {
-                painter.line_segment([w[0], w[1]], stroke);
+            // Stale-anchor guard: a wire whose first / last waypoint
+            // sits far (> 60 screen px) from its current port end is
+            // stale (drag in progress); use auto-Z instead.
+            const STALE_PX: f32 = 60.0;
+            let first_far = way_screen
+                .first()
+                .map(|p| (p.x - from_screen.x).hypot(p.y - from_screen.y) > STALE_PX)
+                .unwrap_or(false);
+            let last_far = way_screen
+                .last()
+                .map(|p| (p.x - to_screen.x).hypot(p.y - to_screen.y) > STALE_PX)
+                .unwrap_or(false);
+            if !(first_far || last_far) {
+                let mut pts = Vec::with_capacity(way_screen.len() + 2);
+                pts.push(from_screen);
+                pts.extend(way_screen.iter().copied());
+                pts.push(to_screen);
+                for w in pts.windows(2) {
+                    painter.line_segment([w[0], w[1]], stroke);
+                }
+                return;
             }
-            return;
+            // else: fall through to auto-Z below
         }
 
         // Whether each side's stub actually helps reach the target.
@@ -1859,8 +1884,45 @@ impl Panel for CanvasDiagramPanel {
                     scene.edge_count(),
                     is_initial_projection,
                 );
+                // Preserve the user's selection across re-projection
+                // when the same node is still in the new scene — the
+                // prior unconditional `clear()` made every drag /
+                // small edit feel like a visual reset (the highlight
+                // ring would briefly vanish after each SetPlacement
+                // cycle). We match nodes by `origin` (= the Modelica
+                // instance name) since Bevy IDs change across scene
+                // rebuilds.
+                let preserved_origins: std::collections::HashSet<String> = docstate
+                    .canvas
+                    .selection
+                    .iter()
+                    .filter_map(|sid| match sid {
+                        lunco_canvas::SelectItem::Node(nid) => docstate
+                            .canvas
+                            .scene
+                            .node(*nid)
+                            .and_then(|n| n.origin.clone()),
+                        _ => None,
+                    })
+                    .collect();
                 docstate.canvas.scene = scene;
                 docstate.canvas.selection.clear();
+                if !preserved_origins.is_empty() {
+                    let new_ids: Vec<lunco_canvas::NodeId> = docstate
+                        .canvas
+                        .scene
+                        .nodes()
+                        .filter_map(|(nid, n)| {
+                            n.origin
+                                .as_deref()
+                                .filter(|o| preserved_origins.contains(*o))
+                                .map(|_| *nid)
+                        })
+                        .collect();
+                    for id in new_ids {
+                        docstate.canvas.selection.add(lunco_canvas::SelectItem::Node(id));
+                    }
+                }
                 docstate.last_seen_gen = gen;
                 docstate.last_seen_target = target;
                 if is_initial_projection {
@@ -3581,11 +3643,25 @@ fn build_ops_from_events(
                 // happen — projection always sets it).
                 let Some(node) = scene.node(*id) else { continue };
                 let Some(name) = node.origin.clone() else { continue };
-                let (mx, my) = canvas_min_to_modelica_center(*new_min);
+                // Use the node's actual icon extent — `Placement::at`
+                // hardcodes 20×20, which silently shrinks (or grows)
+                // every dragged component back to the default size on
+                // re-projection. Read the live `node.rect` instead so
+                // the new placement preserves whatever size the icon
+                // already has on screen (canvas world coords are 1:1
+                // with Modelica units, just Y-flipped).
+                let icon_w = node.rect.width().max(1.0);
+                let icon_h = node.rect.height().max(1.0);
+                let m = coords::canvas_min_to_modelica_center(*new_min, icon_w, icon_h);
                 ops.push(ModelicaOp::SetPlacement {
                     class: class.to_string(),
                     name,
-                    placement: Placement::at(mx, my),
+                    placement: Placement {
+                        x: m.x,
+                        y: m.y,
+                        width: icon_w,
+                        height: icon_h,
+                    },
                 });
             }
             SceneEvent::EdgeCreated { from, to } => {
@@ -3750,6 +3826,18 @@ fn op_remove_edge_inner(
 /// — shouldn't happen, but defence in depth) are logged and
 /// skipped. After success the doc's generation bumps, which the
 /// next frame picks up via `last_seen_gen` and re-projects.
+/// Public re-export of the canvas's op applier so reflect-registered
+/// commands (`MoveComponent`, etc.) can dispatch the same SetPlacement
+/// pipeline the mouse drag uses — keeps undo/redo + source rewriting
+/// consistent across UI-driven and API-driven edits.
+pub fn apply_ops_public(
+    world: &mut World,
+    doc_id: lunco_doc::DocumentId,
+    ops: Vec<ModelicaOp>,
+) {
+    apply_ops(world, doc_id, ops);
+}
+
 fn apply_ops(world: &mut World, doc_id: lunco_doc::DocumentId, ops: Vec<ModelicaOp>) {
     let n = ops.len();
     let mut any_applied = false;
