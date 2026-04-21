@@ -3611,6 +3611,42 @@ pub fn drive_duplicate_loads(
             "[CanvasDiagram] duplicate: installed `{}` (from `{}`)",
             dup_display_name, origin_short,
         );
+        // Pre-warm the MSL inheritance chain on a dedicated thread so
+        // the projection finds inherited connectors. Same pattern as
+        // the drill-in path. The duplicated copy carries `within
+        // <origin package>;` so the within-prefixed qualified path
+        // (e.g. `Modelica.Blocks.Continuous.PIDCopy`) gives the
+        // scope-chain resolver enough context to walk up to
+        // `Modelica.Blocks.Interfaces.SISO`.
+        if let Some(host) = registry.host(doc_id) {
+            if let Some(ast) = host.document().ast().result.as_ref().ok() {
+                let within_prefix = ast
+                    .within
+                    .as_ref()
+                    .map(|w| w.to_string())
+                    .unwrap_or_default();
+                let qpath = if within_prefix.is_empty() {
+                    dup_display_name.clone()
+                } else {
+                    format!("{within_prefix}.{dup_display_name}")
+                };
+                if let Some(class) =
+                    crate::diagram::find_class_by_qualified_name(ast, &qpath)
+                {
+                    let bases: Vec<String> = class
+                        .extends
+                        .iter()
+                        .map(|e| e.base_name.to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect();
+                    if !bases.is_empty() {
+                        std::thread::spawn(move || {
+                            crate::class_cache::prewarm_extends_chain(&qpath, &bases);
+                        });
+                    }
+                }
+            }
+        }
     }
 }
 

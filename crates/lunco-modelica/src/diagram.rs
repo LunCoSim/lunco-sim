@@ -400,14 +400,37 @@ impl ModelicaComponentBuilder {
         if let Some(name) = &self.target_class {
             return name.clone();
         }
-        // Find first non-package class
+        // Find first non-package class. Prepend the file's `within`
+        // clause so the returned target is fully-qualified — extends
+        // resolution walks the scope chain off this name, and a bare
+        // short name (e.g. `"PIDCopy"`) leaves `extends Interfaces.SISO`
+        // with no parent to walk up to. With `within`-prefixing,
+        // `Modelica.Blocks.Continuous.PIDCopy` lets the chain reach
+        // `Modelica.Blocks.Interfaces.SISO`.
+        let within_prefix: String = self
+            .ast
+            .within
+            .as_ref()
+            .map(|w| w.to_string())
+            .unwrap_or_default();
+        let qualify = |short: &str| -> String {
+            if within_prefix.is_empty() {
+                short.to_string()
+            } else {
+                format!("{within_prefix}.{short}")
+            }
+        };
         for (name, class) in &self.ast.classes {
             if class.class_type != ClassType::Package {
-                return name.clone();
+                return qualify(name);
             }
         }
-        // Fallback to first class
-        self.ast.classes.keys().next().cloned().unwrap_or_default()
+        self.ast
+            .classes
+            .keys()
+            .next()
+            .map(|n| qualify(n))
+            .unwrap_or_default()
     }
 
     fn get_target_class(&self, name: &str) -> Option<&ClassDef> {

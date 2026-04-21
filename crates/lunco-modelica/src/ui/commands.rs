@@ -246,6 +246,8 @@ impl Plugin for ModelicaCommandsPlugin {
             .register_type::<CompileActiveModel>()
             .register_type::<SaveActiveDocument>()
             .register_type::<SaveActiveDocumentAs>()
+            .register_type::<NewPlotPanel>()
+            .register_type::<AddSignalToPlot>()
             .add_observer(on_focus_document_by_name)
             .add_observer(on_set_view_mode)
             .add_observer(on_set_zoom)
@@ -264,6 +266,8 @@ impl Plugin for ModelicaCommandsPlugin {
             .add_observer(on_compile_active_model)
             .add_observer(on_save_active_document)
             .add_observer(on_save_active_document_as)
+            .add_observer(on_new_plot_panel)
+            .add_observer(on_add_signal_to_plot)
             .add_observer(resolve_editor_intent)
             .add_observer(resolve_new_document_intent)
             .add_systems(
@@ -2069,6 +2073,119 @@ fn on_save_active_document_as(
             source.len(),
         );
         world.commands().trigger(DocumentSaved::local(doc));
+    });
+}
+
+/// Open a new time-series plot panel (`VizPanel`) in the bottom dock.
+/// Each call allocates a fresh `VizId` and inserts a `LinePlot`-kind
+/// `VisualizationConfig`. The initial `signals` list (Modelica
+/// dotted variable paths) is bound on creation; more can be added
+/// later via [`AddSignalToPlot`].
+#[derive(Event, Reflect, Clone, Debug, Default)]
+#[reflect(Event, Default)]
+pub struct NewPlotPanel {
+    /// Tab title. Empty ⇒ auto-named "Plot #N".
+    pub title: String,
+    /// Initial signals to plot. Each is a fully-qualified scalar
+    /// variable path (e.g. `"P.y"`).
+    pub signals: Vec<String>,
+}
+
+fn on_new_plot_panel(trigger: On<NewPlotPanel>, mut commands: Commands) {
+    let ev = trigger.event().clone();
+    commands.queue(move |world: &mut World| {
+        use lunco_viz::{
+            kinds::line_plot::LINE_PLOT_KIND, view::ViewTarget, viz::SignalBinding,
+            viz::VisualizationConfig, viz::VizId, SignalRef, VisualizationRegistry,
+        };
+        let id = VizId::next();
+        let title = if ev.title.is_empty() {
+            format!("Plot #{}", id.0)
+        } else {
+            ev.title.clone()
+        };
+        // Bind signals to the first ModelicaModel entity — same
+        // entity Telemetry's checkbox uses. SignalRegistry is keyed
+        // by (entity, path) so a signal bound to the wrong entity
+        // never plots. If no model is loaded, drop binding to
+        // PLACEHOLDER so the plot still opens (empty until the
+        // user simulates and re-plots).
+        let model_entity = world
+            .query::<(bevy::prelude::Entity, &crate::ModelicaModel)>()
+            .iter(world)
+            .next()
+            .map(|(e, _)| e);
+        let inputs: Vec<SignalBinding> = ev
+            .signals
+            .iter()
+            .map(|s| {
+                let entity = model_entity.unwrap_or(bevy::prelude::Entity::PLACEHOLDER);
+                SignalBinding {
+                    source: SignalRef::new(entity, s.clone()),
+                    role: "y".into(),
+                    label: None,
+                    color: None,
+                    visible: true,
+                }
+            })
+            .collect();
+        let mut registry = world.resource_mut::<VisualizationRegistry>();
+        registry.insert(VisualizationConfig {
+            id,
+            title: title.clone(),
+            kind: LINE_PLOT_KIND.clone(),
+            view: ViewTarget::Panel2D,
+            inputs,
+            style: serde_json::Value::Null,
+        });
+        world.commands().trigger(lunco_workbench::OpenTab {
+            kind: lunco_viz::VIZ_PANEL_KIND,
+            instance: id.0,
+        });
+        bevy::log::info!("[NewPlotPanel] opened `{}` (id={})", title, id.0);
+    });
+}
+
+/// Add one signal to an existing plot panel. `plot=0` ⇒ the
+/// singleton default Modelica graph.
+#[derive(Event, Reflect, Clone, Debug, Default)]
+#[reflect(Event, Default)]
+pub struct AddSignalToPlot {
+    pub plot: u64,
+    pub signal: String,
+}
+
+fn on_add_signal_to_plot(trigger: On<AddSignalToPlot>, mut commands: Commands) {
+    let ev = trigger.event().clone();
+    commands.queue(move |world: &mut World| {
+        use lunco_viz::{viz::SignalBinding, viz::VizId, SignalRef, VisualizationRegistry};
+        let id = if ev.plot == 0 {
+            crate::ui::viz::DEFAULT_MODELICA_GRAPH
+        } else {
+            VizId(ev.plot)
+        };
+        let model_entity = world
+            .query::<(bevy::prelude::Entity, &crate::ModelicaModel)>()
+            .iter(world)
+            .next()
+            .map(|(e, _)| e)
+            .unwrap_or(bevy::prelude::Entity::PLACEHOLDER);
+        let mut registry = world.resource_mut::<VisualizationRegistry>();
+        let Some(cfg) = registry.get_mut(id) else {
+            bevy::log::warn!("[AddSignalToPlot] no plot with id={}", ev.plot);
+            return;
+        };
+        let signal_ref = SignalRef::new(model_entity, ev.signal.clone());
+        if cfg.inputs.iter().any(|b| b.source == signal_ref) {
+            return;
+        }
+        cfg.inputs.push(SignalBinding {
+            source: signal_ref,
+            role: "y".into(),
+            label: None,
+            color: None,
+            visible: true,
+        });
     });
 }
 
