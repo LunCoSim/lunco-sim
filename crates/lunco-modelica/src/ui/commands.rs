@@ -1698,12 +1698,12 @@ fn on_fit_canvas(trigger: On<FitCanvas>, mut commands: Commands) {
         let Some(mut state) = world.get_resource_mut::<CanvasDiagramState>() else {
             return;
         };
-        let docstate = state.get_mut(doc);
-        if let Some(bounds) = docstate.canvas.scene.bounds() {
-            let sr = approx_screen_rect();
-            let (c, z) = docstate.canvas.viewport.fit_values(bounds, sr, 40.0);
-            docstate.canvas.viewport.set_target(c, z);
-        }
+        // Defer to next render so Fit uses the canvas widget's
+        // actual rect, not a hardcoded approximation. Without this
+        // the observer-side fit picks zoom for an 800×600 viewport
+        // even when the real one is 1700×800, leaving content
+        // clipped at the top under the toolbar.
+        state.get_mut(doc).pending_fit = true;
     });
 }
 

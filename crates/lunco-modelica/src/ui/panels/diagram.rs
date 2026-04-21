@@ -1987,6 +1987,29 @@ pub fn import_model_to_diagram_from_ast(
     // Scope is the target_class when set (drill-in tab), else every
     // class in the file — same scope the source-text regex used to
     // operate on.
+    // Inherited components, gathered once so the layout loop can
+    // also see Placement annotations from the base class (e.g. SISO
+    // declares `RealInput u` with a left-boundary Placement that the
+    // deriving PID inherits — without this, u/y fall through to the
+    // grid fallback and push the scene bounds way past the
+    // authored ±120 box).
+    let inherited_components: Vec<(String, rumoca_session::parsing::ast::Component)> =
+        if let Some(target) = target_class {
+            ast.classes
+                .iter()
+                .find_map(|_| {
+                    crate::diagram::find_class_by_qualified_name(&ast, target)
+                        .map(|class| {
+                            crate::diagram::collect_inherited_components(
+                                class, Some(target), &ast, 0,
+                            )
+                        })
+                })
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+
     let comp_by_short: HashMap<&str, &rumoca_session::parsing::ast::Component> = {
         let mut map: HashMap<&str, &rumoca_session::parsing::ast::Component> =
             HashMap::new();
@@ -2004,6 +2027,9 @@ pub fn import_model_to_diagram_from_ast(
                 for (cname, comp) in target_class_def.components.iter() {
                     map.insert(cname.as_str(), comp);
                 }
+            }
+            for (cname, comp) in &inherited_components {
+                map.entry(cname.as_str()).or_insert(comp);
             }
         } else {
             for (_n, top) in ast.classes.iter() {

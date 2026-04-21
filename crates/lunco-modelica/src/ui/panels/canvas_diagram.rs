@@ -1358,6 +1358,12 @@ pub struct CanvasDocState {
     /// advances past this, the projection is forced to re-run so
     /// inherited components surfaced by the warm cache appear.
     pub last_seen_prewarm_gen: u64,
+    /// Set by the [`crate::ui::commands::FitCanvas`] observer; the
+    /// canvas render system consumes it next frame and runs Fit
+    /// against the *actual* widget rect (rather than the hardcoded
+    /// 800×600 the observer would have to use). Cleared after the
+    /// fit lands.
+    pub pending_fit: bool,
     /// Snapshot of the drill-in target that produced the *currently
     /// rendered* scene. The render trigger compares this against the
     /// live `DrilledInClassNames[doc_id]`; a difference re-projects.
@@ -1403,6 +1409,7 @@ impl Default for CanvasDocState {
             last_seen_gen: 0,
             last_seen_source_hash: 0,
             last_seen_prewarm_gen: 0,
+            pending_fit: false,
             last_seen_target: None,
             context_menu: None,
             projection_task: None,
@@ -2238,6 +2245,25 @@ impl CanvasDiagramPanel {
             docstate.canvas.snap = snap_settings;
             docstate.canvas.ui(ui)
         };
+
+        // Service a deferred Fit request now that the widget rect
+        // (`response.rect`) is known. The observer side just sets
+        // the flag so the math runs against the real screen size.
+        {
+            let mut state = world.resource_mut::<CanvasDiagramState>();
+            let docstate = state.get_mut(active_doc);
+            if docstate.pending_fit {
+                docstate.pending_fit = false;
+                if let Some(bounds) = docstate.canvas.scene.bounds() {
+                    let sr = lunco_canvas::Rect::from_min_max(
+                        lunco_canvas::Pos::new(response.rect.min.x, response.rect.min.y),
+                        lunco_canvas::Pos::new(response.rect.max.x, response.rect.max.y),
+                    );
+                    let (c, z) = docstate.canvas.viewport.fit_values(bounds, sr, 40.0);
+                    docstate.canvas.viewport.set_target(c, z);
+                }
+            }
+        }
 
         // Overlay state machine, in priority order:
         //   1. Drill-in load in flight → "Loading <class>…" card.

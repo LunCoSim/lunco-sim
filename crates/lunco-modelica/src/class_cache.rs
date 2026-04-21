@@ -750,6 +750,33 @@ fn prewarm_extends_chain_inner(class_qualified_path: &str, bases: &[String], dep
                     .filter(|s| !s.is_empty())
                     .collect();
                 prewarm_extends_chain_inner(cand, &next_bases, depth + 1);
+                // Also pre-load each inherited component's *type*
+                // (e.g. SISO's `u: RealInput` → load RealInput)
+                // so the projection's type-resolution can rewrite
+                // the inherited component's `type_name` to a
+                // fully-qualified MSL path. Without this, the
+                // graph→VisualDiagram conversion drops nodes whose
+                // short type name doesn't resolve in the deriving
+                // class's scope.
+                for comp in base.components.values() {
+                    let ty = comp.type_name.to_string();
+                    if ty.is_empty() {
+                        continue;
+                    }
+                    let parts: Vec<&str> = cand.split('.').collect();
+                    let mut tried_qualified = false;
+                    for i in (0..parts.len().saturating_sub(1)).rev() {
+                        let prefix = parts[..=i].join(".");
+                        let q = format!("{}.{}", prefix, ty);
+                        if peek_or_load_msl_class(&q).is_some() {
+                            tried_qualified = true;
+                            break;
+                        }
+                    }
+                    if !tried_qualified {
+                        let _ = peek_or_load_msl_class(&ty);
+                    }
+                }
                 break;
             }
         }

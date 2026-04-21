@@ -546,7 +546,10 @@ impl MSLIndexer {
         let _ = fs::create_dir_all(&icons_dir);
 
         for (full_name, class) in &self.classes {
-            if class.class_type == ClassType::Model || class.class_type == ClassType::Block {
+            if matches!(
+                class.class_type,
+                ClassType::Model | ClassType::Block | ClassType::Connector
+            ) {
                 let mut ports = Vec::new();
                 let mut parameters = Vec::new();
                 let mut visited = HashSet::new();
