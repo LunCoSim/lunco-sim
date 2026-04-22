@@ -804,88 +804,22 @@ impl EdgeVisual for OrthogonalEdgeVisual {
             // else: fall through to auto-Z below
         }
 
-        // Whether each side's stub actually helps reach the target.
-        // A stub helps iff its outward unit vector projects positively
-        // onto the from→to vector — i.e. stepping outward from the
-        // port moves us *closer* to the other end. When the dot
-        // product is zero (port faces perpendicular to the
-        // connection) or negative (port faces away from the target),
-        // emitting the stub creates a visible U-shape that doubles
-        // back across the icon. The previous version always drew
-        // both stubs and produced exactly that bug for collinear
-        // same-direction ports (e.g. an inertia's `flange_b` on the
-        // right wired to a sensor's `flange` whose icon was X-mirrored
-        // to also expose its flange on the right at the same x).
-        let dx_full = to.x - from.x;
-        let dy_full = to.y - from.y;
-        let (uxf, uyf) = self.from_dir.outward();
-        let (uxt, uyt) = self.to_dir.outward();
-        let from_helps = self.from_dir != PortDir::None
-            && uxf * dx_full + uyf * dy_full > 0.0;
-        let to_helps = self.to_dir != PortDir::None
-            && uxt * (-dx_full) + uyt * (-dy_full) > 0.0;
-
-        let from_stub = if from_helps {
-            step(from, self.from_dir, STUB_PX)
-        } else {
-            from
-        };
-        let to_stub = if to_helps {
-            step(to, self.to_dir, STUB_PX)
-        } else {
-            to
-        };
-
-        if from_helps {
-            painter.line_segment(
-                [egui::pos2(from.x, from.y), egui::pos2(from_stub.x, from_stub.y)],
-                stroke,
-            );
+        // Build an orthogonal polyline using port-direction-aware
+        // elbow placement. See [`route_orthogonal`] for the full case
+        // analysis (parallel-aligned, parallel-opposed, perpendicular,
+        // unknown). This replaces the older "always-midpoint Z" router
+        // that produced wires crossing through icon bodies whenever
+        // a port faced away from its peer.
+        let polyline = route_orthogonal(
+            egui::pos2(from.x, from.y),
+            self.from_dir,
+            egui::pos2(to.x, to.y),
+            self.to_dir,
+            STUB_PX,
+        );
+        for w in polyline.windows(2) {
+            painter.line_segment([w[0], w[1]], stroke);
         }
-        if to_helps {
-            painter.line_segment(
-                [egui::pos2(to_stub.x, to_stub.y), egui::pos2(to.x, to.y)],
-                stroke,
-            );
-        }
-
-        let p_from = from_stub;
-        let p_to = to_stub;
-        let dx = p_to.x - p_from.x;
-        let dy = p_to.y - p_from.y;
-        let thr = 1.0;
-
-        // Collinear (or trivially close on one axis) → straight
-        // segment between stub-ends. No Z-bend, no doubling back.
-        if dx.abs() < thr || dy.abs() < thr {
-            painter.line_segment(
-                [egui::pos2(p_from.x, p_from.y), egui::pos2(p_to.x, p_to.y)],
-                stroke,
-            );
-            return;
-        }
-
-        // Z-bend axis selection — horizontal-exit ports route through
-        // an H→V→H Z, vertical-exit ports the opposite. When the
-        // source stub was skipped (port faces away or perpendicular),
-        // fall back to the target's direction; if both are vertical-
-        // bias / both horizontal-bias, this picks the right pivot.
-        let prefer_horizontal_first = match (self.from_dir, self.to_dir) {
-            (PortDir::Left | PortDir::Right, _) => true,
-            (PortDir::None, PortDir::Left | PortDir::Right) => false,
-            (PortDir::Up | PortDir::Down, _) => false,
-            _ => true,
-        };
-        let mid = if prefer_horizontal_first {
-            let midx = p_from.x + dx * 0.5;
-            (egui::pos2(midx, p_from.y), egui::pos2(midx, p_to.y))
-        } else {
-            let midy = p_from.y + dy * 0.5;
-            (egui::pos2(p_from.x, midy), egui::pos2(p_to.x, midy))
-        };
-        painter.line_segment([egui::pos2(p_from.x, p_from.y), mid.0], stroke);
-        painter.line_segment([mid.0, mid.1], stroke);
-        painter.line_segment([mid.1, egui::pos2(p_to.x, p_to.y)], stroke);
 
         // Live-flow animation: small dots moving along the polyline
         // at constant speed. Skips when no signal data is present
@@ -897,12 +831,6 @@ impl EdgeVisual for OrthogonalEdgeVisual {
             ctx.ui.ctx(),
         );
         if !snap.samples.is_empty() {
-            let polyline = [
-                egui::pos2(p_from.x, p_from.y),
-                mid.0,
-                mid.1,
-                egui::pos2(p_to.x, p_to.y),
-            ];
             paint_flow_dots(painter, &polyline, col, ctx.time);
         }
     }
@@ -937,6 +865,158 @@ impl EdgeVisual for OrthogonalEdgeVisual {
 fn step(p: CanvasPos, dir: PortDir, len: f32) -> CanvasPos {
     let (ux, uy) = dir.outward();
     CanvasPos::new(p.x + ux * len, p.y + uy * len)
+}
+
+/// Compute an orthogonal polyline routed between two ports, in
+/// **screen coords** (+Y down). The router emits a stub from each
+/// port in its outward direction, then connects the stub-ends with
+/// either an L-elbow (perpendicular ports) or a Z-bend (parallel /
+/// unknown), choosing pivot positions that keep the wire from
+/// doubling back across the icon body.
+///
+/// Cases (where `f`/`t` are the port-side stub endpoints):
+///
+/// * **Perpendicular** (one horizontal, one vertical): single
+///   L-elbow at the corner aligned with each port's exit axis. No
+///   Z-bend needed.
+///
+/// * **Parallel, opposed** (e.g. Right→Left, both helping): classic
+///   Z-bend pivoted at the midpoint along the ports' shared exit
+///   axis. Stubs already pointed at each other so the elbow lives
+///   between them.
+///
+/// * **Parallel, same direction** (e.g. both Right) or **port faces
+///   away from peer**: the "helping" extent is pushed past the
+///   farther port + STUB so the wire wraps around instead of
+///   doubling back through the source icon. Produces a U-shape when
+///   both ports face the same direction.
+///
+/// * **One unknown direction**: defer to the known port's axis;
+///   midpoint Z. Both unknown: plain horizontal-first Z.
+///
+/// Output always starts at `from` and ends at `to`; intermediate
+/// points are inserted only when needed (no zero-length segments).
+fn route_orthogonal(
+    from: egui::Pos2,
+    from_dir: PortDir,
+    to: egui::Pos2,
+    to_dir: PortDir,
+    stub: f32,
+) -> Vec<egui::Pos2> {
+    use PortDir::*;
+    let f_horiz = matches!(from_dir, Left | Right);
+    let f_vert = matches!(from_dir, Up | Down);
+    let t_horiz = matches!(to_dir, Left | Right);
+    let t_vert = matches!(to_dir, Up | Down);
+
+    // Stub-ends — extend each port outward by `stub` even when the
+    // direction "doesn't help", so the wire is visibly attached to
+    // the connector and the elbow logic below has a fixed anchor.
+    let (uxf, uyf) = from_dir.outward();
+    let (uxt, uyt) = to_dir.outward();
+    let f_stub = if from_dir == None {
+        from
+    } else {
+        egui::pos2(from.x + uxf * stub, from.y + uyf * stub)
+    };
+    let t_stub = if to_dir == None {
+        to
+    } else {
+        egui::pos2(to.x + uxt * stub, to.y + uyt * stub)
+    };
+
+    // "Helps" = the port's outward axis carries us toward the other
+    // port. When false, the elbow has to wrap around the icon to
+    // avoid crossing through it.
+    let dx = to.x - from.x;
+    let dy = to.y - from.y;
+    let from_helps = uxf * dx + uyf * dy > 0.0;
+    let to_helps = uxt * (-dx) + uyt * (-dy) > 0.0;
+
+    let mut pts: Vec<egui::Pos2> = Vec::with_capacity(6);
+    pts.push(from);
+    if from_dir != None {
+        pts.push(f_stub);
+    }
+
+    // Decide the inner routing between f_stub and t_stub.
+    if (f_horiz && t_vert) || (f_vert && t_horiz) {
+        // Perpendicular → L-elbow at the corner that sits along
+        // each port's exit axis. `from`-side determines which
+        // ordinate the corner takes from which side.
+        let corner = if f_horiz {
+            egui::pos2(t_stub.x, f_stub.y)
+        } else {
+            egui::pos2(f_stub.x, t_stub.y)
+        };
+        if corner != f_stub && corner != t_stub {
+            pts.push(corner);
+        }
+    } else if f_horiz && t_horiz {
+        // Both horizontal. Pivot Y at midway between stub-ends;
+        // pivot X at midway between stub-ends if both helping
+        // (classic Z), else push past the trailing port + stub
+        // so the wire wraps around instead of crossing the icon.
+        let pivot_x = if from_helps && to_helps {
+            (f_stub.x + t_stub.x) * 0.5
+        } else if !from_helps {
+            // from-stub points the wrong way — push pivot past
+            // from-stub in its outward direction.
+            f_stub.x
+        } else {
+            t_stub.x
+        };
+        let pivot_y = (f_stub.y + t_stub.y) * 0.5;
+        pts.push(egui::pos2(pivot_x, f_stub.y));
+        if (pivot_y - f_stub.y).abs() > 0.5 {
+            pts.push(egui::pos2(pivot_x, pivot_y));
+            pts.push(egui::pos2(t_stub.x, pivot_y));
+        } else {
+            pts.push(egui::pos2(t_stub.x, f_stub.y));
+        }
+    } else if f_vert && t_vert {
+        // Mirror of the both-horizontal case.
+        let pivot_y = if from_helps && to_helps {
+            (f_stub.y + t_stub.y) * 0.5
+        } else if !from_helps {
+            f_stub.y
+        } else {
+            t_stub.y
+        };
+        let pivot_x = (f_stub.x + t_stub.x) * 0.5;
+        pts.push(egui::pos2(f_stub.x, pivot_y));
+        if (pivot_x - f_stub.x).abs() > 0.5 {
+            pts.push(egui::pos2(pivot_x, pivot_y));
+            pts.push(egui::pos2(pivot_x, t_stub.y));
+        } else {
+            pts.push(egui::pos2(f_stub.x, t_stub.y));
+        }
+    } else {
+        // At least one direction unknown. Defer to whichever side
+        // has a known direction; if both unknown, pick horizontal-
+        // first Z-bend.
+        let horizontal_first = f_horiz || t_horiz || (!f_vert && !t_vert);
+        if horizontal_first {
+            let midx = (f_stub.x + t_stub.x) * 0.5;
+            pts.push(egui::pos2(midx, f_stub.y));
+            pts.push(egui::pos2(midx, t_stub.y));
+        } else {
+            let midy = (f_stub.y + t_stub.y) * 0.5;
+            pts.push(egui::pos2(f_stub.x, midy));
+            pts.push(egui::pos2(t_stub.x, midy));
+        }
+    }
+
+    if to_dir != None {
+        pts.push(t_stub);
+    }
+    pts.push(to);
+
+    // De-dup adjacent identical points (collinear cases above can
+    // produce degenerate runs); a polyline with zero-length segments
+    // confuses both the renderer and the flow-dot animator.
+    pts.dedup_by(|a, b| (a.x - b.x).abs() < 0.5 && (a.y - b.y).abs() < 0.5);
+    pts
 }
 
 /// Selection-state brightener — shifts each channel ~30% toward white
