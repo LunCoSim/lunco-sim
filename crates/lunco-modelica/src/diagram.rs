@@ -146,7 +146,7 @@ impl ModelicaComponentBuilder {
                     comp,
                     &target,
                     &self.ast,
-                    &crate::class_cache::peek_msl_class_cached,
+                    &crate::class_cache::peek_or_load_msl_class,
                 );
                 let qualified = format!("{}.{}", target, comp_name);
                 let node_id = graph.add_node_named(
@@ -420,9 +420,28 @@ impl ModelicaComponentBuilder {
                 format!("{within_prefix}.{short}")
             }
         };
+        // Non-package class at the top level wins outright.
         for (name, class) in &self.ast.classes {
             if class.class_type != ClassType::Package {
                 return qualify(name);
+            }
+        }
+        // All top-level classes are packages (the common case for a
+        // package-wrapped file like `package Foo { model Bar ... }`).
+        // Descend one level into each package and pick the first
+        // non-package class we find. Without this, the builder runs
+        // on the package itself — which has no direct components —
+        // and the downstream fallback regex sweeps the whole source,
+        // rendering every connector declaration in every leaf class
+        // as a spurious top-level node.
+        for (pkg_name, pkg) in &self.ast.classes {
+            if pkg.class_type != ClassType::Package {
+                continue;
+            }
+            for (inner_name, inner) in &pkg.classes {
+                if inner.class_type != ClassType::Package {
+                    return qualify(&format!("{pkg_name}.{inner_name}"));
+                }
             }
         }
         self.ast
@@ -730,6 +749,17 @@ fn ports_for_component(
         return extract_component_ports(comp);
     }
     ports
+}
+
+/// Public re-export of [`is_connector_type`] for callers outside this
+/// module (notably the projector's local-class port extractor).
+pub fn is_connector_type_pub(
+    type_ref: &str,
+    owner_qualified_path: &str,
+    ast: &StoredDefinition,
+    msl_resolve: &dyn Fn(&str) -> Option<std::sync::Arc<ClassDef>>,
+) -> bool {
+    is_connector_type(type_ref, owner_qualified_path, ast, msl_resolve)
 }
 
 /// True when `type_ref` resolves to a `connector` class via the

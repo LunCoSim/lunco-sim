@@ -2317,6 +2317,11 @@ fn register_local_class(
     use rumoca_session::parsing::ast::ClassType;
     let is_expandable_connector = matches!(class_def.class_type, ClassType::Connector)
         && class_def.expandable;
+    // Walk the class's connector sub-components into `PortDef`s.
+    // Without this, locally-defined classes (Tank, Engine, …) have an
+    // empty ports list, so wires from `connect()` statements have
+    // nothing to anchor to and disappear.
+    let ports = extract_local_class_ports(class_def, &class_context, ast);
     out.insert(
         short_name.to_string(),
         MSLComponentDef {
@@ -2327,7 +2332,7 @@ fn register_local_class(
             description: None,
             icon_text: None,
             icon_asset: None,
-            ports: Vec::new(),
+            ports,
             parameters: Vec::new(),
             icon_graphics: icon,
             is_expandable_connector,
@@ -2338,6 +2343,63 @@ fn register_local_class(
             class_kind: String::new(),
         },
     );
+}
+
+/// Walk a locally-defined class's components and emit a [`PortDef`]
+/// for each one whose type is a connector. Position is read from the
+/// connector's `Placement(transformation(extent=...))` annotation
+/// when present; otherwise (0,0) lets the canvas fall back to its
+/// edge-distribution heuristic.
+///
+/// Without this, classes the projector synthesises for the open doc
+/// (Tank/Engine/Airframe and friends) carry an empty ports list, so
+/// `connect()` wires can't find an anchor and disappear from the
+/// canvas. MSL types skip this path — their ports come pre-extracted
+/// from the indexer.
+fn extract_local_class_ports(
+    class_def: &rumoca_session::parsing::ast::ClassDef,
+    class_qualified_path: &str,
+    ast: &rumoca_session::parsing::ast::StoredDefinition,
+) -> Vec<crate::visual_diagram::PortDef> {
+    use rumoca_session::parsing::ast::Causality;
+    let mut out = Vec::new();
+    for (sub_name, sub) in &class_def.components {
+        let sub_type = sub.type_name.to_string();
+        let causality_is_port = matches!(
+            sub.causality,
+            Causality::Input(_) | Causality::Output(_)
+        );
+        let type_is_connector = !sub_type.is_empty()
+            && crate::diagram::is_connector_type_pub(
+                &sub_type,
+                class_qualified_path,
+                ast,
+                &crate::class_cache::peek_or_load_msl_class,
+            );
+        if !causality_is_port && !type_is_connector {
+            continue;
+        }
+        // Read Placement on the connector declaration to anchor the
+        // port at a fixed (x,y) on the icon boundary. Centroid of
+        // the placement extent maps to Modelica's (-100..100) per-axis
+        // grid — the same convention used by MSL ports.
+        let (px, py) = crate::annotations::extract_placement(&sub.annotation)
+            .map(|p| {
+                let cx = (p.transformation.extent.p1.x + p.transformation.extent.p2.x) * 0.5;
+                let cy = (p.transformation.extent.p1.y + p.transformation.extent.p2.y) * 0.5;
+                (cx as f32, cy as f32)
+            })
+            .unwrap_or((0.0, 0.0));
+        out.push(crate::visual_diagram::PortDef {
+            name: sub_name.clone(),
+            connector_type: sub_type.clone(),
+            msl_path: sub_type,
+            is_flow: false,
+            x: px,
+            y: py,
+        });
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------

@@ -739,6 +739,15 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
         egui::Id::new(("lunco_workbench_tab", tab.debug_id()))
     }
 
+    /// Disable egui_dock's per-tab ScrollArea wrapper. Panels that
+    /// need scrolling (code editor, docs view, telemetry lists) own
+    /// their own ScrollArea internally; the dock-level wrapper would
+    /// otherwise pull panel-local toolbars / sticky headers into the
+    /// scrollable region and hide them when the body scrolls.
+    fn scroll_bars(&self, _tab: &Self::Tab) -> [bool; 2] {
+        [false, false]
+    }
+
     fn clear_background(&self, tab: &Self::Tab) -> bool {
         match *tab {
             TabId::Singleton(id) => match self.panels.get(&id) {
