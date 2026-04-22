@@ -273,8 +273,18 @@ impl Panel for TelemetryPanel {
                     }
                     let label = egui::Label::new(&name).sense(egui::Sense::hover());
                     let resp = ui.add(label);
-                    if let Some(desc) = descriptions.get(&name) {
+                    if let Some(desc) = descriptions.get(&name).filter(|d| !d.trim().is_empty()) {
+                        // Hover for the full string (can be long),
+                        // plus a muted inline preview so users who
+                        // never hover still see the hint exists.
                         resp.on_hover_text(desc);
+                        ui.label(
+                            egui::RichText::new(desc.trim())
+                                .italics()
+                                .color(egui::Color32::from_rgb(140, 140, 160))
+                                .size(11.0),
+                        )
+                        .on_hover_text(desc);
                     }
                 });
                 let _ = is_signal_plotted; // re-export available for future UIs

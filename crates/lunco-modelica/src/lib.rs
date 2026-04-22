@@ -1605,6 +1605,13 @@ fn handle_modelica_responses(
             if result.is_new_model {
                 if let Some(reg) = viz_registry.as_deref_mut() {
                     let parameters = model.parameters.clone();
+                    // Clear stale bindings from any prior model/entity so
+                    // switching models doesn't leave old signals plotted.
+                    // The default plot follows the freshly-compiled model;
+                    // user-created plots retain their explicit bindings.
+                    if let Some(cfg) = reg.get_mut(ui::viz::DEFAULT_MODELICA_GRAPH) {
+                        cfg.inputs.clear();
+                    }
                     ui::viz::auto_bind_observables(
                         reg,
                         result.entity,
