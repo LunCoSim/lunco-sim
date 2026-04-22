@@ -70,6 +70,7 @@ pub mod image_loader;
 pub mod panels;
 pub mod viz;
 pub mod theme;
+pub mod welcome_progress;
 
 /// Modelica section of the Twin Browser — class-tree contributed by
 /// this crate to `lunco-workbench`'s `BrowserSectionRegistry`.
@@ -327,6 +328,11 @@ impl Plugin for ModelicaUiPlugin {
         // EditorIntent resolver. UI buttons, keyboard shortcuts,
         // scripts, and the remote API all funnel through these.
         app.add_plugins(ModelicaCommandsPlugin);
+
+        // Welcome-panel open-counter ledger. Loads the persisted
+        // JSON at startup and bumps counts whenever `OpenClass`
+        // fires — drives the progress dots on the learning paths.
+        app.add_plugins(welcome_progress::WelcomeProgressPlugin);
 
         app.init_resource::<WorkbenchState>()
             .init_resource::<ModelicaDocumentRegistry>()
