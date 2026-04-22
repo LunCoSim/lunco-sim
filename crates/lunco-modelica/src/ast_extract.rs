@@ -54,17 +54,92 @@ pub fn extract_model_name(source: &str) -> Option<String> {
 /// main thread on a 184 KB MSL source means a fresh uncached
 /// rumoca parse that runs for tens of seconds in debug builds and
 /// visibly freezes the app.
+///
+/// Returns a fully qualified class name (e.g.
+/// `"AnnotatedRocketStage.RocketStage"`) when the non-package class
+/// lives nested inside a package. Returns just the short name for
+/// top-level non-package classes. This matters because when the
+/// user clicks Compile without drilling into a specific class and
+/// the file is package-scoped (e.g. `package Foo { model Bar ... }`),
+/// rumoca needs the qualified `Foo.Bar` to locate the instantiable
+/// class — passing just `"Foo"` makes it compile the empty package.
 pub fn extract_model_name_from_ast(ast: &StoredDefinition) -> Option<String> {
-    let mut package_name: Option<String> = None;
-    for (name, class) in &ast.classes {
-        if class.class_type != ClassType::Package {
-            return Some(name.clone());
-        }
-        if package_name.is_none() {
-            package_name = Some(name.as_str().to_string());
+    find_first_non_package_qualified(&ast.classes, "")
+}
+
+/// Return ALL non-package classes (qualified) reachable from the
+/// top-level classes, depth-first. Used by the Compile handler to
+/// decide whether to auto-pick (length 0–1) or open a picker modal
+/// (length ≥ 2, task #102). Cheap — walks the already-parsed AST.
+pub fn collect_non_package_classes_qualified(
+    ast: &StoredDefinition,
+) -> Vec<String> {
+    let mut out = Vec::new();
+    collect_non_package_qualified(&ast.classes, "", &mut out);
+    out
+}
+
+fn collect_non_package_qualified(
+    classes: &indexmap::IndexMap<String, ClassDef>,
+    parent: &str,
+    out: &mut Vec<String>,
+) {
+    for (name, class) in classes {
+        let qualified = if parent.is_empty() {
+            name.clone()
+        } else {
+            format!("{parent}.{name}")
+        };
+        if class.class_type == ClassType::Package {
+            collect_non_package_qualified(&class.classes, &qualified, out);
+        } else {
+            out.push(qualified);
         }
     }
-    package_name
+}
+
+/// Depth-first walk of `classes` returning the first non-package
+/// class found, qualified by its path inside the surrounding packages.
+fn find_first_non_package_qualified(
+    classes: &indexmap::IndexMap<String, ClassDef>,
+    parent: &str,
+) -> Option<String> {
+    // First pass: prefer a non-package AT THIS level. Matches
+    // pre-existing behaviour for flat files and avoids drilling
+    // past the obvious top-level model.
+    for (name, class) in classes {
+        if class.class_type != ClassType::Package {
+            return Some(if parent.is_empty() {
+                name.clone()
+            } else {
+                format!("{parent}.{name}")
+            });
+        }
+    }
+    // Second pass: no non-package at this level — descend into each
+    // package and try again.
+    for (name, class) in classes {
+        if class.class_type != ClassType::Package {
+            continue;
+        }
+        let next_parent = if parent.is_empty() {
+            name.clone()
+        } else {
+            format!("{parent}.{name}")
+        };
+        if let Some(found) = find_first_non_package_qualified(&class.classes, &next_parent) {
+            return Some(found);
+        }
+    }
+    // Entire subtree is packages-only (or empty). Fall back to the
+    // top-level package name so earlier callers that relied on the
+    // old "return the package when nothing else exists" behaviour
+    // still get something non-empty; compile will likely still fail
+    // but at least the error message names the file's top entity.
+    classes
+        .keys()
+        .next()
+        .map(|n| if parent.is_empty() { n.to_string() } else { format!("{parent}.{n}") })
 }
 
 /// Extract the Modelica description string (`"..."` after a
@@ -504,6 +579,48 @@ mod tests {
     // --- extract_model_name ---
 
     #[test]
+    fn test_extract_model_name_nested_in_package_returns_qualified() {
+        // Regression: user opened assets/models/AnnotatedRocketStage.mo
+        // (a package containing `model RocketStage`, `model Engine`, …)
+        // and hit Compile without drilling in first. Old extractor
+        // returned just `"AnnotatedRocketStage"` (the package) → rumoca
+        // compiled the empty package → error. The fallback must
+        // descend into packages and qualify the model name so rumoca
+        // can resolve it.
+        let source = r#"
+package AnnotatedRocketStage
+  model RocketStage
+    Real x;
+  end RocketStage;
+  model Engine
+    Real y;
+  end Engine;
+end AnnotatedRocketStage;
+"#;
+        assert_eq!(
+            extract_model_name(source),
+            Some("AnnotatedRocketStage.RocketStage".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_model_name_nested_two_levels_deep() {
+        let source = r#"
+package Outer
+  package Inner
+    model Leaf
+      Real x;
+    end Leaf;
+  end Inner;
+end Outer;
+"#;
+        assert_eq!(
+            extract_model_name(source),
+            Some("Outer.Inner.Leaf".to_string())
+        );
+    }
+
+    #[test]
     fn test_extract_model_name_simple_model() {
         let source = r#"
 model Ball
@@ -540,10 +657,13 @@ package MyPackage
   end Inner;
 end MyPackage;
 "#;
-        // Top-level class is the package; Inner is nested.
-        // AST returns the first top-level class (the package),
-        // which matches the old regex behavior (first match in source order).
-        assert_eq!(extract_model_name(source), Some("MyPackage".to_string()));
+        // Used to return just `"MyPackage"` which made rumoca compile
+        // the empty package and error out. New behaviour descends into
+        // packages and returns the qualified path of the first model.
+        assert_eq!(
+            extract_model_name(source),
+            Some("MyPackage.Inner".to_string())
+        );
     }
 
     // --- extract_parameters ---

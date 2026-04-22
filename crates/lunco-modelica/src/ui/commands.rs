@@ -198,6 +198,103 @@ pub struct OpenExample {
 // Observers
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// One entry in the compile-time class picker — captured when the
+/// user hit Compile on a doc that's a package of ≥2 models without
+/// having drilled into one.
+#[derive(Debug, Clone)]
+pub struct CompileClassPickerEntry {
+    pub doc: DocumentId,
+    /// Fully qualified class paths (e.g. `"AnnotatedRocketStage.RocketStage"`).
+    pub candidates: Vec<String>,
+    /// Index into `candidates` the modal's radio group starts on.
+    pub preselected: usize,
+}
+
+/// Modal picker state for the "which class in this package to
+/// compile?" prompt. `None` = no picker open; `Some(entry)` = modal
+/// visible. See `render_compile_class_picker` in `ui/mod.rs`.
+#[derive(Resource, Default)]
+pub struct CompileClassPickerState(pub Option<CompileClassPickerEntry>);
+
+/// Render the compile-class picker modal when
+/// [`CompileClassPickerState`] is populated. Confirming re-dispatches
+/// `CompileModel` with the chosen class stamped into
+/// [`DrilledInClassNames`] so downstream observers see the user's
+/// pick exactly as they would've after a manual drill-in. Cancel
+/// just clears the state.
+pub(crate) fn render_compile_class_picker(
+    mut egui_ctx: bevy_egui::EguiContexts,
+    mut picker: ResMut<CompileClassPickerState>,
+    mut drilled_in: ResMut<crate::ui::panels::canvas_diagram::DrilledInClassNames>,
+    mut commands: Commands,
+) {
+    let Ok(ctx) = egui_ctx.ctx_mut() else {
+        return;
+    };
+    let Some(entry) = picker.0.as_mut() else {
+        return;
+    };
+
+    let mut confirmed: Option<String> = None;
+    let mut cancelled = false;
+    let mut window_open = true;
+    egui::Window::new("Which class should Compile run?")
+        .id(egui::Id::new(("compile_class_picker", entry.doc.raw())))
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+        .open(&mut window_open)
+        .show(ctx, |ui| {
+            ui.add_space(4.0);
+            ui.label(
+                egui::RichText::new(
+                    "This file is a package with more than one model. Pick \
+                     the class you want to compile:",
+                )
+                .size(12.0),
+            );
+            ui.add_space(8.0);
+            let mut selected = entry.preselected.min(entry.candidates.len().saturating_sub(1));
+            egui::ScrollArea::vertical()
+                .max_height(260.0)
+                .show(ui, |ui| {
+                    for (i, name) in entry.candidates.iter().enumerate() {
+                        ui.radio_value(&mut selected, i, name);
+                    }
+                });
+            entry.preselected = selected;
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                let ok = ui.add(egui::Button::new(
+                    egui::RichText::new("Compile").strong(),
+                ));
+                if ok.clicked() {
+                    confirmed = entry.candidates.get(selected).cloned();
+                }
+                if ui.button("Cancel").clicked() {
+                    cancelled = true;
+                }
+                ui.add_space(10.0);
+                ui.colored_label(
+                    egui::Color32::from_rgb(160, 160, 180),
+                    "Tip: drill into a class (Canvas / Package Browser) \
+                     to skip this dialog next time.",
+                );
+            });
+        });
+    if !window_open {
+        cancelled = true;
+    }
+    if let Some(qualified) = confirmed {
+        let doc = entry.doc;
+        drilled_in.set(doc, qualified);
+        picker.0 = None;
+        commands.trigger(CompileModel { doc });
+    } else if cancelled {
+        picker.0 = None;
+    }
+}
+
 /// Plugin that installs all Modelica command observers.
 ///
 /// `ModelicaUiPlugin` adds this automatically. Keeping the registration
@@ -210,6 +307,7 @@ impl Plugin for ModelicaCommandsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<CloseDialogState>()
             .init_resource::<PendingCloseAfterSave>()
+            .init_resource::<CompileClassPickerState>()
             .add_observer(on_undo_document)
             .add_observer(on_redo_document)
             .add_observer(on_save_document)
@@ -304,7 +402,7 @@ impl Plugin for ModelicaCommandsPlugin {
             )
             .add_systems(
                 bevy_egui::EguiPrimaryContextPass,
-                render_close_dialogs,
+                (render_close_dialogs, render_compile_class_picker),
             );
     }
 }
@@ -922,6 +1020,7 @@ fn on_compile_model(
     mut compile_states: ResMut<CompileStates>,
     mut console: ResMut<crate::ui::panels::console::ConsoleLog>,
     mut diagnostics: Option<ResMut<crate::ui::panels::diagnostics::DiagnosticsLog>>,
+    mut picker: ResMut<CompileClassPickerState>,
     diagram_state: Res<DiagramState>,
     channels: Option<Res<ModelicaChannels>>,
     mut q_models: Query<&mut ModelicaModel>,
@@ -966,6 +1065,26 @@ fn on_compile_model(
     let drilled_in_class: Option<String> = drilled_in_classes
         .as_ref()
         .and_then(|d| d.get(doc).map(str::to_string));
+    // If no drill-in pin and the file is a package of several models,
+    // ask the user which one to compile instead of silently picking.
+    // The picker modal (rendered by `render_compile_class_picker` in
+    // ui/mod.rs) re-dispatches `CompileModel` once the user confirms.
+    if drilled_in_class.is_none() {
+        let candidates = crate::ast_extract::collect_non_package_classes_qualified(&ast);
+        if candidates.len() >= 2 {
+            // If a picker is already open for *this* doc, leave it
+            // alone so rapid repeated Compile clicks don't blow away
+            // the user's in-progress choice.
+            if picker.0.as_ref().map(|p| p.doc) != Some(doc) {
+                picker.0 = Some(CompileClassPickerEntry {
+                    doc,
+                    candidates,
+                    preselected: 0,
+                });
+            }
+            return;
+        }
+    }
     let model_name = drilled_in_class.or_else(|| {
         crate::ast_extract::extract_model_name_from_ast(&ast)
     });

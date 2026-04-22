@@ -46,16 +46,63 @@ fn main() -> anyhow::Result<()> {
         println!("  [{i}] origin={} scalar_count={}", eq.origin, eq.scalar_count);
     }
 
-    // 4. Try to build a stepper — this runs `prepare_dae` where the
-    // MissingStateEquation error is raised.
-    println!("\n--- Building stepper ---");
+    // 4. Build a stepper and actually step it. Tolerances + dt +
+    //    step count overridable via env vars so we can sweep them
+    //    from the shell to find combinations that succeed.
+    let atol = env_f64("ATOL", 1e-3);
+    let rtol = env_f64("RTOL", 1e-3);
+    let dt = env_f64("DT", 0.01);
+    let n_steps: usize = std::env::var("N")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(100);
+    let t_end_hint = dt * n_steps as f64;
+    println!(
+        "\n--- Building stepper (atol={:.1e} rtol={:.1e} dt={:.1e} n={}) ---",
+        atol, rtol, dt, n_steps
+    );
     let mut opts = rumoca_sim::StepperOptions::default();
-    opts.atol = 1e-3;
-    opts.rtol = 1e-3;
-    match rumoca_sim::SimStepper::new(&result.dae, opts) {
-        Ok(_s) => println!("Stepper built OK."),
-        Err(e) => println!("Stepper init failed: {e:?}"),
+    opts.atol = atol;
+    opts.rtol = rtol;
+    let mut stepper = match rumoca_sim::SimStepper::new(&result.dae, opts) {
+        Ok(s) => {
+            println!("Stepper built OK.");
+            s
+        }
+        Err(e) => {
+            println!("Stepper init FAILED: {e:?}");
+            return Ok(());
+        }
+    };
+
+    println!("Stepping to t~={:.3}s...", t_end_hint);
+    let t0 = std::time::Instant::now();
+    let mut failed_at = None;
+    for i in 0..n_steps {
+        if let Err(e) = stepper.step(dt) {
+            failed_at = Some((i, stepper.time(), e));
+            break;
+        }
+    }
+    let dt_total = t0.elapsed().as_secs_f64();
+    match failed_at {
+        Some((i, t, e)) => println!(
+            "STEP FAIL at step {i} (sim_t={:.6}s) after {:.2}s wall: {e:?}",
+            t, dt_total
+        ),
+        None => println!(
+            "All {n_steps} steps OK (sim_t={:.3}s, {:.2}s wall).",
+            stepper.time(),
+            dt_total
+        ),
     }
 
     Ok(())
+}
+
+fn env_f64(name: &str, default: f64) -> f64 {
+    std::env::var(name)
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(default)
 }
