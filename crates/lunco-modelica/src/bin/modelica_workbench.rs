@@ -28,42 +28,17 @@ fn main() {
 
     // Force continuous frame rate even when the window is unfocused
     // so the HTTP API stays responsive under automation. Default
-    // winit behaviour throttles unfocused windows, which masquerades
-    // as an "app hang" when we're driving it via curl from a headless
-    // test harness (the bridge drain runs on a Bevy system; no frame
-    // = no drain).
+    // winit throttles unfocused windows; the bridge-drain system
+    // only runs on ticks, so a throttled window masquerades as an
+    // "app hang" when driving the workbench from curl.
     use bevy::winit::{UpdateMode, WinitSettings};
     app.insert_resource(WinitSettings {
         focused_mode: UpdateMode::Continuous,
         unfocused_mode: UpdateMode::Continuous,
     });
 
-    // Heartbeat: emit an INFO log every 2s of wall clock from each
-    // major schedule. Lets us distinguish "main loop frozen" vs
-    // "API bridge frozen" vs "one schedule wedged" when diagnosing
-    // apparent hangs.
-    app.add_systems(bevy::prelude::Update, heartbeat_update);
-    app.add_systems(bevy::prelude::FixedUpdate, heartbeat_fixed);
-    app.add_systems(bevy::prelude::PostUpdate, heartbeat_post);
-
     app.run();
 }
-
-fn hb(tag: &'static str, last: &mut Option<std::time::Instant>) {
-    let now = std::time::Instant::now();
-    let fire = match *last {
-        None => true,
-        Some(t) => now.duration_since(t).as_secs_f32() >= 2.0,
-    };
-    if fire {
-        *last = Some(now);
-        bevy::log::info!("[hb:{tag}]");
-    }
-}
-
-fn heartbeat_update(mut last: Local<Option<std::time::Instant>>) { hb("upd", &mut last); }
-fn heartbeat_fixed(mut last: Local<Option<std::time::Instant>>) { hb("fix", &mut last); }
-fn heartbeat_post(mut last: Local<Option<std::time::Instant>>) { hb("post", &mut last); }
 
 fn setup_sandbox(mut commands: Commands) {
     // Start empty: the user lands on the Welcome tab, opens whatever
