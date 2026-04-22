@@ -153,5 +153,8 @@ fn setup_web_workbench(
         session_id: 0,
         model_name,
         source,
+        // wasm inline worker still runs on main thread (Phase A
+        // lands on desktop only); no SimStream publisher hook yet.
+        stream: None,
     });
 }

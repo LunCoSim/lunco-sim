@@ -207,6 +207,48 @@ pub mod ui;
 /// Bundled Modelica models for web deployment.
 /// Available on all targets, but primarily used for wasm builds.
 pub mod models;
+pub mod sim_stream;
+pub use sim_stream::{new_sim_stream, SimSnapshot, SimStream, VarHistory, SimSample};
+
+/// UI-thread registry of per-entity lock-free sim streams (Phase A
+/// of the multi-sim architecture). On Compile the command observer
+/// calls [`SimStreamRegistry::get_or_insert`] and ships a clone of
+/// the returned `SimStream` to the worker thread; plots and
+/// telemetry query the registry to get the same handle and render
+/// without locking.
+///
+/// TODO(arch-phase-b): promote this into the full `SimRegistry`
+///   keyed by `SimId` (not `Entity`) so non-Modelica backends can
+///   publish snapshots through the same channel.
+#[derive(Resource, Default)]
+pub struct SimStreamRegistry {
+    streams: std::collections::HashMap<Entity, SimStream>,
+}
+
+impl SimStreamRegistry {
+    /// Existing stream for `entity`, or a freshly-created one. The
+    /// returned handle is cheap to clone (Arc bump) and safe to
+    /// share across threads.
+    pub fn get_or_insert(&mut self, entity: Entity) -> SimStream {
+        self.streams
+            .entry(entity)
+            .or_insert_with(sim_stream::new_sim_stream)
+            .clone()
+    }
+
+    /// Returns the stream for `entity` if one has been registered.
+    /// Readers never need mutable access — they just `load()` the
+    /// `ArcSwap`.
+    pub fn get(&self, entity: Entity) -> Option<&SimStream> {
+        self.streams.get(&entity)
+    }
+
+    /// Drop the stream for `entity`. Called on despawn so stale
+    /// snapshots don't pin memory.
+    pub fn remove(&mut self, entity: Entity) {
+        self.streams.remove(&entity);
+    }
+}
 
 /// System sets for Modelica stepping in [`FixedUpdate`].
 ///
@@ -302,6 +344,7 @@ fn build_modelica_core(app: &mut App) {
     }
 
     app.init_resource::<ui::WorkbenchState>();
+    app.init_resource::<SimStreamRegistry>();
 
     app.configure_sets(
         FixedUpdate,
@@ -361,6 +404,14 @@ pub enum ModelicaCommand {
         session_id: u64,
         model_name: String,
         source: String,
+        /// Lock-free snapshot handle the worker publishes into after
+        /// every successful Step (Phase A of the multi-sim arch).
+        /// `None` = legacy path; main thread still receives per-sample
+        /// data via `ModelicaResult.outputs` and pushes it into
+        /// `SignalRegistry`. When `Some`, the worker updates the
+        /// stream directly and the main-thread handler can skip the
+        /// per-sample push loop.
+        stream: Option<SimStream>,
     },
     /// Update parameter values by recompiling with modified source code.
     ///
@@ -496,6 +547,12 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
     let mut current_sessions: HashMap<Entity, u64> = HashMap::default();
     // DAE cache per entity — enables instant Reset and fast Step auto-init
     let mut cached_models: HashMap<Entity, CachedModel> = HashMap::default();
+    // Lock-free publish stream per entity (Phase A of the multi-sim
+    // refactor — see `sim_stream.rs`). The UI side holds a clone of
+    // the same `Arc<ArcSwap<SimSnapshot>>`; every successful Step
+    // publishes a new snapshot so plots render without locking or
+    // involving the main thread in per-sample work.
+    let mut sim_streams: HashMap<Entity, SimStream> = HashMap::default();
     // Lazy compiler construction. `ModelicaCompiler::new` is now
     // cheap — it creates an empty session with no MSL loaded.
     // Actual MSL files are pulled into the session on demand by
@@ -656,8 +713,16 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                             }
                         }
                     }
-                    ModelicaCommand::Compile { entity, session_id, model_name, source } => {
+                    ModelicaCommand::Compile { entity, session_id, model_name, source, stream } => {
                         current_sessions.insert(entity, session_id);
+                        if let Some(stream) = stream {
+                            // Register the new lock-free publish target
+                            // AND reset the previous snapshot so stale
+                            // history from a prior compile doesn't bleed
+                            // into the new model's horizon.
+                            stream.store(Arc::new(SimSnapshot::empty_at_zero()));
+                            sim_streams.insert(entity, stream);
+                        }
 
                         // Strip input defaults so they become real runtime slots
                         let (stripped_source, input_defaults) = strip_input_defaults(&source);
@@ -801,8 +866,26 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                                     // this single call supersedes the old two-loop
                                     // variable_names + input_names collection.
                                     let outputs = collect_stepper_observables(stepper);
+                                    let new_time = stepper.time();
+                                    // Phase A: also publish to the
+                                    // lock-free stream so consumers that
+                                    // wire into it (plots, telemetry —
+                                    // see TODO arch-phase-a2) can read
+                                    // without main-thread round-tripping.
+                                    // We continue to ship `outputs`
+                                    // through the crossbeam channel as
+                                    // well until plots have migrated;
+                                    // once they read from `SimStream`
+                                    // exclusively, the `outputs` Vec
+                                    // can be cleared here to drop the
+                                    // per-sample main-thread push loop.
+                                    if let Some(stream) = sim_streams.get(&entity) {
+                                        let prev = stream.load();
+                                        let next = SimSnapshot::advance(&prev, new_time, &outputs);
+                                        stream.store(Arc::new(next));
+                                    }
                                     let _ = tx_inner.send(ModelicaResult {
-                                        entity, session_id, new_time: stepper.time(),
+                                        entity, session_id, new_time,
                                         outputs, error: None, log_message: None,
                                         is_new_model: false, detected_symbols: Vec::new(),
                                         is_parameter_update: false, is_reset: false,
@@ -821,6 +904,7 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                     ModelicaCommand::Despawn { entity } => {
                         steppers.remove(&entity);
                         cached_models.remove(&entity);
+                        sim_streams.remove(&entity);
                     }
                 }
             }));
@@ -1027,7 +1111,11 @@ fn inline_worker_process(
                 });
             }
         }
-        ModelicaCommand::Compile { entity, session_id, model_name, source } => {
+        ModelicaCommand::Compile { entity, session_id, model_name, source, stream: _stream } => {
+            // NB: the wasm inline worker runs on the Bevy main thread
+            // today and does not publish to a lock-free SimStream.
+            // Phase A lands on desktop first; TODO(arch-phase-b) wire
+            // the wasm path once the inline worker moves off-thread.
             w.current_sessions.insert(entity, session_id);
             let (stripped_source, input_defaults) = strip_input_defaults(&source);
 

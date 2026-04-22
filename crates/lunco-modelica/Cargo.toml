@@ -54,6 +54,11 @@ egui_extras = { version = "0.33", features = ["all_loaders"] }
 # Pure-Rust HTML → Markdown converter. Used once per Documentation
 # annotation to normalise into the shape commonmark expects.
 htmd = "0.5"
+# Lock-free publish path from the Modelica worker thread into the UI:
+# each running sim owns an `Arc<ArcSwap<SimSnapshot>>` that the worker
+# updates after every Step. Plots read via `load()` — no mutex, no
+# per-sample work on the main thread. See `sim_stream.rs`.
+arc-swap = "1"
 # Compile-time embedding of the `assets/models/` tree so
 # `src/models.rs` can enumerate bundled `.mo` examples by walking a
 # static `Dir`, instead of requiring a `pub const + include_str!` line

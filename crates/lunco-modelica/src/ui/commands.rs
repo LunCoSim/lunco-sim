@@ -1021,6 +1021,7 @@ fn on_compile_model(
     mut console: ResMut<crate::ui::panels::console::ConsoleLog>,
     mut diagnostics: Option<ResMut<crate::ui::panels::diagnostics::DiagnosticsLog>>,
     mut picker: ResMut<CompileClassPickerState>,
+    mut sim_streams: ResMut<crate::SimStreamRegistry>,
     diagram_state: Res<DiagramState>,
     channels: Option<Res<ModelicaChannels>>,
     mut q_models: Query<&mut ModelicaModel>,
@@ -1038,6 +1039,15 @@ fn on_compile_model(
     // costs ~30 s per call in debug builds, and there are four
     // calls, so clicking Compile on an MSL example would lock the
     // UI for minutes. Pulling from the cached AST is constant-time.
+    // Force a fresh parse if the user typed into the editor but the
+    // debounced reparse hasn't run yet (see `ModelicaDocument::apply_patch`
+    // — AST lags source by up to ~250ms during rapid typing).
+    // Compile is a definitive "I want this exact source to be the
+    // compiled model" action, so pay the parse cost right here
+    // instead of risking a stale AST.
+    if let Some(host) = registry.host_mut(doc) {
+        host.document_mut().refresh_ast_now();
+    }
     let (source, ast_for_extract) = match registry.host(doc) {
         Some(h) => {
             let doc = h.document();
@@ -1182,11 +1192,17 @@ fn on_compile_model(
     }
 
     if let Some(channels) = channels {
+        // Get-or-create the sim stream for this entity. Cloned Arc
+        // goes to the worker (owner-of-writes); the registry holds
+        // the same Arc so plot panels / telemetry can read via
+        // `ArcSwap::load()` on the UI thread without locking.
+        let stream = sim_streams.get_or_insert(target_entity);
         let _ = channels.tx.send(ModelicaCommand::Compile {
             entity: target_entity,
             session_id,
             model_name,
             source,
+            stream: Some(stream),
         });
     } else {
         console.error("Modelica worker channel not available — compile dispatch dropped.");

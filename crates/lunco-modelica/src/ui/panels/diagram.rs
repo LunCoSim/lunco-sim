@@ -3020,12 +3020,20 @@ pub fn do_compile(world: &mut World) {
         .set(doc_id, crate::ui::CompileState::Compiling);
 
     // 6. Dispatch to the worker.
+    // Install a sim stream for this entity so the worker can
+    // publish samples lock-free (Phase A). Resource borrow for
+    // `SimStreamRegistry` is scoped here so it's released before we
+    // reach for the immutable `ModelicaChannels` below.
+    let stream = world
+        .get_resource_mut::<crate::SimStreamRegistry>()
+        .map(|mut r| r.get_or_insert(entity));
     if let Some(channels) = world.get_resource::<ModelicaChannels>() {
         let _ = channels.tx.send(ModelicaCommand::Compile {
             entity,
             session_id,
             model_name,
             source,
+            stream,
         });
     }
     if let Some(mut s) = world.get_resource_mut::<DiagramState>() {

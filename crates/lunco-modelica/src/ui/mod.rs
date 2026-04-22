@@ -72,6 +72,8 @@ pub mod viz;
 pub mod theme;
 pub mod uri_handler;
 pub mod welcome_progress;
+/// Debounced AST reparse driver — see module docs.
+pub mod ast_refresh;
 
 /// Modelica section of the Twin Browser — class-tree contributed by
 /// this crate to `lunco-workbench`'s `BrowserSectionRegistry`.
@@ -359,6 +361,11 @@ impl Plugin for ModelicaUiPlugin {
             .add_observer(sync_workspace_on_doc_closed)
             .add_observer(sync_workspace_on_doc_saved)
             .add_systems(Update, panels::diagnostics::refresh_diagnostics)
+            // Debounced AST reparse — reparses any doc that has
+            // stopped receiving keystrokes for AST_DEBOUNCE_MS (250 ms).
+            // Keeps text-edit latency constant regardless of how busy
+            // the sim worker is.
+            .add_systems(Update, ast_refresh::refresh_stale_asts)
             .add_systems(Startup, register_settings_menu)
             // Image-loader install is a first-frame one-shot — runs
             // in the egui primary-context pass until the context is
