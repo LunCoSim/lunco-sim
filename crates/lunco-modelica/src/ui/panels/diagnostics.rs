@@ -201,12 +201,21 @@ pub fn refresh_diagnostics(
 
     let mut entries: Vec<LogEntry> = Vec::new();
 
+    // Model name used to tag every entry pushed in this refresh —
+    // the user's ask: "we should show names of models there." Each
+    // row carries which model the message came from so you can
+    // read the Diagnostics log across multiple open tabs without
+    // guessing. `display_name` falls back to the origin's filename
+    // or "Untitled" when the doc has no explicit name yet.
+    let model_tag = Some(host.document().origin().display_name().to_string());
+
     // 1. AST parse errors — caught by rumoca's recovering parser.
     if let Err(msg) = &host.document().ast().result {
         entries.push(LogEntry {
             at: std::time::Instant::now(),
             level: LogLevel::Error,
             text: msg.clone(),
+            model: model_tag.clone(),
         });
     }
 
@@ -220,6 +229,7 @@ pub fn refresh_diagnostics(
             at: std::time::Instant::now(),
             level: LogLevel::Error,
             text: msg.clone(),
+            model: model_tag.clone(),
         });
     }
 
@@ -245,6 +255,7 @@ pub fn refresh_diagnostics(
                     "{}:{}:{}  [{}] {}",
                     msg.file, msg.line, msg.column, msg.rule, msg.message
                 ),
+                model: model_tag.clone(),
             });
         }
     }
