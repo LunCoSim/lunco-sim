@@ -211,6 +211,64 @@ impl InstancePanel for ModelViewPanel {
 
         ui.separator();
 
+        // Persistent read-only strip — rendered for every library
+        // / MSL tab regardless of which view (Text / Canvas /
+        // Icon / Docs) is active. The old behaviour was to
+        // silently discard user edit ops and write a hint into
+        // Diagnostics, but most edit gestures (inspector field
+        // focus, keyboard typing, drag preview) never reach the
+        // ops layer — so the user saw nothing when they tried to
+        // modify something. A visible strip with a Duplicate
+        // button is unmissable and one click from the fix.
+        let tab_read_only = world
+            .get_resource::<WorkbenchState>()
+            .and_then(|s| s.open_model.as_ref())
+            .map(|m| m.read_only)
+            .unwrap_or(false);
+        if tab_read_only {
+            let mut banner_duplicate_clicked = false;
+            egui::Frame::NONE
+                .fill(egui::Color32::from_rgb(60, 48, 20))
+                .inner_margin(egui::Margin::symmetric(10, 6))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new("🔒")
+                                .color(egui::Color32::from_rgb(220, 200, 120))
+                                .size(14.0),
+                        );
+                        ui.label(
+                            egui::RichText::new(
+                                "Read-only library model — \
+                                 edits won't stick. Duplicate it \
+                                 to your workspace to make changes.",
+                            )
+                            .color(egui::Color32::from_rgb(220, 200, 120))
+                            .size(12.0),
+                        );
+                        ui.add_space(ui.available_width() - 170.0);
+                        if ui
+                            .button("📄  Duplicate to edit")
+                            .on_hover_text(
+                                "Create an editable Untitled copy \
+                                 of this class — the MSL original \
+                                 stays untouched.",
+                            )
+                            .clicked()
+                        {
+                            banner_duplicate_clicked = true;
+                        }
+                    });
+                });
+            if banner_duplicate_clicked {
+                world
+                    .commands()
+                    .trigger(crate::ui::commands::DuplicateModelFromReadOnly {
+                        source_doc: doc,
+                    });
+            }
+        }
+
         // Body — delegate to the existing code / diagram panels
         // (both of which still read `open_model` / `EditorBufferState`
         // / `DiagramState`, which `sync_active_tab_to_doc` just

@@ -39,13 +39,40 @@ pub struct DiagnosticsLog {
 }
 
 impl DiagnosticsLog {
-    /// Replace the current entries in-place.
-    pub fn replace(&mut self, entries: Vec<LogEntry>) {
-        self.entries.clear();
-        self.entries.extend(entries);
+    /// Maximum history retained. Older entries fall off the front
+    /// when new ones arrive. 200 is generous for a compile/lint
+    /// channel (errors come in bursts, not streams) while keeping
+    /// memory bounded.
+    const MAX_ENTRIES: usize = 200;
+
+    /// Append-with-dedup: push new entries onto the end, skipping
+    /// any whose `text` is identical to the *previous* entry. This
+    /// keeps the history (compile failed, then succeeded, then
+    /// failed again → all three events visible) while collapsing
+    /// "same error fired twice in one refresh".
+    ///
+    /// Replaces the earlier `replace` semantics which cleared the
+    /// log every refresh and lost the exact error message the
+    /// moment the user navigated away.
+    pub fn append(&mut self, entries: Vec<LogEntry>) {
+        for e in entries {
+            let dup = self
+                .entries
+                .back()
+                .map(|last| last.text == e.text && last.level == e.level)
+                .unwrap_or(false);
+            if dup {
+                continue;
+            }
+            self.entries.push_back(e);
+        }
+        while self.entries.len() > Self::MAX_ENTRIES {
+            self.entries.pop_front();
+        }
     }
 
-    /// Clear all entries.
+    /// Clear all entries. Kept for the panel's "Clear" button and
+    /// for tests — we no longer call this from the refresh system.
     pub fn clear(&mut self) {
         self.entries.clear();
     }
@@ -136,7 +163,8 @@ pub fn refresh_diagnostics(
             cursor.bound_doc = None;
             cursor.last_ast_gen = 0;
             cursor.last_error_hash = hash_str(None);
-            diagnostics.clear();
+            // Preserve history — user may want to read the last
+            // compile error after closing the tab.
         }
         return;
     };
@@ -146,7 +174,8 @@ pub fn refresh_diagnostics(
             cursor.bound_doc = None;
             cursor.last_ast_gen = 0;
             cursor.last_error_hash = hash_str(None);
-            diagnostics.clear();
+            // Preserve history — user may want to read the last
+            // compile error after closing the tab.
         }
         return;
     };
@@ -220,5 +249,5 @@ pub fn refresh_diagnostics(
         }
     }
 
-    diagnostics.replace(entries);
+    diagnostics.append(entries);
 }
