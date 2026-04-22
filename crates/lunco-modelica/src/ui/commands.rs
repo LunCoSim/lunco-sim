@@ -221,6 +221,12 @@ impl Plugin for ModelicaCommandsPlugin {
             .add_observer(on_create_new_scratch_model)
             .add_observer(on_duplicate_model_from_read_only)
             .add_observer(on_open_example_in_workspace)
+            // Register the `modelica://` scheme with the workbench's
+            // cross-domain URI registry so clickable links in
+            // Documentation HTML (and any future contexts) route
+            // through the same plumbing as USD / SysML will when
+            // their domain crates land.
+            .add_observer(crate::ui::uri_handler::on_modelica_uri_clicked)
             // Auto-Arrange: reflect-registered so the LunCo API can
             // fire it via `ExecuteCommand { command: "AutoArrangeDiagram" }`.
             .register_type::<AutoArrangeDiagram>()
@@ -274,6 +280,14 @@ impl Plugin for ModelicaCommandsPlugin {
             .add_observer(on_duplicate_active_doc)
             .add_observer(resolve_editor_intent)
             .add_observer(resolve_new_document_intent)
+            // Install our scheme handler into the workbench's
+            // `UriRegistry` once at startup. The registry resource is
+            // inserted by WorkbenchPlugin; this system runs after it,
+            // pushes the handler, and exits.
+            .add_systems(
+                bevy::prelude::Startup,
+                register_modelica_uri_handler,
+            )
             .add_systems(
                 bevy::prelude::Update,
                 (
@@ -1777,6 +1791,19 @@ fn on_open_example(
 #[reflect(Event, Default)]
 pub struct OpenClass {
     pub qualified: String,
+}
+
+/// Startup system: register the Modelica URI handler with the
+/// workbench. Runs once — the registry accepts `Arc<dyn UriHandler>`
+/// and treats re-registrations as last-writer-wins, so re-running
+/// would be harmless.
+fn register_modelica_uri_handler(
+    mut registry: ResMut<lunco_workbench::UriRegistry>,
+) {
+    registry.register(std::sync::Arc::new(
+        crate::ui::uri_handler::ModelicaUriHandler,
+    ));
+    bevy::log::info!("[Modelica] registered modelica:// URI handler");
 }
 
 fn on_open_class(trigger: On<OpenClass>, mut commands: Commands) {

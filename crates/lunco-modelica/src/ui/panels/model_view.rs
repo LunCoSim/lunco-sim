@@ -972,7 +972,7 @@ fn render_docs_view(ui: &mut egui::Ui, world: &mut World) {
                     }
                     match info.as_deref().filter(|s| !s.trim().is_empty()) {
                         Some(html) => {
-                            render_html_as_markdown(ui, target_width, html);
+                            render_html_as_markdown(ui, world, target_width, html);
                         }
                         None => {
                             ui.label(
@@ -995,7 +995,7 @@ fn render_docs_view(ui: &mut egui::Ui, world: &mut World) {
                                 .color(egui::Color32::from_rgb(200, 210, 225)),
                         );
                         ui.add_space(6.0);
-                        render_html_as_markdown(ui, target_width, revs);
+                        render_html_as_markdown(ui, world, target_width, revs);
                     }
                 });
         });
@@ -1009,7 +1009,12 @@ fn render_docs_view(ui: &mut egui::Ui, world: &mut World) {
 /// and force the reader to scroll sideways. Keeping the Markdown
 /// render cache static means repeated frames don't re-tokenise the
 /// same text.
-fn render_html_as_markdown(ui: &mut egui::Ui, target_width: f32, html: &str) {
+fn render_html_as_markdown(
+    ui: &mut egui::Ui,
+    world: &mut World,
+    target_width: f32,
+    html: &str,
+) {
     use std::sync::Mutex;
     static CACHE: std::sync::OnceLock<
         Mutex<egui_commonmark::CommonMarkCache>,
@@ -1026,6 +1031,57 @@ fn render_html_as_markdown(ui: &mut egui::Ui, target_width: f32, html: &str) {
             .max_image_width(Some(target_width as usize))
             .show(ui, &mut c, &md);
     }
+
+    // Intercept custom-scheme link clicks. `egui_commonmark` renders
+    // markdown links as `ui.link`s that push an
+    // `OutputCommand::OpenUrl(url)` into `PlatformOutput::commands`
+    // when clicked — the OS-open flow. For schemes the workbench's
+    // `UriRegistry` knows about, we take over: dispatch through the
+    // registry, fire a `UriClicked` event for domain observers
+    // (e.g. `modelica://` → OpenClass), and strip the command from
+    // the output vec so the OS doesn't try to hand it to a browser
+    // that wouldn't know what to do with it. http/https/mailto pass
+    // through untouched — `NotHandled` leaves them in place.
+    let intercepts: Vec<(usize, String, lunco_workbench::UriResolution)> = {
+        let registry = world.get_resource::<lunco_workbench::UriRegistry>();
+        ui.ctx().output_mut(|o| {
+            let mut out = Vec::new();
+            for (idx, cmd) in o.commands.iter().enumerate() {
+                if let egui::OutputCommand::OpenUrl(open) = cmd {
+                    let resolution = registry
+                        .map(|r| r.dispatch(&open.url))
+                        .unwrap_or(lunco_workbench::UriResolution::NotHandled);
+                    if !matches!(
+                        resolution,
+                        lunco_workbench::UriResolution::NotHandled
+                    ) {
+                        out.push((idx, open.url.clone(), resolution));
+                    }
+                }
+            }
+            out
+        })
+    };
+    if intercepts.is_empty() {
+        return;
+    }
+    // Drop the intercepted commands back-to-front so earlier indices
+    // stay valid. At Documentation-rendering scale (a handful of
+    // commands per frame, almost never >1 link click per frame) the
+    // cost is negligible.
+    ui.ctx().output_mut(|o| {
+        for (idx, _, _) in intercepts.iter().rev() {
+            if *idx < o.commands.len() {
+                o.commands.remove(*idx);
+            }
+        }
+    });
+    for (_, url, resolution) in intercepts {
+        world.commands().trigger(lunco_workbench::UriClicked {
+            uri: url,
+            resolution,
+        });
+    }
 }
 
 /// Walk a dotted qualified-name path into nested classes and return
@@ -1035,7 +1091,30 @@ fn walk_qualified_class<'a>(
     ast: &'a rumoca_session::parsing::ast::StoredDefinition,
     qualified: &str,
 ) -> Option<(String, &'a rumoca_session::parsing::ast::ClassDef)> {
-    let mut segments = qualified.split('.');
+    // An MSL file like `Modelica/Blocks/Continuous.mo` declares
+    // `within Modelica.Blocks;` and exposes `Continuous` as its
+    // top-level class. When the drill-in target is the fully
+    // qualified name `Modelica.Blocks.Continuous.PID`, walking from
+    // the first segment (`Modelica`) against `ast.classes` misses
+    // (the AST starts at `Continuous`). Strip any prefix that
+    // matches the file's `within` clause before walking — that's
+    // the "already consumed" part of the path, per MLS §13.2.1.
+    let within_prefix: Option<String> = ast.within.as_ref().map(|w| {
+        w.name
+            .iter()
+            .map(|t| t.text.to_string())
+            .collect::<Vec<_>>()
+            .join(".")
+    });
+    let effective = match within_prefix.as_deref() {
+        Some(p) if !p.is_empty() => qualified
+            .strip_prefix(p)
+            .and_then(|rest| rest.strip_prefix('.'))
+            .unwrap_or(qualified),
+        _ => qualified,
+    };
+
+    let mut segments = effective.split('.');
     let first = segments.next()?;
     let (first_name, first_class) = ast
         .classes

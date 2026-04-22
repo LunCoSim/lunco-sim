@@ -70,6 +70,7 @@ pub mod image_loader;
 pub mod panels;
 pub mod viz;
 pub mod theme;
+pub mod uri_handler;
 pub mod welcome_progress;
 
 /// Modelica section of the Twin Browser — class-tree contributed by

@@ -54,8 +54,10 @@ mod session;
 mod viewport;
 
 pub mod twin_browser;
+pub mod uri;
 
 pub use panel::{InstancePanel, Panel, PanelId, PanelSlot, TabId};
+pub use uri::{UriClicked, UriHandler, UriRegistry, UriResolution};
 pub use twin_browser::{
     BrowserAction, BrowserActions, BrowserCtx, BrowserSection, BrowserSectionRegistry,
     FilesSection, TwinBrowserPanel, UnsavedDocEntry, UnsavedDocs, TWIN_BROWSER_PANEL_ID,
@@ -144,6 +146,10 @@ impl Plugin for WorkbenchPlugin {
             .init_resource::<BrowserSectionRegistry>()
             .init_resource::<BrowserActions>()
             .init_resource::<UnsavedDocs>()
+            // Cross-domain URI registry. Starts empty; each domain
+            // plugin (lunco-modelica, a future lunco-usd, …) pushes
+            // its own handler on build. See `uri.rs` for the trait.
+            .init_resource::<UriRegistry>()
             .add_observer(on_open_tab)
             .add_observer(on_close_tab)
             .add_systems(EguiPrimaryContextPass, render_workbench);
