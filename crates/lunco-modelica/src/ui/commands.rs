@@ -921,6 +921,7 @@ fn on_compile_model(
     mut workbench: ResMut<WorkbenchState>,
     mut compile_states: ResMut<CompileStates>,
     mut console: ResMut<crate::ui::panels::console::ConsoleLog>,
+    mut diagnostics: Option<ResMut<crate::ui::panels::diagnostics::DiagnosticsLog>>,
     diagram_state: Res<DiagramState>,
     channels: Option<Res<ModelicaChannels>>,
     mut q_models: Query<&mut ModelicaModel>,
@@ -1052,6 +1053,14 @@ fn on_compile_model(
 
     compile_states.mark_started(doc);
     console.info(format!("⏵ Compile started: '{model_name}'"));
+    if let Some(diag) = diagnostics.as_mut() {
+        diag.append(vec![crate::ui::panels::log::LogEntry {
+            at: std::time::Instant::now(),
+            level: crate::ui::panels::log::LogLevel::Info,
+            text: format!("⏵ Compile started: '{model_name}'"),
+            model: Some(model_name.clone()),
+        }]);
+    }
 
     if let Some(channels) = channels {
         let _ = channels.tx.send(ModelicaCommand::Compile {

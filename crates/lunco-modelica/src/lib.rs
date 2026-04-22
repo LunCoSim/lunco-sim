@@ -1323,26 +1323,6 @@ fn handle_modelica_responses(
 
             model.is_stepping = false;
 
-            // Pause on any failure to prevent a compile-retry storm.
-            //
-            // Without this, a Compile that failed (e.g.
-            // `MissingStateEquation`) leaves `steppers[entity]` empty.
-            // The next `FixedUpdate` fires `spawn_modelica_requests`,
-            // which ships a `Step` → worker sees no stepper →
-            // `needs_init=true` → full re-compile (~10 s). Repeat
-            // forever. Each failed-Step recompile pins the worker
-            // thread; the main thread still runs, but any observer that
-            // touches the worker channel (CompileActiveModel, etc.)
-            // backs up, and the user perceives the workbench as frozen.
-            //
-            // Pausing on error breaks the loop at the source: no Steps
-            // are sent until the user explicitly resumes (fix source +
-            // Compile, or ▶). Covers solver blowups at t>0 too — a NaN
-            // eruption shouldn't keep grinding.
-            if result.error.is_some() {
-                model.paused = true;
-            }
-
             // Forward log messages to console via bevy_workbench's console system
             if let Some(msg) = &result.log_message {
                 info!("[Modelica] {msg}");
@@ -1449,7 +1429,16 @@ fn handle_modelica_responses(
                     .join(format!("{}_{}", result.entity.index(), result.entity.generation()))
                     .join("model.mo");
                 model.variables.clear();
-                model.paused = false;
+                // Only unpause on a *successful* Compile. A failed
+                // Compile leaves the stepper empty, and unpausing would
+                // cause `spawn_modelica_requests` to ship a Step →
+                // worker recompiles from scratch (~10s) → error → repeat
+                // forever. The earlier error-branch `paused = true`
+                // marks the model as blocked; the user resumes
+                // explicitly after fixing the source.
+                if result.error.is_none() {
+                    model.paused = false;
+                }
 
                 // Merge input names from the worker with values the UI already extracted from source.
                 // The UI extracts defaults from source code (e.g., `input Real g = 9.81` → g: 9.81),

@@ -247,18 +247,36 @@ pub fn refresh_diagnostics(
     let dispatch_key = (doc_id, ast_gen);
     let tag_for_worker = model_tag.clone();
     if !source_owned.is_empty() {
-        let mut lint_state = lint_worker_state().lock().expect("lint state lock");
-        let current_cache_key = lint_state.cached_for;
-        let current_inflight_key = lint_state.inflight_for;
-
-        // Publish cached entries on any frame where the cache
-        // matches — no spawn, no lock contention beyond this one.
-        if current_cache_key == Some(dispatch_key) {
-            entries.extend(lint_state.cached_entries.iter().cloned());
-        } else if current_inflight_key != Some(dispatch_key) {
-            // Fresh key AND no worker is already chasing it → spawn.
-            lint_state.inflight_for = Some(dispatch_key);
-            drop(lint_state);
+        // Scope the first lock so it is ALWAYS released before we
+        // reach for `lint_result_slot()` below. Prior code only
+        // `drop`-ed `lint_state` inside the `else if` spawn arm —
+        // when we fell through to the "worker in-flight for same
+        // key" case the guard stayed live, and line 304's second
+        // `lint_worker_state().lock()` re-entered on the same
+        // thread → `std::sync::Mutex` is non-reentrant → main loop
+        // deadlock the moment a compile error landed (that's the
+        // state change that invalidated the cache while a lint was
+        // in flight). See manual-test log silence after any
+        // `Compile finished with error`.
+        let (cache_hit_entries, need_spawn) = {
+            let mut lint_state =
+                lint_worker_state().lock().expect("lint state lock");
+            let current_cache_key = lint_state.cached_for;
+            let current_inflight_key = lint_state.inflight_for;
+            let mut hit: Option<Vec<LogEntry>> = None;
+            let mut spawn = false;
+            if current_cache_key == Some(dispatch_key) {
+                hit = Some(lint_state.cached_entries.clone());
+            } else if current_inflight_key != Some(dispatch_key) {
+                lint_state.inflight_for = Some(dispatch_key);
+                spawn = true;
+            }
+            (hit, spawn)
+        }; // lint_worker_state lock released here.
+        if let Some(cached) = cache_hit_entries {
+            entries.extend(cached);
+        }
+        if need_spawn {
             let result_slot = lint_result_slot().clone();
             std::thread::spawn(move || {
                 let opts = rumoca_tool_lint::LintOptions::default();
