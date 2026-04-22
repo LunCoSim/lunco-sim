@@ -1449,7 +1449,14 @@ fn extract_class_source(source: &str, class_name: &str) -> Option<String> {
     let opener = regex::Regex::new(&opener_pat).ok()?;
     let closer_pat = format!(r"(?m)^\s*end\s+{safe}\s*;", safe = safe);
     let closer = regex::Regex::new(&closer_pat).ok()?;
-    let start = opener.find(source)?.start();
+    let raw_start = opener.find(source)?.start();
+    // Rewind past leading comment lines so class-describing header
+    // comments ride along with the extracted class. Modelica convention:
+    // `//`-line comments and `/* … */` blocks immediately preceding a
+    // class declaration are semantically "about" that class. Stop as
+    // soon as we hit a line that is neither blank nor a comment
+    // (e.g. `within …;`, another class's `end …;`, or stray code).
+    let start = rewind_through_leading_comments(source, raw_start);
     // Find the first matching `end <ClassName>;` at or after
     // `start`. Multi-class files can have identically-named nested
     // classes, but in MSL practice `end <Name>;` pairs cleanly
@@ -1457,6 +1464,80 @@ fn extract_class_source(source: &str, class_name: &str) -> Option<String> {
     let rel_end = closer.find(&source[start..])?.end();
     let end = start + rel_end;
     Some(source[start..end].to_string())
+}
+
+/// Given a byte offset at the start of a class `model …` header,
+/// walk backward past any immediately-preceding comment block and
+/// return the earliest offset that still belongs to the class.
+///
+/// Rewinds through:
+///   * blank lines (`\n`, `\n\t`, etc.)
+///   * `// …` line comments
+///   * `/* … */` block comments (must fully precede `header_start`)
+///
+/// Stops at any other content — including `within …;`, another
+/// class's `end …;`, or code — so we never accidentally pull
+/// unrelated context into the duplicate.
+fn rewind_through_leading_comments(source: &str, header_start: usize) -> usize {
+    // Find the start of the line that contains `header_start`. Any
+    // earlier line is a candidate for rewind.
+    let header_line_start = source[..header_start]
+        .rfind('\n')
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    // Work line-by-line from there back. `line_starts[i]` is the
+    // byte offset where line `i` begins. Keep only those strictly
+    // before the header line.
+    let mut line_starts: Vec<usize> = std::iter::once(0)
+        .chain(source.match_indices('\n').map(|(i, _)| i + 1))
+        .collect();
+    line_starts.retain(|&o| o < header_line_start);
+
+    // The header line is where the class declaration lives; we
+    // preserve at least that.
+    let mut keep = header_line_start;
+    let mut in_block_comment = false;
+    for &lstart in line_starts.iter().rev() {
+        let lend = source[lstart..]
+            .find('\n')
+            .map(|i| lstart + i)
+            .unwrap_or(source.len());
+        let line = &source[lstart..lend];
+        let trimmed = line.trim();
+        if in_block_comment {
+            // Still inside a `/* … */` that we haven't closed yet.
+            // Closing delimiter on this line ends the block (walking
+            // backward: the earlier `/*` starts it).
+            if trimmed.starts_with("/*") {
+                in_block_comment = false;
+                keep = lstart;
+                continue;
+            }
+            keep = lstart;
+            continue;
+        }
+        if trimmed.is_empty() || trimmed.starts_with("//") {
+            keep = lstart;
+            continue;
+        }
+        // Single-line `/* … */` or start of a multi-line block (we
+        // see it from below — so this is the *close* of a block we'd
+        // have to absorb).
+        if trimmed.ends_with("*/") {
+            // If the same line also opens `/*`, it's a single-line
+            // block comment — absorb and keep scanning.
+            if trimmed.starts_with("/*") {
+                keep = lstart;
+                continue;
+            }
+            // Multi-line block: mark and walk back past its opener.
+            in_block_comment = true;
+            keep = lstart;
+            continue;
+        }
+        break;
+    }
+    keep
 }
 
 /// Walk from a class file's directory up through the filesystem,
@@ -2756,4 +2837,35 @@ fn on_move_component(trigger: On<MoveComponent>, mut commands: Commands) {
         };
         crate::ui::panels::canvas_diagram::apply_ops_public(world, doc_id, vec![op]);
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extract_preserves_line_comments_above_class() {
+        let src = "// hello world\n// more info\nmodel Foo\n  parameter Real x = 1;\nend Foo;\n";
+        let got = extract_class_source(src, "Foo").expect("should extract");
+        assert!(got.contains("// hello world"), "got: {got}");
+        assert!(got.contains("// more info"), "got: {got}");
+        assert!(got.contains("end Foo;"));
+    }
+
+    #[test]
+    fn extract_preserves_block_comments_above_class() {
+        let src = "/* preamble\n   note */\nmodel Foo\nend Foo;\n";
+        let got = extract_class_source(src, "Foo").expect("should extract");
+        assert!(got.contains("/* preamble"), "got: {got}");
+        assert!(got.contains("note */"), "got: {got}");
+    }
+
+    #[test]
+    fn extract_stops_at_unrelated_content_above() {
+        // `within` line is NOT a comment — rewind must stop before it.
+        let src = "within Foo;\n// my comment\nmodel Bar\nend Bar;\n";
+        let got = extract_class_source(src, "Bar").expect("should extract");
+        assert!(!got.contains("within"), "within leaked: {got}");
+        assert!(got.contains("// my comment"), "comment dropped: {got}");
+    }
 }

@@ -885,24 +885,16 @@ pub struct ClassCachePlugin;
 
 impl Plugin for ClassCachePlugin {
     fn build(&self, app: &mut App) {
-        // Colocate rumoca's parsed-artifact cache under our
-        // workspace `.cache/` (next to the MSL files we already
-        // manage there) instead of letting rumoca default to
-        // `~/.cache/rumoca/`. Keeps all our tooling's cache in
-        // one discoverable, clearable place. Honors any explicit
-        // `RUMOCA_CACHE_DIR` the user already set.
-        //
-        // Runs once in plugin build(), before any bg task spawns
-        // a rumoca parse, so the first call sees the redirected
-        // path.
-        if std::env::var_os("RUMOCA_CACHE_DIR").is_none() {
-            let target = lunco_assets::cache_dir().join("rumoca");
-            std::env::set_var("RUMOCA_CACHE_DIR", &target);
-            info!(
-                "[ClassCache] redirected rumoca parse cache to `{}`",
-                target.display()
-            );
-        }
+        // Do NOT redirect `RUMOCA_CACHE_DIR` here. Leaving it unset
+        // lets rumoca use its XDG default (`~/.cache/rumoca/...`),
+        // shared with the `modelica_tester` CLI and any other
+        // rumoca-using tool. The workspace-local override that
+        // used to live here made the workbench re-parse the entire
+        // MSL (~2670 files, minutes) after every rumoca source
+        // change because the artifact-cache key schema invalidated,
+        // while the CLI kept hitting its XDG cache. See
+        // `ModelicaPlugin::build_modelica_core` for the matching
+        // comment.
 
         app.init_resource::<FileCache>()
             .init_resource::<ClassCache>()

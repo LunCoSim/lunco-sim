@@ -264,30 +264,23 @@ fn build_modelica_core(app: &mut App) {
         }
     }
 
-    // **Set RUMOCA_CACHE_DIR BEFORE spawning the worker thread.**
+    // Do NOT override `RUMOCA_CACHE_DIR`. Leaving it unset lets
+    // rumoca-session use its XDG default (`~/.cache/rumoca/...`),
+    // which is the same location the standalone `modelica_tester`
+    // CLI and any other rumoca-using tool share. That share is
+    // what keeps startup-to-first-compile fast: a cache populated
+    // by one tool is hit by the next.
     //
-    // This used to be set by `ClassCachePlugin::build`, which runs
-    // *after* `build_modelica_core` as part of the UI plugin. The
-    // worker thread therefore started with `RUMOCA_CACHE_DIR`
-    // unset, rumoca fell back to the XDG default (`~/.cache/rumoca`),
-    // and wrote/read cache files there. Meanwhile the later UI
-    // thread calls went to the workspace path once the env var
-    // finally arrived.
-    //
-    // Result: every worker compile saw a partially-cold cache
-    // (the files it needed were in the *other* directory), and
-    // every UI-side parse saw the opposite. Two caches, neither
-    // complete for both readers — minutes-long compiles on what
-    // should have been a warm cache. Honors any `RUMOCA_CACHE_DIR`
-    // the user already set.
-    if std::env::var_os("RUMOCA_CACHE_DIR").is_none() {
-        let target = lunco_assets::cache_dir().join("rumoca");
-        std::env::set_var("RUMOCA_CACHE_DIR", &target);
-        log::info!(
-            "[ModelicaCore] RUMOCA_CACHE_DIR set to `{}` before worker spawn",
-            target.display()
-        );
-    }
+    // Earlier versions of this code pinned the cache to the
+    // workspace `.cache/rumoca/` to keep CI/test runs deterministic.
+    // In practice that guaranteed *cold* caches for interactive
+    // use: every rumoca source change bumps the artifact-cache key
+    // schema, which invalidates the workspace cache while the XDG
+    // cache — populated by the CLI — still matches. Result: CLI
+    // compiles in ~5 s, workbench in minutes. Sharing the XDG
+    // cache with the CLI is the obvious fix; callers that want a
+    // sandboxed cache can still set `RUMOCA_CACHE_DIR` explicitly
+    // before launching the binary.
 
     #[cfg(not(target_arch = "wasm32"))]
     {
