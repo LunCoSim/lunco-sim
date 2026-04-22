@@ -19,8 +19,8 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_workbench::{Panel, PanelId, PanelSlot};
 use lunco_viz::{
-    kinds::line_plot::LinePlot, view::Panel2DCtx, viz::Visualization, SignalRegistry,
-    VisualizationRegistry, VizFitRequests,
+    export_signals_to_csv, kinds::line_plot::LinePlot, view::Panel2DCtx, viz::Visualization,
+    SignalRegistry, VisualizationRegistry, VizFitRequests,
 };
 
 use crate::ui::viz::{ensure_default_modelica_graph, DEFAULT_MODELICA_GRAPH};
@@ -71,6 +71,7 @@ impl Panel for GraphsPanel {
         // Fit button is a compact icon so the row is actually useful
         // for telemetry readouts, not empty space around one button.
         let mut fit_clicked = false;
+        let mut export_csv_clicked = false;
         ui.horizontal(|ui| {
             ui.label(
                 egui::RichText::new(format!("{bound_count} var"))
@@ -115,6 +116,16 @@ impl Panel for GraphsPanel {
                 if fit.clicked() {
                     fit_clicked = true;
                 }
+                let csv = ui
+                    .small_button("💾 CSV")
+                    .on_hover_text(
+                        "Export CSV — save the plot's signal histories to a CSV file \
+                         (time column + one column per bound signal; forward-filled at \
+                         union timestamps)",
+                    );
+                if csv.clicked() {
+                    export_csv_clicked = true;
+                }
             });
         });
         ui.separator();
@@ -122,6 +133,9 @@ impl Panel for GraphsPanel {
             if let Some(mut requests) = world.get_resource_mut::<VizFitRequests>() {
                 requests.request(DEFAULT_MODELICA_GRAPH);
             }
+        }
+        if export_csv_clicked {
+            export_default_graph_to_csv(world);
         }
 
         if bound_count == 0 {
@@ -137,5 +151,78 @@ impl Panel for GraphsPanel {
         let viz = LinePlot;
         let mut ctx = Panel2DCtx { ui, world };
         viz.render_panel_2d(&mut ctx, &config);
+    }
+}
+
+/// Gather the default plot's bound signals, pop a native save-file
+/// picker, and write a CSV with `time` + one column per signal.
+///
+/// Goes through `lunco_storage::FileStorage` so the same call site
+/// works when an OPFS / IndexedDB backend lands for wasm. Cancelling
+/// the picker is a silent no-op; write errors go to the console.
+fn export_default_graph_to_csv(world: &mut World) {
+    let (signals, labels) = {
+        let Some(reg) = world.get_resource::<VisualizationRegistry>() else { return };
+        let Some(cfg) = reg.get(DEFAULT_MODELICA_GRAPH) else { return };
+        let sigs: Vec<_> = cfg.inputs.iter().map(|b| b.source.clone()).collect();
+        let labels: Vec<String> = cfg
+            .inputs
+            .iter()
+            .map(|b| b.label.clone().unwrap_or_else(|| b.source.path.clone()))
+            .collect();
+        (sigs, labels)
+    };
+    if signals.is_empty() {
+        return;
+    }
+
+    let csv = {
+        let Some(reg) = world.get_resource::<SignalRegistry>() else { return };
+        export_signals_to_csv(reg, &signals, &labels)
+    };
+
+    let storage = lunco_storage::FileStorage::new();
+    let hint = lunco_storage::SaveHint {
+        suggested_name: Some("modelica_signals.csv".to_string()),
+        start_dir: None,
+        filters: vec![lunco_storage::OpenFilter::new("CSV", &["csv"])],
+    };
+    let handle = match <lunco_storage::FileStorage as lunco_storage::Storage>::pick_save(
+        &storage, &hint,
+    ) {
+        Ok(Some(h)) => h,
+        Ok(None) => return,
+        Err(e) => {
+            if let Some(mut console) =
+                world.get_resource_mut::<crate::ui::panels::console::ConsoleLog>()
+            {
+                console.error(format!("CSV export: picker failed: {e}"));
+            }
+            return;
+        }
+    };
+
+    if let Err(e) = <lunco_storage::FileStorage as lunco_storage::Storage>::write(
+        &storage,
+        &handle,
+        csv.as_bytes(),
+    ) {
+        if let Some(mut console) =
+            world.get_resource_mut::<crate::ui::panels::console::ConsoleLog>()
+        {
+            console.error(format!("CSV export: write failed: {e}"));
+        }
+    } else if let Some(mut console) =
+        world.get_resource_mut::<crate::ui::panels::console::ConsoleLog>()
+    {
+        let path = match &handle {
+            lunco_storage::StorageHandle::File(p) => p.display().to_string(),
+            _ => "(handle)".to_string(),
+        };
+        console.info(format!(
+            "Exported {} bytes ({} signals) to {path}",
+            csv.len(),
+            signals.len()
+        ));
     }
 }

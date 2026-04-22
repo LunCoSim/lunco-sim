@@ -237,6 +237,74 @@ impl SignalRegistry {
     }
 }
 
+/// Build a CSV table from the given signals' histories.
+///
+/// Output is `time,<path1>,<path2>,...` with one row per distinct
+/// timestamp across all included signals, ascending. Each column is
+/// forward-filled (last known value) when that signal has no sample
+/// at that exact timestamp; cells before a signal's first sample are
+/// empty. Signals with no history are skipped.
+pub fn export_signals_to_csv(
+    registry: &SignalRegistry,
+    signals: &[SignalRef],
+    column_labels: &[String],
+) -> String {
+    let cols: Vec<(&str, &ScalarHistory)> = signals
+        .iter()
+        .zip(column_labels.iter())
+        .filter_map(|(s, l)| registry.scalar_history(s).map(|h| (l.as_str(), h)))
+        .collect();
+
+    if cols.is_empty() {
+        return String::from("time\n");
+    }
+
+    // Union all timestamps.
+    let mut times: Vec<f64> = cols
+        .iter()
+        .flat_map(|(_, h)| h.samples.iter().map(|s| s.time))
+        .collect();
+    times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    times.dedup_by(|a, b| (*a - *b).abs() < f64::EPSILON);
+
+    // Header — quote labels containing commas or quotes.
+    let mut out = String::from("time");
+    for (label, _) in &cols {
+        out.push(',');
+        out.push_str(&csv_escape(label));
+    }
+    out.push('\n');
+
+    // Per-column cursor (index of next unread sample).
+    let mut cursors = vec![0usize; cols.len()];
+    let mut last_val = vec![Option::<f64>::None; cols.len()];
+
+    for &t in &times {
+        out.push_str(&format!("{t}"));
+        for (i, (_, hist)) in cols.iter().enumerate() {
+            while cursors[i] < hist.samples.len() && hist.samples[cursors[i]].time <= t {
+                last_val[i] = Some(hist.samples[cursors[i]].value);
+                cursors[i] += 1;
+            }
+            out.push(',');
+            if let Some(v) = last_val[i] {
+                out.push_str(&format!("{v}"));
+            }
+        }
+        out.push('\n');
+    }
+    out
+}
+
+fn csv_escape(s: &str) -> String {
+    if s.contains(',') || s.contains('"') || s.contains('\n') {
+        let escaped = s.replace('"', "\"\"");
+        format!("\"{escaped}\"")
+    } else {
+        s.to_string()
+    }
+}
+
 /// Deterministic colour for a signal path, shared across every plot
 /// surface (panel `Graphs`, `VizPanel`, in-canvas `PlotNodeVisual`,
 /// future inspector). Same `path` ⇒ same colour everywhere; stable
