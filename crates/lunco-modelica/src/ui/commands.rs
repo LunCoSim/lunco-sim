@@ -286,7 +286,7 @@ impl Plugin for ModelicaCommandsPlugin {
             // pushes the handler, and exits.
             .add_systems(
                 bevy::prelude::Startup,
-                register_modelica_uri_handler,
+                (register_modelica_uri_handler, prewarm_msl_library),
             )
             .add_systems(
                 bevy::prelude::Update,
@@ -1804,6 +1804,23 @@ fn register_modelica_uri_handler(
         crate::ui::uri_handler::ModelicaUriHandler,
     ));
     bevy::log::info!("[Modelica] registered modelica:// URI handler");
+}
+
+/// Startup system: force-init the `msl_component_library`
+/// `OnceLock` on a background thread so the first Welcome render
+/// (or palette open) doesn't pay the ~2500-entry JSON parse cost
+/// on the UI thread. Safe because `OnceLock::get_or_init` is
+/// thread-safe and the later `msl_component_library()` call from
+/// the render path just reads the already-initialised slice.
+fn prewarm_msl_library() {
+    std::thread::spawn(|| {
+        let t0 = std::time::Instant::now();
+        let n = crate::visual_diagram::msl_component_library().len();
+        bevy::log::info!(
+            "[MSL] prewarmed component library: {n} entries in {:?}",
+            t0.elapsed()
+        );
+    });
 }
 
 fn on_open_class(trigger: On<OpenClass>, mut commands: Commands) {

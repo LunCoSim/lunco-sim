@@ -1021,11 +1021,40 @@ fn render_html_as_markdown(
     > = std::sync::OnceLock::new();
     let cache = CACHE
         .get_or_init(|| Mutex::new(egui_commonmark::CommonMarkCache::default()));
-    // `htmd::convert` is pure CPU, sub-millisecond on typical MSL
-    // docs. Caching the Markdown conversion would shave frames in
-    // pathological cases; skipping for simplicity — CommonMarkCache
-    // covers the render-side reuse.
-    let md = htmd::convert(html).unwrap_or_else(|_| html.to_string());
+
+    // Memoise the HTML→Markdown conversion by input hash. `htmd`
+    // is pure CPU and sub-ms for typical MSL docs, but the Docs
+    // view re-calls us every frame while the tab is active — at
+    // 60 fps a 2ms conversion is ~120ms/sec of main-thread work
+    // for no reason. A single-entry cache is enough because the
+    // same HTML is requested many frames in a row; switching
+    // tabs changes the input, which re-converts once.
+    static MD_CACHE: std::sync::OnceLock<
+        Mutex<Option<(u64, String)>>,
+    > = std::sync::OnceLock::new();
+    let md_cache = MD_CACHE.get_or_init(|| Mutex::new(None));
+    let html_hash = {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        html.hash(&mut h);
+        h.finish()
+    };
+    let md = {
+        let hit = md_cache
+            .lock()
+            .ok()
+            .and_then(|g| g.as_ref().filter(|(k, _)| *k == html_hash).map(|(_, v)| v.clone()));
+        match hit {
+            Some(v) => v,
+            None => {
+                let v = htmd::convert(html).unwrap_or_else(|_| html.to_string());
+                if let Ok(mut g) = md_cache.lock() {
+                    *g = Some((html_hash, v.clone()));
+                }
+                v
+            }
+        }
+    };
     if let Ok(mut c) = cache.lock() {
         egui_commonmark::CommonMarkViewer::new()
             .max_image_width(Some(target_width as usize))
