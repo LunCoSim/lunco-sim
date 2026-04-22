@@ -787,6 +787,36 @@ fn render_unified_toolbar(
             .on_hover_text("Compile the current model and run it (F5)")
             .clicked();
 
+        // Run-control group. Only meaningful once a stepper exists
+        // (i.e. the model compiled and linked a ModelicaModel
+        // component). Before that, the worker has nothing to pause or
+        // reset — we keep the group disabled rather than hiding it so
+        // the toolbar layout stays stable across compile transitions.
+        if let Some((paused, t_now)) = sim_state {
+            ui.separator();
+            // Single toggle: ▶ when paused, ⏸ when running. Mirrors
+            // Dymola's sim-tab play/pause (and every video player).
+            let (glyph, tip) = if paused {
+                ("▶", "Resume stepping")
+            } else {
+                ("⏸", "Pause stepping (state preserved — Resume to continue)")
+            };
+            run_pause_clicked = ui.button(glyph).on_hover_text(tip).clicked();
+            reset_clicked = ui
+                .button("⟲")
+                .on_hover_text("Reset simulation to t=0 (keeps compiled model)")
+                .clicked();
+            // Clock readout. Mono digits so the width doesn't dance
+            // as the number grows; weak colour so it reads as a
+            // status line, not a control.
+            ui.label(
+                egui::RichText::new(format!("t={:.3}s", t_now))
+                    .monospace()
+                    .weak(),
+            )
+            .on_hover_text("Simulation time (seconds since t=0)");
+        }
+
         // Auto-Arrange: batch SetPlacement on every component in the
         // active class to a clean grid. Only useful on the Diagram
         // view and only on editable docs. Dymola's "Edit → Auto
@@ -844,6 +874,25 @@ fn render_unified_toolbar(
             .trigger(crate::ui::commands::DuplicateModelFromReadOnly {
                 source_doc: doc,
             });
+    }
+    if run_pause_clicked {
+        // sim_state was Some to render the button, so unwrap is safe.
+        let paused = sim_state.map(|(p, _)| p).unwrap_or(false);
+        let raw = doc.raw();
+        if paused {
+            world
+                .commands()
+                .trigger(crate::ui::commands::ResumeActiveModel { doc: raw });
+        } else {
+            world
+                .commands()
+                .trigger(crate::ui::commands::PauseActiveModel { doc: raw });
+        }
+    }
+    if reset_clicked {
+        world
+            .commands()
+            .trigger(crate::ui::commands::ResetActiveModel { doc: doc.raw() });
     }
     if auto_arrange_clicked {
         world
