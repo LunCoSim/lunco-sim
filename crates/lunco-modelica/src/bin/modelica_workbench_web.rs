@@ -22,7 +22,7 @@ use bevy_egui::EguiPlugin;
 use lunco_modelica::{
     ModelicaPlugin,
     ModelicaModel,
-    models::BUNDLED_MODELS,
+    models::bundled_models,
 };
 
 #[cfg(target_arch = "wasm32")]
@@ -45,7 +45,8 @@ pub fn run() {
     // Load the first bundled model (Battery.mo) as the default.
     // Models are embedded at compile time via include_str! — no filesystem access.
     // Bevy requires some default; RocketEngine is first in the list.
-    let default_model = BUNDLED_MODELS
+    let models = bundled_models();
+    let default_model = models
         .first()
         .expect("at least one bundled model");
     let default_filename = default_model.filename;

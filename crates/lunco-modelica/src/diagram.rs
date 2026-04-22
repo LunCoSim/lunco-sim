@@ -165,7 +165,7 @@ impl ModelicaComponentBuilder {
 
             // Add connections as edges
             for eq in &class.equations {
-                if let Equation::Connect { lhs, rhs } = eq {
+                if let Equation::Connect { lhs, rhs, .. } = eq {
                     let (src_node, src_port) = parse_connect_reference(lhs);
                     let (tgt_node, tgt_port) = parse_connect_reference(rhs);
 
@@ -296,7 +296,7 @@ impl ModelicaComponentBuilder {
 
             // Connect connector nodes via `connect()` equations
             for eq in &class.equations {
-                if let Equation::Connect { lhs, rhs } = eq {
+                if let Equation::Connect { lhs, rhs, .. } = eq {
                     let (src_node, src_port) = parse_connect_reference(lhs);
                     let (tgt_node, tgt_port) = parse_connect_reference(rhs);
 

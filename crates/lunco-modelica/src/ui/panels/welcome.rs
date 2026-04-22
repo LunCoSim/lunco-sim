@@ -30,7 +30,7 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_workbench::{Panel, PanelId, PanelSlot};
 
-use crate::models::BUNDLED_MODELS;
+use crate::models::bundled_models;
 use crate::ui::state::ModelLibrary;
 use crate::ui::welcome_progress::ExampleProgress;
 use crate::visual_diagram::{msl_component_library, MSLComponentDef};
@@ -383,10 +383,11 @@ impl Panel for WelcomePanel {
                 // own authored models" escape hatch. Keeps the
                 // fold above scroll dominated by the guided
                 // content without hiding the demos entirely.
+                let bundled = bundled_models();
                 egui::CollapsingHeader::new(
                     egui::RichText::new(format!(
                         "LunCoSim demos ({} bundled)",
-                        BUNDLED_MODELS.len()
+                        bundled.len()
                     ))
                     .size(14.0)
                     .color(title_tint),
@@ -407,7 +408,7 @@ impl Panel for WelcomePanel {
                     // 2-col grid of bundled cards.
                     let col_w = ((ui.available_width() - 8.0) / 2.0).max(220.0);
                 let row_h = 52.0;
-                let mut iter = BUNDLED_MODELS.iter();
+                let mut iter = bundled.iter();
                 loop {
                     let left = iter.next();
                     let right = iter.next();

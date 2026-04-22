@@ -1,3 +1,4 @@
+// tagline: Annotation visual fixture — Engine, Tank, Gimbal icons on a stage diagram
 // Visual test fixture for the graphical-annotation pipeline.
 //
 // Exercises every primitive the slice-1 extractor handles (Rectangle,

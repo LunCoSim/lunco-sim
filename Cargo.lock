@@ -5464,6 +5464,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e7c5cedc30da3a610cac6b4ba17597bdf7152cf974e8aab3afb3d54455e371c8"
 
 [[package]]
+name = "include_dir"
+version = "0.7.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "923d117408f1e49d914f1a379a309cffe4f18c05cf4e3d12e613a15fc81bd0dd"
+dependencies = [
+ "include_dir_macros",
+]
+
+[[package]]
+name = "include_dir_macros"
+version = "0.7.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7cab85a7ed0bd5f0e76d93846e0147172bed2e2d3f859bcc33a8d9699cad1a75"
+dependencies = [
+ "proc-macro2",
+ "quote",
+]
+
+[[package]]
 name = "indexmap"
 version = "2.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6311,6 +6330,7 @@ dependencies = [
  "getrandom 0.3.4",
  "htmd",
  "image",
+ "include_dir",
  "indexmap",
  "log",
  "lunco-api",
@@ -9041,7 +9061,6 @@ dependencies = [
 [[package]]
 name = "rumoca-core"
 version = "0.8.12"
-source = "git+https://github.com/LunCoSim/rumoca?branch=main#ad86b2c5a6f3ea468407c8a5d49228b980ab3cdc"
 dependencies = [
  "miette",
  "serde",
@@ -9050,7 +9069,6 @@ dependencies = [
 [[package]]
 name = "rumoca-eval-ast"
 version = "0.8.12"
-source = "git+https://github.com/LunCoSim/rumoca?branch=main#ad86b2c5a6f3ea468407c8a5d49228b980ab3cdc"
 dependencies = [
  "rumoca-core",
  "rumoca-ir-ast",
@@ -9061,7 +9079,6 @@ dependencies = [
 [[package]]
 name = "rumoca-eval-dae"
 version = "0.8.12"
-source = "git+https://github.com/LunCoSim/rumoca?branch=main#ad86b2c5a6f3ea468407c8a5d49228b980ab3cdc"
 dependencies = [
  "cranelift-codegen",
  "cranelift-frontend",
@@ -9078,7 +9095,6 @@ dependencies = [
 [[package]]
 name = "rumoca-eval-flat"
 version = "0.8.12"
-source = "git+https://github.com/LunCoSim/rumoca?branch=main#ad86b2c5a6f3ea468407c8a5d49228b980ab3cdc"
 dependencies = [
  "indexmap",
  "rumoca-core",
@@ -9090,7 +9106,6 @@ dependencies = [
 [[package]]
 name = "rumoca-ir-ast"
 version = "0.8.12"
-source = "git+https://github.com/LunCoSim/rumoca?branch=main#ad86b2c5a6f3ea468407c8a5d49228b980ab3cdc"
 dependencies = [
  "indexmap",
  "rumoca-core",
@@ -9102,7 +9117,6 @@ dependencies = [
 [[package]]
 name = "rumoca-ir-core"
 version = "0.8.12"
-source = "git+https://github.com/LunCoSim/rumoca?branch=main#ad86b2c5a6f3ea468407c8a5d49228b980ab3cdc"
 dependencies = [
  "serde",
 ]
@@ -9110,7 +9124,6 @@ dependencies = [
 [[package]]
 name = "rumoca-ir-dae"
 version = "0.8.12"
-source = "git+https://github.com/LunCoSim/rumoca?branch=main#ad86b2c5a6f3ea468407c8a5d49228b980ab3cdc"
 dependencies = [
  "indexmap",
  "rumoca-core",
@@ -9121,7 +9134,6 @@ dependencies = [
 [[package]]
 name = "rumoca-ir-flat"
 version = "0.8.12"
-source = "git+https://github.com/LunCoSim/rumoca?branch=main#ad86b2c5a6f3ea468407c8a5d49228b980ab3cdc"
 dependencies = [
  "indexmap",
  "rumoca-core",
@@ -9132,7 +9144,6 @@ dependencies = [
 [[package]]
 name = "rumoca-phase-codegen"
 version = "0.8.12"
-source = "git+https://github.com/LunCoSim/rumoca?branch=main#ad86b2c5a6f3ea468407c8a5d49228b980ab3cdc"
 dependencies = [
  "miette",
  "minijinja",
@@ -9147,7 +9158,6 @@ dependencies = [
 [[package]]
 name = "rumoca-phase-dae"
 version = "0.8.12"
-source = "git+https://github.com/LunCoSim/rumoca?branch=main#ad86b2c5a6f3ea468407c8a5d49228b980ab3cdc"
 dependencies = [
  "indexmap",
  "miette",
@@ -9163,7 +9173,6 @@ dependencies = [
 [[package]]
 name = "rumoca-phase-flatten"
 version = "0.8.12"
-source = "git+https://github.com/LunCoSim/rumoca?branch=main#ad86b2c5a6f3ea468407c8a5d49228b980ab3cdc"
 dependencies = [
  "indexmap",
  "miette",
@@ -9179,7 +9188,6 @@ dependencies = [
 [[package]]
 name = "rumoca-phase-instantiate"
 version = "0.8.12"
-source = "git+https://github.com/LunCoSim/rumoca?branch=main#ad86b2c5a6f3ea468407c8a5d49228b980ab3cdc"
 dependencies = [
  "indexmap",
  "miette",
@@ -9193,7 +9201,6 @@ dependencies = [
 [[package]]
 name = "rumoca-phase-parse"
 version = "0.8.12"
-source = "git+https://github.com/LunCoSim/rumoca?branch=main#ad86b2c5a6f3ea468407c8a5d49228b980ab3cdc"
 dependencies = [
  "anyhow",
  "indexmap",
@@ -9209,7 +9216,6 @@ dependencies = [
 [[package]]
 name = "rumoca-phase-resolve"
 version = "0.8.12"
-source = "git+https://github.com/LunCoSim/rumoca?branch=main#ad86b2c5a6f3ea468407c8a5d49228b980ab3cdc"
 dependencies = [
  "anyhow",
  "indexmap",
@@ -9223,7 +9229,6 @@ dependencies = [
 [[package]]
 name = "rumoca-phase-solve"
 version = "0.8.12"
-source = "git+https://github.com/LunCoSim/rumoca?branch=main#ad86b2c5a6f3ea468407c8a5d49228b980ab3cdc"
 dependencies = [
  "indexmap",
  "rumoca-core",
@@ -9236,7 +9241,6 @@ dependencies = [
 [[package]]
 name = "rumoca-phase-typecheck"
 version = "0.8.12"
-source = "git+https://github.com/LunCoSim/rumoca?branch=main#ad86b2c5a6f3ea468407c8a5d49228b980ab3cdc"
 dependencies = [
  "miette",
  "rumoca-core",
@@ -9250,7 +9254,6 @@ dependencies = [
 [[package]]
 name = "rumoca-session"
 version = "0.8.12"
-source = "git+https://github.com/LunCoSim/rumoca?branch=main#ad86b2c5a6f3ea468407c8a5d49228b980ab3cdc"
 dependencies = [
  "anyhow",
  "bincode",
@@ -9281,7 +9284,6 @@ dependencies = [
 [[package]]
 name = "rumoca-sim"
 version = "0.8.12"
-source = "git+https://github.com/LunCoSim/rumoca?branch=main#ad86b2c5a6f3ea468407c8a5d49228b980ab3cdc"
 dependencies = [
  "diffsol",
  "getrandom 0.3.4",
@@ -9302,7 +9304,6 @@ dependencies = [
 [[package]]
 name = "rumoca-tool-fmt"
 version = "0.8.12"
-source = "git+https://github.com/LunCoSim/rumoca?branch=main#ad86b2c5a6f3ea468407c8a5d49228b980ab3cdc"
 dependencies = [
  "rumoca-session",
  "serde",
@@ -9313,7 +9314,6 @@ dependencies = [
 [[package]]
 name = "rumoca-tool-lint"
 version = "0.8.12"
-source = "git+https://github.com/LunCoSim/rumoca?branch=main#ad86b2c5a6f3ea468407c8a5d49228b980ab3cdc"
 dependencies = [
  "rumoca-session",
  "serde",

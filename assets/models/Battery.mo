@@ -1,3 +1,4 @@
+// tagline: Battery — state-of-charge integrator (equation-only)
 model Battery
   parameter Real capacity = 1.0 "Total capacity in Ah";
   parameter Real voltage_nom = 12.0 "Nominal voltage in V";

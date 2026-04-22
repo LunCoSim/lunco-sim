@@ -891,7 +891,7 @@ fn compute_remove_connection_patch(
         .equations
         .iter()
         .find(|e| match e {
-            Equation::Connect { lhs, rhs } => {
+            Equation::Connect { lhs, rhs, .. } => {
                 (cref_matches_port(lhs, from) && cref_matches_port(rhs, to))
                     || (cref_matches_port(lhs, to) && cref_matches_port(rhs, from))
             }

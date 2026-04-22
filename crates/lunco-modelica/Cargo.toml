@@ -54,6 +54,11 @@ egui_extras = { version = "0.33", features = ["all_loaders"] }
 # Pure-Rust HTML → Markdown converter. Used once per Documentation
 # annotation to normalise into the shape commonmark expects.
 htmd = "0.5"
+# Compile-time embedding of the `assets/models/` tree so
+# `src/models.rs` can enumerate bundled `.mo` examples by walking a
+# static `Dir`, instead of requiring a `pub const + include_str!` line
+# per file. Same API works on wasm32 (where fs access is unavailable).
+include_dir = "0.7"
 # Raster decoders used by egui_extras' `all_loaders`. Only the formats
 # actually present in MSL Resources/Images are enabled to keep the
 # compile surface small.

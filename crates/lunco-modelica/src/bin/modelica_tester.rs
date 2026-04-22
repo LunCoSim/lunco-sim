@@ -36,19 +36,26 @@ fn main() -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("Failed to export DAE IR: {e}"))?;
     println!("DAE IR Size: {} bytes", json_ir.len());
 
-    // 3. Simple Mock Simulation Step
-    println!("Starting mock simulation (t=0.0 to t=1.0)...");
-
-    let mut current_time = 0.0;
-    let dt = 0.1;
-
-    while current_time < 1.0 {
-        // TODO: Use rumoca-sim to actually step the model
-        current_time += dt;
-        println!("  Step: t = {:.2}", current_time);
+    // 3. Dump DAE state list + equations before stepper init.
+    println!("\n--- DAE states ---");
+    for (name, v) in result.dae.states.iter() {
+        println!("  {} (size={})", name, v.size());
+    }
+    println!("--- DAE equations ({}) ---", result.dae.f_x.len());
+    for (i, eq) in result.dae.f_x.iter().enumerate() {
+        println!("  [{i}] origin={} scalar_count={}", eq.origin, eq.scalar_count);
     }
 
-    println!("Simulation complete.");
+    // 4. Try to build a stepper — this runs `prepare_dae` where the
+    // MissingStateEquation error is raised.
+    println!("\n--- Building stepper ---");
+    let mut opts = rumoca_sim::StepperOptions::default();
+    opts.atol = 1e-3;
+    opts.rtol = 1e-3;
+    match rumoca_sim::SimStepper::new(&result.dae, opts) {
+        Ok(_s) => println!("Stepper built OK."),
+        Err(e) => println!("Stepper init failed: {e:?}"),
+    }
 
     Ok(())
 }
