@@ -630,6 +630,22 @@ fn render_unified_toolbar(
         .host(doc)
         .map(|h| (h.can_undo(), h.can_redo(), h.undo_depth(), h.redo_depth()));
 
+    // Live simulation state for the entity linked to this doc, if any.
+    // Populated after a successful Compile; `None` means the toolbar's
+    // Run/Pause/Reset group is still disabled (there's no stepper to
+    // drive). Snapshot the fields we need so the closure below
+    // doesn't need to re-query the world mid-render.
+    let sim_state: Option<(bool, f64)> = world
+        .resource::<ModelicaDocumentRegistry>()
+        .entities_linked_to(doc)
+        .into_iter()
+        .next()
+        .and_then(|e| {
+            world
+                .get::<crate::ModelicaModel>(e)
+                .map(|m| (m.paused, m.current_time))
+        });
+
     // Collect button presses without touching world inside the closure.
     let mut compile_clicked = false;
     let mut undo_clicked = false;
@@ -637,6 +653,8 @@ fn render_unified_toolbar(
     let mut dismiss_error = false;
     let mut duplicate_clicked = false;
     let mut auto_arrange_clicked = false;
+    let mut run_pause_clicked = false;
+    let mut reset_clicked = false;
     let mut new_view_mode = view_mode;
 
     // Always show emoji-only labels in the toolbar. The prior

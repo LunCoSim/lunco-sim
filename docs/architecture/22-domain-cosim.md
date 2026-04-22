@@ -39,6 +39,74 @@ FixedPostUpdate:
 The master loop reads outputs, propagates through connections, writes inputs,
 then steps all engines — this is the FMI master algorithm.
 
+## Where the master loop fits
+
+The pipeline above is the *body* of the per-tick advance. The layer that
+**owns** the pipeline is `Twin` — the Bevy Resource introduced in
+[`14-simulation-layers.md`](14-simulation-layers.md). The loop advances
+the active `Run`s, which reference `Scenario`s materialised from
+`twin.toml` `[scenarios.*]`. Today's implicit "one doc, one model,
+steps forever" is the degenerate case: one implicit Twin, one implicit
+Run, one participant — same master loop.
+
+## Backend registry (dynamic, plugin-driven)
+
+Backends self-register at app boot. Each domain crate ships a Bevy
+plugin that inserts itself into `BackendRegistry`:
+
+```rust
+// lunco-modelica
+impl Plugin for ModelicaBackendPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<BackendRegistry>();     // idempotent
+        app.world_mut().resource_mut::<BackendRegistry>()
+            .register(Arc::new(ModelicaBackend));
+    }
+}
+```
+
+Dropping a crate removes its backend. Scenarios referencing missing
+backends fail gracefully at load. FMU / Python / GMAT / DCP backends
+arrive as separate crates — no core edits.
+
+`Backend` + `Participant` traits live in `lunco-cosim`. See
+[`14-simulation-layers.md`](14-simulation-layers.md) for the full
+signatures and capability flags.
+
+## Typed connections + island partitioning
+
+Connections carry a kind:
+
+```rust
+pub enum ConnectionKind {
+    Causal,   // output → input (signal). Our SimConnection today.
+    Acausal,  // Modelica connect, FluidPort, Flange, Pin. Kirchhoff-style.
+}
+```
+
+Acausal connections cannot cross cosim boundaries without losing
+accuracy (fake algebraic loops delay one signal by a step). At Run
+start, the **IslandPartitioner** groups participants:
+
+1. Union-find over participants connected by acausal edges.
+2. Each island must share a backend that advertises
+   `caps.can_absorb_acausal`. Otherwise → scenario-load error.
+3. Backend `fuse()` collapses the island into one participant. For
+   Modelica this means code-generating a wrapper `.mo` that replicates
+   the connections as `connect()` equations and compiling once.
+4. Inter-island connections remain as `SimConnection` and are propagated
+   by the master each tick (causal only).
+
+Result: three Modelica components wired by `FluidPort`s become one
+flattened DAE with one stepper (Dymola's default behaviour). A
+Modelica + Python mix becomes two islands bridged by causal signals
+(classical cosim). Users can opt out per participant with
+`explicit_boundary = true` for debugging.
+
+Balloon case today: Modelica balloon + Avian rigid body, three causal
+wires. Two islands, one causal bridge. No acausal edges → no fusion →
+identical to today's behaviour. Partitioner lands without regression.
+
 ## Dynamic bodies, not Kinematic
 
 Balloon (and other subsystem-driven bodies) are `RigidBody::Dynamic`.
@@ -56,18 +124,28 @@ collision response on joints. Current Dynamic-body design avoids all three.
 
 ## Pause and time warp
 
-*Not yet implemented — planned.*
+Pause / resume / reset / time-warp are all `TwinCommand` variants
+dispatched through the Twin resource. The master-loop pipeline reads
+`Run.status` and `Run.rate_factor` each tick:
 
-- **Per-entity pause**: `SimPaused` marker component (in `lunco-core`). Any
-  system that respects it skips that entity: wire propagation, force
-  integration, Modelica stepping. Outputs remain readable at their last
-  value so downstream consumers keep running on frozen data.
-- **Global Avian pause**: Avian's built-in `Time<Physics>::pause()`.
-- **Global Modelica pause**: planned future `ModelicaEnabled` resource.
-- **Time warp**: `Time<Virtual>::set_relative_speed(factor)`. Bevy's virtual
-  time scales the `FixedUpdate` accumulator; more fixed-timestep iterations
-  run per frame. All engines speed up together because they share the same
-  schedule.
+- **Pause** = `Run.status = Paused`. Master loop skips all pipeline
+  steps. Wall time continues; sim time frozen. Parameter edits queue as
+  `SetParam` TwinCommands and apply on Resume (Tunable semantics).
+- **Resume** = `Run.status = Running`. Master loop resumes at the next
+  FixedUpdate tick from the same `current_t`.
+- **Reset** = bumps session id (existing mechanism), sends
+  `ParticipantCommand::Reset` to every island, clears trace +
+  input_log, `current_t = t_start`, `status = Idle`.
+- **Time warp** = `Run.rate_factor` scales. Per-tick advance =
+  `rate_factor × FixedUpdate.dt`. Clocks with different base dt scale
+  proportionally. Global slider → same factor applied to every clock's
+  rate (see [`15-adaptive-fidelity.md`](15-adaptive-fidelity.md)).
+
+Historical note (pre-Run model): earlier designs used a per-entity
+`SimPaused` marker and ad-hoc `Time<Physics>::pause()`. That remains a
+correct low-level mechanism, but the Run-centric model is now the
+single source of truth — toolbar / API / scripts all go through
+TwinCommand, not direct component mutation.
 
 ## Convention: Modelica `output` requirement
 

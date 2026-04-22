@@ -211,6 +211,30 @@ default = "build"                 # which workspace opens by default
 Minimal Twin = just `[project]` + `[modelica]` (or whichever domains are
 used). Everything else has sensible defaults.
 
+## 3a. Twin is the simulation control surface
+
+Twin is not only an on-disk manifest — at runtime it's a **live Bevy
+`Resource`** that owns the simulation control plane for its slice of
+the world. Full design in
+[`14-simulation-layers.md`](14-simulation-layers.md). Key points that
+affect Twin authoring:
+
+- `twin.toml` grows a `[scenarios.*]` section declaring named
+  simulation graphs; scenario files live under `<twin>/scenarios/`.
+- Past simulation sessions archive under `<twin>/runs/<id>/` with
+  `run.toml` + `trace.mcap` + `checkpoints/` + `verdict.toml`.
+- Every control action (start / pause / reset / step / warp /
+  switch-fidelity / set-input / tunable-param edit) is a
+  `TwinCommand` the Twin resource dispatches. Local UI, HTTP / gRPC
+  remote, scripts, and replay all push to the same command queue.
+- Headless = the same Twin resource in a Bevy app without rendering,
+  driven by the HTTP adapter. Server-authoritative cosim per spec 022
+  uses exactly this — clients attach replica backends and mirror state
+  via network replication.
+
+The Twin on disk is the source of truth; the runtime Twin resource is
+the controller that mounts that truth into live simulation state.
+
 ## 4. Orphan documents — working outside a Twin
 
 Users can open any Document without creating a Twin:

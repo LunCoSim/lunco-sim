@@ -256,6 +256,12 @@ impl Plugin for ModelicaCommandsPlugin {
             .register_type::<AddSignalToPlot>()
             .register_type::<AddCanvasPlot>()
             .register_type::<DuplicateActiveDoc>()
+            .register_type::<PauseActiveModel>()
+            .register_type::<ResumeActiveModel>()
+            .register_type::<ResetActiveModel>()
+            .add_observer(on_pause_active_model)
+            .add_observer(on_resume_active_model)
+            .add_observer(on_reset_active_model)
             .add_observer(on_focus_document_by_name)
             .add_observer(on_set_view_mode)
             .add_observer(on_set_zoom)
@@ -2173,6 +2179,119 @@ fn on_duplicate_active_doc(trigger: On<DuplicateActiveDoc>, mut commands: Comman
         };
         world.commands().trigger(DuplicateModelFromReadOnly { source_doc: doc });
     });
+}
+
+/// Run-control events — fire against `doc=0` to target the active
+/// document, or a specific `DocumentId.raw()` for automation.
+///
+/// Simulation already ticks automatically once a model is compiled
+/// (see `spawn_modelica_requests` — steps every `FixedUpdate` unless
+/// `ModelicaModel.paused`). These commands are the user-facing
+/// handles on that loop:
+///
+///  * [`PauseActiveModel`]  — freeze stepping without tearing down
+///    worker state. `paused = true`.
+///  * [`ResumeActiveModel`] — thaw from paused. `paused = false`.
+///  * [`ResetActiveModel`]  — send `ModelicaCommand::Reset` to the
+///    worker so it rebuilds the stepper from the cached DAE and
+///    zeroes `current_time`. Cheap — no recompile.
+///
+/// A separate Step-one-frame command is intentionally deferred until
+/// #59 (named experiments / Runs panel) lands — the infrastructure
+/// for a "force one step" flag is better designed alongside that.
+#[derive(Event, Reflect, Clone, Debug, Default)]
+#[reflect(Event, Default)]
+pub struct PauseActiveModel {
+    pub doc: u64,
+}
+
+/// See [`PauseActiveModel`].
+#[derive(Event, Reflect, Clone, Debug, Default)]
+#[reflect(Event, Default)]
+pub struct ResumeActiveModel {
+    pub doc: u64,
+}
+
+/// See [`PauseActiveModel`].
+#[derive(Event, Reflect, Clone, Debug, Default)]
+#[reflect(Event, Default)]
+pub struct ResetActiveModel {
+    pub doc: u64,
+}
+
+fn on_pause_active_model(trigger: On<PauseActiveModel>, mut commands: Commands) {
+    let raw = trigger.event().doc;
+    commands.queue(move |world: &mut World| {
+        let Some(doc) = (if raw == 0 {
+            resolve_active_doc(world)
+        } else {
+            Some(DocumentId::new(raw))
+        }) else {
+            return;
+        };
+        if let Some(entity) = entity_for_doc(world, doc) {
+            if let Some(mut model) = world.get_mut::<ModelicaModel>(entity) {
+                model.paused = true;
+            }
+        }
+    });
+}
+
+fn on_resume_active_model(trigger: On<ResumeActiveModel>, mut commands: Commands) {
+    let raw = trigger.event().doc;
+    commands.queue(move |world: &mut World| {
+        let Some(doc) = (if raw == 0 {
+            resolve_active_doc(world)
+        } else {
+            Some(DocumentId::new(raw))
+        }) else {
+            return;
+        };
+        if let Some(entity) = entity_for_doc(world, doc) {
+            if let Some(mut model) = world.get_mut::<ModelicaModel>(entity) {
+                model.paused = false;
+            }
+        }
+    });
+}
+
+fn on_reset_active_model(trigger: On<ResetActiveModel>, mut commands: Commands) {
+    let raw = trigger.event().doc;
+    commands.queue(move |world: &mut World| {
+        let Some(doc) = (if raw == 0 {
+            resolve_active_doc(world)
+        } else {
+            Some(DocumentId::new(raw))
+        }) else {
+            return;
+        };
+        let Some(entity) = entity_for_doc(world, doc) else {
+            return;
+        };
+        // Snapshot session_id, bump it so stale Step results fence out,
+        // then ship Reset to the worker.
+        let session_id = {
+            let Some(mut model) = world.get_mut::<ModelicaModel>(entity) else {
+                return;
+            };
+            model.session_id += 1;
+            model.is_stepping = true;
+            model.current_time = 0.0;
+            model.last_step_time = 0.0;
+            model.variables.clear();
+            model.session_id
+        };
+        if let Some(channels) = world.get_resource::<crate::ModelicaChannels>() {
+            let _ = channels.tx.send(crate::ModelicaCommand::Reset { entity, session_id });
+        }
+    });
+}
+
+/// Locate the Modelica simulation entity linked to `doc`, if any.
+fn entity_for_doc(world: &World, doc: DocumentId) -> Option<Entity> {
+    world
+        .get_resource::<ModelicaDocumentRegistry>()
+        .and_then(|r| r.entities_linked_to(doc).into_iter().next())
 }
 
 /// Drop a Simulink-style "Scope" plot onto the active canvas at

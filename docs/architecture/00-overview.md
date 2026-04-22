@@ -154,14 +154,24 @@ Details live in [11-workbench.md](11-workbench.md). The high-level principles:
 
 ## 6. Cross-cutting concerns
 
-### Pause, time warp, and paused entities
+### Simulation lifecycle (Twin → Scenario → Run → Model)
 
-Covered in depth in [22-domain-cosim.md](22-domain-cosim.md). Summary:
+The four-layer simulation architecture lives in
+[14-simulation-layers.md](14-simulation-layers.md). Twin is the runtime
+control surface (a Bevy `Resource`) that owns scenarios, runs, traces,
+input queues, and the BackendRegistry. Every control action (start,
+pause, reset, step, warp, switch-fidelity, set-input) is a
+`TwinCommand` dispatched through Twin — UI, HTTP, scripts, replay, and
+remote clients all use the same command queue.
 
-- Per-entity `SimPaused` marker component (in `lunco-core`)
-- Global Avian pause via `Time<Physics>::pause()`
-- Global Modelica pause via (future) resource
-- Speed control via `Time<Virtual>::set_relative_speed()`
+Multi-clock + adaptive fidelity (mission-scope vs physics-scope) is
+specified separately in [15-adaptive-fidelity.md](15-adaptive-fidelity.md).
+
+### Pause, time warp, paused entities
+
+Pause / Resume / Reset / Time-warp are TwinCommand variants, applied at
+tick boundaries. See [22-domain-cosim.md § Pause and time warp](22-domain-cosim.md)
+for the master-loop semantics.
 
 Documents are editable regardless of pause state.
 
@@ -208,7 +218,7 @@ for per-app composition.
 
 ## 8. Where to look next
 
-- **Framework design:** [10-document-system.md](10-document-system.md), [11-workbench.md](11-workbench.md), [13-twin-and-workflow.md](13-twin-and-workflow.md)
+- **Framework design:** [10-document-system.md](10-document-system.md), [11-workbench.md](11-workbench.md), [13-twin-and-workflow.md](13-twin-and-workflow.md), [14-simulation-layers.md](14-simulation-layers.md), [15-adaptive-fidelity.md](15-adaptive-fidelity.md)
 - **Per-domain design:** [20-domain-modelica.md](20-domain-modelica.md), [21-domain-usd.md](21-domain-usd.md), [22-domain-cosim.md](22-domain-cosim.md), [23-domain-environment.md](23-domain-environment.md), [24-domain-sysml.md](24-domain-sysml.md)
 - **Project principles:** [`../principles.md`](../principles.md)
 - **Terminology:** [01-ontology.md](01-ontology.md)
