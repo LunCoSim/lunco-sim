@@ -90,10 +90,19 @@ fn collect_non_package_qualified(
         } else {
             format!("{parent}.{name}")
         };
-        if class.class_type == ClassType::Package {
-            collect_non_package_qualified(&class.classes, &qualified, out);
-        } else {
-            out.push(qualified);
+        match class.class_type {
+            // Descend into packages to reach nested runnable classes.
+            ClassType::Package => {
+                collect_non_package_qualified(&class.classes, &qualified, out);
+            }
+            // Only runnable classes end up on the compile picker —
+            // connectors / records / types / functions have no
+            // equations to simulate and would only confuse the user
+            // by appearing as "Compile this" candidates.
+            ClassType::Model | ClassType::Block | ClassType::Class => {
+                out.push(qualified);
+            }
+            _ => {}
         }
     }
 }
@@ -104,11 +113,18 @@ fn find_first_non_package_qualified(
     classes: &indexmap::IndexMap<String, ClassDef>,
     parent: &str,
 ) -> Option<String> {
-    // First pass: prefer a non-package AT THIS level. Matches
-    // pre-existing behaviour for flat files and avoids drilling
-    // past the obvious top-level model.
+    // Runnable = Model / Block / Class. Skip connectors, records,
+    // types, functions — they have no equations to simulate and
+    // compile would only produce `EmptySystem` / type errors.
+    let is_runnable = |t: &ClassType| {
+        matches!(
+            t,
+            ClassType::Model | ClassType::Block | ClassType::Class
+        )
+    };
+    // First pass: prefer a runnable class AT THIS level.
     for (name, class) in classes {
-        if class.class_type != ClassType::Package {
+        if is_runnable(&class.class_type) {
             return Some(if parent.is_empty() {
                 name.clone()
             } else {
@@ -116,8 +132,7 @@ fn find_first_non_package_qualified(
             });
         }
     }
-    // Second pass: no non-package at this level — descend into each
-    // package and try again.
+    // Second pass: descend into each package.
     for (name, class) in classes {
         if class.class_type != ClassType::Package {
             continue;

@@ -334,6 +334,11 @@ impl Panel for CodeEditorPanel {
         // the leftmost column sit under the adjacent panel's
         // boundary (package browser on the left), hiding the first
         // few characters of every line.
+        // Vertical scroll area owned by the panel (egui_dock's
+        // per-tab ScrollArea is disabled so the toolbar stays
+        // pinned — see lunco-workbench::PanelTabViewer::scroll_bars).
+        // Without this the TextEdit claims all available vertical
+        // space and long files can't be scrolled.
         let output = egui::Frame::default()
             .inner_margin(egui::Margin {
                 left: 8,
@@ -342,16 +347,24 @@ impl Panel for CodeEditorPanel {
                 bottom: 0,
             })
             .show(ui, |ui| {
-                if word_wrap {
-                    show_editor(ui, &mut text)
-                } else {
-                    let mut area = egui::ScrollArea::horizontal()
-                        .auto_shrink([false, false]);
-                    if model_switched {
-                        area = area.horizontal_scroll_offset(0.0);
-                    }
-                    area.show(ui, |ui| show_editor(ui, &mut text)).inner
-                }
+                let v_area = egui::ScrollArea::vertical()
+                    .id_salt("modelica_code_editor_vscroll")
+                    .auto_shrink([false, false]);
+                v_area
+                    .show(ui, |ui| {
+                        if word_wrap {
+                            show_editor(ui, &mut text)
+                        } else {
+                            let mut area = egui::ScrollArea::horizontal()
+                                .id_salt("modelica_code_editor_hscroll")
+                                .auto_shrink([false, false]);
+                            if model_switched {
+                                area = area.horizontal_scroll_offset(0.0);
+                            }
+                            area.show(ui, |ui| show_editor(ui, &mut text)).inner
+                        }
+                    })
+                    .inner
             })
             .inner;
 
