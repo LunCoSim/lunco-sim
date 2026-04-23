@@ -420,28 +420,39 @@ impl ModelicaComponentBuilder {
                 format!("{within_prefix}.{short}")
             }
         };
-        // Non-package class at the top level wins outright.
+        // Models are the canonical "open this in the canvas" choice;
+        // connectors and types alone have no diagram. Walk in order:
+        //   1. top-level models / blocks
+        //   2. nested-in-package models / blocks
+        //   3. anything non-package at top level (last resort —
+        //      includes connectors, records, types)
+        let is_diagrammable = |t: ClassType| {
+            matches!(
+                t,
+                ClassType::Model | ClassType::Block | ClassType::Class
+            )
+        };
         for (name, class) in &self.ast.classes {
-            if class.class_type != ClassType::Package {
+            if is_diagrammable(class.class_type.clone()) {
                 return qualify(name);
             }
         }
-        // All top-level classes are packages (the common case for a
-        // package-wrapped file like `package Foo { model Bar ... }`).
-        // Descend one level into each package and pick the first
-        // non-package class we find. Without this, the builder runs
-        // on the package itself — which has no direct components —
-        // and the downstream fallback regex sweeps the whole source,
-        // rendering every connector declaration in every leaf class
-        // as a spurious top-level node.
         for (pkg_name, pkg) in &self.ast.classes {
             if pkg.class_type != ClassType::Package {
                 continue;
             }
             for (inner_name, inner) in &pkg.classes {
-                if inner.class_type != ClassType::Package {
+                if is_diagrammable(inner.class_type.clone()) {
                     return qualify(&format!("{pkg_name}.{inner_name}"));
                 }
+            }
+        }
+        // Fallback: first non-package anything (connectors, records,
+        // types). Better than picking the package and rendering
+        // nothing.
+        for (name, class) in &self.ast.classes {
+            if class.class_type != ClassType::Package {
+                return qualify(name);
             }
         }
         self.ast
@@ -749,6 +760,32 @@ fn ports_for_component(
         return extract_component_ports(comp);
     }
     ports
+}
+
+/// Resolve a type reference to a `ClassDef` via the scope chain
+/// rooted at `owner_qualified_path`. Searches the local AST first,
+/// then falls back to the supplied MSL resolver. Returns `None` if
+/// no candidate path resolves.
+///
+/// Public so the projector can read connector classes' `Icon`
+/// annotations (for OMEdit-style wire colors) without duplicating
+/// scope-chain logic.
+pub fn resolve_class_by_scope_pub(
+    type_ref: &str,
+    owner_qualified_path: &str,
+    ast: &StoredDefinition,
+    msl_resolve: &dyn Fn(&str) -> Option<std::sync::Arc<ClassDef>>,
+) -> Option<std::sync::Arc<ClassDef>> {
+    let candidates = scope_chain_candidates(type_ref, Some(owner_qualified_path));
+    for cand in &candidates {
+        if let Some(c) = find_class_by_qualified_name(ast, cand) {
+            return Some(std::sync::Arc::new(c.clone()));
+        }
+        if let Some(arc) = msl_resolve(cand) {
+            return Some(arc);
+        }
+    }
+    None
 }
 
 /// Public re-export of [`is_connector_type`] for callers outside this

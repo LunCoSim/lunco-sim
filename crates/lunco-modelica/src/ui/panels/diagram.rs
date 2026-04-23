@@ -2390,6 +2390,15 @@ fn extract_local_class_ports(
                 (cx as f32, cy as f32)
             })
             .unwrap_or((0.0, 0.0));
+        // Resolve the connector class and read its Icon's first
+        // colored graphic to derive the wire color (OMEdit/Dymola
+        // convention). lineColor wins; fillColor is the fallback.
+        let color = resolve_connector_icon_color(
+            &sub_type,
+            class_qualified_path,
+            ast,
+            &crate::class_cache::peek_or_load_msl_class,
+        );
         out.push(crate::visual_diagram::PortDef {
             name: sub_name.clone(),
             connector_type: sub_type.clone(),
@@ -2397,9 +2406,43 @@ fn extract_local_class_ports(
             is_flow: false,
             x: px,
             y: py,
+            color,
         });
     }
     out
+}
+
+/// Find the connector class for `type_ref` (local AST first, then MSL)
+/// and return the lineColor / fillColor of its Icon's first colored
+/// graphic. Returns `None` if the class can't be resolved or has no
+/// authored colors — caller falls back to the leaf-name palette.
+fn resolve_connector_icon_color(
+    type_ref: &str,
+    owner_qualified_path: &str,
+    ast: &rumoca_session::parsing::ast::StoredDefinition,
+    msl_resolve: &dyn Fn(&str) -> Option<std::sync::Arc<rumoca_session::parsing::ast::ClassDef>>,
+) -> Option<[u8; 3]> {
+    use crate::annotations::{extract_icon, GraphicItem};
+    let class = crate::diagram::resolve_class_by_scope_pub(
+        type_ref,
+        owner_qualified_path,
+        ast,
+        msl_resolve,
+    )?;
+    let icon = extract_icon(&class.annotation)?;
+    for g in &icon.graphics {
+        let (line, fill) = match g {
+            GraphicItem::Rectangle(r) => (r.shape.line_color, r.shape.fill_color),
+            GraphicItem::Polygon(p) => (p.shape.line_color, p.shape.fill_color),
+            GraphicItem::Ellipse(e) => (e.shape.line_color, e.shape.fill_color),
+            GraphicItem::Line(l) => (l.color, None),
+            GraphicItem::Text(_) | GraphicItem::Bitmap(_) => (None, None),
+        };
+        if let Some(c) = line.or(fill) {
+            return Some([c.r, c.g, c.b]);
+        }
+    }
+    None
 }
 
 // ---------------------------------------------------------------------------

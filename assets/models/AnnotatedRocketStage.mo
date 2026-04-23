@@ -1,21 +1,87 @@
-// tagline: Rocket stage with MSL connectors — ports + connect() wires in the diagram
-// A working rocket stage wired with real Modelica connectors.
+// tagline: Rocket stage with typed connectors — colors per signal role, OMEdit-style
+// Working rocket stage modelled at the signal level.
 //
-// Tank / Engine / Airframe each declare Modelica.Blocks.Interfaces.Real[In|Out]put
-// connectors with Placement annotations, so ports show on the icon
-// boundary and `connect()` statements render as wires that follow the
-// components when the user drags them on the canvas.
+// Causality choice (per discussion in CHANGELOG / chat):
+//   * Engine owns the throttle → fuel-demand → thrust map (it knows
+//     its Isp and m_dot_max). Throttle is a `RealInput` from outside.
+//   * Tank receives the engine's fuel demand and depletes accordingly,
+//     publishes its current propellant mass as a measurement signal.
+//   * Airframe consumes thrust + current mass, integrates 1-D flight.
 //
-//   engine.m_dot_out  →  tank.m_dot_in    (propellant demand)
-//   tank.m_out        →  airframe.mass_in (current vehicle mass)
-//   engine.thrust     →  airframe.thrust_in
+// Typed connectors per semantic role so wires render in different
+// colors (the OMEdit / Dymola convention is to read color from each
+// connector class's Icon annotation):
+//
+//   FuelDemand  — orange, kg/s, command from consumer to source
+//   MassSignal  — green,  kg,   measurement / publication
+//   ThrustForce — red,    N,    force output
+//   RealInput/Output (MSL) — magenta, generic control signal
+//
+// Wire summary (signal direction, not fluid direction):
+//
+//   engine.fuel_demand → tank.fuel_demand   (orange — command)
+//   tank.mass_out      → airframe.mass_in   (green  — mass measurement)
+//   engine.thrust      → airframe.thrust_in (red    — force)
 
 package AnnotatedRocketStage
 
+  // ── Typed connectors ─────────────────────────────────────────────
+  // Each connector class carries an `Icon` whose `lineColor` becomes
+  // the wire color in standards-compliant editors. Inputs are drawn
+  // as a filled square at the icon boundary; outputs as a filled
+  // triangle pointing outward. The Modelica.Blocks.Interfaces convention.
+
+  connector FuelDemandOutput = output Real(unit = "kg/s")
+    annotation(Icon(coordinateSystem(extent = {{-100,-100},{100,100}}),
+      graphics = {Polygon(
+        points = {{-100,100},{100,0},{-100,-100}},
+        lineColor = {220,140,40},
+        fillColor = {235,170,70},
+        fillPattern = FillPattern.Solid)}));
+
+  connector FuelDemandInput = input Real(unit = "kg/s")
+    annotation(Icon(coordinateSystem(extent = {{-100,-100},{100,100}}),
+      graphics = {Polygon(
+        points = {{-100,100},{100,0},{-100,-100}},
+        lineColor = {220,140,40},
+        fillColor = {235,170,70},
+        fillPattern = FillPattern.Solid)}));
+
+  connector MassSignalOutput = output Real(unit = "kg")
+    annotation(Icon(coordinateSystem(extent = {{-100,-100},{100,100}}),
+      graphics = {Polygon(
+        points = {{-100,100},{100,0},{-100,-100}},
+        lineColor = {40,140,60},
+        fillColor = {80,180,100},
+        fillPattern = FillPattern.Solid)}));
+
+  connector MassSignalInput = input Real(unit = "kg")
+    annotation(Icon(coordinateSystem(extent = {{-100,-100},{100,100}}),
+      graphics = {Polygon(
+        points = {{-100,100},{100,0},{-100,-100}},
+        lineColor = {40,140,60},
+        fillColor = {80,180,100},
+        fillPattern = FillPattern.Solid)}));
+
+  connector ThrustForceOutput = output Real(unit = "N")
+    annotation(Icon(coordinateSystem(extent = {{-100,-100},{100,100}}),
+      graphics = {Polygon(
+        points = {{-100,100},{100,0},{-100,-100}},
+        lineColor = {180,40,40},
+        fillColor = {220,70,70},
+        fillPattern = FillPattern.Solid)}));
+
+  connector ThrustForceInput = input Real(unit = "N")
+    annotation(Icon(coordinateSystem(extent = {{-100,-100},{100,100}}),
+      graphics = {Polygon(
+        points = {{-100,100},{100,0},{-100,-100}},
+        lineColor = {180,40,40},
+        fillColor = {220,70,70},
+        fillPattern = FillPattern.Solid)}));
+
   // ── Composite (declared first so the workbench picks it as the
-  // ── active class when the file is opened — `extract_model_name`
-  // ── returns the first non-package class) ──
-  model RocketStage "Single-stage rocket — tank, engine, airframe wired by connectors"
+  // ── active class when the file is opened) ───────────────────────
+  model RocketStage "Single-stage rocket — engine demands fuel, tank delivers"
     parameter Real g = 9.81 "Gravity (m/s^2)";
     parameter Real dry_mass = 1000 "Empty stage mass (kg)";
 
@@ -30,37 +96,40 @@ package AnnotatedRocketStage
     // Open-loop throttle: full until the tank is effectively empty.
     engine.throttle = if tank.m > 1.0 then 1.0 else 0.0;
 
-    // Three real connects — these produce the diagram wires that
-    // track the components when you drag them on the canvas.
-    connect(engine.m_dot_out, tank.m_dot_in);
-    connect(tank.m_out, airframe.mass_in);
+    // Three connects — colors come from each connector's Icon:
+    //   orange = fuel-flow command, green = mass measurement, red = thrust force.
+    connect(engine.fuel_demand, tank.fuel_demand);
+    connect(tank.mass_out, airframe.mass_in);
     connect(engine.thrust, airframe.thrust_in);
 
     annotation(
       Diagram(coordinateSystem(extent={{-100,-100},{100,100}}),
         graphics={
           Text(extent={{-100,95},{100,80}},
-            textString="Rocket Stage — real connectors",
+            textString="Rocket Stage — typed connectors",
             textColor={0,0,0})
         }),
       experiment(StartTime=0, StopTime=150, Tolerance=1e-4, Interval=0.1));
   end RocketStage;
 
   // ── Liquid rocket engine ──
+  // Owns the throttle → m_dot map and the Isp → thrust calculation.
+  // Publishes m_dot as a fuel-demand signal that the tank consumes;
+  // publishes thrust as a force signal that the airframe consumes.
   model Engine "Liquid rocket engine — constant-Isp model"
     parameter Real Isp = 300 "Specific impulse (s)";
     parameter Real g0 = 9.81 "Standard gravity (m/s^2)";
-    parameter Real m_dot_max = 20 "Max propellant flow (kg/s)";
+    parameter Real m_dot_max = 20 "Max propellant flow at full throttle (kg/s)";
 
     Modelica.Blocks.Interfaces.RealInput throttle "Throttle command [0..1]"
       annotation(Placement(transformation(extent={{-120,-10},{-100,10}})));
-    Modelica.Blocks.Interfaces.RealOutput thrust "Thrust (N)"
-      annotation(Placement(transformation(extent={{100,-10},{120,10}})));
-    Modelica.Blocks.Interfaces.RealOutput m_dot_out "Propellant consumption (kg/s)"
+    FuelDemandOutput fuel_demand "Demanded propellant flow (kg/s)"
       annotation(Placement(transformation(extent={{-10,100},{10,120}})));
+    ThrustForceOutput thrust "Thrust (N)"
+      annotation(Placement(transformation(extent={{100,-10},{120,10}})));
   equation
-    m_dot_out = throttle * m_dot_max;
-    thrust = Isp * g0 * m_dot_out;
+    fuel_demand = throttle * m_dot_max;
+    thrust = Isp * g0 * fuel_demand;
     annotation(Icon(coordinateSystem(extent={{-100,-100},{100,100}}),
       graphics={
         Rectangle(extent={{-30,60},{30,10}},
@@ -83,17 +152,18 @@ package AnnotatedRocketStage
   end Engine;
 
   // ── Propellant tank ──
-  model Tank "Propellant tank — constant-density mass reservoir"
+  // Releases the fuel rate the engine demands; publishes current mass.
+  model Tank "Propellant tank — depletes at the demanded rate"
     parameter Real m_initial = 4000 "Initial propellant mass (kg)";
     Real m(start=m_initial, fixed=true) "Propellant mass (kg)";
 
-    Modelica.Blocks.Interfaces.RealInput m_dot_in "Outflow demanded by consumer (kg/s)"
+    FuelDemandInput fuel_demand "Outflow rate demanded by consumer (kg/s)"
       annotation(Placement(transformation(extent={{-10,-120},{10,-100}})));
-    Modelica.Blocks.Interfaces.RealOutput m_out "Current mass (kg)"
+    MassSignalOutput mass_out "Current propellant mass (kg)"
       annotation(Placement(transformation(extent={{100,-10},{120,10}})));
   equation
-    der(m) = -m_dot_in;
-    m_out = m;
+    der(m) = -fuel_demand;
+    mass_out = m;
     annotation(Icon(coordinateSystem(extent={{-100,-100},{100,100}}),
       graphics={
         Rectangle(extent={{-50,60},{50,-80}},
@@ -124,9 +194,9 @@ package AnnotatedRocketStage
     parameter Real g = 9.81 "Gravity (m/s^2)";
     parameter Real dry_mass = 1000 "Empty stage mass (kg)";
 
-    Modelica.Blocks.Interfaces.RealInput thrust_in "Thrust from engine (N)"
+    ThrustForceInput thrust_in "Thrust from engine (N)"
       annotation(Placement(transformation(extent={{-120,-10},{-100,10}})));
-    Modelica.Blocks.Interfaces.RealInput mass_in "Current propellant mass (kg)"
+    MassSignalInput mass_in "Current propellant mass (kg)"
       annotation(Placement(transformation(extent={{-120,40},{-100,60}})));
 
     Real altitude(start=0, fixed=true) "m";
@@ -164,13 +234,13 @@ package AnnotatedRocketStage
 
   // ── Gimbal (decorative — not instantiated in RocketStage) ──
   model Gimbal "Thrust-vector gimbal — visual icon only (not wired)"
-    Modelica.Blocks.Interfaces.RealInput pitch_cmd "Commanded pitch (rad)"
+    Modelica.Blocks.Interfaces.RealInput pitch_cmd
       annotation(Placement(transformation(extent={{-120,40},{-100,60}})));
-    Modelica.Blocks.Interfaces.RealInput yaw_cmd "Commanded yaw (rad)"
+    Modelica.Blocks.Interfaces.RealInput yaw_cmd
       annotation(Placement(transformation(extent={{-120,-60},{-100,-40}})));
-    Modelica.Blocks.Interfaces.RealOutput pitch "Effective pitch (rad)"
+    Modelica.Blocks.Interfaces.RealOutput pitch
       annotation(Placement(transformation(extent={{100,40},{120,60}})));
-    Modelica.Blocks.Interfaces.RealOutput yaw "Effective yaw (rad)"
+    Modelica.Blocks.Interfaces.RealOutput yaw
       annotation(Placement(transformation(extent={{100,-60},{120,-40}})));
   equation
     pitch = pitch_cmd;

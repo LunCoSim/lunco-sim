@@ -83,6 +83,14 @@ pub struct PortDef {
     pub x: f32,
     #[serde(default)]
     pub y: f32,
+    /// Wire color (RGB 0..=255) sourced from the connector class's
+    /// `Icon` annotation — `lineColor` of the first colored graphic,
+    /// `fillColor` as fallback. `None` means "fall back to the
+    /// leaf-name palette in `wire_color_for`". Mirrors the OMEdit /
+    /// Dymola behavior where wire colors come from each connector
+    /// class's icon definition rather than a hardcoded table.
+    #[serde(default)]
+    pub color: Option<[u8; 3]>,
 }
 
 /// A parameter definition for an MSL component.

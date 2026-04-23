@@ -357,23 +357,43 @@ impl NodeVisual for IconNodeVisual {
             );
         }
 
-        // Ports as small filled circles.
+        // Ports — shape per connector causality (OMEdit / Dymola
+        // convention):
+        //   • input  → filled square   (RealInput, BooleanInput, …)
+        //   • output → filled triangle pointing outward
+        //   • acausal physical → filled circle (Pin, Flange, HeatPort, …)
+        // Direction is derived from where the port sits on the icon
+        // boundary, classified the same way edges classify port_dir.
         for port in &node.ports {
             let world = CanvasPos::new(
                 node.rect.min.x + port.local_offset.x,
                 node.rect.min.y + port.local_offset.y,
             );
             let p = ctx.viewport.world_to_screen(world, ctx.screen_rect);
-            painter.circle_filled(
-                egui::pos2(p.x, p.y),
-                4.0,
-                theme_snap.port_fill,
-            );
-            painter.circle_stroke(
-                egui::pos2(p.x, p.y),
-                4.0,
-                egui::Stroke::new(1.0, theme_snap.port_stroke),
-            );
+            let center = egui::pos2(p.x, p.y);
+
+            // Port shape from leaf name of connector type. Inputs
+            // typically end in `Input`; outputs in `Output`. Anything
+            // else (Pin, Flange_a, HeatPort, custom acausal) stays a
+            // circle.
+            let leaf = port.kind.rsplit('.').next().unwrap_or(&port.kind);
+            let shape = if leaf.ends_with("Input") {
+                PortShape::InputSquare
+            } else if leaf.ends_with("Output") {
+                PortShape::OutputTriangle
+            } else {
+                PortShape::AcausalCircle
+            };
+
+            // Outward direction in *screen* space — derived from
+            // which icon edge the port sits closest to.
+            let cx = node.rect.min.x + node.rect.width() * 0.5;
+            let cy = node.rect.min.y + node.rect.height() * 0.5;
+            let dir = port_edge_dir(world.x - cx, world.y - cy);
+
+            let fill = theme_snap.port_fill;
+            let stroke = egui::Stroke::new(1.0, theme_snap.port_stroke);
+            paint_port_shape(painter, center, shape, dir, fill, stroke);
         }
 
         // Hover tooltip. The canvas claims the whole widget rect
@@ -711,6 +731,11 @@ struct OrthogonalEdgeVisual {
     /// When non-empty, the renderer emits a polyline through the
     /// waypoints instead of the auto Z-bend.
     waypoints_world: Vec<CanvasPos>,
+    /// True when the connection is causal (output→input signal),
+    /// so the renderer emits an arrowhead at the input end. False
+    /// for acausal connectors (Pin, Flange, FluidPort, …) — the
+    /// MLS convention is symmetric arrows-or-no-arrows for those.
+    is_causal: bool,
 }
 
 impl Default for OrthogonalEdgeVisual {
@@ -720,6 +745,7 @@ impl Default for OrthogonalEdgeVisual {
             from_dir: PortDir::None,
             to_dir: PortDir::None,
             waypoints_world: Vec::new(),
+            is_causal: false,
         }
     }
 }
@@ -819,6 +845,17 @@ impl EdgeVisual for OrthogonalEdgeVisual {
         );
         for w in polyline.windows(2) {
             painter.line_segment([w[0], w[1]], stroke);
+        }
+
+        // Arrowhead at the input end on causal-only connections —
+        // OMEdit/Dymola convention. Heuristic: connector type ends
+        // with "Output"/"Input" → causal signal. Arrow points along
+        // the last segment, AT the target port (the input side).
+        if self.is_causal && polyline.len() >= 2 {
+            let n = polyline.len();
+            let tail = polyline[n - 2];
+            let tip = polyline[n - 1];
+            paint_arrowhead(painter, tail, tip, col);
         }
 
         // Live-flow animation: small dots moving along the polyline
@@ -1019,6 +1056,98 @@ fn route_orthogonal(
     pts
 }
 
+/// Paint a small filled triangle pointing from `tail` to `tip`.
+/// Used to indicate signal direction at the input end of causal
+/// connections — matches `arrow={Arrow.None,Arrow.Filled}` in MLS
+/// `Line` annotations.
+fn paint_arrowhead(painter: &egui::Painter, tail: egui::Pos2, tip: egui::Pos2, color: egui::Color32) {
+    let dx = tip.x - tail.x;
+    let dy = tip.y - tail.y;
+    let len = (dx * dx + dy * dy).sqrt();
+    if len < 1.0 {
+        return;
+    }
+    let (ux, uy) = (dx / len, dy / len);
+    let (px, py) = (-uy, ux); // perpendicular
+    const HEAD_LEN: f32 = 9.0;
+    const HEAD_HALFW: f32 = 4.0;
+    let base = egui::pos2(tip.x - ux * HEAD_LEN, tip.y - uy * HEAD_LEN);
+    let b1 = egui::pos2(base.x + px * HEAD_HALFW, base.y + py * HEAD_HALFW);
+    let b2 = egui::pos2(base.x - px * HEAD_HALFW, base.y - py * HEAD_HALFW);
+    painter.add(egui::Shape::convex_polygon(
+        vec![tip, b1, b2],
+        color,
+        egui::Stroke::NONE,
+    ));
+}
+
+/// Visual style of a port marker on a component icon. Mirrors the
+/// OMEdit / Dymola convention so users can read connector causality
+/// at a glance without hovering for the type name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PortShape {
+    /// Filled square — `input` causality (RealInput, BooleanInput, …).
+    InputSquare,
+    /// Filled triangle pointing outward from the icon — `output`
+    /// causality (RealOutput, BooleanOutput, …).
+    OutputTriangle,
+    /// Filled circle — acausal physical connectors (Pin, Flange, …).
+    AcausalCircle,
+}
+
+/// Paint a port marker at `center` using the OMEdit shape convention
+/// described on [`PortShape`]. `dir` orients the output triangle so
+/// it points away from the icon body; ignored for square / circle.
+fn paint_port_shape(
+    painter: &egui::Painter,
+    center: egui::Pos2,
+    shape: PortShape,
+    dir: PortDir,
+    fill: egui::Color32,
+    stroke: egui::Stroke,
+) {
+    const R: f32 = 5.0;
+    match shape {
+        PortShape::InputSquare => {
+            let rect = egui::Rect::from_center_size(center, egui::vec2(R * 1.6, R * 1.6));
+            painter.rect_filled(rect, 0.0, fill);
+            painter.rect_stroke(rect, 0.0, stroke, egui::StrokeKind::Inside);
+        }
+        PortShape::OutputTriangle => {
+            // Three-point triangle: tip in `dir`, base perpendicular.
+            let (ox, oy) = dir.outward();
+            // For PortDir::None fall back to a small square so the
+            // port is still visible (no preferred orientation).
+            if (ox, oy) == (0.0, 0.0) {
+                let rect = egui::Rect::from_center_size(
+                    center,
+                    egui::vec2(R * 1.6, R * 1.6),
+                );
+                painter.rect_filled(rect, 0.0, fill);
+                painter.rect_stroke(rect, 0.0, stroke, egui::StrokeKind::Inside);
+                return;
+            }
+            // Perpendicular for the base: rotate (ox, oy) 90°.
+            let (px, py) = (-oy, ox);
+            let tip = egui::pos2(center.x + ox * R * 1.4, center.y + oy * R * 1.4);
+            let b1 = egui::pos2(
+                center.x - ox * R * 0.4 + px * R * 0.9,
+                center.y - oy * R * 0.4 + py * R * 0.9,
+            );
+            let b2 = egui::pos2(
+                center.x - ox * R * 0.4 - px * R * 0.9,
+                center.y - oy * R * 0.4 - py * R * 0.9,
+            );
+            let pts = vec![tip, b1, b2];
+            painter.add(egui::Shape::convex_polygon(pts.clone(), fill, stroke));
+        }
+        PortShape::AcausalCircle => {
+            painter.circle_filled(center, R - 1.0, fill);
+            painter.circle_stroke(center, R - 1.0, stroke);
+        }
+    }
+}
+
 /// Selection-state brightener — shifts each channel ~30% toward white
 /// while preserving hue. Used so wires keep their domain colour even
 /// while highlighted.
@@ -1197,11 +1326,28 @@ fn build_registry() -> VisualRegistry {
                     .collect()
             })
             .unwrap_or_default();
+        // Prefer the connector's Icon-derived color (OMEdit/Dymola
+        // convention) when the projector populated it, fall through
+        // to the leaf-name palette otherwise.
+        let icon_color = data
+            .get("icon_color")
+            .and_then(|v| v.as_array())
+            .and_then(|arr| {
+                let r = arr.first()?.as_u64()? as u8;
+                let g = arr.get(1)?.as_u64()? as u8;
+                let b = arr.get(2)?.as_u64()? as u8;
+                Some(egui::Color32::from_rgb(r, g, b))
+            });
+        // Causal connection if the connector type leaf ends with
+        // Input/Output (the MSL signal-connector naming convention).
+        let leaf = connector_type.rsplit('.').next().unwrap_or(connector_type);
+        let is_causal = leaf.ends_with("Input") || leaf.ends_with("Output");
         OrthogonalEdgeVisual {
-            color: wire_color_for(connector_type),
+            color: icon_color.unwrap_or_else(|| wire_color_for(connector_type)),
             from_dir,
             to_dir,
             waypoints_world,
+            is_causal,
         }
     });
     reg
@@ -1560,6 +1706,14 @@ fn project_scene(diagram: &VisualDiagram) -> (Scene, HashMap<DiagramNodeId, Canv
             .as_ref()
             .map(|p| p.connector_type.clone())
             .unwrap_or_default();
+        // Wire color sourced from the connector class's Icon
+        // (populated by the projector for both local & MSL types).
+        // Falls back to `null` so the edge factory uses the leaf-name
+        // palette in `wire_color_for`.
+        let icon_color = src_port_def
+            .as_ref()
+            .and_then(|p| p.color)
+            .or_else(|| tgt_port_def.as_ref().and_then(|p| p.color));
         // Stub direction = which edge the port sits on in *screen*
         // space. Apply the owning instance's transform's linear part
         // (no translation — directions don't have a position). One
@@ -1600,6 +1754,9 @@ fn project_scene(diagram: &VisualDiagram) -> (Scene, HashMap<DiagramNodeId, Canv
                 // flipped to canvas world coords at render time.
                 // Empty array when the edge uses auto-routing only.
                 "waypoints": edge.waypoints,
+                // Icon-derived color [r,g,b] when available; null
+                // means the edge factory should use wire_color_for(type).
+                "icon_color": icon_color,
             }),
             origin: None,
         });
