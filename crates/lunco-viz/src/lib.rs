@@ -17,7 +17,8 @@ pub mod panel;
 pub mod kinds;
 
 pub use signal::{
-    ScalarHistory, ScalarSample, SignalMeta, SignalRef, SignalRegistry, SignalType,
+    export_signals_to_csv, ScalarHistory, ScalarSample, SignalMeta, SignalRef, SignalRegistry,
+    SignalType,
 };
 pub use view::{Panel2DCtx, ViewKind, ViewTarget};
 pub use viz::{

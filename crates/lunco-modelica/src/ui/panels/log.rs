@@ -56,6 +56,14 @@ pub struct LogEntry {
     pub at: Instant,
     pub level: LogLevel,
     pub text: String,
+    /// Model this entry belongs to (display name — file stem or
+    /// qualified class). `None` means the entry is session-global
+    /// (e.g. "worker ready"). Rendered as a chip in front of the
+    /// message so users can tell at a glance whether the error
+    /// they're reading came from the tab they're currently
+    /// looking at.
+    #[doc(hidden)]
+    pub model: Option<String>,
 }
 
 /// Render a scrolling log view. Shared body of Console and
@@ -104,11 +112,31 @@ pub fn render_log_view(
         .stick_to_bottom(true)
         .auto_shrink([false, false])
         .show(ui, |ui| {
+            // Fix a session-start instant the first time any log
+            // entry is rendered. `entry.at.elapsed()` was growing
+            // every frame (because it measures time-since-creation
+            // at render time, not at emit time), which made the
+            // whole column appear to tick forward like a
+            // stopwatch. Pinning to a session start gives us a
+            // stable "when did this happen" timestamp that doesn't
+            // move between redraws. Lazily initialised so the
+            // first entry anchors t=0 rather than some arbitrary
+            // app-boot moment.
+            use std::sync::OnceLock;
+            static SESSION_START: OnceLock<std::time::Instant> =
+                OnceLock::new();
+            let session_start = *SESSION_START
+                .get_or_init(|| entries.front().map(|e| e.at).unwrap_or_else(std::time::Instant::now));
             for entry in entries {
                 let color = entry.level.color();
-                // Relative-from-session-start timestamp — cheap to
-                // compute without wall-clock formatting deps.
-                let ts = format!("[{:>6.2}s]", entry.at.elapsed().as_secs_f32().max(0.0));
+                // Fixed offset from session start → same string
+                // every frame, regardless of how long ago the
+                // entry was emitted.
+                let offset = entry
+                    .at
+                    .saturating_duration_since(session_start)
+                    .as_secs_f32();
+                let ts = format!("[{:>6.2}s]", offset);
                 ui.horizontal(|ui| {
                     ui.label(
                         egui::RichText::new(&ts)
@@ -123,6 +151,29 @@ pub fn render_log_view(
                             .strong()
                             .color(color),
                     );
+                    if let Some(model) = entry.model.as_deref() {
+                        // Model chip — dim, monospace, truncated so
+                        // long qualified names don't push the
+                        // message off-screen. 24 chars fits the
+                        // deepest common MSL names
+                        // (`Electrical.Analog.Examples.Rectifier`
+                        // → `Rectifier`); display names are
+                        // usually much shorter.
+                        let pill = if model.chars().count() > 24 {
+                            let s: String =
+                                model.chars().rev().take(24).collect::<String>();
+                            format!("…{}", s.chars().rev().collect::<String>())
+                        } else {
+                            model.to_string()
+                        };
+                        ui.label(
+                            egui::RichText::new(format!("[{pill}]"))
+                                .monospace()
+                                .size(10.0)
+                                .color(egui::Color32::from_rgb(140, 160, 200)),
+                        )
+                        .on_hover_text(model.to_string());
+                    }
                     ui.label(
                         egui::RichText::new(&entry.text)
                             .monospace()

@@ -421,10 +421,33 @@ The reward is no transitional scar tissue in the final codebase.
 
 These resolve during Phase 2 implementation.
 
+## Cross-domain URI handling
+
+The workbench owns a small URI dispatch layer so every domain crate
+can expose navigable links (Documentation cross-references, resource
+refs, external anchors) without reinventing the wheel.
+
+- `UriRegistry` (Bevy `Resource`) holds scheme handlers. Each domain
+  plugin registers its own on `build()`:
+  - `lunco-modelica` → `modelica://Modelica.Blocks.Examples.PID` → drill-in.
+  - Future `lunco-usd` → `usd://stage.usd@</World/Rover>`.
+  - Future `lunco-sysml` → `sysml://package::Element`.
+- `UriClicked` event carries `{ uri, resolution }`; domain observers
+  match on `resolution.doc_kind` and fire their own commands
+  (`OpenClass`, `OpenStage`, …).
+- Docs-view renderer intercepts egui's `OutputCommand::OpenUrl`, routes
+  known schemes through the registry, strips them so the OS browser
+  doesn't try to open them. Unknown schemes (http/https/mailto) pass
+  through.
+
+OS-level registration (clicking a `modelica://` link in the browser
+launches LunCoSim) is a later task — see task #90.
+
 ## See also
 
 - [`10-document-system.md`](10-document-system.md) — panels as DocumentViews
 - [`01-ontology.md`](01-ontology.md) § 4d — workbench vocabulary
+- [`14-simulation-layers.md`](14-simulation-layers.md) — Twin/Run/Scenario control surface
 - [`20-domain-modelica.md`](20-domain-modelica.md) — Modelica-specific panels
 - [`research/ui-ux-inspiration.md`](research/ui-ux-inspiration.md) — patterns from professional tools
 - `specs/008-developer-experience` — detailed spec

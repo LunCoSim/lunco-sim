@@ -211,6 +211,64 @@ impl InstancePanel for ModelViewPanel {
 
         ui.separator();
 
+        // Persistent read-only strip — rendered for every library
+        // / MSL tab regardless of which view (Text / Canvas /
+        // Icon / Docs) is active. The old behaviour was to
+        // silently discard user edit ops and write a hint into
+        // Diagnostics, but most edit gestures (inspector field
+        // focus, keyboard typing, drag preview) never reach the
+        // ops layer — so the user saw nothing when they tried to
+        // modify something. A visible strip with a Duplicate
+        // button is unmissable and one click from the fix.
+        let tab_read_only = world
+            .get_resource::<WorkbenchState>()
+            .and_then(|s| s.open_model.as_ref())
+            .map(|m| m.read_only)
+            .unwrap_or(false);
+        if tab_read_only {
+            let mut banner_duplicate_clicked = false;
+            egui::Frame::NONE
+                .fill(egui::Color32::from_rgb(60, 48, 20))
+                .inner_margin(egui::Margin::symmetric(10, 6))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new("🔒")
+                                .color(egui::Color32::from_rgb(220, 200, 120))
+                                .size(14.0),
+                        );
+                        ui.label(
+                            egui::RichText::new(
+                                "Read-only library model — \
+                                 edits won't stick. Duplicate it \
+                                 to your workspace to make changes.",
+                            )
+                            .color(egui::Color32::from_rgb(220, 200, 120))
+                            .size(12.0),
+                        );
+                        ui.add_space(ui.available_width() - 170.0);
+                        if ui
+                            .button("📄  Duplicate to edit")
+                            .on_hover_text(
+                                "Create an editable Untitled copy \
+                                 of this class — the MSL original \
+                                 stays untouched.",
+                            )
+                            .clicked()
+                        {
+                            banner_duplicate_clicked = true;
+                        }
+                    });
+                });
+            if banner_duplicate_clicked {
+                world
+                    .commands()
+                    .trigger(crate::ui::commands::DuplicateModelFromReadOnly {
+                        source_doc: doc,
+                    });
+            }
+        }
+
         // Body — delegate to the existing code / diagram panels
         // (both of which still read `open_model` / `EditorBufferState`
         // / `DiagramState`, which `sync_active_tab_to_doc` just
@@ -572,6 +630,22 @@ fn render_unified_toolbar(
         .host(doc)
         .map(|h| (h.can_undo(), h.can_redo(), h.undo_depth(), h.redo_depth()));
 
+    // Live simulation state for the entity linked to this doc, if any.
+    // Populated after a successful Compile; `None` means the toolbar's
+    // Run/Pause/Reset group is still disabled (there's no stepper to
+    // drive). Snapshot the fields we need so the closure below
+    // doesn't need to re-query the world mid-render.
+    let sim_state: Option<(bool, f64)> = world
+        .resource::<ModelicaDocumentRegistry>()
+        .entities_linked_to(doc)
+        .into_iter()
+        .next()
+        .and_then(|e| {
+            world
+                .get::<crate::ModelicaModel>(e)
+                .map(|m| (m.paused, m.current_time))
+        });
+
     // Collect button presses without touching world inside the closure.
     let mut compile_clicked = false;
     let mut undo_clicked = false;
@@ -579,6 +653,8 @@ fn render_unified_toolbar(
     let mut dismiss_error = false;
     let mut duplicate_clicked = false;
     let mut auto_arrange_clicked = false;
+    let mut run_pause_clicked = false;
+    let mut reset_clicked = false;
     let mut new_view_mode = view_mode;
 
     // Always show emoji-only labels in the toolbar. The prior
@@ -711,6 +787,36 @@ fn render_unified_toolbar(
             .on_hover_text("Compile the current model and run it (F5)")
             .clicked();
 
+        // Run-control group. Only meaningful once a stepper exists
+        // (i.e. the model compiled and linked a ModelicaModel
+        // component). Before that, the worker has nothing to pause or
+        // reset — we keep the group disabled rather than hiding it so
+        // the toolbar layout stays stable across compile transitions.
+        if let Some((paused, t_now)) = sim_state {
+            ui.separator();
+            // Single toggle: ▶ when paused, ⏸ when running. Mirrors
+            // Dymola's sim-tab play/pause (and every video player).
+            let (glyph, tip) = if paused {
+                ("▶", "Resume stepping")
+            } else {
+                ("⏸", "Pause stepping (state preserved — Resume to continue)")
+            };
+            run_pause_clicked = ui.button(glyph).on_hover_text(tip).clicked();
+            reset_clicked = ui
+                .button("⟲")
+                .on_hover_text("Reset simulation to t=0 (keeps compiled model)")
+                .clicked();
+            // Clock readout. Mono digits so the width doesn't dance
+            // as the number grows; weak colour so it reads as a
+            // status line, not a control.
+            ui.label(
+                egui::RichText::new(format!("t={:.3}s", t_now))
+                    .monospace()
+                    .weak(),
+            )
+            .on_hover_text("Simulation time (seconds since t=0)");
+        }
+
         // Auto-Arrange: batch SetPlacement on every component in the
         // active class to a clean grid. Only useful on the Diagram
         // view and only on editable docs. Dymola's "Edit → Auto
@@ -768,6 +874,25 @@ fn render_unified_toolbar(
             .trigger(crate::ui::commands::DuplicateModelFromReadOnly {
                 source_doc: doc,
             });
+    }
+    if run_pause_clicked {
+        // sim_state was Some to render the button, so unwrap is safe.
+        let paused = sim_state.map(|(p, _)| p).unwrap_or(false);
+        let raw = doc.raw();
+        if paused {
+            world
+                .commands()
+                .trigger(crate::ui::commands::ResumeActiveModel { doc: raw });
+        } else {
+            world
+                .commands()
+                .trigger(crate::ui::commands::PauseActiveModel { doc: raw });
+        }
+    }
+    if reset_clicked {
+        world
+            .commands()
+            .trigger(crate::ui::commands::ResetActiveModel { doc: doc.raw() });
     }
     if auto_arrange_clicked {
         world
@@ -914,7 +1039,7 @@ fn render_docs_view(ui: &mut egui::Ui, world: &mut World) {
                     }
                     match info.as_deref().filter(|s| !s.trim().is_empty()) {
                         Some(html) => {
-                            render_html_as_markdown(ui, target_width, html);
+                            render_html_as_markdown(ui, world, target_width, html);
                         }
                         None => {
                             ui.label(
@@ -937,7 +1062,7 @@ fn render_docs_view(ui: &mut egui::Ui, world: &mut World) {
                                 .color(egui::Color32::from_rgb(200, 210, 225)),
                         );
                         ui.add_space(6.0);
-                        render_html_as_markdown(ui, target_width, revs);
+                        render_html_as_markdown(ui, world, target_width, revs);
                     }
                 });
         });
@@ -951,22 +1076,107 @@ fn render_docs_view(ui: &mut egui::Ui, world: &mut World) {
 /// and force the reader to scroll sideways. Keeping the Markdown
 /// render cache static means repeated frames don't re-tokenise the
 /// same text.
-fn render_html_as_markdown(ui: &mut egui::Ui, target_width: f32, html: &str) {
+fn render_html_as_markdown(
+    ui: &mut egui::Ui,
+    world: &mut World,
+    target_width: f32,
+    html: &str,
+) {
     use std::sync::Mutex;
     static CACHE: std::sync::OnceLock<
         Mutex<egui_commonmark::CommonMarkCache>,
     > = std::sync::OnceLock::new();
     let cache = CACHE
         .get_or_init(|| Mutex::new(egui_commonmark::CommonMarkCache::default()));
-    // `htmd::convert` is pure CPU, sub-millisecond on typical MSL
-    // docs. Caching the Markdown conversion would shave frames in
-    // pathological cases; skipping for simplicity — CommonMarkCache
-    // covers the render-side reuse.
-    let md = htmd::convert(html).unwrap_or_else(|_| html.to_string());
+
+    // Memoise the HTML→Markdown conversion by input hash. `htmd`
+    // is pure CPU and sub-ms for typical MSL docs, but the Docs
+    // view re-calls us every frame while the tab is active — at
+    // 60 fps a 2ms conversion is ~120ms/sec of main-thread work
+    // for no reason. A single-entry cache is enough because the
+    // same HTML is requested many frames in a row; switching
+    // tabs changes the input, which re-converts once.
+    static MD_CACHE: std::sync::OnceLock<
+        Mutex<Option<(u64, String)>>,
+    > = std::sync::OnceLock::new();
+    let md_cache = MD_CACHE.get_or_init(|| Mutex::new(None));
+    let html_hash = {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        html.hash(&mut h);
+        h.finish()
+    };
+    let md = {
+        let hit = md_cache
+            .lock()
+            .ok()
+            .and_then(|g| g.as_ref().filter(|(k, _)| *k == html_hash).map(|(_, v)| v.clone()));
+        match hit {
+            Some(v) => v,
+            None => {
+                let v = htmd::convert(html).unwrap_or_else(|_| html.to_string());
+                if let Ok(mut g) = md_cache.lock() {
+                    *g = Some((html_hash, v.clone()));
+                }
+                v
+            }
+        }
+    };
     if let Ok(mut c) = cache.lock() {
         egui_commonmark::CommonMarkViewer::new()
             .max_image_width(Some(target_width as usize))
             .show(ui, &mut c, &md);
+    }
+
+    // Intercept custom-scheme link clicks. `egui_commonmark` renders
+    // markdown links as `ui.link`s that push an
+    // `OutputCommand::OpenUrl(url)` into `PlatformOutput::commands`
+    // when clicked — the OS-open flow. For schemes the workbench's
+    // `UriRegistry` knows about, we take over: dispatch through the
+    // registry, fire a `UriClicked` event for domain observers
+    // (e.g. `modelica://` → OpenClass), and strip the command from
+    // the output vec so the OS doesn't try to hand it to a browser
+    // that wouldn't know what to do with it. http/https/mailto pass
+    // through untouched — `NotHandled` leaves them in place.
+    let intercepts: Vec<(usize, String, lunco_workbench::UriResolution)> = {
+        let registry = world.get_resource::<lunco_workbench::UriRegistry>();
+        ui.ctx().output_mut(|o| {
+            let mut out = Vec::new();
+            for (idx, cmd) in o.commands.iter().enumerate() {
+                if let egui::OutputCommand::OpenUrl(open) = cmd {
+                    let resolution = registry
+                        .map(|r| r.dispatch(&open.url))
+                        .unwrap_or(lunco_workbench::UriResolution::NotHandled);
+                    if !matches!(
+                        resolution,
+                        lunco_workbench::UriResolution::NotHandled
+                    ) {
+                        out.push((idx, open.url.clone(), resolution));
+                    }
+                }
+            }
+            out
+        })
+    };
+    if intercepts.is_empty() {
+        return;
+    }
+    // Drop the intercepted commands back-to-front so earlier indices
+    // stay valid. At Documentation-rendering scale (a handful of
+    // commands per frame, almost never >1 link click per frame) the
+    // cost is negligible.
+    ui.ctx().output_mut(|o| {
+        for (idx, _, _) in intercepts.iter().rev() {
+            if *idx < o.commands.len() {
+                o.commands.remove(*idx);
+            }
+        }
+    });
+    for (_, url, resolution) in intercepts {
+        world.commands().trigger(lunco_workbench::UriClicked {
+            uri: url,
+            resolution,
+        });
     }
 }
 
@@ -977,7 +1187,30 @@ fn walk_qualified_class<'a>(
     ast: &'a rumoca_session::parsing::ast::StoredDefinition,
     qualified: &str,
 ) -> Option<(String, &'a rumoca_session::parsing::ast::ClassDef)> {
-    let mut segments = qualified.split('.');
+    // An MSL file like `Modelica/Blocks/Continuous.mo` declares
+    // `within Modelica.Blocks;` and exposes `Continuous` as its
+    // top-level class. When the drill-in target is the fully
+    // qualified name `Modelica.Blocks.Continuous.PID`, walking from
+    // the first segment (`Modelica`) against `ast.classes` misses
+    // (the AST starts at `Continuous`). Strip any prefix that
+    // matches the file's `within` clause before walking — that's
+    // the "already consumed" part of the path, per MLS §13.2.1.
+    let within_prefix: Option<String> = ast.within.as_ref().map(|w| {
+        w.name
+            .iter()
+            .map(|t| t.text.to_string())
+            .collect::<Vec<_>>()
+            .join(".")
+    });
+    let effective = match within_prefix.as_deref() {
+        Some(p) if !p.is_empty() => qualified
+            .strip_prefix(p)
+            .and_then(|rest| rest.strip_prefix('.'))
+            .unwrap_or(qualified),
+        _ => qualified,
+    };
+
+    let mut segments = effective.split('.');
     let first = segments.next()?;
     let (first_name, first_class) = ast
         .classes

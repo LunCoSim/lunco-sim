@@ -2317,6 +2317,11 @@ fn register_local_class(
     use rumoca_session::parsing::ast::ClassType;
     let is_expandable_connector = matches!(class_def.class_type, ClassType::Connector)
         && class_def.expandable;
+    // Walk the class's connector sub-components into `PortDef`s.
+    // Without this, locally-defined classes (Tank, Engine, …) have an
+    // empty ports list, so wires from `connect()` statements have
+    // nothing to anchor to and disappear.
+    let ports = extract_local_class_ports(class_def, &class_context, ast);
     out.insert(
         short_name.to_string(),
         MSLComponentDef {
@@ -2327,13 +2332,235 @@ fn register_local_class(
             description: None,
             icon_text: None,
             icon_asset: None,
-            ports: Vec::new(),
+            ports,
             parameters: Vec::new(),
             icon_graphics: icon,
             is_expandable_connector,
+            short_description: None,
+            documentation_info: None,
+            is_example: false,
+            domain: String::new(),
+            class_kind: String::new(),
         },
     );
 }
+
+/// Walk a locally-defined class's components and emit a [`PortDef`]
+/// for each one whose type is a connector. Position is read from the
+/// connector's `Placement(transformation(extent=...))` annotation
+/// when present; otherwise (0,0) lets the canvas fall back to its
+/// edge-distribution heuristic.
+///
+/// Without this, classes the projector synthesises for the open doc
+/// (Tank/Engine/Airframe and friends) carry an empty ports list, so
+/// `connect()` wires can't find an anchor and disappear from the
+/// canvas. MSL types skip this path — their ports come pre-extracted
+/// from the indexer.
+fn extract_local_class_ports(
+    class_def: &rumoca_session::parsing::ast::ClassDef,
+    class_qualified_path: &str,
+    ast: &rumoca_session::parsing::ast::StoredDefinition,
+) -> Vec<crate::visual_diagram::PortDef> {
+    use rumoca_session::parsing::ast::Causality;
+    let mut out = Vec::new();
+    for (sub_name, sub) in &class_def.components {
+        let sub_type = sub.type_name.to_string();
+        let causality_is_port = matches!(
+            sub.causality,
+            Causality::Input(_) | Causality::Output(_)
+        );
+        let type_is_connector = !sub_type.is_empty()
+            && crate::diagram::is_connector_type_pub(
+                &sub_type,
+                class_qualified_path,
+                ast,
+                &crate::class_cache::peek_or_load_msl_class,
+            );
+        if !causality_is_port && !type_is_connector {
+            continue;
+        }
+        // Read Placement on the connector declaration to anchor the
+        // port at a fixed (x,y) on the icon boundary. Centroid of
+        // the placement extent maps to Modelica's (-100..100) per-axis
+        // grid — the same convention used by MSL ports.
+        let (px, py) = crate::annotations::extract_placement(&sub.annotation)
+            .map(|p| {
+                let cx = (p.transformation.extent.p1.x + p.transformation.extent.p2.x) * 0.5;
+                let cy = (p.transformation.extent.p1.y + p.transformation.extent.p2.y) * 0.5;
+                (cx as f32, cy as f32)
+            })
+            .unwrap_or((0.0, 0.0));
+        // Resolve the connector class and extract everything the
+        // renderer needs directly from its AST: wire color
+        // (Icon.graphics), causality (variable prefixes or class-
+        // level causality), and flow-variable metadata.
+        let msl_resolve = &crate::class_cache::peek_or_load_msl_class;
+        let class = crate::diagram::resolve_class_by_scope_pub(
+            &sub_type,
+            class_qualified_path,
+            ast,
+            msl_resolve,
+        );
+        let (color, kind, flow_vars) = class
+            .as_ref()
+            .map(|c| {
+                let color = connector_icon_color(c);
+                let (kind, flow_vars) =
+                    classify_connector(c, class_qualified_path, ast, msl_resolve);
+                (color, kind, flow_vars)
+            })
+            .unwrap_or_default();
+        out.push(crate::visual_diagram::PortDef {
+            name: sub_name.clone(),
+            connector_type: sub_type.clone(),
+            msl_path: sub_type,
+            is_flow: !flow_vars.is_empty(),
+            x: px,
+            y: py,
+            color,
+            kind,
+            flow_vars,
+        });
+    }
+    out
+}
+
+/// Classify a connector class into (port kind, flow-variable list)
+/// by reading its actual declarations — no leaf-name matching.
+///
+/// Covers:
+///   * Short-form aliases `connector X = input Real` via
+///     `class.causality` set during parse.
+///   * Explicit connector blocks with `input`/`output`/`flow`
+///     declarations in `class.components`.
+///   * `extends` inheritance — recurses into the base class so
+///     `connector FuelPort_a extends FuelPort;` correctly picks up
+///     the base's flow variables.
+fn classify_connector(
+    class: &rumoca_session::parsing::ast::ClassDef,
+    owner_qualified_path: &str,
+    ast: &rumoca_session::parsing::ast::StoredDefinition,
+    msl_resolve: &dyn Fn(&str) -> Option<std::sync::Arc<rumoca_session::parsing::ast::ClassDef>>,
+) -> (crate::visual_diagram::PortKind, Vec<crate::visual_diagram::FlowVarMeta>) {
+    use crate::visual_diagram::{FlowVarMeta, PortKind};
+    use rumoca_session::parsing::ast::{Causality, Connection};
+
+    // Short-form type alias (`connector X = input Real`) — causality
+    // is on the class itself, no components to walk.
+    match class.causality {
+        Causality::Input(_) => return (PortKind::Input, Vec::new()),
+        Causality::Output(_) => return (PortKind::Output, Vec::new()),
+        Causality::Empty => {}
+    }
+
+    // Start with this class's own flow variables.
+    let mut flow_vars: Vec<FlowVarMeta> = class
+        .components
+        .iter()
+        .filter_map(|(name, c)| {
+            if matches!(c.connection, Connection::Flow(_)) {
+                let unit = c
+                    .modifications
+                    .get("unit")
+                    .and_then(string_literal_of)
+                    .unwrap_or_default();
+                Some(FlowVarMeta { name: name.clone(), unit })
+            } else {
+                None
+            }
+        })
+        .collect();
+    let (mut n_in, mut n_out) = (0usize, 0usize);
+    for (_, c) in &class.components {
+        match c.causality {
+            Causality::Input(_) => n_in += 1,
+            Causality::Output(_) => n_out += 1,
+            Causality::Empty => {}
+        }
+    }
+
+    // Merge in anything inherited via `extends`.
+    for ext in &class.extends {
+        let base_name = ext.base_name.to_string();
+        let Some(base_class) = crate::diagram::resolve_class_by_scope_pub(
+            &base_name,
+            owner_qualified_path,
+            ast,
+            msl_resolve,
+        ) else {
+            continue;
+        };
+        let (base_kind, base_flows) =
+            classify_connector(&base_class, owner_qualified_path, ast, msl_resolve);
+        for fv in base_flows {
+            if !flow_vars.iter().any(|f| f.name == fv.name) {
+                flow_vars.push(fv);
+            }
+        }
+        match base_kind {
+            PortKind::Input => n_in += 1,
+            PortKind::Output => n_out += 1,
+            PortKind::Acausal => {}
+        }
+    }
+
+    if !flow_vars.is_empty() {
+        (PortKind::Acausal, flow_vars)
+    } else if n_in == 1 && n_out == 0 {
+        (PortKind::Input, flow_vars)
+    } else if n_out == 1 && n_in == 0 {
+        (PortKind::Output, flow_vars)
+    } else {
+        (PortKind::Acausal, flow_vars)
+    }
+}
+
+/// Extract a `"literal"` from an `Expression::Terminal` that holds
+/// a string token. Used to read `unit="kg/s"` out of a component's
+/// modification list without dragging in rumoca's full expression
+/// evaluator. Returns `None` for non-literal expressions.
+fn string_literal_of(expr: &rumoca_session::parsing::ast::Expression) -> Option<String> {
+    use rumoca_session::parsing::ast::Expression;
+    if let Expression::Terminal { token, .. } = expr {
+        let s = token.text.as_ref();
+        // Parser strips the quotes for string literals; most unit
+        // strings arrive already unquoted. Strip quotes defensively
+        // in case a caller hands us the raw source slice.
+        let trimmed = s.trim_matches('"');
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    } else {
+        None
+    }
+}
+
+/// Lookup the first colored graphic's line / fill color on a
+/// connector class. Split out from the old `resolve_connector_icon_color`
+/// so it can be called alongside `classify_connector` from the
+/// single resolve-class site.
+fn connector_icon_color(
+    class: &rumoca_session::parsing::ast::ClassDef,
+) -> Option<[u8; 3]> {
+    use crate::annotations::{extract_icon, GraphicItem};
+    let icon = extract_icon(&class.annotation)?;
+    for g in &icon.graphics {
+        let (line, fill) = match g {
+            GraphicItem::Rectangle(r) => (r.shape.line_color, r.shape.fill_color),
+            GraphicItem::Polygon(p) => (p.shape.line_color, p.shape.fill_color),
+            GraphicItem::Ellipse(e) => (e.shape.line_color, e.shape.fill_color),
+            GraphicItem::Line(l) => (l.color, None),
+            GraphicItem::Text(_) | GraphicItem::Bitmap(_) => (None, None),
+        };
+        if let Some(c) = line.or(fill) {
+            return Some([c.r, c.g, c.b]);
+        }
+    }
+    None
+}
+
 
 // ---------------------------------------------------------------------------
 // Diagram ↔ Snarl Sync
@@ -2995,6 +3222,7 @@ pub fn do_compile(world: &mut World) {
                 session_id,
                 paused: false,
                 parameters: HashMap::new(),
+                parameter_bounds: HashMap::new(),
                 inputs: HashMap::new(),
                 variables: HashMap::new(),
                 descriptions: HashMap::new(),
@@ -3015,12 +3243,20 @@ pub fn do_compile(world: &mut World) {
         .set(doc_id, crate::ui::CompileState::Compiling);
 
     // 6. Dispatch to the worker.
+    // Install a sim stream for this entity so the worker can
+    // publish samples lock-free (Phase A). Resource borrow for
+    // `SimStreamRegistry` is scoped here so it's released before we
+    // reach for the immutable `ModelicaChannels` below.
+    let stream = world
+        .get_resource_mut::<crate::SimStreamRegistry>()
+        .map(|mut r| r.get_or_insert(entity));
     if let Some(channels) = world.get_resource::<ModelicaChannels>() {
         let _ = channels.tx.send(ModelicaCommand::Compile {
             entity,
             session_id,
             model_name,
             source,
+            stream,
         });
     }
     if let Some(mut s) = world.get_resource_mut::<DiagramState>() {

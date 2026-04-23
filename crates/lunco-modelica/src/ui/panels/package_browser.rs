@@ -8,7 +8,7 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_workbench::{Panel, PanelId, PanelSlot};
 
-use crate::models::BUNDLED_MODELS;
+use crate::models::bundled_models;
 use crate::ui::state::{ModelicaDocumentRegistry, ModelLibrary, OpenModel, WorkbenchState};
 
 use bevy::tasks::{AsyncComputeTaskPool, Task};
@@ -315,7 +315,7 @@ fn scan_msl_dir(dir: &std::path::Path, package_path: String) -> Vec<PackageNode>
 
 fn build_bundled_tree() -> Vec<PackageNode> {
     // Use the bundled:// URL scheme as the id so open_model can find it.
-    BUNDLED_MODELS
+    bundled_models()
         .iter()
         .map(|m| PackageNode::Model {
             id: format!("bundled://{}", m.filename),

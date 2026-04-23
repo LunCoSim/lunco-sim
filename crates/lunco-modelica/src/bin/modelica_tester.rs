@@ -36,19 +36,73 @@ fn main() -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("Failed to export DAE IR: {e}"))?;
     println!("DAE IR Size: {} bytes", json_ir.len());
 
-    // 3. Simple Mock Simulation Step
-    println!("Starting mock simulation (t=0.0 to t=1.0)...");
-
-    let mut current_time = 0.0;
-    let dt = 0.1;
-
-    while current_time < 1.0 {
-        // TODO: Use rumoca-sim to actually step the model
-        current_time += dt;
-        println!("  Step: t = {:.2}", current_time);
+    // 3. Dump DAE state list + equations before stepper init.
+    println!("\n--- DAE states ---");
+    for (name, v) in result.dae.states.iter() {
+        println!("  {} (size={})", name, v.size());
+    }
+    println!("--- DAE equations ({}) ---", result.dae.f_x.len());
+    for (i, eq) in result.dae.f_x.iter().enumerate() {
+        println!("  [{i}] origin={} scalar_count={}", eq.origin, eq.scalar_count);
     }
 
-    println!("Simulation complete.");
+    // 4. Build a stepper and actually step it. Tolerances + dt +
+    //    step count overridable via env vars so we can sweep them
+    //    from the shell to find combinations that succeed.
+    let atol = env_f64("ATOL", 1e-3);
+    let rtol = env_f64("RTOL", 1e-3);
+    let dt = env_f64("DT", 0.01);
+    let n_steps: usize = std::env::var("N")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(100);
+    let t_end_hint = dt * n_steps as f64;
+    println!(
+        "\n--- Building stepper (atol={:.1e} rtol={:.1e} dt={:.1e} n={}) ---",
+        atol, rtol, dt, n_steps
+    );
+    let mut opts = rumoca_sim::StepperOptions::default();
+    opts.atol = atol;
+    opts.rtol = rtol;
+    let mut stepper = match rumoca_sim::SimStepper::new(&result.dae, opts) {
+        Ok(s) => {
+            println!("Stepper built OK.");
+            s
+        }
+        Err(e) => {
+            println!("Stepper init FAILED: {e:?}");
+            return Ok(());
+        }
+    };
+
+    println!("Stepping to t~={:.3}s...", t_end_hint);
+    let t0 = std::time::Instant::now();
+    let mut failed_at = None;
+    for i in 0..n_steps {
+        if let Err(e) = stepper.step(dt) {
+            failed_at = Some((i, stepper.time(), e));
+            break;
+        }
+    }
+    let dt_total = t0.elapsed().as_secs_f64();
+    match failed_at {
+        Some((i, t, e)) => println!(
+            "STEP FAIL at step {i} (sim_t={:.6}s) after {:.2}s wall: {e:?}",
+            t, dt_total
+        ),
+        None => println!(
+            "All {n_steps} steps OK (sim_t={:.3}s, {:.2}s wall).",
+            stepper.time(),
+            dt_total
+        ),
+    }
 
     Ok(())
+}
+
+fn env_f64(name: &str, default: f64) -> f64 {
+    std::env::var(name)
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(default)
 }

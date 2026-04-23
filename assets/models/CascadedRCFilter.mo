@@ -1,3 +1,4 @@
+// tagline: Two-stage RC low-pass filter — 6 MSL blocks, renders as a schematic
 model CascadedRCFilter
   "Two-stage RC low-pass filter — classic signal-conditioning example with six MSL components"
 

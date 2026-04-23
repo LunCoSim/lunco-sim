@@ -54,17 +54,107 @@ pub fn extract_model_name(source: &str) -> Option<String> {
 /// main thread on a 184 KB MSL source means a fresh uncached
 /// rumoca parse that runs for tens of seconds in debug builds and
 /// visibly freezes the app.
+///
+/// Returns a fully qualified class name (e.g.
+/// `"AnnotatedRocketStage.RocketStage"`) when the non-package class
+/// lives nested inside a package. Returns just the short name for
+/// top-level non-package classes. This matters because when the
+/// user clicks Compile without drilling into a specific class and
+/// the file is package-scoped (e.g. `package Foo { model Bar ... }`),
+/// rumoca needs the qualified `Foo.Bar` to locate the instantiable
+/// class — passing just `"Foo"` makes it compile the empty package.
 pub fn extract_model_name_from_ast(ast: &StoredDefinition) -> Option<String> {
-    let mut package_name: Option<String> = None;
-    for (name, class) in &ast.classes {
-        if class.class_type != ClassType::Package {
-            return Some(name.clone());
-        }
-        if package_name.is_none() {
-            package_name = Some(name.as_str().to_string());
+    find_first_non_package_qualified(&ast.classes, "")
+}
+
+/// Return ALL non-package classes (qualified) reachable from the
+/// top-level classes, depth-first. Used by the Compile handler to
+/// decide whether to auto-pick (length 0–1) or open a picker modal
+/// (length ≥ 2, task #102). Cheap — walks the already-parsed AST.
+pub fn collect_non_package_classes_qualified(
+    ast: &StoredDefinition,
+) -> Vec<String> {
+    let mut out = Vec::new();
+    collect_non_package_qualified(&ast.classes, "", &mut out);
+    out
+}
+
+fn collect_non_package_qualified(
+    classes: &indexmap::IndexMap<String, ClassDef>,
+    parent: &str,
+    out: &mut Vec<String>,
+) {
+    for (name, class) in classes {
+        let qualified = if parent.is_empty() {
+            name.clone()
+        } else {
+            format!("{parent}.{name}")
+        };
+        match class.class_type {
+            // Descend into packages to reach nested runnable classes.
+            ClassType::Package => {
+                collect_non_package_qualified(&class.classes, &qualified, out);
+            }
+            // Only runnable classes end up on the compile picker —
+            // connectors / records / types / functions have no
+            // equations to simulate and would only confuse the user
+            // by appearing as "Compile this" candidates.
+            ClassType::Model | ClassType::Block | ClassType::Class => {
+                out.push(qualified);
+            }
+            _ => {}
         }
     }
-    package_name
+}
+
+/// Depth-first walk of `classes` returning the first non-package
+/// class found, qualified by its path inside the surrounding packages.
+fn find_first_non_package_qualified(
+    classes: &indexmap::IndexMap<String, ClassDef>,
+    parent: &str,
+) -> Option<String> {
+    // Runnable = Model / Block / Class. Skip connectors, records,
+    // types, functions — they have no equations to simulate and
+    // compile would only produce `EmptySystem` / type errors.
+    let is_runnable = |t: &ClassType| {
+        matches!(
+            t,
+            ClassType::Model | ClassType::Block | ClassType::Class
+        )
+    };
+    // First pass: prefer a runnable class AT THIS level.
+    for (name, class) in classes {
+        if is_runnable(&class.class_type) {
+            return Some(if parent.is_empty() {
+                name.clone()
+            } else {
+                format!("{parent}.{name}")
+            });
+        }
+    }
+    // Second pass: descend into each package.
+    for (name, class) in classes {
+        if class.class_type != ClassType::Package {
+            continue;
+        }
+        let next_parent = if parent.is_empty() {
+            name.clone()
+        } else {
+            format!("{parent}.{name}")
+        };
+        if let Some(found) = find_first_non_package_qualified(&class.classes, &next_parent) {
+            return Some(found);
+        }
+    }
+    // Entire subtree is packages-only (or empty). Fall back to the
+    // top-level package name so earlier callers that relied on the
+    // old "return the package when nothing else exists" behaviour
+    // still get something non-empty; compile will likely still fail
+    // but at least the error message names the file's top entity.
+    classes
+        .keys()
+        .next()
+        .map(|n| if parent.is_empty() { n.to_string() } else { format!("{parent}.{n}") })
 }
 
 /// Extract the Modelica description string (`"..."` after a
@@ -289,17 +379,28 @@ pub fn strip_input_defaults(source: &str) -> (String, HashMap<String, f64>) {
     let mut defaults = HashMap::new();
     collect_inputs_with_defaults_from_classes(&ast.classes, &mut defaults);
 
-    // Rebuild source with input defaults stripped using regex replacement.
-    // TODO: Replace with AST-based source regeneration once we have a Modelica
-    // source printer. For now, regex is the pragmatic choice for text mutation.
+    // Rebuild source with input defaults stripped. The regex has to
+    // cope with modifications between the name and the binding —
+    // `input Real throttle(min=0, max=100, unit="%") = 100;` is
+    // common once users add bounds, and the old pattern skipped such
+    // declarations, so rumoca baked `throttle` in as a constant and
+    // `set_input()` silently no-op'd. Capture groups:
+    //   1: everything up to the component name (`input Type `), with
+    //      dotted types like `Modelica.Blocks.Interfaces.RealInput`
+    //   2: the component name
+    //   3: optional `(…mods…)` — preserved
+    //   4: the `= literal` — dropped
     let re = regex::Regex::new(
-        r"(?m)(^\s*(?:input)\s+\w+\s+)([a-zA-Z0-9_]+)(\s*=\s*[-+]?[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?)",
+        r"(?m)(^\s*input\s+[\w\.]+\s+)([A-Za-z_][A-Za-z0-9_]*)(\s*\([^)]*\))?(\s*=\s*[-+]?[0-9]*\.?[0-9]+(?:[eE][-+]?[0-9]+)?)",
     )
     .unwrap();
 
     let modified = re
         .replace_all(source, |caps: &regex::Captures| {
-            format!("{}{}", &caps[1], &caps[2])
+            let prefix = &caps[1];
+            let name = &caps[2];
+            let mods = caps.get(3).map(|m| m.as_str()).unwrap_or("");
+            format!("{prefix}{name}{mods}")
         })
         .to_string();
 
@@ -477,6 +578,14 @@ fn collect_input_names_from_classes(
 /// Returns `None` for non-numeric bindings (strings, booleans, references, etc.).
 fn extract_numeric_binding(expr: &Option<Expression>) -> Option<f64> {
     let expr = expr.as_ref()?;
+    numeric_of(expr)
+}
+
+/// Parse a numeric literal expression (including a leading `-` unary
+/// minus — rumoca represents `-5` as `Unary(Minus, 5)`). Used for
+/// `min`/`max` modifier extraction where negative bounds are common.
+fn numeric_of(expr: &Expression) -> Option<f64> {
+    use rumoca_session::parsing::ast::OpUnary;
     match expr {
         Expression::Terminal { terminal_type, token } => match terminal_type {
             TerminalType::UnsignedReal | TerminalType::UnsignedInteger => {
@@ -484,7 +593,48 @@ fn extract_numeric_binding(expr: &Option<Expression>) -> Option<f64> {
             }
             _ => None,
         },
+        Expression::Unary { op, rhs } if matches!(op, OpUnary::Minus(_)) => {
+            numeric_of(rhs).map(|v| -v)
+        }
         _ => None,
+    }
+}
+
+/// Parameter bounds (min, max) pulled from `parameter Real x(min=…,
+/// max=…)` modifiers. Either end is `None` if not declared. Used by
+/// the Telemetry panel to clamp DragValues to the authored operating
+/// envelope — MLS §4.8 says the UI SHOULD respect these bounds.
+pub fn extract_parameter_bounds_from_ast(
+    ast: &StoredDefinition,
+) -> HashMap<String, (Option<f64>, Option<f64>)> {
+    let mut bounds = HashMap::new();
+    collect_parameter_bounds_from_classes(&ast.classes, &mut bounds);
+    bounds
+}
+
+fn collect_parameter_bounds_from_classes(
+    classes: &indexmap::IndexMap<String, ClassDef>,
+    out: &mut HashMap<String, (Option<f64>, Option<f64>)>,
+) {
+    // Bounds are collected for *any* tunable numeric declaration —
+    // parameters AND inputs — because users drive both from the
+    // Telemetry panel and expect `min=…, max=…` to be honoured in
+    // both sections. Non-tunable declarations (locals, outputs,
+    // internal algebraics) are skipped.
+    for class in classes.values() {
+        for component in class.components.values() {
+            let tunable = matches!(component.variability, Variability::Parameter(_))
+                || matches!(component.causality, Causality::Input(_));
+            if !tunable {
+                continue;
+            }
+            let min = component.modifications.get("min").and_then(numeric_of);
+            let max = component.modifications.get("max").and_then(numeric_of);
+            if min.is_some() || max.is_some() {
+                out.insert(component.name.clone(), (min, max));
+            }
+        }
+        collect_parameter_bounds_from_classes(&class.classes, out);
     }
 }
 
@@ -502,6 +652,48 @@ mod tests {
     use super::*;
 
     // --- extract_model_name ---
+
+    #[test]
+    fn test_extract_model_name_nested_in_package_returns_qualified() {
+        // Regression: user opened assets/models/AnnotatedRocketStage.mo
+        // (a package containing `model RocketStage`, `model Engine`, …)
+        // and hit Compile without drilling in first. Old extractor
+        // returned just `"AnnotatedRocketStage"` (the package) → rumoca
+        // compiled the empty package → error. The fallback must
+        // descend into packages and qualify the model name so rumoca
+        // can resolve it.
+        let source = r#"
+package AnnotatedRocketStage
+  model RocketStage
+    Real x;
+  end RocketStage;
+  model Engine
+    Real y;
+  end Engine;
+end AnnotatedRocketStage;
+"#;
+        assert_eq!(
+            extract_model_name(source),
+            Some("AnnotatedRocketStage.RocketStage".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_model_name_nested_two_levels_deep() {
+        let source = r#"
+package Outer
+  package Inner
+    model Leaf
+      Real x;
+    end Leaf;
+  end Inner;
+end Outer;
+"#;
+        assert_eq!(
+            extract_model_name(source),
+            Some("Outer.Inner.Leaf".to_string())
+        );
+    }
 
     #[test]
     fn test_extract_model_name_simple_model() {
@@ -540,10 +732,13 @@ package MyPackage
   end Inner;
 end MyPackage;
 "#;
-        // Top-level class is the package; Inner is nested.
-        // AST returns the first top-level class (the package),
-        // which matches the old regex behavior (first match in source order).
-        assert_eq!(extract_model_name(source), Some("MyPackage".to_string()));
+        // Used to return just `"MyPackage"` which made rumoca compile
+        // the empty package and error out. New behaviour descends into
+        // packages and returns the qualified path of the first model.
+        assert_eq!(
+            extract_model_name(source),
+            Some("MyPackage.Inner".to_string())
+        );
     }
 
     // --- extract_parameters ---

@@ -194,6 +194,13 @@ pub struct ModelicaDocument {
     /// Consumers track their last-observed generation and pull the
     /// suffix via [`changes_since`](Self::changes_since).
     changes: VecDeque<(u64, ModelicaChange)>,
+    /// When the source was last mutated (for AST-reparse debouncing).
+    /// Set by `apply_patch`; read by
+    /// [`refresh_stale_asts`](../ui/fn.refresh_stale_asts.html) which
+    /// reparses only after a quiet period so rapid typing stays
+    /// responsive. `None` for fresh docs whose source hasn't changed
+    /// since construction.
+    last_source_edit_at: Option<std::time::Instant>,
 }
 
 impl ModelicaDocument {
@@ -249,6 +256,7 @@ impl ModelicaDocument {
             origin,
             last_saved_generation,
             changes: VecDeque::with_capacity(CHANGE_HISTORY_CAPACITY),
+            last_source_edit_at: None,
         }
     }
 
@@ -257,11 +265,46 @@ impl ModelicaDocument {
         &self.source
     }
 
-    /// The cached parsed AST. Always present (refreshed after every
-    /// mutation), but the inner [`AstCache::result`] may carry a parse
-    /// error rather than a successful AST.
+    /// The cached parsed AST. Always present, but may be *stale* —
+    /// AST reparse is debounced (see `apply_patch`), so immediately
+    /// after a rapid edit burst the returned `AstCache.generation`
+    /// can lag `self.generation`. For read-only UI (syntax highlight,
+    /// diagram projection, lint) staleness is harmless. Callers that
+    /// must see the current source reflected in the AST should call
+    /// [`refresh_ast_now`](Self::refresh_ast_now) first.
     pub fn ast(&self) -> &AstCache {
         &self.ast
+    }
+
+    /// Returns `true` when the source has been edited since the last
+    /// AST reparse. Used by the debouncing refresh system in
+    /// `ui/ast_refresh.rs` to decide whether a reparse is needed.
+    pub fn ast_is_stale(&self) -> bool {
+        self.ast.generation != self.generation
+    }
+
+    /// Wall-clock time of the last source mutation, or `None` if the
+    /// document hasn't been edited since construction. Used by the
+    /// debounce driver to determine whether the typing "quiet
+    /// window" has elapsed.
+    pub fn last_source_edit_at(&self) -> Option<std::time::Instant> {
+        self.last_source_edit_at
+    }
+
+    /// Force an immediate AST reparse and mark the result as matching
+    /// the current source generation. Callers that must see a fresh
+    /// parse (Compile, Format Document, any path that hands the AST
+    /// to rumoca-sim) use this before reading `ast()`.
+    ///
+    /// Idempotent — a no-op when `ast().generation == self.generation`.
+    pub fn refresh_ast_now(&mut self) {
+        if !self.ast_is_stale() {
+            return;
+        }
+        self.ast = Arc::new(AstCache::from_source(&self.source, self.generation));
+        // Once the AST catches up, there's no outstanding edit to
+        // debounce for.
+        self.last_source_edit_at = None;
     }
 
     /// Iterate over structured changes applied since `last_seen`.
@@ -555,7 +598,22 @@ impl ModelicaDocument {
         let removed: String = self.source[range.clone()].to_string();
         self.source.replace_range(range.clone(), &replacement);
         self.generation = self.generation.saturating_add(1);
-        self.ast = Arc::new(AstCache::from_source(&self.source, self.generation));
+        // AST reparse is DEFERRED: rumoca's `parse_to_ast` is fast
+        // (~ms) on small files but adds up under rapid typing,
+        // especially while the sim worker is pushing sample batches
+        // through the main thread's signal-registry drain. The old
+        // eager reparse here turned every keystroke during a run
+        // into a visibly laggy frame. We now:
+        //   * bump `generation` immediately so save/undo paths see
+        //     the mutation right away,
+        //   * stamp `last_source_edit_at` so the debouncing
+        //     reparse system in `ui/ast_refresh.rs` knows when the
+        //     quiet window starts,
+        //   * keep the previous `AstCache` as a stale-but-usable
+        //     snapshot. Consumers that strictly need a fresh parse
+        //     (Compile) check `ast().generation == self.generation`
+        //     and force a reparse via `refresh_ast_now()`.
+        self.last_source_edit_at = Some(std::time::Instant::now());
         self.push_change(change);
         let inverse_range = range.start..(range.start + replacement.len());
         Ok(ModelicaOp::EditText {
@@ -891,7 +949,7 @@ fn compute_remove_connection_patch(
         .equations
         .iter()
         .find(|e| match e {
-            Equation::Connect { lhs, rhs } => {
+            Equation::Connect { lhs, rhs, .. } => {
                 (cref_matches_port(lhs, from) && cref_matches_port(rhs, to))
                     || (cref_matches_port(lhs, to) && cref_matches_port(rhs, from))
             }
@@ -1372,6 +1430,9 @@ mod tests {
             new: "model Foo end Foo;".into(),
         })
         .unwrap();
+        // AST reparse is debounced — force it so the test sees the
+        // new parse deterministically.
+        host.document_mut().refresh_ast_now();
         let cache = host.document().ast();
         assert_eq!(cache.generation, 1);
         let ast = cache.ast().expect("should parse");
@@ -1386,7 +1447,31 @@ mod tests {
             new: "model M Real x end M;".into(), // missing semicolon → parse err
         })
         .unwrap();
+        host.document_mut().refresh_ast_now();
         assert!(host.document().ast().result.is_err());
+    }
+
+    #[test]
+    fn ast_stays_stale_until_refresh() {
+        // Regression test for the debounce behaviour. Before the
+        // debounce change, every keystroke reparsed synchronously,
+        // which was a perf hog under rapid typing. Now `apply_patch`
+        // leaves the AST stale; `ast_is_stale()` tells callers to
+        // wait for the debounce driver or call `refresh_ast_now()`.
+        let mut host = doc();
+        host.apply(ModelicaOp::ReplaceSource {
+            new: "model Foo end Foo;".into(),
+        })
+        .unwrap();
+        assert!(
+            host.document().ast_is_stale(),
+            "AST should be stale right after apply_patch"
+        );
+        // Old cache still usable — matches pre-edit source.
+        assert_eq!(host.document().ast().generation, 0);
+        host.document_mut().refresh_ast_now();
+        assert!(!host.document().ast_is_stale());
+        assert_eq!(host.document().ast().generation, 1);
     }
 
     #[test]
@@ -1475,7 +1560,8 @@ mod tests {
             host.document().source(),
             "model M\n  Real a;\n  Real b;\nend M;\n"
         );
-        // AST cache must reflect the new component.
+        // AST cache is debounced — force a reparse before inspecting.
+        host.document_mut().refresh_ast_now();
         let ast = host.document().ast().ast().expect("parse ok");
         assert!(ast.classes.get("M").unwrap().components.contains_key("b"));
     }

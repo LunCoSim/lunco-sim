@@ -119,6 +119,17 @@ pub trait Tool: Send + Sync {
     /// Default: noop — stateless tools are unaffected.
     fn cancel_in_flight(&mut self) {}
 
+    /// Whether any non-idle gesture is in flight — drag, resize,
+    /// rubber-band, port-connect. Canvas uses this for stale-drag
+    /// rescue: if egui reports the mouse button as NOT held but the
+    /// tool is still mid-gesture (release fired outside the OS
+    /// window, focus loss, missed event), synthesise a release so
+    /// the gesture finalises and selection chrome can clear.
+    /// Default: false (idle), suitable for stateless tools.
+    fn is_active(&self) -> bool {
+        false
+    }
+
     /// Remap any stable references the tool is holding (typically
     /// `NodeId`s captured at press / drag-start time) when the scene
     /// is replaced. `find_new_id` is called for each old id; if it
@@ -192,6 +203,16 @@ enum State {
         pointer_world: Pos,
     },
 
+    /// Resizing a node by its bottom-right handle. Mutates
+    /// `scene.nodes[id].rect.max` live each frame; emits a
+    /// `NodeResized` event on release. Plot / control / dashboard
+    /// nodes use this as their primary resize affordance.
+    ResizingNode {
+        id: NodeId,
+        original_rect: Rect,
+        origin_world: Pos,
+    },
+
     /// Rubber-band select. World-space rect from press-origin to
     /// current pointer. On release, add every node intersecting to
     /// the selection (respecting extend/toggle).
@@ -207,6 +228,9 @@ enum State {
 /// press-time so the drag promotion knows what to do.
 #[derive(Debug, Clone)]
 enum PressTarget {
+    /// Bottom-right resize handle of a node — promotes to
+    /// `ResizingNode` on drag.
+    ResizeHandle(NodeId),
     NodeBody(NodeId),
     Port(PortRef, Pos), // port world-space position for ghost edge origin
     Empty,
@@ -236,6 +260,10 @@ impl Tool for DefaultTool {
         self.state = State::Idle;
     }
 
+    fn is_active(&self) -> bool {
+        !matches!(self.state, State::Idle)
+    }
+
     fn remap_node_ids(&mut self, find_new_id: &dyn Fn(crate::scene::NodeId) -> Option<crate::scene::NodeId>) {
         match &mut self.state {
             State::PrimaryPressed { landed_on, .. } => {
@@ -259,6 +287,20 @@ impl Tool for DefaultTool {
                         }
                     }
                     PressTarget::Empty => {}
+                    PressTarget::ResizeHandle(id) => {
+                        if let Some(new_id) = find_new_id(*id) {
+                            *id = new_id;
+                        } else {
+                            *landed_on = PressTarget::Empty;
+                        }
+                    }
+                }
+            }
+            State::ResizingNode { id, .. } => {
+                if let Some(new_id) = find_new_id(*id) {
+                    *id = new_id;
+                } else {
+                    self.state = State::Idle;
                 }
             }
             State::DraggingNodes { original_rects, .. } => {
@@ -413,6 +455,34 @@ impl DefaultTool {
         toggle: bool,
         ops: &mut CanvasOps,
     ) {
+        // Resize-handle hit test takes priority over node-body —
+        // press inside the bottom-right ~6 world-unit corner of any
+        // node enters resize mode. Skipped on read-only tabs (the
+        // promote-to-Resizing branch in `on_pointer_move` also
+        // honours this, but bailing here saves the state churn).
+        if !ops.read_only {
+            const RESIZE_HANDLE_RADIUS: f32 = 6.0;
+            let mut handle_hit: Option<NodeId> = None;
+            for (nid, node) in ops.scene.nodes() {
+                let dx = world.x - node.rect.max.x;
+                let dy = world.y - node.rect.max.y;
+                if dx * dx + dy * dy
+                    <= RESIZE_HANDLE_RADIUS * RESIZE_HANDLE_RADIUS
+                {
+                    handle_hit = Some(*nid);
+                    break;
+                }
+            }
+            if let Some(id) = handle_hit {
+                self.state = State::PrimaryPressed {
+                    origin_world: world,
+                    landed_on: PressTarget::ResizeHandle(id),
+                    extend,
+                    toggle,
+                };
+                return;
+            }
+        }
         let landed_on = match ops.scene.hit_node(world, PORT_HIT_RADIUS) {
             Some((id, NodeHitKind::Port(port))) => {
                 // Compute the port's world position for ghost-edge
@@ -532,6 +602,24 @@ impl DefaultTool {
                         toggle,
                     };
                 }
+                PressTarget::ResizeHandle(id) => {
+                    if ops.read_only {
+                        self.state = State::Idle;
+                        return;
+                    }
+                    let original_rect = match ops.scene.node(id) {
+                        Some(n) => n.rect,
+                        None => {
+                            self.state = State::Idle;
+                            return;
+                        }
+                    };
+                    self.state = State::ResizingNode {
+                        id,
+                        original_rect,
+                        origin_world,
+                    };
+                }
             }
             return;
         }
@@ -588,6 +676,24 @@ impl DefaultTool {
             } => {
                 *pointer_world = world;
             }
+            State::ResizingNode {
+                id,
+                original_rect,
+                origin_world,
+            } => {
+                let dx = world.x - origin_world.x;
+                let dy = world.y - origin_world.y;
+                let new_max_x = (original_rect.max.x + dx)
+                    .max(original_rect.min.x + 8.0);
+                let new_max_y = (original_rect.max.y + dy)
+                    .max(original_rect.min.y + 8.0);
+                if let Some(n) = ops.scene.node_mut(*id) {
+                    n.rect = Rect::from_min_max(
+                        original_rect.min,
+                        Pos::new(new_max_x, new_max_y),
+                    );
+                }
+            }
             _ => {}
         }
     }
@@ -629,7 +735,26 @@ impl DefaultTool {
                             ));
                         }
                     }
+                    PressTarget::ResizeHandle(id) => {
+                        // Bare click on a handle (no drag) — treat as
+                        // a select on the node so the user gets visual
+                        // confirmation they hit it.
+                        self.apply_click_selection(
+                            SelectItem::Node(id),
+                            extend,
+                            toggle,
+                            ops,
+                        );
+                    }
                 }
+            }
+
+            State::ResizingNode { .. } => {
+                // Live mutation already happened during the drag —
+                // for plot/control nodes that's the source of truth.
+                // For component nodes a future `NodeResized` event
+                // will let domain code emit a `SetPlacement` op; for
+                // now no event is emitted.
             }
 
             State::DraggingNodes { original_rects, .. } => {

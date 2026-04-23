@@ -459,6 +459,14 @@ impl ModelicaDocumentRegistry {
         self.hosts.get_mut(&doc)
     }
 
+    /// Iterate over every known `(DocumentId, &DocumentHost)` pair.
+    /// Used by registry-wide scanners (e.g. the debounced AST-refresh
+    /// driver) that need to check state on every doc without knowing
+    /// ids up front.
+    pub fn docs(&self) -> impl Iterator<Item = (DocumentId, &DocumentHost<ModelicaDocument>)> {
+        self.hosts.iter().map(|(id, host)| (*id, host))
+    }
+
     /// Which [`DocumentId`] does `entity` reference, if any.
     pub fn document_of(&self, entity: Entity) -> Option<DocumentId> {
         self.by_entity.get(&entity).copied()

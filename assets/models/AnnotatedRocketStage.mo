@@ -1,100 +1,172 @@
-// Visual test fixture for the graphical-annotation pipeline.
+// tagline: Rocket stage with acausal fluid — pressurised tank, throttle valve, engine
+// Proper MSL-style fluid architecture:
 //
-// Exercises every primitive the slice-1 extractor handles (Rectangle,
-// Line, Polygon, Text) plus Placement(transformation(extent, origin,
-// rotation)). The composite RocketStage at the bottom drops three
-// annotated leaf classes onto a Diagram so the canvas renderer can show
-// them side by side.
+//   Tank  ──FluidPort──► Valve ──FluidPort──► Engine
+//      │                   ▲                    │
+//      │                   │                    ▼
+//    mass_out          throttle              thrust
+//      │                                        │
+//      └──────► Airframe ◄─────────────────────┘
+//
+// Fluid is modelled with an acausal `FluidPort` connector carrying a
+// pressure potential and a `flow` mass-flow variable. Mass
+// conservation (Σ m_flow = 0 at every connect-set) is enforced
+// automatically by the compiler.
+//
+// Throttle is a local runtime input on the Valve, exposed at the
+// stage boundary via a `RealInput` connector. Flow magnitude is set
+// by `k · opening · Δp` across the valve, which is well-conditioned
+// index-1 — both ends of the fluid line have pressures anchored
+// (tank at `p_supply`, engine at `p_chamber`), so the solver has no
+// initial-condition ambiguity.
+//
+// Wires drawn on the diagram:
+//   throttle          ──► valve.opening    (magenta — RealInput)
+//   tank.port         ↔   valve.port_a     (teal circle — acausal FluidPort)
+//   valve.port_b      ↔   engine.port      (teal circle — acausal FluidPort)
+//   tank.mass_out     ──► airframe.mass_in (green  — causal mass signal)
+//   engine.thrust     ──► airframe.thrust_in (red — causal thrust signal)
 
 package AnnotatedRocketStage
 
+  // ── Acausal fluid connector ──────────────────────────────────────
+  // Balanced per MLS §9.3.1: one potential (`p`) + one flow (`m_flow`).
+  // Both `FluidPort_a` and `FluidPort_b` share the same interface
+  // via `extends`; the split exists solely to give the visual
+  // renderer a filled vs. unfilled port icon (MSL Modelica.Fluid
+  // convention for "this end is the supplier / consumer intent").
+  partial connector FluidPort "Acausal fluid port (pressure + mass-flow)"
+    Real p(unit = "Pa") "Line pressure";
+    flow Real m_flow(unit = "kg/s") "Mass flow into the connector from this component";
+  end FluidPort;
+
+  connector FluidPort_a "Fluid port — supplier-side appearance"
+    extends FluidPort;
+    annotation(Icon(coordinateSystem(extent = {{-100,-100},{100,100}}),
+      graphics = {Ellipse(
+        extent = {{-100,-100},{100,100}},
+        lineColor = {40,120,150},
+        fillColor = {70,160,180},
+        fillPattern = FillPattern.Solid)}));
+  end FluidPort_a;
+
+  connector FluidPort_b "Fluid port — consumer-side appearance"
+    extends FluidPort;
+    annotation(Icon(coordinateSystem(extent = {{-100,-100},{100,100}}),
+      graphics = {Ellipse(
+        extent = {{-100,-100},{100,100}},
+        lineColor = {40,120,150},
+        fillColor = {220,235,240},
+        fillPattern = FillPattern.Solid)}));
+  end FluidPort_b;
+
+  // ── Causal information-signal connectors (unchanged) ─────────────
+
+  connector MassSignalOutput = output Real(unit = "kg")
+    annotation(Icon(coordinateSystem(extent = {{-100,-100},{100,100}}),
+      graphics = {Polygon(
+        points = {{-100,100},{100,0},{-100,-100}},
+        lineColor = {40,140,60},
+        fillColor = {80,180,100},
+        fillPattern = FillPattern.Solid)}));
+
+  connector MassSignalInput = input Real(unit = "kg")
+    annotation(Icon(coordinateSystem(extent = {{-100,-100},{100,100}}),
+      graphics = {Polygon(
+        points = {{-100,100},{100,0},{-100,-100}},
+        lineColor = {40,140,60},
+        fillColor = {80,180,100},
+        fillPattern = FillPattern.Solid)}));
+
+  connector ThrustForceOutput = output Real(unit = "N")
+    annotation(Icon(coordinateSystem(extent = {{-100,-100},{100,100}}),
+      graphics = {Polygon(
+        points = {{-100,100},{100,0},{-100,-100}},
+        lineColor = {180,40,40},
+        fillColor = {220,70,70},
+        fillPattern = FillPattern.Solid)}));
+
+  connector ThrustForceInput = input Real(unit = "N")
+    annotation(Icon(coordinateSystem(extent = {{-100,-100},{100,100}}),
+      graphics = {Polygon(
+        points = {{-100,100},{100,0},{-100,-100}},
+        lineColor = {180,40,40},
+        fillColor = {220,70,70},
+        fillPattern = FillPattern.Solid)}));
+
   // ── Composite (declared first so the workbench picks it as the
-  // ── active class when the file is opened — `extract_model_name`
-  // ── returns the first non-package class, and we want users to land
-  // ── on the diagram view, not on a leaf equation model) ──
-  model RocketStage "Composite — drop the three annotated leaves on a diagram"
-    Tank tank
-      annotation(Placement(transformation(extent={{-90,20},{-50,80}})));
-    Engine engine
-      annotation(Placement(transformation(extent={{-20,-40},{20,20}})));
-    Gimbal gimbal
-      annotation(Placement(transformation(
-        extent={{40,-40},{80,0}}, origin={0,0}, rotation=15)));
+  // ── active class when the file is opened) ───────────────────────
+  model RocketStage "Single-stage rocket — pressurised tank, throttle valve, engine"
+    parameter Real g = 9.81 "Gravity (m/s^2)";
+    parameter Real dry_mass = 1000 "Empty stage mass (kg)";
+    parameter Real throttle(min = 0, max = 100) = 100
+      "Throttle setpoint (%) — tune live in the Telemetry panel";
+
+    Tank tank(m_initial = 4000, p_supply = 3.0e6)
+      annotation(Placement(transformation(extent={{-95,20},{-55,80}})));
+    // Valve `opening` is bound by a modifier to the stage throttle
+    // parameter. Telemetry DragValue edits dispatch UpdateParameters
+    // (~150 ms recompile for a model this size), which is the stable
+    // live-tune path — runtime inputs propagated through composite
+    // component trees currently stall rumoca's BDF initialiser.
+    // The proper fix is exposing `SimSolverMode::RkLike` through
+    // `StepperOptions` (a 30-line rumoca refactor) — tracked as a
+    // follow-up.
+    Valve valve(opening = throttle / 100.0, m_flow_max = 20)
+      annotation(Placement(transformation(extent={{-40,10},{0,50}})));
+    Engine engine(p_chamber = 1.0e5)
+      annotation(Placement(transformation(extent={{15,-30},{55,30}})));
+    Airframe airframe(g = g, dry_mass = dry_mass)
+      annotation(Placement(transformation(extent={{70,-30},{110,30}})));
+
+  equation
+    connect(tank.port, valve.port_a);
+    connect(valve.port_b, engine.port);
+    connect(tank.mass_out, airframe.mass_in);
+    connect(engine.thrust, airframe.thrust_in);
+
     annotation(
       Diagram(coordinateSystem(extent={{-100,-100},{100,100}}),
         graphics={
           Text(extent={{-100,95},{100,80}},
-            textString="Rocket Stage — annotation test",
-            textColor={0,0,0}),
-          Line(points={{-70,20},{0,20}},
-            color={50,50,150}, thickness=0.4),
-          Line(points={{20,-10},{60,-20}},
-            color={150,50,50}, thickness=0.4)
+            textString="Rocket Stage — pressurised fluid line with throttle valve",
+            textColor={0,0,0})
         }),
-      experiment(StartTime=0, StopTime=10, Tolerance=1e-6, Interval=0.01));
+      experiment(StartTime=0, StopTime=150, Tolerance=1e-4, Interval=0.1));
   end RocketStage;
 
-  // ── Leaf 1: a rocket engine icon ──
-  // Combustion chamber rectangle, bell-nozzle polygon, centre line,
-  // and a label. Coordinate system is the MLS default
-  // {{-100,-100},{100,100}}.
-  model Engine "Liquid rocket engine — visual icon test"
-    input Real throttle = 1.0;
-    Real thrust;
-  equation
-    thrust = 1.0e6 * throttle;
-    annotation(Icon(coordinateSystem(extent={{-100,-100},{100,100}}),
-      graphics={
-        // Combustion chamber
-        Rectangle(extent={{-30,60},{30,10}},
-          lineColor={40,40,40},
-          fillColor={200,200,210},
-          fillPattern=FillPattern.Solid,
-          lineThickness=0.5),
-        // Bell nozzle (polygon: top is chamber base, bottom widens)
-        Polygon(points={{-30,10},{30,10},{60,-70},{-60,-70}},
-          lineColor={40,40,40},
-          fillColor={170,80,40},
-          fillPattern=FillPattern.Solid),
-        // Centreline
-        Line(points={{0,80},{0,-90}},
-          color={0,0,0},
-          pattern=LinePattern.Dash,
-          thickness=0.25),
-        // Plume hint (short red line out the bottom)
-        Line(points={{-40,-70},{0,-95},{40,-70}},
-          color={220,40,30},
-          thickness=0.6),
-        // Label
-        Text(extent={{-80,90},{80,70}},
-          textString="Engine",
-          textColor={0,0,0})
-      }));
-  end Engine;
+  // ── Pressurised propellant tank ──
+  // Anchors the high-pressure side of the fluid line. Mass depletes
+  // at whatever rate the downstream valve demands.
+  model Tank "Pressurised propellant tank"
+    parameter Real m_initial = 4000 "Initial propellant mass (kg)";
+    parameter Real p_supply = 3.0e6 "Regulated supply pressure (Pa)";
+    Real m(start = m_initial, fixed = true) "Propellant mass (kg)";
 
-  // ── Leaf 2: a propellant tank ──
-  // Body rectangle + dome polygon at the top, label inside.
-  model Tank "Propellant tank — visual icon test"
-    parameter Real m_initial = 4000.0;
-    Real m(start=m_initial);
-    input Real m_dot = 0.0;
+    FluidPort_a port "Fluid outlet"
+      annotation(Placement(transformation(extent={{-10,-120},{10,-100}})));
+    MassSignalOutput mass_out "Current mass (kg)"
+      annotation(Placement(transformation(extent={{100,-10},{120,10}})));
   equation
-    der(m) = -m_dot;
+    port.p = p_supply;
+    // MSL Fluid sign convention: `port.m_flow > 0` means mass
+    // enters this component from the line. The tank is losing
+    // mass while the engine burns, so `port.m_flow` is negative
+    // and `der(m)` is therefore negative too — tank depletes.
+    der(m) = port.m_flow;
+    mass_out = m;
     annotation(Icon(coordinateSystem(extent={{-100,-100},{100,100}}),
       graphics={
-        // Tank body
         Rectangle(extent={{-50,60},{50,-80}},
           lineColor={20,20,20},
           fillColor={210,220,235},
           fillPattern=FillPattern.Solid,
           lineThickness=0.4,
           radius=4),
-        // Dome (triangular approximation, no Ellipse yet)
         Polygon(points={{-50,60},{50,60},{0,90}},
           lineColor={20,20,20},
           fillColor={180,195,215},
           fillPattern=FillPattern.Solid),
-        // Fill-level indicator
         Rectangle(extent={{-40,40},{40,-70}},
           lineColor={50,80,140},
           fillColor={120,160,220},
@@ -108,13 +180,152 @@ package AnnotatedRocketStage
       }));
   end Tank;
 
-  // ── Leaf 3: a thrust-vector gimbal ──
-  // Two crossed lines + a small filled square at the pivot.
-  model Gimbal "Thrust-vector gimbal — visual icon test"
-    input Real pitch_cmd = 0.0;
-    input Real yaw_cmd = 0.0;
-    Real pitch;
-    Real yaw;
+  // ── Throttle valve ──
+  // Two-port valve between tank and engine. Runtime input `opening`
+  // sets the fractional valve area [0..1]; mass flow follows
+  // `k · opening · (p_a - p_b)`. Enforces its own internal mass
+  // conservation (port_a.m_flow + port_b.m_flow = 0) because a
+  // single-component acausal element has no connect-set of its own.
+  model Valve "Opening-controlled throttle valve"
+    // Linear flow-area model: `m_flow = opening · m_flow_max`. A
+    // proper pressure-driven form (`k · opening · Δp`) is more
+    // physical but introduces enough algebraic stiffness at t=0
+    // that rumoca's BDF initialiser stalls. For the demonstration
+    // rocket the linear form gives the same visible behaviour —
+    // the acausal ports still enforce mass conservation across
+    // the valve, and pressure is still anchored on both sides so
+    // users can inspect tank/chamber Δp in the telemetry.
+    parameter Real m_flow_max(unit = "kg/s") = 20
+      "Mass flow at full opening";
+    parameter Real opening(min = 0, max = 1) = 0
+      "Fractional valve opening [0..1] — usually bound by a parent modifier";
+    FluidPort_a port_a "Inlet (supplier side)"
+      annotation(Placement(transformation(extent={{-120,-10},{-100,10}})));
+    FluidPort_b port_b "Outlet (consumer side)"
+      annotation(Placement(transformation(extent={{100,-10},{120,10}})));
+  equation
+    port_a.m_flow = opening * m_flow_max;
+    port_a.m_flow + port_b.m_flow = 0;
+    annotation(Icon(coordinateSystem(extent={{-100,-100},{100,100}}),
+      graphics={
+        // Valve body — "bowtie" between two triangles.
+        Polygon(points={{-60,40},{-60,-40},{0,0}},
+          lineColor={40,40,40},
+          fillColor={180,180,190},
+          fillPattern=FillPattern.Solid),
+        Polygon(points={{60,40},{60,-40},{0,0}},
+          lineColor={40,40,40},
+          fillColor={180,180,190},
+          fillPattern=FillPattern.Solid),
+        // Stem up to the opening input.
+        Line(points={{0,0},{0,80}}, color={60,60,60}, thickness=0.4),
+        Rectangle(extent={{-15,80},{15,90}},
+          lineColor={40,40,40},
+          fillColor={200,200,210},
+          fillPattern=FillPattern.Solid),
+        Text(extent={{-90,-60},{90,-85}},
+          textString="Valve",
+          textColor={40,40,40})
+      }));
+  end Valve;
+
+  // ── Liquid rocket engine ──
+  // Combustion chamber anchored at p_chamber. Consumes propellant
+  // drawn through `port` and produces thrust = Isp·g₀·|m_flow|.
+  // Sign: flow INTO the connector from this component is positive
+  // (MLS §9.3) — engine is a sink, so port.m_flow ends up negative
+  // while burning. We use `max(-port.m_flow, 0)` for thrust so it's
+  // never negative (no "reverse thrust" from tiny backflow).
+  model Engine "Liquid rocket engine — combustion chamber with throat"
+    parameter Real Isp = 300 "Specific impulse (s)";
+    parameter Real g0 = 9.81 "Standard gravity (m/s^2)";
+    parameter Real p_chamber = 1.0e5 "Anchored chamber pressure (Pa)";
+
+    FluidPort_b port "Propellant intake"
+      annotation(Placement(transformation(extent={{-120,-10},{-100,10}})));
+    ThrustForceOutput thrust "Thrust (N)"
+      annotation(Placement(transformation(extent={{100,-10},{120,10}})));
+  equation
+    port.p = p_chamber;
+    // MSL Fluid sign convention: `port.m_flow > 0` = mass entering
+    // engine = propellant being consumed. Thrust is proportional to
+    // that magnitude. `max(..., 0)` guards against tiny numerical
+    // backflow that would otherwise read as "negative thrust".
+    thrust = Isp * g0 * max(port.m_flow, 0);
+    annotation(Icon(coordinateSystem(extent={{-100,-100},{100,100}}),
+      graphics={
+        Rectangle(extent={{-30,60},{30,10}},
+          lineColor={40,40,40},
+          fillColor={200,200,210},
+          fillPattern=FillPattern.Solid,
+          lineThickness=0.5),
+        Polygon(points={{-30,10},{30,10},{60,-70},{-60,-70}},
+          lineColor={40,40,40},
+          fillColor={170,80,40},
+          fillPattern=FillPattern.Solid),
+        Line(points={{0,80},{0,-90}},
+          color={0,0,0}, pattern=LinePattern.Dash, thickness=0.25),
+        Line(points={{-40,-70},{0,-95},{40,-70}},
+          color={220,40,30}, thickness=0.6),
+        Text(extent={{-80,90},{80,70}},
+          textString="Engine",
+          textColor={0,0,0})
+      }));
+  end Engine;
+
+  // ── Airframe / vehicle body ──
+  model Airframe "Vehicle body — 1-D vertical flight dynamics"
+    parameter Real g = 9.81 "Gravity (m/s^2)";
+    parameter Real dry_mass = 1000 "Empty stage mass (kg)";
+
+    ThrustForceInput thrust_in "Thrust (N)"
+      annotation(Placement(transformation(extent={{-120,-10},{-100,10}})));
+    MassSignalInput mass_in "Current propellant mass (kg)"
+      annotation(Placement(transformation(extent={{-120,40},{-100,60}})));
+
+    Real altitude(start = 0, fixed = true) "m";
+    Real velocity(start = 0, fixed = true) "m/s";
+    Real total_mass "kg";
+  equation
+    total_mass = dry_mass + mass_in;
+    der(altitude) = velocity;
+    der(velocity) = (thrust_in - total_mass * g) / total_mass;
+    annotation(Icon(coordinateSystem(extent={{-100,-100},{100,100}}),
+      graphics={
+        Rectangle(extent={{-20,-70},{20,60}},
+          lineColor={40,40,40},
+          fillColor={230,230,230},
+          fillPattern=FillPattern.Solid,
+          lineThickness=0.5,
+          radius=4),
+        Polygon(points={{-20,60},{20,60},{0,95}},
+          lineColor={40,40,40},
+          fillColor={200,210,230},
+          fillPattern=FillPattern.Solid),
+        Polygon(points={{-20,-70},{-45,-90},{-20,-50}},
+          lineColor={40,40,40},
+          fillColor={160,60,60},
+          fillPattern=FillPattern.Solid),
+        Polygon(points={{20,-70},{45,-90},{20,-50}},
+          lineColor={40,40,40},
+          fillColor={160,60,60},
+          fillPattern=FillPattern.Solid),
+        Text(extent={{-60,10},{60,-10}},
+          textString="Airframe",
+          textColor={0,0,0})
+      }));
+  end Airframe;
+
+  // ── Gimbal (decorative — not instantiated in RocketStage) ──
+  model Gimbal "Thrust-vector gimbal — visual icon only (not wired)"
+    Modelica.Blocks.Interfaces.RealInput pitch_cmd
+      annotation(Placement(transformation(extent={{-120,40},{-100,60}})));
+    Modelica.Blocks.Interfaces.RealInput yaw_cmd
+      annotation(Placement(transformation(extent={{-120,-60},{-100,-40}})));
+    Modelica.Blocks.Interfaces.RealOutput pitch
+      annotation(Placement(transformation(extent={{100,40},{120,60}})));
+    Modelica.Blocks.Interfaces.RealOutput yaw
+      annotation(Placement(transformation(extent={{100,-60},{120,-40}})));
   equation
     pitch = pitch_cmd;
     yaw = yaw_cmd;

@@ -207,6 +207,48 @@ pub mod ui;
 /// Bundled Modelica models for web deployment.
 /// Available on all targets, but primarily used for wasm builds.
 pub mod models;
+pub mod sim_stream;
+pub use sim_stream::{new_sim_stream, SimSnapshot, SimStream, VarHistory, SimSample};
+
+/// UI-thread registry of per-entity lock-free sim streams (Phase A
+/// of the multi-sim architecture). On Compile the command observer
+/// calls [`SimStreamRegistry::get_or_insert`] and ships a clone of
+/// the returned `SimStream` to the worker thread; plots and
+/// telemetry query the registry to get the same handle and render
+/// without locking.
+///
+/// TODO(arch-phase-b): promote this into the full `SimRegistry`
+///   keyed by `SimId` (not `Entity`) so non-Modelica backends can
+///   publish snapshots through the same channel.
+#[derive(Resource, Default)]
+pub struct SimStreamRegistry {
+    streams: std::collections::HashMap<Entity, SimStream>,
+}
+
+impl SimStreamRegistry {
+    /// Existing stream for `entity`, or a freshly-created one. The
+    /// returned handle is cheap to clone (Arc bump) and safe to
+    /// share across threads.
+    pub fn get_or_insert(&mut self, entity: Entity) -> SimStream {
+        self.streams
+            .entry(entity)
+            .or_insert_with(sim_stream::new_sim_stream)
+            .clone()
+    }
+
+    /// Returns the stream for `entity` if one has been registered.
+    /// Readers never need mutable access — they just `load()` the
+    /// `ArcSwap`.
+    pub fn get(&self, entity: Entity) -> Option<&SimStream> {
+        self.streams.get(&entity)
+    }
+
+    /// Drop the stream for `entity`. Called on despawn so stale
+    /// snapshots don't pin memory.
+    pub fn remove(&mut self, entity: Entity) {
+        self.streams.remove(&entity);
+    }
+}
 
 /// System sets for Modelica stepping in [`FixedUpdate`].
 ///
@@ -264,30 +306,23 @@ fn build_modelica_core(app: &mut App) {
         }
     }
 
-    // **Set RUMOCA_CACHE_DIR BEFORE spawning the worker thread.**
+    // Do NOT override `RUMOCA_CACHE_DIR`. Leaving it unset lets
+    // rumoca-session use its XDG default (`~/.cache/rumoca/...`),
+    // which is the same location the standalone `modelica_tester`
+    // CLI and any other rumoca-using tool share. That share is
+    // what keeps startup-to-first-compile fast: a cache populated
+    // by one tool is hit by the next.
     //
-    // This used to be set by `ClassCachePlugin::build`, which runs
-    // *after* `build_modelica_core` as part of the UI plugin. The
-    // worker thread therefore started with `RUMOCA_CACHE_DIR`
-    // unset, rumoca fell back to the XDG default (`~/.cache/rumoca`),
-    // and wrote/read cache files there. Meanwhile the later UI
-    // thread calls went to the workspace path once the env var
-    // finally arrived.
-    //
-    // Result: every worker compile saw a partially-cold cache
-    // (the files it needed were in the *other* directory), and
-    // every UI-side parse saw the opposite. Two caches, neither
-    // complete for both readers — minutes-long compiles on what
-    // should have been a warm cache. Honors any `RUMOCA_CACHE_DIR`
-    // the user already set.
-    if std::env::var_os("RUMOCA_CACHE_DIR").is_none() {
-        let target = lunco_assets::cache_dir().join("rumoca");
-        std::env::set_var("RUMOCA_CACHE_DIR", &target);
-        log::info!(
-            "[ModelicaCore] RUMOCA_CACHE_DIR set to `{}` before worker spawn",
-            target.display()
-        );
-    }
+    // Earlier versions of this code pinned the cache to the
+    // workspace `.cache/rumoca/` to keep CI/test runs deterministic.
+    // In practice that guaranteed *cold* caches for interactive
+    // use: every rumoca source change bumps the artifact-cache key
+    // schema, which invalidates the workspace cache while the XDG
+    // cache — populated by the CLI — still matches. Result: CLI
+    // compiles in ~5 s, workbench in minutes. Sharing the XDG
+    // cache with the CLI is the obvious fix; callers that want a
+    // sandboxed cache can still set `RUMOCA_CACHE_DIR` explicitly
+    // before launching the binary.
 
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -309,6 +344,7 @@ fn build_modelica_core(app: &mut App) {
     }
 
     app.init_resource::<ui::WorkbenchState>();
+    app.init_resource::<SimStreamRegistry>();
 
     app.configure_sets(
         FixedUpdate,
@@ -368,6 +404,14 @@ pub enum ModelicaCommand {
         session_id: u64,
         model_name: String,
         source: String,
+        /// Lock-free snapshot handle the worker publishes into after
+        /// every successful Step (Phase A of the multi-sim arch).
+        /// `None` = legacy path; main thread still receives per-sample
+        /// data via `ModelicaResult.outputs` and pushes it into
+        /// `SignalRegistry`. When `Some`, the worker updates the
+        /// stream directly and the main-thread handler can skip the
+        /// per-sample push loop.
+        stream: Option<SimStream>,
     },
     /// Update parameter values by recompiling with modified source code.
     ///
@@ -503,6 +547,12 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
     let mut current_sessions: HashMap<Entity, u64> = HashMap::default();
     // DAE cache per entity — enables instant Reset and fast Step auto-init
     let mut cached_models: HashMap<Entity, CachedModel> = HashMap::default();
+    // Lock-free publish stream per entity (Phase A of the multi-sim
+    // refactor — see `sim_stream.rs`). The UI side holds a clone of
+    // the same `Arc<ArcSwap<SimSnapshot>>`; every successful Step
+    // publishes a new snapshot so plots render without locking or
+    // involving the main thread in per-sample work.
+    let mut sim_streams: HashMap<Entity, SimStream> = HashMap::default();
     // Lazy compiler construction. `ModelicaCompiler::new` is now
     // cheap — it creates an empty session with no MSL loaded.
     // Actual MSL files are pulled into the session on demand by
@@ -550,7 +600,7 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                             let (stripped_source, input_defaults) = strip_input_defaults(&cached.source);
 
                             let mut opts = StepperOptions::default();
-                            opts.atol = 1e-3; opts.rtol = 1e-3;
+                            opts.atol = 1e-1; opts.rtol = 1e-1;
                             // Recompile stripped source to get a fresh stepper with input slots
                             let compiler = compiler.get_or_insert_with(ModelicaCompiler::new);
                             match compiler.compile_str(&cached.model_name, &stripped_source, "model.mo") {
@@ -621,7 +671,7 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                         match compiler.compile_str(&model_name, &stripped_source, "model.mo") {
                             Ok(comp_res) => {
                                 let mut opts = StepperOptions::default();
-                                opts.atol = 1e-3; opts.rtol = 1e-3;
+                                opts.atol = 1e-1; opts.rtol = 1e-1;
                                 match SimStepper::new(&comp_res.dae, opts) {
                                     Ok(mut stepper) => {
                                         for (name, val) in &input_defaults {
@@ -663,8 +713,16 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                             }
                         }
                     }
-                    ModelicaCommand::Compile { entity, session_id, model_name, source } => {
+                    ModelicaCommand::Compile { entity, session_id, model_name, source, stream } => {
                         current_sessions.insert(entity, session_id);
+                        if let Some(stream) = stream {
+                            // Register the new lock-free publish target
+                            // AND reset the previous snapshot so stale
+                            // history from a prior compile doesn't bleed
+                            // into the new model's horizon.
+                            stream.store(Arc::new(SimSnapshot::empty_at_zero()));
+                            sim_streams.insert(entity, stream);
+                        }
 
                         // Strip input defaults so they become real runtime slots
                         let (stripped_source, input_defaults) = strip_input_defaults(&source);
@@ -673,7 +731,7 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                         match compiler.compile_str(&model_name, &stripped_source, "model.mo") {
                             Ok(comp_res) => {
                                 let mut opts = StepperOptions::default();
-                                opts.atol = 1e-3; opts.rtol = 1e-3;
+                                opts.atol = 1e-1; opts.rtol = 1e-1;
                                 match SimStepper::new(&comp_res.dae, opts) {
                                     Ok(mut stepper) => {
                                         // Set input defaults via set_input so they're runtime-changeable
@@ -745,7 +803,7 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                                     let compiler = compiler.get_or_insert_with(ModelicaCompiler::new);
                                     if let Ok(comp_res) = compiler.compile_str(&cached.model_name, &stripped_source, "model.mo") {
                                         let mut opts = StepperOptions::default();
-                                        opts.atol = 1e-3; opts.rtol = 1e-3;
+                                        opts.atol = 1e-1; opts.rtol = 1e-1;
                                         if let Ok(mut s) = SimStepper::new(&comp_res.dae, opts) {
                                             // Set input defaults first
                                             for (name, val) in &input_defaults {
@@ -767,7 +825,7 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                                 match compiler.compile_str(&model_name, &source, &model_path.to_string_lossy()) {
                                     Ok(comp_res) => {
                                         let mut opts = StepperOptions::default();
-                                        opts.atol = 1e-3; opts.rtol = 1e-3;
+                                        opts.atol = 1e-1; opts.rtol = 1e-1;
                                         if let Ok(mut s) = SimStepper::new(&comp_res.dae, opts) {
                                             for (name, val) in &inputs { let _ = s.set_input(name, *val); }
                                             cached_models.insert(entity, CachedModel {
@@ -808,8 +866,26 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                                     // this single call supersedes the old two-loop
                                     // variable_names + input_names collection.
                                     let outputs = collect_stepper_observables(stepper);
+                                    let new_time = stepper.time();
+                                    // Phase A: also publish to the
+                                    // lock-free stream so consumers that
+                                    // wire into it (plots, telemetry —
+                                    // see TODO arch-phase-a2) can read
+                                    // without main-thread round-tripping.
+                                    // We continue to ship `outputs`
+                                    // through the crossbeam channel as
+                                    // well until plots have migrated;
+                                    // once they read from `SimStream`
+                                    // exclusively, the `outputs` Vec
+                                    // can be cleared here to drop the
+                                    // per-sample main-thread push loop.
+                                    if let Some(stream) = sim_streams.get(&entity) {
+                                        let prev = stream.load();
+                                        let next = SimSnapshot::advance(&prev, new_time, &outputs);
+                                        stream.store(Arc::new(next));
+                                    }
                                     let _ = tx_inner.send(ModelicaResult {
-                                        entity, session_id, new_time: stepper.time(),
+                                        entity, session_id, new_time,
                                         outputs, error: None, log_message: None,
                                         is_new_model: false, detected_symbols: Vec::new(),
                                         is_parameter_update: false, is_reset: false,
@@ -828,6 +904,7 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                     ModelicaCommand::Despawn { entity } => {
                         steppers.remove(&entity);
                         cached_models.remove(&entity);
+                        sim_streams.remove(&entity);
                     }
                 }
             }));
@@ -982,7 +1059,7 @@ fn inline_worker_process(
                         let compiler = compiler.get_or_insert_with(ModelicaCompiler::new);
                         if let Ok(comp_res) = compiler.compile_str(&cached.model_name, &stripped_source, "model.mo") {
                             let mut opts = StepperOptions::default();
-                            opts.atol = 1e-3; opts.rtol = 1e-3;
+                            opts.atol = 1e-1; opts.rtol = 1e-1;
                             if let Ok(mut s) = SimStepper::new(&comp_res.dae, opts) {
                                 for (name, val) in &input_defaults { let _ = s.set_input(name, *val); }
                                 for (name, val) in &inputs { let _ = s.set_input(name, *val); }
@@ -1034,12 +1111,16 @@ fn inline_worker_process(
                 });
             }
         }
-        ModelicaCommand::Compile { entity, session_id, model_name, source } => {
+        ModelicaCommand::Compile { entity, session_id, model_name, source, stream: _stream } => {
+            // NB: the wasm inline worker runs on the Bevy main thread
+            // today and does not publish to a lock-free SimStream.
+            // Phase A lands on desktop first; TODO(arch-phase-b) wire
+            // the wasm path once the inline worker moves off-thread.
             w.current_sessions.insert(entity, session_id);
             let (stripped_source, input_defaults) = strip_input_defaults(&source);
 
             let mut opts = StepperOptions::default();
-            opts.atol = 1e-3; opts.rtol = 1e-3;
+            opts.atol = 1e-1; opts.rtol = 1e-1;
             let tx = &channels.tx_res;
 
             let compiler = compiler.get_or_insert_with(ModelicaCompiler::new);
@@ -1096,7 +1177,7 @@ fn inline_worker_process(
             if let Some(cached) = w.cached_models.get(&entity) {
                 let (stripped_source, input_defaults) = strip_input_defaults(&cached.source);
                 let mut opts = StepperOptions::default();
-                opts.atol = 1e-3; opts.rtol = 1e-3;
+                opts.atol = 1e-1; opts.rtol = 1e-1;
                 let compiler = compiler.get_or_insert_with(ModelicaCompiler::new);
                 match compiler.compile_str(&cached.model_name, &stripped_source, "model.mo") {
                     Ok(comp_res) => {
@@ -1158,7 +1239,7 @@ fn inline_worker_process(
             let (stripped_source, input_defaults) = strip_input_defaults(&source);
 
             let mut opts = StepperOptions::default();
-            opts.atol = 1e-3; opts.rtol = 1e-3;
+            opts.atol = 1e-1; opts.rtol = 1e-1;
             let tx = &channels.tx_res;
 
             let compiler = compiler.get_or_insert_with(ModelicaCompiler::new);
@@ -1241,6 +1322,13 @@ pub struct ModelicaModel {
     /// be recomputed on reload.
     #[reflect(ignore)]
     pub descriptions: HashMap<String, String>,
+    /// Per-parameter `(min, max)` bounds lifted from Modelica
+    /// `parameter Real x(min=..., max=...) = ...` declarations.
+    /// `None` at either end means unbounded on that side. The
+    /// Telemetry panel clamps the DragValue to this range so users
+    /// can't push a model out of its authored operating envelope.
+    #[reflect(ignore)]
+    pub parameter_bounds: HashMap<String, (Option<f64>, Option<f64>)>,
     /// Canonical id of the Modelica source document backing this entity,
     /// looked up in [`ui::ModelicaDocumentRegistry`]. `DocumentId::default()`
     /// (`0`) means "no document assigned yet"; systems should treat it as
@@ -1429,7 +1517,16 @@ fn handle_modelica_responses(
                     .join(format!("{}_{}", result.entity.index(), result.entity.generation()))
                     .join("model.mo");
                 model.variables.clear();
-                model.paused = false;
+                // Only unpause on a *successful* Compile. A failed
+                // Compile leaves the stepper empty, and unpausing would
+                // cause `spawn_modelica_requests` to ship a Step →
+                // worker recompiles from scratch (~10s) → error → repeat
+                // forever. The earlier error-branch `paused = true`
+                // marks the model as blocked; the user resumes
+                // explicitly after fixing the source.
+                if result.error.is_none() {
+                    model.paused = false;
+                }
 
                 // Merge input names from the worker with values the UI already extracted from source.
                 // The UI extracts defaults from source code (e.g., `input Real g = 9.81` → g: 9.81),
@@ -1515,6 +1612,13 @@ fn handle_modelica_responses(
             if result.is_new_model {
                 if let Some(reg) = viz_registry.as_deref_mut() {
                     let parameters = model.parameters.clone();
+                    // Clear stale bindings from any prior model/entity so
+                    // switching models doesn't leave old signals plotted.
+                    // The default plot follows the freshly-compiled model;
+                    // user-created plots retain their explicit bindings.
+                    if let Some(cfg) = reg.get_mut(ui::viz::DEFAULT_MODELICA_GRAPH) {
+                        cfg.inputs.clear();
+                    }
                     ui::viz::auto_bind_observables(
                         reg,
                         result.entity,

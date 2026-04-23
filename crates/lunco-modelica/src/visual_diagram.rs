@@ -64,6 +64,40 @@ impl Default for DiagramNodeId {
     fn default() -> Self { Self::new() }
 }
 
+/// Causality classification of a connector port, derived from the
+/// connector class's variable declarations. Drives the port marker
+/// shape (square / triangle / circle) and the wire's arrowhead
+/// behaviour in the canvas renderer — replaces earlier leaf-name
+/// heuristics (`ends_with("Input")`) that only worked for MSL's
+/// naming conventions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum PortKind {
+    /// Connector has exactly one `input` variable and no `flow`
+    /// variables — canonical signal input (RealInput, BooleanInput).
+    Input,
+    /// Connector has exactly one `output` variable and no `flow`
+    /// variables — canonical signal output (RealOutput, …).
+    Output,
+    /// Connector has any `flow` variable (physical connector with
+    /// conservation), or neither / both causality variants — the
+    /// acausal case (Pin, Flange, HeatPort, FluidPort, custom fuel
+    /// port). Rendered as a filled circle; wire has no arrowhead.
+    #[default]
+    Acausal,
+}
+
+/// Metadata for one `flow` variable declared in a connector class —
+/// the kind of variable whose sign decides animation direction and
+/// whose declared unit labels the hover tooltip.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct FlowVarMeta {
+    /// Variable name inside the connector (e.g. `"m_dot"`, `"i"`).
+    pub name: String,
+    /// Unit string from `Real(unit="…")` / `SI.MassFlowRate` quantity
+    /// — empty when the connector didn't declare one.
+    pub unit: String,
+}
+
 /// A port definition for an MSL component.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PortDef {
@@ -83,6 +117,24 @@ pub struct PortDef {
     pub x: f32,
     #[serde(default)]
     pub y: f32,
+    /// Wire color (RGB 0..=255) sourced from the connector class's
+    /// `Icon` annotation — `lineColor` of the first colored graphic,
+    /// `fillColor` as fallback. `None` means "fall back to the
+    /// leaf-name palette in `wire_color_for`". Mirrors the OMEdit /
+    /// Dymola behavior where wire colors come from each connector
+    /// class's icon definition rather than a hardcoded table.
+    #[serde(default)]
+    pub color: Option<[u8; 3]>,
+    /// Causality classification derived from the connector class's
+    /// variables. Drives port shape + arrowhead.
+    #[serde(default)]
+    pub kind: PortKind,
+    /// Flow-variable descriptors. Empty for causal connectors.
+    /// Non-empty → renderer samples each var from the per-frame
+    /// state snapshot to animate flow and populate tooltips with
+    /// the authored unit.
+    #[serde(default)]
+    pub flow_vars: Vec<FlowVarMeta>,
 }
 
 /// A parameter definition for an MSL component.
@@ -134,6 +186,30 @@ pub struct MSLComponentDef {
     /// connected instances and have very different semantics.
     #[serde(default)]
     pub is_expandable_connector: bool,
+    /// Quoted string written after the Modelica class name, cleaned
+    /// of surrounding `"…"`. Populated by `msl_indexer`. New code
+    /// should prefer this over the `description` field (which stores
+    /// a Debug-formatted token list for legacy reasons).
+    #[serde(default)]
+    pub short_description: Option<String>,
+    /// First plain-text paragraph of `annotation(Documentation(info=…))`,
+    /// HTML-stripped. Used by the Welcome / MSL Library browser for
+    /// richer card copy. `None` when the class has no Documentation.
+    #[serde(default)]
+    pub documentation_info: Option<String>,
+    /// True when `msl_path` contains `.Examples.` — cheap flag for
+    /// the example browser to filter on without re-scanning the path.
+    #[serde(default)]
+    pub is_example: bool,
+    /// Second-level MSL package name for navigation grouping —
+    /// `Modelica.Electrical.Analog.Examples.*` → `"Electrical"`.
+    /// Empty for non-MSL classes.
+    #[serde(default)]
+    pub domain: String,
+    /// Lower-case Modelica class keyword: `"model"`, `"block"`,
+    /// `"connector"`, `"record"`, …
+    #[serde(default)]
+    pub class_kind: String,
 }
 
 /// A node instance placed on the visual canvas.

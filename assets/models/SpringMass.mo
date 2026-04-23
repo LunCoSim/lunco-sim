@@ -1,3 +1,4 @@
+// tagline: Mass–spring–damper second-order system
 model SpringMass
   parameter Real m = 1.0 "Mass in kg";
   parameter Real k = 10.0 "Spring constant in N/m";

@@ -1,3 +1,4 @@
+// tagline: Projectile under gravity with floor collisions
 model BouncyBall
   parameter Real g = 9.81 "Gravity";
   parameter Real k_floor = 1000.0 "Floor stiffness";

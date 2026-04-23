@@ -9,6 +9,27 @@ use crate::ui::{CompileState, CompileStates, ModelicaDocumentRegistry, Workbench
 use crate::ui::viz::{is_signal_plotted, set_signal_plotted};
 use crate::{ModelicaModel, ModelicaChannels, ModelicaCommand};
 
+/// Look up a description string with a leaf-name fallback. Runtime
+/// variable names are fully-qualified (e.g. `"engine.thrust"`) but
+/// `extract_descriptions` keys by the local component name
+/// (`"thrust"` declared inside `model Engine`). Try the full name
+/// first — covers top-level components of the target class — then
+/// fall back to the last dotted segment.
+fn lookup_desc<'a>(
+    descriptions: &'a HashMap<String, String>,
+    name: &str,
+) -> Option<&'a String> {
+    if let Some(d) = descriptions.get(name) {
+        return Some(d);
+    }
+    let leaf = name.rsplit('.').next().unwrap_or(name);
+    if leaf != name {
+        descriptions.get(leaf)
+    } else {
+        None
+    }
+}
+
 /// Telemetry panel — model parameters, inputs, and variable plotting toggles.
 pub struct TelemetryPanel;
 
@@ -57,11 +78,11 @@ impl Panel for TelemetryPanel {
         }
 
         // Read model snapshot for display
-        let (model_name, is_paused, current_time, parameters, inputs, descriptions) = {
+        let (model_name, is_paused, current_time, parameters, inputs, descriptions, parameter_bounds) = {
             if let Some(model) = world.get::<ModelicaModel>(entity) {
                 (model.model_name.clone(), model.paused, model.current_time,
                  model.parameters.clone(), model.inputs.clone(),
-                 model.descriptions.clone())
+                 model.descriptions.clone(), model.parameter_bounds.clone())
             } else {
                 ui.label("Model not found.");
                 return;
@@ -129,11 +150,28 @@ impl Panel for TelemetryPanel {
                         let label = egui::Label::new(format!("{key:16}:"))
                             .sense(egui::Sense::hover());
                         let resp = ui.add(label);
-                        if let Some(desc) = descriptions.get(key) {
+                        if let Some(desc) = lookup_desc(&descriptions, key) {
                             resp.on_hover_text(desc);
                         }
                         let mut v = val;
-                        if ui.add(egui::DragValue::new(&mut v).speed(0.01).fixed_decimals(2)).changed() {
+                        // Honor `parameter Real x(min=..., max=...)`
+                        // modifiers by clamping the DragValue to the
+                        // authored operating range. Unbounded sides
+                        // default to ±f64::INFINITY so the user can
+                        // still go anywhere if the model didn't
+                        // declare a bound.
+                        let (mn, mx) = parameter_bounds
+                            .get(key)
+                            .copied()
+                            .unwrap_or((None, None));
+                        let dv = egui::DragValue::new(&mut v)
+                            .speed(0.01)
+                            .fixed_decimals(2)
+                            .range(
+                                mn.unwrap_or(f64::NEG_INFINITY)
+                                    ..=mx.unwrap_or(f64::INFINITY),
+                            );
+                        if ui.add(dv).changed() {
                             let mut trigger_update = false;
                             let mut model_name = String::new();
                             let mut session_id = 0;
@@ -209,11 +247,23 @@ impl Panel for TelemetryPanel {
                         let label = egui::Label::new(format!("{key:16}:"))
                             .sense(egui::Sense::hover());
                         let resp = ui.add(label);
-                        if let Some(desc) = descriptions.get(&key) {
+                        if let Some(desc) = lookup_desc(&descriptions, &key) {
                             resp.on_hover_text(desc);
                         }
                         let mut v = val;
-                        ui.add(egui::DragValue::new(&mut v).speed(0.1).fixed_decimals(2));
+                        let (mn, mx) = parameter_bounds
+                            .get(&key)
+                            .copied()
+                            .unwrap_or((None, None));
+                        ui.add(
+                            egui::DragValue::new(&mut v)
+                                .speed(0.1)
+                                .fixed_decimals(2)
+                                .range(
+                                    mn.unwrap_or(f64::NEG_INFINITY)
+                                        ..=mx.unwrap_or(f64::INFINITY),
+                                ),
+                        );
                         if (v - val).abs() > 1e-10 {
                             if let Ok(mut m) = world.query::<&mut ModelicaModel>().get_mut(world, entity) {
                                 if let Some(inp) = m.inputs.get_mut(&key) { *inp = v; }
@@ -273,8 +323,18 @@ impl Panel for TelemetryPanel {
                     }
                     let label = egui::Label::new(&name).sense(egui::Sense::hover());
                     let resp = ui.add(label);
-                    if let Some(desc) = descriptions.get(&name) {
+                    if let Some(desc) = lookup_desc(&descriptions, &name).filter(|d| !d.trim().is_empty()) {
+                        // Hover for the full string (can be long),
+                        // plus a muted inline preview so users who
+                        // never hover still see the hint exists.
                         resp.on_hover_text(desc);
+                        ui.label(
+                            egui::RichText::new(desc.trim())
+                                .italics()
+                                .color(egui::Color32::from_rgb(140, 140, 160))
+                                .size(11.0),
+                        )
+                        .on_hover_text(desc);
                     }
                 });
                 let _ = is_signal_plotted; // re-export available for future UIs

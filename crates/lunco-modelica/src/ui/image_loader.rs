@@ -62,13 +62,33 @@ fn mime_for(uri: &str) -> Option<String> {
     Some(m.to_string())
 }
 
+/// Per-URI state. `Pending` entries carry a shared slot the worker
+/// thread fills when the disk read completes; the loader checks it
+/// on subsequent polls and promotes to `Ready` without ever
+/// touching the filesystem from the UI thread.
+enum Slot {
+    /// Worker thread spawned; result not yet available.
+    Pending(Arc<Mutex<Option<Result<Arc<[u8]>, String>>>>),
+    /// Bytes ready — served on every future poll.
+    Ready(Arc<[u8]>),
+    /// Terminal error — served on every future poll (no retry).
+    Failed(String),
+}
+
 /// Image loader that resolves `modelica://Package/sub/path.png`
-/// against the on-disk MSL tree. Bytes are cached in-memory after the
-/// first read — a typical Modelica doc reuses the same image in
-/// multiple classes, and re-reading from disk per frame would stutter.
+/// against the on-disk MSL tree.
+///
+/// Every disk read runs on a background thread: first poll spawns
+/// the worker and returns `BytesPoll::Pending`; egui's image loader
+/// then re-polls each frame, and the first poll after the worker
+/// completes promotes the slot to `Ready`. This keeps the UI thread
+/// free — large SVGs, cold-cache Documentation assets, and burst
+/// loads (e.g. re-layout after a window resize) don't stall the
+/// next frame. The in-process cache covers hot reads so the same
+/// image never hits disk twice.
 pub struct ModelicaImageLoader {
-    /// `modelica://…` URI → file bytes, populated lazily.
-    cache: Mutex<std::collections::HashMap<String, Arc<[u8]>>>,
+    /// `modelica://…` URI → current load state.
+    cache: Mutex<std::collections::HashMap<String, Slot>>,
 }
 
 impl ModelicaImageLoader {
@@ -117,7 +137,7 @@ impl egui::load::BytesLoader for ModelicaImageLoader {
 
     fn load(
         &self,
-        _ctx: &egui::Context,
+        ctx: &egui::Context,
         uri: &str,
     ) -> egui::load::BytesLoadResult {
         if !uri.starts_with("modelica://") {
@@ -130,58 +150,117 @@ impl egui::load::BytesLoader for ModelicaImageLoader {
         #[cfg(target_arch = "wasm32")]
         {
             let _ = uri;
+            let _ = ctx;
             return Err(egui::load::LoadError::NotSupported);
         }
-        // Cache hit → return immediately.
-        if let Some(bytes) = self.cache.lock().ok().and_then(|c| c.get(uri).cloned()) {
-            return Ok(egui::load::BytesPoll::Ready {
-                size: None,
-                bytes: egui::load::Bytes::Shared(bytes),
-                mime: mime_for(uri),
-            });
+
+        // --- State machine, all transitions under one lock ---
+        let mut cache = match self.cache.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+
+        // Existing slot — promote Pending→Ready if the worker
+        // finished, then serve.
+        if let Some(slot) = cache.get(uri) {
+            match slot {
+                Slot::Ready(bytes) => {
+                    return Ok(egui::load::BytesPoll::Ready {
+                        size: None,
+                        bytes: egui::load::Bytes::Shared(bytes.clone()),
+                        mime: mime_for(uri),
+                    });
+                }
+                Slot::Failed(msg) => {
+                    return Err(egui::load::LoadError::Loading(msg.clone()));
+                }
+                Slot::Pending(slot_arc) => {
+                    // Peek at the shared result slot. `try_lock` so
+                    // we never block the UI on the worker's lock —
+                    // if contended we just report Pending for this
+                    // frame and check again next time.
+                    let maybe_ready = slot_arc
+                        .try_lock()
+                        .ok()
+                        .and_then(|guard| guard.clone());
+                    match maybe_ready {
+                        Some(Ok(bytes)) => {
+                            cache.insert(uri.to_string(), Slot::Ready(bytes.clone()));
+                            return Ok(egui::load::BytesPoll::Ready {
+                                size: None,
+                                bytes: egui::load::Bytes::Shared(bytes),
+                                mime: mime_for(uri),
+                            });
+                        }
+                        Some(Err(msg)) => {
+                            cache.insert(uri.to_string(), Slot::Failed(msg.clone()));
+                            return Err(egui::load::LoadError::Loading(msg));
+                        }
+                        None => {
+                            return Ok(egui::load::BytesPoll::Pending { size: None });
+                        }
+                    }
+                }
+            }
         }
-        // Miss: resolve + read. Small and sync — the cache covers
-        // subsequent reads, and the first-frame-per-image cost is
-        // bounded by disk I/O which is sub-millisecond for MSL's
-        // small PNG assets.
+
+        // Fresh URI → resolve, spawn, return Pending.
         let path = match Self::resolve_uri(uri) {
             Some(p) => p,
-            None => return Err(egui::load::LoadError::Loading(
-                format!("modelica:// URI outside MSL root: {uri}"),
-            )),
+            None => {
+                let msg = format!("modelica:// URI outside MSL root: {uri}");
+                cache.insert(uri.to_string(), Slot::Failed(msg.clone()));
+                return Err(egui::load::LoadError::Loading(msg));
+            }
         };
-        match std::fs::read(&path) {
-            Ok(bytes) => {
-                log::info!(
-                    "[ModelicaImageLoader] loaded {} → {} ({} bytes)",
-                    uri,
-                    path.display(),
-                    bytes.len(),
-                );
-                let arc: Arc<[u8]> = Arc::from(bytes);
-                if let Ok(mut c) = self.cache.lock() {
-                    c.insert(uri.to_string(), arc.clone());
-                }
-                Ok(egui::load::BytesPoll::Ready {
-                    size: None,
-                    bytes: egui::load::Bytes::Shared(arc),
-                    mime: mime_for(uri),
-                })
+
+        // Shared result slot written by the worker once the read
+        // completes. Using `std::thread::spawn` (not a bevy task
+        // pool) keeps this module egui-only — no bevy dependency
+        // creeping into the loader surface.
+        let result: Arc<Mutex<Option<Result<Arc<[u8]>, String>>>> =
+            Arc::new(Mutex::new(None));
+        cache.insert(uri.to_string(), Slot::Pending(result.clone()));
+        drop(cache);
+
+        let uri_for_worker = uri.to_string();
+        // Kick egui to repaint when the bytes land — otherwise a
+        // pending image wouldn't drive any redraw and the user
+        // would have to move the mouse to see it appear.
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let read_result: Result<Arc<[u8]>, String> =
+                match std::fs::read(&path) {
+                    Ok(bytes) => {
+                        log::info!(
+                            "[ModelicaImageLoader] loaded {} → {} ({} bytes)",
+                            uri_for_worker,
+                            path.display(),
+                            bytes.len(),
+                        );
+                        Ok(Arc::from(bytes))
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "[ModelicaImageLoader] read failed: {} → {}: {}",
+                            uri_for_worker,
+                            path.display(),
+                            e,
+                        );
+                        Err(format!(
+                            "modelica:// image read failed ({}): {}",
+                            path.display(),
+                            e
+                        ))
+                    }
+                };
+            if let Ok(mut guard) = result.lock() {
+                *guard = Some(read_result);
             }
-            Err(e) => {
-                log::warn!(
-                    "[ModelicaImageLoader] read failed: {} → {}: {}",
-                    uri,
-                    path.display(),
-                    e,
-                );
-                Err(egui::load::LoadError::Loading(format!(
-                    "modelica:// image read failed ({}): {}",
-                    path.display(),
-                    e,
-                )))
-            }
-        }
+            ctx.request_repaint();
+        });
+
+        Ok(egui::load::BytesPoll::Pending { size: None })
     }
 
     fn forget(&self, uri: &str) {
@@ -199,7 +278,14 @@ impl egui::load::BytesLoader for ModelicaImageLoader {
     fn byte_size(&self) -> usize {
         self.cache
             .lock()
-            .map(|c| c.values().map(|b| b.len()).sum::<usize>())
+            .map(|c| {
+                c.values()
+                    .map(|s| match s {
+                        Slot::Ready(b) => b.len(),
+                        _ => 0,
+                    })
+                    .sum::<usize>()
+            })
             .unwrap_or(0)
     }
 }

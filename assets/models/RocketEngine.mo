@@ -1,3 +1,4 @@
+// tagline: Liquid rocket — thrust, mass flow, total impulse (equation-only)
 model RocketEngine
   "Simplified liquid rocket engine — thrust from propellant mass flow and exhaust velocity"
 

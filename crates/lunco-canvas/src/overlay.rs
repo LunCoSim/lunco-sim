@@ -131,7 +131,11 @@ impl Overlay for NavBarOverlay {
         // (above the canvas's own layer) keeps the bar always
         // accessible regardless of node positions.
         let fg_layer = egui::LayerId::new(
-            egui::Order::Foreground,
+            // Order::Middle — sits above canvas content but BELOW
+            // popup menus / tooltips (which use Foreground+).
+            // Earlier we used Foreground, but right-click context
+            // menus then rendered behind the nav bar.
+            egui::Order::Middle,
             ui.id().with("canvas_nav_bar"),
         );
         let painter = ui.ctx().layer_painter(fg_layer);

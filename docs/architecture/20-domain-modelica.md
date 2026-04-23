@@ -528,6 +528,8 @@ fork (unlocks acausal connectors).
 - [`../../crates/lunco-cosim/README.md`](../../crates/lunco-cosim/README.md) — cosim-level engineering docs
 - [`10-document-system.md`](10-document-system.md) — shared Document System foundation
 - [`13-twin-and-workflow.md`](13-twin-and-workflow.md) — how Modelica files live inside a Twin
+- [`14-simulation-layers.md`](14-simulation-layers.md) — Twin / Scenario / Run / Model lifecycle the Modelica stepper participates in
+- [`15-adaptive-fidelity.md`](15-adaptive-fidelity.md) — multi-clock + LoD (future)
 - [`22-domain-cosim.md`](22-domain-cosim.md) — cosim pipeline ordering
 - [`23-domain-environment.md`](23-domain-environment.md) — how environment (gravity, atmosphere) flows into Modelica inputs
 - [`24-domain-sysml.md`](24-domain-sysml.md) — SysML as the structural peer; references Modelica models as realizations

@@ -146,7 +146,7 @@ impl ModelicaComponentBuilder {
                     comp,
                     &target,
                     &self.ast,
-                    &crate::class_cache::peek_msl_class_cached,
+                    &crate::class_cache::peek_or_load_msl_class,
                 );
                 let qualified = format!("{}.{}", target, comp_name);
                 let node_id = graph.add_node_named(
@@ -165,7 +165,7 @@ impl ModelicaComponentBuilder {
 
             // Add connections as edges
             for eq in &class.equations {
-                if let Equation::Connect { lhs, rhs } = eq {
+                if let Equation::Connect { lhs, rhs, .. } = eq {
                     let (src_node, src_port) = parse_connect_reference(lhs);
                     let (tgt_node, tgt_port) = parse_connect_reference(rhs);
 
@@ -296,7 +296,7 @@ impl ModelicaComponentBuilder {
 
             // Connect connector nodes via `connect()` equations
             for eq in &class.equations {
-                if let Equation::Connect { lhs, rhs } = eq {
+                if let Equation::Connect { lhs, rhs, .. } = eq {
                     let (src_node, src_port) = parse_connect_reference(lhs);
                     let (tgt_node, tgt_port) = parse_connect_reference(rhs);
 
@@ -420,6 +420,36 @@ impl ModelicaComponentBuilder {
                 format!("{within_prefix}.{short}")
             }
         };
+        // Models are the canonical "open this in the canvas" choice;
+        // connectors and types alone have no diagram. Walk in order:
+        //   1. top-level models / blocks
+        //   2. nested-in-package models / blocks
+        //   3. anything non-package at top level (last resort —
+        //      includes connectors, records, types)
+        let is_diagrammable = |t: ClassType| {
+            matches!(
+                t,
+                ClassType::Model | ClassType::Block | ClassType::Class
+            )
+        };
+        for (name, class) in &self.ast.classes {
+            if is_diagrammable(class.class_type.clone()) {
+                return qualify(name);
+            }
+        }
+        for (pkg_name, pkg) in &self.ast.classes {
+            if pkg.class_type != ClassType::Package {
+                continue;
+            }
+            for (inner_name, inner) in &pkg.classes {
+                if is_diagrammable(inner.class_type.clone()) {
+                    return qualify(&format!("{pkg_name}.{inner_name}"));
+                }
+            }
+        }
+        // Fallback: first non-package anything (connectors, records,
+        // types). Better than picking the package and rendering
+        // nothing.
         for (name, class) in &self.ast.classes {
             if class.class_type != ClassType::Package {
                 return qualify(name);
@@ -730,6 +760,43 @@ fn ports_for_component(
         return extract_component_ports(comp);
     }
     ports
+}
+
+/// Resolve a type reference to a `ClassDef` via the scope chain
+/// rooted at `owner_qualified_path`. Searches the local AST first,
+/// then falls back to the supplied MSL resolver. Returns `None` if
+/// no candidate path resolves.
+///
+/// Public so the projector can read connector classes' `Icon`
+/// annotations (for OMEdit-style wire colors) without duplicating
+/// scope-chain logic.
+pub fn resolve_class_by_scope_pub(
+    type_ref: &str,
+    owner_qualified_path: &str,
+    ast: &StoredDefinition,
+    msl_resolve: &dyn Fn(&str) -> Option<std::sync::Arc<ClassDef>>,
+) -> Option<std::sync::Arc<ClassDef>> {
+    let candidates = scope_chain_candidates(type_ref, Some(owner_qualified_path));
+    for cand in &candidates {
+        if let Some(c) = find_class_by_qualified_name(ast, cand) {
+            return Some(std::sync::Arc::new(c.clone()));
+        }
+        if let Some(arc) = msl_resolve(cand) {
+            return Some(arc);
+        }
+    }
+    None
+}
+
+/// Public re-export of [`is_connector_type`] for callers outside this
+/// module (notably the projector's local-class port extractor).
+pub fn is_connector_type_pub(
+    type_ref: &str,
+    owner_qualified_path: &str,
+    ast: &StoredDefinition,
+    msl_resolve: &dyn Fn(&str) -> Option<std::sync::Arc<ClassDef>>,
+) -> bool {
+    is_connector_type(type_ref, owner_qualified_path, ast, msl_resolve)
 }
 
 /// True when `type_ref` resolves to a `connector` class via the

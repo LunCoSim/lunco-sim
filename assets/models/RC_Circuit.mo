@@ -1,3 +1,4 @@
+// tagline: Single-stage RC — the minimal schematic
 model RC_Circuit
   parameter Real V_source = 5 "Source voltage in Volts";
   parameter Real R = 100 "Series resistance in Ohms";

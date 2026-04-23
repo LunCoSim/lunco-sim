@@ -26,6 +26,17 @@ fn main() {
     #[cfg(feature = "lunco-api")]
     app.add_plugins(lunco_api::LunCoApiPlugin::default());
 
+    // Force continuous frame rate even when the window is unfocused
+    // so the HTTP API stays responsive under automation. Default
+    // winit throttles unfocused windows; the bridge-drain system
+    // only runs on ticks, so a throttled window masquerades as an
+    // "app hang" when driving the workbench from curl.
+    use bevy::winit::{UpdateMode, WinitSettings};
+    app.insert_resource(WinitSettings {
+        focused_mode: UpdateMode::Continuous,
+        unfocused_mode: UpdateMode::Continuous,
+    });
+
     app.run();
 }
 

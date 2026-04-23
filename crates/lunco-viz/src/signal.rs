@@ -198,6 +198,14 @@ impl SignalRegistry {
         self.scalar_history.get(sig)
     }
 
+    /// Iterate every (`SignalRef`, `ScalarHistory`) pair the registry
+    /// holds. Used by per-frame snapshot builders that need to copy
+    /// data into a `&dyn Any` carrier (e.g. canvas plot nodes whose
+    /// `NodeVisual::draw` has no `World` access).
+    pub fn iter_scalar(&self) -> impl Iterator<Item = (&SignalRef, &ScalarHistory)> {
+        self.scalar_history.iter()
+    }
+
     pub fn signal_type(&self, sig: &SignalRef) -> Option<SignalType> {
         self.types.get(sig).copied()
     }
@@ -227,4 +235,105 @@ impl SignalRegistry {
             h.clear();
         }
     }
+}
+
+/// Build a CSV table from the given signals' histories.
+///
+/// Output is `time,<path1>,<path2>,...` with one row per distinct
+/// timestamp across all included signals, ascending. Each column is
+/// forward-filled (last known value) when that signal has no sample
+/// at that exact timestamp; cells before a signal's first sample are
+/// empty. Signals with no history are skipped.
+pub fn export_signals_to_csv(
+    registry: &SignalRegistry,
+    signals: &[SignalRef],
+    column_labels: &[String],
+) -> String {
+    let cols: Vec<(&str, &ScalarHistory)> = signals
+        .iter()
+        .zip(column_labels.iter())
+        .filter_map(|(s, l)| registry.scalar_history(s).map(|h| (l.as_str(), h)))
+        .collect();
+
+    if cols.is_empty() {
+        return String::from("time\n");
+    }
+
+    // Union all timestamps.
+    let mut times: Vec<f64> = cols
+        .iter()
+        .flat_map(|(_, h)| h.samples.iter().map(|s| s.time))
+        .collect();
+    times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    times.dedup_by(|a, b| (*a - *b).abs() < f64::EPSILON);
+
+    // Header — quote labels containing commas or quotes.
+    let mut out = String::from("time");
+    for (label, _) in &cols {
+        out.push(',');
+        out.push_str(&csv_escape(label));
+    }
+    out.push('\n');
+
+    // Per-column cursor (index of next unread sample).
+    let mut cursors = vec![0usize; cols.len()];
+    let mut last_val = vec![Option::<f64>::None; cols.len()];
+
+    for &t in &times {
+        out.push_str(&format!("{t}"));
+        for (i, (_, hist)) in cols.iter().enumerate() {
+            while cursors[i] < hist.samples.len() && hist.samples[cursors[i]].time <= t {
+                last_val[i] = Some(hist.samples[cursors[i]].value);
+                cursors[i] += 1;
+            }
+            out.push(',');
+            if let Some(v) = last_val[i] {
+                out.push_str(&format!("{v}"));
+            }
+        }
+        out.push('\n');
+    }
+    out
+}
+
+fn csv_escape(s: &str) -> String {
+    if s.contains(',') || s.contains('"') || s.contains('\n') {
+        let escaped = s.replace('"', "\"\"");
+        format!("\"{escaped}\"")
+    } else {
+        s.to_string()
+    }
+}
+
+/// Deterministic colour for a signal path, shared across every plot
+/// surface (panel `Graphs`, `VizPanel`, in-canvas `PlotNodeVisual`,
+/// future inspector). Same `path` ⇒ same colour everywhere; stable
+/// across sessions so a saved layout reopens with consistent legend
+/// colours.
+///
+/// 12-entry Tab10/D3-derived palette via FNV-1a hash. Tweak only by
+/// **appending** — keep existing indices stable so saved layouts
+/// don't change colour after a palette edit.
+pub fn color_for_signal(path: &str) -> bevy_egui::egui::Color32 {
+    use bevy_egui::egui::Color32;
+    const PALETTE: &[Color32] = &[
+        Color32::from_rgb(0x1f, 0x77, 0xb4),
+        Color32::from_rgb(0xff, 0x7f, 0x0e),
+        Color32::from_rgb(0x2c, 0xa0, 0x2c),
+        Color32::from_rgb(0xd6, 0x27, 0x28),
+        Color32::from_rgb(0x94, 0x67, 0xbd),
+        Color32::from_rgb(0x8c, 0x56, 0x4b),
+        Color32::from_rgb(0xe3, 0x77, 0xc2),
+        Color32::from_rgb(0x7f, 0x7f, 0x7f),
+        Color32::from_rgb(0xbc, 0xbd, 0x22),
+        Color32::from_rgb(0x17, 0xbe, 0xcf),
+        Color32::from_rgb(0xae, 0xc7, 0xe8),
+        Color32::from_rgb(0xff, 0xbb, 0x78),
+    ];
+    let mut h: u32 = 0x811c_9dc5;
+    for b in path.as_bytes() {
+        h ^= *b as u32;
+        h = h.wrapping_mul(0x0100_0193);
+    }
+    PALETTE[(h as usize) % PALETTE.len()]
 }

@@ -39,13 +39,40 @@ pub struct DiagnosticsLog {
 }
 
 impl DiagnosticsLog {
-    /// Replace the current entries in-place.
-    pub fn replace(&mut self, entries: Vec<LogEntry>) {
-        self.entries.clear();
-        self.entries.extend(entries);
+    /// Maximum history retained. Older entries fall off the front
+    /// when new ones arrive. 200 is generous for a compile/lint
+    /// channel (errors come in bursts, not streams) while keeping
+    /// memory bounded.
+    const MAX_ENTRIES: usize = 200;
+
+    /// Append-with-dedup: push new entries onto the end, skipping
+    /// any whose `text` is identical to the *previous* entry. This
+    /// keeps the history (compile failed, then succeeded, then
+    /// failed again → all three events visible) while collapsing
+    /// "same error fired twice in one refresh".
+    ///
+    /// Replaces the earlier `replace` semantics which cleared the
+    /// log every refresh and lost the exact error message the
+    /// moment the user navigated away.
+    pub fn append(&mut self, entries: Vec<LogEntry>) {
+        for e in entries {
+            let dup = self
+                .entries
+                .back()
+                .map(|last| last.text == e.text && last.level == e.level)
+                .unwrap_or(false);
+            if dup {
+                continue;
+            }
+            self.entries.push_back(e);
+        }
+        while self.entries.len() > Self::MAX_ENTRIES {
+            self.entries.pop_front();
+        }
     }
 
-    /// Clear all entries.
+    /// Clear all entries. Kept for the panel's "Clear" button and
+    /// for tests — we no longer call this from the refresh system.
     pub fn clear(&mut self) {
         self.entries.clear();
     }
@@ -136,7 +163,8 @@ pub fn refresh_diagnostics(
             cursor.bound_doc = None;
             cursor.last_ast_gen = 0;
             cursor.last_error_hash = hash_str(None);
-            diagnostics.clear();
+            // Preserve history — user may want to read the last
+            // compile error after closing the tab.
         }
         return;
     };
@@ -146,7 +174,8 @@ pub fn refresh_diagnostics(
             cursor.bound_doc = None;
             cursor.last_ast_gen = 0;
             cursor.last_error_hash = hash_str(None);
-            diagnostics.clear();
+            // Preserve history — user may want to read the last
+            // compile error after closing the tab.
         }
         return;
     };
@@ -172,12 +201,21 @@ pub fn refresh_diagnostics(
 
     let mut entries: Vec<LogEntry> = Vec::new();
 
+    // Model name used to tag every entry pushed in this refresh —
+    // the user's ask: "we should show names of models there." Each
+    // row carries which model the message came from so you can
+    // read the Diagnostics log across multiple open tabs without
+    // guessing. `display_name` falls back to the origin's filename
+    // or "Untitled" when the doc has no explicit name yet.
+    let model_tag = Some(host.document().origin().display_name().to_string());
+
     // 1. AST parse errors — caught by rumoca's recovering parser.
     if let Err(msg) = &host.document().ast().result {
         entries.push(LogEntry {
             at: std::time::Instant::now(),
             level: LogLevel::Error,
             text: msg.clone(),
+            model: model_tag.clone(),
         });
     }
 
@@ -191,34 +229,153 @@ pub fn refresh_diagnostics(
             at: std::time::Instant::now(),
             level: LogLevel::Error,
             text: msg.clone(),
+            model: model_tag.clone(),
         });
     }
 
     // 3. Lint findings — `rumoca-tool-lint` runs on the source and
-    // returns warnings/style issues with line+column. Cheap (rumoca
-    // re-uses its parse cache), so running on every change-tick is
-    // fine. Surfaces as Warning-level rows; if a future linter rule
-    // is upgraded to Error, mirror its level here.
-    let source = host.document().source();
-    if !source.is_empty() {
-        let opts = rumoca_tool_lint::LintOptions::default();
-        let display_name = host.document().origin().display_name();
-        for msg in rumoca_tool_lint::lint(source, &display_name, &opts) {
-            let level = match msg.level {
-                rumoca_tool_lint::LintLevel::Error => LogLevel::Error,
-                rumoca_tool_lint::LintLevel::Warning => LogLevel::Warn,
-                _ => LogLevel::Info,
-            };
-            entries.push(LogEntry {
-                at: std::time::Instant::now(),
-                level,
-                text: format!(
-                    "{}:{}:{}  [{}] {}",
-                    msg.file, msg.line, msg.column, msg.rule, msg.message
-                ),
+    // returns warnings/style issues with line+column. For 150KB+
+    // MSL package files the lint pass used to take 100–500ms on the
+    // main thread whenever the AST generation changed (opening a
+    // class, every keystroke). We now dispatch to a background
+    // thread and merge results once they arrive. The
+    // `LintWorkerState` resource tracks the last-seen (doc, ast_gen)
+    // and caches the computed entries so most frames just return
+    // the cache without touching rumoca at all.
+    let source_owned = host.document().source().to_string();
+    let display_name = host.document().origin().display_name().to_string();
+    let dispatch_key = (doc_id, ast_gen);
+    let tag_for_worker = model_tag.clone();
+    if !source_owned.is_empty() {
+        // Scope the first lock so it is ALWAYS released before we
+        // reach for `lint_result_slot()` below. Prior code only
+        // `drop`-ed `lint_state` inside the `else if` spawn arm —
+        // when we fell through to the "worker in-flight for same
+        // key" case the guard stayed live, and line 304's second
+        // `lint_worker_state().lock()` re-entered on the same
+        // thread → `std::sync::Mutex` is non-reentrant → main loop
+        // deadlock the moment a compile error landed (that's the
+        // state change that invalidated the cache while a lint was
+        // in flight). See manual-test log silence after any
+        // `Compile finished with error`.
+        let (cache_hit_entries, need_spawn) = {
+            let mut lint_state =
+                lint_worker_state().lock().expect("lint state lock");
+            let current_cache_key = lint_state.cached_for;
+            let current_inflight_key = lint_state.inflight_for;
+            let mut hit: Option<Vec<LogEntry>> = None;
+            let mut spawn = false;
+            if current_cache_key == Some(dispatch_key) {
+                hit = Some(lint_state.cached_entries.clone());
+            } else if current_inflight_key != Some(dispatch_key) {
+                lint_state.inflight_for = Some(dispatch_key);
+                spawn = true;
+            }
+            (hit, spawn)
+        }; // lint_worker_state lock released here.
+        if let Some(cached) = cache_hit_entries {
+            entries.extend(cached);
+        }
+        if need_spawn {
+            let result_slot = lint_result_slot().clone();
+            std::thread::spawn(move || {
+                let opts = rumoca_tool_lint::LintOptions::default();
+                let out: Vec<LogEntry> = rumoca_tool_lint::lint(
+                    &source_owned,
+                    &display_name,
+                    &opts,
+                )
+                .into_iter()
+                .map(|msg| {
+                    let level = match msg.level {
+                        rumoca_tool_lint::LintLevel::Error => LogLevel::Error,
+                        rumoca_tool_lint::LintLevel::Warning => LogLevel::Warn,
+                        _ => LogLevel::Info,
+                    };
+                    LogEntry {
+                        at: std::time::Instant::now(),
+                        level,
+                        text: format!(
+                            "{}:{}:{}  [{}] {}",
+                            msg.file,
+                            msg.line,
+                            msg.column,
+                            msg.rule,
+                            msg.message
+                        ),
+                        model: tag_for_worker.clone(),
+                    }
+                })
+                .collect();
+                if let Ok(mut slot) = result_slot.lock() {
+                    *slot = Some((dispatch_key, out));
+                }
             });
+        }
+
+        // If a worker finished since we last looked, promote its
+        // output to the cache and serve it. Intentionally after the
+        // spawn so a just-finished result for *this* key lands in
+        // `entries` on the same refresh rather than the next one.
+        if let Ok(mut slot) = lint_result_slot().lock() {
+            if let Some((key, out)) = slot.take() {
+                let mut state = lint_worker_state().lock().expect("lint state lock");
+                state.cached_for = Some(key);
+                state.cached_entries = out.clone();
+                state.inflight_for = None;
+                if key == dispatch_key {
+                    entries.extend(out);
+                }
+            }
         }
     }
 
-    diagnostics.replace(entries);
+    diagnostics.append(entries);
+}
+
+/// Shared state between the lint-worker thread and the main-thread
+/// `refresh_diagnostics` caller. Kept as process-globals (via
+/// `OnceLock`) instead of a Bevy `Resource` because the worker is a
+/// plain `std::thread::spawn` — no bevy ECS access on the worker
+/// side — and the main thread lock is contended for ~microseconds.
+struct LintWorkerState {
+    /// Key (doc, ast_gen) of the currently cached lint output. `None`
+    /// when we've never finished a lint for any state.
+    cached_for: Option<(lunco_doc::DocumentId, u64)>,
+    /// Cached lint entries for `cached_for`. Served on every refresh
+    /// whose key matches — the hot path avoids re-linting and avoids
+    /// re-spawning.
+    cached_entries: Vec<LogEntry>,
+    /// Key of the lint currently in flight on a worker thread, or
+    /// `None` when no worker is running. Prevents a flurry of spawns
+    /// when the UI re-refreshes before the worker finishes.
+    inflight_for: Option<(lunco_doc::DocumentId, u64)>,
+}
+
+fn lint_worker_state() -> &'static std::sync::Mutex<LintWorkerState> {
+    use std::sync::OnceLock;
+    static STATE: OnceLock<std::sync::Mutex<LintWorkerState>> = OnceLock::new();
+    STATE.get_or_init(|| {
+        std::sync::Mutex::new(LintWorkerState {
+            cached_for: None,
+            cached_entries: Vec::new(),
+            inflight_for: None,
+        })
+    })
+}
+
+/// Slot the lint worker writes its result into. A single-element
+/// buffer — the main thread drains it every refresh. `None` means
+/// no completion since the last drain.
+#[allow(clippy::type_complexity)]
+fn lint_result_slot() -> &'static std::sync::Arc<
+    std::sync::Mutex<Option<((lunco_doc::DocumentId, u64), Vec<LogEntry>)>>,
+> {
+    use std::sync::OnceLock;
+    static SLOT: OnceLock<
+        std::sync::Arc<
+            std::sync::Mutex<Option<((lunco_doc::DocumentId, u64), Vec<LogEntry>)>>,
+        >,
+    > = OnceLock::new();
+    SLOT.get_or_init(|| std::sync::Arc::new(std::sync::Mutex::new(None)))
 }

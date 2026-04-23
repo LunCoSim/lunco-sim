@@ -198,6 +198,103 @@ pub struct OpenExample {
 // Observers
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// One entry in the compile-time class picker — captured when the
+/// user hit Compile on a doc that's a package of ≥2 models without
+/// having drilled into one.
+#[derive(Debug, Clone)]
+pub struct CompileClassPickerEntry {
+    pub doc: DocumentId,
+    /// Fully qualified class paths (e.g. `"AnnotatedRocketStage.RocketStage"`).
+    pub candidates: Vec<String>,
+    /// Index into `candidates` the modal's radio group starts on.
+    pub preselected: usize,
+}
+
+/// Modal picker state for the "which class in this package to
+/// compile?" prompt. `None` = no picker open; `Some(entry)` = modal
+/// visible. See `render_compile_class_picker` in `ui/mod.rs`.
+#[derive(Resource, Default)]
+pub struct CompileClassPickerState(pub Option<CompileClassPickerEntry>);
+
+/// Render the compile-class picker modal when
+/// [`CompileClassPickerState`] is populated. Confirming re-dispatches
+/// `CompileModel` with the chosen class stamped into
+/// [`DrilledInClassNames`] so downstream observers see the user's
+/// pick exactly as they would've after a manual drill-in. Cancel
+/// just clears the state.
+pub(crate) fn render_compile_class_picker(
+    mut egui_ctx: bevy_egui::EguiContexts,
+    mut picker: ResMut<CompileClassPickerState>,
+    mut drilled_in: ResMut<crate::ui::panels::canvas_diagram::DrilledInClassNames>,
+    mut commands: Commands,
+) {
+    let Ok(ctx) = egui_ctx.ctx_mut() else {
+        return;
+    };
+    let Some(entry) = picker.0.as_mut() else {
+        return;
+    };
+
+    let mut confirmed: Option<String> = None;
+    let mut cancelled = false;
+    let mut window_open = true;
+    egui::Window::new("Which class should Compile run?")
+        .id(egui::Id::new(("compile_class_picker", entry.doc.raw())))
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+        .open(&mut window_open)
+        .show(ctx, |ui| {
+            ui.add_space(4.0);
+            ui.label(
+                egui::RichText::new(
+                    "This file is a package with more than one model. Pick \
+                     the class you want to compile:",
+                )
+                .size(12.0),
+            );
+            ui.add_space(8.0);
+            let mut selected = entry.preselected.min(entry.candidates.len().saturating_sub(1));
+            egui::ScrollArea::vertical()
+                .max_height(260.0)
+                .show(ui, |ui| {
+                    for (i, name) in entry.candidates.iter().enumerate() {
+                        ui.radio_value(&mut selected, i, name);
+                    }
+                });
+            entry.preselected = selected;
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                let ok = ui.add(egui::Button::new(
+                    egui::RichText::new("Compile").strong(),
+                ));
+                if ok.clicked() {
+                    confirmed = entry.candidates.get(selected).cloned();
+                }
+                if ui.button("Cancel").clicked() {
+                    cancelled = true;
+                }
+                ui.add_space(10.0);
+                ui.colored_label(
+                    egui::Color32::from_rgb(160, 160, 180),
+                    "Tip: drill into a class (Canvas / Package Browser) \
+                     to skip this dialog next time.",
+                );
+            });
+        });
+    if !window_open {
+        cancelled = true;
+    }
+    if let Some(qualified) = confirmed {
+        let doc = entry.doc;
+        drilled_in.set(doc, qualified);
+        picker.0 = None;
+        commands.trigger(CompileModel { doc });
+    } else if cancelled {
+        picker.0 = None;
+    }
+}
+
 /// Plugin that installs all Modelica command observers.
 ///
 /// `ModelicaUiPlugin` adds this automatically. Keeping the registration
@@ -210,6 +307,7 @@ impl Plugin for ModelicaCommandsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<CloseDialogState>()
             .init_resource::<PendingCloseAfterSave>()
+            .init_resource::<CompileClassPickerState>()
             .add_observer(on_undo_document)
             .add_observer(on_redo_document)
             .add_observer(on_save_document)
@@ -221,6 +319,12 @@ impl Plugin for ModelicaCommandsPlugin {
             .add_observer(on_create_new_scratch_model)
             .add_observer(on_duplicate_model_from_read_only)
             .add_observer(on_open_example_in_workspace)
+            // Register the `modelica://` scheme with the workbench's
+            // cross-domain URI registry so clickable links in
+            // Documentation HTML (and any future contexts) route
+            // through the same plumbing as USD / SysML will when
+            // their domain crates land.
+            .add_observer(crate::ui::uri_handler::on_modelica_uri_clicked)
             // Auto-Arrange: reflect-registered so the LunCo API can
             // fire it via `ExecuteCommand { command: "AutoArrangeDiagram" }`.
             .register_type::<AutoArrangeDiagram>()
@@ -248,6 +352,14 @@ impl Plugin for ModelicaCommandsPlugin {
             .register_type::<SaveActiveDocumentAs>()
             .register_type::<NewPlotPanel>()
             .register_type::<AddSignalToPlot>()
+            .register_type::<AddCanvasPlot>()
+            .register_type::<DuplicateActiveDoc>()
+            .register_type::<PauseActiveModel>()
+            .register_type::<ResumeActiveModel>()
+            .register_type::<ResetActiveModel>()
+            .add_observer(on_pause_active_model)
+            .add_observer(on_resume_active_model)
+            .add_observer(on_reset_active_model)
             .add_observer(on_focus_document_by_name)
             .add_observer(on_set_view_mode)
             .add_observer(on_set_zoom)
@@ -268,8 +380,18 @@ impl Plugin for ModelicaCommandsPlugin {
             .add_observer(on_save_active_document_as)
             .add_observer(on_new_plot_panel)
             .add_observer(on_add_signal_to_plot)
+            .add_observer(on_add_canvas_plot)
+            .add_observer(on_duplicate_active_doc)
             .add_observer(resolve_editor_intent)
             .add_observer(resolve_new_document_intent)
+            // Install our scheme handler into the workbench's
+            // `UriRegistry` once at startup. The registry resource is
+            // inserted by WorkbenchPlugin; this system runs after it,
+            // pushes the handler, and exits.
+            .add_systems(
+                bevy::prelude::Startup,
+                (register_modelica_uri_handler, prewarm_msl_library),
+            )
             .add_systems(
                 bevy::prelude::Update,
                 (
@@ -280,7 +402,7 @@ impl Plugin for ModelicaCommandsPlugin {
             )
             .add_systems(
                 bevy_egui::EguiPrimaryContextPass,
-                render_close_dialogs,
+                (render_close_dialogs, render_compile_class_picker),
             );
     }
 }
@@ -355,6 +477,21 @@ fn drain_pending_tab_closes(
         let lunco_workbench::TabId::Instance { kind, instance } = tab else {
             continue; // Singleton — not our concern.
         };
+        // VizPanel (multi-instance plot) tabs close immediately —
+        // they have no dirty state to confirm. Without this branch the
+        // × button on a "Plot #N" tab queued the close and the tab
+        // never went away.
+        if kind == lunco_viz::VIZ_PANEL_KIND {
+            commands.trigger(lunco_workbench::CloseTab { kind, instance });
+            commands.queue(move |world: &mut World| {
+                if let Some(mut reg) =
+                    world.get_resource_mut::<lunco_viz::VisualizationRegistry>()
+                {
+                    reg.remove(lunco_viz::viz::VizId(instance));
+                }
+            });
+            continue;
+        }
         if kind != crate::ui::panels::model_view::MODEL_VIEW_KIND {
             continue; // Another domain's tab.
         }
@@ -882,9 +1019,13 @@ fn on_compile_model(
     mut workbench: ResMut<WorkbenchState>,
     mut compile_states: ResMut<CompileStates>,
     mut console: ResMut<crate::ui::panels::console::ConsoleLog>,
+    mut diagnostics: Option<ResMut<crate::ui::panels::diagnostics::DiagnosticsLog>>,
+    mut picker: ResMut<CompileClassPickerState>,
+    mut sim_streams: ResMut<crate::SimStreamRegistry>,
     diagram_state: Res<DiagramState>,
     channels: Option<Res<ModelicaChannels>>,
     mut q_models: Query<&mut ModelicaModel>,
+    drilled_in_classes: Option<Res<crate::ui::panels::canvas_diagram::DrilledInClassNames>>,
 ) {
     let doc = trigger.event().doc;
 
@@ -898,6 +1039,15 @@ fn on_compile_model(
     // costs ~30 s per call in debug builds, and there are four
     // calls, so clicking Compile on an MSL example would lock the
     // UI for minutes. Pulling from the cached AST is constant-time.
+    // Force a fresh parse if the user typed into the editor but the
+    // debounced reparse hasn't run yet (see `ModelicaDocument::apply_patch`
+    // — AST lags source by up to ~250ms during rapid typing).
+    // Compile is a definitive "I want this exact source to be the
+    // compiled model" action, so pay the parse cost right here
+    // instead of risking a stale AST.
+    if let Some(host) = registry.host_mut(doc) {
+        host.document_mut().refresh_ast_now();
+    }
     let (source, ast_for_extract) = match registry.host(doc) {
         Some(h) => {
             let doc = h.document();
@@ -916,15 +1066,47 @@ fn on_compile_model(
         console.error(format!("Compile failed: {msg}"));
         return;
     };
-    let Some(model_name) =
+    // Prefer the drilled-in class on this doc — the user is looking
+    // at a leaf model (e.g. `AnnotatedRocketStageCopy.RocketStage`)
+    // and pressing Compile must compile *that*, not the enclosing
+    // package. Without this the compile picks the first non-package
+    // class (often the package wrapper) and the simulator returns
+    // `EmptySystem`.
+    let drilled_in_class: Option<String> = drilled_in_classes
+        .as_ref()
+        .and_then(|d| d.get(doc).map(str::to_string));
+    // If no drill-in pin and the file is a package of several models,
+    // ask the user which one to compile instead of silently picking.
+    // The picker modal (rendered by `render_compile_class_picker` in
+    // ui/mod.rs) re-dispatches `CompileModel` once the user confirms.
+    if drilled_in_class.is_none() {
+        let candidates = crate::ast_extract::collect_non_package_classes_qualified(&ast);
+        if candidates.len() >= 2 {
+            // If a picker is already open for *this* doc, leave it
+            // alone so rapid repeated Compile clicks don't blow away
+            // the user's in-progress choice.
+            if picker.0.as_ref().map(|p| p.doc) != Some(doc) {
+                picker.0 = Some(CompileClassPickerEntry {
+                    doc,
+                    candidates,
+                    preselected: 0,
+                });
+            }
+            return;
+        }
+    }
+    let model_name = drilled_in_class.or_else(|| {
         crate::ast_extract::extract_model_name_from_ast(&ast)
-    else {
+    });
+    let Some(model_name) = model_name else {
         let msg = "Could not find a valid model declaration.".to_string();
         workbench.compilation_error = Some(msg.clone());
         console.error(format!("Compile failed: {msg}"));
         return;
     };
     let params = crate::ast_extract::extract_parameters_from_ast(&ast);
+    let param_bounds =
+        crate::ast_extract::extract_parameter_bounds_from_ast(&ast);
     let inputs_with_defaults =
         crate::ast_extract::extract_inputs_with_defaults_from_ast(&ast);
     let runtime_inputs = crate::ast_extract::extract_input_names_from_ast(&ast);
@@ -940,6 +1122,7 @@ fn on_compile_model(
             model.is_stepping = true;
             model.model_name = model_name.clone();
             model.parameters = params.clone();
+            model.parameter_bounds = param_bounds.clone();
             model.inputs.clear();
             for (name, val) in &inputs_with_defaults {
                 let existing = old_inputs.get(name).copied();
@@ -978,6 +1161,7 @@ fn on_compile_model(
                     session_id,
                     paused: false,
                     parameters: params,
+                    parameter_bounds: param_bounds,
                     inputs: runtime_inputs.into_iter().map(|n| (n, 0.0)).collect(),
                     variables: HashMap::new(),
                     descriptions: HashMap::new(),
@@ -1002,13 +1186,27 @@ fn on_compile_model(
 
     compile_states.mark_started(doc);
     console.info(format!("⏵ Compile started: '{model_name}'"));
+    if let Some(diag) = diagnostics.as_mut() {
+        diag.append(vec![crate::ui::panels::log::LogEntry {
+            at: std::time::Instant::now(),
+            level: crate::ui::panels::log::LogLevel::Info,
+            text: format!("⏵ Compile started: '{model_name}'"),
+            model: Some(model_name.clone()),
+        }]);
+    }
 
     if let Some(channels) = channels {
+        // Get-or-create the sim stream for this entity. Cloned Arc
+        // goes to the worker (owner-of-writes); the registry holds
+        // the same Arc so plot panels / telemetry can read via
+        // `ArcSwap::load()` on the UI thread without locking.
+        let stream = sim_streams.get_or_insert(target_entity);
         let _ = channels.tx.send(ModelicaCommand::Compile {
             entity: target_entity,
             session_id,
             model_name,
             source,
+            stream: Some(stream),
         });
     } else {
         console.error("Modelica worker channel not available — compile dispatch dropped.");
@@ -1390,7 +1588,14 @@ fn extract_class_source(source: &str, class_name: &str) -> Option<String> {
     let opener = regex::Regex::new(&opener_pat).ok()?;
     let closer_pat = format!(r"(?m)^\s*end\s+{safe}\s*;", safe = safe);
     let closer = regex::Regex::new(&closer_pat).ok()?;
-    let start = opener.find(source)?.start();
+    let raw_start = opener.find(source)?.start();
+    // Rewind past leading comment lines so class-describing header
+    // comments ride along with the extracted class. Modelica convention:
+    // `//`-line comments and `/* … */` blocks immediately preceding a
+    // class declaration are semantically "about" that class. Stop as
+    // soon as we hit a line that is neither blank nor a comment
+    // (e.g. `within …;`, another class's `end …;`, or stray code).
+    let start = rewind_through_leading_comments(source, raw_start);
     // Find the first matching `end <ClassName>;` at or after
     // `start`. Multi-class files can have identically-named nested
     // classes, but in MSL practice `end <Name>;` pairs cleanly
@@ -1398,6 +1603,80 @@ fn extract_class_source(source: &str, class_name: &str) -> Option<String> {
     let rel_end = closer.find(&source[start..])?.end();
     let end = start + rel_end;
     Some(source[start..end].to_string())
+}
+
+/// Given a byte offset at the start of a class `model …` header,
+/// walk backward past any immediately-preceding comment block and
+/// return the earliest offset that still belongs to the class.
+///
+/// Rewinds through:
+///   * blank lines (`\n`, `\n\t`, etc.)
+///   * `// …` line comments
+///   * `/* … */` block comments (must fully precede `header_start`)
+///
+/// Stops at any other content — including `within …;`, another
+/// class's `end …;`, or code — so we never accidentally pull
+/// unrelated context into the duplicate.
+fn rewind_through_leading_comments(source: &str, header_start: usize) -> usize {
+    // Find the start of the line that contains `header_start`. Any
+    // earlier line is a candidate for rewind.
+    let header_line_start = source[..header_start]
+        .rfind('\n')
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    // Work line-by-line from there back. `line_starts[i]` is the
+    // byte offset where line `i` begins. Keep only those strictly
+    // before the header line.
+    let mut line_starts: Vec<usize> = std::iter::once(0)
+        .chain(source.match_indices('\n').map(|(i, _)| i + 1))
+        .collect();
+    line_starts.retain(|&o| o < header_line_start);
+
+    // The header line is where the class declaration lives; we
+    // preserve at least that.
+    let mut keep = header_line_start;
+    let mut in_block_comment = false;
+    for &lstart in line_starts.iter().rev() {
+        let lend = source[lstart..]
+            .find('\n')
+            .map(|i| lstart + i)
+            .unwrap_or(source.len());
+        let line = &source[lstart..lend];
+        let trimmed = line.trim();
+        if in_block_comment {
+            // Still inside a `/* … */` that we haven't closed yet.
+            // Closing delimiter on this line ends the block (walking
+            // backward: the earlier `/*` starts it).
+            if trimmed.starts_with("/*") {
+                in_block_comment = false;
+                keep = lstart;
+                continue;
+            }
+            keep = lstart;
+            continue;
+        }
+        if trimmed.is_empty() || trimmed.starts_with("//") {
+            keep = lstart;
+            continue;
+        }
+        // Single-line `/* … */` or start of a multi-line block (we
+        // see it from below — so this is the *close* of a block we'd
+        // have to absorb).
+        if trimmed.ends_with("*/") {
+            // If the same line also opens `/*`, it's a single-line
+            // block comment — absorb and keep scanning.
+            if trimmed.starts_with("/*") {
+                keep = lstart;
+                continue;
+            }
+            // Multi-line block: mark and walk back past its opener.
+            in_block_comment = true;
+            keep = lstart;
+            continue;
+        }
+        break;
+    }
+    keep
 }
 
 /// Walk from a class file's directory up through the filesystem,
@@ -1749,6 +2028,36 @@ pub struct OpenClass {
     pub qualified: String,
 }
 
+/// Startup system: register the Modelica URI handler with the
+/// workbench. Runs once — the registry accepts `Arc<dyn UriHandler>`
+/// and treats re-registrations as last-writer-wins, so re-running
+/// would be harmless.
+fn register_modelica_uri_handler(
+    mut registry: ResMut<lunco_workbench::UriRegistry>,
+) {
+    registry.register(std::sync::Arc::new(
+        crate::ui::uri_handler::ModelicaUriHandler,
+    ));
+    bevy::log::info!("[Modelica] registered modelica:// URI handler");
+}
+
+/// Startup system: force-init the `msl_component_library`
+/// `OnceLock` on a background thread so the first Welcome render
+/// (or palette open) doesn't pay the ~2500-entry JSON parse cost
+/// on the UI thread. Safe because `OnceLock::get_or_init` is
+/// thread-safe and the later `msl_component_library()` call from
+/// the render path just reads the already-initialised slice.
+fn prewarm_msl_library() {
+    std::thread::spawn(|| {
+        let t0 = std::time::Instant::now();
+        let n = crate::visual_diagram::msl_component_library().len();
+        bevy::log::info!(
+            "[MSL] prewarmed component library: {n} entries in {:?}",
+            t0.elapsed()
+        );
+    });
+}
+
 fn on_open_class(trigger: On<OpenClass>, mut commands: Commands) {
     let qualified = trigger.event().qualified.clone();
     commands.queue(move |world: &mut World| {
@@ -2073,6 +2382,213 @@ fn on_save_active_document_as(
             source.len(),
         );
         world.commands().trigger(DocumentSaved::local(doc));
+    });
+}
+
+/// API shim: duplicate the active read-only document into a fresh
+/// editable workspace tab. Fires the existing
+/// `DuplicateModelFromReadOnly` event with `doc=0` ⇒ active.
+#[derive(Event, Reflect, Clone, Debug, Default)]
+#[reflect(Event, Default)]
+pub struct DuplicateActiveDoc {
+    pub doc: u64,
+}
+
+fn on_duplicate_active_doc(trigger: On<DuplicateActiveDoc>, mut commands: Commands) {
+    let raw = trigger.event().doc;
+    commands.queue(move |world: &mut World| {
+        let doc = if raw == 0 {
+            resolve_active_doc(world)
+        } else {
+            Some(DocumentId::new(raw))
+        };
+        let Some(doc) = doc else {
+            bevy::log::warn!("[DuplicateActiveDoc] no active document");
+            return;
+        };
+        world.commands().trigger(DuplicateModelFromReadOnly { source_doc: doc });
+    });
+}
+
+/// Run-control events — fire against `doc=0` to target the active
+/// document, or a specific `DocumentId.raw()` for automation.
+///
+/// Simulation already ticks automatically once a model is compiled
+/// (see `spawn_modelica_requests` — steps every `FixedUpdate` unless
+/// `ModelicaModel.paused`). These commands are the user-facing
+/// handles on that loop:
+///
+///  * [`PauseActiveModel`]  — freeze stepping without tearing down
+///    worker state. `paused = true`.
+///  * [`ResumeActiveModel`] — thaw from paused. `paused = false`.
+///  * [`ResetActiveModel`]  — send `ModelicaCommand::Reset` to the
+///    worker so it rebuilds the stepper from the cached DAE and
+///    zeroes `current_time`. Cheap — no recompile.
+///
+/// A separate Step-one-frame command is intentionally deferred until
+/// #59 (named experiments / Runs panel) lands — the infrastructure
+/// for a "force one step" flag is better designed alongside that.
+#[derive(Event, Reflect, Clone, Debug, Default)]
+#[reflect(Event, Default)]
+pub struct PauseActiveModel {
+    pub doc: u64,
+}
+
+/// See [`PauseActiveModel`].
+#[derive(Event, Reflect, Clone, Debug, Default)]
+#[reflect(Event, Default)]
+pub struct ResumeActiveModel {
+    pub doc: u64,
+}
+
+/// See [`PauseActiveModel`].
+#[derive(Event, Reflect, Clone, Debug, Default)]
+#[reflect(Event, Default)]
+pub struct ResetActiveModel {
+    pub doc: u64,
+}
+
+fn on_pause_active_model(trigger: On<PauseActiveModel>, mut commands: Commands) {
+    let raw = trigger.event().doc;
+    commands.queue(move |world: &mut World| {
+        let Some(doc) = (if raw == 0 {
+            resolve_active_doc(world)
+        } else {
+            Some(DocumentId::new(raw))
+        }) else {
+            return;
+        };
+        if let Some(entity) = entity_for_doc(world, doc) {
+            if let Some(mut model) = world.get_mut::<ModelicaModel>(entity) {
+                model.paused = true;
+            }
+        }
+    });
+}
+
+fn on_resume_active_model(trigger: On<ResumeActiveModel>, mut commands: Commands) {
+    let raw = trigger.event().doc;
+    commands.queue(move |world: &mut World| {
+        let Some(doc) = (if raw == 0 {
+            resolve_active_doc(world)
+        } else {
+            Some(DocumentId::new(raw))
+        }) else {
+            return;
+        };
+        if let Some(entity) = entity_for_doc(world, doc) {
+            if let Some(mut model) = world.get_mut::<ModelicaModel>(entity) {
+                model.paused = false;
+            }
+        }
+    });
+}
+
+fn on_reset_active_model(trigger: On<ResetActiveModel>, mut commands: Commands) {
+    let raw = trigger.event().doc;
+    commands.queue(move |world: &mut World| {
+        let Some(doc) = (if raw == 0 {
+            resolve_active_doc(world)
+        } else {
+            Some(DocumentId::new(raw))
+        }) else {
+            return;
+        };
+        let Some(entity) = entity_for_doc(world, doc) else {
+            return;
+        };
+        // Snapshot session_id, bump it so stale Step results fence out,
+        // then ship Reset to the worker.
+        let session_id = {
+            let Some(mut model) = world.get_mut::<ModelicaModel>(entity) else {
+                return;
+            };
+            model.session_id += 1;
+            model.is_stepping = true;
+            model.current_time = 0.0;
+            model.last_step_time = 0.0;
+            model.variables.clear();
+            model.session_id
+        };
+        if let Some(channels) = world.get_resource::<crate::ModelicaChannels>() {
+            let _ = channels.tx.send(crate::ModelicaCommand::Reset { entity, session_id });
+        }
+    });
+}
+
+/// Locate the Modelica simulation entity linked to `doc`, if any.
+fn entity_for_doc(world: &World, doc: DocumentId) -> Option<Entity> {
+    world
+        .get_resource::<ModelicaDocumentRegistry>()
+        .and_then(|r| r.entities_linked_to(doc).into_iter().next())
+}
+
+/// Drop a Simulink-style "Scope" plot onto the active canvas at
+/// world-space position `(x, y)` with the given size, bound to a
+/// scalar signal. Pure UI overlay — does not emit Modelica source.
+/// Uses the active document's coordinate frame (same as
+/// `MoveComponent`: -100..100 typical, +Y down).
+#[derive(Event, Reflect, Clone, Debug, Default)]
+#[reflect(Event, Default)]
+pub struct AddCanvasPlot {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    /// Signal path the plot will display
+    /// (resolved against the active `ModelicaModel` entity).
+    pub signal: String,
+}
+
+fn on_add_canvas_plot(trigger: On<AddCanvasPlot>, mut commands: Commands) {
+    let ev = trigger.event().clone();
+    commands.queue(move |world: &mut World| {
+        let Some(doc) = resolve_active_doc(world) else {
+            bevy::log::warn!("[AddCanvasPlot] no active document");
+            return;
+        };
+        let w = if ev.width > 0.0 { ev.width } else { 60.0 };
+        let h = if ev.height > 0.0 { ev.height } else { 40.0 };
+        // Bind to the active simulator entity — same lookup
+        // NewPlotPanel uses. Stored as the entity's bit-pattern so
+        // the JSON payload is platform-stable.
+        let model_entity = world
+            .query::<(bevy::prelude::Entity, &crate::ModelicaModel)>()
+            .iter(world)
+            .next()
+            .map(|(e, _)| e)
+            .unwrap_or(bevy::prelude::Entity::PLACEHOLDER);
+        // Scene-node addition: the canvas treats this exactly like a
+        // component node (selection, drag, undo all inherit). The
+        // visual is reconstructed from `data` via the registered
+        // `lunco.viz.plot` factory.
+        let payload = lunco_viz::kinds::canvas_plot_node::PlotNodeData {
+            entity: model_entity.to_bits(),
+            signal_path: ev.signal.clone(),
+            title: String::new(),
+        };
+        let data = serde_json::to_value(&payload).unwrap_or_default();
+        let mut state =
+            world.resource_mut::<crate::ui::panels::canvas_diagram::CanvasDiagramState>();
+        let docstate = state.get_mut(Some(doc));
+        let scene = &mut docstate.canvas.scene;
+        let id = scene.alloc_node_id();
+        scene.insert_node(lunco_canvas::scene::Node {
+            id,
+            rect: lunco_canvas::Rect::from_min_max(
+                lunco_canvas::Pos::new(ev.x, ev.y),
+                lunco_canvas::Pos::new(ev.x + w, ev.y + h),
+            ),
+            kind: lunco_viz::kinds::canvas_plot_node::PLOT_NODE_KIND.into(),
+            data,
+            ports: Vec::new(),
+            label: String::new(),
+            origin: None,
+        });
+        bevy::log::info!(
+            "[AddCanvasPlot] doc={} signal={} at ({},{}) {}x{} (node id={})",
+            doc.raw(), ev.signal, ev.x, ev.y, w, h, id.0,
+        );
     });
 }
 
@@ -2460,4 +2976,35 @@ fn on_move_component(trigger: On<MoveComponent>, mut commands: Commands) {
         };
         crate::ui::panels::canvas_diagram::apply_ops_public(world, doc_id, vec![op]);
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extract_preserves_line_comments_above_class() {
+        let src = "// hello world\n// more info\nmodel Foo\n  parameter Real x = 1;\nend Foo;\n";
+        let got = extract_class_source(src, "Foo").expect("should extract");
+        assert!(got.contains("// hello world"), "got: {got}");
+        assert!(got.contains("// more info"), "got: {got}");
+        assert!(got.contains("end Foo;"));
+    }
+
+    #[test]
+    fn extract_preserves_block_comments_above_class() {
+        let src = "/* preamble\n   note */\nmodel Foo\nend Foo;\n";
+        let got = extract_class_source(src, "Foo").expect("should extract");
+        assert!(got.contains("/* preamble"), "got: {got}");
+        assert!(got.contains("note */"), "got: {got}");
+    }
+
+    #[test]
+    fn extract_stops_at_unrelated_content_above() {
+        // `within` line is NOT a comment — rewind must stop before it.
+        let src = "within Foo;\n// my comment\nmodel Bar\nend Bar;\n";
+        let got = extract_class_source(src, "Bar").expect("should extract");
+        assert!(!got.contains("within"), "within leaked: {got}");
+        assert!(got.contains("// my comment"), "comment dropped: {got}");
+    }
 }

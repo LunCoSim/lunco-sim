@@ -357,27 +357,236 @@ impl NodeVisual for IconNodeVisual {
             );
         }
 
-        // Ports as small filled circles.
+        // Ports — shape per connector causality (OMEdit / Dymola
+        // convention):
+        //   • input  → filled square   (RealInput, BooleanInput, …)
+        //   • output → filled triangle pointing outward
+        //   • acausal physical → filled circle (Pin, Flange, HeatPort, …)
+        // Direction is derived from where the port sits on the icon
+        // boundary, classified the same way edges classify port_dir.
         for port in &node.ports {
             let world = CanvasPos::new(
                 node.rect.min.x + port.local_offset.x,
                 node.rect.min.y + port.local_offset.y,
             );
             let p = ctx.viewport.world_to_screen(world, ctx.screen_rect);
-            painter.circle_filled(
-                egui::pos2(p.x, p.y),
-                4.0,
-                theme_snap.port_fill,
-            );
-            painter.circle_stroke(
-                egui::pos2(p.x, p.y),
-                4.0,
-                egui::Stroke::new(1.0, theme_snap.port_stroke),
+            let center = egui::pos2(p.x, p.y);
+
+            // Port shape from AST-derived kind (the projector wrote
+            // `"input"` / `"output"` / `"acausal"` into `port.kind`;
+            // see the `CanvasPort` construction in `project_scene`).
+            let shape = match port.kind.as_str() {
+                "input" => PortShape::InputSquare,
+                "output" => PortShape::OutputTriangle,
+                _ => PortShape::AcausalCircle,
+            };
+
+            // Outward direction in *screen* space — derived from
+            // which icon edge the port sits closest to.
+            let cx = node.rect.min.x + node.rect.width() * 0.5;
+            let cy = node.rect.min.y + node.rect.height() * 0.5;
+            let dir = port_edge_dir(world.x - cx, world.y - cy);
+
+            let fill = theme_snap.port_fill;
+            let stroke = egui::Stroke::new(1.0, theme_snap.port_stroke);
+            paint_port_shape(painter, center, shape, dir, fill, stroke);
+        }
+
+        // Hover tooltip. The canvas claims the whole widget rect
+        // with `Sense::click_and_drag()` so `ui.interact(.., Sense::hover())`
+        // and even `show_tooltip_at_pointer` get suppressed at the
+        // visual's layer. Paint the tooltip card directly with the
+        // foreground painter — bypasses egui's interaction layering
+        // entirely.
+        let cursor = ctx.ui.ctx().pointer_hover_pos();
+        // Suppress the tooltip when the cursor isn't actually over
+        // the canvas (e.g. floated past the widget edge while still
+        // hovering the icon's *world rect*). Without this the card
+        // can sit on top of the side panels because it paints in
+        // an unclipped layer.
+        let canvas_widget_rect = ctx.ui.max_rect();
+        let in_canvas = cursor
+            .map(|c| canvas_widget_rect.contains(c))
+            .unwrap_or(false);
+        let is_hovered = cursor
+            .map(|c| rect.contains(c))
+            .unwrap_or(false)
+            && in_canvas;
+        if is_hovered && !self.instance_name.is_empty() {
+            let cursor = cursor.unwrap();
+            let snap =
+                lunco_viz::kinds::canvas_plot_node::fetch_node_state(
+                    ctx.ui.ctx(),
+                );
+            let prefix = format!("{}.", self.instance_name);
+            let mut rows: Vec<(&String, &f64)> = snap
+                .values
+                .iter()
+                .filter(|(k, _)| k.starts_with(&prefix))
+                .collect();
+            rows.sort_by(|a, b| a.0.cmp(b.0));
+            paint_hover_card(
+                ctx.ui,
+                cursor,
+                &self.instance_name,
+                &self.class_name,
+                &rows,
             );
         }
     }
     fn debug_name(&self) -> &str {
         "modelica.icon"
+    }
+}
+
+/// Direct-paint hover card (foreground layer). Used because the
+/// canvas's `Sense::click_and_drag()` swallows ordinary tooltip
+/// hooks at the visual layer.
+fn paint_hover_card(
+    ui: &mut egui::Ui,
+    cursor: egui::Pos2,
+    instance: &str,
+    class_name: &str,
+    rows: &[(&String, &f64)],
+) {
+    let theme = lunco_canvas::theme::current(ui.ctx());
+    let layer_id = egui::LayerId::new(
+        egui::Order::Tooltip,
+        egui::Id::new(("modelica_icon_hover_card", instance)),
+    );
+    let painter = ui.ctx().layer_painter(layer_id);
+    // Clip to the canvas widget rect so the card never paints over
+    // the side panels (the user would otherwise see a tooltip
+    // ghost overlapping the Twin Browser when hovering an icon
+    // near the canvas's left edge).
+    let canvas_clip = ui.max_rect();
+    let painter = painter.with_clip_rect(canvas_clip);
+
+    // Build text lines first so we can size the card accordingly.
+    let mut lines: Vec<(String, bool)> = Vec::with_capacity(rows.len() + 4);
+    lines.push((instance.to_string(), true));
+    if !class_name.is_empty() {
+        lines.push((class_name.to_string(), false));
+    }
+    if rows.is_empty() {
+        lines.push(("(no values yet — run a sim)".to_string(), false));
+    } else {
+        for (k, v) in rows {
+            let short = k.strip_prefix(&format!("{instance}.")).unwrap_or(k);
+            lines.push((format!("{short:<10}  {v:>10.4}"), false));
+        }
+    }
+
+    let line_h = 14.0_f32;
+    let pad = 6.0_f32;
+    // Estimate width: 7 px per char (monospace). egui doesn't expose
+    // `Painter::text_size` cheaply; this is plenty for the typical
+    // path widths we render.
+    let text_w = lines
+        .iter()
+        .map(|(s, _)| s.chars().count() as f32 * 7.0)
+        .fold(0.0_f32, f32::max);
+    let card_w = (text_w + pad * 2.0).clamp(120.0, 360.0);
+    let card_h = lines.len() as f32 * line_h + pad * 2.0;
+
+    // Anchor card to the right of the cursor with a small offset;
+    // flip to the left if we'd run off the screen edge.
+    let screen = ui.ctx().screen_rect();
+    let mut origin =
+        egui::pos2(cursor.x + 14.0, cursor.y + 14.0);
+    if origin.x + card_w > screen.max.x {
+        origin.x = cursor.x - card_w - 14.0;
+    }
+    if origin.y + card_h > screen.max.y {
+        origin.y = cursor.y - card_h - 14.0;
+    }
+    let card_rect = egui::Rect::from_min_size(
+        origin,
+        egui::vec2(card_w, card_h),
+    );
+    // Drop shadow so the card pops over the diagram.
+    painter.rect_filled(
+        card_rect.translate(egui::vec2(0.0, 2.0)),
+        6.0,
+        theme.overlay_shadow,
+    );
+    painter.rect_filled(card_rect, 6.0, theme.overlay_fill);
+    painter.rect_stroke(
+        card_rect,
+        6.0,
+        egui::Stroke::new(1.0, theme.overlay_stroke),
+        egui::StrokeKind::Outside,
+    );
+
+    let mut y = origin.y + pad;
+    for (line, is_title) in &lines {
+        let font = if *is_title {
+            egui::FontId::proportional(13.0)
+        } else {
+            egui::FontId::monospace(11.0)
+        };
+        let color = if *is_title {
+            theme.overlay_text
+        } else {
+            theme.overlay_text.gamma_multiply(0.85)
+        };
+        painter.text(
+            egui::pos2(origin.x + pad, y),
+            egui::Align2::LEFT_TOP,
+            line,
+            font,
+            color,
+        );
+        y += line_h;
+    }
+}
+
+/// Paint a chain of small bright dots along a polyline that march
+/// from the first to the last vertex at constant screen-pixel speed.
+/// Phase keyed off wall-clock `time` so all wires stay in sync.
+/// Used as the "this connection is alive" overlay during simulation
+/// — Simulink/SPICE-style, no per-edge flow data needed yet.
+fn paint_flow_dots(
+    painter: &egui::Painter,
+    polyline: &[egui::Pos2],
+    base_color: egui::Color32,
+    time: f64,
+) {
+    if polyline.len() < 2 {
+        return;
+    }
+    let mut total_len = 0.0_f32;
+    for w in polyline.windows(2) {
+        total_len += (w[1] - w[0]).length();
+    }
+    if total_len < 1.0 {
+        return;
+    }
+    // Spacing + speed in screen pixels. Tunable.
+    const SPACING_PX: f32 = 28.0;
+    const SPEED_PX_S: f32 = 36.0;
+    let phase = ((time as f32) * SPEED_PX_S).rem_euclid(SPACING_PX);
+    let dot_color = egui::Color32::from_rgba_unmultiplied(
+        base_color.r(),
+        base_color.g(),
+        base_color.b(),
+        220,
+    );
+    let mut s = phase;
+    while s < total_len {
+        // Walk the polyline to find the segment containing arc-length s.
+        let mut acc = 0.0_f32;
+        for w in polyline.windows(2) {
+            let seg_len = (w[1] - w[0]).length();
+            if s <= acc + seg_len {
+                let t = ((s - acc) / seg_len).clamp(0.0, 1.0);
+                let p = w[0] + (w[1] - w[0]) * t;
+                painter.circle_filled(p, 2.2, dot_color);
+                break;
+            }
+            acc += seg_len;
+        }
+        s += SPACING_PX;
     }
 }
 
@@ -518,6 +727,33 @@ struct OrthogonalEdgeVisual {
     /// When non-empty, the renderer emits a polyline through the
     /// waypoints instead of the auto Z-bend.
     waypoints_world: Vec<CanvasPos>,
+    /// True when the connection is causal (output→input signal),
+    /// so the renderer emits an arrowhead at the input end. False
+    /// for acausal connectors (Pin, Flange, FluidPort, …) — the
+    /// MLS convention is symmetric arrows-or-no-arrows for those.
+    is_causal: bool,
+    /// Fully-qualified source port path, e.g. `"engine.thrust"` /
+    /// `"tank.fuel_out"`. Used to look up the current value (and
+    /// its unit) for the hover tooltip, and for flow-animation
+    /// direction (sign of `{source_path}.{flow_var}` at runtime).
+    source_path: String,
+    /// Fully-qualified target port path. Secondary — used only when
+    /// the source path has no sampled value (e.g. inputs are only
+    /// visible on the target side).
+    target_path: String,
+    /// Connector causality classification (Input / Output / Acausal)
+    /// derived from the connector class AST at projection time.
+    /// Drives arrowhead rendering and animation eligibility.
+    kind: crate::visual_diagram::PortKind,
+    /// Flow variables declared on the connector class (name + unit).
+    /// Empty for causal signals — those never animate. Non-empty →
+    /// we sample `{source_path}.{name}` to drive flow animation and
+    /// to populate the hover tooltip with each variable + unit.
+    flow_vars: Vec<crate::visual_diagram::FlowVarMeta>,
+    /// Short class-name for the tooltip label when the connector
+    /// class has no description string. Matches the MSL-style
+    /// "what is this wire carrying" intuition (e.g. `"FuelPort_a"`).
+    connector_leaf: String,
 }
 
 impl Default for OrthogonalEdgeVisual {
@@ -527,6 +763,12 @@ impl Default for OrthogonalEdgeVisual {
             from_dir: PortDir::None,
             to_dir: PortDir::None,
             waypoints_world: Vec::new(),
+            is_causal: false,
+            source_path: String::new(),
+            target_path: String::new(),
+            kind: crate::visual_diagram::PortKind::Acausal,
+            flow_vars: Vec::new(),
+            connector_leaf: String::new(),
         }
     }
 }
@@ -611,88 +853,106 @@ impl EdgeVisual for OrthogonalEdgeVisual {
             // else: fall through to auto-Z below
         }
 
-        // Whether each side's stub actually helps reach the target.
-        // A stub helps iff its outward unit vector projects positively
-        // onto the from→to vector — i.e. stepping outward from the
-        // port moves us *closer* to the other end. When the dot
-        // product is zero (port faces perpendicular to the
-        // connection) or negative (port faces away from the target),
-        // emitting the stub creates a visible U-shape that doubles
-        // back across the icon. The previous version always drew
-        // both stubs and produced exactly that bug for collinear
-        // same-direction ports (e.g. an inertia's `flange_b` on the
-        // right wired to a sensor's `flange` whose icon was X-mirrored
-        // to also expose its flange on the right at the same x).
-        let dx_full = to.x - from.x;
-        let dy_full = to.y - from.y;
-        let (uxf, uyf) = self.from_dir.outward();
-        let (uxt, uyt) = self.to_dir.outward();
-        let from_helps = self.from_dir != PortDir::None
-            && uxf * dx_full + uyf * dy_full > 0.0;
-        let to_helps = self.to_dir != PortDir::None
-            && uxt * (-dx_full) + uyt * (-dy_full) > 0.0;
-
-        let from_stub = if from_helps {
-            step(from, self.from_dir, STUB_PX)
-        } else {
-            from
-        };
-        let to_stub = if to_helps {
-            step(to, self.to_dir, STUB_PX)
-        } else {
-            to
-        };
-
-        if from_helps {
-            painter.line_segment(
-                [egui::pos2(from.x, from.y), egui::pos2(from_stub.x, from_stub.y)],
-                stroke,
-            );
-        }
-        if to_helps {
-            painter.line_segment(
-                [egui::pos2(to_stub.x, to_stub.y), egui::pos2(to.x, to.y)],
-                stroke,
-            );
+        // Build an orthogonal polyline using port-direction-aware
+        // elbow placement. See [`route_orthogonal`] for the full case
+        // analysis (parallel-aligned, parallel-opposed, perpendicular,
+        // unknown). This replaces the older "always-midpoint Z" router
+        // that produced wires crossing through icon bodies whenever
+        // a port faced away from its peer.
+        let polyline = route_orthogonal(
+            egui::pos2(from.x, from.y),
+            self.from_dir,
+            egui::pos2(to.x, to.y),
+            self.to_dir,
+            STUB_PX,
+        );
+        for w in polyline.windows(2) {
+            painter.line_segment([w[0], w[1]], stroke);
         }
 
-        let p_from = from_stub;
-        let p_to = to_stub;
-        let dx = p_to.x - p_from.x;
-        let dy = p_to.y - p_from.y;
-        let thr = 1.0;
-
-        // Collinear (or trivially close on one axis) → straight
-        // segment between stub-ends. No Z-bend, no doubling back.
-        if dx.abs() < thr || dy.abs() < thr {
-            painter.line_segment(
-                [egui::pos2(p_from.x, p_from.y), egui::pos2(p_to.x, p_to.y)],
-                stroke,
-            );
-            return;
+        // Arrowhead at the input end on causal-only connections —
+        // OMEdit/Dymola convention. Heuristic: connector type ends
+        // with "Output"/"Input" → causal signal. Arrow points along
+        // the last segment, AT the target port (the input side).
+        if self.is_causal && polyline.len() >= 2 {
+            let n = polyline.len();
+            let tail = polyline[n - 2];
+            let tip = polyline[n - 1];
+            paint_arrowhead(painter, tail, tip, col);
         }
 
-        // Z-bend axis selection — horizontal-exit ports route through
-        // an H→V→H Z, vertical-exit ports the opposite. When the
-        // source stub was skipped (port faces away or perpendicular),
-        // fall back to the target's direction; if both are vertical-
-        // bias / both horizontal-bias, this picks the right pivot.
-        let prefer_horizontal_first = match (self.from_dir, self.to_dir) {
-            (PortDir::Left | PortDir::Right, _) => true,
-            (PortDir::None, PortDir::Left | PortDir::Right) => false,
-            (PortDir::Up | PortDir::Down, _) => false,
-            _ => true,
-        };
-        let mid = if prefer_horizontal_first {
-            let midx = p_from.x + dx * 0.5;
-            (egui::pos2(midx, p_from.y), egui::pos2(midx, p_to.y))
+        // Live-flow animation: small dots moving along the polyline
+        // at constant speed. Skips when no signal data is present
+        // (sim never ran / paused) so a static diagram doesn't pulse
+        // for no reason. Real per-edge flow magnitude/direction is a
+        // follow-up — for now this just signals "this connection is
+        // live."
+        // Flow-dot animation is a *live status indicator* — it only
+        // runs when the simulator is actively stepping AND a flow
+        // variable has a non-negligible magnitude. Paused state → no
+        // dots, even if the last sampled m_dot was large. No flow
+        // variable on this connector (causal signals: throttle,
+        // thrust, mass) → never animated.
+        // Flow animation: the monotonic `anim_time` only advances
+        // while the simulator is stepping, so pausing freezes the
+        // dots in place (visible but still). Unpausing resumes from
+        // the same phase — no teleport, no fresh cycle.
+        let anim_time = ctx
+            .ui
+            .ctx()
+            .data(|d| {
+                d.get_temp::<f64>(egui::Id::new("lunco_modelica_flow_anim_time"))
+            })
+            .unwrap_or(0.0);
+        let node_state =
+            lunco_viz::kinds::canvas_plot_node::fetch_node_state(ctx.ui.ctx());
+        const ACTIVITY_EPS: f64 = 1e-6;
+        let (value, reverse_if_negative) = if let Some(fv) = self.flow_vars.first() {
+            // Acausal flow connector: sample declared flow variable.
+            // MLS sign convention: positive = mass flows INTO the
+            // connector from the source component; negative → flow
+            // toward source → reverse polyline.
+            let key = format!("{}.{}", self.source_path, fv.name);
+            (node_state.values.get(&key).copied(), true)
         } else {
-            let midy = p_from.y + dy * 0.5;
-            (egui::pos2(p_from.x, midy), egui::pos2(p_to.x, midy))
+            // Causal signal: value is at the source port. Direction
+            // is polyline from→to (output→input); don't flip on sign.
+            let v = node_state
+                .values
+                .get(&self.source_path)
+                .or_else(|| node_state.values.get(&self.target_path))
+                .copied();
+            (v, false)
         };
-        painter.line_segment([egui::pos2(p_from.x, p_from.y), mid.0], stroke);
-        painter.line_segment([mid.0, mid.1], stroke);
-        painter.line_segment([mid.1, egui::pos2(p_to.x, p_to.y)], stroke);
+        if let Some(v) = value {
+            if v.abs() > ACTIVITY_EPS {
+                if reverse_if_negative && v < 0.0 {
+                    let mut rev = polyline.clone();
+                    rev.reverse();
+                    paint_flow_dots(painter, &rev, col, anim_time);
+                } else {
+                    paint_flow_dots(painter, &polyline, col, anim_time);
+                }
+            }
+        }
+
+        // Hover tooltip — "<label>: <value> <unit>" when the pointer
+        // is within HOVER_PX of any segment. Value is sampled from
+        // the per-frame NodeStateSnapshot; renders nothing when
+        // there's no sim (tooltip still shows the label + "n/a").
+        if let Some(p) = ctx.ui.ctx().pointer_hover_pos() {
+            const HOVER_PX: f32 = 8.0;
+            let hit = polyline
+                .windows(2)
+                .any(|w| dist_point_to_segment(p, w[0], w[1]) <= HOVER_PX);
+            if hit {
+                let state = lunco_viz::kinds::canvas_plot_node::fetch_node_state(
+                    ctx.ui.ctx(),
+                );
+                let text = edge_hover_text(self, &state);
+                paint_wire_tooltip(painter, p, &text, col);
+            }
+        }
     }
 
     /// Hit-test the simplified path. Cheap enough to do at full
@@ -725,6 +985,346 @@ impl EdgeVisual for OrthogonalEdgeVisual {
 fn step(p: CanvasPos, dir: PortDir, len: f32) -> CanvasPos {
     let (ux, uy) = dir.outward();
     CanvasPos::new(p.x + ux * len, p.y + uy * len)
+}
+
+/// Compute an orthogonal polyline routed between two ports, in
+/// **screen coords** (+Y down). The router emits a stub from each
+/// port in its outward direction, then connects the stub-ends with
+/// either an L-elbow (perpendicular ports) or a Z-bend (parallel /
+/// unknown), choosing pivot positions that keep the wire from
+/// doubling back across the icon body.
+///
+/// Cases (where `f`/`t` are the port-side stub endpoints):
+///
+/// * **Perpendicular** (one horizontal, one vertical): single
+///   L-elbow at the corner aligned with each port's exit axis. No
+///   Z-bend needed.
+///
+/// * **Parallel, opposed** (e.g. Right→Left, both helping): classic
+///   Z-bend pivoted at the midpoint along the ports' shared exit
+///   axis. Stubs already pointed at each other so the elbow lives
+///   between them.
+///
+/// * **Parallel, same direction** (e.g. both Right) or **port faces
+///   away from peer**: the "helping" extent is pushed past the
+///   farther port + STUB so the wire wraps around instead of
+///   doubling back through the source icon. Produces a U-shape when
+///   both ports face the same direction.
+///
+/// * **One unknown direction**: defer to the known port's axis;
+///   midpoint Z. Both unknown: plain horizontal-first Z.
+///
+/// Output always starts at `from` and ends at `to`; intermediate
+/// points are inserted only when needed (no zero-length segments).
+fn route_orthogonal(
+    from: egui::Pos2,
+    from_dir: PortDir,
+    to: egui::Pos2,
+    to_dir: PortDir,
+    stub: f32,
+) -> Vec<egui::Pos2> {
+    use PortDir::*;
+    let f_horiz = matches!(from_dir, Left | Right);
+    let f_vert = matches!(from_dir, Up | Down);
+    let t_horiz = matches!(to_dir, Left | Right);
+    let t_vert = matches!(to_dir, Up | Down);
+
+    // Stub-ends — extend each port outward by `stub` even when the
+    // direction "doesn't help", so the wire is visibly attached to
+    // the connector and the elbow logic below has a fixed anchor.
+    let (uxf, uyf) = from_dir.outward();
+    let (uxt, uyt) = to_dir.outward();
+    let f_stub = if from_dir == None {
+        from
+    } else {
+        egui::pos2(from.x + uxf * stub, from.y + uyf * stub)
+    };
+    let t_stub = if to_dir == None {
+        to
+    } else {
+        egui::pos2(to.x + uxt * stub, to.y + uyt * stub)
+    };
+
+    // "Helps" = the port's outward axis carries us toward the other
+    // port. When false, the elbow has to wrap around the icon to
+    // avoid crossing through it.
+    let dx = to.x - from.x;
+    let dy = to.y - from.y;
+    let from_helps = uxf * dx + uyf * dy > 0.0;
+    let to_helps = uxt * (-dx) + uyt * (-dy) > 0.0;
+
+    let mut pts: Vec<egui::Pos2> = Vec::with_capacity(6);
+    pts.push(from);
+    if from_dir != None {
+        pts.push(f_stub);
+    }
+
+    // Decide the inner routing between f_stub and t_stub.
+    if (f_horiz && t_vert) || (f_vert && t_horiz) {
+        // Perpendicular → L-elbow at the corner that sits along
+        // each port's exit axis. `from`-side determines which
+        // ordinate the corner takes from which side.
+        let corner = if f_horiz {
+            egui::pos2(t_stub.x, f_stub.y)
+        } else {
+            egui::pos2(f_stub.x, t_stub.y)
+        };
+        if corner != f_stub && corner != t_stub {
+            pts.push(corner);
+        }
+    } else if f_horiz && t_horiz {
+        // Both horizontal. Pivot Y at midway between stub-ends;
+        // pivot X at midway between stub-ends if both helping
+        // (classic Z), else push past the trailing port + stub
+        // so the wire wraps around instead of crossing the icon.
+        let pivot_x = if from_helps && to_helps {
+            (f_stub.x + t_stub.x) * 0.5
+        } else if !from_helps {
+            // from-stub points the wrong way — push pivot past
+            // from-stub in its outward direction.
+            f_stub.x
+        } else {
+            t_stub.x
+        };
+        let pivot_y = (f_stub.y + t_stub.y) * 0.5;
+        pts.push(egui::pos2(pivot_x, f_stub.y));
+        if (pivot_y - f_stub.y).abs() > 0.5 {
+            pts.push(egui::pos2(pivot_x, pivot_y));
+            pts.push(egui::pos2(t_stub.x, pivot_y));
+        } else {
+            pts.push(egui::pos2(t_stub.x, f_stub.y));
+        }
+    } else if f_vert && t_vert {
+        // Mirror of the both-horizontal case.
+        let pivot_y = if from_helps && to_helps {
+            (f_stub.y + t_stub.y) * 0.5
+        } else if !from_helps {
+            f_stub.y
+        } else {
+            t_stub.y
+        };
+        let pivot_x = (f_stub.x + t_stub.x) * 0.5;
+        pts.push(egui::pos2(f_stub.x, pivot_y));
+        if (pivot_x - f_stub.x).abs() > 0.5 {
+            pts.push(egui::pos2(pivot_x, pivot_y));
+            pts.push(egui::pos2(pivot_x, t_stub.y));
+        } else {
+            pts.push(egui::pos2(f_stub.x, t_stub.y));
+        }
+    } else {
+        // At least one direction unknown. Defer to whichever side
+        // has a known direction; if both unknown, pick horizontal-
+        // first Z-bend.
+        let horizontal_first = f_horiz || t_horiz || (!f_vert && !t_vert);
+        if horizontal_first {
+            let midx = (f_stub.x + t_stub.x) * 0.5;
+            pts.push(egui::pos2(midx, f_stub.y));
+            pts.push(egui::pos2(midx, t_stub.y));
+        } else {
+            let midy = (f_stub.y + t_stub.y) * 0.5;
+            pts.push(egui::pos2(f_stub.x, midy));
+            pts.push(egui::pos2(t_stub.x, midy));
+        }
+    }
+
+    if to_dir != None {
+        pts.push(t_stub);
+    }
+    pts.push(to);
+
+    // De-dup adjacent identical points (collinear cases above can
+    // produce degenerate runs); a polyline with zero-length segments
+    // confuses both the renderer and the flow-dot animator.
+    pts.dedup_by(|a, b| (a.x - b.x).abs() < 0.5 && (a.y - b.y).abs() < 0.5);
+    pts
+}
+
+/// Serialise a [`PortKind`](crate::visual_diagram::PortKind) into the
+/// short string used in edge JSON data, so the factory can round-trip
+/// it without pulling in serde enum tagging.
+fn port_kind_str(kind: crate::visual_diagram::PortKind) -> &'static str {
+    match kind {
+        crate::visual_diagram::PortKind::Input => "input",
+        crate::visual_diagram::PortKind::Output => "output",
+        crate::visual_diagram::PortKind::Acausal => "acausal",
+    }
+}
+
+/// Build the wire hover tooltip text from AST-derived semantics —
+/// header = connector class short-name; one line per declared flow
+/// variable (name = value unit) for acausal connectors; otherwise
+/// one line for the source-port value itself (causal signals).
+/// Formats "n/a" for variables the sim hasn't sampled yet.
+fn edge_hover_text(
+    edge: &OrthogonalEdgeVisual,
+    state: &lunco_viz::kinds::canvas_plot_node::NodeStateSnapshot,
+) -> String {
+    use std::fmt::Write;
+    let mut out = String::new();
+    let _ = write!(&mut out, "{}", edge.connector_leaf);
+    if edge.flow_vars.is_empty() {
+        let v = state
+            .values
+            .get(&edge.source_path)
+            .or_else(|| state.values.get(&edge.target_path))
+            .copied();
+        let value_str = match v {
+            Some(v) => format!("{v:.3}"),
+            None => "n/a".into(),
+        };
+        let _ = write!(&mut out, "\n  value = {value_str}");
+    } else {
+        for fv in &edge.flow_vars {
+            let key = format!("{}.{}", edge.source_path, fv.name);
+            let v = state.values.get(&key).copied();
+            let value_str = match v {
+                Some(v) => format!("{v:.3}"),
+                None => "n/a".into(),
+            };
+            let unit = if fv.unit.is_empty() {
+                String::new()
+            } else {
+                format!(" {}", fv.unit)
+            };
+            let _ = write!(&mut out, "\n  {} = {value_str}{unit}", fv.name);
+        }
+    }
+    out
+}
+
+/// Perpendicular distance from point `p` to segment `a`→`b`, in
+/// screen pixels. Used for hit-testing wire hover.
+fn dist_point_to_segment(p: egui::Pos2, a: egui::Pos2, b: egui::Pos2) -> f32 {
+    let ab = b - a;
+    let ap = p - a;
+    let len_sq = ab.x * ab.x + ab.y * ab.y;
+    if len_sq < 1e-6 {
+        return (p - a).length();
+    }
+    let t = ((ap.x * ab.x + ap.y * ab.y) / len_sq).clamp(0.0, 1.0);
+    let proj = egui::pos2(a.x + ab.x * t, a.y + ab.y * t);
+    (p - proj).length()
+}
+
+/// Paint a compact tooltip near `pointer` showing `text`. Uses the
+/// wire's own color for the accent border so the user's eye links
+/// the tooltip to the wire they're hovering.
+fn paint_wire_tooltip(
+    painter: &egui::Painter,
+    pointer: egui::Pos2,
+    text: &str,
+    accent: egui::Color32,
+) {
+    let font = egui::FontId::proportional(11.0);
+    let galley = painter.layout_no_wrap(
+        text.to_string(),
+        font,
+        egui::Color32::from_rgb(235, 235, 240),
+    );
+    let pad = egui::vec2(6.0, 3.0);
+    // Offset so the tooltip doesn't sit under the cursor.
+    let min = egui::pos2(pointer.x + 12.0, pointer.y + 12.0);
+    let rect = egui::Rect::from_min_size(min, galley.size() + pad * 2.0);
+    painter.rect_filled(rect, 3.0, egui::Color32::from_rgba_unmultiplied(20, 22, 28, 235));
+    painter.rect_stroke(
+        rect,
+        3.0,
+        egui::Stroke::new(1.0, accent),
+        egui::StrokeKind::Inside,
+    );
+    painter.galley(rect.min + pad, galley, egui::Color32::PLACEHOLDER);
+}
+
+/// Paint a small filled triangle pointing from `tail` to `tip`.
+/// Used to indicate signal direction at the input end of causal
+/// connections — matches `arrow={Arrow.None,Arrow.Filled}` in MLS
+/// `Line` annotations.
+fn paint_arrowhead(painter: &egui::Painter, tail: egui::Pos2, tip: egui::Pos2, color: egui::Color32) {
+    let dx = tip.x - tail.x;
+    let dy = tip.y - tail.y;
+    let len = (dx * dx + dy * dy).sqrt();
+    if len < 1.0 {
+        return;
+    }
+    let (ux, uy) = (dx / len, dy / len);
+    let (px, py) = (-uy, ux); // perpendicular
+    const HEAD_LEN: f32 = 9.0;
+    const HEAD_HALFW: f32 = 4.0;
+    let base = egui::pos2(tip.x - ux * HEAD_LEN, tip.y - uy * HEAD_LEN);
+    let b1 = egui::pos2(base.x + px * HEAD_HALFW, base.y + py * HEAD_HALFW);
+    let b2 = egui::pos2(base.x - px * HEAD_HALFW, base.y - py * HEAD_HALFW);
+    painter.add(egui::Shape::convex_polygon(
+        vec![tip, b1, b2],
+        color,
+        egui::Stroke::NONE,
+    ));
+}
+
+/// Visual style of a port marker on a component icon. Mirrors the
+/// OMEdit / Dymola convention so users can read connector causality
+/// at a glance without hovering for the type name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PortShape {
+    /// Filled square — `input` causality (RealInput, BooleanInput, …).
+    InputSquare,
+    /// Filled triangle pointing outward from the icon — `output`
+    /// causality (RealOutput, BooleanOutput, …).
+    OutputTriangle,
+    /// Filled circle — acausal physical connectors (Pin, Flange, …).
+    AcausalCircle,
+}
+
+/// Paint a port marker at `center` using the OMEdit shape convention
+/// described on [`PortShape`]. `dir` orients the output triangle so
+/// it points away from the icon body; ignored for square / circle.
+fn paint_port_shape(
+    painter: &egui::Painter,
+    center: egui::Pos2,
+    shape: PortShape,
+    dir: PortDir,
+    fill: egui::Color32,
+    stroke: egui::Stroke,
+) {
+    const R: f32 = 5.0;
+    match shape {
+        PortShape::InputSquare => {
+            let rect = egui::Rect::from_center_size(center, egui::vec2(R * 1.6, R * 1.6));
+            painter.rect_filled(rect, 0.0, fill);
+            painter.rect_stroke(rect, 0.0, stroke, egui::StrokeKind::Inside);
+        }
+        PortShape::OutputTriangle => {
+            // Three-point triangle: tip in `dir`, base perpendicular.
+            let (ox, oy) = dir.outward();
+            // For PortDir::None fall back to a small square so the
+            // port is still visible (no preferred orientation).
+            if (ox, oy) == (0.0, 0.0) {
+                let rect = egui::Rect::from_center_size(
+                    center,
+                    egui::vec2(R * 1.6, R * 1.6),
+                );
+                painter.rect_filled(rect, 0.0, fill);
+                painter.rect_stroke(rect, 0.0, stroke, egui::StrokeKind::Inside);
+                return;
+            }
+            // Perpendicular for the base: rotate (ox, oy) 90°.
+            let (px, py) = (-oy, ox);
+            let tip = egui::pos2(center.x + ox * R * 1.4, center.y + oy * R * 1.4);
+            let b1 = egui::pos2(
+                center.x - ox * R * 0.4 + px * R * 0.9,
+                center.y - oy * R * 0.4 + py * R * 0.9,
+            );
+            let b2 = egui::pos2(
+                center.x - ox * R * 0.4 - px * R * 0.9,
+                center.y - oy * R * 0.4 - py * R * 0.9,
+            );
+            let pts = vec![tip, b1, b2];
+            painter.add(egui::Shape::convex_polygon(pts.clone(), fill, stroke));
+        }
+        PortShape::AcausalCircle => {
+            painter.circle_filled(center, R - 1.0, fill);
+            painter.circle_stroke(center, R - 1.0, stroke);
+        }
+    }
 }
 
 /// Selection-state brightener — shifts each channel ~30% toward white
@@ -807,6 +1407,11 @@ fn segment_dist_sq(
 
 fn build_registry() -> VisualRegistry {
     let mut reg = VisualRegistry::new();
+    // Generic in-canvas viz node kinds (plots today, dashboards /
+    // cameras tomorrow). Lives in lunco-viz so it's reusable from any
+    // domain plugin that wants embedded scopes — Modelica is just the
+    // first integrator.
+    lunco_viz::kinds::canvas_plot_node::register(&mut reg);
     reg.register_node_kind("modelica.icon", |data: &JsonValue| {
         // `type` is the fully-qualified path (used by drill-in);
         // show only its tail under the icon so the label isn't a
@@ -900,11 +1505,58 @@ fn build_registry() -> VisualRegistry {
                     .collect()
             })
             .unwrap_or_default();
+        // Prefer the connector's Icon-derived color (OMEdit/Dymola
+        // convention) when the projector populated it, fall through
+        // to the leaf-name palette otherwise.
+        let icon_color = data
+            .get("icon_color")
+            .and_then(|v| v.as_array())
+            .and_then(|arr| {
+                let r = arr.first()?.as_u64()? as u8;
+                let g = arr.get(1)?.as_u64()? as u8;
+                let b = arr.get(2)?.as_u64()? as u8;
+                Some(egui::Color32::from_rgb(r, g, b))
+            });
+        let leaf = connector_type.rsplit('.').next().unwrap_or(connector_type);
+        let source_path = data
+            .get("source_path")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let target_path = data
+            .get("target_path")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        // AST-derived connector classification (Input/Output/Acausal)
+        // replaces the old "ends_with Input" leaf-name test.
+        let kind = match data.get("kind").and_then(|v| v.as_str()).unwrap_or("") {
+            "input" => crate::visual_diagram::PortKind::Input,
+            "output" => crate::visual_diagram::PortKind::Output,
+            _ => crate::visual_diagram::PortKind::Acausal,
+        };
+        let is_causal = matches!(
+            kind,
+            crate::visual_diagram::PortKind::Input | crate::visual_diagram::PortKind::Output,
+        );
+
+        let flow_vars: Vec<crate::visual_diagram::FlowVarMeta> = data
+            .get("flow_vars")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .unwrap_or_default();
+
         OrthogonalEdgeVisual {
-            color: wire_color_for(connector_type),
+            color: icon_color.unwrap_or_else(|| wire_color_for(connector_type)),
             from_dir,
             to_dir,
             waypoints_world,
+            is_causal,
+            source_path,
+            target_path,
+            kind,
+            flow_vars,
+            connector_leaf: leaf.to_string(),
         }
     });
     reg
@@ -1162,7 +1814,12 @@ fn project_scene(diagram: &VisualDiagram) -> (Scene, HashMap<DiagramNodeId, Canv
                 CanvasPort {
                     id: CanvasPortId::new(p.name.clone()),
                     local_offset: CanvasPos::new(lx, ly),
-                    kind: p.connector_type.clone().into(),
+                    // AST-derived causality classification as a short
+                    // string (`"input"` / `"output"` / `"acausal"`) —
+                    // the canvas renderer's port-shape match reads
+                    // this directly, so MSL naming conventions are
+                    // no longer needed to pick the right shape.
+                    kind: port_kind_str(p.kind).into(),
                 }
             })
             .collect();
@@ -1263,6 +1920,14 @@ fn project_scene(diagram: &VisualDiagram) -> (Scene, HashMap<DiagramNodeId, Canv
             .as_ref()
             .map(|p| p.connector_type.clone())
             .unwrap_or_default();
+        // Wire color sourced from the connector class's Icon
+        // (populated by the projector for both local & MSL types).
+        // Falls back to `null` so the edge factory uses the leaf-name
+        // palette in `wire_color_for`.
+        let icon_color = src_port_def
+            .as_ref()
+            .and_then(|p| p.color)
+            .or_else(|| tgt_port_def.as_ref().and_then(|p| p.color));
         // Stub direction = which edge the port sits on in *screen*
         // space. Apply the owning instance's transform's linear part
         // (no translation — directions don't have a position). One
@@ -1303,6 +1968,35 @@ fn project_scene(diagram: &VisualDiagram) -> (Scene, HashMap<DiagramNodeId, Canv
                 // flipped to canvas world coords at render time.
                 // Empty array when the edge uses auto-routing only.
                 "waypoints": edge.waypoints,
+                // Icon-derived color [r,g,b] when available; null
+                // means the edge factory should use wire_color_for(type).
+                "icon_color": icon_color,
+                // Fully-qualified port paths for hover tooltips —
+                // e.g. `"engine.thrust"` or `"tank.fuel_out"`. The
+                // renderer appends each flow variable's name for
+                // acausal ports and looks the resulting path up in
+                // the per-frame NodeStateSnapshot.
+                "source_path": src_node
+                    .map(|n| format!("{}.{}", n.instance_name, edge.source_port))
+                    .unwrap_or_default(),
+                "target_path": tgt_node
+                    .map(|n| format!("{}.{}", n.instance_name, edge.target_port))
+                    .unwrap_or_default(),
+                // AST-derived connector semantics — replace the old
+                // leaf-name heuristics. `kind` is Input/Output/Acausal
+                // (drives arrowhead + animation eligibility).
+                // `flow_vars` lists every `flow` variable on the
+                // connector class (name + declared unit) so the
+                // tooltip / animation can reference them by their
+                // real names instead of a hardcoded `m_dot`.
+                "kind": src_port_def
+                    .as_ref()
+                    .map(|p| port_kind_str(p.kind))
+                    .unwrap_or("acausal"),
+                "flow_vars": src_port_def
+                    .as_ref()
+                    .map(|p| p.flow_vars.clone())
+                    .unwrap_or_default(),
             }),
             origin: None,
         });
@@ -1330,6 +2024,132 @@ pub type BackgroundDiagramHandle = std::sync::Arc<
         )>,
     >,
 >;
+
+#[allow(dead_code)]
+#[cfg(any())]
+fn render_canvas_plots_deprecated(
+    ui: &mut bevy_egui::egui::Ui,
+    world: &mut World,
+    active_doc: Option<lunco_doc::DocumentId>,
+    canvas_screen_rect: bevy_egui::egui::Rect,
+) {
+    use bevy_egui::egui;
+    use egui_plot::{Line, Plot, PlotPoints};
+    let Some(active_doc) = active_doc else { return };
+
+    // Snapshot plot list + viewport so we don't hold the docstate
+    // borrow across egui_plot calls.
+    let (plots, viewport) = {
+        let state = world.resource::<CanvasDiagramState>();
+        let docstate = state.get(Some(active_doc));
+        if docstate.canvas_plots.is_empty() {
+            return;
+        }
+        (
+            docstate.canvas_plots.clone(),
+            docstate.canvas.viewport.clone(),
+        )
+    };
+
+    // Look up the active simulator entity once — same lookup
+    // NewPlotPanel uses to bind signal refs.
+    let model_entity = world
+        .query::<(bevy::prelude::Entity, &crate::ModelicaModel)>()
+        .iter(world)
+        .next()
+        .map(|(e, _)| e)
+        .unwrap_or(bevy::prelude::Entity::PLACEHOLDER);
+
+    let canvas_rect = lunco_canvas::Rect::from_min_max(
+        lunco_canvas::Pos::new(canvas_screen_rect.min.x, canvas_screen_rect.min.y),
+        lunco_canvas::Pos::new(canvas_screen_rect.max.x, canvas_screen_rect.max.y),
+    );
+
+    // Pull SignalRegistry once — it's a Resource we read for every
+    // plot below, no mutation.
+    let registry_present =
+        world.get_resource::<lunco_viz::SignalRegistry>().is_some();
+    if !registry_present {
+        return;
+    }
+
+    for (idx, plot) in plots.iter().enumerate() {
+        let screen_rect =
+            viewport.world_rect_to_screen(
+                lunco_canvas::Rect::from_min_max(plot.world_min, plot.world_max),
+                canvas_rect,
+            );
+        let egui_rect = egui::Rect::from_min_max(
+            egui::pos2(screen_rect.min.x, screen_rect.min.y),
+            egui::pos2(screen_rect.max.x, screen_rect.max.y),
+        );
+        // Skip plots fully outside the visible canvas area —
+        // pan/zoom can move them off-screen and rendering an
+        // off-canvas widget wastes layout time.
+        if !canvas_screen_rect.intersects(egui_rect) {
+            continue;
+        }
+
+        // Build the line points from SignalRegistry. Re-acquire
+        // the resource borrow per-plot so future per-plot
+        // multi-signal lookups stay simple.
+        let signal_ref =
+            lunco_viz::SignalRef::new(model_entity, plot.signal_path.clone());
+        let points: Vec<[f64; 2]> = world
+            .resource::<lunco_viz::SignalRegistry>()
+            .scalar_history(&signal_ref)
+            .map(|h| h.samples.iter().map(|s| [s.time, s.value]).collect())
+            .unwrap_or_default();
+
+        // Foreground layer so the plot draws on top of nodes/wires.
+        let fg_layer = egui::LayerId::new(
+            egui::Order::Foreground,
+            ui.id().with(("canvas_plot", active_doc.raw(), idx)),
+        );
+        let painter = ui.ctx().layer_painter(fg_layer);
+        // Card background so the plot stays readable over busy
+        // diagrams. Theme-driven colours come from the canvas
+        // overlay theme already used by the NavBar overlay.
+        let theme = lunco_canvas::theme::current(ui.ctx());
+        painter.rect_filled(egui_rect, 6.0, theme.overlay_fill);
+        painter.rect_stroke(
+            egui_rect,
+            6.0,
+            egui::Stroke::new(1.0, theme.overlay_stroke),
+            egui::StrokeKind::Outside,
+        );
+
+        // Plot body — small egui_plot inside the rect. Title bar
+        // shows the bound signal name.
+        let mut child = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(egui_rect.shrink(4.0))
+                .layout(egui::Layout::top_down(egui::Align::Min))
+                .layer_id(fg_layer),
+        );
+        child.label(
+            egui::RichText::new(&plot.signal_path)
+                .small()
+                .color(theme.overlay_text),
+        );
+        let plot_id = (
+            "lunco_canvas_plot",
+            active_doc.raw(),
+            idx as u64,
+        );
+        Plot::new(plot_id)
+            .show_axes([false, false])
+            .show_grid(false)
+            .allow_drag(false)
+            .allow_zoom(false)
+            .allow_scroll(false)
+            .show(&mut child, |plot_ui| {
+                if !points.is_empty() {
+                    plot_ui.line(Line::new("", PlotPoints::from(points)));
+                }
+            });
+    }
+}
 
 pub struct CanvasDocState {
     pub canvas: Canvas,
@@ -2238,6 +3058,82 @@ impl CanvasDiagramPanel {
             );
         }
 
+        // Stash a per-frame snapshot of `SignalRegistry` data so any
+        // `lunco.viz.plot` scene nodes drawn this frame can read live
+        // samples without a `World` reference. Visuals live in
+        // `lunco-viz` and have no Bevy access; the snapshot is the
+        // bridge. Empty when no SignalRegistry is installed —
+        // `PlotNodeVisual` degrades to "title only".
+        if let Some(sig_reg) = world.get_resource::<lunco_viz::SignalRegistry>() {
+            let mut snapshot =
+                lunco_viz::kinds::canvas_plot_node::SignalSnapshot::default();
+            for (sig_ref, hist) in sig_reg.iter_scalar() {
+                let pts: Vec<[f64; 2]> =
+                    hist.samples.iter().map(|s| [s.time, s.value]).collect();
+                snapshot
+                    .samples
+                    .insert((sig_ref.entity, sig_ref.path.clone()), pts);
+            }
+            lunco_viz::kinds::canvas_plot_node::stash_signal_snapshot(
+                ui.ctx(),
+                snapshot,
+            );
+        }
+
+        // Stash a flat per-instance value snapshot so node visuals
+        // (icon hover tooltips, future inline value badges, etc.)
+        // can read parameters / inputs / live variables without
+        // touching the World. Combines all three buckets keyed by
+        // dotted instance path (`R1.R`, `P.y`, …); visuals filter by
+        // the prefix that matches their instance name.
+        {
+            let mut state =
+                lunco_viz::kinds::canvas_plot_node::NodeStateSnapshot::default();
+            let mut q = world.query::<&crate::ModelicaModel>();
+            for model in q.iter(world) {
+                for (k, v) in &model.parameters {
+                    state.values.insert(k.clone(), *v);
+                }
+                for (k, v) in &model.inputs {
+                    state.values.insert(k.clone(), *v);
+                }
+                for (k, v) in &model.variables {
+                    state.values.insert(k.clone(), *v);
+                }
+            }
+            lunco_viz::kinds::canvas_plot_node::stash_node_state(
+                ui.ctx(),
+                state,
+            );
+            // Flow-animation time base. Advances by the current
+            // frame's dt only while the simulator is stepping, so
+            // dots freeze on pause (staying visible at their last
+            // position) and resume from the same phase on unpause.
+            // Edge visuals read this via `fetch_flow_anim_time()`.
+            let any_unpaused = {
+                let mut q2 = world.query::<&crate::ModelicaModel>();
+                q2.iter(world).any(|m| !m.paused)
+            };
+            let dt = ui.ctx().input(|i| i.stable_dt as f64);
+            let prev = ui
+                .ctx()
+                .data(|d| {
+                    d.get_temp::<f64>(egui::Id::new("lunco_modelica_flow_anim_time"))
+                })
+                .unwrap_or(0.0);
+            let next = if any_unpaused { prev + dt } else { prev };
+            ui.ctx().data_mut(|d| {
+                d.insert_temp(
+                    egui::Id::new("lunco_modelica_flow_anim_time"),
+                    next,
+                );
+                d.insert_temp(
+                    egui::Id::new("lunco_modelica_sim_stepping"),
+                    any_unpaused,
+                );
+            });
+        }
+
         let (response, events) = {
             let mut state = world.resource_mut::<CanvasDiagramState>();
             let docstate = state.get_mut(active_doc);
@@ -2832,6 +3728,95 @@ fn render_empty_menu(
             }
         }
     }
+    ui.separator();
+    // ── Add Plot ──────────────────────────────────────────────────
+    // In-canvas scope: pick a signal from the active simulator and
+    // drop a `lunco.viz.plot` Scene node at the click position.
+    // Empty submenu means no sim has run yet.
+    let sigs: Vec<(bevy::prelude::Entity, String)> = world
+        .get_resource::<lunco_viz::SignalRegistry>()
+        .map(|r| {
+            let mut v: Vec<_> = r
+                .iter_scalar()
+                .map(|(s, _)| (s.entity, s.path.clone()))
+                .collect();
+            v.sort_by(|a, b| a.1.cmp(&b.1));
+            v
+        })
+        .unwrap_or_default();
+    ui.menu_button("📊 Add Plot here", |ui| {
+        // TODO(menu-height): the height is "so-so" — sometimes
+        // collapses to 3 rows. Match how the Modelica
+        // "Add component" cascade works (see
+        // `render_msl_package_menu` ~3065): plain
+        // `ui.menu_button(..., |ui| ...)` recursively, no explicit
+        // `set_min_*`/`set_max_*`. Egui auto-sizes from content
+        // there and it Just Works. The current adaptive
+        // computation below is a workaround — the real fix is to
+        // mirror that simpler structure (probably means dropping
+        // the ScrollArea wrapper too).
+        const ROW_PX: f32 = 18.0;
+        let max_h = (ui.ctx().screen_rect().height() * 0.7).max(180.0);
+        let wanted = ((sigs.len() + 2) as f32 * ROW_PX).min(max_h);
+        ui.set_min_height(wanted);
+        if sigs.is_empty() {
+            ui.label(
+                egui::RichText::new("(no signals yet — run a simulation)")
+                    .weak()
+                    .small(),
+            );
+            return;
+        }
+        // ScrollArea caps the height at 80 % of the screen so the
+        // popup never spills past the window. `auto_shrink: true`
+        // for height — the popup itself only grows as tall as it
+        // needs. `false` for width so long names don't trigger a
+        // horizontal scrollbar.
+        let max_h = ui.ctx().screen_rect().height() * 0.8;
+        egui::ScrollArea::vertical()
+            .max_height(max_h)
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                for (entity, path) in &sigs {
+                    if ui.button(path).clicked() {
+                        let payload =
+                            lunco_viz::kinds::canvas_plot_node::PlotNodeData {
+                                entity: entity.to_bits(),
+                                signal_path: path.clone(),
+                                title: String::new(),
+                            };
+                        let data = serde_json::to_value(&payload)
+                            .unwrap_or_default();
+                        let active_doc = active_doc_from_world(world);
+                        let mut state =
+                            world.resource_mut::<CanvasDiagramState>();
+                        let docstate = state.get_mut(active_doc);
+                        let scene = &mut docstate.canvas.scene;
+                        let id = scene.alloc_node_id();
+                        // 60×40 default size in canvas world coords;
+                        // anchor top-left at the click point so the
+                        // plot appears where the menu opened.
+                        scene.insert_node(lunco_canvas::scene::Node {
+                            id,
+                            rect: lunco_canvas::Rect::from_min_max(
+                                click_world,
+                                lunco_canvas::Pos::new(
+                                    click_world.x + 60.0,
+                                    click_world.y + 40.0,
+                                ),
+                            ),
+                            kind: lunco_viz::kinds::canvas_plot_node::PLOT_NODE_KIND
+                                .into(),
+                            data,
+                            ports: Vec::new(),
+                            label: String::new(),
+                            origin: None,
+                        });
+                        ui.close();
+                    }
+                }
+            });
+    });
     ui.separator();
     if ui.button("⎚ Fit all (F)").clicked() {
         let active_doc = active_doc_from_world(world);
@@ -4186,12 +5171,32 @@ fn apply_ops(world: &mut World, doc_id: lunco_doc::DocumentId, ops: Vec<Modelica
         .and_then(|s| s.open_model.as_ref())
         .map(|m| m.read_only)
         .unwrap_or(false);
+    // NOTE: we no longer early-return on read-only tabs. `read_only`
+    // gates *save-to-disk* — editing the in-memory Document is always
+    // allowed. Dropping edits silently made node drags snap back on
+    // every compile, which looked like a regression of the canvas
+    // layout. The duplicate-to-workspace hint is still surfaced (so
+    // users know their in-memory changes won't persist across a tab
+    // close), but the ops themselves flow through to
+    // `checkpoint_source` → compile reads the updated placement.
     if is_read_only {
         bevy::log::info!(
-            "[CanvasDiagram] discarded {} op(s) — tab is a read-only library class",
+            "[CanvasDiagram] applying {} op(s) in-memory on read-only tab \
+             (changes will be lost unless you Duplicate to Workspace)",
             n
         );
-        return;
+        if let Some(mut ws) = world.get_resource_mut::<WorkbenchState>() {
+            // Non-blocking hint — doesn't replace a real compile
+            // error. Only set if there isn't already one visible.
+            if ws.compilation_error.is_none() {
+                ws.compilation_error = Some(
+                    "Read-only library model — edits apply in-memory only. \
+                     Use File → Duplicate to Workspace to keep them across \
+                     tab close / reopen."
+                        .to_string(),
+                );
+            }
+        }
     }
 
     // Preload any class the user just referenced. Fire-and-forget —
