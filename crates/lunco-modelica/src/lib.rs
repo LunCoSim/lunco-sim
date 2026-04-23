@@ -1322,6 +1322,13 @@ pub struct ModelicaModel {
     /// be recomputed on reload.
     #[reflect(ignore)]
     pub descriptions: HashMap<String, String>,
+    /// Per-parameter `(min, max)` bounds lifted from Modelica
+    /// `parameter Real x(min=..., max=...) = ...` declarations.
+    /// `None` at either end means unbounded on that side. The
+    /// Telemetry panel clamps the DragValue to this range so users
+    /// can't push a model out of its authored operating envelope.
+    #[reflect(ignore)]
+    pub parameter_bounds: HashMap<String, (Option<f64>, Option<f64>)>,
     /// Canonical id of the Modelica source document backing this entity,
     /// looked up in [`ui::ModelicaDocumentRegistry`]. `DocumentId::default()`
     /// (`0`) means "no document assigned yet"; systems should treat it as

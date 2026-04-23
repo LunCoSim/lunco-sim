@@ -893,48 +893,45 @@ impl EdgeVisual for OrthogonalEdgeVisual {
         // dots, even if the last sampled m_dot was large. No flow
         // variable on this connector (causal signals: throttle,
         // thrust, mass) → never animated.
-        let sim_stepping = ctx
+        // Flow animation: the monotonic `anim_time` only advances
+        // while the simulator is stepping, so pausing freezes the
+        // dots in place (visible but still). Unpausing resumes from
+        // the same phase — no teleport, no fresh cycle.
+        let anim_time = ctx
             .ui
             .ctx()
             .data(|d| {
-                d.get_temp::<bool>(egui::Id::new("lunco_modelica_sim_stepping"))
+                d.get_temp::<f64>(egui::Id::new("lunco_modelica_flow_anim_time"))
             })
-            .unwrap_or(false);
-        if sim_stepping {
-            let node_state =
-                lunco_viz::kinds::canvas_plot_node::fetch_node_state(ctx.ui.ctx());
-            const ACTIVITY_EPS: f64 = 1e-6;
-            let (value, reverse_if_negative) = if let Some(fv) = self.flow_vars.first() {
-                // Acausal flow connector: sample the first declared
-                // flow variable by its AST name. MLS sign convention:
-                // positive `flow` means mass flows INTO the connector
-                // from the source's component; negative → mass moves
-                // toward the source → reverse polyline so dots trail
-                // the actual direction of travel.
-                let key = format!("{}.{}", self.source_path, fv.name);
-                (node_state.values.get(&key).copied(), true)
-            } else {
-                // Causal signal: value lives at the source port path.
-                // Signal direction is already encoded in the polyline
-                // from→to (output to input), so don't flip on sign;
-                // just animate when the value is non-trivially
-                // non-zero so the wire reads as "live data".
-                let v = node_state
-                    .values
-                    .get(&self.source_path)
-                    .or_else(|| node_state.values.get(&self.target_path))
-                    .copied();
-                (v, false)
-            };
-            if let Some(v) = value {
-                if v.abs() > ACTIVITY_EPS {
-                    if reverse_if_negative && v < 0.0 {
-                        let mut rev = polyline.clone();
-                        rev.reverse();
-                        paint_flow_dots(painter, &rev, col, ctx.time);
-                    } else {
-                        paint_flow_dots(painter, &polyline, col, ctx.time);
-                    }
+            .unwrap_or(0.0);
+        let node_state =
+            lunco_viz::kinds::canvas_plot_node::fetch_node_state(ctx.ui.ctx());
+        const ACTIVITY_EPS: f64 = 1e-6;
+        let (value, reverse_if_negative) = if let Some(fv) = self.flow_vars.first() {
+            // Acausal flow connector: sample declared flow variable.
+            // MLS sign convention: positive = mass flows INTO the
+            // connector from the source component; negative → flow
+            // toward source → reverse polyline.
+            let key = format!("{}.{}", self.source_path, fv.name);
+            (node_state.values.get(&key).copied(), true)
+        } else {
+            // Causal signal: value is at the source port. Direction
+            // is polyline from→to (output→input); don't flip on sign.
+            let v = node_state
+                .values
+                .get(&self.source_path)
+                .or_else(|| node_state.values.get(&self.target_path))
+                .copied();
+            (v, false)
+        };
+        if let Some(v) = value {
+            if v.abs() > ACTIVITY_EPS {
+                if reverse_if_negative && v < 0.0 {
+                    let mut rev = polyline.clone();
+                    rev.reverse();
+                    paint_flow_dots(painter, &rev, col, anim_time);
+                } else {
+                    paint_flow_dots(painter, &polyline, col, anim_time);
                 }
             }
         }
@@ -3108,16 +3105,28 @@ impl CanvasDiagramPanel {
                 ui.ctx(),
                 state,
             );
-            // Stash "simulation is actively stepping" so edge visuals
-            // know when to animate. Animation is a *status* indicator:
-            // no step → no dots, regardless of last-sampled flow
-            // values. Read off `ModelicaModel.paused` across all live
-            // models on the scene; any unpaused model counts.
+            // Flow-animation time base. Advances by the current
+            // frame's dt only while the simulator is stepping, so
+            // dots freeze on pause (staying visible at their last
+            // position) and resume from the same phase on unpause.
+            // Edge visuals read this via `fetch_flow_anim_time()`.
             let any_unpaused = {
                 let mut q2 = world.query::<&crate::ModelicaModel>();
                 q2.iter(world).any(|m| !m.paused)
             };
+            let dt = ui.ctx().input(|i| i.stable_dt as f64);
+            let prev = ui
+                .ctx()
+                .data(|d| {
+                    d.get_temp::<f64>(egui::Id::new("lunco_modelica_flow_anim_time"))
+                })
+                .unwrap_or(0.0);
+            let next = if any_unpaused { prev + dt } else { prev };
             ui.ctx().data_mut(|d| {
+                d.insert_temp(
+                    egui::Id::new("lunco_modelica_flow_anim_time"),
+                    next,
+                );
                 d.insert_temp(
                     egui::Id::new("lunco_modelica_sim_stepping"),
                     any_unpaused,
@@ -5162,27 +5171,32 @@ fn apply_ops(world: &mut World, doc_id: lunco_doc::DocumentId, ops: Vec<Modelica
         .and_then(|s| s.open_model.as_ref())
         .map(|m| m.read_only)
         .unwrap_or(false);
+    // NOTE: we no longer early-return on read-only tabs. `read_only`
+    // gates *save-to-disk* — editing the in-memory Document is always
+    // allowed. Dropping edits silently made node drags snap back on
+    // every compile, which looked like a regression of the canvas
+    // layout. The duplicate-to-workspace hint is still surfaced (so
+    // users know their in-memory changes won't persist across a tab
+    // close), but the ops themselves flow through to
+    // `checkpoint_source` → compile reads the updated placement.
     if is_read_only {
         bevy::log::info!(
-            "[CanvasDiagram] discarded {} op(s) — tab is a read-only library class",
+            "[CanvasDiagram] applying {} op(s) in-memory on read-only tab \
+             (changes will be lost unless you Duplicate to Workspace)",
             n
         );
-        // User-facing explanation. The tab title already shows a 👁
-        // read-only chip, but silent drops still confuse people on
-        // first edit attempt — surface the "why nothing happened" in
-        // the Diagnostics banner so it's unmissable. The duplicate
-        // action clears this on its own (Duplicate → new Untitled →
-        // read_only=false → future ops write through cleanly).
         if let Some(mut ws) = world.get_resource_mut::<WorkbenchState>() {
-            ws.compilation_error = Some(
-                "This is a read-only library model. \
-                 Use File → Duplicate to Workspace \
-                 (or the Duplicate button in the tab header) \
-                 to create an editable copy of it, then try again."
-                    .to_string(),
-            );
+            // Non-blocking hint — doesn't replace a real compile
+            // error. Only set if there isn't already one visible.
+            if ws.compilation_error.is_none() {
+                ws.compilation_error = Some(
+                    "Read-only library model — edits apply in-memory only. \
+                     Use File → Duplicate to Workspace to keep them across \
+                     tab close / reopen."
+                        .to_string(),
+                );
+            }
         }
-        return;
     }
 
     // Preload any class the user just referenced. Fire-and-forget —

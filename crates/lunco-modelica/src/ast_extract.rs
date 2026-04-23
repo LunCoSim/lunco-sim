@@ -379,17 +379,28 @@ pub fn strip_input_defaults(source: &str) -> (String, HashMap<String, f64>) {
     let mut defaults = HashMap::new();
     collect_inputs_with_defaults_from_classes(&ast.classes, &mut defaults);
 
-    // Rebuild source with input defaults stripped using regex replacement.
-    // TODO: Replace with AST-based source regeneration once we have a Modelica
-    // source printer. For now, regex is the pragmatic choice for text mutation.
+    // Rebuild source with input defaults stripped. The regex has to
+    // cope with modifications between the name and the binding —
+    // `input Real throttle(min=0, max=100, unit="%") = 100;` is
+    // common once users add bounds, and the old pattern skipped such
+    // declarations, so rumoca baked `throttle` in as a constant and
+    // `set_input()` silently no-op'd. Capture groups:
+    //   1: everything up to the component name (`input Type `), with
+    //      dotted types like `Modelica.Blocks.Interfaces.RealInput`
+    //   2: the component name
+    //   3: optional `(…mods…)` — preserved
+    //   4: the `= literal` — dropped
     let re = regex::Regex::new(
-        r"(?m)(^\s*(?:input)\s+\w+\s+)([a-zA-Z0-9_]+)(\s*=\s*[-+]?[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?)",
+        r"(?m)(^\s*input\s+[\w\.]+\s+)([A-Za-z_][A-Za-z0-9_]*)(\s*\([^)]*\))?(\s*=\s*[-+]?[0-9]*\.?[0-9]+(?:[eE][-+]?[0-9]+)?)",
     )
     .unwrap();
 
     let modified = re
         .replace_all(source, |caps: &regex::Captures| {
-            format!("{}{}", &caps[1], &caps[2])
+            let prefix = &caps[1];
+            let name = &caps[2];
+            let mods = caps.get(3).map(|m| m.as_str()).unwrap_or("");
+            format!("{prefix}{name}{mods}")
         })
         .to_string();
 
@@ -567,6 +578,14 @@ fn collect_input_names_from_classes(
 /// Returns `None` for non-numeric bindings (strings, booleans, references, etc.).
 fn extract_numeric_binding(expr: &Option<Expression>) -> Option<f64> {
     let expr = expr.as_ref()?;
+    numeric_of(expr)
+}
+
+/// Parse a numeric literal expression (including a leading `-` unary
+/// minus — rumoca represents `-5` as `Unary(Minus, 5)`). Used for
+/// `min`/`max` modifier extraction where negative bounds are common.
+fn numeric_of(expr: &Expression) -> Option<f64> {
+    use rumoca_session::parsing::ast::OpUnary;
     match expr {
         Expression::Terminal { terminal_type, token } => match terminal_type {
             TerminalType::UnsignedReal | TerminalType::UnsignedInteger => {
@@ -574,7 +593,48 @@ fn extract_numeric_binding(expr: &Option<Expression>) -> Option<f64> {
             }
             _ => None,
         },
+        Expression::Unary { op, rhs } if matches!(op, OpUnary::Minus(_)) => {
+            numeric_of(rhs).map(|v| -v)
+        }
         _ => None,
+    }
+}
+
+/// Parameter bounds (min, max) pulled from `parameter Real x(min=…,
+/// max=…)` modifiers. Either end is `None` if not declared. Used by
+/// the Telemetry panel to clamp DragValues to the authored operating
+/// envelope — MLS §4.8 says the UI SHOULD respect these bounds.
+pub fn extract_parameter_bounds_from_ast(
+    ast: &StoredDefinition,
+) -> HashMap<String, (Option<f64>, Option<f64>)> {
+    let mut bounds = HashMap::new();
+    collect_parameter_bounds_from_classes(&ast.classes, &mut bounds);
+    bounds
+}
+
+fn collect_parameter_bounds_from_classes(
+    classes: &indexmap::IndexMap<String, ClassDef>,
+    out: &mut HashMap<String, (Option<f64>, Option<f64>)>,
+) {
+    // Bounds are collected for *any* tunable numeric declaration —
+    // parameters AND inputs — because users drive both from the
+    // Telemetry panel and expect `min=…, max=…` to be honoured in
+    // both sections. Non-tunable declarations (locals, outputs,
+    // internal algebraics) are skipped.
+    for class in classes.values() {
+        for component in class.components.values() {
+            let tunable = matches!(component.variability, Variability::Parameter(_))
+                || matches!(component.causality, Causality::Input(_));
+            if !tunable {
+                continue;
+            }
+            let min = component.modifications.get("min").and_then(numeric_of);
+            let max = component.modifications.get("max").and_then(numeric_of);
+            if min.is_some() || max.is_some() {
+                out.insert(component.name.clone(), (min, max));
+            }
+        }
+        collect_parameter_bounds_from_classes(&class.classes, out);
     }
 }
 

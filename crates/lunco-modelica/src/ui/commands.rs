@@ -1105,6 +1105,8 @@ fn on_compile_model(
         return;
     };
     let params = crate::ast_extract::extract_parameters_from_ast(&ast);
+    let param_bounds =
+        crate::ast_extract::extract_parameter_bounds_from_ast(&ast);
     let inputs_with_defaults =
         crate::ast_extract::extract_inputs_with_defaults_from_ast(&ast);
     let runtime_inputs = crate::ast_extract::extract_input_names_from_ast(&ast);
@@ -1120,6 +1122,7 @@ fn on_compile_model(
             model.is_stepping = true;
             model.model_name = model_name.clone();
             model.parameters = params.clone();
+            model.parameter_bounds = param_bounds.clone();
             model.inputs.clear();
             for (name, val) in &inputs_with_defaults {
                 let existing = old_inputs.get(name).copied();
@@ -1158,6 +1161,7 @@ fn on_compile_model(
                     session_id,
                     paused: false,
                     parameters: params,
+                    parameter_bounds: param_bounds,
                     inputs: runtime_inputs.into_iter().map(|n| (n, 0.0)).collect(),
                     variables: HashMap::new(),
                     descriptions: HashMap::new(),

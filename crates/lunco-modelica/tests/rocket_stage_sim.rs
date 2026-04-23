@@ -1,10 +1,10 @@
 //! End-to-end test: AnnotatedRocketStage compiles and simulates.
 //!
-//! Exercises the real rocket physics (thrust, mass depletion, gravity)
-//! by compiling `AnnotatedRocketStage.RocketStage` and stepping the
-//! solver forward. Asserts altitude rises and tank mass falls —
-//! catches regressions where the equations stop coupling (e.g. if
-//! `tank.m_dot = engine.m_dot` ever gets elided).
+//! Throttle is a parameter (not a runtime input) because rumoca's
+//! BDF initial-condition solver stalls on composite trees with
+//! runtime inputs today — see the note on `RocketStage.throttle` in
+//! the .mo file. The workbench dispatches UpdateParameters on
+//! Telemetry edits, which recompiles quickly enough to feel live.
 
 use lunco_modelica::ModelicaCompiler;
 use rumoca_sim::{SimStepper, StepperOptions};
@@ -17,7 +17,11 @@ fn rocket_stage_thrust_lifts_vehicle_and_depletes_tank() {
 
     let mut compiler = ModelicaCompiler::new();
     let dae = compiler
-        .compile_str("AnnotatedRocketStage.RocketStage", &stripped, "AnnotatedRocketStage.mo")
+        .compile_str(
+            "AnnotatedRocketStage.RocketStage",
+            &stripped,
+            "AnnotatedRocketStage.mo",
+        )
         .expect("RocketStage should compile");
 
     let mut opts = StepperOptions::default();
@@ -28,10 +32,9 @@ fn rocket_stage_thrust_lifts_vehicle_and_depletes_tank() {
     let m0 = stepper.get("tank.m").expect("tank.m present");
     let alt0 = stepper.get("airframe.altitude").expect("altitude present");
 
-    // Step 10 s of burn — long enough for thrust > weight to show.
     let mut t = 0.0;
     while t < 10.0 {
-        stepper.step(t + 0.1).expect("step ok");
+        stepper.step(0.1).expect("step ok");
         t += 0.1;
     }
 

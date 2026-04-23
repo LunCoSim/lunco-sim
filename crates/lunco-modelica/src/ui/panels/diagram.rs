@@ -3222,6 +3222,7 @@ pub fn do_compile(world: &mut World) {
                 session_id,
                 paused: false,
                 parameters: HashMap::new(),
+                parameter_bounds: HashMap::new(),
                 inputs: HashMap::new(),
                 variables: HashMap::new(),
                 descriptions: HashMap::new(),
