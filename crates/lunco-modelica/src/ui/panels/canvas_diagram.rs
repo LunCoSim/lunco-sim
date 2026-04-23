@@ -372,17 +372,13 @@ impl NodeVisual for IconNodeVisual {
             let p = ctx.viewport.world_to_screen(world, ctx.screen_rect);
             let center = egui::pos2(p.x, p.y);
 
-            // Port shape from leaf name of connector type. Inputs
-            // typically end in `Input`; outputs in `Output`. Anything
-            // else (Pin, Flange_a, HeatPort, custom acausal) stays a
-            // circle.
-            let leaf = port.kind.rsplit('.').next().unwrap_or(&port.kind);
-            let shape = if leaf.ends_with("Input") {
-                PortShape::InputSquare
-            } else if leaf.ends_with("Output") {
-                PortShape::OutputTriangle
-            } else {
-                PortShape::AcausalCircle
+            // Port shape from AST-derived kind (the projector wrote
+            // `"input"` / `"output"` / `"acausal"` into `port.kind`;
+            // see the `CanvasPort` construction in `project_scene`).
+            let shape = match port.kind.as_str() {
+                "input" => PortShape::InputSquare,
+                "output" => PortShape::OutputTriangle,
+                _ => PortShape::AcausalCircle,
             };
 
             // Outward direction in *screen* space — derived from
@@ -736,6 +732,28 @@ struct OrthogonalEdgeVisual {
     /// for acausal connectors (Pin, Flange, FluidPort, …) — the
     /// MLS convention is symmetric arrows-or-no-arrows for those.
     is_causal: bool,
+    /// Fully-qualified source port path, e.g. `"engine.thrust"` /
+    /// `"tank.fuel_out"`. Used to look up the current value (and
+    /// its unit) for the hover tooltip, and for flow-animation
+    /// direction (sign of `{source_path}.{flow_var}` at runtime).
+    source_path: String,
+    /// Fully-qualified target port path. Secondary — used only when
+    /// the source path has no sampled value (e.g. inputs are only
+    /// visible on the target side).
+    target_path: String,
+    /// Connector causality classification (Input / Output / Acausal)
+    /// derived from the connector class AST at projection time.
+    /// Drives arrowhead rendering and animation eligibility.
+    kind: crate::visual_diagram::PortKind,
+    /// Flow variables declared on the connector class (name + unit).
+    /// Empty for causal signals — those never animate. Non-empty →
+    /// we sample `{source_path}.{name}` to drive flow animation and
+    /// to populate the hover tooltip with each variable + unit.
+    flow_vars: Vec<crate::visual_diagram::FlowVarMeta>,
+    /// Short class-name for the tooltip label when the connector
+    /// class has no description string. Matches the MSL-style
+    /// "what is this wire carrying" intuition (e.g. `"FuelPort_a"`).
+    connector_leaf: String,
 }
 
 impl Default for OrthogonalEdgeVisual {
@@ -746,6 +764,11 @@ impl Default for OrthogonalEdgeVisual {
             to_dir: PortDir::None,
             waypoints_world: Vec::new(),
             is_causal: false,
+            source_path: String::new(),
+            target_path: String::new(),
+            kind: crate::visual_diagram::PortKind::Acausal,
+            flow_vars: Vec::new(),
+            connector_leaf: String::new(),
         }
     }
 }
@@ -864,11 +887,74 @@ impl EdgeVisual for OrthogonalEdgeVisual {
         // for no reason. Real per-edge flow magnitude/direction is a
         // follow-up — for now this just signals "this connection is
         // live."
-        let snap = lunco_viz::kinds::canvas_plot_node::fetch_signal_snapshot(
-            ctx.ui.ctx(),
-        );
-        if !snap.samples.is_empty() {
-            paint_flow_dots(painter, &polyline, col, ctx.time);
+        // Flow-dot animation is a *live status indicator* — it only
+        // runs when the simulator is actively stepping AND a flow
+        // variable has a non-negligible magnitude. Paused state → no
+        // dots, even if the last sampled m_dot was large. No flow
+        // variable on this connector (causal signals: throttle,
+        // thrust, mass) → never animated.
+        let sim_stepping = ctx
+            .ui
+            .ctx()
+            .data(|d| {
+                d.get_temp::<bool>(egui::Id::new("lunco_modelica_sim_stepping"))
+            })
+            .unwrap_or(false);
+        if sim_stepping {
+            let node_state =
+                lunco_viz::kinds::canvas_plot_node::fetch_node_state(ctx.ui.ctx());
+            const ACTIVITY_EPS: f64 = 1e-6;
+            let (value, reverse_if_negative) = if let Some(fv) = self.flow_vars.first() {
+                // Acausal flow connector: sample the first declared
+                // flow variable by its AST name. MLS sign convention:
+                // positive `flow` means mass flows INTO the connector
+                // from the source's component; negative → mass moves
+                // toward the source → reverse polyline so dots trail
+                // the actual direction of travel.
+                let key = format!("{}.{}", self.source_path, fv.name);
+                (node_state.values.get(&key).copied(), true)
+            } else {
+                // Causal signal: value lives at the source port path.
+                // Signal direction is already encoded in the polyline
+                // from→to (output to input), so don't flip on sign;
+                // just animate when the value is non-trivially
+                // non-zero so the wire reads as "live data".
+                let v = node_state
+                    .values
+                    .get(&self.source_path)
+                    .or_else(|| node_state.values.get(&self.target_path))
+                    .copied();
+                (v, false)
+            };
+            if let Some(v) = value {
+                if v.abs() > ACTIVITY_EPS {
+                    if reverse_if_negative && v < 0.0 {
+                        let mut rev = polyline.clone();
+                        rev.reverse();
+                        paint_flow_dots(painter, &rev, col, ctx.time);
+                    } else {
+                        paint_flow_dots(painter, &polyline, col, ctx.time);
+                    }
+                }
+            }
+        }
+
+        // Hover tooltip — "<label>: <value> <unit>" when the pointer
+        // is within HOVER_PX of any segment. Value is sampled from
+        // the per-frame NodeStateSnapshot; renders nothing when
+        // there's no sim (tooltip still shows the label + "n/a").
+        if let Some(p) = ctx.ui.ctx().pointer_hover_pos() {
+            const HOVER_PX: f32 = 8.0;
+            let hit = polyline
+                .windows(2)
+                .any(|w| dist_point_to_segment(p, w[0], w[1]) <= HOVER_PX);
+            if hit {
+                let state = lunco_viz::kinds::canvas_plot_node::fetch_node_state(
+                    ctx.ui.ctx(),
+                );
+                let text = edge_hover_text(self, &state);
+                paint_wire_tooltip(painter, p, &text, col);
+            }
         }
     }
 
@@ -1054,6 +1140,102 @@ fn route_orthogonal(
     // confuses both the renderer and the flow-dot animator.
     pts.dedup_by(|a, b| (a.x - b.x).abs() < 0.5 && (a.y - b.y).abs() < 0.5);
     pts
+}
+
+/// Serialise a [`PortKind`](crate::visual_diagram::PortKind) into the
+/// short string used in edge JSON data, so the factory can round-trip
+/// it without pulling in serde enum tagging.
+fn port_kind_str(kind: crate::visual_diagram::PortKind) -> &'static str {
+    match kind {
+        crate::visual_diagram::PortKind::Input => "input",
+        crate::visual_diagram::PortKind::Output => "output",
+        crate::visual_diagram::PortKind::Acausal => "acausal",
+    }
+}
+
+/// Build the wire hover tooltip text from AST-derived semantics —
+/// header = connector class short-name; one line per declared flow
+/// variable (name = value unit) for acausal connectors; otherwise
+/// one line for the source-port value itself (causal signals).
+/// Formats "n/a" for variables the sim hasn't sampled yet.
+fn edge_hover_text(
+    edge: &OrthogonalEdgeVisual,
+    state: &lunco_viz::kinds::canvas_plot_node::NodeStateSnapshot,
+) -> String {
+    use std::fmt::Write;
+    let mut out = String::new();
+    let _ = write!(&mut out, "{}", edge.connector_leaf);
+    if edge.flow_vars.is_empty() {
+        let v = state
+            .values
+            .get(&edge.source_path)
+            .or_else(|| state.values.get(&edge.target_path))
+            .copied();
+        let value_str = match v {
+            Some(v) => format!("{v:.3}"),
+            None => "n/a".into(),
+        };
+        let _ = write!(&mut out, "\n  value = {value_str}");
+    } else {
+        for fv in &edge.flow_vars {
+            let key = format!("{}.{}", edge.source_path, fv.name);
+            let v = state.values.get(&key).copied();
+            let value_str = match v {
+                Some(v) => format!("{v:.3}"),
+                None => "n/a".into(),
+            };
+            let unit = if fv.unit.is_empty() {
+                String::new()
+            } else {
+                format!(" {}", fv.unit)
+            };
+            let _ = write!(&mut out, "\n  {} = {value_str}{unit}", fv.name);
+        }
+    }
+    out
+}
+
+/// Perpendicular distance from point `p` to segment `a`→`b`, in
+/// screen pixels. Used for hit-testing wire hover.
+fn dist_point_to_segment(p: egui::Pos2, a: egui::Pos2, b: egui::Pos2) -> f32 {
+    let ab = b - a;
+    let ap = p - a;
+    let len_sq = ab.x * ab.x + ab.y * ab.y;
+    if len_sq < 1e-6 {
+        return (p - a).length();
+    }
+    let t = ((ap.x * ab.x + ap.y * ab.y) / len_sq).clamp(0.0, 1.0);
+    let proj = egui::pos2(a.x + ab.x * t, a.y + ab.y * t);
+    (p - proj).length()
+}
+
+/// Paint a compact tooltip near `pointer` showing `text`. Uses the
+/// wire's own color for the accent border so the user's eye links
+/// the tooltip to the wire they're hovering.
+fn paint_wire_tooltip(
+    painter: &egui::Painter,
+    pointer: egui::Pos2,
+    text: &str,
+    accent: egui::Color32,
+) {
+    let font = egui::FontId::proportional(11.0);
+    let galley = painter.layout_no_wrap(
+        text.to_string(),
+        font,
+        egui::Color32::from_rgb(235, 235, 240),
+    );
+    let pad = egui::vec2(6.0, 3.0);
+    // Offset so the tooltip doesn't sit under the cursor.
+    let min = egui::pos2(pointer.x + 12.0, pointer.y + 12.0);
+    let rect = egui::Rect::from_min_size(min, galley.size() + pad * 2.0);
+    painter.rect_filled(rect, 3.0, egui::Color32::from_rgba_unmultiplied(20, 22, 28, 235));
+    painter.rect_stroke(
+        rect,
+        3.0,
+        egui::Stroke::new(1.0, accent),
+        egui::StrokeKind::Inside,
+    );
+    painter.galley(rect.min + pad, galley, egui::Color32::PLACEHOLDER);
 }
 
 /// Paint a small filled triangle pointing from `tail` to `tip`.
@@ -1338,16 +1520,46 @@ fn build_registry() -> VisualRegistry {
                 let b = arr.get(2)?.as_u64()? as u8;
                 Some(egui::Color32::from_rgb(r, g, b))
             });
-        // Causal connection if the connector type leaf ends with
-        // Input/Output (the MSL signal-connector naming convention).
         let leaf = connector_type.rsplit('.').next().unwrap_or(connector_type);
-        let is_causal = leaf.ends_with("Input") || leaf.ends_with("Output");
+        let source_path = data
+            .get("source_path")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let target_path = data
+            .get("target_path")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        // AST-derived connector classification (Input/Output/Acausal)
+        // replaces the old "ends_with Input" leaf-name test.
+        let kind = match data.get("kind").and_then(|v| v.as_str()).unwrap_or("") {
+            "input" => crate::visual_diagram::PortKind::Input,
+            "output" => crate::visual_diagram::PortKind::Output,
+            _ => crate::visual_diagram::PortKind::Acausal,
+        };
+        let is_causal = matches!(
+            kind,
+            crate::visual_diagram::PortKind::Input | crate::visual_diagram::PortKind::Output,
+        );
+
+        let flow_vars: Vec<crate::visual_diagram::FlowVarMeta> = data
+            .get("flow_vars")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .unwrap_or_default();
+
         OrthogonalEdgeVisual {
             color: icon_color.unwrap_or_else(|| wire_color_for(connector_type)),
             from_dir,
             to_dir,
             waypoints_world,
             is_causal,
+            source_path,
+            target_path,
+            kind,
+            flow_vars,
+            connector_leaf: leaf.to_string(),
         }
     });
     reg
@@ -1605,7 +1817,12 @@ fn project_scene(diagram: &VisualDiagram) -> (Scene, HashMap<DiagramNodeId, Canv
                 CanvasPort {
                     id: CanvasPortId::new(p.name.clone()),
                     local_offset: CanvasPos::new(lx, ly),
-                    kind: p.connector_type.clone().into(),
+                    // AST-derived causality classification as a short
+                    // string (`"input"` / `"output"` / `"acausal"`) —
+                    // the canvas renderer's port-shape match reads
+                    // this directly, so MSL naming conventions are
+                    // no longer needed to pick the right shape.
+                    kind: port_kind_str(p.kind).into(),
                 }
             })
             .collect();
@@ -1757,6 +1974,32 @@ fn project_scene(diagram: &VisualDiagram) -> (Scene, HashMap<DiagramNodeId, Canv
                 // Icon-derived color [r,g,b] when available; null
                 // means the edge factory should use wire_color_for(type).
                 "icon_color": icon_color,
+                // Fully-qualified port paths for hover tooltips —
+                // e.g. `"engine.thrust"` or `"tank.fuel_out"`. The
+                // renderer appends each flow variable's name for
+                // acausal ports and looks the resulting path up in
+                // the per-frame NodeStateSnapshot.
+                "source_path": src_node
+                    .map(|n| format!("{}.{}", n.instance_name, edge.source_port))
+                    .unwrap_or_default(),
+                "target_path": tgt_node
+                    .map(|n| format!("{}.{}", n.instance_name, edge.target_port))
+                    .unwrap_or_default(),
+                // AST-derived connector semantics — replace the old
+                // leaf-name heuristics. `kind` is Input/Output/Acausal
+                // (drives arrowhead + animation eligibility).
+                // `flow_vars` lists every `flow` variable on the
+                // connector class (name + declared unit) so the
+                // tooltip / animation can reference them by their
+                // real names instead of a hardcoded `m_dot`.
+                "kind": src_port_def
+                    .as_ref()
+                    .map(|p| port_kind_str(p.kind))
+                    .unwrap_or("acausal"),
+                "flow_vars": src_port_def
+                    .as_ref()
+                    .map(|p| p.flow_vars.clone())
+                    .unwrap_or_default(),
             }),
             origin: None,
         });
@@ -2865,6 +3108,21 @@ impl CanvasDiagramPanel {
                 ui.ctx(),
                 state,
             );
+            // Stash "simulation is actively stepping" so edge visuals
+            // know when to animate. Animation is a *status* indicator:
+            // no step → no dots, regardless of last-sampled flow
+            // values. Read off `ModelicaModel.paused` across all live
+            // models on the scene; any unpaused model counts.
+            let any_unpaused = {
+                let mut q2 = world.query::<&crate::ModelicaModel>();
+                q2.iter(world).any(|m| !m.paused)
+            };
+            ui.ctx().data_mut(|d| {
+                d.insert_temp(
+                    egui::Id::new("lunco_modelica_sim_stepping"),
+                    any_unpaused,
+                );
+            });
         }
 
         let (response, events) = {

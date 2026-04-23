@@ -22,20 +22,38 @@ package AnnotatedRocketStage
   // Single class shared by both ends; `flow` makes m_dot a
   // through-variable so the solver enforces mass conservation at
   // every connection point automatically.
-  connector FuelPort "Acausal fuel-line port — pressure (potential) + m_dot (flow)"
-    // MLS §9.3.1 requires a balanced connector: one potential per
-    // flow variable. `p` is the line pressure (anchored by the
-    // tank); `m_dot` is the through-variable that conserves to zero
-    // at every connection point.
+  // Base acausal fuel-line connector. Balanced per MLS §9.3.1:
+  // `p` is the potential (line pressure), `m_dot` is the flow
+  // variable (conserved to zero at every connect point). Not
+  // instantiated directly — components use `FuelPort_a` (supplier
+  // intent, filled icon) or `FuelPort_b` (consumer intent,
+  // unfilled icon). Both are acausal and mass conservation still
+  // works both directions; the a/b split is the MSL-convention
+  // visual hint for "which end is the producer".
+  partial connector FuelPort "Acausal fuel port (pressure + mass-flow)"
     Real p(unit = "Pa");
     flow Real m_dot(unit = "kg/s");
+  end FuelPort;
+
+  connector FuelPort_a "Fuel port — supplier end (filled icon)"
+    extends FuelPort;
     annotation(Icon(coordinateSystem(extent = {{-100,-100},{100,100}}),
       graphics = {Ellipse(
         extent = {{-100,-100},{100,100}},
         lineColor = {40,120,150},
         fillColor = {70,160,180},
         fillPattern = FillPattern.Solid)}));
-  end FuelPort;
+  end FuelPort_a;
+
+  connector FuelPort_b "Fuel port — consumer end (unfilled icon)"
+    extends FuelPort;
+    annotation(Icon(coordinateSystem(extent = {{-100,-100},{100,100}}),
+      graphics = {Ellipse(
+        extent = {{-100,-100},{100,100}},
+        lineColor = {40,120,150},
+        fillColor = {220,235,240},
+        fillPattern = FillPattern.Solid)}));
+  end FuelPort_b;
 
   // ── Causal signal connectors (one class per role) ────────────────
   // MSL convention: separate input/output connector classes per role
@@ -122,7 +140,7 @@ package AnnotatedRocketStage
 
     Modelica.Blocks.Interfaces.RealInput throttle "Throttle command [0..1]"
       annotation(Placement(transformation(extent={{-120,-10},{-100,10}})));
-    FuelPort fuel_in "Acausal fuel intake"
+    FuelPort_b fuel_in "Acausal fuel intake (consumer end)"
       annotation(Placement(transformation(extent={{-10,100},{10,120}})));
     ThrustForceOutput thrust "Thrust (N)"
       annotation(Placement(transformation(extent={{100,-10},{120,10}})));
@@ -162,7 +180,7 @@ package AnnotatedRocketStage
     parameter Real p_supply = 2.0e6 "Pressurised supply line (Pa)";
     Real m(start=m_initial, fixed=true) "Propellant mass (kg)";
 
-    FuelPort fuel_out "Acausal fuel outlet"
+    FuelPort_a fuel_out "Acausal fuel outlet (supplier end)"
       annotation(Placement(transformation(extent={{-10,-120},{10,-100}})));
     MassSignalOutput mass_out "Current propellant mass (kg)"
       annotation(Placement(transformation(extent={{100,-10},{120,10}})));

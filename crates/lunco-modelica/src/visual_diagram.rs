@@ -64,6 +64,40 @@ impl Default for DiagramNodeId {
     fn default() -> Self { Self::new() }
 }
 
+/// Causality classification of a connector port, derived from the
+/// connector class's variable declarations. Drives the port marker
+/// shape (square / triangle / circle) and the wire's arrowhead
+/// behaviour in the canvas renderer — replaces earlier leaf-name
+/// heuristics (`ends_with("Input")`) that only worked for MSL's
+/// naming conventions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum PortKind {
+    /// Connector has exactly one `input` variable and no `flow`
+    /// variables — canonical signal input (RealInput, BooleanInput).
+    Input,
+    /// Connector has exactly one `output` variable and no `flow`
+    /// variables — canonical signal output (RealOutput, …).
+    Output,
+    /// Connector has any `flow` variable (physical connector with
+    /// conservation), or neither / both causality variants — the
+    /// acausal case (Pin, Flange, HeatPort, FluidPort, custom fuel
+    /// port). Rendered as a filled circle; wire has no arrowhead.
+    #[default]
+    Acausal,
+}
+
+/// Metadata for one `flow` variable declared in a connector class —
+/// the kind of variable whose sign decides animation direction and
+/// whose declared unit labels the hover tooltip.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct FlowVarMeta {
+    /// Variable name inside the connector (e.g. `"m_dot"`, `"i"`).
+    pub name: String,
+    /// Unit string from `Real(unit="…")` / `SI.MassFlowRate` quantity
+    /// — empty when the connector didn't declare one.
+    pub unit: String,
+}
+
 /// A port definition for an MSL component.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PortDef {
@@ -91,6 +125,16 @@ pub struct PortDef {
     /// class's icon definition rather than a hardcoded table.
     #[serde(default)]
     pub color: Option<[u8; 3]>,
+    /// Causality classification derived from the connector class's
+    /// variables. Drives port shape + arrowhead.
+    #[serde(default)]
+    pub kind: PortKind,
+    /// Flow-variable descriptors. Empty for causal connectors.
+    /// Non-empty → renderer samples each var from the per-frame
+    /// state snapshot to animate flow and populate tooltips with
+    /// the authored unit.
+    #[serde(default)]
+    pub flow_vars: Vec<FlowVarMeta>,
 }
 
 /// A parameter definition for an MSL component.
