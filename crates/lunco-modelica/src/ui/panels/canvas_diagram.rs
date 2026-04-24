@@ -907,26 +907,43 @@ impl EdgeVisual for OrthogonalEdgeVisual {
         let node_state =
             lunco_viz::kinds::canvas_plot_node::fetch_node_state(ctx.ui.ctx());
         const ACTIVITY_EPS: f64 = 1e-6;
-        let (value, reverse_if_negative) = if let Some(fv) = self.flow_vars.first() {
-            // Acausal flow connector: sample declared flow variable.
-            // MLS sign convention: positive = mass flows INTO the
-            // connector from the source component; negative → flow
-            // toward source → reverse polyline.
-            let key = format!("{}.{}", self.source_path, fv.name);
-            (node_state.values.get(&key).copied(), true)
+        // Decide animation direction relative to the polyline's
+        // visual src→tgt orientation. Returns Some(physical_flow_v)
+        // where positive ⇒ flow goes src→tgt (paint as-is) and
+        // negative ⇒ flow goes tgt→src (reverse polyline).
+        let physical_flow = if let Some(fv) = self.flow_vars.first() {
+            // Acausal flow connector. MLS §9.3.1 convention:
+            // `port.m_flow > 0` ⇒ mass enters the component THROUGH
+            // that port (i.e. fluid flows tgt→src in our visual). So
+            // `physical_src_to_tgt = -src.m_flow`. We sample the
+            // source side first; if the compiler eliminated it (one
+            // side of an a+b=0 pair often is), fall back to the
+            // target side and re-flip the sign accordingly.
+            let src_key = format!("{}.{}", self.source_path, fv.name);
+            let tgt_key = format!("{}.{}", self.target_path, fv.name);
+            if let Some(&v_src) = node_state.values.get(&src_key) {
+                Some(-v_src)
+            } else {
+                node_state.values.get(&tgt_key).copied()
+            }
         } else {
-            // Causal signal: value is at the source port. Direction
-            // is polyline from→to (output→input); don't flip on sign.
-            let v = node_state
+            // Causal signal: value lives on the source side; the
+            // visual direction src→tgt already matches the data flow
+            // (output → input), so a positive sample reads as
+            // forward, negative as reverse. We treat the magnitude
+            // as activity and pin direction to the polyline because
+            // a causal signal "going negative" doesn't reverse the
+            // wire — a controller output of -1.0 still flows from
+            // the output to the input it's wired to.
+            node_state
                 .values
                 .get(&self.source_path)
                 .or_else(|| node_state.values.get(&self.target_path))
-                .copied();
-            (v, false)
+                .map(|&v| v.abs())
         };
-        if let Some(v) = value {
+        if let Some(v) = physical_flow {
             if v.abs() > ACTIVITY_EPS {
-                if reverse_if_negative && v < 0.0 {
+                if v < 0.0 {
                     let mut rev = polyline.clone();
                     rev.reverse();
                     paint_flow_dots(painter, &rev, col, anim_time);

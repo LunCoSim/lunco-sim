@@ -1,12 +1,12 @@
 //! End-to-end tests: AnnotatedRocketStage compiles, runs, and
-//! responds to the `throttle` runtime input — both when seeded via
+//! responds to the `valve.opening` runtime input — both when seeded via
 //! `StepperOptions::initial_inputs` at construction and when changed
 //! live via `set_input()` between steps.
 //!
 //! Verifies, across the three scenarios:
 //!   1. Model compiles under the acausal fluid architecture
 //!      (Tank → Valve → Engine).
-//!   2. `throttle` input slot is exposed at the stage boundary and
+//!   2. `valve.opening` input slot is exposed at the stage boundary and
 //!      `set_input()` wires through to the valve.
 //!   3. Opening the throttle produces thrust, depletes the tank,
 //!      and lifts the airframe; closing it stops consumption.
@@ -35,7 +35,7 @@ fn build_stepper(initial_throttle: Option<f64>) -> SimStepper {
     opts.atol = 1e-2;
     opts.rtol = 1e-2;
     if let Some(v) = initial_throttle {
-        opts.initial_inputs.insert("throttle".to_string(), v);
+        opts.initial_inputs.insert("valve.opening".to_string(), v);
     }
     SimStepper::new(&dae.dae, opts).expect("stepper build")
 }
@@ -57,8 +57,8 @@ fn rocket_throttle_seeded_at_ic_drives_thrust_and_lift() {
 
     let inputs = stepper.input_names().to_vec();
     assert!(
-        inputs.iter().any(|n| n == "throttle"),
-        "expected `throttle` in input_names; got {inputs:?}",
+        inputs.iter().any(|n| n == "valve.opening"),
+        "expected `valve.opening` in input_names; got {inputs:?}",
     );
 
     let m0 = stepper.get("tank.m").expect("tank.m");
@@ -100,7 +100,7 @@ fn rocket_throttle_opened_mid_sim_drives_thrust_and_lift() {
 
     // Open the throttle mid-run.
     stepper
-        .set_input("throttle", 1.0)
+        .set_input("valve.opening", 1.0)
         .expect("throttle is a valid input");
 
     // Run 10 more seconds. Previously this would stall with
@@ -132,7 +132,7 @@ fn rocket_throttle_closed_mid_sim_stops_tank_drain() {
 
     let m_at_close = stepper.get("tank.m").expect("tank.m");
     stepper
-        .set_input("throttle", 0.0)
+        .set_input("valve.opening", 0.0)
         .expect("throttle is a valid input");
 
     advance(&mut stepper, 0.1, 50); // 5 s coasting
@@ -171,7 +171,7 @@ fn rocket_throttle_varied_mid_sim_stays_stable() {
 
     for &(value, steps) in sequence {
         stepper
-            .set_input("throttle", value)
+            .set_input("valve.opening", value)
             .expect("throttle is a valid input");
         advance(&mut stepper, 0.1, steps);
     }

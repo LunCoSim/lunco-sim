@@ -99,17 +99,12 @@ package AnnotatedRocketStage
   model RocketStage "Single-stage rocket — pressurised tank, throttle valve, engine"
     parameter Real g = 9.81 "Gravity (m/s^2)";
     parameter Real dry_mass = 1000 "Empty stage mass (kg)";
-    // Throttle exposed as a RealInput connector on the stage,
-    // wired to the valve's own runtime input via `connect()`.
-    // Requires `SimSolverMode::RkLike` (Tsit5) because BDF's
-    // initial-condition solve stalls on composite-tree models
-    // driven by runtime inputs. The workbench configures this
-    // globally in lunco-modelica.
-    Modelica.Blocks.Interfaces.RealInput throttle "Throttle [0..1]"
-      annotation(Placement(transformation(extent={{-120,-10},{-100,10}})));
 
     Tank tank(m_initial = 4000, p_supply = 3.0e6)
       annotation(Placement(transformation(extent={{-95,20},{-55,80}})));
+    // The valve's `opening` input IS the stage's throttle — exposed
+    // as `valve.opening` in the flattened model. No wrapper input
+    // on the stage; UI controls bind directly to the valve.
     Valve valve(m_flow_max = 100)
       annotation(Placement(transformation(extent={{-40,10},{0,50}})));
     Engine engine(p_chamber = 1.0e5)
@@ -118,7 +113,6 @@ package AnnotatedRocketStage
       annotation(Placement(transformation(extent={{70,-30},{110,30}})));
 
   equation
-    connect(throttle, valve.opening);
     connect(tank.port, valve.port_a);
     connect(valve.port_b, engine.port);
     connect(tank.mass_out, airframe.mass_in);
