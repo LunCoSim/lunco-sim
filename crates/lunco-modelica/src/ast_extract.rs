@@ -616,18 +616,26 @@ fn collect_parameter_bounds_from_classes(
     classes: &indexmap::IndexMap<String, ClassDef>,
     out: &mut HashMap<String, (Option<f64>, Option<f64>)>,
 ) {
-    // Bounds are collected for *any* tunable numeric declaration —
-    // parameters AND inputs — because users drive both from the
-    // Telemetry panel and expect `min=…, max=…` to be honoured in
-    // both sections. Non-tunable declarations (locals, outputs,
-    // internal algebraics) are skipped.
+    // Extract bounds from EVERY component that declares `min`/`max`
+    // modifications, regardless of variability or causality.
+    //
+    // The previous implementation gated on
+    //   `Variability::Parameter(_) || Causality::Input(_)`
+    // — which silently dropped a very common case: inputs typed via
+    // a connector class, e.g. `Modelica.Blocks.Interfaces.RealInput`.
+    // The `input` keyword lives inside the connector definition
+    // (`connector RealInput = input Real`), so the AST shows the
+    // component's own causality as `Empty` and the gate rejected it.
+    // Result: `RealInput x(min=0, max=1)` had its bounds invisible
+    // to Telemetry and the UI clamping silently no-op'd.
+    //
+    // Filtering is done on the lookup side instead: Telemetry only
+    // queries this map for displayed parameter / input rows, so
+    // bounds attached to algebraics or outputs (rare but legal —
+    // they document runtime envelopes for assert checks) cause no
+    // visible UI behaviour.
     for class in classes.values() {
         for component in class.components.values() {
-            let tunable = matches!(component.variability, Variability::Parameter(_))
-                || matches!(component.causality, Causality::Input(_));
-            if !tunable {
-                continue;
-            }
             let min = component.modifications.get("min").and_then(numeric_of);
             let max = component.modifications.get("max").and_then(numeric_of);
             if min.is_some() || max.is_some() {
