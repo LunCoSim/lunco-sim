@@ -34,7 +34,7 @@
 
 use bevy::prelude::*;
 use rumoca_session::{Session, SessionConfig};
-use rumoca_sim::{StepperOptions, SimStepper};
+use rumoca_sim::{SimStepper, StepperOptions};
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use crossbeam_channel::{unbounded, Sender, Receiver};

@@ -99,20 +99,18 @@ package AnnotatedRocketStage
   model RocketStage "Single-stage rocket — pressurised tank, throttle valve, engine"
     parameter Real g = 9.81 "Gravity (m/s^2)";
     parameter Real dry_mass = 1000 "Empty stage mass (kg)";
-    parameter Real throttle(min = 0, max = 100) = 100
-      "Throttle setpoint (%) — tune live in the Telemetry panel";
+    // Throttle exposed as a RealInput connector on the stage,
+    // wired to the valve's own runtime input via `connect()`.
+    // Requires `SimSolverMode::RkLike` (Tsit5) because BDF's
+    // initial-condition solve stalls on composite-tree models
+    // driven by runtime inputs. The workbench configures this
+    // globally in lunco-modelica.
+    Modelica.Blocks.Interfaces.RealInput throttle "Throttle [0..1]"
+      annotation(Placement(transformation(extent={{-120,-10},{-100,10}})));
 
     Tank tank(m_initial = 4000, p_supply = 3.0e6)
       annotation(Placement(transformation(extent={{-95,20},{-55,80}})));
-    // Valve `opening` is bound by a modifier to the stage throttle
-    // parameter. Telemetry DragValue edits dispatch UpdateParameters
-    // (~150 ms recompile for a model this size), which is the stable
-    // live-tune path — runtime inputs propagated through composite
-    // component trees currently stall rumoca's BDF initialiser.
-    // The proper fix is exposing `SimSolverMode::RkLike` through
-    // `StepperOptions` (a 30-line rumoca refactor) — tracked as a
-    // follow-up.
-    Valve valve(opening = throttle / 100.0, m_flow_max = 20)
+    Valve valve(m_flow_max = 100)
       annotation(Placement(transformation(extent={{-40,10},{0,50}})));
     Engine engine(p_chamber = 1.0e5)
       annotation(Placement(transformation(extent={{15,-30},{55,30}})));
@@ -120,6 +118,7 @@ package AnnotatedRocketStage
       annotation(Placement(transformation(extent={{70,-30},{110,30}})));
 
   equation
+    connect(throttle, valve.opening);
     connect(tank.port, valve.port_a);
     connect(valve.port_b, engine.port);
     connect(tank.mass_out, airframe.mass_in);
@@ -197,8 +196,9 @@ package AnnotatedRocketStage
     // users can inspect tank/chamber Δp in the telemetry.
     parameter Real m_flow_max(unit = "kg/s") = 20
       "Mass flow at full opening";
-    parameter Real opening(min = 0, max = 1) = 0
-      "Fractional valve opening [0..1] — usually bound by a parent modifier";
+
+    Modelica.Blocks.Interfaces.RealInput opening "Valve opening [0..1]"
+      annotation(Placement(transformation(extent={{-20,80},{20,120}})));
     FluidPort_a port_a "Inlet (supplier side)"
       annotation(Placement(transformation(extent={{-120,-10},{-100,10}})));
     FluidPort_b port_b "Outlet (consumer side)"
@@ -248,10 +248,12 @@ package AnnotatedRocketStage
   equation
     port.p = p_chamber;
     // MSL Fluid sign convention: `port.m_flow > 0` = mass entering
-    // engine = propellant being consumed. Thrust is proportional to
-    // that magnitude. `max(..., 0)` guards against tiny numerical
-    // backflow that would otherwise read as "negative thrust".
-    thrust = Isp * g0 * max(port.m_flow, 0);
+    // engine = propellant being consumed. Thrust scales linearly
+    // with flow. A non-smooth `max(port.m_flow, 0)` guard was
+    // previously here to prevent "negative thrust" from numerical
+    // backflow, but its non-differentiable kink makes BDF's Jacobian
+    // NaN at the initial step, stalling the solve.
+    thrust = Isp * g0 * port.m_flow;
     annotation(Icon(coordinateSystem(extent={{-100,-100},{100,100}}),
       graphics={
         Rectangle(extent={{-30,60},{30,10}},
