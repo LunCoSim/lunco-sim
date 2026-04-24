@@ -138,16 +138,6 @@ impl Panel for GraphsPanel {
             export_default_graph_to_csv(world);
         }
 
-        // Inline input controls — operator-style HMI on the plot
-        // panel. Lets the user nudge an actuator (`valve.opening`,
-        // ...) and watch the response without leaving the graph.
-        // Mirrors the Telemetry "Inputs" row, with the same MLS §4.8
-        // `min`/`max` clamping via the `parameter_bounds` map. We
-        // run our own short query for inputs/bounds rather than
-        // duplicating the Telemetry rendering code; this row is
-        // intentionally compact.
-        render_inline_input_controls(ui, world);
-
         if bound_count == 0 {
             ui.label("No variables selected for plotting.");
             ui.label("Go to Telemetry and check variables to plot.");
@@ -161,93 +151,6 @@ impl Panel for GraphsPanel {
         let viz = LinePlot;
         let mut ctx = Panel2DCtx { ui, world };
         viz.render_panel_2d(&mut ctx, &config);
-    }
-}
-
-/// Render a single horizontal row of `Name [DragValue]` widgets,
-/// one per input on the active model. Edits flow into the
-/// `ModelicaModel.inputs` map; the worker forwards them to the
-/// stepper via `set_input` on the next sync, exactly like the
-/// Telemetry panel — we just put them in front of the user
-/// who's already watching the plot. Bounds (`min`/`max`) clamp
-/// the DragValue using the same leaf-name fallback the Telemetry
-/// panel uses, so `valve.opening(min=0,max=100)` clamps to 0..100.
-fn render_inline_input_controls(ui: &mut egui::Ui, world: &mut World) {
-    use crate::ModelicaModel;
-
-    // Pick the active model — first ModelicaModel entity, matching
-    // Telemetry's auto-select behaviour. Snapshot its inputs +
-    // bounds so we can render and write back without holding a
-    // borrow across the closure.
-    let snap: Option<(Entity, Vec<(String, f64)>, std::collections::HashMap<String, (Option<f64>, Option<f64>)>)> = {
-        let mut q = world.query::<(Entity, &ModelicaModel)>();
-        let mut iter = q.iter(world);
-        iter.next().map(|(entity, model)| {
-            let mut inputs: Vec<(String, f64)> =
-                model.inputs.iter().map(|(k, v)| (k.clone(), *v)).collect();
-            inputs.sort_by(|a, b| a.0.cmp(&b.0));
-            (entity, inputs, model.parameter_bounds.clone())
-        })
-    };
-    let Some((entity, inputs, bounds)) = snap else {
-        return;
-    };
-    if inputs.is_empty() {
-        return;
-    }
-
-    let mut edits: Vec<(String, f64)> = Vec::new();
-    ui.horizontal(|ui| {
-        ui.label(
-            egui::RichText::new("Inputs:")
-                .size(11.0)
-                .color(egui::Color32::GRAY),
-        );
-        for (name, mut value) in inputs {
-            // Compact label — show the leaf name, full path on hover.
-            let leaf = name.rsplit('.').next().unwrap_or(&name).to_string();
-            ui.label(
-                egui::RichText::new(format!("{leaf}:"))
-                    .size(11.0),
-            )
-            .on_hover_text(name.clone());
-            // Same lookup_bounds-style fallback as Telemetry: try
-            // qualified name first, then leaf — bounds are keyed by
-            // leaf in the AST extractor.
-            let (mn, mx) = bounds
-                .get(&name)
-                .copied()
-                .or_else(|| {
-                    let leaf_key = name.rsplit('.').next().unwrap_or(&name);
-                    bounds.get(leaf_key).copied()
-                })
-                .unwrap_or((None, None));
-            let dv = egui::DragValue::new(&mut value)
-                .speed(0.5)
-                .fixed_decimals(2)
-                .range(
-                    mn.unwrap_or(f64::NEG_INFINITY)
-                        ..=mx.unwrap_or(f64::INFINITY),
-                );
-            if ui.add(dv).changed() {
-                edits.push((name.clone(), value));
-            }
-        }
-    });
-    ui.separator();
-
-    // Write changes back. Done outside the rendering loop so
-    // we can re-borrow the model mutably without fighting the
-    // immutable iteration.
-    if edits.is_empty() {
-        return;
-    }
-    if let Ok(mut model) = world.query::<&mut ModelicaModel>().get_mut(world, entity) {
-        for (name, value) in edits {
-            if let Some(slot) = model.inputs.get_mut(&name) {
-                *slot = value;
-            }
-        }
     }
 }
 
