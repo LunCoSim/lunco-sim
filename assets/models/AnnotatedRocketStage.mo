@@ -160,12 +160,22 @@ package AnnotatedRocketStage
           lineColor={20,20,20},
           fillColor={180,195,215},
           fillPattern=FillPattern.Solid),
-        Rectangle(extent={{-40,40},{40,-70}},
+        // Blue LOX fluid level. The bottom edge is fixed at -70;
+        // the top edge moves between -70 (empty) and 40 (full)
+        // proportionally to `m / m_initial`. Modelica.Fluid uses
+        // exactly this DynamicSelect-on-extent pattern in its
+        // OpenTank icon for live fluid-level animation.
+        Rectangle(extent=DynamicSelect(
+            {{-40,40},{40,-70}},
+            {{-40, -70 + 110 * (m / m_initial)}, {40, -70}}),
           lineColor={50,80,140},
           fillColor={120,160,220},
           fillPattern=FillPattern.Solid),
         Text(extent={{-50,10},{50,-10}},
-          textString="LOX",
+          // MLS §18 DynamicSelect: tools that don't animate render
+          // the static "LOX"; the workbench renders the live mass
+          // during simulation by evaluating the dynamic branch.
+          textString=DynamicSelect("LOX", "LOX " + String(m) + " kg"),
           textColor={0,0,80}),
         Text(extent={{-90,-85},{90,-100}},
           textString="Tank",
@@ -242,7 +252,8 @@ package AnnotatedRocketStage
           fillColor={200,200,210},
           fillPattern=FillPattern.Solid),
         Text(extent={{-90,-60},{90,-85}},
-          textString="Valve",
+          // Live opening % via MLS §18 DynamicSelect.
+          textString=DynamicSelect("Valve", "Valve " + String(opening) + " %"),
           textColor={40,40,40})
       }));
   end Valve;

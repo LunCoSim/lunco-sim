@@ -278,12 +278,35 @@ impl NodeVisual for IconNodeVisual {
                 name: (!self.instance_name.is_empty()).then_some(self.instance_name.as_str()),
                 class_name: (!self.class_name.is_empty()).then_some(self.class_name.as_str()),
             };
-            crate::icon_paint::paint_graphics_full(
+            // Build a per-instance value resolver for MLS §18
+            // `DynamicSelect` text expressions. The icon expression
+            // is written in the component's local scope (`m`,
+            // `port.m_flow`); the live snapshot is keyed by full
+            // instance path (`tank.m`, `tank.port.m_flow`). We
+            // prefix with `instance_name.` and look it up — that
+            // covers both top-level state vars and dotted refs into
+            // sub-components / ports. Falls back to the bare name
+            // for cases like global `time`.
+            let node_state =
+                lunco_viz::kinds::canvas_plot_node::fetch_node_state(ctx.ui.ctx());
+            let instance = self.instance_name.clone();
+            let resolver = move |name: &str| -> Option<f64> {
+                if !instance.is_empty() {
+                    let qualified = format!("{instance}.{name}");
+                    if let Some(&v) = node_state.values.get(&qualified) {
+                        return Some(v);
+                    }
+                }
+                node_state.values.get(name).copied()
+            };
+            let resolver_ref: &dyn Fn(&str) -> Option<f64> = &resolver;
+            crate::icon_paint::paint_graphics_with_resolver(
                 painter,
                 rect,
                 icon.coordinate_system,
                 orientation,
                 Some(&sub),
+                Some(resolver_ref),
                 &icon.graphics,
             );
             drew_svg = true;

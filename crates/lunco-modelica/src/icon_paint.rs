@@ -84,13 +84,40 @@ pub fn paint_graphics_full(
     substitution: Option<&TextSubstitution<'_>>,
     graphics: &[GraphicItem],
 ) {
+    paint_graphics_with_resolver(
+        painter,
+        screen_rect,
+        coord_system,
+        orientation,
+        substitution,
+        None,
+        graphics,
+    );
+}
+
+/// Like [`paint_graphics_full`] but also accepts a per-instance
+/// value resolver used by MLS §18 `DynamicSelect` to swap the
+/// static text for an evaluated expression at simulation time.
+/// The resolver receives the variable name as written in the
+/// icon expression (e.g. `m`, `port.m_flow`) and is expected to
+/// prefix it with the component's instance path before looking
+/// it up in the live snapshot. `None` resolver → static text only.
+pub fn paint_graphics_with_resolver(
+    painter: &egui::Painter,
+    screen_rect: egui::Rect,
+    coord_system: CoordinateSystem,
+    orientation: IconOrientation,
+    substitution: Option<&TextSubstitution<'_>>,
+    resolver: Option<&dyn Fn(&str) -> Option<f64>>,
+    graphics: &[GraphicItem],
+) {
     let xform = coord_xform_oriented(coord_system.extent, screen_rect, orientation);
     for item in graphics {
         match item {
-            GraphicItem::Rectangle(r) => paint_rectangle(painter, &xform, r),
+            GraphicItem::Rectangle(r) => paint_rectangle(painter, &xform, r, resolver),
             GraphicItem::Line(l) => paint_line(painter, &xform, l),
             GraphicItem::Polygon(p) => paint_polygon(painter, &xform, p),
-            GraphicItem::Text(t) => paint_text(painter, &xform, t, substitution),
+            GraphicItem::Text(t) => paint_text(painter, &xform, t, substitution, resolver),
             GraphicItem::Ellipse(e) => paint_ellipse(painter, &xform, e),
             GraphicItem::Bitmap(b) => paint_bitmap(painter, &xform, b),
         }
@@ -249,11 +276,28 @@ impl CoordXform {
 // Per-primitive painters
 // ---------------------------------------------------------------------------
 
-fn paint_rectangle(painter: &egui::Painter, xf: &CoordXform, r: &Rectangle) {
+fn paint_rectangle(
+    painter: &egui::Painter,
+    xf: &CoordXform,
+    r: &Rectangle,
+    resolver: Option<&dyn Fn(&str) -> Option<f64>>,
+) {
     // Build the four corners in local coords, rotate+translate, then
     // emit as a 4-vertex convex polygon. We don't use `painter.rect_*`
     // because rotation would not be applied.
-    let Extent { p1, p2 } = r.extent;
+    //
+    // MLS §18 DynamicSelect on `extent` lets the model author swap
+    // the static rectangle bounds for an expression evaluated at
+    // simulation time — used for e.g. a tank fluid-level bar that
+    // shrinks as the tank empties. Falls back to the static extent
+    // if the resolver isn't supplied or any corner fails to evaluate.
+    let extent = r
+        .extent_dynamic
+        .as_ref()
+        .zip(resolver)
+        .and_then(|(de, resolve)| de.eval(resolve))
+        .unwrap_or(r.extent);
+    let Extent { p1, p2 } = extent;
     let corners_local = [
         Point { x: p1.x, y: p1.y },
         Point { x: p2.x, y: p1.y },
@@ -435,16 +479,28 @@ fn paint_text(
     xf: &CoordXform,
     t: &Text,
     substitution: Option<&TextSubstitution<'_>>,
+    resolver: Option<&dyn Fn(&str) -> Option<f64>>,
 ) {
-    if t.text_string.is_empty() {
+    // MLS §18 `DynamicSelect`: if the icon declared a dynamic
+    // counterpart and we have a value resolver (i.e. simulation is
+    // running and the canvas built a per-instance lookup), evaluate
+    // it and use the result. Falls back to the static text on
+    // unresolved variables or unsupported expression syntax — the
+    // icon never goes blank.
+    let dynamic_rendered: Option<String> = match (&t.text_string_dynamic, resolver) {
+        (Some(expr), Some(resolve)) => expr.eval(resolve).map(|v| v.to_display()),
+        _ => None,
+    };
+    let base = dynamic_rendered.as_deref().unwrap_or(t.text_string.as_str());
+    if base.is_empty() {
         return;
     }
     // Substitute `%name` / `%class` before rendering. Most MSL icons
     // set `textString="%name"` so this is where "Resistor" becomes
     // "R1" across the entire diagram.
     let rendered: String = match substitution {
-        Some(sub) => sub.apply(&t.text_string),
-        None => t.text_string.clone(),
+        Some(sub) => sub.apply(base),
+        None => base.to_string(),
     };
     if rendered.is_empty() {
         return;
