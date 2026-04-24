@@ -191,6 +191,43 @@ fn rocket_throttle_set_input_rejects_out_of_bounds() {
         .expect("100% is on the boundary, should be allowed");
 }
 
+/// Scenario F: tank empties, simulation continues. With
+/// `m_flow_max = 100` kg/s and `m_initial = 4000` kg, full
+/// throttle drains the tank in 40 s. The tank-availability
+/// signal gates the valve so commanded flow goes to zero as the
+/// tank empties; mass settles at ~0 instead of going negative,
+/// and BDF doesn't stall. Regression for "Tank can go below
+/// zero" (which previously also tripped the BDF "step size too
+/// small" failure).
+#[test]
+fn rocket_tank_empties_gracefully_without_negative_mass() {
+    let mut stepper = build_stepper(Some(100.0));
+    advance(&mut stepper, 0.1, 600); // 60 s — well past 40 s drain time
+    let m_end = stepper.get("tank.m").expect("tank.m");
+    let availability = stepper
+        .get("tank.availability")
+        .expect("tank.availability");
+    let port_flow = stepper
+        .get("valve.port_a.m_flow")
+        .expect("valve.port_a.m_flow");
+    assert!(
+        m_end > -1e-2,
+        "tank mass should not go negative; got {m_end}",
+    );
+    assert!(
+        m_end < 5.0,
+        "tank should be empty (within smoothing band) after 60 s burn; got {m_end}",
+    );
+    assert!(
+        availability < 1.0e-2,
+        "availability should be ~0 once tank is empty; got {availability}",
+    );
+    assert!(
+        port_flow.abs() < 1.0,
+        "commanded flow should be ~0 once availability gates the valve; got {port_flow}",
+    );
+}
+
 /// Scenario D: stress-test — change throttle many times mid-sim at
 /// various values. Without the post-change algebraic projection, BDF
 /// accumulates drift across repeated `reset_solver_history()` calls

@@ -116,6 +116,9 @@ package AnnotatedRocketStage
     connect(tank.port, valve.port_a);
     connect(valve.port_b, engine.port);
     connect(tank.mass_out, airframe.mass_in);
+    // Tank tells valve how much fuel is available — gates the
+    // commanded flow so an empty tank can't be siphoned.
+    connect(tank.availability, valve.availability);
     connect(engine.thrust, airframe.thrust_in);
 
     annotation(
@@ -134,20 +137,49 @@ package AnnotatedRocketStage
   model Tank "Pressurised propellant tank"
     parameter Real m_initial = 4000 "Initial propellant mass (kg)";
     parameter Real p_supply = 3.0e6 "Regulated supply pressure (Pa)";
-    Real m(start = m_initial, fixed = true) "Propellant mass (kg)";
+    parameter Real m_eps = 5.0
+      "Empty-cutoff smoothing band (kg)";
+    // `min = 0` declares the physical bound (MLS §4.8.4) — tools
+    // can use it for state scaling and operator displays. The hard
+    // enforcement comes from the `availability` signal below: the
+    // valve multiplies its commanded flow by it, so once the tank
+    // is empty no more mass can be drawn through the connect-set
+    // and `der(m)` settles to zero by conservation. `assert` is a
+    // belt-and-braces sanity check that should fire only if a
+    // future change breaks the availability wiring.
+    Real m(start = m_initial, fixed = true, min = 0)
+      "Propellant mass (kg)";
 
     FluidPort_a port "Fluid outlet"
       annotation(Placement(transformation(extent={{-10,-120},{10,-100}})));
     MassSignalOutput mass_out "Current mass (kg)"
       annotation(Placement(transformation(extent={{100,-10},{120,10}})));
+    // Smooth supply availability ∈ [0, 1]: 1 when full, fading
+    // linearly through `m_eps` to 0 at empty. Routed to
+    // `valve.availability` so downstream demand is gated by what's
+    // actually in the tank — no negative-mass simulation, no
+    // unphysical "siphoning empty" behaviour.
+    Modelica.Blocks.Interfaces.RealOutput availability
+      "Supply availability [0..1]"
+      annotation(Placement(transformation(extent={{100,40},{120,60}})));
   equation
     port.p = p_supply;
+    // Smooth, monotonic saturation: → 1 when m ≫ m_eps, → 0 when
+    // m → 0, with no C0 kinks anywhere. Equivalent to clamping
+    // m / m_eps to [0, 1] but everywhere differentiable, so BDF
+    // sees a continuous Jacobian instead of a min/max kink that
+    // would stall the integrator at the empty boundary.
+    availability = m / (m + m_eps);
     // MSL Fluid sign convention: `port.m_flow > 0` means mass
     // enters this component from the line. The tank is losing
     // mass while the engine burns, so `port.m_flow` is negative
     // and `der(m)` is therefore negative too — tank depletes.
+    // Once `availability → 0` the valve commands no flow,
+    // `port.m_flow` settles to 0 by connect-set conservation, and
+    // `der(m)` stops draining the tank.
     der(m) = port.m_flow;
     mass_out = m;
+    assert(m >= -1e-3, "Tank ran dry — availability gating failed.");
     annotation(Icon(coordinateSystem(extent={{-100,-100},{100,100}}),
       graphics={
         Rectangle(extent={{-50,60},{50,-80}},
@@ -231,8 +263,16 @@ package AnnotatedRocketStage
       annotation(Placement(transformation(extent={{-120,-10},{-100,10}})));
     FluidPort_b port_b "Outlet (consumer side)"
       annotation(Placement(transformation(extent={{100,-10},{120,10}})));
+    // Upstream availability ∈ [0, 1]. The tank publishes this as a
+    // smooth function of `m / m_eps`; we multiply commanded flow by
+    // it so an empty tank can't be siphoned through the valve. With
+    // `availability = 1` (default when unwired) the valve behaves
+    // exactly as before — the gating is opt-in via `connect()`.
+    Modelica.Blocks.Interfaces.RealInput availability(min = 0, max = 1) = 1.0
+      "Upstream availability [0..1]"
+      annotation(Placement(transformation(extent={{-120,40},{-100,60}})));
   equation
-    port_a.m_flow = (opening / 100) * m_flow_max;
+    port_a.m_flow = (opening / 100) * m_flow_max * availability;
     port_a.m_flow + port_b.m_flow = 0;
     annotation(Icon(coordinateSystem(extent={{-100,-100},{100,100}}),
       graphics={
