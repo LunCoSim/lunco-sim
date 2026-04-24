@@ -48,12 +48,12 @@ fn advance(stepper: &mut SimStepper, dt: f64, steps: usize) {
     }
 }
 
-/// Scenario A: throttle=1.0 from t=0 via `initial_inputs`.
+/// Scenario A: throttle=100% from t=0 via `initial_inputs`.
 /// Every IC pass sees the intended operating point; no discontinuity
 /// at t=0; tank depletes and vehicle climbs.
 #[test]
 fn rocket_throttle_seeded_at_ic_drives_thrust_and_lift() {
-    let mut stepper = build_stepper(Some(1.0));
+    let mut stepper = build_stepper(Some(100.0));
 
     let inputs = stepper.input_names().to_vec();
     assert!(
@@ -100,7 +100,7 @@ fn rocket_throttle_opened_mid_sim_drives_thrust_and_lift() {
 
     // Open the throttle mid-run.
     stepper
-        .set_input("valve.opening", 1.0)
+        .set_input("valve.opening", 100.0)
         .expect("throttle is a valid input");
 
     // Run 10 more seconds. Previously this would stall with
@@ -126,7 +126,7 @@ fn rocket_throttle_opened_mid_sim_drives_thrust_and_lift() {
 /// wins.
 #[test]
 fn rocket_throttle_closed_mid_sim_stops_tank_drain() {
-    let mut stepper = build_stepper(Some(1.0));
+    let mut stepper = build_stepper(Some(100.0));
 
     advance(&mut stepper, 0.1, 50); // 5 s burn
 
@@ -145,10 +145,10 @@ fn rocket_throttle_closed_mid_sim_stops_tank_drain() {
 }
 
 /// Scenario E: bounds enforcement. The valve declares
-/// `opening(min = 0, max = 1)`; rumoca should reject `set_input`
-/// values outside that range with an error rather than silently
-/// clamping (silent clamping would mislead callers who expect
-/// `get()` to round-trip the value they wrote). Also rejects
+/// `opening(min = 0, max = 100, unit = "%")`; rumoca should reject
+/// `set_input` values outside that range with an error rather than
+/// silently clamping (silent clamping would mislead callers who
+/// expect `get()` to round-trip the value they wrote). Also rejects
 /// non-finite writes.
 #[test]
 fn rocket_throttle_set_input_rejects_out_of_bounds() {
@@ -157,7 +157,7 @@ fn rocket_throttle_set_input_rejects_out_of_bounds() {
     // Negative throttle would mean "reverse flow" (engine → tank),
     // which the model can't physically represent.
     let err = stepper
-        .set_input("valve.opening", -0.5)
+        .set_input("valve.opening", -10.0)
         .expect_err("negative throttle must be rejected");
     let msg = format!("{err}");
     assert!(
@@ -167,7 +167,7 @@ fn rocket_throttle_set_input_rejects_out_of_bounds() {
 
     // Above max.
     let err = stepper
-        .set_input("valve.opening", 1.5)
+        .set_input("valve.opening", 150.0)
         .expect_err("over-max throttle must be rejected");
     let msg = format!("{err}");
     assert!(
@@ -185,10 +185,10 @@ fn rocket_throttle_set_input_rejects_out_of_bounds() {
     // Boundary values are allowed.
     stepper
         .set_input("valve.opening", 0.0)
-        .expect("0.0 is on the boundary, should be allowed");
+        .expect("0% is on the boundary, should be allowed");
     stepper
-        .set_input("valve.opening", 1.0)
-        .expect("1.0 is on the boundary, should be allowed");
+        .set_input("valve.opening", 100.0)
+        .expect("100% is on the boundary, should be allowed");
 }
 
 /// Scenario D: stress-test — change throttle many times mid-sim at
@@ -204,14 +204,14 @@ fn rocket_throttle_varied_mid_sim_stays_stable() {
     // Walk the throttle through a sequence of values. Each change
     // triggers `inputs_dirty` → projection → history reset → step.
     let sequence: &[(f64, usize)] = &[
-        (0.2, 15),
-        (0.8, 15),
-        (0.3, 15),
-        (1.0, 15),
+        (20.0, 15),
+        (80.0, 15),
+        (30.0, 15),
+        (100.0, 15),
         (0.0, 15),
-        (0.5, 15),
-        (0.9, 15),
-        (0.1, 15),
+        (50.0, 15),
+        (90.0, 15),
+        (10.0, 15),
     ];
 
     let m_start = stepper.get("tank.m").expect("tank.m");

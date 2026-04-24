@@ -198,32 +198,31 @@ package AnnotatedRocketStage
     // a solver constraint — the equation-side Limiter below is what
     // physically enforces the bound for any caller (UI, FMI master,
     // scripted set_input, etc.).
-    // `min`/`max` declare the valid range (MLS §4.8.4). Tools clamp
-    // interactive sliders to this range — the workbench's Telemetry
-    // DragValue picks the bounds up via AST extraction. Per Modelica
-    // / FMI convention these are advisory metadata; the solver does
-    // NOT enforce them. Hard enforcement is rumoca's job — see
-    // `SimStepper::set_input`, which rejects out-of-range writes
-    // with an error rather than silently clamping (silent clamping
-    // would mislead callers who expect their value to round-trip).
+    // `min`/`max`/`unit` declare the valid range (MLS §4.8.4). Tools
+    // clamp interactive sliders to this range — the workbench's
+    // Telemetry DragValue picks the bounds up via AST extraction.
+    // Per Modelica / FMI convention these are advisory metadata; the
+    // solver does NOT enforce them. Hard enforcement is rumoca's
+    // job — `SimStepper::set_input` rejects out-of-range writes
+    // with an error rather than silently clamping.
     //
-    // We deliberately do NOT add a `Modelica.Blocks.Nonlinear.Limiter`
-    // block in-line: the C0 kink at the bound makes the residual
-    // non-differentiable, which BDF can't traverse cleanly when the
-    // user happens to operate exactly at the boundary (e.g.
-    // throttle = 1.0 for a long burn). A Limiter is appropriate for
-    // controller-saturation scenarios where the bound is rarely
-    // approached; for an actuator that lives at its limit, the
-    // solver-friendly answer is to reject bad input upstream.
-    Modelica.Blocks.Interfaces.RealInput opening(min = 0, max = 1)
-      "Valve opening [0..1]"
+    // Opening is expressed in percent (0..100) — natural unit for a
+    // control surface; the equation divides by 100 to convert to a
+    // fraction before scaling `m_flow_max`. We deliberately do NOT
+    // add a `Modelica.Blocks.Nonlinear.Limiter` block: the C0 kink
+    // at the bound makes the residual non-differentiable, which BDF
+    // can't traverse cleanly when the user operates exactly at the
+    // boundary (a "full throttle" demo). UI clamping + API rejection
+    // covers the practical envelope.
+    Modelica.Blocks.Interfaces.RealInput opening(min = 0, max = 100, unit = "%")
+      "Valve opening [0..100 %]"
       annotation(Placement(transformation(extent={{-20,80},{20,120}})));
     FluidPort_a port_a "Inlet (supplier side)"
       annotation(Placement(transformation(extent={{-120,-10},{-100,10}})));
     FluidPort_b port_b "Outlet (consumer side)"
       annotation(Placement(transformation(extent={{100,-10},{120,10}})));
   equation
-    port_a.m_flow = opening * m_flow_max;
+    port_a.m_flow = (opening / 100) * m_flow_max;
     port_a.m_flow + port_b.m_flow = 0;
     annotation(Icon(coordinateSystem(extent={{-100,-100},{100,100}}),
       graphics={
