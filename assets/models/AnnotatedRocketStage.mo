@@ -191,7 +191,32 @@ package AnnotatedRocketStage
     parameter Real m_flow_max(unit = "kg/s") = 20
       "Mass flow at full opening";
 
-    Modelica.Blocks.Interfaces.RealInput opening "Valve opening [0..1]"
+    // `min`/`max` annotations on the input declare the valid range
+    // (MLS §4.8.4). Tools clamp interactive sliders to this range
+    // automatically; the workbench's Telemetry DragValue picks the
+    // bounds up via AST extraction. They are advisory metadata, not
+    // a solver constraint — the equation-side Limiter below is what
+    // physically enforces the bound for any caller (UI, FMI master,
+    // scripted set_input, etc.).
+    // `min`/`max` declare the valid range (MLS §4.8.4). Tools clamp
+    // interactive sliders to this range — the workbench's Telemetry
+    // DragValue picks the bounds up via AST extraction. Per Modelica
+    // / FMI convention these are advisory metadata; the solver does
+    // NOT enforce them. Hard enforcement is rumoca's job — see
+    // `SimStepper::set_input`, which rejects out-of-range writes
+    // with an error rather than silently clamping (silent clamping
+    // would mislead callers who expect their value to round-trip).
+    //
+    // We deliberately do NOT add a `Modelica.Blocks.Nonlinear.Limiter`
+    // block in-line: the C0 kink at the bound makes the residual
+    // non-differentiable, which BDF can't traverse cleanly when the
+    // user happens to operate exactly at the boundary (e.g.
+    // throttle = 1.0 for a long burn). A Limiter is appropriate for
+    // controller-saturation scenarios where the bound is rarely
+    // approached; for an actuator that lives at its limit, the
+    // solver-friendly answer is to reject bad input upstream.
+    Modelica.Blocks.Interfaces.RealInput opening(min = 0, max = 1)
+      "Valve opening [0..1]"
       annotation(Placement(transformation(extent={{-20,80},{20,120}})));
     FluidPort_a port_a "Inlet (supplier side)"
       annotation(Placement(transformation(extent={{-120,-10},{-100,10}})));

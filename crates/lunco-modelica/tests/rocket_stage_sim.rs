@@ -144,6 +144,53 @@ fn rocket_throttle_closed_mid_sim_stops_tank_drain() {
     );
 }
 
+/// Scenario E: bounds enforcement. The valve declares
+/// `opening(min = 0, max = 1)`; rumoca should reject `set_input`
+/// values outside that range with an error rather than silently
+/// clamping (silent clamping would mislead callers who expect
+/// `get()` to round-trip the value they wrote). Also rejects
+/// non-finite writes.
+#[test]
+fn rocket_throttle_set_input_rejects_out_of_bounds() {
+    let mut stepper = build_stepper(None);
+
+    // Negative throttle would mean "reverse flow" (engine → tank),
+    // which the model can't physically represent.
+    let err = stepper
+        .set_input("valve.opening", -0.5)
+        .expect_err("negative throttle must be rejected");
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("below declared min"),
+        "expected min-bound error; got {msg}",
+    );
+
+    // Above max.
+    let err = stepper
+        .set_input("valve.opening", 1.5)
+        .expect_err("over-max throttle must be rejected");
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("exceeds declared max"),
+        "expected max-bound error; got {msg}",
+    );
+
+    // NaN must be rejected too.
+    let err = stepper
+        .set_input("valve.opening", f64::NAN)
+        .expect_err("NaN throttle must be rejected");
+    let msg = format!("{err}");
+    assert!(msg.contains("finite"), "expected finite-check error; got {msg}");
+
+    // Boundary values are allowed.
+    stepper
+        .set_input("valve.opening", 0.0)
+        .expect("0.0 is on the boundary, should be allowed");
+    stepper
+        .set_input("valve.opening", 1.0)
+        .expect("1.0 is on the boundary, should be allowed");
+}
+
 /// Scenario D: stress-test — change throttle many times mid-sim at
 /// various values. Without the post-change algebraic projection, BDF
 /// accumulates drift across repeated `reset_solver_history()` calls
