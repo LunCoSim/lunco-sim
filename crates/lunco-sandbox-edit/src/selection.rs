@@ -61,13 +61,18 @@ fn find_selectable(
     None
 }
 
-/// Handles entity selection via Shift+Left-click.
+/// Handles entity selection on Left-click.
 ///
-/// Regular Left-click is reserved for camera possession.
-/// Shift+Left-click selects the entity closest to the camera under the cursor
-/// and immediately enables the transform gizmo.
-/// Only hits selectable entities (rover bodies, props, panels) — ignores ground,
-/// wheels, and invisible colliders.
+/// - **Plain Left-click** selects the entity under the cursor (highlight only,
+///   no gizmo). Camera-side observers (`avatar_raycast_possession`) run on
+///   the same click to dispatch `PossessVessel`/`FollowTarget`.
+/// - **Alt+Left-click** selects *and* attaches a `GizmoTarget` for transform
+///   editing. `DragModeActive` is set so the camera-click handler stays out
+///   of the way until the gizmo is dismissed (Escape).
+/// - **Escape** clears the selection and gizmo.
+///
+/// Hits walk up to the nearest `SelectableRoot`; ground/wheels/invisible
+/// colliders are ignored.
 pub fn handle_entity_selection(
     mut selected: ResMut<SelectedEntity>,
     spawn_state: Res<SpawnState>,
@@ -96,9 +101,18 @@ pub fn handle_entity_selection(
         return;
     }
 
-    // Use Shift+Left-click for selection (regular Left-click is for camera possession)
     if !mouse.just_pressed(MouseButton::Left) { return; }
-    if !keys.pressed(KeyCode::ShiftLeft) && !keys.pressed(KeyCode::ShiftRight) { return; }
+    let alt_held = keys.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]);
+
+    // While a gizmo is up (drag_mode.active), the user is interacting with
+    // the transform gizmo widget — its handles aren't physical colliders, so
+    // raycasts will miss. Without this gate, every click on a gizmo handle
+    // would fall through to the "miss → deselect" path below and tear down
+    // the gizmo before the gizmo library could process the input. Gate: if
+    // the gizmo is up, only re-process the click when it lands on a fresh
+    // `SelectableRoot` collider (i.e. the user is reselecting). Otherwise
+    // pass the click through to the gizmo by returning early.
+    let gizmo_up = drag_mode.active;
 
     let (camera, cam_tf) = match cameras.iter().next() {
         Some(c) => c,
@@ -120,7 +134,11 @@ pub fn handle_entity_selection(
     let hit = raycaster.cast_ray(origin.into(), direction, 1000.0, false, &filter);
 
     let Some(hit_data) = hit else {
-        // Missed everything — deselect
+        // While gizmo is up, a missed raycast almost certainly means the
+        // click was on a gizmo handle — leave selection alone and let the
+        // gizmo library handle the click.
+        if gizmo_up { return; }
+        // Otherwise truly missed everything → deselect.
         for old in q_selected_old.iter() {
             commands.entity(old).remove::<Selected>().remove::<GizmoTarget>();
         }
@@ -133,7 +151,8 @@ pub fn handle_entity_selection(
     let target = find_selectable(hit_data.entity, &q_selectable, &q_parents);
 
     let Some(entity) = target else {
-        // No valid selectable target — deselect
+        // Same logic as the no-hit case — preserve selection if a gizmo is up.
+        if gizmo_up { return; }
         for old in q_selected_old.iter() {
             commands.entity(old).remove::<Selected>().remove::<GizmoTarget>();
         }
@@ -147,12 +166,18 @@ pub fn handle_entity_selection(
         commands.entity(old).remove::<Selected>().remove::<GizmoTarget>();
     }
 
-    // Select the target entity and enable gizmo immediately
-    commands.entity(entity)
-        .insert(Selected)
-        .insert(GizmoTarget::default());
+    // Plain click → highlight only. Alt-click → also attach the transform
+    // gizmo and put the editor into drag mode (which blocks the camera
+    // click handler so dragging a gizmo handle doesn't flip possession).
+    let mut e = commands.entity(entity);
+    e.insert(Selected);
+    if alt_held {
+        e.insert(GizmoTarget::default());
+        drag_mode.active = true;
+    } else {
+        drag_mode.active = false;
+    }
     selected.entity = Some(entity);
-    drag_mode.active = true;
 }
 
 #[cfg(test)]

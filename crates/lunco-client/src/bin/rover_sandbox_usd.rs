@@ -239,10 +239,14 @@ fn setup_sandbox(
             ..default()
         })),
         ChildOf(grid),
+        // big_space requires CellCoord on every spatial entity — without it
+        // `spring_arm_system`'s `Query<(&CellCoord, &Transform)>` doesn't
+        // match and `FollowTarget` clicks bail silently (camera "stuck").
+        CellCoord::default(),
         lunco_sandbox_edit::catalog::BalloonModelMarker::default(),
     ));
 
-    // Green Balloon (Python)
+    // Green Balloon (Python) — same CellCoord requirement as Red above.
     commands.spawn((
         Name::new("Green Balloon (Python)"),
         lunco_core::SelectableRoot,
@@ -256,6 +260,7 @@ fn setup_sandbox(
             ..default()
         })),
         ChildOf(grid),
+        CellCoord::default(),
         lunco_sandbox_edit::catalog::PythonBalloonMarker::default(),
     ));
 }

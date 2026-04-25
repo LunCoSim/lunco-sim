@@ -35,3 +35,19 @@ pub struct FocusTarget {
     /// The entity to focus on.
     pub target: Entity,
 }
+
+/// Follow a target with the chase camera, without taking control.
+///
+/// Inserts `SpringArmCamera` so the camera tracks the target's heading,
+/// but omits `ControllerLink` and vessel input bindings — keyboard input
+/// stays inert toward the target. Use this for non-vessel objects (balloons,
+/// props, observation targets) where the player wants to ride along but
+/// not drive. `PossessVessel` is conceptually `FollowTarget` plus a
+/// controller binding.
+#[Command]
+pub struct FollowTarget {
+    /// The avatar entity that will follow.
+    pub avatar: Entity,
+    /// The entity to follow.
+    pub target: Entity,
+}

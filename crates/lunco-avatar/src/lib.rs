@@ -250,6 +250,7 @@ impl Plugin for LunCoAvatarPlugin {
         app.add_observer(on_possess_command);
         app.add_observer(on_release_command);
         app.add_observer(on_focus_command);
+        app.add_observer(on_follow_command);
         app.add_observer(on_surface_teleport_command);
         app.add_observer(on_leave_surface_command);
 
@@ -975,42 +976,25 @@ fn avatar_global_hotkeys(q_avatar: Query<&IntentState, With<Avatar>>, mut clock:
 
 // ─── Raycasting ──────────────────────────────────────────────────────────────
 
-/// Finds the root Vessel entity from a hit collider by walking up the parent chain.
-/// Returns None if no vessel is found or if the hit is on ground/terrain.
-fn find_vessel_from_hit(
+/// Walks up the parent chain from a raycast hit to find the nearest
+/// click-target — anything tagged `SelectableRoot` (which includes
+/// vessels, balloons, props, panels). Ground/terrain hits return `None`.
+fn find_clickable_from_hit(
     mut entity: Entity,
     q_parents: &Query<&ChildOf>,
-    q_vessel: &Query<Entity, With<Vessel>>,
+    q_selectable: &Query<Entity, With<lunco_core::SelectableRoot>>,
     q_ground: &Query<Entity, With<lunco_core::Ground>>,
 ) -> Option<Entity> {
-    let mut depth = 0;
     const MAX_DEPTH: usize = 8;
-
-    // Walk up parent chain looking for a Vessel
-    loop {
-        // Skip ground/terrain entities
-        if q_ground.get(entity).is_ok() {
-            return None;
-        }
-
-        // Check if this entity is a vessel
-        if q_vessel.get(entity).is_ok() {
-            return Some(entity);
-        }
-
-        depth += 1;
-        if depth >= MAX_DEPTH {
-            break;
-        }
-
-        // Walk up to parent
+    for _ in 0..MAX_DEPTH {
+        if q_ground.get(entity).is_ok() { return None; }
+        if q_selectable.get(entity).is_ok() { return Some(entity); }
         if let Ok(parent) = q_parents.get(entity) {
             entity = parent.parent();
         } else {
             break;
         }
     }
-
     None
 }
 
@@ -1019,55 +1003,58 @@ fn find_vessel_from_hit(
 /// Uses Avian3D SpatialQuery to hit real mesh colliders, not invisible spheres.
 /// Walks up parent chain to find the root Vessel entity for possession.
 /// Celestial bodies still use sphere intersection (they have no colliders).
+/// Plain-click dispatcher: routes a left-click on a world entity to one of
+/// three typed commands.
+///
+/// | Hit                         | Command          |
+/// |-----------------------------|------------------|
+/// | `Vessel` (rover, spacecraft)| `PossessVessel`  |
+/// | other `SelectableRoot`      | `FollowTarget`   |
+/// | `CelestialBody` (no marker) | `FocusTarget`    |
+///
+/// Idempotency lives in each observer (no-op if state already matches).
+/// `DragModeActive` blocks clicks while a transform gizmo is up so the user
+/// can drag a handle without flipping the camera.
 pub fn avatar_raycast_possession(
     mouse: Res<ButtonInput<MouseButton>>,
+    keys: Res<ButtonInput<KeyCode>>,
     windows: Query<&Window>,
     camera_q: Query<(&Camera, &GlobalTransform, Entity), With<Avatar>>,
-    q_link: Query<&lunco_controller::ControllerLink, With<Avatar>>,
     drag_mode_active: Res<lunco_core::DragModeActive>,
     mut commands: Commands,
     q_bodies: Query<(Entity, &GlobalTransform, &CelestialBody)>,
     q_spacecraft: Query<(Entity, &GlobalTransform, &Spacecraft)>,
-    q_rovers: Query<Entity, With<Vessel>>,
+    q_vessel: Query<Entity, With<Vessel>>,
+    q_selectable: Query<Entity, With<lunco_core::SelectableRoot>>,
     q_parents: Query<&ChildOf>,
     q_ground: Query<Entity, With<lunco_core::Ground>>,
     raycaster: avian3d::prelude::SpatialQuery,
 ) {
     if !mouse.just_pressed(MouseButton::Left) { return; }
-
-    // Skip possession check if entity dragging is active
-    // This prevents camera possession from interfering with drag operations
+    // Alt-click is reserved for gizmo selection in lunco-sandbox-edit.
+    if keys.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]) { return; }
+    // Mid-drag on a transform gizmo: don't flip the camera under the user.
     if drag_mode_active.active { return; }
-
-    // If the avatar is already possessing a vessel, skip raycast possession entirely.
-    if q_link.iter().next().is_some() { return; }
 
     let Some(pos) = windows.iter().next().and_then(|w| w.cursor_position()) else { return; };
     let Some((camera, cam_gtf, avatar_entity)) = camera_q.iter().next() else { return; };
     let Ok(ray) = camera.viewport_to_world(cam_gtf, pos) else { return; };
 
-    // Raycast against colliders to find vessels
     let filter = avian3d::prelude::SpatialQueryFilter::default();
-    let hit = raycaster.cast_ray(ray.origin.into(), ray.direction, 1000.0, false, &filter);
+    let collider_hit = raycaster.cast_ray(ray.origin.into(), ray.direction, 1000.0, false, &filter);
 
-    let mut nearest_vessel: Option<Entity> = None;
-    let mut min_vessel_t = f32::INFINITY;
+    let mut nearest_clickable: Option<Entity> = None;
+    let mut min_t = f32::INFINITY;
 
-    if let Some(hit_data) = hit {
-        // Walk up parent chain to find the vessel
-        let vessel = find_vessel_from_hit(hit_data.entity, &q_parents, &q_rovers, &q_ground);
-        if let Some(vessel_entity) = vessel {
-            min_vessel_t = hit_data.distance as f32;
-            nearest_vessel = Some(vessel_entity);
+    if let Some(hit_data) = collider_hit {
+        if let Some(root) = find_clickable_from_hit(hit_data.entity, &q_parents, &q_selectable, &q_ground) {
+            min_t = hit_data.distance as f32;
+            nearest_clickable = Some(root);
         }
     }
 
-    // Also check celestial bodies and spacecraft (no colliders)
-    let mut nearest = nearest_vessel;
-    let mut min_t = min_vessel_t;
-    let mut is_possessable = nearest_vessel.is_some();
-
-    // Check spacecraft with sphere intersection (they may not have colliders)
+    // Spacecraft hit-spheres (no real colliders) — possessable, not selectable.
+    let mut spacecraft_hit: Option<Entity> = None;
     for (entity, gtf, sc) in q_spacecraft.iter() {
         let oc = ray.origin - gtf.translation();
         let b = oc.dot(ray.direction.as_vec3());
@@ -1077,13 +1064,14 @@ pub fn avatar_raycast_possession(
             let t = -b - discr.sqrt();
             if t > 0.0 && t < min_t {
                 min_t = t;
-                nearest = Some(entity);
-                is_possessable = true;
+                nearest_clickable = None;
+                spacecraft_hit = Some(entity);
             }
         }
     }
 
-    // Check celestial bodies with sphere intersection
+    // Celestial bodies — focus only (orbit-distance scale).
+    let mut body_hit: Option<Entity> = None;
     for (entity, gtf, body) in q_bodies.iter() {
         let oc = ray.origin - gtf.translation();
         let b = oc.dot(ray.direction.as_vec3());
@@ -1093,26 +1081,37 @@ pub fn avatar_raycast_possession(
             let t = -b - discr.sqrt();
             if t > 0.0 && t < min_t {
                 min_t = t;
-                nearest = Some(entity);
-                is_possessable = false; // Focus, not possess
+                nearest_clickable = None;
+                spacecraft_hit = None;
+                body_hit = Some(entity);
             }
         }
     }
 
-    if let Some(target) = nearest {
-        if is_possessable {
+    if let Some(target) = body_hit {
+        commands.trigger(FocusTarget { avatar: avatar_entity, target });
+    } else if let Some(target) = spacecraft_hit {
+        commands.trigger(PossessVessel { avatar: avatar_entity, target });
+    } else if let Some(target) = nearest_clickable {
+        if q_vessel.get(target).is_ok() {
             commands.trigger(PossessVessel { avatar: avatar_entity, target });
         } else {
-            commands.trigger(FocusTarget { avatar: avatar_entity, target });
+            commands.trigger(FollowTarget { avatar: avatar_entity, target });
         }
     }
 }
 
-fn avatar_escape_possession(keys: Res<ButtonInput<KeyCode>>, mut q_avatar: Query<Entity, (With<Avatar>, With<ControllerLink>)>, mut commands: Commands) {
-    if keys.just_pressed(KeyCode::Backspace) {
-        for entity in q_avatar.iter_mut() {
-            commands.trigger(ReleaseVessel { target: entity });
-        }
+/// Backspace releases possession **and** plain follow — both unwind through
+/// the same `ReleaseVessel` path (which strips ControllerLink, SpringArm,
+/// interpolation, and reinstates a free-flight camera).
+fn avatar_escape_possession(
+    keys: Res<ButtonInput<KeyCode>>,
+    q_avatar: Query<Entity, (With<Avatar>, Or<(With<ControllerLink>, With<SpringArmCamera>)>)>,
+    mut commands: Commands,
+) {
+    if !keys.just_pressed(KeyCode::Backspace) { return; }
+    for entity in q_avatar.iter() {
+        commands.trigger(ReleaseVessel { target: entity });
     }
 }
 
@@ -1208,7 +1207,7 @@ fn get_grid_for_entity(
 fn on_possess_command(
     trigger: On<PossessVessel>,
     mut commands: Commands,
-    q_avatar: Query<(Entity, &Transform, &CellCoord, &ChildOf), With<Avatar>>,
+    q_avatar: Query<(Entity, &Transform, &CellCoord, &ChildOf, Option<&ControllerLink>), With<Avatar>>,
     q_spatial_abs: Query<(&CellCoord, &Transform), Without<Avatar>>,
     q_grids: Query<&Grid>,
     q_parents: Query<&ChildOf>,
@@ -1220,12 +1219,17 @@ fn on_possess_command(
     _q_chase: Query<&ChaseCamera>,
 ) {
     let cmd = trigger.event();
-    let (avatar_ent, cam_tf, cam_cell, _child_of) = if let Ok(data) = q_avatar.get(cmd.avatar) {
+    let (avatar_ent, cam_tf, cam_cell, _child_of, existing_link) = if let Ok(data) = q_avatar.get(cmd.avatar) {
         data
     } else {
         let Some(first) = q_avatar.iter().next() else { return; };
         first
     };
+
+    // Idempotent: already controlling this exact target — no-op.
+    if let Some(link) = existing_link {
+        if link.vessel_entity == cmd.target { return; }
+    }
 
     // Compute camera absolute position in root frame.
     let cam_abs = lunco_core::coords::get_absolute_pos_in_root_double_ghost_aware(
@@ -1331,6 +1335,101 @@ fn on_possess_command(
         .remove::<FreeFlightCamera>()
         .remove::<SurfaceCamera>()
         .remove::<FrameBlend>();
+}
+
+/// Follows a target with the chase camera but without taking control.
+///
+/// Conceptually `PossessVessel` minus the controller binding: the avatar
+/// rides along behind the target, but keyboard input no longer drives any
+/// vessel. Used for non-`Vessel` objects (balloons, props, observation
+/// targets). Idempotent — clicking the same already-followed target is a
+/// no-op so we don't churn components every frame.
+fn on_follow_command(
+    trigger: On<FollowTarget>,
+    mut commands: Commands,
+    q_avatar: Query<(Entity, &Transform, &CellCoord, &ChildOf, Option<&SpringArmCamera>), With<Avatar>>,
+    q_spatial_abs: Query<(&CellCoord, &Transform), Without<Avatar>>,
+    q_grids: Query<&Grid>,
+    q_parents: Query<&ChildOf>,
+    q_spatial: Query<(&CellCoord, &Transform), Without<Avatar>>,
+    q_vessel_gravity: Query<&GravityBody>,
+) {
+    let cmd = trigger.event();
+    let Ok((avatar_ent, cam_tf, cam_cell, _child_of, existing_spring)) = q_avatar.get(cmd.avatar)
+        .or_else(|_| q_avatar.iter().next().ok_or(())) else { return; };
+
+    // Idempotent: already following this target — no-op.
+    if let Some(arm) = existing_spring {
+        if arm.target == cmd.target { return; }
+    }
+
+    // Target absolute position in root frame.
+    let target_abs = if let Ok((t_cell, t_tf)) = q_spatial.get(cmd.target) {
+        lunco_core::coords::get_absolute_pos_in_root_double_ghost_aware(
+            cmd.target, t_cell, t_tf, &q_parents, &q_grids, &q_spatial_abs,
+        )
+    } else {
+        // Fallback: keep camera where it is.
+        lunco_core::coords::get_absolute_pos_in_root_double_ghost_aware(
+            avatar_ent, cam_cell, cam_tf, &q_parents, &q_grids, &q_spatial_abs,
+        )
+    };
+
+    let target_grid = get_grid_for_entity(cmd.target, &q_parents, &q_grids);
+    let end_distance = 15.0_f64;
+    let end_vert_off = 2.0_f32;
+    let end_pitch = -0.25_f32;
+
+    // Snap behind the target with a default chase pose.
+    let final_rot = Quat::from_euler(EulerRot::YXZ, 0.0, end_pitch, 0.0);
+    let final_offset = final_rot.mul_vec3(Vec3::Z).as_dvec3() * end_distance;
+    let final_abs_pos = target_abs + final_offset + Vec3::Y.as_dvec3() * end_vert_off as f64;
+
+    if let Some(tg) = target_grid {
+        if tg != Entity::PLACEHOLDER {
+            if let Ok(target_grid_ref) = q_grids.get(tg) {
+                let target_grid_abs = lunco_core::coords::get_absolute_pos_in_root_double_ghost_aware(
+                    tg, &CellCoord::default(), &Transform::default(), &q_parents, &q_grids, &q_spatial_abs,
+                );
+                let local_pos = final_abs_pos - target_grid_abs;
+                let (new_cell, new_tf) = target_grid_ref.translation_to_grid(local_pos);
+                commands.entity(avatar_ent)
+                    .insert(new_cell)
+                    .insert(Transform::from_translation(new_tf).with_rotation(final_rot));
+                commands.entity(tg).add_child(avatar_ent);
+            }
+        }
+    }
+
+    // Strip any prior controller binding — follow ≠ possess.
+    let mut cmd_ent = commands.entity(avatar_ent);
+    cmd_ent
+        .remove::<ControllerLink>()
+        .remove::<ActionState<lunco_controller::VesselIntent>>()
+        .remove::<InputMap<lunco_controller::VesselIntent>>()
+        .remove::<FreeFlightCamera>()
+        .remove::<SurfaceCamera>()
+        .remove::<OrbitCamera>()
+        .remove::<FrameBlend>()
+        .insert((
+            SpringArmCamera {
+                target: cmd.target,
+                distance: end_distance,
+                yaw: 0.0,
+                pitch: end_pitch,
+                damping: Some(0.05),
+                vertical_offset: end_vert_off,
+            },
+            avian3d::prelude::TranslationInterpolation,
+            avian3d::prelude::RotationInterpolation,
+        ));
+
+    // Surface-relative mode if following a body on a gravity well.
+    if let Ok(gb) = q_vessel_gravity.get(cmd.target) {
+        cmd_ent.insert(*gb).insert(SurfaceRelativeMode);
+    } else {
+        cmd_ent.remove::<SurfaceRelativeMode>();
+    }
 }
 
 /// Focuses on a target with an instant transition to OrbitCamera mode.
