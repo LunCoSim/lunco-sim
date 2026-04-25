@@ -13,6 +13,7 @@ use bevy::reflect::TypeRegistry;
 use std::io::Cursor;
 use crate::{
     registry::ApiEntityRegistry,
+    queries::ApiQueryRegistry,
     schema::{ApiErrorCode, ApiRequest, ApiResponse, ApiSchema},
     discovery::discover_commands,
 };
@@ -59,6 +60,7 @@ pub fn api_request_observer(
     mut commands: Commands,
     mut id_counter: ResMut<ApiIdCounter>,
     registry: Res<ApiEntityRegistry>,
+    query_registry: Res<ApiQueryRegistry>,
     type_registry: Res<AppTypeRegistry>,
     q_meta: Query<(Option<&Name>, Option<&lunco_core::RoverVessel>, Option<&lunco_core::CelestialBody>)>,
     q_cameras: Query<Entity, With<Camera3d>>,
@@ -68,7 +70,7 @@ pub fn api_request_observer(
 
     let maybe_response = {
         let type_reg = type_registry.read();
-        execute_request(&req.request, &mut commands, &mut id_counter, &registry, &type_reg, &q_meta, &q_cameras, correlation_id)
+        execute_request(&req.request, &mut commands, &mut id_counter, &registry, &query_registry, &type_reg, &q_meta, &q_cameras, correlation_id)
     };
 
     // None means the response is deferred (e.g. waiting for ScreenshotCaptured).
@@ -174,6 +176,7 @@ fn execute_request(
     commands: &mut Commands,
     id_counter: &mut ApiIdCounter,
     registry: &ApiEntityRegistry,
+    query_registry: &ApiQueryRegistry,
     type_registry: &TypeRegistry,
     q_meta: &Query<(Option<&Name>, Option<&lunco_core::RoverVessel>, Option<&lunco_core::CelestialBody>)>,
     _q_cameras: &Query<Entity, With<Camera3d>>,
@@ -220,6 +223,24 @@ fn execute_request(
                     commands.spawn(Screenshot::primary_window());
                     return None; // response deferred
                 }
+            }
+
+            // Query registry — endpoints that *return data* (vs typed
+            // Reflect commands which are fire-and-forget). Domain crates
+            // register providers via `ApiQueryRegistry::register`. The
+            // provider runs deferred via `commands.queue` so it can take
+            // `&mut World`; the response is fired back via
+            // `ApiResponseEvent` when the queue flushes.
+            if let Some(provider) = query_registry.get(command) {
+                let params = params.clone();
+                commands.queue(move |world: &mut World| {
+                    let response = provider.execute(world, &params);
+                    world.commands().trigger(ApiResponseEvent {
+                        response,
+                        correlation_id,
+                    });
+                });
+                return None; // response deferred
             }
 
             // Validate command exists and has ReflectEvent
