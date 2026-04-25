@@ -22,7 +22,6 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_workbench::{Panel, PanelId, PanelSlot};
 
-use crate::ui::panels::diagram::DiagramState;
 use crate::visual_diagram::{msl_component_library, MSLComponentDef};
 
 /// Panel id — registered as a singleton panel, slotted RightInspector.
@@ -376,15 +375,106 @@ impl Panel for ComponentPalettePanel {
             });
 
         // ── Side-effect: instantiate clicked component ──
+        //
+        // Fires `AddModelicaComponent` against the active doc + its
+        // drilled-in / detected class. The Reflect observer in
+        // `crate::api_edits` does the actual AST-level insertion via
+        // `ModelicaOp::AddComponent`, so the path is identical to what
+        // an external API caller would trigger (per AGENTS.md §4.1).
+        //
+        // Placement: simple modulo grid in Modelica diagram coords
+        // (-100..100). Cycles `(placement_counter % 3, /3)` so
+        // successive clicks don't all land on top of each other. The
+        // canvas's auto-arrange button lets users tidy after.
         if let Some(def) = clicked {
-            if let Some(mut state) = world.get_resource_mut::<DiagramState>() {
-                state.placement_counter += 1;
-                let x = 100.0 + (state.placement_counter % 3) as f32 * 200.0;
-                let y = 80.0 + (state.placement_counter / 3) as f32 * 160.0;
-                state.add_component(def, egui::Pos2::new(x, y));
-            }
+            place_via_add_component(world, def);
         }
     }
+}
+
+/// Persistent counter for palette-driven placement so successive
+/// clicks step across a 3×N grid instead of stacking.
+#[derive(Resource, Default)]
+struct PalettePlacementCounter(u32);
+
+fn place_via_add_component(world: &mut World, def: MSLComponentDef) {
+    // Resolve target doc — the active editor tab. No active doc → no
+    // class to add into; we silently no-op (the user clicked into a
+    // workspace with no open Modelica tab).
+    let active_doc = world
+        .get_resource::<lunco_workbench::WorkspaceResource>()
+        .and_then(|ws| ws.active_document);
+    let Some(doc_id) = active_doc else {
+        bevy::log::info!(
+            "[Palette] click on `{}` ignored — no active document",
+            def.msl_path
+        );
+        return;
+    };
+
+    // Resolve target class — drilled-in class on the canvas if set,
+    // otherwise the doc's first detected non-package class.
+    let drilled_in = world
+        .get_resource::<crate::ui::panels::canvas_diagram::DrilledInClassNames>()
+        .and_then(|m| m.get(doc_id).map(str::to_string));
+    let class = drilled_in
+        .or_else(|| {
+            let registry = world.resource::<crate::ui::state::ModelicaDocumentRegistry>();
+            let host = registry.host(doc_id)?;
+            let ast = host.document().ast().result.as_ref().ok().cloned()?;
+            crate::ast_extract::extract_model_name_from_ast(&ast)
+        })
+        .unwrap_or_default();
+    if class.is_empty() {
+        bevy::log::info!(
+            "[Palette] click on `{}` ignored — could not resolve target class on doc {}",
+            def.msl_path,
+            doc_id.raw()
+        );
+        return;
+    }
+
+    // Increment grid counter + compute placement in Modelica coords.
+    let (x, y) = {
+        let mut counter = world
+            .get_resource_or_insert_with::<PalettePlacementCounter>(Default::default);
+        counter.0 = counter.0.saturating_add(1);
+        let n = counter.0;
+        let x = -50.0 + ((n % 3) as f32) * 30.0;
+        let y = 50.0 - ((n / 3) as f32) * 30.0;
+        (x, y)
+    };
+
+    // Synthesise a unique-ish instance name. Modelica allows letters,
+    // digits, underscore — start lower-case. The user can rename via
+    // the inspector after placement.
+    let short = def.name.split('.').last().unwrap_or(&def.name);
+    let mut base = String::with_capacity(short.len());
+    for (i, ch) in short.chars().enumerate() {
+        if i == 0 {
+            base.push(ch.to_ascii_lowercase());
+        } else if ch.is_ascii_alphanumeric() || ch == '_' {
+            base.push(ch);
+        }
+    }
+    if base.is_empty() {
+        base.push_str("inst");
+    }
+    let counter_val = world.resource::<PalettePlacementCounter>().0;
+    let name = format!("{base}{counter_val}");
+
+    world
+        .commands()
+        .trigger(crate::api_edits::AddModelicaComponent {
+            doc: doc_id.raw(),
+            class,
+            type_name: def.msl_path.clone(),
+            name,
+            x,
+            y,
+            width: 20.0,
+            height: 20.0,
+        });
 }
 
 /// Draw one component row (category dot + name + subtitle). Returns

@@ -557,14 +557,12 @@ pub(crate) fn sync_active_tab_to_doc(world: &mut World, doc: DocumentId) {
         buf.model_path = model_path;
     }
 
-    // Reset any stale in-progress diagram canvas — the diagram body
-    // reparses from the fresh source on next render.
-    if let Some(mut ds) = world.get_resource_mut::<crate::ui::panels::diagram::DiagramState>() {
-        ds.diagram = crate::visual_diagram::VisualDiagram::default();
-        ds.snarl = egui_snarl::Snarl::default();
-        ds.compile_status = None;
-    }
-
+    // The legacy snarl viewer's `DiagramState` reset used to live here
+    // (clear `diagram`/`snarl`/`compile_status`). Snarl is gone; the
+    // canvas viewer reprojects from the document AST every frame
+    // when the generation advances, so there is no per-tab cache to
+    // wipe. Compile-status comes from `WorkbenchState.compilation_error`
+    // and is reset when the next compile starts.
     refresh_selected_entity_for(world, doc);
 }
 

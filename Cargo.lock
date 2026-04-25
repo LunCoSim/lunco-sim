@@ -6332,7 +6332,6 @@ dependencies = [
  "bevy_egui",
  "console_error_panic_hook",
  "crossbeam-channel",
- "egui-snarl",
  "egui_commonmark",
  "egui_extras",
  "egui_plot",

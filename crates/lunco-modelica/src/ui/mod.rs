@@ -279,10 +279,11 @@ impl Perspective for AnalyzePerspective {
         // to it — users can close it.
         layout.set_center(vec![PanelId("modelica_welcome")]);
         layout.set_active_center_tab(0);
-        // Right dock gets two tabs: Inspector (params/variables) and
-        // the Component Palette (MSL instantiation). Figma / Unreal
-        // pattern — asset browser on the right, always visible while
-        // the user is working in the center canvas.
+        // Right dock — Telemetry (parameters, inputs, variable
+        // toggles) plus the Component Palette (MSL instantiation).
+        // The Telemetry panel registers itself with the historical
+        // id `modelica_inspector` for layout-stability reasons; the
+        // panel struct is named `TelemetryPanel`.
         layout.set_right_inspector_tabs(vec![
             PanelId("modelica_inspector"),
             PanelId("modelica_component_palette"),
@@ -355,13 +356,11 @@ impl Plugin for ModelicaUiPlugin {
             .init_resource::<ModelicaDocumentRegistry>()
             .init_resource::<CompileStates>()
             .init_resource::<panels::model_view::ModelTabs>()
-            .init_resource::<panels::diagram::DiagramState>()
-            .init_resource::<panels::diagram::DiagramTheme>()
             .init_resource::<panels::code_editor::EditorBufferState>()
-            .init_resource::<panels::palette::PaletteState>()
-            .init_resource::<panels::diagram::ModelSignatureCache>()
             .init_resource::<panels::console::ConsoleLog>()
             .init_resource::<panels::diagnostics::DiagnosticsLog>()
+            .init_resource::<panels::canvas_projection::DiagramAutoLayoutSettings>()
+            .init_resource::<panels::palette::PaletteState>()
             .insert_resource(panels::package_browser::PackageTreeCache::new())
             .init_resource::<browser_dispatch::PendingDrillIns>()
             .add_systems(Update, browser_dispatch::drain_browser_actions)
@@ -403,7 +402,6 @@ impl Plugin for ModelicaUiPlugin {
             .register_panel(panels::graphs::GraphsPanel)
             .register_panel(panels::console::ConsolePanel)
             .register_panel(panels::diagnostics::DiagnosticsPanel)
-            .register_panel(panels::inspector::InspectorPanel)
             .register_panel(panels::canvas_diagram::CanvasDiagramPanel)
             .init_resource::<panels::canvas_diagram::CanvasDiagramState>()
             .init_resource::<panels::canvas_diagram::PaletteSettings>()

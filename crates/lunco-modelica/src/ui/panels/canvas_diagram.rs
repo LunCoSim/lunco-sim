@@ -2803,7 +2803,7 @@ impl Panel for CanvasDiagramPanel {
                 .get_resource::<DiagramProjectionLimits>()
                 .map(|l| (l.max_nodes, l.max_duration))
                 .unwrap_or((
-                    crate::ui::panels::diagram::DEFAULT_MAX_DIAGRAM_NODES,
+                    crate::ui::panels::canvas_projection::DEFAULT_MAX_DIAGRAM_NODES,
                     std::time::Duration::from_secs(60),
                 ));
             // Target class for the projection: the fully-qualified
@@ -2822,7 +2822,7 @@ impl Panel for CanvasDiagramPanel {
             // back to configurable spacing for components without a
             // `Placement` annotation.
             let layout_snapshot = world
-                .get_resource::<crate::ui::panels::diagram::DiagramAutoLayoutSettings>()
+                .get_resource::<crate::ui::panels::canvas_projection::DiagramAutoLayoutSettings>()
                 .cloned()
                 .unwrap_or_default();
             let mut state = world.resource_mut::<CanvasDiagramState>();
@@ -2927,7 +2927,7 @@ impl Panel for CanvasDiagramPanel {
                         }
                         let t0 = std::time::Instant::now();
                         let mut diagram = if let Some(ast) = ast_arc {
-                            crate::ui::panels::diagram::import_model_to_diagram_from_ast(
+                            crate::ui::panels::canvas_projection::import_model_to_diagram_from_ast(
                                 ast,
                                 &source,
                                 max_nodes_snapshot,
@@ -2936,7 +2936,7 @@ impl Panel for CanvasDiagramPanel {
                             )
                             .unwrap_or_default()
                         } else {
-                            crate::ui::panels::diagram::import_model_to_diagram(&source)
+                            crate::ui::panels::canvas_projection::import_model_to_diagram(&source)
                                 .unwrap_or_default()
                         };
                         bevy::log::info!(
@@ -3732,7 +3732,7 @@ impl Default for PaletteSettings {
 pub struct DiagramProjectionLimits {
     /// Maximum component count the projector will accept before
     /// returning `None`. Default
-    /// [`crate::ui::panels::diagram::DEFAULT_MAX_DIAGRAM_NODES`]
+    /// [`crate::ui::panels::canvas_projection::DEFAULT_MAX_DIAGRAM_NODES`]
     /// (1000). Users building power-system or multi-body models
     /// with hundreds of components can raise this in Settings.
     pub max_nodes: usize,
@@ -3751,7 +3751,7 @@ pub struct DiagramProjectionLimits {
 impl Default for DiagramProjectionLimits {
     fn default() -> Self {
         Self {
-            max_nodes: crate::ui::panels::diagram::DEFAULT_MAX_DIAGRAM_NODES,
+            max_nodes: crate::ui::panels::canvas_projection::DEFAULT_MAX_DIAGRAM_NODES,
             max_duration: std::time::Duration::from_secs(60),
         }
     }
@@ -5536,7 +5536,7 @@ fn apply_ops(world: &mut World, doc_id: lunco_doc::DocumentId, ops: Vec<Modelica
 /// Observer for [`crate::ui::commands::AutoArrangeDiagram`].
 ///
 /// Assigns every component of the active class a grid position from
-/// the current [`crate::ui::panels::diagram::DiagramAutoLayoutSettings`]
+/// the current [`crate::ui::panels::canvas_projection::DiagramAutoLayoutSettings`]
 /// `arrange_*` parameters and emits a batch of `SetPlacement` ops.
 ///
 /// Iterates the canvas scene (not the AST) so the order matches what
@@ -5575,7 +5575,7 @@ fn auto_arrange_now(world: &mut World, doc_id: lunco_doc::DocumentId) {
         return;
     };
     let layout = world
-        .get_resource::<crate::ui::panels::diagram::DiagramAutoLayoutSettings>()
+        .get_resource::<crate::ui::panels::canvas_projection::DiagramAutoLayoutSettings>()
         .cloned()
         .unwrap_or_default();
     // Capture each node's `origin` (Modelica instance name) AND

@@ -33,7 +33,6 @@ use crate::ast_extract::{
     extract_parameters, hash_content,
 };
 use crate::ui::panels::code_editor::EditorBufferState;
-use crate::ui::panels::diagram::DiagramState;
 use crate::ui::{CompileState, CompileStates, ModelicaDocumentRegistry, WorkbenchState};
 use crate::{ModelicaChannels, ModelicaCommand, ModelicaModel};
 
@@ -1041,7 +1040,6 @@ fn on_compile_model(
     mut diagnostics: Option<ResMut<crate::ui::panels::diagnostics::DiagnosticsLog>>,
     mut picker: ResMut<CompileClassPickerState>,
     mut sim_streams: ResMut<crate::SimStreamRegistry>,
-    diagram_state: Res<DiagramState>,
     channels: Option<Res<ModelicaChannels>>,
     mut q_models: Query<&mut ModelicaModel>,
     drilled_in_classes: Option<Res<crate::ui::panels::canvas_diagram::DrilledInClassNames>>,
@@ -1205,7 +1203,14 @@ fn on_compile_model(
         // through `Commands` (deferred), so we can't immediately
         // query the new entity in this system — initial fields are
         // set on the component at spawn time instead.
-        let session_id = diagram_state.model_counter as u64 + 1;
+        // Initial session_id for newly-spawned model entity. Existing
+        // entities bump their own `session_id` on recompile (see
+        // the "updated-in-place" branch above); this starting value
+        // matters only for the very first compile of a doc, after
+        // which the per-entity counter takes over. Hardcoded `1`
+        // since the previous source (`DiagramState.model_counter`)
+        // was a snarl-side counter that has been removed.
+        let session_id: u64 = 1;
         let entity = commands
             .spawn((
                 Name::new(model_name.clone()),
@@ -1234,11 +1239,11 @@ fn on_compile_model(
     // Resolve the session_id for the command we're about to send. For
     // the updated-in-place branch this is whatever we just bumped to;
     // for the newly-spawned branch the entity doesn't exist yet (spawn
-    // is deferred), so fall back to the DiagramState counter we used.
+    // is deferred), so fall back to the same `1` we set above.
     let session_id = q_models
         .get(target_entity)
         .map(|m| m.session_id)
-        .unwrap_or_else(|_| diagram_state.model_counter as u64 + 1);
+        .unwrap_or(1);
 
     compile_states.mark_started(doc);
     console.info(format!("⏵ Compile started: '{model_name}'"));
