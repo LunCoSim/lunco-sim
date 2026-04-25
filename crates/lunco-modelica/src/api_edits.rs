@@ -39,27 +39,13 @@
 //!   the entire buffer. A future iteration can add range-based edits.
 
 use bevy::prelude::*;
-use lunco_api::ApiVisibility;
 use lunco_doc::DocumentId;
 
 use crate::document::ModelicaOp;
 use crate::pretty::{ComponentDecl, ConnectEquation, Placement, PortRef};
 use crate::ui::state::ModelicaDocumentRegistry;
 
-/// Names of the edit commands this plugin registers. Centralised so
-/// the visibility gate cannot drift from the registration list — both
-/// loops walk the same array.
-const EDIT_COMMAND_NAMES: &[&str] = &[
-    "SetDocumentSource",
-    "AddModelicaComponent",
-    "RemoveModelicaComponent",
-    "ConnectComponents",
-    "DisconnectComponents",
-];
-
-/// Plugin that registers the Modelica edit events + observers. Always
-/// added — the GUI dispatches these too. External API visibility is
-/// controlled separately via [`ApiVisibility`]; see module docs.
+/// Plugin that registers the Modelica edit events + observers.
 pub struct ModelicaApiEditPlugin;
 
 impl Plugin for ModelicaApiEditPlugin {
@@ -74,37 +60,7 @@ impl Plugin for ModelicaApiEditPlugin {
             .add_observer(on_remove_modelica_component)
             .add_observer(on_connect_components)
             .add_observer(on_disconnect_components);
-
-        // External visibility default: hide unless `--api-expose-edits`
-        // was passed. Domain crates own their hide-by-default set; the
-        // gate lives in the same plugin that introduces the surface so
-        // moving the events to a different crate moves the gate with
-        // them.
-        if !should_expose_edits_to_api() {
-            let mut visibility = app.world_mut().resource_mut::<ApiVisibility>();
-            for name in EDIT_COMMAND_NAMES {
-                visibility.hide(*name);
-            }
-            bevy::log::info!(
-                "[Modelica] edit events hidden from external API \
-                 ({}). Pass `--api-expose-edits` to expose.",
-                EDIT_COMMAND_NAMES.join(", ")
-            );
-        } else {
-            bevy::log::info!(
-                "[Modelica] edit events exposed on external API \
-                 (--api-expose-edits)"
-            );
-        }
     }
-}
-
-/// True when the binary was launched with `--api-expose-edits`.
-/// Read once at plugin build; toggling at runtime is intentionally not
-/// supported (the hidden set in `ApiVisibility` is mutable, but
-/// `discover_schema` callers cache schemas and would not re-fetch).
-pub fn should_expose_edits_to_api() -> bool {
-    std::env::args().any(|a| a == "--api-expose-edits")
 }
 
 // ─── SetDocumentSource ─────────────────────────────────────────────────

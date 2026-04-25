@@ -239,31 +239,18 @@ for the design.
 **Adding a new typed command** (side-effect): follow the existing
 pattern in `skills/test-via-api/SKILL.md`.
 
-### External API visibility
+### External API visibility (optional)
 
-Some Reflect events exist inside the app but are **hidden from the
-external API surface** by default. The mechanism is `ApiVisibility`
-(see `crates/lunco-api/src/queries.rs`) — a `Resource` holding the
-short type names of commands that should not appear in
-`discover_schema` and that the executor rejects with
-`CommandNotFound`. Domain crates push their hide-by-default events
-into the set during plugin build.
+Domain crates can hide Reflect events from the external API surface
+without un-registering them, via the [`ApiVisibility`] resource (see
+`crates/lunco-api/src/queries.rs`). Names pushed into
+`hidden_commands` are filtered out of `discover_schema` and rejected
+by `execute_command` with `CommandNotFound`. The events remain in the
+Bevy type registry — GUI panels, tests, and observers dispatch them
+unaffected.
 
-Crucially, hidden ≠ unregistered. The events are still in the Bevy
-type registry — the GUI dispatches them, observers fire on them, tests
-use them. Only the external API surface (HTTP / MCP) is filtered. This
-matches AGENTS.md §4.1 rule 3 ("UI never mutates state directly … all
-UI interactions emit `CommandMessage` events"): a single Reflect event
-input shape, with a separate visibility decision for who outside the
-process can see it.
-
-| Flag | Reveals |
-|---|---|
-| `--api-expose-edits` | Modelica document mutation commands (`SetDocumentSource`, `AddModelicaComponent`, `RemoveModelicaComponent`, `ConnectComponents`, `DisconnectComponents`). Without this flag the external API is effectively read-only on Modelica sources, while the workbench GUI itself remains fully editable. See `crates/lunco-modelica/src/api_edits.rs`. |
-
-To add a new opt-in mutation surface in another domain: register the
-events as usual, then in the plugin's `build` push their names into
-`ApiVisibility` unless a corresponding flag was supplied.
+No domain currently uses this; it's available for future surfaces
+that want a runtime-toggleable opt-out.
 
 ## Binaries with API Support
 
