@@ -163,11 +163,12 @@ const STATIC_TOOLS = [
   // ── Live model interaction (spec 033 P1 + P2) ─────────────────────────
   {
     name: 'describe_model',
-    description: "List a Modelica model's inputs, parameters, and outputs from its AST. Available before compile — the AST has the structure the moment the doc parses. Returns `{inputs: [...], parameters: [...], outputs: [...]}` where each entry carries `name`, `description`, plus `default`/`min`/`max` where declared.",
+    description: "Full structural picture of a Modelica class from the AST. Returns `{class_name, class_kind, extends, components, connections, inputs, parameters, outputs}`. `components` are sub-instances (the diagram boxes) with their declared types and modifications; `connections` are the wiring (`connect(a, b)` equations) as `{from, to}` dot-paths. `inputs / parameters / outputs` carry `type`, `unit`, `default`, `min`, `max`, `description`. Available before compile — comes from the AST. For multi-class docs, pass `class` (short or qualified name); default is the drilled-in class or first non-package class.",
     inputSchema: {
       type: 'object',
       properties: {
         doc: { type: 'integer', description: 'Document id from `list_open_documents`.' },
+        class: { type: 'string', description: 'Optional target class. Defaults to drilled-in / first non-package class.' },
       },
       required: ['doc'],
     },

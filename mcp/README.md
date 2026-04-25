@@ -61,7 +61,7 @@ These tools are always available:
 | `compile_status` | Read per-doc compile state without triggering compile |
 | `list_compile_candidates` | List the non-package classes a multi-class doc would let you compile |
 | `get_document_source` | Fetch the in-memory source of an open doc (incl. unsaved edits) |
-| `describe_model` | List a model's `inputs / parameters / outputs` from the AST (pre- or post-compile) |
+| `describe_model` | Full structural view of a class: `class_kind`, `extends`, `components`, `connections`, plus typed `inputs / parameters / outputs` with units & bounds |
 | `snapshot_variables` | One-shot read of current parameter / input / variable values from a running sim |
 | `set_input` | Push a runtime input value into a compiled model (effective on the next sim step) |
 

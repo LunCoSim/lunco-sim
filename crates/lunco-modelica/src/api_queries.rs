@@ -542,7 +542,16 @@ impl ApiQueryProvider for GetDocumentSourceProvider {
     }
 }
 
-// ─── DescribeModel (spec 033 P1) ───────────────────────────────────────
+// ─── DescribeModel (spec 033 P1, structural extension) ────────────────
+//
+// Returns the structural picture of one class within a doc:
+// class_kind, extends, components (subinstances), connections (wiring),
+// plus typed inputs / parameters / outputs with units, bounds and
+// defaults. The agent picks which class via the `class` parameter; the
+// default is the drilled-in class or the first non-package class.
+// Equations and full annotations are intentionally not surfaced here
+// — those are best read via `get_document_source` when the agent
+// genuinely needs them.
 
 struct DescribeModelProvider;
 
@@ -559,6 +568,20 @@ impl ApiQueryProvider for DescribeModelProvider {
         let Some(doc_id) = parse_doc_id(params, "doc") else {
             return err_missing_field("doc");
         };
+        let class_param = params
+            .get("class")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(String::from);
+
+        // Resolve drilled-in class as the fallback target before we
+        // borrow the modelica registry — `DrilledInClassNames` is a
+        // separate resource and we need both. Reading them in
+        // sequence keeps the borrow checker simple.
+        let drilled_in = world
+            .get_resource::<DrilledInClassNames>()
+            .and_then(|m| m.get(doc_id).map(str::to_string));
+
         let registry = world.resource::<ModelicaDocumentRegistry>();
         let Some(host) = registry.host(doc_id) else {
             return err_doc_not_found(doc_id);
@@ -574,75 +597,89 @@ impl ApiQueryProvider for DescribeModelProvider {
             );
         };
 
-        // Pull every piece of metadata the AST extractors expose. None
-        // of these require the model to be compiled — the whole point
-        // is to surface the structure to an agent before it commits to
-        // compile, so it knows what knobs exist.
-        let parameters = ast_extract::extract_parameters_from_ast(&ast);
-        let parameter_bounds = ast_extract::extract_parameter_bounds_from_ast(&ast);
-        let inputs_with_defaults =
-            ast_extract::extract_inputs_with_defaults_from_ast(&ast);
-        let input_names = ast_extract::extract_input_names_from_ast(&ast);
-        let variable_names = ast_extract::extract_variable_names_from_ast(&ast);
-        let descriptions = ast_extract::extract_descriptions_from_ast(&ast);
+        // Class resolution: explicit `class` param > drilled-in pin >
+        // first non-package class. Match by short name (the same
+        // convention `compile_model.class` uses) so the caller can pass
+        // either short or qualified.
+        let target_class_name = class_param
+            .or(drilled_in)
+            .or_else(|| ast_extract::extract_model_name_from_ast(&ast));
+        let Some(target_name) = target_class_name else {
+            return ApiResponse::error(
+                ApiErrorCode::EntityNotFound,
+                format!(
+                    "doc {} has no non-package class to describe",
+                    doc_id.raw()
+                ),
+            );
+        };
+        // The caller may pass `Foo.Bar` — try the short tail first.
+        let short = target_name
+            .rsplit('.')
+            .next()
+            .unwrap_or(&target_name);
+        let Some(class) = ast_extract::find_class_by_short_name(&ast, short) else {
+            let candidates =
+                ast_extract::collect_non_package_classes_qualified(&ast);
+            return ApiResponse::error(
+                ApiErrorCode::EntityNotFound,
+                format!(
+                    "class `{}` not found in doc {}. Candidates: [{}]",
+                    target_name,
+                    doc_id.raw(),
+                    candidates.join(", ")
+                ),
+            );
+        };
 
-        // Inputs with defaults are a subset of all input names — anything
-        // in `input_names` not in `inputs_with_defaults` has no declared
-        // default. Project both into one uniform list, marking which had
-        // a default so the agent can decide whether to provide a value
-        // before stepping the sim.
-        let inputs: Vec<serde_json::Value> = input_names
-            .iter()
-            .map(|name| {
-                let default = inputs_with_defaults.get(name).copied();
-                serde_json::json!({
-                    "name": name,
-                    "default": default,
-                    "has_default": default.is_some(),
-                    "description": descriptions.get(name).cloned(),
-                })
-            })
-            .collect();
-
-        let parameters_arr: Vec<serde_json::Value> = parameters
-            .iter()
-            .map(|(name, default)| {
-                let bounds = parameter_bounds.get(name);
-                serde_json::json!({
-                    "name": name,
-                    "default": default,
-                    "min": bounds.and_then(|(lo, _)| *lo),
-                    "max": bounds.and_then(|(_, hi)| *hi),
-                    "description": descriptions.get(name).cloned(),
-                })
-            })
-            .collect();
-
-        // "Outputs" in Modelica are explicit `output Real` declarations,
-        // but the AST extractors don't have a dedicated output-name
-        // collector today. Approximate as "every variable that is not an
-        // input or a parameter" — the agent gets a useful subset, and
-        // we can sharpen later by adding a real output extractor.
-        let input_set: std::collections::HashSet<&String> = input_names.iter().collect();
-        let param_set: std::collections::HashSet<&String> = parameters.keys().collect();
-        let outputs: Vec<serde_json::Value> = variable_names
-            .iter()
-            .filter(|n| !input_set.contains(*n) && !param_set.contains(*n))
-            .map(|name| {
-                serde_json::json!({
-                    "name": name,
-                    "description": descriptions.get(name).cloned(),
-                })
-            })
-            .collect();
+        let inputs = ast_extract::extract_typed_inputs_for_class(class);
+        let parameters = ast_extract::extract_typed_parameters_for_class(class);
+        let outputs = ast_extract::extract_typed_outputs_for_class(class);
+        let components = ast_extract::extract_components_for_class(class);
+        let connections = ast_extract::extract_connections_for_class(class);
+        let extends = ast_extract::extract_extends_for_class(class);
 
         ApiResponse::ok(serde_json::json!({
             "doc_id": doc_id.raw(),
-            "inputs": inputs,
-            "parameters": parameters_arr,
-            "outputs": outputs,
+            "class_name": short,
+            "class_kind": ast_extract::class_kind_label(class),
+            "extends": extends,
+            "components": components.iter().map(component_info_to_json).collect::<Vec<_>>(),
+            "connections": connections
+                .iter()
+                .map(|(from, to)| serde_json::json!({"from": from, "to": to}))
+                .collect::<Vec<_>>(),
+            "inputs": inputs.iter().map(typed_to_json).collect::<Vec<_>>(),
+            "parameters": parameters.iter().map(typed_to_json).collect::<Vec<_>>(),
+            "outputs": outputs.iter().map(typed_to_json).collect::<Vec<_>>(),
         }))
     }
+}
+
+fn typed_to_json(c: &ast_extract::TypedComponent) -> serde_json::Value {
+    serde_json::json!({
+        "name": c.name,
+        "type": c.type_name,
+        "unit": c.unit,
+        "default": c.default,
+        "min": c.min,
+        "max": c.max,
+        "description": if c.description.is_empty() { None } else { Some(c.description.clone()) },
+    })
+}
+
+fn component_info_to_json(c: &ast_extract::ComponentInfo) -> serde_json::Value {
+    let mods: serde_json::Map<String, serde_json::Value> = c
+        .modifications
+        .iter()
+        .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+        .collect();
+    serde_json::json!({
+        "name": c.name,
+        "type": c.type_name,
+        "description": if c.description.is_empty() { None } else { Some(c.description.clone()) },
+        "modifications": serde_json::Value::Object(mods),
+    })
 }
 
 // ─── SnapshotVariables (spec 033 P1) ───────────────────────────────────
