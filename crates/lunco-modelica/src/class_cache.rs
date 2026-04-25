@@ -83,7 +83,7 @@ impl ResourceLoader for ModelicaFileLoader {
         let path = key.clone();
         info!("[FileCache] scheduling load for `{}`", path.display());
         AsyncComputeTaskPool::get().spawn(async move {
-            let t0 = std::time::Instant::now();
+            let t0 = web_time::Instant::now();
             // Read source once so we can hand it to both the
             // rumoca-session parse path (which carries its own
             // content-hash keyed artifact cache — in-memory + on-disk
@@ -398,7 +398,7 @@ pub fn msl_class_to_file_index(
 
 fn build_msl_class_to_file_index(
 ) -> std::collections::HashMap<String, std::path::PathBuf> {
-    let start = std::time::Instant::now();
+    let start = web_time::Instant::now();
     let lib = crate::visual_diagram::msl_component_library();
     let mut map = std::collections::HashMap::with_capacity(lib.len());
     for comp in lib {
@@ -483,7 +483,7 @@ pub fn msl_fs_index() -> &'static MslFsIndex {
 }
 
 fn build_msl_fs_index() -> MslFsIndex {
-    let start = std::time::Instant::now();
+    let start = web_time::Instant::now();
     let Some(root) = lunco_assets::msl_source_root_path() else {
         return MslFsIndex::default();
     };

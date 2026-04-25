@@ -12,7 +12,7 @@
 //! exactly one place instead of drifting between two panels.
 
 use std::collections::VecDeque;
-use std::time::Instant;
+use web_time::Instant;
 
 use bevy_egui::egui;
 
@@ -123,10 +123,10 @@ pub fn render_log_view(
             // first entry anchors t=0 rather than some arbitrary
             // app-boot moment.
             use std::sync::OnceLock;
-            static SESSION_START: OnceLock<std::time::Instant> =
+            static SESSION_START: OnceLock<web_time::Instant> =
                 OnceLock::new();
             let session_start = *SESSION_START
-                .get_or_init(|| entries.front().map(|e| e.at).unwrap_or_else(std::time::Instant::now));
+                .get_or_init(|| entries.front().map(|e| e.at).unwrap_or_else(web_time::Instant::now));
             for entry in entries {
                 let color = entry.level.color();
                 // Fixed offset from session start → same string

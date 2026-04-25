@@ -2632,7 +2632,7 @@ pub struct ProjectionTask {
     /// against `CanvasDocState::last_seen_target` on completion so
     /// the UI knows which target produced the rendered scene.
     pub target_at_spawn: Option<String>,
-    pub spawned_at: std::time::Instant,
+    pub spawned_at: web_time::Instant,
     pub deadline: std::time::Duration,
     pub cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
     pub task: bevy::tasks::Task<Scene>,
@@ -2898,7 +2898,7 @@ impl Panel for CanvasDiagramPanel {
                     docstate.last_seen_gen = gen;
                 } else {
                     let pool = bevy::tasks::AsyncComputeTaskPool::get();
-                    let spawned_at = std::time::Instant::now();
+                    let spawned_at = web_time::Instant::now();
                     let cancel = std::sync::Arc::new(
                         std::sync::atomic::AtomicBool::new(false),
                     );
@@ -2925,7 +2925,7 @@ impl Panel for CanvasDiagramPanel {
                         if should_stop() {
                             return Scene::new();
                         }
-                        let t0 = std::time::Instant::now();
+                        let t0 = web_time::Instant::now();
                         let mut diagram = if let Some(ast) = ast_arc {
                             crate::ui::panels::canvas_projection::import_model_to_diagram_from_ast(
                                 ast,
@@ -2948,7 +2948,7 @@ impl Panel for CanvasDiagramPanel {
                         if should_stop() {
                             return Scene::new();
                         }
-                        let t1 = std::time::Instant::now();
+                        let t1 = web_time::Instant::now();
                         recover_edges_from_source(&source, &mut diagram);
                         bevy::log::info!(
                             "[Projection] recover_edges done in {:.0}ms: {} edges",
@@ -2958,7 +2958,7 @@ impl Panel for CanvasDiagramPanel {
                         if should_stop() {
                             return Scene::new();
                         }
-                        let t2 = std::time::Instant::now();
+                        let t2 = web_time::Instant::now();
                         let (scene, _id_map) = project_scene(&diagram);
                         bevy::log::info!(
                             "[Projection] project_scene done in {:.0}ms",
@@ -4749,7 +4749,7 @@ pub struct DrillInBinding {
     /// When the tab was opened. Used to show elapsed-seconds in the
     /// loading overlay so the user sees work is happening even when
     /// rumoca takes tens of seconds on large package files.
-    pub started: std::time::Instant,
+    pub started: web_time::Instant,
 }
 
 /// Tab-to-task binding for duplicate-to-workspace operations whose
@@ -4774,7 +4774,7 @@ pub struct DuplicateLoads {
 pub struct DuplicateBinding {
     pub display_name: String,
     pub origin_short: String,
-    pub started: std::time::Instant,
+    pub started: web_time::Instant,
     pub task: bevy::tasks::Task<crate::document::ModelicaDocument>,
 }
 
@@ -4876,9 +4876,11 @@ pub fn drive_duplicate_loads(
                         .filter(|s| !s.is_empty())
                         .collect();
                     if !bases.is_empty() {
-                        std::thread::spawn(move || {
-                            crate::class_cache::prewarm_extends_chain(&qpath, &bases);
-                        });
+                        bevy::tasks::AsyncComputeTaskPool::get()
+                            .spawn(async move {
+                                crate::class_cache::prewarm_extends_chain(&qpath, &bases);
+                            })
+                            .detach();
                     }
                 }
             }
@@ -4977,9 +4979,11 @@ pub fn drive_drill_in_loads(
                         .filter(|s| !s.is_empty())
                         .collect();
                     let qpath = qualified.clone();
-                    std::thread::spawn(move || {
-                        crate::class_cache::prewarm_extends_chain(&qpath, &bases);
-                    });
+                    bevy::tasks::AsyncComputeTaskPool::get()
+                        .spawn(async move {
+                            crate::class_cache::prewarm_extends_chain(&qpath, &bases);
+                        })
+                        .detach();
                 }
             }
             continue;
@@ -5121,7 +5125,7 @@ fn open_drill_in_tab(
             doc_id,
             DrillInBinding {
                 qualified: qualified.to_string(),
-                started: std::time::Instant::now(),
+                started: web_time::Instant::now(),
             },
         );
     }

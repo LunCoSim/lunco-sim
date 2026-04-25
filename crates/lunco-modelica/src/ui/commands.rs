@@ -1249,7 +1249,7 @@ fn on_compile_model(
     console.info(format!("⏵ Compile started: '{model_name}'"));
     if let Some(diag) = diagnostics.as_mut() {
         diag.append(vec![crate::ui::panels::log::LogEntry {
-            at: std::time::Instant::now(),
+            at: web_time::Instant::now(),
             level: crate::ui::panels::log::LogLevel::Info,
             text: format!("⏵ Compile started: '{model_name}'"),
             model: Some(model_name.clone()),
@@ -1487,7 +1487,7 @@ fn on_duplicate_model_from_read_only(
         crate::ui::panels::canvas_diagram::DuplicateBinding {
             display_name: name.clone(),
             origin_short: origin_class_short.clone(),
-            started: std::time::Instant::now(),
+            started: web_time::Instant::now(),
             task,
         },
     );
@@ -1616,7 +1616,7 @@ fn on_open_example_in_workspace(
         crate::ui::panels::canvas_diagram::DuplicateBinding {
             display_name: name.clone(),
             origin_short: origin_short.clone(),
-            started: std::time::Instant::now(),
+            started: web_time::Instant::now(),
             task,
         },
     );
@@ -2103,20 +2103,27 @@ fn register_modelica_uri_handler(
 }
 
 /// Startup system: force-init the `msl_component_library`
-/// `OnceLock` on a background thread so the first Welcome render
+/// `OnceLock` on a background task so the first Welcome render
 /// (or palette open) doesn't pay the ~2500-entry JSON parse cost
 /// on the UI thread. Safe because `OnceLock::get_or_init` is
 /// thread-safe and the later `msl_component_library()` call from
 /// the render path just reads the already-initialised slice.
+///
+/// Uses Bevy's `AsyncComputeTaskPool` rather than `std::thread::spawn`
+/// so it compiles for wasm32 (where OS threads are unavailable). On
+/// wasm the task runs cooperatively on the main thread; on native it
+/// runs on a real worker thread.
 fn prewarm_msl_library() {
-    std::thread::spawn(|| {
-        let t0 = std::time::Instant::now();
-        let n = crate::visual_diagram::msl_component_library().len();
-        bevy::log::info!(
-            "[MSL] prewarmed component library: {n} entries in {:?}",
-            t0.elapsed()
-        );
-    });
+    bevy::tasks::AsyncComputeTaskPool::get()
+        .spawn(async {
+            let t0 = web_time::Instant::now();
+            let n = crate::visual_diagram::msl_component_library().len();
+            bevy::log::info!(
+                "[MSL] prewarmed component library: {n} entries in {:?}",
+                t0.elapsed()
+            );
+        })
+        .detach();
 }
 
 fn on_open_class(trigger: On<OpenClass>, mut commands: Commands) {

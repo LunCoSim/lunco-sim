@@ -200,7 +200,7 @@ pub struct ModelicaDocument {
     /// reparses only after a quiet period so rapid typing stays
     /// responsive. `None` for fresh docs whose source hasn't changed
     /// since construction.
-    last_source_edit_at: Option<std::time::Instant>,
+    last_source_edit_at: Option<web_time::Instant>,
 }
 
 impl ModelicaDocument {
@@ -287,7 +287,7 @@ impl ModelicaDocument {
     /// document hasn't been edited since construction. Used by the
     /// debounce driver to determine whether the typing "quiet
     /// window" has elapsed.
-    pub fn last_source_edit_at(&self) -> Option<std::time::Instant> {
+    pub fn last_source_edit_at(&self) -> Option<web_time::Instant> {
         self.last_source_edit_at
     }
 
@@ -613,7 +613,7 @@ impl ModelicaDocument {
         //     snapshot. Consumers that strictly need a fresh parse
         //     (Compile) check `ast().generation == self.generation`
         //     and force a reparse via `refresh_ast_now()`.
-        self.last_source_edit_at = Some(std::time::Instant::now());
+        self.last_source_edit_at = Some(web_time::Instant::now());
         self.push_change(change);
         let inverse_range = range.start..(range.start + replacement.len());
         Ok(ModelicaOp::EditText {

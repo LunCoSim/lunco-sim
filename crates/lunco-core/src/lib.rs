@@ -55,7 +55,7 @@ impl GlobalEntityId {
     /// Create a new globally unique, time-sorted ID (53-bit).
     pub fn new() -> Self {
         use std::sync::atomic::{AtomicU64, Ordering};
-        use std::time::{SystemTime, UNIX_EPOCH};
+        use web_time::{SystemTime, UNIX_EPOCH};
 
         // LunCo Epoch: 2025-01-01 00:00:00 UTC
         const LUNCO_EPOCH_SECS: u64 = 1735689600;

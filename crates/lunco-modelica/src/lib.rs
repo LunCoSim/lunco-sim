@@ -129,7 +129,7 @@ impl ModelicaCompiler {
     /// session is left empty — web targets populate via HTTP once
     /// the async-asset path lands.
     pub fn new() -> Self {
-        let t_total = std::time::Instant::now();
+        let t_total = web_time::Instant::now();
         let mut session = Session::new(SessionConfig::default());
         if let Some(msl_root) = lunco_assets::msl_source_root_path() {
             // Durable-external — MSL rarely changes and is
@@ -179,7 +179,7 @@ impl ModelicaCompiler {
         source: &str,
         filename: &str,
     ) -> Result<Box<rumoca_session::compile::DaeCompilationResult>, String> {
-        let t_total = std::time::Instant::now();
+        let t_total = web_time::Instant::now();
         self.session.update_document(filename, source);
         let result = self
             .session
@@ -212,7 +212,10 @@ pub mod sim_stream;
 #[cfg(feature = "lunco-api")]
 pub mod api_queries;
 
-#[cfg(feature = "lunco-api")]
+// Always built — the UI (palette, inspector, canvas) dispatches these
+// `ApplyModelicaOps` Reflect events directly. The module is named `api_*`
+// because external HTTP callers also use it when `lunco-api` is enabled,
+// but the events themselves carry no `lunco-api` dependency.
 pub mod api_edits;
 pub use sim_stream::{new_sim_stream, SimSnapshot, SimStream, VarHistory, SimSample};
 
@@ -594,7 +597,7 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
             // in-flight and how long it actually took, so a stall is
             // visible in `RUST_LOG=info` output instead of silent.
             let cmd_label = command_label(&cmd);
-            let cmd_started = std::time::Instant::now();
+            let cmd_started = web_time::Instant::now();
             log::info!("[worker] begin: {}", cmd_label);
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 match cmd {
@@ -1836,7 +1839,7 @@ mod observables_smoke {
             end TestLimPID;
         "#;
         let mut c = ModelicaCompiler::new();
-        let t0 = std::time::Instant::now();
+        let t0 = web_time::Instant::now();
         let result = c.compile_str("TestLimPID", src, "TestLimPID.mo");
         let elapsed = t0.elapsed();
         eprintln!(
@@ -1882,7 +1885,7 @@ mod observables_smoke {
             end TestPID;
         "#;
         let mut c = ModelicaCompiler::new();
-        let t0 = std::time::Instant::now();
+        let t0 = web_time::Instant::now();
         let result = c.compile_str("TestPID", src, "TestPID.mo");
         let elapsed = t0.elapsed();
         eprintln!(
@@ -1923,7 +1926,7 @@ mod observables_smoke {
             end TestRotFirst;
         "#;
         let mut c = ModelicaCompiler::new();
-        let t0 = std::time::Instant::now();
+        let t0 = web_time::Instant::now();
         let result = c.compile_str("TestRotFirst", src, "TestRotFirst.mo");
         let elapsed = t0.elapsed();
         eprintln!(
@@ -1958,7 +1961,7 @@ mod observables_smoke {
             end TestFullyQualifiedSI;
         "#;
         let mut c = ModelicaCompiler::new();
-        let t0 = std::time::Instant::now();
+        let t0 = web_time::Instant::now();
         let result = c.compile_str("TestFullyQualifiedSI", src, "Q.mo");
         let elapsed = t0.elapsed();
         eprintln!(

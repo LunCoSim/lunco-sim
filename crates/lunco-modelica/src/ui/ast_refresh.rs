@@ -45,7 +45,7 @@ pub const AST_DEBOUNCE_MS: u128 = 250;
 /// Per-Update driver. Walks every doc in the registry and reparses
 /// the stale ones whose edit burst has cooled off.
 pub fn refresh_stale_asts(mut registry: ResMut<ModelicaDocumentRegistry>) {
-    let now = std::time::Instant::now();
+    let now = web_time::Instant::now();
     // Collect candidates first (immutable pass) so we can fall back
     // to mutable access without borrowing the registry twice.
     let stale: Vec<lunco_doc::DocumentId> = registry

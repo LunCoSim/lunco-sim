@@ -58,6 +58,11 @@ htmd = "0.5"
 # updates after every Step. Plots read via `load()` — no mutex, no
 # per-sample work on the main thread. See `sim_stream.rs`.
 arc-swap = "1"
+# Wasm-safe replacement for `std::time::Instant`. On native it's an alias
+# for `std::time::Instant`; on wasm32 it's backed by `performance.now()`.
+# Required because `std::time::Instant::now()` panics with
+# "time not implemented on this platform" on wasm32-unknown-unknown.
+web-time = { workspace = true }
 # Compile-time embedding of the `assets/models/` tree so
 # `src/models.rs` can enumerate bundled `.mo` examples by walking a
 # static `Dir`, instead of requiring a `pub const + include_str!` line

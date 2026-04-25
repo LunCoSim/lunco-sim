@@ -76,7 +76,7 @@ fn main() -> anyhow::Result<()> {
     };
 
     println!("Stepping to t~={:.3}s...", t_end_hint);
-    let t0 = std::time::Instant::now();
+    let t0 = web_time::Instant::now();
     let mut failed_at = None;
     for i in 0..n_steps {
         if let Err(e) = stepper.step(dt) {

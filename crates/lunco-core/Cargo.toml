@@ -10,3 +10,5 @@ big_space = { workspace = true }
 leafwing-input-manager.workspace = true
 serde = { version = "1", features = ["derive"] }
 lunco-command-macro = { path = "../lunco-command-macro" }
+# `std::time::SystemTime::now()` panics on wasm32-unknown-unknown.
+web-time = { workspace = true }

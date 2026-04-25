@@ -11,7 +11,7 @@
 //! session; oldest-first eviction matches a terminal scrollback.
 
 use std::collections::VecDeque;
-use std::time::Instant;
+use web_time::Instant;
 
 use bevy::prelude::*;
 use bevy_egui::egui;

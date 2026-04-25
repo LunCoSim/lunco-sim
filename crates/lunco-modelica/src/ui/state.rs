@@ -192,7 +192,7 @@ pub struct CompileStates {
     /// [`set_and_stamp`](Self::set_and_stamp). Used to log
     /// "compile X finished in Y ms" to Console / Diagnostics when
     /// the worker responds.
-    compile_started: HashMap<DocumentId, std::time::Instant>,
+    compile_started: HashMap<DocumentId, web_time::Instant>,
 }
 
 impl CompileStates {
@@ -217,7 +217,7 @@ impl CompileStates {
     /// transition.
     pub fn mark_started(&mut self, doc: DocumentId) {
         self.by_doc.insert(doc, CompileState::Compiling);
-        self.compile_started.insert(doc, std::time::Instant::now());
+        self.compile_started.insert(doc, web_time::Instant::now());
     }
 
     /// Transition to a terminal state and return elapsed time since

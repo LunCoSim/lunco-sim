@@ -3,14 +3,14 @@
 //! ## Why a separate binary?
 //!
 //! Desktop uses `std::thread::spawn` for the simulation worker. On wasm32
-//! this panics because `std::time::Instant` and `std::thread` are not
+//! this panics because `web_time::Instant` and `std::thread` are not
 //! implemented in the browser sandbox. The web binary:
 //!
 //! 1. Uses `wasm_bindgen(start)` instead of `fn main()` — the browser calls
 //!    this automatically when the WASM module loads.
 //! 2. Embeds model files via `include_str!` at compile time (no filesystem).
 //! 3. Points to the LunCoSim/rumoca `web-fix` branch which replaces
-//!    `std::time::Instant` with `instant::Instant` (backed by `performance.now()`).
+//!    `web_time::Instant` with `instant::Instant` (backed by `performance.now()`).
 //! 4. Disables `std::time`-dependent Bevy systems; `spawn_modelica_requests`
 //!    uses a fixed 16ms timestep instead of `Time::elapsed_secs_f64()`.
 //!

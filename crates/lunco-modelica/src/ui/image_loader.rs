@@ -215,9 +215,8 @@ impl egui::load::BytesLoader for ModelicaImageLoader {
         };
 
         // Shared result slot written by the worker once the read
-        // completes. Using `std::thread::spawn` (not a bevy task
-        // pool) keeps this module egui-only — no bevy dependency
-        // creeping into the loader surface.
+        // completes. Spawned on Bevy's `IoTaskPool` so this compiles
+        // on wasm32 (where `std::thread::spawn` is unsupported).
         let result: Arc<Mutex<Option<Result<Arc<[u8]>, String>>>> =
             Arc::new(Mutex::new(None));
         cache.insert(uri.to_string(), Slot::Pending(result.clone()));
@@ -228,7 +227,7 @@ impl egui::load::BytesLoader for ModelicaImageLoader {
         // pending image wouldn't drive any redraw and the user
         // would have to move the mouse to see it appear.
         let ctx = ctx.clone();
-        std::thread::spawn(move || {
+        bevy::tasks::IoTaskPool::get().spawn(async move {
             let read_result: Result<Arc<[u8]>, String> =
                 match std::fs::read(&path) {
                     Ok(bytes) => {
@@ -258,7 +257,7 @@ impl egui::load::BytesLoader for ModelicaImageLoader {
                 *guard = Some(read_result);
             }
             ctx.request_repaint();
-        });
+        }).detach();
 
         Ok(egui::load::BytesPoll::Pending { size: None })
     }
