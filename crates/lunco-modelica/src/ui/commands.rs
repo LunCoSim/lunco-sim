@@ -3101,54 +3101,90 @@ fn on_set_model_input(trigger: On<SetModelInput>, mut commands: Commands) {
     let name = trigger.event().name.clone();
     let value = trigger.event().value;
     commands.queue(move |world: &mut World| {
-        let doc = if doc_raw == 0 {
-            match resolve_active_doc(world) {
-                Some(d) => d,
-                None => {
-                    bevy::log::warn!("[SetModelInput] no active document");
-                    return;
-                }
+        match apply_set_model_input(world, doc_raw, &name, value) {
+            Ok(_) => {}
+            Err(e) => {
+                bevy::log::warn!("[SetModelInput] {}", e.message());
             }
-        } else {
-            DocumentId::new(doc_raw)
-        };
-        let registry =
-            world.resource::<crate::ui::state::ModelicaDocumentRegistry>();
-        let entities = registry.entities_linked_to(doc);
-        drop(registry);
-        let Some(entity) = entities.first().copied() else {
-            bevy::log::warn!(
-                "[SetModelInput] doc {} has no linked entity (compile not run yet?)",
-                doc.raw()
-            );
-            return;
-        };
-        let Some(mut model) = world.get_mut::<crate::ModelicaModel>(entity) else {
-            bevy::log::warn!(
-                "[SetModelInput] entity {:?} for doc {} has no ModelicaModel",
-                entity,
-                doc.raw()
-            );
-            return;
-        };
-        if !model.inputs.contains_key(&name) {
-            let known: Vec<&String> = model.inputs.keys().collect();
-            bevy::log::warn!(
-                "[SetModelInput] input `{}` not declared on `{}`. Known inputs: {:?}",
-                name,
-                model.model_name,
-                known
-            );
-            return;
         }
-        model.inputs.insert(name.clone(), value);
-        bevy::log::info!(
-            "[SetModelInput] doc={} {}={}",
-            doc.raw(),
-            name,
-            value
-        );
     });
+}
+
+/// Outcome of [`apply_set_model_input`]. Carries enough context for an
+/// API caller (`SetModelInputProvider`) to format a structured error
+/// JSON; the in-process observer just stringifies and warn-logs.
+#[derive(Debug, Clone)]
+pub enum SetModelInputError {
+    NoActiveDocument,
+    NoLinkedEntity { doc: u64 },
+    EntityMissingModel { doc: u64 },
+    UnknownInput {
+        doc: u64,
+        name: String,
+        model_name: String,
+        known_inputs: Vec<String>,
+    },
+}
+
+impl SetModelInputError {
+    pub fn message(&self) -> String {
+        match self {
+            Self::NoActiveDocument => "no active document (pass `doc` explicitly)".into(),
+            Self::NoLinkedEntity { doc } => format!(
+                "doc {doc} has no linked entity — compile the model before setting inputs"
+            ),
+            Self::EntityMissingModel { doc } => format!(
+                "doc {doc}'s linked entity has no `ModelicaModel` component"
+            ),
+            Self::UnknownInput { name, model_name, known_inputs, .. } => format!(
+                "input `{name}` not declared on `{model_name}`. \
+                 Known inputs: [{}]",
+                known_inputs.join(", ")
+            ),
+        }
+    }
+}
+
+/// Shared mutation: write a runtime input value into the simulation
+/// worker's input slot for `doc`. Used by both the [`SetModelInput`]
+/// Reflect-event observer and the API surface's
+/// `SetModelInputProvider` (in `crate::api_queries`) so the two paths
+/// can never drift.
+///
+/// `doc_raw == 0` means "active document" — same convention as
+/// [`SetModelInput`]'s wire form.
+pub fn apply_set_model_input(
+    world: &mut World,
+    doc_raw: u64,
+    name: &str,
+    value: f64,
+) -> Result<DocumentId, SetModelInputError> {
+    let doc = if doc_raw == 0 {
+        resolve_active_doc(world).ok_or(SetModelInputError::NoActiveDocument)?
+    } else {
+        DocumentId::new(doc_raw)
+    };
+    let registry = world.resource::<crate::ui::state::ModelicaDocumentRegistry>();
+    let entities = registry.entities_linked_to(doc);
+    drop(registry);
+    let Some(entity) = entities.first().copied() else {
+        return Err(SetModelInputError::NoLinkedEntity { doc: doc.raw() });
+    };
+    let Some(mut model) = world.get_mut::<crate::ModelicaModel>(entity) else {
+        return Err(SetModelInputError::EntityMissingModel { doc: doc.raw() });
+    };
+    if !model.inputs.contains_key(name) {
+        let known: Vec<String> = model.inputs.keys().cloned().collect();
+        return Err(SetModelInputError::UnknownInput {
+            doc: doc.raw(),
+            name: name.to_string(),
+            model_name: model.model_name.clone(),
+            known_inputs: known,
+        });
+    }
+    model.inputs.insert(name.to_string(), value);
+    bevy::log::info!("[SetModelInput] doc={} {}={}", doc.raw(), name, value);
+    Ok(doc)
 }
 
 fn on_get_file(trigger: On<GetFile>) {

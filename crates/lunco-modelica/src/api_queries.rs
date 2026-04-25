@@ -56,6 +56,8 @@ impl Plugin for ModelicaApiQueriesPlugin {
         registry.register(GetDocumentSourceProvider);
         registry.register(DescribeModelProvider);
         registry.register(SnapshotVariablesProvider);
+        registry.register(FindModelProvider);
+        registry.register(SetModelInputProvider);
     }
 }
 
@@ -768,6 +770,297 @@ impl ApiQueryProvider for SnapshotVariablesProvider {
             "inputs": project(&model.inputs),
             "variables": project(&model.variables),
         }))
+    }
+}
+
+// ─── FindModel (spec 033 P3) ───────────────────────────────────────────
+//
+// Cross-source fuzzy search. Scans bundled examples, the active
+// Twin's documents, the MSL library, and currently-open documents,
+// scores each entry against the caller's query, and returns a
+// ranked list with canonical URIs. Eliminates the
+// list-then-grep-then-guess pattern an agent otherwise has to
+// implement client-side every time it wants to resolve "Annotated
+// Rocket Engine" → `bundled://AnnotatedRocketStage.mo`.
+//
+// Scoring is intentionally simple: substring containment + weight
+// for token starts (so `"rocket"` matches `RocketEngine.mo` higher
+// than a class with "rocket" buried in its description). Anything
+// fancier (token overlap, edit distance, embedding similarity) is a
+// later iteration on the same provider — wire shape doesn't change.
+
+struct FindModelProvider;
+
+impl ApiQueryProvider for FindModelProvider {
+    fn name(&self) -> &'static str {
+        "FindModel"
+    }
+
+    fn execute(
+        &self,
+        world: &mut World,
+        params: &serde_json::Value,
+    ) -> ApiResponse {
+        let query = params
+            .get("query")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        if query.is_empty() {
+            return ApiResponse::error(
+                ApiErrorCode::DeserializationError,
+                "find_model requires a non-empty `query` string",
+            );
+        }
+        let limit = params
+            .get("limit")
+            .and_then(|v| v.as_u64())
+            .map(|n| (n as usize).clamp(1, 200))
+            .unwrap_or(20);
+        let q = query.to_ascii_lowercase();
+        let mut hits: Vec<FindHit> = Vec::new();
+
+        // ── Bundled embedded examples ────────────────────────────
+        for m in bundled_models() {
+            let label = m.filename.trim_end_matches(".mo").to_string();
+            if let Some(score) = score(&q, &label, m.tagline) {
+                hits.push(FindHit {
+                    uri: format!("bundled://{}", m.filename),
+                    label,
+                    source: "bundled",
+                    description: m.tagline.to_string(),
+                    score,
+                });
+            }
+        }
+
+        // ── Active Twin folder ───────────────────────────────────
+        let twin_files: Vec<(String, String)> = {
+            let ws = world.resource::<WorkspaceResource>();
+            let twin = ws.active_twin.and_then(|id| ws.twin(id));
+            let root = twin
+                .and_then(|t| t.root_handle().as_file_path().map(|p| p.to_path_buf()));
+            twin.map(|t| {
+                t.files()
+                    .iter()
+                    .map(|f| {
+                        let abs = root
+                            .as_ref()
+                            .map(|r| r.join(&f.relative_path).to_string_lossy().into_owned())
+                            .unwrap_or_else(|| f.relative_path.to_string_lossy().into_owned());
+                        let label = f
+                            .relative_path
+                            .file_stem()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("")
+                            .to_string();
+                        (abs, label)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+        };
+        for (abs, label) in twin_files {
+            if let Some(score) = score(&q, &label, &abs) {
+                hits.push(FindHit {
+                    uri: abs.clone(),
+                    label,
+                    source: "twin",
+                    description: abs,
+                    score,
+                });
+            }
+        }
+
+        // ── MSL library ──────────────────────────────────────────
+        // Scan the cached library if it's been initialized; force
+        // initialization here would block on the JSON parse, which
+        // is acceptable since the result is cached after the first
+        // call. Subsequent finds hit the warm cache.
+        for c in msl_component_library() {
+            if let Some(score) = score(&q, &c.display_name, &c.msl_path) {
+                hits.push(FindHit {
+                    uri: c.msl_path.clone(),
+                    label: c.display_name.clone(),
+                    source: "msl",
+                    description: c
+                        .description
+                        .clone()
+                        .unwrap_or_else(|| c.msl_path.clone()),
+                    score,
+                });
+            }
+        }
+
+        // ── Currently-open documents ─────────────────────────────
+        let open_docs: Vec<(u64, String, String)> = {
+            let ws = world.resource::<WorkspaceResource>();
+            ws.documents()
+                .iter()
+                .map(|e| {
+                    let uri = match &e.origin {
+                        DocumentOrigin::File { path, .. } => {
+                            path.to_string_lossy().into_owned()
+                        }
+                        DocumentOrigin::Untitled { name } => format!("mem://{name}"),
+                    };
+                    (e.id.raw(), e.title.clone(), uri)
+                })
+                .collect()
+        };
+        for (_id, title, uri) in open_docs {
+            if let Some(score) = score(&q, &title, &uri) {
+                hits.push(FindHit {
+                    uri: uri.clone(),
+                    label: title,
+                    source: "open",
+                    description: uri,
+                    score,
+                });
+            }
+        }
+
+        // Sort by score desc, then label asc for stable tie-breaking.
+        hits.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.label.cmp(&b.label))
+        });
+        hits.truncate(limit);
+
+        let total_matched = hits.len();
+        let items: Vec<serde_json::Value> = hits
+            .into_iter()
+            .map(|h| {
+                serde_json::json!({
+                    "uri": h.uri,
+                    "label": h.label,
+                    "source": h.source,
+                    "description": h.description,
+                    "score": h.score,
+                })
+            })
+            .collect();
+        ApiResponse::ok(serde_json::json!({
+            "query": query,
+            "items": items,
+            "count": total_matched,
+        }))
+    }
+}
+
+#[derive(Debug)]
+struct FindHit {
+    uri: String,
+    label: String,
+    source: &'static str,
+    description: String,
+    score: f32,
+}
+
+/// Substring-with-weighted-start scoring. Returns `None` for misses
+/// so the caller can `filter_map` the negative cases away cheaply.
+///
+/// Scoring (pick the highest among label + secondary):
+/// - `1.0` — exact match (case-insensitive) on the label
+/// - `0.9` — label *starts* with `q`
+/// - `0.7` — label contains `q` as a whole word at a token boundary
+/// - `0.5` — label contains `q` anywhere
+/// - `0.3` — secondary (description / path) contains `q`
+///
+/// All comparisons are lowercase. `q` is the already-lowercased query.
+fn score(q: &str, label: &str, secondary: &str) -> Option<f32> {
+    if q.is_empty() {
+        return None;
+    }
+    let label_lc = label.to_ascii_lowercase();
+    if label_lc == q {
+        return Some(1.0);
+    }
+    if label_lc.starts_with(q) {
+        return Some(0.9);
+    }
+    // Token boundary: `q` follows a non-alphanumeric char in the label.
+    if label_lc
+        .match_indices(q)
+        .any(|(idx, _)| idx == 0 || !label_lc.as_bytes()[idx - 1].is_ascii_alphanumeric())
+    {
+        return Some(0.7);
+    }
+    if label_lc.contains(q) {
+        return Some(0.5);
+    }
+    if secondary.to_ascii_lowercase().contains(q) {
+        return Some(0.3);
+    }
+    None
+}
+
+// ─── SetModelInput (spec 033 P2 — error-reporting variant) ─────────────
+//
+// Wraps the same `apply_set_model_input` mutation the
+// `SetModelInput` Reflect-event observer uses, but returns a
+// structured `{ok, error?}` payload instead of fire-and-forget. The
+// executor's provider check runs before reflect dispatch, so an API
+// caller hitting `command="SetModelInput"` lands here; in-process
+// triggers (GUI panels, tests) keep going through the Reflect event.
+// Both paths converge on the shared mutation helper, so they can't
+// drift.
+
+struct SetModelInputProvider;
+
+impl ApiQueryProvider for SetModelInputProvider {
+    fn name(&self) -> &'static str {
+        "SetModelInput"
+    }
+
+    fn execute(
+        &self,
+        world: &mut World,
+        params: &serde_json::Value,
+    ) -> ApiResponse {
+        // Wire-format mirror of the Reflect event:
+        // `{ doc: u64, name: String, value: f64 }`. `doc == 0` means
+        // "active document" — same convention the event uses.
+        let doc = params
+            .get("doc")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let Some(name) = params
+            .get("name")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+        else {
+            return err_missing_field("name");
+        };
+        let Some(value) = params.get("value").and_then(|v| v.as_f64()) else {
+            return err_missing_field("value");
+        };
+
+        match crate::ui::commands::apply_set_model_input(world, doc, &name, value) {
+            Ok(resolved_doc) => ApiResponse::ok(serde_json::json!({
+                "ok": true,
+                "doc": resolved_doc.raw(),
+                "name": name,
+                "value": value,
+            })),
+            Err(e) => {
+                use crate::ui::commands::SetModelInputError;
+                let code = match e {
+                    SetModelInputError::NoActiveDocument
+                    | SetModelInputError::NoLinkedEntity { .. }
+                    | SetModelInputError::EntityMissingModel { .. } => {
+                        ApiErrorCode::EntityNotFound
+                    }
+                    SetModelInputError::UnknownInput { .. } => {
+                        ApiErrorCode::DeserializationError
+                    }
+                };
+                ApiResponse::error(code, e.message())
+            }
+        }
     }
 }
 

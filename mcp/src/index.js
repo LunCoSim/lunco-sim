@@ -32,7 +32,7 @@ import {
 } from './api.js';
 
 const SERVER_NAME = 'lunco-mcp-server';
-const SERVER_VERSION = '0.5.0';
+const SERVER_VERSION = '0.6.0';
 
 // MCP Server instance
 const server = new Server(
@@ -160,7 +160,19 @@ const STATIC_TOOLS = [
       },
     },
   },
-  // ── Live model interaction (spec 033 P1 + P2) ─────────────────────────
+  // ── Live model interaction (spec 033 P1 + P2 + P3) ────────────────────
+  {
+    name: 'find_model',
+    description: "Fuzzy search across bundled examples, the active Twin's files, the Modelica Standard Library, and currently-open documents. Returns ranked hits with canonical URIs you can pass to `open_uri`. Scoring: 1.0 exact label, 0.9 prefix, 0.7 token-boundary, 0.5 substring, 0.3 description-only. Empty `query` is rejected.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Search string (case-insensitive).' },
+        limit: { type: 'integer', description: 'Max hits to return (default 20, max 200).' },
+      },
+      required: ['query'],
+    },
+  },
   {
     name: 'describe_model',
     description: "Full structural picture of a Modelica class from the AST. Returns `{class_name, class_kind, extends, components, connections, inputs, parameters, outputs}`. `components` are sub-instances (the diagram boxes) with their declared types and modifications; `connections` are the wiring (`connect(a, b)` equations) as `{from, to}` dot-paths. `inputs / parameters / outputs` carry `type`, `unit`, `default`, `min`, `max`, `description`. Available before compile — comes from the AST. For multi-class docs, pass `class` (short or qualified name); default is the drilled-in class or first non-package class.",
@@ -191,7 +203,7 @@ const STATIC_TOOLS = [
   },
   {
     name: 'set_input',
-    description: "Push a runtime input value into a compiled model's stepper. Takes effect on the next sim step — no recompile, no pause needed. Errors (warn-log) if the input name is not declared on the model. Use `describe_model` first if unsure of names.",
+    description: "Push a runtime input value into a compiled model's stepper. Takes effect on the next sim step — no recompile, no pause needed. Returns `{ok: true, doc, name, value}` on success, or a structured error (`EntityNotFound` for unknown / uncompiled doc, `DeserializationError` listing the known input names if `name` is not declared). Use `describe_model` first if unsure of names. Bounds-clamping is the caller's responsibility; out-of-range values are accepted.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -587,7 +599,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case 'compile_status':
       case 'get_document_source':
       case 'describe_model':
-      case 'snapshot_variables': {
+      case 'snapshot_variables':
+      case 'find_model': {
         // Each of these is backed by an ApiQueryProvider on the Rust
         // side. Rather than duplicate the schema/PascalCase mapping for
         // every tool, route them all through the generic executor —
@@ -603,6 +616,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           get_document_source: 'GetDocumentSource',
           describe_model: 'DescribeModel',
           snapshot_variables: 'SnapshotVariables',
+          find_model: 'FindModel',
         };
         const result = await executeCommand(commandMap[name], args ?? {});
         if (result.error) {

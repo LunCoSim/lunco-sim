@@ -822,6 +822,7 @@ pub struct TypedComponent {
 pub fn extract_typed_inputs_for_class(class: &ClassDef) -> Vec<TypedComponent> {
     typed_components_filtered(class, |c| {
         matches!(c.causality, Causality::Input(_))
+            || is_input_connector_type(&c.type_name.to_string())
     })
 }
 
@@ -834,7 +835,43 @@ pub fn extract_typed_parameters_for_class(class: &ClassDef) -> Vec<TypedComponen
 pub fn extract_typed_outputs_for_class(class: &ClassDef) -> Vec<TypedComponent> {
     typed_components_filtered(class, |c| {
         matches!(c.causality, Causality::Output(_))
+            || is_output_connector_type(&c.type_name.to_string())
     })
+}
+
+/// Whether `type_name` looks like an MSL "RealInput / IntegerInput /
+/// BooleanInput / StringInput" connector class (cf. MLS Annex E.3 +
+/// `Modelica.Blocks.Interfaces`). Components declared with these
+/// types behave as **inputs** at the API surface even though the
+/// `input` keyword lives inside the connector definition rather than
+/// on the component itself, so the bare causality check misses them.
+///
+/// Matches by short-name suffix (`*RealInput`, `*RealInput[N]` for
+/// arrays). Returns `true` for the four primitive variants and for
+/// any user type that happens to end in `Input` — false-positives
+/// here are preferable to the false-negatives (silently missing
+/// `valve` on AnnotatedRocketStage etc.).
+fn is_input_connector_type(type_name: &str) -> bool {
+    // Strip array brackets if any, then split on `.` and inspect the
+    // tail. `Modelica.Blocks.Interfaces.RealInput` and bare
+    // `RealInput` both resolve to the short name `RealInput`.
+    let bare = type_name.split('[').next().unwrap_or(type_name);
+    let short = bare.rsplit('.').next().unwrap_or(bare);
+    matches!(
+        short,
+        "RealInput" | "IntegerInput" | "BooleanInput" | "StringInput"
+    ) || short.ends_with("Input")
+}
+
+/// Symmetric counterpart of [`is_input_connector_type`] for output
+/// connectors — see that doc for the rationale.
+fn is_output_connector_type(type_name: &str) -> bool {
+    let bare = type_name.split('[').next().unwrap_or(type_name);
+    let short = bare.rsplit('.').next().unwrap_or(bare);
+    matches!(
+        short,
+        "RealOutput" | "IntegerOutput" | "BooleanOutput" | "StringOutput"
+    ) || short.ends_with("Output")
 }
 
 fn typed_components_filtered<F>(class: &ClassDef, want: F) -> Vec<TypedComponent>

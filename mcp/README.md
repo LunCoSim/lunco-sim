@@ -63,7 +63,8 @@ These tools are always available:
 | `get_document_source` | Fetch the in-memory source of an open doc (incl. unsaved edits) |
 | `describe_model` | Full structural view of a class: `class_kind`, `extends`, `components`, `connections`, plus typed `inputs / parameters / outputs` with units & bounds |
 | `snapshot_variables` | One-shot read of current parameter / input / variable values from a running sim |
-| `set_input` | Push a runtime input value into a compiled model (effective on the next sim step) |
+| `set_input` | Push a runtime input value into a compiled model. Returns `{ok}` or structured error listing known input names |
+| `find_model` | Fuzzy search across bundled / Twin / MSL / open docs. Returns ranked URIs with relevance scores |
 
 ### Edit API
 
