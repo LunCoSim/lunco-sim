@@ -3082,6 +3082,17 @@ impl Panel for DiagramPanel {
         if !pending_ops.is_empty() && !is_read_only {
             if let Some(doc_id) = bound_doc {
                 let mut any_applied = false;
+                // TODO(spec 034 follow-up, snarl viewer): route through
+                // `ApplyModelicaOps` like the canvas viewer does. Today
+                // this path keeps a direct `host.apply` loop because it
+                // also needs to advance `DiagramState.last_seen_gen` to
+                // prevent snarl from re-projecting and echoing its own
+                // mutations — the canvas viewer deliberately does NOT
+                // advance that cursor (it relies on re-projection to
+                // surface new nodes/edges). Unifying the two paths
+                // needs a per-viewer "after-apply hook" on
+                // `apply_ops_public`. Out of scope for the cleanup PR
+                // that introduced ApplyModelicaOps.
                 if let Some(mut registry) =
                     world.get_resource_mut::<crate::ui::ModelicaDocumentRegistry>()
                 {

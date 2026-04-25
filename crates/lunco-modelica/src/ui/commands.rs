@@ -725,7 +725,17 @@ fn resolve_editor_intent(
                 instance: doc.raw(),
             });
         }
-        EditorIntent::Compile => commands.trigger(CompileModel { doc, class: None }),
+        // Per AGENTS.md §4.1 rule 3: UI / keybinding gestures fire the
+        // public Reflect command (`CompileActiveModel`), not the
+        // internal observer event (`CompileModel`). Empty `class`
+        // inherits the picker / drilled-in / detected-name behaviour,
+        // matching the pre-migration semantics for keyboard Compile.
+        EditorIntent::Compile => {
+            commands.trigger(CompileActiveModel {
+                doc: doc.raw(),
+                class: String::new(),
+            });
+        }
         // `NewDocument` doesn't need an active doc — it's handled by
         // `NewDocumentNoDoc` resolver below (the resolver that runs
         // even when there's no active doc).

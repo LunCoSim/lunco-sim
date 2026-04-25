@@ -42,7 +42,7 @@ use bevy::prelude::*;
 use lunco_doc::DocumentId;
 
 use crate::document::ModelicaOp;
-use crate::pretty::{ComponentDecl, ConnectEquation, Placement, PortRef};
+use crate::pretty::{ComponentDecl, ConnectEquation, Line, Placement, PortRef};
 use crate::ui::state::ModelicaDocumentRegistry;
 
 /// Plugin that registers the Modelica edit events + observers.
@@ -55,11 +55,16 @@ impl Plugin for ModelicaApiEditPlugin {
             .register_type::<RemoveModelicaComponent>()
             .register_type::<ConnectComponents>()
             .register_type::<DisconnectComponents>()
+            .register_type::<ApplyModelicaOps>()
+            .register_type::<ApiOp>()
+            .register_type::<ApiPlacement>()
+            .register_type::<ApiModification>()
             .add_observer(on_set_document_source)
             .add_observer(on_add_modelica_component)
             .add_observer(on_remove_modelica_component)
             .add_observer(on_connect_components)
-            .add_observer(on_disconnect_components);
+            .add_observer(on_disconnect_components)
+            .add_observer(on_apply_modelica_ops);
     }
 }
 
@@ -366,4 +371,376 @@ fn parse_port_ref(s: &str) -> Option<PortRef> {
         return None;
     }
     Some(PortRef::new(component.to_string(), port.to_string()))
+}
+
+// ─── Batched ApplyModelicaOps + Reflect-friendly mirror enum ───────────
+//
+// `ModelicaOp` (in `crate::document`) carries a `Range<usize>` for the
+// `EditText` variant, which is not directly Reflect-derivable. Rather
+// than creep Reflect derives across the doc + pretty layers, this
+// module defines a *mirror* enum [`ApiOp`] that mirrors the structural
+// op variants we want callers to fire over the API and converts to the
+// internal type at the observer boundary.
+//
+// The structural ops (`Add/RemoveComponent`, `Add/RemoveConnection`,
+// `SetPlacement`) cover what the canvas drag-drop pipeline needs and
+// what an external agent would reasonably want. Free-form text edits
+// (`ReplaceSource`, `EditText`) are reachable via [`SetDocumentSource`]
+// instead.
+//
+// The canvas + GUI panels fire [`ApplyModelicaOps`] in lieu of calling
+// [`crate::ui::panels::canvas_diagram::apply_ops`] directly, so all
+// mutations go through the same Reflect command surface (per
+// AGENTS.md §4.1 rule 3).
+
+/// Reflect-friendly placement payload.
+#[derive(Reflect, Clone, Debug, Default)]
+pub struct ApiPlacement {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
+/// Reflect-friendly key/value modification entry. The internal
+/// [`ComponentDecl`] holds these as `Vec<(String, String)>` — the
+/// tuple shape doesn't deserialise cleanly from the JSON callers
+/// actually send, so this struct is the wire form.
+#[derive(Reflect, Clone, Debug, Default)]
+pub struct ApiModification {
+    pub name: String,
+    pub value: String,
+}
+
+/// One structural op against a Modelica document, in a Reflect-friendly
+/// shape. Variants mirror the structural subset of
+/// [`crate::document::ModelicaOp`] — text-level ops are out of scope
+/// here and use [`SetDocumentSource`] instead.
+///
+/// Connection variants encode `from`/`to` as separate `component` +
+/// `port` strings rather than dot-paths so the Reflect deserializer
+/// can validate fields directly without parsing string syntax.
+#[derive(Reflect, Clone, Debug, Default)]
+pub enum ApiOp {
+    /// Default value for Reflect — never appears in real payloads.
+    #[default]
+    Noop,
+    AddComponent {
+        class: String,
+        type_name: String,
+        name: String,
+        modifications: Vec<ApiModification>,
+        placement: ApiPlacement,
+    },
+    RemoveComponent {
+        class: String,
+        name: String,
+    },
+    AddConnection {
+        class: String,
+        from_component: String,
+        from_port: String,
+        to_component: String,
+        to_port: String,
+        /// Optional polyline waypoints, flattened as
+        /// `[x0, y0, x1, y1, ...]`. Empty = no annotation, renderer
+        /// uses its auto-router.
+        line_points: Vec<f32>,
+    },
+    RemoveConnection {
+        class: String,
+        from_component: String,
+        from_port: String,
+        to_component: String,
+        to_port: String,
+    },
+    SetPlacement {
+        class: String,
+        name: String,
+        placement: ApiPlacement,
+    },
+    SetParameter {
+        class: String,
+        component: String,
+        param: String,
+        value: String,
+    },
+}
+
+/// Batched edit event — primary entry point for both the GUI canvas
+/// pipeline and external API callers that want to apply multiple ops
+/// in a single observer pass.
+///
+/// Each op is applied in order through the same `host.apply` path the
+/// individual per-op events use. Today every applied op is a separate
+/// undo entry (matches pre-migration behaviour); transactional grouping
+/// — applying N ops as one undo step — is a follow-up.
+#[derive(Event, Reflect, Clone, Debug, Default)]
+#[reflect(Event, Default)]
+pub struct ApplyModelicaOps {
+    pub doc: u64,
+    pub ops: Vec<ApiOp>,
+}
+
+fn on_apply_modelica_ops(
+    trigger: On<ApplyModelicaOps>,
+    mut commands: Commands,
+) {
+    let raw = trigger.event().doc;
+    let ops = trigger.event().ops.clone();
+    commands.queue(move |world: &mut World| {
+        let Some(doc) = resolve_doc(world, raw) else {
+            bevy::log::warn!("[ApplyModelicaOps] no doc for id {}", raw);
+            return;
+        };
+        let internal: Vec<ModelicaOp> = ops.iter().filter_map(api_op_to_internal).collect();
+        if internal.is_empty() {
+            return;
+        }
+        crate::ui::panels::canvas_diagram::apply_ops_public(world, doc, internal);
+    });
+}
+
+/// Convert one mirror [`ApiOp`] to the internal [`ModelicaOp`].
+/// Returns `None` for `Noop` and for malformed payloads (e.g.
+/// `placement.width <= 0` we treat as "no override" → default extent).
+fn api_op_to_internal(op: &ApiOp) -> Option<ModelicaOp> {
+    match op {
+        ApiOp::Noop => None,
+        ApiOp::AddComponent {
+            class,
+            type_name,
+            name,
+            modifications,
+            placement,
+        } => {
+            if class.is_empty() || type_name.is_empty() || name.is_empty() {
+                return None;
+            }
+            Some(ModelicaOp::AddComponent {
+                class: class.clone(),
+                decl: ComponentDecl {
+                    type_name: type_name.clone(),
+                    name: name.clone(),
+                    modifications: modifications
+                        .iter()
+                        .map(|m| (m.name.clone(), m.value.clone()))
+                        .collect(),
+                    placement: Some(api_placement_to_internal(placement)),
+                },
+            })
+        }
+        ApiOp::RemoveComponent { class, name } => {
+            if class.is_empty() || name.is_empty() {
+                return None;
+            }
+            Some(ModelicaOp::RemoveComponent {
+                class: class.clone(),
+                name: name.clone(),
+            })
+        }
+        ApiOp::AddConnection {
+            class,
+            from_component,
+            from_port,
+            to_component,
+            to_port,
+            line_points,
+        } => {
+            let from = port_ref_or_none(from_component, from_port)?;
+            let to = port_ref_or_none(to_component, to_port)?;
+            let line = if line_points.is_empty() {
+                None
+            } else {
+                let pairs: Vec<(f32, f32)> = line_points
+                    .chunks(2)
+                    .filter(|c| c.len() == 2)
+                    .map(|c| (c[0], c[1]))
+                    .collect();
+                if pairs.is_empty() { None } else { Some(Line { points: pairs }) }
+            };
+            Some(ModelicaOp::AddConnection {
+                class: class.clone(),
+                eq: ConnectEquation { from, to, line },
+            })
+        }
+        ApiOp::RemoveConnection {
+            class,
+            from_component,
+            from_port,
+            to_component,
+            to_port,
+        } => {
+            let from = port_ref_or_none(from_component, from_port)?;
+            let to = port_ref_or_none(to_component, to_port)?;
+            Some(ModelicaOp::RemoveConnection {
+                class: class.clone(),
+                from,
+                to,
+            })
+        }
+        ApiOp::SetPlacement {
+            class,
+            name,
+            placement,
+        } => {
+            if class.is_empty() || name.is_empty() {
+                return None;
+            }
+            Some(ModelicaOp::SetPlacement {
+                class: class.clone(),
+                name: name.clone(),
+                placement: api_placement_to_internal(placement),
+            })
+        }
+        ApiOp::SetParameter {
+            class,
+            component,
+            param,
+            value,
+        } => {
+            if class.is_empty() || component.is_empty() || param.is_empty() {
+                return None;
+            }
+            Some(ModelicaOp::SetParameter {
+                class: class.clone(),
+                component: component.clone(),
+                param: param.clone(),
+                value: value.clone(),
+            })
+        }
+    }
+}
+
+fn api_placement_to_internal(p: &ApiPlacement) -> Placement {
+    Placement {
+        x: p.x,
+        y: p.y,
+        width: if p.width > 0.0 { p.width } else { 20.0 },
+        height: if p.height > 0.0 { p.height } else { 20.0 },
+    }
+}
+
+fn port_ref_or_none(component: &str, port: &str) -> Option<PortRef> {
+    if component.is_empty() || port.is_empty() {
+        return None;
+    }
+    Some(PortRef::new(component.to_string(), port.to_string()))
+}
+
+/// Convert an internal [`ModelicaOp`] back to its [`ApiOp`] mirror.
+/// Used by GUI panels (canvas drag-drop, diagram viewer) to fire
+/// [`ApplyModelicaOps`] with already-constructed ops, keeping a single
+/// command pipeline for both UI and external API callers (per
+/// AGENTS.md §4.1).
+///
+/// Returns `None` for non-structural ops (`ReplaceSource`, `EditText`)
+/// — those go through [`SetDocumentSource`] / typed-event paths
+/// instead, so a UI accidentally trying to fire them via the
+/// structural pipeline is a no-op rather than a silent corruption.
+pub(crate) fn internal_op_to_api(op: &ModelicaOp) -> Option<ApiOp> {
+    match op {
+        ModelicaOp::AddComponent { class, decl } => Some(ApiOp::AddComponent {
+            class: class.clone(),
+            type_name: decl.type_name.clone(),
+            name: decl.name.clone(),
+            modifications: decl
+                .modifications
+                .iter()
+                .map(|(k, v)| ApiModification {
+                    name: k.clone(),
+                    value: v.clone(),
+                })
+                .collect(),
+            placement: decl
+                .placement
+                .map(internal_placement_to_api)
+                .unwrap_or_default(),
+        }),
+        ModelicaOp::RemoveComponent { class, name } => Some(ApiOp::RemoveComponent {
+            class: class.clone(),
+            name: name.clone(),
+        }),
+        ModelicaOp::AddConnection { class, eq } => {
+            let line_points = eq
+                .line
+                .as_ref()
+                .map(|l| l.points.iter().flat_map(|(x, y)| [*x, *y]).collect())
+                .unwrap_or_default();
+            Some(ApiOp::AddConnection {
+                class: class.clone(),
+                from_component: eq.from.component.clone(),
+                from_port: eq.from.port.clone(),
+                to_component: eq.to.component.clone(),
+                to_port: eq.to.port.clone(),
+                line_points,
+            })
+        }
+        ModelicaOp::RemoveConnection { class, from, to } => Some(ApiOp::RemoveConnection {
+            class: class.clone(),
+            from_component: from.component.clone(),
+            from_port: from.port.clone(),
+            to_component: to.component.clone(),
+            to_port: to.port.clone(),
+        }),
+        ModelicaOp::SetPlacement {
+            class,
+            name,
+            placement,
+        } => Some(ApiOp::SetPlacement {
+            class: class.clone(),
+            name: name.clone(),
+            placement: internal_placement_to_api(*placement),
+        }),
+        ModelicaOp::SetParameter {
+            class,
+            component,
+            param,
+            value,
+        } => Some(ApiOp::SetParameter {
+            class: class.clone(),
+            component: component.clone(),
+            param: param.clone(),
+            value: value.clone(),
+        }),
+        // Text-level ops are intentionally excluded from this pipeline.
+        ModelicaOp::ReplaceSource { .. } | ModelicaOp::EditText { .. } => None,
+    }
+}
+
+fn internal_placement_to_api(p: Placement) -> ApiPlacement {
+    ApiPlacement {
+        x: p.x,
+        y: p.y,
+        width: p.width,
+        height: p.height,
+    }
+}
+
+/// Fire [`ApplyModelicaOps`] for a batch of internal-typed ops.
+///
+/// GUI helper: the canvas pipeline still constructs `ModelicaOp` values
+/// internally (the event flow translates scene events directly into
+/// the typed-op shape), but per AGENTS.md §4.1 rule 3 the *application*
+/// must go through a Reflect command. This converts to mirror ops and
+/// fires the event in one place so panels do not duplicate the
+/// conversion.
+///
+/// Skips ops that have no mirror form (text-level
+/// `ReplaceSource`/`EditText`) — those are not meant to flow through
+/// the structural pipeline. If every input op was non-structural the
+/// trigger is omitted (no-op).
+pub fn trigger_apply_ops(
+    world: &mut World,
+    doc: lunco_doc::DocumentId,
+    ops: Vec<ModelicaOp>,
+) {
+    let api_ops: Vec<ApiOp> = ops.iter().filter_map(internal_op_to_api).collect();
+    if api_ops.is_empty() {
+        return;
+    }
+    world.commands().trigger(ApplyModelicaOps {
+        doc: doc.raw(),
+        ops: api_ops,
+    });
 }

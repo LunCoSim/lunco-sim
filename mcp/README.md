@@ -76,6 +76,7 @@ Mutation commands are reachable via `execute_command`:
 | `RemoveModelicaComponent` | Remove a sub-component |
 | `ConnectComponents` | Add a `connect(a.p, b.q)` equation |
 | `DisconnectComponents` | Remove a connect equation |
+| `ApplyModelicaOps` | **Batched** — apply N ops (`Add/RemoveComponent`, `Add/RemoveConnection`, `SetPlacement`, `SetParameter`) in a single observer pass. The same Reflect event the canvas drag-drop pipeline fires — agents and the GUI share one path. Each op still produces an independent undo entry today; transactional grouping is a follow-up. |
 
 Every op flows through the same `ModelicaOp` undo/redo pipeline the
 canvas drag-and-drop uses, so mutations are undoable and journaled

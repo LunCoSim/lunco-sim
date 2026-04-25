@@ -3655,11 +3655,19 @@ impl CanvasDiagramPanel {
             }
         }
 
-        // Translate scene events → ModelicaOps and apply.
+        // Translate scene events → ModelicaOps and apply via the
+        // Reflect command surface (per AGENTS.md §4.1 rule 3). The
+        // helper converts to the API mirror enum and fires
+        // `ApplyModelicaOps`; the observer hands them to
+        // `apply_ops_public`, which is the same code path that
+        // already serviced this site directly.
         if let (Some(doc_id), Some(class)) = (doc_id, editing_class.as_ref()) {
             let mut all_ops = build_ops_from_events(world, &events, class);
             all_ops.extend(menu_ops);
             if !all_ops.is_empty() {
+                #[cfg(feature = "lunco-api")]
+                crate::api_edits::trigger_apply_ops(world, doc_id, all_ops);
+                #[cfg(not(feature = "lunco-api"))]
                 apply_ops(world, doc_id, all_ops);
             }
         } else if !menu_ops.is_empty() {
@@ -5638,6 +5646,9 @@ fn auto_arrange_now(world: &mut World, doc_id: lunco_doc::DocumentId) {
         "[CanvasDiagram] Auto-Arrange: emitting {} SetPlacement ops",
         ops.len()
     );
+    #[cfg(feature = "lunco-api")]
+    crate::api_edits::trigger_apply_ops(world, doc_id, ops);
+    #[cfg(not(feature = "lunco-api"))]
     apply_ops(world, doc_id, ops);
 }
 
