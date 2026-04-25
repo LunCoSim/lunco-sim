@@ -108,11 +108,6 @@ pub struct SpringArmCamera {
     pub pitch: f32,
     pub damping: Option<f32>,
     pub vertical_offset: f32,
-    /// Low-pass-filtered target heading in radians. `None` on first frame
-    /// (snaps to the rover's current heading). Decoupling this from the raw
-    /// per-step rover yaw absorbs wheel/suspension wobble so the camera
-    /// frame stays steady while the rover micro-rocks inside it.
-    pub heading_filter: Option<f64>,
 }
 
 /// Survey camera: orbits a target fixed to the stars.
@@ -283,8 +278,19 @@ impl Plugin for LunCoAvatarPlugin {
             surface_mode_transition_system,
         ));
 
+        // Chase camera shares the rover's fixed-step time domain so its
+        // slerp/lerp uses a constant `dt = 1/60s`. Variable render-frame `dt`
+        // produced perceptible jitter (`alpha = 1 - exp(-rate * dt)` made the
+        // per-frame step proportional to whatever frame time the renderer
+        // happened to deliver). Camera entities also carry
+        // `TranslationInterpolation` + `RotationInterpolation`
+        // (added at SpringArmCamera insertion) so the renderer eases between
+        // fixed-step camera samples — same mechanism rigid bodies use.
+        app.add_systems(FixedPostUpdate,
+            spring_arm_system
+                .after(avian3d::schedule::PhysicsSystems::Writeback));
+
         app.add_systems(PostUpdate, (
-            spring_arm_system,
             chase_camera_system,
             orbit_system,
             freeflight_system,
@@ -402,33 +408,21 @@ fn spring_arm_system(
             scroll_res.delta = 0.0;
         }
 
-        // Resolve rover heading in double-precision to eliminate quantization jitter.
+        // Resolve rover heading in double-precision to eliminate quantization
+        // jitter. The rover Transform is already render-frame-interpolated by
+        // avian's `PhysicsInterpolationPlugin::interpolate_all()` (runs in
+        // `RunFixedMainLoop` before Update), so reading it directly here
+        // gives a smooth signal — no extra low-pass needed. An additional
+        // exp-decay filter would re-introduce jitter under variable frame
+        // time because alpha = 1 - exp(-rate*dt) makes the per-frame catch-up
+        // step proportional to dt, so the camera's lag wobbles around its
+        // mean as frame timing fluctuates.
         let target_fwd_d = t_tf.rotation.mul_vec3(Vec3::Z).as_dvec3();
-        let raw_heading = if target_fwd_d.x.abs() > 1e-6 || target_fwd_d.z.abs() > 1e-6 {
+        let target_heading_d = if target_fwd_d.x.abs() > 1e-6 || target_fwd_d.z.abs() > 1e-6 {
             target_fwd_d.x.atan2(target_fwd_d.z)
         } else { 0.0 };
 
-        // Low-pass the rover heading so wheel/suspension micro-yaw doesn't
-        // make the camera offset wobble. User yaw input is added below
-        // *after* the filter, so mouse-look stays instant.
-        // Rate ≈15 (τ≈67ms) — invisible during deliberate turns, kills wobble.
-        let prev_heading = arm.heading_filter.unwrap_or(raw_heading);
-        // Normalise delta into [-π, π] regardless of how many revolutions
-        // `prev_heading` has accumulated relative to raw. A single `±TAU`
-        // correction is not enough once the filter has drifted past 2π,
-        // which is exactly what produced the "camera snaps a full 360"
-        // symptom after repeated rover spins.
-        let pi = std::f64::consts::PI;
-        let tau = std::f64::consts::TAU;
-        let delta = ((raw_heading - prev_heading + pi).rem_euclid(tau)) - pi;
-        let heading_alpha = 1.0 - (-15.0 * dt as f64).exp();
-        // Keep filtered_heading itself wrapped, so it never drifts unbounded.
-        let next = prev_heading + delta * heading_alpha;
-        let filtered_heading = ((next + pi).rem_euclid(tau)) - pi;
-        arm.heading_filter = Some(filtered_heading);
-
-        // Combine filtered rover heading with instant user yaw offset.
-        let final_yaw = (filtered_heading + arm.yaw as f64) as f32;
+        let final_yaw = (target_heading_d + arm.yaw as f64) as f32;
 
         // Rotation: surface-relative or ecliptic-locked
         let desired_rot = if surface_mode.is_some() {
@@ -1155,7 +1149,11 @@ fn on_release_command(
         .remove::<InputMap<lunco_controller::VesselIntent>>()
         .remove::<SpringArmCamera>()
         .remove::<OrbitCamera>()
-        .remove::<FrameBlend>();
+        .remove::<FrameBlend>()
+        // FreeFlight/Surface cameras run in PostUpdate at render rate, so
+        // strip the fixed-step interpolation that SpringArmCamera relied on.
+        .remove::<avian3d::prelude::TranslationInterpolation>()
+        .remove::<avian3d::prelude::RotationInterpolation>();
 
     // In surface mode, use SurfaceCamera (recomputed from scratch each frame);
     // otherwise use FreeFlightCamera (incremental euler angles).
@@ -1306,15 +1304,20 @@ fn on_possess_command(
             });
     } else {
         let mut cmd_ent = commands.entity(avatar_ent);
-        cmd_ent.insert(SpringArmCamera {
-            target: cmd.target,
-            distance: end_distance,
-            yaw: 0.0,
-            pitch: end_pitch,
-            damping: Some(0.05),
-            vertical_offset: end_vert_off,
-            heading_filter: None,
-        });
+        cmd_ent.insert((
+            SpringArmCamera {
+                target: cmd.target,
+                distance: end_distance,
+                yaw: 0.0,
+                pitch: end_pitch,
+                damping: Some(0.05),
+                vertical_offset: end_vert_off,
+            },
+            // Camera updates in FixedPostUpdate; ease its Transform between
+            // fixed samples so the rendered camera doesn't staircase at 60Hz.
+            avian3d::prelude::TranslationInterpolation,
+            avian3d::prelude::RotationInterpolation,
+        ));
         // If possessing a surface vehicle, enable surface-relative camera mode
         if is_surface_vehicle {
             if let Ok(gb) = q_vessel_gravity.get(cmd.target) {
