@@ -235,3 +235,10 @@ This spec depends on spec 032's `ApiQueryProvider` infrastructure (P1 of 032). O
 - **P2** — `SetInputCommand` (extend the existing worker input channel; reuse squashing).
 - **P3** — `FindModelProvider` (fuzzy match across the listing endpoints from spec 032).
 - **P4** — End-to-end CI script realising User Story 5 + MCP wrappers + docs.
+  - Smoke script lives at `tests/api/agent_workflow.sh`; covers
+    find → open → list_open_documents → list_compile_candidates →
+    compile_model(class) → compile_status poll → describe_model →
+    set_input (happy path + error path) → ResumeActiveModel →
+    snapshot_variables → PauseActiveModel. Run after starting the
+    workbench with `--api 3000`. Does not pkill or send Exit; safe to
+    run against a live user session.

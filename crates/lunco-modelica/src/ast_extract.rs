@@ -657,20 +657,38 @@ fn collect_parameter_bounds_from_classes(
 // merge `RocketStage`'s components with `Tank`'s and `Engine`'s into one
 // nonsensical pile.
 
-/// Find a class by short name in the top-level class list.
+/// Find a class by short name, walking nested classes too.
 ///
-/// Returns `None` if no top-level class has that exact name. Does not
-/// recurse into nested classes — the agent's `class` parameter refers
-/// to top-level classes (the same ones `list_compile_candidates`
-/// surfaces). Nested-class introspection is a future iteration.
+/// Many MSL packages and user-authored multi-class files (e.g.
+/// `AnnotatedRocketStage` which wraps `RocketStage`/`Tank`/`Valve`/…
+/// inside a `package AnnotatedRocketStage`) expose simulatable classes
+/// only inside a wrapper package. A top-level-only lookup misses them
+/// and breaks `describe_model` even when `compile_model` (which uses
+/// `collect_non_package_classes_qualified`) succeeds. Recursing here
+/// keeps the two views consistent.
+///
+/// Returns the first match in iteration order — duplicate short names
+/// across nested levels are resolved by the outer-most occurrence.
 pub fn find_class_by_short_name<'a>(
     ast: &'a StoredDefinition,
     short_name: &str,
 ) -> Option<&'a ClassDef> {
-    ast.classes
-        .iter()
-        .find(|(name, _)| name.as_str() == short_name)
-        .map(|(_, c)| c)
+    find_in_classes(&ast.classes, short_name)
+}
+
+fn find_in_classes<'a>(
+    classes: &'a indexmap::IndexMap<String, ClassDef>,
+    short_name: &str,
+) -> Option<&'a ClassDef> {
+    if let Some((_, class)) = classes.iter().find(|(name, _)| name.as_str() == short_name) {
+        return Some(class);
+    }
+    for class in classes.values() {
+        if let Some(found) = find_in_classes(&class.classes, short_name) {
+            return Some(found);
+        }
+    }
+    None
 }
 
 /// Lower-case Modelica class kind keyword: `model`, `block`, `connector`,

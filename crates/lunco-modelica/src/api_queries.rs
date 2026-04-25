@@ -453,7 +453,15 @@ impl ApiQueryProvider for CompileStatusProvider {
             None => return err_doc_not_found(doc_id),
         };
         drop(registry);
-        let picker_pending = drilled_in.is_none() && candidates.len() >= 2;
+        // `picker_pending` is meaningful only when the doc is in the
+        // `idle` state — i.e. nothing is compiling yet and a *future*
+        // compile with no `class` argument would open the GUI picker.
+        // Once a compile is in flight, has succeeded, or has errored,
+        // the caller already provided enough context (or the picker
+        // was bypassed), so reporting `true` here would be misleading.
+        let picker_pending = matches!(state, CompileState::Idle)
+            && drilled_in.is_none()
+            && candidates.len() >= 2;
 
         // Error message lives on `WorkbenchState.compilation_error`. It
         // is doc-global today (one slot, last writer wins) — fine for

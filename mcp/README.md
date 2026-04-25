@@ -105,6 +105,11 @@ The combination above is designed so an agent can run:
 
 …without touching the GUI.
 
+A runnable smoke test of this exact workflow lives at
+`tests/api/agent_workflow.sh` — start the workbench with
+`--api 3000` and run the script to verify every endpoint above
+end-to-end against AnnotatedRocketStage.
+
 ## Resources
 
 These resources provide declarative access to simulation state:
