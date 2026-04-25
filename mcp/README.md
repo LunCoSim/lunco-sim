@@ -50,8 +50,65 @@ These tools are always available:
 | `discover_schema` | Get all available commands and parameters |
 | `list_entities` | List all simulation entities |
 | `query_entity` | Get entity details by ID |
-| `capture_screenshot` | Capture viewport as PNG |
+| `capture_screenshot` | Capture viewport as PNG (optionally save to file) |
 | `execute_command` | Generic command executor |
+| `list_bundled` | List embedded `assets/models/*.mo` example models with `bundled://` URIs |
+| `list_open_documents` | List every open document (Modelica / USD / SysML / future kinds) with origin + active flag |
+| `list_twin` | List files in the open Twin folder, paginated, classified by kind |
+| `list_msl` | Paginated, filterable enumeration of Modelica Standard Library classes |
+| `open_uri` | Unified scheme-aware open (`bundled://`, `mem://`, qualified MSL name, fs path) |
+| `compile_model` | Compile an open document, optionally targeting a specific class (bypasses GUI picker) |
+| `compile_status` | Read per-doc compile state without triggering compile |
+| `list_compile_candidates` | List the non-package classes a multi-class doc would let you compile |
+| `get_document_source` | Fetch the in-memory source of an open doc (incl. unsaved edits) |
+| `describe_model` | Full structural view of a class: `class_kind`, `extends`, `components`, `connections`, plus typed `inputs / parameters / outputs` with units & bounds |
+| `snapshot_variables` | One-shot read of current parameter / input / variable values from a running sim |
+| `set_input` | Push a runtime input value into a compiled model. Returns `{ok}` or structured error listing known input names |
+| `find_model` | Fuzzy search across bundled / Twin / MSL / open docs. Returns ranked URIs with relevance scores |
+
+### Edit API
+
+Mutation commands are reachable via `execute_command`:
+
+| Command | Purpose |
+|---|---|
+| `SetDocumentSource` | Replace an open document's full source text |
+| `AddModelicaComponent` | Add a sub-component to a class (`AddComponent` AST op) |
+| `RemoveModelicaComponent` | Remove a sub-component |
+| `ConnectComponents` | Add a `connect(a.p, b.q)` equation |
+| `DisconnectComponents` | Remove a connect equation |
+| `ApplyModelicaOps` | **Batched** — apply N ops (`Add/RemoveComponent`, `Add/RemoveConnection`, `SetPlacement`, `SetParameter`) in a single observer pass. The same Reflect event the canvas drag-drop pipeline fires — agents and the GUI share one path. Each op still produces an independent undo entry today; transactional grouping is a follow-up. |
+
+Every op flows through the same `ModelicaOp` undo/redo pipeline the
+canvas drag-and-drop uses, so mutations are undoable and journaled
+identically to UI-driven edits.
+
+The listing tools (`list_*`, `msl_status`) are introduced in spec
+[`032-model-source-listing`](../specs/032-model-source-listing/spec.md).
+They use a generic `ApiQueryProvider` extension point in `lunco-api`, so
+domain crates register their own listings without `lunco-api` taking a
+direct dep on them.
+
+### Example: end-to-end agent workflow
+
+The combination above is designed so an agent can run:
+
+```
+1. find / list                  list_bundled  →  pick "AnnotatedRocketStage.mo"
+2. open                         open_uri(uri="bundled://AnnotatedRocketStage.mo")
+3. compile + run                execute_command(CompileActiveModel, …) +
+                                execute_command(ResumeActiveModel, …)
+4. inspect what's running       list_open_documents
+5. tweak a value, observe       (covered by spec 033 — describe_model,
+                                 set_input, snapshot_variables)
+```
+
+…without touching the GUI.
+
+A runnable smoke test of this exact workflow lives at
+`tests/api/agent_workflow.sh` — start the workbench with
+`--api 3000` and run the script to verify every endpoint above
+end-to-end against AnnotatedRocketStage.
 
 ## Resources
 

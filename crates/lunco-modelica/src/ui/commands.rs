@@ -33,7 +33,6 @@ use crate::ast_extract::{
     extract_parameters, hash_content,
 };
 use crate::ui::panels::code_editor::EditorBufferState;
-use crate::ui::panels::diagram::DiagramState;
 use crate::ui::{CompileState, CompileStates, ModelicaDocumentRegistry, WorkbenchState};
 use crate::{ModelicaChannels, ModelicaCommand, ModelicaModel};
 
@@ -107,6 +106,11 @@ pub struct OpenExampleInWorkspace {
 pub struct CompileModel {
     /// The document to compile.
     pub doc: DocumentId,
+    /// Optional explicit target class. When `Some`, bypass both the
+    /// drilled-in pin and the picker — compile this exact class.
+    /// Used by API callers that need deterministic behaviour without
+    /// a GUI (cf. spec 033 User Story 1.5).
+    pub class: Option<String>,
 }
 
 /// Run the Auto-Arrange layout: assign each component of the active
@@ -289,7 +293,7 @@ pub(crate) fn render_compile_class_picker(
         let doc = entry.doc;
         drilled_in.set(doc, qualified);
         picker.0 = None;
-        commands.trigger(CompileModel { doc });
+        commands.trigger(CompileModel { doc, class: None });
     } else if cancelled {
         picker.0 = None;
     }
@@ -346,6 +350,8 @@ impl Plugin for ModelicaCommandsPlugin {
             .register_type::<GetFile>()
             .register_type::<FormatDocument>()
             .register_type::<OpenFile>()
+            .register_type::<Open>()
+            .register_type::<SetModelInput>()
             .register_type::<InspectActiveDoc>()
             .register_type::<CompileActiveModel>()
             .register_type::<SaveActiveDocument>()
@@ -374,6 +380,8 @@ impl Plugin for ModelicaCommandsPlugin {
             .add_observer(on_get_file)
             .add_observer(on_format_document)
             .add_observer(on_open_file)
+            .add_observer(on_open)
+            .add_observer(on_set_model_input)
             .add_observer(on_inspect_active_doc)
             .add_observer(on_compile_active_model)
             .add_observer(on_save_active_document)
@@ -716,7 +724,17 @@ fn resolve_editor_intent(
                 instance: doc.raw(),
             });
         }
-        EditorIntent::Compile => commands.trigger(CompileModel { doc }),
+        // Per AGENTS.md §4.1 rule 3: UI / keybinding gestures fire the
+        // public Reflect command (`CompileActiveModel`), not the
+        // internal observer event (`CompileModel`). Empty `class`
+        // inherits the picker / drilled-in / detected-name behaviour,
+        // matching the pre-migration semantics for keyboard Compile.
+        EditorIntent::Compile => {
+            commands.trigger(CompileActiveModel {
+                doc: doc.raw(),
+                class: String::new(),
+            });
+        }
         // `NewDocument` doesn't need an active doc — it's handled by
         // `NewDocumentNoDoc` resolver below (the resolver that runs
         // even when there's no active doc).
@@ -1022,12 +1040,12 @@ fn on_compile_model(
     mut diagnostics: Option<ResMut<crate::ui::panels::diagnostics::DiagnosticsLog>>,
     mut picker: ResMut<CompileClassPickerState>,
     mut sim_streams: ResMut<crate::SimStreamRegistry>,
-    diagram_state: Res<DiagramState>,
     channels: Option<Res<ModelicaChannels>>,
     mut q_models: Query<&mut ModelicaModel>,
     drilled_in_classes: Option<Res<crate::ui::panels::canvas_diagram::DrilledInClassNames>>,
 ) {
     let doc = trigger.event().doc;
+    let explicit_class = trigger.event().class.clone();
 
     // Ownership check. Read-only docs are fair game to compile —
     // the Save button is what's gated on writability, not compile.
@@ -1075,11 +1093,47 @@ fn on_compile_model(
     let drilled_in_class: Option<String> = drilled_in_classes
         .as_ref()
         .and_then(|d| d.get(doc).map(str::to_string));
-    // If no drill-in pin and the file is a package of several models,
-    // ask the user which one to compile instead of silently picking.
-    // The picker modal (rendered by `render_compile_class_picker` in
-    // ui/mod.rs) re-dispatches `CompileModel` once the user confirms.
-    if drilled_in_class.is_none() {
+    // Class resolution priority:
+    //   1. explicit_class on the event       — API caller knows exactly
+    //   2. drilled_in_class                  — UI drill-in pin
+    //   3. picker modal                      — GUI fallback for ambiguity
+    //   4. detected_name from AST            — single-class case
+    //
+    // The explicit-class branch (added in spec 033 P0) lets API/agent
+    // callers compile a chosen class without ever opening the picker
+    // modal. Validates against the candidate list so a bad class name
+    // surfaces as a structured error in the diagnostics log instead
+    // of silently picking the wrong thing.
+    let chosen_via_explicit = if let Some(cls) = explicit_class.as_ref() {
+        let candidates = crate::ast_extract::collect_non_package_classes_qualified(&ast);
+        // Match by short name OR full qualified name, so callers can pass
+        // either `"RocketStage"` or `"AnnotatedRocketStage.RocketStage"`.
+        let matched = candidates.iter().find(|c| {
+            c == &cls || c.rsplit('.').next() == Some(cls.as_str())
+        });
+        match matched {
+            Some(qname) => Some(qname.clone()),
+            None => {
+                let msg = format!(
+                    "compile_model class `{cls}` not found. Candidates: [{}]",
+                    candidates.join(", ")
+                );
+                workbench.compilation_error = Some(msg.clone());
+                console.error(format!("Compile failed: {msg}"));
+                let _ = diagnostics; // surfaced via console + workbench
+                return;
+            }
+        }
+    } else {
+        None
+    };
+
+    // If no explicit class and no drill-in pin and the file is a package
+    // of several models, ask the user which one to compile instead of
+    // silently picking. The picker modal (rendered by
+    // `render_compile_class_picker` in ui/mod.rs) re-dispatches
+    // `CompileModel` once the user confirms.
+    if chosen_via_explicit.is_none() && drilled_in_class.is_none() {
         let candidates = crate::ast_extract::collect_non_package_classes_qualified(&ast);
         if candidates.len() >= 2 {
             // If a picker is already open for *this* doc, leave it
@@ -1095,7 +1149,7 @@ fn on_compile_model(
             return;
         }
     }
-    let model_name = drilled_in_class.or_else(|| {
+    let model_name = chosen_via_explicit.or(drilled_in_class).or_else(|| {
         crate::ast_extract::extract_model_name_from_ast(&ast)
     });
     let Some(model_name) = model_name else {
@@ -1149,7 +1203,14 @@ fn on_compile_model(
         // through `Commands` (deferred), so we can't immediately
         // query the new entity in this system — initial fields are
         // set on the component at spawn time instead.
-        let session_id = diagram_state.model_counter as u64 + 1;
+        // Initial session_id for newly-spawned model entity. Existing
+        // entities bump their own `session_id` on recompile (see
+        // the "updated-in-place" branch above); this starting value
+        // matters only for the very first compile of a doc, after
+        // which the per-entity counter takes over. Hardcoded `1`
+        // since the previous source (`DiagramState.model_counter`)
+        // was a snarl-side counter that has been removed.
+        let session_id: u64 = 1;
         let entity = commands
             .spawn((
                 Name::new(model_name.clone()),
@@ -1178,11 +1239,11 @@ fn on_compile_model(
     // Resolve the session_id for the command we're about to send. For
     // the updated-in-place branch this is whatever we just bumped to;
     // for the newly-spawned branch the entity doesn't exist yet (spawn
-    // is deferred), so fall back to the DiagramState counter we used.
+    // is deferred), so fall back to the same `1` we set above.
     let session_id = q_models
         .get(target_entity)
         .map(|m| m.session_id)
-        .unwrap_or_else(|_| diagram_state.model_counter as u64 + 1);
+        .unwrap_or(1);
 
     compile_states.mark_started(doc);
     console.info(format!("⏵ Compile started: '{model_name}'"));
@@ -2717,10 +2778,19 @@ fn on_add_signal_to_plot(trigger: On<AddSignalToPlot>, mut commands: Commands) {
 pub struct CompileActiveModel {
     /// 0 ⇒ active document.
     pub doc: u64,
+    /// Optional target class. Empty = inherit picker / drilled-in /
+    /// detected-name behaviour. When non-empty, the compile bypasses
+    /// the GUI class-picker for documents with multiple non-package
+    /// classes — required for headless / agent-driven workflows where
+    /// no human is available to click the modal (cf. spec 033 P0).
+    /// Lookup is by short name (e.g. `"RocketStage"`) matched against
+    /// the document's `collect_non_package_classes_qualified`.
+    pub class: String,
 }
 
 fn on_compile_active_model(trigger: On<CompileActiveModel>, mut commands: Commands) {
     let raw = trigger.event().doc;
+    let class = trigger.event().class.clone();
     commands.queue(move |world: &mut World| {
         let doc = if raw == 0 {
             resolve_active_doc(world)
@@ -2731,7 +2801,8 @@ fn on_compile_active_model(trigger: On<CompileActiveModel>, mut commands: Comman
             bevy::log::warn!("[CompileActiveModel] no active document");
             return;
         };
-        world.commands().trigger(CompileModel { doc });
+        let target_class = if class.is_empty() { None } else { Some(class) };
+        world.commands().trigger(CompileModel { doc, class: target_class });
     });
 }
 
@@ -2818,6 +2889,19 @@ pub struct OpenFile {
 fn on_open_file(trigger: On<OpenFile>, mut commands: Commands) {
     let path = trigger.event().path.clone();
     commands.queue(move |world: &mut World| {
+        // Scheme dispatch on the canonical openable-source URIs. Plain
+        // absolute / relative paths fall through to the legacy fs-read
+        // branch so existing callers (Open File dialog, drag-and-drop)
+        // keep working unchanged.
+        if let Some(filename) = path.strip_prefix("bundled://") {
+            open_bundled_in_world(world, filename);
+            return;
+        }
+        if let Some(name) = path.strip_prefix("mem://") {
+            focus_in_memory_doc(world, name);
+            return;
+        }
+
         let source = match std::fs::read_to_string(&path) {
             Ok(s) => s,
             Err(e) => {
@@ -2854,6 +2938,70 @@ fn on_open_file(trigger: On<OpenFile>, mut commands: Commands) {
     });
 }
 
+/// Open a bundled (`assets/models/*.mo`) example as an Untitled doc.
+/// Mirrors what the Welcome tab's bundled-card click path does, but
+/// reachable through the API for headless / agent-driven flows. Lands
+/// the doc in Canvas view to match the rest of the open-source-of-truth
+/// behaviour. Untitled because bundled sources are read-only embedded
+/// data — saving needs Save-As.
+fn open_bundled_in_world(world: &mut World, filename: &str) {
+    let Some(source) = crate::models::get_model(filename) else {
+        bevy::log::warn!("[OpenFile] no bundled model named `{}`", filename);
+        return;
+    };
+    // Strip the extension for the tab title — `RC_Circuit.mo` →
+    // `RC_Circuit`. Falls back to the full filename if there is no
+    // extension separator.
+    let display_name = std::path::Path::new(filename)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(filename)
+        .to_string();
+    let mut registry =
+        world.resource_mut::<crate::ui::state::ModelicaDocumentRegistry>();
+    let doc_id = registry.allocate_with_origin(
+        source.to_string(),
+        lunco_doc::DocumentOrigin::untitled(display_name.clone()),
+    );
+    let mut tabs = world.resource_mut::<crate::ui::panels::model_view::ModelTabs>();
+    tabs.ensure(doc_id);
+    if let Some(tab) = tabs.get_mut(doc_id) {
+        tab.view_mode = crate::ui::panels::model_view::ModelViewMode::Canvas;
+    }
+    world.commands().trigger(lunco_workbench::OpenTab {
+        kind: crate::ui::panels::model_view::MODEL_VIEW_KIND,
+        instance: doc_id.raw(),
+    });
+    bevy::log::info!("[OpenFile] opened bundled `{}` as `{}`", filename, display_name);
+}
+
+/// Focus an already-open Untitled tab by `mem://Name`. Does **not**
+/// create a doc — the URI references existing in-memory state. If no
+/// tab matches the name, logs a warning and no-ops; callers should
+/// `list_open_documents` first to verify.
+fn focus_in_memory_doc(world: &mut World, name: &str) {
+    let target_id = format!("mem://{}", name);
+    let cache = world.resource::<crate::ui::panels::package_browser::PackageTreeCache>();
+    let entry = cache
+        .in_memory_models
+        .iter()
+        .find(|e| e.id == target_id)
+        .map(|e| e.doc);
+    drop(cache);
+    let Some(doc_id) = entry else {
+        bevy::log::warn!(
+            "[OpenFile] no Untitled doc named `{}` (mem:// requires an existing tab)",
+            name
+        );
+        return;
+    };
+    // Re-fire OpenTab — workbench treats this as "focus existing".
+    world.commands().trigger(lunco_workbench::OpenTab {
+        kind: crate::ui::panels::model_view::MODEL_VIEW_KIND,
+        instance: doc_id.raw(),
+    });
+}
+
 /// Read a file from the filesystem and log its contents to the
 /// console at INFO level. Useful for automation that wants to
 /// fetch a file's content via the API without spawning a separate
@@ -2863,6 +3011,180 @@ fn on_open_file(trigger: On<OpenFile>, mut commands: Commands) {
 #[reflect(Event, Default)]
 pub struct GetFile {
     pub path: String,
+}
+
+/// Unified open command — dispatches on the URI scheme so an agent
+/// (or any caller) does not need to know whether the target is bundled,
+/// MSL, on disk, or already open as Untitled.
+///
+/// Scheme dispatch:
+/// - `bundled://Filename.mo` → forward to [`OpenFile`] (which now
+///   recognises the scheme and opens the embedded source as Untitled).
+/// - `mem://Name` → forward to [`OpenFile`] (focuses the existing
+///   Untitled tab — does not create a new doc).
+/// - Dot-separated qualified Modelica name (`Modelica.Blocks.Examples.PID`)
+///   → forward to [`OpenExample`].
+/// - Anything else → forward to [`OpenFile`] (raw fs path).
+///
+/// The legacy `OpenFile` / `OpenClass` / `OpenExample` commands stay
+/// available for callers that already use them; this is purely the
+/// scheme-aware front door.
+#[derive(Event, Reflect, Clone, Debug, Default)]
+#[reflect(Event, Default)]
+pub struct Open {
+    pub uri: String,
+}
+
+fn on_open(trigger: On<Open>, mut commands: Commands) {
+    let uri = trigger.event().uri.clone();
+    if uri.is_empty() {
+        bevy::log::warn!("[Open] empty uri");
+        return;
+    }
+
+    // Scheme detection: if the URI contains `://` we route by scheme;
+    // otherwise we look at content shape. A bare dot-separated string
+    // with no path separators is treated as a qualified Modelica name
+    // so `open("Modelica.Blocks.Examples.PID_Controller")` works.
+    if uri.contains("://") {
+        // bundled:// and mem:// are handled inside on_open_file's
+        // scheme dispatcher; route everything else through OpenFile too
+        // (it will fail with a warn for unknown schemes, which is the
+        // right "tell the user" behaviour).
+        commands.trigger(OpenFile { path: uri });
+        return;
+    }
+
+    let looks_like_qualified_name = uri.contains('.')
+        && !uri.contains('/')
+        && !uri.contains('\\');
+    if looks_like_qualified_name {
+        commands.trigger(OpenExample { qualified: uri });
+        return;
+    }
+
+    // Anything else: treat as a filesystem path.
+    commands.trigger(OpenFile { path: uri });
+}
+
+/// Push a runtime input value into a compiled model's stepper.
+///
+/// The simulation worker reads `ModelicaModel.inputs` at every step
+/// (cf. `spawn_modelica_requests`), so writing here propagates to the
+/// running sim on the next tick — no recompile, no worker channel
+/// extension, no squashing logic to add. The squashing the worker
+/// already does on its `UpdateParameters` channel is the same code
+/// path: last-writer-wins per name.
+///
+/// Validation: the input must be a declared input on the compiled
+/// model. We check `model.inputs.contains_key(name)` rather than
+/// re-parsing the AST because the compile path already filtered down
+/// to the runtime-relevant subset.
+///
+/// See spec 033 P2 for the design rationale.
+#[derive(Event, Reflect, Clone, Debug, Default)]
+#[reflect(Event, Default)]
+pub struct SetModelInput {
+    /// Document id whose linked entity holds the running model.
+    pub doc: u64,
+    /// Input name to set. Must already exist on the model — this
+    /// command does not introduce new inputs.
+    pub name: String,
+    /// New value. The API does not clamp to declared bounds; bounds
+    /// enforcement is the agent's responsibility (per spec 033 FR-003
+    /// out-of-scope item).
+    pub value: f64,
+}
+
+fn on_set_model_input(trigger: On<SetModelInput>, mut commands: Commands) {
+    let doc_raw = trigger.event().doc;
+    let name = trigger.event().name.clone();
+    let value = trigger.event().value;
+    commands.queue(move |world: &mut World| {
+        match apply_set_model_input(world, doc_raw, &name, value) {
+            Ok(_) => {}
+            Err(e) => {
+                bevy::log::warn!("[SetModelInput] {}", e.message());
+            }
+        }
+    });
+}
+
+/// Outcome of [`apply_set_model_input`]. Carries enough context for an
+/// API caller (`SetModelInputProvider`) to format a structured error
+/// JSON; the in-process observer just stringifies and warn-logs.
+#[derive(Debug, Clone)]
+pub enum SetModelInputError {
+    NoActiveDocument,
+    NoLinkedEntity { doc: u64 },
+    EntityMissingModel { doc: u64 },
+    UnknownInput {
+        doc: u64,
+        name: String,
+        model_name: String,
+        known_inputs: Vec<String>,
+    },
+}
+
+impl SetModelInputError {
+    pub fn message(&self) -> String {
+        match self {
+            Self::NoActiveDocument => "no active document (pass `doc` explicitly)".into(),
+            Self::NoLinkedEntity { doc } => format!(
+                "doc {doc} has no linked entity — compile the model before setting inputs"
+            ),
+            Self::EntityMissingModel { doc } => format!(
+                "doc {doc}'s linked entity has no `ModelicaModel` component"
+            ),
+            Self::UnknownInput { name, model_name, known_inputs, .. } => format!(
+                "input `{name}` not declared on `{model_name}`. \
+                 Known inputs: [{}]",
+                known_inputs.join(", ")
+            ),
+        }
+    }
+}
+
+/// Shared mutation: write a runtime input value into the simulation
+/// worker's input slot for `doc`. Used by both the [`SetModelInput`]
+/// Reflect-event observer and the API surface's
+/// `SetModelInputProvider` (in `crate::api_queries`) so the two paths
+/// can never drift.
+///
+/// `doc_raw == 0` means "active document" — same convention as
+/// [`SetModelInput`]'s wire form.
+pub fn apply_set_model_input(
+    world: &mut World,
+    doc_raw: u64,
+    name: &str,
+    value: f64,
+) -> Result<DocumentId, SetModelInputError> {
+    let doc = if doc_raw == 0 {
+        resolve_active_doc(world).ok_or(SetModelInputError::NoActiveDocument)?
+    } else {
+        DocumentId::new(doc_raw)
+    };
+    let registry = world.resource::<crate::ui::state::ModelicaDocumentRegistry>();
+    let entities = registry.entities_linked_to(doc);
+    drop(registry);
+    let Some(entity) = entities.first().copied() else {
+        return Err(SetModelInputError::NoLinkedEntity { doc: doc.raw() });
+    };
+    let Some(mut model) = world.get_mut::<crate::ModelicaModel>(entity) else {
+        return Err(SetModelInputError::EntityMissingModel { doc: doc.raw() });
+    };
+    if !model.inputs.contains_key(name) {
+        let known: Vec<String> = model.inputs.keys().cloned().collect();
+        return Err(SetModelInputError::UnknownInput {
+            doc: doc.raw(),
+            name: name.to_string(),
+            model_name: model.model_name.clone(),
+            known_inputs: known,
+        });
+    }
+    model.inputs.insert(name.to_string(), value);
+    bevy::log::info!("[SetModelInput] doc={} {}={}", doc.raw(), name, value);
+    Ok(doc)
 }
 
 fn on_get_file(trigger: On<GetFile>) {

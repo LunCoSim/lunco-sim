@@ -646,6 +646,276 @@ fn collect_parameter_bounds_from_classes(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Structural extractors (spec 033 P1 follow-up — describe_model coverage)
+// ---------------------------------------------------------------------------
+//
+// These walk a *specific* class in the AST rather than merging across all
+// classes the way the simulator-tuning extractors do. The agent decides
+// which class via the `class` parameter on `describe_model`; without this
+// per-class scoping a multi-class doc like AnnotatedRocketStage would
+// merge `RocketStage`'s components with `Tank`'s and `Engine`'s into one
+// nonsensical pile.
+
+/// Find a class by short name, walking nested classes too.
+///
+/// Many MSL packages and user-authored multi-class files (e.g.
+/// `AnnotatedRocketStage` which wraps `RocketStage`/`Tank`/`Valve`/…
+/// inside a `package AnnotatedRocketStage`) expose simulatable classes
+/// only inside a wrapper package. A top-level-only lookup misses them
+/// and breaks `describe_model` even when `compile_model` (which uses
+/// `collect_non_package_classes_qualified`) succeeds. Recursing here
+/// keeps the two views consistent.
+///
+/// Returns the first match in iteration order — duplicate short names
+/// across nested levels are resolved by the outer-most occurrence.
+pub fn find_class_by_short_name<'a>(
+    ast: &'a StoredDefinition,
+    short_name: &str,
+) -> Option<&'a ClassDef> {
+    find_in_classes(&ast.classes, short_name)
+}
+
+fn find_in_classes<'a>(
+    classes: &'a indexmap::IndexMap<String, ClassDef>,
+    short_name: &str,
+) -> Option<&'a ClassDef> {
+    if let Some((_, class)) = classes.iter().find(|(name, _)| name.as_str() == short_name) {
+        return Some(class);
+    }
+    for class in classes.values() {
+        if let Some(found) = find_in_classes(&class.classes, short_name) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// Lower-case Modelica class kind keyword: `model`, `block`, `connector`,
+/// `package`, `function`, `record`, `type`, `class`, `operator`. The same
+/// taxonomy the canvas's class-kind badge surfaces, kept consistent so
+/// the agent and the GUI agree.
+pub fn class_kind_label(class: &ClassDef) -> &'static str {
+    match class.class_type {
+        ClassType::Model => "model",
+        ClassType::Block => "block",
+        ClassType::Connector => "connector",
+        ClassType::Package => "package",
+        ClassType::Function => "function",
+        ClassType::Record => "record",
+        ClassType::Type => "type",
+        ClassType::Class => "class",
+        ClassType::Operator => "operator",
+    }
+}
+
+/// `extends` base type names for a class, in declaration order.
+/// Resolved enough for the agent to traverse the inheritance graph by
+/// re-querying `describe_model` on each base — full transitive closure
+/// is the agent's responsibility, not this single call's.
+pub fn extract_extends_for_class(class: &ClassDef) -> Vec<String> {
+    class
+        .extends
+        .iter()
+        .map(|e| e.base_name.to_string())
+        .collect()
+}
+
+/// Sub-component declarations of a class — the diagram boxes.
+/// Returns one entry per `Tank tank;`, `Valve valve;`, etc. found in
+/// the class body. Excludes inherited components (those live behind
+/// `extends`); the agent walks `extends` itself if it wants the full
+/// flattened picture, matching MLS §5.3 semantics.
+///
+/// Each entry carries the component's instance name, declared type,
+/// description string, and the literal modification map (`R=10`,
+/// `unit="kg"`, …) projected to strings.
+#[derive(Debug, Clone)]
+pub struct ComponentInfo {
+    pub name: String,
+    pub type_name: String,
+    pub description: String,
+    pub modifications: HashMap<String, String>,
+}
+
+pub fn extract_components_for_class(class: &ClassDef) -> Vec<ComponentInfo> {
+    class
+        .components
+        .values()
+        .map(|c| ComponentInfo {
+            name: c.name.clone(),
+            type_name: c.type_name.to_string(),
+            description: tokens_to_description(&c.description),
+            modifications: c
+                .modifications
+                .iter()
+                .map(|(k, v)| (k.clone(), expression_to_string(v)))
+                .collect(),
+        })
+        .collect()
+}
+
+/// Connect-equations of a class. Returns `(from, to)` pairs as
+/// dot-paths (e.g. `("tank.outlet", "valve.inlet")`). Non-connect
+/// equations (algebraic, when, if, …) are intentionally not surfaced
+/// here — the agent's structural picture is the wiring, not the
+/// constitutive equations.
+pub fn extract_connections_for_class(
+    class: &ClassDef,
+) -> Vec<(String, String)> {
+    use rumoca_session::parsing::ast::Equation;
+    class
+        .equations
+        .iter()
+        .filter_map(|e| match e {
+            Equation::Connect { lhs, rhs } => {
+                Some((lhs.to_string(), rhs.to_string()))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// Collapse a description token sequence (Modelica string literal) to
+/// a single trimmed string. Strips surrounding quotes — the AST keeps
+/// them in the lexed token but the agent wants the value, not the
+/// quoting.
+fn tokens_to_description(tokens: &[rumoca_session::parsing::Token]) -> String {
+    let raw = tokens
+        .iter()
+        .map(|t| t.text.as_ref())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let trimmed = raw.trim();
+    trimmed
+        .trim_start_matches('"')
+        .trim_end_matches('"')
+        .to_string()
+}
+
+/// Cheap stringification of an Expression for the modifications map.
+/// Numeric and string literals round-trip exactly; complex expressions
+/// fall back to a placeholder so the agent does not see a truncated
+/// half-rendering. `describe_model` is best-effort surface for
+/// authoring intent — for full fidelity the agent reads
+/// `get_document_source`.
+fn expression_to_string(expr: &Expression) -> String {
+    match expr {
+        Expression::Terminal { terminal_type, token } => match terminal_type {
+            TerminalType::String => token.text.trim_matches('"').to_string(),
+            _ => token.text.to_string(),
+        },
+        Expression::ComponentReference(cref) => cref.to_string(),
+        _ => "<expr>".into(),
+    }
+}
+
+/// Pull the `unit="..."` modification for a component, if any. Returns
+/// the inner string with quotes stripped.
+pub fn unit_of_component(comp: &rumoca_session::parsing::ast::Component) -> Option<String> {
+    comp.modifications
+        .get("unit")
+        .and_then(|expr| match expr {
+            Expression::Terminal { terminal_type: TerminalType::String, token } => {
+                Some(token.text.trim_matches('"').to_string())
+            }
+            _ => None,
+        })
+}
+
+/// Extract every input-typed component for a class with rich metadata
+/// (name, type, unit, default if any, description). Companion to the
+/// existing `extract_input_names_from_ast` which only returns names.
+#[derive(Debug, Clone)]
+pub struct TypedComponent {
+    pub name: String,
+    pub type_name: String,
+    pub unit: Option<String>,
+    pub default: Option<f64>,
+    pub description: String,
+    pub min: Option<f64>,
+    pub max: Option<f64>,
+}
+
+pub fn extract_typed_inputs_for_class(class: &ClassDef) -> Vec<TypedComponent> {
+    typed_components_filtered(class, |c| {
+        matches!(c.causality, Causality::Input(_))
+            || is_input_connector_type(&c.type_name.to_string())
+    })
+}
+
+pub fn extract_typed_parameters_for_class(class: &ClassDef) -> Vec<TypedComponent> {
+    typed_components_filtered(class, |c| {
+        matches!(c.variability, Variability::Parameter(_))
+    })
+}
+
+pub fn extract_typed_outputs_for_class(class: &ClassDef) -> Vec<TypedComponent> {
+    typed_components_filtered(class, |c| {
+        matches!(c.causality, Causality::Output(_))
+            || is_output_connector_type(&c.type_name.to_string())
+    })
+}
+
+/// Whether `type_name` looks like an MSL "RealInput / IntegerInput /
+/// BooleanInput / StringInput" connector class (cf. MLS Annex E.3 +
+/// `Modelica.Blocks.Interfaces`). Components declared with these
+/// types behave as **inputs** at the API surface even though the
+/// `input` keyword lives inside the connector definition rather than
+/// on the component itself, so the bare causality check misses them.
+///
+/// Matches by short-name suffix (`*RealInput`, `*RealInput[N]` for
+/// arrays). Returns `true` for the four primitive variants and for
+/// any user type that happens to end in `Input` — false-positives
+/// here are preferable to the false-negatives (silently missing
+/// `valve` on AnnotatedRocketStage etc.).
+fn is_input_connector_type(type_name: &str) -> bool {
+    // Strip array brackets if any, then split on `.` and inspect the
+    // tail. `Modelica.Blocks.Interfaces.RealInput` and bare
+    // `RealInput` both resolve to the short name `RealInput`.
+    let bare = type_name.split('[').next().unwrap_or(type_name);
+    let short = bare.rsplit('.').next().unwrap_or(bare);
+    matches!(
+        short,
+        "RealInput" | "IntegerInput" | "BooleanInput" | "StringInput"
+    ) || short.ends_with("Input")
+}
+
+/// Symmetric counterpart of [`is_input_connector_type`] for output
+/// connectors — see that doc for the rationale.
+fn is_output_connector_type(type_name: &str) -> bool {
+    let bare = type_name.split('[').next().unwrap_or(type_name);
+    let short = bare.rsplit('.').next().unwrap_or(bare);
+    matches!(
+        short,
+        "RealOutput" | "IntegerOutput" | "BooleanOutput" | "StringOutput"
+    ) || short.ends_with("Output")
+}
+
+fn typed_components_filtered<F>(class: &ClassDef, want: F) -> Vec<TypedComponent>
+where
+    F: Fn(&rumoca_session::parsing::ast::Component) -> bool,
+{
+    class
+        .components
+        .values()
+        .filter(|c| want(c))
+        .map(|c| TypedComponent {
+            name: c.name.clone(),
+            type_name: c.type_name.to_string(),
+            unit: unit_of_component(c),
+            default: c
+                .binding
+                .as_ref()
+                .and_then(numeric_of)
+                .or_else(|| numeric_of(&c.start)),
+            description: tokens_to_description(&c.description),
+            min: c.modifications.get("min").and_then(numeric_of),
+            max: c.modifications.get("max").and_then(numeric_of),
+        })
+        .collect()
+}
+
 /// Compute a simple hash of the source content for change detection.
 pub fn hash_content(source: &str) -> u64 {
     use std::collections::hash_map::DefaultHasher;

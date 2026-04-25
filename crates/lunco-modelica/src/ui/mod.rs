@@ -279,12 +279,15 @@ impl Perspective for AnalyzePerspective {
         // to it — users can close it.
         layout.set_center(vec![PanelId("modelica_welcome")]);
         layout.set_active_center_tab(0);
-        // Right dock gets two tabs: Inspector (params/variables) and
-        // the Component Palette (MSL instantiation). Figma / Unreal
-        // pattern — asset browser on the right, always visible while
-        // the user is working in the center canvas.
+        // Right dock — Telemetry (parameters, inputs, variable
+        // toggles), Inspector (selected node's modifications), and
+        // Component Palette (MSL instantiation). The Telemetry panel
+        // is registered under the historical id `modelica_inspector`
+        // for layout-stability reasons; the new selection-driven
+        // Inspector uses `modelica_diagram_inspector`.
         layout.set_right_inspector_tabs(vec![
             PanelId("modelica_inspector"),
+            PanelId("modelica_diagram_inspector"),
             PanelId("modelica_component_palette"),
         ]);
         // Bottom dock: Graphs first so it's the default active tab —
@@ -337,17 +340,29 @@ impl Plugin for ModelicaUiPlugin {
         // fires — drives the progress dots on the learning paths.
         app.add_plugins(welcome_progress::WelcomeProgressPlugin);
 
+        // Reflect-registered query providers exposed over the
+        // ApiQueryRegistry (cf. spec 032). Feature-gated because the
+        // registry only exists when `lunco-api` is enabled.
+        #[cfg(feature = "lunco-api")]
+        app.add_plugins(crate::api_queries::ModelicaApiQueriesPlugin);
+
+        // Edit events — always registered so the GUI and tests can
+        // dispatch them. External API exposure is gated separately
+        // inside the plugin via `ApiVisibility` (off by default; pass
+        // `--api-expose-edits` to expose). See
+        // `crates/lunco-modelica/src/api_edits.rs` for the rationale.
+        #[cfg(feature = "lunco-api")]
+        app.add_plugins(crate::api_edits::ModelicaApiEditPlugin);
+
         app.init_resource::<WorkbenchState>()
             .init_resource::<ModelicaDocumentRegistry>()
             .init_resource::<CompileStates>()
             .init_resource::<panels::model_view::ModelTabs>()
-            .init_resource::<panels::diagram::DiagramState>()
-            .init_resource::<panels::diagram::DiagramTheme>()
             .init_resource::<panels::code_editor::EditorBufferState>()
-            .init_resource::<panels::palette::PaletteState>()
-            .init_resource::<panels::diagram::ModelSignatureCache>()
             .init_resource::<panels::console::ConsoleLog>()
             .init_resource::<panels::diagnostics::DiagnosticsLog>()
+            .init_resource::<panels::canvas_projection::DiagramAutoLayoutSettings>()
+            .init_resource::<panels::palette::PaletteState>()
             .insert_resource(panels::package_browser::PackageTreeCache::new())
             .init_resource::<browser_dispatch::PendingDrillIns>()
             .add_systems(Update, browser_dispatch::drain_browser_actions)
@@ -389,7 +404,6 @@ impl Plugin for ModelicaUiPlugin {
             .register_panel(panels::graphs::GraphsPanel)
             .register_panel(panels::console::ConsolePanel)
             .register_panel(panels::diagnostics::DiagnosticsPanel)
-            .register_panel(panels::inspector::InspectorPanel)
             .register_panel(panels::canvas_diagram::CanvasDiagramPanel)
             .init_resource::<panels::canvas_diagram::CanvasDiagramState>()
             .init_resource::<panels::canvas_diagram::PaletteSettings>()
@@ -401,6 +415,7 @@ impl Plugin for ModelicaUiPlugin {
             .add_systems(Update, panels::canvas_diagram::drive_drill_in_loads)
             .add_systems(Update, panels::canvas_diagram::drive_duplicate_loads)
             .add_systems(bevy_egui::EguiPrimaryContextPass, alpha_banner)
+            .register_panel(panels::inspector::InspectorPanel)
             .register_panel(panels::palette::ComponentPalettePanel)
             // Multi-instance: one tab per open document. Instances are
             // opened at runtime by the Package Browser.

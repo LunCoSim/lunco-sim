@@ -2,11 +2,18 @@
 
 use bevy::prelude::*;
 use bevy::reflect::{TypeInfo, TypeRegistry};
+use crate::queries::ApiVisibility;
 use crate::schema::{ApiSchema, CommandSchema, FieldSchema};
 
 /// Discover LunCo commands from the type registry.
 /// Filters to only types from `lunco_*` crates that have `ReflectEvent`.
-pub(crate) fn discover_commands(type_registry: &TypeRegistry) -> Vec<CommandSchema> {
+/// Hidden commands (per [`ApiVisibility`]) are filtered out — they remain
+/// reflectable and dispatchable inside the app, but external API
+/// consumers see them as if they did not exist.
+pub(crate) fn discover_commands(
+    type_registry: &TypeRegistry,
+    visibility: Option<&ApiVisibility>,
+) -> Vec<CommandSchema> {
     type_registry.iter()
         .filter_map(|reg| {
             let info = reg.type_info();
@@ -17,6 +24,11 @@ pub(crate) fn discover_commands(type_registry: &TypeRegistry) -> Vec<CommandSche
             if short_name.starts_with("Api") || short_name.starts_with("Telemetry") { return None; }
             let full_path = info.type_path_table().path();
             if !full_path.contains("lunco_") { return None; }
+            // Visibility filter — last gate before the command becomes
+            // part of the externally-advertised schema.
+            if visibility.is_some_and(|v| v.is_hidden(&short_name)) {
+                return None;
+            }
             let fields: Vec<FieldSchema> = struct_info.iter().map(|f: &bevy::reflect::NamedField| FieldSchema {
                 name: f.name().to_string(),
                 type_name: f.type_path().to_string(),
@@ -30,7 +42,8 @@ pub(crate) fn discover_commands(type_registry: &TypeRegistry) -> Vec<CommandSche
 pub fn discover_schema(world: &World) -> ApiSchema {
     let type_registry = world.resource::<AppTypeRegistry>();
     let registry_read = type_registry.read();
-    let commands = discover_commands(&registry_read);
+    let visibility = world.get_resource::<ApiVisibility>();
+    let commands = discover_commands(&registry_read, visibility);
     ApiSchema { commands }
 }
 

@@ -736,7 +736,6 @@ impl Panel for PackageBrowserPanel {
         if let Some(action) = to_open {
             match action {
                 PackageAction::Open(id, name, lib) => open_model(world, id, name, lib),
-                PackageAction::Instantiate(id) => instantiate_model(world, id),
             }
         }
 
@@ -754,7 +753,6 @@ impl Panel for PackageBrowserPanel {
 
 enum PackageAction {
     Open(String, String, ModelLibrary),
-    Instantiate(String),
 }
 
 // ---------------------------------------------------------------------------
@@ -861,19 +859,13 @@ fn render_node(
                 ui.painter().rect_filled(resp.rect, 2.0, bg);
             }
 
-            let mut instantiate_requested = false;
-            if library == &ModelLibrary::MSL {
-                resp.context_menu(|ui| {
-                    if ui.button("➕ Instantiate in Diagram").clicked() {
-                        instantiate_requested = true;
-                        ui.close();
-                    }
-                });
-            }
-
-            if instantiate_requested {
-                result = Some(PackageAction::Instantiate(id.clone()));
-            } else if resp.clicked() {
+            // Right-click "Instantiate in Diagram" was a snarl-only
+            // affordance that pushed into the global single-doc
+            // `DiagramState`. The canvas viewer has its own
+            // drag-from-palette flow per open doc; the package browser
+            // now falls back to plain "click → open as read-only tab"
+            // for MSL classes.
+            if resp.clicked() {
                 result = Some(PackageAction::Open(id.clone(), name.clone(), library.clone()));
             }
 
@@ -1324,26 +1316,6 @@ pub(crate) fn open_model(world: &mut World, id: String, name: String, library: M
     }
 }
 
-fn instantiate_model(world: &mut World, id: String) {
-    let msl_path = if let Some(stripped) = id.strip_prefix("msl_path:") {
-        format!("Modelica.{}", stripped)
-    } else {
-        id.clone()
-    };
-
-    if let Some(def) = crate::visual_diagram::msl_component_by_path(&msl_path) {
-        if let Some(mut state) = world.get_resource_mut::<crate::ui::panels::diagram::DiagramState>() {
-            state.placement_counter += 1;
-            let x = 100.0 + (state.placement_counter % 3) as f32 * 200.0;
-            let y = 80.0 + (state.placement_counter / 3) as f32 * 160.0;
-            state.add_component(def, egui::Pos2::new(x, y));
-            // Ensure diagram switches to the active tab if necessary
-            world.resource_mut::<WorkbenchState>().diagram_dirty = true;
-        }
-    } else {
-        log::warn!("Component definition not found for MSL path: {}", msl_path);
-    }
-}
 
 // The legacy "New Model" modal (name-prompt dialog) used to live here.
 // VS Code's one-click "New Untitled" flow replaces it — the ➕

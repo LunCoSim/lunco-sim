@@ -39,7 +39,6 @@ lunco-twin = { path = "../lunco-twin" }
 lunco-workspace = { path = "../lunco-workspace" }
 lunco-storage = { path = "../lunco-storage" }
 lunco-cache = { path = "../lunco-cache" }
-egui-snarl = "0.9"
 egui_plot = "0.34.1"
 # Docs view (ModelViewMode::Docs): HTML → Markdown → egui render.
 # `egui_commonmark` pulls the right `egui` version transitively to

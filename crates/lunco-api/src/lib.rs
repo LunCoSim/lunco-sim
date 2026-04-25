@@ -47,6 +47,7 @@ use bevy::prelude::*;
 
 pub mod discovery;
 pub mod executor;
+pub mod queries;
 pub mod registry;
 pub mod schema;
 pub mod subscription;
@@ -55,6 +56,7 @@ pub mod transports;
 // Re-export public types for convenience
 pub use discovery::*;
 pub use executor::*;
+pub use queries::*;
 pub use registry::*;
 pub use schema::*;
 pub use subscription::*;
@@ -131,6 +133,8 @@ impl Plugin for LunCoApiPlugin {
         // Core systems (always enabled)
         app.add_plugins((
             ApiEntityRegistryPlugin,
+            ApiQueryRegistryPlugin,
+            ApiVisibilityPlugin,
             ApiExecutorPlugin,
             ApiDiscoveryPlugin,
             ApiTelemetryPlugin,

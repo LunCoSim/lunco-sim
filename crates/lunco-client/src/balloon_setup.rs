@@ -6,22 +6,39 @@
 
 use bevy::prelude::*;
 use lunco_assets::assets_dir;
-use lunco_cosim::{SimComponent, SimStatus, SimConnection};
+use lunco_cosim::{SimComponent, SimConnection, SimStatus};
 use lunco_doc::DocumentOrigin;
 use lunco_modelica::{
-    ModelicaChannels, ModelicaCommand, ModelicaModel,
-    extract_model_name, extract_parameters, extract_inputs_with_defaults,
-    ui::{CompileState, CompileStates, ModelicaDocumentRegistry},
+    ModelicaModel,
+    ui::{CompileModel, ModelicaDocumentRegistry},
 };
 use lunco_sandbox_edit::catalog::BalloonModelMarker;
 
 /// System that triggers Modelica compilation for new balloons.
+///
+/// Routes through the canonical compile pipeline (`CompileModel`
+/// Reflect event → `on_compile_model` observer) rather than driving
+/// the worker channel directly. The observer:
+///
+/// - Refreshes the document AST and runs the AST-based extractors
+///   (params **with min/max bounds**, inputs with defaults + runtime
+///   input names, descriptions). The previous regex-based extractors
+///   (`extract_parameters`, `extract_inputs_with_defaults`) silently
+///   dropped `parameter Real x(min=…, max=…)` bounds and connector-
+///   typed inputs — both are visible now.
+/// - Updates the existing `ModelicaModel` in place (we pre-link the
+///   entity below so it hits the update-in-place branch, not the
+///   spawn-new-entity branch).
+/// - Manages `CompileStates` and `SimStreamRegistry` itself (Phase A
+///   lock-free streaming — the balloon now publishes through the same
+///   `SimStream` mechanism the workbench panels use).
+/// - Writes the source to `modelica_dir()/<entity>_<gen>/model.mo`
+///   inside the worker thread (the manual `fs::write` shim that used
+///   to sit here was redundant).
 pub fn compile_balloon_model(
     mut commands: Commands,
     q_new: Query<(Entity, &Name), Added<BalloonModelMarker>>,
-    channels: Res<ModelicaChannels>,
     mut doc_registry: ResMut<ModelicaDocumentRegistry>,
-    mut compile_states: ResMut<CompileStates>,
 ) {
     for (entity, name) in &q_new {
         let model_path = assets_dir().join("models/balloon.mo");
@@ -33,50 +50,32 @@ pub fn compile_balloon_model(
             }
         };
 
-        let model_name = extract_model_name(&source).unwrap_or_else(|| "Balloon".into());
-        let params = extract_parameters(&source);
-        let inputs = extract_inputs_with_defaults(&source);
-
-        // Allocate the Document first — it's the single source of truth
-        // for this model's text, and the entity should carry a valid id
-        // from the moment it gets `ModelicaModel`.
+        // Allocate doc + link entity in one shot. `readonly_file`
+        // origin matches the bundled-asset semantics (edits land
+        // in-memory only; Save-As to commit).
         let doc_id = doc_registry.open_for_with_origin(
             entity,
-            source.clone(),
+            source,
             DocumentOrigin::readonly_file(model_path.clone()),
         );
 
-        // Create ModelicaModel BEFORE compiling — handle_modelica_responses
-        // only processes results for entities that already have one.
+        // Stub `ModelicaModel` so the canonical compile observer's
+        // update-in-place branch finds it. Every meaningful field is
+        // overwritten by `on_compile_model` from AST-extracted data;
+        // we only seed the path + doc id since those don't come from
+        // the AST.
         commands.entity(entity).insert(ModelicaModel {
             model_path: model_path.clone(),
-            model_name: model_name.clone(),
-            parameters: params,
-            inputs: inputs.into_iter().collect(),
-            variables: Default::default(),
-            descriptions: Default::default(),
-            current_time: 0.0,
-            last_step_time: 0.0,
-            session_id: 0,
-            paused: false,
             document: doc_id,
-            is_stepping: false,
-        });
-        compile_states.set(doc_id, CompileState::Compiling);
-
-        let _ = channels.tx.send(ModelicaCommand::Compile {
-            entity,
-            session_id: 0,
-            model_name: model_name.clone(),
-            source: source.clone(),
+            ..Default::default()
         });
 
-        info!("Balloon '{name}' — compiling Modelica model '{model_name}'");
+        // Fire the canonical compile. `class: None` means "use the
+        // detected name" — balloon.mo defines a single class so the
+        // picker logic stays out of the way.
+        commands.trigger(CompileModel { doc: doc_id, class: None });
 
-        let temp_dir = lunco_assets::modelica_dir()
-            .join(format!("{}_{}", entity.index(), entity.generation()));
-        let _ = std::fs::create_dir_all(&temp_dir);
-        let _ = std::fs::write(temp_dir.join("model.mo"), &source);
+        info!("Balloon '{name}' — compile dispatched (doc {})", doc_id.raw());
     }
 }
 
