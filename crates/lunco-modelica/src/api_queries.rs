@@ -20,9 +20,9 @@
 //! optional `lunco-api` feature) without changing its behaviour.
 
 use bevy::prelude::*;
-use lunco_api::{ApiQueryProvider, ApiQueryRegistry, ApiResponse};
+use lunco_api::{ApiErrorCode, ApiQueryProvider, ApiQueryRegistry, ApiResponse};
 use lunco_doc::DocumentOrigin;
-use lunco_twin::DocumentKind;
+use lunco_twin::{DocumentKind, FileEntry, FileKind};
 use lunco_workbench::WorkspaceResource;
 
 use crate::models::bundled_models;
@@ -39,6 +39,7 @@ impl Plugin for ModelicaApiQueriesPlugin {
         let mut registry = app.world_mut().resource_mut::<ApiQueryRegistry>();
         registry.register(ListBundledProvider);
         registry.register(ListOpenDocumentsProvider);
+        registry.register(ListTwinProvider);
     }
 }
 
@@ -115,6 +116,108 @@ impl ApiQueryProvider for ListOpenDocumentsProvider {
             "active_doc_id": active.map(|d| d.raw()),
         }))
     }
+}
+
+// ─── ListTwin ──────────────────────────────────────────────────────────
+
+struct ListTwinProvider;
+
+impl ApiQueryProvider for ListTwinProvider {
+    fn name(&self) -> &'static str {
+        "ListTwin"
+    }
+
+    fn execute(
+        &self,
+        world: &mut World,
+        params: &serde_json::Value,
+    ) -> ApiResponse {
+        // Pagination params: both optional. `offset` defaults to 0,
+        // `limit` defaults to "all" (no slicing). Caller supplies them
+        // when a Twin folder is large enough to warrant paging; the
+        // common case (<100 files) returns the whole list.
+        let offset = params
+            .get("offset")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as usize;
+        let limit = params
+            .get("limit")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as usize);
+
+        let ws = world.resource::<WorkspaceResource>();
+
+        // No Twin open → explicit `{open: false}`. Distinguish from
+        // "Twin open but empty" (`{open: true, files: [], total: 0}`)
+        // so the agent does not retry pointlessly.
+        let Some(twin_id) = ws.active_twin else {
+            return ApiResponse::ok(serde_json::json!({ "open": false }));
+        };
+        let Some(twin) = ws.twin(twin_id) else {
+            // Active id points at a Twin that's no longer registered
+            // — possible if the Twin was closed but `active_twin`
+            // wasn't cleared. Treat as no Twin open.
+            return ApiResponse::ok(serde_json::json!({ "open": false }));
+        };
+
+        let all = twin.files();
+        let total = all.len();
+        let end = match limit {
+            Some(n) => (offset + n).min(total),
+            None => total,
+        };
+        let slice = if offset >= total {
+            &[][..]
+        } else {
+            &all[offset..end]
+        };
+
+        let root = twin
+            .root_handle()
+            .as_file_path()
+            .map(|p| p.to_path_buf());
+        let items: Vec<serde_json::Value> = slice
+            .iter()
+            .map(|f| file_entry_to_json(f, root.as_deref()))
+            .collect();
+
+        ApiResponse::ok(serde_json::json!({
+            "open": true,
+            "root": root.as_ref().map(|p| p.to_string_lossy().into_owned()),
+            "files": items,
+            "total": total,
+            "offset": offset,
+            "limit": limit,
+        }))
+    }
+}
+
+fn file_entry_to_json(
+    f: &FileEntry,
+    root: Option<&std::path::Path>,
+) -> serde_json::Value {
+    let abs = root.map(|r| r.join(&f.relative_path));
+    serde_json::json!({
+        "relative_path": f.relative_path.to_string_lossy(),
+        "absolute_path": abs.as_ref().map(|p| p.to_string_lossy().into_owned()),
+        "kind": file_kind_label(&f.kind),
+    })
+}
+
+/// Compact string form of a [`FileKind`]. Documents become
+/// `"document/<subkind>"` so the agent can filter by the broad category
+/// or the specific domain. File references and unknowns are flat.
+fn file_kind_label(k: &FileKind) -> String {
+    match k {
+        FileKind::Document(d) => format!("document/{}", document_kind_label(d)),
+        FileKind::FileReference => "file_reference".into(),
+        FileKind::Unknown => "unknown".into(),
+    }
+}
+
+#[allow(dead_code)] // used by ListTwin error responses once we wire bound checks
+fn err_invalid_params(msg: impl Into<String>) -> ApiResponse {
+    ApiResponse::error(ApiErrorCode::DeserializationError, msg)
 }
 
 /// Stable string label for a [`DocumentKind`]. Matches the file-extension
