@@ -51,6 +51,45 @@ So that I can resolve "Annotated Rocket Engine" to `bundled://AnnotatedRocketSta
 
 ---
 
+### User Story 1.5 - Compile a Specific Class From a Multi-Class Document (Priority: P1)
+
+As an AI agent
+I want to fire one call that compiles a chosen class from a document with several non-package classes
+So that `AnnotatedRocketStage.mo`'s `RocketStage` (or `Engine`, `Tank`, etc.) compiles without ever needing the GUI's class-picker modal.
+
+**Why this priority**: Without this primitive, every multi-class document is a hard wall for the agent. `CompileActiveModel` silently aborts and waits for a modal click that an API caller cannot produce. Discovered while validating the spec 032 workflow against AnnotatedRocketStage.
+
+**Independent Test**: Open a multi-class doc via `open_uri`, call `list_compile_candidates(doc_id)` to enumerate the choices, then `compile_model(doc_id, class="RocketStage")`. Verify `compile_status(doc_id)` reaches `state: "ok"` without any UI interaction.
+
+**Acceptance Scenarios**:
+
+1. **Given** AnnotatedRocketStage is open, **When** I call `list_compile_candidates(doc_id)`, **Then** I receive `[{qualified: "RocketStage", kind: "model"}, {qualified: "Tank", kind: "model"}, ...]` — every non-package class the document defines.
+2. **Given** the document has 6 non-package classes, **When** I call `compile_model(doc_id, class: "RocketStage")`, **Then** the compile proceeds with `RocketStage` as the target — the GUI picker modal does NOT open and `compile_status` transitions to `"compiling"` then `"ok"`.
+3. **Given** I call `compile_model(doc_id)` with no `class` field on a multi-class doc, **When** the existing `drilled_in_class` is `None`, **Then** `compile_status` reports `state: "needs_class_choice"` with the candidate list — the API caller can recover without a modal.
+4. **Given** I pass a `class` name that is not a non-package class in the document, **When** I call `compile_model`, **Then** `compile_status` transitions to `"error"` with a clear message naming the bad class and listing the valid choices.
+5. **Given** I have already called `set_active_class(doc_id, "Engine")`, **When** I subsequently call `compile_model(doc_id)` with no `class`, **Then** the previously-set class is used — sticky across calls within the session.
+
+---
+
+### User Story 1.6 - Read the Current Source of an Open Document (Priority: P1)
+
+As an AI agent
+I want to fetch the in-memory source text of any open document — including Untitled docs that have no filesystem path
+So that I can reason about what was loaded, see uncommitted edits, or feed the source into a downstream tool (lint, format, diff, search) without re-reading the file from disk.
+
+**Why this priority**: The agent's mental model of the workspace is incomplete without source visibility. The existing `GetFile(path)` command requires a filesystem path (Untitled docs have none) and logs to the console (the agent never receives the bytes back). Both gaps land on the same fix: a query provider that returns the live source.
+
+**Independent Test**: Open `bundled://AnnotatedRocketStage.mo` (which lands as Untitled — no fs path), call `get_document_source(doc_id)`, receive the complete `.mo` source as a string in the response payload.
+
+**Acceptance Scenarios**:
+
+1. **Given** I have opened a bundled example as Untitled, **When** I call `get_document_source(doc_id)`, **Then** I receive `{source: "...", kind: "modelica", generation: N, dirty: true, origin: {kind: "untitled", name: "..."}}` with the full embedded source.
+2. **Given** I have opened a file from disk and edited it without saving, **When** I call `get_document_source`, **Then** I receive the in-memory edited source — not the on-disk version — and `dirty: true`.
+3. **Given** an unknown `doc_id`, **When** I call `get_document_source`, **Then** I receive `EntityNotFound`.
+4. **Given** a document of a non-Modelica kind (USD, SysML, future Markdown), **When** I call `get_document_source`, **Then** I still receive the source text and the correct `kind` label — the provider is type-agnostic at the cross-domain level.
+
+---
+
 ### User Story 2 - Describe a Model's Inputs and Parameters (Priority: P1)
 
 As an AI agent
@@ -188,6 +227,10 @@ So that I can write the workflow as a script and run it under CI without the UI 
 
 This spec depends on spec 032's `ApiQueryProvider` infrastructure (P1 of 032). Once 032 is fully landed:
 
+- **P0** — Multi-class compile + source visibility (User Stories 1.5, 1.6). Unblocks the immediate AnnotatedRocketStage workflow without touching the worker's input channel.
+  - `ListCompileCandidatesProvider` + `CompileStatusProvider` + `GetDocumentSourceProvider`
+  - Extend `CompileActiveModel` with optional `class: String` (empty = inherit picker behaviour)
+  - Optional `SetActiveClass` Reflect event (writes `DrilledInClassNames`).
 - **P1** — `DescribeModelProvider` + `SnapshotVariablesProvider` (read-only, no worker plumbing changes).
 - **P2** — `SetInputCommand` (extend the existing worker input channel; reuse squashing).
 - **P3** — `FindModelProvider` (fuzzy match across the listing endpoints from spec 032).

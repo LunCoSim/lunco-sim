@@ -21,12 +21,16 @@
 
 use bevy::prelude::*;
 use lunco_api::{ApiErrorCode, ApiQueryProvider, ApiQueryRegistry, ApiResponse};
-use lunco_doc::DocumentOrigin;
+use lunco_doc::{Document, DocumentOrigin};
 use lunco_twin::{DocumentKind, FileEntry, FileKind};
 use lunco_workbench::WorkspaceResource;
 
+use crate::ast_extract;
 use crate::models::bundled_models;
-use crate::visual_diagram::{msl_component_library, msl_loaded, MSLComponentDef};
+use crate::ui::panels::canvas_diagram::DrilledInClassNames;
+use crate::ui::state::{CompileState, CompileStates, ModelicaDocumentRegistry};
+use crate::visual_diagram::{msl_component_library, MSLComponentDef};
+use lunco_doc::DocumentId;
 
 /// Plugin that registers the [`ApiQueryProvider`]s exposed by
 /// `lunco-modelica`. Wired into [`crate::ui::ModelicaUiPlugin`] when
@@ -35,14 +39,21 @@ pub struct ModelicaApiQueriesPlugin;
 
 impl Plugin for ModelicaApiQueriesPlugin {
     fn build(&self, app: &mut App) {
-        // The registry resource is initialized by `ApiQueryRegistryPlugin`
-        // (added by `LunCoApiPlugin`); we just push our providers in.
+        // Idempotent init: `LunCoApiPlugin::ApiQueryRegistryPlugin`
+        // installs this resource too, but plugin ordering is not
+        // guaranteed — if the modelica plugin builds before lunco-api,
+        // mutating the registry would panic. `init_resource` is a
+        // no-op when the resource already exists, so calling it here
+        // makes our plugin order-independent.
+        app.init_resource::<ApiQueryRegistry>();
         let mut registry = app.world_mut().resource_mut::<ApiQueryRegistry>();
         registry.register(ListBundledProvider);
         registry.register(ListOpenDocumentsProvider);
         registry.register(ListTwinProvider);
-        registry.register(MslStatusProvider);
         registry.register(ListMslProvider);
+        registry.register(ListCompileCandidatesProvider);
+        registry.register(CompileStatusProvider);
+        registry.register(GetDocumentSourceProvider);
     }
 }
 
@@ -218,45 +229,6 @@ fn file_kind_label(k: &FileKind) -> String {
     }
 }
 
-// ─── MslStatus ─────────────────────────────────────────────────────────
-
-struct MslStatusProvider;
-
-impl ApiQueryProvider for MslStatusProvider {
-    fn name(&self) -> &'static str {
-        "MslStatus"
-    }
-
-    fn execute(
-        &self,
-        _world: &mut World,
-        _params: &serde_json::Value,
-    ) -> ApiResponse {
-        // Cheap path: do not force `msl_component_library()` — we only
-        // want to report whether someone *else* (the prewarm thread or
-        // an earlier UI call) has already done so. If it has, also
-        // surface the counts; if not, leave them at zero.
-        if msl_loaded() {
-            let lib = msl_component_library();
-            let examples = lib
-                .iter()
-                .filter(|c| c.msl_path.contains(".Examples."))
-                .count();
-            ApiResponse::ok(serde_json::json!({
-                "loaded": true,
-                "class_count": lib.len(),
-                "examples_count": examples,
-            }))
-        } else {
-            ApiResponse::ok(serde_json::json!({
-                "loaded": false,
-                "class_count": 0,
-                "examples_count": 0,
-            }))
-        }
-    }
-}
-
 // ─── ListMsl ───────────────────────────────────────────────────────────
 
 /// Default MSL page size if `limit` is not supplied. Picked so a single
@@ -378,6 +350,218 @@ impl ApiQueryProvider for ListMslProvider {
             "loaded": true,
         }))
     }
+}
+
+// ─── ListCompileCandidates (spec 033 P0) ───────────────────────────────
+
+struct ListCompileCandidatesProvider;
+
+impl ApiQueryProvider for ListCompileCandidatesProvider {
+    fn name(&self) -> &'static str {
+        "ListCompileCandidates"
+    }
+
+    fn execute(
+        &self,
+        world: &mut World,
+        params: &serde_json::Value,
+    ) -> ApiResponse {
+        let Some(doc_id) = parse_doc_id(params, "doc") else {
+            return err_missing_field("doc");
+        };
+        let registry = world.resource::<ModelicaDocumentRegistry>();
+        let Some(host) = registry.host(doc_id) else {
+            return err_doc_not_found(doc_id);
+        };
+        let document = host.document();
+        let Some(ast) = document.ast().result.as_ref().ok().cloned() else {
+            return ApiResponse::ok(serde_json::json!({
+                "doc_id": doc_id.raw(),
+                "candidates": [],
+                "ast_parsed": false,
+            }));
+        };
+        let candidates: Vec<serde_json::Value> =
+            ast_extract::collect_non_package_classes_qualified(&ast)
+                .into_iter()
+                .map(|qualified| {
+                    let short = qualified
+                        .rsplit('.')
+                        .next()
+                        .unwrap_or(&qualified)
+                        .to_string();
+                    serde_json::json!({
+                        "qualified": qualified,
+                        "short": short,
+                    })
+                })
+                .collect();
+        ApiResponse::ok(serde_json::json!({
+            "doc_id": doc_id.raw(),
+            "candidates": candidates,
+            "count": candidates.len(),
+            "ast_parsed": true,
+        }))
+    }
+}
+
+// ─── CompileStatus (spec 033 P0) ───────────────────────────────────────
+
+struct CompileStatusProvider;
+
+impl ApiQueryProvider for CompileStatusProvider {
+    fn name(&self) -> &'static str {
+        "CompileStatus"
+    }
+
+    fn execute(
+        &self,
+        world: &mut World,
+        params: &serde_json::Value,
+    ) -> ApiResponse {
+        let Some(doc_id) = parse_doc_id(params, "doc") else {
+            return err_missing_field("doc");
+        };
+        // Pull each piece of state in turn — `world.resource::<...>` borrows
+        // are scoped to the line, so successive `let`s are fine even though
+        // we touch four different resources.
+        let state = world
+            .get_resource::<CompileStates>()
+            .map(|cs| cs.state_of(doc_id))
+            .unwrap_or(CompileState::Idle);
+        let drilled_in = world
+            .get_resource::<DrilledInClassNames>()
+            .and_then(|m| m.get(doc_id).map(str::to_string));
+        // `picker_pending` mirrors the gate in `on_compile_model`: we
+        // would be in the picker branch if no class is pinned and the
+        // doc has 2+ non-package classes. Easier to recompute than to
+        // expose CompileClassPickerState which is a UI concern.
+        let registry = world.resource::<ModelicaDocumentRegistry>();
+        let (candidates, has_ast) = match registry.host(doc_id) {
+            Some(host) => {
+                let ast = host.document().ast().result.as_ref().cloned().ok();
+                let cands = ast
+                    .as_ref()
+                    .map(|a| ast_extract::collect_non_package_classes_qualified(a))
+                    .unwrap_or_default();
+                (cands, ast.is_some())
+            }
+            None => return err_doc_not_found(doc_id),
+        };
+        drop(registry);
+        let picker_pending = drilled_in.is_none() && candidates.len() >= 2;
+
+        // Error message lives on `WorkbenchState.compilation_error`. It
+        // is doc-global today (one slot, last writer wins) — fine for
+        // single-doc workflows; revisit if multi-doc compile lands.
+        let error_message = world
+            .get_resource::<crate::ui::state::WorkbenchState>()
+            .and_then(|ws| ws.compilation_error.clone());
+
+        let state_label = match state {
+            CompileState::Idle => "idle",
+            CompileState::Compiling => "compiling",
+            CompileState::Ready => "ok",
+            CompileState::Error => "error",
+        };
+        ApiResponse::ok(serde_json::json!({
+            "doc_id": doc_id.raw(),
+            "state": state_label,
+            "drilled_in_class": drilled_in,
+            "picker_pending": picker_pending,
+            "candidates": candidates,
+            "ast_parsed": has_ast,
+            "error_message": error_message,
+        }))
+    }
+}
+
+// ─── GetDocumentSource (spec 033 P0, US 1.6) ───────────────────────────
+
+struct GetDocumentSourceProvider;
+
+impl ApiQueryProvider for GetDocumentSourceProvider {
+    fn name(&self) -> &'static str {
+        "GetDocumentSource"
+    }
+
+    fn execute(
+        &self,
+        world: &mut World,
+        params: &serde_json::Value,
+    ) -> ApiResponse {
+        let Some(doc_id) = parse_doc_id(params, "doc") else {
+            return err_missing_field("doc");
+        };
+
+        // Modelica docs are the only kind in the `ModelicaDocumentRegistry`
+        // today; future kinds (USD, SysML) will need their own registries
+        // and a fan-out by `DocumentKind` here. The cross-domain
+        // workspace entry tells us which registry to query, so this
+        // dispatch is centralised.
+        let ws = world.resource::<WorkspaceResource>();
+        let entry = ws.document(doc_id).cloned();
+        drop(ws);
+        let Some(entry) = entry else {
+            return err_doc_not_found(doc_id);
+        };
+
+        match entry.kind {
+            DocumentKind::Modelica => {
+                let registry = world.resource::<ModelicaDocumentRegistry>();
+                let Some(host) = registry.host(doc_id) else {
+                    return err_doc_not_found(doc_id);
+                };
+                let document = host.document();
+                ApiResponse::ok(serde_json::json!({
+                    "doc_id": doc_id.raw(),
+                    "kind": "modelica",
+                    "source": document.source(),
+                    "generation": document.generation(),
+                    "dirty": document.is_dirty(),
+                    "origin": origin_to_json(document.origin()),
+                    "title": entry.title,
+                }))
+            }
+            other => {
+                // Other kinds don't have a content registry hooked up
+                // yet — return metadata + a stub so callers can detect
+                // the gap programmatically rather than guess.
+                ApiResponse::error(
+                    ApiErrorCode::InternalError,
+                    format!(
+                        "GetDocumentSource not yet implemented for kind `{}` — \
+                         only Modelica docs expose source today.",
+                        document_kind_label(&other),
+                    ),
+                )
+            }
+        }
+    }
+}
+
+// ─── Provider helpers ──────────────────────────────────────────────────
+
+fn parse_doc_id(params: &serde_json::Value, field: &str) -> Option<DocumentId> {
+    params
+        .get(field)
+        .and_then(|v| v.as_u64())
+        .filter(|id| *id != 0)
+        .map(DocumentId::new)
+}
+
+fn err_missing_field(field: &str) -> ApiResponse {
+    ApiResponse::error(
+        ApiErrorCode::DeserializationError,
+        format!("missing or invalid `{field}` field (must be a non-zero u64 doc_id)"),
+    )
+}
+
+fn err_doc_not_found(doc_id: DocumentId) -> ApiResponse {
+    ApiResponse::error(
+        ApiErrorCode::EntityNotFound,
+        format!("doc_id {} not in registry", doc_id.raw()),
+    )
 }
 
 #[allow(dead_code)] // available for providers that want to surface validation errors

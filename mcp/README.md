@@ -55,7 +55,6 @@ These tools are always available:
 | `list_bundled` | List embedded `assets/models/*.mo` example models with `bundled://` URIs |
 | `list_open_documents` | List every open document (Modelica / USD / SysML / future kinds) with origin + active flag |
 | `list_twin` | List files in the open Twin folder, paginated, classified by kind |
-| `msl_status` | Check MSL prewarm state without forcing init |
 | `list_msl` | Paginated, filterable enumeration of Modelica Standard Library classes |
 | `open_uri` | Unified scheme-aware open (`bundled://`, `mem://`, qualified MSL name, fs path) |
 

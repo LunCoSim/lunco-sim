@@ -910,25 +910,25 @@ fn render_unified_toolbar(
                         .resource_mut::<ModelicaDocumentRegistry>()
                         .checkpoint_source(doc, buffer);
                 }
-                world.commands().trigger(crate::ui::CompileModel { doc });
+                world.commands().trigger(crate::ui::CompileModel { doc, class: None });
             }
             ModelViewMode::Canvas => {
                 // Canvas is a read-only view in B2 — compile just
                 // routes through the document source, same as Text.
                 // B3 (doc write-back) will emit real ops from drag /
                 // connect; compile can then stay the same.
-                world.commands().trigger(crate::ui::CompileModel { doc });
+                world.commands().trigger(crate::ui::CompileModel { doc, class: None });
             }
             ModelViewMode::Icon => {
                 // Icon is a pure display view — compile-from-icon
                 // doesn't mean anything, route through the document
                 // source the same as Text does.
-                world.commands().trigger(crate::ui::CompileModel { doc });
+                world.commands().trigger(crate::ui::CompileModel { doc, class: None });
             }
             ModelViewMode::Docs => {
                 // Docs is pure display — compile routes through the
                 // document source like Text.
-                world.commands().trigger(crate::ui::CompileModel { doc });
+                world.commands().trigger(crate::ui::CompileModel { doc, class: None });
             }
         }
     }

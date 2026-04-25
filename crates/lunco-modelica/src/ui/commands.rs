@@ -107,6 +107,11 @@ pub struct OpenExampleInWorkspace {
 pub struct CompileModel {
     /// The document to compile.
     pub doc: DocumentId,
+    /// Optional explicit target class. When `Some`, bypass both the
+    /// drilled-in pin and the picker — compile this exact class.
+    /// Used by API callers that need deterministic behaviour without
+    /// a GUI (cf. spec 033 User Story 1.5).
+    pub class: Option<String>,
 }
 
 /// Run the Auto-Arrange layout: assign each component of the active
@@ -289,7 +294,7 @@ pub(crate) fn render_compile_class_picker(
         let doc = entry.doc;
         drilled_in.set(doc, qualified);
         picker.0 = None;
-        commands.trigger(CompileModel { doc });
+        commands.trigger(CompileModel { doc, class: None });
     } else if cancelled {
         picker.0 = None;
     }
@@ -718,7 +723,7 @@ fn resolve_editor_intent(
                 instance: doc.raw(),
             });
         }
-        EditorIntent::Compile => commands.trigger(CompileModel { doc }),
+        EditorIntent::Compile => commands.trigger(CompileModel { doc, class: None }),
         // `NewDocument` doesn't need an active doc — it's handled by
         // `NewDocumentNoDoc` resolver below (the resolver that runs
         // even when there's no active doc).
@@ -1030,6 +1035,7 @@ fn on_compile_model(
     drilled_in_classes: Option<Res<crate::ui::panels::canvas_diagram::DrilledInClassNames>>,
 ) {
     let doc = trigger.event().doc;
+    let explicit_class = trigger.event().class.clone();
 
     // Ownership check. Read-only docs are fair game to compile —
     // the Save button is what's gated on writability, not compile.
@@ -1077,11 +1083,47 @@ fn on_compile_model(
     let drilled_in_class: Option<String> = drilled_in_classes
         .as_ref()
         .and_then(|d| d.get(doc).map(str::to_string));
-    // If no drill-in pin and the file is a package of several models,
-    // ask the user which one to compile instead of silently picking.
-    // The picker modal (rendered by `render_compile_class_picker` in
-    // ui/mod.rs) re-dispatches `CompileModel` once the user confirms.
-    if drilled_in_class.is_none() {
+    // Class resolution priority:
+    //   1. explicit_class on the event       — API caller knows exactly
+    //   2. drilled_in_class                  — UI drill-in pin
+    //   3. picker modal                      — GUI fallback for ambiguity
+    //   4. detected_name from AST            — single-class case
+    //
+    // The explicit-class branch (added in spec 033 P0) lets API/agent
+    // callers compile a chosen class without ever opening the picker
+    // modal. Validates against the candidate list so a bad class name
+    // surfaces as a structured error in the diagnostics log instead
+    // of silently picking the wrong thing.
+    let chosen_via_explicit = if let Some(cls) = explicit_class.as_ref() {
+        let candidates = crate::ast_extract::collect_non_package_classes_qualified(&ast);
+        // Match by short name OR full qualified name, so callers can pass
+        // either `"RocketStage"` or `"AnnotatedRocketStage.RocketStage"`.
+        let matched = candidates.iter().find(|c| {
+            c == &cls || c.rsplit('.').next() == Some(cls.as_str())
+        });
+        match matched {
+            Some(qname) => Some(qname.clone()),
+            None => {
+                let msg = format!(
+                    "compile_model class `{cls}` not found. Candidates: [{}]",
+                    candidates.join(", ")
+                );
+                workbench.compilation_error = Some(msg.clone());
+                console.error(format!("Compile failed: {msg}"));
+                let _ = diagnostics; // surfaced via console + workbench
+                return;
+            }
+        }
+    } else {
+        None
+    };
+
+    // If no explicit class and no drill-in pin and the file is a package
+    // of several models, ask the user which one to compile instead of
+    // silently picking. The picker modal (rendered by
+    // `render_compile_class_picker` in ui/mod.rs) re-dispatches
+    // `CompileModel` once the user confirms.
+    if chosen_via_explicit.is_none() && drilled_in_class.is_none() {
         let candidates = crate::ast_extract::collect_non_package_classes_qualified(&ast);
         if candidates.len() >= 2 {
             // If a picker is already open for *this* doc, leave it
@@ -1097,7 +1139,7 @@ fn on_compile_model(
             return;
         }
     }
-    let model_name = drilled_in_class.or_else(|| {
+    let model_name = chosen_via_explicit.or(drilled_in_class).or_else(|| {
         crate::ast_extract::extract_model_name_from_ast(&ast)
     });
     let Some(model_name) = model_name else {
@@ -2719,10 +2761,19 @@ fn on_add_signal_to_plot(trigger: On<AddSignalToPlot>, mut commands: Commands) {
 pub struct CompileActiveModel {
     /// 0 ⇒ active document.
     pub doc: u64,
+    /// Optional target class. Empty = inherit picker / drilled-in /
+    /// detected-name behaviour. When non-empty, the compile bypasses
+    /// the GUI class-picker for documents with multiple non-package
+    /// classes — required for headless / agent-driven workflows where
+    /// no human is available to click the modal (cf. spec 033 P0).
+    /// Lookup is by short name (e.g. `"RocketStage"`) matched against
+    /// the document's `collect_non_package_classes_qualified`.
+    pub class: String,
 }
 
 fn on_compile_active_model(trigger: On<CompileActiveModel>, mut commands: Commands) {
     let raw = trigger.event().doc;
+    let class = trigger.event().class.clone();
     commands.queue(move |world: &mut World| {
         let doc = if raw == 0 {
             resolve_active_doc(world)
@@ -2733,7 +2784,8 @@ fn on_compile_active_model(trigger: On<CompileActiveModel>, mut commands: Comman
             bevy::log::warn!("[CompileActiveModel] no active document");
             return;
         };
-        world.commands().trigger(CompileModel { doc });
+        let target_class = if class.is_empty() { None } else { Some(class) };
+        world.commands().trigger(CompileModel { doc, class: target_class });
     });
 }
 

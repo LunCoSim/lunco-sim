@@ -89,23 +89,6 @@ So that I can find a class to open without reading 2500 entries at once
 
 ---
 
-### User Story 5 - MSL Load Status (Priority: P2)
-
-As an AI agent
-I want to ask whether the MSL library has finished its background prewarm
-So that I can decide whether to wait, or skip MSL queries during cold start
-
-**Why this priority**: Lets the agent avoid unintentionally blocking the API thread for hundreds of milliseconds during the prewarm window.
-
-**Independent Test**: Issue `msl_status`, receive `{loaded: bool, class_count: u32, examples_count: u32}`.
-
-**Acceptance Scenarios**:
-
-1. **Given** the binary just started, **When** I call `msl_status` before prewarm completes, **Then** I receive `{loaded:false, class_count:0, examples_count:0}` immediately (no blocking).
-2. **Given** prewarm has completed, **When** I call `msl_status`, **Then** I receive `{loaded:true, class_count:N, examples_count:M}` with non-zero counts.
-
----
-
 ### User Story 6 - Unified `Open` With Scheme Dispatch (Priority: P1)
 
 As an AI agent
@@ -133,12 +116,11 @@ So that I do not need to know whether the target is bundled, MSL, on disk, or al
 - **FR-001**: `list_bundled` MUST return every `*.mo` file embedded under `assets/models/`, each entry carrying at minimum `filename` and `tagline`.
 - **FR-002**: `list_open_documents` MUST return one entry per workspace document (saved + Untitled), carrying `doc_id`, `title`, `origin`, `kind`, `dirty`, `active`, `view_mode`. Untitled docs MUST be included alongside file-backed ones.
 - **FR-003**: `list_twin` MUST return `{open, root, files, total}` when a Twin is open, or `{open:false}` when none is. Files MUST carry the `FileKind` classification produced by `Twin::index`. The endpoint MUST accept optional `limit` and `offset` parameters.
-- **FR-004**: `list_msl` MUST return a paginated slice of MSL classes with an opaque `next_cursor` token, accepting at minimum `prefix`, `category`, `examples_only` filters and a `limit` parameter (default 200, max 1000).
-- **FR-005**: `msl_status` MUST report whether MSL prewarm has completed without itself blocking on prewarm.
-- **FR-006**: `open(uri)` MUST dispatch on URI scheme: `bundled://` → embedded source as Untitled, qualified name → MSL example, absolute path → file open, `mem://` → focus existing tab.
-- **FR-007**: `OpenFile` MUST recognize `bundled://` URIs and open the embedded source as an Untitled doc, preserving the existing fs-path behaviour for absolute paths.
-- **FR-008**: All listing endpoints MUST return structured data via `ApiResponse::Ok { data: ... }` — not as console-log side effects.
-- **FR-009**: Endpoints MUST be reachable both via the existing `POST /api/commands` HTTP endpoint and as typed MCP tools in `mcp/src/index.js`.
+- **FR-004**: `list_msl` MUST return a paginated slice of MSL classes with an opaque `next_cursor` token, accepting at minimum `prefix`, `category`, `examples_only` filters and a `limit` parameter (default 200, max 1000). The first call may block briefly on `MSL_LIBRARY` initialization; subsequent calls hit the cached `OnceLock`. A separate prewarm-status endpoint is intentionally not provided — by the time any API request arrives, the startup-time prewarm thread has had ample wall time to finish, and a status check would only add round-trips and TOCTOU between status and use.
+- **FR-005**: `open(uri)` MUST dispatch on URI scheme: `bundled://` → embedded source as Untitled, qualified name → MSL example, absolute path → file open, `mem://` → focus existing tab.
+- **FR-006**: `OpenFile` MUST recognize `bundled://` URIs and open the embedded source as an Untitled doc, preserving the existing fs-path behaviour for absolute paths.
+- **FR-007**: All listing endpoints MUST return structured data via `ApiResponse::Ok { data: ... }` — not as console-log side effects.
+- **FR-008**: Endpoints MUST be reachable both via the existing `POST /api/commands` HTTP endpoint and as typed MCP tools in `mcp/src/index.js`.
 
 ### Key Entities
 

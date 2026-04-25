@@ -32,7 +32,7 @@ import {
 } from './api.js';
 
 const SERVER_NAME = 'lunco-mcp-server';
-const SERVER_VERSION = '0.3.0';
+const SERVER_VERSION = '0.4.0';
 
 // MCP Server instance
 const server = new Server(
@@ -141,11 +141,6 @@ const STATIC_TOOLS = [
     },
   },
   {
-    name: 'msl_status',
-    description: 'Check whether the Modelica Standard Library has finished its background prewarm. Returns `{loaded, class_count, examples_count}`. Cheap and non-blocking — call this before `list_msl` if you want to avoid the cold-start parse cost.',
-    inputSchema: { type: 'object', properties: {} },
-  },
-  {
     name: 'list_msl',
     description: 'List MSL classes with cursor-based pagination and filters. The MSL has ~2500 entries — use filters to narrow. Returns `{items, count, total_matched, next_cursor}`. Pass `next_cursor` back as `cursor` for the next page.',
     inputSchema: {
@@ -163,6 +158,52 @@ const STATIC_TOOLS = [
           },
         },
       },
+    },
+  },
+  // ── Multi-class compile + source visibility (spec 033 P0) ─────────────
+  {
+    name: 'list_compile_candidates',
+    description: 'List the non-package classes in an open document — i.e. the choices the GUI class-picker modal would present. Use this before `compile_model` on a multi-class file to know which class to target. Returns `{candidates: [{qualified, short}], ast_parsed}`.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        doc: { type: 'integer', description: 'Document id from `list_open_documents`.' },
+      },
+      required: ['doc'],
+    },
+  },
+  {
+    name: 'compile_status',
+    description: "Read the per-document compile state without triggering a compile. Returns `{state: 'idle'|'compiling'|'ok'|'error', drilled_in_class, picker_pending, candidates, ast_parsed, error_message}`. `picker_pending: true` means the GUI would show its class-picker modal — use `compile_model(doc, class=...)` to bypass it.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        doc: { type: 'integer', description: 'Document id from `list_open_documents`.' },
+      },
+      required: ['doc'],
+    },
+  },
+  {
+    name: 'get_document_source',
+    description: 'Fetch the in-memory source text of an open document — including Untitled docs that have no filesystem path. Returns `{source, generation, dirty, kind, origin, title}`. Use this to see what was loaded (including unsaved edits) without re-reading from disk.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        doc: { type: 'integer', description: 'Document id from `list_open_documents`.' },
+      },
+      required: ['doc'],
+    },
+  },
+  {
+    name: 'compile_model',
+    description: "Compile an open document. Pass `class` to specify which class to compile — required when the document has multiple non-package classes (the GUI's class-picker modal cannot be invoked through the API). Without `class`, behaves like the GUI Compile button: uses the drilled-in pin, falls back to single-detected-class, otherwise sets `compile_status.picker_pending=true` and aborts.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        doc: { type: 'integer', description: 'Document id (0 = active).' },
+        class: { type: 'string', description: 'Target class. Short name (e.g. "RocketStage") or fully qualified. Omit to inherit picker / drilled-in behaviour.' },
+      },
+      required: ['doc'],
     },
   },
   {
@@ -495,12 +536,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
-      // ── Model source listing (spec 032) ────────────────────────────
+      // ── Model source listing (spec 032) + compile/source (spec 033 P0) ─
       case 'list_bundled':
       case 'list_open_documents':
       case 'list_twin':
-      case 'msl_status':
-      case 'list_msl': {
+      case 'list_msl':
+      case 'list_compile_candidates':
+      case 'compile_status':
+      case 'get_document_source': {
         // Each of these is backed by an ApiQueryProvider on the Rust
         // side. Rather than duplicate the schema/PascalCase mapping for
         // every tool, route them all through the generic executor —
@@ -510,8 +553,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           list_bundled: 'ListBundled',
           list_open_documents: 'ListOpenDocuments',
           list_twin: 'ListTwin',
-          msl_status: 'MslStatus',
           list_msl: 'ListMsl',
+          list_compile_candidates: 'ListCompileCandidates',
+          compile_status: 'CompileStatus',
+          get_document_source: 'GetDocumentSource',
         };
         const result = await executeCommand(commandMap[name], args ?? {});
         if (result.error) {
@@ -524,6 +569,31 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           content: [
             { type: 'text', text: JSON.stringify(result, null, 2) },
           ],
+        };
+      }
+
+      case 'compile_model': {
+        const { doc, class: target_class } = args ?? {};
+        if (doc === undefined || doc === null) {
+          return {
+            content: [{ type: 'text', text: 'Error: `doc` is required' }],
+            isError: true,
+          };
+        }
+        // Map snake_case `class` (the friendly tool field) to the
+        // Reflect-event field name. `class` is a JS reserved-ish name
+        // so quoting it here keeps the destructure clean.
+        const params = { doc };
+        if (target_class) params.class = target_class;
+        const result = await executeCommand('CompileActiveModel', params);
+        if (result.error) {
+          return {
+            content: [{ type: 'text', text: `Error: ${result.error}` }],
+            isError: true,
+          };
+        }
+        return {
+          content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
         };
       }
 
