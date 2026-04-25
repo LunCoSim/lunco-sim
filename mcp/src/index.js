@@ -20,6 +20,8 @@ import {
   ListPromptsRequestSchema,
   GetPromptRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
+import { writeFile, mkdir } from 'node:fs/promises';
+import { dirname, resolve } from 'node:path';
 import {
   apiRequest,
   executeCommand,
@@ -81,10 +83,20 @@ const STATIC_TOOLS = [
   },
   {
     name: 'capture_screenshot',
-    description: 'Capture a screenshot of the current simulation view. Returns PNG bytes as base64-encoded string.',
+    description: 'Capture a screenshot of the current simulation view. By default returns the PNG as an inline image. If `path` is given, writes the PNG to that file (resolved against the server cwd) and returns the absolute path instead. If `return_base64` is true, also returns the raw base64 string as text content (useful for piping to a file via the agent).',
     inputSchema: {
       type: 'object',
-      properties: {},
+      properties: {
+        path: {
+          type: 'string',
+          description: 'Optional file path to save the PNG to. Relative paths resolve against the server cwd. Parent directories are created automatically.',
+        },
+        return_base64: {
+          type: 'boolean',
+          description: 'If true, return the PNG bytes as a base64 text block in addition to the inline image. Default false.',
+          default: false,
+        },
+      },
     },
   },
   {
@@ -368,17 +380,35 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'capture_screenshot': {
+        const { path, return_base64 = false } = args ?? {};
         const pngBytes = await captureScreenshot();
         const base64 = pngBytes.toString('base64');
-        return {
-          content: [
-            {
-              type: 'image',
-              data: base64,
-              mimeType: 'image/png',
-            },
-          ],
-        };
+
+        if (path) {
+          const abs = resolve(process.cwd(), path);
+          await mkdir(dirname(abs), { recursive: true });
+          await writeFile(abs, pngBytes);
+          return {
+            content: [
+              {
+                type: 'text',
+                text: `Saved ${pngBytes.length} bytes to ${abs}`,
+              },
+            ],
+          };
+        }
+
+        const content = [
+          {
+            type: 'image',
+            data: base64,
+            mimeType: 'image/png',
+          },
+        ];
+        if (return_base64) {
+          content.push({ type: 'text', text: base64 });
+        }
+        return { content };
       }
 
       case 'execute_command': {
