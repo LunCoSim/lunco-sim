@@ -1014,6 +1014,7 @@ struct InlineWorkerInner {
     steppers: HashMap<Entity, (u64, String, SimStepper)>,
     current_sessions: HashMap<Entity, u64>,
     cached_models: HashMap<Entity, CachedModel>,
+    compiler: Option<ModelicaCompiler>,
 }
 
 /// Thread-safe wrapper for wasm32 inline worker state.
@@ -1056,7 +1057,7 @@ fn inline_worker_process(
                 if let Some(cached) = w.cached_models.get(&entity) {
                     if cached.model_name == model_name {
                         let (stripped_source, input_defaults) = strip_input_defaults(&cached.source);
-                        let compiler = compiler.get_or_insert_with(ModelicaCompiler::new);
+                        let compiler = w.compiler.get_or_insert_with(ModelicaCompiler::new);
                         if let Ok(comp_res) = compiler.compile_str(&cached.model_name, &stripped_source, "model.mo") {
                             let mut opts = StepperOptions::default();
                             opts.atol = 1e-1; opts.rtol = 1e-1;
@@ -1123,7 +1124,7 @@ fn inline_worker_process(
             opts.atol = 1e-1; opts.rtol = 1e-1;
             let tx = &channels.tx_res;
 
-            let compiler = compiler.get_or_insert_with(ModelicaCompiler::new);
+            let compiler = w.compiler.get_or_insert_with(ModelicaCompiler::new);
             match compiler.compile_str(&model_name, &stripped_source, "model.mo") {
                 Ok(comp_res) => {
                     match SimStepper::new(&comp_res.dae, opts) {
@@ -1178,7 +1179,7 @@ fn inline_worker_process(
                 let (stripped_source, input_defaults) = strip_input_defaults(&cached.source);
                 let mut opts = StepperOptions::default();
                 opts.atol = 1e-1; opts.rtol = 1e-1;
-                let compiler = compiler.get_or_insert_with(ModelicaCompiler::new);
+                let compiler = w.compiler.get_or_insert_with(ModelicaCompiler::new);
                 match compiler.compile_str(&cached.model_name, &stripped_source, "model.mo") {
                     Ok(comp_res) => {
                         if let Ok(mut stepper) = SimStepper::new(&comp_res.dae, opts) {
@@ -1242,7 +1243,7 @@ fn inline_worker_process(
             opts.atol = 1e-1; opts.rtol = 1e-1;
             let tx = &channels.tx_res;
 
-            let compiler = compiler.get_or_insert_with(ModelicaCompiler::new);
+            let compiler = w.compiler.get_or_insert_with(ModelicaCompiler::new);
             match compiler.compile_str(&model_name, &stripped_source, "model.mo") {
                 Ok(comp_res) => {
                     match SimStepper::new(&comp_res.dae, opts) {

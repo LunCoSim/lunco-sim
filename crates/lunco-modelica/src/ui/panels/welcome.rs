@@ -978,6 +978,7 @@ impl Panel for WelcomePanel {
                 .trigger(crate::ui::commands::CreateNewScratchModel);
         }
         if open_folder {
+            #[cfg(not(target_arch = "wasm32"))]
             if let Some(folder) = rfd::FileDialog::new()
                 .set_title("Open workspace folder")
                 .pick_folder()

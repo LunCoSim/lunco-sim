@@ -645,9 +645,7 @@ impl Panel for PackageBrowserPanel {
 
         // ── Twin lifecycle ──────────────────────────────────────
         if open_twin_picker {
-            // Native dialog still blocks the main thread while visible,
-            // but the scan afterwards moves to AsyncComputeTaskPool so
-            // a huge twin doesn't freeze the UI on open.
+            #[cfg(not(target_arch = "wasm32"))]
             if let Some(folder) = rfd::FileDialog::new()
                 .set_title("Open Twin folder")
                 .pick_folder()

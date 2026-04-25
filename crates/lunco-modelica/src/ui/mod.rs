@@ -410,7 +410,9 @@ impl Plugin for ModelicaUiPlugin {
         // Contribute the Modelica section to the Twin Browser's
         // section registry. The workbench's WorkbenchPlugin already
         // installed the registry resource and the built-in Files
-        // section; we just append.
+        // section; we just append. ensure it exists first to avoid
+        // panics during mixed-mode or deferred plugin builds.
+        app.init_resource::<lunco_workbench::BrowserSectionRegistry>();
         app.world_mut()
             .resource_mut::<lunco_workbench::BrowserSectionRegistry>()
             .register(browser_section::ModelicaSection::default());

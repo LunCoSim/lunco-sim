@@ -17,6 +17,7 @@
 //! See `../lib.rs` for the inline worker implementation.
 
 use bevy::prelude::*;
+use bevy::render::{RenderPlugin, settings::{WgpuSettings, Backends, RenderCreation}};
 use std::path::PathBuf;
 use bevy_egui::EguiPlugin;
 use lunco_modelica::{
@@ -30,8 +31,8 @@ use wasm_bindgen::prelude::*;
 
 /// Desktop stub — this binary only works on wasm32.
 /// Use `modelica_workbench` for desktop.
-#[cfg(not(target_arch = "wasm32"))]
 fn main() {
+    #[cfg(not(target_arch = "wasm32"))]
     panic!("modelica_workbench_web is a wasm32-only binary. Use `cargo run --bin modelica_workbench` for desktop.");
 }
 
@@ -53,6 +54,7 @@ pub fn run() {
     let default_source = default_model.source;
 
     App::new()
+        .insert_resource(Time::<Fixed>::from_hz(60.0))
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "LunCo Modelica Workbench".into(),
@@ -66,8 +68,16 @@ pub fn run() {
                 ..default()
             }),
             ..default()
+        }).set(RenderPlugin {
+            render_creation: RenderCreation::Automatic(WgpuSettings {
+                backends: Some(Backends::all()),
+                ..default()
+            }),
+            ..default()
         }))
         .add_plugins(EguiPlugin::default())
+        .add_plugins(lunco_workbench::WorkbenchPlugin)
+        .add_plugins(lunco_viz::LuncoVizPlugin)
         .add_plugins(ModelicaPlugin)
         .insert_resource(BundledModelInfo {
             default_filename: default_filename.to_string(),

@@ -68,7 +68,7 @@ include_dir = "0.7"
 # actually present in MSL Resources/Images are enabled to keep the
 # compile surface small.
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
-usvg = { version = "0.45", default-features = false }
+usvg = { version = "0.45", default-features = false, features = ["text"] }
 # LunCoSim/rumoca fork, `main` branch.
 # Tracks upstream rumoca. `main` already carries:
 #   - the `instant::Instant` wasm32 fix that `web-fix` was carrying
