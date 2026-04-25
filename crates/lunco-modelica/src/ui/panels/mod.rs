@@ -11,6 +11,7 @@ pub mod console;
 pub mod diagnostics;
 pub mod log;
 pub mod model_view;
+pub mod inspector;
 pub mod palette;
 pub mod welcome;
 pub mod placeholder;

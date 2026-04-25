@@ -280,12 +280,14 @@ impl Perspective for AnalyzePerspective {
         layout.set_center(vec![PanelId("modelica_welcome")]);
         layout.set_active_center_tab(0);
         // Right dock — Telemetry (parameters, inputs, variable
-        // toggles) plus the Component Palette (MSL instantiation).
-        // The Telemetry panel registers itself with the historical
-        // id `modelica_inspector` for layout-stability reasons; the
-        // panel struct is named `TelemetryPanel`.
+        // toggles), Inspector (selected node's modifications), and
+        // Component Palette (MSL instantiation). The Telemetry panel
+        // is registered under the historical id `modelica_inspector`
+        // for layout-stability reasons; the new selection-driven
+        // Inspector uses `modelica_diagram_inspector`.
         layout.set_right_inspector_tabs(vec![
             PanelId("modelica_inspector"),
+            PanelId("modelica_diagram_inspector"),
             PanelId("modelica_component_palette"),
         ]);
         // Bottom dock: Graphs first so it's the default active tab —
@@ -413,6 +415,7 @@ impl Plugin for ModelicaUiPlugin {
             .add_systems(Update, panels::canvas_diagram::drive_drill_in_loads)
             .add_systems(Update, panels::canvas_diagram::drive_duplicate_loads)
             .add_systems(bevy_egui::EguiPrimaryContextPass, alpha_banner)
+            .register_panel(panels::inspector::InspectorPanel)
             .register_panel(panels::palette::ComponentPalettePanel)
             // Multi-instance: one tab per open document. Instances are
             // opened at runtime by the Package Browser.
