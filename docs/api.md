@@ -181,26 +181,63 @@ app.run();
 
 ## Architecture
 
+There are **two response shapes** behind `POST /api/commands`:
+
+1. **Reflect Event commands** — fire-and-forget side effects.
+   `OpenFile`, `MoveComponent`, `DriveRover`, etc. The executor
+   reflects on the type, deserialises params, and triggers the
+   matching `Event` for domain observers to handle. Returns
+   `command_accepted` immediately.
+
+2. **Query providers** — return structured data.
+   `ListBundled`, `ListTwin`, `ListMsl`, `MslStatus`,
+   `ListOpenDocuments` (and future entries from spec 033). Domain
+   crates register implementations of `ApiQueryProvider` against the
+   `ApiQueryRegistry`; the executor checks the registry first when
+   handling an `ExecuteCommand` request, runs the provider deferred
+   via `commands.queue` so it has `&mut World` access, and returns
+   the resulting `ApiResponse::Ok { data }` to the transport.
+
+The wire format is identical for both — `{"command": "...", "params": {...}}` —
+so callers don't need to know which path their command takes. The
+executor differentiates internally.
+
 ```
 ┌────────────────────────────────────────────────────────────┐
-│  HTTP Client (curl, Python, Browser)                       │
+│  HTTP Client (curl, Python, MCP, Browser)                  │
 └────────────────────┬───────────────────────────────────────┘
                      │ POST /api/commands
                      ▼
 ┌────────────────────────────────────────────────────────────┐
 │  lunco-api                                                 │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────────┐ │
-│  │ HttpBridge   │→ │ ApiExecutor  │→ │ ApiCommandEvent  │ │
-│  │ (axum)       │  │ (reflection) │  │ (ECS event)      │ │
-│  └──────────────┘  └──────────────┘  └──────────────────┘ │
+│  │ HttpBridge   │→ │ ApiExecutor  │→ │ ApiQueryRegistry │ │  ← query?
+│  │ (axum)       │  │              │  │ → provider.exec  │ │    yes → returns data
+│  └──────────────┘  └─────┬────────┘  └──────────────────┘ │
+│                          │ no                              │
+│                          ▼                                 │
+│                    ┌──────────────────┐                    │
+│                    │ ApiCommandEvent  │  (Reflect dispatch)│
+│                    └──────────────────┘                    │
 └────────────────────┬───────────────────────────────────────┘
                      │ On<ApiCommandEvent>
                      ▼
 ┌────────────────────────────────────────────────────────────┐
-│  Domain Observers (lunco-mobility, lunco-avatar, etc.)     │
+│  Domain Observers (lunco-mobility, lunco-avatar, …)        │
 │  Handle the command and mutate simulation state            │
 └────────────────────────────────────────────────────────────┘
 ```
+
+**Adding a new query endpoint** (data-returning): implement
+`ApiQueryProvider` in the domain crate that owns the data, register
+it in your plugin's `build` via
+`app.world_mut().resource_mut::<ApiQueryRegistry>().register(...)`.
+See `crates/lunco-modelica/src/api_queries.rs` for examples and
+spec [`032-model-source-listing`](../specs/032-model-source-listing/spec.md)
+for the design.
+
+**Adding a new typed command** (side-effect): follow the existing
+pattern in `skills/test-via-api/SKILL.md`.
 
 ## Binaries with API Support
 

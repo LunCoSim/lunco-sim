@@ -32,7 +32,7 @@ import {
 } from './api.js';
 
 const SERVER_NAME = 'lunco-mcp-server';
-const SERVER_VERSION = '0.2.0';
+const SERVER_VERSION = '0.3.0';
 
 // MCP Server instance
 const server = new Server(
@@ -116,6 +116,64 @@ const STATIC_TOOLS = [
         },
       },
       required: ['command'],
+    },
+  },
+  // ── Model source listing (spec 032) ────────────────────────────────────
+  {
+    name: 'list_bundled',
+    description: 'List embedded LunCoSim example models (assets/models/*.mo). Returns each entry with `filename`, `tagline`, and a `bundled://` URI suitable for `open_uri`. Always reachable, no pagination.',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'list_open_documents',
+    description: 'List every document currently open in the workspace — Modelica, USD, SysML, mission, or any future kind. Returns `doc_id`, `title`, `kind`, `origin` (file vs untitled), and `active` flag. Use this to decide whether to focus an existing tab or open something new.',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'list_twin',
+    description: 'List files in the currently-open Twin folder. Returns `{open: false}` when no Twin is open. Otherwise returns `{root, files, total}` with each file carrying a relative path, absolute path, and kind label (e.g. `document/modelica`, `file_reference`). Supports pagination via `limit` + `offset`.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        limit: { type: 'integer', description: 'Max files to return (omit for all).' },
+        offset: { type: 'integer', description: 'Index of the first file to return (default 0).' },
+      },
+    },
+  },
+  {
+    name: 'msl_status',
+    description: 'Check whether the Modelica Standard Library has finished its background prewarm. Returns `{loaded, class_count, examples_count}`. Cheap and non-blocking — call this before `list_msl` if you want to avoid the cold-start parse cost.',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'list_msl',
+    description: 'List MSL classes with cursor-based pagination and filters. The MSL has ~2500 entries — use filters to narrow. Returns `{items, count, total_matched, next_cursor}`. Pass `next_cursor` back as `cursor` for the next page.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        cursor: { type: 'string', description: 'Cursor token returned by the previous page (decimal-string offset). Omit on first call.' },
+        limit: { type: 'integer', description: 'Max items per page (default 200, max 1000).' },
+        filter: {
+          type: 'object',
+          description: 'Optional filters. Combined with AND.',
+          properties: {
+            prefix: { type: 'string', description: 'Qualified-name prefix, e.g. "Modelica.Blocks".' },
+            category: { type: 'string', description: 'Top-level package, e.g. "Blocks", "Electrical".' },
+            examples_only: { type: 'boolean', description: 'When true, return only `*.Examples.*` classes.' },
+          },
+        },
+      },
+    },
+  },
+  {
+    name: 'open_uri',
+    description: 'Unified open command — dispatches on the URI scheme. Accepts `bundled://Filename.mo` (embedded example), `mem://Name` (re-focus existing Untitled tab), a dot-separated qualified Modelica name (`Modelica.Blocks.Examples.PID_Controller`, opened as MSL example), or a filesystem path. Use this in preference to `OpenFile`/`OpenClass`/`OpenExample`.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        uri: { type: 'string', description: 'The URI to open.' },
+      },
+      required: ['uri'],
     },
   },
 ];
@@ -433,6 +491,63 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               type: 'text',
               text: JSON.stringify(result, null, 2),
             },
+          ],
+        };
+      }
+
+      // ── Model source listing (spec 032) ────────────────────────────
+      case 'list_bundled':
+      case 'list_open_documents':
+      case 'list_twin':
+      case 'msl_status':
+      case 'list_msl': {
+        // Each of these is backed by an ApiQueryProvider on the Rust
+        // side. Rather than duplicate the schema/PascalCase mapping for
+        // every tool, route them all through the generic executor —
+        // their JSON shapes are documented in the static tool entries
+        // above.
+        const commandMap = {
+          list_bundled: 'ListBundled',
+          list_open_documents: 'ListOpenDocuments',
+          list_twin: 'ListTwin',
+          msl_status: 'MslStatus',
+          list_msl: 'ListMsl',
+        };
+        const result = await executeCommand(commandMap[name], args ?? {});
+        if (result.error) {
+          return {
+            content: [{ type: 'text', text: `Error: ${result.error}` }],
+            isError: true,
+          };
+        }
+        return {
+          content: [
+            { type: 'text', text: JSON.stringify(result, null, 2) },
+          ],
+        };
+      }
+
+      case 'open_uri': {
+        const { uri } = args ?? {};
+        if (!uri) {
+          return {
+            content: [{ type: 'text', text: 'Error: `uri` is required' }],
+            isError: true,
+          };
+        }
+        // `Open` is a Reflect Event on the Rust side, fire-and-forget.
+        // We surface it as its own typed tool so agents do not need to
+        // remember the PascalCase name or the params shape.
+        const result = await executeCommand('Open', { uri });
+        if (result.error) {
+          return {
+            content: [{ type: 'text', text: `Error: ${result.error}` }],
+            isError: true,
+          };
+        }
+        return {
+          content: [
+            { type: 'text', text: JSON.stringify(result, null, 2) },
           ],
         };
       }

@@ -26,6 +26,7 @@ use lunco_twin::{DocumentKind, FileEntry, FileKind};
 use lunco_workbench::WorkspaceResource;
 
 use crate::models::bundled_models;
+use crate::visual_diagram::{msl_component_library, msl_loaded, MSLComponentDef};
 
 /// Plugin that registers the [`ApiQueryProvider`]s exposed by
 /// `lunco-modelica`. Wired into [`crate::ui::ModelicaUiPlugin`] when
@@ -40,6 +41,8 @@ impl Plugin for ModelicaApiQueriesPlugin {
         registry.register(ListBundledProvider);
         registry.register(ListOpenDocumentsProvider);
         registry.register(ListTwinProvider);
+        registry.register(MslStatusProvider);
+        registry.register(ListMslProvider);
     }
 }
 
@@ -215,7 +218,169 @@ fn file_kind_label(k: &FileKind) -> String {
     }
 }
 
-#[allow(dead_code)] // used by ListTwin error responses once we wire bound checks
+// ─── MslStatus ─────────────────────────────────────────────────────────
+
+struct MslStatusProvider;
+
+impl ApiQueryProvider for MslStatusProvider {
+    fn name(&self) -> &'static str {
+        "MslStatus"
+    }
+
+    fn execute(
+        &self,
+        _world: &mut World,
+        _params: &serde_json::Value,
+    ) -> ApiResponse {
+        // Cheap path: do not force `msl_component_library()` — we only
+        // want to report whether someone *else* (the prewarm thread or
+        // an earlier UI call) has already done so. If it has, also
+        // surface the counts; if not, leave them at zero.
+        if msl_loaded() {
+            let lib = msl_component_library();
+            let examples = lib
+                .iter()
+                .filter(|c| c.msl_path.contains(".Examples."))
+                .count();
+            ApiResponse::ok(serde_json::json!({
+                "loaded": true,
+                "class_count": lib.len(),
+                "examples_count": examples,
+            }))
+        } else {
+            ApiResponse::ok(serde_json::json!({
+                "loaded": false,
+                "class_count": 0,
+                "examples_count": 0,
+            }))
+        }
+    }
+}
+
+// ─── ListMsl ───────────────────────────────────────────────────────────
+
+/// Default MSL page size if `limit` is not supplied. Picked so a single
+/// page is comfortably under typical agent context budgets while still
+/// being useful for prefix-narrowed queries.
+const MSL_DEFAULT_LIMIT: usize = 200;
+/// Hard cap on `limit`. Above this the response gets unwieldy and
+/// agents should be paginating anyway.
+const MSL_MAX_LIMIT: usize = 1000;
+
+struct ListMslProvider;
+
+impl ApiQueryProvider for ListMslProvider {
+    fn name(&self) -> &'static str {
+        "ListMsl"
+    }
+
+    fn execute(
+        &self,
+        _world: &mut World,
+        params: &serde_json::Value,
+    ) -> ApiResponse {
+        // Pagination + filter params. All optional. `cursor` is an
+        // opaque decimal string carrying the offset to start from
+        // (returned by the previous page); v1 does not validate that
+        // the caller's filter matches the cursor — changing filter
+        // mid-pagination is undefined behaviour and the agent's
+        // responsibility to avoid. Filter-hash invalidation is a v2
+        // nicety (see spec 032 FR-004).
+        let cursor: usize = params
+            .get("cursor")
+            .and_then(|v| v.as_str())
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+
+        let limit = params
+            .get("limit")
+            .and_then(|v| v.as_u64())
+            .map(|n| (n as usize).min(MSL_MAX_LIMIT))
+            .unwrap_or(MSL_DEFAULT_LIMIT);
+
+        let filter = params.get("filter");
+        let prefix = filter
+            .and_then(|f| f.get("prefix"))
+            .and_then(|v| v.as_str());
+        let category = filter
+            .and_then(|f| f.get("category"))
+            .and_then(|v| v.as_str());
+        let examples_only = filter
+            .and_then(|f| f.get("examples_only"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        // First call here will block on the JSON parse (~hundreds of
+        // ms). The agent can preflight `MslStatus` to decide whether to
+        // wait. We accept the blocking cost rather than returning an
+        // empty result — better to be slow than to lie.
+        let lib = msl_component_library();
+
+        // Apply filters in one pass over the static slice. The filter
+        // closures are cheap; no allocation until we slice the
+        // matching subset for the response.
+        let matched: Vec<&MSLComponentDef> = lib
+            .iter()
+            .filter(|c| match prefix {
+                Some(p) => c.msl_path.starts_with(p),
+                None => true,
+            })
+            .filter(|c| match category {
+                Some(cat) => {
+                    // Top-level package: drop the `Modelica.` prefix
+                    // and take the first segment. Matches the
+                    // categories the Welcome tab and palette already
+                    // surface.
+                    let after_modelica = c
+                        .msl_path
+                        .strip_prefix("Modelica.")
+                        .unwrap_or(&c.msl_path);
+                    let top = after_modelica.split('.').next().unwrap_or("");
+                    top.eq_ignore_ascii_case(cat)
+                }
+                None => true,
+            })
+            .filter(|c| !examples_only || c.msl_path.contains(".Examples."))
+            .collect();
+
+        let total = matched.len();
+        let end = (cursor + limit).min(total);
+        let page_slice = if cursor >= total {
+            &[][..]
+        } else {
+            &matched[cursor..end]
+        };
+
+        let items: Vec<serde_json::Value> = page_slice
+            .iter()
+            .map(|c| {
+                serde_json::json!({
+                    "qualified": c.msl_path,
+                    "name": c.name,
+                    "category": c.category,
+                    "display_name": c.display_name,
+                    "description": c.description,
+                })
+            })
+            .collect();
+
+        let next_cursor = if end < total {
+            Some(end.to_string())
+        } else {
+            None
+        };
+
+        ApiResponse::ok(serde_json::json!({
+            "items": items,
+            "count": items.len(),
+            "total_matched": total,
+            "next_cursor": next_cursor,
+            "loaded": true,
+        }))
+    }
+}
+
+#[allow(dead_code)] // available for providers that want to surface validation errors
 fn err_invalid_params(msg: impl Into<String>) -> ApiResponse {
     ApiResponse::error(ApiErrorCode::DeserializationError, msg)
 }

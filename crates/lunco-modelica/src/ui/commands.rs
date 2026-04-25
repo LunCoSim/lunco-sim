@@ -346,6 +346,7 @@ impl Plugin for ModelicaCommandsPlugin {
             .register_type::<GetFile>()
             .register_type::<FormatDocument>()
             .register_type::<OpenFile>()
+            .register_type::<Open>()
             .register_type::<InspectActiveDoc>()
             .register_type::<CompileActiveModel>()
             .register_type::<SaveActiveDocument>()
@@ -374,6 +375,7 @@ impl Plugin for ModelicaCommandsPlugin {
             .add_observer(on_get_file)
             .add_observer(on_format_document)
             .add_observer(on_open_file)
+            .add_observer(on_open)
             .add_observer(on_inspect_active_doc)
             .add_observer(on_compile_active_model)
             .add_observer(on_save_active_document)
@@ -2818,6 +2820,19 @@ pub struct OpenFile {
 fn on_open_file(trigger: On<OpenFile>, mut commands: Commands) {
     let path = trigger.event().path.clone();
     commands.queue(move |world: &mut World| {
+        // Scheme dispatch on the canonical openable-source URIs. Plain
+        // absolute / relative paths fall through to the legacy fs-read
+        // branch so existing callers (Open File dialog, drag-and-drop)
+        // keep working unchanged.
+        if let Some(filename) = path.strip_prefix("bundled://") {
+            open_bundled_in_world(world, filename);
+            return;
+        }
+        if let Some(name) = path.strip_prefix("mem://") {
+            focus_in_memory_doc(world, name);
+            return;
+        }
+
         let source = match std::fs::read_to_string(&path) {
             Ok(s) => s,
             Err(e) => {
@@ -2854,6 +2869,70 @@ fn on_open_file(trigger: On<OpenFile>, mut commands: Commands) {
     });
 }
 
+/// Open a bundled (`assets/models/*.mo`) example as an Untitled doc.
+/// Mirrors what the Welcome tab's bundled-card click path does, but
+/// reachable through the API for headless / agent-driven flows. Lands
+/// the doc in Canvas view to match the rest of the open-source-of-truth
+/// behaviour. Untitled because bundled sources are read-only embedded
+/// data — saving needs Save-As.
+fn open_bundled_in_world(world: &mut World, filename: &str) {
+    let Some(source) = crate::models::get_model(filename) else {
+        bevy::log::warn!("[OpenFile] no bundled model named `{}`", filename);
+        return;
+    };
+    // Strip the extension for the tab title — `RC_Circuit.mo` →
+    // `RC_Circuit`. Falls back to the full filename if there is no
+    // extension separator.
+    let display_name = std::path::Path::new(filename)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(filename)
+        .to_string();
+    let mut registry =
+        world.resource_mut::<crate::ui::state::ModelicaDocumentRegistry>();
+    let doc_id = registry.allocate_with_origin(
+        source.to_string(),
+        lunco_doc::DocumentOrigin::untitled(display_name.clone()),
+    );
+    let mut tabs = world.resource_mut::<crate::ui::panels::model_view::ModelTabs>();
+    tabs.ensure(doc_id);
+    if let Some(tab) = tabs.get_mut(doc_id) {
+        tab.view_mode = crate::ui::panels::model_view::ModelViewMode::Canvas;
+    }
+    world.commands().trigger(lunco_workbench::OpenTab {
+        kind: crate::ui::panels::model_view::MODEL_VIEW_KIND,
+        instance: doc_id.raw(),
+    });
+    bevy::log::info!("[OpenFile] opened bundled `{}` as `{}`", filename, display_name);
+}
+
+/// Focus an already-open Untitled tab by `mem://Name`. Does **not**
+/// create a doc — the URI references existing in-memory state. If no
+/// tab matches the name, logs a warning and no-ops; callers should
+/// `list_open_documents` first to verify.
+fn focus_in_memory_doc(world: &mut World, name: &str) {
+    let target_id = format!("mem://{}", name);
+    let cache = world.resource::<crate::ui::panels::package_browser::PackageTreeCache>();
+    let entry = cache
+        .in_memory_models
+        .iter()
+        .find(|e| e.id == target_id)
+        .map(|e| e.doc);
+    drop(cache);
+    let Some(doc_id) = entry else {
+        bevy::log::warn!(
+            "[OpenFile] no Untitled doc named `{}` (mem:// requires an existing tab)",
+            name
+        );
+        return;
+    };
+    // Re-fire OpenTab — workbench treats this as "focus existing".
+    world.commands().trigger(lunco_workbench::OpenTab {
+        kind: crate::ui::panels::model_view::MODEL_VIEW_KIND,
+        instance: doc_id.raw(),
+    });
+}
+
 /// Read a file from the filesystem and log its contents to the
 /// console at INFO level. Useful for automation that wants to
 /// fetch a file's content via the API without spawning a separate
@@ -2863,6 +2942,60 @@ fn on_open_file(trigger: On<OpenFile>, mut commands: Commands) {
 #[reflect(Event, Default)]
 pub struct GetFile {
     pub path: String,
+}
+
+/// Unified open command — dispatches on the URI scheme so an agent
+/// (or any caller) does not need to know whether the target is bundled,
+/// MSL, on disk, or already open as Untitled.
+///
+/// Scheme dispatch:
+/// - `bundled://Filename.mo` → forward to [`OpenFile`] (which now
+///   recognises the scheme and opens the embedded source as Untitled).
+/// - `mem://Name` → forward to [`OpenFile`] (focuses the existing
+///   Untitled tab — does not create a new doc).
+/// - Dot-separated qualified Modelica name (`Modelica.Blocks.Examples.PID`)
+///   → forward to [`OpenExample`].
+/// - Anything else → forward to [`OpenFile`] (raw fs path).
+///
+/// The legacy `OpenFile` / `OpenClass` / `OpenExample` commands stay
+/// available for callers that already use them; this is purely the
+/// scheme-aware front door.
+#[derive(Event, Reflect, Clone, Debug, Default)]
+#[reflect(Event, Default)]
+pub struct Open {
+    pub uri: String,
+}
+
+fn on_open(trigger: On<Open>, mut commands: Commands) {
+    let uri = trigger.event().uri.clone();
+    if uri.is_empty() {
+        bevy::log::warn!("[Open] empty uri");
+        return;
+    }
+
+    // Scheme detection: if the URI contains `://` we route by scheme;
+    // otherwise we look at content shape. A bare dot-separated string
+    // with no path separators is treated as a qualified Modelica name
+    // so `open("Modelica.Blocks.Examples.PID_Controller")` works.
+    if uri.contains("://") {
+        // bundled:// and mem:// are handled inside on_open_file's
+        // scheme dispatcher; route everything else through OpenFile too
+        // (it will fail with a warn for unknown schemes, which is the
+        // right "tell the user" behaviour).
+        commands.trigger(OpenFile { path: uri });
+        return;
+    }
+
+    let looks_like_qualified_name = uri.contains('.')
+        && !uri.contains('/')
+        && !uri.contains('\\');
+    if looks_like_qualified_name {
+        commands.trigger(OpenExample { qualified: uri });
+        return;
+    }
+
+    // Anything else: treat as a filesystem path.
+    commands.trigger(OpenFile { path: uri });
 }
 
 fn on_get_file(trigger: On<GetFile>) {

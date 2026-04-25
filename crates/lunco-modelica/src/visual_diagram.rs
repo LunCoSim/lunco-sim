@@ -389,6 +389,19 @@ use std::sync::OnceLock;
 
 static MSL_LIBRARY: OnceLock<Vec<MSLComponentDef>> = OnceLock::new();
 
+/// Whether the MSL library has been initialized.
+///
+/// `MSL_LIBRARY` is a `OnceLock` populated lazily by the first call to
+/// [`msl_component_library`] (or by the `prewarm_msl_library` background
+/// thread on startup). This accessor returns `true` once that init has
+/// completed, without forcing it — callers can poll it to decide whether
+/// an MSL query would block.
+///
+/// Cheap (single relaxed atomic load behind `OnceLock::get`).
+pub fn msl_loaded() -> bool {
+    MSL_LIBRARY.get().is_some()
+}
+
 /// Returns the MSL component definitions available in the palette.
 /// Loaded from the preprocessed MSL index.
 pub fn msl_component_library() -> &'static [MSLComponentDef] {

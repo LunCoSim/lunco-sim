@@ -50,8 +50,36 @@ These tools are always available:
 | `discover_schema` | Get all available commands and parameters |
 | `list_entities` | List all simulation entities |
 | `query_entity` | Get entity details by ID |
-| `capture_screenshot` | Capture viewport as PNG |
+| `capture_screenshot` | Capture viewport as PNG (optionally save to file) |
 | `execute_command` | Generic command executor |
+| `list_bundled` | List embedded `assets/models/*.mo` example models with `bundled://` URIs |
+| `list_open_documents` | List every open document (Modelica / USD / SysML / future kinds) with origin + active flag |
+| `list_twin` | List files in the open Twin folder, paginated, classified by kind |
+| `msl_status` | Check MSL prewarm state without forcing init |
+| `list_msl` | Paginated, filterable enumeration of Modelica Standard Library classes |
+| `open_uri` | Unified scheme-aware open (`bundled://`, `mem://`, qualified MSL name, fs path) |
+
+The listing tools (`list_*`, `msl_status`) are introduced in spec
+[`032-model-source-listing`](../specs/032-model-source-listing/spec.md).
+They use a generic `ApiQueryProvider` extension point in `lunco-api`, so
+domain crates register their own listings without `lunco-api` taking a
+direct dep on them.
+
+### Example: end-to-end agent workflow
+
+The combination above is designed so an agent can run:
+
+```
+1. find / list                  list_bundled  →  pick "AnnotatedRocketStage.mo"
+2. open                         open_uri(uri="bundled://AnnotatedRocketStage.mo")
+3. compile + run                execute_command(CompileActiveModel, …) +
+                                execute_command(ResumeActiveModel, …)
+4. inspect what's running       list_open_documents
+5. tweak a value, observe       (covered by spec 033 — describe_model,
+                                 set_input, snapshot_variables)
+```
+
+…without touching the GUI.
 
 ## Resources
 
