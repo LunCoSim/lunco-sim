@@ -29,7 +29,7 @@
 //!   parsed; renderer currently fills a full ellipse and ignores arc
 //!   bounds (follow-up slice).
 
-use rumoca_session::parsing::ast::{Expression, OpUnary, TerminalType};
+use rumoca_session::parsing::ast::{Expression, OpBinary, OpUnary, TerminalType};
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
@@ -260,6 +260,47 @@ pub struct Rectangle {
     pub origin: Point,
     pub rotation: f64,
     pub radius: f64, // corner radius, mm
+    /// Dynamic counterpart to `extent` extracted from MLS §18
+    /// `extent = DynamicSelect(static_matrix, dynamic_matrix)`.
+    /// When present and a value resolver is supplied at render time,
+    /// the renderer evaluates each of the four corner expressions
+    /// and uses the result instead of `extent`. Used for live tank
+    /// fill bars, gauge sweeps, etc.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extent_dynamic: Option<DynExtent>,
+}
+
+/// Per-corner expressions for a dynamic `extent`. Each field is a
+/// [`DynExpr`] evaluated against the per-instance value snapshot at
+/// render time. `(x1, y1)` is `extent[1]`, `(x2, y2)` is `extent[2]`
+/// — matching MLS Annex D's two-corner extent layout.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DynExtent {
+    pub x1: DynExpr,
+    pub y1: DynExpr,
+    pub x2: DynExpr,
+    pub y2: DynExpr,
+}
+
+impl DynExtent {
+    /// Evaluate against a value resolver. Returns the resolved
+    /// [`Extent`] only when all four corners resolve to a number;
+    /// any unresolved variable causes the renderer to fall back to
+    /// the static extent (no half-evaluated geometry).
+    pub fn eval(&self, resolve: &dyn Fn(&str) -> Option<f64>) -> Option<Extent> {
+        let to_num = |dv: DynValue| match dv {
+            DynValue::Number(n) => Some(n),
+            DynValue::Text(_) => None,
+        };
+        let x1 = to_num(self.x1.eval(resolve)?)?;
+        let y1 = to_num(self.y1.eval(resolve)?)?;
+        let x2 = to_num(self.x2.eval(resolve)?)?;
+        let y2 = to_num(self.y2.eval(resolve)?)?;
+        Some(Extent {
+            p1: Point { x: x1, y: y1 },
+            p2: Point { x: x2, y: y2 },
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -300,6 +341,127 @@ pub struct Text {
     pub text_color: Option<Color>,
     pub origin: Point,
     pub rotation: f64,
+    /// Dynamic counterpart to `text_string` extracted from MLS §18
+    /// `textString = DynamicSelect(static_str, dynamic_expr)`.
+    /// When present and a value resolver is supplied at render time,
+    /// the renderer evaluates this expression against current
+    /// instance values and uses the result instead of `text_string`.
+    /// `None` for ordinary static text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_string_dynamic: Option<DynExpr>,
+}
+
+/// Tiny expression AST that the icon renderer can evaluate against a
+/// per-instance value snapshot. Populated from MLS §18 `DynamicSelect`
+/// in icon annotations — the dynamic branch of
+/// `DynamicSelect(static, dynamic)` is converted to this enum at AST
+/// extract time so the renderer doesn't need a Modelica parser.
+///
+/// Only the operations needed for typical icon-display expressions are
+/// supported: numeric literals, string literals, variable lookup,
+/// arithmetic, unary minus, `String(x)` conversion, and string
+/// concatenation via `+`. More complex expressions fall through to
+/// `None` and the renderer falls back to the static text — bigger
+/// scope (function calls, conditionals, comparisons) is a follow-up.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum DynExpr {
+    /// Numeric literal (`100`, `3.14`).
+    Const(f64),
+    /// Quoted string literal (`"opening "`).
+    StringLit(String),
+    /// Bare identifier or dotted reference (`m`, `port.m_flow`).
+    /// At render time the resolver prefixes this with the instance
+    /// path (e.g. `tank.m`) before looking it up in the snapshot.
+    Var(String),
+    /// Unary minus.
+    Neg(Box<DynExpr>),
+    /// `a + b`. If either operand is a string, the result is a
+    /// concatenation; otherwise it's numeric addition.
+    Add(Box<DynExpr>, Box<DynExpr>),
+    /// `a - b` (numeric only).
+    Sub(Box<DynExpr>, Box<DynExpr>),
+    /// `a * b` (numeric only).
+    Mul(Box<DynExpr>, Box<DynExpr>),
+    /// `a / b` (numeric only).
+    Div(Box<DynExpr>, Box<DynExpr>),
+    /// `String(x)` — Modelica's value-to-string conversion.
+    StringCall(Box<DynExpr>),
+}
+
+/// Result of evaluating a `DynExpr`. Used internally by the renderer
+/// to thread typed values through arithmetic and string concatenation
+/// without losing precision.
+#[derive(Debug, Clone)]
+pub enum DynValue {
+    Number(f64),
+    Text(String),
+}
+
+impl DynValue {
+    /// Render any value as the string the icon should display.
+    /// Round to three decimals, then trim trailing zeros (and a
+    /// trailing dot) so integers come out as `3127`, fractions like
+    /// `3127.4`, and exact values aren't padded with noise.
+    pub fn to_display(&self) -> String {
+        match self {
+            DynValue::Number(n) => {
+                let s = format!("{n:.3}");
+                let trimmed = s.trim_end_matches('0').trim_end_matches('.');
+                trimmed.to_string()
+            }
+            DynValue::Text(s) => s.clone(),
+        }
+    }
+}
+
+impl DynExpr {
+    /// Evaluate against a value resolver. The resolver maps variable
+    /// names (as written in the icon expression) to their current
+    /// numeric value — typically a closure that prefixes the
+    /// instance path and looks the result up in
+    /// `NodeStateSnapshot.values`. Returns `None` if any referenced
+    /// variable is unresolved (the renderer will then fall back to
+    /// the static text rather than display "0" or stale data).
+    pub fn eval(&self, resolve: &dyn Fn(&str) -> Option<f64>) -> Option<DynValue> {
+        match self {
+            DynExpr::Const(v) => Some(DynValue::Number(*v)),
+            DynExpr::StringLit(s) => Some(DynValue::Text(s.clone())),
+            DynExpr::Var(name) => resolve(name).map(DynValue::Number),
+            DynExpr::Neg(x) => match x.eval(resolve)? {
+                DynValue::Number(n) => Some(DynValue::Number(-n)),
+                DynValue::Text(_) => None,
+            },
+            DynExpr::Add(a, b) => {
+                let av = a.eval(resolve)?;
+                let bv = b.eval(resolve)?;
+                match (&av, &bv) {
+                    (DynValue::Number(x), DynValue::Number(y)) => {
+                        Some(DynValue::Number(x + y))
+                    }
+                    _ => Some(DynValue::Text(format!(
+                        "{}{}",
+                        av.to_display(),
+                        bv.to_display()
+                    ))),
+                }
+            }
+            DynExpr::Sub(a, b) => match (a.eval(resolve)?, b.eval(resolve)?) {
+                (DynValue::Number(x), DynValue::Number(y)) => Some(DynValue::Number(x - y)),
+                _ => None,
+            },
+            DynExpr::Mul(a, b) => match (a.eval(resolve)?, b.eval(resolve)?) {
+                (DynValue::Number(x), DynValue::Number(y)) => Some(DynValue::Number(x * y)),
+                _ => None,
+            },
+            DynExpr::Div(a, b) => match (a.eval(resolve)?, b.eval(resolve)?) {
+                (DynValue::Number(x), DynValue::Number(y)) => {
+                    if y == 0.0 { None } else { Some(DynValue::Number(x / y)) }
+                }
+                _ => None,
+            },
+            DynExpr::StringCall(x) => Some(DynValue::Text(x.eval(resolve)?.to_display())),
+        }
+    }
 }
 
 /// MLS Annex D `Ellipse` primitive — a filled-shape ellipse fitted to
@@ -666,10 +828,12 @@ fn extract_graphic_item(expr: &Expression) -> Option<GraphicItem> {
 }
 
 fn extract_rectangle(args: &[Expression]) -> Option<Rectangle> {
-    let extent = named_arg(args, "extent").and_then(extract_extent)?;
+    let raw_extent = named_arg(args, "extent")?;
+    let (extent, extent_dynamic) = extract_extent_with_dynamic(raw_extent)?;
     Some(Rectangle {
         shape: extract_filled_shape(args),
         extent,
+        extent_dynamic,
         origin: named_arg(args, "origin")
             .and_then(extract_point)
             .unwrap_or(Point { x: 0.0, y: 0.0 }),
@@ -679,6 +843,45 @@ fn extract_rectangle(args: &[Expression]) -> Option<Rectangle> {
         radius: named_arg(args, "radius")
             .and_then(extract_number)
             .unwrap_or(0.0),
+    })
+}
+
+/// Extract a rectangle/text/etc. `extent` argument, returning both the
+/// static `Extent` (always required) and an optional [`DynExtent`]
+/// when the argument was wrapped in `DynamicSelect(static_matrix,
+/// dynamic_matrix)`. The static branch must always parse — that's the
+/// fallback the renderer uses when no resolver is supplied or any
+/// dynamic corner fails to evaluate.
+fn extract_extent_with_dynamic(expr: &Expression) -> Option<(Extent, Option<DynExtent>)> {
+    if call_name(expr) == Some("DynamicSelect") {
+        let cargs = call_args(expr).unwrap_or(&[]);
+        let static_extent = cargs.first().and_then(extract_extent)?;
+        let dyn_extent = cargs.get(1).and_then(extract_dyn_extent);
+        Some((static_extent, dyn_extent))
+    } else {
+        Some((extract_extent(expr)?, None))
+    }
+}
+
+/// Lower a 2×2 expression matrix (`{{x1,y1},{x2,y2}}`) to a
+/// [`DynExtent`] of four [`DynExpr`]s. Returns `None` if any cell
+/// can't be lowered — the caller falls back to the static extent
+/// rather than render half-evaluated geometry.
+fn extract_dyn_extent(expr: &Expression) -> Option<DynExtent> {
+    let outer = array_elements(expr)?;
+    if outer.len() != 2 {
+        return None;
+    }
+    let p1 = array_elements(&outer[0])?;
+    let p2 = array_elements(&outer[1])?;
+    if p1.len() != 2 || p2.len() != 2 {
+        return None;
+    }
+    Some(DynExtent {
+        x1: expr_to_dyn(&p1[0])?,
+        y1: expr_to_dyn(&p1[1])?,
+        x2: expr_to_dyn(&p2[0])?,
+        y2: expr_to_dyn(&p2[1])?,
     })
 }
 
@@ -784,12 +987,32 @@ fn extract_polygon(args: &[Expression]) -> Option<Polygon> {
 
 fn extract_text(args: &[Expression]) -> Option<Text> {
     let extent = named_arg(args, "extent").and_then(extract_extent)?;
-    let text_string = named_arg(args, "textString")
-        .and_then(extract_string)
-        .unwrap_or_default();
+    let raw = named_arg(args, "textString");
+    let (text_string, text_string_dynamic) = match raw {
+        Some(arg) if call_name(arg) == Some("DynamicSelect") => {
+            // MLS §18: `textString = DynamicSelect(static, dynamic)`.
+            // Tools that don't animate render `static`; tools that do
+            // (in simulation) evaluate `dynamic` against current
+            // values. We always store the static for the cold view
+            // and additionally try to lower `dynamic` to a `DynExpr`
+            // we can evaluate at render time. If lowering fails (the
+            // expression uses unsupported syntax) we silently fall
+            // back to the static — strictly an additive feature.
+            let cargs = call_args(arg).unwrap_or(&[]);
+            let static_str = cargs
+                .first()
+                .and_then(extract_string)
+                .unwrap_or_default();
+            let dyn_expr = cargs.get(1).and_then(expr_to_dyn);
+            (static_str, dyn_expr)
+        }
+        Some(arg) => (extract_string(arg).unwrap_or_default(), None),
+        None => (String::new(), None),
+    };
     Some(Text {
         extent,
         text_string,
+        text_string_dynamic,
         font_size: named_arg(args, "fontSize")
             .and_then(extract_number)
             .unwrap_or(0.0),
@@ -803,6 +1026,61 @@ fn extract_text(args: &[Expression]) -> Option<Text> {
             .and_then(extract_number)
             .unwrap_or(0.0),
     })
+}
+
+/// Lower a parsed Modelica expression to the renderer-side
+/// [`DynExpr`]. Supports the operations typical of icon-display
+/// expressions (numeric/string literals, variable refs, +-*/,
+/// unary minus, `String(x)`); falls back to `None` for syntax we
+/// don't yet handle so callers can use the static text.
+fn expr_to_dyn(expr: &Expression) -> Option<DynExpr> {
+    match unwrap_paren(expr) {
+        Expression::Terminal { terminal_type, token } => match terminal_type {
+            TerminalType::UnsignedReal | TerminalType::UnsignedInteger => {
+                token.text.parse::<f64>().ok().map(DynExpr::Const)
+            }
+            TerminalType::String => Some(DynExpr::StringLit(token.text.as_ref().to_string())),
+            _ => None,
+        },
+        Expression::Unary { op, rhs } => {
+            let inner = expr_to_dyn(rhs)?;
+            match op {
+                OpUnary::Minus(_) => Some(DynExpr::Neg(Box::new(inner))),
+                OpUnary::Plus(_) => Some(inner),
+                _ => None,
+            }
+        }
+        Expression::ComponentReference(comp) => {
+            let parts: Vec<String> = comp
+                .parts
+                .iter()
+                .map(|p| p.ident.text.as_ref().to_string())
+                .collect();
+            Some(DynExpr::Var(parts.join(".")))
+        }
+        Expression::Binary { lhs, op, rhs } => {
+            let l = Box::new(expr_to_dyn(lhs)?);
+            let r = Box::new(expr_to_dyn(rhs)?);
+            match op {
+                OpBinary::Add(_) => Some(DynExpr::Add(l, r)),
+                OpBinary::Sub(_) => Some(DynExpr::Sub(l, r)),
+                OpBinary::Mul(_) => Some(DynExpr::Mul(l, r)),
+                OpBinary::Div(_) => Some(DynExpr::Div(l, r)),
+                _ => None,
+            }
+        }
+        e @ Expression::FunctionCall { args, .. } => {
+            // Only `String(x)` is recognised as a value-conversion
+            // call here. Other function calls (math etc.) fall
+            // through and the static text is used.
+            if call_name(e) == Some("String") && args.len() == 1 {
+                Some(DynExpr::StringCall(Box::new(expr_to_dyn(&args[0])?)))
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
 }
 
 fn extract_filled_shape(args: &[Expression]) -> FilledShape {
@@ -1004,6 +1282,68 @@ mod tests {
     /// extends-inheritance tests that need to resolve parent classes.
     fn parse_source(source: &str) -> rumoca_session::parsing::ast::StoredDefinition {
         parse_to_ast(source, "test.mo").expect("parse")
+    }
+
+    #[test]
+    fn dyn_expr_eval_static_concat_string_call() {
+        let resolve = |name: &str| -> Option<f64> {
+            match name {
+                "m" => Some(3127.4),
+                "opening" => Some(75.0),
+                _ => None,
+            }
+        };
+        let resolve_ref: &dyn Fn(&str) -> Option<f64> = &resolve;
+
+        // "LOX " + String(m) + " kg"  →  "LOX 3127.4 kg"
+        let expr = DynExpr::Add(
+            Box::new(DynExpr::Add(
+                Box::new(DynExpr::StringLit("LOX ".into())),
+                Box::new(DynExpr::StringCall(Box::new(DynExpr::Var("m".into())))),
+            )),
+            Box::new(DynExpr::StringLit(" kg".into())),
+        );
+        assert_eq!(expr.eval(resolve_ref).unwrap().to_display(), "LOX 3127.4 kg");
+
+        // Unknown var → None (renderer falls back to static text).
+        let bad = DynExpr::Var("nonexistent".into());
+        assert!(bad.eval(resolve_ref).is_none());
+
+        // Numeric arithmetic survives string ops.
+        let arith = DynExpr::Mul(
+            Box::new(DynExpr::Var("opening".into())),
+            Box::new(DynExpr::Const(2.0)),
+        );
+        match arith.eval(resolve_ref).unwrap() {
+            DynValue::Number(n) => assert!((n - 150.0).abs() < 1e-9),
+            other => panic!("expected number, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn extract_dynamic_select_from_text_string() {
+        let src = r#"
+            model M
+              annotation(Icon(graphics={
+                Text(extent={{-1,-1},{1,1}},
+                     textString=DynamicSelect("static", String(x)))
+              }));
+            end M;
+        "#;
+        let ann = class_annotations(src);
+        let icon = extract_icon(&ann).expect("icon");
+        let text = match &icon.graphics[0] {
+            GraphicItem::Text(t) => t,
+            other => panic!("expected text, got {other:?}"),
+        };
+        assert_eq!(text.text_string, "static");
+        match text.text_string_dynamic.as_ref().expect("dynamic") {
+            DynExpr::StringCall(inner) => match inner.as_ref() {
+                DynExpr::Var(n) => assert_eq!(n, "x"),
+                other => panic!("expected Var(x), got {other:?}"),
+            },
+            other => panic!("expected StringCall, got {other:?}"),
+        }
     }
 
     #[test]

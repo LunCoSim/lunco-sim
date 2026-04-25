@@ -47,16 +47,17 @@ scnr2 = { git = "https://github.com/jsinger67/scnr2", tag = "0.3.3" }
 scnr2_generate = { git = "https://github.com/jsinger67/scnr2", tag = "0.3.3" }
 scnr2_macro = { git = "https://github.com/jsinger67/scnr2", tag = "0.3.3" }
 
-# Local rumoca worktree — lets us diagnose + fix rumoca bugs (e.g.
-# `MissingStateEquation("spring.w_rel")` on every Mechanics.Rotational
-# example) without pushing to the LunCoSim/rumoca fork first. Remove
-# or revert to git-main once the fix lands upstream.
-[patch."https://github.com/LunCoSim/rumoca"]
-rumoca-session   = { path = "../rumoca/crates/rumoca-session" }
-rumoca-sim       = { path = "../rumoca/crates/rumoca-sim" }
-rumoca-phase-parse = { path = "../rumoca/crates/rumoca-phase-parse" }
-rumoca-tool-fmt  = { path = "../rumoca/crates/rumoca-tool-fmt" }
-rumoca-tool-lint = { path = "../rumoca/crates/rumoca-tool-lint" }
+# Rumoca is consumed from the LunCoSim/rumoca fork's `main` branch
+# (see crates/lunco-modelica/Cargo.toml). To diagnose / fix rumoca
+# bugs locally, re-enable the patch block below pointing at a sibling
+# `../rumoca` checkout.
+#
+# [patch."https://github.com/LunCoSim/rumoca"]
+# rumoca-session   = { path = "../rumoca/crates/rumoca-session" }
+# rumoca-sim       = { path = "../rumoca/crates/rumoca-sim" }
+# rumoca-phase-parse = { path = "../rumoca/crates/rumoca-phase-parse" }
+# rumoca-tool-fmt  = { path = "../rumoca/crates/rumoca-tool-fmt" }
+# rumoca-tool-lint = { path = "../rumoca/crates/rumoca-tool-lint" }
 
 [workspace.package]
 description = "Initialize multi-crate workspace architecture for vessel control simulation"

@@ -37,6 +37,12 @@ fn main() {
         unfocused_mode: UpdateMode::Continuous,
     });
 
+    // Physics fixed timestep: 60 Hz. Modelica stepping runs in
+    // FixedUpdate so the worker receives a predictable per-tick dt.
+    // Matches the Avian / lunco-cosim convention; the worker hands
+    // `time.delta_secs_f64()` straight to `stepper.step()`.
+    app.insert_resource(Time::<Fixed>::from_hz(60.0));
+
     app.run();
 }
 

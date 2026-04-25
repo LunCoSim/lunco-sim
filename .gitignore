@@ -22,3 +22,6 @@ external/
 node_modules/
 
 .cargo/
+
+# graphify generated outputs
+graphify-out/

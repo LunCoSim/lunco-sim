@@ -97,6 +97,19 @@ Commands discovered from the simulation's schema are exposed as typed tools:
 
 ## IDE Integration
 
+### AI agents (this repo)
+
+This repo ships a project-scoped `.mcp.json` at the workspace root that
+runs the server straight from `mcp/src/index.js`. On first launch it
+auto-installs dependencies (`npm install` runs only if `mcp/node_modules/`
+is missing), then execs the server.
+
+`.mcp.json` is read by any MCP-aware agent that supports project-scoped
+config (Claude Code, Cline, Cursor, Windsurf, etc.). The agent will
+typically prompt you once to approve the server before it loads.
+
+No global install needed — just open the repo in your agent of choice.
+
 ### Claude Desktop
 
 Add to `~/.claude/mcp.json`:

@@ -111,6 +111,67 @@ pub fn fetch_node_state(ctx: &egui::Context) -> Arc<NodeStateSnapshot> {
         .unwrap_or_default()
 }
 
+/// Per-frame snapshot of model inputs that are exposed for direct
+/// in-canvas control (Dashboard-style sliders / knobs). Indexed by
+/// the same fully-qualified instance path as [`NodeStateSnapshot`]
+/// (e.g. `"valve.opening"`). Includes the declared `min`/`max`
+/// bounds so widgets can clamp without a separate lookup.
+#[derive(Debug, Default, Clone)]
+pub struct InputControlSnapshot {
+    /// `"<instance>.<input>" -> (current_value, min, max)`.
+    pub inputs: std::collections::HashMap<String, (f64, Option<f64>, Option<f64>)>,
+}
+
+pub fn stash_input_control_snapshot(ctx: &egui::Context, snapshot: InputControlSnapshot) {
+    ctx.data_mut(|d| d.insert_temp(input_control_snapshot_id(), Arc::new(snapshot)));
+}
+
+pub fn fetch_input_control_snapshot(ctx: &egui::Context) -> Arc<InputControlSnapshot> {
+    ctx.data(|d| d.get_temp::<Arc<InputControlSnapshot>>(input_control_snapshot_id()))
+        .unwrap_or_default()
+}
+
+/// Push a write request from an in-canvas control widget into the
+/// per-frame queue. The host drains it after the canvas finishes
+/// rendering and applies the changes to the model. Keys are the
+/// fully-qualified input names; multiple writes during one frame
+/// last-write-wins.
+pub fn queue_input_write(ctx: &egui::Context, name: &str, value: f64) {
+    let queue: Arc<std::sync::Mutex<std::collections::HashMap<String, f64>>> = ctx.data_mut(|d| {
+        if let Some(existing) = d.get_temp(input_writes_id()) {
+            existing
+        } else {
+            let fresh: Arc<std::sync::Mutex<std::collections::HashMap<String, f64>>> =
+                Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+            d.insert_temp(input_writes_id(), fresh.clone());
+            fresh
+        }
+    });
+    if let Ok(mut guard) = queue.lock() {
+        guard.insert(name.to_string(), value);
+    };
+}
+
+/// Drain the per-frame input-write queue. Called by the host once
+/// per render pass after the canvas is done; returns the pending
+/// writes for the host to apply to its `ModelicaModel.inputs`
+/// (which the worker forwards to `SimStepper::set_input`).
+pub fn drain_input_writes(ctx: &egui::Context) -> Vec<(String, f64)> {
+    let queue: Option<Arc<std::sync::Mutex<std::collections::HashMap<String, f64>>>> =
+        ctx.data(|d| d.get_temp(input_writes_id()));
+    let Some(queue) = queue else { return Vec::new() };
+    let Ok(mut guard) = queue.lock() else { return Vec::new() };
+    guard.drain().collect()
+}
+
+fn input_control_snapshot_id() -> egui::Id {
+    egui::Id::new("lunco_viz_input_control_snapshot")
+}
+
+fn input_writes_id() -> egui::Id {
+    egui::Id::new("lunco_viz_input_write_queue")
+}
+
 fn node_state_id() -> egui::Id {
     egui::Id::new("lunco_viz_node_state_snapshot")
 }

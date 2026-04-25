@@ -166,7 +166,20 @@ impl Canvas {
         // tool never sees the interaction. Reading raw
         // `button_pressed` / `button_down` / `button_released`
         // covers clicks and drags uniformly.
-        if response.hovered() || response.contains_pointer() {
+        // Suppress canvas pointer handling when the pointer is
+        // inside a rect reserved by an in-canvas Dashboard widget
+        // (e.g. a slider rendered on a node). Widgets publish
+        // their rects via `push_canvas_widget_rect()` below and
+        // the canvas skips its raw-input dispatch for that frame
+        // when the pointer is over any of them. This is simpler
+        // and more predictable than `is_pointer_over_area()` /
+        // `is_using_pointer()` in egui, which can over-suppress
+        // or lag behind the initial press.
+        let pointer_now = ui.ctx().input(|i| i.pointer.hover_pos());
+        let pointer_in_widget = pointer_now
+            .map(|p| pointer_is_over_canvas_widget(ui.ctx(), p))
+            .unwrap_or(false);
+        if (response.hovered() || response.contains_pointer()) && !pointer_in_widget {
             let (primary_pressed, primary_down, primary_released, pointer) = ui.ctx().input(|i| {
                 (
                     i.pointer.button_pressed(PointerButton::Primary),
@@ -424,6 +437,16 @@ impl Canvas {
         // clip is intersected with the existing one, so no
         // unintended side effects in tightly-laid-out hosts.
         ui.set_clip_rect(rect);
+        // Wipe the previous frame's widget-rect reservations right
+        // before scene draw. In-canvas widgets (sliders on node
+        // icons) re-publish their rects in this frame's draw pass,
+        // so the list ends up populated for the NEXT frame's
+        // input-dispatch check — a one-frame lag that's invisible
+        // to the user (the node's slider has to be visible for at
+        // least a frame before it can be interacted with, which
+        // it always is).
+        clear_canvas_widget_rects(ui.ctx());
+
         {
             // Pass the active tool's preview (ghost edge during a
             // port drag, rubber-band rect during band-select) via
@@ -488,4 +511,60 @@ impl Canvas {
             _ => {}
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// In-canvas widget pointer routing
+// ---------------------------------------------------------------------------
+//
+// Dashboard-style widgets rendered ON nodes (sliders, knobs, …)
+// need to claim pointer input before the canvas's general node-drag
+// handler fires. We use a simple per-frame rect list: widgets
+// publish their screen-rect via [`push_canvas_widget_rect`] during
+// their draw; the canvas checks the list at input-dispatch time via
+// [`pointer_is_over_canvas_widget`] and skips that frame's
+// PointerDown / PointerMove when the pointer is inside any reserved
+// rect. [`clear_canvas_widget_rects`] is called at the end of the
+// canvas render so stale rects from a previous frame don't
+// suppress input this frame — widgets re-publish every frame they
+// render.
+
+pub fn push_canvas_widget_rect(ctx: &egui::Context, rect: egui::Rect) {
+    use std::sync::{Arc, Mutex};
+    let list: Arc<Mutex<Vec<egui::Rect>>> = ctx.data_mut(|d| {
+        if let Some(existing) = d.get_temp(canvas_widget_rects_id()) {
+            existing
+        } else {
+            let fresh: Arc<Mutex<Vec<egui::Rect>>> = Arc::new(Mutex::new(Vec::new()));
+            d.insert_temp(canvas_widget_rects_id(), fresh.clone());
+            fresh
+        }
+    });
+    if let Ok(mut guard) = list.lock() {
+        guard.push(rect);
+    };
+}
+
+pub(crate) fn pointer_is_over_canvas_widget(ctx: &egui::Context, pos: egui::Pos2) -> bool {
+    use std::sync::{Arc, Mutex};
+    let list: Option<Arc<Mutex<Vec<egui::Rect>>>> =
+        ctx.data(|d| d.get_temp(canvas_widget_rects_id()));
+    let Some(list) = list else { return false };
+    let Ok(guard) = list.lock() else { return false };
+    guard.iter().any(|r| r.contains(pos))
+}
+
+pub(crate) fn clear_canvas_widget_rects(ctx: &egui::Context) {
+    use std::sync::{Arc, Mutex};
+    let list: Option<Arc<Mutex<Vec<egui::Rect>>>> =
+        ctx.data(|d| d.get_temp(canvas_widget_rects_id()));
+    if let Some(list) = list {
+        if let Ok(mut guard) = list.lock() {
+            guard.clear();
+        };
+    }
+}
+
+fn canvas_widget_rects_id() -> egui::Id {
+    egui::Id::new("lunco_canvas_widget_rects")
 }

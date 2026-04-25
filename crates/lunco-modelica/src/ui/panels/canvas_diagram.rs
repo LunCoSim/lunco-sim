@@ -278,12 +278,35 @@ impl NodeVisual for IconNodeVisual {
                 name: (!self.instance_name.is_empty()).then_some(self.instance_name.as_str()),
                 class_name: (!self.class_name.is_empty()).then_some(self.class_name.as_str()),
             };
-            crate::icon_paint::paint_graphics_full(
+            // Build a per-instance value resolver for MLS §18
+            // `DynamicSelect` text expressions. The icon expression
+            // is written in the component's local scope (`m`,
+            // `port.m_flow`); the live snapshot is keyed by full
+            // instance path (`tank.m`, `tank.port.m_flow`). We
+            // prefix with `instance_name.` and look it up — that
+            // covers both top-level state vars and dotted refs into
+            // sub-components / ports. Falls back to the bare name
+            // for cases like global `time`.
+            let node_state =
+                lunco_viz::kinds::canvas_plot_node::fetch_node_state(ctx.ui.ctx());
+            let instance = self.instance_name.clone();
+            let resolver = move |name: &str| -> Option<f64> {
+                if !instance.is_empty() {
+                    let qualified = format!("{instance}.{name}");
+                    if let Some(&v) = node_state.values.get(&qualified) {
+                        return Some(v);
+                    }
+                }
+                node_state.values.get(name).copied()
+            };
+            let resolver_ref: &dyn Fn(&str) -> Option<f64> = &resolver;
+            crate::icon_paint::paint_graphics_with_resolver(
                 painter,
                 rect,
                 icon.coordinate_system,
                 orientation,
                 Some(&sub),
+                Some(resolver_ref),
                 &icon.graphics,
             );
             drew_svg = true;
@@ -433,6 +456,14 @@ impl NodeVisual for IconNodeVisual {
                 &rows,
             );
         }
+
+        // Dashboard-style in-canvas control widget. Last call in
+        // draw so the painter borrow taken above has ended (Rust
+        // NLL allows ui to be reborrowed mutably here for
+        // `ui.interact`). The widget is always visible while the
+        // icon is rendered and captures pointer events itself so
+        // dragging the slider does NOT also drag the node.
+        paint_input_control_widget(ctx.ui, rect, &self.instance_name);
     }
     fn debug_name(&self) -> &str {
         "modelica.icon"
@@ -907,26 +938,43 @@ impl EdgeVisual for OrthogonalEdgeVisual {
         let node_state =
             lunco_viz::kinds::canvas_plot_node::fetch_node_state(ctx.ui.ctx());
         const ACTIVITY_EPS: f64 = 1e-6;
-        let (value, reverse_if_negative) = if let Some(fv) = self.flow_vars.first() {
-            // Acausal flow connector: sample declared flow variable.
-            // MLS sign convention: positive = mass flows INTO the
-            // connector from the source component; negative → flow
-            // toward source → reverse polyline.
-            let key = format!("{}.{}", self.source_path, fv.name);
-            (node_state.values.get(&key).copied(), true)
+        // Decide animation direction relative to the polyline's
+        // visual src→tgt orientation. Returns Some(physical_flow_v)
+        // where positive ⇒ flow goes src→tgt (paint as-is) and
+        // negative ⇒ flow goes tgt→src (reverse polyline).
+        let physical_flow = if let Some(fv) = self.flow_vars.first() {
+            // Acausal flow connector. MLS §9.3.1 convention:
+            // `port.m_flow > 0` ⇒ mass enters the component THROUGH
+            // that port (i.e. fluid flows tgt→src in our visual). So
+            // `physical_src_to_tgt = -src.m_flow`. We sample the
+            // source side first; if the compiler eliminated it (one
+            // side of an a+b=0 pair often is), fall back to the
+            // target side and re-flip the sign accordingly.
+            let src_key = format!("{}.{}", self.source_path, fv.name);
+            let tgt_key = format!("{}.{}", self.target_path, fv.name);
+            if let Some(&v_src) = node_state.values.get(&src_key) {
+                Some(-v_src)
+            } else {
+                node_state.values.get(&tgt_key).copied()
+            }
         } else {
-            // Causal signal: value is at the source port. Direction
-            // is polyline from→to (output→input); don't flip on sign.
-            let v = node_state
+            // Causal signal: value lives on the source side; the
+            // visual direction src→tgt already matches the data flow
+            // (output → input), so a positive sample reads as
+            // forward, negative as reverse. We treat the magnitude
+            // as activity and pin direction to the polyline because
+            // a causal signal "going negative" doesn't reverse the
+            // wire — a controller output of -1.0 still flows from
+            // the output to the input it's wired to.
+            node_state
                 .values
                 .get(&self.source_path)
                 .or_else(|| node_state.values.get(&self.target_path))
-                .copied();
-            (v, false)
+                .map(|&v| v.abs())
         };
-        if let Some(v) = value {
+        if let Some(v) = physical_flow {
             if v.abs() > ACTIVITY_EPS {
-                if reverse_if_negative && v < 0.0 {
+                if v < 0.0 {
                     let mut rev = polyline.clone();
                     rev.reverse();
                     paint_flow_dots(painter, &rev, col, anim_time);
@@ -1215,8 +1263,18 @@ fn paint_wire_tooltip(
     text: &str,
     accent: egui::Color32,
 ) {
+    // Draw on a Tooltip-order layer rather than the painter's own
+    // layer so the tooltip sits ABOVE any node icons that might
+    // overlap it. Wires are drawn before nodes (so ports sit on
+    // top visually), which would otherwise occlude the edge
+    // tooltip when the hover point is near a component body.
+    let ctx = painter.ctx().clone();
+    let top = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Tooltip,
+        egui::Id::new("lunco_modelica_wire_tooltip"),
+    ));
     let font = egui::FontId::proportional(11.0);
-    let galley = painter.layout_no_wrap(
+    let galley = top.layout_no_wrap(
         text.to_string(),
         font,
         egui::Color32::from_rgb(235, 235, 240),
@@ -1225,14 +1283,14 @@ fn paint_wire_tooltip(
     // Offset so the tooltip doesn't sit under the cursor.
     let min = egui::pos2(pointer.x + 12.0, pointer.y + 12.0);
     let rect = egui::Rect::from_min_size(min, galley.size() + pad * 2.0);
-    painter.rect_filled(rect, 3.0, egui::Color32::from_rgba_unmultiplied(20, 22, 28, 235));
-    painter.rect_stroke(
+    top.rect_filled(rect, 3.0, egui::Color32::from_rgba_unmultiplied(20, 22, 28, 235));
+    top.rect_stroke(
         rect,
         3.0,
         egui::Stroke::new(1.0, accent),
         egui::StrokeKind::Inside,
     );
-    painter.galley(rect.min + pad, galley, egui::Color32::PLACEHOLDER);
+    top.galley(rect.min + pad, galley, egui::Color32::PLACEHOLDER);
 }
 
 /// Paint a small filled triangle pointing from `tail` to `tip`.
@@ -1258,6 +1316,139 @@ fn paint_arrowhead(painter: &egui::Painter, tail: egui::Pos2, tip: egui::Pos2, c
         color,
         egui::Stroke::NONE,
     ));
+}
+
+/// Render Dashboard-style in-canvas control widgets for every
+/// bounded input attached to this instance. Mirrors the Simulink
+/// `Dashboard.Slider` / SCADA HMI pattern: small interactive strips
+/// rendered ON the node, separate from the icon body, that capture
+/// pointer events directly so dragging a slider doesn't also drag
+/// the node.
+///
+/// Coverage:
+/// - One vertical strip per input whose key starts with `<instance>.`
+///   *and* has finite declared `min`/`max` bounds.
+/// - Strips are stacked side by side along the right edge of the
+///   icon, leaf-name tooltip on hover so users learn which strip
+///   controls which input.
+/// - Inputs without bounds are skipped (we'd have nothing to map
+///   drag distance against). A future revision can add a
+///   knob-style relative-drag widget for unbounded inputs and an
+///   explicit `__LunCo_inputControl(target=...)` annotation for
+///   model authors who want fine control over placement / kind.
+fn paint_input_control_widget(
+    ui: &mut egui::Ui,
+    icon_rect: egui::Rect,
+    instance_name: &str,
+) {
+    if instance_name.is_empty() || icon_rect.height() < 24.0 {
+        return;
+    }
+    let snap = lunco_viz::kinds::canvas_plot_node::fetch_input_control_snapshot(ui.ctx());
+    let prefix = format!("{instance_name}.");
+
+    // Collect all bounded inputs for this instance, sorted by name
+    // for stable left-to-right order across frames (the snapshot's
+    // HashMap iteration is non-deterministic).
+    let mut bound: Vec<(String, f64, f64, f64)> = snap
+        .inputs
+        .iter()
+        .filter(|(name, _)| name.starts_with(&prefix))
+        .filter_map(|(name, (value, min, max))| {
+            let (mn, mx) = (min.as_ref()?, max.as_ref()?);
+            if mx <= mn {
+                return None;
+            }
+            Some((name.clone(), *value, *mn, *mx))
+        })
+        .collect();
+    if bound.is_empty() {
+        return;
+    }
+    bound.sort_by(|a, b| a.0.cmp(&b.0));
+
+    // Strip geometry, in screen pixels (no zoom scaling so the
+    // widget stays usably-sized at any zoom). Multiple strips stack
+    // right-to-left from the icon's right edge.
+    const STRIP_WIDTH: f32 = 10.0;
+    const STRIP_GAP: f32 = 3.0;
+    const STRIP_PAD: f32 = 4.0;
+    let h = (icon_rect.height() * 0.7).max(24.0);
+    let strip_top_y = icon_rect.center().y - h * 0.5;
+
+    for (idx, (name, value, mn, mx)) in bound.iter().enumerate() {
+        let x = icon_rect.right()
+            - STRIP_PAD
+            - STRIP_WIDTH
+            - (idx as f32) * (STRIP_WIDTH + STRIP_GAP);
+        let strip_rect = egui::Rect::from_min_size(
+            egui::pos2(x, strip_top_y),
+            egui::vec2(STRIP_WIDTH, h),
+        );
+
+        // Publish the strip's screen-rect so the canvas's raw-input
+        // dispatch skips node-drag when the pointer is inside. This
+        // is how the slider "wins" the pointer without competing
+        // with the canvas's tool interaction — see
+        // [`lunco_canvas::canvas::push_canvas_widget_rect`].
+        lunco_canvas::canvas::push_canvas_widget_rect(ui.ctx(), strip_rect);
+
+        // Background trough.
+        let trough_color = egui::Color32::from_rgba_unmultiplied(40, 40, 50, 200);
+        ui.painter().rect_filled(strip_rect, 3.0, trough_color);
+
+        // Filled portion = current value normalised against bounds.
+        let frac = ((*value - *mn) / (*mx - *mn)).clamp(0.0, 1.0) as f32;
+        if frac > 0.0 {
+            let fill_h = strip_rect.height() * frac;
+            let fill_rect = egui::Rect::from_min_size(
+                egui::pos2(strip_rect.min.x, strip_rect.max.y - fill_h),
+                egui::vec2(strip_rect.width(), fill_h),
+            );
+            let fill_color = egui::Color32::from_rgb(80, 180, 250);
+            ui.painter().rect_filled(fill_rect, 3.0, fill_color);
+        }
+
+        // Outline so the strip stays visible against any icon body.
+        ui.painter().rect_stroke(
+            strip_rect,
+            3.0,
+            egui::Stroke::new(1.0, egui::Color32::from_gray(180)),
+            egui::StrokeKind::Inside,
+        );
+
+        // `ui.interact` at the strip's rect. Seeding the Id with
+        // the input's fully-qualified name so two instances of the
+        // same component class (or two inputs on the same instance)
+        // don't share drag state.
+        let widget_id = egui::Id::new(("lunco_input_control", name.clone()));
+        let response = ui.interact(strip_rect, widget_id, egui::Sense::click_and_drag());
+        if response.dragged() || response.clicked() {
+            if let Some(pos) = response.interact_pointer_pos() {
+                // Vertical pointer position → value: top = max,
+                // bottom = min (standard fader convention).
+                let y_rel = (pos.y - strip_rect.min.y) / strip_rect.height();
+                let inv = (1.0 - y_rel).clamp(0.0, 1.0) as f64;
+                let new_value = mn + inv * (mx - mn);
+                if (new_value - value).abs() > 1e-9 {
+                    lunco_viz::kinds::canvas_plot_node::queue_input_write(
+                        ui.ctx(),
+                        name,
+                        new_value,
+                    );
+                }
+            }
+        }
+        if response.hovered() {
+            let leaf = name.rsplit('.').next().unwrap_or(name);
+            let tooltip = if (mx - mn - 100.0).abs() < 1e-6 && mn.abs() < 1e-6 {
+                format!("{leaf}: {value:.1} %")
+            } else {
+                format!("{leaf}: {value:.3} (range {mn:.2} … {mx:.2})")
+            };
+            response.on_hover_text(tooltip);
+        }
+    }
 }
 
 /// Visual style of a port marker on a component icon. Mirrors the
@@ -3134,6 +3325,38 @@ impl CanvasDiagramPanel {
             });
         }
 
+        // Stash the input-control snapshot so each canvas icon can
+        // render an in-canvas control widget bound to its own
+        // RealInput(s). Includes the input's current value plus
+        // declared min/max bounds (with the same leaf-name fallback
+        // Telemetry uses, since `parameter_bounds` keys by leaf
+        // component name and the runtime queries by qualified path).
+        // Publishing this every frame keeps the widgets responsive
+        // to recompiles, parameter changes, and external writes.
+        {
+            let mut control_snapshot =
+                lunco_viz::kinds::canvas_plot_node::InputControlSnapshot::default();
+            let mut q = world.query::<&crate::ModelicaModel>();
+            for model in q.iter(world) {
+                for (qualified, value) in &model.inputs {
+                    let leaf = qualified.rsplit('.').next().unwrap_or(qualified);
+                    let (mn, mx) = model
+                        .parameter_bounds
+                        .get(qualified)
+                        .copied()
+                        .or_else(|| model.parameter_bounds.get(leaf).copied())
+                        .unwrap_or((None, None));
+                    control_snapshot
+                        .inputs
+                        .insert(qualified.clone(), (*value, mn, mx));
+                }
+            }
+            lunco_viz::kinds::canvas_plot_node::stash_input_control_snapshot(
+                ui.ctx(),
+                control_snapshot,
+            );
+        }
+
         let (response, events) = {
             let mut state = world.resource_mut::<CanvasDiagramState>();
             let docstate = state.get_mut(active_doc);
@@ -3141,6 +3364,26 @@ impl CanvasDiagramPanel {
             docstate.canvas.snap = snap_settings;
             docstate.canvas.ui(ui)
         };
+
+        // Drain in-canvas input control writes from the per-frame
+        // queue and apply them to the matching `ModelicaModel.inputs`.
+        // The worker forwards the change to `SimStepper::set_input`
+        // on the next sync — same path the Telemetry slider uses,
+        // just sourced from the diagram's overlay widgets.
+        {
+            let writes =
+                lunco_viz::kinds::canvas_plot_node::drain_input_writes(ui.ctx());
+            if !writes.is_empty() {
+                let mut q = world.query::<&mut crate::ModelicaModel>();
+                for mut model in q.iter_mut(world) {
+                    for (name, value) in &writes {
+                        if let Some(slot) = model.inputs.get_mut(name) {
+                            *slot = *value;
+                        }
+                    }
+                }
+            }
+        }
 
         // Service a deferred Fit request now that the widget rect
         // (`response.rect`) is known. The observer side just sets

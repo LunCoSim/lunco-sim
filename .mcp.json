@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "lunco": {
+      "command": "sh",
+      "args": [
+        "-c",
+        "cd mcp && (test -d node_modules || npm install --silent) && exec node src/index.js"
+      ],
+      "env": {
+        "LUNCO_API_HOST": "localhost",
+        "LUNCO_API_PORT": "3000"
+      }
+    }
+  }
+}

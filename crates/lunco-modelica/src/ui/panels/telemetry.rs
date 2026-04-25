@@ -30,6 +30,29 @@ fn lookup_desc<'a>(
     }
 }
 
+/// Same leaf-name fallback as `lookup_desc`, applied to the
+/// `(min, max)` bounds map. The AST extractor keys bounds by leaf
+/// component name (`opening`) because bound declarations live inside
+/// the component class; the runtime queries by fully-qualified
+/// instance path (`valve.opening`). Try the qualified name first
+/// (handles top-level components of the active class) then fall back
+/// to the leaf.
+fn lookup_bounds(
+    bounds: &HashMap<String, (Option<f64>, Option<f64>)>,
+    name: &str,
+) -> (Option<f64>, Option<f64>) {
+    if let Some(b) = bounds.get(name) {
+        return *b;
+    }
+    let leaf = name.rsplit('.').next().unwrap_or(name);
+    if leaf != name {
+        if let Some(b) = bounds.get(leaf) {
+            return *b;
+        }
+    }
+    (None, None)
+}
+
 /// Telemetry panel — model parameters, inputs, and variable plotting toggles.
 pub struct TelemetryPanel;
 
@@ -160,10 +183,7 @@ impl Panel for TelemetryPanel {
                         // default to ±f64::INFINITY so the user can
                         // still go anywhere if the model didn't
                         // declare a bound.
-                        let (mn, mx) = parameter_bounds
-                            .get(key)
-                            .copied()
-                            .unwrap_or((None, None));
+                        let (mn, mx) = lookup_bounds(&parameter_bounds, key);
                         let dv = egui::DragValue::new(&mut v)
                             .speed(0.01)
                             .fixed_decimals(2)
@@ -251,10 +271,7 @@ impl Panel for TelemetryPanel {
                             resp.on_hover_text(desc);
                         }
                         let mut v = val;
-                        let (mn, mx) = parameter_bounds
-                            .get(&key)
-                            .copied()
-                            .unwrap_or((None, None));
+                        let (mn, mx) = lookup_bounds(&parameter_bounds, &key);
                         ui.add(
                             egui::DragValue::new(&mut v)
                                 .speed(0.1)
