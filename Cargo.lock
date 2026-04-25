@@ -6243,6 +6243,7 @@ dependencies = [
  "leafwing-input-manager",
  "lunco-command-macro",
  "serde",
+ "serde_json",
  "smallvec",
  "web-time",
 ]

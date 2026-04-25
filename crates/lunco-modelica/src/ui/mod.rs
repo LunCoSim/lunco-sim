@@ -379,6 +379,7 @@ impl Plugin for ModelicaUiPlugin {
             // stopped receiving keystrokes for AST_DEBOUNCE_MS (250 ms).
             // Keeps text-edit latency constant regardless of how busy
             // the sim worker is.
+            .init_resource::<ast_refresh::PendingAstParses>()
             .add_systems(Update, ast_refresh::refresh_stale_asts)
             .add_systems(Startup, register_settings_menu)
             // Image-loader install is a first-frame one-shot — runs

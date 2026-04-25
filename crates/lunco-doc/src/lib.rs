@@ -243,6 +243,24 @@ impl DocumentOrigin {
         matches!(self, Self::File { writable: true, .. })
     }
 
+    /// Whether the document accepts mutating ops. **Different from
+    /// [`is_writable`](Self::is_writable)**: Untitled docs *cannot save*
+    /// without a Save-As (so `is_writable() == false`), but they
+    /// absolutely *can be edited* — they are the canonical scratch
+    /// surface. Read-only library origins (`File { writable: false }`)
+    /// are the only kind that refuse mutations.
+    ///
+    /// `ModelicaDocument::apply` (and any other [`Document`] impl that
+    /// wants to enforce origin-level read-only) calls this — never
+    /// `is_writable`. Conflating the two silently bricks every
+    /// duplicate-to-workspace flow.
+    pub fn accepts_mutations(&self) -> bool {
+        match self {
+            Self::Untitled { .. } => true,
+            Self::File { writable, .. } => *writable,
+        }
+    }
+
     /// Whether this document has never been written to disk in this
     /// session (Save-As is required before Save can work).
     pub fn is_untitled(&self) -> bool {
@@ -276,6 +294,13 @@ impl DocumentOrigin {
 pub enum DocumentError {
     /// The operation is invalid for the current document state.
     ValidationFailed(String),
+    /// The document is read-only — its origin (e.g. an MSL library
+    /// class or a bundled example) does not allow mutation. Callers
+    /// should surface this as "duplicate to workspace first" rather
+    /// than retry. The document layer is the single source of truth
+    /// for this invariant; UI panels (palette, inspector, canvas) do
+    /// NOT pre-check — they fire ops and observe the error.
+    ReadOnly,
     /// An internal error occurred during application.
     Internal(String),
 }
@@ -284,6 +309,10 @@ impl fmt::Display for DocumentError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::ValidationFailed(msg) => write!(f, "Validation failed: {}", msg),
+            Self::ReadOnly => write!(
+                f,
+                "document is read-only — duplicate to workspace to edit"
+            ),
             Self::Internal(msg) => write!(f, "Internal error: {}", msg),
         }
     }
