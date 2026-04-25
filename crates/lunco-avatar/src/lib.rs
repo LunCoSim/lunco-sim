@@ -108,6 +108,11 @@ pub struct SpringArmCamera {
     pub pitch: f32,
     pub damping: Option<f32>,
     pub vertical_offset: f32,
+    /// Low-pass-filtered target heading in radians. `None` on first frame
+    /// (snaps to the rover's current heading). Decoupling this from the raw
+    /// per-step rover yaw absorbs wheel/suspension wobble so the camera
+    /// frame stays steady while the rover micro-rocks inside it.
+    pub heading_filter: Option<f64>,
 }
 
 /// Survey camera: orbits a target fixed to the stars.
@@ -399,12 +404,31 @@ fn spring_arm_system(
 
         // Resolve rover heading in double-precision to eliminate quantization jitter.
         let target_fwd_d = t_tf.rotation.mul_vec3(Vec3::Z).as_dvec3();
-        let target_heading_d = if target_fwd_d.x.abs() > 1e-6 || target_fwd_d.z.abs() > 1e-6 {
+        let raw_heading = if target_fwd_d.x.abs() > 1e-6 || target_fwd_d.z.abs() > 1e-6 {
             target_fwd_d.x.atan2(target_fwd_d.z)
         } else { 0.0 };
 
-        // Combine rover heading with user yaw offset.
-        let final_yaw = (target_heading_d + arm.yaw as f64) as f32;
+        // Low-pass the rover heading so wheel/suspension micro-yaw doesn't
+        // make the camera offset wobble. User yaw input is added below
+        // *after* the filter, so mouse-look stays instant.
+        // Rate ≈15 (τ≈67ms) — invisible during deliberate turns, kills wobble.
+        let prev_heading = arm.heading_filter.unwrap_or(raw_heading);
+        // Normalise delta into [-π, π] regardless of how many revolutions
+        // `prev_heading` has accumulated relative to raw. A single `±TAU`
+        // correction is not enough once the filter has drifted past 2π,
+        // which is exactly what produced the "camera snaps a full 360"
+        // symptom after repeated rover spins.
+        let pi = std::f64::consts::PI;
+        let tau = std::f64::consts::TAU;
+        let delta = ((raw_heading - prev_heading + pi).rem_euclid(tau)) - pi;
+        let heading_alpha = 1.0 - (-15.0 * dt as f64).exp();
+        // Keep filtered_heading itself wrapped, so it never drifts unbounded.
+        let next = prev_heading + delta * heading_alpha;
+        let filtered_heading = ((next + pi).rem_euclid(tau)) - pi;
+        arm.heading_filter = Some(filtered_heading);
+
+        // Combine filtered rover heading with instant user yaw offset.
+        let final_yaw = (filtered_heading + arm.yaw as f64) as f32;
 
         // Rotation: surface-relative or ecliptic-locked
         let desired_rot = if surface_mode.is_some() {
@@ -1127,6 +1151,8 @@ fn on_release_command(
 
     commands.entity(avatar_ent)
         .remove::<ControllerLink>()
+        .remove::<ActionState<lunco_controller::VesselIntent>>()
+        .remove::<InputMap<lunco_controller::VesselIntent>>()
         .remove::<SpringArmCamera>()
         .remove::<OrbitCamera>()
         .remove::<FrameBlend>();
@@ -1148,40 +1174,18 @@ fn on_release_command(
     info!("Released possession → camera at current position (surface={})", is_surface);
 }
 
-/// Forwards drive commands to the possessed vessel.
+/// No-op placeholder.
 ///
-/// CTRL acts as a momentary inhibit: when held, the rover receives zero
-/// intents, preventing accidental movement while the user is flying the camera.
-fn on_user_intent(trigger: On<IntentAnalogState>, q_avatar: Query<&ControllerLink, With<Avatar>>, mut commands: Commands, keys: Res<ButtonInput<KeyCode>>, mut was_ctrl: Local<bool>) {
-    let analog = trigger.event();
-    let avatar_entity = trigger.entity;
-    let is_ctrl = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
-    let is_moving = analog.forward.abs() > 0.01 || analog.side.abs() > 0.01;
-
-    if let Ok(link) = q_avatar.get(avatar_entity) {
-        if is_ctrl {
-            if !*was_ctrl {
-                commands.trigger(lunco_mobility::DriveRover {
-                    target: link.vessel_entity,
-                    forward: 0.0,
-                    steer: 0.0,
-                });
-            }
-            *was_ctrl = is_ctrl;
-            return;
-        }
-
-        let ctrl_just_released = *was_ctrl && !is_ctrl;
-        if is_moving || ctrl_just_released {
-            commands.trigger(lunco_mobility::DriveRover {
-                target: link.vessel_entity,
-                forward: analog.forward as f64,
-                steer: analog.side as f64,
-            });
-        }
-    }
-    *was_ctrl = is_ctrl;
-}
+/// **History**: this observer used to forward analog WASD into `DriveRover`
+/// commands, racing the typed `lunco-controller::translate_intents_to_commands`
+/// path on the same physical keys. Two writers on the same steer port produced
+/// per-frame torque oscillation (jitter on rotation) and the embedded
+/// "Ctrl-zeroes-rover" hack made Ctrl stop the wheels even though Ctrl is now
+/// strictly a camera modifier. The vessel-driving logic lives entirely in
+/// `lunco-controller` now; this observer is left in place only so the
+/// `IntentAnalogState` event still has a registered handler if other crates
+/// rely on it firing.
+fn on_user_intent(_trigger: On<IntentAnalogState>) {}
 
 /// Helper function to find the grid an entity belongs to.
 fn get_grid_for_entity(
@@ -1275,9 +1279,14 @@ fn on_possess_command(
         }
     }
 
-    commands.entity(avatar_ent)
-        .insert(ControllerLink { vessel_entity: cmd.target });
-    commands.entity(cmd.target).insert((
+    // VesselIntent state + input map go on the **avatar**, not the vessel.
+    // `lunco-controller::translate_intents_to_commands` joins on
+    // `(VesselIntentState, ControllerLink)` — both must live on the same
+    // entity for the query to match. Putting the action state on the vessel
+    // (as a stranded component) silently disabled the entire keyboard drive
+    // path; the legacy `on_user_intent` observer was masking the bug.
+    commands.entity(avatar_ent).insert((
+        ControllerLink { vessel_entity: cmd.target },
         ActionState::<lunco_controller::VesselIntent>::default(),
         lunco_controller::get_default_input_map(),
     ));
@@ -1304,6 +1313,7 @@ fn on_possess_command(
             pitch: end_pitch,
             damping: Some(0.05),
             vertical_offset: end_vert_off,
+            heading_filter: None,
         });
         // If possessing a surface vehicle, enable surface-relative camera mode
         if is_surface_vehicle {

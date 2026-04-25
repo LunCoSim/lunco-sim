@@ -49,28 +49,68 @@ pub struct ControllerLink {
 ///
 /// This system implements the 'Level 4' Controller logic, mixing various
 /// intents (like Forward + Left) into typed command structs.
+///
+/// **Latch (cruise control)**: `Shift + W/S/A/D` toggles a sticky setpoint on
+/// that axis. While latched, the rover keeps driving/steering hands-off so you
+/// can hold `Ctrl` to detach the camera and inspect rover behaviour. Re-tap
+/// the same `Shift+key` to release, or press `Space` (brake) to clear all.
 fn translate_intents_to_commands(
     q_controllers: Query<(Entity, &VesselIntentState, &ControllerLink)>,
     keys: Res<ButtonInput<KeyCode>>,
     mut commands: Commands,
     mut last_intents: Local<HashMap<Entity, (f64, f64, f64)>>,
+    mut latches: Local<HashMap<Entity, (f64, f64)>>,
 ) {
+    // Ctrl = camera free-look mode: live key signal stops flowing to the
+    // vessel so WASD only moves the camera, not the rover. The latch
+    // (Shift-toggled setpoint) bypasses this gate — once latched, the rover
+    // keeps its commanded motion regardless of Ctrl.
     let ctrl_pressed = keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
+    let shift_pressed = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
 
     for (ent, intent_state, link) in q_controllers.iter() {
-        let mut forward_intent = 0.0;
-        if !ctrl_pressed {
-            if intent_state.pressed(&VesselIntent::DriveForward) { forward_intent += 1.0; }
-            if intent_state.pressed(&VesselIntent::DriveReverse) { forward_intent -= 1.0; }
+        let latch = latches.entry(ent).or_insert((0.0, 0.0));
+
+        // Shift + axis key toggles a latched setpoint on that axis.
+        // Re-tapping the same direction clears it; the opposite direction
+        // overrides the sign.
+        if shift_pressed {
+            if intent_state.just_pressed(&VesselIntent::DriveForward) {
+                latch.0 = if latch.0 ==  1.0 { 0.0 } else {  1.0 };
+            }
+            if intent_state.just_pressed(&VesselIntent::DriveReverse) {
+                latch.0 = if latch.0 == -1.0 { 0.0 } else { -1.0 };
+            }
+            if intent_state.just_pressed(&VesselIntent::SteerLeft) {
+                latch.1 = if latch.1 == -1.0 { 0.0 } else { -1.0 };
+            }
+            if intent_state.just_pressed(&VesselIntent::SteerRight) {
+                latch.1 = if latch.1 ==  1.0 { 0.0 } else {  1.0 };
+            }
         }
 
-        let mut steer_intent = 0.0;
-        if !ctrl_pressed {
+        // Brake always clears latches — emergency stop.
+        if intent_state.pressed(&VesselIntent::Brake) {
+            *latch = (0.0, 0.0);
+        }
+
+        // Live keys add on top of the latch. Gated by:
+        //   - Shift: would double-fire alongside the latch toggle.
+        //   - Ctrl: free-look mode, signal must not flow to the vessel.
+        // The latch itself (latch.0/.1) is read unconditionally — Shift+D
+        // sets a setpoint that survives both modifiers.
+        let mut forward_intent = latch.0;
+        let mut steer_intent = latch.1;
+        if !shift_pressed && !ctrl_pressed {
+            if intent_state.pressed(&VesselIntent::DriveForward) { forward_intent += 1.0; }
+            if intent_state.pressed(&VesselIntent::DriveReverse) { forward_intent -= 1.0; }
             if intent_state.pressed(&VesselIntent::SteerLeft) { steer_intent -= 1.0; }
             if intent_state.pressed(&VesselIntent::SteerRight) { steer_intent += 1.0; }
         }
+        forward_intent = forward_intent.clamp(-1.0, 1.0);
+        steer_intent = steer_intent.clamp(-1.0, 1.0);
 
-        let brake_intent = if !ctrl_pressed && intent_state.pressed(&VesselIntent::Brake) { 1.0 } else { 0.0 };
+        let brake_intent = if intent_state.pressed(&VesselIntent::Brake) { 1.0 } else { 0.0 };
 
         let current = (forward_intent, steer_intent, brake_intent);
         let prev = last_intents.get(&ent).copied();

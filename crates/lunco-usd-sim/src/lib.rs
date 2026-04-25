@@ -278,6 +278,7 @@ fn process_usd_sim_prims(
                             pitch,
                             damping: None,
                             vertical_offset: 2.0,
+                            heading_filter: None,
                         },
                         AdaptiveNearPlane,
                         avatar_tf,
