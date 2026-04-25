@@ -211,6 +211,9 @@ pub mod sim_stream;
 
 #[cfg(feature = "lunco-api")]
 pub mod api_queries;
+
+#[cfg(feature = "lunco-api")]
+pub mod api_edits;
 pub use sim_stream::{new_sim_stream, SimSnapshot, SimStream, VarHistory, SimSample};
 
 /// UI-thread registry of per-entity lock-free sim streams (Phase A

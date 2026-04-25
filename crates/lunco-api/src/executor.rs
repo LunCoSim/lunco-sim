@@ -13,7 +13,7 @@ use bevy::reflect::TypeRegistry;
 use std::io::Cursor;
 use crate::{
     registry::ApiEntityRegistry,
-    queries::ApiQueryRegistry,
+    queries::{ApiQueryRegistry, ApiVisibility},
     schema::{ApiErrorCode, ApiRequest, ApiResponse, ApiSchema},
     discovery::discover_commands,
 };
@@ -61,6 +61,7 @@ pub fn api_request_observer(
     mut id_counter: ResMut<ApiIdCounter>,
     registry: Res<ApiEntityRegistry>,
     query_registry: Res<ApiQueryRegistry>,
+    visibility: Res<ApiVisibility>,
     type_registry: Res<AppTypeRegistry>,
     q_meta: Query<(Option<&Name>, Option<&lunco_core::RoverVessel>, Option<&lunco_core::CelestialBody>)>,
     q_cameras: Query<Entity, With<Camera3d>>,
@@ -70,7 +71,7 @@ pub fn api_request_observer(
 
     let maybe_response = {
         let type_reg = type_registry.read();
-        execute_request(&req.request, &mut commands, &mut id_counter, &registry, &query_registry, &type_reg, &q_meta, &q_cameras, correlation_id)
+        execute_request(&req.request, &mut commands, &mut id_counter, &registry, &query_registry, &visibility, &type_reg, &q_meta, &q_cameras, correlation_id)
     };
 
     // None means the response is deferred (e.g. waiting for ScreenshotCaptured).
@@ -177,6 +178,7 @@ fn execute_request(
     id_counter: &mut ApiIdCounter,
     registry: &ApiEntityRegistry,
     query_registry: &ApiQueryRegistry,
+    visibility: &ApiVisibility,
     type_registry: &TypeRegistry,
     q_meta: &Query<(Option<&Name>, Option<&lunco_core::RoverVessel>, Option<&lunco_core::CelestialBody>)>,
     _q_cameras: &Query<Entity, With<Camera3d>>,
@@ -223,6 +225,19 @@ fn execute_request(
                     commands.spawn(Screenshot::primary_window());
                     return None; // response deferred
                 }
+            }
+
+            // Visibility gate — commands marked hidden in `ApiVisibility`
+            // are reachable inside the app (GUI, observers, tests) but
+            // invisible to external callers. Reject with the same
+            // `CommandNotFound` an unknown name produces, so the
+            // external surface looks identical to "this command does
+            // not exist on this binary."
+            if visibility.is_hidden(command) {
+                return Some(ApiResponse::error(
+                    ApiErrorCode::CommandNotFound,
+                    format!("Command '{}' not found or not API-accessible", command),
+                ));
             }
 
             // Query registry — endpoints that *return data* (vs typed
@@ -297,7 +312,7 @@ fn execute_request(
             Some(ApiResponse::ok(serde_json::json!({ "entities": entities, "count": entities.len() })))
         }
         ApiRequest::DiscoverSchema => {
-            let cmds = discover_commands(type_registry);
+            let cmds = discover_commands(type_registry, Some(visibility));
             Some(ApiResponse::ok(serde_json::to_value(&ApiSchema { commands: cmds }).unwrap_or_default()))
         }
         ApiRequest::SubscribeTelemetry { filter: _ } => {

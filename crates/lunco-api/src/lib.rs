@@ -134,6 +134,7 @@ impl Plugin for LunCoApiPlugin {
         app.add_plugins((
             ApiEntityRegistryPlugin,
             ApiQueryRegistryPlugin,
+            ApiVisibilityPlugin,
             ApiExecutorPlugin,
             ApiDiscoveryPlugin,
             ApiTelemetryPlugin,

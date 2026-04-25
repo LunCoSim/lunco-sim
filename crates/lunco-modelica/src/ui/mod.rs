@@ -343,6 +343,14 @@ impl Plugin for ModelicaUiPlugin {
         #[cfg(feature = "lunco-api")]
         app.add_plugins(crate::api_queries::ModelicaApiQueriesPlugin);
 
+        // Edit events — always registered so the GUI and tests can
+        // dispatch them. External API exposure is gated separately
+        // inside the plugin via `ApiVisibility` (off by default; pass
+        // `--api-expose-edits` to expose). See
+        // `crates/lunco-modelica/src/api_edits.rs` for the rationale.
+        #[cfg(feature = "lunco-api")]
+        app.add_plugins(crate::api_edits::ModelicaApiEditPlugin);
+
         app.init_resource::<WorkbenchState>()
             .init_resource::<ModelicaDocumentRegistry>()
             .init_resource::<CompileStates>()

@@ -121,3 +121,78 @@ impl Plugin for ApiQueryRegistryPlugin {
         app.init_resource::<ApiQueryRegistry>();
     }
 }
+
+// ─── ApiVisibility ─────────────────────────────────────────────────────
+
+/// Filter for which Reflect-registered commands are exposed via the
+/// external API surface (HTTP transport, MCP `discover_schema`, etc.)
+/// while keeping them fully reflectable, observable, and dispatchable
+/// **within the app**.
+///
+/// ## Why a separate filter
+///
+/// The Bevy `AppTypeRegistry` is the single source of truth for
+/// reflected types — every domain plugin's GUI panel, observer, and
+/// (per AGENTS.md §4.1) UI command bindings rely on registration. We
+/// can't gate sensitive surfaces by *not registering* them: that breaks
+/// the in-app dispatch path the GUI itself uses.
+///
+/// Instead, registration stays unconditional and domain crates push
+/// command names that should be hidden from external callers into
+/// [`hidden_commands`]. The discovery and executor layers consult this
+/// set:
+///
+/// - [`crate::discover_commands`] omits hidden names from
+///   [`crate::ApiSchema`].
+/// - The executor rejects hidden commands with
+///   [`crate::ApiErrorCode::CommandNotFound`] — the same error a
+///   typo'd command name produces, so the surface looks identical to
+///   "the command does not exist" from outside.
+///
+/// ## Default policy
+///
+/// Empty by default — every Reflect-registered command is visible.
+/// Domain crates that ship internal-by-default mutation surfaces add
+/// their command names in their plugin `build`. CLI flags or other
+/// runtime knobs can clear entries to opt those surfaces in.
+///
+/// Mutating this resource **after** the API server has started works —
+/// future calls observe the new visibility — so a future
+/// "live toggle from a privileged channel" feature is reachable
+/// without re-architecting the gate.
+#[derive(Resource, Default, Debug)]
+pub struct ApiVisibility {
+    /// Set of Reflect command short names that should be invisible to
+    /// external API consumers. The name is the short type path
+    /// (`"SetDocumentSource"`), matching what
+    /// [`crate::ApiRequest::ExecuteCommand`]'s `command` field carries.
+    pub hidden_commands: std::collections::HashSet<String>,
+}
+
+impl ApiVisibility {
+    /// Hide a command from external API surface. Idempotent.
+    pub fn hide(&mut self, name: impl Into<String>) {
+        self.hidden_commands.insert(name.into());
+    }
+
+    /// Reveal a previously-hidden command. Idempotent — no-op if the
+    /// name was never hidden.
+    pub fn reveal(&mut self, name: &str) {
+        self.hidden_commands.remove(name);
+    }
+
+    /// True when the command is hidden from external callers.
+    pub fn is_hidden(&self, name: &str) -> bool {
+        self.hidden_commands.contains(name)
+    }
+}
+
+/// Plugin that adds the [`ApiVisibility`] resource. Always installed by
+/// [`crate::LunCoApiPlugin`].
+pub struct ApiVisibilityPlugin;
+
+impl Plugin for ApiVisibilityPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<ApiVisibility>();
+    }
+}

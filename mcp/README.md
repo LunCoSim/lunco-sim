@@ -65,6 +65,35 @@ These tools are always available:
 | `snapshot_variables` | One-shot read of current parameter / input / variable values from a running sim |
 | `set_input` | Push a runtime input value into a compiled model (effective on the next sim step) |
 
+### Edit API (opt-in exposure, `--api-expose-edits`)
+
+Mutation commands always exist *inside the workbench* — the GUI uses
+them — but they are **hidden from the external API surface by default**.
+`discover_schema` does not return them, and `execute_command` rejects
+them with `CommandNotFound`. Pass `--api-expose-edits` to opt the
+external surface in:
+
+```bash
+cargo run --bin modelica_workbench -- --api 3000 --api-expose-edits
+```
+
+When exposed, these Reflect events become reachable via
+`execute_command`:
+
+| Command | Purpose |
+|---|---|
+| `SetDocumentSource` | Replace an open document's full source text |
+| `AddModelicaComponent` | Add a sub-component to a class (`AddComponent` AST op) |
+| `RemoveModelicaComponent` | Remove a sub-component |
+| `ConnectComponents` | Add a `connect(a.p, b.q)` equation |
+| `DisconnectComponents` | Remove a connect equation |
+
+The visibility gate is *external-only* — these events are always
+Reflect-registered and observable, so the workbench's own GUI is
+unaffected by the flag. Every op flows through the same `ModelicaOp`
+undo/redo pipeline the canvas drag-and-drop uses, so mutations are
+undoable and journaled identically to UI-driven edits.
+
 The listing tools (`list_*`, `msl_status`) are introduced in spec
 [`032-model-source-listing`](../specs/032-model-source-listing/spec.md).
 They use a generic `ApiQueryProvider` extension point in `lunco-api`, so
