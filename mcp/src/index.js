@@ -32,7 +32,7 @@ import {
 } from './api.js';
 
 const SERVER_NAME = 'lunco-mcp-server';
-const SERVER_VERSION = '0.4.0';
+const SERVER_VERSION = '0.5.0';
 
 // MCP Server instance
 const server = new Server(
@@ -158,6 +158,47 @@ const STATIC_TOOLS = [
           },
         },
       },
+    },
+  },
+  // ── Live model interaction (spec 033 P1 + P2) ─────────────────────────
+  {
+    name: 'describe_model',
+    description: "List a Modelica model's inputs, parameters, and outputs from its AST. Available before compile — the AST has the structure the moment the doc parses. Returns `{inputs: [...], parameters: [...], outputs: [...]}` where each entry carries `name`, `description`, plus `default`/`min`/`max` where declared.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        doc: { type: 'integer', description: 'Document id from `list_open_documents`.' },
+      },
+      required: ['doc'],
+    },
+  },
+  {
+    name: 'snapshot_variables',
+    description: 'One-shot read of current values from a running (or paused) sim. Returns `{t, parameters, inputs, variables, ...}`. Pass `names: ["valve", "thrust"]` to filter; omit for everything. Returns `compiled: false` with empty maps if the doc has no linked entity yet (compile not run).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        doc: { type: 'integer', description: 'Document id.' },
+        names: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Optional filter — names to include (matched across parameters/inputs/variables).',
+        },
+      },
+      required: ['doc'],
+    },
+  },
+  {
+    name: 'set_input',
+    description: "Push a runtime input value into a compiled model's stepper. Takes effect on the next sim step — no recompile, no pause needed. Errors (warn-log) if the input name is not declared on the model. Use `describe_model` first if unsure of names.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        doc: { type: 'integer', description: 'Document id (0 = active).' },
+        name: { type: 'string', description: 'Input variable name (e.g. "valve").' },
+        value: { type: 'number', description: 'New value.' },
+      },
+      required: ['doc', 'name', 'value'],
     },
   },
   // ── Multi-class compile + source visibility (spec 033 P0) ─────────────
@@ -543,7 +584,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case 'list_msl':
       case 'list_compile_candidates':
       case 'compile_status':
-      case 'get_document_source': {
+      case 'get_document_source':
+      case 'describe_model':
+      case 'snapshot_variables': {
         // Each of these is backed by an ApiQueryProvider on the Rust
         // side. Rather than duplicate the schema/PascalCase mapping for
         // every tool, route them all through the generic executor —
@@ -557,6 +600,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           list_compile_candidates: 'ListCompileCandidates',
           compile_status: 'CompileStatus',
           get_document_source: 'GetDocumentSource',
+          describe_model: 'DescribeModel',
+          snapshot_variables: 'SnapshotVariables',
         };
         const result = await executeCommand(commandMap[name], args ?? {});
         if (result.error) {
@@ -569,6 +614,30 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           content: [
             { type: 'text', text: JSON.stringify(result, null, 2) },
           ],
+        };
+      }
+
+      case 'set_input': {
+        const { doc, name: input_name, value } = args ?? {};
+        if (doc === undefined || !input_name || value === undefined) {
+          return {
+            content: [{ type: 'text', text: 'Error: `doc`, `name`, and `value` are required' }],
+            isError: true,
+          };
+        }
+        const result = await executeCommand('SetModelInput', {
+          doc,
+          name: input_name,
+          value,
+        });
+        if (result.error) {
+          return {
+            content: [{ type: 'text', text: `Error: ${result.error}` }],
+            isError: true,
+          };
+        }
+        return {
+          content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
         };
       }
 

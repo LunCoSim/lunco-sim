@@ -57,6 +57,13 @@ These tools are always available:
 | `list_twin` | List files in the open Twin folder, paginated, classified by kind |
 | `list_msl` | Paginated, filterable enumeration of Modelica Standard Library classes |
 | `open_uri` | Unified scheme-aware open (`bundled://`, `mem://`, qualified MSL name, fs path) |
+| `compile_model` | Compile an open document, optionally targeting a specific class (bypasses GUI picker) |
+| `compile_status` | Read per-doc compile state without triggering compile |
+| `list_compile_candidates` | List the non-package classes a multi-class doc would let you compile |
+| `get_document_source` | Fetch the in-memory source of an open doc (incl. unsaved edits) |
+| `describe_model` | List a model's `inputs / parameters / outputs` from the AST (pre- or post-compile) |
+| `snapshot_variables` | One-shot read of current parameter / input / variable values from a running sim |
+| `set_input` | Push a runtime input value into a compiled model (effective on the next sim step) |
 
 The listing tools (`list_*`, `msl_status`) are introduced in spec
 [`032-model-source-listing`](../specs/032-model-source-listing/spec.md).

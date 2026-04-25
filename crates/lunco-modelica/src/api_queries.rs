@@ -54,6 +54,8 @@ impl Plugin for ModelicaApiQueriesPlugin {
         registry.register(ListCompileCandidatesProvider);
         registry.register(CompileStatusProvider);
         registry.register(GetDocumentSourceProvider);
+        registry.register(DescribeModelProvider);
+        registry.register(SnapshotVariablesProvider);
     }
 }
 
@@ -537,6 +539,198 @@ impl ApiQueryProvider for GetDocumentSourceProvider {
                 )
             }
         }
+    }
+}
+
+// ─── DescribeModel (spec 033 P1) ───────────────────────────────────────
+
+struct DescribeModelProvider;
+
+impl ApiQueryProvider for DescribeModelProvider {
+    fn name(&self) -> &'static str {
+        "DescribeModel"
+    }
+
+    fn execute(
+        &self,
+        world: &mut World,
+        params: &serde_json::Value,
+    ) -> ApiResponse {
+        let Some(doc_id) = parse_doc_id(params, "doc") else {
+            return err_missing_field("doc");
+        };
+        let registry = world.resource::<ModelicaDocumentRegistry>();
+        let Some(host) = registry.host(doc_id) else {
+            return err_doc_not_found(doc_id);
+        };
+        let document = host.document();
+        let Some(ast) = document.ast().result.as_ref().ok().cloned() else {
+            return ApiResponse::error(
+                ApiErrorCode::InternalError,
+                format!(
+                    "doc {} has no parsed AST — fix any parse errors first",
+                    doc_id.raw()
+                ),
+            );
+        };
+
+        // Pull every piece of metadata the AST extractors expose. None
+        // of these require the model to be compiled — the whole point
+        // is to surface the structure to an agent before it commits to
+        // compile, so it knows what knobs exist.
+        let parameters = ast_extract::extract_parameters_from_ast(&ast);
+        let parameter_bounds = ast_extract::extract_parameter_bounds_from_ast(&ast);
+        let inputs_with_defaults =
+            ast_extract::extract_inputs_with_defaults_from_ast(&ast);
+        let input_names = ast_extract::extract_input_names_from_ast(&ast);
+        let variable_names = ast_extract::extract_variable_names_from_ast(&ast);
+        let descriptions = ast_extract::extract_descriptions_from_ast(&ast);
+
+        // Inputs with defaults are a subset of all input names — anything
+        // in `input_names` not in `inputs_with_defaults` has no declared
+        // default. Project both into one uniform list, marking which had
+        // a default so the agent can decide whether to provide a value
+        // before stepping the sim.
+        let inputs: Vec<serde_json::Value> = input_names
+            .iter()
+            .map(|name| {
+                let default = inputs_with_defaults.get(name).copied();
+                serde_json::json!({
+                    "name": name,
+                    "default": default,
+                    "has_default": default.is_some(),
+                    "description": descriptions.get(name).cloned(),
+                })
+            })
+            .collect();
+
+        let parameters_arr: Vec<serde_json::Value> = parameters
+            .iter()
+            .map(|(name, default)| {
+                let bounds = parameter_bounds.get(name);
+                serde_json::json!({
+                    "name": name,
+                    "default": default,
+                    "min": bounds.and_then(|(lo, _)| *lo),
+                    "max": bounds.and_then(|(_, hi)| *hi),
+                    "description": descriptions.get(name).cloned(),
+                })
+            })
+            .collect();
+
+        // "Outputs" in Modelica are explicit `output Real` declarations,
+        // but the AST extractors don't have a dedicated output-name
+        // collector today. Approximate as "every variable that is not an
+        // input or a parameter" — the agent gets a useful subset, and
+        // we can sharpen later by adding a real output extractor.
+        let input_set: std::collections::HashSet<&String> = input_names.iter().collect();
+        let param_set: std::collections::HashSet<&String> = parameters.keys().collect();
+        let outputs: Vec<serde_json::Value> = variable_names
+            .iter()
+            .filter(|n| !input_set.contains(*n) && !param_set.contains(*n))
+            .map(|name| {
+                serde_json::json!({
+                    "name": name,
+                    "description": descriptions.get(name).cloned(),
+                })
+            })
+            .collect();
+
+        ApiResponse::ok(serde_json::json!({
+            "doc_id": doc_id.raw(),
+            "inputs": inputs,
+            "parameters": parameters_arr,
+            "outputs": outputs,
+        }))
+    }
+}
+
+// ─── SnapshotVariables (spec 033 P1) ───────────────────────────────────
+
+struct SnapshotVariablesProvider;
+
+impl ApiQueryProvider for SnapshotVariablesProvider {
+    fn name(&self) -> &'static str {
+        "SnapshotVariables"
+    }
+
+    fn execute(
+        &self,
+        world: &mut World,
+        params: &serde_json::Value,
+    ) -> ApiResponse {
+        let Some(doc_id) = parse_doc_id(params, "doc") else {
+            return err_missing_field("doc");
+        };
+        // Optional `names` filter — when absent, return everything.
+        // Accepts either an array of strings or null/missing.
+        let name_filter: Option<Vec<String>> = params.get("names").and_then(|v| {
+            v.as_array().map(|arr| {
+                arr.iter()
+                    .filter_map(|x| x.as_str().map(String::from))
+                    .collect()
+            })
+        });
+
+        // Doc must exist before we go fishing for the entity. A doc with
+        // no linked entity (compile not run yet) is not an error per
+        // spec 033 US 4 #3 — return an empty payload with `t: null` so
+        // the agent can detect the gap programmatically.
+        let registry = world.resource::<ModelicaDocumentRegistry>();
+        if registry.host(doc_id).is_none() {
+            return err_doc_not_found(doc_id);
+        }
+        let entities = registry.entities_linked_to(doc_id);
+        drop(registry);
+        let Some(entity) = entities.first().copied() else {
+            return ApiResponse::ok(serde_json::json!({
+                "doc_id": doc_id.raw(),
+                "t": null,
+                "compiled": false,
+                "parameters": {},
+                "inputs": {},
+                "variables": {},
+            }));
+        };
+
+        let Some(model) = world.get::<crate::ModelicaModel>(entity) else {
+            return ApiResponse::ok(serde_json::json!({
+                "doc_id": doc_id.raw(),
+                "t": null,
+                "compiled": false,
+                "parameters": {},
+                "inputs": {},
+                "variables": {},
+            }));
+        };
+
+        // Project to JSON, optionally honoring the `names` filter.
+        // Filter is applied uniformly across parameters/inputs/variables
+        // because the agent does not always know which bucket a name
+        // lives in (e.g. `valve` is an input on this model but might be
+        // a parameter on the next one).
+        let in_filter = |name: &str| -> bool {
+            name_filter.as_ref().is_none_or(|f| f.iter().any(|n| n == name))
+        };
+        let project = |map: &std::collections::HashMap<String, f64>| -> serde_json::Value {
+            let inner: serde_json::Map<String, serde_json::Value> = map
+                .iter()
+                .filter(|(k, _)| in_filter(k))
+                .map(|(k, v)| (k.clone(), serde_json::json!(v)))
+                .collect();
+            serde_json::Value::Object(inner)
+        };
+
+        ApiResponse::ok(serde_json::json!({
+            "doc_id": doc_id.raw(),
+            "t": model.current_time,
+            "compiled": true,
+            "model_name": model.model_name,
+            "paused": model.paused,
+            "parameters": project(&model.parameters),
+            "inputs": project(&model.inputs),
+            "variables": project(&model.variables),
+        }))
     }
 }
 

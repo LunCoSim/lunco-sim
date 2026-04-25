@@ -352,6 +352,7 @@ impl Plugin for ModelicaCommandsPlugin {
             .register_type::<FormatDocument>()
             .register_type::<OpenFile>()
             .register_type::<Open>()
+            .register_type::<SetModelInput>()
             .register_type::<InspectActiveDoc>()
             .register_type::<CompileActiveModel>()
             .register_type::<SaveActiveDocument>()
@@ -381,6 +382,7 @@ impl Plugin for ModelicaCommandsPlugin {
             .add_observer(on_format_document)
             .add_observer(on_open_file)
             .add_observer(on_open)
+            .add_observer(on_set_model_input)
             .add_observer(on_inspect_active_doc)
             .add_observer(on_compile_active_model)
             .add_observer(on_save_active_document)
@@ -3048,6 +3050,90 @@ fn on_open(trigger: On<Open>, mut commands: Commands) {
 
     // Anything else: treat as a filesystem path.
     commands.trigger(OpenFile { path: uri });
+}
+
+/// Push a runtime input value into a compiled model's stepper.
+///
+/// The simulation worker reads `ModelicaModel.inputs` at every step
+/// (cf. `spawn_modelica_requests`), so writing here propagates to the
+/// running sim on the next tick — no recompile, no worker channel
+/// extension, no squashing logic to add. The squashing the worker
+/// already does on its `UpdateParameters` channel is the same code
+/// path: last-writer-wins per name.
+///
+/// Validation: the input must be a declared input on the compiled
+/// model. We check `model.inputs.contains_key(name)` rather than
+/// re-parsing the AST because the compile path already filtered down
+/// to the runtime-relevant subset.
+///
+/// See spec 033 P2 for the design rationale.
+#[derive(Event, Reflect, Clone, Debug, Default)]
+#[reflect(Event, Default)]
+pub struct SetModelInput {
+    /// Document id whose linked entity holds the running model.
+    pub doc: u64,
+    /// Input name to set. Must already exist on the model — this
+    /// command does not introduce new inputs.
+    pub name: String,
+    /// New value. The API does not clamp to declared bounds; bounds
+    /// enforcement is the agent's responsibility (per spec 033 FR-003
+    /// out-of-scope item).
+    pub value: f64,
+}
+
+fn on_set_model_input(trigger: On<SetModelInput>, mut commands: Commands) {
+    let doc_raw = trigger.event().doc;
+    let name = trigger.event().name.clone();
+    let value = trigger.event().value;
+    commands.queue(move |world: &mut World| {
+        let doc = if doc_raw == 0 {
+            match resolve_active_doc(world) {
+                Some(d) => d,
+                None => {
+                    bevy::log::warn!("[SetModelInput] no active document");
+                    return;
+                }
+            }
+        } else {
+            DocumentId::new(doc_raw)
+        };
+        let registry =
+            world.resource::<crate::ui::state::ModelicaDocumentRegistry>();
+        let entities = registry.entities_linked_to(doc);
+        drop(registry);
+        let Some(entity) = entities.first().copied() else {
+            bevy::log::warn!(
+                "[SetModelInput] doc {} has no linked entity (compile not run yet?)",
+                doc.raw()
+            );
+            return;
+        };
+        let Some(mut model) = world.get_mut::<crate::ModelicaModel>(entity) else {
+            bevy::log::warn!(
+                "[SetModelInput] entity {:?} for doc {} has no ModelicaModel",
+                entity,
+                doc.raw()
+            );
+            return;
+        };
+        if !model.inputs.contains_key(&name) {
+            let known: Vec<&String> = model.inputs.keys().collect();
+            bevy::log::warn!(
+                "[SetModelInput] input `{}` not declared on `{}`. Known inputs: {:?}",
+                name,
+                model.model_name,
+                known
+            );
+            return;
+        }
+        model.inputs.insert(name.clone(), value);
+        bevy::log::info!(
+            "[SetModelInput] doc={} {}={}",
+            doc.raw(),
+            name,
+            value
+        );
+    });
 }
 
 fn on_get_file(trigger: On<GetFile>) {
