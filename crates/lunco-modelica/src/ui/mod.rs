@@ -337,6 +337,12 @@ impl Plugin for ModelicaUiPlugin {
         // fires — drives the progress dots on the learning paths.
         app.add_plugins(welcome_progress::WelcomeProgressPlugin);
 
+        // Reflect-registered query providers exposed over the
+        // ApiQueryRegistry (cf. spec 032). Feature-gated because the
+        // registry only exists when `lunco-api` is enabled.
+        #[cfg(feature = "lunco-api")]
+        app.add_plugins(crate::api_queries::ModelicaApiQueriesPlugin);
+
         app.init_resource::<WorkbenchState>()
             .init_resource::<ModelicaDocumentRegistry>()
             .init_resource::<CompileStates>()

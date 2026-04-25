@@ -208,6 +208,9 @@ pub mod ui;
 /// Available on all targets, but primarily used for wasm builds.
 pub mod models;
 pub mod sim_stream;
+
+#[cfg(feature = "lunco-api")]
+pub mod api_queries;
 pub use sim_stream::{new_sim_stream, SimSnapshot, SimStream, VarHistory, SimSample};
 
 /// UI-thread registry of per-entity lock-free sim streams (Phase A

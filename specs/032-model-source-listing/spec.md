@@ -5,6 +5,10 @@
 **Status**: Draft
 **Input**: Expose all openable model sources (Twin folder, bundled examples, MSL, ephemeral docs) and current workspace state through the API, with a single scheme-aware `Open` command.
 
+## Agent-Workflow Anchor
+
+The validation scenario for this spec is the start of an end-to-end agent-driven simulation: *"I want to simulate the Annotated Rocket Engine — load it, set the valve to 50%, then 100%, pause, resume."* This spec covers steps 1–2 of that workflow (**find** the model across all sources and **open** it through one URI) and the workspace-state visibility (**what is currently open**) that every subsequent step depends on. Live model interaction — describing a model's inputs, mutating runtime values, snapshotting variables — is deferred to spec 033 (`agent-driven-simulation`). The two specs together produce the agent loop; this one is the half that lets the agent *find and load*, and report *what is loaded right now*.
+
 ## Problem Statement
 
 The workbench has four distinct sources a user can open content from — the open Twin folder, embedded `assets/models/*.mo` bundled examples, the Modelica Standard Library (~2500 classes), and in-memory Untitled docs — plus a live workspace state (open tabs, dirty flags, view modes). Each is reachable through the UI, but **none is enumerable through the API**. An AI agent driving the workbench via MCP today has to call `discover_schema`, then guess class names; there is no way to ask "what can I open?" or "what is currently open?". The three open commands (`OpenFile`, `OpenClass`, `OpenExample`) carry different semantics and the agent has to know which to call. Bundled examples in particular cannot be opened through the public API at all — `OpenFile` does raw `fs::read_to_string` and does not understand the `bundled://` URI scheme used internally by the Welcome tab. MSL load status is invisible: `MSL_LIBRARY` is prewarmed on a background thread but a caller has no way to ask whether prewarm finished, so a query during cold start blocks the API thread for hundreds of milliseconds.
