@@ -189,6 +189,36 @@ generate_bindings() {
     info "Bundle ready: $dist_dir"
 }
 
+# Pack MSL into a versioned, compressed bundle and place it next to the
+# wasm under `dist/<bin>/msl/`. Same-origin so the runtime fetcher doesn't
+# need CORS configuration. Skipped for binaries that don't ship MSL
+# (rover_sandbox_web).
+build_msl_bundle() {
+    local binary="$1"
+    if [ "$binary" != "modelica_workbench_web" ]; then
+        return 0
+    fi
+    local dist_dir="$PROJECT_DIR/dist/$binary"
+    local msl_dir="$dist_dir/msl"
+
+    info "Packing MSL bundle for $binary..."
+
+    # The bundler walks `lunco_assets::msl_source_root_path()` on the host,
+    # which lives at <workspace>/.cache/msl/ in this repo. If MSL isn't
+    # materialised, the binary will exit non-zero with a clear message and
+    # we surface that as a build error so we never ship without MSL.
+    rm -rf "$msl_dir"
+    mkdir -p "$msl_dir"
+    cargo run --release -q -p lunco-assets --bin build_msl_assets -- \
+        --out "$msl_dir"
+
+    if [ $? -ne 0 ]; then
+        error "MSL bundling failed"
+        exit 1
+    fi
+    success "MSL bundle written to $msl_dir"
+}
+
 # Serve the web application from its dist bundle.
 serve_web() {
     local binary="$1"
@@ -277,6 +307,7 @@ main() {
             local crate=$(get_binary_config "$binary")
             build_wasm "$binary" "$crate"
             generate_bindings "$binary" "$crate"
+            build_msl_bundle "$binary"
             success "Build complete! Run '$0 serve $binary' to start the server"
             ;;
         serve)
@@ -307,6 +338,7 @@ main() {
             fi
             build_wasm "$binary" "$crate"
             generate_bindings "$binary" "$crate"
+            build_msl_bundle "$binary"
             serve_web "$binary" "$crate" "${port:-$default_port}"
             ;;
         clean)

@@ -12,6 +12,12 @@ toml = "0.8"
 thiserror = "2.0"
 image = { workspace = true }
 
+# Native-only helper binary that packs MSL into a versioned, compressed
+# bundle for the web build. Path-gated to keep wasm32 builds away from it.
+[[bin]]
+name = "build_msl_assets"
+path = "src/bin/build_msl_assets.rs"
+
 # Desktop-only: HTTP client for asset downloads, tarball extraction, hashing
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 ureq = { version = "2.9", features = ["tls"] }
@@ -20,6 +26,10 @@ chrono = "0.4"
 flate2 = "1.0"
 bzip2 = "0.4"
 tar = "0.4"
+# zstd compressor for the MSL asset bundle the build_msl_assets binary
+# emits into `dist/<bin>/msl/`. Web runtime uses a pure-Rust decoder
+# (ruzstd) — see lunco-assets's wasm32 deps.
+zstd = "0.13"
 resvg = { workspace = true }
 tiny-skia = { workspace = true }
 usvg = { workspace = true }

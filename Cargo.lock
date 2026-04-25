@@ -6092,6 +6092,7 @@ dependencies = [
  "toml",
  "ureq",
  "usvg",
+ "zstd",
 ]
 
 [[package]]
