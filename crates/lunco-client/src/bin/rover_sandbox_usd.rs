@@ -55,6 +55,14 @@ fn main() {
                 }),
                 ..default()
             })
+            .set(bevy::log::LogPlugin {
+                // Quieten third-party noise: rumoca's JIT + diffsol's solver
+                // both emit per-function and per-step info that floods the
+                // log during balloon stepping. Override via RUST_LOG when
+                // diagnosing one of them.
+                filter: "wgpu=error,naga=warn,cranelift=warn,cranelift_jit=warn,cranelift_codegen=warn,diffsol=warn,info".into(),
+                ..default()
+            })
             .build()
             .disable::<TransformPlugin>())
         .add_plugins(BigSpaceDefaultPlugins.build().disable::<big_space::validation::BigSpaceValidationPlugin>())

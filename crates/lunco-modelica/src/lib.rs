@@ -671,7 +671,15 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
             // visible in `RUST_LOG=info` output instead of silent.
             let cmd_label = command_label(&cmd);
             let cmd_started = web_time::Instant::now();
-            log::info!("[worker] begin: {}", cmd_label);
+            // `Step` fires at simulation rate (~60 Hz) — log at debug to
+            // avoid drowning the console. One-shot commands (Compile,
+            // Reset, …) stay at info because they're rare and useful.
+            let is_hot_path = matches!(cmd, ModelicaCommand::Step { .. });
+            if is_hot_path {
+                log::debug!("[worker] begin: {}", cmd_label);
+            } else {
+                log::info!("[worker] begin: {}", cmd_label);
+            }
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 match cmd {
                     ModelicaCommand::Reset { entity, session_id } => {
@@ -1005,6 +1013,8 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                     cmd_label,
                     elapsed
                 );
+            } else if is_hot_path {
+                log::debug!("[worker] end: {} took {:?}", cmd_label, elapsed);
             } else {
                 log::info!("[worker] end: {} took {:?}", cmd_label, elapsed);
             }
