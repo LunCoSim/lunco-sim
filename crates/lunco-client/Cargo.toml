@@ -16,7 +16,7 @@ name = "model_viewer"
 path = "src/bin/model_viewer.rs"
 
 [dependencies]
-bevy = { workspace = true, features = ["default"] }
+bevy = { workspace = true, features = ["bevy_pbr", "bevy_gltf", "bevy_scene", "bevy_mesh", "bevy_light", "bevy_post_process", "bevy_anti_alias", "mesh_picking"] }
 avian3d = { workspace = true }
 big_space = { workspace = true }
 leafwing-input-manager = { workspace = true }

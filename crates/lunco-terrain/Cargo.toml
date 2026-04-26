@@ -5,7 +5,7 @@ edition = "2021"
 description = "Terrain generation, QuadSphere tiling, and collision for LunCoSim"
 
 [dependencies]
-bevy = { workspace = true, features = ["default"] }
+bevy = { workspace = true, features = ["bevy_pbr", "bevy_gltf", "bevy_scene", "bevy_mesh", "bevy_light", "bevy_post_process", "bevy_anti_alias", "mesh_picking"] }
 bevy_mesh = "0.18.1"
 bevy_render = "0.18.1"
 avian3d = { workspace = true }

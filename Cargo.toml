@@ -63,7 +63,37 @@ scnr2_macro = { git = "https://github.com/jsinger67/scnr2", tag = "0.3.3" }
 description = "Initialize multi-crate workspace architecture for vessel control simulation"
 
 [workspace.dependencies]
-bevy = { version = "0.18.1", features = ["default"] }
+# Slim Bevy: drop everything Modelica/rover workbench provably doesn't
+# use. Defaults pull bevy_audio/vorbis (no audio in the apps),
+# bevy_text/bevy_ui*/bevy_sprite* (egui replaces UI + 2D),
+# bevy_animation/bevy_gizmos/bevy_gilrs/sysinfo_plugin (unused on
+# either binary). Each enabled feature is documented inline so we
+# don't drift.
+#
+# If a build break surfaces something that was silently relying on a
+# default-on feature, add it here with a `# used by …` comment rather
+# than re-enabling `default` (which un-strips the lot).
+bevy = { version = "0.18.1", default-features = false, features = [
+    # ── 2D / UI-only core. Anything 3D-shaped (PBR, GLTF, scenes,
+    # meshes, post-processing, mesh picking) is *not* in this list —
+    # crates that need 3D opt in via their own Cargo.toml so the
+    # Modelica workbench web binary doesn't carry them. See
+    # `crates/lunco-client/Cargo.toml` for the opt-in pattern.
+    "bevy_log",                    # info!/warn!/error! macros workspace-wide
+    "bevy_state",                  # state machine (some panels)
+    "bevy_color",                  # Color / ClearColor
+    "bevy_input_focus",            # focus tracking for egui
+    "multi_threaded",              # task pools (AsyncCompute/Io)
+    "bevy_render",                 # bevy_egui needs render + winit + window
+    "bevy_winit",
+    "bevy_window",
+    "bevy_camera",
+    "bevy_core_pipeline",
+    "bevy_image",                  # egui_extras image loaders + asset pipeline
+    "webgl2",                      # wasm fallback when WebGPU unavailable
+    "x11",                         # Linux native window backend
+    "bevy_picking",                # picking core (sub-backends are opt-in)
+] }
 lunco-assets = { path = "crates/lunco-assets" }
 avian3d = { version = "0.6.1", default-features = false, features = ["3d", "f64", "parry-f64", "parallel", "debug-plugin", "default-collider", "collider-from-mesh"] }
 big_space = "0.12.0"

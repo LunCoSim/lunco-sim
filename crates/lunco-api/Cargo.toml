@@ -11,7 +11,7 @@ transport-http = ["dep:axum", "dep:tokio"]
 [dependencies]
 lunco-core = { path = "../lunco-core" }
 lunco-telemetry = { path = "../lunco-telemetry" }
-bevy = { workspace = true, features = ["default"] }
+bevy = { workspace = true }
 image = "0.25"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
