@@ -65,6 +65,11 @@ These tools are always available:
 | `snapshot_variables` | One-shot read of current parameter / input / variable values from a running sim |
 | `set_input` | Push a runtime input value into a compiled model. Returns `{ok}` or structured error listing known input names |
 | `find_model` | Fuzzy search across bundled / Twin / MSL / open docs. Returns ranked URIs with relevance scores |
+| `cosim_status` | Snapshot every USD-driven cosim entity (`UsdSourcedCosim`): position, velocity, Modelica state, propagated `force_y`. Probe-the-running-sim alternative to log polling |
+| `load_scene` | Reload (or replace) the active USD scene at runtime. Despawns existing USD prims + cosim wires, force-reads the file from disk, spawns a fresh root. Use after editing a `.usda` to pick up changes without restarting |
+| `possess_vessel` | Take direct control of a vessel — chase camera + keyboard input bound to the target |
+| `follow_target` | Chase camera onto any `SelectableRoot` (balloon, prop) without binding controls |
+| `focus_target` | Orbit camera at an appropriate distance (celestial bodies, large objects) |
 
 ### Edit API
 

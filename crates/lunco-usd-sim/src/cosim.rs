@@ -26,8 +26,9 @@
 //! is the authoritative path for USD-defined cosim entities.
 
 use bevy::prelude::*;
-use big_space::prelude::CellCoord;
+use big_space::prelude::{CellCoord, Grid};
 use lunco_assets::assets_dir;
+use lunco_core::{Command, on_command};
 use lunco_cosim::{SimComponent, SimConnection, SimStatus};
 use lunco_doc::DocumentId;
 use lunco_modelica::{
@@ -425,6 +426,125 @@ impl lunco_api::ApiQueryProvider for CosimStatusProvider {
     }
 }
 
+/// Reload (or load) a USD scene at runtime via the API.
+///
+/// `curl … {"command":"LoadScene","params":{"path":"scenes/sandbox/sandbox_scene.usda","root_prim":""}}`
+///
+/// - `path`: USD asset path relative to the asset root.
+/// - `root_prim`: SDF path of the prim to spawn (e.g. `/SandboxScene`).
+///   Empty string auto-derives `/PascalCaseFromFilename`
+///   (so `sandbox_scene.usda` → `/SandboxScene`).
+///
+/// Despawns every existing entity carrying `UsdPrimPath` plus every
+/// `SimConnection` (cosim wires are scene-derived in current code), then
+/// reloads the asset from disk and spawns a fresh root entity. Existing
+/// pipelines (`sync_usd_visuals`, `process_usd_cosim_prims`, the
+/// avian/sim translators) take it from there. The first `Grid` entity
+/// in the world is used as the parent — i.e. the `BigSpace` host
+/// stays put across reloads.
+///
+/// Cleans up worker-side state too: sends `ModelicaCommand::Despawn`
+/// for every entity carrying a `ModelicaModel` (the Modelica worker
+/// drops its `steppers` / `cached_models` / `sim_streams` entries) and
+/// drops `ScriptRegistry::documents` entries for every `ScriptedModel`.
+/// Without this, repeated reloads accumulate stale steppers and parsed
+/// scripts indefinitely.
+#[Command]
+pub struct LoadScene {
+    /// USD asset path (relative to `assets/`).
+    pub path: String,
+    /// SDF path of the prim to spawn. Empty = auto-derive from filename.
+    pub root_prim: String,
+}
+
+#[on_command(LoadScene)]
+fn on_load_scene(
+    cmd: LoadScene,
+    asset_server: Res<AssetServer>,
+    mut commands: Commands,
+    q_usd: Query<Entity, With<UsdPrimPath>>,
+    q_wires: Query<Entity, With<SimConnection>>,
+    q_grid: Query<Entity, With<Grid>>,
+    q_modelica: Query<Entity, With<ModelicaModel>>,
+    q_scripted: Query<&ScriptedModel>,
+    channels: Res<ModelicaChannels>,
+    mut script_registry: ResMut<lunco_scripting::ScriptRegistry>,
+) {
+    let path = &cmd.path;
+    let root_prim = if cmd.root_prim.is_empty() {
+        derive_root_prim_path(path)
+    } else {
+        cmd.root_prim.clone()
+    };
+    info!("[load-scene] reload path=`{}` root=`{}`", path, root_prim);
+
+    // Worker-side cleanup before despawn. Send Despawn for every
+    // Modelica-bearing entity so the worker's `steppers` /
+    // `cached_models` / `sim_streams` hashmaps don't leak.
+    let mut modelica_freed = 0usize;
+    for e in q_modelica.iter() {
+        let _ = channels.tx.send(ModelicaCommand::Despawn { entity: e });
+        modelica_freed += 1;
+    }
+    // Drop registered Python script documents for every ScriptedModel.
+    let mut scripts_freed = 0usize;
+    for sm in q_scripted.iter() {
+        if let Some(raw_id) = sm.document_id {
+            if script_registry.documents.remove(&DocumentId::new(raw_id)).is_some() {
+                scripts_freed += 1;
+            }
+        }
+    }
+
+    let mut despawned = 0usize;
+    for e in q_usd.iter() { commands.entity(e).try_despawn(); despawned += 1; }
+    for e in q_wires.iter() { commands.entity(e).try_despawn(); despawned += 1; }
+    info!(
+        "[load-scene] cleanup: {} entities despawned, {} Modelica steppers freed, {} Python docs freed",
+        despawned, modelica_freed, scripts_freed,
+    );
+
+    // Force fresh read from disk in case the user edited the file.
+    asset_server.reload(path);
+    let handle = asset_server.load::<UsdStageAsset>(path);
+
+    let Some(grid) = q_grid.iter().next() else {
+        warn!("[load-scene] no `Grid` entity found — scene won't be parented");
+        return;
+    };
+
+    let root = commands.spawn((
+        Name::new(format!("Scene:{}", path)),
+        UsdPrimPath { stage_handle: handle, path: root_prim.clone() },
+        Visibility::Visible,
+        InheritedVisibility::default(),
+        ViewVisibility::default(),
+        Transform::default(),
+        CellCoord::default(),
+    )).id();
+    commands.entity(grid).add_child(root);
+    info!("[load-scene] spawned new root entity {} at `{}`", root, root_prim);
+}
+
+/// Derives `/PascalCaseFromFilename` from an asset path.
+/// `scenes/sandbox/sandbox_scene.usda` → `/SandboxScene`.
+fn derive_root_prim_path(asset_path: &str) -> String {
+    let stem = asset_path
+        .rsplit('/').next().unwrap_or(asset_path)
+        .rsplit_once('.').map(|(s, _)| s).unwrap_or(asset_path);
+    let pascal: String = stem
+        .split('_')
+        .map(|p| {
+            let mut chars = p.chars();
+            match chars.next() {
+                None => String::new(),
+                Some(c) => c.to_uppercase().chain(chars).collect(),
+            }
+        })
+        .collect();
+    format!("/{}", pascal)
+}
+
 /// Plugin install hook — registers translator systems, per-tick sync
 /// systems, and the API query provider. Called from `UsdSimPlugin::build`.
 ///
@@ -462,6 +582,10 @@ pub(crate) fn install(app: &mut App) {
     app.add_systems(Startup, |mut reg: ResMut<lunco_api::ApiQueryRegistry>| {
         reg.register(CosimStatusProvider);
     });
+
+    // Generated by `#[on_command(LoadScene)]` — registers the type and
+    // installs the observer.
+    __register_on_load_scene(app);
 }
 
 #[cfg(test)]

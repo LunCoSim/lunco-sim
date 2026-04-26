@@ -170,9 +170,65 @@ See [`../../crates/lunco-cosim/README.md#modelica-model-convention`](../../crate
 and [`20-domain-modelica.md`](20-domain-modelica.md) for the full story,
 including planned upstream fixes to the rumoca fork.
 
+## USD-driven authoring (`lunco_usd_sim::cosim`)
+
+Cosim entities and wires are declared in USD scenes — no per-scene Rust.
+The translator (`lunco-usd-sim/src/cosim.rs`, registered by
+`UsdSimPlugin`) reads three attribute kinds from any USD prim that
+participates in a cosim:
+
+| Attribute | What it does |
+|---|---|
+| `string lunco:modelicaModel = "models/Balloon.mo"` | Opens the source, dispatches `ModelicaCommand::Compile`, populates `ModelicaModel` + `SimComponent` once the worker returns. |
+| `string lunco:pythonModel = "models/Amplifier.py"` | Registers a `ScriptDocument`, attaches `ScriptedModel` + `SimComponent`. Stepped by `lunco-scripting::run_scripted_models` each `FixedUpdate`. |
+| `string lunco:simWires = "from:to,from:to:scale,..."` | Comma-separated **self-loop** wires (same entity, different ports). Each entry spawns one `SimConnection`. Empty string is legal for cross-entity-only entities. |
+
+For wires *between* entities, declare a typeless prim with two rels:
+
+```usda
+def "OscToAmp"
+{
+    rel    lunco:wireFrom = </Scene/Oscillator>
+    string lunco:fromPort = "signal"
+    rel    lunco:wireTo   = </Scene/Amplifier>
+    string lunco:toPort   = "signal"
+    double lunco:scale    = 1.0
+}
+```
+
+`process_usd_cosim_wires` resolves rels to ECS entities each tick
+(deferred until both endpoints exist — handles async USD asset loads)
+and spawns one `SimConnection` per resolved wire.
+
+The result: a multi-component, multi-language cosim is a USD edit, not
+a Rust edit. `cross_entity_cosim_test` exercises the canonical chain
+(Modelica oscillator → Python amplifier → Avian sphere) headlessly in
+~1.3 s.
+
+## Runtime scene control
+
+The `LoadScene` typed command (registered by `UsdSimPlugin`) reloads or
+replaces the active scene without restarting the binary:
+
+```bash
+curl -X POST http://127.0.0.1:3000/api/commands \
+  -d '{"command":"LoadScene","params":{"path":"scenes/sandbox/sandbox_scene.usda","root_prim":""}}'
+```
+
+It despawns every entity carrying `UsdPrimPath`, despawns every
+`SimConnection`, force-reads the asset from disk, and spawns a fresh
+root under the first `Grid`. Authoring loop: edit `.usda`, curl, see
+new scene.
+
+`CosimStatus` (`ApiQueryProvider`) returns a snapshot of every
+USD-driven cosim entity (`UsdSourcedCosim`) — position, velocity,
+Modelica timing, propagated `force_y` — for live introspection without
+log polling.
+
 ## See also
 
 - [`../../crates/lunco-cosim/README.md`](../../crates/lunco-cosim/README.md) — engineering docs
+- [`../../crates/lunco-usd-sim/README.md`](../../crates/lunco-usd-sim/README.md) — USD translator details (the cosim attributes above)
 - [`20-domain-modelica.md`](20-domain-modelica.md) — Modelica-specific design
 - [`23-domain-environment.md`](23-domain-environment.md) — environment/gravity integration
 - `specs/014-modelica-simulation` — detailed Modelica spec
