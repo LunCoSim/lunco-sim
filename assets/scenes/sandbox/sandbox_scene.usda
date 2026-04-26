@@ -165,4 +165,62 @@ def Xform "SandboxScene"
     {
         double3 xformOp:translate = (-10.0, 5.0, 0.0)
     }
+
+    # --- Cosim chain demo: Modelica → Python → Avian, cross-entity wires ---
+    #
+    # Three-prim minimal mixed-language cosim:
+    #   Oscillator (Modelica)   produces `signal = sin(2π·1Hz·t)`
+    #   Amplifier  (Python)     scales `signal` by gain=50 → `scaled`
+    #   CosimTarget (Avian)     receives `scaled` as `force_y`
+    #
+    # Wire prims (`OscToAmp`, `AmpToTarget`) carry the `lunco:wireFrom` /
+    # `lunco:wireTo` rels — `lunco_usd_sim::cosim::process_usd_cosim_wires`
+    # resolves them to ECS entities and spawns one `SimConnection` each.
+    # Result: the target sphere bobs ±50 N at 1 Hz.
+
+    def "Oscillator"
+    {
+        string lunco:modelicaModel = "models/Oscillator.mo"
+        string lunco:simWires = ""
+    }
+
+    def "Amplifier"
+    {
+        string lunco:pythonModel = "models/Amplifier.py"
+        string lunco:simWires = ""
+    }
+
+    def Sphere "CosimTarget" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI"]
+    )
+    {
+        double radius = 0.5
+        color3f primvars:displayColor = (0.9, 0.7, 0.2)
+        double3 xformOp:translate = (-30.0, 5.0, 10.0)
+        bool physics:rigidBodyEnabled = true
+        bool physics:collisionEnabled = true
+        float physics:mass = 1.0
+        # No `lunco:modelicaModel` / `lunco:pythonModel` — the cosim
+        # translator skips this prim. Its AvianSim component is auto-
+        # added by `on_add_rigid_body`; the AmpToTarget wire below
+        # writes amplified signal into AvianSim.inputs["force_y"].
+    }
+
+    def "OscToAmp"
+    {
+        rel lunco:wireFrom = </SandboxScene/Oscillator>
+        string lunco:fromPort = "signal"
+        rel lunco:wireTo = </SandboxScene/Amplifier>
+        string lunco:toPort = "signal"
+        double lunco:scale = 1.0
+    }
+
+    def "AmpToTarget"
+    {
+        rel lunco:wireFrom = </SandboxScene/Amplifier>
+        string lunco:fromPort = "scaled"
+        rel lunco:wireTo = </SandboxScene/CosimTarget>
+        string lunco:toPort = "force_y"
+        double lunco:scale = 1.0
+    }
 }

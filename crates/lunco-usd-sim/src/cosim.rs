@@ -40,7 +40,8 @@ use lunco_scripting::{
 };
 use lunco_doc::DocumentHost;
 use lunco_usd_bevy::{UsdPrimPath, UsdStageAsset};
-use openusd::sdf::Path as SdfPath;
+use openusd::sdf::{AbstractData, Path as SdfPath, Value};
+use std::collections::HashMap;
 
 use crate::UsdSimProcessed;
 
@@ -49,6 +50,14 @@ use crate::UsdSimProcessed;
 /// the same entity on subsequent ticks.
 #[derive(Component, Default)]
 pub struct UsdSourcedCosim;
+
+/// Marker for cross-entity wire prims that have been resolved into a
+/// `SimConnection`. Wire prims are typeless USD nodes carrying the
+/// `lunco:wireFrom` / `lunco:wireTo` rels — the translator rescans
+/// each frame until both endpoints exist as ECS entities, then spawns
+/// the wire and tags itself with this marker.
+#[derive(Component, Default)]
+pub struct UsdSourcedWire;
 
 /// Reads cosim attributes from USD prims and dispatches model
 /// compilation + wires. Runs in `Update` after `sync_usd_visuals` so
@@ -280,6 +289,90 @@ pub fn sync_script_inputs(
     }
 }
 
+/// Cross-entity wire translator. Reads typeless USD prims that carry
+/// `rel lunco:wireFrom = </path>` + `rel lunco:wireTo = </path>` plus
+/// `lunco:fromPort` / `lunco:toPort` / optional `lunco:scale`, resolves
+/// the rel targets to ECS entities, and spawns one `SimConnection`.
+///
+/// Defers when an endpoint hasn't been spawned yet (asset loading is
+/// async); reruns each frame until both sides exist or the wire is
+/// dropped from the scene.
+pub fn process_usd_cosim_wires(
+    mut commands: Commands,
+    q_unprocessed: Query<(Entity, &UsdPrimPath), Without<UsdSourcedWire>>,
+    q_all: Query<(Entity, &UsdPrimPath)>,
+    stages: Res<Assets<UsdStageAsset>>,
+) {
+    // Index every UsdPrimPath entity by its sdf path string. Built once
+    // per call — wire prims and their endpoints are typically all in
+    // the same stage, so this is cheap.
+    let mut by_path: HashMap<String, Entity> = HashMap::new();
+    for (e, p) in q_all.iter() {
+        by_path.insert(p.path.clone(), e);
+    }
+
+    for (entity, prim_path) in q_unprocessed.iter() {
+        let Some(stage) = stages.get(&prim_path.stage_handle) else { continue; };
+        let Ok(sdf_path) = SdfPath::new(&prim_path.path) else { continue; };
+        let reader = (*stage.reader).clone();
+
+        let Some(from_path) = read_rel_target(&reader, &sdf_path, "lunco:wireFrom") else { continue; };
+        let Some(to_path) = read_rel_target(&reader, &sdf_path, "lunco:wireTo") else { continue; };
+        let from_port = reader.prim_attribute_value::<String>(&sdf_path, "lunco:fromPort");
+        let to_port = reader.prim_attribute_value::<String>(&sdf_path, "lunco:toPort");
+
+        let (Some(from_port), Some(to_port)) = (from_port, to_port) else {
+            warn!(
+                "[usd-cosim] {} declares wire rels but missing lunco:fromPort or lunco:toPort",
+                prim_path.path
+            );
+            commands.entity(entity).insert(UsdSourcedWire);
+            continue;
+        };
+        let scale = reader
+            .prim_attribute_value::<f64>(&sdf_path, "lunco:scale")
+            .unwrap_or(1.0);
+
+        let from_str = from_path.to_string();
+        let to_str = to_path.to_string();
+        let (Some(&start_element), Some(&end_element)) =
+            (by_path.get(&from_str), by_path.get(&to_str))
+        else {
+            // Endpoint(s) not spawned yet — try again next frame.
+            continue;
+        };
+
+        commands.spawn(SimConnection {
+            start_element,
+            start_connector: from_port.clone(),
+            end_element,
+            end_connector: to_port.clone(),
+            scale,
+        });
+        commands.entity(entity).insert(UsdSourcedWire);
+        info!(
+            "[usd-cosim] wire {}.{} → {}.{} (scale={})",
+            from_str, from_port, to_str, to_port, scale,
+        );
+    }
+}
+
+/// Reads a single-target `rel <name> = </path>` from a USD prim. USD
+/// stores rels under the `targetPaths` field (not `default`) as a
+/// `PathListOp`. Returns the first contributing target.
+fn read_rel_target(
+    reader: &openusd::usda::TextReader,
+    prim: &SdfPath,
+    name: &str,
+) -> Option<SdfPath> {
+    let prop_path = prim.append_property(name).ok()?;
+    let val = reader.get(&prop_path, "targetPaths").ok()?;
+    match val.as_ref() {
+        Value::PathListOp(list_op) => list_op.iter().next().cloned(),
+        _ => None,
+    }
+}
+
 /// Parses a `"from:to"` or `"from:to:scale"` wire entry. Empty ports are rejected.
 fn parse_wire(raw: &str) -> Option<(String, String, f64)> {
     let mut parts = raw.split(':');
@@ -348,6 +441,10 @@ pub(crate) fn install(app: &mut App) {
         Update,
         (
             process_usd_cosim_prims,
+            // Cross-entity wires must run after participant prims are
+            // processed (so their entities are addressable in the
+            // path → entity index built each call).
+            process_usd_cosim_wires,
             wrap_modelica_into_simcomponent,
         ).chain().after(lunco_usd_bevy::sync_usd_visuals),
     );

@@ -15,3 +15,6 @@ lunco-sandbox-edit = { path = "../lunco-sandbox-edit" }
 lunco-modelica = { path = "../lunco-modelica" }
 lunco-celestial = { path = "../lunco-celestial" }
 lunco-environment = { path = "../lunco-environment" }
+lunco-scripting = { path = "../lunco-scripting" }
+lunco-doc = { path = "../lunco-doc" }
+env_logger = "0.11"

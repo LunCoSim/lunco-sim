@@ -6258,11 +6258,14 @@ version = "0.1.0"
 dependencies = [
  "avian3d",
  "bevy",
+ "env_logger",
  "lunco-celestial",
  "lunco-core",
+ "lunco-doc",
  "lunco-environment",
  "lunco-modelica",
  "lunco-sandbox-edit",
+ "lunco-scripting",
 ]
 
 [[package]]
