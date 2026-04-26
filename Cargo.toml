@@ -128,3 +128,22 @@ lunco-theme = { path = "crates/lunco-theme" }
 egui_colors = "0.4.0"
 catppuccin-egui = "5.2.0"
 egui-phosphor = "0.7.1"
+
+# ── Release profile cranks (size-first) ───────────────────────────────
+# Tuned for the wasm web build, where binary size translates 1-for-1
+# into download time and in-browser compile time. Native release builds
+# pay slightly more compile time and run at near-identical speed —
+# the hot loops live in rumoca / wgpu, not in our code.
+#
+# - opt-level = "z": shrink-first optimisation (vs the default "3"
+#   which favours runtime speed). Typical gain on our wasm: 5–15 %.
+# - lto = "fat": cross-crate inlining and dead-code elimination across
+#   the whole workspace, not just per-crate. Bigger build cost, smaller
+#   output. Stacks with `wasm-opt`.
+# - codegen-units = 1: lets LLVM see the whole crate at once instead of
+#   parallelising into 16 chunks. Slower to compile, slightly smaller.
+[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+strip = true
