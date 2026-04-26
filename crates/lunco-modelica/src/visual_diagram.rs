@@ -390,17 +390,50 @@ use std::sync::OnceLock;
 static MSL_LIBRARY: OnceLock<Vec<MSLComponentDef>> = OnceLock::new();
 
 /// Returns the MSL component definitions available in the palette.
-/// Loaded from the preprocessed MSL index.
+/// Loaded from `msl_index.json` — either via the in-memory MSL bundle
+/// (web) or directly off disk (native).
+///
+/// The cache uses `OnceLock::set` only after a *successful* load so
+/// early calls (e.g. the `prewarm_msl_library` startup task on wasm
+/// before the MSL bundle has finished fetching) return an empty slice
+/// without permanently poisoning the cache. Subsequent calls retry the
+/// load until it succeeds, then memoize. Per-frame cost while empty is
+/// one `OnceLock::get` + one hashmap lookup — negligible.
 pub fn msl_component_library() -> &'static [MSLComponentDef] {
-    MSL_LIBRARY.get_or_init(|| {
-        let index_path = lunco_assets::msl_dir().join("msl_index.json");
-        if let Ok(content) = std::fs::read_to_string(index_path) {
-            if let Ok(lib) = serde_json::from_str(&content) {
-                return lib;
+    if let Some(lib) = MSL_LIBRARY.get() {
+        return lib;
+    }
+    if let Some(lib) = try_load_msl_library() {
+        let _ = MSL_LIBRARY.set(lib);
+    }
+    MSL_LIBRARY.get().map(|v| v.as_slice()).unwrap_or(&[])
+}
+
+fn try_load_msl_library() -> Option<Vec<MSLComponentDef>> {
+    // 1. In-memory bundle (set by `MslRemotePlugin` on wasm; also
+    //    populated on native if we ever decide to load via the same
+    //    pipeline). This wins so a host that has both still uses the
+    //    deliberately-shipped index over whatever happens to be on disk.
+    if let Some(src) = lunco_assets::msl::global_msl_source() {
+        if let Some(bytes) = src.read(std::path::Path::new("msl_index.json")) {
+            if let Ok(text) = std::str::from_utf8(&bytes) {
+                if let Ok(lib) = serde_json::from_str::<Vec<MSLComponentDef>>(text) {
+                    return Some(lib);
+                }
             }
         }
-        Vec::new()
-    })
+    }
+    // 2. Native filesystem fallback.
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let path = lunco_assets::msl_dir().join("msl_index.json");
+        if let Ok(content) = std::fs::read_to_string(path) {
+            if let Ok(lib) = serde_json::from_str::<Vec<MSLComponentDef>>(&content) {
+                return Some(lib);
+            }
+        }
+    }
+    None
 }
 
 /// Get unique categories from the MSL library.

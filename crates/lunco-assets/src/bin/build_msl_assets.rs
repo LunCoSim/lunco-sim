@@ -97,8 +97,22 @@ fn main() {
 
     let mut entries: Vec<PathBuf> = Vec::new();
     collect_mo_files(&msl_root, &msl_root, &mut entries);
+    // Also pack the precomputed palette index if present. The web
+    // runtime reads it via `MslAssetSource::read("msl_index.json")` to
+    // populate `msl_component_library()` — without this the palette
+    // ships empty on wasm.
+    let index_path = msl_root.join("msl_index.json");
+    if index_path.is_file() {
+        entries.push(index_path);
+    } else {
+        eprintln!(
+            "warning: {} not present — palette will be empty on web. \
+             Run `cargo run -p lunco-modelica --bin msl_indexer` first.",
+            index_path.display()
+        );
+    }
     entries.sort(); // deterministic tar order → reproducible hash
-    eprintln!("found {} .mo files", entries.len());
+    eprintln!("found {} files to pack", entries.len());
 
     // Tar → zstd → write to a temp file, then rename to hashed final path.
     let tmp_path = out_dir.join("sources.tar.zst.tmp");
@@ -178,9 +192,16 @@ fn pre_parse(
     entries: &[PathBuf],
 ) -> Vec<(String, rumoca_ir_ast::StoredDefinition)> {
     let mut out = Vec::with_capacity(entries.len());
-    let total = entries.len();
+    // Only `.mo` files are Modelica source; the bundle may also carry
+    // ancillary files (e.g. `msl_index.json` for the palette) that we
+    // pack as bytes but don't try to parse here.
+    let mo_entries: Vec<&PathBuf> = entries
+        .iter()
+        .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("mo"))
+        .collect();
+    let total = mo_entries.len();
     let mut last_pct: usize = usize::MAX;
-    for (i, path) in entries.iter().enumerate() {
+    for (i, path) in mo_entries.iter().enumerate() {
         let rel = path.strip_prefix(msl_root).expect("entry under msl root");
         let uri = rel.to_string_lossy().replace('\\', "/");
         let source = match fs::read_to_string(path) {

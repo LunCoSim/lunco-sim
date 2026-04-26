@@ -393,6 +393,22 @@ pub fn msl_class_to_file_index(
     use std::sync::OnceLock;
     static INDEX: OnceLock<std::collections::HashMap<String, std::path::PathBuf>> =
         OnceLock::new();
+    static EMPTY: OnceLock<std::collections::HashMap<String, std::path::PathBuf>> =
+        OnceLock::new();
+
+    if let Some(idx) = INDEX.get() {
+        return idx;
+    }
+    // On web, the palette library is empty until the MSL bundle has
+    // been fetched + decompressed (see `msl_component_library` for the
+    // same trick). If we'd `OnceLock::set` an empty map here, the
+    // index would stay empty for the lifetime of the page even after
+    // MSL lands. So: return an empty placeholder *without* memoising,
+    // so the next caller retries the build.
+    let lib = crate::visual_diagram::msl_component_library();
+    if lib.is_empty() {
+        return EMPTY.get_or_init(std::collections::HashMap::new);
+    }
     INDEX.get_or_init(build_msl_class_to_file_index)
 }
 
@@ -415,27 +431,56 @@ fn build_msl_class_to_file_index(
 }
 
 pub fn locate_msl_file(qualified: &str) -> Option<std::path::PathBuf> {
-    let msl_root = lunco_assets::msl_dir();
     let segments: Vec<&str> = qualified.split('.').collect();
     if segments.is_empty() {
         return None;
     }
-    for i in (1..=segments.len()).rev() {
-        let mut dir = msl_root.clone();
-        for seg in &segments[..i] {
-            dir.push(seg);
+
+    // 1. In-memory bundle — populated on web by `MslRemotePlugin`.
+    //    Returns relative paths (e.g. `Modelica/Blocks/package.mo`).
+    //    `parse_msl_file_cached` re-keys against `GLOBAL_PARSED_MSL`
+    //    using the same forward-slash relative path.
+    if let Some(lunco_assets::msl::MslAssetSource::InMemory(in_mem)) =
+        lunco_assets::msl::global_msl_source()
+    {
+        for i in (1..=segments.len()).rev() {
+            let prefix: std::path::PathBuf = segments[..i].iter().collect();
+            // At any depth: prefer a directory holding `package.mo`
+            // over a flat `.mo`, so `Modelica.Blocks` resolves to
+            // `Modelica/Blocks/package.mo` (the package) rather than
+            // falling up to `Modelica/package.mo` (the grandparent).
+            let pkg = prefix.join("package.mo");
+            if in_mem.files.contains_key(&pkg) {
+                return Some(pkg);
+            }
+            let flat = prefix.with_extension("mo");
+            if in_mem.files.contains_key(&flat) {
+                return Some(flat);
+            }
         }
-        // At any depth: prefer a directory holding `package.mo`
-        // over a flat `.mo`, so `Modelica.Blocks` resolves to
-        // `Modelica/Blocks/package.mo` (the package) rather than
-        // falling up to `Modelica/package.mo` (the grandparent).
-        let pkg = dir.join("package.mo");
-        if pkg.exists() {
-            return Some(pkg);
-        }
-        let flat = dir.with_extension("mo");
-        if flat.exists() {
-            return Some(flat);
+        return None;
+    }
+
+    // 2. Filesystem path — native fallback. On wasm without a bundle
+    //    installed there's nothing to look at; this whole branch is
+    //    cfg'd out so we don't accidentally compile `Path::exists()`
+    //    on a target that can't satisfy it.
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let msl_root = lunco_assets::msl_dir();
+        for i in (1..=segments.len()).rev() {
+            let mut dir = msl_root.clone();
+            for seg in &segments[..i] {
+                dir.push(seg);
+            }
+            let pkg = dir.join("package.mo");
+            if pkg.exists() {
+                return Some(pkg);
+            }
+            let flat = dir.with_extension("mo");
+            if flat.exists() {
+                return Some(flat);
+            }
         }
     }
     None
@@ -804,23 +849,57 @@ fn parse_msl_file_cached(
             return slot.clone();
         }
     }
-    // Use rumoca-session's cached parallel parse instead of the
-    // lower-level `parse_to_syntax`. The session-cache hits the
-    // already-parsed file (FileCache populates it on drill-in), so
-    // this is a hashmap lookup in practice. Calling `parse_to_syntax`
-    // directly here can stall for tens of seconds on a 180 KB MSL
-    // file inside a worker thread, presumably due to parol's
-    // recovery loop or shared-state contention.
-    let parsed = (|| {
+
+    // 1. In-memory pre-parsed bundle (web). `path` is the relative
+    //    URI returned by `locate_msl_file`'s in-memory branch (e.g.
+    //    `Modelica/Blocks/package.mo`). `GLOBAL_PARSED_MSL` keys are
+    //    forward-slash strings produced by `MslInMemory::as_source_pairs`,
+    //    so we look up by the same shape.
+    if let Some(parsed) = lookup_in_pre_parsed_bundle(path) {
+        let arc = Some(Arc::new(parsed));
+        if let Ok(mut map) = cache.lock() {
+            map.insert(path.to_path_buf(), arc.clone());
+        }
+        return arc;
+    }
+
+    // 2. Disk-based parse (native). Use rumoca-session's cached
+    //    parallel parse instead of the lower-level `parse_to_syntax`.
+    //    The session-cache hits the already-parsed file (FileCache
+    //    populates it on drill-in), so this is a hashmap lookup in
+    //    practice. Calling `parse_to_syntax` directly here can stall
+    //    for tens of seconds on a 180 KB MSL file, presumably due to
+    //    parol's recovery loop.
+    #[cfg(not(target_arch = "wasm32"))]
+    let parsed: Option<Arc<rumoca_session::parsing::ast::StoredDefinition>> = (|| {
         let pairs = rumoca_session::parsing::parse_files_parallel(&[path.to_path_buf()])
             .ok()?;
         let (_, stored) = pairs.into_iter().next()?;
         Some(Arc::new(stored))
     })();
+    #[cfg(target_arch = "wasm32")]
+    let parsed: Option<Arc<rumoca_session::parsing::ast::StoredDefinition>> = None;
+
     if let Ok(mut map) = cache.lock() {
         map.insert(path.to_path_buf(), parsed.clone());
     }
     parsed
+}
+
+/// Look up a parsed MSL `StoredDefinition` by relative path in the
+/// process-wide pre-parsed bundle (`crate::msl_remote::global_parsed_msl`).
+/// Returns `None` if the bundle isn't installed yet or the path isn't
+/// present. Linear scan over ~2670 entries — cheap (<1 ms) and only
+/// happens once per path because `parse_msl_file_cached` memoises.
+fn lookup_in_pre_parsed_bundle(
+    path: &std::path::Path,
+) -> Option<rumoca_session::parsing::ast::StoredDefinition> {
+    let parsed = crate::msl_remote::global_parsed_msl()?;
+    let key = path.to_string_lossy().replace('\\', "/");
+    parsed
+        .iter()
+        .find(|(uri, _)| uri.as_str() == key)
+        .map(|(_, def)| def.clone())
 }
 
 fn load_msl_class_uncached(
