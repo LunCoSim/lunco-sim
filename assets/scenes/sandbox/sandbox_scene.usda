@@ -149,4 +149,20 @@ def Xform "SandboxScene"
         double3 xformOp:translate = (-25.0, 5.0, 0.0)
         string lunco:wheelType = "physical"
     }
+
+    # --- Balloons (cosim entities — geometry/physics + Modelica/Python wiring all in USD) ---
+
+    def Sphere "RedBalloon" (
+        prepend references = @/vessels/balloons/modelica_balloon.usda@</ModelicaBalloon>
+    )
+    {
+        double3 xformOp:translate = (10.0, 5.0, 0.0)
+    }
+
+    def Sphere "GreenBalloon" (
+        prepend references = @/vessels/balloons/python_balloon.usda@</PythonBalloon>
+    )
+    {
+        double3 xformOp:translate = (-10.0, 5.0, 0.0)
+    }
 }

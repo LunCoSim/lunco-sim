@@ -13,3 +13,5 @@ avian3d.workspace = true
 avian3d = { workspace = true, features = ["default-collider"] }
 lunco-sandbox-edit = { path = "../lunco-sandbox-edit" }
 lunco-modelica = { path = "../lunco-modelica" }
+lunco-celestial = { path = "../lunco-celestial" }
+lunco-environment = { path = "../lunco-environment" }

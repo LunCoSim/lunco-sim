@@ -186,11 +186,15 @@ pub fn msl_source_root_path() -> Option<PathBuf> {
     // is materialised. `Complex.mo` alone isn't a strong enough
     // signal — it's a small top-level file and might predate a
     // botched Modelica tree delete.
-    if root.join("Modelica").exists() {
-        Some(root)
-    } else {
-        None
+    if !root.join("Modelica").exists() {
+        return None;
     }
+    // Canonicalize so callers see the same absolute path regardless
+    // of CWD. `LUNCOSIM_CACHE = "../.cache"` in `.cargo/config.toml`
+    // is relative, and rumoca's bincode source-root cache keys on the
+    // exact path it receives — a CWD-dependent relative form would
+    // produce different keys per caller and force full reparses.
+    std::fs::canonicalize(&root).ok().or(Some(root))
 }
 
 // ============================================================================

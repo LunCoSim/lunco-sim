@@ -142,35 +142,47 @@ impl ModelicaCompiler {
         if Self::preload_from_global(&mut session, t_total) {
             return Self { session };
         }
-        if let Some(msl_root) = lunco_assets::msl_source_root_path() {
-            // Durable-external — MSL rarely changes and is
-            // library-grade; rumoca uses this classification to
-            // enable bincode persistence for parsed artifacts.
-            let report = session.load_source_root_tolerant(
-                "msl",
-                rumoca_session::compile::SourceRootKind::DurableExternal,
-                &msl_root,
-                None,
-            );
-            log::info!(
-                "[ModelicaCompiler] preloaded MSL from `{}` in {:.2}s: \
-                 {} parsed / {} inserted (cache {:?}); diagnostics: {}",
-                msl_root.display(),
-                t_total.elapsed().as_secs_f64(),
-                report.parsed_file_count,
-                report.inserted_file_count,
-                report.cache_status,
-                if report.diagnostics.is_empty() {
-                    "none".to_string()
-                } else {
-                    format!("{} lines", report.diagnostics.len())
-                },
-            );
-        } else {
-            log::info!(
-                "[ModelicaCompiler] no MSL source root available on this target; \
-                 session starts empty",
-            );
+        // MSL preload is opt-in via `LUNCO_MODELICA_PRELOAD_MSL=1`.
+        // Default-skip because the rumoca bincode cache invalidates on
+        // every parse-schema bump, making cold preload cost minutes
+        // for callers (sandbox balloon, standalone models) that import
+        // nothing from MSL anyway. Models that *do* reference MSL
+        // currently require the env until rumoca grows a lazy
+        // resolve-on-first-symbol hook.
+        let want_msl = std::env::var("LUNCO_MODELICA_PRELOAD_MSL")
+            .map(|v| v != "0" && !v.is_empty())
+            .unwrap_or(false);
+        if want_msl {
+            if let Some(msl_root) = lunco_assets::msl_source_root_path() {
+                // Durable-external — MSL rarely changes and is
+                // library-grade; rumoca uses this classification to
+                // enable bincode persistence for parsed artifacts.
+                let report = session.load_source_root_tolerant(
+                    "msl",
+                    rumoca_session::compile::SourceRootKind::DurableExternal,
+                    &msl_root,
+                    None,
+                );
+                log::info!(
+                    "[ModelicaCompiler] preloaded MSL from `{}` in {:.2}s: \
+                     {} parsed / {} inserted (cache {:?}); diagnostics: {}",
+                    msl_root.display(),
+                    t_total.elapsed().as_secs_f64(),
+                    report.parsed_file_count,
+                    report.inserted_file_count,
+                    report.cache_status,
+                    if report.diagnostics.is_empty() {
+                        "none".to_string()
+                    } else {
+                        format!("{} lines", report.diagnostics.len())
+                    },
+                );
+            } else {
+                log::info!(
+                    "[ModelicaCompiler] no MSL source root available on this target; \
+                     session starts empty",
+                );
+            }
         }
         Self { session }
     }
