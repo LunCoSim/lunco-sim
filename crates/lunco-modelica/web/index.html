@@ -10,10 +10,13 @@
         body { background: #1a1a1a; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
         #bevy { width: 100%; height: 100%; display: block; }
 
-        /* Centred loader card. Covers wasm download → wasm init → MSL
-           fetch → MSL parse → ready in one place. Non-blocking
-           backdrop so the canvas underneath stays interactable as soon
-           as wasm initialises. Hidden once MSL is ready. */
+        /* Centred loader card. Covers ONLY the crucial pre-init steps:
+           wasm download → wasm init. Hidden the moment `init()` resolves.
+           Non-blocking backdrop (pointer-events: none on the root)
+           so the canvas underneath is interactable from the first
+           paint. MSL load progress goes to the bottom status bar
+           because MSL is non-blocking — the UI is fully usable while
+           it streams in. */
         #loading {
             position: fixed; inset: 0;
             display: flex; align-items: center; justify-content: center;
@@ -61,6 +64,47 @@
         }
         #loading.error .title { color: #f44336; }
         #loading.error .bar > .fill { background: #f44336; }
+
+        /* Bottom status bar — peripheral info while MSL streams in.
+           VS-Code-style strip pinned to the bottom edge. Pointer-events
+           off so it can't intercept clicks meant for the workbench. */
+        #status-bar {
+            position: fixed; left: 0; right: 0; bottom: 0;
+            height: 22px;
+            background: rgba(20, 20, 20, 0.9);
+            border-top: 1px solid #2a2a2a;
+            color: #c8c8c8; font-size: 11px;
+            display: flex; align-items: center; gap: 10px;
+            padding: 0 10px;
+            pointer-events: none;
+            z-index: 900;
+            transition: opacity 0.3s ease;
+        }
+        #status-bar.hidden { opacity: 0; visibility: hidden; }
+        #status-bar .dot {
+            width: 8px; height: 8px; border-radius: 50%;
+            background: #4CAF50;
+            animation: pulse 1.4s ease-in-out infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50%      { opacity: 0.4; }
+        }
+        #status-bar.ready .dot   { background: #4CAF50; animation: none; }
+        #status-bar.error .dot   { background: #f44336; animation: none; }
+        #status-bar .label { color: #aaa; }
+        #status-bar .text  { color: #e8e8e8; font-variant-numeric: tabular-nums; }
+        #status-bar .bar {
+            margin-left: auto;
+            flex: 0 0 140px;
+            height: 4px; background: #2a2a2a; border-radius: 2px; overflow: hidden;
+        }
+        #status-bar.ready .bar, #status-bar.indeterminate .bar { display: none; }
+        #status-bar .bar > .fill {
+            height: 100%; background: #4CAF50; width: 0%;
+            transition: width 0.15s ease;
+        }
+        #status-bar.error .bar > .fill { background: #f44336; }
     </style>
 </head>
 <body>
@@ -71,6 +115,12 @@
             <div class="detail">&nbsp;</div>
             <div class="bar"><div class="fill"></div></div>
         </div>
+    </div>
+    <div id="status-bar" class="hidden indeterminate">
+        <span class="dot"></span>
+        <span class="label">MSL</span>
+        <span class="text">starting</span>
+        <span class="bar"><span class="fill"></span></span>
     </div>
     <canvas id="bevy"></canvas>
     <script type="module">
@@ -96,8 +146,6 @@
             setDetail(msg);
             fillE.style.width = '100%';
         }
-        // Expose for the wasm-side DOM mirror to drive directly.
-        window.__lc_loader = { setPhase, setDetail, setProgress, setIndeterminate, setError };
 
         function resize() {
             const canvas = document.getElementById('bevy');
@@ -148,12 +196,11 @@
             setDetail('compiling wasm…');
             setIndeterminate();
             await init({ module_or_path: wasmBuf });
-            setPhase('Ready');
-            setDetail('starting workbench');
-            setProgress(100);
-            // Wasm now drives further status (MSL fetch / parse / ready)
-            // via window.__lc_loader. The DOM mirror in Rust hides the
-            // loader once MSL is fully ready.
+            // Wasm is up and the workbench can render. Hide the centred
+            // loader immediately — anything further (MSL fetch / parse)
+            // is non-blocking and goes to the bottom status bar, which
+            // the wasm side drives directly via web-sys.
+            root.classList.add('hidden');
             resize();
         } catch (e) {
             console.error(e);

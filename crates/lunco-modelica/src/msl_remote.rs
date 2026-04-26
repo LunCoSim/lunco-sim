@@ -342,22 +342,22 @@ fn log_state_transition(s: &MslLoadState) {
 
 // ─── DOM status mirror ─────────────────────────────────────────────
 
-/// Mirror the current `MslLoadState` into the `#loading` overlay card
-/// in `index.html`. The card is shared across the whole boot sequence
-/// (wasm download → wasm init → MSL fetch → MSL parse → ready); JS
-/// drives the early phases, this system drives MSL phases. Hidden
-/// once MSL transitions to `Ready` (after a brief "Ready" pulse so
-/// the user sees the green-bar completion).
+/// Mirror the current `MslLoadState` into the `#status-bar` strip at
+/// the bottom of `index.html`. MSL is non-blocking — the workbench is
+/// already usable by the time this runs — so the indicator is small
+/// and peripheral. Hidden once MSL transitions to `Ready` (after a
+/// brief "ready" pulse so the user sees completion).
 ///
-/// Implementation: instead of poking the DOM directly we call helper
-/// functions stashed on `window.__lc_loader` by the page script. That
-/// keeps all DOM-shape decisions in `index.html` and lets the wasm
-/// side stay tiny.
+/// We poke the DOM directly via web-sys here. No JS bridge: the
+/// elements are stable, the strings are short, and avoiding the
+/// bridge means one less thing that can drift between Rust and JS.
 #[cfg(target_arch = "wasm32")]
 fn mirror_state_to_dom(
     state: Res<MslLoadState>,
     mut last_summary: bevy::prelude::Local<Option<String>>,
 ) {
+    use web_sys::window;
+
     // Cheap change-detection: a short summary string captures the
     // visible-state delta. Avoids touching the DOM when nothing moved.
     let summary = summarize_for_dom(&state);
@@ -366,46 +366,46 @@ fn mirror_state_to_dom(
     }
     *last_summary = Some(summary);
 
+    let Some(doc) = window().and_then(|w| w.document()) else { return };
+    let Some(bar) = doc.get_element_by_id("status-bar") else { return };
+
     match &*state {
         MslLoadState::NotStarted => {
-            // JS already shows "Starting…" before the wasm runs; nothing to do.
+            let _ = bar.set_attribute("class", "hidden");
         }
         MslLoadState::Loading { phase, bytes_done, bytes_total } => {
             let phase_label = match phase {
-                MslLoadPhase::FetchingManifest => "Fetching MSL manifest",
-                MslLoadPhase::FetchingBundle   => "Downloading MSL",
-                MslLoadPhase::Decompressing    => "Decompressing MSL",
-                MslLoadPhase::Parsing          => "Loading MSL",
+                MslLoadPhase::FetchingManifest => "fetching manifest",
+                MslLoadPhase::FetchingBundle   => "downloading",
+                MslLoadPhase::Decompressing    => "decompressing",
+                MslLoadPhase::Parsing          => "loading",
             };
-            loader_set_phase(phase_label);
-
-            let detail = match phase {
-                MslLoadPhase::Parsing => format!("{} / {} files", bytes_done, bytes_total),
+            let text = match phase {
+                MslLoadPhase::Parsing => format!("{phase_label} {} / {}", bytes_done, bytes_total),
                 _ if *bytes_total > 0 => format!(
-                    "{:.1} / {:.1} MB",
+                    "{phase_label} — {:.1} / {:.1} MB",
                     *bytes_done as f64 / 1_048_576.0,
                     *bytes_total as f64 / 1_048_576.0,
                 ),
-                _ => "".to_string(),
+                _ => phase_label.to_string(),
             };
-            loader_set_detail(&detail);
-
+            let cls = if *bytes_total > 0 { "" } else { "indeterminate" };
+            let _ = bar.set_attribute("class", cls);
+            set_text(&doc, "#status-bar .text", &text);
             if *bytes_total > 0 {
                 let pct = (*bytes_done as f64 / *bytes_total as f64 * 100.0).clamp(0.0, 100.0);
-                loader_set_progress(pct);
-            } else {
-                loader_set_indeterminate();
+                set_fill(&doc, pct);
             }
         }
         MslLoadState::Ready { file_count, .. } => {
-            loader_set_phase("Ready");
-            loader_set_detail(&format!("{file_count} MSL files loaded"));
-            loader_set_progress(100.0);
-            // Hide after a brief moment so the user sees completion.
-            schedule_loader_hide(700);
+            let _ = bar.set_attribute("class", "ready");
+            set_text(&doc, "#status-bar .text", &format!("ready — {file_count} files"));
+            // Hide after a beat so the user sees the green ready dot.
+            schedule_status_bar_hide(1500);
         }
         MslLoadState::Failed(msg) => {
-            loader_set_error(msg);
+            let _ = bar.set_attribute("class", "error");
+            set_text(&doc, "#status-bar .text", &format!("failed: {msg}"));
         }
     }
 }
@@ -416,7 +416,7 @@ fn summarize_for_dom(state: &MslLoadState) -> String {
         MslLoadState::NotStarted => "n".into(),
         MslLoadState::Loading { phase, bytes_done, bytes_total } => {
             // Bucket into 1% steps so the bar doesn't redraw on every
-            // single byte and we avoid spamming JS calls.
+            // single byte and we avoid DOM thrash.
             let pct_bucket = if *bytes_total > 0 {
                 ((*bytes_done as f64 / *bytes_total as f64) * 100.0) as u32
             } else {
@@ -429,62 +429,35 @@ fn summarize_for_dom(state: &MslLoadState) -> String {
     }
 }
 
-// ─── window.__lc_loader bridge ─────────────────────────────────────
+#[cfg(target_arch = "wasm32")]
+fn set_text(doc: &web_sys::Document, selector: &str, text: &str) {
+    let Ok(Some(node)) = doc.query_selector(selector) else { return };
+    node.set_text_content(Some(text));
+}
 
 #[cfg(target_arch = "wasm32")]
-fn loader_obj() -> Option<js_sys::Object> {
+fn set_fill(doc: &web_sys::Document, pct: f64) {
     use wasm_bindgen::JsCast;
-    let win = web_sys::window()?;
-    let val = js_sys::Reflect::get(&win, &"__lc_loader".into()).ok()?;
-    val.dyn_into::<js_sys::Object>().ok()
+    let Ok(Some(node)) = doc.query_selector("#status-bar .bar > .fill") else { return };
+    if let Ok(el) = node.dyn_into::<web_sys::HtmlElement>() {
+        let _ = el.style().set_property("width", &format!("{pct:.1}%"));
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
-fn call_loader(method: &str, arg: wasm_bindgen::JsValue) {
-    use wasm_bindgen::JsCast;
-    let Some(obj) = loader_obj() else { return };
-    let Ok(fnval) = js_sys::Reflect::get(&obj, &method.into()) else { return };
-    let Ok(func) = fnval.dyn_into::<js_sys::Function>() else { return };
-    let _ = func.call1(&obj.into(), &arg);
-}
-
-#[cfg(target_arch = "wasm32")]
-fn loader_set_phase(text: &str) {
-    call_loader("setPhase", text.into());
-}
-
-#[cfg(target_arch = "wasm32")]
-fn loader_set_detail(text: &str) {
-    call_loader("setDetail", text.into());
-}
-
-#[cfg(target_arch = "wasm32")]
-fn loader_set_progress(pct: f64) {
-    call_loader("setProgress", pct.into());
-}
-
-#[cfg(target_arch = "wasm32")]
-fn loader_set_indeterminate() {
-    use wasm_bindgen::JsCast;
-    let Some(obj) = loader_obj() else { return };
-    let Ok(fnval) = js_sys::Reflect::get(&obj, &"setIndeterminate".into()) else { return };
-    let Ok(func) = fnval.dyn_into::<js_sys::Function>() else { return };
-    let _ = func.call0(&obj.into());
-}
-
-#[cfg(target_arch = "wasm32")]
-fn loader_set_error(msg: &str) {
-    call_loader("setError", msg.into());
-}
-
-#[cfg(target_arch = "wasm32")]
-fn schedule_loader_hide(delay_ms: i32) {
+fn schedule_status_bar_hide(delay_ms: i32) {
     use wasm_bindgen::JsCast;
     let Some(win) = web_sys::window() else { return };
     let cb = wasm_bindgen::closure::Closure::once_into_js(move || {
         if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
-            if let Some(el) = doc.get_element_by_id("loading") {
-                let _ = el.set_attribute("class", "hidden");
+            if let Some(el) = doc.get_element_by_id("status-bar") {
+                let cur = el.get_attribute("class").unwrap_or_default();
+                let new_cls = if cur.contains("hidden") {
+                    cur
+                } else {
+                    format!("{cur} hidden").trim().to_string()
+                };
+                let _ = el.set_attribute("class", &new_cls);
             }
         }
     });
