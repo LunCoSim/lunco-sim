@@ -79,6 +79,7 @@ pub fn run() {
         .add_plugins(lunco_workbench::WorkbenchPlugin)
         .add_plugins(lunco_viz::LuncoVizPlugin)
         .add_plugins(ModelicaPlugin)
+        .add_plugins(lunco_modelica::msl_remote::MslRemotePlugin)
         .insert_resource(BundledModelInfo {
             default_filename: default_filename.to_string(),
             default_source: default_source.to_string(),
@@ -157,14 +158,10 @@ fn setup_web_workbench(
     // `handle_modelica_responses` on the `is_new_model` branch.
     workbench_state.selected_entity = Some(entity);
 
-    // Kick off initial compilation of the bundled model.
-    let _ = channels.tx.send(lunco_modelica::ModelicaCommand::Compile {
-        entity,
-        session_id: 0,
-        model_name,
-        source,
-        // wasm inline worker still runs on main thread (Phase A
-        // lands on desktop only); no SimStream publisher hook yet.
-        stream: None,
-    });
+    // No automatic compile on boot: the user clicks Compile when
+    // ready. Avoids racing the MSL fetch (which lands seconds later
+    // on web) and respects the principle that compile is an explicit
+    // user action. `entity`, `model_name`, `source` are bound here so
+    // the toolbar/keyboard Compile path finds them populated.
+    let _ = (entity, model_name, source, channels);
 }

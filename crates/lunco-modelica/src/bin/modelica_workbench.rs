@@ -21,6 +21,7 @@ fn main() {
         // samples into it.
         .add_plugins(lunco_viz::LuncoVizPlugin)
         .add_plugins(ModelicaPlugin)
+        .add_plugins(lunco_modelica::msl_remote::MslRemotePlugin)
         .add_systems(Startup, setup_sandbox);
 
     #[cfg(feature = "lunco-api")]

@@ -63,6 +63,11 @@ arc-swap = "1"
 # Required because `std::time::Instant::now()` panics with
 # "time not implemented on this platform" on wasm32-unknown-unknown.
 web-time = { workspace = true }
+# Pre-parsed MSL bundle deserialiser. Same encoding as rumoca's
+# on-disk artifact cache — the wasm fetcher decodes a Vec of
+# (uri, StoredDefinition) shipped at build time, skipping a ~27-min
+# per-file parse on the page.
+bincode = "1.3"
 # Compile-time embedding of the `assets/models/` tree so
 # `src/models.rs` can enumerate bundled `.mo` examples by walking a
 # static `Dir`, instead of requiring a `pub const + include_str!` line
@@ -73,24 +78,31 @@ include_dir = "0.7"
 # compile surface small.
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 usvg = { version = "0.45", default-features = false, features = ["text"] }
-# LunCoSim/rumoca fork, `main` branch.
-# Tracks upstream rumoca. `main` already carries:
+# LunCoSim/rumoca fork, `wasm-asset-loader` branch (off `main`).
+# `main` already carries:
 #   - the `instant::Instant` wasm32 fix that `web-fix` was carrying
 #     (std::time::Instant panics on wasm32-unknown-unknown)
 #   - `SimStepper` reconstruction of algebraic/output variables via the
 #     retained `EliminationResult` (state()/get() now return every
 #     variable, not just solver-vector entries).
-rumoca-sim = { git = "https://github.com/LunCoSim/rumoca", branch = "main" }
-rumoca-session = { git = "https://github.com/LunCoSim/rumoca", branch = "main" }
-rumoca-phase-parse = { git = "https://github.com/LunCoSim/rumoca", branch = "main" }
+# `wasm-asset-loader` adds:
+#   - `Session::load_source_root_in_memory(...)` so the wasm runtime can
+#     hand pre-fetched MSL bytes to the compile session without any fs.
+#
+# While that branch is in flight locally, point `path = ...` at the
+# sibling worktree so we can iterate without pushing. Flip back to
+# `git = ..., branch = "wasm-asset-loader"` after the branch is pushed.
+rumoca-sim = { path = "../../../rumoca/crates/rumoca-sim" }
+rumoca-session = { path = "../../../rumoca/crates/rumoca-session" }
+rumoca-phase-parse = { path = "../../../rumoca/crates/rumoca-phase-parse" }
 # Modelica formatter — surfaced as a "Format" toolbar button +
 # Ctrl+Shift+F binding. Rewrites the active editor buffer with
 # the canonical layout rumoca-tool-fmt produces.
-rumoca-tool-fmt = { git = "https://github.com/LunCoSim/rumoca", branch = "main" }
+rumoca-tool-fmt = { path = "../../../rumoca/crates/rumoca-tool-fmt" }
 # Modelica linter — surfaced into the Diagnostics panel alongside
 # parse errors. Wraps `rumoca_tool_lint::lint(source, name, opts)`
 # which returns a `Vec<LintMessage>` we map to `LogEntry`s.
-rumoca-tool-lint = { git = "https://github.com/LunCoSim/rumoca", branch = "main" }
+rumoca-tool-lint = { path = "../../../rumoca/crates/rumoca-tool-lint" }
 anyhow = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -116,6 +128,33 @@ walkdir = "2.5"
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
-web-sys = { version = "0.3", features = ["console", "Document", "HtmlInputElement", "Window", "File", "FileList", "FileReader", "Blob"] }
+# `Response`, `Request`, `RequestInit`, `Headers` for the MSL fetcher
+# (see `src/msl_remote.rs`); the rest predate this work.
+web-sys = { version = "0.3", features = [
+    "console",
+    "Document",
+    "Element",
+    "HtmlElement",
+    "HtmlInputElement",
+    "CssStyleDeclaration",
+    "Window",
+    "File",
+    "FileList",
+    "FileReader",
+    "Blob",
+    "Request",
+    "RequestInit",
+    "RequestMode",
+    "Response",
+    "Headers",
+] }
+js-sys = "0.3"
 console_error_panic_hook = "0.1"
 getrandom = { version = "0.3", features = ["wasm_js"] }
+# Pure-Rust zstd decoder for the MSL bundle. Smaller than the
+# `zstd` crate (which uses a C dep) and the encoder side already runs
+# on native (see `lunco-assets/src/bin/build_msl_assets.rs`).
+ruzstd = "0.7"
+# Tar reader to walk the decompressed MSL bundle. The `tar` crate is
+# fs-free if you only call `Archive::entries()`; works on wasm.
+tar = "0.4"

@@ -246,7 +246,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -257,7 +257,7 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1409,7 +1409,7 @@ dependencies = [
  "image",
  "ktx2",
  "rectangle-pack",
- "ruzstd",
+ "ruzstd 0.8.2",
  "serde",
  "thiserror 2.0.18",
  "tracing",
@@ -4107,7 +4107,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4652,7 +4652,7 @@ dependencies = [
  "libc",
  "log",
  "rustversion",
- "windows-link 0.1.3",
+ "windows-link 0.2.1",
  "windows-result 0.4.1",
 ]
 
@@ -5589,7 +5589,7 @@ checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
 dependencies = [
  "hermit-abi",
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6078,11 +6078,14 @@ name = "lunco-assets"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "bincode",
  "bzip2",
  "chrono",
  "flate2",
  "image",
  "resvg",
+ "rumoca-ir-ast",
+ "rumoca-phase-parse",
  "serde",
  "serde_json",
  "sha2",
@@ -6333,6 +6336,7 @@ dependencies = [
  "arc-swap",
  "bevy",
  "bevy_egui",
+ "bincode",
  "console_error_panic_hook",
  "crossbeam-channel",
  "egui_commonmark",
@@ -6344,6 +6348,7 @@ dependencies = [
  "image",
  "include_dir",
  "indexmap",
+ "js-sys",
  "log",
  "lunco-api",
  "lunco-assets",
@@ -6365,8 +6370,10 @@ dependencies = [
  "rumoca-sim",
  "rumoca-tool-fmt",
  "rumoca-tool-lint",
+ "ruzstd 0.7.3",
  "serde",
  "serde_json",
+ "tar",
  "usvg",
  "uuid",
  "walkdir",
@@ -6645,7 +6652,7 @@ version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "db9a0d582c2874f68138a16ce1867e0ffde6c0bb0a0df85e1f36d04146db488a"
 dependencies = [
- "twox-hash",
+ "twox-hash 2.1.2",
 ]
 
 [[package]]
@@ -7240,7 +7247,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -9074,7 +9081,6 @@ dependencies = [
 [[package]]
 name = "rumoca-core"
 version = "0.8.12"
-source = "git+https://github.com/LunCoSim/rumoca?branch=main#dbd2b6499e2fd47aef65abee00b73e6af6ac33ab"
 dependencies = [
  "miette",
  "serde",
@@ -9083,7 +9089,6 @@ dependencies = [
 [[package]]
 name = "rumoca-eval-ast"
 version = "0.8.12"
-source = "git+https://github.com/LunCoSim/rumoca?branch=main#dbd2b6499e2fd47aef65abee00b73e6af6ac33ab"
 dependencies = [
  "rumoca-core",
  "rumoca-ir-ast",
@@ -9094,7 +9099,6 @@ dependencies = [
 [[package]]
 name = "rumoca-eval-dae"
 version = "0.8.12"
-source = "git+https://github.com/LunCoSim/rumoca?branch=main#dbd2b6499e2fd47aef65abee00b73e6af6ac33ab"
 dependencies = [
  "cranelift-codegen",
  "cranelift-frontend",
@@ -9111,7 +9115,6 @@ dependencies = [
 [[package]]
 name = "rumoca-eval-flat"
 version = "0.8.12"
-source = "git+https://github.com/LunCoSim/rumoca?branch=main#dbd2b6499e2fd47aef65abee00b73e6af6ac33ab"
 dependencies = [
  "indexmap",
  "rumoca-core",
@@ -9123,7 +9126,6 @@ dependencies = [
 [[package]]
 name = "rumoca-ir-ast"
 version = "0.8.12"
-source = "git+https://github.com/LunCoSim/rumoca?branch=main#dbd2b6499e2fd47aef65abee00b73e6af6ac33ab"
 dependencies = [
  "indexmap",
  "rumoca-core",
@@ -9135,7 +9137,6 @@ dependencies = [
 [[package]]
 name = "rumoca-ir-core"
 version = "0.8.12"
-source = "git+https://github.com/LunCoSim/rumoca?branch=main#dbd2b6499e2fd47aef65abee00b73e6af6ac33ab"
 dependencies = [
  "serde",
 ]
@@ -9143,7 +9144,6 @@ dependencies = [
 [[package]]
 name = "rumoca-ir-dae"
 version = "0.8.12"
-source = "git+https://github.com/LunCoSim/rumoca?branch=main#dbd2b6499e2fd47aef65abee00b73e6af6ac33ab"
 dependencies = [
  "indexmap",
  "rumoca-core",
@@ -9154,7 +9154,6 @@ dependencies = [
 [[package]]
 name = "rumoca-ir-flat"
 version = "0.8.12"
-source = "git+https://github.com/LunCoSim/rumoca?branch=main#dbd2b6499e2fd47aef65abee00b73e6af6ac33ab"
 dependencies = [
  "indexmap",
  "rumoca-core",
@@ -9165,7 +9164,6 @@ dependencies = [
 [[package]]
 name = "rumoca-phase-codegen"
 version = "0.8.12"
-source = "git+https://github.com/LunCoSim/rumoca?branch=main#dbd2b6499e2fd47aef65abee00b73e6af6ac33ab"
 dependencies = [
  "miette",
  "minijinja",
@@ -9180,7 +9178,6 @@ dependencies = [
 [[package]]
 name = "rumoca-phase-dae"
 version = "0.8.12"
-source = "git+https://github.com/LunCoSim/rumoca?branch=main#dbd2b6499e2fd47aef65abee00b73e6af6ac33ab"
 dependencies = [
  "indexmap",
  "miette",
@@ -9196,7 +9193,6 @@ dependencies = [
 [[package]]
 name = "rumoca-phase-flatten"
 version = "0.8.12"
-source = "git+https://github.com/LunCoSim/rumoca?branch=main#dbd2b6499e2fd47aef65abee00b73e6af6ac33ab"
 dependencies = [
  "indexmap",
  "miette",
@@ -9212,7 +9208,6 @@ dependencies = [
 [[package]]
 name = "rumoca-phase-instantiate"
 version = "0.8.12"
-source = "git+https://github.com/LunCoSim/rumoca?branch=main#dbd2b6499e2fd47aef65abee00b73e6af6ac33ab"
 dependencies = [
  "indexmap",
  "miette",
@@ -9226,7 +9221,6 @@ dependencies = [
 [[package]]
 name = "rumoca-phase-parse"
 version = "0.8.12"
-source = "git+https://github.com/LunCoSim/rumoca?branch=main#dbd2b6499e2fd47aef65abee00b73e6af6ac33ab"
 dependencies = [
  "anyhow",
  "indexmap",
@@ -9242,7 +9236,6 @@ dependencies = [
 [[package]]
 name = "rumoca-phase-resolve"
 version = "0.8.12"
-source = "git+https://github.com/LunCoSim/rumoca?branch=main#dbd2b6499e2fd47aef65abee00b73e6af6ac33ab"
 dependencies = [
  "anyhow",
  "indexmap",
@@ -9256,7 +9249,6 @@ dependencies = [
 [[package]]
 name = "rumoca-phase-solve"
 version = "0.8.12"
-source = "git+https://github.com/LunCoSim/rumoca?branch=main#dbd2b6499e2fd47aef65abee00b73e6af6ac33ab"
 dependencies = [
  "indexmap",
  "rumoca-core",
@@ -9269,7 +9261,6 @@ dependencies = [
 [[package]]
 name = "rumoca-phase-typecheck"
 version = "0.8.12"
-source = "git+https://github.com/LunCoSim/rumoca?branch=main#dbd2b6499e2fd47aef65abee00b73e6af6ac33ab"
 dependencies = [
  "miette",
  "rumoca-core",
@@ -9283,7 +9274,6 @@ dependencies = [
 [[package]]
 name = "rumoca-session"
 version = "0.8.12"
-source = "git+https://github.com/LunCoSim/rumoca?branch=main#dbd2b6499e2fd47aef65abee00b73e6af6ac33ab"
 dependencies = [
  "anyhow",
  "bincode",
@@ -9314,7 +9304,6 @@ dependencies = [
 [[package]]
 name = "rumoca-sim"
 version = "0.8.12"
-source = "git+https://github.com/LunCoSim/rumoca?branch=main#dbd2b6499e2fd47aef65abee00b73e6af6ac33ab"
 dependencies = [
  "diffsol",
  "getrandom 0.3.4",
@@ -9335,7 +9324,6 @@ dependencies = [
 [[package]]
 name = "rumoca-tool-fmt"
 version = "0.8.12"
-source = "git+https://github.com/LunCoSim/rumoca?branch=main#dbd2b6499e2fd47aef65abee00b73e6af6ac33ab"
 dependencies = [
  "rumoca-session",
  "serde",
@@ -9346,7 +9334,6 @@ dependencies = [
 [[package]]
 name = "rumoca-tool-lint"
 version = "0.8.12"
-source = "git+https://github.com/LunCoSim/rumoca?branch=main#dbd2b6499e2fd47aef65abee00b73e6af6ac33ab"
 dependencies = [
  "rumoca-session",
  "serde",
@@ -9404,7 +9391,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -9468,11 +9455,20 @@ dependencies = [
 
 [[package]]
 name = "ruzstd"
+version = "0.7.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fad02996bfc73da3e301efe90b1837be9ed8f4a462b6ed410aa35d00381de89f"
+dependencies = [
+ "twox-hash 1.6.3",
+]
+
+[[package]]
+name = "ruzstd"
 version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e5ff0cc5e135c8870a775d3320910cd9b564ec036b4dc0b8741629020be63f01"
 dependencies = [
- "twox-hash",
+ "twox-hash 2.1.2",
 ]
 
 [[package]]
@@ -9866,7 +9862,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a766e1110788c36f4fa1c2b71b387a7815aa65f88ce0229841826633d93723e"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -10205,10 +10201,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.2",
  "once_cell",
  "rustix 1.1.4",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -10237,7 +10233,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "230a1b821ccbd75b185820a1f1ff7b14d21da1e442e22c0863ea5f08771a8874"
 dependencies = [
  "rustix 1.1.4",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -10772,6 +10768,16 @@ dependencies = [
 
 [[package]]
 name = "twox-hash"
+version = "1.6.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "97fee6b57c6a41524a810daee9286c02d7752c4253064d0b05472833a438f675"
+dependencies = [
+ "cfg-if",
+ "static_assertions",
+]
+
+[[package]]
+name = "twox-hash"
 version = "2.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9ea3136b675547379c4bd395ca6b938e5ad3c3d20fad76e7fe85f9e0d011419c"
@@ -10814,7 +10820,7 @@ checksum = "f2f6fb2847f6742cd76af783a2a2c49e9375d0a111c7bef6f71cd9e738c72d6e"
 dependencies = [
  "memoffset",
  "tempfile",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -11628,7 +11634,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

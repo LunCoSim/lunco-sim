@@ -124,13 +124,24 @@ pub struct ModelicaCompiler {
 impl ModelicaCompiler {
     /// Construct a compiler and preload MSL.
     ///
-    /// On targets without a filesystem (`wasm32`),
-    /// [`lunco_assets::msl_source_root_path`] returns `None` and the
-    /// session is left empty — web targets populate via HTTP once
-    /// the async-asset path lands.
+    /// MSL discovery order:
+    ///
+    /// 1. The process-wide source from [`lunco_assets::msl::global_msl_source`]
+    ///    if it's been installed. This is how the wasm runtime feeds the
+    ///    fetched-from-server MSL bundle in.
+    /// 2. Fall back to [`lunco_assets::msl_source_root_path`] (filesystem).
+    ///
+    /// If both are absent — typical for the first wasm tick before the
+    /// MSL bundle has finished downloading — the session is left empty
+    /// and the next compile will surface `unresolved type reference`
+    /// diagnostics until MSL lands. Callers that want to gate compiles
+    /// on MSL readiness should consult `MslLoadState`.
     pub fn new() -> Self {
         let t_total = web_time::Instant::now();
         let mut session = Session::new(SessionConfig::default());
+        if Self::preload_from_global(&mut session, t_total) {
+            return Self { session };
+        }
         if let Some(msl_root) = lunco_assets::msl_source_root_path() {
             // Durable-external — MSL rarely changes and is
             // library-grade; rumoca uses this classification to
@@ -162,6 +173,55 @@ impl ModelicaCompiler {
             );
         }
         Self { session }
+    }
+
+    /// If a process-wide MSL has been installed, preload it into the
+    /// session. Returns `true` when handled (caller skips the disk
+    /// fallback).
+    ///
+    /// Two web-side fast paths, in priority order:
+    ///
+    /// 1. **Pre-parsed bundle** ([`msl_remote::global_parsed_msl`]).
+    ///    The chunked parse driver finished running, so we already have
+    ///    `Vec<(uri, StoredDefinition)>` in hand — install via
+    ///    `Session::replace_parsed_source_set` (no parsing). This is
+    ///    the steady-state path on web.
+    /// 2. **Source-only bundle** (`MslAssetSource::InMemory`). Bytes
+    ///    are decompressed but the chunked parser hasn't finished yet.
+    ///    Falling through to `load_source_root_in_memory` here would
+    ///    block the main thread for ~60–120 s, so we skip preload and
+    ///    let the caller see an empty session — the auto-retrigger on
+    ///    parse-complete will rebuild the compiler properly.
+    fn preload_from_global(session: &mut Session, t_total: web_time::Instant) -> bool {
+        if let Some(parsed) = msl_remote::global_parsed_msl() {
+            let docs = (**parsed).clone();
+            let pair_count = docs.len();
+            let inserted = session.replace_parsed_source_set(
+                "msl",
+                rumoca_session::compile::SourceRootKind::DurableExternal,
+                docs,
+                None,
+            );
+            log::info!(
+                "[ModelicaCompiler] installed pre-parsed MSL in {:.2}s: \
+                 {} inserted (of {} docs)",
+                t_total.elapsed().as_secs_f64(),
+                inserted,
+                pair_count,
+            );
+            return true;
+        }
+        if matches!(
+            lunco_assets::msl::global_msl_source(),
+            Some(lunco_assets::msl::MslAssetSource::InMemory(_))
+        ) {
+            log::info!(
+                "[ModelicaCompiler] MSL bundle present but parse not yet complete — \
+                 starting with empty session; compile will be retriggered when parse finishes"
+            );
+            return true;
+        }
+        false
     }
 
     /// Compile Modelica source string and return DAE result.
@@ -207,6 +267,7 @@ pub mod ui;
 /// Bundled Modelica models for web deployment.
 /// Available on all targets, but primarily used for wasm builds.
 pub mod models;
+pub mod msl_remote;
 pub mod sim_stream;
 
 #[cfg(feature = "lunco-api")]
@@ -1033,8 +1094,22 @@ struct InlineWorkerInner {
 /// exist on this target, we can safely implement Send/Sync.
 #[cfg(target_arch = "wasm32")]
 #[derive(Resource, Default)]
-struct InlineWorker {
+pub(crate) struct InlineWorker {
     inner: InlineWorkerInner,
+}
+
+#[cfg(target_arch = "wasm32")]
+impl InlineWorker {
+    /// Drop any previously-constructed `ModelicaCompiler`. Used by the
+    /// MSL drain when the in-memory bundle finishes loading: a compiler
+    /// that was lazily built before MSL was available has an empty
+    /// session and would yield `unresolved type reference` for every
+    /// MSL ref. The next compile will re-init via
+    /// `get_or_insert_with(ModelicaCompiler::new)` and pick up the
+    /// global MSL source.
+    pub(crate) fn reset_compiler(&mut self) {
+        self.inner.compiler = None;
+    }
 }
 
 // SAFETY: wasm32-unknown-unknown has no threads, so Send/Sync are vacuously true.

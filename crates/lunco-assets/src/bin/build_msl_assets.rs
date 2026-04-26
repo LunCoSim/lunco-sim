@@ -43,6 +43,13 @@ use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
+/// Tag stamped into the manifest's `rumoca_artifact_tag` field. The
+/// wasm runtime refuses to deserialise a parsed bundle whose tag
+/// doesn't match its compiled-in expectation — the bincode'd
+/// `StoredDefinition` layout is rumoca-version sensitive. Bump this
+/// whenever the rumoca version we point at changes its AST shape.
+const RUMOCA_ARTIFACT_TAG: &str = "rumoca-0.8.12-wasm-asset-loader";
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let mut out_dir: Option<PathBuf> = None;
@@ -104,6 +111,25 @@ fn main() {
     fs::rename(&tmp_path, &final_path).expect("rename to final");
     let compressed_size = fs::metadata(&final_path).expect("stat final").len();
 
+    // Pre-parse every .mo source into a `StoredDefinition`, bincode-
+    // serialise the `Vec<(uri, StoredDefinition)>`, and zstd-compress.
+    // The wasm runtime fetches this and deserialises directly into
+    // rumoca via `Session::replace_parsed_source_set` — the alternative
+    // (per-file parse on the page) is ~27 minutes for 2670 files.
+    eprintln!("parsing {} files for the pre-parsed bundle…", entries.len());
+    let parsed = pre_parse(&msl_root, &entries);
+    let parsed_count = parsed.len();
+    eprintln!("parsed {parsed_count} / {} files", entries.len());
+
+    let parsed_tmp = out_dir.join("parsed.bin.zst.tmp");
+    let parsed_uncompressed_size = serialise_parsed(&parsed, &parsed_tmp);
+    let parsed_sha = file_sha256(&parsed_tmp);
+    let parsed_short = &parsed_sha[..16];
+    let parsed_final_name = format!("parsed-{parsed_short}.bin.zst");
+    let parsed_final_path = out_dir.join(&parsed_final_name);
+    fs::rename(&parsed_tmp, &parsed_final_path).expect("rename parsed");
+    let parsed_compressed_size = fs::metadata(&parsed_final_path).expect("stat parsed").len();
+
     let manifest = serde_json::json!({
         "schema_version": 1,
         "sources": {
@@ -113,6 +139,14 @@ fn main() {
             "compressed_bytes": compressed_size,
             "file_count": entries.len(),
         },
+        "parsed": {
+            "filename": parsed_final_name,
+            "sha256": parsed_sha,
+            "uncompressed_bytes": parsed_uncompressed_size,
+            "compressed_bytes": parsed_compressed_size,
+            "file_count": parsed_count,
+        },
+        "rumoca_artifact_tag": RUMOCA_ARTIFACT_TAG,
         "msl_root_marker": "Modelica/package.mo",
     });
     let manifest_path = out_dir.join("manifest.json");
@@ -125,7 +159,60 @@ fn main() {
         compressed_size as f64 / 1_048_576.0,
         total_uncompressed as f64 / 1_048_576.0,
     );
+    eprintln!(
+        "wrote {} ({:.1} MB compressed, {:.1} MB uncompressed; {} docs)",
+        parsed_final_name,
+        parsed_compressed_size as f64 / 1_048_576.0,
+        parsed_uncompressed_size as f64 / 1_048_576.0,
+        parsed_count,
+    );
     eprintln!("wrote manifest.json");
+}
+
+/// Parse every MSL `.mo` file into `(uri, StoredDefinition)`. URIs use
+/// MSL-relative forward-slash paths so they match what the wasm runtime
+/// will reconstruct from the source bundle; rumoca treats these as
+/// stable identifiers (not real filesystem paths).
+fn pre_parse(
+    msl_root: &Path,
+    entries: &[PathBuf],
+) -> Vec<(String, rumoca_ir_ast::StoredDefinition)> {
+    let mut out = Vec::with_capacity(entries.len());
+    let total = entries.len();
+    let mut last_pct: usize = usize::MAX;
+    for (i, path) in entries.iter().enumerate() {
+        let rel = path.strip_prefix(msl_root).expect("entry under msl root");
+        let uri = rel.to_string_lossy().replace('\\', "/");
+        let source = match fs::read_to_string(path) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("  skip {uri}: read failed: {e}");
+                continue;
+            }
+        };
+        match rumoca_phase_parse::parse_to_ast(&source, &uri) {
+            Ok(def) => out.push((uri, def)),
+            Err(e) => eprintln!("  skip {uri}: parse failed: {e}"),
+        }
+        let pct = (i + 1) * 20 / total; // 5% buckets
+        if pct != last_pct {
+            eprintln!("  parse: {} / {total} ({}%)", i + 1, pct * 5);
+            last_pct = pct;
+        }
+    }
+    out
+}
+
+fn serialise_parsed(parsed: &[(String, rumoca_ir_ast::StoredDefinition)], dest: &Path) -> u64 {
+    let raw = bincode::serialize(parsed).expect("bincode serialise parsed");
+    let uncompressed = raw.len() as u64;
+    let file = File::create(dest).expect("create parsed tmp");
+    let buf = BufWriter::new(file);
+    let mut zstd_w = zstd::Encoder::new(buf, 19).expect("zstd encoder");
+    use std::io::Write as _;
+    zstd_w.write_all(&raw).expect("write parsed bincode");
+    zstd_w.finish().expect("zstd finish parsed");
+    uncompressed
 }
 
 fn collect_mo_files(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) {
