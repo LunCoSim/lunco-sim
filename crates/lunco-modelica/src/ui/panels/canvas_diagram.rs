@@ -3334,19 +3334,33 @@ impl CanvasDiagramPanel {
         // touching the World. Combines all three buckets keyed by
         // dotted instance path (`R1.R`, `P.y`, …); visuals filter by
         // the prefix that matches their instance name.
+        // Resolve THIS canvas's simulator entity once. Doc-scoped, not
+        // active-tab-scoped: a future split-pane / multi-canvas layout
+        // where two model views are visible at once stays correct
+        // because each canvas reads from `simulator_for(world, its
+        // own doc_id)`. The `query.iter().next()` pattern that lived
+        // here previously picked an arbitrary `ModelicaModel` from
+        // the world — fine with one model loaded, catastrophically
+        // wrong with two (parameter/input snapshots and slider writes
+        // would land on whichever entity Bevy iterated first).
+        let canvas_sim = doc_id.and_then(|d| {
+            crate::ui::state::simulator_for(world, d)
+        });
+
         {
             let mut state =
                 lunco_viz::kinds::canvas_plot_node::NodeStateSnapshot::default();
-            let mut q = world.query::<&crate::ModelicaModel>();
-            for model in q.iter(world) {
-                for (k, v) in &model.parameters {
-                    state.values.insert(k.clone(), *v);
-                }
-                for (k, v) in &model.inputs {
-                    state.values.insert(k.clone(), *v);
-                }
-                for (k, v) in &model.variables {
-                    state.values.insert(k.clone(), *v);
+            if let Some(entity) = canvas_sim {
+                if let Some(model) = world.get::<crate::ModelicaModel>(entity) {
+                    for (k, v) in &model.parameters {
+                        state.values.insert(k.clone(), *v);
+                    }
+                    for (k, v) in &model.inputs {
+                        state.values.insert(k.clone(), *v);
+                    }
+                    for (k, v) in &model.variables {
+                        state.values.insert(k.clone(), *v);
+                    }
                 }
             }
             lunco_viz::kinds::canvas_plot_node::stash_node_state(
@@ -3358,10 +3372,13 @@ impl CanvasDiagramPanel {
             // dots freeze on pause (staying visible at their last
             // position) and resume from the same phase on unpause.
             // Edge visuals read this via `fetch_flow_anim_time()`.
-            let any_unpaused = {
-                let mut q2 = world.query::<&crate::ModelicaModel>();
-                q2.iter(world).any(|m| !m.paused)
-            };
+            // Scoped to THIS canvas's sim — animation stops when
+            // this doc's model is paused, regardless of whether
+            // another tab's sim is still running.
+            let any_unpaused = canvas_sim
+                .and_then(|e| world.get::<crate::ModelicaModel>(e))
+                .map(|m| !m.paused)
+                .unwrap_or(false);
             let dt = ui.ctx().input(|i| i.stable_dt as f64);
             let prev = ui
                 .ctx()
@@ -3393,19 +3410,20 @@ impl CanvasDiagramPanel {
         {
             let mut control_snapshot =
                 lunco_viz::kinds::canvas_plot_node::InputControlSnapshot::default();
-            let mut q = world.query::<&crate::ModelicaModel>();
-            for model in q.iter(world) {
-                for (qualified, value) in &model.inputs {
-                    let leaf = qualified.rsplit('.').next().unwrap_or(qualified);
-                    let (mn, mx) = model
-                        .parameter_bounds
-                        .get(qualified)
-                        .copied()
-                        .or_else(|| model.parameter_bounds.get(leaf).copied())
-                        .unwrap_or((None, None));
-                    control_snapshot
-                        .inputs
-                        .insert(qualified.clone(), (*value, mn, mx));
+            if let Some(entity) = canvas_sim {
+                if let Some(model) = world.get::<crate::ModelicaModel>(entity) {
+                    for (qualified, value) in &model.inputs {
+                        let leaf = qualified.rsplit('.').next().unwrap_or(qualified);
+                        let (mn, mx) = model
+                            .parameter_bounds
+                            .get(qualified)
+                            .copied()
+                            .or_else(|| model.parameter_bounds.get(leaf).copied())
+                            .unwrap_or((None, None));
+                        control_snapshot
+                            .inputs
+                            .insert(qualified.clone(), (*value, mn, mx));
+                    }
                 }
             }
             lunco_viz::kinds::canvas_plot_node::stash_input_control_snapshot(
@@ -3431,11 +3449,17 @@ impl CanvasDiagramPanel {
             let writes =
                 lunco_viz::kinds::canvas_plot_node::drain_input_writes(ui.ctx());
             if !writes.is_empty() {
-                let mut q = world.query::<&mut crate::ModelicaModel>();
-                for mut model in q.iter_mut(world) {
-                    for (name, value) in &writes {
-                        if let Some(slot) = model.inputs.get_mut(name) {
-                            *slot = *value;
+                // Apply only to THIS canvas's sim. The previous form
+                // walked every `ModelicaModel` and matched by input
+                // name — a slider on tab A's canvas would silently
+                // overwrite the same-named input on tab B's compiled
+                // model.
+                if let Some(entity) = canvas_sim {
+                    if let Some(mut model) = world.get_mut::<crate::ModelicaModel>(entity) {
+                        for (name, value) in &writes {
+                            if let Some(slot) = model.inputs.get_mut(name) {
+                                *slot = *value;
+                            }
                         }
                     }
                 }
@@ -5513,13 +5537,12 @@ fn synthesize_msl_node(
 ) -> lunco_canvas::NodeId {
     use lunco_canvas::{Node as CanvasNode, Port as CanvasPort, PortId as CanvasPortId, Pos as CanvasPos, Rect as CanvasRect};
 
-    // Default Modelica icon extent {{-100,-100},{100,100}} → 200×200
-    // canvas units, centred on the click. Matches what the projector
-    // produces for a component with no Placement override (rare in
-    // practice, but the size lands close to the canonical projection
-    // because most MSL icons declare extent={{-10,-10},{10,10}} which
-    // the source rewrite carries along anyway).
-    let half = 100.0_f32;
+    // Match `Placement::at` — 20×20 canvas units centred on the
+    // click. The source rewrite emits the same extent so the
+    // canonical reproject (when one happens) keeps the size stable.
+    // Using the full -100..100 default would render a node 10× too
+    // large compared with what the AST will produce.
+    let half = 10.0_f32;
     let icon_w = half * 2.0;
     let icon_h = half * 2.0;
     let min_wx = at_world.x - half;
@@ -5534,10 +5557,12 @@ fn synthesize_msl_node(
             let (lx, ly) = if p.x == 0.0 && p.y == 0.0 {
                 port_fallback_offset_for_size(i, n_ports, icon_w, icon_h)
             } else {
-                // Identity transform → world-relative offsets within
-                // the icon-local AABB (port coords are -100..100, AABB
-                // origin sits at `min_wx`/`min_wy`).
-                (p.x + half, half - p.y)
+                // Map port coords (-100..100, +Y up) into the
+                // 20×20 icon-local screen box (+Y down). Same scale
+                // factor 20/200 = 0.1 the projector uses for a
+                // Placement::at extent.
+                let scale = icon_w / 200.0;
+                ((p.x + 100.0) * scale, (100.0 - p.y) * scale)
             };
             CanvasPort {
                 id: CanvasPortId::new(p.name.clone()),

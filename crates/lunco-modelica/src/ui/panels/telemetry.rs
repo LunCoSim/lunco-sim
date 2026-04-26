@@ -65,30 +65,22 @@ impl Panel for TelemetryPanel {
         // Fix selection leakage
         ui.style_mut().interaction.selectable_labels = false;
 
-        // Auto-select first ModelicaModel entity if none selected (matches old behavior)
-        {
-            let needs_select = world.get_resource::<WorkbenchState>()
-                .map_or(true, |s| s.selected_entity.is_none());
-            if needs_select {
-                type Q = bevy::ecs::query::QueryState<Entity, bevy::ecs::query::With<crate::ModelicaModel>>;
-                let mut query_state = Q::new(world);
-                if let Some(entity) = query_state.iter(world).next() {
-                    if let Some(mut s) = world.get_resource_mut::<WorkbenchState>() {
-                        s.selected_entity = Some(entity);
-                    }
-                }
-            }
-        }
-
-        // Read snapshot of state to avoid borrow conflicts
+        // Resolve the entity to display: explicit pin (`selected_entity`)
+        // wins so the future "Pin to a specific model" UX stays
+        // possible, otherwise follow the active document — same
+        // lookup any doc-scoped panel uses. The previous form read
+        // `selected_entity` only and was clobbered on every Compile,
+        // stranding the user looking at whichever model was compiled
+        // last regardless of which tab they had focused.
         let (entity, has_data) = {
-            let state = match world.get_resource::<WorkbenchState>() {
-                Some(s) => s,
-                None => { ui.label("No state"); return; },
-            };
-            let e = state.selected_entity;
-            let has = e.map(|e| world.get::<ModelicaModel>(e).is_some()).unwrap_or(false);
-            (e, has)
+            let pinned = world
+                .get_resource::<WorkbenchState>()
+                .and_then(|s| s.selected_entity);
+            let resolved = pinned.or_else(|| crate::ui::state::active_simulator(world));
+            let has = resolved
+                .map(|e| world.get::<ModelicaModel>(e).is_some())
+                .unwrap_or(false);
+            (resolved, has)
         };
 
         let Some(entity) = entity else {
