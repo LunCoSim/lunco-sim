@@ -6262,6 +6262,9 @@ dependencies = [
 [[package]]
 name = "lunco-doc"
 version = "0.1.0"
+dependencies = [
+ "lunco-core",
+]
 
 [[package]]
 name = "lunco-doc-bevy"

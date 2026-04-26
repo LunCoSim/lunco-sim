@@ -5682,7 +5682,7 @@ fn apply_ops(world: &mut World, doc_id: lunco_doc::DocumentId, ops: Vec<Modelica
             bevy::log::info!("[CanvasDiagram] applying {:?}", op);
             match host.apply(op) {
                 Ok(_) => any_applied = true,
-                Err(lunco_doc::DocumentError::ReadOnly) => {
+                Err(lunco_doc::Reject::ReadOnly) => {
                     // Document layer rejects mutations on read-only
                     // origins (MSL drill-in, bundled library). We
                     // surface ONE banner per op-batch instead of

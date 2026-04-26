@@ -145,9 +145,26 @@ pub struct Mutation<P> {
     pub payload: P,
 }
 
+/// Conversion shortcut: any payload can be wrapped in a default
+/// local envelope by relying on `Into<Mutation<P>>`. This lets call
+/// sites write `host.apply(op)` and have the dispatcher stamp the
+/// envelope automatically — no clutter at the boundary.
+///
+/// Doesn't conflict with the reflexive `impl<T> From<T> for T`
+/// because the target type here is `Mutation<P>`, not `P`.
+impl<P> From<P> for Mutation<P> {
+    fn from(payload: P) -> Self {
+        Self::local(payload)
+    }
+}
+
 impl<P> Mutation<P> {
     /// Build an envelope for a locally-originated mutation. Mints a
-    /// fresh [`OpId`], stamps [`SessionId::LOCAL`].
+    /// fresh [`OpId`], stamps [`SessionId::LOCAL`]. Same as
+    /// `payload.into()` — explicit form is preferred when the call
+    /// site needs to set additional fields (`parent_gen`, etc.) or
+    /// when the type inference around `Into` gets in the reader's
+    /// way.
     pub fn local(payload: P) -> Self {
         Self {
             id: OpId::new(),

@@ -1609,7 +1609,7 @@ mod tests {
                 replacement: String::new(),
             })
             .unwrap_err();
-        assert!(matches!(err, DocumentError::ValidationFailed(_)));
+        assert!(matches!(err, lunco_doc::Reject::InvalidOp(_)));
         // Unchanged on error.
         assert_eq!(host.document().source(), "model Empty end Empty;\n");
         assert_eq!(host.generation(), 0);
@@ -1705,7 +1705,7 @@ mod tests {
                 },
             })
             .unwrap_err();
-        assert!(matches!(err, DocumentError::ValidationFailed(_)));
+        assert!(matches!(err, lunco_doc::Reject::InvalidOp(_)));
         assert_eq!(host.generation(), 0);
     }
 
@@ -1769,6 +1769,6 @@ mod tests {
                 },
             })
             .unwrap_err();
-        assert!(matches!(err, DocumentError::ValidationFailed(_)));
+        assert!(matches!(err, lunco_doc::Reject::InvalidOp(_)));
     }
 }
