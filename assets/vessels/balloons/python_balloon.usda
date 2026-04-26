@@ -1,0 +1,23 @@
+#usda 1.0
+(
+    defaultPrim = "PythonBalloon"
+)
+
+# Reusable Python-driven balloon. Mirrors `modelica_balloon.usda` but
+# uses `lunco:pythonModel` so the cosim translator routes to the Python
+# backend rather than Modelica.
+
+def Sphere "PythonBalloon" (
+    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI"]
+)
+{
+    double radius = 1.0
+    color3f primvars:displayColor = (0.2, 0.9, 0.2)
+
+    bool physics:rigidBodyEnabled = true
+    bool physics:collisionEnabled = true
+    float physics:mass = 4.5
+
+    string lunco:pythonModel = "models/GreenBalloon.py"
+    string lunco:simWires = "netForce:force_y,height:height,velocity_y:velocity"
+}

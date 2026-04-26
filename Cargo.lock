@@ -6002,9 +6002,14 @@ version = "0.1.0"
 dependencies = [
  "avian3d",
  "bevy",
+ "env_logger",
+ "lunco-celestial",
  "lunco-core",
+ "lunco-doc",
+ "lunco-environment",
  "lunco-modelica",
  "lunco-sandbox-edit",
+ "lunco-scripting",
 ]
 
 [[package]]
@@ -6344,15 +6349,22 @@ dependencies = [
  "bevy",
  "big_space",
  "leafwing-input-manager",
+ "lunco-api",
+ "lunco-assets",
  "lunco-avatar",
  "lunco-controller",
  "lunco-core",
+ "lunco-cosim",
+ "lunco-doc",
  "lunco-fsw",
  "lunco-hardware",
  "lunco-mobility",
+ "lunco-modelica",
  "lunco-robotics",
+ "lunco-scripting",
  "lunco-usd-bevy",
  "openusd",
+ "serde_json",
 ]
 
 [[package]]

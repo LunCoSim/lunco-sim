@@ -112,8 +112,14 @@ impl Plugin for UsdSimPlugin {
                process_usd_sim_prims,
                swap_raycast_to_joint,
            ).chain().after(lunco_usd_bevy::sync_usd_visuals));
+        // USD → cosim wiring (`lunco:modelicaModel`, `lunco:scriptModel`,
+        // `lunco:simWires`) — see `cosim.rs`.
+        cosim::install(app);
     }
 }
+
+pub mod cosim;
+pub use cosim::{CosimStatusProvider, UsdSourcedCosim};
 
 /// Helper to check if a prim has a specific API schema applied.
 ///

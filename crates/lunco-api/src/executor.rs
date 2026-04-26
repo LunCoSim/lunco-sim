@@ -134,8 +134,9 @@ pub fn api_command_dispatcher(
 
 /// Recursively finds fields that look like stable IDs and resolves them to Bevy Entity indices.
 ///
-/// Note: This is a heuristic. We assume fields named 'target', 'entity', or 'body'
-/// that contain a large number or numeric string are meant to be GlobalEntityIds.
+/// Note: This is a heuristic. We assume fields named 'target', 'entity',
+/// 'body', 'parent', or 'avatar' that contain a large number or numeric
+/// string are meant to be GlobalEntityIds.
 fn resolve_ids_in_json(value: &mut serde_json::Value, registry: &ApiEntityRegistry) {
     use lunco_core::GlobalEntityId;
 
@@ -143,7 +144,7 @@ fn resolve_ids_in_json(value: &mut serde_json::Value, registry: &ApiEntityRegist
         serde_json::Value::Object(map) => {
             for (k, v) in map.iter_mut() {
                 // Heuristic: fields that typically store Entity IDs
-                if k == "target" || k == "entity" || k == "body" || k == "parent" {
+                if k == "target" || k == "entity" || k == "body" || k == "parent" || k == "avatar" {
                     if let Some(id_u64) = v.as_u64() {
                         if let Some(entity) = registry.resolve(&GlobalEntityId(id_u64)) {
                             // Replace with raw Bevy index for reflection deserializer

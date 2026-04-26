@@ -81,20 +81,40 @@ fn find_libpython_windows() -> Option<std::path::PathBuf> {
 #[cfg(feature = "python")]
 fn find_libpython_via_python3() -> Option<std::path::PathBuf> {
     use std::process::Command;
+    // Pull all candidate filenames from sysconfig in one shot. On Debian-
+    // family systems `LDLIBRARY` is `libpython3.X.so` — a symlink that
+    // ships only with the `-dev` package — so a runtime-only install
+    // can't find it. `INSTSONAME` (`libpython3.X.so.1.0`) is the actual
+    // installed file and is present in every reasonable install.
     let output = Command::new("python3")
         .arg("-c")
-        .arg("import sysconfig; import os; print(os.path.join(sysconfig.get_config_var('LIBDIR'), sysconfig.get_config_var('LDLIBRARY')))")
+        .arg(
+            "import sysconfig\n\
+             print(sysconfig.get_config_var('LIBDIR'))\n\
+             print(sysconfig.get_config_var('INSTSONAME') or '')\n\
+             print(sysconfig.get_config_var('LDLIBRARY') or '')",
+        )
         .output()
         .ok()?;
-    
-    if output.status.success() {
-        let path_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        let path = std::path::PathBuf::from(path_str);
-        if path.exists() {
-            return Some(path);
-        }
+    if !output.status.success() { return None; }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut lines = stdout.lines();
+    let libdir = lines.next()?.trim().to_string();
+    let inst_soname = lines.next().unwrap_or("").trim().to_string();
+    let ld_library = lines.next().unwrap_or("").trim().to_string();
+
+    let libdir_path = std::path::PathBuf::from(&libdir);
+    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+    if !inst_soname.is_empty() { candidates.push(libdir_path.join(&inst_soname)); }
+    if !ld_library.is_empty() {
+        candidates.push(libdir_path.join(&ld_library));
+        // Versioned-symlink fallbacks for distros that don't ship the
+        // bare `.so` (Debian without `-dev`): try `.so.1` and `.so.1.0`.
+        candidates.push(libdir_path.join(format!("{}.1", ld_library)));
+        candidates.push(libdir_path.join(format!("{}.1.0", ld_library)));
     }
-    None
+    candidates.into_iter().find(|p| p.exists())
 }
 
 pub fn initialize_python() {

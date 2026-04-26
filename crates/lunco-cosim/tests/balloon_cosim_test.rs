@@ -32,7 +32,7 @@ use lunco_modelica::{
 };
 use lunco_sandbox_edit::catalog::BalloonModelMarker;
 
-const BALLOON_MO: &str = include_str!("../../../assets/models/balloon.mo");
+const BALLOON_MO: &str = include_str!("../../../assets/models/Balloon.mo");
 
 // Miniature copies of the production `balloon_setup` systems. They're
 // duplicated here because `balloon_setup.rs` lives as a `#[path]`-included
@@ -57,14 +57,7 @@ fn compile_balloon_model(
             model_name: model_name.clone(),
             parameters: params,
             inputs: inputs.into_iter().collect(),
-            variables: Default::default(),
-            descriptions: Default::default(),
-            current_time: 0.0,
-            last_step_time: 0.0,
-            session_id: 0,
-            paused: false,
-            is_stepping: false,
-            document: Default::default(),
+            ..default()
         });
 
         let _ = channels.tx.send(ModelicaCommand::Compile {
@@ -72,6 +65,7 @@ fn compile_balloon_model(
             session_id: 0,
             model_name,
             source,
+            stream: None,
         });
 
         eprintln!("test: sent Compile for balloon '{name}'");

@@ -100,6 +100,78 @@ curl -X POST http://127.0.0.1:3000/api/commands \
   }'
 ```
 
+### Example: Reload USD scene at runtime
+
+`LoadScene` despawns every entity carrying `UsdPrimPath` plus every
+`SimConnection`, force-reads the asset from disk, and spawns a fresh
+root parented to the first `Grid`. Use after editing a `.usda` file to
+pick up changes without restarting.
+
+```bash
+curl -X POST http://127.0.0.1:3000/api/commands \
+  -H "Content-Type: application/json" \
+  -d '{
+    "command": "LoadScene",
+    "params": {
+      "path": "scenes/sandbox/sandbox_scene.usda",
+      "root_prim": ""
+    }
+  }'
+```
+
+`root_prim` empty auto-derives `/PascalCaseFromFilename`
+(`sandbox_scene.usda` → `/SandboxScene`).
+
+### Example: Possess / Follow / Focus
+
+Three avatar-camera commands, all share `{avatar, target}`:
+
+```bash
+# Take direct control (rover, spacecraft)
+curl -X POST http://127.0.0.1:3000/api/commands \
+  -d '{"command":"PossessVessel","params":{"avatar":"01ARZ...","target":"01ARZ..."}}'
+
+# Chase camera only — any SelectableRoot (balloons, props)
+curl -X POST http://127.0.0.1:3000/api/commands \
+  -d '{"command":"FollowTarget","params":{"avatar":"01ARZ...","target":"01ARZ..."}}'
+
+# Orbit a celestial body
+curl -X POST http://127.0.0.1:3000/api/commands \
+  -d '{"command":"FocusTarget","params":{"avatar":"01ARZ...","target":"01ARZ..."}}'
+```
+
+### Example: Live cosim status
+
+`CosimStatus` returns one row per USD-driven cosim entity
+(`UsdSourcedCosim`) with position, velocity, Modelica timing, and
+propagated wire values:
+
+```bash
+curl -X POST http://127.0.0.1:3000/api/commands \
+  -H "Content-Type: application/json" \
+  -d '{"command":"CosimStatus","params":{}}' | jq
+```
+
+```json
+{
+  "data": {
+    "entities": [
+      {
+        "name": "/SandboxScene/RedBalloon",
+        "y": 17.27,
+        "vy": 3.04,
+        "has_simcomponent": true,
+        "modelica_var_count": 7,
+        "modelica_current_time": 9.62,
+        "netForce": 44.16,
+        "force_y_input": 44.16,
+        "buoyancy": 71.55
+      }
+    ]
+  }
+}
+```
+
 ## Response Format
 
 ### Success

@@ -271,6 +271,61 @@ const STATIC_TOOLS = [
       required: ['uri'],
     },
   },
+  // ── Cosim observability + scene control ──────────────────────────────
+  {
+    name: 'cosim_status',
+    description: 'Snapshot of every USD-driven cosim entity (`UsdSourcedCosim`). Returns `{entities: [{name, y, vy, has_simcomponent, modelica_var_count, modelica_paused, modelica_current_time, netForce, force_y_input, buoyancy}]}`. `netForce` / `force_y_input` / `buoyancy` are nullable (Python entities don\'t expose `buoyancy`; pre-compile entries have nulls until Modelica produces variables). Useful for verifying cosim chains end-to-end without polling logs.',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'load_scene',
+    description: 'Reload (or replace) the active USD scene at runtime. Despawns every entity carrying `UsdPrimPath`, despawns every `SimConnection`, force-reloads the asset from disk, then spawns a fresh root parented to the first `Grid`. Use after editing a `.usda` file to pick up changes without restarting the binary. `root_prim` empty auto-derives `/PascalCaseFromFilename` (so `sandbox_scene.usda` → `/SandboxScene`).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'USD asset path relative to `assets/` (e.g. "scenes/sandbox/sandbox_scene.usda").' },
+        root_prim: { type: 'string', description: 'SDF path of the root prim to spawn. Empty = auto-derive from filename.', default: '' },
+      },
+      required: ['path'],
+    },
+  },
+  // ── Avatar camera control ────────────────────────────────────────────
+  {
+    name: 'possess_vessel',
+    description: 'Take direct control of a vessel (rover, spacecraft). Inserts `ControllerLink` so keyboard input drives the target plus a `SpringArmCamera` chase view. Idempotent: re-issuing for the same target is a no-op. Pass entity IDs from `list_entities`.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        avatar: { type: 'string', description: 'Avatar entity api_id.' },
+        target: { type: 'string', description: 'Vessel entity api_id.' },
+      },
+      required: ['avatar', 'target'],
+    },
+  },
+  {
+    name: 'follow_target',
+    description: 'Chase-camera-only follow: tracks any `SelectableRoot` entity (balloons, props, …) without binding controls. Inserts `SpringArmCamera` and removes any prior `ControllerLink`. Use for observation and scripted camera moves.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        avatar: { type: 'string', description: 'Avatar entity api_id.' },
+        target: { type: 'string', description: 'Target entity api_id (any `SelectableRoot`).' },
+      },
+      required: ['avatar', 'target'],
+    },
+  },
+  {
+    name: 'focus_target',
+    description: 'Orbit-camera focus on a celestial body or large object. Switches to `OrbitCamera` at a distance scaled to the body\'s radius. Different from `follow_target`: stays at orbit distance, no surface-relative mode.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        avatar: { type: 'string', description: 'Avatar entity api_id.' },
+        target: { type: 'string', description: 'Body entity api_id.' },
+      },
+      required: ['avatar', 'target'],
+    },
+  },
 ];
 
 // Dynamic tools cache (built from schema)
@@ -288,7 +343,14 @@ function buildDynamicTools(schema) {
   }
 
   // Filter out commands that are already handled by static tools with special logic
-  const EXCLUDED_COMMANDS = ['CaptureScreenshot'];
+  // (richer descriptions / parameter docs than the auto-generated form).
+  const EXCLUDED_COMMANDS = [
+    'CaptureScreenshot',
+    'LoadScene',
+    'PossessVessel',
+    'FollowTarget',
+    'FocusTarget',
+  ];
   const commands = schema.commands.filter(cmd => !EXCLUDED_COMMANDS.includes(cmd.name));
 
   return commands.map((cmd) => {
@@ -704,6 +766,47 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             { type: 'text', text: JSON.stringify(result, null, 2) },
           ],
         };
+      }
+
+      // ── Cosim observability ─────────────────────────────────────────
+      case 'cosim_status': {
+        // ApiQueryProvider — returns data synchronously, NOT a Reflect
+        // Event. Goes through `execute_command` like other queries.
+        const result = await executeCommand('CosimStatus', args ?? {});
+        if (result.error) {
+          return { content: [{ type: 'text', text: `Error: ${result.error}` }], isError: true };
+        }
+        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+      }
+
+      case 'load_scene': {
+        const { path, root_prim = '' } = args ?? {};
+        if (!path) {
+          return { content: [{ type: 'text', text: 'Error: `path` is required' }], isError: true };
+        }
+        const result = await executeCommand('LoadScene', { path, root_prim });
+        if (result.error) {
+          return { content: [{ type: 'text', text: `Error: ${result.error}` }], isError: true };
+        }
+        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+      }
+
+      case 'possess_vessel':
+      case 'follow_target':
+      case 'focus_target': {
+        const { avatar, target } = args ?? {};
+        if (!avatar || !target) {
+          return { content: [{ type: 'text', text: 'Error: `avatar` and `target` are both required' }], isError: true };
+        }
+        // Tool name → PascalCase command name.
+        const commandName = name.split('_')
+          .map((p) => p.charAt(0).toUpperCase() + p.slice(1))
+          .join('');
+        const result = await executeCommand(commandName, { avatar, target });
+        if (result.error) {
+          return { content: [{ type: 'text', text: `Error: ${result.error}` }], isError: true };
+        }
+        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       }
 
       default: {

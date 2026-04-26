@@ -1,0 +1,45 @@
+#usda 1.0
+(
+    defaultPrim = "ModelicaBalloon"
+)
+
+# Reusable Modelica-driven balloon. Geometry and physics live here in USD
+# (see PhysicsRigidBodyAPI / PhysicsCollisionAPI from the Avian translator).
+# The cosim layer is wired via two custom attributes:
+#
+#   string lunco:modelicaModel = "models/Balloon.mo"
+#       — Path (relative to assets/) of the Modelica source. The cosim
+#       translator opens it, registers a document, and triggers compile.
+#
+#   string lunco:simWires = "fromPort:toPort,fromPort:toPort:scale,..."
+#       — Comma-separated self-loop wires connecting Modelica ↔ AvianSim
+#       ports on this same entity. Each entry spawns one `SimConnection`.
+#       `:scale` is optional (defaults to 1.0). Encoded as a single
+#       string because `string[]` arrays don't compose across `references`
+#       in the current openusd parser.
+#
+# Instantiate in scenes via reference + overrides:
+#   def "RedBalloon" (prepend references = @/vessels/balloons/modelica_balloon.usda@</ModelicaBalloon>) {
+#       double3 xformOp:translate = (10, 5, 0)
+#       color3f primvars:displayColor = (0.9, 0.2, 0.2)
+#   }
+
+def Sphere "ModelicaBalloon" (
+    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI"]
+)
+{
+    double radius = 1.0
+    color3f primvars:displayColor = (0.9, 0.2, 0.2)
+
+    bool physics:rigidBodyEnabled = true
+    bool physics:collisionEnabled = true
+    float physics:mass = 4.5
+
+    # Modelica source + cosim wires. The translator (`lunco_usd_sim::cosim`)
+    # picks these up after `sync_usd_visuals` populates Transform/Mesh.
+    # Wires are comma-separated `from:to` (or `from:to:scale`) entries —
+    # `string[]` arrays don't compose across `references` in the current
+    # openusd parser, so we encode them in a single string.
+    string lunco:modelicaModel = "models/Balloon.mo"
+    string lunco:simWires = "netForce:force_y,volume:collider,height:height,velocity_y:velocity"
+}

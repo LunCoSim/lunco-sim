@@ -27,10 +27,6 @@ use lunco_modelica::{ModelicaPlugin, ModelicaSet};
 use big_space::prelude::Grid;
 use lunco_materials::{BlueprintMaterialPlugin, SolarPanelMaterialPlugin};
 
-#[path = "../balloon_setup.rs"]
-mod balloon_setup;
-#[path = "../python_balloon_setup.rs"]
-mod python_balloon_setup;
 #[path = "../code_panel.rs"]
 mod code_panel;
 #[path = "../models_palette.rs"]
@@ -57,6 +53,14 @@ fn main() {
                     position: WindowPosition::Centered(MonitorSelection::Primary),
                     ..default()
                 }),
+                ..default()
+            })
+            .set(bevy::log::LogPlugin {
+                // Quieten third-party noise: rumoca's JIT + diffsol's solver
+                // both emit per-function and per-step info that floods the
+                // log during balloon stepping. Override via RUST_LOG when
+                // diagnosing one of them.
+                filter: "wgpu=error,naga=warn,cranelift=warn,cranelift_jit=warn,cranelift_codegen=warn,diffsol=warn,info".into(),
                 ..default()
             })
             .build()
@@ -104,34 +108,17 @@ fn main() {
             layout.activate_perspective(lunco_workbench::PerspectiveId("rover_view"));
         })
         .add_systems(Update, apply_sandbox_settings)
-        // One-shot setup systems stay in Update (fire only on Added<BalloonModelMarker>)
-        .add_systems(Update, balloon_setup::compile_balloon_model)
-        .add_systems(Update, balloon_setup::setup_balloon_wires)
-        .add_systems(Update, python_balloon_setup::setup_python_balloon)
-        // Per-tick sync systems run in FixedUpdate, ordered within the cosim pipeline:
-        //   HandleResponses → sync_outputs → Propagate → ApplyForces → sync_inputs → SpawnRequests
+        // Cosim pipeline ordering inside FixedUpdate:
+        //   HandleResponses → Propagate → ApplyForces → SpawnRequests.
+        // All USD-driven cosim wiring (compile dispatch, SimComponent
+        // setup, per-tick sync) is registered by
+        // `lunco_usd_sim::cosim::install` from `UsdPlugins`.
         .configure_sets(FixedUpdate, (
             ModelicaSet::HandleResponses,
             PropagateCosimSet::Propagate,
             ApplyForcesCosimSet::ApplyForces,
             ModelicaSet::SpawnRequests,
         ).chain())
-        .add_systems(FixedUpdate,
-            balloon_setup::sync_modelica_outputs
-                .after(ModelicaSet::HandleResponses)
-                .before(PropagateCosimSet::Propagate))
-        .add_systems(FixedUpdate,
-            python_balloon_setup::sync_script_outputs
-                .after(ModelicaSet::HandleResponses)
-                .before(PropagateCosimSet::Propagate))
-        .add_systems(FixedUpdate,
-            balloon_setup::sync_inputs_to_modelica
-                .after(ApplyForcesCosimSet::ApplyForces)
-                .before(ModelicaSet::SpawnRequests))
-        .add_systems(FixedUpdate,
-            python_balloon_setup::sync_inputs_to_script
-                .after(ApplyForcesCosimSet::ApplyForces)
-                .before(ModelicaSet::SpawnRequests))
         // Selection must run before avatar possession so DragModeActive flag is set
         .add_systems(Update, lunco_sandbox_edit::selection::handle_entity_selection.before(lunco_avatar::avatar_raycast_possession))
         .add_systems(PreUpdate, global_transform_propagation_system)
@@ -178,8 +165,6 @@ impl Default for SandboxSettings {
 fn setup_sandbox(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     let big_space_root = commands.spawn(BigSpace::default()).id();
     let grid = commands.spawn((
@@ -224,45 +209,10 @@ fn setup_sandbox(
         CellCoord::default(),
     )).set_parent_in_place(grid);
 
-    // --- Spawn Balloons ---
-    // Red Balloon (Modelica)
-    commands.spawn((
-        Name::new("Red Balloon (Modelica)"),
-        lunco_core::SelectableRoot,
-        Transform::from_xyz(10.0, 5.0, 0.0),
-        avian3d::prelude::RigidBody::Dynamic,
-        avian3d::prelude::Collider::sphere(1.0),
-        avian3d::prelude::Mass(4.5),
-        Mesh3d(meshes.add(Sphere::new(1.0).mesh().ico(16).unwrap())),
-        MeshMaterial3d(materials.add(StandardMaterial {
-            base_color: Color::srgb(0.9, 0.2, 0.2),
-            ..default()
-        })),
-        ChildOf(grid),
-        // big_space requires CellCoord on every spatial entity — without it
-        // `spring_arm_system`'s `Query<(&CellCoord, &Transform)>` doesn't
-        // match and `FollowTarget` clicks bail silently (camera "stuck").
-        CellCoord::default(),
-        lunco_sandbox_edit::catalog::BalloonModelMarker::default(),
-    ));
-
-    // Green Balloon (Python) — same CellCoord requirement as Red above.
-    commands.spawn((
-        Name::new("Green Balloon (Python)"),
-        lunco_core::SelectableRoot,
-        Transform::from_xyz(-10.0, 5.0, 0.0),
-        avian3d::prelude::RigidBody::Dynamic,
-        avian3d::prelude::Collider::sphere(1.0),
-        avian3d::prelude::Mass(4.5),
-        Mesh3d(meshes.add(Sphere::new(1.0).mesh().ico(16).unwrap())),
-        MeshMaterial3d(materials.add(StandardMaterial {
-            base_color: Color::srgb(0.2, 0.9, 0.2),
-            ..default()
-        })),
-        ChildOf(grid),
-        CellCoord::default(),
-        lunco_sandbox_edit::catalog::PythonBalloonMarker::default(),
-    ));
+    // Balloons live in `sandbox_scene.usda` now (Red/GreenBalloon prims
+    // reference `vessels/balloons/{modelica,python}_balloon.usda`).
+    // The cosim translator reads `lunco:modelicaModel` / `lunco:scriptModel`
+    // and `lunco:simWires` to wire up Modelica/Python and SimConnections.
 }
 
 /// Spawns a default avatar if no USD-defined Avatar was loaded.
