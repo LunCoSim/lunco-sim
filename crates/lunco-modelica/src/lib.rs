@@ -967,7 +967,10 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                             }
                         } else {
                             let mut r = result_ok(entity, session_id);
-                            r.error = Some("Sim engine failed to start.".to_string());
+                            r.error = Some(
+                                "No compiled model. Click Compile (or Run will compile + start)."
+                                    .to_string(),
+                            );
                             let _ = tx_inner.send(r);
                         }
                     }
@@ -1187,10 +1190,22 @@ fn inline_worker_process(
                     let _ = tx.send(result_ok(entity, session_id));
                 }
             } else {
+                // No stepper for this entity. The Bevy-side
+                // `spawn_modelica_requests` is supposed to catch this
+                // and dispatch a Compile first; if we got here the
+                // user pressed Run on a never-compiled model AND the
+                // auto-compile hook didn't fire (e.g. doc id is
+                // missing). Surface a message that tells the user
+                // what to do next instead of "Sim engine failed to
+                // start." which doesn't.
                 let _ = tx.send(ModelicaResult {
                     entity, session_id, new_time: 0.0,
                     outputs: Vec::new(),
-                    detected_symbols: Vec::new(), error: Some("Sim engine failed to start.".to_string()),
+                    detected_symbols: Vec::new(),
+                    error: Some(
+                        "No compiled model. Click Compile (or Run will compile + start)."
+                            .to_string(),
+                    ),
                     log_message: None, is_new_model: false, is_parameter_update: false,
                     is_reset: false, detected_input_names: Vec::new(), detected_descriptions: Vec::new(),
                 });
@@ -1423,6 +1438,13 @@ pub struct ModelicaModel {
     pub document: lunco_doc::DocumentId,
     #[reflect(ignore)]
     pub is_stepping: bool,
+    /// `true` after a successful Compile has installed a stepper for
+    /// this entity in the Modelica worker. `spawn_modelica_requests`
+    /// uses this to dispatch a Compile (instead of a doomed Step) when
+    /// the user clicks Run on a never-compiled model. Reset to `false`
+    /// when a result reports an error or a fresh Compile is in flight.
+    #[reflect(ignore)]
+    pub is_compiled: bool,
 }
 
 /// Sends `Step` commands for each active model.
@@ -1433,11 +1455,36 @@ fn spawn_modelica_requests(
     channels: Res<ModelicaChannels>,
     time: Res<Time<Fixed>>,
     mut q_models: Query<(Entity, &mut ModelicaModel)>,
+    mut commands: Commands,
 ) {
     let dt = time.delta_secs_f64();
 
     for (entity, mut model) in q_models.iter_mut() {
         if model.is_stepping || model.paused { continue; }
+
+        // First-step path: model has been unpaused (user pressed Run)
+        // but no Compile has succeeded yet — the worker has no stepper
+        // and a Step would just bounce back as "Click Compile first".
+        // Auto-trigger CompileModel instead. The observer flips
+        // `is_stepping = true` and bumps `session_id`, so we won't
+        // re-trigger on subsequent frames; on a successful result the
+        // response handler sets `is_compiled = true` and unpauses.
+        if !model.is_compiled {
+            let doc = model.document;
+            if doc != lunco_doc::DocumentId::default() {
+                commands.trigger(crate::ui::commands::CompileModel {
+                    doc,
+                    class: if model.model_name.is_empty() {
+                        None
+                    } else {
+                        Some(model.model_name.clone())
+                    },
+                });
+            }
+            // Don't ship a Step this frame either way — let the
+            // compile flow run.
+            continue;
+        }
 
         let inputs: Vec<(String, f64)> = model.inputs.iter()
             .map(|(name, val)| (name.clone(), *val))
@@ -1593,6 +1640,12 @@ fn handle_modelica_responses(
                     c.error(format!("[{}] {prefix}: {err}", model.model_name));
                 }
                 model.paused = true;
+                // Solver errors destroy the stepper in the worker
+                // (lib.rs ~1176 removes it). Clear the flag so the
+                // next Run after the user fixes things triggers a
+                // fresh Compile rather than a doomed Step. Compile
+                // errors flip this in the `is_new_model` block below.
+                model.is_compiled = false;
             } else if workbench_state.selected_entity == Some(result.entity) {
                 workbench_state.compilation_error = None;
             }
@@ -1611,6 +1664,12 @@ fn handle_modelica_responses(
                 // explicitly after fixing the source.
                 if result.error.is_none() {
                     model.paused = false;
+                    // Worker has installed a stepper for this entity.
+                    // `spawn_modelica_requests` reads this to decide
+                    // whether to ship Step or trigger Compile-on-first-step.
+                    model.is_compiled = true;
+                } else {
+                    model.is_compiled = false;
                 }
 
                 // Merge input names from the worker with values the UI already extracted from source.

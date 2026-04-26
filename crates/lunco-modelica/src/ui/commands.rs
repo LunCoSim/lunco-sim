@@ -1228,6 +1228,7 @@ fn on_compile_model(
                     descriptions: HashMap::new(),
                     document: doc,
                     is_stepping: true,
+                    is_compiled: false,
                 },
             ))
             .id();

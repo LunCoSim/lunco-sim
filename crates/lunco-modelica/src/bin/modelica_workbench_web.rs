@@ -143,7 +143,11 @@ fn setup_web_workbench(
     )).id();
 
     doc_registry.link(entity, doc_id);
-    compile_states.set(doc_id, lunco_modelica::ui::CompileState::Compiling);
+    // No initial compile is dispatched (see comment further down).
+    // Leave CompileStates at the default Idle — setting it to
+    // Compiling here without a corresponding `Compile` send would
+    // leave the toolbar stuck on the sandglass icon forever.
+    let _ = compile_states;
 
     // Open the model tab so the user lands on the actual model view
     // instead of the Welcome placeholder.
