@@ -12,6 +12,10 @@ egui_dock = "0.18"
 lunco-doc = { path = "../lunco-doc" }
 lunco-twin = { path = "../lunco-twin" }
 lunco-workspace = { path = "../lunco-workspace" }
+# `Instant::now()` panics on wasm32-unknown-unknown. The status bus
+# stamps every event with a wall-clock instant, so we use the wasm-safe
+# replacement on every target.
+web-time = { workspace = true }
 
 [dev-dependencies]
 # For the hello_workbench example. The full DefaultPlugins pull in a winit

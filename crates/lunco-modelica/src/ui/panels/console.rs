@@ -11,7 +11,17 @@
 //! session; oldest-first eviction matches a terminal scrollback.
 
 use std::collections::VecDeque;
+use std::sync::OnceLock;
 use web_time::Instant;
+
+/// Wall-clock anchor for console timestamps. Initialised on the first
+/// message push. We display `(msg.at - SESSION_START).as_secs_f32()`
+/// — that value is captured at push time and never changes for an
+/// existing message, so timestamps don't tick during render. Using the
+/// first message's instant (rather than module-load time) keeps the
+/// "0.00s" line useful: it always belongs to the first event the user
+/// sees, not some arbitrary moment the binary booted.
+static SESSION_START: OnceLock<Instant> = OnceLock::new();
 
 use bevy::prelude::*;
 use bevy_egui::egui;
@@ -69,11 +79,15 @@ pub struct ConsoleLog {
 
 impl ConsoleLog {
     pub fn push(&mut self, level: ConsoleLevel, text: impl Into<String>) {
+        let now = Instant::now();
+        // Lock in the session anchor on the first push so the very
+        // first message gets `[+0.00s]` and everything is relative to it.
+        SESSION_START.get_or_init(|| now);
         if self.messages.len() >= MAX_MESSAGES {
             self.messages.pop_front();
         }
         self.messages.push_back(ConsoleMessage {
-            at: Instant::now(),
+            at: now,
             level,
             text: text.into(),
         });
@@ -168,14 +182,21 @@ impl Panel for ConsolePanel {
                     // Monospaced, timestamp-prefixed rows — one per
                     // message. Keep render cost O(N) without any
                     // per-frame regex or parsing.
+                    let session_start = SESSION_START
+                        .get()
+                        .copied()
+                        .or_else(|| snapshot.first().map(|m| m.at));
                     for msg in &snapshot {
                         let color = msg.level.color();
-                        // Relative-from-session-start timestamp; good
-                        // enough without wall-clock formatting deps.
-                        let ts = format!(
-                            "[{:>6.2}s]",
-                            msg.at.elapsed().as_secs_f32().max(0.0)
-                        );
+                        // Stable [+T.TTs] anchored at the first message
+                        // (or the SESSION_START captured at first push).
+                        // Captured at push time — does not tick while
+                        // the panel is open.
+                        let offset = session_start
+                            .and_then(|s| msg.at.checked_duration_since(s))
+                            .map(|d| d.as_secs_f32())
+                            .unwrap_or(0.0);
+                        let ts = format!("[+{offset:>6.2}s]");
                         ui.horizontal(|ui| {
                             ui.label(
                                 egui::RichText::new(&ts)

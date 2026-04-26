@@ -53,6 +53,7 @@ mod perspective;
 mod session;
 mod viewport;
 
+pub mod status_bus;
 pub mod twin_browser;
 pub mod uri;
 
@@ -135,6 +136,12 @@ impl Plugin for WorkbenchPlugin {
         // wiring by adding just `WorkspacePlugin`.
         if !app.is_plugin_added::<session::WorkspacePlugin>() {
             app.add_plugins(session::WorkspacePlugin);
+        }
+        // Cross-cutting status bus. Subsystems publish events here;
+        // renderers (status bar, console fan-out, diagnostics fan-out)
+        // are added separately by their owning plugins.
+        if !app.is_plugin_added::<status_bus::StatusBusPlugin>() {
+            app.add_plugins(status_bus::StatusBusPlugin);
         }
         app.init_resource::<WorkbenchLayout>()
             .init_resource::<PendingTabCloses>()
@@ -991,16 +998,13 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
     });
 
     // ── Status bar ──────────────────────────────────────────────────
+    // Drives off the cross-cutting `StatusBus` resource. Latest event
+    // shows in the strip; click opens a popup with recent history.
+    // Falls back to the legacy `layout.status` text when the bus is
+    // empty so existing callers keep working during the migration.
     egui::TopBottomPanel::bottom("lunco_workbench_status_bar").show(ctx, |ui| {
         ui.style_mut().visuals = theme.to_visuals();
-        ui.horizontal(|ui| match layout.status.as_ref() {
-            Some(StatusContent::Text(s)) => {
-                ui.label(egui::RichText::new(s).small());
-            }
-            None => {
-                ui.label(egui::RichText::new("ready").small().weak());
-            }
-        });
+        render_status_bar_inner(ui, world, layout, theme);
     });
 
     // ── Activity bar ────────────────────────────────────────────────
@@ -1122,6 +1126,145 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
 
 /// Render a single panel inside its own egui container (side-panel mode).
 /// Mirrors PanelTabViewer's lookup-and-take-back pattern.
+/// Render the bottom status strip. Reads from [`status_bus::StatusBus`]
+/// (cross-cutting; populated by MSL load, compile, sim, etc.) and
+/// renders a click-to-expand popup with recent history.
+fn render_status_bar_inner(
+    ui: &mut egui::Ui,
+    world: &mut World,
+    layout: &WorkbenchLayout,
+    _theme: &lunco_theme::Theme,
+) {
+    use status_bus::{StatusBus, StatusLevel};
+
+    let popup_id = ui.make_persistent_id("lunco_workbench_status_bar_popup");
+
+    // Snapshot what we need from the bus into local owned values so
+    // we don't hold a borrow across the popup callback (it also wants
+    // to read the bus).
+    struct LatestSnapshot {
+        source: &'static str,
+        message: String,
+        level: StatusLevel,
+        progress_pct: Option<f64>,
+    }
+    let (latest, history): (Option<LatestSnapshot>, Vec<status_bus::StatusEvent>) = {
+        let bus = world.resource::<StatusBus>();
+        let latest = bus.display_latest().map(|e| LatestSnapshot {
+            source: e.source,
+            message: e.message.clone(),
+            level: e.level,
+            progress_pct: e.progress_pct(),
+        });
+        let history: Vec<_> = bus.history().cloned().collect();
+        (latest, history)
+    };
+
+    ui.horizontal(|ui| {
+        // The whole strip is one clickable region; the popup anchors
+        // off its response so it appears just above the bar.
+        let response = ui
+            .scope(|ui| {
+                ui.set_height(18.0);
+                if let Some(l) = latest.as_ref() {
+                    let dot_color = match l.level {
+                        StatusLevel::Error => egui::Color32::from_rgb(244, 67, 54),
+                        StatusLevel::Warn => egui::Color32::from_rgb(255, 152, 0),
+                        StatusLevel::Progress | StatusLevel::Info => {
+                            egui::Color32::from_rgb(76, 175, 80)
+                        }
+                    };
+                    // Painted circle instead of `●` so we don't depend
+                    // on a font that ships U+25CF (the wasm build's
+                    // egui font fallback chain doesn't, hence "tofu"
+                    // boxes for that glyph).
+                    let (rect, _) = ui.allocate_exact_size(
+                        egui::vec2(10.0, 10.0),
+                        egui::Sense::hover(),
+                    );
+                    ui.painter().circle_filled(rect.center(), 4.0, dot_color);
+                    ui.label(egui::RichText::new(l.source).small().strong());
+                    ui.label(egui::RichText::new(&l.message).small());
+                    if let Some(pct) = l.progress_pct {
+                        ui.add(
+                            egui::ProgressBar::new((pct as f32) / 100.0)
+                                .desired_width(120.0)
+                                .desired_height(6.0),
+                        );
+                    }
+                } else {
+                    // Bus is empty — fall back to whatever a panel
+                    // pushed via the legacy `layout.status_bar(...)`
+                    // API so existing call sites keep working.
+                    match layout.status.as_ref() {
+                        Some(StatusContent::Text(s)) => {
+                            ui.label(egui::RichText::new(s).small());
+                        }
+                        None => {
+                            ui.label(egui::RichText::new("ready").small().weak());
+                        }
+                    }
+                }
+            })
+            .response
+            .interact(egui::Sense::click())
+            .on_hover_text("Click to view recent status events");
+
+        if response.clicked() {
+            ui.memory_mut(|m| m.toggle_popup(popup_id));
+        }
+
+        // egui::Popup is the post-0.31 API. `open_memory(None)` ties
+        // the open state to egui's memory keyed by `popup_id`, so the
+        // `toggle_popup` call above flips it.
+        egui::Popup::from_response(&response)
+            .id(popup_id)
+            .align(egui::RectAlign::TOP_START)
+            .layout(egui::Layout::top_down_justified(egui::Align::LEFT))
+            .open_memory(None)
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+            .show(|ui| {
+                ui.set_min_width(420.0);
+                ui.set_max_width(560.0);
+                ui.set_max_height(360.0);
+                ui.heading("Recent status events");
+                ui.separator();
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    if history.is_empty() {
+                        ui.label(egui::RichText::new("(no events yet)").weak());
+                        return;
+                    }
+                    // Newest first.
+                    for ev in history.iter().rev() {
+                        let level_tag = match ev.level {
+                            StatusLevel::Info => egui::RichText::new("INFO ")
+                                .small()
+                                .color(egui::Color32::from_rgb(160, 160, 160)),
+                            StatusLevel::Warn => egui::RichText::new("WARN ")
+                                .small()
+                                .color(egui::Color32::from_rgb(255, 152, 0)),
+                            StatusLevel::Error => egui::RichText::new("ERR  ")
+                                .small()
+                                .color(egui::Color32::from_rgb(244, 67, 54)),
+                            StatusLevel::Progress => egui::RichText::new("…    ")
+                                .small()
+                                .color(egui::Color32::from_rgb(120, 120, 120)),
+                        };
+                        ui.horizontal(|ui| {
+                            ui.label(level_tag.monospace());
+                            ui.label(
+                                egui::RichText::new(format!("[{}]", ev.source))
+                                    .small()
+                                    .strong(),
+                            );
+                            ui.label(egui::RichText::new(&ev.message).small());
+                        });
+                    }
+                });
+            });
+    });
+}
+
 fn render_panel_solo(
     ui: &mut egui::Ui,
     id: &PanelId,

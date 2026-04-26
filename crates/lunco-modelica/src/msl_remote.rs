@@ -60,6 +60,12 @@ impl Plugin for MslRemotePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<MslLoadState>();
 
+        // Cross-platform: mirror MSL state changes into the workbench
+        // status bus so renderers (status bar, console, diagnostics)
+        // pick them up uniformly. Lives in this plugin (not the bus
+        // crate) because it knows about `MslLoadState` shape.
+        app.add_systems(Update, mirror_state_to_status_bus);
+
         // Native: synchronous decision based on whether the disk tree is
         // there. We never need an async task on this target.
         #[cfg(not(target_arch = "wasm32"))]
@@ -92,14 +98,16 @@ impl Plugin for MslRemotePlugin {
                 bytes_total: 0,
             });
             app.insert_resource(MslLoadSlot(slot.clone()));
-            // The drain runs first to hand bundle → parse, then the
-            // parse driver runs in the same frame so chunks start
-            // immediately without an extra tick of latency. The DOM
-            // mirror runs after both so it always reflects the latest
-            // state in the same frame the user can see.
+            // Order:
+            //  1. drain_msl_load_slot — bundle → parse handoff
+            //  2. drive_msl_parse — chunked parse if needed
+            //  3. mirror_state_to_status_bus (added cross-platform above)
+            // The cross-platform mirror runs after the drain so it picks
+            // up state changes within the same frame; egui's status bar
+            // (rendered later by the workbench) reads StatusBus directly.
             app.add_systems(
                 Update,
-                (drain_msl_load_slot, drive_msl_parse, mirror_state_to_dom).chain(),
+                (drain_msl_load_slot, drive_msl_parse).chain(),
             );
             wasm_bindgen_futures::spawn_local(web::run_fetcher(slot));
         }
@@ -340,132 +348,109 @@ fn log_state_transition(s: &MslLoadState) {
     }
 }
 
-// ─── DOM status mirror ─────────────────────────────────────────────
+// ─── State → StatusBus mirror (cross-platform) ─────────────────────
 
-/// Mirror the current `MslLoadState` into the `#status-bar` strip at
-/// the bottom of `index.html`. MSL is non-blocking — the workbench is
-/// already usable by the time this runs — so the indicator is small
-/// and peripheral. Hidden once MSL transitions to `Ready` (after a
-/// brief "ready" pulse so the user sees completion).
-///
-/// We poke the DOM directly via web-sys here. No JS bridge: the
-/// elements are stable, the strings are short, and avoiding the
-/// bridge means one less thing that can drift between Rust and JS.
-#[cfg(target_arch = "wasm32")]
-fn mirror_state_to_dom(
+/// Watch [`MslLoadState`] and translate transitions / progress ticks
+/// into [`StatusBus`] events. Phase changes become discrete `Info`
+/// entries (preserved in history); byte/file counts within a phase
+/// become `Progress` ticks (updated in place).
+fn mirror_state_to_status_bus(
     state: Res<MslLoadState>,
-    mut last_summary: bevy::prelude::Local<Option<String>>,
+    mut bus: ResMut<lunco_workbench::status_bus::StatusBus>,
+    mut last: bevy::prelude::Local<Option<MirrorMemo>>,
 ) {
-    use web_sys::window;
-
-    // Cheap change-detection: a short summary string captures the
-    // visible-state delta. Avoids touching the DOM when nothing moved.
-    let summary = summarize_for_dom(&state);
-    if last_summary.as_deref() == Some(summary.as_str()) {
-        return;
-    }
-    *last_summary = Some(summary);
-
-    let Some(doc) = window().and_then(|w| w.document()) else { return };
-    let Some(bar) = doc.get_element_by_id("status-bar") else { return };
+    let now_summary = MirrorMemo::from(&*state);
+    let prior_phase_label = last.as_ref().and_then(|m| m.phase_label);
 
     match &*state {
-        MslLoadState::NotStarted => {
-            let _ = bar.set_attribute("class", "hidden");
-        }
+        MslLoadState::NotStarted => {}
         MslLoadState::Loading { phase, bytes_done, bytes_total } => {
-            let phase_label = match phase {
-                MslLoadPhase::FetchingManifest => "fetching manifest",
-                MslLoadPhase::FetchingBundle   => "downloading",
-                MslLoadPhase::Decompressing    => "decompressing",
-                MslLoadPhase::Parsing          => "loading",
-            };
-            let text = match phase {
-                MslLoadPhase::Parsing => format!("{phase_label} {} / {}", bytes_done, bytes_total),
-                _ if *bytes_total > 0 => format!(
-                    "{phase_label} — {:.1} / {:.1} MB",
-                    *bytes_done as f64 / 1_048_576.0,
-                    *bytes_total as f64 / 1_048_576.0,
-                ),
-                _ => phase_label.to_string(),
-            };
-            let cls = if *bytes_total > 0 { "" } else { "indeterminate" };
-            let _ = bar.set_attribute("class", cls);
-            set_text(&doc, "#status-bar .text", &text);
-            if *bytes_total > 0 {
-                let pct = (*bytes_done as f64 / *bytes_total as f64 * 100.0).clamp(0.0, 100.0);
-                set_fill(&doc, pct);
+            let label = msl_phase_label(*phase);
+            // Phase transition → discrete history entry.
+            if prior_phase_label != Some(label) {
+                bus.push(
+                    MSL_SOURCE,
+                    lunco_workbench::status_bus::StatusLevel::Info,
+                    label,
+                );
             }
+            // Progress tick (in-place; doesn't accumulate in history).
+            let detail = format_progress_detail(*phase, *bytes_done, *bytes_total);
+            bus.push_progress(MSL_SOURCE, detail, *bytes_done, *bytes_total);
         }
         MslLoadState::Ready { file_count, .. } => {
-            let _ = bar.set_attribute("class", "ready");
-            set_text(&doc, "#status-bar .text", &format!("ready — {file_count} files"));
-            // Hide after a beat so the user sees the green ready dot.
-            schedule_status_bar_hide(1500);
-        }
-        MslLoadState::Failed(msg) => {
-            let _ = bar.set_attribute("class", "error");
-            set_text(&doc, "#status-bar .text", &format!("failed: {msg}"));
-        }
-    }
-}
-
-#[cfg(target_arch = "wasm32")]
-fn summarize_for_dom(state: &MslLoadState) -> String {
-    match state {
-        MslLoadState::NotStarted => "n".into(),
-        MslLoadState::Loading { phase, bytes_done, bytes_total } => {
-            // Bucket into 1% steps so the bar doesn't redraw on every
-            // single byte and we avoid DOM thrash.
-            let pct_bucket = if *bytes_total > 0 {
-                ((*bytes_done as f64 / *bytes_total as f64) * 100.0) as u32
-            } else {
-                0
-            };
-            format!("L:{phase:?}:{pct_bucket}")
-        }
-        MslLoadState::Ready { file_count, .. } => format!("R:{file_count}"),
-        MslLoadState::Failed(m) => format!("F:{}", m.len()),
-    }
-}
-
-#[cfg(target_arch = "wasm32")]
-fn set_text(doc: &web_sys::Document, selector: &str, text: &str) {
-    let Ok(Some(node)) = doc.query_selector(selector) else { return };
-    node.set_text_content(Some(text));
-}
-
-#[cfg(target_arch = "wasm32")]
-fn set_fill(doc: &web_sys::Document, pct: f64) {
-    use wasm_bindgen::JsCast;
-    let Ok(Some(node)) = doc.query_selector("#status-bar .bar > .fill") else { return };
-    if let Ok(el) = node.dyn_into::<web_sys::HtmlElement>() {
-        let _ = el.style().set_property("width", &format!("{pct:.1}%"));
-    }
-}
-
-#[cfg(target_arch = "wasm32")]
-fn schedule_status_bar_hide(delay_ms: i32) {
-    use wasm_bindgen::JsCast;
-    let Some(win) = web_sys::window() else { return };
-    let cb = wasm_bindgen::closure::Closure::once_into_js(move || {
-        if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
-            if let Some(el) = doc.get_element_by_id("status-bar") {
-                let cur = el.get_attribute("class").unwrap_or_default();
-                let new_cls = if cur.contains("hidden") {
-                    cur
-                } else {
-                    format!("{cur} hidden").trim().to_string()
-                };
-                let _ = el.set_attribute("class", &new_cls);
+            // Only fire once per Ready transition (re-renders shouldn't spam).
+            if !matches!(last.as_ref(), Some(MirrorMemo { ready: true, .. })) {
+                bus.push(
+                    MSL_SOURCE,
+                    lunco_workbench::status_bus::StatusLevel::Info,
+                    format!("ready — {file_count} files"),
+                );
+                bus.clear_progress(MSL_SOURCE);
             }
         }
-    });
-    let _ = win.set_timeout_with_callback_and_timeout_and_arguments_0(
-        cb.as_ref().unchecked_ref(),
-        delay_ms,
-    );
+        MslLoadState::Failed(msg) => {
+            if !matches!(last.as_ref(), Some(MirrorMemo { failed: true, .. })) {
+                bus.push(
+                    MSL_SOURCE,
+                    lunco_workbench::status_bus::StatusLevel::Error,
+                    msg.clone(),
+                );
+                bus.clear_progress(MSL_SOURCE);
+            }
+        }
+    }
+
+    *last = Some(now_summary);
 }
+
+const MSL_SOURCE: &str = "MSL";
+
+fn msl_phase_label(p: MslLoadPhase) -> &'static str {
+    match p {
+        MslLoadPhase::FetchingManifest => "fetching manifest",
+        MslLoadPhase::FetchingBundle   => "downloading",
+        MslLoadPhase::Decompressing    => "decompressing",
+        MslLoadPhase::Parsing          => "loading",
+    }
+}
+
+fn format_progress_detail(phase: MslLoadPhase, done: u64, total: u64) -> String {
+    let label = msl_phase_label(phase);
+    match phase {
+        MslLoadPhase::Parsing if total > 0 => format!("{label} {done} / {total}"),
+        _ if total > 0 => format!(
+            "{label} — {:.1} / {:.1} MB",
+            done as f64 / 1_048_576.0,
+            total as f64 / 1_048_576.0,
+        ),
+        _ => label.to_string(),
+    }
+}
+
+#[derive(Default)]
+struct MirrorMemo {
+    phase_label: Option<&'static str>,
+    ready: bool,
+    failed: bool,
+}
+
+impl From<&MslLoadState> for MirrorMemo {
+    fn from(s: &MslLoadState) -> Self {
+        match s {
+            MslLoadState::NotStarted => Self::default(),
+            MslLoadState::Loading { phase, .. } => Self {
+                phase_label: Some(msl_phase_label(*phase)),
+                ..Self::default()
+            },
+            MslLoadState::Ready { .. } => Self { ready: true, ..Self::default() },
+            MslLoadState::Failed(_) => Self { failed: true, ..Self::default() },
+        }
+    }
+}
+
+// (Status bar UI lives in lunco-workbench's egui status panel; this
+// module just publishes events to the bus via mirror_state_to_status_bus.)
 
 // ─── Web fetcher implementation ─────────────────────────────────────
 
