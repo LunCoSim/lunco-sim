@@ -1233,7 +1233,13 @@ fn on_compile_model(
             ))
             .id();
         registry.link(entity, doc);
-        workbench.selected_entity = Some(entity);
+        // Intentionally NOT setting `workbench.selected_entity` here.
+        // Side panels resolve their target entity via
+        // `active_simulator(world)` (= active doc → linked entity),
+        // so a fresh compile on an inactive tab no longer steals the
+        // visible selection from the focused tab. `selected_entity`
+        // is reserved for an explicit "Pin to model" UX.
+        let _ = &workbench;
         entity
     };
 

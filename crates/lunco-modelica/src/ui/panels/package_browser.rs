@@ -736,6 +736,9 @@ impl Panel for PackageBrowserPanel {
         if let Some(action) = to_open {
             match action {
                 PackageAction::Open(id, name, lib) => open_model(world, id, name, lib),
+                PackageAction::Instantiate { msl_path, display_name } => {
+                    instantiate_on_active_canvas(world, &msl_path, &display_name);
+                }
             }
         }
 
@@ -753,6 +756,11 @@ impl Panel for PackageBrowserPanel {
 
 enum PackageAction {
     Open(String, String, ModelLibrary),
+    /// Double-click on a class row — instantiate it on the currently
+    /// active canvas tab. Routes through the same `AddModelicaComponent`
+    /// Reflect event the palette uses, so origin-level read-only
+    /// rejection applies uniformly.
+    Instantiate { msl_path: String, display_name: String },
 }
 
 // ---------------------------------------------------------------------------
@@ -859,13 +867,26 @@ fn render_node(
                 ui.painter().rect_filled(resp.rect, 2.0, bg);
             }
 
-            // Right-click "Instantiate in Diagram" was a snarl-only
-            // affordance that pushed into the global single-doc
-            // `DiagramState`. The canvas viewer has its own
-            // drag-from-palette flow per open doc; the package browser
-            // now falls back to plain "click → open as read-only tab"
-            // for MSL classes.
-            if resp.clicked() {
+            // Click semantics:
+            //  - single click → open as a (read-only) tab. Drill-in /
+            //    inspection use case.
+            //  - double-click → instantiate on the currently-active
+            //    canvas. Adds the MSL class as a sub-component of the
+            //    active doc's drilled-in / detected class. Routes
+            //    through the same `AddModelicaComponent` Reflect event
+            //    the palette uses, so the document layer's read-only
+            //    enforcement applies uniformly. Note: egui fires
+            //    `clicked()` on the first release of a double-click
+            //    too, so we'll also open a tab — accept that as
+            //    "double-click opens the source AND adds the
+            //    instance"; users who only want one behaviour can use
+            //    plain click vs the canvas's right-click menu.
+            if resp.double_clicked() {
+                result = Some(PackageAction::Instantiate {
+                    msl_path: msl_path_for_id(id, library),
+                    display_name: name.clone(),
+                });
+            } else if resp.clicked() {
                 result = Some(PackageAction::Open(id.clone(), name.clone(), library.clone()));
             }
 
@@ -1162,6 +1183,110 @@ fn render_in_memory_models(
         }
     }
     clicked
+}
+
+/// Resolve a Package Browser tree row id to its fully-qualified MSL
+/// path. The browser stores MSL entries with the `msl_path:` prefix
+/// (which canonicalises by stripping the leading `Modelica.` and
+/// re-adding it on lookup); other libraries use the bare id. This
+/// helper centralises the conversion so click handlers don't
+/// open-code the prefix.
+fn msl_path_for_id(id: &str, library: &ModelLibrary) -> String {
+    if let Some(rest) = id.strip_prefix("msl_path:") {
+        format!("Modelica.{}", rest)
+    } else if matches!(library, ModelLibrary::MSL) {
+        format!("Modelica.{}", id)
+    } else {
+        id.to_string()
+    }
+}
+
+/// Add an instance of an MSL class as a sub-component of the
+/// currently-active canvas tab. Mirrors what the Component Palette
+/// click does, so the read-only / class-resolution / placement logic
+/// stays in one place (the [`crate::api_edits::AddModelicaComponent`]
+/// observer + `apply_ops`).
+fn instantiate_on_active_canvas(
+    world: &mut World,
+    msl_path: &str,
+    display_name: &str,
+) {
+    // Resolve target doc.
+    let active_doc = world
+        .get_resource::<lunco_workbench::WorkspaceResource>()
+        .and_then(|ws| ws.active_document);
+    let Some(doc_id) = active_doc else {
+        bevy::log::info!(
+            "[PackageBrowser] double-click on `{}` ignored — no active document",
+            msl_path
+        );
+        return;
+    };
+    // Class to add into = drilled-in pin if any, else first non-package.
+    let drilled_in = world
+        .get_resource::<crate::ui::panels::canvas_diagram::DrilledInClassNames>()
+        .and_then(|m| m.get(doc_id).map(str::to_string));
+    let class = drilled_in
+        .or_else(|| {
+            let registry = world.resource::<crate::ui::state::ModelicaDocumentRegistry>();
+            let host = registry.host(doc_id)?;
+            let ast = host.document().ast().result.as_ref().ok().cloned()?;
+            crate::ast_extract::extract_model_name_from_ast(&ast)
+        })
+        .unwrap_or_default();
+    if class.is_empty() {
+        bevy::log::info!(
+            "[PackageBrowser] double-click on `{}` ignored — no target class",
+            msl_path
+        );
+        return;
+    }
+    // Synthesise an instance name from the short tail. Lower-case
+    // first char + a small numeric suffix to avoid collisions on
+    // repeat double-clicks. The user can rename via the inspector.
+    let short = msl_path.rsplit('.').next().unwrap_or(msl_path);
+    let mut base = String::new();
+    for (i, ch) in short.chars().enumerate() {
+        if i == 0 {
+            base.push(ch.to_ascii_lowercase());
+        } else if ch.is_ascii_alphanumeric() || ch == '_' {
+            base.push(ch);
+        }
+    }
+    if base.is_empty() {
+        base.push_str("inst");
+    }
+    let name = format!(
+        "{base}{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u32 % 10_000)
+            .unwrap_or(0)
+    );
+    bevy::log::info!(
+        "[PackageBrowser] double-click → AddModelicaComponent(`{display_name}` as `{name}` in `{class}`)"
+    );
+
+    #[cfg(feature = "lunco-api")]
+    world
+        .commands()
+        .trigger(crate::api_edits::AddModelicaComponent {
+            doc: doc_id.raw(),
+            class,
+            type_name: msl_path.to_string(),
+            name,
+            x: 0.0,
+            y: 0.0,
+            width: 20.0,
+            height: 20.0,
+        });
+    #[cfg(not(feature = "lunco-api"))]
+    {
+        let _ = (display_name, name, class);
+        bevy::log::warn!(
+            "[PackageBrowser] double-click instantiate requires the `lunco-api` feature"
+        );
+    }
 }
 
 pub(crate) fn open_model(world: &mut World, id: String, name: String, library: ModelLibrary) {

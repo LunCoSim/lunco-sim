@@ -203,16 +203,18 @@ impl Panel for CodeEditorPanel {
         let _ = (display_name, compilation_error);
 
         // Resolve the DocumentId for the currently-shown model so the
-        // focus-loss commit below writes into it. Prefer the registry's
-        // entity→doc link (what a compile set up), falling back to
-        // `open_model.doc` so edits on an uncompiled in-memory model
-        // still land in its pre-allocated Document.
-        let doc_id = selected_entity
-            .and_then(|e| world.resource::<ModelicaDocumentRegistry>().document_of(e))
+        // focus-loss commit below writes into it. Active document
+        // wins (this *is* a per-tab editor — it's looking at the
+        // focused doc by definition); fall back to the legacy
+        // `selected_entity → document_of(entity)` lookup only when
+        // there's no active document, which covers the brief window
+        // before workspace state is initialised.
+        let doc_id = world
+            .get_resource::<lunco_workbench::WorkspaceResource>()
+            .and_then(|ws| ws.active_document)
             .or_else(|| {
-                world
-                    .get_resource::<lunco_workbench::WorkspaceResource>()
-                    .and_then(|ws| ws.active_document)
+                selected_entity
+                    .and_then(|e| world.resource::<ModelicaDocumentRegistry>().document_of(e))
             });
 
         // ── Settings menu (gear button) ──

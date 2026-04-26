@@ -411,6 +411,10 @@ fn place_via_add_component(world: &mut World, def: MSLComponentDef) {
         );
         return;
     };
+    // Note: no pre-check for read-only here. The document layer
+    // (`ModelicaDocument::apply`) rejects ops on read-only origins
+    // and `apply_ops` surfaces a one-shot banner. Pre-checking in
+    // panels would duplicate the policy and inevitably drift.
 
     // Resolve target class — drilled-in class on the canvas if set,
     // otherwise the doc's first detected non-package class.

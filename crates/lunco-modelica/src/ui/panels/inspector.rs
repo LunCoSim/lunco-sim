@@ -58,6 +58,20 @@ impl Panel for InspectorPanel {
             return;
         };
 
+        // Read-only state — derived from the document's origin (the
+        // canonical source of truth; `ModelicaDocument::apply` enforces
+        // the same invariant). We use it purely for UX (dim the text
+        // editors) — even if a stray edit slipped through, the doc
+        // would reject it. The defensive guard before firing
+        // `ApplyModelicaOps` is a belt-and-braces gesture.
+        let read_only = {
+            let registry = world.resource::<crate::ui::state::ModelicaDocumentRegistry>();
+            registry
+                .host(doc_id)
+                .map(|h| h.document().is_read_only())
+                .unwrap_or(false)
+        };
+
         // ── Resolve the selected node's Modelica instance name ──
         //
         // Edges are not currently inspectable — we only surface
@@ -153,6 +167,15 @@ impl Panel for InspectorPanel {
         if !component_info.description.is_empty() {
             ui.label(&component_info.description);
         }
+        if read_only {
+            ui.label(
+                egui::RichText::new(
+                    "🔒 Read-only library tab — duplicate to workspace to edit.",
+                )
+                .italics()
+                .color(egui::Color32::from_rgb(180, 150, 90)),
+            );
+        }
         ui.separator();
 
         // ── Render modifications + collect edits ────────────────
@@ -181,8 +204,14 @@ impl Panel for InspectorPanel {
                     for (k, v) in entries {
                         ui.label(k);
                         let mut buf = v.clone();
-                        let resp = ui.text_edit_singleline(&mut buf);
-                        if resp.lost_focus() && buf != *v {
+                        // `add_enabled` disables the input on read-only
+                        // tabs — egui dims it and ignores keystrokes,
+                        // so the user clearly sees they can't edit.
+                        let resp = ui.add_enabled(
+                            !read_only,
+                            egui::TextEdit::singleline(&mut buf),
+                        );
+                        if !read_only && resp.lost_focus() && buf != *v {
                             edits.push((k.clone(), buf));
                         }
                         ui.end_row();
@@ -191,7 +220,10 @@ impl Panel for InspectorPanel {
         });
 
         // ── Apply edits as a single batched event ───────────────
-        if !edits.is_empty() {
+        // Defensive: even if a stray edit slipped through (shouldn't
+        // happen given the disabled inputs above), don't fire ops on
+        // a read-only doc.
+        if !edits.is_empty() && !read_only {
             let ops: Vec<ApiOp> = edits
                 .into_iter()
                 .map(|(param, value)| ApiOp::SetParameter {

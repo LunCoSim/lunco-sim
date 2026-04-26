@@ -5,8 +5,13 @@ edition = "2021"
 description = "Document System foundation for LunCoSim — Document, DocumentOp, DocumentHost with undo/redo. UI-free, headless-capable."
 
 [dependencies]
-# Deliberately zero runtime dependencies. lunco-doc is pure data model.
-# No bevy, no egui, no serde (yet). Domain crates layer those on as needed.
+# Single dependency: `lunco-core` for the `Mutation` / `Ack` /
+# `Reject` envelope and the `OpId` identity primitive. Pulls bevy
+# transitively, which is a regression on the original "headless data
+# model" stance — the right long-term move is to split lunco-core
+# into a bevy-free identity sub-crate. For now the simpler tradeoff
+# wins; every consumer of lunco-doc already depends on lunco-core.
+lunco-core = { path = "../lunco-core" }
 
 [dev-dependencies]
 # Only for tests. The toy TextDocument needs no external crates.
