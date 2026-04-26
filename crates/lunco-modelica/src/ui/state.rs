@@ -192,7 +192,7 @@ pub struct CompileStates {
     /// [`set_and_stamp`](Self::set_and_stamp). Used to log
     /// "compile X finished in Y ms" to Console / Diagnostics when
     /// the worker responds.
-    compile_started: HashMap<DocumentId, std::time::Instant>,
+    compile_started: HashMap<DocumentId, web_time::Instant>,
 }
 
 impl CompileStates {
@@ -217,7 +217,7 @@ impl CompileStates {
     /// transition.
     pub fn mark_started(&mut self, doc: DocumentId) {
         self.by_doc.insert(doc, CompileState::Compiling);
-        self.compile_started.insert(doc, std::time::Instant::now());
+        self.compile_started.insert(doc, web_time::Instant::now());
     }
 
     /// Transition to a terminal state and return elapsed time since
@@ -401,6 +401,53 @@ impl ModelicaDocumentRegistry {
             .filter_map(|(e, d)| (*d == doc).then_some(*e))
             .collect()
     }
+
+    /// First simulator entity linked to `doc`, or `None` when no
+    /// compile has spawned one yet. The canonical lookup for any
+    /// view-bound panel that needs sim state for "its" document —
+    /// canvas plots, in-canvas input controls, model-view toolbar.
+    /// Cosim cases (>1 entity per doc) take the first; if you need
+    /// all of them, call [`entities_linked_to`](Self::entities_linked_to).
+    pub fn simulator_for(&self, doc: DocumentId) -> Option<Entity> {
+        self.by_entity
+            .iter()
+            .find_map(|(e, d)| (*d == doc).then_some(*e))
+    }
+}
+
+/// View-bound entry point: the simulator entity for `doc`. Pure
+/// function on (world, doc) — no "active tab" magic, no side panel
+/// preference. Doc-scoped views (model-view, in-canvas plots,
+/// per-doc input controls) call this with their own `doc_id` so two
+/// canvases for different models read from the right entity each.
+pub fn simulator_for(world: &World, doc: DocumentId) -> Option<Entity> {
+    world
+        .get_resource::<ModelicaDocumentRegistry>()
+        .and_then(|r| r.simulator_for(doc))
+}
+
+/// Convenience for singleton side panels (Telemetry, Inspector) that
+/// follow the active tab by default. Resolves
+/// `WorkspaceResource.active_document → simulator_for(doc)`. Returns
+/// `None` when there's no active doc or no compiled sim for it.
+///
+/// The "follow active tab" policy is explicit at the call site —
+/// nothing in the lookup itself depends on tab focus. Future panels
+/// that pin to a specific doc just call [`simulator_for`] with the
+/// pinned id instead.
+pub fn active_simulator(world: &World) -> Option<Entity> {
+    let active = world
+        .get_resource::<lunco_workbench::WorkspaceResource>()?
+        .active_document?;
+    simulator_for(world, active)
+}
+
+/// Empty `impl` block kept so the trailing `}` above closes
+/// `ModelicaDocumentRegistry`'s impl cleanly without cargo-culting
+/// the existing braces below. The two free functions above belong
+/// at module scope, not on the registry — they consult multiple
+/// resources.
+impl ModelicaDocumentRegistry {
 
     /// Replace the source on an existing document. Returns `true` if the
     /// document changed (different source), `false` on no-op (identical

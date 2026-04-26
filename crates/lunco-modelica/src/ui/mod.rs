@@ -351,7 +351,6 @@ impl Plugin for ModelicaUiPlugin {
         // inside the plugin via `ApiVisibility` (off by default; pass
         // `--api-expose-edits` to expose). See
         // `crates/lunco-modelica/src/api_edits.rs` for the rationale.
-        #[cfg(feature = "lunco-api")]
         app.add_plugins(crate::api_edits::ModelicaApiEditPlugin);
 
         app.init_resource::<WorkbenchState>()
@@ -361,6 +360,10 @@ impl Plugin for ModelicaUiPlugin {
             .init_resource::<panels::code_editor::EditorBufferState>()
             .init_resource::<panels::console::ConsoleLog>()
             .init_resource::<panels::diagnostics::DiagnosticsLog>()
+            // Forward StatusBus events to the Console panel so the
+            // user has a chronological audit trail of every status
+            // event from every subsystem (MSL, compile, sim, …).
+            .add_systems(Update, fan_status_bus_to_console)
             .init_resource::<panels::canvas_projection::DiagramAutoLayoutSettings>()
             .init_resource::<panels::palette::PaletteState>()
             .insert_resource(panels::package_browser::PackageTreeCache::new())
@@ -380,6 +383,7 @@ impl Plugin for ModelicaUiPlugin {
             // stopped receiving keystrokes for AST_DEBOUNCE_MS (250 ms).
             // Keeps text-edit latency constant regardless of how busy
             // the sim worker is.
+            .init_resource::<ast_refresh::PendingAstParses>()
             .add_systems(Update, ast_refresh::refresh_stale_asts)
             .add_systems(Startup, register_settings_menu)
             // Image-loader install is a first-frame one-shot — runs
@@ -425,7 +429,9 @@ impl Plugin for ModelicaUiPlugin {
         // Contribute the Modelica section to the Twin Browser's
         // section registry. The workbench's WorkbenchPlugin already
         // installed the registry resource and the built-in Files
-        // section; we just append.
+        // section; we just append. ensure it exists first to avoid
+        // panics during mixed-mode or deferred plugin builds.
+        app.init_resource::<lunco_workbench::BrowserSectionRegistry>();
         app.world_mut()
             .resource_mut::<lunco_workbench::BrowserSectionRegistry>()
             .register(browser_section::ModelicaSection::default());
@@ -604,4 +610,46 @@ fn install_image_loaders_once(
         "[ModelicaImageLoader] installed egui_extras loaders + modelica:// loader"
     );
     commands.insert_resource(ImageLoadersInstalled);
+}
+
+/// Forward newly-pushed [`lunco_workbench::status_bus::StatusBus`]
+/// events to the [`panels::console::ConsoleLog`].
+///
+/// We track the count of *discrete* history entries we've already
+/// mirrored so progress ticks (which mutate the bus seq but don't
+/// append to history) don't show up as console spam. New entries
+/// arrive at the back of the ring buffer; old ones drop off the front
+/// when capacity is hit. We use a (last_seen_seq, last_back_message)
+/// pair to detect "new entries since we last looked" without needing
+/// per-event sequence numbers.
+fn fan_status_bus_to_console(
+    bus: bevy::prelude::Res<lunco_workbench::status_bus::StatusBus>,
+    mut console: bevy::prelude::ResMut<panels::console::ConsoleLog>,
+    mut last_count: bevy::prelude::Local<usize>,
+) {
+    let count = bus.history().count();
+    if count == 0 {
+        *last_count = 0;
+        return;
+    }
+    if count == *last_count {
+        return;
+    }
+    // The history ring buffer can lose entries from the front when
+    // capacity hits. We only forward what's *new* at the back since
+    // last we looked. Skip the first `(count - delta).min(count)`
+    // events; forward the rest.
+    let delta = count.saturating_sub(*last_count);
+    for ev in bus.history().rev().take(delta).collect::<Vec<_>>().into_iter().rev() {
+        let level = match ev.level {
+            lunco_workbench::status_bus::StatusLevel::Info => panels::console::ConsoleLevel::Info,
+            lunco_workbench::status_bus::StatusLevel::Warn => panels::console::ConsoleLevel::Warn,
+            lunco_workbench::status_bus::StatusLevel::Error => panels::console::ConsoleLevel::Error,
+            // Progress events shouldn't be in `history` (they live in
+            // active_progress), but if one ever sneaks in, surface as Info.
+            lunco_workbench::status_bus::StatusLevel::Progress => panels::console::ConsoleLevel::Info,
+        };
+        console.push(level, format!("[{}] {}", ev.source, ev.message));
+    }
+    *last_count = count;
 }

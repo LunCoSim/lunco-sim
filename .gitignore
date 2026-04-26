@@ -6,9 +6,12 @@ target/
 .cache/
 extern/
 
-# WebAssembly build artifacts
-crates/lunco-modelica/web/pkg/
-crates/lunco-client/web/pkg/
+# Web bundle output (final shippable wasm + JS + HTML)
+dist/
+
+# Locally installed cargo binaries (e.g. wasm-bindgen-cli) used by build scripts.
+# Kept outside target/ so `cargo clean` doesn't force a reinstall.
+.cargo-bin/
 
 # AI tool configs
 external/

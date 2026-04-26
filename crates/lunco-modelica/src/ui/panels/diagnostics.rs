@@ -212,7 +212,7 @@ pub fn refresh_diagnostics(
     // 1. AST parse errors — caught by rumoca's recovering parser.
     if let Err(msg) = &host.document().ast().result {
         entries.push(LogEntry {
-            at: std::time::Instant::now(),
+            at: web_time::Instant::now(),
             level: LogLevel::Error,
             text: msg.clone(),
             model: model_tag.clone(),
@@ -226,7 +226,7 @@ pub fn refresh_diagnostics(
     // was visible in the toolbar.
     if let Some(msg) = workbench.compilation_error.as_ref() {
         entries.push(LogEntry {
-            at: std::time::Instant::now(),
+            at: web_time::Instant::now(),
             level: LogLevel::Error,
             text: msg.clone(),
             model: model_tag.clone(),
@@ -278,7 +278,7 @@ pub fn refresh_diagnostics(
         }
         if need_spawn {
             let result_slot = lint_result_slot().clone();
-            std::thread::spawn(move || {
+            bevy::tasks::AsyncComputeTaskPool::get().spawn(async move {
                 let opts = rumoca_tool_lint::LintOptions::default();
                 let out: Vec<LogEntry> = rumoca_tool_lint::lint(
                     &source_owned,
@@ -293,7 +293,7 @@ pub fn refresh_diagnostics(
                         _ => LogLevel::Info,
                     };
                     LogEntry {
-                        at: std::time::Instant::now(),
+                        at: web_time::Instant::now(),
                         level,
                         text: format!(
                             "{}:{}:{}  [{}] {}",
@@ -310,7 +310,7 @@ pub fn refresh_diagnostics(
                 if let Ok(mut slot) = result_slot.lock() {
                     *slot = Some((dispatch_key, out));
                 }
-            });
+            }).detach();
         }
 
         // If a worker finished since we last looked, promote its

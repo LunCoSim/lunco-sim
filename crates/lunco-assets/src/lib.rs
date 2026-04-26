@@ -32,6 +32,7 @@
 use std::path::PathBuf;
 
 pub mod download;
+pub mod msl;
 pub mod process;
 
 // ============================================================================

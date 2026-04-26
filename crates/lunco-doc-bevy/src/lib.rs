@@ -52,7 +52,7 @@
 #![warn(missing_docs)]
 
 use std::collections::HashMap;
-use std::time::Instant;
+use web_time::Instant;
 
 use bevy::prelude::*;
 use lunco_doc::DocumentId;

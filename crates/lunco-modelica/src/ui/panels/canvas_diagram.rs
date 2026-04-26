@@ -2345,6 +2345,18 @@ fn render_canvas_plots_deprecated(
 pub struct CanvasDocState {
     pub canvas: Canvas,
     pub last_seen_gen: u64,
+    /// Generation that the *canvas scene* already reflects, ahead of
+    /// or equal to the AST projection. Bumped by [`apply_ops`] when a
+    /// canvas-originated edit has already been applied locally
+    /// (drag → SetPlacement leaves the scene moved; menu Add → a
+    /// synthesised node is inserted into the scene). The project gate
+    /// then skips reprojection while `canvas_acked_gen >= gen`,
+    /// which is what keeps Add and Move feeling instant: no waiting
+    /// for the off-thread parse to complete before the visual
+    /// settles. The next *foreign* edit (typed source change) bumps
+    /// `gen` past `canvas_acked_gen` and the regular projection path
+    /// re-engages.
+    pub canvas_acked_gen: u64,
     /// Hash of the *projection-relevant* slice of source for the
     /// scene currently on screen — collapses whitespace, drops
     /// comments. Cheap-skip: when a doc generation bumps but this
@@ -2418,6 +2430,7 @@ impl Default for CanvasDocState {
         Self {
             canvas,
             last_seen_gen: 0,
+            canvas_acked_gen: 0,
             last_seen_source_hash: 0,
             last_seen_prewarm_gen: 0,
             pending_fit: false,
@@ -2632,7 +2645,7 @@ pub struct ProjectionTask {
     /// against `CanvasDocState::last_seen_target` on completion so
     /// the UI knows which target produced the rendered scene.
     pub target_at_spawn: Option<String>,
-    pub spawned_at: std::time::Instant,
+    pub spawned_at: web_time::Instant,
     pub deadline: std::time::Duration,
     pub cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
     pub task: bevy::tasks::Task<Scene>,
@@ -2686,6 +2699,12 @@ impl Panel for CanvasDiagramPanel {
     }
 
     fn render(&mut self, ui: &mut egui::Ui, world: &mut World) {
+        // TEMP diagnostic: time the whole render and shout when slow.
+        // 16ms = 60 fps budget; anything past 30ms is a "felt" stall.
+        // Combined with the per-section timers below this tells us
+        // exactly which sub-block burns the frame on multi-class docs
+        // after a structural op.
+        let _frame_t0 = web_time::Instant::now();
         // Ensure the state resource exists before we poke it.
         if world.get_resource::<CanvasDiagramState>().is_none() {
             world.insert_resource(CanvasDiagramState::default());
@@ -2732,7 +2751,16 @@ impl Panel for CanvasDiagramPanel {
             //      `last_seen_gen`. Standard edit-reproject path.
             let docstate = state.get(Some(doc_id));
             let first_render = !state.has_entry(doc_id);
-            let gen_advanced = gen != docstate.last_seen_gen;
+            // `gen_advanced` is the source-of-truth-changed signal,
+            // but a canvas-originated edit (drag, menu Add) has
+            // already mutated the scene and bumped
+            // `canvas_acked_gen` to the new doc generation — in that
+            // case the projection would just rebuild what's already
+            // on screen, so we suppress it. Foreign edits (typed in
+            // the code editor) bump `gen` past `canvas_acked_gen` and
+            // this filter passes through unchanged.
+            let gen_advanced =
+                gen != docstate.last_seen_gen && gen > docstate.canvas_acked_gen;
             // Drill-in target changed (e.g. user clicked a different
             // class in the Twin Browser for an already-open tab).
             let live_target = world
@@ -2748,7 +2776,28 @@ impl Panel for CanvasDiagramPanel {
             // cheap layer of "intelligent reprojection" — catches
             // comment / blank-line / parameter-default edits before
             // they pay the rumoca-projection cost.
-            let needs_project = first_render || target_changed || prewarm_advanced || {
+            // Block projection while the AST is stale. The parse runs
+            // off-thread (cf. `crate::ui::ast_refresh`) and takes a
+            // couple of seconds in debug builds; if we project against
+            // the *previous* AST, the new structural change is invisible
+            // and `last_seen_gen` advances anyway — so the next AST
+            // refresh produces no follow-up reproject and the user
+            // stares at a stale scene forever. We disable
+            // `needs_project` here so we still fall through to the
+            // polling block below (resolves any in-flight task) but
+            // don't spawn a new one.
+            let ast_stale_for_doc = world
+                .resource::<ModelicaDocumentRegistry>()
+                .host(doc_id)
+                .map(|h| h.document().ast_is_stale())
+                .unwrap_or(false);
+            if ast_stale_for_doc {
+                // Keep egui awake so the next frame re-checks once
+                // the off-thread parse has landed.
+                ui.ctx().request_repaint();
+            }
+
+            let needs_project = !ast_stale_for_doc && (first_render || target_changed || prewarm_advanced || {
                 if !gen_advanced {
                     false
                 } else {
@@ -2774,7 +2823,7 @@ impl Panel for CanvasDiagramPanel {
                         true
                     }
                 }
-            };
+            });
             needs_project.then_some((doc_id, gen))
         };
 
@@ -2898,7 +2947,7 @@ impl Panel for CanvasDiagramPanel {
                     docstate.last_seen_gen = gen;
                 } else {
                     let pool = bevy::tasks::AsyncComputeTaskPool::get();
-                    let spawned_at = std::time::Instant::now();
+                    let spawned_at = web_time::Instant::now();
                     let cancel = std::sync::Arc::new(
                         std::sync::atomic::AtomicBool::new(false),
                     );
@@ -2925,7 +2974,7 @@ impl Panel for CanvasDiagramPanel {
                         if should_stop() {
                             return Scene::new();
                         }
-                        let t0 = std::time::Instant::now();
+                        let t0 = web_time::Instant::now();
                         let mut diagram = if let Some(ast) = ast_arc {
                             crate::ui::panels::canvas_projection::import_model_to_diagram_from_ast(
                                 ast,
@@ -2948,7 +2997,7 @@ impl Panel for CanvasDiagramPanel {
                         if should_stop() {
                             return Scene::new();
                         }
-                        let t1 = std::time::Instant::now();
+                        let t1 = web_time::Instant::now();
                         recover_edges_from_source(&source, &mut diagram);
                         bevy::log::info!(
                             "[Projection] recover_edges done in {:.0}ms: {} edges",
@@ -2958,7 +3007,7 @@ impl Panel for CanvasDiagramPanel {
                         if should_stop() {
                             return Scene::new();
                         }
-                        let t2 = std::time::Instant::now();
+                        let t2 = web_time::Instant::now();
                         let (scene, _id_map) = project_scene(&diagram);
                         bevy::log::info!(
                             "[Projection] project_scene done in {:.0}ms",
@@ -3186,7 +3235,15 @@ impl Panel for CanvasDiagramPanel {
             }
         }
 
+        let t_render_canvas = web_time::Instant::now();
         self.render_canvas(ui, world);
+        let render_canvas_ms = t_render_canvas.elapsed().as_secs_f64() * 1000.0;
+        let total_ms = _frame_t0.elapsed().as_secs_f64() * 1000.0;
+        if total_ms > 30.0 {
+            bevy::log::info!(
+                "[CanvasDiagram] SLOW frame: total={total_ms:.1}ms render_canvas={render_canvas_ms:.1}ms"
+            );
+        }
     }
 }
 
@@ -3277,19 +3334,33 @@ impl CanvasDiagramPanel {
         // touching the World. Combines all three buckets keyed by
         // dotted instance path (`R1.R`, `P.y`, …); visuals filter by
         // the prefix that matches their instance name.
+        // Resolve THIS canvas's simulator entity once. Doc-scoped, not
+        // active-tab-scoped: a future split-pane / multi-canvas layout
+        // where two model views are visible at once stays correct
+        // because each canvas reads from `simulator_for(world, its
+        // own doc_id)`. The `query.iter().next()` pattern that lived
+        // here previously picked an arbitrary `ModelicaModel` from
+        // the world — fine with one model loaded, catastrophically
+        // wrong with two (parameter/input snapshots and slider writes
+        // would land on whichever entity Bevy iterated first).
+        let canvas_sim = doc_id.and_then(|d| {
+            crate::ui::state::simulator_for(world, d)
+        });
+
         {
             let mut state =
                 lunco_viz::kinds::canvas_plot_node::NodeStateSnapshot::default();
-            let mut q = world.query::<&crate::ModelicaModel>();
-            for model in q.iter(world) {
-                for (k, v) in &model.parameters {
-                    state.values.insert(k.clone(), *v);
-                }
-                for (k, v) in &model.inputs {
-                    state.values.insert(k.clone(), *v);
-                }
-                for (k, v) in &model.variables {
-                    state.values.insert(k.clone(), *v);
+            if let Some(entity) = canvas_sim {
+                if let Some(model) = world.get::<crate::ModelicaModel>(entity) {
+                    for (k, v) in &model.parameters {
+                        state.values.insert(k.clone(), *v);
+                    }
+                    for (k, v) in &model.inputs {
+                        state.values.insert(k.clone(), *v);
+                    }
+                    for (k, v) in &model.variables {
+                        state.values.insert(k.clone(), *v);
+                    }
                 }
             }
             lunco_viz::kinds::canvas_plot_node::stash_node_state(
@@ -3301,10 +3372,13 @@ impl CanvasDiagramPanel {
             // dots freeze on pause (staying visible at their last
             // position) and resume from the same phase on unpause.
             // Edge visuals read this via `fetch_flow_anim_time()`.
-            let any_unpaused = {
-                let mut q2 = world.query::<&crate::ModelicaModel>();
-                q2.iter(world).any(|m| !m.paused)
-            };
+            // Scoped to THIS canvas's sim — animation stops when
+            // this doc's model is paused, regardless of whether
+            // another tab's sim is still running.
+            let any_unpaused = canvas_sim
+                .and_then(|e| world.get::<crate::ModelicaModel>(e))
+                .map(|m| !m.paused)
+                .unwrap_or(false);
             let dt = ui.ctx().input(|i| i.stable_dt as f64);
             let prev = ui
                 .ctx()
@@ -3336,19 +3410,20 @@ impl CanvasDiagramPanel {
         {
             let mut control_snapshot =
                 lunco_viz::kinds::canvas_plot_node::InputControlSnapshot::default();
-            let mut q = world.query::<&crate::ModelicaModel>();
-            for model in q.iter(world) {
-                for (qualified, value) in &model.inputs {
-                    let leaf = qualified.rsplit('.').next().unwrap_or(qualified);
-                    let (mn, mx) = model
-                        .parameter_bounds
-                        .get(qualified)
-                        .copied()
-                        .or_else(|| model.parameter_bounds.get(leaf).copied())
-                        .unwrap_or((None, None));
-                    control_snapshot
-                        .inputs
-                        .insert(qualified.clone(), (*value, mn, mx));
+            if let Some(entity) = canvas_sim {
+                if let Some(model) = world.get::<crate::ModelicaModel>(entity) {
+                    for (qualified, value) in &model.inputs {
+                        let leaf = qualified.rsplit('.').next().unwrap_or(qualified);
+                        let (mn, mx) = model
+                            .parameter_bounds
+                            .get(qualified)
+                            .copied()
+                            .or_else(|| model.parameter_bounds.get(leaf).copied())
+                            .unwrap_or((None, None));
+                        control_snapshot
+                            .inputs
+                            .insert(qualified.clone(), (*value, mn, mx));
+                    }
                 }
             }
             lunco_viz::kinds::canvas_plot_node::stash_input_control_snapshot(
@@ -3374,11 +3449,17 @@ impl CanvasDiagramPanel {
             let writes =
                 lunco_viz::kinds::canvas_plot_node::drain_input_writes(ui.ctx());
             if !writes.is_empty() {
-                let mut q = world.query::<&mut crate::ModelicaModel>();
-                for mut model in q.iter_mut(world) {
-                    for (name, value) in &writes {
-                        if let Some(slot) = model.inputs.get_mut(name) {
-                            *slot = *value;
+                // Apply only to THIS canvas's sim. The previous form
+                // walked every `ModelicaModel` and matched by input
+                // name — a slider on tab A's canvas would silently
+                // overwrite the same-named input on tab B's compiled
+                // model.
+                if let Some(entity) = canvas_sim {
+                    if let Some(mut model) = world.get_mut::<crate::ModelicaModel>(entity) {
+                        for (name, value) in &writes {
+                            if let Some(slot) = model.inputs.get_mut(name) {
+                                *slot = *value;
+                            }
                         }
                     }
                 }
@@ -3691,7 +3772,17 @@ impl CanvasDiagramPanel {
 /// regardless of the source list's order.
 struct MslPackageNode {
     subpackages: std::collections::BTreeMap<String, MslPackageNode>,
+    /// Classes at this level. Pre-sorted alphabetically by short name
+    /// once at tree-build time so `render_msl_package_menu` doesn't
+    /// clone-and-sort on every render frame (the menu re-renders
+    /// every frame the pointer is over it; per-frame O(n log n)
+    /// across nested submenus is the cause of the laggy right-click
+    /// context-menu navigation).
     classes: Vec<&'static MSLComponentDef>,
+    /// Pre-computed: `true` if this subtree contains at least one
+    /// non-icon-only class. Lets the menu skip empty branches in O(1)
+    /// instead of recursively walking on every render.
+    has_non_icon_class: bool,
 }
 
 impl MslPackageNode {
@@ -3699,6 +3790,7 @@ impl MslPackageNode {
         Self {
             subpackages: Default::default(),
             classes: Vec::new(),
+            has_non_icon_class: false,
         }
     }
 }
@@ -3758,24 +3850,15 @@ impl Default for DiagramProjectionLimits {
 }
 
 /// True if the subtree contains any class that would be visible
-/// with the icon-only filter ON. Used to prune empty submenus at
-/// render time so the user doesn't click into a dead-end
-/// `Mechanics > Rotational > Icons` branch.
+/// with the icon-only filter OFF (i.e. has a real, non-icon-only
+/// class somewhere). Reads the precomputed flag set at tree-build
+/// time so the menu can skip empty branches in O(1).
 ///
-/// Recursive but cheap — MSL is ~2400 classes across a shallow
-/// tree (depth ≤ 6). The menu builder hits this at most once per
-/// submenu when opened.
+/// Was previously recursive — fine for one open-frame, expensive
+/// when called on every render for every visible submenu (the
+/// right-click menu re-runs every frame the pointer is over it).
 fn package_has_visible_classes(node: &MslPackageNode) -> bool {
-    if node
-        .classes
-        .iter()
-        .any(|c| !crate::class_cache::is_icon_only_class(&c.msl_path))
-    {
-        return true;
-    }
-    node.subpackages
-        .values()
-        .any(package_has_visible_classes)
+    node.has_non_icon_class
 }
 
 /// Lazily-built package tree. Walks every entry in
@@ -3804,8 +3887,27 @@ fn msl_package_tree() -> &'static MslPackageNode {
             }
             node.classes.push(comp);
         }
+        // Post-pass: sort classes alphabetically by short name and
+        // precompute the `has_non_icon_class` rollup. Done once here
+        // so the right-click menu's recursive renderer is purely
+        // O(visible-items) per frame instead of repeatedly cloning,
+        // sorting, and walking subtrees.
+        finalize_tree(&mut root);
         root
     })
+}
+
+fn finalize_tree(node: &mut MslPackageNode) {
+    node.classes.sort_by(|a, b| a.name.cmp(&b.name));
+    let mut any_visible = node
+        .classes
+        .iter()
+        .any(|c| !crate::class_cache::is_icon_only_class(&c.msl_path));
+    for child in node.subpackages.values_mut() {
+        finalize_tree(child);
+        any_visible = any_visible || child.has_non_icon_class;
+    }
+    node.has_non_icon_class = any_visible;
 }
 
 /// Recursively render a package node as egui submenus.
@@ -3819,6 +3921,8 @@ fn msl_package_tree() -> &'static MslPackageNode {
 /// exactly as the flat menu did.
 fn render_msl_package_menu(
     ui: &mut egui::Ui,
+    world: &mut World,
+    doc_id: Option<lunco_doc::DocumentId>,
     node: &MslPackageNode,
     click_world: lunco_canvas::Pos,
     editing_class: Option<&str>,
@@ -3834,17 +3938,18 @@ fn render_msl_package_menu(
             continue;
         }
         ui.menu_button(name, |ui| {
-            render_msl_package_menu(ui, child, click_world, editing_class, show_icons, out);
+            render_msl_package_menu(
+                ui, world, doc_id, child, click_world, editing_class, show_icons, out,
+            );
         });
     }
     if !node.subpackages.is_empty() && !node.classes.is_empty() {
         ui.separator();
     }
-    // Sort classes alphabetically by short name for predictable
-    // navigation — the library's JSON order isn't guaranteed.
-    let mut classes = node.classes.clone();
-    classes.sort_by(|a, b| a.name.cmp(&b.name));
-    for comp in classes {
+    // Classes are pre-sorted at tree-build time (see `finalize_tree`).
+    // Iterating directly avoids a clone + sort on every render frame.
+    for comp in &node.classes {
+        let comp = *comp;
         // Hide icon-only classes unless the user explicitly enabled
         // them in Settings. Path-based detection via `is_icon_only_class`
         // (currently `.Icons.` subpackage check).
@@ -3873,7 +3978,26 @@ fn render_msl_package_menu(
             .clicked()
         {
             if let Some(class) = editing_class {
-                out.push(op_add_component(comp, click_world, class));
+                let instance_name = {
+                    let state = world.resource::<CanvasDiagramState>();
+                    pick_add_instance_name(comp, &state.get(doc_id).canvas.scene)
+                };
+                // Optimistic synthesis: the canvas reflects the new
+                // node *before* the AST settles, so the user sees an
+                // instant response. `apply_ops` then bumps
+                // `canvas_acked_gen` to suppress the redundant
+                // reproject when the AST does land.
+                {
+                    let mut state = world.resource_mut::<CanvasDiagramState>();
+                    let docstate = state.get_mut(doc_id);
+                    synthesize_msl_node(
+                        &mut docstate.canvas.scene,
+                        comp,
+                        &instance_name,
+                        click_world,
+                    );
+                }
+                out.push(op_add_component_with_name(comp, &instance_name, click_world, class));
             }
             ui.close();
         }
@@ -3899,6 +4023,13 @@ fn render_node_menu(
         if let Some(class) = editing_class {
             if let Some(op) = op_remove_component(world, id, class) {
                 out.push(op);
+                // Optimistic scene mutation — `apply_ops` will then
+                // bump `canvas_acked_gen` and the project gate skips
+                // the redundant reproject.
+                let active_doc = active_doc_from_world(world);
+                let mut state = world.resource_mut::<CanvasDiagramState>();
+                let docstate = state.get_mut(active_doc);
+                docstate.canvas.scene.remove_node(id);
             }
         }
         ui.close();
@@ -3928,6 +4059,10 @@ fn render_edge_menu(
         if let Some(class) = editing_class {
             if let Some(op) = op_remove_edge(world, id, class) {
                 out.push(op);
+                let active_doc = active_doc_from_world(world);
+                let mut state = world.resource_mut::<CanvasDiagramState>();
+                let docstate = state.get_mut(active_doc);
+                docstate.canvas.scene.remove_edge(id);
             }
         }
         ui.close();
@@ -3956,8 +4091,11 @@ fn render_empty_menu(
         .get_resource::<PaletteSettings>()
         .map(|s| s.show_icon_only_classes)
         .unwrap_or(false);
+    let active_doc = active_doc_from_world(world);
     render_msl_package_menu(
         ui,
+        world,
+        active_doc,
         msl_package_tree(),
         click_world,
         editing_class,
@@ -3973,7 +4111,21 @@ fn render_empty_menu(
         {
             if ui.button(quick_name).clicked() {
                 if let Some(class) = editing_class {
-                    out.push(op_add_component(comp, click_world, class));
+                    let instance_name = {
+                        let state = world.resource::<CanvasDiagramState>();
+                        pick_add_instance_name(comp, &state.get(active_doc).canvas.scene)
+                    };
+                    {
+                        let mut state = world.resource_mut::<CanvasDiagramState>();
+                        let docstate = state.get_mut(active_doc);
+                        synthesize_msl_node(
+                            &mut docstate.canvas.scene,
+                            comp,
+                            &instance_name,
+                            click_world,
+                        );
+                    }
+                    out.push(op_add_component_with_name(comp, &instance_name, click_world, class));
                 }
                 ui.close();
             }
@@ -4749,7 +4901,7 @@ pub struct DrillInBinding {
     /// When the tab was opened. Used to show elapsed-seconds in the
     /// loading overlay so the user sees work is happening even when
     /// rumoca takes tens of seconds on large package files.
-    pub started: std::time::Instant,
+    pub started: web_time::Instant,
 }
 
 /// Tab-to-task binding for duplicate-to-workspace operations whose
@@ -4774,7 +4926,7 @@ pub struct DuplicateLoads {
 pub struct DuplicateBinding {
     pub display_name: String,
     pub origin_short: String,
-    pub started: std::time::Instant,
+    pub started: web_time::Instant,
     pub task: bevy::tasks::Task<crate::document::ModelicaDocument>,
 }
 
@@ -4876,9 +5028,11 @@ pub fn drive_duplicate_loads(
                         .filter(|s| !s.is_empty())
                         .collect();
                     if !bases.is_empty() {
-                        std::thread::spawn(move || {
-                            crate::class_cache::prewarm_extends_chain(&qpath, &bases);
-                        });
+                        bevy::tasks::AsyncComputeTaskPool::get()
+                            .spawn(async move {
+                                crate::class_cache::prewarm_extends_chain(&qpath, &bases);
+                            })
+                            .detach();
                     }
                 }
             }
@@ -4977,9 +5131,11 @@ pub fn drive_drill_in_loads(
                         .filter(|s| !s.is_empty())
                         .collect();
                     let qpath = qualified.clone();
-                    std::thread::spawn(move || {
-                        crate::class_cache::prewarm_extends_chain(&qpath, &bases);
-                    });
+                    bevy::tasks::AsyncComputeTaskPool::get()
+                        .spawn(async move {
+                            crate::class_cache::prewarm_extends_chain(&qpath, &bases);
+                        })
+                        .detach();
                 }
             }
             continue;
@@ -5121,7 +5277,7 @@ fn open_drill_in_tab(
             doc_id,
             DrillInBinding {
                 qualified: qualified.to_string(),
-                started: std::time::Instant::now(),
+                started: web_time::Instant::now(),
             },
         );
     }
@@ -5168,15 +5324,33 @@ fn resolve_doc_context(world: &World) -> (Option<lunco_doc::DocumentId>, Option<
     else {
         return (None, None);
     };
+    // Class resolution priority — must match `compile_model`'s logic
+    // and `active_class_for_doc` so the canvas's *edit* target lines
+    // up with what compile / projection consider authoritative:
+    //   1. drilled-in pin (user explicitly navigated into a class)
+    //   2. first non-package class via `extract_model_name_from_ast`
+    //   3. `WorkbenchState.open_model.detected_name` (display cache)
+    //
+    // The previous `s.classes.keys().next()` returned the IndexMap's
+    // first key, which for a multi-class file wrapped in a `package`
+    // (AnnotatedRocketStage, every MSL example, …) is the *package*
+    // wrapper. Adding a component to a package corrupts the file —
+    // packages can only contain classes, not components.
+    let drilled_in = world
+        .get_resource::<DrilledInClassNames>()
+        .and_then(|m| m.get(doc_id).map(str::to_string));
     let open = world.resource::<WorkbenchState>().open_model.as_ref();
-    let class = world
-        .resource::<ModelicaDocumentRegistry>()
-        .host(doc_id)
-        .and_then(|h| {
-            h.document()
-                .ast()
-                .ast()
-                .and_then(|s| s.classes.keys().next().cloned())
+    let class = drilled_in
+        .or_else(|| {
+            world
+                .resource::<ModelicaDocumentRegistry>()
+                .host(doc_id)
+                .and_then(|h| {
+                    h.document()
+                        .ast()
+                        .ast()
+                        .and_then(crate::ast_extract::extract_model_name_from_ast)
+                })
         })
         .or_else(|| open.and_then(|o| o.detected_name.clone()));
     (Some(doc_id), class)
@@ -5293,41 +5467,48 @@ fn component_headers(
     (instance, type_name)
 }
 
-/// Build an `AddComponent` op at a world-space position. Carries
-/// the component's default parameter values and a `Placement`
-/// annotation so the new node lands at the right spot in both the
-/// source and any downstream re-projection.
-fn op_add_component(
-    comp: &MSLComponentDef,
-    at_world: lunco_canvas::Pos,
-    class: &str,
-) -> ModelicaOp {
-    // `at_world` is the click position — already the intended
-    // centre, not a rect min — so we don't add the icon offsets
-    // here. Just flip canvas → Modelica via the typed conversion.
-    let ModelicaPos { x: mx, y: my } = canvas_to_modelica(at_world);
-    // Auto-generate a unique instance name: first letter of the
-    // component's short name + a counter. VisualDiagram's own
-    // `next_instance_name` does this but requires a mutable
-    // VisualDiagram instance — for our static-ops path we just use
-    // a timestamp-ish fallback. B4: snapshot the doc to count
-    // existing instances and pick the next N.
+/// Pick the next free instance name in `scene` for `comp`. First
+/// letter of the short class name + smallest unused integer (`R1`,
+/// `R2`, …). Walks `scene.nodes()` directly so the choice respects
+/// nodes the user has just optimistically synthesised but that
+/// haven't yet round-tripped through the AST.
+fn pick_add_instance_name(comp: &MSLComponentDef, scene: &lunco_canvas::Scene) -> String {
     let prefix = comp
         .name
         .chars()
         .next()
         .unwrap_or('X')
         .to_ascii_uppercase();
-    let suffix = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.subsec_millis() % 10_000)
-        .unwrap_or(0);
-    let instance_name = format!("{}{}", prefix, suffix);
+    let mut n: u32 = 1;
+    loop {
+        let candidate = format!("{prefix}{n}");
+        let taken = scene
+            .nodes()
+            .any(|(_, node)| node.origin.as_deref() == Some(candidate.as_str()));
+        if !taken {
+            return candidate;
+        }
+        n += 1;
+    }
+}
+
+/// Build an `AddComponent` op at a world-space position with a
+/// caller-chosen instance name. Carries the component's default
+/// parameter values and a `Placement` annotation so the new node
+/// lands at the right spot in both the source and any downstream
+/// re-projection.
+fn op_add_component_with_name(
+    comp: &MSLComponentDef,
+    instance_name: &str,
+    at_world: lunco_canvas::Pos,
+    class: &str,
+) -> ModelicaOp {
+    let ModelicaPos { x: mx, y: my } = canvas_to_modelica(at_world);
     ModelicaOp::AddComponent {
         class: class.to_string(),
         decl: pretty::ComponentDecl {
             type_name: comp.msl_path.clone(),
-            name: instance_name,
+            name: instance_name.to_string(),
             modifications: comp
                 .parameters
                 .iter()
@@ -5337,6 +5518,81 @@ fn op_add_component(
             placement: Some(Placement::at(mx, my)),
         },
     }
+}
+
+/// Optimistically synthesise a canvas Node for a freshly-added MSL
+/// component, mirroring the subset of [`project_scene`]'s logic that
+/// applies before the AST settles. Uses the identity icon transform
+/// and the fallback port layout — the next reproject (if any) will
+/// replace this with the canonical projection.
+///
+/// Returns the fresh `NodeId`; the caller pairs it with the matching
+/// `AddComponent` op so the optimistic scene + the source rewrite
+/// stay in lock-step.
+fn synthesize_msl_node(
+    scene: &mut lunco_canvas::Scene,
+    comp: &MSLComponentDef,
+    instance_name: &str,
+    at_world: lunco_canvas::Pos,
+) -> lunco_canvas::NodeId {
+    use lunco_canvas::{Node as CanvasNode, Port as CanvasPort, PortId as CanvasPortId, Pos as CanvasPos, Rect as CanvasRect};
+
+    // Match `Placement::at` — 20×20 canvas units centred on the
+    // click. The source rewrite emits the same extent so the
+    // canonical reproject (when one happens) keeps the size stable.
+    // Using the full -100..100 default would render a node 10× too
+    // large compared with what the AST will produce.
+    let half = 10.0_f32;
+    let icon_w = half * 2.0;
+    let icon_h = half * 2.0;
+    let min_wx = at_world.x - half;
+    let min_wy = at_world.y - half;
+
+    let n_ports = comp.ports.len();
+    let ports: Vec<CanvasPort> = comp
+        .ports
+        .iter()
+        .enumerate()
+        .map(|(i, p)| {
+            let (lx, ly) = if p.x == 0.0 && p.y == 0.0 {
+                port_fallback_offset_for_size(i, n_ports, icon_w, icon_h)
+            } else {
+                // Map port coords (-100..100, +Y up) into the
+                // 20×20 icon-local screen box (+Y down). Same scale
+                // factor 20/200 = 0.1 the projector uses for a
+                // Placement::at extent.
+                let scale = icon_w / 200.0;
+                ((p.x + 100.0) * scale, (100.0 - p.y) * scale)
+            };
+            CanvasPort {
+                id: CanvasPortId::new(p.name.clone()),
+                local_offset: CanvasPos::new(lx, ly),
+                kind: port_kind_str(p.kind).into(),
+            }
+        })
+        .collect();
+
+    let id = scene.alloc_node_id();
+    scene.insert_node(CanvasNode {
+        id,
+        rect: CanvasRect::from_min_size(CanvasPos::new(min_wx, min_wy), icon_w, icon_h),
+        kind: "modelica.icon".into(),
+        data: serde_json::json!({
+            "type": comp.msl_path,
+            "icon_asset": comp.icon_asset.clone().unwrap_or_default(),
+            "icon_only": crate::class_cache::is_icon_only_class(&comp.msl_path),
+            "expandable_connector": comp.is_expandable_connector,
+            "icon_graphics": comp.icon_graphics,
+            "icon_rotation_deg": 0.0_f32,
+            "icon_mirror_x": false,
+            "icon_mirror_y": false,
+            "instance_name": instance_name,
+        }),
+        ports,
+        label: instance_name.to_string(),
+        origin: Some(instance_name.to_string()),
+    });
+    id
 }
 
 fn op_remove_component(
@@ -5407,53 +5663,20 @@ pub fn apply_ops_public(
 }
 
 fn apply_ops(world: &mut World, doc_id: lunco_doc::DocumentId, ops: Vec<ModelicaOp>) {
+    // TEMP: timing instrumentation to find the source of the
+    // multi-second lag observed when adding components from the
+    // right-click menu. Each phase is timed independently so we
+    // know which one to optimise.
+    let t_start = web_time::Instant::now();
     let n = ops.len();
     let mut any_applied = false;
-    // Read-only guard — only block ops when the user is viewing a
-    // TRULY read-only tab (MSL / bundled library class), NOT when
-    // the doc is merely Untitled. `Document::is_read_only` in this
-    // codebase means "can't save-to-disk without Save-As", which is
-    // true for Untitled despite Untitled being fully editable. The
-    // Package Browser / drill-in sets
-    // `WorkbenchState.open_model.read_only` to `true` only for
-    // library classes, so gate on that instead.
-    let is_read_only = world
-        .get_resource::<WorkbenchState>()
-        .and_then(|s| s.open_model.as_ref())
-        .map(|m| m.read_only)
-        .unwrap_or(false);
-    // NOTE: we no longer early-return on read-only tabs. `read_only`
-    // gates *save-to-disk* — editing the in-memory Document is always
-    // allowed. Dropping edits silently made node drags snap back on
-    // every compile, which looked like a regression of the canvas
-    // layout. The duplicate-to-workspace hint is still surfaced (so
-    // users know their in-memory changes won't persist across a tab
-    // close), but the ops themselves flow through to
-    // `checkpoint_source` → compile reads the updated placement.
-    if is_read_only {
-        bevy::log::info!(
-            "[CanvasDiagram] applying {} op(s) in-memory on read-only tab \
-             (changes will be lost unless you Duplicate to Workspace)",
-            n
-        );
-        if let Some(mut ws) = world.get_resource_mut::<WorkbenchState>() {
-            // Non-blocking hint — doesn't replace a real compile
-            // error. Only set if there isn't already one visible.
-            if ws.compilation_error.is_none() {
-                ws.compilation_error = Some(
-                    "Read-only library model — edits apply in-memory only. \
-                     Use File → Duplicate to Workspace to keep them across \
-                     tab close / reopen."
-                        .to_string(),
-                );
-            }
-        }
-    }
+    let mut hit_read_only = false;
 
     // Preload any class the user just referenced. Fire-and-forget —
     // the two-tier cache (FileCache + ClassCache) dedupes by file,
     // so adding ten Resistors triggers at most one parse of the
     // Resistor.mo file across this session.
+    let t_preload_start = web_time::Instant::now();
     for op in &ops {
         if let ModelicaOp::AddComponent { decl, .. } = op {
             if decl.type_name.starts_with("Modelica.") {
@@ -5461,7 +5684,9 @@ fn apply_ops(world: &mut World, doc_id: lunco_doc::DocumentId, ops: Vec<Modelica
             }
         }
     }
+    let preload_ms = t_preload_start.elapsed().as_secs_f64() * 1000.0;
 
+    let t_apply_start = web_time::Instant::now();
     {
         let Some(mut registry) = world.get_resource_mut::<ModelicaDocumentRegistry>() else {
             bevy::log::warn!(
@@ -5482,15 +5707,44 @@ fn apply_ops(world: &mut World, doc_id: lunco_doc::DocumentId, ops: Vec<Modelica
             bevy::log::info!("[CanvasDiagram] applying {:?}", op);
             match host.apply(op) {
                 Ok(_) => any_applied = true,
+                Err(lunco_doc::Reject::ReadOnly) => {
+                    // Document layer rejects mutations on read-only
+                    // origins (MSL drill-in, bundled library). We
+                    // surface ONE banner per op-batch instead of
+                    // spamming per op.
+                    hit_read_only = true;
+                }
                 Err(e) => bevy::log::warn!("[CanvasDiagram] op failed: {}", e),
+            }
+        }
+    }
+    let apply_ms = t_apply_start.elapsed().as_secs_f64() * 1000.0;
+
+    if hit_read_only {
+        if let Some(mut ws) = world.get_resource_mut::<WorkbenchState>() {
+            // Don't clobber a real compile error.
+            if ws.compilation_error.is_none() {
+                ws.compilation_error = Some(
+                    "Read-only library tab — edits rejected. \
+                     Use File → Duplicate to Workspace to create an \
+                     editable copy."
+                        .to_string(),
+                );
             }
         }
     }
 
     if !any_applied {
+        bevy::log::info!(
+            "[CanvasDiagram] apply_ops timing (NO-OP): preload={:.1}ms apply={:.1}ms total={:.1}ms",
+            preload_ms,
+            apply_ms,
+            t_start.elapsed().as_secs_f64() * 1000.0
+        );
         return;
     }
 
+    let t_mirror_start = web_time::Instant::now();
     // Mirror the post-edit source back to `WorkbenchState.open_model`
     // so every other panel (code editor, breadcrumb, inspector)
     // that reads the cached source sees the update immediately —
@@ -5508,7 +5762,7 @@ fn apply_ops(world: &mut World, doc_id: lunco_doc::DocumentId, ops: Vec<Modelica
                 ),
             )
         });
-    if let Some((src, _new_gen)) = fresh {
+    if let Some((src, new_gen)) = fresh {
         if let Some(mut ws) = world.get_resource_mut::<WorkbenchState>() {
             if let Some(open) = ws.open_model.as_mut() {
                 let mut line_starts = vec![0usize];
@@ -5522,15 +5776,49 @@ fn apply_ops(world: &mut World, doc_id: lunco_doc::DocumentId, ops: Vec<Modelica
                 open.cached_galley = None;
             }
         }
-        // IMPORTANT: do NOT advance `last_seen_gen` here. Letting
-        // the next-frame project check see the bumped generation
-        // triggers a fresh projection, which is how the newly-added
-        // node / edge actually shows up on the canvas. Snarl skips
-        // re-projection because its viewer mutates snarl state in
-        // lock-step with the op, but we don't — we always project
-        // from the document source, so skipping re-projection
-        // leaves the canvas scene stale.
+        // Canvas-originated edits have *already* mutated the scene
+        // before reaching apply_ops (drag moved the node; menu Add
+        // synthesised a node prior to dispatch). Acknowledging the
+        // new generation here tells the project gate "the scene
+        // already reflects this state — don't re-project". The
+        // hash bump keeps the cheap-skip path in `project_now`
+        // consistent for any later foreign edit comparison.
+        let new_hash = projection_relevant_source_hash(&src);
+        if let Some(mut state) = world.get_resource_mut::<CanvasDiagramState>() {
+            let docstate = state.get_mut(Some(doc_id));
+            docstate.canvas_acked_gen = new_gen;
+            docstate.last_seen_gen = new_gen;
+            docstate.last_seen_source_hash = new_hash;
+        }
     }
+
+    let mirror_ms = t_mirror_start.elapsed().as_secs_f64() * 1000.0;
+
+    // Wake egui. Without this, the canvas panel's `render` only
+    // fires on the next input event, so the projection task that
+    // would materialise the new component sits idle for whatever
+    // egui's reactive sleep happens to be (~2 s in practice). The
+    // panel's render pass is what *spawns* the projection task and
+    // *polls* the in-flight task — both gated on render running.
+    // Pinging every EguiContext component (one per window) brings
+    // the next paint within ~16ms, the projection cycle wakes up,
+    // and the right-click → component-appears latency drops from
+    // multi-second to imperceptible.
+    let t_repaint_start = web_time::Instant::now();
+    let mut q = world.query::<&mut bevy_egui::EguiContext>();
+    for mut ctx in q.iter_mut(world) {
+        ctx.get_mut().request_repaint();
+    }
+    let repaint_ms = t_repaint_start.elapsed().as_secs_f64() * 1000.0;
+
+    bevy::log::info!(
+        "[CanvasDiagram] apply_ops timing: preload={:.1}ms apply={:.1}ms mirror={:.1}ms repaint={:.1}ms total={:.1}ms",
+        preload_ms,
+        apply_ms,
+        mirror_ms,
+        repaint_ms,
+        t_start.elapsed().as_secs_f64() * 1000.0
+    );
 }
 
 /// Observer for [`crate::ui::commands::AutoArrangeDiagram`].

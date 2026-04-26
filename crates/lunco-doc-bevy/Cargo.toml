@@ -8,3 +8,5 @@ description = "Bevy integration for the LunCoSim Document System — generic doc
 bevy = { workspace = true }
 bevy_egui = { workspace = true }
 lunco-doc = { path = "../lunco-doc" }
+# `std::time::Instant::now()` panics on wasm32-unknown-unknown.
+web-time = { workspace = true }

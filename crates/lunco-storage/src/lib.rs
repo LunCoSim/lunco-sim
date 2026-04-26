@@ -171,12 +171,19 @@ impl StorageHandle {
 }
 
 fn path_is_under(p: &Path, root: &Path) -> bool {
-    match (p.canonicalize(), root.canonicalize()) {
-        (Ok(pp), Ok(rp)) => pp.starts_with(rp),
-        // Fall back to prefix-string comparison if either path can't be
-        // canonicalised (e.g. referenced file was just deleted). Not
-        // symlink-safe but the common case works.
-        _ => p.starts_with(root),
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        match (p.canonicalize(), root.canonicalize()) {
+            (Ok(pp), Ok(rp)) => pp.starts_with(rp),
+            // Fall back to prefix-string comparison if either path can't be
+            // canonicalised (e.g. referenced file was just deleted). Not
+            // symlink-safe but the common case works.
+            _ => p.starts_with(root),
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        p.starts_with(root)
     }
 }
 

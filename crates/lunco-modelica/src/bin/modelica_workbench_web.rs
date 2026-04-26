@@ -3,20 +3,21 @@
 //! ## Why a separate binary?
 //!
 //! Desktop uses `std::thread::spawn` for the simulation worker. On wasm32
-//! this panics because `std::time::Instant` and `std::thread` are not
+//! this panics because `web_time::Instant` and `std::thread` are not
 //! implemented in the browser sandbox. The web binary:
 //!
 //! 1. Uses `wasm_bindgen(start)` instead of `fn main()` — the browser calls
 //!    this automatically when the WASM module loads.
 //! 2. Embeds model files via `include_str!` at compile time (no filesystem).
 //! 3. Points to the LunCoSim/rumoca `web-fix` branch which replaces
-//!    `std::time::Instant` with `instant::Instant` (backed by `performance.now()`).
+//!    `web_time::Instant` with `instant::Instant` (backed by `performance.now()`).
 //! 4. Disables `std::time`-dependent Bevy systems; `spawn_modelica_requests`
 //!    uses a fixed 16ms timestep instead of `Time::elapsed_secs_f64()`.
 //!
 //! See `../lib.rs` for the inline worker implementation.
 
 use bevy::prelude::*;
+use bevy::render::{RenderPlugin, settings::{WgpuSettings, Backends, RenderCreation}};
 use std::path::PathBuf;
 use bevy_egui::EguiPlugin;
 use lunco_modelica::{
@@ -30,8 +31,8 @@ use wasm_bindgen::prelude::*;
 
 /// Desktop stub — this binary only works on wasm32.
 /// Use `modelica_workbench` for desktop.
-#[cfg(not(target_arch = "wasm32"))]
 fn main() {
+    #[cfg(not(target_arch = "wasm32"))]
     panic!("modelica_workbench_web is a wasm32-only binary. Use `cargo run --bin modelica_workbench` for desktop.");
 }
 
@@ -53,6 +54,7 @@ pub fn run() {
     let default_source = default_model.source;
 
     App::new()
+        .insert_resource(Time::<Fixed>::from_hz(60.0))
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "LunCo Modelica Workbench".into(),
@@ -66,9 +68,18 @@ pub fn run() {
                 ..default()
             }),
             ..default()
+        }).set(RenderPlugin {
+            render_creation: RenderCreation::Automatic(WgpuSettings {
+                backends: Some(Backends::all()),
+                ..default()
+            }),
+            ..default()
         }))
         .add_plugins(EguiPlugin::default())
+        .add_plugins(lunco_workbench::WorkbenchPlugin)
+        .add_plugins(lunco_viz::LuncoVizPlugin)
         .add_plugins(ModelicaPlugin)
+        .add_plugins(lunco_modelica::msl_remote::MslRemotePlugin)
         .insert_resource(BundledModelInfo {
             default_filename: default_filename.to_string(),
             default_source: default_source.to_string(),
@@ -132,7 +143,11 @@ fn setup_web_workbench(
     )).id();
 
     doc_registry.link(entity, doc_id);
-    compile_states.set(doc_id, lunco_modelica::ui::CompileState::Compiling);
+    // No initial compile is dispatched (see comment further down).
+    // Leave CompileStates at the default Idle — setting it to
+    // Compiling here without a corresponding `Compile` send would
+    // leave the toolbar stuck on the sandglass icon forever.
+    let _ = compile_states;
 
     // Open the model tab so the user lands on the actual model view
     // instead of the Welcome placeholder.
@@ -147,14 +162,10 @@ fn setup_web_workbench(
     // `handle_modelica_responses` on the `is_new_model` branch.
     workbench_state.selected_entity = Some(entity);
 
-    // Kick off initial compilation of the bundled model.
-    let _ = channels.tx.send(lunco_modelica::ModelicaCommand::Compile {
-        entity,
-        session_id: 0,
-        model_name,
-        source,
-        // wasm inline worker still runs on main thread (Phase A
-        // lands on desktop only); no SimStream publisher hook yet.
-        stream: None,
-    });
+    // No automatic compile on boot: the user clicks Compile when
+    // ready. Avoids racing the MSL fetch (which lands seconds later
+    // on web) and respects the principle that compile is an explicit
+    // user action. `entity`, `model_name`, `source` are bound here so
+    // the toolbar/keyboard Compile path finds them populated.
+    let _ = (entity, model_name, source, channels);
 }

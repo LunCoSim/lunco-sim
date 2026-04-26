@@ -32,7 +32,11 @@
 //! explicitly to force the reparse on the spot.
 
 use bevy::prelude::*;
+use bevy::tasks::{AsyncComputeTaskPool, Task};
+use futures_lite::future;
+use std::collections::HashMap;
 
+use crate::document::AstCache;
 use crate::ui::state::ModelicaDocumentRegistry;
 
 /// Quiet window before a debounced reparse fires. 250 ms matches
@@ -42,26 +46,87 @@ use crate::ui::state::ModelicaDocumentRegistry;
 /// enough that lint + diagram updates feel live.
 pub const AST_DEBOUNCE_MS: u128 = 250;
 
-/// Per-Update driver. Walks every doc in the registry and reparses
-/// the stale ones whose edit burst has cooled off.
-pub fn refresh_stale_asts(mut registry: ResMut<ModelicaDocumentRegistry>) {
-    let now = std::time::Instant::now();
-    // Collect candidates first (immutable pass) so we can fall back
-    // to mutable access without borrowing the registry twice.
-    let stale: Vec<lunco_doc::DocumentId> = registry
+/// Tracks in-flight off-thread AST parses, keyed by document id.
+///
+/// rumoca's `parse_to_ast` is **very** slow in debug builds (~2 s on
+/// a 20 KB Modelica file with deep imports — verified empirically).
+/// Synchronous reparse on the main thread froze the UI for the
+/// duration of every structural edit. Parsing on
+/// `AsyncComputeTaskPool` and polling here keeps the main thread
+/// responsive — every consumer (canvas projection, telemetry,
+/// diagnostics) reads the *previous* AST until the new one lands,
+/// which is fine because they already tolerate stale-by-one-edit
+/// reads.
+///
+/// One entry per doc; a new edit while a parse is in flight just
+/// lets the existing parse finish — `install_ast` discards the
+/// result if the doc's generation has moved on, and the next
+/// debounce tick will spawn a fresh parse against the latest source.
+#[derive(Resource, Default)]
+pub struct PendingAstParses {
+    by_doc: HashMap<lunco_doc::DocumentId, Task<AstCache>>,
+}
+
+/// Per-Update driver. Drains completed parse tasks first (so a fresh
+/// AST is visible this frame), then spawns parses for any docs whose
+/// edit burst has cooled off and aren't already being parsed.
+pub fn refresh_stale_asts(
+    mut registry: ResMut<ModelicaDocumentRegistry>,
+    mut pending: ResMut<PendingAstParses>,
+) {
+    // ── Drain completed parses ───────────────────────────────────
+    let ready: Vec<(lunco_doc::DocumentId, AstCache)> = pending
+        .by_doc
+        .iter_mut()
+        .filter_map(|(id, task)| {
+            future::block_on(future::poll_once(task)).map(|ast| (*id, ast))
+        })
+        .collect();
+    for (id, ast) in ready {
+        if let Some(host) = registry.host_mut(id) {
+            host.document_mut().install_ast(ast);
+        }
+        pending.by_doc.remove(&id);
+    }
+
+    // ── Spawn parses for newly-stale docs ────────────────────────
+    let now = web_time::Instant::now();
+    let to_spawn: Vec<(lunco_doc::DocumentId, String, u64)> = registry
         .docs()
         .filter_map(|(id, host)| {
+            if pending.by_doc.contains_key(&id) {
+                return None; // already parsing
+            }
             let doc = host.document();
             if !doc.ast_is_stale() {
                 return None;
             }
             let last = doc.last_source_edit_at()?;
-            (now.duration_since(last).as_millis() >= AST_DEBOUNCE_MS).then_some(id)
+            (now.duration_since(last).as_millis() >= AST_DEBOUNCE_MS).then(|| {
+                (
+                    id,
+                    doc.source_snapshot(),
+                    <crate::document::ModelicaDocument as lunco_doc::Document>::generation(doc),
+                )
+            })
         })
         .collect();
-    for id in stale {
-        if let Some(host) = registry.host_mut(id) {
-            host.document_mut().refresh_ast_now();
+    if !to_spawn.is_empty() {
+        let pool = AsyncComputeTaskPool::get();
+        for (id, source, gen) in to_spawn {
+            let bytes = source.len();
+            let task = pool.spawn(async move {
+                let t = web_time::Instant::now();
+                let ast = AstCache::from_source(&source, gen);
+                let elapsed_ms = t.elapsed().as_secs_f64() * 1000.0;
+                if elapsed_ms > 50.0 {
+                    bevy::log::info!(
+                        "[ast_refresh] off-thread parse: {bytes} bytes in {elapsed_ms:.1}ms (gen={gen})"
+                    );
+                }
+                ast
+            });
+            pending.by_doc.insert(id, task);
         }
     }
 }

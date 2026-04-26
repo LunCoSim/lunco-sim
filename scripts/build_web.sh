@@ -116,7 +116,10 @@ build_wasm() {
     info "Target: wasm32-unknown-unknown"
     info "Profile: release"
     
-    cargo build --release --target wasm32-unknown-unknown --bin "$binary" -p "$crate"
+    # We use --no-default-features to avoid pulling in the full tokio/axum stack
+    # from lunco-api, which depends on mio and other networking primitives
+    # that are unsupported on wasm32-unknown-unknown.
+    cargo build --release --target wasm32-unknown-unknown --bin "$binary" -p "$crate" --no-default-features
     
     if [ $? -eq 0 ]; then
         success "WASM binary built successfully"
@@ -126,49 +129,114 @@ build_wasm() {
     fi
 }
 
-# Generate JavaScript bindings
+# Generate JavaScript bindings and assemble the shippable bundle.
+#
+# Layout (matches Rust/wasm conventions):
+#   target/wasm32-unknown-unknown/release/<bin>.wasm   — cargo output
+#   target/web/<bin>/                                  — wasm-bindgen output (intermediate)
+#   dist/<bin>/                                        — final bundle served to browsers
+#   crates/<crate>/web/index.html                      — source HTML template
 generate_bindings() {
     local binary="$1"
     local crate="$2"
-    local web_dir="$PROJECT_DIR/crates/$crate/web"
-    local pkg_dir="$web_dir/pkg"
-    local target_dir="$PROJECT_DIR/target/wasm32-unknown-unknown/release"
-    
+    local index_html="$PROJECT_DIR/crates/$crate/web/index.html"
+
+    # Dynamically find the target directory in case it's overridden in .cargo/config.toml
+    local base_target_dir=$(cargo metadata --format-version 1 --no-deps | jq -r .target_directory)
+    local cargo_out_dir="$base_target_dir/wasm32-unknown-unknown/release"
+    local bindgen_out_dir="$base_target_dir/web/$binary"
+    local dist_dir="$PROJECT_DIR/dist/$binary"
+
     info "Generating JavaScript bindings..."
-    
-    # Create pkg directory if it doesn't exist
-    mkdir -p "$pkg_dir"
-    
-    wasm-bindgen "$target_dir/${binary}.wasm" \
-        --out-dir "$pkg_dir" \
+    info "wasm-bindgen out: $bindgen_out_dir"
+    info "Bundle dir:       $dist_dir"
+
+    mkdir -p "$bindgen_out_dir" "$dist_dir"
+
+    # Prefer local wasm-bindgen if it exists
+    local wasm_bindgen_cmd="wasm-bindgen"
+    if [ -f "$PROJECT_DIR/.cargo-bin/bin/wasm-bindgen" ]; then
+        wasm_bindgen_cmd="$PROJECT_DIR/.cargo-bin/bin/wasm-bindgen"
+        info "Using local wasm-bindgen: $wasm_bindgen_cmd"
+    fi
+
+    $wasm_bindgen_cmd "$cargo_out_dir/${binary}.wasm" \
+        --out-dir "$bindgen_out_dir" \
         --target web
-    
-    if [ $? -eq 0 ]; then
-        success "JavaScript bindings generated"
-    else
+
+    if [ $? -ne 0 ]; then
         error "Binding generation failed"
         exit 1
     fi
-    
+    success "JavaScript bindings generated"
+
+    # Assemble the bundle: bindings + index.html in one place.
+    # Use a fresh dist dir so stale files from a previous binary version
+    # don't get served accidentally.
+    rm -rf "$dist_dir"
+    mkdir -p "$dist_dir"
+    cp "$bindgen_out_dir"/* "$dist_dir/"
+    if [ -f "$index_html" ]; then
+        cp "$index_html" "$dist_dir/index.html"
+    else
+        warn "No index.html found at $index_html — bundle will lack an entry point"
+    fi
+
     # Show output size
-    WASM_SIZE=$(du -h "$pkg_dir/${binary}_bg.wasm" | cut -f1)
-    JS_SIZE=$(du -h "$pkg_dir/${binary}.js" | cut -f1)
-    info "Output sizes: WASM=${WASM_SIZE}, JS=${JS_SIZE}"
+    WASM_SIZE=$(du -h "$dist_dir/${binary}_bg.wasm" | cut -f1)
+    JS_SIZE=$(du -h "$dist_dir/${binary}.js" | cut -f1)
+    info "Bundle sizes: WASM=${WASM_SIZE}, JS=${JS_SIZE}"
+    info "Bundle ready: $dist_dir"
 }
 
-# Serve the web application
+# Pack MSL into a versioned, compressed bundle and place it next to the
+# wasm under `dist/<bin>/msl/`. Same-origin so the runtime fetcher doesn't
+# need CORS configuration. Skipped for binaries that don't ship MSL
+# (rover_sandbox_web).
+build_msl_bundle() {
+    local binary="$1"
+    if [ "$binary" != "modelica_workbench_web" ]; then
+        return 0
+    fi
+    local dist_dir="$PROJECT_DIR/dist/$binary"
+    local msl_dir="$dist_dir/msl"
+
+    info "Packing MSL bundle for $binary..."
+
+    # The bundler walks `lunco_assets::msl_source_root_path()` on the host,
+    # which lives at <workspace>/.cache/msl/ in this repo. If MSL isn't
+    # materialised, the binary will exit non-zero with a clear message and
+    # we surface that as a build error so we never ship without MSL.
+    rm -rf "$msl_dir"
+    mkdir -p "$msl_dir"
+    cargo run --release -q -p lunco-assets --bin build_msl_assets -- \
+        --out "$msl_dir"
+
+    if [ $? -ne 0 ]; then
+        error "MSL bundling failed"
+        exit 1
+    fi
+    success "MSL bundle written to $msl_dir"
+}
+
+# Serve the web application from its dist bundle.
 serve_web() {
     local binary="$1"
     local crate="$2"
-    local web_dir="$PROJECT_DIR/crates/$crate/web"
+    local dist_dir="$PROJECT_DIR/dist/$binary"
     local port="${3:-8080}"
-    
+
+    if [ ! -f "$dist_dir/index.html" ]; then
+        error "No bundle at $dist_dir — run '$0 build $binary' first"
+        exit 1
+    fi
+
     info "Starting web server for $binary..."
-    info "Serving from: $web_dir"
+    info "Serving from: $dist_dir"
     info "URL: http://localhost:$port"
-    
-    cd "$web_dir"
-    
+
+    cd "$dist_dir"
+
     if [ "$HTTP_SERVER_CMD" = "http-server" ]; then
         info "Using http-server (Node.js)"
         http-server -p "$port" -c-1 --cors
@@ -178,13 +246,17 @@ serve_web() {
     fi
 }
 
-# Clean build artifacts
+# Clean build artifacts.
+# We don't touch target/ globally — that's cargo's job (`cargo clean`). We
+# only remove the web-specific intermediates and the dist bundle.
 clean() {
-    info "Cleaning build artifacts..."
-    rm -rf "$PROJECT_DIR/crates/lunco-modelica/web/pkg"
-    rm -rf "$PROJECT_DIR/crates/lunco-client/web/pkg"
-    rm -f "$PROJECT_DIR/target/wasm32-unknown-unknown/release/"*_web.wasm
-    rm -f "$PROJECT_DIR/target/wasm32-unknown-unknown/release/"*_web.d
+    info "Cleaning web build artifacts..."
+    local base_target_dir
+    base_target_dir=$(cargo metadata --format-version 1 --no-deps | jq -r .target_directory)
+    rm -rf "$base_target_dir/web"
+    rm -rf "$PROJECT_DIR/dist"
+    rm -f "$base_target_dir/wasm32-unknown-unknown/release/"*_web.wasm
+    rm -f "$base_target_dir/wasm32-unknown-unknown/release/"*_web.d
     success "Cleaned"
 }
 
@@ -235,6 +307,7 @@ main() {
             local crate=$(get_binary_config "$binary")
             build_wasm "$binary" "$crate"
             generate_bindings "$binary" "$crate"
+            build_msl_bundle "$binary"
             success "Build complete! Run '$0 serve $binary' to start the server"
             ;;
         serve)
@@ -265,6 +338,7 @@ main() {
             fi
             build_wasm "$binary" "$crate"
             generate_bindings "$binary" "$crate"
+            build_msl_bundle "$binary"
             serve_web "$binary" "$crate" "${port:-$default_port}"
             ;;
         clean)

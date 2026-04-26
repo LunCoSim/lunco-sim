@@ -7,22 +7,99 @@
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         html, body { width: 100%; height: 100%; overflow: hidden; }
-        body { background: #1a1a1a; }
+        body { background: #1a1a1a; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
         #bevy { width: 100%; height: 100%; display: block; }
+
+        /* Centred loader card. Covers ONLY the crucial pre-init steps:
+           wasm download → wasm init. Hidden the moment `init()` resolves.
+           Non-blocking backdrop (pointer-events: none on the root)
+           so the canvas underneath is interactable from the first
+           paint. MSL load progress goes to the bottom status bar
+           because MSL is non-blocking — the UI is fully usable while
+           it streams in. */
         #loading {
-            position: fixed; top: 50%; left: 50%;
-            transform: translate(-50%, -50%);
-            color: #4CAF50; font-family: sans-serif; text-align: center;
+            position: fixed; inset: 0;
+            display: flex; align-items: center; justify-content: center;
+            pointer-events: none;
+            transition: opacity 0.3s ease;
+            z-index: 1000;
         }
+        #loading.hidden { opacity: 0; visibility: hidden; }
+        #loading .card {
+            min-width: 320px; max-width: 420px;
+            padding: 18px 22px;
+            background: rgba(20, 20, 20, 0.94);
+            border: 1px solid #3a3a3a; border-radius: 10px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+            pointer-events: auto;
+        }
+        #loading .title {
+            color: #4CAF50; font-weight: 600; font-size: 14px;
+            letter-spacing: 0.04em; text-transform: uppercase;
+        }
+        #loading .phase {
+            color: #e8e8e8; font-size: 16px; margin-top: 6px;
+        }
+        #loading .detail {
+            color: #888; font-size: 12px; margin-top: 4px;
+            font-variant-numeric: tabular-nums;
+        }
+        #loading .bar {
+            margin-top: 14px; height: 6px; width: 100%;
+            background: #2a2a2a; border-radius: 3px; overflow: hidden;
+        }
+        #loading .bar > .fill {
+            height: 100%; background: #4CAF50; width: 0%;
+            transition: width 0.15s ease;
+        }
+        /* Indeterminate state when we don't know totals yet — gentle
+           shimmer so the user can see things are alive. */
+        #loading.indeterminate .bar > .fill {
+            width: 35%;
+            animation: shimmer 1.4s ease-in-out infinite;
+        }
+        @keyframes shimmer {
+            0%   { margin-left: -35%; }
+            100% { margin-left: 100%; }
+        }
+        #loading.error .title { color: #f44336; }
+        #loading.error .bar > .fill { background: #f44336; }
     </style>
 </head>
 <body>
-    <div id="loading">Loading...</div>
+    <div id="loading" class="indeterminate">
+        <div class="card">
+            <div class="title">Modelica Workbench</div>
+            <div class="phase">Starting…</div>
+            <div class="detail">&nbsp;</div>
+            <div class="bar"><div class="fill"></div></div>
+        </div>
+    </div>
     <canvas id="bevy"></canvas>
     <script type="module">
-        import init from './pkg/modelica_workbench_web.js';
+        import init from './modelica_workbench_web.js';
 
-        // Resize canvas to match window
+        const root   = document.getElementById('loading');
+        const phaseE = root.querySelector('.phase');
+        const detailE = root.querySelector('.detail');
+        const fillE  = root.querySelector('.bar > .fill');
+
+        function setPhase(text)   { phaseE.textContent = text; }
+        function setDetail(text)  { detailE.innerHTML = text || '&nbsp;'; }
+        function setProgress(pct) {
+            // Determinate fill — drop the shimmer.
+            root.classList.remove('indeterminate');
+            fillE.style.width = `${Math.max(0, Math.min(100, pct)).toFixed(1)}%`;
+        }
+        function setIndeterminate() { root.classList.add('indeterminate'); }
+        function setError(msg) {
+            root.classList.add('error');
+            root.classList.remove('indeterminate');
+            setPhase('Failed');
+            setDetail(msg);
+            fillE.style.width = '100%';
+        }
+
         function resize() {
             const canvas = document.getElementById('bevy');
             if (canvas) {
@@ -30,14 +107,58 @@
                 canvas.height = window.innerHeight;
             }
         }
-
         window.addEventListener('resize', resize);
         resize();
 
-        init().then(() => {
-            document.getElementById('loading').remove();
+        // Manual fetch of the wasm so we can show real download progress
+        // (wasm-bindgen's default `init()` fetches internally with no
+        // hooks). The 104 MB binary is the longest pre-init step.
+        async function fetchWasmWithProgress(url) {
+            setPhase('Downloading runtime');
+            setDetail('connecting…');
+            setIndeterminate();
+            const resp = await fetch(url);
+            if (!resp.ok) throw new Error(`HTTP ${resp.status} ${resp.statusText}`);
+            const totalHdr = resp.headers.get('Content-Length');
+            const total = totalHdr ? parseInt(totalHdr, 10) : 0;
+            const reader = resp.body.getReader();
+            const chunks = [];
+            let received = 0;
+            while (true) {
+                const { value, done } = await reader.read();
+                if (done) break;
+                chunks.push(value);
+                received += value.byteLength;
+                if (total > 0) {
+                    setProgress((received / total) * 100);
+                    setDetail(`${(received/1048576).toFixed(1)} / ${(total/1048576).toFixed(1)} MB`);
+                } else {
+                    setDetail(`${(received/1048576).toFixed(1)} MB`);
+                }
+            }
+            // Concatenate the chunks into one ArrayBuffer.
+            const buf = new Uint8Array(received);
+            let off = 0;
+            for (const c of chunks) { buf.set(c, off); off += c.byteLength; }
+            return buf.buffer;
+        }
+
+        try {
+            const wasmBuf = await fetchWasmWithProgress('./modelica_workbench_web_bg.wasm');
+            setPhase('Initializing');
+            setDetail('compiling wasm…');
+            setIndeterminate();
+            await init({ module_or_path: wasmBuf });
+            // Wasm is up and the workbench can render. Hide the centred
+            // loader immediately — anything further (MSL fetch / parse)
+            // is non-blocking and goes to the bottom status bar, which
+            // the wasm side drives directly via web-sys.
+            root.classList.add('hidden');
             resize();
-        });
+        } catch (e) {
+            console.error(e);
+            setError(String(e && e.message ? e.message : e));
+        }
     </script>
 </body>
 </html>

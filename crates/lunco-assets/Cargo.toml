@@ -12,6 +12,12 @@ toml = "0.8"
 thiserror = "2.0"
 image = { workspace = true }
 
+# Native-only helper binary that packs MSL into a versioned, compressed
+# bundle for the web build. Path-gated to keep wasm32 builds away from it.
+[[bin]]
+name = "build_msl_assets"
+path = "src/bin/build_msl_assets.rs"
+
 # Desktop-only: HTTP client for asset downloads, tarball extraction, hashing
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 ureq = { version = "2.9", features = ["tls"] }
@@ -20,6 +26,20 @@ chrono = "0.4"
 flate2 = "1.0"
 bzip2 = "0.4"
 tar = "0.4"
+# zstd compressor for the MSL asset bundle the build_msl_assets binary
+# emits into `dist/<bin>/msl/`. Web runtime uses a pure-Rust decoder
+# (ruzstd) — see lunco-modelica's wasm32 deps.
+zstd = "0.13"
+# `build_msl_assets` parses every MSL .mo file and ships a bincode'd
+# `Vec<(String, StoredDefinition)>` next to the source bundle so the
+# wasm runtime can skip the per-file parse (which is ~600 ms/file in
+# release wasm — unworkable for 2670 files).
+# Local path while the rumoca branch is in flight; flip back to git+branch
+# once `wasm-asset-loader` is pushed. Mirrors the path shape used by
+# lunco-modelica/Cargo.toml.
+rumoca-phase-parse = { path = "../../../rumoca/crates/rumoca-phase-parse" }
+rumoca-ir-ast = { path = "../../../rumoca/crates/rumoca-ir-ast" }
+bincode = "1.3"
 resvg = { workspace = true }
 tiny-skia = { workspace = true }
 usvg = { workspace = true }

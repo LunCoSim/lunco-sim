@@ -200,7 +200,7 @@ pub struct ModelicaDocument {
     /// reparses only after a quiet period so rapid typing stays
     /// responsive. `None` for fresh docs whose source hasn't changed
     /// since construction.
-    last_source_edit_at: Option<std::time::Instant>,
+    last_source_edit_at: Option<web_time::Instant>,
 }
 
 impl ModelicaDocument {
@@ -287,8 +287,33 @@ impl ModelicaDocument {
     /// document hasn't been edited since construction. Used by the
     /// debounce driver to determine whether the typing "quiet
     /// window" has elapsed.
-    pub fn last_source_edit_at(&self) -> Option<std::time::Instant> {
+    pub fn last_source_edit_at(&self) -> Option<web_time::Instant> {
         self.last_source_edit_at
+    }
+
+    /// Install a freshly-parsed AST cache produced off-thread.
+    ///
+    /// The async refresh path (`crate::ui::ast_refresh`) parses on
+    /// the task pool to keep multi-second rumoca parses off the main
+    /// thread. When the task completes, we hand the result here.
+    /// We only install if the new cache matches the **current** doc
+    /// generation — otherwise the source has moved on while parsing
+    /// was in flight and the result is stale (the next debounce will
+    /// kick a fresh parse).
+    pub fn install_ast(&mut self, ast: AstCache) {
+        if ast.generation != self.generation {
+            return;
+        }
+        self.ast = Arc::new(ast);
+        self.last_source_edit_at = None;
+    }
+
+    /// A clone of the source text (used by the off-thread parse task).
+    /// Cheap: `String::clone` does a heap copy but for our typical
+    /// 20-100 KB sources this is microseconds — negligible vs the
+    /// multi-second parse it kicks off.
+    pub fn source_snapshot(&self) -> String {
+        self.source.clone()
     }
 
     /// Force an immediate AST reparse and mark the result as matching
@@ -301,7 +326,20 @@ impl ModelicaDocument {
         if !self.ast_is_stale() {
             return;
         }
+        // TEMP timing — we suspect this is the multi-second hot spot
+        // when the user adds components to a multi-class doc. If it
+        // is, the fix is to move parse_to_ast off the main thread or
+        // cache the per-class subtree.
+        let t = web_time::Instant::now();
+        let bytes = self.source.len();
         self.ast = Arc::new(AstCache::from_source(&self.source, self.generation));
+        let elapsed_ms = t.elapsed().as_secs_f64() * 1000.0;
+        if elapsed_ms > 5.0 {
+            bevy::log::info!(
+                "[Doc] refresh_ast_now: {bytes} bytes parsed in {elapsed_ms:.1}ms (gen={})",
+                self.generation
+            );
+        }
         // Once the AST catches up, there's no outstanding edit to
         // debounce for.
         self.last_source_edit_at = None;
@@ -377,10 +415,13 @@ impl ModelicaDocument {
         self.origin.canonical_path()
     }
 
-    /// True when this document is treated as read-only by the UI.
-    /// Read-only == library / bundled origin or untitled with no path.
+    /// True when this document is treated as read-only by the UI —
+    /// i.e. it does not accept mutating ops. Library / bundled
+    /// origins are read-only; Untitled scratch docs are NOT (they
+    /// can't save without Save-As but they accept every edit).
+    /// Mirrors [`DocumentOrigin::accepts_mutations`].
     pub fn is_read_only(&self) -> bool {
-        !self.origin.is_writable()
+        !self.origin.accepts_mutations()
     }
 
     /// Set or change the origin (e.g. after Save-As binds a path to
@@ -557,6 +598,24 @@ impl Document for ModelicaDocument {
     }
 
     fn apply(&mut self, op: Self::Op) -> Result<Self::Op, DocumentError> {
+        // Read-only enforcement — the document is the single
+        // source of truth for its own mutability. Origin says
+        // whether this doc accepts ops; if not, every caller
+        // (palette, inspector, canvas drag-drop, API) gets the
+        // same `ReadOnly` error and surfaces it through their
+        // normal error paths (no band-aid pre-checks needed in
+        // panels). Cosmetic ops are not exempt — a frozen MSL
+        // class shouldn't accept SetPlacement either; users
+        // duplicate-to-workspace if they want to lay it out.
+        //
+        // **`accepts_mutations()`, not `is_writable()`** —
+        // `is_writable` returns `false` for Untitled docs (Save-As
+        // required), but Untitled docs are the canonical scratch
+        // surface and must accept all edits. Conflating the two
+        // silently bricks the duplicate-to-workspace flow.
+        if !self.origin.accepts_mutations() {
+            return Err(DocumentError::ReadOnly);
+        }
         // Translate any op to a (range, replacement, change) triple.
         // `ReplaceSource` is expressed as replacing the full buffer —
         // no special-casing needed below. Every op follows the same
@@ -613,7 +672,7 @@ impl ModelicaDocument {
         //     snapshot. Consumers that strictly need a fresh parse
         //     (Compile) check `ast().generation == self.generation`
         //     and force a reparse via `refresh_ast_now()`.
-        self.last_source_edit_at = Some(std::time::Instant::now());
+        self.last_source_edit_at = Some(web_time::Instant::now());
         self.push_change(change);
         let inverse_range = range.start..(range.start + replacement.len());
         Ok(ModelicaOp::EditText {
@@ -779,6 +838,26 @@ fn compute_add_component_patch(
     decl: &ComponentDecl,
 ) -> Result<(Range<usize>, String), DocumentError> {
     let class_def = resolve_class(ast, class)?;
+    // Defensive: refuse to inject a component declaration into a
+    // `package` class. Modelica forbids package-level component
+    // declarations (per spec: a package may only contain classes,
+    // constants, and operator overloads), so a naive splice produces
+    // a parse error that bricks the file for every subsequent
+    // AST-based op. The right-click menu and palette already pass
+    // the *inner* class name in the post-spec-035 path, but this
+    // belt-and-braces check stops the same crash if a future caller
+    // forgets — `op_to_patch` is the last gate before the source
+    // mutates.
+    if matches!(
+        class_def.class_type,
+        rumoca_session::parsing::ast::ClassType::Package
+    ) {
+        return Err(DocumentError::ValidationFailed(format!(
+            "cannot add component `{}` directly into package `{}`. \
+             Add it into one of the package's classes instead.",
+            decl.name, class
+        )));
+    }
     let insertion_byte = class_section_insertion_point(class_def).ok_or_else(|| {
         DocumentError::ValidationFailed(format!(
             "could not locate insertion point in class `{}`",
@@ -1530,7 +1609,7 @@ mod tests {
                 replacement: String::new(),
             })
             .unwrap_err();
-        assert!(matches!(err, DocumentError::ValidationFailed(_)));
+        assert!(matches!(err, lunco_doc::Reject::InvalidOp(_)));
         // Unchanged on error.
         assert_eq!(host.document().source(), "model Empty end Empty;\n");
         assert_eq!(host.generation(), 0);
@@ -1626,7 +1705,7 @@ mod tests {
                 },
             })
             .unwrap_err();
-        assert!(matches!(err, DocumentError::ValidationFailed(_)));
+        assert!(matches!(err, lunco_doc::Reject::InvalidOp(_)));
         assert_eq!(host.generation(), 0);
     }
 
@@ -1690,6 +1769,6 @@ mod tests {
                 },
             })
             .unwrap_err();
-        assert!(matches!(err, DocumentError::ValidationFailed(_)));
+        assert!(matches!(err, lunco_doc::Reject::InvalidOp(_)));
     }
 }

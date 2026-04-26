@@ -124,13 +124,24 @@ pub struct ModelicaCompiler {
 impl ModelicaCompiler {
     /// Construct a compiler and preload MSL.
     ///
-    /// On targets without a filesystem (`wasm32`),
-    /// [`lunco_assets::msl_source_root_path`] returns `None` and the
-    /// session is left empty — web targets populate via HTTP once
-    /// the async-asset path lands.
+    /// MSL discovery order:
+    ///
+    /// 1. The process-wide source from [`lunco_assets::msl::global_msl_source`]
+    ///    if it's been installed. This is how the wasm runtime feeds the
+    ///    fetched-from-server MSL bundle in.
+    /// 2. Fall back to [`lunco_assets::msl_source_root_path`] (filesystem).
+    ///
+    /// If both are absent — typical for the first wasm tick before the
+    /// MSL bundle has finished downloading — the session is left empty
+    /// and the next compile will surface `unresolved type reference`
+    /// diagnostics until MSL lands. Callers that want to gate compiles
+    /// on MSL readiness should consult `MslLoadState`.
     pub fn new() -> Self {
-        let t_total = std::time::Instant::now();
+        let t_total = web_time::Instant::now();
         let mut session = Session::new(SessionConfig::default());
+        if Self::preload_from_global(&mut session, t_total) {
+            return Self { session };
+        }
         if let Some(msl_root) = lunco_assets::msl_source_root_path() {
             // Durable-external — MSL rarely changes and is
             // library-grade; rumoca uses this classification to
@@ -164,6 +175,55 @@ impl ModelicaCompiler {
         Self { session }
     }
 
+    /// If a process-wide MSL has been installed, preload it into the
+    /// session. Returns `true` when handled (caller skips the disk
+    /// fallback).
+    ///
+    /// Two web-side fast paths, in priority order:
+    ///
+    /// 1. **Pre-parsed bundle** ([`msl_remote::global_parsed_msl`]).
+    ///    The chunked parse driver finished running, so we already have
+    ///    `Vec<(uri, StoredDefinition)>` in hand — install via
+    ///    `Session::replace_parsed_source_set` (no parsing). This is
+    ///    the steady-state path on web.
+    /// 2. **Source-only bundle** (`MslAssetSource::InMemory`). Bytes
+    ///    are decompressed but the chunked parser hasn't finished yet.
+    ///    Falling through to `load_source_root_in_memory` here would
+    ///    block the main thread for ~60–120 s, so we skip preload and
+    ///    let the caller see an empty session — the auto-retrigger on
+    ///    parse-complete will rebuild the compiler properly.
+    fn preload_from_global(session: &mut Session, t_total: web_time::Instant) -> bool {
+        if let Some(parsed) = msl_remote::global_parsed_msl() {
+            let docs = (**parsed).clone();
+            let pair_count = docs.len();
+            let inserted = session.replace_parsed_source_set(
+                "msl",
+                rumoca_session::compile::SourceRootKind::DurableExternal,
+                docs,
+                None,
+            );
+            log::info!(
+                "[ModelicaCompiler] installed pre-parsed MSL in {:.2}s: \
+                 {} inserted (of {} docs)",
+                t_total.elapsed().as_secs_f64(),
+                inserted,
+                pair_count,
+            );
+            return true;
+        }
+        if matches!(
+            lunco_assets::msl::global_msl_source(),
+            Some(lunco_assets::msl::MslAssetSource::InMemory(_))
+        ) {
+            log::info!(
+                "[ModelicaCompiler] MSL bundle present but parse not yet complete — \
+                 starting with empty session; compile will be retriggered when parse finishes"
+            );
+            return true;
+        }
+        false
+    }
+
     /// Compile Modelica source string and return DAE result.
     ///
     /// The user source is fed as a workspace document on top of the
@@ -179,7 +239,7 @@ impl ModelicaCompiler {
         source: &str,
         filename: &str,
     ) -> Result<Box<rumoca_session::compile::DaeCompilationResult>, String> {
-        let t_total = std::time::Instant::now();
+        let t_total = web_time::Instant::now();
         self.session.update_document(filename, source);
         let result = self
             .session
@@ -207,12 +267,16 @@ pub mod ui;
 /// Bundled Modelica models for web deployment.
 /// Available on all targets, but primarily used for wasm builds.
 pub mod models;
+pub mod msl_remote;
 pub mod sim_stream;
 
 #[cfg(feature = "lunco-api")]
 pub mod api_queries;
 
-#[cfg(feature = "lunco-api")]
+// Always built — the UI (palette, inspector, canvas) dispatches these
+// `ApplyModelicaOps` Reflect events directly. The module is named `api_*`
+// because external HTTP callers also use it when `lunco-api` is enabled,
+// but the events themselves carry no `lunco-api` dependency.
 pub mod api_edits;
 pub use sim_stream::{new_sim_stream, SimSnapshot, SimStream, VarHistory, SimSample};
 
@@ -594,7 +658,7 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
             // in-flight and how long it actually took, so a stall is
             // visible in `RUST_LOG=info` output instead of silent.
             let cmd_label = command_label(&cmd);
-            let cmd_started = std::time::Instant::now();
+            let cmd_started = web_time::Instant::now();
             log::info!("[worker] begin: {}", cmd_label);
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 match cmd {
@@ -903,7 +967,10 @@ fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
                             }
                         } else {
                             let mut r = result_ok(entity, session_id);
-                            r.error = Some("Sim engine failed to start.".to_string());
+                            r.error = Some(
+                                "No compiled model. Click Compile (or Run will compile + start)."
+                                    .to_string(),
+                            );
                             let _ = tx_inner.send(r);
                         }
                     }
@@ -1020,6 +1087,7 @@ struct InlineWorkerInner {
     steppers: HashMap<Entity, (u64, String, SimStepper)>,
     current_sessions: HashMap<Entity, u64>,
     cached_models: HashMap<Entity, CachedModel>,
+    compiler: Option<ModelicaCompiler>,
 }
 
 /// Thread-safe wrapper for wasm32 inline worker state.
@@ -1029,8 +1097,22 @@ struct InlineWorkerInner {
 /// exist on this target, we can safely implement Send/Sync.
 #[cfg(target_arch = "wasm32")]
 #[derive(Resource, Default)]
-struct InlineWorker {
+pub(crate) struct InlineWorker {
     inner: InlineWorkerInner,
+}
+
+#[cfg(target_arch = "wasm32")]
+impl InlineWorker {
+    /// Drop any previously-constructed `ModelicaCompiler`. Used by the
+    /// MSL drain when the in-memory bundle finishes loading: a compiler
+    /// that was lazily built before MSL was available has an empty
+    /// session and would yield `unresolved type reference` for every
+    /// MSL ref. The next compile will re-init via
+    /// `get_or_insert_with(ModelicaCompiler::new)` and pick up the
+    /// global MSL source.
+    pub(crate) fn reset_compiler(&mut self) {
+        self.inner.compiler = None;
+    }
 }
 
 // SAFETY: wasm32-unknown-unknown has no threads, so Send/Sync are vacuously true.
@@ -1062,7 +1144,7 @@ fn inline_worker_process(
                 if let Some(cached) = w.cached_models.get(&entity) {
                     if cached.model_name == model_name {
                         let (stripped_source, input_defaults) = strip_input_defaults(&cached.source);
-                        let compiler = compiler.get_or_insert_with(ModelicaCompiler::new);
+                        let compiler = w.compiler.get_or_insert_with(ModelicaCompiler::new);
                         if let Ok(comp_res) = compiler.compile_str(&cached.model_name, &stripped_source, "model.mo") {
                             let mut opts = StepperOptions::default();
                             opts.atol = 1e-1; opts.rtol = 1e-1;
@@ -1108,10 +1190,22 @@ fn inline_worker_process(
                     let _ = tx.send(result_ok(entity, session_id));
                 }
             } else {
+                // No stepper for this entity. The Bevy-side
+                // `spawn_modelica_requests` is supposed to catch this
+                // and dispatch a Compile first; if we got here the
+                // user pressed Run on a never-compiled model AND the
+                // auto-compile hook didn't fire (e.g. doc id is
+                // missing). Surface a message that tells the user
+                // what to do next instead of "Sim engine failed to
+                // start." which doesn't.
                 let _ = tx.send(ModelicaResult {
                     entity, session_id, new_time: 0.0,
                     outputs: Vec::new(),
-                    detected_symbols: Vec::new(), error: Some("Sim engine failed to start.".to_string()),
+                    detected_symbols: Vec::new(),
+                    error: Some(
+                        "No compiled model. Click Compile (or Run will compile + start)."
+                            .to_string(),
+                    ),
                     log_message: None, is_new_model: false, is_parameter_update: false,
                     is_reset: false, detected_input_names: Vec::new(), detected_descriptions: Vec::new(),
                 });
@@ -1129,7 +1223,7 @@ fn inline_worker_process(
             opts.atol = 1e-1; opts.rtol = 1e-1;
             let tx = &channels.tx_res;
 
-            let compiler = compiler.get_or_insert_with(ModelicaCompiler::new);
+            let compiler = w.compiler.get_or_insert_with(ModelicaCompiler::new);
             match compiler.compile_str(&model_name, &stripped_source, "model.mo") {
                 Ok(comp_res) => {
                     match SimStepper::new(&comp_res.dae, opts) {
@@ -1184,7 +1278,7 @@ fn inline_worker_process(
                 let (stripped_source, input_defaults) = strip_input_defaults(&cached.source);
                 let mut opts = StepperOptions::default();
                 opts.atol = 1e-1; opts.rtol = 1e-1;
-                let compiler = compiler.get_or_insert_with(ModelicaCompiler::new);
+                let compiler = w.compiler.get_or_insert_with(ModelicaCompiler::new);
                 match compiler.compile_str(&cached.model_name, &stripped_source, "model.mo") {
                     Ok(comp_res) => {
                         if let Ok(mut stepper) = SimStepper::new(&comp_res.dae, opts) {
@@ -1248,7 +1342,7 @@ fn inline_worker_process(
             opts.atol = 1e-1; opts.rtol = 1e-1;
             let tx = &channels.tx_res;
 
-            let compiler = compiler.get_or_insert_with(ModelicaCompiler::new);
+            let compiler = w.compiler.get_or_insert_with(ModelicaCompiler::new);
             match compiler.compile_str(&model_name, &stripped_source, "model.mo") {
                 Ok(comp_res) => {
                     match SimStepper::new(&comp_res.dae, opts) {
@@ -1344,6 +1438,13 @@ pub struct ModelicaModel {
     pub document: lunco_doc::DocumentId,
     #[reflect(ignore)]
     pub is_stepping: bool,
+    /// `true` after a successful Compile has installed a stepper for
+    /// this entity in the Modelica worker. `spawn_modelica_requests`
+    /// uses this to dispatch a Compile (instead of a doomed Step) when
+    /// the user clicks Run on a never-compiled model. Reset to `false`
+    /// when a result reports an error or a fresh Compile is in flight.
+    #[reflect(ignore)]
+    pub is_compiled: bool,
 }
 
 /// Sends `Step` commands for each active model.
@@ -1354,11 +1455,36 @@ fn spawn_modelica_requests(
     channels: Res<ModelicaChannels>,
     time: Res<Time<Fixed>>,
     mut q_models: Query<(Entity, &mut ModelicaModel)>,
+    mut commands: Commands,
 ) {
     let dt = time.delta_secs_f64();
 
     for (entity, mut model) in q_models.iter_mut() {
         if model.is_stepping || model.paused { continue; }
+
+        // First-step path: model has been unpaused (user pressed Run)
+        // but no Compile has succeeded yet — the worker has no stepper
+        // and a Step would just bounce back as "Click Compile first".
+        // Auto-trigger CompileModel instead. The observer flips
+        // `is_stepping = true` and bumps `session_id`, so we won't
+        // re-trigger on subsequent frames; on a successful result the
+        // response handler sets `is_compiled = true` and unpauses.
+        if !model.is_compiled {
+            let doc = model.document;
+            if doc != lunco_doc::DocumentId::default() {
+                commands.trigger(crate::ui::commands::CompileModel {
+                    doc,
+                    class: if model.model_name.is_empty() {
+                        None
+                    } else {
+                        Some(model.model_name.clone())
+                    },
+                });
+            }
+            // Don't ship a Step this frame either way — let the
+            // compile flow run.
+            continue;
+        }
 
         let inputs: Vec<(String, f64)> = model.inputs.iter()
             .map(|(name, val)| (name.clone(), *val))
@@ -1514,6 +1640,12 @@ fn handle_modelica_responses(
                     c.error(format!("[{}] {prefix}: {err}", model.model_name));
                 }
                 model.paused = true;
+                // Solver errors destroy the stepper in the worker
+                // (lib.rs ~1176 removes it). Clear the flag so the
+                // next Run after the user fixes things triggers a
+                // fresh Compile rather than a doomed Step. Compile
+                // errors flip this in the `is_new_model` block below.
+                model.is_compiled = false;
             } else if workbench_state.selected_entity == Some(result.entity) {
                 workbench_state.compilation_error = None;
             }
@@ -1532,6 +1664,12 @@ fn handle_modelica_responses(
                 // explicitly after fixing the source.
                 if result.error.is_none() {
                     model.paused = false;
+                    // Worker has installed a stepper for this entity.
+                    // `spawn_modelica_requests` reads this to decide
+                    // whether to ship Step or trigger Compile-on-first-step.
+                    model.is_compiled = true;
+                } else {
+                    model.is_compiled = false;
                 }
 
                 // Merge input names from the worker with values the UI already extracted from source.
@@ -1835,7 +1973,7 @@ mod observables_smoke {
             end TestLimPID;
         "#;
         let mut c = ModelicaCompiler::new();
-        let t0 = std::time::Instant::now();
+        let t0 = web_time::Instant::now();
         let result = c.compile_str("TestLimPID", src, "TestLimPID.mo");
         let elapsed = t0.elapsed();
         eprintln!(
@@ -1881,7 +2019,7 @@ mod observables_smoke {
             end TestPID;
         "#;
         let mut c = ModelicaCompiler::new();
-        let t0 = std::time::Instant::now();
+        let t0 = web_time::Instant::now();
         let result = c.compile_str("TestPID", src, "TestPID.mo");
         let elapsed = t0.elapsed();
         eprintln!(
@@ -1922,7 +2060,7 @@ mod observables_smoke {
             end TestRotFirst;
         "#;
         let mut c = ModelicaCompiler::new();
-        let t0 = std::time::Instant::now();
+        let t0 = web_time::Instant::now();
         let result = c.compile_str("TestRotFirst", src, "TestRotFirst.mo");
         let elapsed = t0.elapsed();
         eprintln!(
@@ -1957,7 +2095,7 @@ mod observables_smoke {
             end TestFullyQualifiedSI;
         "#;
         let mut c = ModelicaCompiler::new();
-        let t0 = std::time::Instant::now();
+        let t0 = web_time::Instant::now();
         let result = c.compile_str("TestFullyQualifiedSI", src, "Q.mo");
         let elapsed = t0.elapsed();
         eprintln!(

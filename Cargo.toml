@@ -81,6 +81,12 @@ image = { version = "0.25", features = ["tiff", "png", "jpeg"] }
 smallvec = "1.13"
 openusd = "0.2.0"
 instant = "0.1"
+# Drop-in replacement for `std::time::Instant` / `SystemTime` that works on
+# wasm32-unknown-unknown (where the std types panic at runtime). Backed by
+# `performance.now()` in the browser, `std::time` on native. Used by Bevy
+# itself, so already in our dep graph as a transitive — pin it explicitly so
+# our own code can depend on it.
+web-time = "1"
 # getrandom 0.2 with js feature for wasm32 support (needed by rand, uuid, etc.)
 getrandom_02 = { package = "getrandom", version = "0.2", features = ["js"] }
 lunco-api = { path = "crates/lunco-api" }

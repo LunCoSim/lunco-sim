@@ -14,7 +14,9 @@
 
 use std::path::Path;
 use image::GenericImageView;
+#[cfg(not(target_arch = "wasm32"))]
 use resvg::tiny_skia;
+#[cfg(not(target_arch = "wasm32"))]
 use usvg::{Tree, Options};
 use crate::cache_dir;
 

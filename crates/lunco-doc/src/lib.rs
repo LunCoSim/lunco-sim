@@ -22,7 +22,7 @@
 //! ## Example
 //!
 //! ```
-//! use lunco_doc::{Document, DocumentOp, DocumentHost, DocumentError, DocumentId};
+//! use lunco_doc::{Document, DocumentOp, DocumentHost, DocumentError, DocumentId, Mutation};
 //!
 //! // Define a minimal document type:
 //! struct Counter { id: DocumentId, value: i32, generation: u64 }
@@ -44,7 +44,7 @@
 //! }
 //!
 //! let mut host = DocumentHost::new(Counter { id: DocumentId::new(1), value: 0, generation: 0 });
-//! host.apply(CounterOp::Inc(5)).unwrap();
+//! host.apply(Mutation::local(CounterOp::Inc(5))).unwrap();
 //! assert_eq!(host.document().value, 5);
 //! host.undo().unwrap();
 //! assert_eq!(host.document().value, 0);
@@ -55,8 +55,11 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+use std::collections::VecDeque;
 use std::fmt;
 use std::path::{Path, PathBuf};
+
+pub use lunco_core::{Ack, Mutation, OpId, Reject, SessionId};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SymbolPath — opaque cross-document reference
@@ -243,6 +246,24 @@ impl DocumentOrigin {
         matches!(self, Self::File { writable: true, .. })
     }
 
+    /// Whether the document accepts mutating ops. **Different from
+    /// [`is_writable`](Self::is_writable)**: Untitled docs *cannot save*
+    /// without a Save-As (so `is_writable() == false`), but they
+    /// absolutely *can be edited* — they are the canonical scratch
+    /// surface. Read-only library origins (`File { writable: false }`)
+    /// are the only kind that refuse mutations.
+    ///
+    /// `ModelicaDocument::apply` (and any other [`Document`] impl that
+    /// wants to enforce origin-level read-only) calls this — never
+    /// `is_writable`. Conflating the two silently bricks every
+    /// duplicate-to-workspace flow.
+    pub fn accepts_mutations(&self) -> bool {
+        match self {
+            Self::Untitled { .. } => true,
+            Self::File { writable, .. } => *writable,
+        }
+    }
+
     /// Whether this document has never been written to disk in this
     /// session (Save-As is required before Save can work).
     pub fn is_untitled(&self) -> bool {
@@ -276,6 +297,13 @@ impl DocumentOrigin {
 pub enum DocumentError {
     /// The operation is invalid for the current document state.
     ValidationFailed(String),
+    /// The document is read-only — its origin (e.g. an MSL library
+    /// class or a bundled example) does not allow mutation. Callers
+    /// should surface this as "duplicate to workspace first" rather
+    /// than retry. The document layer is the single source of truth
+    /// for this invariant; UI panels (palette, inspector, canvas) do
+    /// NOT pre-check — they fire ops and observe the error.
+    ReadOnly,
     /// An internal error occurred during application.
     Internal(String),
 }
@@ -284,6 +312,10 @@ impl fmt::Display for DocumentError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::ValidationFailed(msg) => write!(f, "Validation failed: {}", msg),
+            Self::ReadOnly => write!(
+                f,
+                "document is read-only — duplicate to workspace to edit"
+            ),
             Self::Internal(msg) => write!(f, "Internal error: {}", msg),
         }
     }
@@ -349,7 +381,19 @@ pub struct DocumentHost<D: Document> {
     document: D,
     undo_stack: Vec<D::Op>,
     redo_stack: Vec<D::Op>,
+    /// Bounded ring buffer of recently-applied [`OpId`]s for
+    /// idempotent replay. A duplicate op-id (same client retrying
+    /// after a flaky network drop, or a wire frame redelivered) is
+    /// dropped silently and reported as [`Reject::Duplicate`]. Cap
+    /// of 256 is enough to absorb realistic retry windows without
+    /// growing unbounded; older ids age out.
+    seen_ops: VecDeque<OpId>,
 }
+
+/// How many recent op-ids the dedupe ring keeps. 256 covers one to
+/// two seconds of sustained edit traffic at typical user rates and
+/// is well over any realistic retry window.
+const SEEN_OPS_CAP: usize = 256;
 
 impl<D: Document> DocumentHost<D> {
     /// Create a new host wrapping the given document. Undo/redo stacks
@@ -359,6 +403,7 @@ impl<D: Document> DocumentHost<D> {
             document,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
+            seen_ops: VecDeque::with_capacity(SEEN_OPS_CAP),
         }
     }
 
@@ -386,19 +431,56 @@ impl<D: Document> DocumentHost<D> {
         self.document.generation()
     }
 
-    /// Apply a forward op to the document.
+    /// Apply a mutation envelope. The single entry point for forward
+    /// edits: dedupes by [`OpId`] (silently absorbed as
+    /// [`Reject::Duplicate`]) and validates `parent_gen` when the
+    /// caller supplies one.
     ///
-    /// On success, the op's inverse is recorded for undo and the redo
-    /// stack is cleared (since a new edit invalidates any pending redo
-    /// branch — standard linear-history semantics).
+    /// Accepts anything `Into<Mutation<Op>>` — by default a bare
+    /// `Op` converts to a fresh local envelope, so `host.apply(op)`
+    /// just works. Pass an explicit `Mutation::local_against(...)`
+    /// to assert a parent generation.
     ///
-    /// On failure, the document is left unchanged and the error is
-    /// propagated. Undo/redo stacks are unaffected.
-    pub fn apply(&mut self, op: D::Op) -> Result<(), DocumentError> {
-        let inverse = self.document.apply(op)?;
+    /// On success returns an [`Ack`] reporting the post-apply
+    /// generation; the `assigned` field is left null at this layer —
+    /// domain-specific apply paths (e.g. modelica's name allocator)
+    /// fill it in by wrapping this method.
+    ///
+    /// On any failure the document is unchanged, the undo/redo
+    /// stacks are untouched, and the op-id is **not** added to the
+    /// seen-ops ring (so a retry of the same op-id can succeed once
+    /// the underlying problem is fixed).
+    pub fn apply<M: Into<Mutation<D::Op>>>(
+        &mut self,
+        mutation: M,
+    ) -> Result<Ack, Reject> {
+        let mutation: Mutation<D::Op> = mutation.into();
+        if self.seen_ops.contains(&mutation.id) {
+            return Err(Reject::Duplicate);
+        }
+        if let Some(parent) = mutation.parent_gen {
+            let current = self.document.generation();
+            if parent != current {
+                return Err(Reject::StaleParent {
+                    current_gen: current,
+                });
+            }
+        }
+        let inverse = match self.document.apply(mutation.payload) {
+            Ok(inv) => inv,
+            Err(DocumentError::ReadOnly) => return Err(Reject::ReadOnly),
+            Err(DocumentError::ValidationFailed(msg)) => return Err(Reject::InvalidOp(msg)),
+            Err(DocumentError::Internal(msg)) => return Err(Reject::InvalidOp(msg)),
+        };
         self.undo_stack.push(inverse);
         self.redo_stack.clear();
-        Ok(())
+        if self.seen_ops.len() == SEEN_OPS_CAP {
+            self.seen_ops.pop_front();
+        }
+        self.seen_ops.push_back(mutation.id);
+        let mut ack = Ack::new(mutation.id);
+        ack.new_gen = Some(self.document.generation());
+        Ok(ack)
     }
 
     /// Undo the most recent op. Returns `Ok(false)` if the undo stack is
@@ -523,10 +605,10 @@ mod tests {
             generation: 0,
         });
 
-        host.apply(TextOp::Insert {
+        host.apply(Mutation::local(TextOp::Insert {
             pos: 5,
             text: " World".to_string(),
-        })
+        }))
         .unwrap();
         assert_eq!(host.document().text, "Hello World");
         assert_eq!(host.generation(), 1);
@@ -538,6 +620,56 @@ mod tests {
         host.redo().unwrap();
         assert_eq!(host.document().text, "Hello World");
         assert_eq!(host.generation(), 3);
+    }
+
+    #[test]
+    fn test_apply_dedupes_by_op_id() {
+        let mut host = DocumentHost::new(TextDocument {
+            id: DocumentId::new(1),
+            text: "x".to_string(),
+            generation: 0,
+        });
+        let m = Mutation::local(TextOp::Insert {
+            pos: 1,
+            text: "y".to_string(),
+        });
+        let id = m.id;
+        let ack = host.apply(m.clone()).unwrap();
+        assert_eq!(ack.op_id, id);
+        assert_eq!(host.document().text, "xy");
+        // Replaying the same envelope is a no-op, reported as Duplicate.
+        let m2 = Mutation {
+            id,
+            origin: SessionId::LOCAL,
+            parent_gen: None,
+            payload: m.payload,
+        };
+        match host.apply(m2) {
+            Err(Reject::Duplicate) => {}
+            other => panic!("expected Duplicate, got {other:?}"),
+        }
+        assert_eq!(host.document().text, "xy");
+    }
+
+    #[test]
+    fn test_apply_validates_parent_gen() {
+        let mut host = DocumentHost::new(TextDocument {
+            id: DocumentId::new(1),
+            text: "x".to_string(),
+            generation: 0,
+        });
+        let stale = Mutation::local_against(
+            999,
+            TextOp::Insert {
+                pos: 1,
+                text: "y".to_string(),
+            },
+        );
+        match host.apply(stale) {
+            Err(Reject::StaleParent { current_gen }) => assert_eq!(current_gen, 0),
+            other => panic!("expected StaleParent, got {other:?}"),
+        }
+        assert_eq!(host.document().text, "x");
     }
 
     #[test]
