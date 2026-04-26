@@ -170,6 +170,32 @@ generate_bindings() {
     fi
     success "JavaScript bindings generated"
 
+    # Best-effort wasm-opt pass. Typical 15–30 % size win on a release
+    # wasm, which directly cuts download + streaming-compile time on
+    # the page. Skipped (with a hint) if wasm-opt isn't on PATH so the
+    # build still succeeds on machines that haven't installed
+    # `binaryen`.
+    local wasm_in="$bindgen_out_dir/${binary}_bg.wasm"
+    if [ -f "$wasm_in" ] && command -v wasm-opt &> /dev/null; then
+        info "Running wasm-opt -O2 (best-effort size + speed pass)…"
+        local before
+        before=$(stat -c '%s' "$wasm_in" 2>/dev/null || stat -f '%z' "$wasm_in")
+        # -O2 keeps compile time reasonable while still doing useful
+        # work; -Oz/-Os go further but are noticeably slower per build.
+        local tmp="$wasm_in.opt.tmp"
+        if wasm-opt -O2 --strip-debug -o "$tmp" "$wasm_in"; then
+            mv "$tmp" "$wasm_in"
+            local after
+            after=$(stat -c '%s' "$wasm_in" 2>/dev/null || stat -f '%z' "$wasm_in")
+            info "wasm-opt: $(awk "BEGIN{printf \"%.1f\", $before/1048576}") MB → $(awk "BEGIN{printf \"%.1f\", $after/1048576}") MB"
+        else
+            warn "wasm-opt failed; keeping original output"
+            rm -f "$tmp"
+        fi
+    elif [ -f "$wasm_in" ]; then
+        info "wasm-opt not installed — skipping size pass (install \`binaryen\` for ~20% smaller wasm)"
+    fi
+
     # Assemble the bundle: bindings + index.html in one place.
     # Use a fresh dist dir so stale files from a previous binary version
     # don't get served accidentally.

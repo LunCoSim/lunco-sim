@@ -8,7 +8,11 @@
         * { margin: 0; padding: 0; box-sizing: border-box; }
         html, body { width: 100%; height: 100%; overflow: hidden; }
         body { background: #1a1a1a; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-        #bevy { width: 100%; height: 100%; display: block; }
+        /* Match the workbench backdrop so the gap between wasm init
+           resolving and Bevy's first egui frame is invisible — no
+           gray-flash. Bevy's clear colour paints over this once the
+           render loop starts. */
+        #bevy { width: 100%; height: 100%; display: block; background: #1a1a1a; }
 
         /* Centred loader card. Covers ONLY the crucial pre-init steps:
            wasm download → wasm init. Hidden the moment `init()` resolves.
@@ -110,50 +114,108 @@
         window.addEventListener('resize', resize);
         resize();
 
-        // Manual fetch of the wasm so we can show real download progress
-        // (wasm-bindgen's default `init()` fetches internally with no
-        // hooks). The 104 MB binary is the longest pre-init step.
-        async function fetchWasmWithProgress(url) {
-            setPhase('Downloading runtime');
+        // Streaming wasm load: wraps the fetch's body in a
+        // TransformStream that counts bytes for the progress UI, then
+        // hands the (still-streaming) Response straight to wasm-bindgen's
+        // init(). The browser compiles wasm chunks via
+        // WebAssembly.compileStreaming as they arrive — overlapping
+        // download and compile, which routinely cuts pre-init time by
+        // 30–50 % on the 104 MB binary versus buffering first.
+        function fmtBytes(n) { return (n/1048576).toFixed(1) + ' MB'; }
+        function fmtRate(bps) {
+            if (bps <= 0) return '';
+            if (bps > 1048576) return (bps/1048576).toFixed(1) + ' MB/s';
+            if (bps > 1024) return (bps/1024).toFixed(0) + ' KB/s';
+            return bps.toFixed(0) + ' B/s';
+        }
+        function fmtEta(s) {
+            if (!isFinite(s) || s <= 0) return '';
+            if (s < 60) return `${Math.ceil(s)}s left`;
+            const m = Math.floor(s / 60);
+            const r = Math.ceil(s - m * 60);
+            return `${m}m ${r}s left`;
+        }
+
+        async function streamWasmResponse(url) {
+            setPhase('Loading runtime');
             setDetail('connecting…');
             setIndeterminate();
             const resp = await fetch(url);
             if (!resp.ok) throw new Error(`HTTP ${resp.status} ${resp.statusText}`);
             const totalHdr = resp.headers.get('Content-Length');
             const total = totalHdr ? parseInt(totalHdr, 10) : 0;
-            const reader = resp.body.getReader();
-            const chunks = [];
+
+            const start = performance.now();
+            let lastT = start;
+            let lastReceived = 0;
             let received = 0;
-            while (true) {
-                const { value, done } = await reader.read();
-                if (done) break;
-                chunks.push(value);
-                received += value.byteLength;
-                if (total > 0) {
-                    setProgress((received / total) * 100);
-                    setDetail(`${(received/1048576).toFixed(1)} / ${(total/1048576).toFixed(1)} MB`);
-                } else {
-                    setDetail(`${(received/1048576).toFixed(1)} MB`);
+            let speed = 0;          // EMA bytes/sec
+            const SMOOTH = 0.2;
+
+            const counter = new TransformStream({
+                transform(chunk, controller) {
+                    received += chunk.byteLength;
+                    const now = performance.now();
+                    const dt = (now - lastT) / 1000;
+                    if (dt > 0.05) {
+                        const inst = (received - lastReceived) / dt;
+                        speed = speed === 0 ? inst : speed * (1 - SMOOTH) + inst * SMOOTH;
+                        lastT = now;
+                        lastReceived = received;
+                    }
+                    if (total > 0) {
+                        setProgress((received / total) * 100);
+                        const eta = speed > 0 ? (total - received) / speed : 0;
+                        setDetail([
+                            `${fmtBytes(received)} / ${fmtBytes(total)}`,
+                            fmtRate(speed),
+                            fmtEta(eta),
+                        ].filter(Boolean).join(' · '));
+                    } else {
+                        setDetail([fmtBytes(received), fmtRate(speed)]
+                            .filter(Boolean).join(' · '));
+                    }
+                    controller.enqueue(chunk);
                 }
-            }
-            // Concatenate the chunks into one ArrayBuffer.
-            const buf = new Uint8Array(received);
-            let off = 0;
-            for (const c of chunks) { buf.set(c, off); off += c.byteLength; }
-            return buf.buffer;
+            });
+
+            // Re-wrap the streamed body into a fresh Response so
+            // `WebAssembly.compileStreaming` (called by wasm-bindgen
+            // when init() is given a Response) can validate the MIME
+            // type. Some servers don't send `Content-Type:
+            // application/wasm`; force it here so streaming compile
+            // doesn't fall back to buffered.
+            const headers = new Headers(resp.headers);
+            headers.set('Content-Type', 'application/wasm');
+            return new Response(resp.body.pipeThrough(counter), {
+                status: resp.status,
+                statusText: resp.statusText,
+                headers,
+            });
         }
 
-        try {
-            const wasmBuf = await fetchWasmWithProgress('./modelica_workbench_web_bg.wasm');
-            setPhase('Initializing');
-            setDetail('compiling wasm…');
-            setIndeterminate();
-            await init({ module_or_path: wasmBuf });
-            // Wasm is up and the workbench can render. Hide the centred
-            // loader immediately — anything further (MSL fetch / parse)
-            // is non-blocking and goes to the bottom status bar, which
-            // the wasm side drives directly via web-sys.
+        // Called by wasm once Bevy has painted its first egui frame.
+        // Hiding the centred loader earlier (e.g. on init() resolve)
+        // shows a dark canvas with no UI for the gap while plugins
+        // build + first frame is queued. The wasm side calls this
+        // once via web-sys.
+        window.__lc_app_ready = function () {
             root.classList.add('hidden');
+            resize();
+        };
+
+        try {
+            const wasmResp = await streamWasmResponse('./modelica_workbench_web_bg.wasm');
+            setPhase('Starting workbench');
+            setDetail('initialising…');
+            setIndeterminate();
+            // wasm-bindgen will pipe this Response into
+            // WebAssembly.instantiateStreaming, kicking off compile as
+            // chunks arrive. By the time the download finishes, most
+            // of the compile is already done.
+            await init({ module_or_path: wasmResp });
+            // Don't hide yet — the wasm side calls __lc_app_ready()
+            // after the first egui frame is painted.
             resize();
         } catch (e) {
             console.error(e);

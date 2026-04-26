@@ -53,8 +53,16 @@ pub fn run() {
     let default_filename = default_model.filename;
     let default_source = default_model.source;
 
-    App::new()
-        .insert_resource(Time::<Fixed>::from_hz(60.0))
+    let mut app = App::new();
+    app.insert_resource(Time::<Fixed>::from_hz(60.0));
+    // Match the index.html backdrop so the first wgpu clear paints
+    // the same dark colour the canvas already has — eliminates the
+    // gray flash between wasm init resolving and the first egui
+    // frame landing. Wasm-only because there's no host HTML page on
+    // native to colour-match against.
+    #[cfg(target_arch = "wasm32")]
+    app.insert_resource(ClearColor(Color::srgb_u8(0x1a, 0x1a, 0x1a)));
+    app
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "LunCo Modelica Workbench".into(),
@@ -85,6 +93,7 @@ pub fn run() {
             default_source: default_source.to_string(),
         })
         .add_systems(Startup, setup_web_workbench)
+        .add_systems(Update, hide_html_loader_once_painted)
         .run();
 }
 
@@ -169,3 +178,24 @@ fn setup_web_workbench(
     // the toolbar/keyboard Compile path finds them populated.
     let _ = (entity, model_name, source, channels);
 }
+
+/// Hide the centred HTML loader once Bevy has actually started ticking.
+/// We wait two Update frames so the first egui frame has been queued
+/// and (likely) painted — hiding earlier would leave the user staring
+/// at a dark canvas with no UI while plugins finish building. Runs
+/// only on `wasm32` because the loader element only exists there.
+#[cfg(target_arch = "wasm32")]
+fn hide_html_loader_once_painted(mut frame: bevy::prelude::Local<u32>) {
+    use wasm_bindgen::JsCast;
+    *frame += 1;
+    if *frame != 2 {
+        return;
+    }
+    let Some(win) = web_sys::window() else { return };
+    let Ok(fnval) = js_sys::Reflect::get(&win, &"__lc_app_ready".into()) else { return };
+    let Ok(func) = fnval.dyn_into::<js_sys::Function>() else { return };
+    let _ = func.call0(&win.into());
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn hide_html_loader_once_painted() {}
