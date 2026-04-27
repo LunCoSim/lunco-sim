@@ -32,19 +32,43 @@
 //! explicitly to force the reparse on the spot.
 
 use bevy::prelude::*;
-use bevy::tasks::{AsyncComputeTaskPool, Task};
-use futures_lite::future;
+use bevy::tasks::AsyncComputeTaskPool;
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use crate::document::AstCache;
 use crate::ui::state::ModelicaDocumentRegistry;
 
-/// Quiet window before a debounced reparse fires. 250 ms matches
-/// VS Code's default AST-refresh cadence and sits comfortably above
-/// the "I'm still typing" threshold for competent typists (~6–8
-/// keystrokes/s) while keeping the worst-case observed-AST lag short
-/// enough that lint + diagram updates feel live.
-pub const AST_DEBOUNCE_MS: u128 = 250;
+/// Shared slot the worker thread fills when its parse completes.
+/// `Arc<Mutex<Option<_>>>` mirrors the pattern used by
+/// `ui::image_loader` for the same reason: `mpsc::Receiver` is
+/// `Send`-only, but Bevy `Resource` needs `Sync`. The mutex is
+/// touched at most twice (worker writes once at parse completion,
+/// main thread reads via `try_lock` once per Update tick), so
+/// contention is negligible.
+type ParseSlot = Arc<Mutex<Option<AstCache>>>;
+
+/// Quiet window before a debounced reparse fires.
+///
+/// Was 250 ms (VS Code's default). Bumped to 2500 ms after profiling
+/// showed the rumoca parse takes ~2.5 s in debug builds for a 20 KB
+/// Modelica file, and even on a separate thread the parse causes
+/// noticeable CPU contention with bevy_render's pipelined extract
+/// (`Last` schedule blocks for ~parse-duration; verified in
+/// telemetry: every multi-second slow frame correlates 1:1 with an
+/// in-flight parse). With a long debounce, user gestures (drag,
+/// rapid Add) don't keep re-arming the reparse — the parse only
+/// fires after the user is idle for 2.5 s, by which point the
+/// renderer has plenty of headroom.
+///
+/// Trade-off: panels that read the AST (inspector, lint) lag by up
+/// to 2.5 s after the last edit. Acceptable because:
+///   - Optimistic synth places nodes on canvas immediately
+///   - Compile / Format / API path force-refresh via
+///     `refresh_ast_now` regardless of debounce
+///   - Inspector's "new component just added" view fills in once
+///     the user pauses
+pub const AST_DEBOUNCE_MS: u128 = 2500;
 
 /// Tracks in-flight off-thread AST parses, keyed by document id.
 ///
@@ -62,24 +86,46 @@ pub const AST_DEBOUNCE_MS: u128 = 250;
 /// lets the existing parse finish — `install_ast` discards the
 /// result if the doc's generation has moved on, and the next
 /// debounce tick will spawn a fresh parse against the latest source.
+/// Per-doc receiver for the most recent in-flight parse on a
+/// dedicated OS thread. Bevy's `AsyncComputeTaskPool` shares its
+/// thread budget with bevy_render's pipelined extract on small-core
+/// machines — a multi-second rumoca parse there starves the
+/// renderer and the entire `Last` schedule blocks until the parse
+/// completes (verified in telemetry: `[FrameTimeProbe] total=3599ms
+/// last=3596`). Using `std::thread::spawn` guarantees an OS thread
+/// the kernel scheduler can keep separate from bevy's render thread.
 #[derive(Resource, Default)]
 pub struct PendingAstParses {
-    by_doc: HashMap<lunco_doc::DocumentId, Task<AstCache>>,
+    by_doc: HashMap<lunco_doc::DocumentId, ParseSlot>,
 }
 
 /// Per-Update driver. Drains completed parse tasks first (so a fresh
 /// AST is visible this frame), then spawns parses for any docs whose
 /// edit burst has cooled off and aren't already being parsed.
+///
+/// **Idle gate**: spawn is suppressed while
+/// [`crate::ui::input_activity::InputActivity::is_active`] returns
+/// true. The user's mouse moves, drags, clicks, and edits all reset
+/// the activity timer. Parses only fire after 500 ms of true idle —
+/// breaks the "every Add freezes UI for 1.5 s" feedback loop where
+/// rumoca on a background thread still correlated 1:1 with bevy's
+/// `Last`-schedule render stall.
 pub fn refresh_stale_asts(
     mut registry: ResMut<ModelicaDocumentRegistry>,
     mut pending: ResMut<PendingAstParses>,
+    activity: Res<crate::ui::input_activity::InputActivity>,
 ) {
     // ── Drain completed parses ───────────────────────────────────
+    // Non-blocking `try_lock` per slot; the worker thread fills the
+    // slot when its parse finishes. We never block the Update tick
+    // on the parse — if a slot is contended (worker mid-write) we
+    // skip and check again next tick.
     let ready: Vec<(lunco_doc::DocumentId, AstCache)> = pending
         .by_doc
-        .iter_mut()
-        .filter_map(|(id, task)| {
-            future::block_on(future::poll_once(task)).map(|ast| (*id, ast))
+        .iter()
+        .filter_map(|(id, slot)| {
+            let mut guard = slot.try_lock().ok()?;
+            guard.take().map(|ast| (*id, ast))
         })
         .collect();
     for (id, ast) in ready {
@@ -87,6 +133,15 @@ pub fn refresh_stale_asts(
             host.document_mut().install_ast(ast);
         }
         pending.by_doc.remove(&id);
+    }
+
+    // ── Idle gate ────────────────────────────────────────────────
+    // Defer all parse spawns until the user has been idle for at
+    // least `IDLE_THRESHOLD_MS`. Drains above always run because a
+    // task that's already complete is free to install — it's just
+    // the *spawning* that we want to keep off the user's path.
+    if activity.is_active() {
+        return;
     }
 
     // ── Spawn parses for newly-stale docs ────────────────────────
@@ -111,11 +166,32 @@ pub fn refresh_stale_asts(
             })
         })
         .collect();
+    // DIAGNOSTIC: temporarily skip ALL background parses to confirm
+    // whether the parse itself is what blocks the `Last` schedule.
+    // Set `LUNCO_DISABLE_BG_PARSE=1` to suppress.
+    if std::env::var_os("LUNCO_DISABLE_BG_PARSE").is_some() {
+        if !to_spawn.is_empty() {
+            bevy::log::info!(
+                "[ast_refresh] DIAGNOSTIC: would spawn {} parses, skipped",
+                to_spawn.len()
+            );
+        }
+        return;
+    }
     if !to_spawn.is_empty() {
         let pool = AsyncComputeTaskPool::get();
         for (id, source, gen) in to_spawn {
             let bytes = source.len();
-            let task = pool.spawn(async move {
+            let slot: ParseSlot = Arc::new(Mutex::new(None));
+            let slot_for_worker = slot.clone();
+            // `spawn().detach()` releases the `Task<T>` handle so we
+            // never have to poll-or-drop it on the main thread; the
+            // task runs to completion on the pool, fills the shared
+            // slot, and the next Update tick observes it via
+            // `try_lock`. Using Bevy's `AsyncComputeTaskPool` keeps
+            // the parse on the platform's chosen thread budget
+            // (cross-platform incl. wasm32 cooperative scheduling).
+            pool.spawn(async move {
                 let t = web_time::Instant::now();
                 let ast = AstCache::from_source(&source, gen);
                 let elapsed_ms = t.elapsed().as_secs_f64() * 1000.0;
@@ -124,9 +200,12 @@ pub fn refresh_stale_asts(
                         "[ast_refresh] off-thread parse: {bytes} bytes in {elapsed_ms:.1}ms (gen={gen})"
                     );
                 }
-                ast
-            });
-            pending.by_doc.insert(id, task);
+                if let Ok(mut guard) = slot_for_worker.lock() {
+                    *guard = Some(ast);
+                }
+            })
+            .detach();
+            pending.by_doc.insert(id, slot);
         }
     }
 }

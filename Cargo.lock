@@ -6367,6 +6367,7 @@ dependencies = [
  "lunco-viz",
  "lunco-workbench",
  "lunco-workspace",
+ "rayon",
  "regex",
  "rfd",
  "rumoca-phase-parse",

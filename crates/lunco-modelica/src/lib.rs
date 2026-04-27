@@ -427,11 +427,107 @@ fn build_modelica_core(app: &mut App) {
             spawn_modelica_requests.in_set(ModelicaSet::SpawnRequests),
         ));
 
+    // Global frame-time tracker. Logs every Update tick that exceeds
+    // a threshold AND every tick within a 5-second window after the
+    // last Modelica edit. The canvas-render-internal SLOW frame
+    // instrumentation only caught time spent inside one panel; this
+    // catches main-thread blocking in ANY system on the Bevy schedule
+    // (other panels, observers, drive_*_cache, etc.).
+    app.init_resource::<FrameTimeProbe>();
+    app.add_systems(bevy::prelude::First, frame_time_probe_start);
+    app.add_systems(bevy::prelude::PreUpdate, frame_time_probe_pre_update_end);
+    app.add_systems(bevy::prelude::Update, frame_time_probe_update_end);
+    app.add_systems(bevy::prelude::PostUpdate, frame_time_probe_post_update_end);
+    app.add_systems(bevy::prelude::Last, frame_time_probe_end);
+
     #[cfg(target_arch = "wasm32")]
     {
         app.add_systems(Update, inline_worker_process);
         app.add_systems(Update, ui::update_file_load_result);
     }
+}
+
+/// Global frame-time probe — start of frame.
+fn frame_time_probe_start(mut probe: ResMut<FrameTimeProbe>) {
+    let now = web_time::Instant::now();
+    probe.frame_start = Some(now);
+    probe.pre_update_start = Some(now);
+}
+
+fn frame_time_probe_pre_update_end(mut probe: ResMut<FrameTimeProbe>) {
+    let now = web_time::Instant::now();
+    probe.pre_update_ms = probe
+        .pre_update_start
+        .map(|t| now.duration_since(t).as_secs_f64() * 1000.0)
+        .unwrap_or(0.0);
+    probe.update_start = Some(now);
+}
+
+fn frame_time_probe_update_end(mut probe: ResMut<FrameTimeProbe>) {
+    let now = web_time::Instant::now();
+    probe.update_ms = probe
+        .update_start
+        .map(|t| now.duration_since(t).as_secs_f64() * 1000.0)
+        .unwrap_or(0.0);
+    probe.post_update_start = Some(now);
+}
+
+fn frame_time_probe_post_update_end(mut probe: ResMut<FrameTimeProbe>) {
+    let now = web_time::Instant::now();
+    probe.post_update_ms = probe
+        .post_update_start
+        .map(|t| now.duration_since(t).as_secs_f64() * 1000.0)
+        .unwrap_or(0.0);
+    probe.last_start = Some(now);
+}
+
+/// Global frame-time probe — end of frame. Logs the total Bevy
+/// schedule time and (if applicable) flags whether we're inside the
+/// post-edit window so per-edit hitches anywhere in the app surface.
+fn frame_time_probe_end(mut probe: ResMut<FrameTimeProbe>) {
+    let now = web_time::Instant::now();
+    let last_ms = probe
+        .last_start
+        .map(|t| now.duration_since(t).as_secs_f64() * 1000.0)
+        .unwrap_or(0.0);
+    let Some(start) = probe.frame_start else { return };
+    let dt_ms = now.duration_since(start).as_secs_f64() * 1000.0;
+    let in_window = probe
+        .last_edit
+        .map(|t| t.elapsed().as_secs_f64() < 5.0)
+        .unwrap_or(false);
+    if dt_ms > 30.0 || in_window {
+        bevy::log::info!(
+            "[FrameTimeProbe] total={dt_ms:.0}ms pre={:.0} update={:.0} post={:.0} last={last_ms:.0}{}",
+            probe.pre_update_ms,
+            probe.update_ms,
+            probe.post_update_ms,
+            if in_window { " (post-edit window)" } else { "" }
+        );
+    }
+    probe.frame_start = None;
+}
+
+/// Stamp the `last_edit` timestamp from anywhere that mutates a
+/// document. The `apply_ops` site in `canvas_diagram` calls this so
+/// the post-edit window covers any frame after a user edit.
+pub fn frame_time_probe_stamp_edit(world: &mut World) {
+    if let Some(mut probe) = world.get_resource_mut::<FrameTimeProbe>() {
+        probe.last_edit = Some(web_time::Instant::now());
+    }
+}
+
+#[derive(Resource, Default)]
+pub struct FrameTimeProbe {
+    frame_start: Option<web_time::Instant>,
+    pre_update_start: Option<web_time::Instant>,
+    update_start: Option<web_time::Instant>,
+    post_update_start: Option<web_time::Instant>,
+    last_start: Option<web_time::Instant>,
+    pre_update_ms: f64,
+    update_ms: f64,
+    post_update_ms: f64,
+    last_edit: Option<web_time::Instant>,
 }
 
 /// Channels for communicating with the background simulation worker.
@@ -1459,8 +1555,20 @@ fn spawn_modelica_requests(
 ) {
     let dt = time.delta_secs_f64();
 
+    let total_models = q_models.iter().count();
+    let mut sent = 0u32;
+    let mut blocked_stepping = 0u32;
+    let mut blocked_paused = 0u32;
+    let t0 = web_time::Instant::now();
     for (entity, mut model) in q_models.iter_mut() {
-        if model.is_stepping || model.paused { continue; }
+        if model.is_stepping {
+            blocked_stepping += 1;
+            continue;
+        }
+        if model.paused {
+            blocked_paused += 1;
+            continue;
+        }
 
         // First-step path: model has been unpaused (user pressed Run)
         // but no Compile has succeeded yet — the worker has no stepper
@@ -1499,6 +1607,17 @@ fn spawn_modelica_requests(
             inputs,
             dt,
         });
+        sent += 1;
+    }
+    // Telemetry: when sim time appears to "stop" the cause is almost
+    // always that every model has `is_stepping=true` and Step results
+    // never came back to clear it. Logging the per-tick reason makes
+    // a stalled sim debuggable from the runtime log.
+    if total_models > 0 && sent == 0 && blocked_stepping > 0 {
+        bevy::log::warn!(
+            "[spawn_modelica_requests] no Step dispatched: {blocked_stepping} blocked on is_stepping (worker hung?), {blocked_paused} paused, took {:.2}ms",
+            t0.elapsed().as_secs_f64() * 1000.0,
+        );
     }
 }
 

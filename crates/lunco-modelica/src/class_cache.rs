@@ -122,8 +122,13 @@ impl ResourceLoader for ModelicaFileLoader {
             // through the artifact cache. We call it with a single
             // path; the rayon parallelism is overhead-free for a
             // 1-element input.
-            let parse_result =
-                rumoca_session::parsing::parse_files_parallel(&[path.clone()]);
+            // DIAGNOSTIC: same gate as `AstCache::from_source`, so a
+            // single env var disables ALL rumoca calls system-wide.
+            let parse_result = if std::env::var_os("LUNCO_NO_PARSE").is_some() {
+                Err(anyhow::anyhow!("LUNCO_NO_PARSE diagnostic — parse skipped"))
+            } else {
+                rumoca_session::parsing::parse_files_parallel(&[path.clone()])
+            };
             let ast = match parse_result {
                 Ok(mut pairs) if !pairs.is_empty() => {
                     let (_, stored) = pairs.remove(0);
@@ -812,6 +817,9 @@ fn parse_msl_file_cached(
     // file inside a worker thread, presumably due to parol's
     // recovery loop or shared-state contention.
     let parsed = (|| {
+        if std::env::var_os("LUNCO_NO_PARSE").is_some() {
+            return None;
+        }
         let pairs = rumoca_session::parsing::parse_files_parallel(&[path.to_path_buf()])
             .ok()?;
         let (_, stored) = pairs.into_iter().next()?;

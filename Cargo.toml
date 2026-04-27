@@ -98,3 +98,11 @@ lunco-theme = { path = "crates/lunco-theme" }
 egui_colors = "0.4.0"
 catppuccin-egui = "5.2.0"
 egui-phosphor = "0.7.1"
+
+# Profile for samply / perf — release codegen with line-table debug info so
+# stacks symbolicate to function names. Strip is off; otherwise identical to
+# release. Build with `cargo run --profile profiling --bin ...`.
+[profile.profiling]
+inherits = "release"
+debug = "line-tables-only"
+strip = "none"

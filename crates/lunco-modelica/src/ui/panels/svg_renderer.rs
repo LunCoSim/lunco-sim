@@ -31,6 +31,16 @@ fn svg_options() -> &'static Options<'static> {
     })
 }
 
+type ParsedTreeCache = std::sync::Mutex<
+    std::collections::HashMap<(usize, usize), Option<std::sync::Arc<Tree>>>,
+>;
+
+fn parsed_tree_cache() -> &'static ParsedTreeCache {
+    use std::sync::OnceLock;
+    static CACHE: OnceLock<ParsedTreeCache> = OnceLock::new();
+    CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
 /// Parsed-SVG cache keyed by the input bytes pointer (plus length as
 /// a collision guard). Callers load SVG bytes through an `Arc<Vec<u8>>`
 /// cache elsewhere, so the pointer is stable across frames for the
@@ -42,10 +52,7 @@ fn svg_options() -> &'static Options<'static> {
 /// Entries live forever: the icon set is fixed at build time, and
 /// the parsed trees are tens of KB each at most.
 fn parsed_tree(svg_data: &[u8]) -> Option<std::sync::Arc<Tree>> {
-    use std::sync::{Mutex, OnceLock};
-    static CACHE: OnceLock<Mutex<std::collections::HashMap<(usize, usize), Option<std::sync::Arc<Tree>>>>> =
-        OnceLock::new();
-    let cache = CACHE.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
+    let cache = parsed_tree_cache();
     let key = (svg_data.as_ptr() as usize, svg_data.len());
     if let Ok(map) = cache.lock() {
         if let Some(cached) = map.get(&key) {
@@ -59,6 +66,24 @@ fn parsed_tree(svg_data: &[u8]) -> Option<std::sync::Arc<Tree>> {
         map.insert(key, parsed.clone());
     }
     parsed
+}
+
+/// Pre-parse an SVG byte buffer into the [`parsed_tree`] cache so
+/// the first canvas paint that needs it doesn't pay usvg's
+/// XML+path parse cost (50-300ms per Modelica icon — measured
+/// 567ms summed across an Add of one Resistor that pulled three
+/// fresh icons in the same frame). Idempotent — re-calling with
+/// the same Arc backing is a hashmap-hit no-op.
+///
+/// The cache key is `(bytes.as_ptr(), bytes.len())`. Callers must
+/// pre-warm by calling this with the **same** `Arc<Vec<u8>>` the
+/// canvas's `svg_bytes_for` returns at render time, otherwise the
+/// pointers won't match and the cache won't hit. The `prewarm_svg_bytes`
+/// path in `canvas_diagram.rs` populates that exact cache; this
+/// function uses the same `Arc` it stored.
+pub fn prewarm_parse(svg_bytes: &std::sync::Arc<Vec<u8>>) {
+    let bytes: &[u8] = svg_bytes.as_ref();
+    parsed_tree(bytes); // populate cache; throw the result away
 }
 
 /// Translates a usvg::Tree into a list of egui::Shape primitives, scaled to fit in `rect`.

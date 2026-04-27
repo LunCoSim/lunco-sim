@@ -100,6 +100,60 @@ impl ModelicaImageLoader {
         }
     }
 
+    /// Eagerly populate the cache with the bytes for every URI in
+    /// `uris`. Spawned on `IoTaskPool` so it runs entirely in the
+    /// background — no UI work, no main-thread blocking.
+    ///
+    /// Pre-warming the icon cache eliminates the visible "node has
+    /// no icon for ~2 seconds after Add" gap that the optimistic
+    /// synth path exhibits when a fresh MSL component first appears
+    /// on the canvas. With the bytes already in `Slot::Ready`, the
+    /// next paint just reads them — no async file load, no decode
+    /// hitch, no perceived freeze.
+    pub fn prewarm_uris(self: Arc<Self>, uris: Vec<String>) {
+        bevy::tasks::IoTaskPool::get()
+            .spawn(async move {
+                let t0 = web_time::Instant::now();
+                let mut loaded = 0usize;
+                let mut failed = 0usize;
+                let mut total_bytes = 0usize;
+                for uri in uris.iter() {
+                    // Skip if already cached (don't re-read).
+                    if self.cache.lock().ok()
+                        .and_then(|m| m.get(uri).map(|_| ()))
+                        .is_some()
+                    {
+                        continue;
+                    }
+                    let Some(path) = Self::resolve_uri(uri) else {
+                        continue;
+                    };
+                    match std::fs::read(&path) {
+                        Ok(bytes) => {
+                            let arc: Arc<[u8]> = Arc::from(bytes);
+                            total_bytes += arc.len();
+                            loaded += 1;
+                            if let Ok(mut cache) = self.cache.lock() {
+                                cache.insert(
+                                    uri.clone(),
+                                    Slot::Ready(arc),
+                                );
+                            }
+                        }
+                        Err(_) => {
+                            failed += 1;
+                        }
+                    }
+                }
+                bevy::log::info!(
+                    "[ModelicaImageLoader] prewarm: {loaded} loaded ({} KB), {failed} failed, in {:.1}s",
+                    total_bytes / 1024,
+                    t0.elapsed().as_secs_f64(),
+                );
+            })
+            .detach();
+    }
+
     /// Resolve `modelica://Modelica/Resources/…` → filesystem path.
     /// Returns `None` for URIs in unknown packages or paths that
     /// escape the MSL root (defence-in-depth against a malformed

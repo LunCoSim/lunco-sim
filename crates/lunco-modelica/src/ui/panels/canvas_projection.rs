@@ -870,10 +870,19 @@ fn register_local_class(
             {
                 return Some(Arc::new(c.clone()));
             }
-            // Cross-file: synchronously resolve via the MSL class
-            // cache. Memoised — only the first call per qualified
-            // name does I/O.
-            crate::class_cache::peek_or_load_msl_class(name)
+            // Cross-file: peek the MSL class cache *without* loading
+            // on miss. Using the blocking `peek_or_load_msl_class`
+            // here cascaded into 40-second projections when the user
+            // duplicated a model with many extends-chains — each
+            // unresolved base did a sync rumoca parse inside the
+            // projection task (see telemetry: `[Projection] import
+            // done in 39879ms: 4 nodes 5 edges`). The non-blocking
+            // path returns None for cold-cache classes; the icon
+            // resolver falls back to defaults (rectangle + label),
+            // and the next prewarm-driven re-projection picks up the
+            // inherited graphics once `prewarm_extends_chain` has
+            // populated the cache off-thread.
+            crate::class_cache::peek_msl_class_cached(name)
         };
     let mut visited = std::collections::HashSet::new();
     // Build the qualified name from the document's `within` so

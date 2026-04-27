@@ -5,6 +5,32 @@ use bevy_egui::EguiPlugin;
 use lunco_modelica::ModelicaPlugin;
 
 fn main() {
+    // ROOT-CAUSE FIX for "every Add/Move freezes UI ~1.5s" — rumoca's
+    // `parse_files_parallel` (called from FileCache load + MSL extends
+    // prewarm) initializes rayon's *global* pool with `num_cpus - 1`
+    // threads (see `rumoca-session/src/parse.rs::init_rayon_pool`).
+    // Each parse then saturates every CPU core except one, leaving
+    // bevy_render's pipelined extract fighting for that single core
+    // → main app's `Last` schedule blocks waiting for the previous
+    // frame's render → the user sees a 1.4-2.5 s freeze on every
+    // edit. Pre-empt rayon's init by configuring the global pool to
+    // 2 threads BEFORE any rumoca call. Single-file MSL parses don't
+    // benefit from massive parallelism (rayon overhead > work for one
+    // 2 KB file), and bevy keeps every other core for rendering /
+    // simulation / async tasks. `build_global` errors silently if
+    // rayon's pool is somehow already initialised — harmless.
+    let rayon_init = rayon::ThreadPoolBuilder::new()
+        .num_threads(2)
+        .build_global();
+    match rayon_init {
+        Ok(()) => eprintln!(
+            "[modelica_workbench] rayon global pool capped at 2 threads"
+        ),
+        Err(e) => eprintln!(
+            "[modelica_workbench] WARN: rayon already initialised, our cap LOST: {e}"
+        ),
+    }
+
     let mut app = App::new();
     app.add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {

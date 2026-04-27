@@ -58,6 +58,15 @@ htmd = "0.5"
 # updates after every Step. Plots read via `load()` — no mutex, no
 # per-sample work on the main thread. See `sim_stream.rs`.
 arc-swap = "1"
+# Direct rayon dependency so `modelica_workbench` can configure the
+# global rayon pool BEFORE rumoca's `parse_files_parallel` initialises
+# it with `num_cpus - 1` threads. With rumoca's default, every
+# parse-on-Add saturates all-but-one core for ~1.5 s and starves
+# bevy_render — the `Last` schedule blocks waiting for the previous
+# frame's render. Capping rayon at 2 threads keeps cores free for
+# rendering without losing meaningful parse speed (rumoca's parallel
+# benefit is for batch parses, not the per-Add single-file path).
+rayon = "1"
 # Wasm-safe replacement for `std::time::Instant`. On native it's an alias
 # for `std::time::Instant`; on wasm32 it's backed by `performance.now()`.
 # Required because `std::time::Instant::now()` panics with

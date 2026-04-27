@@ -159,6 +159,16 @@ pub struct AstCache {
 impl AstCache {
     /// Parse `source` into a fresh cache at the given generation.
     pub fn from_source(source: &str, generation: u64) -> Self {
+        // DIAGNOSTIC: when `LUNCO_NO_PARSE=1`, return an Err result
+        // instantly without invoking rumoca. Lets us prove whether
+        // the parse function itself is what blocks the renderer
+        // (independent of which thread it runs on).
+        if std::env::var_os("LUNCO_NO_PARSE").is_some() {
+            return Self {
+                generation,
+                result: Err("LUNCO_NO_PARSE diagnostic — parse skipped".into()),
+            };
+        }
         let result = match parse_to_ast(source, "model.mo") {
             Ok(ast) => Ok(Arc::new(ast)),
             Err(e) => Err(e.to_string()),

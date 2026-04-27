@@ -74,6 +74,7 @@ pub mod uri_handler;
 pub mod welcome_progress;
 /// Debounced AST reparse driver — see module docs.
 pub mod ast_refresh;
+pub mod input_activity;
 
 /// Modelica section of the Twin Browser — class-tree contributed by
 /// this crate to `lunco-workbench`'s `BrowserSectionRegistry`.
@@ -384,6 +385,8 @@ impl Plugin for ModelicaUiPlugin {
             // Keeps text-edit latency constant regardless of how busy
             // the sim worker is.
             .init_resource::<ast_refresh::PendingAstParses>()
+            .init_resource::<input_activity::InputActivity>()
+            .add_systems(bevy::prelude::PreUpdate, input_activity::stamp_user_input)
             .add_systems(Update, ast_refresh::refresh_stale_asts)
             .add_systems(Startup, register_settings_menu)
             // Image-loader install is a first-frame one-shot — runs
@@ -603,12 +606,33 @@ fn install_image_loaders_once(
     egui_extras::install_image_loaders(ctx);
     // Custom loader for `modelica://Package/Resources/…` URIs used
     // throughout MSL Documentation blocks.
-    ctx.add_bytes_loader(std::sync::Arc::new(
-        image_loader::ModelicaImageLoader::new(),
-    ));
+    let loader = std::sync::Arc::new(image_loader::ModelicaImageLoader::new());
+    ctx.add_bytes_loader(loader.clone());
     bevy::log::info!(
         "[ModelicaImageLoader] installed egui_extras loaders + modelica:// loader"
     );
+
+    // Pre-warm the canvas's SVG-bytes cache for every MSL component
+    // the right-click Add menu can spawn. The optimistic-synth path
+    // drops a node into the scene immediately on Add; the canvas's
+    // node visual then calls `svg_bytes_for(icon_asset)` which does
+    // a synchronous `std::fs::read` on the render thread for any
+    // cold-cache icon (5-50ms each, multiplied across icons painted
+    // for the first time). Pre-warming reads every MSL palette icon
+    // off the main thread before the user ever Adds — by the time
+    // they do, the cache hit is constant-time and the icon paints in
+    // the same frame as the optimistic synth.
+    let asset_paths: Vec<String> = crate::visual_diagram::msl_component_library()
+        .iter()
+        .filter_map(|comp| comp.icon_asset.clone())
+        .filter(|s| !s.is_empty())
+        .collect();
+    bevy::log::info!(
+        "[svg_bytes] queueing prewarm for {} canvas-icon assets",
+        asset_paths.len()
+    );
+    crate::ui::panels::canvas_diagram::prewarm_svg_bytes(asset_paths);
+
     commands.insert_resource(ImageLoadersInstalled);
 }
 

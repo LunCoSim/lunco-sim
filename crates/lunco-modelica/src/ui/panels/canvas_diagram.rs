@@ -62,11 +62,17 @@ pub const CANVAS_DIAGRAM_PANEL_ID: PanelId = PanelId("modelica_canvas_diagram");
 /// path. Loaded lazily on first request for a path; later requests
 /// return the shared buffer. Entries live forever — icon asset
 /// files don't change at runtime, and the total size is small.
-fn svg_bytes_for(asset_path: &str) -> Option<std::sync::Arc<Vec<u8>>> {
+fn svg_bytes_cache() -> &'static std::sync::Mutex<
+    std::collections::HashMap<String, Option<std::sync::Arc<Vec<u8>>>>,
+> {
     use std::sync::{Mutex, OnceLock};
     static CACHE: OnceLock<Mutex<std::collections::HashMap<String, Option<std::sync::Arc<Vec<u8>>>>>> =
         OnceLock::new();
-    let cache = CACHE.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
+    CACHE.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+}
+
+fn svg_bytes_for(asset_path: &str) -> Option<std::sync::Arc<Vec<u8>>> {
+    let cache = svg_bytes_cache();
     let mut map = cache.lock().expect("svg cache poisoned");
     if let Some(cached) = map.get(asset_path) {
         return cached.clone();
@@ -74,10 +80,77 @@ fn svg_bytes_for(asset_path: &str) -> Option<std::sync::Arc<Vec<u8>>> {
     // SVG assets ship inside the MSL cache dir (see snarl panel's
     // `draw_symbol_v2` for the reference resolution). Icon paths
     // come from `msl_index.json` and are relative to that dir.
+    //
+    // This is the on-demand fallback: a sync `std::fs::read` on the
+    // main render thread. Cold-cache icons cost 5-50ms each here,
+    // which adds up on first paint of an MSL component the user
+    // just optimistically synthesised. The pre-warm path below
+    // populates this same cache off-thread at app startup so the
+    // sync read never fires for MSL palette icons.
     let full = lunco_assets::msl_dir().join(asset_path);
     let loaded = std::fs::read(&full).ok().map(std::sync::Arc::new);
     map.insert(asset_path.to_string(), loaded.clone());
     loaded
+}
+
+/// Pre-populate the SVG-bytes cache off-thread for every supplied
+/// asset path. Called once at app startup with the full MSL palette
+/// so the canvas's render-time `svg_bytes_for` lookup hits the cache
+/// instead of doing a sync `std::fs::read` for each new icon.
+///
+/// Spawned on `IoTaskPool` so the read storm runs on the I/O pool
+/// rather than the compute pool — file reads are I/O-bound and
+/// shouldn't compete with the off-thread AST parse for compute
+/// threads.
+pub fn prewarm_svg_bytes(asset_paths: Vec<String>) {
+    bevy::tasks::IoTaskPool::get()
+        .spawn(async move {
+            let t0 = web_time::Instant::now();
+            let mut loaded = 0usize;
+            let mut failed = 0usize;
+            let mut total_bytes = 0usize;
+            let cache = svg_bytes_cache();
+            for asset in asset_paths.iter() {
+                // Skip anything already cached (don't re-read on
+                // subsequent prewarm calls).
+                if cache.lock().ok()
+                    .and_then(|m| m.get(asset).map(|_| ()))
+                    .is_some()
+                {
+                    continue;
+                }
+                let full = lunco_assets::msl_dir().join(asset);
+                match std::fs::read(&full) {
+                    Ok(bytes) => {
+                        total_bytes += bytes.len();
+                        loaded += 1;
+                        let arc = std::sync::Arc::new(bytes);
+                        if let Ok(mut map) = cache.lock() {
+                            map.insert(asset.clone(), Some(arc.clone()));
+                        }
+                        // Pre-parse the usvg Tree so the first paint
+                        // doesn't pay the XML+path parse cost.
+                        // Without this, even with bytes cached, the
+                        // first canvas frame after Add still hit
+                        // 50-500ms decoding new icons. Same Arc data
+                        // pointer → cache hit at render time.
+                        super::svg_renderer::prewarm_parse(&arc);
+                    }
+                    Err(_) => {
+                        failed += 1;
+                        if let Ok(mut map) = cache.lock() {
+                            map.insert(asset.clone(), None);
+                        }
+                    }
+                }
+            }
+            bevy::log::info!(
+                "[svg_bytes] prewarm: {loaded} loaded ({} KB) + parsed, {failed} failed, in {:.1}s",
+                total_bytes / 1024,
+                t0.elapsed().as_secs_f64(),
+            );
+        })
+        .detach();
 }
 
 /// Theme-derived colour snapshot consumed by every layer inside the
@@ -3105,6 +3178,37 @@ impl Panel for CanvasDiagramPanel {
                         )
                     })
                 });
+            // Drop the projection result if the doc has moved on
+            // while it was running. Projection tasks can take tens
+            // of seconds when MSL `extends`-chain resolution misses
+            // the cache (each miss does a sync rumoca parse inside
+            // the task — see `peek_or_load_msl_class`). During that
+            // window the user may have added several components via
+            // the optimistic-synth path; swapping in the stale
+            // projected scene wipes those nodes. We KEEP the
+            // optimistic scene as-is; the next projection (gated by
+            // `prewarm_advanced` / `gen_advanced` on a fresher
+            // source) will reconcile.
+            let done_task = done_task.and_then(|(gen, target, source_hash, prewarm_gen_at_spawn, scene)| {
+                if gen < docstate.canvas_acked_gen {
+                    bevy::log::info!(
+                        "[CanvasDiagram] discarding stale projection: \
+                         project_gen={gen} canvas_acked_gen={} \
+                         ({} nodes, {} edges)",
+                        docstate.canvas_acked_gen,
+                        scene.node_count(),
+                        scene.edge_count(),
+                    );
+                    // Record the prewarm gen we observed at spawn so
+                    // the project_now check doesn't keep re-spawning
+                    // for the same prewarm bump.
+                    docstate.last_seen_prewarm_gen = prewarm_gen_at_spawn;
+                    docstate.projection_task = None;
+                    None
+                } else {
+                    Some((gen, target, source_hash, prewarm_gen_at_spawn, scene))
+                }
+            });
             if let Some((gen, target, source_hash, prewarm_gen_at_spawn, scene)) = done_task {
                 docstate.projection_task = None;
                 bevy::log::info!(
@@ -3239,21 +3343,62 @@ impl Panel for CanvasDiagramPanel {
         self.render_canvas(ui, world);
         let render_canvas_ms = t_render_canvas.elapsed().as_secs_f64() * 1000.0;
         let total_ms = _frame_t0.elapsed().as_secs_f64() * 1000.0;
-        if total_ms > 30.0 {
+        // Post-Add window tracker: every frame after a recent
+        // apply_ops gets logged regardless of how fast it was, so we
+        // see exactly what the user is feeling. Hooked off the
+        // global wall-clock timestamp stamped by `apply_ops` (see
+        // `LAST_APPLY_AT`); 2-second window after the last apply.
+        let mut force_log = false;
+        if let Ok(guard) = LAST_APPLY_AT.lock() {
+            if let Some(t) = *guard {
+                if t.elapsed().as_secs_f64() < 2.0 {
+                    force_log = true;
+                }
+            }
+        }
+        // 8ms threshold — half a 60 Hz frame; anything beyond this
+        // is enough to cause a visible animation hiccup on a
+        // 120 Hz monitor.
+        if total_ms > 8.0 || force_log {
             bevy::log::info!(
-                "[CanvasDiagram] SLOW frame: total={total_ms:.1}ms render_canvas={render_canvas_ms:.1}ms"
+                "[CanvasDiagram] frame: total={total_ms:.1}ms render_canvas={render_canvas_ms:.1}ms{}",
+                if force_log { " (post-apply window)" } else { "" }
             );
         }
     }
 }
 
+/// Wall-clock timestamp of the most recent `apply_ops` call. Used
+/// by the post-Add window tracker in the panel render to log every
+/// frame for ~2 seconds after each Add — captures sub-threshold
+/// hitches that don't trip the SLOW frame log on their own but add
+/// up to a perceived "freeze" when the user does something.
+static LAST_APPLY_AT: std::sync::Mutex<Option<web_time::Instant>> =
+    std::sync::Mutex::new(None);
+
 impl CanvasDiagramPanel {
     fn render_canvas(&self, ui: &mut egui::Ui, world: &mut World) {
+        // Per-phase timing harness — gated on `RENDER_CANVAS_TRACE`
+        // env var so the SLOW-frame log can pinpoint the heavy phase
+        // without flooding normal runs. Set the var to anything
+        // non-empty (`RENDER_CANVAS_TRACE=1`) to enable.
+        let trace_phases = std::env::var_os("RENDER_CANVAS_TRACE").is_some();
+        let mut phase_t = web_time::Instant::now();
+        let mut phase_log: Vec<(&'static str, f64)> = Vec::new();
+        let mut mark = |label: &'static str, t: &mut web_time::Instant, log: &mut Vec<(&'static str, f64)>| {
+            let ms = t.elapsed().as_secs_f64() * 1000.0;
+            if ms > 1.0 {
+                log.push((label, ms));
+            }
+            *t = web_time::Instant::now();
+        };
+
         // Resolve editing class + doc id up front. These drive op
         // emission; without them (no doc bound, or unparseable
         // source) the canvas stays read-only — events still fire
         // but translate to nothing, matching "no-op on empty doc".
         let (doc_id, editing_class) = resolve_doc_context(world);
+        mark("resolve_doc_context", &mut phase_t, &mut phase_log);
 
         // Active doc — the tab whose canvas should respond to
         // input this frame. All state accesses below route through
@@ -3432,6 +3577,7 @@ impl CanvasDiagramPanel {
             );
         }
 
+        mark("snapshots+sigreg", &mut phase_t, &mut phase_log);
         let (response, events) = {
             let mut state = world.resource_mut::<CanvasDiagramState>();
             let docstate = state.get_mut(active_doc);
@@ -3439,6 +3585,7 @@ impl CanvasDiagramPanel {
             docstate.canvas.snap = snap_settings;
             docstate.canvas.ui(ui)
         };
+        mark("canvas.ui (scene render)", &mut phase_t, &mut phase_log);
 
         // Drain in-canvas input control writes from the per-frame
         // queue and apply them to the matching `ModelicaModel.inputs`.
@@ -3761,6 +3908,20 @@ impl CanvasDiagramPanel {
         // the unused warning when `doc_id`/`class` were absent.
         let _ = events;
 
+        mark("tail (events/menu/fit)", &mut phase_t, &mut phase_log);
+        if trace_phases && !phase_log.is_empty() {
+            let total: f64 = phase_log.iter().map(|(_, ms)| *ms).sum();
+            if total > 30.0 {
+                let breakdown = phase_log
+                    .iter()
+                    .map(|(name, ms)| format!("{name}={ms:.1}ms"))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                bevy::log::info!(
+                    "[CanvasDiagram] render_canvas phases (sum={total:.1}ms): {breakdown}"
+                );
+            }
+        }
     }
 }
 
@@ -4979,26 +5140,33 @@ impl DrillInLoads {
 pub fn drive_duplicate_loads(
     mut loads: bevy::prelude::ResMut<DuplicateLoads>,
     mut registry: bevy::prelude::ResMut<ModelicaDocumentRegistry>,
+    mut probe: Option<bevy::prelude::ResMut<crate::FrameTimeProbe>>,
 ) {
     use bevy::prelude::*;
     let doc_ids: Vec<lunco_doc::DocumentId> = loads.pending.keys().copied().collect();
+    let mut had_install = false;
     for doc_id in doc_ids {
         let Some(binding) = loads.pending.get_mut(&doc_id) else {
             continue;
         };
+        let t_poll = web_time::Instant::now();
         let Some(doc) = futures_lite::future::block_on(
             futures_lite::future::poll_once(&mut binding.task),
         ) else {
             continue;
         };
+        let poll_ms = t_poll.elapsed().as_secs_f64() * 1000.0;
         let dup_display_name = binding.display_name.clone();
         let origin_short = binding.origin_short.clone();
         loads.pending.remove(&doc_id);
+        let t_install = web_time::Instant::now();
         registry.install_prebuilt(doc_id, doc);
+        let install_ms = t_install.elapsed().as_secs_f64() * 1000.0;
         info!(
-            "[CanvasDiagram] duplicate: installed `{}` (from `{}`)",
+            "[CanvasDiagram] duplicate: installed `{}` (from `{}`) — poll={poll_ms:.1}ms install={install_ms:.1}ms",
             dup_display_name, origin_short,
         );
+        had_install = true;
         // Pre-warm the MSL inheritance chain on a dedicated thread so
         // the projection finds inherited connectors. Same pattern as
         // the drill-in path. The duplicated copy carries `within
@@ -5036,6 +5204,11 @@ pub fn drive_duplicate_loads(
                     }
                 }
             }
+        }
+    }
+    if had_install {
+        if let Some(p) = probe.as_deref_mut() {
+            p.last_edit = Some(web_time::Instant::now());
         }
     }
 }
@@ -5668,6 +5841,15 @@ fn apply_ops(world: &mut World, doc_id: lunco_doc::DocumentId, ops: Vec<Modelica
     // right-click menu. Each phase is timed independently so we
     // know which one to optimise.
     let t_start = web_time::Instant::now();
+    // Stamp the post-apply window so the canvas frame logger
+    // captures every subsequent frame's timing for ~2 seconds.
+    if let Ok(mut guard) = LAST_APPLY_AT.lock() {
+        *guard = Some(t_start);
+    }
+    // Stamp the GLOBAL frame-time probe so every Bevy Update tick
+    // (not just canvas render) gets logged for the next 5 seconds —
+    // catches main-thread blocks anywhere in the schedule.
+    crate::frame_time_probe_stamp_edit(world);
     let n = ops.len();
     let mut any_applied = false;
     let mut hit_read_only = false;

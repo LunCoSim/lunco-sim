@@ -1057,15 +1057,19 @@ fn on_compile_model(
     // costs ~30 s per call in debug builds, and there are four
     // calls, so clicking Compile on an MSL example would lock the
     // UI for minutes. Pulling from the cached AST is constant-time.
-    // Force a fresh parse if the user typed into the editor but the
-    // debounced reparse hasn't run yet (see `ModelicaDocument::apply_patch`
-    // — AST lags source by up to ~250ms during rapid typing).
-    // Compile is a definitive "I want this exact source to be the
-    // compiled model" action, so pay the parse cost right here
-    // instead of risking a stale AST.
-    if let Some(host) = registry.host_mut(doc) {
-        host.document_mut().refresh_ast_now();
-    }
+    // Note: previously this site called `refresh_ast_now()` to force
+    // a fresh parse before extracting metadata. That ran a 2.5 s
+    // rumoca parse synchronously on the main thread (verified in
+    // telemetry: `[Doc] refresh_ast_now: 20052 bytes parsed in
+    // 2522.0ms`) and froze the UI — sim-time stalled, egui animations
+    // stuttered, FixedUpdate skipped 60+ ticks. The off-thread
+    // debounced refresh (see `ui::ast_refresh`) keeps the AST at
+    // most 250 ms behind source, which the metadata extractors
+    // below (params / inputs / bounds / class names) tolerate fine.
+    // The worker re-parses the *source* verbatim for the actual
+    // compile (see `ModelicaCommand::Compile`), so any AST staleness
+    // here only affects telemetry-panel labels for one debounce
+    // cycle, not the compiled model itself.
     let (source, ast_for_extract) = match registry.host(doc) {
         Some(h) => {
             let doc = h.document();
