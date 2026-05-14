@@ -581,6 +581,11 @@ impl Perspective for AnalyzePerspective {
             crate::ui::panels::graphs::MODELICA_PLOT_KIND,
             crate::ui::viz::DEFAULT_MODELICA_GRAPH.0,
         );
+        // Graphs is the most-used bottom tab — pin it leftmost.
+        layout.move_instance_to_front(
+            crate::ui::panels::graphs::MODELICA_PLOT_KIND,
+            crate::ui::viz::DEFAULT_MODELICA_GRAPH.0,
+        );
     }
 }
 

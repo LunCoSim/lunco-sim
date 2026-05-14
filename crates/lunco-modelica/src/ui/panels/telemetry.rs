@@ -940,6 +940,27 @@ fn flatten_class_parameters(
     let mut visited: std::collections::HashSet<String> =
         std::collections::HashSet::new();
     walk(index, class, class, &mut chain, &mut visited, &mut out);
+
+    // Drop sub-component rows whose value is a bare identifier matching
+    // a top-level parameter — those are bindings (e.g. `airframe.g` ←
+    // outer `g`), not independent knobs. Editing them is a no-op because
+    // they're rebound at compile time; surfacing them just clutters the
+    // panel and confuses users (issue: typing -10 in `airframe.g`
+    // doesn't change anything since the row is bound to `g`).
+    let top_level: std::collections::HashSet<String> = out
+        .iter()
+        .filter(|fp| fp.chain.is_empty())
+        .map(|fp| fp.leaf.clone())
+        .collect();
+    out.retain(|fp| {
+        if fp.chain.is_empty() {
+            return true;
+        }
+        let v = fp.value.trim();
+        let is_bare_ident =
+            !v.is_empty() && v.chars().all(|c| c.is_alphanumeric() || c == '_');
+        !(is_bare_ident && top_level.contains(v))
+    });
     out
 }
 
@@ -999,13 +1020,19 @@ fn render_active_class_parameters(
 
     // Flatten using only the local AST index — synchronous with the
     // latest parse, no engine session dependency, no async lag.
-    let rows: Vec<FlatParam> = {
+    // Also snapshot the doc's read-only state so we can disable
+    // editing on bundled / locked-source documents (otherwise the
+    // user types into a field that silently rejects the write).
+    let (rows, read_only): (Vec<FlatParam>, bool) = {
         let Some(registry) = world.get_resource::<crate::ui::ModelicaDocumentRegistry>() else {
             return;
         };
         let Some(host) = registry.host(doc_id) else { return };
-        let index = host.document().index();
-        flatten_class_parameters(index, &active)
+        let doc = host.document();
+        (
+            flatten_class_parameters(doc.index(), &active),
+            doc.is_read_only(),
+        )
     };
     if rows.is_empty() {
         return;
@@ -1024,7 +1051,10 @@ fn render_active_class_parameters(
             // edits, apply after the borrow on `rows` is released.
             let mut edits: Vec<(String, String, String)> = Vec::new(); // (component, param, value)
             for row in &rows {
-                let editable = row.depth() <= 1;
+                // Read-only docs (bundled examples) can't accept any
+                // edits — fall back to the muted display path for
+                // every row.
+                let editable = !read_only && row.depth() <= 1;
                 let path = row.path();
                 ui.horizontal(|ui| {
                     let display_value = format_param_value(&row.value);

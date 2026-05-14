@@ -540,6 +540,24 @@ impl WorkbenchLayout {
         }
     }
 
+    /// Move an already-open instance tab to position 0 in its leaf so
+    /// it renders as the leftmost tab. No-op if the tab isn't open.
+    pub fn move_instance_to_front(&mut self, kind: PanelId, instance: u64) {
+        let tab = TabId::Instance { kind, instance };
+        let Some((surface, node, tab_idx)) = self.dock.find_tab(&tab) else {
+            return;
+        };
+        if tab_idx.0 == 0 {
+            return;
+        }
+        let surface_ref = self.dock.get_surface_mut(surface).and_then(|s| s.node_tree_mut());
+        let Some(tree) = surface_ref else { return };
+        if let Some(removed) = tree[node].remove_tab(tab_idx) {
+            tree[node].insert_tab(egui_dock::TabIndex(0), removed);
+            tree.set_active_tab(node, egui_dock::TabIndex(0));
+        }
+    }
+
     /// Close a multi-instance tab if present. Idempotent.
     pub fn close_instance(&mut self, kind: PanelId, instance: u64) {
         let tab = TabId::Instance { kind, instance };

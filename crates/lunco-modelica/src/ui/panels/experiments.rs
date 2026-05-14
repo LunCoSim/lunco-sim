@@ -243,18 +243,16 @@ impl Panel for ExperimentsPanel {
             (t.tokens.success, t.tokens.warning, t.tokens.error, t.tokens.text_subdued)
         };
 
-        // Setup + Parameter overrides scroll together when the panel is
-        // short — otherwise the bounds row at the bottom of Setup gets
-        // clipped behind the experiments table below.
+        // One outer ScrollArea wraps Setup + Parameter overrides +
+        // experiments table + empty-state copy so the user can reach
+        // every section even when the bottom dock is short.
         egui::ScrollArea::vertical()
-            .id_salt("experiments_setup_scroll")
-            .auto_shrink([false, true])
-            .max_height(ui.available_height() * 0.45)
+            .id_salt("experiments_panel_scroll")
+            .auto_shrink([false, false])
             .show(ui, |ui| {
-                self.render_setup_section(ui, world);
-                ui.separator();
-                self.render_override_editor(ui, world);
-            });
+        self.render_setup_section(ui, world);
+        ui.separator();
+        self.render_override_editor(ui, world);
         ui.separator();
 
         // Snapshot for rendering — avoids holding the registry borrow
@@ -422,15 +420,9 @@ impl Panel for ExperimentsPanel {
             .get_resource::<ExperimentVisibility>()
             .and_then(|v| v.editing_name.clone());
 
-        // auto_shrink([false, false]) keeps the scrollbar visible even
-        // when the table is taller than the panel — without this, in a
-        // shrunken bottom dock the area collapses to one-row height
-        // and rows past the first are off-screen with no scroll
-        // affordance.
-        egui::ScrollArea::vertical()
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                egui::Grid::new("experiments_table")
+        // Table grid renders directly; the outer panel ScrollArea
+        // wraps the whole panel including this grid.
+        egui::Grid::new("experiments_table")
                 .num_columns(7)
                 .striped(true)
                 .show(ui, |ui| {
@@ -618,7 +610,6 @@ impl Panel for ExperimentsPanel {
                         ui.end_row();
                     }
                 });
-        });
 
         // Apply rename state transitions in priority order: commit
         // wins over cancel wins over start. Avoids flicker when a
@@ -713,6 +704,7 @@ impl Panel for ExperimentsPanel {
         // Plot + variable picker now live in the Graphs panel — this
         // panel is the run *list* / comparison-source. See the Source
         // toggle in panels::graphs.
+            }); // outer experiments_panel_scroll
     }
 }
 
@@ -1363,7 +1355,41 @@ fn render_experiments_plot_inner(
     // Graphs tab never collapses to a blank panel.
     let Some(doc_id) = crate::ui::doc_pin::resolved_experiments_doc(world)
     else {
+        // No doc resolved yet — still draw the header so Fit / Dup /
+        // New stay visible (otherwise the panel looks broken in the
+        // welcome state). Fit is a no-op here (no axes to fit yet),
+        // New/Dup dispatch the same commands as the populated header.
+        let mut new_plot = false;
+        let mut dup = false;
+        let col_muted = world.resource::<lunco_theme::Theme>().tokens.text_subdued;
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new("📈 (no model)  ·  0 vars")
+                    .color(col_muted)
+                    .small(),
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.small_button("➕").on_hover_text("New plot panel").clicked() {
+                    new_plot = true;
+                }
+                if ui.small_button("📄").on_hover_text("Duplicate this plot").clicked() {
+                    dup = true;
+                }
+                let _ = ui.small_button("📐 Fit").on_hover_text("Auto-fit axes");
+            });
+        });
         render_empty_plot_frame(ui, extras);
+        if new_plot {
+            world
+                .commands()
+                .trigger(crate::ui::commands::NewPlotPanel::default());
+        }
+        if dup {
+            world.commands().trigger(crate::ui::commands::NewPlotPanel {
+                source: viz_id.0,
+                ..Default::default()
+            });
+        }
         return ExpPlotSummary::default();
     };
     let twin = crate::ui::doc_pin::twin_id_for_doc(doc_id);
