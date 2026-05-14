@@ -135,7 +135,7 @@ instant = "0.1"
 # `performance.now()` in the browser, `std::time` on native. Used by Bevy
 # itself, so already in our dep graph as a transitive — pin it explicitly so
 # our own code can depend on it.
-web-time = "1"
+web-time = { version = "1", features = ["serde"] }
 # getrandom 0.2 with js feature for wasm32 support (needed by rand, uuid, etc.)
 getrandom_02 = { package = "getrandom", version = "0.2", features = ["js"] }
 lunco-api = { path = "crates/lunco-api" }

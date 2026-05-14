@@ -1057,14 +1057,17 @@ fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, world: &mut World) {
     let load_state = world
         .get_resource::<lunco_assets::msl::MslLoadState>()
         .cloned();
+    #[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
     let install_running = matches!(
         load_state,
         Some(lunco_assets::msl::MslLoadState::Loading { .. })
     );
+    #[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
     let install_failed = matches!(
         load_state,
         Some(lunco_assets::msl::MslLoadState::Failed(_))
     );
+    #[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
     let install_ready = matches!(
         load_state,
         Some(lunco_assets::msl::MslLoadState::Ready { .. })
@@ -1073,6 +1076,8 @@ fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, world: &mut World) {
         // While an install is in flight, show Cancel. When it's
         // finished (Ready/Failed) show Reinstall/Retry instead so the
         // user can always pick "do it again" without restarting.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
         if install_running {
             if let Some(cancel) = world.get_resource::<crate::msl_remote::MslInstallCancel>() {
                 if ui
@@ -1111,6 +1116,8 @@ fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, world: &mut World) {
                 crate::msl_remote::reinstall_msl(world);
             }
         }
+        }
+        #[cfg(not(target_arch = "wasm32"))]
         if ui
             .button("Open cache folder")
             .on_hover_text("Reveal the MSL cache directory in the system file manager.")

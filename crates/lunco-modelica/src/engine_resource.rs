@@ -562,7 +562,7 @@ pub fn drive_engine_sync(
                     );
                     continue;
                 }
-                if crate::worker_transport::dispatch_parse_to_worker(doc_id, gen, uri, source.clone()) {
+                if crate::worker_transport::dispatch_parse_to_worker(doc_id, gen, uri, source.to_string()) {
                     true
                 } else {
                     handle.finish_pending_failed(doc_id, gen);
@@ -610,7 +610,7 @@ pub fn drive_engine_sync(
 /// negligible.
 pub fn drain_worker_parse_results(
     handle: Res<ModelicaEngineHandle>,
-    registry: ResMut<crate::ui::state::ModelicaDocumentRegistry>,
+    mut registry: ResMut<crate::ui::state::ModelicaDocumentRegistry>,
 ) {
     #[cfg(target_arch = "wasm32")]
     {

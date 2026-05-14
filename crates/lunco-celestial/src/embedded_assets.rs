@@ -7,14 +7,14 @@
 
 use bevy::prelude::*;
 use bevy_shader::Shader;
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", feature = "embed-assets"))]
 use bevy_asset::{load_internal_asset, RenderAssetUsages};
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", feature = "embed-assets"))]
 use bevy::image::{ImageSampler, ImageSamplerDescriptor, ImageAddressMode, ImageFilterMode};
 use std::marker::PhantomData;
 use uuid::Uuid;
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", feature = "embed-assets"))]
 use lunco_materials::BLUEPRINT_SHADER_HANDLE;
 
 // ============================================================================
@@ -35,22 +35,22 @@ pub const TRAJECTORY_SHADER_HANDLE: Handle<Shader> = Handle::Uuid(TRAJECTORY_SHA
 // Moon uses a solid grey fallback since no JPEG source is available.
 // ============================================================================
 
-#[cfg(target_arch = "wasm32")]
-const EARTH_JPG: &[u8] = include_bytes!("../../../.cache/textures/earth_source.jpg");
+#[cfg(all(target_arch = "wasm32", feature = "embed-assets"))]
+const EARTH_JPG: &[u8] = include_bytes!("../../../../.cache/textures/earth_source.jpg");
 
 // ============================================================================
 // Embedded Missions
 // ============================================================================
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", feature = "embed-assets"))]
 const ARTEMIS_2_JSON: &str = include_str!("../../../assets/missions/artemis-2.json");
 
 // ============================================================================
 // Embedded Ephemeris Data (wasm32)
 // ============================================================================
 
-#[cfg(target_arch = "wasm32")]
-const ARTEMIS_2_EPHEMERIS_CSV: &str = include_str!("../../../.cache/ephemeris/target_-1024_2026-04-02_0159_2026-04-11_0001.csv");
+#[cfg(all(target_arch = "wasm32", feature = "embed-assets"))]
+const ARTEMIS_2_EPHEMERIS_CSV: &str = include_str!("../../../../.cache/ephemeris/target_-1024_2026-04-02_0159_2026-04-11_0001.csv");
 
 // ============================================================================
 // Embedded Assets Plugin
@@ -61,9 +61,9 @@ const ARTEMIS_2_EPHEMERIS_CSV: &str = include_str!("../../../.cache/ephemeris/ta
 pub struct EmbeddedAssetsPlugin;
 
 impl Plugin for EmbeddedAssetsPlugin {
-    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_variables))]
+    #[allow(unused_variables)]
     fn build(&self, app: &mut App) {
-        #[cfg(target_arch = "wasm32")]
+        #[cfg(all(target_arch = "wasm32", feature = "embed-assets"))]
         {
             // Register shaders with const UUID handles so MaterialExtension can resolve them
             load_internal_asset!(
@@ -119,7 +119,7 @@ pub struct EmbeddedMissionData {
     pub artemis_2_ephemeris_csv: String,
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", feature = "embed-assets"))]
 fn load_image_from_bytes(bytes: &[u8]) -> Result<Image, image::ImageError> {
     let img = image::load_from_memory(bytes)?;
     let mut image = Image::from_dynamic(img, true, RenderAssetUsages::RENDER_WORLD);

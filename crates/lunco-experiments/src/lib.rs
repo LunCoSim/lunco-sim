@@ -14,7 +14,7 @@
 //! plug in the same way.
 
 use std::collections::BTreeMap;
-use std::time::SystemTime;
+use web_time::SystemTime;
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;

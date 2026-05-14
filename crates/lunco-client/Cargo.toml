@@ -27,7 +27,7 @@ lunco-robotics = { path = "../lunco-robotics" }
 lunco-controller = { path = "../lunco-controller" }
 lunco-fsw = { path = "../lunco-fsw" }
 lunco-avatar = { path = "../lunco-avatar" }
-lunco-celestial = { path = "../lunco-celestial" }
+lunco-celestial = { path = "../lunco-celestial", features = ["embed-assets"] }
 lunco-terrain = { path = "../lunco-terrain" }
 lunco-materials = { path = "../lunco-materials" }
 lunco-modelica = { path = "../lunco-modelica" }

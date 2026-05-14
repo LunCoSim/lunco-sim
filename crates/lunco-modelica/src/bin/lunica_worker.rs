@@ -56,6 +56,7 @@ fn command_label(cmd: &ModelicaCommand) -> String {
         ModelicaCommand::UpdateParameters { model_name, entity, .. } => format!("UpdateParameters {model_name} entity={entity:?}"),
         ModelicaCommand::Reset { entity, .. } => format!("Reset entity={entity:?}"),
         ModelicaCommand::Despawn { entity } => format!("Despawn entity={entity:?}"),
+        ModelicaCommand::LoadSourceRoot { id, .. } => format!("LoadSourceRoot id={id}"),
     }
 }
 
@@ -70,6 +71,7 @@ fn command_session(cmd: &ModelicaCommand) -> (bevy::prelude::Entity, u64) {
         | ModelicaCommand::UpdateParameters { entity, session_id, .. }
         | ModelicaCommand::Reset { entity, session_id, .. } => (*entity, *session_id),
         ModelicaCommand::Despawn { entity } => (*entity, 0),
+        ModelicaCommand::LoadSourceRoot { .. } => (bevy::prelude::Entity::PLACEHOLDER, 0),
     }
 }
 

@@ -8,6 +8,7 @@ description = "Backend-agnostic experiment / batch-run registry. Models a single
 serde = { workspace = true }
 uuid = { workspace = true }
 crossbeam-channel = { workspace = true }
+web-time = { workspace = true }
 # Optional — exposes ExperimentRegistry as a Bevy Resource and ships
 # events. Off by default so headless callers (CLI sweeps, tests) stay
 # Bevy-free.

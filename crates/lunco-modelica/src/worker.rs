@@ -1101,6 +1101,7 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
                                 experiment_interval: exp_interval,
                                 experiment_solver: exp_solver,
                                 compiled_model_name: Some(model_name.clone()),
+                                loaded_source_root_id: None,
                             });
                         }
                         Err(e) => {
